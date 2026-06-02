@@ -20,8 +20,8 @@ import { accessSync, constants } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const __filename = fileURLToPath(import.meta.url);
-const repoRoot = resolve(dirname(__filename), '..', '..', '..');
+const Filename = fileURLToPath(import.meta.url);
+const repoRoot = resolve(dirname(Filename), '..', '..', '..');
 
 const sentinels = [
   // Created by both `npm ci` and `npm install`.

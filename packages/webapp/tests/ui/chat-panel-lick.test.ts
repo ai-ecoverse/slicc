@@ -8,7 +8,7 @@
  * path preserves lick metadata so every channel renders as a lick widget.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { ChatPanel } from '../../src/ui/chat-panel.js';
 import { SessionStore } from '../../src/ui/session-store.js';

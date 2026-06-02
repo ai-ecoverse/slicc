@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
 import { HarRecorder } from '../../src/cdp/har-recorder.js';
 import type { CDPTransport } from '../../src/cdp/transport.js';
-import type { CDPEventListener, ConnectionState, CDPConnectOptions } from '../../src/cdp/types.js';
+import type { CDPConnectOptions, CDPEventListener, ConnectionState } from '../../src/cdp/types.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 
 // Mock CDP Transport
@@ -63,7 +63,9 @@ class MockCDPTransport implements CDPTransport {
 
   // Test helper: emit an event
   emit(event: string, params: Record<string, unknown>): void {
-    this.listeners.get(event)?.forEach((listener) => listener(params));
+    this.listeners.get(event)?.forEach((listener) => {
+      listener(params);
+    });
   }
 
   // Test helper: get sent commands

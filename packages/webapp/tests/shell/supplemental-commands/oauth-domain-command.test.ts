@@ -1,5 +1,5 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { IFileSystem } from 'just-bash';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock the provider-settings module so the command exercises its
 // public surface (getExtraOAuthDomains / setExtraOAuthDomainsAsync /
@@ -17,9 +17,9 @@ vi.mock('../../../src/ui/provider-settings.js', () => ({
 
 import { createOAuthDomainCommand } from '../../../src/shell/supplemental-commands/oauth-domain-command.js';
 import {
+  getAllExtraOAuthDomains,
   getExtraOAuthDomains,
   setExtraOAuthDomainsAsync,
-  getAllExtraOAuthDomains,
 } from '../../../src/ui/provider-settings.js';
 
 const mockGetExtraOAuthDomains = vi.mocked(getExtraOAuthDomains);

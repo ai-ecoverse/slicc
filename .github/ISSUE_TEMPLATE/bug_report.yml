@@ -53,6 +53,22 @@ body:
         - Build / dev server / Vite HMR
         - Other / not sure
 
+  - type: checkboxes
+    id: area
+    attributes:
+      label: Area (apply matching `area/*` labels)
+      description: |
+        After filing, please add the matching `area/*` label(s) to the issue so it routes to the right maintainer. Tick all that apply as a reminder.
+      options:
+        - label: '`area/webapp` — browser app core (packages/webapp)'
+        - label: '`area/extension` — Chrome extension (packages/chrome-extension)'
+        - label: '`area/node-server` — Node CLI / Electron server (packages/node-server)'
+        - label: '`area/worker` — Cloudflare worker (packages/cloudflare-worker)'
+        - label: '`area/swift` — native macOS apps (swift-launcher / swift-server)'
+        - label: '`area/ios` — iOS follower app (packages/ios-app)'
+        - label: '`area/docs` — README, CLAUDE.md, AGENTS.md, docs/, SKILL.md'
+        - label: '`area/build` — build, CI, release, monorepo tooling'
+
   - type: textarea
     id: repro
     attributes:

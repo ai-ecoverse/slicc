@@ -42,6 +42,18 @@ describeIfConfigured('deployed tray worker', () => {
         'POST /oauth/revoke',
         'GET /api/runtime-config',
         'ANY /api/fetch-proxy',
+        'GET /api/cloud/config',
+        'POST /api/cloud/start',
+        'GET /api/cloud/list',
+        'POST /api/cloud/pause',
+        'POST /api/cloud/resume',
+        'POST /api/cloud/kill',
+        'POST /api/cloud/sign-out',
+        'GET /api/cloud/admin/stats',
+        'GET /auth/cloud-callback',
+        'GET /auth/cloud-callback.js',
+        'GET /cloud',
+        'GET /cloud/*',
       ],
     });
 
@@ -252,6 +264,52 @@ describeIfConfigured('deployed tray worker', () => {
     const body = (await response.json()) as { error?: string; error_description?: string };
     expect(body.error).toBe('bad_verification_code');
   }, 15_000);
+
+  it('POST /tray with kind=hosted creates a tray against the deployed worker', async () => {
+    if (!workerBaseUrl) return;
+    const baseUrl = new URL(workerBaseUrl);
+    const response = await fetch(new URL('/tray', baseUrl), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'hosted' }),
+    });
+    expect(response.status).toBe(201);
+    const body = (await response.json()) as CreateTrayResponse;
+    expect(body.trayId).toBeTruthy();
+    expect(body.capabilities.join.url).toBeTruthy();
+    expect(body.capabilities.controller.url).toBeTruthy();
+    expect(body.capabilities.webhook.url).toBeTruthy();
+  }, 15_000);
+
+  it('POST /tray with no body still creates a desktop tray (back-compat)', async () => {
+    if (!workerBaseUrl) return;
+    const baseUrl = new URL(workerBaseUrl);
+    const response = await fetch(new URL('/tray', baseUrl), { method: 'POST' });
+    expect(response.status).toBe(201);
+    const body = (await response.json()) as CreateTrayResponse;
+    expect(body.trayId).toBeTruthy();
+    expect(body.capabilities.join.url).toBeTruthy();
+    expect(body.capabilities.controller.url).toBeTruthy();
+    expect(body.capabilities.webhook.url).toBeTruthy();
+  }, 15_000);
+});
+
+describe('cloud routes smoke', () => {
+  it('rejects unauthenticated /api/cloud/list with 401', async () => {
+    if (!workerBaseUrl) return;
+    const res = await fetch(`${workerBaseUrl}/api/cloud/list`);
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/MISSING_TOKEN|INVALID_TOKEN/);
+  });
+
+  it('serves /cloud dashboard with CSP', async () => {
+    if (!workerBaseUrl) return;
+    const res = await fetch(`${workerBaseUrl}/cloud`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toMatch(/text\/html/);
+    expect(res.headers.get('content-security-policy')).toBeTruthy();
+  });
 });
 
 function openWebSocket(

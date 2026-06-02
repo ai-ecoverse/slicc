@@ -2,7 +2,7 @@
  * Tests for the session store (IndexedDB persistence).
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
 import { SessionStore } from '../../src/ui/session-store.js';
 import type { ChatMessage, Session } from '../../src/ui/types.js';

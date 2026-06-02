@@ -1,20 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
-  DEFAULT_STAGING_TRAY_WORKER_BASE_URL,
   buildTrayLaunchUrl,
   buildTrayUrlValue,
   buildTrayWorkerUrl,
+  DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
+  DEFAULT_STAGING_TRAY_WORKER_BASE_URL,
   fetchRuntimeConfig,
   hasStoredTrayJoinUrl,
   normalizeTrayWorkerBaseUrl,
   parseTrayJoinUrlValue,
   parseTrayUrlValue,
+  type RuntimeConfigStorage,
   resolveTrayRuntimeConfig,
   resolveTrayWorkerBaseUrl,
   storeTrayJoinUrl,
-  type RuntimeConfigStorage,
 } from '../../src/scoops/tray-runtime-config.js';
 
 class MemoryStorage implements RuntimeConfigStorage {

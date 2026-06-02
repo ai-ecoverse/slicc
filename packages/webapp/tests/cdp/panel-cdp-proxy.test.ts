@@ -2,7 +2,7 @@
  * Tests for PanelCdpProxy — CDP transport that routes through offscreen document.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock chrome.runtime
 const messageListeners: Array<

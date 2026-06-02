@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import { validateApiKey, __test__ } from '../../src/scoops/api-key-validator.js';
+import { describe, expect, it, vi } from 'vitest';
+import { __test__, validateApiKey } from '../../src/scoops/api-key-validator.js';
 
 function fakeFetch(impl: (url: string, init: RequestInit) => Response | Promise<Response>) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

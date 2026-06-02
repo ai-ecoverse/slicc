@@ -8,7 +8,7 @@
  *      and return null — nothing meaningful to extract or archive.
  *   3. Run two LLM calls over the message list with a shared system prompt
  *      (Anthropic prompt cache hits on the prefix for the second call):
- *        - Memory extraction → append bullets to /shared/CLAUDE.md.
+ *        - Memory extraction → append bullets to /workspace/CLAUDE.md.
  *        - Title generation → 3-6 word label used to name the archive.
  *      Either call may fail independently; failures fall through to safe
  *      defaults (no memory append, heuristic title).
@@ -20,18 +20,19 @@
  * to do with them.
  */
 
-import type { Api, Model } from '@earendil-works/pi-ai';
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
-import type { VirtualFS } from '../fs/index.js';
-import { createLogger } from '../core/logger.js';
-import type { ChatMessage, Session } from './types.js';
-import type { SessionStore } from './session-store.js';
+import type { Api, Model } from '@earendil-works/pi-ai';
 import {
-  runOneOffCompactionCall,
   COMPACTION_MEMORY_INSTRUCTION,
   COMPACTION_TITLE_INSTRUCTION,
+  runOneOffCompactionCall,
 } from '../core/context-compaction.js';
+import { createLogger } from '../core/logger.js';
+import type { VirtualFS } from '../fs/index.js';
+import { applyConeMemoryBudget } from '../scoops/cone-memory-budget.js';
 import { formatChatForClipboard } from './chat-panel.js';
+import type { SessionStore } from './session-store.js';
+import type { ChatMessage, Session } from './types.js';
 
 const log = createLogger('session-freezer');
 
@@ -145,7 +146,11 @@ export async function freezeConeSession(
       });
       if (bullets.trim() && bullets.trim() !== 'NONE') {
         try {
-          await appendGlobalMemoryViaVfs(opts.vfs, bullets.trim(), 'new-session');
+          await appendConeMemoryViaVfs(opts.vfs, bullets.trim(), 'new-session', {
+            model: opts.model,
+            apiKey: opts.apiKey,
+            headers: opts.headers,
+          });
           log.info('Memory extracted and appended on new-session');
         } catch (err) {
           log.warn('Memory append failed', {
@@ -333,7 +338,7 @@ function cleanTitle(raw: string): string {
 
 function heuristicTitle(messages: ChatMessage[]): string {
   const firstUser = messages.find((m) => m.role === 'user');
-  if (!firstUser || !firstUser.content) return 'untitled-session';
+  if (!firstUser?.content) return 'untitled-session';
   const head = firstUser.content.trim().replace(/\s+/g, ' ');
   return head.length > 60 ? `${head.slice(0, 60)}…` : head || 'untitled-session';
 }
@@ -366,25 +371,58 @@ async function ensureDir(vfs: VirtualFS, path: string): Promise<void> {
   }
 }
 
-async function appendGlobalMemoryViaVfs(
+/**
+ * Append auto-extracted bullets to `/workspace/CLAUDE.md`, then route through
+ * the logarithmic memory budget (`applyConeMemoryBudget`) so a long-running
+ * series of freezer/enrichment appends gets restructured the same way the
+ * orchestrator's compaction-driven `appendConeMemory` path does. The budget
+ * step is best-effort — credentials are optional; when missing or when the
+ * sink throws, the appended bullets stay on disk and we just log.
+ */
+async function appendConeMemoryViaVfs(
   vfs: VirtualFS,
   bullets: string,
-  source: string
+  source: string,
+  budgetOpts?: {
+    model?: Parameters<typeof applyConeMemoryBudget>[0]['model'];
+    apiKey?: string;
+    headers?: Record<string, string>;
+    signal?: AbortSignal;
+  }
 ): Promise<void> {
-  const path = '/shared/CLAUDE.md';
+  const path = '/workspace/CLAUDE.md';
   let current = '';
   try {
     const raw = await vfs.readFile(path, { encoding: 'utf-8' });
     current = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
   } catch {
     // File doesn't exist yet — we'll create it via writeFile below.
-    await ensureDir(vfs, '/shared');
+    await ensureDir(vfs, '/workspace');
   }
   const date = new Date().toISOString().slice(0, 10);
   const heading = `## Auto-extracted (${date}, ${source})`;
   const separator = current.length === 0 || current.endsWith('\n') ? '' : '\n';
   const block = `${separator}\n${heading}\n\n${bullets}\n`;
   await vfs.writeFile(path, current + block);
+
+  // Post-append budget step. Symmetric to the orchestrator path —
+  // bound `/workspace/CLAUDE.md` against the logarithmic budget when
+  // credentials are wired through. Failures are swallowed by the sink
+  // itself, but wrap in try/catch defensively so a thrown error never
+  // escapes the freezer.
+  try {
+    await applyConeMemoryBudget({
+      vfs,
+      model: budgetOpts?.model,
+      apiKey: budgetOpts?.apiKey,
+      headers: budgetOpts?.headers,
+      signal: budgetOpts?.signal,
+    });
+  } catch (err) {
+    log.warn('Cone memory budget step threw (append already committed)', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 async function updateSessionsIndex(
@@ -560,7 +598,11 @@ export async function enrichPendingSession(
   const trimmedBullets = bullets.trim();
   if (trimmedBullets && trimmedBullets !== 'NONE') {
     try {
-      await appendGlobalMemoryViaVfs(vfs, trimmedBullets, 'pending-enrichment');
+      await appendConeMemoryViaVfs(vfs, trimmedBullets, 'pending-enrichment', {
+        model: opts.model,
+        apiKey: opts.apiKey,
+        headers: opts.headers,
+      });
     } catch (err) {
       log.warn('Enrichment memory append failed (continuing with title rewrite)', {
         filename: entry.filename,

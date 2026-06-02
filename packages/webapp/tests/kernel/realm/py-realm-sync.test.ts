@@ -11,14 +11,14 @@
  * it.
  */
 
-import { describe, it, expect, vi } from 'vitest';
 import type { PyodideInterface } from 'pyodide';
-import type { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
+import { describe, expect, it, vi } from 'vitest';
 import {
-  syncVfsToPyodide,
-  syncPyodideToVfs,
   type PreSyncSnapshot,
+  syncPyodideToVfs,
+  syncVfsToPyodide,
 } from '../../../src/kernel/realm/py-realm-shared.js';
+import type { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
 
 function emptySnapshot(): PreSyncSnapshot {
   return { files: new Map(), dirs: new Set() };

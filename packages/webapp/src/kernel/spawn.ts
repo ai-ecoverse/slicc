@@ -30,9 +30,9 @@
 
 import type { CDPTransport } from '../cdp/transport.js';
 import { OffscreenClient, type OffscreenClientCallbacks } from '../ui/offscreen-client.js';
-import { createPanelMessageChannelTransport } from './transport-message-channel.js';
 import { startPageCdpForwarder } from './cdp-worker-proxy.js';
 import type { KernelWorkerInitMsg, KernelWorkerReadyMsg } from './kernel-worker.js';
+import { createPanelMessageChannelTransport } from './transport-message-channel.js';
 
 // ---------------------------------------------------------------------------
 // Public API

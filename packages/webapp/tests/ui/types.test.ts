@@ -2,13 +2,13 @@
  * Type-level tests — verify the UI type contracts compile correctly.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type {
-  AgentHandle,
   AgentEvent,
+  AgentHandle,
   ChatMessage,
-  ToolCall,
   Session,
+  ToolCall,
 } from '../../src/ui/types.js';
 
 describe('UI types', () => {

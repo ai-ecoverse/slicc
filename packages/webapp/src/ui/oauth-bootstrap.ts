@@ -7,9 +7,9 @@
  * Tolerates per-entry failure (log and continue).
  */
 
-import { getAccounts, saveOAuthAccount } from './provider-settings.js';
-import { getRegisteredProviderConfig } from '../providers/index.js';
 import { createLogger } from '../core/logger.js';
+import { getRegisteredProviderConfig } from '../providers/index.js';
+import { getAccounts, saveOAuthAccount } from './provider-settings.js';
 
 const log = createLogger('oauth-bootstrap');
 

@@ -1,21 +1,21 @@
-export { VirtualFS } from './virtual-fs.js';
-export type { VirtualFsOptions, BackendType } from './virtual-fs.js';
-export { FsError } from './types.js';
+export type { FsChangeEvent, FsChangeType, FsWatchCallback, FsWatchFilter } from './fs-watcher.js';
+export { FsWatcher } from './fs-watcher.js';
+export type { IndexingStatus, MountIndexEntry, MountIndexState } from './mount-index.js';
+export { MountIndex } from './mount-index.js';
+export { joinPath, normalizePath, pathSegments, splitPath } from './path-utils.js';
 export { RestrictedFS } from './restricted-fs.js';
 export type {
-  FileContent,
+  DirEntry,
   Encoding,
   EntryType,
-  Stats,
-  DirEntry,
-  WriteFileOptions,
-  MkdirOptions,
-  RmOptions,
-  ReadFileOptions,
+  FileContent,
   FsErrorCode,
+  MkdirOptions,
+  ReadFileOptions,
+  RmOptions,
+  Stats,
+  WriteFileOptions,
 } from './types.js';
-export { normalizePath, splitPath, pathSegments, joinPath } from './path-utils.js';
-export { FsWatcher } from './fs-watcher.js';
-export type { FsChangeEvent, FsChangeType, FsWatchFilter, FsWatchCallback } from './fs-watcher.js';
-export { MountIndex } from './mount-index.js';
-export type { MountIndexEntry, MountIndexState, IndexingStatus } from './mount-index.js';
+export { FsError } from './types.js';
+export type { BackendType, VirtualFsOptions } from './virtual-fs.js';
+export { VirtualFS } from './virtual-fs.js';

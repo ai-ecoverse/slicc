@@ -1,5 +1,5 @@
-import { deflateSync } from 'zlib';
 import { describe, expect, it } from 'vitest';
+import { deflateSync } from 'zlib';
 
 import { computeAverageLuminance, decodePngPixels } from '../src/electron-controller.js';
 

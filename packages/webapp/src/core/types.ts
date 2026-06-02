@@ -80,10 +80,14 @@ export interface ToolResultMessage {
 export type Message = UserMessage | AssistantMessage | ToolResultMessage;
 
 /**
- * AgentMessage: extensible union of LLM messages.
- * For now, same as Message. Apps can extend with custom types.
+ * AgentMessage: extensible union of LLM messages + custom messages.
+ * Re-exported from pi-agent-core so declaration-merged custom message types
+ * (BashExecutionMessage, BranchSummaryMessage, CompactionSummaryMessage, etc.)
+ * are part of the union.
  */
-export type AgentMessage = Message;
+import type { AgentMessage } from '@earendil-works/pi-agent-core';
+
+export type { AgentMessage };
 
 // ─── Tool Types ─────────────────────────────────────────────────────────────
 

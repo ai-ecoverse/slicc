@@ -1,9 +1,9 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+import type { ToolDefinition } from '../../src/core/types.js';
 import { VirtualFS } from '../../src/fs/index.js';
 import { WasmShell } from '../../src/shell/index.js';
 import { createBashTool } from '../../src/tools/bash-tool.js';
-import type { ToolDefinition } from '../../src/core/types.js';
 
 describe('Bash Tool', () => {
   let fs: VirtualFS;

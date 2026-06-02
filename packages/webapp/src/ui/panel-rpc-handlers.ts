@@ -10,10 +10,10 @@
  * offscreen document already has a DOM.
  */
 
+import type { PageInfo } from '../cdp/types.js';
 import type { PanelRpcHandlers, PanelRpcResults } from '../kernel/panel-rpc.js';
 import type { LeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import { getAllExtraOAuthDomains, setExtraOAuthDomains } from './provider-settings.js';
-import type { PageInfo } from '../cdp/types.js';
 
 /**
  * Options threaded into the handler factory. Each callback is optional
@@ -523,7 +523,9 @@ export async function captureCamera(req: CameraCaptureRequest): Promise<CameraCa
       durationMs,
     };
   } finally {
-    stream.getTracks().forEach((t) => t.stop());
+    stream.getTracks().forEach((t) => {
+      t.stop();
+    });
   }
 }
 
@@ -742,7 +744,9 @@ async function captureScreen(mimeType: string, quality: number): Promise<Blob> {
       );
     });
   } finally {
-    stream.getTracks().forEach((t) => t.stop());
+    stream.getTracks().forEach((t) => {
+      t.stop();
+    });
   }
 }
 

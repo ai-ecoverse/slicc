@@ -12,10 +12,17 @@
  * the user-facing latency on every cold start is painful.
  *
  * Extension mode: cross-origin `importScripts` is blocked under the
- * extension origin's CSP, so we fetch the core JS + wasm as bytes
- * and hand the loader same-origin `blob:` URLs. The wrapper's inner
- * worker is bundled at build time via `?raw` so it always matches
- * the installed wrapper version (no separate CDN fetch needed).
+ * extension origin's CSP, and Chrome Web Store MV3 review forbids
+ * hosting executable JS off-package. Both the 112 KB
+ * `ffmpeg-core.js` Emscripten glue AND the `@ffmpeg/ffmpeg` wrapper
+ * worker are bundled under `dist/extension/vendor/` and loaded
+ * via `chrome.runtime.getURL` — same-origin to the extension,
+ * satisfies the reviewer, AND keeps the worker's internal
+ * `import(coreURL)` same-scheme (a cross-scheme module import
+ * from a `blob:` worker to a `chrome-extension://` URL
+ * deadlocks silently). The (~32 MB) `ffmpeg-core.wasm` binary
+ * still streams from the CDN on first run and is cached via
+ * Cache Storage.
  *
  * Standalone CLI: `unpkg.com` ships CORS-enabled responses, so the
  * loader feeds it the bare CDN URLs. The proxied-fetch path on the
@@ -30,12 +37,7 @@
  */
 
 import { FFmpeg } from '@ffmpeg/ffmpeg';
-// Vite `?raw` inlines the wrapper worker source at build time using
-// the package's public `./worker` subpath export, so the extension's
-// blob-URL path always serves bytes that match the installed wrapper
-// even if renovate bumps the wrapper version (no separate CDN fetch
-// for worker.js, no version-skew risk).
-import ffmpegWorkerSource from '@ffmpeg/ffmpeg/worker?raw';
+import { unpkgUrl } from './cdn-url-builder.js';
 import { isExtensionRuntime } from './shared.js';
 
 // Pin @ffmpeg/core version explicitly. The wrapper does NOT depend on
@@ -55,7 +57,8 @@ const FFMPEG_CORE_VERSION = '0.12.10';
 // build is a side-effecting IIFE with no exports and therefore
 // surfaces as `ERROR_IMPORT_FAILURE` ("failed to import
 // ffmpeg-core.js"). Always point at /esm/.
-export const FFMPEG_CORE_CDN_BASE = `https://unpkg.com/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/esm/`;
+export const FFMPEG_CORE_CDN_BASE_URL = unpkgUrl('@ffmpeg/core', FFMPEG_CORE_VERSION, 'dist/esm/');
+export const FFMPEG_CORE_CDN_BASE = FFMPEG_CORE_CDN_BASE_URL.toString();
 
 const CACHE_NAME = `slicc-ffmpeg-${FFMPEG_CORE_VERSION}`;
 
@@ -112,21 +115,26 @@ async function resolveAssetUrls(log: (msg: string) => void): Promise<FfmpegAsset
     return { coreURL: coreUrl, wasmURL: wasmUrl };
   }
 
-  // Extension origin: stage the heavy core / wasm bytes through
-  // blob URLs so the loader's dynamic `import(coreURL)` stays
-  // same-origin under the extension CSP. The wrapper worker source
-  // is inlined from the installed @ffmpeg/ffmpeg bundle at build
-  // time (see `ffmpegWorkerSource`), so it always matches the
-  // wrapper's wire protocol without an extra CDN fetch.
-  log('downloading ffmpeg-core (cached after first run)...');
-  const [coreBytes, wasmBytes] = await Promise.all([
-    fetchWithCache(coreUrl, 'application/javascript', log),
-    fetchWithCache(wasmUrl, 'application/wasm', log),
-  ]);
+  // Extension origin: both the wrapper worker and the core JS glue
+  // are bundled into the package under `vendor/` (see
+  // `build-ffmpeg-worker` and `copy-extension-assets` in
+  // `packages/chrome-extension/vite.config.ts`) and exposed as
+  // web-accessible resources. Loading both from
+  // `chrome.runtime.getURL` keeps everything on the extension origin:
+  // the wrapper worker spawns from `chrome-extension://<id>/...` and
+  // its internal `await import(coreURL)` resolves same-scheme without
+  // tripping the cross-scheme blob-to-chrome-extension module-import
+  // deadlock. Only the heavy `ffmpeg-core.wasm` binary still streams
+  // from the CDN on first run; cached bytes are served from a
+  // `blob:` URL on subsequent loads.
+  const coreUrlExt = chrome.runtime.getURL('vendor/ffmpeg-core.js');
+  const classWorkerUrlExt = chrome.runtime.getURL('vendor/ffmpeg-worker.js');
+  log('downloading ffmpeg-core.wasm (cached after first run)...');
+  const wasmBytes = await fetchWithCache(wasmUrl, 'application/wasm', log);
   return {
-    coreURL: bytesToBlobUrl(coreBytes, 'application/javascript'),
+    coreURL: coreUrlExt,
     wasmURL: bytesToBlobUrl(wasmBytes, 'application/wasm'),
-    classWorkerURL: stringToBlobUrl(ffmpegWorkerSource, 'application/javascript'),
+    classWorkerURL: classWorkerUrlExt,
   };
 }
 
@@ -187,10 +195,6 @@ function bytesToBlobUrl(bytes: Uint8Array, contentType: string): string {
   const buffer = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(buffer).set(bytes);
   return URL.createObjectURL(new Blob([buffer], { type: contentType }));
-}
-
-function stringToBlobUrl(source: string, contentType: string): string {
-  return URL.createObjectURL(new Blob([source], { type: contentType }));
 }
 
 function shortUrl(url: string): string {

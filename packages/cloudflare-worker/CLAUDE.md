@@ -8,12 +8,31 @@ The worker provides tray session coordination, capability-token routing, TURN cr
 
 ## Main Files
 
-- `src/index.ts` — worker entry point and public HTTP routing
-- `src/session-tray.ts` — `SessionTrayDurableObject` state machine
-- `src/tray-signaling.ts` — shared signaling message types
-- `src/turn-credentials.ts` — Cloudflare TURN credential fetcher
-- `src/shared.ts` — capability token and response helpers
-- `wrangler.jsonc` — Wrangler config, Durable Object binding, staging env
+| Path                                                                                                                 | Purpose                                                                                                                                                                                                                                                                                         |
+| -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/index.ts`                                                                                                       | Worker entry point and public HTTP routing                                                                                                                                                                                                                                                      |
+| `src/session-tray.ts`                                                                                                | `SessionTrayDurableObject` state machine                                                                                                                                                                                                                                                        |
+| `src/tray-signaling.ts`                                                                                              | Shared signaling message types                                                                                                                                                                                                                                                                  |
+| `src/turn-credentials.ts`                                                                                            | Cloudflare TURN credential fetcher                                                                                                                                                                                                                                                              |
+| `src/shared.ts`                                                                                                      | Capability token + response helpers; `reclaimMsForTray`; the `TRAY_RECLAIM_TTL_MS` / `HOSTED_TRAY_RECLAIM_TTL_MS` consts                                                                                                                                                                        |
+| `src/links.ts`                                                                                                       | `applySliccLinks` — adds the standard RFC 8288 `Link` rel set to every response                                                                                                                                                                                                                 |
+| `src/handoff-page.ts`                                                                                                | `/handoff` route handler — converts `?upskill=` / `?handoff=` / `?msg=` into a `Link` response header                                                                                                                                                                                           |
+| `src/api-catalog.ts`                                                                                                 | `/.well-known/api-catalog` (RFC 9264 linkset) response builder                                                                                                                                                                                                                                  |
+| `src/llms-txt.ts`                                                                                                    | `/llms.txt` response builder                                                                                                                                                                                                                                                                    |
+| `src/rel-docs.ts`                                                                                                    | `/rel/:name` response builder — dereferenceable docs for SLICC custom rels                                                                                                                                                                                                                      |
+| `src/oauth-exchange.ts`, `src/oauth-registry.ts`                                                                     | OAuth callback relay (`/auth/callback`) — decodes the `state` envelope and routes to localhost / extension / allowlisted remote                                                                                                                                                                 |
+| `src/auth/cloud-callback.ts`                                                                                         | `/auth/cloud-callback` IMS popup callback for the cloud dashboard                                                                                                                                                                                                                               |
+| `src/cloud/cloud-sessions-do.ts`                                                                                     | `CloudSessionsDurableObject` — per-user state for `/api/cloud/*`. Wraps `@slicc/cloud-core` ops under `blockConcurrencyWhile`                                                                                                                                                                   |
+| `src/cloud/handlers.ts`, `src/cloud/handler-signout.ts`, `src/cloud/handler-admin.ts`, `src/cloud/handler-config.ts` | HTTP handlers for the `/api/cloud/*` routes; delegate to the DO                                                                                                                                                                                                                                 |
+| `src/cloud/auth.ts`, `src/cloud/auth-cache.ts`, `src/cloud/auth-middleware.ts`                                       | IMS bearer auth: extraction + verification, caching, and the middleware that wraps `/api/cloud/*` handlers                                                                                                                                                                                      |
+| `src/cloud/caps.ts`                                                                                                  | `checkCapsForRun` — per-user cone cap enforcement (`CONE_CAP_RUNNING`, `CONE_CAP_PAUSED`); called from `resumeConeOp` (inside `blockConcurrencyWhile`). The start-path counterpart lives in `@slicc/cloud-core`'s `reserveSlot`, which does the cap check + atomic slot reservation in one step |
+| `src/cloud/local-registry.ts`                                                                                        | `Registry` implementation backed by DurableObject storage — the worker counterpart of node-server's `FileRegistry`                                                                                                                                                                              |
+| `src/cloud/error-envelope.ts`                                                                                        | `errorResponse(status, code, message, details?)` and `okResponse(payload?)` helpers — the JSON shape used by `/api/cloud/*` replies; handlers map `CloudError.code` to HTTP statuses at the call site                                                                                           |
+| `src/cloud/proxy-config.ts`                                                                                          | Pulls IMS client_id / scopes / environment from the Adobe LLM proxy's `/v1/config` so the dashboard popup stays in sync                                                                                                                                                                         |
+| `src/cloud/rate-limit.ts`                                                                                            | Per-user rate limiting on the cloud endpoints                                                                                                                                                                                                                                                   |
+| `wrangler.jsonc`                                                                                                     | Wrangler config, Durable Object bindings (`TRAY_HUB`, `CLOUD_SESSIONS`), staging env, asset binding                                                                                                                                                                                             |
+
+This package depends on `@slicc/cloud-core` (see [`packages/cloud-core/CLAUDE.md`](../cloud-core/CLAUDE.md)) for sandbox lifecycle logic. The worker-local `src/cloud/` files are adapter glue (auth, DO storage, HTTP plumbing) — operation logic lives in cloud-core.
 
 ## Tray Hub Architecture
 
@@ -33,7 +52,7 @@ The worker provides tray session coordination, capability-token routing, TURN cr
 - `GET|POST /join/:token` — follower join and bootstrap polling flow
 - `GET|POST /controller/:token` — leader attach flow and leader WebSocket upgrade
 - `POST /webhook/:token/:webhookId` — forward webhook events into the live leader
-- `GET /auth/callback` — OAuth callback relay page (decodes `state` param with port/path/nonce, redirects to localhost)
+- `GET /auth/callback` — OAuth callback relay page (decodes `state` param with source/port/path/nonce, redirects to localhost for `source:'local'`, extension for `source:'extension'`, or allowlisted remote origin for `source:'remote'`)
 
 ### Signaling model
 
@@ -48,6 +67,15 @@ The worker provides tray session coordination, capability-token routing, TURN cr
 - `session-tray.ts` caches ICE servers and refreshes them before TTL expiry.
 - `wrangler.jsonc` defines the key ID; the API token is stored as a Wrangler secret.
 
+### Tray kind (desktop / hosted)
+
+`TrayRecord.kind` is `'desktop' | 'hosted'`, defaulting to `'desktop'` when absent.
+`POST /tray` reads an optional `kind` from the request body (no body = desktop;
+malformed body = 400). The reclaim TTL is `HOSTED_TRAY_RECLAIM_TTL_MS = 30 days`
+for hosted trays, `TRAY_RECLAIM_TTL_MS = 1 hour` for desktop trays — branched
+through the pure helper `reclaimMsForTray(tray)` in `shared.ts`. Hosted trays
+support laptop-orchestrated sandboxes that pause for days at a time.
+
 ### Static Asset Serving
 
 - The worker serves the built webapp (`dist/ui/`) via Cloudflare Workers Static Assets.
@@ -58,6 +86,7 @@ The worker provides tray session coordination, capability-token routing, TURN cr
 - Requests with `?json=true`, POST requests, and WebSocket upgrades always get the API/JSON response.
 - The browser tray follower code (`packages/webapp/src/scoops/tray-follower.ts`) appends `?json=true` to all fetch calls to ensure API responses.
 - The webapp must be built (`npm run build -w @slicc/webapp`) before the worker can be deployed.
+- **25 MiB per-asset cap**: Cloudflare Workers Static Assets reject any single file in `dist/ui/` over 25 MiB, and `wrangler deploy` (incl. `--dry-run`) fails hard with `Asset too large`. A webapp change that bundles a large binary (e.g. the 33 MB `biome_wasm_bg.wasm`, stripped by `packages/webapp/vite-plugins/strip-biome-wasm-asset.ts`) breaks the deploy. The `cloudflare-worker` CI job runs `npm run build -w @slicc/cloudflare-worker` (the same `wrangler deploy --dry-run`) as a hard gate after building the webapp. The other deploy steps in that same job are `continue-on-error: true` and the finalize/smoke steps skip (rather than fail) when no deploy succeeds, so before this gate an oversized asset passed the PR and only broke later in the separate `release` workflow. The dry-run gate now fails the PR up front.
 
 ## Commands
 
@@ -100,3 +129,68 @@ This lives at the repo root because it coordinates the worker with browser runti
   2. `tests/deployed.test.ts` — smoke test that runs against the deployed staging worker (also checks routes list)
   3. The routes array in `src/index.ts` (the default 200 response)
      Missing any of these causes CI failures — the staging smoke test deploys the worker then verifies the routes match.
+
+## Cloud cones (sliccy.ai/cloud)
+
+Web feature shipped via Plan D. Spec at `docs/superpowers/specs/2026-05-26-cloud-cones-on-sliccy-ai-design.md`.
+
+### Routes
+
+- `GET  /cloud` — dashboard SPA (CSP-enforced)
+- `GET  /auth/cloud-callback` — IMS popup callback (HTML)
+- `GET  /auth/cloud-callback.js` — IMS popup callback (JS, served inline by worker)
+- `POST /api/cloud/start` — start a new cone (auth + cap-checked)
+- `GET  /api/cloud/list` — per-user cone list (reconciled with e2b per call)
+- `POST /api/cloud/pause` — pause a cone
+- `POST /api/cloud/resume` — resume a paused cone (refreshes IMS token in sandbox)
+- `POST /api/cloud/kill` — kill a cone (idempotent)
+- `POST /api/cloud/sign-out` — invalidate the auth cache entry for the bearer
+- `GET  /api/cloud/admin/stats` — admin-gated by `ADMIN_USER_IDS`
+
+All `/api/cloud/*` require `Authorization: Bearer <ims-access-token>` and route to `env.CLOUD_SESSIONS.idFromName(userId)` for per-user state. Lifecycle business logic lives inside the DurableObject (atomic via `state.blockConcurrencyWhile`), not in worker handlers.
+
+### Wrangler config
+
+Vars (in `wrangler.jsonc`):
+
+- `ADOBE_PROXY_ENDPOINT` — Adobe LLM proxy URL. Default `https://adobe-llm-proxy.paolo-moz.workers.dev`. Worker fetches `/v1/config` to learn IMS client_id + scopes + environment, keeping dashboard popup config in sync with what the cone needs to call the proxy.
+- `ALLOWED_EMAIL_DOMAIN` — CSV, default `adobe.com`. Set to `*` to allow any domain.
+- `BLOCKED_EMAILS` — CSV denylist (emails explicitly blocked even if domain allowed).
+- `REQUIRE_OWNER_ORG` — `true` for v2 expansion to any ownerOrg-holder.
+- `CONE_CAP_RUNNING`, `CONE_CAP_PAUSED` — per-user caps (default 1 / 5).
+- `ADMIN_USER_IDS` — CSV of IMS userIds with admin access.
+
+Secrets (`wrangler secret put`):
+
+- `E2B_API_KEY` — Adobe team e2b key. Worker-only; never reachable from browser.
+
+GitHub Actions secrets (for CI worker deploy + template build):
+
+- `E2B_API_KEY` — same value; scoped to the Adobe team workspace.
+
+### v1 → v2 expansion
+
+```bash
+npx wrangler secret put REQUIRE_OWNER_ORG  # value: true
+# update ALLOWED_EMAIL_DOMAIN in wrangler.jsonc to "*"
+npx wrangler deploy
+```
+
+### Stable API contract (worker ↔ sandbox)
+
+Worker depends on these surfaces inside paused-cone images. **Breaking changes require a deprecation cycle** because paused cones from older templates cannot be patched in-place:
+
+- `POST /api/leader-restart` (loopback in sandbox) — re-kicks the leader.
+- `GET  /api/hosted-bootstrap` (loopback in sandbox) — page reads ADOBE_IMS_TOKEN.
+- `POST /api/cloud-status` (loopback in sandbox) — page reports join state.
+- `/slicc/secrets.env` — sandbox file the worker writes via SDK.
+- `/tmp/slicc-join.json` — sandbox file the worker reads via SDK.
+- `ADOBE_IMS_TOKEN`, `ADOBE_IMS_TOKEN_DOMAINS`, `SLICC_TRAY_WORKER_BASE_URL` — envs consumed by `start.sh`.
+
+### Routes-mirror rule (applies to /api/cloud/\* too)
+
+Per the existing tray hub rule — every new route must appear in three places:
+
+- `src/index.ts` routes array (the default `GET /` body)
+- `tests/index.test.ts` routes-list assertion
+- `tests/deployed.test.ts` routes-list assertion

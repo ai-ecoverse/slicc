@@ -1,21 +1,21 @@
 import 'fake-indexeddb/auto';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { IFileSystem, SecureFetch } from 'just-bash';
 import { zipSync } from 'fflate';
+import type { IFileSystem, SecureFetch } from 'just-bash';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { BrowserAPI, PageInfo } from '../../../src/cdp/index.js';
 import { VirtualFS } from '../../../src/fs/index.js';
 import {
-  createSkillCommand,
-  createUpskillCommand,
   _resetBrowseShCatalogCache,
   _resetGlobalFsCache,
+  createSkillCommand,
+  createUpskillCommand,
   installRecommendedSkills,
   normalizeHostname,
   parseBrowseShRef,
   parseGitHubRef,
   scoreSkills,
 } from '../../../src/shell/supplemental-commands/upskill-command.js';
-import type { BrowserAPI, PageInfo } from '../../../src/cdp/index.js';
 
 function createMockCtx() {
   const fs: Partial<IFileSystem> = {
@@ -999,6 +999,176 @@ describe('upskill recommendations subcommand', () => {
     expect(result.stdout).toContain('AEM');
     expect(result.stdout).toContain('score: 7');
     expect(result.stdout).toContain('upskill recommendations --install');
+  });
+
+  it('fetches the company-specific catalog when profile.company is set', async () => {
+    await fs.mkdir('/home/test', { recursive: true });
+    await fs.writeFile(
+      '/home/test/.welcome.json',
+      JSON.stringify({
+        purpose: 'work',
+        role: 'developer',
+        tasks: ['build-websites'],
+        apps: ['aem'],
+        name: 'Test',
+        company: 'Adobe',
+      })
+    );
+
+    const seen: string[] = [];
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      seen.push(url);
+      if (url.endsWith('/skills/catalog.json')) {
+        return {
+          status: 200,
+          body: JSON.stringify({
+            data: [
+              {
+                name: 'aem',
+                displayName: 'AEM',
+                description: 'AEM skill',
+                repo: 'adobe/skills',
+                path: 'skills/aem',
+                skill: 'aem',
+                apps: 'aem',
+                tasks: 'build-websites',
+                role: 'developer',
+                purpose: 'work',
+                boost: '',
+              },
+            ],
+          }),
+          headers: {},
+        };
+      }
+      if (url.endsWith('/skills/adobe.json')) {
+        return {
+          status: 200,
+          body: JSON.stringify({
+            data: [
+              {
+                name: 'adobe-internal-tool',
+                displayName: 'Adobe Internal Tool',
+                description: 'Internal-only skill',
+                repo: 'adobe/internal-skills',
+                path: 'skills/internal',
+                skill: 'internal',
+                apps: 'aem',
+                tasks: 'build-websites',
+                role: 'developer',
+                purpose: 'work',
+                boost: '',
+              },
+            ],
+          }),
+          headers: {},
+        };
+      }
+      return { status: 404, body: '', headers: {} };
+    });
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['recommendations'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(seen.some((u) => u.endsWith('/skills/adobe.json'))).toBe(true);
+    expect(result.stdout).toContain('AEM');
+    expect(result.stdout).toContain('Adobe Internal Tool');
+  });
+
+  it('falls back to base catalog when company catalog 404s', async () => {
+    await fs.mkdir('/home/test', { recursive: true });
+    await fs.writeFile(
+      '/home/test/.welcome.json',
+      JSON.stringify({
+        purpose: 'work',
+        role: 'developer',
+        tasks: ['build-websites'],
+        apps: ['aem'],
+        name: 'Test',
+        company: 'Unknown Co',
+      })
+    );
+
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith('/skills/catalog.json')) {
+        return {
+          status: 200,
+          body: JSON.stringify({
+            data: [
+              {
+                name: 'aem',
+                displayName: 'AEM',
+                description: 'AEM skill',
+                repo: 'adobe/skills',
+                path: 'skills/aem',
+                skill: 'aem',
+                apps: 'aem',
+                tasks: 'build-websites',
+                role: 'developer',
+                purpose: 'work',
+                boost: '',
+              },
+            ],
+          }),
+          headers: {},
+        };
+      }
+      return { status: 404, body: '', headers: {} };
+    });
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['recommendations'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('AEM');
+  });
+
+  it('skips company catalog fetch when company is empty', async () => {
+    await fs.mkdir('/home/test', { recursive: true });
+    await fs.writeFile(
+      '/home/test/.welcome.json',
+      JSON.stringify({
+        purpose: 'work',
+        role: 'developer',
+        tasks: ['build-websites'],
+        apps: ['aem'],
+        name: 'Test',
+        company: '',
+      })
+    );
+
+    const seen: string[] = [];
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      seen.push(url);
+      if (url.endsWith('/skills/catalog.json')) {
+        return {
+          status: 200,
+          body: JSON.stringify({
+            data: [
+              {
+                name: 'aem',
+                displayName: 'AEM',
+                description: 'AEM skill',
+                repo: 'adobe/skills',
+                path: 'skills/aem',
+                skill: 'aem',
+                apps: 'aem',
+                tasks: 'build-websites',
+                role: 'developer',
+                purpose: 'work',
+                boost: '',
+              },
+            ],
+          }),
+          headers: {},
+        };
+      }
+      return { status: 404, body: '', headers: {} };
+    });
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['recommendations'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(seen.some((u) => u.includes('/skills/') && !u.endsWith('/catalog.json'))).toBe(false);
   });
 
   it('returns error when catalog fetch fails', async () => {

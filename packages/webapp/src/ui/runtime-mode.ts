@@ -1,16 +1,22 @@
 import {
-  DEFAULT_EXTENSION_TAB_ID,
-  isBuiltinExtensionTabId,
-  type ExtensionTabId,
-} from './tabbed-ui.js';
-import {
   DETACHED_RUNTIME_QUERY_NAME,
   DETACHED_RUNTIME_QUERY_VALUE,
 } from '../../../chrome-extension/src/messages.js';
+import {
+  DEFAULT_EXTENSION_TAB_ID,
+  type ExtensionTabId,
+  isBuiltinExtensionTabId,
+} from './tabbed-ui.js';
 
-export type UiRuntimeMode = 'standalone' | 'extension' | 'electron-overlay' | 'extension-detached';
+export type UiRuntimeMode =
+  | 'standalone'
+  | 'extension'
+  | 'electron-overlay'
+  | 'extension-detached'
+  | 'hosted-leader';
 
 export const ELECTRON_OVERLAY_RUNTIME_QUERY_VALUE = 'electron-overlay';
+export const HOSTED_LEADER_RUNTIME_QUERY_VALUE = 'hosted-leader';
 export const ELECTRON_OVERLAY_RUNTIME_PATH = '/electron';
 export const ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE = 'slicc-electron-overlay:set-tab';
 // Re-export shared detached-runtime constants from chrome-extension/messages.ts
@@ -40,6 +46,10 @@ export function resolveUiRuntimeMode(locationHref: string, isExtension: boolean)
   }
   try {
     const url = new URL(locationHref);
+    // Check for hosted-leader first, before path-based detection
+    if (url.searchParams.get('runtime') === HOSTED_LEADER_RUNTIME_QUERY_VALUE) {
+      return 'hosted-leader';
+    }
     return isElectronOverlayUrl(url) ? 'electron-overlay' : 'standalone';
   } catch {
     return 'standalone';
@@ -51,7 +61,9 @@ export function shouldUseRuntimeModeTrayDefaults(
   hasRuntimeConfigEndpoint: boolean
 ): boolean {
   return (
-    runtimeMode === 'electron-overlay' || (runtimeMode === 'standalone' && hasRuntimeConfigEndpoint)
+    runtimeMode === 'electron-overlay' ||
+    runtimeMode === 'hosted-leader' ||
+    (runtimeMode === 'standalone' && hasRuntimeConfigEndpoint)
   );
 }
 

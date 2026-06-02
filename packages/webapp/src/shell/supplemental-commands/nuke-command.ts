@@ -1,5 +1,5 @@
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { defineCommand } from 'just-bash';
 
 /**
  * BroadcastChannel name shared with the page-side reload listener

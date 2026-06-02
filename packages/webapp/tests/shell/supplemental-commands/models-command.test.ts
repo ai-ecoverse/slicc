@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 describe('models-command direct fetch migration', () => {
   let originalChrome: any;
@@ -41,8 +41,9 @@ describe('models-command direct fetch migration', () => {
 
     // Import the module AFTER chrome mock is in place
     // This ensures createProxiedFetch will see chrome.runtime.id
-    const modelsCommand =
-      await import('../../../src/shell/supplemental-commands/models-command.ts');
+    const modelsCommand = await import(
+      '../../../src/shell/supplemental-commands/models-command.ts'
+    );
 
     // We can't directly invoke fetchAAData since it's not exported,
     // but we can verify the file imports createProxiedFetch

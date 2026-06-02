@@ -1,10 +1,14 @@
 // @vitest-environment jsdom
 import 'fake-indexeddb/auto';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { VirtualFS } from '../../src/fs/virtual-fs.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FsWatcher } from '../../src/fs/fs-watcher.js';
-import { SprinkleManager } from '../../src/ui/sprinkle-manager.js';
+import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import type { LickEvent } from '../../src/scoops/lick-manager.js';
+import {
+  readOpenSprinklesFromUrl,
+  SprinkleManager,
+  writeOpenSprinklesToUrl,
+} from '../../src/ui/sprinkle-manager.js';
 
 vi.mock('../../src/ui/sprinkle-renderer.js', () => ({
   SprinkleRenderer: class {
@@ -61,11 +65,23 @@ describe('SprinkleManager', () => {
   let lickHandler: (event: LickEvent) => void;
   let addSprinkle: ReturnType<typeof vi.fn>;
   let removeSprinkle: ReturnType<typeof vi.fn>;
+  let minimizeSprinkle: ReturnType<typeof vi.fn>;
+  let registerSprinkle: ReturnType<typeof vi.fn>;
+  let unregisterSprinkle: ReturnType<typeof vi.fn>;
+  let closeSprinkleContent: ReturnType<typeof vi.fn>;
   let mgr: SprinkleManager;
 
   beforeEach(async () => {
     vi.stubGlobal('localStorage', makeMemoryStorage());
     vi.stubGlobal('document', makeFakeDocument());
+    // Reset the URL to a known state so URL-persistence tests start
+    // clean and a leaked `?sprinkles=...` from a previous test can't
+    // restore unexpected panels in the next one.
+    try {
+      window.history.replaceState(null, '', '/');
+    } catch {
+      /* jsdom may already be in a clean state */
+    }
     vfs = await VirtualFS.create({
       dbName: `test-sprinkle-manager-${dbCounter++}`,
       wipe: true,
@@ -73,6 +89,10 @@ describe('SprinkleManager', () => {
     lickHandler = vi.fn() as unknown as (event: LickEvent) => void;
     addSprinkle = vi.fn();
     removeSprinkle = vi.fn();
+    minimizeSprinkle = vi.fn();
+    registerSprinkle = vi.fn();
+    unregisterSprinkle = vi.fn();
+    closeSprinkleContent = vi.fn();
     mgr = new SprinkleManager(
       vfs,
       lickHandler,
@@ -83,6 +103,10 @@ describe('SprinkleManager', () => {
           element: HTMLElement
         ) => void,
         removeSprinkle: removeSprinkle as unknown as (name: string) => void,
+        minimizeSprinkle: minimizeSprinkle as unknown as (name: string) => void,
+        registerSprinkle: registerSprinkle as unknown as (name: string, title: string) => void,
+        unregisterSprinkle: unregisterSprinkle as unknown as (name: string) => void,
+        closeSprinkleContent: closeSprinkleContent as unknown as (name: string) => void,
       },
       vi.fn()
     );
@@ -122,6 +146,22 @@ describe('SprinkleManager', () => {
     expect(() => mgr.sendToSprinkle('unknown', {})).not.toThrow();
   });
 
+  it('minimize() calls the minimizeSprinkle callback when the sprinkle is open', async () => {
+    await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>D</title><div>hi</div>');
+    await mgr.refresh();
+    await mgr.open('dash');
+    minimizeSprinkle.mockClear();
+
+    mgr.minimize('dash');
+
+    expect(minimizeSprinkle).toHaveBeenCalledWith('dash');
+  });
+
+  it('minimize() is a no-op when the sprinkle is not open', () => {
+    mgr.minimize('not-open');
+    expect(minimizeSprinkle).not.toHaveBeenCalled();
+  });
+
   it('sendToSprinkle fires the onSendToSprinkle hook when sprinkle is open (leader broadcast wiring)', async () => {
     // The hook is what `ui/main.ts:mainStandaloneWorker` wires to
     // `pageLeaderTray.sync.broadcastSprinkleUpdate` so followers receive the
@@ -139,6 +179,7 @@ describe('SprinkleManager', () => {
           element: HTMLElement
         ) => void,
         removeSprinkle: removeSprinkle as unknown as (name: string) => void,
+        minimizeSprinkle: minimizeSprinkle as unknown as (name: string) => void,
       },
       vi.fn(),
       { onSendToSprinkle }
@@ -164,6 +205,7 @@ describe('SprinkleManager', () => {
           element: HTMLElement
         ) => void,
         removeSprinkle: removeSprinkle as unknown as (name: string) => void,
+        minimizeSprinkle: minimizeSprinkle as unknown as (name: string) => void,
       },
       vi.fn(),
       { onSendToSprinkle }
@@ -189,6 +231,7 @@ describe('SprinkleManager', () => {
           element: HTMLElement
         ) => void,
         removeSprinkle: removeSprinkle as unknown as (name: string) => void,
+        minimizeSprinkle: minimizeSprinkle as unknown as (name: string) => void,
       },
       vi.fn(),
       { onSendToSprinkle }
@@ -255,6 +298,7 @@ describe('SprinkleManager', () => {
           element: HTMLElement
         ) => void,
         removeSprinkle: removeSprinkle as unknown as (name: string) => void,
+        minimizeSprinkle: minimizeSprinkle as unknown as (name: string) => void,
       },
       vi.fn(),
       { onSendToSprinkle: constructorHook }
@@ -443,6 +487,131 @@ describe('SprinkleManager', () => {
     });
   });
 
+  describe('one-shot auto-open consumption ledger (slicc-autoopened-once)', () => {
+    it('first-run restoreOpenSprinkles auto-opens and records the autoopen sprinkle', async () => {
+      await vfs.writeFile(
+        '/shared/sprinkles/intro/intro.shtml',
+        '<title>Intro</title><div data-sprinkle-autoopen>hi</div>'
+      );
+      await mgr.refresh();
+      await mgr.restoreOpenSprinkles();
+
+      expect(mgr.opened()).toContain('intro');
+      const ledger = JSON.parse(localStorage.getItem('slicc-autoopened-once') ?? '[]');
+      expect(ledger).toContain('intro');
+    });
+
+    it('second restoreOpenSprinkles does NOT auto-open a previously-consumed sprinkle after user closes it', async () => {
+      await vfs.writeFile(
+        '/shared/sprinkles/intro/intro.shtml',
+        '<title>Intro</title><div data-sprinkle-autoopen>hi</div>'
+      );
+      await mgr.refresh();
+      await mgr.restoreOpenSprinkles();
+      expect(mgr.opened()).toContain('intro');
+
+      // User closes the intro panel. close() persists the now-empty
+      // open set, so the next restore will hit the no-localStorage-entry
+      // branch again (well, an empty-array branch — verify both shapes).
+      mgr.close('intro');
+      localStorage.removeItem('slicc-open-sprinkles');
+
+      // Fresh manager simulating a reload: same VFS, same localStorage,
+      // ledger should keep the auto-open from firing again.
+      const addSprinkle2 = vi.fn();
+      const mgr2 = new SprinkleManager(
+        vfs,
+        lickHandler,
+        {
+          addSprinkle: addSprinkle2 as unknown as (
+            name: string,
+            title: string,
+            element: HTMLElement
+          ) => void,
+          removeSprinkle: vi.fn() as unknown as (name: string) => void,
+          minimizeSprinkle: vi.fn() as unknown as (name: string) => void,
+        },
+        vi.fn()
+      );
+      await mgr2.refresh();
+      await mgr2.restoreOpenSprinkles();
+
+      expect(mgr2.opened()).not.toContain('intro');
+      const names = addSprinkle2.mock.calls.map((c) => c[0]);
+      expect(names).not.toContain('intro');
+    });
+
+    it('surfaceUnseenSprinkles skips an autoopen sprinkle already in the ledger even when known-sprinkles is empty', async () => {
+      // Pre-seed the consumption ledger as if a prior session had
+      // already auto-opened it; leave known-sprinkles empty to force
+      // the unseen branch.
+      localStorage.setItem('slicc-autoopened-once', JSON.stringify(['hello']));
+      await vfs.writeFile(
+        '/shared/sprinkles/hello/hello.shtml',
+        '<title>Hello</title><div data-sprinkle-autoopen>hi</div>'
+      );
+      // Also put an empty open-sprinkles entry so restoreOpenSprinkles
+      // takes the localStorage-present branch and only surfaceUnseenSprinkles
+      // is exercised for hello.
+      localStorage.setItem('slicc-open-sprinkles', JSON.stringify([]));
+      await mgr.refresh();
+      await mgr.restoreOpenSprinkles();
+
+      expect(mgr.opened()).not.toContain('hello');
+    });
+
+    it('non-auto-open sprinkles are not added to the consumption ledger', async () => {
+      await vfs.writeFile(
+        '/shared/sprinkles/plain/plain.shtml',
+        '<title>Plain</title><div>hi</div>'
+      );
+      await mgr.refresh();
+      await mgr.restoreOpenSprinkles();
+
+      const ledger = JSON.parse(localStorage.getItem('slicc-autoopened-once') ?? '[]');
+      expect(ledger).not.toContain('plain');
+    });
+
+    it('runOpenNewAutoOpenSprinkles records a freshly-installed autoopen sprinkle and skips it on a second install burst', async () => {
+      // Seed an existing sprinkle so the known-sprinkles ledger is
+      // non-empty and the new one is genuinely "isNew".
+      await vfs.writeFile('/shared/sprinkles/seed/seed.shtml', '<title>Seed</title><div>hi</div>');
+      await mgr.refresh();
+      await mgr.restoreOpenSprinkles();
+      addSprinkle.mockClear();
+
+      // New autoopen sprinkle lands — should auto-open and consume.
+      await vfs.writeFile(
+        '/shared/sprinkles/onboard/onboard.shtml',
+        '<title>Onboard</title><div data-sprinkle-autoopen>hi</div>'
+      );
+      await mgr.openNewAutoOpenSprinkles();
+      expect(mgr.opened()).toContain('onboard');
+      const ledger = JSON.parse(localStorage.getItem('slicc-autoopened-once') ?? '[]');
+      expect(ledger).toContain('onboard');
+
+      // Simulate user closing it, then a fresh install burst (e.g.
+      // uninstall + reinstall via upskill) — the sprinkle is no
+      // longer in availableSprinkles, then reappears as "new".
+      mgr.close('onboard');
+      await vfs.rm('/shared/sprinkles/onboard/onboard.shtml');
+      // Force the cooldown to elapse so the next call doesn't no-op.
+      await new Promise((r) => setTimeout(r, 260));
+      await mgr.openNewAutoOpenSprinkles();
+      addSprinkle.mockClear();
+
+      await vfs.writeFile(
+        '/shared/sprinkles/onboard/onboard.shtml',
+        '<title>Onboard</title><div data-sprinkle-autoopen>hi</div>'
+      );
+      await new Promise((r) => setTimeout(r, 260));
+      await mgr.openNewAutoOpenSprinkles();
+
+      // Ledger keeps it from re-auto-opening.
+      expect(mgr.opened()).not.toContain('onboard');
+    });
+  });
+
   it('open forwards the declared icon spec to the addSprinkle callback', async () => {
     // Custom icon contract: a sprinkle declaring <link rel="icon">
     // must surface the raw spec in the addSprinkle options so the
@@ -467,5 +636,383 @@ describe('SprinkleManager', () => {
     ];
     expect(name).toBe('iconic');
     expect(options?.icon).toBe('music');
+  });
+
+  describe('URL-based open-state persistence (?sprinkles=)', () => {
+    function urlSprinklesParam(): string | null {
+      return new URLSearchParams(window.location.search).get('sprinkles');
+    }
+
+    it('readOpenSprinklesFromUrl returns null when no param is present', () => {
+      window.history.replaceState(null, '', '/');
+      expect(readOpenSprinklesFromUrl()).toBeNull();
+    });
+
+    it('readOpenSprinklesFromUrl returns [] for an empty param', () => {
+      window.history.replaceState(null, '', '/?sprinkles=');
+      expect(readOpenSprinklesFromUrl()).toEqual([]);
+    });
+
+    it('readOpenSprinklesFromUrl splits CSV names', () => {
+      window.history.replaceState(null, '', '/?sprinkles=migrate-page,llm-wiki');
+      expect(readOpenSprinklesFromUrl()).toEqual(['migrate-page', 'llm-wiki']);
+    });
+
+    it('writeOpenSprinklesToUrl sets the param and preserves other params (tray)', () => {
+      window.history.replaceState(null, '', '/?tray=https%3A%2F%2Fexample.com');
+      writeOpenSprinklesToUrl(['dash', 'wiki']);
+      const params = new URLSearchParams(window.location.search);
+      expect(params.get('sprinkles')).toBe('dash,wiki');
+      // tray param must be preserved exactly (decoded URLSearchParams view)
+      expect(params.get('tray')).toBe('https://example.com');
+    });
+
+    it('writeOpenSprinklesToUrl with empty array removes the param entirely', () => {
+      window.history.replaceState(null, '', '/?sprinkles=a,b&detached=1');
+      writeOpenSprinklesToUrl([]);
+      const params = new URLSearchParams(window.location.search);
+      expect(params.has('sprinkles')).toBe(false);
+      expect(params.get('detached')).toBe('1');
+    });
+
+    it('open() writes the sprinkle name to the URL (coalesced microtask flush)', async () => {
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>D</title><div>hi</div>');
+      await mgr.refresh();
+      await mgr.open('dash');
+      // URL write is queued onto a microtask — drain it.
+      await Promise.resolve();
+      expect(urlSprinklesParam()).toBe('dash');
+    });
+
+    it('close() removes the sprinkle from the URL', async () => {
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>D</title><div>hi</div>');
+      await vfs.writeFile('/shared/sprinkles/wiki/wiki.shtml', '<title>W</title><div>hi</div>');
+      await mgr.refresh();
+      await mgr.open('dash');
+      await mgr.open('wiki');
+      await Promise.resolve();
+      expect(urlSprinklesParam()).toBe('dash,wiki');
+
+      mgr.close('dash');
+      await Promise.resolve();
+      expect(urlSprinklesParam()).toBe('wiki');
+
+      mgr.close('wiki');
+      await Promise.resolve();
+      // Empty open set → param removed entirely.
+      expect(urlSprinklesParam()).toBeNull();
+    });
+
+    it('attention-only opens are excluded from the URL', async () => {
+      await vfs.writeFile('/shared/sprinkles/quiet/quiet.shtml', '<title>Q</title><div>hi</div>');
+      await mgr.refresh();
+      await mgr.open('quiet', undefined, { attention: true });
+      await Promise.resolve();
+      expect(urlSprinklesParam()).toBeNull();
+
+      // Promotion to user-opened should land in the URL.
+      mgr.markActivated('quiet');
+      await Promise.resolve();
+      expect(urlSprinklesParam()).toBe('quiet');
+    });
+
+    it('persistOpenSprinkles preserves the tray param across open/close', async () => {
+      window.history.replaceState(null, '', '/?tray=https%3A%2F%2Ftray.example');
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>D</title><div>hi</div>');
+      await mgr.refresh();
+      await mgr.open('dash');
+      await Promise.resolve();
+      const params = new URLSearchParams(window.location.search);
+      expect(params.get('sprinkles')).toBe('dash');
+      expect(params.get('tray')).toBe('https://tray.example');
+
+      mgr.close('dash');
+      await Promise.resolve();
+      const after = new URLSearchParams(window.location.search);
+      expect(after.has('sprinkles')).toBe(false);
+      expect(after.get('tray')).toBe('https://tray.example');
+    });
+
+    it('synchronous open+close burst collapses into a single URL write', async () => {
+      // The coalescer collapses persist calls scheduled within the
+      // same microtask (e.g. close-then-open during a tab swap, or
+      // close-many during a "close all" action). Two awaited
+      // open()s are separated by file-read microtask boundaries and
+      // each flushes its own URL write — that's expected.
+      await vfs.writeFile('/shared/sprinkles/a/a.shtml', '<title>A</title><div>hi</div>');
+      await vfs.writeFile('/shared/sprinkles/b/b.shtml', '<title>B</title><div>hi</div>');
+      await mgr.refresh();
+      await mgr.open('a');
+      await mgr.open('b');
+      await Promise.resolve();
+
+      const replaceSpy = vi.spyOn(window.history, 'replaceState');
+      // Two synchronous mutations in the same tick — both schedule
+      // microtask URL writes, the second is deduped by `urlWriteScheduled`.
+      mgr.close('a');
+      mgr.close('b');
+      await Promise.resolve();
+
+      // Exactly one replaceState reflecting the final empty set.
+      expect(replaceSpy).toHaveBeenCalledTimes(1);
+      expect(urlSprinklesParam()).toBeNull();
+      replaceSpy.mockRestore();
+    });
+
+    it('restoreOpenSprinkles reads the URL and reopens those panels', async () => {
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>D</title><div>hi</div>');
+      await vfs.writeFile('/shared/sprinkles/wiki/wiki.shtml', '<title>W</title><div>hi</div>');
+      window.history.replaceState(null, '', '/?sprinkles=dash,wiki');
+
+      await mgr.refresh();
+      await mgr.restoreOpenSprinkles();
+
+      expect(mgr.opened()).toContain('dash');
+      expect(mgr.opened()).toContain('wiki');
+    });
+
+    it('restoreOpenSprinkles migrates from legacy localStorage when URL has no param, then clears the key', async () => {
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>D</title><div>hi</div>');
+      // No URL param, but the legacy key carries a prior session's set.
+      window.history.replaceState(null, '', '/');
+      localStorage.setItem('slicc-open-sprinkles', JSON.stringify(['dash']));
+
+      await mgr.refresh();
+      await mgr.restoreOpenSprinkles();
+      await Promise.resolve();
+
+      // Sprinkle reopened, URL now carries the migrated set, legacy
+      // key cleared so a future reload takes the URL branch.
+      expect(mgr.opened()).toContain('dash');
+      expect(urlSprinklesParam()).toBe('dash');
+      expect(localStorage.getItem('slicc-open-sprinkles')).toBeNull();
+    });
+
+    it('restoreOpenSprinkles with explicit URL param does NOT surface other unseen sprinkles', async () => {
+      // Regression guard for the Codex P2 review on PR #773: when the
+      // URL carries `?sprinkles=dash`, the function used to fall
+      // through to `surfaceUnseenSprinkles()` after the URL-controlled
+      // restore. On a fresh profile (empty `slicc-known-sprinkles`),
+      // that surfaced every OTHER discoverable sprinkle in attention
+      // mode — so opening a shared link `?sprinkles=dash` quietly
+      // popped icons for everything else the user had never seen.
+      // The URL must restore exactly the panels it names.
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>D</title><div>hi</div>');
+      await vfs.writeFile('/shared/sprinkles/other/other.shtml', '<title>O</title><div>hi</div>');
+      window.history.replaceState(null, '', '/?sprinkles=dash');
+      // Fresh profile: known-sprinkles ledger is empty.
+      expect(localStorage.getItem('slicc-known-sprinkles')).toBeNull();
+
+      await mgr.refresh();
+      await mgr.restoreOpenSprinkles();
+
+      expect(mgr.opened()).toEqual(['dash']);
+      expect(mgr.opened()).not.toContain('other');
+    });
+
+    it('restoreOpenSprinkles prefers URL over legacy localStorage when both exist', async () => {
+      await vfs.writeFile('/shared/sprinkles/url-one/url-one.shtml', '<title>U</title><div/>');
+      await vfs.writeFile('/shared/sprinkles/legacy/legacy.shtml', '<title>L</title><div/>');
+      window.history.replaceState(null, '', '/?sprinkles=url-one');
+      localStorage.setItem('slicc-open-sprinkles', JSON.stringify(['legacy']));
+
+      await mgr.refresh();
+      await mgr.restoreOpenSprinkles();
+      await Promise.resolve();
+
+      // The URL drives restore; the legacy entry is NOT user-opened
+      // (it may still surface in attention mode via the unseen-
+      // sprinkles pass, but only `url-one` lands in the persisted
+      // open set that defines what reloads come back).
+      expect(urlSprinklesParam()).toBe('url-one');
+      // Legacy key is preserved on the URL-wins branch — it'll be
+      // overwritten by the next user-driven open via the safety-net
+      // localStorage write in `persistOpenSprinkles`.
+      expect(localStorage.getItem('slicc-open-sprinkles')).not.toBeNull();
+    });
+  });
+
+  // ── Always-visible rail icons ──────────────────────────────────────
+  //
+  // Every discovered sprinkle gets a rail icon at boot independent of
+  // open state. The icon acts as a launcher when the sprinkle is
+  // closed and indicates the active item when open. Closing only
+  // clears content via `closeSprinkleContent`; the icon stays.
+  describe('always-visible rail icons', () => {
+    it('refresh registers a rail icon for every discovered sprinkle', async () => {
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>hi</div>');
+      await vfs.writeFile('/shared/sprinkles/wiki/wiki.shtml', '<title>Wiki</title><div>hi</div>');
+
+      await mgr.refresh();
+
+      const names = registerSprinkle.mock.calls.map((c) => c[0]);
+      expect(names).toContain('dash');
+      expect(names).toContain('wiki');
+    });
+
+    it('refresh forwards icon spec to registerSprinkle so the rail glyph resolves on register', async () => {
+      await vfs.writeFile(
+        '/shared/sprinkles/iconic/iconic.shtml',
+        '<title>Iconic</title><link rel="icon" href="music" /><div>hi</div>'
+      );
+      await mgr.refresh();
+
+      const call = registerSprinkle.mock.calls.find((c) => c[0] === 'iconic');
+      expect(call).toBeDefined();
+      const opts = call![2] as { icon?: string } | undefined;
+      expect(opts?.icon).toBe('music');
+    });
+
+    it('refresh does not re-register an already-registered sprinkle', async () => {
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>hi</div>');
+      await mgr.refresh();
+      registerSprinkle.mockClear();
+
+      await mgr.refresh();
+
+      expect(registerSprinkle).not.toHaveBeenCalled();
+    });
+
+    it('inlineSprinkles names are filtered out of registerSprinkle (and unset lets them through)', async () => {
+      // `welcome` would also work in principle, but it's already
+      // removed upstream by HIDDEN_SPRINKLES in sprinkle-discovery.ts,
+      // so the assertion would pass even if `inlineSprinkles` were
+      // ignored. Use a non-hidden name to actually exercise the
+      // `inlineSprinkles` filter in `syncRegisteredIcons`.
+      await vfs.writeFile('/shared/sprinkles/foo/foo.shtml', '<title>Foo</title><div>hi</div>');
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>hi</div>');
+
+      const inlineMgr = new SprinkleManager(
+        vfs,
+        lickHandler,
+        {
+          addSprinkle: addSprinkle as unknown as (
+            name: string,
+            title: string,
+            element: HTMLElement
+          ) => void,
+          removeSprinkle: removeSprinkle as unknown as (name: string) => void,
+          minimizeSprinkle: minimizeSprinkle as unknown as (name: string) => void,
+          registerSprinkle: registerSprinkle as unknown as (name: string, title: string) => void,
+          unregisterSprinkle: unregisterSprinkle as unknown as (name: string) => void,
+        },
+        vi.fn(),
+        { inlineSprinkles: new Set(['foo']) }
+      );
+
+      await inlineMgr.refresh();
+
+      const filteredNames = registerSprinkle.mock.calls.map((c) => c[0]);
+      expect(filteredNames).toContain('dash');
+      expect(filteredNames).not.toContain('foo');
+
+      // Control: without `inlineSprinkles`, the same `foo` IS
+      // registered. Proves the absence above is caused by the
+      // option, not by upstream discovery filtering.
+      registerSprinkle.mockClear();
+      const defaultMgr = new SprinkleManager(
+        vfs,
+        lickHandler,
+        {
+          addSprinkle: addSprinkle as unknown as (
+            name: string,
+            title: string,
+            element: HTMLElement
+          ) => void,
+          removeSprinkle: removeSprinkle as unknown as (name: string) => void,
+          minimizeSprinkle: minimizeSprinkle as unknown as (name: string) => void,
+          registerSprinkle: registerSprinkle as unknown as (name: string, title: string) => void,
+          unregisterSprinkle: unregisterSprinkle as unknown as (name: string) => void,
+        },
+        vi.fn()
+      );
+
+      await defaultMgr.refresh();
+
+      const defaultNames = registerSprinkle.mock.calls.map((c) => c[0]);
+      expect(defaultNames).toContain('dash');
+      expect(defaultNames).toContain('foo');
+    });
+
+    it('refresh unregisters sprinkles that disappear from the VFS', async () => {
+      await vfs.writeFile('/shared/sprinkles/gone/gone.shtml', '<title>Gone</title><div>hi</div>');
+      await mgr.refresh();
+      unregisterSprinkle.mockClear();
+
+      await vfs.rm('/shared/sprinkles/gone/gone.shtml');
+      await mgr.refresh();
+
+      expect(unregisterSprinkle).toHaveBeenCalledWith('gone');
+    });
+
+    it('close routes through closeSprinkleContent so the rail icon stays', async () => {
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>hi</div>');
+      await mgr.refresh();
+      await mgr.open('dash');
+      removeSprinkle.mockClear();
+      closeSprinkleContent.mockClear();
+
+      mgr.close('dash');
+
+      expect(closeSprinkleContent).toHaveBeenCalledWith('dash');
+      expect(removeSprinkle).not.toHaveBeenCalled();
+    });
+
+    it('close falls back to removeSprinkle when closeSprinkleContent is unset (legacy callers)', async () => {
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>hi</div>');
+      const legacyMgr = new SprinkleManager(
+        vfs,
+        lickHandler,
+        {
+          addSprinkle: addSprinkle as unknown as (
+            name: string,
+            title: string,
+            element: HTMLElement
+          ) => void,
+          removeSprinkle: removeSprinkle as unknown as (name: string) => void,
+          minimizeSprinkle: minimizeSprinkle as unknown as (name: string) => void,
+        },
+        vi.fn()
+      );
+      await legacyMgr.refresh();
+      await legacyMgr.open('dash');
+      removeSprinkle.mockClear();
+
+      legacyMgr.close('dash');
+
+      expect(removeSprinkle).toHaveBeenCalledWith('dash');
+    });
+
+    it('activate opens a registered-but-closed sprinkle', async () => {
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>hi</div>');
+      await mgr.refresh();
+      expect(mgr.opened()).not.toContain('dash');
+
+      await mgr.activate('dash');
+
+      expect(mgr.opened()).toContain('dash');
+    });
+
+    it('activate promotes an attention-mode sprinkle to user-opened', async () => {
+      await vfs.writeFile('/shared/sprinkles/q/q.shtml', '<title>Q</title><div>hi</div>');
+      await mgr.refresh();
+      await mgr.open('q', undefined, { attention: true });
+      expect(JSON.parse(localStorage.getItem('slicc-open-sprinkles') ?? '[]')).toEqual([]);
+
+      await mgr.activate('q');
+
+      expect(JSON.parse(localStorage.getItem('slicc-open-sprinkles') ?? '[]')).toEqual(['q']);
+    });
+
+    it('activate is a no-op when the sprinkle is already user-opened', async () => {
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>hi</div>');
+      await mgr.refresh();
+      await mgr.open('dash');
+      addSprinkle.mockClear();
+
+      await mgr.activate('dash');
+
+      expect(addSprinkle).not.toHaveBeenCalled();
+    });
   });
 });

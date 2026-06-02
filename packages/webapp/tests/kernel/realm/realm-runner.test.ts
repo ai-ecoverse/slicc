@@ -7,12 +7,12 @@
  * DedicatedWorker / iframe (vitest runs in node and has neither).
  */
 
-import { describe, it, expect, vi } from 'vitest';
 import type { CommandContext } from 'just-bash';
+import { describe, expect, it, vi } from 'vitest';
 import { ProcessManager } from '../../../src/kernel/process-manager.js';
-import { runInRealm } from '../../../src/kernel/realm/realm-runner.js';
-import type { Realm } from '../../../src/kernel/realm/realm-runner.js';
 import type { RealmPortLike } from '../../../src/kernel/realm/realm-rpc.js';
+import type { Realm } from '../../../src/kernel/realm/realm-runner.js';
+import { runInRealm } from '../../../src/kernel/realm/realm-runner.js';
 import type { RealmDoneMsg, RealmErrorMsg } from '../../../src/kernel/realm/realm-types.js';
 
 interface MockRealm extends Realm {
@@ -399,5 +399,82 @@ describe('runInRealm', () => {
       exitCode: 0,
     } satisfies RealmDoneMsg);
     await promise;
+  });
+
+  // Regression: PR #786 review (Codex P2 — stamp websocket
+  // subscriptions with the owning scoop). `attachRealmHost` was
+  // being called without `scoopJid`, so `wsObserve` always stored
+  // `undefined` and `dropForScoop(jid)` matched nothing on
+  // `unregisterScoop`. The runner must thread `owner.scoopJid`
+  // into the realm host's options so `wsObserve` can stamp it.
+  it("threads owner.scoopJid into attachRealmHost (wsObserve stamps the subscriber's scoopJid)", async () => {
+    const pm = new ProcessManager();
+    const realm = makeMockRealm();
+    const observed: Array<{ scoopJid?: string }> = [];
+    const fakeRegistry = {
+      observe: async (req: { targetId: string; scoopJid?: string; forward: unknown }) => {
+        observed.push({ scoopJid: req.scoopJid });
+        return {
+          id: 'wssub-stub',
+          targetId: req.targetId,
+          forward: req.forward,
+          createdAt: new Date().toISOString(),
+        };
+      },
+      update: async () => ({}),
+      close: async () => true,
+      list: () => [],
+    };
+    const g = globalThis as { __slicc_wsSubscribers?: unknown; __slicc_browser?: unknown };
+    const originalReg = g.__slicc_wsSubscribers;
+    const originalBrowser = g.__slicc_browser;
+    g.__slicc_wsSubscribers = fakeRegistry;
+    // Stub a browser so `dispatchBrowser`'s `resolveBrowser(opts)` gate
+    // doesn't throw before reaching the `wsObserve` case.
+    g.__slicc_browser = {};
+    try {
+      const localCtx = {
+        fs: { resolvePath: (b: string, p: string) => `${b}/${p}` },
+      } as unknown as CommandContext;
+      const promise = runInRealm({
+        pm,
+        realmFactory: async () => realm,
+        owner: { kind: 'scoop', scoopJid: 'jid-X' },
+        kind: 'js',
+        code: '',
+        argv: ['node'],
+        env: {},
+        cwd: '/workspace',
+        filename: '<eval>',
+        ctx: localCtx,
+      });
+      // Wait for the factory + attachRealmHost.
+      await Promise.resolve();
+      await Promise.resolve();
+      // Realm-side issues a wsObserve via the RPC protocol.
+      realm.fireMessage({
+        type: 'realm-rpc-req',
+        id: 'req-1',
+        channel: 'browser',
+        op: 'wsObserve',
+        args: [{ targetId: 't1', forward: { sink: 'log' } }],
+      });
+      // Allow the async respond() to settle.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      realm.fireMessage({
+        type: 'realm-done',
+        stdout: '',
+        stderr: '',
+        exitCode: 0,
+      } satisfies RealmDoneMsg);
+      await promise;
+      expect(observed).toHaveLength(1);
+      expect(observed[0].scoopJid).toBe('jid-X');
+    } finally {
+      if (originalReg === undefined) delete g.__slicc_wsSubscribers;
+      else g.__slicc_wsSubscribers = originalReg;
+      if (originalBrowser === undefined) delete g.__slicc_browser;
+      else g.__slicc_browser = originalBrowser;
+    }
   });
 });

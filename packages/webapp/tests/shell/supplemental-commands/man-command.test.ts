@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { IFileSystem } from 'just-bash';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createManCommand } from '../../../src/shell/supplemental-commands/man-command.js';
 
 function createMockCtx() {

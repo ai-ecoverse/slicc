@@ -33,14 +33,14 @@
  *     `ps`'s tree mode treats untracked ppids as orphans.
  */
 
-import { FsError } from '../fs/types.js';
 import type {
   MountBackend,
+  MountDescription,
   MountDirEntry,
   MountStat,
-  MountDescription,
   RefreshReport,
 } from '../fs/mount/backend.js';
+import { FsError } from '../fs/types.js';
 import type { Process, ProcessManager } from './process-manager.js';
 
 const KERNEL_PID = 1;

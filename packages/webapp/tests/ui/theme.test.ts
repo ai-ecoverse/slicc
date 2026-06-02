@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock localStorage
 const storage = new Map<string, string>();
@@ -52,10 +52,10 @@ afterAll(() => {
 });
 
 import {
-  getThemePreference,
-  setThemePreference,
   applyTheme,
+  getThemePreference,
   initTheme,
+  setThemePreference,
 } from '../../src/ui/theme.js';
 
 describe('theme', () => {

@@ -10,41 +10,41 @@
  * - NanoClaw-style tools (send_message, scoop management)
  */
 
-import type { RegisteredScoop } from './types.js';
-import type { VirtualFS } from '../fs/index.js';
-import type { RestrictedFS } from '../fs/restricted-fs.js';
-import { WasmShell } from '../shell/index.js';
-import { Agent, adaptTools, createLogger } from '../core/index.js';
+import type { ThinkingLevel } from '@earendil-works/pi-agent-core';
+import type { Api, AssistantMessage as PiAssistantMessage } from '@earendil-works/pi-ai';
+import { getSupportedThinkingLevels, isContextOverflow, streamSimple } from '@earendil-works/pi-ai';
+import type { BrowserAPI } from '../cdp/index.js';
 import { createCompactContext, stripOrphanedToolResults } from '../core/context-compaction.js';
 import type {
-  AgentEvent as CoreAgentEvent,
   AgentMessage,
   AssistantMessage,
   AssistantMessageEvent,
-  TextContent,
+  AgentEvent as CoreAgentEvent,
   ImageContent,
   Model,
+  TextContent,
 } from '../core/index.js';
-import { isContextOverflow, streamSimple, getSupportedThinkingLevels } from '@earendil-works/pi-ai';
-import type { Api, AssistantMessage as PiAssistantMessage } from '@earendil-works/pi-ai';
-import type { ThinkingLevel } from '@earendil-works/pi-agent-core';
+import { Agent, adaptTools, createLogger } from '../core/index.js';
+import { fetchSecretEnvVars } from '../core/secret-env.js';
 import type { SessionStore } from '../core/session.js';
-import { createFileTools, createBashTool } from '../tools/index.js';
-import type { BrowserAPI } from '../cdp/index.js';
+import type { VirtualFS } from '../fs/index.js';
+import type { RestrictedFS } from '../fs/restricted-fs.js';
+import type { Process, ProcessManager } from '../kernel/process-manager.js';
+import { WasmShell } from '../shell/index.js';
+import { createBashTool, createFileTools } from '../tools/index.js';
 import {
   getApiKey,
+  getSelectedProvider,
   resolveCurrentModel,
   resolveModelById,
-  getSelectedProvider,
 } from '../ui/provider-settings.js';
-import { loadSkills, formatSkillsForPrompt, createDefaultSkills, type Skill } from './skills.js';
+import { getAdobeSessionId } from './llm-session-id.js';
 import {
   createScoopManagementTools,
   type ScoopManagementToolsConfig,
 } from './scoop-management-tools.js';
-import { getAdobeSessionId } from './llm-session-id.js';
-import { fetchSecretEnvVars } from '../core/secret-env.js';
-import type { Process, ProcessManager } from '../kernel/process-manager.js';
+import { createDefaultSkills, formatSkillsForPrompt, loadSkills } from './skills.js';
+import type { RegisteredScoop } from './types.js';
 
 const log = createLogger('scoop-context');
 
@@ -204,16 +204,38 @@ export interface ScoopContextCallbacks {
     jids: readonly string[],
     timeoutMs?: number
   ) => { scheduled: string[]; unknown: string[] };
-  /** Get global CLAUDE.md content (shared across all scoops) */
+  /**
+   * Get `/shared/CLAUDE.md` content (the runtime instructions file
+   * visible to all scoops). Auto-extracted memory does NOT land here —
+   * see {@link appendConeMemory} for the cone-private sink.
+   */
   getGlobalMemory: () => Promise<string>;
-  /** Update global CLAUDE.md (cone only) */
+  /**
+   * Update `/shared/CLAUDE.md` (cone only). Backs the explicit
+   * `update_global_memory` tool surface; not used by the auto-extraction
+   * pass (which routes through {@link appendConeMemory}).
+   */
   setGlobalMemory?: (content: string) => Promise<void>;
   /**
-   * Append auto-extracted memory bullets to /shared/CLAUDE.md (cone only).
+   * Append auto-extracted memory bullets to /workspace/CLAUDE.md (cone only).
    * Called by the compaction memory-extraction pass. When omitted the
-   * compaction pass skips its second LLM call entirely.
+   * compaction pass skips its second LLM call entirely. The explicit-edit
+   * surface for `/shared/CLAUDE.md` is the `update_global_memory` tool.
+   *
+   * `meta` may carry the active LLM model + credentials so the sink can
+   * run a budget-driven restructure pass when an append overshoots the
+   * size budget — see `cone-memory-budget.ts`.
    */
-  appendGlobalMemory?: (bullets: string, meta: { source: string }) => Promise<void>;
+  appendConeMemory?: (
+    bullets: string,
+    meta: {
+      source: string;
+      model?: Model<Api>;
+      apiKey?: string;
+      headers?: Record<string, string>;
+      signal?: AbortSignal;
+    }
+  ) => Promise<void>;
   /**
    * Optional lifecycle hook for compaction. Emitted by the compaction
    * `transformContext` before and after each LLM call so the panel can
@@ -476,10 +498,17 @@ export class ScoopContext {
       // Auto-extracted memory is cone-only — scoops keep their own local
       // memory files curated by the user. Wiring the callback only for the
       // cone also skips the second compaction LLM call entirely for scoops.
+      // Forward the active model + key + adobe headers so the sink can run
+      // its budget-driven restructure pass against the same provider.
       const onMemoryUpdates =
-        this.scoop.isCone && this.callbacks.appendGlobalMemory
+        this.scoop.isCone && this.callbacks.appendConeMemory
           ? (bullets: string) =>
-              this.callbacks.appendGlobalMemory!(bullets, { source: 'compaction' })
+              this.callbacks.appendConeMemory!(bullets, {
+                source: 'compaction',
+                model,
+                apiKey: getApiKey() ?? undefined,
+                headers: compactionHeaders,
+              })
           : undefined;
       const compactFn = createCompactContext({
         model,

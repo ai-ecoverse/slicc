@@ -25,28 +25,28 @@
  * envelope emit.
  */
 
-import type { FsWatcher, VirtualFS } from '../fs/index.js';
-import { Bash, defineCommand, getCommandNames, getNetworkCommandNames } from 'just-bash';
 import type { BashExecResult, Command, CommandName } from 'just-bash';
-import { VfsAdapter } from './vfs-adapter.js';
-import { GitCommands } from '../git/git-commands.js';
-import { createSupplementalCommands } from './supplemental-commands.js';
-import type { MediaPreviewItem } from './supplemental-commands.js';
+import { Bash, defineCommand, getCommandNames, getNetworkCommandNames } from 'just-bash';
 import type { BrowserAPI } from '../cdp/index.js';
+import type { FsWatcher, VirtualFS } from '../fs/index.js';
+import { MountCommands } from '../fs/mount-commands.js';
+import { GitCommands } from '../git/git-commands.js';
+import type { ProcessManager, ProcessOwner } from '../kernel/process-manager.js';
+import { trackShellCommand } from '../ui/telemetry.js';
+import type { BshDiscoveryFS } from './bsh-discovery.js';
+import type { JshDiscoveryFS } from './jsh-discovery.js';
+import type { JshProcessConfig } from './jsh-executor.js';
+import { executeJsCode, executeJshFile } from './jsh-executor.js';
+import { parseShellArgs } from './parse-shell-args.js';
+import { createProxiedFetch } from './proxied-fetch.js';
+import { ScriptCatalog } from './script-catalog.js';
 import {
   createSkillCommand,
   createUpskillCommand,
 } from './supplemental-commands/upskill-command.js';
-import { MountCommands } from '../fs/mount-commands.js';
-import type { ProcessManager, ProcessOwner } from '../kernel/process-manager.js';
-import type { JshProcessConfig } from './jsh-executor.js';
-import type { BshDiscoveryFS } from './bsh-discovery.js';
-import type { JshDiscoveryFS } from './jsh-discovery.js';
-import { executeJshFile, executeJsCode } from './jsh-executor.js';
-import { parseShellArgs } from './parse-shell-args.js';
-import { ScriptCatalog } from './script-catalog.js';
-import { trackShellCommand } from '../ui/telemetry.js';
-import { createProxiedFetch } from './proxied-fetch.js';
+import type { MediaPreviewItem } from './supplemental-commands.js';
+import { createSupplementalCommands } from './supplemental-commands.js';
+import { VfsAdapter } from './vfs-adapter.js';
 
 // ---------------------------------------------------------------------------
 // Options

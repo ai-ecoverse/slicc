@@ -7,10 +7,10 @@
  * `isomorphic-git` to the ESM entry on purpose.
  */
 
-import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
-import { resolve, dirname } from 'path';
+import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
+import { describe, expect, it } from 'vitest';
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const isoGitDir = resolve(currentDir, '../../../../node_modules/isomorphic-git');

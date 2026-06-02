@@ -9,8 +9,8 @@ import {
   resolveQaProfilesRoot,
 } from './chrome-launch.js';
 
-const __dirname = fileURLToPath(new URL('.', import.meta.url));
-const projectRoot = resolve(__dirname, '..', '..');
+const Dirname = fileURLToPath(new URL('.', import.meta.url));
+const projectRoot = resolve(Dirname, '..', '..');
 
 async function main(): Promise<void> {
   const chromePath = findChromeExecutable();

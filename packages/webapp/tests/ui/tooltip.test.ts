@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { initTooltips } from '../../src/ui/tooltip.js';
 
 // The tooltip is laid out as `font-size: 11px` text with `4px 8px` padding;

@@ -1,7 +1,7 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignoreBinaries": ["swift", "wrangler", "playwright", "sleep"],
-  "ignoreDependencies": ["pyodide", "@cloudflare/workers-types"],
+  "ignoreDependencies": ["pyodide", "@cloudflare/workers-types", "e2b"],
   "ignore": [
     "dist/**",
     "**/dist/**",
@@ -15,7 +15,7 @@
   ],
   "workspaces": {
     ".": {
-      "entry": ["vitest.config.ts", "eslint.config.js", ".releaserc.json"],
+      "entry": ["vitest.config.ts", "biome.json", ".releaserc.json"],
       "project": ["*.{js,ts,mjs}"]
     },
     "packages/webapp": {
@@ -61,6 +61,7 @@
       "ignore": ["src/chrome.d.ts"],
       "ignoreDependencies": [
         "@imagemagick/magick-wasm",
+        "@ffmpeg/core",
         "@earendil-works/pi-ai",
         "@earendil-works/pi-coding-agent"
       ]
@@ -76,7 +77,8 @@
         "tests/**/*.test.ts"
       ],
       "project": ["src/**/*.ts", "tests/**/*.ts"],
-      "ignore": ["tests/integration/**"]
+      "ignore": ["tests/integration/**"],
+      "ignoreDependencies": ["e2b"]
     },
     "packages/cloudflare-worker": {
       "entry": ["src/index.ts", "tests/**/*.test.ts"],

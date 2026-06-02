@@ -29,16 +29,16 @@
 
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import type {
+  ToolCall as AgentToolCall,
   AssistantMessage,
   Message,
   TextContent,
-  ToolCall as AgentToolCall,
   ToolResultMessage,
   UserMessage,
 } from '@earendil-works/pi-ai';
+import { isLickChannel, LICK_CHANNELS, type LickChannel } from '../ui/lick-channels.js';
 import type { ChatMessage, ToolCall as UiToolCall } from '../ui/types.js';
 import { HIDDEN_TOOL_NAMES } from './hidden-tools.js';
-import { isLickChannel, LICK_CHANNELS, type LickChannel } from '../ui/lick-channels.js';
 
 /**
  * Pure translator. `idSeed` lets callers inject a deterministic id
@@ -150,7 +150,6 @@ export function agentMessagesToChatMessages(
       if (!target) continue;
       target.result = textOf(m.content);
       target.isError = m.isError;
-      continue;
     }
   }
 

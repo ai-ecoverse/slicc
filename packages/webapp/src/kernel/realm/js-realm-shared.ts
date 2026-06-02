@@ -17,14 +17,33 @@
  * it's a `MessagePort`-shaped fake.
  */
 
-import { RealmRpcClient, type RealmPortLike } from './realm-rpc.js';
-import type { RealmDoneMsg, RealmInitMsg, SerializedFetchResponse } from './realm-types.js';
+import { esmShUrl } from '../../shell/supplemental-commands/cdn-url-builder.js';
+import { createHttpGlobal } from './http-global.js';
 import {
-  LOAD_MODULE_TIMEOUT_MS,
+  attachArgvParseFlags,
+  createCli,
+  createColor,
+  fmt,
+  pool,
+  time,
+} from './js-realm-helpers.js';
+import { type RealmPortLike, RealmRpcClient } from './realm-rpc.js';
+import type {
+  RealmDoneMsg,
+  RealmInitMsg,
+  SerializedFetchResponse,
+  TabHandle,
+  WsSelector,
+  WsSink,
+  WsSubscriberInfo,
+} from './realm-types.js';
+import {
   NODE_NATIVE_PACKAGES,
   nativePackageError,
+  resolveLoadModuleTimeoutMs,
   withTimeout,
 } from './require-guards.js';
+import { createSkillGlobal } from './skill-global.js';
 
 const NODE_BUILTINS_UNAVAILABLE = new Set([
   'http',
@@ -83,10 +102,10 @@ function formatConsoleArg(value: unknown): string {
  * `realm-done` has been posted.
  *
  * The `loadModule` hook is overridable so the iframe (which can't
- * use `import('https://esm.sh/...')` reliably under sandbox CSP)
- * can substitute its own fetch + Function fallback. The default is
- * a dynamic `import()` against esm.sh — the standalone worker
- * path.
+ * use a dynamic `import()` against the esm.sh CDN reliably under
+ * sandbox CSP) can substitute its own fetch + Function fallback.
+ * The default is a dynamic `import()` against esm.sh — the
+ * standalone worker path.
  */
 export async function runJsRealm(
   init: RealmInitMsg,
@@ -154,8 +173,16 @@ export async function runJsRealm(
     },
   };
 
+  // `process.argv` carries a non-enumerable `parseFlags()` method so the
+  // per-skill argv-loop reinvention (~25 LoC × every skill) collapses to a
+  // single call. See `js-realm-helpers.ts` for the spec.
+  const argvWithParseFlags = attachArgvParseFlags(init.argv);
+  // `stdout.isTTY` matches the shell's TTY policy: realm output is captured
+  // and replayed verbatim, so we treat stdout as a TTY unless `NO_COLOR` is
+  // explicitly set in the realm env. The `c` global also honors `NO_COLOR`.
+  const noColor = !!init.env?.NO_COLOR;
   const processShim = {
-    argv: init.argv,
+    argv: argvWithParseFlags,
     env: init.env,
     cwd: () => init.cwd,
     exit: (codeValue?: number) => {
@@ -163,9 +190,21 @@ export async function runJsRealm(
       throw new NodeExitError(normalized);
     },
     stdin: stdinShim,
-    stdout: { write: writeStdout },
-    stderr: { write: writeStderr },
+    stdout: { write: writeStdout, isTTY: !noColor },
+    stderr: { write: writeStderr, isTTY: !noColor },
   };
+
+  // `c` / `cli` are constructed together so cli.die/warn can call into c
+  // without skills having to wire their own colorizer.
+  const colorApi = createColor({ isTTY: !noColor, noColor });
+  const cliApi = createCli({
+    writeStdout,
+    writeStderr,
+    exit: (code: number): never => {
+      throw new NodeExitError(code);
+    },
+    color: colorApi,
+  });
 
   const rpc = new RealmRpcClient(port);
 
@@ -192,10 +231,60 @@ export async function runJsRealm(
     },
   };
 
-  const execBridge = (
-    command: string
-  ): Promise<{ stdout: string; stderr: string; exitCode: number }> =>
-    rpc.call('exec', 'run', [command]);
+  // `exec(string)` parses the command through the shell — convenient
+  // for one-liners but punishing for anyone constructing commands
+  // programmatically (the spec called out the bespoke `shellQuote()`
+  // helpers skills kept reinventing). `exec.spawn(argv[])` mirrors
+  // `child_process.spawn(cmd, args)` and bypasses shell parsing on
+  // every arg, killing the quoting-trap class of bugs.
+  type ExecResult = { stdout: string; stderr: string; exitCode: number };
+  const execRun = (command: string): Promise<ExecResult> => rpc.call('exec', 'run', [command]);
+  const execBridge = Object.assign(execRun, {
+    spawn: (argv: string[]): Promise<ExecResult> => rpc.call('exec', 'spawn', [argv]),
+  });
+
+  // `skill` is computed once at boot from argv[1] and frozen. It exposes
+  // the script-relative path helpers and the skill-scoped config/token
+  // store; see `skill-global.ts` for the surface and rationale.
+  const skillGlobal = createSkillGlobal({ argv: init.argv, fs: fsBridge, exec: execBridge });
+
+  // `browser` is the kernel-side CDP bridge — wraps the same
+  // BrowserAPI playwright-cli uses, so standalone and extension
+  // floats share one realm surface. Accepts a `TabHandle` (from
+  // `findTab` / `ensureTab`) or a bare `targetId` string for ops
+  // that don't need a fresh listPages round-trip. `eval` / `evalAsync`
+  // serialize functions to a string call expression so realm code
+  // can pass a closure as ergonomically as a string.
+  const browserBridge = {
+    findTab: (query: { domain?: string; urlMatch?: string | RegExp }): Promise<TabHandle | null> =>
+      rpc.call('browser', 'findTab', [normalizeUrlMatchQuery(query)]),
+    ensureTab: (url: string, options: { matchUrl?: string | RegExp } = {}): Promise<TabHandle> =>
+      rpc.call('browser', 'ensureTab', [url, normalizeMatchUrl(options)]),
+    eval: (tab: TabHandle | string, fnOrCode: ((..._args: unknown[]) => unknown) | string) =>
+      rpc.call('browser', 'eval', [resolveTargetId(tab), serializeEvalSource(fnOrCode, false)]),
+    evalAsync: (tab: TabHandle | string, fnOrCode: ((..._args: unknown[]) => unknown) | string) =>
+      rpc.call('browser', 'evalAsync', [resolveTargetId(tab), serializeEvalSource(fnOrCode, true)]),
+    cookie: (tab: TabHandle | string, name: string): Promise<string | null> =>
+      rpc.call('browser', 'cookie', [resolveTargetId(tab), name]),
+    localStorage: (tab: TabHandle | string, key: string): Promise<string | null> =>
+      rpc.call('browser', 'localStorage', [resolveTargetId(tab), key]),
+    fetch: (
+      tab: TabHandle | string,
+      url: string,
+      opts: BrowserFetchOptions = {}
+    ): Promise<BrowserFetchResult> =>
+      rpc.call('browser', 'evalAsync', [
+        resolveTargetId(tab),
+        buildBrowserFetchScript(url, opts),
+      ]) as Promise<BrowserFetchResult>,
+    websocket: createWsObserverApi(rpc),
+  };
+
+  // `http` is the standard API-client builder; see `http-global.ts`. It
+  // wraps `realmFetch` so it inherits the kernel-side fetch-proxy + the
+  // secret masking that goes with it. The realm needs only one instance:
+  // `http.client(config)` is what builds the per-API surface.
+  const httpGlobal = createHttpGlobal({ fetch: realmFetch });
 
   async function realmFetch(input: string | URL | Request, opts?: RequestInit): Promise<Response> {
     const url =
@@ -247,10 +336,11 @@ export async function runJsRealm(
     writeStderr(`Warning: ${nativePackageError(id, id).message}\n`);
   }
   const requireCache: Record<string, unknown> = Object.create(null);
+  const loadModuleTimeoutMs = resolveLoadModuleTimeoutMs(init.env);
   if (loadableSpecifiers.length > 0) {
     const results = await Promise.allSettled(
       loadableSpecifiers.map(async (id) => {
-        const mod = await withTimeout(loadModule(id), LOAD_MODULE_TIMEOUT_MS, `require('${id}')`);
+        const mod = await withTimeout(loadModule(id), loadModuleTimeoutMs, `require('${id}')`);
         const val = mod && 'default' in mod ? mod.default : mod;
         requireCache[id] = val;
       })
@@ -293,7 +383,7 @@ export async function runJsRealm(
     if (id in requireCache) return requireCache[id];
     if (bareId in requireCache) return requireCache[bareId];
     throw new Error(
-      `require('${id}'): module not pre-loaded. Use a string literal so it can be pre-fetched, or use \`await import('https://esm.sh/${id}')\` directly.`
+      `require('${id}'): module not pre-loaded. Use a string literal so it can be pre-fetched, or use \`await import('${esmShUrl(id).toString()}')\` directly.`
     );
   };
 
@@ -313,7 +403,15 @@ export async function runJsRealm(
       module: typeof moduleShim,
       exports: Record<string, unknown>,
       exec: typeof execBridge,
-      fetch: typeof realmFetch
+      fetch: typeof realmFetch,
+      skill: typeof skillGlobal,
+      http: typeof httpGlobal,
+      browser: typeof browserBridge,
+      cli: typeof cliApi,
+      c: typeof colorApi,
+      timeApi: typeof time,
+      fmtApi: typeof fmt,
+      poolApi: typeof pool
     ) => Promise<unknown>;
     const fn = new AsyncFn(
       'fs',
@@ -324,6 +422,14 @@ export async function runJsRealm(
       'exports',
       'exec',
       'fetch',
+      'skill',
+      'http',
+      'browser',
+      'cli',
+      'c',
+      'time',
+      'fmt',
+      'pool',
       `"use strict";\n${init.code}`
     );
     await fn(
@@ -334,7 +440,15 @@ export async function runJsRealm(
       moduleShim,
       moduleShim.exports,
       execBridge,
-      realmFetch
+      realmFetch,
+      skillGlobal,
+      httpGlobal,
+      browserBridge,
+      cliApi,
+      colorApi,
+      time,
+      fmt,
+      pool
     );
   } catch (err: unknown) {
     if (err instanceof NodeExitError) {
@@ -387,5 +501,262 @@ function serializeRequestInit(
 }
 
 async function defaultLoadModule(id: string): Promise<Record<string, unknown>> {
-  return (await import(/* @vite-ignore */ 'https://esm.sh/' + id)) as Record<string, unknown>;
+  return (await import(/* @vite-ignore */ esmShUrl(id).toString())) as Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// `browser` global helpers
+// ---------------------------------------------------------------------------
+
+/** Accept either a `TabHandle` (from `findTab`/`ensureTab`) or a bare targetId. */
+function resolveTargetId(tab: TabHandle | string): string {
+  if (typeof tab === 'string') return tab;
+  if (tab && typeof tab === 'object' && typeof tab.targetId === 'string') return tab.targetId;
+  throw new TypeError('browser: expected a tab handle or targetId string');
+}
+
+/**
+ * Serialize a function or string into a self-calling expression
+ * suitable for `Runtime.evaluate`. For functions we emit
+ * `(<fn.toString()>)()` so the page sees an IIFE; for strings we
+ * pass them through verbatim so user-authored snippets keep working.
+ * `awaitPromise` is purely a CDP-side flag — the source string is
+ * the same either way, but we keep the parameter explicit so a
+ * future tweak to wrap async function bodies has a hook.
+ */
+function serializeEvalSource(
+  source: ((..._args: unknown[]) => unknown) | string,
+  _awaitPromise: boolean
+): string {
+  if (typeof source === 'function') {
+    return `(${source.toString()})()`;
+  }
+  if (typeof source === 'string') return source;
+  throw new TypeError('browser.eval/evalAsync: source must be a function or string');
+}
+
+/**
+ * Options accepted by `browser.fetch(tab, url, opts)`. Mirrors the
+ * `RequestInit` subset that round-trips cleanly as JSON through the
+ * page-context bridge — non-serializable shapes (FormData, Blob,
+ * AbortSignal, ReadableStream) are intentionally out of scope. Body
+ * may be a string (sent verbatim) or any JSON-encodable value (the
+ * bridge stringifies it and defaults Content-Type to application/json).
+ */
+export interface BrowserFetchOptions {
+  method?: string;
+  headers?: Record<string, string>;
+  body?: unknown;
+  credentials?: 'include' | 'same-origin' | 'omit';
+  mode?: string;
+  cache?: string;
+  redirect?: string;
+  referrer?: string;
+  referrerPolicy?: string;
+  integrity?: string;
+  keepalive?: boolean;
+}
+
+/**
+ * Structured result returned by `browser.fetch`. `body` is parsed
+ * JSON when the response Content-Type contains `application/json`,
+ * otherwise raw text. Binary responses are out of scope for Wave 3.1
+ * (the script returns the text decoding the page applies).
+ */
+export interface BrowserFetchResult {
+  ok: boolean;
+  status: number;
+  headers: Record<string, string>;
+  body: unknown;
+}
+
+/**
+ * Build the self-contained page-context script that `browser.fetch`
+ * injects via `evalAsync`. All request shaping (method/credentials/
+ * headers/body) is baked into the script via `JSON.stringify` so the
+ * page side does nothing but call `fetch()` and assemble the
+ * structured response. Credentials default to `'include'` so session
+ * cookies travel automatically — that's the whole reason
+ * `browser.fetch` exists rather than the realm-side `fetch`. Body
+ * objects become a JSON string and force Content-Type unless the
+ * caller already set one. Plain string bodies are passed through.
+ *
+ * Exported so `realm-iframe`/parity tests can assert the injected
+ * script is a single function (no temp file, no base64 chunking).
+ */
+export function buildBrowserFetchScript(url: string, opts: BrowserFetchOptions = {}): string {
+  const headers: Record<string, string> = {};
+  const rawHeaders = opts.headers ?? {};
+  for (const [k, v] of Object.entries(rawHeaders)) {
+    if (typeof v === 'string') headers[k] = v;
+  }
+  const method = typeof opts.method === 'string' ? opts.method : 'GET';
+  const credentials =
+    opts.credentials === 'same-origin' || opts.credentials === 'omit'
+      ? opts.credentials
+      : 'include';
+  let body: string | undefined;
+  if (opts.body !== undefined && opts.body !== null) {
+    if (typeof opts.body === 'string') {
+      body = opts.body;
+    } else {
+      body = JSON.stringify(opts.body);
+      const hasCt = Object.keys(headers).some((k) => k.toLowerCase() === 'content-type');
+      if (!hasCt) headers['Content-Type'] = 'application/json';
+    }
+  }
+  const init: Record<string, unknown> = { method, credentials, headers };
+  if (body !== undefined) init.body = body;
+  const passthrough = [
+    'mode',
+    'cache',
+    'redirect',
+    'referrer',
+    'referrerPolicy',
+    'integrity',
+    'keepalive',
+  ] as const;
+  for (const k of passthrough) {
+    const v = opts[k];
+    if (v !== undefined) init[k] = v;
+  }
+  // Single self-contained async IIFE — runs entirely in the page,
+  // returns a structured-cloneable object that CDP returnByValue
+  // round-trips back to the realm host as-is. Keep this stringly
+  // typed (no template-literal substitutions inside the function
+  // body) so JSON.stringify is the only escape boundary.
+  return (
+    '(async () => {' +
+    'const r = await fetch(' +
+    JSON.stringify(url) +
+    ', ' +
+    JSON.stringify(init) +
+    ');' +
+    'const h = {};' +
+    'r.headers.forEach((v, k) => { h[k] = v; });' +
+    "const ct = r.headers.get('content-type') || '';" +
+    'let b;' +
+    "if (ct.indexOf('application/json') !== -1) {" +
+    'try { b = await r.json(); } catch (e) { b = await r.text(); }' +
+    '} else { b = await r.text(); }' +
+    'return { ok: r.ok, status: r.status, headers: h, body: b };' +
+    '})()'
+  );
+}
+
+/**
+ * Coerce the realm-side `urlMatch` (RegExp or string) into the
+ * pattern source the host expects. Allowing both lets realm code
+ * write the natural literal-RegExp form without losing the
+ * structured-clone safety of a string crossing the port.
+ */
+function normalizeUrlMatchQuery(query: { domain?: string; urlMatch?: string | RegExp }): {
+  domain?: string;
+  urlMatch?: string;
+} {
+  const out: { domain?: string; urlMatch?: string } = {};
+  if (query.domain !== undefined) out.domain = query.domain;
+  if (query.urlMatch !== undefined) {
+    out.urlMatch = query.urlMatch instanceof RegExp ? query.urlMatch.source : query.urlMatch;
+  }
+  return out;
+}
+
+function normalizeMatchUrl(options: { matchUrl?: string | RegExp }): { matchUrl?: string } {
+  if (options.matchUrl === undefined) return {};
+  return {
+    matchUrl: options.matchUrl instanceof RegExp ? options.matchUrl.source : options.matchUrl,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// `browser.websocket` — declarative WebSocket observer
+// ---------------------------------------------------------------------------
+
+/**
+ * Builder for a `browser.websocket.on(tab, opts)` chain. The selector
+ * (`.filter`) and sink (`.forward`) are collected on the builder; the
+ * actual subscriber is created by the await on `.forward(...)`, which
+ * resolves to a {@link WsSubscriberHandle}.
+ */
+interface WsObserverBuilder {
+  filter(selector: WsSelector): WsObserverBuilder;
+  forward(sink: WsSink): Promise<WsSubscriberHandle>;
+}
+
+interface WsSubscriberHandle extends WsSubscriberInfo {
+  update(patch: {
+    urlMatch?: string | RegExp | null;
+    filter?: WsSelector | null;
+  }): Promise<WsSubscriberInfo>;
+  close(): Promise<boolean>;
+}
+
+interface WsObserverApi {
+  on(tab: TabHandle | string, opts?: { urlMatch?: string | RegExp }): WsObserverBuilder;
+  list(): Promise<WsSubscriberInfo[]>;
+}
+
+/**
+ * Construct the realm-side `browser.websocket` chainable API. All
+ * actual work happens host-side; this file just shapes the builder
+ * surface and forwards JSON-safe payloads over the `browser` RPC
+ * channel.
+ */
+function createWsObserverApi(rpc: RealmRpcClient): WsObserverApi {
+  function makeHandle(info: WsSubscriberInfo): WsSubscriberHandle {
+    return {
+      ...info,
+      async update(patch): Promise<WsSubscriberInfo> {
+        const wire: { urlMatch?: string | null; filter?: WsSelector | null } = {};
+        if (patch.urlMatch !== undefined) {
+          wire.urlMatch =
+            patch.urlMatch === null
+              ? null
+              : patch.urlMatch instanceof RegExp
+                ? patch.urlMatch.source
+                : patch.urlMatch;
+        }
+        if (patch.filter !== undefined) wire.filter = patch.filter;
+        return rpc.call<WsSubscriberInfo>('browser', 'wsUpdate', [info.id, wire]);
+      },
+      async close(): Promise<boolean> {
+        return rpc.call<boolean>('browser', 'wsClose', [info.id]);
+      },
+    };
+  }
+
+  return {
+    on(tab, opts = {}) {
+      const targetId = resolveTargetId(tab);
+      const urlMatch =
+        opts.urlMatch === undefined
+          ? undefined
+          : opts.urlMatch instanceof RegExp
+            ? opts.urlMatch.source
+            : opts.urlMatch;
+      let selector: WsSelector | undefined;
+      const builder: WsObserverBuilder = {
+        filter(next) {
+          if (typeof next === 'function' || typeof next === 'string') {
+            throw new TypeError(
+              'browser.websocket: filter must be a declarative JSON object, not a function or string'
+            );
+          }
+          selector = next;
+          return builder;
+        },
+        async forward(sink) {
+          const info = await rpc.call<WsSubscriberInfo>('browser', 'wsObserve', [
+            { targetId, urlMatch, filter: selector, forward: sink },
+          ]);
+          return makeHandle(info);
+        },
+      };
+      return builder;
+    },
+    async list() {
+      return rpc.call<WsSubscriberInfo[]>('browser', 'wsList', []);
+    },
+  };
 }

@@ -8,8 +8,12 @@
     "typecheck": "tsc --noEmit -p ../../tsconfig.worker.json",
     "dev": "npx wrangler dev --config wrangler.jsonc"
   },
+  "dependencies": {
+    "@slicc/cloud-core": "*",
+    "jose": "^6.2.3"
+  },
   "devDependencies": {
-    "@cloudflare/workers-types": "4.20260518.1",
-    "wrangler": "4.92.0"
+    "@cloudflare/workers-types": "4.20260526.1",
+    "wrangler": "4.94.0"
   }
 }

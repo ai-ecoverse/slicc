@@ -4,8 +4,21 @@ node_modules/
 *.min.css
 package-lock.json
 artifacts/
+# Swift package build artifacts (gitignored in each swift-* package; exclude
+# from prettier so a local `swift build` doesn't pollute prettier --check)
+**/.build/
+
+# Owned by Biome — keep Prettier on docs/config-text formats only.
+# JS/TS/JSX/JSON/JSONC/CSS are formatted and linted by Biome (biome.json).
+*.ts
+*.tsx
+*.js
+*.jsx
+*.mjs
+*.cjs
+*.json
+*.jsonc
+*.css
+
 # HTML files with embedded content that shouldn't be reformatted
-index.html
-sandbox.html
-sprinkle-sandbox.html
-tool-ui-sandbox.html
+**/*.html

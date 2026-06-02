@@ -3,7 +3,7 @@
  * communicating with the agent via lick events.
  */
 
-import type { VirtualFS, EntryType } from '../fs/index.js';
+import type { EntryType, VirtualFS } from '../fs/index.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 import { toPreviewUrl } from '../shell/supplemental-commands/shared.js';
 
@@ -40,6 +40,8 @@ export interface SprinkleBridgeAPI {
   open(path: string, opts?: { projectRoot?: string }): void;
   /** Close this sprinkle */
   close(): void;
+  /** Collapse the sprinkle panel (rail icon stays visible; user can click to reopen). Does not close or destroy the sprinkle. */
+  minimize(): void;
   /** Stop the cone agent */
   stopCone(): void;
   /** Push an image into the chat input as a pending attachment (no agent turn). */
@@ -55,6 +57,7 @@ export class SprinkleBridge {
   private lickHandler: (event: LickEvent) => void;
   private fs: VirtualFS;
   private closeHandler: (name: string) => void;
+  private minimizeHandler: (name: string) => void;
   private stopConeHandler: () => void;
   private attachImageHandler: (base64: string, name?: string, mimeType?: string) => void;
 
@@ -62,12 +65,14 @@ export class SprinkleBridge {
     fs: VirtualFS,
     lickHandler: (event: LickEvent) => void,
     closeHandler: (name: string) => void,
+    minimizeHandler: (name: string) => void,
     stopConeHandler: () => void,
     attachImageHandler: (base64: string, name?: string, mimeType?: string) => void
   ) {
     this.fs = fs;
     this.lickHandler = lickHandler;
     this.closeHandler = closeHandler;
+    this.minimizeHandler = minimizeHandler;
     this.stopConeHandler = stopConeHandler;
     this.attachImageHandler = attachImageHandler;
   }
@@ -168,6 +173,7 @@ export class SprinkleBridge {
         window.open(url, '_blank');
       },
       close: () => this.closeHandler(sprinkleName),
+      minimize: () => this.minimizeHandler(sprinkleName),
       stopCone: () => this.stopConeHandler(),
       attachImage: (base64: string, name?: string, mimeType?: string) =>
         this.attachImageHandler(base64, name, mimeType),

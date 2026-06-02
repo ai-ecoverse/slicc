@@ -1,22 +1,22 @@
 import {
-  FOLLOWER_ATTACH_RETRY_AFTER_MS,
-  type FollowerBootstrapResponse,
-  jsonResponse,
-  TRAY_RECLAIM_TTL_MS,
-  websocketResponse,
   type CreateTrayRequest,
   type DurableObjectStateLike,
+  FOLLOWER_ATTACH_RETRY_AFTER_MS,
   type FollowerAttachResponse,
   type FollowerAttachResult,
-  type TrayRecord,
+  type FollowerBootstrapResponse,
+  jsonResponse,
+  reclaimMsForTray,
   type TrayLeaderSummary,
+  type TrayRecord,
+  websocketResponse,
 } from './shared.js';
 import {
+  type FollowerBootstrapRequest,
+  type LeaderToWorkerControlMessage,
   TRAY_BOOTSTRAP_MAX_RETRIES,
   TRAY_BOOTSTRAP_RETRY_AFTER_MS,
   TRAY_BOOTSTRAP_TIMEOUT_MS,
-  type FollowerBootstrapRequest,
-  type LeaderToWorkerControlMessage,
   type TrayBootstrapEvent,
   type TrayBootstrapFailure,
   type TrayBootstrapRecord,
@@ -183,6 +183,7 @@ export class SessionTrayDurableObject {
       joinToken: payload.joinToken,
       controllerToken: payload.controllerToken,
       webhookToken: payload.webhookToken,
+      kind: payload.kind ?? 'desktop',
       controllers: {},
       bootstraps: {},
       leader: null,
@@ -220,7 +221,7 @@ export class SessionTrayDurableObject {
           {
             action: 'fail',
             code: 'TRAY_EXPIRED',
-            error: 'Tray expired because the leader did not reclaim it within one hour',
+            error: 'Tray expired because the leader did not reclaim it in time',
           },
           410
         );
@@ -695,7 +696,7 @@ export class SessionTrayDurableObject {
       controllerId: leader.controllerId,
       connected: leader.connected && Boolean(this.leaderSocket),
       reconnectDeadline: leader.disconnectedAt
-        ? new Date(Date.parse(leader.disconnectedAt) + TRAY_RECLAIM_TTL_MS).toISOString()
+        ? new Date(Date.parse(leader.disconnectedAt) + reclaimMsForTray(this.tray)).toISOString()
         : null,
     };
   }
@@ -1103,7 +1104,7 @@ export class SessionTrayDurableObject {
       return null;
     }
 
-    const expiresAt = Date.parse(tray.leader.disconnectedAt) + TRAY_RECLAIM_TTL_MS;
+    const expiresAt = Date.parse(tray.leader.disconnectedAt) + reclaimMsForTray(tray);
     if (this.now() <= expiresAt) {
       return null;
     }
@@ -1112,7 +1113,7 @@ export class SessionTrayDurableObject {
     await this.persistTray();
     return jsonResponse(
       {
-        error: 'Tray expired because the leader did not reclaim it within one hour',
+        error: 'Tray expired because the leader did not reclaim it in time',
         code: 'TRAY_EXPIRED',
       },
       410

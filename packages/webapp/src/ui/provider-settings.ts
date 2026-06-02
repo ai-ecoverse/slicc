@@ -4,26 +4,28 @@
  * provider-specific options, and dynamic model population.
  */
 
-import { getProviders, getModels, getModel, createLogger } from '../core/index.js';
-import type { Model } from '../core/index.js';
 import type { Api } from '@earendil-works/pi-ai';
-import { storeTrayJoinUrl, hasStoredTrayJoinUrl } from '../scoops/tray-runtime-config.js';
+import type { Model } from '../core/index.js';
+import { createLogger, getModel, getModels, getProviders } from '../core/index.js';
+import { hasStoredTrayJoinUrl, storeTrayJoinUrl } from '../scoops/tray-runtime-config.js';
 import { describeInvalidJoinUrl } from './tray-join-url.js';
 
 export { describeInvalidJoinUrl };
-import { getFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
+
 import type { RefreshTrayRuntimeMsg } from '../../../chrome-extension/src/messages.js';
+import {
+  bedrockCampRegionFromBaseUrl,
+  isBedrockCampCompatible,
+} from '../providers/built-in/bedrock-camp.js';
+import type { ProviderConfig } from '../providers/index.js';
 import {
   getRegisteredProviderConfig,
   getRegisteredProviderIds,
   shouldIncludeProvider,
 } from '../providers/index.js';
-import type { ProviderConfig } from '../providers/index.js';
-import type { CompatOverrides } from '../providers/types.js';
-import {
-  isBedrockCampCompatible,
-  bedrockCampRegionFromBaseUrl,
-} from '../providers/built-in/bedrock-camp.js';
+import type { CompatOverrides, DeviceCodePrompter } from '../providers/types.js';
+import { getFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
+import { copyTextToClipboard } from './clipboard.js';
 import { trackSettingsOpen } from './telemetry.js';
 
 export type { ProviderConfig } from '../providers/index.js';
@@ -132,6 +134,18 @@ const LEGACY_KEYS = [
   'bedrock_region',
 ] as const;
 
+// Provider ids that used to expose LLM models but no longer do — `selected-model`
+// entries pointing at any of these are stale after the upgrade and must be
+// cleared, otherwise `resolveCurrentModel()` falls through to its Anthropic
+// default while `getApiKey()` still returns the unrelated OAuth token (e.g.
+// GitHub PAT) and the next cone turn fails with an opaque auth error.
+//
+// We migrate eagerly on module load — `ensureModelSelected()` in layout.ts
+// also catches the broader "stored selection no longer resolves" case, but
+// it only runs on the page boot path; the worker context can `import` this
+// module first and call `resolveCurrentModel()` before layout has booted.
+const LEGACY_AUTH_ONLY_PROVIDERS = new Set(['github']);
+
 // Account entry in the slicc_accounts array
 export interface Account {
   providerId: string;
@@ -146,13 +160,15 @@ export interface Account {
   userName?: string;
   userAvatar?: string;
   maskedValue?: string;
+  /** True when the user has explicitly logged out; token fields are cleared but the row is retained. */
+  loggedOut?: boolean;
 }
 
 // Delete legacy keys on first access
-let _legacyCleaned = false;
+let LegacyCleaned = false;
 function cleanLegacyKeys(): void {
-  if (_legacyCleaned) return;
-  _legacyCleaned = true;
+  if (LegacyCleaned) return;
+  LegacyCleaned = true;
   for (const key of LEGACY_KEYS) {
     try {
       localStorage.removeItem(key);
@@ -160,24 +176,91 @@ function cleanLegacyKeys(): void {
       /* noop */
     }
   }
+  migrateLegacyAuthOnlySelection();
 }
 
-function _resetLegacyCleanup(): void {
-  _legacyCleaned = false;
+/**
+ * Clear `selected-model` when it points at a provider that used to expose
+ * LLM models but no longer does (currently: `github`, after the 3.13.0
+ * Copilot split). Idempotent; never throws.
+ *
+ * Exported only for tests — the production path runs this through
+ * `cleanLegacyKeys()` so the migration fires on the first call to
+ * `getAccounts()` in both the panel and worker contexts.
+ */
+export function migrateLegacyAuthOnlySelection(): void {
+  try {
+    const raw = localStorage.getItem(MODEL_KEY);
+    if (!raw) return;
+    const sep = raw.indexOf(':');
+    if (sep <= 0) return;
+    const provider = raw.slice(0, sep);
+    if (LEGACY_AUTH_ONLY_PROVIDERS.has(provider)) {
+      localStorage.removeItem(MODEL_KEY);
+    }
+  } catch {
+    /* localStorage may be unavailable in some contexts — leave the
+       selection alone; layout.ts:ensureModelSelected() will catch
+       the mismatch on the next boot. */
+  }
+}
+
+function ResetLegacyCleanup(): void {
+  LegacyCleaned = false;
 }
 
 /** Test-only exports */
-export const __test__ = { _resetLegacyCleanup };
+export const __test__ = { _resetLegacyCleanup: ResetLegacyCleanup };
 
 // Provider configs are now loaded dynamically from packages/webapp/src/providers/index.ts
 // (built-in providers in packages/webapp/src/providers/built-in/ + external providers in /packages/webapp/providers/)
 
-// Get all available providers — pi-ai providers (filtered by build config) + registered configs
+// Get all available providers — pi-ai providers (filtered by build config) + registered configs.
+// Hidden providers (config.hidden) are participants in the registry but never
+// surfaced to the user (see ProviderConfig.hidden — used by storage-slot
+// providers like the GitHub Copilot token cache).
 export function getAvailableProviders(): string[] {
   const piProviders = (getProviders() as string[]).filter(shouldIncludeProvider);
   const registeredIds = getRegisteredProviderIds(); // external + built-in extensions, already filtered
   const merged = new Set([...piProviders, ...registeredIds]);
-  return [...merged];
+  return [...merged].filter((id) => !getRegisteredProviderConfig(id)?.hidden);
+}
+
+/**
+ * Whether a provider exposes any LLM models the user could actually pick.
+ *
+ * Used to keep auth-only providers (e.g. plain `github`, which exists solely
+ * for git push/pull and the `oauth-token github` shell command) out of the
+ * "Add Account" picker. Login-gated LLM providers like `github-copilot`
+ * still pass because pi-ai's static registry advertises their catalog even
+ * before the user authenticates.
+ *
+ * Checked sources, in order:
+ *   1. `getProviderModels(id)` — covers providers that proxy another pi-ai
+ *      registry (bedrock-camp → amazon-bedrock) and providers whose
+ *      `getModelIds()` already resolves to a non-empty list.
+ *   2. Pi-ai's static `getModels(id)` — catches providers that advertise a
+ *      static catalog but resolve dynamic models only after login
+ *      (github-copilot pre-login).
+ *   3. The provider's `modelOverrides` declaration — explicit intent that
+ *      models will be offered, even if both look-ups above are empty in
+ *      the current state.
+ */
+export function providerOffersLlmModels(providerId: string): boolean {
+  try {
+    if (getProviderModels(providerId).length > 0) return true;
+  } catch {
+    /* fall through */
+  }
+  try {
+    const piModels = (getModels as (id: string) => unknown[])(providerId);
+    if (piModels.length > 0) return true;
+  } catch {
+    /* provider not registered with pi-ai */
+  }
+  const cfg = getRegisteredProviderConfig(providerId);
+  if (cfg?.modelOverrides && Object.keys(cfg.modelOverrides).length > 0) return true;
+  return false;
 }
 
 // Get provider config with fallback for unknown providers
@@ -205,6 +288,7 @@ function applyModelMetadata(
     reasoning?: boolean;
     input?: string[];
     compat?: CompatOverrides;
+    thinkingLevelMap?: Record<string, string | null>;
   }
 ): void {
   if (metadata.context_window !== undefined) model.contextWindow = metadata.context_window;
@@ -221,6 +305,16 @@ function applyModelMetadata(
     model.compat = {
       ...((model.compat as Record<string, unknown> | undefined) ?? {}),
       ...(metadata.compat as Record<string, unknown>),
+    };
+  }
+  // Same per-level merge for thinkingLevelMap: pi-ai's stream functions read
+  // `model.thinkingLevelMap[effort]` to translate the reasoning level, so a
+  // provider override (e.g. Codex's `minimal` → `low`) must land on the model
+  // rather than being silently dropped in favor of the base map.
+  if (metadata.thinkingLevelMap !== undefined) {
+    model.thinkingLevelMap = {
+      ...((model.thinkingLevelMap as Record<string, string | null> | undefined) ?? {}),
+      ...metadata.thinkingLevelMap,
     };
   }
 }
@@ -431,9 +525,13 @@ export function getAllAvailableModels(): GroupedModels[] {
   const seen = new Map<string, GroupedModels>();
   for (const account of accounts) {
     if (seen.has(account.providerId)) continue;
+    const config = getProviderConfig(account.providerId);
+    // Hidden providers (e.g. internal Copilot token slot) participate in the
+    // registry for token storage but must not surface in the picker even when
+    // they have an active account.
+    if (config.hidden) continue;
     const models = pickerVisible(getProviderModels(account.providerId));
     if (models.length === 0) continue;
-    const config = getProviderConfig(account.providerId);
     const group: GroupedModels = {
       providerId: account.providerId,
       providerName: config.name,
@@ -482,9 +580,9 @@ export function getAccounts(): Account[] {
  * kept in sync by `installPageStorageSync`.
  */
 import {
+  type OAuthExtraDomainsStore,
   readOAuthExtras as sharedReadOAuthExtras,
   writeOAuthExtras as sharedWriteOAuthExtras,
-  type OAuthExtraDomainsStore,
 } from '@slicc/shared-ts';
 import { getPanelRpcClient, hasLocalDom } from '../kernel/panel-rpc.js';
 
@@ -614,6 +712,15 @@ export function addAccount(
 }
 
 export async function removeAccount(providerId: string): Promise<void> {
+  // For OAuth providers, run the full logout sequence first (token revocation,
+  // IdP session clear, and replica removal). removeAccount then finishes by
+  // deleting the account entry entirely.
+  const accountToRemove = getAccounts().find((a) => a.providerId === providerId);
+  const configToRemove = getProviderConfig(providerId);
+  if (accountToRemove && configToRemove?.isOAuth) {
+    await logoutOAuthAccount(providerId);
+  }
+
   // Clear the replica BEFORE wiping the local Account
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
   try {
@@ -655,6 +762,85 @@ export async function removeAccount(providerId: string): Promise<void> {
   const sep = raw.indexOf(':');
   if (sep > 0 && raw.slice(0, sep) === providerId) {
     localStorage.removeItem(MODEL_KEY);
+  }
+}
+
+/**
+ * Logs out of an OAuth provider: revokes the token at the IdP API, opens the
+ * IdP browser-session logout URL (if the provider defines one), clears local
+ * token fields, and marks the account as loggedOut: true so the UI shows a
+ * Login button instead.
+ *
+ * Does NOT remove the account row — use removeAccount for that. removeAccount
+ * calls this internally for OAuth providers so delete also logs out.
+ */
+export async function logoutOAuthAccount(providerId: string): Promise<void> {
+  const account = getAccounts().find((a) => a.providerId === providerId);
+  if (!account) return;
+  const providerConfig = getProviderConfig(providerId);
+  if (!providerConfig?.isOAuth) return;
+
+  // 1. Revoke the token at the IdP API
+  if (providerConfig.onOAuthLogout) {
+    try {
+      await providerConfig.onOAuthLogout();
+    } catch (err) {
+      log.warn('onOAuthLogout failed', {
+        providerId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // 2. Open IdP logout URL to clear browser session (Option B — see spec).
+  //    Skipped gracefully when not defined or in non-window runtimes.
+  if (providerConfig.getOAuthLogoutUrl) {
+    const logoutUrl = providerConfig.getOAuthLogoutUrl(account);
+    if (logoutUrl) {
+      const { openIdpLogoutUrl } = await import('../providers/oauth-service.js');
+      await openIdpLogoutUrl(logoutUrl).catch((err) => {
+        log.warn('IdP logout popup failed', {
+          providerId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+  }
+
+  // 3. Clear token fields, retain display info, set loggedOut: true
+  const updated = getAccounts().map((a): Account => {
+    if (a.providerId !== providerId) return a;
+    return {
+      providerId: a.providerId,
+      apiKey: '',
+      baseUrl: a.baseUrl,
+      userName: a.userName,
+      userAvatar: a.userAvatar,
+      loggedOut: true,
+    };
+  });
+  await saveAccountsAsync(updated);
+
+  // 4. Remove token replica from node-server / extension storage
+  const isExt = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+  try {
+    if (isExt) {
+      await chrome.storage.local.remove([
+        `oauth.${providerId}.token`,
+        `oauth.${providerId}.token_DOMAINS`,
+      ]);
+    } else {
+      const r = await fetch(`/api/secrets/oauth/${providerId}`, { method: 'DELETE' });
+      if (!r.ok && r.status !== 404) {
+        log.warn('OAuth replica DELETE non-ok during logout', { providerId, status: r.status });
+      }
+    }
+  } catch (err) {
+    log.error('OAuth replica removal failed during logout', {
+      providerId,
+      isExtension: isExt,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -1116,6 +1302,10 @@ const ICON_PATHS = {
     'M8 6V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2',
     'M6 6v10a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V6',
   ],
+  /** Arrow leaving a box — used for the Logout button */
+  logout: ['M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4', 'M16 17l5-5-5-5', 'M21 12H9'],
+  /** Arrow entering a box — used for the Login (re-connect) button */
+  login: ['M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4', 'M10 17l5-5-5-5', 'M15 12H3'],
 };
 
 export interface ShowProviderSettingsOptions {
@@ -1202,7 +1392,12 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
           const detail = document.createElement('div');
           detail.style.cssText =
             'font-size: 11px; color: var(--s2-content-disabled); font-family: monospace; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
-          if (account.userName) {
+          if (account.loggedOut) {
+            detail.textContent = account.userName
+              ? `Logged out — was ${account.userName}`
+              : 'Logged out';
+            detail.style.color = 'var(--s2-content-disabled)';
+          } else if (account.userName) {
             detail.textContent = account.userName;
           } else if (account.accessToken) {
             detail.textContent = 'Logged in';
@@ -1235,6 +1430,65 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
             renderAccountForm(account);
           });
           actions.appendChild(editBtn);
+
+          // Logout/Login toggle — OAuth providers only
+          if (config.isOAuth) {
+            const isLoggedOut = account.loggedOut === true;
+            const authBtn = document.createElement('button');
+            authBtn.style.cssText = iconBtnStyle;
+            if (isLoggedOut) {
+              authBtn.setAttribute('aria-label', 'Log in');
+              authBtn.setAttribute('title', 'Log in');
+              authBtn.appendChild(svgIcon(ICON_PATHS.login));
+              authBtn.addEventListener('mouseenter', () => {
+                authBtn.style.color = 'var(--s2-accent)';
+                authBtn.style.borderColor = 'var(--s2-accent)';
+              });
+              authBtn.addEventListener('mouseleave', () => {
+                authBtn.style.color = 'var(--s2-content-secondary)';
+                authBtn.style.borderColor = 'var(--s2-border-subtle)';
+              });
+              authBtn.addEventListener('click', async () => {
+                const { createOAuthLauncher, createInterceptingOAuthLauncherForCurrentRuntime } =
+                  await import('../providers/oauth-service.js');
+                // Always force re-auth when reconnecting from a logged-out
+                // state so providers with SSO (e.g. Adobe IMS) don't silently
+                // re-authorize the previous account.
+                const loginOptions = { forceReauth: true };
+                if (config.onOAuthLoginIntercepted) {
+                  const interceptingLauncher =
+                    await createInterceptingOAuthLauncherForCurrentRuntime();
+                  if (interceptingLauncher) {
+                    await config.onOAuthLoginIntercepted(
+                      interceptingLauncher,
+                      renderAccountsList,
+                      loginOptions
+                    );
+                  }
+                } else if (config.onOAuthLogin) {
+                  const launcher = createOAuthLauncher();
+                  await config.onOAuthLogin(launcher, renderAccountsList, loginOptions);
+                }
+              });
+            } else {
+              authBtn.setAttribute('aria-label', 'Log out');
+              authBtn.setAttribute('title', 'Log out');
+              authBtn.appendChild(svgIcon(ICON_PATHS.logout));
+              authBtn.addEventListener('mouseenter', () => {
+                authBtn.style.color = 'var(--s2-warning, #f59e0b)';
+                authBtn.style.borderColor = 'var(--s2-warning, #f59e0b)';
+              });
+              authBtn.addEventListener('mouseleave', () => {
+                authBtn.style.color = 'var(--s2-content-secondary)';
+                authBtn.style.borderColor = 'var(--s2-border-subtle)';
+              });
+              authBtn.addEventListener('click', async () => {
+                await logoutOAuthAccount(account.providerId);
+                renderAccountsList();
+              });
+            }
+            actions.appendChild(authBtn);
+          }
 
           const deleteBtn = document.createElement('button');
           deleteBtn.style.cssText = iconBtnStyle;
@@ -1367,6 +1621,16 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
         providerSelect.disabled = true;
         providerSelect.style.opacity = '0.7';
       } else {
+        // Placeholder so nothing is silently pre-selected — users must
+        // explicitly pick a provider before any auth/key UI shows up.
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = 'Select a provider…';
+        placeholder.disabled = true;
+        placeholder.selected = true;
+        placeholder.hidden = true;
+        providerSelect.appendChild(placeholder);
+
         const providers = getAvailableProviders();
         const existingProviders = new Set(getAccounts().map((a) => a.providerId));
         const sorted = [...providers].sort((a, b) => {
@@ -1376,6 +1640,10 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
         });
         for (const providerId of sorted) {
           if (existingProviders.has(providerId)) continue;
+          // Skip auth-only providers (no LLM models to expose) — they're
+          // useful as accounts the user might already have, but not as
+          // something to "add" from this dialog.
+          if (!providerOffersLlmModels(providerId)) continue;
           const config = getProviderConfig(providerId);
           const opt = document.createElement('option');
           opt.value = providerId;
@@ -1408,7 +1676,105 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
         'font-size: 12px; color: var(--s2-content-secondary); text-align: center;';
       oauthSection.appendChild(oauthStatus);
 
-      // OAuth login handler — calls the provider's onOAuthLogin callback with a generic launcher
+      // OAuth login handler — calls the provider's onOAuthLogin callback with a generic launcher.
+      // Device-flow providers (e.g. github-copilot) also receive a `presentDeviceCode` prompter
+      // that renders the verification code inline in this dialog instead of via a floating overlay.
+      const createDialogDeviceCodePrompter = (): DeviceCodePrompter => {
+        const host = oauthSection;
+        const status = oauthStatus;
+        const loginBtn = oauthLoginBtn;
+        return (input) =>
+          new Promise<'continue' | 'cancel'>((resolve) => {
+            // Hide the default login UI while the prompt is active so the
+            // dialog only shows the code + the continue/cancel pair. The
+            // original elements are restored on resolution.
+            const wasLoginHidden = loginBtn.style.display;
+            const wasStatusHidden = status.style.display;
+            loginBtn.style.display = 'none';
+            status.style.display = 'none';
+
+            const prompt = document.createElement('div');
+            prompt.setAttribute('data-slicc-device-code-prompt', '');
+            prompt.style.cssText = 'display:flex;flex-direction:column;gap:8px';
+
+            const label = document.createElement('div');
+            label.className = 'dialog__desc';
+            label.textContent = 'Verification code';
+            label.style.cssText = 'font-size: 11px; color: var(--s2-content-tertiary);';
+
+            const code = document.createElement('div');
+            code.textContent = input.userCode;
+            code.style.cssText = [
+              'font: 600 22px ui-monospace, SFMono-Regular, Menlo, monospace',
+              'letter-spacing: 2px',
+              'color: var(--s2-content-primary, #e6edf3)',
+              'background: var(--s2-bg-secondary, #161b22)',
+              'border: 1px solid var(--s2-border, #30363d)',
+              'border-radius: 6px',
+              'padding: 10px 12px',
+              'text-align: center',
+              'user-select: all',
+              'cursor: text',
+            ].join(';');
+
+            const hint = document.createElement('div');
+            hint.className = 'dialog__desc';
+            hint.style.cssText = 'font-size: 12px; color: var(--s2-content-secondary);';
+            hint.textContent =
+              'Click Copy & Continue — we will open the GitHub authorization page in a new tab. Paste this code there if it is not already filled in.';
+
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;margin-top:4px';
+
+            const cancelBtn = document.createElement('button');
+            cancelBtn.type = 'button';
+            cancelBtn.className = 'dialog__btn';
+            cancelBtn.textContent = 'Cancel';
+
+            const continueBtn = document.createElement('button');
+            continueBtn.type = 'button';
+            continueBtn.className = 'dialog__btn dialog__btn--primary';
+            continueBtn.textContent = 'Copy & Continue';
+
+            const cleanup = () => {
+              try {
+                prompt.remove();
+              } catch {
+                /* already removed */
+              }
+              loginBtn.style.display = wasLoginHidden;
+              status.style.display = wasStatusHidden;
+            };
+
+            cancelBtn.addEventListener('click', () => {
+              cleanup();
+              resolve('cancel');
+            });
+            continueBtn.addEventListener('click', () => {
+              void (async () => {
+                try {
+                  await copyTextToClipboard(input.userCode);
+                } catch {
+                  /* user can still copy manually from the displayed code */
+                }
+                cleanup();
+                status.style.display = wasStatusHidden;
+                status.textContent = 'Waiting for you to authorize in the new tab…';
+                resolve('continue');
+              })();
+            });
+
+            row.appendChild(cancelBtn);
+            row.appendChild(continueBtn);
+
+            prompt.appendChild(label);
+            prompt.appendChild(code);
+            prompt.appendChild(hint);
+            prompt.appendChild(row);
+            host.appendChild(prompt);
+          });
+      };
+
       oauthLoginBtn.addEventListener('click', async () => {
         const pid = providerSelect.value;
         if (!pid) return;
@@ -1431,15 +1797,18 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
         oauthStatus.textContent = 'Opening login window...';
         try {
           if (providerConfig.onOAuthLoginIntercepted) {
-            const { createInterceptingOAuthLauncherForCurrentRuntime } =
-              await import('../providers/oauth-service.js');
+            const { createInterceptingOAuthLauncherForCurrentRuntime } = await import(
+              '../providers/oauth-service.js'
+            );
             const launcher = await createInterceptingOAuthLauncherForCurrentRuntime();
             if (!launcher) {
               throw new Error(
                 'No controlled-browser CDP transport available — open SLICC in standalone mode or the Chrome extension.'
               );
             }
-            await providerConfig.onOAuthLoginIntercepted(launcher, renderAccountsList);
+            await providerConfig.onOAuthLoginIntercepted(launcher, renderAccountsList, {
+              presentDeviceCode: createDialogDeviceCodePrompter(),
+            });
           } else if (providerConfig.onOAuthLogin) {
             const { createOAuthLauncher } = await import('../providers/oauth-service.js');
             const launcher = createOAuthLauncher();
@@ -1574,7 +1943,18 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
 
       function updateFormFields() {
         const pid = providerSelect.value;
-        if (!pid) return;
+        if (!pid) {
+          // Placeholder state — hide everything so the dialog only shows
+          // the dropdown until the user makes a choice.
+          providerDesc.textContent = '';
+          oauthSection.style.display = 'none';
+          apiKeySection.style.display = 'none';
+          baseUrlSection.style.display = 'none';
+          deploymentSection.style.display = 'none';
+          apiVersionSection.style.display = 'none';
+          saveBtn.style.display = 'none';
+          return;
+        }
         const providerConfig = getProviderConfig(pid);
 
         providerDesc.textContent = providerConfig.description;

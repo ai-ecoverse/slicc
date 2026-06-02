@@ -7,12 +7,12 @@
  * elsewhere; those have their own tests.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   Gate,
+  type Process,
   ProcessManager,
   runAsProcess,
-  type Process,
 } from '../../src/kernel/process-manager.js';
 
 function makeManager(): ProcessManager {

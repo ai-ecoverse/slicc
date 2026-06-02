@@ -13,6 +13,7 @@
     "identity",
     "storage",
     "webRequest",
+    "declarativeNetRequestWithHostAccess",
     "notifications"
   ],
   "host_permissions": ["<all_urls>"],

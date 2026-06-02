@@ -7,15 +7,14 @@
  * in CLI mode (forbidden-header bridging) and direct fetch in extension mode
  * (CORS bypass via host_permissions).
  */
-import { defineCommand } from 'just-bash';
+
+import { unzipSync } from 'fflate';
 import type { Command, CommandContext, SecureFetch } from 'just-bash';
+import { defineCommand } from 'just-bash';
+import type { BrowserAPI, PageInfo } from '../../cdp/index.js';
+import { GLOBAL_FS_DB_NAME } from '../../fs/global-db.js';
 import type { VirtualFS } from '../../fs/index.js';
 import { VirtualFS as SharedVirtualFS } from '../../fs/index.js';
-import { GLOBAL_FS_DB_NAME } from '../../fs/global-db.js';
-import type { DiscoveredSkill } from '../../skills/types.js';
-import { unzipSync } from 'fflate';
-import { consumeCachedBinaryByUrl } from '../binary-cache.js';
-import { decodeFetchBody, getFetchBodyBytes, parseFetchJson } from '../fetch-body.js';
 import {
   extractHandoff,
   isSafeUpskillBranch,
@@ -23,7 +22,9 @@ import {
   UPSKILL_REL,
 } from '../../net/handoff-link.js';
 import { parseLinkHeader } from '../../net/link-header.js';
-import type { BrowserAPI, PageInfo } from '../../cdp/index.js';
+import type { DiscoveredSkill } from '../../skills/types.js';
+import { consumeCachedBinaryByUrl } from '../binary-cache.js';
+import { decodeFetchBody, getFetchBodyBytes, parseFetchJson } from '../fetch-body.js';
 
 const TESSL_API = 'https://api.tessl.io';
 const BROWSE_SH_API = 'https://browse.sh/api/skills';
@@ -31,7 +32,8 @@ const SKILLS_DIR = '/workspace/skills';
 const GITHUB_GLOBAL_DB = GLOBAL_FS_DB_NAME;
 const GITHUB_TOKEN_PATH = '/workspace/.git/github-token';
 const GITHUB_API_ACCEPT = 'application/vnd.github.v3+json';
-const SKILL_CATALOG_URL = 'https://www.sliccy.com/skills/catalog.json';
+const SKILL_CATALOG_BASE_URL = 'https://www.sliccy.com/skills/';
+const SKILL_CATALOG_URL = `${SKILL_CATALOG_BASE_URL}catalog.json`;
 
 interface TesslSkillAttributes {
   name: string;
@@ -120,17 +122,16 @@ interface CatalogSkill {
   priority?: number;
 }
 
-interface SkillCatalog {
-  version: number;
-  skills: CatalogSkill[];
-}
-
 interface UserProfile {
   purpose: string;
   role: string;
   tasks: string[];
   apps: string[];
   name: string;
+  /** Optional company / organization, collected by the welcome sprinkle. When
+   *  set, recommendations also pull `/skills/<slug>.json` so company-specific
+   *  skills can be pushed alongside the global catalog. */
+  company?: string;
 }
 
 interface RemoteCatalogRow {
@@ -156,7 +157,7 @@ interface ScoredSkill {
 }
 
 function splitField(value: string): string[] | undefined {
-  if (!value || !value.trim()) return undefined;
+  if (!value?.trim()) return undefined;
   return value
     .split(',')
     .map((s) => s.trim())
@@ -552,7 +553,7 @@ Examples:
  * Extract owner/repo from a GitHub URL.
  */
 function parseGitHubUrl(url: string): { owner: string; repo: string } | null {
-  const match = url.match(/github\.com\/([^\/?#]+)\/([^\/?#]+)/);
+  const match = url.match(/github\.com\/([^/?#]+)\/([^/?#]+)/);
   if (!match) return null;
   return { owner: match[1], repo: match[2].replace(/\.git$/, '') };
 }
@@ -1433,7 +1434,7 @@ export function parseGitHubRef(
     return { owner: url[1], repo: url[2], branch: url[3], path: url[4] };
   }
   // Handle owner/repo or owner/repo@branch format
-  const match = ref.match(/^([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_.-]+)(?:@([a-zA-Z0-9_./\-]+))?$/);
+  const match = ref.match(/^([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_.-]+)(?:@([a-zA-Z0-9_./-]+))?$/);
   if (match) {
     return { owner: match[1], repo: match[2], branch: match[3] };
   }
@@ -1468,7 +1469,59 @@ function normalizeProfile(profile: Partial<UserProfile>): UserProfile {
     tasks: Array.isArray(profile.tasks) ? profile.tasks : [],
     apps: Array.isArray(profile.apps) ? profile.apps : [],
     name: profile.name ?? '',
+    company: typeof profile.company === 'string' ? profile.company : undefined,
   };
+}
+
+/**
+ * Slugify a company name for use as a catalog filename component, e.g.
+ * `"Adobe"` → `"adobe"`, `"Acme Inc."` → `"acme-inc"`. Accepts `unknown`
+ * so a corrupted/manually-edited `/home/<user>/.welcome.json` (e.g.
+ * `company: 42`) can never throw — returns `null` for non-strings or
+ * anything that slugs to an empty string.
+ */
+function slugifyCompany(company: unknown): string | null {
+  if (typeof company !== 'string' || !company) return null;
+  const slug = company
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-+|-+$)/g, '');
+  return slug || null;
+}
+
+/**
+ * Fetch the per-company skill catalog (`/skills/<slug>.json`). Returns `[]`
+ * on any failure — a missing or broken company catalog must not block the
+ * primary recommendation flow.
+ */
+async function fetchCompanyCatalog(
+  fetchFn: SecureFetch,
+  company: unknown
+): Promise<CatalogSkill[]> {
+  try {
+    const slug = slugifyCompany(company);
+    if (!slug) return [];
+    const response = await fetchFn(`${SKILL_CATALOG_BASE_URL}${slug}.json`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (response.status !== 200) return [];
+    const data = parseFetchJson<{ data: RemoteCatalogRow[] }>(response.body);
+    return parseRemoteCatalog(data.data);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Merge a base catalog with a company-specific catalog, deduping by skill
+ * name. Company-specific entries take precedence so a company can override
+ * affinity / priority of a globally-listed skill.
+ */
+function mergeCatalogs(base: CatalogSkill[], company: CatalogSkill[]): CatalogSkill[] {
+  if (company.length === 0) return base;
+  const companyNames = new Set(company.map((s) => s.name));
+  return [...base.filter((s) => !companyNames.has(s.name)), ...company];
 }
 
 /**
@@ -1556,11 +1609,14 @@ export async function installRecommendedSkills(
 
   if (!profile) return empty('no-profile');
 
-  // Fetch catalog and installed names in parallel
+  // Fetch catalog, optional company catalog, and installed names in parallel.
+  // The company catalog (when profile.company is set) is best-effort — its
+  // failure is silently ignored so an unrecognized company never blocks
+  // recommendations from the global catalog.
   let catalogSkills: CatalogSkill[];
   let installed: Set<string>;
   try {
-    const [catalogResult, installedResult] = await Promise.all([
+    const [catalogResult, companyResult, installedResult] = await Promise.all([
       (async () => {
         const response = await fetchFn(SKILL_CATALOG_URL, {
           headers: { Accept: 'application/json' },
@@ -1571,9 +1627,10 @@ export async function installRecommendedSkills(
         const data = parseFetchJson<{ data: RemoteCatalogRow[] }>(response.body);
         return parseRemoteCatalog(data.data);
       })(),
+      fetchCompanyCatalog(fetchFn, profile.company),
       getInstalledSkillNames(fs),
     ]);
-    catalogSkills = catalogResult;
+    catalogSkills = mergeCatalogs(catalogResult, companyResult);
     installed = installedResult;
   } catch (err) {
     return empty('catalog-fetch', [
@@ -1928,7 +1985,7 @@ async function discoverTabUpskill(
   for (const link of parsed) {
     if (!link.rel.includes(UPSKILL_REL)) continue;
     const single = extractHandoff([link]);
-    if (!single || single.verb !== 'upskill') continue;
+    if (single?.verb !== 'upskill') continue;
     links.push({
       target: single.target,
       branch: single.branch,
@@ -2163,7 +2220,7 @@ async function handleRecommendations(
   let catalogSkills: CatalogSkill[];
   let installed: Set<string>;
   try {
-    const [catalogResult, installedResult] = await Promise.all([
+    const [catalogResult, companyResult, installedResult] = await Promise.all([
       (async () => {
         const response = await fetchFn(SKILL_CATALOG_URL, {
           headers: { Accept: 'application/json' },
@@ -2174,9 +2231,10 @@ async function handleRecommendations(
         const data = parseFetchJson<{ data: RemoteCatalogRow[] }>(response.body);
         return parseRemoteCatalog(data.data);
       })(),
+      fetchCompanyCatalog(fetchFn, profile.company),
       getInstalledSkillNames(fs),
     ]);
-    catalogSkills = catalogResult;
+    catalogSkills = mergeCatalogs(catalogResult, companyResult);
     installed = installedResult;
   } catch (err) {
     return {

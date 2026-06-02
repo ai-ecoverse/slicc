@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // jsdom historically exposed `localStorage` but on Node >= 25 it falls
 // through to a node-native stub that throws. Match the pattern in
@@ -30,28 +30,32 @@ vi.mock('../../../src/providers/oauth-service.js', async (importOriginal) => {
   return { ...orig, getOAuthPageOrigin: mockGetOAuthPageOrigin };
 });
 
-import {
-  createMcpCommand,
-  coerceArgsBySchema,
-  renderToolResult,
-  aliasContent,
-  extractTimeoutFlag,
-} from '../../../src/shell/supplemental-commands/mcp-command.js';
-import { VirtualFS } from '../../../src/fs/virtual-fs.js';
 import { GLOBAL_FS_DB_NAME } from '../../../src/fs/global-db.js';
+import { VirtualFS } from '../../../src/fs/virtual-fs.js';
+import {
+  getRegisteredProviderConfig,
+  getRegisteredProviderIds,
+  unregisterProviderConfig,
+} from '../../../src/providers/index.js';
+import type { FetchLike } from '../../../src/shell/mcp/oauth.js';
+import {
+  _testOnly_resetMcpProviderState,
+  mcpProviderId,
+  registerMcpProvider,
+} from '../../../src/shell/mcp/provider.js';
 import {
   _testOnly_resetStoreCache,
   readServersFile,
   setServer,
 } from '../../../src/shell/mcp/store.js';
-import { _testOnly_resetMcpProviderState, mcpProviderId } from '../../../src/shell/mcp/provider.js';
-import {
-  unregisterProviderConfig,
-  getRegisteredProviderConfig,
-  getRegisteredProviderIds,
-} from '../../../src/providers/index.js';
 import type { McpFetchLike } from '../../../src/shell/mcp/types.js';
-import type { FetchLike } from '../../../src/shell/mcp/oauth.js';
+import {
+  aliasContent,
+  coerceArgsBySchema,
+  createMcpCommand,
+  extractTimeoutFlag,
+  renderToolResult,
+} from '../../../src/shell/supplemental-commands/mcp-command.js';
 
 type RpcBody = {
   jsonrpc?: string;
@@ -1490,5 +1494,252 @@ describe('mcp invoke --timeout flag (integration)', () => {
     });
     expect(r.exitCode).toBe(0);
     expect(r.stderr).toMatch(/invalid --timeout value "abc"/);
+  });
+});
+
+describe('mcp auth', () => {
+  beforeEach(async () => {
+    _testOnly_resetStoreCache();
+    _testOnly_resetMcpProviderState();
+    unregisterProviderConfig(mcpProviderId('demo'));
+    await wipeGlobalFs();
+    localStorage.clear();
+    mockGetOAuthPageOrigin.mockReset();
+    mockGetOAuthPageOrigin.mockResolvedValue({
+      origin: window.location.origin,
+      href: window.location.href,
+    });
+  });
+
+  afterEach(async () => {
+    _testOnly_resetMcpProviderState();
+    unregisterProviderConfig(mcpProviderId('demo'));
+    await new Promise((r) => setTimeout(r, 600));
+    _testOnly_resetStoreCache();
+  });
+
+  it('--help lists --silent and --interactive flags', async () => {
+    const r = await runCmd(['auth', '--help']);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('usage: mcp auth');
+    expect(r.stdout).toContain('--silent');
+    expect(r.stdout).toContain('--interactive');
+  });
+
+  it('top-level help mentions the auth subcommand', async () => {
+    const r = await runCmd(['--help']);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toMatch(/\bauth\b/);
+  });
+
+  it('refresh --help mentions mcp auth for token refresh', async () => {
+    const r = await runCmd(['refresh', '--help']);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('mcp auth');
+  });
+
+  it('errors on missing <name>', async () => {
+    const r = await runCmd(['auth']);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain('mcp auth: expected <name>');
+  });
+
+  it('rejects --silent and --interactive together', async () => {
+    const r = await runCmd(['auth', 'demo', '--silent', '--interactive']);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain('mutually exclusive');
+  });
+
+  it('errors on unknown server with mcp list hint', async () => {
+    const r = await runCmd(['auth', 'ghost']);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain('unknown server "ghost"');
+    expect(r.stderr).toContain('mcp list');
+  });
+
+  it('errors on server without an auth block', async () => {
+    await setServer('demo', { url: 'https://server.test/sse' });
+    const r = await runCmd(['auth', 'demo']);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain('does not use OAuth');
+  });
+
+  it('silent renewal: rotates token via refresh_token grant', async () => {
+    await setServer('demo', {
+      url: 'https://server.test/sse',
+      auth: {
+        providerId: 'mcp:demo',
+        authorizationServer: 'https://auth.test',
+        clientId: 'cid',
+        scope: 'mcp:tools',
+      },
+    });
+    localStorage.setItem(
+      'slicc_accounts',
+      JSON.stringify([
+        {
+          providerId: 'mcp:demo',
+          apiKey: '',
+          accessToken: 'stale-token',
+          refreshToken: 'mcp-refresh-token',
+          tokenExpiresAt: Date.now() - 60_000,
+        },
+      ])
+    );
+    // Pre-register with the mock OAuth fetch so `onSilentRenew` uses it
+    // instead of the default `createProxiedFetch`. `ensureMcpProviderRegistered`
+    // short-circuits when the provider is already in the session set.
+    registerMcpProvider({
+      name: 'demo',
+      serverUrl: 'https://server.test/sse',
+      auth: {
+        providerId: 'mcp:demo',
+        authorizationServer: 'https://auth.test',
+        clientId: 'cid',
+        scope: 'mcp:tools',
+      },
+      fetchImpl: makeMockOAuthFetch(),
+    });
+
+    const r = await runCmd(['auth', 'demo']);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('Re-authenticated "demo"');
+    expect(r.stdout).toContain('silent renewal');
+
+    const accounts = JSON.parse(localStorage.getItem('slicc_accounts') || '[]');
+    const acc = accounts.find((a: { providerId: string }) => a.providerId === 'mcp:demo');
+    expect(acc?.accessToken).toBe('rotated-token');
+  });
+
+  it('--silent fails non-zero with retry hint when no refresh_token is stored', async () => {
+    await setServer('demo', {
+      url: 'https://server.test/sse',
+      auth: {
+        providerId: 'mcp:demo',
+        authorizationServer: 'https://auth.test',
+        clientId: 'cid',
+        scope: 'mcp:tools',
+      },
+    });
+    localStorage.setItem(
+      'slicc_accounts',
+      JSON.stringify([
+        {
+          providerId: 'mcp:demo',
+          apiKey: '',
+          accessToken: 'stale-token',
+          // No refreshToken -> onSilentRenew returns null.
+        },
+      ])
+    );
+    registerMcpProvider({
+      name: 'demo',
+      serverUrl: 'https://server.test/sse',
+      auth: {
+        providerId: 'mcp:demo',
+        authorizationServer: 'https://auth.test',
+        clientId: 'cid',
+        scope: 'mcp:tools',
+      },
+      fetchImpl: makeMockOAuthFetch(),
+    });
+
+    const r = await runCmd(['auth', 'demo', '--silent']);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain('silent renewal');
+    expect(r.stderr).toContain('retry without --silent');
+  });
+
+  it('falls back from silent to interactive when silent returns null', async () => {
+    await setServer('demo', {
+      url: 'https://server.test/sse',
+      auth: {
+        providerId: 'mcp:demo',
+        authorizationServer: 'https://auth.test',
+        clientId: 'cid',
+        scope: 'mcp:tools',
+      },
+    });
+    // No account at all -> getOAuthAccountInfo returns null -> silent
+    // renewal returns null without throwing. Default flow must then run
+    // the interactive popup path through the injected launcher.
+    registerMcpProvider({
+      name: 'demo',
+      serverUrl: 'https://server.test/sse',
+      auth: {
+        providerId: 'mcp:demo',
+        authorizationServer: 'https://auth.test',
+        clientId: 'cid',
+        scope: 'mcp:tools',
+      },
+      fetchImpl: makeMockOAuthFetch(),
+    });
+
+    const r = await runCmd(['auth', 'demo'], { oauthLauncher: stubLauncher });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('Re-authenticated "demo"');
+    expect(r.stdout).toContain('interactive login');
+
+    const accounts = JSON.parse(localStorage.getItem('slicc_accounts') || '[]');
+    const acc = accounts.find((a: { providerId: string }) => a.providerId === 'mcp:demo');
+    expect(acc?.accessToken).toBe('mcp-access-token');
+  });
+
+  it('--interactive skips silent renewal and runs the popup flow directly', async () => {
+    await setServer('demo', {
+      url: 'https://server.test/sse',
+      auth: {
+        providerId: 'mcp:demo',
+        authorizationServer: 'https://auth.test',
+        clientId: 'cid',
+        scope: 'mcp:tools',
+      },
+    });
+    // Seed a *valid* refresh token to prove --interactive bypasses it.
+    localStorage.setItem(
+      'slicc_accounts',
+      JSON.stringify([
+        {
+          providerId: 'mcp:demo',
+          apiKey: '',
+          accessToken: 'stale-token',
+          refreshToken: 'mcp-refresh-token',
+          tokenExpiresAt: Date.now() - 60_000,
+        },
+      ])
+    );
+    registerMcpProvider({
+      name: 'demo',
+      serverUrl: 'https://server.test/sse',
+      auth: {
+        providerId: 'mcp:demo',
+        authorizationServer: 'https://auth.test',
+        clientId: 'cid',
+        scope: 'mcp:tools',
+      },
+      fetchImpl: makeMockOAuthFetch(),
+    });
+
+    const r = await runCmd(['auth', 'demo', '--interactive'], { oauthLauncher: stubLauncher });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('interactive login');
+  });
+
+  it('mcp refresh: emits a hint to run `mcp auth <name>` on a 401', async () => {
+    await setServer('demo', {
+      url: 'https://server.test/sse',
+      auth: {
+        providerId: 'mcp:demo',
+        authorizationServer: 'https://auth.test',
+        clientId: 'cid',
+        scope: 'mcp:tools',
+      },
+    });
+    // Server requires auth + no account is stored -> initialize gets 401.
+    const { fetch } = makeMockMcpFetch({ authRequired: true });
+    const r = await runCmd(['refresh', 'demo'], { fetchImpl: fetch });
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain('mcp auth demo');
+    expect(r.stderr).toContain('401');
   });
 });

@@ -2,20 +2,20 @@
  * Tests for extension message types and helpers.
  */
 
-import { describe, it, expect } from 'vitest';
-import { isExtensionMessage, type ExtensionMessage } from '../src/messages.js';
+import { describe, expect, it } from 'vitest';
 import type {
+  LeaderActiveScoopMsg,
+  LeaderModeChangedMsg,
+  LeaderRequestLeaderModeStateMsg,
   LeaderSprinklesSnapshotMsg,
   LeaderSprinkleUpdateMsg,
-  LeaderUserMessageEchoMsg,
-  LeaderActiveScoopMsg,
-  LeaderRequestLeaderModeStateMsg,
   LeaderTrayResetRequestMsg,
-  LeaderModeChangedMsg,
   LeaderTrayResetResponseMsg,
-  PanelToOffscreenMessage,
+  LeaderUserMessageEchoMsg,
   OffscreenToPanelMessage,
+  PanelToOffscreenMessage,
 } from '../src/messages.js';
+import { type ExtensionMessage, isExtensionMessage } from '../src/messages.js';
 
 describe('isExtensionMessage', () => {
   it('returns true for valid panel envelope', () => {

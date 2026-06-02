@@ -9,7 +9,7 @@
  * what the local-llm handler passes downstream without making real fetches.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Stub provider-settings so the local-llm module can import it
 // without dragging in the full storage layer.
@@ -35,9 +35,9 @@ vi.mock('@earendil-works/pi-ai/openai-completions', () => ({
   streamSimpleOpenAICompletions: mockStreamSimple,
 }));
 
-import { register } from '../../src/providers/built-in/local-llm.js';
-import { getApiProvider, clearApiProviders } from '@earendil-works/pi-ai';
 import type { Api, Model } from '@earendil-works/pi-ai';
+import { clearApiProviders, getApiProvider } from '@earendil-works/pi-ai';
+import { register } from '../../src/providers/built-in/local-llm.js';
 
 const LOCAL_LLM_API = 'local-llm-openai' as Api;
 

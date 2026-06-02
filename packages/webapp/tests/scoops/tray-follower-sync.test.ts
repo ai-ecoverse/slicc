@@ -1,17 +1,16 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
-
-import { FollowerSyncManager } from '../../src/scoops/tray-follower-sync.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  setFollowerTrayRuntimeStatus,
   getFollowerTrayRuntimeStatus,
+  setFollowerTrayRuntimeStatus,
 } from '../../src/scoops/tray-follower-status.js';
-import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
-import type { AgentEvent, ChatMessage } from '../../src/ui/types.js';
+import { FollowerSyncManager } from '../../src/scoops/tray-follower-sync.js';
 import type {
-  LeaderToFollowerMessage,
   FollowerToLeaderMessage,
+  LeaderToFollowerMessage,
   TrayTargetEntry,
 } from '../../src/scoops/tray-sync-protocol.js';
+import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
+import type { AgentEvent, ChatMessage } from '../../src/ui/types.js';
 
 // ---------------------------------------------------------------------------
 // Fake data channel
@@ -1594,7 +1593,7 @@ describe('FollowerSyncManager', () => {
         // Sibling still in-flight — deliver content.
         const sent = channel.parseSent();
         const fetchMsg = sent.find((m) => m.type === 'sprinkle.fetch');
-        if (!fetchMsg || fetchMsg.type !== 'sprinkle.fetch') {
+        if (fetchMsg?.type !== 'sprinkle.fetch') {
           throw new Error('expected sprinkle.fetch');
         }
         channel.simulateLeaderMessage({
@@ -1722,7 +1721,7 @@ describe('FollowerSyncManager', () => {
         // Resolve via leader reply so the test exits cleanly.
         const sent = channel.parseSent();
         const fetchMsg = sent.find((m) => m.type === 'sprinkle.fetch');
-        if (!fetchMsg || fetchMsg.type !== 'sprinkle.fetch') {
+        if (fetchMsg?.type !== 'sprinkle.fetch') {
           throw new Error('expected sprinkle.fetch');
         }
         channel.simulateLeaderMessage({
@@ -1973,7 +1972,7 @@ describe('FollowerSyncManager', () => {
       const ySent = channel
         .parseSent()
         .find((m) => m.type === 'sprinkle.fetch' && m.sprinkleName === 'y');
-      if (!ySent || ySent.type !== 'sprinkle.fetch') throw new Error('unreachable');
+      if (ySent?.type !== 'sprinkle.fetch') throw new Error('unreachable');
 
       channel.simulateLeaderMessage({
         type: 'sprinkle.content',

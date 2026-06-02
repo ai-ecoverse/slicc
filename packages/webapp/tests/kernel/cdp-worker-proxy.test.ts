@@ -11,10 +11,10 @@
  *   - tearing down the forwarder cleans up real-transport subscriptions
  */
 
-import { describe, it, expect, vi } from 'vitest';
-import { WorkerCdpProxy, startPageCdpForwarder } from '../../src/kernel/cdp-worker-proxy.js';
+import { describe, expect, it, vi } from 'vitest';
 import type { CDPTransport } from '../../src/cdp/transport.js';
 import type { CDPEventListener, ConnectionState } from '../../src/cdp/types.js';
+import { startPageCdpForwarder, WorkerCdpProxy } from '../../src/kernel/cdp-worker-proxy.js';
 
 function tick(ms = 5): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));

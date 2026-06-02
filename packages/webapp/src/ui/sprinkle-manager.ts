@@ -3,13 +3,12 @@
  * and their placement in the layout.
  */
 
-import type { VirtualFS } from '../fs/index.js';
-import type { FsWatcher } from '../fs/index.js';
-import { discoverSprinkles, type Sprinkle } from './sprinkle-discovery.js';
-import { SprinkleBridge } from './sprinkle-bridge.js';
-import { SprinkleRenderer } from './sprinkle-renderer.js';
-import type { LickEvent } from '../scoops/lick-manager.js';
 import { createLogger } from '../core/logger.js';
+import type { FsWatcher, VirtualFS } from '../fs/index.js';
+import type { LickEvent } from '../scoops/lick-manager.js';
+import { SprinkleBridge } from './sprinkle-bridge.js';
+import { discoverSprinkles, type Sprinkle } from './sprinkle-discovery.js';
+import { SprinkleRenderer } from './sprinkle-renderer.js';
 import { trackSprinkleView } from './telemetry.js';
 
 const log = createLogger('sprinkle-manager');
@@ -45,9 +44,100 @@ export interface SprinkleManagerCallbacks {
   ): void;
   /** Called to remove a sprinkle from the layout. */
   removeSprinkle(name: string): void;
+  /** Called to collapse the rail content panel without destroying the sprinkle. */
+  minimizeSprinkle(name: string): void;
+  /**
+   * Called when a sprinkle is discovered in the VFS so its rail icon
+   * can be added independently of `open()`. The layout treats the
+   * icon as a launcher — clicking it routes back through the
+   * activation callback. Optional for back-compat with callers that
+   * don't surface always-visible rail icons (e.g. the follower
+   * controller, which is told what to render by the leader).
+   */
+  registerSprinkle?(name: string, title: string, options?: { icon?: string; zone?: string }): void;
+  /**
+   * Called when a sprinkle disappears from the VFS so the layout
+   * can remove its rail icon. Optional for back-compat.
+   */
+  unregisterSprinkle?(name: string): void;
+  /**
+   * Called when a sprinkle is closed but its rail icon should stay
+   * (it's still in `availableSprinkles`). The layout clears the
+   * panel content and collapses the rail panel without removing
+   * the icon. Falls back to `removeSprinkle` when unset, preserving
+   * the legacy "close → icon gone" behavior for callers that
+   * haven't opted into always-visible icons.
+   */
+  closeSprinkleContent?(name: string): void;
 }
 
 const OPEN_SPRINKLES_KEY = 'slicc-open-sprinkles';
+/**
+ * Query parameter that carries the open-sprinkles set. URL is the
+ * primary source of truth — a manual reload / shared link restores the
+ * exact same panels. `OPEN_SPRINKLES_KEY` (localStorage) is kept for
+ * one release as a migration fallback: `restoreOpenSprinkles` reads it
+ * only when the URL has no `sprinkles` param, then clears it. New
+ * writes go to both URL and localStorage during this window so a
+ * downgrade in mid-migration doesn't lose the user's open set (see the
+ * spec's Rollback Plan).
+ */
+const URL_OPEN_SPRINKLES_PARAM = 'sprinkles';
+
+/**
+ * Read the open-sprinkles set from the URL. Returns `null` when the
+ * `sprinkles` param is absent (signaling "fall back to legacy or
+ * first-run"); returns `[]` when the param is present-but-empty
+ * (signaling "explicitly nothing open"). Safe to call from any
+ * context — returns `null` outside the DOM (worker, SSR).
+ */
+export function readOpenSprinklesFromUrl(): string[] | null {
+  try {
+    if (typeof window === 'undefined' || !window.location) return null;
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get(URL_OPEN_SPRINKLES_PARAM);
+    if (raw === null) return null;
+    if (raw === '') return [];
+    return raw
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Replace the `sprinkles` query param without touching other params
+ * (e.g. `tray`, `detached`) or pushing a new history entry. Empty
+ * list removes the param entirely so a shared URL with no open
+ * sprinkles doesn't grow `?sprinkles=`. No-ops outside the DOM.
+ */
+export function writeOpenSprinklesToUrl(names: readonly string[]): void {
+  try {
+    if (
+      typeof window === 'undefined' ||
+      !window.location ||
+      typeof history === 'undefined' ||
+      typeof history.replaceState !== 'function'
+    ) {
+      return;
+    }
+    const url = new URL(window.location.href);
+    if (names.length === 0) {
+      url.searchParams.delete(URL_OPEN_SPRINKLES_PARAM);
+    } else {
+      // Join with raw commas — names are basenames of `.shtml` files
+      // and never contain commas. Leaving commas unencoded keeps the
+      // URL readable in the address bar.
+      url.searchParams.set(URL_OPEN_SPRINKLES_PARAM, names.join(','));
+    }
+    const next = url.pathname + url.search + url.hash;
+    history.replaceState(history.state ?? null, '', next);
+  } catch {
+    /* history not writable, ignore */
+  }
+}
 /**
  * Persistent ledger of every sprinkle name we've ever discovered in
  * this profile. When `restoreOpenSprinkles()` runs and finds an
@@ -56,6 +146,17 @@ const OPEN_SPRINKLES_KEY = 'slicc-open-sprinkles';
  * in attention mode so the rail icon shows up.
  */
 const KNOWN_SPRINKLES_KEY = 'slicc-known-sprinkles';
+/**
+ * One-shot consumption ledger for `data-sprinkle-autoopen` sprinkles.
+ * Once a sprinkle has been auto-opened (via the first-run
+ * `restoreOpenSprinkles` branch, `surfaceUnseenSprinkles`, or the
+ * post-install `runOpenNewAutoOpenSprinkles` path), its name lands
+ * here and the three auto-open paths skip it forever after. The user
+ * closing the panel won't resurrect it, and an unrelated reset of the
+ * known-sprinkles ledger won't either. User-driven opens (rail icon,
+ * picker) bypass this ledger entirely.
+ */
+const AUTOOPENED_ONCE_KEY = 'slicc-autoopened-once';
 
 export interface SprinkleManagerOptions {
   /**
@@ -88,6 +189,14 @@ export interface SprinkleManagerOptions {
   onSendToSprinkle?: (name: string, data: unknown) => void;
   /** Called when a sprinkle pushes an image into the chat input via slicc.attachImage(). */
   onAttachImage?: (base64: string, name?: string, mimeType?: string) => void;
+  /**
+   * Sprinkle names whose `.shtml` file should NEVER surface a rail
+   * icon (they back inline dips rendered elsewhere, e.g. the welcome
+   * sprinkle). Matched by basename against discovered sprinkles
+   * before `registerSprinkle` is invoked. Empty/unset means every
+   * discovered sprinkle gets a rail icon.
+   */
+  inlineSprinkles?: ReadonlySet<string>;
 }
 
 /**
@@ -131,8 +240,25 @@ export class SprinkleManager {
   private lastRefreshAt = 0;
   private autoOpenBehavior: 'activate' | 'attention';
   private onSendToSprinkle?: (name: string, data: unknown) => void;
+  /**
+   * Names whose rail icons have been pushed to the layout via
+   * `callbacks.registerSprinkle`. Used to diff against the next
+   * `refresh()` discovery and surface install/uninstall as icon
+   * register/unregister events. Empty when the callback is unset
+   * (legacy callers that don't surface always-visible icons).
+   */
+  private registeredSprinkles = new Set<string>();
+  private readonly inlineSprinkles: ReadonlySet<string>;
   private readonly changeListeners = new Set<() => void>();
   private changeNotifyScheduled = false;
+  /**
+   * Coalesce URL writes — `open()` + `close()` bursts inside a single
+   * microtask should produce ONE `history.replaceState` call against
+   * the final snapshot, not one per mutation. Without this an
+   * open-then-immediately-close sequence (e.g. restore + auto-close)
+   * spams history and wastes the chance to keep the address bar quiet.
+   */
+  private urlWriteScheduled = false;
 
   constructor(
     fs: VirtualFS,
@@ -146,12 +272,14 @@ export class SprinkleManager {
       fs,
       lickHandler,
       (name) => this.close(name),
+      (name) => this.minimize(name),
       stopConeHandler,
       options.onAttachImage ?? (() => {})
     );
     this.callbacks = callbacks;
     this.autoOpenBehavior = options.autoOpenBehavior ?? 'activate';
     this.onSendToSprinkle = options.onSendToSprinkle;
+    this.inlineSprinkles = options.inlineSprinkles ?? new Set();
   }
 
   /**
@@ -187,36 +315,73 @@ export class SprinkleManager {
   }
 
   /** Restore sprinkles that were open in the previous session.
-   *  On first run (no localStorage entry), auto-open sprinkles marked with data-sprinkle-autoopen.
+   *  URL `?sprinkles=` is the primary source of truth — a manual
+   *  reload or shared link reopens the same panels. When the URL
+   *  has no `sprinkles` param we fall back to the legacy
+   *  `slicc-open-sprinkles` localStorage entry once (then clear it).
+   *  On first run (no URL param AND no localStorage entry),
+   *  auto-open sprinkles marked with data-sprinkle-autoopen.
    *  Always surfaces sprinkles that have landed in the VFS since
    *  the last time the panel saw them (skill installs in a prior
    *  session, or the very first time we boot a profile that
    *  predates the known-sprinkles ledger). */
   async restoreOpenSprinkles(): Promise<void> {
     try {
-      const raw = localStorage.getItem(OPEN_SPRINKLES_KEY);
-      if (raw) {
-        const names: string[] = JSON.parse(raw);
-        for (const name of names) {
+      const urlNames = readOpenSprinklesFromUrl();
+      if (urlNames !== null) {
+        for (const name of urlNames) {
           try {
             await this.open(name);
           } catch {
             log.warn('Failed to restore sprinkle', { name });
           }
         }
+        // URL is the explicit source of truth — a shared link should
+        // reopen exactly the panels it names. Skip the unseen-surfacing
+        // pass so a fresh profile loading `?sprinkles=dash` doesn't
+        // also attention-surface every other discoverable sprinkle.
+        return;
       } else {
-        // No previously-opened sprinkles — open autoopen ones
-        // (legacy behavior). The non-autoopen ones get a rail
-        // icon via `surfaceUnseenSprinkles()` below.
-        const attention = this.autoOpenBehavior === 'attention';
-        for (const sprinkle of this.availableSprinkles.values()) {
-          if (sprinkle.autoOpen) {
+        const raw = localStorage.getItem(OPEN_SPRINKLES_KEY);
+        if (raw) {
+          // One-time migration: legacy localStorage → URL. The
+          // subsequent `open()` calls each re-persist (URL +
+          // localStorage), and after the burst we clear the legacy
+          // key so future reloads take the URL branch above.
+          try {
+            const names: string[] = JSON.parse(raw);
+            for (const name of names) {
+              try {
+                await this.open(name);
+              } catch {
+                log.warn('Failed to restore sprinkle', { name });
+              }
+            }
+          } finally {
+            try {
+              localStorage.removeItem(OPEN_SPRINKLES_KEY);
+            } catch {
+              /* localStorage unavailable, ignore */
+            }
+          }
+        } else {
+          // No previously-opened sprinkles — open autoopen ones
+          // (legacy behavior). The non-autoopen ones get a rail
+          // icon via `surfaceUnseenSprinkles()` below.
+          const attention = this.autoOpenBehavior === 'attention';
+          const autoOpenedOnce = this.loadAutoOpenedOnce();
+          const consumed = new Set<string>();
+          for (const sprinkle of this.availableSprinkles.values()) {
+            if (!sprinkle.autoOpen) continue;
+            if (autoOpenedOnce.has(sprinkle.name)) continue;
             try {
               await this.open(sprinkle.name, undefined, { attention });
+              consumed.add(sprinkle.name);
             } catch {
               log.warn('Failed to auto-open sprinkle', { name: sprinkle.name });
             }
           }
+          if (consumed.size > 0) this.persistAutoOpenedOnce(consumed);
         }
       }
     } catch {
@@ -234,20 +399,28 @@ export class SprinkleManager {
    */
   private async surfaceUnseenSprinkles(): Promise<void> {
     const known = this.loadKnownSprinkles();
+    const autoOpenedOnce = this.loadAutoOpenedOnce();
     const attentionForAutoOpen = this.autoOpenBehavior === 'attention';
+    const consumed = new Set<string>();
     for (const sprinkle of this.availableSprinkles.values()) {
       if (known.has(sprinkle.name)) continue;
       if (this.openSprinkles.has(sprinkle.name)) continue;
+      // Auto-open sprinkles are one-shot: if we've already consumed
+      // this one in a prior session, skip it entirely even though
+      // the known-sprinkles ledger doesn't list it.
+      if (sprinkle.autoOpen && autoOpenedOnce.has(sprinkle.name)) continue;
       try {
         await this.open(sprinkle.name, undefined, {
           attention: sprinkle.autoOpen ? attentionForAutoOpen : true,
         });
+        if (sprinkle.autoOpen) consumed.add(sprinkle.name);
         log.info('Surfaced previously-unseen sprinkle', { name: sprinkle.name });
       } catch {
         log.warn('Failed to surface unseen sprinkle', { name: sprinkle.name });
       }
     }
     this.persistKnownSprinkles(new Set(this.availableSprinkles.keys()));
+    if (consumed.size > 0) this.persistAutoOpenedOnce(consumed);
   }
 
   private loadKnownSprinkles(): Set<string> {
@@ -277,11 +450,47 @@ export class SprinkleManager {
     }
   }
 
+  private loadAutoOpenedOnce(): Set<string> {
+    try {
+      const raw = localStorage.getItem(AUTOOPENED_ONCE_KEY);
+      if (!raw) return new Set();
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? new Set(arr.filter((x) => typeof x === 'string')) : new Set();
+    } catch {
+      return new Set();
+    }
+  }
+
+  /**
+   * Union the given names into the persistent one-shot ledger. Like
+   * `persistKnownSprinkles`, the merge is monotonic — once a
+   * `data-sprinkle-autoopen` sprinkle has been auto-opened, the
+   * ledger entry stays even if the sprinkle disappears from the VFS
+   * (uninstall, branch checkout, mount unavailable) so a later
+   * reappearance does NOT re-trigger the welcome flow.
+   */
+  private persistAutoOpenedOnce(names: Set<string>): void {
+    try {
+      const merged = new Set<string>([...this.loadAutoOpenedOnce(), ...names]);
+      localStorage.setItem(AUTOOPENED_ONCE_KEY, JSON.stringify([...merged]));
+    } catch {
+      /* localStorage full, ignore */
+    }
+  }
+
   /**
    * Persist only sprinkles the user has actively opened. Entries
    * still in `attentionOnly` (passive surfacing, never clicked) are
    * filtered out — restoring a panel the user never engaged with
    * would be surprising on reload.
+   *
+   * URL `?sprinkles=...` is the primary store (so reload / shared
+   * link restores the same panels). `slicc-open-sprinkles` in
+   * localStorage is still written during this release as a safety
+   * net for downgrades and as the migration source for the
+   * URL-aware `restoreOpenSprinkles` branch. The URL write is
+   * coalesced via `queueMicrotask` so an open+close burst yields
+   * one `history.replaceState`, not several.
    */
   private persistOpenSprinkles(): void {
     try {
@@ -292,6 +501,19 @@ export class SprinkleManager {
     } catch {
       /* localStorage full, ignore */
     }
+    this.schedulePersistOpenSprinklesToUrl();
+  }
+
+  private schedulePersistOpenSprinklesToUrl(): void {
+    if (this.urlWriteScheduled) return;
+    this.urlWriteScheduled = true;
+    queueMicrotask(() => {
+      this.urlWriteScheduled = false;
+      const userOpened = [...this.openSprinkles.keys()].filter(
+        (name) => !this.attentionOnly.has(name)
+      );
+      writeOpenSprinklesToUrl(userOpened);
+    });
   }
 
   /**
@@ -326,6 +548,8 @@ export class SprinkleManager {
     const previouslyKnown = new Set(this.availableSprinkles.keys());
     await this.refresh();
     const attentionForAutoOpen = this.autoOpenBehavior === 'attention';
+    const autoOpenedOnce = this.loadAutoOpenedOnce();
+    const consumedAutoOpen = new Set<string>();
     let changed = false;
     for (const sprinkle of this.availableSprinkles.values()) {
       if (this.openSprinkles.has(sprinkle.name)) continue;
@@ -333,8 +557,18 @@ export class SprinkleManager {
       if (!isNew) continue;
       changed = true;
       if (sprinkle.autoOpen) {
+        // Already consumed in a prior session — never auto-open
+        // again, even if the known-sprinkles ledger has been reset
+        // or the sprinkle was uninstalled and reappeared.
+        if (autoOpenedOnce.has(sprinkle.name)) {
+          log.info('Skipped one-shot auto-open for previously-consumed sprinkle', {
+            name: sprinkle.name,
+          });
+          continue;
+        }
         try {
           await this.open(sprinkle.name, undefined, { attention: attentionForAutoOpen });
+          consumedAutoOpen.add(sprinkle.name);
           log.info('Auto-opened new sprinkle after install', {
             name: sprinkle.name,
             attention: attentionForAutoOpen,
@@ -354,13 +588,65 @@ export class SprinkleManager {
     if (changed) {
       this.persistKnownSprinkles(new Set(this.availableSprinkles.keys()));
     }
+    if (consumedAutoOpen.size > 0) {
+      this.persistAutoOpenedOnce(consumedAutoOpen);
+    }
   }
 
   /** Scan VFS and update available sprinkles. */
   async refresh(): Promise<void> {
     this.availableSprinkles = await discoverSprinkles(this.fs);
     log.info('Discovered sprinkles', { count: this.availableSprinkles.size });
+    this.syncRegisteredIcons();
     this.notifyChange();
+  }
+
+  /**
+   * Diff `availableSprinkles` against the layout's registered rail
+   * icons and surface install/uninstall as register/unregister
+   * callbacks. No-op when `callbacks.registerSprinkle` is unset
+   * (legacy callers that don't surface always-visible icons).
+   *
+   * `inlineSprinkles` are filtered out so dip-only sprinkles never
+   * leak into the rail. An open sprinkle that has disappeared from
+   * the VFS is closed first so its content unmounts before the icon
+   * is dropped.
+   */
+  private syncRegisteredIcons(): void {
+    if (!this.callbacks.registerSprinkle) return;
+    const next = new Set<string>();
+    for (const sprinkle of this.availableSprinkles.values()) {
+      if (this.inlineSprinkles.has(sprinkle.name)) continue;
+      next.add(sprinkle.name);
+    }
+    for (const sprinkle of this.availableSprinkles.values()) {
+      if (!next.has(sprinkle.name)) continue;
+      if (this.registeredSprinkles.has(sprinkle.name)) continue;
+      try {
+        this.callbacks.registerSprinkle(sprinkle.name, sprinkle.title, {
+          icon: sprinkle.icon,
+        });
+        this.registeredSprinkles.add(sprinkle.name);
+      } catch (err) {
+        log.warn('registerSprinkle callback threw', {
+          name: sprinkle.name,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    for (const name of [...this.registeredSprinkles]) {
+      if (next.has(name)) continue;
+      if (this.openSprinkles.has(name)) this.close(name);
+      try {
+        this.callbacks.unregisterSprinkle?.(name);
+      } catch (err) {
+        log.warn('unregisterSprinkle callback threw', {
+          name,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      this.registeredSprinkles.delete(name);
+    }
   }
 
   /**
@@ -466,6 +752,31 @@ export class SprinkleManager {
     this.notifyChange();
   }
 
+  /**
+   * Route a rail-icon click to the right action based on current
+   * state. When the sprinkle was surfaced in attention mode, promote
+   * it to user-opened (`markActivated`). When it has a registered
+   * rail icon but no content yet, open it. Already-open user-driven
+   * entries get no extra work — the rail-zone toggle has already
+   * shown the panel.
+   */
+  async activate(name: string, zone?: string): Promise<void> {
+    if (this.attentionOnly.has(name)) {
+      this.markActivated(name);
+      return;
+    }
+    if (!this.openSprinkles.has(name)) {
+      try {
+        await this.open(name, zone);
+      } catch (err) {
+        log.warn('Failed to open sprinkle from rail-icon click', {
+          name,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
   /** Close a sprinkle by name. */
   close(name: string): void {
     const entry = this.openSprinkles.get(name);
@@ -476,10 +787,31 @@ export class SprinkleManager {
     this.bridge.removeSprinkle(name);
     this.openSprinkles.delete(name);
     this.attentionOnly.delete(name);
-    this.callbacks.removeSprinkle(name);
+    // Prefer `closeSprinkleContent` so the rail icon survives the
+    // close — the sprinkle is still in `availableSprinkles` and
+    // clicking the icon should reopen it. Fall back to the legacy
+    // `removeSprinkle` for callers that haven't opted into
+    // always-visible icons (back-compat for tests and any caller
+    // wired before the split).
+    if (this.callbacks.closeSprinkleContent) {
+      this.callbacks.closeSprinkleContent(name);
+    } else {
+      this.callbacks.removeSprinkle(name);
+    }
     this.persistOpenSprinkles();
     log.info('Sprinkle closed', { name });
     this.notifyChange();
+  }
+
+  /**
+   * Minimize (collapse) a sprinkle by name. The rail icon stays visible and
+   * the sprinkle remains open/registered — the user can click the icon to
+   * reopen it. No-op if the sprinkle is not open.
+   */
+  minimize(name: string): void {
+    if (!this.openSprinkles.has(name)) return;
+    this.callbacks.minimizeSprinkle(name);
+    log.info('Sprinkle minimized', { name });
   }
 
   /** List available sprinkles. */

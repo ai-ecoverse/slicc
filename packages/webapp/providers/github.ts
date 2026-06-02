@@ -1,48 +1,37 @@
 /**
- * GitHub Provider — OAuth login + GitHub Models LLM access.
+ * GitHub Provider — pure OAuth + git authentication.
+ *
+ * Scope:
+ *   This provider exists ONLY to give slicc a GitHub identity for
+ *   git push/pull/clone, the `oauth-token github` shell command, and
+ *   masking of `*.github.com` traffic through the fetch-proxy. It
+ *   intentionally exposes NO LLM models — slicc's previous attempt to
+ *   reach Copilot through this token never worked because GitHub's
+ *   `copilot_internal/v2/token` endpoint is restricted to specific
+ *   OAuth client IDs (notably the VS Code Copilot Chat client), and
+ *   slicc's OAuth App is not on that allowlist. The Copilot LLM
+ *   surface lives in the sibling `github-copilot.ts` provider, which
+ *   uses GitHub's device-code flow with the VS Code client ID.
  *
  * Authentication:
- *   Authorization code grant via the generic OAuth token broker.
- *   CLI mode:       popup → /auth/callback relay → code extracted → worker exchanges
- *   Extension mode: chrome.identity.launchWebAuthFlow → code extracted → worker exchanges
- *
- * LLM access:
- *   GitHub Models (models.inference.ai.azure.com) is an OpenAI-compatible API
- *   authenticated with the GitHub OAuth token. Routes through pi-ai's
- *   streamOpenAICompletions.
+ *   Authorization-code grant via the generic OAuth token broker.
+ *   CLI mode:       popup → /auth/callback relay → code → worker exchange
+ *   Extension mode: chrome.identity.launchWebAuthFlow → code → worker exchange
  *
  * Git integration:
- *   The OAuth token is written to /workspace/.git/github-token in the global VFS
- *   so isomorphic-git picks it up for push/pull/clone operations.
+ *   The OAuth token is written to /workspace/.git/github-token in the global
+ *   VFS so isomorphic-git picks it up for push / pull / clone.
  */
 
-import type {
-  ProviderConfig,
-  OAuthLauncher,
-  OAuthLoginOptions,
-  ModelMetadata,
-} from '../src/providers/types.js';
-import {
-  registerApiProvider,
-  streamOpenAICompletions,
-  streamSimpleOpenAICompletions,
-  createAssistantMessageEventStream,
-} from '@earendil-works/pi-ai';
-import type {
-  Api,
-  Model,
-  Context,
-  SimpleStreamOptions,
-  OpenAICompletionsOptions,
-} from '@earendil-works/pi-ai';
-import { saveOAuthAccount, getAccounts, getOAuthAccountInfo } from '../src/ui/provider-settings.js';
+import { GLOBAL_FS_DB_NAME } from '../src/fs/global-db.js';
 import {
   exchangeOAuthCode,
-  revokeOAuthToken,
   getWorkerBaseUrl,
+  revokeOAuthToken,
 } from '../src/providers/oauth-code-exchange.js';
 import { getOAuthPageOrigin } from '../src/providers/oauth-service.js';
-import { GLOBAL_FS_DB_NAME } from '../src/fs/global-db.js';
+import type { OAuthLauncher, OAuthLoginOptions, ProviderConfig } from '../src/providers/types.js';
+import { getAccounts, getOAuthAccountInfo, saveOAuthAccount } from '../src/ui/provider-settings.js';
 
 // ── Config ─────────────────────────────────────────────────────────
 
@@ -252,8 +241,9 @@ export async function syncGitIdentityFromGitHub(profile: GitHubUserProfile): Pro
 
   try {
     const { VirtualFS } = await import('../src/fs/index.js');
-    const { readGlobalGitConfigValue, writeGlobalGitConfigValue } =
-      await import('../src/git/git-config.js');
+    const { readGlobalGitConfigValue, writeGlobalGitConfigValue } = await import(
+      '../src/git/git-config.js'
+    );
     const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
 
     const desiredName = profile.name || profile.login;
@@ -285,162 +275,19 @@ async function getValidAccessToken(): Promise<string> {
   return account.accessToken;
 }
 
-// ── GitHub Models ──────────────────────────────────────────────────
-
-// New unified GitHub Models endpoint (replaces the old Azure inference endpoint).
-// Model IDs use vendor-prefixed format: "openai/gpt-4.1"
-const GITHUB_MODELS_BASE = 'https://models.github.ai/inference';
-
-/**
- * Models available via GitHub Models free tier (no Copilot subscription required).
- * gpt-4o / gpt-4o-mini / o3-mini are deprecated; o4-mini requires a paid Copilot plan.
- * Model IDs use the vendor-prefixed format required by the models.github.ai endpoint.
- */
-const GITHUB_MODELS: Array<{ id: string; name: string } & ModelMetadata> = [
-  {
-    id: 'openai/gpt-4.1',
-    name: 'GPT-4.1',
-    api: 'openai',
-    context_window: 1047576,
-    max_tokens: 32768,
-    reasoning: false,
-    input: ['text', 'image'],
-  },
-  {
-    id: 'openai/gpt-4.1-mini',
-    name: 'GPT-4.1 mini',
-    api: 'openai',
-    context_window: 1047576,
-    max_tokens: 32768,
-    reasoning: false,
-    input: ['text', 'image'],
-  },
-];
-
-// ── Stream functions ───────────────────────────────────────────────
-
-function makeErrorOutput(model: Model<Api>, error: unknown) {
-  return {
-    type: 'error' as const,
-    reason: 'error' as const,
-    error: {
-      role: 'assistant' as const,
-      content: [],
-      api: 'github-openai' as Api,
-      provider: 'github',
-      model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: 'error' as const,
-      errorMessage: error instanceof Error ? error.message : String(error),
-      timestamp: Date.now(),
-    },
-  };
-}
-
-const streamGitHub = (
-  model: Model<Api>,
-  context: Context,
-  options: OpenAICompletionsOptions = {}
-) => {
-  const stream = createAssistantMessageEventStream();
-  (async () => {
-    try {
-      const accessToken = await getValidAccessToken();
-      const proxyModel = {
-        ...model,
-        baseUrl: GITHUB_MODELS_BASE,
-        api: 'openai-completions' as Api,
-        compat: {
-          ...(model as any).compat,
-          supportsStore: false,
-          supportsDeveloperRole: false,
-          // models.github.ai/inference does not support stream_options.include_usage
-          // (causes 500 after ~30s timeout) or max_completion_tokens (use max_tokens).
-          supportsUsageInStreaming: false,
-          maxTokensField: 'max_tokens',
-        },
-      };
-      const inner = streamOpenAICompletions(proxyModel as any, context, {
-        ...options,
-        apiKey: accessToken,
-      } as any);
-      for await (const event of inner) stream.push(event as any);
-      stream.end();
-    } catch (error) {
-      console.error(
-        '[github] Stream error:',
-        error instanceof Error ? error.message : String(error)
-      );
-      stream.push(makeErrorOutput(model, error) as any);
-      stream.end();
-    }
-  })();
-  return stream;
-};
-
-const streamSimpleGitHub = (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => {
-  const stream = createAssistantMessageEventStream();
-  (async () => {
-    try {
-      const accessToken = await getValidAccessToken();
-      const proxyModel = {
-        ...model,
-        baseUrl: GITHUB_MODELS_BASE,
-        api: 'openai-completions' as Api,
-        compat: {
-          ...(model as any).compat,
-          supportsStore: false,
-          supportsDeveloperRole: false,
-          // models.github.ai/inference does not support stream_options.include_usage
-          // (causes 500 after ~30s timeout) or max_completion_tokens (use max_tokens).
-          supportsUsageInStreaming: false,
-          maxTokensField: 'max_tokens',
-        },
-      };
-      const inner = streamSimpleOpenAICompletions(proxyModel as any, context, {
-        ...options,
-        apiKey: accessToken,
-      } as any);
-      for await (const event of inner) stream.push(event as any);
-      stream.end();
-    } catch (error) {
-      console.error(
-        '[github] Stream error:',
-        error instanceof Error ? error.message : String(error)
-      );
-      stream.push(makeErrorOutput(model, error) as any);
-      stream.end();
-    }
-  })();
-  return stream;
-};
-
-// ── Provider config ────────────────────────────────────────────────
-
 export const config: ProviderConfig = {
   id: 'github',
   name: 'GitHub',
-  description: 'GitHub Models + git authentication — login with your GitHub account',
+  description:
+    'Sign in with GitHub for git authentication (push/pull/clone) and the `oauth-token github` shell command. Does not expose LLM models — use the GitHub Copilot provider for those.',
   requiresApiKey: false,
   requiresBaseUrl: false,
   isOAuth: true,
-  defaultModelId: 'gpt-4.1', // substring-matched against openai/gpt-4.1
-  oauthTokenDomains: [
-    'github.com',
-    '*.github.com',
-    'api.github.com',
-    'raw.githubusercontent.com',
-    'models.github.ai',
-  ],
+  oauthTokenDomains: ['github.com', '*.github.com', 'api.github.com', 'raw.githubusercontent.com'],
 
-  getModelIds: () => GITHUB_MODELS,
+  // Pure git/auth provider — no LLM models exposed. Copilot lives in
+  // its own sibling provider (`github-copilot.ts`).
+  getModelIds: () => [],
 
   onOAuthLogin: async (
     launcher: OAuthLauncher,
@@ -564,19 +411,17 @@ export const config: ProviderConfig = {
     }
     // Clear git token from VFS
     await clearGitToken();
-    // Clear account
+    // Clear github account
     await saveOAuthAccount({ providerId: 'github', accessToken: '' });
   },
+
+  /**
+   * Opens https://github.com/logout to clear the GitHub browser session.
+   * Note: GitHub's actual logout is a CSRF-protected POST form; a GET
+   * navigation is best-effort and may not fully clear the session in all
+   * browser contexts. See spec PR notes for details.
+   */
+  getOAuthLogoutUrl: (_account) => 'https://github.com/logout',
 };
-
-// ── Registration ───────────────────────────────────────────────────
-
-export function register(): void {
-  registerApiProvider({
-    api: 'github-openai' as Api,
-    stream: streamGitHub as any,
-    streamSimple: streamSimpleGitHub as any,
-  });
-}
 
 export { getValidAccessToken };

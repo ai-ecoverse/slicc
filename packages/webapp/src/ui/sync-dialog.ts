@@ -7,7 +7,9 @@ export interface SyncEnabledDialogOptions {
 }
 
 export function showSyncEnabledDialog(options: SyncEnabledDialogOptions): void {
-  document.querySelectorAll('.dialog-overlay[data-sync-dialog]').forEach((el) => el.remove());
+  document.querySelectorAll('.dialog-overlay[data-sync-dialog]').forEach((el) => {
+    el.remove();
+  });
 
   const overlay = document.createElement('div');
   overlay.className = 'dialog-overlay';

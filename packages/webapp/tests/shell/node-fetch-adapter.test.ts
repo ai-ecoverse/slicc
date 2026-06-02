@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
 import type { SecureFetch } from 'just-bash';
+import { describe, expect, it, vi } from 'vitest';
 import { createNodeFetchAdapter } from '../../src/shell/supplemental-commands/node-fetch-adapter.js';
 
 const okResult = (
@@ -356,5 +356,55 @@ describe('createNodeFetchAdapter', () => {
         body: { foo: 'bar' } as unknown as BodyInit,
       })
     ).rejects.toThrow(/unsupported request body type/);
+  });
+
+  it('propagates Origin from init.headers (Record) to SecureFetch', async () => {
+    const secureFetch: SecureFetch = vi.fn(async () => okResult());
+    const fetch = createNodeFetchAdapter(secureFetch);
+
+    await fetch('https://api.example.com/x', {
+      method: 'GET',
+      headers: { Origin: 'https://my.app', Cookie: 'sid=abc' },
+    });
+
+    const opts = (secureFetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
+      headers: Record<string, string>;
+    };
+    expect(opts.headers['Origin']).toBe('https://my.app');
+    expect(opts.headers['Cookie']).toBe('sid=abc');
+  });
+
+  it('propagates Origin from init.headers (Headers instance) to SecureFetch', async () => {
+    const secureFetch: SecureFetch = vi.fn(async () => okResult());
+    const fetch = createNodeFetchAdapter(secureFetch);
+
+    const h = new Headers();
+    h.set('Origin', 'https://my.app');
+    await fetch('https://api.example.com/x', { method: 'GET', headers: h });
+
+    const opts = (secureFetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
+      headers: Record<string, string>;
+    };
+    // Headers normalizes keys to lowercase, but the value must survive.
+    expect(opts.headers['origin']).toBe('https://my.app');
+  });
+
+  it('lets init.headers Origin override a Request.headers Origin', async () => {
+    const secureFetch: SecureFetch = vi.fn(async () => okResult());
+    const fetch = createNodeFetchAdapter(secureFetch);
+
+    const request = new Request('https://api.example.com/x', {
+      method: 'GET',
+      headers: { Origin: 'https://from-request' },
+    });
+    await fetch(request, { headers: { Origin: 'https://from-init' } });
+
+    const opts = (secureFetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
+      headers: Record<string, string>;
+    };
+    // init wins on conflicts; case may differ depending on Headers
+    // normalization, so check both candidate slots.
+    const origin = opts.headers['Origin'] ?? opts.headers['origin'];
+    expect(origin).toBe('https://from-init');
   });
 });

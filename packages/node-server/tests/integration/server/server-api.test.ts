@@ -362,6 +362,123 @@ describe('shared server API conformance', () => {
     }
   });
 
+  it('synthesizes a default Origin from the target URL when none is supplied', async () => {
+    const { createServer } = await import('node:http');
+    const upstream = createServer((req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ origin: req.headers['origin'] || null }));
+    });
+
+    await new Promise<void>((resolve) => upstream.listen(0, resolve));
+    const port = (upstream.address() as import('node:net').AddressInfo).port;
+
+    try {
+      const res = await fetchFromServer('/api/fetch-proxy', {
+        method: 'GET',
+        headers: { 'x-target-url': `http://127.0.0.1:${port}/path` },
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.origin).toBe(`http://127.0.0.1:${port}`);
+    } finally {
+      upstream.close();
+    }
+  });
+
+  it('explicit X-Proxy-Origin wins over the default-Origin fallback', async () => {
+    const { createServer } = await import('node:http');
+    const upstream = createServer((req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ origin: req.headers['origin'] || null }));
+    });
+
+    await new Promise<void>((resolve) => upstream.listen(0, resolve));
+    const port = (upstream.address() as import('node:net').AddressInfo).port;
+
+    try {
+      const res = await fetchFromServer('/api/fetch-proxy', {
+        method: 'GET',
+        headers: {
+          'x-target-url': `http://127.0.0.1:${port}/path`,
+          'x-proxy-origin': 'https://example.com',
+        },
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.origin).toBe('https://example.com');
+    } finally {
+      upstream.close();
+    }
+  });
+
+  it('strips localhost Origin then refills with default-Origin fallback', async () => {
+    const { createServer } = await import('node:http');
+    const upstream = createServer((req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ origin: req.headers['origin'] || null }));
+    });
+
+    await new Promise<void>((resolve) => upstream.listen(0, resolve));
+    const port = (upstream.address() as import('node:net').AddressInfo).port;
+
+    try {
+      const res = await fetchFromServer('/api/fetch-proxy', {
+        method: 'GET',
+        headers: {
+          'x-target-url': `http://127.0.0.1:${port}/path`,
+          origin: 'http://localhost:5710',
+        },
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      // The page's localhost Origin should be stripped, then the fallback fires
+      // and substitutes the target URL's origin — not the page Origin.
+      expect(body.origin).toBe(`http://127.0.0.1:${port}`);
+    } finally {
+      upstream.close();
+    }
+  });
+
+  it('derives default Origin for unusual ports and IPv6 hosts', async () => {
+    const { createServer } = await import('node:http');
+    const upstream = createServer((req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ origin: req.headers['origin'] || null }));
+    });
+
+    // Try IPv6 loopback first to exercise the [::1] origin shape end-to-end;
+    // fall back to IPv4 if the runner has IPv6 disabled (some CI sandboxes do).
+    const ipv6Ok = await new Promise<boolean>((resolve) => {
+      const onError = () => {
+        upstream.removeAllListeners('error');
+        resolve(false);
+      };
+      upstream.once('error', onError);
+      upstream.listen(0, '::1', () => {
+        upstream.off('error', onError);
+        resolve(true);
+      });
+    });
+    if (!ipv6Ok) {
+      await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+    }
+    const port = (upstream.address() as import('node:net').AddressInfo).port;
+    const host = ipv6Ok ? '[::1]' : '127.0.0.1';
+
+    try {
+      const res = await fetchFromServer('/api/fetch-proxy', {
+        method: 'GET',
+        headers: { 'x-target-url': `http://${host}:${port}/path` },
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      // WHATWG URL preserves the bracketed IPv6 host and the explicit port.
+      expect(body.origin).toBe(`http://${host}:${port}`);
+    } finally {
+      upstream.close();
+    }
+  });
+
   it('returns webhook CORS headers for preflight requests', async () => {
     const response = await fetchFromServer('/webhooks/test-id', { method: 'OPTIONS' });
     expect(response.status).toBe(204);

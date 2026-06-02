@@ -23,7 +23,7 @@
  * class. If the structural contract drifts, this file stops compiling.
  */
 
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Mock chrome.runtime — fan-out style so a panel-source message reaches the
@@ -31,9 +31,11 @@ import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 // listener.
 // ---------------------------------------------------------------------------
 
-interface ChromeListener {
-  (message: unknown, sender: unknown, sendResponse: (r?: unknown) => void): boolean | void;
-}
+type ChromeListener = (
+  message: unknown,
+  sender: unknown,
+  sendResponse: (r?: unknown) => void
+) => boolean | void;
 
 const messageListeners: ChromeListener[] = [];
 const sentMessages: unknown[] = [];
@@ -97,9 +99,9 @@ const { OffscreenBridge } = await import('../../../chrome-extension/src/offscree
 const { OffscreenClient } = await import('../../src/ui/offscreen-client.js');
 
 import type {
-  KernelFacade,
-  KernelClientFacade,
   KernelClientCallbacks,
+  KernelClientFacade,
+  KernelFacade,
 } from '../../src/kernel/types.js';
 
 // ---------------------------------------------------------------------------

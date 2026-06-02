@@ -1,9 +1,9 @@
+import type { ChildProcess } from 'child_process';
 import { existsSync, readdirSync } from 'fs';
 import { mkdir, readFile, unlink, writeFile } from 'fs/promises';
 import { request as httpRequest } from 'http';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
-import type { ChildProcess } from 'child_process';
 
 /**
  * Default startup timeout for Chrome's CDP listener. Overridable via the
@@ -156,6 +156,7 @@ export function buildChromeLaunchArgs(options: {
   cdpPort: number;
   launchUrl: string;
   profile: ChromeLaunchProfile;
+  hosted?: boolean;
 }): string[] {
   const args = [
     `--remote-debugging-port=${options.cdpPort}`,
@@ -178,6 +179,16 @@ export function buildChromeLaunchArgs(options: {
   if (options.profile.extensionPath) {
     args.push(`--disable-extensions-except=${options.profile.extensionPath}`);
     args.push(`--load-extension=${options.profile.extensionPath}`);
+  }
+
+  if (options.hosted) {
+    args.push(
+      '--headless=new',
+      '--no-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--font-render-hinting=none'
+    );
   }
 
   args.push(options.launchUrl);
@@ -813,7 +824,7 @@ export function waitForCdpPortFromActivePortFile(
           if (Number.isInteger(port) && port > 0 && port <= 65_535) {
             candidatePort = port;
             const secondLine = lines[1]?.trim();
-            if (secondLine && secondLine.startsWith('/')) {
+            if (secondLine?.startsWith('/')) {
               candidateWsPath = secondLine;
             }
           }

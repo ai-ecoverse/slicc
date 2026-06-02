@@ -12,10 +12,10 @@
 import {
   deleteSecret,
   listSecrets,
-  saveCustomSecret,
-  saveS3Profile,
   type SecretEntry,
   type StorageArea,
+  saveCustomSecret,
+  saveS3Profile,
 } from './secrets-storage.js';
 
 declare const chrome: {
@@ -137,12 +137,12 @@ function setupTabs(): void {
   document.querySelectorAll<HTMLButtonElement>('.tab').forEach((tab) => {
     tab.addEventListener('click', () => {
       const target = tab.dataset.pane;
-      document
-        .querySelectorAll<HTMLButtonElement>('.tab')
-        .forEach((t) => t.classList.toggle('active', t === tab));
-      document
-        .querySelectorAll<HTMLDivElement>('.pane')
-        .forEach((p) => p.classList.toggle('active', p.id === `pane-${target}`));
+      document.querySelectorAll<HTMLButtonElement>('.tab').forEach((t) => {
+        t.classList.toggle('active', t === tab);
+      });
+      document.querySelectorAll<HTMLDivElement>('.pane').forEach((p) => {
+        p.classList.toggle('active', p.id === `pane-${target}`);
+      });
     });
   });
 }

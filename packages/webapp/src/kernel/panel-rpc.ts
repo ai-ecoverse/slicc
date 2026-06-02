@@ -40,10 +40,10 @@
 
 import type { OAuthExtraDomainsStore } from '@slicc/shared-ts';
 import type { LeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
-import type { TrayLeaveResult } from '../scoops/tray-leave.js';
 // FloatType (and the two imports above) are domain types from scoops/ that leak into
 // this transport module. If this list grows, consolidate into a shared wire-types.ts.
 import type { FloatType } from '../scoops/tray-leader-sync.js';
+import type { TrayLeaveResult } from '../scoops/tray-leave.js';
 
 const PANEL_RPC_CHANNEL = 'slicc-panel-rpc';
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -300,7 +300,7 @@ export function createPanelRpcClient(options: { instanceId?: string } = {}): Pan
 
   channel.addEventListener('message', (event: MessageEvent) => {
     const msg = event.data as PanelRpcResponseMsg | undefined;
-    if (!msg || msg.type !== 'panel-rpc-response') return;
+    if (msg?.type !== 'panel-rpc-response') return;
     const slot = pending.get(msg.id);
     if (!slot) return;
     pending.delete(msg.id);
@@ -387,7 +387,7 @@ export function installPanelRpcHandler(options: {
 
   const listener = async (event: MessageEvent): Promise<void> => {
     const msg = event.data as PanelRpcRequestMsg | undefined;
-    if (!msg || msg.type !== 'panel-rpc-request') return;
+    if (msg?.type !== 'panel-rpc-request') return;
     const handler = (options.handlers as Record<string, ((p: unknown) => unknown) | undefined>)[
       msg.op
     ];

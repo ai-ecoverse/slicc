@@ -164,7 +164,6 @@ addEventListener('message', function(e) {
     }
 
     // Sanitize and render the HTML content (trusted agent-authored tool UI, same as sprinkle sandbox)
-    // eslint-disable-next-line no-unsanitized/property
     document.body.innerHTML = sanitizeHtml(msg.html);
 
     // Defer height measurement until after CSS is painted

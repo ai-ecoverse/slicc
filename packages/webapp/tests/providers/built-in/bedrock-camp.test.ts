@@ -1,14 +1,14 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getApiProvider } from '@earendil-works/pi-ai';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // The register() call in the built-in module registers 'bedrock-camp-converse'.
 import {
-  register,
-  config,
-  streamSimpleBedrockCamp,
-  streamBedrockCamp,
   bedrockCampRegionFromBaseUrl,
+  config,
   isBedrockCampCompatible,
+  register,
+  streamBedrockCamp,
+  streamSimpleBedrockCamp,
 } from '../../../src/providers/built-in/bedrock-camp.js';
 
 // Call register manually since built-in modules use explicit registration
@@ -180,18 +180,15 @@ describe('bedrock-camp built-in provider', () => {
     ['us.anthropic.claude-opus-4-7', 'xhigh'],
     ['global.anthropic.claude-opus-4-7', 'xhigh'],
     ['us.anthropic.claude-sonnet-4-6', 'high'],
-  ])(
-    'uses adaptive thinking for Claude 4.6 / Opus 4.7 (%s -> effort=%s)',
-    async (modelId, expectedEffort) => {
-      const payload = await capturePayload(baseModel({ id: modelId, name: modelId }), {
-        reasoning: 'xhigh',
-      });
-      expect(payload.additionalModelRequestFields).toEqual({
-        thinking: { type: 'adaptive', display: 'summarized' },
-        output_config: { effort: expectedEffort },
-      });
-    }
-  );
+  ])('uses adaptive thinking for Claude 4.6 / Opus 4.7 (%s -> effort=%s)', async (modelId, expectedEffort) => {
+    const payload = await capturePayload(baseModel({ id: modelId, name: modelId }), {
+      reasoning: 'xhigh',
+    });
+    expect(payload.additionalModelRequestFields).toEqual({
+      thinking: { type: 'adaptive', display: 'summarized' },
+      output_config: { effort: expectedEffort },
+    });
+  });
 
   it('keeps non-adaptive Claude 4.x models on thinking.type=enabled with interleaved beta', async () => {
     const payload = await capturePayload(

@@ -1,21 +1,17 @@
 #!/usr/bin/env node
+import { promises as fsPromises } from 'node:fs';
+import { createSubstrate } from '@slicc/cloud-core';
+import { type ChildProcess, spawn } from 'child_process';
+import express, { type NextFunction, type Request, type Response } from 'express';
+import { existsSync, readFileSync } from 'fs';
 import { createServer } from 'http';
 import { createServer as createNetServer } from 'net';
-import { spawn, type ChildProcess } from 'child_process';
-import { existsSync, readFileSync } from 'fs';
-import { join, resolve, dirname, sep } from 'path';
 import { homedir } from 'os';
+import { dirname, join, resolve, sep } from 'path';
 import { Readable, Transform } from 'stream';
 import { StringDecoder } from 'string_decoder';
 import { fileURLToPath } from 'url';
-import express, { type Request, type Response, type NextFunction } from 'express';
-import { WebSocketServer, WebSocket } from 'ws';
-import {
-  ElectronAppAlreadyRunningError,
-  ElectronOverlayInjector,
-  launchElectronApp,
-} from './electron-controller.js';
-import { getElectronAppPorts } from './electron-runtime.js';
+import { WebSocket, WebSocketServer } from 'ws';
 import {
   buildChromeLaunchArgs,
   clearStaleDevToolsActivePort,
@@ -25,21 +21,45 @@ import {
   resolveChromeLaunchProfile,
   waitForCdpPort,
 } from './chrome-launch.js';
-import { resolveCliBrowserLaunchUrl } from './launch-url.js';
-import { parseCliRuntimeFlags } from './runtime-flags.js';
-import { FileLogger } from './file-logger.js';
 import { CliLogDedup } from './cli-log-dedup.js';
-import { EnvSecretStore } from './secrets/env-secret-store.js';
-import { SecretProxyManager } from './secrets/proxy-manager.js';
-import { OauthSecretStore } from './secrets/oauth-secret-store.js';
-import { handleDaSignAndForward, handleS3SignAndForward } from './secrets/sign-and-forward.js';
-import { readOrCreateSessionId } from './secrets/session-id-file.js';
-
+import { type ParsedCloudArgs, parseCloudArgs } from './cloud/dispatch.js';
+import { runKill } from './cloud/kill.js';
+import { runList } from './cloud/list.js';
+import { runPause } from './cloud/pause.js';
+import { FileRegistry } from './cloud/registry-file.js';
+import { runResume } from './cloud/resume.js';
+import { runStart } from './cloud/start.js';
+import { registerCloudStatusEndpoint } from './cloud-status.js';
+import {
+  ElectronAppAlreadyRunningError,
+  ElectronOverlayInjector,
+  launchElectronApp,
+} from './electron-controller.js';
+import { getElectronAppPorts } from './electron-runtime.js';
 import { FETCH_PROXY_SKIP_HEADERS } from './fetch-proxy-headers.js';
+import { FileLogger } from './file-logger.js';
+import { registerHostedBootstrapEndpoint } from './hosted-bootstrap.js';
+import { resolveCliBrowserLaunchUrl } from './launch-url.js';
+import { createHttpCdp, registerLeaderRestartEndpoint } from './leader-restart.js';
 import { buildLocalApiDescriptor, sliccLinksMiddleware } from './links-middleware.js';
+import { parseCliRuntimeFlags } from './runtime-flags.js';
+import { EnvSecretStore } from './secrets/env-secret-store.js';
+import { OauthSecretStore } from './secrets/oauth-secret-store.js';
+import { SecretProxyManager } from './secrets/proxy-manager.js';
+import { readOrCreateSessionId } from './secrets/session-id-file.js';
+import { handleDaSignAndForward, handleS3SignAndForward } from './secrets/sign-and-forward.js';
 
-const __dirname = fileURLToPath(new URL('.', import.meta.url));
-const PROJECT_ROOT = resolve(__dirname, '..', '..');
+const Dirname = fileURLToPath(new URL('.', import.meta.url));
+const PROJECT_ROOT = resolve(Dirname, '..', '..');
+
+// ---------------------------------------------------------------------------
+// Cloud dispatcher — must run BEFORE any other boot logic
+// ---------------------------------------------------------------------------
+const _parsedCloudArgs = parseCloudArgs(process.argv.slice(2));
+if (_parsedCloudArgs) {
+  await runCloudSubcommand(_parsedCloudArgs);
+  process.exit(0);
+}
 
 const RUNTIME_FLAGS = parseCliRuntimeFlags(process.argv.slice(2));
 
@@ -449,7 +469,7 @@ async function main() {
             }
           }),
         ]);
-      } catch (err) {
+      } catch (_err) {
         // Check if app exited quickly (likely due to disabled remote debugging fuse)
         if (exitCode !== null) {
           console.error(
@@ -515,6 +535,11 @@ async function main() {
       join: RUNTIME_FLAGS.join,
       joinUrl: RUNTIME_FLAGS.joinUrl,
     });
+    // Append runtime parameter for hosted mode
+    if (RUNTIME_FLAGS.hosted) {
+      const sep = browserLaunchUrl.includes('?') ? '&' : '?';
+      browserLaunchUrl += `${sep}runtime=hosted-leader`;
+    }
     // Append optional prompt parameter
     if (RUNTIME_FLAGS.prompt) {
       const sep = browserLaunchUrl.includes('?') ? '&' : '?';
@@ -528,12 +553,17 @@ async function main() {
 
     const chromeProfile = (() => {
       try {
-        return resolveChromeLaunchProfile({
+        const resolved = resolveChromeLaunchProfile({
           projectRoot: PROJECT_ROOT,
           tmpDir: process.env['TMPDIR'] ?? '/tmp',
           profile: RUNTIME_FLAGS.profile,
           servePort: SERVE_PORT,
         });
+        // Override user data dir in hosted mode to use persistent profile
+        if (RUNTIME_FLAGS.hosted) {
+          resolved.userDataDir = process.env['CHROME_USER_DATA_DIR'] ?? '/data/profile';
+        }
+        return resolved;
       } catch (error: unknown) {
         console.error(error instanceof Error ? error.message : String(error));
         process.exit(1);
@@ -572,6 +602,7 @@ async function main() {
       cdpPort: REQUESTED_CDP_PORT,
       launchUrl: browserLaunchUrl,
       profile: chromeProfile,
+      hosted: RUNTIME_FLAGS.hosted,
     });
 
     // Profile directories are reused across runs (both the dev
@@ -813,6 +844,8 @@ async function main() {
   app.get('/api/runtime-config', (_req, res) => {
     res.json({
       trayWorkerBaseUrl:
+        // Hosted mode source: env var injected at sandbox-create time.
+        (RUNTIME_FLAGS.hosted ? process.env['SLICC_TRAY_WORKER_BASE_URL']?.trim() : null) ??
         RUNTIME_FLAGS.leadWorkerBaseUrl ??
         (process.env['WORKER_BASE_URL']?.trim() || null) ??
         (DEV_MODE
@@ -1161,6 +1194,15 @@ async function main() {
     res.status(204).end();
   });
 
+  // Cloud status endpoint (hosted-only) — writes join info to /tmp/slicc-join.json
+  // Register BEFORE Chromium launches. The webapp's first action after
+  // ?runtime=hosted-leader boot is to mint a tray and POST /api/cloud-status.
+  // If the route doesn't exist yet, the post 404s and the CLI poll times out.
+  if (RUNTIME_FLAGS.hosted) {
+    registerCloudStatusEndpoint(app, { joinFilePath: '/tmp/slicc-join.json' });
+    registerHostedBootstrapEndpoint(app, { secretStore });
+  }
+
   // Fetch proxy — forwards cross-origin requests from the browser to bypass CORS.
   // Used by just-bash's curl which calls the browser's fetch() API.
   // Note: express.json() may have already parsed the body, so we check req.body first.
@@ -1232,6 +1274,16 @@ async function main() {
       } else if (isLocalhostOrigin(headers['origin'] as string)) {
         // Only strip browser's auto-added localhost origin, preserve legitimate origins
         delete headers['origin'];
+      }
+      // Default-Origin fallback: when no explicit caller Origin survives, synthesize
+      // one from the target URL so upstream CORS-protected APIs see a real Origin
+      // instead of nothing. Caller-supplied X-Proxy-Origin (handled above) still wins.
+      if (!headers['origin']) {
+        try {
+          headers['origin'] = new URL(targetUrl).origin;
+        } catch {
+          // Malformed targetUrl — leave origin unset; the upstream fetch will fail anyway.
+        }
       }
 
       // Forbidden-header transport: restore X-Proxy-Referer → Referer
@@ -1486,7 +1538,7 @@ async function main() {
   // Create the HTTP server BEFORE Vite so we can register our upgrade handler first
   const server = createServer(app);
 
-  if (DEV_MODE) {
+  if (DEV_MODE && !RUNTIME_FLAGS.hosted) {
     // Dev mode: use Vite's dev server as middleware for HMR
     const { createServer: createViteServer } = await import('vite');
     const webappIndexHtml = resolve(process.cwd(), 'packages/webapp/index.html');
@@ -1528,7 +1580,7 @@ async function main() {
     console.log(`Vite dev server middleware attached (HMR on ${SERVE_ORIGIN}/__vite_hmr)`);
   } else {
     // Production mode: serve built static files
-    const uiDir = resolve(__dirname, '..', 'ui');
+    const uiDir = resolve(Dirname, '..', 'ui');
     app.use(
       express.static(uiDir, {
         setHeaders: (res, path) => {
@@ -1931,6 +1983,15 @@ async function main() {
         console.log(`[cdp-proxy] Pre-connected: CDP available at ${cdpUrl}`);
         await ensureChromeConnection(cdpUrl);
         console.log('[cdp-proxy] Chrome WebSocket ready (pre-warmed)');
+
+        // Register leader-restart endpoint now that CDP is ready (hosted mode only)
+        if (RUNTIME_FLAGS.hosted) {
+          registerLeaderRestartEndpoint(app, {
+            cdp: createHttpCdp(CDP_PORT),
+            localUrlPrefix: `http://localhost:${SERVE_PORT}/`,
+          });
+          console.log('[hosted] /api/leader-restart endpoint registered');
+        }
       } catch (err) {
         console.log('[cdp-proxy] Pre-connect failed (will retry on first client):', err);
       }
@@ -1962,6 +2023,106 @@ async function main() {
       }, 2500);
     }
   });
+}
+
+// ---------------------------------------------------------------------------
+// Cloud dispatcher helpers
+// ---------------------------------------------------------------------------
+
+async function readSecretsEnvKey(name: string): Promise<string | undefined> {
+  try {
+    const home = process.env['HOME'] ?? process.env['USERPROFILE'] ?? '.';
+    const file = process.env['SLICC_SECRETS_FILE'] ?? join(home, '.slicc', 'secrets.env');
+    const contents = await fsPromises.readFile(file, 'utf-8');
+    for (const line of contents.split('\n')) {
+      const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+      if (m && m[1] === name) return m[2].trim();
+    }
+  } catch {
+    /* file missing → undefined */
+  }
+  return undefined;
+}
+
+function defaultSecretsPath(): string {
+  const home = process.env['HOME'] ?? process.env['USERPROFILE'] ?? '.';
+  return join(home, '.slicc', 'secrets.env');
+}
+
+function readPackageVersion(): string {
+  try {
+    const pkgPath = join(PROJECT_ROOT, 'package.json');
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as { version: string };
+    return pkg.version;
+  } catch {
+    return 'unknown';
+  }
+}
+
+async function runCloudSubcommand(parsed: ParsedCloudArgs): Promise<void> {
+  const apiKey = process.env['E2B_API_KEY'] ?? (await readSecretsEnvKey('E2B_API_KEY'));
+  if (!apiKey) {
+    console.error(
+      'E2B_API_KEY not set. Add it to ~/.slicc/secrets.env (with E2B_API_KEY_DOMAINS=e2b.dev) ' +
+        'or export it.'
+    );
+    process.exit(2);
+  }
+  const substrate = createSubstrate(parsed.args.substrate, { apiKey });
+  const registryPath = FileRegistry.defaultPath();
+  const localSliccVersion = readPackageVersion();
+
+  switch (parsed.subcommand) {
+    case 'start': {
+      const result = await runStart({
+        substrate,
+        envFilePath: parsed.args.envFile ?? defaultSecretsPath(),
+        registryPath,
+        workerBaseUrl: process.env['SLICC_TRAY_WORKER_BASE_URL']?.trim() || 'https://www.sliccy.ai',
+        sliccVersion: localSliccVersion,
+        name: parsed.args.name,
+      });
+      console.log(`Sandbox ${result.sandboxId} ready.`);
+      console.log(`Open: ${result.joinUrl}`);
+      console.log('Attach from iOS, desktop SLICC, or any browser tab.');
+      break;
+    }
+    case 'list': {
+      const entries = await runList({ substrate, registryPath });
+      for (const e of entries) {
+        console.log(`${e.substrate}\t${e.sandboxId}\t${e.name ?? '-'}\t${e.state}\t${e.joinUrl}`);
+      }
+      break;
+    }
+    case 'pause':
+      await runPause({ substrate, registryPath, query: parsed.args.query });
+      console.log('Paused.');
+      break;
+    case 'resume': {
+      const result = await runResume({
+        substrate,
+        envFilePath: parsed.args.envFile ?? defaultSecretsPath(),
+        registryPath,
+        query: parsed.args.query,
+        localSliccVersion,
+      });
+      if (result.versionMismatch) {
+        console.warn(
+          `Warning: running sandbox is sliccVersion=${result.versionMismatch.running}, ` +
+            `local CLI is ${result.versionMismatch.local}. Proceeding anyway.`
+        );
+      }
+      if (result.trayRebuilt) {
+        console.warn('Tray was rebuilt; existing followers must re-attach to the new join URL.');
+      }
+      console.log(`Resumed. Open: ${result.joinUrl}`);
+      break;
+    }
+    case 'kill':
+      await runKill({ substrate, registryPath, query: parsed.args.query });
+      console.log('Killed.');
+      break;
+  }
 }
 
 main().catch((err) => {

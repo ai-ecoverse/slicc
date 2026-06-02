@@ -5,17 +5,17 @@
  * against an IndexedDB-backed marker for the previously-seen version.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
+import { setState } from '../../src/scoops/db.js';
 import {
+  __test__,
   detectUpgrade,
   getLastSeenVersion,
-  setLastSeenVersion,
   readBundledVersion,
   recordVersionSeen,
+  setLastSeenVersion,
 } from '../../src/scoops/upgrade-detection.js';
-import { setState } from '../../src/scoops/db.js';
-import { __test__ } from '../../src/scoops/upgrade-detection.js';
 
 describe('upgrade-detection', () => {
   beforeEach(async () => {

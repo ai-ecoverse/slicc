@@ -2,7 +2,7 @@
  * Tests for OffscreenClient — side panel's interface to the offscreen agent engine.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock chrome.runtime
 const messageListeners: Array<

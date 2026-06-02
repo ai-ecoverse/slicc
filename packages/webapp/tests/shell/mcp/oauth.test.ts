@@ -1,14 +1,14 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   discoverAuth,
   dynamicRegister,
-  pickPkceMethod,
-  generatePkce,
-  runAuthFlow,
   exchangeCode,
-  refreshAccessToken,
   extractCodeFromUrl,
   type FetchLike,
+  generatePkce,
+  pickPkceMethod,
+  refreshAccessToken,
+  runAuthFlow,
 } from '../../../src/shell/mcp/oauth.js';
 
 // ── Test helpers ────────────────────────────────────────────────────

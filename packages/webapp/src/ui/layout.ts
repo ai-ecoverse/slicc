@@ -26,42 +26,44 @@
  */
 
 import { ChatPanel } from './chat-panel.js';
-import { TerminalPanel } from './terminal-panel.js';
 import { FileBrowserPanel } from './file-browser-panel.js';
 import { MemoryPanel } from './memory-panel.js';
+import { ScoopSwitcher } from './scoop-switcher.js';
 import { ScoopsPanel } from './scoops-panel.js';
 import type { FrozenSessionIndexEntry } from './session-freezer.js';
-import { ScoopSwitcher } from './scoop-switcher.js';
+import { TerminalPanel } from './terminal-panel.js';
 // Side-effect import: registers the `<slicc-press-button>` custom element.
 import './press-button.js';
+import { createLogger } from '../core/logger.js';
+import { getFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
+import { getLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
+import { initialsFromLabel } from './avatar-initials.js';
+import { copyTextToClipboard } from './clipboard.js';
 import type { SliccPressButton } from './press-button.js';
 import {
-  getApiKey,
   clearAllSettings,
-  getSelectedModelId,
+  getAccounts,
+  getAllAvailableModels,
+  getApiKey,
+  getProviderConfig,
+  logoutOAuthAccount,
+  removeAccount,
   setSelectedModelId,
   showProviderSettings,
-  getAllAvailableModels,
-  getAccounts,
-  getProviderConfig,
-  removeAccount,
 } from './provider-settings.js';
-import { getLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
-import { getFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
-import { copyTextToClipboard } from './clipboard.js';
 import { computeTrayMenuModel } from './tray-join-url.js';
-import { createLogger } from '../core/logger.js';
 
 const layoutLog = createLogger('ui.layout');
-import { showSyncEnabledDialog } from './sync-dialog.js';
-import { getTrayResetter } from '../shell/supplemental-commands/host-command.js';
-import { type ExtensionTabId } from './tabbed-ui.js';
-import { RailZone } from './rail-zone.js';
-import { PanelRegistry } from './panel-registry.js';
-import { showSprinklePicker } from './sprinkle-picker.js';
-import type { ZoneId } from './panel-types.js';
+
 // ChatMessage import removed — copy chat moved to feedback row
 import type { RegisteredScoop, ScoopTabState, ThinkingLevel } from '../scoops/types.js';
+import { getTrayResetter } from '../shell/supplemental-commands/host-command.js';
+import { PanelRegistry } from './panel-registry.js';
+import type { ZoneId } from './panel-types.js';
+import { RailZone } from './rail-zone.js';
+import { showSprinklePicker } from './sprinkle-picker.js';
+import { showSyncEnabledDialog } from './sync-dialog.js';
+import type { ExtensionTabId } from './tabbed-ui.js';
 
 export interface LayoutPanels {
   chat: ChatPanel;
@@ -336,7 +338,7 @@ export class Layout {
    * header is a detached node.
    */
   setThreadHeaderName(text: string): void {
-    if (this.threadHeaderName && this.threadHeaderName.isConnected) {
+    if (this.threadHeaderName?.isConnected) {
       this.threadHeaderName.textContent = text;
     }
   }
@@ -376,7 +378,7 @@ export class Layout {
   openTerminal(): void {
     // Don't steal focus from an active sprinkle.
     const active = this.primaryRail.getActiveItemId();
-    if (active && active.startsWith('sprinkle-')) return;
+    if (active?.startsWith('sprinkle-')) return;
     this.primaryRail.activateItem('terminal');
   }
 
@@ -623,9 +625,7 @@ export class Layout {
   }
 
   private getInitials(name: string): string {
-    const parts = name.trim().split(/\s+/);
-    if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-    return name.slice(0, 2).toUpperCase();
+    return initialsFromLabel(name);
   }
 
   /**
@@ -787,8 +787,8 @@ export class Layout {
       // `never` and this assignment fails to compile. Without it,
       // a new kind would silently flow into the trailing `else` and
       // ship with wrong styling + an unintended leave button.
-      const _exhaustive: never = model;
-      void _exhaustive;
+      const Exhaustive: never = model;
+      void Exhaustive;
     }
 
     // "Leave" affordance: previously the only way out was DevTools
@@ -830,9 +830,11 @@ export class Layout {
     el.setAttribute('aria-label', 'Account');
     el.dataset.tooltip = 'Account';
 
-    // Find first account with user info
+    // Find first account with user info — skip loggedOut rows (userName/userAvatar
+    // are intentionally retained after OAuth logout for "re-login as X" UX, but
+    // a logged-out account must not drive the avatar display).
     const accounts = getAccounts();
-    const account = accounts.find((a) => a.userName || a.userAvatar);
+    const account = accounts.find((a) => !a.loggedOut && (a.userName || a.userAvatar));
 
     if (account?.userAvatar) {
       // Avatar URL
@@ -885,9 +887,11 @@ export class Layout {
     const popover = document.createElement('div');
     popover.className = 'avatar-popover';
 
-    // Find current account info
+    // Find current account info — exclude loggedOut rows for the same reason
+    // as buildUserAvatar: userName is retained post-logout but must not drive
+    // the popover's signed-in state.
     const accounts = getAccounts();
-    const account = accounts.find((a) => a.userName || a.accessToken || a.apiKey);
+    const account = accounts.find((a) => !a.loggedOut && (a.userName || a.accessToken || a.apiKey));
 
     if (account) {
       const userSection = document.createElement('div');
@@ -909,8 +913,13 @@ export class Layout {
       const signOutBtn = document.createElement('button');
       signOutBtn.className = 'avatar-popover__item';
       signOutBtn.textContent = 'Sign out';
-      signOutBtn.addEventListener('click', () => {
-        removeAccount(account.providerId);
+      signOutBtn.addEventListener('click', async () => {
+        const cfg = getProviderConfig(account.providerId);
+        if (cfg?.isOAuth) {
+          await logoutOAuthAccount(account.providerId);
+        } else {
+          await removeAccount(account.providerId);
+        }
         popover.remove();
         this.refreshAvatar();
         this.refreshModels?.();
@@ -1406,6 +1415,67 @@ export class Layout {
   /** Track dynamic sprinkle sections in standalone mode. */
   private dynamicSprinkles = new Map<string, HTMLElement>();
 
+  /**
+   * Register a sprinkle's rail icon without opening it. The icon
+   * acts as a launcher — clicking it fires `onSprinkleActivate`,
+   * which the SprinkleManager routes to `open()` for not-yet-open
+   * sprinkles. The placeholder container is reused by a later
+   * `addSprinkle` call so the rail entry persists across the open
+   * lifecycle. Idempotent: safe to call repeatedly for the same name.
+   */
+  registerSprinkle(name: string, title: string, iconSpec?: string, targetZone?: ZoneId): void {
+    const tabId = `sprinkle-${name}`;
+    if (this.dynamicSprinkles.has(name) && this.primaryRail.hasItem(tabId)) return;
+
+    const zone = targetZone ?? 'primary';
+    const container = document.createElement('div');
+    container.style.cssText =
+      'display: flex; flex-direction: column; min-height: 0; overflow: auto; flex: 1;';
+
+    if (!this.registry.has(tabId)) {
+      this.registry.register({
+        id: tabId,
+        label: title,
+        zone,
+        closable: true,
+        element: container,
+        onClose: () => this.onSprinkleClose?.(name),
+      });
+    }
+
+    if (!this.primaryRail.hasItem(tabId)) {
+      this.primaryRail.addItem({
+        id: tabId,
+        label: title,
+        icon: SPRINKLE_DEFAULT_ICON,
+        element: container,
+        position: 'top',
+        closable: true,
+      });
+    }
+    this.dynamicSprinkles.set(name, container);
+
+    if (iconSpec && this.resolveSprinkleIcon) {
+      this.resolveSprinkleIcon(iconSpec)
+        .then((html) => {
+          if (html) this.primaryRail.setItemIcon(tabId, html);
+        })
+        .catch(() => {
+          /* fall back to default — already rendered */
+        });
+    }
+    this.updateAddButtons();
+  }
+
+  /** Remove a registered sprinkle's rail icon and registry entry entirely. */
+  unregisterSprinkle(name: string): void {
+    const tabId = `sprinkle-${name}`;
+    this.primaryRail.removeItem(tabId);
+    this.registry.unregister(tabId);
+    this.dynamicSprinkles.delete(name);
+    this.updateAddButtons();
+  }
+
   /** Add a dynamic .shtml sprinkle to the rail. */
   addSprinkle(
     name: string,
@@ -1414,38 +1484,20 @@ export class Layout {
     targetZone?: ZoneId,
     options?: { attention?: boolean; icon?: string }
   ): void {
-    const zone = targetZone ?? 'primary';
     const tabId = `sprinkle-${name}`;
 
-    const container = document.createElement('div');
-    container.style.cssText =
-      'display: flex; flex-direction: column; min-height: 0; overflow: auto; flex: 1;';
-    container.appendChild(element);
-
-    this.registry.register({
-      id: tabId,
-      label: title,
-      zone,
-      closable: true,
-      element: container,
-      onClose: () => this.onSprinkleClose?.(name),
-    });
-
-    this.primaryRail.addItem({
-      id: tabId,
-      label: title,
-      icon: SPRINKLE_DEFAULT_ICON,
-      element: container,
-      position: 'top',
-      closable: true,
-    });
-    this.dynamicSprinkles.set(name, container);
-
-    // Resolve the per-sprinkle icon asynchronously and swap it in
-    // when ready. We add the rail item with the default icon
-    // first so the entry is clickable immediately, then upgrade
-    // the SVG once the resolver responds.
-    if (options?.icon && this.resolveSprinkleIcon) {
+    // Reuse the placeholder container created by `registerSprinkle`
+    // if present so the rail entry survives close→reopen cycles. The
+    // follower controller path skips register, so create a fresh
+    // rail entry on demand here.
+    let container = this.dynamicSprinkles.get(name);
+    const fresh = !container || !this.primaryRail.hasItem(tabId);
+    if (fresh) {
+      this.registerSprinkle(name, title, options?.icon, targetZone);
+      container = this.dynamicSprinkles.get(name)!;
+    } else if (options?.icon && this.resolveSprinkleIcon) {
+      // Icon spec may have arrived only on open (e.g. follower path);
+      // upgrade the rail glyph if so.
       this.resolveSprinkleIcon(options.icon)
         .then((html) => {
           if (html) this.primaryRail.setItemIcon(tabId, html);
@@ -1454,6 +1506,7 @@ export class Layout {
           /* fall back to default — already rendered */
         });
     }
+    container!.appendChild(element);
 
     if (options?.attention) {
       // Auto-installed sprinkle in extension mode: leave the panel
@@ -1476,6 +1529,31 @@ export class Layout {
     this.registry.unregister(tabId);
     this.dynamicSprinkles.delete(name);
     this.updateAddButtons();
+  }
+
+  /**
+   * Clear a sprinkle's content from its rail-hosted container and
+   * collapse the panel if it was active. Leaves the rail icon in
+   * place so it continues to act as a launcher. Used by the
+   * SprinkleManager's `close()` path so closing a sprinkle doesn't
+   * yank its icon from the rail.
+   */
+  closeSprinkleContent(name: string): void {
+    const tabId = `sprinkle-${name}`;
+    const container = this.dynamicSprinkles.get(name);
+    if (container) {
+      while (container.firstChild) container.firstChild.remove();
+    }
+    if (this.primaryRail?.getActiveItemId() === tabId) {
+      this.primaryRail.collapse();
+    }
+  }
+
+  /** Collapse the rail content panel without removing the sprinkle. The rail icon stays visible. */
+  minimizeSprinkle(name: string): void {
+    if (this.primaryRail?.getActiveItemId() === `sprinkle-${name}`) {
+      this.primaryRail.collapse();
+    }
   }
 
   // The legacy switchPrimaryTab/switchDrawerTab helpers were removed

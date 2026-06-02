@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from 'vitest';
+
 import { DoorOpen, Sparkles } from 'lucide';
+import { describe, expect, it } from 'vitest';
 import { getLickDescriptor } from '../../src/ui/lick-view.js';
 import type { ChatMessage } from '../../src/ui/types.js';
 

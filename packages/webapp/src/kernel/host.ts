@@ -54,23 +54,23 @@
  * their float.
  */
 
-import type {
-  Orchestrator as OrchestratorType,
-  OrchestratorCallbacks,
-} from '../scoops/orchestrator.js';
-import { Orchestrator } from '../scoops/orchestrator.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import { NavigationWatcher } from '../cdp/navigation-watcher.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
-import type { LickEvent, LickManager } from '../scoops/lick-manager.js';
-import type { ChannelMessage, RegisteredScoop } from '../scoops/types.js';
-import type { KernelFacade } from './types.js';
 import { publishAgentBridge } from '../scoops/agent-bridge.js';
-import { ProcessManager } from './process-manager.js';
-import { ProcMountBackend } from './proc-mount.js';
-import { subscribeToLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
-import { subscribeToFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 import { formatLickEventForCone } from '../scoops/lick-formatting.js';
+import type { LickEvent, LickManager } from '../scoops/lick-manager.js';
+import type {
+  OrchestratorCallbacks,
+  Orchestrator as OrchestratorType,
+} from '../scoops/orchestrator.js';
+import { Orchestrator } from '../scoops/orchestrator.js';
+import { subscribeToFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
+import { subscribeToLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
+import type { ChannelMessage, RegisteredScoop } from '../scoops/types.js';
+import { ProcMountBackend } from './proc-mount.js';
+import { ProcessManager } from './process-manager.js';
+import type { KernelFacade } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -341,8 +341,9 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   }
 
   // 6. Register session-costs provider for the `cost` shell command.
-  const { registerSessionCostsProvider } =
-    await import('../shell/supplemental-commands/cost-command.js');
+  const { registerSessionCostsProvider } = await import(
+    '../shell/supplemental-commands/cost-command.js'
+  );
   registerSessionCostsProvider(() => orchestrator.getSessionCosts());
 
   // 7. LickManager init + lick→cone routing.
@@ -358,6 +359,60 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   // 8. Expose lickManager on globalThis for the `crontask` / `webhook`
   //    shell commands. globalThis is identical in worker + page.
   (globalThis as Record<string, unknown>).__slicc_lickManager = lickManager;
+
+  // 8a-pre. browser.websocket subscriber registry. The registry owns
+  //    the resolved sink dispatchers + the page-side CDP bridge so
+  //    `browser.websocket` is end-to-end functional in both floats
+  //    (WebSocket CDP standalone, chrome.debugger extension). The
+  //    realm-host resolves `globalThis.__slicc_wsSubscribers` at
+  //    `wsObserve`/`wsUpdate`/etc. call time. `unregisterScoop`
+  //    auto-cleans up subscribers via `dropForScoop`.
+  const { CdpWsPageBridge } = await import('../cdp/cdp-ws-page-bridge.js');
+  const { WsSubscriberRegistry } = await import('./realm/ws-subscribers.js');
+  const wsBridge = new CdpWsPageBridge({ browser });
+  const wsRegistry = new WsSubscriberRegistry({
+    bridge: wsBridge,
+    webhooks: { has: (id) => lickManager.getWebhook(id) !== undefined },
+    dispatcher: {
+      webhook: (id, payload) => {
+        lickManager.handleWebhookEvent(id, {}, payload);
+      },
+      scoop: (jid, payload) => {
+        const scoop = orchestrator.getScoops().find((s) => s.jid === jid);
+        if (!scoop) {
+          log.warn?.('browser.websocket: scoop sink not found', { jid });
+          return;
+        }
+        const msg: ChannelMessage = {
+          id: `ws-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          chatJid: jid,
+          senderId: 'browser.websocket',
+          senderName: 'browser.websocket',
+          content: typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2),
+          timestamp: new Date().toISOString(),
+          fromAssistant: false,
+          channel: 'browser.websocket',
+        };
+        void orchestrator.handleMessage(msg);
+      },
+      vfs: async (path, payload) => {
+        if (!sharedFs) return;
+        const line = (typeof payload === 'string' ? payload : JSON.stringify(payload)) + '\n';
+        let existing = '';
+        try {
+          const cur = await sharedFs.readFile(path);
+          existing = typeof cur === 'string' ? cur : new TextDecoder().decode(cur);
+        } catch {
+          /* file does not exist yet */
+        }
+        await sharedFs.writeFile(path, existing + line);
+      },
+      log: (payload) => {
+        log.info?.('browser.websocket frame', { payload });
+      },
+    },
+  });
+  (globalThis as Record<string, unknown>).__slicc_wsSubscribers = wsRegistry;
 
   // 8a. /licks-ws bridge to the node-server. The extension offscreen
   //     kernel-host has no node-server peer to connect to, so we gate
@@ -555,7 +610,20 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
           /* not mounted */
         }
       }
-      releaseHostGlobals({ processManager, lickManager, browser });
+      // Tear down the browser.websocket subscriber registry. Drops
+      // the page-side bridge's binding-called listener so we don't
+      // keep delivering frames after the host is gone.
+      try {
+        wsRegistry.dispose();
+      } catch (err) {
+        log.warn('WsSubscriberRegistry.dispose() failed', err);
+      }
+      try {
+        wsBridge.dispose();
+      } catch (err) {
+        log.warn('CdpWsPageBridge.dispose() failed', err);
+      }
+      releaseHostGlobals({ processManager, lickManager, browser, wsRegistry });
     },
   };
 }
@@ -574,9 +642,13 @@ export function releaseHostGlobals(refs: {
   processManager: ProcessManager;
   lickManager: LickManager;
   browser?: BrowserAPI;
+  wsRegistry?: unknown;
 }): void {
   const g = globalThis as Record<string, unknown>;
   if (g.__slicc_pm === refs.processManager) delete g.__slicc_pm;
   if (g.__slicc_lickManager === refs.lickManager) delete g.__slicc_lickManager;
   if (refs.browser && g.__slicc_browser === refs.browser) delete g.__slicc_browser;
+  if (refs.wsRegistry && g.__slicc_wsSubscribers === refs.wsRegistry) {
+    delete g.__slicc_wsSubscribers;
+  }
 }

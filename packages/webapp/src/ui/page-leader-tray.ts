@@ -22,28 +22,32 @@
  * keeps the helper's import graph small.
  */
 
-import { LeaderTrayManager } from '../scoops/tray-leader.js';
+import type { BrowserAPI } from '../cdp/browser-api.js';
+import type { CDPTransport } from '../cdp/transport.js';
+import { createLogger } from '../core/logger.js';
+import type { VirtualFS } from '../fs/virtual-fs.js';
+import { ThrottledErrorTracker } from '../scoops/throttled-error-tracker.js';
 import type {
   LeaderTraySession,
   LeaderTraySessionStore,
   LeaderTrayWebSocket,
+  TrayKind,
 } from '../scoops/tray-leader.js';
-import { LeaderTrayPeerManager } from '../scoops/tray-webrtc.js';
-import { LeaderSyncManager } from '../scoops/tray-leader-sync.js';
+import {
+  getLeaderTrayRuntimeStatus,
+  LeaderTrayManager,
+  type LeaderTrayRuntimeStatus,
+} from '../scoops/tray-leader.js';
 import type { LeaderSyncManagerOptions } from '../scoops/tray-leader-sync.js';
+import { LeaderSyncManager } from '../scoops/tray-leader-sync.js';
+import { buildTrayLaunchUrl } from '../scoops/tray-runtime-config.js';
 import type {
+  RemoteTargetInfo,
   ScoopSummary,
   SprinkleSummary,
-  RemoteTargetInfo,
 } from '../scoops/tray-sync-protocol.js';
+import { LeaderTrayPeerManager } from '../scoops/tray-webrtc.js';
 import type { AgentEvent } from './types.js';
-import type { BrowserAPI } from '../cdp/browser-api.js';
-import type { CDPTransport } from '../cdp/transport.js';
-import type { VirtualFS } from '../fs/virtual-fs.js';
-import { buildTrayLaunchUrl } from '../scoops/tray-runtime-config.js';
-import { getLeaderTrayRuntimeStatus, type LeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
-import { createLogger } from '../core/logger.js';
-import { ThrottledErrorTracker } from '../scoops/throttled-error-tracker.js';
 
 const log = createLogger('page-leader-tray');
 
@@ -57,6 +61,16 @@ const log = createLogger('page-leader-tray');
 export interface StartPageLeaderTrayOptions {
   /** Cloudflare tray worker base URL (from `tray-worker-base-url` localStorage). */
   workerBaseUrl: string;
+
+  /** Tray attach runtime string. Default 'slicc-standalone'. */
+  runtime?: string;
+  /** Tray kind. Default omitted (desktop). */
+  kind?: TrayKind;
+  /**
+   * Invoked once the leader tray is ready and the join URL is minted.
+   * Used by hosted-leader mode to POST `/api/cloud-status`.
+   */
+  onLeaderReady?: (session: LeaderTraySession) => void;
 
   // --- LeaderSyncManager dependencies (flat callbacks) ---
   getMessages: LeaderSyncManagerOptions['getMessages'];
@@ -187,7 +201,9 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
   // everything else is signaling for the peer manager.
   leader = new LeaderTrayManager({
     workerBaseUrl: options.workerBaseUrl,
-    runtime: 'slicc-standalone',
+    runtime: options.runtime ?? 'slicc-standalone',
+    ...(options.kind ? { kind: options.kind } : {}),
+    ...(options.onLeaderReady ? { onLeaderReady: options.onLeaderReady } : {}),
     fetchImpl,
     ...(options._storeOverride ? { store: options._storeOverride } : {}),
     ...(options._webSocketFactory ? { webSocketFactory: options._webSocketFactory } : {}),

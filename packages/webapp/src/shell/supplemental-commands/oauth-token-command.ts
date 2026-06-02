@@ -1,5 +1,5 @@
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { defineCommand } from 'just-bash';
 
 function helpText(): string {
   return `oauth-token — get an OAuth access token for a provider, or run an
@@ -56,10 +56,12 @@ export function createOAuthTokenCommand(): Command {
   return defineCommand('oauth-token', async (args) => {
     // Lazy imports — same pattern as other supplemental commands that
     // import from browser modules.
-    const { getOAuthAccountInfo, getSelectedProvider, getAccounts } =
-      await import('../../ui/provider-settings.js');
-    const { getRegisteredProviderConfig, getRegisteredProviderIds } =
-      await import('../../providers/index.js');
+    const { getOAuthAccountInfo, getSelectedProvider, getAccounts } = await import(
+      '../../ui/provider-settings.js'
+    );
+    const { getRegisteredProviderConfig, getRegisteredProviderIds } = await import(
+      '../../providers/index.js'
+    );
 
     if (args.includes('--help') || args.includes('-h')) {
       return { stdout: helpText(), stderr: '', exitCode: 0 };
@@ -168,8 +170,9 @@ export function createOAuthTokenCommand(): Command {
     // the success path is identical.
     try {
       if (config.onOAuthLoginIntercepted) {
-        const { createInterceptingOAuthLauncherForCurrentRuntime } =
-          await import('../../providers/oauth-service.js');
+        const { createInterceptingOAuthLauncherForCurrentRuntime } = await import(
+          '../../providers/oauth-service.js'
+        );
         const launcher = await createInterceptingOAuthLauncherForCurrentRuntime();
         if (!launcher) {
           return {
@@ -205,7 +208,7 @@ export function createOAuthTokenCommand(): Command {
 
       // Read the newly saved token
       const newInfo = getOAuthAccountInfo(providerId);
-      if (newInfo && newInfo.token) {
+      if (newInfo?.token) {
         const masked = newInfo.maskedValue;
         if (!masked) {
           return {
@@ -243,8 +246,9 @@ async function runDeclarativeIntercept(
   args: string[]
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const { parseInterceptOAuthConfig } = await import('../../providers/intercepted-oauth.js');
-  const { createInterceptingOAuthLauncherForCurrentRuntime } =
-    await import('../../providers/oauth-service.js');
+  const { createInterceptingOAuthLauncherForCurrentRuntime } = await import(
+    '../../providers/oauth-service.js'
+  );
 
   let rawConfig: unknown;
   const fromFileIdx = args.indexOf('--from-file');

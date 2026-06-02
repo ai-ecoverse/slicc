@@ -1,13 +1,13 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach } from 'vitest';
-import {
-  saveMountEntry,
-  removeMountEntry,
-  getAllMountEntries,
-  clearMountEntries,
-  type MountTableEntry,
-} from '../../src/fs/mount-table-store.js';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { newMountId } from '../../src/fs/mount/mount-id.js';
+import {
+  clearMountEntries,
+  getAllMountEntries,
+  type MountTableEntry,
+  removeMountEntry,
+  saveMountEntry,
+} from '../../src/fs/mount-table-store.js';
 
 /** Minimal mock of FileSystemDirectoryHandle for IDB storage tests. */
 function mockHandle(name: string): FileSystemDirectoryHandle {

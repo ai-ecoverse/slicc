@@ -226,6 +226,9 @@ window.slicc = {
   close: function() {
     parent.postMessage({ type: 'sprinkle-close' }, '*');
   },
+  minimize: function() {
+    parent.postMessage({ type: 'sprinkle-minimize' }, '*');
+  },
   stopCone: function() {
     parent.postMessage({ type: 'sprinkle-stop-cone' }, '*');
   },
@@ -333,6 +336,7 @@ function buildNestedBridgeScript(savedState, savedStorage, name, isLight) {
       'getState: function() { return window.__slicc_state; },' +
       'open: function(path, opts) { parent.postMessage({ type: "sprinkle-open", path: path, projectRoot: opts && opts.projectRoot || null }, "*"); },' +
       'close: function() { parent.postMessage({ type: "sprinkle-close" }, "*"); },' +
+      'minimize: function() { parent.postMessage({ type: "sprinkle-minimize" }, "*"); },' +
       'stopCone: function() { parent.postMessage({ type: "sprinkle-stop-cone" }, "*"); },' +
       'attachImage: function(base64, name, mimeType) { parent.postMessage({ type: "sprinkle-attach-image", base64: base64, name: name, mimeType: mimeType }, "*"); }' +
     '};' +
@@ -442,7 +446,6 @@ addEventListener('message', function(e) {
       }
 
       // Render the SHTML content (trusted user/agent-authored sprinkle)
-      // eslint-disable-next-line no-unsanitized/property -- trusted content, same as CLI renderer
       document.body.innerHTML = msg.content;
 
       // Auto-set width on .fill elements
@@ -565,7 +568,7 @@ addEventListener('message', function(e) {
   // Relay bridge messages FROM the nested child iframe TO the extension page.
   if (window.__slicc_childIframe && e.source === window.__slicc_childIframe.contentWindow) {
     var bridgeTypes = [
-      'sprinkle-lick', 'sprinkle-set-state', 'sprinkle-close', 'sprinkle-stop-cone',
+      'sprinkle-lick', 'sprinkle-set-state', 'sprinkle-close', 'sprinkle-minimize', 'sprinkle-stop-cone',
       'sprinkle-attach-image', 'sprinkle-open', 'sprinkle-readfile',
       'sprinkle-writefile', 'sprinkle-readdir', 'sprinkle-exists',
       'sprinkle-stat', 'sprinkle-mkdir', 'sprinkle-rm',

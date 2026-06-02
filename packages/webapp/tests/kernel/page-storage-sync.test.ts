@@ -12,9 +12,9 @@
  *     between tests doesn't leak interceptors).
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { installPageStorageSync } from '../../src/kernel/page-storage-sync.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PanelToOffscreenMessage } from '../../../chrome-extension/src/messages.js';
+import { installPageStorageSync } from '../../src/kernel/page-storage-sync.js';
 
 interface FakeStorage extends Storage {
   _store: Map<string, string>;

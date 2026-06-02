@@ -5,8 +5,8 @@
  * Uses BrowserAPI + VirtualFS injected from the shell options.
  */
 
-import { defineCommand } from 'just-bash';
 import type { Command, SecureFetch } from 'just-bash';
+import { defineCommand } from 'just-bash';
 import type { BrowserAPI, PageInfo } from '../../cdp/index.js';
 import { HarRecorder } from '../../cdp/index.js';
 import { normalizeAccessibilityText } from '../../cdp/normalize-accessibility-text.js';
@@ -16,13 +16,15 @@ import { FsError, type VirtualFS } from '../../fs/index.js';
 import { getPanelRpcClient, type PanelRpcResults } from '../../kernel/panel-rpc.js';
 import { discoverLinks } from '../../net/discover-links.js';
 import { extractHandoff, type HandoffMatch } from '../../net/handoff-link.js';
-import { parseLinkHeader, type ParsedLink } from '../../net/link-header.js';
+import { type ParsedLink, parseLinkHeader } from '../../net/link-header.js';
 import { createProxiedFetch } from '../proxied-fetch.js';
+import { normalizeHeadersInit } from '../proxy-headers.js';
 import {
+  type BrowseShSkillSummary,
   fetchBrowseShCatalog,
   normalizeHostname,
-  type BrowseShSkillSummary,
 } from './upskill-command.js';
+
 const log = createLogger('playwright-teleport');
 
 // ---------------------------------------------------------------------------
@@ -119,7 +121,7 @@ export const PLAYWRIGHT_COMMAND_NAMES = ['playwright-cli', 'playwright', 'puppet
 const sharedStateByBrowser = new WeakMap<BrowserAPI, WeakMap<VirtualFS, PlaywrightState>>();
 
 /** Commands that invalidate ref snapshots because page state may have changed. */
-const SNAPSHOT_INVALIDATING_COMMANDS = new Set([
+const _SNAPSHOT_INVALIDATING_COMMANDS = new Set([
   'click',
   'dblclick',
   'fill',
@@ -160,7 +162,7 @@ function filenameSafeTimestamp(date: Date): string {
   return date.toISOString().replace(/:/g, '-');
 }
 
-function parseNonNegativeInteger(value: string): number | null {
+function _parseNonNegativeInteger(value: string): number | null {
   if (!/^[0-9]+$/.test(value)) return null;
   return Number(value);
 }
@@ -851,7 +853,7 @@ async function captureTeleportPageDiagnostics(
   const raw = await browser.evaluate(`(() => JSON.stringify({
     url: window.location.href,
     title: document.title || '',
-    bodySnippet: document.body?.innerText?.replace(/\s+/g, ' ').trim().slice(0, 500) || '(empty)',
+    bodySnippet: document.body?.innerText?.replace(/\\s+/g, ' ').trim().slice(0, 500) || '(empty)',
   }))()`);
 
   if (typeof raw !== 'string' || raw.length === 0) {
@@ -1467,7 +1469,7 @@ async function captureCookiesAndComplete(
  * Check if a teleport watcher has been triggered and needs to block.
  * Returns a result string if blocked, null if not blocking.
  */
-async function checkTeleportBlock(
+async function _checkTeleportBlock(
   state: PlaywrightState,
   targetId: string
 ): Promise<string | null> {
@@ -1654,13 +1656,19 @@ function requireTab(flags: Record<string, string>): { targetId: string } | { err
 /**
  * Adapter that lets `discoverLinks` (Web Fetch shape) ride on our
  * `SecureFetch`, inheriting CORS bypass and forbidden-header bridging.
- * Mirrors the helper used by the standalone `discover` command.
+ * Mirrors the helper used by the standalone `discover` command — also
+ * forwards `init.headers` so caller-supplied forbidden headers
+ * (`Origin`, `Cookie`, `Referer`) survive end-to-end.
  */
-function asWebFetch(secureFetch: SecureFetch): typeof fetch {
+export function asWebFetch(secureFetch: SecureFetch): typeof fetch {
   const adapter = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url =
       typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
-    const result = await secureFetch(url, { method: init?.method ?? 'GET' });
+    const headers = normalizeHeadersInit(init?.headers);
+    const result = await secureFetch(url, {
+      method: init?.method ?? 'GET',
+      ...(headers ? { headers } : {}),
+    });
     return new Response(result.body as BodyInit, {
       status: result.status,
       statusText: result.statusText,
@@ -2193,7 +2201,7 @@ export function createPlaywrightCommand(
             result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          const data = await browser.withTab(tab.targetId, async () => {
+          const _data = await browser.withTab(tab.targetId, async () => {
             await browser.navigate(positional[0]);
             return true;
           });
@@ -2334,7 +2342,7 @@ export function createPlaywrightCommand(
           const output = await browser.withTab(tab.targetId, async () => {
             // Ref-based screenshot
             let clip: { x: number; y: number; width: number; height: number } | undefined;
-            if (positional[0] && positional[0].startsWith('e')) {
+            if (positional[0]?.startsWith('e')) {
               const snapshot = state.snapshots.get(tab.targetId);
               if (!snapshot) {
                 throw new Error('No snapshot available. Run "snapshot" first.');

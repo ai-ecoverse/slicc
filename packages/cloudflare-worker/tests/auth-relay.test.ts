@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { handleWorkerRequest, type WorkerEnv } from '../src/index.js';
 
 const fakeAssets = {
@@ -25,11 +25,16 @@ async function fetchRelayBody(query: string): Promise<string> {
  * user). This is the behavioural test seam — the relay's logic lives in the
  * page's <script> tag, not in worker code, so we exercise the script directly.
  */
-function runRelay(html: string, search: string, hash = ''): { replaced?: string; error?: string } {
+function runRelay(
+  html: string,
+  search: string,
+  hash = ''
+): { replaced?: string; error?: string; postedMessage?: any } {
   const match = html.match(/<script>([\s\S]*?)<\/script>/);
   if (!match) throw new Error('No <script> in relay HTML');
   let replaced: string | undefined;
   let errorText: string | undefined;
+  let postedMessage: any;
   const fakeLocation = {
     search,
     hash,
@@ -39,23 +44,48 @@ function runRelay(html: string, search: string, hash = ''): { replaced?: string;
   };
   const msgEl = { textContent: '' };
   const fakeDocument = { getElementById: (_id: string) => msgEl };
+  const fakeOpener = {
+    postMessage: (msg: any, _targetOrigin: string) => {
+      postedMessage = msg;
+    },
+  };
+  const fakeWindow = {
+    opener: fakeOpener,
+    close: () => {
+      /* no-op in test */
+    },
+  };
   const fn = new Function(
     'location',
     'document',
+    'window',
     'btoa',
     'atob',
     'URLSearchParams',
     'JSON',
     'Number',
+    'setTimeout',
     match[1]!
   );
-  fn(fakeLocation, fakeDocument, btoa, atob, URLSearchParams, JSON, Number);
+  fn(
+    fakeLocation,
+    fakeDocument,
+    fakeWindow,
+    btoa,
+    atob,
+    URLSearchParams,
+    JSON,
+    Number,
+    (_fn: any, _ms: number) => {
+      /* no-op setTimeout in test */
+    }
+  );
   if (!replaced && msgEl.textContent.startsWith('OAuth redirect failed: ')) {
     errorText = msgEl.textContent
       .replace(/^OAuth redirect failed: /, '')
       .replace(/\. Close.*$/, '');
   }
-  return { replaced, error: errorText };
+  return { replaced, error: errorText, postedMessage };
 }
 
 describe('OAuth callback relay — page response', () => {
@@ -227,5 +257,16 @@ describe('OAuth callback relay — unknown source', () => {
     const { replaced, error } = runRelay(html, `?state=${state}`);
     expect(replaced).toBeUndefined();
     expect(error).toContain('Unknown source');
+  });
+});
+
+describe('OAuth callback relay — error handling', () => {
+  it('postMessages error to window.opener on catch', async () => {
+    // No state query param → catch block runs
+    const html = await fetchRelayBody('');
+    const { replaced, error, postedMessage } = runRelay(html, '');
+    expect(replaced).toBeUndefined();
+    expect(error).toBeTruthy();
+    expect(postedMessage).toEqual({ type: 'sliccy.cloud.imsError', error: expect.any(String) });
   });
 });

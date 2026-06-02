@@ -10,11 +10,11 @@
  * masked secret values would bypass the proxy.
  */
 
-import { describe, it, expect, vi } from 'vitest';
-import type { CommandContext, IFileSystem, FsStat } from 'just-bash';
-import { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
+import type { CommandContext, FsStat, IFileSystem } from 'just-bash';
+import { describe, expect, it, vi } from 'vitest';
 import { attachRealmHost } from '../../../src/kernel/realm/realm-host.js';
 import type { RealmPortLike } from '../../../src/kernel/realm/realm-rpc.js';
+import { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
 
 interface PortPair {
   realm: RealmPortLike;
@@ -490,6 +490,73 @@ describe('realm RPC: exec channel', () => {
     attachRealmHost(host, ctx);
     const client = new RealmRpcClient(realm);
     await expect(client.call('exec', 'run', ['ls'])).rejects.toThrow(/exec is not available/);
+    client.dispose();
+  });
+
+  it('exec.spawn forwards argv tail via just-bash `args` (no shell parsing)', async () => {
+    // The quoting-trap canary: a literal `$peculiar` and an arg with
+    // spaces. Both MUST land in the `args` option verbatim — if they
+    // get folded into the command string they'd be word-split and
+    // env-expanded by the shell, which is exactly what spawn() exists
+    // to prevent.
+    const exec = vi.fn().mockResolvedValue({ stdout: 'ok', stderr: '', exitCode: 0 });
+    const ctx = makeCtx({ exec });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx);
+    const client = new RealmRpcClient(realm);
+    const result = await client.call<{ stdout: string; stderr: string; exitCode: number }>(
+      'exec',
+      'spawn',
+      [['echo', 'arg with spaces', '$peculiar', '* glob']]
+    );
+    expect(result).toEqual({ stdout: 'ok', stderr: '', exitCode: 0 });
+    expect(exec).toHaveBeenCalledWith('echo', {
+      cwd: '/workspace',
+      args: ['arg with spaces', '$peculiar', '* glob'],
+    });
+    client.dispose();
+  });
+
+  it('exec.spawn rejects a non-array argv', async () => {
+    const exec = vi.fn();
+    const ctx = makeCtx({ exec });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx);
+    const client = new RealmRpcClient(realm);
+    await expect(client.call('exec', 'spawn', ['not-an-array'])).rejects.toThrow(
+      /argv must be a non-empty string\[\]/
+    );
+    await expect(client.call('exec', 'spawn', [[]])).rejects.toThrow(
+      /argv must be a non-empty string\[\]/
+    );
+    await expect(client.call('exec', 'spawn', [['cmd', 42]])).rejects.toThrow(
+      /argv must be a non-empty string\[\]/
+    );
+    expect(exec).not.toHaveBeenCalled();
+    client.dispose();
+  });
+});
+
+describe('realm RPC: vfs.writeFile size cap', () => {
+  it('round-trips a 4 MiB string without skill-side chunking', async () => {
+    // The Concur skill (lines 80–110) used to base64-chunk content
+    // through a shell heredoc because `cat << EOF` had an argv cap.
+    // `fs.writeFile` is the canonical escape hatch: it ships the
+    // string through structured clone on the realm port, no shell
+    // argv involved. Pin the contract so a regression in the RPC
+    // path can't quietly reintroduce the cap.
+    const FOUR_MIB = 4 * 1024 * 1024;
+    const huge = 'x'.repeat(FOUR_MIB);
+    const fs = makeMockFs();
+    const ctx = makeCtx({ fs });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx);
+    const client = new RealmRpcClient(realm);
+    await client.call('vfs', 'writeFile', ['/tmp/huge.txt', huge]);
+    const persisted = await fs.readFile('/tmp/huge.txt');
+    expect(persisted.length).toBe(FOUR_MIB);
+    expect(persisted.startsWith('xxxx')).toBe(true);
+    expect(persisted.endsWith('xxxx')).toBe(true);
     client.dispose();
   });
 });

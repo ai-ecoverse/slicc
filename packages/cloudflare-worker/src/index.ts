@@ -1,35 +1,59 @@
+import { buildApiCatalogResponse } from './api-catalog.js';
+import { handleCloudCallback, handleCloudCallbackScript } from './auth/cloud-callback.js';
+import { CloudSessionsDurableObject } from './cloud/cloud-sessions-do.js';
+import { handleAdminStats } from './cloud/handler-admin.js';
+import { handleCloudConfig } from './cloud/handler-config.js';
+import { handleSignOut } from './cloud/handler-signout.js';
 import {
+  handleKill,
+  handleList,
+  handlePause,
+  handleResume,
+  handleStart,
+} from './cloud/handlers.js';
+import { buildHandoffResponse } from './handoff-page.js';
+import { applySliccLinks } from './links.js';
+import { buildLlmsTxtResponse } from './llms-txt.js';
+import {
+  handleOAuthMethodNotAllowed,
+  handleOAuthPreflight,
+  handleOAuthRevoke,
+  handleOAuthToken,
+} from './oauth-exchange.js';
+import { buildRelResponse } from './rel-docs.js';
+import { SessionTrayDurableObject } from './session-tray.js';
+import {
+  type CreateTrayRequest,
   createCapabilityToken,
+  type DurableObjectNamespaceLike,
   jsonResponse,
   parseCapabilityToken,
   wantsJSON,
-  type CreateTrayRequest,
-  type DurableObjectNamespaceLike,
 } from './shared.js';
-import { buildHandoffResponse } from './handoff-page.js';
-import { SessionTrayDurableObject } from './session-tray.js';
-import {
-  handleOAuthToken,
-  handleOAuthRevoke,
-  handleOAuthPreflight,
-  handleOAuthMethodNotAllowed,
-} from './oauth-exchange.js';
-import { applySliccLinks } from './links.js';
-import { buildApiCatalogResponse } from './api-catalog.js';
-import { buildLlmsTxtResponse } from './llms-txt.js';
-import { buildRelResponse } from './rel-docs.js';
 
 export interface WorkerEnv {
   TRAY_HUB: DurableObjectNamespaceLike;
+  CLOUD_SESSIONS: DurableObjectNamespaceLike;
   ASSETS: { fetch(request: Request): Promise<Response> };
   CLOUDFLARE_TURN_KEY_ID?: string;
   CLOUDFLARE_TURN_API_TOKEN?: string;
+  E2B_API_KEY?: string;
+  ADOBE_PROXY_ENDPOINT?: string;
+  IMS_RELAY_URL?: string;
+  ALLOWED_EMAIL_DOMAIN?: string;
+  BLOCKED_EMAILS?: string;
+  REQUIRE_OWNER_ORG?: string;
+  ADMIN_USER_IDS?: string;
+  CONE_CAP_RUNNING?: string;
+  CONE_CAP_PAUSED?: string;
+  ALLOWED_CLOUD_DASHBOARD_ORIGINS?: string;
 }
 
 function serveSPA(request: Request, env: WorkerEnv): Promise<Response> {
   return env.ASSETS.fetch(request);
 }
-const OAUTH_RELAY_HTML = `<!DOCTYPE html>
+const OAUTH_RELAY_HTML = (allowedOrigins: string): string =>
+  `<!DOCTYPE html>
 <html><head><title>Redirecting to SLICC...</title></head>
 <body>
 <p id="msg">Redirecting to SLICC...</p>
@@ -60,15 +84,45 @@ try {
     var extensionId = state.extensionId || '';
     if (!/^[a-p]{32}$/.test(extensionId)) throw new Error('Invalid extensionId');
     target = 'https://' + extensionId + '.chromiumapp.org' + path + query;
+  } else if (source === 'remote') {
+    // Remote origin (staging / preview / deployed dashboards).
+    var origin = state.origin || '';
+    // Origin must be a strict https origin (no path, no userinfo, no invalid port).
+    if (!/^https:\\/\\/[a-z0-9.-]+(:[0-9]{1,5})?$/i.test(origin)) {
+      throw new Error('Invalid origin: ' + origin);
+    }
+    // Allowlist enforced server-side via the inlined ALLOWED_ORIGINS array.
+    var allowed = ${JSON.stringify('PLACEHOLDER')};
+    if (allowed.indexOf(origin) === -1) {
+      throw new Error('Origin not in ALLOWED_CLOUD_DASHBOARD_ORIGINS: ' + origin);
+    }
+    target = origin + path + query;
   } else {
     throw new Error('Unknown source: ' + source);
   }
   location.replace(target + location.hash);
 } catch (e) {
-  document.getElementById('msg').textContent = 'OAuth redirect failed: ' + e.message + '. Close this window and try again.';
+  var msg = 'OAuth redirect failed: ' + e.message + '. Close this window and try again.';
+  document.getElementById('msg').textContent = msg;
+  if (window.opener) {
+    try {
+      window.opener.postMessage({ type: 'sliccy.cloud.imsError', error: e.message }, '*');
+    } catch (postErr) {
+      /* opener may be cross-origin and reject; the inline message is the fallback */
+    }
+  }
+  setTimeout(function() { window.close(); }, 3000);
 }
 </script>
-</body></html>`;
+</body></html>`.replace(
+    JSON.stringify('PLACEHOLDER'),
+    JSON.stringify(
+      allowedOrigins
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+    )
+  );
 
 export async function handleWorkerRequest(
   request: Request,
@@ -81,6 +135,82 @@ export async function handleWorkerRequest(
     const target = new URL(url.toString());
     target.hostname = 'www.sliccy.ai';
     return Response.redirect(target.toString(), 301);
+  }
+
+  // Cloud cones routes (Plan D).
+  if (url.pathname.startsWith('/api/cloud/')) {
+    const op = url.pathname.replace('/api/cloud/', '');
+    // Handlers expect CloudEnv/AdminEnv types, which are structurally compatible
+    // with WorkerEnv but have different optionality. Cast at dispatch boundary.
+    const cloudEnv = env as unknown as Parameters<typeof handleStart>[1];
+    const adminEnv = env as unknown as Parameters<typeof handleAdminStats>[1];
+    switch (op) {
+      case 'config':
+        return handleCloudConfig(request, env);
+      case 'start':
+        return handleStart(request, cloudEnv);
+      case 'list':
+        return handleList(request, cloudEnv);
+      case 'pause':
+        return handlePause(request, cloudEnv);
+      case 'resume':
+        return handleResume(request, cloudEnv);
+      case 'kill':
+        return handleKill(request, cloudEnv);
+      case 'sign-out':
+        return handleSignOut(request);
+      case 'admin/stats':
+        return handleAdminStats(request, adminEnv);
+      default:
+        return new Response(`unknown cloud op: ${op}`, { status: 404 });
+    }
+  }
+
+  // IMS implicit-grant callback (Plan D).
+  if (url.pathname === '/auth/cloud-callback') return handleCloudCallback();
+  if (url.pathname === '/auth/cloud-callback.js') return handleCloudCallbackScript();
+
+  // Cloud dashboard SPA (Plan D Phase D-6).
+  if (
+    url.pathname === '/cloud' ||
+    (url.pathname.startsWith('/cloud/') && (request.method === 'GET' || request.method === 'HEAD'))
+  ) {
+    // Use the canonical directory URL — fetching `index.html` triggers CF
+    // Static Assets' html_handling auto-canonicalize which 307s to the dir,
+    // and the worker only intercepts `/cloud*`, so the followed redirect
+    // hits Static Assets directly without our CSP wrapper. Asking for `/`
+    // returns the same index.html content without the redirect dance.
+    const path =
+      url.pathname === '/cloud' ? '/packages/webapp/cloud/' : `/packages/webapp${url.pathname}`;
+    const res = await env.ASSETS.fetch(new Request(new URL(path, request.url), request));
+
+    // If ASSETS still returned a redirect (e.g., for some edge path),
+    // follow it internally and proxy the eventual response — this preserves
+    // our CSP wrapping across any auto-canonicalize hop.
+    const finalRes =
+      res.status >= 300 && res.status < 400 && res.headers.get('location')
+        ? await env.ASSETS.fetch(
+            new Request(new URL(res.headers.get('location')!, request.url), request)
+          )
+        : res;
+
+    const headers = new Headers(finalRes.headers);
+    headers.set(
+      'content-security-policy',
+      [
+        "default-src 'self'",
+        "script-src 'self'",
+        "connect-src 'self' https://ims-na1.adobelogin.com",
+        "img-src 'self' data:",
+        "style-src 'self' 'unsafe-inline'",
+        "frame-ancestors 'none'",
+      ].join('; ')
+    );
+    return new Response(finalRes.body, {
+      status: finalRes.status,
+      statusText: finalRes.statusText,
+      headers,
+    });
   }
 
   if (url.pathname === '/tray' && request.method === 'POST') {
@@ -101,7 +231,8 @@ export async function handleWorkerRequest(
   // OAuth callback relay — serves a static HTML page that reads the OAuth state
   // parameter and redirects to the correct localhost port. Provider-agnostic.
   if (url.pathname === '/auth/callback') {
-    return new Response(OAUTH_RELAY_HTML, {
+    const html = OAUTH_RELAY_HTML(env.ALLOWED_CLOUD_DASHBOARD_ORIGINS ?? '');
+    return new Response(html, {
       status: 200,
       headers: { 'Content-Type': 'text/html; charset=utf-8' },
     });
@@ -254,6 +385,18 @@ export async function handleWorkerRequest(
         'POST /oauth/revoke',
         'GET /api/runtime-config',
         'ANY /api/fetch-proxy',
+        'GET /api/cloud/config',
+        'POST /api/cloud/start',
+        'GET /api/cloud/list',
+        'POST /api/cloud/pause',
+        'POST /api/cloud/resume',
+        'POST /api/cloud/kill',
+        'POST /api/cloud/sign-out',
+        'GET /api/cloud/admin/stats',
+        'GET /auth/cloud-callback',
+        'GET /auth/cloud-callback.js',
+        'GET /cloud',
+        'GET /cloud/*',
       ],
     },
     200
@@ -285,6 +428,36 @@ async function handleDmgDownload(): Promise<Response> {
 }
 
 async function createTray(request: Request, env: WorkerEnv): Promise<Response> {
+  let kind: 'desktop' | 'hosted' = 'desktop';
+  // Tolerate three back-compat shapes: no content-length header at all
+  // (legacy clients), content-length: 0, and an empty-string body. Only
+  // attempt JSON parse when there's actually a body to parse.
+  const rawBody = await request.text();
+  if (rawBody.trim() !== '') {
+    try {
+      const body = JSON.parse(rawBody) as { kind?: unknown };
+      if (body.kind === 'hosted' || body.kind === 'desktop') {
+        kind = body.kind;
+      } else if (body.kind !== undefined) {
+        return jsonResponse(
+          {
+            error: 'kind must be "desktop" or "hosted"',
+            code: 'INVALID_KIND',
+          },
+          400
+        );
+      }
+    } catch {
+      return jsonResponse(
+        {
+          error: 'request body must be valid JSON',
+          code: 'INVALID_BODY',
+        },
+        400
+      );
+    }
+  }
+
   const url = new URL(request.url);
   const trayId = crypto.randomUUID();
   const payload: CreateTrayRequest = {
@@ -293,6 +466,7 @@ async function createTray(request: Request, env: WorkerEnv): Promise<Response> {
     joinToken: createCapabilityToken(trayId),
     controllerToken: createCapabilityToken(trayId),
     webhookToken: createCapabilityToken(trayId),
+    kind,
   };
 
   const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(trayId));
@@ -358,4 +532,4 @@ const worker = {
 };
 
 export default worker;
-export { SessionTrayDurableObject };
+export { CloudSessionsDurableObject, SessionTrayDurableObject };

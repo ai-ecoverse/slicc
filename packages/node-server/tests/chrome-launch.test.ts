@@ -1,12 +1,8 @@
-import { type existsSync, type readdirSync } from 'fs';
-import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { type existsSync, existsSync as fsExistsSync, type readdirSync } from 'fs';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-
 import { afterEach, describe, expect, it } from 'vitest';
-
-import { existsSync as fsExistsSync } from 'fs';
-import { stat } from 'fs/promises';
 
 import {
   buildChromeLaunchArgs,
@@ -113,6 +109,41 @@ describe('chrome-launch', () => {
       '--load-extension=/repo/dist/extension',
       'http://localhost:3000',
     ]);
+  });
+
+  describe('buildChromeLaunchArgs — hosted mode', () => {
+    const baseOpts = {
+      cdpPort: 9222,
+      launchUrl: 'http://localhost:5710/',
+      profile: {
+        id: null,
+        displayName: 'Chrome',
+        userDataDir: '/tmp/x',
+        extensionPath: null,
+      },
+    };
+
+    it('default mode does not include container flags', () => {
+      const args = buildChromeLaunchArgs(baseOpts);
+      expect(args).not.toContain('--no-sandbox');
+      expect(args).not.toContain('--disable-dev-shm-usage');
+      expect(args).not.toContain('--headless=new');
+    });
+
+    it('hosted: true appends container flags', () => {
+      const args = buildChromeLaunchArgs({ ...baseOpts, hosted: true });
+      expect(args).toContain('--no-sandbox');
+      expect(args).toContain('--disable-dev-shm-usage');
+      expect(args).toContain('--disable-gpu');
+      expect(args).toContain('--headless=new');
+      expect(args).toContain('--font-render-hinting=none');
+    });
+
+    it('hosted mode preserves existing flags (user-data-dir, etc.)', () => {
+      const args = buildChromeLaunchArgs({ ...baseOpts, hosted: true });
+      expect(args).toContain('--user-data-dir=/tmp/x');
+      expect(args).toContain('--remote-debugging-port=9222');
+    });
   });
 
   describe('resolveChromeAppBundle', () => {

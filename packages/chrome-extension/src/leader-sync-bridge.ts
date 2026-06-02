@@ -8,31 +8,31 @@
  * `PanelLeaderSyncProxy.resetTray` below).
  */
 
+import type { MessageAttachment } from '../../webapp/src/core/attachments.js';
+import type { LeaderSyncManager } from '../../webapp/src/scoops/tray-leader-sync.js';
+import {
+  discriminateMsg,
+  type OffscreenMessageHub,
+  type PanelMessageSender,
+  type PanelMessageSubscriber,
+} from './bridge-transport.js';
 import type {
+  LeaderActiveScoopMsg,
+  LeaderModeChangedMsg,
+  LeaderRequestLeaderModeStateMsg,
   LeaderSprinklesSnapshotMsg,
   LeaderSprinkleUpdateMsg,
-  LeaderUserMessageEchoMsg,
-  LeaderActiveScoopMsg,
-  LeaderRequestLeaderModeStateMsg,
-  LeaderModeChangedMsg,
   LeaderTrayResetRequestMsg,
   LeaderTrayResetResponseMsg,
   LeaderTrayRuntimeStatusEnvelope,
+  LeaderUserMessageEchoMsg,
   SprinkleSummaryEnvelope,
 } from './messages.js';
-import type { LeaderSyncManager } from '../../webapp/src/scoops/tray-leader-sync.js';
-import type { MessageAttachment } from '../../webapp/src/core/attachments.js';
-import {
-  type PanelMessageSender,
-  type PanelMessageSubscriber,
-  type OffscreenMessageHub,
-  discriminateMsg,
-} from './bridge-transport.js';
 
 // Re-export the shared transport interfaces so existing consumers
 // (offscreen.ts, leader-sync-bridge.test.ts, etc.) keep importing
 // them from this module's stable public surface.
-export type { PanelMessageSender, PanelMessageSubscriber, OffscreenMessageHub };
+export type { OffscreenMessageHub, PanelMessageSender, PanelMessageSubscriber };
 
 /** Narrow surface the leader adapter needs on OffscreenBridge — kept slim
  *  so tests can pass a hand-built stub. */

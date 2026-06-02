@@ -7,8 +7,8 @@
  * helpers from here so there is exactly one reader/writer of the file.
  */
 
-import { GLOBAL_FS_DB_NAME } from '../../fs/global-db.js';
 import { createLogger } from '../../core/logger.js';
+import { GLOBAL_FS_DB_NAME } from '../../fs/global-db.js';
 import { FsError } from '../../fs/types.js';
 import type { McpAuthEntry, McpServerAuthRecord, McpServerEntry, McpServersFile } from './types.js';
 

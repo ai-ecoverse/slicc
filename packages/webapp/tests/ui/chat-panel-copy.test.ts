@@ -8,11 +8,11 @@
  * side-rail click-and-hold gesture. These tests pin both branches.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { ChatPanel, formatChatForClipboard } from '../../src/ui/chat-panel.js';
-import type { ChatMessage } from '../../src/ui/types.js';
 import { LONG_PRESS_MS } from '../../src/ui/long-press.js';
+import type { ChatMessage } from '../../src/ui/types.js';
 
 vi.mock('../../src/ui/voice-input.js', () => ({
   VoiceInput: class {

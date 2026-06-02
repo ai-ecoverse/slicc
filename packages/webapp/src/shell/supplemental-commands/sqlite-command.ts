@@ -1,5 +1,5 @@
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { defineCommand } from 'just-bash';
 import { formatSqlValue, getSqlJs } from './shared.js';
 
 function sqliteHelp(): { stdout: string; stderr: string; exitCode: number } {

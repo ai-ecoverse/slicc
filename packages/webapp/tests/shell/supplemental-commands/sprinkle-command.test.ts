@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSprinkleCommand } from '../../../src/shell/supplemental-commands/sprinkle-command.js';
 import type { SprinkleManager } from '../../../src/ui/sprinkle-manager.js';
 

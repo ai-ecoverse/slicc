@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { mask, buildScrubber, domainMatches, isAllowedDomain } from '../src/secret-masking.js';
+import { describe, expect, it } from 'vitest';
+import { buildScrubber, domainMatches, isAllowedDomain, mask } from '../src/secret-masking.js';
 
 describe('mask()', () => {
   it('produces deterministic output for same inputs', async () => {

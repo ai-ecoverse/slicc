@@ -1,12 +1,12 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { DaMountBackend } from '../../../src/fs/mount/backend-da.js';
+import type { DaProfile } from '../../../src/fs/mount/profile.js';
 import { RemoteMountCache } from '../../../src/fs/mount/remote-cache.js';
 import { installFetchMock } from './helpers/mock-fetch.js';
 import { createSignedFetchDaStub } from './helpers/signed-fetch-stub.js';
-import type { DaProfile } from '../../../src/fs/mount/profile.js';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
 const FIXTURES = join(__dirname, 'fixtures');
 

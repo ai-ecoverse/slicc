@@ -1,8 +1,8 @@
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { defineCommand } from 'just-bash';
 import { createLogger } from '../../core/logger.js';
 import { normalizePath } from '../../fs/path-utils.js';
-import { THINKING_LEVELS, isThinkingLevel, type ThinkingLevel } from '../../scoops/types.js';
+import { isThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from '../../scoops/types.js';
 
 const log = createLogger('agent-command');
 

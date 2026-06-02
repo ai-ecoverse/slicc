@@ -31,7 +31,7 @@ export interface Logger {
 }
 
 // No-op function — assigned once, shared across all prod loggers.
-const noop = () => {};
+const _noop = () => {};
 
 // ---------------------------------------------------------------------------
 // Log deduplication
@@ -135,6 +135,11 @@ class DedupBuffer {
     this.entries = [];
   }
 
+  /** Silently drop all buffered entries without emitting suppression summaries. */
+  clear(): void {
+    this.entries = [];
+  }
+
   private evict(now: number): void {
     while (this.entries.length > 0 && now - this.entries[0].firstSeen > DEDUP_WINDOW_MS) {
       const evicted = this.entries.shift()!;
@@ -153,9 +158,25 @@ class DedupBuffer {
 // Logger factory
 // ---------------------------------------------------------------------------
 
+/** Tracks every DedupBuffer ever handed out so tests can reset all of them. */
+const allDedupBuffers = new Set<DedupBuffer>();
+
+/**
+ * Test-only helper: silently clears every logger's dedup buffer so that
+ * messages logged in a prior test don't get suppressed in a later one.
+ * The module-global `DedupBuffer` instances otherwise persist across tests
+ * and break hermeticity under `--sequence.shuffle.tests`.
+ */
+export function resetLoggerDedupForTests(): void {
+  for (const buf of allDedupBuffers) {
+    buf.clear();
+  }
+}
+
 export function createLogger(namespace: string): Logger {
   const prefix = `[${namespace}]`;
   const dedup = new DedupBuffer();
+  allDedupBuffers.add(dedup);
 
   function makeMethod(level: LogLevel) {
     return (message: string, ...data: unknown[]) => {

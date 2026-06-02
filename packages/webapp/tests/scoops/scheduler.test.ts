@@ -2,11 +2,11 @@
  * Tests for TaskScheduler cron, interval, and once scheduling.
  */
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
-import { TaskScheduler } from '../../src/scoops/scheduler.js';
 import * as db from '../../src/scoops/db.js';
-import type { ScheduledTask, RegisteredScoop } from '../../src/scoops/types.js';
+import { TaskScheduler } from '../../src/scoops/scheduler.js';
+import type { RegisteredScoop } from '../../src/scoops/types.js';
 
 // Mock scoop for testing
 const mockScoop: RegisteredScoop = {

@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import { FsWatcher, type FsChangeEvent } from '../../src/fs/fs-watcher.js';
+import { describe, expect, it, vi } from 'vitest';
+import { FsWatcher } from '../../src/fs/fs-watcher.js';
 
 describe('FsWatcher', () => {
   it('notifies matching watchers', () => {

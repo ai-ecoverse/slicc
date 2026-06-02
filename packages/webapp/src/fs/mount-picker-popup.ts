@@ -56,7 +56,7 @@ export function openMountPickerPopup(requestId?: string): Promise<Record<string,
 
     const listener = (msg: unknown) => {
       const m = msg as Record<string, unknown>;
-      if (!m || m.source !== 'mount-popup' || m.requestId !== popupRequestId) return;
+      if (m?.source !== 'mount-popup' || m.requestId !== popupRequestId) return;
       cleanup();
       resolve(m);
     };

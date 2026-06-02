@@ -1,5 +1,5 @@
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { defineCommand } from 'just-bash';
 
 // Lazy-loaded dependencies
 let pdfLibPromise: Promise<typeof import('@cantoo/pdf-lib')> | null = null;
@@ -299,9 +299,9 @@ export function createPdftkCommand(name: string = 'pdftk'): Command {
             const totalPages = doc.getPageCount();
             const indices = Array.from({ length: totalPages }, (_, i) => i);
             const copiedPages = await outputDoc.copyPages(doc, indices);
-            copiedPages.forEach((page: Awaited<ReturnType<typeof outputDoc.copyPages>>[number]) =>
-              outputDoc.addPage(page)
-            );
+            copiedPages.forEach((page: Awaited<ReturnType<typeof outputDoc.copyPages>>[number]) => {
+              outputDoc.addPage(page);
+            });
             continue;
           }
 

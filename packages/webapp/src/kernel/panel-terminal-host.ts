@@ -16,18 +16,18 @@
  * the same process table.
  */
 
-import { TerminalSessionHost } from './terminal-session-host.js';
-import type { TerminalSessionHostOptions } from './terminal-session-host.js';
-import { WasmShellHeadless } from '../shell/wasm-shell-headless.js';
-import type { MediaPreviewItem } from '../shell/supplemental-commands/imgcat-command.js';
-import type { TerminalMediaPreviewMsg, TerminalSessionId } from '../shell/terminal-protocol.js';
-import type { BrowserAPI } from '../cdp/browser-api.js';
-import type { VirtualFS } from '../fs/virtual-fs.js';
-import type { ProcessManager } from './process-manager.js';
 import type {
   ExtensionMessage,
   OffscreenToPanelMessage,
 } from '../../../chrome-extension/src/messages.js';
+import type { BrowserAPI } from '../cdp/browser-api.js';
+import type { VirtualFS } from '../fs/virtual-fs.js';
+import type { MediaPreviewItem } from '../shell/supplemental-commands/imgcat-command.js';
+import type { TerminalMediaPreviewMsg, TerminalSessionId } from '../shell/terminal-protocol.js';
+import { WasmShellHeadless } from '../shell/wasm-shell-headless.js';
+import type { ProcessManager } from './process-manager.js';
+import type { TerminalSessionHostOptions } from './terminal-session-host.js';
+import { TerminalSessionHost } from './terminal-session-host.js';
 import type { KernelTransport } from './types.js';
 
 export interface PanelTerminalHostOptions {

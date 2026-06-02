@@ -2,7 +2,7 @@
  * Tests for provider settings — multi-account storage layer.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const storage = new Map<string, string>();
 const mockStorage = {
@@ -164,36 +164,40 @@ vi.mock('../../src/providers/index.js', () => ({
   shouldIncludeProvider: () => true,
 }));
 
+vi.mock('../../src/providers/oauth-service.js', () => ({
+  openIdpLogoutUrl: vi.fn().mockResolvedValue(undefined),
+}));
+
+import type { ProviderDefault } from '../../src/ui/provider-settings.js';
 import {
-  getSelectedProvider,
-  setSelectedProvider,
-  clearSelectedProvider,
-  getApiKey,
-  setApiKey,
-  clearApiKey,
-  getBaseUrl,
-  setBaseUrl,
-  clearBaseUrl,
-  getSelectedModelId,
-  setSelectedModelId,
-  clearAllSettings,
-  resolveCurrentModel,
-  getAccounts,
   addAccount,
-  removeAccount,
-  getApiKeyForProvider,
-  getBaseUrlForProvider,
-  getAllAvailableModels,
   applyProviderDefaults,
+  clearAllSettings,
+  clearApiKey,
+  clearBaseUrl,
   exportProviders,
+  getAccounts,
+  getAllAvailableModels,
+  getApiKey,
+  getApiKeyForProvider,
   getAvailableProviders,
+  getBaseUrl,
+  getBaseUrlForProvider,
+  getOAuthAccountInfo,
   getProviderConfig,
   getProviderModels,
+  getSelectedModelId,
+  getSelectedProvider,
+  logoutOAuthAccount,
+  migrateLegacyAuthOnlySelection,
+  removeAccount,
+  resolveCurrentModel,
   resolveModelById,
   saveOAuthAccount,
-  getOAuthAccountInfo,
+  setApiKey,
+  setBaseUrl,
+  setSelectedProvider,
 } from '../../src/ui/provider-settings.js';
-import type { ProviderDefault } from '../../src/ui/provider-settings.js';
 
 describe('multi-account storage', () => {
   beforeEach(() => {
@@ -247,6 +251,52 @@ describe('multi-account storage', () => {
     expect(accounts[0].providerId).toBe('openai');
   });
 
+  it('removeAccount calls logoutOAuthAccount (onOAuthLogout) for OAuth providers before removing', async () => {
+    const onOAuthLogoutSpy = vi.fn().mockResolvedValue(undefined);
+    const configs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    configs.set('test-oauth', {
+      id: 'test-oauth',
+      name: 'Test OAuth',
+      description: 'OAuth test provider',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogout: onOAuthLogoutSpy,
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => configs.get(id));
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([
+        { providerId: 'test-oauth', apiKey: '', accessToken: 'tok-xyz', userName: 'bob' },
+      ])
+    );
+
+    await removeAccount('test-oauth');
+
+    // Account is fully removed
+    expect(getAccounts()).toHaveLength(0);
+    // Token revocation was called (via logoutOAuthAccount)
+    expect(onOAuthLogoutSpy).toHaveBeenCalledOnce();
+  });
+
+  it('removeAccount does NOT call onOAuthLogout for non-OAuth providers', async () => {
+    const onOAuthLogoutSpy = vi.fn();
+    const configs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    configs.set('anthropic', {
+      ...configs.get('anthropic'),
+      onOAuthLogout: onOAuthLogoutSpy,
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => configs.get(id));
+    addAccount('anthropic', 'sk-ant');
+    await removeAccount('anthropic');
+    expect(onOAuthLogoutSpy).not.toHaveBeenCalled();
+    expect(getAccounts()).toHaveLength(0);
+  });
+
   it('getApiKeyForProvider returns the key for a specific provider', () => {
     addAccount('anthropic', 'ant-key');
     addAccount('openai', 'oai-key');
@@ -289,6 +339,51 @@ describe('selected model encodes provider', () => {
     storage.set('selected-model', 'anthropic:claude-sonnet-4-0');
     setSelectedProvider('openai');
     expect(storage.get('selected-model')).toBe('openai:claude-sonnet-4-0');
+  });
+});
+
+describe('migrateLegacyAuthOnlySelection — clears stale auth-only selections', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('clears selected-model when it points at github (auth-only after 3.13)', () => {
+    storage.set('selected-model', 'github:gpt-4.1');
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBeUndefined();
+  });
+
+  it('preserves selected-model for providers that still expose LLM models', () => {
+    storage.set('selected-model', 'anthropic:claude-sonnet-4-6');
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBe('anthropic:claude-sonnet-4-6');
+  });
+
+  it('preserves selected-model when prefix is github-copilot (LLM provider)', () => {
+    // github-copilot lives next to the legacy github prefix but still
+    // offers LLM models; the migration must not collateral-damage it.
+    storage.set('selected-model', 'github-copilot:claude-sonnet-4.6');
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBe('github-copilot:claude-sonnet-4.6');
+  });
+
+  it('is a no-op when selected-model is unset', () => {
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBeUndefined();
+  });
+
+  it('is a no-op when selected-model has no provider prefix', () => {
+    storage.set('selected-model', 'claude-sonnet-4-6');
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBe('claude-sonnet-4-6');
+  });
+
+  it('is idempotent', () => {
+    storage.set('selected-model', 'github:gpt-4.1');
+    migrateLegacyAuthOnlySelection();
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBeUndefined();
   });
 });
 
@@ -1234,6 +1329,57 @@ describe('getProviderModels with getModelIds', () => {
     expect(models[0].name).toBe('My Custom Model');
     expect(models[0].provider).toBe('custom-oauth');
   });
+
+  it('merges thinkingLevelMap from getModelIds over the pi-ai base map', () => {
+    // Regression for the Codex bug: applyModelMetadata previously copied only
+    // a fixed set of fields and dropped thinkingLevelMap, so a provider's
+    // `minimal` → `low` remap silently lost out to the base model's map and
+    // the wrong reasoning effort reached the backend.
+    mockGetProviders.mockReturnValue(['openai']);
+    mockGetModels.mockImplementation((providerId: string) => {
+      if (providerId === 'openai') {
+        return [
+          {
+            id: 'gpt-5.3-codex',
+            name: 'GPT-5.3 Codex',
+            provider: 'openai',
+            api: 'openai-responses',
+            reasoning: true,
+            // pi-ai base map — no `minimal` remap.
+            thinkingLevelMap: { off: null, xhigh: 'xhigh' },
+          },
+        ];
+      }
+      return [];
+    });
+
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('codexy', {
+      id: 'codexy',
+      name: 'Codexy',
+      description: 'Test',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => [
+        {
+          id: 'gpt-5.3-codex',
+          name: 'GPT-5.3 Codex',
+          api: 'openai',
+          thinkingLevelMap: { xhigh: 'xhigh', minimal: 'low' },
+        },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('codexy');
+    expect(models).toHaveLength(1);
+    expect(
+      (models[0] as { thinkingLevelMap?: Record<string, string | null> }).thinkingLevelMap
+    ).toEqual({ off: null, xhigh: 'xhigh', minimal: 'low' });
+  });
 });
 
 describe('Adobe sonnet model preference', () => {
@@ -1541,5 +1687,110 @@ describe('model metadata overrides', () => {
     const models = getProviderModels('test-proxy');
     expect(String(models[0].api)).toContain('anthropic');
     expect(String(models[0].api)).not.toContain('openai');
+  });
+});
+
+describe('logoutOAuthAccount', () => {
+  let onOAuthLogoutMock: ReturnType<typeof vi.fn>;
+  let getOAuthLogoutUrlMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+
+    onOAuthLogoutMock = vi.fn().mockResolvedValue(undefined);
+    getOAuthLogoutUrlMock = vi.fn().mockReturnValue('https://idp.example.com/logout');
+
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-oauth', {
+      id: 'test-oauth',
+      name: 'Test OAuth',
+      description: 'OAuth test provider',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogout: onOAuthLogoutMock,
+      getOAuthLogoutUrl: getOAuthLogoutUrlMock,
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([
+        {
+          providerId: 'test-oauth',
+          apiKey: '',
+          accessToken: 'tok-abc',
+          userName: 'alice',
+          userAvatar: 'https://example.com/avatar.png',
+        },
+      ])
+    );
+  });
+
+  it('calls onOAuthLogout when defined', async () => {
+    await logoutOAuthAccount('test-oauth');
+    expect(onOAuthLogoutMock).toHaveBeenCalledOnce();
+  });
+
+  it('calls getOAuthLogoutUrl with the account object', async () => {
+    await logoutOAuthAccount('test-oauth');
+    expect(getOAuthLogoutUrlMock).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: 'test-oauth', accessToken: 'tok-abc' })
+    );
+  });
+
+  it('after logout: account has loggedOut:true, accessToken cleared, apiKey empty, userName/userAvatar retained', async () => {
+    await logoutOAuthAccount('test-oauth');
+    const accounts = getAccounts();
+    expect(accounts[0]).toMatchObject({
+      providerId: 'test-oauth',
+      loggedOut: true,
+      apiKey: '',
+      userName: 'alice',
+      userAvatar: 'https://example.com/avatar.png',
+    });
+    expect(accounts[0].accessToken).toBeUndefined();
+  });
+
+  it('does nothing for a non-OAuth provider', async () => {
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([{ providerId: 'anthropic', apiKey: 'sk-ant-123' }])
+    );
+    await logoutOAuthAccount('anthropic');
+    const accounts = getAccounts();
+    expect(accounts[0].loggedOut).toBeUndefined();
+    expect(onOAuthLogoutMock).not.toHaveBeenCalled();
+  });
+
+  it('does nothing for an unknown providerId', async () => {
+    await expect(logoutOAuthAccount('unknown-provider')).resolves.toBeUndefined();
+  });
+
+  it('continues local cleanup when onOAuthLogout throws — still sets loggedOut:true and warns', async () => {
+    onOAuthLogoutMock.mockRejectedValue(new Error('IdP error'));
+    await logoutOAuthAccount('test-oauth');
+    const accounts = getAccounts();
+    expect(accounts[0].loggedOut).toBe(true);
+    expect(mockLog.warn).toHaveBeenCalledWith('onOAuthLogout failed', expect.anything());
+  });
+
+  it('buildUserAvatar selector skips logged-out account even though userName/userAvatar are retained', async () => {
+    await logoutOAuthAccount('test-oauth');
+    const accounts = getAccounts();
+    // This is the exact finder used in buildUserAvatar — must return undefined after logout.
+    const found = accounts.find((a) => !a.loggedOut && (a.userName || a.userAvatar));
+    expect(found).toBeUndefined();
+  });
+
+  it('showAvatarPopover selector skips logged-out account even though userName is retained', async () => {
+    await logoutOAuthAccount('test-oauth');
+    const accounts = getAccounts();
+    // This is the exact finder used in showAvatarPopover — must return undefined after logout.
+    const found = accounts.find((a) => !a.loggedOut && (a.userName || a.accessToken || a.apiKey));
+    expect(found).toBeUndefined();
   });
 });
