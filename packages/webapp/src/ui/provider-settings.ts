@@ -1640,10 +1640,11 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
         });
         for (const providerId of sorted) {
           if (existingProviders.has(providerId)) continue;
-          // Skip auth-only providers (no LLM models to expose) — they're
-          // useful as accounts the user might already have, but not as
-          // something to "add" from this dialog.
-          if (!providerOffersLlmModels(providerId)) continue;
+          // Skip providers that offer neither LLM models nor OAuth login.
+          // OAuth-only providers (e.g. GitHub for git auth) must remain
+          // addable so users can re-login after removing them.
+          const providerCfg = getProviderConfig(providerId);
+          if (!providerOffersLlmModels(providerId) && !providerCfg.isOAuth) continue;
           const config = getProviderConfig(providerId);
           const opt = document.createElement('option');
           opt.value = providerId;
