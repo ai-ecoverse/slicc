@@ -336,13 +336,12 @@ export class SprinkleManager {
       }
 
       const uint8 = new Uint8Array(bytes);
-      let binary = '';
+      const parts: string[] = [];
       const chunk = 8192;
       for (let i = 0; i < uint8.length; i += chunk) {
-        binary += String.fromCharCode(...uint8.subarray(i, i + chunk));
+        parts.push(String.fromCharCode(...uint8.subarray(i, i + chunk)));
       }
-      const base64 = btoa(binary);
-
+      const base64 = btoa(parts.join(''));
       return { base64, width, height, mimeType };
     };
 
