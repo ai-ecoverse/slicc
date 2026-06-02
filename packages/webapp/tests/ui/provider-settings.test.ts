@@ -104,7 +104,7 @@ const { mockGetRegisteredProviderConfig, mockGetRegisteredProviderIds } = vi.hoi
       'bedrock-camp',
       {
         id: 'bedrock-camp',
-        name: 'AWS Bedrock (CAMP)',
+        name: 'AWS Bedrock',
         description: 'CAMP',
         requiresApiKey: true,
         requiresBaseUrl: true,
