@@ -1,6 +1,7 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { getPanelRpcClient, hasLocalDom } from '../../kernel/panel-rpc.js';
+import { captureViaPopup, isExtensionFloat } from './extension-media-capture.js';
 import { basename } from './shared.js';
 
 function screencaptureHelp(): { stdout: string; stderr: string; exitCode: number } {
@@ -114,7 +115,7 @@ export function createScreencaptureCommand(): Command {
         exitCode: 1,
       };
     }
-    if (local && !navigator.mediaDevices?.getDisplayMedia) {
+    if (local && !isExtensionFloat() && !navigator.mediaDevices?.getDisplayMedia) {
       return {
         stdout: '',
         stderr: 'screencapture: screen capture is not supported in this browser\n',
@@ -146,7 +147,13 @@ export function createScreencaptureCommand(): Command {
 
     let bytes: Uint8Array;
     try {
-      if (local) {
+      if (isExtensionFloat()) {
+        // Extension mode: capture in a visible popup window so Chrome can
+        // show its screen picker — the offscreen document (where this
+        // shell command usually runs) has no surface to show it.
+        const popup = await captureViaPopup({ kind: 'screen', mimeType, quality });
+        bytes = popup.bytes;
+      } else if (local) {
         const r = await captureLocally(mimeType, quality);
         bytes = r.bytes;
       } else {
@@ -178,6 +185,23 @@ export function createScreencaptureCommand(): Command {
 
     if (toClipboard) {
       try {
+        if (
+          isExtensionFloat() &&
+          typeof document !== 'undefined' &&
+          typeof document.hasFocus === 'function' &&
+          !document.hasFocus()
+        ) {
+          // Offscreen agent shell: there is no focused surface to write the
+          // system clipboard from, and the capture popup has already closed.
+          // Fail fast instead of hanging on a focus event that never fires —
+          // run `-c` from the focusable side-panel terminal, or save to a file.
+          return {
+            stdout: '',
+            stderr:
+              'screencapture: clipboard capture needs a focused window; save to a file instead\n',
+            exitCode: 1,
+          };
+        }
         if (local) {
           // Stay on the page: convert to PNG if needed and write to
           // navigator.clipboard directly. Wait for the document to

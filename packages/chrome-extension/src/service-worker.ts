@@ -322,10 +322,18 @@ async function ensureOffscreen(): Promise<void> {
         return;
       }
       console.log('[slicc-sw] Creating offscreen document...');
+      // `USER_MEDIA` / `DISPLAY_MEDIA` are offscreen-API *reasons* (not
+      // manifest permissions): they let the offscreen document touch
+      // `navigator.mediaDevices` (e.g. `enumerateDevices`). The actual
+      // camera/mic/screen capture still happens in a visible popup window
+      // because the offscreen document has no surface to show Chrome's
+      // permission prompt / screen picker — see `capture-popup.html` and
+      // `packages/webapp/src/shell/supplemental-commands/extension-media-capture.ts`.
       await chrome.offscreen.createDocument({
         url: OFFSCREEN_URL,
-        reasons: ['WORKERS'],
-        justification: 'Runs the SLICC agent engine so work survives side panel close.',
+        reasons: ['WORKERS', 'USER_MEDIA', 'DISPLAY_MEDIA'],
+        justification:
+          'Runs the SLICC agent engine so work survives side panel close, and enumerates camera/mic/screen devices for media-capture commands.',
       });
       console.log('[slicc-sw] Offscreen document created');
     } catch (err) {
@@ -347,6 +355,37 @@ chrome.runtime.onInstalled?.addListener?.(() => {
   ensureOffscreen();
 });
 ensureOffscreen();
+
+// ---------------------------------------------------------------------------
+// Media-capture popup window
+// ---------------------------------------------------------------------------
+// Media capture (`getUserMedia` / `getDisplayMedia`) needs a *visible* surface
+// so Chrome can show its permission prompt / screen picker. The shell command
+// requesting the capture runs in the offscreen document (or the side-panel
+// shell); the offscreen document can't call `chrome.windows.create`, so it
+// asks the service worker to open the capture popup here. The popup performs
+// the capture and broadcasts the bytes back over `chrome.runtime` messaging,
+// which the requesting context picks up directly (no SW relay needed for the
+// result). See `capture-popup.html` / `capture-popup.js`.
+function isCaptureOpenWindowMsg(msg: unknown): msg is { type: 'capture-open-window'; url: string } {
+  return (
+    typeof msg === 'object' &&
+    msg !== null &&
+    'type' in msg &&
+    (msg as { type?: unknown }).type === 'capture-open-window' &&
+    typeof (msg as { url?: unknown }).url === 'string'
+  );
+}
+
+chrome.runtime.onMessage.addListener((message: unknown) => {
+  if (!isCaptureOpenWindowMsg(message)) return false;
+  chrome.windows
+    .create({ url: message.url, type: 'popup', width: 360, height: 220, focused: true })
+    .catch((err) => {
+      console.error('[slicc-sw] Failed to open capture popup window:', err);
+    });
+  return false;
+});
 
 // ---------------------------------------------------------------------------
 // Tab grouping — inline copy for service worker (SW can't import shared chunks)
