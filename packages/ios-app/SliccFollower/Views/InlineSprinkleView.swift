@@ -468,7 +468,24 @@ struct InlineSprinkleView: UIViewRepresentable {
         setState: function() {},
         getState: function() { return null; },
         close: function() {},
-        stopCone: function() { send('lick', { body: { action: '__stopCone__' } }); }
+        stopCone: function() { send('lick', { body: { action: '__stopCone__' } }); },
+        // The follower has no addressable worker shell on the leader, so
+        // shell exec / agent spawn degrade to a clean non-zero result
+        // rather than throwing into the sprinkle (mirrors the web
+        // follower bridge in sprinkle-follower-controller.ts).
+        exec: function() {
+          return Promise.resolve({
+            stdout: '',
+            stderr: 'exec not supported in follower-rendered sprinkle\\n',
+            exitCode: 127
+          });
+        },
+        agent: function() {
+          return Promise.resolve({
+            stdout: 'agent not supported in follower-rendered sprinkle\\n',
+            exitCode: 127
+          });
+        }
       };
       window.slicc = bridge;
       window.bridge = bridge;

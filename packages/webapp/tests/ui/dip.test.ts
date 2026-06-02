@@ -6,7 +6,9 @@ import {
   disposeDips,
   extractShtmlBlocks,
   hydrateDips,
+  mountDip,
   mountDraftDip,
+  setDipExecHandler,
   splitContentSegments,
 } from '../../src/ui/dip.js';
 
@@ -389,5 +391,154 @@ describe('mountDraftDip', () => {
     expect(iframe.isConnected).toBe(true);
     draft.dispose();
     expect(iframe.isConnected).toBe(false);
+  });
+});
+
+describe('dip exec/agent trust gating', () => {
+  let container: HTMLElement;
+
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+  });
+
+  afterEach(() => {
+    container.remove();
+    // Clear the module-level handler so tests don't leak into each other.
+    setDipExecHandler(undefined);
+  });
+
+  /** Dispatch a window `message` whose source is the dip's contentWindow. */
+  function postFromDip(iframe: HTMLIFrameElement, data: Record<string, unknown>): void {
+    window.dispatchEvent(
+      new MessageEvent('message', { source: iframe.contentWindow as Window, data })
+    );
+  }
+
+  it('untrusted dips do NOT expose exec/agent in the bridge', () => {
+    const inst = mountDip(container, '<button>x</button>', vi.fn(), /* trusted */ false);
+    const iframe = container.querySelector('iframe')!;
+    expect(iframe.srcdoc).not.toContain('exec: function');
+    expect(iframe.srcdoc).not.toContain('agent: function');
+    expect(iframe.srcdoc).not.toContain('dip-exec');
+    inst.dispose();
+  });
+
+  it('trusted dips DO expose exec/agent in the bridge', () => {
+    const inst = mountDip(container, '<button>x</button>', vi.fn(), /* trusted */ true);
+    const iframe = container.querySelector('iframe')!;
+    expect(iframe.srcdoc).toContain('exec: function');
+    expect(iframe.srcdoc).toContain('agent: function');
+    inst.dispose();
+  });
+
+  it('routes a trusted dip dip-exec request to the registered handler', async () => {
+    const handler = vi.fn().mockResolvedValue({ stdout: 'out', stderr: '', exitCode: 0 });
+    setDipExecHandler(handler);
+    const inst = mountDip(container, '<button>x</button>', vi.fn(), /* trusted */ true);
+    const iframe = container.querySelector('iframe')!;
+    const postSpy = vi.fn();
+    Object.defineProperty(iframe.contentWindow!, 'postMessage', {
+      configurable: true,
+      value: postSpy,
+    });
+
+    postFromDip(iframe, { type: 'dip-exec', id: 7, cmd: 'echo hi' });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(handler).toHaveBeenCalledWith('echo hi');
+    expect(postSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'dip-exec-response',
+        id: 7,
+        result: { stdout: 'out', stderr: '', exitCode: 0 },
+      }),
+      '*'
+    );
+    inst.dispose();
+  });
+
+  it('builds the agent command from prompt + opts and folds stderr into stdout', async () => {
+    const handler = vi.fn().mockResolvedValue({ stdout: 'done', stderr: '', exitCode: 0 });
+    setDipExecHandler(handler);
+    const inst = mountDip(container, '<button>x</button>', vi.fn(), /* trusted */ true);
+    const iframe = container.querySelector('iframe')!;
+    const postSpy = vi.fn();
+    Object.defineProperty(iframe.contentWindow!, 'postMessage', {
+      configurable: true,
+      value: postSpy,
+    });
+
+    postFromDip(iframe, {
+      type: 'dip-agent',
+      id: 9,
+      prompt: 'hello',
+      opts: { model: 'claude-opus-4-6' },
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    const cmd = handler.mock.calls[0]?.[0] as string;
+    expect(cmd).toContain('agent');
+    expect(cmd).toContain("--model 'claude-opus-4-6'");
+    expect(cmd).toContain("'hello'");
+    expect(postSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'dip-agent-response',
+        id: 9,
+        result: { stdout: 'done', exitCode: 0 },
+      }),
+      '*'
+    );
+    inst.dispose();
+  });
+
+  it('surfaces a clean 127 result for trusted exec when no handler is wired', async () => {
+    setDipExecHandler(undefined);
+    const inst = mountDip(container, '<button>x</button>', vi.fn(), /* trusted */ true);
+    const iframe = container.querySelector('iframe')!;
+    const postSpy = vi.fn();
+    Object.defineProperty(iframe.contentWindow!, 'postMessage', {
+      configurable: true,
+      value: postSpy,
+    });
+
+    postFromDip(iframe, { type: 'dip-exec', id: 1, cmd: 'x' });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(postSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'dip-exec-response',
+        id: 1,
+        result: { stdout: '', stderr: 'exec: shell bridge not available\n', exitCode: 127 },
+      }),
+      '*'
+    );
+    inst.dispose();
+  });
+
+  it('rejects exec from an untrusted dip even if the message is spoofed', async () => {
+    const handler = vi.fn();
+    setDipExecHandler(handler);
+    const inst = mountDip(container, '<button>x</button>', vi.fn(), /* trusted */ false);
+    const iframe = container.querySelector('iframe')!;
+    const postSpy = vi.fn();
+    Object.defineProperty(iframe.contentWindow!, 'postMessage', {
+      configurable: true,
+      value: postSpy,
+    });
+
+    postFromDip(iframe, { type: 'dip-exec', id: 3, cmd: 'x' });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(postSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'dip-exec-response',
+        id: 3,
+        error: 'exec not allowed for this dip',
+      }),
+      '*'
+    );
+    inst.dispose();
   });
 });

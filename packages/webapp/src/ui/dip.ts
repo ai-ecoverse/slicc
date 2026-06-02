@@ -9,6 +9,12 @@
  */
 
 import FS from '@isomorphic-git/lightning-fs';
+import type {
+  SprinkleAgentOptions,
+  SprinkleAgentResult,
+  SprinkleExecHandler,
+  SprinkleExecResult,
+} from './sprinkle-bridge.js';
 import { collectThemeCSS } from './sprinkle-renderer.js';
 import { isThemeLight, registerSprinkleWindow, unregisterSprinkleWindow } from './theme.js';
 
@@ -79,8 +85,25 @@ async function readShtmlFromVFS(vfsPath: string, signal?: AbortSignal): Promise<
   return typeof raw === 'string' ? raw : new TextDecoder().decode(raw as Uint8Array);
 }
 
+/**
+ * Shell-exec bridge methods, injected into the dip `slicc` object only
+ * for TRUSTED dips. Untrusted inline-chat dips never receive these, so
+ * an attacker-controlled cone reply can't spawn shell commands / scoops.
+ * `exec` posts `dip-exec`; `agent` posts `dip-agent` — both route to the
+ * page-side `dipExecHandler` (same worker shell sprinkles use).
+ */
+const EXEC_BRIDGE_METHODS = `,
+    exec: function(cmd) {
+      return _vfsCall('dip-exec', { cmd: cmd }, function(m) { return m.result; });
+    },
+    agent: function(prompt, opts) {
+      return _vfsCall('dip-agent', { prompt: prompt, opts: opts || null },
+        function(m) { return m.result; });
+    }`;
+
 /** Minimal bridge script: lick + read-only VFS + auto-height. */
-const BRIDGE_SCRIPT = `(function() {
+function buildBridgeScript(includeExec: boolean): string {
+  return `(function() {
   var _cbId = 0;
   var _callbacks = {};
 
@@ -114,7 +137,7 @@ const BRIDGE_SCRIPT = `(function() {
     },
     stat: function(path) {
       return _vfsCall('dip-stat', { path: path }, function(m) { return m.stat; });
-    }
+    }${includeExec ? EXEC_BRIDGE_METHODS : ''}
   };
   function reportHeight() {
     parent.postMessage({ type: 'dip-height',
@@ -192,6 +215,7 @@ const BRIDGE_SCRIPT = `(function() {
     }
   });
 })();`;
+}
 
 export interface DipInstance {
   dispose(): void;
@@ -320,7 +344,7 @@ const DRAFT_BRIDGE_EXTENSION = `(function(){
   });
 })();`;
 
-function buildDipSrcdoc(content: string, isDraft: boolean): string {
+function buildDipSrcdoc(content: string, isDraft: boolean, trusted = false): string {
   const themeCSS = collectThemeCSS();
   const htmlClass = isThemeLight() ? ' class="theme-light"' : '';
   // Drafts can't introspect content (it streams), so always include the
@@ -329,12 +353,14 @@ function buildDipSrcdoc(content: string, isDraft: boolean): string {
   const includeEditor = isDraft || content.includes('<slicc-editor');
   const includeDiff = isDraft || content.includes('<slicc-diff');
   const draftScript = isDraft ? `<script>${DRAFT_BRIDGE_EXTENSION}</script>` : '';
+  // Drafts are never trusted, so they never get the exec/agent methods.
+  const bridgeScript = buildBridgeScript(/* includeExec */ trusted && !isDraft);
   return `<!DOCTYPE html>
 <html${htmlClass}><head>
 <meta charset="utf-8">
 <style>${themeCSS}</style>
 <style>${DIP_HOST_STYLES}</style>
-<script>${BRIDGE_SCRIPT}</script>
+<script>${bridgeScript}</script>
 ${draftScript}
 ${includeEditor ? '<script src="/slicc-editor.js"></script>' : ''}
 ${includeDiff ? '<script src="/slicc-diff.js"></script>' : ''}
@@ -354,7 +380,7 @@ const liveDipWindows = new Set<Window>();
 /**
  * Post a `slicc-*` payload to every live dip iframe. Dips listen for
  * matching `slicc-message` CustomEvents on `document` (see
- * `BRIDGE_SCRIPT`). Closed/detached iframes are ignored automatically
+ * `buildBridgeScript`). Closed/detached iframes are ignored automatically
  * because they're removed from the registry on dispose().
  */
 export function broadcastToDips(payload: { type: string; [k: string]: unknown }): void {
@@ -368,6 +394,110 @@ export function broadcastToDips(payload: { type: string; [k: string]: unknown })
       /* Closed iframes throw — ignore. */
     }
   }
+}
+
+// ── Trusted-dip shell exec / agent bridge ──
+//
+// Only TRUSTED dips (image-sourced under TRUSTED_DIP_SOURCE_PREFIXES) get
+// `slicc.exec()` / `slicc.agent()`. The page routes those through the same
+// worker shell sprinkles use, wired by `ui/main.ts` via `setDipExecHandler`.
+// When unset (tests / no worker), exec surfaces a clean `127` result rather
+// than throwing — mirroring the sprinkle bridge's "missing handler" contract.
+
+/** Page→worker shell-exec transport for trusted dips. */
+let dipExecHandler: SprinkleExecHandler | undefined;
+
+/**
+ * Wire the page→worker shell-exec transport used by trusted dips'
+ * `slicc.exec()` / `slicc.agent()`. Called from `ui/main.ts` with the
+ * same handler handed to `SprinkleManager`. Pass `undefined` to clear.
+ */
+export function setDipExecHandler(handler: SprinkleExecHandler | undefined): void {
+  dipExecHandler = handler;
+}
+
+/**
+ * Single-quote a value for safe inclusion in a bash command line. Wraps
+ * in `'…'` and escapes embedded single quotes as `'\''`. Empty input
+ * becomes `''` so the token is still well-formed. Mirrors the sprinkle
+ * bridge's `shellQuote`.
+ */
+function shellQuoteDip(value: string): string {
+  if (value.length === 0) return `''`;
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/** Build the `agent …` shell command from a prompt + options (flags first). */
+function buildDipAgentCommand(prompt: string, opts?: SprinkleAgentOptions): string {
+  const cwd = opts?.cwd ?? '.';
+  const allowed = opts?.allowedCommands ?? '*';
+  const parts = ['agent'];
+  if (opts?.model) parts.push('--model', shellQuoteDip(opts.model));
+  if (opts?.thinking) parts.push('--thinking', shellQuoteDip(opts.thinking));
+  if (opts?.readOnly) parts.push('--read-only', shellQuoteDip(opts.readOnly));
+  parts.push(shellQuoteDip(cwd), shellQuoteDip(allowed), shellQuoteDip(prompt));
+  return parts.join(' ');
+}
+
+/**
+ * Run a command via the injected dip shell-exec transport, surfacing a
+ * clean `127` result when no handler is wired (rather than throwing).
+ */
+async function runDipExec(cmd: string): Promise<SprinkleExecResult> {
+  if (!dipExecHandler) {
+    return { stdout: '', stderr: 'exec: shell bridge not available\n', exitCode: 127 };
+  }
+  try {
+    return await dipExecHandler(cmd);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { stdout: '', stderr: `exec: ${message}\n`, exitCode: 1 };
+  }
+}
+
+/** Run an `agent` spawn, folding stderr into stdout like the sprinkle bridge. */
+async function runDipAgent(
+  prompt: string,
+  opts?: SprinkleAgentOptions
+): Promise<SprinkleAgentResult> {
+  const result = await runDipExec(buildDipAgentCommand(prompt, opts));
+  return { stdout: result.stdout || result.stderr, exitCode: result.exitCode };
+}
+
+/**
+ * Handle a `dip-exec` / `dip-agent` request from a dip iframe. Gated on
+ * `trustedDipWindows` so even a spoofed message from an untrusted iframe
+ * can't reach the shell. Returns `true` when the message was handled.
+ */
+async function handleDipExecRequest(
+  iframeWindow: Window | null,
+  msg: { type: string; id?: number; cmd?: string; prompt?: string; opts?: SprinkleAgentOptions }
+): Promise<boolean> {
+  if (!iframeWindow || typeof msg.id !== 'number') return false;
+  const respond = (payload: Record<string, unknown>) => {
+    try {
+      iframeWindow.postMessage({ ...payload, id: msg.id }, '*');
+    } catch {
+      /* iframe gone — ignore */
+    }
+  };
+
+  if (!trustedDipWindows.has(iframeWindow)) {
+    respond({ type: `${msg.type}-response`, error: 'exec not allowed for this dip' });
+    return true;
+  }
+
+  if (msg.type === 'dip-exec') {
+    const result = await runDipExec(typeof msg.cmd === 'string' ? msg.cmd : '');
+    respond({ type: 'dip-exec-response', result });
+    return true;
+  }
+  if (msg.type === 'dip-agent') {
+    const result = await runDipAgent(typeof msg.prompt === 'string' ? msg.prompt : '', msg.opts);
+    respond({ type: 'dip-agent-response', result });
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -385,7 +515,7 @@ export function mountDip(
   onLick: (action: string, data: unknown) => void,
   trusted = false
 ): DipInstance {
-  const srcdoc = buildDipSrcdoc(content, /* isDraft */ false);
+  const srcdoc = buildDipSrcdoc(content, /* isDraft */ false, trusted);
 
   if (isExtension) {
     return mountDipExtension(container, srcdoc, onLick, trusted);
@@ -448,6 +578,8 @@ export function mountDip(
       msg.type === 'dip-stat'
     ) {
       void handleDipVfsRequest(iframe.contentWindow, msg);
+    } else if (msg.type === 'dip-exec' || msg.type === 'dip-agent') {
+      void handleDipExecRequest(iframe.contentWindow, msg);
     }
   };
   window.addEventListener('message', messageHandler);
@@ -878,6 +1010,8 @@ function mountDipExtension(
       msg.type === 'dip-stat'
     ) {
       void handleDipVfsRequest(iframe.contentWindow, msg);
+    } else if (msg.type === 'dip-exec' || msg.type === 'dip-agent') {
+      void handleDipExecRequest(iframe.contentWindow, msg);
     }
   };
   window.addEventListener('message', messageHandler);
