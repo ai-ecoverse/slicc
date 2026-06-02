@@ -26,6 +26,7 @@
 import type { BuildOptions, Loader, Plugin, TransformOptions } from 'esbuild-wasm';
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import { stdinAsText } from '../just-bash-compat.js';
 import { esmShUrl } from './cdn-url-builder.js';
 import { getEsbuild } from './esbuild-wasm.js';
 import { basename, dirname, joinPath } from './shared.js';
@@ -432,7 +433,7 @@ async function runTransform(
     source = await ctx.fs.readFile(inputPath);
     sourcefile = inputPath;
   } else {
-    source = ctx.stdin ?? '';
+    source = stdinAsText(ctx.stdin);
     if (!source) {
       return { stdout: HELP_TEXT, stderr: '', exitCode: 0 };
     }

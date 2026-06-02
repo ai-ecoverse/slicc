@@ -21,6 +21,7 @@ import {
   setSprinkleRoute,
 } from '../../ui/sprinkle-bridge.js';
 import type { SprinkleManager } from '../../ui/sprinkle-manager.js';
+import { stdinAsText } from '../just-bash-compat.js';
 
 function sprinkleHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
@@ -66,8 +67,9 @@ export function createSprinkleCommand(): Command {
       let html = args.slice(1).join(' ');
 
       // Check for piped stdin
-      if (!html && ctx.stdin) {
-        html = ctx.stdin;
+      if (!html) {
+        const stdinText = stdinAsText(ctx.stdin);
+        if (stdinText) html = stdinText;
       }
 
       if (!html) {
