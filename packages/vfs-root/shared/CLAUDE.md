@@ -32,6 +32,8 @@ Easy to miss. Try before DevTools, env vars, or external tools:
 - `agent <cwd> <cmds> <prompt>` — one-shot fire-and-forget scoop
 - `serve <dir>` — host a VFS dir over HTTP
 - `ffmpeg` — on-demand WASM; `-f avfoundation` captures img/vid/mic
+- `usb` / `serial` / `hid` — WebUSB / Web Serial / WebHID device access; `<cmd> request` opens a device picker (run from a panel terminal so the gesture lands)
+- `esptool` — flash ESP32 / ESP8266 over `serial`. Chromium panel/extension only
 
 ## Principles
 
