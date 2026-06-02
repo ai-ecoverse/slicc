@@ -477,9 +477,7 @@ describe('full document rendering', () => {
       source: iframe.contentWindow as any,
     });
     dom.window.dispatchEvent(event);
-
-    await new Promise((r) => setTimeout(r, 10));
-
+    await Promise.resolve();
     expect(bridge.captureScreen).toHaveBeenCalled();
     expect(postMessageSpy).toHaveBeenCalledWith(
       {
