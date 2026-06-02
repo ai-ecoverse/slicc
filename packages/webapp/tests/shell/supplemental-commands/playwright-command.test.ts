@@ -22,12 +22,6 @@ vi.mock('../../../src/kernel/panel-rpc.js', () => ({
 
 import { getPanelRpcClient } from '../../../src/kernel/panel-rpc.js';
 
-/** Default empty tray response. */
-const NO_TRAY: PanelRpcClient = {
-  call: vi.fn().mockResolvedValue({ followers: [], bestRuntimeId: null, targets: [] }),
-  dispose: vi.fn(),
-};
-
 /** Wire a follower list + best follower into the panel-RPC mock. */
 function setMockFollowers(
   followers: Array<{
