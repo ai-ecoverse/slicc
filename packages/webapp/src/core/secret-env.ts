@@ -42,6 +42,39 @@ function isValidShellEnvName(name: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
 }
 
+/**
+ * Build the shell env map from a list of masked secret entries.
+ *
+ * Applies the POSIX-identifier filter so dot-namespaced internal secrets
+ * (`s3.<profile>.*`, `oauth.<id>.token`, `db.<name>.password`) stay out of
+ * `printenv` while still being available to the fetch-proxy for unmasking.
+ *
+ * Narrow GitHub-only bridge: when the masked `oauth.github.token` is
+ * present, also surface it under the conventional `GITHUB_TOKEN` and
+ * `GH_TOKEN` aliases so `git push` Just Works after a single OAuth login.
+ * Any user-provided `GITHUB_TOKEN` / `GH_TOKEN` secret takes precedence
+ * over the alias (we do not overwrite an existing entry). A user `export`
+ * inside the live shell session still wins via bash's own env semantics.
+ */
+function buildEnvFromMaskedEntries(entries: MaskedSecretEntry[]): Record<string, string> {
+  const env: Record<string, string> = {};
+  let githubOAuthMasked: string | undefined;
+  for (const entry of entries) {
+    if (!entry?.name || !entry?.maskedValue) continue;
+    if (entry.name === 'oauth.github.token') {
+      githubOAuthMasked = entry.maskedValue;
+    }
+    if (isValidShellEnvName(entry.name)) {
+      env[entry.name] = entry.maskedValue;
+    }
+  }
+  if (githubOAuthMasked) {
+    if (env.GITHUB_TOKEN === undefined) env.GITHUB_TOKEN = githubOAuthMasked;
+    if (env.GH_TOKEN === undefined) env.GH_TOKEN = githubOAuthMasked;
+  }
+  return env;
+}
+
 export async function fetchSecretEnvVars(): Promise<Record<string, string>> {
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
@@ -50,12 +83,7 @@ export async function fetchSecretEnvVars(): Promise<Record<string, string>> {
     return new Promise((resolve) => {
       chrome.runtime.sendMessage({ type: 'secrets.list-masked-entries' }, (response: unknown) => {
         const resp = response as { entries?: MaskedSecretEntry[] };
-        const env: Record<string, string> = {};
-        for (const entry of resp?.entries ?? []) {
-          if (entry.name && entry.maskedValue && isValidShellEnvName(entry.name)) {
-            env[entry.name] = entry.maskedValue;
-          }
-        }
+        const env = buildEnvFromMaskedEntries(resp?.entries ?? []);
 
         if (Object.keys(env).length > 0) {
           log.info('Loaded masked secrets into shell env from SW', {
@@ -80,12 +108,7 @@ export async function fetchSecretEnvVars(): Promise<Record<string, string>> {
       return {};
     }
 
-    const env: Record<string, string> = {};
-    for (const entry of entries) {
-      if (entry.name && entry.maskedValue && isValidShellEnvName(entry.name)) {
-        env[entry.name] = entry.maskedValue;
-      }
-    }
+    const env = buildEnvFromMaskedEntries(entries);
 
     if (Object.keys(env).length > 0) {
       log.info('Loaded masked secrets into shell env', { count: Object.keys(env).length });
