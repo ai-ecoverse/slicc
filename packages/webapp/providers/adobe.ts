@@ -37,6 +37,7 @@ import {
   streamSimpleOpenAICompletions,
 } from '@earendil-works/pi-ai';
 import { getOAuthPageOrigin } from '../src/providers/oauth-service.js';
+import { createSilentRenewBackoff } from '../src/providers/silent-renew-backoff.js';
 import type { OAuthLauncher, OAuthLoginOptions, ProviderConfig } from '../src/providers/types.js';
 import { getDailyAdobeUuid } from '../src/scoops/llm-session-id.js';
 import {
@@ -454,6 +455,9 @@ export const config: ProviderConfig = {
 /** Track in-flight renewal to avoid duplicate attempts. */
 let renewalInProgress: Promise<string | null> | null = null;
 
+/** Skips re-attempting a failed silent renewal until the cooldown elapses. */
+const silentRenewBackoff = createSilentRenewBackoff();
+
 async function getValidAccessToken(): Promise<string> {
   const account = getAdobeAccount();
   if (!account?.accessToken) throw new Error('Not logged in to Adobe — please log in first');
@@ -462,17 +466,11 @@ async function getValidAccessToken(): Promise<string> {
   const expiresIn = (account.tokenExpiresAt ?? 0) - Date.now();
   if (expiresIn > 60000) return account.accessToken;
 
-  // Token expired or about to expire — try silent renewal
+  // Token expired or about to expire — try silent renewal, throttled so a dead
+  // session doesn't re-hit IMS on every stream/turn (see silent-renew-backoff).
   console.log('[adobe] Token expired or expiring soon, attempting silent renewal...');
-  try {
-    const newToken = await silentRenewToken();
-    if (newToken) return newToken;
-  } catch (err) {
-    console.warn(
-      '[adobe] Silent renewal failed:',
-      err instanceof Error ? err.message : String(err)
-    );
-  }
+  const newToken = await silentRenewBackoff.run(() => silentRenewToken());
+  if (newToken) return newToken;
 
   // Re-read account — another concurrent call may have renewed it
   const refreshedAccount = getAdobeAccount();
