@@ -48,6 +48,7 @@ import { OauthSecretStore } from './secrets/oauth-secret-store.js';
 import { SecretProxyManager } from './secrets/proxy-manager.js';
 import { readOrCreateSessionId } from './secrets/session-id-file.js';
 import { handleDaSignAndForward, handleS3SignAndForward } from './secrets/sign-and-forward.js';
+import { registerSudoApproveEndpoint } from './sudo/endpoint.js';
 
 const Dirname = fileURLToPath(new URL('.', import.meta.url));
 const PROJECT_ROOT = resolve(Dirname, '..', '..');
@@ -1202,6 +1203,11 @@ async function main() {
     registerCloudStatusEndpoint(app, { joinFilePath: '/tmp/slicc-join.json' });
     registerHostedBootstrapEndpoint(app, { secretStore });
   }
+
+  // Sudo approval endpoint — raises a native OS dialog / TTY prompt from this
+  // trusted process so the in-browser agent can request, but never fabricate,
+  // an approval. Loopback-only; selects a backend by environment at call time.
+  registerSudoApproveEndpoint(app);
 
   // Fetch proxy — forwards cross-origin requests from the browser to bypass CORS.
   // Used by just-bash's curl which calls the browser's fetch() API.

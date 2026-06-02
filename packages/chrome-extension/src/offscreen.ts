@@ -50,6 +50,7 @@ import {
   resolveTrayRuntimeConfig,
 } from '../../../packages/webapp/src/scoops/tray-runtime-config.js';
 import { startFollowerWithAutoReconnect } from '../../../packages/webapp/src/scoops/tray-webrtc.js';
+import { installSudoTestHook } from '../../../packages/webapp/src/sudo/index.js';
 import { getApiKey } from '../../../packages/webapp/src/ui/provider-settings.js';
 import { initTelemetry } from '../../../packages/webapp/src/ui/telemetry.js';
 import { applyTrayRuntimeUpdate as applyTrayRuntimeUpdateHelper } from './apply-tray-runtime-update.js';
@@ -132,6 +133,11 @@ async function init(): Promise<void> {
   });
   const { orchestrator, lickManager } = host;
   console.log('[slicc-offscreen] Kernel host ready, scoops:', orchestrator.getScoops().length);
+
+  // Publish the manual sudo test hook in the offscreen (agent) realm. It
+  // relays approval requests to the side-panel responder via
+  // chrome.runtime.sendMessage. No enforcement is wired yet — test surface.
+  installSudoTestHook();
 
   // Stand up the terminal-RPC host on the same kernel transport — the
   // panel's `RemoteTerminalView` opens sessions here so panel-typed

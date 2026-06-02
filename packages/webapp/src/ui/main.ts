@@ -536,6 +536,7 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   const { OffscreenClient } = await import('./offscreen-client.js');
   const { VirtualFS } = await import('../fs/index.js');
   const { publishAgentBridgeProxy } = await import('../scoops/agent-bridge.js');
+  const { installPanelSudoResponder } = await import('../sudo/index.js');
 
   const layout = new Layout(app, !isDetachedSelf);
   await layout.panels.chat.initSession('session-cone');
@@ -545,6 +546,11 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   // `offscreen.ts`); the proxy forwards spawn requests through
   // chrome.runtime.sendMessage and awaits the offscreen response.
   publishAgentBridgeProxy();
+
+  // Install the sudo responder. The offscreen broker relays approval
+  // requests here (the panel realm), where `window.confirm`/`window.prompt`
+  // are genuine, non-agent-scriptable native gestures.
+  installPanelSudoResponder();
 
   let selectedScoop: RegisteredScoop | null = null;
 
@@ -1709,6 +1715,12 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   const { installPageStorageSync } = await import('../kernel/page-storage-sync.js');
   const { VirtualFS } = await import('../fs/index.js');
   const { BrowserAPI } = await import('../cdp/index.js');
+  const { installSudoTestHook } = await import('../sudo/index.js');
+
+  // Publish the manual sudo test hook on the page realm. In standalone mode
+  // this resolves via `POST /api/sudo-approve` (native OS dialog from the
+  // node-server process); no enforcement is wired yet — it's a test surface.
+  installSudoTestHook();
 
   // Resolve the tray worker base URL from /api/runtime-config so consumers
   // like oauth-code-exchange's `getWorkerBaseUrl` read a value that matches
