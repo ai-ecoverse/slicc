@@ -22,6 +22,8 @@ function makeBridge(name: string): SprinkleBridgeAPI {
     open: vi.fn(),
     close: vi.fn(),
     stopCone: vi.fn(),
+    attachImage: vi.fn(),
+    captureScreen: vi.fn(),
   };
 }
 
@@ -409,5 +411,81 @@ describe('full document rendering', () => {
     expect(container.querySelector('iframe')).toBeTruthy();
     renderer.dispose();
     expect(container.querySelector('iframe')).toBeNull();
+  });
+
+  it('handles sprinkle-capture-screen message and posts response', async () => {
+    const bridge = makeBridge('full-doc');
+    (bridge.captureScreen as ReturnType<typeof vi.fn>).mockResolvedValue({
+      base64: 'abc',
+      width: 100,
+      height: 50,
+      mimeType: 'image/png',
+    });
+    const renderer = new SprinkleRenderer(container, bridge);
+    const html = '<!DOCTYPE html><html><head></head><body>Hi</body></html>';
+    await renderer.render(html, 'full-doc');
+
+    const iframe = container.querySelector('iframe')!;
+    // Mock postMessage on the iframe's contentWindow
+    const postMessageSpy = vi.fn();
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: { postMessage: postMessageSpy },
+      writable: true,
+    });
+
+    // Simulate the message from the iframe
+    const event = new dom.window.MessageEvent('message', {
+      data: { type: 'sprinkle-capture-screen', id: 'req-1' },
+      source: iframe.contentWindow as any,
+    });
+    dom.window.dispatchEvent(event);
+
+    // Wait for the async captureScreen to resolve
+    await Promise.resolve();
+    expect(bridge.captureScreen).toHaveBeenCalled();
+    expect(postMessageSpy).toHaveBeenCalledWith(
+      {
+        type: 'sprinkle-capture-screen-response',
+        id: 'req-1',
+        base64: 'abc',
+        width: 100,
+        height: 50,
+        mimeType: 'image/png',
+      },
+      '*'
+    );
+  });
+
+  it('handles sprinkle-capture-screen error and posts error response', async () => {
+    const bridge = makeBridge('full-doc');
+    (bridge.captureScreen as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('Screen capture denied')
+    );
+    const renderer = new SprinkleRenderer(container, bridge);
+    const html = '<!DOCTYPE html><html><head></head><body>Hi</body></html>';
+    await renderer.render(html, 'full-doc');
+
+    const iframe = container.querySelector('iframe')!;
+    const postMessageSpy = vi.fn();
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: { postMessage: postMessageSpy },
+      writable: true,
+    });
+
+    const event = new dom.window.MessageEvent('message', {
+      data: { type: 'sprinkle-capture-screen', id: 'req-2' },
+      source: iframe.contentWindow as any,
+    });
+    dom.window.dispatchEvent(event);
+    await Promise.resolve();
+    expect(bridge.captureScreen).toHaveBeenCalled();
+    expect(postMessageSpy).toHaveBeenCalledWith(
+      {
+        type: 'sprinkle-capture-screen-response',
+        id: 'req-2',
+        error: 'Screen capture denied',
+      },
+      '*'
+    );
   });
 });

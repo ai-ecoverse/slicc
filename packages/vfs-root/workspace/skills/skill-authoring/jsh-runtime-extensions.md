@@ -190,6 +190,7 @@ http.client(config: {
   get(path, opts?):    Promise<unknown>;
   post(path, opts?):   Promise<unknown>;
   put(path, opts?):    Promise<unknown>;
+  patch(path, opts?):  Promise<unknown>;
   delete(path, opts?): Promise<unknown>;
 }
 // opts: { params?, headers?, body?, signal?: AbortSignal, raw?: boolean }

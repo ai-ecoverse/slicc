@@ -152,6 +152,13 @@ If a shell command needs to affect the panel UI, use the dual-context pattern:
 
 No supplemental command currently uses this exact hook+relay shape — the previous example (`debug-command.ts`) was removed when Terminal/Memory became unconditional in the rail. The sprinkle subsystem solves a related problem with a proxy-interface approach (`globalThis.__slicc_sprinkleManager` published in both realms with different implementations, dispatching `sprinkle-op` request/response RPCs); see `docs/pitfalls.md` "Extension Dual-Shell Context" for the full reference.
 
+## Media Capture (offscreen reasons + popup grant path)
+
+Camera / microphone / screen capture (`ffmpeg -f avfoundation`, `screencapture`) work without any new manifest permission:
+
+- **Offscreen reasons, not permissions**: the offscreen document is created with `reasons: ['WORKERS', 'USER_MEDIA', 'DISPLAY_MEDIA']` (`service-worker.ts`). These are arguments to `chrome.offscreen.createDocument` — **not** manifest `permissions` — so the Web Store permission-justification dashboard does not apply to them. They let the offscreen document touch `navigator.mediaDevices` (e.g. `enumerateDevices`).
+- **Media capture needs a visible surface**: `getUserMedia` / `getDisplayMedia` are gated by a runtime prompt that an invisible offscreen document (and the side panel) cannot show. Route the capture through a real window — `capture-popup.html` / `capture-popup.js`, modeled on the `voice-popup` pair. The shell command (`extension-media-capture.ts:captureViaPopup`) asks the service worker to open the popup (`capture-open-window` message → `chrome.windows.create`, no permission needed), the popup performs the capture and posts the bytes back over `chrome.runtime` messaging, and `ffmpeg-command.ts` / `screencapture-command.ts` gate this path behind `isExtensionFloat()`. CLI / standalone keep their page-served auto-grant path unchanged.
+
 ## Runtime Conventions
 
 - **Extension detection**: `typeof chrome !== 'undefined' && !!chrome?.runtime?.id`

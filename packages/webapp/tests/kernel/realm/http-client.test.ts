@@ -385,14 +385,39 @@ describe('http.client — retries', () => {
 });
 
 describe('http.client — methods', () => {
-  it('routes get/post/put/delete to the correct HTTP method', async () => {
+  it('routes get/post/put/patch/delete to the correct HTTP method', async () => {
     const deps = makeDeps(() => jsonResponse({}));
     const client = createHttpGlobal(deps).client({ baseUrl: 'https://api.example.com' });
     await client.get('/g');
     await client.post('/p');
     await client.put('/u');
+    await client.patch('/pa');
     await client.delete('/d');
-    expect(deps.fetch.calls.map((c) => c.init?.method)).toEqual(['GET', 'POST', 'PUT', 'DELETE']);
+    expect(deps.fetch.calls.map((c) => c.init?.method)).toEqual([
+      'GET',
+      'POST',
+      'PUT',
+      'PATCH',
+      'DELETE',
+    ]);
+  });
+
+  it('serializes object bodies as JSON on PATCH with Content-Type application/json', async () => {
+    const deps = makeDeps(() => jsonResponse({ ok: true }));
+    const client = createHttpGlobal(deps).client({ baseUrl: 'https://api.example.com' });
+    await client.patch('/items/1', { body: { name: 'alice' } });
+    const init = deps.fetch.calls[0].init!;
+    const headers = init.headers as Record<string, string>;
+    expect(init.method).toBe('PATCH');
+    expect(headers['Content-Type']).toBe('application/json');
+    expect(init.body).toBe(JSON.stringify({ name: 'alice' }));
+  });
+
+  it('exposes patch as an enumerable own property of the client', () => {
+    const deps = makeDeps(() => jsonResponse({}));
+    const client = createHttpGlobal(deps).client({});
+    const keys = Object.keys(client);
+    expect(keys).toContain('patch');
   });
 
   it('returns a frozen client object', () => {

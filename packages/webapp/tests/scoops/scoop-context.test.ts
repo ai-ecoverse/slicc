@@ -1114,6 +1114,18 @@ describe('isNonRetryableError', () => {
     expect(isNonRetryableError('Invalid API-Key provided')).toBe(true);
   });
 
+  it('treats session-expired / re-login messages as non-retryable', () => {
+    expect(isNonRetryableError('Adobe session expired — please log in again')).toBe(true);
+    expect(isNonRetryableError('Session expired, please re-authenticate')).toBe(true);
+  });
+
+  it('session-expiry pattern does not over-match unrelated transient errors', () => {
+    // Guard against the broad `log in again` alternative bleeding into
+    // recoverable failures — these must stay retryable (not non-retryable).
+    expect(isNonRetryableError('network error: failed to fetch')).toBe(false);
+    expect(isNonRetryableError('503 service unavailable, retrying')).toBe(false);
+  });
+
   it('matches billing/quota errors', () => {
     expect(isNonRetryableError('insufficient quota')).toBe(true);
     expect(isNonRetryableError('billing issue detected')).toBe(true);

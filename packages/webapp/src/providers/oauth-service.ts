@@ -268,7 +268,10 @@ export async function openIdpLogoutUrl(
  * Extension mode: route through service worker → chrome.identity.launchWebAuthFlow.
  * The service worker returns the redirect URL (with fragment) via a broadcast message.
  */
-async function launchOAuthExtension(authorizeUrl: string): Promise<string | null> {
+async function launchOAuthExtension(
+  authorizeUrl: string,
+  opts?: { interactive?: boolean }
+): Promise<string | null> {
   return new Promise<string | null>((resolve) => {
     let resolved = false;
     const cleanup = () => {
@@ -296,7 +299,12 @@ async function launchOAuthExtension(authorizeUrl: string): Promise<string | null
     (chrome as any).runtime
       .sendMessage({
         source: 'panel',
-        payload: { type: 'oauth-request', providerId: 'oauth', authorizeUrl },
+        payload: {
+          type: 'oauth-request',
+          providerId: 'oauth',
+          authorizeUrl,
+          interactive: opts?.interactive ?? true,
+        },
       })
       .catch((err: unknown) => {
         console.error('[oauth-service] Failed to send OAuth request to service worker:', err);

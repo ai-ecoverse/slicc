@@ -246,6 +246,8 @@ export default defineConfig(({ mode }) => ({
         );
         copyFileSync(resolve(Dirname, 'voice-popup.html'), resolve(outDir, 'voice-popup.html'));
         copyFileSync(resolve(Dirname, 'voice-popup.js'), resolve(outDir, 'voice-popup.js'));
+        copyFileSync(resolve(Dirname, 'capture-popup.html'), resolve(outDir, 'capture-popup.html'));
+        copyFileSync(resolve(Dirname, 'capture-popup.js'), resolve(outDir, 'capture-popup.js'));
         copyFileSync(resolve(Dirname, 'mount-popup.html'), resolve(outDir, 'mount-popup.html'));
         copyFileSync(resolve(Dirname, 'mount-popup.js'), resolve(outDir, 'mount-popup.js'));
         copyFileSync(

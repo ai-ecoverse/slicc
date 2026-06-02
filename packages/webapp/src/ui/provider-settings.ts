@@ -146,6 +146,26 @@ const LEGACY_KEYS = [
 // module first and call `resolveCurrentModel()` before layout has booted.
 const LEGACY_AUTH_ONLY_PROVIDERS = new Set(['github']);
 
+/**
+ * True when `providerId` is a pi-ai provider that the build config
+ * (`packages/dev-tools/providers.build.json` → `shouldIncludeProvider`)
+ * excludes — e.g. `amazon-bedrock`, whose pi browser stream is
+ * unsupported. Registered built-in/external providers (e.g.
+ * `bedrock-camp`, `adobe`) are not pi-ai providers and so are never
+ * matched here; `bedrock-camp` still resolves its catalog via
+ * `getModelsDynamic('amazon-bedrock')` untouched. Mirrors the pi-provider
+ * filter in `getAvailableProviders()`. Never throws.
+ */
+function isBuildExcludedPiProvider(providerId: string): boolean {
+  let piProviders: string[];
+  try {
+    piProviders = getProviders() as string[];
+  } catch {
+    return false;
+  }
+  return piProviders.includes(providerId) && !shouldIncludeProvider(providerId);
+}
+
 // Account entry in the slicc_accounts array
 export interface Account {
   providerId: string;
@@ -181,8 +201,12 @@ function cleanLegacyKeys(): void {
 
 /**
  * Clear `selected-model` when it points at a provider that used to expose
- * LLM models but no longer does (currently: `github`, after the 3.13.0
- * Copilot split). Idempotent; never throws.
+ * LLM models but no longer does — either a legacy auth-only provider
+ * (currently: `github`, after the 3.13.0 Copilot split) or a pi-ai provider
+ * excluded by the build config (e.g. `amazon-bedrock`, whose pi browser
+ * stream is unsupported). In the latter case the stored account row is also
+ * dropped so it can't resurface models or route the next cone turn through
+ * the broken stream. Idempotent; never throws.
  *
  * Exported only for tests — the production path runs this through
  * `cleanLegacyKeys()` so the migration fires on the first call to
@@ -191,17 +215,43 @@ function cleanLegacyKeys(): void {
 export function migrateLegacyAuthOnlySelection(): void {
   try {
     const raw = localStorage.getItem(MODEL_KEY);
-    if (!raw) return;
-    const sep = raw.indexOf(':');
-    if (sep <= 0) return;
-    const provider = raw.slice(0, sep);
-    if (LEGACY_AUTH_ONLY_PROVIDERS.has(provider)) {
-      localStorage.removeItem(MODEL_KEY);
+    if (raw) {
+      const sep = raw.indexOf(':');
+      if (sep > 0) {
+        const provider = raw.slice(0, sep);
+        if (LEGACY_AUTH_ONLY_PROVIDERS.has(provider) || isBuildExcludedPiProvider(provider)) {
+          localStorage.removeItem(MODEL_KEY);
+        }
+      }
     }
   } catch {
     /* localStorage may be unavailable in some contexts — leave the
        selection alone; layout.ts:ensureModelSelected() will catch
        the mismatch on the next boot. */
+  }
+  // Drop stored account rows for build-excluded pi-ai providers so a
+  // previously-saved account (e.g. `amazon-bedrock`) can no longer surface
+  // models or route chats through pi's browser-unsupported stream. Reads the
+  // raw store directly to avoid recursing through getAccounts() → cleanLegacyKeys().
+  try {
+    const rawAccounts = localStorage.getItem(ACCOUNTS_KEY);
+    if (!rawAccounts) return;
+    const parsed = JSON.parse(rawAccounts);
+    if (!Array.isArray(parsed)) return;
+    const filtered = parsed.filter(
+      (entry) =>
+        !(
+          entry != null &&
+          typeof entry === 'object' &&
+          typeof entry.providerId === 'string' &&
+          isBuildExcludedPiProvider(entry.providerId)
+        )
+    );
+    if (filtered.length !== parsed.length) {
+      localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(filtered));
+    }
+  } catch {
+    /* leave accounts alone if storage is unavailable or the row is malformed. */
   }
 }
 
@@ -530,6 +580,10 @@ export function getAllAvailableModels(): GroupedModels[] {
     // registry for token storage but must not surface in the picker even when
     // they have an active account.
     if (config.hidden) continue;
+    // Build-excluded pi-ai providers (e.g. a previously-saved `amazon-bedrock`
+    // account) must not surface models — pi's browser stream for them is
+    // unsupported. Registered providers like `bedrock-camp` are unaffected.
+    if (isBuildExcludedPiProvider(account.providerId)) continue;
     const models = pickerVisible(getProviderModels(account.providerId));
     if (models.length === 0) continue;
     const group: GroupedModels = {

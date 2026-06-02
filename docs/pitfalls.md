@@ -359,6 +359,14 @@ Host the real leader tray `WebSocket` in `packages/chrome-extension/src/service-
 | **CLI**       | Direct `WebSocket` in the app runtime            |
 | **Extension** | Service worker proxy, not the offscreen document |
 
+## Silent OAuth renewal must stay windowless (IMS JS redirect)
+
+`launchWebAuthFlow({ interactive: false })` alone flashes / fails for Adobe IMS
+because its `prompt=none` page JS-redirects after load. Keep the
+`abortOnLoadForNonInteractive: false` + `timeoutMsForNonInteractive` options in
+`packages/chrome-extension/src/oauth-flow-options.ts`. See
+`docs/oauth-intercept.md` "Silent token renewal".
+
 ## Fetch Proxy: CORS & CSP
 
 | Mode          | Fetch Strategy                                       | CORS Handling                                                                                |
