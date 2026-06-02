@@ -247,4 +247,47 @@ describe('dig command', () => {
     const [, init] = fetchSpy.mock.calls[0];
     expect(init.headers['X-Target-URL']).toContain('name=weird%20name.example');
   });
+
+  it('no-args error mentions usage in stderr', async () => {
+    const cmd = createDigCommand();
+    const result = await cmd.execute([], createMockCtx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toLowerCase()).toContain('usage');
+  });
+
+  it('explicit AAAA type lands type=AAAA in the URL and renders AAAA in output', async () => {
+    const body = JSON.stringify({
+      Status: 0,
+      Answer: [{ name: 'example.com.', type: 28, TTL: 300, data: '2606:2800:220:1::1' }],
+    });
+    const fetchSpy = vi.fn().mockResolvedValue(fetchResponse(200, body));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const cmd = createDigCommand();
+    const result = await cmd.execute(['example.com', 'AAAA'], createMockCtx());
+
+    const [, init] = fetchSpy.mock.calls[0];
+    expect(init.headers['X-Target-URL']).toContain('&type=AAAA');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('AAAA');
+    expect(result.stdout).toContain('2606:2800:220:1::1');
+  });
+
+  it('does not call fetch on unsupported record type', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const cmd = createDigCommand();
+    const result = await cmd.execute(['example.com', 'BOGUS'], createMockCtx());
+    expect(result.exitCode).toBe(1);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('maps DoH Status=2 to SERVFAIL error', async () => {
+    const body = JSON.stringify({ Status: 2, Answer: [] });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fetchResponse(200, body)));
+    const cmd = createDigCommand();
+    const result = await cmd.execute(['fail.example'], createMockCtx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('SERVFAIL');
+  });
 });
