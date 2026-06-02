@@ -79,7 +79,7 @@ import { enterDetachedActiveState } from './detached-active.js';
 // the INEFFECTIVE_DYNAMIC_IMPORT warning), occasionally surfacing as a runtime
 // "o is not a function" error in the fs chunk because of the resulting
 // circular module-evaluation order.
-import { broadcastToDips } from './dip.js';
+import { broadcastToDips, setDipExecHandler } from './dip.js';
 import { createExtensionLeaderHooks } from './extension-leader-hooks.js';
 import { Layout } from './layout.js';
 import { isLickChannel, type LickChannel } from './lick-channels.js';
@@ -88,6 +88,7 @@ import {
   runNewSessionFreezeQuick,
   scheduleBackgroundEnrichment,
 } from './new-session.js';
+import type { OffscreenClient } from './offscreen-client.js';
 import { flushCredentialsToWorker, resolveDefaultModel } from './onboarding-helpers.js';
 import type { PageFollowerTrayHandle } from './page-follower-tray.js';
 import { startPageFollowerTray } from './page-follower-tray.js';
@@ -113,6 +114,7 @@ import {
   findDroppedSkillTransferFile,
   hasDroppedFiles,
 } from './skill-drop.js';
+import type { SprinkleExecHandler } from './sprinkle-bridge.js';
 import { resolveSprinkleIconHtml } from './sprinkle-icon.js';
 import { SprinkleManager } from './sprinkle-manager.js';
 import { initTelemetry } from './telemetry.js';
@@ -121,6 +123,44 @@ import { initTooltips } from './tooltip.js';
 import type { ChatMessage } from './types.js';
 
 const log = createLogger('main');
+
+/**
+ * Build the page→worker shell-exec handler handed to `SprinkleManager`
+ * so `slicc.exec()` / `slicc.agent()` run in the same worker shell used
+ * by `.jsh` / `node -e`. Works in BOTH the standalone-worker and
+ * extension floats because it routes through the `OffscreenClient`
+ * transport (kernel-worker `MessageChannel` / extension `chrome.runtime`).
+ *
+ * The `TerminalSessionClient` + worker session are created lazily on the
+ * first `exec` and reused for subsequent calls. A failed open resets the
+ * cached session so a later call can retry rather than wedging on a
+ * rejected promise.
+ */
+function createSprinkleExecHandler(client: OffscreenClient): SprinkleExecHandler {
+  let sessionPromise: ReturnType<typeof openSession> | null = null;
+  const openSession = async () => {
+    const { TerminalSessionClient } = await import('../kernel/terminal-session-client.js');
+    const session = new TerminalSessionClient({
+      client,
+      sid: `sprinkle-exec-${Date.now()}`,
+    });
+    await session.open({ cwd: '/' });
+    return session;
+  };
+  const ensureSession = (): ReturnType<typeof openSession> => {
+    if (!sessionPromise) {
+      sessionPromise = openSession().catch((err) => {
+        sessionPromise = null;
+        throw err;
+      });
+    }
+    return sessionPromise;
+  };
+  return async (cmd: string) => {
+    const session = await ensureSession();
+    return session.exec(cmd);
+  };
+}
 
 /**
  * Welcome-flow lick actions that must fire at most ONCE per browser
@@ -1378,9 +1418,14 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
       onAttachImage: (base64, name, mimeType) =>
         layout.panels.chat.addImageAttachment(base64, name, mimeType),
       inlineSprinkles: INLINE_DIP_SPRINKLES,
+      execHandler: createSprinkleExecHandler(client),
     }
   );
   (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
+  // Trusted dips route `slicc.exec()` / `slicc.agent()` through the same
+  // worker shell sprinkles use. Untrusted inline-chat dips never expose
+  // these methods (see dip.ts), so this only ever serves trusted dips.
+  setDipExecHandler(createSprinkleExecHandler(client));
   (window as unknown as Record<string, unknown>).__slicc_reloadSkills = () => {
     chrome.runtime.sendMessage({
       source: 'panel',
@@ -2497,9 +2542,14 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       onAttachImage: (base64, name, mimeType) =>
         layout.panels.chat.addImageAttachment(base64, name, mimeType),
       inlineSprinkles: INLINE_DIP_SPRINKLES,
+      execHandler: createSprinkleExecHandler(client),
     }
   );
   (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
+  // Trusted dips route `slicc.exec()` / `slicc.agent()` through the same
+  // worker shell sprinkles use. Untrusted inline-chat dips never expose
+  // these methods (see dip.ts), so this only ever serves trusted dips.
+  setDipExecHandler(createSprinkleExecHandler(client));
   const stopSprinkleHandler = installSprinkleManagerHandlerOverChannel(sprinkleManager, {
     instanceId,
   });
