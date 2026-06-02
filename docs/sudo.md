@@ -92,6 +92,12 @@ Brokers (`packages/webapp/src/sudo/`):
 - **CLI / Electron** — `createHttpSudoBroker` POSTs `POST /api/sudo-approve`
   (`packages/node-server/src/sudo/`), which selects an OS-native backend
   (Electron / osascript / PowerShell / zenity / TTY).
+- **Native macOS (swift-server)** — when Sliccstart launches the bundled
+  `slicc-server`, `createHttpSudoBroker` POSTs the same `POST /api/sudo-approve`
+  to `packages/swift-server/Sources/Server/SudoApprove.swift`, which raises the
+  identical `osascript` dialog as node-server. Loopback-only (the server binds
+  `127.0.0.1`) and fail-closed (`deny`) on any error, non-zero exit, dismissed
+  dialog, or unparsable output.
 
 All brokers **fail closed**: any transport error, malformed response, or missing
 gesture resolves to `deny`.

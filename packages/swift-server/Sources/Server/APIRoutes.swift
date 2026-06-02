@@ -293,6 +293,12 @@ func registerAPIRoutes(
     // upstream, and returns a JSON envelope. See Sources/Server/SignAndForward.swift.
     SignAndForward.registerRoutes(router: router, httpClient: httpClient)
 
+    // Native sudo approval. The in-browser broker POSTs the gated action
+    // here; this headless process raises a real macOS dialog by shelling out
+    // to `osascript`. Loopback-only by construction; fail-closed to deny on
+    // any error. See Sources/Server/SudoApprove.swift.
+    SudoApprove.registerRoutes(router: router)
+
     for method in fetchProxyMethods {
         router.on("/api/fetch-proxy", method: method) { request, _ in
             guard let initialTargetURLValue = request.headers[targetURLHeader] else {
