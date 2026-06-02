@@ -40,10 +40,6 @@ One scoop per sprinkle, named identically. Cone MUST NOT write `.shtml` or run `
 
 Inline `shtml` chat blocks hydrate into sandboxed widgets - ephemeral, lick-only (no state). Cone may write directly; persistent UI uses Sprinkles. See `/workspace/skills/dips/SKILL.md`.
 
-```shtml
-<button onclick="slicc.lick({action:'choose',data:{v:42}})">Pick</button>
-```
-
 ## Licks
 
 Events arrive as `[<Event>: <name>]` with JSON body:
