@@ -118,6 +118,85 @@ describe('fetchSecretEnvVars', () => {
       expect(result['0LEADING_DIGIT']).toBeUndefined();
       expect(result['WITH-HYPHEN']).toBeUndefined();
     });
+
+    // GitHub OAuth env-alias bridge: when oauth.github.token is present
+    // in the masked secrets feed, surface it as GITHUB_TOKEN / GH_TOKEN
+    // so `git push` works after a single OAuth login (no manual export).
+    describe('GitHub OAuth env-alias bridge', () => {
+      it('exposes GITHUB_TOKEN and GH_TOKEN when oauth.github.token is present', async () => {
+        vi.mocked(globalThis.fetch).mockResolvedValueOnce({
+          ok: true,
+          json: async () => [
+            {
+              name: 'oauth.github.token',
+              maskedValue: 'ghp_masked_oauth',
+              domains: ['github.com'],
+            },
+          ],
+        } as Response);
+
+        const result = await fetchSecretEnvVars();
+        expect(result.GITHUB_TOKEN).toBe('ghp_masked_oauth');
+        expect(result.GH_TOKEN).toBe('ghp_masked_oauth');
+        // The dot-form must NOT leak into printenv — only the aliases do.
+        expect(result['oauth.github.token']).toBeUndefined();
+      });
+
+      it('does not expose GITHUB_TOKEN/GH_TOKEN when oauth.github.token is absent', async () => {
+        vi.mocked(globalThis.fetch).mockResolvedValueOnce({
+          ok: true,
+          json: async () => [
+            { name: 'NPM_TOKEN', maskedValue: 'npm_masked', domains: ['npmjs.org'] },
+            { name: 'oauth.adobe.token', maskedValue: 'eyJmasked', domains: ['*.adobe.io'] },
+          ],
+        } as Response);
+
+        const result = await fetchSecretEnvVars();
+        expect(result).toEqual({ NPM_TOKEN: 'npm_masked' });
+        expect(result.GITHUB_TOKEN).toBeUndefined();
+        expect(result.GH_TOKEN).toBeUndefined();
+      });
+
+      it('user-set GITHUB_TOKEN wins over the OAuth alias', async () => {
+        vi.mocked(globalThis.fetch).mockResolvedValueOnce({
+          ok: true,
+          json: async () => [
+            { name: 'GITHUB_TOKEN', maskedValue: 'user_masked_github', domains: ['github.com'] },
+            {
+              name: 'oauth.github.token',
+              maskedValue: 'ghp_masked_oauth',
+              domains: ['github.com'],
+            },
+          ],
+        } as Response);
+
+        const result = await fetchSecretEnvVars();
+        expect(result.GITHUB_TOKEN).toBe('user_masked_github');
+        // GH_TOKEN was not user-set, so the OAuth alias still fills it.
+        expect(result.GH_TOKEN).toBe('ghp_masked_oauth');
+        expect(result['oauth.github.token']).toBeUndefined();
+      });
+
+      it('user-set GH_TOKEN wins over the OAuth alias', async () => {
+        vi.mocked(globalThis.fetch).mockResolvedValueOnce({
+          ok: true,
+          json: async () => [
+            { name: 'GH_TOKEN', maskedValue: 'user_masked_gh', domains: ['github.com'] },
+            {
+              name: 'oauth.github.token',
+              maskedValue: 'ghp_masked_oauth',
+              domains: ['github.com'],
+            },
+          ],
+        } as Response);
+
+        const result = await fetchSecretEnvVars();
+        expect(result.GH_TOKEN).toBe('user_masked_gh');
+        // GITHUB_TOKEN was not user-set, so the OAuth alias still fills it.
+        expect(result.GITHUB_TOKEN).toBe('ghp_masked_oauth');
+        expect(result['oauth.github.token']).toBeUndefined();
+      });
+    });
   });
 
   describe('Extension mode', () => {
@@ -210,6 +289,103 @@ describe('fetchSecretEnvVars', () => {
 
       const result = await fetchSecretEnvVars();
       expect(result).toEqual({ GITHUB_TOKEN: 'ghp_masked' });
+    });
+
+    // GitHub OAuth env-alias bridge — extension mode mirror of the CLI suite.
+    describe('GitHub OAuth env-alias bridge', () => {
+      it('exposes GITHUB_TOKEN and GH_TOKEN when oauth.github.token is present', async () => {
+        vi.mocked((globalThis as any).chrome.runtime.sendMessage).mockImplementation(
+          (_msg: any, callback?: (resp: any) => void) => {
+            if (callback) {
+              callback({
+                entries: [
+                  {
+                    name: 'oauth.github.token',
+                    maskedValue: 'ghp_masked_oauth',
+                    domains: ['github.com'],
+                  },
+                ],
+              });
+            }
+            return Promise.resolve();
+          }
+        );
+
+        const result = await fetchSecretEnvVars();
+        expect(result.GITHUB_TOKEN).toBe('ghp_masked_oauth');
+        expect(result.GH_TOKEN).toBe('ghp_masked_oauth');
+        expect(result['oauth.github.token']).toBeUndefined();
+      });
+
+      it('does not expose GITHUB_TOKEN/GH_TOKEN when oauth.github.token is absent', async () => {
+        vi.mocked((globalThis as any).chrome.runtime.sendMessage).mockImplementation(
+          (_msg: any, callback?: (resp: any) => void) => {
+            if (callback) {
+              callback({
+                entries: [{ name: 'NPM_TOKEN', maskedValue: 'npm_masked', domains: ['npmjs.org'] }],
+              });
+            }
+            return Promise.resolve();
+          }
+        );
+
+        const result = await fetchSecretEnvVars();
+        expect(result).toEqual({ NPM_TOKEN: 'npm_masked' });
+        expect(result.GITHUB_TOKEN).toBeUndefined();
+        expect(result.GH_TOKEN).toBeUndefined();
+      });
+
+      it('user-set GITHUB_TOKEN wins over the OAuth alias', async () => {
+        vi.mocked((globalThis as any).chrome.runtime.sendMessage).mockImplementation(
+          (_msg: any, callback?: (resp: any) => void) => {
+            if (callback) {
+              callback({
+                entries: [
+                  {
+                    name: 'GITHUB_TOKEN',
+                    maskedValue: 'user_masked_github',
+                    domains: ['github.com'],
+                  },
+                  {
+                    name: 'oauth.github.token',
+                    maskedValue: 'ghp_masked_oauth',
+                    domains: ['github.com'],
+                  },
+                ],
+              });
+            }
+            return Promise.resolve();
+          }
+        );
+
+        const result = await fetchSecretEnvVars();
+        expect(result.GITHUB_TOKEN).toBe('user_masked_github');
+        expect(result.GH_TOKEN).toBe('ghp_masked_oauth');
+      });
+
+      it('user-set GH_TOKEN wins over the OAuth alias', async () => {
+        vi.mocked((globalThis as any).chrome.runtime.sendMessage).mockImplementation(
+          (_msg: any, callback?: (resp: any) => void) => {
+            if (callback) {
+              callback({
+                entries: [
+                  { name: 'GH_TOKEN', maskedValue: 'user_masked_gh', domains: ['github.com'] },
+                  {
+                    name: 'oauth.github.token',
+                    maskedValue: 'ghp_masked_oauth',
+                    domains: ['github.com'],
+                  },
+                ],
+              });
+            }
+            return Promise.resolve();
+          }
+        );
+
+        const result = await fetchSecretEnvVars();
+        expect(result.GH_TOKEN).toBe('user_masked_gh');
+        expect(result.GITHUB_TOKEN).toBe('ghp_masked_oauth');
+      });
     });
   });
 });

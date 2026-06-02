@@ -97,7 +97,7 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
   ],
   ['Data processing', ['xargs', 'jq', 'base64', 'date', 'expr', 'seq']],
   ['Hashes', ['md5sum', 'sha1sum', 'sha256sum']],
-  ['Network', ['curl', 'wget', 'websocat', 'html-to-markdown']],
+  ['Network', ['curl', 'wget', 'dig', 'websocat', 'html-to-markdown']],
   ['Version control', ['git']],
   ['Languages', ['node', 'python', 'python3', 'sqlite3']],
   ['Build tools', ['tsc', 'esbuild', 'test', 'biome']],

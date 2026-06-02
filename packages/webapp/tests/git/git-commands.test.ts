@@ -213,6 +213,100 @@ describe('GitCommands', () => {
     expect(getResult.stdout.trim()).toBe('ghp_via_shared_const');
   });
 
+  describe('GH_TOKEN / GITHUB_TOKEN env fallback', () => {
+    // Pull the onAuth callback that GitCommands hands to isomorphic-git for a
+    // clone invocation. Works for both Map<string,string> and Record<string,string>
+    // env shapes since execute() accepts either.
+    async function captureOnAuth(
+      env?: ReadonlyMap<string, string> | Record<string, string>
+    ): Promise<(() => { username: string; password: string }) | undefined> {
+      const cloneSpy = vi.spyOn(isoGit, 'clone').mockResolvedValue();
+      const listFilesSpy = vi.spyOn(isoGit, 'listFiles').mockResolvedValue([]);
+      try {
+        const result = await git.execute(
+          ['clone', 'https://github.com/example/repo.git', 'repo'],
+          '/workspace',
+          env
+        );
+        expect(result.exitCode).toBe(0);
+        const call = cloneSpy.mock.calls[0]?.[0] as
+          | { onAuth?: () => { username: string; password: string } }
+          | undefined;
+        return call?.onAuth;
+      } finally {
+        cloneSpy.mockRestore();
+        listFilesSpy.mockRestore();
+      }
+    }
+
+    it('uses $GH_TOKEN when only GH_TOKEN is set (no file)', async () => {
+      const onAuth = await captureOnAuth({ GH_TOKEN: 'ghp_from_gh_token' });
+      expect(onAuth).toBeDefined();
+      expect(onAuth?.()).toEqual({ username: 'x-access-token', password: 'ghp_from_gh_token' });
+    });
+
+    it('uses $GITHUB_TOKEN when only GITHUB_TOKEN is set (no file)', async () => {
+      const onAuth = await captureOnAuth({ GITHUB_TOKEN: 'ghp_from_github_token' });
+      expect(onAuth).toBeDefined();
+      expect(onAuth?.()).toEqual({
+        username: 'x-access-token',
+        password: 'ghp_from_github_token',
+      });
+    });
+
+    it('prefers $GH_TOKEN over $GITHUB_TOKEN when both are set', async () => {
+      const onAuth = await captureOnAuth({
+        GH_TOKEN: 'ghp_gh_wins',
+        GITHUB_TOKEN: 'ghp_github_loses',
+      });
+      expect(onAuth?.()).toEqual({ username: 'x-access-token', password: 'ghp_gh_wins' });
+    });
+
+    it('file token wins over both env vars (file is the explicit override)', async () => {
+      await git.execute(['config', 'github.token', 'ghp_from_file'], '/project');
+      const onAuth = await captureOnAuth({
+        GH_TOKEN: 'ghp_gh_ignored',
+        GITHUB_TOKEN: 'ghp_github_ignored',
+      });
+      expect(onAuth?.()).toEqual({ username: 'x-access-token', password: 'ghp_from_file' });
+    });
+
+    it('returns no onAuth when neither file nor env vars are set', async () => {
+      const onAuth = await captureOnAuth();
+      expect(onAuth).toBeUndefined();
+    });
+
+    it('accepts a Map env (matches shell ctx.env shape) for GH_TOKEN', async () => {
+      const env = new Map<string, string>([['GH_TOKEN', 'ghp_from_map']]);
+      const onAuth = await captureOnAuth(env);
+      expect(onAuth?.()).toEqual({ username: 'x-access-token', password: 'ghp_from_map' });
+    });
+
+    it('ignores empty-string env values (treats them as unset)', async () => {
+      const onAuth = await captureOnAuth({ GH_TOKEN: '', GITHUB_TOKEN: '' });
+      expect(onAuth).toBeUndefined();
+    });
+
+    it('does not retain env from a previous execute() call', async () => {
+      // First call sets GH_TOKEN; second call passes no env. The second call
+      // must NOT inherit the first call's token.
+      await captureOnAuth({ GH_TOKEN: 'ghp_first_call' });
+      const onAuth = await captureOnAuth();
+      expect(onAuth).toBeUndefined();
+    });
+
+    it('does not expose env tokens via `git config github.token` reads', async () => {
+      // The file is the explicit override; env vars are an ambient fallback
+      // only for auth-using operations. `git config github.token` should
+      // continue to reflect the file state.
+      const result = await git.execute(['config', 'github.token'], '/project', {
+        GH_TOKEN: 'ghp_env_should_not_leak',
+      });
+      expect(result.stdout.trim()).toBe('');
+      expect(result.exitCode).toBe(1);
+    });
+  });
+
   it('supports --no-single-branch for clone', async () => {
     const cloneSpy = vi.spyOn(isoGit, 'clone').mockResolvedValue();
     const listFilesSpy = vi.spyOn(isoGit, 'listFiles').mockResolvedValue([]);

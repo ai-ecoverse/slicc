@@ -438,6 +438,8 @@ export class SprinkleFollowerController {
       attachImage: () => {
         // No-op on follower — the follower doesn't own the chat input.
       },
+      captureScreen: () =>
+        Promise.reject(new Error('captureScreen not supported in follower-rendered sprinkle')),
     };
     return api;
   }

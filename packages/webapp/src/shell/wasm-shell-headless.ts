@@ -620,7 +620,7 @@ export class WasmShellHeadless implements HeadlessShellLike {
     const gitCommands = this.gitCommands;
     return defineCommand('git', async (args, ctx) => {
       const cwd = ctx.cwd;
-      const result = await gitCommands.execute(args, cwd);
+      const result = await gitCommands.execute(args, cwd, ctx.env);
       return {
         stdout: result.stdout,
         stderr: result.stderr,

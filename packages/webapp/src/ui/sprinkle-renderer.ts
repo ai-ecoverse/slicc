@@ -283,6 +283,30 @@ export class SprinkleRenderer {
               '*'
             )
         );
+      } else if (msg.type === 'sprinkle-capture-screen') {
+        this.bridge.captureScreen().then(
+          (result) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-capture-screen-response',
+                id: msg.id,
+                base64: result.base64,
+                width: result.width,
+                height: result.height,
+                mimeType: result.mimeType,
+              },
+              '*'
+            ),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-capture-screen-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
+        );
       } else if (msg.type === 'sprinkle-fetch-script') {
         const url = msg.url as string;
         const id = msg.id as string;
@@ -492,6 +516,11 @@ export class SprinkleRenderer {
     minimize: function() { parent.postMessage({ type: 'sprinkle-minimize' }, '*'); },
     stopCone: function() { parent.postMessage({ type: 'sprinkle-stop-cone' }, '*'); },
     attachImage: function(base64, name, mimeType) { parent.postMessage({ type: 'sprinkle-attach-image', base64: base64, name: name, mimeType: mimeType }, '*'); },
+    captureScreen: function() {
+      return _vfsCall('sprinkle-capture-screen', {}, function(m) {
+        return { base64: m.base64, width: m.width, height: m.height, mimeType: m.mimeType };
+      });
+    },
     name: ''
   };
   window.slicc = api;
@@ -705,6 +734,30 @@ export class SprinkleRenderer {
             iframe.contentWindow?.postMessage(
               {
                 type: 'sprinkle-rm-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
+        );
+      } else if (msg.type === 'sprinkle-capture-screen') {
+        this.bridge.captureScreen().then(
+          (result) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-capture-screen-response',
+                id: msg.id,
+                base64: result.base64,
+                width: result.width,
+                height: result.height,
+                mimeType: result.mimeType,
+              },
+              '*'
+            ),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-capture-screen-response',
                 id: msg.id,
                 error: err instanceof Error ? err.message : String(err),
               },

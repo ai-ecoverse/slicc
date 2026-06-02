@@ -49,6 +49,7 @@ import {
   DETACHED_RUNTIME_QUERY_VALUE,
   isExtensionMessage,
 } from './messages.js';
+import { buildWebAuthFlowOptions } from './oauth-flow-options.js';
 import { deleteSecret, listSecrets, listSecretsWithValues, setSecret } from './secrets-storage.js';
 import { readOrCreateSwSessionId } from './sw-session-id.js';
 
@@ -971,10 +972,9 @@ chrome.debugger.onEvent.addListener(
 // ---------------------------------------------------------------------------
 
 async function handleOAuthRequest(msg: OAuthRequestMsg): Promise<OAuthResultMsg> {
-  const redirectUrl = await chrome.identity.launchWebAuthFlow({
-    url: msg.authorizeUrl,
-    interactive: true,
-  });
+  const redirectUrl = await chrome.identity.launchWebAuthFlow(
+    buildWebAuthFlowOptions(msg.authorizeUrl, msg.interactive ?? true)
+  );
 
   if (!redirectUrl) {
     return {

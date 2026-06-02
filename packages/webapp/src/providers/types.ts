@@ -12,8 +12,16 @@ import type {
  * Opens a browser window/flow for the given authorize URL and returns the
  * redirect URL (with token/code in fragment or query) once the flow completes.
  * Returns null if the user cancelled or the flow timed out.
+ *
+ * `opts.interactive` controls whether the flow is allowed to show UI. Silent
+ * renewals (prompt=none) pass `false` so the transport runs without a visible
+ * window; explicit user-initiated logins omit it (defaults to interactive).
+ * Transports that cannot run non-interactively (e.g. CLI popup) may ignore it.
  */
-export type OAuthLauncher = (authorizeUrl: string) => Promise<string | null>;
+export type OAuthLauncher = (
+  authorizeUrl: string,
+  opts?: { interactive?: boolean }
+) => Promise<string | null>;
 
 /**
  * Outbound-request rewrite applied during an intercepted OAuth flow.

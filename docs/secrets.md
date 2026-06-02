@@ -45,6 +45,13 @@ oauth-domain clear adobe
 
 Extras are stored in `localStorage` under `slicc_oauth_extra_domains` (`{providerId: [domain, ...]}`). The merged list (defaults + extras, deduped case-insensitively) is what gets sent to the fetch-proxy / SW the next time the token is saved. To apply newly-added extras to an existing token immediately, run `oauth-token <providerId>` (re-saves) or reload the page (`oauth-bootstrap` re-pushes).
 
+### Cloning a private GitHub repo
+
+Two clone shapes are supported. Prefer the first — the second is an escape hatch for tools that only know how to pass auth via the URL.
+
+- **Preferred (env / file-based auth):** `git clone https://github.com/owner/repo` — the fetch-proxy attaches the GitHub PAT it already has on file (`/workspace/.git/github-token`, then `GH_TOKEN` / `GITHUB_TOKEN` from the shell env) to the request at the wire boundary.
+- **Escape hatch (URL-embedded masked credential):** `git clone https://x-access-token:$(oauth-token github)@github.com/owner/repo.git` — the masked value in the URL's userinfo segment is unmasked into a synthetic `Authorization: Basic` header by the fetch-proxy (`/api/fetch-proxy` in node-server / swift-server, the `fetch-proxy.fetch` Port handler in the extension SW). The agent never sees the real PAT in either form.
+
 ### Shell-env naming convention
 
 Only secrets whose names are valid POSIX env identifiers — `[A-Za-z_][A-Za-z0-9_]*` — are exposed as `$NAME` in the agent shell. Names containing dots, hyphens, or starting with a digit (e.g. `s3.r2.access_key_id`, `oauth.adobe.token`, `db.prod.password`) are still loaded into the fetch-proxy for header unmasking, but they do not leak into `printenv` or `$VAR` resolution. Use this to keep subsystem secrets (mount backends, OAuth replicas) out of the agent's environment while still letting the proxy substitute them when an HTTP request happens to carry the masked value.

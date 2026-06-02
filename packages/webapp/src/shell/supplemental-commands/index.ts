@@ -14,6 +14,7 @@ import {
 import { createConvertCommand } from './convert-command.js';
 import { createCostCommand } from './cost-command.js';
 import { createCrontaskCommand } from './crontask-command.js';
+import { createDigCommand } from './dig-command.js';
 import { createDiscoverCommand } from './discover-command.js';
 import { createEsbuildCommand } from './esbuild-command.js';
 import { createFfmpegCommand } from './ffmpeg-command.js';
@@ -115,6 +116,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createWhichCommand({ fs: options.fs, scriptCatalog: options.scriptCatalog }),
     createUnameCommand(),
     createManCommand(),
+    createDigCommand(),
     createOAuthTokenCommand(),
     createOAuthDomainCommand(),
     createLocalLlmCommand(),
