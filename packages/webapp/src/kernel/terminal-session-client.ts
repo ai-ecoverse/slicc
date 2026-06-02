@@ -21,17 +21,17 @@
  * changing this surface.
  */
 
-import type { OffscreenClient } from '../ui/offscreen-client.js';
 import type {
+  TerminalClearedMsg,
   TerminalControlMsg,
   TerminalEventMsg,
-  TerminalSessionId,
-  TerminalOutputMsg,
-  TerminalMediaPreviewMsg,
-  TerminalStatusMsg,
   TerminalExitMsg,
-  TerminalClearedMsg,
+  TerminalMediaPreviewMsg,
+  TerminalOutputMsg,
+  TerminalSessionId,
+  TerminalStatusMsg,
 } from '../shell/terminal-protocol.js';
+import type { OffscreenClient } from '../ui/offscreen-client.js';
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -257,12 +257,12 @@ export class TerminalSessionClient {
 
 // Re-export envelopes for ergonomic imports at call sites.
 export type {
-  TerminalEventMsg,
-  TerminalControlMsg,
-  TerminalSessionId,
-  TerminalOutputMsg,
-  TerminalMediaPreviewMsg,
-  TerminalStatusMsg,
-  TerminalExitMsg,
   TerminalClearedMsg,
+  TerminalControlMsg,
+  TerminalEventMsg,
+  TerminalExitMsg,
+  TerminalMediaPreviewMsg,
+  TerminalOutputMsg,
+  TerminalSessionId,
+  TerminalStatusMsg,
 };

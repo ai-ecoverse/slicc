@@ -6,8 +6,8 @@
  * assets disagree and Pyodide fails at runtime.
  */
 
-import { describe, it, expect } from 'vitest';
 import { version as pyodidePackageVersion } from 'pyodide/package.json';
+import { describe, expect, it } from 'vitest';
 import rootPackageJson from '../../../../../package.json';
 import { PYODIDE_CDN, PYODIDE_VERSION } from '../../../src/kernel/realm/py-realm-shared.js';
 

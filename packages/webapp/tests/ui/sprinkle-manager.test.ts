@@ -1,14 +1,14 @@
 // @vitest-environment jsdom
 import 'fake-indexeddb/auto';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { VirtualFS } from '../../src/fs/virtual-fs.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FsWatcher } from '../../src/fs/fs-watcher.js';
+import { VirtualFS } from '../../src/fs/virtual-fs.js';
+import type { LickEvent } from '../../src/scoops/lick-manager.js';
 import {
-  SprinkleManager,
   readOpenSprinklesFromUrl,
+  SprinkleManager,
   writeOpenSprinklesToUrl,
 } from '../../src/ui/sprinkle-manager.js';
-import type { LickEvent } from '../../src/scoops/lick-manager.js';
 
 vi.mock('../../src/ui/sprinkle-renderer.js', () => ({
   SprinkleRenderer: class {

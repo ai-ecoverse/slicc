@@ -24,3 +24,6 @@ packages/swift-launcher/.node-cache/
 .claude/settings.*
 .claude/worktrees/
 packages/cloudflare-worker/.dev.vars
+
+# RUM error-triage runtime artifact
+rum-error-candidates.json

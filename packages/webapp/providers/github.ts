@@ -23,15 +23,15 @@
  *   VFS so isomorphic-git picks it up for push / pull / clone.
  */
 
-import type { ProviderConfig, OAuthLauncher, OAuthLoginOptions } from '../src/providers/types.js';
-import { saveOAuthAccount, getAccounts, getOAuthAccountInfo } from '../src/ui/provider-settings.js';
+import { GLOBAL_FS_DB_NAME } from '../src/fs/global-db.js';
 import {
   exchangeOAuthCode,
-  revokeOAuthToken,
   getWorkerBaseUrl,
+  revokeOAuthToken,
 } from '../src/providers/oauth-code-exchange.js';
 import { getOAuthPageOrigin } from '../src/providers/oauth-service.js';
-import { GLOBAL_FS_DB_NAME } from '../src/fs/global-db.js';
+import type { OAuthLauncher, OAuthLoginOptions, ProviderConfig } from '../src/providers/types.js';
+import { getAccounts, getOAuthAccountInfo, saveOAuthAccount } from '../src/ui/provider-settings.js';
 
 // ── Config ─────────────────────────────────────────────────────────
 
@@ -241,8 +241,9 @@ export async function syncGitIdentityFromGitHub(profile: GitHubUserProfile): Pro
 
   try {
     const { VirtualFS } = await import('../src/fs/index.js');
-    const { readGlobalGitConfigValue, writeGlobalGitConfigValue } =
-      await import('../src/git/git-config.js');
+    const { readGlobalGitConfigValue, writeGlobalGitConfigValue } = await import(
+      '../src/git/git-config.js'
+    );
     const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
 
     const desiredName = profile.name || profile.login;
@@ -413,6 +414,14 @@ export const config: ProviderConfig = {
     // Clear github account
     await saveOAuthAccount({ providerId: 'github', accessToken: '' });
   },
+
+  /**
+   * Opens https://github.com/logout to clear the GitHub browser session.
+   * Note: GitHub's actual logout is a CSRF-protected POST form; a GET
+   * navigation is best-effort and may not fully clear the session in all
+   * browser contexts. See spec PR notes for details.
+   */
+  getOAuthLogoutUrl: (_account) => 'https://github.com/logout',
 };
 
 export { getValidAccessToken };

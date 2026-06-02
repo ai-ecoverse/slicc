@@ -33,6 +33,7 @@
  */
 
 import * as esbuild from 'esbuild-wasm';
+import { unpkgUrl } from './cdn-url-builder.js';
 import { isExtensionRuntime, isNodeRuntime } from './shared.js';
 
 /** Version string read off the installed `esbuild-wasm` package. */
@@ -43,7 +44,11 @@ export const ESBUILD_VERSION = esbuild.version;
  * wrapper's version so the wasm asset always matches the JS
  * wrapper that's about to consume it.
  */
-export const ESBUILD_WASM_CDN_URL = `https://unpkg.com/esbuild-wasm@${ESBUILD_VERSION}/esbuild.wasm`;
+export const ESBUILD_WASM_CDN_URL = unpkgUrl(
+  'esbuild-wasm',
+  ESBUILD_VERSION,
+  'esbuild.wasm'
+).toString();
 
 const CACHE_NAME = `slicc-esbuild-${ESBUILD_VERSION}`;
 
@@ -99,7 +104,7 @@ async function loadEsbuild(onProgress?: (msg: string) => void): Promise<typeof e
   // bumps into the extension origin's CSP; running on the offscreen
   // thread is fine because the offscreen document is already
   // dedicated to the agent runtime.
-  await esbuild.initialize({ wasmModule, worker: isExtensionRuntime() ? false : true });
+  await esbuild.initialize({ wasmModule, worker: !isExtensionRuntime() });
   log('esbuild ready');
   return esbuild;
 }

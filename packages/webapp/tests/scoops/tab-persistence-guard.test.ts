@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  TabPersistenceGuard,
   type AudioContextLike,
   type LockManagerLike,
+  TabPersistenceGuard,
   type WindowLike,
 } from '../../src/scoops/tab-persistence-guard.js';
 

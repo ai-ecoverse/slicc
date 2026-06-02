@@ -1,10 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
-  buildGreeting,
+  __test__,
   buildCapabilityLine,
   buildConfession,
+  buildGreeting,
   buildIntroMessages,
-  __test__,
 } from '../../src/scoops/onboarding-messages.js';
 
 /** Deterministic random — returns each value in `seq` in order, then 0. */

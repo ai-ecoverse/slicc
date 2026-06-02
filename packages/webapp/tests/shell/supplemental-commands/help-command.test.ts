@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { createCommandsCommand } from '../../../src/shell/supplemental-commands/help-command.js';
 import type { IFileSystem } from 'just-bash';
+import { describe, expect, it } from 'vitest';
+import { createCommandsCommand } from '../../../src/shell/supplemental-commands/help-command.js';
 
 function createMockCtx(registeredCommands: string[]) {
   return {

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { OauthSecretStore } from '../../src/secrets/oauth-secret-store.js';
 import { SecretProxyManager } from '../../src/secrets/proxy-manager.js';
 

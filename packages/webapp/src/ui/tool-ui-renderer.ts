@@ -10,12 +10,12 @@
  * forwarded to the toolUIRegistry so sprinkle-chat can resolve.
  */
 
-import { toolUIRegistry } from '../tools/tool-ui.js';
-import { mountDip, type DipInstance } from './dip.js';
-import { collectThemeCSS } from './sprinkle-renderer.js';
-import { isThemeLight } from './theme.js';
 import { createLogger } from '../core/logger.js';
 import { openMountPickerPopup } from '../fs/mount-picker-popup.js';
+import { toolUIRegistry } from '../tools/tool-ui.js';
+import { type DipInstance, mountDip } from './dip.js';
+import { collectThemeCSS } from './sprinkle-renderer.js';
+import { isThemeLight } from './theme.js';
 
 const log = createLogger('tool-ui-renderer');
 

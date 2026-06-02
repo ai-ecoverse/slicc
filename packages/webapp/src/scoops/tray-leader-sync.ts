@@ -3,33 +3,33 @@
  * over WebRTC data channels using the typed tray sync protocol.
  */
 
-import type { AgentEvent, ChatMessage } from '../ui/types.js';
-import { stripLocalPathsForRemote } from '../core/attachments.js';
+import type { BrowserAPI } from '../cdp/browser-api.js';
+import { type RemoteCDPSender, RemoteCDPTransport } from '../cdp/remote-cdp-transport.js';
+import type { CDPTransport } from '../cdp/transport.js';
 import type { MessageAttachment } from '../core/attachments.js';
-import type { TrayDataChannelLike } from './tray-webrtc.js';
+import { stripLocalPathsForRemote } from '../core/attachments.js';
+import { createLogger } from '../core/logger.js';
+import type { VirtualFS } from '../fs/virtual-fs.js';
+import type { AgentEvent, ChatMessage } from '../ui/types.js';
+import { DataChannelKeepalive } from './data-channel-keepalive.js';
+import { handleFsRequest } from './tray-fs-handler.js';
 import {
   createLeaderSyncChannel,
-  sendCDPResponse,
-  reassembleCDPResponse,
-  sendSnapshot,
-  type LeaderToFollowerMessage,
   type FollowerToLeaderMessage,
-  type TraySyncChannel,
+  type LeaderToFollowerMessage,
   type RemoteTargetInfo,
-  type TrayTargetEntry,
-  type TrayFsRequest,
-  type TrayFsResponse,
+  reassembleCDPResponse,
   type ScoopSummary,
   type SprinkleSummary,
+  sendCDPResponse,
+  sendSnapshot,
+  type TrayFsRequest,
+  type TrayFsResponse,
+  type TraySyncChannel,
+  type TrayTargetEntry,
 } from './tray-sync-protocol.js';
-import { handleFsRequest } from './tray-fs-handler.js';
-import type { VirtualFS } from '../fs/virtual-fs.js';
 import { TrayTargetRegistry } from './tray-target-registry.js';
-import type { CDPTransport } from '../cdp/transport.js';
-import type { BrowserAPI } from '../cdp/browser-api.js';
-import { RemoteCDPTransport, type RemoteCDPSender } from '../cdp/remote-cdp-transport.js';
-import { DataChannelKeepalive } from './data-channel-keepalive.js';
-import { createLogger } from '../core/logger.js';
+import type { TrayDataChannelLike } from './tray-webrtc.js';
 
 const log = createLogger('tray-leader-sync');
 
@@ -981,7 +981,7 @@ export class LeaderSyncManager {
    * for the outbound channel.
    */
   private handleCDPResponse(message: FollowerToLeaderMessage & { type: 'cdp.response' }): void {
-    const { requestId, result, error, chunkData, chunkIndex, totalChunks } = message;
+    const { requestId } = message;
     const route = this.pendingCDPRoutes.get(requestId);
     if (!route) return;
 

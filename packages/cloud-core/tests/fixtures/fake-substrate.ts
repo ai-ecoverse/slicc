@@ -4,8 +4,8 @@ import type {
   SandboxHandle,
   SandboxInfo,
   SandboxSubstrate,
-  SubstrateId,
   SandboxSummary,
+  SubstrateId,
 } from '../../src/index.js';
 
 export interface FakeSandboxHandleOpts {

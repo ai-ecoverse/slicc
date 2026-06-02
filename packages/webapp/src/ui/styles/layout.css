@@ -49,7 +49,7 @@
   position: relative;
 }
 .layout__divider::after {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0;
   left: -3px;
@@ -77,7 +77,7 @@
 }
 /* Brand gradient accent line at bottom of thread header */
 .thread-header::before {
-  content: '';
+  content: "";
   position: absolute;
   bottom: 0;
   left: 0;
@@ -88,7 +88,7 @@
 }
 /* Processing indicator — overlays the gradient line when active */
 .thread-header::after {
-  content: '';
+  content: "";
   position: absolute;
   bottom: 0;
   left: 0;
@@ -182,7 +182,7 @@
   position: relative;
 }
 .layout__right-divider::after {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0;
   top: -3px;
@@ -267,16 +267,16 @@
 .layout__left--fullpage-hidden,
 .layout__divider--fullpage-hidden,
 .layout__scoops--fullpage-hidden {
-  display: none !important;
+  display: none;
 }
 .layout__right--fullpage {
   flex: 1;
   min-width: 0;
   /* Override overlay mode positioning so fullpage works at all breakpoints */
-  position: static !important;
-  width: auto !important;
-  transform: none !important;
-  box-shadow: none !important;
+  position: static;
+  width: auto;
+  transform: none;
+  box-shadow: none;
 }
 
 /* Desktop ≥1024px: right panel is always visible, hide its toggle */

@@ -26,8 +26,8 @@
  * is down rather than wondering why their webhook never fires.
  */
 import { createLogger } from '../core/logger.js';
-import type { LickManager } from './lick-manager.js';
 import { getLickWebSocketUrl, getTrayWebhookUrl, getWebhookUrl } from '../ui/runtime-mode.js';
+import type { LickManager } from './lick-manager.js';
 import { getLeaderTrayRuntimeStatus } from './tray-leader.js';
 
 const log = createLogger('lick-ws-bridge');

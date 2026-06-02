@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { handleCloudConfig } from '../src/cloud/handler-config.js';
 import { clearProxyConfigCache } from '../src/cloud/proxy-config.js';
 

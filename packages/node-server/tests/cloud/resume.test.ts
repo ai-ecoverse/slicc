@@ -1,9 +1,9 @@
-import { describe, expect, it, beforeEach } from 'vitest';
 import { promises as fs } from 'node:fs';
-import path from 'node:path';
 import os from 'node:os';
-import { runResume } from '../../src/cloud/resume.js';
+import path from 'node:path';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { FileRegistry } from '../../src/cloud/registry-file.js';
+import { runResume } from '../../src/cloud/resume.js';
 import { FakeSubstrate } from './fake-substrate.js';
 
 let dir: string;

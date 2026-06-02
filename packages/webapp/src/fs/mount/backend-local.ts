@@ -20,18 +20,18 @@
  * approve a picker, so they get an immediate error.
  */
 
-import { FsError } from '../types.js';
-import { showToolUI, toolUIRegistry, type ToolExecutionContext } from '../../tools/tool-ui.js';
+import { showToolUI, type ToolExecutionContext, toolUIRegistry } from '../../tools/tool-ui.js';
 import {
-  openMountPickerPopup,
   loadAndClearPendingHandle,
+  openMountPickerPopup,
   reactivateHandle,
 } from '../mount-picker-popup.js';
+import { FsError } from '../types.js';
 import type {
   MountBackend,
+  MountDescription,
   MountDirEntry,
   MountStat,
-  MountDescription,
   RefreshReport,
 } from './backend.js';
 

@@ -13,13 +13,13 @@
  *   - localStorage(tab, key)
  */
 
-import { describe, it, expect } from 'vitest';
-import type { CommandContext, IFileSystem, FsStat } from 'just-bash';
+import type { CommandContext, FsStat, IFileSystem } from 'just-bash';
+import { describe, expect, it } from 'vitest';
 import type { BrowserAPI } from '../../../src/cdp/browser-api.js';
 import type { PageInfo } from '../../../src/cdp/types.js';
-import { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
 import { attachRealmHost } from '../../../src/kernel/realm/realm-host.js';
 import type { RealmPortLike } from '../../../src/kernel/realm/realm-rpc.js';
+import { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
 import type { TabHandle } from '../../../src/kernel/realm/realm-types.js';
 
 interface PortPair {

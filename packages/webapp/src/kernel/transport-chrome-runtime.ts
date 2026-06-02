@@ -9,8 +9,8 @@
  */
 
 import type { ExtensionMessage } from '../../../chrome-extension/src/messages.js';
-import type { KernelTransport } from './types.js';
 import { createLogger } from '../core/logger.js';
+import type { KernelTransport } from './types.js';
 
 const log = createLogger('panel-transport');
 

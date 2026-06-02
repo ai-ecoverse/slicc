@@ -1,6 +1,6 @@
-import { defineCommand } from 'just-bash';
-import type { Command, CommandContext } from 'just-bash';
 import { zipSync } from 'fflate';
+import type { Command, CommandContext } from 'just-bash';
+import { defineCommand } from 'just-bash';
 import { basename, joinPath } from './shared.js';
 
 async function addPathToZip(

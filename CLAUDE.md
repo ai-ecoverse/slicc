@@ -6,18 +6,20 @@ This root file is the repo navigation hub. Keep package-specific architecture an
 
 ### Packages
 
-| Path                          | Purpose                                                                              |
-| ----------------------------- | ------------------------------------------------------------------------------------ |
-| `packages/webapp/`            | Browser app core: UI, VFS, shell, CDP, tools, providers, skills, scoops              |
-| `packages/chrome-extension/`  | Manifest V3 extension entry points, HTML shells, and message bridges                 |
-| `packages/cloudflare-worker/` | Tray hub worker for session coordination, signaling, and TURN credentials            |
-| `packages/node-server/`       | Node.js CLI/Electron server: Chrome launch, CDP proxy, dev serving                   |
-| `packages/vfs-root/`          | Default VFS content copied into the app on init/reset                                |
-| `packages/swift-launcher/`    | Native macOS SwiftUI launcher app (`Sliccstart`)                                     |
-| `packages/swift-server/`      | Native macOS Hummingbird server (`slicc-server`)                                     |
-| `packages/ios-app/`           | Native iOS SwiftUI follower app (`SliccFollower`) — joins a leader over WebRTC       |
-| `packages/dev-tools/`         | Repo-level tooling guidance for build helpers, QA setup, configs, and test utilities |
-| `packages/assets/`            | Shared static files (logos, fonts, favicon) used by multiple packages                |
+| Path                          | Purpose                                                                                                            |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `packages/webapp/`            | Browser app core: UI, VFS, shell, CDP, tools, providers, skills, scoops                                            |
+| `packages/chrome-extension/`  | Manifest V3 extension entry points, HTML shells, and message bridges                                               |
+| `packages/cloudflare-worker/` | Tray hub worker for session coordination, signaling, TURN credentials, and the `sliccy.ai/cloud` cone dashboard    |
+| `packages/node-server/`       | Node.js CLI/Electron server: Chrome launch, CDP proxy, dev serving, hosted-leader mode                             |
+| `packages/cloud-core/`        | `@slicc/cloud-core` — shared sandbox-lifecycle library consumed by both `node-server --cloud …` and the worker     |
+| `packages/shared-ts/`         | `@slicc/shared-ts` — platform-agnostic primitives (secret masking, secrets pipeline) shared across all TS packages |
+| `packages/vfs-root/`          | Default VFS content copied into the app on init/reset                                                              |
+| `packages/swift-launcher/`    | Native macOS SwiftUI launcher app (`Sliccstart`)                                                                   |
+| `packages/swift-server/`      | Native macOS Hummingbird server (`slicc-server`)                                                                   |
+| `packages/ios-app/`           | Native iOS SwiftUI follower app (`SliccFollower`) — joins a leader over WebRTC (SPM project, not an npm workspace) |
+| `packages/dev-tools/`         | Repo-level tooling: build helpers, QA setup, providers build filter, e2b template for hosted cones                 |
+| `packages/assets/`            | Shared static files (logos, fonts, favicon) used by multiple packages (folder, not an npm workspace)               |
 
 ### Other Top-Level Directories
 
@@ -45,6 +47,8 @@ For runtime-specific commands, use the nearest guide:
 - [`packages/chrome-extension/CLAUDE.md`](packages/chrome-extension/CLAUDE.md)
 - [`packages/cloudflare-worker/CLAUDE.md`](packages/cloudflare-worker/CLAUDE.md)
 - [`packages/node-server/CLAUDE.md`](packages/node-server/CLAUDE.md)
+- [`packages/cloud-core/CLAUDE.md`](packages/cloud-core/CLAUDE.md)
+- [`packages/shared-ts/CLAUDE.md`](packages/shared-ts/CLAUDE.md)
 - [`packages/vfs-root/CLAUDE.md`](packages/vfs-root/CLAUDE.md)
 - [`packages/swift-launcher/CLAUDE.md`](packages/swift-launcher/CLAUDE.md)
 - [`packages/swift-server/CLAUDE.md`](packages/swift-server/CLAUDE.md)
@@ -119,7 +123,7 @@ Each instance gets an isolated Chrome profile (keyed by port) and separate CDP p
 - **Cone**: Main agent ("sliccy"). Full filesystem access, all tools. Code: `orchestrator.ts`, `RegisteredScoop` with `isCone: true`.
 - **Scoops**: Isolated sub-agents with sandboxed filesystem (`/scoops/{name}/` + `/shared/`), own shell/conversation. Tools: `scoop_scoop`, `feed_scoop`, `drop_scoop`. Code: `scoop-context.ts`, `restricted-fs.ts`.
 - **Licks**: External events triggering scoops (webhooks, cron tasks). Code: `LickManager`, `LickEvent`. Shell: `webhook`, `crontask`.
-- **Floats**: Runtime environments — CLI (`packages/node-server/src/`), Extension (`packages/chrome-extension/src/`), Electron (`packages/node-server/src/electron-main.ts`), Sliccstart (`packages/swift-launcher/` — native macOS launcher), **hosted-leader (cloud)** (`packages/node-server/src/cloud/` orchestrates an e2b sandbox running `node-server --hosted`; see `packages/dev-tools/e2b-template/`).
+- **Floats**: Runtime environments — CLI (`packages/node-server/src/`), Extension (`packages/chrome-extension/src/`), Electron (`packages/node-server/src/electron-main.ts`), Sliccstart (`packages/swift-launcher/` — native macOS launcher), **hosted-leader (cloud)** (`@slicc/cloud-core` owns the substrate / start / resume / pause / kill operations; `packages/node-server/src/cloud/` is the CLI adapter that spawns an e2b sandbox running `node-server --hosted`; see `packages/dev-tools/e2b-template/`).
 
 Use ice cream terms over technical jargon (e.g., "feed_scoop" not "delegate_to_scoop").
 
@@ -144,9 +148,15 @@ Virtual Filesystem (packages/webapp/src/fs/) → RestrictedFS → Shell (package
 
 ### Build Targets
 
-- **Browser bundle** (tsconfig.json): Everything except `packages/node-server/src/`. Bundled by Vite.
-- **CLI/Electron** (tsconfig.cli.json): Only `packages/node-server/src/`. Compiled by TSC to dist/node-server/.
-- **Extension** (packages/chrome-extension/vite.config.ts): Browser bundle + extension entry points + bundled Pyodide.
+`npm run typecheck` runs five `tsc --noEmit` invocations:
+
+- **Browser bundle** (`tsconfig.json`): `packages/webapp/`. The Vite-built extension (`packages/chrome-extension/vite.config.ts`) reuses this config; its extra entries are bundle-time only, not a separate typecheck target.
+- **CLI/Electron** (`tsconfig.cli.json`): `packages/node-server/src/`. Compiled by TSC to `dist/node-server/`.
+- **Tray-hub worker** (`tsconfig.worker.json`): `packages/cloudflare-worker/src/`.
+- **Kernel-worker safety guard** (`tsconfig.webapp-worker.json`): typechecks the DedicatedWorker-side webapp code against a no-DOM lib set so accidental `window` references fail at typecheck time.
+- **Cloud-core library** (`packages/cloud-core/tsconfig.json`): `@slicc/cloud-core` is built ahead of `webapp` / `node-server` / `cloudflare-worker` (which all import it) via `postinstall` and the root `build` chain.
+
+`@slicc/shared-ts` uses the same postinstall pre-build pattern as `@slicc/cloud-core` (it must be built before `node-server` and `webapp` can typecheck), but its own `tsc --noEmit` is invoked by its workspace `npm run typecheck` script rather than the root pipeline.
 
 ### Key Subsystems
 
@@ -156,7 +166,7 @@ Virtual Filesystem (packages/webapp/src/fs/) → RestrictedFS → Shell (package
 
 **Mount backends** (`packages/webapp/src/fs/mount/`): `LocalMountBackend` (FS Access), `S3MountBackend`, `DaMountBackend` are **signing-naive** in the browser bundle — they construct logical requests and call an injected `SignedFetch*` transport. The transport routes to `/api/s3-sign-and-forward` / `/api/da-sign-and-forward` (CLI; node-server resolves credentials, signs SigV4, forwards) or to `chrome.runtime.sendMessage` (extension; service worker reads `s3.<profile>.*` from `chrome.storage.local`, signs, forwards via `host_permissions: <all_urls>`). The agent never holds S3 credentials in either deployment. The IMS bearer token for DA flows transiently in the envelope; v2 will move that OAuth flow server-side too.
 
-**Shell** (`packages/webapp/src/shell/`): WasmShell wraps just-bash 2.14.3 (WASM). 78+ commands including `git`, `node -e`, `python3 -c`, `playwright-cli`, `open`, `serve`, `sqlite3`, `convert`, `pdftk`, `skill`, `upskill`, `webhook`, `crontask`, `mount` (local + S3 / S3-compatible / DA via `--source`), `oauth-token`, `agent` (spawn a one-shot sub-scoop via AgentBridge — shell surface for scoop delegation from any float), `mcp` (`add`/`list`/`delete`/`invoke`/`refresh` MCP servers; auto-writes a `.jsh` alias shim at `/workspace/.mcp/aliases/<name>.jsh`, registers `mcp:<name>` OAuth providers, and materializes MCP Apps as sprinkles under `/workspace/.mcp/sprinkles/<name>/`; lazy re-registration from `/workspace/.mcp/servers.json`). Any `*.jsh` file on VFS is auto-discovered as a command. Extension CSP workaround: dynamic code routes through `sandbox.html`. **Two shell contexts in extension mode**: side panel has its own WasmShell (mounted in terminal tab), offscreen document has the agent's WasmShell (runs bash tool calls). Commands that affect the UI must handle both — use `window.__slicc_*` hooks for direct calls (panel) and `chrome.runtime.sendMessage` relay for offscreen→panel communication.
+**Shell** (`packages/webapp/src/shell/`): WasmShell wraps just-bash 2.14.3 (WASM). Just-bash builtins plus ~50 supplemental commands registered in `shell/supplemental-commands/index.ts` and `shell/wasm-shell-headless.ts` (notable: `git`, `node -e`, `python3 -c`, `playwright-cli`, `open`, `serve`, `sqlite3`, `tsc`, `test`, `biome`, `esbuild`, `ffmpeg`, `convert`, `pdftk`, `upskill`, `discover`, `webhook`, `crontask`, `fswatch`, `mount`, `oauth-token`, `oauth-domain`, `secret`, `agent`, `mcp`, `host`, `ps`, `kill`, plus macOS-style helpers `say`/`afplay`/`pbcopy`/`pbpaste`/`screencapture`). See [`docs/shell-reference.md`](docs/shell-reference.md) for the authoritative per-command list. `agent` spawns a one-shot sub-scoop via AgentBridge — shell surface for scoop delegation from any float. `mcp` (`add`/`list`/`delete`/`invoke`/`refresh`) auto-writes a `.jsh` alias shim at `/workspace/.mcp/aliases/<name>.jsh`, registers `mcp:<name>` OAuth providers, and materializes MCP Apps as sprinkles under `/workspace/.mcp/sprinkles/<name>/`; lazy re-registration from `/workspace/.mcp/servers.json`. Any `*.jsh` file on VFS is auto-discovered as a command. Extension CSP workaround: dynamic code routes through `sandbox.html`. **Two shell contexts in extension mode**: side panel has its own WasmShell (mounted in terminal tab), offscreen document has the agent's WasmShell (runs bash tool calls). Commands that affect the UI must handle both — use `window.__slicc_*` hooks for direct calls (panel) and `chrome.runtime.sendMessage` relay for offscreen→panel communication.
 
 **CDP** (`packages/webapp/src/cdp/`): `CDPTransport` interface with WebSocket (CLI) and `chrome.debugger` (extension) implementations. `BrowserAPI` provides Playwright-style API (listPages, navigate, screenshot, evaluate, click, etc.). Screenshots normalize DPR to 1.
 
@@ -203,7 +213,7 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 - **Extension `window.open()` returns `null`**: Fire-and-forget; don't treat null as failure.
 - **Model ID aliases**: Use pi-ai aliases (e.g., `claude-opus-4-6`) not dated snapshot IDs.
 - **Provider composition**: Auto-discovered from pi-ai. External providers: drop `.ts` in `packages/webapp/providers/`. OAuth via `createOAuthLauncher()` in `packages/webapp/src/providers/oauth-service.ts`. Registration runs in both `main.ts` and `offscreen.ts`. Providers can override model capabilities via `modelOverrides` (static) or `getModelIds()` metadata (dynamic). Three-layer merge: pi-ai → modelOverrides → getModelIds. OpenAI-compatible models route through `streamOpenAICompletions` when `api: 'openai'` is set in metadata.
-- **Two CLAUDE.md files**: This one (project root) is for Claude Code. `packages/vfs-root/shared/CLAUDE.md` is for the agent (bundled to `/shared/CLAUDE.md`).
+- **Developer vs agent CLAUDE.md**: Developer-facing `CLAUDE.md` lives at the repo root and in each package. The single agent-facing runtime `CLAUDE.md` lives at `packages/vfs-root/shared/CLAUDE.md` and is bundled into the VFS as `/shared/CLAUDE.md`. See [`docs/CLAUDE.md`](docs/CLAUDE.md) for the tier table.
 - **Default VFS content**: `packages/vfs-root/` bundled into VFS via `import.meta.glob`.
 - **Preview URLs**: Use `toPreviewUrl(vfsPath)` from `packages/webapp/src/shell/supplemental-commands/shared.ts`.
 
@@ -249,7 +259,7 @@ Every change must satisfy **tests**, **docs**, and **verification**.
 These are the repo's CI gates and the default full verification pass before commit:
 
 ```bash
-npx prettier --write <changed-files>   # Format FIRST — CI fails on unformatted code
+npm run lint                           # Format + lint FIRST — CI fails on unformatted code
 npm run typecheck
 npm run test
 npm run test:coverage                  # Enforces minimum coverage thresholds
@@ -257,6 +267,6 @@ npm run build
 npm run build -w @slicc/chrome-extension
 ```
 
-**Always run Prettier before committing.** CI runs `npx prettier --check .` as a lint gate and will reject unformatted code. Run `npx prettier --write <files>` on every file you touch. This is the most common CI failure — don't skip it.
+**Always run `npm run lint` before committing.** It runs `biome check --write .` over JS/TS/JSON/CSS and `prettier --write .` over the remaining doc / config-text formats (Markdown, YAML, HTML). CI runs the check-only equivalents as a hard gate and will reject any unformatted code. This is the most common CI failure — don't skip it.
 
 CI runs these gates in `.github/workflows/ci.yml`.

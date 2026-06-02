@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createOpenCommand } from '../../../src/shell/supplemental-commands/open-command.js';
 
 function createMockCtx(opts: { files?: Record<string, Uint8Array>; cwd?: string } = {}) {

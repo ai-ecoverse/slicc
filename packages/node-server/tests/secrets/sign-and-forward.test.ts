@@ -64,7 +64,7 @@ function makeRes(): {
   status: () => number;
 } {
   let statusCode = 200;
-  let payload: unknown = undefined;
+  let payload: unknown;
   let headersSent = false;
   const res = {
     status(code: number) {

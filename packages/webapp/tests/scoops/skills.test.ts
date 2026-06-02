@@ -2,10 +2,10 @@
  * Tests for the skills system — frontmatter parsing, loading, and prompt formatting.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
-import { loadSkills, formatSkillsForPrompt } from '../../src/scoops/skills.js';
+import { formatSkillsForPrompt, loadSkills } from '../../src/scoops/skills.js';
 
 describe('Skills', () => {
   let vfs: VirtualFS;

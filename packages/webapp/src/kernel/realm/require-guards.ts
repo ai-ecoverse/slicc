@@ -78,6 +78,22 @@ export const NATIVE_PACKAGE_HINTS: Partial<Record<NativePackageName, string>> = 
 
 export const LOAD_MODULE_TIMEOUT_MS = 15_000;
 
+/**
+ * Resolve the per-`require()` pre-fetch timeout. Defaults to
+ * `LOAD_MODULE_TIMEOUT_MS` (15 s); callers may override via the
+ * `SLICC_REALM_PREFETCH_BUDGET_MS` env var threaded through the
+ * realm's `init.env`. Used by the CDP smoke test to give heavier
+ * packages a longer budget without changing user-facing timing.
+ */
+export function resolveLoadModuleTimeoutMs(env: Record<string, string> | undefined): number {
+  const raw = env?.['SLICC_REALM_PREFETCH_BUDGET_MS'];
+  if (typeof raw === 'string' && raw.length > 0) {
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return LOAD_MODULE_TIMEOUT_MS;
+}
+
 export function nativePackageError(id: string, bareId: string): Error {
   // `bareId` arrives as a free-form `string` from user `require()`
   // calls; cast through the literal record so we can still index

@@ -30,8 +30,8 @@
  * itself a leaf module).
  */
 
-import type { CDPConnectOptions, CDPEventListener, ConnectionState } from '../cdp/types.js';
 import type { CDPTransport } from '../cdp/transport.js';
+import type { CDPConnectOptions, CDPEventListener, ConnectionState } from '../cdp/types.js';
 
 /** Decoded form of a CDP response, regardless of envelope shape. */
 export interface ParsedCdpResponse {

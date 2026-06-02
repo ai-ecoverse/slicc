@@ -1,5 +1,5 @@
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 import { createProxiedFetch } from '../proxied-fetch.js';
 

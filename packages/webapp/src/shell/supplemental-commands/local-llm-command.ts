@@ -16,8 +16,8 @@
  * user can run it themselves from the terminal.
  */
 
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { defineCommand } from 'just-bash';
 import { config as localLlmConfig } from '../../providers/built-in/local-llm.js';
 
 // Single source of truth: the provider config owns the ID, the command

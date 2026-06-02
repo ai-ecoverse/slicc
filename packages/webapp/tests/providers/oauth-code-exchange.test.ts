@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Stub localStorage
 const store = new Map<string, string>();
@@ -13,8 +13,9 @@ const mockFetch = vi.fn<typeof fetch>();
 vi.stubGlobal('fetch', mockFetch);
 
 // Import after stubs are in place
-const { exchangeOAuthCode, revokeOAuthToken } =
-  await import('../../src/providers/oauth-code-exchange.js');
+const { exchangeOAuthCode, revokeOAuthToken } = await import(
+  '../../src/providers/oauth-code-exchange.js'
+);
 
 beforeEach(() => {
   store.clear();

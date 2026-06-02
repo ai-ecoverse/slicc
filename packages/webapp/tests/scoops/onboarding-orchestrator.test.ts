@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { VirtualFS } from '../../src/fs/index.js';
+import { __test__ as messageTest } from '../../src/scoops/onboarding-messages.js';
 import {
   OnboardingOrchestrator,
   type ProviderCatalogue,
 } from '../../src/scoops/onboarding-orchestrator.js';
-import { __test__ as messageTest } from '../../src/scoops/onboarding-messages.js';
 
 type AccountSnapshot = {
   id: string;

@@ -13,8 +13,10 @@
  * VirtualFS) so we exercise the shell + PM contract end-to-end.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
+import type { BrowserAPI } from '../../src/cdp/index.js';
+import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { createPanelTerminalHost } from '../../src/kernel/panel-terminal-host.js';
 import { ProcessManager } from '../../src/kernel/process-manager.js';
 import { TerminalSessionClient } from '../../src/kernel/terminal-session-client.js';
@@ -23,8 +25,6 @@ import {
   createPanelMessageChannelTransport,
 } from '../../src/kernel/transport-message-channel.js';
 import { OffscreenClient } from '../../src/ui/offscreen-client.js';
-import { VirtualFS } from '../../src/fs/virtual-fs.js';
-import type { BrowserAPI } from '../../src/cdp/index.js';
 
 function tick(ms = 5): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));

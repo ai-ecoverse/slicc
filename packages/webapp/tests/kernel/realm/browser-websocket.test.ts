@@ -17,20 +17,20 @@
  *    Function or string filter at the boundary.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import type { WsSelector } from '../../../src/kernel/realm/realm-types.js';
 import { installWsRouter } from '../../../src/kernel/realm/ws-router-page.js';
 import {
-  parseWsFrame,
   matchWsSelector,
+  parseWsFrame,
   projectWsFrame,
 } from '../../../src/kernel/realm/ws-selector.js';
 import {
-  WsSubscriberRegistry,
   type WsPageBridge,
   type WsSinkDispatcher,
+  WsSubscriberRegistry,
   type WsWebhookResolver,
 } from '../../../src/kernel/realm/ws-subscribers.js';
-import type { WsSelector } from '../../../src/kernel/realm/realm-types.js';
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -219,10 +219,14 @@ describe('ws-router-page: installWsRouter idempotency', () => {
       filter: { parseAs: 'json', where: { type: 'message', channel: 'C123' } },
     });
     // Discovery: opening a ws and calling `send` plugs in the message listener.
-    const ws = new (WebSocketCtor as unknown as new (url: string) => {
-      send: (d: string) => void;
-      emit: (d: string) => void;
-    })('wss://example/');
+    const ws = new (
+      WebSocketCtor as unknown as new (
+        url: string
+      ) => {
+        send: (d: string) => void;
+        emit: (d: string) => void;
+      }
+    )('wss://example/');
     ws.send('hello');
     ws.emit(JSON.stringify({ type: 'message', channel: 'C123', text: 'hi' }));
     ws.emit(JSON.stringify({ type: 'message', channel: 'C-other', text: 'nope' }));

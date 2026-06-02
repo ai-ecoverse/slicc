@@ -8,9 +8,9 @@
  * disposed (the ref-equal guard prevents that).
  */
 
-import { describe, it, expect } from 'vitest';
-import { ProcessManager } from '../../src/kernel/process-manager.js';
+import { describe, expect, it } from 'vitest';
 import { releaseHostGlobals } from '../../src/kernel/host.js';
+import { ProcessManager } from '../../src/kernel/process-manager.js';
 import type { LickManager } from '../../src/scoops/lick-manager.js';
 
 function fakeLickManager(): LickManager {

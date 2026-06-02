@@ -12,14 +12,10 @@
  *   --help, -h   Show usage
  */
 
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
-import type {
-  TrayFsRequest,
-  TrayFsResponse,
-  TrayFsResponseData,
-} from '../../scoops/tray-sync-protocol.js';
+import type { TrayFsRequest, TrayFsResponse } from '../../scoops/tray-sync-protocol.js';
 import { computeRsyncDiff, type RsyncEntry } from './rsync-diff.js';
 
 // ---------------------------------------------------------------------------

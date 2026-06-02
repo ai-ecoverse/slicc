@@ -6,9 +6,9 @@
  * - find: List files matching a glob-like pattern
  */
 
-import type { VirtualFS } from '../fs/index.js';
-import type { ToolDefinition, ToolResult } from '../core/types.js';
 import { createLogger } from '../core/logger.js';
+import type { ToolDefinition, ToolResult } from '../core/types.js';
+import type { VirtualFS } from '../fs/index.js';
 
 const log = createLogger('tool:search');
 

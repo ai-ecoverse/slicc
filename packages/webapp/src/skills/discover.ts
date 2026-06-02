@@ -7,8 +7,8 @@
  */
 
 import type { VirtualFS } from '../fs/index.js';
-import type { DiscoveredSkill } from './types.js';
 import { discoverSkillCandidates, resolveSkillNameCollisions } from './catalog.js';
+import type { DiscoveredSkill } from './types.js';
 
 /**
  * Discover all available skills from the native skills directory plus

@@ -1,9 +1,8 @@
-import { spawn, type ChildProcess } from 'child_process';
+import { type ChildProcess, spawn } from 'child_process';
+import { app, BrowserWindow, nativeTheme, session } from 'electron';
 import { readFile } from 'fs/promises';
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
-
-import { app, BrowserWindow, nativeTheme, session } from 'electron';
 
 import {
   buildElectronOverlayAppUrl,
@@ -15,8 +14,8 @@ import {
   parseElectronFloatFlags,
 } from './electron-runtime.js';
 
-const __dirname = fileURLToPath(new URL('.', import.meta.url));
-const PROJECT_ROOT = resolve(__dirname, '..', '..');
+const Dirname = fileURLToPath(new URL('.', import.meta.url));
+const PROJECT_ROOT = resolve(Dirname, '..', '..');
 const FLAGS = parseElectronFloatFlags(process.argv.slice(2));
 const SERVE_ORIGIN = getElectronServeOrigin(FLAGS.servePort);
 const OVERLAY_APP_URL = buildElectronOverlayAppUrl(SERVE_ORIGIN);

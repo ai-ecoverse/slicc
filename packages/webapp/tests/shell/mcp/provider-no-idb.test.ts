@@ -1,15 +1,15 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import {
-  ensureMcpProviderRegistered,
-  ensureAllMcpProvidersRegistered,
-  registerMcpProvider,
-  mcpProviderId,
-  _testOnly_resetMcpProviderState,
-} from '../../../src/shell/mcp/provider.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   getRegisteredProviderConfig,
   unregisterProviderConfig,
 } from '../../../src/providers/index.js';
+import {
+  _testOnly_resetMcpProviderState,
+  ensureAllMcpProvidersRegistered,
+  ensureMcpProviderRegistered,
+  mcpProviderId,
+  registerMcpProvider,
+} from '../../../src/shell/mcp/provider.js';
 
 // These tests run in Vitest's node environment where `indexedDB` is
 // not defined. The provider guard short-circuits before any

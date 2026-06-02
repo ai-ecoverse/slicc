@@ -86,6 +86,7 @@ export type Message = UserMessage | AssistantMessage | ToolResultMessage;
  * are part of the union.
  */
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
+
 export type { AgentMessage };
 
 // ─── Tool Types ─────────────────────────────────────────────────────────────

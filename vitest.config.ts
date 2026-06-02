@@ -1,6 +1,6 @@
-import { defineConfig } from 'vitest/config';
-import { resolve } from 'path';
 import { readFileSync } from 'fs';
+import { resolve } from 'path';
+import { defineConfig } from 'vitest/config';
 
 const webappDir = resolve(__dirname, 'packages/webapp');
 const workspaceRoot = __dirname;
@@ -137,6 +137,16 @@ export default defineConfig({
         test: {
           name: 'cloud-core',
           include: ['packages/cloud-core/tests/**/*.test.ts'],
+        },
+      },
+      {
+        // Repo-level tooling under packages/dev-tools/ (plain .mjs, not a
+        // workspace). Co-located *.test.mjs so `npm test` covers the triage
+        // logic; no per-package coverage gate applies to this project.
+        extends: true,
+        test: {
+          name: 'dev-tools',
+          include: ['packages/dev-tools/**/*.test.mjs'],
         },
       },
     ],

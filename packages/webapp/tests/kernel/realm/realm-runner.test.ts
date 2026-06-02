@@ -7,12 +7,12 @@
  * DedicatedWorker / iframe (vitest runs in node and has neither).
  */
 
-import { describe, it, expect, vi } from 'vitest';
 import type { CommandContext } from 'just-bash';
+import { describe, expect, it, vi } from 'vitest';
 import { ProcessManager } from '../../../src/kernel/process-manager.js';
-import { runInRealm } from '../../../src/kernel/realm/realm-runner.js';
-import type { Realm } from '../../../src/kernel/realm/realm-runner.js';
 import type { RealmPortLike } from '../../../src/kernel/realm/realm-rpc.js';
+import type { Realm } from '../../../src/kernel/realm/realm-runner.js';
+import { runInRealm } from '../../../src/kernel/realm/realm-runner.js';
 import type { RealmDoneMsg, RealmErrorMsg } from '../../../src/kernel/realm/realm-types.js';
 
 interface MockRealm extends Realm {

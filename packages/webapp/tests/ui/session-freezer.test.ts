@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { Session, ChatMessage } from '../../src/ui/types.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ChatMessage, Session } from '../../src/ui/types.js';
 
 const mockRunOneOffCompactionCall = vi.fn();
 vi.mock('../../src/core/context-compaction.js', () => ({

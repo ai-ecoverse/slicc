@@ -8,18 +8,18 @@
  */
 
 import type { Api, Model } from '@earendil-works/pi-ai';
-import type { VirtualFS } from '../fs/index.js';
 import { createLogger } from '../core/logger.js';
+import type { VirtualFS } from '../fs/index.js';
 import { getDailyAdobeUuid } from '../scoops/llm-session-id.js';
 import { getApiKey, resolveCurrentModel } from './provider-settings.js';
-import { SessionStore } from './session-store.js';
 import {
   enrichPendingSession,
-  freezeConeSession,
-  listPendingEnrichments,
   type FrozenSession,
   type FrozenSessionIndexEntry,
+  freezeConeSession,
+  listPendingEnrichments,
 } from './session-freezer.js';
+import { SessionStore } from './session-store.js';
 
 const log = createLogger('new-session');
 

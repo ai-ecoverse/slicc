@@ -1,5 +1,5 @@
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { defineCommand } from 'just-bash';
 
 function crontaskHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
@@ -65,17 +65,18 @@ function getExtensionLickManager(): import('../../scoops/lick-manager.js').LickM
 }
 
 /** Lazy-loaded proxy for when the command runs in the side panel terminal */
-let _lickProxy: Awaited<
+let LickProxy: Awaited<
   ReturnType<
     typeof import('../../../../chrome-extension/src/lick-manager-proxy.js').createLickManagerProxy
   >
 > | null = null;
 async function getLickProxy() {
-  if (_lickProxy) return _lickProxy;
-  const { createLickManagerProxy } =
-    await import('../../../../chrome-extension/src/lick-manager-proxy.js');
-  _lickProxy = createLickManagerProxy();
-  return _lickProxy;
+  if (LickProxy) return LickProxy;
+  const { createLickManagerProxy } = await import(
+    '../../../../chrome-extension/src/lick-manager-proxy.js'
+  );
+  LickProxy = createLickManagerProxy();
+  return LickProxy;
 }
 
 async function apiCall(
@@ -206,8 +207,9 @@ export function createCrontaskCommand(): Command {
             const tasks = extLm
               ? extLm.listCronTasks()
               : await (async () => {
-                  const { listCronTasksAsync } =
-                    await import('../../../../chrome-extension/src/lick-manager-proxy.js');
+                  const { listCronTasksAsync } = await import(
+                    '../../../../chrome-extension/src/lick-manager-proxy.js'
+                  );
                   return listCronTasksAsync();
                 })();
             if (tasks.length === 0) {

@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { config as githubProvider } from '../../providers/github.js';
+import { describe, expect, it } from 'vitest';
 import { config as adobeProvider } from '../../providers/adobe.js';
+import { config as githubProvider } from '../../providers/github.js';
 
 describe('OAuth provider domain config', () => {
   it('github provider has bare github.com (for git push)', () => {

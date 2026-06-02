@@ -6,7 +6,7 @@
  * and is verified manually.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // --- Stub the window global for Node environment ---
 
@@ -49,7 +49,11 @@ function fireMessage(data: unknown, opts: { origin?: string; source?: object | n
 }
 
 // Import AFTER stubs are in place (module reads `window` at call time)
-import { createOAuthLauncher, getOAuthPageOrigin } from '../../src/providers/oauth-service.js';
+import {
+  createOAuthLauncher,
+  getOAuthPageOrigin,
+  openIdpLogoutUrl,
+} from '../../src/providers/oauth-service.js';
 
 describe('createOAuthLauncher', () => {
   beforeEach(() => {
@@ -127,6 +131,76 @@ describe('createOAuthLauncher', () => {
     const result = await promise;
     expect(result).toBeNull();
     expect(mockPopup.close).toHaveBeenCalled();
+  });
+
+  it('resolves null when the user closes the OAuth popup (cancelled flow)', async () => {
+    // Provide a popup with a mutable `closed` property so we can simulate
+    // the user dismissing the window mid-flow.
+    let popupClosed = false;
+    const cancelPopup = {
+      close: vi.fn(),
+      get closed() {
+        return popupClosed;
+      },
+    };
+    mockWindow.open.mockReturnValueOnce(cancelPopup);
+
+    // Server never has a result (pure user-cancel, no COOP race).
+    vi.mocked(fetch).mockResolvedValue({ status: 204 } as Response);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    // Simulate user closing the popup, then advance past the closed-detect
+    // interval (500ms) plus the 1500ms grace period that lets the poll timer
+    // run one final cycle before giving up.
+    popupClosed = true;
+    await vi.advanceTimersByTimeAsync(2100);
+
+    const result = await promise;
+    expect(result).toBeNull();
+  });
+
+  it('resolves with the server result when popup closes mid-COOP relay (race fix)', async () => {
+    // Simulate the COOP/Electron race: callback page fires POST to
+    // /api/oauth-result then calls window.close() synchronously.  The popup
+    // is already closed when the 500ms poll detects it, but the server-side
+    // result arrives within the 1500ms grace period.
+    let popupClosed = false;
+    const cancelPopup = {
+      close: vi.fn(),
+      get closed() {
+        return popupClosed;
+      },
+    };
+    mockWindow.open.mockReturnValueOnce(cancelPopup);
+
+    const mockFetch = vi.mocked(fetch);
+    // First server poll (fires at t=1000ms): no result yet — POST still in-flight.
+    mockFetch.mockResolvedValueOnce({ status: 204 } as Response);
+    // Second server poll (fires at t=2000ms, within the 1500ms grace): result landed.
+    mockFetch.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          redirectUrl: 'http://localhost:5710/auth/callback#token=coop',
+        }),
+    } as Response);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    // t=500ms: closed-poll detects popup closed, starts 1500ms grace.
+    popupClosed = true;
+    await vi.advanceTimersByTimeAsync(500);
+    // t=1000ms: first pollTimer fires → 204, keeps polling.
+    await vi.advanceTimersByTimeAsync(500);
+    // t=2000ms: second pollTimer fires → result, resolves before grace expires.
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const result = await promise;
+    expect(result).toBe('http://localhost:5710/auth/callback#token=coop');
   });
 
   it('cleans up message listener after successful callback', async () => {
@@ -417,6 +491,69 @@ describe('getOAuthPageOrigin', () => {
     delete (globalThis as any).window;
     delete (globalThis as any).__slicc_panelRpc;
     await expect(getOAuthPageOrigin()).rejects.toThrow(/panel-RPC bridge/);
+  });
+});
+
+describe('openIdpLogoutUrl', () => {
+  afterEach(() => {
+    // Restore mockWindow so it is available for other describe blocks
+    vi.stubGlobal('window', mockWindow);
+  });
+
+  it('opens a popup to the given URL with popup=yes in the features string', async () => {
+    const closeStub = vi.fn();
+    // closed: false so the poll loop does not resolve early; timeout fires first
+    vi.stubGlobal('window', { open: vi.fn(() => ({ close: closeStub, closed: false })) });
+
+    await openIdpLogoutUrl('https://idp.example.com/logout', 50);
+
+    expect((window as any).open).toHaveBeenCalledWith(
+      'https://idp.example.com/logout',
+      '_blank',
+      expect.stringContaining('popup=yes')
+    );
+  });
+
+  it('force-closes the popup and resolves after the timeout when user does not close it', async () => {
+    const closeStub = vi.fn();
+    vi.stubGlobal('window', { open: vi.fn(() => ({ close: closeStub, closed: false })) });
+
+    await openIdpLogoutUrl('https://idp.example.com/logout', 50);
+
+    expect(closeStub).toHaveBeenCalled();
+  });
+
+  it('resolves as soon as the user closes the popup without waiting for the timeout', async () => {
+    let closed = false;
+    const closeStub = vi.fn(() => {
+      closed = true;
+    });
+    vi.stubGlobal('window', {
+      open: vi.fn(() => ({
+        close: closeStub,
+        get closed() {
+          return closed;
+        },
+      })),
+    });
+
+    // Simulate user closing the popup after ~60ms; timeout is 10s so it must
+    // be the popup.closed poll (every 500ms in prod, but here we just rely on
+    // the popup closing before the deadline).
+    setTimeout(() => {
+      closed = true;
+    }, 60);
+
+    const start = Date.now();
+    await openIdpLogoutUrl('https://idp.example.com/logout', 10_000);
+    // Should resolve well before the 10s timeout
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
+  it('resolves undefined and does not throw when window is undefined (worker runtime)', async () => {
+    vi.stubGlobal('window', undefined);
+
+    await expect(openIdpLogoutUrl('https://idp.example.com/logout')).resolves.toBeUndefined();
   });
 });
 

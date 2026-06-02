@@ -15,31 +15,31 @@
  * by hand; tracked as a follow-up.
  */
 
-import type { ProviderConfig } from '../types.js';
-import {
-  registerApiProvider,
-  calculateCost,
-  createAssistantMessageEventStream,
-} from '@earendil-works/pi-ai';
-import type { AssistantMessageEventStream } from '@earendil-works/pi-ai';
-import { transformMessages } from '@earendil-works/pi-ai/dist/providers/transform-messages.js';
-import {
-  buildBaseOptions,
-  adjustMaxTokensForThinking,
-  clampReasoning,
-} from '@earendil-works/pi-ai/dist/providers/simple-options.js';
 import type {
   Api,
-  Model,
-  Context,
-  StreamOptions,
-  SimpleStreamOptions,
   AssistantMessage,
-  ThinkingLevel,
-  ThinkingBudgets,
+  AssistantMessageEventStream,
   CacheRetention,
+  Context,
+  Model,
   ProviderResponse,
+  SimpleStreamOptions,
+  StreamOptions,
+  ThinkingBudgets,
+  ThinkingLevel,
 } from '@earendil-works/pi-ai';
+import {
+  calculateCost,
+  createAssistantMessageEventStream,
+  registerApiProvider,
+} from '@earendil-works/pi-ai';
+import {
+  adjustMaxTokensForThinking,
+  buildBaseOptions,
+  clampReasoning,
+} from '@earendil-works/pi-ai/dist/providers/simple-options.js';
+import { transformMessages } from '@earendil-works/pi-ai/dist/providers/transform-messages.js';
+import type { ProviderConfig } from '../types.js';
 
 export const config: ProviderConfig = {
   id: 'bedrock-camp',

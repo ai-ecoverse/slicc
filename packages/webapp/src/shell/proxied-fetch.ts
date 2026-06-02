@@ -20,12 +20,12 @@
 
 import type { SecureFetch } from 'just-bash';
 import type { ResponseMsg } from '../../../chrome-extension/src/fetch-proxy-shared.js';
+import { isProxyError, readProxyErrorMessage } from '../core/proxy-error.js';
 import { cacheBinaryBody, cacheBinaryByUrl } from './binary-cache.js';
 import { getFetchBodyBytes } from './fetch-body.js';
-import { isProxyError, readProxyErrorMessage } from '../core/proxy-error.js';
 import {
-  encodeForbiddenRequestHeaders as _encodeForbiddenRequestHeaders,
   decodeForbiddenResponseHeaders as _decodeForbiddenResponseHeaders,
+  encodeForbiddenRequestHeaders as _encodeForbiddenRequestHeaders,
   headersToRecord as _headersToRecord,
 } from './proxy-headers.js';
 

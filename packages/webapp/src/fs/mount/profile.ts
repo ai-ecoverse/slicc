@@ -130,7 +130,7 @@ export async function getDefaultImsClient(): Promise<AdobeImsClient> {
     (a: { providerId?: string; accessToken?: string }) => a.providerId === 'adobe'
   );
 
-  if (!adobeAccount || !adobeAccount.accessToken) {
+  if (!adobeAccount?.accessToken) {
     throw new ProfileNotConfiguredError(
       'No Adobe IMS account found. Log in via Settings → Providers → Adobe first.'
     );

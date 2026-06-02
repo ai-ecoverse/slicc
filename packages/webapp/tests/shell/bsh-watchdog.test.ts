@@ -1,10 +1,10 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CDPTransport } from '../../src/cdp/transport.js';
 import { FsWatcher } from '../../src/fs/index.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { BshWatchdog } from '../../src/shell/bsh-watchdog.js';
 import { ScriptCatalog } from '../../src/shell/script-catalog.js';
-import type { CDPTransport } from '../../src/cdp/transport.js';
 
 let dbCounter = 0;
 

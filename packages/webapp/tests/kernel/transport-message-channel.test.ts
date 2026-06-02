@@ -10,17 +10,17 @@
  *  - multiple subscribers each get every message
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import type {
+  ExtensionMessage,
+  OffscreenToPanelMessage,
+  PanelToOffscreenMessage,
+} from '../../../chrome-extension/src/messages.js';
 import {
-  createMessageChannelTransport,
   createBridgeMessageChannelTransport,
+  createMessageChannelTransport,
   createPanelMessageChannelTransport,
 } from '../../src/kernel/transport-message-channel.js';
-import type {
-  PanelToOffscreenMessage,
-  OffscreenToPanelMessage,
-  ExtensionMessage,
-} from '../../../chrome-extension/src/messages.js';
 
 interface UpMsg {
   type: 'up';

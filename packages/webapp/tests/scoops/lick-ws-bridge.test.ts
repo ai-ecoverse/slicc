@@ -7,11 +7,11 @@
  * tray-leader), reconnection + escalation, send-race on stop.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LickManager, WebhookEntry } from '../../src/scoops/lick-manager.js';
 import {
-  setLeaderTrayRuntimeStatus,
   type LeaderTraySession,
+  setLeaderTrayRuntimeStatus,
 } from '../../src/scoops/tray-leader.js';
 
 class FakeWebSocket {

@@ -3,8 +3,8 @@
  * Compact: shows selected scoop + dropdown on click. Fits in the header bar.
  */
 
-import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
 import type { Orchestrator } from '../scoops/orchestrator.js';
+import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
 
 export interface ScoopSwitcherCallbacks {
   onScoopSelect: (scoop: RegisteredScoop) => void;

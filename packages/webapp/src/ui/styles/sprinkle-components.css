@@ -305,7 +305,7 @@
   color: var(--s2-content-default);
 }
 .sprinkle-status-light::before {
-  content: '';
+  content: "";
   width: 8px;
   height: 8px;
   border-radius: 50%;
@@ -609,7 +609,7 @@
   border-color: var(--s2-positive);
 }
 .sprinkle-task-item--done .sprinkle-task-item__check::after {
-  content: '';
+  content: "";
   width: 8px;
   height: 5px;
   border-left: 1.5px solid white;
@@ -665,7 +665,7 @@
 }
 /* Auto-fill via --progress custom property on parent */
 .sprinkle-progress-bar__track::after {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0;
   right: auto;
@@ -694,7 +694,7 @@
   transition: width 300ms ease;
 }
 .sprinkle-progress-bar:not(:has(.sprinkle-progress-bar__track))::after {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0;
   right: auto;
@@ -751,7 +751,7 @@
   transition: width 300ms ease;
 }
 .sprinkle-meter__track::after {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0;
   right: auto;
@@ -780,7 +780,7 @@
   transition: width 300ms ease;
 }
 .sprinkle-meter:not(:has(.sprinkle-meter__track))::after {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0;
   right: auto;
@@ -1122,7 +1122,7 @@ dl.sprinkle-kv-list dd:last-of-type {
   flex-shrink: 0;
 }
 .sprinkle-collapsible__chevron::before {
-  content: '\25B6';
+  content: "\25B6";
   font-size: 10px;
   color: var(--s2-gray-600);
 }

@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import type { MessageAttachment } from '../../src/core/attachments.js';
 import {
   formatPromptWithAttachments,
   imageContentFromAttachments,
   stripLocalPathsForRemote,
 } from '../../src/core/attachments.js';
-import type { MessageAttachment } from '../../src/core/attachments.js';
 
 describe('attachment prompt formatting', () => {
   it('keeps image attachments as image content and adds a prompt summary', () => {

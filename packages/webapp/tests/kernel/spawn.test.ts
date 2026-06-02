@@ -16,9 +16,9 @@
  *   - `dispose()` calls `terminate()` and closes the page-side ports
  */
 
-import { describe, it, expect, vi } from 'vitest';
-import { bootstrapKernelWorker, type WorkerLike } from '../../src/kernel/spawn.js';
+import { describe, expect, it, vi } from 'vitest';
 import type { CDPTransport } from '../../src/cdp/transport.js';
+import { bootstrapKernelWorker, type WorkerLike } from '../../src/kernel/spawn.js';
 import type { OffscreenClientCallbacks } from '../../src/ui/offscreen-client.js';
 
 function makeStubCdpTransport(): CDPTransport {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  findDroppedSkillFile,
   findDroppedNonSkillTransferFiles,
+  findDroppedSkillFile,
   findDroppedSkillTransferFile,
   isSkillArchiveName,
 } from '../../src/ui/skill-drop.js';

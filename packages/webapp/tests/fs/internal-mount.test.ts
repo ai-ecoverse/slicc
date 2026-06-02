@@ -13,7 +13,7 @@
  */
 
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../src/fs/index.js';
 import { ProcMountBackend } from '../../src/kernel/proc-mount.js';
 import { ProcessManager } from '../../src/kernel/process-manager.js';
@@ -112,7 +112,6 @@ describe('mountInternal', () => {
       close: async () => undefined,
       getHandle: () => ({}) as unknown,
     };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await expect(vfs.mount('/proc', stub as any)).rejects.toMatchObject({ code: 'EEXIST' });
   });
 });

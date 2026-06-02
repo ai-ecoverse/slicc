@@ -18,14 +18,14 @@
  * parameter.
  */
 
-import type { CDPTransport } from './transport.js';
 import { createLogger } from '../core/logger.js';
-import type { ParsedLink } from '../net/link-header.js';
 import {
   extractHandoffFromCdpHeaders,
   type HandoffMatch,
   type HandoffVerb,
 } from '../net/handoff-link.js';
+import type { ParsedLink } from '../net/link-header.js';
+import type { CDPTransport } from './transport.js';
 
 const log = createLogger('navigation-watcher');
 
@@ -269,7 +269,7 @@ export class NavigationWatcher {
     const info = params['targetInfo'] as
       | { targetId?: string; type?: string; attached?: boolean; openerId?: string }
       | undefined;
-    if (!info || info.type !== 'page' || typeof info.targetId !== 'string') return;
+    if (info?.type !== 'page' || typeof info.targetId !== 'string') return;
     if (info.attached) return; // already attached
 
     try {

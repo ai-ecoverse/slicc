@@ -6,7 +6,7 @@
  * `terminal-view` (panel) ⇄ session bridge (worker).
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   isTerminalControlMsg,
   isTerminalEventMsg,

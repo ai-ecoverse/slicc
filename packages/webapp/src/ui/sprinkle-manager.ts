@@ -3,13 +3,12 @@
  * and their placement in the layout.
  */
 
-import type { VirtualFS } from '../fs/index.js';
-import type { FsWatcher } from '../fs/index.js';
-import { discoverSprinkles, type Sprinkle } from './sprinkle-discovery.js';
-import { SprinkleBridge } from './sprinkle-bridge.js';
-import { SprinkleRenderer } from './sprinkle-renderer.js';
-import type { LickEvent } from '../scoops/lick-manager.js';
 import { createLogger } from '../core/logger.js';
+import type { FsWatcher, VirtualFS } from '../fs/index.js';
+import type { LickEvent } from '../scoops/lick-manager.js';
+import { SprinkleBridge } from './sprinkle-bridge.js';
+import { discoverSprinkles, type Sprinkle } from './sprinkle-discovery.js';
+import { SprinkleRenderer } from './sprinkle-renderer.js';
 import { trackSprinkleView } from './telemetry.js';
 
 const log = createLogger('sprinkle-manager');

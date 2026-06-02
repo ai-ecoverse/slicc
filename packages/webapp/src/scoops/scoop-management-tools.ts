@@ -5,15 +5,15 @@
  * but implemented as direct agent tools.
  */
 
+import { createLogger } from '../core/logger.js';
 import type { ToolDefinition } from '../core/types.js';
 import {
   CURRENT_SCOOP_CONFIG_VERSION,
-  THINKING_LEVELS,
   isThinkingLevel,
   type RegisteredScoop,
+  THINKING_LEVELS,
   type ThinkingLevel,
 } from './types.js';
-import { createLogger } from '../core/logger.js';
 
 const log = createLogger('scoop-management-tools');
 

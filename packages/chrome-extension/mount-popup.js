@@ -8,7 +8,7 @@ function send(msg) {
         /* no receiver */
       }
     });
-  } catch (e) {
+  } catch (_e) {
     /* context invalidated */
   }
 }

@@ -6,8 +6,8 @@
  * call + DOMPurify sanitization for faster streaming rendering (~60fps).
  */
 
-import { Marked, type Tokens } from 'marked';
 import { sanitize as purify } from 'isomorphic-dompurify';
+import { Marked, type Tokens } from 'marked';
 
 /** Escape HTML special characters. */
 export function escapeHtml(text: string): string {

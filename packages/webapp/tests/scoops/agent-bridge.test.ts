@@ -7,17 +7,17 @@
 
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { FsError } from '../../src/fs/types.js';
+import type { VirtualFS } from '../../src/fs/virtual-fs.js';
 import {
   AGENT_BRIDGE_GLOBAL_KEY,
+  type AgentSpawnOptions,
   createAgentBridge,
   publishAgentBridge,
-  type AgentSpawnOptions,
 } from '../../src/scoops/agent-bridge.js';
 import type { Orchestrator, ScoopObserver } from '../../src/scoops/orchestrator.js';
-import type { VirtualFS } from '../../src/fs/virtual-fs.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
 import { CURRENT_SCOOP_CONFIG_VERSION } from '../../src/scoops/types.js';
-import { FsError } from '../../src/fs/types.js';
 
 /**
  * Observer-driven mock orchestrator. Each `sendPrompt` call drives the

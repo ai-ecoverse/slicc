@@ -1,10 +1,10 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
-import {
-  PanelFollowerSprinkleProxy,
-  connectOffscreenFollowerSprinkleBridge,
-} from '../src/follower-sprinkle-bridge.js';
-import type { SprinkleFollowerSync } from '../../../packages/webapp/src/ui/sprinkle-follower-controller.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SprinkleSummary } from '../../../packages/webapp/src/scoops/tray-sync-protocol.js';
+import type { SprinkleFollowerSync } from '../../../packages/webapp/src/ui/sprinkle-follower-controller.js';
+import {
+  connectOffscreenFollowerSprinkleBridge,
+  PanelFollowerSprinkleProxy,
+} from '../src/follower-sprinkle-bridge.js';
 
 /**
  * Mini message bus that wires a panel side and an offscreen side together so

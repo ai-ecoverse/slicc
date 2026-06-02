@@ -7,10 +7,10 @@
  * File is created with mode 0600 if it doesn't exist.
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { parseEnvFile, serializeEnvFile, type EnvEntry } from './env-file.js';
+import { dirname, resolve } from 'node:path';
+import { type EnvEntry, parseEnvFile, serializeEnvFile } from './env-file.js';
 import type { Secret, SecretEntry, SecretStore } from './types.js';
 
 const DOMAINS_SUFFIX = '_DOMAINS';

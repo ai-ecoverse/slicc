@@ -19,10 +19,9 @@
  * surface which catches syntax errors and isolated-module issues.
  */
 
+import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import type { Command } from 'just-bash';
-import type { CommandContext } from 'just-bash';
-import { getTypeScript, basename, dirname, type TypeScriptModule } from './shared.js';
+import { basename, dirname, getTypeScript, type TypeScriptModule } from './shared.js';
 
 export interface ParsedTscArgs {
   files: string[];

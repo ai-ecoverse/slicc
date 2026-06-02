@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import express, { type Express } from 'express';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
+import express, { type Express } from 'express';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FETCH_PROXY_SKIP_HEADERS } from '../src/fetch-proxy-headers.js';
 
 /**

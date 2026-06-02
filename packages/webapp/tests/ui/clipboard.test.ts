@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { copyTextToClipboard, readTextFromClipboard } from '../../src/ui/clipboard.js';
 
 interface MockNavigator {

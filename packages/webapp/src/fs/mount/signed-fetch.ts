@@ -19,11 +19,11 @@
  * browser-side exposure.
  */
 
-import { getDefaultImsClient } from './profile.js';
+import { FsError } from '../types.js';
 import type { SignedFetchDa, SignedFetchDaRequest } from './backend-da.js';
 import type { SignedFetchS3, SignedFetchS3Request } from './backend-s3.js';
+import { getDefaultImsClient } from './profile.js';
 import type { SignAndForwardReply } from './sign-and-forward-shared.js';
-import { FsError } from '../types.js';
 
 function isExtensionContext(): boolean {
   return (

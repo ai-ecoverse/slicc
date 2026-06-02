@@ -15,15 +15,15 @@
  * Scoop fail-fast lives in LocalMountBackend.create().
  */
 
-import type { VirtualFS } from './virtual-fs.js';
+import { getToolExecutionContext } from '../tools/tool-ui.js';
+import { DaMountBackend, type SignedFetchDa } from './mount/backend-da.js';
 import { LocalMountBackend } from './mount/backend-local.js';
 import { S3MountBackend, type SignedFetchS3 } from './mount/backend-s3.js';
-import { DaMountBackend, type SignedFetchDa } from './mount/backend-da.js';
-import { RemoteMountCache } from './mount/remote-cache.js';
-import { makeSignedFetchS3, makeSignedFetchDa } from './mount/signed-fetch.js';
 import { newMountId } from './mount/mount-id.js';
-import { getToolExecutionContext } from '../tools/tool-ui.js';
+import { RemoteMountCache } from './mount/remote-cache.js';
+import { makeSignedFetchDa, makeSignedFetchS3 } from './mount/signed-fetch.js';
 import { loadAndClearPendingHandle, reactivateHandle } from './mount-picker-popup.js';
+import type { VirtualFS } from './virtual-fs.js';
 
 export interface MountCommandResult {
   stdout: string;

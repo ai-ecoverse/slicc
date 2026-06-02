@@ -12,7 +12,7 @@
  * and updateMessageEl inserts it at the correct position once content arrives.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { ChatPanel } from '../../src/ui/chat-panel.js';
 import type { ChatMessage } from '../../src/ui/types.js';

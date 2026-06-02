@@ -11,38 +11,42 @@
  * Chrome extension API types provided by ./chrome.d.ts
  */
 
-import type {
-  ExtensionMessage,
-  CdpCommandMsg,
-  CdpResponseMsg,
-  CdpEventMsg,
-  NavigateLickMsg,
-  TraySocketCommandMessage,
-  TraySocketErrorMsg,
-  TraySocketMessageMsg,
-  TraySocketOpenMsg,
-  TraySocketOpenedMsg,
-  OAuthRequestMsg,
-  OAuthResultMsg,
-} from './messages.js';
-import { extractHandoffFromWebRequest } from '../../webapp/src/net/handoff-link.js';
+import { type FetchProxySecretSource, SecretsPipeline } from '@slicc/shared-ts';
 import {
-  isExtensionMessage,
-  DETACHED_RUNTIME_QUERY_NAME,
-  DETACHED_RUNTIME_QUERY_VALUE,
-} from './messages.js';
-import {
+  type DaSignAndForwardEnvelope,
   executeDaSignAndForward,
   executeS3SignAndForward,
-  type DaSignAndForwardEnvelope,
   type S3SignAndForwardEnvelope,
   type SecretGetter,
   type SignAndForwardReply,
 } from '../../webapp/src/fs/mount/sign-and-forward-shared.js';
+import {
+  extractHandoffFromWebRequest,
+  handoffFingerprint,
+} from '../../webapp/src/net/handoff-link.js';
 import { handleFetchProxyConnectionAsync } from './fetch-proxy-shared.js';
+import type {
+  CdpCommandMsg,
+  CdpEventMsg,
+  CdpResponseMsg,
+  ExtensionMessage,
+  NavigateLickMsg,
+  OAuthRequestMsg,
+  OAuthResultMsg,
+  TraySocketCommandMessage,
+  TraySocketErrorMsg,
+  TraySocketMessageMsg,
+  TraySocketOpenedMsg,
+  TraySocketOpenMsg,
+} from './messages.js';
+import {
+  DETACHED_RUNTIME_QUERY_NAME,
+  DETACHED_RUNTIME_QUERY_VALUE,
+  isExtensionMessage,
+} from './messages.js';
 import { deleteSecret, listSecrets, listSecretsWithValues, setSecret } from './secrets-storage.js';
 import { readOrCreateSwSessionId } from './sw-session-id.js';
-import { SecretsPipeline, type FetchProxySecretSource } from '@slicc/shared-ts';
+
 // ---------------------------------------------------------------------------
 // Detached popout state
 // ---------------------------------------------------------------------------
@@ -431,10 +435,33 @@ chrome.notifications.onClicked.addListener((notificationId: string) => {
 // document response advertises a SLICC handoff rel via RFC 8288 Link.
 // ---------------------------------------------------------------------------
 
+/**
+ * Payload fingerprints of handoffs whose OS notification has already been shown
+ * this service-worker lifetime. A site can advertise the same SLICC `Link` rel
+ * on every page response; without this guard each navigation re-shows the
+ * toast.
+ *
+ * IMPORTANT: this set gates ONLY the notification — never the forward. The
+ * durable cone-turn dedup lives in the long-lived offscreen `LickManager`,
+ * which records a fingerprint only at the instant it actually fires (in-process,
+ * no async delivery gap). The forward here (`chrome.runtime.sendMessage`) is
+ * best-effort and silently drops when the offscreen document isn't listening
+ * yet (e.g. cold start). If we suppressed the forward on "seen", a first
+ * delivery that was dropped before the offscreen came up would lose the handoff
+ * permanently. So we always forward and let the offscreen guard dedup the cone
+ * turn. MV3 may evict and respawn the worker, resetting this set — an accepted
+ * limitation of the in-memory design (a repeat toast can appear once after
+ * eviction). See {@link handoffFingerprint}.
+ */
+const notifiedHandoffFingerprints = new Set<string>();
+
 chrome.webRequest.onHeadersReceived.addListener(
   (details) => {
     const { match } = extractHandoffFromWebRequest(details.responseHeaders, details.url);
     if (!match) return;
+    const fingerprint = handoffFingerprint(match);
+    const alreadyNotified = notifiedHandoffFingerprints.has(fingerprint);
+    notifiedHandoffFingerprints.add(fingerprint);
     const payload: NavigateLickMsg = {
       type: 'navigate-lick',
       url: details.url,
@@ -456,15 +483,17 @@ chrome.webRequest.onHeadersReceived.addListener(
       chrome.tabs
         .get(tabId)
         .then((tab) => {
-          if (tab.windowId !== undefined) showHandoffNotification(tab.windowId);
+          if (!alreadyNotified && tab.windowId !== undefined) showHandoffNotification(tab.windowId);
           dispatch(tab.title);
         })
         .catch(() => dispatch());
     } else {
-      chrome.windows
-        .getCurrent()
-        .then((w) => showHandoffNotification(w.id!))
-        .catch(() => {});
+      if (!alreadyNotified) {
+        chrome.windows
+          .getCurrent()
+          .then((w) => showHandoffNotification(w.id!))
+          .catch(() => {});
+      }
       dispatch();
     }
   },

@@ -1,5 +1,5 @@
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { defineCommand } from 'just-bash';
 import { createProxiedFetch } from '../proxied-fetch.js';
 
 function manHelp(): { stdout: string; stderr: string; exitCode: number } {

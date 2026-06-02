@@ -5,7 +5,7 @@
  * resolution happens at build time (Vite), not in Vitest's Node runtime.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { ProviderConfig } from '../../src/providers/types.js';
 
 // ── Test the filtering logic directly ──────────────────────────────

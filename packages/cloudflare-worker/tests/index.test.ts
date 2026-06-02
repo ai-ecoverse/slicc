@@ -1,17 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import worker, { handleWorkerRequest } from '../src/index.js';
+import { SessionTrayDurableObject } from '../src/session-tray.js';
 import {
-  FOLLOWER_ATTACH_RETRY_AFTER_MS,
-  wantsJSON,
-  TRAY_RECLAIM_TTL_MS,
-  HOSTED_TRAY_RECLAIM_TTL_MS,
-  reclaimMsForTray,
   type CreateTrayRequest,
   type DurableObjectIdLike,
   type DurableObjectStateLike,
+  FOLLOWER_ATTACH_RETRY_AFTER_MS,
+  HOSTED_TRAY_RECLAIM_TTL_MS,
+  reclaimMsForTray,
+  TRAY_RECLAIM_TTL_MS,
   type TrayRecord,
+  wantsJSON,
 } from '../src/shared.js';
-import { SessionTrayDurableObject } from '../src/session-tray.js';
 import { TRAY_BOOTSTRAP_TIMEOUT_MS } from '../src/tray-signaling.js';
 import { TURN_CREDENTIAL_TTL_MS } from '../src/turn-credentials.js';
 

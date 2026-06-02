@@ -1,5 +1,5 @@
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { defineCommand } from 'just-bash';
 import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
 
 function sayHelp(): { stdout: string; stderr: string; exitCode: number } {
@@ -134,7 +134,7 @@ export function createSayCommand(): Command {
 
     // Voice matching for worker context: the page-side handler does the
     // exact-name match on `voice`, so we pre-resolve the partial here.
-    let resolvedVoice: string | undefined = undefined;
+    let resolvedVoice: string | undefined;
     if (voiceName) {
       const voices = local
         ? await getVoices().then((vs) =>
