@@ -7,7 +7,7 @@ import { createLogger } from '../core/logger.js';
 import type { FsWatcher, VirtualFS } from '../fs/index.js';
 import { getPanelRpcClient, hasLocalDom } from '../kernel/panel-rpc.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
-import { SprinkleBridge, type CaptureScreenResult } from './sprinkle-bridge.js';
+import { type CaptureScreenResult, SprinkleBridge } from './sprinkle-bridge.js';
 import { discoverSprinkles, type Sprinkle } from './sprinkle-discovery.js';
 import { SprinkleRenderer } from './sprinkle-renderer.js';
 import { trackSprinkleView } from './telemetry.js';
@@ -322,7 +322,7 @@ export class SprinkleManager {
           });
           bytes = await blob.arrayBuffer();
         } finally {
-          stream.getTracks().forEach((t) => t.stop());
+          for (const t of stream.getTracks()) t.stop();
         }
       } else {
         const result = await panelRpc!.call(
