@@ -109,6 +109,16 @@ export function pathGlobToRegExp(pattern: string): RegExp {
   return new RegExp(`^${re}$`);
 }
 
+/**
+ * Collapse a grant pattern to a single trimmed line. A backend-supplied pattern
+ * with embedded newlines could otherwise inject extra rules when appended to a
+ * sudoers drop-in (or compile to an unexpected RegExp), so persistence paths run
+ * the pattern through this first.
+ */
+export function sanitizeGrantPattern(pattern: string): string {
+  return pattern.split(/\r?\n/, 1)[0]?.trim() ?? '';
+}
+
 const DIRECTIVES = new Set(['Cmnd', 'Read', 'Write']);
 
 /** Recognized directive keyword for a parsed rule. */

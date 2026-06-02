@@ -23,6 +23,7 @@ import {
   pathGlobToRegExp,
   SUDOERS_D_DIR,
   type SudoersPolicy,
+  sanitizeGrantPattern,
 } from '../shell/sudo/sudoers.js';
 import type { SudoBroker, SudoKind } from '../sudo/types.js';
 import { normalizePath } from './path-utils.js';
@@ -66,12 +67,14 @@ async function defaultApplyGrant(
   op: PathOp,
   pattern: string
 ): Promise<void> {
+  const safe = sanitizeGrantPattern(pattern);
+  if (!safe) return;
   const policy = getPolicy();
-  const rule = { pattern, nopasswd: true, regex: pathGlobToRegExp(pattern) };
+  const rule = { pattern: safe, nopasswd: true, regex: pathGlobToRegExp(safe) };
   (op === 'read' ? policy.read : policy.write).push(rule);
 
   const directive = op === 'read' ? 'Read' : 'Write';
-  const line = `NOPASSWD ${directive} ${pattern}\n`;
+  const line = `NOPASSWD ${directive} ${safe}\n`;
   try {
     await target.mkdir(SUDOERS_D_DIR, { recursive: true });
     let existing = '';
@@ -149,6 +152,10 @@ export function createSudoFs<T extends object>(target: T, deps: SudoFsDeps): T {
   }
   if (has('rename')) {
     overrides.rename = async (oldPath: unknown, newPath: unknown) => {
+      // A rename exposes the source's contents at the destination, so a
+      // read-protected source must clear a read approval before the move —
+      // otherwise the policy could be bypassed by relocating then reading.
+      await gate('read', oldPath as string);
       await gate('write', oldPath as string);
       await gate('write', newPath as string);
       return (target as Record<string, (...a: unknown[]) => unknown>).rename(oldPath, newPath);

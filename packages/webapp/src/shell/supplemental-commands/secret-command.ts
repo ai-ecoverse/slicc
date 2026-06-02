@@ -3,6 +3,7 @@ import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { createSudoBroker } from '../../sudo/index.js';
 import type { SudoBroker } from '../../sudo/types.js';
+import { commandGlobToRegExp } from '../sudo/sudoers.js';
 import { createDefaultSecretBackend, type SecretBackend } from './secret-backends.js';
 
 function helpText(): string {
@@ -89,6 +90,32 @@ const OP_LABEL: Record<GatedOp, string> = {
 /** Process-lifetime "Always" grants (intrinsic, independent of /etc/sudoers). */
 const moduleGrants = new Set<string>();
 
+/**
+ * Whether a single grant `pattern` matches `subject` (`secret:<op>:<name>`).
+ * Patterns are glob-matched (so `secret:scope:*` matches every scope op); a
+ * malformed pattern that fails to compile is treated as non-matching.
+ */
+function grantMatches(pattern: string, subject: string): boolean {
+  if (pattern === subject) return true;
+  try {
+    return commandGlobToRegExp(pattern).test(subject);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether any stored grant covers `subject` (`secret:<op>:<name>`). Glob
+ * matching keeps a wildcard-edited "Always" pattern effective instead of
+ * silently never matching an exact-string lookup.
+ */
+function grantCovers(grants: Set<string>, subject: string): boolean {
+  for (const grant of grants) {
+    if (grantMatches(grant, subject)) return true;
+  }
+  return false;
+}
+
 /** Dependencies — injectable for tests; production defaults wire the live realm. */
 export interface SecretCommandDeps {
   backend?: SecretBackend;
@@ -113,7 +140,7 @@ export function createSecretCommand(deps: SecretCommandDeps = {}): Command {
   // Returns true to proceed, false when denied.
   const gate = async (op: GatedOp, name: string): Promise<boolean> => {
     const pattern = `secret:${op}:${name}`;
-    if (grants.has(pattern) || grants.has(`secret:${op}:*`)) return true;
+    if (grantCovers(grants, pattern)) return true;
     const decision = await getBroker().requestApproval({
       kind: 'secret',
       detail: `${OP_LABEL[op]}: ${name}`,
@@ -121,7 +148,11 @@ export function createSecretCommand(deps: SecretCommandDeps = {}): Command {
     });
     if (decision.decision === 'deny') return false;
     if (decision.decision === 'always') {
-      grants.add(decision.pattern?.trim() || pattern);
+      // Only store an edited pattern when it actually matches this subject;
+      // otherwise fall back to the exact pattern so we never persist a silent
+      // never-match grant that would re-prompt for this op forever.
+      const accepted = decision.pattern?.trim();
+      grants.add(accepted && grantMatches(accepted, pattern) ? accepted : pattern);
     }
     return true;
   };

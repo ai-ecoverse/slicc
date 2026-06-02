@@ -29,6 +29,7 @@ import {
   SUDOERS_D_DIR,
   SUDOERS_FILE,
   type SudoersPolicy,
+  sanitizeGrantPattern,
 } from '../shell/sudo/sudoers.js';
 import type { ShellSudoConfig } from '../shell/wasm-shell-headless.js';
 import { createSudoBroker } from './index.js';
@@ -154,6 +155,8 @@ export class SudoManager {
   }
 
   private async persistCommandGrant(pattern: string): Promise<void> {
+    const safe = sanitizeGrantPattern(pattern);
+    if (!safe) return;
     let existing = '';
     try {
       if (await this.fs.exists(GRANTED_FILE)) {
@@ -169,7 +172,7 @@ export class SudoManager {
       /* already exists */
     }
     const prefix = existing && !existing.endsWith('\n') ? `${existing}\n` : existing;
-    await this.fs.writeFile(GRANTED_FILE, `${prefix}NOPASSWD Cmnd  ${pattern}\n`);
+    await this.fs.writeFile(GRANTED_FILE, `${prefix}NOPASSWD Cmnd  ${safe}\n`);
     await this.reload();
   }
 

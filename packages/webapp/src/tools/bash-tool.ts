@@ -63,14 +63,14 @@ export function splitCommandSegments(command: string): string[] {
       continue;
     }
 
-    if (char === ';' || char === '|') {
-      flush();
-      continue;
-    }
-
     if ((char === '&' || char === '|') && command[i + 1] === char) {
       flush();
       i++;
+      continue;
+    }
+
+    if (char === ';' || char === '|') {
+      flush();
       continue;
     }
 
