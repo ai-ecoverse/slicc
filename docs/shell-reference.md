@@ -523,7 +523,11 @@ Standard API-client builder for the jsh realm. `token` is lazy (resolved freshly
 ```typescript
 http.client(config: {
   baseUrl?: string;
-  token?: (req?: { method: string; path: string; url: string }) => string | Promise<string | null | undefined>;
+  token?: (req?: { method: string; path: string; url: string }) =>
+    | string
+    | null
+    | undefined
+    | Promise<string | null | undefined>;
   headers?: Record<string, string>;
   retry?: { on: number[]; maxAttempts: number };
   timeoutMs?: number;
