@@ -11,6 +11,8 @@ const action = document.getElementById('action');
 
 const request = parseRequest();
 
+let settled = false;
+
 function parseRequest() {
   try {
     const raw = new URLSearchParams(location.search).get('req');
@@ -55,6 +57,7 @@ function describeMediaError(err) {
 }
 
 function fail(error) {
+  settled = true;
   setStatus(error, true);
   hint.textContent = '';
   send({ source: 'capture-popup', requestId: request?.requestId, ok: false, error });
@@ -62,6 +65,7 @@ function fail(error) {
 }
 
 function succeed(bytes, mimeType, width, height, durationMs) {
+  settled = true;
   const msg = {
     source: 'capture-popup',
     requestId: request.requestId,
@@ -86,6 +90,22 @@ chrome.runtime.onMessage.addListener((msg) => {
     window.close();
   }
   return false;
+});
+
+// If the user closes the popup (or it unloads) before the capture settles,
+// post a single cancellation failure so the shell-side captureViaPopup
+// rejects promptly instead of hanging until its ~5-minute timeout. The
+// `settled` guard prevents a double-send after a normal succeed()/fail()
+// (whose own window.close() calls also trigger pagehide).
+window.addEventListener('pagehide', () => {
+  if (settled) return;
+  settled = true;
+  send({
+    source: 'capture-popup',
+    requestId: request?.requestId,
+    ok: false,
+    error: 'capture cancelled',
+  });
 });
 
 if (!request) {
