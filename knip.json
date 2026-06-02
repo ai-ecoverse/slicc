@@ -45,7 +45,7 @@
         "tests/integration/**",
         "tests/test-dips.mjs"
       ],
-      "ignoreDependencies": ["buffer", "puppeteer-core"]
+      "ignoreDependencies": ["buffer", "puppeteer-core", "@types/w3c-web-serial"]
     },
     "packages/chrome-extension": {
       "entry": [
