@@ -36,6 +36,7 @@ function runTessl(args, cwd) {
     env: tesslEnv,
     encoding: 'utf8',
     shell: isWin,
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
 }
 
