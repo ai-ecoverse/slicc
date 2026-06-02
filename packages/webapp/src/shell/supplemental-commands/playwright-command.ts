@@ -518,11 +518,31 @@ async function getActionablePages(
   state: PlaywrightState
 ): Promise<PageInfo[]> {
   await resolveAppTabId(browser, state);
-  // Use listAllTargets when available (includes remote tray targets)
-  const pages =
-    typeof browser.listAllTargets === 'function'
-      ? await browser.listAllTargets()
-      : await browser.listPages();
+  // Use listAllTargets when available (includes remote tray targets).
+  // In standalone mode the worker-side BrowserAPI has no trayTargetProvider, so
+  // listAllTargets() returns local-only. Always supplement via panel-RPC from the
+  // page-side BrowserAPI (fully wired), then dedupe by targetId — idempotent whether
+  // or not the worker instance is also wired.
+  let pages: PageInfo[];
+  if (typeof browser.listAllTargets === 'function') {
+    pages = await browser.listAllTargets();
+    const rpc = getPanelRpcClient();
+    if (rpc) {
+      try {
+        const { targets } = await rpc.call('list-remote-targets', undefined, { timeoutMs: 3000 });
+        const seen = new Set(pages.map((p) => p.targetId));
+        for (const t of targets) {
+          if (!seen.has(t.targetId)) {
+            pages.push({ targetId: t.targetId, title: t.title, url: t.url });
+          }
+        }
+      } catch (err) {
+        log.debug('panel-rpc list-remote-targets failed', { err: String(err) });
+      }
+    }
+  } else {
+    pages = await browser.listPages();
+  }
   return pages.filter((page) => isActionablePage(state, page));
 }
 

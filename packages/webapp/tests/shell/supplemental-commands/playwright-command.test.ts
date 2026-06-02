@@ -763,6 +763,71 @@ describe('playwright-cli tab management', () => {
     expect(result.stdout).toContain('No tabs open');
   });
 
+  it('tab-list merges follower remote targets from panel-RPC when RPC client available', async () => {
+    // Worker listAllTargets returns only local tabs
+    (browser as { listAllTargets?: unknown }).listAllTargets = vi
+      .fn()
+      .mockResolvedValue([
+        { targetId: 'local-1', title: 'Local Tab', url: 'https://local.example.com' },
+      ]);
+    // RPC returns a remote follower tab
+    (globalThis as { __slicc_panelRpc?: unknown }).__slicc_panelRpc = {
+      call: vi.fn().mockResolvedValue({
+        targets: [
+          {
+            targetId: 'f-runtime:remote-tab',
+            title: 'Follower Tab',
+            url: 'https://follower.example.com',
+          },
+        ],
+      }),
+      dispose: vi.fn(),
+    };
+
+    try {
+      const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+      const result = await cmd.execute(['tab-list'], {} as any);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Local Tab');
+      expect(result.stdout).toContain('Follower Tab');
+    } finally {
+      (globalThis as { __slicc_panelRpc?: unknown }).__slicc_panelRpc = undefined;
+    }
+  });
+
+  it('tab-list deduplicates when RPC returns a target already in local results', async () => {
+    (browser as { listAllTargets?: unknown }).listAllTargets = vi.fn().mockResolvedValue([
+      {
+        targetId: 'f-runtime:remote-tab',
+        title: 'Follower Tab',
+        url: 'https://follower.example.com',
+      },
+    ]);
+    (globalThis as { __slicc_panelRpc?: unknown }).__slicc_panelRpc = {
+      call: vi.fn().mockResolvedValue({
+        targets: [
+          {
+            targetId: 'f-runtime:remote-tab',
+            title: 'Follower Tab',
+            url: 'https://follower.example.com',
+          },
+        ],
+      }),
+      dispose: vi.fn(),
+    };
+
+    try {
+      const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+      const result = await cmd.execute(['tab-list'], {} as any);
+      expect(result.exitCode).toBe(0);
+      // Should appear exactly once despite being in both local and RPC results
+      const matches = (result.stdout.match(/Follower Tab/g) ?? []).length;
+      expect(matches).toBe(1);
+    } finally {
+      (globalThis as { __slicc_panelRpc?: unknown }).__slicc_panelRpc = undefined;
+    }
+  });
+
   it('tab-list shows → for current target and * for active tab', async () => {
     (browser.listPages as ReturnType<typeof vi.fn>).mockResolvedValue([
       { targetId: 'tab-new', title: 'Page A', url: 'https://a.com', active: false },

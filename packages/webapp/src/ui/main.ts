@@ -2678,6 +2678,11 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       // non-transferable WebRTC resources and live on the page.
       leaveTray: async ({ workerBaseUrl, requestId }) =>
         await performTrayLeaveLocally({ workerBaseUrl, requestId }),
+      // Bridge remote (follower) browser targets to the worker-side
+      // playwright-cli. The worker's BrowserAPI has no trayTargetProvider
+      // so listAllTargets() falls back to local CDP only; this callback
+      // fetches from the page-side BrowserAPI which is fully wired.
+      listRemoteTargets: () => browser.listAllTargets(),
     }),
   });
   // Tear down on session reload so the handler doesn't outlive its
