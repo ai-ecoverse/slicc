@@ -415,20 +415,24 @@ describe('dip exec/agent trust gating', () => {
     );
   }
 
-  it('untrusted dips do NOT expose exec/agent in the bridge', () => {
+  it('untrusted dips do NOT expose exec/agent/jsh in the bridge', () => {
     const inst = mountDip(container, '<button>x</button>', vi.fn(), /* trusted */ false);
     const iframe = container.querySelector('iframe')!;
-    expect(iframe.srcdoc).not.toContain('exec: function');
     expect(iframe.srcdoc).not.toContain('agent: function');
     expect(iframe.srcdoc).not.toContain('dip-exec');
+    expect(iframe.srcdoc).not.toContain('dip-jsh');
     inst.dispose();
   });
 
-  it('trusted dips DO expose exec/agent in the bridge', () => {
+  it('trusted dips DO expose exec/agent + the Tier 1 jsh globals in the bridge', () => {
     const inst = mountDip(container, '<button>x</button>', vi.fn(), /* trusted */ true);
     const iframe = container.querySelector('iframe')!;
-    expect(iframe.srcdoc).toContain('exec: function');
+    expect(iframe.srcdoc).toContain('exec: Object.assign(function');
     expect(iframe.srcdoc).toContain('agent: function');
+    // Tier 1 jsh surface routes through a single `dip-jsh` round-trip.
+    expect(iframe.srcdoc).toContain('dip-jsh');
+    expect(iframe.srcdoc).toContain("op: 'fetch'");
+    expect(iframe.srcdoc).toContain("op: 'browser'");
     inst.dispose();
   });
 

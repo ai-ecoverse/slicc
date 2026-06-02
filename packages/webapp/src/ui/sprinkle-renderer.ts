@@ -341,6 +341,23 @@ export class SprinkleRenderer {
               '*'
             )
         );
+      } else if (msg.type === 'sprinkle-jsh') {
+        this.bridge._jsh(msg.op, msg.args).then(
+          (result) =>
+            iframe.contentWindow?.postMessage(
+              { type: 'sprinkle-jsh-response', id: msg.id, result },
+              '*'
+            ),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-jsh-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
+        );
       } else if (msg.type === 'sprinkle-fetch-script') {
         const url = msg.url as string;
         const id = msg.id as string;
@@ -488,6 +505,19 @@ export class SprinkleRenderer {
     });
   }
 
+  function _jshCall(op, args) {
+    return _vfsCall('sprinkle-jsh', { op: op, args: args }, function(m) { return m.result; });
+  }
+  function _b64ToU8(b64) {
+    var bin = atob(b64); var u8 = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    return u8;
+  }
+  function _u8ToB64(bytes) {
+    var bin = ''; for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin);
+  }
+
   var api = {
     lick: function(event) {
       var action, data;
@@ -555,12 +585,32 @@ export class SprinkleRenderer {
         return { base64: m.base64, width: m.width, height: m.height, mimeType: m.mimeType };
       });
     },
-    exec: function(cmd) {
+    exec: Object.assign(function(cmd) {
       return _vfsCall('sprinkle-exec', { cmd: cmd }, function(m) { return m.result; });
-    },
+    }, { spawn: function(argv) { return _jshCall('spawn', [argv]); } }),
     agent: function(prompt, opts) {
       return _vfsCall('sprinkle-agent', { prompt: prompt, opts: opts }, function(m) { return m.result; });
     },
+    fetch: function(url, init) { return _jshCall('fetch', [url, init || null]); },
+    http: {
+      client: function(cfg) {
+        function mk(method) { return function(path, opts) { return _jshCall('http', [cfg, method, path, opts || null]); }; }
+        return { get: mk('get'), post: mk('post'), put: mk('put'), patch: mk('patch'), 'delete': mk('delete') };
+      }
+    },
+    browser: {
+      findTab: function(q) { return _jshCall('browser', ['findTab', q]); },
+      ensureTab: function(url, options) { return _jshCall('browser', ['ensureTab', url, options || {}]); },
+      eval: function(tab, code) { return _jshCall('browser', ['eval', tab, code]); },
+      evalAsync: function(tab, code) { return _jshCall('browser', ['evalAsync', tab, code]); },
+      cookie: function(tab, name) { return _jshCall('browser', ['cookie', tab, name]); },
+      localStorage: function(tab, key) { return _jshCall('browser', ['localStorage', tab, key]); },
+      fetch: function(tab, url, opts) { return _jshCall('browser', ['fetch', tab, url, opts || {}]); }
+    },
+    readFileBinary: function(path) { return _jshCall('readFileBinary', [path]).then(function(r) { return _b64ToU8(r.base64); }); },
+    writeFileBinary: function(path, bytes) { return _jshCall('writeFileBinary', [path, _u8ToB64(bytes)]); },
+    fetchToFile: function(url, path) { return _jshCall('fetchToFile', [url, path]); },
+    _jsh: function(op, args) { return _jshCall(op, args); },
     name: ''
   };
   window.slicc = api;
@@ -832,6 +882,23 @@ export class SprinkleRenderer {
             iframe.contentWindow?.postMessage(
               {
                 type: 'sprinkle-agent-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
+        );
+      } else if (msg.type === 'sprinkle-jsh') {
+        this.bridge._jsh(msg.op, msg.args).then(
+          (result) =>
+            iframe.contentWindow?.postMessage(
+              { type: 'sprinkle-jsh-response', id: msg.id, result },
+              '*'
+            ),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-jsh-response',
                 id: msg.id,
                 error: err instanceof Error ? err.message : String(err),
               },

@@ -9,11 +9,13 @@
  */
 
 import FS from '@isomorphic-git/lightning-fs';
-import type {
-  SprinkleAgentOptions,
-  SprinkleAgentResult,
-  SprinkleExecHandler,
-  SprinkleExecResult,
+import {
+  runJshOp,
+  type SprinkleAgentOptions,
+  type SprinkleAgentResult,
+  type SprinkleExecHandler,
+  type SprinkleExecResult,
+  type SprinkleFetchResult,
 } from './sprinkle-bridge.js';
 import { collectThemeCSS } from './sprinkle-renderer.js';
 import { isThemeLight, registerSprinkleWindow, unregisterSprinkleWindow } from './theme.js';
@@ -93,12 +95,43 @@ async function readShtmlFromVFS(vfsPath: string, signal?: AbortSignal): Promise<
  * page-side `dipExecHandler` (same worker shell sprinkles use).
  */
 const EXEC_BRIDGE_METHODS = `,
-    exec: function(cmd) {
+    exec: Object.assign(function(cmd) {
       return _vfsCall('dip-exec', { cmd: cmd }, function(m) { return m.result; });
-    },
+    }, { spawn: function(argv) {
+      return _vfsCall('dip-jsh', { op: 'spawn', args: [argv] }, function(m) { return m.result; });
+    } }),
     agent: function(prompt, opts) {
       return _vfsCall('dip-agent', { prompt: prompt, opts: opts || null },
         function(m) { return m.result; });
+    }`;
+
+/**
+ * Tier 1 jsh globals injected into the dip `slicc` object alongside
+ * {@link EXEC_BRIDGE_METHODS} (TRUSTED dips only). Each routes through a
+ * single `dip-jsh` round-trip handled page-side by {@link runDipJsh},
+ * which runs the op in the same worker realm `slicc.exec` uses. `browser`
+ * is therefore trusted-only by construction — untrusted dips never get
+ * these methods at all. Binary-fs ops stay sprinkle-only.
+ */
+const JSH_BRIDGE_METHODS = `,
+    fetch: function(url, init) {
+      return _vfsCall('dip-jsh', { op: 'fetch', args: [url, init || null] }, function(m) { return m.result; });
+    },
+    http: { client: function(cfg) {
+      function mk(method) { return function(path, opts) { return _vfsCall('dip-jsh', { op: 'http', args: [cfg, method, path, opts || null] }, function(m) { return m.result; }); }; }
+      return { get: mk('get'), post: mk('post'), put: mk('put'), patch: mk('patch'), 'delete': mk('delete') };
+    } },
+    browser: {
+      findTab: function(q) { return _vfsCall('dip-jsh', { op: 'browser', args: ['findTab', q] }, function(m) { return m.result; }); },
+      ensureTab: function(url, options) { return _vfsCall('dip-jsh', { op: 'browser', args: ['ensureTab', url, options || {}] }, function(m) { return m.result; }); },
+      eval: function(tab, code) { return _vfsCall('dip-jsh', { op: 'browser', args: ['eval', tab, code] }, function(m) { return m.result; }); },
+      evalAsync: function(tab, code) { return _vfsCall('dip-jsh', { op: 'browser', args: ['evalAsync', tab, code] }, function(m) { return m.result; }); },
+      cookie: function(tab, name) { return _vfsCall('dip-jsh', { op: 'browser', args: ['cookie', tab, name] }, function(m) { return m.result; }); },
+      localStorage: function(tab, key) { return _vfsCall('dip-jsh', { op: 'browser', args: ['localStorage', tab, key] }, function(m) { return m.result; }); },
+      fetch: function(tab, url, opts) { return _vfsCall('dip-jsh', { op: 'browser', args: ['fetch', tab, url, opts || {}] }, function(m) { return m.result; }); }
+    },
+    fetchToFile: function(url, path) {
+      return _vfsCall('dip-jsh', { op: 'fetchToFile', args: [url, path] }, function(m) { return m.result; });
     }`;
 
 /** Minimal bridge script: lick + read-only VFS + auto-height. */
@@ -137,7 +170,7 @@ function buildBridgeScript(includeExec: boolean): string {
     },
     stat: function(path) {
       return _vfsCall('dip-stat', { path: path }, function(m) { return m.stat; });
-    }${includeExec ? EXEC_BRIDGE_METHODS : ''}
+    }${includeExec ? EXEC_BRIDGE_METHODS : ''}${includeExec ? JSH_BRIDGE_METHODS : ''}
   };
   function reportHeight() {
     parent.postMessage({ type: 'dip-height',
@@ -465,13 +498,39 @@ async function runDipAgent(
 }
 
 /**
+ * Run a Tier 1 jsh op over the dip exec transport (same worker realm
+ * `slicc.exec` uses). `fetch` gets its base64 body decoded into UTF-8
+ * `body` text, matching the sprinkle bridge's `jshDispatch`. Throws when
+ * no exec handler is wired (parsed from the clean `127` exec result).
+ */
+async function runDipJsh(op: string, args: unknown[]): Promise<unknown> {
+  const value = await runJshOp(runDipExec, op, args);
+  if (op === 'fetch') {
+    const v = value as SprinkleFetchResult;
+    const bin = atob(v.bodyBase64);
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    return { ...v, body: new TextDecoder('utf-8').decode(u8) };
+  }
+  return value;
+}
+
+/**
  * Handle a `dip-exec` / `dip-agent` request from a dip iframe. Gated on
  * `trustedDipWindows` so even a spoofed message from an untrusted iframe
  * can't reach the shell. Returns `true` when the message was handled.
  */
 async function handleDipExecRequest(
   iframeWindow: Window | null,
-  msg: { type: string; id?: number; cmd?: string; prompt?: string; opts?: SprinkleAgentOptions }
+  msg: {
+    type: string;
+    id?: number;
+    cmd?: string;
+    prompt?: string;
+    opts?: SprinkleAgentOptions;
+    op?: string;
+    args?: unknown[];
+  }
 ): Promise<boolean> {
   if (!iframeWindow || typeof msg.id !== 'number') return false;
   const respond = (payload: Record<string, unknown>) => {
@@ -495,6 +554,21 @@ async function handleDipExecRequest(
   if (msg.type === 'dip-agent') {
     const result = await runDipAgent(typeof msg.prompt === 'string' ? msg.prompt : '', msg.opts);
     respond({ type: 'dip-agent-response', result });
+    return true;
+  }
+  if (msg.type === 'dip-jsh') {
+    try {
+      const result = await runDipJsh(
+        typeof msg.op === 'string' ? msg.op : '',
+        Array.isArray(msg.args) ? msg.args : []
+      );
+      respond({ type: 'dip-jsh-response', result });
+    } catch (err) {
+      respond({
+        type: 'dip-jsh-response',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     return true;
   }
   return false;
@@ -578,7 +652,7 @@ export function mountDip(
       msg.type === 'dip-stat'
     ) {
       void handleDipVfsRequest(iframe.contentWindow, msg);
-    } else if (msg.type === 'dip-exec' || msg.type === 'dip-agent') {
+    } else if (msg.type === 'dip-exec' || msg.type === 'dip-agent' || msg.type === 'dip-jsh') {
       void handleDipExecRequest(iframe.contentWindow, msg);
     }
   };
@@ -1010,7 +1084,7 @@ function mountDipExtension(
       msg.type === 'dip-stat'
     ) {
       void handleDipVfsRequest(iframe.contentWindow, msg);
-    } else if (msg.type === 'dip-exec' || msg.type === 'dip-agent') {
+    } else if (msg.type === 'dip-exec' || msg.type === 'dip-agent' || msg.type === 'dip-jsh') {
       void handleDipExecRequest(iframe.contentWindow, msg);
     }
   };
