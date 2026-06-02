@@ -10,7 +10,11 @@
  * offscreen document already has a DOM.
  */
 
+import { getNavigatorHid, getSharedHidRegistry } from '../kernel/hid-device-registry.js';
+import * as hidOps from '../kernel/hid-operations.js';
 import type { PanelRpcHandlers, PanelRpcResults } from '../kernel/panel-rpc.js';
+import * as serialOps from '../kernel/serial-operations.js';
+import { getNavigatorSerial, getSharedSerialRegistry } from '../kernel/serial-port-registry.js';
 import { getNavigatorUsb, getSharedUsbRegistry } from '../kernel/usb-device-registry.js';
 import * as usbOps from '../kernel/usb-operations.js';
 import type { LeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
@@ -40,6 +44,15 @@ export interface StandalonePanelRpcHandlerOptions {
     workerBaseUrl: string | null;
     requestId?: string;
   }) => Promise<PanelRpcResults['tray-leave']> | PanelRpcResults['tray-leave'];
+  /**
+   * Emit an event on the panel-RPC event channel back to worker
+   * subscribers. Wired by `mainStandaloneWorker` to a
+   * `createPanelRpcEventEmitter` instance so the `hid` command's
+   * `watch` subscription receives input reports as the page-side
+   * device emits them. Left undefined in tests / contexts without an
+   * emitter; the subscribe handler then drops reports silently.
+   */
+  emitEvent?: (channel: string, payload: unknown) => void;
 }
 
 /**
@@ -49,6 +62,11 @@ export interface StandalonePanelRpcHandlerOptions {
 export function createStandalonePanelRpcHandlers(
   options: StandalonePanelRpcHandlerOptions = {}
 ): PanelRpcHandlers {
+  // Active `hid watch` subscriptions, keyed by device handle. Each maps
+  // to the page-side `inputreport` unsubscribe so the matching
+  // `hid-unsubscribe-input-reports` op (or a re-subscribe) tears it down.
+  const hidSubscriptions = new Map<string, () => void>();
+
   return {
     'page-info': () => ({
       origin: window.location.origin,
@@ -362,6 +380,159 @@ export function createStandalonePanelRpcHandlers(
       await usbOps.usbReset(usbRegistry(), handle);
       return { done: true };
     },
+
+    // ── WebHID ────────────────────────────────────────────────────────
+    // Mirrors the WebUSB handlers above, keyed by opaque handles backed
+    // by the page-side `HidDeviceHandleRegistry`. `hid-request` calls
+    // `requestDevice` and therefore only succeeds during a user gesture.
+    // `hid-subscribe-input-reports` attaches an `inputreport` listener
+    // that fans reports back over the event channel via `emitEvent`.
+    'hid-list': async () => ({ devices: await hidOps.hidList(hidRegistry(), requireHid()) }),
+
+    'hid-request': async ({ filters }) => ({
+      device: await hidOps.hidRequest(hidRegistry(), requireHid(), filters),
+    }),
+
+    'hid-device-info': ({ handle }) => ({
+      device: hidOps.hidDeviceInfo(hidRegistry(), handle),
+    }),
+
+    'hid-open': async ({ handle }) => {
+      await hidOps.hidOpen(hidRegistry(), handle);
+      return { done: true };
+    },
+
+    'hid-close': async ({ handle }) => {
+      await hidOps.hidClose(hidRegistry(), handle);
+      return { done: true };
+    },
+
+    'hid-send-report': async ({ handle, reportId, bytes }) => {
+      await hidOps.hidSendReport(hidRegistry(), handle, reportId, bytes);
+      return { done: true };
+    },
+
+    'hid-send-feature-report': async ({ handle, reportId, bytes }) => {
+      await hidOps.hidSendFeatureReport(hidRegistry(), handle, reportId, bytes);
+      return { done: true };
+    },
+
+    'hid-receive-feature-report': async ({ handle, reportId }) =>
+      hidOps.hidReceiveFeatureReport(hidRegistry(), handle, reportId),
+
+    'hid-subscribe-input-reports': ({ handle }) => {
+      // Replace any existing subscription for this handle so a
+      // re-subscribe doesn't leak the previous listener.
+      hidSubscriptions.get(handle)?.();
+      const unsubscribe = hidOps.hidSubscribeInputReports(hidRegistry(), handle, (report) => {
+        options.emitEvent?.('hid-input-report', {
+          handle,
+          reportId: report.reportId,
+          bytes: report.bytes,
+        });
+      });
+      hidSubscriptions.set(handle, unsubscribe);
+      return { done: true };
+    },
+
+    'hid-unsubscribe-input-reports': ({ handle }) => {
+      hidSubscriptions.get(handle)?.();
+      hidSubscriptions.delete(handle);
+      return { done: true };
+    },
+
+    // ── Web Serial ──────────────────────────────────────────────────────
+    // Mirrors the WebUSB handlers above, keyed by opaque handles backed
+    // by the page-side `SerialPortRegistry`. `serial-request` calls
+    // `requestPort` and therefore only succeeds during a user gesture.
+    'serial-list': async () => ({
+      devices: await serialOps.serialList(serialRegistry(), requireSerial()),
+    }),
+
+    'serial-request': async ({ filters }) => ({
+      device: await serialOps.serialRequest(serialRegistry(), requireSerial(), filters),
+    }),
+
+    'serial-device-info': ({ handle }) => ({
+      device: serialOps.serialDeviceInfo(serialRegistry(), handle),
+    }),
+
+    'serial-open': async ({ handle, options }) => {
+      await serialOps.serialOpen(serialRegistry(), handle, options);
+      return { done: true };
+    },
+
+    'serial-close': async ({ handle }) => {
+      await serialOps.serialClose(serialRegistry(), handle);
+      return { done: true };
+    },
+
+    'serial-read': async ({ handle, maxBytes, until, timeoutMs }) => {
+      const bytes = await serialOps.serialRead(serialRegistry(), handle, {
+        maxBytes,
+        until: until ? new Uint8Array(until) : undefined,
+        timeoutMs,
+      });
+      const buffer = bytes.buffer.slice(
+        bytes.byteOffset,
+        bytes.byteOffset + bytes.byteLength
+      ) as ArrayBuffer;
+      return { bytes: buffer };
+    },
+
+    'serial-write': async ({ handle, bytes }) => ({
+      bytesWritten: await serialOps.serialWrite(serialRegistry(), handle, new Uint8Array(bytes)),
+    }),
+
+    'serial-get-signals': async ({ handle }) => ({
+      signals: await serialOps.serialGetSignals(serialRegistry(), handle),
+    }),
+
+    'serial-set-signals': async ({ handle, signals }) => {
+      await serialOps.serialSetSignals(serialRegistry(), handle, signals);
+      return { done: true };
+    },
+
+    // ── esptool ──────────────────────────────────────────────────────
+    // High-level ESP flasher ops for the worker-side `esptool` command.
+    // esptool-js is heavy (pako + per-chip firmware stubs), so the
+    // wrapper is dynamically imported on first use to keep it out of the
+    // eager page bundle. Each esptool terminal line is fanned back to the
+    // worker on the `esptool-progress` channel so flash progress streams.
+    'esptool-chip-info': async ({ handle, baudRate }) => {
+      const esptool = await import('../kernel/esptool-operations.js');
+      return esptool.esptoolChipInfo(serialRegistry(), handle, baudRate, (line) =>
+        options.emitEvent?.('esptool-progress', { handle, line })
+      );
+    },
+
+    'esptool-read-mac': async ({ handle, baudRate }) => {
+      const esptool = await import('../kernel/esptool-operations.js');
+      return esptool.esptoolReadMac(serialRegistry(), handle, baudRate, (line) =>
+        options.emitEvent?.('esptool-progress', { handle, line })
+      );
+    },
+
+    'esptool-erase-flash': async ({ handle, baudRate }) => {
+      const esptool = await import('../kernel/esptool-operations.js');
+      await esptool.esptoolEraseFlash(serialRegistry(), handle, baudRate, (line) =>
+        options.emitEvent?.('esptool-progress', { handle, line })
+      );
+      return { done: true };
+    },
+
+    'esptool-flash': async ({ handle, baudRate, eraseAll, segments }) => {
+      const esptool = await import('../kernel/esptool-operations.js');
+      await esptool.esptoolFlash(
+        serialRegistry(),
+        handle,
+        baudRate,
+        eraseAll,
+        segments.map((s) => ({ address: s.address, data: new Uint8Array(s.bytes) })),
+        (line) => options.emitEvent?.('esptool-progress', { handle, line })
+      );
+      return { done: true };
+    },
   };
 }
 
@@ -375,6 +546,30 @@ function requireUsb() {
   const usb = getNavigatorUsb();
   if (!usb) throw new Error('WebUSB is unavailable in this browser');
   return usb;
+}
+
+/** Shared page-side WebHID registry (lazy singleton). */
+function hidRegistry() {
+  return getSharedHidRegistry();
+}
+
+/** Resolve `navigator.hid` or throw a clear error for the worker side. */
+function requireHid() {
+  const hid = getNavigatorHid();
+  if (!hid) throw new Error('WebHID is unavailable in this browser');
+  return hid;
+}
+
+/** Shared page-side Web Serial registry (lazy singleton). */
+function serialRegistry() {
+  return getSharedSerialRegistry();
+}
+
+/** Resolve `navigator.serial` or throw a clear error for the worker side. */
+function requireSerial() {
+  const serial = getNavigatorSerial();
+  if (!serial) throw new Error('Web Serial is unavailable in this browser');
+  return serial;
 }
 
 // ── Camera capture (page-side) ──────────────────────────────────────

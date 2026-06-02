@@ -2662,8 +2662,14 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // typed in the worker terminal has to bridge here to reach
   // `pageLeaderTray.reset()`. The callback reads the current value of
   // `pageLeaderTray` so it picks up assignments made after install.
-  const { installPanelRpcHandler } = await import('../kernel/panel-rpc.js');
+  const { installPanelRpcHandler, createPanelRpcEventEmitter } = await import(
+    '../kernel/panel-rpc.js'
+  );
   const { createStandalonePanelRpcHandlers } = await import('./panel-rpc-handlers.js');
+  // Page-side emitter for the panel-RPC event channel — drives the
+  // `hid` command's `watch` subscription by pushing input reports to
+  // the worker as the page-side device emits them.
+  const panelRpcEventEmitter = createPanelRpcEventEmitter({ instanceId });
   const stopPanelRpcHandler = installPanelRpcHandler({
     instanceId,
     handlers: createStandalonePanelRpcHandlers({
@@ -2678,12 +2684,20 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       // non-transferable WebRTC resources and live on the page.
       leaveTray: async ({ workerBaseUrl, requestId }) =>
         await performTrayLeaveLocally({ workerBaseUrl, requestId }),
+      emitEvent: (channel, payload) => panelRpcEventEmitter.emit(channel, payload),
     }),
   });
   // Tear down on session reload so the handler doesn't outlive its
   // page (the channel would still receive requests and try to call
   // into a torn-down DOM).
-  window.addEventListener('beforeunload', () => stopPanelRpcHandler(), { once: true });
+  window.addEventListener(
+    'beforeunload',
+    () => {
+      stopPanelRpcHandler();
+      panelRpcEventEmitter.dispose();
+    },
+    { once: true }
+  );
 
   await sprinkleManager.refresh();
   layout.onSprinkleClose = (name) => sprinkleManager.close(name);

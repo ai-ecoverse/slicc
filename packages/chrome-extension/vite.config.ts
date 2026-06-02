@@ -256,6 +256,22 @@ export default defineConfig(({ mode }) => ({
           resolve(Dirname, 'usb-picker-popup.js'),
           resolve(outDir, 'usb-picker-popup.js')
         );
+        copyFileSync(
+          resolve(Dirname, 'hid-picker-popup.html'),
+          resolve(outDir, 'hid-picker-popup.html')
+        );
+        copyFileSync(
+          resolve(Dirname, 'hid-picker-popup.js'),
+          resolve(outDir, 'hid-picker-popup.js')
+        );
+        copyFileSync(
+          resolve(Dirname, 'serial-picker-popup.html'),
+          resolve(outDir, 'serial-picker-popup.html')
+        );
+        copyFileSync(
+          resolve(Dirname, 'serial-picker-popup.js'),
+          resolve(outDir, 'serial-picker-popup.js')
+        );
         copyFileSync(resolve(Dirname, 'secrets.html'), resolve(outDir, 'secrets.html'));
         // secrets.js is built from src/secrets-entry.ts via esbuild below;
         // see the 'build-secrets-page' plugin.

@@ -41,6 +41,14 @@
 import type { OAuthExtraDomainsStore } from '@slicc/shared-ts';
 import type { LeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import type { TrayLeaveResult } from '../scoops/tray-leave.js';
+import type { HidDeviceFilter, HidDeviceInfo } from './hid-device-registry.js';
+import type {
+  SerialDeviceInfo,
+  SerialFilter,
+  SerialInputSignals,
+  SerialOpenOptions,
+  SerialOutputSignals,
+} from './serial-port-registry.js';
 import type { UsbControlSetup, UsbDeviceFilter, UsbDeviceInfo } from './usb-device-registry.js';
 
 const PANEL_RPC_CHANNEL = 'slicc-panel-rpc';
@@ -202,7 +210,64 @@ export type PanelRpcRequest =
       op: 'usb-transfer-out';
       payload: { handle: string; endpointNumber: number; bytes: ArrayBuffer };
     }
-  | { op: 'usb-reset'; payload: { handle: string } };
+  | { op: 'usb-reset'; payload: { handle: string } }
+  // ── WebHID bridge ─────────────────────────────────────────────────
+  // Same handle-keyed pattern as the WebUSB bridge above. `HIDDevice`
+  // objects are non-serializable, so every op exchanges only plain data
+  // / `ArrayBuffer`s. `hid-subscribe-input-reports` attaches a page-side
+  // `inputreport` listener that fans reports back to the worker over the
+  // panel-RPC event channel (see `createPanelRpcEventEmitter` /
+  // `PanelRpcClient.onEvent`) on the `hid-input-report` channel.
+  | { op: 'hid-list'; payload?: undefined }
+  | { op: 'hid-request'; payload: { filters: HidDeviceFilter[] } }
+  | { op: 'hid-device-info'; payload: { handle: string } }
+  | { op: 'hid-open'; payload: { handle: string } }
+  | { op: 'hid-close'; payload: { handle: string } }
+  | { op: 'hid-send-report'; payload: { handle: string; reportId: number; bytes: ArrayBuffer } }
+  | {
+      op: 'hid-send-feature-report';
+      payload: { handle: string; reportId: number; bytes: ArrayBuffer };
+    }
+  | { op: 'hid-receive-feature-report'; payload: { handle: string; reportId: number } }
+  | { op: 'hid-subscribe-input-reports'; payload: { handle: string } }
+  | { op: 'hid-unsubscribe-input-reports'; payload: { handle: string } }
+  // ── Web Serial bridge ─────────────────────────────────────────────
+  // Same handle-keyed pattern as the WebUSB bridge above. `SerialPort`
+  // objects are non-serializable, so every op is keyed by an opaque
+  // string handle and exchanges only plain data / `ArrayBuffer`s.
+  | { op: 'serial-list'; payload?: undefined }
+  | { op: 'serial-request'; payload: { filters: SerialFilter[] } }
+  | { op: 'serial-device-info'; payload: { handle: string } }
+  | { op: 'serial-open'; payload: { handle: string; options: SerialOpenOptions } }
+  | { op: 'serial-close'; payload: { handle: string } }
+  | {
+      op: 'serial-read';
+      payload: { handle: string; maxBytes?: number; until?: ArrayBuffer; timeoutMs?: number };
+    }
+  | { op: 'serial-write'; payload: { handle: string; bytes: ArrayBuffer } }
+  | { op: 'serial-get-signals'; payload: { handle: string } }
+  | { op: 'serial-set-signals'; payload: { handle: string; signals: SerialOutputSignals } }
+  // ── esptool bridge ─────────────────────────────────────────────────
+  // High-level ESP flasher ops driven from the worker-side `esptool`
+  // command. esptool-js holds a `SerialPort` (non-serializable), so each
+  // op is keyed by a `SerialPort` handle from the shared serial registry
+  // — the same handle namespace as the `serial` command. Firmware blobs
+  // cross as `ArrayBuffer`s. While an op runs, the page fans esptool's
+  // terminal output back to the worker on the `esptool-progress` event
+  // channel (see `EsptoolProgressEventPayload`) so flash progress lines
+  // surface on the command's stdout.
+  | { op: 'esptool-chip-info'; payload: { handle: string; baudRate: number } }
+  | { op: 'esptool-read-mac'; payload: { handle: string; baudRate: number } }
+  | { op: 'esptool-erase-flash'; payload: { handle: string; baudRate: number } }
+  | {
+      op: 'esptool-flash';
+      payload: {
+        handle: string;
+        baudRate: number;
+        eraseAll: boolean;
+        segments: Array<{ address: number; bytes: ArrayBuffer }>;
+      };
+    };
 
 export interface PanelRpcResults {
   'page-info': { origin: string; href: string; title: string };
@@ -244,6 +309,69 @@ export interface PanelRpcResults {
   'usb-transfer-in': { status: string; bytes: ArrayBuffer };
   'usb-transfer-out': { status: string; bytesWritten: number };
   'usb-reset': { done: true };
+  'hid-list': { devices: HidDeviceInfo[] };
+  'hid-request': { device: HidDeviceInfo };
+  'hid-device-info': { device: HidDeviceInfo };
+  'hid-open': { done: true };
+  'hid-close': { done: true };
+  'hid-send-report': { done: true };
+  'hid-send-feature-report': { done: true };
+  'hid-receive-feature-report': { reportId: number; bytes: ArrayBuffer };
+  'hid-subscribe-input-reports': { done: true };
+  'hid-unsubscribe-input-reports': { done: true };
+  'serial-list': { devices: SerialDeviceInfo[] };
+  'serial-request': { device: SerialDeviceInfo };
+  'serial-device-info': { device: SerialDeviceInfo };
+  'serial-open': { done: true };
+  'serial-close': { done: true };
+  'serial-read': { bytes: ArrayBuffer };
+  'serial-write': { bytesWritten: number };
+  'serial-get-signals': { signals: SerialInputSignals };
+  'serial-set-signals': { done: true };
+  'esptool-chip-info': EsptoolChipInfo;
+  'esptool-read-mac': { mac: string };
+  'esptool-erase-flash': { done: true };
+  'esptool-flash': { done: true };
+}
+
+/**
+ * Serializable chip identity returned by `esptool-chip-info`. Mirrors the
+ * fields the Python `esptool chip_id` / `read_mac` flow reports.
+ */
+export interface EsptoolChipInfo {
+  /** Short chip family name, e.g. `ESP32`, `ESP32-C3`. */
+  chip: string;
+  /** Full chip description string from esptool-js. */
+  description: string;
+  /** Decoded chip feature flags. */
+  features: string[];
+  /** Crystal frequency in MHz. */
+  crystalMHz: number;
+  /** Factory MAC address as `aa:bb:cc:dd:ee:ff`. */
+  mac: string;
+}
+
+/**
+ * Payload pushed on the `esptool-progress` event channel for each line
+ * esptool-js writes to its terminal while a worker `esptool` op is in
+ * flight (chip detection, erase progress, and `Writing at 0x…` flash
+ * lines). `handle` keys the line to the originating port so concurrent
+ * ops don't cross streams.
+ */
+export interface EsptoolProgressEventPayload {
+  handle: string;
+  line: string;
+}
+
+/**
+ * Payload pushed on the `hid-input-report` event channel for each
+ * `inputreport` the page-side device emits while a worker `hid watch`
+ * subscription is active. `bytes` is the report's data buffer.
+ */
+export interface HidInputReportEventPayload {
+  handle: string;
+  reportId: number;
+  bytes: ArrayBuffer;
 }
 
 export type PanelRpcOp = PanelRpcRequest['op'];
@@ -269,6 +397,19 @@ interface PanelRpcResponseMsg {
   error?: string;
 }
 
+/**
+ * Page→worker push envelope. Unlike request/response, events are
+ * fire-and-forget: the page emits them on a named channel (e.g.
+ * `hid-input-report`) and any worker subscriber registered via
+ * `PanelRpcClient.onEvent` receives them. Used for streaming device
+ * input reports back to a long-lived `hid watch` command.
+ */
+interface PanelRpcEventMsg {
+  type: 'panel-rpc-event';
+  channel: string;
+  payload: unknown;
+}
+
 // ── Worker-side client ──────────────────────────────────────────────
 
 export interface PanelRpcClient {
@@ -277,6 +418,12 @@ export interface PanelRpcClient {
     payload: PanelRpcPayloadFor<O>,
     opts?: { timeoutMs?: number }
   ): Promise<PanelRpcResultFor<O>>;
+  /**
+   * Subscribe to page-emitted events on a named channel. Returns an
+   * unsubscribe function. Multiple subscribers per channel are
+   * supported; each receives every event posted on that channel.
+   */
+  onEvent(channel: string, handler: (payload: unknown) => void): () => void;
   /** Close the BroadcastChannel and reject any in-flight requests. */
   dispose(): void;
 }
@@ -292,6 +439,7 @@ export function createPanelRpcClient(options: { instanceId?: string } = {}): Pan
   if (typeof BroadcastChannel !== 'function') {
     return {
       call: () => Promise.reject(new Error('panel-rpc: BroadcastChannel is unavailable')),
+      onEvent: () => () => {},
       dispose: () => {},
     };
   }
@@ -307,16 +455,49 @@ export function createPanelRpcClient(options: { instanceId?: string } = {}): Pan
     }
   >();
 
+  const eventSubscribers = new Map<string, Set<(payload: unknown) => void>>();
+
   channel.addEventListener('message', (event: MessageEvent) => {
-    const msg = event.data as PanelRpcResponseMsg | undefined;
-    if (msg?.type !== 'panel-rpc-response') return;
-    const slot = pending.get(msg.id);
+    const data = event.data as PanelRpcResponseMsg | PanelRpcEventMsg | undefined;
+    if (data?.type === 'panel-rpc-event') {
+      const subs = eventSubscribers.get(data.channel);
+      if (subs) {
+        for (const handler of subs) {
+          try {
+            handler(data.payload);
+          } catch (err) {
+            console.warn(
+              `panel-rpc: event handler for '${data.channel}' threw:`,
+              err instanceof Error ? err.message : String(err)
+            );
+          }
+        }
+      }
+      return;
+    }
+    if (data?.type !== 'panel-rpc-response') return;
+    const slot = pending.get(data.id);
     if (!slot) return;
-    pending.delete(msg.id);
+    pending.delete(data.id);
     clearTimeout(slot.timer);
-    if (typeof msg.error === 'string') slot.reject(new Error(msg.error));
-    else slot.resolve(msg.result);
+    if (typeof data.error === 'string') slot.reject(new Error(data.error));
+    else slot.resolve(data.result);
   });
+
+  function onEvent(eventChannel: string, handler: (payload: unknown) => void): () => void {
+    let subs = eventSubscribers.get(eventChannel);
+    if (!subs) {
+      subs = new Set();
+      eventSubscribers.set(eventChannel, subs);
+    }
+    subs.add(handler);
+    return () => {
+      const set = eventSubscribers.get(eventChannel);
+      if (!set) return;
+      set.delete(handler);
+      if (set.size === 0) eventSubscribers.delete(eventChannel);
+    };
+  }
 
   function call<O extends PanelRpcOp>(
     op: O,
@@ -346,6 +527,7 @@ export function createPanelRpcClient(options: { instanceId?: string } = {}): Pan
       slot.reject(new Error('panel-rpc: client disposed'));
     }
     pending.clear();
+    eventSubscribers.clear();
     try {
       channel.close();
     } catch {
@@ -353,7 +535,52 @@ export function createPanelRpcClient(options: { instanceId?: string } = {}): Pan
     }
   }
 
-  return { call, dispose };
+  return { call, onEvent, dispose };
+}
+
+// ── Page-side event emitter ─────────────────────────────────────────
+
+export interface PanelRpcEventEmitter {
+  /** Post an event on a named channel to any worker `onEvent` subscriber. */
+  emit(channel: string, payload: unknown): void;
+  /** Close the underlying BroadcastChannel. */
+  dispose(): void;
+}
+
+/**
+ * Build a page-side emitter for the panel-RPC event channel. Worker
+ * commands subscribe via `PanelRpcClient.onEvent`. Constructed on the
+ * same instance-scoped channel name so the worker client receives the
+ * posts (a `BroadcastChannel` never delivers a message to itself, so the
+ * page emitter and the page request-handler can safely share a name).
+ */
+export function createPanelRpcEventEmitter(
+  options: { instanceId?: string } = {}
+): PanelRpcEventEmitter {
+  if (typeof BroadcastChannel !== 'function') {
+    return { emit: () => {}, dispose: () => {} };
+  }
+  const channel = new BroadcastChannel(panelRpcChannelName(options.instanceId));
+  return {
+    emit(eventChannel: string, payload: unknown): void {
+      const msg: PanelRpcEventMsg = { type: 'panel-rpc-event', channel: eventChannel, payload };
+      try {
+        channel.postMessage(msg);
+      } catch (err) {
+        console.warn(
+          `panel-rpc: failed to emit event '${eventChannel}':`,
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+    },
+    dispose(): void {
+      try {
+        channel.close();
+      } catch {
+        /* noop */
+      }
+    },
+  };
 }
 
 // ── Page-side handler ───────────────────────────────────────────────

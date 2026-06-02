@@ -37,9 +37,24 @@
 import type { FitAddon } from '@xterm/addon-fit';
 import type { Terminal } from '@xterm/xterm';
 import { storePendingHandle } from '../fs/mount-picker-popup.js';
+import { parseHidArgs, parseHidFilters } from '../shell/supplemental-commands/hid-command.js';
+import {
+  parseSerialArgs,
+  parseSerialFilters,
+} from '../shell/supplemental-commands/serial-command.js';
 import { parseUsbArgs, parseUsbFilters } from '../shell/supplemental-commands/usb-command.js';
 import type { TerminalEventMsg, TerminalSessionId } from '../shell/terminal-protocol.js';
 import type { OffscreenClient } from '../ui/offscreen-client.js';
+import {
+  getNavigatorHid,
+  getSharedHidRegistry,
+  type HidDeviceFilter,
+} from './hid-device-registry.js';
+import {
+  getNavigatorSerial,
+  getSharedSerialRegistry,
+  type SerialFilter,
+} from './serial-port-registry.js';
 import { type TerminalExecResult, TerminalSessionClient } from './terminal-session-client.js';
 import {
   getNavigatorUsb,
@@ -642,6 +657,20 @@ export class RemoteTerminalView {
       void this.runRemoteWithUsbPicker(usbFilters);
       return;
     }
+    // Pre-intercept `hid request` for the same gesture reason as
+    // `usb request`: `navigator.hid.requestDevice` needs a user gesture.
+    const hidFilters = parseHidRequestCommand(command);
+    if (hidFilters) {
+      void this.runRemoteWithHidPicker(hidFilters);
+      return;
+    }
+    // Pre-intercept `serial request` for the same gesture reason:
+    // `navigator.serial.requestPort` needs a user gesture.
+    const serialFilters = parseSerialRequestCommand(command);
+    if (serialFilters) {
+      void this.runRemoteWithSerialPicker(serialFilters);
+      return;
+    }
     void this.runRemote(command);
   }
 
@@ -674,6 +703,81 @@ export class RemoteTerminalView {
         return;
       }
       await this.runRemoteImpl(`usb request --__resolved ${handle}`);
+    } finally {
+      this.isExecuting = false;
+      this.showPrompt();
+    }
+  }
+
+  /**
+   * Run the WebHID chooser on the Enter-keystroke gesture, register the
+   * granted device in the page-side registry, then forward
+   * `hid request --__resolved <handle>` so the worker command renders
+   * the device descriptor. `navigator.hid.requestDevice` resolves with
+   * an array; an empty array (or NotFound/Abort) means cancellation.
+   */
+  private async runRemoteWithHidPicker(filters: HidDeviceFilter[]): Promise<void> {
+    this.isExecuting = true;
+    try {
+      const hid = getNavigatorHid();
+      if (!hid) {
+        this.terminal?.writeln('hid: WebHID is not available in this browser');
+        return;
+      }
+      let handle: string;
+      try {
+        const devices = await hid.requestDevice({ filters });
+        const device = devices[0];
+        if (!device) {
+          this.terminal?.writeln('hid: cancelled');
+          return;
+        }
+        handle = getSharedHidRegistry().register(device);
+      } catch (err: unknown) {
+        const name = err instanceof Error ? err.name : '';
+        if (name === 'NotFoundError' || name === 'AbortError') {
+          this.terminal?.writeln('hid: cancelled');
+          return;
+        }
+        this.terminal?.writeln(`hid: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
+      await this.runRemoteImpl(`hid request --__resolved ${handle}`);
+    } finally {
+      this.isExecuting = false;
+      this.showPrompt();
+    }
+  }
+
+  /**
+   * Run the Web Serial chooser on the Enter-keystroke gesture, register
+   * the granted port in the page-side registry, then forward
+   * `serial request --__resolved <handle>` so the worker command renders
+   * the port descriptor. `navigator.serial.requestPort` rejects with
+   * NotFound/Abort when the user dismisses the chooser.
+   */
+  private async runRemoteWithSerialPicker(filters: SerialFilter[]): Promise<void> {
+    this.isExecuting = true;
+    try {
+      const serial = getNavigatorSerial();
+      if (!serial) {
+        this.terminal?.writeln('serial: Web Serial is not available in this browser');
+        return;
+      }
+      let handle: string;
+      try {
+        const port = await serial.requestPort(filters.length ? { filters } : {});
+        handle = getSharedSerialRegistry().register(port);
+      } catch (err: unknown) {
+        const name = err instanceof Error ? err.name : '';
+        if (name === 'NotFoundError' || name === 'AbortError') {
+          this.terminal?.writeln('serial: cancelled');
+          return;
+        }
+        this.terminal?.writeln(`serial: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
+      await this.runRemoteImpl(`serial request --__resolved ${handle}`);
     } finally {
       this.isExecuting = false;
       this.showPrompt();
@@ -868,6 +972,37 @@ function parseUsbRequestCommand(line: string): UsbDeviceFilter[] | null {
   }
   const { flags } = parseUsbArgs(tokens.slice(2));
   return parseUsbFilters(flags);
+}
+
+/**
+ * Parse a typed command line and return the WebHID filters when it is a
+ * gesture-requiring `hid request` (no `--__resolved` handle and no help
+ * flag). Returns `null` for anything else so the worker handles it.
+ */
+function parseHidRequestCommand(line: string): HidDeviceFilter[] | null {
+  const tokens = line.trim().split(/\s+/);
+  if (tokens[0] !== 'hid' || tokens[1] !== 'request') return null;
+  if (tokens.includes('--__resolved') || tokens.includes('--help') || tokens.includes('-h')) {
+    return null;
+  }
+  const { flags } = parseHidArgs(tokens.slice(2));
+  return parseHidFilters(flags);
+}
+
+/**
+ * Parse a typed command line and return the Web Serial filters when it
+ * is a gesture-requiring `serial request` (no `--__resolved` handle and
+ * no help flag). Returns `null` for anything else so the worker handles
+ * it.
+ */
+function parseSerialRequestCommand(line: string): SerialFilter[] | null {
+  const tokens = line.trim().split(/\s+/);
+  if (tokens[0] !== 'serial' || tokens[1] !== 'request') return null;
+  if (tokens.includes('--__resolved') || tokens.includes('--help') || tokens.includes('-h')) {
+    return null;
+  }
+  const { flags } = parseSerialArgs(tokens.slice(2));
+  return parseSerialFilters(flags);
 }
 
 // ---------------------------------------------------------------------------

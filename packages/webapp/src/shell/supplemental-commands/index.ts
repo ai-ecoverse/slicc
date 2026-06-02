@@ -16,9 +16,11 @@ import { createCostCommand } from './cost-command.js';
 import { createCrontaskCommand } from './crontask-command.js';
 import { createDiscoverCommand } from './discover-command.js';
 import { createEsbuildCommand } from './esbuild-command.js';
+import { createEsptoolCommand } from './esptool-command.js';
 import { createFfmpegCommand } from './ffmpeg-command.js';
 import { createFsWatchCommand } from './fswatch-command.js';
 import { createCommandsCommand } from './help-command.js';
+import { createHidCommand } from './hid-command.js';
 import { createHostCommand } from './host-command.js';
 import type { ImgcatCommandOptions } from './imgcat-command.js';
 import { createImgcatCommand } from './imgcat-command.js';
@@ -40,6 +42,7 @@ import { createRsyncCommand } from './rsync-command.js';
 import { createSayCommand } from './say-command.js';
 import { createScreencaptureCommand } from './screencapture-command.js';
 import { createSecretCommand } from './secret-command.js';
+import { createSerialCommand } from './serial-command.js';
 import { createServeCommand } from './serve-command.js';
 import { createSprinkleCommand } from './sprinkle-command.js';
 import { createSqliteCommand } from './sqlite-command.js';
@@ -137,6 +140,9 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createPsCommand({ processManager: options.processManager }),
     createKillCommand({ processManager: options.processManager }),
     createUsbCommand(),
+    createHidCommand(),
+    createSerialCommand(),
+    createEsptoolCommand(),
   ];
 
   if (options.fs) {
