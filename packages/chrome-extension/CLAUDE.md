@@ -126,6 +126,16 @@ and self-close, but DO NOT count as the canonical detached tab.
 - **Extension-relative scripts** must load statically in `<head>`, not via dynamic `createElement('script').src` (opaque origin blocks runtime loads).
 - See `docs/pitfalls.md` "Extension Sandbox: External Scripts & Opaque Origin" for the full reference.
 
+## Device Picker Popups
+
+The `usb` / `serial` / `hid` shell commands call WebUSB / Web Serial / WebHID device pickers (`navigator.usb` / `navigator.serial` / `navigator.hid` `requestDevice`), which the side panel cannot host reliably. The extension runs each chooser in a dedicated popup window via `chrome.windows.create`, mirroring `mount-popup.html` / `voice-popup.html`. Three popup entry points are bundled (HTML + JS, plain static files copied into `dist/extension/` by the `closeBundle` hook in `vite.config.ts` — they are not Vite `rollupOptions.input` entries):
+
+- `usb-picker-popup.html` / `usb-picker-popup.js`
+- `serial-picker-popup.html` / `serial-picker-popup.js`
+- `hid-picker-popup.html` / `hid-picker-popup.js`
+
+Each popup runs `requestDevice` on its own button-click gesture (satisfying Chrome's user-gesture rule), then posts the granted device identifiers back via `chrome.runtime` messaging. The page-side launchers (`usb-picker.ts` / `serial-picker.ts` / `hid-picker.ts` in `packages/webapp/src/shell/supplemental-commands/`) re-acquire the now-granted device in their own realm. Any change to the `closeBundle` static-asset copy list must keep these six files listed or the picker windows 404.
+
 ## Dual-Context Shell Model
 
 The extension has **two WasmShell instances**:
