@@ -516,4 +516,63 @@ describe('oauth-token command', () => {
     expect(result.stderr).toContain('no masked value');
     expect(result.stderr).toContain('github');
   });
+
+  it('--renew triggers onSilentRenew and reports success', async () => {
+    const onSilentRenew = vi.fn(async () => 'fresh-token');
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'adobe',
+      name: 'Adobe',
+      isOAuth: true,
+      onSilentRenew,
+    } as never);
+    mockGetOAuthAccountInfo
+      .mockReturnValueOnce({ token: 'old', expiresAt: Date.now() - 1000, expired: true })
+      .mockReturnValueOnce({
+        token: 'fresh-token',
+        expiresAt: Date.now() + 24 * 3600_000,
+        expired: false,
+      });
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['--renew', 'adobe'], createMockCtx());
+
+    expect(onSilentRenew).toHaveBeenCalledTimes(1);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('SUCCESS');
+  });
+
+  it('--renew reports failure when onSilentRenew returns null', async () => {
+    const onSilentRenew = vi.fn(async () => null);
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'adobe',
+      name: 'Adobe',
+      isOAuth: true,
+      onSilentRenew,
+    } as never);
+    mockGetOAuthAccountInfo.mockReturnValue({
+      token: 'old',
+      expiresAt: Date.now() - 1000,
+      expired: true,
+    });
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['--renew', 'adobe'], createMockCtx());
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain('FAILED');
+  });
+
+  it('--renew errors when the provider has no onSilentRenew hook', async () => {
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'noauth',
+      name: 'NoAuth',
+      isOAuth: true,
+    } as never);
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['--renew', 'noauth'], createMockCtx());
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('no onSilentRenew hook');
+  });
 });

@@ -202,6 +202,7 @@ The webapp consumes `@slicc/shared-ts` for secret masking primitives. `createPro
 
 - `packages/webapp/src/ui/oauth-bootstrap.ts` is awaited in `main()` before the kernel-worker scoops start. For each non-expired account it re-pushes the masked replica; for each expiring/expired one it invokes the provider's optional `onSilentRenew` hook (page context has `window`, so the IMS popup/iframe flow works there). Bounded by a 10s soft timeout to avoid deadlocking the UI on a hung IMS popup. The worker reads the freshly-renewed token from its `localStorage` shim once it boots.
 - `provider.onSilentRenew` is the new hook on `ProviderConfig` — providers that support silent renewal implement it (Adobe does via `silentRenewToken`). The worker-side `silentRenewToken` short-circuits with `if (typeof window === 'undefined') return null;` so a stale-token stream attempt from the worker surfaces a clean "session expired" error instead of `window is not defined`.
+- Extension silent renewal runs `launchWebAuthFlow` non-interactively (`interactive:false` + `abortOnLoadForNonInteractive:false` + `timeoutMsForNonInteractive`) and throttles repeat failures via a 5-minute cooldown; see `docs/oauth-intercept.md` "Silent token renewal".
 
 ### Per-provider extra allowed domains
 

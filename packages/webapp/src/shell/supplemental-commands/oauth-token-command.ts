@@ -14,6 +14,9 @@ Provider mode:
   oauth-token                     Get token for the currently selected provider
   oauth-token --list              List OAuth providers with status
   oauth-token --scope <scopes>    Request specific OAuth scopes (comma-separated)
+  oauth-token --renew [<id>]      Force a silent token renewal now (onSilentRenew),
+                                  bypassing the expiry gate. Reports success and
+                                  the new expiry.
 
 Declarative intercept mode (no provider needed):
   oauth-token --from-file <path>  Run an intercepted OAuth flow defined by a
@@ -74,6 +77,11 @@ export function createOAuthTokenCommand(): Command {
         getRegisteredProviderConfig,
         getOAuthAccountInfo
       );
+    }
+
+    // Force a silent renewal now via onSilentRenew(), bypassing the expiry gate.
+    if (args.includes('--renew')) {
+      return runSilentRenew(args);
     }
 
     // ── Declarative intercept mode: --from-file / --intercept ──
@@ -232,6 +240,94 @@ export function createOAuthTokenCommand(): Command {
       return { stdout: '', stderr: `oauth-token: login failed: ${msg}\n`, exitCode: 1 };
     }
   });
+}
+
+/**
+ * Force a silent token renewal now via the provider's `onSilentRenew()` hook,
+ * bypassing the expiry gate. Reports whether a fresh token came back and the
+ * new expiry — useful for verifying renewal without waiting for natural expiry.
+ */
+async function runSilentRenew(
+  args: string[]
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const { getSelectedProvider, getOAuthAccountInfo } = await import(
+    '../../ui/provider-settings.js'
+  );
+  const { getRegisteredProviderConfig, getRegisteredProviderIds } = await import(
+    '../../providers/index.js'
+  );
+
+  // First non-flag arg is the provider id; fall back to the selected
+  // provider, then the first registered provider that supports renewal.
+  const positional = args.filter((a) => !a.startsWith('-'));
+  let providerId: string | undefined = positional[0];
+  if (!providerId) {
+    const selected = getSelectedProvider();
+    if (getRegisteredProviderConfig(selected)?.onSilentRenew) {
+      providerId = selected;
+    } else {
+      providerId = getRegisteredProviderIds().find(
+        (id) => getRegisteredProviderConfig(id)?.onSilentRenew
+      );
+    }
+  }
+  if (!providerId) {
+    return errResult('oauth-token --renew: no provider supports silent renewal');
+  }
+
+  const config = getRegisteredProviderConfig(providerId);
+  if (!config) {
+    return errResult(`oauth-token --renew: unknown provider "${providerId}"`);
+  }
+  if (!config.onSilentRenew) {
+    return errResult(`oauth-token --renew: provider "${providerId}" has no onSilentRenew hook`);
+  }
+
+  const before = getOAuthAccountInfo(providerId);
+  const beforeToken = before?.token;
+
+  const lines: string[] = [`oauth-token --renew ${providerId}`];
+  lines.push(`  before: ${describeAccount(before)}`);
+
+  let result: string | null = null;
+  let threw: string | null = null;
+  try {
+    result = await config.onSilentRenew();
+  } catch (err) {
+    threw = err instanceof Error ? err.message : String(err);
+  }
+
+  if (threw) {
+    lines.push(`  silent renewal: ERROR — ${threw}`);
+  } else if (result) {
+    const after = getOAuthAccountInfo(providerId);
+    const changed = Boolean(beforeToken && after?.token && beforeToken !== after.token);
+    lines.push(`  silent renewal: SUCCESS${changed ? ' — token refreshed' : ' (token unchanged)'}`);
+    lines.push(`  after:  ${describeAccount(after)}`);
+  } else {
+    lines.push('  silent renewal: FAILED (onSilentRenew returned null)');
+    lines.push('  → no window should have appeared. Open DevTools console and');
+    lines.push('    look for "[oauth-service] Extension OAuth error" / "[adobe]" to see');
+    lines.push('    the IMS/Chrome reason (e.g. login_required).');
+  }
+
+  return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: result ? 0 : 1 };
+}
+
+function describeAccount(
+  info: { expiresAt?: number; expired: boolean } | null | undefined
+): string {
+  if (!info) return 'no token';
+  if (info.expired) return 'expired';
+  if (info.expiresAt) {
+    const rem = info.expiresAt - Date.now();
+    if (rem > 0) {
+      const h = Math.floor(rem / 3600000);
+      const m = Math.floor((rem % 3600000) / 60000);
+      return h > 0 ? `valid, expires in ${h}h ${m}m` : `valid, expires in ${m}m`;
+    }
+  }
+  return 'valid';
 }
 
 /**
