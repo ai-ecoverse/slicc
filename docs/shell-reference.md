@@ -673,6 +673,40 @@ The agent can dynamically discover new scripts via `commands`, then invoke them 
 
 ---
 
+## Sprinkle & Dip Bridge
+
+`.shtml` sprinkles (and trusted dips) talk to SLICC through a `slicc.*` bridge object injected into their sandboxed iframe — usable from `<script>` tags and `onclick` attributes. Beyond lick events and the read-only VFS helpers, the bridge exposes the same Tier 1 jsh runtime globals that `.jsh` scripts use. Every call routes through the **same worker shell** `.jsh` / `node -e` runs in, so a sprinkle reaches the full supplemental-command surface and any `.jsh` script on the VFS.
+
+**Files**: `packages/webapp/src/ui/sprinkle-bridge.ts` (sprinkles), `packages/webapp/src/ui/dip.ts` (dips), `packages/chrome-extension/sprinkle-sandbox.html` (extension-mode `postMessage` relay).
+
+### Shell & agent surface
+
+| Method                       | Returns                               | Notes                                                                                                                                                                                                                                                               |
+| ---------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `slicc.exec(cmd)`            | `Promise<{stdout, stderr, exitCode}>` | Runs `cmd` in the worker shell. A non-zero `exitCode` — or `127` when no shell bridge is wired — is returned in the result, never thrown.                                                                                                                           |
+| `slicc.exec.spawn(argv)`     | `Promise<{stdout, stderr, exitCode}>` | Array-form exec that bypasses shell parsing (safer for untrusted args).                                                                                                                                                                                             |
+| `slicc.agent(prompt, opts?)` | `Promise<{stdout, exitCode}>`         | Spawns a one-shot sub-scoop, blocks until it completes, resolves with its final message on `stdout`. `opts`: `{cwd, allowedCommands, model, thinking, readOnly}`. Sugar over `slicc.exec` building the `agent` command. Errors come back on `stdout`, never thrown. |
+
+### Tier 1 jsh globals
+
+These mirror the `.jsh` runtime globals (see `jsh-runtime-extensions.md` in the skill-authoring skill). Each routes through one round-trip into the worker realm.
+
+| Method                                                              | Returns                                                             | Notes                                                                                                                        |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `slicc.fetch(url, init?)`                                           | `Promise<{ok, status, statusText, url, headers, body, bodyBase64}>` | Proxied, secret-injecting fetch — **not** the iframe's CORS-bound native `fetch`.                                            |
+| `slicc.http.client(config)`                                         | client with `get`/`post`/`put`/`patch`/`delete`                     | Higher-level API client over the proxied fetch. `config`: `{baseUrl, token, headers, retry, timeoutMs}`.                     |
+| `slicc.browser.*`                                                   | `Promise<unknown>`                                                  | Playwright-style CDP surface (`findTab`, `ensureTab`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`). Trusted-only. |
+| `slicc.fetchToFile(url, path)`                                      | `Promise<number>`                                                   | Download a URL (via the proxied fetch) straight to a VFS file; resolves with the byte count.                                 |
+| `slicc.readFileBinary(path)` / `slicc.writeFileBinary(path, bytes)` | `Promise<Uint8Array>` / `Promise<void>`                             | Binary VFS I/O (parity with the jsh `fs` global).                                                                            |
+
+### Trust boundary
+
+- **Sprinkles** are sourced from the VFS (under `/shared/sprinkles/`, `/workspace/sprinkles/`, etc.) and always get the full bridge.
+- **Trusted dips** — `.shtml` loaded from an image reference under a known sprinkles directory — get `exec`/`agent` and the Tier 1 jsh globals too.
+- **Untrusted inline-chat dips** (fenced ` ```shtml ` blocks emitted by the agent) NEVER receive `exec`/`agent`/`browser` or the other realm-backed globals, so an attacker-controlled cone reply can't spawn shell commands or scoops. `slicc.browser` is trusted-only by construction.
+
+---
+
 ## Binary Handling
 
 SLICC's shell supports binary data (images, PDFs, archives) via careful encoding.
