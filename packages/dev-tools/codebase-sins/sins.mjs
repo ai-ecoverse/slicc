@@ -100,7 +100,7 @@ export function selectSinOfDay(date = new Date()) {
 
 /**
  * Resolve a workflow_dispatch override that may be a 1-7 rank or a sin
- * name/id. Falls back to `selectSinOfDay()` when empty or invalid. Pure.
+ * name/id. Falls back to `selectSinOfDay()` when empty or invalid. No I/O.
  * @param {string|number|null|undefined} override
  * @returns {(typeof SINS)[number]}
  */
