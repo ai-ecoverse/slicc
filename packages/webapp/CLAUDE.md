@@ -92,6 +92,15 @@ Deep reference: `docs/kernel/process-model.md`.
 - Active surface is file tools, `bash`, and scoop/nanoclaw helpers.
 - Browser automation is intentionally routed through shell commands rather than a separate tool family.
 
+### Sudo (agent action approvals)
+
+- Paths: parser/matcher `shell/sudo/sudoers.ts`, FS gate `fs/sudo-fs.ts`, command gate `shell/sudo/command-guard.ts`, brokers + manager `sudo/`.
+- `SudoManager` (`sudo/sudo-manager.ts`) is the per-float policy store: the `Orchestrator` constructs one in `init()` once the shared VFS + `FsWatcher` exist, seeds the default `/etc/sudoers` template (bundled from `packages/vfs-root/etc/sudoers`), loads + merges `/etc/sudoers` and `/etc/sudoers.d/*` into a live `SudoersPolicy`, and re-reads it on any change so edits and "Always" grants take effect with no restart.
+- Wiring happens in `scoops/scoop-context.ts`: the agent's FS handle is wrapped once with `createSudoFs` and that single gated handle backs BOTH the file tools and the shell, so reads/writes funnel through one `matchPath` check; the shell also gets `SudoManager.getShellConfig()` for command-level gating. The panel terminal is intentionally NOT gated — the human typing there is the approver.
+- Brokers are float-specific (`createSudoBroker`): the offscreen/agent realm relays to the side-panel responder, standalone/Electron POSTs `/api/sudo-approve`. The agent can request approval but can never fabricate the decision.
+- Self-protection is hardcoded in `matchPath`: writes to `/etc/sudoers` + `/etc/sudoers.d/*` always require approval regardless of policy. "Always" command grants are appended to `/etc/sudoers.d/granted` via the manager's raw-FS sink (so the grant write itself does not re-prompt).
+- Deep reference: `docs/sudo.md`.
+
 ### Tray Sync (multi-browser leader/follower)
 
 - Path: `packages/webapp/src/scoops/tray-*`, plus page wiring in `packages/webapp/src/ui/page-leader-tray.ts` and `packages/webapp/src/ui/page-follower-tray.ts`.

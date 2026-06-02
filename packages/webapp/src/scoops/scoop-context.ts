@@ -29,8 +29,10 @@ import { fetchSecretEnvVars } from '../core/secret-env.js';
 import type { SessionStore } from '../core/session.js';
 import type { VirtualFS } from '../fs/index.js';
 import type { RestrictedFS } from '../fs/restricted-fs.js';
+import { createSudoFs } from '../fs/sudo-fs.js';
 import type { Process, ProcessManager } from '../kernel/process-manager.js';
 import { WasmShell } from '../shell/index.js';
+import type { SudoManager } from '../sudo/sudo-manager.js';
 import { createBashTool, createFileTools } from '../tools/index.js';
 import {
   getApiKey,
@@ -284,6 +286,7 @@ export class ScoopContext {
 
   private skillsFs: VirtualFS | null = null;
   private skillsDir: string = '/workspace/skills';
+  private sudoManager: SudoManager | null = null;
 
   constructor(
     scoop: RegisteredScoop,
@@ -292,7 +295,8 @@ export class ScoopContext {
     sessionStore?: SessionStore,
     skillsFs?: VirtualFS,
     coneJid?: string,
-    processManager?: ProcessManager
+    processManager?: ProcessManager,
+    sudoManager?: SudoManager | null
   ) {
     this.scoop = scoop;
     this.callbacks = callbacks;
@@ -301,6 +305,7 @@ export class ScoopContext {
     this.skillsFs = skillsFs ?? null;
     this.coneJid = coneJid;
     this.processManager = processManager ?? null;
+    this.sudoManager = sudoManager ?? null;
     // Internal persistence key — stable across days/restarts so saved
     // conversations can be restored by `SessionStore.load`. The outgoing
     // Adobe `X-Session-Id` is computed separately in `init()`.
@@ -339,9 +344,24 @@ export class ScoopContext {
       // Real values never leave the server — only deterministic masked values are used.
       const secretEnv = await fetchSecretEnvVars();
 
+      // Wrap the agent's FS handle with the sudo gate. This single gated handle
+      // backs BOTH the file tools and the shell's bash file ops, so reads/writes
+      // (and the always-on /etc/sudoers self-protection) funnel through one
+      // `matchPath` check against the live policy. The shell's "Always" command
+      // grants are routed through the manager's raw-FS sink (see getShellConfig)
+      // so they don't re-prompt on the grant write.
+      const gatedFs = (
+        this.sudoManager
+          ? createSudoFs(this.fs, {
+              broker: this.sudoManager.getBroker(),
+              getPolicy: () => this.sudoManager!.getPolicy(),
+            })
+          : this.fs
+      ) as VirtualFS;
+
       // Pass effectiveSkillsFs for JSH discovery so scoops can find .jsh files from all loaded skills
       this.shell = new WasmShell({
-        fs: this.fs as VirtualFS,
+        fs: gatedFs,
         cwd,
         env: Object.keys(secretEnv).length > 0 ? secretEnv : undefined,
         browserAPI: browser,
@@ -355,6 +375,9 @@ export class ScoopContext {
         // that need a human gesture fail fast instead of hanging on a tool
         // UI nobody will see (issue #508).
         isScoop: () => !this.scoop.isCone,
+        // Command-level sudo enforcement. Shares the same broker + live policy
+        // as the FS gate; "Always" grants persist via the manager's raw-FS sink.
+        sudo: this.sudoManager?.getShellConfig(),
       });
       log.info('WasmShell initialized', { folder: this.scoop.folder });
       const skills = await loadSkills(effectiveSkillsFs, this.skillsDir);
@@ -378,7 +401,7 @@ export class ScoopContext {
 
       // Create tools (browser automation and search are now via shell commands through bash)
       const legacyTools = [
-        ...createFileTools(this.fs as VirtualFS),
+        ...createFileTools(gatedFs),
         createBashTool(this.shell),
         ...scoopManagementTools,
       ];

@@ -10,6 +10,8 @@ SLICC uses `just-bash` (WASM Bash interpreter v2.14.3) as its core shell runtime
 
 **Entry point**: Via the `bash` agent tool. All shell features available to agents.
 
+**Approvals**: Commands and file ops can be gated by the sudoers policy at `/etc/sudoers`. A gated command segment pauses for a native human approval before running; a denied command exits `1` with `sudo: approval denied`. See [`sudo.md`](sudo.md) for the policy format, the FS + command gates, and live reload.
+
 ---
 
 ## Supplemental Commands

@@ -116,6 +116,14 @@ export interface ShellSudoConfig {
   getPolicy: () => SudoersPolicy | null;
   /** Trusted-realm approval broker (the agent can only request, never fabricate). */
   broker: SudoBroker;
+  /**
+   * Optional sink that persists a human-confirmed `NOPASSWD Cmnd` grant. When
+   * supplied, the shell routes "Always" grants here instead of writing through
+   * `options.fs` directly — this lets the shell run on the FS-gated handle (so
+   * the `/etc/sudoers` self-protection invariant covers shell writes too) while
+   * the grant append still hits the raw VFS and does not re-prompt.
+   */
+  persistCommandGrant?: (pattern: string) => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -496,10 +504,16 @@ export class WasmShellHeadless implements HeadlessShellLike {
 
   /**
    * Append a human-confirmed `NOPASSWD Cmnd` grant to `/etc/sudoers.d/granted`.
-   * Uses the raw VFS handle so the self-protection invariant (which the FS-level
-   * gate enforces on the agent's handle) does not re-prompt on the grant write.
+   * Prefers the injected `persistCommandGrant` sink (which writes through the
+   * raw VFS, so the self-protection invariant does not re-prompt on the grant
+   * write); falls back to `options.fs` directly when no sink is supplied.
    */
   private async persistCommandGrant(pattern: string): Promise<void> {
+    const sink = this.options.sudo?.persistCommandGrant;
+    if (sink) {
+      await sink(pattern);
+      return;
+    }
     const path = `${SUDOERS_D_DIR}/granted`;
     const fs = this.options.fs;
     let existing = '';

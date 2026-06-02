@@ -1,0 +1,56 @@
+# /etc/sudoers — SLICC agent approval policy
+#
+# This file controls which agent actions require a native human approval
+# prompt (an OS dialog in CLI/Electron, or a window.confirm/prompt in the
+# Chrome extension) before they run. By default EVERYTHING below is commented
+# out, so no extra prompts fire — uncomment a rule to start gating an action.
+#
+# Every line is one of three directives. A leading `NOPASSWD` tag turns a rule
+# into an explicit grant (matching actions run with no prompt):
+#
+#   Cmnd  <glob>        Require approval before a shell command segment that
+#                       matches <glob> runs (matched against each top-level
+#                       segment of the command line).
+#   Read  <glob>        Require approval before reading a VFS path.
+#   Write <glob>        Require approval before writing a VFS path.
+#
+# Globs:
+#   - Command globs: `*` and `**` match any run of characters, `?` matches one.
+#   - Path globs:    `*` matches within one path segment (no `/`), `**` matches
+#                    across segments. A trailing `/**` also matches the dir
+#                    itself (so `/workspace/.git/**` matches `/workspace/.git`).
+#
+# Precedence: a matching NOPASSWD grant wins (no prompt); otherwise any plain
+# match requires approval; no match means the action is never gated.
+#
+# Self-protection (ALWAYS on, not configurable): writes to /etc/sudoers and
+# anything under /etc/sudoers.d/ always require approval — a NOPASSWD rule can
+# never override this. Reads of these files are allowed (visudo-style).
+#
+# Live reload: edits to this file (and to /etc/sudoers.d/*) take effect for the
+# agent immediately, with no restart. When you choose "Always" on a prompt the
+# generalized pattern is appended to /etc/sudoers.d/granted (auto-managed —
+# edit /etc/sudoers here for durable rules instead).
+#
+# ---------------------------------------------------------------------------
+# Example rules — uncomment and adapt to taste.
+# ---------------------------------------------------------------------------
+#
+# Require approval before any `git push`:
+# Cmnd  git push*
+#
+# Require approval before force-pushing, but allow ordinary pushes outright:
+# Cmnd  git push --force*
+# NOPASSWD Cmnd  git push origin*
+#
+# Require approval before deleting anything:
+# Cmnd  rm *
+#
+# Gate reads of a secrets directory:
+# Read  /shared/secrets/**
+#
+# Gate writes into the git internals of the workspace:
+# Write /workspace/.git/**
+#
+# Gate writes anywhere under /mnt (mounted external storage):
+# Write /mnt/**
