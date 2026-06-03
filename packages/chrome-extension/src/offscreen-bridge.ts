@@ -91,6 +91,14 @@ export class OffscreenBridge implements KernelFacade {
    */
   private followerSync: FollowerSyncManager | null = null;
   /**
+   * Sticky "this offscreen is configured as a follower" flag. Set on entering
+   * follower mode (whether or not a sync is live yet) and cleared only on
+   * permanent leave. `followerSync` is null during transient WebRTC
+   * reconnects; this flag stays true so handlers (e.g. `sprinkle-lick`) can
+   * log+drop the lick rather than fall back to the local model-less cone.
+   */
+  private followerActive = false;
+  /**
    * KernelTransport — defaults to the chrome.runtime adapter (lazily
    * constructed on first `emit()` so a `new OffscreenBridge()` doesn't
    * throw when imported in a context without `chrome.runtime`, e.g. a
@@ -483,6 +491,17 @@ export class OffscreenBridge implements KernelFacade {
    */
   setFollowerSync(sync: FollowerSyncManager | null): void {
     this.followerSync = sync;
+  }
+
+  /**
+   * Sticky follower-mode signal. Caller (offscreen.ts) sets `true` on
+   * entering the follower branch (regardless of whether a sync is live yet)
+   * and `false` only on permanent leave. Used by handlers that must
+   * distinguish "transient reconnect, log+drop" from "not a follower at
+   * all, handle locally" — see `case 'sprinkle-lick'` in `handlePanelMessage`.
+   */
+  setFollowerActive(active: boolean): void {
+    this.followerActive = active;
   }
 
   /**
@@ -1234,16 +1253,30 @@ export class OffscreenBridge implements KernelFacade {
         // shared `routeSprinkleLick` so `startExtensionLeaderTray`'s
         // `onSprinkleLick` callback can share the same routing.
         const lickMsg = msg as any;
-        // Follower mode: the dip lives in the leader's mirrored chat,
-        // so its lick belongs to the leader's cone (this offscreen's
-        // local cone is model-less). Mirrors how follower-panel
-        // sprinkles forward via follower-sprinkle-bridge.
-        if (this.followerSync) {
-          this.followerSync.sendSprinkleLick(
-            lickMsg.sprinkleName,
-            lickMsg.body,
-            lickMsg.targetScoop
-          );
+        // Follower mode: the dip lives in the leader's mirrored chat, so
+        // its lick belongs to the leader's cone (sending it locally would
+        // record a click against a conversation that doesn't contain the
+        // dip; on a typical follower the local cone also has no provider
+        // login). Mirrors how follower-panel sprinkles forward via
+        // follower-sprinkle-bridge.
+        // Predicate is `followerActive` (sticky across reconnects) not
+        // `followerSync` (transiently null during WebRTC reconnects) so a
+        // flicker doesn't reroute us back to the local model-less cone.
+        // `originLabel` is intentionally not forwarded — the leader is the
+        // origin authority and re-stamps it from the connection on receive
+        // (see `tray-leader-sync.ts case 'sprinkle.lick'`).
+        if (this.followerActive) {
+          if (this.followerSync) {
+            this.followerSync.sendSprinkleLick(
+              lickMsg.sprinkleName,
+              lickMsg.body,
+              lickMsg.targetScoop
+            );
+          } else {
+            console.warn('[offscreen-bridge] sprinkle-lick dropped: follower sync mid-reconnect', {
+              sprinkleName: lickMsg.sprinkleName,
+            });
+          }
           break;
         }
         await this.routeSprinkleLick(

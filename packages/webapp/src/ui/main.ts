@@ -2469,12 +2469,22 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
     };
     if (interceptWelcomeLick(event)) return;
     // Follower mode: the dip lives in the leader's mirrored chat, so its
-    // lick belongs to the leader's cone (this worker's cone is model-less
-    // anyway). Mirrors how panel-rendered follower sprinkles forward via
+    // lick belongs to the leader's cone (sending it locally would record
+    // a click against a conversation that doesn't contain the dip; on a
+    // typical follower the local cone also has no provider login to handle
+    // it). Mirrors how panel-rendered follower sprinkles forward via
     // SprinkleFollowerController → sync.sendSprinkleLick.
-    const followerSync = pageFollowerTray?.currentSync;
-    if (followerSync) {
-      followerSync.sendSprinkleLick('inline', { action, data });
+    // Predicate is `pageFollowerTray` (set on join, cleared only on permanent
+    // leave) rather than `?.currentSync` (transiently null during WebRTC
+    // reconnects) — we'd rather log+drop a dip click than reroute it back
+    // to the model-less local cone.
+    if (pageFollowerTray) {
+      const sync = pageFollowerTray.currentSync;
+      if (sync) {
+        sync.sendSprinkleLick('inline', { action, data });
+      } else {
+        log.warn('Dip lick dropped: follower sync mid-reconnect', { action });
+      }
       return;
     }
     client.sendSprinkleLick('inline', { action, data });

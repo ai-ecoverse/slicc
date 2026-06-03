@@ -986,6 +986,7 @@ describe('OffscreenBridge follower mode', () => {
 
   it('sprinkle-lick (e.g. chat dip) in follower mode forwards to leader, skips local cone', async () => {
     mockSync.sendSprinkleLick = vi.fn();
+    bridge.setFollowerActive(true);
     bridge.setFollowerSync(mockSync);
 
     simulatePanelMessage({
@@ -1002,6 +1003,50 @@ describe('OffscreenBridge follower mode', () => {
       { action: 'accept', data: { v: 1 } },
       undefined
     );
+    expect(mockOrchestrator.handleMessage).not.toHaveBeenCalled();
+  });
+
+  it('sprinkle-lick in follower mode forwards targetScoop verbatim (third positional arg)', async () => {
+    mockSync.sendSprinkleLick = vi.fn();
+    bridge.setFollowerActive(true);
+    bridge.setFollowerSync(mockSync);
+
+    simulatePanelMessage({
+      type: 'sprinkle-lick',
+      sprinkleName: 'welcome',
+      body: { action: 'click' },
+      targetScoop: 'helper-scoop',
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(mockSync.sendSprinkleLick).toHaveBeenCalledWith(
+      'welcome',
+      { action: 'click' },
+      'helper-scoop'
+    );
+  });
+
+  it('sprinkle-lick mid-reconnect (followerActive but no sync) drops without falling through to local cone', async () => {
+    mockSync.sendSprinkleLick = vi.fn();
+    // Simulate the transient WebRTC reconnect window: bridge knows it's a
+    // follower, but `setFollowerSync(null)` was called by `detachSync`.
+    bridge.setFollowerActive(true);
+    bridge.setFollowerSync(null);
+
+    simulatePanelMessage({
+      type: 'sprinkle-lick',
+      sprinkleName: 'inline',
+      body: { action: 'accept' },
+      targetScoop: undefined,
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Critically: must NOT fall through to the local cone (that would
+    // regress the bug `sprinkle-lick forwards to leader, skips local cone`
+    // exists to prevent).
+    expect(mockSync.sendSprinkleLick).not.toHaveBeenCalled();
     expect(mockOrchestrator.handleMessage).not.toHaveBeenCalled();
   });
 
