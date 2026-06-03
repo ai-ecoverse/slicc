@@ -16,7 +16,7 @@
     "dist"
   ],
   "dependencies": {
-    "html2canvas": "^1.4.1"
+    "html2canvas-pro": "^2.0.4"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

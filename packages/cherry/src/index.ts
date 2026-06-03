@@ -8,7 +8,11 @@ import { mountSliccImpl } from './mount.js';
 export interface HostCapabilities {
   /** Allow the leader to navigate the host page top-level frame. */
   navigate: boolean;
-  /** Screenshot strategy. 'html2canvas' lazy-loads the lib; 'none' disables. */
+  /**
+   * Screenshot strategy. `'html2canvas'` lazy-loads the renderer (the
+   * maintained `html2canvas-pro` fork, for CSS Color 4 support); `'none'`
+   * disables screenshots.
+   */
   screenshot: 'html2canvas' | 'none';
   /** Allow the leader to request opening URLs in new host tabs/windows. */
   openUrl: boolean;

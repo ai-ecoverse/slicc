@@ -125,7 +125,12 @@ export function createCdpHostHandler(opts: CdpHostHandlerOptions): Handler {
         if (opts.capabilities.screenshot !== 'html2canvas') {
           throw new CherryUnsupportedError('Page.captureScreenshot');
         }
-        const { default: html2canvas } = await import('html2canvas');
+        // Use the maintained `html2canvas-pro` fork (drop-in API): the original
+        // `html2canvas@1.4.1` predates CSS Color 4 and throws on modern color
+        // syntax ("unsupported color function 'color'") — common on real host
+        // pages. The capability value stays `'html2canvas'` (the rasterization
+        // strategy), only the implementation lib differs.
+        const { default: html2canvas } = await import('html2canvas-pro');
         const canvas = await html2canvas(document.body);
         const data = canvas.toDataURL('image/png').split(',')[1] ?? '';
         return { data };

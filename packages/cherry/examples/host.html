@@ -127,10 +127,10 @@
           import { mountSlicc } from '@ai-ecoverse/cherry';
 
       Their bundler (or a CDN such as esm.sh) resolves the package and its
-      `html2canvas` dependency automatically — no import map required. This
+      `html2canvas-pro` dependency automatically — no import map required. This
       throwaway harness instead loads the locally-built, not-yet-published
       package, so the import map below points that same bare specifier at the
-      local `dist/`, and resolves the SDK's `html2canvas` dependency from the
+      local `dist/`, and resolves the SDK's `html2canvas-pro` dependency from the
       repo's node_modules — the exact file a bundler would pull in.
 
       Serve from the repo root so both paths resolve:  npx http-server . -p 8080
@@ -139,7 +139,7 @@
       {
         "imports": {
           "@ai-ecoverse/cherry": "../dist/index.js",
-          "html2canvas": "../../../node_modules/html2canvas/dist/html2canvas.esm.js"
+          "html2canvas-pro": "../../../node_modules/html2canvas-pro/dist/html2canvas-pro.esm.js"
         }
       }
     </script>
