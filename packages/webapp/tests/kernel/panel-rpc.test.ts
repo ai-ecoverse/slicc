@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createPanelRpcClient,
   installPanelRpcHandler,
+  PANEL_RPC_DEFAULT_TIMEOUT_MS,
+  type PanelRpcPushMsg,
   panelRpcChannelName,
 } from '../../src/kernel/panel-rpc.js';
 
@@ -293,5 +295,81 @@ describe('panel-rpc', () => {
     } finally {
       (globalThis as { localStorage: Storage }).localStorage = originalLocalStorage;
     }
+  });
+
+  it('exposes the default timeout constant', () => {
+    expect(PANEL_RPC_DEFAULT_TIMEOUT_MS).toBe(15_000);
+  });
+
+  it('round-trips a remote-cdp-send request', async () => {
+    const stop = installPanelRpcHandler({
+      instanceId: 'rcdp-send',
+      handlers: {
+        'remote-cdp-send': (p) => ({ echoed: p.method }),
+      },
+    });
+    const client = createPanelRpcClient({ instanceId: 'rcdp-send' });
+    const result = await client.call('remote-cdp-send', {
+      runtimeId: 'follower-1',
+      localTargetId: 'tgt-1',
+      method: 'Page.captureScreenshot',
+    });
+    expect(result).toEqual({ echoed: 'Page.captureScreenshot' });
+    client.dispose();
+    stop();
+  });
+
+  it('dispatches a remote-cdp-event push to the registered target', async () => {
+    const client = createPanelRpcClient({ instanceId: 'rcdp-push' });
+    const received: Array<{ method: string }> = [];
+    client.registerPushTarget('follower-1:tgt-1', (payload) => {
+      received.push({ method: payload.method });
+    });
+
+    // A second channel on the same name simulates the page-side pusher.
+    const pusher = new BroadcastChannel(panelRpcChannelName('rcdp-push'));
+    const push: PanelRpcPushMsg = {
+      type: 'panel-rpc-push',
+      op: 'remote-cdp-event',
+      payload: { runtimeId: 'follower-1', localTargetId: 'tgt-1', method: 'Page.loadEventFired' },
+    };
+    pusher.postMessage(push);
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(received).toEqual([{ method: 'Page.loadEventFired' }]);
+
+    client.unregisterPushTarget('follower-1:tgt-1');
+    pusher.postMessage(push);
+    await new Promise((r) => setTimeout(r, 0));
+    // No new delivery after unregister.
+    expect(received).toEqual([{ method: 'Page.loadEventFired' }]);
+
+    pusher.close();
+    client.dispose();
+  });
+
+  it('ignores pushes for unregistered target keys without throwing', async () => {
+    const client = createPanelRpcClient({ instanceId: 'rcdp-orphan' });
+    const pusher = new BroadcastChannel(panelRpcChannelName('rcdp-orphan'));
+    pusher.postMessage({
+      type: 'panel-rpc-push',
+      op: 'remote-cdp-event',
+      payload: { runtimeId: 'x', localTargetId: 'y', method: 'Page.frameNavigated' },
+    } satisfies PanelRpcPushMsg);
+    await new Promise((r) => setTimeout(r, 0));
+    // Reaching here without an unhandled error is the assertion.
+    expect(true).toBe(true);
+    pusher.close();
+    client.dispose();
+  });
+
+  it('push register/unregister are no-ops when BroadcastChannel is unavailable', () => {
+    const saved = (globalThis as { BroadcastChannel?: unknown }).BroadcastChannel;
+    (globalThis as { BroadcastChannel?: unknown }).BroadcastChannel = undefined;
+    const client = createPanelRpcClient({ instanceId: 'no-bc-push' });
+    expect(() => client.registerPushTarget('a:b', () => {})).not.toThrow();
+    expect(() => client.unregisterPushTarget('a:b')).not.toThrow();
+    client.dispose();
+    (globalThis as { BroadcastChannel?: unknown }).BroadcastChannel = saved;
   });
 });
