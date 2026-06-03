@@ -2423,4 +2423,19 @@ describe('cherry teleport selection', () => {
     const pool = selectTeleportPool([browserTarget, networkCherry], { requireNetwork: true });
     expect(pool.map((t) => t.targetId).sort()).toEqual(['b', 'nc']);
   });
+
+  it('fires onRemoteTransportsCleaned for each mapped runtime when a follower is removed', () => {
+    const onRemoteTransportsCleaned = vi.fn();
+    const { manager } = createManager({ onRemoteTransportsCleaned });
+    const ch1 = new FakeChannel();
+    manager.addFollower('b1', ch1);
+    // Advertise so runtimeToBootstrap maps 'follower-b1' → 'b1'.
+    ch1.simulateMessage({
+      type: 'targets.advertise',
+      targets: [{ targetId: 'tab1', title: 'Tab', url: 'https://example.com' }],
+      runtimeId: 'follower-b1',
+    });
+    manager.removeFollower('b1');
+    expect(onRemoteTransportsCleaned).toHaveBeenCalledWith('follower-b1');
+  });
 });

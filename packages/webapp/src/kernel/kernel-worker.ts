@@ -26,6 +26,7 @@
 
 import { OffscreenBridge } from '../../../chrome-extension/src/offscreen-bridge.js';
 import { BrowserAPI } from '../cdp/browser-api.js';
+import { createPanelRpcTrayProvider } from '../cdp/panel-rpc-tray-provider.js';
 // Provider registration is async-explicit (not side-effect import).
 // `providers/index.ts` switched to lazy `import.meta.glob` to break a
 // circular import chain (providers/index → built-in/azure-openai →
@@ -38,6 +39,7 @@ import { WorkerCdpProxy } from './cdp-worker-proxy.js';
 import { createKernelHost, type KernelHost } from './host.js';
 import { makeSameOriginBypassFetch } from './kernel-worker-fetch-bypass.js';
 import { makeKernelWorkerInitGuard } from './kernel-worker-init-guard.js';
+import { getPanelRpcClient } from './panel-rpc.js';
 import { createPanelTerminalHost } from './panel-terminal-host.js';
 import { createBridgeMessageChannelTransport } from './transport-message-channel.js';
 
@@ -241,6 +243,15 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
   const { createPanelRpcClient } = await import('./panel-rpc.js');
   panelRpcClient = createPanelRpcClient({ instanceId: init.instanceId });
   (globalThis as Record<string, unknown>).__slicc_panelRpc = panelRpcClient;
+
+  // Give the worker BrowserAPI a tray target provider so the cone can
+  // *drive* federated tray/cherry targets, not just list them. The
+  // provider tunnels each CDP op over panel-RPC to the page-side
+  // RemoteCDPTransport (which owns the WebRTC channel). Safe to set
+  // unconditionally: its methods run only for composite remote ids
+  // (which exist only when a tray is active), and with no panel-RPC
+  // client they fail closed. See issue #848.
+  browser.setTrayTargetProvider(createPanelRpcTrayProvider(getPanelRpcClient));
 
   // Take the process manager from the kernel host so scoop-turns
   // (registered by `ScoopContext`) and shell execs (registered by

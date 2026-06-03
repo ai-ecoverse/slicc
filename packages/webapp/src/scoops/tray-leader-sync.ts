@@ -87,6 +87,13 @@ export interface LeaderSyncManagerOptions {
    * host events are dropped (no cone-side delivery).
    */
   onCherryHostEvent?: (cherryRuntimeId: string | undefined, name: string, detail?: unknown) => void;
+  /**
+   * Invoked from `cleanupRemoteTransports` (follower disconnect) with the
+   * runtimeId whose page-side RemoteCDPTransports were just disconnected.
+   * The standalone page wires this to the remote-CDP bridge so its
+   * worker-facing session map drops matching sessions in sync. See #848.
+   */
+  onRemoteTransportsCleaned?: (runtimeId: string) => void;
 }
 
 /** Derived float type from the runtime string (e.g. 'slicc-standalone' → 'standalone'). */
@@ -937,6 +944,18 @@ export class LeaderSyncManager {
         this.remoteTransports.delete(key);
         log.debug('Cleaned up stale remote transport', { key });
       }
+    }
+    // Guard the consumer callback: it runs inside `removeFollower` before
+    // the registry/runtime-map cleanup, so a throwing handler would abort
+    // follower teardown and leave a stale entry. Matches the defensive
+    // pattern around `onSprinkleLick` / `onCherryHostEvent`.
+    try {
+      this.options.onRemoteTransportsCleaned?.(runtimeId);
+    } catch (err) {
+      log.warn('onRemoteTransportsCleaned handler threw', {
+        runtimeId,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
