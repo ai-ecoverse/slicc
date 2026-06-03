@@ -55,6 +55,15 @@ import { getVoiceLang, VoiceInput } from './voice-input.js';
 // Side-effect import: registers the `<slicc-press-button>` custom element.
 import './press-button.js';
 import type { SliccPressButton } from './press-button.js';
+import type { SlashCommandPickerItem } from './slash-command-picker.js';
+import { SlashCommandPicker } from './slash-command-picker.js';
+import {
+  findActiveSlashToken,
+  findSkillSubmenuQuery,
+  type SlashCommandActions,
+  type SlashCommandContext,
+  type SlashCommandRegistry,
+} from './slash-commands.js';
 
 const log = createLogger('chat-panel');
 
@@ -77,6 +86,12 @@ export type AttachmentWriter = (file: File) => Promise<string>;
 const MAX_INLINE_IMAGE_BYTES = 5 * 1024 * 1024;
 /** Above this size, text files are saved to the VFS instead of inlined. */
 const MAX_INLINE_TEXT_BYTES = 512 * 1024;
+
+export interface ChatPanelOptions {
+  slashCommandRegistry?: SlashCommandRegistry;
+  slashCommandActions?: SlashCommandActions;
+  isCone?: () => boolean;
+}
 
 /** Generate a simple unique ID. */
 function uid(): string {
@@ -337,11 +352,52 @@ export class ChatPanel {
    *  (e.g. context switches that pass `false` while already idle). */
   private wasStreaming = false;
 
-  constructor(container: HTMLElement) {
+  private slashRegistry: SlashCommandRegistry | null = null;
+  private slashActions: SlashCommandActions | null = null;
+  private slashIsCone: () => boolean = () => true;
+  private slashPicker: SlashCommandPicker | null = null;
+
+  constructor(container: HTMLElement, options?: ChatPanelOptions) {
     this.container = container;
     this.sessionStore = new SessionStore();
     this.sessionId = 'default';
+    if (options) {
+      this.slashRegistry = options.slashCommandRegistry ?? null;
+      this.slashActions = options.slashCommandActions ?? null;
+      this.slashIsCone = options.isCone ?? (() => true);
+    }
     this.render();
+    if (this.slashRegistry) {
+      this.slashPicker = new SlashCommandPicker({
+        anchor: this.textarea,
+        onAccept: (item) => this.onSlashPickerAccept(item),
+        onDismiss: () => {
+          /* picker hides itself on dismiss */
+        },
+      });
+    }
+  }
+
+  /**
+   * Wire slash-command options after construction. Calling this after
+   * `render()` is safe — the picker is instantiated lazily here when
+   * a registry is provided. Replaces any previously-wired slash options.
+   */
+  setSlashOptions(options: ChatPanelOptions): void {
+    this.slashPicker?.dispose();
+    this.slashPicker = null;
+    this.slashRegistry = options.slashCommandRegistry ?? null;
+    this.slashActions = options.slashCommandActions ?? null;
+    this.slashIsCone = options.isCone ?? (() => true);
+    if (this.slashRegistry && this.textarea) {
+      this.slashPicker = new SlashCommandPicker({
+        anchor: this.textarea,
+        onAccept: (item) => this.onSlashPickerAccept(item),
+        onDismiss: () => {
+          /* picker hides itself on dismiss */
+        },
+      });
+    }
   }
 
   /** Wire up the agent handle. Can be called after construction. */
@@ -1137,6 +1193,11 @@ export class ChatPanel {
 
     // Event listeners
     this.textarea.addEventListener('keydown', (e) => {
+      // Give the picker first dibs on navigation keys when it's visible.
+      if (this.slashPicker?.handleKey(e)) {
+        e.preventDefault();
+        return;
+      }
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         this.sendMessage();
@@ -1168,6 +1229,7 @@ export class ChatPanel {
     this.textarea.addEventListener('input', () => {
       this.adjustTextareaHeight();
       this.updateSendButtonState();
+      this.refreshSlashPicker();
     });
 
     this.textarea.addEventListener('paste', (e) => {
@@ -2058,6 +2120,19 @@ export class ChatPanel {
   }
 
   /**
+   * Seed the composer with '/sk' and show the slash-command picker. Used
+   * by the design-time chat fixture (?ui-fixture=1) to pre-open the picker
+   * for CSS iteration without requiring manual keystrokes. Design-time only.
+   */
+  seedFixtureComposer(): void {
+    if (!this.textarea || !this.slashPicker) return;
+    this.textarea.value = '/sk';
+    this.adjustTextareaHeight();
+    this.updateSendButtonState();
+    this.refreshSlashPicker();
+  }
+
+  /**
    * Cycle through {@link THINKING_LEVEL_CYCLE}, skipping `xhigh` when the
    * active model doesn't support it. Notifies {@link onThinkingLevelChange}
    * so the layout can mirror the new value into the active scoop's config
@@ -2239,6 +2314,9 @@ export class ChatPanel {
   private updateSendButtonState(): void {
     if (!this.sendBtn || !this.textarea) return;
     const hasText = this.textarea.value.trim().length > 0;
+    if (!this.isStreaming) {
+      this.sendBtn.style.display = 'flex';
+    }
     this.sendBtn.disabled =
       this.attachmentReadInProgress || (!hasText && this.pendingAttachments.length === 0);
     if (this.attachBtn) this.attachBtn.disabled = this.attachmentReadInProgress;
@@ -3207,6 +3285,125 @@ export class ChatPanel {
     this.dips.set(msgId, instances);
   }
 
+  private refreshSlashPicker(): void {
+    if (!this.slashRegistry || !this.slashPicker) return;
+    const cursor = this.textarea.selectionStart ?? this.textarea.value.length;
+
+    // Second level: `/skills <query>` — show installed skills filtered by query.
+    const sub = findSkillSubmenuQuery(this.textarea.value, cursor);
+    if (sub) {
+      const skills = this.slashRegistry
+        .list()
+        .filter((c) => c.kind === 'skill' && c.name.startsWith(sub.query));
+      if (skills.length === 0) {
+        this.slashPicker.hide();
+        return;
+      }
+      this.slashPicker.show(
+        skills.map((c) => ({ name: c.name, description: c.description, kind: c.kind }))
+      );
+      return;
+    }
+
+    // Top level: a `/word` token.
+    const token = findActiveSlashToken(this.textarea.value, cursor);
+    if (!token) {
+      this.slashPicker.hide();
+      return;
+    }
+    // A bare `/` shows the base set only (actions + the `/skills` entry) so
+    // the palette isn't drowned by every installed skill. Once the user
+    // types a prefix, skills become directly matchable by name (e.g. `/aem`
+    // surfaces the AEM skills) — base commands first, then skill matches —
+    // so you can reach a skill without going through the `/skills` submenu.
+    const matched = this.slashRegistry.match(token.prefix);
+    const base = matched.filter((c) => c.kind !== 'skill');
+    const skills = token.prefix === '' ? [] : matched.filter((c) => c.kind === 'skill');
+    const visible = [...base, ...skills];
+    if (visible.length === 0) {
+      this.slashPicker.hide();
+      return;
+    }
+    this.slashPicker.show(
+      visible.map((c) => ({ name: c.name, description: c.description, kind: c.kind }))
+    );
+  }
+
+  private buildSlashContext(): SlashCommandContext | null {
+    if (!this.slashActions || !this.slashRegistry) return null;
+    return {
+      chat: { addSystemMessage: (content: string) => this.addSystemMessage(content) },
+      actions: this.slashActions,
+      isCone: () => this.slashIsCone(),
+      getRegistry: () => this.slashRegistry!,
+    };
+  }
+
+  private onSlashPickerAccept(item: SlashCommandPickerItem): void {
+    const cursor = this.textarea.selectionStart ?? this.textarea.value.length;
+
+    if (item.kind === 'skill') {
+      // In submenu mode — replace the `/skills <query>` region with the ref.
+      const sub = findSkillSubmenuQuery(this.textarea.value, cursor);
+      const token = findActiveSlashToken(this.textarea.value, cursor);
+      const region = sub ?? token;
+      if (region) {
+        this.replaceActiveToken(region.start, region.end, `/${item.name} `);
+      }
+      this.slashPicker?.hide();
+      this.textarea.focus();
+      return;
+    }
+
+    const token = findActiveSlashToken(this.textarea.value, cursor);
+    if (!token) {
+      this.slashPicker?.hide();
+      this.textarea.focus();
+      return;
+    }
+
+    if (item.kind === 'submenu') {
+      // Drill in: rewrite the token to `/skills ` and reopen the picker
+      // (now in submenu mode showing the skills list).
+      this.replaceActiveToken(token.start, token.end, '/skills ');
+      this.textarea.focus();
+      this.refreshSlashPicker();
+      return;
+    }
+
+    // action: strip the token from the text, then fire the action.
+    this.replaceActiveToken(token.start, token.end, '');
+    this.slashPicker?.hide();
+    this.textarea.focus();
+    void this.runActionCommand(item.name);
+  }
+
+  private replaceActiveToken(start: number, end: number, replacement: string): void {
+    const v = this.textarea.value;
+    this.textarea.value = v.slice(0, start) + replacement + v.slice(end);
+    const caret = start + replacement.length;
+    this.textarea.setSelectionRange(caret, caret);
+    this.adjustTextareaHeight();
+    this.updateSendButtonState();
+  }
+
+  private async runActionCommand(name: string): Promise<void> {
+    if (!this.slashRegistry) return;
+    const cmd = this.slashRegistry.get(name);
+    if (!cmd?.run) return;
+    const ctx = this.buildSlashContext();
+    if (!ctx) {
+      this.addSystemMessage('Slash commands not available in this context.');
+      return;
+    }
+    try {
+      await cmd.run(ctx);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.addSystemMessage(`Error running \`/${name}\`: ${message}`);
+    }
+  }
+
   /** Dispose the panel. */
   dispose(): void {
     this.cancelPendingDelta();
@@ -3218,6 +3415,8 @@ export class ChatPanel {
       document.removeEventListener('keydown', this.keydownListener);
       this.keydownListener = null;
     }
+    this.slashPicker?.dispose();
+    this.slashPicker = null;
     this.container.innerHTML = '';
   }
 }

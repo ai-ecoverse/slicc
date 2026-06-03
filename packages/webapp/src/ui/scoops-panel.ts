@@ -80,6 +80,24 @@ export class ScoopsPanel {
     this.container.classList.toggle('layout__scoops--expanded', this.expanded);
   }
 
+  /** Force the rail expanded (idempotent — unlike toggleExpanded). */
+  expand(): void {
+    this.expanded = true;
+    this.container.classList.add('layout__scoops--expanded');
+  }
+
+  /**
+   * Expand the rail, refresh the frozen-sessions index, scroll the section
+   * into view. Returns the number of frozen sessions found.
+   */
+  async revealFrozenSessions(): Promise<number> {
+    this.expand();
+    await this.refreshFrozenSessions();
+    const list = this.container.querySelector('.frozen-sessions-list');
+    list?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    return this.frozenSessions.length;
+  }
+
   // Eye geometry constants (in SVG viewBox units 0 0 200 100)
   private static readonly LEFT_EYE = { cx: 55, cy: 50, r: 38 };
   private static readonly RIGHT_EYE = { cx: 145, cy: 50, r: 38 };

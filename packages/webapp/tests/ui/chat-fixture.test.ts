@@ -114,4 +114,9 @@ describe('createChatFixture', () => {
     expect(FIXTURE_SESSION_ID).toBe('session-ui-fixture');
     expect(FIXTURE_SCOOP_NAME).toBe('ui-fixture');
   });
+
+  it('exports the fixture seed function', async () => {
+    const { applyFixtureSeed } = await import('../../src/ui/chat-fixture.js');
+    expect(typeof applyFixtureSeed).toBe('function');
+  });
 });

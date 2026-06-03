@@ -50,6 +50,17 @@ function tsAt(minutes: number): number {
  *  tests can reference it without duplicating the string. */
 export const FIXTURE_SESSION_ID = 'session-ui-fixture';
 
+/** Pre-fill the composer with '/sk' and show the slash-command picker.
+ *  Called by the design-time fixture to let devs iterate on picker CSS
+ *  with Vite HMR. Design-time only — handles optional seedFixtureComposer. */
+export function applyFixtureSeed(
+  composer: { seedFixtureComposer?: () => void } | null | undefined
+): void {
+  if (composer?.seedFixtureComposer) {
+    composer.seedFixtureComposer();
+  }
+}
+
 /** Scoop name shown in the header when the fixture is active.
  *  Passed to `switchToContext(_, _, scoopName)` so message labels
  *  render as `@ui-fixture` instead of `sliccy`. */

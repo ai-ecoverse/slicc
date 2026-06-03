@@ -1,0 +1,74 @@
+.slash-picker {
+  background: var(--surface-elevated, #fff);
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  padding: 4px;
+  z-index: 1000;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.slash-picker__item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.slash-picker__item:hover {
+  background: var(--surface-hover, rgba(0, 0, 0, 0.04));
+}
+
+.slash-picker__item--active {
+  background: var(--accent-soft, rgba(60, 100, 220, 0.12));
+}
+
+.slash-picker__label {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text, #111);
+}
+
+.slash-picker__desc {
+  font-size: 12px;
+  color: var(--text-muted, #666);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.slash-picker__kind {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted, #999);
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-left: auto;
+}
+
+@media (prefers-color-scheme: dark) {
+  .slash-picker {
+    background: var(--surface-elevated, #1e1e1e);
+    border-color: var(--border, rgba(255, 255, 255, 0.12));
+  }
+
+  .slash-picker__item:hover {
+    background: var(--surface-hover, rgba(255, 255, 255, 0.04));
+  }
+
+  .slash-picker__label {
+    color: var(--text, #eee);
+  }
+
+  .slash-picker__desc {
+    color: var(--text-muted, #aaa);
+  }
+}

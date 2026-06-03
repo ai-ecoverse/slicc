@@ -12,6 +12,7 @@ import './styles/dialog.css';
 import './styles/sprinkle-components.css';
 import './styles/feedback.css';
 import './styles/image-preview.css';
+import './styles/slash-command-picker.css';
 
 /**
  * Main entry point for the Browser Coding Agent UI.
@@ -102,6 +103,7 @@ import {
   resolveCurrentModel,
   resolveModelById,
   saveOAuthAccount,
+  showProviderSettings,
 } from './provider-settings.js';
 import { canonicalRuntimeId } from './runtime-identity.js';
 import {
@@ -117,6 +119,8 @@ import {
   findDroppedSkillTransferFile,
   hasDroppedFiles,
 } from './skill-drop.js';
+import { buildSlashCommandRegistry } from './slash-commands/index.js';
+import type { SlashCommandActions } from './slash-commands.js';
 import { resolveSprinkleIconHtml } from './sprinkle-icon.js';
 import { SprinkleManager } from './sprinkle-manager.js';
 import { initTelemetry } from './telemetry.js';
@@ -125,6 +129,72 @@ import { initTooltips } from './tooltip.js';
 import type { ChatMessage } from './types.js';
 
 const log = createLogger('main');
+
+interface WireSlashCommandsDeps {
+  layout: Layout;
+  vfs: VirtualFS;
+  getIsCone: () => boolean;
+  /** False in the extension float — omits `/sessions` (no frozen-sessions
+   *  surface there, since the scoops rail is hidden). */
+  includeSessions: boolean;
+}
+
+async function wireSlashCommands({
+  layout,
+  vfs,
+  getIsCone,
+  includeSessions,
+}: WireSlashCommandsDeps): Promise<void> {
+  const slashActions: SlashCommandActions = {
+    newSession: async () => {
+      await layout.onClearChat?.({ freeze: 'quick' });
+      location.reload();
+    },
+    freezeSession: async () => {
+      const frozen = await runNewSessionFreeze({ vfs });
+      if (!frozen) {
+        // The freezer skips sessions below its message threshold (and on
+        // missing creds / write failure), returning null. Tell the user
+        // why nothing was archived rather than silently no-op'ing.
+        layout.panels.chat.addSystemMessage(
+          'Nothing to freeze yet — a session needs at least a few messages before it can be archived.'
+        );
+        return;
+      }
+      // Unlike /new and the New Session button, /freeze keeps the current
+      // chat (no reload), so the rail won't re-read the index on its own —
+      // refresh it in place so the new archive appears immediately.
+      await layout.panels.scoops.refreshFrozenSessions();
+      layout.panels.chat.addSystemMessage(`Session frozen: “${frozen.title}”`);
+    },
+    clearChat: async () => {
+      await layout.onClearChat?.({ freeze: false });
+      location.reload();
+    },
+    openSettings: async () => {
+      showProviderSettings();
+    },
+    openMemory: async () => {
+      layout.setActiveTab('memory');
+    },
+    openFrozenSessions: async () => {
+      // `/sessions` is only registered in standalone (see includeSessions),
+      // so this runs there; `available` stays a defensive guard.
+      const { available, count } = await layout.showFrozenSessions();
+      if (available && count === 0) {
+        layout.panels.chat.addSystemMessage(
+          'No frozen sessions yet. Use `/new` or `/freeze` to archive the current session.'
+        );
+      }
+    },
+  };
+  const slashRegistry = await buildSlashCommandRegistry({ vfs, includeSessions });
+  layout.panels.chat.setSlashOptions({
+    slashCommandRegistry: slashRegistry,
+    slashCommandActions: slashActions,
+    isCone: getIsCone,
+  });
+}
 
 /**
  * Welcome-flow lick actions that must fire at most ONCE per browser
@@ -228,12 +298,13 @@ async function loadUIFixtureIntoChat(chatPanel: {
   switchToContext: (id: string, readOnly: boolean, scoopName?: string) => Promise<void>;
   loadMessages: (msgs: ChatMessage[]) => void;
   setCompactionState?: (state: 'summarizing' | 'extracting-memory' | 'idle') => void;
+  seedFixtureComposer?(): void;
 }): Promise<void> {
-  const [{ createChatFixture, FIXTURE_SESSION_ID, FIXTURE_SCOOP_NAME }] = await Promise.all([
-    import('./chat-fixture.js'),
-  ]);
+  const [{ createChatFixture, FIXTURE_SESSION_ID, FIXTURE_SCOOP_NAME, applyFixtureSeed }] =
+    await Promise.all([import('./chat-fixture.js')]);
   await chatPanel.switchToContext(FIXTURE_SESSION_ID, true, FIXTURE_SCOOP_NAME);
   chatPanel.loadMessages(createChatFixture());
+  applyFixtureSeed(chatPanel);
   // Optional preview of the compaction ghost bubble for designers:
   //   ?ui-fixture=1&compacting=summarizing
   //   ?ui-fixture=1&compacting=extracting-memory
@@ -884,6 +955,14 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   // Wire agent handle
   const agentHandle = client.createAgentHandle();
   layout.panels.chat.setAgent(agentHandle);
+
+  // Wire slash commands — extension path (no /sessions: rail is hidden)
+  await wireSlashCommands({
+    layout,
+    vfs: localFs,
+    getIsCone: () => selectedScoop?.isCone ?? true,
+    includeSessions: false,
+  });
 
   // Wire panels — OffscreenClient implements the Orchestrator methods
   // that ScoopsPanel, ScoopSwitcher, and MemoryPanel need
@@ -2155,6 +2234,14 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   const agentHandle = client.createAgentHandle();
   layout.panels.chat.setAgent(agentHandle);
   layout.panels.chat.setAttachmentWriter(createAttachmentTmpWriter(localFs));
+
+  // Wire slash commands — standalone kernel-worker path
+  await wireSlashCommands({
+    layout,
+    vfs: localFs,
+    getIsCone: () => selectedScoop?.isCone ?? true,
+    includeSessions: true,
+  });
 
   // Wire delete callback — only meaningful if the underlying client
   // supports it. The orchestrator-shim's `deleteQueuedMessage` is a

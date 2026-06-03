@@ -360,6 +360,21 @@ export class Layout {
     this.primaryRail?.activateItem(id);
   }
 
+  /**
+   * Reveal the frozen-sessions section in the scoops rail. Returns
+   * `{ available, count }` — `available` is false in extension mode, where
+   * the scoops rail is hidden (the ScoopsPanel is still constructed but its
+   * container is `display: none`, so expanding it would be a no-op).
+   */
+  async showFrozenSessions(): Promise<{ available: boolean; count: number }> {
+    const panel = this.panels?.scoops;
+    if (this.isExtension || !panel?.revealFrozenSessions) {
+      return { available: false, count: 0 };
+    }
+    const count = await panel.revealFrozenSessions();
+    return { available: true, count };
+  }
+
   getActiveTab(): TabId {
     return this.activeTab;
   }
