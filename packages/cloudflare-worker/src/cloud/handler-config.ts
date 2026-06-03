@@ -59,6 +59,9 @@ export async function handleCloudConfig(_req: Request, env: ConfigEnv): Promise<
       imsReceivePath: RECEIVE_PATH,
       capRunning,
       capPaused,
+      // Adobe models from the proxy, so the dashboard can offer them without a
+      // provider login (Adobe is configured by default from the IMS bearer).
+      adobeModels: (proxy.models ?? []).map((m) => ({ id: m.id, name: m.name })),
     });
   } catch (err) {
     // Discriminate network/HTTP errors (transient, 502) from shape errors (config bug, 500).

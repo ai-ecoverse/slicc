@@ -48,6 +48,7 @@ describeIfConfigured('deployed tray worker', () => {
         'POST /api/cloud/pause',
         'POST /api/cloud/resume',
         'POST /api/cloud/kill',
+        'GET /api/cloud/cone-config',
         'POST /api/cloud/sign-out',
         'GET /api/cloud/admin/stats',
         'GET /auth/cloud-callback',

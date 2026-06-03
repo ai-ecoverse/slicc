@@ -1,6 +1,8 @@
 // Shared types for cloud-core operations. Consumed by both node-server (CLI)
 // and cloudflare-worker (Plan D).
 
+import type { ConeConfigIndex } from './cone-config/index.js';
+
 /**
  * Registry entry for a cloud-hosted cone (sandbox). Renamed from
  * CloudSessionEntry in node-server — the canonical name going forward is
@@ -50,6 +52,11 @@ export interface ConeEntry {
    * filtering and by CLI for tracking.
    */
   metadata?: Record<string, string>;
+  /**
+   * Names-only index of the cone's config bundle (model, account provider IDs,
+   * secret names). Persisted on the registry; NO secret values stored.
+   */
+  coneConfigIndex?: ConeConfigIndex;
 }
 
 /**
@@ -83,6 +90,7 @@ export interface ResumeResult {
   joinUrl: string;
   trayRebuilt: boolean;
   versionMismatch?: { running: string; local: string };
+  coneConfigIndex?: ConeConfigIndex;
 }
 
 /**

@@ -984,7 +984,7 @@ export async function saveOAuthAccount(opts: {
           await saveAccountsAsync(accounts);
         }
       }
-    } else {
+    } else if (!(globalThis as Record<string, unknown>).__slicc_connect_mode) {
       const r = await fetch('/api/secrets/oauth-update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1367,6 +1367,21 @@ export interface ShowProviderSettingsOptions {
   preferTrayJoin?: boolean;
   /** When set, show a simplified "Join this tray" confirmation with the URL pre-filled (no paste needed). */
   autoJoinUrl?: string;
+  /**
+   * When true, open straight to the add-account form (provider picker + login),
+   * skipping the accounts list and tray-join views. Used by connect mode, where
+   * the dashboard already shows the account list and tray-join is irrelevant.
+   * In this mode the form's secondary button is a plain "Cancel" (close) instead
+   * of "Back"/"Connect to another browser".
+   */
+  startInAddAccount?: boolean;
+  /**
+   * Restrict the provider picker to providers matching this predicate. When set,
+   * it fully controls the dropdown (overriding the default "models only" filter),
+   * so auth-only providers like GitHub can be offered. Used by connect mode to
+   * show only providers that can actually authenticate there.
+   */
+  providerFilter?: (providerId: string) => boolean;
 }
 
 /**
@@ -1386,8 +1401,22 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
     dialog.className = 'dialog';
     dialog.style.cssText = 'max-width: 480px; width: 90vw; padding: 32px;';
 
+    // After an account is added/logged-in: in connect mode the parent surface
+    // owns the list (with its own remove + Done), so close instead of showing
+    // the internal accounts list — which carries tray-join + "Get Started".
+    const finishAccountChange = () => {
+      if (options?.startInAddAccount) {
+        overlay.remove();
+        resolve((localStorage.getItem(ACCOUNTS_KEY) ?? '') !== accountsBefore);
+      } else {
+        renderAccountsList();
+      }
+    };
+
     // Decide initial view: list if accounts exist, tray-join or add-form if empty
-    if (getAccounts().length > 0) {
+    if (options?.startInAddAccount) {
+      renderAccountForm();
+    } else if (getAccounts().length > 0) {
       renderAccountsList();
     } else if (options?.autoJoinUrl) {
       renderAutoJoinConfirmation(options.autoJoinUrl);
@@ -1694,10 +1723,16 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
         });
         for (const providerId of sorted) {
           if (existingProviders.has(providerId)) continue;
-          // Skip auth-only providers (no LLM models to expose) — they're
-          // useful as accounts the user might already have, but not as
-          // something to "add" from this dialog.
-          if (!providerOffersLlmModels(providerId)) continue;
+          if (options?.providerFilter) {
+            // Caller-supplied filter fully controls the list (e.g. connect mode
+            // offers GitHub — an auth-only provider — but hides ones that can't
+            // authenticate there).
+            if (!options.providerFilter(providerId)) continue;
+          } else if (!providerOffersLlmModels(providerId)) {
+            // Default: skip auth-only providers (no LLM models to expose) —
+            // useful as existing accounts, but not something to "add" here.
+            continue;
+          }
           const config = getProviderConfig(providerId);
           const opt = document.createElement('option');
           opt.value = providerId;
@@ -1860,13 +1895,13 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
                 'No controlled-browser CDP transport available — open SLICC in standalone mode or the Chrome extension.'
               );
             }
-            await providerConfig.onOAuthLoginIntercepted(launcher, renderAccountsList, {
+            await providerConfig.onOAuthLoginIntercepted(launcher, finishAccountChange, {
               presentDeviceCode: createDialogDeviceCodePrompter(),
             });
           } else if (providerConfig.onOAuthLogin) {
             const { createOAuthLauncher } = await import('../providers/oauth-service.js');
             const launcher = createOAuthLauncher();
-            await providerConfig.onOAuthLogin(launcher, renderAccountsList);
+            await providerConfig.onOAuthLogin(launcher, finishAccountChange);
           }
         } catch (err) {
           // Clean up pre-login baseUrl placeholder if no account existed before
@@ -2099,7 +2134,7 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
           apiVersionInput.value.trim() || undefined
         );
 
-        renderAccountsList();
+        finishAccountChange();
       }
 
       saveBtn.addEventListener('click', validateAndSave);
@@ -2116,7 +2151,20 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
 
       // Back button (only shown when accounts already exist)
       const hasAccounts = getAccounts().length > 0;
-      if (!isEdit && !hasAccounts) {
+      if (options?.startInAddAccount) {
+        // Connect mode: the parent surface owns the account list, and tray-join
+        // is irrelevant here — offer a plain close instead of "Back"/"Connect to
+        // another browser" (both of which dropped users into confusing views).
+        const cancelBtn = document.createElement('button');
+        cancelBtn.className = 'dialog__btn dialog__btn--secondary';
+        cancelBtn.style.marginTop = '8px';
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.addEventListener('click', () => {
+          overlay.remove();
+          resolve((localStorage.getItem(ACCOUNTS_KEY) ?? '') !== accountsBefore);
+        });
+        dialog.appendChild(cancelBtn);
+      } else if (!isEdit && !hasAccounts) {
         const joinBtn = document.createElement('button');
         joinBtn.className = 'dialog__btn dialog__btn--secondary';
         joinBtn.style.marginTop = '8px';

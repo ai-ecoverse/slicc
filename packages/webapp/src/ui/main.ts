@@ -96,6 +96,7 @@ import { startPageLeaderTray } from './page-leader-tray.js';
 import {
   applyProviderDefaults,
   getApiKey,
+  removeAccount,
   resolveCurrentModel,
   resolveModelById,
   saveOAuthAccount,
@@ -2800,30 +2801,35 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
         try {
           const res = await fetch('/api/hosted-bootstrap');
           if (!res.ok) return;
-          const bootstrap = (await res.json()) as { adobeImsToken?: string };
-          if (!bootstrap.adobeImsToken) return;
-
-          // Seed the model/provider selection before injecting the account so the
-          // first user message resolves to `adobe`. Without this, getSelectedProvider()
-          // hits the `accounts.length > 0` branch — which depends on saveOAuthAccount
-          // having already pushed the account into the kernel-worker shim. The shim
-          // write is async (panel-rpc), so a sub-second user message after this block
-          // can race the account propagation. An explicit "selected-model" write is
-          // synchronous in the kernel-worker shim and removes the race.
-          //
-          // Skip the write if already set so a paused-then-resumed cone preserves
-          // whatever model the user picked in the prior session.
-          if (!localStorage.getItem('selected-model')) {
+          const boot = (await res.json()) as {
+            model?: string;
+            accounts?: import('@slicc/cloud-core/cone-config').Account[];
+            adobeImsToken?: string;
+          };
+          const accounts =
+            boot.accounts ??
+            (boot.adobeImsToken
+              ? [{ providerId: 'adobe', kind: 'oauth' as const, accessToken: boot.adobeImsToken }]
+              : []);
+          if (boot.model) localStorage.setItem('selected-model', boot.model);
+          else if (!localStorage.getItem('selected-model'))
             localStorage.setItem('selected-model', 'adobe:claude-opus-4-6');
-          }
-
-          await saveOAuthAccount({
-            providerId: 'adobe',
-            accessToken: bootstrap.adobeImsToken,
-            tokenExpiresAt: Date.now() + 60 * 60 * 1000,
-            userName: 'cloud-injected',
+          const { applyHostedAccounts } = await import('./hosted-config-apply.js');
+          const prevManaged = JSON.parse(
+            localStorage.getItem('slicc_cloud_managed') ?? '[]'
+          ) as string[];
+          await applyHostedAccounts(accounts, {
+            saveOAuthAccount,
+            addAccount,
+            removeAccount,
+            currentProviderIds: () => getAccounts().map((a) => a.providerId),
+            previouslyManaged: () => prevManaged,
           });
-          log.info('hosted-leader: Adobe IMS token injected from secrets.env');
+          localStorage.setItem(
+            'slicc_cloud_managed',
+            JSON.stringify(accounts.map((a) => a.providerId))
+          );
+          log.info('hosted-leader: cone config applied', { count: accounts.length });
         } catch (err) {
           log.warn('hosted-leader: bootstrap fetch failed; provider needs manual login', {
             error: err instanceof Error ? err.message : String(err),
@@ -3260,6 +3266,38 @@ async function main(): Promise<void> {
   const app = document.getElementById('app');
   if (!app) throw new Error('#app element not found');
 
+  // Connect mode (?connect=1) is served by the cloudflare worker, which has NO
+  // /api/fetch-proxy — so the llm-proxy SW (scope '/') would 404 every
+  // cross-origin fetch (e.g. GitHub OAuth). It must not control this page.
+  // Unregister any SW left from a prior full-app visit on this origin and reload
+  // once to detach, then proceed SW-free. Detected inline so it gates before the
+  // registration below; mirrors resolveUiRuntimeMode's `connect=1` check.
+  const isConnectModeForSw = (() => {
+    try {
+      return new URL(window.location.href).searchParams.get('connect') === '1';
+    } catch {
+      return false;
+    }
+  })();
+  if ('serviceWorker' in navigator && isConnectModeForSw) {
+    try {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister().catch(() => false)));
+      if (
+        navigator.serviceWorker.controller &&
+        !sessionStorage.getItem('slicc-connect-sw-cleared')
+      ) {
+        sessionStorage.setItem('slicc-connect-sw-cleared', '1');
+        log.info('connect mode: detaching from service worker (no proxy on worker origin)');
+        location.reload();
+        return;
+      }
+      sessionStorage.removeItem('slicc-connect-sw-cleared');
+    } catch (err) {
+      log.error('connect-mode SW cleanup failed', err);
+    }
+  }
+
   // Register preview service worker (serves VFS content at /preview/*)
   // and ensure it is controlling this page before we proceed. If the SW
   // was just installed for the first time, `navigator.serviceWorker.
@@ -3268,8 +3306,9 @@ async function main(): Promise<void> {
   // fetches fall through to the dev server and 404, which breaks dips
   // that load .shtml files (welcome dip, etc.). The standard fix is a
   // one-shot reload right after the first activation; we gate it on
-  // sessionStorage to avoid loops.
-  if ('serviceWorker' in navigator) {
+  // sessionStorage to avoid loops. Skipped in connect mode (handled above —
+  // the worker origin has no /api/fetch-proxy, so no SW should control it).
+  if ('serviceWorker' in navigator && !isConnectModeForSw) {
     try {
       await navigator.serviceWorker.register('/preview-sw.js', { scope: '/preview/' });
       log.info('Preview SW registered');
@@ -3347,6 +3386,15 @@ async function main(): Promise<void> {
   // Resolve UI runtime mode from chrome.runtime.id and URL query.
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
   const runtimeMode = resolveUiRuntimeMode(window.location.href, isExtension);
+
+  // Connect mode (?connect=1): slim provider-login + accounts + model-picker UI.
+  // Used by /cloud dashboard for shared localStorage account provisioning.
+  if (runtimeMode === 'connect') {
+    (globalThis as Record<string, unknown>).__slicc_connect_mode = true;
+    const { mountConnectSurface } = await import('./connect-surface.js');
+    await mountConnectSurface(app);
+    return;
+  }
 
   // Detached extension tab (?detached=1): standalone-density Layout with
   // the offscreen agent. See docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md

@@ -5,6 +5,7 @@ import { handleAdminStats } from './cloud/handler-admin.js';
 import { handleCloudConfig } from './cloud/handler-config.js';
 import { handleSignOut } from './cloud/handler-signout.js';
 import {
+  handleConeConfig,
   handleKill,
   handleList,
   handlePause,
@@ -124,6 +125,30 @@ try {
     )
   );
 
+// Capture page for the OAuth relay's final hop. After the relay bounces a
+// provider response back to the dashboard's own origin (code present, state
+// consumed), this page hands the full URL (which carries the OAuth `code`) to
+// the opener via postMessage — the signal the webapp's `launchOAuthCli` waits
+// for — then closes. Used by the webapp-served-by-worker (connect/cloud)
+// context, where there's no node-server callback page.
+//
+// The relay only ever bounces back to the dashboard's OWN origin, so the
+// legitimate opener is same-origin: scope the postMessage `targetOrigin` to
+// `location.origin` (NOT '*') so the code can't be delivered to a cross-origin
+// window that managed to become our opener. The receiver also re-checks
+// `event.origin`, but the sender must scope delivery too.
+const OAUTH_CAPTURE_HTML = `<!DOCTYPE html>
+<html><head><title>Completing sign-in…</title></head>
+<body><p>Completing sign-in… you can close this window.</p>
+<script>
+try {
+  if (window.opener) {
+    window.opener.postMessage({ type: 'oauth-callback', redirectUrl: location.href }, location.origin);
+  }
+} catch (e) { /* opener may be gone */ }
+setTimeout(function () { try { window.close(); } catch (e) {} }, 300);
+</script></body></html>`;
+
 export async function handleWorkerRequest(
   request: Request,
   env: WorkerEnv,
@@ -157,6 +182,8 @@ export async function handleWorkerRequest(
         return handleResume(request, cloudEnv);
       case 'kill':
         return handleKill(request, cloudEnv);
+      case 'cone-config':
+        return handleConeConfig(request, cloudEnv);
       case 'sign-out':
         return handleSignOut(request);
       case 'admin/stats':
@@ -231,7 +258,16 @@ export async function handleWorkerRequest(
   // OAuth callback relay — serves a static HTML page that reads the OAuth state
   // parameter and redirects to the correct localhost port. Provider-agnostic.
   if (url.pathname === '/auth/callback') {
-    const html = OAUTH_RELAY_HTML(env.ALLOWED_CLOUD_DASHBOARD_ORIGINS ?? '');
+    // Capture hop: the relay has already bounced the provider response back to
+    // this origin (provider params present, `state` consumed). Hand the URL to
+    // the opener via postMessage instead of re-running the relay — this is the
+    // webapp-served-by-worker (connect/cloud) completion path.
+    const isCaptureHop =
+      !url.searchParams.has('state') &&
+      (url.searchParams.has('code') || url.searchParams.has('error'));
+    const html = isCaptureHop
+      ? OAUTH_CAPTURE_HTML
+      : OAUTH_RELAY_HTML(env.ALLOWED_CLOUD_DASHBOARD_ORIGINS ?? '');
     return new Response(html, {
       status: 200,
       headers: { 'Content-Type': 'text/html; charset=utf-8' },
@@ -391,6 +427,7 @@ export async function handleWorkerRequest(
         'POST /api/cloud/pause',
         'POST /api/cloud/resume',
         'POST /api/cloud/kill',
+        'GET /api/cloud/cone-config',
         'POST /api/cloud/sign-out',
         'GET /api/cloud/admin/stats',
         'GET /auth/cloud-callback',

@@ -122,3 +122,12 @@ describe('runtime-mode — hosted-leader', () => {
     expect(resolveUiRuntimeMode('http://localhost:5710/', false)).toBe('standalone');
   });
 });
+
+describe('resolveUiRuntimeMode connect mode', () => {
+  it('detects ?connect=1 (non-extension)', () => {
+    expect(resolveUiRuntimeMode('https://www.sliccy.ai/?connect=1', false)).toBe('connect');
+  });
+  it('does not treat ?connect=1 as connect in extension contexts', () => {
+    expect(resolveUiRuntimeMode('https://x/?connect=1', true)).toBe('extension');
+  });
+});
