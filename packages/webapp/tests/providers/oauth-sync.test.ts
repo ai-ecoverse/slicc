@@ -85,7 +85,6 @@ describe('saveOAuthAccount — CLI sync to /api/secrets/oauth-update', () => {
     expect(fetchCalled).toBe(true);
     const accounts = getAccounts();
     const info = accounts.find((a) => a.providerId === 'github');
-    console.log('Account:', info);
     expect(info?.maskedValue).toBe('ghp_masked_sentinel');
   });
 
@@ -101,9 +100,31 @@ describe('saveOAuthAccount — CLI sync to /api/secrets/oauth-update', () => {
       })
     ).resolves.toBeUndefined();
   });
+
+  it('logoutOAuthAccount DELETEs the CLI replica at /api/secrets/oauth/<id>', async () => {
+    const calls: { url: string; method?: string }[] = [];
+    globalThis.fetch = vi.fn(async (url: any, init: any) => {
+      calls.push({ url: String(url), method: init?.method });
+      return { ok: true, status: 200 } as any;
+    });
+    (globalThis as any).localStorage.setItem(
+      'slicc_accounts',
+      JSON.stringify([{ providerId: 'github', apiKey: '', accessToken: 'ghp_x' }])
+    );
+
+    const { logoutOAuthAccount } = await import('../../src/ui/provider-settings.js');
+    await expect(logoutOAuthAccount('github')).resolves.toBeUndefined();
+
+    // The CLI branch of deleteOAuthReplica must issue the replica DELETE so the
+    // node-server OauthSecretStore is cleared (local clear ≠ server clear hazard).
+    const del = calls.find(
+      (c) => c.url.includes('/api/secrets/oauth/github') && c.method === 'DELETE'
+    );
+    expect(del).toBeDefined();
+  });
 });
 
-describe('saveOAuthAccount — extension sync via chrome.storage.local + SW message', () => {
+describe('saveOAuthAccount — extension sync via SW message (SW owns chrome.storage, #847)', () => {
   let originalChrome: unknown;
   let originalLocalStorage: Storage;
 
@@ -134,9 +155,9 @@ describe('saveOAuthAccount — extension sync via chrome.storage.local + SW mess
     (globalThis as any).localStorage = originalLocalStorage;
   });
 
-  it('writes to chrome.storage.local + dispatches secrets.mask-oauth-token and caches maskedValue', async () => {
+  it('dispatches secrets.mask-oauth-token WITH the token + domains (SW owns the write) and caches maskedValue', async () => {
     const storageWrites: Record<string, unknown> = {};
-    const sentMessages: { msg: unknown }[] = [];
+    const sentMessages: { msg: any }[] = [];
     (globalThis as any).chrome = {
       runtime: {
         id: 'test-ext-id',
@@ -150,6 +171,9 @@ describe('saveOAuthAccount — extension sync via chrome.storage.local + SW mess
           }
         }),
       },
+      // Present here, but #847: saveOAuthAccount must NOT use it — oauth-token
+      // runs in the offscreen document, which has no chrome.storage. The token
+      // travels in the SW message and the SW does the write.
       storage: {
         local: {
           set: vi.fn(async (obj: Record<string, unknown>) => {
@@ -166,22 +190,78 @@ describe('saveOAuthAccount — extension sync via chrome.storage.local + SW mess
       accessToken: 'ghp_real_extension',
     });
 
-    // chrome.storage.local got the OAuth replica + DOMAINS pair
-    expect(storageWrites['oauth.github.token']).toBe('ghp_real_extension');
-    expect(storageWrites['oauth.github.token_DOMAINS']).toBe('github.com');
+    // saveOAuthAccount must NOT write chrome.storage itself (offscreen has none).
+    expect(storageWrites['oauth.github.token']).toBeUndefined();
 
-    // SW received the mask-oauth-token round-trip
-    const askMask = sentMessages.find(
-      (m) =>
-        typeof m.msg === 'object' &&
-        m.msg != null &&
-        (m.msg as any).type === 'secrets.mask-oauth-token'
-    );
+    // The SW round-trip carries the token + comma-joined domains so the SW can
+    // write them.
+    const askMask = sentMessages.find((m) => m.msg?.type === 'secrets.mask-oauth-token');
     expect(askMask).toBeDefined();
+    expect(askMask?.msg.accessToken).toBe('ghp_real_extension');
+    expect(askMask?.msg.domains).toBe('github.com');
 
     // maskedValue from the SW reply was cached in the Account
     const acct = getAccounts().find((a) => a.providerId === 'github');
     expect(acct?.maskedValue).toBe('ghp_masked_extension');
+  });
+
+  it('works from an offscreen-like context with NO chrome.storage (the actual #847 env)', async () => {
+    const sent: any[] = [];
+    (globalThis as any).chrome = {
+      runtime: {
+        id: 'test-ext-id',
+        lastError: undefined,
+        sendMessage: vi.fn((msg: any, cb: (r: any) => void) => {
+          sent.push(msg);
+          cb(
+            msg?.type === 'secrets.mask-oauth-token' ? { maskedValue: 'ghp_masked_offscreen' } : {}
+          );
+        }),
+      },
+      // NO `storage` at all — the real offscreen shape that threw before the fix.
+    };
+
+    const { saveOAuthAccount, getAccounts } = await import('../../src/ui/provider-settings.js');
+    await expect(
+      saveOAuthAccount({ providerId: 'github', accessToken: 'ghp_off' })
+    ).resolves.toBeUndefined();
+
+    const askMask = sent.find((m) => m?.type === 'secrets.mask-oauth-token');
+    expect(askMask?.accessToken).toBe('ghp_off');
+    expect(getAccounts().find((a) => a.providerId === 'github')?.maskedValue).toBe(
+      'ghp_masked_offscreen'
+    );
+  });
+
+  it('removeAccount routes the replica delete through the SW (offscreen has no chrome.storage, #847)', async () => {
+    const sent: any[] = [];
+    (globalThis as any).chrome = {
+      runtime: {
+        id: 'test-ext-id',
+        lastError: undefined,
+        sendMessage: vi.fn((msg: any, cb: (r: any) => void) => {
+          sent.push(msg);
+          cb({ ok: true });
+        }),
+      },
+      // NO `storage` — the real offscreen shape. A direct
+      // chrome.storage.local.remove would throw here (the twin of the
+      // masking bug, reachable via `mcp delete`).
+    };
+    (globalThis as any).localStorage.setItem(
+      'slicc_accounts',
+      JSON.stringify([{ providerId: 'github', apiKey: '', accessToken: 'ghp_x' }])
+    );
+
+    const { removeAccount, getAccounts } = await import('../../src/ui/provider-settings.js');
+    await expect(removeAccount('github')).resolves.toBeUndefined();
+
+    // Replica removal went through the SW secrets.delete message (deleteSecret
+    // removes both `oauth.<id>.token` and its `_DOMAINS` companion).
+    const del = sent.find((m) => m?.type === 'secrets.delete' && m.name === 'oauth.github.token');
+    expect(del).toBeDefined();
+    // The account row is gone afterward.
+    expect(getAccounts().find((a) => a.providerId === 'github')).toBeUndefined();
   });
 
   it('still resolves when chrome.runtime.lastError is set (SW unreachable)', async () => {

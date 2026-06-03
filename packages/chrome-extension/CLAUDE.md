@@ -348,7 +348,7 @@ Each provider's hardcoded `oauthTokenDomains` is the immutable default safelist.
 - the **OAuth domains** tab on the options page (`secrets.html`)
 - direct `localStorage` edit of `slicc_oauth_extra_domains` at the extension origin
 
-The extras are read by `saveOAuthAccount` in `provider-settings.ts` and merged with provider defaults (deduped case-insensitively) before being pushed to `chrome.storage.local`'s `oauth.<id>.token_DOMAINS`. Page-side `oauth-bootstrap` re-pushes the merged list on every page load, so newly-added extras apply on next side-panel reload.
+The extras are read by `saveOAuthAccount` in `provider-settings.ts` and merged with provider defaults (deduped case-insensitively), then sent in the `secrets.mask-oauth-token` SW message — the service worker (which owns `chrome.storage`; `oauth-token` runs in the offscreen document, which has none — #847) writes `oauth.<id>.token` + `oauth.<id>.token_DOMAINS`. Page-side `oauth-bootstrap` re-pushes the merged list on every page load, so newly-added extras apply on next side-panel reload.
 
 ## Automated CDP Smoke Test
 

@@ -197,7 +197,9 @@ import {
   getSelectedModelId,
   getSelectedProvider,
   logoutOAuthAccount,
+  maskOAuthTokenWithRetry,
   migrateLegacyAuthOnlySelection,
+  persistOAuthMaskViaServiceWorker,
   removeAccount,
   resolveCurrentModel,
   resolveModelById,
@@ -1865,5 +1867,114 @@ describe('logoutOAuthAccount', () => {
     // This is the exact finder used in showAvatarPopover — must return undefined after logout.
     const found = accounts.find((a) => !a.loggedOut && (a.userName || a.accessToken || a.apiKey));
     expect(found).toBeUndefined();
+  });
+});
+
+describe('maskOAuthTokenWithRetry (cold service worker — issue #847)', () => {
+  // A freshly-opened side panel can have a cold SW whose secrets pipeline isn't
+  // warm yet, so the first secrets.mask-oauth-token round-trip comes back with
+  // no maskedValue. Without a retry, saveOAuthAccount gave up and oauth-token
+  // reported "no masked value" until the panel was reopened. Retry briefly.
+  const noSleep = async () => {};
+
+  it('returns the masked value once the SW warms up (empty, empty, then value)', async () => {
+    const responses = [{}, {}, { maskedValue: 'MASK' }];
+    let i = 0;
+    const send = async () => responses[i++];
+    const result = await maskOAuthTokenWithRetry(send, { attempts: 3, sleep: noSleep });
+    expect(result.maskedValue).toBe('MASK');
+    expect(i).toBe(3); // retried past the two empty responses
+  });
+
+  it('returns immediately on first success without extra round-trips', async () => {
+    let calls = 0;
+    const send = async () => {
+      calls++;
+      return { maskedValue: 'M' };
+    };
+    expect((await maskOAuthTokenWithRetry(send, { attempts: 3, sleep: noSleep })).maskedValue).toBe(
+      'M'
+    );
+    expect(calls).toBe(1);
+  });
+
+  it('gives up with no maskedValue after exhausting attempts', async () => {
+    let calls = 0;
+    const send = async () => {
+      calls++;
+      return {};
+    };
+    const result = await maskOAuthTokenWithRetry(send, { attempts: 3, sleep: noSleep });
+    expect(result.maskedValue).toBeUndefined();
+    expect(calls).toBe(3); // bounded — does not loop forever
+  });
+
+  it('keeps retrying through a transient SW error (resp.error then value)', async () => {
+    const responses = [{ error: 'pipeline build failed' }, { maskedValue: 'MASK2' }];
+    let i = 0;
+    const send = async () => responses[i++];
+    expect((await maskOAuthTokenWithRetry(send, { attempts: 3, sleep: noSleep })).maskedValue).toBe(
+      'MASK2'
+    );
+  });
+
+  it('propagates the last SW error reason on give-up (for a prod-visible diagnostic)', async () => {
+    const send = async () => ({ error: 'entry missing after write' });
+    const result = await maskOAuthTokenWithRetry(send, { attempts: 2, sleep: noSleep });
+    expect(result.maskedValue).toBeUndefined();
+    expect(result.lastError).toBe('entry missing after write');
+  });
+});
+
+describe('persistOAuthMaskViaServiceWorker (#847 — offscreen has no chrome.storage)', () => {
+  // oauth-token runs in the offscreen document, which has chrome.runtime but
+  // NOT chrome.storage. The token+domains must travel IN the SW message so the
+  // SW (which owns chrome.storage) writes them — the caller must never touch
+  // chrome.storage. This helper does exactly that and persists the mask.
+  const noSleep = async () => {};
+
+  it('sends accessToken + comma-joined domains to the SW (so the SW can write storage) and persists the mask', async () => {
+    let payload: { providerId: string; accessToken: string; domains: string } | undefined;
+    const accounts = [{ providerId: 'github', apiKey: '', accessToken: 'tok' }] as never[];
+    await persistOAuthMaskViaServiceWorker(
+      { providerId: 'github', accessToken: 'tok', domains: ['github.com', 'api.github.com'] },
+      {
+        sendMaskRequest: async (p) => {
+          payload = p;
+          return { maskedValue: 'MASK' };
+        },
+        getAccounts: () => accounts,
+        saveAccounts: async () => {},
+      }
+    );
+    // The whole point: the token leaves via the message, not via chrome.storage.
+    expect(payload).toEqual({
+      providerId: 'github',
+      accessToken: 'tok',
+      domains: 'github.com,api.github.com',
+    });
+    expect((accounts[0] as { maskedValue?: string }).maskedValue).toBe('MASK');
+  });
+
+  it('leaves the account unmasked AND logs a prod-visible error WITH the SW reason', async () => {
+    const accounts = [{ providerId: 'github', apiKey: '', accessToken: 'tok' }] as never[];
+    mockLog.error.mockClear();
+    await persistOAuthMaskViaServiceWorker(
+      { providerId: 'github', accessToken: 'tok', domains: ['github.com'] },
+      {
+        // SW reports WHY it couldn't mask — the reason must reach the give-up log.
+        sendMaskRequest: async () => ({ error: 'entry missing after write' }),
+        getAccounts: () => accounts,
+        saveAccounts: async () => {},
+      },
+      { attempts: 2, sleep: noSleep }
+    );
+    expect((accounts[0] as { maskedValue?: string }).maskedValue).toBeUndefined();
+    // #847: the give-up must NOT be silent (log.warn is dropped at prod ERROR
+    // level) AND must carry the reason so cold-SW vs write-fault is diagnosable.
+    expect(mockLog.error).toHaveBeenCalledWith(
+      expect.stringContaining('give-up'),
+      expect.objectContaining({ providerId: 'github', reason: 'entry missing after write' })
+    );
   });
 });
