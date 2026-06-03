@@ -1429,6 +1429,17 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
 
+    // Click-outside-to-dismiss. `target === overlay` is only true for a
+    // click that both started and ended on the backdrop, so a press that
+    // begins inside the dialog (e.g. dragging to select input text) and
+    // releases on the backdrop won't close it. Resolves the same way the
+    // "Get Started" button does — whether accounts changed while open.
+    overlay.addEventListener('click', (e) => {
+      if (e.target !== overlay) return;
+      overlay.remove();
+      resolve((localStorage.getItem(ACCOUNTS_KEY) ?? '') !== accountsBefore);
+    });
+
     // ── Accounts list view ──────────────────────────────────────────
     function renderAccountsList() {
       dialog.innerHTML = '';
