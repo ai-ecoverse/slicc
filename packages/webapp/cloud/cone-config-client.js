@@ -147,6 +147,22 @@ export function validateModelHasAccount(model, selectedProviderIds, authOptional
   return selectedProviderIds.includes(provider);
 }
 
+// Build the coneConfigDelta for a plain resume. The worker injects a fresh
+// Adobe IMS bearer server-side, but WITHOUT a tokenExpiresAt — and the cone's
+// getValidAccessToken treats a missing expiry as already-expired, then fails
+// silent renewal headlessly ("Adobe session expired"). So resume must re-ship
+// the connected accounts the same shape as start (carrying tokenExpiresAt); the
+// later upsert wins by providerId in mergeConeConfig, restoring the expiry.
+// Only accounts (no model/secrets/deletes) — a plain resume changes nothing else.
+export function assembleResumeDelta(allAccounts) {
+  return assembleDelta({
+    upsertAccounts: allAccounts.filter((a) => a.accessToken || a.apiKey),
+    upsertSecretRows: [],
+    deleteProviderIds: [],
+    deleteSecretNames: [],
+  });
+}
+
 export function assembleDelta({
   model,
   upsertAccounts,

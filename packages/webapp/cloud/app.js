@@ -1,6 +1,7 @@
 import {
   assembleBundle,
   assembleDelta,
+  assembleResumeDelta,
   bundleDropWarnings,
   MODEL_CATALOG_KEY,
   modelsForConnected,
@@ -712,7 +713,15 @@ async function runConeAction(li, sandboxId, kind) {
   busyRows.set(sandboxId, action.label);
   applyBusyStateToRow(li, action.label);
   try {
-    await api(action.path, { method: 'POST', body: JSON.stringify({ sandboxId }) });
+    const body = { sandboxId };
+    if (kind === 'resume') {
+      // Re-ship connected accounts (with tokenExpiresAt) so the refreshed Adobe
+      // token lands the same shape as start — otherwise the cone reads the
+      // expiry-less server-injected bearer as expired ("Adobe session expired").
+      const coneConfigDelta = assembleResumeDelta(readAccounts());
+      if (Object.keys(coneConfigDelta).length > 0) body.coneConfigDelta = coneConfigDelta;
+    }
+    await api(action.path, { method: 'POST', body: JSON.stringify(body) });
   } catch (e) {
     showToast(kind.charAt(0).toUpperCase() + kind.slice(1) + ' failed: ' + e.message);
   } finally {

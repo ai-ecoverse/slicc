@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assembleBundle,
   assembleDelta,
+  assembleResumeDelta,
   bundleDropWarnings,
   modelsForConnected,
   parseModelCatalog,
@@ -196,5 +197,39 @@ describe('assembleDelta', () => {
         deleteSecretNames: [],
       })
     ).toEqual({});
+  });
+});
+
+describe('assembleResumeDelta (plain resume re-ships connected accounts like start)', () => {
+  // Bug: a plain resume sent only { sandboxId }, so the worker injected a bare
+  // Adobe bearer with no tokenExpiresAt; the cone read "no expiry" as expired and
+  // threw "Adobe session expired". Resume must ship the account the same shape as
+  // start — including tokenExpiresAt — so the cone trusts the refreshed token.
+  it('upserts the connected Adobe account carrying tokenExpiresAt', () => {
+    const delta = assembleResumeDelta([
+      { providerId: 'adobe', accessToken: 'ims-tok', tokenExpiresAt: 1234567890, apiKey: '' },
+    ]);
+    expect(delta.upsert.accounts).toEqual([
+      { providerId: 'adobe', kind: 'oauth', accessToken: 'ims-tok', tokenExpiresAt: 1234567890 },
+    ]);
+    // Plain resume must not move the model or touch secrets/deletes.
+    expect(delta.model).toBeUndefined();
+    expect(delta.upsert.secrets).toBeUndefined();
+    expect(delta.delete).toBeUndefined();
+  });
+
+  it('re-ships every connected account (oauth + apikey), not just Adobe', () => {
+    const delta = assembleResumeDelta([
+      { providerId: 'adobe', accessToken: 'ims', tokenExpiresAt: 9, apiKey: '' },
+      { providerId: 'anthropic', accessToken: '', apiKey: 'sk-x' },
+    ]);
+    expect(delta.upsert.accounts).toEqual([
+      { providerId: 'adobe', kind: 'oauth', accessToken: 'ims', tokenExpiresAt: 9 },
+      { providerId: 'anthropic', kind: 'apikey', apiKey: 'sk-x' },
+    ]);
+  });
+
+  it('returns an empty delta when no account has a credential', () => {
+    expect(assembleResumeDelta([{ providerId: 'adobe', accessToken: '', apiKey: '' }])).toEqual({});
   });
 });
