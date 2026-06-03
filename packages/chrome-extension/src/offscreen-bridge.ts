@@ -14,6 +14,7 @@ import { createLogger } from '../../../packages/webapp/src/core/logger.js';
 import { createOffscreenChromeRuntimeTransport } from '../../../packages/webapp/src/kernel/transport-chrome-runtime.js';
 import type { KernelFacade, KernelTransport } from '../../../packages/webapp/src/kernel/types.js';
 import { HIDDEN_TOOL_NAMES } from '../../../packages/webapp/src/scoops/hidden-tools.js';
+import { formatLickEventForCone } from '../../../packages/webapp/src/scoops/lick-formatting.js';
 import type {
   Orchestrator,
   OrchestratorCallbacks,
@@ -33,6 +34,7 @@ import type {
   AgentEventMsg,
   ErrorMsg,
   ExtensionMessage,
+  ForwardedLickEvent,
   IncomingMessageMsg,
   OffscreenToPanelMessage,
   PanelCdpResponseMsg,
@@ -88,6 +90,14 @@ export class OffscreenBridge implements KernelFacade {
    * messages the local orchestrator would emit.
    */
   private followerSync: FollowerSyncManager | null = null;
+  /**
+   * Sticky "this offscreen is configured as a follower" flag. Set on entering
+   * follower mode (whether or not a sync is live yet) and cleared only on
+   * permanent leave. `followerSync` is null during transient WebRTC
+   * reconnects; this flag stays true so handlers (e.g. `sprinkle-lick`) can
+   * log+drop the lick rather than fall back to the local model-less cone.
+   */
+  private followerActive = false;
   /**
    * KernelTransport — defaults to the chrome.runtime adapter (lazily
    * constructed on first `emit()` so a `new OffscreenBridge()` doesn't
@@ -484,6 +494,17 @@ export class OffscreenBridge implements KernelFacade {
   }
 
   /**
+   * Sticky follower-mode signal. Caller (offscreen.ts) sets `true` on
+   * entering the follower branch (regardless of whether a sync is live yet)
+   * and `false` only on permanent leave. Used by handlers that must
+   * distinguish "transient reconnect, log+drop" from "not a follower at
+   * all, handle locally" — see `case 'sprinkle-lick'` in `handlePanelMessage`.
+   */
+  setFollowerActive(active: boolean): void {
+    this.followerActive = active;
+  }
+
+  /**
    * Update the cached active-scoop jid. Called by the leader-sync hub
    * adapter (`OffscreenLeaderSyncBridge` in `leader-sync-bridge.ts`)
    * when a `leader-active-scoop` envelope arrives from the panel. Pass
@@ -669,7 +690,8 @@ export class OffscreenBridge implements KernelFacade {
   async routeSprinkleLick(
     sprinkleName: string,
     body: unknown,
-    targetScoop?: string
+    targetScoop?: string,
+    originLabel?: string
   ): Promise<void> {
     if (!this.orchestrator) return;
     const scoops = this.orchestrator.getScoops();
@@ -686,7 +708,16 @@ export class OffscreenBridge implements KernelFacade {
     }
     if (!target) return;
     const msgId = `sprinkle-${sprinkleName}-${Date.now()}`;
-    const content = `[Sprinkle Event: ${sprinkleName}]\n\`\`\`json\n${JSON.stringify(body, null, 2)}\n\`\`\``;
+    const formatted = formatLickEventForCone({
+      type: 'sprinkle',
+      sprinkleName,
+      timestamp: new Date().toISOString(),
+      body,
+      originLabel,
+    } as Parameters<typeof formatLickEventForCone>[0]);
+    const content =
+      formatted?.content ??
+      `[Sprinkle Event: ${sprinkleName}]\n\`\`\`json\n${JSON.stringify(body, null, 2)}\n\`\`\``;
     const channelMsg: ChannelMessage = {
       id: msgId,
       chatJid: target.jid,
@@ -1222,7 +1253,38 @@ export class OffscreenBridge implements KernelFacade {
         // shared `routeSprinkleLick` so `startExtensionLeaderTray`'s
         // `onSprinkleLick` callback can share the same routing.
         const lickMsg = msg as any;
-        await this.routeSprinkleLick(lickMsg.sprinkleName, lickMsg.body, lickMsg.targetScoop);
+        // Follower mode: the dip lives in the leader's mirrored chat, so
+        // its lick belongs to the leader's cone (sending it locally would
+        // record a click against a conversation that doesn't contain the
+        // dip; on a typical follower the local cone also has no provider
+        // login). Mirrors how follower-panel sprinkles forward via
+        // follower-sprinkle-bridge.
+        // Predicate is `followerActive` (sticky across reconnects) not
+        // `followerSync` (transiently null during WebRTC reconnects) so a
+        // flicker doesn't reroute us back to the local model-less cone.
+        // `originLabel` is intentionally not forwarded — the leader is the
+        // origin authority and re-stamps it from the connection on receive
+        // (see `tray-leader-sync.ts case 'sprinkle.lick'`).
+        if (this.followerActive) {
+          if (this.followerSync) {
+            this.followerSync.sendSprinkleLick(
+              lickMsg.sprinkleName,
+              lickMsg.body,
+              lickMsg.targetScoop
+            );
+          } else {
+            console.warn('[offscreen-bridge] sprinkle-lick dropped: follower sync mid-reconnect', {
+              sprinkleName: lickMsg.sprinkleName,
+            });
+          }
+          break;
+        }
+        await this.routeSprinkleLick(
+          lickMsg.sprinkleName,
+          lickMsg.body,
+          lickMsg.targetScoop,
+          lickMsg.originLabel
+        );
         break;
       }
 
@@ -1232,6 +1294,47 @@ export class OffscreenBridge implements KernelFacade {
         // worker-side LickManager via the orchestrator. Fire-and-forget;
         // matches the pre-regression direct-call semantics.
         this.orchestrator.handleWebhookEvent(msg.webhookId, msg.headers, msg.body);
+        break;
+      }
+
+      case 'set-follower-forwarding': {
+        // Standalone follower: install/clear a forwarder on the worker's
+        // LickManager that relays forwardable licks to the page (which hands
+        // them to the FollowerSyncManager). Extension never sends this — it
+        // installs the forwarder directly in offscreen.ts.
+        const lm = (globalThis as Record<string, unknown>).__slicc_lickManager as
+          | { setForwarder(fn: ((e: ForwardedLickEvent) => void) | null): void }
+          | undefined;
+        if (!lm) {
+          console.warn(
+            '[offscreen-bridge] set-follower-forwarding ignored: worker LickManager unavailable'
+          );
+          break;
+        }
+        if (msg.enabled) {
+          lm.setForwarder((event) => this.emit({ type: 'forward-lick', event }));
+        } else {
+          lm.setForwarder(null);
+        }
+        break;
+      }
+
+      case 'inject-forwarded-lick': {
+        // Standalone leader: route a follower-forwarded lick into the
+        // worker's LickManager (→ defaultLickEventHandler → cone).
+        // Re-emitting through emitEvent is TERMINAL here only because a
+        // leader never has a forwarder installed (see set-follower-forwarding).
+        const lm = (globalThis as Record<string, unknown>).__slicc_lickManager as
+          | { emitEvent(e: ForwardedLickEvent): void }
+          | undefined;
+        if (!lm) {
+          console.warn(
+            '[offscreen-bridge] inject-forwarded-lick dropped: worker LickManager unavailable',
+            { type: msg.event.type }
+          );
+          break;
+        }
+        lm.emitEvent(msg.event);
         break;
       }
 

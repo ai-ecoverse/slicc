@@ -119,6 +119,14 @@ export interface StartPageFollowerTrayOptions {
   // --- BrowserAPI for federated target advertisement ---
   browserAPI: BrowserAPI;
 
+  /**
+   * Called with `true` once a follower connection is live and `false`
+   * on detach/stop. Standalone wires this to
+   * `client.sendSetFollowerForwarding(enabled)` so the kernel worker
+   * forwards navigate licks while connected.
+   */
+  onForwardingToggle?: (enabled: boolean) => void;
+
   // --- Sprinkle sync wiring (optional) ---
   /**
    * Add a sprinkle panel to the host layout. When omitted, the follower simply
@@ -197,6 +205,7 @@ export function startPageFollowerTray(
       activeSprinkleController = null;
     }
     if (!activeSync) return;
+    options.onForwardingToggle?.(false);
     options.browserAPI.setTrayTargetProvider(null);
     activeSync.close();
     activeSync = null;
@@ -276,6 +285,7 @@ export function startPageFollowerTray(
     activeSync = sync;
     options.browserAPI.setTrayTargetProvider(sync);
     options.setChatAgent(sync);
+    options.onForwardingToggle?.(true);
     sync.requestSnapshot();
 
     targetRefreshInterval = setInterval(() => void refreshTargets(), refreshIntervalMs);

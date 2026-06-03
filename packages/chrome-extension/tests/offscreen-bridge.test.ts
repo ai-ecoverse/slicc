@@ -984,6 +984,89 @@ describe('OffscreenBridge follower mode', () => {
     expect(mockSync.sendMessage).not.toHaveBeenCalled();
   });
 
+  it('sprinkle-lick (e.g. chat dip) in follower mode forwards to leader, skips local cone', async () => {
+    mockSync.sendSprinkleLick = vi.fn();
+    bridge.setFollowerActive(true);
+    bridge.setFollowerSync(mockSync);
+
+    simulatePanelMessage({
+      type: 'sprinkle-lick',
+      sprinkleName: 'inline',
+      body: { action: 'accept', data: { v: 1 } },
+      targetScoop: undefined,
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(mockSync.sendSprinkleLick).toHaveBeenCalledWith(
+      'inline',
+      { action: 'accept', data: { v: 1 } },
+      undefined
+    );
+    expect(mockOrchestrator.handleMessage).not.toHaveBeenCalled();
+  });
+
+  it('sprinkle-lick in follower mode forwards targetScoop verbatim (third positional arg)', async () => {
+    mockSync.sendSprinkleLick = vi.fn();
+    bridge.setFollowerActive(true);
+    bridge.setFollowerSync(mockSync);
+
+    simulatePanelMessage({
+      type: 'sprinkle-lick',
+      sprinkleName: 'welcome',
+      body: { action: 'click' },
+      targetScoop: 'helper-scoop',
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(mockSync.sendSprinkleLick).toHaveBeenCalledWith(
+      'welcome',
+      { action: 'click' },
+      'helper-scoop'
+    );
+  });
+
+  it('sprinkle-lick mid-reconnect (followerActive but no sync) drops without falling through to local cone', async () => {
+    mockSync.sendSprinkleLick = vi.fn();
+    // Simulate the transient WebRTC reconnect window: bridge knows it's a
+    // follower, but `setFollowerSync(null)` was called by `detachSync`.
+    bridge.setFollowerActive(true);
+    bridge.setFollowerSync(null);
+
+    simulatePanelMessage({
+      type: 'sprinkle-lick',
+      sprinkleName: 'inline',
+      body: { action: 'accept' },
+      targetScoop: undefined,
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Critically: must NOT fall through to the local cone (that would
+    // regress the bug `sprinkle-lick forwards to leader, skips local cone`
+    // exists to prevent).
+    expect(mockSync.sendSprinkleLick).not.toHaveBeenCalled();
+    expect(mockOrchestrator.handleMessage).not.toHaveBeenCalled();
+  });
+
+  it('sprinkle-lick falls through to routeSprinkleLick when follower mode inactive', async () => {
+    mockSync.sendSprinkleLick = vi.fn();
+
+    simulatePanelMessage({
+      type: 'sprinkle-lick',
+      sprinkleName: 'inline',
+      body: { action: 'accept' },
+      targetScoop: undefined,
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(mockSync.sendSprinkleLick).not.toHaveBeenCalled();
+    // routeSprinkleLick → orchestrator.handleMessage on the cone
+    expect(mockOrchestrator.handleMessage).toHaveBeenCalled();
+  });
+
   it('applyFollowerSnapshot replaces cone buffer, persists, emits scoop-messages-replaced', () => {
     // Pre-populate with stale local content to verify replacement.
     const buf = (bridge as any).getBuffer('cone_1');
@@ -1240,6 +1323,15 @@ describe('OffscreenBridge.routeSprinkleLick', () => {
     // Nothing throws; mock orchestrator on the bound bridge is unaffected.
     expect(mockOrchestrator.handleMessage).not.toHaveBeenCalled();
   });
+
+  it('includes the forwarded origin label in the lick content', async () => {
+    await bridge.routeSprinkleLick('welcome', { action: 'go' }, 'helper', 'iOS follower');
+    expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('Forwarded from iOS follower'),
+      })
+    );
+  });
 });
 
 describe('OffscreenBridge.onAgentEvent tap', () => {
@@ -1386,5 +1478,63 @@ describe('OffscreenBridge.notifyPanelIncomingMessage', () => {
     });
     const sent = sentMessages.find((m: any) => m?.payload?.type === 'incoming-message') as any;
     expect(sent.payload.message.channel).toBe('webhook');
+  });
+});
+
+describe('OffscreenBridge follower-forwarding bridge', () => {
+  let bridge: InstanceType<typeof OffscreenBridge>;
+  let setForwarder: ReturnType<typeof vi.fn>;
+  let emitEvent: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+    setForwarder = vi.fn();
+    emitEvent = vi.fn();
+    (globalThis as any).__slicc_lickManager = { setForwarder, emitEvent };
+    bridge = new OffscreenBridge();
+    await bridge.bind({
+      getScoops: vi.fn(() => []),
+      handleMessage: vi.fn().mockResolvedValue(undefined),
+    } as any);
+  });
+
+  it('set-follower-forwarding(true) installs a forwarder that emits forward-lick to the page', async () => {
+    const emitSpy = vi.spyOn(bridge as any, 'emit');
+    await (bridge as any).handlePanelMessage({ type: 'set-follower-forwarding', enabled: true });
+    expect(setForwarder).toHaveBeenCalledTimes(1);
+    const fwd = setForwarder.mock.calls[0][0] as (e: unknown) => void;
+    const event = { type: 'navigate', navigateUrl: 'https://x', timestamp: 't', body: {} };
+    fwd(event);
+    expect(emitSpy).toHaveBeenCalledWith({ type: 'forward-lick', event });
+  });
+
+  it('set-follower-forwarding(false) clears the forwarder', async () => {
+    await (bridge as any).handlePanelMessage({ type: 'set-follower-forwarding', enabled: false });
+    expect(setForwarder).toHaveBeenCalledWith(null);
+  });
+
+  it('inject-forwarded-lick emits the event into the worker LickManager', async () => {
+    const event = { type: 'navigate', navigateUrl: 'https://x', timestamp: 't', body: {} };
+    await (bridge as any).handlePanelMessage({ type: 'inject-forwarded-lick', event });
+    expect(emitEvent).toHaveBeenCalledWith(event);
+  });
+
+  it('inject-forwarded-lick is a no-op (no throw) when the worker LickManager is absent', async () => {
+    delete (globalThis as any).__slicc_lickManager;
+    await expect(
+      (bridge as any).handlePanelMessage({
+        type: 'inject-forwarded-lick',
+        event: { type: 'navigate', navigateUrl: 'https://x', timestamp: 't', body: {} },
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it('set-follower-forwarding is a no-op (no throw) when the worker LickManager is absent', async () => {
+    delete (globalThis as any).__slicc_lickManager;
+    await expect(
+      (bridge as any).handlePanelMessage({ type: 'set-follower-forwarding', enabled: true })
+    ).resolves.toBeUndefined();
   });
 });

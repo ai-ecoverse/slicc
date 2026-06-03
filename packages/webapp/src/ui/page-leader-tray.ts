@@ -26,6 +26,7 @@ import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { CDPTransport } from '../cdp/transport.js';
 import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
+import type { LickEvent } from '../scoops/lick-manager.js';
 import { ThrottledErrorTracker } from '../scoops/throttled-error-tracker.js';
 import type {
   LeaderTraySession,
@@ -80,6 +81,7 @@ export interface StartPageLeaderTrayOptions {
   getSprinkles?: () => SprinkleSummary[];
   readSprinkleContent?: LeaderSyncManagerOptions['readSprinkleContent'];
   onSprinkleLick?: LeaderSyncManagerOptions['onSprinkleLick'];
+  onForwardedLick?: (event: LickEvent, originBootstrapId: string) => void;
   onFollowerMessage: LeaderSyncManagerOptions['onFollowerMessage'];
   onFollowerAbort: LeaderSyncManagerOptions['onFollowerAbort'];
   onFollowerCountChanged?: LeaderSyncManagerOptions['onFollowerCountChanged'];
@@ -172,6 +174,7 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
     getSprinkles: options.getSprinkles,
     readSprinkleContent: options.readSprinkleContent,
     onSprinkleLick: options.onSprinkleLick,
+    onForwardedLick: options.onForwardedLick,
     onFollowerMessage: options.onFollowerMessage,
     onFollowerAbort: options.onFollowerAbort,
     onFollowerCountChanged: options.onFollowerCountChanged,

@@ -434,6 +434,28 @@ describe('OffscreenClient', () => {
     expect((events[2] as any).type).toBe('tool_result');
     expect((events[2] as any).result).toBe('file1.txt\nfile2.txt');
   });
+
+  it('sendSetFollowerForwarding posts the toggle to the worker', () => {
+    client.sendSetFollowerForwarding(true);
+    const env = sentMessages.at(-1) as { source: string; payload: any };
+    expect(env.source).toBe('panel');
+    expect(env.payload).toEqual({ type: 'set-follower-forwarding', enabled: true });
+  });
+
+  it('sendForwardedLick posts the event to the worker', () => {
+    const event = { type: 'navigate', navigateUrl: 'https://x', timestamp: 't', body: {} };
+    client.sendForwardedLick(event as any);
+    const env = sentMessages.at(-1) as { source: string; payload: any };
+    expect(env.payload).toEqual({ type: 'inject-forwarded-lick', event });
+  });
+
+  it('dispatches inbound forward-lick to the registered handler', () => {
+    const handler = vi.fn();
+    client.setForwardLickHandler(handler);
+    const event = { type: 'navigate', navigateUrl: 'https://x', timestamp: 't', body: {} };
+    simulateMessage('offscreen', { type: 'forward-lick', event });
+    expect(handler).toHaveBeenCalledWith(event);
+  });
 });
 
 describe('OffscreenClient.setSelectedScoopJid + onScoopSelected', () => {

@@ -12,6 +12,7 @@ import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { AgentEvent, ChatMessage } from '../ui/types.js';
 import { DataChannelKeepalive } from './data-channel-keepalive.js';
+import { FORWARDABLE_TO_LEADER, type LickEvent } from './lick-manager.js';
 import { handleFsRequest } from './tray-fs-handler.js';
 import {
   CHERRY_RUNTIME_TAG,
@@ -50,7 +51,19 @@ export interface LeaderSyncManagerOptions {
   /** Resolve a sprinkle's raw .shtml content for follower-side rendering. */
   readSprinkleContent?: (sprinkleName: string) => Promise<string | null> | string | null;
   /** Forward a sprinkle lick (from a follower's open or inline sprinkle) to the leader's lick router. */
-  onSprinkleLick?: (sprinkleName: string, body: unknown, targetScoop?: string) => void;
+  onSprinkleLick?: (
+    sprinkleName: string,
+    body: unknown,
+    targetScoop?: string,
+    originLabel?: string
+  ) => void;
+  /**
+   * Handle a generic lick (e.g. `navigate`) forwarded by a follower.
+   * The event arrives already validated, scrubbed, and stamped with
+   * `originFollowerId`/`originLabel`. Adapters route it into the
+   * leader's `lickManager.emitEvent`.
+   */
+  onForwardedLick?: (event: LickEvent, originBootstrapId: string) => void;
   /** Handle a user message arriving from a follower. */
   onFollowerMessage: (text: string, messageId: string, attachments?: MessageAttachment[]) => void;
   /** Handle an abort request from a follower. */
@@ -77,15 +90,32 @@ export interface LeaderSyncManagerOptions {
 }
 
 /** Derived float type from the runtime string (e.g. 'slicc-standalone' → 'standalone'). */
-export type FloatType = 'standalone' | 'extension' | 'electron' | 'unknown';
+export type FloatType = 'standalone' | 'extension' | 'electron' | 'ios' | 'unknown';
 
 /** Derive a FloatType from the follower's runtime string. */
 function deriveFloatType(runtime?: string): FloatType {
   if (!runtime) return 'unknown';
+  if (runtime.includes('ios')) return 'ios';
   if (runtime.includes('standalone')) return 'standalone';
   if (runtime.includes('extension')) return 'extension';
   if (runtime.includes('electron')) return 'electron';
   return 'unknown';
+}
+
+/** Human-readable origin label for a forwarded lick, for the agent. */
+export function labelForFollower(floatType: FloatType, runtime?: string): string {
+  switch (floatType) {
+    case 'extension':
+      return 'extension follower';
+    case 'standalone':
+      return 'standalone follower';
+    case 'electron':
+      return 'Electron follower';
+    case 'ios':
+      return 'iOS follower';
+    default:
+      return runtime ? `follower (${runtime})` : 'follower';
+  }
 }
 
 /**
@@ -649,19 +679,57 @@ export class LeaderSyncManager {
       case 'sprinkle.fetch':
         void this.handleSprinkleFetch(bootstrapId, message.requestId, message.sprinkleName);
         break;
-      case 'sprinkle.lick':
+      case 'sprinkle.lick': {
         log.info('Follower sprinkle lick received', {
           bootstrapId,
           sprinkleName: message.sprinkleName,
         });
+        const follower = this.followers.get(bootstrapId);
+        const originLabel = labelForFollower(follower?.floatType ?? 'unknown', follower?.runtime);
         try {
-          this.options.onSprinkleLick?.(message.sprinkleName, message.body, message.targetScoop);
+          this.options.onSprinkleLick?.(
+            message.sprinkleName,
+            message.body,
+            message.targetScoop,
+            originLabel
+          );
         } catch (err) {
           log.warn('onSprinkleLick handler threw', {
             error: err instanceof Error ? err.message : String(err),
           });
         }
         break;
+      }
+      case 'lick': {
+        const incoming = message.event;
+        if (!incoming || !FORWARDABLE_TO_LEADER.has(incoming.type)) {
+          log.warn('Rejecting malformed or non-forwardable lick from follower', {
+            bootstrapId,
+            type: incoming?.type,
+          });
+          break;
+        }
+        const follower = this.followers.get(bootstrapId);
+        // Strip follower-sent routing — the leader is the sole authority on
+        // origin AND routing. The wire type omits origin fields, and the
+        // stamp below overrides any that a malformed peer sneaks through at
+        // runtime (later keys win over `...rest`). Forwarded licks (navigate)
+        // always target the leader's cone, so a follower `targetScoop` is dropped.
+        const { targetScoop: _droppedTarget, ...rest } = incoming;
+        const stamped: LickEvent = {
+          ...rest,
+          originFollowerId: bootstrapId,
+          originLabel: labelForFollower(follower?.floatType ?? 'unknown', follower?.runtime),
+        };
+        try {
+          this.options.onForwardedLick?.(stamped, bootstrapId);
+        } catch (err) {
+          log.warn('onForwardedLick handler threw', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+        break;
+      }
       case 'targets.advertise': {
         log.info('Follower targets advertised', {
           bootstrapId,

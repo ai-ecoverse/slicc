@@ -92,6 +92,7 @@ describe('startExtensionLeaderTray — read-only callbacks', () => {
       sharedFs: overrides.sharedFs ?? (makeMockSharedFs() as any),
       browser: overrides.browser ?? makeStubBrowser(),
       log: console as any,
+      lickManager: overrides.lickManager ?? ({ emitEvent: vi.fn() } as any),
       leaderBridge:
         overrides.leaderBridge ??
         ({
@@ -251,6 +252,21 @@ describe('startExtensionLeaderTray — read-only callbacks', () => {
     );
     handle.stop();
   });
+
+  it('onForwardedLick emits the event into the provided lickManager', () => {
+    const emitEvent = vi.fn();
+    const { options } = startWithCapture({ lickManager: { emitEvent } as any });
+    const event = {
+      type: 'navigate',
+      navigateUrl: 'https://x',
+      timestamp: 't',
+      body: {},
+      originFollowerId: 'b1',
+      originLabel: 'standalone follower',
+    };
+    options.onForwardedLick!(event as any, 'b1');
+    expect(emitEvent).toHaveBeenCalledWith(event);
+  });
 });
 
 describe('startExtensionLeaderTray onFollowerMessage', () => {
@@ -269,6 +285,7 @@ describe('startExtensionLeaderTray onFollowerMessage', () => {
       sharedFs: overrides.sharedFs ?? (makeMockSharedFs() as any),
       browser: overrides.browser ?? makeStubBrowser(),
       log: console as any,
+      lickManager: overrides.lickManager ?? ({ emitEvent: vi.fn() } as any),
       leaderBridge:
         overrides.leaderBridge ??
         ({
@@ -415,6 +432,7 @@ describe('startExtensionLeaderTray peer connection', () => {
       sharedFs: overrides.sharedFs ?? (makeMockSharedFs() as any),
       browser: overrides.browser ?? makeStubBrowser(),
       log: console as any,
+      lickManager: overrides.lickManager ?? ({ emitEvent: vi.fn() } as any),
       leaderBridge:
         overrides.leaderBridge ??
         ({
@@ -512,6 +530,7 @@ describe('startExtensionLeaderTray webhook routing', () => {
       sharedFs: overrides.sharedFs ?? (makeMockSharedFs() as any),
       browser: overrides.browser ?? makeStubBrowser(),
       log: console as any,
+      lickManager: overrides.lickManager ?? ({ emitEvent: vi.fn() } as any),
       leaderBridge:
         overrides.leaderBridge ??
         ({
@@ -617,6 +636,7 @@ describe('startExtensionLeaderTray agent-event tap', () => {
       sharedFs: overrides.sharedFs ?? (makeMockSharedFs() as any),
       browser: overrides.browser ?? makeStubBrowser(),
       log: console as any,
+      lickManager: overrides.lickManager ?? ({ emitEvent: vi.fn() } as any),
       leaderBridge:
         overrides.leaderBridge ??
         ({
@@ -700,6 +720,7 @@ describe('startExtensionLeaderTray intervals', () => {
       sharedFs: overrides.sharedFs ?? (makeMockSharedFs() as any),
       browser: overrides.browser ?? makeStubBrowser(),
       log: console as any,
+      lickManager: overrides.lickManager ?? ({ emitEvent: vi.fn() } as any),
       leaderBridge:
         overrides.leaderBridge ??
         ({
@@ -791,6 +812,7 @@ describe('startExtensionLeaderTray host-command + reset', () => {
       sharedFs: overrides.sharedFs ?? (makeMockSharedFs() as any),
       browser: overrides.browser ?? makeStubBrowser(),
       log: console as any,
+      lickManager: overrides.lickManager ?? ({ emitEvent: vi.fn() } as any),
       leaderBridge:
         overrides.leaderBridge ??
         ({
@@ -915,6 +937,7 @@ describe('startExtensionLeaderTray teardown', () => {
       sharedFs: overrides.sharedFs ?? (makeMockSharedFs() as any),
       browser: overrides.browser ?? makeStubBrowser(),
       log: console as any,
+      lickManager: overrides.lickManager ?? ({ emitEvent: vi.fn() } as any),
       leaderBridge:
         overrides.leaderBridge ??
         ({
@@ -1016,6 +1039,7 @@ describe('startExtensionLeaderTray start failure retry contract', () => {
       sharedFs: overrides.sharedFs ?? (makeMockSharedFs() as any),
       browser: overrides.browser ?? makeStubBrowser(),
       log: console as any,
+      lickManager: overrides.lickManager ?? ({ emitEvent: vi.fn() } as any),
       leaderBridge:
         overrides.leaderBridge ??
         ({

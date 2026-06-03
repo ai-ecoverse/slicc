@@ -294,6 +294,12 @@ async function init(): Promise<void> {
     activeTrayRuntimeKey = nextTrayRuntimeKey;
 
     if (trayRuntimeConfig?.joinUrl) {
+      // Mark follower mode active for the whole join lifetime — sticky across
+      // transient WebRTC reconnects so panel→offscreen handlers (e.g.
+      // `sprinkle-lick`) know to log+drop instead of falling back to the
+      // local model-less cone when sync is briefly null between connects.
+      // Cleared in the matching `stopTrayRuntime` below.
+      bridge.setFollowerActive(true);
       let activeSync: FollowerSyncManager | null = null;
       let activeSprinkleBridge: ReturnType<typeof connectOffscreenFollowerSprinkleBridge> | null =
         null;
@@ -309,6 +315,7 @@ async function init(): Promise<void> {
         }
         if (!activeSync) return;
         bridge.setFollowerSync(null);
+        lickManager.setForwarder(null);
         browser.setTrayTargetProvider(null);
         activeSync.close();
         activeSync = null;
@@ -434,6 +441,11 @@ async function init(): Promise<void> {
             activeSync = sync;
             browser.setTrayTargetProvider(sync);
             bridge.setFollowerSync(sync);
+            // Follower mode: forwardable licks (`navigate` — how SLICC handoffs
+            // arrive) observed locally must go to the LEADER's agent, not this
+            // follower's (model-less or invisible) local cone. The LickManager
+            // dispatch chokepoint ships them over the data channel.
+            lickManager.setForwarder((event) => sync.forwardLick(event));
             sync.requestSnapshot();
             targetRefreshInterval = setInterval(() => void refreshTargets(), 5000);
             void refreshTargets();
@@ -447,6 +459,9 @@ async function init(): Promise<void> {
       stopTrayRuntime = () => {
         detachSync();
         reconnectHandle.cancel();
+        // Clear sticky follower-mode marker — only on permanent leave, not
+        // on the transient detaches inside `detachSync` above.
+        bridge.setFollowerActive(false);
       };
       return;
     }
@@ -493,6 +508,7 @@ async function init(): Promise<void> {
         browser,
         log,
         leaderBridge,
+        lickManager,
       });
 
       // REGRESSION-SENSITIVE SITE: clearing `activeTrayRuntimeKey` and

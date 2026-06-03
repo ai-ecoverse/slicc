@@ -5,6 +5,7 @@ import {
   isCherryTarget,
   LeaderSyncManager,
   type LeaderSyncManagerOptions,
+  labelForFollower,
   selectTeleportPool,
 } from '../../src/scoops/tray-leader-sync.js';
 import type {
@@ -79,6 +80,19 @@ function createManager(overrides?: Partial<LeaderSyncManagerOptions>) {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+describe('labelForFollower', () => {
+  it('maps known float types to readable labels', () => {
+    expect(labelForFollower('extension')).toBe('extension follower');
+    expect(labelForFollower('standalone')).toBe('standalone follower');
+    expect(labelForFollower('electron')).toBe('Electron follower');
+    expect(labelForFollower('ios')).toBe('iOS follower');
+  });
+  it('falls back to the raw runtime string for unknown', () => {
+    expect(labelForFollower('unknown', 'slicc-weird')).toBe('follower (slicc-weird)');
+    expect(labelForFollower('unknown')).toBe('follower');
+  });
+});
 
 describe('LeaderSyncManager', () => {
   it('sends a snapshot on addFollower', () => {
@@ -2081,23 +2095,24 @@ describe('LeaderSyncManager', () => {
       expect(sent[0].error).toBe('disk full');
     });
 
-    it('sprinkle.lick invokes onSprinkleLick with name, body, and targetScoop', () => {
+    it('sprinkle.lick invokes onSprinkleLick with name, body, targetScoop, and origin label', () => {
       const onSprinkleLick = vi.fn();
       const { manager } = createManager({ onSprinkleLick });
       const channel = new FakeChannel();
-      manager.addFollower('b1', channel);
+      manager.addFollower('b1', channel, { runtime: 'slicc-ios' });
 
       channel.simulateMessage({
         type: 'sprinkle.lick',
         sprinkleName: 'welcome',
-        body: { action: 'click', data: { x: 1 } },
+        body: { action: 'click' },
         targetScoop: 'scoop-1',
       });
 
       expect(onSprinkleLick).toHaveBeenCalledWith(
         'welcome',
-        { action: 'click', data: { x: 1 } },
-        'scoop-1'
+        { action: 'click' },
+        'scoop-1',
+        'iOS follower'
       );
     });
 
@@ -2138,6 +2153,100 @@ describe('LeaderSyncManager', () => {
         body: { action: 'second' },
       });
       expect(onSprinkleLick).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('inbound generic lick', () => {
+    it('stamps origin from the connection and calls onForwardedLick', () => {
+      const onForwardedLick = vi.fn();
+      const { manager } = createManager({ onForwardedLick });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel, { runtime: 'slicc-extension-offscreen' });
+
+      channel.simulateMessage({
+        type: 'lick',
+        event: { type: 'navigate', navigateUrl: 'https://x', timestamp: 't', body: { v: 1 } },
+      });
+
+      expect(onForwardedLick).toHaveBeenCalledTimes(1);
+      const [event, bootstrapId] = onForwardedLick.mock.calls[0];
+      expect(bootstrapId).toBe('b1');
+      expect(event).toMatchObject({
+        type: 'navigate',
+        originFollowerId: 'b1',
+        originLabel: 'extension follower',
+      });
+    });
+
+    it('rejects a non-forwardable lick type', () => {
+      const onForwardedLick = vi.fn();
+      const { manager } = createManager({ onForwardedLick });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel, { runtime: 'slicc-extension-offscreen' });
+
+      channel.simulateMessage({
+        type: 'lick',
+        event: { type: 'webhook', timestamp: 't', body: {} },
+      } as unknown as FollowerToLeaderMessage);
+
+      expect(onForwardedLick).not.toHaveBeenCalled();
+    });
+
+    it('scrubs follower-sent origin fields before stamping', () => {
+      const onForwardedLick = vi.fn();
+      const { manager } = createManager({ onForwardedLick });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel, { runtime: 'slicc-extension-offscreen' });
+
+      channel.simulateMessage({
+        type: 'lick',
+        event: {
+          type: 'navigate',
+          navigateUrl: 'https://x',
+          timestamp: 't',
+          body: {},
+          originFollowerId: 'SPOOFED',
+          originLabel: 'SPOOFED',
+        },
+      } as unknown as FollowerToLeaderMessage);
+
+      const [event] = onForwardedLick.mock.calls[0];
+      expect(event.originFollowerId).toBe('b1');
+      expect(event.originLabel).toBe('extension follower');
+    });
+
+    it('drops a follower-supplied targetScoop so forwarded licks target the cone', () => {
+      const onForwardedLick = vi.fn();
+      const { manager } = createManager({ onForwardedLick });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel, { runtime: 'slicc-extension-offscreen' });
+
+      channel.simulateMessage({
+        type: 'lick',
+        event: {
+          type: 'navigate',
+          navigateUrl: 'https://x',
+          timestamp: 't',
+          body: {},
+          targetScoop: 'some-scoop',
+        },
+      } as unknown as FollowerToLeaderMessage);
+
+      expect(onForwardedLick).toHaveBeenCalledTimes(1);
+      const [event] = onForwardedLick.mock.calls[0];
+      expect(event.targetScoop).toBeUndefined();
+    });
+
+    it('ignores a lick message with a missing event without crashing or forwarding', () => {
+      const onForwardedLick = vi.fn();
+      const { manager } = createManager({ onForwardedLick });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel, { runtime: 'slicc-extension-offscreen' });
+
+      expect(() =>
+        channel.simulateMessage({ type: 'lick' } as unknown as FollowerToLeaderMessage)
+      ).not.toThrow();
+      expect(onForwardedLick).not.toHaveBeenCalled();
     });
   });
 

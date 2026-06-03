@@ -204,6 +204,7 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 - When a tray is connected, remote browser targets are exposed through federated target routing; keep CDP local to the runtime that owns the page.
 - Teleport is part of the browser/shell workflow: `playwright teleport --start=<regex> --return=<regex>` and equivalent flags on `open`, `tab-new`, and navigation commands.
 - Any `*.bsh` file is a browser-navigation helper. Keep detailed behavior in docs rather than growing this root guide.
+- **Lick forwarding**: A tray follower forwards `navigate` licks (which is how SLICC handoffs arrive) to the leader's agent instead of handling them locally. The leader stamps the follower's origin onto the forwarded lick; the leader is the origin authority.
 
 ## Key Conventions
 

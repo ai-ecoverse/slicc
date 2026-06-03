@@ -2468,6 +2468,25 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       body: { action, data },
     };
     if (interceptWelcomeLick(event)) return;
+    // Follower mode: the dip lives in the leader's mirrored chat, so its
+    // lick belongs to the leader's cone (sending it locally would record
+    // a click against a conversation that doesn't contain the dip; on a
+    // typical follower the local cone also has no provider login to handle
+    // it). Mirrors how panel-rendered follower sprinkles forward via
+    // SprinkleFollowerController → sync.sendSprinkleLick.
+    // Predicate is `pageFollowerTray` (set on join, cleared only on permanent
+    // leave) rather than `?.currentSync` (transiently null during WebRTC
+    // reconnects) — we'd rather log+drop a dip click than reroute it back
+    // to the model-less local cone.
+    if (pageFollowerTray) {
+      const sync = pageFollowerTray.currentSync;
+      if (sync) {
+        sync.sendSprinkleLick('inline', { action, data });
+      } else {
+        log.warn('Dip lick dropped: follower sync mid-reconnect', { action });
+      }
+      return;
+    }
     client.sendSprinkleLick('inline', { action, data });
   };
 
@@ -2527,6 +2546,17 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   let pageLeaderTray: PageLeaderTrayHandle | null = null;
   let pageFollowerTray: PageFollowerTrayHandle | null = null;
 
+  // Register a handler so the kernel worker's forward-lick messages
+  // reach the live follower sync. The handler reads `pageFollowerTray`
+  // lazily — at registration time the handle is null (not yet assigned),
+  // but the handler body runs only after a follower connection goes live
+  // and the worker starts emitting forward-lick events.
+  client.setForwardLickHandler((event) => {
+    const sync = pageFollowerTray?.currentSync;
+    if (sync) sync.forwardLick(event);
+    else log.warn('forward-lick dropped: no active follower sync');
+  });
+
   /**
    * Build the full `StartPageLeaderTrayOptions` for the in-scope deps
    * (layout, client, sprinkleManager, browser, etc.). Used by the boot
@@ -2572,8 +2602,13 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
         return null;
       }
     },
-    onSprinkleLick: (sprinkleName: string, body: unknown, targetScoop?: string) =>
-      client.sendSprinkleLick(sprinkleName, body, targetScoop),
+    onSprinkleLick: (
+      sprinkleName: string,
+      body: unknown,
+      targetScoop?: string,
+      originLabel?: string
+    ) => client.sendSprinkleLick(sprinkleName, body, targetScoop, originLabel),
+    onForwardedLick: (event) => client.sendForwardedLick(event),
     onFollowerMessage: (text, messageId, attachments) => {
       layout.panels.chat.addUserMessage(text, attachments);
       agentHandle.sendMessage(text, messageId, attachments);
@@ -2901,6 +2936,7 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
         onStatus: (status) => layout.panels.chat.setProcessing(status === 'processing'),
         setChatAgent: (agent) => layout.panels.chat.setAgent(agent),
         browserAPI: browser,
+        onForwardingToggle: (enabled) => client.sendSetFollowerForwarding(enabled),
         // Follower-side sprinkle rendering: the leader broadcasts `sprinkles.list`,
         // and the `SprinkleFollowerController` (inside `startPageFollowerTray`)
         // mirrors the open-state by fetching `.shtml` content over the data
@@ -3019,6 +3055,7 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
         onStatus: (status) => layout.panels.chat.setProcessing(status === 'processing'),
         setChatAgent: (agent) => layout.panels.chat.setAgent(agent),
         browserAPI: browser,
+        onForwardingToggle: (enabled) => client.sendSetFollowerForwarding(enabled),
         addSprinkle: (name, title, element, zone, options) =>
           layout.addSprinkle(
             name,

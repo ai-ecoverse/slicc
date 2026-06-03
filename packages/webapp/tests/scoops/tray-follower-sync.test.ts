@@ -28,6 +28,9 @@ class FakeChannel implements TrayDataChannelLike {
   }
 
   send(data: string): void {
+    if (this.readyState === 'closed') {
+      throw new Error('Cannot send on closed channel');
+    }
     this.sent.push(data);
   }
 
@@ -1346,6 +1349,38 @@ describe('FollowerSyncManager', () => {
 
       const sent = channel.parseSent() as Array<Record<string, unknown>>;
       expect(sent[0].targetScoop).toBeUndefined();
+    });
+
+    it('forwardLick sends a generic lick to the leader and returns true', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+      const ok = follower.forwardLick({
+        type: 'navigate',
+        navigateUrl: 'https://x',
+        timestamp: 't',
+        body: { v: 1 },
+      });
+      expect(ok).toBe(true);
+      expect(channel.parseSent()).toEqual([
+        {
+          type: 'lick',
+          event: { type: 'navigate', navigateUrl: 'https://x', timestamp: 't', body: { v: 1 } },
+        },
+      ]);
+    });
+
+    it('forwardLick returns false and sends nothing when the channel is closed', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+      channel.close();
+      const ok = follower.forwardLick({
+        type: 'navigate',
+        navigateUrl: 'https://x',
+        timestamp: 't',
+        body: {},
+      });
+      expect(ok).toBe(false);
+      expect(channel.sent).toHaveLength(0);
     });
 
     it('fetchSprinkleContent sends sprinkle.fetch and resolves with single-chunk content', async () => {

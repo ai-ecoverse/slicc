@@ -126,6 +126,32 @@ describe('formatLickEventForCone', () => {
     expect(out!.label).toBe('Sprinkle Event');
     expect(out!.content).toContain('[Sprinkle Event: welcome]');
   });
+
+  it('prefixes a forwarded origin label when present', () => {
+    const event = {
+      type: 'navigate',
+      navigateUrl: 'https://example.com',
+      timestamp: '2026-05-29T00:00:00Z',
+      body: { url: 'https://example.com', verb: 'upskill' },
+      originFollowerId: 'b1',
+      originLabel: 'extension follower',
+    } as unknown as LickEvent;
+    const out = formatLickEventForCone(event);
+    expect(out).not.toBeNull();
+    expect(out!.content).toContain('Forwarded from extension follower');
+    expect(out!.content).toContain('[Navigate Event: https://example.com]');
+  });
+
+  it('omits the origin prefix when no originLabel is set', () => {
+    const event = {
+      type: 'navigate',
+      navigateUrl: 'https://example.com',
+      timestamp: '2026-05-29T00:00:00Z',
+      body: {},
+    } as unknown as LickEvent;
+    const out = formatLickEventForCone(event);
+    expect(out!.content).not.toContain('Forwarded from');
+  });
 });
 
 describe('cherry lick formatting', () => {

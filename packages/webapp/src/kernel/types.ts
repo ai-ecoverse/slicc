@@ -207,7 +207,12 @@ export interface KernelClientFacade {
   clearAllMessages(): Promise<void>;
   clearFilesystem(): void;
   requestState(): void;
-  sendSprinkleLick(sprinkleName: string, body: unknown, targetScoop?: string): void;
+  sendSprinkleLick(
+    sprinkleName: string,
+    body: unknown,
+    targetScoop?: string,
+    originLabel?: string
+  ): void;
   setSprinkleOpHandler(handler: (payload: unknown) => void): void;
 
   // -------------------------------------------------------------------------

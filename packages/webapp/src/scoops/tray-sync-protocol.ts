@@ -24,6 +24,7 @@
 import type { MessageAttachment } from '../core/attachments.js';
 import { createLogger } from '../core/logger.js';
 import type { AgentEvent, ChatMessage } from '../ui/types.js';
+import type { LickEvent } from './lick-manager.js';
 import type { TrayDataChannelLike } from './tray-webrtc.js';
 
 const log = createLogger('tray-sync');
@@ -114,6 +115,7 @@ export type FollowerToLeaderMessage =
       body: unknown;
       targetScoop?: string;
     }
+  | { type: 'lick'; event: Omit<LickEvent, 'originFollowerId' | 'originLabel'> }
   | { type: 'targets.advertise'; targets: RemoteTargetInfo[]; runtimeId: string }
   | {
       type: 'cdp.request';

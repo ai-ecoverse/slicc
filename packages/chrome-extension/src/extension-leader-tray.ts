@@ -13,6 +13,7 @@ import type { BrowserAPI } from '../../webapp/src/cdp/browser-api.js';
 import type { MessageAttachment } from '../../webapp/src/core/attachments.js';
 import type { Logger } from '../../webapp/src/core/logger.js';
 import type { VirtualFS } from '../../webapp/src/fs/virtual-fs.js';
+import type { LickManager } from '../../webapp/src/scoops/lick-manager.js';
 import type { Orchestrator } from '../../webapp/src/scoops/orchestrator.js';
 import { ThrottledErrorTracker } from '../../webapp/src/scoops/throttled-error-tracker.js';
 import {
@@ -95,7 +96,12 @@ export interface ExtensionLeaderBridge {
    *  push new entries, which is all `BufferLike` exposes. */
   getBuffer(jid: string): BufferLike;
   persistScoop(jid: string): void;
-  routeSprinkleLick(name: string, body: unknown, targetScoop?: string): Promise<void>;
+  routeSprinkleLick(
+    name: string,
+    body: unknown,
+    targetScoop?: string,
+    originLabel?: string
+  ): Promise<void>;
   notifyPanelIncomingMessage(jid: string, msg: ChannelMessage): void;
   onAgentEvent(handler: (scoopJid: string, event: AgentEvent) => void): () => void;
 }
@@ -108,6 +114,9 @@ export interface StartExtensionLeaderTrayOptions {
   browser: BrowserAPI;
   log: Logger;
   leaderBridge: OffscreenLeaderSyncBridgeHandle;
+
+  /** Offscreen LickManager — used to route follower-forwarded licks into the leader's cone. */
+  lickManager: LickManager;
 
   /** @internal */ _trayLeaderFactory?: (
     cfg: ConstructorParameters<typeof LeaderTrayManager>[0]
@@ -122,7 +131,8 @@ export interface StartExtensionLeaderTrayOptions {
 export function startExtensionLeaderTray(
   options: StartExtensionLeaderTrayOptions
 ): ExtensionLeaderTrayHandle {
-  const { workerBaseUrl, bridge, orchestrator, sharedFs, browser, leaderBridge } = options;
+  const { workerBaseUrl, bridge, orchestrator, sharedFs, browser, leaderBridge, lickManager } =
+    options;
   const refreshIntervalMs = options._refreshIntervalMs ?? 5000;
 
   let sync!: LeaderSyncManager;
@@ -170,14 +180,21 @@ export function startExtensionLeaderTray(
         return null;
       }
     },
-    onSprinkleLick: (name, body, targetScoop) => {
-      void bridge.routeSprinkleLick(name, body, targetScoop).catch((err) => {
+    onSprinkleLick: (name, body, targetScoop, originLabel) => {
+      void bridge.routeSprinkleLick(name, body, targetScoop, originLabel).catch((err) => {
         options.log.error('routeSprinkleLick failed', {
           name,
           targetScoop,
           error: err instanceof Error ? err.message : String(err),
         });
       });
+    },
+    onForwardedLick: (event) => {
+      // Leader-side: route the forwarded lick through our own LickManager
+      // so it hits defaultLickEventHandler → formatLickEventForCone (with
+      // the stamped origin label) → the cone. Terminal (no re-forward) only
+      // because a leader never has a forwarder installed.
+      lickManager.emitEvent(event);
     },
     onFollowerMessage: (text, messageId, attachments) => {
       const activeJid = getActiveJid();

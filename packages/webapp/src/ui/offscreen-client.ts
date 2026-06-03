@@ -12,6 +12,7 @@ import type {
   AgentEventMsg,
   ErrorMsg,
   ExtensionMessage,
+  ForwardedLickEvent,
   IncomingMessageMsg,
   OffscreenToPanelMessage,
   PanelToOffscreenMessage,
@@ -29,6 +30,7 @@ import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/index.js';
 import { createPanelChromeRuntimeTransport } from '../kernel/transport-chrome-runtime.js';
 import type { KernelClientFacade, KernelTransport } from '../kernel/types.js';
+import type { LickEvent } from '../scoops/lick-manager.js';
 import { setFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 import { setLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import type { RegisteredScoop, ScoopTabState, ThinkingLevel } from '../scoops/types.js';
@@ -36,6 +38,18 @@ import type { TerminalEventMsg } from '../shell/terminal-protocol.js';
 import type { AgentHandle, AgentEvent as UIAgentEvent } from './types.js';
 
 const log = createLogger('offscreen-client');
+
+// Compile-time guard: the real `LickEvent`'s carrier fields must stay
+// assignable to the wire mirror `ForwardedLickEvent` (messages.ts can't import
+// LickEvent directly). `ForwardedLickEvent` is intentionally a loose carrier
+// (`[key: string]: unknown`) that an `interface` source can't satisfy
+// wholesale, so we assert the named carrier fields with NO cast — if
+// `type` / `timestamp` / `body` drift, this fails the build instead of
+// silently breaking the `as unknown as LickEvent` casts at the boundary.
+const _assertLickWireCarrier: (
+  e: LickEvent
+) => Pick<ForwardedLickEvent, 'type' | 'timestamp' | 'body'> = (e) => e;
+void _assertLickWireCarrier;
 
 export interface OffscreenClientCallbacks {
   onStatusChange: (scoopJid: string, status: ScoopTabState['status']) => void;
@@ -369,14 +383,21 @@ export class OffscreenClient implements KernelClientFacade {
   // -------------------------------------------------------------------------
 
   private sprinkleOpHandler: ((payload: unknown) => void) | null = null;
+  private forwardLickHandler: ((event: LickEvent) => void) | null = null;
 
   /** Send a sprinkle lick event to the offscreen orchestrator. */
-  sendSprinkleLick(sprinkleName: string, body: unknown, targetScoop?: string): void {
+  sendSprinkleLick(
+    sprinkleName: string,
+    body: unknown,
+    targetScoop?: string,
+    originLabel?: string
+  ): void {
     this.send({
       type: 'sprinkle-lick',
       sprinkleName,
       body,
       targetScoop,
+      originLabel,
     } as PanelToOffscreenMessage);
   }
 
@@ -394,6 +415,21 @@ export class OffscreenClient implements KernelClientFacade {
       headers,
       body,
     } as PanelToOffscreenMessage);
+  }
+
+  /** Standalone follower: tell the worker to forward (or stop forwarding) licks. */
+  sendSetFollowerForwarding(enabled: boolean): void {
+    this.send({ type: 'set-follower-forwarding', enabled } as PanelToOffscreenMessage);
+  }
+
+  /** Standalone leader: inject a follower-forwarded lick into the worker's LickManager. */
+  sendForwardedLick(event: LickEvent): void {
+    this.send({ type: 'inject-forwarded-lick', event } as PanelToOffscreenMessage);
+  }
+
+  /** Register the page-side handler the worker's forward-lick messages dispatch into. */
+  setForwardLickHandler(handler: ((event: LickEvent) => void) | null): void {
+    this.forwardLickHandler = handler;
   }
 
   /**
@@ -508,6 +544,10 @@ export class OffscreenClient implements KernelClientFacade {
         applyTrayRuntimeStatusSnapshot(m.leader, m.follower);
         break;
       }
+
+      case 'forward-lick':
+        this.forwardLickHandler?.(msg.event as unknown as LickEvent);
+        break;
 
       // Terminal session events route to subscribers registered via
       // `onTerminalEvent`. Not chat-related, so they don't go through
