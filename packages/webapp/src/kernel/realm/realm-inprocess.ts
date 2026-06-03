@@ -16,7 +16,7 @@
  */
 
 import { runJsRealm } from './js-realm-shared.js';
-import { runPyRealm } from './py-realm-shared.js';
+import { PyRealmSession } from './py-realm-shared.js';
 import type { RealmPortLike } from './realm-rpc.js';
 import type { Realm, RealmFactory } from './realm-runner.js';
 import type { RealmErrorMsg, RealmInitMsg } from './realm-types.js';
@@ -101,29 +101,63 @@ export function createInProcessJsRealmFactory(): RealmFactory {
 }
 
 /**
- * In-process Python realm factory. Same pattern as the JS one but
- * dispatches to `runPyRealm`. Used when no DedicatedWorker is
- * available (vitest, headless tools that didn't import the
- * default factory). Cold-start cost is the same ~1-2 s — Pyodide
- * doesn't care that it's running in the same realm as the
- * kernel.
+ * In-process Python realm factory. Mirrors the warm-reuse worker
+ * (`py-realm-worker.ts`): the realm-side listener stays attached and
+ * hosts a single `PyRealmSession` across many `realm-init` messages,
+ * so the pool can check the same in-process realm out repeatedly
+ * (state reset between runs). Used when no DedicatedWorker is
+ * available (vitest, headless tools that didn't import the default
+ * factory).
+ *
+ * `loaderImport` lets tests inject a fake Pyodide instead of paying
+ * the real ~1-2 s cold boot; production callers omit it and the
+ * session dynamically imports `pyodide`.
+ *
+ * `terminate()` detaches the listener (there's no worker to kill in
+ * process). After eviction the pool creates a fresh in-process realm
+ * on the next checkout, which boots a new session.
  */
-export function createInProcessPyRealmFactory(): RealmFactory {
+export function createInProcessPyRealmFactory(
+  loaderImport?: () => Promise<typeof import('pyodide')>
+): RealmFactory {
   return async ({ kind }) => {
     if (kind !== 'py') {
       throw new Error('createInProcessPyRealmFactory: only kind:py is supported');
     }
     const { realmSide, hostSide } = makeInProcessPortPair();
+    let sessionPromise: Promise<PyRealmSession> | null = null;
+    let busy = false;
     const initHandler = (event: MessageEvent): void => {
       const data = event.data as { type?: string };
       if (data?.type !== 'realm-init') return;
-      realmSide.removeEventListener('message', initHandler);
       const init = event.data as RealmInitMsg;
       if (init.kind !== 'py') return;
-      void runPyRealm(init, realmSide).catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
-        const errMsg: RealmErrorMsg = { type: 'realm-error', message };
-        realmSide.postMessage(errMsg);
+      if (busy) return;
+      busy = true;
+      void (async () => {
+        let session: PyRealmSession;
+        try {
+          if (!sessionPromise) sessionPromise = PyRealmSession.create(init, loaderImport);
+          session = await sessionPromise;
+        } catch (err) {
+          sessionPromise = null;
+          const message = err instanceof Error ? err.message : String(err);
+          const errMsg: RealmErrorMsg = {
+            type: 'realm-error',
+            message: `loadPyodide: ${message}`,
+          };
+          realmSide.postMessage(errMsg);
+          return;
+        }
+        try {
+          await session.run(init, realmSide);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          const errMsg: RealmErrorMsg = { type: 'realm-error', message };
+          realmSide.postMessage(errMsg);
+        }
+      })().finally(() => {
+        busy = false;
       });
     };
     realmSide.addEventListener('message', initHandler);

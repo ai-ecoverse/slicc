@@ -18,22 +18,30 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { ProcessManager, ProcessOwner } from '../../kernel/process-manager.js';
+import { createPyRealmPool } from '../../kernel/realm/py-realm-pool.js';
 import {
   createDefaultRealmFactory,
   resolvePyodideIndexURL,
 } from '../../kernel/realm/realm-factory.js';
-import type { RealmFactory } from '../../kernel/realm/realm-runner.js';
-import { runInRealm } from '../../kernel/realm/realm-runner.js';
+import type { RealmFactory, RealmPool } from '../../kernel/realm/realm-runner.js';
+import { runInPooledRealm, runInRealm } from '../../kernel/realm/realm-runner.js';
 import { stdinAsText } from '../just-bash-compat.js';
 
 export interface PythonCommandOptions {
   /**
-   * Override the realm factory. Default: `createDefaultRealmFactory()`
-   * — picks the Pyodide DedicatedWorker realm in both standalone
-   * and extension modes (Pyodide is WASM, only needs
-   * `wasm-unsafe-eval`). Tests can inject a mock.
+   * Override the realm factory. When set, the command runs the
+   * one-shot path (`runInRealm` — fresh realm per call, terminated
+   * after) instead of the warm pool. Tests inject a mock realm here;
+   * production leaves it unset so `python` reuses warm Pyodide
+   * workers from the pool.
    */
   realmFactory?: RealmFactory;
+  /**
+   * Override the warm realm pool. Default: a process-wide singleton
+   * built on `createDefaultRealmFactory()`. Tests inject a pool over
+   * a mock/in-process factory; ignored when `realmFactory` is set.
+   */
+  pool?: RealmPool;
   /** Override the indexURL used by `loadPyodide`. */
   pyodideIndexURL?: string;
 }
@@ -130,41 +138,48 @@ export function createPython3LikeCommand(
       if (!syncDirs.includes(scriptDir)) syncDirs.push(scriptDir);
     }
 
-    const pm = options ? lookupGlobalPm() : null;
     const owner: ProcessOwner = { kind: 'system' };
-    const realmFactory = options.realmFactory ?? createDefaultRealmFactory();
     const pyodideIndexURL = options.pyodideIndexURL ?? resolvePyodideIndexURL();
     // When the program source itself was read from piped stdin, the script
     // must not re-read its own code as input — mirror the `node` command's
     // empty-stdin behavior in that branch.
     const realmStdin = filename === '<stdin>' ? '' : stdinAsText(ctx.stdin);
+    const pm = await resolvePm();
+    const env = Object.fromEntries(ctx.env.entries());
 
-    if (!pm) {
-      return runWithEphemeralPm({
-        realmFactory,
+    // Injected factory → one-shot path (fresh realm per call,
+    // terminated after). Backward-compatible surface tests use to
+    // drive a mock realm. Otherwise route through the warm pool so
+    // the Pyodide interpreter + FS survive between invocations.
+    if (options.realmFactory) {
+      return runInRealm({
+        pm,
+        realmFactory: options.realmFactory,
         owner,
+        kind: 'py',
         code,
         argv: procArgv,
         realmArgv: sysArgv,
-        env: Object.fromEntries(ctx.env.entries()),
+        env,
         cwd: ctx.cwd,
         filename,
         ctx,
         stdin: realmStdin,
         pyodideIndexURL,
         pyodideSyncDirs: syncDirs,
+        procKind: 'py',
       });
     }
 
-    return runInRealm({
+    const pool = options.pool ?? getGlobalPyRealmPool();
+    return runInPooledRealm({
       pm,
-      realmFactory,
+      pool,
       owner,
-      kind: 'py',
       code,
       argv: procArgv,
       realmArgv: sysArgv,
-      env: Object.fromEntries(ctx.env.entries()),
+      env,
       cwd: ctx.cwd,
       filename,
       ctx,
@@ -194,40 +209,34 @@ function lookupGlobalPm(): ProcessManager | null {
   return null;
 }
 
+/**
+ * Resolve the `ProcessManager`: the kernel-host singleton when wired
+ * (`globalThis.__slicc_pm`), else a lazily-built ephemeral one for
+ * vitest / headless tooling so `ps` / `kill` still have a registry.
+ */
 let EphemeralPm: ProcessManager | null = null;
-async function runWithEphemeralPm(args: {
-  realmFactory: RealmFactory;
-  owner: ProcessOwner;
-  code: string;
-  argv: string[];
-  realmArgv?: string[];
-  env: Record<string, string>;
-  cwd: string;
-  filename: string;
-  ctx: Parameters<typeof runInRealm>[0]['ctx'];
-  stdin?: string;
-  pyodideIndexURL: string;
-  pyodideSyncDirs: string[];
-}) {
+async function resolvePm(): Promise<ProcessManager> {
+  const global = lookupGlobalPm();
+  if (global) return global;
   if (!EphemeralPm) {
     const { ProcessManager: PM } = await import('../../kernel/process-manager.js');
     EphemeralPm = new PM();
   }
-  return runInRealm({
-    pm: EphemeralPm,
-    realmFactory: args.realmFactory,
-    owner: args.owner,
-    kind: 'py',
-    code: args.code,
-    argv: args.argv,
-    realmArgv: args.realmArgv,
-    env: args.env,
-    cwd: args.cwd,
-    filename: args.filename,
-    ctx: args.ctx,
-    stdin: args.stdin,
-    pyodideIndexURL: args.pyodideIndexURL,
-    pyodideSyncDirs: args.pyodideSyncDirs,
-    procKind: 'py',
-  });
+  return EphemeralPm;
+}
+
+/**
+ * Process-wide warm Pyodide pool. One per JS context (each kernel
+ * worker / offscreen agent gets its own), stashed on `globalThis` so
+ * a single pool is shared across `WasmShell` instances within the
+ * context. Built on the default realm factory, which falls back to
+ * the reusable in-process Pyodide realm when no `Worker` is
+ * available (vitest / headless).
+ */
+function getGlobalPyRealmPool(): RealmPool {
+  const g = globalThis as { __slicc_py_pool?: RealmPool };
+  if (!g.__slicc_py_pool) {
+    g.__slicc_py_pool = createPyRealmPool({ factory: createDefaultRealmFactory() });
+  }
+  return g.__slicc_py_pool;
 }

@@ -56,114 +56,292 @@ except BaseException:
 `;
 
 // ---------------------------------------------------------------------------
+// Per-run state isolation (warm-pool reuse)
+// ---------------------------------------------------------------------------
+
+/**
+ * Captured ONCE right after `loadPyodide`, before any user code
+ * runs. Records the pristine `sys.modules` key set into a Python
+ * global so the per-run reset can prune anything user code imported
+ * back down to this baseline.
+ */
+export const PY_BASELINE_SNIPPET = `
+import sys as __slicc_sys
+__slicc_baseline_modules = frozenset(__slicc_sys.modules)
+del __slicc_sys
+`;
+
+/**
+ * Run BEFORE every reused run (never on the first). Prunes
+ * `sys.modules` back to the post-boot baseline so a module a
+ * previous run imported (and possibly monkeypatched) is re-imported
+ * fresh next time. The `__main__` namespace is already fresh every
+ * run — `PYTHON_RUNNER` `exec`s into a brand-new dict — so only the
+ * shared module cache needs explicit teardown here.
+ *
+ * Residual shared-state caveat: pruning `sys.modules` drops the
+ * Python-level module objects, but C-level singletons living in the
+ * WASM heap (a native extension's global state, an already-open file
+ * descriptor outside the synced scratch dirs, numpy's threadpool, …)
+ * are NOT reset. This is the accepted trade-off for skipping the
+ * ~1-2 s cold boot on warm reuse; code needing hermetic isolation
+ * gets a cold worker whenever the pool evicts (SIGKILL / error).
+ */
+export const PY_RESET_SNIPPET = `
+import sys as __slicc_sys
+for __slicc_name in list(__slicc_sys.modules):
+    if __slicc_name not in __slicc_baseline_modules:
+        __slicc_sys.modules.pop(__slicc_name, None)
+del __slicc_sys
+try:
+    del __slicc_name
+except NameError:
+    pass
+`;
+
+/**
+ * Pyodide/emscripten system directories that must never be cleared
+ * between runs — wiping them breaks the interpreter. The per-run
+ * scratch reset only touches the caller's `syncDirs` contents, and
+ * skips any entry that is itself one of these roots.
+ */
+const PROTECTED_PY_DIRS = new Set<string>([
+  '/',
+  '/bin',
+  '/sbin',
+  '/dev',
+  '/etc',
+  '/home',
+  '/home/pyodide',
+  '/lib',
+  '/lib64',
+  '/proc',
+  '/root',
+  '/usr',
+]);
+
+function errMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+// ---------------------------------------------------------------------------
 // Python realm execution engine
 // ---------------------------------------------------------------------------
 
 /**
- * Run a `kind:'py'` realm against `port`. Loads Pyodide via the
- * supplied `loaderImport` (default: dynamic `import('pyodide')`),
- * syncs VFS↔Pyodide-FS via the `vfs` RPC channel, runs the user
- * code, then posts `realm-done`. Used by both `py-realm-worker.ts`
- * (worker context) and the in-process test factory.
+ * A warm, reusable Pyodide realm. `create()` pays the one-time
+ * `loadPyodide` cost and snapshots the pristine module set; `run()`
+ * executes one `RealmInitMsg` and posts `realm-done`. The same
+ * session services many `run()` calls — the warm-pool reuse that
+ * skips cold boot. State carried by Pyodide between runs (imported
+ * modules, scratch files) is reset at the start of every run after
+ * the first; see `PY_RESET_SNIPPET` for the caveat.
+ */
+export class PyRealmSession {
+  private hasRun = false;
+
+  private constructor(private readonly pyodide: PyodideInterface) {}
+
+  /**
+   * Load Pyodide via `loaderImport` (default: dynamic
+   * `import('pyodide')`) and capture the module baseline. Throws on
+   * load failure — callers (the worker / in-process factory) post a
+   * `realm-error` with a `loadPyodide:` prefix.
+   */
+  static async create(
+    init: RealmInitMsg,
+    loaderImport: () => Promise<typeof import('pyodide')> = () => import('pyodide')
+  ): Promise<PyRealmSession> {
+    const mod = await loaderImport();
+    const pyodide = await mod.loadPyodide({
+      indexURL: init.pyodideIndexURL,
+      fullStdLib: false,
+    });
+    pyodide.runPython(PY_BASELINE_SNIPPET);
+    return new PyRealmSession(pyodide);
+  }
+
+  /**
+   * Execute one realm-init against `port`: reset state (reused runs
+   * only), sync VFS↔Pyodide-FS via the `vfs` RPC channel, run the
+   * user code, then post `realm-done`.
+   */
+  async run(init: RealmInitMsg, port: RealmPortLike): Promise<void> {
+    const pyodide = this.pyodide;
+    const stdoutChunks: string[] = [];
+    const stderrChunks: string[] = [];
+    const pushWarning = (msg: string): void => {
+      stderrChunks.push(`Warning: ${msg}\n`);
+    };
+
+    // Default `[cwd, '/tmp']` is deliberate: those are the two
+    // directories Python code almost always reads from (the working
+    // directory the user invoked from + the conventional scratch
+    // location). Adding `/workspace/` or `/shared/` to the default
+    // would mirror the entire workspace into Pyodide's FS on every
+    // invocation — minutes per `python3 -c "print(1)"` even with the
+    // bulk-RPC path. Callers that need wider visibility pass an
+    // explicit `pyodideSyncDirs`.
+    const syncDirs = init.pyodideSyncDirs ?? [init.cwd, '/tmp'];
+
+    // Reset carried state on every reused run. The first run on a
+    // freshly-booted session skips this — nothing to clean and the
+    // scratch dirs don't exist yet. `clearPyScratch` wipes the
+    // synced dirs so a file the previous run created (and that VFS
+    // has since deleted) doesn't leak in via pre-sync's add-only
+    // mirror; `PY_RESET_SNIPPET` prunes the module cache.
+    if (this.hasRun) {
+      try {
+        clearPyScratch(pyodide, syncDirs, pushWarning);
+      } catch (err) {
+        pushWarning(`reset scratch failed: ${errMessage(err)}`);
+      }
+      try {
+        pyodide.runPython(PY_RESET_SNIPPET);
+      } catch (err) {
+        pushWarning(`reset modules failed: ${errMessage(err)}`);
+      }
+    }
+    this.hasRun = true;
+
+    const rpc = new RealmRpcClient(port);
+
+    let preSyncSnapshot: PreSyncSnapshot = { files: new Map(), dirs: new Set() };
+    try {
+      preSyncSnapshot = await syncVfsToPyodide(rpc, pyodide, syncDirs, pushWarning);
+    } catch (err) {
+      pushWarning(`VFS→Pyodide sync failed: ${errMessage(err)}`);
+    }
+
+    try {
+      pyodide.FS.chdir(init.cwd);
+    } catch {
+      /* dir may not exist in Pyodide FS */
+    }
+
+    pyodide.setStdout({ batched: (msg: string) => stdoutChunks.push(msg + '\n') });
+    pyodide.setStderr({ batched: (msg: string) => stderrChunks.push(msg + '\n') });
+
+    let stdinConsumed = false;
+    pyodide.setStdin({
+      stdin: () => {
+        if (stdinConsumed || !init.stdin) return null;
+        stdinConsumed = true;
+        return init.stdin;
+      },
+    });
+    pyodide.globals.set('__slicc_code', init.code);
+    pyodide.globals.set('__slicc_filename', init.filename);
+    pyodide.globals.set('__slicc_argv', init.argv);
+
+    let exitCode: number;
+    try {
+      await pyodide.runPythonAsync(PYTHON_RUNNER);
+      const raw = pyodide.globals.get('__slicc_exit_code');
+      exitCode = typeof raw === 'number' ? raw : Number(raw ?? 1);
+    } catch (err) {
+      stderrChunks.push(`${errMessage(err)}\n`);
+      exitCode = 1;
+    }
+
+    try {
+      pyodide.runPython('del __slicc_code, __slicc_filename, __slicc_argv, __slicc_exit_code');
+    } catch {
+      /* best-effort cleanup */
+    }
+
+    try {
+      await syncPyodideToVfs(rpc, pyodide, syncDirs, preSyncSnapshot, pushWarning);
+    } catch (err) {
+      pushWarning(`Pyodide→VFS sync failed: ${errMessage(err)}`);
+    }
+
+    rpc.dispose();
+    const done: RealmDoneMsg = {
+      type: 'realm-done',
+      stdout: stdoutChunks.join(''),
+      stderr: stderrChunks.join(''),
+      exitCode,
+    };
+    port.postMessage(done);
+  }
+}
+
+/**
+ * Recursively delete the CONTENTS of each scratch dir (not the dir
+ * itself), skipping Pyodide/emscripten system roots. Used by
+ * `PyRealmSession.run` to drop stale in-memory files before a reused
+ * run re-mirrors VFS.
+ */
+function clearPyScratch(pyodide: PyodideInterface, dirs: string[], pushWarning: WarningSink): void {
+  const FS = pyodide.FS;
+  for (const dir of dirs) {
+    if (PROTECTED_PY_DIRS.has(dir)) continue;
+    let names: string[];
+    try {
+      names = (FS.readdir(dir) as string[]).filter((n) => n !== '.' && n !== '..');
+    } catch {
+      continue; // dir not present in Pyodide FS yet
+    }
+    for (const name of names) {
+      const full = dir === '/' ? `/${name}` : `${dir}/${name}`;
+      if (PROTECTED_PY_DIRS.has(full)) continue;
+      removePyPath(FS, full, pushWarning);
+    }
+  }
+}
+
+function removePyPath(Fs: PyodideInterface['FS'], path: string, pushWarning: WarningSink): void {
+  let st: { mode: number };
+  try {
+    st = Fs.stat(path) as { mode: number };
+  } catch {
+    return;
+  }
+  if (Fs.isDir(st.mode)) {
+    let names: string[];
+    try {
+      names = (Fs.readdir(path) as string[]).filter((n) => n !== '.' && n !== '..');
+    } catch {
+      names = [];
+    }
+    for (const name of names) removePyPath(Fs, `${path}/${name}`, pushWarning);
+    try {
+      Fs.rmdir(path);
+    } catch (err) {
+      pushWarning(`reset: rmdir '${path}' failed: ${errMessage(err)}`);
+    }
+  } else {
+    try {
+      Fs.unlink(path);
+    } catch (err) {
+      pushWarning(`reset: unlink '${path}' failed: ${errMessage(err)}`);
+    }
+  }
+}
+
+/**
+ * One-shot convenience wrapper retained for callers that don't reuse
+ * the realm. Creates a session, runs once, and posts `realm-error`
+ * (prefixed `loadPyodide:`) if the interpreter fails to boot.
  */
 export async function runPyRealm(
   init: RealmInitMsg,
   port: RealmPortLike,
   loaderImport: () => Promise<typeof import('pyodide')> = () => import('pyodide')
 ): Promise<void> {
-  const stdoutChunks: string[] = [];
-  const stderrChunks: string[] = [];
-
-  const rpc = new RealmRpcClient(port);
-
-  let pyodide: PyodideInterface;
+  let session: PyRealmSession;
   try {
-    const mod = await loaderImport();
-    pyodide = await mod.loadPyodide({
-      indexURL: init.pyodideIndexURL,
-      fullStdLib: false,
-    });
+    session = await PyRealmSession.create(init, loaderImport);
   } catch (err) {
-    rpc.dispose();
-    const message = err instanceof Error ? err.message : String(err);
-    const errMsg: RealmErrorMsg = { type: 'realm-error', message: `loadPyodide: ${message}` };
+    const errMsg: RealmErrorMsg = {
+      type: 'realm-error',
+      message: `loadPyodide: ${errMessage(err)}`,
+    };
     port.postMessage(errMsg);
     return;
   }
-
-  // Default `[cwd, '/tmp']` is deliberate: those are the two
-  // directories Python code almost always reads from (the working
-  // directory the user invoked from + the conventional scratch
-  // location). Adding `/workspace/` or `/shared/` to the default
-  // would mirror the entire workspace into Pyodide's FS on every
-  // invocation — minutes per `python3 -c "print(1)"` even with the
-  // bulk-RPC path. Callers that need wider visibility pass an
-  // explicit `pyodideSyncDirs`.
-  const syncDirs = init.pyodideSyncDirs ?? [init.cwd, '/tmp'];
-  const pushWarning = (msg: string): void => {
-    stderrChunks.push(`Warning: ${msg}\n`);
-  };
-  let preSyncSnapshot: PreSyncSnapshot = { files: new Map(), dirs: new Set() };
-  try {
-    preSyncSnapshot = await syncVfsToPyodide(rpc, pyodide, syncDirs, pushWarning);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    pushWarning(`VFS→Pyodide sync failed: ${message}`);
-  }
-
-  try {
-    pyodide.FS.chdir(init.cwd);
-  } catch {
-    /* dir may not exist in Pyodide FS */
-  }
-
-  pyodide.setStdout({ batched: (msg: string) => stdoutChunks.push(msg + '\n') });
-  pyodide.setStderr({ batched: (msg: string) => stderrChunks.push(msg + '\n') });
-
-  let stdinConsumed = false;
-  pyodide.setStdin({
-    stdin: () => {
-      if (stdinConsumed || !init.stdin) return null;
-      stdinConsumed = true;
-      return init.stdin;
-    },
-  });
-  pyodide.globals.set('__slicc_code', init.code);
-  pyodide.globals.set('__slicc_filename', init.filename);
-  pyodide.globals.set('__slicc_argv', init.argv);
-
-  let exitCode: number;
-  try {
-    await pyodide.runPythonAsync(PYTHON_RUNNER);
-    const raw = pyodide.globals.get('__slicc_exit_code');
-    exitCode = typeof raw === 'number' ? raw : Number(raw ?? 1);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    stderrChunks.push(`${message}\n`);
-    exitCode = 1;
-  }
-
-  try {
-    pyodide.runPython('del __slicc_code, __slicc_filename, __slicc_argv, __slicc_exit_code');
-  } catch {
-    /* best-effort cleanup */
-  }
-
-  try {
-    await syncPyodideToVfs(rpc, pyodide, syncDirs, preSyncSnapshot, pushWarning);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    pushWarning(`Pyodide→VFS sync failed: ${message}`);
-  }
-
-  rpc.dispose();
-  const done: RealmDoneMsg = {
-    type: 'realm-done',
-    stdout: stdoutChunks.join(''),
-    stderr: stderrChunks.join(''),
-    exitCode,
-  };
-  port.postMessage(done);
+  await session.run(init, port);
 }
 
 // ---------------------------------------------------------------------------

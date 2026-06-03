@@ -66,6 +66,38 @@ export interface RealmFactoryArgs {
 export type RealmFactory = (args: RealmFactoryArgs) => Promise<Realm>;
 
 // ---------------------------------------------------------------------------
+// Realm pool abstraction (warm-reuse)
+// ---------------------------------------------------------------------------
+
+/**
+ * A checked-out realm. The runner drives one init/done cycle then
+ * either `release()`s it back to the pool for reuse (clean exit) or
+ * `evict()`s it (error / SIGKILL) so a broken or hard-killed worker
+ * is never handed out again. Both are idempotent and first-wins.
+ *
+ * Defined here (not in `py-realm-pool.ts`) so the runner depends only
+ * on this interface, not the concrete pool — keeps the import edge
+ * one-directional (pool → runner).
+ */
+export interface RealmLease {
+  readonly realm: Realm;
+  /** Return the realm to the pool for reuse. */
+  release(): void;
+  /** Terminate + drop the realm from the pool (broken / killed). */
+  evict(): void;
+}
+
+/**
+ * A pool of warm, reusable realms. `checkout` resolves a lease once
+ * capacity is available (reusing a warm idle realm, creating a new
+ * one under the concurrency limit, or queuing FIFO otherwise).
+ */
+export interface RealmPool {
+  checkout(ctx: CommandContext): Promise<RealmLease>;
+  dispose(): void;
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -209,6 +241,163 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
     const init: RealmInitMsg = {
       type: 'realm-init',
       kind: opts.kind,
+      code: opts.code,
+      argv: opts.realmArgv ?? opts.argv,
+      env: opts.env,
+      cwd: opts.cwd,
+      filename: opts.filename,
+      stdin: opts.stdin,
+      pyodideIndexURL: opts.pyodideIndexURL,
+      pyodideSyncDirs: opts.pyodideSyncDirs,
+    };
+    realm.controlPort.postMessage(init);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Pooled runner (warm-reuse)
+// ---------------------------------------------------------------------------
+
+export interface RunInPooledRealmOptions {
+  pm: ProcessManager;
+  /** Warm-realm pool to check the worker out of. */
+  pool: RealmPool;
+  owner: ProcessOwner;
+  /** Python source. */
+  code: string;
+  argv: string[];
+  env: Record<string, string>;
+  cwd: string;
+  filename: string;
+  ctx: CommandContext;
+  ppid?: number;
+  /** Override the argv exposed to user code as `sys.argv`. */
+  realmArgv?: string[];
+  /** Optional initial stdin exposed to the user code. */
+  stdin?: string;
+  /** Pyodide indexURL. */
+  pyodideIndexURL?: string;
+  /** Pyodide VFS sync directories. */
+  pyodideSyncDirs?: string[];
+  /** `ProcessKind` to register the process under. Defaults to `'py'`. */
+  procKind?: ProcessKind;
+}
+
+/**
+ * Run `code` in a warm realm checked out of `pool`, hooking the
+ * resulting process into `pm` so `ps` / `kill` see it. Mirrors
+ * `runInRealm` but:
+ *
+ *   - the realm comes from the pool (warm reuse skips cold boot)
+ *     rather than a fresh-per-call factory;
+ *   - the realm host is (re-)attached to THIS call's
+ *     `CommandContext` on every checkout and disposed on return, so
+ *     a reused worker dispatches `vfs`/`exec`/`fetch` against the
+ *     current caller's fs/cwd/secrets — never a previous run's;
+ *   - clean `realm-done` RELEASES the lease back to the pool for
+ *     reuse; `realm-error`, a realm `error` event, and SIGKILL all
+ *     EVICT it (terminate + drop) so a broken / hard-killed worker
+ *     is replaced lazily instead of reused.
+ *
+ * SIGKILL still exits 137 by terminating the underlying worker (via
+ * `lease.evict()` → `realm.terminate()`); the pool lazily spins a
+ * fresh worker on the next checkout.
+ */
+export async function runInPooledRealm(opts: RunInPooledRealmOptions): Promise<RealmResult> {
+  const procKind: ProcessKind = opts.procKind ?? 'py';
+  const proc = opts.pm.spawn({
+    kind: procKind,
+    argv: opts.argv,
+    cwd: opts.cwd,
+    env: opts.env,
+    owner: opts.owner,
+    ppid: opts.ppid,
+  });
+
+  let lease: RealmLease;
+  try {
+    lease = await opts.pool.checkout(opts.ctx);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    opts.pm.exit(proc.pid, 1);
+    return { stdout: '', stderr: `realm-runner: ${message}\n`, exitCode: 1 };
+  }
+
+  const realm = lease.realm;
+  // Re-attach the host to THIS checkout's context. Disposed on
+  // settle so the next checkout of a reused worker re-binds to its
+  // own caller's fs/cwd/secrets.
+  const host: RealmHostHandle = attachRealmHost(realm.controlPort, opts.ctx, {
+    ...(opts.owner.scoopJid !== undefined ? { scoopJid: opts.owner.scoopJid } : {}),
+  });
+
+  return new Promise<RealmResult>((resolve) => {
+    let settled = false;
+    let unsubSignal: (() => void) | null = null;
+    let messageHandler: ((event: MessageEvent) => void) | null = null;
+    let errorHandler: ((event: ErrorEvent) => void) | null = null;
+
+    const cleanup = (): void => {
+      if (messageHandler) realm.controlPort.removeEventListener('message', messageHandler);
+      if (errorHandler && realm.removeEventListener) {
+        realm.removeEventListener('error', errorHandler);
+      }
+      unsubSignal?.();
+      host.dispose();
+    };
+
+    const settle = (
+      result: RealmResult,
+      exitForPm: number | null,
+      disposition: 'release' | 'evict'
+    ): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      try {
+        if (disposition === 'evict') lease.evict();
+        else lease.release();
+      } catch {
+        /* idempotent on the lease */
+      }
+      opts.pm.exit(proc.pid, exitForPm);
+      resolve(result);
+    };
+
+    messageHandler = (event: MessageEvent): void => {
+      const data = event.data as { type?: string };
+      if (data?.type === 'realm-done') {
+        const done = event.data as RealmDoneMsg;
+        settle(
+          { stdout: done.stdout, stderr: done.stderr, exitCode: done.exitCode },
+          done.exitCode,
+          'release'
+        );
+      } else if (data?.type === 'realm-error') {
+        const err = event.data as RealmErrorMsg;
+        settle({ stdout: '', stderr: err.message + '\n', exitCode: 1 }, 1, 'evict');
+      }
+    };
+
+    errorHandler = (event: ErrorEvent): void => {
+      const message = event.message ?? 'realm error';
+      settle({ stdout: '', stderr: message + '\n', exitCode: 1 }, 1, 'evict');
+    };
+
+    // SIGKILL evicts: terminate the worker (137) and drop it from
+    // the pool so it's never reused. The pool lazily replaces it.
+    unsubSignal = opts.pm.onSignal((signaled, sig) => {
+      if (signaled.pid !== proc.pid) return;
+      if (sig !== 'SIGKILL') return;
+      settle({ stdout: '', stderr: '', exitCode: 137 }, 137, 'evict');
+    });
+
+    realm.controlPort.addEventListener('message', messageHandler);
+    if (realm.addEventListener) realm.addEventListener('error', errorHandler);
+
+    const init: RealmInitMsg = {
+      type: 'realm-init',
+      kind: 'py',
       code: opts.code,
       argv: opts.realmArgv ?? opts.argv,
       env: opts.env,
