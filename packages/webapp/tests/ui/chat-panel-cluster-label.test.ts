@@ -15,7 +15,7 @@
  *     request once the burst settles, not one per call.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import type { ChatMessage, ToolCall } from '../../src/ui/types.js';
 

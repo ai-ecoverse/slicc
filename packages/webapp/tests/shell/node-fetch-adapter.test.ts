@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
 import type { SecureFetch } from 'just-bash';
+import { describe, expect, it, vi } from 'vitest';
 import { createNodeFetchAdapter } from '../../src/shell/supplemental-commands/node-fetch-adapter.js';
 
 const okResult = (

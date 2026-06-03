@@ -15,7 +15,7 @@
 import type { PyodideInterface } from 'pyodide';
 import { version as pyodidePackageVersion } from 'pyodide/package.json';
 import { resolvePinnedPackageVersion } from '../../shell/supplemental-commands/shared.js';
-import { RealmRpcClient, type RealmPortLike } from './realm-rpc.js';
+import { type RealmPortLike, RealmRpcClient } from './realm-rpc.js';
 import type {
   RealmDoneMsg,
   RealmErrorMsg,

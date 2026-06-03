@@ -1,12 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { createSubstrate } from '@slicc/cloud-core';
-import { runStart } from '../src/cloud/start.js';
+import { describe, expect, it } from 'vitest';
+import { runKill } from '../src/cloud/kill.js';
 import { runPause } from '../src/cloud/pause.js';
 import { runResume } from '../src/cloud/resume.js';
-import { runKill } from '../src/cloud/kill.js';
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
+import { runStart } from '../src/cloud/start.js';
 
 const apiKey = process.env['SLICC_TEST_E2B_API_KEY'];
 const describeFn = apiKey ? describe : describe.skip;

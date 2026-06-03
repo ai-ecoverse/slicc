@@ -1,14 +1,14 @@
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { defineCommand } from 'just-bash';
+import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
+import {
+  type FollowerTrayRuntimeStatus,
+  getFollowerTrayRuntimeStatus,
+} from '../../scoops/tray-follower-status.js';
 import {
   getLeaderTrayRuntimeStatus,
   type LeaderTrayRuntimeStatus,
 } from '../../scoops/tray-leader.js';
-import {
-  getFollowerTrayRuntimeStatus,
-  type FollowerTrayRuntimeStatus,
-} from '../../scoops/tray-follower-status.js';
-import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
 import { leaveTray as defaultLeaveTray, type TrayLeaveResult } from '../../scoops/tray-leave.js';
 import { normalizeTrayWorkerBaseUrl } from '../../scoops/tray-runtime-config.js';
 
@@ -69,6 +69,17 @@ function getLeaderStatusWithFallback(): LeaderTrayRuntimeStatus {
     // ignore parse errors
   }
   return moduleStatus;
+}
+
+/**
+ * Fallback-aware connected-follower list, exported for the `cherry-emit`
+ * command's default registry. Unlike `getConnectedFollowers` (page-thread
+ * getter only), this also reads the `slicc.leaderTrayFollowers` localStorage
+ * shim that `main.ts` keeps current, so the kernel-worker shell sees the
+ * leader's followers too.
+ */
+export function getConnectedFollowersWithFallback(): ConnectedFollowerInfo[] {
+  return getFollowersWithFallback();
 }
 
 // Same reason: the module-level getter is only set on the page thread.

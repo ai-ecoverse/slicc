@@ -1,7 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-
-import { createStandalonePanelRpcHandlers } from '../../src/ui/panel-rpc-handlers.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { LeaderTrayRuntimeStatus } from '../../src/scoops/tray-leader.js';
+import { createStandalonePanelRpcHandlers } from '../../src/ui/panel-rpc-handlers.js';
 
 /**
  * Targeted tests for the `tray-reset` panel-RPC handler. The factory
@@ -110,6 +109,42 @@ describe('createStandalonePanelRpcHandlers — tray-leave', () => {
     });
     await expect(handlers['tray-leave']!({ workerBaseUrl: 'https://x' })).rejects.toThrow(
       /worker unreachable/
+    );
+  });
+});
+
+describe('createStandalonePanelRpcHandlers — cherry-emit', () => {
+  it('forwards runtimeId/name/detail and reports delivered when the follower is connected', async () => {
+    const calls: Array<{ runtimeId: string; name: string; detail?: unknown }> = [];
+    const handlers = createStandalonePanelRpcHandlers({
+      emitCherrySliccEvent: (runtimeId, name, detail) => {
+        calls.push({ runtimeId, name, detail });
+        return true;
+      },
+    });
+    const result = await handlers['cherry-emit']!({
+      runtimeId: 'follower-abc',
+      name: 'build.done',
+      detail: { ok: true },
+    });
+    expect(calls).toEqual([
+      { runtimeId: 'follower-abc', name: 'build.done', detail: { ok: true } },
+    ]);
+    expect(result).toEqual({ delivered: true });
+  });
+
+  it('reports delivered:false when the owning follower is not connected', async () => {
+    const handlers = createStandalonePanelRpcHandlers({
+      emitCherrySliccEvent: () => false,
+    });
+    const result = await handlers['cherry-emit']!({ runtimeId: 'gone', name: 'noop' });
+    expect(result).toEqual({ delivered: false });
+  });
+
+  it('rejects with a clear error when no emitCherrySliccEvent callback is wired', async () => {
+    const handlers = createStandalonePanelRpcHandlers({});
+    await expect(handlers['cherry-emit']!({ runtimeId: 'x', name: 'noop' })).rejects.toThrow(
+      /not available in this environment/i
     );
   });
 });
@@ -269,5 +304,29 @@ describe('createStandalonePanelRpcHandlers — save-oauth-accounts', () => {
     const result = await handlers['save-oauth-accounts']!({ accountsJson: next });
     expect(result.storedJson).toBe(next);
     expect(lsData.slicc_accounts).toBe(next);
+  });
+});
+
+describe('createStandalonePanelRpcHandlers — list-remote-targets', () => {
+  it('returns empty targets when no listRemoteTargets callback wired', async () => {
+    const handlers = createStandalonePanelRpcHandlers({});
+    const result = await handlers['list-remote-targets']!(undefined);
+    expect(result).toEqual({ targets: [] });
+  });
+
+  it('filters to composite targetIds only', async () => {
+    const handlers = createStandalonePanelRpcHandlers({
+      listRemoteTargets: () => [
+        { targetId: 'local-1', title: 'Local Tab', url: 'https://local.example.com' },
+        {
+          targetId: 'runtime-abc:tab-1',
+          title: 'Follower Tab',
+          url: 'https://follower.example.com',
+        },
+      ],
+    });
+    const result = await handlers['list-remote-targets']!(undefined);
+    expect(result.targets).toHaveLength(1);
+    expect(result.targets[0].targetId).toBe('runtime-abc:tab-1');
   });
 });

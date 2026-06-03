@@ -8,7 +8,7 @@
  * - getBuffer/getOrCreateAssistantMsg - buffer isolation, source attribution
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChannelMessage } from '../../webapp/src/scoops/types.js';
 
 // Mock chrome.runtime
@@ -683,6 +683,8 @@ describe('OffscreenBridge handlePanelMessage', () => {
       clearScoopMessages: vi.fn().mockResolvedValue(undefined),
       delegateToScoop: vi.fn().mockResolvedValue(undefined),
       updateModel: vi.fn(),
+      handleWebhookEvent: vi.fn(),
+      handleCherryHostEvent: vi.fn(),
     };
 
     await bridge.bind(mockOrchestrator);
@@ -693,6 +695,25 @@ describe('OffscreenBridge handlePanelMessage', () => {
       listener({ source: 'panel', payload }, {}, () => {});
     }
   }
+
+  it('dispatches lick-cherry-host-event to orchestrator.handleCherryHostEvent', async () => {
+    simulatePanelMessage({
+      type: 'lick-cherry-host-event',
+      cherryRuntimeId: 'follower-b1',
+      name: 'cart.updated',
+      detail: { items: 3 },
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(mockOrchestrator.handleCherryHostEvent).toHaveBeenCalledWith(
+      'follower-b1',
+      'cart.updated',
+      {
+        items: 3,
+      }
+    );
+  });
 
   it('dispatches user-message to orchestrator.handleMessage', async () => {
     simulatePanelMessage({

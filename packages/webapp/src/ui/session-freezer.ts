@@ -20,19 +20,19 @@
  * to do with them.
  */
 
-import type { Api, Model } from '@earendil-works/pi-ai';
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
-import type { VirtualFS } from '../fs/index.js';
-import { createLogger } from '../core/logger.js';
-import type { ChatMessage, Session } from './types.js';
-import type { SessionStore } from './session-store.js';
+import type { Api, Model } from '@earendil-works/pi-ai';
 import {
-  runOneOffCompactionCall,
   COMPACTION_MEMORY_INSTRUCTION,
   COMPACTION_TITLE_INSTRUCTION,
+  runOneOffCompactionCall,
 } from '../core/context-compaction.js';
+import { createLogger } from '../core/logger.js';
+import type { VirtualFS } from '../fs/index.js';
 import { applyConeMemoryBudget } from '../scoops/cone-memory-budget.js';
 import { formatChatForClipboard } from './chat-panel.js';
+import type { SessionStore } from './session-store.js';
+import type { ChatMessage, Session } from './types.js';
 
 const log = createLogger('session-freezer');
 
@@ -338,7 +338,7 @@ function cleanTitle(raw: string): string {
 
 function heuristicTitle(messages: ChatMessage[]): string {
   const firstUser = messages.find((m) => m.role === 'user');
-  if (!firstUser || !firstUser.content) return 'untitled-session';
+  if (!firstUser?.content) return 'untitled-session';
   const head = firstUser.content.trim().replace(/\s+/g, ' ');
   return head.length > 60 ? `${head.slice(0, 60)}…` : head || 'untitled-session';
 }

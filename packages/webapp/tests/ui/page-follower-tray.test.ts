@@ -15,10 +15,13 @@
  * covered by the class-level tests already.
  */
 
-import { describe, it, expect, vi } from 'vitest';
-
-import { startPageFollowerTray } from '../../src/ui/page-follower-tray.js';
+import { describe, expect, it, vi } from 'vitest';
 import type { StartPageFollowerTrayOptions } from '../../src/ui/page-follower-tray.js';
+import {
+  buildAdvertisedTargets,
+  CHERRY_RUNTIME_TAG,
+  startPageFollowerTray,
+} from '../../src/ui/page-follower-tray.js';
 
 /**
  * Minimal `BrowserAPI`-shaped fake. The helper only references
@@ -82,6 +85,16 @@ describe('startPageFollowerTray', () => {
     expect(() => handle.stop()).not.toThrow();
   });
 
+  it('accepts an onCherrySliccEvent option (cherry outbound bridge) without throwing', () => {
+    const opts: StartPageFollowerTrayOptions = {
+      ...makeBaseOptions(),
+      runtime: CHERRY_RUNTIME_TAG,
+      onCherrySliccEvent: vi.fn(),
+    };
+    const handle = startPageFollowerTray(opts);
+    expect(() => handle.stop()).not.toThrow();
+  });
+
   it('uses the supplied joinUrl when starting the follower', async () => {
     const opts = makeBaseOptions();
     const handle = startPageFollowerTray(opts);
@@ -104,5 +117,44 @@ describe('startPageFollowerTray', () => {
     } finally {
       handle.stop();
     }
+  });
+});
+
+describe('buildAdvertisedTargets', () => {
+  const pages = [
+    { targetId: 't1', title: 'One', url: 'https://a.example/1' },
+    { targetId: 't2', title: 'Two', url: 'https://a.example/2' },
+  ];
+
+  it('advertises bare targets for non-cherry runtimes (registry defaults kind to browser)', () => {
+    const out = buildAdvertisedTargets(pages, 'slicc-standalone');
+    expect(out).toEqual([
+      { targetId: 't1', title: 'One', url: 'https://a.example/1' },
+      { targetId: 't2', title: 'Two', url: 'https://a.example/2' },
+    ]);
+    // No cherry tagging or capabilities leak onto normal browser targets.
+    for (const t of out) {
+      expect(t.kind).toBeUndefined();
+      expect(t.capabilities).toBeUndefined();
+    }
+  });
+
+  it("tags cherry runtime targets with kind:'cherry' and network:false capabilities", () => {
+    const out = buildAdvertisedTargets(pages, CHERRY_RUNTIME_TAG);
+    expect(out).toHaveLength(2);
+    for (const [i, t] of out.entries()) {
+      expect(t.targetId).toBe(pages[i].targetId);
+      expect(t.title).toBe(pages[i].title);
+      expect(t.url).toBe(pages[i].url);
+      expect(t.kind).toBe('cherry');
+      // network MUST be false — a cherry host can never serve Network.* — so the
+      // leader keeps it out of network-requiring teleport selection.
+      expect(t.capabilities).toEqual({ navigate: true, network: false, screenshot: true });
+    }
+  });
+
+  it('returns an empty list for empty input regardless of runtime', () => {
+    expect(buildAdvertisedTargets([], CHERRY_RUNTIME_TAG)).toEqual([]);
+    expect(buildAdvertisedTargets([], 'slicc-standalone')).toEqual([]);
   });
 });

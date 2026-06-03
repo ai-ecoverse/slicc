@@ -172,6 +172,28 @@ export type PanelRpcRequest =
       // mirror it into its shim immediately. See issue #701.
       op: 'save-oauth-accounts';
       payload: { accountsJson: string };
+    }
+  | {
+      // Push a `cherry.slicc_event` (cone → host page) out through the
+      // page-side LeaderSyncManager. The `cherry-emit` shell command runs
+      // in the kernel worker, but the leader tray's WebRTC data channels
+      // live on the page, so the worker bridges here. `runtimeId` is the
+      // canonical follower id (a bare runtime id, no `:localTarget`
+      // suffix). Result `delivered` is false when no leader tray is active
+      // or the owning follower is not connected, letting the command
+      // surface a clear failure rather than silently succeeding.
+      op: 'cherry-emit';
+      payload: { runtimeId: string; name: string; detail?: unknown };
+    }
+  | {
+      // Fetch remote (follower) browser targets from the page-side
+      // BrowserAPI. The tray provider is set on the page-side instance
+      // only — the worker's BrowserAPI has no reference to it, so
+      // listAllTargets() in the worker falls back to local CDP tabs.
+      // This op bridges the gap: the page fetches its full target list
+      // and returns only entries with composite targetIds (remote ones).
+      op: 'list-remote-targets';
+      payload?: undefined;
     };
 
 export interface PanelRpcResults {
@@ -201,6 +223,10 @@ export interface PanelRpcResults {
   'tray-leave': TrayLeaveResult;
   'oauth-extras-set': { storeAfter: OAuthExtraDomainsStore };
   'save-oauth-accounts': { storedJson: string };
+  'cherry-emit': { delivered: boolean };
+  'list-remote-targets': {
+    targets: Array<{ targetId: string; title: string; url: string }>;
+  };
 }
 
 export type PanelRpcOp = PanelRpcRequest['op'];
@@ -266,7 +292,7 @@ export function createPanelRpcClient(options: { instanceId?: string } = {}): Pan
 
   channel.addEventListener('message', (event: MessageEvent) => {
     const msg = event.data as PanelRpcResponseMsg | undefined;
-    if (!msg || msg.type !== 'panel-rpc-response') return;
+    if (msg?.type !== 'panel-rpc-response') return;
     const slot = pending.get(msg.id);
     if (!slot) return;
     pending.delete(msg.id);
@@ -353,7 +379,7 @@ export function installPanelRpcHandler(options: {
 
   const listener = async (event: MessageEvent): Promise<void> => {
     const msg = event.data as PanelRpcRequestMsg | undefined;
-    if (!msg || msg.type !== 'panel-rpc-request') return;
+    if (msg?.type !== 'panel-rpc-request') return;
     const handler = (options.handlers as Record<string, ((p: unknown) => unknown) | undefined>)[
       msg.op
     ];

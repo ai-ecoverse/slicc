@@ -1,12 +1,12 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { MountCommands } from '../../src/fs/mount-commands.js';
 import type { VirtualFS } from '../../src/fs/virtual-fs.js';
 import {
-  pushToolExecutionContext,
   popToolExecutionContext,
-  toolUIRegistry,
+  pushToolExecutionContext,
   type ToolExecutionContext,
+  toolUIRegistry,
 } from '../../src/tools/tool-ui.js';
 
 function makeMockMountIndex() {

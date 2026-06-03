@@ -1,6 +1,6 @@
-import { defineCommand } from 'just-bash';
-import type { Command } from 'just-bash';
 import { unzipSync } from 'fflate';
+import type { Command } from 'just-bash';
+import { defineCommand } from 'just-bash';
 import { dirname, ensureWithinRoot } from './shared.js';
 
 function unzipHelp(): { stdout: string; stderr: string; exitCode: number } {

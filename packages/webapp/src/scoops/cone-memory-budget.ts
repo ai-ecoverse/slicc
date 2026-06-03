@@ -9,8 +9,8 @@
 
 import type { Api, Model, UserMessage } from '@earendil-works/pi-ai';
 import { completeSimple } from '@earendil-works/pi-ai';
-import type { VirtualFS } from '../fs/index.js';
 import { createLogger } from '../core/logger.js';
+import type { VirtualFS } from '../fs/index.js';
 
 const log = createLogger('cone-memory-budget');
 

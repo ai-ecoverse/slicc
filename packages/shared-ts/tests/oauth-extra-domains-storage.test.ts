@@ -1,12 +1,12 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  OAUTH_EXTRA_DOMAINS_KEY,
   addOAuthExtraDomain,
   clearOAuthExtras,
+  type LocalStorageLike,
+  OAUTH_EXTRA_DOMAINS_KEY,
   readOAuthExtras,
   removeOAuthExtraDomain,
   writeOAuthExtras,
-  type LocalStorageLike,
 } from '../src/oauth-extra-domains-storage.js';
 
 function makeStorage(initial?: Record<string, string>): LocalStorageLike & {

@@ -11,18 +11,18 @@
  */
 
 import type FS from '@isomorphic-git/lightning-fs';
-import type { VirtualFS } from './virtual-fs.js';
+import type { FsWatchCallback, FsWatchFilter } from './fs-watcher.js';
+import { normalizePath } from './path-utils.js';
 import type {
-  FileContent,
   DirEntry,
-  Stats,
-  ReadFileOptions,
+  FileContent,
   MkdirOptions,
+  ReadFileOptions,
   RmOptions,
+  Stats,
 } from './types.js';
 import { FsError } from './types.js';
-import { normalizePath } from './path-utils.js';
-import type { FsWatchFilter, FsWatchCallback } from './fs-watcher.js';
+import type { VirtualFS } from './virtual-fs.js';
 
 export class RestrictedFS {
   private vfs: VirtualFS;

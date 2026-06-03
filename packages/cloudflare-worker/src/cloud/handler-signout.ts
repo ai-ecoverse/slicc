@@ -1,4 +1,4 @@
-import { extractBearer, AuthError } from './auth.js';
+import { AuthError, extractBearer } from './auth.js';
 import { invalidate } from './auth-cache.js';
 import { errorResponse, okResponse } from './error-envelope.js';
 

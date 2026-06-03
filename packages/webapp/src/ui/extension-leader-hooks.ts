@@ -14,11 +14,11 @@
  * failure shape #682 was filed for, but on the panel side.
  */
 
-import { PanelLeaderSyncProxy } from '../../../chrome-extension/src/leader-sync-bridge.js';
 import type {
   PanelMessageSender,
   PanelMessageSubscriber,
 } from '../../../chrome-extension/src/bridge-transport.js';
+import { PanelLeaderSyncProxy } from '../../../chrome-extension/src/leader-sync-bridge.js';
 import type { MessageAttachment } from '../core/attachments.js';
 
 /** Minimal `SprinkleManager` surface this module needs. Keeps the test

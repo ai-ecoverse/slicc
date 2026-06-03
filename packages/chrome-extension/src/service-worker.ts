@@ -11,38 +11,43 @@
  * Chrome extension API types provided by ./chrome.d.ts
  */
 
-import type {
-  ExtensionMessage,
-  CdpCommandMsg,
-  CdpResponseMsg,
-  CdpEventMsg,
-  NavigateLickMsg,
-  TraySocketCommandMessage,
-  TraySocketErrorMsg,
-  TraySocketMessageMsg,
-  TraySocketOpenMsg,
-  TraySocketOpenedMsg,
-  OAuthRequestMsg,
-  OAuthResultMsg,
-} from './messages.js';
-import { extractHandoffFromWebRequest } from '../../webapp/src/net/handoff-link.js';
+import { type FetchProxySecretSource, SecretsPipeline } from '@slicc/shared-ts';
 import {
-  isExtensionMessage,
-  DETACHED_RUNTIME_QUERY_NAME,
-  DETACHED_RUNTIME_QUERY_VALUE,
-} from './messages.js';
-import {
+  type DaSignAndForwardEnvelope,
   executeDaSignAndForward,
   executeS3SignAndForward,
-  type DaSignAndForwardEnvelope,
   type S3SignAndForwardEnvelope,
   type SecretGetter,
   type SignAndForwardReply,
 } from '../../webapp/src/fs/mount/sign-and-forward-shared.js';
+import {
+  extractHandoffFromWebRequest,
+  handoffFingerprint,
+} from '../../webapp/src/net/handoff-link.js';
 import { handleFetchProxyConnectionAsync } from './fetch-proxy-shared.js';
+import type {
+  CdpCommandMsg,
+  CdpEventMsg,
+  CdpResponseMsg,
+  ExtensionMessage,
+  NavigateLickMsg,
+  OAuthRequestMsg,
+  OAuthResultMsg,
+  TraySocketCommandMessage,
+  TraySocketErrorMsg,
+  TraySocketMessageMsg,
+  TraySocketOpenedMsg,
+  TraySocketOpenMsg,
+} from './messages.js';
+import {
+  DETACHED_RUNTIME_QUERY_NAME,
+  DETACHED_RUNTIME_QUERY_VALUE,
+  isExtensionMessage,
+} from './messages.js';
+import { buildWebAuthFlowOptions } from './oauth-flow-options.js';
 import { deleteSecret, listSecrets, listSecretsWithValues, setSecret } from './secrets-storage.js';
 import { readOrCreateSwSessionId } from './sw-session-id.js';
-import { SecretsPipeline, type FetchProxySecretSource } from '@slicc/shared-ts';
+
 // ---------------------------------------------------------------------------
 // Detached popout state
 // ---------------------------------------------------------------------------
@@ -318,10 +323,18 @@ async function ensureOffscreen(): Promise<void> {
         return;
       }
       console.log('[slicc-sw] Creating offscreen document...');
+      // `USER_MEDIA` / `DISPLAY_MEDIA` are offscreen-API *reasons* (not
+      // manifest permissions): they let the offscreen document touch
+      // `navigator.mediaDevices` (e.g. `enumerateDevices`). The actual
+      // camera/mic/screen capture still happens in a visible popup window
+      // because the offscreen document has no surface to show Chrome's
+      // permission prompt / screen picker — see `capture-popup.html` and
+      // `packages/webapp/src/shell/supplemental-commands/extension-media-capture.ts`.
       await chrome.offscreen.createDocument({
         url: OFFSCREEN_URL,
-        reasons: ['WORKERS'],
-        justification: 'Runs the SLICC agent engine so work survives side panel close.',
+        reasons: ['WORKERS', 'USER_MEDIA', 'DISPLAY_MEDIA'],
+        justification:
+          'Runs the SLICC agent engine so work survives side panel close, and enumerates camera/mic/screen devices for media-capture commands.',
       });
       console.log('[slicc-sw] Offscreen document created');
     } catch (err) {
@@ -343,6 +356,55 @@ chrome.runtime.onInstalled?.addListener?.(() => {
   ensureOffscreen();
 });
 ensureOffscreen();
+
+// ---------------------------------------------------------------------------
+// Media-capture popup window
+// ---------------------------------------------------------------------------
+// Media capture (`getUserMedia` / `getDisplayMedia`) needs a *visible* surface
+// so Chrome can show its permission prompt / screen picker. The shell command
+// requesting the capture runs in the offscreen document (or the side-panel
+// shell); the offscreen document can't call `chrome.windows.create`, so it
+// asks the service worker to open the capture popup here. The popup performs
+// the capture and broadcasts the bytes back over `chrome.runtime` messaging,
+// which the requesting context picks up directly (no SW relay needed for the
+// result). See `capture-popup.html` / `capture-popup.js`.
+function isCaptureOpenWindowMsg(
+  msg: unknown
+): msg is { type: 'capture-open-window'; url: string; requestId?: string } {
+  return (
+    typeof msg === 'object' &&
+    msg !== null &&
+    'type' in msg &&
+    (msg as { type?: unknown }).type === 'capture-open-window' &&
+    typeof (msg as { url?: unknown }).url === 'string'
+  );
+}
+
+chrome.runtime.onMessage.addListener((message: unknown) => {
+  if (!isCaptureOpenWindowMsg(message)) return false;
+  const requestId = message.requestId;
+  chrome.windows
+    .create({ url: message.url, type: 'popup', width: 360, height: 220, focused: true })
+    .catch((err) => {
+      console.error('[slicc-sw] Failed to open capture popup window:', err);
+      // Surface the failure to the requesting context so captureViaPopup
+      // rejects promptly instead of waiting out its ~5-minute timeout. The
+      // success path never reaches this branch, so there is no double-send.
+      if (requestId) {
+        chrome.runtime
+          .sendMessage({
+            source: 'capture-popup',
+            requestId,
+            ok: false,
+            error: `failed to open capture window: ${err?.message || String(err)}`,
+          })
+          .catch(() => {
+            // Requesting context may not be listening — best effort.
+          });
+      }
+    });
+  return false;
+});
 
 // ---------------------------------------------------------------------------
 // Tab grouping — inline copy for service worker (SW can't import shared chunks)
@@ -431,10 +493,33 @@ chrome.notifications.onClicked.addListener((notificationId: string) => {
 // document response advertises a SLICC handoff rel via RFC 8288 Link.
 // ---------------------------------------------------------------------------
 
+/**
+ * Payload fingerprints of handoffs whose OS notification has already been shown
+ * this service-worker lifetime. A site can advertise the same SLICC `Link` rel
+ * on every page response; without this guard each navigation re-shows the
+ * toast.
+ *
+ * IMPORTANT: this set gates ONLY the notification — never the forward. The
+ * durable cone-turn dedup lives in the long-lived offscreen `LickManager`,
+ * which records a fingerprint only at the instant it actually fires (in-process,
+ * no async delivery gap). The forward here (`chrome.runtime.sendMessage`) is
+ * best-effort and silently drops when the offscreen document isn't listening
+ * yet (e.g. cold start). If we suppressed the forward on "seen", a first
+ * delivery that was dropped before the offscreen came up would lose the handoff
+ * permanently. So we always forward and let the offscreen guard dedup the cone
+ * turn. MV3 may evict and respawn the worker, resetting this set — an accepted
+ * limitation of the in-memory design (a repeat toast can appear once after
+ * eviction). See {@link handoffFingerprint}.
+ */
+const notifiedHandoffFingerprints = new Set<string>();
+
 chrome.webRequest.onHeadersReceived.addListener(
   (details) => {
     const { match } = extractHandoffFromWebRequest(details.responseHeaders, details.url);
     if (!match) return;
+    const fingerprint = handoffFingerprint(match);
+    const alreadyNotified = notifiedHandoffFingerprints.has(fingerprint);
+    notifiedHandoffFingerprints.add(fingerprint);
     const payload: NavigateLickMsg = {
       type: 'navigate-lick',
       url: details.url,
@@ -456,15 +541,17 @@ chrome.webRequest.onHeadersReceived.addListener(
       chrome.tabs
         .get(tabId)
         .then((tab) => {
-          if (tab.windowId !== undefined) showHandoffNotification(tab.windowId);
+          if (!alreadyNotified && tab.windowId !== undefined) showHandoffNotification(tab.windowId);
           dispatch(tab.title);
         })
         .catch(() => dispatch());
     } else {
-      chrome.windows
-        .getCurrent()
-        .then((w) => showHandoffNotification(w.id!))
-        .catch(() => {});
+      if (!alreadyNotified) {
+        chrome.windows
+          .getCurrent()
+          .then((w) => showHandoffNotification(w.id!))
+          .catch(() => {});
+      }
       dispatch();
     }
   },
@@ -937,10 +1024,9 @@ chrome.debugger.onEvent.addListener(
 // ---------------------------------------------------------------------------
 
 async function handleOAuthRequest(msg: OAuthRequestMsg): Promise<OAuthResultMsg> {
-  const redirectUrl = await chrome.identity.launchWebAuthFlow({
-    url: msg.authorizeUrl,
-    interactive: true,
-  });
+  const redirectUrl = await chrome.identity.launchWebAuthFlow(
+    buildWebAuthFlowOptions(msg.authorizeUrl, msg.interactive ?? true)
+  );
 
   if (!redirectUrl) {
     return {

@@ -1,5 +1,5 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { IFileSystem } from 'just-bash';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock modules before importing the command
 vi.mock('../../../src/ui/provider-settings.js', () => ({
@@ -17,17 +17,17 @@ vi.mock('../../../src/providers/oauth-service.js', () => ({
   createOAuthLauncher: vi.fn(() => vi.fn()),
 }));
 
-import { createOAuthTokenCommand } from '../../../src/shell/supplemental-commands/oauth-token-command.js';
-import {
-  getOAuthAccountInfo,
-  getSelectedProvider,
-  getAccounts,
-} from '../../../src/ui/provider-settings.js';
 import {
   getRegisteredProviderConfig,
   getRegisteredProviderIds,
 } from '../../../src/providers/index.js';
 import { createOAuthLauncher } from '../../../src/providers/oauth-service.js';
+import { createOAuthTokenCommand } from '../../../src/shell/supplemental-commands/oauth-token-command.js';
+import {
+  getAccounts,
+  getOAuthAccountInfo,
+  getSelectedProvider,
+} from '../../../src/ui/provider-settings.js';
 
 const mockGetOAuthAccountInfo = vi.mocked(getOAuthAccountInfo);
 const mockGetSelectedProvider = vi.mocked(getSelectedProvider);
@@ -515,5 +515,64 @@ describe('oauth-token command', () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('no masked value');
     expect(result.stderr).toContain('github');
+  });
+
+  it('--renew triggers onSilentRenew and reports success', async () => {
+    const onSilentRenew = vi.fn(async () => 'fresh-token');
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'adobe',
+      name: 'Adobe',
+      isOAuth: true,
+      onSilentRenew,
+    } as never);
+    mockGetOAuthAccountInfo
+      .mockReturnValueOnce({ token: 'old', expiresAt: Date.now() - 1000, expired: true })
+      .mockReturnValueOnce({
+        token: 'fresh-token',
+        expiresAt: Date.now() + 24 * 3600_000,
+        expired: false,
+      });
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['--renew', 'adobe'], createMockCtx());
+
+    expect(onSilentRenew).toHaveBeenCalledTimes(1);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('SUCCESS');
+  });
+
+  it('--renew reports failure when onSilentRenew returns null', async () => {
+    const onSilentRenew = vi.fn(async () => null);
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'adobe',
+      name: 'Adobe',
+      isOAuth: true,
+      onSilentRenew,
+    } as never);
+    mockGetOAuthAccountInfo.mockReturnValue({
+      token: 'old',
+      expiresAt: Date.now() - 1000,
+      expired: true,
+    });
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['--renew', 'adobe'], createMockCtx());
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain('FAILED');
+  });
+
+  it('--renew errors when the provider has no onSilentRenew hook', async () => {
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'noauth',
+      name: 'NoAuth',
+      isOAuth: true,
+    } as never);
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['--renew', 'noauth'], createMockCtx());
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('no onSilentRenew hook');
   });
 });

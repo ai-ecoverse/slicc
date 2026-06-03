@@ -4,27 +4,28 @@
  * provider-specific options, and dynamic model population.
  */
 
-import { getProviders, getModels, getModel, createLogger } from '../core/index.js';
-import type { Model } from '../core/index.js';
 import type { Api } from '@earendil-works/pi-ai';
-import { storeTrayJoinUrl, hasStoredTrayJoinUrl } from '../scoops/tray-runtime-config.js';
+import type { Model } from '../core/index.js';
+import { createLogger, getModel, getModels, getProviders } from '../core/index.js';
+import { hasStoredTrayJoinUrl, storeTrayJoinUrl } from '../scoops/tray-runtime-config.js';
 import { describeInvalidJoinUrl } from './tray-join-url.js';
 
 export { describeInvalidJoinUrl };
-import { getFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
+
 import type { RefreshTrayRuntimeMsg } from '../../../chrome-extension/src/messages.js';
+import {
+  bedrockCampRegionFromBaseUrl,
+  isBedrockCampCompatible,
+} from '../providers/built-in/bedrock-camp.js';
+import type { ProviderConfig } from '../providers/index.js';
 import {
   getRegisteredProviderConfig,
   getRegisteredProviderIds,
   shouldIncludeProvider,
 } from '../providers/index.js';
-import type { ProviderConfig } from '../providers/index.js';
 import type { CompatOverrides, DeviceCodePrompter } from '../providers/types.js';
+import { getFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 import { copyTextToClipboard } from './clipboard.js';
-import {
-  isBedrockCampCompatible,
-  bedrockCampRegionFromBaseUrl,
-} from '../providers/built-in/bedrock-camp.js';
 import { trackSettingsOpen } from './telemetry.js';
 
 export type { ProviderConfig } from '../providers/index.js';
@@ -145,6 +146,26 @@ const LEGACY_KEYS = [
 // module first and call `resolveCurrentModel()` before layout has booted.
 const LEGACY_AUTH_ONLY_PROVIDERS = new Set(['github']);
 
+/**
+ * True when `providerId` is a pi-ai provider that the build config
+ * (`packages/dev-tools/providers.build.json` → `shouldIncludeProvider`)
+ * excludes — e.g. `amazon-bedrock`, whose pi browser stream is
+ * unsupported. Registered built-in/external providers (e.g.
+ * `bedrock-camp`, `adobe`) are not pi-ai providers and so are never
+ * matched here; `bedrock-camp` still resolves its catalog via
+ * `getModelsDynamic('amazon-bedrock')` untouched. Mirrors the pi-provider
+ * filter in `getAvailableProviders()`. Never throws.
+ */
+function isBuildExcludedPiProvider(providerId: string): boolean {
+  let piProviders: string[];
+  try {
+    piProviders = getProviders() as string[];
+  } catch {
+    return false;
+  }
+  return piProviders.includes(providerId) && !shouldIncludeProvider(providerId);
+}
+
 // Account entry in the slicc_accounts array
 export interface Account {
   providerId: string;
@@ -159,13 +180,15 @@ export interface Account {
   userName?: string;
   userAvatar?: string;
   maskedValue?: string;
+  /** True when the user has explicitly logged out; token fields are cleared but the row is retained. */
+  loggedOut?: boolean;
 }
 
 // Delete legacy keys on first access
-let _legacyCleaned = false;
+let LegacyCleaned = false;
 function cleanLegacyKeys(): void {
-  if (_legacyCleaned) return;
-  _legacyCleaned = true;
+  if (LegacyCleaned) return;
+  LegacyCleaned = true;
   for (const key of LEGACY_KEYS) {
     try {
       localStorage.removeItem(key);
@@ -178,8 +201,12 @@ function cleanLegacyKeys(): void {
 
 /**
  * Clear `selected-model` when it points at a provider that used to expose
- * LLM models but no longer does (currently: `github`, after the 3.13.0
- * Copilot split). Idempotent; never throws.
+ * LLM models but no longer does — either a legacy auth-only provider
+ * (currently: `github`, after the 3.13.0 Copilot split) or a pi-ai provider
+ * excluded by the build config (e.g. `amazon-bedrock`, whose pi browser
+ * stream is unsupported). In the latter case the stored account row is also
+ * dropped so it can't resurface models or route the next cone turn through
+ * the broken stream. Idempotent; never throws.
  *
  * Exported only for tests — the production path runs this through
  * `cleanLegacyKeys()` so the migration fires on the first call to
@@ -188,26 +215,52 @@ function cleanLegacyKeys(): void {
 export function migrateLegacyAuthOnlySelection(): void {
   try {
     const raw = localStorage.getItem(MODEL_KEY);
-    if (!raw) return;
-    const sep = raw.indexOf(':');
-    if (sep <= 0) return;
-    const provider = raw.slice(0, sep);
-    if (LEGACY_AUTH_ONLY_PROVIDERS.has(provider)) {
-      localStorage.removeItem(MODEL_KEY);
+    if (raw) {
+      const sep = raw.indexOf(':');
+      if (sep > 0) {
+        const provider = raw.slice(0, sep);
+        if (LEGACY_AUTH_ONLY_PROVIDERS.has(provider) || isBuildExcludedPiProvider(provider)) {
+          localStorage.removeItem(MODEL_KEY);
+        }
+      }
     }
   } catch {
     /* localStorage may be unavailable in some contexts — leave the
        selection alone; layout.ts:ensureModelSelected() will catch
        the mismatch on the next boot. */
   }
+  // Drop stored account rows for build-excluded pi-ai providers so a
+  // previously-saved account (e.g. `amazon-bedrock`) can no longer surface
+  // models or route chats through pi's browser-unsupported stream. Reads the
+  // raw store directly to avoid recursing through getAccounts() → cleanLegacyKeys().
+  try {
+    const rawAccounts = localStorage.getItem(ACCOUNTS_KEY);
+    if (!rawAccounts) return;
+    const parsed = JSON.parse(rawAccounts);
+    if (!Array.isArray(parsed)) return;
+    const filtered = parsed.filter(
+      (entry) =>
+        !(
+          entry != null &&
+          typeof entry === 'object' &&
+          typeof entry.providerId === 'string' &&
+          isBuildExcludedPiProvider(entry.providerId)
+        )
+    );
+    if (filtered.length !== parsed.length) {
+      localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(filtered));
+    }
+  } catch {
+    /* leave accounts alone if storage is unavailable or the row is malformed. */
+  }
 }
 
-function _resetLegacyCleanup(): void {
-  _legacyCleaned = false;
+function ResetLegacyCleanup(): void {
+  LegacyCleaned = false;
 }
 
 /** Test-only exports */
-export const __test__ = { _resetLegacyCleanup };
+export const __test__ = { _resetLegacyCleanup: ResetLegacyCleanup };
 
 // Provider configs are now loaded dynamically from packages/webapp/src/providers/index.ts
 // (built-in providers in packages/webapp/src/providers/built-in/ + external providers in /packages/webapp/providers/)
@@ -527,6 +580,10 @@ export function getAllAvailableModels(): GroupedModels[] {
     // registry for token storage but must not surface in the picker even when
     // they have an active account.
     if (config.hidden) continue;
+    // Build-excluded pi-ai providers (e.g. a previously-saved `amazon-bedrock`
+    // account) must not surface models — pi's browser stream for them is
+    // unsupported. Registered providers like `bedrock-camp` are unaffected.
+    if (isBuildExcludedPiProvider(account.providerId)) continue;
     const models = pickerVisible(getProviderModels(account.providerId));
     if (models.length === 0) continue;
     const group: GroupedModels = {
@@ -577,9 +634,9 @@ export function getAccounts(): Account[] {
  * kept in sync by `installPageStorageSync`.
  */
 import {
+  type OAuthExtraDomainsStore,
   readOAuthExtras as sharedReadOAuthExtras,
   writeOAuthExtras as sharedWriteOAuthExtras,
-  type OAuthExtraDomainsStore,
 } from '@slicc/shared-ts';
 import { getPanelRpcClient, hasLocalDom } from '../kernel/panel-rpc.js';
 
@@ -709,6 +766,15 @@ export function addAccount(
 }
 
 export async function removeAccount(providerId: string): Promise<void> {
+  // For OAuth providers, run the full logout sequence first (token revocation,
+  // IdP session clear, and replica removal). removeAccount then finishes by
+  // deleting the account entry entirely.
+  const accountToRemove = getAccounts().find((a) => a.providerId === providerId);
+  const configToRemove = getProviderConfig(providerId);
+  if (accountToRemove && configToRemove?.isOAuth) {
+    await logoutOAuthAccount(providerId);
+  }
+
   // Clear the replica BEFORE wiping the local Account
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
   try {
@@ -750,6 +816,85 @@ export async function removeAccount(providerId: string): Promise<void> {
   const sep = raw.indexOf(':');
   if (sep > 0 && raw.slice(0, sep) === providerId) {
     localStorage.removeItem(MODEL_KEY);
+  }
+}
+
+/**
+ * Logs out of an OAuth provider: revokes the token at the IdP API, opens the
+ * IdP browser-session logout URL (if the provider defines one), clears local
+ * token fields, and marks the account as loggedOut: true so the UI shows a
+ * Login button instead.
+ *
+ * Does NOT remove the account row — use removeAccount for that. removeAccount
+ * calls this internally for OAuth providers so delete also logs out.
+ */
+export async function logoutOAuthAccount(providerId: string): Promise<void> {
+  const account = getAccounts().find((a) => a.providerId === providerId);
+  if (!account) return;
+  const providerConfig = getProviderConfig(providerId);
+  if (!providerConfig?.isOAuth) return;
+
+  // 1. Revoke the token at the IdP API
+  if (providerConfig.onOAuthLogout) {
+    try {
+      await providerConfig.onOAuthLogout();
+    } catch (err) {
+      log.warn('onOAuthLogout failed', {
+        providerId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // 2. Open IdP logout URL to clear browser session (Option B — see spec).
+  //    Skipped gracefully when not defined or in non-window runtimes.
+  if (providerConfig.getOAuthLogoutUrl) {
+    const logoutUrl = providerConfig.getOAuthLogoutUrl(account);
+    if (logoutUrl) {
+      const { openIdpLogoutUrl } = await import('../providers/oauth-service.js');
+      await openIdpLogoutUrl(logoutUrl).catch((err) => {
+        log.warn('IdP logout popup failed', {
+          providerId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+  }
+
+  // 3. Clear token fields, retain display info, set loggedOut: true
+  const updated = getAccounts().map((a): Account => {
+    if (a.providerId !== providerId) return a;
+    return {
+      providerId: a.providerId,
+      apiKey: '',
+      baseUrl: a.baseUrl,
+      userName: a.userName,
+      userAvatar: a.userAvatar,
+      loggedOut: true,
+    };
+  });
+  await saveAccountsAsync(updated);
+
+  // 4. Remove token replica from node-server / extension storage
+  const isExt = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+  try {
+    if (isExt) {
+      await chrome.storage.local.remove([
+        `oauth.${providerId}.token`,
+        `oauth.${providerId}.token_DOMAINS`,
+      ]);
+    } else {
+      const r = await fetch(`/api/secrets/oauth/${providerId}`, { method: 'DELETE' });
+      if (!r.ok && r.status !== 404) {
+        log.warn('OAuth replica DELETE non-ok during logout', { providerId, status: r.status });
+      }
+    }
+  } catch (err) {
+    log.error('OAuth replica removal failed during logout', {
+      providerId,
+      isExtension: isExt,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -839,7 +984,7 @@ export async function saveOAuthAccount(opts: {
           await saveAccountsAsync(accounts);
         }
       }
-    } else {
+    } else if (!(globalThis as Record<string, unknown>).__slicc_connect_mode) {
       const r = await fetch('/api/secrets/oauth-update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1211,6 +1356,10 @@ const ICON_PATHS = {
     'M8 6V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2',
     'M6 6v10a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V6',
   ],
+  /** Arrow leaving a box — used for the Logout button */
+  logout: ['M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4', 'M16 17l5-5-5-5', 'M21 12H9'],
+  /** Arrow entering a box — used for the Login (re-connect) button */
+  login: ['M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4', 'M10 17l5-5-5-5', 'M15 12H3'],
 };
 
 export interface ShowProviderSettingsOptions {
@@ -1218,6 +1367,21 @@ export interface ShowProviderSettingsOptions {
   preferTrayJoin?: boolean;
   /** When set, show a simplified "Join this tray" confirmation with the URL pre-filled (no paste needed). */
   autoJoinUrl?: string;
+  /**
+   * When true, open straight to the add-account form (provider picker + login),
+   * skipping the accounts list and tray-join views. Used by connect mode, where
+   * the dashboard already shows the account list and tray-join is irrelevant.
+   * In this mode the form's secondary button is a plain "Cancel" (close) instead
+   * of "Back"/"Connect to another browser".
+   */
+  startInAddAccount?: boolean;
+  /**
+   * Restrict the provider picker to providers matching this predicate. When set,
+   * it fully controls the dropdown (overriding the default "models only" filter),
+   * so auth-only providers like GitHub can be offered. Used by connect mode to
+   * show only providers that can actually authenticate there.
+   */
+  providerFilter?: (providerId: string) => boolean;
 }
 
 /**
@@ -1237,8 +1401,22 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
     dialog.className = 'dialog';
     dialog.style.cssText = 'max-width: 480px; width: 90vw; padding: 32px;';
 
+    // After an account is added/logged-in: in connect mode the parent surface
+    // owns the list (with its own remove + Done), so close instead of showing
+    // the internal accounts list — which carries tray-join + "Get Started".
+    const finishAccountChange = () => {
+      if (options?.startInAddAccount) {
+        overlay.remove();
+        resolve((localStorage.getItem(ACCOUNTS_KEY) ?? '') !== accountsBefore);
+      } else {
+        renderAccountsList();
+      }
+    };
+
     // Decide initial view: list if accounts exist, tray-join or add-form if empty
-    if (getAccounts().length > 0) {
+    if (options?.startInAddAccount) {
+      renderAccountForm();
+    } else if (getAccounts().length > 0) {
       renderAccountsList();
     } else if (options?.autoJoinUrl) {
       renderAutoJoinConfirmation(options.autoJoinUrl);
@@ -1297,7 +1475,12 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
           const detail = document.createElement('div');
           detail.style.cssText =
             'font-size: 11px; color: var(--s2-content-disabled); font-family: monospace; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
-          if (account.userName) {
+          if (account.loggedOut) {
+            detail.textContent = account.userName
+              ? `Logged out — was ${account.userName}`
+              : 'Logged out';
+            detail.style.color = 'var(--s2-content-disabled)';
+          } else if (account.userName) {
             detail.textContent = account.userName;
           } else if (account.accessToken) {
             detail.textContent = 'Logged in';
@@ -1330,6 +1513,65 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
             renderAccountForm(account);
           });
           actions.appendChild(editBtn);
+
+          // Logout/Login toggle — OAuth providers only
+          if (config.isOAuth) {
+            const isLoggedOut = account.loggedOut === true;
+            const authBtn = document.createElement('button');
+            authBtn.style.cssText = iconBtnStyle;
+            if (isLoggedOut) {
+              authBtn.setAttribute('aria-label', 'Log in');
+              authBtn.setAttribute('title', 'Log in');
+              authBtn.appendChild(svgIcon(ICON_PATHS.login));
+              authBtn.addEventListener('mouseenter', () => {
+                authBtn.style.color = 'var(--s2-accent)';
+                authBtn.style.borderColor = 'var(--s2-accent)';
+              });
+              authBtn.addEventListener('mouseleave', () => {
+                authBtn.style.color = 'var(--s2-content-secondary)';
+                authBtn.style.borderColor = 'var(--s2-border-subtle)';
+              });
+              authBtn.addEventListener('click', async () => {
+                const { createOAuthLauncher, createInterceptingOAuthLauncherForCurrentRuntime } =
+                  await import('../providers/oauth-service.js');
+                // Always force re-auth when reconnecting from a logged-out
+                // state so providers with SSO (e.g. Adobe IMS) don't silently
+                // re-authorize the previous account.
+                const loginOptions = { forceReauth: true };
+                if (config.onOAuthLoginIntercepted) {
+                  const interceptingLauncher =
+                    await createInterceptingOAuthLauncherForCurrentRuntime();
+                  if (interceptingLauncher) {
+                    await config.onOAuthLoginIntercepted(
+                      interceptingLauncher,
+                      renderAccountsList,
+                      loginOptions
+                    );
+                  }
+                } else if (config.onOAuthLogin) {
+                  const launcher = createOAuthLauncher();
+                  await config.onOAuthLogin(launcher, renderAccountsList, loginOptions);
+                }
+              });
+            } else {
+              authBtn.setAttribute('aria-label', 'Log out');
+              authBtn.setAttribute('title', 'Log out');
+              authBtn.appendChild(svgIcon(ICON_PATHS.logout));
+              authBtn.addEventListener('mouseenter', () => {
+                authBtn.style.color = 'var(--s2-warning, #f59e0b)';
+                authBtn.style.borderColor = 'var(--s2-warning, #f59e0b)';
+              });
+              authBtn.addEventListener('mouseleave', () => {
+                authBtn.style.color = 'var(--s2-content-secondary)';
+                authBtn.style.borderColor = 'var(--s2-border-subtle)';
+              });
+              authBtn.addEventListener('click', async () => {
+                await logoutOAuthAccount(account.providerId);
+                renderAccountsList();
+              });
+            }
+            actions.appendChild(authBtn);
+          }
 
           const deleteBtn = document.createElement('button');
           deleteBtn.style.cssText = iconBtnStyle;
@@ -1481,10 +1723,16 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
         });
         for (const providerId of sorted) {
           if (existingProviders.has(providerId)) continue;
-          // Skip auth-only providers (no LLM models to expose) — they're
-          // useful as accounts the user might already have, but not as
-          // something to "add" from this dialog.
-          if (!providerOffersLlmModels(providerId)) continue;
+          if (options?.providerFilter) {
+            // Caller-supplied filter fully controls the list (e.g. connect mode
+            // offers GitHub — an auth-only provider — but hides ones that can't
+            // authenticate there).
+            if (!options.providerFilter(providerId)) continue;
+          } else if (!providerOffersLlmModels(providerId)) {
+            // Default: skip auth-only providers (no LLM models to expose) —
+            // useful as existing accounts, but not something to "add" here.
+            continue;
+          }
           const config = getProviderConfig(providerId);
           const opt = document.createElement('option');
           opt.value = providerId;
@@ -1638,21 +1886,22 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
         oauthStatus.textContent = 'Opening login window...';
         try {
           if (providerConfig.onOAuthLoginIntercepted) {
-            const { createInterceptingOAuthLauncherForCurrentRuntime } =
-              await import('../providers/oauth-service.js');
+            const { createInterceptingOAuthLauncherForCurrentRuntime } = await import(
+              '../providers/oauth-service.js'
+            );
             const launcher = await createInterceptingOAuthLauncherForCurrentRuntime();
             if (!launcher) {
               throw new Error(
                 'No controlled-browser CDP transport available — open SLICC in standalone mode or the Chrome extension.'
               );
             }
-            await providerConfig.onOAuthLoginIntercepted(launcher, renderAccountsList, {
+            await providerConfig.onOAuthLoginIntercepted(launcher, finishAccountChange, {
               presentDeviceCode: createDialogDeviceCodePrompter(),
             });
           } else if (providerConfig.onOAuthLogin) {
             const { createOAuthLauncher } = await import('../providers/oauth-service.js');
             const launcher = createOAuthLauncher();
-            await providerConfig.onOAuthLogin(launcher, renderAccountsList);
+            await providerConfig.onOAuthLogin(launcher, finishAccountChange);
           }
         } catch (err) {
           // Clean up pre-login baseUrl placeholder if no account existed before
@@ -1885,7 +2134,7 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
           apiVersionInput.value.trim() || undefined
         );
 
-        renderAccountsList();
+        finishAccountChange();
       }
 
       saveBtn.addEventListener('click', validateAndSave);
@@ -1902,7 +2151,20 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
 
       // Back button (only shown when accounts already exist)
       const hasAccounts = getAccounts().length > 0;
-      if (!isEdit && !hasAccounts) {
+      if (options?.startInAddAccount) {
+        // Connect mode: the parent surface owns the account list, and tray-join
+        // is irrelevant here — offer a plain close instead of "Back"/"Connect to
+        // another browser" (both of which dropped users into confusing views).
+        const cancelBtn = document.createElement('button');
+        cancelBtn.className = 'dialog__btn dialog__btn--secondary';
+        cancelBtn.style.marginTop = '8px';
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.addEventListener('click', () => {
+          overlay.remove();
+          resolve((localStorage.getItem(ACCOUNTS_KEY) ?? '') !== accountsBefore);
+        });
+        dialog.appendChild(cancelBtn);
+      } else if (!isEdit && !hasAccounts) {
         const joinBtn = document.createElement('button');
         joinBtn.className = 'dialog__btn dialog__btn--secondary';
         joinBtn.style.marginTop = '8px';

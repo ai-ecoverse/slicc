@@ -25,9 +25,10 @@
  * directory yields a diagnostic.
  */
 
-import { defineCommand } from 'just-bash';
 import type { Command, CommandContext } from 'just-bash';
-import { getBiome, type BiomeRuntime } from './biome-runtime.js';
+import { defineCommand } from 'just-bash';
+import { stdinAsText } from '../just-bash-compat.js';
+import { type BiomeRuntime, getBiome } from './biome-runtime.js';
 
 const LINTABLE_EXTENSIONS = new Set([
   'js',
@@ -293,7 +294,7 @@ async function runStdin(
   runtime: BiomeRuntime
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const virtualPath = parsed.stdinFilePath ?? '/stdin.ts';
-  const source = ctx.stdin ?? '';
+  const source = stdinAsText(ctx.stdin);
   const summary = await processFile(parsed, runtime, virtualPath, source, async () => {
     // No-op writer: stdin mode never persists.
   });

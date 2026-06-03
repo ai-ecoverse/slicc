@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { EnvSecretStore } from '../../src/secrets/env-secret-store.js';
-import { SecretProxyManager } from '../../src/secrets/proxy-manager.js';
 import { OauthSecretStore } from '../../src/secrets/oauth-secret-store.js';
+import { SecretProxyManager } from '../../src/secrets/proxy-manager.js';
 
 function createTempSecretsFile(content: string): string {
   const dir = join(tmpdir(), `slicc-test-${randomUUID()}`);

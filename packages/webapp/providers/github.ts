@@ -23,15 +23,15 @@
  *   VFS so isomorphic-git picks it up for push / pull / clone.
  */
 
-import type { ProviderConfig, OAuthLauncher, OAuthLoginOptions } from '../src/providers/types.js';
-import { saveOAuthAccount, getAccounts, getOAuthAccountInfo } from '../src/ui/provider-settings.js';
+import { GLOBAL_FS_DB_NAME } from '../src/fs/global-db.js';
 import {
   exchangeOAuthCode,
-  revokeOAuthToken,
   getWorkerBaseUrl,
+  revokeOAuthToken,
 } from '../src/providers/oauth-code-exchange.js';
 import { getOAuthPageOrigin } from '../src/providers/oauth-service.js';
-import { GLOBAL_FS_DB_NAME } from '../src/fs/global-db.js';
+import type { OAuthLauncher, OAuthLoginOptions, ProviderConfig } from '../src/providers/types.js';
+import { getAccounts, getOAuthAccountInfo, saveOAuthAccount } from '../src/ui/provider-settings.js';
 
 // ── Config ─────────────────────────────────────────────────────────
 
@@ -55,6 +55,65 @@ const githubConfig: GitHubConfig = configFiles['/packages/webapp/providers/githu
 
 let runtimeClientId: string | null = null;
 let runtimeWorkerBaseUrl: string | null = null;
+
+/**
+ * Decide the GitHub OAuth `redirect_uri` + `state` for the current runtime.
+ * Pure (exported for tests).
+ *
+ * GitHub OAuth Apps allow a single registered callback — the worker's
+ * `/auth/callback` relay — so every runtime redirects there and the relay
+ * bounces the code back via `state`:
+ *  - **extension** → `source:'extension'` (relay bounces to chromiumapp.org)
+ *  - **connect mode** (webapp served by the worker; page origin is NOT the
+ *    registered callback) → `source:'local'`+port for localhost, else
+ *    `source:'remote'`+origin — must route through the relay, then a capture
+ *    page on the bounced origin postMessages the code back
+ *  - **standalone CLI** → existing port-based local bounce (node-server serves
+ *    the capture page on localhost; `runtimeWorkerBaseUrl` is the prod relay)
+ */
+export function resolveGithubOAuthRedirect(opts: {
+  isExtension: boolean;
+  isConnectMode: boolean;
+  workerBaseUrl: string;
+  runtimeWorkerBaseUrl: string | null;
+  pageOrigin: string | null;
+  pageHref: string | null;
+  extensionId: string;
+  nonce: string;
+}): { redirectUri: string; state: Record<string, unknown> } {
+  const { isExtension, isConnectMode, workerBaseUrl, pageOrigin, pageHref, extensionId, nonce } =
+    opts;
+  if (isExtension) {
+    return {
+      redirectUri: `${workerBaseUrl}/auth/callback`,
+      state: { source: 'extension', extensionId, path: '/github', nonce },
+    };
+  }
+  if (isConnectMode) {
+    const origin = pageOrigin ?? '';
+    if (/^https?:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin)) {
+      const port = parseInt(new URL(pageHref ?? origin).port || '8790', 10);
+      return {
+        redirectUri: `${workerBaseUrl}/auth/callback`,
+        state: { source: 'local', port, path: '/auth/callback', nonce },
+      };
+    }
+    return {
+      redirectUri: `${workerBaseUrl}/auth/callback`,
+      state: { source: 'remote', origin, path: '/auth/callback', nonce },
+    };
+  }
+  // Standalone CLI — unchanged: node-server's runtime-config supplies the prod
+  // relay as runtimeWorkerBaseUrl, and node-server serves the localhost capture.
+  return {
+    redirectUri: `${opts.runtimeWorkerBaseUrl ?? pageOrigin ?? ''}/auth/callback`,
+    state: {
+      port: parseInt(new URL(pageHref ?? pageOrigin ?? 'http://localhost:5710').port || '5710', 10),
+      path: '/auth/callback',
+      nonce,
+    },
+  };
+}
 
 async function resolveClientId(): Promise<string> {
   if (runtimeClientId) return runtimeClientId;
@@ -241,8 +300,9 @@ export async function syncGitIdentityFromGitHub(profile: GitHubUserProfile): Pro
 
   try {
     const { VirtualFS } = await import('../src/fs/index.js');
-    const { readGlobalGitConfigValue, writeGlobalGitConfigValue } =
-      await import('../src/git/git-config.js');
+    const { readGlobalGitConfigValue, writeGlobalGitConfigValue } = await import(
+      '../src/git/git-config.js'
+    );
     const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
 
     const desiredName = profile.name || profile.login;
@@ -300,30 +360,26 @@ export const config: ProviderConfig = {
 
     const scopes = options?.scopes ?? githubConfig.scopes;
 
-    // Both flows redirect through the worker's /auth/callback relay. The relay
-    // reads the `state` param (source=local|extension) and forwards to the
-    // correct final destination. Using one registered URL per OAuth App lets
-    // GitHub OAuth Apps (single-callback) work for both CLI and extension.
-    //
-    // The CLI branch resolves `origin` / `href` via `getOAuthPageOrigin()` so
-    // the same code works when `onOAuthLogin` is invoked from a shell command
-    // running inside the kernel `DedicatedWorker` (which has no `window`).
+    // All runtimes redirect through the worker's /auth/callback relay (the single
+    // registered OAuth App callback); the relay forwards to the correct final
+    // destination via `state`. See resolveGithubOAuthRedirect for the per-runtime
+    // logic. `getOAuthPageOrigin()` resolves origin/href even when invoked from a
+    // shell command inside the kernel DedicatedWorker (which has no `window`).
     const pageInfo = isExtension ? null : await getOAuthPageOrigin();
-    const redirectUri = isExtension
-      ? `${getWorkerBaseUrl()}/auth/callback`
-      : `${runtimeWorkerBaseUrl ?? pageInfo!.origin}/auth/callback`;
-
     const nonce = crypto.randomUUID();
     const extensionId = isExtension
       ? (chrome as unknown as { runtime: { id: string } }).runtime.id
       : '';
-    const stateData = isExtension
-      ? { source: 'extension', extensionId, path: '/github', nonce }
-      : {
-          port: parseInt(new URL(pageInfo!.href).port || '5710', 10),
-          path: '/auth/callback',
-          nonce,
-        };
+    const { redirectUri, state: stateData } = resolveGithubOAuthRedirect({
+      isExtension,
+      isConnectMode: !!(globalThis as Record<string, unknown>).__slicc_connect_mode,
+      workerBaseUrl: getWorkerBaseUrl(),
+      runtimeWorkerBaseUrl,
+      pageOrigin: pageInfo?.origin ?? null,
+      pageHref: pageInfo?.href ?? null,
+      extensionId,
+      nonce,
+    });
     const oauthState = btoa(JSON.stringify(stateData));
     const expectedNonce = nonce;
 
@@ -413,6 +469,14 @@ export const config: ProviderConfig = {
     // Clear github account
     await saveOAuthAccount({ providerId: 'github', accessToken: '' });
   },
+
+  /**
+   * Opens https://github.com/logout to clear the GitHub browser session.
+   * Note: GitHub's actual logout is a CSRF-protected POST form; a GET
+   * navigation is best-effort and may not fully clear the session in all
+   * browser contexts. See spec PR notes for details.
+   */
+  getOAuthLogoutUrl: (_account) => 'https://github.com/logout',
 };
 
 export { getValidAccessToken };

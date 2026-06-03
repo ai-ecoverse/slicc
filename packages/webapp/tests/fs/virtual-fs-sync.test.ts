@@ -8,7 +8,7 @@
  */
 
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 
 describe('VirtualFS sync fast-path', () => {
@@ -31,7 +31,9 @@ describe('VirtualFS sync fast-path', () => {
       expect(entries).not.toBeNull();
       const names = entries!.map((e) => e.name).sort();
       expect(names).toEqual(['a.ts', 'b.ts']);
-      entries!.forEach((e) => expect(e.type).toBe('file'));
+      entries!.forEach((e) => {
+        expect(e.type).toBe('file');
+      });
     });
 
     it('returns directory entries with correct type', async () => {

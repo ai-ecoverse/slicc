@@ -2,7 +2,7 @@
  * Tests for provider settings — multi-account storage layer.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const storage = new Map<string, string>();
 const mockStorage = {
@@ -77,6 +77,14 @@ vi.mock('../../src/core/index.js', () => ({
   createLogger: mockCreateLogger,
 }));
 
+// `shouldIncludeProvider` defaults to allow-all so the bulk of the suite is
+// unaffected, but is a vi.fn so the build-exclusion tests can swap in a real
+// exclusion (e.g. dropping `amazon-bedrock`). Reset to allow-all in each
+// relevant beforeEach since vi.clearAllMocks() wipes the implementation.
+const { mockShouldIncludeProvider } = vi.hoisted(() => ({
+  mockShouldIncludeProvider: vi.fn((_id: string) => true),
+}));
+
 // Mock the providers/index.js module — return a minimal set of registered providers
 const { mockGetRegisteredProviderConfig, mockGetRegisteredProviderIds } = vi.hoisted(() => {
   const providerConfigs = new Map<string, Record<string, unknown>>([
@@ -104,7 +112,7 @@ const { mockGetRegisteredProviderConfig, mockGetRegisteredProviderIds } = vi.hoi
       'bedrock-camp',
       {
         id: 'bedrock-camp',
-        name: 'AWS Bedrock (CAMP)',
+        name: 'AWS Bedrock',
         description: 'CAMP',
         requiresApiKey: true,
         requiresBaseUrl: true,
@@ -161,40 +169,43 @@ const { mockGetRegisteredProviderConfig, mockGetRegisteredProviderIds } = vi.hoi
 vi.mock('../../src/providers/index.js', () => ({
   getRegisteredProviderConfig: mockGetRegisteredProviderConfig,
   getRegisteredProviderIds: mockGetRegisteredProviderIds,
-  shouldIncludeProvider: () => true,
+  shouldIncludeProvider: mockShouldIncludeProvider,
 }));
 
+vi.mock('../../src/providers/oauth-service.js', () => ({
+  openIdpLogoutUrl: vi.fn().mockResolvedValue(undefined),
+}));
+
+import type { ProviderDefault } from '../../src/ui/provider-settings.js';
 import {
-  getSelectedProvider,
-  setSelectedProvider,
-  clearSelectedProvider,
-  getApiKey,
-  setApiKey,
-  clearApiKey,
-  getBaseUrl,
-  setBaseUrl,
-  clearBaseUrl,
-  getSelectedModelId,
-  setSelectedModelId,
-  clearAllSettings,
-  resolveCurrentModel,
-  getAccounts,
   addAccount,
-  removeAccount,
-  getApiKeyForProvider,
-  getBaseUrlForProvider,
-  getAllAvailableModels,
   applyProviderDefaults,
+  clearAllSettings,
+  clearApiKey,
+  clearBaseUrl,
   exportProviders,
+  getAccounts,
+  getAllAvailableModels,
+  getApiKey,
+  getApiKeyForProvider,
   getAvailableProviders,
+  getBaseUrl,
+  getBaseUrlForProvider,
+  getOAuthAccountInfo,
   getProviderConfig,
   getProviderModels,
+  getSelectedModelId,
+  getSelectedProvider,
+  logoutOAuthAccount,
+  migrateLegacyAuthOnlySelection,
+  removeAccount,
+  resolveCurrentModel,
   resolveModelById,
   saveOAuthAccount,
-  getOAuthAccountInfo,
-  migrateLegacyAuthOnlySelection,
+  setApiKey,
+  setBaseUrl,
+  setSelectedProvider,
 } from '../../src/ui/provider-settings.js';
-import type { ProviderDefault } from '../../src/ui/provider-settings.js';
 
 describe('multi-account storage', () => {
   beforeEach(() => {
@@ -246,6 +257,52 @@ describe('multi-account storage', () => {
     const accounts = getAccounts();
     expect(accounts).toHaveLength(1);
     expect(accounts[0].providerId).toBe('openai');
+  });
+
+  it('removeAccount calls logoutOAuthAccount (onOAuthLogout) for OAuth providers before removing', async () => {
+    const onOAuthLogoutSpy = vi.fn().mockResolvedValue(undefined);
+    const configs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    configs.set('test-oauth', {
+      id: 'test-oauth',
+      name: 'Test OAuth',
+      description: 'OAuth test provider',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogout: onOAuthLogoutSpy,
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => configs.get(id));
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([
+        { providerId: 'test-oauth', apiKey: '', accessToken: 'tok-xyz', userName: 'bob' },
+      ])
+    );
+
+    await removeAccount('test-oauth');
+
+    // Account is fully removed
+    expect(getAccounts()).toHaveLength(0);
+    // Token revocation was called (via logoutOAuthAccount)
+    expect(onOAuthLogoutSpy).toHaveBeenCalledOnce();
+  });
+
+  it('removeAccount does NOT call onOAuthLogout for non-OAuth providers', async () => {
+    const onOAuthLogoutSpy = vi.fn();
+    const configs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    configs.set('anthropic', {
+      ...configs.get('anthropic'),
+      onOAuthLogout: onOAuthLogoutSpy,
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => configs.get(id));
+    addAccount('anthropic', 'sk-ant');
+    await removeAccount('anthropic');
+    expect(onOAuthLogoutSpy).not.toHaveBeenCalled();
+    expect(getAccounts()).toHaveLength(0);
   });
 
   it('getApiKeyForProvider returns the key for a specific provider', () => {
@@ -503,6 +560,71 @@ describe('getAllAvailableModels', () => {
     const groups = getAllAvailableModels();
     expect(groups).toHaveLength(1);
     expect(groups[0].providerId).toBe('anthropic');
+  });
+});
+
+describe('build-excluded pi-ai providers', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+    // Exercise the real exclusion: `amazon-bedrock` is a pi-ai provider whose
+    // pi browser stream is unsupported, so the build config drops it.
+    mockShouldIncludeProvider.mockImplementation((id: string) => id !== 'amazon-bedrock');
+  });
+
+  afterEach(() => {
+    // Restore allow-all so the leaked implementation doesn't affect other suites.
+    mockShouldIncludeProvider.mockImplementation(() => true);
+  });
+
+  it('getAllAvailableModels skips a stored amazon-bedrock account', () => {
+    addAccount('anthropic', 'ant-key');
+    addAccount('amazon-bedrock', 'bedrock-key');
+    const groups = getAllAvailableModels();
+    expect(groups.map((g) => g.providerId)).toEqual(['anthropic']);
+  });
+
+  it('leaves bedrock-camp untouched (registered, not a pi-ai provider)', () => {
+    // bedrock-camp is not in getProviders(), so the pi-provider exclusion must
+    // not drop its account row or clear its selection — it still resolves via
+    // amazon-bedrock's catalog elsewhere.
+    storage.set('selected-model', 'bedrock-camp:some-model');
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([{ providerId: 'bedrock-camp', apiKey: 'camp-key' }])
+    );
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBe('bedrock-camp:some-model');
+    const remaining = JSON.parse(storage.get('slicc_accounts') as string);
+    expect(remaining.map((a: { providerId: string }) => a.providerId)).toEqual(['bedrock-camp']);
+  });
+
+  it('migrateLegacyAuthOnlySelection clears a selected-model on amazon-bedrock', () => {
+    storage.set('selected-model', 'amazon-bedrock:anthropic.claude-3-sonnet');
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBeUndefined();
+  });
+
+  it('migrateLegacyAuthOnlySelection drops a stored amazon-bedrock account row', () => {
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([
+        { providerId: 'anthropic', apiKey: 'ant-key' },
+        { providerId: 'amazon-bedrock', apiKey: 'bedrock-key' },
+      ])
+    );
+    migrateLegacyAuthOnlySelection();
+    const remaining = JSON.parse(storage.get('slicc_accounts') as string);
+    expect(remaining.map((a: { providerId: string }) => a.providerId)).toEqual(['anthropic']);
+  });
+
+  it('migrateLegacyAuthOnlySelection preserves selection + account for an included provider', () => {
+    storage.set('selected-model', 'anthropic:claude-sonnet-4-6');
+    storage.set('slicc_accounts', JSON.stringify([{ providerId: 'anthropic', apiKey: 'ant-key' }]));
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBe('anthropic:claude-sonnet-4-6');
+    const remaining = JSON.parse(storage.get('slicc_accounts') as string);
+    expect(remaining.map((a: { providerId: string }) => a.providerId)).toEqual(['anthropic']);
   });
 });
 
@@ -1638,5 +1760,110 @@ describe('model metadata overrides', () => {
     const models = getProviderModels('test-proxy');
     expect(String(models[0].api)).toContain('anthropic');
     expect(String(models[0].api)).not.toContain('openai');
+  });
+});
+
+describe('logoutOAuthAccount', () => {
+  let onOAuthLogoutMock: ReturnType<typeof vi.fn>;
+  let getOAuthLogoutUrlMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+
+    onOAuthLogoutMock = vi.fn().mockResolvedValue(undefined);
+    getOAuthLogoutUrlMock = vi.fn().mockReturnValue('https://idp.example.com/logout');
+
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-oauth', {
+      id: 'test-oauth',
+      name: 'Test OAuth',
+      description: 'OAuth test provider',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogout: onOAuthLogoutMock,
+      getOAuthLogoutUrl: getOAuthLogoutUrlMock,
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([
+        {
+          providerId: 'test-oauth',
+          apiKey: '',
+          accessToken: 'tok-abc',
+          userName: 'alice',
+          userAvatar: 'https://example.com/avatar.png',
+        },
+      ])
+    );
+  });
+
+  it('calls onOAuthLogout when defined', async () => {
+    await logoutOAuthAccount('test-oauth');
+    expect(onOAuthLogoutMock).toHaveBeenCalledOnce();
+  });
+
+  it('calls getOAuthLogoutUrl with the account object', async () => {
+    await logoutOAuthAccount('test-oauth');
+    expect(getOAuthLogoutUrlMock).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: 'test-oauth', accessToken: 'tok-abc' })
+    );
+  });
+
+  it('after logout: account has loggedOut:true, accessToken cleared, apiKey empty, userName/userAvatar retained', async () => {
+    await logoutOAuthAccount('test-oauth');
+    const accounts = getAccounts();
+    expect(accounts[0]).toMatchObject({
+      providerId: 'test-oauth',
+      loggedOut: true,
+      apiKey: '',
+      userName: 'alice',
+      userAvatar: 'https://example.com/avatar.png',
+    });
+    expect(accounts[0].accessToken).toBeUndefined();
+  });
+
+  it('does nothing for a non-OAuth provider', async () => {
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([{ providerId: 'anthropic', apiKey: 'sk-ant-123' }])
+    );
+    await logoutOAuthAccount('anthropic');
+    const accounts = getAccounts();
+    expect(accounts[0].loggedOut).toBeUndefined();
+    expect(onOAuthLogoutMock).not.toHaveBeenCalled();
+  });
+
+  it('does nothing for an unknown providerId', async () => {
+    await expect(logoutOAuthAccount('unknown-provider')).resolves.toBeUndefined();
+  });
+
+  it('continues local cleanup when onOAuthLogout throws — still sets loggedOut:true and warns', async () => {
+    onOAuthLogoutMock.mockRejectedValue(new Error('IdP error'));
+    await logoutOAuthAccount('test-oauth');
+    const accounts = getAccounts();
+    expect(accounts[0].loggedOut).toBe(true);
+    expect(mockLog.warn).toHaveBeenCalledWith('onOAuthLogout failed', expect.anything());
+  });
+
+  it('buildUserAvatar selector skips logged-out account even though userName/userAvatar are retained', async () => {
+    await logoutOAuthAccount('test-oauth');
+    const accounts = getAccounts();
+    // This is the exact finder used in buildUserAvatar — must return undefined after logout.
+    const found = accounts.find((a) => !a.loggedOut && (a.userName || a.userAvatar));
+    expect(found).toBeUndefined();
+  });
+
+  it('showAvatarPopover selector skips logged-out account even though userName is retained', async () => {
+    await logoutOAuthAccount('test-oauth');
+    const accounts = getAccounts();
+    // This is the exact finder used in showAvatarPopover — must return undefined after logout.
+    const found = accounts.find((a) => !a.loggedOut && (a.userName || a.accessToken || a.apiKey));
+    expect(found).toBeUndefined();
   });
 });

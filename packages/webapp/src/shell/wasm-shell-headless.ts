@@ -25,28 +25,29 @@
  * envelope emit.
  */
 
-import type { FsWatcher, VirtualFS } from '../fs/index.js';
-import { Bash, defineCommand, getCommandNames, getNetworkCommandNames } from 'just-bash';
 import type { BashExecResult, Command, CommandName } from 'just-bash';
-import { VfsAdapter } from './vfs-adapter.js';
-import { GitCommands } from '../git/git-commands.js';
-import { createSupplementalCommands } from './supplemental-commands.js';
-import type { MediaPreviewItem } from './supplemental-commands.js';
+import { Bash, defineCommand, getCommandNames, getNetworkCommandNames } from 'just-bash';
 import type { BrowserAPI } from '../cdp/index.js';
+import type { FsWatcher, VirtualFS } from '../fs/index.js';
+import { MountCommands } from '../fs/mount-commands.js';
+import { GitCommands } from '../git/git-commands.js';
+import type { ProcessManager, ProcessOwner } from '../kernel/process-manager.js';
+import { trackShellCommand } from '../ui/telemetry.js';
+import type { BshDiscoveryFS } from './bsh-discovery.js';
+import type { JshDiscoveryFS } from './jsh-discovery.js';
+import type { JshProcessConfig } from './jsh-executor.js';
+import { executeJsCode, executeJshFile } from './jsh-executor.js';
+import { EMPTY_BYTES } from './just-bash-compat.js';
+import { parseShellArgs } from './parse-shell-args.js';
+import { createProxiedFetch } from './proxied-fetch.js';
+import { ScriptCatalog } from './script-catalog.js';
 import {
   createSkillCommand,
   createUpskillCommand,
 } from './supplemental-commands/upskill-command.js';
-import { MountCommands } from '../fs/mount-commands.js';
-import type { ProcessManager, ProcessOwner } from '../kernel/process-manager.js';
-import type { JshProcessConfig } from './jsh-executor.js';
-import type { BshDiscoveryFS } from './bsh-discovery.js';
-import type { JshDiscoveryFS } from './jsh-discovery.js';
-import { executeJshFile, executeJsCode } from './jsh-executor.js';
-import { parseShellArgs } from './parse-shell-args.js';
-import { ScriptCatalog } from './script-catalog.js';
-import { trackShellCommand } from '../ui/telemetry.js';
-import { createProxiedFetch } from './proxied-fetch.js';
+import type { MediaPreviewItem } from './supplemental-commands.js';
+import { createSupplementalCommands } from './supplemental-commands.js';
+import { VfsAdapter } from './vfs-adapter.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -373,7 +374,7 @@ export class WasmShellHeadless implements HeadlessShellLike {
         fs: this.vfsAdapter,
         cwd: this.cwd,
         env: new Map(Object.entries(this.lastEnv)),
-        stdin: '',
+        stdin: EMPTY_BYTES,
         exec: (cmd, opts) => this.bash.exec(cmd, { env: this.lastEnv, cwd: opts?.cwd ?? this.cwd }),
       },
       this.buildJshProcessConfig()
@@ -469,6 +470,14 @@ export class WasmShellHeadless implements HeadlessShellLike {
 
         const command: Command = {
           name,
+          // just-bash v3 monkey-patches async primitives in the defense-
+          // in-depth sandbox for untrusted commands. The `.jsh` executor
+          // reads the script from the VFS and runs it in a worker realm,
+          // both of which require unpatched async I/O. Mark the command
+          // trusted so just-bash runs it inside
+          // `DefenseInDepthBox.runTrustedAsync`, matching how `git`,
+          // `mount`, and other host-extension commands are registered.
+          trusted: true,
           async execute(args: string[], ctx) {
             const currentMap = await catalog.getJshCommands();
             const currentPath = currentMap.get(cmdName);
@@ -530,7 +539,7 @@ export class WasmShellHeadless implements HeadlessShellLike {
     const gitCommands = this.gitCommands;
     return defineCommand('git', async (args, ctx) => {
       const cwd = ctx.cwd;
-      const result = await gitCommands.execute(args, cwd);
+      const result = await gitCommands.execute(args, cwd, ctx.env);
       return {
         stdout: result.stdout,
         stderr: result.stderr,
@@ -598,7 +607,7 @@ export class WasmShellHeadless implements HeadlessShellLike {
         fs: this.vfsAdapter,
         cwd: this.cwd,
         env: new Map(Object.entries(this.lastEnv)),
-        stdin: '',
+        stdin: EMPTY_BYTES,
         exec: (cmd, opts) => this.bash.exec(cmd, { env: this.lastEnv, cwd: opts?.cwd ?? this.cwd }),
       },
       this.buildJshProcessConfig()

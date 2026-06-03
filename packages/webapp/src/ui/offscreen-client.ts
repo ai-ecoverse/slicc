@@ -8,34 +8,34 @@
  * - State sync on reconnect with retry logic
  */
 
-import type { AgentHandle, AgentEvent as UIAgentEvent } from './types.js';
-import type { MessageAttachment } from '../core/attachments.js';
-import type { RegisteredScoop, ScoopTabState, ThinkingLevel } from '../scoops/types.js';
-import type { VirtualFS } from '../fs/index.js';
 import type {
-  ExtensionMessage,
-  PanelToOffscreenMessage,
-  OffscreenToPanelMessage,
-  StateSnapshotMsg,
   AgentEventMsg,
-  ScoopStatusMsg,
-  ScoopCreatedMsg,
   ErrorMsg,
+  ExtensionMessage,
+  ForwardedLickEvent,
   IncomingMessageMsg,
+  OffscreenToPanelMessage,
+  PanelToOffscreenMessage,
+  ScoopCreatedMsg,
   ScoopListMsg,
   ScoopMessagesReplacedMsg,
+  ScoopStatusMsg,
+  StateSnapshotMsg,
   TrayFollowerStatusSnapshot,
   TrayLeaderStatusSnapshot,
   TrayRuntimeStatusMsg,
-  ForwardedLickEvent,
 } from '../../../chrome-extension/src/messages.js';
+import type { MessageAttachment } from '../core/attachments.js';
 import { createLogger } from '../core/logger.js';
-import { setLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
-import { setFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
-import type { KernelClientFacade, KernelTransport } from '../kernel/types.js';
+import type { VirtualFS } from '../fs/index.js';
 import { createPanelChromeRuntimeTransport } from '../kernel/transport-chrome-runtime.js';
-import type { TerminalEventMsg } from '../shell/terminal-protocol.js';
+import type { KernelClientFacade, KernelTransport } from '../kernel/types.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
+import { setFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
+import { setLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
+import type { RegisteredScoop, ScoopTabState, ThinkingLevel } from '../scoops/types.js';
+import type { TerminalEventMsg } from '../shell/terminal-protocol.js';
+import type { AgentHandle, AgentEvent as UIAgentEvent } from './types.js';
 
 const log = createLogger('offscreen-client');
 
@@ -430,6 +430,23 @@ export class OffscreenClient implements KernelClientFacade {
   /** Register the page-side handler the worker's forward-lick messages dispatch into. */
   setForwardLickHandler(handler: ((event: LickEvent) => void) | null): void {
     this.forwardLickHandler = handler;
+  }
+
+  /**
+   * Relay a cherry host event from the page-side `LeaderSyncManager` into the
+   * worker-side `LickManager`. The leader receives `cherry.host_event` over a
+   * follower's data channel (its embedded cherry host page called
+   * `emitHostEvent`); this method forwards it across the bridge so the lick
+   * manager (kernel worker) can emit a `'cherry'` lick to the cone.
+   * Fire-and-forget — no ack expected.
+   */
+  sendCherryHostEvent(cherryRuntimeId: string | undefined, name: string, detail?: unknown): void {
+    this.send({
+      type: 'lick-cherry-host-event',
+      cherryRuntimeId,
+      name,
+      detail,
+    } as PanelToOffscreenMessage);
   }
 
   /** Register a handler for sprinkle-op messages from the offscreen proxy. */

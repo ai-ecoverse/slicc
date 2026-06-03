@@ -1,16 +1,7 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
-
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  FollowerTrayManager,
-  LeaderTrayPeerManager,
-  startFollowerWithAutoReconnect,
-  type TrayDataChannelLike,
-  type TrayPeerConnectionLike,
-  type FollowerAutoReconnectHandle,
-} from '../../src/scoops/tray-webrtc.js';
-import {
-  setFollowerTrayRuntimeStatus,
   getFollowerTrayRuntimeStatus,
+  setFollowerTrayRuntimeStatus,
 } from '../../src/scoops/tray-follower-status.js';
 import type {
   FollowerBootstrapResponse,
@@ -20,6 +11,13 @@ import type {
   TrayIceCandidate,
   TraySessionDescription,
 } from '../../src/scoops/tray-types.js';
+import {
+  FollowerTrayManager,
+  LeaderTrayPeerManager,
+  startFollowerWithAutoReconnect,
+  type TrayDataChannelLike,
+  type TrayPeerConnectionLike,
+} from '../../src/scoops/tray-webrtc.js';
 
 class FakeDataChannel implements TrayDataChannelLike {
   readyState = 'connecting';

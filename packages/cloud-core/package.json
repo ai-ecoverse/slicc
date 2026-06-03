@@ -10,6 +10,10 @@
       "types": "./dist/src/index.d.ts",
       "default": "./dist/src/index.js"
     },
+    "./cone-config": {
+      "types": "./dist/src/cone-config/index.d.ts",
+      "default": "./dist/src/cone-config/index.js"
+    },
     "./tests/fake-substrate": {
       "types": "./dist/tests/fixtures/fake-substrate.d.ts",
       "default": "./dist/tests/fixtures/fake-substrate.js"

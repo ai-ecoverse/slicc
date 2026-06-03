@@ -3,37 +3,37 @@
  * and provides an AgentHandle for the follower's ChatPanel.
  */
 
-import type { AgentEvent, AgentHandle, ChatMessage } from '../ui/types.js';
-import { stripLocalPathsForRemote } from '../core/attachments.js';
-import type { MessageAttachment } from '../core/attachments.js';
-import type { TrayDataChannelLike } from './tray-webrtc.js';
-import {
-  createFollowerSyncChannel,
-  sendCDPResponse,
-  reassembleCDPResponse,
-  reassembleSnapshot,
-  type LeaderToFollowerMessage,
-  type FollowerToLeaderMessage,
-  type TraySyncChannel,
-  type RemoteTargetInfo,
-  type TrayTargetEntry,
-  type TrayFsRequest,
-  type TrayFsResponse,
-  type SprinkleSummary,
-} from './tray-sync-protocol.js';
-import { handleFsRequest } from './tray-fs-handler.js';
-import type { VirtualFS } from '../fs/virtual-fs.js';
-import type { CDPTransport } from '../cdp/transport.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
-import { RemoteCDPTransport, type RemoteCDPSender } from '../cdp/remote-cdp-transport.js';
+import { type RemoteCDPSender, RemoteCDPTransport } from '../cdp/remote-cdp-transport.js';
+import type { CDPTransport } from '../cdp/transport.js';
+import type { MessageAttachment } from '../core/attachments.js';
+import { stripLocalPathsForRemote } from '../core/attachments.js';
+import { createLogger } from '../core/logger.js';
+import type { VirtualFS } from '../fs/virtual-fs.js';
+import type { AgentEvent, AgentHandle, ChatMessage } from '../ui/types.js';
 import { DataChannelKeepalive } from './data-channel-keepalive.js';
 import type { LickEvent } from './lick-manager.js';
 import {
-  setFollowerTrayRuntimeStatus,
   getFollowerTrayRuntimeStatus,
   setFollowerLastPingTime,
+  setFollowerTrayRuntimeStatus,
 } from './tray-follower-status.js';
-import { createLogger } from '../core/logger.js';
+import { handleFsRequest } from './tray-fs-handler.js';
+import {
+  createFollowerSyncChannel,
+  type FollowerToLeaderMessage,
+  type LeaderToFollowerMessage,
+  type RemoteTargetInfo,
+  reassembleCDPResponse,
+  reassembleSnapshot,
+  type SprinkleSummary,
+  sendCDPResponse,
+  type TrayFsRequest,
+  type TrayFsResponse,
+  type TraySyncChannel,
+  type TrayTargetEntry,
+} from './tray-sync-protocol.js';
+import type { TrayDataChannelLike } from './tray-webrtc.js';
 
 const log = createLogger('tray-follower-sync');
 
@@ -67,6 +67,22 @@ export interface FollowerSyncManagerOptions {
   onSprinklesList?: (sprinkles: SprinkleSummary[]) => void;
   /** Called when the leader sends a `sprinkle.update` payload (mirrors `SprinkleManager.sendToSprinkle`). */
   onSprinkleUpdate?: (sprinkleName: string, data: unknown) => void;
+  /**
+   * Called when the leader sends a `cherry.slicc_event` (cone → host page). Only
+   * a cherry follower wires this — it forwards the event to the host SDK via
+   * `CherryHostTransport.emitSliccEventToHost`. Non-cherry followers leave it
+   * unset, so the event falls through harmlessly. The wire `targetId` is not
+   * forwarded: a cherry follower owns exactly one host transport, so the event
+   * has only one destination.
+   */
+  onCherrySliccEvent?: (name: string, detail?: unknown) => void;
+  /**
+   * This follower's own runtime id, stamped onto outbound `cherry.host_event`
+   * messages (host page → cone) so the cone-side lick records which cherry
+   * runtime emitted it. The leader routes the event by connection identity, not
+   * by this field, so it is informational only. Only a cherry follower sets it.
+   */
+  selfRuntimeId?: string;
   /**
    * Bound on every `fetchSprinkleContent` call. If the leader never
    * answers a `sprinkle.fetch` (deadlocked agent, partial chunked
@@ -320,6 +336,21 @@ export class FollowerSyncManager implements AgentHandle {
   /** Get the stored target registry entries from the leader. */
   getTargets(): TrayTargetEntry[] {
     return this.targetEntries;
+  }
+
+  /**
+   * Send a host-originated `cherry.host_event` (host page → cone) to the leader,
+   * where it surfaces as a `cherry` lick. Only a cherry follower calls this —
+   * its `CherryHostTransport.onHostEvent` is wired to forward host SDK
+   * `emitHostEvent` calls here.
+   */
+  sendCherryHostEvent(name: string, detail?: unknown): void {
+    this.sync.send({
+      type: 'cherry.host_event',
+      targetId: this.options.selfRuntimeId ?? '',
+      name,
+      detail,
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -640,6 +671,13 @@ export class FollowerSyncManager implements AgentHandle {
       case 'sprinkle.update':
         log.debug('Sprinkle update received', { sprinkleName: message.sprinkleName });
         this.options.onSprinkleUpdate?.(message.sprinkleName, message.data);
+        break;
+
+      case 'cherry.slicc_event':
+        // Cone → host page event. A cherry follower forwards it to the host
+        // SDK; non-cherry followers leave `onCherrySliccEvent` unset and it
+        // falls through harmlessly.
+        this.options.onCherrySliccEvent?.(message.name, message.detail);
         break;
 
       case 'ping': {

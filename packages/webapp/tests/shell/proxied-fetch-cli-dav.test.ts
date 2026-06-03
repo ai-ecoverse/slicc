@@ -6,7 +6,7 @@
  * tightens the method allowlist, these tests fail.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const DAV_VERBS = ['PROPFIND', 'REPORT', 'MKCALENDAR', 'LOCK'] as const;
 

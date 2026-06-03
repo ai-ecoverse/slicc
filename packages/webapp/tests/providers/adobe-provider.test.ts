@@ -5,7 +5,7 @@
  * the exported pure-logic functions and mock the rest.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock localStorage
 const storage = new Map<string, string>();

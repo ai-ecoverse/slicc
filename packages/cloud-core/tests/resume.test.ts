@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import type { RunResult, SandboxHandle, SubstrateId } from '../src/index.js';
 import { resumeCone } from '../src/operations/resume.js';
-import type { SubstrateId, SandboxHandle, RunResult } from '../src/index.js';
 import { MemRegistry, makeFakeSubstrate } from './fixtures/index.js';
 
 // Specialized handle for resume tests: configurable joinJson and kick behavior.

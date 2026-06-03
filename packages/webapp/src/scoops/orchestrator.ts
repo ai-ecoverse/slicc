@@ -9,34 +9,33 @@
  * - Owns a single shared VirtualFS instance
  */
 
-import {
-  CURRENT_SCOOP_CONFIG_VERSION,
-  type RegisteredScoop,
-  type ChannelMessage,
-  type ScoopTabState,
-  type ScheduledTask,
-  type ThinkingLevel,
-} from './types.js';
-import * as db from './db.js';
-import { createLogger } from '../core/logger.js';
-import { ScoopContext, type ScoopContextCallbacks } from './scoop-context.js';
-import { TaskScheduler } from './scheduler.js';
-import { VirtualFS, FsWatcher } from '../fs/index.js';
-import { RestrictedFS } from '../fs/restricted-fs.js';
+import type { Api, Model } from '@earendil-works/pi-ai';
 import type { BrowserAPI } from '../cdp/index.js';
-import { createDefaultSharedFiles, createDefaultSkills } from './skills.js';
-import type { ProcessManager } from '../kernel/process-manager.js';
-import { buildActiveLicksError, type LickManager } from './lick-manager.js';
-import { isExternalLickChannel } from './lick-formatting.js';
-import { SessionStore } from '../core/session.js';
 import { formatPromptWithAttachments, imageContentFromAttachments } from '../core/attachments.js';
+import { createLogger } from '../core/logger.js';
+import { SessionStore } from '../core/session.js';
+import type { AssistantMessage, ImageContent } from '../core/types.js';
+import { FsWatcher, VirtualFS } from '../fs/index.js';
+import { RestrictedFS } from '../fs/restricted-fs.js';
+import type { ProcessManager } from '../kernel/process-manager.js';
 import {
   registerSessionCostsProvider,
   type ScoopCostData,
 } from '../shell/supplemental-commands/cost-command.js';
-import type { AssistantMessage, ImageContent } from '../core/types.js';
 import { applyConeMemoryBudget, CONE_MEMORY_PATH } from './cone-memory-budget.js';
-import type { Api, Model } from '@earendil-works/pi-ai';
+import * as db from './db.js';
+import { isExternalLickChannel } from './lick-formatting.js';
+import { buildActiveLicksError, type LickManager } from './lick-manager.js';
+import { TaskScheduler } from './scheduler.js';
+import { ScoopContext, type ScoopContextCallbacks } from './scoop-context.js';
+import { createDefaultSharedFiles, createDefaultSkills } from './skills.js';
+import {
+  type ChannelMessage,
+  CURRENT_SCOOP_CONFIG_VERSION,
+  type RegisteredScoop,
+  type ScoopTabState,
+  type ThinkingLevel,
+} from './types.js';
 
 const log = createLogger('orchestrator');
 
@@ -626,6 +625,25 @@ export class Orchestrator {
    */
   handleWebhookEvent(webhookId: string, headers: Record<string, string>, body: unknown): void {
     this.lickManager?.handleWebhookEvent(webhookId, headers, body);
+  }
+
+  /**
+   * Relay a cherry host event into the LickManager as a `'cherry'` lick. Used
+   * by the leader tray (page-side via the `lick-cherry-host-event` bridge,
+   * extension-side in-process) when a follower forwards a `cherry.host_event`
+   * emitted by its embedded cherry host page. The owning follower's runtime id
+   * is resolved by the leader sync manager; the host origin is not carried at
+   * the tray layer, so it is left undefined.
+   */
+  handleCherryHostEvent(cherryRuntimeId: string | undefined, name: string, detail?: unknown): void {
+    this.lickManager?.emitEvent({
+      type: 'cherry',
+      cherryRuntimeId,
+      cherryName: name,
+      cherryOrigin: undefined,
+      body: detail,
+      timestamp: new Date().toISOString(),
+    });
   }
 
   /** Register a new scoop and wait until its tab/context has been registered

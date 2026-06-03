@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { startExtensionLeaderTray } from '../src/extension-leader-tray.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeaderSyncManagerOptions } from '../../webapp/src/scoops/tray-leader-sync.js';
+import { startExtensionLeaderTray } from '../src/extension-leader-tray.js';
 
 const messageListeners: Array<
   (message: unknown, sender: unknown, sendResponse: (r?: unknown) => void) => void
@@ -837,8 +837,9 @@ describe('startExtensionLeaderTray host-command + reset', () => {
   }
 
   it('setConnectedFollowersGetter exposes the peer list', async () => {
-    const { getConnectedFollowers } =
-      await import('../../webapp/src/shell/supplemental-commands/host-command.js');
+    const { getConnectedFollowers } = await import(
+      '../../webapp/src/shell/supplemental-commands/host-command.js'
+    );
     const { handle } = startWithCapture();
     handle.peers.getPeers = vi.fn(
       () =>
@@ -852,7 +853,11 @@ describe('startExtensionLeaderTray host-command + reset', () => {
     );
     const followers = getConnectedFollowers();
     expect(followers).toEqual([
-      { runtimeId: 'b1', runtime: 'slicc-standalone', connectedAt: '2026-05-20T00:00:00Z' },
+      {
+        runtimeId: 'follower-b1',
+        runtime: 'slicc-standalone',
+        connectedAt: '2026-05-20T00:00:00Z',
+      },
     ]);
     handle.stop();
   });
@@ -899,7 +904,11 @@ describe('startExtensionLeaderTray host-command + reset', () => {
       expect(setItem).toHaveBeenCalledWith(
         'slicc.leaderTrayFollowers',
         JSON.stringify([
-          { runtimeId: 'b1', runtime: 'slicc-standalone', connectedAt: '2026-05-20T00:00:00Z' },
+          {
+            runtimeId: 'follower-b1',
+            runtime: 'slicc-standalone',
+            connectedAt: '2026-05-20T00:00:00Z',
+          },
         ])
       );
       handle.stop();
@@ -997,8 +1006,9 @@ describe('startExtensionLeaderTray teardown', () => {
   });
 
   it('stop() also clears intervals + host-command setters', async () => {
-    const { getConnectedFollowers } =
-      await import('../../webapp/src/shell/supplemental-commands/host-command.js');
+    const { getConnectedFollowers } = await import(
+      '../../webapp/src/shell/supplemental-commands/host-command.js'
+    );
     const clearSpy = vi.spyOn(global, 'clearInterval');
     const { handle } = startWithCapture();
     handle.stop();

@@ -4,13 +4,13 @@
  * CLI to read after sandbox creation.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
-import express from 'express';
-import type { Request as ExpressRequest, Response as ExpressResponse, NextFunction } from 'express';
 import { promises as fs } from 'node:fs';
-import { join } from 'node:path';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { Request as ExpressRequest, Response as ExpressResponse, NextFunction } from 'express';
+import express from 'express';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { registerCloudStatusEndpoint, requireLoopback } from '../src/cloud-status.js';
 
 /**

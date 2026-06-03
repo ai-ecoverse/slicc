@@ -1,7 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import type { SandboxSubstrate } from '../src/index.js';
 import { listCones } from '../src/operations/list.js';
 import { MemRegistry, makeFakeSubstrate } from './fixtures/index.js';
-import type { SandboxSubstrate } from '../src/index.js';
 
 describe('listCones', () => {
   it('returns registry entries enriched with live state', async () => {

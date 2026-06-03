@@ -6,17 +6,17 @@
  * exercises the lifecycle: open → exec → exec → signal → close.
  */
 
-import { describe, it, expect, vi } from 'vitest';
-import { TerminalSessionHost } from '../../src/kernel/terminal-session-host.js';
+import { describe, expect, it, vi } from 'vitest';
+import { ProcessManager } from '../../src/kernel/process-manager.js';
 import { TerminalSessionClient } from '../../src/kernel/terminal-session-client.js';
+import { TerminalSessionHost } from '../../src/kernel/terminal-session-host.js';
 import {
   createBridgeMessageChannelTransport,
   createPanelMessageChannelTransport,
 } from '../../src/kernel/transport-message-channel.js';
-import { OffscreenClient } from '../../src/ui/offscreen-client.js';
-import { ProcessManager } from '../../src/kernel/process-manager.js';
-import type { HeadlessShellLike } from '../../src/shell/wasm-shell-headless.js';
 import type { TerminalEventMsg } from '../../src/shell/terminal-protocol.js';
+import type { HeadlessShellLike } from '../../src/shell/wasm-shell-headless.js';
+import { OffscreenClient } from '../../src/ui/offscreen-client.js';
 
 function tick(ms = 5): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));

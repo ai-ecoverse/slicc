@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { VirtualFS } from '../../src/fs/virtual-fs.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FsError } from '../../src/fs/types.js';
+import { VirtualFS } from '../../src/fs/virtual-fs.js';
 
 describe('VirtualFS', () => {
   let vfs: VirtualFS;

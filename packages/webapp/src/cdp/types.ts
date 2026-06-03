@@ -57,6 +57,19 @@ export interface PageInfo {
   url: string;
   /** True if this is the user's currently active/focused tab (extension mode only). */
   active?: boolean;
+  /** Distinguishes a real browser page from a cooperative cherry host page. */
+  kind?: 'browser' | 'cherry';
+  /**
+   * Only present for kind === 'cherry'. What the host page lends to the leader,
+   * expressed in the vocabulary this tray/teleport layer cares about: `network`
+   * gates whether the target may serve `Network.*` CDP for teleport-pool
+   * selection. NOTE: intentionally a DIFFERENT shape from the SDK handshake
+   * `CherryHandshakeHello.capabilities` (`{ navigate; screenshot; openUrl }` in
+   * cdp/cherry-host-protocol.ts) — `openUrl` is a sandbox-escape concern at the
+   * host SDK boundary, whereas `network` is a teleport-routing concern here.
+   * They are mapped, not equal.
+   */
+  capabilities?: { navigate: boolean; network: boolean; screenshot: boolean };
 }
 
 /** Options for connecting the CDP client. */

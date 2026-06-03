@@ -1,21 +1,21 @@
 import 'fake-indexeddb/auto';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { IFileSystem, SecureFetch } from 'just-bash';
 import { zipSync } from 'fflate';
+import type { IFileSystem, SecureFetch } from 'just-bash';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { BrowserAPI, PageInfo } from '../../../src/cdp/index.js';
 import { VirtualFS } from '../../../src/fs/index.js';
 import {
-  createSkillCommand,
-  createUpskillCommand,
   _resetBrowseShCatalogCache,
   _resetGlobalFsCache,
+  createSkillCommand,
+  createUpskillCommand,
   installRecommendedSkills,
   normalizeHostname,
   parseBrowseShRef,
   parseGitHubRef,
   scoreSkills,
 } from '../../../src/shell/supplemental-commands/upskill-command.js';
-import type { BrowserAPI, PageInfo } from '../../../src/cdp/index.js';
 
 function createMockCtx() {
   const fs: Partial<IFileSystem> = {

@@ -205,7 +205,7 @@ export class TabZone {
   /** Activate a tab by id. Only works if the tab is mounted. */
   activateTab(id: string): void {
     const target = this.tabs.get(id);
-    if (!target || !target.mounted) return;
+    if (!target?.mounted) return;
 
     this.activeTabId = id;
     for (const [tabId, { btn, container, mounted }] of this.tabs) {

@@ -8,51 +8,47 @@
  * Also maintains an event buffer for state sync on panel reconnect.
  */
 
+import type { BrowserAPI } from '../../../packages/webapp/src/cdp/index.js';
+import type { MessageAttachment } from '../../../packages/webapp/src/core/attachments.js';
+import { createLogger } from '../../../packages/webapp/src/core/logger.js';
+import { createOffscreenChromeRuntimeTransport } from '../../../packages/webapp/src/kernel/transport-chrome-runtime.js';
+import type { KernelFacade, KernelTransport } from '../../../packages/webapp/src/kernel/types.js';
+import { HIDDEN_TOOL_NAMES } from '../../../packages/webapp/src/scoops/hidden-tools.js';
+import { formatLickEventForCone } from '../../../packages/webapp/src/scoops/lick-formatting.js';
 import type {
   Orchestrator,
   OrchestratorCallbacks,
 } from '../../../packages/webapp/src/scoops/orchestrator.js';
+import { getFollowerTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-follower-status.js';
+import type { FollowerSyncManager } from '../../../packages/webapp/src/scoops/tray-follower-sync.js';
+import { getLeaderTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-leader.js';
 import type {
-  RegisteredScoop,
   ChannelMessage,
+  RegisteredScoop,
   ScoopTabState,
 } from '../../../packages/webapp/src/scoops/types.js';
+import { toolUIRegistry } from '../../../packages/webapp/src/tools/tool-ui.js';
+import { SessionStore } from '../../../packages/webapp/src/ui/session-store.js';
+import type { AgentEvent, ChatMessage } from '../../../packages/webapp/src/ui/types.js';
 import type {
   AgentEventMsg,
+  ErrorMsg,
   ExtensionMessage,
-  PanelToOffscreenMessage,
+  ForwardedLickEvent,
+  IncomingMessageMsg,
+  OffscreenToPanelMessage,
   PanelCdpResponseMsg,
-  ScoopStatusMsg,
+  PanelToOffscreenMessage,
+  ScoopCreatedMsg,
   ScoopListMsg,
   ScoopSnapshotConfig,
+  ScoopStatusMsg,
   SetThinkingLevelMsg,
   StateSnapshotMsg,
-  ErrorMsg,
-  ScoopCreatedMsg,
-  IncomingMessageMsg,
   TrayFollowerStatusSnapshot,
   TrayLeaderStatusSnapshot,
   TrayRuntimeStatusMsg,
-  OffscreenToPanelMessage,
-  ForwardedLickEvent,
 } from './messages.js';
-import { createLogger } from '../../../packages/webapp/src/core/logger.js';
-import { getLeaderTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-leader.js';
-import { getFollowerTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-follower-status.js';
-import { HIDDEN_TOOL_NAMES } from '../../../packages/webapp/src/scoops/hidden-tools.js';
-import { formatLickEventForCone } from '../../../packages/webapp/src/scoops/lick-formatting.js';
-import { SessionStore } from '../../../packages/webapp/src/ui/session-store.js';
-import { toolUIRegistry } from '../../../packages/webapp/src/tools/tool-ui.js';
-import type { AgentEvent, ChatMessage } from '../../../packages/webapp/src/ui/types.js';
-import type { MessageAttachment } from '../../../packages/webapp/src/core/attachments.js';
-import type { BrowserAPI } from '../../../packages/webapp/src/cdp/index.js';
-import type { FollowerSyncManager } from '../../../packages/webapp/src/scoops/tray-follower-sync.js';
-import type {
-  KernelFacade,
-  KernelTransport,
-  FollowerAgentEvent,
-} from '../../../packages/webapp/src/kernel/types.js';
-import { createOffscreenChromeRuntimeTransport } from '../../../packages/webapp/src/kernel/transport-chrome-runtime.js';
 
 const log = createLogger('offscreen-bridge');
 
@@ -880,8 +876,9 @@ export class OffscreenBridge implements KernelFacade {
     // path until needed.
     const context = this.orchestrator.getScoopContext(scoopJid);
     if (context) {
-      const { agentMessagesToChatMessages } =
-        await import('../../../packages/webapp/src/scoops/agent-message-to-chat.js');
+      const { agentMessagesToChatMessages } = await import(
+        '../../../packages/webapp/src/scoops/agent-message-to-chat.js'
+      );
       const agentMessages = context.getAgentMessages();
       if (agentMessages.length > 0) {
         const chatMessages = agentMessagesToChatMessages(agentMessages, {
@@ -1293,6 +1290,15 @@ export class OffscreenBridge implements KernelFacade {
           break;
         }
         lm.emitEvent(msg.event);
+        break;
+      }
+
+      case 'lick-cherry-host-event': {
+        // Page-side LeaderSyncManager received a `cherry.host_event` over a
+        // follower's data channel (its embedded cherry host page called
+        // `emitHostEvent`) and relayed it here. Dispatch into the worker-side
+        // LickManager via the orchestrator as a `'cherry'` lick.
+        this.orchestrator.handleCherryHostEvent(msg.cherryRuntimeId, msg.name, msg.detail);
         break;
       }
 

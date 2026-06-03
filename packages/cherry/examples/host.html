@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@ai-ecoverse/cherry — local embed harness</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, sans-serif;
+      }
+      body {
+        margin: 0;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        height: 100vh;
+      }
+      header {
+        padding: 12px 16px;
+        border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+        display: grid;
+        gap: 8px;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      label {
+        font-size: 12px;
+        opacity: 0.8;
+        min-width: 96px;
+      }
+      input[type='text'] {
+        flex: 1;
+        min-width: 280px;
+        padding: 6px 8px;
+        font: inherit;
+      }
+      button {
+        padding: 6px 14px;
+        font: inherit;
+        cursor: pointer;
+      }
+      main {
+        display: grid;
+        grid-template-columns: 1fr 320px;
+        min-height: 0;
+      }
+      #mount {
+        min-height: 0;
+        border-right: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+      }
+      #log {
+        margin: 0;
+        padding: 12px;
+        overflow: auto;
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+        white-space: pre-wrap;
+      }
+      .hint {
+        font-size: 12px;
+        opacity: 0.7;
+      }
+      code {
+        font-family: ui-monospace, monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="row">
+        <strong>@ai-ecoverse/cherry embed harness</strong>
+        <span class="hint"
+          >Serve this from the repo root (<code>npx http-server . -p 8080</code>) on an origin
+          <em>different</em> from <code>sliccOrigin</code>.</span
+        >
+      </div>
+      <div class="row">
+        <label for="origin">sliccOrigin</label>
+        <input id="origin" type="text" value="http://localhost:5710" />
+      </div>
+      <div class="row">
+        <label for="join">joinToken</label>
+        <input
+          id="join"
+          type="text"
+          placeholder="Paste the leader's /join/… URL (avatar → Enable multi-browser sync)"
+        />
+      </div>
+      <div class="row">
+        <label for="shot">screenshot</label>
+        <select id="shot">
+          <option value="none" selected>none</option>
+          <option value="html2canvas">html2canvas</option>
+        </select>
+        <button id="mountBtn">Mount</button>
+        <button id="destroyBtn" disabled>Destroy</button>
+        <span class="hint"
+          >navigate / openUrl are enabled; deny a CDP domain by editing
+          <code>onPermissionRequest</code>.</span
+        >
+      </div>
+      <div class="row">
+        <label for="evtName">send event</label>
+        <input id="evtName" type="text" placeholder="event name (e.g. checkout-done)" />
+        <input id="evtDetail" type="text" placeholder='detail JSON (optional, e.g. {"id":7})' />
+        <button id="emitBtn" disabled>Emit to cone</button>
+        <span class="hint"
+          >Fires <code>handle.emitHostEvent(name, detail)</code> → surfaces as a
+          <code>[cherry]</code> lick on the cone.</span
+        >
+      </div>
+    </header>
+    <main>
+      <div id="mount"></div>
+      <pre id="log"></pre>
+    </main>
+
+    <!--
+      Harness plumbing — NOT something a real embedder writes.
+
+      A real embedder installs the SDK from npm and imports it by name:
+
+          import { mountSlicc } from '@ai-ecoverse/cherry';
+
+      Their bundler (or a CDN such as esm.sh) resolves the package and its
+      `html2canvas-pro` dependency automatically — no import map required. This
+      throwaway harness instead loads the locally-built, not-yet-published
+      package, so the import map below points that same bare specifier at the
+      local `dist/`, and resolves the SDK's `html2canvas-pro` dependency from the
+      repo's node_modules — the exact file a bundler would pull in.
+
+      Serve from the repo root so both paths resolve:  npx http-server . -p 8080
+    -->
+    <script type="importmap">
+      {
+        "imports": {
+          "@ai-ecoverse/cherry": "../dist/index.js",
+          "html2canvas-pro": "../../../node_modules/html2canvas-pro/dist/html2canvas-pro.esm.js"
+        }
+      }
+    </script>
+
+    <script type="module">
+      // Authored exactly as a real embedder would import the SDK. (Run
+      // `npm run build -w @ai-ecoverse/cherry` first; the import map above maps
+      // this bare specifier to the local build.)
+      import { mountSlicc } from '@ai-ecoverse/cherry';
+
+      const logEl = document.getElementById('log');
+      const log = (...parts) => {
+        const line = `[${new Date().toLocaleTimeString()}] ${parts
+          .map((p) => (typeof p === 'string' ? p : JSON.stringify(p)))
+          .join(' ')}`;
+        logEl.textContent += line + '\n';
+        logEl.scrollTop = logEl.scrollHeight;
+      };
+
+      let handle = null;
+      const mountBtn = document.getElementById('mountBtn');
+      const destroyBtn = document.getElementById('destroyBtn');
+      const emitBtn = document.getElementById('emitBtn');
+
+      mountBtn.addEventListener('click', () => {
+        if (handle) return;
+        const sliccOrigin = document.getElementById('origin').value.trim();
+        const joinToken = document.getElementById('join').value.trim();
+        const screenshot = document.getElementById('shot').value;
+        if (!joinToken) {
+          log('joinToken is required — paste a /join/… URL from a running leader.');
+          return;
+        }
+        log('mounting against', sliccOrigin);
+        handle = mountSlicc({
+          container: document.getElementById('mount'),
+          sliccOrigin,
+          capabilities: { navigate: true, screenshot, openUrl: true },
+          joinToken,
+          hooks: {
+            onSliccEvent: (name, detail) => log('onSliccEvent', name, detail ?? {}),
+            onOpenUrl: (url) => {
+              log('onOpenUrl', url);
+              window.open(url, '_blank', 'noopener');
+            },
+            onPermissionRequest: (domain) => {
+              // Baseline: allow everything. Return false to deny a synthetic CDP
+              // domain (the SDK then answers the leader with code -32601).
+              log('onPermissionRequest', domain, '→ allow');
+              return true;
+            },
+          },
+        });
+        mountBtn.disabled = true;
+        destroyBtn.disabled = false;
+        emitBtn.disabled = false;
+      });
+
+      destroyBtn.addEventListener('click', () => {
+        handle?.destroy();
+        handle = null;
+        document.getElementById('mount').replaceChildren();
+        log('destroyed');
+        mountBtn.disabled = false;
+        destroyBtn.disabled = true;
+        emitBtn.disabled = true;
+      });
+
+      emitBtn.addEventListener('click', () => {
+        if (!handle) return;
+        const name = document.getElementById('evtName').value.trim();
+        if (!name) {
+          log('event name is required.');
+          return;
+        }
+        const raw = document.getElementById('evtDetail').value.trim();
+        let detail;
+        if (raw) {
+          try {
+            detail = JSON.parse(raw);
+          } catch {
+            log('detail is not valid JSON — sending it as a string.');
+            detail = raw;
+          }
+        }
+        handle.emitHostEvent(name, detail);
+        log('emitHostEvent', name, detail ?? {});
+      });
+
+      log('ready — paste a joinToken and press Mount.');
+    </script>
+  </body>
+</html>

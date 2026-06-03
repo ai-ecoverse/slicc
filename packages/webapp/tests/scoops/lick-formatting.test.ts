@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { formatLickEventForCone } from '../../src/scoops/lick-formatting.js';
 import type { LickEvent } from '../../src/scoops/lick-manager.js';
 
@@ -151,5 +151,22 @@ describe('formatLickEventForCone', () => {
     } as unknown as LickEvent;
     const out = formatLickEventForCone(event);
     expect(out!.content).not.toContain('Forwarded from');
+  });
+});
+
+describe('cherry lick formatting', () => {
+  it('formats a cherry host event for the cone', () => {
+    const formatted = formatLickEventForCone({
+      type: 'cherry',
+      cherryName: 'checkout-complete',
+      cherryRuntimeId: 'follower-abc',
+      cherryOrigin: 'https://shop.example',
+      timestamp: new Date().toISOString(),
+      body: { orderId: 42 },
+    } as never);
+    expect(formatted).not.toBeNull();
+    expect(formatted!.label).toBe('Cherry Event');
+    expect(formatted!.content).toContain('checkout-complete');
+    expect(formatted!.content).toContain('shop.example');
   });
 });

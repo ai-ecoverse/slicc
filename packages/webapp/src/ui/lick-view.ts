@@ -7,18 +7,18 @@
  */
 
 import {
-  Webhook,
+  ArrowUpCircle,
+  Bell,
   CalendarClock,
-  Sparkles,
+  Compass,
   DoorOpen,
   FolderSync,
-  Compass,
-  RotateCcw,
-  Bell,
-  IceCream,
   Hourglass,
+  IceCream,
   ListChecks,
-  ArrowUpCircle,
+  RotateCcw,
+  Sparkles,
+  Webhook,
 } from 'lucide';
 import type { ChatMessage } from './types.js';
 

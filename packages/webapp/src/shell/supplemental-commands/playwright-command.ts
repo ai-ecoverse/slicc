@@ -5,26 +5,32 @@
  * Uses BrowserAPI + VirtualFS injected from the shell options.
  */
 
-import { defineCommand } from 'just-bash';
 import type { Command, SecureFetch } from 'just-bash';
+import { defineCommand } from 'just-bash';
 import type { BrowserAPI, PageInfo } from '../../cdp/index.js';
 import { HarRecorder } from '../../cdp/index.js';
 import { normalizeAccessibilityText } from '../../cdp/normalize-accessibility-text.js';
 import type { AccessibilityNode } from '../../cdp/types.js';
 import { createLogger } from '../../core/logger.js';
 import { FsError, type VirtualFS } from '../../fs/index.js';
-import type { FloatType } from '../../scoops/tray-leader-sync.js';
 import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
 import { discoverLinks } from '../../net/discover-links.js';
 import { extractHandoff, type HandoffMatch } from '../../net/handoff-link.js';
-import { parseLinkHeader, type ParsedLink } from '../../net/link-header.js';
+import { type ParsedLink, parseLinkHeader } from '../../net/link-header.js';
+import type { FloatType } from '../../scoops/tray-leader-sync.js';
+import {
+  TRAY_JOIN_STORAGE_KEY,
+  TRAY_WORKER_STORAGE_KEY,
+} from '../../scoops/tray-runtime-config.js';
+import { CHERRY_RUNTIME_TAG } from '../../scoops/tray-sync-protocol.js';
 import { createProxiedFetch } from '../proxied-fetch.js';
 import { normalizeHeadersInit } from '../proxy-headers.js';
 import {
+  type BrowseShSkillSummary,
   fetchBrowseShCatalog,
   normalizeHostname,
-  type BrowseShSkillSummary,
 } from './upskill-command.js';
+
 const log = createLogger('playwright-teleport');
 
 // ---------------------------------------------------------------------------
@@ -149,7 +155,7 @@ export const PLAYWRIGHT_COMMAND_NAMES = ['playwright-cli', 'playwright', 'puppet
 const sharedStateByBrowser = new WeakMap<BrowserAPI, WeakMap<VirtualFS, PlaywrightState>>();
 
 /** Commands that invalidate ref snapshots because page state may have changed. */
-const SNAPSHOT_INVALIDATING_COMMANDS = new Set([
+const _SNAPSHOT_INVALIDATING_COMMANDS = new Set([
   'click',
   'dblclick',
   'fill',
@@ -190,7 +196,7 @@ function filenameSafeTimestamp(date: Date): string {
   return date.toISOString().replace(/:/g, '-');
 }
 
-function parseNonNegativeInteger(value: string): number | null {
+function _parseNonNegativeInteger(value: string): number | null {
   if (!/^[0-9]+$/.test(value)) return null;
   return Number(value);
 }
@@ -512,16 +518,55 @@ function isActionablePage(state: PlaywrightState, page: PageInfo): boolean {
   return !isAppTab(state, page.targetId) && !isChromeInternalUiTarget(page);
 }
 
+/**
+ * Cheap, synchronous check for whether a multi-browser tray is configured
+ * (leader worker URL or follower join URL present). Reads `globalThis.localStorage`
+ * — the real Storage on the page, or the page-seeded shim in the kernel worker.
+ * Used to skip the `list-remote-targets` panel-RPC round-trip entirely when no
+ * tray exists, so plain (non-tray) playwright commands stay at one local call.
+ */
+function isTrayConfigured(): boolean {
+  try {
+    const ls = (globalThis as { localStorage?: Storage }).localStorage;
+    if (!ls) return false;
+    return !!(ls.getItem(TRAY_WORKER_STORAGE_KEY) || ls.getItem(TRAY_JOIN_STORAGE_KEY));
+  } catch {
+    return false;
+  }
+}
+
 async function getActionablePages(
   browser: BrowserAPI,
   state: PlaywrightState
 ): Promise<PageInfo[]> {
   await resolveAppTabId(browser, state);
-  // Use listAllTargets when available (includes remote tray targets)
-  const pages =
-    typeof browser.listAllTargets === 'function'
-      ? await browser.listAllTargets()
-      : await browser.listPages();
+  // Use listAllTargets when available (includes remote tray targets).
+  // In standalone mode the worker-side BrowserAPI has no trayTargetProvider, so
+  // listAllTargets() returns local-only. When a tray is configured, supplement via
+  // panel-RPC from the page-side BrowserAPI (fully wired) and dedupe by targetId.
+  // The tray-configured gate keeps the no-tray common case to a single local call
+  // (no per-command BroadcastChannel round-trip, no 3s-timeout exposure).
+  let pages: PageInfo[];
+  if (typeof browser.listAllTargets === 'function') {
+    pages = await browser.listAllTargets();
+    const rpc = isTrayConfigured() ? getPanelRpcClient() : null;
+    if (rpc) {
+      try {
+        const { targets } = await rpc.call('list-remote-targets', undefined, { timeoutMs: 3000 });
+        const seen = new Set(pages.map((p) => p.targetId));
+        for (const t of targets) {
+          if (!seen.has(t.targetId)) {
+            seen.add(t.targetId);
+            pages.push({ targetId: t.targetId, title: t.title, url: t.url });
+          }
+        }
+      } catch (err) {
+        log.debug('panel-rpc list-remote-targets failed', { err: String(err) });
+      }
+    }
+  } else {
+    pages = await browser.listPages();
+  }
   return pages.filter((page) => isActionablePage(state, page));
 }
 
@@ -861,7 +906,7 @@ async function captureTeleportPageDiagnostics(
   const raw = await browser.evaluate(`(() => JSON.stringify({
     url: window.location.href,
     title: document.title || '',
-    bodySnippet: document.body?.innerText?.replace(/\s+/g, ' ').trim().slice(0, 500) || '(empty)',
+    bodySnippet: document.body?.innerText?.replace(/\\s+/g, ' ').trim().slice(0, 500) || '(empty)',
   }))()`);
 
   if (typeof raw !== 'string' || raw.length === 0) {
@@ -1478,7 +1523,7 @@ async function captureCookiesAndComplete(
  * Check if a teleport watcher has been triggered and needs to block.
  * Returns a result string if blocked, null if not blocking.
  */
-async function checkTeleportBlock(
+async function _checkTeleportBlock(
   state: PlaywrightState,
   targetId: string
 ): Promise<string | null> {
@@ -2020,6 +2065,24 @@ export function createPlaywrightCommand(
           }
           const runtimeId = flags['runtime'];
 
+          // Explicit --runtime bypasses getBestFollowerForTeleport's auto-select
+          // exclusion, so re-gate it here against the same connected-follower
+          // surface: a cherry host can never serve `Network.*` and must not be a
+          // teleport target. Fail closed with a clear error rather than letting
+          // the leader hit a -32601 mid-flow.
+          if (runtimeId) {
+            const followers = getConnectedFollowersGetter?.()?.() ?? [];
+            const match = followers.find((f) => f.runtimeId === runtimeId);
+            if (match?.runtime === CHERRY_RUNTIME_TAG) {
+              result = {
+                stdout: '',
+                stderr: `teleport: runtime ${runtimeId} is a cherry host and cannot serve a cookie teleport (no Network.* access)\n`,
+                exitCode: 1,
+              };
+              break;
+            }
+          }
+
           // Disarm any existing watcher on this tab
           const existingWatcher = state.teleportWatchers.get(tab.targetId);
           if (existingWatcher) {
@@ -2202,7 +2265,7 @@ export function createPlaywrightCommand(
             result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          const data = await browser.withTab(tab.targetId, async () => {
+          const _data = await browser.withTab(tab.targetId, async () => {
             await browser.navigate(positional[0]);
             return true;
           });
@@ -2343,7 +2406,7 @@ export function createPlaywrightCommand(
           const output = await browser.withTab(tab.targetId, async () => {
             // Ref-based screenshot
             let clip: { x: number; y: number; width: number; height: number } | undefined;
-            if (positional[0] && positional[0].startsWith('e')) {
+            if (positional[0]?.startsWith('e')) {
               const snapshot = state.snapshots.get(tab.targetId);
               if (!snapshot) {
                 throw new Error('No snapshot available. Run "snapshot" first.');

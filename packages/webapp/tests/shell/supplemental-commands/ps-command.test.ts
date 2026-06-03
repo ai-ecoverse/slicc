@@ -2,10 +2,10 @@
  * Tests for `ps`.
  */
 
-import { describe, it, expect } from 'vitest';
 import type { CommandContext } from 'just-bash';
-import { createPsCommand } from '../../../src/shell/supplemental-commands/ps-command.js';
+import { describe, expect, it } from 'vitest';
 import { ProcessManager } from '../../../src/kernel/process-manager.js';
+import { createPsCommand } from '../../../src/shell/supplemental-commands/ps-command.js';
 
 const mockCtx = {} as CommandContext;
 

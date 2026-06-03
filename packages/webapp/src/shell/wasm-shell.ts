@@ -18,27 +18,27 @@
  * `WasmShellHeadless` directly; today the inheritance is enough.
  */
 
-import type { Terminal } from '@xterm/xterm';
 import type { FitAddon } from '@xterm/addon-fit';
+import type { Terminal } from '@xterm/xterm';
 import type { BashExecResult } from 'just-bash';
-import type { MediaPreviewItem } from './supplemental-commands.js';
 import {
-  WasmShellHeadless,
-  type HeadlessShellOptions,
-  type HeadlessShellLike,
-} from './wasm-shell-headless.js';
-import {
-  encodeForbiddenRequestHeaders,
   decodeForbiddenResponseHeaders,
+  encodeForbiddenRequestHeaders,
   isTextContentType,
 } from './proxied-fetch.js';
+import type { MediaPreviewItem } from './supplemental-commands.js';
+import {
+  type HeadlessShellLike,
+  type HeadlessShellOptions,
+  WasmShellHeadless,
+} from './wasm-shell-headless.js';
 
+export { WasmShellHeadless } from './wasm-shell-headless.js';
+export type { HeadlessShellLike };
 // Re-exports for backwards compatibility — existing tests import
 // these from `wasm-shell.ts`. New callers should import from the
 // origin modules directly.
-export { encodeForbiddenRequestHeaders, decodeForbiddenResponseHeaders, isTextContentType };
-export type { HeadlessShellLike };
-export { WasmShellHeadless } from './wasm-shell-headless.js';
+export { decodeForbiddenResponseHeaders, encodeForbiddenRequestHeaders, isTextContentType };
 
 function basename(path: string): string {
   const trimmed = path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
@@ -651,7 +651,6 @@ export class WasmShell extends WasmShellHeadless {
       }
       if (ch === '"' && !inSingle) {
         inDouble = !inDouble;
-        continue;
       }
     }
     return inSingle || inDouble;

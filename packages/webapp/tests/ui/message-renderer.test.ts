@@ -2,12 +2,12 @@
  * Tests for the message renderer — markdown parsing and syntax highlighting.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
+  escapeHtml,
   renderAssistantMessageContent,
   renderMessageContent,
   renderToolInput,
-  escapeHtml,
 } from '../../src/ui/message-renderer.js';
 
 describe('escapeHtml', () => {

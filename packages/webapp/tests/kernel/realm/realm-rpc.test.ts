@@ -10,11 +10,11 @@
  * masked secret values would bypass the proxy.
  */
 
-import { describe, it, expect, vi } from 'vitest';
-import type { CommandContext, IFileSystem, FsStat } from 'just-bash';
-import { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
+import type { CommandContext, FsStat, IFileSystem } from 'just-bash';
+import { describe, expect, it, vi } from 'vitest';
 import { attachRealmHost } from '../../../src/kernel/realm/realm-host.js';
 import type { RealmPortLike } from '../../../src/kernel/realm/realm-rpc.js';
+import { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
 
 interface PortPair {
   realm: RealmPortLike;

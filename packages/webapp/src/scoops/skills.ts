@@ -11,8 +11,8 @@
 
 import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/index.js';
-import { discoverSkills } from '../skills/index.js';
 import type { SkillDiscoverySource } from '../skills/index.js';
+import { discoverSkills } from '../skills/index.js';
 
 const log = createLogger('skills');
 
@@ -52,7 +52,7 @@ const BINARY_EXTENSIONS = new Set([
   '.pdf',
 ]);
 
-function isBinaryFile(path: string): boolean {
+function _isBinaryFile(path: string): boolean {
   const ext = path.slice(path.lastIndexOf('.')).toLowerCase();
   return BINARY_EXTENSIONS.has(ext);
 }
@@ -249,7 +249,7 @@ async function loadStandaloneMarkdownSkills(fs: VirtualFS, skillsDir: string): P
         }
       }
     }
-  } catch (err) {
+  } catch (_err) {
     // Skills directory doesn't exist yet
     log.debug('Standalone skills directory not found', { dir: skillsDir });
   }

@@ -21,114 +21,60 @@ import './styles/image-preview.css';
  * Always uses cone+orchestrator mode — no direct agent path.
  */
 
-import { Layout } from './layout.js';
-import {
-  getApiKey,
-  applyProviderDefaults,
-  resolveCurrentModel,
-  resolveModelById,
-  saveOAuthAccount,
-} from './provider-settings.js';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
-import { initTheme } from './theme.js';
-import { initTooltips } from './tooltip.js';
-import type { AgentHandle, AgentEvent as UIAgentEvent, ChatMessage } from './types.js';
-import { isLickChannel, type LickChannel } from './lick-channels.js';
+import type {
+  PanelMessageSender,
+  PanelMessageSubscriber,
+} from '../../../chrome-extension/src/bridge-transport.js';
+import { isExtensionMessage } from '../../../chrome-extension/src/messages.js';
+import type { CherryHostTransport } from '../cdp/cherry-host-transport.js';
+import type { BrowserAPI } from '../cdp/index.js';
 import { createLogger } from '../core/index.js';
+import { SessionStore as AgentSessionStore } from '../core/session.js';
 import type { VirtualFS } from '../fs/index.js';
-import { installSkillFromDrop } from '../skills/install-from-drop.js';
+import { LocalMountBackend } from '../fs/mount/backend-local.js';
+import { newMountId } from '../fs/mount/mount-id.js';
 import {
-  findDroppedNonSkillTransferFiles,
-  findDroppedSkillTransferFile,
-  hasDroppedFiles,
-} from './skill-drop.js';
-import { createAttachmentTmpWriter } from './attachment-vfs.js';
+  loadAndClearPendingHandle,
+  openMountPickerPopup,
+  reactivateHandle,
+} from '../fs/mount-picker-popup.js';
+import { recoverMounts } from '../fs/mount-recovery.js';
+import { getAllMountEntries } from '../fs/mount-table-store.js';
 // Auto-discover and register all providers (built-in + external).
 // IMPORTANT: This import must also appear in packages/chrome-extension/src/offscreen.ts
 // — the extension agent engine runs in the offscreen document, not in this file.
 import { registerProviders } from '../providers/index.js';
-import { flushCredentialsToWorker, resolveDefaultModel } from './onboarding-helpers.js';
-import {
-  runNewSessionFreeze,
-  runNewSessionFreezeQuick,
-  scheduleBackgroundEnrichment,
-} from './new-session.js';
-import { frozenSessionPath, parseFrozenArchive } from './session-freezer.js';
-import { BrowserAPI } from '../cdp/index.js';
-import { type Orchestrator } from '../scoops/index.js';
-import { publishAgentBridge } from '../scoops/agent-bridge.js';
 import { clearAllMessages as clearOrchestratorMessages } from '../scoops/db.js';
-import { SessionStore as AgentSessionStore } from '../core/session.js';
-import type { RegisteredScoop, ChannelMessage } from '../scoops/types.js';
+import type { Orchestrator } from '../scoops/index.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 import {
-  IndexedDbLeaderTraySessionStore,
-  LeaderTrayManager,
-  createTrayFetch,
   getLeaderTrayRuntimeStatus,
+  IndexedDbLeaderTraySessionStore,
   subscribeToLeaderTrayRuntimeStatus,
 } from '../scoops/tray-leader.js';
+import type { TrayLeaveResult } from '../scoops/tray-leave.js';
 import {
   DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
   DEFAULT_STAGING_TRAY_WORKER_BASE_URL,
-  buildTrayLaunchUrl,
   fetchRuntimeConfig,
   hasStoredTrayJoinUrl,
   resolveTrayRuntimeConfig,
   TRAY_JOIN_STORAGE_KEY,
   TRAY_WORKER_STORAGE_KEY,
 } from '../scoops/tray-runtime-config.js';
-import {
-  FollowerTrayManager,
-  LeaderTrayPeerManager,
-  startFollowerWithAutoReconnect,
-  type FollowerAutoReconnectHandle,
-} from '../scoops/tray-webrtc.js';
-import { LeaderSyncManager } from '../scoops/tray-leader-sync.js';
-import { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
-import { TabPersistenceGuard } from '../scoops/tab-persistence-guard.js';
-import { startPageLeaderTray } from './page-leader-tray.js';
-import type { PageLeaderTrayHandle, StartPageLeaderTrayOptions } from './page-leader-tray.js';
-import type { TrayLeaveResult } from '../scoops/tray-leave.js';
-import { startPageFollowerTray } from './page-follower-tray.js';
-import type { PageFollowerTrayHandle } from './page-follower-tray.js';
-import {
-  getElectronOverlayInitialTab,
-  getLickWebSocketUrl,
-  getTrayWebhookUrl,
-  getWebhookUrl,
-  isElectronOverlaySetTabMessage,
-  resolveUiRuntimeMode,
-  shouldUseRuntimeModeTrayDefaults,
-  type UiRuntimeMode,
-} from './runtime-mode.js';
-import {
-  setConnectedFollowersGetter,
-  setTrayResetter,
-} from '../shell/supplemental-commands/host-command.js';
-import { setRsyncSendFsRequest } from '../shell/supplemental-commands/rsync-command.js';
-import {
-  setPlaywrightTeleportBestFollower,
-  setPlaywrightTeleportConnectedFollowers,
-} from '../shell/supplemental-commands/playwright-command.js';
-import { SprinkleManager } from './sprinkle-manager.js';
-import { resolveSprinkleIconHtml } from './sprinkle-icon.js';
-import { initTelemetry } from './telemetry.js';
-import { getAllMountEntries } from '../fs/mount-table-store.js';
-import { recoverMounts } from '../fs/mount-recovery.js';
-import { formatLickEventForCone } from '../scoops/lick-formatting.js';
-import { LocalMountBackend } from '../fs/mount/backend-local.js';
-import { newMountId } from '../fs/mount/mount-id.js';
-import {
-  openMountPickerPopup,
-  loadAndClearPendingHandle,
-  reactivateHandle,
-} from '../fs/mount-picker-popup.js';
-import { detectUpgrade, recordVersionSeen } from '../scoops/upgrade-detection.js';
+import type { RegisteredScoop } from '../scoops/types.js';
 import {
   detectWelcomeFirstRun,
   hasOnboardingFinalLickInHistory,
 } from '../scoops/welcome-detection.js';
+import {
+  setConnectedFollowersGetter,
+  setTrayResetter,
+} from '../shell/supplemental-commands/host-command.js';
+import { installSkillFromDrop } from '../skills/install-from-drop.js';
+import { createAttachmentTmpWriter } from './attachment-vfs.js';
+import { enterDetachedActiveState } from './detached-active.js';
 // Static-import dip helpers used by the onboarding orchestrator. dip.ts is
 // already pulled into the main entry chunk via chat-panel.ts/tool-ui-renderer.ts
 // — dynamic-importing it here only confused rollup's chunk graph (and triggered
@@ -136,13 +82,47 @@ import {
 // "o is not a function" error in the fs chunk because of the resulting
 // circular module-evaluation order.
 import { broadcastToDips } from './dip.js';
-import { isExtensionMessage } from '../../../chrome-extension/src/messages.js';
-import type {
-  PanelMessageSender,
-  PanelMessageSubscriber,
-} from '../../../chrome-extension/src/bridge-transport.js';
 import { createExtensionLeaderHooks } from './extension-leader-hooks.js';
-import { enterDetachedActiveState } from './detached-active.js';
+import { Layout } from './layout.js';
+import { isLickChannel, type LickChannel } from './lick-channels.js';
+import {
+  runNewSessionFreeze,
+  runNewSessionFreezeQuick,
+  scheduleBackgroundEnrichment,
+} from './new-session.js';
+import { flushCredentialsToWorker, resolveDefaultModel } from './onboarding-helpers.js';
+import type { PageFollowerTrayHandle } from './page-follower-tray.js';
+import { CHERRY_RUNTIME_TAG, startPageFollowerTray } from './page-follower-tray.js';
+import type { PageLeaderTrayHandle, StartPageLeaderTrayOptions } from './page-leader-tray.js';
+import { startPageLeaderTray } from './page-leader-tray.js';
+import {
+  applyProviderDefaults,
+  getApiKey,
+  removeAccount,
+  resolveCurrentModel,
+  resolveModelById,
+  saveOAuthAccount,
+} from './provider-settings.js';
+import { canonicalRuntimeId } from './runtime-identity.js';
+import {
+  getElectronOverlayInitialTab,
+  isElectronOverlaySetTabMessage,
+  resolveUiRuntimeMode,
+  shouldUseRuntimeModeTrayDefaults,
+  type UiRuntimeMode,
+} from './runtime-mode.js';
+import { frozenSessionPath, parseFrozenArchive } from './session-freezer.js';
+import {
+  findDroppedNonSkillTransferFiles,
+  findDroppedSkillTransferFile,
+  hasDroppedFiles,
+} from './skill-drop.js';
+import { resolveSprinkleIconHtml } from './sprinkle-icon.js';
+import { SprinkleManager } from './sprinkle-manager.js';
+import { initTelemetry } from './telemetry.js';
+import { initTheme } from './theme.js';
+import { initTooltips } from './tooltip.js';
+import type { ChatMessage } from './types.js';
 
 const log = createLogger('main');
 
@@ -513,8 +493,9 @@ async function fireFastForwardFinalLick(
 ): Promise<void> {
   if (await hasOnboardingFinalLickInHistory()) return;
   const profile = fs ? await loadPersistedProfile(fs) : {};
-  const { getSelectedModelId, getProviderConfig, getProviderModels } =
-    await import('./provider-settings.js');
+  const { getSelectedModelId, getProviderConfig, getProviderModels } = await import(
+    './provider-settings.js'
+  );
   const modelId = (() => {
     try {
       return getSelectedModelId() || null;
@@ -641,8 +622,9 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   // Register session costs provider for the panel's terminal shell.
   // The offscreen document owns the orchestrator, so we request cost data via chrome.runtime.
   {
-    const { registerSessionCostsProvider } =
-      await import('../shell/supplemental-commands/cost-command.js');
+    const { registerSessionCostsProvider } = await import(
+      '../shell/supplemental-commands/cost-command.js'
+    );
     registerSessionCostsProvider(
       () =>
         new Promise((resolve) => {
@@ -993,8 +975,9 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   // Mirrors the standalone wiring in mainCli — instantiated lazily so
   // it has access to layout/chatPanel + provider settings + the
   // OffscreenClient sprinkle-lick relay.
-  const { OnboardingOrchestrator: OnboardingOrchestratorExt } =
-    await import('../scoops/onboarding-orchestrator.js');
+  const { OnboardingOrchestrator: OnboardingOrchestratorExt } = await import(
+    '../scoops/onboarding-orchestrator.js'
+  );
   const broadcastToDipsExt = broadcastToDips;
   const {
     getAvailableProviders: getAvailableProvidersExt,
@@ -1092,8 +1075,9 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
           // needs a CDP transport; loopback URI is captured via
           // `Fetch.requestPaused` without binding a real local port.
           if (cfg.onOAuthLoginIntercepted) {
-            const { createInterceptingOAuthLauncherForCurrentRuntime } =
-              await import('../providers/oauth-service.js');
+            const { createInterceptingOAuthLauncherForCurrentRuntime } = await import(
+              '../providers/oauth-service.js'
+            );
             const launcher = await createInterceptingOAuthLauncherForCurrentRuntime();
             if (!launcher) {
               return {
@@ -1507,8 +1491,9 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   // and the controller stays idle; pending fetches reject via the proxy's
   // bounded `DEFAULT_FETCH_TIMEOUT_MS` so the controller doesn't pin the
   // `opening` set forever.
-  const { PanelFollowerSprinkleProxy } =
-    await import('../../../chrome-extension/src/follower-sprinkle-bridge.js');
+  const { PanelFollowerSprinkleProxy } = await import(
+    '../../../chrome-extension/src/follower-sprinkle-bridge.js'
+  );
   const { SprinkleFollowerController } = await import('./sprinkle-follower-controller.js');
   const followerSprinkleSender = {
     send(envelope: { source: 'panel'; payload: unknown }): void {
@@ -1663,8 +1648,9 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   // Page-side handler for nuke-reload broadcasts. The offscreen shell
   // can't reload the side panel directly; nuke broadcasts a reload
   // request and the panel listens.
-  const { installNukeReloadListener } =
-    await import('../shell/supplemental-commands/nuke-command.js');
+  const { installNukeReloadListener } = await import(
+    '../shell/supplemental-commands/nuke-command.js'
+  );
   installNukeReloadListener();
 
   // `?ui-fixture=1` — same design-time override as the CLI path, but run
@@ -1858,16 +1844,27 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // `CDPClient` is still in `disconnected` state at that moment, the
   // send throws "CDP client is not connected" and the agent sees
   // confusing errors for `playwright`, `open`, etc.
-  const browser = new BrowserAPI();
-  const realCdpTransport = browser.getTransport();
-  try {
-    await browser.connect();
-  } catch (err) {
-    log.warn(
-      'Initial CDP connect failed; worker-forwarded commands will retry on demand',
-      err instanceof Error ? err.message : String(err)
-    );
+  let browser: BrowserAPI;
+  let cherryJoinUrl: string | undefined;
+  let cherryTransport: CherryHostTransport | undefined;
+  if (runtimeMode === 'cherry') {
+    const { setupCherryFollower } = await import('./main-cherry.js');
+    const cherry = await setupCherryFollower();
+    browser = cherry.browser;
+    cherryJoinUrl = cherry.joinUrl;
+    cherryTransport = cherry.transport;
+  } else {
+    browser = new BrowserAPI();
+    try {
+      await browser.connect();
+    } catch (err) {
+      log.warn(
+        'Initial CDP connect failed; worker-forwarded commands will retry on demand',
+        err instanceof Error ? err.message : String(err)
+      );
+    }
   }
+  const realCdpTransport = browser.getTransport();
 
   // Expose the page-side BrowserAPI so the OAuth intercept launcher
   // (active-transport.ts) can resolve a CDP transport from the main
@@ -2213,8 +2210,9 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // shell can reach it. The shell side of the bridge lives in
   // `kernel-worker.ts`; this side installs the dispatcher.
   const { SprinkleManager } = await import('./sprinkle-manager.js');
-  const { installSprinkleManagerHandlerOverChannel } =
-    await import('../scoops/sprinkle-bridge-channel.js');
+  const { installSprinkleManagerHandlerOverChannel } = await import(
+    '../scoops/sprinkle-bridge-channel.js'
+  );
 
   // ── Welcome / onboarding wiring (mirrors `mainExtension`) ──────────
   //
@@ -2229,8 +2227,9 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // constructed on first lick so it can capture `sprinkleManager`
   // (defined just below) by reference.
   const firedWelcomeActions = loadFiredWelcomeActions();
-  const { OnboardingOrchestrator: OnboardingOrchestratorWorker } =
-    await import('../scoops/onboarding-orchestrator.js');
+  const { OnboardingOrchestrator: OnboardingOrchestratorWorker } = await import(
+    '../scoops/onboarding-orchestrator.js'
+  );
   // Dynamic import (matches `mainExtension`) — keeps the static
   // import surface small and avoids dragging the full
   // provider-settings module into the early boot graph.
@@ -2244,8 +2243,9 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
     setSelectedModelId,
     providerOffersLlmModels,
   } = await import('./provider-settings.js');
-  const { createSprinkleDeviceCodePrompter, resolveDeviceCodeDecision } =
-    await import('../providers/device-code-bridge.js');
+  const { createSprinkleDeviceCodePrompter, resolveDeviceCodeDecision } = await import(
+    '../providers/device-code-bridge.js'
+  );
   let workerOnboardingOrchestrator: InstanceType<typeof OnboardingOrchestratorWorker> | null = null;
   // `sprinkleManager` is assigned just below; closures reference the
   // binding, not the value, so the orchestrator's lazy construction
@@ -2289,8 +2289,9 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
           }
           if (cfg.requiresBaseUrl && baseUrl) addAccount(providerId, '', baseUrl);
           if (cfg.onOAuthLoginIntercepted) {
-            const { createInterceptingOAuthLauncherForCurrentRuntime } =
-              await import('../providers/oauth-service.js');
+            const { createInterceptingOAuthLauncherForCurrentRuntime } = await import(
+              '../providers/oauth-service.js'
+            );
             const launcher = await createInterceptingOAuthLauncherForCurrentRuntime();
             if (!launcher) {
               return {
@@ -2601,7 +2602,7 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
         'slicc.leaderTrayFollowers',
         JSON.stringify(
           followerPeers.map((p) => ({
-            runtimeId: p.bootstrapId,
+            runtimeId: canonicalRuntimeId(p.bootstrapId),
             runtime: p.runtime,
             connectedAt: p.connectedAt ?? undefined,
           }))
@@ -2609,6 +2610,8 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       );
     },
     sendWebhookEvent: (id, headers, body) => client.sendWebhookEvent(id, headers, body),
+    onCherryHostEvent: (runtimeId, name, detail) =>
+      client.sendCherryHostEvent(runtimeId, name, detail),
     onAgentEvent: (handler) => agentHandle.onEvent(handler),
     browserAPI: browser,
     browserTransport: realCdpTransport,
@@ -2624,7 +2627,7 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   const wireLeaderHooks = (handle: PageLeaderTrayHandle): void => {
     setConnectedFollowersGetter(() =>
       handle.peers.getPeers().map((p) => ({
-        runtimeId: p.bootstrapId,
+        runtimeId: canonicalRuntimeId(p.bootstrapId),
         runtime: p.runtime,
         connectedAt: p.connectedAt ?? undefined,
       }))
@@ -2708,6 +2711,18 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       // non-transferable WebRTC resources and live on the page.
       leaveTray: async ({ workerBaseUrl, requestId }) =>
         await performTrayLeaveLocally({ workerBaseUrl, requestId }),
+      // Worker-side `cherry-emit` bridges here so a cone → host
+      // `slicc.event` reaches the page-side LeaderSyncManager. Reads the
+      // live `pageLeaderTray` binding so it picks up a leader started
+      // after install; returns false when no leader is active (the
+      // command already gates on a connected cherry runtime).
+      emitCherrySliccEvent: (runtimeId, name, detail) =>
+        pageLeaderTray?.sync.emitCherrySliccEvent(runtimeId, name, detail) ?? false,
+      // Bridge remote (follower) browser targets to the worker-side
+      // playwright-cli. The worker's BrowserAPI has no trayTargetProvider
+      // so listAllTargets() falls back to local CDP only; this callback
+      // fetches from the page-side BrowserAPI which is fully wired.
+      listRemoteTargets: () => browser.listAllTargets(),
     }),
   });
   // Tear down on session reload so the handler doesn't outlive its
@@ -2825,36 +2840,74 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
         try {
           const res = await fetch('/api/hosted-bootstrap');
           if (!res.ok) return;
-          const bootstrap = (await res.json()) as { adobeImsToken?: string };
-          if (!bootstrap.adobeImsToken) return;
-
-          // Seed the model/provider selection before injecting the account so the
-          // first user message resolves to `adobe`. Without this, getSelectedProvider()
-          // hits the `accounts.length > 0` branch — which depends on saveOAuthAccount
-          // having already pushed the account into the kernel-worker shim. The shim
-          // write is async (panel-rpc), so a sub-second user message after this block
-          // can race the account propagation. An explicit "selected-model" write is
-          // synchronous in the kernel-worker shim and removes the race.
-          //
-          // Skip the write if already set so a paused-then-resumed cone preserves
-          // whatever model the user picked in the prior session.
-          if (!localStorage.getItem('selected-model')) {
+          const boot = (await res.json()) as {
+            model?: string;
+            accounts?: import('@slicc/cloud-core/cone-config').Account[];
+            adobeImsToken?: string;
+          };
+          const accounts =
+            boot.accounts ??
+            (boot.adobeImsToken
+              ? [{ providerId: 'adobe', kind: 'oauth' as const, accessToken: boot.adobeImsToken }]
+              : []);
+          if (boot.model) localStorage.setItem('selected-model', boot.model);
+          else if (!localStorage.getItem('selected-model'))
             localStorage.setItem('selected-model', 'adobe:claude-opus-4-6');
-          }
-
-          await saveOAuthAccount({
-            providerId: 'adobe',
-            accessToken: bootstrap.adobeImsToken,
-            tokenExpiresAt: Date.now() + 60 * 60 * 1000,
-            userName: 'cloud-injected',
+          const { applyHostedAccounts } = await import('./hosted-config-apply.js');
+          const prevManaged = JSON.parse(
+            localStorage.getItem('slicc_cloud_managed') ?? '[]'
+          ) as string[];
+          await applyHostedAccounts(accounts, {
+            saveOAuthAccount,
+            addAccount,
+            removeAccount,
+            currentProviderIds: () => getAccounts().map((a) => a.providerId),
+            previouslyManaged: () => prevManaged,
           });
-          log.info('hosted-leader: Adobe IMS token injected from secrets.env');
+          localStorage.setItem(
+            'slicc_cloud_managed',
+            JSON.stringify(accounts.map((a) => a.providerId))
+          );
+          log.info('hosted-leader: cone config applied', { count: accounts.length });
         } catch (err) {
           log.warn('hosted-leader: bootstrap fetch failed; provider needs manual login', {
             error: err instanceof Error ? err.message : String(err),
           });
         }
       })();
+    } else if (runtimeMode === 'cherry' && cherryJoinUrl) {
+      pageFollowerTray = startPageFollowerTray({
+        joinUrl: cherryJoinUrl,
+        runtime: CHERRY_RUNTIME_TAG,
+        onSnapshot: (messages) => layout.panels.chat.loadMessages(messages),
+        onUserMessage: (text, _messageId, _scoopJid, attachments) =>
+          layout.panels.chat.addUserMessage(text, attachments),
+        onStatus: (status) => layout.panels.chat.setProcessing(status === 'processing'),
+        // Outbound cone → host bridge: the leader's `cherry-emit` lands here as a
+        // `cherry.slicc_event`; forward it to the host page's `onSliccEvent` hook
+        // via the iframe transport. The iframe only ever lends its own single
+        // host page, so no target needs to be disambiguated on this side.
+        onCherrySliccEvent: (name, detail) => cherryTransport?.emitSliccEventToHost(name, detail),
+        setChatAgent: (agent) => layout.panels.chat.setAgent(agent),
+        browserAPI: browser,
+        addSprinkle: (name, title, element, zone, options) =>
+          layout.addSprinkle(
+            name,
+            title,
+            element,
+            zone as 'primary' | 'drawer' | undefined,
+            options
+          ),
+        removeSprinkle: (name) => layout.removeSprinkle(name),
+      });
+      // Inbound host → cone bridge: the host page's `handle.emitHostEvent` posts
+      // a `host.event` to the iframe transport; forward it to the leader as a
+      // `cherry.host_event` so it surfaces as a `cherry` lick on the cone. Read
+      // `currentSync` lazily so a reconnect (new sync instance) still routes.
+      if (cherryTransport) {
+        cherryTransport.onHostEvent = (name, detail) =>
+          pageFollowerTray?.currentSync?.sendCherryHostEvent(name, detail);
+      }
     } else if (storedJoinUrl) {
       pageFollowerTray = startPageFollowerTray({
         joinUrl: storedJoinUrl,
@@ -3176,8 +3229,9 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // Page-side handler for nuke-reload broadcasts. The shell now lives
   // in the kernel worker where `location.reload()` is a no-op, so the
   // nuke command broadcasts a reload request and the page listens.
-  const { installNukeReloadListener } =
-    await import('../shell/supplemental-commands/nuke-command.js');
+  const { installNukeReloadListener } = await import(
+    '../shell/supplemental-commands/nuke-command.js'
+  );
   const stopNukeListener = installNukeReloadListener();
 
   // Cleanup on unload.
@@ -3219,7 +3273,7 @@ function startFreezeWatchdog(): void {
   // Extension CSP blocks blob: workers; skip in extension mode.
   // The extension offscreen document is a separate process anyway,
   // so a frozen sprinkle in the panel won't block the agent.
-  if (typeof chrome !== 'undefined' && !!chrome?.runtime?.id) return;
+  if (typeof chrome !== 'undefined' && chrome?.runtime?.id) return;
 
   const workerCode = `
     let lastPong = Date.now();
@@ -3286,6 +3340,38 @@ async function main(): Promise<void> {
   const app = document.getElementById('app');
   if (!app) throw new Error('#app element not found');
 
+  // Connect mode (?connect=1) is served by the cloudflare worker, which has NO
+  // /api/fetch-proxy — so the llm-proxy SW (scope '/') would 404 every
+  // cross-origin fetch (e.g. GitHub OAuth). It must not control this page.
+  // Unregister any SW left from a prior full-app visit on this origin and reload
+  // once to detach, then proceed SW-free. Detected inline so it gates before the
+  // registration below; mirrors resolveUiRuntimeMode's `connect=1` check.
+  const isConnectModeForSw = (() => {
+    try {
+      return new URL(window.location.href).searchParams.get('connect') === '1';
+    } catch {
+      return false;
+    }
+  })();
+  if ('serviceWorker' in navigator && isConnectModeForSw) {
+    try {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister().catch(() => false)));
+      if (
+        navigator.serviceWorker.controller &&
+        !sessionStorage.getItem('slicc-connect-sw-cleared')
+      ) {
+        sessionStorage.setItem('slicc-connect-sw-cleared', '1');
+        log.info('connect mode: detaching from service worker (no proxy on worker origin)');
+        location.reload();
+        return;
+      }
+      sessionStorage.removeItem('slicc-connect-sw-cleared');
+    } catch (err) {
+      log.error('connect-mode SW cleanup failed', err);
+    }
+  }
+
   // Register preview service worker (serves VFS content at /preview/*)
   // and ensure it is controlling this page before we proceed. If the SW
   // was just installed for the first time, `navigator.serviceWorker.
@@ -3294,8 +3380,9 @@ async function main(): Promise<void> {
   // fetches fall through to the dev server and 404, which breaks dips
   // that load .shtml files (welcome dip, etc.). The standard fix is a
   // one-shot reload right after the first activation; we gate it on
-  // sessionStorage to avoid loops.
-  if ('serviceWorker' in navigator) {
+  // sessionStorage to avoid loops. Skipped in connect mode (handled above —
+  // the worker origin has no /api/fetch-proxy, so no SW should control it).
+  if ('serviceWorker' in navigator && !isConnectModeForSw) {
     try {
       await navigator.serviceWorker.register('/preview-sw.js', { scope: '/preview/' });
       log.info('Preview SW registered');
@@ -3368,11 +3455,20 @@ async function main(): Promise<void> {
   // (welcome wizard → connect-llm dip → OnboardingOrchestrator). The user
   // can still open the legacy dialog later from the accounts/settings UI.
   const apiKey = getApiKey();
-  const allowProviderlessTrayJoin = !apiKey && hasStoredTrayJoinUrl(window.localStorage);
+  const _allowProviderlessTrayJoin = !apiKey && hasStoredTrayJoinUrl(window.localStorage);
 
   // Resolve UI runtime mode from chrome.runtime.id and URL query.
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
   const runtimeMode = resolveUiRuntimeMode(window.location.href, isExtension);
+
+  // Connect mode (?connect=1): slim provider-login + accounts + model-picker UI.
+  // Used by /cloud dashboard for shared localStorage account provisioning.
+  if (runtimeMode === 'connect') {
+    (globalThis as Record<string, unknown>).__slicc_connect_mode = true;
+    const { mountConnectSurface } = await import('./connect-surface.js');
+    await mountConnectSurface(app);
+    return;
+  }
 
   // Detached extension tab (?detached=1): standalone-density Layout with
   // the offscreen agent. See docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md

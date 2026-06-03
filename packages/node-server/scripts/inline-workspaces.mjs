@@ -7,19 +7,19 @@
 // not real npm dependencies). Inlining them makes the published output self-contained.
 
 import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
   readdirSync,
   readFileSync,
   writeFileSync,
-  mkdirSync,
-  copyFileSync,
-  existsSync,
 } from 'node:fs';
-import { join, relative, dirname, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const repoRoot = resolve(__dirname, '../../..');
+const Filename = fileURLToPath(import.meta.url);
+const Dirname = dirname(Filename);
+const repoRoot = resolve(Dirname, '../../..');
 const nodeServerDist = resolve(repoRoot, 'dist/node-server');
 
 if (!existsSync(nodeServerDist)) {

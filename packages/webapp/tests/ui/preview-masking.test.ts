@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { maskSecrets } from '../../src/ui/preview-masking.js';
 
 // Use synthetic tokens that look like real secrets but won't trigger

@@ -2,27 +2,27 @@
  * Tests for the scoops database layer.
  */
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
 import {
-  initDB,
-  saveScoop,
-  getScoop,
-  getAllScoops,
   deleteScoop,
-  saveMessage,
-  getMessagesSince,
-  saveSession,
-  getSession,
-  getAllSessions,
-  saveTask,
-  getTask,
-  getAllTasks,
   deleteTask,
+  getAllScoops,
+  getAllSessions,
+  getAllTasks,
+  getMessagesSince,
+  getScoop,
+  getSession,
   getState,
+  getTask,
+  initDB,
+  saveMessage,
+  saveScoop,
+  saveSession,
+  saveTask,
   setState,
 } from '../../src/scoops/db.js';
-import type { RegisteredScoop, ChannelMessage, ScheduledTask } from '../../src/scoops/types.js';
+import type { ChannelMessage, RegisteredScoop, ScheduledTask } from '../../src/scoops/types.js';
 
 describe('Scoops Database', () => {
   beforeAll(async () => {

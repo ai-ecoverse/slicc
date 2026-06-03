@@ -1,15 +1,17 @@
 import {
   createSubstrate,
   isCloudError,
-  startCone,
-  reserveSlot,
+  killCone,
   listCones,
   pauseCone,
+  reserveSlot,
   resumeCone,
-  killCone,
   type SandboxSubstrate,
+  startCone,
 } from '@slicc/cloud-core';
+import { bundleIndex, type ConeConfigDelta } from '@slicc/cloud-core/cone-config';
 import { checkCapsForRun } from './caps.js';
+import { buildStartConeArgs, coneConfigToBundle } from './cone-config-bridge.js';
 import { errorResponse, okResponse } from './error-envelope.js';
 import { LocalRegistry } from './local-registry.js';
 
@@ -29,19 +31,21 @@ interface DurableObjectStateLike {
   blockConcurrencyWhile<T>(fn: () => Promise<T>): Promise<T>;
 }
 
-const ADOBE_TOKEN_DOMAINS = 'adobe-llm-proxy.paolo-moz.workers.dev';
+export const ADOBE_TOKEN_DOMAINS = 'adobe-llm-proxy.paolo-moz.workers.dev';
 
 interface StartConeBody {
   bearer: string;
   name?: string;
   userId: string;
   workerOrigin: string;
+  coneConfig?: unknown;
 }
 interface ResumeConeBody {
   bearer: string;
   sandboxId: string;
   localSliccVersion: string;
   userId: string;
+  coneConfigDelta?: unknown;
 }
 interface SimpleSandboxBody {
   sandboxId: string;
@@ -82,6 +86,8 @@ export class CloudSessionsDurableObject {
           return await this.killConeOp((await request.json()) as SimpleSandboxBody);
         case '/list-cones':
           return await this.listConesOp((await request.json()) as ListConesBody);
+        case '/cone-config-index':
+          return await this.coneConfigIndexOp((await request.json()) as SimpleSandboxBody);
         default:
           return new Response(`unknown DO op: ${op}`, { status: 404 });
       }
@@ -153,14 +159,15 @@ export class CloudSessionsDurableObject {
     // Slow phase: NO LOCK. The reservation entry holds the cap slot.
     // ~15-25s for substrate.create + poll.
     try {
+      const bundle = coneConfigToBundle(body.coneConfig, body.bearer);
+      const { envContents, coneConfigJson } = buildStartConeArgs(bundle, body.bearer);
+
       const result = await startCone(
         { substrate, registry },
         {
           reservationId: reservation.reservationId,
-          envContents: [
-            `ADOBE_IMS_TOKEN=${body.bearer}`,
-            `ADOBE_IMS_TOKEN_DOMAINS=${ADOBE_TOKEN_DOMAINS}`,
-          ].join('\n'),
+          envContents,
+          coneConfigJson,
           envs: {
             ADOBE_IMS_TOKEN: body.bearer,
             ADOBE_IMS_TOKEN_DOMAINS: ADOBE_TOKEN_DOMAINS,
@@ -171,6 +178,11 @@ export class CloudSessionsDurableObject {
           metadata: { userId: body.userId },
         }
       );
+
+      // Persist the names-only index on the DO record after successful start
+      const index = bundleIndex(bundle);
+      await registry.update(result.sandboxId, { coneConfigIndex: index });
+
       return okResponse({
         sandboxId: result.sandboxId,
         name: result.name,
@@ -250,18 +262,41 @@ export class CloudSessionsDurableObject {
 
     // Slow phase: no lock. substrate.connect + kick + poll + registry.update.
     try {
+      const userDelta = body.coneConfigDelta as ConeConfigDelta | undefined;
+      // Always refresh the Adobe IMS bearer, merged with any user edits, through
+      // the read-modify-write delta path. A raw refreshSecretsContents overwrite
+      // would clobber every OTHER flat secret/account in /slicc/secrets.env. User
+      // upserts come after Adobe's (so a user re-auth wins by providerId/name),
+      // and a user delete of 'adobe' still wins (merge applies upserts then deletes).
+      const mergedDelta: ConeConfigDelta = {
+        ...(userDelta?.model ? { model: userDelta.model } : {}),
+        upsert: {
+          accounts: [
+            { providerId: 'adobe', kind: 'oauth', accessToken: body.bearer },
+            ...(userDelta?.upsert?.accounts ?? []),
+          ],
+          secrets: [
+            { name: 'ADOBE_IMS_TOKEN', value: body.bearer, domains: [ADOBE_TOKEN_DOMAINS] },
+            ...(userDelta?.upsert?.secrets ?? []),
+          ],
+        },
+        ...(userDelta?.delete ? { delete: userDelta.delete } : {}),
+      };
       const result = await resumeCone(
         { substrate, registry },
         {
           query: body.sandboxId,
           localSliccVersion: body.localSliccVersion,
-          refreshSecretsContents: [
-            `ADOBE_IMS_TOKEN=${body.bearer}`,
-            `ADOBE_IMS_TOKEN_DOMAINS=${ADOBE_TOKEN_DOMAINS}`,
-          ].join('\n'),
+          coneConfigDelta: mergedDelta,
           skipStateCheck: true, // Already checked + reserved under lock
         }
       );
+
+      // Persist the updated index if resumeCone returned one
+      if (result.coneConfigIndex) {
+        await registry.update(body.sandboxId, { coneConfigIndex: result.coneConfigIndex });
+      }
+
       return okResponse({
         sandboxId: result.sandboxId,
         joinUrl: result.joinUrl,
@@ -317,6 +352,21 @@ export class CloudSessionsDurableObject {
         { metadata: { userId: body.userId } }
       );
       return okResponse({ cones });
+    } catch (err) {
+      if (isCloudError(err)) {
+        return errorResponse(errCodeToStatus(err.code), err.code, err.message, err.details);
+      }
+      return errorResponse(500, 'INTERNAL', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private async coneConfigIndexOp(body: SimpleSandboxBody): Promise<Response> {
+    try {
+      const entry = await this.registry().findByNameOrId(body.sandboxId);
+      if (!entry) {
+        return errorResponse(404, 'NOT_FOUND', `cone not found: ${body.sandboxId}`);
+      }
+      return okResponse({ coneConfigIndex: entry.coneConfigIndex ?? null });
     } catch (err) {
       if (isCloudError(err)) {
         return errorResponse(errCodeToStatus(err.code), err.code, err.message, err.details);

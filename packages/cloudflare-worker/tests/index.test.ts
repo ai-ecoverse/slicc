@@ -1,17 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import worker, { handleWorkerRequest } from '../src/index.js';
+import { SessionTrayDurableObject } from '../src/session-tray.js';
 import {
-  FOLLOWER_ATTACH_RETRY_AFTER_MS,
-  wantsJSON,
-  TRAY_RECLAIM_TTL_MS,
-  HOSTED_TRAY_RECLAIM_TTL_MS,
-  reclaimMsForTray,
   type CreateTrayRequest,
   type DurableObjectIdLike,
   type DurableObjectStateLike,
+  FOLLOWER_ATTACH_RETRY_AFTER_MS,
+  HOSTED_TRAY_RECLAIM_TTL_MS,
+  reclaimMsForTray,
+  TRAY_RECLAIM_TTL_MS,
   type TrayRecord,
+  wantsJSON,
 } from '../src/shared.js';
-import { SessionTrayDurableObject } from '../src/session-tray.js';
 import { TRAY_BOOTSTRAP_TIMEOUT_MS } from '../src/tray-signaling.js';
 import { TURN_CREDENTIAL_TTL_MS } from '../src/turn-credentials.js';
 
@@ -1180,6 +1180,7 @@ describe('tray worker skeleton', () => {
         'POST /api/cloud/pause',
         'POST /api/cloud/resume',
         'POST /api/cloud/kill',
+        'GET /api/cloud/cone-config',
         'POST /api/cloud/sign-out',
         'GET /api/cloud/admin/stats',
         'GET /auth/cloud-callback',
@@ -2106,5 +2107,33 @@ describe('SessionTrayDurableObject — kind persistence', () => {
     const stored = (await state.storage.get('tray')) as TrayRecord;
     expect(stored.kind ?? 'desktop').toBe('desktop');
     expect(reclaimMsForTray(stored)).toBe(TRAY_RECLAIM_TTL_MS);
+  });
+});
+
+describe('cherry framing policy', () => {
+  it('default SPA forbids framing and is not no-store', async () => {
+    const { env } = createTestHarness();
+    const res = await worker.fetch(new Request('https://app.example/'), env);
+    expect(res.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+    expect(res.headers.get('cache-control') ?? '').not.toContain('no-store');
+  });
+
+  it('cherry boot allows configured ancestors and is uncacheable', async () => {
+    const env = {
+      ...createTestHarness().env,
+      ALLOWED_CHERRY_HOST_ORIGINS: 'https://host.example',
+    };
+    const res = await worker.fetch(new Request('https://app.example/?cherry=1'), env);
+    const csp = res.headers.get('content-security-policy') ?? '';
+    expect(csp).toContain('frame-ancestors https://host.example');
+    expect(csp).not.toContain("frame-ancestors 'none'");
+    expect(res.headers.get('cache-control')).toContain('no-store');
+    expect(res.headers.get('vary') ?? '').toContain('Sec-Fetch-Dest');
+  });
+
+  it('cherry boot with no configured ancestors falls back to none', async () => {
+    const { env } = createTestHarness();
+    const res = await worker.fetch(new Request('https://app.example/?cherry=1'), env);
+    expect(res.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
   });
 });

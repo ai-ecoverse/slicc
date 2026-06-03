@@ -5,12 +5,12 @@
  * All messages flow through the service worker as a relay.
  */
 
-import type { ScoopTabState } from './types.js';
 import type { MessageAttachment } from '../../webapp/src/core/attachments.js';
 import type {
   TerminalControlMsg,
   TerminalEventMsg,
 } from '../../webapp/src/shell/terminal-protocol.js';
+import type { ScoopTabState } from './types.js';
 
 /**
  * Local mirror of `SprinkleSummary` from
@@ -210,6 +210,12 @@ export interface OAuthRequestMsg {
   type: 'oauth-request';
   providerId: string;
   authorizeUrl: string;
+  /**
+   * Whether to show the auth window. Silent renewals (prompt=none) pass
+   * `false` so `chrome.identity.launchWebAuthFlow` runs without UI; explicit
+   * user-initiated logins pass `true` (the default when omitted).
+   */
+  interactive?: boolean;
 }
 
 /** Sprinkle lick event from side panel to offscreen agent. */
@@ -298,6 +304,23 @@ export interface InjectForwardedLickMsg {
 export interface ForwardLickMsg {
   type: 'forward-lick';
   event: ForwardedLickEvent;
+}
+
+/**
+ * Cherry host event relayed from the page-side `LeaderSyncManager` into the
+ * worker-side `LickManager`. The page-side leader receives `cherry.host_event`
+ * over a follower's data channel (its embedded cherry host page called
+ * `emitHostEvent`) and forwards it here so the lick manager (which lives in the
+ * kernel worker) can emit a `'cherry'` lick to the cone. Fire-and-forget;
+ * matches `Orchestrator.handleCherryHostEvent` (the `'cherry'` lick `timestamp`
+ * is generated worker-side). `cherryRuntimeId` is the owning follower's runtime
+ * id, resolved leader-side; `undefined` when the follower is no longer mapped.
+ */
+export interface CherryHostEventMsg {
+  type: 'lick-cherry-host-event';
+  cherryRuntimeId: string | undefined;
+  name: string;
+  detail?: unknown;
 }
 
 /** Request skill reload after upskill install. */
@@ -501,6 +524,7 @@ export type PanelToOffscreenMessage =
   | WebhookEventMsg
   | SetFollowerForwardingMsg
   | InjectForwardedLickMsg
+  | CherryHostEventMsg
   | ReloadSkillsMsg
   | ToolUIActionMsg
   | LocalStorageSetMsg

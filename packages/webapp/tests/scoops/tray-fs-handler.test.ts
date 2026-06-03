@@ -1,8 +1,7 @@
 import 'fake-indexeddb/auto';
-import { describe, expect, it, beforeEach } from 'vitest';
-
-import { handleFsRequest, uint8ToBase64, base64ToUint8 } from '../../src/scoops/tray-fs-handler.js';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
+import { base64ToUint8, handleFsRequest, uint8ToBase64 } from '../../src/scoops/tray-fs-handler.js';
 import type {
   TrayFsRequest,
   TrayFsResponse,

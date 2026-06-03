@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  LeaderTrayManager,
   createTrayFetch,
   getLeaderTrayRuntimeStatus,
-  parseLeaderTraySession,
-  setLeaderTrayRuntimeStatus,
-  subscribeToLeaderTrayRuntimeStatus,
+  LeaderTrayManager,
   type LeaderTraySession,
   type LeaderTraySessionStore,
   type LeaderTrayWebSocket,
+  parseLeaderTraySession,
+  setLeaderTrayRuntimeStatus,
+  subscribeToLeaderTrayRuntimeStatus,
 } from '../../src/scoops/tray-leader.js';
 
 class MemorySessionStore implements LeaderTraySessionStore {

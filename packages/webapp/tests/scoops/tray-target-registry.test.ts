@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { TrayTargetRegistry } from '../../src/scoops/tray-target-registry.js';
 import type { RemoteTargetInfo } from '../../src/scoops/tray-sync-protocol.js';
+import { TrayTargetRegistry } from '../../src/scoops/tray-target-registry.js';
 
 describe('TrayTargetRegistry', () => {
   it('returns entries with correct targetId format for one runtime', () => {
@@ -20,6 +20,8 @@ describe('TrayTargetRegistry', () => {
       title: 'Google',
       url: 'https://google.com',
       isLocal: false,
+      kind: 'browser',
+      capabilities: undefined,
     });
     expect(entries[1]).toEqual({
       targetId: 'rt-A:tab2',
@@ -28,6 +30,8 @@ describe('TrayTargetRegistry', () => {
       title: 'GitHub',
       url: 'https://github.com',
       isLocal: false,
+      kind: 'browser',
+      capabilities: undefined,
     });
   });
 

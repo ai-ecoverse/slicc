@@ -19,10 +19,10 @@
  * surface which catches syntax errors and isolated-module issues.
  */
 
+import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import type { Command } from 'just-bash';
-import type { CommandContext } from 'just-bash';
-import { getTypeScript, basename, dirname, type TypeScriptModule } from './shared.js';
+import { stdinAsText } from '../just-bash-compat.js';
+import { basename, dirname, getTypeScript, type TypeScriptModule } from './shared.js';
 
 export interface ParsedTscArgs {
   files: string[];
@@ -291,7 +291,7 @@ export function createTscCommand(): Command {
 
     // No files: transpile stdin → stdout, mirroring `cat foo.ts | tsc`.
     if (parsed.files.length === 0) {
-      const source = ctx.stdin ?? '';
+      const source = stdinAsText(ctx.stdin);
       if (!source) {
         return { stdout: HELP_TEXT, stderr: '', exitCode: 0 };
       }

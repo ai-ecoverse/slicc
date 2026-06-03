@@ -6,8 +6,8 @@
  * and restricted filesystem access.
  */
 
-import type { MessageAttachment } from '../core/attachments.js';
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core';
+import type { MessageAttachment } from '../core/attachments.js';
 
 export type { ThinkingLevel };
 

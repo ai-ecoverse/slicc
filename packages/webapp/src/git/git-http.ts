@@ -6,7 +6,7 @@
  * - Extension mode: Port-based chrome.runtime.connect({name: 'fetch-proxy.fetch'})
  */
 
-import type { HttpClient, GitHttpRequest, GitHttpResponse } from 'isomorphic-git';
+import type { GitHttpRequest, GitHttpResponse, HttpClient } from 'isomorphic-git';
 import { createProxiedFetch } from '../shell/proxied-fetch.js';
 
 let proxiedFetch: ReturnType<typeof createProxiedFetch> | null = null;

@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { ChatPanel } from '../../src/ui/chat-panel.js';
-import type { AgentHandle, AgentEvent } from '../../src/ui/types.js';
+import type { AgentEvent, AgentHandle } from '../../src/ui/types.js';
 
 vi.mock('../../src/ui/voice-input.js', () => ({
   VoiceInput: class {
@@ -64,7 +64,9 @@ describe('ChatPanel image preview integration', () => {
 
   afterEach(() => {
     container.remove();
-    document.querySelectorAll('.image-preview-overlay').forEach((el) => el.remove());
+    document.querySelectorAll('.image-preview-overlay').forEach((el) => {
+      el.remove();
+    });
     vi.unstubAllGlobals();
   });
 

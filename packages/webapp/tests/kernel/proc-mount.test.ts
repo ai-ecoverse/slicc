@@ -2,10 +2,10 @@
  * Tests for `ProcMountBackend`.
  */
 
-import { describe, it, expect } from 'vitest';
-import { ProcessManager } from '../../src/kernel/process-manager.js';
-import { ProcMountBackend } from '../../src/kernel/proc-mount.js';
+import { describe, expect, it } from 'vitest';
 import { FsError } from '../../src/fs/types.js';
+import { ProcMountBackend } from '../../src/kernel/proc-mount.js';
+import { ProcessManager } from '../../src/kernel/process-manager.js';
 
 function decode(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes);

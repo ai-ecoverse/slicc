@@ -30,17 +30,17 @@
  * the first real request after recovery surfaces auth issues.
  */
 
+import type { MountBackend } from './mount/backend.js';
 import { LocalMountBackend } from './mount/backend-local.js';
 import {
-  S3MountBackend,
   DaMountBackend,
-  RemoteMountCache,
-  makeSignedFetchS3,
   makeSignedFetchDa,
+  makeSignedFetchS3,
+  RemoteMountCache,
+  S3MountBackend,
 } from './mount/index.js';
-import type { MountBackend } from './mount/backend.js';
-import { loadMountHandle } from './mount-table-store.js';
 import type { MountTableEntry } from './mount-table-store.js';
+import { loadMountHandle } from './mount-table-store.js';
 
 /**
  * Discriminated `MountRecoveryEntry`. Local entries carry the captured
@@ -201,7 +201,6 @@ export async function recoverMounts(
           reason,
         });
       }
-      continue;
     }
   }
 

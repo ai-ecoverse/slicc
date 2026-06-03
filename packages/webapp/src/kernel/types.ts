@@ -19,9 +19,10 @@
 import type {
   AgentEventMsg,
   ErrorMsg,
+  ExtensionThinkingLevel,
   IncomingMessageMsg,
-  PanelToOffscreenMessage,
   OffscreenToPanelMessage,
+  PanelToOffscreenMessage,
   ScoopCreatedMsg,
   ScoopListMsg,
   ScoopMessagesReplacedMsg,
@@ -30,14 +31,13 @@ import type {
   TrayFollowerStatusSnapshot,
   TrayLeaderStatusSnapshot,
   TrayRuntimeStatusMsg,
-  ExtensionThinkingLevel,
 } from '../../../chrome-extension/src/messages.js';
-import type { ChatMessage, AgentHandle, AgentEvent as UIAgentEvent } from '../ui/types.js';
-import type { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
-import type { Orchestrator } from '../scoops/orchestrator.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
-import type { RegisteredScoop, ThinkingLevel } from '../scoops/types.js';
 import type { VirtualFS } from '../fs/index.js';
+import type { Orchestrator } from '../scoops/orchestrator.js';
+import type { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
+import type { RegisteredScoop, ThinkingLevel } from '../scoops/types.js';
+import type { AgentHandle, ChatMessage, AgentEvent as UIAgentEvent } from '../ui/types.js';
 
 // ---------------------------------------------------------------------------
 // 1. Wire — generic over today's panel/host message shapes.
@@ -49,6 +49,7 @@ import type { VirtualFS } from '../fs/index.js';
 // ---------------------------------------------------------------------------
 
 import type { KernelTransport as KernelTransportBase } from './transport.js';
+
 export type { KernelTransport as KernelTransportRaw } from './transport.js';
 
 /**
@@ -227,18 +228,18 @@ export interface KernelClientFacade {
 // ---------------------------------------------------------------------------
 
 export type {
-  TrayLeaderStatusSnapshot,
-  TrayFollowerStatusSnapshot,
-  TrayRuntimeStatusMsg,
   AgentEventMsg,
-  StateSnapshotMsg,
-  ScoopListMsg,
-  ScoopCreatedMsg,
-  IncomingMessageMsg,
-  ScoopStatusMsg,
-  ScoopMessagesReplacedMsg,
   ErrorMsg,
-  PanelToOffscreenMessage,
-  OffscreenToPanelMessage,
   ExtensionThinkingLevel,
+  IncomingMessageMsg,
+  OffscreenToPanelMessage,
+  PanelToOffscreenMessage,
+  ScoopCreatedMsg,
+  ScoopListMsg,
+  ScoopMessagesReplacedMsg,
+  ScoopStatusMsg,
+  StateSnapshotMsg,
+  TrayFollowerStatusSnapshot,
+  TrayLeaderStatusSnapshot,
+  TrayRuntimeStatusMsg,
 };

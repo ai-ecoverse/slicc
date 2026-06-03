@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
-import { startCone, type StartResult, type SandboxHandle } from '@slicc/cloud-core';
 import type { SandboxSubstrate } from '@slicc/cloud-core';
+import { type SandboxHandle, type StartResult, startCone } from '@slicc/cloud-core';
 import { FileRegistry } from './registry-file.js';
 
 export interface RunStartOpts {

@@ -1,6 +1,9 @@
-import { describe, it, expect } from 'vitest';
 import express from 'express';
-import { registerHostedBootstrapEndpoint } from '../src/hosted-bootstrap.js';
+import { describe, expect, it } from 'vitest';
+import {
+  buildHostedBootstrapPayload,
+  registerHostedBootstrapEndpoint,
+} from '../src/hosted-bootstrap.js';
 import type { Secret, SecretEntry, SecretStore } from '../src/secrets/types.js';
 
 class FakeSecretStore implements SecretStore {
@@ -61,5 +64,41 @@ describe('GET /api/hosted-bootstrap', () => {
     // middleware in. A 200 from 127.0.0.1 above proves the middleware lets
     // loopback through; the cross-coverage is enough.
     expect(true).toBe(true);
+  });
+});
+
+describe('buildHostedBootstrapPayload', () => {
+  it('returns model + accounts from cone-config.json when present', () => {
+    const readConeConfig = () =>
+      JSON.stringify({
+        model: 'anthropic:claude-opus-4-6',
+        accounts: [{ providerId: 'anthropic', kind: 'apikey', apiKey: 'k' }],
+      });
+    const payload = buildHostedBootstrapPayload({
+      readConeConfig,
+      getLegacyAdobeToken: () => undefined,
+    });
+    expect(payload.model).toBe('anthropic:claude-opus-4-6');
+    expect(payload.accounts).toEqual([{ providerId: 'anthropic', kind: 'apikey', apiKey: 'k' }]);
+  });
+
+  it('falls back to a legacy Adobe token when cone-config.json is absent', () => {
+    const payload = buildHostedBootstrapPayload({
+      readConeConfig: () => null,
+      getLegacyAdobeToken: () => 'legacy-token',
+    });
+    expect(payload.model).toBe('adobe:claude-opus-4-6');
+    expect(payload.accounts).toEqual([
+      { providerId: 'adobe', kind: 'oauth', accessToken: 'legacy-token' },
+    ]);
+    expect(payload.adobeImsToken).toBe('legacy-token');
+  });
+
+  it('returns an empty payload when nothing is provisioned', () => {
+    const payload = buildHostedBootstrapPayload({
+      readConeConfig: () => null,
+      getLegacyAdobeToken: () => undefined,
+    });
+    expect(payload).toEqual({});
   });
 });

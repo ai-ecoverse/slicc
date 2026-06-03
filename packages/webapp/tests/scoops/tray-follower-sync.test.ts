@@ -1,17 +1,16 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
-
-import { FollowerSyncManager } from '../../src/scoops/tray-follower-sync.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  setFollowerTrayRuntimeStatus,
   getFollowerTrayRuntimeStatus,
+  setFollowerTrayRuntimeStatus,
 } from '../../src/scoops/tray-follower-status.js';
-import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
-import type { AgentEvent, ChatMessage } from '../../src/ui/types.js';
+import { FollowerSyncManager } from '../../src/scoops/tray-follower-sync.js';
 import type {
-  LeaderToFollowerMessage,
   FollowerToLeaderMessage,
+  LeaderToFollowerMessage,
   TrayTargetEntry,
 } from '../../src/scoops/tray-sync-protocol.js';
+import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
+import type { AgentEvent, ChatMessage } from '../../src/ui/types.js';
 
 // ---------------------------------------------------------------------------
 // Fake data channel
@@ -391,6 +390,38 @@ describe('FollowerSyncManager', () => {
       channel.simulateLeaderMessage({ type: 'status', scoopStatus: 'processing' });
 
       expect(onStatus).toHaveBeenCalledWith('processing');
+    });
+  });
+
+  describe('cherry.slicc_event handling', () => {
+    it('invokes onCherrySliccEvent with name, detail (wire targetId not forwarded)', () => {
+      const channel = new FakeChannel();
+      const onCherrySliccEvent = vi.fn();
+      new FollowerSyncManager(channel, { onCherrySliccEvent });
+
+      channel.simulateLeaderMessage({
+        type: 'cherry.slicc_event',
+        targetId: 'follower-abc',
+        name: 'build.done',
+        detail: { ok: true },
+      });
+
+      expect(onCherrySliccEvent).toHaveBeenCalledWith('build.done', { ok: true });
+    });
+
+    it('ignores cherry.slicc_event when no callback is wired', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      // Must not throw — falls through without a handler.
+      expect(() =>
+        channel.simulateLeaderMessage({
+          type: 'cherry.slicc_event',
+          targetId: 'follower-abc',
+          name: 'noop',
+        })
+      ).not.toThrow();
+      void follower;
     });
   });
 
@@ -1629,7 +1660,7 @@ describe('FollowerSyncManager', () => {
         // Sibling still in-flight — deliver content.
         const sent = channel.parseSent();
         const fetchMsg = sent.find((m) => m.type === 'sprinkle.fetch');
-        if (!fetchMsg || fetchMsg.type !== 'sprinkle.fetch') {
+        if (fetchMsg?.type !== 'sprinkle.fetch') {
           throw new Error('expected sprinkle.fetch');
         }
         channel.simulateLeaderMessage({
@@ -1757,7 +1788,7 @@ describe('FollowerSyncManager', () => {
         // Resolve via leader reply so the test exits cleanly.
         const sent = channel.parseSent();
         const fetchMsg = sent.find((m) => m.type === 'sprinkle.fetch');
-        if (!fetchMsg || fetchMsg.type !== 'sprinkle.fetch') {
+        if (fetchMsg?.type !== 'sprinkle.fetch') {
           throw new Error('expected sprinkle.fetch');
         }
         channel.simulateLeaderMessage({
@@ -2008,7 +2039,7 @@ describe('FollowerSyncManager', () => {
       const ySent = channel
         .parseSent()
         .find((m) => m.type === 'sprinkle.fetch' && m.sprinkleName === 'y');
-      if (!ySent || ySent.type !== 'sprinkle.fetch') throw new Error('unreachable');
+      if (ySent?.type !== 'sprinkle.fetch') throw new Error('unreachable');
 
       channel.simulateLeaderMessage({
         type: 'sprinkle.content',
@@ -2179,6 +2210,35 @@ describe('FollowerSyncManager', () => {
       const fetches = channel.parseSent().filter((m) => m.type === 'sprinkle.fetch');
       expect(fetches).toHaveLength(2);
       void second;
+    });
+  });
+
+  describe('sendCherryHostEvent', () => {
+    it('sends a cherry.host_event stamped with the configured selfRuntimeId', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel, { selfRuntimeId: 'rt-9' });
+
+      follower.sendCherryHostEvent('checkout-done', { id: 7 });
+
+      const sent = channel.parseSent();
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toEqual({
+        type: 'cherry.host_event',
+        targetId: 'rt-9',
+        name: 'checkout-done',
+        detail: { id: 7 },
+      });
+    });
+
+    it('falls back to an empty targetId when no selfRuntimeId is set', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      follower.sendCherryHostEvent('ping');
+
+      const sent = channel.parseSent() as Array<{ type: string; targetId: string }>;
+      expect(sent[0].type).toBe('cherry.host_event');
+      expect(sent[0].targetId).toBe('');
     });
   });
 

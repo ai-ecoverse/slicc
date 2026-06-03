@@ -1,6 +1,7 @@
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { defineCommand } from 'just-bash';
 import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
+import { stdinAsText } from '../just-bash-compat.js';
 
 function formatError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -99,7 +100,7 @@ export function createPbcopyCommand(): Command {
     if (args.includes('--help') || args.includes('-h')) {
       return pbcopyHelp();
     }
-    return copyToClipboard(ctx.stdin, 'pbcopy');
+    return copyToClipboard(stdinAsText(ctx.stdin), 'pbcopy');
   });
 }
 
@@ -130,8 +131,9 @@ export function createClipboardAutoCommand(name: string): Command {
     if (forceOutput) {
       return pasteFromClipboard(name);
     }
-    if (forceInput || ctx.stdin.length > 0) {
-      return copyToClipboard(ctx.stdin, name);
+    const stdinText = stdinAsText(ctx.stdin);
+    if (forceInput || stdinText.length > 0) {
+      return copyToClipboard(stdinText, name);
     }
     return pasteFromClipboard(name);
   });

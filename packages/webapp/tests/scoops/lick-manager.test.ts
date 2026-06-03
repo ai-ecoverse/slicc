@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import {
-  LickManager,
   FORWARDABLE_TO_LEADER,
   type LickEvent,
+  LickManager,
 } from '../../src/scoops/lick-manager.js';
 
 const SPRINKLE_DEDICATED: ReadonlySet<LickEvent['type']> = new Set(['sprinkle']);
@@ -13,6 +13,10 @@ const LOCAL_ONLY: ReadonlySet<LickEvent['type']> = new Set([
   'fswatch',
   'session-reload',
   'upgrade',
+  // `cherry` is emitted ON the leader by `Orchestrator.handleCherryHostEvent`
+  // after the leader receives a `cherry.host_event` from a follower, so it's
+  // never a follower-side forward source.
+  'cherry',
 ]);
 const ALL_LICK_TYPES: LickEvent['type'][] = [
   'webhook',
@@ -22,6 +26,7 @@ const ALL_LICK_TYPES: LickEvent['type'][] = [
   'session-reload',
   'navigate',
   'upgrade',
+  'cherry',
 ];
 const _exhaustive: Record<LickEvent['type'], true> = {
   webhook: true,
@@ -31,6 +36,7 @@ const _exhaustive: Record<LickEvent['type'], true> = {
   'session-reload': true,
   navigate: true,
   upgrade: true,
+  cherry: true,
 };
 void _exhaustive;
 

@@ -1,10 +1,10 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { SecretsPipeline } from '@slicc/shared-ts';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   handleFetchProxyConnection,
   handleFetchProxyConnectionAsync,
   type PortLike,
 } from '../src/fetch-proxy-shared.js';
-import { SecretsPipeline } from '@slicc/shared-ts';
 
 function makePort(
   onPost: (msg: unknown) => void
@@ -15,8 +15,16 @@ function makePort(
     onMessage: { addListener: (fn: (msg: unknown) => void) => listeners.push(fn) },
     onDisconnect: { addListener: (fn: () => void) => disconnectListeners.push(fn) },
     postMessage: onPost,
-    fireMessage: (m: unknown) => listeners.forEach((l) => l(m)),
-    fireDisconnect: () => disconnectListeners.forEach((l) => l()),
+    fireMessage: (m: unknown) => {
+      listeners.forEach((l) => {
+        l(m);
+      });
+    },
+    fireDisconnect: () => {
+      disconnectListeners.forEach((l) => {
+        l();
+      });
+    },
   };
 }
 
@@ -42,7 +50,9 @@ describe('handleFetchProxyConnection', () => {
     const chunks = [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6])];
     const stream = new ReadableStream<Uint8Array>({
       start(c) {
-        chunks.forEach((ch) => c.enqueue(ch));
+        chunks.forEach((ch) => {
+          c.enqueue(ch);
+        });
         c.close();
       },
     });

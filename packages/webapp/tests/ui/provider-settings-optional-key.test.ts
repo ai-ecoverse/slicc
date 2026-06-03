@@ -8,7 +8,7 @@
  * real key for hosted OpenAI-compatible endpoints.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const storage = new Map<string, string>();
 const mockStorage = {

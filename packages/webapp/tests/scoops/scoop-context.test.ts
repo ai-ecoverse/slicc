@@ -6,14 +6,14 @@
  */
 
 import 'fake-indexeddb/auto';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  ScoopContext,
   abortableSleep,
   isImageProcessingError,
   isNonRetryableError,
   isRetryableError,
   resolveThinkingLevel,
+  ScoopContext,
   type ScoopContextCallbacks,
 } from '../../src/scoops/scoop-context.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
@@ -1114,6 +1114,18 @@ describe('isNonRetryableError', () => {
     expect(isNonRetryableError('Invalid API-Key provided')).toBe(true);
   });
 
+  it('treats session-expired / re-login messages as non-retryable', () => {
+    expect(isNonRetryableError('Adobe session expired — please log in again')).toBe(true);
+    expect(isNonRetryableError('Session expired, please re-authenticate')).toBe(true);
+  });
+
+  it('session-expiry pattern does not over-match unrelated transient errors', () => {
+    // Guard against the broad `log in again` alternative bleeding into
+    // recoverable failures — these must stay retryable (not non-retryable).
+    expect(isNonRetryableError('network error: failed to fetch')).toBe(false);
+    expect(isNonRetryableError('503 service unavailable, retrying')).toBe(false);
+  });
+
   it('matches billing/quota errors', () => {
     expect(isNonRetryableError('insufficient quota')).toBe(true);
     expect(isNonRetryableError('billing issue detected')).toBe(true);
@@ -1848,7 +1860,6 @@ describe('ScoopContext dispose', () => {
 
     ctx.dispose();
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- accessing private method for testing
     const handler = (ctx as any).handleAgentEvent.bind(ctx);
 
     handler({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'hi' } });

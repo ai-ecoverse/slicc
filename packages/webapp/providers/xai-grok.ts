@@ -19,26 +19,26 @@
  */
 
 import type {
-  ProviderConfig,
-  InterceptingOAuthLauncher,
-  OAuthLoginOptions,
-} from '../src/providers/types.js';
+  Api,
+  Context,
+  Model,
+  ProviderStreamOptions,
+  SimpleStreamOptions,
+  StreamOptions,
+} from '@earendil-works/pi-ai';
 import {
+  createAssistantMessageEventStream,
   registerApiProvider,
   streamOpenAIResponses,
   streamSimpleOpenAIResponses,
-  createAssistantMessageEventStream,
 } from '@earendil-works/pi-ai';
 import type {
-  Api,
-  Model,
-  Context,
-  SimpleStreamOptions,
-  StreamOptions,
-  ProviderStreamOptions,
-} from '@earendil-works/pi-ai';
-import { saveOAuthAccount, getAccounts } from '../src/ui/provider-settings.js';
-import { XaiOAuthError, XaiErrorCode } from './xai-grok-errors.js';
+  InterceptingOAuthLauncher,
+  OAuthLoginOptions,
+  ProviderConfig,
+} from '../src/providers/types.js';
+import { getAccounts, saveOAuthAccount } from '../src/ui/provider-settings.js';
+import { XaiErrorCode, XaiOAuthError } from './xai-grok-errors.js';
 import { resolveModels, toModelMetadata, type XaiModelConfig } from './xai-grok-models.js';
 import { sanitizePayload } from './xai-grok-sanitize.js';
 
@@ -438,4 +438,4 @@ export function register(): void {
   });
 }
 
-export { XaiOAuthError, XaiErrorCode };
+export { XaiErrorCode, XaiOAuthError };

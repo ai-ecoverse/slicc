@@ -7,17 +7,17 @@
  * - Session management for target-specific commands
  */
 
+import { createLogger } from '../core/logger.js';
+import type { CDPTransport } from './transport.js';
 import type {
   CDPCommand,
-  CDPResponse,
-  CDPEvent,
-  CDPMessage,
   CDPConnectOptions,
+  CDPEvent,
   CDPEventListener,
+  CDPMessage,
+  CDPResponse,
   ConnectionState,
 } from './types.js';
-import type { CDPTransport } from './transport.js';
-import { createLogger } from '../core/logger.js';
 
 const log = createLogger('cdp');
 

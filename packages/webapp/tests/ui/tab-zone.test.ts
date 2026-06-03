@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TabZone, type TabZoneTab } from '../../src/ui/tab-zone.js';
 
 // Mock localStorage

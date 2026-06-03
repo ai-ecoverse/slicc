@@ -78,22 +78,22 @@
 }
 .msg--user .msg__content a,
 .msg--user .msg__content a:visited {
-  color: #c8bbff !important;
-  text-decoration: underline !important;
+  color: #c8bbff;
+  text-decoration: underline;
 }
 .msg--user .msg__content a:hover {
-  color: #fff !important;
+  color: #fff;
 }
 .msg--user :not(pre) > code {
-  background: rgba(255, 255, 255, 0.18) !important;
-  color: #fff !important;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
 }
 .msg--user pre {
-  background: rgba(0, 0, 0, 0.25) !important;
-  border-color: rgba(255, 255, 255, 0.1) !important;
+  background: rgba(0, 0, 0, 0.25);
+  border-color: rgba(255, 255, 255, 0.1);
 }
 .msg--user pre code {
-  color: #e8e0ff !important;
+  color: #e8e0ff;
 }
 .msg--user .msg__attachments {
   margin-bottom: 8px;
@@ -126,7 +126,7 @@
   letter-spacing: 0.04em;
 }
 .msg--assistant .msg__error-label::before {
-  content: '!';
+  content: "!";
   width: 16px;
   height: 16px;
   border-radius: var(--s2-radius-s);
@@ -245,7 +245,7 @@
   display: none;
 }
 .msg__collapsible summary::before {
-  content: '\25B8';
+  content: "\25B8";
   font-size: 10px;
   color: var(--s2-content-tertiary);
   transition: transform var(--s2-transition-default);
@@ -654,15 +654,15 @@
   display: none;
 }
 
-.chat__thinking-btn[data-level='off'] {
+.chat__thinking-btn[data-level="off"] {
   opacity: 0.5;
 }
-.chat__thinking-btn[data-level='minimal'],
-.chat__thinking-btn[data-level='low'] {
+.chat__thinking-btn[data-level="minimal"],
+.chat__thinking-btn[data-level="low"] {
   opacity: 0.75;
 }
-.chat__thinking-btn[data-level='medium'],
-.chat__thinking-btn[data-level='high'] {
+.chat__thinking-btn[data-level="medium"],
+.chat__thinking-btn[data-level="high"] {
   opacity: 1;
   color: var(--s2-accent, var(--slicc-cone, #6b8afd));
 }
@@ -670,7 +670,7 @@
 /* xhigh: ice-cream gradient with subtle shimmer.
    Falls back to flat brand pastels via CSS variables; design tokens can
    override via --slicc-cone-* without touching this rule. */
-.chat__thinking-btn[data-level='xhigh'] {
+.chat__thinking-btn[data-level="xhigh"] {
   opacity: 1;
   color: #fff;
   background: linear-gradient(
@@ -695,7 +695,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chat__thinking-btn[data-level='xhigh'] {
+  .chat__thinking-btn[data-level="xhigh"] {
     animation: none;
   }
 }

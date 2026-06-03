@@ -6,9 +6,9 @@
  * which delegates to just-bash's Bash interpreter.
  */
 
-import type { WasmShell } from '../shell/index.js';
-import type { ToolDefinition, ToolResult } from '../core/types.js';
 import { createLogger } from '../core/logger.js';
+import type { ToolDefinition, ToolResult } from '../core/types.js';
+import type { WasmShell } from '../shell/index.js';
 
 const log = createLogger('tool:bash');
 

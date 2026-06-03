@@ -27,15 +27,16 @@
  *     a real DOM (extension offscreen, standalone non-worker).
  */
 
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
-import { getFfmpeg } from './ffmpeg-wasm.js';
+import { defineCommand } from 'just-bash';
+import { getPanelRpcClient, hasLocalDom } from '../../kernel/panel-rpc.js';
 import {
-  captureCamera,
   type CameraCaptureRequest,
   type CameraCaptureResult,
+  captureCamera,
 } from '../../ui/panel-rpc-handlers.js';
-import { getPanelRpcClient, hasLocalDom } from '../../kernel/panel-rpc.js';
+import { captureViaPopup, isExtensionFloat } from './extension-media-capture.js';
+import { getFfmpeg } from './ffmpeg-wasm.js';
 
 interface MediaDeviceSummary {
   videoinputs: Array<{ deviceId: string; label: string; groupId?: string }>;
@@ -635,7 +636,21 @@ async function runAvfoundationCapture(
 
   let result: CameraCaptureResult;
   try {
-    if (hasLocalDom() && typeof navigator !== 'undefined' && navigator.mediaDevices) {
+    if (isExtensionFloat()) {
+      // Extension mode: capture in a visible popup window so Chrome can
+      // show its camera/mic permission prompt — the offscreen document
+      // (where this shell command usually runs) has no surface for it.
+      const popup = await captureViaPopup({ kind: 'camera', ...plan.request });
+      const buf = new ArrayBuffer(popup.bytes.byteLength);
+      new Uint8Array(buf).set(popup.bytes);
+      result = {
+        bytes: buf,
+        mimeType: popup.mimeType,
+        width: popup.width,
+        height: popup.height,
+        ...(popup.durationMs !== undefined ? { durationMs: popup.durationMs } : {}),
+      };
+    } else if (hasLocalDom() && typeof navigator !== 'undefined' && navigator.mediaDevices) {
       result = await captureCamera(plan.request);
     } else {
       const panelRpc = getPanelRpcClient();

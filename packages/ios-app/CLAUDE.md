@@ -37,6 +37,13 @@ This package is NOT an npm workspace. It is a Swift Package Manager project (`Pa
 - The leader→follower reply path for follower-originated CDP/tab.open requests (`cdp.response` / `cdp.event` / `tab.opened` / `tab.open.error` received by a follower that asked for it). Since iOS doesn't originate, it never has to consume the reply.
 - `tab.open.error` send-side — iOS embeds CDP errors in `cdp.response.error` and always sends `.tabOpened` for `tab.open`.
 
+### Cherry (embedded follower) mirror
+
+iOS mirrors the cherry-target wire surface even though it cannot _host_ a cherry page:
+
+- `Models/SyncProtocol.swift` defines `CherryCapabilities { navigate, network, screenshot }` and `RemoteTargetInfo.kind` / `.capabilities`, mirroring `RemoteTargetInfo` from `tray-sync-protocol.ts`. The `network` capability gates whether the leader may drive `Network.*` against the target (distinct from the host-page `openUrl` capability); for a cherry target it is always `false`. A target advertised with `"kind":"cherry"` decodes into these fields (see `Tests/SliccFollowerTests/SyncProtocolTests.swift`).
+- `LeaderToFollowerMessage` includes `cherry.slicc_event` (decoded as `.cherrySliccEvent(targetId, name, detail)`). iOS has **no cherry page surface**, so `AppState.handleDataChannelMessage` handles it as a **documented no-op**: it logs and ignores the event. The case exists to keep the decode switch exhaustive and to leave a seam for a future cherry-on-iOS path.
+
 The doc-comment headers above the `LeaderToFollowerMessage` and `FollowerToLeaderMessage` enum declarations in `SyncProtocol.swift` declare the omission explicitly — `// MARK: -` boundaries are the stable anchors; line numbers shift whenever the headers expand.
 
 When you change the protocol:
@@ -72,7 +79,16 @@ cd packages/ios-app
 swift build                                      # Library build (CI smoke)
 xcodegen generate                                # Regenerate SliccFollower.xcodeproj from project.yml
 xcodebuild -project SliccFollower.xcodeproj …    # IPA / TestFlight builds
+swiftlint lint                                   # SwiftLint (config inherits repo-root .swiftlint.yml)
 ```
+
+## Linting
+
+`packages/ios-app/.swiftlint.yml` inherits the shared rule set from the
+repo-root `.swiftlint.yml` (via `parent_config`) and excludes this package's
+`.build`/`SliccFollower.xcodeproj`. Warnings surface code-quality issues; only
+`error`-severity violations fail CI. Use `swiftlint --fix` to auto-correct
+fixable violations.
 
 TestFlight automation lives in `scripts/package-and-upload-testflight.sh` (consumes secrets via `setup-testflight-secrets.sh`).
 

@@ -9,9 +9,9 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { SecretsPipeline, type FetchProxySecretSource } from '@slicc/shared-ts';
-import { type EnvSecretStore } from './env-secret-store.js';
-import { type OauthSecretStore } from './oauth-secret-store.js';
+import { type FetchProxySecretSource, SecretsPipeline } from '@slicc/shared-ts';
+import type { EnvSecretStore } from './env-secret-store.js';
+import type { OauthSecretStore } from './oauth-secret-store.js';
 
 export class SecretProxyManager {
   private readonly pipeline: SecretsPipeline;

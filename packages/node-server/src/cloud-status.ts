@@ -1,5 +1,5 @@
-import express, { type Express, type Request, type Response, type NextFunction } from 'express';
 import { promises as fs } from 'node:fs';
+import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 
 export interface CloudStatusEndpointOptions {
   joinFilePath: string;

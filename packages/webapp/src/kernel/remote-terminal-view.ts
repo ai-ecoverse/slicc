@@ -34,12 +34,12 @@
  * the worker bundle.
  */
 
-import type { Terminal } from '@xterm/xterm';
 import type { FitAddon } from '@xterm/addon-fit';
-import type { OffscreenClient } from '../ui/offscreen-client.js';
-import type { TerminalEventMsg, TerminalSessionId } from '../shell/terminal-protocol.js';
-import { TerminalSessionClient, type TerminalExecResult } from './terminal-session-client.js';
+import type { Terminal } from '@xterm/xterm';
 import { storePendingHandle } from '../fs/mount-picker-popup.js';
+import type { TerminalEventMsg, TerminalSessionId } from '../shell/terminal-protocol.js';
+import type { OffscreenClient } from '../ui/offscreen-client.js';
+import { type TerminalExecResult, TerminalSessionClient } from './terminal-session-client.js';
 
 export interface RemoteTerminalViewOptions {
   client: OffscreenClient;

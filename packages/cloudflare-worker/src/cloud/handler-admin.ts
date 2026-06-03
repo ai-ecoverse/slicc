@@ -1,6 +1,6 @@
+import type { ValidateBearerEnv } from './auth.js';
 import { authenticateRequest } from './auth-middleware.js';
 import { errorResponse, okResponse } from './error-envelope.js';
-import type { ValidateBearerEnv } from './auth.js';
 
 export interface AdminEnv extends ValidateBearerEnv {
   ADMIN_USER_IDS: string;

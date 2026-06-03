@@ -1,5 +1,5 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { createLogger, setLogLevel, LogLevel, fingerprint } from '../../src/core/logger.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createLogger, fingerprint, LogLevel, setLogLevel } from '../../src/core/logger.js';
 
 describe('logger', () => {
   beforeEach(() => {

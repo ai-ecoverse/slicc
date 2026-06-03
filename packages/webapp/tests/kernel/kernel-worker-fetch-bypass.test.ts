@@ -6,11 +6,11 @@
  * Pyodide / ImageMagick on strict CDNs.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  type FetchFn,
   isSameOrigin,
   makeSameOriginBypassFetch,
-  type FetchFn,
 } from '../../src/kernel/kernel-worker-fetch-bypass.js';
 
 const SELF_ORIGIN = 'http://localhost:5710';

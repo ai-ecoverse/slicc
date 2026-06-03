@@ -1,11 +1,11 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import type { LeaderSyncManager } from '../../webapp/src/scoops/tray-leader-sync.js';
 import {
-  PanelLeaderSyncProxy,
+  type ActiveScoopSink,
   connectOffscreenLeaderSyncBridge,
   type OffscreenMessageHub,
-  type ActiveScoopSink,
+  PanelLeaderSyncProxy,
 } from '../src/leader-sync-bridge.js';
-import type { LeaderSyncManager } from '../../webapp/src/scoops/tray-leader-sync.js';
 
 function createBus() {
   type Envelope = { source: string; payload: unknown };

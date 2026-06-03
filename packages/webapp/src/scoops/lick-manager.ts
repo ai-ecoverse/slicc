@@ -6,6 +6,7 @@
  */
 
 import { createLogger } from '../core/logger.js';
+import { handoffFingerprint } from '../net/handoff-link.js';
 import * as db from './db.js';
 
 const log = createLogger('lick-manager');
@@ -33,7 +34,15 @@ export interface CronTaskEntry {
 }
 
 export interface LickEvent {
-  type: 'webhook' | 'cron' | 'sprinkle' | 'fswatch' | 'session-reload' | 'navigate' | 'upgrade';
+  type:
+    | 'webhook'
+    | 'cron'
+    | 'sprinkle'
+    | 'fswatch'
+    | 'session-reload'
+    | 'navigate'
+    | 'upgrade'
+    | 'cherry';
   webhookId?: string;
   webhookName?: string;
   cronId?: string;
@@ -48,6 +57,10 @@ export interface LickEvent {
   /** For upgrade events: the previously-seen and current bundled SLICC versions. */
   upgradeFromVersion?: string;
   upgradeToVersion?: string;
+  /** For cherry events: the host-page event name, owning follower runtime, and host origin. */
+  cherryName?: string;
+  cherryRuntimeId?: string;
+  cherryOrigin?: string;
   targetScoop?: string;
   /**
    * Set ONLY by the leader when it re-emits a lick forwarded from a
@@ -70,11 +83,35 @@ export type LickEventHandler = (event: LickEvent) => void;
  * leader's agent (and that the leader accepts on the generic `lick`
  * tray message). `navigate` is the only such type today. `sprinkle`
  * also belongs to the leader's agent but forwards via its own
- * dedicated `sprinkle.lick` path, so it is intentionally NOT here.
+ * dedicated `sprinkle.lick` path; `cherry` is emitted ON the leader by
+ * `Orchestrator.handleCherryHostEvent` after the leader receives a
+ * `cherry.host_event` from a follower, so it's never a follower-side
+ * forward source. Both are intentionally NOT here.
  */
 export const FORWARDABLE_TO_LEADER: ReadonlySet<LickEvent['type']> = new Set<LickEvent['type']>([
   'navigate',
 ]);
+
+/**
+ * Derive a stable dedup key from a navigate lick's body, or `null` if the body
+ * lacks the structured handoff fields (in which case the event is let through
+ * undeduped). The body is built by every navigate source (CDP watcher,
+ * extension offscreen, lick-ws bridge) as `{ url, verb, target, branch?, path?,
+ * instruction?, title? }`; we key on the payload identity, never the page
+ * `url`. See {@link handoffFingerprint}.
+ */
+function navigateFingerprint(body: unknown): string | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const b = body as Record<string, unknown>;
+  if (typeof b.verb !== 'string' || typeof b.target !== 'string') return null;
+  return handoffFingerprint({
+    verb: b.verb,
+    target: b.target,
+    branch: typeof b.branch === 'string' ? b.branch : undefined,
+    path: typeof b.path === 'string' ? b.path : undefined,
+    instruction: typeof b.instruction === 'string' ? b.instruction : undefined,
+  });
+}
 
 // ─── Lick Manager ───────────────────────────────────────────────────────────
 
@@ -84,6 +121,16 @@ export class LickManager {
   private cronInterval: ReturnType<typeof setInterval> | null = null;
   private eventHandler: LickEventHandler | null = null;
   private forwarder: LickEventHandler | null = null;
+  /**
+   * Payload fingerprints of navigate (handoff/upskill) licks already emitted
+   * this session. A site can advertise the same SLICC `Link` rel on every page
+   * response, so without this guard each navigation would wake the cone and
+   * (in the extension) re-show a notification. Scoped to the instance so it
+   * naturally re-arms on a fresh session / reset; `upskill`'s on-disk
+   * "already exists" check still prevents duplicate installs on that one
+   * re-fire. See {@link handoffFingerprint}.
+   */
+  private seenNavigateFingerprints = new Set<string>();
 
   /** Initialize - load from IndexedDB and start cron scheduler */
   async init(): Promise<void> {
@@ -145,6 +192,16 @@ export class LickManager {
 
   /** Emit an externally-generated lick event (e.g., from fswatch). */
   emitEvent(event: LickEvent): void {
+    if (event.type === 'navigate') {
+      const fingerprint = navigateFingerprint(event.body);
+      if (fingerprint !== null) {
+        if (this.seenNavigateFingerprints.has(fingerprint)) {
+          log.debug('Suppressing duplicate navigate lick', { fingerprint });
+          return;
+        }
+        this.seenNavigateFingerprints.add(fingerprint);
+      }
+    }
     log.info('External lick event', { type: event.type, target: event.targetScoop });
     this.dispatch(event);
   }

@@ -1,9 +1,9 @@
 import {
-  extractBearer,
-  validateBearer,
   AuthError,
   type AuthResult,
+  extractBearer,
   type ValidateBearerEnv,
+  validateBearer,
 } from './auth.js';
 import { getCached, setCached } from './auth-cache.js';
 import { errorResponse } from './error-envelope.js';

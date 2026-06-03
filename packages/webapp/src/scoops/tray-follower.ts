@@ -3,10 +3,10 @@ import type {
   FollowerAttachResponse,
   FollowerBootstrapResponse,
   FollowerJoinRequest,
-  TrayLeaderSummary,
   TrayBootstrapEvent,
   TrayBootstrapStatus,
   TrayIceCandidate,
+  TrayLeaderSummary,
   TraySessionDescription,
   TurnIceServer,
 } from './tray-types.js';

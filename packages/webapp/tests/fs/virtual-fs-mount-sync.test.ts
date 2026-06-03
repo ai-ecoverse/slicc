@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Stub mount-table-store's loadMountHandle so peer instances can reconstruct
 // the LocalMountBackend without needing the handle to round-trip through

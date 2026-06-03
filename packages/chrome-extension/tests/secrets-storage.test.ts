@@ -7,19 +7,19 @@
  * (`src/secrets-entry.ts`) is integration-only and not unit-tested.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  PROFILE_RE,
   deleteSecret,
   deriveS3Domains,
   listSecrets,
   listSecretsWithValues,
+  PROFILE_RE,
+  type StorageArea,
   saveCustomSecret,
   saveS3Profile,
   setSecret,
   validateCustomSecretInput,
   validateS3ProfileInput,
-  type StorageArea,
 } from '../src/secrets-storage.js';
 
 class MemStorage implements StorageArea {

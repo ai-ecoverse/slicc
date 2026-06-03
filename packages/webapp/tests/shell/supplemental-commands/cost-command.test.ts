@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach } from 'vitest';
 import type { IFileSystem } from 'just-bash';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  _resetSessionCostsProvider,
   createCostCommand,
   registerSessionCostsProvider,
-  _resetSessionCostsProvider,
   type ScoopCostData,
 } from '../../../src/shell/supplemental-commands/cost-command.js';
 

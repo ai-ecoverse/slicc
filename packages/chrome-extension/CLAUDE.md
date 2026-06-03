@@ -122,7 +122,8 @@ and self-close, but DO NOT count as the canonical detached tab.
 - `tool-ui-sandbox.html` and related HTML shells exist for specialized extension UI surfaces.
 - When loading bundled assets, prefer `chrome.runtime.getURL(...)`.
 - **External CDN scripts in sprinkles** are fetch-and-inlined by `sprinkle-renderer.ts` (full-doc) or via `sprinkle-fetch-script` parent relay (partial-content). Never use `<script src="https://...">` directly in sandbox HTML.
-- **npm packages in `node -e`** are pre-fetched by the per-task realm iframe via `cdn.jsdelivr.net/npm/<id>` + indirect `Function` constructor (the sandbox CSP allows `Function` but not cross-origin `import()`). The realm runtime owns this path now (see `kernel/realm/`), not the legacy inline node-command code.
+- **npm packages in `node -e`** are pre-fetched by the per-task realm iframe via `cdn.jsdelivr.net/npm/<id>` + indirect `Function` constructor (the sandbox CSP allows `Function` but not cross-origin `import()`). The realm runtime owns this path now (see `kernel/realm/`), not the legacy inline node-command code. Chrome Web Store MV3 review string-matches full CDN URLs in built JS, so both the inline `sandbox.html` builder and the bundled code construct hosts via the token-array pattern in `packages/webapp/src/shell/supplemental-commands/cdn-url-builder.ts`.
+- **Bundled vendor JS (ffmpeg-core)** lives under `dist/extension/vendor/` alongside `pyodide/` and `magick.wasm`. The 112 KB `ffmpeg-core.js` Emscripten glue is copied by the `closeBundle` hook in `vite.config.ts` and loaded via `chrome.runtime.getURL('vendor/ffmpeg-core.js')`; the manifest's `web_accessible_resources` exposes `vendor/*`. The same hook strips the leftover `unpkg.com/@ffmpeg/core@…/ffmpeg-core.js` literal that `@ffmpeg/ffmpeg/dist/esm/const.js` bundles into the output, so the reviewer's substring scan stays clean.
 - **Extension-relative scripts** must load statically in `<head>`, not via dynamic `createElement('script').src` (opaque origin blocks runtime loads).
 - See `docs/pitfalls.md` "Extension Sandbox: External Scripts & Opaque Origin" for the full reference.
 
@@ -142,6 +143,13 @@ If a shell command needs to affect the panel UI, use the dual-context pattern:
 
 No supplemental command currently uses this exact hook+relay shape — the previous example (`debug-command.ts`) was removed when Terminal/Memory became unconditional in the rail. The sprinkle subsystem solves a related problem with a proxy-interface approach (`globalThis.__slicc_sprinkleManager` published in both realms with different implementations, dispatching `sprinkle-op` request/response RPCs); see `docs/pitfalls.md` "Extension Dual-Shell Context" for the full reference.
 
+## Media Capture (offscreen reasons + popup grant path)
+
+Camera / microphone / screen capture (`ffmpeg -f avfoundation`, `screencapture`) work without any new manifest permission:
+
+- **Offscreen reasons, not permissions**: the offscreen document is created with `reasons: ['WORKERS', 'USER_MEDIA', 'DISPLAY_MEDIA']` (`service-worker.ts`). These are arguments to `chrome.offscreen.createDocument` — **not** manifest `permissions` — so the Web Store permission-justification dashboard does not apply to them. They let the offscreen document touch `navigator.mediaDevices` (e.g. `enumerateDevices`).
+- **Media capture needs a visible surface**: `getUserMedia` / `getDisplayMedia` are gated by a runtime prompt that an invisible offscreen document (and the side panel) cannot show. Route the capture through a real window — `capture-popup.html` / `capture-popup.js`, modeled on the `voice-popup` pair. The shell command (`extension-media-capture.ts:captureViaPopup`) asks the service worker to open the popup (`capture-open-window` message → `chrome.windows.create`, no permission needed), the popup performs the capture and posts the bytes back over `chrome.runtime` messaging, and `ffmpeg-command.ts` / `screencapture-command.ts` gate this path behind `isExtensionFloat()`. CLI / standalone keep their page-served auto-grant path unchanged.
+
 ## Runtime Conventions
 
 - **Extension detection**: `typeof chrome !== 'undefined' && !!chrome?.runtime?.id`
@@ -157,13 +165,32 @@ Pure logic lives in `src/secrets-storage.ts` (testable; `tests/secrets-storage.t
 
 ## Telemetry
 
-The side panel emits Helix RUM beacons via the inlined `packages/webapp/src/ui/rum.js` (extension-only). CLI/Electron use `@adobe/helix-rum-js` instead; the choice is made by `telemetry.ts:initTelemetry()` based on `getModeLabel()`. Offscreen and the service worker are not instrumented. Force 100% sampling for debugging by setting `localStorage.setItem('slicc-rum-debug', '1')` in the side panel's DevTools and reloading. See `docs/operational-telemetry.md`.
+Both the side panel AND the offscreen document emit Helix RUM beacons via the inlined `packages/webapp/src/ui/rum.js` (extension-only). CLI/Electron use `@adobe/helix-rum-js` instead; the choice is made by `telemetry.ts:initTelemetry()` based on `getModeLabel()`. The two extension realms are independent — the panel captures user-typed shell commands and chat sends; the offscreen realm captures the agent's bash tool calls (including `agent` scoop delegations from the cone, which is why this realm needs telemetry to track delegation activity). The service worker is not instrumented. Force 100% sampling for debugging by setting `localStorage.setItem('slicc-rum-debug', '1')` in DevTools for the realm you want to debug (side panel inspect, or right-click → Inspect on `chrome-extension://<id>/offscreen.html`) and reloading. See `docs/operational-telemetry.md`.
 
 ## Build Notes
 
 - `packages/chrome-extension/vite.config.ts` builds the side panel UI, service worker, offscreen document, and copied static assets into `dist/extension/`.
 - The extension consumes shared browser code from `packages/webapp/` rather than duplicating core runtime logic.
 - `manifest.json` ships a stable `key` (so the production ID is fixed). For local debugging that key triggers `Content verify job failed for extension … at path: index.html` and the extension refuses to load. Build with `SLICC_EXT_DEV=1 npm run build -w @slicc/chrome-extension` to strip `key` so Chrome assigns a path-derived ID instead.
+
+## MV3 Remote Hosted Code Guard
+
+Chrome Web Store rejects MV3 submissions when its reviewer string-matches a full third-party CDN URL in the built bundle (violation reference Blue Argon). Even a literal that the runtime overrides — e.g. the `https://unpkg.com/@ffmpeg/core@.../ffmpeg-core.js` baked into `@ffmpeg/ffmpeg`'s worker source — is enough to fail review.
+
+`packages/dev-tools/tools/check-extension-rhc.sh` scans `dist/extension/` (recursively, across `.js`/`.html`/`.json`/`.css`, excluding `.map` files) and exits non-zero if any of these patterns appear:
+
+- `https://unpkg.com/<path>` (scoped or non-scoped — anything followed by a `/<package-path>`)
+- `https://esm.sh/<path>`
+- `https://cdn.jsdelivr.net/npm/<path>`
+
+Bare hostnames (`unpkg.com`, `esm.sh`, `cdn.jsdelivr.net`) and the host-only form `https://unpkg.com` (no path) are allowed — that's the form the runtime URL builder leaves behind.
+
+The check is wired in two places:
+
+- `npm run postbuild:check -w @slicc/chrome-extension` invokes it from the package
+- the `chrome-extension` CI job runs it after `Build extension` in `.github/workflows/ci.yml`
+
+**Debugging a failure:** the script prints `file:line:URL` for every match. Open the cited file, find the call site that constructed the URL, and migrate it to `packages/webapp/src/shell/supplemental-commands/cdn-url-builder.ts` so only the bare host appears as a string literal and the path is composed at runtime via `new URL(path, ...)`.
 
 ## Local QA: dedicated profile preinstalled with the extension
 
@@ -323,6 +350,59 @@ Each provider's hardcoded `oauthTokenDomains` is the immutable default safelist.
 - direct `localStorage` edit of `slicc_oauth_extra_domains` at the extension origin
 
 The extras are read by `saveOAuthAccount` in `provider-settings.ts` and merged with provider defaults (deduped case-insensitively) before being pushed to `chrome.storage.local`'s `oauth.<id>.token_DOMAINS`. Page-side `oauth-bootstrap` re-pushes the merged list on every page load, so newly-added extras apply on next side-panel reload.
+
+## Automated CDP Smoke Test
+
+`packages/dev-tools/tools/extension-smoke-test.ts` is the end-to-end
+verification that the rebuilt extension actually works in a real Chrome
+without remote-code-hosting violations. The npm script
+`test:extension-smoke` runs it after a fresh extension build:
+
+```bash
+npm run build -w @slicc/chrome-extension
+npm run test:extension-smoke -w @slicc/chrome-extension
+```
+
+What it does:
+
+1. Verifies `dist/extension/` exists.
+2. Launches Chrome for Testing (via `findChromeExecutable`) with a
+   disposable user-data-dir and `--load-extension=dist/extension`.
+   `--remote-debugging-port=0` lets Chrome pick a free port, discovered
+   via `<userDataDir>/DevToolsActivePort`.
+3. Resolves the extension ID dynamically from `/json/list`
+   (matches the `chrome-extension://<id>/service-worker.js` target).
+4. Opens `chrome-extension://<id>/index.html?detached=1` as a regular
+   tab so the side-panel UI bootstraps in a CDP-reachable target.
+5. Installs a tiny in-page bridge via `Runtime.evaluate` that
+   synthesizes `TerminalControlMsg` envelopes through
+   `chrome.runtime.sendMessage` (same wire format as the panel's own
+   `TerminalSessionClient`). The bridge opens one terminal session and
+   exposes `window.__sliccSmokeExec(command)`.
+6. Runs two scenarios with `Network.requestWillBeSent` capture:
+   - **`ffmpeg -version`** — asserts exit 0, output contains
+     `ffmpeg version`, no remote `.js` fetches from forbidden hosts
+     (`unpkg.com`, `esm.sh`, `cdn.jsdelivr.net`), and
+     `ffmpeg-core.js` was loaded from `chrome-extension://<id>/`.
+   - **`node -e "..."`** with a `require('lodash')` — asserts exit 0
+     and non-empty stdout (validates the `esm.sh` JS-loader path).
+7. Tears down Chrome and the tmp profile.
+
+On failure the script prints a per-assertion diagnostic and writes a
+full transcript to a temporary file (`smoke artifacts: <path>` is the
+last line on stderr). Chrome stderr is captured next to it.
+
+Local debugging knobs:
+
+- `CHROME_PATH=<bin>` override the resolved Chrome executable.
+- `SLICC_SMOKE_KEEP_PROFILE=1` skip teardown of the tmp profile.
+- `SLICC_SMOKE_TIMEOUT_MS=180000` extend the per-scenario budget.
+
+CI runs the smoke test on Linux under `xvfb-run` (MV3 side panels need
+headed Chrome; `--headless=new` is incompatible with extension loading
+in production Chrome). The CI step is `continue-on-error: true` while
+the `ffmpeg-core.js` bundling work lands — the artifact stays visible
+so regressions are obvious without blocking merges during the rollout.
 
 ## Related Guides
 

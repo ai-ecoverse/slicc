@@ -10,6 +10,7 @@
  * offscreen document already has a DOM.
  */
 
+import type { PageInfo } from '../cdp/types.js';
 import type { PanelRpcHandlers, PanelRpcResults } from '../kernel/panel-rpc.js';
 import type { LeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import { getAllExtraOAuthDomains, setExtraOAuthDomains } from './provider-settings.js';
@@ -38,6 +39,25 @@ export interface StandalonePanelRpcHandlerOptions {
     workerBaseUrl: string | null;
     requestId?: string;
   }) => Promise<PanelRpcResults['tray-leave']> | PanelRpcResults['tray-leave'];
+  /**
+   * Push a `cherry.slicc_event` (cone → host page) out through the
+   * page-side LeaderSyncManager. Wired by `mainStandaloneWorker` to
+   * `pageLeaderTray.sync.emitCherrySliccEvent(...)`; the worker-side
+   * `cherry-emit` command bridges here because the leader tray's WebRTC
+   * data channels live on the page. Returns `true` when the message was
+   * sent, `false` when the owning follower is not connected.
+   */
+  emitCherrySliccEvent?: (runtimeId: string, name: string, detail?: unknown) => boolean;
+  /**
+   * Return the remote (follower) browser targets known to the page-side
+   * BrowserAPI. `mainStandaloneWorker` wires this unconditionally to
+   * `browser.listAllTargets()`; it returns local-only (no composite
+   * targetIds) until a leader tray is active, and the `list-remote-targets`
+   * handler filters to composite ids. The worker's BrowserAPI has no
+   * trayTargetProvider, so it can't call listAllTargets() itself — this
+   * bridges the gap. Optional so other host wirings (tests) may omit it.
+   */
+  listRemoteTargets?: () => Promise<PageInfo[]> | PageInfo[];
 }
 
 /**
@@ -275,6 +295,13 @@ export function createStandalonePanelRpcHandlers(
       return await options.leaveTray({ workerBaseUrl, requestId });
     },
 
+    'cherry-emit': async ({ runtimeId, name, detail }) => {
+      if (!options.emitCherrySliccEvent) {
+        throw new Error('cherry-emit: not available in this environment');
+      }
+      return { delivered: options.emitCherrySliccEvent(runtimeId, name, detail) };
+    },
+
     'oauth-extras-set': ({ providerId, domains }) => {
       // Page-side write to real `window.localStorage` for the
       // `oauth-domain` shell command running in the kernel worker.
@@ -301,6 +328,16 @@ export function createStandalonePanelRpcHandlers(
       localStorage.setItem('slicc_accounts', accountsJson);
       const storedJson = localStorage.getItem('slicc_accounts') ?? accountsJson;
       return { storedJson };
+    },
+
+    'list-remote-targets': async () => {
+      if (!options.listRemoteTargets) return { targets: [] };
+      const all = await options.listRemoteTargets();
+      // Only return remote entries (composite targetId = "runtimeId:localId")
+      const remote = all.filter((p) => p.targetId.includes(':'));
+      return {
+        targets: remote.map((p) => ({ targetId: p.targetId, title: p.title, url: p.url })),
+      };
     },
   };
 }
@@ -494,7 +531,9 @@ export async function captureCamera(req: CameraCaptureRequest): Promise<CameraCa
       durationMs,
     };
   } finally {
-    stream.getTracks().forEach((t) => t.stop());
+    stream.getTracks().forEach((t) => {
+      t.stop();
+    });
   }
 }
 
@@ -713,7 +752,9 @@ async function captureScreen(mimeType: string, quality: number): Promise<Blob> {
       );
     });
   } finally {
-    stream.getTracks().forEach((t) => t.stop());
+    stream.getTracks().forEach((t) => {
+      t.stop();
+    });
   }
 }
 

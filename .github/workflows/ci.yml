@@ -23,9 +23,11 @@ jobs:
       node-server: ${{ steps.filter.outputs.node-server }}
       extension: ${{ steps.filter.outputs.extension }}
       cloudflare-worker: ${{ steps.filter.outputs.cloudflare-worker }}
+      cherry: ${{ steps.filter.outputs.cherry }}
       swift-server: ${{ steps.filter.outputs.swift-server }}
       swift-launcher: ${{ steps.filter.outputs.swift-launcher }}
       ios-app: ${{ steps.filter.outputs.ios-app }}
+      swift-config: ${{ steps.filter.outputs.swift-config }}
       root-config: ${{ steps.filter.outputs.root-config }}
       is-queue-leader: ${{ steps.queue-position.outputs.leader }}
     steps:
@@ -48,12 +50,16 @@ jobs:
               - 'packages/chrome-extension/**'
             cloudflare-worker:
               - 'packages/cloudflare-worker/**'
+            cherry:
+              - 'packages/cherry/**'
             swift-server:
               - 'packages/swift-server/**'
             swift-launcher:
               - 'packages/swift-launcher/**'
             ios-app:
               - 'packages/ios-app/**'
+            swift-config:
+              - '.swiftlint.yml'
             root-config:
               - 'package.json'
               - 'package-lock.json'
@@ -93,22 +99,14 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - name: Format check
-        run: npx prettier --check .
-      - name: Check CLAUDE.md size
-        run: |
-          chars=$(wc -c < CLAUDE.md)
-          if [ "$chars" -gt 30000 ]; then
-            echo "::error::CLAUDE.md exceeds 30,000 character limit ($chars chars). Please condense it."
-            exit 1
-          fi
-      - name: Check agent CLAUDE.md size
-        run: |
-          size=$(wc -c < packages/vfs-root/shared/CLAUDE.md)
-          if [ "$size" -gt 3000 ]; then
-            echo "::error::packages/vfs-root/shared/CLAUDE.md exceeds 3KB limit ($size bytes). Keep agent instructions concise."
-            exit 1
-          fi
+      - name: Lint (biome + prettier + CLAUDE.md sizes + tessl skill lint)
+        run: npm run lint:ci
+      - name: Check Chrome Web Store manifest justifications
+        # Fail if the extension manifest gains/drops a permission without a
+        # matching reviewer justification in docs/chrome-web-store-submission.md
+        # (or vice-versa). Keeps the CWS submission pack in sync with the
+        # shipped permission set.
+        run: bash packages/dev-tools/tools/check-manifest-justifications.sh
       - name: Dead code detection (knip)
         # Hard-fail on unused files, missing/unlisted dependencies,
         # unresolved imports, duplicate exports, and unused binaries.
@@ -135,6 +133,7 @@ jobs:
       needs.changes.outputs.node-server == 'true' ||
       needs.changes.outputs.extension == 'true' ||
       needs.changes.outputs.cloudflare-worker == 'true' ||
+      needs.changes.outputs.cherry == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
     strategy:
@@ -291,6 +290,8 @@ jobs:
         run: npm run build -w @slicc/webapp
       - name: Build extension
         run: npm run build -w @slicc/chrome-extension
+      - name: Check bundle for forbidden CDN URL literals (MV3 RHC guard)
+        run: bash packages/dev-tools/tools/check-extension-rhc.sh
       - name: Check bundle for Node-only APIs
         run: |
           # Scan extension bundles for Node-only APIs that should never be bundled.
@@ -324,6 +325,20 @@ jobs:
             exit 1
           fi
           echo "✓ No Node-only APIs found in dev-optimized deps (extension)"
+      - name: Install Chrome for Testing
+        run: npx --yes @puppeteer/browsers install chrome@stable
+      - name: Install xvfb
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb
+      - name: Extension smoke test (CDP)
+        env:
+          SLICC_CI: '1'
+        # MV3 extensions with side panels need headed Chrome; xvfb provides
+        # the required display on a headless runner. The test is permitted
+        # to fail loudly while the ffmpeg-core.js bundling work lands —
+        # `continue-on-error: true` keeps CI green during the rollout but
+        # surfaces the artifact so the breakage stays visible.
+        continue-on-error: true
+        run: xvfb-run -a npm run test:extension-smoke -w @slicc/chrome-extension
 
   cloudflare-worker:
     needs: changes
@@ -469,15 +484,47 @@ jobs:
             sleep 15
           done
 
+  cherry:
+    needs: changes
+    if: >-
+      needs.changes.outputs.cherry == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: tsc --noEmit -p packages/cherry/tsconfig.json
+      - name: Test (with coverage threshold gate)
+        run: npm run test:coverage:cherry
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-cherry
+          path: coverage/
+          if-no-files-found: ignore
+      - name: Build
+        run: npm run build -w @ai-ecoverse/cherry
+
   swift-server:
     needs: [changes, lint]
     if: >-
       needs.lint.result == 'success' &&
       needs.changes.outputs.is-queue-leader == 'true' &&
-      needs.changes.outputs.swift-server == 'true'
+      (needs.changes.outputs.swift-server == 'true' ||
+      needs.changes.outputs.swift-config == 'true')
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install SwiftLint
+        run: brew install swiftlint
+      - name: Lint (SwiftLint)
+        run: cd packages/swift-server && swiftlint lint --reporter github-actions-logging
       - name: Build
         run: cd packages/swift-server && swift build -c release
       - name: Test (with coverage threshold gate)
@@ -506,6 +553,7 @@ jobs:
       needs.changes.outputs.is-queue-leader == 'true' &&
       (needs.changes.outputs.swift-launcher == 'true' ||
       needs.changes.outputs.swift-server == 'true' ||
+      needs.changes.outputs.swift-config == 'true' ||
       needs.changes.outputs.webapp == 'true' ||
       needs.changes.outputs.vfs-root == 'true' ||
       needs.changes.outputs.assets == 'true' ||
@@ -518,6 +566,10 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Install SwiftLint
+        run: brew install swiftlint
+      - name: Lint (SwiftLint)
+        run: cd packages/swift-launcher && swiftlint lint --reporter github-actions-logging
       - name: Build webapp (dependency)
         run: npm run build -w @slicc/webapp
       - name: Build swift-server (dependency)
@@ -559,10 +611,15 @@ jobs:
     needs: [changes, lint]
     if: >-
       needs.lint.result == 'success' &&
-      needs.changes.outputs.ios-app == 'true'
+      (needs.changes.outputs.ios-app == 'true' ||
+      needs.changes.outputs.swift-config == 'true')
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install SwiftLint
+        run: brew install swiftlint
+      - name: Lint (SwiftLint)
+        run: cd packages/ios-app && swiftlint lint --reporter github-actions-logging
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate Xcode project

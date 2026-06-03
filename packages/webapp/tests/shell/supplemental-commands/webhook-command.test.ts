@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LickManager, WebhookEntry } from '../../../src/scoops/lick-manager.js';
 import type { LeaderTraySession } from '../../../src/scoops/tray-leader.js';
 
@@ -415,8 +415,9 @@ describe('webhook command — extension side panel → offscreen via BroadcastCh
     };
 
     // Start the offscreen host with a tray URL resolver.
-    const { startLickManagerHost } =
-      await import('../../../../chrome-extension/src/lick-manager-proxy.js');
+    const { startLickManagerHost } = await import(
+      '../../../../chrome-extension/src/lick-manager-proxy.js'
+    );
     startLickManagerHost(mockLickManager as never, {
       getTrayWebhookUrl: () => SESSION.webhookUrl,
     });
@@ -448,8 +449,9 @@ describe('webhook command — extension side panel → offscreen via BroadcastCh
       deleteCronTask: vi.fn(),
     };
 
-    const { startLickManagerHost } =
-      await import('../../../../chrome-extension/src/lick-manager-proxy.js');
+    const { startLickManagerHost } = await import(
+      '../../../../chrome-extension/src/lick-manager-proxy.js'
+    );
     startLickManagerHost(mockLickManager as never, {
       getTrayWebhookUrl: () => SESSION.webhookUrl,
     });
@@ -471,8 +473,9 @@ describe('webhook command — extension side panel → offscreen via BroadcastCh
       deleteCronTask: vi.fn(),
     };
 
-    const { startLickManagerHost } =
-      await import('../../../../chrome-extension/src/lick-manager-proxy.js');
+    const { startLickManagerHost } = await import(
+      '../../../../chrome-extension/src/lick-manager-proxy.js'
+    );
     startLickManagerHost(mockLickManager as never);
 
     const { command } = await loadCommandAndTrayLeader();
@@ -492,8 +495,9 @@ describe('webhook command — extension side panel → offscreen via BroadcastCh
       deleteCronTask: vi.fn(),
     };
 
-    const { startLickManagerHost } =
-      await import('../../../../chrome-extension/src/lick-manager-proxy.js');
+    const { startLickManagerHost } = await import(
+      '../../../../chrome-extension/src/lick-manager-proxy.js'
+    );
     // No tray URL resolver → returns null.
     startLickManagerHost(mockLickManager as never);
 

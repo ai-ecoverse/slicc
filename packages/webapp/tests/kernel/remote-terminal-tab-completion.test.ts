@@ -1,8 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   bashSingleQuote,
-  buildCompgenPlan,
   buildCompgenDirCheck,
+  buildCompgenPlan,
   longestCommonPrefix,
 } from '../../src/kernel/remote-terminal-view.js';
 

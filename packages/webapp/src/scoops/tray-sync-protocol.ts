@@ -21,13 +21,23 @@
  * checklist.
  */
 
-import type { AgentEvent, ChatMessage } from '../ui/types.js';
 import type { MessageAttachment } from '../core/attachments.js';
-import type { TrayDataChannelLike } from './tray-webrtc.js';
 import { createLogger } from '../core/logger.js';
+import type { AgentEvent, ChatMessage } from '../ui/types.js';
 import type { LickEvent } from './lick-manager.js';
+import type { TrayDataChannelLike } from './tray-webrtc.js';
 
 const log = createLogger('tray-sync');
+
+/**
+ * Runtime tag a cherry follower connects with (`StartPageFollowerTrayOptions.runtime`).
+ * It is the advertisement-independent signal the leader uses to keep a cooperative
+ * cherry host page out of flows it cannot satisfy (teleport selection) — see
+ * `tray-leader-sync.ts:getBestFollowerForTeleport`. Kept here, next to the wire
+ * format, because both the follower boot (`ui/`) and the leader (`scoops/`) must
+ * agree on the exact string without one layer importing the other.
+ */
+export const CHERRY_RUNTIME_TAG = 'slicc-cherry';
 
 // ---------------------------------------------------------------------------
 // Protocol messages
@@ -88,6 +98,7 @@ export type LeaderToFollowerMessage =
   | { type: 'tab.open.error'; requestId: string; error: string }
   | { type: 'fs.request'; requestId: string; request: TrayFsRequest }
   | { type: 'fs.response'; requestId: string; response: TrayFsResponse }
+  | CherrySliccEventMessage
   | { type: 'ping' }
   | { type: 'pong' };
 
@@ -130,6 +141,7 @@ export type FollowerToLeaderMessage =
   | { type: 'tab.open.error'; requestId: string; error: string }
   | { type: 'fs.request'; requestId: string; targetRuntimeId: string; request: TrayFsRequest }
   | { type: 'fs.response'; requestId: string; response: TrayFsResponse }
+  | CherryHostEventMessage
   | { type: 'ping' }
   | { type: 'pong' };
 
@@ -141,6 +153,51 @@ export interface RemoteTargetInfo {
   targetId: string;
   title: string;
   url: string;
+  /** Distinguishes a real browser page from a cooperative cherry host page. */
+  kind?: 'browser' | 'cherry';
+  /**
+   * Only present for kind === 'cherry'. What the host page lends to the leader,
+   * expressed in the vocabulary this tray/teleport layer cares about: `network`
+   * gates whether the target may serve `Network.*` CDP for teleport-pool
+   * selection. NOTE: intentionally a DIFFERENT shape from the SDK handshake
+   * `CherryHandshakeHello.capabilities` (`{ navigate; screenshot; openUrl }` in
+   * cdp/cherry-host-protocol.ts) — `openUrl` is a sandbox-escape concern at the
+   * host SDK boundary, whereas `network` is a teleport-routing concern here.
+   * They are mapped, not equal.
+   */
+  capabilities?: { navigate: boolean; network: boolean; screenshot: boolean };
+}
+
+// ---------------------------------------------------------------------------
+// Cherry event-passing messages
+// ---------------------------------------------------------------------------
+
+/** Host page → cone: a named event emitted by the cherry host page. */
+export interface CherryHostEventMessage {
+  type: 'cherry.host_event';
+  targetId: string;
+  name: string;
+  detail?: unknown;
+}
+
+/** Cone → host page: a named event sent to the cherry host page. */
+export interface CherrySliccEventMessage {
+  type: 'cherry.slicc_event';
+  targetId: string;
+  name: string;
+  detail?: unknown;
+}
+
+export function isCherryHostEventMessage(m: unknown): m is CherryHostEventMessage {
+  return (
+    typeof m === 'object' && m !== null && (m as { type?: string }).type === 'cherry.host_event'
+  );
+}
+
+export function isCherrySliccEventMessage(m: unknown): m is CherrySliccEventMessage {
+  return (
+    typeof m === 'object' && m !== null && (m as { type?: string }).type === 'cherry.slicc_event'
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -178,6 +235,19 @@ export interface TrayTargetEntry {
   title: string;
   url: string;
   isLocal: boolean; // True if owned by the receiving runtime (set by consumer, not registry)
+  /** Distinguishes a real browser page from a cooperative cherry host page. */
+  kind?: 'browser' | 'cherry';
+  /**
+   * Only present for kind === 'cherry'. What the host page lends to the leader,
+   * expressed in the vocabulary this tray/teleport layer cares about: `network`
+   * gates whether the target may serve `Network.*` CDP for teleport-pool
+   * selection. NOTE: intentionally a DIFFERENT shape from the SDK handshake
+   * `CherryHandshakeHello.capabilities` (`{ navigate; screenshot; openUrl }` in
+   * cdp/cherry-host-protocol.ts) — `openUrl` is a sandbox-escape concern at the
+   * host SDK boundary, whereas `network` is a teleport-routing concern here.
+   * They are mapped, not equal.
+   */
+  capabilities?: { navigate: boolean; network: boolean; screenshot: boolean };
 }
 
 // ---------------------------------------------------------------------------
