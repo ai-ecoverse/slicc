@@ -43,7 +43,7 @@ import type { ProviderConfig } from '../types.js';
 
 export const config: ProviderConfig = {
   id: 'bedrock-camp',
-  name: 'AWS Bedrock (CAMP)',
+  name: 'AWS Bedrock',
   description: 'Claude on AWS Bedrock via CAMP Bearer token',
   requiresApiKey: true,
   apiKeyPlaceholder: 'ABSK...',

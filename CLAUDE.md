@@ -269,6 +269,6 @@ npm run build
 npm run build -w @slicc/chrome-extension
 ```
 
-**Always run `npm run lint` before committing.** It runs `biome check --write .` over JS/TS/JSON/CSS and `prettier --write .` over the remaining doc / config-text formats (Markdown, YAML, HTML). CI runs the check-only equivalents as a hard gate and will reject any unformatted code. This is the most common CI failure — don't skip it.
+**Always run `npm run lint` before committing.** It runs `biome check --write .` over JS/TS/JSON/CSS and `prettier --write .` over the remaining doc / config-text formats (Markdown, YAML, HTML), then `lint:docs` (CLAUDE.md size limits) and `lint:skills` (tessl `SKILL.md` lint). CI runs the check-only/strict equivalents (`npm run lint:ci`) as a hard gate and will reject any unformatted code. This is the most common CI failure — don't skip it.
 
 CI runs these gates in `.github/workflows/ci.yml`.

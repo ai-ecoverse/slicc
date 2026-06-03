@@ -513,11 +513,16 @@ async function attachOffscreenRecorder(
       logArtifact(`[offscreen network-fail ${params.requestId}] ${params.errorText ?? ''}`);
     }
   });
-  // Auto-attach ONLY to dedicated workers (the FFmpeg WASM worker
-  // is where `vendor/ffmpeg-core.js` is fetched via `import()`). We
-  // do NOT attach to service workers / sandbox iframes — earlier
-  // experiments showed that disturbs the panel target and causes
-  // "Inspected target navigated or closed" mid-scenario.
+  // Network capture targets ONLY dedicated workers (the FFmpeg WASM
+  // worker is where `vendor/ffmpeg-core.js` is fetched via `import()`).
+  // But `waitForDebuggerOnStart: true` pauses EVERY auto-attached child
+  // on start, so each one must be resumed or it hangs indefinitely —
+  // fatally so for the `node -e` realm, which runs in a sandbox iframe
+  // child of the offscreen document (the staged-WAV step and the
+  // `node-e` scenario both block on it). For the FFmpeg worker we still
+  // enable Network BEFORE resuming so its `import(coreURL)` fetch lands
+  // in the recorder; every other child (realm iframe, service workers)
+  // is resumed straight away without enabling Network.
   const attachedSessions = new Set<string>();
   const offAttach = session.onEvent((ev) => {
     if (ev.method !== 'Target.attachedToTarget') return;
@@ -528,21 +533,21 @@ async function attachOffscreenRecorder(
     const sid = params.sessionId;
     const childType = params.targetInfo?.type ?? '';
     if (!sid || attachedSessions.has(sid)) return;
+    attachedSessions.add(sid);
     logArtifact(
       `[offscreen attached-child] type=${childType} url=${params.targetInfo?.url?.slice(0, 120)}`
     );
-    if (childType !== 'worker') return;
-    attachedSessions.add(sid);
-    // Enable Network BEFORE releasing the worker; otherwise the
-    // worker's `import(coreURL)` can complete before we've enabled
-    // the Network domain, and we miss the `vendor/ffmpeg-core.js`
-    // event the RHC assertion needs.
-    session
-      .send('Network.enable', {}, sid)
-      .catch(() => undefined)
-      .finally(() => {
-        session.send('Runtime.runIfWaitingForDebugger', {}, sid).catch(() => undefined);
-      });
+    const resume = (): void => {
+      session.send('Runtime.runIfWaitingForDebugger', {}, sid).catch(() => undefined);
+    };
+    if (childType === 'worker') {
+      session
+        .send('Network.enable', {}, sid)
+        .catch(() => undefined)
+        .finally(resume);
+    } else {
+      resume();
+    }
   });
 
   await session.send('Runtime.enable');
@@ -653,6 +658,16 @@ async function rotateBridgeSession(cdp: CdpSession): Promise<void> {
      ]).then(() => true)`,
     /* awaitPromise */ true
   );
+}
+
+/** Rotate the bridge session between scenarios, logging (not throwing) on failure. */
+async function rotateBridgeSessionOrWarn(cdp: CdpSession): Promise<void> {
+  try {
+    await rotateBridgeSession(cdp);
+    logArtifact('bridge session rotated');
+  } catch (err) {
+    logArtifact(`WARN session rotate failed: ${(err as Error).message}`);
+  }
 }
 
 interface ScenarioFailure {
@@ -859,9 +874,246 @@ async function runNodeScenario(cdp: CdpSession, failures: ScenarioFailure[]): Pr
   });
 }
 
+/**
+ * Read `/tmp/photo.jpg` back and emit its size plus a base64 dump of its
+ * bytes for JPEG-envelope validation. Deliberately uses just-bash
+ * builtins (`wc`, `base64`) rather than `node -e`: those run
+ * synchronously in the WASM shell with no realm worker or network, so
+ * the readback can't hang even if the realm path is unavailable.
+ * `base64` is the one builtin guaranteed to round-trip binary faithfully
+ * (just-bash's `od`/`tail -c` don't match GNU byte semantics). Output is
+ * a single `SZ=<n>|B64=<base64>` line the smoke side decodes and checks.
+ */
+const JPEG_PROBE_CODE = [
+  'sz=$(wc -c < /tmp/photo.jpg);',
+  "b64=$(base64 < /tmp/photo.jpg | tr -d '\\n');",
+  'printf \'SZ=%s|B64=%s\\n\' "$sz" "$b64"',
+].join(' ');
+
+/**
+ * Media-capture scenario. Exercises the extension's avfoundation photo
+ * path end-to-end: the offscreen shell runs `ffmpeg -f avfoundation`,
+ * which (under `isExtensionFloat()`) opens `capture-popup.html` via the
+ * service worker's `capture-open-window` handler, captures one frame
+ * from the synthetic camera through `getUserMedia` (auto-granted by the
+ * `--use-fake-*` flags), JPEG-encodes it, and posts the bytes back over
+ * `chrome.runtime` messaging to be written to the VFS. We then read the
+ * file back with just-bash builtins and assert it's a non-empty valid
+ * JPEG (SOI `FF D8 FF`, EOI `FF D9`). The photo path writes the canvas
+ * bytes straight to the VFS (no wasm transcode for a plain `.jpg`
+ * target), so the scenario doesn't depend on `ffmpeg.exec()` or the
+ * `node -e` realm path.
+ */
+async function runMediaCaptureScenario(
+  cdp: CdpSession,
+  net: NetEntry[],
+  extId: string,
+  failures: ScenarioFailure[]
+): Promise<void> {
+  const scenario = 'media-capture';
+  const captureCommand = 'ffmpeg -f avfoundation -i 0 -frames:v 1 /tmp/photo.jpg';
+  // The fake device grants instantly, but the photo path waits ~1.5s for
+  // auto-exposure warmup and opens a popup window first; a 90s budget is
+  // generous without burning the full SCENARIO_TIMEOUT_MS on a hang.
+  const captureBudget = Math.min(SCENARIO_TIMEOUT_MS, 90_000);
+  logArtifact(`[${scenario}] running '${captureCommand}' (budget=${captureBudget}ms) ...`);
+  const start = Date.now();
+  let result: ExecResult | null = null;
+  let execError: string | null = null;
+  try {
+    result = await execShell(cdp, captureCommand, captureBudget);
+  } catch (err) {
+    execError = (err as Error).message;
+  }
+  const slice = net.filter((e) => e.ts >= start);
+  if (result) {
+    logArtifact(
+      `[${scenario}] capture exitCode=${result.exitCode} stdout=${result.stdout.length}B stderr='${result.stderr.slice(-300).trim()}' network=${slice.length}`
+    );
+  } else {
+    logArtifact(`[${scenario}] capture exec did not complete (${execError})`);
+  }
+
+  if (execError) {
+    failures.push({ scenario, message: `capture exec threw: ${execError}` });
+    return;
+  }
+  if (!result) {
+    failures.push({ scenario, message: 'capture exec returned no result' });
+    return;
+  }
+  assertScenario(
+    failures,
+    scenario,
+    result.exitCode === 0,
+    `capture exit code 0 (got ${result.exitCode})`,
+    { stderrTail: result.stderr.slice(-2000), stdoutTail: result.stdout.slice(-2000) }
+  );
+
+  // Read the captured file back with just-bash builtins and validate the
+  // JPEG envelope. This confirms the bytes actually round-tripped from
+  // the popup into the VFS — not just that the command exited cleanly.
+  let probe: ExecResult;
+  try {
+    probe = await execShell(cdp, JPEG_PROBE_CODE, 30_000);
+  } catch (err) {
+    failures.push({ scenario, message: `jpeg probe exec threw: ${(err as Error).message}` });
+    return;
+  }
+  if (probe.exitCode !== 0) {
+    failures.push({
+      scenario,
+      message: `jpeg probe exit ${probe.exitCode}`,
+      detail: { stderrTail: probe.stderr.slice(-2000), stdoutTail: probe.stdout.slice(-2000) },
+    });
+    return;
+  }
+  const m = /SZ=([0-9]+)\|B64=([A-Za-z0-9+/=]*)/.exec(probe.stdout);
+  if (!m) {
+    failures.push({
+      scenario,
+      message: 'jpeg probe stdout did not match expected SZ/B64 shape',
+      detail: { stdout: probe.stdout.slice(0, 500) },
+    });
+    return;
+  }
+  const len = parseInt(m[1], 10);
+  const bytes = Buffer.from(m[2], 'base64');
+  const soi = [bytes[0], bytes[1], bytes[2]];
+  const eoi = bytes.length >= 2 ? [bytes[bytes.length - 2], bytes[bytes.length - 1]] : [];
+  logArtifact(
+    `[${scenario}] jpeg probe wc=${len} decoded=${bytes.length} soi=${JSON.stringify(soi)} eoi=${JSON.stringify(eoi)}`
+  );
+  assertScenario(failures, scenario, len > 0, `captured file is non-empty (wc -c = ${len})`, {
+    len,
+  });
+  // The base64 decode length should match the on-disk size — confirms the
+  // dump round-tripped cleanly rather than being truncated mid-stream.
+  assertScenario(
+    failures,
+    scenario,
+    bytes.length === len,
+    `base64 decode length matches wc -c (${bytes.length} vs ${len})`,
+    { decoded: bytes.length, wc: len }
+  );
+  // JPEG start-of-image marker is FF D8 FF.
+  assertScenario(
+    failures,
+    scenario,
+    soi[0] === 0xff && soi[1] === 0xd8 && soi[2] === 0xff,
+    'captured file has JPEG SOI marker (FF D8 FF)',
+    { soi }
+  );
+  // JPEG end-of-image marker is FF D9.
+  assertScenario(
+    failures,
+    scenario,
+    eoi[0] === 0xff && eoi[1] === 0xd9,
+    'captured file has JPEG EOI marker (FF D9)',
+    { eoi }
+  );
+
+  // Security invariant shared with the ffmpeg scenario: no remote `.js`
+  // from forbidden hosts during the capture window.
+  const jsViolations = slice.filter((e) => {
+    if (!/\.js(\?|$)/i.test(e.url)) return false;
+    if (e.url.startsWith(`chrome-extension://${extId}/`)) return false;
+    return FORBIDDEN_HOSTS.some((h) => e.url.includes(`//${h}/`) || e.url.includes(`//${h}:`));
+  });
+  assertScenario(
+    failures,
+    scenario,
+    jsViolations.length === 0,
+    'no remote .js fetches from forbidden hosts',
+    { violations: jsViolations.slice(0, 10).map((e) => e.url) }
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Main orchestration
 // ---------------------------------------------------------------------------
+
+/**
+ * Attach the offscreen-document network recorder unless disabled via
+ * `SLICC_SMOKE_NO_OFFSCREEN=1`. Logging is folded in here so `main()`
+ * stays a flat sequence rather than a nested conditional.
+ */
+async function maybeAttachOffscreen(
+  cdpPort: number,
+  extId: string,
+  entries: NetEntry[]
+): Promise<{ session: CdpSession; dispose: () => void } | null> {
+  if (process.env['SLICC_SMOKE_NO_OFFSCREEN']) {
+    logArtifact('SLICC_SMOKE_NO_OFFSCREEN=1 set; skipping offscreen attach');
+    return null;
+  }
+  const off = await attachOffscreenRecorder(cdpPort, extId, entries, CDP_READY_TIMEOUT_MS);
+  logArtifact(
+    off
+      ? 'offscreen recorder attached'
+      : 'WARN: offscreen target not found within timeout — ffmpeg-core capture may miss'
+  );
+  return off;
+}
+
+/**
+ * Run all scenarios in sequence, rotating the bridge session between
+ * each so a stuck inflight exec on the offscreen side doesn't bleed
+ * into the next scenario. Returns the accumulated failures.
+ */
+async function runScenarios(
+  cdp: CdpSession,
+  entries: NetEntry[],
+  extId: string
+): Promise<ScenarioFailure[]> {
+  const failures: ScenarioFailure[] = [];
+  await runFfmpegScenario(cdp, entries, extId, failures);
+  // ffmpeg.exec() may still be running on the offscreen side after
+  // its smoke-side timeout; rotate to a fresh session so the next
+  // scenario doesn't bounce off the busy-session sentinel.
+  await rotateBridgeSessionOrWarn(cdp);
+  await runNodeScenario(cdp, failures);
+  // Media capture opens a popup window and drives getUserMedia on the
+  // offscreen side; rotate again so it starts from a clean session.
+  await rotateBridgeSessionOrWarn(cdp);
+  await runMediaCaptureScenario(cdp, entries, extId, failures);
+  return failures;
+}
+
+/** Log the scenario outcome and return the process exit code. */
+function reportFailures(failures: ScenarioFailure[]): number {
+  if (failures.length === 0) {
+    logArtifact('all scenarios passed');
+    return 0;
+  }
+  logArtifact(`FAILURES (${failures.length}):`);
+  for (const f of failures) {
+    logArtifact(`  [${f.scenario}] ${f.message}${f.detail ? ' ' + JSON.stringify(f.detail) : ''}`);
+  }
+  return 1;
+}
+
+/** Best-effort terminate the Chrome child process (SIGTERM, then SIGKILL). */
+async function killChrome(chrome: ChildProcess): Promise<void> {
+  if (chrome.exitCode !== null) return;
+  try {
+    chrome.kill('SIGTERM');
+    await Promise.race([new Promise<void>((res) => chrome.once('exit', () => res())), delay(3000)]);
+    if (chrome.exitCode === null) chrome.kill('SIGKILL');
+  } catch {
+    // Ignore.
+  }
+}
+
+/** Remove the disposable Chrome profile unless `SLICC_SMOKE_KEEP_PROFILE` is set. */
+function removeProfile(profileDir: string): void {
+  if (process.env['SLICC_SMOKE_KEEP_PROFILE']) return;
+  try {
+    rmSync(profileDir, { recursive: true, force: true });
+  } catch {
+    // Ignore.
+  }
+}
 
 async function main(): Promise<number> {
   logArtifact(`smoke test artifact dir: ${ARTIFACT_DIR}`);
@@ -899,6 +1151,13 @@ async function main(): Promise<number> {
     '--disable-crash-reporter',
     '--disable-background-tracing',
     '--disable-blink-features=AutomationControlled',
+    // Media-capture scenario: feed a synthetic camera/mic and auto-grant
+    // the getUserMedia / getDisplayMedia prompt so the popup capture path
+    // runs headlessly without a real device or a human clicking "Allow".
+    // Scoped to the smoke harness only — production Chrome launch and the
+    // extension manifest are unchanged.
+    '--use-fake-device-for-media-stream',
+    '--use-fake-ui-for-media-stream',
     'about:blank',
   ];
 
@@ -965,52 +1224,15 @@ async function main(): Promise<number> {
     // network events. Skip with `SLICC_SMOKE_NO_OFFSCREEN=1` for
     // local debugging in case the auto-attach interferes with the
     // ffmpeg WASM worker on a specific Chrome build.
-    if (!process.env['SLICC_SMOKE_NO_OFFSCREEN']) {
-      offscreen = await attachOffscreenRecorder(
-        cdpPort,
-        extId,
-        recorder.entries,
-        CDP_READY_TIMEOUT_MS
-      );
-      if (offscreen) {
-        logArtifact('offscreen recorder attached');
-      } else {
-        logArtifact(
-          'WARN: offscreen target not found within timeout — ffmpeg-core capture may miss'
-        );
-      }
-    } else {
-      logArtifact('SLICC_SMOKE_NO_OFFSCREEN=1 set; skipping offscreen attach');
-    }
+    offscreen = await maybeAttachOffscreen(cdpPort, extId, recorder.entries);
 
     logArtifact('running scenarios ...');
-    const failures: ScenarioFailure[] = [];
-    await runFfmpegScenario(cdp, recorder.entries, extId, failures);
-    // ffmpeg.exec() may still be running on the offscreen side after
-    // its smoke-side timeout; rotate to a fresh session so the next
-    // scenario doesn't bounce off the busy-session sentinel.
-    try {
-      await rotateBridgeSession(cdp);
-      logArtifact('bridge session rotated');
-    } catch (err) {
-      logArtifact(`WARN session rotate failed: ${(err as Error).message}`);
-    }
-    await runNodeScenario(cdp, failures);
+    const failures = await runScenarios(cdp, recorder.entries, extId);
     recorder.dispose();
     offscreen?.dispose();
     offscreen = null;
 
-    if (failures.length === 0) {
-      logArtifact('all scenarios passed');
-      exitCode = 0;
-    } else {
-      logArtifact(`FAILURES (${failures.length}):`);
-      for (const f of failures) {
-        logArtifact(
-          `  [${f.scenario}] ${f.message}${f.detail ? ' ' + JSON.stringify(f.detail) : ''}`
-        );
-      }
-    }
+    exitCode = reportFailures(failures);
   } catch (err) {
     logArtifact(`fatal: ${(err as Error).message}`);
     if ((err as Error).stack) logArtifact((err as Error).stack!);
@@ -1025,25 +1247,8 @@ async function main(): Promise<number> {
     } catch {
       // Ignore.
     }
-    if (chrome && chrome.exitCode === null) {
-      try {
-        chrome.kill('SIGTERM');
-        await Promise.race([
-          new Promise<void>((res) => chrome!.once('exit', () => res())),
-          delay(3000),
-        ]);
-        if (chrome.exitCode === null) chrome.kill('SIGKILL');
-      } catch {
-        // Ignore.
-      }
-    }
-    if (!process.env['SLICC_SMOKE_KEEP_PROFILE']) {
-      try {
-        rmSync(profileDir, { recursive: true, force: true });
-      } catch {
-        // Ignore.
-      }
-    }
+    if (chrome) await killChrome(chrome);
+    removeProfile(profileDir);
     // Last line of stderr is always the artifact-log path so CI / humans
     // can grab it without parsing the rest of the output.
     process.stderr.write(`\nsmoke artifacts: ${ARTIFACT_LOG}\n`);

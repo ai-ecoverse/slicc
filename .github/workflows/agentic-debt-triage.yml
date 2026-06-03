@@ -1,0 +1,111 @@
+name: Agentic Debt Triage
+
+# Nightly "agentic-debt" hunter. Where RUM error triage chases runtime bugs,
+# this workflow chases CODEBASE debt introduced by agentic development. Each
+# night it rotates through seven agentic-codebase failure modes — the "sins" —
+# and hands the sin of the day to claude-code-action, which investigates the
+# repo read-only and files exactly ONE GitHub issue documenting the single most
+# impactful instance it finds (steering clear of areas already covered by open
+# issues / PRs).
+#
+# The seven-sin rotation (day-of-year UTC mod 7, severity order):
+#   1. complicatification  easy things done the hard way
+#   2. entanglement        muddy module boundaries / wrong call directions
+#   3. drift               code vs. comments/names/docs out of sync
+#   4. duplication         copy-paste / parallel implementations
+#   5. bloat               gigantic files/functions; deep nesting
+#   6. necrophilia         dead code: unused exports, unreachable branches
+#   7. paranoia            overly defensive programming
+# Rotation + per-sin prompts live in packages/dev-tools/codebase-sins/; the
+# select-sin.mjs CLI emits the chosen sin id/name/label and composed prompt.
+#
+# Required repository secret (already present — same as rum-error-triage.yml):
+#   AWS_BEARER_TOKEN_BEDROCK  Amazon Bedrock API key (Adobe CAMP `ABSK...`
+#                             bearer token) for claude-code-action. Optional
+#                             repo vars RUM_AWS_REGION / SINS_BEDROCK_MODEL /
+#                             RUM_BEDROCK_MODEL tune region + inference profile.
+# No new secrets are required beyond what RUM error triage already uses.
+#
+# Third-party actions are pinned to immutable commit SHAs (identical to
+# .github/workflows/rum-error-triage.yml) — this job has issues:write access.
+
+on:
+  schedule:
+    - cron: '33 5 * * *' # nightly at 05:33 UTC (off the congested top-of-hour; offset from RUM's 03:00)
+  workflow_dispatch:
+    inputs:
+      sin:
+        description: 'Override sin of the day (1-7 or name); blank = rotation'
+        required: false
+      dry_run:
+        description: 'Select the sin only; do not run Claude / file an issue'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: agentic-debt-triage
+  cancel-in-progress: false
+
+permissions:
+  contents: read # read-only investigation of the codebase
+  issues: write # file the agentic-debt issue
+  pull-requests: read # so Claude can `gh pr list` to avoid covered areas
+  id-token: write # claude-code-action fetches an OIDC token during GitHub token setup
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      # Third-party actions are pinned to immutable commit SHAs (matching
+      # .github/workflows/rum-error-triage.yml).
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0 # full history so Claude can use git log / blame
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+
+      - name: Ensure triage labels exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create agentic-debt --color 5319e7 --description "Agentic-codebase tech-debt surfaced by nightly triage" --force
+          for id in complicatification entanglement drift duplication bloat necrophilia paranoia; do
+            gh label create "debt:$id" --color 5319e7 --description "Agentic-debt sin: $id" --force
+          done
+
+      - name: Select the sin of the day
+        id: sin
+        env:
+          SIN_OVERRIDE: ${{ github.event.inputs.sin }}
+        run: node packages/dev-tools/codebase-sins/select-sin.mjs
+
+      - name: Hunt the sin and file an issue
+        if: github.event.inputs.dry_run != 'true'
+        uses: anthropics/claude-code-action@36a69b6a90b850823f86de06fdfd56264772ad98 # v1
+        env:
+          # Bedrock path: authenticate with an Amazon Bedrock API key (the Adobe
+          # CAMP `ABSK...` bearer token). Set the AWS_BEARER_TOKEN_BEDROCK secret
+          # and, if needed, the RUM_AWS_REGION / SINS_BEDROCK_MODEL repo
+          # variables to match the region + inference profile your CAMP key can
+          # reach. (Bearer-token auth for Bedrock is newer in Claude Code — if a
+          # run fails on auth, fall back to `anthropic_api_key`.)
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
+          # claude-code-action does NOT expose a token to the Bash tool's `gh`,
+          # so set it explicitly or `gh issue create` / `gh issue list` fail.
+          # The job's top-level permissions scope this token appropriately.
+          GH_TOKEN: ${{ github.token }}
+        with:
+          use_bedrock: 'true'
+          # Print Claude's full turn-by-turn output to the Actions log on manual
+          # dispatch (to inspect its reasoning); kept off for the nightly cron so
+          # routine runs don't log tool output that may contain sensitive data.
+          show_full_output: ${{ github.event_name == 'workflow_dispatch' }}
+          claude_args: |
+            --model ${{ vars.SINS_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
+            --allowedTools "Read,Grep,Glob,Bash(gh issue:*),Bash(gh pr:*),Bash(gh label:*),Bash(git:*)"
+            --max-turns 40
+          prompt: ${{ steps.sin.outputs.prompt }}

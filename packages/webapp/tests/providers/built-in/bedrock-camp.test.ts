@@ -70,7 +70,7 @@ describe('bedrock-camp built-in provider', () => {
   it('exports a valid ProviderConfig', () => {
     expect(config).toBeDefined();
     expect(config.id).toBe('bedrock-camp');
-    expect(config.name).toBe('AWS Bedrock (CAMP)');
+    expect(config.name).toBe('AWS Bedrock');
     expect(config.requiresApiKey).toBe(true);
     expect(config.requiresBaseUrl).toBe(true);
   });

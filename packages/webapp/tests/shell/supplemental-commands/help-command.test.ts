@@ -134,6 +134,7 @@ const DEFAULT_BUILTIN_COMMANDS = [
   'sha256sum',
   'curl',
   'wget',
+  'dig',
   'websocat',
   'html-to-markdown',
   'git',

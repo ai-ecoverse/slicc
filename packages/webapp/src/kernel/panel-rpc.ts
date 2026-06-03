@@ -184,6 +184,16 @@ export type PanelRpcRequest =
       // surface a clear failure rather than silently succeeding.
       op: 'cherry-emit';
       payload: { runtimeId: string; name: string; detail?: unknown };
+    }
+  | {
+      // Fetch remote (follower) browser targets from the page-side
+      // BrowserAPI. The tray provider is set on the page-side instance
+      // only — the worker's BrowserAPI has no reference to it, so
+      // listAllTargets() in the worker falls back to local CDP tabs.
+      // This op bridges the gap: the page fetches its full target list
+      // and returns only entries with composite targetIds (remote ones).
+      op: 'list-remote-targets';
+      payload?: undefined;
     };
 
 export interface PanelRpcResults {
@@ -214,6 +224,9 @@ export interface PanelRpcResults {
   'oauth-extras-set': { storeAfter: OAuthExtraDomainsStore };
   'save-oauth-accounts': { storedJson: string };
   'cherry-emit': { delivered: boolean };
+  'list-remote-targets': {
+    targets: Array<{ targetId: string; title: string; url: string }>;
+  };
 }
 
 export type PanelRpcOp = PanelRpcRequest['op'];
