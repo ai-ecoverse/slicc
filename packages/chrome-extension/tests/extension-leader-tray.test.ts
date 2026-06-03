@@ -831,7 +831,11 @@ describe('startExtensionLeaderTray host-command + reset', () => {
     );
     const followers = getConnectedFollowers();
     expect(followers).toEqual([
-      { runtimeId: 'b1', runtime: 'slicc-standalone', connectedAt: '2026-05-20T00:00:00Z' },
+      {
+        runtimeId: 'follower-b1',
+        runtime: 'slicc-standalone',
+        connectedAt: '2026-05-20T00:00:00Z',
+      },
     ]);
     handle.stop();
   });
@@ -878,7 +882,11 @@ describe('startExtensionLeaderTray host-command + reset', () => {
       expect(setItem).toHaveBeenCalledWith(
         'slicc.leaderTrayFollowers',
         JSON.stringify([
-          { runtimeId: 'b1', runtime: 'slicc-standalone', connectedAt: '2026-05-20T00:00:00Z' },
+          {
+            runtimeId: 'follower-b1',
+            runtime: 'slicc-standalone',
+            connectedAt: '2026-05-20T00:00:00Z',
+          },
         ])
       );
       handle.stop();

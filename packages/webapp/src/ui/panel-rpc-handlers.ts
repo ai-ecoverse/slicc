@@ -40,6 +40,15 @@ export interface StandalonePanelRpcHandlerOptions {
     requestId?: string;
   }) => Promise<PanelRpcResults['tray-leave']> | PanelRpcResults['tray-leave'];
   /**
+   * Push a `cherry.slicc_event` (cone → host page) out through the
+   * page-side LeaderSyncManager. Wired by `mainStandaloneWorker` to
+   * `pageLeaderTray.sync.emitCherrySliccEvent(...)`; the worker-side
+   * `cherry-emit` command bridges here because the leader tray's WebRTC
+   * data channels live on the page. Returns `true` when the message was
+   * sent, `false` when the owning follower is not connected.
+   */
+  emitCherrySliccEvent?: (runtimeId: string, name: string, detail?: unknown) => boolean;
+  /**
    * Return the remote (follower) browser targets known to the page-side
    * BrowserAPI. `mainStandaloneWorker` wires this unconditionally to
    * `browser.listAllTargets()`; it returns local-only (no composite
@@ -284,6 +293,13 @@ export function createStandalonePanelRpcHandlers(
         throw new Error('host leave: tray leave is not available in this environment');
       }
       return await options.leaveTray({ workerBaseUrl, requestId });
+    },
+
+    'cherry-emit': async ({ runtimeId, name, detail }) => {
+      if (!options.emitCherrySliccEvent) {
+        throw new Error('cherry-emit: not available in this environment');
+      }
+      return { delivered: options.emitCherrySliccEvent(runtimeId, name, detail) };
     },
 
     'oauth-extras-set': ({ providerId, domains }) => {

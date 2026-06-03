@@ -6,6 +6,8 @@ import type { ScriptCatalog } from '../script-catalog.js';
 import { createAfplayCommand, createChimeCommand } from './afplay-command.js';
 import { createAgentCommand } from './agent-command.js';
 import { createBiomeCommand } from './biome-command.js';
+import type { CherryRuntimeRegistry } from './cherry-emit-command.js';
+import { createCherryEmitCommand } from './cherry-emit-command.js';
 import {
   createClipboardAutoCommand,
   createPbcopyCommand,
@@ -82,6 +84,8 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
    * works with either.
    */
   processManager?: ProcessManager;
+  /** Leader-side cherry runtime registry. Absent outside leader contexts. */
+  cherryRuntimeRegistry?: CherryRuntimeRegistry;
 }
 
 export function createSupplementalCommands(options: SupplementalCommandsConfig = {}): Command[] {
@@ -137,6 +141,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createDiscoverCommand(),
     createPsCommand({ processManager: options.processManager }),
     createKillCommand({ processManager: options.processManager }),
+    createCherryEmitCommand({ registry: options.cherryRuntimeRegistry }),
   ];
 
   if (options.fs) {

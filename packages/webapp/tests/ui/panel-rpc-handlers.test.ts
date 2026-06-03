@@ -113,6 +113,42 @@ describe('createStandalonePanelRpcHandlers — tray-leave', () => {
   });
 });
 
+describe('createStandalonePanelRpcHandlers — cherry-emit', () => {
+  it('forwards runtimeId/name/detail and reports delivered when the follower is connected', async () => {
+    const calls: Array<{ runtimeId: string; name: string; detail?: unknown }> = [];
+    const handlers = createStandalonePanelRpcHandlers({
+      emitCherrySliccEvent: (runtimeId, name, detail) => {
+        calls.push({ runtimeId, name, detail });
+        return true;
+      },
+    });
+    const result = await handlers['cherry-emit']!({
+      runtimeId: 'follower-abc',
+      name: 'build.done',
+      detail: { ok: true },
+    });
+    expect(calls).toEqual([
+      { runtimeId: 'follower-abc', name: 'build.done', detail: { ok: true } },
+    ]);
+    expect(result).toEqual({ delivered: true });
+  });
+
+  it('reports delivered:false when the owning follower is not connected', async () => {
+    const handlers = createStandalonePanelRpcHandlers({
+      emitCherrySliccEvent: () => false,
+    });
+    const result = await handlers['cherry-emit']!({ runtimeId: 'gone', name: 'noop' });
+    expect(result).toEqual({ delivered: false });
+  });
+
+  it('rejects with a clear error when no emitCherrySliccEvent callback is wired', async () => {
+    const handlers = createStandalonePanelRpcHandlers({});
+    await expect(handlers['cherry-emit']!({ runtimeId: 'x', name: 'noop' })).rejects.toThrow(
+      /not available in this environment/i
+    );
+  });
+});
+
 /**
  * `oauth-extras-set` is the panel-RPC op that lets a worker-side
  * `oauth-domain` write reach real page `localStorage`. The handler

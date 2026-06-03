@@ -92,6 +92,13 @@ export interface StartPageLeaderTrayOptions {
    */
   sendWebhookEvent: (webhookId: string, headers: Record<string, string>, body: unknown) => void;
 
+  /**
+   * Forward an inbound `cherry.host_event` (from a follower's embedded cherry
+   * host page) to the worker's `LickManager` as a `'cherry'` lick. Wired to
+   * `OffscreenClient.sendCherryHostEvent` by the caller. Fire-and-forget.
+   */
+  onCherryHostEvent?: LeaderSyncManagerOptions['onCherryHostEvent'];
+
   // --- Agent event tap (helper owns the subscription) ---
   /**
    * Subscribe to agent events. The helper installs one listener that
@@ -168,6 +175,7 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
     onFollowerMessage: options.onFollowerMessage,
     onFollowerAbort: options.onFollowerAbort,
     onFollowerCountChanged: options.onFollowerCountChanged,
+    onCherryHostEvent: options.onCherryHostEvent,
     browserAPI: options.browserAPI,
     browserTransport: options.browserTransport,
     vfs: options.vfs,

@@ -27,6 +27,8 @@ import type {
   PanelMessageSubscriber,
 } from '../../../chrome-extension/src/bridge-transport.js';
 import { isExtensionMessage } from '../../../chrome-extension/src/messages.js';
+import type { CherryHostTransport } from '../cdp/cherry-host-transport.js';
+import type { BrowserAPI } from '../cdp/index.js';
 import { createLogger } from '../core/index.js';
 import { SessionStore as AgentSessionStore } from '../core/session.js';
 import type { VirtualFS } from '../fs/index.js';
@@ -90,7 +92,7 @@ import {
 } from './new-session.js';
 import { flushCredentialsToWorker, resolveDefaultModel } from './onboarding-helpers.js';
 import type { PageFollowerTrayHandle } from './page-follower-tray.js';
-import { startPageFollowerTray } from './page-follower-tray.js';
+import { CHERRY_RUNTIME_TAG, startPageFollowerTray } from './page-follower-tray.js';
 import type { PageLeaderTrayHandle, StartPageLeaderTrayOptions } from './page-leader-tray.js';
 import { startPageLeaderTray } from './page-leader-tray.js';
 import {
@@ -101,6 +103,7 @@ import {
   resolveModelById,
   saveOAuthAccount,
 } from './provider-settings.js';
+import { canonicalRuntimeId } from './runtime-identity.js';
 import {
   getElectronOverlayInitialTab,
   isElectronOverlaySetTabMessage,
@@ -1841,16 +1844,27 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // `CDPClient` is still in `disconnected` state at that moment, the
   // send throws "CDP client is not connected" and the agent sees
   // confusing errors for `playwright`, `open`, etc.
-  const browser = new BrowserAPI();
-  const realCdpTransport = browser.getTransport();
-  try {
-    await browser.connect();
-  } catch (err) {
-    log.warn(
-      'Initial CDP connect failed; worker-forwarded commands will retry on demand',
-      err instanceof Error ? err.message : String(err)
-    );
+  let browser: BrowserAPI;
+  let cherryJoinUrl: string | undefined;
+  let cherryTransport: CherryHostTransport | undefined;
+  if (runtimeMode === 'cherry') {
+    const { setupCherryFollower } = await import('./main-cherry.js');
+    const cherry = await setupCherryFollower();
+    browser = cherry.browser;
+    cherryJoinUrl = cherry.joinUrl;
+    cherryTransport = cherry.transport;
+  } else {
+    browser = new BrowserAPI();
+    try {
+      await browser.connect();
+    } catch (err) {
+      log.warn(
+        'Initial CDP connect failed; worker-forwarded commands will retry on demand',
+        err instanceof Error ? err.message : String(err)
+      );
+    }
   }
+  const realCdpTransport = browser.getTransport();
 
   // Expose the page-side BrowserAPI so the OAuth intercept launcher
   // (active-transport.ts) can resolve a CDP transport from the main
@@ -2572,7 +2586,7 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
         'slicc.leaderTrayFollowers',
         JSON.stringify(
           followerPeers.map((p) => ({
-            runtimeId: p.bootstrapId,
+            runtimeId: canonicalRuntimeId(p.bootstrapId),
             runtime: p.runtime,
             connectedAt: p.connectedAt ?? undefined,
           }))
@@ -2580,6 +2594,8 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       );
     },
     sendWebhookEvent: (id, headers, body) => client.sendWebhookEvent(id, headers, body),
+    onCherryHostEvent: (runtimeId, name, detail) =>
+      client.sendCherryHostEvent(runtimeId, name, detail),
     onAgentEvent: (handler) => agentHandle.onEvent(handler),
     browserAPI: browser,
     browserTransport: realCdpTransport,
@@ -2595,7 +2611,7 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   const wireLeaderHooks = (handle: PageLeaderTrayHandle): void => {
     setConnectedFollowersGetter(() =>
       handle.peers.getPeers().map((p) => ({
-        runtimeId: p.bootstrapId,
+        runtimeId: canonicalRuntimeId(p.bootstrapId),
         runtime: p.runtime,
         connectedAt: p.connectedAt ?? undefined,
       }))
@@ -2679,6 +2695,13 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       // non-transferable WebRTC resources and live on the page.
       leaveTray: async ({ workerBaseUrl, requestId }) =>
         await performTrayLeaveLocally({ workerBaseUrl, requestId }),
+      // Worker-side `cherry-emit` bridges here so a cone → host
+      // `slicc.event` reaches the page-side LeaderSyncManager. Reads the
+      // live `pageLeaderTray` binding so it picks up a leader started
+      // after install; returns false when no leader is active (the
+      // command already gates on a connected cherry runtime).
+      emitCherrySliccEvent: (runtimeId, name, detail) =>
+        pageLeaderTray?.sync.emitCherrySliccEvent(runtimeId, name, detail) ?? false,
       // Bridge remote (follower) browser targets to the worker-side
       // playwright-cli. The worker's BrowserAPI has no trayTargetProvider
       // so listAllTargets() falls back to local CDP only; this callback
@@ -2836,6 +2859,39 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
           });
         }
       })();
+    } else if (runtimeMode === 'cherry' && cherryJoinUrl) {
+      pageFollowerTray = startPageFollowerTray({
+        joinUrl: cherryJoinUrl,
+        runtime: CHERRY_RUNTIME_TAG,
+        onSnapshot: (messages) => layout.panels.chat.loadMessages(messages),
+        onUserMessage: (text, _messageId, _scoopJid, attachments) =>
+          layout.panels.chat.addUserMessage(text, attachments),
+        onStatus: (status) => layout.panels.chat.setProcessing(status === 'processing'),
+        // Outbound cone → host bridge: the leader's `cherry-emit` lands here as a
+        // `cherry.slicc_event`; forward it to the host page's `onSliccEvent` hook
+        // via the iframe transport. The iframe only ever lends its own single
+        // host page, so no target needs to be disambiguated on this side.
+        onCherrySliccEvent: (name, detail) => cherryTransport?.emitSliccEventToHost(name, detail),
+        setChatAgent: (agent) => layout.panels.chat.setAgent(agent),
+        browserAPI: browser,
+        addSprinkle: (name, title, element, zone, options) =>
+          layout.addSprinkle(
+            name,
+            title,
+            element,
+            zone as 'primary' | 'drawer' | undefined,
+            options
+          ),
+        removeSprinkle: (name) => layout.removeSprinkle(name),
+      });
+      // Inbound host → cone bridge: the host page's `handle.emitHostEvent` posts
+      // a `host.event` to the iframe transport; forward it to the leader as a
+      // `cherry.host_event` so it surfaces as a `cherry` lick on the cone. Read
+      // `currentSync` lazily so a reconnect (new sync instance) still routes.
+      if (cherryTransport) {
+        cherryTransport.onHostEvent = (name, detail) =>
+          pageFollowerTray?.currentSync?.sendCherryHostEvent(name, detail);
+      }
     } else if (storedJoinUrl) {
       pageFollowerTray = startPageFollowerTray({
         joinUrl: storedJoinUrl,

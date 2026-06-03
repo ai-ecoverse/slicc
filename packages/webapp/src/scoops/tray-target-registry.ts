@@ -41,6 +41,8 @@ export class TrayTargetRegistry {
           title: t.title,
           url: t.url,
           isLocal: false,
+          kind: t.kind ?? 'browser',
+          capabilities: t.capabilities,
         });
       }
     }

@@ -127,3 +127,20 @@ describe('formatLickEventForCone', () => {
     expect(out!.content).toContain('[Sprinkle Event: welcome]');
   });
 });
+
+describe('cherry lick formatting', () => {
+  it('formats a cherry host event for the cone', () => {
+    const formatted = formatLickEventForCone({
+      type: 'cherry',
+      cherryName: 'checkout-complete',
+      cherryRuntimeId: 'follower-abc',
+      cherryOrigin: 'https://shop.example',
+      timestamp: new Date().toISOString(),
+      body: { orderId: 42 },
+    } as never);
+    expect(formatted).not.toBeNull();
+    expect(formatted!.label).toBe('Cherry Event');
+    expect(formatted!.content).toContain('checkout-complete');
+    expect(formatted!.content).toContain('shop.example');
+  });
+});

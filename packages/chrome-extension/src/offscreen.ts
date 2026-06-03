@@ -51,6 +51,7 @@ import {
 } from '../../../packages/webapp/src/scoops/tray-runtime-config.js';
 import { startFollowerWithAutoReconnect } from '../../../packages/webapp/src/scoops/tray-webrtc.js';
 import { getApiKey } from '../../../packages/webapp/src/ui/provider-settings.js';
+import { canonicalRuntimeId } from '../../../packages/webapp/src/ui/runtime-identity.js';
 import { initTelemetry } from '../../../packages/webapp/src/ui/telemetry.js';
 import { applyTrayRuntimeUpdate as applyTrayRuntimeUpdateHelper } from './apply-tray-runtime-update.js';
 import {
@@ -322,7 +323,7 @@ async function init(): Promise<void> {
           onConnected: (connection) => {
             log.info('Extension follower connected', { trayId: connection.trayId });
             detachSync();
-            const runtimeId = `follower-${connection.bootstrapId}`;
+            const runtimeId = canonicalRuntimeId(connection.bootstrapId);
             // Track our sprinkle bridge ahead of time so the FollowerSyncManager
             // callbacks can forward `sprinkles.list` / `sprinkle.update` to the
             // panel without a forward declaration. Bind is wrapped in a closure

@@ -16,6 +16,7 @@ SLICC runs in multiple runtime environments ("floats"):
   - `SLICC_TRAY_WORKER_BASE_URL` env drives `/api/runtime-config`
   - Substrate abstraction: `SandboxSubstrate` interface lives in `@slicc/cloud-core` (`packages/cloud-core/src/substrate.ts`); MVP impl at `packages/cloud-core/src/substrates/e2b.ts`. Node-server and the worker both consume cloud-core; `packages/node-server/src/cloud/` is thin adapter glue.
   - Template: `packages/dev-tools/e2b-template/` — `template.ts` (e2b TypeScript template definition), `start.sh`, `scripts/build-template.sh`, `scripts/verify-template.sh`, `runtime-package.json`, and `README.md`.
+- **Cherry (embedded follower garnish)**: a third-party host page embeds the `@ai-ecoverse/cherry` SDK (`mountSlicc`), which mounts the webapp in an iframe with `?cherry=1` (`runtime=cherry` in `runtime-mode.ts`). That follower lends the host page to a remote cloud-cone leader as a capability-limited browser target over cooperative, postMessage-backed **synthetic CDP** — the leader can navigate / screenshot / open-url on the host page but never drive raw `Network.*`. The follower iframe uses `CherryHostTransport` (the third `CDPTransport`). The SDK **embeds only**: the host (or its backend) supplies a ready tray join URL as the required `joinToken`, and the follower embeds against that already-provisioned leader. Creating/provisioning a cloud cone from the SDK is out of scope (future work). See `packages/cherry/CLAUDE.md` and the synthetic-CDP matrix below.
 
 ## Layer Stack Table
 
@@ -43,18 +44,20 @@ SLICC runs in multiple runtime environments ("floats"):
 
 ### packages/webapp/src/cdp/ — Chrome DevTools Protocol
 
-| File                              | Purpose                                                                                                                                                                                                                     |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `browser-api.ts`                  | High-level Playwright-inspired API (listPages, navigate, screenshot, evaluate, click, type, waitForSelector, getAccessibilityTree); used by the `playwright-cli` shell command path and related browser automation commands |
-| `cdp-client.ts`                   | WebSocket-based CDP client (CLI mode, connects to `ws://localhost:5710/cdp`)                                                                                                                                                |
-| `debugger-client.ts`              | Chrome debugger API client (extension mode, uses `chrome.debugger`); adds agent-created tabs to "slicc" tab group                                                                                                           |
-| `har-recorder.ts`                 | HAR 1.2 recorder for network traffic; saves snapshots to VFS on navigation                                                                                                                                                  |
-| `transport.ts`                    | CDPTransport interface (abstracts CDP/debugger implementations)                                                                                                                                                             |
-| `normalize-accessibility-text.ts` | Accessibility tree text normalization utilities                                                                                                                                                                             |
-| `index.ts`                        | Re-exports + auto-selects transport based on extension detection                                                                                                                                                            |
-| `types.ts`                        | TargetInfo, PageInfo, EvaluateOptions, AccessibilityNode, etc.                                                                                                                                                              |
-| `offscreen-cdp-proxy.ts`          | CDPTransport over chrome.runtime messages (offscreen → service worker → chrome.debugger)                                                                                                                                    |
-| `panel-cdp-proxy.ts`              | CDPTransport for side panel terminal (panel → offscreen → service worker → chrome.debugger)                                                                                                                                 |
+| File                              | Purpose                                                                                                                                                                                                                                                                                                          |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `browser-api.ts`                  | High-level Playwright-inspired API (listPages, navigate, screenshot, evaluate, click, type, waitForSelector, getAccessibilityTree); used by the `playwright-cli` shell command path and related browser automation commands                                                                                      |
+| `cdp-client.ts`                   | WebSocket-based CDP client (CLI mode, connects to `ws://localhost:5710/cdp`)                                                                                                                                                                                                                                     |
+| `debugger-client.ts`              | Chrome debugger API client (extension mode, uses `chrome.debugger`); adds agent-created tabs to "slicc" tab group                                                                                                                                                                                                |
+| `har-recorder.ts`                 | HAR 1.2 recorder for network traffic; saves snapshots to VFS on navigation                                                                                                                                                                                                                                       |
+| `transport.ts`                    | CDPTransport interface (abstracts CDP/debugger implementations)                                                                                                                                                                                                                                                  |
+| `normalize-accessibility-text.ts` | Accessibility tree text normalization utilities                                                                                                                                                                                                                                                                  |
+| `index.ts`                        | Re-exports + auto-selects transport based on extension detection                                                                                                                                                                                                                                                 |
+| `types.ts`                        | TargetInfo, PageInfo, EvaluateOptions, AccessibilityNode, etc.                                                                                                                                                                                                                                                   |
+| `offscreen-cdp-proxy.ts`          | CDPTransport over chrome.runtime messages (offscreen → service worker → chrome.debugger)                                                                                                                                                                                                                         |
+| `panel-cdp-proxy.ts`              | CDPTransport for side panel terminal (panel → offscreen → service worker → chrome.debugger)                                                                                                                                                                                                                      |
+| `cherry-host-transport.ts`        | **Third** CDPTransport — synthetic CDP over postMessage to the `@ai-ecoverse/cherry` host SDK (`window.parent`). Runs in the `?cherry=1` follower iframe. Synthesizes session lifecycle locally; synthetic ids `cherry-target`/`cherry-session`/`cherry-frame`/`cherry-loader`. See the translation matrix below |
+| `cherry-host-protocol.ts`         | Canonical cherry envelope contract + three-factor `acceptEnvelope` gate (origin allowlist + source identity + `channelId` nonce). `packages/cherry/src/protocol.ts` is a structural mirror kept in sync                                                                                                          |
 
 ### packages/webapp/src/kernel/ — Kernel Host (worker-resident agent engine)
 
@@ -430,6 +433,48 @@ Sprinkle .shtml files live in the **leader's** VFS only — followers see them v
 - When the leader's `SprinkleManager.sendToSprinkle(name, data)` runs, `LeaderSyncManager.broadcastSprinkleUpdate(name, data)` mirrors the payload to every follower as `sprinkle.update`.
 
 The follower's rendered sprinkle has **no VFS access** to the leader. Both follower implementations stub the file-IO bridge methods — `readFile`, `writeFile`, `readDir`, `stat`, `mkdir`, `rm`, and `screenshot` reject with descriptive errors; `exists` returns `Promise.resolve(false)` so feature-detection paths don't throw. See `SprinkleFollowerController.createBridge` (TS) and `SprinkleWebView.bridgeJS` (iOS). Sprinkles that rely on file IO should feature-detect via `exists` and degrade.
+
+## Cherry (Embedded Follower) Synthetic-CDP Architecture
+
+A third-party host page embeds `@ai-ecoverse/cherry`'s `mountSlicc`, which mounts the webapp in an iframe (`?cherry=1`). The follower in that iframe lends the host page to a remote cloud-cone leader as a **capability-limited browser target** over cooperative, postMessage-backed **synthetic CDP**. There is no WebSocket and no `chrome.debugger`; the iframe-side `CherryHostTransport` is a third `CDPTransport`.
+
+### Topology
+
+```text
+[ third-party host page ] ──@ai-ecoverse/cherry SDK── postMessage ──> [ ?cherry=1 follower iframe ]
+   createCdpHostHandler        (cherry envelope         CherryHostTransport (CDPTransport)
+   (host-realm execution)       protocol + 3-factor      → BrowserAPI → tray follower
+                                acceptEnvelope gate)      → remote cloud-cone LEADER drives it
+```
+
+- **Handshake**: the iframe sends `handshake.hello` with a `cherry-<uuid>` `channelId`; the host SDK replies `handshake.welcome` carrying the ready `joinUrl` the host supplied via the required `joinToken`. The follower embeds against that already-provisioned leader.
+- **Embedding only**: cone creation/provisioning from the SDK is out of scope (future work). The host (or its backend) is responsible for obtaining the tray join URL; the SDK never calls `/api/cloud/*` (that would be a cross-origin third-party `Authorization` header, and a third-party IMS token fails the cloud proxy's `validateBearer`).
+- **Three-factor gate** (`acceptEnvelope`): every inbound message must pass (1) origin allowlist, (2) `MessageEvent.source` identity, (3) `channelId` nonce, before any synthetic CDP is acted on.
+- **Two-tier capability gating**: the host's `capabilities` (`navigate` / `screenshot` / `openUrl`) gate side effects that escape the page sandbox and fail closed in `createCdpHostHandler`; DOM read/query + `Input` (within the page) are the baseline driveable contract, authorized upstream per-domain by `onPermissionRequest` at the mount layer.
+
+### CDP translation matrix
+
+CDP methods fall into three buckets. **Synthesized in-transport** are answered locally by `CherryHostTransport.handleSynthetic` (never cross postMessage). **Host-realm** are forwarded to the host SDK and run via `createCdpHostHandler` on the host page. **Rejected** throw `CherryUnsupportedError` (CDP error code `-32601`); domain permission denials use the same `-32601`.
+
+| CDP method                                                                  | Where it runs                | Notes                                                                                                                        |
+| --------------------------------------------------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `Target.getTargets` / `attachToTarget` / `detachFromTarget` / `closeTarget` | Synthesized in-transport     | One synthetic page target `cherry-target`; attach returns session `cherry-session`                                           |
+| `Page.enable` / `Runtime.enable` / `DOM.enable` / `Page.bringToFront`       | Synthesized in-transport     | Resolve `{}` to satisfy `BrowserAPI` session setup                                                                           |
+| `Page.getFrameTree`                                                         | Synthesized in-transport     | Synthetic frame `cherry-frame` / loader `cherry-loader` at the host origin                                                   |
+| `Runtime.createIsolatedWorld`                                               | Synthesized in-transport     | Returns `executionContextId: 1`                                                                                              |
+| `Page.frameNavigated` / `Page.loadEventFired`                               | Emitted in-transport (event) | Synthesized after a `Page.navigate` resolves so `BrowserAPI.navigate()` doesn't hang                                         |
+| `Runtime.evaluate`                                                          | Host realm                   | Indirect `eval` in the host page global; governed by the **host page's CSP** (throws → `exceptionDetails`)                   |
+| `DOM.getDocument` / `DOM.querySelector` / `DOM.getBoxModel`                 | Host realm                   | Node ids minted host-side; `getBoxModel` throws unsupported when the node has no rect                                        |
+| `Input.dispatchMouseEvent` / `Input.dispatchKeyEvent`                       | Host realm                   | Baseline driveable contract (clicks/keys within the page)                                                                    |
+| `Page.captureScreenshot`                                                    | Host realm                   | Only under the `'html2canvas'` strategy (best-effort DOM raster, lazily imported); `'none'` → rejected `-32601`              |
+| `Page.navigate`                                                             | Host realm (capability)      | Only when `capabilities.navigate`; else rejected. Returns `{ frameId: 'cherry-frame', loaderId: 'cherry-loader' }`           |
+| `Target.createTarget`                                                       | Host realm (capability)      | Only when `capabilities.openUrl`; calls the host `onOpenUrl` hook and returns `{ targetId: 'cherry-opened' }`; else rejected |
+| `Network.*`                                                                 | Rejected (`-32601`)          | **Never available on a cherry target.** No network domain exists; the advertised `network` capability is always `false`      |
+| Any other method                                                            | Rejected (`-32601`)          | `CherryUnsupportedError` — Cherry implements no escape hatch                                                                 |
+
+Because a cherry target has no `Network.*` domain, it can never serve a cookie/storage **teleport**. Both teleport selection paths exclude it: auto-selection via `getBestFollowerForTeleport` (`canRuntimeServeTeleport`) and the explicit `teleport --runtime <id>` path, which is gated at arm time in `playwright-command.ts` — a runtime advertising `CHERRY_RUNTIME_TAG` is rejected before any watcher is created.
+
+The iOS follower cannot host a cherry page; it mirrors the cherry target's `kind`/`capabilities` on `RemoteTargetInfo` and treats the `cherry.slicc_event` leader message as a documented no-op (logs and ignores). See `packages/ios-app/CLAUDE.md`.
 
 ## Data Flow Diagrams
 

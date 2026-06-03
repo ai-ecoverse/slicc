@@ -5,7 +5,10 @@ import {
   createFollowerSyncChannel,
   createLeaderSyncChannel,
   type FollowerToLeaderMessage,
+  isCherryHostEventMessage,
+  isCherrySliccEventMessage,
   type LeaderToFollowerMessage,
+  type RemoteTargetInfo,
   reassembleCDPResponse,
   reassembleSnapshot,
   sendCDPResponse,
@@ -717,6 +720,44 @@ describe('tray-sync-protocol', () => {
       expect(result).not.toBeNull();
       expect(result!.messages).toEqual(messages);
       expect(result!.scoopJid).toBe('test-scoop');
+    });
+  });
+
+  describe('cherry target tagging', () => {
+    it('RemoteTargetInfo carries kind and capabilities', () => {
+      const t: RemoteTargetInfo = {
+        targetId: 't1',
+        title: 'Host',
+        url: 'https://host.example',
+        kind: 'cherry',
+        capabilities: { navigate: true, network: false, screenshot: true },
+      };
+      expect(t.kind).toBe('cherry');
+      expect(t.capabilities?.network).toBe(false);
+    });
+
+    it('isCherrySliccEventMessage narrows the union', () => {
+      expect(
+        isCherrySliccEventMessage({
+          type: 'cherry.slicc_event',
+          targetId: 't1',
+          name: 'open-url',
+          detail: { url: 'https://x' },
+        })
+      ).toBe(true);
+      expect(isCherrySliccEventMessage({ type: 'cdp.request' })).toBe(false);
+    });
+
+    it('isCherryHostEventMessage narrows the union', () => {
+      expect(
+        isCherryHostEventMessage({
+          type: 'cherry.host_event',
+          targetId: 't1',
+          name: 'checkout',
+          detail: {},
+        })
+      ).toBe(true);
+      expect(isCherryHostEventMessage({ type: 'cherry.slicc_event' })).toBe(false);
     });
   });
 });

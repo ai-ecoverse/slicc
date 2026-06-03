@@ -48,10 +48,26 @@ export interface WorkerEnv {
   CONE_CAP_RUNNING?: string;
   CONE_CAP_PAUSED?: string;
   ALLOWED_CLOUD_DASHBOARD_ORIGINS?: string;
+  /** Space-separated origins permitted to frame the `?cherry=1` SPA. Empty = deny. */
+  ALLOWED_CHERRY_HOST_ORIGINS?: string;
 }
 
-function serveSPA(request: Request, env: WorkerEnv): Promise<Response> {
-  return env.ASSETS.fetch(request);
+async function serveSPA(request: Request, env: WorkerEnv): Promise<Response> {
+  const res = await env.ASSETS.fetch(request);
+  const url = new URL(request.url);
+  const out = new Response(res.body, res); // clone for mutable headers
+
+  if (url.searchParams.get('cherry') === '1') {
+    const allowed = (env.ALLOWED_CHERRY_HOST_ORIGINS ?? '').trim();
+    const ancestors = allowed.length > 0 ? allowed : "'none'";
+    out.headers.set('Content-Security-Policy', `frame-ancestors ${ancestors}`);
+    // Cherry and non-cherry responses must never share a cache entry.
+    out.headers.set('Cache-Control', 'no-store');
+    out.headers.set('Vary', 'Sec-Fetch-Dest');
+  } else {
+    out.headers.set('Content-Security-Policy', "frame-ancestors 'none'");
+  }
+  return out;
 }
 const OAUTH_RELAY_HTML = (allowedOrigins: string): string =>
   `<!DOCTYPE html>

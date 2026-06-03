@@ -83,6 +83,11 @@
     "packages/cloudflare-worker": {
       "entry": ["src/index.ts", "tests/**/*.test.ts"],
       "project": ["src/**/*.ts", "tests/**/*.ts"]
+    },
+    "packages/cherry": {
+      "entry": ["src/index.ts", "tests/**/*.test.ts"],
+      "project": ["src/**/*.ts", "tests/**/*.ts"],
+      "ignoreDependencies": ["jsdom", "@types/jsdom"]
     }
   }
 }

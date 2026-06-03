@@ -25,10 +25,12 @@ import { LeaderSyncManager } from '../../webapp/src/scoops/tray-leader-sync.js';
 import type { SprinkleSummary } from '../../webapp/src/scoops/tray-sync-protocol.js';
 import { LeaderTrayPeerManager } from '../../webapp/src/scoops/tray-webrtc.js';
 import type { ChannelMessage } from '../../webapp/src/scoops/types.js';
+import { setCherryEmitter } from '../../webapp/src/shell/supplemental-commands/cherry-emit-command.js';
 import {
   setConnectedFollowersGetter,
   setTrayResetter,
 } from '../../webapp/src/shell/supplemental-commands/host-command.js';
+import { canonicalRuntimeId } from '../../webapp/src/ui/runtime-identity.js';
 import type { AgentEvent, ChatMessage } from '../../webapp/src/ui/types.js';
 import type { OffscreenLeaderSyncBridgeHandle } from './leader-sync-bridge.js';
 import type { LeaderTrayResetRequestMsg, LeaderTrayResetResponseMsg } from './messages.js';
@@ -233,6 +235,12 @@ export function startExtensionLeaderTray(
       const jid = getActiveJid();
       if (jid) orchestrator.stopScoop(jid);
     },
+    // Cherry host events route straight into the in-process LickManager via the
+    // orchestrator — no `lick-cherry-host-event` bridge hop, because the
+    // extension's lickManager is in-offscreen (parity with the `webhook.event`
+    // direct call below).
+    onCherryHostEvent: (cherryRuntimeId, name, detail) =>
+      orchestrator.handleCherryHostEvent(cherryRuntimeId, name, detail),
     browserAPI: browser,
     browserTransport: browser.getTransport?.() ?? undefined,
     vfs: sharedFs ?? undefined,
@@ -351,11 +359,17 @@ export function startExtensionLeaderTray(
   // future panel-realm caller.
   setConnectedFollowersGetter(() =>
     trayPeers.getPeers().map((p) => ({
-      runtimeId: p.bootstrapId,
+      runtimeId: canonicalRuntimeId(p.bootstrapId),
       runtime: p.runtime,
       connectedAt: p.connectedAt ?? undefined,
     }))
   );
+
+  // Outbound `cherry-emit` (cone → host `slicc.event`): the agent shell runs in
+  // this same offscreen realm as `sync`, so emit directly with no panel-RPC hop
+  // (the standalone float bridges worker→page instead). Mirror of the inbound
+  // `onCherryHostEvent` direct call.
+  setCherryEmitter((runtimeId, name, detail) => sync.emitCherrySliccEvent(runtimeId, name, detail));
 
   const resetSequence = async (): Promise<LeaderTrayRuntimeStatus> => {
     sync.stop();
@@ -373,7 +387,7 @@ export function startExtensionLeaderTray(
   // after construction mutates the live options.
   syncOptions.onFollowerCountChanged = (_count: number) => {
     const peers = trayPeers.getPeers().map((p) => ({
-      runtimeId: p.bootstrapId,
+      runtimeId: canonicalRuntimeId(p.bootstrapId),
       runtime: p.runtime,
       connectedAt: p.connectedAt ?? undefined,
     }));
@@ -459,6 +473,7 @@ export function startExtensionLeaderTray(
       trayPeers.stop();
       trayLeader.stop();
       setConnectedFollowersGetter(null);
+      setCherryEmitter(null);
       setTrayResetter(null);
       chrome.runtime.onMessage.removeListener(resetListener);
       leaderBridge.signalLeaderMode(false);
