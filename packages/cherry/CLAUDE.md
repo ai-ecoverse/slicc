@@ -154,6 +154,23 @@ exactly match where the webapp is served — a mismatch fails the three-factor
 server does not apply the `frame-ancestors` CSP (only the worker does), so local
 framing works without worker config.
 
+**The harness mirrors real embedder code.** `host.html` is authored exactly as a
+real consumer would write it — `import { mountSlicc } from '@ai-ecoverse/cherry'`.
+A real embedder `npm install`s the package and their bundler (or a CDN like
+esm.sh) resolves it plus its `html2canvas` dependency automatically. Since this
+SDK isn't published yet and the harness has no bundler, `host.html` carries an
+`importmap` (clearly labelled as plumbing) that maps the `@ai-ecoverse/cherry`
+specifier to the local `dist/` and the `html2canvas` specifier to the copy in the
+repo's `node_modules` — the same file a bundler would resolve. **Serve from the
+repo root** (`npx http-server . -p 8080`) so both relative map paths resolve.
+
+**Screenshots:** set the **screenshot** dropdown to `html2canvas` (it defaults to
+`none`) _before_ Mount — capabilities are fixed at mount time, so changing it
+afterward does nothing. The SDK is built with `tsc` (no bundling), so the
+screenshot path keeps a bare `await import('html2canvas')` (resolved per the
+import map above). Cherry's screenshot is `html2canvas` (best-effort DOM raster of
+`document.body`), not a pixel-level CDP capture.
+
 ## Related Guides
 
 - `packages/webapp/CLAUDE.md` — `CherryHostTransport`, the `?cherry=1` boot mode,

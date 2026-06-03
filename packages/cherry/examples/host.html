@@ -119,10 +119,36 @@
       <pre id="log"></pre>
     </main>
 
+    <!--
+      Harness plumbing — NOT something a real embedder writes.
+
+      A real embedder installs the SDK from npm and imports it by name:
+
+          import { mountSlicc } from '@ai-ecoverse/cherry';
+
+      Their bundler (or a CDN such as esm.sh) resolves the package and its
+      `html2canvas` dependency automatically — no import map required. This
+      throwaway harness instead loads the locally-built, not-yet-published
+      package, so the import map below points that same bare specifier at the
+      local `dist/`, and resolves the SDK's `html2canvas` dependency from the
+      repo's node_modules — the exact file a bundler would pull in.
+
+      Serve from the repo root so both paths resolve:  npx http-server . -p 8080
+    -->
+    <script type="importmap">
+      {
+        "imports": {
+          "@ai-ecoverse/cherry": "../dist/index.js",
+          "html2canvas": "../../../node_modules/html2canvas/dist/html2canvas.esm.js"
+        }
+      }
+    </script>
+
     <script type="module">
-      // Import the built SDK directly (run `npm run build -w @ai-ecoverse/cherry` first).
-      // Relative path works whether you serve from the repo root or from packages/cherry/.
-      import { mountSlicc } from '../dist/index.js';
+      // Authored exactly as a real embedder would import the SDK. (Run
+      // `npm run build -w @ai-ecoverse/cherry` first; the import map above maps
+      // this bare specifier to the local build.)
+      import { mountSlicc } from '@ai-ecoverse/cherry';
 
       const logEl = document.getElementById('log');
       const log = (...parts) => {
