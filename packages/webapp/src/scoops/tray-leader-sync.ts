@@ -74,6 +74,13 @@ export interface LeaderSyncManagerOptions {
    * host events are dropped (no cone-side delivery).
    */
   onCherryHostEvent?: (cherryRuntimeId: string | undefined, name: string, detail?: unknown) => void;
+  /**
+   * Invoked from `cleanupRemoteTransports` (follower disconnect) with the
+   * runtimeId whose page-side RemoteCDPTransports were just disconnected.
+   * The standalone page wires this to the remote-CDP bridge so its
+   * worker-facing session map drops matching sessions in sync. See #848.
+   */
+  onRemoteTransportsCleaned?: (runtimeId: string) => void;
 }
 
 /** Derived float type from the runtime string (e.g. 'slicc-standalone' → 'standalone'). */
@@ -870,6 +877,7 @@ export class LeaderSyncManager {
         log.debug('Cleaned up stale remote transport', { key });
       }
     }
+    this.options.onRemoteTransportsCleaned?.(runtimeId);
   }
 
   /**

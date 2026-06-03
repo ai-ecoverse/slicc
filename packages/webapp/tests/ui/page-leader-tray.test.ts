@@ -25,12 +25,32 @@ import type {
   LeaderTraySessionStore,
   LeaderTrayWebSocket,
 } from '../../src/scoops/tray-leader.js';
+import type { FollowerToLeaderMessage } from '../../src/scoops/tray-sync-protocol.js';
+import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
 import { startPageLeaderTray } from '../../src/ui/page-leader-tray.js';
 import type { AgentEvent } from '../../src/ui/types.js';
 
 // ---------------------------------------------------------------------------
 // Shared fakes
 // ---------------------------------------------------------------------------
+
+class CapturingChannel implements TrayDataChannelLike {
+  readyState = 'open';
+  private messageListeners: Array<(event: { data: string }) => void> = [];
+  addEventListener(type: string, listener: (...args: never[]) => void): void {
+    if (type === 'message') {
+      this.messageListeners.push(listener as (event: { data: string }) => void);
+    }
+  }
+  send(): void {}
+  close(): void {
+    this.readyState = 'closed';
+  }
+  simulate(msg: FollowerToLeaderMessage): void {
+    const data = JSON.stringify(msg);
+    for (const l of this.messageListeners) l({ data });
+  }
+}
 
 class MemorySessionStore implements LeaderTraySessionStore {
   value: LeaderTraySession | null = null;
@@ -340,5 +360,27 @@ describe('startPageLeaderTray', () => {
     expect(leaderStop).toHaveBeenCalledOnce();
     expect(peersStop).toHaveBeenCalledOnce();
     expect(syncStop).toHaveBeenCalledOnce();
+  });
+
+  it('threads onRemoteTransportsCleaned into the sync manager', () => {
+    const { fetchImpl, webSocketFactory } = makeLeaderFetch();
+    const onRemoteTransportsCleaned = vi.fn();
+    const opts = {
+      ...makeBaseOptions({ fetchImpl, webSocketFactory, store }),
+      onRemoteTransportsCleaned,
+    };
+    const handle = startPageLeaderTray(opts);
+
+    const channel = new CapturingChannel();
+    handle.sync.addFollower('b1', channel);
+    channel.simulate({
+      type: 'targets.advertise',
+      targets: [{ targetId: 'tab1', title: 'Tab', url: 'https://example.com' }],
+      runtimeId: 'follower-b1',
+    });
+    handle.sync.removeFollower('b1');
+    expect(onRemoteTransportsCleaned).toHaveBeenCalledWith('follower-b1');
+
+    handle.stop();
   });
 });

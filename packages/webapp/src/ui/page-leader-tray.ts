@@ -83,6 +83,7 @@ export interface StartPageLeaderTrayOptions {
   onFollowerMessage: LeaderSyncManagerOptions['onFollowerMessage'];
   onFollowerAbort: LeaderSyncManagerOptions['onFollowerAbort'];
   onFollowerCountChanged?: LeaderSyncManagerOptions['onFollowerCountChanged'];
+  onRemoteTransportsCleaned?: LeaderSyncManagerOptions['onRemoteTransportsCleaned'];
 
   // --- Bridge hop to worker LickManager (replaces the pre-regression direct call) ---
   /**
@@ -175,6 +176,7 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
     onFollowerMessage: options.onFollowerMessage,
     onFollowerAbort: options.onFollowerAbort,
     onFollowerCountChanged: options.onFollowerCountChanged,
+    onRemoteTransportsCleaned: options.onRemoteTransportsCleaned,
     onCherryHostEvent: options.onCherryHostEvent,
     browserAPI: options.browserAPI,
     browserTransport: options.browserTransport,
