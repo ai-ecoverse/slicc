@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeaderTrayRuntimeStatus } from '../../src/scoops/tray-leader.js';
 import { createStandalonePanelRpcHandlers } from '../../src/ui/panel-rpc-handlers.js';
 
@@ -328,5 +328,82 @@ describe('createStandalonePanelRpcHandlers — list-remote-targets', () => {
     const result = await handlers['list-remote-targets']!(undefined);
     expect(result.targets).toHaveLength(1);
     expect(result.targets[0].targetId).toBe('runtime-abc:tab-1');
+  });
+});
+
+describe('createStandalonePanelRpcHandlers — remote-cdp', () => {
+  const makeBridge = () => {
+    const calls: string[] = [];
+    return {
+      calls,
+      bridge: {
+        send: vi.fn(async (p: { method: string }) => {
+          calls.push(`send:${p.method}`);
+          return { echoed: p.method };
+        }),
+        subscribe: vi.fn(async () => {
+          calls.push('subscribe');
+          return { ok: true as const };
+        }),
+        unsubscribe: vi.fn(async () => {
+          calls.push('unsubscribe');
+          return { ok: true as const };
+        }),
+        detach: vi.fn(async () => {
+          calls.push('detach');
+          return { ok: true as const };
+        }),
+        openTab: vi.fn(async () => {
+          calls.push('openTab');
+          return { targetId: 'follower-1:new' };
+        }),
+        cleanupRuntime: vi.fn(),
+        disposeAll: vi.fn(),
+      },
+    };
+  };
+
+  it('routes remote-cdp-send to the bridge', async () => {
+    const { bridge } = makeBridge();
+    const handlers = createStandalonePanelRpcHandlers({ remoteCdp: bridge });
+    const result = await handlers['remote-cdp-send']!({
+      runtimeId: 'follower-1',
+      localTargetId: 'tgt-1',
+      method: 'Page.captureScreenshot',
+    });
+    expect(result).toEqual({ echoed: 'Page.captureScreenshot' });
+    expect(bridge.send).toHaveBeenCalledOnce();
+  });
+
+  it('routes subscribe / unsubscribe / detach / open-tab to the bridge', async () => {
+    const { bridge } = makeBridge();
+    const handlers = createStandalonePanelRpcHandlers({ remoteCdp: bridge });
+    expect(
+      await handlers['remote-cdp-subscribe']!({
+        runtimeId: 'f',
+        localTargetId: 't',
+        event: 'Page.loadEventFired',
+      })
+    ).toEqual({ ok: true });
+    expect(
+      await handlers['remote-cdp-unsubscribe']!({
+        runtimeId: 'f',
+        localTargetId: 't',
+        event: 'Page.loadEventFired',
+      })
+    ).toEqual({ ok: true });
+    expect(await handlers['remote-cdp-detach']!({ runtimeId: 'f', localTargetId: 't' })).toEqual({
+      ok: true,
+    });
+    expect(await handlers['remote-open-tab']!({ runtimeId: 'f', url: 'about:blank' })).toEqual({
+      targetId: 'follower-1:new',
+    });
+  });
+
+  it('rejects remote-cdp-send when no bridge is wired', async () => {
+    const handlers = createStandalonePanelRpcHandlers({});
+    await expect(
+      handlers['remote-cdp-send']!({ runtimeId: 'f', localTargetId: 't', method: 'Page.enable' })
+    ).rejects.toThrow(/remote-cdp bridge not available/);
   });
 });
