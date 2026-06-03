@@ -1,5 +1,5 @@
 /**
- * @slicc/cherry — embed a SLICC follower in an iframe on a host page and lend
+ * @ai-ecoverse/cherry — embed a SLICC follower in an iframe on a host page and lend
  * the host page to a remote cloud-cone leader as a driveable CDP target.
  */
 

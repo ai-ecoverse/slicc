@@ -2,7 +2,7 @@
 name: cherry
 description: |
   Use this when a cherry target is connected — a third-party host web page that
-  has embedded a SLICC follower via the @slicc/cherry SDK and lent itself to you
+  has embedded a SLICC follower via the @ai-ecoverse/cherry SDK and lent itself to you
   (a cloud-cone leader) as a driveable, capability-limited browser target. Covers
   what you can and cannot do with a cherry target (navigate / screenshot / open
   URL, NEVER raw network), the `cherry-emit` command for pushing host-page events,
@@ -13,7 +13,7 @@ allowed-tools: bash
 # Cherry
 
 A **cherry target** is a third-party web page that has embedded a SLICC follower
-in an iframe (the webapp loaded with `?cherry=1`) using the `@slicc/cherry` host
+in an iframe (the webapp loaded with `?cherry=1`) using the `@ai-ecoverse/cherry` host
 SDK. The host page lends itself to you over cooperative, postMessage-backed
 _synthetic_ CDP. You drive it exactly like any other browser target — the same
 `BrowserAPI` / `playwright-cli` / teleport surface you already use — but it is

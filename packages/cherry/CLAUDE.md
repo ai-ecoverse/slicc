@@ -4,7 +4,7 @@ This file covers the embedded-follower host SDK in `packages/cherry/`.
 
 ## Scope
 
-`@slicc/cherry` is a tiny, dependency-light host-side SDK that a **third-party
+`@ai-ecoverse/cherry` is a tiny, dependency-light host-side SDK that a **third-party
 web page** embeds. It mounts a SLICC follower in an iframe (the webapp loaded
 with `?cherry=1`) and lends the host page to a remote cloud-cone **leader** as a
 driveable, capability-limited CDP target — over cooperative, postMessage-backed
@@ -123,8 +123,8 @@ you change one, change the other.
 ## Build and test
 
 ```bash
-npm run build -w @slicc/cherry   # tsc -p tsconfig.json → dist/
-npm test -w @slicc/cherry        # vitest (jsdom)
+npm run build -w @ai-ecoverse/cherry   # tsc -p tsconfig.json → dist/
+npm test -w @ai-ecoverse/cherry        # vitest (jsdom)
 ```
 
 `mountSliccImpl` and `CherryHostTransport` both expose `__test_*` seams (e.g.
@@ -134,7 +134,7 @@ without a real cross-origin window.
 ### Manual end-to-end embed harness
 
 `examples/host.html` is a throwaway host page for exercising a real embed. It
-imports the built SDK (`../dist/index.js`), so run `npm run build -w @slicc/cherry`
+imports the built SDK (`../dist/index.js`), so run `npm run build -w @ai-ecoverse/cherry`
 first. Steps:
 
 1. `npm run dev` (webapp at `http://localhost:5710`); in that browser, avatar

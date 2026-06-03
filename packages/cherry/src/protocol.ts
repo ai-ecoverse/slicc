@@ -2,7 +2,7 @@
  * Cherry host protocol — standalone SDK mirror.
  *
  * This is a structural copy of the postMessage envelope contract between the
- * embedded SLICC follower (iframe) and the @slicc/cherry host SDK. The SDK must
+ * embedded SLICC follower (iframe) and the @ai-ecoverse/cherry host SDK. The SDK must
  * NOT import from @slicc/webapp (it ships independently to third-party origins),
  * so the shapes are duplicated here.
  *

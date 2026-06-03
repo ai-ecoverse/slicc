@@ -1,6 +1,6 @@
 /**
  * Cherry host protocol: the postMessage envelope contract between the embedded
- * SLICC follower (iframe) and the @slicc/cherry host SDK.
+ * SLICC follower (iframe) and the @ai-ecoverse/cherry host SDK.
  *
  * Security: every inbound message is validated by acceptEnvelope() against three
  * independent factors — origin allowlist, MessageEvent.source identity, and a

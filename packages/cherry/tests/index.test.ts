@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { mountSlicc } from '../src/index.js';
 
-describe('@slicc/cherry public surface', () => {
+describe('@ai-ecoverse/cherry public surface', () => {
   it('exports mountSlicc as a function', () => {
     expect(typeof mountSlicc).toBe('function');
   });

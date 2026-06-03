@@ -509,7 +509,7 @@ jobs:
           path: coverage/
           if-no-files-found: ignore
       - name: Build
-        run: npm run build -w @slicc/cherry
+        run: npm run build -w @ai-ecoverse/cherry
 
   swift-server:
     needs: [changes, lint]

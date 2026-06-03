@@ -1,6 +1,6 @@
 /**
  * Host-realm execution of the synthetic CDP subset Cherry supports.
- * Runs on the third-party host page inside @slicc/cherry.
+ * Runs on the third-party host page inside @ai-ecoverse/cherry.
  */
 
 export class CherryUnsupportedError extends Error {
