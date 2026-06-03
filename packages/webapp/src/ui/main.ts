@@ -41,6 +41,7 @@ import {
 } from '../fs/mount-picker-popup.js';
 import { recoverMounts } from '../fs/mount-recovery.js';
 import { getAllMountEntries } from '../fs/mount-table-store.js';
+import { type PanelRpcPushMsg, panelRpcChannelName } from '../kernel/panel-rpc.js';
 // Auto-discover and register all providers (built-in + external).
 // IMPORTANT: This import must also appear in packages/chrome-extension/src/offscreen.ts
 // — the extension agent engine runs in the offscreen document, not in this file.
@@ -103,6 +104,7 @@ import {
   resolveModelById,
   saveOAuthAccount,
 } from './provider-settings.js';
+import { createRemoteCdpPageBridge } from './remote-cdp-page-bridge.js';
 import { canonicalRuntimeId } from './runtime-identity.js';
 import {
   getElectronOverlayInitialTab,
@@ -2527,6 +2529,23 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   let pageLeaderTray: PageLeaderTrayHandle | null = null;
   let pageFollowerTray: PageFollowerTrayHandle | null = null;
 
+  // Remote-CDP driving bridge (issue #848): the kernel worker's BrowserAPI
+  // drives federated tray/cherry targets by tunneling CDP over panel-RPC
+  // to this page-side bridge, which owns the real RemoteCDPTransport via
+  // `pageLeaderTray.sync`. CDP events flow back as `remote-cdp-event`
+  // pushes on a dedicated channel instance (same instance-scoped name).
+  const remoteCdpPushChannel =
+    typeof BroadcastChannel === 'function'
+      ? new BroadcastChannel(panelRpcChannelName(instanceId))
+      : null;
+  const remoteCdpBridge = createRemoteCdpPageBridge({
+    getSync: () => pageLeaderTray?.sync ?? null,
+    postEvent: (payload) => {
+      const msg: PanelRpcPushMsg = { type: 'panel-rpc-push', op: 'remote-cdp-event', payload };
+      remoteCdpPushChannel?.postMessage(msg);
+    },
+  });
+
   /**
    * Build the full `StartPageLeaderTrayOptions` for the in-scope deps
    * (layout, client, sprinkleManager, browser, etc.). Used by the boot
@@ -2593,6 +2612,7 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
         )
       );
     },
+    onRemoteTransportsCleaned: (runtimeId) => remoteCdpBridge.cleanupRuntime(runtimeId),
     sendWebhookEvent: (id, headers, body) => client.sendWebhookEvent(id, headers, body),
     onCherryHostEvent: (runtimeId, name, detail) =>
       client.sendCherryHostEvent(runtimeId, name, detail),
@@ -2630,6 +2650,7 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
     setTrayResetter(null);
     layout.panels.chat.setOnLocalUserMessage(undefined);
     sprinkleManager.setSendToSprinkleHook(undefined);
+    remoteCdpBridge.disposeAll();
   };
 
   /**
@@ -2707,12 +2728,21 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       // so listAllTargets() falls back to local CDP only; this callback
       // fetches from the page-side BrowserAPI which is fully wired.
       listRemoteTargets: () => browser.listAllTargets(),
+      remoteCdp: remoteCdpBridge,
     }),
   });
   // Tear down on session reload so the handler doesn't outlive its
   // page (the channel would still receive requests and try to call
   // into a torn-down DOM).
-  window.addEventListener('beforeunload', () => stopPanelRpcHandler(), { once: true });
+  window.addEventListener(
+    'beforeunload',
+    () => {
+      stopPanelRpcHandler();
+      remoteCdpBridge.disposeAll();
+      remoteCdpPushChannel?.close();
+    },
+    { once: true }
+  );
 
   await sprinkleManager.refresh();
   layout.onSprinkleClose = (name) => sprinkleManager.close(name);
