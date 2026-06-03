@@ -31,7 +31,7 @@ name: Agentic Debt Triage
 
 on:
   schedule:
-    - cron: '0 5 * * *' # nightly at 05:00 UTC (offset from RUM's 03:00)
+    - cron: '33 5 * * *' # nightly at 05:33 UTC (off the congested top-of-hour; offset from RUM's 03:00)
   workflow_dispatch:
     inputs:
       sin:
