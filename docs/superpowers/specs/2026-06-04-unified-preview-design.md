@@ -46,7 +46,7 @@ The unified design fixes all of these at once by changing the question from "how
 
 ### Worker (Cloudflare)
 
-- `SessionTrayDurableObject` (`packages/cloudflare-worker/src/session-tray.ts`) holds the `TrayRecord` with **three capability tokens** today: `joinToken`, `controllerToken`, `webhookToken` (`shared.ts:127-140` factory). A _fourth_ `previewToken` slots in naturally.
+- `SessionTrayDurableObject` (`packages/cloudflare-worker/src/session-tray.ts`) holds the `TrayRecord` with **three top-level capability tokens** today: `joinToken`, `controllerToken`, `webhookToken` (`shared.ts:127-140` factory). The preview design adds a sibling **map** `previews: Record<previewToken, PreviewRecord>` (many tokens per tray — one per active `serve`) — _not_ a fourth singleton field. Each `previewToken` is minted from the same `createCapabilityToken(trayId)` factory.
 - The leader holds a **controller WebSocket** to the DO (`handleControllerAttach`, ~line 359). It already forwards `webhook.event` to the leader over this socket (`session-tray.ts:571`) — preview content uses the same mechanism with a new message pair.
 - Reclaim windows are fixed in `shared.ts:10-11`: **`TRAY_RECLAIM_TTL_MS = 1h` (desktop)**, **`HOSTED_TRAY_RECLAIM_TTL_MS = 30d` (hosted)**. Live previews' URL lifetime is bounded by this.
 - The worker has Static Assets via `env.ASSETS`, a SPA fallback, and CORS-aware routes including webhooks with `access-control-allow-origin: *` (`session-tray.ts:517,586,590`).
@@ -54,7 +54,7 @@ The unified design fixes all of these at once by changing the question from "how
 
 ### Webapp / leader
 
-- `LeaderSyncManager` (`packages/webapp/src/scoops/tray-leader-sync.ts`) handles the controller WS, broadcasts to followers, has `getConnectedFollowers()` (~line 827).
+- `LeaderSyncManager` (`packages/webapp/src/scoops/tray-leader-sync.ts`) handles the controller WS, broadcasts to followers, has `getConnectedFollowers()` (line 965).
 - The leader has direct VFS access via `VirtualFS` (LightningFS) — answering a `preview.request` requires only `vfs.readFile`/`stat`. Chunked-response packaging is already implemented in `tray-fs-handler.ts` (`handleReadFile`, `chunkContent` at 64 KB).
 - The page-side `LeaderSyncManager` is reachable from the kernel-worker via the existing **`panel-rpc` bridge** (`packages/webapp/src/kernel/panel-rpc.ts`) — proven by the `tray-reset` op.
 
@@ -109,7 +109,7 @@ The unified design fixes all of these at once by changing the question from "how
 
 For the **live-weave bridge**, see the _Bridge channel — opt-in live weaving_ section below.
 
-### URL scheme — wildcard subdomain (env-derived)
+### URL scheme — wildcard subdomain (lookup-table mapped)
 
 ```
 prod      https://<previewToken>.preview.sliccy.ai/<path>
@@ -117,7 +117,7 @@ staging   https://<previewToken>.preview.staging.sliccy.ai/<path>
                 └─ unguessable, DO-issued capability  └─ path forwarded to leader as-is
 ```
 
-The **preview host is derived from the tray's worker base URL**. A tray on `sliccy.ai` mints preview URLs under `*.preview.sliccy.ai`; a tray on `staging.sliccy.ai` (or whatever staging host the user's `VITE_WORKER_BASE_URL` points to) mints under `*.preview.staging.sliccy.ai`. This keeps a token minted on worker A from being served by worker B (different DurableObject namespaces) — a real risk for local dev pointed at staging while the spec defaults to prod.
+The **preview host is mapped from the tray's worker base URL via an explicit lookup table** — _not_ a hostname suffix-strip. Staging's mint API lives on `slicc-tray-hub-staging.minivelos.workers.dev` (per `tray-runtime-config.ts:4-5`), which has no string relationship to `preview.staging.sliccy.ai`. The mapping table (`PREVIEW_BASE_BY_WORKER`) is the canonical source of truth; full implementation is in the _Shared helper for URL construction_ section below. A tray minting on prod gets `*.preview.sliccy.ai`; a tray minting on the staging worker gets `*.preview.staging.sliccy.ai`. This keeps a token minted on worker A from being served by worker B (different DurableObject namespaces) — a real risk for local dev pointed at staging while the spec defaults to prod.
 
 The browser's URL-resolution rules then put **every** request — relative, root-absolute, lazy, dynamic — back on the same origin (`<previewToken>.preview.sliccy.ai`), so the worker sees it all. Root-absolute `/scripts.js` resolves to `<previewToken>.preview.sliccy.ai/scripts.js`, hits the worker, gets routed against the served root: solved.
 
@@ -666,13 +666,13 @@ The existing `--project` flag in `serve-command.ts` becomes a **no-op alias**: a
 - Per-request timeout (30 s) → 502 with no leader response.
 - CORS between preview subdomains: cross-preview reads denied (no `Access-Control-Allow-Origin`).
 - Mint API auth: requests with wrong/missing `controllerToken` → 403; requests against a tray that doesn't exist → 404.
-- Env-derived URL minting: tray on staging-worker-base-URL → staging preview host.
+- Lookup-table URL minting via `PREVIEW_BASE_BY_WORKER`: tray on `slicc-tray-hub-staging.minivelos.workers.dev` → preview URL on `preview.staging.sliccy.ai`; tray on `www.sliccy.ai` → `preview.sliccy.ai`; unmapped worker host → mint throws (no silent fallback).
 - Routes-mirror parity: `index.ts` + `tests/index.test.ts` + `tests/deployed.test.ts` agree on mint + revoke + list routes.
 - Coverage above floor (75% L/S, 65% B, 85% F).
 
 ### Webapp (leader side)
 
-- `preview.request` handler in both `page-leader-tray.ts` (standalone/cloud) and `extension-leader-tray.ts` (extension): security gate via `isPathWithinServedRoot`; reads chunked; returns 404 on miss; binary base64; UTF-8 path; 500 on read error; `preview.revoked` broadcast invalidates open follower tabs.
+- `preview.request` handler in both `page-leader-tray.ts` (standalone/cloud) and `extension-leader-tray.ts` (extension): security gate via `isPathWithinServedRoot`; reads chunked; returns 404 on miss; binary base64; UTF-8 path; 500 on read error; `preview.revoked` notice is logged leader-side (HTTP-only user-visible invalidation in Phase 1 — open follower tabs degrade on next asset fetch, not proactive close, per Decision #6).
 - `tray-open-preview` op — **three contexts**, all reach the same in-realm `LeaderSyncManager.broadcastPreviewOpen`:
   - **Standalone agent** (kernel worker): panel-RPC path resolves via the page handler against `pageLeaderTray.currentLeaderSync`.
   - **Extension agent** (offscreen kernel worker — the primary extension agent path): **in-realm direct call** via `getPreviewMinter()` (the `setPreviewMinter` hook registered by `extension-leader-tray.ts`, mirroring `setCherryEmitter` precedent). Critical: panel-RPC and `chrome.runtime.sendMessage` do NOT reach the offscreen from inside the offscreen — the in-realm hook is the only correct path here.
@@ -749,7 +749,7 @@ Phase 1b is _implementation-light_ but _coverage-broad_ — it's the unglamorous
 | 5   | Bridge v1 command surface | Full surface: `eval`, `setOuterHTML`, `inject`, `requestReload`, `host-event`. (Larger attack surface accepted; bridge is opt-in.)                                                                                                                                                                 |
 | 6   | Token revocation timing   | Phase 1. `serve --stop <token>` + `--list` + DO `revokePreview` deletion + `preview.revoked` controller-WS notice to the leader. Phase 1 invalidation is HTTP-only (URL stops working immediately; open tabs degrade on next asset fetch); proactive bridge `preview-stopped` tab close = Phase 2. |
 | 7   | `--project` deprecation   | No-op alias with obsolete warning; scrub references from docs/skills/examples (single grep pass).                                                                                                                                                                                                  |
-| 8   | Domain + staging DNS      | Prod `*.preview.sliccy.ai` + staging `*.preview.staging.sliccy.ai`; env-derived from tray worker base URL. Pre-Phase-1 infra prerequisite.                                                                                                                                                         |
+| 8   | Domain + staging DNS      | Prod `*.preview.sliccy.ai` + staging `*.preview.staging.sliccy.ai`; **mapped from tray worker base URL via an explicit `PREVIEW_BASE_BY_WORKER` lookup table** (NOT derived — staging mint host is `minivelos.workers.dev`). Pre-Phase-1 infra prerequisite: same-DO-namespace dual-zone binding.  |
 
 ## Risks
 
@@ -770,5 +770,5 @@ Phase 1b is _implementation-light_ but _coverage-broad_ — it's the unglamorous
 - **No placeholders.** All 8 open questions are now in the Decisions section with concrete outcomes. Remaining items (large-binary streaming, observability hooks) are explicitly Phase-2 follow-ups, not unfinished design.
 - **Internal consistency.** `preview.open` carries `{ url }` everywhere (TS protocol + iOS Swift). `previewToken` is DO-stored. `servedRoot` is on every leader-request. Bridge is opt-in (Cherry default-on). The `isPathWithinServedRoot` rename is consistent across security model + leader handler + testing. The `--project` no-op-with-warning behavior is consistent across `serve-command.ts` + docs scrub. Env-derived domain ties through URL scheme + worker routes + mint API.
 - **Scope.** Single feature; four phases with one parallel slice; each phase independently shippable. Phase 1b is the surface-area completeness slice the reviewer correctly flagged.
-- **Honest disclosure.** Seven risks acknowledged (worker capacity, TLS-termination trust delta, DNS/cert prerequisite incl. staging, Phase 3 deletion, extension wiring, iOS step, eval surface, LoC scale). The `eval`-in-v1 decision is documented as a deliberate trade against the reviewer's deferral recommendation, with mitigations.
+- **Honest disclosure.** Nine risks acknowledged (worker capacity, TLS-termination trust delta, DNS/cert prerequisite incl. staging dual-zone binding, Phase 3 deletion, extension three-context wiring, iOS step, eval surface, LoC scale, auto-enable failure-surfacing) + the closed token-host-parser footgun recap. The `eval`-in-v1 decision is documented as a deliberate trade against the reviewer's deferral recommendation, with mitigations.
 - **Reviewer cross-check.** All 7 blocking gaps addressed (Phase 1b, extension float, iOS step, `--project` deprecation, dev/staging DNS, controller-WS union extension, mint HTTP API). All 5 important non-blocking items addressed (gate function rename + tests, MIME/dir-index handling, timeouts, CORS, shareable-link matrix tightening). LoC estimate revised honestly. Reviewer's "ready after gaps" verdict is the bar this revision targets.
