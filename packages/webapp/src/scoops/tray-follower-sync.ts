@@ -618,6 +618,14 @@ export class FollowerSyncManager implements AgentHandle {
         this.executeLocalTabOpen(message.requestId, message.url);
         break;
       }
+      case 'preview.open': {
+        // Same semantics as tab.open for Phase 1: open the URL in a new tab.
+        // The preview-vs-tab distinction is informational — keeps the door
+        // open for preview-specific tab behavior in Phase 2 (e.g. an
+        // injected bridge channel) without re-routing through tab.open.
+        this.executeLocalTabOpen(message.requestId, message.url);
+        break;
+      }
       case 'tab.opened': {
         const resolver = this.tabOpenResolvers.get(message.requestId);
         if (resolver) {

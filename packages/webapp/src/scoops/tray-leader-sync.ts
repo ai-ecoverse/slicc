@@ -563,6 +563,16 @@ export class LeaderSyncManager {
     this.broadcastToAllFollowers(message);
   }
 
+  /**
+   * Tell every connected follower to open the worker-served preview URL.
+   * Phase 1: fire-and-forget; followers don't ack (no preview.opened reply).
+   */
+  broadcastPreviewOpen(url: string): void {
+    if (this.followers.size === 0) return;
+    const requestId = `prv-${crypto.randomUUID()}`;
+    this.broadcastToAllFollowers({ type: 'preview.open', requestId, url });
+  }
+
   /** Chunk size for sprinkle content responses. Mirrors snapshot chunking. */
   private static readonly SPRINKLE_CHUNK_SIZE = 32 * 1024; // 32 KB
   private static readonly SPRINKLE_CHUNK_THRESHOLD = 64 * 1024; // 64 KB

@@ -96,6 +96,7 @@ export type LeaderToFollowerMessage =
   | { type: 'tab.open'; requestId: string; url: string }
   | { type: 'tab.opened'; requestId: string; targetId: string }
   | { type: 'tab.open.error'; requestId: string; error: string }
+  | { type: 'preview.open'; requestId: string; url: string }
   | { type: 'fs.request'; requestId: string; request: TrayFsRequest }
   | { type: 'fs.response'; requestId: string; response: TrayFsResponse }
   | CherrySliccEventMessage
