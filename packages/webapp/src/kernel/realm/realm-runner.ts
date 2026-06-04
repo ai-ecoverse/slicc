@@ -100,8 +100,11 @@ export interface RunInRealmOptions {
    * Wave D1: forwarded to `RealmInitMsg.opfsMountDbName`. When set
    * (currently `'slicc-fs'` if `slicc_opfs_vfs === 'opfs'`), the
    * Python realm worker switches from the legacy `walkTree`/
-   * `writeBatch` copy path to `mountNativeFS` + `syncfs(true)`
-   * against the same OPFS subtree the kernel worker owns.
+   * `writeBatch` copy path to `pyodide.FS.mount(OPFS_SYNC_FS, …)`
+   * against the same OPFS subtree the kernel worker owns — the
+   * in-tree plugin builds the FS tree synchronously from a prewalk
+   * snapshot and queues OPFS mutations, which are drained via
+   * `flushOpfsRealmMounts` before `realm-done`.
    */
   opfsMountDbName?: string;
   /**

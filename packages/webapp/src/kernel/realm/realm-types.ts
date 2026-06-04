@@ -59,8 +59,11 @@ export interface RealmInitMsg {
    * Wave D1 (`slicc_opfs_vfs === 'opfs'`): when set, the Python
    * realm worker resolves each `pyodideMountDirs` entry against the
    * same-origin OPFS root at `<opfsMountDbName>/<vfsPath>` and mounts
-   * it via `pyodide.mountNativeFS` + `syncfs(true)` instead of
-   * issuing the legacy `vfs.walkTree` copy. The realm worker has
+   * it via `pyodide.FS.mount(OPFS_SYNC_FS, …)` instead of issuing
+   * the legacy `vfs.walkTree` copy — the in-tree plugin builds the
+   * FS tree synchronously from a prewalk snapshot and queues OPFS
+   * mutations, which are drained via `flushOpfsRealmMounts` /
+   * `flushPendingOpfsOps` before `realm-done`. The realm worker has
    * no `localStorage` shim, so the kernel side detects the flag and
    * passes the dbName through this field. Undefined → legacy copy.
    */
