@@ -44,6 +44,7 @@ import { createSayCommand } from './say-command.js';
 import { createScreencaptureCommand } from './screencapture-command.js';
 import { createSecretCommand } from './secret-command.js';
 import { createServeCommand } from './serve-command.js';
+import { createSliccFsCleanupCommand } from './slicc-fs-cleanup-command.js';
 import { createSprinkleCommand } from './sprinkle-command.js';
 import { createSqliteCommand } from './sqlite-command.js';
 import { createTestCommand } from './test-command.js';
@@ -142,6 +143,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createPsCommand({ processManager: options.processManager }),
     createKillCommand({ processManager: options.processManager }),
     createCherryEmitCommand({ registry: options.cherryRuntimeRegistry }),
+    createSliccFsCleanupCommand({ fs: options.fs }),
   ];
 
   if (options.fs) {
