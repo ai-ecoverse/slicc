@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FsError, type FsErrorCode } from '../../src/fs/types.js';
 import { resolveVfsBackendFromEnv, VirtualFS } from '../../src/fs/virtual-fs.js';
 
-describe('VirtualFS — backend flag plumbing (Wave A2)', () => {
+describe('VirtualFS — backend resolution (Wave F1)', () => {
   let vfs: VirtualFS;
   beforeEach(async () => {
     vfs = await VirtualFS.create({ dbName: 'test-vfs-backend', wipe: true });
@@ -12,39 +12,39 @@ describe('VirtualFS — backend flag plumbing (Wave A2)', () => {
     await new Promise((r) => setTimeout(r, 600));
   });
 
-  it("defaults to 'lfs' when no backend option and no localStorage flag is set", () => {
+  it("falls back to 'lfs' in Node test envs without OPFS support", () => {
+    // Wave F1: the `slicc_opfs_vfs` flag was removed; the resolver
+    // now capability-detects OPFS via `navigator.storage.getDirectory`.
+    // Node tests have no `navigator.storage`, so resolution falls
+    // through to the still-importable LFS backend (F2 deletes it).
     expect(vfs.backend).toBe('lfs');
   });
 
-  it("resolveVfsBackendFromEnv returns 'lfs' when localStorage has no flag", () => {
+  it("resolveVfsBackendFromEnv returns 'lfs' when navigator.storage is unavailable", () => {
     expect(resolveVfsBackendFromEnv()).toBe('lfs');
   });
 
-  it("resolveVfsBackendFromEnv returns 'opfs' when localStorage.slicc_opfs_vfs === 'opfs'", () => {
-    const store = new Map<string, string>([['slicc_opfs_vfs', 'opfs']]);
-    const original = (globalThis as { localStorage?: Storage }).localStorage;
-    Object.defineProperty(globalThis, 'localStorage', {
+  it("resolveVfsBackendFromEnv returns 'opfs' when navigator.storage.getDirectory exists", () => {
+    const original = (globalThis as { navigator?: unknown }).navigator;
+    Object.defineProperty(globalThis, 'navigator', {
       configurable: true,
       value: {
-        getItem: (k: string) => store.get(k) ?? null,
-        setItem: () => {},
-        removeItem: () => {},
-        clear: () => {},
-        key: () => null,
-        length: 0,
+        storage: {
+          getDirectory: () => Promise.resolve({}),
+        },
       },
     });
     try {
       expect(resolveVfsBackendFromEnv()).toBe('opfs');
     } finally {
-      Object.defineProperty(globalThis, 'localStorage', {
+      Object.defineProperty(globalThis, 'navigator', {
         configurable: true,
         value: original,
       });
     }
   });
 
-  it('an explicit backend option overrides the env flag', async () => {
+  it('an explicit backend option overrides env resolution', async () => {
     const lfsVfs = await VirtualFS.create({
       dbName: 'test-vfs-backend-explicit',
       wipe: true,

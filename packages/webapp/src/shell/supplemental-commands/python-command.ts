@@ -27,23 +27,31 @@ import { runInRealm } from '../../kernel/realm/realm-runner.js';
 import { stdinAsText } from '../just-bash-compat.js';
 
 /**
- * Wave D1: when `slicc_opfs_vfs === 'opfs'` the kernel worker's VFS
- * lives at `OPFS-root/slicc-fs/`. We pass the dbName through
+ * Wave D1 / F1: the kernel worker's VFS lives at
+ * `OPFS-root/slicc-fs/`. We pass the dbName through
  * `RealmInitMsg.opfsMountDbName` so the Python realm worker (a
- * separate `DedicatedWorker` without our localStorage shim) can
- * resolve the same OPFS subtree and `mountNativeFS` against it.
- * The dbName mirrors `Orchestrator`'s primary `VirtualFS.create({
- * dbName: 'slicc-fs' })` call site — kept in sync explicitly rather
- * than imported to avoid pulling the orchestrator into this command.
+ * separate `DedicatedWorker`) can resolve the same OPFS subtree
+ * and mount it via the in-tree `OPFS_SYNC_FS` plugin. The dbName
+ * mirrors `Orchestrator`'s primary `VirtualFS.create({ dbName:
+ * 'slicc-fs' })` call site — kept in sync explicitly rather than
+ * imported to avoid pulling the orchestrator into this command.
+ *
+ * Wave F1 removed the `slicc_opfs_vfs` boot flag: production
+ * always selects OPFS so the dbName is always set. The
+ * capability check exists only so Node-based test environments
+ * without `navigator.storage.getDirectory` fall through to the
+ * legacy `walkTree` sync path (same env-fallback used by
+ * `resolveVfsBackendFromEnv`).
  */
 const OPFS_KERNEL_DB_NAME = 'slicc-fs';
 
 function resolveOpfsMountDbName(): string | undefined {
   try {
-    const v = (globalThis as { localStorage?: Storage }).localStorage?.getItem('slicc_opfs_vfs');
-    if (v === 'opfs') return OPFS_KERNEL_DB_NAME;
+    const storage = (globalThis as { navigator?: { storage?: { getDirectory?: unknown } } })
+      .navigator?.storage;
+    if (typeof storage?.getDirectory === 'function') return OPFS_KERNEL_DB_NAME;
   } catch {
-    /* localStorage may be unavailable in some test contexts */
+    /* navigator may be unavailable in some test contexts */
   }
   return undefined;
 }

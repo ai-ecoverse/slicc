@@ -97,10 +97,9 @@ export interface RunInRealmOptions {
   /** Pyodide VFS sync directories — only consumed when `kind:'py'`. */
   pyodideMountDirs?: string[];
   /**
-   * Wave D1: forwarded to `RealmInitMsg.opfsMountDbName`. When set
-   * (currently `'slicc-fs'` if `slicc_opfs_vfs === 'opfs'`), the
-   * Python realm worker switches from the legacy `walkTree`/
-   * `writeBatch` copy path to `pyodide.FS.mount(OPFS_SYNC_FS, …)`
+   * Wave D1 / F1: forwarded to `RealmInitMsg.opfsMountDbName`.
+   * Always set to `'slicc-fs'` by the Python command after F1 — the
+   * Python realm worker uses `pyodide.FS.mount(OPFS_SYNC_FS, …)`
    * against the same OPFS subtree the kernel worker owns — the
    * in-tree plugin builds the FS tree synchronously from a prewalk
    * snapshot and queues OPFS mutations, which are drained via

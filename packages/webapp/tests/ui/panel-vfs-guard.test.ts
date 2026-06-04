@@ -1,9 +1,9 @@
 /**
- * Tests for the Wave B5 panel-VFS guard. Asserts the warning fires when
- * the side panel would construct a `VirtualFS` while
- * `slicc_opfs_vfs === 'opfs'` (offscreen-owns-OPFS regime), and stays
- * silent on the legacy LFS path so existing extension boots are
- * unaffected.
+ * Tests for the Wave B5 / F1 panel-VFS guard. Asserts the warning
+ * fires when the side panel would construct an OPFS-backed
+ * `VirtualFS` (offscreen-owns-OPFS regime), and stays silent on the
+ * still-importable LFS shadow path that the panel uses for
+ * mount-table-recovery and other legacy consumers.
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -21,11 +21,11 @@ describe('warnIfPanelVfsConstructionUnderOpfs (Wave B5)', () => {
     expect(logger.warn).toHaveBeenCalledTimes(1);
     const [message] = logger.warn.mock.calls[0]!;
     expect(message).toContain('Wave B5');
-    expect(message).toContain('slicc_opfs_vfs');
+    expect(message).toContain('OPFS-backed');
     expect(message).toContain('Offscreen');
   });
 
-  it("stays silent on the legacy 'lfs' backend", () => {
+  it("stays silent on the 'lfs' shadow backend", () => {
     const logger = makeLogger();
     const fired = warnIfPanelVfsConstructionUnderOpfs('lfs', logger);
     expect(fired).toBe(false);

@@ -912,7 +912,7 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
     layout.panels.fileBrowser.setFs(remoteVfs);
     previewVfsReader = remoteVfs;
     writableFs = remoteWritableVfs;
-    log.info('File browser + preview-vfs wired to worker VFS RPC (slicc_opfs_vfs=opfs)');
+    log.info('File browser + preview-vfs wired to worker VFS RPC');
   }
 
   // Mount the panel terminal as a `RemoteTerminalView` backed by the
@@ -2265,12 +2265,10 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
     if (opfsLeader.isLeader) {
       const { createRemoteWritableVfsClient } = await import('../kernel/writable-vfs-client.js');
       writableFs = createRemoteWritableVfsClient({ transport: client.getTransport() });
-      log.info(
-        'File browser + preview-vfs + writable freezer wired to worker VFS RPC (slicc_opfs_vfs=opfs, leader)'
-      );
+      log.info('File browser + preview-vfs + writable freezer wired to worker VFS RPC (leader)');
     } else {
       log.info(
-        'File browser + preview-vfs wired to worker VFS RPC (slicc_opfs_vfs=opfs, follower; freezer uses LFS shadow)'
+        'File browser + preview-vfs wired to worker VFS RPC (follower; freezer uses LFS shadow)'
       );
     }
   }

@@ -1,11 +1,11 @@
 /**
  * VirtualFS — POSIX-like virtual filesystem.
  *
- * Backed by LightningFS (default, `backend: 'lfs'`) or by `@zenfs/core` over
- * `@zenfs/dom` `WebAccess` rooted at an OPFS subdirectory
- * (`backend: 'opfs'`). The OPFS path is gated behind the `slicc_opfs_vfs`
- * boot flag (defaults to LFS) — production behavior with the flag off is
- * byte-identical to before. See spec note d8860197-… for context.
+ * Backed by `@zenfs/core` over `@zenfs/dom` `WebAccess` rooted at an OPFS
+ * subdirectory (`backend: 'opfs'`, the production default). The legacy
+ * LightningFS backend (`backend: 'lfs'`) remains importable so test
+ * environments without OPFS support keep working until Wave F2 deletes
+ * it entirely; production browsers always select OPFS.
  *
  * This is the single unified filesystem used throughout the application:
  * - Shell operations (just-bash via VfsAdapter)
@@ -46,19 +46,20 @@ const MAX_SYMLINK_DEPTH = 10;
 export type VfsBackend = 'lfs' | 'opfs';
 
 /**
- * Page/worker-side boot flag (Wave A2). When set to `'opfs'`, calls to
- * `VirtualFS.create` without an explicit `backend` option pick the ZenFS
- * `WebAccess` backend over OPFS instead of LightningFS. Read from
- * `globalThis.localStorage` (the worker's localStorage shim is seeded
- * from the page snapshot in `kernel-worker.ts`, so this resolves
- * consistently on both sides).
+ * Resolve the default VFS backend (Wave F1). The `slicc_opfs_vfs`
+ * boot flag was removed — production always uses ZenFS `WebAccess`
+ * over OPFS. The capability check exists only so Node-based test
+ * environments without an OPFS polyfill transparently fall back to
+ * the still-importable LFS backend; browsers always select OPFS.
+ * Wave F2 deletes the LFS fallback path entirely.
  */
 export function resolveVfsBackendFromEnv(): VfsBackend {
   try {
-    const v = (globalThis as { localStorage?: Storage }).localStorage?.getItem('slicc_opfs_vfs');
-    if (v === 'opfs') return 'opfs';
+    const storage = (globalThis as { navigator?: { storage?: { getDirectory?: unknown } } })
+      .navigator?.storage;
+    if (typeof storage?.getDirectory === 'function') return 'opfs';
   } catch {
-    /* localStorage may be unavailable in some test contexts */
+    /* navigator may be unavailable in some test contexts */
   }
   return 'lfs';
 }
@@ -69,10 +70,9 @@ export interface VirtualFsOptions {
   /** Wipe existing data on init. */
   wipe?: boolean;
   /**
-   * Backend selection (Wave A2). Default resolution order:
-   *   1. explicit option,
-   *   2. `localStorage.slicc_opfs_vfs === 'opfs'`,
-   *   3. `'lfs'`.
+   * Backend selection. Defaults to `'opfs'` in browsers; environments
+   * without OPFS (Node tests) fall through to `'lfs'` until Wave F2
+   * deletes the LFS path. Explicit `backend` overrides resolution.
    */
   backend?: VfsBackend;
 }
@@ -204,12 +204,10 @@ export class VirtualFS {
    *
    * ZenFS' top-level `configure({ mounts: { '/': … } })` installs a
    * GLOBAL mount, so only one OPFS-backed VirtualFS instance can be
-   * active at a time. With the flag off (LFS path) this code never
-   * runs. With the flag on, the orchestrator's primary `slicc-fs`
-   * instance owns the OPFS root; smaller per-feature instances
-   * (`mcp-store`, `oauth-token-command`, etc.) still come up but
-   * share the same OPFS root via the unique `dbName` subdirectory
-   * convention — out of scope for Wave A; tracked for Wave B.
+   * active at a time. The orchestrator's primary `slicc-fs` instance
+   * owns the OPFS root; smaller per-feature instances (`mcp-store`,
+   * `oauth-token-command`, etc.) still come up but share the same
+   * OPFS root via the unique `dbName` subdirectory convention.
    */
   private static async initOpfsBackend(
     vfs: VirtualFS,

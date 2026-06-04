@@ -8,9 +8,9 @@
  * ONLY on explicit user invocation and refuses unless the sentinel is
  * present in the OPFS-backed VFS.
  *
- * Behind the `slicc_opfs_vfs` flag: when the shell's VFS is the LFS
- * default backend (flag-off), the command is inert and prints a no-op
- * message — there's no migration to clean up after.
+ * If the shell's VFS isn't OPFS-backed (test or unusual host), the
+ * command is inert and prints a no-op message — there's no migration
+ * to clean up after.
  *
  * Secret-safe: only the IDB name and outcome are surfaced. No file
  * paths or contents are read.
@@ -27,7 +27,7 @@ import {
 export interface SliccFsCleanupCommandOptions {
   /**
    * Shared VFS used for the sentinel check. When the shell has no
-   * VFS (or the VFS is on the LFS backend), the command is inert and
+   * VFS (or the VFS isn't OPFS-backed), the command is inert and
    * exits with a "OPFS migration not active" message.
    */
   fs?: VirtualFS;
@@ -72,8 +72,7 @@ export function createSliccFsCleanupCommand(options: SliccFsCleanupCommandOption
     if (fs?.backend !== 'opfs') {
       return {
         stdout: '',
-        stderr:
-          'slicc-fs-cleanup: OPFS migration not active on this shell (slicc_opfs_vfs flag off) — nothing to do\n',
+        stderr: 'slicc-fs-cleanup: OPFS migration not active on this shell — nothing to do\n',
         exitCode: 0,
       };
     }
