@@ -6,6 +6,7 @@ import {
   type FollowerAttachResult,
   type FollowerBootstrapResponse,
   jsonResponse,
+  type PreviewRecord,
   reclaimMsForTray,
   type TrayLeaderSummary,
   type TrayRecord,
@@ -1306,5 +1307,65 @@ export class SessionTrayDurableObject {
 
   private isoNow(): string {
     return new Date(this.now()).toISOString();
+  }
+
+  async mintPreview(req: {
+    controllerToken: string;
+    servedRoot: string;
+    entryPath: string;
+    allowLive: boolean;
+    workerBaseUrl: string;
+  }): Promise<{ previewToken: string; url: string }> {
+    await this.loadTray();
+    const tray = this.requireTray();
+
+    if (!this.matchesToken(req.controllerToken, tray.controllerToken)) {
+      throw new Error('Invalid controller capability');
+    }
+
+    const { createCapabilityToken } = await import('./shared.js');
+    const { buildPreviewUrl } = await import('@slicc/shared-ts');
+
+    const previewToken = createCapabilityToken(tray.trayId);
+    const record: PreviewRecord = {
+      previewToken,
+      trayId: tray.trayId,
+      servedRoot: req.servedRoot,
+      entryPath: req.entryPath,
+      allowLive: req.allowLive,
+      createdAt: this.isoNow(),
+    };
+
+    tray.previews ??= {};
+    tray.previews[previewToken] = record;
+    await this.persistTray();
+
+    const url = buildPreviewUrl(req.workerBaseUrl, previewToken, '/');
+    return { previewToken, url };
+  }
+
+  async resolvePreview(previewToken: string): Promise<PreviewRecord | null> {
+    await this.loadTray();
+    const tray = this.tray;
+    if (!tray || tray.expiredAt) return null;
+    return tray.previews?.[previewToken] ?? null;
+  }
+
+  async revokePreview(previewToken: string): Promise<{ revoked: boolean }> {
+    await this.loadTray();
+    const tray = this.requireTray();
+    if (!tray.previews?.[previewToken]) return { revoked: false };
+    delete tray.previews[previewToken];
+    await this.persistTray();
+
+    this.sendToLeader({ type: 'preview.revoked', previewToken });
+    return { revoked: true };
+  }
+
+  async listPreviews(): Promise<PreviewRecord[]> {
+    await this.loadTray();
+    const tray = this.tray;
+    if (!tray || tray.expiredAt) return [];
+    return Object.values(tray.previews ?? {});
   }
 }
