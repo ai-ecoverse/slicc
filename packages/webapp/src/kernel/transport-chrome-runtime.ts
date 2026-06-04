@@ -42,7 +42,11 @@ export function createOffscreenChromeRuntimeTransport<Out>(): KernelTransport<
       chrome.runtime.onMessage.addListener(listener);
       return () => chrome.runtime.onMessage.removeListener(listener);
     },
-    send: (payload) => {
+    // `transfer` is intentionally ignored — chrome.runtime.sendMessage
+    // serialises via structured clone with no transfer-list support, so
+    // the payload is always copied. Callers that pass `transfer` must
+    // tolerate the copy in this adapter.
+    send: (payload, _transfer) => {
       chrome.runtime
         .sendMessage({
           source: 'offscreen' as const,
@@ -89,7 +93,9 @@ export function createPanelChromeRuntimeTransport<Out>(): KernelTransport<Extens
       chrome.runtime.onMessage.addListener(listener);
       return () => chrome.runtime.onMessage.removeListener(listener);
     },
-    send: (payload) => {
+    // `transfer` is intentionally ignored — chrome.runtime.sendMessage
+    // serialises via structured clone with no transfer-list support.
+    send: (payload, _transfer) => {
       chrome.runtime
         .sendMessage({
           source: 'panel' as const,

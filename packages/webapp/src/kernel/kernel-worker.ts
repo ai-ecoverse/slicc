@@ -42,6 +42,7 @@ import { makeKernelWorkerInitGuard } from './kernel-worker-init-guard.js';
 import { getPanelRpcClient } from './panel-rpc.js';
 import { createPanelTerminalHost } from './panel-terminal-host.js';
 import { createBridgeMessageChannelTransport } from './transport-message-channel.js';
+import { startVfsRpcHost } from './vfs-rpc-host.js';
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -153,6 +154,7 @@ function installLocalStorageShim(seed: Record<string, string>): void {
 
 let host: KernelHost | null = null;
 let stopTerminalHost: (() => void) | null = null;
+let stopVfsRpcHost: (() => void) | null = null;
 let panelRpcClient: { dispose: () => void } | null = null;
 
 /**
@@ -279,6 +281,17 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
       logger: console,
     });
     stopTerminalHost = handle.stop;
+    // Wave B1 (issue d8860197): stand up the worker-side VFS read RPC
+    // surface on the same kernel transport. `VirtualFS` satisfies the
+    // `LocalVfsClient` shape structurally so we hand `sharedFs` in
+    // directly. The page-side consumer wiring lands in B2/B3 — until
+    // then this is a no-op subscriber.
+    const vfsHandle = startVfsRpcHost({
+      transport: bridgeTransport,
+      client: sharedFs,
+      logger: console,
+    });
+    stopVfsRpcHost = vfsHandle.stop;
   } else {
     console.warn('[kernel-worker] shared FS unavailable; terminal sessions will fail to open');
   }
@@ -295,6 +308,8 @@ self.addEventListener('message', (event: MessageEvent) => {
   if (data?.type !== 'kernel-worker-shutdown') return;
   stopTerminalHost?.();
   stopTerminalHost = null;
+  stopVfsRpcHost?.();
+  stopVfsRpcHost = null;
   panelRpcClient?.dispose();
   panelRpcClient = null;
   void host?.dispose();

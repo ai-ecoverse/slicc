@@ -28,6 +28,7 @@ import { createLogger } from '../../../packages/webapp/src/core/index.js';
 import { createKernelHost } from '../../../packages/webapp/src/kernel/host.js';
 import { createPanelTerminalHost } from '../../../packages/webapp/src/kernel/panel-terminal-host.js';
 import { createOffscreenChromeRuntimeTransport } from '../../../packages/webapp/src/kernel/transport-chrome-runtime.js';
+import { startVfsRpcHost } from '../../../packages/webapp/src/kernel/vfs-rpc-host.js';
 // Auto-discover and register all providers (built-in + external).
 // IMPORTANT: Keep in sync with packages/webapp/src/ui/main.ts — both
 // entry points need all providers. Registration is explicit (not
@@ -143,6 +144,7 @@ async function init(): Promise<void> {
   // `TerminalSessionHost` AND the per-session `WasmShellHeadless`, so
   // `ps` / `kill` / `cat /proc/<pid>/...` work uniformly.
   let stopTerminalHost: (() => void) | null = null;
+  let stopVfsRpcHost: (() => void) | null = null;
   const sharedFs = host.sharedFs;
   if (sharedFs) {
     const handle = createPanelTerminalHost({
@@ -153,6 +155,16 @@ async function init(): Promise<void> {
       logger: log,
     });
     stopTerminalHost = handle.stop;
+    // Wave B1 (issue d8860197): worker-side VFS read RPC surface, same
+    // wiring as the standalone DedicatedWorker (`kernel-worker.ts`). The
+    // page-side consumer lands in B2/B3 — until then this is a no-op
+    // subscriber; existing behavior is unchanged.
+    const vfsHandle = startVfsRpcHost({
+      transport: bridgeTransport,
+      client: sharedFs,
+      logger: log,
+    });
+    stopVfsRpcHost = vfsHandle.stop;
   } else {
     log.warn('shared FS unavailable; panel terminal sessions will fail to open');
   }
@@ -166,6 +178,8 @@ async function init(): Promise<void> {
     () => {
       stopTerminalHost?.();
       stopTerminalHost = null;
+      stopVfsRpcHost?.();
+      stopVfsRpcHost = null;
       void host.dispose();
     },
     { once: true }
