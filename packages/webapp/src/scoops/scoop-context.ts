@@ -514,6 +514,17 @@ export class ScoopContext {
           : undefined;
       const compactFn = createCompactContext({
         model,
+        // Size GC to the model's real context window. The Adobe proxy reports
+        // up to 1M tokens for Sonnet/Opus 4.x; without this, compaction (and
+        // its cone memory-extraction call) would fire at the hardcoded 200K
+        // default — ~18% of capacity — on every long session. A 0/missing
+        // window falls back to createCompactContext's default; passing 0 would
+        // make the threshold (window - reserveTokens) negative and compact on
+        // every turn.
+        contextWindow:
+          typeof model.contextWindow === 'number' && model.contextWindow > 0
+            ? model.contextWindow
+            : undefined,
         getApiKey: () => getApiKey() ?? undefined,
         headers: compactionHeaders,
         onMemoryUpdates,

@@ -36,6 +36,10 @@ import {
   streamSimpleAnthropic,
   streamSimpleOpenAICompletions,
 } from '@earendil-works/pi-ai';
+import {
+  type AdobeModelMetadata,
+  enrichAdobeModel,
+} from '../src/providers/adobe-model-metadata.js';
 import { getOAuthPageOrigin } from '../src/providers/oauth-service.js';
 import { createSilentRenewBackoff } from '../src/providers/silent-renew-backoff.js';
 import type { OAuthLauncher, OAuthLoginOptions, ProviderConfig } from '../src/providers/types.js';
@@ -90,24 +94,18 @@ interface ProxyConfig {
   clientId?: string;
   scopes?: string;
   imsEnvironment?: string;
-  models?: Array<{ id: string; name?: string }>;
+  // The /v1/config response carries full per-model metadata (context_window,
+  // max_tokens, etc.) — not just id/name. Typing it as AdobeModelMetadata lets
+  // getModelIds propagate the real window through the unauthenticated fallback
+  // path, before the authenticated /v1/models cache is populated.
+  models?: AdobeModelMetadata[];
 }
 
 const proxyConfigCache = new Map<string, ProxyConfig>();
 
 // ── Proxy model metadata cache ──────────────────────────────────────
 
-interface ProxyModelEntry {
-  id: string;
-  name?: string;
-  api?: 'anthropic' | 'openai';
-  context_window?: number;
-  max_tokens?: number;
-  reasoning?: boolean;
-  input?: string[];
-}
-
-const proxyMetadataCache = new Map<string, ProxyModelEntry>();
+const proxyMetadataCache = new Map<string, AdobeModelMetadata>();
 
 /**
  * Fetch client config from the proxy's /v1/config endpoint (unauthenticated).
@@ -250,32 +248,12 @@ export const config: ProviderConfig = {
   ],
 
   getModelIds: () => {
-    // Helper to propagate metadata from cache
-    const enrichModel = (m: { id: string; name?: string }) => {
-      const entry: any = { id: m.id, name: m.name ?? m.id };
-      const meta = proxyMetadataCache.get(m.id);
-      if (meta?.api) entry.api = meta.api;
-      if (meta?.context_window !== undefined) entry.context_window = meta.context_window;
-      if (meta?.max_tokens !== undefined) entry.max_tokens = meta.max_tokens;
-      if (meta?.reasoning !== undefined) entry.reasoning = meta.reasoning;
-      if (meta?.input) entry.input = meta.input;
-      // Adobe's IMS proxy forwards Anthropic-Messages requests to AWS Bedrock.
-      // Bedrock's Haiku endpoints currently 400 on `tools[].eager_input_streaming`
-      // ("Extra inputs are not permitted"); the same field works on Opus and
-      // Sonnet. pi-ai 0.70+ adds the field to every tool definition by default,
-      // so we turn it off only for Haiku here. pi-ai's anthropic provider then
-      // omits the field and sends the legacy
-      // `fine-grained-tool-streaming-2025-05-14` beta header instead, which
-      // Haiku-on-Bedrock accepts. The compat object travels with the
-      // ModelMetadata returned by getModelIds and is merged onto the streaming
-      // Model<Api> by provider-settings.ts:applyModelMetadata. Both
-      // getProviderModels (the picker / fallback path) and resolveModelById /
-      // resolveCurrentModel (the streaming path) preserve it.
-      if (/haiku/i.test(m.id)) {
-        entry.compat = { supportsEagerToolInputStreaming: false };
-      }
-      return entry;
-    };
+    // Merge each model with cached /v1/models metadata; the entry itself fills
+    // any gaps. The Haiku `compat` workaround and the cache-vs-entry precedence
+    // live in the pure helper (src/providers/adobe-model-metadata.ts) so they
+    // can be unit-tested without importing this DOM/chrome-bound module.
+    const enrichModel = (m: AdobeModelMetadata) =>
+      enrichAdobeModel(m, proxyMetadataCache.get(m.id));
 
     // Prefer the authenticated /v1/models response (has all available models)
     for (const models of modelsCache.values()) {
@@ -288,9 +266,11 @@ export const config: ProviderConfig = {
         return result;
       }
     }
-    // Fall back to /v1/config response (unauthenticated, may be incomplete)
+    // Fall back to /v1/config response (unauthenticated). Entries carry their
+    // own context_window/max_tokens, so the real window survives this path even
+    // though proxyMetadataCache is empty until /v1/models is fetched.
     for (const config of proxyConfigCache.values()) {
-      if (config.models?.length) return config.models.map(enrichModel);
+      if (config.models?.length) return config.models.map((m) => enrichModel(m));
     }
     // Fall back to persisted models from a previous session
     try {
@@ -857,7 +837,7 @@ async function fetchProxyModels(): Promise<Model<Api>[]> {
       if (data.data?.length) {
         // Store metadata from proxy response for later use in getModelIds()
         for (const pm of data.data) {
-          const entry: ProxyModelEntry = { id: pm.id, name: pm.name };
+          const entry: AdobeModelMetadata = { id: pm.id, name: pm.name };
           if (pm.api !== undefined) entry.api = pm.api;
           if (pm.context_window !== undefined) entry.context_window = pm.context_window;
           if (pm.max_tokens !== undefined) entry.max_tokens = pm.max_tokens;
