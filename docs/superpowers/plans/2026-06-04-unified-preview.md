@@ -1874,7 +1874,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
     // ONLY (extension agent uses setPreviewMinter direct hook, NOT this).
     // See spec § Extension float — tray-open-preview wiring (three contexts).
     op: 'tray-open-preview';
-    payload: { entryPath: string; servedRoot: string; allowLive: boolean };
+    payload: { entryPath: string; servedRoot: string; bridge: boolean; noBridge: boolean };
   }
 ```
 
@@ -2101,9 +2101,10 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 This is the biggest leader-side change. The `serve` command now:
 
-1. Parses flags: `--bridge` (opt-in, sets `allowLive`), `--stop <token>` (revoke), `--list` (list active previews), `--project` (no-op alias — prints obsolete warning and ignores).
-2. On a normal serve: picks the active mint surface (extension agent in-realm `getPreviewMinter()` → standalone panel-RPC → fail). Auto-enables tray if no `LeaderSyncManager` is active.
-3. Mints, broadcasts `preview.open` to followers (handled by the mint path), reports the URL.
+1. Parses flags: `--bridge` (opt-in user intent), `--no-bridge` (force-off override), `--stop <token>` (revoke), `--list` (list active previews), `--project` (no-op alias — prints obsolete warning and ignores).
+2. On a normal serve: picks the active mint surface across **three** contexts (extension agent in-realm `getPreviewMinter()` → extension panel terminal `requestTrayOpenPreview()` envelope → standalone panel-RPC → otherwise fail). Auto-enables tray if no `LeaderSyncManager` is active.
+3. Passes the raw `bridge` / `noBridge` intent flags through to the mint site (panel-RPC handler / envelope listener / in-realm minter) — the mint site computes `effectiveAllowLive` per Task 17, since the Cherry-follower check is leader-side state the worker can't see.
+4. Mints (via the chosen surface), broadcasts `preview.open` to followers (handled inside the mint path), opens the leader's own tab at the worker URL, reports the URL.
 
 This task is large. Break the implementation into sub-steps but commit at the end.
 
@@ -2212,8 +2213,19 @@ export async function serveCommand(args: string[], context: ShellContext): Promi
     // Continue with mint anyway (no-op alias).
   }
 
+  // Imports needed at the top of serve-command.ts:
+  //   import { isExtensionRuntime } from './shared.js';                        // shared.ts:135
+  //   import { requestTrayOpenPreview } from '@slicc/chrome-extension/leader-sync-bridge.js';
+  //     // (or a webapp-side re-export — match the existing extension-only
+  //     // import pattern, e.g. dynamic import guarded by isExtensionRuntime().)
+
   const { entryPath, servedRoot } = resolveEntry(flags.positional, context);
-  const allowLive = !!flags.bridge;
+  // Raw INTENT flags — NOT pre-computed allowLive. The Cherry-follower check
+  // is leader-side state the worker can't see, so each mint site computes
+  // `effectiveAllowLive` itself (Task 17). serve-command's job is just to
+  // forward the user's `--bridge` / `--no-bridge` intent unchanged.
+  const bridge = !!flags.bridge;
+  const noBridge = !!flags.noBridge;
 
   // Auto-enable tray if no active leader sync.
   if (!hasActiveLeaderSync(context)) {
@@ -2225,13 +2237,13 @@ export async function serveCommand(args: string[], context: ShellContext): Promi
   const inRealmMinter = getPreviewMinter();
   if (inRealmMinter) {
     // 1) Extension AGENT (offscreen kernel worker) — in-realm setPreviewMinter hook.
-    result = await inRealmMinter({ entryPath, servedRoot, allowLive });
+    result = await inRealmMinter({ entryPath, servedRoot, bridge, noBridge });
   } else if (isExtensionRuntime() && typeof window !== 'undefined') {
     // 2) Extension PANEL TERMINAL (side panel WasmShell — has DOM, no panel-RPC,
     //    no in-realm minter). Posts a chrome.runtime envelope to the offscreen
     //    via leader-sync-bridge.ts's `requestTrayOpenPreview` (mirrors the
     //    `requestLeaderTrayReset` precedent at leader-sync-bridge.ts:76,88,142,145).
-    result = await requestTrayOpenPreview({ entryPath, servedRoot, allowLive });
+    result = await requestTrayOpenPreview({ entryPath, servedRoot, bridge, noBridge });
   } else {
     // 3) Standalone kernel worker — panel-RPC into the page-side handler.
     const rpc = getPanelRpcClient();
@@ -2240,7 +2252,7 @@ export async function serveCommand(args: string[], context: ShellContext): Promi
         'serve: no leader tray available. Enable multi-browser sync via `host enable` or the avatar popover.'
       );
     }
-    result = await rpc.call('tray-open-preview', { entryPath, servedRoot, allowLive });
+    result = await rpc.call('tray-open-preview', { entryPath, servedRoot, bridge, noBridge });
   }
 
   // Open the leader's OWN tab at the worker URL (preserves today's `serve`
@@ -2278,7 +2290,7 @@ function parseFlags(args: string[]) {
 }
 ```
 
-- [ ] **Step 5: Run, confirm tests PASS** (7 cases).
+- [ ] **Step 5: Run, confirm tests PASS** (10 cases).
 
 - [ ] **Step 6: Format + commit**
 
@@ -2322,12 +2334,19 @@ Pass `effectiveAllowLive` into the `mintPreviewViaWorker` call's `allowLive` arg
 
 - [ ] **Step 3: Add a test** that with a Cherry follower connected, mint payload has `allowLive: true` even without `--bridge`; and with `--no-bridge`, `allowLive: false` regardless.
 
-- [ ] **Step 4: Format + commit**
+- [ ] **Step 4: Format + commit** — Cherry inspection lands at three mint sites across two packages, so the commit scope is webapp + chrome-extension:
 
 ```
-npx prettier --write packages/webapp/src/shell/supplemental-commands/
-git add packages/webapp/
+npx prettier --write packages/webapp/src/ packages/chrome-extension/src/
+git add packages/webapp/ packages/chrome-extension/
 git commit -m "feat(preview): Cherry-tagged followers default --bridge:true at mint (override with --no-bridge)
+
+Cherry inspection + effectiveAllowLive computation lands at the three
+mint sites: panel-rpc-handlers.ts (standalone), extension-leader-tray.ts
+setPreviewMinter closure (extension agent), and extension-leader-tray.ts
+chrome.runtime envelope listener (extension panel terminal). Each
+inspects its in-realm LeaderSyncManager.getConnectedFollowers() for
+CHERRY_RUNTIME_TAG before calling mintPreviewViaWorker.
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -2391,10 +2410,12 @@ This is the third extension context: side-panel terminal posts an envelope to th
 - [ ] **Step 1: Add the envelope type** alongside `leader-tray-reset` in whatever messages file types those:
 
 ```ts
-| { source: 'panel'; payload: { type: 'tray-open-preview'; requestId: string; entryPath: string; servedRoot: string; allowLive: boolean } }
+| { source: 'panel'; payload: { type: 'tray-open-preview'; requestId: string; entryPath: string; servedRoot: string; bridge: boolean; noBridge: boolean } }
 | { source: 'offscreen'; payload: { type: 'tray-open-preview-response'; requestId: string; url: string; pushed: number } }
 | { source: 'offscreen'; payload: { type: 'tray-open-preview-error'; requestId: string; error: string } }
 ```
+
+Note the envelope carries **intent flags** (`bridge` / `noBridge`), not a precomputed `allowLive`. The envelope LISTENER in `extension-leader-tray.ts` runs the same Cherry-follower inspection + `effectiveAllowLive` computation as the other two mint sites per Task 17. The worker only ever sees the final `allowLive` on the mint API call.
 
 - [ ] **Step 2: Add the listener** in `extension-leader-tray.ts` near `:423` (the leader-tray-reset listener) — on receiving `tray-open-preview` envelope, call `getPreviewMinter()?.(...)` (or mint directly via `mintPreviewViaWorker` + `sync.broadcastPreviewOpen`) and respond.
 
