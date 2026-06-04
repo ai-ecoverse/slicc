@@ -128,6 +128,7 @@ import { initTelemetry } from './telemetry.js';
 import { initTheme } from './theme.js';
 import { initTooltips } from './tooltip.js';
 import type { ChatMessage } from './types.js';
+import { persistWelcomeSentinel } from './welcome-sentinel.js';
 
 const log = createLogger('main');
 
@@ -2640,9 +2641,17 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       return true;
     }
     if (action === 'shortcut-migrate') {
-      void localFs
-        .writeFile('/shared/.welcomed', '1')
-        .catch((err) => log.warn('Failed to persist welcome completion marker', err));
+      // Wave B4b: route the sentinel write through `writableFs` so under
+      // `slicc_opfs_vfs=opfs` it lands on the worker-owned canonical OPFS
+      // (matching B4's freezer/enrichment reroute). Followers (B6
+      // election non-leader) no-op so the marker isn't silently orphaned
+      // in the page-side LFS shadow (mirrors B4a's enrichment gate).
+      // Flag off: `writableFs === localFs` AND `opfsLeader.isLeader ===
+      // true` (no election ran) → byte-identical to the pre-B4b path.
+      persistWelcomeSentinel({
+        writableFs,
+        isWriter: !useRpcVfs || opfsLeader.isLeader,
+      });
       return true;
     }
     return false;
