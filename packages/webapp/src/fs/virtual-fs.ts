@@ -101,6 +101,19 @@ export class VirtualFS {
    */
   private mountPoints = new Map<string, MountBackend>();
   /**
+   * Live `WebAccessFS` instance for the OPFS backend (null on LFS).
+   * Captured from `@zenfs/core`'s mount registry right after `configure()`
+   * so {@link flush} / {@link dispose} can serialize its in-memory index
+   * (`index.toJSON()`) back to the metadata sidecar — ZenFS only READS
+   * the sidecar on boot (`@zenfs/dom` `WebAccessFS._loadMetadata`) and
+   * never writes it (`IndexFS.sync()` is a no-op), so VirtualFS owns the
+   * write-back. The structural type matches the parts we touch
+   * (`index.toJSON()`); the full class lives in `@zenfs/dom`.
+   */
+  private opfsBackendFs: { index: { toJSON: () => unknown } } | null = null;
+  /** OPFS subdir handle for the current OPFS backend (null on LFS). */
+  private opfsHandle: FileSystemDirectoryHandle | null = null;
+  /**
    * Paths that were registered via `mountInternal` instead of the
    * user-facing `mount()`. Hidden from `listMounts()` (so
    * `RestrictedFS` can't see them, scoops can't browse them, and they
@@ -213,7 +226,7 @@ export class VirtualFS {
     // existing sidecar (the reload case) is left untouched so persisted
     // metadata survives.
     await VirtualFS.seedOpfsMetadataSidecarIfMissing(handle);
-    const [{ configure, fs: zenfsImport }, { WebAccess }] = await Promise.all([
+    const [{ configure, fs: zenfsImport, mounts }, { WebAccess }] = await Promise.all([
       import('@zenfs/core'),
       import('@zenfs/dom'),
     ]);
@@ -227,6 +240,20 @@ export class VirtualFS {
       },
     });
     vfs.lfs = zenfsImport.promises as unknown as FS.PromisifiedFS;
+    // Capture the live `WebAccessFS` from `@zenfs/core`'s mount registry
+    // (populated by `configure` → `mountWithMkdir` → `mounts.set(point, fs)`
+    // in `@zenfs/core/vfs/shared.js`). Needed so `flush`/`dispose` can
+    // serialize `index.toJSON()` back to the sidecar — see field doc on
+    // {@link opfsBackendFs}.
+    const mountedFs = mounts.get('/') as unknown as
+      | {
+          index?: { toJSON: () => unknown };
+        }
+      | undefined;
+    vfs.opfsBackendFs = mountedFs?.index
+      ? (mountedFs as { index: { toJSON: () => unknown } })
+      : null;
+    vfs.opfsHandle = handle;
   }
 
   /**
@@ -336,10 +363,16 @@ export class VirtualFS {
    * No-op if the backend doesn't expose flush.
    */
   async flush(): Promise<void> {
-    // OPFS: WebAccess writes go through FileSystemSyncAccessHandle which
-    // is durable as soon as the call returns — no superblock debounce
-    // window to flush.
-    if (this.backend !== 'lfs') return;
+    if (this.backend !== 'lfs') {
+      // OPFS: file data writes are durable (WebAccess uses
+      // FileSystemSyncAccessHandle), but POSIX metadata (filemode bits,
+      // symlink targets) lives only in the WebAccessFS in-memory `index`
+      // until we serialize it back to the sidecar. `IndexFS.sync()` is a
+      // no-op and `WebAccessFS` does not override it, so VirtualFS owns
+      // the write-back.
+      await this.writeOpfsMetadataSidecar();
+      return;
+    }
     const pfs = this.lfs as unknown as {
       _backend?: { flush?: () => Promise<void>; saveSuperblock?: { cancel?: () => void } };
     };
@@ -349,6 +382,25 @@ export class VirtualFS {
     if (pfs._backend?.flush) {
       await pfs._backend.flush();
     }
+  }
+
+  /**
+   * Serialize the live OPFS WebAccessFS index back to `/.metadata.json` in
+   * the OPFS subdir so filemode bits and symlinks survive a reload. No-op
+   * on the LFS backend, on backends without a captured index reference
+   * (defensive — should not happen after a successful `initOpfsBackend`),
+   * or if the OPFS handle was never captured. See {@link opfsBackendFs}.
+   */
+  private async writeOpfsMetadataSidecar(): Promise<void> {
+    if (this.backend !== 'opfs') return;
+    const backendFs = this.opfsBackendFs;
+    const handle = this.opfsHandle;
+    if (!backendFs || !handle) return;
+    const json = JSON.stringify(backendFs.index.toJSON());
+    const fileHandle = await handle.getFileHandle('.metadata.json', { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(json);
+    await writable.close();
   }
 
   /**
@@ -386,7 +438,12 @@ export class VirtualFS {
     // configure() registry is not unwound here — same instance assumption
     // documented on initOpfsBackend(). Multiple `VirtualFS.create` calls
     // on the OPFS path within a single process share the same global mount.
-    if (this.backend !== 'lfs') return;
+    // Persist the metadata sidecar first so filemode/symlink state survives
+    // the dispose (same mechanism as `flush()` on the OPFS path).
+    if (this.backend !== 'lfs') {
+      await this.writeOpfsMetadataSidecar();
+      return;
+    }
 
     const pfs = this.lfs as any;
 
