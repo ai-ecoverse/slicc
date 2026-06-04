@@ -340,6 +340,25 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
     }
   }
 
+  // 5c. Wave C1 — legacy IDB → OPFS migration DETECTION. Guarded on
+  // `backend === 'opfs'` so the LFS-default path is byte-identical and
+  // never imports the migration module. C1 is read-only (sentinel probe
+  // + LightningFS readdir/lstat/readlink walk); C2 will perform the copy
+  // and write the sentinel. Fire-and-forget — failures must never block
+  // worker boot.
+  if (sharedFs && sharedFs.backend === 'opfs') {
+    void (async () => {
+      try {
+        const { detectLegacyMigrationFromVfs } = await import(
+          '../fs/migration/migration-detect.js'
+        );
+        await detectLegacyMigrationFromVfs(sharedFs, log);
+      } catch (err) {
+        log.warn('legacy migration detection failed (non-fatal in C1)', err);
+      }
+    })();
+  }
+
   // 6. Register session-costs provider for the `cost` shell command.
   const { registerSessionCostsProvider } = await import(
     '../shell/supplemental-commands/cost-command.js'
