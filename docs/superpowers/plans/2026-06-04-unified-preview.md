@@ -20,7 +20,7 @@ These are **NOT plan tasks** — they're prerequisites the human owner confirms 
 
 1. **DNS + wildcard TLS cert** on the `sliccy.ai` zone for both `*.preview.sliccy.ai` and `*.preview.staging.sliccy.ai`. Confirmed with whoever owns the zone.
 2. **Staging worker dual-zone route binding** — the staging worker at `slicc-tray-hub-staging.minivelos.workers.dev` must also hold a route binding on the `sliccy.ai` zone for `*.preview.staging.sliccy.ai/*`. Both bindings dispatch to the same worker deployment / DurableObject namespace.
-3. **Federated-branch artifact for the security-gate test port** — the federated worktree at `/Users/kpauls/projects/adobe/github/slicc/.claude/worktrees/federated-preview` (commit `f950bd7f`) is the source for the 13-test security suite ported in Task 10. If that worktree is gone, use `git show worktree-federated-preview:packages/webapp/tests/scoops/leader-preview-reader.test.ts`.
+3. **Federated-branch artifact for the security-gate test port** — the federated worktree at `/Users/kpauls/projects/adobe/github/slicc/.claude/worktrees/federated-preview` (commit `f950bd7f`) is the source for the 13-test security suite ported in **Task 8** (`isPathWithinServedRoot` + tests). If that worktree is gone, use `git show worktree-federated-preview:packages/webapp/tests/scoops/leader-preview-reader.test.ts`.
 
 If any prerequisite isn't ready, **stop and escalate**. Don't try to fudge the staging URL or skip the cert.
 
@@ -234,9 +234,12 @@ npm run test -w @slicc/shared-ts -- tests/preview-url.test.ts
 - [ ] **Step 6: Format + commit**
 
 ```
-npx prettier --write packages/shared-ts/src/preview-url.ts packages/shared-ts/src/index.ts packages/shared-ts/tests/preview-url.test.ts
-git add packages/shared-ts/
+npx prettier --write packages/shared-ts/src/preview-url.ts packages/shared-ts/src/index.ts packages/shared-ts/tests/preview-url.test.ts packages/cloudflare-worker/package.json
+git add packages/shared-ts/ packages/cloudflare-worker/package.json
 git commit -m "feat(preview): shared previewBaseHost + buildPreviewUrl lookup helper
+
+Also adds @slicc/shared-ts to packages/cloudflare-worker/package.json so
+Task 4's buildPreviewUrl import will resolve.
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -461,13 +464,14 @@ The DO needs:
 
 ```ts
 import { describe, it, expect, beforeEach } from 'vitest';
-// Import whatever existing helpers spin up a SessionTrayDurableObject under test
-// (search for createTestTray, withFreshTray, or similar in the worker tests).
-// Then:
+// `setupTrayForTest()` below is a PLACEHOLDER — replace it with the inline setup
+// pattern used by the webhook tests at `packages/cloudflare-worker/tests/index.test.ts:918+`
+// (POST /tray to mint, capture controllerToken from the response, attach a fake
+// controller WS). Do NOT import a `createTestTray` helper — it doesn't exist.
 
 describe('SessionTrayDurableObject preview methods', () => {
   it('mintPreview stores a record and returns a token + URL', async () => {
-    const tray = await createTestTray(); // existing harness helper
+    const tray = await setupTrayForTest(); // placeholder — see comment above
     const { previewToken, url } = await tray.mintPreview({
       controllerToken: tray.controllerToken,
       servedRoot: '/workspace/dist',
@@ -486,7 +490,7 @@ describe('SessionTrayDurableObject preview methods', () => {
   });
 
   it('mintPreview rejects when controllerToken is wrong', async () => {
-    const tray = await createTestTray();
+    const tray = await setupTrayForTest();
     await expect(
       tray.mintPreview({
         controllerToken: 'wrong.token',
@@ -499,12 +503,12 @@ describe('SessionTrayDurableObject preview methods', () => {
   });
 
   it('resolvePreview returns null for unknown tokens', async () => {
-    const tray = await createTestTray();
+    const tray = await setupTrayForTest();
     expect(await tray.resolvePreview('bogus.abc')).toBeNull();
   });
 
   it('revokePreview deletes the record and returns { revoked: true }', async () => {
-    const tray = await createTestTray();
+    const tray = await setupTrayForTest();
     const { previewToken } = await tray.mintPreview({
       controllerToken: tray.controllerToken,
       servedRoot: '/w',
@@ -517,7 +521,7 @@ describe('SessionTrayDurableObject preview methods', () => {
   });
 
   it('revokePreview on unknown token returns { revoked: false }', async () => {
-    const tray = await createTestTray();
+    const tray = await setupTrayForTest();
     expect(await tray.revokePreview('nope.0')).toEqual({ revoked: false });
   });
 });
@@ -1654,7 +1658,7 @@ broadcastPreviewOpen(url: string): void {
 - [ ] **Step 6: Format + commit**
 
 ```
-npx prettier --write packages/webapp/src/scoops/tray-leader-sync.ts packages/webapp/src/ui/page-leader-tray.ts packages/webapp/tests/scoops/tray-leader-sync-preview-open.test.ts
+npx prettier --write packages/webapp/src/scoops/tray-sync-protocol.ts packages/webapp/src/scoops/tray-leader-sync.ts packages/webapp/src/ui/page-leader-tray.ts packages/webapp/tests/scoops/tray-leader-sync-preview-open.test.ts
 git add packages/webapp/
 git commit -m "feat(preview): LeaderSyncManager.broadcastPreviewOpen + currentLeaderSync getter
 
@@ -2088,6 +2092,8 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ## Task 16: `serve` three-context decision + auto-enable tray + `--bridge`/`--stop`/`--list`/`--project`
 
+**Depends on Task 15** (`mintPreviewViaWorker`) and **Task 19** (`requestTrayOpenPreview` from `leader-sync-bridge.ts`) at compile time. If executing strictly task-by-task, land Tasks 13 + 15 + 19 before this task's Step 4 — or treat 13/15/16/19 as a single coherent slice.
+
 **Files:**
 
 - Modify: `packages/webapp/src/shell/supplemental-commands/serve-command.ts`
@@ -2144,6 +2150,32 @@ describe('serve unified', () => {
   it('--project prints obsolete warning to stderr and proceeds with mint (no-op alias)', async () => {
     /* run serve --project /workspace/dist; assert stderr includes "obsolete"; assert mint still happened */
   });
+
+  it('extension panel terminal posts requestTrayOpenPreview envelope (has DOM, no panel-RPC, no in-realm minter)', async () => {
+    /* stub isExtensionRuntime() → true; ensure no getPreviewMinter / getPanelRpcClient;
+       stub requestTrayOpenPreview to capture its call; run serve and assert it was
+       invoked with { entryPath, servedRoot, allowLive } */
+  });
+
+  it("opens the leader's own tab at the minted URL via browserAPI.createPage", async () => {
+    setPreviewMinter(async () => ({ url: 'https://leader-tab.preview.sliccy.ai/', pushed: 0 }));
+    const createPageMock = vi.fn().mockResolvedValue(undefined);
+    const browserAPI = { createPage: createPageMock } as never;
+    await runServe(['serve', '/workspace/dist'], { browserAPI });
+    expect(createPageMock).toHaveBeenCalledWith('https://leader-tab.preview.sliccy.ai/');
+  });
+
+  it('falls back to window.open when no browserAPI is supplied', async () => {
+    setPreviewMinter(async () => ({ url: 'https://x.y.preview.sliccy.ai/', pushed: 0 }));
+    const openSpy = vi.fn().mockReturnValue(null); // null is fine — fire-and-forget
+    vi.stubGlobal('window', { open: openSpy });
+    await runServe(['serve', '/workspace/dist']);
+    expect(openSpy).toHaveBeenCalledWith(
+      'https://x.y.preview.sliccy.ai/',
+      '_blank',
+      'noopener,noreferrer'
+    );
+  });
 });
 ```
 
@@ -2188,20 +2220,26 @@ export async function serveCommand(args: string[], context: ShellContext): Promi
     await autoEnableTray(context);
   }
 
-  // Three-context mint:
+  // Three-context mint — check from most-specific to most-generic:
   let result: MintPreviewResult;
   const inRealmMinter = getPreviewMinter();
   if (inRealmMinter) {
-    // Extension agent path
+    // 1) Extension AGENT (offscreen kernel worker) — in-realm setPreviewMinter hook.
     result = await inRealmMinter({ entryPath, servedRoot, allowLive });
+  } else if (isExtensionRuntime() && typeof window !== 'undefined') {
+    // 2) Extension PANEL TERMINAL (side panel WasmShell — has DOM, no panel-RPC,
+    //    no in-realm minter). Posts a chrome.runtime envelope to the offscreen
+    //    via leader-sync-bridge.ts's `requestTrayOpenPreview` (mirrors the
+    //    `requestLeaderTrayReset` precedent at leader-sync-bridge.ts:76,88,142,145).
+    result = await requestTrayOpenPreview({ entryPath, servedRoot, allowLive });
   } else {
+    // 3) Standalone kernel worker — panel-RPC into the page-side handler.
     const rpc = getPanelRpcClient();
     if (!rpc) {
       return errorResult(
         'serve: no leader tray available. Enable multi-browser sync via `host enable` or the avatar popover.'
       );
     }
-    // Standalone path
     result = await rpc.call('tray-open-preview', { entryPath, servedRoot, allowLive });
   }
 
