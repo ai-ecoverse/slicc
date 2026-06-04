@@ -110,7 +110,7 @@ final class ChromeLauncherTests: XCTestCase {
 
         XCTAssertEqual(
             launcher.resolveUserDataDir(),
-            "/Users/test/.slicc/chrome-profiles/browser-coding-agent-chrome"
+            "/Users/test/.slicc/profiles/browser-coding-agent-chrome"
         )
     }
 
@@ -119,11 +119,11 @@ final class ChromeLauncherTests: XCTestCase {
 
         XCTAssertEqual(
             launcher.resolveUserDataDir(servePort: 5720),
-            "/Users/test/.slicc/chrome-profiles/browser-coding-agent-chrome-5720"
+            "/Users/test/.slicc/profiles/browser-coding-agent-chrome-5720"
         )
         XCTAssertEqual(
             launcher.resolveUserDataDir(servePort: 5710),
-            "/Users/test/.slicc/chrome-profiles/browser-coding-agent-chrome"
+            "/Users/test/.slicc/profiles/browser-coding-agent-chrome"
         )
     }
 

@@ -29,13 +29,13 @@ afterEach(async () => {
 });
 
 describe('chrome-launch', () => {
-  it('defaults to ~/.slicc/chrome-profiles when no tmpDir override is given', () => {
+  it('defaults to ~/.slicc/profiles when no tmpDir override is given', () => {
     const profile = resolveChromeLaunchProfile({
       projectRoot: '/repo',
     });
 
     expect(profile.userDataDir).toBe(
-      join(homedir(), '.slicc', 'chrome-profiles', 'browser-coding-agent-chrome')
+      join(homedir(), '.slicc', 'profiles', 'browser-coding-agent-chrome')
     );
   });
 

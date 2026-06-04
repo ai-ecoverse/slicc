@@ -112,7 +112,7 @@ export function resolveQaProfilesRoot(projectRoot: string): string {
 }
 
 export function resolveDefaultChromeUserDataDir(
-  profilesDir = join(homedir(), '.slicc', 'chrome-profiles'),
+  profilesDir = join(homedir(), '.slicc', 'profiles'),
   servePort?: number
 ): string {
   const suffix = servePort && servePort !== 5710 ? `-${servePort}` : '';

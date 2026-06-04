@@ -238,7 +238,7 @@ struct ChromeLauncher: Sendable {
     func resolveUserDataDir(tmpDir: String? = nil, servePort: Int? = nil) -> String {
         let baseDir = normalizedPath(tmpDir)
             ?? URL(fileURLWithPath: homeDirectoryProvider(), isDirectory: true)
-                .appendingPathComponent(".slicc/chrome-profiles", isDirectory: true)
+                .appendingPathComponent(".slicc/profiles", isDirectory: true)
                 .path
         let suffix = (servePort != nil && servePort != defaultServePort) ? "-\(servePort!)" : ""
         return URL(fileURLWithPath: baseDir, isDirectory: true)
