@@ -142,6 +142,34 @@ Tokens are unguessable (`createCapabilityToken(trayId)` pattern from `shared.ts:
 
 This is the [option-2-from-design-discussion](#) shape: no in-memory state to lose on leader reload, no replay/handshake to re-register served roots after reconnect, tokens are independently revocable.
 
+**Minting is fresh-each-time, not idempotent.** Re-running `serve /workspace/dist` mints a **new** token (and a new subdomain URL) every invocation — the worker does not key tokens by `(trayId, servedRoot, entryPath)` and dedupe. Rationale: capability tokens are unguessable by construction, and keying-by-content would leak structure into what should be opaque. Cheap to mint, independently revocable, no caller surprise where two `serve` calls hand out URLs that share fate. Old previews of the same root remain valid until tray expiry or explicit revoke; they simply co-exist on a different subdomain from the new one.
+
+### Concurrent serves
+
+Multiple `serve` invocations run side-by-side without interference. Each mints its own `previewToken` → its own subdomain → its own origin → its own DO-stored `servedRoot`/`entryPath`. The leader's security gate fires against the per-request `servedRoot`, so paths are scoped to the token that asked for them, not to "whatever the most recent serve set."
+
+Concretely:
+
+```
+serve /workspace/dist          → token A  → https://<tokenA>.preview.sliccy.ai/
+serve /workspace/site-b        → token B  → https://<tokenB>.preview.sliccy.ai/
+
+GET <tokenA>.preview.sliccy.ai/        → entryPath               = /workspace/dist/index.html
+GET <tokenA>.preview.sliccy.ai/app.js  → servedRoot + '/app.js'  = /workspace/dist/app.js
+GET <tokenB>.preview.sliccy.ai/        → entryPath               = /workspace/site-b/index.html
+GET <tokenB>.preview.sliccy.ai/app.js  → servedRoot + '/app.js'  = /workspace/site-b/app.js
+```
+
+`<tokenA>.preview.sliccy.ai/app.js` and `<tokenB>.preview.sliccy.ai/app.js` look like "the same path at the same root" structurally, but they're on **different origins** and resolve to **different physical VFS paths** because the per-token `servedRoot` rides every request. No shared state, no collision, no "most recent serve wins."
+
+Three properties this gives us for free:
+
+- **Browser-native site isolation between previews.** Different subdomains = different origins; cookies, `localStorage`, `IndexedDB`, `postMessage` channels are all isolated. A page served from `<tokenA>` doing `fetch('https://<tokenB>.preview.sliccy.ai/secret')` is a cross-origin request; the worker should **default-deny CORS between preview subdomains** so previews never see each other's content.
+- **Bridge channel isolation.** Each token's `__preview/bridge` WS upgrade is scoped to that token's session; the bridge in preview A cannot receive commands for preview B.
+- **Independent revocation.** Deleting one preview's DO record doesn't affect the other.
+
+This is a structural fix for a class of bug the current SW-based local serve has to work around. `preview-sw.ts` keeps `projectRoot` per-`clientId` precisely because the old design has a global-clobber problem with concurrent serves (the regression we fixed mid-implementation on the P2P branch). Under the unified design that fix is _structural_ — different tokens = different origins = different gates, end of story — not a per-client lookup map.
+
 ### Protocol — worker ↔ leader (controller WS)
 
 Two new message types on the existing controller WebSocket the leader already holds:
