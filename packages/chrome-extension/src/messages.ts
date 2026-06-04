@@ -491,6 +491,112 @@ export type VfsStatResultMsg =
 
 export type VfsReadResultMsg = VfsReadDirResultMsg | VfsReadFileResultMsg | VfsStatResultMsg;
 
+// ---------------------------------------------------------------------------
+// VFS write RPCs (Wave B2w — issue #d8860197)
+// ---------------------------------------------------------------------------
+// Write-side RPC surface that lets the panel mutate the worker-owned VFS
+// without touching OPFS directly. Mirrors the writable subset of
+// `VirtualFS` used by `session-freezer.ts` (`writeFile`, `mkdir`, `rm`,
+// `flush`).
+//
+// Mirrored (not imported) for the same reason as `VfsReadDirRequestMsg`
+// above — the `fs/types.ts` import would drag the webapp fs module
+// graph into the webapp-worker tsconfig.
+//
+// Binary `writeFile` payloads carry the raw `Uint8Array` and request
+// transfer of the backing `ArrayBuffer` (zero-copy on the
+// `MessageChannel` adapter; structured-clone copy on chrome.runtime,
+// which silently ignores the transfer list). Text payloads stay as
+// `string` (no transfer benefit).
+
+/** Panel → worker: write file content at `path`. */
+export type VfsWriteFileRequestMsg =
+  | {
+      type: 'vfs-write-file';
+      /** Correlation id echoed on the matching `vfs-write-file-result`. */
+      requestId: string;
+      path: string;
+      encoding: 'utf-8';
+      data: string;
+      /** Create parent directories if they don't exist. Default: false. */
+      recursive?: boolean;
+    }
+  | {
+      type: 'vfs-write-file';
+      requestId: string;
+      path: string;
+      encoding: 'binary';
+      data: Uint8Array;
+      recursive?: boolean;
+    };
+
+/** Panel → worker: create directory at `path`. */
+export interface VfsMkdirRequestMsg {
+  type: 'vfs-mkdir';
+  /** Correlation id echoed on the matching `vfs-mkdir-result`. */
+  requestId: string;
+  path: string;
+  /** Create parent directories if they don't exist. Default: false. */
+  recursive?: boolean;
+}
+
+/** Panel → worker: remove the entry at `path`. */
+export interface VfsRmRequestMsg {
+  type: 'vfs-rm';
+  /** Correlation id echoed on the matching `vfs-rm-result`. */
+  requestId: string;
+  path: string;
+  /** Remove directories and their contents recursively. Default: false. */
+  recursive?: boolean;
+}
+
+/**
+ * Panel → worker: flush the VFS to durable storage. Used by the freezer
+ * after a sequence of writes so the bytes land on disk before a
+ * subsequent `location.reload()` could race the IndexedDB debounce.
+ */
+export interface VfsFlushRequestMsg {
+  type: 'vfs-flush';
+  /** Correlation id echoed on the matching `vfs-flush-result`. */
+  requestId: string;
+}
+
+export type VfsWriteRequestMsg =
+  | VfsWriteFileRequestMsg
+  | VfsMkdirRequestMsg
+  | VfsRmRequestMsg
+  | VfsFlushRequestMsg;
+
+/**
+ * Worker → panel: response to `vfs-write-file`. Success branch carries
+ * no payload (writes are void); failure branch carries an error envelope
+ * shaped like the read-side failures.
+ */
+export type VfsWriteFileResultMsg =
+  | { type: 'vfs-write-file-result'; requestId: string; ok: true }
+  | { type: 'vfs-write-file-result'; requestId: string; ok: false; error: VfsErrorEnvelope };
+
+/** Worker → panel: response to `vfs-mkdir`. */
+export type VfsMkdirResultMsg =
+  | { type: 'vfs-mkdir-result'; requestId: string; ok: true }
+  | { type: 'vfs-mkdir-result'; requestId: string; ok: false; error: VfsErrorEnvelope };
+
+/** Worker → panel: response to `vfs-rm`. */
+export type VfsRmResultMsg =
+  | { type: 'vfs-rm-result'; requestId: string; ok: true }
+  | { type: 'vfs-rm-result'; requestId: string; ok: false; error: VfsErrorEnvelope };
+
+/** Worker → panel: response to `vfs-flush`. */
+export type VfsFlushResultMsg =
+  | { type: 'vfs-flush-result'; requestId: string; ok: true }
+  | { type: 'vfs-flush-result'; requestId: string; ok: false; error: VfsErrorEnvelope };
+
+export type VfsWriteResultMsg =
+  | VfsWriteFileResultMsg
+  | VfsMkdirResultMsg
+  | VfsRmResultMsg
+  | VfsFlushResultMsg;
+
 // Detached popout messages — panel ↔ SW coordination.
 // See docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md.
 
@@ -667,6 +773,10 @@ export type PanelToOffscreenMessage =
   // Panel-driven VFS read RPCs. Routed by the worker's `VfsRpcHost`,
   // ignored by `OffscreenBridge`. Defined above as `VfsReadRequestMsg`.
   | VfsReadRequestMsg
+  // Panel-driven VFS write RPCs (Wave B2w). Routed by the worker's
+  // `VfsRpcHost` when a writable backend is wired; otherwise the host
+  // replies with an EACCES failure envelope. Ignored by `OffscreenBridge`.
+  | VfsWriteRequestMsg
   | DetachedPopoutRequestMsg
   | DetachedClaimMsg
   | LeaderSprinklesSnapshotMsg
@@ -993,6 +1103,9 @@ export type OffscreenToPanelMessage =
   // VFS read RPC responses emitted by the worker's `VfsRpcHost`.
   // Defined above as `VfsReadResultMsg`.
   | VfsReadResultMsg
+  // VFS write RPC responses emitted by the worker's `VfsRpcHost`
+  // (Wave B2w). Defined above as `VfsWriteResultMsg`.
+  | VfsWriteResultMsg
   | LeaderModeChangedMsg
   | LeaderTrayResetResponseMsg;
 

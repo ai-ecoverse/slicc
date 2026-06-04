@@ -1,10 +1,13 @@
 /**
- * `VfsRpcHost` — worker-side endpoint for the VFS read RPC protocol.
+ * `VfsRpcHost` — worker-side endpoint for the VFS RPC protocol.
  *
  * Wave B1 of the worker-owned-OPFS migration (blueprint note d8860197):
  * exposes `readDir` / `readFile` / `stat` from the worker (which owns
  * the ZenFS/OPFS VFS) over the existing kernel RPC transport so the
- * page can observe the VFS without touching OPFS itself.
+ * page can observe the VFS without touching OPFS itself. Wave B2w
+ * extends the surface with `writeFile` / `mkdir` / `rm` / `flush` so
+ * page-side callers (e.g. the session freezer) can mutate the
+ * worker-owned VFS through the same wire.
  *
  * Co-resides with `OffscreenBridge` and `TerminalSessionHost` on the
  * same kernel port: each subscriber filters by the messages it cares
@@ -14,24 +17,31 @@
  * cross-talk.
  *
  * Per-request lifecycle:
- *   `vfs-read-dir`  → `client.readDir(path)` → `vfs-read-dir-result`
- *   `vfs-read-file` → `client.readFile(path, options)` → `vfs-read-file-result`
- *                     Binary payloads are handed back as `Uint8Array`
- *                     with the underlying buffer in the transfer list,
- *                     so the `MessageChannel` adapter moves ownership
- *                     to the panel (zero-copy). The chrome.runtime
- *                     adapter copies — it doesn't honor transferables.
- *   `vfs-stat`      → `client.stat(path)` → `vfs-stat-result`
+ *   `vfs-read-dir`   → `client.readDir(path)`             → `vfs-read-dir-result`
+ *   `vfs-read-file`  → `client.readFile(path, options)`   → `vfs-read-file-result`
+ *                      Binary payloads are handed back as `Uint8Array`
+ *                      with the underlying buffer in the transfer list,
+ *                      so the `MessageChannel` adapter moves ownership
+ *                      to the panel (zero-copy). The chrome.runtime
+ *                      adapter copies — it doesn't honor transferables.
+ *   `vfs-stat`       → `client.stat(path)`                → `vfs-stat-result`
+ *   `vfs-write-file` → `writableClient.writeFile(...)`    → `vfs-write-file-result`
+ *   `vfs-mkdir`      → `writableClient.mkdir(...)`        → `vfs-mkdir-result`
+ *   `vfs-rm`         → `writableClient.rm(...)`           → `vfs-rm-result`
+ *   `vfs-flush`      → `writableClient.flush()`           → `vfs-flush-result`
  *
- * Errors thrown by the underlying `LocalVfsClient` are serialised onto
- * the failure branch of the discriminated response. `FsError` (POSIX
+ * Errors thrown by the underlying VFS backend are serialised onto the
+ * failure branch of the discriminated response. `FsError` (POSIX
  * `code` + `message` + `path`) round-trips with the `code` preserved;
- * any other error becomes `{ code: 'EIO', message }`.
+ * any other error becomes `{ code: 'EIO', message }`. Write requests
+ * received without a `writableClient` configured are answered with
+ * `EACCES` so a stray `WritableVfsClient` against a read-only host
+ * fails fast rather than hanging.
  *
- * No page-side consumer wires this surface yet — Wave B2/B3 add the
- * `VfsRpcClient` and switch the panel `LocalVfsClient` implementation
- * over to it. When no client subscribes, the host's responses simply
- * fan out into nobody — existing behavior is unchanged.
+ * Wave B2w wiring is flag-gated by `slicc_opfs_vfs === 'opfs'` at the
+ * call site (kernel-worker / offscreen boot). When the flag is off, no
+ * page-side consumer subscribes and the new write request types fan
+ * out into nobody — existing behavior is unchanged.
  */
 
 import type {
@@ -40,18 +50,28 @@ import type {
   PanelToOffscreenMessage,
   VfsDirEntryEnvelope,
   VfsErrorEnvelope,
+  VfsFlushRequestMsg,
+  VfsFlushResultMsg,
+  VfsMkdirRequestMsg,
+  VfsMkdirResultMsg,
   VfsReadDirRequestMsg,
   VfsReadDirResultMsg,
   VfsReadFileRequestMsg,
   VfsReadFileResultMsg,
   VfsReadRequestMsg,
+  VfsRmRequestMsg,
+  VfsRmResultMsg,
   VfsStatRequestMsg,
   VfsStatResultMsg,
   VfsStatsEnvelope,
+  VfsWriteFileRequestMsg,
+  VfsWriteFileResultMsg,
+  VfsWriteRequestMsg,
 } from '../../../chrome-extension/src/messages.js';
 import { FsError } from '../fs/types.js';
 import type { LocalVfsClient } from './local-vfs-client.js';
 import type { KernelTransport } from './types.js';
+import type { WritableVfsBackend } from './writable-vfs-client.js';
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -71,6 +91,18 @@ export interface VfsRpcHostOptions {
    * `host.sharedFs` directly.
    */
   client: LocalVfsClient;
+  /**
+   * Optional writable VFS backend (Wave B2w — `slicc_opfs_vfs === 'opfs'`
+   * gates wiring at the caller). When wired, the host accepts
+   * `vfs-write-file` / `vfs-mkdir` / `vfs-rm` / `vfs-flush` request
+   * envelopes and dispatches them. When absent, write requests are
+   * answered with an `EACCES` failure envelope so a stray
+   * `WritableVfsClient` against a read-only host fails fast instead of
+   * silently dropping. `VirtualFS` satisfies `WritableVfsBackend` for
+   * free, so the kernel-worker / offscreen pass `host.sharedFs` here
+   * too once the flag is on.
+   */
+  writableClient?: WritableVfsBackend;
   /**
    * Optional logger. Defaults to `console`. Override in tests to
    * silence expected warnings.
@@ -103,12 +135,14 @@ export function startVfsRpcHost(options: VfsRpcHostOptions): VfsRpcHostHandle {
 class VfsRpcHost {
   private readonly transport: KernelTransport<ExtensionMessage, OffscreenToPanelMessage>;
   private readonly client: LocalVfsClient;
+  private readonly writableClient: WritableVfsBackend | null;
   private readonly log: NonNullable<VfsRpcHostOptions['logger']>;
   private unsubscribe: (() => void) | null = null;
 
   constructor(options: VfsRpcHostOptions) {
     this.transport = options.transport;
     this.client = options.client;
+    this.writableClient = options.writableClient ?? null;
     this.log = options.logger ?? console;
   }
 
@@ -118,13 +152,21 @@ class VfsRpcHost {
       if (!isExtensionEnvelope(envelope)) return;
       if (envelope.source !== 'panel') return;
       const payload = envelope.payload as PanelToOffscreenMessage;
-      if (!isVfsReadRequest(payload)) return;
-      void this.handleRequest(payload).catch((err) => {
-        // `handleRequest` already converts all known failures into a
-        // failure-branch response. An exception here is a bug — most
-        // likely a transport.send() throw. Log it; we can't reply.
-        this.log.warn('[vfs-rpc-host] handler unexpectedly threw', err);
-      });
+      if (isVfsReadRequest(payload)) {
+        void this.handleRequest(payload).catch((err) => {
+          // `handleRequest` already converts all known failures into a
+          // failure-branch response. An exception here is a bug — most
+          // likely a transport.send() throw. Log it; we can't reply.
+          this.log.warn('[vfs-rpc-host] handler unexpectedly threw', err);
+        });
+        return;
+      }
+      if (isVfsWriteRequest(payload)) {
+        void this.handleWriteRequest(payload).catch((err) => {
+          this.log.warn('[vfs-rpc-host] write handler unexpectedly threw', err);
+        });
+        return;
+      }
     });
   }
 
@@ -245,6 +287,122 @@ class VfsRpcHost {
   }
 
   // -------------------------------------------------------------------------
+  // Write-side handlers (Wave B2w)
+  // -------------------------------------------------------------------------
+
+  private async handleWriteRequest(req: VfsWriteRequestMsg): Promise<void> {
+    if (!this.writableClient) {
+      // No writable backend wired — fail fast so a stray write client
+      // against a read-only host surfaces immediately instead of hanging.
+      this.emitWriteError(
+        writeResultTypeFor(req.type),
+        req.requestId,
+        new FsError('EACCES', 'vfs-rpc-host has no writable backend wired'),
+        writeRequestPath(req)
+      );
+      return;
+    }
+    switch (req.type) {
+      case 'vfs-write-file':
+        return this.handleWriteFile(req, this.writableClient);
+      case 'vfs-mkdir':
+        return this.handleMkdir(req, this.writableClient);
+      case 'vfs-rm':
+        return this.handleRm(req, this.writableClient);
+      case 'vfs-flush':
+        return this.handleFlush(req, this.writableClient);
+    }
+  }
+
+  private async handleWriteFile(
+    req: VfsWriteFileRequestMsg,
+    backend: WritableVfsBackend
+  ): Promise<void> {
+    try {
+      // The discriminated request envelope already pins `data` to the
+      // right runtime shape per `encoding`. Pass it through to the
+      // backend's `writeFile`, which accepts either `string` or
+      // `Uint8Array` (`FileContent` in `fs/types.ts`).
+      if (req.encoding === 'binary') {
+        if (!(req.data instanceof Uint8Array)) {
+          this.emitWriteError(
+            'vfs-write-file-result',
+            req.requestId,
+            new FsError('EIO', 'vfs-write-file(binary) data is not Uint8Array'),
+            req.path
+          );
+          return;
+        }
+      } else if (typeof req.data !== 'string') {
+        this.emitWriteError(
+          'vfs-write-file-result',
+          req.requestId,
+          new FsError('EIO', 'vfs-write-file(utf-8) data is not string'),
+          req.path
+        );
+        return;
+      }
+      const opts = req.recursive === undefined ? undefined : { recursive: req.recursive };
+      await backend.writeFile(req.path, req.data, opts);
+      const response: VfsWriteFileResultMsg = {
+        type: 'vfs-write-file-result',
+        requestId: req.requestId,
+        ok: true,
+      };
+      this.transport.send(response);
+    } catch (err) {
+      this.emitWriteError('vfs-write-file-result', req.requestId, err, req.path);
+    }
+  }
+
+  private async handleMkdir(req: VfsMkdirRequestMsg, backend: WritableVfsBackend): Promise<void> {
+    try {
+      const opts = req.recursive === undefined ? undefined : { recursive: req.recursive };
+      await backend.mkdir(req.path, opts);
+      const response: VfsMkdirResultMsg = {
+        type: 'vfs-mkdir-result',
+        requestId: req.requestId,
+        ok: true,
+      };
+      this.transport.send(response);
+    } catch (err) {
+      this.emitWriteError('vfs-mkdir-result', req.requestId, err, req.path);
+    }
+  }
+
+  private async handleRm(req: VfsRmRequestMsg, backend: WritableVfsBackend): Promise<void> {
+    try {
+      const opts = req.recursive === undefined ? undefined : { recursive: req.recursive };
+      await backend.rm(req.path, opts);
+      const response: VfsRmResultMsg = {
+        type: 'vfs-rm-result',
+        requestId: req.requestId,
+        ok: true,
+      };
+      this.transport.send(response);
+    } catch (err) {
+      this.emitWriteError('vfs-rm-result', req.requestId, err, req.path);
+    }
+  }
+
+  private async handleFlush(req: VfsFlushRequestMsg, backend: WritableVfsBackend): Promise<void> {
+    try {
+      await backend.flush();
+      const response: VfsFlushResultMsg = {
+        type: 'vfs-flush-result',
+        requestId: req.requestId,
+        ok: true,
+      };
+      this.transport.send(response);
+    } catch (err) {
+      // `flush()` has no associated path; pass empty string and let the
+      // error envelope drop the `path` field when the source `FsError`
+      // doesn't carry one.
+      this.emitWriteError('vfs-flush-result', req.requestId, err, '');
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // Error emission
   // -------------------------------------------------------------------------
 
@@ -291,6 +449,67 @@ class VfsRpcHost {
       }
     }
   }
+
+  private emitWriteError(
+    type:
+      | VfsWriteFileResultMsg['type']
+      | VfsMkdirResultMsg['type']
+      | VfsRmResultMsg['type']
+      | VfsFlushResultMsg['type'],
+    requestId: string,
+    err: unknown,
+    path: string
+  ): void {
+    // `path === ''` is the sentinel for flush, which has no associated
+    // path. Drop the `path` field from the envelope in that case so
+    // callers don't reconstruct an `FsError` with a spurious empty path.
+    const error = toErrorEnvelope(err, path);
+    if (path === '' && error.path === '') {
+      delete (error as { path?: string }).path;
+    }
+    switch (type) {
+      case 'vfs-write-file-result': {
+        const msg: VfsWriteFileResultMsg = {
+          type: 'vfs-write-file-result',
+          requestId,
+          ok: false,
+          error,
+        };
+        this.transport.send(msg);
+        return;
+      }
+      case 'vfs-mkdir-result': {
+        const msg: VfsMkdirResultMsg = {
+          type: 'vfs-mkdir-result',
+          requestId,
+          ok: false,
+          error,
+        };
+        this.transport.send(msg);
+        return;
+      }
+      case 'vfs-rm-result': {
+        const msg: VfsRmResultMsg = {
+          type: 'vfs-rm-result',
+          requestId,
+          ok: false,
+          error,
+        };
+        this.transport.send(msg);
+        return;
+      }
+      case 'vfs-flush-result': {
+        const msg: VfsFlushResultMsg = {
+          type: 'vfs-flush-result',
+          requestId,
+          ok: false,
+          error,
+        };
+        this.transport.send(msg);
+        return;
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -305,6 +524,37 @@ function isVfsReadRequest(payload: unknown): payload is VfsReadRequestMsg {
   if (typeof payload !== 'object' || payload === null) return false;
   const t = (payload as { type?: unknown }).type;
   return t === 'vfs-read-dir' || t === 'vfs-read-file' || t === 'vfs-stat';
+}
+
+function isVfsWriteRequest(payload: unknown): payload is VfsWriteRequestMsg {
+  if (typeof payload !== 'object' || payload === null) return false;
+  const t = (payload as { type?: unknown }).type;
+  return t === 'vfs-write-file' || t === 'vfs-mkdir' || t === 'vfs-rm' || t === 'vfs-flush';
+}
+
+function writeResultTypeFor(
+  reqType: VfsWriteRequestMsg['type']
+):
+  | VfsWriteFileResultMsg['type']
+  | VfsMkdirResultMsg['type']
+  | VfsRmResultMsg['type']
+  | VfsFlushResultMsg['type'] {
+  switch (reqType) {
+    case 'vfs-write-file':
+      return 'vfs-write-file-result';
+    case 'vfs-mkdir':
+      return 'vfs-mkdir-result';
+    case 'vfs-rm':
+      return 'vfs-rm-result';
+    case 'vfs-flush':
+      return 'vfs-flush-result';
+  }
+}
+
+function writeRequestPath(req: VfsWriteRequestMsg): string {
+  // `flush` has no path; sentinel `''` triggers the path-drop branch in
+  // `emitWriteError`.
+  return req.type === 'vfs-flush' ? '' : req.path;
 }
 
 function toErrorEnvelope(err: unknown, path: string): VfsErrorEnvelope {
