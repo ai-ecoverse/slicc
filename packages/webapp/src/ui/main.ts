@@ -2262,7 +2262,19 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   //     `enrichPendingSessions` finishes the work on the next boot.
   //   - `freeze === false`                      → discard (long press).
   //     No archive entry is written.
+  //
+  // Wave B4a: under `slicc_opfs_vfs=opfs`, only the OPFS leader (B6
+  // election) may write the archive — followers' `writableFs` is the
+  // page-side LFS shadow which the worker-OPFS-backed UI never reads,
+  // so a follower archive would be silently orphaned. Make the
+  // affordance a no-op on followers (matches the B6 read-only banner).
+  // Flag off: `opfsLeader.isLeader === true` (no election ran), so the
+  // gate is unreachable and behavior stays byte-identical.
   layout.onClearChat = async (opts) => {
+    if (useRpcVfs && !opfsLeader.isLeader) {
+      log.info('New session affordance skipped (OPFS follower — read-only tab)');
+      return;
+    }
     if (opts?.freeze === 'quick') {
       try {
         await runNewSessionFreezeQuick({ vfs: writableFs });
@@ -3491,7 +3503,13 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // Wave B4: routes through `writableFs` so the OPFS-leader tab lands
   // the rename + index update on the worker-owned canonical OPFS via
   // the `WritableVfsClient`. Followers (and flag-off) reuse `localFs`.
-  scheduleBackgroundEnrichment(writableFs);
+  //
+  // Wave B4a: pass `isWriter` so the scheduler no-ops on followers
+  // under the OPFS flag. Otherwise the enrichment write would land in
+  // the page-side LFS shadow (silent orphan, never seen by the
+  // worker-OPFS sessions index). Flag off → `isWriter: true` (no
+  // election ran), behavior byte-identical to pre-B4a.
+  scheduleBackgroundEnrichment(writableFs, { isWriter: !useRpcVfs || opfsLeader.isLeader });
 
   log.info('Standalone kernel-worker UI ready');
 }

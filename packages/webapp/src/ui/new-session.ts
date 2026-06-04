@@ -196,8 +196,21 @@ export async function enrichPendingSessions(
  * Defers via `requestIdleCallback` where available so a slow LLM call
  * can't delay first paint; falls back to `setTimeout(0)` otherwise.
  * Never throws — `enrichPendingSessions` is already best-effort.
+ *
+ * Wave B4a: callers pass `isWriter: false` for non-leader tabs under
+ * `slicc_opfs_vfs === 'opfs'`. Enrichment writes go via the supplied
+ * VFS; on a follower that VFS is the page-side LFS shadow which the
+ * worker-OPFS-backed UI never reads → silent orphan. Skip the pass
+ * entirely on followers (read-only mode), matching the B6 banner.
  */
-export function scheduleBackgroundEnrichment(vfs: WritableVfsClient): void {
+export function scheduleBackgroundEnrichment(
+  vfs: WritableVfsClient,
+  opts: { isWriter?: boolean } = {}
+): void {
+  if (opts.isWriter === false) {
+    log.info('Background enrichment skipped (OPFS follower — read-only tab)');
+    return;
+  }
   const run = (): void => {
     void enrichPendingSessions({ vfs }).catch(() => {
       // `enrichPendingSessions` already logs internally and is best-effort
