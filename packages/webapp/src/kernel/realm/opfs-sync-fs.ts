@@ -1,5 +1,5 @@
 /**
- * Wave E1 — In-tree `OPFS_SYNC_FS` Emscripten-FS plugin.
+ * Wave E1+E2 — In-tree `OPFS_SYNC_FS` Emscripten-FS plugin.
  *
  * Mirrors the structure of Pyodide's `nativefs.ts` but goes
  * straight to the OPFS subtree via `FileSystemSyncAccessHandle`
@@ -8,7 +8,7 @@
  * the SAH I/O surface (`read` / `write` / `truncate` / `getSize`)
  * is what makes this plugin synchronous at the Emscripten boundary.
  *
- * Two-phase wire-up (E2 will land the registration + mount):
+ * Two-phase wire-up:
  *   1. `prewalkOpfsTree(rootHandle)` — async walk of the OPFS
  *      subtree, returns a `OpfsPrewalkSnapshot` carrying every
  *      directory + file handle keyed by path relative to the
@@ -21,17 +21,19 @@
  * `node_ops` (lookup / readdir / mknod / unlink / rmdir / rename
  * / symlink / readlink / getattr / setattr) all touch the
  * in-memory tree synchronously. OPFS mutations are queued onto
- * `mount.opts.pendingOps` (a Promise-chain) so the caller can
- * `await opts.flush()` before relinquishing control of the
- * worker — keeps the FS boundary sync without losing durability.
- * SAH-backed file I/O is sync end-to-end via the injected
- * `sahProvider` (test shim provides a sync acquirer; real OPFS
- * deployment wraps the async `createSyncAccessHandle()` via a
- * pre-warmed pool — E2's concern).
+ * `mount.opts.pendingOps` (a Promise-chain) so the caller
+ * `await flushPendingOpfsOps(mount)` before relinquishing control
+ * of the worker — keeps the FS boundary sync without losing
+ * durability. SAH-backed file I/O is sync end-to-end via the
+ * injected `sahProvider`; production wires up
+ * `createBufferedOpfsSahProvider` (preload-then-flush in-memory
+ * backing) and a future wave can swap that for a real
+ * `createSyncAccessHandle` pool once cross-worker leasing is firmed
+ * up (Wave B6 leader-election + ZenFS SAH coordination).
  *
- * Not yet wired into Pyodide; E2 swaps `mountOpfsDirsAndSyncIn`'s
- * `mountNativeFS` + `syncfs(true)` for `pyodide.FS.mount(plugin,
- * opts, dir)` on the flag-ON path. Flag-off is untouched.
+ * Wired into Pyodide by `py-realm-shared.ts::mountOpfsDirsAndSyncIn`
+ * on the `slicc_opfs_vfs === 'opfs'` flag-ON path; flag-off is
+ * untouched.
  */
 
 // ---------------------------------------------------------------------------
@@ -666,11 +668,144 @@ function enqueueOpfsOp(mount: OpfsMount, op: () => Promise<void>): void {
 
 /**
  * Public flush helper — drains every queued OPFS mutation across
- * the mount. E2 will call this before `realm-done` so the kernel
- * sees a consistent tree after Python exits.
+ * the mount. E2 calls this before `realm-done` so the kernel sees
+ * a consistent tree after Python exits.
  */
 export async function flushPendingOpfsOps(mount: OpfsMount): Promise<void> {
   await (OPFS_OP_CHAINS.get(mount) ?? Promise.resolve());
+}
+
+// ---------------------------------------------------------------------------
+// Wave E2: production-grade SAH provider for the realm worker
+// ---------------------------------------------------------------------------
+
+/**
+ * Buffered `OpfsSahProvider` for the realm worker. Keeps file
+ * contents in memory during the turn (so the Emscripten-FS boundary
+ * stays synchronous) and writes dirty buffers back to OPFS via
+ * `createWritable` at flush time. Existing OPFS files are seeded
+ * by `preload(prewalk)`; new files (`mknod` path) start with an
+ * empty buffer and are persisted to disk on flush.
+ *
+ * Compromise vs real SAH: every accessed file's content lives in
+ * memory for the duration of the realm turn (Python turns are
+ * short-lived and the realm worker is killed/recycled per task, so
+ * this bounds residency). A future wave can swap the in-memory
+ * backing for `createSyncAccessHandle()` end-to-end once the
+ * cross-tab / cross-worker leasing story (Wave B6 leader election
+ * + ZenFS SAH coordination) is firmed up.
+ */
+export interface OpfsBufferedSahProvider {
+  /** Inject into `OpfsMountOpts.sahProvider` before `FS.mount`. */
+  provider: OpfsSahProvider;
+  /** Seed in-memory backings from existing OPFS files. */
+  preload(prewalk: OpfsPrewalkSnapshot): Promise<void>;
+  /** Write every dirty buffer back to OPFS under `rootHandle`. */
+  flush(rootHandle: FileSystemDirectoryHandle): Promise<void>;
+}
+
+interface BufferedBacking {
+  data: Uint8Array;
+  dirty: boolean;
+}
+
+class BufferedSyncAccessHandle implements OpfsSyncAccessHandle {
+  constructor(
+    private readonly backing: BufferedBacking,
+    private readonly onClose: () => void
+  ) {}
+  read(buffer: ArrayBufferView, options?: { at?: number }): number {
+    const at = options?.at ?? 0;
+    const view = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    const end = Math.min(this.backing.data.length, at + view.byteLength);
+    const n = Math.max(0, end - at);
+    view.set(this.backing.data.subarray(at, at + n), 0);
+    return n;
+  }
+  write(buffer: ArrayBufferView, options?: { at?: number }): number {
+    const at = options?.at ?? 0;
+    const view = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    const requiredLength = at + view.byteLength;
+    if (requiredLength > this.backing.data.length) {
+      const grown = new Uint8Array(requiredLength);
+      grown.set(this.backing.data);
+      this.backing.data = grown;
+    }
+    this.backing.data.set(view, at);
+    this.backing.dirty = true;
+    return view.byteLength;
+  }
+  truncate(newSize: number): void {
+    if (newSize === this.backing.data.length) return;
+    const grown = new Uint8Array(newSize);
+    grown.set(this.backing.data.subarray(0, Math.min(newSize, this.backing.data.length)));
+    this.backing.data = grown;
+    this.backing.dirty = true;
+  }
+  getSize(): number {
+    return this.backing.data.length;
+  }
+  flush(): void {}
+  close(): void {
+    this.onClose();
+  }
+}
+
+export function createBufferedOpfsSahProvider(): OpfsBufferedSahProvider {
+  const backings = new Map<string, BufferedBacking>();
+  const leased = new Set<string>();
+  const provider: OpfsSahProvider = {
+    acquire(relPath: string, _fileHandle?: FileSystemFileHandle): OpfsSyncAccessHandle {
+      if (leased.has(relPath)) {
+        throw new Error(`OPFS SAH lease conflict: ${relPath}`);
+      }
+      leased.add(relPath);
+      let backing = backings.get(relPath);
+      if (!backing) {
+        backing = { data: new Uint8Array(), dirty: true };
+        backings.set(relPath, backing);
+      }
+      return new BufferedSyncAccessHandle(backing, () => {
+        leased.delete(relPath);
+      });
+    },
+    release(relPath: string): void {
+      leased.delete(relPath);
+    },
+  };
+  return {
+    provider,
+    async preload(prewalk: OpfsPrewalkSnapshot): Promise<void> {
+      for (const [relPath, entry] of prewalk.entries) {
+        if (entry.kind !== 'file') continue;
+        const file = await entry.fileHandle.getFile();
+        const data = new Uint8Array(await file.arrayBuffer());
+        backings.set(relPath, { data, dirty: false });
+      }
+    },
+    async flush(rootHandle: FileSystemDirectoryHandle): Promise<void> {
+      for (const [relPath, backing] of backings) {
+        if (!backing.dirty) continue;
+        const parts = relPath.split('/');
+        let cursor = rootHandle;
+        for (const part of parts.slice(0, -1)) {
+          cursor = await cursor.getDirectoryHandle(part, { create: true });
+        }
+        const fileHandle = await cursor.getFileHandle(parts[parts.length - 1], { create: true });
+        const writable = await fileHandle.createWritable();
+        // Copy into a fresh ArrayBuffer-backed view so the dom
+        // `FileSystemWriteChunkType` overload (which requires a
+        // strict `ArrayBuffer`, not `ArrayBufferLike`) accepts it
+        // without forcing every backing.data slot to carry a wider
+        // type than the SAH-shaped reads need.
+        const buf = new ArrayBuffer(backing.data.byteLength);
+        new Uint8Array(buf).set(backing.data);
+        await writable.write(buf);
+        await writable.close();
+        backing.dirty = false;
+      }
+    },
+  };
 }
 
 async function ensureDirHandle(node: FsNode): Promise<FileSystemDirectoryHandle> {
