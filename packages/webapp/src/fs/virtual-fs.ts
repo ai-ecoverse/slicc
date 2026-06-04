@@ -204,6 +204,15 @@ export class VirtualFS {
     wipe: boolean
   ): Promise<void> {
     const handle = providedHandle ?? (await VirtualFS.acquireOpfsHandle(vfs.dbName, wipe));
+    // ZenFS' `WebAccessFS._loadMetadata` reads `/.metadata.json` eagerly when
+    // a `metadata` path is configured and throws ENOENT on first boot of a
+    // fresh OPFS subdir. Seed an empty-but-valid sidecar before `configure()`
+    // so the file exists. The shape mirrors `Index.toJSON()` in
+    // `@zenfs/core/internal/file_index.js` (`{ version, maxSize, entries }`)
+    // so ZenFS can overwrite it byte-compatibly. Only seed when absent — an
+    // existing sidecar (the reload case) is left untouched so persisted
+    // metadata survives.
+    await VirtualFS.seedOpfsMetadataSidecarIfMissing(handle);
     const [{ configure, fs: zenfsImport }, { WebAccess }] = await Promise.all([
       import('@zenfs/core'),
       import('@zenfs/dom'),
@@ -218,6 +227,42 @@ export class VirtualFS {
       },
     });
     vfs.lfs = zenfsImport.promises as unknown as FS.PromisifiedFS;
+  }
+
+  /**
+   * Seed `/.metadata.json` in the OPFS subdir handle with an empty-but-valid
+   * ZenFS `Index.toJSON()` payload if the file is missing. No-op when the
+   * sidecar already exists (reload case — persisted metadata must survive).
+   *
+   * The shape `{ version: 1, maxSize: 0xffffffff, entries: {} }` matches
+   * `Index.toJSON()` in `@zenfs/core/internal/file_index.js`; `maxSize`
+   * comes from `size_max = 0xffffffff` in `@zenfs/core/constants.js`.
+   * `WebAccessFS._loadMetadata` reads this with `JSON.parse` +
+   * `index.fromJSON(...)`. Empty entries means the root `/` inode is
+   * created on-demand by `WebAccessFS.stat`'s ENOENT recovery path
+   * (lines ~84-110 of `@zenfs/dom/access.js`), same as the no-metadata
+   * boot path.
+   */
+  private static async seedOpfsMetadataSidecarIfMissing(
+    handle: FileSystemDirectoryHandle
+  ): Promise<void> {
+    const SIDECAR_NAME = '.metadata.json';
+    try {
+      await handle.getFileHandle(SIDECAR_NAME);
+      return;
+    } catch (err) {
+      const name = (err as { name?: string } | null)?.name;
+      if (name !== 'NotFoundError') throw err;
+    }
+    const fileHandle = await handle.getFileHandle(SIDECAR_NAME, { create: true });
+    const writable = await fileHandle.createWritable();
+    const initial = JSON.stringify({
+      version: 1,
+      maxSize: 0xffffffff,
+      entries: {},
+    });
+    await writable.write(initial);
+    await writable.close();
   }
 
   /**
