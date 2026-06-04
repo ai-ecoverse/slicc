@@ -47,7 +47,13 @@ jobs:
     # Skip fork PRs: secrets are unavailable on `pull_request` from forks, and
     # reviewing them safely would require `pull_request_target` + a security
     # review (out of scope). Only run when the PR head lives in this repo.
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    # Also skip bot-authored PRs (e.g. Renovate dependency bumps): they don't
+    # need an AI review, and claude-code-action rejects bot-initiated runs by
+    # default ("Workflow initiated by non-human actor"), which only produced
+    # noisy failed runs.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.type != 'Bot'
     steps:
       - name: Wait 5 minutes for personal/human reviewers
         run: sleep 300
@@ -101,7 +107,7 @@ jobs:
           claude_args: |
             --model ${{ vars.PR_REVIEW_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Read,Grep,Glob"
-            --max-turns 40
+            --max-turns 200
           prompt: |
             You are performing an automated code review for the SLICC codebase.
 
