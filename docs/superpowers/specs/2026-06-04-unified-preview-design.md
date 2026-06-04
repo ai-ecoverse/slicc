@@ -434,7 +434,7 @@ type MintPreviewResponse = {
 // response: { revoked: boolean }
 ```
 
-Implementation: top-level routes in `cloudflare-worker/src/index.ts` that delegate to the `SessionTrayDurableObject` via the existing stub-fetch pattern; the DO holds `previews: Record<previewToken, PreviewRecord>` keyed under the tray. **Revoke (Phase 1)** deletes the DO record AND broadcasts a `preview.revoked { previewToken }` over the controller WS so the leader can emit a `preview-stopped` bridge event to invalidate any open follower tabs. Subsequent requests for that token return the "session ended" HTML.
+Implementation: top-level routes in `cloudflare-worker/src/index.ts` that delegate to the `SessionTrayDurableObject` via the existing stub-fetch pattern; the DO holds `previews: Record<previewToken, PreviewRecord>` keyed under the tray. **Revoke (Phase 1)** deletes the DO record AND broadcasts a `preview.revoked { previewToken }` over the controller WS; the leader logs it (optional cone-side lick). Subsequent requests for that token return the "session ended" HTML. **Proactive open-tab invalidation via a bridge `preview-stopped` event is Phase 2** (the bridge ships in Phase 2). In Phase 1 the URL stops working immediately; open tabs degrade on their next asset fetch.
 
 Routes-mirror rule applies: `index.ts` routes + `tests/index.test.ts` + `tests/deployed.test.ts` (3-file update, for **both** mint and revoke).
 
@@ -658,7 +658,7 @@ The existing `--project` flag in `serve-command.ts` becomes a **no-op alias**: a
 - `tray-open-preview` op:
   - **standalone:** panel-rpc path calls the worker mint, gets URL, broadcasts followers.
   - **extension:** `chrome.runtime` envelope path lands in offscreen, calls in-realm `LeaderSyncManager.broadcastPreviewOpen`.
-- `serve` auto-enable: when no tray active, calls the existing `leaveTray({ workerBaseUrl, switchTo: 'leader' })` path before minting; with tray active, mints directly.
+- `serve` auto-enable: when no tray active, calls the existing `leaveTray({ workerBaseUrl: resolvedUrl })` path (standalone) or `__slicc_setTrayRuntime(null, workerBaseUrl)` in-realm hook (extension offscreen) before minting; with tray active, mints directly.
 - `serve --bridge` mints with `allowLive: true`; default mints with `allowLive: false`.
 - `serve --stop <token>` and `serve --list` shell paths.
 - `--project` no-op: accepted, warning printed to stderr, mint identical to omitting.
@@ -721,16 +721,16 @@ Phase 1b is _implementation-light_ but _coverage-broad_ — it's the unglamorous
 
 ## Decisions (pinned, reviewer cross-check 2026-06-04)
 
-| #   | Topic                     | Outcome                                                                                                                                    |
-| --- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| 1   | iOS protocol              | Add `preview.open` to `SyncProtocol.swift` + `AppState.handleDataChannelMessage` (5-step checklist). Phase 1.                              |
-| 2   | `serve` without tray      | Auto-enable tray on first invocation (calls existing `leaveTray({ switchTo: 'leader' })` path). Zero-config UX preserved.                  |
-| 3   | Bridge default            | Opt-in (`serve --bridge` / `--interactive`); Cherry-opened previews default-on.                                                            |
-| 4   | Dips + `open`             | Direct VFS read (no worker mint per dip / per `open`).                                                                                     |
-| 5   | Bridge v1 command surface | Full surface: `eval`, `setOuterHTML`, `inject`, `requestReload`, `host-event`. (Larger attack surface accepted; bridge is opt-in.)         |
-| 6   | Token revocation timing   | Phase 1. `serve --stop <token>` + `--list` + DO `revokePreview` + controller-WS broadcast invalidate.                                      |
-| 7   | `--project` deprecation   | No-op alias with obsolete warning; scrub references from docs/skills/examples (single grep pass).                                          |
-| 8   | Domain + staging DNS      | Prod `*.preview.sliccy.ai` + staging `*.preview.staging.sliccy.ai`; env-derived from tray worker base URL. Pre-Phase-1 infra prerequisite. |
+| #   | Topic                     | Outcome                                                                                                                                                                                                      |
+| --- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | iOS protocol              | Add `preview.open` to `SyncProtocol.swift` + `AppState.handleDataChannelMessage` (5-step checklist). Phase 1.                                                                                                |
+| 2   | `serve` without tray      | Auto-enable tray on first invocation via `leaveTray({ workerBaseUrl: resolvedUrl })` (returns `{kind:'switched'}`); extension offscreen uses `__slicc_setTrayRuntime` direct hook. Zero-config UX preserved. |
+| 3   | Bridge default            | Opt-in (`serve --bridge` / `--interactive`); Cherry-opened previews default-on.                                                                                                                              |
+| 4   | Dips + `open`             | Direct VFS read (no worker mint per dip / per `open`).                                                                                                                                                       |
+| 5   | Bridge v1 command surface | Full surface: `eval`, `setOuterHTML`, `inject`, `requestReload`, `host-event`. (Larger attack surface accepted; bridge is opt-in.)                                                                           |
+| 6   | Token revocation timing   | Phase 1. `serve --stop <token>` + `--list` + DO `revokePreview` + controller-WS broadcast invalidate.                                                                                                        |
+| 7   | `--project` deprecation   | No-op alias with obsolete warning; scrub references from docs/skills/examples (single grep pass).                                                                                                            |
+| 8   | Domain + staging DNS      | Prod `*.preview.sliccy.ai` + staging `*.preview.staging.sliccy.ai`; env-derived from tray worker base URL. Pre-Phase-1 infra prerequisite.                                                                   |
 
 ## Risks
 
