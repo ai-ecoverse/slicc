@@ -340,21 +340,23 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
     }
   }
 
-  // 5c. Wave C1 — legacy IDB → OPFS migration DETECTION. Guarded on
+  // 5c. Wave C2 — legacy IDB → OPFS migration RUN. Guarded on
   // `backend === 'opfs'` so the LFS-default path is byte-identical and
-  // never imports the migration module. C1 is read-only (sentinel probe
-  // + LightningFS readdir/lstat/readlink walk); C2 will perform the copy
-  // and write the sentinel. Fire-and-forget — failures must never block
-  // worker boot.
+  // never imports the migration module. The runner re-uses C1
+  // detection (sentinel-present → fast no-op; legacy-absent → no-op)
+  // and on `needs-migration` performs the copy, parity-checks
+  // file-count + total-bytes, and atomically writes the sentinel as
+  // the FINAL operation. On any error or mismatch the sentinel is
+  // NOT written and the legacy `slicc-fs` IDB is left untouched
+  // (read-only throughout — rollback escape hatch preserved for C5).
+  // Fire-and-forget — failures must never block worker boot.
   if (sharedFs && sharedFs.backend === 'opfs') {
     void (async () => {
       try {
-        const { detectLegacyMigrationFromVfs } = await import(
-          '../fs/migration/migration-detect.js'
-        );
-        await detectLegacyMigrationFromVfs(sharedFs, log);
+        const { runLegacyMigrationFromVfs } = await import('../fs/migration/migration-run.js');
+        await runLegacyMigrationFromVfs(sharedFs, { logger: log });
       } catch (err) {
-        log.warn('legacy migration detection failed (non-fatal in C1)', err);
+        log.warn('legacy migration run failed (non-fatal)', err);
       }
     })();
   }
