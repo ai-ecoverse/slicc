@@ -892,6 +892,12 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   layout.panels.scoops.setOrchestrator(client as unknown as Orchestrator);
   layout.panels.memory.setOrchestrator(client as unknown as Orchestrator);
   layout.setScoopSwitcherOrchestrator?.(client as unknown as Orchestrator);
+  // Scope-label tooltip on dropdown items uses the side-effect-free
+  // transcript accessor on `OffscreenClient` — same role as
+  // `Orchestrator.getMessagesForScoop` in the standalone rail, but
+  // routed through a dedicated `request-scoop-transcript` round-trip
+  // so the chat panel is never repainted.
+  layout.setScoopSwitcherTranscriptSource?.((jid) => client.getScoopTranscript(jid));
 
   layout.onScoopSelect = selectScoop;
 
@@ -2016,6 +2022,11 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   layout.panels.scoops.setOrchestrator(client as unknown as Orchestrator);
   layout.panels.memory.setOrchestrator(client as unknown as Orchestrator);
   layout.setScoopSwitcherOrchestrator?.(client as unknown as Orchestrator);
+  // Scope-label tooltip for the scoop-switcher in electron-overlay
+  // (the only standalone-worker path that mounts the switcher today —
+  // non-overlay standalone uses the scoops rail instead). No-op when
+  // the switcher isn't constructed.
+  layout.setScoopSwitcherTranscriptSource?.((jid) => client.getScoopTranscript(jid));
   layout.onScoopSelect = selectScoop;
 
   // Wire clear chat — must drive the IDB clears from the PAGE in

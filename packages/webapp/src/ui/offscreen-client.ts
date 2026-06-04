@@ -20,6 +20,7 @@ import type {
   ScoopListMsg,
   ScoopMessagesReplacedMsg,
   ScoopStatusMsg,
+  ScoopTranscriptMsg,
   StateSnapshotMsg,
   TrayFollowerStatusSnapshot,
   TrayLeaderStatusSnapshot,
@@ -94,6 +95,12 @@ export class OffscreenClient implements KernelClientFacade {
    * `requestId`; resolved when a `clear-chat-ack` envelope arrives.
    */
   private pendingClearAcks = new Map<string, () => void>();
+  /**
+   * Pending `request-scoop-transcript` requests awaiting the bridge's
+   * reply. Keyed by `requestId`; resolved with the transcript string
+   * (or `''` on timeout) when a `scoop-transcript` envelope arrives.
+   */
+  private pendingTranscriptRequests = new Map<string, (transcript: string) => void>();
   /**
    * KernelTransport — defaults to the chrome.runtime adapter.
    * A `MessageChannel`-backed transport can be passed via the
@@ -353,6 +360,33 @@ export class OffscreenClient implements KernelClientFacade {
     this.send({ type: 'request-scoop-messages', scoopJid } as PanelToOffscreenMessage);
   }
 
+  /**
+   * Side-effect-free transcript accessor. Distinct from
+   * {@link requestScoopMessages}, which mutates the chat panel via
+   * `scoop-messages-replaced`. The worker replies with a
+   * `scoop-transcript` envelope carrying the same `requestId` so this
+   * Promise can resolve cleanly without touching panel state. Used by
+   * the scoop-switcher's scope-label tooltip. Resolves to an empty
+   * string on timeout or unknown scoop.
+   */
+  async getScoopTranscript(scoopJid: string): Promise<string> {
+    const requestId = `tr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const reply = new Promise<string>((resolve) => {
+      this.pendingTranscriptRequests.set(requestId, resolve);
+    });
+    this.send({
+      type: 'request-scoop-transcript',
+      requestId,
+      scoopJid,
+    } as PanelToOffscreenMessage);
+    const result = await Promise.race([
+      reply,
+      new Promise<string>((resolve) => setTimeout(() => resolve(''), 5000)),
+    ]);
+    this.pendingTranscriptRequests.delete(requestId);
+    return result;
+  }
+
   /** Request full state from offscreen. Retries until state arrives. */
   requestState(): void {
     this.send({ type: 'request-state' });
@@ -536,6 +570,16 @@ export class OffscreenClient implements KernelClientFacade {
       case 'scoop-messages-replaced': {
         const m = msg as ScoopMessagesReplacedMsg;
         this.callbacks.onScoopMessagesReplaced?.(m.scoopJid, m.messages);
+        break;
+      }
+
+      case 'scoop-transcript': {
+        const m = msg as ScoopTranscriptMsg;
+        const resolve = this.pendingTranscriptRequests.get(m.requestId);
+        if (resolve) {
+          this.pendingTranscriptRequests.delete(m.requestId);
+          resolve(m.transcript);
+        }
         break;
       }
 

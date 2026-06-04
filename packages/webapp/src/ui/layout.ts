@@ -28,6 +28,7 @@
 import { ChatPanel } from './chat-panel.js';
 import { FileBrowserPanel } from './file-browser-panel.js';
 import { MemoryPanel } from './memory-panel.js';
+import { ScoopScopeLabeler } from './scoop-scope-label.js';
 import { ScoopSwitcher } from './scoop-switcher.js';
 import { ScoopsPanel } from './scoops-panel.js';
 import type { FrozenSessionIndexEntry } from './session-freezer.js';
@@ -211,6 +212,19 @@ export class Layout {
     orchestrator: import('../scoops/orchestrator.js').Orchestrator
   ): void {
     this.scoopSwitcher?.setOrchestrator(orchestrator);
+  }
+
+  /**
+   * Wire the extension scoop-switcher with a scope-label generator
+   * backed by the side-effect-free transcript accessor on
+   * `OffscreenClient`. Same shape as the standalone rail's labeler;
+   * the only difference is the transcript source (panel→offscreen
+   * round-trip vs. direct `Orchestrator.getMessagesForScoop`).
+   */
+  setScoopSwitcherTranscriptSource?(fetchTranscript: (jid: string) => Promise<string>): void {
+    if (!this.scoopSwitcher) return;
+    const labeler = new ScoopScopeLabeler(fetchTranscript);
+    this.scoopSwitcher.setLabeler(labeler, fetchTranscript);
   }
 
   /** Update scoop switcher status (extension mode). */

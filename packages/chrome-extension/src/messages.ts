@@ -145,6 +145,31 @@ export interface RequestScoopMessagesMsg {
   scoopJid: string;
 }
 
+/**
+ * Side-effect-free transcript fetch for a scoop. Distinct from
+ * `request-scoop-messages` (which triggers the chat panel to
+ * wholesale-replace its render via `scoop-messages-replaced`): this
+ * one is a pure read used by the scoop-switcher's scope-label
+ * tooltip. The worker resolves the most recent transcript it has
+ * (in-flight buffer, then live agent state) and flattens it into a
+ * single string. The `requestId` correlates the reply.
+ */
+export interface RequestScoopTranscriptMsg {
+  type: 'request-scoop-transcript';
+  requestId: string;
+  scoopJid: string;
+}
+
+/** Reply to {@link RequestScoopTranscriptMsg}. `transcript` is the
+ *  flattened text the labeler hands to `quickLabel`; empty string if
+ *  the scoop is unknown or has no history yet. */
+export interface ScoopTranscriptMsg {
+  type: 'scoop-transcript';
+  requestId: string;
+  scoopJid: string;
+  transcript: string;
+}
+
 export interface ClearChatMsg {
   type: 'clear-chat';
   /** Correlation id so the panel can await the bridge's ack and avoid
@@ -510,6 +535,7 @@ export type PanelToOffscreenMessage =
   | SetModelMsg
   | RequestStateMsg
   | RequestScoopMessagesMsg
+  | RequestScoopTranscriptMsg
   | ClearChatMsg
   | ClearFilesystemMsg
   | RefreshModelMsg
@@ -845,6 +871,7 @@ export type OffscreenToPanelMessage =
   | ScoopCreatedMsg
   | IncomingMessageMsg
   | ScoopMessagesReplacedMsg
+  | ScoopTranscriptMsg
   | PanelCdpResponseMsg
   | OAuthResultMsg
   | TrayRuntimeStatusMsg
