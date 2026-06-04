@@ -323,8 +323,8 @@ export class ScoopsPanel {
           });
           return '';
         }
-        const latest = extractLatestUserPrompt(transcript);
-        if (latest.length > 0) this.lastUserPrompts.set(jid, latest);
+        const trimmed = truncateFallbackPrompt(extractLatestUserPrompt(transcript));
+        if (trimmed.length > 0) this.lastUserPrompts.set(jid, trimmed);
         return transcript;
       });
       return;
@@ -344,8 +344,11 @@ export class ScoopsPanel {
         for (let i = messages.length - 1; i >= 0; i--) {
           const m = messages[i];
           if (!m.fromAssistant && m.content && m.content.trim().length > 0) {
-            this.lastUserPrompts.set(jid, m.content);
-            break;
+            const trimmed = truncateFallbackPrompt(m.content);
+            if (trimmed.length > 0) {
+              this.lastUserPrompts.set(jid, trimmed);
+              break;
+            }
           }
         }
         return flattenScoopTranscript(messages);

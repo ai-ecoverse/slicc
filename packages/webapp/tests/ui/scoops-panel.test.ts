@@ -125,6 +125,69 @@ describe('ScoopsPanel scope tooltip', () => {
     expect(scope?.style.display).not.toBe('none');
   });
 
+  it('stores the cached fallback prompt truncated (injected source path)', async () => {
+    quickLabelMock.mockResolvedValue(null);
+    const cone = makeCone('cone-1');
+    const orch = makeOrchestrator([cone]);
+    const longPrompt = `please ${'really '.repeat(40)}summarize the recent diff`;
+    expect(longPrompt.length).toBeGreaterThan(80);
+    const fetchTranscript = vi.fn(async () => `user: ${longPrompt}\nassistant: ok`);
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const panel = new ScoopsPanel(container, { onScoopSelect: () => {}, onSendMessage: () => {} });
+    panel.setScopeTranscriptSource(fetchTranscript);
+    // biome-ignore lint/suspicious/noExplicitAny: fake orchestrator covers only the surface the panel touches
+    panel.setOrchestrator(orch as any);
+
+    const item = container.querySelector<HTMLElement>('.scoop-item[data-jid="cone-1"]')!;
+    item.dispatchEvent(new MouseEvent('mouseenter'));
+    await flush();
+    await flush();
+    item.dispatchEvent(new MouseEvent('mouseleave'));
+    item.dispatchEvent(new MouseEvent('mouseenter'));
+
+    const scope = document.querySelector<HTMLElement>('.scoop-fixed-tooltip__scope');
+    const text = scope?.textContent ?? '';
+    expect(text.length).toBeGreaterThan(0);
+    expect(text.length).toBeLessThanOrEqual(80);
+    expect(text.endsWith('…')).toBe(true);
+  });
+
+  it('stores the cached fallback prompt truncated (orchestrator path)', async () => {
+    quickLabelMock.mockResolvedValue(null);
+    const cone = makeCone('cone-1');
+    const longContent = `please ${'really '.repeat(40)}summarize the recent diff`;
+    expect(longContent.length).toBeGreaterThan(80);
+    const orch = {
+      getScoops: vi.fn(() => [cone]),
+      getMessagesForScoop: vi.fn(async () => [
+        { fromAssistant: false, senderName: 'user', content: longContent },
+      ]),
+    };
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const panel = new ScoopsPanel(container, { onScoopSelect: () => {}, onSendMessage: () => {} });
+    // No transcript source: orchestrator branch must run.
+    // biome-ignore lint/suspicious/noExplicitAny: fake orchestrator covers only the surface the panel touches
+    panel.setOrchestrator(orch as any);
+
+    const item = container.querySelector<HTMLElement>('.scoop-item[data-jid="cone-1"]')!;
+    item.dispatchEvent(new MouseEvent('mouseenter'));
+    await flush();
+    await flush();
+    expect(orch.getMessagesForScoop).toHaveBeenCalledWith('cone-1');
+    item.dispatchEvent(new MouseEvent('mouseleave'));
+    item.dispatchEvent(new MouseEvent('mouseenter'));
+
+    const scope = document.querySelector<HTMLElement>('.scoop-fixed-tooltip__scope');
+    const text = scope?.textContent ?? '';
+    expect(text.length).toBeGreaterThan(0);
+    expect(text.length).toBeLessThanOrEqual(80);
+    expect(text.endsWith('…')).toBe(true);
+  });
+
   it('hides the scope line when the transcript yields no user prompt and no label', async () => {
     quickLabelMock.mockResolvedValue(null);
     const cone = makeCone('cone-1');
