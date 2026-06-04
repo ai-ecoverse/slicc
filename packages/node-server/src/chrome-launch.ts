@@ -1,6 +1,6 @@
 import type { ChildProcess } from 'child_process';
 import { existsSync, readdirSync } from 'fs';
-import { cp, mkdir, readFile, unlink, writeFile } from 'fs/promises';
+import { cp, mkdir, readFile, rm, unlink, writeFile } from 'fs/promises';
 import { request as httpRequest } from 'http';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
@@ -146,8 +146,16 @@ export async function migrateLegacyDefaultChromeProfile(
   if (existsSync(newDir)) return;
   for (const candidate of candidates) {
     if (existsSync(candidate)) {
-      await cp(candidate, newDir, { recursive: true });
-      console.log(`Migrated Chrome profile: ${candidate} → ${newDir}`);
+      try {
+        await cp(candidate, newDir, { recursive: true });
+        console.log(`Migrated Chrome profile: ${candidate} → ${newDir}`);
+      } catch (err) {
+        await rm(newDir, { recursive: true, force: true }).catch(() => {});
+        console.warn(
+          `Chrome profile migration failed (${candidate} → ${newDir}); continuing with a fresh profile.`,
+          err
+        );
+      }
       return;
     }
   }

@@ -993,6 +993,26 @@ describe('migrateLegacyDefaultChromeProfile', () => {
     expect(await readFile(join(newProfile, 'marker.txt'), 'utf8')).toBe('existing-data');
   });
 
+  it('does not throw and leaves no partial copy when cp fails', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'slicc-migrate-'));
+    tempDirs.push(root);
+
+    const legacyProfile = join(root, 'legacy', 'browser-coding-agent-chrome');
+    await mkdir(legacyProfile, { recursive: true });
+    await writeFile(join(legacyProfile, 'marker.txt'), 'legacy-data');
+
+    // Make newDir's parent a file so cp fails with ENOTDIR — newDir itself does not exist,
+    // so the existsSync guard doesn't short-circuit.
+    const newParent = join(root, 'new');
+    await writeFile(newParent, 'i-am-a-file-not-a-dir');
+    const newProfile = join(newParent, 'browser-coding-agent-chrome');
+
+    await expect(
+      migrateLegacyDefaultChromeProfile(newProfile, [legacyProfile])
+    ).resolves.not.toThrow();
+    expect(fsExistsSync(newProfile)).toBe(false);
+  });
+
   it('is a no-op when no legacy profile exists', async () => {
     const root = await mkdtemp(join(tmpdir(), 'slicc-migrate-'));
     tempDirs.push(root);

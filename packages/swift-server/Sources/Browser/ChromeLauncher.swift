@@ -249,14 +249,19 @@ struct ChromeLauncher: Sendable {
     /// One-time migration: if `newDir` doesn't exist yet, copies the first matching
     /// candidate (legacy profile from $TMPDIR or /tmp) to the stable new location.
     /// Non-destructive — the old profile is left in place.
-    func migrateLegacyDefaultChromeProfile(newDir: String, candidates: [String]) throws {
+    func migrateLegacyDefaultChromeProfile(newDir: String, candidates: [String]) {
         guard !FileManager.default.fileExists(atPath: newDir) else { return }
         for candidate in candidates {
             if FileManager.default.fileExists(atPath: candidate) {
-                let destParent = URL(fileURLWithPath: newDir).deletingLastPathComponent()
-                try FileManager.default.createDirectory(at: destParent, withIntermediateDirectories: true)
-                try FileManager.default.copyItem(atPath: candidate, toPath: newDir)
-                logger.info("Migrated Chrome profile: \(candidate) → \(newDir)")
+                do {
+                    let destParent = URL(fileURLWithPath: newDir).deletingLastPathComponent()
+                    try FileManager.default.createDirectory(at: destParent, withIntermediateDirectories: true)
+                    try FileManager.default.copyItem(atPath: candidate, toPath: newDir)
+                    logger.info("Migrated Chrome profile: \(candidate) → \(newDir)")
+                } catch {
+                    try? FileManager.default.removeItem(atPath: newDir)
+                    logger.warning("Chrome profile migration failed (\(candidate) → \(newDir)): \(error.localizedDescription); continuing with a fresh profile.")
+                }
                 return
             }
         }
@@ -278,7 +283,7 @@ struct ChromeLauncher: Sendable {
 
     func launch(config: ChromeLaunchConfig) async throws -> ChromeProcess {
         let profileDirName = URL(fileURLWithPath: config.userDataDir).lastPathComponent
-        try migrateLegacyDefaultChromeProfile(
+        migrateLegacyDefaultChromeProfile(
             newDir: config.userDataDir,
             candidates: legacyChromeCandidates(profileDirName: profileDirName)
         )

@@ -147,7 +147,7 @@ final class ChromeLauncherTests: XCTestCase {
 
         let newProfile = root.appendingPathComponent("new/browser-coding-agent-chrome")
         let launcher = makeLauncher()
-        try launcher.migrateLegacyDefaultChromeProfile(newDir: newProfile.path, candidates: [legacyProfile.path])
+        launcher.migrateLegacyDefaultChromeProfile(newDir: newProfile.path, candidates: [legacyProfile.path])
 
         let content = try String(contentsOfFile: newProfile.appendingPathComponent("marker.txt").path, encoding: .utf8)
         XCTAssertEqual(content, "legacy-data")
@@ -167,7 +167,7 @@ final class ChromeLauncherTests: XCTestCase {
         fm.createFile(atPath: legacyProfile.appendingPathComponent("marker.txt").path, contents: Data("legacy-data".utf8))
 
         let launcher = makeLauncher()
-        try launcher.migrateLegacyDefaultChromeProfile(newDir: newProfile.path, candidates: [legacyProfile.path])
+        launcher.migrateLegacyDefaultChromeProfile(newDir: newProfile.path, candidates: [legacyProfile.path])
 
         let content = try String(contentsOfFile: newProfile.appendingPathComponent("marker.txt").path, encoding: .utf8)
         XCTAssertEqual(content, "existing-data")
@@ -182,7 +182,7 @@ final class ChromeLauncherTests: XCTestCase {
         let missingLegacy = root.appendingPathComponent("legacy/browser-coding-agent-chrome")
         let launcher = makeLauncher()
 
-        XCTAssertNoThrow(try launcher.migrateLegacyDefaultChromeProfile(newDir: newProfile.path, candidates: [missingLegacy.path]))
+        launcher.migrateLegacyDefaultChromeProfile(newDir: newProfile.path, candidates: [missingLegacy.path])
         XCTAssertFalse(fm.fileExists(atPath: newProfile.path))
     }
 
