@@ -4,11 +4,15 @@
  * The agent's `bash` tool calls run here. Owns just-bash,
  * the VFS adapter, custom commands (git, mount, supplemental), the
  * `.jsh` discovery + sync loop, and the `executeCommand` /
- * `executeScriptFile` primitives. Zero DOM — the file lives outside
- * `tsconfig.webapp-worker.json`'s include list today only because of
- * its transitive imports, but every line of this class is worker-
- * safe in principle (`setInterval`, `IndexedDB`-backed VFS, no
- * `window`/`document`).
+ * `executeScriptFile` primitives. Zero DOM in this class's own code
+ * (`setInterval`, `IndexedDB`-backed VFS only). Shell-command
+ * telemetry is emitted through the dependency-inverted
+ * `telemetry-hook.ts` sink (the UI registers `trackShellCommand`)
+ * rather than importing `ui/telemetry.ts` directly, so the shell no
+ * longer carries a back-edge into the `ui/` layer. The file still
+ * lives outside `tsconfig.webapp-worker.json`'s no-DOM include
+ * because its remaining (type-only) `cdp/` imports transitively reach
+ * the DOM-bound CDP transports.
  *
  * The view layer — `WasmShell` in `wasm-shell.ts` — extends this
  * class and adds xterm mounting, the line editor, history, and
@@ -32,7 +36,6 @@ import type { FsWatcher, VirtualFS } from '../fs/index.js';
 import { MountCommands } from '../fs/mount-commands.js';
 import { GitCommands } from '../git/git-commands.js';
 import type { ProcessManager, ProcessOwner } from '../kernel/process-manager.js';
-import { trackShellCommand } from '../ui/telemetry.js';
 import type { BshDiscoveryFS } from './bsh-discovery.js';
 import type { JshDiscoveryFS } from './jsh-discovery.js';
 import type { JshProcessConfig } from './jsh-executor.js';
@@ -47,6 +50,7 @@ import {
 } from './supplemental-commands/upskill-command.js';
 import type { MediaPreviewItem } from './supplemental-commands.js';
 import { createSupplementalCommands } from './supplemental-commands.js';
+import { emitShellCommand } from './telemetry-hook.js';
 import { VfsAdapter } from './vfs-adapter.js';
 
 // ---------------------------------------------------------------------------
@@ -414,7 +418,7 @@ export class WasmShellHeadless implements HeadlessShellLike {
    */
   protected async runCommand(command: string, signal?: AbortSignal): Promise<BashExecResult> {
     const commandName = command.trim().split(/\s+/)[0] || 'unknown';
-    trackShellCommand(commandName);
+    emitShellCommand(commandName);
 
     // just-bash's published ExecOptions type does not yet expose
     // AbortSignal, but we still forward it so external callers and
