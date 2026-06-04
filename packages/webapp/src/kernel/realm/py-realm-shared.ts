@@ -104,16 +104,17 @@ export async function runPyRealm(
     stderrChunks.push(`Warning: ${msg}\n`);
   };
   let preSyncSnapshot: PreSyncSnapshot = { files: new Map(), dirs: new Set() };
-  // Wave D1: under `slicc_opfs_vfs === 'opfs'` the kernel detects the
-  // flag and passes the OPFS dbName through `init.opfsMountDbName`.
+  // Wave D1+D2: under `slicc_opfs_vfs === 'opfs'` the kernel detects
+  // the flag and passes the OPFS dbName through `init.opfsMountDbName`.
   // The realm worker has no `localStorage` shim, so this is the only
-  // signal we get. Undefined → legacy `walkTree` copy (byte-identical
-  // pre-D1). Defined → `mountNativeFS` + `syncfs(true)` per syncDir
-  // against the same-origin OPFS subtree the kernel owns. The legacy
-  // post-sync `syncPyodideToVfs` still runs under both branches (D2
-  // replaces it with `syncfs(false)`); seeding the snapshot from
-  // Pyodide-FS state post-mount keeps the diff honest in the meantime
-  // so it only emits user-created files, not the entire OPFS subtree.
+  // signal we get. Undefined → legacy `walkTree` copy + `writeBatch`
+  // flush (byte-identical pre-D1). Defined → D1 `mountNativeFS` +
+  // `syncfs(true)` per syncDir against the same-origin OPFS subtree
+  // the kernel owns, and D2 `syncfs(false)` after exec to flush every
+  // mount back to OPFS. The snapshot returned by the mount helper is
+  // still populated for shape compatibility but unused on the OPFS
+  // path — `syncfs(false)` handles the write-back end to end. D3
+  // retires the legacy helpers once the OPFS branch is the default.
   if (init.opfsMountDbName !== undefined) {
     try {
       preSyncSnapshot = await mountOpfsDirsAndSyncIn(
@@ -173,11 +174,20 @@ export async function runPyRealm(
     /* best-effort cleanup */
   }
 
-  try {
-    await syncPyodideToVfs(rpc, pyodide, syncDirs, preSyncSnapshot, pushWarning);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    pushWarning(`Pyodide→VFS sync failed: ${message}`);
+  if (init.opfsMountDbName !== undefined) {
+    try {
+      await syncOpfsDirsOut(pyodide);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      pushWarning(`Pyodide→VFS OPFS flush failed: ${message}`);
+    }
+  } else {
+    try {
+      await syncPyodideToVfs(rpc, pyodide, syncDirs, preSyncSnapshot, pushWarning);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      pushWarning(`Pyodide→VFS sync failed: ${message}`);
+    }
   }
 
   rpc.dispose();
@@ -559,4 +569,32 @@ function recordExistingIntoSnapshot(
   } else if (FS.isFile(st.mode)) {
     snapshot.files.set(pyPath, st.size);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Wave D2: OPFS-native write-back
+// ---------------------------------------------------------------------------
+
+/**
+ * Flush every native-FS mount Pyodide currently holds back to its
+ * backing OPFS subtree via a single `FS.syncfs(false, cb)`. Used on
+ * the OPFS branch in place of the legacy walk-then-`writeBatch` path
+ * — emscripten knows the dirty set per mount, so any file the
+ * Python program wrote under a mounted dir lands on disk without us
+ * diffing Pyodide-FS against a pre-sync snapshot.
+ *
+ * A single call covers every mount globally (emscripten's syncfs has
+ * no per-path argument), so callers do not loop over `syncDirs`. The
+ * Promise resolves on `cb(null)` and rejects on `cb(err)`; non-Error
+ * payloads are coerced to `Error` so the outer `pushWarning` formatter
+ * always has a `.message` to read. Bypassed legacy `syncPyodideToVfs`
+ * stays in place until Wave D3 retires it.
+ */
+export async function syncOpfsDirsOut(pyodide: PyodideInterface): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    pyodide.FS.syncfs(false, (err: Error | null | undefined) => {
+      if (err) reject(err instanceof Error ? err : new Error(String(err)));
+      else resolve();
+    });
+  });
 }

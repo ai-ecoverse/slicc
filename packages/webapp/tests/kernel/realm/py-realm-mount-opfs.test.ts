@@ -13,7 +13,10 @@
 
 import type { PyodideInterface } from 'pyodide';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mountOpfsDirsAndSyncIn } from '../../../src/kernel/realm/py-realm-shared.js';
+import {
+  mountOpfsDirsAndSyncIn,
+  syncOpfsDirsOut,
+} from '../../../src/kernel/realm/py-realm-shared.js';
 import { createMutableDirectoryHandle } from '../../fs/fsa-test-helpers.js';
 
 function makeFakePyodide(): {
@@ -65,16 +68,22 @@ function makeFakePyodide(): {
     isFile: (mode: number): boolean => (mode & 0o170000) === FILE_MODE,
     syncfs: vi.fn((populate: boolean, cb: (err: Error | null | undefined) => void): void => {
       syncfsCalls.push({ populate });
-      // Simulate OPFS→MEMFS materialization for syncfs(true) when
-      // a handle is registered: read the mock handle's tree into
-      // the fake FS so post-sync sees the files.
-      if (populate) {
+      // Simulate the bi-directional OPFS↔MEMFS bridge emscripten's
+      // NATIVEFS uses: `populate=true` reads the mocked OPFS handle
+      // into the fake Pyodide FS so post-mount sees the seed tree;
+      // `populate=false` walks the in-memory files under every
+      // mounted path and writes them back through the handle so D2
+      // round-trip tests can assert what landed in OPFS.
+      const run = async (): Promise<void> => {
         for (const [mountPath, handle] of mountedAt) {
-          void hydrateFromHandle(handle, mountPath, files, dirs).then(() => cb(null));
-          return;
+          if (populate) await hydrateFromHandle(handle, mountPath, files, dirs);
+          else await flushToHandle(handle, mountPath, files);
         }
-      }
-      cb(null);
+      };
+      void run().then(
+        () => cb(null),
+        (err) => cb(err instanceof Error ? err : new Error(String(err)))
+      );
     }),
   };
   const pyodide = {
@@ -112,6 +121,43 @@ async function hydrateFromHandle(
       files.set(childPath, new Uint8Array(ab));
     }
   }
+}
+
+async function flushToHandle(
+  handle: FileSystemDirectoryHandle,
+  pyPath: string,
+  files: Map<string, Uint8Array>
+): Promise<void> {
+  // Walk every file currently in the fake Pyodide FS that lives
+  // under `pyPath` and persist it through the mocked OPFS handle,
+  // creating intermediate dirs on the fly. Mirrors what emscripten's
+  // NATIVEFS does when `syncfs(false)` runs against the FSA backend.
+  const prefix = pyPath === '/' ? '/' : `${pyPath}/`;
+  for (const [filePath, content] of files) {
+    if (!filePath.startsWith(prefix)) continue;
+    const parts = filePath.slice(prefix.length).split('/');
+    let cursor = handle;
+    for (const part of parts.slice(0, -1)) {
+      cursor = await cursor.getDirectoryHandle(part, { create: true });
+    }
+    const fileHandle = await cursor.getFileHandle(parts[parts.length - 1], { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(content);
+    await writable.close();
+  }
+}
+
+async function readHandleText(
+  root: FileSystemDirectoryHandle,
+  segments: string[]
+): Promise<string> {
+  let cursor = root;
+  for (const part of segments.slice(0, -1)) {
+    cursor = await cursor.getDirectoryHandle(part);
+  }
+  const fileHandle = await cursor.getFileHandle(segments[segments.length - 1]);
+  const file = await fileHandle.getFile();
+  return file.text();
 }
 
 function installNavigatorStub(rootHandle: FileSystemDirectoryHandle | null): void {
@@ -225,5 +271,67 @@ describe('mountOpfsDirsAndSyncIn (Wave D1)', () => {
     expect(mountedAt.has('/ok')).toBe(true);
     expect(files.get('/ok/k.txt')).toBeTruthy();
     expect(warnings.some((w) => w.includes('/bad') && w.includes('mount denied'))).toBe(true);
+  });
+});
+
+describe('syncOpfsDirsOut (Wave D2)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('issues a single FS.syncfs(false) so emscripten flushes every native mount at once', async () => {
+    const { pyodide, syncfsCalls } = makeFakePyodide();
+
+    await syncOpfsDirsOut(pyodide);
+
+    expect(pyodide.FS.syncfs).toHaveBeenCalledTimes(1);
+    expect(syncfsCalls).toEqual([{ populate: false }]);
+  });
+
+  it('rejects with the emscripten error when the callback receives one', async () => {
+    const { pyodide } = makeFakePyodide();
+    (pyodide.FS.syncfs as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_populate: boolean, cb: (err: Error | null | undefined) => void): void => {
+        cb(new Error('disk full'));
+      }
+    );
+
+    await expect(syncOpfsDirsOut(pyodide)).rejects.toThrow('disk full');
+  });
+
+  it('round-trip: D1 syncfs(true) seeds Pyodide-FS, D2 syncfs(false) flushes new files back to OPFS', async () => {
+    // Seed OPFS with a file the mount picks up, then simulate a
+    // Pyodide-side write (the realm worker would set this via
+    // `pyodide.FS.writeFile` from user code), and assert syncOpfsDirsOut
+    // persists it through the mocked OPFS handle.
+    const opfs = createMutableDirectoryHandle({
+      'slicc-fs': {
+        workspace: { 'seed.txt': 'SEED' },
+        tmp: {},
+      },
+    });
+    installNavigatorStub(opfs.handle);
+    const { pyodide, files, syncfsCalls } = makeFakePyodide();
+    const warnings: string[] = [];
+
+    await mountOpfsDirsAndSyncIn(pyodide, ['/workspace', '/tmp'], 'slicc-fs', (msg) =>
+      warnings.push(msg)
+    );
+
+    // Pull leg lands the seed file in MEMFS.
+    expect(new TextDecoder().decode(files.get('/workspace/seed.txt')!)).toBe('SEED');
+
+    // Simulate user code writing two new files under different mounts.
+    files.set('/workspace/new.txt', new TextEncoder().encode('NEW'));
+    files.set('/tmp/scratch.txt', new TextEncoder().encode('SCRATCH'));
+
+    await syncOpfsDirsOut(pyodide);
+
+    expect(syncfsCalls.some((c) => c.populate === false)).toBe(true);
+    expect(await readHandleText(opfs.handle, ['slicc-fs', 'workspace', 'new.txt'])).toBe('NEW');
+    expect(await readHandleText(opfs.handle, ['slicc-fs', 'tmp', 'scratch.txt'])).toBe('SCRATCH');
+    // Existing seed file untouched.
+    expect(await readHandleText(opfs.handle, ['slicc-fs', 'workspace', 'seed.txt'])).toBe('SEED');
+    expect(warnings).toEqual([]);
   });
 });
