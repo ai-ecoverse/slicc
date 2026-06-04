@@ -204,6 +204,20 @@ export class ScoopScopeLabeler {
   }
 }
 
+/** Pull the last `user: …` block (case-insensitive, lenient on
+ *  whitespace) from a flat `role: text` transcript string. Returns an
+ *  empty string when no user line is present. Shared by the rail
+ *  (`scoops-panel.ts`) and the dropdown switcher (`scoop-switcher.ts`)
+ *  so the fallback tooltip line stays consistent across floats. */
+export function extractLatestUserPrompt(transcript: string): string {
+  const lines = transcript.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = /^user:\s*(.*)$/i.exec(lines[i] ?? '');
+    if (m && m[1].length > 0) return m[1];
+  }
+  return '';
+}
+
 /** Test-only hooks. */
 export const __test__ = {
   clipTranscript,

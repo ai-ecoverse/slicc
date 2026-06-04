@@ -227,6 +227,17 @@ export class Layout {
     this.scoopSwitcher.setLabeler(labeler, fetchTranscript);
   }
 
+  /**
+   * Wire the standalone scoops rail with the same side-effect-free
+   * transcript source. Required because the standalone rail is wired
+   * with the `OffscreenClient` shim, which does not implement
+   * `Orchestrator.getMessagesForScoop` — without this hook the rail
+   * tooltip's scope line never populates.
+   */
+  setScoopsRailTranscriptSource?(fetchTranscript: (jid: string) => Promise<string>): void {
+    this.panels.scoops?.setScopeTranscriptSource(fetchTranscript);
+  }
+
   /** Update scoop switcher status (extension mode). */
   updateScoopSwitcherStatus?(scoopJid: string, status: ScoopTabState['status']): void {
     this.scoopSwitcher?.updateStatus(scoopJid, status);

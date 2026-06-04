@@ -12,7 +12,7 @@ import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/index.js';
 import type { Orchestrator } from '../scoops/orchestrator.js';
 import type { ChannelMessage, RegisteredScoop, ScoopTabState } from '../scoops/types.js';
-import { ScoopScopeLabeler } from './scoop-scope-label.js';
+import { extractLatestUserPrompt, ScoopScopeLabeler } from './scoop-scope-label.js';
 import { type FrozenSessionIndexEntry, readSessionsIndex } from './session-freezer.js';
 
 const log = createLogger('scoops-panel');
@@ -96,6 +96,12 @@ export class ScoopsPanel {
   /** Currently-visible rail tooltip; updated when the labeler resolves
    *  a new label while the user is still hovering the same item. */
   private activeTooltip: { jid: string; scopeEl: HTMLElement } | null = null;
+  /** Optional side-effect-free transcript fetcher. When wired (e.g.
+   *  standalone mode injecting `OffscreenClient.getScoopTranscript`),
+   *  the rail labeler routes through this instead of the orchestrator's
+   *  `getMessagesForScoop`, which the standalone shim doesn't implement.
+   *  Falls back to the orchestrator-backed path when null. */
+  private transcriptSource: ((jid: string) => Promise<string>) | null = null;
 
   constructor(container: HTMLElement, callbacks: ScoopsPanelCallbacks) {
     this.container = container;
@@ -282,6 +288,53 @@ export class ScoopsPanel {
   /** Set the orchestrator instance */
   setOrchestrator(orchestrator: Orchestrator): void {
     this.orchestrator = orchestrator;
+    this.rebuildScopeLabeler();
+    this.refreshScoops();
+  }
+
+  /**
+   * Wire a side-effect-free transcript source for the rail's scope
+   * labeler. When set, the labeler routes through this fetcher (e.g.
+   * `OffscreenClient.getScoopTranscript` in standalone mode) and
+   * derives the fallback "latest user prompt" line from the flat
+   * transcript string via `extractLatestUserPrompt` — symmetric to the
+   * extension scoop-switcher. When NOT set, the labeler falls back to
+   * `Orchestrator.getMessagesForScoop` so any real-Orchestrator caller
+   * (and existing unit tests) keeps working unchanged.
+   */
+  setScopeTranscriptSource(fetchTranscript: (jid: string) => Promise<string>): void {
+    this.transcriptSource = fetchTranscript;
+    this.rebuildScopeLabeler();
+  }
+
+  /** (Re)build `scopeLabeler` against whichever source is currently
+   *  wired — transcript source wins over orchestrator. */
+  private rebuildScopeLabeler(): void {
+    if (this.transcriptSource) {
+      const fetch = this.transcriptSource;
+      this.scopeLabeler = new ScoopScopeLabeler(async (jid) => {
+        let transcript = '';
+        try {
+          transcript = await fetch(jid);
+        } catch (err) {
+          log.debug('Transcript source threw for scope label', {
+            jid,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          return '';
+        }
+        const latest = extractLatestUserPrompt(transcript);
+        if (latest.length > 0) this.lastUserPrompts.set(jid, latest);
+        return transcript;
+      });
+      return;
+    }
+
+    const orchestrator = this.orchestrator;
+    if (!orchestrator) {
+      this.scopeLabeler = null;
+      return;
+    }
     // Build the scope labeler against this orchestrator. The transcript
     // fetcher also caches the latest user prompt so the tooltip has an
     // immediate fallback line before the LLM label resolves.
@@ -304,7 +357,6 @@ export class ScoopsPanel {
         return '';
       }
     });
-    this.refreshScoops();
   }
 
   /**

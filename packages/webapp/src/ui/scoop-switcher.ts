@@ -5,7 +5,7 @@
 
 import type { Orchestrator } from '../scoops/orchestrator.js';
 import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
-import type { ScoopScopeLabeler } from './scoop-scope-label.js';
+import { extractLatestUserPrompt, type ScoopScopeLabeler } from './scoop-scope-label.js';
 
 export interface ScoopSwitcherCallbacks {
   onScoopSelect: (scoop: RegisteredScoop) => void;
@@ -555,18 +555,6 @@ export class ScoopSwitcher {
     `;
     document.head.appendChild(style);
   }
-}
-
-/** Pull the last `user: …` block (case-insensitive, lenient on
- *  whitespace) from the flat transcript shape `formatTranscript`
- *  emits. Returns an empty string when no user line is present. */
-function extractLatestUserPrompt(transcript: string): string {
-  const lines = transcript.split('\n');
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const m = /^user:\s*(.*)$/i.exec(lines[i] ?? '');
-    if (m && m[1].length > 0) return m[1];
-  }
-  return '';
 }
 
 function truncate(text: string, max: number): string {
