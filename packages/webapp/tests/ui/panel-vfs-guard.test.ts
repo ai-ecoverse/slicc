@@ -2,8 +2,7 @@
  * Tests for the Wave B5 / F1 panel-VFS guard. Asserts the warning
  * fires when the side panel would construct an OPFS-backed
  * `VirtualFS` (offscreen-owns-OPFS regime), and stays silent on the
- * still-importable LFS shadow path that the panel uses for
- * mount-table-recovery and other legacy consumers.
+ * non-OPFS (`'memory'`) backend used in Node test envs / fallback.
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -25,9 +24,9 @@ describe('warnIfPanelVfsConstructionUnderOpfs (Wave B5)', () => {
     expect(message).toContain('Offscreen');
   });
 
-  it("stays silent on the 'lfs' shadow backend", () => {
+  it("stays silent on the non-OPFS 'memory' backend", () => {
     const logger = makeLogger();
-    const fired = warnIfPanelVfsConstructionUnderOpfs('lfs', logger);
+    const fired = warnIfPanelVfsConstructionUnderOpfs('memory', logger);
     expect(fired).toBe(false);
     expect(logger.warn).not.toHaveBeenCalled();
   });

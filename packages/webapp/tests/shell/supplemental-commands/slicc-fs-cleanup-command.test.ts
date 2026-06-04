@@ -15,7 +15,7 @@ function createMockCtx() {
   };
 }
 
-function fakeFs(backend: 'lfs' | 'opfs'): VirtualFS {
+function fakeFs(backend: 'memory' | 'opfs'): VirtualFS {
   return { backend } as unknown as VirtualFS;
 }
 
@@ -28,11 +28,11 @@ describe('slicc-fs-cleanup command', () => {
     expect(result.stdout).toContain('Usage:');
   });
 
-  it('is inert on the LFS-default backend (flag-off path)', async () => {
+  it('is inert on the non-OPFS backend (flag-off path)', async () => {
     const runCleanup = vi.fn(
       async () => ({ kind: 'deleted', message: '' }) as LegacyIdbCleanupResult
     );
-    const cmd = createSliccFsCleanupCommand({ fs: fakeFs('lfs'), runCleanup });
+    const cmd = createSliccFsCleanupCommand({ fs: fakeFs('memory'), runCleanup });
     const result = await cmd.execute([], createMockCtx());
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toContain('OPFS migration not active');
