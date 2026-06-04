@@ -1538,3 +1538,71 @@ describe('OffscreenBridge follower-forwarding bridge', () => {
     ).resolves.toBeUndefined();
   });
 });
+
+describe('OffscreenBridge request-scoop-transcript', () => {
+  let bridge: InstanceType<typeof OffscreenBridge>;
+
+  beforeEach(async () => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+    bridge = new OffscreenBridge();
+    await bridge.bind({
+      getScoops: vi.fn(() => [
+        { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+      ]),
+      handleMessage: vi.fn().mockResolvedValue(undefined),
+      getScoopContext: vi.fn(() => undefined),
+    } as any);
+  });
+
+  it('flattens buffered messages and replies with correlated requestId', async () => {
+    const buf = (bridge as any).getBuffer('cone_1');
+    buf.push(
+      { id: 'u1', role: 'user', content: 'help me refactor auth', timestamp: 100 },
+      { id: 'a1', role: 'assistant', content: 'starting now', timestamp: 200 },
+      { id: 'a2', role: 'assistant', content: '   ', timestamp: 300 } // empty after trim — skip
+    );
+
+    await (bridge as any).handlePanelMessage({
+      type: 'request-scoop-transcript',
+      requestId: 'tr-test-1',
+      scoopJid: 'cone_1',
+    });
+
+    const reply = sentMessages.find((m: any) => m.payload?.type === 'scoop-transcript') as any;
+    expect(reply).toBeDefined();
+    expect(reply.payload.requestId).toBe('tr-test-1');
+    expect(reply.payload.scoopJid).toBe('cone_1');
+    expect(reply.payload.transcript).toBe('user: help me refactor auth\nassistant: starting now');
+  });
+
+  it('returns empty transcript for an unknown scoop', async () => {
+    await (bridge as any).handlePanelMessage({
+      type: 'request-scoop-transcript',
+      requestId: 'tr-test-2',
+      scoopJid: 'does-not-exist',
+    });
+
+    const reply = sentMessages.find((m: any) => m.payload?.type === 'scoop-transcript') as any;
+    expect(reply).toBeDefined();
+    expect(reply.payload.requestId).toBe('tr-test-2');
+    expect(reply.payload.transcript).toBe('');
+  });
+
+  it('does NOT emit scoop-messages-replaced (side-effect-free vs request-scoop-messages)', async () => {
+    const buf = (bridge as any).getBuffer('cone_1');
+    buf.push({ id: 'u1', role: 'user', content: 'hi', timestamp: 100 });
+
+    await (bridge as any).handlePanelMessage({
+      type: 'request-scoop-transcript',
+      requestId: 'tr-test-3',
+      scoopJid: 'cone_1',
+    });
+
+    const replacedReply = sentMessages.find(
+      (m: any) => m.payload?.type === 'scoop-messages-replaced'
+    );
+    expect(replacedReply).toBeUndefined();
+  });
+});

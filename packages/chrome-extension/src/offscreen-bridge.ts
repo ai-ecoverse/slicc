@@ -975,6 +975,69 @@ export class OffscreenBridge implements KernelFacade {
   }
 
   /**
+   * Side-effect-free transcript fetch for the scoop-switcher's scope
+   * label tooltip. Distinct from {@link handleRequestScoopMessages},
+   * which emits a `scoop-messages-replaced` that the chat panel
+   * wholesale-applies. Replies with a `scoop-transcript` envelope
+   * (correlated by `requestId`) carrying a flattened `user: …` /
+   * `assistant: …` transcript string — empty on unknown scoop or no
+   * history yet.
+   *
+   * Resolution order mirrors the message-replace path:
+   *   1. In-flight `messageBuffers` (current session, including
+   *      streaming tail).
+   *   2. Live `ScoopContext.getAgentMessages()` translated to the
+   *      chat shape so tool-use blocks become readable text.
+   */
+  private async handleRequestScoopTranscript(requestId: string, scoopJid: string): Promise<void> {
+    const empty = (): void => {
+      this.emit({ type: 'scoop-transcript', requestId, scoopJid, transcript: '' });
+    };
+    if (!this.orchestrator) {
+      empty();
+      return;
+    }
+    const scoop = this.orchestrator.getScoops().find((s) => s.jid === scoopJid);
+    if (!scoop) {
+      empty();
+      return;
+    }
+
+    const buffered = this.messageBuffers.get(scoopJid);
+    if (buffered && buffered.length > 0) {
+      this.emit({
+        type: 'scoop-transcript',
+        requestId,
+        scoopJid,
+        transcript: formatTranscript(buffered),
+      });
+      return;
+    }
+
+    const context = this.orchestrator.getScoopContext(scoopJid);
+    if (context) {
+      const { agentMessagesToChatMessages } = await import(
+        '../../../packages/webapp/src/scoops/agent-message-to-chat.js'
+      );
+      const agentMessages = context.getAgentMessages();
+      if (agentMessages.length > 0) {
+        const chatMessages = agentMessagesToChatMessages(agentMessages, {
+          source: scoop.isCone ? 'cone' : (scoop.name ?? scoop.folder),
+        });
+        this.emit({
+          type: 'scoop-transcript',
+          requestId,
+          scoopJid,
+          transcript: formatTranscript(chatMessages),
+        });
+        return;
+      }
+    }
+
+    empty();
+  }
+
+  /**
    * Persist a scoop's message buffer to the shared UI session store.
    * Fire-and-forget — errors are swallowed to avoid blocking agent processing.
    *
@@ -1191,6 +1254,11 @@ export class OffscreenBridge implements KernelFacade {
 
       case 'request-scoop-messages': {
         await this.handleRequestScoopMessages(msg.scoopJid);
+        break;
+      }
+
+      case 'request-scoop-transcript': {
+        await this.handleRequestScoopTranscript(msg.requestId, msg.scoopJid);
         break;
       }
 
@@ -1454,4 +1522,20 @@ export class OffscreenBridge implements KernelFacade {
 
 function uid(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+/**
+ * Flatten a list of chat-shaped messages into a single `role: content`
+ * transcript string suitable for the scope-label LLM call. Empty
+ * `content` entries are skipped so a streaming-only assistant message
+ * with no text yet doesn't insert blank lines.
+ */
+function formatTranscript(messages: ReadonlyArray<{ role: string; content: string }>): string {
+  const lines: string[] = [];
+  for (const m of messages) {
+    const text = (m.content ?? '').trim();
+    if (text.length === 0) continue;
+    lines.push(`${m.role}: ${text}`);
+  }
+  return lines.join('\n');
 }
