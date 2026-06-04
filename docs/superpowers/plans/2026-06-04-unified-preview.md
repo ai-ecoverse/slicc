@@ -59,9 +59,11 @@ If any prerequisite isn't ready, **stop and escalate**. Don't try to fudge the s
 - `packages/cloudflare-worker/src/index.ts` — preview-subdomain dispatch + mint/revoke/list route wiring.
 - `packages/cloudflare-worker/wrangler.jsonc` — wildcard routes for prod + staging.
 - `packages/cloudflare-worker/tests/index.test.ts` + `tests/deployed.test.ts` — routes-mirror parity for the 3 new mint routes.
-- `packages/webapp/src/scoops/tray-leader-sync.ts` — add `broadcastPreviewOpen(url)` method; route inbound `preview.request` from controller WS to `preview-request-handler.ts`.
-- `packages/webapp/src/ui/page-leader-tray.ts` — `currentLeaderSync` getter (port from federated); wire `preview.request` handler on the controller WS.
-- `packages/chrome-extension/src/extension-leader-tray.ts` — register `setPreviewMinter` (mirrors `setCherryEmitter`); add `tray-open-preview` `chrome.runtime` envelope listener for panel-terminal path; wire `preview.request` handler.
+- `packages/webapp/src/scoops/tray-leader-sync.ts` — extend `LeaderToFollowerMessage` union with `preview.open { requestId, url }`; add `broadcastPreviewOpen(url)` method.
+- `packages/webapp/src/scoops/tray-follower-sync.ts` — add `case 'preview.open':` follower dispatch (mirrors `tab.open` at `:617` → `executeLocalTabOpen`).
+- `packages/webapp/src/ui/page-leader-tray.ts` — `currentLeaderSync` getter (port from federated); wire `preview.request` AND `preview.revoked` handlers on the controller WS (NOT in `tray-leader-sync.ts` — the controller-WS listener lives in the page/extension tray manager, not in `LeaderSyncManager`).
+- `packages/chrome-extension/src/extension-leader-tray.ts` — register `setPreviewMinter` (mirrors `setCherryEmitter` at `:29,389,493`); add `tray-open-preview` `chrome.runtime` envelope listener for panel-terminal path; wire `preview.request` AND `preview.revoked` handlers.
+- `packages/chrome-extension/src/leader-sync-bridge.ts` — extension panel terminal posts the `tray-open-preview` envelope to offscreen (mirrors `leader-tray-reset` precedent).
 - `packages/webapp/src/kernel/panel-rpc.ts` — add `tray-open-preview` op type + result entry.
 - `packages/webapp/src/ui/panel-rpc-handlers.ts` — implement `tray-open-preview` standalone page handler.
 - `packages/webapp/src/shell/supplemental-commands/serve-command.ts` — three-context decision; auto-enable tray; mint via worker; `--bridge`/`--stop`/`--list`/`--project` flags.
@@ -118,12 +120,15 @@ describe('previewBaseHost', () => {
 
 describe('buildPreviewUrl', () => {
   it('builds the canonical URL for prod', () => {
+    // Note: the path argument is a URL path on the preview origin, NOT a VFS
+    // path. The mint URL has `/` (DO record carries entryPath separately);
+    // subsequent asset fetches use root-relative paths like `/app.js`.
     expect(buildPreviewUrl('https://www.sliccy.ai', 'tray1.abc', '/')).toBe(
       'https://tray1.abc.preview.sliccy.ai/'
     );
-    expect(
-      buildPreviewUrl('https://www.sliccy.ai', 'tray1.abc', '/workspace/dist/index.html')
-    ).toBe('https://tray1.abc.preview.sliccy.ai/workspace/dist/index.html');
+    expect(buildPreviewUrl('https://www.sliccy.ai', 'tray1.abc', '/app.js')).toBe(
+      'https://tray1.abc.preview.sliccy.ai/app.js'
+    );
   });
 
   it('builds the staging URL even though the worker host is on workers.dev', () => {
@@ -198,6 +203,27 @@ export function buildPreviewUrl(workerBaseUrl: string, previewToken: string, pat
 ```ts
 export { previewBaseHost, buildPreviewUrl } from './preview-url.js';
 ```
+
+- [ ] **Step 4b: Add worker dependency on `@slicc/shared-ts`** — the worker imports `buildPreviewUrl` starting in Task 4 but `packages/cloudflare-worker/package.json` currently only has `@slicc/cloud-core` + `jose` as dependencies. Add:
+
+```jsonc
+// packages/cloudflare-worker/package.json
+"dependencies": {
+  "@slicc/cloud-core": "*",
+  "@slicc/shared-ts": "*",
+  "jose": "^6.2.3"
+}
+```
+
+Run `npm install` from the repo root after this edit so the workspace symlink is in place.
+
+Verify the worker bundles still resolve it:
+
+```
+npm run typecheck -w @slicc/cloudflare-worker
+```
+
+(Same pattern `@slicc/cloud-core` already follows.)
 
 - [ ] **Step 5: Run, confirm PASS** (all 8 tests):
 
@@ -310,13 +336,13 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 - Modify: `packages/cloudflare-worker/src/shared.ts` (add `PreviewRecord`)
 - Modify: `packages/cloudflare-worker/src/tray-signaling.ts` (extend both unions)
 
-- [ ] **Step 1: Add `PreviewRecord` to `shared.ts`** — insert after the existing `TrayRecord` type:
+- [ ] **Step 1: Add `PreviewRecord` to `shared.ts` AND extend `TrayRecord`** — insert after the existing `TrayRecord` type:
 
 ```ts
 /**
  * One record per active `serve` invocation (many per tray). Stored in the
- * SessionTrayDurableObject's `previews: Record<previewToken, PreviewRecord>`
- * map. Deleted on tray expiry OR on explicit `serve --stop` revoke.
+ * SessionTrayDurableObject's `tray.previews` map (added to TrayRecord below).
+ * Deleted on tray expiry OR on explicit `serve --stop` revoke.
  */
 export interface PreviewRecord {
   previewToken: string; // unguessable: trayId.<18-byte-hex> per createCapabilityToken
@@ -327,6 +353,17 @@ export interface PreviewRecord {
   createdAt: string; // ISO timestamp
 }
 ```
+
+ALSO extend `TrayRecord` (find the existing interface in `shared.ts`) with a `previews?` field:
+
+```ts
+export interface TrayRecord {
+  // … existing fields (trayId, controllerToken, joinToken, webhookToken, expiredAt, …) …
+  previews?: Record<string, PreviewRecord>;
+}
+```
+
+The `?` keeps existing serialized trays from breaking when the field isn't present yet — the DO defaults to `{}` on first mint.
 
 - [ ] **Step 2: Extend `LeaderToWorkerControlMessage` in `tray-signaling.ts`** — find the existing union (after `LeaderBootstrapFailedMessage`), add the `preview.response` variant:
 
@@ -412,12 +449,15 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 The DO needs:
 
-- A `previews: Record<previewToken, PreviewRecord>` field on the persisted tray record.
+- A `previews: Record<previewToken, PreviewRecord>` field on the persisted tray record (already added to `TrayRecord` in Task 3).
 - `mintPreview(opts) -> { previewToken, url }`: validates controllerToken, generates token via `createCapabilityToken(trayId)`, stores the record, returns the URL via `buildPreviewUrl(workerBaseUrl, token, '/')`.
 - `resolvePreview(previewToken) -> PreviewRecord | null`: lookup (also expire-checked against tray's `expiredAt`).
 - `revokePreview(previewToken) -> { revoked: boolean }`: deletes the record AND sends `preview.revoked` to the leader over the controller WS.
+- `listPreviews() -> Array<PreviewRecord>`: returns every current preview record (used by `GET /api/tray/:trayId/previews` in Task 5).
 
-- [ ] **Step 1: Write failing test** at `packages/cloudflare-worker/tests/session-tray-preview.test.ts` — adapt to whatever test harness the existing `tests/session-tray*.test.ts` (or `tests/index.test.ts`) uses for the DO. Read one of those first for the exact harness pattern; mirror it. Then add:
+**Harness pointer (no `createTestTray()` helper exists today).** `packages/cloudflare-worker/tests/index.test.ts` uses inline DO setup — read the webhook tests at `:918` and `:983` (POST `/webhook/:token/:webhookId`) for the exact pattern: how they create a tray via `POST /tray`, how they mint capability tokens, how they validate. Mirror that in `session-tray-preview.test.ts`; do NOT import a `createTestTray()` helper (it doesn't exist).
+
+- [ ] **Step 1: Write failing test** at `packages/cloudflare-worker/tests/session-tray-preview.test.ts` — see harness pointer above; the snippet below uses placeholder names but the implementer should replace them with real inline setup:
 
 ```ts
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -531,6 +571,12 @@ async revokePreview(previewToken: string): Promise<{ revoked: boolean }> {
   // degrade on next asset fetch.
   this.sendToLeader({ type: 'preview.revoked', previewToken });
   return { revoked: true };
+}
+
+async listPreviews(): Promise<PreviewRecord[]> {
+  const tray = await this.loadTray();
+  if (!tray || tray.expiredAt) return [];
+  return Object.values(tray.previews ?? {});
 }
 ```
 
@@ -1480,21 +1526,29 @@ The standalone leader holds the controller WS via `LeaderTrayManager` (look at t
 rg -n "webhook.event\|message.type ===" packages/webapp/src/ui/page-leader-tray.ts
 ```
 
-- [ ] **Step 2: Add `preview.request` dispatch** — after the existing webhook-event branch, add:
+- [ ] **Step 2: Add `preview.request` AND `preview.revoked` dispatch** — after the existing webhook-event branch, add:
 
 ```ts
 if (message.type === 'preview.request') {
   handlePreviewRequest(message, this.controllerSocket, vfs);
   return;
 }
+if (message.type === 'preview.revoked') {
+  // Phase 1: log only (Phase 2's bridge channel will use this to push a
+  // preview-stopped event to open tabs). Optional follow-up: emit a cone-side
+  // `cherry`-style lick so the agent sees the user-initiated revoke.
+  log.info('Preview revoked by worker', { previewToken: message.previewToken });
+  return;
+}
 ```
 
 …where `vfs` is the leader's `VirtualFS` instance (already in scope at this layer — find it the same way the federated branch did, via the `options.vfs` field of `LeaderSyncManagerOptions` if applicable).
 
-Import:
+Imports:
 
 ```ts
 import { handlePreviewRequest } from '../scoops/preview-request-handler.js';
+// (`log` already exists at this file's top via createLogger; reuse it.)
 ```
 
 - [ ] **Step 3: Typecheck**
@@ -1508,7 +1562,7 @@ npm run typecheck
 ```
 npx prettier --write packages/webapp/src/ui/page-leader-tray.ts
 git add packages/webapp/src/ui/page-leader-tray.ts
-git commit -m "feat(preview): wire preview.request handler on standalone controller WS
+git commit -m "feat(preview): wire preview.request + preview.revoked handlers on standalone controller WS
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -1523,7 +1577,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 Same mechanism as Task 10, but in the offscreen leader. Look for the existing webhook handler in `extension-leader-tray.ts` for the precedent (search `webhook.event`).
 
-- [ ] **Step 1: Add the `preview.request` dispatch** alongside the webhook handler. Imports + same body as Task 10.
+- [ ] **Step 1: Add BOTH the `preview.request` AND the `preview.revoked` dispatch** alongside the webhook handler. Imports + same bodies as Task 10 (the revoked branch is log-only in Phase 1).
 
 - [ ] **Step 2: Typecheck.**
 
@@ -1572,17 +1626,24 @@ describe('LeaderSyncManager.broadcastPreviewOpen', () => {
 
 - [ ] **Step 2: Run, confirm FAIL.**
 
-- [ ] **Step 3: Implement `broadcastPreviewOpen` in `tray-leader-sync.ts`** — mirror the existing `broadcastEvent` / `broadcastSprinkleUpdate` patterns:
+- [ ] **Step 2b: Extend `LeaderToFollowerMessage` union** in `packages/webapp/src/scoops/tray-sync-protocol.ts` — find the existing union (`tab.open` etc., around `:46`) and add:
+
+```ts
+| { type: 'preview.open'; requestId: string; url: string }
+```
+
+`requestId` matches the existing `tab.open`/`tab.opened` request/reply convention (iOS test in Task 18 expects it on the wire even though Phase 1 doesn't ack).
+
+- [ ] **Step 3: Implement `broadcastPreviewOpen` in `tray-leader-sync.ts`** — use the existing private `broadcastToAllFollowers` API (`:357`) instead of iterating `this.followers` directly. Mirror `broadcastEvent` / `broadcastSprinkleUpdate` patterns:
 
 ```ts
 /**
  * Tell every connected follower to open the worker-served preview URL.
- * Phase 1: no requestId / no follower ack — fire-and-forget broadcast.
+ * Phase 1: fire-and-forget; followers don't ack (no preview.opened reply).
  */
 broadcastPreviewOpen(url: string): void {
-  for (const f of this.followers.values()) {
-    f.channel.send({ type: 'preview.open', url });
-  }
+  const requestId = `prv-${crypto.randomUUID()}`;
+  this.broadcastToAllFollowers({ type: 'preview.open', requestId, url });
 }
 ```
 
@@ -1598,6 +1659,68 @@ git add packages/webapp/
 git commit -m "feat(preview): LeaderSyncManager.broadcastPreviewOpen + currentLeaderSync getter
 
 Ports from worktree-federated-preview @ f950bd7f.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+```
+
+---
+
+## Task 12b: Follower-side `preview.open` dispatch
+
+**Files:**
+
+- Modify: `packages/webapp/src/scoops/tray-follower-sync.ts` (add `case 'preview.open':` arm)
+- Test: `packages/webapp/tests/scoops/tray-follower-sync-preview-open.test.ts`
+
+Without this task, mint + broadcast succeed but standalone/extension/electron followers never **open** the preview tab (only iOS gets it via Task 18; the TS follower path is silent). The existing `tab.open` case at `tray-follower-sync.ts:617` is the template — both messages do "create a tab pointing at this URL" semantically. Reuse `executeLocalTabOpen` rather than duplicating its body.
+
+- [ ] **Step 1: Write failing test:**
+
+```ts
+import { describe, it, expect, vi } from 'vitest';
+import { FollowerSyncManager } from '../../src/scoops/tray-follower-sync.js';
+
+describe('FollowerSyncManager preview.open dispatch', () => {
+  it('opens a tab at the URL via executeLocalTabOpen', async () => {
+    /* Read the existing tab.open test for the harness. Construct a
+       FollowerSyncManager with a stub browserAPI; deliver a fake
+       { type: 'preview.open', requestId: 'r1', url: 'https://t.x.preview.sliccy.ai/' }
+       message via the same channel mechanism the tab.open test uses; assert
+       browserAPI.createPage was called with that URL (matching the existing
+       executeLocalTabOpen behavior — background:true on extension, etc.). */
+  });
+});
+```
+
+- [ ] **Step 2: Run, confirm FAIL.**
+
+- [ ] **Step 3: Add the dispatch case** in `packages/webapp/src/scoops/tray-follower-sync.ts` — find the existing `case 'tab.open':` at `:617`:
+
+```ts
+case 'tab.open': {
+  this.executeLocalTabOpen(message.requestId, message.url);
+  break;
+}
+// ADD THIS RIGHT AFTER:
+case 'preview.open': {
+  // Same semantics as tab.open: open the URL in a new tab. The preview-vs-tab
+  // distinction is purely informational here (it lets us add preview-specific
+  // semantics in Phase 2 if needed without re-routing through tab.open).
+  this.executeLocalTabOpen(message.requestId, message.url);
+  break;
+}
+```
+
+(No new `executePreviewOpen` method needed — `executeLocalTabOpen` already does exactly what we need: `chrome.tabs.create` in extension, `browserAPI.createPage` in standalone, `window.open` fallback. If Phase 2 needs preview-specific tab semantics we can introduce a separate method then.)
+
+- [ ] **Step 4: Run, confirm PASS.**
+
+- [ ] **Step 5: Format + commit**
+
+```
+npx prettier --write packages/webapp/src/scoops/tray-follower-sync.ts packages/webapp/tests/scoops/tray-follower-sync-preview-open.test.ts
+git add packages/webapp/
+git commit -m "feat(preview): follower-side preview.open dispatch (reuses executeLocalTabOpen)
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -1875,7 +1998,18 @@ describe('mintPreviewViaWorker', () => {
 - [ ] **Step 3: Implement** `preview-mint-client.ts`:
 
 ```ts
-import type { PreviewRecord } from '@slicc/cloudflare-worker/shared.js'; // or wherever exported
+// NOTE: don't import PreviewRecord from @slicc/cloudflare-worker — webapp has no
+// dependency on the worker package. Define the list-response item locally;
+// the wire shape is small and we control both sides of the contract.
+
+interface PreviewListItem {
+  previewToken: string;
+  url: string;
+  servedRoot: string;
+  entryPath: string;
+  allowLive: boolean;
+  createdAt: string;
+}
 
 export interface MintArgs {
   workerBaseUrl: string;
@@ -1927,7 +2061,7 @@ export async function revokePreviewViaWorker(
 export async function listPreviewsViaWorker(
   args: { workerBaseUrl: string; trayId: string; controllerToken: string },
   fetchImpl: typeof fetch = fetch
-): Promise<{ previews: Array<Omit<PreviewRecord, 'trayId'>> }> {
+): Promise<{ previews: PreviewListItem[] }> {
   const url = `${args.workerBaseUrl}/api/tray/${encodeURIComponent(args.trayId)}/previews`;
   const res = await fetchImpl(url, {
     method: 'GET',
@@ -2071,6 +2205,18 @@ export async function serveCommand(args: string[], context: ShellContext): Promi
     result = await rpc.call('tray-open-preview', { entryPath, servedRoot, allowLive });
   }
 
+  // Open the leader's OWN tab at the worker URL (preserves today's `serve`
+  // UX of seeing the preview immediately on the leader's browser; also pushes
+  // to followers via the mint path). The leader-side open is independent of
+  // the broadcast — both targets see the same URL.
+  if (browserAPI) {
+    await browserAPI.createPage(result.url);
+  } else if (typeof window !== 'undefined' && typeof window.open === 'function') {
+    // window.open() returns null in extension offscreen/side-panel contexts even
+    // when the tab opens — fire-and-forget, never treat null as failure.
+    window.open(result.url, '_blank', 'noopener,noreferrer');
+  }
+
   context.stdout.write(`Preview URL: ${result.url}\n`);
   context.stdout.write(`Pushed to ${result.pushed} follower${result.pushed === 1 ? '' : 's'}\n`);
   return { exitCode: 0 };
@@ -2118,7 +2264,12 @@ Per Decision #3: at mint time, if any connected follower advertises `CHERRY_RUNT
 
 - [ ] **Step 1: Add `--no-bridge` flag** to `serve-command.ts`'s parser (parallel to `--bridge`).
 
-- [ ] **Step 2: At every mint site** (extension agent, panel-RPC handler), inspect connected followers right before mint:
+- [ ] **Step 2: At every mint site, inspect connected followers right before mint and compute `effectiveAllowLive`.** "Every mint site" is **three** places (matching the three contexts from Tasks 13-19):
+  - **Standalone path** — `packages/webapp/src/ui/panel-rpc-handlers.ts` `tray-open-preview` handler (Task 14).
+  - **Extension agent path** — `packages/chrome-extension/src/extension-leader-tray.ts` `setPreviewMinter` closure (Task 13).
+  - **Extension panel terminal path** — `packages/chrome-extension/src/extension-leader-tray.ts` `chrome.runtime` envelope listener (Task 19).
+
+`serve-command.ts` doesn't compute `effectiveAllowLive` itself — it just passes the raw `--bridge` / `--no-bridge` user intent through. The mint sites combine that with the follower runtime check:
 
 ```ts
 import { CHERRY_RUNTIME_TAG } from '../scoops/tray-sync-protocol.js';
@@ -2126,10 +2277,10 @@ import { CHERRY_RUNTIME_TAG } from '../scoops/tray-sync-protocol.js';
 const hasCherryFollower = sync
   .getConnectedFollowers()
   .some((f) => f.runtime === CHERRY_RUNTIME_TAG);
-const effectiveAllowLive = !flags.noBridge && (flags.bridge || hasCherryFollower);
+const effectiveAllowLive = !payload.noBridge && (payload.bridge || hasCherryFollower);
 ```
 
-Pass `effectiveAllowLive` into the mint call.
+Pass `effectiveAllowLive` into the `mintPreviewViaWorker` call's `allowLive` argument.
 
 - [ ] **Step 3: Add a test** that with a Cherry follower connected, mint payload has `allowLive: true` even without `--bridge`; and with `--no-bridge`, `allowLive: false` regardless.
 
@@ -2209,7 +2360,7 @@ This is the third extension context: side-panel terminal posts an envelope to th
 
 - [ ] **Step 2: Add the listener** in `extension-leader-tray.ts` near `:423` (the leader-tray-reset listener) — on receiving `tray-open-preview` envelope, call `getPreviewMinter()?.(...)` (or mint directly via `mintPreviewViaWorker` + `sync.broadcastPreviewOpen`) and respond.
 
-- [ ] **Step 3: Add the side-panel sender** wherever the panel terminal's `serve` originates — when in extension panel context, post the envelope; await the reply. (Look for how the panel uses `leader-tray-reset` today and mirror it.)
+- [ ] **Step 3: Add the side-panel sender in `packages/chrome-extension/src/leader-sync-bridge.ts`** — this is the panel→offscreen bridge module that already hosts `leader-tray-reset`'s send-side. Add a `requestTrayOpenPreview(opts)` function that posts the envelope and awaits the reply (mirror the existing `requestLeaderTrayReset()` shape). The side-panel `serve` command (the panel-terminal shell, not the agent) calls this when running in extension panel context.
 
 - [ ] **Step 4: Build extension**
 
@@ -2382,11 +2533,13 @@ Per the spec § Documentation updates. Each file gets its own commit so the diff
 
 ## Task 26: Full verification pass
 
-- [ ] **Step 1: Prettier:**
+- [ ] **Step 1: Full lint (CI-equivalent — biome + prettier + docs/skills):**
 
 ```
-npx prettier --check .
+npm run lint:ci
 ```
+
+(CI runs `biome check . && prettier --check . && lint:docs && lint:skills --strict`. The simpler `prettier --check` only catches formatting; biome catches a broader class of issues. Use `npm run lint` to auto-fix biome + prettier locally if needed.)
 
 - [ ] **Step 2: Typecheck:**
 
@@ -2433,28 +2586,33 @@ cd packages/cloudflare-worker && npx wrangler deploy --dry-run
 
 # Self-review notes (author)
 
-**Spec coverage:**
+**Spec coverage (27 tasks total — Task 12b added after second plan review):**
 
-- Worker preview handler, DO mint/revoke/list, WS protocol extensions, wildcard routes: Tasks 2-7.
-- Leader-side security gate + handler + dispatch wiring: Tasks 8-11.
-- `tray-open-preview` three-context wiring: Tasks 13-15, 19.
-- `currentLeaderSync` + `broadcastPreviewOpen`: Task 12.
-- `serve` unified command (auto-enable, three contexts, `--bridge`/`--stop`/`--list`/`--project`): Tasks 16-17.
+- Worker preview handler, DO mint/revoke/list (incl. `listPreviews()` method), WS protocol extensions (both directions: `preview.request`/`preview.revoked` worker→leader, `preview.response` leader→worker), wildcard routes: Tasks 2-7.
+- Shared-ts URL helper + worker dependency on `@slicc/shared-ts`: Task 1 (incl. Step 4b which adds the package.json dep).
+- Leader-side security gate + handler + dispatch wiring (incl. `preview.revoked` log-only branch): Tasks 8-11.
+- `LeaderToFollowerMessage.preview.open { requestId, url }` + `LeaderSyncManager.broadcastPreviewOpen` via the existing `broadcastToAllFollowers` API: Task 12.
+- **Follower-side `preview.open` dispatch** (reuses `executeLocalTabOpen` from the existing `tab.open` template at `:617`): **Task 12b** (added in second plan review).
+- `tray-open-preview` three-context wiring (standalone panel-RPC / extension agent in-realm `setPreviewMinter` / extension panel terminal `chrome.runtime` envelope via `leader-sync-bridge.ts`): Tasks 13-15, 19.
+- `currentLeaderSync` + extension `leader-sync-bridge.ts` sender: Tasks 12, 19.
+- `serve` unified command — auto-enable tray, three contexts, `--bridge`/`--stop`/`--list`/`--project`, **leader-tab open via `browserAPI.createPage` / `window.open` after mint** (preserves today's UX): Tasks 16-17.
+- Cherry default-on at **every mint site** (panel-RPC handler + extension agent minter + extension envelope listener — three places, not just `serve-command.ts`): Task 17.
 - iOS `preview.open`: Task 18.
 - Phase 1b consumer migration: Tasks 20-23.
 - `--project` scrub + docs: Tasks 24-25.
+- Full lint (`npm run lint:ci` = biome + prettier + docs + skills, not just prettier --check): Task 26.
 
 **Type consistency** — names used across tasks:
 
-- `PreviewRecord { previewToken, trayId, servedRoot, entryPath, allowLive, createdAt }` (Task 3 → Tasks 4, 6, 15).
+- `PreviewRecord { previewToken, trayId, servedRoot, entryPath, allowLive, createdAt }` (Task 3 → Tasks 4, 6, 15). `TrayRecord.previews?: Record<string, PreviewRecord>` added to the existing tray type (Task 3 Step 1).
 - `preview.request { reqId, servedRoot, vfsPath, asText }` (Tasks 3, 9).
 - `preview.response { reqId, ok, mime?, chunkIndex, totalChunks, content, encoding } | { reqId, ok:false, status, reason? }` (Tasks 3, 6, 9).
-- `preview.revoked { previewToken }` (Tasks 3, 4).
-- `preview.open { url }` (TS + Swift; Tasks 12, 18).
+- `preview.revoked { previewToken }` (Tasks 3, 4, 10/11).
+- `preview.open { requestId: string; url: string }` (TS protocol union + Swift; Tasks 12, 12b, 18). `requestId` is on the wire even though Phase 1 doesn't ack — matches the `tab.open`/`tab.opened` convention iOS already follows.
 - `setPreviewMinter` / `getPreviewMinter` / `PreviewMinter` (Tasks 13, 16, 17).
 - `isPathWithinServedRoot(vfsPath, servedRoot)` (Tasks 8, 9).
-- `mintPreviewViaWorker` / `revokePreviewViaWorker` / `listPreviewsViaWorker` (Tasks 15, 16).
-- `previewBaseHost` / `buildPreviewUrl` from `@slicc/shared-ts/preview-url` (Tasks 1, 4, 12).
+- `mintPreviewViaWorker` / `revokePreviewViaWorker` / `listPreviewsViaWorker` (Tasks 15, 16). `PreviewListItem` defined locally in `preview-mint-client.ts` (webapp has no dependency on the worker package; the wire shape is small and we control both sides).
+- `previewBaseHost` / `buildPreviewUrl` from `@slicc/shared-ts/preview-url` (Tasks 1, 4, 12). Worker pulls them in via the new `@slicc/shared-ts` dependency added in Task 1 Step 4b.
 - `previewTokenFromHost` from `cloudflare-worker/preview-host` (Tasks 2, 6).
 
 **Placeholder scan:**
