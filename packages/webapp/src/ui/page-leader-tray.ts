@@ -27,6 +27,7 @@ import type { CDPTransport } from '../cdp/transport.js';
 import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
+import { handlePreviewRequest } from '../scoops/preview-request-handler.js';
 import { ThrottledErrorTracker } from '../scoops/throttled-error-tracker.js';
 import type {
   LeaderTraySession,
@@ -223,6 +224,36 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
     onControlMessage: (message) => {
       if (message.type === 'webhook.event') {
         options.sendWebhookEvent(message.webhookId, message.headers, message.body);
+        return;
+      }
+      if (message.type === 'preview.request') {
+        const vfs = options.vfs;
+        if (!vfs) {
+          leader.sendControlMessage({
+            type: 'preview.response',
+            reqId: message.reqId,
+            ok: false,
+            status: 500,
+            reason: 'leader has no VFS bound',
+          });
+          return;
+        }
+        void handlePreviewRequest(
+          message,
+          {
+            send: (m) =>
+              leader.sendControlMessage(m as Parameters<typeof leader.sendControlMessage>[0]),
+          },
+          vfs
+        ).catch((err) => {
+          log.error('preview.request handling failed', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+        return;
+      }
+      if (message.type === 'preview.revoked') {
+        log.info('Preview revoked by worker', { previewToken: message.previewToken });
         return;
       }
       void peers.handleControlMessage(message).catch((err) => {

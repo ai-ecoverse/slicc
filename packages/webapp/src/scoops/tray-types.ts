@@ -107,7 +107,22 @@ export type WorkerToLeaderControlMessage =
   | FollowerJoinRequestedMessage
   | BootstrapAnswerMessage
   | BootstrapIceCandidateMessage
-  | WebhookEventMessage;
+  | WebhookEventMessage
+  | WorkerPreviewRequest
+  | WorkerPreviewRevoked;
+
+export interface WorkerPreviewRequest {
+  type: 'preview.request';
+  reqId: string;
+  servedRoot: string;
+  vfsPath: string;
+  asText: boolean;
+}
+
+export interface WorkerPreviewRevoked {
+  type: 'preview.revoked';
+  previewToken: string;
+}
 
 export interface LeaderBootstrapOfferMessage {
   type: 'bootstrap.offer';
@@ -133,11 +148,32 @@ export interface LeaderBootstrapFailedMessage {
   retryAfterMs?: number | null;
 }
 
+export interface LeaderPreviewResponseOk {
+  type: 'preview.response';
+  reqId: string;
+  ok: true;
+  mime: string;
+  chunkIndex: number;
+  totalChunks: number;
+  content: string;
+  encoding: 'utf-8' | 'base64';
+}
+
+export interface LeaderPreviewResponseError {
+  type: 'preview.response';
+  reqId: string;
+  ok: false;
+  status: 404 | 403 | 500;
+  reason?: string;
+}
+
 export type LeaderToWorkerControlMessage =
   | { type: 'ping' }
   | LeaderBootstrapOfferMessage
   | LeaderBootstrapIceCandidateMessage
-  | LeaderBootstrapFailedMessage;
+  | LeaderBootstrapFailedMessage
+  | LeaderPreviewResponseOk
+  | LeaderPreviewResponseError;
 
 export interface TrayLeaderSummary {
   controllerId: string;

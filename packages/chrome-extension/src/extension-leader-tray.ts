@@ -15,6 +15,7 @@ import type { Logger } from '../../webapp/src/core/logger.js';
 import type { VirtualFS } from '../../webapp/src/fs/virtual-fs.js';
 import type { LickManager } from '../../webapp/src/scoops/lick-manager.js';
 import type { Orchestrator } from '../../webapp/src/scoops/orchestrator.js';
+import { handlePreviewRequest } from '../../webapp/src/scoops/preview-request-handler.js';
 import { ThrottledErrorTracker } from '../../webapp/src/scoops/throttled-error-tracker.js';
 import {
   getLeaderTrayRuntimeStatus,
@@ -351,6 +352,37 @@ export function startExtensionLeaderTray(
     onControlMessage: (message) => {
       if (message.type === 'webhook.event') {
         orchestrator.handleWebhookEvent(message.webhookId, message.headers, message.body);
+        return;
+      }
+      if (message.type === 'preview.request') {
+        if (!sharedFs) {
+          trayLeader.sendControlMessage({
+            type: 'preview.response',
+            reqId: message.reqId,
+            ok: false,
+            status: 500,
+            reason: 'leader has no VFS bound',
+          });
+          return;
+        }
+        void handlePreviewRequest(
+          message,
+          {
+            send: (m) =>
+              trayLeader.sendControlMessage(
+                m as Parameters<typeof trayLeader.sendControlMessage>[0]
+              ),
+          },
+          sharedFs
+        ).catch((err) => {
+          options.log.error('preview.request handling failed', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+        return;
+      }
+      if (message.type === 'preview.revoked') {
+        options.log.info('Preview revoked by worker', { previewToken: message.previewToken });
         return;
       }
       void trayPeers.handleControlMessage(message).catch((err) => {
