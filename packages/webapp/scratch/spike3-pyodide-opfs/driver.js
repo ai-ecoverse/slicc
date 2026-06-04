@@ -18,7 +18,9 @@ async function readOpfsDirect(rootName) {
         const f = await handle.getFile();
         const bytes = new Uint8Array(await f.arrayBuffer());
         const preview = new TextDecoder().decode(bytes.slice(0, 200));
-        lines.push(`[file]  ${name}  (${f.size}B, mtime=${new Date(f.lastModified).toISOString()})`);
+        lines.push(
+          `[file]  ${name}  (${f.size}B, mtime=${new Date(f.lastModified).toISOString()})`
+        );
         lines.push(`        first200=${JSON.stringify(preview)}`);
       } else {
         lines.push(`[dir]   ${name}/`);

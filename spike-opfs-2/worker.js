@@ -91,12 +91,16 @@ async function rpcWriteOnce(name, text) {
 async function rpcResetAll() {
   STATE.stop = true;
   for (const h of STATE.handles.values()) {
-    try { h.close(); } catch {}
+    try {
+      h.close();
+    } catch {}
   }
   STATE.handles.clear();
   const root = await getRoot();
   for await (const name of root.keys()) {
-    try { await root.removeEntry(name, { recursive: true }); } catch {}
+    try {
+      await root.removeEntry(name, { recursive: true });
+    } catch {}
   }
   STATE.writes = 0;
   STATE.lastErr = null;
@@ -107,15 +111,33 @@ self.onmessage = async (ev) => {
   try {
     let result;
     switch (op) {
-      case 'start-write-loop': result = await startWriteLoop(args.name, args.intervalMs ?? 5); break;
-      case 'stop': STATE.stop = true; result = { stopped: true, writes: STATE.writes, lastErr: STATE.lastErr }; break;
-      case 'read': result = await rpcRead(args.name, args.asText); break;
-      case 'list': result = await rpcList(); break;
-      case 'stat': result = await rpcStat(args.name); break;
-      case 'write-once': result = await rpcWriteOnce(args.name, args.text); break;
-      case 'reset': result = await rpcResetAll(); break;
-      case 'status': result = { writes: STATE.writes, lastErr: STATE.lastErr, openHandles: STATE.handles.size }; break;
-      default: throw new Error(`unknown op: ${op}`);
+      case 'start-write-loop':
+        result = await startWriteLoop(args.name, args.intervalMs ?? 5);
+        break;
+      case 'stop':
+        STATE.stop = true;
+        result = { stopped: true, writes: STATE.writes, lastErr: STATE.lastErr };
+        break;
+      case 'read':
+        result = await rpcRead(args.name, args.asText);
+        break;
+      case 'list':
+        result = await rpcList();
+        break;
+      case 'stat':
+        result = await rpcStat(args.name);
+        break;
+      case 'write-once':
+        result = await rpcWriteOnce(args.name, args.text);
+        break;
+      case 'reset':
+        result = await rpcResetAll();
+        break;
+      case 'status':
+        result = { writes: STATE.writes, lastErr: STATE.lastErr, openHandles: STATE.handles.size };
+        break;
+      default:
+        throw new Error(`unknown op: ${op}`);
     }
     self.postMessage({ id, ok: true, result });
   } catch (err) {
