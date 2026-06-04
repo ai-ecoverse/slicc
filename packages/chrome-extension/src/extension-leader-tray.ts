@@ -15,6 +15,7 @@ import type { Logger } from '../../webapp/src/core/logger.js';
 import type { VirtualFS } from '../../webapp/src/fs/virtual-fs.js';
 import type { LickManager } from '../../webapp/src/scoops/lick-manager.js';
 import type { Orchestrator } from '../../webapp/src/scoops/orchestrator.js';
+import { setPreviewMinter } from '../../webapp/src/scoops/preview-minter.js';
 import { handlePreviewRequest } from '../../webapp/src/scoops/preview-request-handler.js';
 import { ThrottledErrorTracker } from '../../webapp/src/scoops/throttled-error-tracker.js';
 import {
@@ -32,6 +33,7 @@ import {
   setConnectedFollowersGetter,
   setTrayResetter,
 } from '../../webapp/src/shell/supplemental-commands/host-command.js';
+import { mintPreviewViaWorker } from '../../webapp/src/shell/supplemental-commands/preview-mint-client.js';
 import { canonicalRuntimeId } from '../../webapp/src/ui/runtime-identity.js';
 import type { AgentEvent, ChatMessage } from '../../webapp/src/ui/types.js';
 import type { OffscreenLeaderSyncBridgeHandle } from './leader-sync-bridge.js';
@@ -420,6 +422,28 @@ export function startExtensionLeaderTray(
   // `onCherryHostEvent` direct call.
   setCherryEmitter((runtimeId, name, detail) => sync.emitCherrySliccEvent(runtimeId, name, detail));
 
+  // Mint preview hook: the agent shell (in this same offscreen realm) calls
+  // getPreviewMinter()?.(opts) — we do the worker round-trip + follower
+  // broadcast in-realm with no panel-RPC hop. Standalone uses the
+  // tray-open-preview panel-RPC op instead (Task 14).
+  setPreviewMinter(async (opts) => {
+    const status = getLeaderTrayRuntimeStatus();
+    const session = status.session;
+    if (!session) throw new Error('No active leader tray; cannot mint preview');
+    const controllerUrl = new URL(session.controllerUrl);
+    const controllerToken = controllerUrl.pathname.split('/').pop() ?? '';
+    const { url } = await mintPreviewViaWorker({
+      workerBaseUrl: session.workerBaseUrl,
+      trayId: session.trayId,
+      controllerToken,
+      servedRoot: opts.servedRoot,
+      entryPath: opts.entryPath,
+      allowLive: opts.allowLive,
+    });
+    sync.broadcastPreviewOpen(url);
+    return { url, pushed: trayPeers.getPeers().length };
+  });
+
   const resetSequence = async (): Promise<LeaderTrayRuntimeStatus> => {
     sync.stop();
     trayPeers.stop();
@@ -523,6 +547,7 @@ export function startExtensionLeaderTray(
       trayLeader.stop();
       setConnectedFollowersGetter(null);
       setCherryEmitter(null);
+      setPreviewMinter(null);
       setTrayResetter(null);
       chrome.runtime.onMessage.removeListener(resetListener);
       leaderBridge.signalLeaderMode(false);
