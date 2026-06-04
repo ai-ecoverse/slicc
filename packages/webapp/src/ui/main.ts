@@ -1790,6 +1790,12 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   const { installPageStorageSync } = await import('../kernel/page-storage-sync.js');
   const { VirtualFS, resolveVfsBackendFromEnv } = await import('../fs/index.js');
   const { BrowserAPI } = await import('../cdp/index.js');
+  // Wave C3 — page-side companion to the worker's migration progress
+  // signals. The controller is allocated lazily on the first signal
+  // (see `spawnKernelWorker` callbacks below); the import is cheap and
+  // a no-op when the flag is off because the worker never posts the
+  // start signal in that case.
+  const { createMigrationSplash } = await import('./migration-splash.js');
 
   // Resolve the tray worker base URL from /api/runtime-config so consumers
   // like oauth-code-exchange's `getWorkerBaseUrl` read a value that matches
@@ -2066,9 +2072,26 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // `kernel-worker-ready` over the kernel port.
   const { OffscreenClient } = await import('./offscreen-client.js');
   void OffscreenClient; // type import for the `client` variable above
+
+  // Wave C3 — lazily-allocated splash controller. We don't construct
+  // it eagerly because the migration only runs on the OPFS flag path
+  // AND only when the sentinel is absent; the controller is created
+  // on first `onMigrationStart` so flag-off boots never touch
+  // `document.body`.
+  let migrationSplash: ReturnType<typeof createMigrationSplash> | null = null;
+
   const host = spawnKernelWorker({
     realCdpTransport,
     instanceId,
+    onMigrationStart: () => {
+      if (!migrationSplash) {
+        migrationSplash = createMigrationSplash({ root: document.body, logger: log });
+      }
+      migrationSplash.arm();
+    },
+    onMigrationFinish: () => {
+      migrationSplash?.disarm();
+    },
     callbacks: {
       onStatusChange: (scoopJid, status) => {
         layout.panels.scoops.updateScoopStatus(scoopJid, status);

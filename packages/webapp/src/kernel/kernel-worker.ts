@@ -85,6 +85,25 @@ export interface KernelWorkerReadyMsg {
   type: 'kernel-worker-ready';
 }
 
+/**
+ * Wave C3 — migration progress signals.
+ *
+ * The kernel host invokes `onMigrationStart` immediately before the
+ * OPFS migration IIFE (when `sharedFs.backend === 'opfs'`) and
+ * `onMigrationFinish` from a `finally` so a thrown runner still
+ * dismisses the splash. We post these raw on the kernel port —
+ * identical channel to `kernel-worker-ready` — so the page can wire
+ * a `walk > 1s` splash without a new heavyweight transport. Flag-off
+ * floats never construct an OPFS-backed VFS, so these are never
+ * posted and the byte-identical legacy boot is preserved.
+ */
+export interface KernelMigrationStartedMsg {
+  type: 'kernel-migration-started';
+}
+export interface KernelMigrationFinishedMsg {
+  type: 'kernel-migration-finished';
+}
+
 // ---------------------------------------------------------------------------
 // Fetch bypass header
 // ---------------------------------------------------------------------------
@@ -218,6 +237,16 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
     bridge,
     callbacks,
     logger: console,
+    onMigrationStart: () => {
+      init.kernelPort.postMessage({
+        type: 'kernel-migration-started',
+      } satisfies KernelMigrationStartedMsg);
+    },
+    onMigrationFinish: () => {
+      init.kernelPort.postMessage({
+        type: 'kernel-migration-finished',
+      } satisfies KernelMigrationFinishedMsg);
+    },
   });
 
   // Publish a sprinkle-manager proxy on the worker's globalThis so the

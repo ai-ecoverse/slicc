@@ -31,7 +31,12 @@
 import type { CDPTransport } from '../cdp/transport.js';
 import { OffscreenClient, type OffscreenClientCallbacks } from '../ui/offscreen-client.js';
 import { startPageCdpForwarder } from './cdp-worker-proxy.js';
-import type { KernelWorkerInitMsg, KernelWorkerReadyMsg } from './kernel-worker.js';
+import type {
+  KernelMigrationFinishedMsg,
+  KernelMigrationStartedMsg,
+  KernelWorkerInitMsg,
+  KernelWorkerReadyMsg,
+} from './kernel-worker.js';
 import { createPanelMessageChannelTransport } from './transport-message-channel.js';
 
 // ---------------------------------------------------------------------------
@@ -73,6 +78,16 @@ export interface KernelWorkerSpawnOptions {
    * scoped to one tab/worker pair. Optional.
    */
   instanceId?: string;
+  /**
+   * Wave C3 — invoked when the worker posts `kernel-migration-started`
+   * over the kernel port (only when the OPFS migration runner is about
+   * to walk legacy IDB → OPFS). Page wires this to a >1s threshold
+   * splash. Optional: callers that don't care omit them and the
+   * incoming messages are swallowed.
+   */
+  onMigrationStart?: () => void;
+  /** Wave C3 — invoked when the worker posts `kernel-migration-finished`. */
+  onMigrationFinish?: () => void;
 }
 
 export interface KernelWorkerBootstrapOptions {
@@ -87,6 +102,10 @@ export interface KernelWorkerBootstrapOptions {
    * scoped to one tab/worker pair. Optional.
    */
   instanceId?: string;
+  /** Wave C3 — see `KernelWorkerSpawnOptions.onMigrationStart`. */
+  onMigrationStart?: () => void;
+  /** Wave C3 — see `KernelWorkerSpawnOptions.onMigrationFinish`. */
+  onMigrationFinish?: () => void;
 }
 
 /**
@@ -169,7 +188,33 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
       }
     };
     listener = (event: MessageEvent): void => {
-      const data = event.data as Partial<KernelWorkerReadyMsg> | null;
+      const data = event.data as
+        | Partial<KernelWorkerReadyMsg>
+        | Partial<KernelMigrationStartedMsg>
+        | Partial<KernelMigrationFinishedMsg>
+        | null;
+      // Wave C3 — migration progress signals share the kernel port
+      // with `kernel-worker-ready` (deliberately raw, not enveloped,
+      // because the page-side `OffscreenClient` only routes `source:
+      // 'panel'`-tagged messages). The `ready` listener stays armed
+      // after a migration signal arrives so the worker can still
+      // post `kernel-worker-ready` when it eventually finishes.
+      if (data?.type === 'kernel-migration-started') {
+        try {
+          options.onMigrationStart?.();
+        } catch {
+          /* swallow — splash callback must never break boot */
+        }
+        return;
+      }
+      if (data?.type === 'kernel-migration-finished') {
+        try {
+          options.onMigrationFinish?.();
+        } catch {
+          /* swallow — splash callback must never break boot */
+        }
+        return;
+      }
       if (data?.type !== 'kernel-worker-ready') return;
       cleanupReady?.();
       resolve();
@@ -256,5 +301,7 @@ export function spawnKernelWorker(options: KernelWorkerSpawnOptions): SpawnedKer
     readyTimeoutMs: options.readyTimeoutMs,
     localStorageSeed: options.localStorageSeed ?? collectLocalStorageSeed(),
     instanceId: options.instanceId,
+    onMigrationStart: options.onMigrationStart,
+    onMigrationFinish: options.onMigrationFinish,
   });
 }

@@ -154,6 +154,22 @@ export interface KernelHostConfig {
    * Logger. Defaults to `console`.
    */
   logger?: KernelHostLogger;
+
+  /**
+   * Wave C3 — migration progress callbacks. Invoked from the OPFS
+   * migration IIFE in step 5c immediately before/after the migration
+   * runs. Used by the kernel-worker entry to surface in-progress /
+   * done signals to the page over the existing kernel port so the
+   * page can show a >1s splash. Only fires when `sharedFs.backend ===
+   * 'opfs'` (the same gate that triggers the migration runner), so
+   * the flag-off path stays byte-identical and never invokes these.
+   *
+   * The pair must always be called together: `onMigrationFinish`
+   * runs in a `finally` block so an exception in the runner still
+   * triggers the dismiss signal and the page can hide the splash.
+   */
+  onMigrationStart?: () => void;
+  onMigrationFinish?: () => void;
 }
 
 export interface LickRoutingContext {
@@ -351,12 +367,43 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   // (read-only throughout — rollback escape hatch preserved for C5).
   // Fire-and-forget — failures must never block worker boot.
   if (sharedFs && sharedFs.backend === 'opfs') {
+    // Wave C3 — signal start BEFORE the IIFE so the page-side splash
+    // timer arms even if the dynamic import + first await hop is
+    // already past the 1s threshold. `onMigrationFinish` runs in a
+    // `finally` so any thrown error still dismisses the splash.
+    try {
+      config.onMigrationStart?.();
+    } catch (err) {
+      log.warn('onMigrationStart callback threw (non-fatal)', err);
+    }
     void (async () => {
       try {
         const { runLegacyMigrationFromVfs } = await import('../fs/migration/migration-run.js');
-        await runLegacyMigrationFromVfs(sharedFs, { logger: log });
+        const result = await runLegacyMigrationFromVfs(sharedFs, { logger: log });
+        // Wave C5 — deferred IDB deletion. When the sentinel is
+        // present (already-migrated OR just-copied) AND the legacy
+        // `slicc-fs` IDB is still present, emit a one-shot per-boot
+        // log telling the user it's safe to clear via the
+        // `slicc-fs-cleanup` shell command. Counts only — no paths
+        // or contents.
+        if (result.kind === 'sentinel-present' || result.kind === 'copied') {
+          const { probeLegacyIdbExistsDefault } = await import(
+            '../fs/migration/migration-cleanup.js'
+          );
+          if (await probeLegacyIdbExistsDefault()) {
+            log.info(
+              '[migration] legacy slicc-fs IDB still present after migration — safe to clear with `slicc-fs-cleanup`'
+            );
+          }
+        }
       } catch (err) {
         log.warn('legacy migration run failed (non-fatal)', err);
+      } finally {
+        try {
+          config.onMigrationFinish?.();
+        } catch (err) {
+          log.warn('onMigrationFinish callback threw (non-fatal)', err);
+        }
       }
     })();
   }
