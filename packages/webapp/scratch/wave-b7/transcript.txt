@@ -1,0 +1,81 @@
+=== Wave B7 driver ===
+CDP=http://127.0.0.1:54553
+BASE=http://localhost:5721/packages/webapp/scratch/wave-b7/index.html
+time=2026-06-04T18:57:22.171Z
+connected to browser
+[A] goto http://localhost:5721/packages/webapp/scratch/wave-b7/index.html?role=A
+[A console.debug] [vite] connecting...
+[A console.debug] [vite] connected.
+[A] goto status=200 url=http://localhost:5721/packages/webapp/scratch/wave-b7/index.html?role=A
+[B] goto http://localhost:5721/packages/webapp/scratch/wave-b7/index.html?role=B
+[B console.debug] [vite] connecting...
+[B console.debug] [vite] connected.
+[B] goto status=200 url=http://localhost:5721/packages/webapp/scratch/wave-b7/index.html?role=B
+contextA={"origin":"http://localhost:5721","isSecureContext":true,"hasGetDirectory":true,"flag":"opfs"}
+contextB={"origin":"http://localhost:5721","isSecureContext":true,"flag":"opfs"}
+--- result.A ---
+{
+  "role": "A",
+  "ts": "2026-06-04T18:57:24.884Z",
+  "results": [
+    {
+      "name": "B7.A1 leader sees follower readiness (election concluded with a peer)",
+      "status": "pass",
+      "detail": "follower role=B isLeader=false"
+    },
+    {
+      "name": "B7.A2-leader leader wrote /shared/.welcomed to worker OPFS",
+      "status": "pass",
+      "detail": "value=\"B7-1780599443415-gre92m\""
+    },
+    {
+      "name": "B7.A3 leader handleFsRequest readFile returns written content (tray FS handler under test)",
+      "status": "pass",
+      "detail": "content=\"B7-1780599443415-gre92m\", chunks=1"
+    }
+  ],
+  "isLeader": true,
+  "tabId": "ec0c9a30-e83a-497e-ad62-380de0167744",
+  "value": "B7-1780599443415-gre92m"
+}
+--- result.B ---
+{
+  "role": "B",
+  "ts": "2026-06-04T18:57:24.909Z",
+  "results": [
+    {
+      "name": "B7.A1 follower lost election → read-only mode",
+      "status": "pass",
+      "detail": "selfTabId=b6b5ec29-003c-45c4-ba28-ad1b26d2b681, leaderTabId=ec0c9a30-e83a-497e-ad62-380de0167744"
+    },
+    {
+      "name": "B7.A2 follower read leader OPFS via federated fs.request; no LFS-shadow orphan",
+      "status": "pass",
+      "detail": "remote=\"B7-1780599443415-gre92m\", lfsExists=false (FsError: ENOENT: ENOENT: /shared '/shared')"
+    },
+    {
+      "name": "B7.A3 follower → leader: handleFsRequest readFile content matches over BroadcastChannel (simulated WebRTC tray wire)",
+      "status": "pass",
+      "detail": "content=\"B7-1780599443415-gre92m\", note=\"WebRTC data channel simulated by BroadcastChannel; handler is production tray-fs-handler\""
+    }
+  ],
+  "isLeader": false,
+  "tabId": "b6b5ec29-003c-45c4-ba28-ad1b26d2b681",
+  "leaderTabId": "ec0c9a30-e83a-497e-ad62-380de0167744",
+  "remoteContent": "B7-1780599443415-gre92m",
+  "lfsExists": false
+}
+leaders=1 followers=1
+electionOk=true
+--- summary ---
+allPassed=true
+tabA.isLeader=true tabB.isLeader=false
+tabA.value=B7-1780599443415-gre92m
+tabB.remoteContent=B7-1780599443415-gre92m tabB.lfsExists=false
+PASS B7.A1 leader sees follower readiness (election concluded with a peer) — follower role=B isLeader=false
+PASS B7.A2-leader leader wrote /shared/.welcomed to worker OPFS — value="B7-1780599443415-gre92m"
+PASS B7.A3 leader handleFsRequest readFile returns written content (tray FS handler under test) — content="B7-1780599443415-gre92m", chunks=1
+PASS B7.A1 follower lost election → read-only mode — selfTabId=b6b5ec29-003c-45c4-ba28-ad1b26d2b681, leaderTabId=ec0c9a30-e83a-497e-ad62-380de0167744
+PASS B7.A2 follower read leader OPFS via federated fs.request; no LFS-shadow orphan — remote="B7-1780599443415-gre92m", lfsExists=false (FsError: ENOENT: ENOENT: /shared '/shared')
+PASS B7.A3 follower → leader: handleFsRequest readFile content matches over BroadcastChannel (simulated WebRTC tray wire) — content="B7-1780599443415-gre92m", note="WebRTC data channel simulated by BroadcastChannel; handler is production tray-fs-handler"
+done exit=0
