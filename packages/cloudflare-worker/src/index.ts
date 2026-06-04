@@ -21,6 +21,8 @@ import {
   handleOAuthRevoke,
   handleOAuthToken,
 } from './oauth-exchange.js';
+import { handlePreviewRequest } from './preview-handler.js';
+import { previewTokenFromHost } from './preview-host.js';
 import { handlePreviewList, handlePreviewMint, handlePreviewStop } from './preview-routes.js';
 import { buildRelResponse } from './rel-docs.js';
 import { SessionTrayDurableObject } from './session-tray.js';
@@ -172,6 +174,14 @@ export async function handleWorkerRequest(
   fetchImpl: typeof fetch = fetch
 ): Promise<Response> {
   const url = new URL(request.url);
+
+  // Preview subdomains (<token>.preview.sliccy.ai / .preview.staging.sliccy.ai)
+  // dispatch FIRST — they share the worker binding but never want any of the
+  // /api, /handoff, /auth, or SPA routes below. The handler resolves the token
+  // to a tray Durable Object and round-trips the request through the leader.
+  if (previewTokenFromHost(url.host)) {
+    return handlePreviewRequest(request, env);
+  }
 
   if (url.hostname === 'sliccy.ai') {
     const target = new URL(url.toString());

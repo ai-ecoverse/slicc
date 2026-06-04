@@ -153,8 +153,25 @@ async function createTrayAndAttachLeader(
   controllerToken: string;
   stub: SessionTrayDurableObject;
 }> {
+  const { trayId, controllerToken, stub } = await createTrayAttachLeaderWithSocket(env, namespace);
+  return { trayId, controllerToken, stub };
+}
+
+// Variant that also exposes the leader-side WebSocket so tests can install
+// a `message` listener and respond to `preview.request` messages.
+async function createTrayAttachLeaderWithSocket(
+  env: ReturnType<typeof createTestHarness>['env'],
+  namespace: FakeNamespace,
+  options: { workerHost?: string } = {}
+): Promise<{
+  trayId: string;
+  controllerToken: string;
+  stub: SessionTrayDurableObject;
+  clientSocket: FakeWebSocket;
+}> {
+  const host = options.workerHost ?? 'www.sliccy.ai';
   const created = await handleWorkerRequest(
-    new Request('https://tray.test/tray', { method: 'POST' }),
+    new Request(`https://${host}/tray`, { method: 'POST' }),
     env
   );
   const session = (await created.json()) as {
@@ -171,16 +188,17 @@ async function createTrayAndAttachLeader(
     env
   );
   const leader = (await attach.json()) as { leaderKey: string; websocket: { url: string } };
-  await handleWorkerRequest(
+  const socketResponse = await handleWorkerRequest(
     new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }),
     env
   );
+  const clientSocket = (socketResponse as unknown as { webSocket: FakeWebSocket }).webSocket;
 
   const controllerUrl = new URL(session.capabilities.controller.url);
   const controllerToken = controllerUrl.pathname.split('/').pop() ?? '';
   const stub = namespace.get(namespace.idFromName(session.trayId));
 
-  return { trayId: session.trayId, controllerToken, stub };
+  return { trayId: session.trayId, controllerToken, stub, clientSocket };
 }
 
 describe('SessionTrayDurableObject preview methods', () => {
@@ -273,5 +291,182 @@ describe('SessionTrayDurableObject preview methods', () => {
 
     const previews = await asPreview(stub).listPreviews();
     expect(previews).toHaveLength(2);
+  });
+});
+
+// Helper: mint a preview via the public worker route and return token + URL.
+async function mintPreviewViaWorker(
+  env: ReturnType<typeof createTestHarness>['env'],
+  trayId: string,
+  controllerToken: string,
+  body: { servedRoot: string; entryPath: string; allowLive: boolean } = {
+    servedRoot: '/workspace/dist',
+    entryPath: '/workspace/dist/index.html',
+    allowLive: false,
+  }
+): Promise<{ previewToken: string; url: string }> {
+  const res = await handleWorkerRequest(
+    new Request(`https://www.sliccy.ai/api/tray/${trayId}/preview`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${controllerToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    }),
+    env
+  );
+  if (res.status !== 200) {
+    throw new Error(`mint failed: ${res.status} ${await res.text()}`);
+  }
+  return (await res.json()) as { previewToken: string; url: string };
+}
+
+describe('preview HTTP handler', () => {
+  it('end-to-end: mint -> GET preview URL -> leader responds -> bytes returned', async () => {
+    const { env, namespace } = createTestHarness();
+    const { trayId, controllerToken, clientSocket } = await createTrayAttachLeaderWithSocket(
+      env,
+      namespace
+    );
+    const { url } = await mintPreviewViaWorker(env, trayId, controllerToken);
+
+    // Install leader-side responder BEFORE the GET (the GET awaits the response).
+    clientSocket.addEventListener('message', (event) => {
+      const msg = JSON.parse(event.data ?? '{}') as {
+        type: string;
+        reqId?: string;
+        vfsPath?: string;
+      };
+      if (msg.type === 'preview.request' && msg.reqId) {
+        clientSocket.send(
+          JSON.stringify({
+            type: 'preview.response',
+            reqId: msg.reqId,
+            ok: true,
+            mime: 'text/html',
+            chunkIndex: 0,
+            totalChunks: 1,
+            content: '<h1>hello</h1>',
+            encoding: 'utf-8',
+          })
+        );
+      }
+    });
+
+    const res = await handleWorkerRequest(new Request(url), env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
+    expect(await res.text()).toBe('<h1>hello</h1>');
+  });
+
+  it('returns 404 for unknown token host', async () => {
+    const { env } = createTestHarness();
+    const res = await handleWorkerRequest(
+      new Request('https://bogus.deadbeef.preview.sliccy.ai/'),
+      env
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 502 when leader is disconnected', async () => {
+    const { env, namespace } = createTestHarness();
+    const { trayId, controllerToken, clientSocket } = await createTrayAttachLeaderWithSocket(
+      env,
+      namespace
+    );
+    const { url } = await mintPreviewViaWorker(env, trayId, controllerToken);
+
+    // Close the leader WS so hasLiveLeader() returns false.
+    clientSocket.close();
+
+    const res = await handleWorkerRequest(new Request(url), env);
+    expect(res.status).toBe(502);
+  });
+
+  it('returns 403 when leader sends ok:false status:403', async () => {
+    const { env, namespace } = createTestHarness();
+    const { trayId, controllerToken, clientSocket } = await createTrayAttachLeaderWithSocket(
+      env,
+      namespace
+    );
+    const { url } = await mintPreviewViaWorker(env, trayId, controllerToken);
+
+    clientSocket.addEventListener('message', (event) => {
+      const msg = JSON.parse(event.data ?? '{}') as { type: string; reqId?: string };
+      if (msg.type === 'preview.request' && msg.reqId) {
+        clientSocket.send(
+          JSON.stringify({
+            type: 'preview.response',
+            reqId: msg.reqId,
+            ok: false,
+            status: 403,
+            reason: 'outside servedRoot',
+          })
+        );
+      }
+    });
+
+    const res = await handleWorkerRequest(new Request(url), env);
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 404 when leader sends ok:false status:404', async () => {
+    const { env, namespace } = createTestHarness();
+    const { trayId, controllerToken, clientSocket } = await createTrayAttachLeaderWithSocket(
+      env,
+      namespace
+    );
+    const { url } = await mintPreviewViaWorker(env, trayId, controllerToken);
+
+    clientSocket.addEventListener('message', (event) => {
+      const msg = JSON.parse(event.data ?? '{}') as { type: string; reqId?: string };
+      if (msg.type === 'preview.request' && msg.reqId) {
+        clientSocket.send(
+          JSON.stringify({
+            type: 'preview.response',
+            reqId: msg.reqId,
+            ok: false,
+            status: 404,
+            reason: 'no such file',
+          })
+        );
+      }
+    });
+
+    const res = await handleWorkerRequest(new Request(url), env);
+    expect(res.status).toBe(404);
+  });
+
+  it('omits Access-Control-Allow-Origin between preview subdomains', async () => {
+    const { env, namespace } = createTestHarness();
+    const { trayId, controllerToken, clientSocket } = await createTrayAttachLeaderWithSocket(
+      env,
+      namespace
+    );
+    const { url } = await mintPreviewViaWorker(env, trayId, controllerToken);
+
+    clientSocket.addEventListener('message', (event) => {
+      const msg = JSON.parse(event.data ?? '{}') as { type: string; reqId?: string };
+      if (msg.type === 'preview.request' && msg.reqId) {
+        clientSocket.send(
+          JSON.stringify({
+            type: 'preview.response',
+            reqId: msg.reqId,
+            ok: true,
+            mime: 'text/html',
+            chunkIndex: 0,
+            totalChunks: 1,
+            content: '<h1>hello</h1>',
+            encoding: 'utf-8',
+          })
+        );
+      }
+    });
+
+    const res = await handleWorkerRequest(new Request(url), env);
+    expect(res.status).toBe(200);
+    // Preview tabs must not be able to fetch from each other's subdomain cross-origin.
+    expect(res.headers.get('access-control-allow-origin')).toBeNull();
   });
 });

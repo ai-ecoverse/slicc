@@ -71,6 +71,64 @@ interface CachedIceServers {
   expiresAtMs: number;
 }
 
+// One chunk of a leader's preview.response. Mirrors LeaderPreviewResponseOk |
+// LeaderPreviewResponseError from `tray-signaling.ts` — kept as a single shape
+// so the assembler can route by `ok` without re-narrowing the discriminator.
+interface PreviewResponseChunk {
+  type: 'preview.response';
+  reqId: string;
+  ok: boolean;
+  status?: number; // when !ok
+  mime?: string; // when ok
+  encoding?: 'utf-8' | 'base64'; // when ok
+  chunkIndex?: number; // when ok
+  totalChunks?: number; // when ok
+  content?: string; // when ok (utf-8 text OR base64-encoded bytes)
+  reason?: string; // when !ok (human-readable)
+}
+
+type AssemblerResult =
+  | { ok: true; mime: string; encoding: 'utf-8' | 'base64'; content: string }
+  | { ok: false; status: number; reason?: string };
+
+class PreviewAssembler {
+  private readonly chunks = new Map<number, string>();
+  private resolveFn!: (result: AssemblerResult) => void;
+  readonly done: Promise<AssemblerResult>;
+
+  constructor() {
+    this.done = new Promise<AssemblerResult>((r) => {
+      this.resolveFn = r;
+    });
+  }
+
+  push(chunk: PreviewResponseChunk): void {
+    if (!chunk.ok) {
+      this.resolveFn({ ok: false, status: chunk.status ?? 500, reason: chunk.reason });
+      return;
+    }
+    const total = chunk.totalChunks ?? 1;
+    const idx = chunk.chunkIndex ?? 0;
+    this.chunks.set(idx, chunk.content ?? '');
+    if (this.chunks.size === total) {
+      let assembled = '';
+      for (let i = 0; i < total; i++) {
+        assembled += this.chunks.get(i) ?? '';
+      }
+      this.resolveFn({
+        ok: true,
+        mime: chunk.mime ?? 'application/octet-stream',
+        encoding: chunk.encoding ?? 'utf-8',
+        content: assembled,
+      });
+    }
+  }
+
+  fail(status: number, reason?: string): void {
+    this.resolveFn({ ok: false, status, reason });
+  }
+}
+
 export class SessionTrayDurableObject {
   private readonly now: () => number;
   private readonly webSocketPairFactory: () => { client: unknown; server: TrayWebSocketLike };
@@ -80,6 +138,11 @@ export class SessionTrayDurableObject {
   private tray: TrayRecord | null = null;
   private leaderSocket: TrayWebSocketLike | null = null;
   private cachedIceServers: CachedIceServers | null = null;
+  // In-flight `/internal/preview/fetch` calls, keyed by reqId. Populated when
+  // we send `preview.request` to the leader; drained by `handleLeaderMessage`
+  // when the matching `preview.response` arrives (single chunk today, future-
+  // proof for chunked binary).
+  private readonly pendingPreviews = new Map<string, PreviewAssembler>();
 
   constructor(
     private readonly state: DurableObjectStateLike,
@@ -160,6 +223,90 @@ export class SessionTrayDurableObject {
         return jsonResponse({ error: 'Invalid controller capability' }, 403);
       }
       return jsonResponse({ previews: await this.listPreviews() }, 200);
+    }
+
+    // `/internal/preview/resolve?token=<previewToken>` — unauthenticated lookup
+    // used by the worker-side host dispatcher (`preview-handler.ts`) to fetch
+    // the PreviewRecord before round-tripping with the leader. The token is
+    // itself the capability (unguessable secret); no controller bearer needed.
+    if (url.pathname === '/internal/preview/resolve' && request.method === 'GET') {
+      const token = url.searchParams.get('token') ?? '';
+      await this.loadTray();
+      if (!this.tray) {
+        return jsonResponse({ error: 'Not found', code: 'TRAY_NOT_INITIALIZED' }, 404);
+      }
+      const rec = await this.resolvePreview(token);
+      if (!rec) {
+        return jsonResponse({ error: 'Not found' }, 404);
+      }
+      return jsonResponse(rec, 200);
+    }
+
+    // `/internal/preview/fetch` — worker-side dispatcher round-trips a preview
+    // GET through the leader. Sends `preview.request` over the controller WS,
+    // waits up to 30s for `preview.response` chunks, returns the assembled
+    // bytes. 502 when no live leader; 504 on timeout; 4xx pass-through from
+    // the leader's `ok:false` responses.
+    if (url.pathname === '/internal/preview/fetch' && request.method === 'POST') {
+      await this.loadTray();
+      if (!this.tray) {
+        return jsonResponse({ error: 'Not found', code: 'TRAY_NOT_INITIALIZED' }, 404);
+      }
+      let body: { reqId: string; servedRoot: string; vfsPath: string; asText: boolean };
+      try {
+        body = (await request.json()) as {
+          reqId: string;
+          servedRoot: string;
+          vfsPath: string;
+          asText: boolean;
+        };
+      } catch {
+        return jsonResponse({ error: 'invalid body' }, 400);
+      }
+      if (!this.hasLiveLeader()) {
+        return new Response('Bad gateway: leader disconnected', { status: 502 });
+      }
+      const assembler = new PreviewAssembler();
+      this.pendingPreviews.set(body.reqId, assembler);
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      try {
+        const sent = this.sendToLeader({
+          type: 'preview.request',
+          reqId: body.reqId,
+          servedRoot: body.servedRoot,
+          vfsPath: body.vfsPath,
+          asText: body.asText,
+        });
+        if (!sent) {
+          return new Response('Bad gateway: leader disconnected', { status: 502 });
+        }
+        const timeoutPromise = new Promise<AssemblerResult>((resolve) => {
+          timer = setTimeout(
+            () => resolve({ ok: false, status: 504, reason: 'leader timeout' }),
+            30_000
+          );
+        });
+        const result = await Promise.race([assembler.done, timeoutPromise]);
+        if (!result.ok) {
+          return new Response(result.reason ?? 'error', { status: result.status });
+        }
+        const responseBody =
+          result.encoding === 'base64'
+            ? Uint8Array.from(atob(result.content), (c) => c.charCodeAt(0))
+            : result.content;
+        // Deliberately NO access-control-allow-origin header — preview
+        // subdomains must not be able to fetch from each other cross-origin.
+        return new Response(responseBody, {
+          status: 200,
+          headers: {
+            'content-type': result.mime,
+            'cache-control': 'no-cache',
+          },
+        });
+      } finally {
+        if (timer) clearTimeout(timer);
+        this.pendingPreviews.delete(body.reqId);
+      }
     }
 
     await this.loadTray();
@@ -711,6 +858,12 @@ export class SessionTrayDurableObject {
                 : (message.retryAfterMs ?? TRAY_BOOTSTRAP_RETRY_AFTER_MS),
           });
         }
+      } else if (message.type === 'preview.response') {
+        const assembler = this.pendingPreviews.get(message.reqId);
+        if (assembler) {
+          assembler.push(message as unknown as PreviewResponseChunk);
+        }
+        // Silently drop responses for unknown reqIds (e.g. timeout already fired).
       }
 
       await this.persistTray();
@@ -728,6 +881,12 @@ export class SessionTrayDurableObject {
     this.tray.leader.connected = false;
     this.tray.leader.disconnectedAt = this.isoNow();
     this.tray.leader.lastSeenAt = this.tray.leader.disconnectedAt;
+    // Fail any in-flight preview fetches so callers don't wait for the 30s
+    // timeout. The leader is gone — no response can arrive.
+    for (const assembler of this.pendingPreviews.values()) {
+      assembler.fail(502, 'leader disconnected');
+    }
+    this.pendingPreviews.clear();
     await this.persistTray();
   }
 
