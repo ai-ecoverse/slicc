@@ -43,6 +43,7 @@ import { recoverMounts } from '../fs/mount-recovery.js';
 import { getAllMountEntries } from '../fs/mount-table-store.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import { type PanelRpcPushMsg, panelRpcChannelName } from '../kernel/panel-rpc.js';
+import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
 // Auto-discover and register all providers (built-in + external).
 // IMPORTANT: This import must also appear in packages/chrome-extension/src/offscreen.ts
 // — the extension agent engine runs in the offscreen document, not in this file.
@@ -566,10 +567,6 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   const panelBackend = resolveVfsBackendFromEnv();
   warnIfPanelVfsConstructionUnderOpfs(panelBackend, log);
 
-  // Create a local VFS instance for the file browser and terminal.
-  // IndexedDB is shared across all same-origin extension pages, so this
-  // reads/writes the same data as the offscreen document's VFS.
-  const localFs = await VirtualFS.create({ dbName: 'slicc-fs' });
   // Wave B2 (blueprint note d8860197): with `slicc_opfs_vfs === 'opfs'`
   // the worker owns the canonical OPFS-backed VFS, so panel reads must
   // route through the kernel transport's `VfsRpcHost` instead of
@@ -578,6 +575,23 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   // off, keep the historical local-VFS path so the LFS shadow store
   // still drives the file browser.
   const useRpcVfs = panelBackend === 'opfs';
+
+  // Create a local VFS instance for the file browser and terminal.
+  // IndexedDB is shared across all same-origin extension pages, so this
+  // reads/writes the same data as the offscreen document's VFS.
+  //
+  // Wave B4 (blueprint note d8860197): under `slicc_opfs_vfs === 'opfs'`
+  // force the page-side VFS to the LFS backend so it no longer races
+  // the worker for OPFS handles (the worker is the canonical OPFS
+  // owner; the page keeps an LFS shadow for legacy consumers like
+  // mount-recovery, attachment writer, and memory-panel reads).
+  // Byte-identical when the flag is off — `resolveVfsBackendFromEnv()`
+  // returns `'lfs'` in that case too. Wave F owns final teardown of
+  // the page-side instance.
+  const localFs = await VirtualFS.create({
+    dbName: 'slicc-fs',
+    ...(useRpcVfs ? { backend: 'lfs' as const } : {}),
+  });
   if (!useRpcVfs) {
     layout.panels.fileBrowser.setFs(localFs);
     log.info('File browser wired to shared VFS (local IndexedDB)');
@@ -879,11 +893,24 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   // is shared — the RemoteVfsClient only subscribes to `vfs-*-result`
   // envelopes and does not perturb the existing agent-event / scoop-list /
   // sprinkle-op routing.
+  //
+  // Wave B4: also construct a `RemoteWritableVfsClient` so panel-side
+  // writers (session freezer, pending-enrichment) route to the offscreen
+  // VFS over the same wire. The extension is a singleton writer (one
+  // offscreen document), so we do not gate on an OPFS leader election
+  // here — the panel is always the canonical writer relative to the
+  // offscreen.
+  let writableFs: WritableVfsClient = localFs;
   if (useRpcVfs) {
     const { createRemoteVfsClient } = await import('../kernel/remote-vfs-client.js');
+    const { createRemoteWritableVfsClient } = await import('../kernel/writable-vfs-client.js');
     const remoteVfs = createRemoteVfsClient({ transport: client.getTransport() });
+    const remoteWritableVfs = createRemoteWritableVfsClient({
+      transport: client.getTransport(),
+    });
     layout.panels.fileBrowser.setFs(remoteVfs);
     previewVfsReader = remoteVfs;
+    writableFs = remoteWritableVfs;
     log.info('File browser + preview-vfs wired to worker VFS RPC (slicc_opfs_vfs=opfs)');
   }
 
@@ -988,13 +1015,13 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   layout.onClearChat = async (opts) => {
     if (opts?.freeze === 'quick') {
       try {
-        await runNewSessionFreezeQuick({ vfs: localFs });
+        await runNewSessionFreezeQuick({ vfs: writableFs });
       } catch (err) {
         log.warn('Quick freezer step failed (clearing anyway)', { error: String(err) });
       }
     } else if (opts?.freeze !== false) {
       try {
-        await runNewSessionFreeze({ vfs: localFs });
+        await runNewSessionFreeze({ vfs: writableFs });
       } catch (err) {
         log.warn('Freezer step failed (clearing anyway)', { error: String(err) });
       }
@@ -1715,7 +1742,12 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   // sink — `/shared/CLAUDE.md` is left untouched). Deferred behind
   // `requestIdleCallback` (or `setTimeout(0)` as a fallback) so a slow
   // enrichment never blocks first paint.
-  scheduleBackgroundEnrichment(localFs);
+  //
+  // Wave B4: routes through `writableFs` so under `slicc_opfs_vfs=opfs`
+  // the rename + index update lands on the worker-owned OPFS via the
+  // `WritableVfsClient`. Flag off: `writableFs === localFs` (byte-
+  // identical to pre-B4 behavior).
+  scheduleBackgroundEnrichment(writableFs);
 }
 
 // ---------------------------------------------------------------------------
@@ -1834,10 +1866,6 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   await layout.panels.chat.initSession('session-cone');
   log.info('Session initialized (kernel-worker mode)');
 
-  // Local VFS for the file browser + memory panel + preview-vfs fallback.
-  // Same IndexedDB as the worker's VFS, so writes from the agent are
-  // visible in the file browser without round-tripping the wire.
-  const localFs = await VirtualFS.create({ dbName: 'slicc-fs' });
   // Wave B2 (blueprint note d8860197): with `slicc_opfs_vfs === 'opfs'`,
   // the worker owns the canonical OPFS-backed VFS and panel reads must
   // route through the kernel transport's `VfsRpcHost`. Defer the
@@ -1845,6 +1873,23 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // flag off, keep the historical local-VFS path so the LFS shadow
   // still drives the file browser.
   const useRpcVfs = resolveVfsBackendFromEnv() === 'opfs';
+
+  // Local VFS for the file browser + memory panel + preview-vfs fallback.
+  // Same IndexedDB as the worker's VFS, so writes from the agent are
+  // visible in the file browser without round-tripping the wire.
+  //
+  // Wave B4 (blueprint note d8860197): under `slicc_opfs_vfs === 'opfs'`
+  // force the page-side VFS to the LFS backend so it no longer races
+  // the worker for OPFS handles (the worker is the canonical OPFS
+  // owner; the page keeps an LFS shadow for legacy consumers like
+  // mount-recovery and attachment writer). Byte-identical when the
+  // flag is off — `resolveVfsBackendFromEnv()` returns `'lfs'` in
+  // that case too. Wave F owns final teardown of the page-side
+  // instance.
+  const localFs = await VirtualFS.create({
+    dbName: 'slicc-fs',
+    ...(useRpcVfs ? { backend: 'lfs' as const } : {}),
+  });
   if (!useRpcVfs) {
     layout.panels.fileBrowser.setFs(localFs);
   }
@@ -2177,14 +2222,33 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // the worker owns the canonical OPFS-backed view and the page-side
   // `localFs` shadow can be stale. `panelReadVfs` is the read-only
   // handle handed to those consumers below.
+  //
+  // Wave B4: also construct a `RemoteWritableVfsClient` so page-side
+  // writers (session freezer, pending-enrichment) route through the
+  // worker's `VfsRpcHost` write surface (B2w) and land on the canonical
+  // OPFS store. Only the OPFS leader (B6 election) is the writer —
+  // followers fall back to `localFs` (LFS shadow) so the New Session
+  // gesture doesn't hang on EACCES under contention. Flag off:
+  // `writableFs === localFs` (byte-identical to pre-B4 behavior).
   let panelReadVfs: LocalVfsClient = localFs;
+  let writableFs: WritableVfsClient = localFs;
   if (useRpcVfs) {
     const { createRemoteVfsClient } = await import('../kernel/remote-vfs-client.js');
     const remoteVfs = createRemoteVfsClient({ transport: client.getTransport() });
     layout.panels.fileBrowser.setFs(remoteVfs);
     previewVfsReader = remoteVfs;
     panelReadVfs = remoteVfs;
-    log.info('File browser + preview-vfs wired to worker VFS RPC (slicc_opfs_vfs=opfs)');
+    if (opfsLeader.isLeader) {
+      const { createRemoteWritableVfsClient } = await import('../kernel/writable-vfs-client.js');
+      writableFs = createRemoteWritableVfsClient({ transport: client.getTransport() });
+      log.info(
+        'File browser + preview-vfs + writable freezer wired to worker VFS RPC (slicc_opfs_vfs=opfs, leader)'
+      );
+    } else {
+      log.info(
+        'File browser + preview-vfs wired to worker VFS RPC (slicc_opfs_vfs=opfs, follower; freezer uses LFS shadow)'
+      );
+    }
   }
 
   // Wire "New session" — freeze the cone's chat to /sessions/ via the
@@ -2201,13 +2265,13 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   layout.onClearChat = async (opts) => {
     if (opts?.freeze === 'quick') {
       try {
-        await runNewSessionFreezeQuick({ vfs: localFs });
+        await runNewSessionFreezeQuick({ vfs: writableFs });
       } catch (err) {
         log.warn('Quick freezer step failed (clearing anyway)', { error: String(err) });
       }
     } else if (opts?.freeze !== false) {
       try {
-        await runNewSessionFreeze({ vfs: localFs });
+        await runNewSessionFreeze({ vfs: writableFs });
       } catch (err) {
         log.warn('Freezer step failed (clearing anyway)', { error: String(err) });
       }
@@ -3423,7 +3487,11 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // Background enrichment of pending-frozen sessions (see the extension
   // path for rationale). Fire-and-forget after the boot-critical wiring
   // is in place so a slow enrichment never blocks first paint.
-  scheduleBackgroundEnrichment(localFs);
+  //
+  // Wave B4: routes through `writableFs` so the OPFS-leader tab lands
+  // the rename + index update on the worker-owned canonical OPFS via
+  // the `WritableVfsClient`. Followers (and flag-off) reuse `localFs`.
+  scheduleBackgroundEnrichment(writableFs);
 
   log.info('Standalone kernel-worker UI ready');
 }

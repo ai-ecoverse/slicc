@@ -28,8 +28,8 @@ import {
   runOneOffCompactionCall,
 } from '../core/context-compaction.js';
 import { createLogger } from '../core/logger.js';
-import type { VirtualFS } from '../fs/index.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
+import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
 import { applyConeMemoryBudget } from '../scoops/cone-memory-budget.js';
 import { formatChatForClipboard } from './chat-panel.js';
 import type { SessionStore } from './session-store.js';
@@ -86,7 +86,15 @@ export interface FrozenSessionArchive {
 
 export interface FreezeConeSessionOptions {
   sessionStore: SessionStore;
-  vfs: VirtualFS;
+  /**
+   * Writable VFS handle. Wave B4 (blueprint note d8860197): under
+   * `slicc_opfs_vfs === 'opfs'` AND on the OPFS-leader tab, callers
+   * pass a `RemoteWritableVfsClient` so writes route to the worker's
+   * `VfsRpcHost` and hit the canonical OPFS store. With the flag off
+   * the existing page-side `VirtualFS` satisfies the same shape
+   * structurally, keeping behavior byte-identical.
+   */
+  vfs: WritableVfsClient;
   /**
    * Active LLM model. When omitted (e.g. no provider configured) the
    * freezer still archives the session but skips the memory and title
@@ -364,7 +372,7 @@ function pendingShortId(): string {
   return `${time}-${rand}`;
 }
 
-async function ensureDir(vfs: VirtualFS, path: string): Promise<void> {
+async function ensureDir(vfs: WritableVfsClient, path: string): Promise<void> {
   try {
     await vfs.mkdir(path, { recursive: true });
   } catch {
@@ -381,7 +389,7 @@ async function ensureDir(vfs: VirtualFS, path: string): Promise<void> {
  * sink throws, the appended bullets stay on disk and we just log.
  */
 async function appendConeMemoryViaVfs(
-  vfs: VirtualFS,
+  vfs: WritableVfsClient,
   bullets: string,
   source: string,
   budgetOpts?: {
@@ -427,7 +435,7 @@ async function appendConeMemoryViaVfs(
 }
 
 async function updateSessionsIndex(
-  vfs: VirtualFS,
+  vfs: WritableVfsClient,
   newEntry: FrozenSessionIndexEntry
 ): Promise<void> {
   let existing: FrozenSessionIndexEntry[] = [];
@@ -504,7 +512,7 @@ export interface EnrichPendingSessionOptions {
  * Returns the updated index entry on success, `null` on no-op / failure.
  */
 export async function enrichPendingSession(
-  vfs: VirtualFS,
+  vfs: WritableVfsClient,
   entry: FrozenSessionIndexEntry,
   opts: EnrichPendingSessionOptions
 ): Promise<FrozenSessionIndexEntry | null> {
@@ -663,12 +671,7 @@ export async function enrichPendingSession(
   //    failure — the index already points at the new name.
   if (newPath !== oldPath) {
     try {
-      const fsMaybe = vfs as VirtualFS & {
-        rm?: (path: string, opts?: { recursive?: boolean }) => Promise<void>;
-      };
-      if (typeof fsMaybe.rm === 'function') {
-        await fsMaybe.rm(oldPath);
-      }
+      await vfs.rm(oldPath);
     } catch (err) {
       log.info('Stale pending archive cleanup failed (harmless)', {
         oldPath,
@@ -729,7 +732,7 @@ let indexWriteChain: Promise<void> = Promise.resolve();
  * isn't found in the index. Writes are serialized via {@link indexWriteChain}.
  */
 async function replaceIndexEntry(
-  vfs: VirtualFS,
+  vfs: WritableVfsClient,
   oldFilename: string,
   replacement: FrozenSessionIndexEntry
 ): Promise<void> {
