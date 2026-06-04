@@ -97,6 +97,14 @@ export interface RunInRealmOptions {
   /** Pyodide VFS sync directories — only consumed when `kind:'py'`. */
   pyodideSyncDirs?: string[];
   /**
+   * Wave D1: forwarded to `RealmInitMsg.opfsMountDbName`. When set
+   * (currently `'slicc-fs'` if `slicc_opfs_vfs === 'opfs'`), the
+   * Python realm worker switches from the legacy `walkTree`/
+   * `writeBatch` copy path to `mountNativeFS` + `syncfs(true)`
+   * against the same OPFS subtree the kernel worker owns.
+   */
+  opfsMountDbName?: string;
+  /**
    * Override the `ProcessKind` used to register the process. Defaults
    * to `'jsh'` (Python migration overrides this with `'py'` once the
    * union is widened).
@@ -217,6 +225,7 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
       stdin: opts.stdin,
       pyodideIndexURL: opts.pyodideIndexURL,
       pyodideSyncDirs: opts.pyodideSyncDirs,
+      opfsMountDbName: opts.opfsMountDbName,
     };
     realm.controlPort.postMessage(init);
   });

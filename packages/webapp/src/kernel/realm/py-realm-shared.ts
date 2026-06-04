@@ -104,11 +104,35 @@ export async function runPyRealm(
     stderrChunks.push(`Warning: ${msg}\n`);
   };
   let preSyncSnapshot: PreSyncSnapshot = { files: new Map(), dirs: new Set() };
-  try {
-    preSyncSnapshot = await syncVfsToPyodide(rpc, pyodide, syncDirs, pushWarning);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    pushWarning(`VFS→Pyodide sync failed: ${message}`);
+  // Wave D1: under `slicc_opfs_vfs === 'opfs'` the kernel detects the
+  // flag and passes the OPFS dbName through `init.opfsMountDbName`.
+  // The realm worker has no `localStorage` shim, so this is the only
+  // signal we get. Undefined → legacy `walkTree` copy (byte-identical
+  // pre-D1). Defined → `mountNativeFS` + `syncfs(true)` per syncDir
+  // against the same-origin OPFS subtree the kernel owns. The legacy
+  // post-sync `syncPyodideToVfs` still runs under both branches (D2
+  // replaces it with `syncfs(false)`); seeding the snapshot from
+  // Pyodide-FS state post-mount keeps the diff honest in the meantime
+  // so it only emits user-created files, not the entire OPFS subtree.
+  if (init.opfsMountDbName !== undefined) {
+    try {
+      preSyncSnapshot = await mountOpfsDirsAndSyncIn(
+        pyodide,
+        syncDirs,
+        init.opfsMountDbName,
+        pushWarning
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      pushWarning(`VFS→Pyodide OPFS mount failed: ${message}`);
+    }
+  } else {
+    try {
+      preSyncSnapshot = await syncVfsToPyodide(rpc, pyodide, syncDirs, pushWarning);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      pushWarning(`VFS→Pyodide sync failed: ${message}`);
+    }
   }
 
   try {
@@ -419,5 +443,120 @@ export async function syncPyodideToVfs(
   }
   for (const d of result.failedMkdirs) {
     pushWarning(`Pyodide→VFS mkdir '${d.path}' failed: ${d.error}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Wave D1: OPFS-native mount path
+// ---------------------------------------------------------------------------
+
+/**
+ * For each `dir`, resolve the same-origin OPFS handle the kernel
+ * worker owns (`OPFS-root / <opfsDbName> / <vfsPath…>`), `mountNativeFS`
+ * it into Pyodide-FS, then `syncfs(true)` to populate MEMFS from
+ * OPFS. The returned snapshot seeds the legacy post-sync diff (still
+ * active until Wave D2 swaps it for `syncfs(false)`) so it only
+ * emits user-created files, not the entire mounted subtree.
+ *
+ * Sub-handles are created with `{ create: true }` so a fresh OPFS
+ * subtree boots cleanly — `/tmp` and freshly-created cwds don't
+ * exist on disk yet but Python expects them to be writable.
+ *
+ * Per-dir failures (handle resolution, mount, or syncfs) surface
+ * through `pushWarning` and the loop continues with the next dir,
+ * matching the legacy `syncVfsToPyodide` policy.
+ */
+export async function mountOpfsDirsAndSyncIn(
+  pyodide: PyodideInterface,
+  dirs: string[],
+  opfsDbName: string,
+  pushWarning: WarningSink = () => {}
+): Promise<PreSyncSnapshot> {
+  const snapshot: PreSyncSnapshot = {
+    files: new Map<string, number>(),
+    dirs: new Set<string>(),
+  };
+  const storage = (navigator as unknown as { storage?: StorageManager }).storage;
+  if (!storage?.getDirectory) {
+    pushWarning('VFS→Pyodide OPFS mount skipped: navigator.storage.getDirectory unavailable');
+    return snapshot;
+  }
+  let opfsRoot: FileSystemDirectoryHandle;
+  try {
+    opfsRoot = await storage.getDirectory();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    pushWarning(`VFS→Pyodide OPFS mount: getDirectory() failed: ${message}`);
+    return snapshot;
+  }
+  let kernelDbHandle: FileSystemDirectoryHandle;
+  try {
+    kernelDbHandle = await opfsRoot.getDirectoryHandle(opfsDbName, { create: true });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    pushWarning(`VFS→Pyodide OPFS mount: opening '${opfsDbName}' failed: ${message}`);
+    return snapshot;
+  }
+
+  for (const dir of dirs) {
+    try {
+      let handle: FileSystemDirectoryHandle = kernelDbHandle;
+      for (const part of dir.split('/').filter(Boolean)) {
+        handle = await handle.getDirectoryHandle(part, { create: true });
+      }
+      try {
+        pyodide.FS.stat(dir);
+      } catch {
+        pyodide.FS.mkdirTree(dir);
+      }
+      await pyodide.mountNativeFS(dir, handle);
+      await new Promise<void>((resolve, reject) => {
+        pyodide.FS.syncfs(true, (err: Error | null | undefined) => {
+          if (err) reject(err instanceof Error ? err : new Error(String(err)));
+          else resolve();
+        });
+      });
+      recordExistingIntoSnapshot(pyodide, dir, snapshot);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      pushWarning(`VFS→Pyodide OPFS mount '${dir}' failed: ${message}`);
+    }
+  }
+
+  return snapshot;
+}
+
+/**
+ * Walk Pyodide-FS under `pyPath` and record every file (size-keyed)
+ * and directory into `snapshot`. Mirrors the `recordExisting`
+ * closure inside `syncVfsToPyodide` so the post-mount snapshot has
+ * the same shape the legacy `syncPyodideToVfs` diff expects.
+ */
+function recordExistingIntoSnapshot(
+  pyodide: PyodideInterface,
+  pyPath: string,
+  snapshot: PreSyncSnapshot
+): void {
+  const FS = pyodide.FS;
+  let st: { mode: number; size: number };
+  try {
+    st = FS.stat(pyPath) as { mode: number; size: number };
+  } catch {
+    return;
+  }
+  if (FS.isDir(st.mode)) {
+    snapshot.dirs.add(pyPath);
+    let names: string[];
+    try {
+      names = (FS.readdir(pyPath) as string[]).filter((n) => n !== '.' && n !== '..');
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      const full = pyPath === '/' ? `/${name}` : `${pyPath}/${name}`;
+      recordExistingIntoSnapshot(pyodide, full, snapshot);
+    }
+  } else if (FS.isFile(st.mode)) {
+    snapshot.files.set(pyPath, st.size);
   }
 }

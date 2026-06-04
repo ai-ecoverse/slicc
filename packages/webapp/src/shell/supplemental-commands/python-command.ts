@@ -26,6 +26,28 @@ import type { RealmFactory } from '../../kernel/realm/realm-runner.js';
 import { runInRealm } from '../../kernel/realm/realm-runner.js';
 import { stdinAsText } from '../just-bash-compat.js';
 
+/**
+ * Wave D1: when `slicc_opfs_vfs === 'opfs'` the kernel worker's VFS
+ * lives at `OPFS-root/slicc-fs/`. We pass the dbName through
+ * `RealmInitMsg.opfsMountDbName` so the Python realm worker (a
+ * separate `DedicatedWorker` without our localStorage shim) can
+ * resolve the same OPFS subtree and `mountNativeFS` against it.
+ * The dbName mirrors `Orchestrator`'s primary `VirtualFS.create({
+ * dbName: 'slicc-fs' })` call site — kept in sync explicitly rather
+ * than imported to avoid pulling the orchestrator into this command.
+ */
+const OPFS_KERNEL_DB_NAME = 'slicc-fs';
+
+function resolveOpfsMountDbName(): string | undefined {
+  try {
+    const v = (globalThis as { localStorage?: Storage }).localStorage?.getItem('slicc_opfs_vfs');
+    if (v === 'opfs') return OPFS_KERNEL_DB_NAME;
+  } catch {
+    /* localStorage may be unavailable in some test contexts */
+  }
+  return undefined;
+}
+
 export interface PythonCommandOptions {
   /**
    * Override the realm factory. Default: `createDefaultRealmFactory()`
@@ -138,6 +160,7 @@ export function createPython3LikeCommand(
     // must not re-read its own code as input — mirror the `node` command's
     // empty-stdin behavior in that branch.
     const realmStdin = filename === '<stdin>' ? '' : stdinAsText(ctx.stdin);
+    const opfsMountDbName = resolveOpfsMountDbName();
 
     if (!pm) {
       return runWithEphemeralPm({
@@ -153,6 +176,7 @@ export function createPython3LikeCommand(
         stdin: realmStdin,
         pyodideIndexURL,
         pyodideSyncDirs: syncDirs,
+        opfsMountDbName,
       });
     }
 
@@ -171,6 +195,7 @@ export function createPython3LikeCommand(
       stdin: realmStdin,
       pyodideIndexURL,
       pyodideSyncDirs: syncDirs,
+      opfsMountDbName,
       procKind: 'py',
     });
   });
@@ -208,6 +233,7 @@ async function runWithEphemeralPm(args: {
   stdin?: string;
   pyodideIndexURL: string;
   pyodideSyncDirs: string[];
+  opfsMountDbName: string | undefined;
 }) {
   if (!EphemeralPm) {
     const { ProcessManager: PM } = await import('../../kernel/process-manager.js');
@@ -228,6 +254,7 @@ async function runWithEphemeralPm(args: {
     stdin: args.stdin,
     pyodideIndexURL: args.pyodideIndexURL,
     pyodideSyncDirs: args.pyodideSyncDirs,
+    opfsMountDbName: args.opfsMountDbName,
     procKind: 'py',
   });
 }
