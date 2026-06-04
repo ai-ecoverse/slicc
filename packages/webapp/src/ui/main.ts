@@ -41,6 +41,7 @@ import {
 } from '../fs/mount-picker-popup.js';
 import { recoverMounts } from '../fs/mount-recovery.js';
 import { getAllMountEntries } from '../fs/mount-table-store.js';
+import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import { type PanelRpcPushMsg, panelRpcChannelName } from '../kernel/panel-rpc.js';
 // Auto-discover and register all providers (built-in + external).
 // IMPORTANT: This import must also appear in packages/chrome-extension/src/offscreen.ts
@@ -540,7 +541,7 @@ async function fireFastForwardFinalLick(
 async function mainExtension(app: HTMLElement, options?: { detached?: boolean }): Promise<void> {
   const isDetachedSelf = options?.detached === true;
   const { OffscreenClient } = await import('./offscreen-client.js');
-  const { VirtualFS } = await import('../fs/index.js');
+  const { VirtualFS, resolveVfsBackendFromEnv } = await import('../fs/index.js');
   const { publishAgentBridgeProxy } = await import('../scoops/agent-bridge.js');
 
   const layout = new Layout(app, !isDetachedSelf);
@@ -558,8 +559,18 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   // IndexedDB is shared across all same-origin extension pages, so this
   // reads/writes the same data as the offscreen document's VFS.
   const localFs = await VirtualFS.create({ dbName: 'slicc-fs' });
-  layout.panels.fileBrowser.setFs(localFs);
-  log.info('File browser wired to shared VFS (local IndexedDB)');
+  // Wave B2 (blueprint note d8860197): with `slicc_opfs_vfs === 'opfs'`
+  // the worker owns the canonical OPFS-backed VFS, so panel reads must
+  // route through the kernel transport's `VfsRpcHost` instead of
+  // hitting OPFS twice from the page. Defer the file-browser wiring
+  // until after `client` is constructed in that case; with the flag
+  // off, keep the historical local-VFS path so the LFS shadow store
+  // still drives the file browser.
+  const useRpcVfs = resolveVfsBackendFromEnv() === 'opfs';
+  if (!useRpcVfs) {
+    layout.panels.fileBrowser.setFs(localFs);
+    log.info('File browser wired to shared VFS (local IndexedDB)');
+  }
 
   // Restore persisted mounts. The side panel and the offscreen document
   // each have their own VirtualFS instance (sharing only the underlying
@@ -585,6 +596,13 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
 
   // Listen for preview SW file-read requests (falls back here for mounted dirs).
   // Uses BroadcastChannel because the SW's `/preview/` scope excludes this page.
+  //
+  // Wave B3 (blueprint note d8860197): the reader is held in a `let` so that
+  // when `slicc_opfs_vfs === 'opfs'` the swap below (after `client` is up)
+  // rewires this responder to the worker's `VfsRpcHost` via the shared
+  // kernel transport. With the flag off, `localFs` stays in place and the
+  // path is byte-identical to the pre-Wave-B behavior.
+  let previewVfsReader: LocalVfsClient = localFs;
   const previewVfsCh = new BroadcastChannel('preview-vfs');
   previewVfsCh.onmessage = (event) => {
     if (event.data?.type !== 'preview-vfs-read') return;
@@ -592,7 +610,7 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
     (async () => {
       try {
         const encoding = asText ? 'utf-8' : 'binary';
-        const content = await localFs.readFile(path, { encoding });
+        const content = await previewVfsReader.readFile(path, { encoding });
         previewVfsCh.postMessage({ type: 'preview-vfs-response', id, content });
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -855,6 +873,20 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
 
   // Wire local VFS to client so memory panel can read CLAUDE.md files
   client.setLocalFS(localFs);
+
+  // Wave B2/B3: with `slicc_opfs_vfs === 'opfs'`, route file-browser reads
+  // AND the preview-vfs BroadcastChannel responder through the offscreen's
+  // `VfsRpcHost` instead of touching OPFS from the panel. The transport
+  // is shared — the RemoteVfsClient only subscribes to `vfs-*-result`
+  // envelopes and does not perturb the existing agent-event / scoop-list /
+  // sprinkle-op routing.
+  if (useRpcVfs) {
+    const { createRemoteVfsClient } = await import('../kernel/remote-vfs-client.js');
+    const remoteVfs = createRemoteVfsClient({ transport: client.getTransport() });
+    layout.panels.fileBrowser.setFs(remoteVfs);
+    previewVfsReader = remoteVfs;
+    log.info('File browser + preview-vfs wired to worker VFS RPC (slicc_opfs_vfs=opfs)');
+  }
 
   // Mount the panel terminal as a `RemoteTerminalView` backed by the
   // offscreen `TerminalSessionHost`. Keystrokes assemble locally; each
@@ -1724,7 +1756,7 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
 
   const { spawnKernelWorker } = await import('../kernel/spawn.js');
   const { installPageStorageSync } = await import('../kernel/page-storage-sync.js');
-  const { VirtualFS } = await import('../fs/index.js');
+  const { VirtualFS, resolveVfsBackendFromEnv } = await import('../fs/index.js');
   const { BrowserAPI } = await import('../cdp/index.js');
 
   // Resolve the tray worker base URL from /api/runtime-config so consumers
@@ -1807,7 +1839,16 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // Same IndexedDB as the worker's VFS, so writes from the agent are
   // visible in the file browser without round-tripping the wire.
   const localFs = await VirtualFS.create({ dbName: 'slicc-fs' });
-  layout.panels.fileBrowser.setFs(localFs);
+  // Wave B2 (blueprint note d8860197): with `slicc_opfs_vfs === 'opfs'`,
+  // the worker owns the canonical OPFS-backed VFS and panel reads must
+  // route through the kernel transport's `VfsRpcHost`. Defer the
+  // file-browser wiring until after `client` is available; with the
+  // flag off, keep the historical local-VFS path so the LFS shadow
+  // still drives the file browser.
+  const useRpcVfs = resolveVfsBackendFromEnv() === 'opfs';
+  if (!useRpcVfs) {
+    layout.panels.fileBrowser.setFs(localFs);
+  }
 
   // Recover the panel's view of mounts. The worker recovers its own
   // mounts inside `createKernelHost`; this is just the page-side
@@ -1828,6 +1869,13 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // the canonical one (lives inside `createKernelHost`); this fires only
   // when the worker hasn't booted yet or when the request resolves
   // against a panel-only mount.
+  //
+  // Wave B3 (blueprint note d8860197): the reader is held in a `let` so
+  // that when `slicc_opfs_vfs === 'opfs'` the swap below (after `client`
+  // is up) rewires this responder to the kernel worker's `VfsRpcHost`
+  // via the shared transport. With the flag off, `localFs` stays in
+  // place and the path is byte-identical to pre-Wave-B behavior.
+  let previewVfsReader: LocalVfsClient = localFs;
   const previewVfsCh = new BroadcastChannel('preview-vfs');
   previewVfsCh.onmessage = (event) => {
     if (event.data?.type !== 'preview-vfs-read') return;
@@ -1835,7 +1883,7 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
     (async () => {
       try {
         const encoding = asText ? 'utf-8' : 'binary';
-        const content = await localFs.readFile(path, { encoding });
+        const content = await previewVfsReader.readFile(path, { encoding });
         previewVfsCh.postMessage({ type: 'preview-vfs-response', id, content });
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -2096,6 +2144,18 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // file system. Without this the panel reads empty in standalone-worker
   // mode — only the extension path was calling setLocalFS before.
   client.setLocalFS(localFs);
+
+  // Wave B2/B3: with `slicc_opfs_vfs === 'opfs'`, route file-browser reads
+  // AND the preview-vfs BroadcastChannel responder through the kernel
+  // worker's `VfsRpcHost` (deferred from the initial wiring above so we
+  // can reach `client.getTransport()`).
+  if (useRpcVfs) {
+    const { createRemoteVfsClient } = await import('../kernel/remote-vfs-client.js');
+    const remoteVfs = createRemoteVfsClient({ transport: client.getTransport() });
+    layout.panels.fileBrowser.setFs(remoteVfs);
+    previewVfsReader = remoteVfs;
+    log.info('File browser + preview-vfs wired to worker VFS RPC (slicc_opfs_vfs=opfs)');
+  }
 
   // Wire "New session" — freeze the cone's chat to /sessions/ via the
   // freezer (memory extraction + title), then clear ONLY the cone
