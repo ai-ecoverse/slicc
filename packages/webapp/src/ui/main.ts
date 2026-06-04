@@ -1849,6 +1849,41 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
     layout.panels.fileBrowser.setFs(localFs);
   }
 
+  // Wave B6 (blueprint note d8860197): under the OPFS flag, run the
+  // cross-tab `slicc-opfs-leader` election BEFORE any code path
+  // that opens an OPFS handle. `createSyncAccessHandle` is exclusive
+  // per file (Spike 2); racing two kernel-workers on the same OPFS
+  // tree corrupts the store. First-writer-wins — newer tabs become
+  // followers and surface a non-blocking read-only banner. The full
+  // worker-side gating (skipping OPFS open / cross-tab read routing)
+  // is the Wave B7 heavy harness; B6 lands the election + banner +
+  // `__slicc_opfs_leader` state surface so B7 has a single hook.
+  let opfsLeader: { isLeader: boolean; dispose: () => void } = {
+    isLeader: true,
+    dispose: () => {},
+  };
+  if (useRpcVfs) {
+    const { electOpfsLeader } = await import('./opfs-leader-election.js');
+    const { showOpfsReadOnlyBanner } = await import('./opfs-readonly-banner.js');
+    const result = await electOpfsLeader({ logger: log });
+    opfsLeader = { isLeader: result.isLeader, dispose: result.dispose };
+    (globalThis as Record<string, unknown>).__slicc_opfs_leader = {
+      isLeader: result.isLeader,
+      self: result.self,
+      leader: result.leader,
+    };
+    if (result.isLeader) {
+      log.info('OPFS leader election: this tab is the writer', { tabId: result.self.tabId });
+    } else {
+      log.warn('OPFS leader election: another tab is the writer; entering read-only mode', {
+        self: result.self.tabId,
+        leader: result.leader?.tabId,
+      });
+      showOpfsReadOnlyBanner({ leaderTabId: result.leader?.tabId });
+    }
+  }
+  void opfsLeader;
+
   // Recover the panel's view of mounts. The worker recovers its own
   // mounts inside `createKernelHost`; this is just the page-side
   // `localFs`'s mount table being repopulated on reload.
