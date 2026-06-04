@@ -147,17 +147,35 @@ This is the [option-2-from-design-discussion](#) shape: no in-memory state to lo
 
 **Minting is fresh-each-time, not idempotent.** Re-running `serve /workspace/dist` mints a **new** token (and a new subdomain URL) every invocation — the worker does not key tokens by `(trayId, servedRoot, entryPath)` and dedupe. Rationale: capability tokens are unguessable by construction, and keying-by-content would leak structure into what should be opaque. Cheap to mint, independently revocable, no caller surprise where two `serve` calls hand out URLs that share fate. Old previews of the same root remain valid until tray expiry or explicit revoke; they simply co-exist on a different subdomain from the new one.
 
-**Shared helper for URL construction** — to avoid the env-suffix logic drifting between worker mint, leader client, and tests, factor a single helper:
+**Shared helper for URL construction** — factor a single helper so the env-suffix logic never drifts between worker mint, leader client, and tests. **Critically: this is a lookup table, not a hostname suffix-strip.** The staging worker is `slicc-tray-hub-staging.minivelos.workers.dev` (`packages/webapp/src/scoops/tray-runtime-config.ts:4-5`); there's no string transformation that derives `preview.staging.sliccy.ai` from `minivelos.workers.dev`. Concrete shape:
 
 ```ts
-// packages/shared-ts/src/preview-url.ts (or a new tray-preview-url module)
-//   previewBaseHost(workerBaseUrl: string)
-//     → 'preview.sliccy.ai' | 'preview.staging.sliccy.ai' | ...
-//   buildPreviewUrl(workerBaseUrl: string, previewToken: string, path?: string)
-//     → `https://<previewToken>.<previewBaseHost>/<path>`
+// packages/shared-ts/src/preview-url.ts (new)
+const PREVIEW_BASE_BY_WORKER: Record<string, string> = {
+  // Production
+  'www.sliccy.ai': 'preview.sliccy.ai',
+  'sliccy.ai': 'preview.sliccy.ai',
+  // Staging — mint API host (minivelos.workers.dev) is a DIFFERENT origin
+  // from the preview host (sliccy.ai zone); both must route to the same
+  // worker deployment / DO namespace (see Risks).
+  'slicc-tray-hub-staging.minivelos.workers.dev': 'preview.staging.sliccy.ai',
+};
+
+export function previewBaseHost(workerBaseUrl: string): string {
+  const host = new URL(workerBaseUrl).host.toLowerCase();
+  const mapped = PREVIEW_BASE_BY_WORKER[host];
+  if (!mapped) throw new Error(`No preview base configured for worker host ${host}`);
+  return mapped;
+}
+
+export function buildPreviewUrl(workerBaseUrl: string, previewToken: string, path = '/'): string {
+  const base = previewBaseHost(workerBaseUrl);
+  const p = path.startsWith('/') ? path : '/' + path;
+  return `https://${previewToken}.${base}${p}`;
+}
 ```
 
-The worker uses these in its mint route to populate the `url` field; the page/offscreen mint callers use them to interpret URLs received from the worker; tests assert against them. One place to update if the domain pattern ever changes.
+The worker mint route calls `buildPreviewUrl` to populate the `url` field; page/offscreen mint callers interpret URLs received from the worker; tests assert against the same helper. **Infra prerequisite (see Risks):** the staging worker deployment must hold a route binding on the `sliccy.ai` zone for `*.preview.staging.sliccy.ai/*` _in addition to_ the existing `minivelos.workers.dev` mint-API host, and both must dispatch to the same DurableObject namespace — otherwise mint and preview traffic land on different DOs and 404 each other.
 
 ### Concurrent serves
 
@@ -342,7 +360,7 @@ Discrete UI states for the bridge to render:
 - **The full 13-test security suite** (`worktree-federated-preview/packages/webapp/tests/scoops/leader-preview-reader.test.ts` — reviewer-corrected from the spec's earlier "9-test" claim) — port to `tests/scoops/preview-request-handler.test.ts` against the new leader-side handler. Includes empty-real-file vs no-file distinction.
 - **`preview.open` protocol message** — same shape, `url` field replaces `path`/`root`. **Also extend iOS** (`SyncProtocol.swift` union + `AppState.handleDataChannelMessage` dispatcher) — small Swift change, per `packages/ios-app/CLAUDE.md`'s 5-step protocol checklist.
 - **`tray-open-preview` panel-rpc op** — payload changes to mint a preview token via the worker, response changes to `{ url, pushed }`.
-- **`currentLeaderSync` getter** on `page-leader-tray.ts` — unchanged.
+- **`currentLeaderSync` getter** on `page-leader-tray.ts` — **port from federated branch** (does not exist on `main` today; same applies to `LeaderSyncManager.broadcastPreviewOpen` and the page-side `openPreviewToFollowers` panel-RPC handler — all greenfield on this branch).
 - **`serve` follower-push integration** — same shape; URL is now worker-served. `serve` itself gains auto-enable-tray behavior (see Decisions).
 - **iOS `.unknown` decoder safety** — already present; the new `preview.open` case is added explicitly rather than relying on the silent-drop path.
 
@@ -587,7 +605,7 @@ iOS becomes a first-class preview viewer. No `WKURLSchemeHandler` work — iOS j
 
 Zero-config from the user's POV. The bridge default-off still holds — `serve` without `--bridge` mints `allowLive: false`. **The leader's own tab opens at the worker URL, not a local `/preview/...`** — there is no local `/preview/` to fall back to under the unified design; leader + followers all open the same `<previewToken>.preview.<env>.sliccy.ai` URL.
 
-**Cherry default-on mint rule:** at mint time the leader inspects `getConnectedFollowers()`. If any follower's runtime tag indicates Cherry (the offscreen's Cherry-runtime advertise; see `extension-leader-tray.ts` for the runtime-tag convention), the mint payload is upgraded to `allowLive: true` unless the user explicitly passed `--no-bridge`. Standalone/iOS/extension followers without Cherry stay opt-in.
+**Cherry default-on mint rule:** at mint time the leader inspects `getConnectedFollowers()`. If any follower advertises `CHERRY_RUNTIME_TAG === 'slicc-cherry'` (defined at `packages/webapp/src/scoops/tray-sync-protocol.ts:40` and filtered on by `cherry-emit-command.ts`), the mint payload is upgraded to `allowLive: true` unless the user explicitly passed `--no-bridge`. Standalone / iOS / non-Cherry extension followers stay opt-in.
 
 ### `serve --stop <token>` (Phase 1 revocation UX)
 
@@ -641,7 +659,7 @@ The existing `--project` flag in `serve-command.ts` becomes a **no-op alias**: a
 ### Worker
 
 - DO `mintPreview` issues unguessable tokens, stores the record, validates `controllerToken`; `revokePreview` deletes the record and emits the controller-WS broadcast.
-- Host-header parsing extracts the token correctly **including the embedded `.` in the `trayId.<hex>` token format** (leftmost-label only); bogus/unknown tokens → 404.
+- Host-header parsing extracts the token correctly **including the embedded `.` in the `trayId.<hex>` token format** via `previewTokenFromHost` (suffix-strip of `.preview.<env>.sliccy.ai`, NOT `host.split('.')[0]` which would drop the secret); bogus / wrong-suffix / unknown tokens → 404. Test the full `trayId.hex.preview.sliccy.ai` regression case explicitly.
 - `preview.request`/`preview.response` chunk reassembly into HTTP streaming responses (including binary base64 decode → bytes, MIME inference, directory → `index.html`).
 - Bridge WS upgrade path; messages routed to the leader's controller WS as `preview.bridge_event` / `preview.bridge_command`. Bridge with `allowLive: false` → upgrade rejected.
 - `TRAY_EXPIRED` and `previewToken` not found → "session ended" HTML page (distinct copy).
@@ -655,9 +673,10 @@ The existing `--project` flag in `serve-command.ts` becomes a **no-op alias**: a
 ### Webapp (leader side)
 
 - `preview.request` handler in both `page-leader-tray.ts` (standalone/cloud) and `extension-leader-tray.ts` (extension): security gate via `isPathWithinServedRoot`; reads chunked; returns 404 on miss; binary base64; UTF-8 path; 500 on read error; `preview.revoked` broadcast invalidates open follower tabs.
-- `tray-open-preview` op:
-  - **standalone:** panel-rpc path calls the worker mint, gets URL, broadcasts followers.
-  - **extension:** `chrome.runtime` envelope path lands in offscreen, calls in-realm `LeaderSyncManager.broadcastPreviewOpen`.
+- `tray-open-preview` op — **three contexts**, all reach the same in-realm `LeaderSyncManager.broadcastPreviewOpen`:
+  - **Standalone agent** (kernel worker): panel-RPC path resolves via the page handler against `pageLeaderTray.currentLeaderSync`.
+  - **Extension agent** (offscreen kernel worker — the primary extension agent path): **in-realm direct call** via `getPreviewMinter()` (the `setPreviewMinter` hook registered by `extension-leader-tray.ts`, mirroring `setCherryEmitter` precedent). Critical: panel-RPC and `chrome.runtime.sendMessage` do NOT reach the offscreen from inside the offscreen — the in-realm hook is the only correct path here.
+  - **Extension panel terminal** (side panel shell, not the agent): `chrome.runtime` envelope panel → offscreen listener (mirrors `leader-tray-reset` at `extension-leader-tray.ts:~423`).
 - `serve` auto-enable: when no tray active, calls the existing `leaveTray({ workerBaseUrl: resolvedUrl })` path (standalone) or `__slicc_setTrayRuntime(null, workerBaseUrl)` in-realm hook (extension offscreen) before minting; with tray active, mints directly.
 - `serve --bridge` mints with `allowLive: true`; default mints with `allowLive: false`.
 - `serve --stop <token>` and `serve --list` shell paths.
@@ -696,7 +715,7 @@ The existing `--project` flag in `serve-command.ts` becomes a **no-op alias**: a
 
 Four deployable slices (Phase 1b runs in parallel with Phase 1):
 
-**Phase 1 — wire delivery + revocation.** Worker wildcard route + DO `mintPreview` / `revokePreview` + `preview.request`/`preview.response` over controller WS (extending `LeaderToWorkerControlMessage`) + leader handler with security gate + `serve` auto-enable + mint via the new HTTP API + `preview.open { url }` to followers + **iOS protocol step** (preview.open Swift case + dispatcher) + extension-float `chrome.runtime` envelope wiring + `serve --stop`/`--list`. _No bridge yet; previews are static-render-only._ Includes routes-mirror updates + worker tests at coverage floor. **Prerequisite:** DNS + wildcard cert for prod + staging confirmed with infra.
+**Phase 1 — wire delivery + revocation.** Worker wildcard route + DO `mintPreview` / `revokePreview` / list + `preview.request`/`preview.response`/`preview.revoked` over controller WS (extending both `LeaderToWorkerControlMessage` and `WorkerToLeaderControlMessage`) + leader handler with security gate + `serve` auto-enable + mint via the new HTTP API + `preview.open { url }` to followers + **iOS protocol step** (`preview.open` Swift case + dispatcher) + **extension three-context wiring** (`setPreviewMinter` in-realm hook for the offscreen agent + `chrome.runtime` envelope for the panel terminal + the panel-RPC path for standalone) + `serve --stop`/`--list`. _No bridge yet; previews are static-render-only._ Includes routes-mirror updates + worker tests at coverage floor. **Prerequisites:** DNS + wildcard cert for prod + staging confirmed with infra; staging worker holds a `*.preview.staging.sliccy.ai/*` route binding on the `sliccy.ai` zone alongside its `minivelos.workers.dev` mint host (same worker, same DO namespace).
 
 **Phase 1b — non-serve consumer migration.** In parallel with Phase 1. Covered fully in [Phase 1b — Non-serve preview-consumer migration](#phase-1b--non-serve-preview-consumer-migration) below.
 
@@ -721,16 +740,16 @@ Phase 1b is _implementation-light_ but _coverage-broad_ — it's the unglamorous
 
 ## Decisions (pinned, reviewer cross-check 2026-06-04)
 
-| #   | Topic                     | Outcome                                                                                                                                                                                                      |
-| --- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 1   | iOS protocol              | Add `preview.open` to `SyncProtocol.swift` + `AppState.handleDataChannelMessage` (5-step checklist). Phase 1.                                                                                                |
-| 2   | `serve` without tray      | Auto-enable tray on first invocation via `leaveTray({ workerBaseUrl: resolvedUrl })` (returns `{kind:'switched'}`); extension offscreen uses `__slicc_setTrayRuntime` direct hook. Zero-config UX preserved. |
-| 3   | Bridge default            | Opt-in (`serve --bridge` / `--interactive`); Cherry-opened previews default-on.                                                                                                                              |
-| 4   | Dips + `open`             | Direct VFS read (no worker mint per dip / per `open`).                                                                                                                                                       |
-| 5   | Bridge v1 command surface | Full surface: `eval`, `setOuterHTML`, `inject`, `requestReload`, `host-event`. (Larger attack surface accepted; bridge is opt-in.)                                                                           |
-| 6   | Token revocation timing   | Phase 1. `serve --stop <token>` + `--list` + DO `revokePreview` + controller-WS broadcast invalidate.                                                                                                        |
-| 7   | `--project` deprecation   | No-op alias with obsolete warning; scrub references from docs/skills/examples (single grep pass).                                                                                                            |
-| 8   | Domain + staging DNS      | Prod `*.preview.sliccy.ai` + staging `*.preview.staging.sliccy.ai`; env-derived from tray worker base URL. Pre-Phase-1 infra prerequisite.                                                                   |
+| #   | Topic                     | Outcome                                                                                                                                                                                                                                                                                            |
+| --- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | iOS protocol              | Add `preview.open` to `SyncProtocol.swift` + `AppState.handleDataChannelMessage` (5-step checklist). Phase 1.                                                                                                                                                                                      |
+| 2   | `serve` without tray      | Auto-enable tray on first invocation via `leaveTray({ workerBaseUrl: resolvedUrl })` (returns `{kind:'switched'}`); extension offscreen uses `__slicc_setTrayRuntime` direct hook. Zero-config UX preserved.                                                                                       |
+| 3   | Bridge default            | Opt-in (`serve --bridge` / `--interactive`); Cherry-opened previews default-on.                                                                                                                                                                                                                    |
+| 4   | Dips + `open`             | Direct VFS read (no worker mint per dip / per `open`).                                                                                                                                                                                                                                             |
+| 5   | Bridge v1 command surface | Full surface: `eval`, `setOuterHTML`, `inject`, `requestReload`, `host-event`. (Larger attack surface accepted; bridge is opt-in.)                                                                                                                                                                 |
+| 6   | Token revocation timing   | Phase 1. `serve --stop <token>` + `--list` + DO `revokePreview` deletion + `preview.revoked` controller-WS notice to the leader. Phase 1 invalidation is HTTP-only (URL stops working immediately; open tabs degrade on next asset fetch); proactive bridge `preview-stopped` tab close = Phase 2. |
+| 7   | `--project` deprecation   | No-op alias with obsolete warning; scrub references from docs/skills/examples (single grep pass).                                                                                                                                                                                                  |
+| 8   | Domain + staging DNS      | Prod `*.preview.sliccy.ai` + staging `*.preview.staging.sliccy.ai`; env-derived from tray worker base URL. Pre-Phase-1 infra prerequisite.                                                                                                                                                         |
 
 ## Risks
 
@@ -738,7 +757,7 @@ Phase 1b is _implementation-light_ but _coverage-broad_ — it's the unglamorous
 - **TLS termination at the worker on both legs** is the genuine trust delta. The worker sees preview plaintext. Documented loudly; not a regression for "agent UI experimentation" content (the dominant use), is a continuation for everything else.
 - **DNS / wildcard cert provisioning** has to land before Phase 1 can be useful in production. **Staging is the bigger risk** — `packages/cloudflare-worker/wrangler.jsonc` has no staging preview route today. Confirm prod + staging wildcards with infra before Phase 1 starts. Pre-flight check: does the existing CF zone allow `*.preview.sliccy.ai` and `*.preview.staging.sliccy.ai`?
 - **Phase 3 deletion risk.** Removing `preview-sw.ts` from main is a destructive change. Gated on (a) prod soak of Phase 1, (b) Phase 1b consumer migration complete, (c) e2e replaced, (d) documented rollback plan.
-- **Extension float wiring** (new — reviewer-flagged). `getPanelRpcClient()` is null in the extension offscreen; the `chrome.runtime` envelope path for `tray-open-preview` is its own surface to test. Without this, extension `serve` cannot mint or push previews.
+- **Extension three-context wiring** (new — reviewer-flagged). The extension has THREE invocation paths, not one. The **primary agent path** is the offscreen kernel worker calling `getPreviewMinter()` _in-realm_ (mirroring `setCherryEmitter` precedent at `extension-leader-tray.ts:29,389,493`) — `getPanelRpcClient()` is null there, and `chrome.runtime.sendMessage` does NOT deliver to the offscreen's own listeners. The `chrome.runtime` envelope path is secondary and only covers the **side panel terminal** (not the agent). Without the in-realm direct path, the extension agent's `serve` cannot mint or push previews at all.
 - **iOS protocol step** (new — reviewer-flagged). iOS isn't "for free" — requires a Swift change (small but mandatory). 5-step checklist per `packages/ios-app/CLAUDE.md` keeps it routine.
 - **Bridge command surface includes `eval`** (decision #5). The agent can run arbitrary expressions in the served-page realm. Mitigations: bridge is opt-in; served page's CSP applies; `<meta name="slicc-preview" content="no-bridge">` opt-out honored. Document in user-facing skills/docs that `--bridge` opens this capability.
 - **LoC scale** (new — reviewer-flagged). Phase 1 is closer to 800–1500 LoC plus test ports — not the ~300 LoC "transfer" estimate that referred only to the federated-branch carry-over. Budget accordingly.
