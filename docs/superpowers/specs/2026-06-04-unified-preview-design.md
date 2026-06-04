@@ -147,6 +147,18 @@ This is the [option-2-from-design-discussion](#) shape: no in-memory state to lo
 
 **Minting is fresh-each-time, not idempotent.** Re-running `serve /workspace/dist` mints a **new** token (and a new subdomain URL) every invocation — the worker does not key tokens by `(trayId, servedRoot, entryPath)` and dedupe. Rationale: capability tokens are unguessable by construction, and keying-by-content would leak structure into what should be opaque. Cheap to mint, independently revocable, no caller surprise where two `serve` calls hand out URLs that share fate. Old previews of the same root remain valid until tray expiry or explicit revoke; they simply co-exist on a different subdomain from the new one.
 
+**Shared helper for URL construction** — to avoid the env-suffix logic drifting between worker mint, leader client, and tests, factor a single helper:
+
+```ts
+// packages/shared-ts/src/preview-url.ts (or a new tray-preview-url module)
+//   previewBaseHost(workerBaseUrl: string)
+//     → 'preview.sliccy.ai' | 'preview.staging.sliccy.ai' | ...
+//   buildPreviewUrl(workerBaseUrl: string, previewToken: string, path?: string)
+//     → `https://<previewToken>.<previewBaseHost>/<path>`
+```
+
+The worker uses these in its mint route to populate the `url` field; the page/offscreen mint callers use them to interpret URLs received from the worker; tests assert against them. One place to update if the domain pattern ever changes.
+
 ### Concurrent serves
 
 Multiple `serve` invocations run side-by-side without interference. Each mints its own `previewToken` → its own subdomain → its own origin → its own DO-stored `servedRoot`/`entryPath`. The leader's security gate fires against the per-request `servedRoot`, so paths are scoped to the token that asked for them, not to "whatever the most recent serve set."
@@ -175,7 +187,14 @@ This is a structural fix for a class of bug the current SW-based local serve has
 
 ### Protocol — worker ↔ leader (controller WS)
 
-The current `LeaderToWorkerControlMessage` union (`packages/cloudflare-worker/src/tray-signaling.ts:~150-160`) is `ping | bootstrap.offer | bootstrap.ice_candidate | bootstrap.failed` — leader replies that aren't bootstrap-related don't exist. **Phase 1 extends the union** (in `tray-signaling.ts`) with two new variants below, and updates the DO's `handleLeaderMessage` to route `preview.response` chunks to the pending-request assembler keyed by `reqId`. Phase 2 adds `preview.bridge_event` (leader → worker, forwarded to bridge) symmetrically.
+**Both** sides of the controller-WS union need new variants in `packages/cloudflare-worker/src/tray-signaling.ts`:
+
+- **`LeaderToWorkerControlMessage`** (today: `ping | bootstrap.offer | bootstrap.ice_candidate | bootstrap.failed`) — Phase 1 adds `preview.response`; Phase 2 adds `preview.bridge_event` (forwarded to bridge symmetrically).
+- **`WorkerToLeaderControlMessage`** (today: `webhook.event` + bootstrap pushes; `tray-signaling.ts:~117`) — Phase 1 adds `preview.request` (worker → leader) and `preview.revoked` (worker → leader, on `serve --stop`). The DO sends `preview.request` via the same `sendToLeader` pattern that already forwards `webhook.event` (`session-tray.ts:~571`).
+
+The DO's `handleLeaderMessage` routes `preview.response` chunks to a per-DO `pending: Map<reqId, ResponseAssembler>` keyed by `reqId`. Leader-side handler dispatches `preview.request` → `onPreviewRequest` (see "Leader-side changes" below).
+
+Wire shape for the new variants:
 
 Two new message types on the existing controller WebSocket the leader already holds:
 
@@ -208,6 +227,12 @@ type PreviewResponse =
       status: 404 | 403 | 500;
       reason?: string;
     };
+
+// worker → leader (Phase 1, broadcast on serve --stop)
+type PreviewRevoked = {
+  type: 'preview.revoked';
+  previewToken: string;
+};
 ```
 
 Reassembly is the same shape as today's federated FS: defensive sort by `chunkIndex`, concatenate, decode base64 if binary. Worker has an in-memory map `pending = Map<reqId, ResponseAssembler>` per DO instance.
@@ -353,7 +378,19 @@ This is a _net reduction_ — the unified design removes more code than it adds.
    - prod: `routes: [..., "*.preview.sliccy.ai/*"]`
    - staging: `routes: [..., "*.preview.staging.sliccy.ai/*"]`
      CF auto-provisions TLS for subdomains under managed zones; confirm the wildcard cert covers the preview leaf (`*.preview.sliccy.ai`) — typically requires explicit add-on or zone config.
-2. **Sub-domain dispatch:** `Worker.fetch(request)` parses `request.headers.get('host')`. If host matches `<token>.preview.<env>.sliccy.ai` (env-aware), route to the preview handler; else the existing handler. The token format is `trayId.<18-byte-hex>` (multi-dot) — parse as `host.split('.')[0]` then verify against the leftmost label only (don't split on every dot or the embedded `.` in the token format breaks).
+2. **Sub-domain dispatch:** `Worker.fetch(request)` parses `request.headers.get('host')`. If host matches a preview subdomain, route to the preview handler; else the existing handler. **Token format is `trayId.<18-byte-hex>` (i.e. it contains a literal `.` between trayId and secret — `shared.ts:127-132`), so the host has TWO dots before `.preview` and naive `host.split('.')[0]` drops the secret.** Extract by **suffix-stripping the known preview base**:
+
+   ```ts
+   // packages/cloudflare-worker/src/preview-host.ts (new)
+   const PREVIEW_HOST_RE = /^(.+)\.preview\.(staging\.)?sliccy\.ai$/i;
+   export function previewTokenFromHost(host: string): string | null {
+     const m = host.match(PREVIEW_HOST_RE);
+     return m?.[1] ?? null;
+   }
+   ```
+
+   Then validate the extracted token with existing `parseCapabilityToken(token)` (`shared.ts:134-141`), which expects exactly one `.` between trayId and secret. Reject if `parseCapabilityToken` returns null → 404.
+
 3. **Pre-Phase-1 prerequisite:** confirm DNS/TLS provisioning with whoever owns the `sliccy.ai` zone (and the staging equivalent) **before** Phase 1 implementation lands. Without the staging wildcard, dev/staging trays mint URLs that 404. Treat as a blocker.
 
 ### Routes — preview handler (on `*.preview.<env>.sliccy.ai`)
@@ -451,28 +488,64 @@ Both add the same `preview.request` handler:
 // in a new shared module preview-request-handler.ts, called from both
 // page-leader-tray.ts and extension-leader-tray.ts when their controller WS
 // receives a preview.request:
-function onPreviewRequest(msg: PreviewRequest, ws: ControllerWebSocket, vfs: VirtualFS): void {
-  const { reqId, servedRoot, vfsPath, asText } = msg;
-  // Security gate: vfsPath must be under servedRoot. Renamed from federated branch.
+async function onPreviewRequest(
+  msg: PreviewRequest,
+  ws: ControllerWebSocket,
+  vfs: VirtualFS
+): Promise<void> {
+  let { reqId, servedRoot, vfsPath, asText } = msg;
+  // Security gate FIRST (renamed from federated branch's isWithinAllowedRoots):
   if (!isPathWithinServedRoot(vfsPath, servedRoot)) {
     ws.send({ type: 'preview.response', reqId, ok: false, status: 403 });
     return;
+  }
+  // Directory → index.html (mirrors preview-sw.ts:135-138). serve always sends
+  // a full file path, so this only matters for hand-typed trailing-slash navs
+  // (e.g. <token>.preview.sliccy.ai/assets/).
+  try {
+    const stat = await vfs.stat(vfsPath);
+    if (stat.isDirectory) {
+      vfsPath = vfsPath.replace(/\/?$/, '/') + 'index.html';
+      // Re-gate the rewritten path (still inside servedRoot, but be explicit).
+      if (!isPathWithinServedRoot(vfsPath, servedRoot)) {
+        ws.send({ type: 'preview.response', reqId, ok: false, status: 403 });
+        return;
+      }
+    }
+  } catch {
+    /* not a dir; fall through to read */
   }
   // Read VFS; reuse handleReadFile + chunkContent from tray-fs-handler.ts.
   // Reply with one or more PreviewResponse chunks. 404 on miss; 500 on read error.
 }
 ```
 
-The leader stores no per-preview state; `servedRoot` arrives on every request. Survives leader reload trivially (the DO holds the truth).
+The leader stores no per-preview state; `servedRoot` arrives on every request. Survives leader reload trivially (the DO holds the truth). **Mounted directories work transparently**: `VirtualFS.readFile`/`stat` follow FS Access / S3 / DA mount handles via the existing mount backends, so `serve /workspace/mounted-r2-bucket` reads through the leader's mount exactly as `preview-sw.ts` does today. Manual test row added in the Testing section.
 
-### Extension float — `tray-open-preview` wiring
+### Extension float — `tray-open-preview` wiring (three contexts)
 
-The extension's leader runs in the offscreen document, where **`getPanelRpcClient()` is null** (panel-rpc is a standalone page↔kernel-worker bridge). So `tray-open-preview` can't go through panel-rpc in the extension; it needs a dual-path mirror of the existing `leader-tray-reset` / `cherry-emit` envelope pattern:
+The extension has **three** execution contexts that can invoke `serve` / mint a preview, not two. `getPanelRpcClient()` is null in the offscreen, but the offscreen _also hosts the agent's kernel-worker shell_ via `createKernelHost` (`packages/chrome-extension/src/offscreen.ts:125-133`). That means the agent's `bash` tool running inside the offscreen kernel-worker has direct in-realm access to `LeaderSyncManager` — same realm as the leader sync — and should NOT round-trip through the panel. Cherry already established this pattern with `setCherryEmitter` (`extension-leader-tray.ts:29,389,493` — module-level hook the offscreen registers; in-realm callers call it directly; cleared on teardown).
 
-- **Standalone:** kernel-worker `serve` calls `getPanelRpcClient().call('tray-open-preview', …)` → page-side `panel-rpc-handlers.ts` resolves it via `pageLeaderTray.currentLeaderSync.broadcastPreviewOpen(...)`.
-- **Extension:** kernel-worker `serve` posts a `chrome.runtime` envelope `{ source: 'panel', payload: { type: 'tray-open-preview', requestId, servedRoot, entryPath, allowLive } }` → offscreen's `extension-leader-tray.ts` listens (mirroring its existing `leader-tray-reset` listener at line ~423) → resolves via the in-realm `sync.broadcastPreviewOpen(...)`. Replies with `{ source: 'offscreen', payload: { type: 'tray-open-preview-response', requestId, url, pushed } }`.
+Mirror that pattern with `setPreviewMinter` for `tray-open-preview`:
 
-The `serve` command picks the path with the same `getPanelRpcClient()` null-check that already exists; null → extension envelope path; non-null → panel-rpc path. Both paths reach the in-realm `LeaderSyncManager` and the worker's mint API; the difference is only the bridge transport.
+| Context                                                             | Transport                                   | Path                                                                                                                                                                                                                                                                                                                                                             |
+| ------------------------------------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Standalone agent** (kernel worker in `kernel-worker.ts`)          | panel-RPC `tray-open-preview`               | kernel worker → page → `panel-rpc-handlers.ts` resolves via `pageLeaderTray.currentLeaderSync.broadcastPreviewOpen(...)`                                                                                                                                                                                                                                         |
+| **Extension agent** (kernel worker in offscreen, agent `bash` tool) | **direct in-realm call**                    | kernel worker calls `getPreviewMinter()?.(...)` — the offscreen's `extension-leader-tray.ts` `startExtensionLeaderTray()` registers the closure via `setPreviewMinter((opts) => mintAndBroadcast(sync, opts))` and clears it on teardown (mirrors `setCherryEmitter` at line 389/493)                                                                            |
+| **Extension panel terminal** (side panel shell, not the agent)      | `chrome.runtime` envelope panel → offscreen | side panel `serve` posts `{ source: 'panel', payload: { type: 'tray-open-preview', requestId, servedRoot, entryPath, allowLive } }`; the offscreen listens with the existing `leader-tray-reset`-style listener (`extension-leader-tray.ts:~423`) and replies `{ source: 'offscreen', payload: { type: 'tray-open-preview-response', requestId, url, pushed } }` |
+
+Decision sequence in `serve-command.ts`:
+
+```ts
+const minter = getPreviewMinter?.(); // ← in-realm direct path (extension offscreen)
+if (minter) return minter({ entryPath, servedRoot, allowLive });
+const rpc = getPanelRpcClient(); // ← standalone panel-RPC
+if (rpc) return rpc.call('tray-open-preview', { entryPath, servedRoot, allowLive });
+// (Side panel terminal posts the chrome.runtime envelope itself — distinct caller; not reached
+// from agent kernel-worker code.)
+```
+
+All three paths land on the same `LeaderSyncManager.broadcastPreviewOpen(...)` call against the in-realm sync; only the transport differs.
 
 ### Worker→page `tray-open-preview` op (panel-rpc, repurposed)
 
@@ -504,11 +577,45 @@ iOS becomes a first-class preview viewer. No `WKURLSchemeHandler` work — iOS j
 
 ### `serve` command — auto-enable tray
 
-`serve` calls into `tray-open-preview` (panel-rpc or extension-envelope per float). When the leader has no active tray (`pageLeaderTray?.currentLeaderSync` is null), `serve` **auto-enables the tray on first invocation** (calls `leaveTray({ workerBaseUrl, switchTo: 'leader' })` or equivalent — the existing path used by the avatar-popover "Enable multi-browser sync" button), then mints. Zero-config from the user's POV. The user sees a tray come up implicitly and is one click away from disabling it again via the avatar popover. The bridge default-off still holds — `serve` without `--bridge` mints `allowLive: false`.
+`serve` resolves the active mint surface via the three-context decision above. When the leader has no active tray (no `LeaderSyncManager`), `serve` **auto-enables the tray on first invocation** using the existing leave/switch pattern (the avatar-popover "Enable multi-browser sync" path): call `leaveTray({ workerBaseUrl: resolvedUrl })` with a non-null `workerBaseUrl` — `performTrayLeave` returns `{ kind: 'switched', ... }` to indicate the role flipped to leader (no `switchTo` option exists; the workerBaseUrl is the switch). Resolve `resolvedUrl` via `resolveTrayWorkerBaseUrl()` so `VITE_WORKER_BASE_URL` and any surviving stored value win over the dev/prod default — matching `main.ts` / `offscreen.ts` boot resolution and the avatar-popover path. Per-context detail:
+
+- **Standalone kernel worker:** call `leaveTray({ workerBaseUrl })` — it routes through panel-RPC `tray-leave` (`scoops/tray-leave.ts:204`), the page handler runs `performTrayLeave` against live tray handles, returns the new runtime status.
+- **Extension offscreen kernel worker:** use the local in-realm hook `globalThis.__slicc_setTrayRuntime(null, workerBaseUrl)` (the `OFFSCREEN_SET_TRAY_RUNTIME_HOOK` documented at `tray-leave.ts:33-36`). Chrome does not deliver a context's own `sendMessage` to its own listeners, so panel-RPC / `chrome.runtime` envelopes do NOT work from inside the offscreen; the hook is the only correct path.
+- **Extension panel terminal:** the existing `tray-leave` panel-RPC path applies (panel → offscreen via `refresh-tray-runtime`).
+
+**Known follow-up gap (inherited):** offscreen-side `activeHandle.leader.start()` rejection (`chrome-extension/src/offscreen.ts:~497`) rolls back to `state: 'inactive'` and only logs to telemetry. Auto-enable inherits this — a failed start silently fails the `serve` command. Spec calls this out; surfacing the error to the user is tracked as a separate follow-up (already noted in `packages/webapp/CLAUDE.md` "Re-enabling after Stop").
+
+Zero-config from the user's POV. The bridge default-off still holds — `serve` without `--bridge` mints `allowLive: false`. **The leader's own tab opens at the worker URL, not a local `/preview/...`** — there is no local `/preview/` to fall back to under the unified design; leader + followers all open the same `<previewToken>.preview.<env>.sliccy.ai` URL.
+
+**Cherry default-on mint rule:** at mint time the leader inspects `getConnectedFollowers()`. If any follower's runtime tag indicates Cherry (the offscreen's Cherry-runtime advertise; see `extension-leader-tray.ts` for the runtime-tag convention), the mint payload is upgraded to `allowLive: true` unless the user explicitly passed `--no-bridge`. Standalone/iOS/extension followers without Cherry stay opt-in.
 
 ### `serve --stop <token>` (Phase 1 revocation UX)
 
-Adds a `--stop <previewToken>` flag to `serve` that calls the new worker `POST /api/tray/<trayId>/preview/stop` route (auth: `controllerToken`). The worker deletes the DO record, broadcasts `preview.revoked { previewToken }` over the controller WS; the leader emits a `preview-stopped` bridge event to invalidate any open follower tabs (best-effort — those tabs may also see 404s on subsequent asset fetches). `serve --list` (also Phase 1) prints the active preview tokens + URLs from a worker `GET /api/tray/<trayId>/previews` admin endpoint.
+Adds a `--stop <previewToken>` flag to `serve` that calls the new worker `POST /api/tray/<trayId>/preview/stop` route (auth: `controllerToken`). The worker:
+
+1. Deletes the DO `PreviewRecord`.
+2. Broadcasts `preview.revoked { previewToken }` over the controller WS to the leader. The leader logs and (optional) emits a `cherry`-style lick to the cone so the agent knows the preview was stopped.
+3. **Future requests** to `<previewToken>.preview.<env>.sliccy.ai/...` return the standard "session ended" HTML (the DO no longer has the record).
+4. **Open follower tabs are invalidated best-effort via HTTP only in Phase 1** — they receive 404 / session-ended on their next asset fetch (every subresource a SPA loads is one). A _proactive_ tab-close signal (the bridge-channel `preview-stopped` event) is a Phase 2 add, since the bridge channel itself ships in Phase 2. Phase 1 is "the URL stops working immediately; the open tab degrades on the next fetch."
+
+`serve --list` (also Phase 1) prints active preview tokens + URLs from a worker admin endpoint:
+
+```
+// GET /api/tray/<trayId>/previews
+// Authorization: Bearer <controllerToken>
+type ListPreviewsResponse = {
+  previews: Array<{
+    previewToken: string;
+    url: string;
+    servedRoot: string;
+    entryPath: string;
+    allowLive: boolean;
+    createdAt: string;
+  }>;
+};
+```
+
+Routes-mirror updates (Phase 1 mint + revoke + list = 3 new routes; `index.ts` + `tests/index.test.ts` + `tests/deployed.test.ts` all need parity).
 
 ### `--project` flag — obsolete alias (no-op)
 
@@ -580,8 +687,10 @@ The existing `--project` flag in `serve-command.ts` becomes a **no-op alias**: a
 - Tray expiry: wait past `TRAY_RECLAIM_TTL_MS`; subsequent request returns "session ended" page.
 - Security: from a served page, `fetch('/workspace/.git/github-token')` → 403; the leader is never asked.
 - Concurrent serves: open two `serve`s under different roots; verify origin isolation (cross-preview fetch denied).
+- **Mounted VFS:** `serve` a directory under a local FS-Access mount AND an S3/R2 mount; verify both render multi-asset content through the leader's existing mount backends.
 - Shareable: copy URL to a different browser (no SLICC running) — bytes render, bridge degrades gracefully.
 - `serve --stop`: revoke an active token; existing tabs see 404 on next asset; new tabs see session-ended.
+- **Auto-enable failure surfacing:** force the offscreen `activeHandle.leader.start()` to reject (the known gap at `offscreen.ts:~497`); verify `serve` surfaces an error to the user rather than silently succeeding (Phase-1 follow-up gate — at minimum a clear stderr message, full UI surface tracked separately).
 
 ## Phasing
 
@@ -633,6 +742,8 @@ Phase 1b is _implementation-light_ but _coverage-broad_ — it's the unglamorous
 - **iOS protocol step** (new — reviewer-flagged). iOS isn't "for free" — requires a Swift change (small but mandatory). 5-step checklist per `packages/ios-app/CLAUDE.md` keeps it routine.
 - **Bridge command surface includes `eval`** (decision #5). The agent can run arbitrary expressions in the served-page realm. Mitigations: bridge is opt-in; served page's CSP applies; `<meta name="slicc-preview" content="no-bridge">` opt-out honored. Document in user-facing skills/docs that `--bridge` opens this capability.
 - **LoC scale** (new — reviewer-flagged). Phase 1 is closer to 800–1500 LoC plus test ports — not the ~300 LoC "transfer" estimate that referred only to the federated-branch carry-over. Budget accordingly.
+- **Auto-enable tray inherits a known offscreen failure-surface gap.** `activeHandle.leader.start()` rejection at `chrome-extension/src/offscreen.ts:~497` rolls back to `state: 'inactive'` and only logs to telemetry. Auto-enable-on-first-`serve` inherits this — a failed start silently fails the command. Phase-1 follow-up: surface this error to the agent / user (at minimum a clear stderr message from `serve`).
+- **Token-host parsing footgun (closed).** Earlier draft suggested `host.split('.')[0]`, which would drop the secret half of the `trayId.secret` token format and cause every preview to 404. Fixed: extract via `previewTokenFromHost` regex that strips the known `.preview.<env>.sliccy.ai` suffix and validates with `parseCapabilityToken`. Recorded here so a future reader doesn't reintroduce the naive split.
 
 ## Self-review (revised)
 
