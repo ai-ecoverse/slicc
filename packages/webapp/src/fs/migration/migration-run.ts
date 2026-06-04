@@ -43,6 +43,7 @@ import {
   type LegacyLfsReader,
   type MigrationLogger,
 } from './migration-detect.js';
+import { assertMigrationNotInSidePanel, type MigrationCallerEnv } from './migration-guard.js';
 
 // Compile-time guard — the C1 sentinel constant must equal the C2 one
 // (a divergence would mean C1 says "migrated" against a file C2 never
@@ -71,6 +72,13 @@ export interface RunLegacyMigrationFromVfsDeps {
   /** OPFS-existence probe override (forwarded to C1). */
   probeLegacyDbExists?: () => Promise<boolean>;
   logger?: MigrationLogger;
+  /**
+   * Wave C4 caller-environment override. Tests pass a simulated env
+   * (extension side panel, offscreen, worker, ...) so the side-panel
+   * guard can be exercised without monkey-patching globals. Production
+   * callers leave this undefined — the guard snapshots `globalThis`.
+   */
+  callerEnv?: MigrationCallerEnv;
 }
 
 /**
@@ -82,6 +90,11 @@ export async function runLegacyMigrationFromVfs(
   sharedFs: VirtualFS,
   deps: RunLegacyMigrationFromVfsDeps = {}
 ): Promise<MigrationRunResult> {
+  // Wave C4 — defensive guard: the side panel must never invoke the
+  // migration (the offscreen document is the sole VFS owner under the
+  // `slicc_opfs_vfs` flag). Today the panel boot path doesn't import
+  // this module; the assert protects against future regressions.
+  assertMigrationNotInSidePanel(deps.callerEnv);
   const logger = deps.logger;
   const detection = await detectLegacyMigration({
     sentinelExists: async () => {

@@ -144,4 +144,62 @@ describe('runLegacyMigrationFromVfs', () => {
     expect(result).toEqual({ kind: 'legacy-absent' });
     expect(reader).not.toHaveBeenCalled();
   });
+
+  it('Wave C4 — rejects calls from the chrome extension side panel before touching the legacy IDB', async () => {
+    const reader = vi.fn(async () => buildFileReader({}));
+    const lfs = vi.fn(async () => buildLfsReader({ '/': { type: 'dir' } }));
+    const probe = vi.fn(async () => true);
+    await expect(
+      runLegacyMigrationFromVfs(vfs, {
+        legacyLfsFactory: lfs,
+        legacyReaderFactory: reader,
+        probeLegacyDbExists: probe,
+        callerEnv: {
+          hasExtensionRuntime: true,
+          hasDocument: true,
+          pathname: '/index.html',
+        },
+      })
+    ).rejects.toThrow(/Wave C4/);
+    // None of the legacy handles or the OPFS sentinel probe were touched.
+    expect(reader).not.toHaveBeenCalled();
+    expect(lfs).not.toHaveBeenCalled();
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it('Wave C4 — allows calls from the offscreen document (extension VFS owner)', async () => {
+    const tree: Record<string, MockEntry> = {
+      '/': { type: 'dir' },
+      '/a.txt': { type: 'file', size: 1, bytes: new Uint8Array([7]) },
+    };
+    const result = await runLegacyMigrationFromVfs(vfs, {
+      legacyLfsFactory: async () => buildLfsReader(tree),
+      legacyReaderFactory: async () => buildFileReader(tree),
+      probeLegacyDbExists: async () => true,
+      callerEnv: {
+        hasExtensionRuntime: true,
+        hasDocument: true,
+        pathname: '/offscreen.html',
+      },
+    });
+    expect(result.kind).toBe('copied');
+  });
+
+  it('Wave C4 — allows calls from the standalone DedicatedWorker (no document)', async () => {
+    const tree: Record<string, MockEntry> = {
+      '/': { type: 'dir' },
+      '/a.txt': { type: 'file', size: 1, bytes: new Uint8Array([7]) },
+    };
+    const result = await runLegacyMigrationFromVfs(vfs, {
+      legacyLfsFactory: async () => buildLfsReader(tree),
+      legacyReaderFactory: async () => buildFileReader(tree),
+      probeLegacyDbExists: async () => true,
+      callerEnv: {
+        hasExtensionRuntime: false,
+        hasDocument: false,
+        pathname: '',
+      },
+    });
+    expect(result.kind).toBe('copied');
+  });
 });
