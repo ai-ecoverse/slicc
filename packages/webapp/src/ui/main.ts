@@ -544,6 +544,7 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   const { OffscreenClient } = await import('./offscreen-client.js');
   const { VirtualFS, resolveVfsBackendFromEnv } = await import('../fs/index.js');
   const { publishAgentBridgeProxy } = await import('../scoops/agent-bridge.js');
+  const { warnIfPanelVfsConstructionUnderOpfs } = await import('./panel-vfs-guard.js');
 
   const layout = new Layout(app, !isDetachedSelf);
   await layout.panels.chat.initSession('session-cone');
@@ -556,6 +557,15 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
 
   let selectedScoop: RegisteredScoop | null = null;
 
+  // Wave B5 (blueprint note d8860197): the offscreen document is the
+  // sole VFS constructor under `slicc_opfs_vfs === 'opfs'`. Emit a
+  // startup warning before the panel runs its own `VirtualFS.create`
+  // so the convention violation surfaces in dev/QA — no runtime block,
+  // since the LFS-shadow + mount-table-recovery paths still rely on
+  // the panel-side instance with the flag off.
+  const panelBackend = resolveVfsBackendFromEnv();
+  warnIfPanelVfsConstructionUnderOpfs(panelBackend, log);
+
   // Create a local VFS instance for the file browser and terminal.
   // IndexedDB is shared across all same-origin extension pages, so this
   // reads/writes the same data as the offscreen document's VFS.
@@ -567,7 +577,7 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   // until after `client` is constructed in that case; with the flag
   // off, keep the historical local-VFS path so the LFS shadow store
   // still drives the file browser.
-  const useRpcVfs = resolveVfsBackendFromEnv() === 'opfs';
+  const useRpcVfs = panelBackend === 'opfs';
   if (!useRpcVfs) {
     layout.panels.fileBrowser.setFs(localFs);
     log.info('File browser wired to shared VFS (local IndexedDB)');
