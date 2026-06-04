@@ -2762,6 +2762,36 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       // command already gates on a connected cherry runtime).
       emitCherrySliccEvent: (runtimeId, name, detail) =>
         pageLeaderTray?.sync.emitCherrySliccEvent(runtimeId, name, detail) ?? false,
+      // Worker-side `serve` bridges here so the kernel-worker `serve` command
+      // can mint a preview URL via the page-side leader's controllerToken,
+      // then broadcast preview.open through the page-side LeaderSyncManager.
+      // Extension uses the in-realm `setPreviewMinter` hook instead.
+      mintPreview: async ({ entryPath, servedRoot, bridge: _bridge, noBridge: _noBridge }) => {
+        const sync = pageLeaderTray?.currentLeaderSync;
+        if (!sync) {
+          throw new Error('serve: no active leader tray; cannot mint preview');
+        }
+        const status = getLeaderTrayRuntimeStatus();
+        const session = status.session;
+        if (!session) {
+          throw new Error('serve: leader tray has no active session');
+        }
+        const controllerUrl = new URL(session.controllerUrl);
+        const controllerToken = controllerUrl.pathname.split('/').pop() ?? '';
+        const { mintPreviewViaWorker } = await import(
+          '../shell/supplemental-commands/preview-mint-client.js'
+        );
+        const { url } = await mintPreviewViaWorker({
+          workerBaseUrl: session.workerBaseUrl,
+          trayId: session.trayId,
+          controllerToken,
+          servedRoot,
+          entryPath,
+          allowLive: false,
+        });
+        sync.broadcastPreviewOpen(url);
+        return { url, pushed: sync.getConnectedFollowers().length };
+      },
       // Bridge remote (follower) browser targets to the worker-side
       // playwright-cli. The worker's BrowserAPI has no trayTargetProvider
       // so listAllTargets() falls back to local CDP only; this callback
