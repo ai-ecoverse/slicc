@@ -76,15 +76,15 @@
   line-height: 18px;
   letter-spacing: 0;
 }
-.msg--user .msg__content a,
-.msg--user .msg__content a:visited {
-  color: #c8bbff;
+.msg.msg--user .msg__content a,
+.msg.msg--user .msg__content a:visited {
+  color: #fff;
   text-decoration: underline;
 }
-.msg--user .msg__content a:hover {
+.msg.msg--user .msg__content a:hover {
   color: #fff;
 }
-.msg--user :not(pre) > code {
+.msg.msg--user :not(pre) > code {
   background: rgba(255, 255, 255, 0.18);
   color: #fff;
 }
