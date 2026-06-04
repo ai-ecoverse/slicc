@@ -95,7 +95,7 @@ export interface RunInRealmOptions {
   /** Pyodide indexURL — only consumed when `kind:'py'`. */
   pyodideIndexURL?: string;
   /** Pyodide VFS sync directories — only consumed when `kind:'py'`. */
-  pyodideSyncDirs?: string[];
+  pyodideMountDirs?: string[];
   /**
    * Wave D1: forwarded to `RealmInitMsg.opfsMountDbName`. When set
    * (currently `'slicc-fs'` if `slicc_opfs_vfs === 'opfs'`), the
@@ -224,7 +224,7 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
       filename: opts.filename,
       stdin: opts.stdin,
       pyodideIndexURL: opts.pyodideIndexURL,
-      pyodideSyncDirs: opts.pyodideSyncDirs,
+      pyodideMountDirs: opts.pyodideMountDirs,
       opfsMountDbName: opts.opfsMountDbName,
     };
     realm.controlPort.postMessage(init);

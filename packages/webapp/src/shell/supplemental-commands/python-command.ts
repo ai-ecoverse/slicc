@@ -175,7 +175,7 @@ export function createPython3LikeCommand(
         ctx,
         stdin: realmStdin,
         pyodideIndexURL,
-        pyodideSyncDirs: syncDirs,
+        pyodideMountDirs: syncDirs,
         opfsMountDbName,
       });
     }
@@ -194,7 +194,7 @@ export function createPython3LikeCommand(
       ctx,
       stdin: realmStdin,
       pyodideIndexURL,
-      pyodideSyncDirs: syncDirs,
+      pyodideMountDirs: syncDirs,
       opfsMountDbName,
       procKind: 'py',
     });
@@ -232,7 +232,7 @@ async function runWithEphemeralPm(args: {
   ctx: Parameters<typeof runInRealm>[0]['ctx'];
   stdin?: string;
   pyodideIndexURL: string;
-  pyodideSyncDirs: string[];
+  pyodideMountDirs: string[];
   opfsMountDbName: string | undefined;
 }) {
   if (!EphemeralPm) {
@@ -253,7 +253,7 @@ async function runWithEphemeralPm(args: {
     ctx: args.ctx,
     stdin: args.stdin,
     pyodideIndexURL: args.pyodideIndexURL,
-    pyodideSyncDirs: args.pyodideSyncDirs,
+    pyodideMountDirs: args.pyodideMountDirs,
     opfsMountDbName: args.opfsMountDbName,
     procKind: 'py',
   });

@@ -54,10 +54,10 @@ export interface RealmInitMsg {
   /** `loadPyodide({indexURL})` for `kind:'py'`. */
   pyodideIndexURL?: string;
   /** Initial directories synced VFS↔Pyodide-FS for `kind:'py'`. */
-  pyodideSyncDirs?: string[];
+  pyodideMountDirs?: string[];
   /**
    * Wave D1 (`slicc_opfs_vfs === 'opfs'`): when set, the Python
-   * realm worker resolves each `pyodideSyncDirs` entry against the
+   * realm worker resolves each `pyodideMountDirs` entry against the
    * same-origin OPFS root at `<opfsMountDbName>/<vfsPath>` and mounts
    * it via `pyodide.mountNativeFS` + `syncfs(true)` instead of
    * issuing the legacy `vfs.walkTree` copy. The realm worker has

@@ -98,8 +98,8 @@ export async function runPyRealm(
   // would mirror the entire workspace into Pyodide's FS on every
   // invocation — minutes per `python3 -c "print(1)"` even with the
   // bulk-RPC path. Callers that need wider visibility pass an
-  // explicit `pyodideSyncDirs`.
-  const syncDirs = init.pyodideSyncDirs ?? [init.cwd, '/tmp'];
+  // explicit `pyodideMountDirs`.
+  const syncDirs = init.pyodideMountDirs ?? [init.cwd, '/tmp'];
   const pushWarning = (msg: string): void => {
     stderrChunks.push(`Warning: ${msg}\n`);
   };
