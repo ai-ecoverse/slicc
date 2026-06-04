@@ -114,6 +114,54 @@ export class SessionTrayDurableObject {
       return this.handleCreate(request);
     }
 
+    if (url.pathname === '/internal/preview/mint' && request.method === 'POST') {
+      const body = (await request.json()) as {
+        controllerToken: string;
+        servedRoot: string;
+        entryPath: string;
+        allowLive: boolean;
+        workerBaseUrl: string;
+      };
+      await this.loadTray();
+      if (!this.tray) {
+        return jsonResponse({ error: 'Not found', code: 'TRAY_NOT_INITIALIZED' }, 404);
+      }
+      try {
+        const result = await this.mintPreview(body);
+        return jsonResponse(result, 200);
+      } catch (err) {
+        return jsonResponse({ error: (err as Error).message }, 403);
+      }
+    }
+
+    if (url.pathname === '/internal/preview/stop' && request.method === 'POST') {
+      const body = (await request.json()) as {
+        controllerToken: string;
+        previewToken: string;
+      };
+      await this.loadTray();
+      if (!this.tray) {
+        return jsonResponse({ error: 'Not found', code: 'TRAY_NOT_INITIALIZED' }, 404);
+      }
+      if (!this.matchesToken(body.controllerToken, this.tray.controllerToken)) {
+        return jsonResponse({ error: 'Invalid controller capability' }, 403);
+      }
+      const result = await this.revokePreview(body.previewToken);
+      return jsonResponse(result, 200);
+    }
+
+    if (url.pathname === '/internal/preview/list' && request.method === 'GET') {
+      const controllerToken = request.headers.get('x-controller-token') ?? '';
+      await this.loadTray();
+      if (!this.tray) {
+        return jsonResponse({ error: 'Not found', code: 'TRAY_NOT_INITIALIZED' }, 404);
+      }
+      if (!this.matchesToken(controllerToken, this.tray.controllerToken)) {
+        return jsonResponse({ error: 'Invalid controller capability' }, 403);
+      }
+      return jsonResponse({ previews: await this.listPreviews() }, 200);
+    }
+
     await this.loadTray();
     if (!this.tray) {
       return jsonResponse({ error: 'Tray not initialized', code: 'TRAY_NOT_INITIALIZED' }, 500);

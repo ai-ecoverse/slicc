@@ -21,6 +21,7 @@ import {
   handleOAuthRevoke,
   handleOAuthToken,
 } from './oauth-exchange.js';
+import { handlePreviewList, handlePreviewMint, handlePreviewStop } from './preview-routes.js';
 import { buildRelResponse } from './rel-docs.js';
 import { SessionTrayDurableObject } from './session-tray.js';
 import {
@@ -378,6 +379,24 @@ export async function handleWorkerRequest(
     return buildRelResponse(relMatch[1]);
   }
 
+  // Unified-preview mint/revoke/list HTTP routes.
+  // Bearer = controllerToken; the worker forwards to the DO via its fetch() surface.
+  const previewMintMatch = url.pathname.match(/^\/api\/tray\/([^/]+)\/preview$/);
+  if (previewMintMatch && request.method === 'POST') {
+    const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(previewMintMatch[1]));
+    return handlePreviewMint(request, stub);
+  }
+  const previewStopMatch = url.pathname.match(/^\/api\/tray\/([^/]+)\/preview\/stop$/);
+  if (previewStopMatch && request.method === 'POST') {
+    const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(previewStopMatch[1]));
+    return handlePreviewStop(request, stub);
+  }
+  const previewListMatch = url.pathname.match(/^\/api\/tray\/([^/]+)\/previews$/);
+  if (previewListMatch && request.method === 'GET') {
+    const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(previewListMatch[1]));
+    return handlePreviewList(request, stub);
+  }
+
   const tokenMatch = url.pathname.match(/^\/(join|controller|webhook)\/([^/]+?)(?:\/([^/]+))?$/);
   if (tokenMatch) {
     const route = tokenMatch[1];
@@ -432,6 +451,9 @@ export async function handleWorkerRequest(
         'GET|POST /join/:token',
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',
+        'POST /api/tray/:trayId/preview',
+        'POST /api/tray/:trayId/preview/stop',
+        'GET /api/tray/:trayId/previews',
         'GET /auth/callback',
         'POST /oauth/token',
         'POST /oauth/revoke',
