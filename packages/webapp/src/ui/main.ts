@@ -97,6 +97,7 @@ import type { PageFollowerTrayHandle } from './page-follower-tray.js';
 import { CHERRY_RUNTIME_TAG, startPageFollowerTray } from './page-follower-tray.js';
 import type { PageLeaderTrayHandle, StartPageLeaderTrayOptions } from './page-leader-tray.js';
 import { startPageLeaderTray } from './page-leader-tray.js';
+import { installPreviewVfsResponder } from './preview-vfs-responder.js';
 import {
   applyProviderDefaults,
   getApiKey,
@@ -601,26 +602,14 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   // when `slicc_opfs_vfs === 'opfs'` the swap below (after `client` is up)
   // rewires this responder to the worker's `VfsRpcHost` via the shared
   // kernel transport. With the flag off, `localFs` stays in place and the
-  // path is byte-identical to the pre-Wave-B behavior.
+  // path is byte-identical to pre-Wave-B behavior.
   let previewVfsReader: LocalVfsClient = localFs;
   const previewVfsCh = new BroadcastChannel('preview-vfs');
-  previewVfsCh.onmessage = (event) => {
-    if (event.data?.type !== 'preview-vfs-read') return;
-    const { id, path, asText } = event.data;
-    (async () => {
-      try {
-        const encoding = asText ? 'utf-8' : 'binary';
-        const content = await previewVfsReader.readFile(path, { encoding });
-        previewVfsCh.postMessage({ type: 'preview-vfs-response', id, content });
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (!errMsg.includes('ENOENT')) {
-          log.error('Preview VFS read failed', { path, error: errMsg });
-        }
-        previewVfsCh.postMessage({ type: 'preview-vfs-response', id, error: errMsg });
-      }
-    })();
-  };
+  installPreviewVfsResponder({
+    channel: previewVfsCh,
+    getReader: () => previewVfsReader,
+    logger: log,
+  });
 
   // Wire skill drop install with toast feedback
   const skillDropToast = createSkillDropToast();
@@ -1877,23 +1866,11 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // place and the path is byte-identical to pre-Wave-B behavior.
   let previewVfsReader: LocalVfsClient = localFs;
   const previewVfsCh = new BroadcastChannel('preview-vfs');
-  previewVfsCh.onmessage = (event) => {
-    if (event.data?.type !== 'preview-vfs-read') return;
-    const { id, path, asText } = event.data;
-    (async () => {
-      try {
-        const encoding = asText ? 'utf-8' : 'binary';
-        const content = await previewVfsReader.readFile(path, { encoding });
-        previewVfsCh.postMessage({ type: 'preview-vfs-response', id, content });
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (!errMsg.includes('ENOENT')) {
-          log.error('Preview VFS read failed', { path, error: errMsg });
-        }
-        previewVfsCh.postMessage({ type: 'preview-vfs-response', id, error: errMsg });
-      }
-    })();
-  };
+  installPreviewVfsResponder({
+    channel: previewVfsCh,
+    getReader: () => previewVfsReader,
+    logger: log,
+  });
 
   // Real CDP transport. The worker's `BrowserAPI` proxies CDP commands
   // back here through the kernel transport. We must connect the
