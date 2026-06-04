@@ -2171,11 +2171,19 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // AND the preview-vfs BroadcastChannel responder through the kernel
   // worker's `VfsRpcHost` (deferred from the initial wiring above so we
   // can reach `client.getTransport()`).
+  //
+  // Wave B2b: the scoops-panel frozen-sessions index + frozen-archive
+  // reader also need to read through the worker under the flag, since
+  // the worker owns the canonical OPFS-backed view and the page-side
+  // `localFs` shadow can be stale. `panelReadVfs` is the read-only
+  // handle handed to those consumers below.
+  let panelReadVfs: LocalVfsClient = localFs;
   if (useRpcVfs) {
     const { createRemoteVfsClient } = await import('../kernel/remote-vfs-client.js');
     const remoteVfs = createRemoteVfsClient({ transport: client.getTransport() });
     layout.panels.fileBrowser.setFs(remoteVfs);
     previewVfsReader = remoteVfs;
+    panelReadVfs = remoteVfs;
     log.info('File browser + preview-vfs wired to worker VFS RPC (slicc_opfs_vfs=opfs)');
   }
 
@@ -2211,16 +2219,19 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   };
 
   // Frozen sessions sidebar (standalone only). The panel reads
-  // /sessions/index.json from the page-side VFS that already shares
-  // IndexedDB with the worker. Clicking an entry reads the archive
-  // markdown, parses it back into messages, and displays it in the
-  // chat panel read-only — matching the affordance of clicking a
-  // live scoop (which also opens the chat view rather than a file).
-  layout.panels.scoops.setVfs(localFs);
+  // /sessions/index.json and the per-archive markdown through
+  // `panelReadVfs` — either the page-side `localFs` (shared IDB with
+  // the worker) or, under `slicc_opfs_vfs=opfs`, the worker-backed
+  // `RemoteVfsClient` so reads see the canonical OPFS view. Clicking
+  // an entry reads the archive, parses it back into messages, and
+  // displays it in the chat panel read-only — matching the affordance
+  // of clicking a live scoop (which also opens the chat view rather
+  // than a file).
+  layout.panels.scoops.setVfs(panelReadVfs);
   layout.onFrozenSessionOpen = (entry) => {
     void (async () => {
       try {
-        const raw = await localFs.readFile(frozenSessionPath(entry), { encoding: 'utf-8' });
+        const raw = await panelReadVfs.readFile(frozenSessionPath(entry), { encoding: 'utf-8' });
         const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
         const parsed = parseFrozenArchive(text);
         const title = parsed.title || entry.title;

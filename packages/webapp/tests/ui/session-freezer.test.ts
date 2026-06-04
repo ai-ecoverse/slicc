@@ -682,6 +682,81 @@ describe('listPendingEnrichments', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Wave B2b: the read-only sessions-index API (`readSessionsIndex` +
+// `listPendingEnrichments`) is typed against `LocalVfsClient`, so it works
+// end-to-end with a `RemoteVfsClient` over a real `MessageChannel +
+// VfsRpcHost` — the same RPC path the scoops panel takes under
+// `slicc_opfs_vfs=opfs`. Pins that the widened signatures actually accept
+// the worker-backed reader (not just a page-side `VirtualFS`).
+// ---------------------------------------------------------------------------
+describe('readSessionsIndex over RemoteVfsClient (Wave B2b)', () => {
+  it('reads /sessions/index.json through the RPC host', async () => {
+    const { createRemoteVfsClient } = await import('../../src/kernel/remote-vfs-client.js');
+    const { createBridgeMessageChannelTransport, createPanelMessageChannelTransport } =
+      await import('../../src/kernel/transport-message-channel.js');
+    const { startVfsRpcHost } = await import('../../src/kernel/vfs-rpc-host.js');
+
+    const channel = new MessageChannel();
+    const bridge = createBridgeMessageChannelTransport(channel.port2);
+    const panel = createPanelMessageChannelTransport(channel.port1);
+
+    const indexPayload = JSON.stringify([
+      {
+        filename: '2026-05-13T19-30-00-000Z-fix-build.md',
+        title: 'fix build',
+        frozenAt: '2026-05-13T19:30:00.000Z',
+        messageCount: 12,
+      },
+      {
+        filename: 'pending-xyz.md',
+        title: 'rough',
+        frozenAt: '2026-05-14T08:00:00.000Z',
+        messageCount: 5,
+        pendingEnrichment: true,
+      },
+    ]);
+
+    const readFile = vi.fn(async (path: string) => {
+      if (path === '/sessions/index.json') return indexPayload;
+      const err = new Error(`ENOENT: ${path}`);
+      (err as unknown as { code: string }).code = 'ENOENT';
+      throw err;
+    });
+
+    const host = startVfsRpcHost({
+      transport: bridge,
+      client: {
+        readDir: async () => [],
+        readFile,
+        stat: async () => ({ type: 'file', size: 0, mtime: 0, ctime: 0 }),
+      },
+      logger: { warn: vi.fn(), debug: vi.fn() },
+    });
+    const remoteVfs = createRemoteVfsClient({
+      transport: panel,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+    });
+
+    try {
+      const all = await readSessionsIndex(remoteVfs);
+      expect(all).toHaveLength(2);
+      expect(all[0].filename).toBe('2026-05-13T19-30-00-000Z-fix-build.md');
+
+      const pending = await listPendingEnrichments(remoteVfs);
+      expect(pending).toHaveLength(1);
+      expect(pending[0].filename).toBe('pending-xyz.md');
+
+      expect(readFile).toHaveBeenCalledWith('/sessions/index.json', expect.anything());
+    } finally {
+      remoteVfs.dispose();
+      host.stop();
+      channel.port1.close();
+      channel.port2.close();
+    }
+  });
+});
+
 describe('enrichPendingSession', () => {
   beforeEach(() => {
     mockRunOneOffCompactionCall.mockReset();

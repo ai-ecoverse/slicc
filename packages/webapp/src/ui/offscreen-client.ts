@@ -28,7 +28,7 @@ import type {
 } from '../../../chrome-extension/src/messages.js';
 import type { MessageAttachment } from '../core/attachments.js';
 import { createLogger } from '../core/logger.js';
-import type { VirtualFS } from '../fs/index.js';
+import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import { createPanelChromeRuntimeTransport } from '../kernel/transport-chrome-runtime.js';
 import type { KernelClientFacade, KernelTransport } from '../kernel/types.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
@@ -89,7 +89,7 @@ export class OffscreenClient implements KernelClientFacade {
   private currentMessageId = new Map<string, string>();
   private ready = false;
   private stateRetryTimer: ReturnType<typeof setInterval> | null = null;
-  private localFs: VirtualFS | null = null;
+  private localFs: LocalVfsClient | null = null;
   /**
    * Pending `clear-chat` requests awaiting the bridge's ack. Keyed by
    * `requestId`; resolved when a `clear-chat-ack` envelope arrives.
@@ -170,8 +170,14 @@ export class OffscreenClient implements KernelClientFacade {
     this.setupMessageListener();
   }
 
-  /** Set a local VFS instance (same IndexedDB as offscreen) for memory panel / file browser. */
-  setLocalFS(fs: VirtualFS): void {
+  /**
+   * Set a local VFS handle for the memory panel / file browser. Typed
+   * as `LocalVfsClient` (read-only surface) so accidental panel-side
+   * writes fail at compile time. With `slicc_opfs_vfs=opfs` (Wave B2),
+   * callers pass a worker-RPC-backed `RemoteVfsClient`; with the flag
+   * off, a page-side `VirtualFS` satisfies the same structural type.
+   */
+  setLocalFS(fs: LocalVfsClient): void {
     this.localFs = fs;
   }
 
@@ -283,15 +289,15 @@ export class OffscreenClient implements KernelClientFacade {
 
   /** Return a lightweight context facade for the memory panel.
    *  The memory panel only calls context.getFS() to read CLAUDE.md files. */
-  getScoopContext(_jid: string): { getFS: () => VirtualFS | null } | undefined {
+  getScoopContext(_jid: string): { getFS: () => LocalVfsClient | null } | undefined {
     if (!this.localFs) return undefined;
     // Return a facade that gives the memory panel access to the shared VFS.
     // The memory panel reads scoop memory at /scoops/{folder}/CLAUDE.md or /workspace/CLAUDE.md.
     return { getFS: () => this.localFs };
   }
 
-  /** Return the shared VFS. */
-  getSharedFS(): VirtualFS | null {
+  /** Return the shared VFS handle (read-only surface). */
+  getSharedFS(): LocalVfsClient | null {
     return this.localFs;
   }
 

@@ -29,6 +29,7 @@ import {
 } from '../core/context-compaction.js';
 import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/index.js';
+import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import { applyConeMemoryBudget } from '../scoops/cone-memory-budget.js';
 import { formatChatForClipboard } from './chat-panel.js';
 import type { SessionStore } from './session-store.js';
@@ -443,8 +444,13 @@ async function updateSessionsIndex(
   await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
 }
 
-/** Read the sessions index (or empty array if missing/malformed). */
-export async function readSessionsIndex(vfs: VirtualFS): Promise<FrozenSessionIndexEntry[]> {
+/**
+ * Read the sessions index (or empty array if missing/malformed). Typed
+ * as `LocalVfsClient` (read-only surface) so panel-side callers can pass
+ * either a page-side `VirtualFS` or a worker-RPC-backed `RemoteVfsClient`
+ * (Wave B2, `slicc_opfs_vfs=opfs`).
+ */
+export async function readSessionsIndex(vfs: LocalVfsClient): Promise<FrozenSessionIndexEntry[]> {
   try {
     const raw = await vfs.readFile(SESSIONS_INDEX_PATH, { encoding: 'utf-8' });
     const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
@@ -463,9 +469,12 @@ export function frozenSessionPath(entry: FrozenSessionIndexEntry): string {
 /**
  * Subset of the sessions index that still needs the LLM-driven enrichment
  * pass (memory extraction + title rewrite). Returns `[]` when the index
- * is missing, empty, or malformed — never throws.
+ * is missing, empty, or malformed — never throws. Read-only, so typed
+ * against `LocalVfsClient` (Wave B2b widening).
  */
-export async function listPendingEnrichments(vfs: VirtualFS): Promise<FrozenSessionIndexEntry[]> {
+export async function listPendingEnrichments(
+  vfs: LocalVfsClient
+): Promise<FrozenSessionIndexEntry[]> {
   const all = await readSessionsIndex(vfs);
   return all.filter((e) => e.pendingEnrichment === true);
 }
