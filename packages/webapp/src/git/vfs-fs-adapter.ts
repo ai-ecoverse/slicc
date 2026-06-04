@@ -1,14 +1,20 @@
 /**
  * Adapter exposing a {@link VirtualFS} as a `PromiseFsClient` for isomorphic-git.
  *
- * Why this exists: `VirtualFS.getLightningFS()` returns the raw LightningFS
- * instance, which only sees IndexedDB. Mounted directories (File System Access
- * API) are transparently routed through `VirtualFS` — so isomorphic-git needs
- * to go through `VirtualFS` to see `.git/HEAD` on mounted paths.
+ * Why this exists: the underlying VFS backend (LightningFS or ZenFS-on-OPFS)
+ * only sees its own storage. Mounted directories (File System Access API,
+ * S3, DA) are transparently routed through `VirtualFS` — so isomorphic-git
+ * needs to go through `VirtualFS` to see `.git/HEAD` on mounted paths.
  *
  * For non-mounted paths we still read mode/size/mtime directly from the
- * underlying LightningFS to keep behavior byte-identical to the pre-adapter
- * code path (notably `statusMatrix`'s filemode comparison).
+ * underlying backend's `fs.promises` surface to keep behavior byte-identical
+ * to the pre-adapter code path (notably `statusMatrix`'s filemode comparison).
+ *
+ * Wave A5: the raw backend is obtained via {@link VirtualFS.getLightningFS}
+ * (deprecated, kept stable through Wave F). On the OPFS backend this returns
+ * `@zenfs/core`'s `fs.promises`, which exposes the same Node-fs-shaped
+ * surface (readFile/writeFile/stat/lstat/readlink/symlink/readdir/mkdir/
+ * rmdir/unlink) that isomorphic-git expects — the cast is structural.
  */
 
 import type FS from '@isomorphic-git/lightning-fs';

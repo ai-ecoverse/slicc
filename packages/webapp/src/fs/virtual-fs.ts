@@ -1,5 +1,11 @@
 /**
- * VirtualFS — POSIX-like virtual filesystem backed by LightningFS.
+ * VirtualFS — POSIX-like virtual filesystem.
+ *
+ * Backed by LightningFS (default, `backend: 'lfs'`) or by `@zenfs/core` over
+ * `@zenfs/dom` `WebAccess` rooted at an OPFS subdirectory
+ * (`backend: 'opfs'`). The OPFS path is gated behind the `slicc_opfs_vfs`
+ * boot flag (defaults to LFS) — production behavior with the flag off is
+ * byte-identical to before. See spec note d8860197-… for context.
  *
  * This is the single unified filesystem used throughout the application:
  * - Shell operations (just-bash via VfsAdapter)
@@ -25,6 +31,7 @@ import type {
   DirEntry,
   EntryType,
   FileContent,
+  FsErrorCode,
   MkdirOptions,
   ReadFileOptions,
   RmOptions,
@@ -35,17 +42,56 @@ import { FsError } from './types.js';
 /** Maximum number of symlink hops before throwing ELOOP. */
 const MAX_SYMLINK_DEPTH = 10;
 
+/** Backend identifier for {@link VirtualFS}. */
+export type VfsBackend = 'lfs' | 'opfs';
+
+/**
+ * Page/worker-side boot flag (Wave A2). When set to `'opfs'`, calls to
+ * `VirtualFS.create` without an explicit `backend` option pick the ZenFS
+ * `WebAccess` backend over OPFS instead of LightningFS. Read from
+ * `globalThis.localStorage` (the worker's localStorage shim is seeded
+ * from the page snapshot in `kernel-worker.ts`, so this resolves
+ * consistently on both sides).
+ */
+export function resolveVfsBackendFromEnv(): VfsBackend {
+  try {
+    const v = (globalThis as { localStorage?: Storage }).localStorage?.getItem('slicc_opfs_vfs');
+    if (v === 'opfs') return 'opfs';
+  } catch {
+    /* localStorage may be unavailable in some test contexts */
+  }
+  return 'lfs';
+}
+
 export interface VirtualFsOptions {
-  /** Database name for LightningFS IndexedDB storage. */
+  /** Database name for LightningFS IndexedDB storage (LFS backend). */
   dbName?: string;
   /** Wipe existing data on init. */
   wipe?: boolean;
+  /**
+   * Backend selection (Wave A2). Default resolution order:
+   *   1. explicit option,
+   *   2. `localStorage.slicc_opfs_vfs === 'opfs'`,
+   *   3. `'lfs'`.
+   */
+  backend?: VfsBackend;
 }
 
 export class VirtualFS {
+  /**
+   * Node-fs-promises-shaped client. For `backend === 'lfs'` this is the
+   * real `FS.PromisifiedFS`; for `backend === 'opfs'` it's the
+   * `@zenfs/core` `fs.promises` instance cast to the same shape (the
+   * methods used in this file — readFile/writeFile/readdir/mkdir/rmdir/
+   * unlink/symlink/readlink/rename/stat/lstat/realpath — are common to
+   * both). Backend-specific code (CacheFS sync access, IDB poking on
+   * dispose) is guarded by {@link backend}.
+   */
   private lfs: FS.PromisifiedFS;
-  private rawFs: FS;
+  private rawFs: FS | null;
   private _ready: Promise<void>;
+  /** Backend selection — see {@link VfsBackend}. */
+  public readonly backend: VfsBackend;
   /**
    * Map from absolute mount path → MountBackend instance. The backend
    * abstracts over local FS Access handles (`LocalMountBackend`), S3
@@ -70,16 +116,33 @@ export class VirtualFS {
   /** Index of files in mounted directories for fast discovery. */
   private mountIndex = new MountIndex();
 
-  private constructor(dbName: string, wipe: boolean) {
+  private constructor(
+    dbName: string,
+    wipe?: boolean,
+    backend?: VfsBackend,
+    opfsHandle?: FileSystemDirectoryHandle
+  ) {
     this.dbName = dbName;
-    const fs = new FS(dbName, { wipe });
-    this.rawFs = fs;
-    this.lfs = fs.promises;
-    // LightningFS initializes asynchronously; wait for first stat to complete
-    this._ready = this.lfs
-      .stat('/')
-      .then(() => {})
-      .catch(() => {});
+    // Default to LFS for any non-'opfs' value (including `undefined`) so
+    // callers that bypass `VirtualFS.create` and reach the constructor
+    // directly (a handful of legacy tests) keep their LFS behavior.
+    this.backend = backend === 'opfs' ? 'opfs' : 'lfs';
+    if (this.backend === 'lfs') {
+      const fs = new FS(dbName, { wipe: wipe === true });
+      this.rawFs = fs;
+      this.lfs = fs.promises;
+      // LightningFS initializes asynchronously; wait for first stat to complete
+      this._ready = this.lfs
+        .stat('/')
+        .then(() => {})
+        .catch(() => {});
+    } else {
+      this.rawFs = null;
+      // `lfs` is assigned after async ZenFS configure resolves in `create()`.
+      // Treated as nullable until then via the `_ready` gate.
+      this.lfs = null as unknown as FS.PromisifiedFS;
+      this._ready = VirtualFS.initOpfsBackend(this, opfsHandle, wipe === true);
+    }
 
     // Set up BroadcastChannel for mount point synchronization. Messages
     // carry a `BackendDescriptor` (not the live backend, which isn't
@@ -119,11 +182,78 @@ export class VirtualFS {
     }
   }
 
+  /**
+   * Configure `@zenfs/core` with the `@zenfs/dom` `WebAccess` backend
+   * rooted at an OPFS subdirectory, with `metadata: '/.metadata.json'`
+   * so filemode bits and symlinks survive a page reload (without the
+   * sidecar the metadata lives only in IndexFS in-memory and is lost
+   * on every reload — see Spike 1 / Wave A3).
+   *
+   * ZenFS' top-level `configure({ mounts: { '/': … } })` installs a
+   * GLOBAL mount, so only one OPFS-backed VirtualFS instance can be
+   * active at a time. With the flag off (LFS path) this code never
+   * runs. With the flag on, the orchestrator's primary `slicc-fs`
+   * instance owns the OPFS root; smaller per-feature instances
+   * (`mcp-store`, `oauth-token-command`, etc.) still come up but
+   * share the same OPFS root via the unique `dbName` subdirectory
+   * convention — out of scope for Wave A; tracked for Wave B.
+   */
+  private static async initOpfsBackend(
+    vfs: VirtualFS,
+    providedHandle: FileSystemDirectoryHandle | undefined,
+    wipe: boolean
+  ): Promise<void> {
+    const handle = providedHandle ?? (await VirtualFS.acquireOpfsHandle(vfs.dbName, wipe));
+    const [{ configure, fs: zenfsImport }, { WebAccess }] = await Promise.all([
+      import('@zenfs/core'),
+      import('@zenfs/dom'),
+    ]);
+    await configure({
+      mounts: {
+        '/': {
+          backend: WebAccess,
+          handle,
+          metadata: '/.metadata.json',
+        },
+      },
+    });
+    vfs.lfs = zenfsImport.promises as unknown as FS.PromisifiedFS;
+  }
+
+  /**
+   * Resolve an OPFS subdirectory handle for the given `dbName`. If
+   * `wipe` is true, removes the subdirectory first (best-effort) before
+   * re-creating it.
+   */
+  private static async acquireOpfsHandle(
+    dbName: string,
+    wipe: boolean
+  ): Promise<FileSystemDirectoryHandle> {
+    const storage = (navigator as unknown as { storage?: StorageManager }).storage;
+    if (!storage?.getDirectory) {
+      throw new FsError('EINVAL', 'OPFS is not available in this environment');
+    }
+    const root = await storage.getDirectory();
+    if (wipe) {
+      try {
+        await (
+          root as unknown as {
+            removeEntry: (n: string, o?: { recursive: boolean }) => Promise<void>;
+          }
+        ).removeEntry(dbName, { recursive: true });
+      } catch {
+        /* missing entry is fine */
+      }
+    }
+    return root.getDirectoryHandle(dbName, { create: true });
+  }
+
   /** Create a VirtualFS instance. */
   static async create(options?: VirtualFsOptions): Promise<VirtualFS> {
     const dbName = options?.dbName ?? 'browser-fs';
-    const wipe = options?.wipe ?? false;
-    const vfs = new VirtualFS(dbName, wipe);
+    const wipe = options?.wipe === true;
+    const backend: VfsBackend = options?.backend ?? resolveVfsBackendFromEnv();
+    const vfs = new VirtualFS(dbName, wipe, backend);
     await vfs._ready;
     if (wipe) {
       await clearMountEntries().catch(() => {});
@@ -131,7 +261,17 @@ export class VirtualFS {
     return vfs;
   }
 
-  /** Get the underlying LightningFS promises API (for isomorphic-git). */
+  /**
+   * Get the underlying LightningFS promises API.
+   *
+   * @deprecated Wave A5: prefer routing isomorphic-git through this method
+   * via the cast in {@link createIsomorphicGitFs} for now. Will be removed
+   * in Wave F once the OPFS backend is the only path. For the OPFS backend
+   * the returned object is `@zenfs/core`'s `fs.promises`, which exposes the
+   * same Node-fs-shaped surface isomorphic-git uses (readFile/writeFile/
+   * stat/lstat/readlink/symlink/etc.) — cast through `FS.PromisifiedFS` is
+   * structural.
+   */
   getLightningFS(): FS.PromisifiedFS {
     return this.lfs;
   }
@@ -151,6 +291,10 @@ export class VirtualFS {
    * No-op if the backend doesn't expose flush.
    */
   async flush(): Promise<void> {
+    // OPFS: WebAccess writes go through FileSystemSyncAccessHandle which
+    // is durable as soon as the call returns — no superblock debounce
+    // window to flush.
+    if (this.backend !== 'lfs') return;
     const pfs = this.lfs as unknown as {
       _backend?: { flush?: () => Promise<void>; saveSuperblock?: { cancel?: () => void } };
     };
@@ -192,6 +336,12 @@ export class VirtualFS {
     this.watcher?.dispose();
     this.watcher = null;
     this.mountIndex.dispose();
+
+    // OPFS: nothing to tear down past the watchers/channels. ZenFS' global
+    // configure() registry is not unwound here — same instance assumption
+    // documented on initOpfsBackend(). Multiple `VirtualFS.create` calls
+    // on the OPFS path within a single process share the same global mount.
+    if (this.backend !== 'lfs') return;
 
     const pfs = this.lfs as any;
 
@@ -261,6 +411,9 @@ export class VirtualFS {
    * suite validates the structure so upgrades that break it are caught.
    */
   private getCacheFS(): any | null {
+    // OPFS backend has no LightningFS CacheFS — sync fast paths fall back
+    // to async, which is the safe behavior anyway.
+    if (this.backend !== 'lfs') return null;
     try {
       const cache = (this.lfs as any)._backend?._cache;
       if (cache?.activated && cache._root instanceof Map) return cache;
@@ -1338,6 +1491,18 @@ export class VirtualFS {
     const mount = this.findMount(normalized);
     if (mount) return normalized; // Mount paths are already real
 
+    // Wave A7: on the OPFS backend delegate to ZenFS' native realpath
+    // (metadata-sidecar backed). The LFS path keeps its hand-rolled
+    // resolver until Wave F.
+    if (this.backend === 'opfs') {
+      try {
+        const rp = (this.lfs as unknown as { realpath?: (p: string) => Promise<string> }).realpath;
+        if (typeof rp === 'function') return normalizePath(await rp.call(this.lfs, normalized));
+      } catch (err) {
+        throw this.convertError(err, normalized);
+      }
+    }
+
     const parts = normalized.split('/').filter(Boolean);
     let resolved = '/';
     let hops = _hops;
@@ -1383,10 +1548,39 @@ export class VirtualFS {
   }
 
   /**
-   * Convert LightningFS errors to FsError.
+   * Convert LightningFS / ZenFS errors to {@link FsError}.
+   *
+   * Wave A4: ZenFS throws `ErrnoError` instances with a `.code` POSIX
+   * string field (and `.errno: number`); LightningFS embeds the code
+   * in the message text. Try the structured `.code` form first so we
+   * carry through codes ZenFS reports verbatim, then fall back to
+   * substring matching for LightningFS.
    */
   private convertError(err: unknown, path: string): FsError {
     if (err instanceof FsError) return err;
+    // ZenFS ErrnoError carries `.code` directly (POSIX string).
+    const structured = (err as { code?: unknown })?.code;
+    if (typeof structured === 'string') {
+      const code = structured as FsErrorCode;
+      const known: FsErrorCode[] = [
+        'ENOENT',
+        'EEXIST',
+        'ENOTDIR',
+        'EISDIR',
+        'ENOTEMPTY',
+        'EINVAL',
+        'EACCES',
+        'ELOOP',
+        'EBUSY',
+        'EFBIG',
+        'EBADF',
+        'EIO',
+      ];
+      if ((known as string[]).includes(code)) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return new FsError(code, msg || code, path);
+      }
+    }
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes('ENOENT')) {
       return new FsError('ENOENT', 'no such file or directory', path);

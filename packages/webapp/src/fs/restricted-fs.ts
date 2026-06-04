@@ -136,7 +136,14 @@ export class RestrictedFS {
     return this.vfs;
   }
 
-  /** Get the underlying LightningFS (needed by isomorphic-git). */
+  /**
+   * Get the underlying raw `fs.promises`-shaped backend (LightningFS or
+   * `@zenfs/core` on OPFS), passthrough to {@link VirtualFS.getLightningFS}.
+   *
+   * @deprecated Wave A5: forwarded to the underlying VFS. Will be removed
+   * in Wave F once the OPFS backend is the only path. Use this only for
+   * isomorphic-git integration; new code should go through {@link VirtualFS}.
+   */
   getLightningFS(): FS.PromisifiedFS {
     return this.vfs.getLightningFS();
   }
