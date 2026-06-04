@@ -1,6 +1,6 @@
 import type { ChildProcess } from 'child_process';
 import { existsSync, readdirSync } from 'fs';
-import { mkdir, readFile, unlink, writeFile } from 'fs/promises';
+import { cp, mkdir, readFile, unlink, writeFile } from 'fs/promises';
 import { request as httpRequest } from 'http';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
@@ -112,11 +112,45 @@ export function resolveQaProfilesRoot(projectRoot: string): string {
 }
 
 export function resolveDefaultChromeUserDataDir(
-  tmpDir = process.env['TMPDIR'] ?? '/tmp',
+  profilesDir = join(homedir(), '.slicc', 'chrome-profiles'),
   servePort?: number
 ): string {
   const suffix = servePort && servePort !== 5710 ? `-${servePort}` : '';
-  return join(tmpDir, `${DEFAULT_USER_DATA_DIR_NAME}${suffix}`);
+  return join(profilesDir, `${DEFAULT_USER_DATA_DIR_NAME}${suffix}`);
+}
+
+/**
+ * Builds the ordered list of legacy candidate paths to check during migration.
+ * Checks $TMPDIR first (the macOS per-user temp dir used by terminal sessions),
+ * then /tmp (the fallback used by GUI apps that don't inherit TMPDIR).
+ */
+export function legacyChromeCandidates(
+  profileDirName: string,
+  env: NodeJS.ProcessEnv = process.env
+): string[] {
+  const bases = new Set<string>();
+  if (env['TMPDIR']) bases.add(env['TMPDIR']);
+  bases.add('/tmp');
+  return [...bases].map((b) => join(b, profileDirName));
+}
+
+/**
+ * One-time migration: if `newDir` doesn't exist yet, copies the first matching
+ * candidate (legacy profile from $TMPDIR or /tmp) to the stable new location.
+ * Non-destructive — the old profile is left in place.
+ */
+export async function migrateLegacyDefaultChromeProfile(
+  newDir: string,
+  candidates: string[]
+): Promise<void> {
+  if (existsSync(newDir)) return;
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      await cp(candidate, newDir, { recursive: true });
+      console.log(`Migrated Chrome profile: ${candidate} → ${newDir}`);
+      return;
+    }
+  }
 }
 
 export function resolveChromeLaunchProfile(options: {

@@ -236,16 +236,53 @@ struct ChromeLauncher: Sendable {
     }
 
     func resolveUserDataDir(tmpDir: String? = nil, servePort: Int? = nil) -> String {
-        let baseTmpDir = normalizedPath(tmpDir)
-            ?? normalizedPath(environmentProvider()["TMPDIR"])
-            ?? "/tmp"
+        let baseDir = normalizedPath(tmpDir)
+            ?? URL(fileURLWithPath: homeDirectoryProvider(), isDirectory: true)
+                .appendingPathComponent(".slicc/chrome-profiles", isDirectory: true)
+                .path
         let suffix = (servePort != nil && servePort != defaultServePort) ? "-\(servePort!)" : ""
-        return URL(fileURLWithPath: baseTmpDir, isDirectory: true)
+        return URL(fileURLWithPath: baseDir, isDirectory: true)
             .appendingPathComponent("\(defaultChromeUserDataDirName)\(suffix)", isDirectory: true)
             .path
     }
 
+    /// One-time migration: if `newDir` doesn't exist yet, copies the first matching
+    /// candidate (legacy profile from $TMPDIR or /tmp) to the stable new location.
+    /// Non-destructive — the old profile is left in place.
+    func migrateLegacyDefaultChromeProfile(newDir: String, candidates: [String]) throws {
+        guard !FileManager.default.fileExists(atPath: newDir) else { return }
+        for candidate in candidates {
+            if FileManager.default.fileExists(atPath: candidate) {
+                let destParent = URL(fileURLWithPath: newDir).deletingLastPathComponent()
+                try FileManager.default.createDirectory(at: destParent, withIntermediateDirectories: true)
+                try FileManager.default.copyItem(atPath: candidate, toPath: newDir)
+                logger.info("Migrated Chrome profile: \(candidate) → \(newDir)")
+                return
+            }
+        }
+    }
+
+    /// Builds the ordered list of legacy candidate paths for a given profile dir name.
+    /// Checks $TMPDIR first, then /tmp, deduplicating when they are the same.
+    func legacyChromeCandidates(profileDirName: String) -> [String] {
+        var bases: [String] = []
+        let env = environmentProvider()
+        if let tmpDir = env["TMPDIR"] {
+            bases.append(tmpDir)
+        }
+        if !bases.contains("/tmp") {
+            bases.append("/tmp")
+        }
+        return bases.map { URL(fileURLWithPath: $0).appendingPathComponent(profileDirName).path }
+    }
+
     func launch(config: ChromeLaunchConfig) async throws -> ChromeProcess {
+        let profileDirName = URL(fileURLWithPath: config.userDataDir).lastPathComponent
+        try migrateLegacyDefaultChromeProfile(
+            newDir: config.userDataDir,
+            candidates: legacyChromeCandidates(profileDirName: profileDirName)
+        )
+
         let executable = config.executablePath ?? findChromeExecutable(
             projectRoot: config.projectRoot,
             environment: config.environment,

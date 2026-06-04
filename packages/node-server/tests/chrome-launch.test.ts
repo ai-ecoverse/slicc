@@ -1,6 +1,6 @@
 import { type existsSync, existsSync as fsExistsSync, type readdirSync } from 'fs';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
-import { tmpdir } from 'os';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
+import { homedir, tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -11,6 +11,7 @@ import {
   ensureQaProfileScaffold,
   findChromeExecutable,
   getDefaultCdpLaunchTimeoutMs,
+  migrateLegacyDefaultChromeProfile,
   parseCdpPortFromStderr,
   planChromeSpawn,
   probeCdpAlive,
@@ -28,7 +29,17 @@ afterEach(async () => {
 });
 
 describe('chrome-launch', () => {
-  it('uses the legacy tmp profile when no QA profile is requested', () => {
+  it('defaults to ~/.slicc/chrome-profiles when no tmpDir override is given', () => {
+    const profile = resolveChromeLaunchProfile({
+      projectRoot: '/repo',
+    });
+
+    expect(profile.userDataDir).toBe(
+      join(homedir(), '.slicc', 'chrome-profiles', 'browser-coding-agent-chrome')
+    );
+  });
+
+  it('uses an explicit tmpDir override when provided', () => {
     const profile = resolveChromeLaunchProfile({
       projectRoot: '/repo',
       tmpDir: '/tmp/test-root',
@@ -947,5 +958,68 @@ describe('probeCdpAlive', () => {
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
+  });
+});
+
+describe('migrateLegacyDefaultChromeProfile', () => {
+  it('copies a legacy profile to the new stable location', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'slicc-migrate-'));
+    tempDirs.push(root);
+
+    const legacyProfile = join(root, 'legacy', 'browser-coding-agent-chrome');
+    await mkdir(legacyProfile, { recursive: true });
+    await writeFile(join(legacyProfile, 'marker.txt'), 'legacy-data');
+
+    const newProfile = join(root, 'new', 'browser-coding-agent-chrome');
+    await migrateLegacyDefaultChromeProfile(newProfile, [legacyProfile]);
+
+    expect(await readFile(join(newProfile, 'marker.txt'), 'utf8')).toBe('legacy-data');
+  });
+
+  it('skips migration when the new profile already exists', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'slicc-migrate-'));
+    tempDirs.push(root);
+
+    const newProfile = join(root, 'new', 'browser-coding-agent-chrome');
+    await mkdir(newProfile, { recursive: true });
+    await writeFile(join(newProfile, 'marker.txt'), 'existing-data');
+
+    const legacyProfile = join(root, 'legacy', 'browser-coding-agent-chrome');
+    await mkdir(legacyProfile, { recursive: true });
+    await writeFile(join(legacyProfile, 'marker.txt'), 'legacy-data');
+
+    await migrateLegacyDefaultChromeProfile(newProfile, [legacyProfile]);
+
+    expect(await readFile(join(newProfile, 'marker.txt'), 'utf8')).toBe('existing-data');
+  });
+
+  it('is a no-op when no legacy profile exists', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'slicc-migrate-'));
+    tempDirs.push(root);
+
+    const newProfile = join(root, 'new', 'browser-coding-agent-chrome');
+    const missingLegacy = join(root, 'legacy', 'browser-coding-agent-chrome');
+
+    await expect(
+      migrateLegacyDefaultChromeProfile(newProfile, [missingLegacy])
+    ).resolves.not.toThrow();
+    expect(fsExistsSync(newProfile)).toBe(false);
+  });
+
+  it('tries candidates in order and stops at the first match', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'slicc-migrate-'));
+    tempDirs.push(root);
+
+    const first = join(root, 'first', 'browser-coding-agent-chrome');
+    const second = join(root, 'second', 'browser-coding-agent-chrome');
+    await mkdir(first, { recursive: true });
+    await writeFile(join(first, 'marker.txt'), 'first-data');
+    await mkdir(second, { recursive: true });
+    await writeFile(join(second, 'marker.txt'), 'second-data');
+
+    const newProfile = join(root, 'new', 'browser-coding-agent-chrome');
+    await migrateLegacyDefaultChromeProfile(newProfile, [first, second]);
+
+    expect(await readFile(join(newProfile, 'marker.txt'), 'utf8')).toBe('first-data');
   });
 });
