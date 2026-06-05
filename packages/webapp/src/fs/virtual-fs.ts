@@ -1,11 +1,12 @@
 /**
  * VirtualFS — POSIX-like virtual filesystem.
  *
- * Backed by `@zenfs/core` over `@zenfs/dom` `WebAccess` rooted at an OPFS
- * subdirectory (`backend: 'opfs'`, the production default). The legacy
- * LightningFS backend (`backend: 'lfs'`) remains importable so test
- * environments without OPFS support keep working until Wave F2 deletes
- * it entirely; production browsers always select OPFS.
+ * Backed by `@zenfs/core`: `WebAccess` (from `@zenfs/dom`) rooted at an
+ * OPFS subdirectory (`backend: 'opfs'`, the production default) in
+ * browsers, or `InMemory` (`backend: 'memory'`) in Node/Vitest where
+ * OPFS is unavailable. Both backends present the same Node-fs-promises
+ * surface, so the rest of this file is backend-agnostic past the
+ * constructor.
  *
  * This is the single unified filesystem used throughout the application:
  * - Shell operations (just-bash via VfsAdapter)
@@ -14,7 +15,6 @@
  * - Agent tools
  */
 
-import FS from '@isomorphic-git/lightning-fs';
 import type { FsWatcher } from './fs-watcher.js';
 import type { MountBackend, RefreshReport } from './mount/backend.js';
 import { LocalMountBackend } from './mount/backend-local.js';
@@ -26,7 +26,7 @@ import {
   removeMountEntry,
   saveMountEntry,
 } from './mount-table-store.js';
-import { joinPath, normalizePath, splitPath } from './path-utils.js';
+import { normalizePath, splitPath } from './path-utils.js';
 import type {
   DirEntry,
   EntryType,
@@ -39,19 +39,14 @@ import type {
 } from './types.js';
 import { FsError } from './types.js';
 
-/** Maximum number of symlink hops before throwing ELOOP. */
-const MAX_SYMLINK_DEPTH = 10;
-
 /** Backend identifier for {@link VirtualFS}. */
-export type VfsBackend = 'lfs' | 'opfs';
+export type VfsBackend = 'memory' | 'opfs';
 
 /**
- * Resolve the default VFS backend (Wave F1). The `slicc_opfs_vfs`
- * boot flag was removed — production always uses ZenFS `WebAccess`
- * over OPFS. The capability check exists only so Node-based test
- * environments without an OPFS polyfill transparently fall back to
- * the still-importable LFS backend; browsers always select OPFS.
- * Wave F2 deletes the LFS fallback path entirely.
+ * Resolve the default VFS backend (Wave F2). Production browsers always
+ * select OPFS via `navigator.storage.getDirectory`; Node/Vitest
+ * environments without OPFS fall back to ZenFS' `InMemory` backend so
+ * tests stay self-contained (no IDB shim, no FS-Access mock).
  */
 export function resolveVfsBackendFromEnv(): VfsBackend {
   try {
@@ -61,35 +56,97 @@ export function resolveVfsBackendFromEnv(): VfsBackend {
   } catch {
     /* navigator may be unavailable in some test contexts */
   }
-  return 'lfs';
+  return 'memory';
 }
 
 export interface VirtualFsOptions {
-  /** Database name for LightningFS IndexedDB storage (LFS backend). */
+  /**
+   * Identifier for this VFS instance. On `'opfs'` it names the OPFS
+   * subdirectory the backend roots at; on `'memory'` it's a label
+   * carried into the InMemory store (informational only — InMemory
+   * does not persist across reloads).
+   */
   dbName?: string;
   /** Wipe existing data on init. */
   wipe?: boolean;
   /**
    * Backend selection. Defaults to `'opfs'` in browsers; environments
-   * without OPFS (Node tests) fall through to `'lfs'` until Wave F2
-   * deletes the LFS path. Explicit `backend` overrides resolution.
+   * without OPFS (Node tests) fall through to `'memory'`. Explicit
+   * `backend` overrides resolution.
    */
   backend?: VfsBackend;
 }
 
+/**
+ * Structural subset of `node:fs/promises` consumed by VirtualFS. Kept
+ * loose intentionally — `@isomorphic-git/lightning-fs`'s legacy stats
+ * shape (`isDirectory()` / `isSymbolicLink()` / `mode` / `mtimeMs`) and
+ * ZenFS' Node-compatible `Stats` both satisfy it without further
+ * adaptation. `readFile` returns string or Uint8Array depending on the
+ * options.encoding; callers branch on the type they expect.
+ */
+interface FsPromisesLike {
+  readFile(path: string, options?: unknown): Promise<unknown>;
+  writeFile(path: string, data: unknown, options?: unknown): Promise<void>;
+  readdir(path: string): Promise<string[]>;
+  mkdir(path: string, options?: unknown): Promise<unknown>;
+  rmdir(path: string): Promise<void>;
+  unlink(path: string): Promise<void>;
+  rename(oldPath: string, newPath: string): Promise<void>;
+  stat(path: string): Promise<FsStatsLike>;
+  lstat(path: string): Promise<FsStatsLike>;
+  symlink(target: string, path: string): Promise<void>;
+  readlink(path: string): Promise<string>;
+  realpath?(path: string): Promise<string>;
+}
+
+interface FsStatsLike {
+  size: number;
+  mode: number;
+  mtimeMs: number;
+  ctimeMs: number;
+  isFile(): boolean;
+  isDirectory(): boolean;
+  isSymbolicLink(): boolean;
+}
+
+/** Structural subset of `node:fs` sync methods we lean on for the fast path. */
+interface FsSyncLike {
+  readdirSync?(path: string): string[];
+  statSync?(path: string): FsStatsLike;
+  lstatSync?(path: string): FsStatsLike;
+  readlinkSync?(path: string): string;
+}
+
 export class VirtualFS {
   /**
-   * Node-fs-promises-shaped client. For `backend === 'lfs'` this is the
-   * real `FS.PromisifiedFS`; for `backend === 'opfs'` it's the
-   * `@zenfs/core` `fs.promises` instance cast to the same shape (the
-   * methods used in this file — readFile/writeFile/readdir/mkdir/rmdir/
-   * unlink/symlink/readlink/rename/stat/lstat/realpath — are common to
-   * both). Backend-specific code (CacheFS sync access, IDB poking on
-   * dispose) is guarded by {@link backend}.
+   * Node-fs-promises-shaped client used by every public VirtualFS
+   * method. Created in the constructor as a *deferred + prefixed*
+   * proxy: each call awaits {@link _ready} (so callers that bypass
+   * `VirtualFS.create` and use the constructor synchronously still
+   * work), then forwards to {@link rawLfs} with paths translated
+   * through {@link prefix}. Empty `mountRoot` (OPFS) skips
+   * translation; non-empty `mountRoot` (memory) prepends it.
    */
-  private lfs: FS.PromisifiedFS;
-  private rawFs: FS | null;
+  private lfs: FsPromisesLike;
+  /** Sync counterpart to {@link lfs} — used by the sync fast paths. */
+  private lfsSync: FsSyncLike;
+  /**
+   * Raw ZenFS `fs.promises` (assigned by `init*Backend`). The {@link
+   * lfs} proxy looks this up lazily on every call so callers don't
+   * need to re-acquire the reference after init.
+   */
+  private rawLfs: FsPromisesLike | null = null;
+  /** Raw ZenFS sync surface (assigned by `init*Backend`). */
+  private rawLfsSync: FsSyncLike | null = null;
   private _ready: Promise<void>;
+  /**
+   * Flips to `true` once {@link _ready} resolves so the {@link lfs}
+   * proxy can skip `await this._ready` on the hot path. `await` on an
+   * already-resolved promise still costs a microtask; for tens of
+   * thousands of fs ops that adds measurable latency.
+   */
+  private _readyResolved = false;
   /** Backend selection — see {@link VfsBackend}. */
   public readonly backend: VfsBackend;
   /**
@@ -101,7 +158,7 @@ export class VirtualFS {
    */
   private mountPoints = new Map<string, MountBackend>();
   /**
-   * Live `WebAccessFS` instance for the OPFS backend (null on LFS).
+   * Live `WebAccessFS` instance for the OPFS backend (null on memory).
    * Captured from `@zenfs/core`'s mount registry right after `configure()`
    * so {@link flush} / {@link dispose} can serialize its in-memory index
    * (`index.toJSON()`) back to the metadata sidecar — ZenFS only READS
@@ -111,8 +168,18 @@ export class VirtualFS {
    * (`index.toJSON()`); the full class lives in `@zenfs/dom`.
    */
   private opfsBackendFs: { index: { toJSON: () => unknown } } | null = null;
-  /** OPFS subdir handle for the current OPFS backend (null on LFS). */
+  /** OPFS subdir handle for the current OPFS backend (null on memory). */
   private opfsHandle: FileSystemDirectoryHandle | null = null;
+  /**
+   * Path prefix prepended to every `this.lfs`/`this.lfsSync` call.
+   * Empty on the OPFS backend (single global '/' mount). On the memory
+   * backend each VirtualFS instance is mounted at `/__zenfs__/<dbName>`
+   * so multiple instances can coexist without `configureSingle`
+   * clobbering each other. {@link prefix} / {@link unprefix} translate
+   * between VFS-visible (`/foo`) and underlying-ZenFS
+   * (`/__zenfs__/<dbName>/foo`) paths.
+   */
+  private mountRoot: string = '';
   /**
    * Paths that were registered via `mountInternal` instead of the
    * user-facing `mount()`. Hidden from `listMounts()` (so
@@ -136,26 +203,29 @@ export class VirtualFS {
     opfsHandle?: FileSystemDirectoryHandle
   ) {
     this.dbName = dbName;
-    // Default to LFS for any non-'opfs' value (including `undefined`) so
-    // callers that bypass `VirtualFS.create` and reach the constructor
-    // directly (a handful of legacy tests) keep their LFS behavior.
-    this.backend = backend === 'opfs' ? 'opfs' : 'lfs';
-    if (this.backend === 'lfs') {
-      const fs = new FS(dbName, { wipe: wipe === true });
-      this.rawFs = fs;
-      this.lfs = fs.promises;
-      // LightningFS initializes asynchronously; wait for first stat to complete
-      this._ready = this.lfs
-        .stat('/')
-        .then(() => {})
-        .catch(() => {});
-    } else {
-      this.rawFs = null;
-      // `lfs` is assigned after async ZenFS configure resolves in `create()`.
-      // Treated as nullable until then via the `_ready` gate.
-      this.lfs = null as unknown as FS.PromisifiedFS;
-      this._ready = VirtualFS.initOpfsBackend(this, opfsHandle, wipe === true);
-    }
+    // Default to InMemory for any non-'opfs' value (including `undefined`)
+    // so callers that bypass `VirtualFS.create` and reach the constructor
+    // directly (a handful of test fixtures) come up on the Node-safe
+    // backend rather than failing on missing OPFS APIs.
+    this.backend = backend === 'opfs' ? 'opfs' : 'memory';
+    // `lfs` is a deferred+prefixing proxy created here so callers can
+    // use the VFS immediately after `new VirtualFS(...)` without
+    // awaiting `create()`. Each method on the proxy awaits `_ready`
+    // before forwarding to `rawLfs` (which `init*Backend` populates).
+    this.lfs = this.makeDeferredLfs();
+    this.lfsSync = this.makeDeferredLfsSync();
+    this._ready =
+      this.backend === 'opfs'
+        ? VirtualFS.initOpfsBackend(this, opfsHandle, wipe === true)
+        : VirtualFS.initMemoryBackend(this, dbName, wipe === true);
+    this._ready.then(
+      () => {
+        this._readyResolved = true;
+      },
+      () => {
+        /* error path leaves _readyResolved false; ops will rethrow via await */
+      }
+    );
 
     // Set up BroadcastChannel for mount point synchronization. Messages
     // carry a `BackendDescriptor` (not the live backend, which isn't
@@ -237,7 +307,7 @@ export class VirtualFS {
         },
       },
     });
-    vfs.lfs = zenfsImport.promises as unknown as FS.PromisifiedFS;
+    vfs.lfs = zenfsImport.promises as unknown as FsPromisesLike;
     // Capture the live `WebAccessFS` from `@zenfs/core`'s mount registry
     // (populated by `configure` → `mountWithMkdir` → `mounts.set(point, fs)`
     // in `@zenfs/core/vfs/shared.js`). Needed so `flush`/`dispose` can
@@ -252,6 +322,199 @@ export class VirtualFS {
       ? (mountedFs as { index: { toJSON: () => unknown } })
       : null;
     vfs.opfsHandle = handle;
+    // OPFS uses a single global '/' mount — no path-prefix translation.
+    vfs.mountRoot = '';
+    vfs.rawLfs = zenfsImport.promises as unknown as FsPromisesLike;
+    vfs.rawLfsSync = zenfsImport as unknown as FsSyncLike;
+  }
+
+  /**
+   * Configure `@zenfs/core` with an `InMemory` backend mounted at a
+   * per-instance subpath (`/__zenfs__/<dbName>`). Used in Node/Vitest
+   * environments (and any browser context where OPFS is unavailable).
+   *
+   * Why a sub-mount instead of `configureSingle('/')`: `configureSingle`
+   * replaces the root mount globally, so two VirtualFS instances with
+   * different `dbName`s would clobber each other (LightningFS, the
+   * pre-F2 backend, isolated by IDB name so multi-instance was free).
+   * Mounting each instance at `/__zenfs__/<dbName>` lets multiple
+   * memory VFS instances coexist; the {@link prefix} / {@link unprefix}
+   * helpers translate VFS-visible paths to/from the underlying ZenFS
+   * paths.
+   *
+   * Same-dbName VFS instances share state via the {@link
+   * memoryBackends} cache (mirrors LFS' per-IDB-name semantics).
+   * `wipe: true` clears the cached store before re-mounting.
+   */
+  private static async initMemoryBackend(
+    vfs: VirtualFS,
+    dbName: string,
+    wipe: boolean
+  ): Promise<void> {
+    const zenfs = await import('@zenfs/core');
+    await VirtualFS.ensureMemoryRoot(zenfs);
+    const mountPoint = `/__zenfs__/${dbName}`;
+    let entry = VirtualFS.memoryBackends.get(dbName);
+    if (entry && wipe) {
+      try {
+        zenfs.umount(mountPoint);
+      } catch {
+        /* not mounted yet */
+      }
+      VirtualFS.memoryBackends.delete(dbName);
+      entry = undefined;
+    }
+    if (!entry) {
+      entry = { store: zenfs.InMemory.create({ label: dbName }), refs: 0 };
+      VirtualFS.memoryBackends.set(dbName, entry);
+    }
+    entry.refs += 1;
+    try {
+      // ZenFS `mount` expects a `FileSystem`; `InMemory.create` returns
+      // a `StoreFS<InMemoryStore>` which structurally satisfies it.
+      // Cast through `unknown` so we don't have to import the internal
+      // `FileSystem` type just for this argument.
+      (zenfs.mount as unknown as (p: string, fs: unknown) => void)(mountPoint, entry.store);
+    } catch {
+      /* already mounted with this store — safe to ignore */
+    }
+    vfs.mountRoot = mountPoint;
+    vfs.rawLfs = zenfs.promises as unknown as FsPromisesLike;
+    vfs.rawLfsSync = zenfs as unknown as FsSyncLike;
+    vfs.opfsBackendFs = null;
+    vfs.opfsHandle = null;
+  }
+
+  /**
+   * Bootstrap the global ZenFS root once per process so per-instance
+   * `mount('/__zenfs__/<dbName>', …)` calls have a root to attach to.
+   * Idempotent — subsequent inits short-circuit after the first
+   * `configureSingle` resolves.
+   */
+  private static memoryRootReady: Promise<void> | null = null;
+  /**
+   * Per-`dbName` cache of `InMemory` stores so multiple alive VirtualFS
+   * instances with the same `dbName` share state (mirrors the legacy
+   * LightningFS-per-IDB-name semantics). Reference-counted so a
+   * `dispose()` on the last live holder drops the store and the next
+   * `create()` for that name starts fresh — without the count, a
+   * sequential test pattern (`create → write → dispose → create`)
+   * would inherit the previous test's residual data.
+   */
+  private static memoryBackends: Map<string, { store: unknown; refs: number }> = new Map();
+  private static async ensureMemoryRoot(zenfs: typeof import('@zenfs/core')): Promise<void> {
+    if (VirtualFS.memoryRootReady) return VirtualFS.memoryRootReady;
+    VirtualFS.memoryRootReady = (async () => {
+      await zenfs.configureSingle({ backend: zenfs.InMemory, label: '__vfs_root__' });
+    })();
+    return VirtualFS.memoryRootReady;
+  }
+
+  /** Translate a VFS-visible path to the underlying ZenFS path (memory backend only). */
+  private prefix(p: string): string {
+    if (!this.mountRoot) return p;
+    return p === '/' ? this.mountRoot : this.mountRoot + p;
+  }
+
+  /** Strip the mount-root prefix from a ZenFS path (memory backend only). */
+  private unprefix(p: string): string {
+    if (!this.mountRoot || !p.startsWith(this.mountRoot)) return p;
+    const tail = p.slice(this.mountRoot.length);
+    return tail || '/';
+  }
+
+  /**
+   * Build the deferred+prefixing `fs.promises` proxy stored in
+   * {@link lfs}. Each method awaits {@link _ready} (so
+   * pre-init callers don't crash) then forwards to {@link rawLfs} with
+   * paths translated through {@link prefix}/{@link unprefix}.
+   *
+   * `rawLfs` is looked up at call time, so this proxy survives any
+   * subsequent reassignment by `init*Backend`.
+   */
+  private makeDeferredLfs(): FsPromisesLike {
+    const pf = (p: string) => this.prefix(p);
+    const upf = (p: string) => this.unprefix(p);
+    const raw = (): FsPromisesLike => {
+      if (!this.rawLfs) throw new Error('VirtualFS used before init resolved');
+      return this.rawLfs;
+    };
+    // Awaiting an already-resolved promise still costs a microtask
+    // per call; the `_readyResolved` short-circuit cuts that overhead
+    // out of the hot path (skill discovery scans ~10k mkdirs in tests).
+    return {
+      readFile: (p, opts) =>
+        this._readyResolved
+          ? raw().readFile(pf(p), opts)
+          : this._ready.then(() => raw().readFile(pf(p), opts)),
+      writeFile: (p, data, opts) =>
+        this._readyResolved
+          ? raw().writeFile(pf(p), data, opts)
+          : this._ready.then(() => raw().writeFile(pf(p), data, opts)),
+      readdir: (p) =>
+        this._readyResolved ? raw().readdir(pf(p)) : this._ready.then(() => raw().readdir(pf(p))),
+      mkdir: (p, opts) =>
+        this._readyResolved
+          ? raw().mkdir(pf(p), opts)
+          : this._ready.then(() => raw().mkdir(pf(p), opts)),
+      rmdir: (p) =>
+        this._readyResolved ? raw().rmdir(pf(p)) : this._ready.then(() => raw().rmdir(pf(p))),
+      unlink: (p) =>
+        this._readyResolved ? raw().unlink(pf(p)) : this._ready.then(() => raw().unlink(pf(p))),
+      rename: (a, b) =>
+        this._readyResolved
+          ? raw().rename(pf(a), pf(b))
+          : this._ready.then(() => raw().rename(pf(a), pf(b))),
+      stat: (p) =>
+        this._readyResolved ? raw().stat(pf(p)) : this._ready.then(() => raw().stat(pf(p))),
+      lstat: (p) =>
+        this._readyResolved ? raw().lstat(pf(p)) : this._ready.then(() => raw().lstat(pf(p))),
+      symlink: (target, p) => {
+        const t = target.startsWith('/') ? pf(target) : target;
+        return this._readyResolved
+          ? raw().symlink(t, pf(p))
+          : this._ready.then(() => raw().symlink(t, pf(p)));
+      },
+      readlink: async (p) => {
+        if (!this._readyResolved) await this._ready;
+        return upf(await raw().readlink(pf(p)));
+      },
+      realpath: async (p) => {
+        if (!this._readyResolved) await this._ready;
+        const r = raw();
+        if (typeof r.realpath !== 'function') return pf(p);
+        return upf(await r.realpath(pf(p)));
+      },
+    };
+  }
+
+  /**
+   * Sync counterpart to {@link makeDeferredLfs}. Cannot await
+   * `_ready`; if a caller invokes these before init resolves they
+   * receive `undefined` for the missing methods and the public
+   * `statSync` / `lstatSync` / `readDirSync` fall through to null.
+   */
+  private makeDeferredLfsSync(): FsSyncLike {
+    const pf = (p: string) => this.prefix(p);
+    const upf = (p: string) => this.unprefix(p);
+    return {
+      readdirSync: (p: string): string[] | undefined => {
+        const r = this.rawLfsSync;
+        return r?.readdirSync ? r.readdirSync(pf(p)) : undefined;
+      },
+      statSync: (p: string): FsStatsLike | undefined => {
+        const r = this.rawLfsSync;
+        return r?.statSync ? r.statSync(pf(p)) : undefined;
+      },
+      lstatSync: (p: string): FsStatsLike | undefined => {
+        const r = this.rawLfsSync;
+        return r?.lstatSync ? r.lstatSync(pf(p)) : undefined;
+      },
+      readlinkSync: (p: string): string | undefined => {
+        const r = this.rawLfsSync;
+        return r?.readlinkSync ? upf(r.readlinkSync(pf(p))) : undefined;
+      },
+    } as unknown as FsSyncLike;
   }
 
   /**
@@ -332,62 +595,27 @@ export class VirtualFS {
   }
 
   /**
-   * Get the underlying LightningFS promises API.
+   * Force any backend-owned metadata to durable storage immediately.
+   * On the OPFS backend this serializes the in-memory `WebAccessFS`
+   * index to the `/.metadata.json` sidecar so filemode bits and
+   * symlinks survive a page reload. On the InMemory backend this is a
+   * no-op (the store is process-local and not persisted).
    *
-   * @deprecated Wave A5: prefer routing isomorphic-git through this method
-   * via the cast in {@link createIsomorphicGitFs} for now. Will be removed
-   * in Wave F once the OPFS backend is the only path. For the OPFS backend
-   * the returned object is `@zenfs/core`'s `fs.promises`, which exposes the
-   * same Node-fs-shaped surface isomorphic-git uses (readFile/writeFile/
-   * stat/lstat/readlink/symlink/etc.) — cast through `FS.PromisifiedFS` is
-   * structural.
-   */
-  getLightningFS(): FS.PromisifiedFS {
-    return this.lfs;
-  }
-
-  /**
-   * Force the LightningFS superblock to commit to IndexedDB immediately.
-   *
-   * LightningFS debounces directory-metadata saves: a `mkdir` or `writeFile`
-   * that creates new inodes returns once the in-memory cache is updated,
-   * but the superblock IDB write is deferred. If the page is reloaded
-   * before the debounce timer fires, those new directories and files
-   * appear orphaned on next boot (their inode blocks are present but
-   * not linked from the root metadata).
-   *
-   * Call this before any operation that may kill the page (`location.reload`,
-   * navigation away, tab close) when newly-created paths must survive.
-   * No-op if the backend doesn't expose flush.
+   * Call this before any operation that may kill the page
+   * (`location.reload`, navigation away, tab close) when newly-created
+   * paths must survive.
    */
   async flush(): Promise<void> {
-    if (this.backend !== 'lfs') {
-      // OPFS: file data writes are durable (WebAccess uses
-      // FileSystemSyncAccessHandle), but POSIX metadata (filemode bits,
-      // symlink targets) lives only in the WebAccessFS in-memory `index`
-      // until we serialize it back to the sidecar. `IndexFS.sync()` is a
-      // no-op and `WebAccessFS` does not override it, so VirtualFS owns
-      // the write-back.
-      await this.writeOpfsMetadataSidecar();
-      return;
-    }
-    const pfs = this.lfs as unknown as {
-      _backend?: { flush?: () => Promise<void>; saveSuperblock?: { cancel?: () => void } };
-    };
-    // Cancel the debounced saver — otherwise it might fire AFTER our flush,
-    // with stale superblock data captured at debounce-schedule time.
-    pfs._backend?.saveSuperblock?.cancel?.();
-    if (pfs._backend?.flush) {
-      await pfs._backend.flush();
-    }
+    await this.writeOpfsMetadataSidecar();
   }
 
   /**
-   * Serialize the live OPFS WebAccessFS index back to `/.metadata.json` in
-   * the OPFS subdir so filemode bits and symlinks survive a reload. No-op
-   * on the LFS backend, on backends without a captured index reference
-   * (defensive — should not happen after a successful `initOpfsBackend`),
-   * or if the OPFS handle was never captured. See {@link opfsBackendFs}.
+   * Serialize the live OPFS WebAccessFS index back to `/.metadata.json`
+   * in the OPFS subdir so filemode bits and symlinks survive a reload.
+   * No-op on the InMemory backend, on backends without a captured index
+   * reference (defensive — should not happen after a successful
+   * `initOpfsBackend`), or if the OPFS handle was never captured. See
+   * {@link opfsBackendFs}.
    */
   private async writeOpfsMetadataSidecar(): Promise<void> {
     if (this.backend !== 'opfs') return;
@@ -422,8 +650,12 @@ export class VirtualFS {
   }
 
   /**
-   * Close the underlying IndexedDB connection and release resources.
-   * Must be called when the VirtualFS instance is no longer needed (e.g., in test cleanup).
+   * Close watchers/channels and persist any pending OPFS metadata.
+   * On the memory backend, decrement the per-`dbName` refcount and
+   * drop the cached store when the last live holder disposes — keeps
+   * concurrent same-name instances sharing state while preventing
+   * stale data from leaking into the next create-after-dispose
+   * sequence.
    */
   async dispose(): Promise<void> {
     this.mountSyncChannel?.close();
@@ -431,122 +663,62 @@ export class VirtualFS {
     this.watcher?.dispose();
     this.watcher = null;
     this.mountIndex.dispose();
-
-    // OPFS: nothing to tear down past the watchers/channels. ZenFS' global
-    // configure() registry is not unwound here — same instance assumption
-    // documented on initOpfsBackend(). Multiple `VirtualFS.create` calls
-    // on the OPFS path within a single process share the same global mount.
-    // Persist the metadata sidecar first so filemode/symlink state survives
-    // the dispose (same mechanism as `flush()` on the OPFS path).
-    if (this.backend !== 'lfs') {
-      await this.writeOpfsMetadataSidecar();
-      return;
-    }
-
-    const pfs = this.lfs as any;
-
-    // 1. Cancel any pending deactivation timeout
-    if (pfs._deactivationTimeout) {
-      clearTimeout(pfs._deactivationTimeout);
-      pfs._deactivationTimeout = null;
-    }
-
-    // 2. Wait for any pending operations to complete
-    if (pfs._operations?.size > 0) {
-      await pfs._gracefulShutdown?.();
-    }
-
-    // 3. Cancel the debounced saveSuperblock timer in DefaultBackend
-    if (pfs._backend?.saveSuperblock?.cancel) {
-      pfs._backend.saveSuperblock.cancel();
-    }
-
-    // 4. Flush pending writes then deactivate (closes IDB via IdbBackend.close())
-    if (pfs._backend) {
-      try {
-        if (pfs._backend.flush) await pfs._backend.flush();
-      } catch {
-        /* may fail if not activated */
-      }
-      if (pfs._backend.deactivate) {
-        await pfs._backend.deactivate();
-      }
-    }
-
-    // 5. Null out retained references so the entire LFS tree can be GC'd
-    pfs._backend = null;
-    pfs._activationPromise = null;
-    pfs._deactivationPromise = null;
-    pfs._initPromise = null;
-
-    // 6. Delete the IndexedDB database to free memory (critical for fake-indexeddb in tests)
-    if (typeof indexedDB !== 'undefined' && indexedDB.deleteDatabase) {
-      try {
-        const req = indexedDB.deleteDatabase(this.dbName);
-        await new Promise<void>((resolve, reject) => {
-          req.onsuccess = () => resolve();
-          req.onerror = () => reject(req.error);
-        });
-      } catch {
-        // Best effort — may fail if IndexedDB is not available
+    // Persist the metadata sidecar so filemode/symlink state survives
+    // the dispose (same mechanism as `flush()` on the OPFS path; no-op
+    // on InMemory).
+    await this.writeOpfsMetadataSidecar();
+    if (this.backend === 'memory' && this.mountRoot) {
+      const entry = VirtualFS.memoryBackends.get(this.dbName);
+      if (entry) {
+        entry.refs -= 1;
+        if (entry.refs <= 0) {
+          VirtualFS.memoryBackends.delete(this.dbName);
+          try {
+            const zenfs = await import('@zenfs/core');
+            zenfs.umount(this.mountRoot);
+          } catch {
+            /* best-effort — module may already be GCed in tests */
+          }
+        }
       }
     }
   }
 
   // ---------------------------------------------------------------------------
+  // Synchronous fast-path (VfsAdapter / RestrictedFS contract)
   // ---------------------------------------------------------------------------
-  // Synchronous fast-path: direct CacheFS access for non-mounted paths
-  // ---------------------------------------------------------------------------
+  //
+  // These methods historically reached into LightningFS' in-memory
+  // CacheFS tree. Wave F2 routes them through ZenFS' Node-compatible
+  // sync API (`fs.statSync` / `fs.lstatSync` / `fs.readdirSync`).
+  // Behavior:
+  //   * On the `'memory'` backend (InMemory) sync ops succeed — tests
+  //     keep getting non-null Stats for valid paths.
+  //   * On the `'opfs'` backend (WebAccessFS) sync ops are not
+  //     available outside a SharedWorker context and throw at call
+  //     time; we catch and return null so callers fall back to async.
+  // Mount paths always return null (mounts are async-only).
 
-  /**
-   * Access the LightningFS in-memory CacheFS tree directly.
-   * Returns null if the cache is not activated or the internal structure
-   * doesn't match expectations (e.g. after a LightningFS upgrade).
-   *
-   * The CacheFS tree is a nested Map where:
-   * - Key 0 (STAT) holds { mode, type, size, ino, mtimeMs }
-   * - String keys are child entry names mapping to sub-Maps
-   *
-   * This is a private LightningFS internal. The `cachefs-internals` test
-   * suite validates the structure so upgrades that break it are caught.
-   */
-  private getCacheFS(): any | null {
-    // OPFS backend has no LightningFS CacheFS — sync fast paths fall back
-    // to async, which is the safe behavior anyway.
-    if (this.backend !== 'lfs') return null;
-    try {
-      const cache = (this.lfs as any)._backend?._cache;
-      if (cache?.activated && cache._root instanceof Map) return cache;
-      return null;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Synchronous readDir for non-mounted LightningFS paths.
-   * Returns null if the path is under a mount or the CacheFS fast path is
-   * unavailable — callers must fall back to the async `readDir()`.
-   */
   readDirSync(path: string): DirEntry[] | null {
     const normalized = normalizePath(path);
     if (this.findMount(normalized)) return null;
-    const cache = this.getCacheFS();
-    if (!cache) return null;
+    const sync = this.lfsSync;
+    if (typeof sync.readdirSync !== 'function' || typeof sync.lstatSync !== 'function') return null;
     try {
-      // CacheFS.readdir follows symlinks in the path (via _lookup with follow=true)
-      const names: string[] = cache.readdir(normalized);
+      const names = sync.readdirSync(normalized);
       const entries: DirEntry[] = [];
       for (const name of names) {
         const childPath = normalized === '/' ? `/${name}` : `${normalized}/${name}`;
         try {
-          // lstat does NOT follow the leaf symlink — gives us the entry's own type
-          const stat = cache.lstat(childPath);
-          const type: EntryType =
-            stat.type === 'symlink' ? 'symlink' : stat.type === 'dir' ? 'directory' : 'file';
+          const s = sync.lstatSync(childPath);
+          const type: EntryType = s.isSymbolicLink()
+            ? 'symlink'
+            : s.isDirectory()
+              ? 'directory'
+              : 'file';
           entries.push({ name, type });
         } catch {
-          // Skip entries we can't stat (shouldn't happen in CacheFS)
+          /* skip entries we can't stat */
         }
       }
       return entries;
@@ -555,103 +727,47 @@ export class VirtualFS {
     }
   }
 
-  /**
-   * Synchronous stat (follows symlinks) for non-mounted LightningFS paths.
-   * Returns null if the path is under a mount, the CacheFS fast path is
-   * unavailable, or the symlink target is in a mounted tree.
-   *
-   * Enforces MAX_SYMLINK_DEPTH to stay consistent with the async realpath().
-   * CacheFS._lookup follows symlinks internally without a depth limit, so we
-   * manually resolve symlinks with a hop counter before calling stat.
-   */
   statSync(path: string): Stats | null {
     const normalized = normalizePath(path);
     if (this.findMount(normalized)) return null;
-    const cache = this.getCacheFS();
-    if (!cache) return null;
+    const sync = this.lfsSync;
+    if (typeof sync.statSync !== 'function') return null;
     try {
-      // Manually resolve symlinks with a depth limit matching the async path.
-      const resolved = this.resolveSymlinksSync(cache, normalized);
-      if (resolved === null) return null;
-      const s = cache.lstat(resolved);
-      // After full resolution, result should be file or dir, not symlink.
+      const s = sync.statSync(normalized);
       return {
-        type: s.type === 'dir' ? 'directory' : 'file',
-        size: s.size ?? 0,
-        mtime: s.mtimeMs ?? Date.now(),
-        ctime: s.mtimeMs ?? Date.now(),
+        type: s.isDirectory() ? 'directory' : 'file',
+        size: s.size,
+        mtime: s.mtimeMs,
+        ctime: s.ctimeMs,
       };
     } catch {
       return null;
     }
   }
 
-  /**
-   * Synchronously resolve all symlinks in a path using CacheFS, with a hop
-   * limit matching MAX_SYMLINK_DEPTH. Returns null if the limit is exceeded
-   * or the target is unresolvable (e.g. in a mount).
-   *
-   * Uses a shared mutable counter so that hops accumulate across recursive
-   * calls (matching the async realpath behavior).
-   */
-  private resolveSymlinksSync(
-    cache: any,
-    path: string,
-    hops: { count: number } = { count: 0 }
-  ): string | null {
-    const parts = path.split('/').filter(Boolean);
-    let resolved = '/';
-    for (const part of parts) {
-      resolved = resolved === '/' ? `/${part}` : `${resolved}/${part}`;
-      try {
-        const s = cache.lstat(resolved);
-        if (s.type === 'symlink') {
-          if (++hops.count > MAX_SYMLINK_DEPTH) return null;
-          const target = s.target;
-          if (target.startsWith('/')) {
-            resolved = normalizePath(target);
-          } else {
-            const { dir } = splitPath(resolved);
-            resolved = normalizePath(joinPath(dir, target));
-          }
-          // Recursively resolve — shared hops object accumulates across calls
-          const full = this.resolveSymlinksSync(cache, resolved, hops);
-          if (full === null) return null;
-          resolved = full;
-        }
-      } catch {
-        return null;
-      }
-    }
-    return resolved;
-  }
-
-  /**
-   * Synchronous lstat (does NOT follow symlinks) for non-mounted paths.
-   * Returns null if the fast path is unavailable.
-   */
   lstatSync(path: string): Stats | null {
     const normalized = normalizePath(path);
     if (this.findMount(normalized)) return null;
-    const cache = this.getCacheFS();
-    if (!cache) return null;
+    const sync = this.lfsSync;
+    if (typeof sync.lstatSync !== 'function') return null;
     try {
-      const s = cache.lstat(normalized);
-      if (s.type === 'symlink') {
+      const s = sync.lstatSync(normalized);
+      if (s.isSymbolicLink()) {
+        const target = sync.readlinkSync ? sync.readlinkSync(normalized) : '';
         return {
           type: 'symlink',
-          size: s.size ?? 0,
-          mtime: s.mtimeMs ?? Date.now(),
-          ctime: s.mtimeMs ?? Date.now(),
+          size: s.size,
+          mtime: s.mtimeMs,
+          ctime: s.ctimeMs,
           isSymlink: true,
-          symlinkTarget: s.target,
+          symlinkTarget: target,
         };
       }
       return {
-        type: s.type === 'dir' ? 'directory' : 'file',
-        size: s.size ?? 0,
-        mtime: s.mtimeMs ?? Date.now(),
-        ctime: s.mtimeMs ?? Date.now(),
+        type: s.isDirectory() ? 'directory' : 'file',
+        size: s.size,
+        mtime: s.mtimeMs,
+        ctime: s.ctimeMs,
       };
     } catch {
       return null;
@@ -1008,10 +1124,9 @@ export class VirtualFS {
     try {
       const encoding = options?.encoding ?? 'utf-8';
       if (encoding === 'utf-8') {
-        return await this.lfs.readFile(resolved, { encoding: 'utf8' });
-      } else {
-        return await this.lfs.readFile(resolved);
+        return (await this.lfs.readFile(resolved, { encoding: 'utf8' })) as string;
       }
+      return (await this.lfs.readFile(resolved)) as Uint8Array;
     } catch (err) {
       throw this.convertError(err, normalized);
     }
@@ -1584,62 +1699,27 @@ export class VirtualFS {
 
   /**
    * Resolve all symlinks in a path to produce the final canonical path.
-   * @throws FsError ELOOP if more than MAX_SYMLINK_DEPTH symlinks are encountered
+   * Delegates to ZenFS' native `realpath` (metadata-sidecar backed on
+   * OPFS, direct lookup on InMemory). ZenFS enforces its own
+   * symlink-hop limit; an exceeded chain surfaces as `ELOOP`.
    */
-  async realpath(path: string, _hops = 0): Promise<string> {
+  async realpath(path: string): Promise<string> {
     const normalized = normalizePath(path);
     const mount = this.findMount(normalized);
     if (mount) return normalized; // Mount paths are already real
-
-    // Wave A7: on the OPFS backend delegate to ZenFS' native realpath
-    // (metadata-sidecar backed). The LFS path keeps its hand-rolled
-    // resolver until Wave F.
-    if (this.backend === 'opfs') {
-      try {
-        const rp = (this.lfs as unknown as { realpath?: (p: string) => Promise<string> }).realpath;
-        if (typeof rp === 'function') return normalizePath(await rp.call(this.lfs, normalized));
-      } catch (err) {
-        throw this.convertError(err, normalized);
-      }
+    try {
+      const rp = this.lfs.realpath;
+      if (typeof rp === 'function') return normalizePath(await rp.call(this.lfs, normalized));
+    } catch (err) {
+      throw this.convertError(err, normalized);
     }
-
-    const parts = normalized.split('/').filter(Boolean);
-    let resolved = '/';
-    let hops = _hops;
-
-    for (const part of parts) {
-      resolved = resolved === '/' ? `/${part}` : `${resolved}/${part}`;
-      try {
-        const s = await this.lfs.lstat(resolved);
-        if (s.isSymbolicLink()) {
-          if (++hops > MAX_SYMLINK_DEPTH) {
-            throw new FsError('ELOOP', 'too many levels of symbolic links', path);
-          }
-          const target = await this.lfs.readlink(resolved);
-          if (target.startsWith('/')) {
-            // Absolute symlink — restart resolution from the target
-            resolved = normalizePath(target);
-          } else {
-            // Relative symlink — resolve relative to the link's parent directory
-            const { dir } = splitPath(resolved);
-            resolved = normalizePath(joinPath(dir, target));
-          }
-          // The resolved path itself may contain more symlinks — resolve it fully
-          resolved = await this.realpath(resolved, hops);
-        }
-      } catch (err) {
-        if (err instanceof FsError) throw err;
-        throw this.convertError(err, resolved);
-      }
-    }
-
-    return resolved;
+    return normalized;
   }
 
   /**
    * Internal helper: resolve symlinks in a path before an operation.
    * Used by readFile, writeFile, stat, etc. to follow symlinks transparently.
-   * Only applies to LFS-backed paths (mount points are returned as-is).
+   * Mount points are returned as-is (mount backends do not support symlinks).
    */
   private async resolveSymlinks(path: string): Promise<string> {
     const mount = this.findMount(path);
@@ -1704,6 +1784,3 @@ export class VirtualFS {
     return new FsError('EINVAL', msg, path);
   }
 }
-
-// For backwards compatibility, keep BackendType but it's no longer used
-export type BackendType = 'lightningfs';

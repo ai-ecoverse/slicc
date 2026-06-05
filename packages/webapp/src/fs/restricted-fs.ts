@@ -10,7 +10,6 @@
  * for paths outside allowed areas — hard enforcement.
  */
 
-import type FS from '@isomorphic-git/lightning-fs';
 import type { FsWatchCallback, FsWatchFilter } from './fs-watcher.js';
 import { normalizePath } from './path-utils.js';
 import type {
@@ -134,18 +133,6 @@ export class RestrictedFS {
   /** Get the underlying unrestricted VirtualFS (cone-only escape hatch). */
   getUnderlyingFS(): VirtualFS {
     return this.vfs;
-  }
-
-  /**
-   * Get the underlying raw `fs.promises`-shaped backend (LightningFS or
-   * `@zenfs/core` on OPFS), passthrough to {@link VirtualFS.getLightningFS}.
-   *
-   * @deprecated Wave A5: forwarded to the underlying VFS. Will be removed
-   * in Wave F once the OPFS backend is the only path. Use this only for
-   * isomorphic-git integration; new code should go through {@link VirtualFS}.
-   */
-  getLightningFS(): FS.PromisifiedFS {
-    return this.vfs.getLightningFS();
   }
 
   /**

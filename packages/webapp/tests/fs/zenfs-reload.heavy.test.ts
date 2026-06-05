@@ -57,11 +57,10 @@ d('VirtualFS — OPFS reload integrity (heavy)', () => {
 
   it('exec filemode survives a reload', async () => {
     const { VirtualFS } = await import('../../src/fs/virtual-fs.js');
-    const lfsLike = (vfs: InstanceType<typeof VirtualFS>) =>
-      vfs.getLightningFS() as unknown as {
-        chmod?: (p: string, m: number) => Promise<void>;
-        lstat: (p: string) => Promise<{ mode: number }>;
-      };
+    // Wave F2: `vfs.getLightningFS()` was deleted; reach the underlying
+    // ZenFS `fs.promises` directly here, since this test exercises a
+    // POSIX surface (`chmod`) that VirtualFS does not re-expose.
+    const { fs: zenfs } = await import('@zenfs/core');
     {
       const vfs = await VirtualFS.create({
         dbName: 'a6-reload-filemode',
@@ -69,8 +68,7 @@ d('VirtualFS — OPFS reload integrity (heavy)', () => {
         wipe: true,
       });
       await vfs.writeFile('/run.sh', '#!/bin/sh\necho ok\n');
-      const fs = lfsLike(vfs);
-      if (fs.chmod) await fs.chmod('/run.sh', 0o100755);
+      await zenfs.promises.chmod('/run.sh', 0o100755);
       await vfs.dispose();
     }
     {
@@ -78,8 +76,7 @@ d('VirtualFS — OPFS reload integrity (heavy)', () => {
         dbName: 'a6-reload-filemode',
         backend: 'opfs',
       });
-      const fs = lfsLike(vfs);
-      const st = await fs.lstat('/run.sh');
+      const st = await zenfs.promises.lstat('/run.sh');
       expect(st.mode & 0o111).not.toBe(0);
       await vfs.dispose();
     }

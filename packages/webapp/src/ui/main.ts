@@ -582,16 +582,15 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   // reads/writes the same data as the offscreen document's VFS.
   //
   // Wave B4 (blueprint note d8860197): under `slicc_opfs_vfs === 'opfs'`
-  // force the page-side VFS to the LFS backend so it no longer races
-  // the worker for OPFS handles (the worker is the canonical OPFS
-  // owner; the page keeps an LFS shadow for legacy consumers like
-  // mount-recovery, attachment writer, and memory-panel reads).
-  // Byte-identical when the flag is off — `resolveVfsBackendFromEnv()`
-  // returns `'lfs'` in that case too. Wave F owns final teardown of
-  // the page-side instance.
+  // force the page-side VFS to the InMemory backend so it no longer
+  // races the worker for OPFS handles (the worker is the canonical
+  // OPFS owner; the page keeps an in-process shadow only for legacy
+  // consumers like mount-recovery, attachment writer, and memory-panel
+  // reads). Wave F2 swapped LFS → ZenFS InMemory; the page shadow no
+  // longer persists across reloads.
   const localFs = await VirtualFS.create({
     dbName: 'slicc-fs',
-    ...(useRpcVfs ? { backend: 'lfs' as const } : {}),
+    ...(useRpcVfs ? { backend: 'memory' as const } : {}),
   });
   if (!useRpcVfs) {
     layout.panels.fileBrowser.setFs(localFs);
@@ -1886,16 +1885,15 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // visible in the file browser without round-tripping the wire.
   //
   // Wave B4 (blueprint note d8860197): under `slicc_opfs_vfs === 'opfs'`
-  // force the page-side VFS to the LFS backend so it no longer races
-  // the worker for OPFS handles (the worker is the canonical OPFS
-  // owner; the page keeps an LFS shadow for legacy consumers like
-  // mount-recovery and attachment writer). Byte-identical when the
-  // flag is off — `resolveVfsBackendFromEnv()` returns `'lfs'` in
-  // that case too. Wave F owns final teardown of the page-side
-  // instance.
+  // force the page-side VFS to the InMemory backend so it no longer
+  // races the worker for OPFS handles (the worker is the canonical
+  // OPFS owner; the page keeps an in-process shadow for legacy
+  // consumers like mount-recovery and attachment writer). Wave F2
+  // swapped LFS → ZenFS InMemory; the page shadow no longer persists
+  // across reloads.
   const localFs = await VirtualFS.create({
     dbName: 'slicc-fs',
-    ...(useRpcVfs ? { backend: 'lfs' as const } : {}),
+    ...(useRpcVfs ? { backend: 'memory' as const } : {}),
   });
   if (!useRpcVfs) {
     layout.panels.fileBrowser.setFs(localFs);

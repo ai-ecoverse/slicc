@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FsError, type FsErrorCode } from '../../src/fs/types.js';
 import { resolveVfsBackendFromEnv, VirtualFS } from '../../src/fs/virtual-fs.js';
 
-describe('VirtualFS — backend resolution (Wave F1)', () => {
+describe('VirtualFS — backend resolution (Wave F2)', () => {
   let vfs: VirtualFS;
   beforeEach(async () => {
     vfs = await VirtualFS.create({ dbName: 'test-vfs-backend', wipe: true });
@@ -12,16 +12,15 @@ describe('VirtualFS — backend resolution (Wave F1)', () => {
     await new Promise((r) => setTimeout(r, 600));
   });
 
-  it("falls back to 'lfs' in Node test envs without OPFS support", () => {
-    // Wave F1: the `slicc_opfs_vfs` flag was removed; the resolver
-    // now capability-detects OPFS via `navigator.storage.getDirectory`.
-    // Node tests have no `navigator.storage`, so resolution falls
-    // through to the still-importable LFS backend (F2 deletes it).
-    expect(vfs.backend).toBe('lfs');
+  it("falls back to 'memory' in Node test envs without OPFS support", () => {
+    // Wave F2 swapped the Node-test fallback off LightningFS onto
+    // ZenFS' `InMemory` backend. Node tests have no
+    // `navigator.storage`, so resolution falls through to `'memory'`.
+    expect(vfs.backend).toBe('memory');
   });
 
-  it("resolveVfsBackendFromEnv returns 'lfs' when navigator.storage is unavailable", () => {
-    expect(resolveVfsBackendFromEnv()).toBe('lfs');
+  it("resolveVfsBackendFromEnv returns 'memory' when navigator.storage is unavailable", () => {
+    expect(resolveVfsBackendFromEnv()).toBe('memory');
   });
 
   it("resolveVfsBackendFromEnv returns 'opfs' when navigator.storage.getDirectory exists", () => {
@@ -45,13 +44,13 @@ describe('VirtualFS — backend resolution (Wave F1)', () => {
   });
 
   it('an explicit backend option overrides env resolution', async () => {
-    const lfsVfs = await VirtualFS.create({
+    const memVfs = await VirtualFS.create({
       dbName: 'test-vfs-backend-explicit',
       wipe: true,
-      backend: 'lfs',
+      backend: 'memory',
     });
-    expect(lfsVfs.backend).toBe('lfs');
-    await lfsVfs.dispose();
+    expect(memVfs.backend).toBe('memory');
+    await memVfs.dispose();
   });
 });
 

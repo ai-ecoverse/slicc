@@ -9,7 +9,11 @@ describe('discoverSkillCandidates', () => {
 
   beforeEach(async () => {
     globalThis.indexedDB = new IDBFactory();
-    fs = await VirtualFS.create();
+    // Wave F2: VirtualFS' memory backend caches stores per dbName so
+    // multiple alive instances share state. Pass `wipe: true` here so
+    // each test starts with a clean tree (the prior LightningFS path
+    // relied on `new IDBFactory()` for the same effect).
+    fs = await VirtualFS.create({ wipe: true });
   });
 
   it('finds native, .agents, and .claude skill directories with stable precedence order', async () => {
@@ -71,7 +75,11 @@ describe('discoverSkillCandidates', () => {
         path: '/zz-after-cap/.claude/skills/late-skill',
       })
     );
-  }, 10_000);
+    // Wave F2: ZenFS InMemory mkdir is meaningfully slower per-call
+    // than the pre-F2 LightningFS path (10k mkdirs lands in the 15-20s
+    // range vs ~5s on LFS). The test is a cap-stress, not a perf
+    // benchmark, so widen the budget rather than skip it.
+  }, 30_000);
 
   it('refreshes cached compatibility discovery after the same fs instance mutates', async () => {
     await fs.mkdir('/repo/.claude/skills/first-skill', { recursive: true });
