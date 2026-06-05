@@ -1312,6 +1312,39 @@ export async function clearAllSettings(): Promise<void> {
 }
 
 /**
+ * Build a provider-routed model for a model id that pi-ai's registry does not
+ * know. OAuth/custom providers (Adobe, etc.) proxy arbitrary model ids, so an
+ * unknown id must still route through the provider (`api: '${providerId}-anthropic'`)
+ * rather than degrading to a native Anthropic model — otherwise the provider's
+ * token (e.g. an Adobe IMS token) is sent to api.anthropic.com and rejected
+ * with `401 invalid x-api-key`. Mirrors the unknown-id construction in
+ * `getProviderModels`. Context-window/max-tokens are conservative defaults;
+ * the real metadata arrives once the provider's model list is fetched.
+ */
+function buildProviderRoutedModel(
+  providerId: string,
+  modelId: string,
+  baseUrl: string | null
+): Model<Api> {
+  return {
+    id: modelId,
+    name: modelId,
+    provider: providerId,
+    api: `${providerId}-anthropic` as Api,
+    baseUrl: baseUrl ?? '',
+    contextWindow: 200000,
+    maxTokens: 16384,
+    input: ['text', 'image'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    inputCost: 0,
+    outputCost: 0,
+    cacheReadCost: 0,
+    cacheWriteCost: 0,
+    reasoning: true,
+  } as unknown as Model<Api>;
+}
+
+/**
  * Resolve a specific model by ID, using the current provider's
  * baseUrl and API routing. Falls back to resolveCurrentModel() if
  * modelId is not provided.
@@ -1321,9 +1354,9 @@ export function resolveModelById(modelId?: string): Model<Api> {
 
   const providerId = getSelectedProvider();
   const baseUrl = getBaseUrlForProvider(providerId);
+  const providerConfig = getProviderConfig(providerId);
 
   try {
-    const providerConfig = getProviderConfig(providerId);
     const effectiveProvider = providerConfig.isOAuth
       ? 'anthropic'
       : providerId === 'azure-ai-foundry'
@@ -1356,6 +1389,17 @@ export function resolveModelById(modelId?: string): Model<Api> {
     }
     return resolved;
   } catch {
+    // Unknown to pi-ai (threw or returned no id). For an OAuth/custom provider,
+    // resolve the REQUESTED id through the provider — prefer its own model list,
+    // else synthesize a provider-routed model. Never fall through to
+    // resolveCurrentModel() (which resolves the *selected* model, not the
+    // requested one) or to a native Anthropic model (which would leak the
+    // OAuth token → 401 invalid x-api-key). See the cloud-cone regression.
+    if (providerConfig.isOAuth) {
+      const providerModel = getProviderModels(providerId).find((m) => m.id === modelId);
+      if (providerModel) return baseUrl ? { ...providerModel, baseUrl } : providerModel;
+      return buildProviderRoutedModel(providerId, modelId, baseUrl);
+    }
     return resolveCurrentModel();
   }
 }
@@ -1416,6 +1460,13 @@ export function resolveCurrentModel(): Model<Api> {
     const customModel = models.find((m) => m.id === effectiveModelId);
     if (customModel) {
       return baseUrl ? { ...customModel, baseUrl } : customModel;
+    }
+    // OAuth/custom providers proxy arbitrary model ids — route the unknown id
+    // through the provider rather than returning a native Anthropic model,
+    // which would send the provider's token (e.g. Adobe IMS) to
+    // api.anthropic.com → 401 invalid x-api-key. See the cloud-cone regression.
+    if (providerConfig.isOAuth) {
+      return buildProviderRoutedModel(providerId, effectiveModelId, baseUrl);
     }
     // Last resort fallback
     return getModelDynamic('anthropic', 'claude-sonnet-4-0');

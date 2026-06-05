@@ -2927,7 +2927,18 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
           if (boot.model) localStorage.setItem('selected-model', boot.model);
           else if (!localStorage.getItem('selected-model'))
             localStorage.setItem('selected-model', 'adobe:claude-opus-4-6');
-          const { applyHostedAccounts } = await import('./hosted-config-apply.js');
+          const { applyHostedAccounts, prewarmHostedModels } = await import(
+            './hosted-config-apply.js'
+          );
+          // Pre-warm provider model lists BEFORE applying accounts. Applying an
+          // account writes localStorage, which triggers the kernel-worker
+          // re-init that resolves the cone's model — so the list must be warm
+          // first, or an id pi-ai doesn't know (e.g. claude-opus-4-8) resolves
+          // against a cold default. Passes the injected token so the fetch
+          // works before the account is persisted. Best-effort.
+          await prewarmHostedModels(accounts, {
+            getRefreshModels: (pid) => getProviderConfig(pid).refreshModels,
+          });
           const prevManaged = JSON.parse(
             localStorage.getItem('slicc_cloud_managed') ?? '[]'
           ) as string[];

@@ -428,6 +428,17 @@ export const config: ProviderConfig = {
     if (!account?.accessToken) return null;
     return silentRenewToken();
   },
+
+  // Fetch + cache the proxy model list, then run getModelIds so the enriched
+  // list is persisted to localStorage. The cloud cone calls this (with the
+  // injected token, before the account is saved) so the kernel worker's cold
+  // getModelIds reads the full model set + 1M context window from localStorage
+  // on its first resolve — instead of the default sonnet. Normal floats get
+  // this for free during onOAuthLogin.
+  refreshModels: async (accessToken?: string) => {
+    await getAdobeModels(accessToken);
+    config.getModelIds?.();
+  },
 };
 
 // ── Token access + silent renewal ────────────────────────────────────
@@ -822,13 +833,15 @@ const streamSimpleAdobe = (model: Model<Api>, context: Context, options?: Simple
 
 // ── Model list ──────────────────────────────────────────────────────
 
-async function fetchProxyModels(): Promise<Model<Api>[]> {
+async function fetchProxyModels(accessToken?: string): Promise<Model<Api>[]> {
   try {
-    const accessToken = await getValidAccessToken();
+    // Pre-warm callers (cloud cone, before the account is persisted) pass the
+    // token explicitly; everyone else reads it from the saved account.
+    const token = accessToken ?? (await getValidAccessToken());
     const endpoint = getProxyEndpoint();
     const res = await fetch(`${endpoint}/v1/models`, {
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        Authorization: `Bearer ${token}`,
         [SLICC_VERSION_HEADER]: __SLICC_VERSION__,
       },
     });
@@ -895,11 +908,11 @@ async function fetchProxyModels(): Promise<Model<Api>[]> {
 
 const modelsCache = new Map<string, Model<Api>[]>();
 
-export async function getAdobeModels(): Promise<Model<Api>[]> {
+export async function getAdobeModels(accessToken?: string): Promise<Model<Api>[]> {
   const endpoint = getProxyEndpoint();
   const cached = modelsCache.get(endpoint);
   if (cached) return cached;
-  const models = await fetchProxyModels();
+  const models = await fetchProxyModels(accessToken);
   modelsCache.set(endpoint, models);
   return models;
 }

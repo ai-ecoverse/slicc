@@ -50,3 +50,41 @@ export async function applyHostedAccounts(
     }
   }
 }
+
+export interface PrewarmModelsDeps {
+  /** Resolve a provider's optional `refreshModels` hook, or undefined if it has none. */
+  getRefreshModels: (providerId: string) => ((accessToken?: string) => Promise<void>) | undefined;
+}
+
+/**
+ * Pre-warm provider model lists for injected OAuth accounts.
+ *
+ * Must run BEFORE `applyHostedAccounts`: applying an account writes
+ * localStorage, which triggers the kernel-worker's re-init and model
+ * resolution. If the provider's model list hasn't been fetched by then, the
+ * cone resolves against a cold default — for a model id pi-ai's registry
+ * doesn't know (e.g. `claude-opus-4-8`) that previously degraded to a native
+ * Anthropic model and 401'd. With Layer-1 routing the request still reaches
+ * the proxy, but the model metadata (e.g. Adobe's 1M context window) would be
+ * a 200K default until the list warms. Pre-warming here, with the token in
+ * hand, makes the cone's first init see the real model + metadata.
+ *
+ * Best-effort: a failed refresh must never block account application.
+ */
+export async function prewarmHostedModels(
+  accounts: Account[],
+  deps: PrewarmModelsDeps
+): Promise<void> {
+  await Promise.all(
+    accounts.map(async (a) => {
+      if (a.kind !== 'oauth' || !a.accessToken) return;
+      const refresh = deps.getRefreshModels(a.providerId);
+      if (!refresh) return;
+      try {
+        await refresh(a.accessToken);
+      } catch {
+        // best-effort — Layer-1 routing works without warmed metadata
+      }
+    })
+  );
+}
