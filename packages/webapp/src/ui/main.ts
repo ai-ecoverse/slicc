@@ -3891,31 +3891,6 @@ main().catch((err) => {
     errorDiv.appendChild(h1);
     errorDiv.appendChild(p);
 
-    const resetBtn = document.createElement('button');
-    resetBtn.textContent = 'Reset all data & reload';
-    resetBtn.style.cssText =
-      'margin-top: 1rem; padding: 0.5rem 1.5rem; background: var(--s2-negative, #e34850); color: #fff; ' +
-      'border: none; border-radius: 6px; cursor: pointer; font-size: 14px;';
-    resetBtn.addEventListener('click', async () => {
-      resetBtn.disabled = true;
-      resetBtn.textContent = 'Resetting…';
-      const dbs = await indexedDB.databases();
-      await Promise.all(
-        dbs.map((db) =>
-          db.name
-            ? new Promise<void>((res) => {
-                const req = indexedDB.deleteDatabase(db.name!);
-                req.onsuccess = () => res();
-                req.onerror = () => res();
-                req.onblocked = () => res();
-              })
-            : Promise.resolve()
-        )
-      );
-      location.reload();
-    });
-    errorDiv.appendChild(resetBtn);
-
     while (app.firstChild) app.removeChild(app.firstChild);
     app.appendChild(errorDiv);
   }
