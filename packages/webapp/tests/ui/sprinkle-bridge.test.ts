@@ -444,6 +444,13 @@ describe('SprinkleBridge', () => {
       const cmd = execHandler.mock.calls[0][0] as string;
       expect(cmd.startsWith('node -e ')).toBe(true);
       expect(cmd).toContain('fetch');
+      // Realm has no Node Buffer global — base64 must use realm-available
+      // primitives (Uint8Array + chunked String.fromCharCode + btoa).
+      expect(cmd).not.toContain('Buffer.from');
+      expect(cmd).not.toContain('require("buffer")');
+      expect(cmd).toContain('new Uint8Array(await r.arrayBuffer())');
+      expect(cmd).toContain('String.fromCharCode.apply');
+      expect(cmd).toContain('bodyBase64:btoa(bin)');
       expect(res.status).toBe(200);
       expect(res.body).toBe('{"hi":1}');
       expect(res.bodyBase64).toBe(btoa('{"hi":1}'));

@@ -175,8 +175,9 @@ export function buildJshNodeScript(op: string, args: unknown[]): string {
     "if(op==='fetch'){" +
     'var r=await fetch(a[0],a[1]||undefined);' +
     'var h={};r.headers.forEach(function(v,k){h[k]=v;});' +
-    'var buf=Buffer.from(await r.arrayBuffer());' +
-    'out={ok:r.ok,status:r.status,statusText:r.statusText,url:r.url,headers:h,bodyBase64:buf.toString("base64")};' +
+    'var u=new Uint8Array(await r.arrayBuffer());' +
+    'var bin="",C=0x8000;for(var i=0;i<u.length;i+=C){bin+=String.fromCharCode.apply(null,u.subarray(i,i+C));}' +
+    'out={ok:r.ok,status:r.status,statusText:r.statusText,url:r.url,headers:h,bodyBase64:btoa(bin)};' +
     "}else if(op==='http'){" +
     'var c=http.client(a[0]||{});' +
     'var res=await c[a[1]](a[2],Object.assign({},a[3]||{},{raw:true}));' +
