@@ -36,12 +36,14 @@ import {
   streamSimpleAnthropic,
   streamSimpleOpenAICompletions,
 } from '@earendil-works/pi-ai';
+import { withAdaptiveThinkingShim } from '../src/providers/adaptive-thinking.js';
 import {
   type AdobeModelMetadata,
   enrichAdobeModel,
 } from '../src/providers/adobe-model-metadata.js';
 import { getOAuthPageOrigin } from '../src/providers/oauth-service.js';
 import { createSilentRenewBackoff } from '../src/providers/silent-renew-backoff.js';
+import { withSupportedTemperature } from '../src/providers/temperature-support.js';
 import type { OAuthLauncher, OAuthLoginOptions, ProviderConfig } from '../src/providers/types.js';
 import { getDailyAdobeUuid } from '../src/scoops/llm-session-id.js';
 import {
@@ -748,7 +750,16 @@ const streamAdobe = (
           proxyModel as any,
           context,
           withSliccVersionHeader(
-            ensureSessionIdHeader({ ...options, apiKey: accessToken }, 'streamAdobe[anthropic]')
+            ensureSessionIdHeader(
+              // opus-4-8 quirks the pinned pi-ai doesn't know: it rejects
+              // `temperature` (strip it), and needs adaptive thinking instead of
+              // the legacy enabled+budget shape pi-ai emits (rewrite via onPayload).
+              withAdaptiveThinkingShim(
+                model,
+                withSupportedTemperature(model.id, model.name, { ...options, apiKey: accessToken })
+              ),
+              'streamAdobe[anthropic]'
+            )
           )
         );
         for await (const event of inner) stream.push(event as any);
@@ -800,7 +811,14 @@ const streamSimpleAdobe = (model: Model<Api>, context: Context, options?: Simple
           context,
           withSliccVersionHeader(
             ensureSessionIdHeader(
-              { ...options, apiKey: accessToken },
+              // opus-4-8 quirks the pinned pi-ai doesn't know: it rejects
+              // `temperature` (strip it — also covers thinking-disabled quick-llm
+              // helpers), and needs adaptive thinking instead of the legacy
+              // enabled+budget shape pi-ai emits (rewrite via onPayload).
+              withAdaptiveThinkingShim(
+                model,
+                withSupportedTemperature(model.id, model.name, { ...options, apiKey: accessToken })
+              ),
               'streamSimpleAdobe[anthropic]'
             )
           ) as any
