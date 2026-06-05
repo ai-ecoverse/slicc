@@ -484,6 +484,33 @@ jobs:
             sleep 15
           done
 
+  cloud-core:
+    needs: changes
+    if: >-
+      needs.changes.outputs.cloud-core == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: tsc --noEmit -p packages/cloud-core/tsconfig.json
+      - name: Test (with coverage threshold gate)
+        run: npm run test:coverage:cloud-core
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-cloud-core
+          path: coverage/
+          if-no-files-found: ignore
+      - name: Build
+        run: npm run build -w @slicc/cloud-core
+
   cherry:
     needs: changes
     if: >-
@@ -530,7 +557,7 @@ jobs:
       - name: Test (with coverage threshold gate)
         run: |
           ./packages/dev-tools/tools/swift-coverage-check.sh \
-            packages/swift-server SliccServerPackageTests 40 40 35
+            packages/swift-server SliccServerPackageTests
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -583,7 +610,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           ./packages/dev-tools/tools/swift-coverage-check.sh \
-            packages/swift-launcher SliccstartPackageTests 5 5 8
+            packages/swift-launcher SliccstartPackageTests
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -704,6 +731,7 @@ jobs:
         node-server,
         chrome-extension,
         cloudflare-worker,
+        cloud-core,
         global-install,
         swift-launcher,
         swift-server,
