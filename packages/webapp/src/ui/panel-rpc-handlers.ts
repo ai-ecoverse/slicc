@@ -427,7 +427,7 @@ export function createStandalonePanelRpcHandlers(
     'hid-list': async () => ({ devices: await hidOps.hidList(hidRegistry(), requireHid()) }),
 
     'hid-request': async ({ filters }) => ({
-      device: await hidOps.hidRequest(hidRegistry(), requireHid(), filters),
+      devices: await hidOps.hidRequest(hidRegistry(), requireHid(), filters),
     }),
 
     'hid-device-info': ({ handle }) => ({
@@ -457,11 +457,12 @@ export function createStandalonePanelRpcHandlers(
     'hid-receive-feature-report': async ({ handle, reportId }) =>
       hidOps.hidReceiveFeatureReport(hidRegistry(), handle, reportId),
 
-    'hid-subscribe-input-reports': ({ handle }) => {
+    'hid-subscribe-input-reports': async ({ handle }) => {
       // Replace any existing subscription for this handle so a
-      // re-subscribe doesn't leak the previous listener.
+      // re-subscribe doesn't leak the previous listener. The subscribe
+      // helper auto-opens the device, so this op is async.
       hidSubscriptions.get(handle)?.();
-      const unsubscribe = hidOps.hidSubscribeInputReports(hidRegistry(), handle, (report) => {
+      const unsubscribe = await hidOps.hidSubscribeInputReports(hidRegistry(), handle, (report) => {
         options.emitEvent?.('hid-input-report', {
           handle,
           reportId: report.reportId,
