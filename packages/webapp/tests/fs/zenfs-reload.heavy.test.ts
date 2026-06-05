@@ -59,24 +59,29 @@ d('VirtualFS — OPFS reload integrity (heavy)', () => {
     const { VirtualFS } = await import('../../src/fs/virtual-fs.js');
     // `vfs.getLightningFS()` no longer exists; reach the underlying
     // ZenFS `fs.promises` directly here, since this test exercises a
-    // POSIX surface (`chmod`) that VirtualFS does not re-expose.
+    // POSIX surface (`chmod`) that VirtualFS does not re-expose. The
+    // OPFS backend is now mounted at `/__opfs__/<dbName>` (per-dbName
+    // subpath, see `initOpfsBackend`), so direct ZenFS calls must
+    // address the prefixed path.
     const { fs: zenfs } = await import('@zenfs/core');
+    const DB = 'a6-reload-filemode';
+    const ROOT = `/__opfs__/${DB}`;
     {
       const vfs = await VirtualFS.create({
-        dbName: 'a6-reload-filemode',
+        dbName: DB,
         backend: 'opfs',
         wipe: true,
       });
       await vfs.writeFile('/run.sh', '#!/bin/sh\necho ok\n');
-      await zenfs.promises.chmod('/run.sh', 0o100755);
+      await zenfs.promises.chmod(`${ROOT}/run.sh`, 0o100755);
       await vfs.dispose();
     }
     {
       const vfs = await VirtualFS.create({
-        dbName: 'a6-reload-filemode',
+        dbName: DB,
         backend: 'opfs',
       });
-      const st = await zenfs.promises.lstat('/run.sh');
+      const st = await zenfs.promises.lstat(`${ROOT}/run.sh`);
       expect(st.mode & 0o111).not.toBe(0);
       await vfs.dispose();
     }

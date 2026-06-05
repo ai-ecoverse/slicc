@@ -275,18 +275,32 @@ export class VirtualFS {
   }
 
   /**
-   * Configure `@zenfs/core` with the `@zenfs/dom` `WebAccess` backend
-   * rooted at an OPFS subdirectory, with `metadata: '/.metadata.json'`
-   * so filemode bits and symlinks survive a page reload (without the
-   * sidecar the metadata lives only in IndexFS in-memory and is lost
-   * on every reload).
+   * Mount an OPFS-backed `WebAccessFS` at a per-`dbName` subpath
+   * (`/__opfs__/<dbName>`) so multiple OPFS-backed VirtualFS instances
+   * with different `dbName`s coexist without clobbering each other.
    *
-   * ZenFS' top-level `configure({ mounts: { '/': … } })` installs a
-   * GLOBAL mount, so only one OPFS-backed VirtualFS instance can be
-   * active at a time. The orchestrator's primary `slicc-fs` instance
-   * owns the OPFS root; smaller per-feature instances (`mcp-store`,
-   * `oauth-token-command`, etc.) still come up but share the same
-   * OPFS root via the unique `dbName` subdirectory convention.
+   * Earlier revisions called `configure({ mounts: { '/': … } })`, which
+   * installs a GLOBAL `/` mount on the shared ZenFS module. A second
+   * `initOpfsBackend` for a different `dbName` (e.g. the helper VFS at
+   * `slicc-fs-global` used by git/MCP/OAuth) would then replace `/`
+   * and silently disconnect the orchestrator's primary `slicc-fs`
+   * instance from its OPFS tree (`/workspace` would resolve into the
+   * helper's subdir). To avoid that, we:
+   *
+   *   1. Initialize a stub `InMemory` root once per realm via
+   *      {@link ensureRootMount} so per-dbName sub-mounts have a root
+   *      to attach to.
+   *   2. Resolve a `WebAccessFS` instance directly via
+   *      `resolveMountConfig(...)` (the same helper `configure` uses
+   *      internally) so we can hand it to `mount(point, fs)` without
+   *      replacing existing mounts.
+   *   3. Mount at `/__opfs__/<dbName>` and route VirtualFS-visible
+   *      paths through {@link prefix}/{@link unprefix} just like the
+   *      memory backend does.
+   *
+   * Same-`dbName` instances share the resolved `WebAccessFS` via the
+   * {@link opfsBackends} refcount cache (mirrors the memory backend's
+   * per-`dbName` semantics); the last `dispose()` umounts the subpath.
    */
   private static async initOpfsBackend(
     vfs: VirtualFS,
@@ -296,45 +310,52 @@ export class VirtualFS {
     const handle = providedHandle ?? (await VirtualFS.acquireOpfsHandle(vfs.dbName, wipe));
     // ZenFS' `WebAccessFS._loadMetadata` reads `/.metadata.json` eagerly when
     // a `metadata` path is configured and throws ENOENT on first boot of a
-    // fresh OPFS subdir. Seed an empty-but-valid sidecar before `configure()`
-    // so the file exists. The shape mirrors `Index.toJSON()` in
-    // `@zenfs/core/internal/file_index.js` (`{ version, maxSize, entries }`)
-    // so ZenFS can overwrite it byte-compatibly. Only seed when absent — an
-    // existing sidecar (the reload case) is left untouched so persisted
-    // metadata survives.
+    // fresh OPFS subdir. Seed an empty-but-valid sidecar before
+    // `resolveMountConfig()` so the file exists. The shape mirrors
+    // `Index.toJSON()` in `@zenfs/core/internal/file_index.js`
+    // (`{ version, maxSize, entries }`) so ZenFS can overwrite it
+    // byte-compatibly. Only seed when absent — an existing sidecar (the
+    // reload case) is left untouched so persisted metadata survives.
     await VirtualFS.seedOpfsMetadataSidecarIfMissing(handle);
-    const [{ configure, fs: zenfsImport, mounts }, { WebAccess }] = await Promise.all([
-      import('@zenfs/core'),
-      import('@zenfs/dom'),
-    ]);
-    await configure({
-      mounts: {
-        '/': {
-          backend: WebAccess,
-          handle,
-          metadata: '/.metadata.json',
-        },
-      },
-    });
-    vfs.lfs = zenfsImport.promises as unknown as FsPromisesLike;
-    // Capture the live `WebAccessFS` from `@zenfs/core`'s mount registry
-    // (populated by `configure` → `mountWithMkdir` → `mounts.set(point, fs)`
-    // in `@zenfs/core/vfs/shared.js`). Needed so `flush`/`dispose` can
-    // serialize `index.toJSON()` back to the sidecar — see field doc on
-    // {@link opfsBackendFs}.
-    const mountedFs = mounts.get('/') as unknown as
-      | {
-          index?: { toJSON: () => unknown };
+    const [zenfs, { WebAccess }] = await Promise.all([import('@zenfs/core'), import('@zenfs/dom')]);
+    await VirtualFS.ensureRootMount(zenfs);
+    const mountPoint = `/__opfs__/${vfs.dbName}`;
+    let entry = VirtualFS.opfsBackends.get(vfs.dbName);
+    if (entry && wipe) {
+      try {
+        zenfs.umount(mountPoint);
+      } catch {
+        /* not mounted yet */
+      }
+      VirtualFS.opfsBackends.delete(vfs.dbName);
+      entry = undefined;
+    }
+    if (!entry) {
+      const backendFs = (await (
+        zenfs as unknown as {
+          resolveMountConfig: (opts: unknown) => Promise<unknown>;
         }
-      | undefined;
-    vfs.opfsBackendFs = mountedFs?.index
-      ? (mountedFs as { index: { toJSON: () => unknown } })
+      ).resolveMountConfig({
+        backend: WebAccess,
+        handle,
+        metadata: '/.metadata.json',
+      })) as { index?: { toJSON: () => unknown } };
+      try {
+        (zenfs.mount as unknown as (p: string, fs: unknown) => void)(mountPoint, backendFs);
+      } catch {
+        /* already mounted with this backend — safe to ignore */
+      }
+      entry = { backendFs, refs: 0 };
+      VirtualFS.opfsBackends.set(vfs.dbName, entry);
+    }
+    entry.refs += 1;
+    vfs.opfsBackendFs = entry.backendFs.index
+      ? (entry.backendFs as { index: { toJSON: () => unknown } })
       : null;
     vfs.opfsHandle = handle;
-    // OPFS uses a single global '/' mount — no path-prefix translation.
-    vfs.mountRoot = '';
-    vfs.rawLfs = zenfsImport.promises as unknown as FsPromisesLike;
-    vfs.rawLfsSync = zenfsImport as unknown as FsSyncLike;
+    vfs.mountRoot = mountPoint;
+    vfs.rawLfs = zenfs.promises as unknown as FsPromisesLike;
+    vfs.rawLfsSync = zenfs as unknown as FsSyncLike;
   }
 
   /**
@@ -361,7 +382,7 @@ export class VirtualFS {
     wipe: boolean
   ): Promise<void> {
     const zenfs = await import('@zenfs/core');
-    await VirtualFS.ensureMemoryRoot(zenfs);
+    await VirtualFS.ensureRootMount(zenfs);
     const mountPoint = `/__zenfs__/${dbName}`;
     let entry = VirtualFS.memoryBackends.get(dbName);
     if (entry && wipe) {
@@ -396,11 +417,16 @@ export class VirtualFS {
 
   /**
    * Bootstrap the global ZenFS root once per process so per-instance
-   * `mount('/__zenfs__/<dbName>', …)` calls have a root to attach to.
-   * Idempotent — subsequent inits short-circuit after the first
-   * `configureSingle` resolves.
+   * `mount('/__zenfs__/<dbName>', …)` / `mount('/__opfs__/<dbName>', …)`
+   * calls have a root to attach to. Idempotent — subsequent inits
+   * short-circuit after the first `configureSingle` resolves. The root
+   * is `InMemory`; per-`dbName` sub-mounts (memory or OPFS) are
+   * installed on top via `mount()`, so this never replaces the
+   * existing mount registry. Called from both
+   * {@link initMemoryBackend} and {@link initOpfsBackend} so OPFS
+   * instances no longer remount the global `/`.
    */
-  private static memoryRootReady: Promise<void> | null = null;
+  private static rootMountReady: Promise<void> | null = null;
   /**
    * Per-`dbName` cache of `InMemory` stores so multiple alive VirtualFS
    * instances with the same `dbName` share state (mirrors the legacy
@@ -411,12 +437,24 @@ export class VirtualFS {
    * would inherit the previous test's residual data.
    */
   private static memoryBackends: Map<string, { store: unknown; refs: number }> = new Map();
-  private static async ensureMemoryRoot(zenfs: typeof import('@zenfs/core')): Promise<void> {
-    if (VirtualFS.memoryRootReady) return VirtualFS.memoryRootReady;
-    VirtualFS.memoryRootReady = (async () => {
+  /**
+   * Per-`dbName` cache of resolved `WebAccessFS` backends so multiple
+   * alive OPFS-backed VirtualFS instances with the same `dbName` share
+   * one mount + one in-memory index. Refcounted with the same
+   * semantics as {@link memoryBackends}: the last `dispose()` for a
+   * name umounts `/__opfs__/<dbName>` and drops the entry so a fresh
+   * `create()` re-resolves the backend.
+   */
+  private static opfsBackends: Map<
+    string,
+    { backendFs: { index?: { toJSON: () => unknown } }; refs: number }
+  > = new Map();
+  private static async ensureRootMount(zenfs: typeof import('@zenfs/core')): Promise<void> {
+    if (VirtualFS.rootMountReady) return VirtualFS.rootMountReady;
+    VirtualFS.rootMountReady = (async () => {
       await zenfs.configureSingle({ backend: zenfs.InMemory, label: '__vfs_root__' });
     })();
-    return VirtualFS.memoryRootReady;
+    return VirtualFS.rootMountReady;
   }
 
   /** Translate a VFS-visible path to the underlying ZenFS path (memory backend only). */
@@ -676,12 +714,16 @@ export class VirtualFS {
     // the dispose (same mechanism as `flush()` on the OPFS path; no-op
     // on InMemory).
     await this.writeOpfsMetadataSidecar();
-    if (this.backend === 'memory' && this.mountRoot) {
-      const entry = VirtualFS.memoryBackends.get(this.dbName);
+    if (this.mountRoot) {
+      // OPFS and memory share the same refcount-then-umount lifecycle;
+      // pick the right backend cache and apply it.
+      const cache: Map<string, { refs: number }> =
+        this.backend === 'opfs' ? VirtualFS.opfsBackends : VirtualFS.memoryBackends;
+      const entry = cache.get(this.dbName);
       if (entry) {
         entry.refs -= 1;
         if (entry.refs <= 0) {
-          VirtualFS.memoryBackends.delete(this.dbName);
+          cache.delete(this.dbName);
           try {
             const zenfs = await import('@zenfs/core');
             zenfs.umount(this.mountRoot);
