@@ -3,16 +3,24 @@
  * bridge. Wires `createHidBridge` through a real `RealmRpcClient`
  * connected to `attachRealmHost` with an injected mock `HidBackend`,
  * covering the realm device-object surface, the realm-RPC envelope
- * shape, binary report transfer, and error propagation. Input-report
- * subscriptions are out of scope for v1 (no realm-side `hid.watch`).
+ * shape, binary report transfer, error propagation, and the
+ * `addEventListener('inputreport', …)` event-driven path the VIA-style
+ * request/response runs sit on top of.
  */
 
 import type { CommandContext } from 'just-bash';
 import { describe, expect, it } from 'vitest';
+import type {
+  RealmHidInputReportEvent,
+  RealmHidInputReportListener,
+} from '../../../src/kernel/realm/js-realm-shared.js';
 import { createHidBridge } from '../../../src/kernel/realm/js-realm-shared.js';
 import { attachRealmHost } from '../../../src/kernel/realm/realm-host.js';
 import { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
-import type { HidBackend } from '../../../src/shell/supplemental-commands/hid-backends.js';
+import type {
+  HidBackend,
+  HidInputReport,
+} from '../../../src/shell/supplemental-commands/hid-backends.js';
 import { makeCtx, makePortPair } from './device-bridge-test-helpers.js';
 
 interface Recorded {
@@ -20,12 +28,25 @@ interface Recorded {
   args: unknown[];
 }
 
-function makeMockBackend(recorded: Recorded[], throwOn?: string): HidBackend {
+interface MockBackendOpts {
+  throwOn?: string;
+  /** Receive the emit hook the backend uses to fan a fake report. */
+  onEmit?(emit: (handle: string, report: HidInputReport) => void): void;
+}
+
+function makeMockBackend(recorded: Recorded[], opts: MockBackendOpts = {}): HidBackend {
   const rec = (op: string, args: unknown[]) => recorded.push({ op, args });
   const guard = (op: string) => {
-    if (throwOn === op) throw new Error(`backend ${op} boom`);
+    if (opts.throwOn === op) throw new Error(`backend ${op} boom`);
   };
   const info = (handle: string) => ({ handle, vendorId: 0x046d, productId: 0xc52b, opened: false });
+  // Per-handle subscriber registry so a test can emit a fake report after
+  // `subscribeInputReports` resolves and assert the listener received it.
+  const subs = new Map<string, (report: HidInputReport) => void>();
+  opts.onEmit?.((handle, report) => {
+    const cb = subs.get(handle);
+    cb?.(report);
+  });
   return {
     list: async () => {
       rec('list', []);
@@ -52,17 +73,24 @@ function makeMockBackend(recorded: Recorded[], throwOn?: string): HidBackend {
       rec('receiveFeatureReport', [h, reportId]);
       return { reportId, bytes: new Uint8Array([0x01, 0x02, 0x03]) };
     },
-    subscribeInputReports: async () => async () => {},
+    subscribeInputReports: async (h, onReport) => {
+      rec('subscribeInputReports', [h]);
+      subs.set(h, onReport);
+      return async () => {
+        rec('unsubscribeInputReports', [h]);
+        subs.delete(h);
+      };
+    },
   };
 }
 
-function setup(recorded: Recorded[], throwOn?: string) {
+function setup(recorded: Recorded[], opts: MockBackendOpts = {}) {
   const ctx: CommandContext = makeCtx();
   const { realm, host } = makePortPair();
-  const handle = attachRealmHost(host, ctx, { hidBackend: makeMockBackend(recorded, throwOn) });
+  const handle = attachRealmHost(host, ctx, { hidBackend: makeMockBackend(recorded, opts) });
   const client = new RealmRpcClient(realm);
   const hid = createHidBridge(client);
-  return { hid, dispose: () => (client.dispose(), handle.dispose()) };
+  return { hid, client, handle, dispose: () => (client.dispose(), handle.dispose()) };
 }
 
 describe('realm hid bridge', () => {
@@ -121,7 +149,7 @@ describe('realm hid bridge', () => {
 
   it('propagates backend errors to the realm caller', async () => {
     const rec: Recorded[] = [];
-    const { hid, dispose } = setup(rec, 'open');
+    const { hid, dispose } = setup(rec, { throwOn: 'open' });
     const device = await hid.request([]);
     await expect(device.open()).rejects.toThrow(/backend open boom/);
     dispose();
@@ -135,5 +163,151 @@ describe('realm hid bridge', () => {
     await expect(client.call('hid', 'bogusOp', [])).rejects.toThrow(/unknown hid op/);
     client.dispose();
     handle.dispose();
+  });
+
+  describe('addEventListener(inputreport)', () => {
+    function withEmit() {
+      const rec: Recorded[] = [];
+      let emit: (handle: string, report: HidInputReport) => void = () => {};
+      const ctx = setup(rec, {
+        onEmit: (e) => {
+          emit = e;
+        },
+      });
+      return { ...ctx, rec, emit: (h: string, r: HidInputReport) => emit(h, r) };
+    }
+
+    it('subscribes on first listener and delivers reports as DataView events', async () => {
+      const { hid, rec, emit, dispose } = withEmit();
+      const device = await hid.request([]);
+      const received: Array<{ reportId: number; bytes: number[] }> = [];
+      device.addEventListener('inputreport', (event) => {
+        const view = event.data;
+        const bytes = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
+        received.push({ reportId: event.reportId, bytes: [...bytes] });
+      });
+      // Let the subscribe RPC round-trip before emitting.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(rec).toContainEqual({ op: 'subscribeInputReports', args: ['hid1'] });
+      emit('hid1', { reportId: 3, bytes: new Uint8Array([0xaa, 0xbb]) });
+      expect(received).toEqual([{ reportId: 3, bytes: [0xaa, 0xbb] }]);
+      dispose();
+    });
+
+    it('coalesces multiple listeners into one backend subscription', async () => {
+      const { hid, rec, emit, dispose } = withEmit();
+      const device = await hid.request([]);
+      const a: number[][] = [];
+      const b: number[][] = [];
+      device.addEventListener('inputreport', (e) =>
+        a.push([...new Uint8Array(e.data.buffer, e.data.byteOffset, e.data.byteLength)])
+      );
+      device.addEventListener('inputreport', (e) =>
+        b.push([...new Uint8Array(e.data.buffer, e.data.byteOffset, e.data.byteLength)])
+      );
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      const subscribes = rec.filter((r) => r.op === 'subscribeInputReports');
+      expect(subscribes).toHaveLength(1);
+      emit('hid1', { reportId: 0, bytes: new Uint8Array([0x11]) });
+      expect(a).toEqual([[0x11]]);
+      expect(b).toEqual([[0x11]]);
+      dispose();
+    });
+
+    it('unsubscribes the backend once the last listener is removed', async () => {
+      const { hid, rec, dispose } = withEmit();
+      const device = await hid.request([]);
+      const cb = (): void => {};
+      device.addEventListener('inputreport', cb);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      device.removeEventListener('inputreport', cb);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(rec).toContainEqual({ op: 'unsubscribeInputReports', args: ['hid1'] });
+      dispose();
+    });
+
+    it('completes a VIA-style send→input-report round trip via addEventListener', async () => {
+      const { hid, rec, emit, dispose } = withEmit();
+      const device = await hid.request([]);
+      const reply = new Promise<RealmHidInputReportEvent>((resolve) => {
+        const handler: RealmHidInputReportListener = (event) => {
+          device.removeEventListener('inputreport', handler);
+          resolve(event);
+        };
+        device.addEventListener('inputreport', handler);
+      });
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      await device.sendReport(0, new Uint8Array([0x01]));
+      emit('hid1', { reportId: 0, bytes: new Uint8Array([0x01, 0x42]) });
+      const event = await reply;
+      const echoed = new Uint8Array(
+        event.data.buffer,
+        event.data.byteOffset,
+        event.data.byteLength
+      );
+      expect([...echoed]).toEqual([0x01, 0x42]);
+      // After the response handler self-detaches the listener count drops
+      // to zero, which kicks the unsubscribe.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(rec).toContainEqual({ op: 'unsubscribeInputReports', args: ['hid1'] });
+      dispose();
+    });
+
+    it('onInputReport is an alias for addEventListener("inputreport")', async () => {
+      const { hid, rec, emit, dispose } = withEmit();
+      const device = await hid.request([]);
+      const seen: number[] = [];
+      device.onInputReport((event) => seen.push(event.reportId));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(rec).toContainEqual({ op: 'subscribeInputReports', args: ['hid1'] });
+      emit('hid1', { reportId: 7, bytes: new Uint8Array([0]) });
+      expect(seen).toEqual([7]);
+      dispose();
+    });
+
+    it('ignores events keyed to another device handle', async () => {
+      const { hid, emit, dispose } = withEmit();
+      const device = await hid.request([]);
+      const seen: number[] = [];
+      device.addEventListener('inputreport', (e) => seen.push(e.reportId));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      emit('hid-other', { reportId: 99, bytes: new Uint8Array([0]) });
+      expect(seen).toEqual([]);
+      dispose();
+    });
+
+    it('accepts disconnect listeners as a valid registration type', async () => {
+      const { hid, dispose } = withEmit();
+      const device = await hid.request([]);
+      const cb = (): void => {};
+      // Registration must not throw and must accept removal symmetrically.
+      device.addEventListener('disconnect', cb);
+      device.removeEventListener('disconnect', cb);
+      dispose();
+    });
+
+    it('throws on unknown event types', async () => {
+      const { hid, dispose } = withEmit();
+      const device = await hid.request([]);
+      expect(() =>
+        (
+          device as unknown as { addEventListener: (t: string, c: () => void) => void }
+        ).addEventListener('not-a-real-event', () => {})
+      ).toThrow(/unknown event type/);
+      dispose();
+    });
+
+    it('drains outstanding subscriptions on realm-host dispose', async () => {
+      const { hid, rec, handle, dispose } = withEmit();
+      const device = await hid.request([]);
+      device.addEventListener('inputreport', () => {});
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(rec.filter((r) => r.op === 'subscribeInputReports')).toHaveLength(1);
+      handle.dispose();
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      // The host-side disposer drains the backend unsubscribe.
+      expect(rec.filter((r) => r.op === 'unsubscribeInputReports')).toHaveLength(1);
+      dispose();
+    });
   });
 });

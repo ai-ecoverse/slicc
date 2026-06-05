@@ -37,6 +37,7 @@ import type {
 import type { UsbControlSetup, UsbDeviceFilter } from '../usb-device-registry.js';
 import type { RealmPortLike } from './realm-rpc.js';
 import type {
+  RealmEventMsg,
   RealmRpcRequest,
   RealmRpcResponse,
   SerializedFetchResponse,
@@ -98,20 +99,48 @@ export function attachRealmHost(
   ctx: CommandContext,
   opts: RealmHostOptions = {}
 ): RealmHostHandle {
+  // Per-port HID `inputreport` subscriptions, keyed by device handle.
+  // The realm side calls `hid.subscribeInputReports(h)` to start the
+  // backend listener and `unsubscribeInputReports(h)` to stop it;
+  // `dispose()` drains the map so realm teardown can never leak a
+  // page-side `inputreport` listener (DOD: "no leaked subscriptions
+  // on realm teardown").
+  const hidSubscriptions = new Map<string, () => void | Promise<void>>();
+  let disposed = false;
+  const pushEvent = (msg: RealmEventMsg, transfer: Transferable[] = []): void => {
+    if (disposed) return;
+    try {
+      port.postMessage(msg, transfer);
+    } catch {
+      // Disposed ports / detached transferables — best-effort, the
+      // listener-cleanup happens via `dispose()`.
+    }
+  };
+  const hidCtx: HidDispatchCtx = { subscriptions: hidSubscriptions, pushEvent };
   const handler = (event: MessageEvent): void => {
     const data = event.data as { type?: string };
     if (data?.type !== 'realm-rpc-req') return;
     const req = event.data as RealmRpcRequest;
-    void respond(port, req, ctx, opts);
+    void respond(port, req, ctx, opts, hidCtx);
   };
   port.addEventListener('message', handler);
   port.start?.();
-  let disposed = false;
   return {
     dispose: () => {
       if (disposed) return;
       disposed = true;
       port.removeEventListener('message', handler);
+      // Drain HID subscriptions best-effort; sync and async unsubscribes
+      // are both honored. We don't await — `dispose()` is sync, and the
+      // backend's unsubscribe surface accepts fire-and-forget here.
+      for (const unsub of hidSubscriptions.values()) {
+        try {
+          void Promise.resolve(unsub()).catch(() => {});
+        } catch {
+          /* swallow — realm teardown must not throw */
+        }
+      }
+      hidSubscriptions.clear();
     },
   };
 }
@@ -120,10 +149,11 @@ async function respond(
   port: RealmPortLike,
   req: RealmRpcRequest,
   ctx: CommandContext,
-  opts: RealmHostOptions
+  opts: RealmHostOptions,
+  hidCtx: HidDispatchCtx
 ): Promise<void> {
   try {
-    const result = await dispatch(req, ctx, opts);
+    const result = await dispatch(req, ctx, opts, hidCtx);
     const res: RealmRpcResponse = { type: 'realm-rpc-res', id: req.id, result };
     // Body bytes need to be transferred so we don't structured-clone
     // potentially-large response bodies on every fetch.
@@ -139,7 +169,8 @@ async function respond(
 async function dispatch(
   req: RealmRpcRequest,
   ctx: CommandContext,
-  opts: RealmHostOptions
+  opts: RealmHostOptions,
+  hidCtx: HidDispatchCtx
 ): Promise<unknown> {
   switch (req.channel) {
     case 'vfs':
@@ -155,7 +186,7 @@ async function dispatch(
     case 'serial':
       return dispatchSerial(req.op, req.args, resolveSerialBackendForHost(opts));
     case 'hid':
-      return dispatchHid(req.op, req.args, resolveHidBackendForHost(opts));
+      return dispatchHid(req.op, req.args, resolveHidBackendForHost(opts), hidCtx);
     default:
       throw new Error(`realm-host: unknown channel '${req.channel}'`);
   }
@@ -685,8 +716,25 @@ async function dispatchSerial(
   }
 }
 
+/**
+ * Per-port state the HID dispatch needs beyond the backend itself:
+ * the subscription map (so subscribe/unsubscribe are idempotent and
+ * realm teardown can drain leftovers) and the push hook (so backend
+ * `inputreport` callbacks fan back to the realm over the same port
+ * the RPC arrived on). Lives in `attachRealmHost`'s closure.
+ */
+interface HidDispatchCtx {
+  subscriptions: Map<string, () => void | Promise<void>>;
+  pushEvent(msg: RealmEventMsg, transfer?: Transferable[]): void;
+}
+
 /** Dispatch a `hid` channel RPC against the resolved backend. */
-async function dispatchHid(op: string, args: unknown[], backend: HidBackend): Promise<unknown> {
+async function dispatchHid(
+  op: string,
+  args: unknown[],
+  backend: HidBackend,
+  hidCtx: HidDispatchCtx
+): Promise<unknown> {
   switch (op) {
     case 'list':
       return backend.list();
@@ -704,6 +752,34 @@ async function dispatchHid(op: string, args: unknown[], backend: HidBackend): Pr
       return backend.sendFeatureReport(args[0] as string, args[1] as number, args[2] as Uint8Array);
     case 'receiveFeatureReport':
       return backend.receiveFeatureReport(args[0] as string, args[1] as number);
+    case 'subscribeInputReports': {
+      // Idempotent: a second subscribe for the same handle is a no-op so
+      // a realm caller that hangs multiple listeners on one device only
+      // opens one backend subscription. The matching unsubscribe runs on
+      // `unsubscribeInputReports` or on realm-host `dispose()`.
+      const handle = args[0] as string;
+      if (hidCtx.subscriptions.has(handle)) return true;
+      const off = await backend.subscribeInputReports(handle, (report) => {
+        const bytes =
+          report.bytes instanceof Uint8Array ? report.bytes : new Uint8Array(report.bytes);
+        const msg: RealmEventMsg = {
+          type: 'realm-event',
+          channel: 'hid-input-report',
+          payload: { handle, reportId: report.reportId, bytes },
+        };
+        hidCtx.pushEvent(msg, [bytes.buffer as Transferable]);
+      });
+      hidCtx.subscriptions.set(handle, off);
+      return true;
+    }
+    case 'unsubscribeInputReports': {
+      const handle = args[0] as string;
+      const off = hidCtx.subscriptions.get(handle);
+      if (!off) return true;
+      hidCtx.subscriptions.delete(handle);
+      await off();
+      return true;
+    }
     default:
       throw new Error(`realm-host: unknown hid op '${op}'`);
   }

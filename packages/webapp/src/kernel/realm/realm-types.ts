@@ -126,6 +126,21 @@ export interface RealmRpcResponse {
 }
 
 /**
+ * Host → realm push event. Unlike `realm-rpc-res` (one per request id),
+ * events are fire-and-forget: the host emits them on a named `channel`
+ * and any in-realm subscriber registered via `RealmRpcClient.onEvent`
+ * receives them. Used today by the HID bridge to stream `inputreport`
+ * payloads to in-realm device listeners (channel `hid-input-report`,
+ * payload `{ handle, reportId, bytes }`), mirroring the `panel-rpc-event`
+ * page→worker fan-out one layer below.
+ */
+export interface RealmEventMsg {
+  type: 'realm-event';
+  channel: string;
+  payload: unknown;
+}
+
+/**
  * Sandbox iframe handshake: posted from inside the iframe when its
  * bootstrap has loaded and is ready to receive a port. The host
  * responds with a `realm-port-init` carrying the transferred port.
@@ -227,4 +242,4 @@ export interface WsSubscriberInfo {
 export type RealmOutbound = RealmDoneMsg | RealmErrorMsg | RealmRpcRequest | RealmIframeReadyMsg;
 
 /** Inbound to the realm. */
-export type RealmInbound = RealmInitMsg | RealmRpcResponse | RealmPortInitMsg;
+export type RealmInbound = RealmInitMsg | RealmRpcResponse | RealmPortInitMsg | RealmEventMsg;
