@@ -37,6 +37,30 @@ function tick(ms = 5): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/**
+ * Deterministic replacement for `await tick(N)` when the test needs to
+ * observe a response that hops port1 -> port2 -> async handler -> port2
+ * -> port1. On loaded CI runners (Node 24/25) the worker_threads
+ * MessagePort delivery can drift past a fixed-budget setTimeout, which
+ * is what makes a single `tick(20)` flaky for the very first test in
+ * this file. Polling `ctx.responses.length` removes that drift.
+ */
+async function waitForResponses(
+  ctx: { responses: unknown[] },
+  expected = 1,
+  timeoutMs = 1000
+): Promise<void> {
+  const start = Date.now();
+  while (ctx.responses.length < expected) {
+    if (Date.now() - start > timeoutMs) {
+      throw new Error(
+        `Timed out after ${timeoutMs}ms waiting for ${expected} response(s); got ${ctx.responses.length}`
+      );
+    }
+    await new Promise((r) => setTimeout(r, 1));
+  }
+}
+
 function makeStubVfs(overrides?: Partial<LocalVfsClient>): {
   client: LocalVfsClient;
   readDir: ReturnType<typeof vi.fn>;
@@ -107,7 +131,7 @@ describe('VfsRpcHost round-trip over MessageChannel', () => {
     ] satisfies DirEntry[]);
     const req: VfsReadRequestMsg = { type: 'vfs-read-dir', requestId: 'r1', path: '/workspace' };
     ctx.panelTransport.send(req);
-    await tick(20);
+    await waitForResponses(ctx);
     expect(ctx.vfs.readDir).toHaveBeenCalledWith('/workspace');
     expect(ctx.responses).toHaveLength(1);
     const resp = ctx.responses[0] as VfsReadDirResultMsg;
