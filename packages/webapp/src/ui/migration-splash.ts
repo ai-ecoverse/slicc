@@ -104,6 +104,12 @@ export function createMigrationSplash(opts: MigrationSplashOptions): MigrationSp
   let timerId: ReturnType<typeof setTimeout> | null = null;
   let nodes: ModalNodes | null = null;
   let lastProgress: MigrationSplashProgress = { copied: 0, total: 0 };
+  // Document-level capture-phase keydown blocker. Installed when the
+  // modal paints, removed on disarm. Necessary because the scrim is
+  // neither focusable nor an ancestor of the focused element, so a
+  // listener on the scrim itself never receives the key events.
+  let keydownBlocker: ((e: Event) => void) | null = null;
+  let keydownBlockerTarget: EventTarget | null = null;
 
   function applyProgress(): void {
     if (!nodes) return;
@@ -140,13 +146,22 @@ export function createMigrationSplash(opts: MigrationSplashOptions): MigrationSp
       'blur(4px)';
     scrim.style.pointerEvents = 'auto';
     scrim.style.fontFamily = BRAND_FONT_STACK;
-    // Swallow pointer + key events so they cannot reach the booting UI
-    // underneath. Capture-phase listeners win over downstream handlers.
-    const swallow = (e: Event): void => {
+    // Swallow pointer events at the scrim so clicks can't fall
+    // through to the booting UI underneath.
+    scrim.addEventListener('click', (e) => {
       e.stopPropagation();
+    });
+    // Keyboard blocker is installed at document scope (capture phase)
+    // because the scrim is not in the focused element's ancestor
+    // chain — a scrim-attached listener would never see the events.
+    const target: EventTarget = doc.defaultView ?? doc;
+    const blocker = (e: Event): void => {
+      e.stopImmediatePropagation();
+      e.preventDefault();
     };
-    scrim.addEventListener('click', swallow);
-    scrim.addEventListener('keydown', swallow, true);
+    target.addEventListener('keydown', blocker, true);
+    keydownBlocker = blocker;
+    keydownBlockerTarget = target;
 
     const card = doc.createElement('div');
     card.style.minWidth = '320px';
@@ -201,6 +216,11 @@ export function createMigrationSplash(opts: MigrationSplashOptions): MigrationSp
   }
 
   function remove(): void {
+    if (keydownBlocker && keydownBlockerTarget) {
+      keydownBlockerTarget.removeEventListener('keydown', keydownBlocker, true);
+      keydownBlocker = null;
+      keydownBlockerTarget = null;
+    }
     if (!nodes) return;
     nodes.root.remove();
     nodes = null;

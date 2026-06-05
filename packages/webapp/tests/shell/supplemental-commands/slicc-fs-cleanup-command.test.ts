@@ -94,6 +94,18 @@ describe('slicc-fs-cleanup command', () => {
     expect(result.stderr).toContain('sentinel');
   });
 
+  it('rejects unknown arguments without running the destructive driver', async () => {
+    const runCleanup = vi.fn(
+      async () => ({ kind: 'deleted', message: '' }) as LegacyIdbCleanupResult
+    );
+    const cmd = createSliccFsCleanupCommand({ fs: fakeFs('opfs'), runCleanup });
+    const result = await cmd.execute(['--dry-run'], createMockCtx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('unsupported argument');
+    expect(result.stderr).toContain('--dry-run');
+    expect(runCleanup).not.toHaveBeenCalled();
+  });
+
   it('exits non-zero with stderr on blocked / error outcomes', async () => {
     for (const kind of ['blocked', 'error'] as const) {
       const runCleanup = vi.fn(

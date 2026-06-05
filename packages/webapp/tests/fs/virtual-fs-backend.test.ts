@@ -9,7 +9,7 @@ describe('VirtualFS — backend resolution', () => {
     vfs = await VirtualFS.create({ dbName: 'test-vfs-backend', wipe: true });
   });
   afterEach(async () => {
-    await new Promise((r) => setTimeout(r, 600));
+    await vfs.dispose();
   });
 
   it("falls back to 'memory' in Node test envs without OPFS support", () => {
@@ -60,7 +60,7 @@ describe('VirtualFS — ZenFS ErrnoError → FsError mapping', () => {
     vfs = await VirtualFS.create({ dbName: 'test-vfs-errno', wipe: true });
   });
   afterEach(async () => {
-    await new Promise((r) => setTimeout(r, 600));
+    await vfs.dispose();
   });
 
   function mapErr(code: string): FsError {

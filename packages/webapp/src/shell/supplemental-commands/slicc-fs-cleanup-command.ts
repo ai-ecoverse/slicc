@@ -68,6 +68,16 @@ export function createSliccFsCleanupCommand(options: SliccFsCleanupCommandOption
     if (args.includes('--help') || args.includes('-h')) {
       return { stdout: helpText(), stderr: '', exitCode: 0 };
     }
+    // Destructive command: refuse anything beyond the bare zero-arg
+    // invocation (mirrors `df`'s arg validation). Unknown flags like
+    // `--dry-run` must not silently fall through to deletion.
+    if (args.length > 0) {
+      return {
+        stdout: '',
+        stderr: `slicc-fs-cleanup: unsupported argument: ${args[0]}\n`,
+        exitCode: 1,
+      };
+    }
     const fs = options.fs;
     if (fs?.backend !== 'opfs') {
       return {

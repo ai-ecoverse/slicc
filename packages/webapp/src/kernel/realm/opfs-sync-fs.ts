@@ -427,26 +427,23 @@ export function createOpfsSyncFs(Fs: EmscriptenFsApi): OpfsSyncFsPlugin {
         if (attr.size !== undefined && Fs.isFile(node.mode)) {
           const newSize = attr.size;
           node.opfs.size = newSize;
-          // Truncate via the SAH if one is already open; otherwise
-          // queue an async truncate that runs through a transient
-          // SAH lease so the on-disk file matches the new size.
-          const live = tryGetOpenSah(node);
-          if (live) {
-            live.truncate(newSize);
-            live.flush();
-          } else {
-            enqueueOpfsOp(node.mount, async () => {
-              const fileHandle = await ensureFileHandle(node);
-              const sah = node.mount.opts.sahProvider.acquire(node.opfs.relPath, fileHandle);
-              try {
-                sah.truncate(newSize);
-                sah.flush();
-              } finally {
-                sah.close();
-                node.mount.opts.sahProvider.release(node.opfs.relPath);
-              }
-            });
-          }
+          // `setattr` has no access to the stream, so any open SAH on
+          // this node is owned by `stream.sah` and not visible here.
+          // Always queue an async truncate through a transient SAH
+          // lease so the on-disk file matches the new size. E2 can
+          // reintroduce a stream-level fast path by threading the
+          // open SAH (if any) into this call.
+          enqueueOpfsOp(node.mount, async () => {
+            const fileHandle = await ensureFileHandle(node);
+            const sah = node.mount.opts.sahProvider.acquire(node.opfs.relPath, fileHandle);
+            try {
+              sah.truncate(newSize);
+              sah.flush();
+            } finally {
+              sah.close();
+              node.mount.opts.sahProvider.release(node.opfs.relPath);
+            }
+          });
         }
         if (attr.mtime !== undefined) {
           const ts = attr.mtime.getTime();
@@ -829,18 +826,11 @@ async function ensureFileHandle(node: FsNode): Promise<FileSystemFileHandle> {
   return fileHandle;
 }
 
-/**
- * Returns the SAH currently leased to this node, if any. The
- * provider owns the lease lifecycle; we just probe it via a no-op
- * acquire/release pair. Used by `setattr(size=…)` so a truncate
- * on an open file doesn't try to re-lease.
- */
-function tryGetOpenSah(_node: FsNode): OpfsSyncAccessHandle | undefined {
-  // Stream-level SAHs are cached on `stream.sah`; setattr doesn't
-  // have access to the stream so it always goes through the
-  // queued path. Kept as a hook so E2 can specialise.
-  return undefined;
-}
+// NOTE: a stream-level SAH fast path for `setattr(size=…)` would
+// live next to `ensureFileHandle` above — `stream.sah` would be
+// looked up off the node's open stream(s) (E2 work). The previous
+// `tryGetOpenSah` stub was a hook for that specialisation and is
+// removed here to keep the surface free of unused symbols.
 
 function renameSubtreeRelPaths(node: FsNode, newRelPath: string): void {
   node.opfs.relPath = newRelPath;

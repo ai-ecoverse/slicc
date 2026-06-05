@@ -148,6 +148,44 @@ describe('createMigrationSplash', () => {
     expect(root.querySelector(`#${MIGRATION_SPLASH_ELEMENT_ID}`)).toBeNull();
   });
 
+  it('installs a capture-phase keydown blocker on paint and removes it on disarm', () => {
+    // Spy the window's listener registration so we pin the exact
+    // contract (event type, capture phase, paired removal) without
+    // depending on jsdom's event-dispatch fidelity, which doesn't
+    // reliably propagate synthesized keydowns to window listeners.
+    const target = document.defaultView ?? window;
+    const addSpy = vi.spyOn(target, 'addEventListener');
+    const removeSpy = vi.spyOn(target, 'removeEventListener');
+
+    const splash = createMigrationSplash({ root, thresholdMs: 0 });
+    splash.forceShow();
+
+    const addCall = addSpy.mock.calls.find(
+      ([type, , options]) => type === 'keydown' && options === true
+    );
+    expect(addCall, 'capture-phase keydown blocker should be installed on paint').toBeDefined();
+    const blocker = addCall?.[1] as (e: Event) => void;
+    expect(typeof blocker).toBe('function');
+
+    // Verify the blocker preventDefaults and stops propagation so a
+    // downstream listener would never see the event.
+    const ev = new Event('keydown', { cancelable: true });
+    const stopSpy = vi.spyOn(ev, 'stopImmediatePropagation');
+    const preventSpy = vi.spyOn(ev, 'preventDefault');
+    blocker(ev);
+    expect(stopSpy).toHaveBeenCalledTimes(1);
+    expect(preventSpy).toHaveBeenCalledTimes(1);
+
+    splash.disarm();
+    const removeCall = removeSpy.mock.calls.find(
+      ([type, fn, options]) => type === 'keydown' && fn === blocker && options === true
+    );
+    expect(removeCall, 'capture-phase keydown blocker should be removed on disarm').toBeDefined();
+
+    addSpy.mockRestore();
+    removeSpy.mockRestore();
+  });
+
   it('defaults the threshold to the documented C3 brief value', () => {
     expect(DEFAULT_MIGRATION_SPLASH_THRESHOLD_MS).toBe(1000);
     const splash = createMigrationSplash({ root });
