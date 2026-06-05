@@ -60,12 +60,22 @@ jobs:
               - 'packages/ios-app/**'
             swift-config:
               - '.swiftlint.yml'
+              # Swift coverage floors + the gate script live outside the
+              # swift packages, so a threshold-only ratchet PR must still
+              # trigger the swift coverage jobs that consume them.
+              - 'coverage-thresholds.json'
+              - 'packages/dev-tools/tools/swift-coverage-check.sh'
             root-config:
               - 'package.json'
               - 'package-lock.json'
               - 'tsconfig*.json'
               - 'vitest*.config.*'
               - '.github/workflows/ci.yml'
+              # Coverage floors + the TS gate tooling gate every package
+              # job; a threshold-only ratchet PR must exercise them.
+              - 'coverage-thresholds.json'
+              - 'packages/dev-tools/tools/coverage-gate.mjs'
+              - 'packages/dev-tools/tools/coverage-ratchet-lib.mjs'
       - name: Check merge queue position
         id: queue-position
         env:
