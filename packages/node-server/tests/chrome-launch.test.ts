@@ -1,6 +1,6 @@
 import { type existsSync, existsSync as fsExistsSync, type readdirSync } from 'fs';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
-import { homedir, tmpdir } from 'os';
+import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -11,12 +11,14 @@ import {
   ensureQaProfileScaffold,
   findChromeExecutable,
   getDefaultCdpLaunchTimeoutMs,
+  legacyChromeCandidates,
   migrateLegacyDefaultChromeProfile,
   parseCdpPortFromStderr,
   planChromeSpawn,
   probeCdpAlive,
   resolveChromeAppBundle,
   resolveChromeLaunchProfile,
+  resolveProfilesDir,
   waitForCdpPort,
   waitForCdpPortFromActivePortFile,
   waitForCdpPortFromStderr,
@@ -28,15 +30,57 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
+describe('resolveProfilesDir', () => {
+  it('returns Application Support path on darwin', () => {
+    expect(resolveProfilesDir('darwin', '/Users/test', {})).toBe(
+      '/Users/test/Library/Application Support/Slicc/profiles'
+    );
+  });
+
+  it('returns ~/.local/state path on linux when XDG_STATE_HOME is not set', () => {
+    expect(resolveProfilesDir('linux', '/home/test', {})).toBe(
+      '/home/test/.local/state/slicc/profiles'
+    );
+  });
+
+  it('uses XDG_STATE_HOME on linux when set', () => {
+    expect(resolveProfilesDir('linux', '/home/test', { XDG_STATE_HOME: '/custom/state' })).toBe(
+      '/custom/state/slicc/profiles'
+    );
+  });
+
+  it('returns LOCALAPPDATA path on win32 when set', () => {
+    expect(resolveProfilesDir('win32', '/home/test', { LOCALAPPDATA: '/fake/AppData/Local' })).toBe(
+      join('/fake/AppData/Local', 'Slicc', 'profiles')
+    );
+  });
+
+  it('falls back to tmpdir on unknown platforms', () => {
+    expect(resolveProfilesDir('freebsd' as NodeJS.Platform, '/home/test', {})).toBe(tmpdir());
+  });
+});
+
+describe('legacyChromeCandidates', () => {
+  it('includes $TMPDIR-based path', () => {
+    const candidates = legacyChromeCandidates('browser-coding-agent-chrome', {
+      TMPDIR: '/private/tmp/userXYZ',
+    });
+    expect(candidates).toContain('/private/tmp/userXYZ/browser-coding-agent-chrome');
+  });
+
+  it('includes /tmp-based path', () => {
+    const candidates = legacyChromeCandidates('browser-coding-agent-chrome', {});
+    expect(candidates).toContain('/tmp/browser-coding-agent-chrome');
+  });
+});
+
 describe('chrome-launch', () => {
-  it('defaults to ~/.slicc/profiles when no tmpDir override is given', () => {
+  it('defaults to platform-appropriate profiles dir when no tmpDir override is given', () => {
     const profile = resolveChromeLaunchProfile({
       projectRoot: '/repo',
     });
 
-    expect(profile.userDataDir).toBe(
-      join(homedir(), '.slicc', 'profiles', 'browser-coding-agent-chrome')
-    );
+    expect(profile.userDataDir).not.toContain('.slicc');
   });
 
   it('uses an explicit tmpDir override when provided', () => {
