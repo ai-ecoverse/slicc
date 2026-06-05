@@ -572,6 +572,53 @@ export function createStandalonePanelRpcHandlers(
       return { done: true };
     },
 
+    'esptool-read-flash': async ({ handle, baudRate, address, size }) => {
+      const esptool = await import('../kernel/esptool-operations.js');
+      const bytes = await esptool.esptoolReadFlash(
+        serialRegistry(),
+        handle,
+        baudRate,
+        address,
+        size,
+        (line) => options.emitEvent?.('esptool-progress', { handle, line })
+      );
+      const buffer = bytes.buffer.slice(
+        bytes.byteOffset,
+        bytes.byteOffset + bytes.byteLength
+      ) as ArrayBuffer;
+      return { bytes: buffer };
+    },
+
+    'esptool-read-reg': async ({ handle, baudRate, address }) => {
+      const esptool = await import('../kernel/esptool-operations.js');
+      return esptool.esptoolReadReg(serialRegistry(), handle, baudRate, address, (line) =>
+        options.emitEvent?.('esptool-progress', { handle, line })
+      );
+    },
+
+    'esptool-flash-id': async ({ handle, baudRate }) => {
+      const esptool = await import('../kernel/esptool-operations.js');
+      return esptool.esptoolFlashId(serialRegistry(), handle, baudRate, (line) =>
+        options.emitEvent?.('esptool-progress', { handle, line })
+      );
+    },
+
+    'esptool-erase-region': async ({ handle, baudRate, address, size }) => {
+      const esptool = await import('../kernel/esptool-operations.js');
+      await esptool.esptoolEraseRegion(serialRegistry(), handle, baudRate, address, size, (line) =>
+        options.emitEvent?.('esptool-progress', { handle, line })
+      );
+      return { done: true };
+    },
+
+    'esptool-run': async ({ handle, baudRate }) => {
+      const esptool = await import('../kernel/esptool-operations.js');
+      await esptool.esptoolRun(serialRegistry(), handle, baudRate, (line) =>
+        options.emitEvent?.('esptool-progress', { handle, line })
+      );
+      return { done: true };
+    },
+
     'list-remote-targets': async () => {
       if (!options.listRemoteTargets) return { targets: [] };
       const all = await options.listRemoteTargets();

@@ -29,6 +29,12 @@ function cannedResult(op: string): unknown {
       return CHIP;
     case 'esptool-read-mac':
       return { mac: CHIP.mac };
+    case 'esptool-read-flash':
+      return { bytes: new Uint8Array([0xaa, 0xbb, 0xcc, 0xdd]).buffer };
+    case 'esptool-read-reg':
+      return { value: 0xdeadbeef };
+    case 'esptool-flash-id':
+      return { flashId: 0x164020, manufacturer: 0x20, device: 0x4016, flashSize: '4MB' };
     default:
       return { done: true };
   }
@@ -61,6 +67,7 @@ function ctx(overrides: Record<string, unknown> = {}) {
     fs: {
       resolvePath: (base: string, p: string) => (p.startsWith('/') ? p : `${base}/${p}`),
       readFileBuffer: vi.fn(async () => new Uint8Array([0xe9, 0x01, 0x02, 0x03])),
+      writeFile: vi.fn(async () => undefined),
     },
     ...overrides,
   } as any;
@@ -87,6 +94,10 @@ describe('esptool command — arg parsing', () => {
     expect(canonicalSub('id')).toBe('chip_id');
     expect(canonicalSub('read-mac')).toBe('read_mac');
     expect(canonicalSub('erase_flash')).toBe('erase_flash');
+    expect(canonicalSub('read-flash')).toBe('read_flash');
+    expect(canonicalSub('read-reg')).toBe('read_reg');
+    expect(canonicalSub('flash-id')).toBe('flash_id');
+    expect(canonicalSub('erase-region')).toBe('erase_region');
   });
 });
 
@@ -161,6 +172,59 @@ describe('esptool command — bridged panel-rpc envelopes', () => {
     );
     expect(result.stdout).toContain('Writing at 0x10000... (100%)');
   });
+
+  it('read_flash forwards addr/size and writes the returned bytes to the VFS', async () => {
+    const c = ctx();
+    const result = await createEsptoolCommand().execute(
+      ['--port', 'serial1', 'read_flash', '0x1000', '0x4', 'dump.bin'],
+      c
+    );
+    expect(calls[0]).toMatchObject({
+      op: 'esptool-read-flash',
+      payload: { handle: 'serial1', address: 0x1000, size: 4 },
+    });
+    expect(c.fs.writeFile).toHaveBeenCalledTimes(1);
+    const writeArgs = c.fs.writeFile.mock.calls[0];
+    expect(writeArgs[0]).toBe('/workspace/dump.bin');
+    expect(writeArgs[1]).toEqual(new Uint8Array([0xaa, 0xbb, 0xcc, 0xdd]));
+    expect(result.stdout).toContain('Wrote 4 bytes to /workspace/dump.bin');
+  });
+
+  it('read_reg prints the value as a zero-padded hex string', async () => {
+    const result = await createEsptoolCommand().execute(
+      ['--port', 'serial1', 'read_reg', '0x3ff5a000'],
+      ctx()
+    );
+    expect(calls[0]).toMatchObject({
+      op: 'esptool-read-reg',
+      payload: { handle: 'serial1', address: 0x3ff5a000 },
+    });
+    expect(result.stdout).toContain('0x3ff5a000 = 0xdeadbeef');
+  });
+
+  it('flash_id renders manufacturer / device / detected size', async () => {
+    const result = await createEsptoolCommand().execute(['--port', 'serial1', 'flash_id'], ctx());
+    expect(calls[0]).toMatchObject({ op: 'esptool-flash-id', payload: { handle: 'serial1' } });
+    expect(result.stdout).toContain('Manufacturer: 0x20');
+    expect(result.stdout).toContain('Device: 0x4016');
+    expect(result.stdout).toContain('Detected flash size: 4MB');
+  });
+
+  it('erase_region forwards addr/size', async () => {
+    await createEsptoolCommand().execute(
+      ['--port', 'serial1', 'erase_region', '0x9000', '0x1000'],
+      ctx()
+    );
+    expect(calls[0]).toMatchObject({
+      op: 'esptool-erase-region',
+      payload: { handle: 'serial1', address: 0x9000, size: 0x1000 },
+    });
+  });
+
+  it('run forwards an esptool-run envelope', async () => {
+    await createEsptoolCommand().execute(['--port', 'serial1', 'run'], ctx());
+    expect(calls[0]).toMatchObject({ op: 'esptool-run', payload: { handle: 'serial1' } });
+  });
 });
 
 describe('esptool command — error paths', () => {
@@ -194,6 +258,33 @@ describe('esptool command — error paths', () => {
     );
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('addr');
+  });
+
+  it('rejects read_flash without all three positionals', async () => {
+    installMockRpc();
+    const result = await createEsptoolCommand().execute(
+      ['--port', 'serial1', 'read_flash', '0x1000', '0x4'],
+      ctx()
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('read_flash');
+  });
+
+  it('rejects read_reg without an address', async () => {
+    installMockRpc();
+    const result = await createEsptoolCommand().execute(['--port', 'serial1', 'read_reg'], ctx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('read_reg');
+  });
+
+  it('rejects erase_region without addr/size', async () => {
+    installMockRpc();
+    const result = await createEsptoolCommand().execute(
+      ['--port', 'serial1', 'erase_region', '0x9000'],
+      ctx()
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('erase_region');
   });
 
   it('maps a rejected picker to a cancellation message', async () => {

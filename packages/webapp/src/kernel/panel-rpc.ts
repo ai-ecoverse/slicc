@@ -271,6 +271,20 @@ export type PanelRpcRequest =
       };
     }
   | {
+      op: 'esptool-read-flash';
+      payload: { handle: string; baudRate: number; address: number; size: number };
+    }
+  | {
+      op: 'esptool-read-reg';
+      payload: { handle: string; baudRate: number; address: number };
+    }
+  | { op: 'esptool-flash-id'; payload: { handle: string; baudRate: number } }
+  | {
+      op: 'esptool-erase-region';
+      payload: { handle: string; baudRate: number; address: number; size: number };
+    }
+  | { op: 'esptool-run'; payload: { handle: string; baudRate: number } }
+  | {
       // Push a `cherry.slicc_event` (cone → host page) out through the
       // page-side LeaderSyncManager. The `cherry-emit` shell command runs
       // in the kernel worker, but the leader tray's WebRTC data channels
@@ -400,6 +414,11 @@ export interface PanelRpcResults {
   'esptool-read-mac': { mac: string };
   'esptool-erase-flash': { done: true };
   'esptool-flash': { done: true };
+  'esptool-read-flash': { bytes: ArrayBuffer };
+  'esptool-read-reg': { value: number };
+  'esptool-flash-id': EsptoolFlashId;
+  'esptool-erase-region': { done: true };
+  'esptool-run': { done: true };
   'cherry-emit': { delivered: boolean };
   'list-remote-targets': {
     targets: Array<{ targetId: string; title: string; url: string }>;
@@ -426,6 +445,24 @@ export interface EsptoolChipInfo {
   crystalMHz: number;
   /** Factory MAC address as `aa:bb:cc:dd:ee:ff`. */
   mac: string;
+}
+
+/**
+ * Structured result of `esptool-flash-id`. Mirrors the fields the Python
+ * `esptool flash_id` flow reports: SPI flash manufacturer + device id
+ * decoded from the 24-bit RDID value, plus the size string looked up in
+ * esptool-js's `DETECTED_FLASH_SIZES` map (or `null` when the byte is
+ * not in the table).
+ */
+export interface EsptoolFlashId {
+  /** Raw 24-bit RDID value. */
+  flashId: number;
+  /** SPI flash manufacturer id (low byte of RDID). */
+  manufacturer: number;
+  /** Two-byte device id (mid + high bytes of RDID, packed `(mid<<8)|high`). */
+  device: number;
+  /** Detected flash size string (e.g. `4MB`), or `null` if not in the lookup. */
+  flashSize: string | null;
 }
 
 /**

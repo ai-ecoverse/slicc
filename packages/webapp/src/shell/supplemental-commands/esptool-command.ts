@@ -69,10 +69,15 @@ const HELP = `esptool - flash ESP32 / ESP8266 chips via esptool-js
 Usage: esptool [--port H] [--baud N] <subcommand> [args]
 
 Subcommands:
-  chip_id                       Detect the chip and print its variant + MAC
-  read_mac                      Print the factory MAC address
-  erase_flash                   Erase the entire flash
-  write_flash <addr> <file>...  Flash firmware at <addr> (addr/file pairs)
+  chip_id                            Detect the chip and print its variant + MAC
+  read_mac                           Print the factory MAC address
+  flash_id                           Print manufacturer / device id / detected size
+  read_reg <addr>                    Print a 32-bit register value (hex)
+  read_flash <addr> <size> <file>    Read <size> bytes from <addr> to <file>
+  erase_flash                        Erase the entire flash
+  erase_region <addr> <size>         Erase a flash region
+  write_flash <addr> <file>...       Flash firmware at <addr> (addr/file pairs)
+  run                                Leave the bootloader and run the app
 
 Options:
   --port H        Use an existing serial handle from 'serial request'
@@ -151,6 +156,48 @@ async function dispatch(
       const handle = await resolveHandle(flags, serial);
       await esptool.flash(handle, baud, bools.has('--erase'), segments, onLine);
       return ok(lines.length ? `${lines.join('\n')}\n` : 'flash written\n');
+    }
+    case 'read_flash': {
+      if (positionals.length < 4) {
+        return fail('read_flash expects <addr> <size> <outfile>');
+      }
+      const address = parseIntArg(positionals[1], 'address');
+      const size = parseIntArg(positionals[2], 'size');
+      const out = ctx.fs.resolvePath(ctx.cwd, positionals[3]);
+      const handle = await resolveHandle(flags, serial);
+      const bytes = await esptool.readFlash(handle, baud, address, size, onLine);
+      await ctx.fs.writeFile(out, bytes);
+      lines.push(`Wrote ${bytes.byteLength} bytes to ${out}`);
+      return ok(`${lines.join('\n')}\n`);
+    }
+    case 'read_reg': {
+      if (positionals.length < 2) return fail('read_reg expects <addr>');
+      const address = parseIntArg(positionals[1], 'address');
+      const handle = await resolveHandle(flags, serial);
+      const { value } = await esptool.readReg(handle, baud, address, onLine);
+      lines.push(`0x${address.toString(16)} = 0x${(value >>> 0).toString(16).padStart(8, '0')}`);
+      return ok(`${lines.join('\n')}\n`);
+    }
+    case 'flash_id': {
+      const handle = await resolveHandle(flags, serial);
+      const id = await esptool.flashId(handle, baud, onLine);
+      lines.push(`Manufacturer: 0x${id.manufacturer.toString(16).padStart(2, '0')}`);
+      lines.push(`Device: 0x${id.device.toString(16).padStart(4, '0')}`);
+      lines.push(`Detected flash size: ${id.flashSize ?? 'unknown'}`);
+      return ok(`${lines.join('\n')}\n`);
+    }
+    case 'erase_region': {
+      if (positionals.length < 3) return fail('erase_region expects <addr> <size>');
+      const address = parseIntArg(positionals[1], 'address');
+      const size = parseIntArg(positionals[2], 'size');
+      const handle = await resolveHandle(flags, serial);
+      await esptool.eraseRegion(handle, baud, address, size, onLine);
+      return ok(lines.length ? `${lines.join('\n')}\n` : 'region erased\n');
+    }
+    case 'run': {
+      const handle = await resolveHandle(flags, serial);
+      await esptool.run(handle, baud, onLine);
+      return ok(lines.length ? `${lines.join('\n')}\n` : 'running app\n');
     }
     default:
       return fail(`unknown subcommand '${positionals[0] ?? ''}'. Try 'esptool --help'.`);

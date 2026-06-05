@@ -15,7 +15,7 @@
  */
 
 import { ESPLoader, type FlashOptions, type IEspLoaderTerminal, Transport } from 'esptool-js';
-import type { EsptoolChipInfo } from './panel-rpc.js';
+import type { EsptoolChipInfo, EsptoolFlashId } from './panel-rpc.js';
 import type { SerialPortEntry, SerialPortRegistry } from './serial-port-registry.js';
 
 /** A single firmware blob and its flash offset. */
@@ -190,5 +190,100 @@ export async function esptoolFlash(
       compress: true,
     };
     await loader.writeFlash(flashOptions);
+  });
+}
+
+/** Read `size` bytes from flash starting at `address`. Streams `Reading flash…` progress via `onLine`. */
+export async function esptoolReadFlash(
+  registry: SerialPortRegistry,
+  handle: string,
+  baudRate: number,
+  address: number,
+  size: number,
+  onLine: (line: string) => void
+): Promise<Uint8Array> {
+  return withLoader(registry, handle, baudRate, onLine, async (loader) => {
+    let lastPct = -1;
+    return loader.readFlash(address, size, (_packet, progress, totalSize) => {
+      const pct = totalSize > 0 ? Math.floor((progress / totalSize) * 100) : 100;
+      if (pct !== lastPct) {
+        lastPct = pct;
+        onLine(`Reading flash at 0x${address.toString(16)}... (${pct}%)`);
+      }
+    });
+  });
+}
+
+/** Read a single 32-bit register value at `address`. */
+export async function esptoolReadReg(
+  registry: SerialPortRegistry,
+  handle: string,
+  baudRate: number,
+  address: number,
+  onLine: (line: string) => void
+): Promise<{ value: number }> {
+  return withLoader(registry, handle, baudRate, onLine, async (loader) => ({
+    value: (await loader.readReg(address)) >>> 0,
+  }));
+}
+
+/** Read SPI flash manufacturer / device id + detected size from the RDID command. */
+export async function esptoolFlashId(
+  registry: SerialPortRegistry,
+  handle: string,
+  baudRate: number,
+  onLine: (line: string) => void
+): Promise<EsptoolFlashId> {
+  return withLoader(registry, handle, baudRate, onLine, async (loader) => {
+    const flashId = (await loader.readFlashId()) >>> 0;
+    const manufacturer = flashId & 0xff;
+    const device = ((flashId >> 8) & 0xff) | ((flashId >> 16) & 0xff00);
+    const sizeId = (flashId >> 16) & 0xff;
+    const sizes = (loader as unknown as { DETECTED_FLASH_SIZES: Record<number, string> })
+      .DETECTED_FLASH_SIZES;
+    const flashSize = sizes[sizeId] ?? null;
+    return { flashId, manufacturer, device, flashSize };
+  });
+}
+
+/**
+ * Erase a flash region (`address` + `size`, both aligned to a 4 KiB
+ * sector by the bootloader). esptool-js doesn't expose a high-level
+ * `eraseRegion`, so this drives the raw `ESP_ERASE_REGION = 0xd1`
+ * opcode via `checkCommand`, packing two little-endian uint32 values
+ * just like Python `esptool.py`.
+ */
+export async function esptoolEraseRegion(
+  registry: SerialPortRegistry,
+  handle: string,
+  baudRate: number,
+  address: number,
+  size: number,
+  onLine: (line: string) => void
+): Promise<void> {
+  await withLoader(registry, handle, baudRate, onLine, async (loader) => {
+    const pkt = new Uint8Array(8);
+    const dv = new DataView(pkt.buffer);
+    dv.setUint32(0, address >>> 0, true);
+    dv.setUint32(4, size >>> 0, true);
+    onLine(`Erasing region 0x${address.toString(16)} (${size} bytes)...`);
+    await loader.checkCommand('erase region', loader.ESP_ERASE_REGION, pkt);
+  });
+}
+
+/**
+ * Leave the bootloader and run the application. `withLoader` already
+ * issues a `hard_reset` in its `finally` block, so the body is empty —
+ * the connect/stub-upload roundtrip plus the post-body reset is exactly
+ * what Python esptool's `run` verb does.
+ */
+export async function esptoolRun(
+  registry: SerialPortRegistry,
+  handle: string,
+  baudRate: number,
+  onLine: (line: string) => void
+): Promise<void> {
+  await withLoader(registry, handle, baudRate, onLine, async () => {
+    onLine('Leaving bootloader; running app...');
   });
 }
