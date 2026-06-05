@@ -54,9 +54,12 @@ export interface SprinkleFetchInit {
 }
 
 /**
- * Structured result of `slicc.fetch`. The body is provided both as
- * UTF-8 `body` text and raw `bodyBase64` so binary responses survive
- * the JSON/postMessage transport. Unlike the iframe's CORS-bound native
+ * Internal wire/transport shape carried by the bridge for `slicc.fetch`.
+ * The body is base64-encoded so binary responses survive the
+ * JSON/postMessage transport between the realm worker and the page.
+ * This is NOT the public return of `slicc.fetch` — the page-side
+ * `jshDispatch` rebuilds a native `Response` from these fields before
+ * returning to the sprinkle. Unlike the iframe's CORS-bound native
  * `fetch`, this routes through the worker shell's proxied,
  * secret-injecting fetch.
  */
@@ -66,8 +69,6 @@ export interface SprinkleFetchResult {
   statusText: string;
   url: string;
   headers: Record<string, string>;
-  /** Response body decoded as UTF-8 text. */
-  body: string;
   /** Raw response body, base64-encoded (use for binary payloads). */
   bodyBase64: string;
 }
@@ -242,6 +243,39 @@ function base64ToU8(b64: string): Uint8Array {
   return out;
 }
 
+/** Statuses that the `Response` constructor forbids carrying a body. */
+const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
+
+/**
+ * Build a native `Response` page-side from the bridge's wire shape.
+ * Handles null-body statuses (101/103/204/205/304) by passing `null`
+ * for the body, and statuses outside the `Response` constructor's
+ * accepted `[200,599]` range by constructing a default-status Response
+ * and shadowing `status`/`statusText`/`ok` (and `url`) via own data
+ * props. `Response.url` is a read-only prototype getter; an own data
+ * prop shadows it for property reads while native `.text()`/`.json()`/
+ * `.arrayBuffer()`/`.blob()` still read the internal body.
+ */
+function buildFetchResponse(v: SprinkleFetchResult): Response {
+  const bytes = base64ToU8(v.bodyBase64);
+  const body: BodyInit | null = NULL_BODY_STATUSES.has(v.status) ? null : (bytes as BodyInit);
+  const headers = new Headers(v.headers);
+  let resp: Response;
+  try {
+    resp = new Response(body, { status: v.status, statusText: v.statusText, headers });
+    Object.defineProperty(resp, 'url', { value: v.url, configurable: true });
+    return resp;
+  } catch {
+    resp = new Response(body, { headers });
+    const ok = v.status >= 200 && v.status < 300;
+    Object.defineProperty(resp, 'status', { value: v.status, configurable: true });
+    Object.defineProperty(resp, 'statusText', { value: v.statusText, configurable: true });
+    Object.defineProperty(resp, 'ok', { value: ok, configurable: true });
+    Object.defineProperty(resp, 'url', { value: v.url, configurable: true });
+    return resp;
+  }
+}
+
 /**
  * Page→worker shell-exec transport. Runs `cmd` in the same worker
  * shell used by `.jsh` / `node -e` (so all supplemental commands and
@@ -314,10 +348,10 @@ export interface SprinkleBridgeAPI {
   /**
    * Proxied, secret-injecting `fetch` (NOT the iframe's CORS-bound
    * native fetch). Routes through the same worker-shell fetch proxy used
-   * by `node -e` / `.jsh`. Resolves with a structured result; rejects on
-   * transport failure.
+   * by `node -e` / `.jsh`. Resolves with a native `Response` (built
+   * page-side from the decoded body); rejects on transport failure.
    */
-  fetch(url: string, init?: SprinkleFetchInit): Promise<SprinkleFetchResult>;
+  fetch(url: string, init?: SprinkleFetchInit): Promise<Response>;
   /** Higher-level API-client builder layered on the proxied fetch. */
   http: SprinkleHttp;
   /**
@@ -422,7 +456,7 @@ export class SprinkleBridge {
     const value = await runJshOp((cmd) => this.runExec(cmd), op, args);
     if (op === 'fetch') {
       const v = value as SprinkleFetchResult;
-      return { ...v, body: new TextDecoder('utf-8').decode(base64ToU8(v.bodyBase64)) };
+      return buildFetchResponse(v);
     }
     return value;
   }
@@ -532,7 +566,7 @@ export class SprinkleBridge {
         spawn: (argv: string[]) => this.jshDispatch('spawn', [argv]) as Promise<SprinkleExecResult>,
       }) as SprinkleExecFn,
       fetch: (url: string, init?: SprinkleFetchInit) =>
-        this.jshDispatch('fetch', [url, init ?? null]) as Promise<SprinkleFetchResult>,
+        this.jshDispatch('fetch', [url, init ?? null]) as Promise<Response>,
       http: {
         client: (config: SprinkleHttpClientConfig): SprinkleHttpClient => {
           const make = (method: string) => (path: string, opts?: SprinkleHttpRequestOpts) =>

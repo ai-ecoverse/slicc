@@ -428,7 +428,7 @@ describe('SprinkleBridge', () => {
       );
     }
 
-    it('fetch() routes through a node -e realm command and decodes the body', async () => {
+    it('fetch() routes through a node -e realm command and returns a native Response', async () => {
       const execHandler = vi.fn().mockResolvedValue(
         jshOk({
           ok: true,
@@ -451,9 +451,71 @@ describe('SprinkleBridge', () => {
       expect(cmd).toContain('new Uint8Array(await r.arrayBuffer())');
       expect(cmd).toContain('String.fromCharCode.apply');
       expect(cmd).toContain('bodyBase64:btoa(bin)');
+      expect(res).toBeInstanceOf(Response);
       expect(res.status).toBe(200);
-      expect(res.body).toBe('{"hi":1}');
-      expect(res.bodyBase64).toBe(btoa('{"hi":1}'));
+      expect(res.statusText).toBe('OK');
+      expect(res.ok).toBe(true);
+      expect(res.url).toBe('https://api.example.com/x');
+      expect(res.headers).toBeInstanceOf(Headers);
+      expect(res.headers.get('content-type')).toBe('application/json');
+      expect(await res.text()).toBe('{"hi":1}');
+    });
+
+    it('fetch() parses JSON via the native Response.json()', async () => {
+      const execHandler = vi.fn().mockResolvedValue(
+        jshOk({
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          url: 'https://api.example.com/x',
+          headers: { 'content-type': 'application/json' },
+          bodyBase64: btoa('{"hi":1}'),
+        })
+      );
+      const api = bridgeWith(execHandler).createAPI('s');
+      const res = await api.fetch('https://api.example.com/x');
+      expect(await res.json()).toEqual({ hi: 1 });
+    });
+
+    it('fetch() handles null-body statuses (204) without throwing', async () => {
+      const execHandler = vi.fn().mockResolvedValue(
+        jshOk({
+          ok: true,
+          status: 204,
+          statusText: 'No Content',
+          url: 'https://api.example.com/empty',
+          headers: {},
+          bodyBase64: btoa(''),
+        })
+      );
+      const api = bridgeWith(execHandler).createAPI('s');
+      const res = await api.fetch('https://api.example.com/empty');
+      expect(res).toBeInstanceOf(Response);
+      expect(res.status).toBe(204);
+      expect(res.url).toBe('https://api.example.com/empty');
+      expect(await res.text()).toBe('');
+    });
+
+    it('fetch() handles out-of-range statuses by shadowing status/ok/statusText', async () => {
+      const execHandler = vi.fn().mockResolvedValue(
+        jshOk({
+          ok: false,
+          status: 999,
+          statusText: 'Custom',
+          url: 'https://api.example.com/weird',
+          headers: { 'x-trace': 'abc' },
+          bodyBase64: btoa('weird'),
+        })
+      );
+      const api = bridgeWith(execHandler).createAPI('s');
+      const res = await api.fetch('https://api.example.com/weird');
+      expect(res).toBeInstanceOf(Response);
+      expect(res.status).toBe(999);
+      expect(res.statusText).toBe('Custom');
+      expect(res.ok).toBe(false);
+      expect(res.url).toBe('https://api.example.com/weird');
+      expect(res.headers.get('x-trace')).toBe('abc');
+      expect(await res.text()).toBe('weird');
     });
 
     it('http.client().get() dispatches a raw http op and returns the structured response', async () => {
