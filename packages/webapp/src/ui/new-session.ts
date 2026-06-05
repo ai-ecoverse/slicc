@@ -9,7 +9,7 @@
 
 import type { Api, Model } from '@earendil-works/pi-ai';
 import { createLogger } from '../core/logger.js';
-import type { VirtualFS } from '../fs/index.js';
+import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
 import { getDailyAdobeUuid } from '../scoops/llm-session-id.js';
 import { getApiKey, resolveCurrentModel } from './provider-settings.js';
 import {
@@ -32,7 +32,14 @@ const log = createLogger('new-session');
 const FREEZER_SESSION_ANCHOR = 'ui-new-session';
 
 export interface RunNewSessionFreezeOptions {
-  vfs: VirtualFS;
+  /**
+   * Writable VFS handle. Under `slicc_opfs_vfs === 'opfs'` AND on the
+   * OPFS-leader tab, callers pass a `RemoteWritableVfsClient` so
+   * writes route to the worker's `VfsRpcHost` (canonical OPFS store).
+   * With the flag off the existing page-side `VirtualFS` satisfies
+   * the same shape structurally.
+   */
+  vfs: WritableVfsClient;
 }
 
 /**
@@ -189,8 +196,22 @@ export async function enrichPendingSessions(
  * Defers via `requestIdleCallback` where available so a slow LLM call
  * can't delay first paint; falls back to `setTimeout(0)` otherwise.
  * Never throws — `enrichPendingSessions` is already best-effort.
+ *
+ * Callers pass `isWriter: false` for non-leader tabs under
+ * `slicc_opfs_vfs === 'opfs'`. Enrichment writes go via the supplied
+ * VFS; on a follower that VFS is the page-side LFS shadow which the
+ * worker-OPFS-backed UI never reads → silent orphan. Skip the pass
+ * entirely on followers (read-only mode), matching the read-only
+ * banner.
  */
-export function scheduleBackgroundEnrichment(vfs: VirtualFS): void {
+export function scheduleBackgroundEnrichment(
+  vfs: WritableVfsClient,
+  opts: { isWriter?: boolean } = {}
+): void {
+  if (opts.isWriter === false) {
+    log.info('Background enrichment skipped (OPFS follower — read-only tab)');
+    return;
+  }
   const run = (): void => {
     void enrichPendingSessions({ vfs }).catch(() => {
       // `enrichPendingSessions` already logs internally and is best-effort

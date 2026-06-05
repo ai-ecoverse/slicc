@@ -5,7 +5,7 @@
  * via `Page.addScriptToEvaluateOnNewDocument` (for future loads) and
  * `Runtime.evaluate` (for the current document). Subsequent
  * subscribers register selectors with the already-installed router
- * rather than re-patching the prototype — which is the Wave 4.1
+ * rather than re-patching the prototype — which is the
  * security-review hard rule.
  *
  * The script is the runtime's audited replacement for the

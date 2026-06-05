@@ -204,4 +204,96 @@ describe('scheduleBackgroundEnrichment — boot-time enrichment scheduler', () =
     // VFS read counts as evidence that the scheduled work ran.
     expect(readFile).toHaveBeenCalled();
   });
+
+  // Gate the enrichment write path on OPFS leadership. A follower
+  // tab's `writableFs` is the page-side LFS shadow which the
+  // worker-OPFS-backed UI never reads → a write here is silently
+  // orphaned. The scheduler must short-circuit on followers.
+  it('no-ops when isWriter is false (OPFS follower) — no rIC, no setTimeout, no VFS read', async () => {
+    const ricSpy = vi.fn((cb: () => void) => {
+      cb();
+      return 1;
+    });
+    (globalThis as { requestIdleCallback?: unknown }).requestIdleCallback = ricSpy;
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    const readFile = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+    const fakeFs = {
+      readFile,
+      exists: vi.fn().mockResolvedValue(false),
+    } as unknown as Parameters<
+      typeof import('../../src/ui/new-session.js').scheduleBackgroundEnrichment
+    >[0];
+
+    const { scheduleBackgroundEnrichment } = await import('../../src/ui/new-session.js');
+    scheduleBackgroundEnrichment(fakeFs, { isWriter: false });
+
+    // The scheduler must short-circuit synchronously — assert before
+    // yielding to the event loop so the test's own `await new
+    // Promise(setTimeout)` can't pollute the setTimeout spy.
+    expect(ricSpy).not.toHaveBeenCalled();
+    expect(setTimeoutSpy).not.toHaveBeenCalled();
+    expect(readFile).not.toHaveBeenCalled();
+
+    // Yield once anyway to catch any deferred work we missed.
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    expect(ricSpy).not.toHaveBeenCalled();
+    expect(readFile).not.toHaveBeenCalled();
+    setTimeoutSpy.mockRestore();
+  });
+
+  it('runs normally when isWriter is true (OPFS leader)', async () => {
+    const ricSpy = vi.fn((cb: () => void) => {
+      cb();
+      return 1;
+    });
+    (globalThis as { requestIdleCallback?: unknown }).requestIdleCallback = ricSpy;
+    const readFile = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+    const fakeFs = {
+      readFile,
+      exists: vi.fn().mockResolvedValue(false),
+    } as unknown as Parameters<
+      typeof import('../../src/ui/new-session.js').scheduleBackgroundEnrichment
+    >[0];
+
+    const { scheduleBackgroundEnrichment } = await import('../../src/ui/new-session.js');
+    scheduleBackgroundEnrichment(fakeFs, { isWriter: true });
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(ricSpy).toHaveBeenCalledTimes(1);
+    expect(readFile).toHaveBeenCalled();
+  });
+
+  it('flag-off default (no opts) preserves byte-identical behavior — VFS read still happens', async () => {
+    // No `isWriter` field at all: the absent flag must not block the
+    // run (only `isWriter === false` short-circuits). This pins the
+    // flag-off contract: existing callers that never learn about the
+    // new option behave exactly as before.
+    const ricSpy = vi.fn((cb: () => void) => {
+      cb();
+      return 1;
+    });
+    (globalThis as { requestIdleCallback?: unknown }).requestIdleCallback = ricSpy;
+    const readFile = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+    const fakeFs = {
+      readFile,
+      exists: vi.fn().mockResolvedValue(false),
+    } as unknown as Parameters<
+      typeof import('../../src/ui/new-session.js').scheduleBackgroundEnrichment
+    >[0];
+
+    const { scheduleBackgroundEnrichment } = await import('../../src/ui/new-session.js');
+    scheduleBackgroundEnrichment(fakeFs);
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(ricSpy).toHaveBeenCalledTimes(1);
+    expect(readFile).toHaveBeenCalled();
+  });
 });

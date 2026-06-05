@@ -10,7 +10,8 @@
 import type { Api, Model, UserMessage } from '@earendil-works/pi-ai';
 import { completeSimple } from '@earendil-works/pi-ai';
 import { createLogger } from '../core/logger.js';
-import type { VirtualFS } from '../fs/index.js';
+import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
+import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
 
 const log = createLogger('cone-memory-budget');
 
@@ -58,7 +59,7 @@ export function splitConeMemory(content: string): { header: string; autoExtracte
 }
 
 /** Best-effort read of /sessions/index.json — returns 0 on any failure. */
-export async function readSessionCount(vfs: VirtualFS): Promise<number> {
+export async function readSessionCount(vfs: LocalVfsClient): Promise<number> {
   try {
     const raw = await vfs.readFile(SESSIONS_INDEX_PATH, { encoding: 'utf-8' });
     const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
@@ -132,7 +133,13 @@ ${autoExtracted}
 }
 
 export interface ApplyConeMemoryBudgetOptions {
-  vfs: VirtualFS;
+  /**
+   * Writable VFS handle. Callers under `slicc_opfs_vfs === 'opfs'`
+   * pass a `RemoteWritableVfsClient` so reads/writes route through
+   * the worker's `VfsRpcHost`; with the flag off, the page-side
+   * `VirtualFS` satisfies the same shape.
+   */
+  vfs: WritableVfsClient;
   model?: Model<Api>;
   apiKey?: string;
   headers?: Record<string, string>;

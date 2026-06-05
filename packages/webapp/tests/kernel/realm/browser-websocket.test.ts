@@ -1,5 +1,5 @@
 /**
- * Tests for the Wave 4.1 `browser.websocket` declarative observer.
+ * Tests for the `browser.websocket` declarative observer.
  *
  * Coverage matrix (mirrors Definition of Done):
  *  - Router IIFE is idempotent — patches `WebSocket.prototype.send`

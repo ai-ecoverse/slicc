@@ -8,7 +8,6 @@
  * route to the cone via the onLick callback. Auto-height via ResizeObserver.
  */
 
-import FS from '@isomorphic-git/lightning-fs';
 import { collectThemeCSS } from './sprinkle-renderer.js';
 import { isThemeLight, registerSprinkleWindow, unregisterSprinkleWindow } from './theme.js';
 
@@ -16,19 +15,79 @@ const isExtension =
   typeof chrome !== 'undefined' && !!(chrome as { runtime?: { id?: string } })?.runtime?.id;
 
 /**
- * Fallback VFS reader for `.shtml` dips. The preview service worker is
- * the canonical way to fetch VFS content (it normalizes mounts, MIME
- * types, etc.), but on the very first install of a page the SW may not
- * be controlling yet — `clients.claim()` happens asynchronously, so
- * `/preview/*` requests fall through to the dev server and 404. This
- * direct reader bypasses the network entirely and reads the same
- * LightningFS database the SW uses, so dips render correctly even on
- * the first uncontrolled boot.
+ * Fallback VFS read for `.shtml` dips when the preview service worker
+ * isn't yet controlling the page. Talks to the page-side `preview-vfs`
+ * BroadcastChannel responder (`preview-vfs-responder.ts`), which holds
+ * a live `VirtualFS` reference and serves both OPFS-rooted files and
+ * mounted directories. A 5s timeout matches the SW-side responder.
  */
-let lfsReader: FS.PromisifiedFS | null = null;
-function getLfsReader(): FS.PromisifiedFS {
-  if (!lfsReader) lfsReader = new FS('slicc-fs').promises;
-  return lfsReader;
+async function readShtmlFromVFS(vfsPath: string, signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+  const content = await readViaPreviewVfsBridge(vfsPath, true, signal);
+  if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+  if (content === null) throw new Error(`VFS read failed: ${vfsPath}`);
+  return typeof content === 'string' ? content : new TextDecoder().decode(content);
+}
+
+interface PreviewVfsBridgeChannel {
+  postMessage(data: unknown): void;
+  addEventListener(type: 'message', listener: (ev: MessageEvent) => void): void;
+  removeEventListener(type: 'message', listener: (ev: MessageEvent) => void): void;
+}
+
+let previewVfsBridgeChannel: PreviewVfsBridgeChannel | null = null;
+function getPreviewVfsBridge(): PreviewVfsBridgeChannel | null {
+  if (previewVfsBridgeChannel) return previewVfsBridgeChannel;
+  if (typeof BroadcastChannel === 'undefined') return null;
+  try {
+    previewVfsBridgeChannel = new BroadcastChannel('preview-vfs') as PreviewVfsBridgeChannel;
+  } catch {
+    return null;
+  }
+  return previewVfsBridgeChannel;
+}
+
+async function readViaPreviewVfsBridge(
+  vfsPath: string,
+  asText: boolean,
+  signal?: AbortSignal
+): Promise<string | Uint8Array | null> {
+  const bc = getPreviewVfsBridge();
+  if (!bc) return null;
+  const id = `dip-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return new Promise<string | Uint8Array | null>((resolve) => {
+    let settled = false;
+    const cleanup = () => {
+      bc.removeEventListener('message', handler);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const handler = (event: MessageEvent): void => {
+      if (settled) return;
+      if (event.data?.type !== 'preview-vfs-response' || event.data.id !== id) return;
+      settled = true;
+      cleanup();
+      if (event.data.error) {
+        resolve(null);
+        return;
+      }
+      resolve(event.data.content ?? null);
+    };
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(null);
+    };
+    bc.addEventListener('message', handler);
+    signal?.addEventListener('abort', onAbort);
+    setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(null);
+    }, 5000);
+    bc.postMessage({ type: 'preview-vfs-read', id, path: vfsPath, asText });
+  });
 }
 
 /**
@@ -70,14 +129,6 @@ function isTrustedDipReadPath(path: string): boolean {
 
 /** Iframes whose dip source was trusted — eligible for the VFS bridge. */
 const trustedDipWindows = new WeakSet<Window>();
-
-async function readShtmlFromVFS(vfsPath: string, signal?: AbortSignal): Promise<string> {
-  if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
-  const lfs = getLfsReader();
-  const raw = await lfs.readFile(vfsPath, 'utf8');
-  if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
-  return typeof raw === 'string' ? raw : new TextDecoder().decode(raw as Uint8Array);
-}
 
 /** Minimal bridge script: lick + read-only VFS + auto-height. */
 const BRIDGE_SCRIPT = `(function() {
@@ -157,8 +208,8 @@ const BRIDGE_SCRIPT = `(function() {
         if (actionData) { try { actionData = JSON.parse(actionData); } catch(ex) {} }
         /* Picker hint (e.g. data-picker="directory") needs the parent to
            run File System Access API on the click activation chain.
-           Phase 2b.6 — forward as a separate message so the parent can
-           run showDirectoryPicker, stash the handle in IDB, then dispatch
+           Forward as a separate message so the parent can run
+           showDirectoryPicker, stash the handle in IDB, then dispatch
            the lick with the IDB key. */
         var picker = el.dataset.picker;
         if (picker) {
@@ -433,12 +484,12 @@ export function mountDip(
     } else if (msg.type === 'dip-open-link') {
       openDipLink(msg.url);
     } else if (msg.type === 'dip-picker-action') {
-      // Phase 2b.6 — picker buttons (`data-picker="directory"`)
-      // post their click here instead of inline `dip-lick` so the
-      // parent can run `showDirectoryPicker` on the propagated
-      // user activation, stash the handle in IDB, then dispatch
-      // the lick with `{ handleInIdb, idbKey, dirName }`. Until
-      // this case landed, the message arrived at `mountDip` but
+      // Picker buttons (`data-picker="directory"`) post their click
+      // here instead of inline `dip-lick` so the parent can run
+      // `showDirectoryPicker` on the propagated user activation,
+      // stash the handle in IDB, then dispatch the lick with
+      // `{ handleInIdb, idbKey, dirName }`. Until this case landed,
+      // the message arrived at `mountDip` but
       // nothing dispatched to `handleDipPickerAction` — every
       // mount-dialog "Select directory" click was a silent no-op.
       void handleDipPickerAction(msg, onLick);
@@ -574,7 +625,6 @@ async function handleDipVfsRequest(
 ): Promise<boolean> {
   if (!iframeWindow || typeof msg.id !== 'number') return false;
   const path = typeof msg.path === 'string' ? msg.path : '';
-  const lfs = getLfsReader();
   const respond = (payload: Record<string, unknown>) => {
     try {
       iframeWindow.postMessage({ ...payload, id: msg.id }, '*');
@@ -593,45 +643,41 @@ async function handleDipVfsRequest(
   }
 
   if (msg.type === 'dip-readfile') {
-    try {
-      const raw = await lfs.readFile(path, 'utf8');
-      const content = typeof raw === 'string' ? raw : new TextDecoder().decode(raw as Uint8Array);
-      respond({ type: 'dip-readfile-response', content });
-    } catch (err) {
-      respond({
-        type: 'dip-readfile-response',
-        error: err instanceof Error ? err.message : 'Read failed',
-      });
+    const raw = await readViaPreviewVfsBridge(path, true);
+    if (raw === null) {
+      respond({ type: 'dip-readfile-response', error: 'Read failed' });
+      return true;
     }
+    const content = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+    respond({ type: 'dip-readfile-response', content });
     return true;
   }
   if (msg.type === 'dip-exists') {
-    try {
-      await lfs.stat(path);
-      respond({ type: 'dip-exists-response', exists: true });
-    } catch {
-      respond({ type: 'dip-exists-response', exists: false });
-    }
+    const raw = await readViaPreviewVfsBridge(path, true);
+    respond({ type: 'dip-exists-response', exists: raw !== null });
     return true;
   }
   if (msg.type === 'dip-stat') {
-    try {
-      const st = await lfs.stat(path);
-      respond({
-        type: 'dip-stat-response',
-        stat: {
-          isFile: st.isFile(),
-          isDirectory: st.isDirectory(),
-          size: st.size,
-          mtimeMs: st.mtimeMs,
-        },
-      });
-    } catch (err) {
-      respond({
-        type: 'dip-stat-response',
-        error: err instanceof Error ? err.message : 'Stat failed',
-      });
+    // Stat semantics are limited under the read-bridge: a successful
+    // read confirms existence + a file (mounted directories surface as
+    // EISDIR via the responder and resolve to null here). Size is the
+    // byte length of the fetched content; mtimeMs is not available
+    // through the preview-vfs envelope and reported as 0.
+    const raw = await readViaPreviewVfsBridge(path, false);
+    if (raw === null) {
+      respond({ type: 'dip-stat-response', error: 'Stat failed' });
+      return true;
     }
+    const size = typeof raw === 'string' ? raw.length : raw.byteLength;
+    respond({
+      type: 'dip-stat-response',
+      stat: {
+        isFile: true,
+        isDirectory: false,
+        size,
+        mtimeMs: 0,
+      },
+    });
     return true;
   }
   return false;
@@ -795,7 +841,7 @@ export function disposeDips(instances: DipInstance[]): void {
  * `FileSystemDirectoryHandle` in the shared mount-handle IDB store,
  * then forward the click as an `onLick` carrying `{ handleInIdb,
  * idbKey, dirName }` so a worker-resident `LocalMountBackend.create`
- * (Phase 2b.6) can pick it up via `loadAndClearPendingHandle`.
+ * can pick it up via `loadAndClearPendingHandle`.
  *
  * In standalone-CLI (non-worker) mode the same plumbing works: the
  * agent's `onAction` handler already has the `handleInIdb` branch and

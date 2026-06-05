@@ -1,5 +1,5 @@
 /**
- * Integration smoke for the Wave 4.2 CDP page-bridge adapter.
+ * Integration smoke for the CDP page-bridge adapter.
  *
  * Drives `CdpWsPageBridge` against a fake `BrowserAPI` whose
  * transport records CDP traffic and replays binding-called events,

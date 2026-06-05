@@ -41,7 +41,9 @@ import {
 } from '../fs/mount-picker-popup.js';
 import { recoverMounts } from '../fs/mount-recovery.js';
 import { getAllMountEntries } from '../fs/mount-table-store.js';
+import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import { type PanelRpcPushMsg, panelRpcChannelName } from '../kernel/panel-rpc.js';
+import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
 // Auto-discover and register all providers (built-in + external).
 // IMPORTANT: This import must also appear in packages/chrome-extension/src/offscreen.ts
 // — the extension agent engine runs in the offscreen document, not in this file.
@@ -96,6 +98,7 @@ import type { PageFollowerTrayHandle } from './page-follower-tray.js';
 import { CHERRY_RUNTIME_TAG, startPageFollowerTray } from './page-follower-tray.js';
 import type { PageLeaderTrayHandle, StartPageLeaderTrayOptions } from './page-leader-tray.js';
 import { startPageLeaderTray } from './page-leader-tray.js';
+import { installPreviewVfsResponder } from './preview-vfs-responder.js';
 import {
   applyProviderDefaults,
   getApiKey,
@@ -125,6 +128,7 @@ import { initTelemetry } from './telemetry.js';
 import { initTheme } from './theme.js';
 import { initTooltips } from './tooltip.js';
 import type { ChatMessage } from './types.js';
+import { persistWelcomeSentinel } from './welcome-sentinel.js';
 
 const log = createLogger('main');
 
@@ -540,8 +544,9 @@ async function fireFastForwardFinalLick(
 async function mainExtension(app: HTMLElement, options?: { detached?: boolean }): Promise<void> {
   const isDetachedSelf = options?.detached === true;
   const { OffscreenClient } = await import('./offscreen-client.js');
-  const { VirtualFS } = await import('../fs/index.js');
+  const { VirtualFS, resolveVfsBackendFromEnv } = await import('../fs/index.js');
   const { publishAgentBridgeProxy } = await import('../scoops/agent-bridge.js');
+  const { warnIfPanelVfsConstructionUnderOpfs } = await import('./panel-vfs-guard.js');
 
   const layout = new Layout(app, !isDetachedSelf);
   await layout.panels.chat.initSession('session-cone');
@@ -554,12 +559,42 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
 
   let selectedScoop: RegisteredScoop | null = null;
 
+  // The offscreen document is the sole VFS constructor under
+  // `slicc_opfs_vfs === 'opfs'`. Emit a startup warning before the
+  // panel runs its own `VirtualFS.create` so the convention violation
+  // surfaces in dev/QA — no runtime block, since the LFS-shadow +
+  // mount-table-recovery paths still rely on the panel-side instance
+  // with the flag off.
+  const panelBackend = resolveVfsBackendFromEnv();
+  warnIfPanelVfsConstructionUnderOpfs(panelBackend, log);
+
+  // With `slicc_opfs_vfs === 'opfs'` the worker owns the canonical
+  // OPFS-backed VFS, so panel reads must route through the kernel
+  // transport's `VfsRpcHost` instead of hitting OPFS twice from the
+  // page. Defer the file-browser wiring until after `client` is
+  // constructed in that case; with the flag off, keep the historical
+  // local-VFS path so the LFS shadow store still drives the file
+  // browser.
+  const useRpcVfs = panelBackend === 'opfs';
+
   // Create a local VFS instance for the file browser and terminal.
   // IndexedDB is shared across all same-origin extension pages, so this
   // reads/writes the same data as the offscreen document's VFS.
-  const localFs = await VirtualFS.create({ dbName: 'slicc-fs' });
-  layout.panels.fileBrowser.setFs(localFs);
-  log.info('File browser wired to shared VFS (local IndexedDB)');
+  //
+  // Under `slicc_opfs_vfs === 'opfs'` force the page-side VFS to the
+  // InMemory backend so it no longer races the worker for OPFS handles
+  // (the worker is the canonical OPFS owner; the page keeps an
+  // in-process shadow only for legacy consumers like mount-recovery,
+  // attachment writer, and memory-panel reads). The page shadow no
+  // longer persists across reloads.
+  const localFs = await VirtualFS.create({
+    dbName: 'slicc-fs',
+    ...(useRpcVfs ? { backend: 'memory' as const } : {}),
+  });
+  if (!useRpcVfs) {
+    layout.panels.fileBrowser.setFs(localFs);
+    log.info('File browser wired to shared VFS (local IndexedDB)');
+  }
 
   // Restore persisted mounts. The side panel and the offscreen document
   // each have their own VirtualFS instance (sharing only the underlying
@@ -585,24 +620,19 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
 
   // Listen for preview SW file-read requests (falls back here for mounted dirs).
   // Uses BroadcastChannel because the SW's `/preview/` scope excludes this page.
+  //
+  // The reader is held in a `let` so that when
+  // `slicc_opfs_vfs === 'opfs'` the swap below (after `client` is up)
+  // rewires this responder to the worker's `VfsRpcHost` via the shared
+  // kernel transport. With the flag off, `localFs` stays in place and
+  // the path is byte-identical to the local-VFS baseline.
+  let previewVfsReader: LocalVfsClient = localFs;
   const previewVfsCh = new BroadcastChannel('preview-vfs');
-  previewVfsCh.onmessage = (event) => {
-    if (event.data?.type !== 'preview-vfs-read') return;
-    const { id, path, asText } = event.data;
-    (async () => {
-      try {
-        const encoding = asText ? 'utf-8' : 'binary';
-        const content = await localFs.readFile(path, { encoding });
-        previewVfsCh.postMessage({ type: 'preview-vfs-response', id, content });
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (!errMsg.includes('ENOENT')) {
-          log.error('Preview VFS read failed', { path, error: errMsg });
-        }
-        previewVfsCh.postMessage({ type: 'preview-vfs-response', id, error: errMsg });
-      }
-    })();
-  };
+  installPreviewVfsResponder({
+    channel: previewVfsCh,
+    getReader: () => previewVfsReader,
+    logger: log,
+  });
 
   // Wire skill drop install with toast feedback
   const skillDropToast = createSkillDropToast();
@@ -856,6 +886,33 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   // Wire local VFS to client so memory panel can read CLAUDE.md files
   client.setLocalFS(localFs);
 
+  // With `slicc_opfs_vfs === 'opfs'`, route file-browser reads AND
+  // the preview-vfs BroadcastChannel responder through the offscreen's
+  // `VfsRpcHost` instead of touching OPFS from the panel. The transport
+  // is shared — the RemoteVfsClient only subscribes to `vfs-*-result`
+  // envelopes and does not perturb the existing agent-event / scoop-list /
+  // sprinkle-op routing.
+  //
+  // Also construct a `RemoteWritableVfsClient` so panel-side writers
+  // (session freezer, pending-enrichment) route to the offscreen VFS
+  // over the same wire. The extension is a singleton writer (one
+  // offscreen document), so we do not gate on an OPFS leader election
+  // here — the panel is always the canonical writer relative to the
+  // offscreen.
+  let writableFs: WritableVfsClient = localFs;
+  if (useRpcVfs) {
+    const { createRemoteVfsClient } = await import('../kernel/remote-vfs-client.js');
+    const { createRemoteWritableVfsClient } = await import('../kernel/writable-vfs-client.js');
+    const remoteVfs = createRemoteVfsClient({ transport: client.getTransport() });
+    const remoteWritableVfs = createRemoteWritableVfsClient({
+      transport: client.getTransport(),
+    });
+    layout.panels.fileBrowser.setFs(remoteVfs);
+    previewVfsReader = remoteVfs;
+    writableFs = remoteWritableVfs;
+    log.info('File browser + preview-vfs wired to worker VFS RPC');
+  }
+
   // Mount the panel terminal as a `RemoteTerminalView` backed by the
   // offscreen `TerminalSessionHost`. Keystrokes assemble locally; each
   // committed line dispatches a `terminal-exec` to the offscreen so
@@ -957,13 +1014,13 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   layout.onClearChat = async (opts) => {
     if (opts?.freeze === 'quick') {
       try {
-        await runNewSessionFreezeQuick({ vfs: localFs });
+        await runNewSessionFreezeQuick({ vfs: writableFs });
       } catch (err) {
         log.warn('Quick freezer step failed (clearing anyway)', { error: String(err) });
       }
     } else if (opts?.freeze !== false) {
       try {
-        await runNewSessionFreeze({ vfs: localFs });
+        await runNewSessionFreeze({ vfs: writableFs });
       } catch (err) {
         log.warn('Freezer step failed (clearing anyway)', { error: String(err) });
       }
@@ -1684,7 +1741,12 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   // sink — `/shared/CLAUDE.md` is left untouched). Deferred behind
   // `requestIdleCallback` (or `setTimeout(0)` as a fallback) so a slow
   // enrichment never blocks first paint.
-  scheduleBackgroundEnrichment(localFs);
+  //
+  // Routes through `writableFs` so under `slicc_opfs_vfs=opfs` the
+  // rename + index update lands on the worker-owned OPFS via the
+  // `WritableVfsClient`. Flag off: `writableFs === localFs` (byte-
+  // identical to the local-VFS baseline).
+  scheduleBackgroundEnrichment(writableFs);
 }
 
 // ---------------------------------------------------------------------------
@@ -1724,8 +1786,14 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
 
   const { spawnKernelWorker } = await import('../kernel/spawn.js');
   const { installPageStorageSync } = await import('../kernel/page-storage-sync.js');
-  const { VirtualFS } = await import('../fs/index.js');
+  const { VirtualFS, resolveVfsBackendFromEnv } = await import('../fs/index.js');
   const { BrowserAPI } = await import('../cdp/index.js');
+  // Page-side companion to the worker's migration progress signals.
+  // The controller is allocated lazily on the first signal (see
+  // `spawnKernelWorker` callbacks below); the import is cheap and a
+  // no-op when the flag is off because the worker never posts the
+  // start signal in that case.
+  const { createMigrationSplash } = await import('./migration-splash.js');
 
   // Resolve the tray worker base URL from /api/runtime-config so consumers
   // like oauth-code-exchange's `getWorkerBaseUrl` read a value that matches
@@ -1803,11 +1871,66 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   await layout.panels.chat.initSession('session-cone');
   log.info('Session initialized (kernel-worker mode)');
 
+  // With `slicc_opfs_vfs === 'opfs'`, the worker owns the canonical
+  // OPFS-backed VFS and panel reads must route through the kernel
+  // transport's `VfsRpcHost`. Defer the file-browser wiring until
+  // after `client` is available; with the flag off, keep the
+  // historical local-VFS path so the LFS shadow still drives the
+  // file browser.
+  const useRpcVfs = resolveVfsBackendFromEnv() === 'opfs';
+
   // Local VFS for the file browser + memory panel + preview-vfs fallback.
   // Same IndexedDB as the worker's VFS, so writes from the agent are
   // visible in the file browser without round-tripping the wire.
-  const localFs = await VirtualFS.create({ dbName: 'slicc-fs' });
-  layout.panels.fileBrowser.setFs(localFs);
+  //
+  // Under `slicc_opfs_vfs === 'opfs'` force the page-side VFS to the
+  // InMemory backend so it no longer races the worker for OPFS handles
+  // (the worker is the canonical OPFS owner; the page keeps an
+  // in-process shadow for legacy consumers like mount-recovery and
+  // attachment writer). The page shadow no longer persists across
+  // reloads.
+  const localFs = await VirtualFS.create({
+    dbName: 'slicc-fs',
+    ...(useRpcVfs ? { backend: 'memory' as const } : {}),
+  });
+  if (!useRpcVfs) {
+    layout.panels.fileBrowser.setFs(localFs);
+  }
+
+  // Under the OPFS flag, run the cross-tab `slicc-opfs-leader`
+  // election BEFORE any code path that opens an OPFS handle.
+  // `createSyncAccessHandle` is exclusive per file; racing two
+  // kernel-workers on the same OPFS tree corrupts the store.
+  // First-writer-wins — newer tabs become followers and surface a
+  // non-blocking read-only banner. The election + banner +
+  // `__slicc_opfs_leader` state surface gives downstream
+  // worker-side gating (skipping OPFS open / cross-tab read routing)
+  // a single hook.
+  let opfsLeader: { isLeader: boolean; dispose: () => void } = {
+    isLeader: true,
+    dispose: () => {},
+  };
+  if (useRpcVfs) {
+    const { electOpfsLeader } = await import('./opfs-leader-election.js');
+    const { showOpfsReadOnlyBanner } = await import('./opfs-readonly-banner.js');
+    const result = await electOpfsLeader({ logger: log });
+    opfsLeader = { isLeader: result.isLeader, dispose: result.dispose };
+    (globalThis as Record<string, unknown>).__slicc_opfs_leader = {
+      isLeader: result.isLeader,
+      self: result.self,
+      leader: result.leader,
+    };
+    if (result.isLeader) {
+      log.info('OPFS leader election: this tab is the writer', { tabId: result.self.tabId });
+    } else {
+      log.warn('OPFS leader election: another tab is the writer; entering read-only mode', {
+        self: result.self.tabId,
+        leader: result.leader?.tabId,
+      });
+      showOpfsReadOnlyBanner({ leaderTabId: result.leader?.tabId });
+    }
+  }
+  void opfsLeader;
 
   // Recover the panel's view of mounts. The worker recovers its own
   // mounts inside `createKernelHost`; this is just the page-side
@@ -1828,24 +1951,19 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // the canonical one (lives inside `createKernelHost`); this fires only
   // when the worker hasn't booted yet or when the request resolves
   // against a panel-only mount.
+  //
+  // The reader is held in a `let` so that when
+  // `slicc_opfs_vfs === 'opfs'` the swap below (after `client` is up)
+  // rewires this responder to the kernel worker's `VfsRpcHost` via
+  // the shared transport. With the flag off, `localFs` stays in place
+  // and the path is byte-identical to the local-VFS baseline.
+  let previewVfsReader: LocalVfsClient = localFs;
   const previewVfsCh = new BroadcastChannel('preview-vfs');
-  previewVfsCh.onmessage = (event) => {
-    if (event.data?.type !== 'preview-vfs-read') return;
-    const { id, path, asText } = event.data;
-    (async () => {
-      try {
-        const encoding = asText ? 'utf-8' : 'binary';
-        const content = await localFs.readFile(path, { encoding });
-        previewVfsCh.postMessage({ type: 'preview-vfs-response', id, content });
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (!errMsg.includes('ENOENT')) {
-          log.error('Preview VFS read failed', { path, error: errMsg });
-        }
-        previewVfsCh.postMessage({ type: 'preview-vfs-response', id, error: errMsg });
-      }
-    })();
-  };
+  installPreviewVfsResponder({
+    channel: previewVfsCh,
+    getReader: () => previewVfsReader,
+    logger: log,
+  });
 
   // Real CDP transport. The worker's `BrowserAPI` proxies CDP commands
   // back here through the kernel transport. We must connect the
@@ -1950,9 +2068,36 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // `kernel-worker-ready` over the kernel port.
   const { OffscreenClient } = await import('./offscreen-client.js');
   void OffscreenClient; // type import for the `client` variable above
+
+  // Lazily-allocated migration splash controller. We don't construct
+  // it eagerly because the migration only runs on the OPFS flag path
+  // AND only when the sentinel is absent; the controller is created
+  // on first `onMigrationStart` so flag-off boots never touch
+  // `document.body`.
+  let migrationSplash: ReturnType<typeof createMigrationSplash> | null = null;
+
   const host = spawnKernelWorker({
     realCdpTransport,
     instanceId,
+    onMigrationStart: () => {
+      if (!migrationSplash) {
+        migrationSplash = createMigrationSplash({ root: document.body, logger: log });
+      }
+      migrationSplash.arm();
+    },
+    onMigrationProgress: (progress) => {
+      // Lazy-allocate the controller in case `started` was missed (the
+      // page-side bridge swallows raw kernel-port messages prior to the
+      // first listener tick).
+      if (!migrationSplash) {
+        migrationSplash = createMigrationSplash({ root: document.body, logger: log });
+        migrationSplash.arm();
+      }
+      migrationSplash.updateProgress(progress);
+    },
+    onMigrationFinish: () => {
+      migrationSplash?.disarm();
+    },
     callbacks: {
       onStatusChange: (scoopJid, status) => {
         layout.panels.scoops.updateScoopStatus(scoopJid, status);
@@ -2097,6 +2242,43 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // mode — only the extension path was calling setLocalFS before.
   client.setLocalFS(localFs);
 
+  // With `slicc_opfs_vfs === 'opfs'`, route file-browser reads AND
+  // the preview-vfs BroadcastChannel responder through the kernel
+  // worker's `VfsRpcHost` (deferred from the initial wiring above so
+  // we can reach `client.getTransport()`).
+  //
+  // The scoops-panel frozen-sessions index + frozen-archive reader
+  // also need to read through the worker under the flag, since the
+  // worker owns the canonical OPFS-backed view and the page-side
+  // `localFs` shadow can be stale. `panelReadVfs` is the read-only
+  // handle handed to those consumers below.
+  //
+  // Also construct a `RemoteWritableVfsClient` so page-side writers
+  // (session freezer, pending-enrichment) route through the worker's
+  // `VfsRpcHost` write surface and land on the canonical OPFS store.
+  // Only the OPFS leader is the writer — followers fall back to
+  // `localFs` (LFS shadow) so the New Session gesture doesn't hang on
+  // EACCES under contention. Flag off: `writableFs === localFs`
+  // (byte-identical to the local-VFS baseline).
+  let panelReadVfs: LocalVfsClient = localFs;
+  let writableFs: WritableVfsClient = localFs;
+  if (useRpcVfs) {
+    const { createRemoteVfsClient } = await import('../kernel/remote-vfs-client.js');
+    const remoteVfs = createRemoteVfsClient({ transport: client.getTransport() });
+    layout.panels.fileBrowser.setFs(remoteVfs);
+    previewVfsReader = remoteVfs;
+    panelReadVfs = remoteVfs;
+    if (opfsLeader.isLeader) {
+      const { createRemoteWritableVfsClient } = await import('../kernel/writable-vfs-client.js');
+      writableFs = createRemoteWritableVfsClient({ transport: client.getTransport() });
+      log.info('File browser + preview-vfs + writable freezer wired to worker VFS RPC (leader)');
+    } else {
+      log.info(
+        'File browser + preview-vfs wired to worker VFS RPC (follower; freezer uses LFS shadow)'
+      );
+    }
+  }
+
   // Wire "New session" — freeze the cone's chat to /sessions/ via the
   // freezer (memory extraction + title), then clear ONLY the cone
   // session via the kernel client. Scoops survive intentionally so the
@@ -2108,16 +2290,28 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   //     `enrichPendingSessions` finishes the work on the next boot.
   //   - `freeze === false`                      → discard (long press).
   //     No archive entry is written.
+  //
+  // Under `slicc_opfs_vfs=opfs`, only the OPFS leader may write the
+  // archive — followers' `writableFs` is the page-side LFS shadow
+  // which the worker-OPFS-backed UI never reads, so a follower
+  // archive would be silently orphaned. Make the affordance a no-op
+  // on followers (matches the read-only banner). Flag off:
+  // `opfsLeader.isLeader === true` (no election ran), so the gate is
+  // unreachable and behavior stays byte-identical.
   layout.onClearChat = async (opts) => {
+    if (useRpcVfs && !opfsLeader.isLeader) {
+      log.info('New session affordance skipped (OPFS follower — read-only tab)');
+      return;
+    }
     if (opts?.freeze === 'quick') {
       try {
-        await runNewSessionFreezeQuick({ vfs: localFs });
+        await runNewSessionFreezeQuick({ vfs: writableFs });
       } catch (err) {
         log.warn('Quick freezer step failed (clearing anyway)', { error: String(err) });
       }
     } else if (opts?.freeze !== false) {
       try {
-        await runNewSessionFreeze({ vfs: localFs });
+        await runNewSessionFreeze({ vfs: writableFs });
       } catch (err) {
         log.warn('Freezer step failed (clearing anyway)', { error: String(err) });
       }
@@ -2129,16 +2323,19 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   };
 
   // Frozen sessions sidebar (standalone only). The panel reads
-  // /sessions/index.json from the page-side VFS that already shares
-  // IndexedDB with the worker. Clicking an entry reads the archive
-  // markdown, parses it back into messages, and displays it in the
-  // chat panel read-only — matching the affordance of clicking a
-  // live scoop (which also opens the chat view rather than a file).
-  layout.panels.scoops.setVfs(localFs);
+  // /sessions/index.json and the per-archive markdown through
+  // `panelReadVfs` — either the page-side `localFs` (shared IDB with
+  // the worker) or, under `slicc_opfs_vfs=opfs`, the worker-backed
+  // `RemoteVfsClient` so reads see the canonical OPFS view. Clicking
+  // an entry reads the archive, parses it back into messages, and
+  // displays it in the chat panel read-only — matching the affordance
+  // of clicking a live scoop (which also opens the chat view rather
+  // than a file).
+  layout.panels.scoops.setVfs(panelReadVfs);
   layout.onFrozenSessionOpen = (entry) => {
     void (async () => {
       try {
-        const raw = await localFs.readFile(frozenSessionPath(entry), { encoding: 'utf-8' });
+        const raw = await panelReadVfs.readFile(frozenSessionPath(entry), { encoding: 'utf-8' });
         const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
         const parsed = parseFrozenArchive(text);
         const title = parsed.title || entry.title;
@@ -2471,9 +2668,17 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       return true;
     }
     if (action === 'shortcut-migrate') {
-      void localFs
-        .writeFile('/shared/.welcomed', '1')
-        .catch((err) => log.warn('Failed to persist welcome completion marker', err));
+      // Route the sentinel write through `writableFs` so under
+      // `slicc_opfs_vfs=opfs` it lands on the worker-owned canonical
+      // OPFS (matching the freezer/enrichment reroute). Non-leader
+      // followers no-op so the marker isn't silently orphaned in the
+      // page-side LFS shadow. Flag off: `writableFs === localFs` AND
+      // `opfsLeader.isLeader === true` (no election ran) →
+      // byte-identical to the local-VFS baseline.
+      persistWelcomeSentinel({
+        writableFs,
+        isWriter: !useRpcVfs || opfsLeader.isLeader,
+      });
       return true;
     }
     return false;
@@ -2846,7 +3051,7 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       //
       // NOTE: not unit-tested. main.ts has no test scaffold today; building one
       // for this 3-line branch isn't worth the cost. The behavior is covered
-      // indirectly by the live e2b harness (Phase 5.1) — a sandbox booted with
+      // indirectly by the live e2b harness — a sandbox booted with
       // a stale TRAY_JOIN_STORAGE_KEY would join an unreachable follower and
       // /tmp/slicc-join.json would never appear, surfacing in the start poll
       // timeout. If a regression slips, the live harness catches it.
@@ -3341,7 +3546,17 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // Background enrichment of pending-frozen sessions (see the extension
   // path for rationale). Fire-and-forget after the boot-critical wiring
   // is in place so a slow enrichment never blocks first paint.
-  scheduleBackgroundEnrichment(localFs);
+  //
+  // Routes through `writableFs` so the OPFS-leader tab lands the
+  // rename + index update on the worker-owned canonical OPFS via the
+  // `WritableVfsClient`. Followers (and flag-off) reuse `localFs`.
+  //
+  // Pass `isWriter` so the scheduler no-ops on followers under the
+  // OPFS flag. Otherwise the enrichment write would land in the
+  // page-side LFS shadow (silent orphan, never seen by the
+  // worker-OPFS sessions index). Flag off → `isWriter: true` (no
+  // election ran), behavior byte-identical to the local-VFS baseline.
+  scheduleBackgroundEnrichment(writableFs, { isWriter: !useRpcVfs || opfsLeader.isLeader });
 
   log.info('Standalone kernel-worker UI ready');
 }

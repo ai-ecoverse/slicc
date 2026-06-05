@@ -28,6 +28,7 @@ import { createLogger } from '../../../packages/webapp/src/core/index.js';
 import { createKernelHost } from '../../../packages/webapp/src/kernel/host.js';
 import { createPanelTerminalHost } from '../../../packages/webapp/src/kernel/panel-terminal-host.js';
 import { createOffscreenChromeRuntimeTransport } from '../../../packages/webapp/src/kernel/transport-chrome-runtime.js';
+import { startVfsRpcHost } from '../../../packages/webapp/src/kernel/vfs-rpc-host.js';
 // Auto-discover and register all providers (built-in + external).
 // IMPORTANT: Keep in sync with packages/webapp/src/ui/main.ts — both
 // entry points need all providers. Registration is explicit (not
@@ -143,6 +144,7 @@ async function init(): Promise<void> {
   // `TerminalSessionHost` AND the per-session `WasmShellHeadless`, so
   // `ps` / `kill` / `cat /proc/<pid>/...` work uniformly.
   let stopTerminalHost: (() => void) | null = null;
+  let stopVfsRpcHost: (() => void) | null = null;
   const sharedFs = host.sharedFs;
   if (sharedFs) {
     const handle = createPanelTerminalHost({
@@ -153,6 +155,23 @@ async function init(): Promise<void> {
       logger: log,
     });
     stopTerminalHost = handle.stop;
+    // Worker-side VFS read RPC surface, same wiring as the standalone
+    // DedicatedWorker (`kernel-worker.ts`).
+    //
+    // Also wire `writableClient: sharedFs` so the host accepts
+    // `vfs-write-file` / `vfs-mkdir` / `vfs-rm` / `vfs-flush`
+    // envelopes from the panel-side `WritableVfsClient`. `VirtualFS`
+    // satisfies the `WritableVfsBackend` shape structurally. With
+    // the OPFS flag off, the panel never constructs the writable
+    // client so these write request types fan out into nobody —
+    // existing behavior is unchanged.
+    const vfsHandle = startVfsRpcHost({
+      transport: bridgeTransport,
+      client: sharedFs,
+      writableClient: sharedFs,
+      logger: log,
+    });
+    stopVfsRpcHost = vfsHandle.stop;
   } else {
     log.warn('shared FS unavailable; panel terminal sessions will fail to open');
   }
@@ -166,6 +185,8 @@ async function init(): Promise<void> {
     () => {
       stopTerminalHost?.();
       stopTerminalHost = null;
+      stopVfsRpcHost?.();
+      stopVfsRpcHost = null;
       void host.dispose();
     },
     { once: true }

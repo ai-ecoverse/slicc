@@ -9,7 +9,7 @@
  */
 
 import { createLogger } from '../core/logger.js';
-import type { VirtualFS } from '../fs/index.js';
+import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { Orchestrator } from '../scoops/orchestrator.js';
 import type { ChannelMessage, RegisteredScoop, ScoopTabState } from '../scoops/types.js';
 import { extractLatestUserPrompt, ScoopScopeLabeler } from './scoop-scope-label.js';
@@ -74,7 +74,7 @@ export class ScoopsPanel {
   private selectedScoopJid: string | null = null;
   private scoopStatuses: Map<string, ScoopTabState['status']> = new Map();
   private expanded = false;
-  private vfs: VirtualFS | null = null;
+  private vfs: LocalVfsClient | null = null;
   private frozenSessions: FrozenSessionIndexEntry[] = [];
 
   // Roaming eyes state
@@ -365,9 +365,11 @@ export class ScoopsPanel {
   /**
    * Wire the VFS so the panel can render the "Frozen sessions" section
    * from `/sessions/index.json`. Standalone-only — extension mode hides
-   * the scoops panel entirely.
+   * the scoops panel entirely. Typed as `LocalVfsClient` (read-only
+   * surface) so callers can pass a page-side `VirtualFS` or, under
+   * `slicc_opfs_vfs=opfs`, a worker-RPC-backed `RemoteVfsClient`.
    */
-  setVfs(vfs: VirtualFS): void {
+  setVfs(vfs: LocalVfsClient): void {
     this.vfs = vfs;
     void this.refreshFrozenSessions();
   }

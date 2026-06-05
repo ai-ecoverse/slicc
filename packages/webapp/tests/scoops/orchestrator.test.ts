@@ -83,19 +83,9 @@ async function settleAndDisposeSharedFs(
   sharedFs: ReturnType<Orchestrator['getSharedFS']>
 ): Promise<void> {
   if (!sharedFs) return;
-
-  const lfs = sharedFs.getLightningFS() as any;
-  if (lfs?._operations?.size > 0) {
-    await lfs._gracefulShutdown?.();
-  }
-  if (lfs?._deactivationTimeout) {
-    clearTimeout(lfs._deactivationTimeout);
-    lfs._deactivationTimeout = null;
-  }
-  if (lfs?._deactivate) {
-    await lfs._deactivate();
-  }
-
+  // LightningFS-specific graceful shutdown / debounce cancel is no
+  // longer needed — ZenFS backends own no IDB-debounced state, so
+  // `dispose()` alone is sufficient.
   await sharedFs.dispose();
 }
 
