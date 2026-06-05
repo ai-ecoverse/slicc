@@ -26,7 +26,7 @@ import {
   removeMountEntry,
   saveMountEntry,
 } from './mount-table-store.js';
-import { normalizePath, splitPath } from './path-utils.js';
+import { joinPath, normalizePath, splitPath } from './path-utils.js';
 import type {
   DirEntry,
   EntryType,
@@ -38,6 +38,15 @@ import type {
   Stats,
 } from './types.js';
 import { FsError } from './types.js';
+
+/**
+ * Maximum number of symlink hops {@link VirtualFS.realpath} will follow
+ * before throwing `ELOOP`. ZenFS' own `vfs/async.js#resolve` recurses
+ * without a hop counter, so a `/a → /b → /a` cycle explodes the async
+ * stack and OOMs the process — see {@link VirtualFS.realpath} for the
+ * bounded loop that protects against that.
+ */
+const MAX_SYMLINK_DEPTH = 10;
 
 /** Backend identifier for {@link VirtualFS}. */
 export type VfsBackend = 'memory' | 'opfs';
@@ -731,18 +740,45 @@ export class VirtualFS {
     const normalized = normalizePath(path);
     if (this.findMount(normalized)) return null;
     const sync = this.lfsSync;
-    if (typeof sync.statSync !== 'function') return null;
-    try {
-      const s = sync.statSync(normalized);
-      return {
-        type: s.isDirectory() ? 'directory' : 'file',
-        size: s.size,
-        mtime: s.mtimeMs,
-        ctime: s.ctimeMs,
-      };
-    } catch {
+    if (
+      typeof sync.statSync !== 'function' ||
+      typeof sync.lstatSync !== 'function' ||
+      typeof sync.readlinkSync !== 'function'
+    ) {
       return null;
     }
+    // Resolve symlinks with a bounded hop counter — ZenFS' native
+    // `statSync` follows symlinks via unbounded recursion and a `/a → /b
+    // → /a` cycle blows the stack. Mirrors {@link realpath}'s bounded
+    // walk on the sync surface; returns null on ELOOP so callers can
+    // fall back to async (which throws the explicit ELOOP).
+    let current = normalized;
+    for (let hops = 0; hops <= MAX_SYMLINK_DEPTH; hops++) {
+      let s: FsStatsLike;
+      try {
+        s = sync.lstatSync(current);
+      } catch {
+        return null;
+      }
+      if (!s.isSymbolicLink()) {
+        return {
+          type: s.isDirectory() ? 'directory' : 'file',
+          size: s.size,
+          mtime: s.mtimeMs,
+          ctime: s.ctimeMs,
+        };
+      }
+      let target: string;
+      try {
+        target = sync.readlinkSync(current);
+      } catch {
+        return null;
+      }
+      current = target.startsWith('/')
+        ? normalizePath(target)
+        : normalizePath(joinPath(splitPath(current).dir, target));
+    }
+    return null;
   }
 
   lstatSync(path: string): Stats | null {
@@ -1699,21 +1735,65 @@ export class VirtualFS {
 
   /**
    * Resolve all symlinks in a path to produce the final canonical path.
-   * Delegates to ZenFS' native `realpath` (metadata-sidecar backed on
-   * OPFS, direct lookup on InMemory). ZenFS enforces its own
-   * symlink-hop limit; an exceeded chain surfaces as `ELOOP`.
+   *
+   * Walks the path component-by-component (so intermediate directory
+   * symlinks like `/alias → /real` are resolved when reading
+   * `/alias/file.txt`) and bounds total hops by {@link
+   * MAX_SYMLINK_DEPTH}; a circular chain surfaces as `ELOOP`. We can't
+   * delegate to ZenFS' native `realpath` because `@zenfs/core`'s
+   * `vfs/async.js#resolve` recurses without a hop counter — a `/a →
+   * /b → /a` cycle blows the async stack and exhausts the heap before
+   * any error is raised. This bounded loop mirrors the POSIX realpath
+   * contract and keeps the InMemory test backend (and OPFS in
+   * production) from OOM-ing on cycles.
    */
   async realpath(path: string): Promise<string> {
     const normalized = normalizePath(path);
     const mount = this.findMount(normalized);
     if (mount) return normalized; // Mount paths are already real
-    try {
-      const rp = this.lfs.realpath;
-      if (typeof rp === 'function') return normalizePath(await rp.call(this.lfs, normalized));
-    } catch (err) {
-      throw this.convertError(err, normalized);
+    let hops = 0;
+    // Component-walk: build the resolved path one segment at a time,
+    // resolving any symlink encountered against the already-resolved
+    // prefix so directory-component symlinks (`/alias/file.txt`) work.
+    const parts = normalized.split('/').filter(Boolean);
+    let resolved = '/';
+    for (let i = 0; i < parts.length; i++) {
+      let next = resolved === '/' ? `/${parts[i]}` : `${resolved}/${parts[i]}`;
+      // Follow symlinks at this component up to the hop limit.
+      while (true) {
+        let stats: FsStatsLike;
+        try {
+          stats = await this.lfs.lstat(next);
+        } catch (err) {
+          // Non-existent tail component is allowed (realpath of a
+          // not-yet-created file still has a canonical form); rethrow
+          // for ENOTDIR/EACCES/etc.
+          const converted = this.convertError(err, normalized);
+          if (converted.code === 'ENOENT' && i === parts.length - 1) {
+            resolved = next;
+            return resolved;
+          }
+          throw converted;
+        }
+        if (!stats.isSymbolicLink()) {
+          resolved = next;
+          break;
+        }
+        if (++hops > MAX_SYMLINK_DEPTH) {
+          throw new FsError('ELOOP', 'too many symbolic links encountered', normalized);
+        }
+        let target: string;
+        try {
+          target = await this.lfs.readlink(next);
+        } catch (err) {
+          throw this.convertError(err, normalized);
+        }
+        next = target.startsWith('/')
+          ? normalizePath(target)
+          : normalizePath(joinPath(splitPath(next).dir, target));
+      }
     }
-    return normalized;
+    return resolved;
   }
 
   /**
