@@ -226,7 +226,7 @@ The bridge also reaches the **same worker shell** that `.jsh` scripts and `node 
 
 - `slicc.exec(cmd)` — run a shell command in the worker shell. Returns `Promise<{stdout, stderr, exitCode}>`. A non-zero `exitCode` (or `127` when the shell bridge is unavailable) is returned in the result, never thrown. Use `slicc.exec.spawn(argv)` to bypass shell parsing for untrusted args.
 - `slicc.agent(prompt, opts?)` — spawn a one-shot sub-scoop, feed it `prompt`, block until it completes, and resolve with its final message on `stdout`. Returns `Promise<{stdout, exitCode}>`. `opts`: `{cwd?, allowedCommands?, model?, thinking?, readOnly?}`. Sugar over `slicc.exec` building the `agent` command — the same handoff-free delegation as the `agent` shell command. On failure the error text comes back on `stdout` with a non-zero `exitCode`, never thrown.
-- `slicc.fetch(url, init?)` — proxied, secret-injecting fetch (NOT the iframe's CORS-bound native fetch). Returns a structured `Promise<{ok, status, statusText, url, headers, body, bodyBase64}>`.
+- `slicc.fetch(url, init?)` — proxied, secret-injecting fetch (NOT the iframe's CORS-bound native fetch). Resolves to a native `Response` (with `.json()`/`.text()`/`.arrayBuffer()`/`.blob()` and `.ok`/`.status`/`.headers`/`.url`).
 - `slicc.http.client(config)` — higher-level API client over the proxied fetch (`get`/`post`/`put`/`patch`/`delete`). `config`: `{baseUrl?, token?, headers?, retry?, timeoutMs?}`.
 - `slicc.browser.*` — Playwright-style CDP surface (`findTab`, `ensureTab`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`), mirroring the jsh `browser` global.
 - `slicc.fetchToFile(url, path)` — download a URL (via the proxied fetch) straight to a VFS file; resolves with the byte count.
