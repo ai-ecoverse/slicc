@@ -43,6 +43,7 @@ import { recoverMounts } from '../fs/mount-recovery.js';
 import { getAllMountEntries } from '../fs/mount-table-store.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import { type PanelRpcPushMsg, panelRpcChannelName } from '../kernel/panel-rpc.js';
+import { createRemoteSprinkleVfs } from '../kernel/remote-sprinkle-vfs.js';
 import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
 // Auto-discover and register all providers (built-in + external).
 // IMPORTANT: This import must also appear in packages/chrome-extension/src/offscreen.ts
@@ -1416,8 +1417,17 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   };
 
   // ── Sprinkle Manager (SHTML sprinkle panels) ────────────────────────
+  // Under `slicc_opfs_vfs=opfs` `localFs` is an empty memory VFS — the
+  // worker owns the canonical OPFS-backed tree. Bind the manager (and
+  // by extension `discoverSprinkles` / `SprinkleBridge`) to a
+  // worker-RPC-backed adapter in that mode so `.shtml` files actually
+  // surface. With the flag off, byte-identical to the previous direct
+  // `localFs` wiring.
+  const sprinkleFs = useRpcVfs
+    ? createRemoteSprinkleVfs({ reader: writableFs, writer: writableFs })
+    : localFs;
   const sprinkleManager = new SprinkleManager(
-    localFs,
+    sprinkleFs,
     async (event: LickEvent) => {
       // Route sprinkle licks to the offscreen orchestrator's cone
       if (event.type === 'sprinkle') {
@@ -2776,8 +2786,21 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
     client.sendSprinkleLick('inline', { action, data });
   };
 
+  // Under `slicc_opfs_vfs=opfs` `localFs` is an empty memory VFS — the
+  // kernel worker owns the canonical OPFS tree. Bind the manager (and
+  // by extension `discoverSprinkles` / `SprinkleBridge`) to the
+  // worker-RPC-backed read/write surface so `.shtml` discovery and
+  // `sprinkle list` see real files. Reads go through `panelReadVfs`
+  // (works on leader and follower); writes go through `writableFs`
+  // (RPC on leader, memory shadow on follower — follower sprinkle
+  // writes are best-effort and don't reach OPFS, matching the
+  // read-only banner). With the flag off, byte-identical to the
+  // previous direct `localFs` wiring.
+  const sprinkleFs = useRpcVfs
+    ? createRemoteSprinkleVfs({ reader: panelReadVfs, writer: writableFs })
+    : localFs;
   sprinkleManager = new SprinkleManager(
-    localFs,
+    sprinkleFs,
     async (event: LickEvent) => {
       if (event.type === 'sprinkle') {
         if (interceptWelcomeLick(event)) {
