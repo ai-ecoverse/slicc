@@ -1894,7 +1894,7 @@ export async function installRecommendedSkills(
 
 /**
  * Normalize a hostname for catalog matching: lowercases and strips a single
- * leading `www.`. Exported so Wave 4 (browse.sh skill install dispatch) can
+ * leading `www.`. Exported so the browse.sh skill install dispatch can
  * reuse the exact same matching contract this subcommand surfaces to users.
  */
 export function normalizeHostname(host: string): string {

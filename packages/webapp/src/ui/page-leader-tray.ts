@@ -26,6 +26,7 @@ import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { CDPTransport } from '../cdp/transport.js';
 import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
+import type { LickEvent } from '../scoops/lick-manager.js';
 import { ThrottledErrorTracker } from '../scoops/throttled-error-tracker.js';
 import type {
   LeaderTraySession,
@@ -80,9 +81,11 @@ export interface StartPageLeaderTrayOptions {
   getSprinkles?: () => SprinkleSummary[];
   readSprinkleContent?: LeaderSyncManagerOptions['readSprinkleContent'];
   onSprinkleLick?: LeaderSyncManagerOptions['onSprinkleLick'];
+  onForwardedLick?: (event: LickEvent, originBootstrapId: string) => void;
   onFollowerMessage: LeaderSyncManagerOptions['onFollowerMessage'];
   onFollowerAbort: LeaderSyncManagerOptions['onFollowerAbort'];
   onFollowerCountChanged?: LeaderSyncManagerOptions['onFollowerCountChanged'];
+  onRemoteTransportsCleaned?: LeaderSyncManagerOptions['onRemoteTransportsCleaned'];
 
   // --- Bridge hop to worker LickManager (replaces the pre-regression direct call) ---
   /**
@@ -91,6 +94,13 @@ export interface StartPageLeaderTrayOptions {
    * caller. Fire-and-forget; no ack expected.
    */
   sendWebhookEvent: (webhookId: string, headers: Record<string, string>, body: unknown) => void;
+
+  /**
+   * Forward an inbound `cherry.host_event` (from a follower's embedded cherry
+   * host page) to the worker's `LickManager` as a `'cherry'` lick. Wired to
+   * `OffscreenClient.sendCherryHostEvent` by the caller. Fire-and-forget.
+   */
+  onCherryHostEvent?: LeaderSyncManagerOptions['onCherryHostEvent'];
 
   // --- Agent event tap (helper owns the subscription) ---
   /**
@@ -165,9 +175,12 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
     getSprinkles: options.getSprinkles,
     readSprinkleContent: options.readSprinkleContent,
     onSprinkleLick: options.onSprinkleLick,
+    onForwardedLick: options.onForwardedLick,
     onFollowerMessage: options.onFollowerMessage,
     onFollowerAbort: options.onFollowerAbort,
     onFollowerCountChanged: options.onFollowerCountChanged,
+    onRemoteTransportsCleaned: options.onRemoteTransportsCleaned,
+    onCherryHostEvent: options.onCherryHostEvent,
     browserAPI: options.browserAPI,
     browserTransport: options.browserTransport,
     vfs: options.vfs,

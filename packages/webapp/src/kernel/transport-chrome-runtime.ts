@@ -6,10 +6,22 @@
  * filter and the bridge can keep its `sprinkle-op-response` peek logic.
  * The MessageChannel transport (`transport-message-channel.ts`) follows
  * the same shape.
+ *
+ * Binary payloads: `chrome.runtime.sendMessage` is JSON-serialising in
+ * practice between extension contexts (a raw `Uint8Array` arrives at
+ * the receiver as a plain `{ [i]: byte }` object that fails the host's
+ * `instanceof Uint8Array` guard, and the OPFS binary read path collapses
+ * the bytes to `[object Object]`). The adapters route the envelope
+ * through {@link encodeBinaryForTransport} on send and
+ * {@link decodeBinaryForTransport} on receive so any nested `Uint8Array`
+ * (today: VFS binary read/write `data`) survives the wire intact. The
+ * MessageChannel transport keeps its zero-copy transfer path; it does
+ * not need this wrapper.
  */
 
 import type { ExtensionMessage } from '../../../chrome-extension/src/messages.js';
 import { createLogger } from '../core/logger.js';
+import { decodeBinaryForTransport, encodeBinaryForTransport } from './transport-binary-codec.js';
 import type { KernelTransport } from './types.js';
 
 const log = createLogger('panel-transport');
@@ -36,17 +48,27 @@ export function createOffscreenChromeRuntimeTransport<Out>(): KernelTransport<
         _sendResponse: (response?: unknown) => void
       ): boolean => {
         if (!isExtMsg(message)) return false;
-        handler(message);
+        // Restore any `Uint8Array` values JSON-serialised on the way in.
+        // No-op when the sender already delivered structured binary
+        // (the sentinel only matches the encoder's shape).
+        handler(decodeBinaryForTransport(message) as ExtensionMessage);
         return false;
       };
       chrome.runtime.onMessage.addListener(listener);
       return () => chrome.runtime.onMessage.removeListener(listener);
     },
-    send: (payload) => {
+    // `transfer` is intentionally ignored — chrome.runtime.sendMessage
+    // serialises via JSON with no transfer-list support, so the payload
+    // is always copied. Callers that pass `transfer` must tolerate the
+    // copy in this adapter. Nested `Uint8Array` payloads are encoded
+    // through {@link encodeBinaryForTransport} so they survive that
+    // serialisation.
+    send: (payload, _transfer) => {
+      const encoded = encodeBinaryForTransport(payload);
       chrome.runtime
         .sendMessage({
           source: 'offscreen' as const,
-          payload,
+          payload: encoded,
         })
         .catch((err: unknown) => {
           // "Receiving end does not exist" is expected when no panel is
@@ -83,17 +105,24 @@ export function createPanelChromeRuntimeTransport<Out>(): KernelTransport<Extens
         _sendResponse: (response?: unknown) => void
       ): boolean => {
         if (!isExtMsg(message)) return false;
-        handler(message);
+        // Restore any `Uint8Array` values JSON-serialised on the way in
+        // (see {@link decodeBinaryForTransport}).
+        handler(decodeBinaryForTransport(message) as ExtensionMessage);
         return false;
       };
       chrome.runtime.onMessage.addListener(listener);
       return () => chrome.runtime.onMessage.removeListener(listener);
     },
-    send: (payload) => {
+    // `transfer` is intentionally ignored — chrome.runtime.sendMessage
+    // serialises via JSON with no transfer-list support; nested
+    // `Uint8Array` payloads are encoded via
+    // {@link encodeBinaryForTransport} so they survive the wire.
+    send: (payload, _transfer) => {
+      const encoded = encodeBinaryForTransport(payload);
       chrome.runtime
         .sendMessage({
           source: 'panel' as const,
-          payload,
+          payload: encoded,
         })
         .catch((err: unknown) => {
           // Panel-side: log because send failures matter for UX. Routed

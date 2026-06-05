@@ -627,6 +627,25 @@ export class Orchestrator {
     this.lickManager?.handleWebhookEvent(webhookId, headers, body);
   }
 
+  /**
+   * Relay a cherry host event into the LickManager as a `'cherry'` lick. Used
+   * by the leader tray (page-side via the `lick-cherry-host-event` bridge,
+   * extension-side in-process) when a follower forwards a `cherry.host_event`
+   * emitted by its embedded cherry host page. The owning follower's runtime id
+   * is resolved by the leader sync manager; the host origin is not carried at
+   * the tray layer, so it is left undefined.
+   */
+  handleCherryHostEvent(cherryRuntimeId: string | undefined, name: string, detail?: unknown): void {
+    this.lickManager?.emitEvent({
+      type: 'cherry',
+      cherryRuntimeId,
+      cherryName: name,
+      cherryOrigin: undefined,
+      body: detail,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
   /** Register a new scoop and wait until its tab/context has been registered
    *  before returning. Does NOT guarantee successful initialization:
    *  `ScoopContext.init()` can handle failures internally and leave the tab

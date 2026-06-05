@@ -49,6 +49,7 @@ Mirror of `page-leader-tray.ts` for the offscreen runtime.
   `EXTERNAL_LICK_CHANNELS` (`lick-formatting.ts:29-37`). Orchestrator
   dispatch runs in a fire-and-forget IIFE so the wire signature stays
   `void`.
+- **Lick forwarding**: The follower installs `lickManager.setForwarder((e) => sync.forwardLick(e))` on the offscreen lick manager while connected (cleared on detach). The leader passes the offscreen `lickManager` into `startExtensionLeaderTray` and wires `onForwardedLick → lickManager.emitEvent`. (Standalone bridge messages — `set-follower-forwarding`, `forward-lick`, `inject-forwarded-lick` — are shared via `messages.ts`.)
 
 ### Leaving a tray
 
@@ -141,6 +142,13 @@ If a shell command needs to affect the panel UI, use the dual-context pattern:
 2. fall back to `chrome.runtime.sendMessage(...)` when running from offscreen
 
 No supplemental command currently uses this exact hook+relay shape — the previous example (`debug-command.ts`) was removed when Terminal/Memory became unconditional in the rail. The sprinkle subsystem solves a related problem with a proxy-interface approach (`globalThis.__slicc_sprinkleManager` published in both realms with different implementations, dispatching `sprinkle-op` request/response RPCs); see `docs/pitfalls.md` "Extension Dual-Shell Context" for the full reference.
+
+## Media Capture (offscreen reasons + popup grant path)
+
+Camera / microphone / screen capture (`ffmpeg -f avfoundation`, `screencapture`) work without any new manifest permission:
+
+- **Offscreen reasons, not permissions**: the offscreen document is created with `reasons: ['WORKERS', 'USER_MEDIA', 'DISPLAY_MEDIA']` (`service-worker.ts`). These are arguments to `chrome.offscreen.createDocument` — **not** manifest `permissions` — so the Web Store permission-justification dashboard does not apply to them. They let the offscreen document touch `navigator.mediaDevices` (e.g. `enumerateDevices`).
+- **Media capture needs a visible surface**: `getUserMedia` / `getDisplayMedia` are gated by a runtime prompt that an invisible offscreen document (and the side panel) cannot show. Route the capture through a real window — `capture-popup.html` / `capture-popup.js`, modeled on the `voice-popup` pair. The shell command (`extension-media-capture.ts:captureViaPopup`) asks the service worker to open the popup (`capture-open-window` message → `chrome.windows.create`, no permission needed), the popup performs the capture and posts the bytes back over `chrome.runtime` messaging, and `ffmpeg-command.ts` / `screencapture-command.ts` gate this path behind `isExtensionFloat()`. CLI / standalone keep their page-served auto-grant path unchanged.
 
 ## Runtime Conventions
 
@@ -341,7 +349,7 @@ Each provider's hardcoded `oauthTokenDomains` is the immutable default safelist.
 - the **OAuth domains** tab on the options page (`secrets.html`)
 - direct `localStorage` edit of `slicc_oauth_extra_domains` at the extension origin
 
-The extras are read by `saveOAuthAccount` in `provider-settings.ts` and merged with provider defaults (deduped case-insensitively) before being pushed to `chrome.storage.local`'s `oauth.<id>.token_DOMAINS`. Page-side `oauth-bootstrap` re-pushes the merged list on every page load, so newly-added extras apply on next side-panel reload.
+The extras are read by `saveOAuthAccount` in `provider-settings.ts` and merged with provider defaults (deduped case-insensitively), then sent in the `secrets.mask-oauth-token` SW message — the service worker (which owns `chrome.storage`; `oauth-token` runs in the offscreen document, which has none — #847) writes `oauth.<id>.token` + `oauth.<id>.token_DOMAINS`. Page-side `oauth-bootstrap` re-pushes the merged list on every page load, so newly-added extras apply on next side-panel reload.
 
 ## Automated CDP Smoke Test
 

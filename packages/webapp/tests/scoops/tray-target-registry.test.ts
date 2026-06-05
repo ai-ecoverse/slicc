@@ -20,6 +20,8 @@ describe('TrayTargetRegistry', () => {
       title: 'Google',
       url: 'https://google.com',
       isLocal: false,
+      kind: 'browser',
+      capabilities: undefined,
     });
     expect(entries[1]).toEqual({
       targetId: 'rt-A:tab2',
@@ -28,6 +30,8 @@ describe('TrayTargetRegistry', () => {
       title: 'GitHub',
       url: 'https://github.com',
       isLocal: false,
+      kind: 'browser',
+      capabilities: undefined,
     });
   });
 

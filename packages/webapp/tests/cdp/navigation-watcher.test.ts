@@ -277,9 +277,9 @@ describe('NavigationWatcher', () => {
   });
 
   it('propagates upskill branch + path Link params end-to-end into the emitted event', async () => {
-    // Wave 7 follow-up: the verifier confirmed propagation by reading the
-    // code; this test locks it in so a future refactor of either the
-    // CDP shape or the extractor can't silently drop branch/path.
+    // The verifier confirmed propagation by reading the code; this
+    // test locks it in so a future refactor of either the CDP shape
+    // or the extractor can't silently drop branch/path.
     await watcher.start();
     transport.emit('Target.attachedToTarget', {
       sessionId: 'sess-1',

@@ -323,10 +323,18 @@ async function ensureOffscreen(): Promise<void> {
         return;
       }
       console.log('[slicc-sw] Creating offscreen document...');
+      // `USER_MEDIA` / `DISPLAY_MEDIA` are offscreen-API *reasons* (not
+      // manifest permissions): they let the offscreen document touch
+      // `navigator.mediaDevices` (e.g. `enumerateDevices`). The actual
+      // camera/mic/screen capture still happens in a visible popup window
+      // because the offscreen document has no surface to show Chrome's
+      // permission prompt / screen picker — see `capture-popup.html` and
+      // `packages/webapp/src/shell/supplemental-commands/extension-media-capture.ts`.
       await chrome.offscreen.createDocument({
         url: OFFSCREEN_URL,
-        reasons: ['WORKERS'],
-        justification: 'Runs the SLICC agent engine so work survives side panel close.',
+        reasons: ['WORKERS', 'USER_MEDIA', 'DISPLAY_MEDIA'],
+        justification:
+          'Runs the SLICC agent engine so work survives side panel close, and enumerates camera/mic/screen devices for media-capture commands.',
       });
       console.log('[slicc-sw] Offscreen document created');
     } catch (err) {
@@ -348,6 +356,55 @@ chrome.runtime.onInstalled?.addListener?.(() => {
   ensureOffscreen();
 });
 ensureOffscreen();
+
+// ---------------------------------------------------------------------------
+// Media-capture popup window
+// ---------------------------------------------------------------------------
+// Media capture (`getUserMedia` / `getDisplayMedia`) needs a *visible* surface
+// so Chrome can show its permission prompt / screen picker. The shell command
+// requesting the capture runs in the offscreen document (or the side-panel
+// shell); the offscreen document can't call `chrome.windows.create`, so it
+// asks the service worker to open the capture popup here. The popup performs
+// the capture and broadcasts the bytes back over `chrome.runtime` messaging,
+// which the requesting context picks up directly (no SW relay needed for the
+// result). See `capture-popup.html` / `capture-popup.js`.
+function isCaptureOpenWindowMsg(
+  msg: unknown
+): msg is { type: 'capture-open-window'; url: string; requestId?: string } {
+  return (
+    typeof msg === 'object' &&
+    msg !== null &&
+    'type' in msg &&
+    (msg as { type?: unknown }).type === 'capture-open-window' &&
+    typeof (msg as { url?: unknown }).url === 'string'
+  );
+}
+
+chrome.runtime.onMessage.addListener((message: unknown) => {
+  if (!isCaptureOpenWindowMsg(message)) return false;
+  const requestId = message.requestId;
+  chrome.windows
+    .create({ url: message.url, type: 'popup', width: 360, height: 220, focused: true })
+    .catch((err) => {
+      console.error('[slicc-sw] Failed to open capture popup window:', err);
+      // Surface the failure to the requesting context so captureViaPopup
+      // rejects promptly instead of waiting out its ~5-minute timeout. The
+      // success path never reaches this branch, so there is no double-send.
+      if (requestId) {
+        chrome.runtime
+          .sendMessage({
+            source: 'capture-popup',
+            requestId,
+            ok: false,
+            error: `failed to open capture window: ${err?.message || String(err)}`,
+          })
+          .catch(() => {
+            // Requesting context may not be listening — best effort.
+          });
+      }
+    });
+  return false;
+});
 
 // ---------------------------------------------------------------------------
 // Tab grouping — inline copy for service worker (SW can't import shared chunks)
@@ -1155,12 +1212,42 @@ chrome.runtime.onMessage.addListener(
       typeof msg.providerId === 'string'
     ) {
       const providerId = msg.providerId;
+      const accessToken =
+        'accessToken' in msg && typeof (msg as { accessToken?: unknown }).accessToken === 'string'
+          ? (msg as { accessToken: string }).accessToken
+          : undefined;
+      const domains =
+        'domains' in msg && typeof (msg as { domains?: unknown }).domains === 'string'
+          ? (msg as { domains: string }).domains
+          : undefined;
       (async () => {
         try {
+          // #847: the caller may be the offscreen document, which has
+          // `chrome.runtime` but NOT `chrome.storage` (MV3 quirk — same reason
+          // `secrets.set` proxies through the SW). Write the secret here, where
+          // the SW owns `chrome.storage`, before building the pipeline that
+          // masks it. `domains` is the comma-joined `_DOMAINS` companion.
+          if (accessToken && domains) {
+            await chrome.storage.local.set({
+              [`oauth.${providerId}.token`]: accessToken,
+              [`oauth.${providerId}.token_DOMAINS`]: domains,
+            });
+          }
           const pipeline = await buildSecretsPipeline();
           await pipeline.reload();
           const name = `oauth.${providerId}.token`;
           const found = pipeline.getMaskedEntries().find((e) => e.name === name);
+          // We just wrote the secret above, so a missing entry here is NOT a
+          // cold-start miss — it's a real fault (write didn't land, or the
+          // pipeline stopped emitting it). Surface it so the page side can
+          // distinguish "not warm yet" from "wrote it and still missing".
+          if (accessToken && domains && !found) {
+            // Real fault (not a cold miss): surface a reason so the page can
+            // distinguish it and the give-up log isn't reason-less (#847).
+            console.warn('[sw] secrets.mask-oauth-token: entry missing after write', { name });
+            sendResponse({ maskedValue: undefined, error: 'entry missing after write' });
+            return;
+          }
           sendResponse({ maskedValue: found?.maskedValue });
         } catch (err) {
           console.error('[sw] secrets.mask-oauth-token failed', err);

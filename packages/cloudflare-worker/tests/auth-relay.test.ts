@@ -260,6 +260,61 @@ describe('OAuth callback relay — unknown source', () => {
   });
 });
 
+describe('OAuth callback relay — capture hop (webapp served by worker)', () => {
+  // Run the capture page's inline script against fakes; return the posted message.
+  function runCapture(html: string, href: string): { postedMessage?: any; postedTarget?: string } {
+    const match = html.match(/<script>([\s\S]*?)<\/script>/);
+    if (!match) throw new Error('No <script> in capture HTML');
+    let postedMessage: any;
+    let postedTarget: string | undefined;
+    const fakeWindow = {
+      opener: {
+        postMessage: (msg: any, target: string) => {
+          postedMessage = msg;
+          postedTarget = target;
+        },
+      },
+      close: () => {
+        /* no-op */
+      },
+    };
+    const fn = new Function('window', 'location', 'setTimeout', match[1]!);
+    fn(fakeWindow, { href, origin: new URL(href).origin }, (_fn: any) => {
+      /* no-op setTimeout */
+    });
+    return { postedMessage, postedTarget };
+  }
+
+  it('serves the capture page when code is present and state is consumed', async () => {
+    const res = await handleWorkerRequest(relayRequest('?code=abc&nonce=n1'), env);
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain('Completing sign-in');
+    expect(body).not.toContain('Redirecting to SLICC');
+  });
+
+  it('serves the capture page for an OAuth error response too', async () => {
+    const body = await fetchRelayBody('?error=access_denied&nonce=n');
+    expect(body).toContain('Completing sign-in');
+  });
+
+  it('capture page postMessages the redirect URL to the opener', async () => {
+    const href = 'https://www.sliccy.ai/auth/callback?code=abc&nonce=n1';
+    const html = await fetchRelayBody('?code=abc&nonce=n1');
+    const { postedMessage, postedTarget } = runCapture(html, href);
+    expect(postedMessage).toEqual({ type: 'oauth-callback', redirectUrl: href });
+    // Scoped to the page's own origin (NOT '*') so the code can't leak cross-origin.
+    expect(postedTarget).toBe('https://www.sliccy.ai');
+  });
+
+  it('still serves the relay (not capture) when state is present', async () => {
+    const state = btoa(JSON.stringify({ port: 5720, path: '/auth/callback', nonce: 'n' }));
+    const body = await fetchRelayBody(`?state=${state}&code=abc`);
+    expect(body).toContain('Redirecting to SLICC');
+    expect(body).not.toContain('Completing sign-in');
+  });
+});
+
 describe('OAuth callback relay — error handling', () => {
   it('postMessages error to window.opener on catch', async () => {
     // No state query param → catch block runs

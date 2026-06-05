@@ -1,3 +1,13 @@
+import {
+  bundleIndex,
+  bundleToFiles,
+  type ConeConfig,
+  type ConeConfigDelta,
+  type ConeConfigIndex,
+  mergeConeConfig,
+  type SecretEntry,
+  validateConeConfig,
+} from '../cone-config/index.js';
 import { CloudError } from '../errors.js';
 import { pollForRefreshedStatus } from '../polling.js';
 import type { Registry } from '../registry.js';
@@ -16,6 +26,8 @@ export interface ResumeConeOpts {
    * and BEFORE the leader-restart kick. Both CLI (cloud/resume.ts) and worker
    * (cloud-sessions-do.ts) pass this unconditionally now to inject a fresh IMS bearer. */
   refreshSecretsContents?: string;
+  /** Optional: merge delta into existing cone-config.json + secrets.env. */
+  coneConfigDelta?: ConeConfigDelta;
   pollIntervalMs?: number;
   pollTimeoutMs?: number;
   /** Skip the state check (NOT_FOUND + ALREADY_RUNNING). Used by the worker
@@ -29,6 +41,73 @@ export interface ResumeConeOpts {
 // Therefore: no `|| true`; we parse status from stdout AND check exitCode.
 const KICK_CMD =
   'curl -sS -X POST http://localhost:5710/api/leader-restart -o /dev/null -w "%{http_code}"';
+
+const DEFAULT_MODEL = 'adobe:claude-opus-4-6';
+
+function parseSecretsEnv(text: string): SecretEntry[] {
+  const domains = new Map<string, string[]>();
+  for (const l of text.split('\n')) {
+    const eq = l.indexOf('=');
+    if (eq < 0) continue;
+    const key = l.slice(0, eq);
+    if (key.endsWith('_DOMAINS')) {
+      domains.set(
+        key.slice(0, -'_DOMAINS'.length),
+        l
+          .slice(eq + 1)
+          .split(',')
+          .filter(Boolean)
+      );
+    }
+  }
+  const out: SecretEntry[] = [];
+  for (const l of text.split('\n')) {
+    const eq = l.indexOf('=');
+    if (eq < 0) continue;
+    const name = l.slice(0, eq);
+    if (name.endsWith('_DOMAINS')) continue;
+    out.push({ name, value: l.slice(eq + 1), domains: domains.get(name) ?? [] });
+  }
+  return out;
+}
+
+/**
+ * Merge `delta` over the existing files; returns new file contents + names index.
+ * When `coneConfigJson` is null (a pre-feature cone), synthesizes a degenerate
+ * base from secrets.env.
+ */
+export function applyConeConfigDelta(
+  coneConfigJson: string | null,
+  secretsEnv: string,
+  delta: ConeConfigDelta
+): { coneConfigJson: string; secretsEnv: string; index: ConeConfigIndex } {
+  let base: ConeConfig;
+  if (coneConfigJson) {
+    let parsed: { model?: string; accounts?: unknown[] };
+    try {
+      parsed = JSON.parse(coneConfigJson) as { model?: string; accounts?: unknown[] };
+    } catch (err) {
+      // Distinguish a corrupt on-disk file from invalid data, so the surfaced
+      // error points at the right cause instead of an opaque SyntaxError.
+      throw new Error(
+        `cone-config: corrupt /slicc/cone-config.json: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+    base = validateConeConfig({
+      model: parsed.model ?? DEFAULT_MODEL,
+      accounts: parsed.accounts ?? [],
+      secrets: parseSecretsEnv(secretsEnv),
+    });
+  } else {
+    base = { model: DEFAULT_MODEL, accounts: [], secrets: parseSecretsEnv(secretsEnv) };
+  }
+  // Validate the MERGED result, not just the base: delta upserts arrive as
+  // unknown from the worker and are otherwise unvalidated, so this is where a
+  // newline-injecting secret value or bad name gets rejected before serialization.
+  const merged = validateConeConfig(mergeConeConfig(base, delta));
+  const files = bundleToFiles(merged);
+  return { ...files, index: bundleIndex(merged) };
+}
 
 export async function resumeCone(
   deps: ResumeConeDeps,
@@ -61,9 +140,37 @@ export async function resumeCone(
 
   const handle = await deps.substrate.connect(entry.sandboxId);
 
-  // refreshSecretsContents: both CLI and worker pass this now to inject a fresh
-  // IMS bearer. Write to /slicc/secrets.env BEFORE the kick loop.
-  if (opts.refreshSecretsContents !== undefined) {
+  let resumeIndex: ConeConfigIndex | undefined;
+
+  // New: coneConfigDelta takes precedence — read existing files, merge, write both.
+  if (opts.coneConfigDelta) {
+    let existingConeConfig: string | null = null;
+    try {
+      existingConeConfig = await handle.readFile('/slicc/cone-config.json');
+    } catch {
+      existingConeConfig = null;
+    }
+    let existingSecretsEnv = '';
+    try {
+      existingSecretsEnv = await handle.readFile('/slicc/secrets.env');
+    } catch {
+      existingSecretsEnv = '';
+    }
+    const applied = applyConeConfigDelta(
+      existingConeConfig,
+      existingSecretsEnv,
+      opts.coneConfigDelta
+    );
+    await handle.writeFile('/slicc/secrets.env', applied.secretsEnv);
+    await handle.writeFile('/slicc/cone-config.json', applied.coneConfigJson);
+    // Reload the fetch-proxy masking so changed flat secrets take effect. Must
+    // succeed before the leader Page.reload — a silent failure here would leave
+    // the running cone with stale flat secrets while reporting resume success.
+    await reloadSecretsProxyUntilReady(handle);
+    resumeIndex = applied.index;
+  } else if (opts.refreshSecretsContents !== undefined) {
+    // Legacy path: both CLI and worker pass this now to inject a fresh IMS bearer.
+    // Write to /slicc/secrets.env BEFORE the kick loop.
     await handle.writeFile('/slicc/secrets.env', opts.refreshSecretsContents);
   }
 
@@ -109,6 +216,7 @@ export async function resumeCone(
     joinUrl: refreshed.joinUrl,
     trayRebuilt,
     ...(versionMismatch ? { versionMismatch } : {}),
+    coneConfigIndex: resumeIndex,
   };
 }
 
@@ -128,4 +236,37 @@ async function kickLeaderUntilReady(handle: SandboxHandle): Promise<boolean> {
     await new Promise((r) => setTimeout(r, 1000));
   }
   return false;
+}
+
+const RELOAD_CMD =
+  'curl -sS -X POST http://localhost:5710/api/secrets/reload -o /dev/null -w "%{http_code}"';
+
+// Reload the node-server secret proxy, retrying the cold-start (503/connect)
+// window like the leader kick. Throws if it never succeeds — a stale fetch-proxy
+// would silently serve old flat secrets.
+async function reloadSecretsProxyUntilReady(handle: SandboxHandle): Promise<void> {
+  // Track why the last attempt didn't succeed so the exhaustion error is
+  // actionable (HTTP 503 cold-start vs. a connection-level curl failure).
+  let lastError = 'no attempt made';
+  for (let i = 0; i < 5; i++) {
+    const result = await handle.run(RELOAD_CMD);
+    if (result.exitCode === 0) {
+      const status = result.stdout.trim();
+      if (status === '200') return;
+      if (status !== '503') {
+        throw new CloudError(
+          'INTERNAL',
+          `/api/secrets/reload returned unexpected status ${status}`
+        );
+      }
+      lastError = `HTTP ${status}`;
+    } else {
+      lastError = `curl exit ${result.exitCode}: ${result.stderr.trim()}`;
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  throw new CloudError(
+    'INTERNAL',
+    `Failed to reload secrets proxy after 5 retries (changed secrets may be stale; last: ${lastError})`
+  );
 }

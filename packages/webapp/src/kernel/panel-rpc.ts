@@ -44,6 +44,8 @@ import type { TrayLeaveResult } from '../scoops/tray-leave.js';
 
 const PANEL_RPC_CHANNEL = 'slicc-panel-rpc';
 const DEFAULT_TIMEOUT_MS = 15_000;
+/** Public alias of the panel-RPC default `call()` timeout (15s). */
+export const PANEL_RPC_DEFAULT_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
 
 export function panelRpcChannelName(instanceId?: string): string {
   return instanceId ? `${PANEL_RPC_CHANNEL}:${instanceId}` : PANEL_RPC_CHANNEL;
@@ -172,6 +174,72 @@ export type PanelRpcRequest =
       // mirror it into its shim immediately. See issue #701.
       op: 'save-oauth-accounts';
       payload: { accountsJson: string };
+    }
+  | {
+      // Push a `cherry.slicc_event` (cone → host page) out through the
+      // page-side LeaderSyncManager. The `cherry-emit` shell command runs
+      // in the kernel worker, but the leader tray's WebRTC data channels
+      // live on the page, so the worker bridges here. `runtimeId` is the
+      // canonical follower id (a bare runtime id, no `:localTarget`
+      // suffix). Result `delivered` is false when no leader tray is active
+      // or the owning follower is not connected, letting the command
+      // surface a clear failure rather than silently succeeding.
+      op: 'cherry-emit';
+      payload: { runtimeId: string; name: string; detail?: unknown };
+    }
+  | {
+      // Fetch remote (follower) browser targets from the page-side
+      // BrowserAPI. The tray provider is set on the page-side instance
+      // only — the worker's BrowserAPI has no reference to it, so
+      // listAllTargets() in the worker falls back to local CDP tabs.
+      // This op bridges the gap: the page fetches its full target list
+      // and returns only entries with composite targetIds (remote ones).
+      op: 'list-remote-targets';
+      payload?: undefined;
+    }
+  | {
+      // Drive a remote (tray/cherry) target: relay a single CDP command
+      // to the page-side RemoteCDPTransport that owns the WebRTC channel.
+      // The worker's PanelRpcCdpTransport can't own an RTCDataChannel, so
+      // it tunnels here. `sessionId` threads through transparently.
+      op: 'remote-cdp-send';
+      payload: {
+        runtimeId: string;
+        localTargetId: string;
+        method: string;
+        params?: Record<string, unknown>;
+        sessionId?: string;
+        /**
+         * Per-op CDP timeout (ms) forwarded to the page-side
+         * `RemoteCDPTransport.send` so a long op (e.g. `Page.printToPDF`)
+         * isn't floored at the page transport's 30s default. The panel-RPC
+         * `call` timeout is always layered strictly above this.
+         */
+        timeout?: number;
+      };
+    }
+  | {
+      // Subscribe the page-side RemoteCDPTransport to a CDP event so its
+      // firings get pushed back to the worker as `remote-cdp-event`.
+      // Ref-counted page-side (0→1 wires a forwarder).
+      op: 'remote-cdp-subscribe';
+      payload: { runtimeId: string; localTargetId: string; event: string };
+    }
+  | {
+      // Drop one event subscription (1→0 unwires the page-side forwarder).
+      op: 'remote-cdp-unsubscribe';
+      payload: { runtimeId: string; localTargetId: string; event: string };
+    }
+  | {
+      // Dispose the page-side session for a target (drops forwarders and
+      // the RemoteCDPTransport). Sent by PanelRpcCdpTransport.disconnect().
+      op: 'remote-cdp-detach';
+      payload: { runtimeId: string; localTargetId: string };
+    }
+  | {
+      // Open a new tab on a remote runtime; returns the composite targetId.
+      op: 'remote-open-tab';
+      payload: { runtimeId: string; url: string };
     };
 
 export interface PanelRpcResults {
@@ -201,6 +269,15 @@ export interface PanelRpcResults {
   'tray-leave': TrayLeaveResult;
   'oauth-extras-set': { storeAfter: OAuthExtraDomainsStore };
   'save-oauth-accounts': { storedJson: string };
+  'cherry-emit': { delivered: boolean };
+  'list-remote-targets': {
+    targets: Array<{ targetId: string; title: string; url: string }>;
+  };
+  'remote-cdp-send': Record<string, unknown>;
+  'remote-cdp-subscribe': { ok: true };
+  'remote-cdp-unsubscribe': { ok: true };
+  'remote-cdp-detach': { ok: true };
+  'remote-open-tab': { targetId: string };
 }
 
 export type PanelRpcOp = PanelRpcRequest['op'];
@@ -209,6 +286,16 @@ export type PanelRpcPayloadFor<O extends PanelRpcOp> = Extract<
   { op: O }
 >['payload'];
 export type PanelRpcResultFor<O extends PanelRpcOp> = PanelRpcResults[O];
+
+/**
+ * Compile-time completeness guard: every `PanelRpcOp` must have a
+ * matching `PanelRpcResults` entry. Indexing `PanelRpcResults[K]` for an
+ * op `K` that lacks a result entry is a type error here, so adding an op
+ * to the `PanelRpcRequest` union without its result fails the build
+ * (rather than silently degrading `PanelRpcResultFor` to an index error
+ * only at some unrelated call site).
+ */
+export type PanelRpcResultsCoverage = { [K in PanelRpcOp]: PanelRpcResults[K] };
 
 // ── Wire envelopes ──────────────────────────────────────────────────
 
@@ -226,6 +313,27 @@ interface PanelRpcResponseMsg {
   error?: string;
 }
 
+/** Payload of a `remote-cdp-event` push (page → worker). */
+export interface RemoteCdpEventPayload {
+  runtimeId: string;
+  localTargetId: string;
+  method: string;
+  params?: Record<string, unknown>;
+}
+
+/**
+ * Page → worker push envelope, distinct from the request/response
+ * envelopes. Relays CDP events fired on a page-side `RemoteCDPTransport`
+ * back to the worker-side `PanelRpcCdpTransport` that subscribed. Posted
+ * on the same instance-scoped channel; the worker client routes it to a
+ * registered push target keyed by `runtimeId:localTargetId`.
+ */
+export interface PanelRpcPushMsg {
+  type: 'panel-rpc-push';
+  op: 'remote-cdp-event';
+  payload: RemoteCdpEventPayload;
+}
+
 // ── Worker-side client ──────────────────────────────────────────────
 
 export interface PanelRpcClient {
@@ -234,6 +342,15 @@ export interface PanelRpcClient {
     payload: PanelRpcPayloadFor<O>,
     opts?: { timeoutMs?: number }
   ): Promise<PanelRpcResultFor<O>>;
+  /**
+   * Register a handler for `remote-cdp-event` pushes targeting a
+   * composite key (`runtimeId:localTargetId`). Used by
+   * `PanelRpcCdpTransport` to receive page-pushed CDP events. No-op
+   * when `BroadcastChannel` is unavailable.
+   */
+  registerPushTarget(key: string, handler: (payload: RemoteCdpEventPayload) => void): void;
+  /** Drop a previously registered push handler. */
+  unregisterPushTarget(key: string): void;
   /** Close the BroadcastChannel and reject any in-flight requests. */
   dispose(): void;
 }
@@ -249,6 +366,8 @@ export function createPanelRpcClient(options: { instanceId?: string } = {}): Pan
   if (typeof BroadcastChannel !== 'function') {
     return {
       call: () => Promise.reject(new Error('panel-rpc: BroadcastChannel is unavailable')),
+      registerPushTarget: () => {},
+      unregisterPushTarget: () => {},
       dispose: () => {},
     };
   }
@@ -263,9 +382,17 @@ export function createPanelRpcClient(options: { instanceId?: string } = {}): Pan
       timer: ReturnType<typeof setTimeout>;
     }
   >();
+  const pushTargets = new Map<string, (payload: RemoteCdpEventPayload) => void>();
 
   channel.addEventListener('message', (event: MessageEvent) => {
-    const msg = event.data as PanelRpcResponseMsg | undefined;
+    const msg = event.data as PanelRpcResponseMsg | PanelRpcPushMsg | undefined;
+    if (msg?.type === 'panel-rpc-push') {
+      if (msg.op === 'remote-cdp-event') {
+        const p = msg.payload;
+        pushTargets.get(`${p.runtimeId}:${p.localTargetId}`)?.(p);
+      }
+      return;
+    }
     if (msg?.type !== 'panel-rpc-response') return;
     const slot = pending.get(msg.id);
     if (!slot) return;
@@ -297,12 +424,24 @@ export function createPanelRpcClient(options: { instanceId?: string } = {}): Pan
     });
   }
 
+  function registerPushTarget(
+    key: string,
+    handler: (payload: RemoteCdpEventPayload) => void
+  ): void {
+    pushTargets.set(key, handler);
+  }
+
+  function unregisterPushTarget(key: string): void {
+    pushTargets.delete(key);
+  }
+
   function dispose(): void {
     for (const [, slot] of pending) {
       clearTimeout(slot.timer);
       slot.reject(new Error('panel-rpc: client disposed'));
     }
     pending.clear();
+    pushTargets.clear();
     try {
       channel.close();
     } catch {
@@ -310,7 +449,7 @@ export function createPanelRpcClient(options: { instanceId?: string } = {}): Pan
     }
   }
 
-  return { call, dispose };
+  return { call, registerPushTarget, unregisterPushTarget, dispose };
 }
 
 // ── Page-side handler ───────────────────────────────────────────────

@@ -80,7 +80,7 @@ jobs:
 
       - name: Classify candidates and file issues
         if: steps.query.outputs.has_candidates == 'true' && github.event.inputs.dry_run != 'true'
-        uses: anthropics/claude-code-action@787c5a0ce96a9a6cfb050ea0c8f4c05f2447c251 # v1
+        uses: anthropics/claude-code-action@41ea7642c1436fa0ee57aae58347904b71a5af27 # v1
         env:
           # Bedrock path: authenticate with an Amazon Bedrock API key (the Adobe
           # CAMP `ABSK...` bearer token). Set the AWS_BEARER_TOKEN_BEDROCK secret
@@ -97,6 +97,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         with:
           use_bedrock: 'true'
+          # Pass the workflow's GITHUB_TOKEN explicitly so the action uses it
+          # directly instead of attempting an OIDC -> GitHub App token exchange
+          # (which fails with "User does not have write access" when the Claude
+          # GitHub App is not installed on this repo). Job permissions above
+          # (contents/issues/pull-requests: write) scope this token appropriately.
+          github_token: ${{ github.token }}
           # Print Claude's full turn-by-turn output to the Actions log on manual
           # dispatch (to inspect its reasoning); kept off for the nightly cron so
           # routine runs don't log tool output that may contain sensitive data.

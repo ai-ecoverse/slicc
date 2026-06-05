@@ -27,6 +27,8 @@ import type {
   PanelMessageSubscriber,
 } from '../../../chrome-extension/src/bridge-transport.js';
 import { isExtensionMessage } from '../../../chrome-extension/src/messages.js';
+import type { CherryHostTransport } from '../cdp/cherry-host-transport.js';
+import type { BrowserAPI } from '../cdp/index.js';
 import { createLogger } from '../core/index.js';
 import { SessionStore as AgentSessionStore } from '../core/session.js';
 import type { VirtualFS } from '../fs/index.js';
@@ -39,6 +41,9 @@ import {
 } from '../fs/mount-picker-popup.js';
 import { recoverMounts } from '../fs/mount-recovery.js';
 import { getAllMountEntries } from '../fs/mount-table-store.js';
+import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
+import { type PanelRpcPushMsg, panelRpcChannelName } from '../kernel/panel-rpc.js';
+import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
 // Auto-discover and register all providers (built-in + external).
 // IMPORTANT: This import must also appear in packages/chrome-extension/src/offscreen.ts
 // — the extension agent engine runs in the offscreen document, not in this file.
@@ -91,16 +96,20 @@ import {
 import type { OffscreenClient } from './offscreen-client.js';
 import { flushCredentialsToWorker, resolveDefaultModel } from './onboarding-helpers.js';
 import type { PageFollowerTrayHandle } from './page-follower-tray.js';
-import { startPageFollowerTray } from './page-follower-tray.js';
+import { CHERRY_RUNTIME_TAG, startPageFollowerTray } from './page-follower-tray.js';
 import type { PageLeaderTrayHandle, StartPageLeaderTrayOptions } from './page-leader-tray.js';
 import { startPageLeaderTray } from './page-leader-tray.js';
+import { installPreviewVfsResponder } from './preview-vfs-responder.js';
 import {
   applyProviderDefaults,
   getApiKey,
+  removeAccount,
   resolveCurrentModel,
   resolveModelById,
   saveOAuthAccount,
 } from './provider-settings.js';
+import { createRemoteCdpPageBridge } from './remote-cdp-page-bridge.js';
+import { canonicalRuntimeId } from './runtime-identity.js';
 import {
   getElectronOverlayInitialTab,
   isElectronOverlaySetTabMessage,
@@ -121,6 +130,7 @@ import { initTelemetry } from './telemetry.js';
 import { initTheme } from './theme.js';
 import { initTooltips } from './tooltip.js';
 import type { ChatMessage } from './types.js';
+import { persistWelcomeSentinel } from './welcome-sentinel.js';
 
 const log = createLogger('main');
 
@@ -135,9 +145,18 @@ const log = createLogger('main');
  * first `exec` and reused for subsequent calls. A failed open resets the
  * cached session so a later call can retry rather than wedging on a
  * rejected promise.
+ *
+ * Calls are serialized through a per-session promise queue: the worker
+ * `TerminalSessionHost.handleExec` only permits one in-flight exec per
+ * session (a concurrent second call exits 130), so chaining each new
+ * exec on the tail of the queue keeps the shared session usable for
+ * overlapping `slicc.exec()` / `slicc.agent()` calls — including the
+ * dip handler wired via `setDipExecHandler`, which shares this same
+ * session.
  */
 function createSprinkleExecHandler(client: OffscreenClient): SprinkleExecHandler {
   let sessionPromise: ReturnType<typeof openSession> | null = null;
+  let execChain: Promise<unknown> = Promise.resolve();
   const openSession = async () => {
     const { TerminalSessionClient } = await import('../kernel/terminal-session-client.js');
     const session = new TerminalSessionClient({
@@ -157,8 +176,12 @@ function createSprinkleExecHandler(client: OffscreenClient): SprinkleExecHandler
     return sessionPromise;
   };
   return async (cmd: string) => {
-    const session = await ensureSession();
-    return session.exec(cmd);
+    const run = execChain.then(
+      () => ensureSession().then((session) => session.exec(cmd)),
+      () => ensureSession().then((session) => session.exec(cmd))
+    );
+    execChain = run.catch(() => undefined);
+    return run;
   };
 }
 
@@ -574,8 +597,9 @@ async function fireFastForwardFinalLick(
 async function mainExtension(app: HTMLElement, options?: { detached?: boolean }): Promise<void> {
   const isDetachedSelf = options?.detached === true;
   const { OffscreenClient } = await import('./offscreen-client.js');
-  const { VirtualFS } = await import('../fs/index.js');
+  const { VirtualFS, resolveVfsBackendFromEnv } = await import('../fs/index.js');
   const { publishAgentBridgeProxy } = await import('../scoops/agent-bridge.js');
+  const { warnIfPanelVfsConstructionUnderOpfs } = await import('./panel-vfs-guard.js');
 
   const layout = new Layout(app, !isDetachedSelf);
   await layout.panels.chat.initSession('session-cone');
@@ -588,12 +612,42 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
 
   let selectedScoop: RegisteredScoop | null = null;
 
+  // The offscreen document is the sole VFS constructor under
+  // `slicc_opfs_vfs === 'opfs'`. Emit a startup warning before the
+  // panel runs its own `VirtualFS.create` so the convention violation
+  // surfaces in dev/QA — no runtime block, since the LFS-shadow +
+  // mount-table-recovery paths still rely on the panel-side instance
+  // with the flag off.
+  const panelBackend = resolveVfsBackendFromEnv();
+  warnIfPanelVfsConstructionUnderOpfs(panelBackend, log);
+
+  // With `slicc_opfs_vfs === 'opfs'` the worker owns the canonical
+  // OPFS-backed VFS, so panel reads must route through the kernel
+  // transport's `VfsRpcHost` instead of hitting OPFS twice from the
+  // page. Defer the file-browser wiring until after `client` is
+  // constructed in that case; with the flag off, keep the historical
+  // local-VFS path so the LFS shadow store still drives the file
+  // browser.
+  const useRpcVfs = panelBackend === 'opfs';
+
   // Create a local VFS instance for the file browser and terminal.
   // IndexedDB is shared across all same-origin extension pages, so this
   // reads/writes the same data as the offscreen document's VFS.
-  const localFs = await VirtualFS.create({ dbName: 'slicc-fs' });
-  layout.panels.fileBrowser.setFs(localFs);
-  log.info('File browser wired to shared VFS (local IndexedDB)');
+  //
+  // Under `slicc_opfs_vfs === 'opfs'` force the page-side VFS to the
+  // InMemory backend so it no longer races the worker for OPFS handles
+  // (the worker is the canonical OPFS owner; the page keeps an
+  // in-process shadow only for legacy consumers like mount-recovery,
+  // attachment writer, and memory-panel reads). The page shadow no
+  // longer persists across reloads.
+  const localFs = await VirtualFS.create({
+    dbName: 'slicc-fs',
+    ...(useRpcVfs ? { backend: 'memory' as const } : {}),
+  });
+  if (!useRpcVfs) {
+    layout.panels.fileBrowser.setFs(localFs);
+    log.info('File browser wired to shared VFS (local IndexedDB)');
+  }
 
   // Restore persisted mounts. The side panel and the offscreen document
   // each have their own VirtualFS instance (sharing only the underlying
@@ -619,24 +673,19 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
 
   // Listen for preview SW file-read requests (falls back here for mounted dirs).
   // Uses BroadcastChannel because the SW's `/preview/` scope excludes this page.
+  //
+  // The reader is held in a `let` so that when
+  // `slicc_opfs_vfs === 'opfs'` the swap below (after `client` is up)
+  // rewires this responder to the worker's `VfsRpcHost` via the shared
+  // kernel transport. With the flag off, `localFs` stays in place and
+  // the path is byte-identical to the local-VFS baseline.
+  let previewVfsReader: LocalVfsClient = localFs;
   const previewVfsCh = new BroadcastChannel('preview-vfs');
-  previewVfsCh.onmessage = (event) => {
-    if (event.data?.type !== 'preview-vfs-read') return;
-    const { id, path, asText } = event.data;
-    (async () => {
-      try {
-        const encoding = asText ? 'utf-8' : 'binary';
-        const content = await localFs.readFile(path, { encoding });
-        previewVfsCh.postMessage({ type: 'preview-vfs-response', id, content });
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (!errMsg.includes('ENOENT')) {
-          log.error('Preview VFS read failed', { path, error: errMsg });
-        }
-        previewVfsCh.postMessage({ type: 'preview-vfs-response', id, error: errMsg });
-      }
-    })();
-  };
+  installPreviewVfsResponder({
+    channel: previewVfsCh,
+    getReader: () => previewVfsReader,
+    logger: log,
+  });
 
   // Wire skill drop install with toast feedback
   const skillDropToast = createSkillDropToast();
@@ -890,6 +939,33 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   // Wire local VFS to client so memory panel can read CLAUDE.md files
   client.setLocalFS(localFs);
 
+  // With `slicc_opfs_vfs === 'opfs'`, route file-browser reads AND
+  // the preview-vfs BroadcastChannel responder through the offscreen's
+  // `VfsRpcHost` instead of touching OPFS from the panel. The transport
+  // is shared — the RemoteVfsClient only subscribes to `vfs-*-result`
+  // envelopes and does not perturb the existing agent-event / scoop-list /
+  // sprinkle-op routing.
+  //
+  // Also construct a `RemoteWritableVfsClient` so panel-side writers
+  // (session freezer, pending-enrichment) route to the offscreen VFS
+  // over the same wire. The extension is a singleton writer (one
+  // offscreen document), so we do not gate on an OPFS leader election
+  // here — the panel is always the canonical writer relative to the
+  // offscreen.
+  let writableFs: WritableVfsClient = localFs;
+  if (useRpcVfs) {
+    const { createRemoteVfsClient } = await import('../kernel/remote-vfs-client.js');
+    const { createRemoteWritableVfsClient } = await import('../kernel/writable-vfs-client.js');
+    const remoteVfs = createRemoteVfsClient({ transport: client.getTransport() });
+    const remoteWritableVfs = createRemoteWritableVfsClient({
+      transport: client.getTransport(),
+    });
+    layout.panels.fileBrowser.setFs(remoteVfs);
+    previewVfsReader = remoteVfs;
+    writableFs = remoteWritableVfs;
+    log.info('File browser + preview-vfs wired to worker VFS RPC');
+  }
+
   // Mount the panel terminal as a `RemoteTerminalView` backed by the
   // offscreen `TerminalSessionHost`. Keystrokes assemble locally; each
   // committed line dispatches a `terminal-exec` to the offscreen so
@@ -926,6 +1002,17 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   layout.panels.scoops.setOrchestrator(client as unknown as Orchestrator);
   layout.panels.memory.setOrchestrator(client as unknown as Orchestrator);
   layout.setScoopSwitcherOrchestrator?.(client as unknown as Orchestrator);
+  // Scope-label tooltip on dropdown items uses the side-effect-free
+  // transcript accessor on `OffscreenClient` — same role as
+  // `Orchestrator.getMessagesForScoop` in the standalone rail, but
+  // routed through a dedicated `request-scoop-transcript` round-trip
+  // so the chat panel is never repainted.
+  layout.setScoopSwitcherTranscriptSource?.((jid) => client.getScoopTranscript(jid));
+  // Symmetric wiring for the standalone scoops rail tooltip — the
+  // `OffscreenClient` shim doesn't implement `getMessagesForScoop`, so
+  // the rail's scope-label fetcher must route through the same
+  // side-effect-free transcript round-trip.
+  layout.setScoopsRailTranscriptSource?.((jid) => client.getScoopTranscript(jid));
 
   layout.onScoopSelect = selectScoop;
 
@@ -980,13 +1067,13 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   layout.onClearChat = async (opts) => {
     if (opts?.freeze === 'quick') {
       try {
-        await runNewSessionFreezeQuick({ vfs: localFs });
+        await runNewSessionFreezeQuick({ vfs: writableFs });
       } catch (err) {
         log.warn('Quick freezer step failed (clearing anyway)', { error: String(err) });
       }
     } else if (opts?.freeze !== false) {
       try {
-        await runNewSessionFreeze({ vfs: localFs });
+        await runNewSessionFreeze({ vfs: writableFs });
       } catch (err) {
         log.warn('Freezer step failed (clearing anyway)', { error: String(err) });
       }
@@ -1712,7 +1799,12 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   // sink — `/shared/CLAUDE.md` is left untouched). Deferred behind
   // `requestIdleCallback` (or `setTimeout(0)` as a fallback) so a slow
   // enrichment never blocks first paint.
-  scheduleBackgroundEnrichment(localFs);
+  //
+  // Routes through `writableFs` so under `slicc_opfs_vfs=opfs` the
+  // rename + index update lands on the worker-owned OPFS via the
+  // `WritableVfsClient`. Flag off: `writableFs === localFs` (byte-
+  // identical to the local-VFS baseline).
+  scheduleBackgroundEnrichment(writableFs);
 }
 
 // ---------------------------------------------------------------------------
@@ -1752,8 +1844,14 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
 
   const { spawnKernelWorker } = await import('../kernel/spawn.js');
   const { installPageStorageSync } = await import('../kernel/page-storage-sync.js');
-  const { VirtualFS } = await import('../fs/index.js');
+  const { VirtualFS, resolveVfsBackendFromEnv } = await import('../fs/index.js');
   const { BrowserAPI } = await import('../cdp/index.js');
+  // Page-side companion to the worker's migration progress signals.
+  // The controller is allocated lazily on the first signal (see
+  // `spawnKernelWorker` callbacks below); the import is cheap and a
+  // no-op when the flag is off because the worker never posts the
+  // start signal in that case.
+  const { createMigrationSplash } = await import('./migration-splash.js');
 
   // Resolve the tray worker base URL from /api/runtime-config so consumers
   // like oauth-code-exchange's `getWorkerBaseUrl` read a value that matches
@@ -1831,11 +1929,66 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   await layout.panels.chat.initSession('session-cone');
   log.info('Session initialized (kernel-worker mode)');
 
+  // With `slicc_opfs_vfs === 'opfs'`, the worker owns the canonical
+  // OPFS-backed VFS and panel reads must route through the kernel
+  // transport's `VfsRpcHost`. Defer the file-browser wiring until
+  // after `client` is available; with the flag off, keep the
+  // historical local-VFS path so the LFS shadow still drives the
+  // file browser.
+  const useRpcVfs = resolveVfsBackendFromEnv() === 'opfs';
+
   // Local VFS for the file browser + memory panel + preview-vfs fallback.
   // Same IndexedDB as the worker's VFS, so writes from the agent are
   // visible in the file browser without round-tripping the wire.
-  const localFs = await VirtualFS.create({ dbName: 'slicc-fs' });
-  layout.panels.fileBrowser.setFs(localFs);
+  //
+  // Under `slicc_opfs_vfs === 'opfs'` force the page-side VFS to the
+  // InMemory backend so it no longer races the worker for OPFS handles
+  // (the worker is the canonical OPFS owner; the page keeps an
+  // in-process shadow for legacy consumers like mount-recovery and
+  // attachment writer). The page shadow no longer persists across
+  // reloads.
+  const localFs = await VirtualFS.create({
+    dbName: 'slicc-fs',
+    ...(useRpcVfs ? { backend: 'memory' as const } : {}),
+  });
+  if (!useRpcVfs) {
+    layout.panels.fileBrowser.setFs(localFs);
+  }
+
+  // Under the OPFS flag, run the cross-tab `slicc-opfs-leader`
+  // election BEFORE any code path that opens an OPFS handle.
+  // `createSyncAccessHandle` is exclusive per file; racing two
+  // kernel-workers on the same OPFS tree corrupts the store.
+  // First-writer-wins — newer tabs become followers and surface a
+  // non-blocking read-only banner. The election + banner +
+  // `__slicc_opfs_leader` state surface gives downstream
+  // worker-side gating (skipping OPFS open / cross-tab read routing)
+  // a single hook.
+  let opfsLeader: { isLeader: boolean; dispose: () => void } = {
+    isLeader: true,
+    dispose: () => {},
+  };
+  if (useRpcVfs) {
+    const { electOpfsLeader } = await import('./opfs-leader-election.js');
+    const { showOpfsReadOnlyBanner } = await import('./opfs-readonly-banner.js');
+    const result = await electOpfsLeader({ logger: log });
+    opfsLeader = { isLeader: result.isLeader, dispose: result.dispose };
+    (globalThis as Record<string, unknown>).__slicc_opfs_leader = {
+      isLeader: result.isLeader,
+      self: result.self,
+      leader: result.leader,
+    };
+    if (result.isLeader) {
+      log.info('OPFS leader election: this tab is the writer', { tabId: result.self.tabId });
+    } else {
+      log.warn('OPFS leader election: another tab is the writer; entering read-only mode', {
+        self: result.self.tabId,
+        leader: result.leader?.tabId,
+      });
+      showOpfsReadOnlyBanner({ leaderTabId: result.leader?.tabId });
+    }
+  }
+  void opfsLeader;
 
   // Recover the panel's view of mounts. The worker recovers its own
   // mounts inside `createKernelHost`; this is just the page-side
@@ -1856,24 +2009,19 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // the canonical one (lives inside `createKernelHost`); this fires only
   // when the worker hasn't booted yet or when the request resolves
   // against a panel-only mount.
+  //
+  // The reader is held in a `let` so that when
+  // `slicc_opfs_vfs === 'opfs'` the swap below (after `client` is up)
+  // rewires this responder to the kernel worker's `VfsRpcHost` via
+  // the shared transport. With the flag off, `localFs` stays in place
+  // and the path is byte-identical to the local-VFS baseline.
+  let previewVfsReader: LocalVfsClient = localFs;
   const previewVfsCh = new BroadcastChannel('preview-vfs');
-  previewVfsCh.onmessage = (event) => {
-    if (event.data?.type !== 'preview-vfs-read') return;
-    const { id, path, asText } = event.data;
-    (async () => {
-      try {
-        const encoding = asText ? 'utf-8' : 'binary';
-        const content = await localFs.readFile(path, { encoding });
-        previewVfsCh.postMessage({ type: 'preview-vfs-response', id, content });
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (!errMsg.includes('ENOENT')) {
-          log.error('Preview VFS read failed', { path, error: errMsg });
-        }
-        previewVfsCh.postMessage({ type: 'preview-vfs-response', id, error: errMsg });
-      }
-    })();
-  };
+  installPreviewVfsResponder({
+    channel: previewVfsCh,
+    getReader: () => previewVfsReader,
+    logger: log,
+  });
 
   // Real CDP transport. The worker's `BrowserAPI` proxies CDP commands
   // back here through the kernel transport. We must connect the
@@ -1885,16 +2033,27 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // `CDPClient` is still in `disconnected` state at that moment, the
   // send throws "CDP client is not connected" and the agent sees
   // confusing errors for `playwright`, `open`, etc.
-  const browser = new BrowserAPI();
-  const realCdpTransport = browser.getTransport();
-  try {
-    await browser.connect();
-  } catch (err) {
-    log.warn(
-      'Initial CDP connect failed; worker-forwarded commands will retry on demand',
-      err instanceof Error ? err.message : String(err)
-    );
+  let browser: BrowserAPI;
+  let cherryJoinUrl: string | undefined;
+  let cherryTransport: CherryHostTransport | undefined;
+  if (runtimeMode === 'cherry') {
+    const { setupCherryFollower } = await import('./main-cherry.js');
+    const cherry = await setupCherryFollower();
+    browser = cherry.browser;
+    cherryJoinUrl = cherry.joinUrl;
+    cherryTransport = cherry.transport;
+  } else {
+    browser = new BrowserAPI();
+    try {
+      await browser.connect();
+    } catch (err) {
+      log.warn(
+        'Initial CDP connect failed; worker-forwarded commands will retry on demand',
+        err instanceof Error ? err.message : String(err)
+      );
+    }
   }
+  const realCdpTransport = browser.getTransport();
 
   // Expose the page-side BrowserAPI so the OAuth intercept launcher
   // (active-transport.ts) can resolve a CDP transport from the main
@@ -1967,9 +2126,36 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // `kernel-worker-ready` over the kernel port.
   const { OffscreenClient } = await import('./offscreen-client.js');
   void OffscreenClient; // type import for the `client` variable above
+
+  // Lazily-allocated migration splash controller. We don't construct
+  // it eagerly because the migration only runs on the OPFS flag path
+  // AND only when the sentinel is absent; the controller is created
+  // on first `onMigrationStart` so flag-off boots never touch
+  // `document.body`.
+  let migrationSplash: ReturnType<typeof createMigrationSplash> | null = null;
+
   const host = spawnKernelWorker({
     realCdpTransport,
     instanceId,
+    onMigrationStart: () => {
+      if (!migrationSplash) {
+        migrationSplash = createMigrationSplash({ root: document.body, logger: log });
+      }
+      migrationSplash.arm();
+    },
+    onMigrationProgress: (progress) => {
+      // Lazy-allocate the controller in case `started` was missed (the
+      // page-side bridge swallows raw kernel-port messages prior to the
+      // first listener tick).
+      if (!migrationSplash) {
+        migrationSplash = createMigrationSplash({ root: document.body, logger: log });
+        migrationSplash.arm();
+      }
+      migrationSplash.updateProgress(progress);
+    },
+    onMigrationFinish: () => {
+      migrationSplash?.disarm();
+    },
     callbacks: {
       onStatusChange: (scoopJid, status) => {
         layout.panels.scoops.updateScoopStatus(scoopJid, status);
@@ -2044,6 +2230,16 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   layout.panels.scoops.setOrchestrator(client as unknown as Orchestrator);
   layout.panels.memory.setOrchestrator(client as unknown as Orchestrator);
   layout.setScoopSwitcherOrchestrator?.(client as unknown as Orchestrator);
+  // Scope-label tooltip for the scoop-switcher in electron-overlay
+  // (the only standalone-worker path that mounts the switcher today —
+  // non-overlay standalone uses the scoops rail instead). No-op when
+  // the switcher isn't constructed.
+  layout.setScoopSwitcherTranscriptSource?.((jid) => client.getScoopTranscript(jid));
+  // Symmetric wiring for the standalone scoops rail tooltip — the
+  // `OffscreenClient` shim doesn't implement `getMessagesForScoop`, so
+  // the rail's scope-label fetcher must route through the same
+  // side-effect-free transcript round-trip.
+  layout.setScoopsRailTranscriptSource?.((jid) => client.getScoopTranscript(jid));
   layout.onScoopSelect = selectScoop;
 
   // Wire clear chat — must drive the IDB clears from the PAGE in
@@ -2104,6 +2300,43 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // mode — only the extension path was calling setLocalFS before.
   client.setLocalFS(localFs);
 
+  // With `slicc_opfs_vfs === 'opfs'`, route file-browser reads AND
+  // the preview-vfs BroadcastChannel responder through the kernel
+  // worker's `VfsRpcHost` (deferred from the initial wiring above so
+  // we can reach `client.getTransport()`).
+  //
+  // The scoops-panel frozen-sessions index + frozen-archive reader
+  // also need to read through the worker under the flag, since the
+  // worker owns the canonical OPFS-backed view and the page-side
+  // `localFs` shadow can be stale. `panelReadVfs` is the read-only
+  // handle handed to those consumers below.
+  //
+  // Also construct a `RemoteWritableVfsClient` so page-side writers
+  // (session freezer, pending-enrichment) route through the worker's
+  // `VfsRpcHost` write surface and land on the canonical OPFS store.
+  // Only the OPFS leader is the writer — followers fall back to
+  // `localFs` (LFS shadow) so the New Session gesture doesn't hang on
+  // EACCES under contention. Flag off: `writableFs === localFs`
+  // (byte-identical to the local-VFS baseline).
+  let panelReadVfs: LocalVfsClient = localFs;
+  let writableFs: WritableVfsClient = localFs;
+  if (useRpcVfs) {
+    const { createRemoteVfsClient } = await import('../kernel/remote-vfs-client.js');
+    const remoteVfs = createRemoteVfsClient({ transport: client.getTransport() });
+    layout.panels.fileBrowser.setFs(remoteVfs);
+    previewVfsReader = remoteVfs;
+    panelReadVfs = remoteVfs;
+    if (opfsLeader.isLeader) {
+      const { createRemoteWritableVfsClient } = await import('../kernel/writable-vfs-client.js');
+      writableFs = createRemoteWritableVfsClient({ transport: client.getTransport() });
+      log.info('File browser + preview-vfs + writable freezer wired to worker VFS RPC (leader)');
+    } else {
+      log.info(
+        'File browser + preview-vfs wired to worker VFS RPC (follower; freezer uses LFS shadow)'
+      );
+    }
+  }
+
   // Wire "New session" — freeze the cone's chat to /sessions/ via the
   // freezer (memory extraction + title), then clear ONLY the cone
   // session via the kernel client. Scoops survive intentionally so the
@@ -2115,16 +2348,28 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   //     `enrichPendingSessions` finishes the work on the next boot.
   //   - `freeze === false`                      → discard (long press).
   //     No archive entry is written.
+  //
+  // Under `slicc_opfs_vfs=opfs`, only the OPFS leader may write the
+  // archive — followers' `writableFs` is the page-side LFS shadow
+  // which the worker-OPFS-backed UI never reads, so a follower
+  // archive would be silently orphaned. Make the affordance a no-op
+  // on followers (matches the read-only banner). Flag off:
+  // `opfsLeader.isLeader === true` (no election ran), so the gate is
+  // unreachable and behavior stays byte-identical.
   layout.onClearChat = async (opts) => {
+    if (useRpcVfs && !opfsLeader.isLeader) {
+      log.info('New session affordance skipped (OPFS follower — read-only tab)');
+      return;
+    }
     if (opts?.freeze === 'quick') {
       try {
-        await runNewSessionFreezeQuick({ vfs: localFs });
+        await runNewSessionFreezeQuick({ vfs: writableFs });
       } catch (err) {
         log.warn('Quick freezer step failed (clearing anyway)', { error: String(err) });
       }
     } else if (opts?.freeze !== false) {
       try {
-        await runNewSessionFreeze({ vfs: localFs });
+        await runNewSessionFreeze({ vfs: writableFs });
       } catch (err) {
         log.warn('Freezer step failed (clearing anyway)', { error: String(err) });
       }
@@ -2136,16 +2381,19 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   };
 
   // Frozen sessions sidebar (standalone only). The panel reads
-  // /sessions/index.json from the page-side VFS that already shares
-  // IndexedDB with the worker. Clicking an entry reads the archive
-  // markdown, parses it back into messages, and displays it in the
-  // chat panel read-only — matching the affordance of clicking a
-  // live scoop (which also opens the chat view rather than a file).
-  layout.panels.scoops.setVfs(localFs);
+  // /sessions/index.json and the per-archive markdown through
+  // `panelReadVfs` — either the page-side `localFs` (shared IDB with
+  // the worker) or, under `slicc_opfs_vfs=opfs`, the worker-backed
+  // `RemoteVfsClient` so reads see the canonical OPFS view. Clicking
+  // an entry reads the archive, parses it back into messages, and
+  // displays it in the chat panel read-only — matching the affordance
+  // of clicking a live scoop (which also opens the chat view rather
+  // than a file).
+  layout.panels.scoops.setVfs(panelReadVfs);
   layout.onFrozenSessionOpen = (entry) => {
     void (async () => {
       try {
-        const raw = await localFs.readFile(frozenSessionPath(entry), { encoding: 'utf-8' });
+        const raw = await panelReadVfs.readFile(frozenSessionPath(entry), { encoding: 'utf-8' });
         const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
         const parsed = parseFrozenArchive(text);
         const title = parsed.title || entry.title;
@@ -2478,9 +2726,17 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       return true;
     }
     if (action === 'shortcut-migrate') {
-      void localFs
-        .writeFile('/shared/.welcomed', '1')
-        .catch((err) => log.warn('Failed to persist welcome completion marker', err));
+      // Route the sentinel write through `writableFs` so under
+      // `slicc_opfs_vfs=opfs` it lands on the worker-owned canonical
+      // OPFS (matching the freezer/enrichment reroute). Non-leader
+      // followers no-op so the marker isn't silently orphaned in the
+      // page-side LFS shadow. Flag off: `writableFs === localFs` AND
+      // `opfsLeader.isLeader === true` (no election ran) →
+      // byte-identical to the local-VFS baseline.
+      persistWelcomeSentinel({
+        writableFs,
+        isWriter: !useRpcVfs || opfsLeader.isLeader,
+      });
       return true;
     }
     return false;
@@ -2498,6 +2754,25 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       body: { action, data },
     };
     if (interceptWelcomeLick(event)) return;
+    // Follower mode: the dip lives in the leader's mirrored chat, so its
+    // lick belongs to the leader's cone (sending it locally would record
+    // a click against a conversation that doesn't contain the dip; on a
+    // typical follower the local cone also has no provider login to handle
+    // it). Mirrors how panel-rendered follower sprinkles forward via
+    // SprinkleFollowerController → sync.sendSprinkleLick.
+    // Predicate is `pageFollowerTray` (set on join, cleared only on permanent
+    // leave) rather than `?.currentSync` (transiently null during WebRTC
+    // reconnects) — we'd rather log+drop a dip click than reroute it back
+    // to the model-less local cone.
+    if (pageFollowerTray) {
+      const sync = pageFollowerTray.currentSync;
+      if (sync) {
+        sync.sendSprinkleLick('inline', { action, data });
+      } else {
+        log.warn('Dip lick dropped: follower sync mid-reconnect', { action });
+      }
+      return;
+    }
     client.sendSprinkleLick('inline', { action, data });
   };
 
@@ -2562,6 +2837,38 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   let pageLeaderTray: PageLeaderTrayHandle | null = null;
   let pageFollowerTray: PageFollowerTrayHandle | null = null;
 
+  // Remote-CDP driving bridge (issue #848): the kernel worker's BrowserAPI
+  // drives federated tray/cherry targets by tunneling CDP over panel-RPC
+  // to this page-side bridge, which owns the real RemoteCDPTransport via
+  // `pageLeaderTray.sync`. CDP events flow back as `remote-cdp-event`
+  // pushes on a dedicated channel instance (same instance-scoped name).
+  // This channel is intentionally page→worker push only: the worker's
+  // `createPanelRpcClient` (a different realm) receives these, and the
+  // page never consumes from it (a BroadcastChannel doesn't deliver to
+  // the instance that posted).
+  const remoteCdpPushChannel =
+    typeof BroadcastChannel === 'function'
+      ? new BroadcastChannel(panelRpcChannelName(instanceId))
+      : null;
+  const remoteCdpBridge = createRemoteCdpPageBridge({
+    getSync: () => pageLeaderTray?.sync ?? null,
+    postEvent: (payload) => {
+      const msg: PanelRpcPushMsg = { type: 'panel-rpc-push', op: 'remote-cdp-event', payload };
+      remoteCdpPushChannel?.postMessage(msg);
+    },
+  });
+
+  // Register a handler so the kernel worker's forward-lick messages
+  // reach the live follower sync. The handler reads `pageFollowerTray`
+  // lazily — at registration time the handle is null (not yet assigned),
+  // but the handler body runs only after a follower connection goes live
+  // and the worker starts emitting forward-lick events.
+  client.setForwardLickHandler((event) => {
+    const sync = pageFollowerTray?.currentSync;
+    if (sync) sync.forwardLick(event);
+    else log.warn('forward-lick dropped: no active follower sync');
+  });
+
   /**
    * Build the full `StartPageLeaderTrayOptions` for the in-scope deps
    * (layout, client, sprinkleManager, browser, etc.). Used by the boot
@@ -2607,8 +2914,13 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
         return null;
       }
     },
-    onSprinkleLick: (sprinkleName: string, body: unknown, targetScoop?: string) =>
-      client.sendSprinkleLick(sprinkleName, body, targetScoop),
+    onSprinkleLick: (
+      sprinkleName: string,
+      body: unknown,
+      targetScoop?: string,
+      originLabel?: string
+    ) => client.sendSprinkleLick(sprinkleName, body, targetScoop, originLabel),
+    onForwardedLick: (event) => client.sendForwardedLick(event),
     onFollowerMessage: (text, messageId, attachments) => {
       layout.panels.chat.addUserMessage(text, attachments);
       agentHandle.sendMessage(text, messageId, attachments);
@@ -2621,14 +2933,17 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
         'slicc.leaderTrayFollowers',
         JSON.stringify(
           followerPeers.map((p) => ({
-            runtimeId: p.bootstrapId,
+            runtimeId: canonicalRuntimeId(p.bootstrapId),
             runtime: p.runtime,
             connectedAt: p.connectedAt ?? undefined,
           }))
         )
       );
     },
+    onRemoteTransportsCleaned: (runtimeId) => remoteCdpBridge.cleanupRuntime(runtimeId),
     sendWebhookEvent: (id, headers, body) => client.sendWebhookEvent(id, headers, body),
+    onCherryHostEvent: (runtimeId, name, detail) =>
+      client.sendCherryHostEvent(runtimeId, name, detail),
     onAgentEvent: (handler) => agentHandle.onEvent(handler),
     browserAPI: browser,
     browserTransport: realCdpTransport,
@@ -2644,7 +2959,7 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   const wireLeaderHooks = (handle: PageLeaderTrayHandle): void => {
     setConnectedFollowersGetter(() =>
       handle.peers.getPeers().map((p) => ({
-        runtimeId: p.bootstrapId,
+        runtimeId: canonicalRuntimeId(p.bootstrapId),
         runtime: p.runtime,
         connectedAt: p.connectedAt ?? undefined,
       }))
@@ -2663,6 +2978,7 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
     setTrayResetter(null);
     layout.panels.chat.setOnLocalUserMessage(undefined);
     sprinkleManager.setSendToSprinkleHook(undefined);
+    remoteCdpBridge.disposeAll();
   };
 
   /**
@@ -2728,12 +3044,33 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       // non-transferable WebRTC resources and live on the page.
       leaveTray: async ({ workerBaseUrl, requestId }) =>
         await performTrayLeaveLocally({ workerBaseUrl, requestId }),
+      // Worker-side `cherry-emit` bridges here so a cone → host
+      // `slicc.event` reaches the page-side LeaderSyncManager. Reads the
+      // live `pageLeaderTray` binding so it picks up a leader started
+      // after install; returns false when no leader is active (the
+      // command already gates on a connected cherry runtime).
+      emitCherrySliccEvent: (runtimeId, name, detail) =>
+        pageLeaderTray?.sync.emitCherrySliccEvent(runtimeId, name, detail) ?? false,
+      // Bridge remote (follower) browser targets to the worker-side
+      // playwright-cli. The worker's BrowserAPI has no trayTargetProvider
+      // so listAllTargets() falls back to local CDP only; this callback
+      // fetches from the page-side BrowserAPI which is fully wired.
+      listRemoteTargets: () => browser.listAllTargets(),
+      remoteCdp: remoteCdpBridge,
     }),
   });
   // Tear down on session reload so the handler doesn't outlive its
   // page (the channel would still receive requests and try to call
   // into a torn-down DOM).
-  window.addEventListener('beforeunload', () => stopPanelRpcHandler(), { once: true });
+  window.addEventListener(
+    'beforeunload',
+    () => {
+      stopPanelRpcHandler();
+      remoteCdpBridge.disposeAll();
+      remoteCdpPushChannel?.close();
+    },
+    { once: true }
+  );
 
   await sprinkleManager.refresh();
   layout.onSprinkleClose = (name) => sprinkleManager.close(name);
@@ -2777,7 +3114,7 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       //
       // NOTE: not unit-tested. main.ts has no test scaffold today; building one
       // for this 3-line branch isn't worth the cost. The behavior is covered
-      // indirectly by the live e2b harness (Phase 5.1) — a sandbox booted with
+      // indirectly by the live e2b harness — a sandbox booted with
       // a stale TRAY_JOIN_STORAGE_KEY would join an unreachable follower and
       // /tmp/slicc-join.json would never appear, surfacing in the start poll
       // timeout. If a regression slips, the live harness catches it.
@@ -2845,36 +3182,85 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
         try {
           const res = await fetch('/api/hosted-bootstrap');
           if (!res.ok) return;
-          const bootstrap = (await res.json()) as { adobeImsToken?: string };
-          if (!bootstrap.adobeImsToken) return;
-
-          // Seed the model/provider selection before injecting the account so the
-          // first user message resolves to `adobe`. Without this, getSelectedProvider()
-          // hits the `accounts.length > 0` branch — which depends on saveOAuthAccount
-          // having already pushed the account into the kernel-worker shim. The shim
-          // write is async (panel-rpc), so a sub-second user message after this block
-          // can race the account propagation. An explicit "selected-model" write is
-          // synchronous in the kernel-worker shim and removes the race.
-          //
-          // Skip the write if already set so a paused-then-resumed cone preserves
-          // whatever model the user picked in the prior session.
-          if (!localStorage.getItem('selected-model')) {
+          const boot = (await res.json()) as {
+            model?: string;
+            accounts?: import('@slicc/cloud-core/cone-config').Account[];
+            adobeImsToken?: string;
+          };
+          const accounts =
+            boot.accounts ??
+            (boot.adobeImsToken
+              ? [{ providerId: 'adobe', kind: 'oauth' as const, accessToken: boot.adobeImsToken }]
+              : []);
+          if (boot.model) localStorage.setItem('selected-model', boot.model);
+          else if (!localStorage.getItem('selected-model'))
             localStorage.setItem('selected-model', 'adobe:claude-opus-4-6');
-          }
-
-          await saveOAuthAccount({
-            providerId: 'adobe',
-            accessToken: bootstrap.adobeImsToken,
-            tokenExpiresAt: Date.now() + 60 * 60 * 1000,
-            userName: 'cloud-injected',
+          const { applyHostedAccounts, prewarmHostedModels } = await import(
+            './hosted-config-apply.js'
+          );
+          // Pre-warm provider model lists BEFORE applying accounts. Applying an
+          // account writes localStorage, which triggers the kernel-worker
+          // re-init that resolves the cone's model — so the list must be warm
+          // first, or an id pi-ai doesn't know (e.g. claude-opus-4-8) resolves
+          // against a cold default. Passes the injected token so the fetch
+          // works before the account is persisted. Best-effort.
+          await prewarmHostedModels(accounts, {
+            getRefreshModels: (pid) => getProviderConfig(pid).refreshModels,
           });
-          log.info('hosted-leader: Adobe IMS token injected from secrets.env');
+          const prevManaged = JSON.parse(
+            localStorage.getItem('slicc_cloud_managed') ?? '[]'
+          ) as string[];
+          await applyHostedAccounts(accounts, {
+            saveOAuthAccount,
+            addAccount,
+            removeAccount,
+            currentProviderIds: () => getAccounts().map((a) => a.providerId),
+            previouslyManaged: () => prevManaged,
+          });
+          localStorage.setItem(
+            'slicc_cloud_managed',
+            JSON.stringify(accounts.map((a) => a.providerId))
+          );
+          log.info('hosted-leader: cone config applied', { count: accounts.length });
         } catch (err) {
           log.warn('hosted-leader: bootstrap fetch failed; provider needs manual login', {
             error: err instanceof Error ? err.message : String(err),
           });
         }
       })();
+    } else if (runtimeMode === 'cherry' && cherryJoinUrl) {
+      pageFollowerTray = startPageFollowerTray({
+        joinUrl: cherryJoinUrl,
+        runtime: CHERRY_RUNTIME_TAG,
+        onSnapshot: (messages) => layout.panels.chat.loadMessages(messages),
+        onUserMessage: (text, _messageId, _scoopJid, attachments) =>
+          layout.panels.chat.addUserMessage(text, attachments),
+        onStatus: (status) => layout.panels.chat.setProcessing(status === 'processing'),
+        // Outbound cone → host bridge: the leader's `cherry-emit` lands here as a
+        // `cherry.slicc_event`; forward it to the host page's `onSliccEvent` hook
+        // via the iframe transport. The iframe only ever lends its own single
+        // host page, so no target needs to be disambiguated on this side.
+        onCherrySliccEvent: (name, detail) => cherryTransport?.emitSliccEventToHost(name, detail),
+        setChatAgent: (agent) => layout.panels.chat.setAgent(agent),
+        browserAPI: browser,
+        addSprinkle: (name, title, element, zone, options) =>
+          layout.addSprinkle(
+            name,
+            title,
+            element,
+            zone as 'primary' | 'drawer' | undefined,
+            options
+          ),
+        removeSprinkle: (name) => layout.removeSprinkle(name),
+      });
+      // Inbound host → cone bridge: the host page's `handle.emitHostEvent` posts
+      // a `host.event` to the iframe transport; forward it to the leader as a
+      // `cherry.host_event` so it surfaces as a `cherry` lick on the cone. Read
+      // `currentSync` lazily so a reconnect (new sync instance) still routes.
+      if (cherryTransport) {
+        cherryTransport.onHostEvent = (name, detail) =>
+          pageFollowerTray?.currentSync?.sendCherryHostEvent(name, detail);
+      }
     } else if (storedJoinUrl) {
       pageFollowerTray = startPageFollowerTray({
         joinUrl: storedJoinUrl,
@@ -2884,6 +3270,7 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
         onStatus: (status) => layout.panels.chat.setProcessing(status === 'processing'),
         setChatAgent: (agent) => layout.panels.chat.setAgent(agent),
         browserAPI: browser,
+        onForwardingToggle: (enabled) => client.sendSetFollowerForwarding(enabled),
         // Follower-side sprinkle rendering: the leader broadcasts `sprinkles.list`,
         // and the `SprinkleFollowerController` (inside `startPageFollowerTray`)
         // mirrors the open-state by fetching `.shtml` content over the data
@@ -3002,6 +3389,7 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
         onStatus: (status) => layout.panels.chat.setProcessing(status === 'processing'),
         setChatAgent: (agent) => layout.panels.chat.setAgent(agent),
         browserAPI: browser,
+        onForwardingToggle: (enabled) => client.sendSetFollowerForwarding(enabled),
         addSprinkle: (name, title, element, zone, options) =>
           layout.addSprinkle(
             name,
@@ -3221,7 +3609,17 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // Background enrichment of pending-frozen sessions (see the extension
   // path for rationale). Fire-and-forget after the boot-critical wiring
   // is in place so a slow enrichment never blocks first paint.
-  scheduleBackgroundEnrichment(localFs);
+  //
+  // Routes through `writableFs` so the OPFS-leader tab lands the
+  // rename + index update on the worker-owned canonical OPFS via the
+  // `WritableVfsClient`. Followers (and flag-off) reuse `localFs`.
+  //
+  // Pass `isWriter` so the scheduler no-ops on followers under the
+  // OPFS flag. Otherwise the enrichment write would land in the
+  // page-side LFS shadow (silent orphan, never seen by the
+  // worker-OPFS sessions index). Flag off → `isWriter: true` (no
+  // election ran), behavior byte-identical to the local-VFS baseline.
+  scheduleBackgroundEnrichment(writableFs, { isWriter: !useRpcVfs || opfsLeader.isLeader });
 
   log.info('Standalone kernel-worker UI ready');
 }
@@ -3305,6 +3703,38 @@ async function main(): Promise<void> {
   const app = document.getElementById('app');
   if (!app) throw new Error('#app element not found');
 
+  // Connect mode (?connect=1) is served by the cloudflare worker, which has NO
+  // /api/fetch-proxy — so the llm-proxy SW (scope '/') would 404 every
+  // cross-origin fetch (e.g. GitHub OAuth). It must not control this page.
+  // Unregister any SW left from a prior full-app visit on this origin and reload
+  // once to detach, then proceed SW-free. Detected inline so it gates before the
+  // registration below; mirrors resolveUiRuntimeMode's `connect=1` check.
+  const isConnectModeForSw = (() => {
+    try {
+      return new URL(window.location.href).searchParams.get('connect') === '1';
+    } catch {
+      return false;
+    }
+  })();
+  if ('serviceWorker' in navigator && isConnectModeForSw) {
+    try {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister().catch(() => false)));
+      if (
+        navigator.serviceWorker.controller &&
+        !sessionStorage.getItem('slicc-connect-sw-cleared')
+      ) {
+        sessionStorage.setItem('slicc-connect-sw-cleared', '1');
+        log.info('connect mode: detaching from service worker (no proxy on worker origin)');
+        location.reload();
+        return;
+      }
+      sessionStorage.removeItem('slicc-connect-sw-cleared');
+    } catch (err) {
+      log.error('connect-mode SW cleanup failed', err);
+    }
+  }
+
   // Register preview service worker (serves VFS content at /preview/*)
   // and ensure it is controlling this page before we proceed. If the SW
   // was just installed for the first time, `navigator.serviceWorker.
@@ -3313,8 +3743,9 @@ async function main(): Promise<void> {
   // fetches fall through to the dev server and 404, which breaks dips
   // that load .shtml files (welcome dip, etc.). The standard fix is a
   // one-shot reload right after the first activation; we gate it on
-  // sessionStorage to avoid loops.
-  if ('serviceWorker' in navigator) {
+  // sessionStorage to avoid loops. Skipped in connect mode (handled above —
+  // the worker origin has no /api/fetch-proxy, so no SW should control it).
+  if ('serviceWorker' in navigator && !isConnectModeForSw) {
     try {
       await navigator.serviceWorker.register('/preview-sw.js', { scope: '/preview/' });
       log.info('Preview SW registered');
@@ -3392,6 +3823,15 @@ async function main(): Promise<void> {
   // Resolve UI runtime mode from chrome.runtime.id and URL query.
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
   const runtimeMode = resolveUiRuntimeMode(window.location.href, isExtension);
+
+  // Connect mode (?connect=1): slim provider-login + accounts + model-picker UI.
+  // Used by /cloud dashboard for shared localStorage account provisioning.
+  if (runtimeMode === 'connect') {
+    (globalThis as Record<string, unknown>).__slicc_connect_mode = true;
+    const { mountConnectSurface } = await import('./connect-surface.js');
+    await mountConnectSurface(app);
+    return;
+  }
 
   // Detached extension tab (?detached=1): standalone-density Layout with
   // the offscreen agent. See docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md

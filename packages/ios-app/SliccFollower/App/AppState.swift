@@ -696,6 +696,12 @@ class AppState: ObservableObject {
         case .pong:
             Task { await keepalive?.receivedPong() }
 
+        case let .cherrySliccEvent(targetId, name, _):
+            // Cherry host-page events are not hosted on iOS (the follower has no
+            // cherry page surface). Documented no-op: log and ignore. Present so the
+            // switch stays exhaustive and a future cherry-on-iOS path has a seam.
+            logger.debug("Ignoring cherry.slicc_event for target=\(targetId) name=\(name) (cherry pages not hosted on iOS)")
+
         case .unknown:
             logger.debug("Unknown message type received")
             break  // Silently ignore unhandled message types

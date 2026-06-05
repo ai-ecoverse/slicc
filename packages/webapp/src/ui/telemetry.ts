@@ -12,6 +12,8 @@
  * - navigate: page load with deployment mode
  */
 
+import { setShellTelemetrySink } from '../shell/telemetry-hook.js';
+
 type SampleRUM = (checkpoint: string, data?: { source?: string; target?: string }) => void;
 
 let sampleRUM: SampleRUM | null = null;
@@ -43,6 +45,11 @@ export async function initTelemetry(): Promise<void> {
   if (initialized) return;
   if (typeof localStorage !== 'undefined' && localStorage.getItem('telemetry-disabled') === 'true')
     return;
+
+  // Register the shell telemetry sink so the worker-resident shell can emit
+  // command beacons without importing this DOM-bound module (dependency
+  // inversion — keeps the shell layer free of a back-edge into ui/).
+  setShellTelemetrySink(trackShellCommand);
 
   try {
     const mode = getModeLabel();

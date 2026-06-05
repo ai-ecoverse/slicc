@@ -206,8 +206,11 @@ function deduplicateByFamily(models: ModelInfo[]): ModelInfo[] {
   for (const m of models) {
     const family = extractFamily(m.id);
     // Keep the first occurrence per family (models are already sorted by cost desc,
-    // so the first is typically the latest/most capable version)
-    if (!familyMap.has(family)) {
+    // so the first is typically the latest/most capable version) — BUT never
+    // collapse away the active model. A newer model with placeholder $0 pricing
+    // (e.g. an Adobe opus-4-8 not yet in pi-ai's cost registry) sorts last and
+    // would otherwise be hidden behind the older same-family entry.
+    if (!familyMap.has(family) || m.selected) {
       familyMap.set(family, m);
     }
   }
@@ -232,8 +235,8 @@ interface ModelInfo {
 function toModelInfo(
   m: any,
   providerId: string,
-  selectedModelId: string,
-  selectedProvider: string,
+  activeModelId: string,
+  activeProvider: string,
   aaModels?: AAModelData[]
 ): ModelInfo {
   const aaMatch = aaModels ? matchAAModel(m.id, aaModels) : undefined;
@@ -246,7 +249,10 @@ function toModelInfo(
     maxTokens: m.maxTokens ?? 0,
     reasoning: !!m.reasoning,
     input: m.input ?? ['text'],
-    selected: m.id === selectedModelId && providerId === selectedProvider,
+    // "selected" marks the model the agent ACTUALLY resolves to (from
+    // resolveCurrentModel), not the raw selected id — so a fallback shows the
+    // real model, not a guess.
+    selected: m.id === activeModelId && providerId === activeProvider,
   };
   if (aaMatch?.intelligence_index != null) info.intelligence = aaMatch.intelligence_index;
   if (aaMatch?.coding_index != null) info.codingScore = aaMatch.coding_index;
@@ -275,10 +281,7 @@ function formatHumanReadable(
     lines.push(`${prefix}${id} ${cost.padEnd(16)} ${ctx.padEnd(10)} ${benchPart} ${reasoning}`);
   }
 
-  const selected = models.find((m) => m.selected);
-  lines.push(
-    `\n  ${models.length} model${models.length !== 1 ? 's' : ''} available.${selected ? ` Currently using: ${selected.id}` : ''}`
-  );
+  lines.push(`\n  ${models.length} model${models.length !== 1 ? 's' : ''} available.`);
   if (hasAAData) {
     lines.push('  Intelligence data: artificialanalysis.ai');
   }
@@ -294,6 +297,7 @@ export function createModelsCommand(vfs?: VirtualFS): Command {
       getProviderModels,
       getSelectedProvider,
       getSelectedModelId,
+      resolveCurrentModel,
     } = await import('../../ui/provider-settings.js');
 
     if (args.includes('--help') || args.includes('-h')) {
@@ -316,6 +320,17 @@ export function createModelsCommand(vfs?: VirtualFS): Command {
       const msg = 'No provider accounts configured. Run the provider settings to add one.\n';
       return { stdout: '', stderr: msg, exitCode: 1 };
     }
+
+    // The model the agent ACTUALLY resolves and streams with — not the raw
+    // selected id. resolveCurrentModel() falls back deterministically (and runs
+    // identically in every float: standalone worker, panel terminal, and the
+    // extension offscreen/panel shells — it only reads localStorage + the pi-ai
+    // registry), so this reflects reality even when the selection can't be
+    // honored (cold model list, id unknown to pi-ai). The ► marker, JSON
+    // `selected` flag, and the "Currently using" line below all key off this.
+    const activeModel = resolveCurrentModel();
+    const activeId = activeModel.id;
+    const activeProvider = activeModel.provider;
 
     // Fetch AA benchmark data unless skipped
     let aaModels: AAModelData[] | undefined;
@@ -354,7 +369,7 @@ export function createModelsCommand(vfs?: VirtualFS): Command {
         continue;
       }
       let models = rawModels
-        .map((m: any) => toModelInfo(m, pid, selectedModelId, selectedProvider, aaModels))
+        .map((m: any) => toModelInfo(m, pid, activeId, activeProvider, aaModels))
         .sort((a: ModelInfo, b: ModelInfo) => b.cost.input - a.cost.input);
 
       if (!allVersions) {
@@ -375,6 +390,17 @@ export function createModelsCommand(vfs?: VirtualFS): Command {
     if (!allVersions && !jsonMode) {
       outputParts.push('Showing latest versions only. Use --all-versions to see all.\n');
     }
+
+    // One authoritative line: the model the agent actually resolves to. If that
+    // differs from the selection (the selected id couldn't be honored — cold
+    // list, unknown id, or a fallback), surface both so there's no guessing.
+    const activeRef = `${activeProvider}:${activeId}`;
+    const selectedRef = `${selectedProvider}:${selectedModelId}`;
+    outputParts.push(
+      activeRef === selectedRef
+        ? `Currently using: ${activeRef}\n`
+        : `Currently using: ${activeRef}  (selected ${selectedRef} — resolved to a different model)\n`
+    );
 
     return { stdout: outputParts.join('\n'), stderr: '', exitCode: 0 };
   });

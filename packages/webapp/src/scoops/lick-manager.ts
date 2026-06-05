@@ -34,7 +34,15 @@ export interface CronTaskEntry {
 }
 
 export interface LickEvent {
-  type: 'webhook' | 'cron' | 'sprinkle' | 'fswatch' | 'session-reload' | 'navigate' | 'upgrade';
+  type:
+    | 'webhook'
+    | 'cron'
+    | 'sprinkle'
+    | 'fswatch'
+    | 'session-reload'
+    | 'navigate'
+    | 'upgrade'
+    | 'cherry';
   webhookId?: string;
   webhookName?: string;
   cronId?: string;
@@ -49,13 +57,40 @@ export interface LickEvent {
   /** For upgrade events: the previously-seen and current bundled SLICC versions. */
   upgradeFromVersion?: string;
   upgradeToVersion?: string;
+  /** For cherry events: the host-page event name, owning follower runtime, and host origin. */
+  cherryName?: string;
+  cherryRuntimeId?: string;
+  cherryOrigin?: string;
   targetScoop?: string;
+  /**
+   * Set ONLY by the leader when it re-emits a lick forwarded from a
+   * follower. `originFollowerId` is the follower's bootstrapId (reserved
+   * for future per-follower response routing); `originLabel` is a
+   * human-readable source ("extension follower", "iOS follower", …)
+   * to be surfaced to the agent by `formatLickEventForCone`.
+   */
+  originFollowerId?: string;
+  originLabel?: string;
   timestamp: string;
   headers?: Record<string, string>;
   body: unknown;
 }
 
 export type LickEventHandler = (event: LickEvent) => void;
+
+/**
+ * Lick types that an `emitEvent`-emitting follower forwards to the
+ * leader's agent (and that the leader accepts on the generic `lick`
+ * tray message). `navigate` is the only such type today. `sprinkle`
+ * also belongs to the leader's agent but forwards via its own
+ * dedicated `sprinkle.lick` path; `cherry` is emitted ON the leader by
+ * `Orchestrator.handleCherryHostEvent` after the leader receives a
+ * `cherry.host_event` from a follower, so it's never a follower-side
+ * forward source. Both are intentionally NOT here.
+ */
+export const FORWARDABLE_TO_LEADER: ReadonlySet<LickEvent['type']> = new Set<LickEvent['type']>([
+  'navigate',
+]);
 
 /**
  * Derive a stable dedup key from a navigate lick's body, or `null` if the body
@@ -85,6 +120,7 @@ export class LickManager {
   private crontasks = new Map<string, CronTaskEntry>();
   private cronInterval: ReturnType<typeof setInterval> | null = null;
   private eventHandler: LickEventHandler | null = null;
+  private forwarder: LickEventHandler | null = null;
   /**
    * Payload fingerprints of navigate (handoff/upskill) licks already emitted
    * this session. A site can advertise the same SLICC `Link` rel on every page
@@ -133,6 +169,27 @@ export class LickManager {
     this.eventHandler = handler;
   }
 
+  /**
+   * Install a forwarder (follower mode) or clear it (leader/standalone,
+   * pass `null`). When set, forwardable lick types are shipped to the
+   * leader via the forwarder instead of running the local handler.
+   */
+  setForwarder(forwarder: LickEventHandler | null): void {
+    this.forwarder = forwarder;
+  }
+
+  /**
+   * Single dispatch chokepoint. Every emit site (emitEvent, webhook,
+   * cron) routes through here so the forwarder gate is consistent.
+   */
+  private dispatch(event: LickEvent): void {
+    if (this.forwarder && FORWARDABLE_TO_LEADER.has(event.type)) {
+      this.forwarder(event);
+      return;
+    }
+    this.eventHandler?.(event);
+  }
+
   /** Emit an externally-generated lick event (e.g., from fswatch). */
   emitEvent(event: LickEvent): void {
     if (event.type === 'navigate') {
@@ -146,7 +203,7 @@ export class LickManager {
       }
     }
     log.info('External lick event', { type: event.type, target: event.targetScoop });
-    this.eventHandler?.(event);
+    this.dispatch(event);
   }
 
   // ─── Webhooks ─────────────────────────────────────────────────────────────
@@ -236,7 +293,7 @@ export class LickManager {
       name: webhook.name,
       targetScoop: webhook.scoop,
     });
-    this.eventHandler?.(event);
+    this.dispatch(event);
   }
 
   // ─── Cron Tasks ───────────────────────────────────────────────────────────
@@ -363,7 +420,7 @@ export class LickManager {
       };
 
       log.info('Cron task running', { id: task.id, name: task.name });
-      this.eventHandler?.(event);
+      this.dispatch(event);
 
       // Update times
       const next = this.getNextCronTime(task.cron, now);

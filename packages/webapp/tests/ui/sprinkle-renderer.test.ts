@@ -4,6 +4,7 @@ import type { SprinkleBridgeAPI } from '../../src/ui/sprinkle-bridge.js';
 import { isFullDocument, SprinkleRenderer } from '../../src/ui/sprinkle-renderer.js';
 
 function makeBridge(name: string): SprinkleBridgeAPI {
+  const exec = Object.assign(vi.fn(), { spawn: vi.fn() }) as SprinkleBridgeAPI['exec'];
   return {
     name,
     lick: vi.fn(),
@@ -21,11 +22,27 @@ function makeBridge(name: string): SprinkleBridgeAPI {
     getState: vi.fn(() => null),
     open: vi.fn(),
     close: vi.fn(),
+    minimize: vi.fn(),
     stopCone: vi.fn(),
     attachImage: vi.fn(),
     captureScreen: vi.fn(),
-    exec: vi.fn(),
+    exec,
     agent: vi.fn(),
+    fetch: vi.fn(),
+    http: { client: vi.fn() },
+    browser: {
+      findTab: vi.fn(),
+      ensureTab: vi.fn(),
+      eval: vi.fn(),
+      evalAsync: vi.fn(),
+      cookie: vi.fn(),
+      localStorage: vi.fn(),
+      fetch: vi.fn(),
+    },
+    readFileBinary: vi.fn(),
+    writeFileBinary: vi.fn(),
+    fetchToFile: vi.fn(),
+    _jsh: vi.fn(),
   };
 }
 

@@ -140,6 +140,14 @@ export default defineConfig({
         },
       },
       {
+        extends: true,
+        test: {
+          name: 'cherry',
+          environment: 'jsdom',
+          include: ['packages/cherry/tests/**/*.test.ts'],
+        },
+      },
+      {
         // Repo-level tooling under packages/dev-tools/ (plain .mjs, not a
         // workspace). Co-located *.test.mjs so `npm test` covers the triage
         // logic; no per-package coverage gate applies to this project.

@@ -164,14 +164,18 @@ describe('hydrateDips', () => {
   });
 });
 
-describe('hydrateDips — LightningFS fallback for uncontrolled boots', () => {
+describe('hydrateDips — preview-vfs bridge fallback for uncontrolled boots', () => {
   let container: HTMLElement;
+  let responderChannel: BroadcastChannel | null = null;
+  let responderListener: ((ev: MessageEvent) => void) | null = null;
 
   beforeEach(() => {
     container = document.createElement('div');
     document.body.appendChild(container);
     // Force "no controller" — this is the realistic state on the very
-    // first boot before the SW claims the page.
+    // first boot before the SW claims the page. dip.ts then routes
+    // .shtml reads through the `preview-vfs` BroadcastChannel bridge
+    // (the replacement for the legacy direct LightningFS read).
     Object.defineProperty(navigator, 'serviceWorker', {
       configurable: true,
       value: { controller: null },
@@ -180,20 +184,44 @@ describe('hydrateDips — LightningFS fallback for uncontrolled boots', () => {
 
   afterEach(() => {
     container.remove();
+    if (responderListener && responderChannel) {
+      responderChannel.removeEventListener('message', responderListener);
+    }
+    responderChannel?.close();
+    responderChannel = null;
+    responderListener = null;
     delete (navigator as Record<string, unknown>).serviceWorker;
   });
 
-  it('reads .shtml content directly from LightningFS when SW is not controlling, bypassing fetch entirely', async () => {
-    // Lazy-import LightningFS so the fake-indexeddb shim is in place.
-    const FS = (await import('@isomorphic-git/lightning-fs')).default;
-    const lfs = new FS('slicc-fs').promises;
-    await lfs.mkdir('/shared').catch(() => {});
-    await lfs.mkdir('/shared/sprinkles').catch(() => {});
-    await lfs.mkdir('/shared/sprinkles/welcome').catch(() => {});
-    await lfs.writeFile(
-      '/shared/sprinkles/welcome/welcome.shtml',
-      '<button onclick="slicc.lick(\'go\')">Go</button>'
-    );
+  it('reads .shtml content via the preview-vfs BroadcastChannel bridge when SW is not controlling, bypassing fetch entirely', async () => {
+    // Stand up an in-process `preview-vfs` responder. This is the same
+    // wire contract `installPreviewVfsResponder` implements in the
+    // page-side host — `preview-vfs-read` in, `preview-vfs-response`
+    // out, correlated by `id`.
+    const shtml = '<button onclick="slicc.lick(\'go\')">Go</button>';
+    const files = new Map<string, string>([['/shared/sprinkles/welcome/welcome.shtml', shtml]]);
+    responderChannel = new BroadcastChannel('preview-vfs');
+    responderListener = (ev: MessageEvent) => {
+      const data = ev.data as
+        | { type: string; id: string; path: string; asText: boolean }
+        | undefined;
+      if (data?.type !== 'preview-vfs-read') return;
+      const content = files.get(data.path);
+      if (content === undefined) {
+        responderChannel?.postMessage({
+          type: 'preview-vfs-response',
+          id: data.id,
+          error: `ENOENT: ${data.path}`,
+        });
+        return;
+      }
+      responderChannel?.postMessage({
+        type: 'preview-vfs-response',
+        id: data.id,
+        content,
+      });
+    };
+    responderChannel.addEventListener('message', responderListener);
 
     // Tripwire: if the code mistakenly calls fetch, fail loudly.
     const fetchSpy = vi
@@ -204,9 +232,9 @@ describe('hydrateDips — LightningFS fallback for uncontrolled boots', () => {
     const instances = hydrateDips(container, vi.fn());
     expect(instances).toHaveLength(1);
 
-    // Poll for the async LFS read + mountDip — LightningFS init runs
-    // its own microtask chain, so a single setTimeout(0) sometimes
-    // races ahead of the readFile + then(mountDip) sequence.
+    // Poll for the async bridge round-trip + mountDip — BroadcastChannel
+    // dispatch is async (microtask + structured clone), so a single
+    // setTimeout(0) can race ahead of the resolveContent → mountDip chain.
     const wrapper = container.querySelector<HTMLElement>('.msg__dip')!;
     let iframe: HTMLIFrameElement | null = null;
     for (let i = 0; i < 100; i++) {

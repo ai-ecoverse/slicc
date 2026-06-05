@@ -164,6 +164,76 @@ describe('bootstrapKernelWorker', () => {
     expect(worker.terminateCalls).toBe(1);
   });
 
+  it('routes kernel-migration-started/finished to the splash callbacks', async () => {
+    // The worker posts these raw on the kernel port (same shape as
+    // `kernel-worker-ready`); the page-side listener dispatches them
+    // to the optional callbacks without disturbing the `ready`
+    // resolution.
+    let stashedKernelPort: MessagePort | null = null;
+    const worker: WorkerLike = {
+      postMessage: (message: unknown) => {
+        const data = message as { type?: string; kernelPort?: MessagePort };
+        if (data?.type === 'kernel-worker-init' && data.kernelPort) {
+          stashedKernelPort = data.kernelPort;
+          stashedKernelPort.start();
+        }
+      },
+      terminate: () => undefined,
+    };
+    const onMigrationStart = vi.fn();
+    const onMigrationFinish = vi.fn();
+    const host = bootstrapKernelWorker({
+      worker,
+      realCdpTransport: makeStubCdpTransport(),
+      callbacks: makeStubCallbacks(),
+      readyTimeoutMs: 1_000,
+      onMigrationStart,
+      onMigrationFinish,
+    });
+
+    expect(stashedKernelPort).not.toBeNull();
+    // Worker signals start, then finish, then ready (matches the
+    // host.ts wiring: start fires before the IIFE, finish in the
+    // IIFE's `finally`, ready already posted by `boot()` immediately
+    // after `createKernelHost` returns).
+    stashedKernelPort!.postMessage({ type: 'kernel-migration-started' });
+    stashedKernelPort!.postMessage({ type: 'kernel-migration-finished' });
+    stashedKernelPort!.postMessage({ type: 'kernel-worker-ready' });
+    await host.ready;
+
+    expect(onMigrationStart).toHaveBeenCalledTimes(1);
+    expect(onMigrationFinish).toHaveBeenCalledTimes(1);
+    host.dispose();
+  });
+
+  it('migration callbacks are optional — boot still resolves without them', async () => {
+    let stashedKernelPort: MessagePort | null = null;
+    const worker: WorkerLike = {
+      postMessage: (message: unknown) => {
+        const data = message as { type?: string; kernelPort?: MessagePort };
+        if (data?.type === 'kernel-worker-init' && data.kernelPort) {
+          stashedKernelPort = data.kernelPort;
+          stashedKernelPort.start();
+        }
+      },
+      terminate: () => undefined,
+    };
+    const host = bootstrapKernelWorker({
+      worker,
+      realCdpTransport: makeStubCdpTransport(),
+      callbacks: makeStubCallbacks(),
+      readyTimeoutMs: 1_000,
+    });
+    expect(stashedKernelPort).not.toBeNull();
+    // Flag-off boots never post these, but a defensive page-side
+    // listener must still no-op cleanly if they ever arrived.
+    stashedKernelPort!.postMessage({ type: 'kernel-migration-started' });
+    stashedKernelPort!.postMessage({ type: 'kernel-migration-finished' });
+    stashedKernelPort!.postMessage({ type: 'kernel-worker-ready' });
+    await expect(host.ready).resolves.toBeUndefined();
+    host.dispose();
+  });
+
   it('a stale kernel-worker-ready arriving after timeout does not resolve ready', async () => {
     // Catches the original leak: if the timeout path forgot to remove
     // the listener, a later `kernel-worker-ready` posted on the port

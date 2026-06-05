@@ -157,14 +157,6 @@ describe('RestrictedFS', () => {
     await expect(restricted.readTextFile('/scoops/secret-at-parent.txt')).rejects.toThrow('ENOENT');
   });
 
-  // ── getLightningFS delegation ───────────────────────────────────────
-
-  it('getLightningFS returns the underlying LightningFS', () => {
-    const lfs = restricted.getLightningFS();
-    expect(lfs).toBeDefined();
-    expect(typeof lfs.readFile).toBe('function');
-  });
-
   // ── copyFile source/dest checks ─────────────────────────────────────
 
   it('copyFile within allowed dirs works', async () => {

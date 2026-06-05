@@ -1,3 +1,4 @@
+import { MAX_CONE_CONFIG_BYTES, validateConeConfigDelta } from '@slicc/cloud-core/cone-config';
 import { authenticateRequest } from './auth-middleware.js';
 import { errorResponse } from './error-envelope.js';
 import { checkRateLimit } from './rate-limit.js';
@@ -58,11 +59,17 @@ export async function handleStart(request: Request, env: CloudEnv): Promise<Resp
     });
   }
   const bearer = request.headers.get('Authorization')!.slice(7);
-  const body = (await request.json().catch(() => ({}))) as { name?: string };
+  const body = (await request.json().catch(() => ({}))) as { name?: string; coneConfig?: unknown };
+  try {
+    validateStartBody(body);
+  } catch (e) {
+    return errorResponse(400, 'BAD_REQUEST', (e as Error).message);
+  }
   const stub = getDoStub(env, auth.userId);
   return forwardToDo(stub, '/start-cone', {
     bearer,
     name: body.name,
+    coneConfig: body.coneConfig,
     userId: auth.userId,
     workerOrigin: new URL(request.url).origin,
   });
@@ -108,14 +115,23 @@ export async function handleResume(request: Request, env: CloudEnv): Promise<Res
     });
   }
   const bearer = request.headers.get('Authorization')!.slice(7);
-  const body = (await request.json().catch(() => ({}))) as { sandboxId?: string };
+  const body = (await request.json().catch(() => ({}))) as {
+    sandboxId?: string;
+    coneConfigDelta?: unknown;
+  };
   if (!body.sandboxId) {
     return errorResponse(400, 'BAD_REQUEST', 'sandboxId is required');
+  }
+  try {
+    validateResumeBody(body);
+  } catch (e) {
+    return errorResponse(400, 'BAD_REQUEST', (e as Error).message);
   }
   const stub = getDoStub(env, auth.userId);
   return forwardToDo(stub, '/resume-cone', {
     bearer,
     sandboxId: body.sandboxId,
+    coneConfigDelta: body.coneConfigDelta,
     localSliccVersion: 'web-' + new Date().toISOString().slice(0, 10),
     userId: auth.userId,
   });
@@ -136,4 +152,33 @@ export async function handleKill(request: Request, env: CloudEnv): Promise<Respo
   }
   const stub = getDoStub(env, auth.userId);
   return forwardToDo(stub, '/kill-cone', { sandboxId: body.sandboxId });
+}
+
+export function validateStartBody(body: { name?: string; coneConfig?: unknown }): void {
+  if (body.coneConfig !== undefined) {
+    const size = new TextEncoder().encode(JSON.stringify(body.coneConfig)).length;
+    if (size > MAX_CONE_CONFIG_BYTES) {
+      throw new Error(`coneConfig too large: ${size} > ${MAX_CONE_CONFIG_BYTES}`);
+    }
+  }
+}
+
+export function validateResumeBody(body: { coneConfigDelta?: unknown }): void {
+  if (body.coneConfigDelta === undefined) return;
+  const size = new TextEncoder().encode(JSON.stringify(body.coneConfigDelta)).length;
+  if (size > MAX_CONE_CONFIG_BYTES) {
+    throw new Error(`coneConfigDelta too large: ${size} > ${MAX_CONE_CONFIG_BYTES}`);
+  }
+  // Shape/hygiene validation (env-name, single-line values, etc.). Errors are
+  // redacted (shape only, never values) — safe to surface as a 400.
+  validateConeConfigDelta(body.coneConfigDelta);
+}
+
+export async function handleConeConfig(request: Request, env: CloudEnv): Promise<Response> {
+  const auth = await authenticateRequest(request, env);
+  if (auth instanceof Response) return auth;
+  const sandboxId = new URL(request.url).searchParams.get('sandboxId');
+  if (!sandboxId) return errorResponse(400, 'BAD_REQUEST', 'sandboxId is required');
+  const stub = getDoStub(env, auth.userId);
+  return forwardToDo(stub, '/cone-config-index', { sandboxId, userId: auth.userId });
 }

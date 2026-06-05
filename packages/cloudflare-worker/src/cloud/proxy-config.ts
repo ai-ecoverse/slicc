@@ -6,10 +6,17 @@
 const DEFAULT_PROXY = 'https://adobe-llm-proxy.paolo-moz.workers.dev';
 const TTL_MS = 5 * 60 * 1000;
 
+export interface ProxyModel {
+  id: string;
+  name: string;
+}
+
 export interface ProxyConfig {
   clientId: string;
   scopes: string;
   imsEnvironment: string;
+  /** Models the proxy exposes (Adobe-provided). Optional: absent on older proxies. */
+  models?: ProxyModel[];
 }
 
 let cached: { config: ProxyConfig; expiresAt: number } | null = null;

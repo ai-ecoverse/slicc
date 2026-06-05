@@ -9,6 +9,7 @@ This root file is the repo navigation hub. Keep package-specific architecture an
 | Path                          | Purpose                                                                                                            |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `packages/webapp/`            | Browser app core: UI, VFS, shell, CDP, tools, providers, skills, scoops                                            |
+| `packages/cherry/`            | Host-side embed SDK (`mountSlicc`) lending a third-party page to a leader as a target                              |
 | `packages/chrome-extension/`  | Manifest V3 extension entry points, HTML shells, and message bridges                                               |
 | `packages/cloudflare-worker/` | Tray hub worker for session coordination, signaling, TURN credentials, and the `sliccy.ai/cloud` cone dashboard    |
 | `packages/node-server/`       | Node.js CLI/Electron server: Chrome launch, CDP proxy, dev serving, hosted-leader mode                             |
@@ -44,6 +45,7 @@ npm run dev                              # Dev mode with Vite HMR + Chrome + CDP
 For runtime-specific commands, use the nearest guide:
 
 - [`packages/webapp/CLAUDE.md`](packages/webapp/CLAUDE.md)
+- [`packages/cherry/CLAUDE.md`](packages/cherry/CLAUDE.md)
 - [`packages/chrome-extension/CLAUDE.md`](packages/chrome-extension/CLAUDE.md)
 - [`packages/cloudflare-worker/CLAUDE.md`](packages/cloudflare-worker/CLAUDE.md)
 - [`packages/node-server/CLAUDE.md`](packages/node-server/CLAUDE.md)
@@ -80,7 +82,7 @@ Prefer the helper in `.agents/skills/slicc-handoff/scripts/slicc-handoff` when i
 - **Cone**: the main agent.
 - **Scoops**: isolated sub-agents with sandboxed filesystems.
 - **Licks**: external events such as webhooks or cron tasks.
-- **Floats**: runtime environments such as CLI, extension, Electron, and cloud.
+- **Floats**: runtime environments such as CLI, extension, Electron, cloud, and Cherry (an embedded follower garnish — the webapp running `?cherry=1` inside a third-party host page's iframe).
 
 Use the ice cream terms in code review comments and docs when they match the domain.
 
@@ -123,7 +125,7 @@ Each instance gets an isolated Chrome profile (keyed by port) and separate CDP p
 - **Cone**: Main agent ("sliccy"). Full filesystem access, all tools. Code: `orchestrator.ts`, `RegisteredScoop` with `isCone: true`.
 - **Scoops**: Isolated sub-agents with sandboxed filesystem (`/scoops/{name}/` + `/shared/`), own shell/conversation. Tools: `scoop_scoop`, `feed_scoop`, `drop_scoop`. Code: `scoop-context.ts`, `restricted-fs.ts`.
 - **Licks**: External events triggering scoops (webhooks, cron tasks). Code: `LickManager`, `LickEvent`. Shell: `webhook`, `crontask`.
-- **Floats**: Runtime environments — CLI (`packages/node-server/src/`), Extension (`packages/chrome-extension/src/`), Electron (`packages/node-server/src/electron-main.ts`), Sliccstart (`packages/swift-launcher/` — native macOS launcher), **hosted-leader (cloud)** (`@slicc/cloud-core` owns the substrate / start / resume / pause / kill operations; `packages/node-server/src/cloud/` is the CLI adapter that spawns an e2b sandbox running `node-server --hosted`; see `packages/dev-tools/e2b-template/`).
+- **Floats**: Runtime environments — CLI (`packages/node-server/src/`), Extension (`packages/chrome-extension/src/`), Electron (`packages/node-server/src/electron-main.ts`), Sliccstart (`packages/swift-launcher/` — native macOS launcher), **hosted-leader (cloud)** (`@slicc/cloud-core` owns the substrate / start / resume / pause / kill operations; `packages/node-server/src/cloud/` is the CLI adapter that spawns an e2b sandbox running `node-server --hosted`; see `packages/dev-tools/e2b-template/`), **Cherry (embedded follower garnish)** (`packages/cherry/` host SDK `mountSlicc` embeds the webapp with `?cherry=1` in a third-party page's iframe and lends that page to a remote leader as a capability-limited synthetic-CDP target).
 
 Use ice cream terms over technical jargon (e.g., "feed_scoop" not "delegate_to_scoop").
 
@@ -174,7 +176,7 @@ Virtual Filesystem (packages/webapp/src/fs/) → RestrictedFS → Shell (package
 
 **Core Agent** (`packages/webapp/src/core/`): Uses pi-agent-core for agent loop, pi-ai for LLM streaming. `tool-adapter.ts` bridges legacy ToolDefinition to pi-compatible AgentTool. `SessionStore` persists conversations to IndexedDB.
 
-**Context Compaction** (`packages/webapp/src/core/context-compaction.ts`): LLM-summarized compaction at ~183K tokens. Images auto-resized before LLM (5MB base64 limit). Overflow recovery replaces oversized messages (>40K chars) with placeholders.
+**Context Compaction** (`packages/webapp/src/core/context-compaction.ts`): LLM-summarized compaction at `model.contextWindow - reserveTokens` — the resolved model's real window, forwarded by `scoop-context.ts` (e.g. ~983K for a 1M-window Adobe Sonnet/Opus 4.x); falls back to a 200K default only when the model reports no window. Images auto-resized before LLM (5MB base64 limit). Overflow recovery replaces oversized messages (>40K chars) with placeholders.
 
 **UI** (`packages/webapp/src/ui/`): Vanilla TypeScript, no framework. Unified split-pane layout for both floats — `Layout(root, isExtension)` toggles density (scoops rail, switcher, avatar). Extension mode: side panel UI with Chat panel and Terminal/Files/Memory rail items pinned. Standalone: resizable split layout with all panels visible. Detached popout (`?detached=1`) uses `isExtension=false` for full standalone UX. `main.ts` delegates to `mainExtension()` (OffscreenClient) or bootstraps Orchestrator directly. Tab bar is fully dynamic — `TabZone.addTab()`/`removeTab()` adds/removes tabs at runtime (used by sprinkle panels).
 
@@ -202,6 +204,7 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 - When a tray is connected, remote browser targets are exposed through federated target routing; keep CDP local to the runtime that owns the page.
 - Teleport is part of the browser/shell workflow: `playwright teleport --start=<regex> --return=<regex>` and equivalent flags on `open`, `tab-new`, and navigation commands.
 - Any `*.bsh` file is a browser-navigation helper. Keep detailed behavior in docs rather than growing this root guide.
+- **Lick forwarding**: A tray follower forwards `navigate` licks (which is how SLICC handoffs arrive) to the leader's agent instead of handling them locally. The leader stamps the follower's origin onto the forwarded lick; the leader is the origin authority.
 
 ## Key Conventions
 
@@ -267,6 +270,6 @@ npm run build
 npm run build -w @slicc/chrome-extension
 ```
 
-**Always run `npm run lint` before committing.** It runs `biome check --write .` over JS/TS/JSON/CSS and `prettier --write .` over the remaining doc / config-text formats (Markdown, YAML, HTML). CI runs the check-only equivalents as a hard gate and will reject any unformatted code. This is the most common CI failure — don't skip it.
+**Always run `npm run lint` before committing.** It runs `biome check --write .` over JS/TS/JSON/CSS and `prettier --write .` over the remaining doc / config-text formats (Markdown, YAML, HTML), then `lint:docs` (CLAUDE.md size limits) and `lint:skills` (tessl `SKILL.md` lint). CI runs the check-only/strict equivalents (`npm run lint:ci`) as a hard gate and will reject any unformatted code. This is the most common CI failure — don't skip it.
 
 CI runs these gates in `.github/workflows/ci.yml`.
