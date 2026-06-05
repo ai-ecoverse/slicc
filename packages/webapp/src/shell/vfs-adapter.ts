@@ -176,6 +176,20 @@ export class VfsAdapter implements IFileSystem {
   ): Promise<void> {
     return this.trusted(async () => {
       const normalized = normalizePath(path);
+      // Enforce POSIX EISDIR for the append target — ZenFS' InMemory backend
+      // (used in tests) silently overwrites a directory entry with file bytes
+      // on writeFile/appendFile rather than rejecting, so the contract is
+      // enforced here at the shell-facing surface.
+      try {
+        const s = await this.vfs.stat(normalized);
+        if (s.type === 'directory') {
+          throw new FsError('EISDIR', 'is a directory', normalized);
+        }
+      } catch (err) {
+        if (err instanceof FsError && err.code === 'EISDIR') throw err;
+        // Any other stat failure (most importantly ENOENT) means the target
+        // is writable as a new file — fall through to the read+concat path.
+      }
       // Read existing content as binary to avoid encoding corruption
       let existingBytes = new Uint8Array(0);
       try {

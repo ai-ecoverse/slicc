@@ -7,7 +7,7 @@ import { existsSync, readFileSync } from 'fs';
 import { createServer } from 'http';
 import { createServer as createNetServer } from 'net';
 import { homedir } from 'os';
-import { dirname, join, resolve, sep } from 'path';
+import { basename, dirname, join, resolve, sep } from 'path';
 import { Readable, Transform } from 'stream';
 import { StringDecoder } from 'string_decoder';
 import { fileURLToPath } from 'url';
@@ -17,6 +17,8 @@ import {
   clearStaleDevToolsActivePort,
   ensureQaProfileScaffold,
   findChromeExecutable,
+  legacyChromeCandidates,
+  migrateLegacyDefaultChromeProfile,
   planChromeSpawn,
   resolveChromeLaunchProfile,
   waitForCdpPort,
@@ -48,6 +50,7 @@ import { OauthSecretStore } from './secrets/oauth-secret-store.js';
 import { SecretProxyManager } from './secrets/proxy-manager.js';
 import { readOrCreateSessionId } from './secrets/session-id-file.js';
 import { handleDaSignAndForward, handleS3SignAndForward } from './secrets/sign-and-forward.js';
+import { registerSecretsReloadEndpoint } from './secrets-reload-endpoint.js';
 
 const Dirname = fileURLToPath(new URL('.', import.meta.url));
 const PROJECT_ROOT = resolve(Dirname, '..', '..');
@@ -555,7 +558,6 @@ async function main() {
       try {
         const resolved = resolveChromeLaunchProfile({
           projectRoot: PROJECT_ROOT,
-          tmpDir: process.env['TMPDIR'] ?? '/tmp',
           profile: RUNTIME_FLAGS.profile,
           servePort: SERVE_PORT,
         });
@@ -581,6 +583,12 @@ async function main() {
 
     if (chromeProfile.id) {
       await ensureQaProfileScaffold(PROJECT_ROOT);
+    } else if (!RUNTIME_FLAGS.hosted) {
+      const profileDirName = basename(chromeProfile.userDataDir);
+      await migrateLegacyDefaultChromeProfile(
+        chromeProfile.userDataDir,
+        legacyChromeCandidates(profileDirName)
+      );
     }
 
     if (chromeProfile.extensionPath && !existsSync(chromeProfile.extensionPath)) {
@@ -1201,6 +1209,7 @@ async function main() {
   if (RUNTIME_FLAGS.hosted) {
     registerCloudStatusEndpoint(app, { joinFilePath: '/tmp/slicc-join.json' });
     registerHostedBootstrapEndpoint(app, { secretStore });
+    registerSecretsReloadEndpoint(app, { secretProxy });
   }
 
   // Fetch proxy — forwards cross-origin requests from the browser to bypass CORS.

@@ -112,11 +112,22 @@ struct SprinkleSummary: Codable, Identifiable, Hashable {
 
 // MARK: - TrayTargetEntry / RemoteTargetInfo
 
+/// Mirrors RemoteTargetInfo.capabilities from tray-sync-protocol.ts (Task 5).
+/// `network` gates whether the leader may drive `Network.*` CDP against this
+/// target; distinct from the host-page `openUrl` capability.
+struct CherryCapabilities: Codable, Hashable {
+    let navigate: Bool
+    let network: Bool
+    let screenshot: Bool
+}
+
 /// Mirrors RemoteTargetInfo from tray-sync-protocol.ts (sent in targets.advertise)
 struct RemoteTargetInfo: Codable, Hashable {
     let targetId: String
     let title: String
     let url: String
+    var kind: String?
+    var capabilities: CherryCapabilities?
 }
 
 // MARK: - CDPTargetSummary
@@ -143,7 +154,8 @@ struct TrayTargetEntry: Codable, Hashable {
 
 /// Mirrors a **subset** of `LeaderToFollowerMessage` from tray-sync-protocol.ts.
 /// Implemented here: chat, scoops, sprinkles, control, leader-initiated CDP
-/// (`cdp.request`, `targets.registry`, `tab.open`). TS-only and omitted from
+/// (`cdp.request`, `targets.registry`, `tab.open`), and the cherry host-page
+/// event fan-out (`cherry.slicc_event`). TS-only and omitted from
 /// this enum: federated `fs.request`/`fs.response`, plus the leader→follower
 /// reply path for follower-originated requests (`cdp.response`,
 /// `cdp.event`, `tab.opened`, `tab.open.error`) — iOS never originates those
@@ -176,6 +188,7 @@ enum LeaderToFollowerMessage: Codable {
         sessionId: String?)
     case targetsRegistry(targets: [TrayTargetEntry])
     case tabOpen(requestId: String, url: String)
+    case cherrySliccEvent(targetId: String, name: String, detail: AnyCodable?)
     case ping
     case pong
     case unknown(type: String)
@@ -186,6 +199,7 @@ enum LeaderToFollowerMessage: Codable {
         case scoops, activeScoopJid, sprinkles
         case requestId, sprinkleName, content, data
         case localTargetId, method, params, sessionId, targets, url
+        case targetId, name, detail
     }
 
     init(from decoder: Decoder) throws {
@@ -255,6 +269,11 @@ enum LeaderToFollowerMessage: Codable {
                 requestId: try container.decode(String.self, forKey: .requestId),
                 url: try container.decode(String.self, forKey: .url)
             )
+        case "cherry.slicc_event":
+            self = .cherrySliccEvent(
+                targetId: try container.decode(String.self, forKey: .targetId),
+                name: try container.decode(String.self, forKey: .name),
+                detail: try container.decodeIfPresent(AnyCodable.self, forKey: .detail))
         case "ping":
             self = .ping
         case "pong":
@@ -325,6 +344,11 @@ enum LeaderToFollowerMessage: Codable {
             try container.encode("tab.open", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(url, forKey: .url)
+        case let .cherrySliccEvent(targetId, name, detail):
+            try container.encode("cherry.slicc_event", forKey: .type)
+            try container.encode(targetId, forKey: .targetId)
+            try container.encode(name, forKey: .name)
+            try container.encodeIfPresent(detail, forKey: .detail)
         case .ping:
             try container.encode("ping", forKey: .type)
         case .pong:

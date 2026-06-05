@@ -15,11 +15,10 @@ describe('VirtualFS', () => {
   });
 
   afterEach(async () => {
-    // Wait for LightningFS debounced saveSuperblock (500ms) and deactivation
-    // timeout to flush before the next test's beforeEach wipes the DB.
-    // Without this, fake-indexeddb aborts in-flight transactions, producing
-    // unhandled AbortError rejections at node:internal/locks.
-    await new Promise((r) => setTimeout(r, 600));
+    // Drop the ZenFS memory mount + InMemoryStore so each test sheds
+    // its store between runs (good hygiene; not the root of the OOM
+    // this file used to hit — see {@link VirtualFS.realpath}).
+    await vfs.dispose();
   });
 
   describe('file operations', () => {

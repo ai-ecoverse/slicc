@@ -22,6 +22,7 @@ import {
   TRAY_JOIN_STORAGE_KEY,
   TRAY_WORKER_STORAGE_KEY,
 } from '../../scoops/tray-runtime-config.js';
+import { CHERRY_RUNTIME_TAG } from '../../scoops/tray-sync-protocol.js';
 import { createProxiedFetch } from '../proxied-fetch.js';
 import { normalizeHeadersInit } from '../proxy-headers.js';
 import {
@@ -2063,6 +2064,24 @@ export function createPlaywrightCommand(
             break;
           }
           const runtimeId = flags['runtime'];
+
+          // Explicit --runtime bypasses getBestFollowerForTeleport's auto-select
+          // exclusion, so re-gate it here against the same connected-follower
+          // surface: a cherry host can never serve `Network.*` and must not be a
+          // teleport target. Fail closed with a clear error rather than letting
+          // the leader hit a -32601 mid-flow.
+          if (runtimeId) {
+            const followers = getConnectedFollowersGetter?.()?.() ?? [];
+            const match = followers.find((f) => f.runtimeId === runtimeId);
+            if (match?.runtime === CHERRY_RUNTIME_TAG) {
+              result = {
+                stdout: '',
+                stderr: `teleport: runtime ${runtimeId} is a cherry host and cannot serve a cookie teleport (no Network.* access)\n`,
+                exitCode: 1,
+              };
+              break;
+            }
+          }
 
           // Disarm any existing watcher on this tab
           const existingWatcher = state.teleportWatchers.get(tab.targetId);

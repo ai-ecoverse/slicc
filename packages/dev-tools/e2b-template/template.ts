@@ -58,7 +58,7 @@ async function main(): Promise<void> {
 
   console.log('Template definition built, starting Template.build…');
   const buildInfo = await Template.build(template, 'slicc', {
-    memoryMB: 2048,
+    memoryMB: 8192,
     onBuildLogs: defaultBuildLogger({ minLevel: 'debug' }),
   });
   console.log('Published template slicc:', buildInfo);

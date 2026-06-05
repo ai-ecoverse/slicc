@@ -12,10 +12,14 @@ import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { AgentEvent, ChatMessage } from '../ui/types.js';
 import { DataChannelKeepalive } from './data-channel-keepalive.js';
+import { FORWARDABLE_TO_LEADER, type LickEvent } from './lick-manager.js';
 import { handleFsRequest } from './tray-fs-handler.js';
 import {
+  CHERRY_RUNTIME_TAG,
+  type CherryHostEventMessage,
   createLeaderSyncChannel,
   type FollowerToLeaderMessage,
+  isCherryHostEventMessage,
   type LeaderToFollowerMessage,
   type RemoteTargetInfo,
   reassembleCDPResponse,
@@ -47,7 +51,19 @@ export interface LeaderSyncManagerOptions {
   /** Resolve a sprinkle's raw .shtml content for follower-side rendering. */
   readSprinkleContent?: (sprinkleName: string) => Promise<string | null> | string | null;
   /** Forward a sprinkle lick (from a follower's open or inline sprinkle) to the leader's lick router. */
-  onSprinkleLick?: (sprinkleName: string, body: unknown, targetScoop?: string) => void;
+  onSprinkleLick?: (
+    sprinkleName: string,
+    body: unknown,
+    targetScoop?: string,
+    originLabel?: string
+  ) => void;
+  /**
+   * Handle a generic lick (e.g. `navigate`) forwarded by a follower.
+   * The event arrives already validated, scrubbed, and stamped with
+   * `originFollowerId`/`originLabel`. Adapters route it into the
+   * leader's `lickManager.emitEvent`.
+   */
+  onForwardedLick?: (event: LickEvent, originBootstrapId: string) => void;
   /** Handle a user message arriving from a follower. */
   onFollowerMessage: (text: string, messageId: string, attachments?: MessageAttachment[]) => void;
   /** Handle an abort request from a follower. */
@@ -62,18 +78,86 @@ export interface LeaderSyncManagerOptions {
   vfs?: VirtualFS;
   /** Called whenever a follower is added or removed (incl. via dead detection or stop). */
   onFollowerCountChanged?: (count: number) => void;
+  /**
+   * Deliver an inbound cherry host event (`cherry.host_event`) to the cone as a
+   * `'cherry'` lick. The sync manager resolves the owning follower's runtime id
+   * and hands it off; the callback owns reaching the LickManager (which lives in
+   * the kernel worker — standalone bridges page→worker via `OffscreenClient`,
+   * the extension calls the in-process orchestrator). Optional — when omitted,
+   * host events are dropped (no cone-side delivery).
+   */
+  onCherryHostEvent?: (cherryRuntimeId: string | undefined, name: string, detail?: unknown) => void;
+  /**
+   * Invoked from `cleanupRemoteTransports` (follower disconnect) with the
+   * runtimeId whose page-side RemoteCDPTransports were just disconnected.
+   * The standalone page wires this to the remote-CDP bridge so its
+   * worker-facing session map drops matching sessions in sync. See #848.
+   */
+  onRemoteTransportsCleaned?: (runtimeId: string) => void;
 }
 
 /** Derived float type from the runtime string (e.g. 'slicc-standalone' → 'standalone'). */
-export type FloatType = 'standalone' | 'extension' | 'electron' | 'unknown';
+export type FloatType = 'standalone' | 'extension' | 'electron' | 'ios' | 'unknown';
 
 /** Derive a FloatType from the follower's runtime string. */
 function deriveFloatType(runtime?: string): FloatType {
   if (!runtime) return 'unknown';
+  if (runtime.includes('ios')) return 'ios';
   if (runtime.includes('standalone')) return 'standalone';
   if (runtime.includes('extension')) return 'extension';
   if (runtime.includes('electron')) return 'electron';
   return 'unknown';
+}
+
+/** Human-readable origin label for a forwarded lick, for the agent. */
+export function labelForFollower(floatType: FloatType, runtime?: string): string {
+  switch (floatType) {
+    case 'extension':
+      return 'extension follower';
+    case 'standalone':
+      return 'standalone follower';
+    case 'electron':
+      return 'Electron follower';
+    case 'ios':
+      return 'iOS follower';
+    default:
+      return runtime ? `follower (${runtime})` : 'follower';
+  }
+}
+
+/**
+ * True when a target is a cooperative cherry host page rather than a real
+ * browser page. Cherry targets only lend the capabilities they advertise, so
+ * teleport routing must treat them specially (see `selectTeleportPool`).
+ */
+export function isCherryTarget(t: Pick<RemoteTargetInfo, 'kind'>): boolean {
+  return t.kind === 'cherry';
+}
+
+/**
+ * Filter a list of advertised targets down to those eligible for a teleport.
+ * Real browser targets always qualify. A cherry host page is included for a
+ * network-requiring teleport (`requireNetwork: true`) only when it explicitly
+ * advertises `capabilities.network === true` — honoring the field the protocol
+ * doc on `RemoteTargetInfo.capabilities` says "gates whether the target may
+ * serve `Network.*` CDP for teleport-pool selection." When the teleport does
+ * not need network, cherry targets are always kept.
+ *
+ * Consumed by `getBestFollowerForTeleport` (auto-select) via
+ * `canRuntimeServeTeleport`. The explicit `teleport --runtime <id>` path is
+ * gated separately in `playwright-command.ts` at arm time, which rejects a
+ * runtime advertising the `CHERRY_RUNTIME_TAG` before any watcher is created.
+ */
+export function selectTeleportPool<
+  T extends Pick<RemoteTargetInfo, 'kind' | 'capabilities'> & { targetId: string },
+>(targets: T[], opts: { requireNetwork: boolean }): T[] {
+  return targets.filter((t) => {
+    if (!isCherryTarget(t)) return true;
+    // Cherry hosts drive a host-page realm over postMessage; they can only
+    // serve a network-requiring teleport if they explicitly advertise it.
+    if (opts.requireNetwork) return t.capabilities?.network === true;
+    return true;
+  });
 }
 
 interface ConnectedFollower {
@@ -602,19 +686,57 @@ export class LeaderSyncManager {
       case 'sprinkle.fetch':
         void this.handleSprinkleFetch(bootstrapId, message.requestId, message.sprinkleName);
         break;
-      case 'sprinkle.lick':
+      case 'sprinkle.lick': {
         log.info('Follower sprinkle lick received', {
           bootstrapId,
           sprinkleName: message.sprinkleName,
         });
+        const follower = this.followers.get(bootstrapId);
+        const originLabel = labelForFollower(follower?.floatType ?? 'unknown', follower?.runtime);
         try {
-          this.options.onSprinkleLick?.(message.sprinkleName, message.body, message.targetScoop);
+          this.options.onSprinkleLick?.(
+            message.sprinkleName,
+            message.body,
+            message.targetScoop,
+            originLabel
+          );
         } catch (err) {
           log.warn('onSprinkleLick handler threw', {
             error: err instanceof Error ? err.message : String(err),
           });
         }
         break;
+      }
+      case 'lick': {
+        const incoming = message.event;
+        if (!incoming || !FORWARDABLE_TO_LEADER.has(incoming.type)) {
+          log.warn('Rejecting malformed or non-forwardable lick from follower', {
+            bootstrapId,
+            type: incoming?.type,
+          });
+          break;
+        }
+        const follower = this.followers.get(bootstrapId);
+        // Strip follower-sent routing — the leader is the sole authority on
+        // origin AND routing. The wire type omits origin fields, and the
+        // stamp below overrides any that a malformed peer sneaks through at
+        // runtime (later keys win over `...rest`). Forwarded licks (navigate)
+        // always target the leader's cone, so a follower `targetScoop` is dropped.
+        const { targetScoop: _droppedTarget, ...rest } = incoming;
+        const stamped: LickEvent = {
+          ...rest,
+          originFollowerId: bootstrapId,
+          originLabel: labelForFollower(follower?.floatType ?? 'unknown', follower?.runtime),
+        };
+        try {
+          this.options.onForwardedLick?.(stamped, bootstrapId);
+        } catch (err) {
+          log.warn('onForwardedLick handler threw', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+        break;
+      }
       case 'targets.advertise': {
         log.info('Follower targets advertised', {
           bootstrapId,
@@ -694,6 +816,10 @@ export class LeaderSyncManager {
       }
       case 'fs.response': {
         this.handleFsResponse(message.requestId, message.response);
+        break;
+      }
+      case 'cherry.host_event': {
+        this.routeCherryHostEvent(bootstrapId, message);
         break;
       }
       case 'ping': {
@@ -819,6 +945,18 @@ export class LeaderSyncManager {
         log.debug('Cleaned up stale remote transport', { key });
       }
     }
+    // Guard the consumer callback: it runs inside `removeFollower` before
+    // the registry/runtime-map cleanup, so a throwing handler would abort
+    // follower teardown and leave a stale entry. Matches the defensive
+    // pattern around `onSprinkleLick` / `onCherryHostEvent`.
+    try {
+      this.options.onRemoteTransportsCleaned?.(runtimeId);
+    } catch (err) {
+      log.warn('onRemoteTransportsCleaned handler threw', {
+        runtimeId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**
@@ -844,9 +982,29 @@ export class LeaderSyncManager {
   }
 
   /**
+   * Whether a runtime can serve a (network-requiring) cookie teleport. A cherry
+   * host can never serve `Network.*`, so it is excluded two ways: the
+   * `CHERRY_RUNTIME_TAG` runtime tag short-circuits even before the follower has
+   * advertised any targets (closing the pre-advertisement window), and once
+   * targets exist they must pass `selectTeleportPool` with `requireNetwork`.
+   * A runtime with no registry entries yet (and a non-cherry tag) is given the
+   * benefit of the doubt — same posture as `canRuntimeOpenTab`.
+   */
+  private canRuntimeServeTeleport(runtimeId: string, follower: ConnectedFollower): boolean {
+    if (follower.runtime === CHERRY_RUNTIME_TAG) return false;
+    // `getEntries()` clears the registry dirty flag — benign here for the same
+    // reason documented on `canRuntimeOpenTab`: advertise paths broadcast
+    // synchronously before any teleport selection can interleave.
+    const entries = this.registry.getEntries().filter((e) => e.runtimeId === runtimeId);
+    if (entries.length === 0) return true;
+    return selectTeleportPool(entries, { requireNetwork: true }).length > 0;
+  }
+
+  /**
    * Find the best follower for a cookie teleport.
    * Prefers standalone floats, then sorts by most recent activity.
-   * Returns null if no alive followers exist.
+   * Excludes cherry hosts and any runtime that cannot serve `Network.*`.
+   * Returns null if no eligible followers exist.
    */
   getBestFollowerForTeleport(): {
     runtimeId: string;
@@ -862,6 +1020,7 @@ export class LeaderSyncManager {
     for (const [runtimeId, bootstrapId] of this.runtimeToBootstrap) {
       const follower = this.followers.get(bootstrapId);
       if (!follower) continue;
+      if (!this.canRuntimeServeTeleport(runtimeId, follower)) continue;
       candidates.push({
         runtimeId,
         bootstrapId,
@@ -1035,9 +1194,86 @@ export class LeaderSyncManager {
     }
   }
 
+  /** Resolve the advertised runtimeId for a follower's bootstrapId, if known. */
+  private runtimeIdForBootstrap(bootstrapId: string): string | undefined {
+    for (const [runtimeId, bId] of this.runtimeToBootstrap) {
+      if (bId === bootstrapId) return runtimeId;
+    }
+    return undefined;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Cherry event routing
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Route an inbound `cherry.host_event` (a named event emitted by a cherry
+   * host page on a follower) to the cone as a `'cherry'` lick. The host origin
+   * is not carried at this protocol layer, so it is left undefined.
+   */
+  private routeCherryHostEvent(bootstrapId: string, message: CherryHostEventMessage): void {
+    if (!isCherryHostEventMessage(message)) return;
+    const onCherryHostEvent = this.options.onCherryHostEvent;
+    if (!onCherryHostEvent) {
+      log.debug('cherry.host_event received but no onCherryHostEvent wired', {
+        bootstrapId,
+        name: message.name,
+      });
+      return;
+    }
+    const cherryRuntimeId = this.runtimeIdForBootstrap(bootstrapId);
+    try {
+      onCherryHostEvent(cherryRuntimeId, message.name, message.detail);
+    } catch (err) {
+      log.warn('Failed to route cherry.host_event to cone', {
+        bootstrapId,
+        name: message.name,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Send a `cherry.slicc_event` (cone → host page) to the follower that owns
+   * `targetId`. The composite `targetId` is `{runtimeId}:{localTargetId}`; the
+   * leader resolves the owning runtime and forwards the named event with its
+   * optional detail. Returns true if the message was sent, false if the owning
+   * follower is not connected.
+   */
+  emitCherrySliccEvent(targetId: string, name: string, detail?: unknown): boolean {
+    const sep = targetId.indexOf(':');
+    const targetRuntimeId = sep >= 0 ? targetId.slice(0, sep) : targetId;
+    const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
+    const targetFollower = targetBootstrapId ? this.followers.get(targetBootstrapId) : undefined;
+    if (!targetFollower) {
+      log.warn('emitCherrySliccEvent: owning follower not connected', { targetId, name });
+      return false;
+    }
+    return targetFollower.sync.send({ type: 'cherry.slicc_event', targetId, name, detail });
+  }
+
   // ---------------------------------------------------------------------------
   // Tab open routing
   // ---------------------------------------------------------------------------
+
+  /**
+   * Whether a runtime can honor a generic `tab.open`. A runtime whose only
+   * advertised targets are cherry host pages cannot — a cooperative host page
+   * is not a tab spawner and the tray `capabilities` shape (navigate/network/
+   * screenshot) carries no `openUrl` capability, so we refuse rather than emit
+   * a `tab.open` the cherry host can't honor. Runtimes with at least one real
+   * browser target (or no registry entry yet) are allowed through unchanged.
+   */
+  private canRuntimeOpenTab(targetRuntimeId: string): boolean {
+    // `getEntries()` is a read that ALSO clears the registry's dirty flag.
+    // That is benign here: the registry mutation paths (`setTargets` via
+    // `targets.advertise` / `setLocalTargets`) broadcast in the same
+    // synchronous turn, before any `tab.open` can interleave — so a `tab.open`
+    // gating read can never swallow a not-yet-broadcast change.
+    const entries = this.registry.getEntries().filter((e) => e.runtimeId === targetRuntimeId);
+    if (entries.length === 0) return true;
+    return entries.some((e) => !isCherryTarget(e));
+  }
 
   /**
    * Open a tab on a remote runtime from the leader's own code.
@@ -1049,6 +1285,12 @@ export class LeaderSyncManager {
 
     if (!targetFollower) {
       return Promise.reject(new Error(`Target runtime "${targetRuntimeId}" not connected`));
+    }
+
+    if (!this.canRuntimeOpenTab(targetRuntimeId)) {
+      return Promise.reject(
+        new Error(`Target runtime "${targetRuntimeId}" is a cherry host that cannot open tabs`)
+      );
     }
 
     const requestId = `tab-open-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1112,6 +1354,17 @@ export class LeaderSyncManager {
           type: 'tab.open.error',
           requestId,
           error: `Target runtime "${targetRuntimeId}" not connected`,
+        });
+      }
+      return;
+    }
+
+    if (!this.canRuntimeOpenTab(targetRuntimeId)) {
+      if (requester) {
+        requester.sync.send({
+          type: 'tab.open.error',
+          requestId,
+          error: `Target runtime "${targetRuntimeId}" is a cherry host that cannot open tabs`,
         });
       }
       return;

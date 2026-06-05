@@ -1,0 +1,81 @@
+name: Coverage Ratchet
+
+on:
+  schedule:
+    - cron: '15 4 * * *' # nightly at 04:15 UTC (offset from other nightly jobs)
+  workflow_dispatch:
+
+concurrency:
+  group: coverage-ratchet-main
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  ratchet:
+    # macos so the Swift packages can be measured alongside the TS ones.
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          ssh-key: ${{ secrets.DEPLOY_KEY }}
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # Dependencies the Swift coverage builds need (mirrors ci.yml).
+      - name: Build webapp (Swift launcher dependency)
+        run: npm run build -w @slicc/webapp
+      - name: Build swift-server (Swift launcher dependency)
+        run: cd packages/swift-server && swift build -c release
+
+      - name: Run coverage ratchet
+        id: ratchet
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node packages/dev-tools/tools/coverage-ratchet.mjs --github-output
+
+      - name: Commit raised floors
+        if: steps.ratchet.outputs.changed == 'true'
+        env:
+          RATCHET_BRANCH: automation/coverage-ratchet
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -C "$RATCHET_BRANCH"
+          git add coverage-thresholds.json
+          git commit -m "chore(coverage): ratchet floors toward measured coverage"
+          git push --force-with-lease origin "$RATCHET_BRANCH"
+
+      - name: Create or update ratchet PR
+        if: steps.ratchet.outputs.changed == 'true'
+        env:
+          # BOT_PAT (not GITHUB_TOKEN) so the resulting pull_request /
+          # merge_group events trigger CI — same anti-recursion constraint
+          # documented in planning-artifact-cleanup.yml.
+          GH_TOKEN: ${{ secrets.BOT_PAT }}
+          RATCHET_BRANCH: automation/coverage-ratchet
+        run: |
+          set -euo pipefail
+          PR_URL=$(gh pr list \
+            --base main \
+            --head "$RATCHET_BRANCH" \
+            --state open \
+            --json url \
+            --jq '.[0].url // ""')
+          if [ -z "$PR_URL" ]; then
+            gh pr create \
+              --base main \
+              --head "$RATCHET_BRANCH" \
+              --title "chore(coverage): ratchet coverage floors" \
+              --body "Automated nightly bump of \`coverage-thresholds.json\` toward measured coverage. Floors only ever rise (>=1pp steps, <1% headroom); no PR is opened when nothing changed."
+          fi

@@ -1,17 +1,17 @@
 /**
  * Adapter exposing a {@link VirtualFS} as a `PromiseFsClient` for isomorphic-git.
  *
- * Why this exists: `VirtualFS.getLightningFS()` returns the raw LightningFS
- * instance, which only sees IndexedDB. Mounted directories (File System Access
- * API) are transparently routed through `VirtualFS` — so isomorphic-git needs
- * to go through `VirtualFS` to see `.git/HEAD` on mounted paths.
+ * Every method routes through the public `VirtualFS` surface — so
+ * mounted directories (File System Access API, S3, DA) are visible to
+ * isomorphic-git the same way as the local OPFS/InMemory tree, and the
+ * watcher / mount-index notifications fire normally.
  *
- * For non-mounted paths we still read mode/size/mtime directly from the
- * underlying LightningFS to keep behavior byte-identical to the pre-adapter
- * code path (notably `statusMatrix`'s filemode comparison).
+ * This adapter previously reached past `VirtualFS` for non-mounted
+ * paths via the (now-removed) `getLightningFS()` escape hatch. The
+ * fast-path shortcut is gone; `VirtualFS` itself owns symlink
+ * resolution and watcher notification for every op.
  */
 
-import type FS from '@isomorphic-git/lightning-fs';
 import type { VirtualFS } from '../fs/index.js';
 import { FsError } from '../fs/types.js';
 
@@ -78,119 +78,68 @@ function wantsUtf8(options: unknown): boolean {
 
 /** Build an isomorphic-git-compatible PromiseFsClient over a VirtualFS. */
 export function createIsomorphicGitFs(vfs: VirtualFS): PromiseFsClient {
-  const lfs: FS.PromisifiedFS = vfs.getLightningFS();
-
-  const inMount = (path: string): boolean => vfs.isPathUnderMount(path);
-
   const promises: IsoGitFsPromises = {
     async readFile(path, options) {
-      if (inMount(path)) {
-        const content = await vfs.readFile(
-          path,
-          wantsUtf8(options) ? { encoding: 'utf-8' } : { encoding: 'binary' }
-        );
-        return content;
-      }
-      if (wantsUtf8(options)) {
-        return (await lfs.readFile(path, { encoding: 'utf8' })) as string;
-      }
-      return (await lfs.readFile(path)) as Uint8Array;
+      const content = await vfs.readFile(
+        path,
+        wantsUtf8(options) ? { encoding: 'utf-8' } : { encoding: 'binary' }
+      );
+      return content;
     },
 
     async writeFile(path, data, _options) {
-      if (inMount(path)) {
-        await vfs.writeFile(path, data);
-        return;
-      }
-      await lfs.writeFile(path, data);
+      await vfs.writeFile(path, data);
     },
 
     async unlink(path) {
-      if (inMount(path)) {
-        await vfs.rm(path);
-        return;
-      }
-      await lfs.unlink(path);
+      await vfs.rm(path);
     },
 
     async readdir(path) {
-      if (inMount(path)) {
-        const entries = await vfs.readDir(path);
-        return entries.map((e) => e.name);
-      }
-      return (await lfs.readdir(path)) as string[];
+      const entries = await vfs.readDir(path);
+      return entries.map((e) => e.name);
     },
 
     async mkdir(path, options) {
-      const opts = (options ?? undefined) as { recursive?: boolean; mode?: number } | undefined;
-      if (inMount(path)) {
-        await vfs.mkdir(
-          path,
-          opts?.recursive !== undefined ? { recursive: opts.recursive } : undefined
-        );
-        return;
-      }
-      // LightningFS accepts { mode } (but not recursive). Drop `recursive` so
-      // callers that include it don't break the signature.
-      await lfs.mkdir(path, opts?.mode !== undefined ? { mode: opts.mode } : undefined);
+      const opts = (options ?? undefined) as { recursive?: boolean } | undefined;
+      await vfs.mkdir(
+        path,
+        opts?.recursive !== undefined ? { recursive: opts.recursive } : undefined
+      );
     },
 
     async rmdir(path) {
-      if (inMount(path)) {
-        await vfs.rm(path);
-        return;
-      }
-      await lfs.rmdir(path);
+      await vfs.rm(path);
     },
 
     async stat(path) {
-      if (inMount(path)) {
-        const s = await vfs.stat(path);
-        return toStats(s.type === 'directory' ? 'dir' : 'file', {
-          size: s.size,
-          mtimeMs: s.mtime,
-          ctimeMs: s.ctime,
-        });
-      }
-      const s = await lfs.stat(path);
-      return toStats(s.isDirectory() ? 'dir' : s.isSymbolicLink() ? 'symlink' : 'file', {
-        mode: s.mode,
+      const s = await vfs.stat(path);
+      return toStats(s.type === 'directory' ? 'dir' : 'file', {
         size: s.size,
-        ino: s.ino,
-        mtimeMs: s.mtimeMs,
-        ctimeMs: s.ctimeMs,
+        mtimeMs: s.mtime,
+        ctimeMs: s.ctime,
       });
     },
 
     async lstat(path) {
-      if (inMount(path)) {
-        const s = await vfs.lstat(path);
-        const type: 'file' | 'dir' | 'symlink' =
-          s.type === 'directory' ? 'dir' : s.type === 'symlink' ? 'symlink' : 'file';
-        return toStats(type, { size: s.size, mtimeMs: s.mtime, ctimeMs: s.ctime });
-      }
-      const s = await lfs.lstat(path);
-      return toStats(s.isDirectory() ? 'dir' : s.isSymbolicLink() ? 'symlink' : 'file', {
-        mode: s.mode,
-        size: s.size,
-        ino: s.ino,
-        mtimeMs: s.mtimeMs,
-        ctimeMs: s.ctimeMs,
-      });
+      const s = await vfs.lstat(path);
+      const type: 'file' | 'dir' | 'symlink' =
+        s.type === 'directory' ? 'dir' : s.type === 'symlink' ? 'symlink' : 'file';
+      return toStats(type, { size: s.size, mtimeMs: s.mtime, ctimeMs: s.ctime });
     },
 
     async readlink(path) {
-      if (inMount(path)) {
+      if (vfs.isPathUnderMount(path)) {
         throw new FsError('EINVAL', 'symlinks not supported on mounted filesystems', path);
       }
-      return lfs.readlink(path);
+      return vfs.readlink(path);
     },
 
     async symlink(target, path) {
-      if (inMount(path)) {
+      if (vfs.isPathUnderMount(path)) {
         throw new FsError('EINVAL', 'symlinks not supported on mounted filesystems', path);
       }
-      await lfs.symlink(target, path);
+      await vfs.symlink(target, path);
     },
   };
 

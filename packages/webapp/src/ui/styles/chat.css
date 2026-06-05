@@ -76,24 +76,38 @@
   line-height: 18px;
   letter-spacing: 0;
 }
-.msg--user .msg__content a,
-.msg--user .msg__content a:visited {
-  color: #c8bbff;
-  text-decoration: underline;
-}
-.msg--user .msg__content a:hover {
+.msg.msg--user .msg__content a,
+.msg.msg--user .msg__content a:visited {
   color: #fff;
+  text-decoration: underline;
+  text-decoration-color: rgba(255, 255, 255, 0.6);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
 }
-.msg--user :not(pre) > code {
+.msg.msg--user .msg__content a:hover {
+  color: #fff;
+  text-decoration-color: #fff;
+}
+.msg.msg--user :not(pre) > code {
   background: rgba(255, 255, 255, 0.18);
   color: #fff;
 }
-.msg--user pre {
+.msg.msg--user pre {
   background: rgba(0, 0, 0, 0.25);
   border-color: rgba(255, 255, 255, 0.1);
 }
-.msg--user pre code {
+.msg.msg--user pre code {
   color: #e8e0ff;
+}
+.msg.msg--user .msg__content th {
+  background: rgba(0, 0, 0, 0.2);
+}
+.msg.msg--user .msg__content th,
+.msg.msg--user .msg__content td {
+  border-color: rgba(255, 255, 255, 0.25);
+}
+.msg.msg--user .msg__content blockquote {
+  color: rgba(255, 255, 255, 0.8);
 }
 .msg--user .msg__attachments {
   margin-bottom: 8px;

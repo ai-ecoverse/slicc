@@ -20,6 +20,16 @@ export interface KernelTransport<In, Out> {
   /** Subscribe to inbound messages. Returns an unsubscribe function. */
   onMessage(handler: (message: In) => void): () => void;
 
-  /** Send an outbound message. Fire-and-forget; transports queue or drop. */
-  send(message: Out): void;
+  /**
+   * Send an outbound message. Fire-and-forget; transports queue or drop.
+   *
+   * `transfer` is an optional list of `Transferable` objects (typically
+   * `ArrayBuffer`s underlying a `Uint8Array`) that should be moved across
+   * the wire instead of copied. Only the `MessageChannel` adapter honors
+   * the list — chrome.runtime serialises via structured clone with no
+   * transfer-list support, so the extension adapter silently ignores it
+   * and the payload is copied. Callers that pass `transfer` MUST treat
+   * the backing buffers as detached after the call.
+   */
+  send(message: Out, transfer?: Transferable[]): void;
 }

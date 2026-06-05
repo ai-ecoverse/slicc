@@ -360,3 +360,72 @@ describe('github.ts onOAuthLogin in worker context (no window)', () => {
     expect(auth.searchParams.get('redirect_uri')).toBe('http://localhost:5711/auth/callback');
   });
 });
+
+describe('resolveGithubOAuthRedirect (per-runtime redirect_uri + state)', () => {
+  const base = {
+    workerBaseUrl: 'https://www.sliccy.ai',
+    runtimeWorkerBaseUrl: null as string | null,
+    extensionId: '',
+    nonce: 'n1',
+  };
+
+  it('extension → worker relay + source:extension', async () => {
+    const { resolveGithubOAuthRedirect } = await import('../../providers/github.js');
+    const r = resolveGithubOAuthRedirect({
+      ...base,
+      isExtension: true,
+      isConnectMode: false,
+      pageOrigin: null,
+      pageHref: null,
+      extensionId: 'a'.repeat(32),
+    });
+    expect(r.redirectUri).toBe('https://www.sliccy.ai/auth/callback');
+    expect(r.state).toMatchObject({ source: 'extension', path: '/github' });
+  });
+
+  it('connect mode on localhost → registered relay + source:local with the page port', async () => {
+    const { resolveGithubOAuthRedirect } = await import('../../providers/github.js');
+    const r = resolveGithubOAuthRedirect({
+      ...base,
+      isExtension: false,
+      isConnectMode: true,
+      pageOrigin: 'http://localhost:8790',
+      pageHref: 'http://localhost:8790/?connect=1',
+    });
+    // Routes through the registered relay (NOT the localhost origin), bounces back via port.
+    expect(r.redirectUri).toBe('https://www.sliccy.ai/auth/callback');
+    expect(r.state).toMatchObject({ source: 'local', port: 8790, path: '/auth/callback' });
+  });
+
+  it('connect mode on a deployed origin → registered relay + source:remote with origin', async () => {
+    const { resolveGithubOAuthRedirect } = await import('../../providers/github.js');
+    const r = resolveGithubOAuthRedirect({
+      ...base,
+      isExtension: false,
+      isConnectMode: true,
+      pageOrigin: 'https://www.sliccy.ai',
+      pageHref: 'https://www.sliccy.ai/?connect=1',
+    });
+    expect(r.redirectUri).toBe('https://www.sliccy.ai/auth/callback');
+    expect(r.state).toMatchObject({
+      source: 'remote',
+      origin: 'https://www.sliccy.ai',
+      path: '/auth/callback',
+    });
+  });
+
+  it('standalone CLI → runtimeWorkerBaseUrl relay + port bounce, no source (unchanged)', async () => {
+    const { resolveGithubOAuthRedirect } = await import('../../providers/github.js');
+    const r = resolveGithubOAuthRedirect({
+      ...base,
+      isExtension: false,
+      isConnectMode: false,
+      runtimeWorkerBaseUrl: 'https://www.sliccy.ai',
+      pageOrigin: 'http://localhost:5710',
+      pageHref: 'http://localhost:5710/',
+    });
+    expect(r.redirectUri).toBe('https://www.sliccy.ai/auth/callback');
+    expect(r.state).toMatchObject({ port: 5710, path: '/auth/callback' });
+    expect(r.state.source).toBeUndefined();
+  });
+});

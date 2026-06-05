@@ -434,6 +434,28 @@ describe('OffscreenClient', () => {
     expect((events[2] as any).type).toBe('tool_result');
     expect((events[2] as any).result).toBe('file1.txt\nfile2.txt');
   });
+
+  it('sendSetFollowerForwarding posts the toggle to the worker', () => {
+    client.sendSetFollowerForwarding(true);
+    const env = sentMessages.at(-1) as { source: string; payload: any };
+    expect(env.source).toBe('panel');
+    expect(env.payload).toEqual({ type: 'set-follower-forwarding', enabled: true });
+  });
+
+  it('sendForwardedLick posts the event to the worker', () => {
+    const event = { type: 'navigate', navigateUrl: 'https://x', timestamp: 't', body: {} };
+    client.sendForwardedLick(event as any);
+    const env = sentMessages.at(-1) as { source: string; payload: any };
+    expect(env.payload).toEqual({ type: 'inject-forwarded-lick', event });
+  });
+
+  it('dispatches inbound forward-lick to the registered handler', () => {
+    const handler = vi.fn();
+    client.setForwardLickHandler(handler);
+    const event = { type: 'navigate', navigateUrl: 'https://x', timestamp: 't', body: {} };
+    simulateMessage('offscreen', { type: 'forward-lick', event });
+    expect(handler).toHaveBeenCalledWith(event);
+  });
 });
 
 describe('OffscreenClient.setSelectedScoopJid + onScoopSelected', () => {
@@ -513,5 +535,65 @@ describe('OffscreenClient.setSelectedScoopJid + onScoopSelected', () => {
     localClient.onScoopSelected((jid) => calls.push(jid));
     localClient.setSelectedScoopJid('scoop-2');
     expect(calls).toEqual(['scoop-2']);
+  });
+});
+
+describe('OffscreenClient.getScoopTranscript', () => {
+  let client: InstanceType<typeof OffscreenClient>;
+  const callbacks = {
+    onStatusChange: vi.fn(),
+    onScoopCreated: vi.fn(),
+    onScoopListUpdate: vi.fn(),
+    onIncomingMessage: vi.fn(),
+  };
+
+  beforeEach(() => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+    client = new OffscreenClient(callbacks);
+  });
+
+  it('sends request-scoop-transcript and resolves on matching reply', async () => {
+    const pending = client.getScoopTranscript('cone_1');
+    expect(sentMessages.length).toBe(1);
+    const envelope = sentMessages[0] as { source: string; payload: any };
+    expect(envelope.source).toBe('panel');
+    expect(envelope.payload.type).toBe('request-scoop-transcript');
+    expect(envelope.payload.scoopJid).toBe('cone_1');
+    const requestId = envelope.payload.requestId;
+    expect(typeof requestId).toBe('string');
+
+    simulateMessage('offscreen', {
+      type: 'scoop-transcript',
+      requestId,
+      scoopJid: 'cone_1',
+      transcript: 'user: hi\nassistant: hello',
+    });
+
+    await expect(pending).resolves.toBe('user: hi\nassistant: hello');
+  });
+
+  it('ignores replies for unrelated requestIds', async () => {
+    const pending = client.getScoopTranscript('cone_1');
+    const envelope = sentMessages[0] as { source: string; payload: any };
+    const requestId = envelope.payload.requestId;
+
+    // Unrelated reply — must not resolve the pending promise.
+    simulateMessage('offscreen', {
+      type: 'scoop-transcript',
+      requestId: 'tr-other',
+      scoopJid: 'cone_1',
+      transcript: 'spurious',
+    });
+
+    // Correct reply
+    simulateMessage('offscreen', {
+      type: 'scoop-transcript',
+      requestId,
+      scoopJid: 'cone_1',
+      transcript: 'real',
+    });
+    await expect(pending).resolves.toBe('real');
   });
 });

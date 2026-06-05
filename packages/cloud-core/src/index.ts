@@ -1,6 +1,12 @@
 // Public re-exports for the @slicc/cloud-core package.
 // Populated by subsequent tasks as we move code in.
 
+// Re-export the side-effect-free cone-config contract from the root too, so
+// Node/worker consumers (which go through node-server's inline-workspaces
+// packaging that only rewrites the bare '@slicc/cloud-core' specifier) can
+// import it from the root. The browser webapp must still import the
+// './cone-config' subpath to avoid pulling e2b into its bundle.
+export * from './cone-config/index.js';
 export * from './errors.js';
 export type { KillConeDeps, KillConeResult } from './operations/kill.js';
 export { killCone } from './operations/kill.js';

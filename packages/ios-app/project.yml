@@ -16,7 +16,13 @@ targets:
     type: application
     supportedDestinations: [iOS]
     sources:
-      - SliccFollower
+      - path: SliccFollower
+        # Test sources (XCTest) must not compile into the app target — there is
+        # no XCTest test target yet (see packages/ios-app/CLAUDE.md), and the
+        # app target globs all of SliccFollower/. Excluding Tests/ keeps
+        # `xcodebuild build` green; the test file stays for a future test target.
+        excludes:
+          - Tests
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.follower

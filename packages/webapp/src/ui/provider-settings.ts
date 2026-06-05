@@ -416,24 +416,18 @@ export function getProviderModels(providerId: string): Model<Api>[] {
         const apiType = pm.api === 'openai' ? 'openai' : 'anthropic';
         const customApi = `${providerId}-${apiType}` as Api;
         const base = modelMap.get(pm.id);
-        const model: Record<string, any> = base
-          ? { ...base, api: customApi, provider: providerId }
-          : {
-              id: pm.id,
-              name: pm.name ?? pm.id,
-              provider: providerId,
-              api: customApi,
-              baseUrl: '',
-              contextWindow: 200000,
-              maxTokens: 16384,
-              input: ['text', 'image'],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              inputCost: 0,
-              outputCost: 0,
-              cacheReadCost: 0,
-              cacheWriteCost: 0,
-              reasoning: true,
-            };
+        let model: Record<string, any>;
+        if (base) {
+          model = { ...base, api: customApi, provider: providerId };
+        } else {
+          // Single source for the synthesized-model shape (api is known here
+          // from proxy metadata, so pass it explicitly rather than inferring).
+          model = buildProviderRoutedModel(providerId, pm.id, '', customApi) as unknown as Record<
+            string,
+            any
+          >;
+          if (pm.name) model.name = pm.name; // proxy display name; else keep the id
+        }
 
         // Apply modelOverrides (layer 2) then getModelIds metadata (layer 3).
         // pm is a superset of ModelMetadata (adds id/name) — applyModelMetadata
@@ -765,30 +759,42 @@ export function addAccount(
   saveAccounts(accounts);
 }
 
-export async function removeAccount(providerId: string): Promise<void> {
-  // For OAuth providers, run the full logout sequence first (token revocation,
-  // IdP session clear, and replica removal). removeAccount then finishes by
-  // deleting the account entry entirely.
-  const accountToRemove = getAccounts().find((a) => a.providerId === providerId);
-  const configToRemove = getProviderConfig(providerId);
-  if (accountToRemove && configToRemove?.isOAuth) {
-    await logoutOAuthAccount(providerId);
-  }
-
-  // Clear the replica BEFORE wiping the local Account
+/**
+ * Remove an OAuth token's replica (the `oauth.<id>.token` + `_DOMAINS` pair).
+ *
+ * #847 (remove-path twin): `removeAccount`/`logoutOAuthAccount` are reachable
+ * from the offscreen shell (`mcp delete`, provider logout), which has
+ * `chrome.runtime` but NOT `chrome.storage` — a direct
+ * `chrome.storage.local.remove` throws there. Route the delete through the SW
+ * `secrets.delete` message (whose `deleteSecret` removes both keys), mirroring
+ * the write path. CLI deletes the node-server replica. Fail-open with a logged
+ * breadcrumb (the local Account is wiped by the caller regardless).
+ */
+async function deleteOAuthReplica(providerId: string): Promise<void> {
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
   try {
     if (isExtension) {
-      await chrome.storage.local.remove([
-        `oauth.${providerId}.token`,
-        `oauth.${providerId}.token_DOMAINS`,
-      ]);
+      const resp = await new Promise<{ ok?: boolean; error?: string }>((resolve) => {
+        chrome.runtime.sendMessage(
+          { type: 'secrets.delete', name: `oauth.${providerId}.token` },
+          (r: unknown) => {
+            if (chrome.runtime.lastError) {
+              log.error('SW secrets.delete transport failed', {
+                providerId,
+                error: chrome.runtime.lastError.message,
+              });
+            }
+            resolve((r as { ok?: boolean; error?: string } | undefined) ?? {});
+          }
+        );
+      });
+      if (resp.error) {
+        log.error('SW secrets.delete returned error', { providerId, error: resp.error });
+      }
     } else {
       const r = await fetch(`/api/secrets/oauth/${providerId}`, { method: 'DELETE' });
-      // 404 is benign (already deleted). Anything else non-2xx means the
-      // server still has the OAuth token in its OauthSecretStore — surface
-      // for operational visibility so the user knows local clear ≠ server
-      // clear in that path.
+      // 404 is benign (already deleted). Anything else non-2xx means the server
+      // still has the OAuth token — surface so local clear ≠ server clear is visible.
       if (!r.ok && r.status !== 404) {
         log.warn('OAuth replica DELETE non-ok', { providerId, status: r.status });
       }
@@ -800,6 +806,21 @@ export async function removeAccount(providerId: string): Promise<void> {
       error: err instanceof Error ? err.message : String(err),
     });
   }
+}
+
+export async function removeAccount(providerId: string): Promise<void> {
+  // For OAuth providers, run the full logout sequence first (token revocation,
+  // IdP session clear, and replica removal). removeAccount then finishes by
+  // deleting the account entry entirely.
+  const accountToRemove = getAccounts().find((a) => a.providerId === providerId);
+  const configToRemove = getProviderConfig(providerId);
+  if (accountToRemove && configToRemove?.isOAuth) {
+    await logoutOAuthAccount(providerId);
+  }
+
+  // Clear the replica BEFORE wiping the local Account (SW-proxied in the
+  // extension so it works from the offscreen shell — see deleteOAuthReplica).
+  await deleteOAuthReplica(providerId);
 
   // Use the worker-safe async variant so `mcp delete` (which runs in
   // the kernel worker) writes through panel-rpc to real page
@@ -875,26 +896,96 @@ export async function logoutOAuthAccount(providerId: string): Promise<void> {
   });
   await saveAccountsAsync(updated);
 
-  // 4. Remove token replica from node-server / extension storage
-  const isExt = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
-  try {
-    if (isExt) {
-      await chrome.storage.local.remove([
-        `oauth.${providerId}.token`,
-        `oauth.${providerId}.token_DOMAINS`,
-      ]);
-    } else {
-      const r = await fetch(`/api/secrets/oauth/${providerId}`, { method: 'DELETE' });
-      if (!r.ok && r.status !== 404) {
-        log.warn('OAuth replica DELETE non-ok during logout', { providerId, status: r.status });
-      }
-    }
-  } catch (err) {
-    log.error('OAuth replica removal failed during logout', {
-      providerId,
-      isExtension: isExt,
-      error: err instanceof Error ? err.message : String(err),
+  // 4. Remove token replica from node-server / extension storage (SW-proxied
+  //    in the extension so it works from the offscreen shell — see #847).
+  await deleteOAuthReplica(providerId);
+}
+
+/**
+ * Run the service-worker `secrets.mask-oauth-token` round-trip with a small
+ * bounded retry. Opening a fresh side panel can cold-start the SW whose secrets
+ * pipeline isn't warm yet, so the first round-trip (issued from the offscreen
+ * shell, where `oauth-token` runs) can come back with no `maskedValue`
+ * (issue #847). Retry a few times with a short backoff. Defense-in-depth: the
+ * primary #847 cause was the offscreen `chrome.storage` gap, fixed by moving the
+ * write into the SW (see `persistOAuthMaskViaServiceWorker`).
+ *
+ * @param send Issues one round-trip, resolving `{ maskedValue?, error? }`.
+ * @param opts `attempts` (floored to >=1, default 3), `delayMs` (default 150),
+ *   and an injectable `sleep`; no sleep after the final attempt.
+ * @returns `{ maskedValue }` on success, else `{ lastError }` carrying the last
+ *   SW-reported error (so the caller can log a non-empty give-up reason; may be
+ *   undefined for a genuinely empty/cold reply). Never throws. Pure + injectable.
+ */
+export async function maskOAuthTokenWithRetry(
+  send: () => Promise<{ maskedValue?: string; error?: string }>,
+  opts: { attempts?: number; delayMs?: number; sleep?: (ms: number) => Promise<void> } = {}
+): Promise<{ maskedValue?: string; lastError?: string }> {
+  const attempts = Math.max(1, opts.attempts ?? 3);
+  const delayMs = opts.delayMs ?? 150;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  let lastError: string | undefined;
+  for (let i = 0; i < attempts; i++) {
+    const resp = await send();
+    if (resp.maskedValue) return { maskedValue: resp.maskedValue };
+    if (resp.error) lastError = resp.error;
+    if (i < attempts - 1) await sleep(delayMs);
+  }
+  return { lastError };
+}
+
+/**
+ * Register an OAuth token's masked replica via the service worker and persist
+ * the masked value on the account.
+ *
+ * #847: `saveOAuthAccount` is reachable from the offscreen `oauth-token` shell
+ * (which has `chrome.runtime` but NOT `chrome.storage`) as well as the page-side
+ * login button (which does have `chrome.storage`). Routing the write through the
+ * SW — which owns `chrome.storage` — is the single path that works from BOTH, so
+ * the token + domains travel IN the SW message and the SW does the write. The
+ * remove path does the same via `deleteOAuthReplica`. Returns (after a
+ * `log.error` breadcrumb with the SW reason) if masking never succeeds, and
+ * no-ops if the account row is gone. Pure + injectable; unit-testable sans `chrome`.
+ */
+export async function persistOAuthMaskViaServiceWorker(
+  opts: { providerId: string; accessToken: string; domains: string[] },
+  deps: {
+    sendMaskRequest: (payload: {
+      providerId: string;
+      accessToken: string;
+      domains: string;
+    }) => Promise<{ maskedValue?: string; error?: string }>;
+    getAccounts: () => Account[];
+    saveAccounts: (accounts: Account[]) => Promise<void>;
+  },
+  maskOpts?: { attempts?: number; delayMs?: number; sleep?: (ms: number) => Promise<void> }
+): Promise<void> {
+  const payload = {
+    providerId: opts.providerId,
+    accessToken: opts.accessToken,
+    domains: opts.domains.join(','),
+  };
+  const { maskedValue, lastError } = await maskOAuthTokenWithRetry(
+    () => deps.sendMaskRequest(payload),
+    maskOpts
+  );
+  if (!maskedValue) {
+    // Don't fail silently: the account stays unmasked and `oauth-token` will
+    // report "no masked value". log.warn is dropped at the prod ERROR level, so
+    // this give-up breadcrumb must be log.error to be visible at all (#847).
+    // Carry the SW reason so the operator can tell a cold/empty reply apart from
+    // a write failure or "entry missing after write" pipeline fault.
+    log.error('OAuth mask give-up: no masked value after retries', {
+      providerId: opts.providerId,
+      reason: lastError ?? 'no error reported (cold SW or empty reply)',
     });
+    return;
+  }
+  const accounts = deps.getAccounts();
+  const acct = accounts.find((a) => a.providerId === opts.providerId);
+  if (acct) {
+    acct.maskedValue = maskedValue;
+    await deps.saveAccounts(accounts);
   }
 }
 
@@ -926,7 +1017,8 @@ export async function saveOAuthAccount(opts: {
   // worker writes through `panel-rpc` to real page localStorage.
   await saveAccountsAsync(accounts);
 
-  // Sync to replica (CLI: node-server /api/secrets/oauth-update; Extension: SW via chrome.storage.local + runtime.sendMessage)
+  // Sync to replica (CLI: node-server /api/secrets/oauth-update; Extension: SW
+  // message — the SW owns the chrome.storage write, see persistOAuthMaskViaServiceWorker)
   const cfg = getProviderConfig(opts.providerId);
   const defaults = cfg?.oauthTokenDomains ?? [];
   const extras = getExtraOAuthDomains(opts.providerId);
@@ -944,14 +1036,20 @@ export async function saveOAuthAccount(opts: {
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
   try {
     if (isExtension) {
-      await chrome.storage.local.set({
-        [`oauth.${opts.providerId}.token`]: opts.accessToken,
-        [`oauth.${opts.providerId}.token_DOMAINS`]: domains.join(','),
-      });
-      const resp = await new Promise<{ maskedValue?: string; error?: string }>((resolve) => {
-        chrome.runtime.sendMessage(
-          { type: 'secrets.mask-oauth-token', providerId: opts.providerId },
-          (r: any) => {
+      // #847: `oauth-token` runs in the offscreen document, which has
+      // `chrome.runtime` but NOT `chrome.storage` — a direct
+      // `chrome.storage.local.set` here throws "Cannot read properties of
+      // undefined (reading 'local')", the catch swallows it, and the account is
+      // left unmasked. Send the token + domains IN the message so the service
+      // worker (which owns `chrome.storage`) writes them, then masks. The retry
+      // also covers a genuinely cold SW that isn't ready on the first round-trip.
+      const sendMaskRequest = (payload: {
+        providerId: string;
+        accessToken: string;
+        domains: string;
+      }) =>
+        new Promise<{ maskedValue?: string; error?: string }>((resolve) => {
+          chrome.runtime.sendMessage({ type: 'secrets.mask-oauth-token', ...payload }, (r: any) => {
             // Chrome sets `lastError` AND invokes the callback with
             // `undefined` when the SW is unreachable / message port closed /
             // listener crashed. Without explicit handling the empty
@@ -962,29 +1060,24 @@ export async function saveOAuthAccount(opts: {
                 error: chrome.runtime.lastError.message,
               });
             }
+            // The SW handler returns `{ maskedValue: undefined, error: '<msg>' }`
+            // on storage-write / pipeline-build failure (see service-worker.ts
+            // secrets.mask-oauth-token catch). Surface that — matching the CLI
+            // branch's "OAuth replica POST non-ok" logging.
+            if (r?.error) {
+              log.warn('SW mask-oauth-token returned error', {
+                providerId: opts.providerId,
+                error: r.error,
+              });
+            }
             resolve(r ?? {});
-          }
-        );
-      });
-      // The SW handler returns `{ maskedValue: undefined, error: '<msg>' }`
-      // on pipeline-build failure (see service-worker.ts secrets.mask-oauth-token
-      // catch). Surface that — matching the CLI branch's "OAuth replica POST
-      // non-ok" logging — so a failure isn't invisible from the page side.
-      if (resp.error) {
-        log.warn('SW mask-oauth-token returned error', {
-          providerId: opts.providerId,
-          error: resp.error,
+          });
         });
-      }
-      if (resp.maskedValue) {
-        const accounts = getAccounts();
-        const acct = accounts.find((a) => a.providerId === opts.providerId);
-        if (acct) {
-          acct.maskedValue = resp.maskedValue;
-          await saveAccountsAsync(accounts);
-        }
-      }
-    } else {
+      await persistOAuthMaskViaServiceWorker(
+        { providerId: opts.providerId, accessToken: opts.accessToken, domains },
+        { sendMaskRequest, getAccounts, saveAccounts: saveAccountsAsync }
+      );
+    } else if (!(globalThis as Record<string, unknown>).__slicc_connect_mode) {
       const r = await fetch('/api/secrets/oauth-update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1213,6 +1306,51 @@ export async function clearAllSettings(): Promise<void> {
 }
 
 /**
+ * Cold-cache heuristic for the proxy API family of a model id pi-ai's registry
+ * doesn't know. The real `api` comes from the provider's model metadata once
+ * the list is fetched; until then we guess from the id so an OpenAI-flavored
+ * model routes through the OpenAI API instead of Anthropic (which would fail at
+ * the wire-format level). Conservative — only well-known OpenAI families map to
+ * `openai`; everything else (incl. all current Adobe `claude-*` models) stays
+ * `anthropic`. Self-corrects once the model list warms.
+ */
+function inferProviderApiType(modelId: string): 'anthropic' | 'openai' {
+  return /^(?:gpt[-.]?|o[0-9]|chatgpt)/i.test(modelId) ? 'openai' : 'anthropic';
+}
+
+/**
+ * Build a provider-routed model for a model id that pi-ai's registry does not
+ * know. OAuth/custom providers (Adobe, etc.) proxy arbitrary model ids, so an
+ * unknown id must still route through the provider rather than degrading to a
+ * native Anthropic model — otherwise the provider's token (e.g. an Adobe IMS
+ * token) is sent to api.anthropic.com and rejected with `401 invalid x-api-key`.
+ *
+ * `api` is passed by callers that already know it (e.g. `getProviderModels`,
+ * from proxy metadata); when omitted (the cold-cache resolver path) it's
+ * inferred from the id via `inferProviderApiType`. Context-window/max-tokens
+ * are conservative defaults; the real metadata arrives once the list is fetched.
+ */
+function buildProviderRoutedModel(
+  providerId: string,
+  modelId: string,
+  baseUrl: string | null,
+  api?: Api
+): Model<Api> {
+  return {
+    id: modelId,
+    name: modelId,
+    provider: providerId,
+    api: api ?? (`${providerId}-${inferProviderApiType(modelId)}` as Api),
+    baseUrl: baseUrl ?? '',
+    contextWindow: 200000,
+    maxTokens: 16384,
+    input: ['text', 'image'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    reasoning: true,
+  } as Model<Api>;
+}
+
+/**
  * Resolve a specific model by ID, using the current provider's
  * baseUrl and API routing. Falls back to resolveCurrentModel() if
  * modelId is not provided.
@@ -1222,9 +1360,9 @@ export function resolveModelById(modelId?: string): Model<Api> {
 
   const providerId = getSelectedProvider();
   const baseUrl = getBaseUrlForProvider(providerId);
+  const providerConfig = getProviderConfig(providerId);
 
   try {
-    const providerConfig = getProviderConfig(providerId);
     const effectiveProvider = providerConfig.isOAuth
       ? 'anthropic'
       : providerId === 'azure-ai-foundry'
@@ -1256,7 +1394,26 @@ export function resolveModelById(modelId?: string): Model<Api> {
       resolved = { ...resolved, baseUrl };
     }
     return resolved;
-  } catch {
+  } catch (err) {
+    // Common, benign case: the id is simply unknown to pi-ai. Keep at debug so
+    // an *unexpected* throw (registry/override bug) leaves a breadcrumb instead
+    // of resolving silently.
+    log.debug('resolveModelById: pi-ai lookup miss, using provider fallback', {
+      providerId,
+      modelId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    // Unknown to pi-ai (threw or returned no id). For an OAuth/custom provider,
+    // resolve the REQUESTED id through the provider — prefer its own model list,
+    // else synthesize a provider-routed model. Never fall through to
+    // resolveCurrentModel() (which resolves the *selected* model, not the
+    // requested one) or to a native Anthropic model (which would leak the
+    // OAuth token → 401 invalid x-api-key). See the cloud-cone regression.
+    if (providerConfig.isOAuth) {
+      const providerModel = getProviderModels(providerId).find((m) => m.id === modelId);
+      if (providerModel) return baseUrl ? { ...providerModel, baseUrl } : providerModel;
+      return buildProviderRoutedModel(providerId, modelId, baseUrl);
+    }
     return resolveCurrentModel();
   }
 }
@@ -1312,11 +1469,23 @@ export function resolveCurrentModel(): Model<Api> {
     }
 
     return resolved;
-  } catch {
+  } catch (err) {
+    log.debug('resolveCurrentModel: pi-ai lookup miss, using provider fallback', {
+      providerId,
+      effectiveModelId,
+      error: err instanceof Error ? err.message : String(err),
+    });
     // Model not in pi-ai registry — try provider's custom model list first
     const customModel = models.find((m) => m.id === effectiveModelId);
     if (customModel) {
       return baseUrl ? { ...customModel, baseUrl } : customModel;
+    }
+    // OAuth/custom providers proxy arbitrary model ids — route the unknown id
+    // through the provider rather than returning a native Anthropic model,
+    // which would send the provider's token (e.g. Adobe IMS) to
+    // api.anthropic.com → 401 invalid x-api-key. See the cloud-cone regression.
+    if (providerConfig.isOAuth) {
+      return buildProviderRoutedModel(providerId, effectiveModelId, baseUrl);
     }
     // Last resort fallback
     return getModelDynamic('anthropic', 'claude-sonnet-4-0');
@@ -1367,6 +1536,21 @@ export interface ShowProviderSettingsOptions {
   preferTrayJoin?: boolean;
   /** When set, show a simplified "Join this tray" confirmation with the URL pre-filled (no paste needed). */
   autoJoinUrl?: string;
+  /**
+   * When true, open straight to the add-account form (provider picker + login),
+   * skipping the accounts list and tray-join views. Used by connect mode, where
+   * the dashboard already shows the account list and tray-join is irrelevant.
+   * In this mode the form's secondary button is a plain "Cancel" (close) instead
+   * of "Back"/"Connect to another browser".
+   */
+  startInAddAccount?: boolean;
+  /**
+   * Restrict the provider picker to providers matching this predicate. When set,
+   * it fully controls the dropdown (overriding the default "models only" filter),
+   * so auth-only providers like GitHub can be offered. Used by connect mode to
+   * show only providers that can actually authenticate there.
+   */
+  providerFilter?: (providerId: string) => boolean;
 }
 
 /**
@@ -1386,8 +1570,22 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
     dialog.className = 'dialog';
     dialog.style.cssText = 'max-width: 480px; width: 90vw; padding: 32px;';
 
+    // After an account is added/logged-in: in connect mode the parent surface
+    // owns the list (with its own remove + Done), so close instead of showing
+    // the internal accounts list — which carries tray-join + "Get Started".
+    const finishAccountChange = () => {
+      if (options?.startInAddAccount) {
+        overlay.remove();
+        resolve((localStorage.getItem(ACCOUNTS_KEY) ?? '') !== accountsBefore);
+      } else {
+        renderAccountsList();
+      }
+    };
+
     // Decide initial view: list if accounts exist, tray-join or add-form if empty
-    if (getAccounts().length > 0) {
+    if (options?.startInAddAccount) {
+      renderAccountForm();
+    } else if (getAccounts().length > 0) {
       renderAccountsList();
     } else if (options?.autoJoinUrl) {
       renderAutoJoinConfirmation(options.autoJoinUrl);
@@ -1694,10 +1892,16 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
         });
         for (const providerId of sorted) {
           if (existingProviders.has(providerId)) continue;
-          // Skip auth-only providers (no LLM models to expose) — they're
-          // useful as accounts the user might already have, but not as
-          // something to "add" from this dialog.
-          if (!providerOffersLlmModels(providerId)) continue;
+          if (options?.providerFilter) {
+            // Caller-supplied filter fully controls the list (e.g. connect mode
+            // offers GitHub — an auth-only provider — but hides ones that can't
+            // authenticate there).
+            if (!options.providerFilter(providerId)) continue;
+          } else if (!providerOffersLlmModels(providerId)) {
+            // Default: skip auth-only providers (no LLM models to expose) —
+            // useful as existing accounts, but not something to "add" here.
+            continue;
+          }
           const config = getProviderConfig(providerId);
           const opt = document.createElement('option');
           opt.value = providerId;
@@ -1860,13 +2064,13 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
                 'No controlled-browser CDP transport available — open SLICC in standalone mode or the Chrome extension.'
               );
             }
-            await providerConfig.onOAuthLoginIntercepted(launcher, renderAccountsList, {
+            await providerConfig.onOAuthLoginIntercepted(launcher, finishAccountChange, {
               presentDeviceCode: createDialogDeviceCodePrompter(),
             });
           } else if (providerConfig.onOAuthLogin) {
             const { createOAuthLauncher } = await import('../providers/oauth-service.js');
             const launcher = createOAuthLauncher();
-            await providerConfig.onOAuthLogin(launcher, renderAccountsList);
+            await providerConfig.onOAuthLogin(launcher, finishAccountChange);
           }
         } catch (err) {
           // Clean up pre-login baseUrl placeholder if no account existed before
@@ -2099,7 +2303,7 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
           apiVersionInput.value.trim() || undefined
         );
 
-        renderAccountsList();
+        finishAccountChange();
       }
 
       saveBtn.addEventListener('click', validateAndSave);
@@ -2116,7 +2320,20 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
 
       // Back button (only shown when accounts already exist)
       const hasAccounts = getAccounts().length > 0;
-      if (!isEdit && !hasAccounts) {
+      if (options?.startInAddAccount) {
+        // Connect mode: the parent surface owns the account list, and tray-join
+        // is irrelevant here — offer a plain close instead of "Back"/"Connect to
+        // another browser" (both of which dropped users into confusing views).
+        const cancelBtn = document.createElement('button');
+        cancelBtn.className = 'dialog__btn dialog__btn--secondary';
+        cancelBtn.style.marginTop = '8px';
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.addEventListener('click', () => {
+          overlay.remove();
+          resolve((localStorage.getItem(ACCOUNTS_KEY) ?? '') !== accountsBefore);
+        });
+        dialog.appendChild(cancelBtn);
+      } else if (!isEdit && !hasAccounts) {
         const joinBtn = document.createElement('button');
         joinBtn.className = 'dialog__btn dialog__btn--secondary';
         joinBtn.style.marginTop = '8px';

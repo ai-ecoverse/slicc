@@ -248,4 +248,110 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
     expect(typeof response.maskedValue).toBe('string');
     expect(response.maskedValue.length).toBeGreaterThan(0);
   });
+
+  // #847: the offscreen caller (where oauth-token runs) has no chrome.storage,
+  // so the SW must do the write from the message. This is the line that
+  // actually fixes the bug.
+  it('secrets.mask-oauth-token writes oauth.<id>.token + _DOMAINS from the message, then masks', async () => {
+    await import('../src/service-worker.js');
+    // `testprov` is NOT pre-seeded — the SW-side write is load-bearing here.
+    expect(storageMap['oauth.testprov.token']).toBeUndefined();
+    let response: any;
+    for (const l of messageListeners) {
+      const result = l(
+        {
+          type: 'secrets.mask-oauth-token',
+          providerId: 'testprov',
+          accessToken: 'tok_real',
+          domains: 'example.com,api.example.com',
+        },
+        {},
+        (r: any) => {
+          response = r;
+        }
+      );
+      if (result === true) break;
+    }
+    await new Promise((r) => setTimeout(r, 30));
+    expect(storageMap['oauth.testprov.token']).toBe('tok_real');
+    expect(storageMap['oauth.testprov.token_DOMAINS']).toBe('example.com,api.example.com');
+    expect(typeof response.maskedValue).toBe('string');
+    expect(response.maskedValue.length).toBeGreaterThan(0);
+  });
+
+  it('secrets.mask-oauth-token skips the OAuth-token write when accessToken/domains are absent (back-compat)', async () => {
+    await import('../src/service-worker.js');
+    const setSpy = (globalThis as any).chrome.storage.local.set;
+    setSpy.mockClear();
+    let response: any;
+    for (const l of messageListeners) {
+      const result = l({ type: 'secrets.mask-oauth-token', providerId: 'github' }, {}, (r: any) => {
+        response = r;
+      });
+      if (result === true) break;
+    }
+    await new Promise((r) => setTimeout(r, 30));
+    // Old-shape message must NOT write the OAuth token keys (an unrelated
+    // session-id write may occur — assert specifically, not "never called").
+    const wroteOAuthKey = setSpy.mock.calls.some(
+      (call: any[]) => call[0] && 'oauth.github.token' in call[0]
+    );
+    expect(wroteOAuthKey).toBe(false);
+    // The pre-seeded oauth.github.token still masks.
+    expect(typeof response.maskedValue).toBe('string');
+  });
+
+  it('secrets.mask-oauth-token returns { error } (not a throw) when the storage write fails', async () => {
+    await import('../src/service-worker.js');
+    (globalThis as any).chrome.storage.local.set = vi.fn(async () => {
+      throw new Error('quota exceeded');
+    });
+    let response: any;
+    for (const l of messageListeners) {
+      const result = l(
+        {
+          type: 'secrets.mask-oauth-token',
+          providerId: 'failprov',
+          accessToken: 't',
+          domains: 'x.com',
+        },
+        {},
+        (r: any) => {
+          response = r;
+        }
+      );
+      if (result === true) break;
+    }
+    await new Promise((r) => setTimeout(r, 30));
+    // The page-side retry/give-up logic depends on the SW surfacing { error },
+    // not throwing across the message boundary.
+    expect(response.maskedValue).toBeUndefined();
+    expect(typeof response.error).toBe('string');
+  });
+
+  it('returns { error: "entry missing after write" } when the entry is absent post-write (real fault, not cold miss)', async () => {
+    await import('../src/service-worker.js');
+    // No-op the write so the entry is genuinely missing after "writing" — the
+    // page must be able to tell this from a cold-start miss, so it gets an error.
+    (globalThis as any).chrome.storage.local.set = vi.fn(async () => {});
+    let response: any;
+    for (const l of messageListeners) {
+      const result = l(
+        {
+          type: 'secrets.mask-oauth-token',
+          providerId: 'ghost',
+          accessToken: 't',
+          domains: 'x.com',
+        },
+        {},
+        (r: any) => {
+          response = r;
+        }
+      );
+      if (result === true) break;
+    }
+    await new Promise((r) => setTimeout(r, 30));
+    expect(response.maskedValue).toBeUndefined();
+    expect(response.error).toBe('entry missing after write');
+  });
 });

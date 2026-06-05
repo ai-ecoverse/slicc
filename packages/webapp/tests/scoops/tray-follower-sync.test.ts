@@ -28,6 +28,9 @@ class FakeChannel implements TrayDataChannelLike {
   }
 
   send(data: string): void {
+    if (this.readyState === 'closed') {
+      throw new Error('Cannot send on closed channel');
+    }
     this.sent.push(data);
   }
 
@@ -387,6 +390,38 @@ describe('FollowerSyncManager', () => {
       channel.simulateLeaderMessage({ type: 'status', scoopStatus: 'processing' });
 
       expect(onStatus).toHaveBeenCalledWith('processing');
+    });
+  });
+
+  describe('cherry.slicc_event handling', () => {
+    it('invokes onCherrySliccEvent with name, detail (wire targetId not forwarded)', () => {
+      const channel = new FakeChannel();
+      const onCherrySliccEvent = vi.fn();
+      new FollowerSyncManager(channel, { onCherrySliccEvent });
+
+      channel.simulateLeaderMessage({
+        type: 'cherry.slicc_event',
+        targetId: 'follower-abc',
+        name: 'build.done',
+        detail: { ok: true },
+      });
+
+      expect(onCherrySliccEvent).toHaveBeenCalledWith('build.done', { ok: true });
+    });
+
+    it('ignores cherry.slicc_event when no callback is wired', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      // Must not throw — falls through without a handler.
+      expect(() =>
+        channel.simulateLeaderMessage({
+          type: 'cherry.slicc_event',
+          targetId: 'follower-abc',
+          name: 'noop',
+        })
+      ).not.toThrow();
+      void follower;
     });
   });
 
@@ -1316,6 +1351,38 @@ describe('FollowerSyncManager', () => {
       expect(sent[0].targetScoop).toBeUndefined();
     });
 
+    it('forwardLick sends a generic lick to the leader and returns true', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+      const ok = follower.forwardLick({
+        type: 'navigate',
+        navigateUrl: 'https://x',
+        timestamp: 't',
+        body: { v: 1 },
+      });
+      expect(ok).toBe(true);
+      expect(channel.parseSent()).toEqual([
+        {
+          type: 'lick',
+          event: { type: 'navigate', navigateUrl: 'https://x', timestamp: 't', body: { v: 1 } },
+        },
+      ]);
+    });
+
+    it('forwardLick returns false and sends nothing when the channel is closed', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+      channel.close();
+      const ok = follower.forwardLick({
+        type: 'navigate',
+        navigateUrl: 'https://x',
+        timestamp: 't',
+        body: {},
+      });
+      expect(ok).toBe(false);
+      expect(channel.sent).toHaveLength(0);
+    });
+
     it('fetchSprinkleContent sends sprinkle.fetch and resolves with single-chunk content', async () => {
       const channel = new FakeChannel();
       const follower = new FollowerSyncManager(channel);
@@ -2143,6 +2210,35 @@ describe('FollowerSyncManager', () => {
       const fetches = channel.parseSent().filter((m) => m.type === 'sprinkle.fetch');
       expect(fetches).toHaveLength(2);
       void second;
+    });
+  });
+
+  describe('sendCherryHostEvent', () => {
+    it('sends a cherry.host_event stamped with the configured selfRuntimeId', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel, { selfRuntimeId: 'rt-9' });
+
+      follower.sendCherryHostEvent('checkout-done', { id: 7 });
+
+      const sent = channel.parseSent();
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toEqual({
+        type: 'cherry.host_event',
+        targetId: 'rt-9',
+        name: 'checkout-done',
+        detail: { id: 7 },
+      });
+    });
+
+    it('falls back to an empty targetId when no selfRuntimeId is set', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      follower.sendCherryHostEvent('ping');
+
+      const sent = channel.parseSent() as Array<{ type: string; targetId: string }>;
+      expect(sent[0].type).toBe('cherry.host_event');
+      expect(sent[0].targetId).toBe('');
     });
   });
 

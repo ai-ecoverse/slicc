@@ -1,7 +1,7 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignoreBinaries": ["swift", "swiftlint", "wrangler", "playwright", "sleep"],
-  "ignoreDependencies": ["pyodide", "@cloudflare/workers-types", "e2b"],
+  "ignoreDependencies": ["pyodide", "@cloudflare/workers-types", "e2b", "@tessl/cli"],
   "ignore": [
     "dist/**",
     "**/dist/**",
@@ -83,6 +83,11 @@
     "packages/cloudflare-worker": {
       "entry": ["src/index.ts", "tests/**/*.test.ts"],
       "project": ["src/**/*.ts", "tests/**/*.ts"]
+    },
+    "packages/cherry": {
+      "entry": ["src/index.ts", "tests/**/*.test.ts"],
+      "project": ["src/**/*.ts", "tests/**/*.ts"],
+      "ignoreDependencies": ["jsdom", "@types/jsdom"]
     }
   }
 }

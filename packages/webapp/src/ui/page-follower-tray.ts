@@ -31,21 +31,60 @@ import { createLogger } from '../core/logger.js';
 import { ThrottledErrorTracker } from '../scoops/throttled-error-tracker.js';
 import { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
 import type { SprinkleSummary } from '../scoops/tray-sync-protocol.js';
+import { CHERRY_RUNTIME_TAG, type RemoteTargetInfo } from '../scoops/tray-sync-protocol.js';
 import {
   type FollowerAutoReconnectHandle,
   type FollowerTrayConnection,
   startFollowerWithAutoReconnect,
   type TrayPeerConnectionFactory,
 } from '../scoops/tray-webrtc.js';
+import { canonicalRuntimeId } from './runtime-identity.js';
 import { SprinkleFollowerController } from './sprinkle-follower-controller.js';
 import type { SprinkleAddOptions } from './sprinkle-manager.js';
 import type { AgentHandle, ChatMessage } from './types.js';
 
 const log = createLogger('page-follower-tray');
 
+export { CHERRY_RUNTIME_TAG } from '../scoops/tray-sync-protocol.js';
+
+/**
+ * Shape the page's local browser targets for advertisement to the leader.
+ *
+ * A cherry follower (`runtime === CHERRY_RUNTIME_TAG`) lends a cooperative host
+ * page, not a real browser tab: it can never serve `Network.*`, so every target
+ * it advertises is tagged `kind: 'cherry'` with `capabilities.network = false`.
+ * That metadata is what lets the leader keep cherry out of flows it cannot
+ * satisfy — `canRuntimeOpenTab` (tab.open) reads `kind`, and
+ * `getBestFollowerForTeleport` / `selectTeleportPool` read `capabilities.network`.
+ * `navigate`/`screenshot` are advisory: the host SDK is the real authority and
+ * gates each CDP domain itself, and the iframe never learns the host's exact
+ * grants — only `network` (always false) and `kind` drive leader selection here.
+ *
+ * Non-cherry runtimes advertise bare `{ targetId, title, url }` (the registry
+ * defaults `kind` to `'browser'`), unchanged from before.
+ */
+export function buildAdvertisedTargets(
+  pages: { targetId: string; title: string; url: string }[],
+  runtime: string
+): RemoteTargetInfo[] {
+  if (runtime !== CHERRY_RUNTIME_TAG) {
+    return pages.map((p) => ({ targetId: p.targetId, title: p.title, url: p.url }));
+  }
+  return pages.map((p) => ({
+    targetId: p.targetId,
+    title: p.title,
+    url: p.url,
+    kind: 'cherry' as const,
+    capabilities: { navigate: true, network: false, screenshot: true },
+  }));
+}
+
 export interface StartPageFollowerTrayOptions {
   /** The leader's join URL (from the `TRAY_JOIN_STORAGE_KEY` constant — `slicc.trayJoinUrl` — in localStorage). */
   joinUrl: string;
+
+  /** Tray runtime tag (default 'slicc-standalone'). Cherry passes 'slicc-cherry' so leader selection can distinguish it. */
+  runtime?: string;
 
   // --- FollowerSyncManager callbacks (forwarded directly) ---
   /** Replace the follower's chat panel with the snapshot from the leader. */
@@ -59,6 +98,13 @@ export interface StartPageFollowerTrayOptions {
   ) => void;
   /** Update the chat panel's processing indicator from the leader's scoop status. */
   onStatus: (scoopStatus: string) => void;
+  /**
+   * Forward a leader-sent `cherry.slicc_event` (cone → host page) onward. Only
+   * the cherry boot path wires this — it routes the event to the host SDK via
+   * the iframe's `CherryHostTransport.emitSliccEventToHost`. Omitted by ordinary
+   * followers, where the event has no host page to reach.
+   */
+  onCherrySliccEvent?: (name: string, detail?: unknown) => void;
 
   // --- Page-side wiring callbacks ---
   /**
@@ -72,6 +118,14 @@ export interface StartPageFollowerTrayOptions {
 
   // --- BrowserAPI for federated target advertisement ---
   browserAPI: BrowserAPI;
+
+  /**
+   * Called with `true` once a follower connection is live and `false`
+   * on detach/stop. Standalone wires this to
+   * `client.sendSetFollowerForwarding(enabled)` so the kernel worker
+   * forwards navigate licks while connected.
+   */
+  onForwardingToggle?: (enabled: boolean) => void;
 
   // --- Sprinkle sync wiring (optional) ---
   /**
@@ -151,6 +205,7 @@ export function startPageFollowerTray(
       activeSprinkleController = null;
     }
     if (!activeSync) return;
+    options.onForwardingToggle?.(false);
     options.browserAPI.setTrayTargetProvider(null);
     activeSync.close();
     activeSync = null;
@@ -158,7 +213,7 @@ export function startPageFollowerTray(
 
   const wireFollowerSync = (connection: FollowerTrayConnection): void => {
     detachSync();
-    const runtimeId = `follower-${connection.bootstrapId}`;
+    const runtimeId = canonicalRuntimeId(connection.bootstrapId);
 
     // The sprinkle controller (if the caller wired sprinkle layout callbacks)
     // is constructed lazily here so it shares the lifecycle of this sync
@@ -172,6 +227,8 @@ export function startPageFollowerTray(
       onSnapshot: options.onSnapshot,
       onUserMessage: options.onUserMessage,
       onStatus: options.onStatus,
+      onCherrySliccEvent: options.onCherrySliccEvent,
+      selfRuntimeId: runtimeId,
       onTargetsChanged: () => void refreshTargets(),
       onSprinklesList: (sprinkles) => {
         options.onSprinklesList?.(sprinkles);
@@ -215,7 +272,7 @@ export function startPageFollowerTray(
       cdpThrottle.reportSuccess();
       try {
         sync.advertiseTargets(
-          pages.map((p) => ({ targetId: p.targetId, title: p.title, url: p.url })),
+          buildAdvertisedTargets(pages, options.runtime ?? 'slicc-standalone'),
           runtimeId
         );
       } catch (err) {
@@ -228,6 +285,7 @@ export function startPageFollowerTray(
     activeSync = sync;
     options.browserAPI.setTrayTargetProvider(sync);
     options.setChatAgent(sync);
+    options.onForwardingToggle?.(true);
     sync.requestSnapshot();
 
     targetRefreshInterval = setInterval(() => void refreshTargets(), refreshIntervalMs);
@@ -239,7 +297,7 @@ export function startPageFollowerTray(
   reconnectHandle = startFollowerWithAutoReconnect(
     {
       joinUrl: options.joinUrl,
-      runtime: 'slicc-standalone',
+      runtime: options.runtime ?? 'slicc-standalone',
       fetchImpl: options._fetchImpl,
       peerConnectionFactory: options._peerConnectionFactory,
       sleep: options._sleep,

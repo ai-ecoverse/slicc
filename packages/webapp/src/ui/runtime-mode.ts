@@ -13,7 +13,9 @@ export type UiRuntimeMode =
   | 'extension'
   | 'electron-overlay'
   | 'extension-detached'
-  | 'hosted-leader';
+  | 'hosted-leader'
+  | 'connect'
+  | 'cherry';
 
 export const ELECTRON_OVERLAY_RUNTIME_QUERY_VALUE = 'electron-overlay';
 export const HOSTED_LEADER_RUNTIME_QUERY_VALUE = 'hosted-leader';
@@ -46,9 +48,16 @@ export function resolveUiRuntimeMode(locationHref: string, isExtension: boolean)
   }
   try {
     const url = new URL(locationHref);
+    // Check for connect mode
+    if (url.searchParams.get('connect') === '1') {
+      return 'connect';
+    }
     // Check for hosted-leader first, before path-based detection
     if (url.searchParams.get('runtime') === HOSTED_LEADER_RUNTIME_QUERY_VALUE) {
       return 'hosted-leader';
+    }
+    if (url.searchParams.get('cherry') === '1') {
+      return 'cherry';
     }
     return isElectronOverlayUrl(url) ? 'electron-overlay' : 'standalone';
   } catch {

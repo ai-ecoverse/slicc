@@ -33,6 +33,52 @@ describe('GET /api/cloud/config', () => {
     expect(body.imsRelayUrl).toBe('https://www.sliccy.ai/auth/callback');
   });
 
+  it('passes the proxy model list through as adobeModels', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url =
+        typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes('/v1/config')) {
+        return new Response(
+          JSON.stringify({
+            clientId: 'x',
+            scopes: 'y',
+            imsEnvironment: 'prod',
+            models: [
+              { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', context_window: 1000000 },
+              { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5' },
+            ],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    const res = await handleCloudConfig(new Request('https://w/api/cloud/config'), {});
+    const body = (await res.json()) as { adobeModels: Array<{ id: string; name: string }> };
+    // Only id + name pass through (extra proxy fields are dropped).
+    expect(body.adobeModels).toEqual([
+      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
+      { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5' },
+    ]);
+  });
+
+  it('returns adobeModels: [] when the proxy omits models', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url =
+        typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes('/v1/config')) {
+        return new Response(
+          JSON.stringify({ clientId: 'x', scopes: 'y', imsEnvironment: 'prod' }),
+          { status: 200 }
+        );
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    const res = await handleCloudConfig(new Request('https://w/api/cloud/config'), {});
+    const body = (await res.json()) as { adobeModels: unknown[] };
+    expect(body.adobeModels).toEqual([]);
+  });
+
   it('returns 502 PROXY_CONFIG_UNAVAILABLE when proxy is down', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('boom', { status: 500 }));
     const res = await handleCloudConfig(new Request('https://w/api/cloud/config'), {});

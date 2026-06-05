@@ -37,6 +37,13 @@ This package is NOT an npm workspace. It is a Swift Package Manager project (`Pa
 - The leader→follower reply path for follower-originated CDP/tab.open requests (`cdp.response` / `cdp.event` / `tab.opened` / `tab.open.error` received by a follower that asked for it). Since iOS doesn't originate, it never has to consume the reply.
 - `tab.open.error` send-side — iOS embeds CDP errors in `cdp.response.error` and always sends `.tabOpened` for `tab.open`.
 
+### Cherry (embedded follower) mirror
+
+iOS mirrors the cherry-target wire surface even though it cannot _host_ a cherry page:
+
+- `Models/SyncProtocol.swift` defines `CherryCapabilities { navigate, network, screenshot }` and `RemoteTargetInfo.kind` / `.capabilities`, mirroring `RemoteTargetInfo` from `tray-sync-protocol.ts`. The `network` capability gates whether the leader may drive `Network.*` against the target (distinct from the host-page `openUrl` capability); for a cherry target it is always `false`. A target advertised with `"kind":"cherry"` decodes into these fields (see `Tests/SliccFollowerTests/SyncProtocolTests.swift`).
+- `LeaderToFollowerMessage` includes `cherry.slicc_event` (decoded as `.cherrySliccEvent(targetId, name, detail)`). iOS has **no cherry page surface**, so `AppState.handleDataChannelMessage` handles it as a **documented no-op**: it logs and ignores the event. The case exists to keep the decode switch exhaustive and to leave a seam for a future cherry-on-iOS path.
+
 The doc-comment headers above the `LeaderToFollowerMessage` and `FollowerToLeaderMessage` enum declarations in `SyncProtocol.swift` declare the omission explicitly — `// MARK: -` boundaries are the stable anchors; line numbers shift whenever the headers expand.
 
 When you change the protocol:
@@ -60,6 +67,10 @@ Both followers now implement sprinkle rendering (the TS implementation landed in
 - Sprinkles: `refreshSprinkles()`, `fetchSprinkleContent(_:)` with chunk reassembly + waiter dedup, `sendSprinkleLick(_:body:targetScoop:)`, `handleSprinkleContent(...)`
 - Multi-scoop: `selectScoop`, `swipeToNextScoop` / `swipeToPreviousScoop`, per-scoop `messagesByScoop` buffer + scheduled flush throttling
 - Agent events: `handleAgentEvent(_:scoopJid:)` with the same scoop-targeted buffer update + per-render-loop throttle
+
+### Lick Forwarding (leader-side origin stamping)
+
+The native iOS follower's sprinkle licks now display their origin label in the leader's cone via leader-side origin stamping (no iOS change was required). The leader's `onSprinkleLick` callback gained a 4th `originLabel` parameter and routes sprinkle lick content through the shared `formatLickEventForCone`, so follower sprinkle licks (including from iOS) display their origin. Migrating iOS from the legacy `sprinkle.lick` envelope to the generic `lick` follower→leader message (for `navigate` / handoff licks) remains a documented follow-up.
 
 ## Build
 

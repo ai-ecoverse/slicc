@@ -34,6 +34,7 @@ export const EXTERNAL_LICK_CHANNELS: ReadonlySet<LickEvent['type']> = new Set<Li
   'session-reload',
   'navigate',
   'upgrade',
+  'cherry',
 ]);
 
 export function isExternalLickChannel(
@@ -54,6 +55,7 @@ export function formatLickEventForCone(event: LickEvent): FormattedLick | null {
   const isSessionReload = event.type === 'session-reload';
   const isNavigate = event.type === 'navigate';
   const isUpgrade = event.type === 'upgrade';
+  const isCherry = event.type === 'cherry';
 
   const eventName = isWebhook
     ? (event as { webhookName?: string }).webhookName
@@ -69,7 +71,9 @@ export function formatLickEventForCone(event: LickEvent): FormattedLick | null {
               ? `${(event as { upgradeFromVersion?: string }).upgradeFromVersion ?? 'unknown'}→${
                   (event as { upgradeToVersion?: string }).upgradeToVersion ?? 'unknown'
                 }`
-              : (event as { cronName?: string }).cronName;
+              : isCherry
+                ? (event as { cherryName?: string }).cherryName
+                : (event as { cronName?: string }).cronName;
 
   const label = isWebhook
     ? 'Webhook Event'
@@ -83,7 +87,9 @@ export function formatLickEventForCone(event: LickEvent): FormattedLick | null {
             ? 'Navigate Event'
             : isUpgrade
               ? 'Upgrade Event'
-              : 'Cron Event';
+              : isCherry
+                ? 'Cherry Event'
+                : 'Cron Event';
 
   if (isSessionReload) {
     const body = event.body as
@@ -116,9 +122,22 @@ export function formatLickEventForCone(event: LickEvent): FormattedLick | null {
     };
   }
 
+  if (isCherry) {
+    const origin = (event as { cherryOrigin?: string }).cherryOrigin ?? 'unknown origin';
+    const runtime = (event as { cherryRuntimeId?: string }).cherryRuntimeId ?? 'unknown';
+    const name = (event as { cherryName?: string }).cherryName ?? 'unnamed';
+    return {
+      label,
+      content:
+        `[${label}: ${name}] from ${origin} (runtime ${runtime})\n` +
+        `\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``,
+    };
+  }
+
   // Generic fallback: webhook / sprinkle / fswatch / navigate / cron.
+  const origin = event.originLabel ? `_Forwarded from ${event.originLabel}._\n\n` : '';
   return {
     label,
-    content: `[${label}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``,
+    content: `${origin}[${label}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``,
   };
 }

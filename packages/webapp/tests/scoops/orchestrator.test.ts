@@ -83,19 +83,9 @@ async function settleAndDisposeSharedFs(
   sharedFs: ReturnType<Orchestrator['getSharedFS']>
 ): Promise<void> {
   if (!sharedFs) return;
-
-  const lfs = sharedFs.getLightningFS() as any;
-  if (lfs?._operations?.size > 0) {
-    await lfs._gracefulShutdown?.();
-  }
-  if (lfs?._deactivationTimeout) {
-    clearTimeout(lfs._deactivationTimeout);
-    lfs._deactivationTimeout = null;
-  }
-  if (lfs?._deactivate) {
-    await lfs._deactivate();
-  }
-
+  // LightningFS-specific graceful shutdown / debounce cancel is no
+  // longer needed — ZenFS backends own no IDB-debounced state, so
+  // `dispose()` alone is sufficient.
   await sharedFs.dispose();
 }
 
@@ -2511,5 +2501,44 @@ describe('Orchestrator legacy cone-memory migration', () => {
     expect(await readUtf8(fs, '/shared/CLAUDE.md')).toBe(polluted);
     // /workspace/CLAUDE.md was not created by this no-op call.
     await expect(fs.readFile('/workspace/CLAUDE.md', { encoding: 'utf-8' })).rejects.toBeDefined();
+  });
+});
+
+describe('Orchestrator.handleCherryHostEvent', () => {
+  function makeOrch(): Orchestrator {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    return new Orchestrator(container, {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    });
+  }
+
+  it('emits a cherry lick with the host event name, runtime id, and detail', () => {
+    const orch = makeOrch();
+    const emitEvent = vi.fn();
+    orch.setLickManager({ emitEvent } as any);
+
+    orch.handleCherryHostEvent('follower-b1', 'cart.updated', { items: 3 });
+
+    expect(emitEvent).toHaveBeenCalledTimes(1);
+    const evt = emitEvent.mock.calls[0][0];
+    expect(evt.type).toBe('cherry');
+    expect(evt.cherryName).toBe('cart.updated');
+    expect(evt.cherryRuntimeId).toBe('follower-b1');
+    expect(evt.cherryOrigin).toBeUndefined();
+    expect(evt.body).toEqual({ items: 3 });
+    expect(typeof evt.timestamp).toBe('string');
+  });
+
+  it('does not throw when no lick manager is set', () => {
+    const orch = makeOrch();
+    expect(() => orch.handleCherryHostEvent('rt', 'evt')).not.toThrow();
   });
 });

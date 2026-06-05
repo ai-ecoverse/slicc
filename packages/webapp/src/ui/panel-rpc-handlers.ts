@@ -20,6 +20,7 @@ import { getNavigatorUsb, getSharedUsbRegistry } from '../kernel/usb-device-regi
 import * as usbOps from '../kernel/usb-operations.js';
 import type { LeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import { getAllExtraOAuthDomains, setExtraOAuthDomains } from './provider-settings.js';
+import type { RemoteCdpPageBridge } from './remote-cdp-page-bridge.js';
 
 /**
  * Options threaded into the handler factory. Each callback is optional
@@ -55,6 +56,15 @@ export interface StandalonePanelRpcHandlerOptions {
    */
   emitEvent?: (channel: string, payload: unknown) => void;
   /**
+   * Push a `cherry.slicc_event` (cone → host page) out through the
+   * page-side LeaderSyncManager. Wired by `mainStandaloneWorker` to
+   * `pageLeaderTray.sync.emitCherrySliccEvent(...)`; the worker-side
+   * `cherry-emit` command bridges here because the leader tray's WebRTC
+   * data channels live on the page. Returns `true` when the message was
+   * sent, `false` when the owning follower is not connected.
+   */
+  emitCherrySliccEvent?: (runtimeId: string, name: string, detail?: unknown) => boolean;
+  /**
    * Return the remote (follower) browser targets known to the page-side
    * BrowserAPI. `mainStandaloneWorker` wires this unconditionally to
    * `browser.listAllTargets()`; it returns local-only (no composite
@@ -64,6 +74,15 @@ export interface StandalonePanelRpcHandlerOptions {
    * bridges the gap. Optional so other host wirings (tests) may omit it.
    */
   listRemoteTargets?: () => Promise<PageInfo[]> | PageInfo[];
+  /**
+   * Page-side remote-CDP bridge backing the `remote-cdp-*` /
+   * `remote-open-tab` ops. Lets the worker BrowserAPI *drive* federated
+   * tray/cherry targets by tunneling each CDP op to the page-side
+   * `RemoteCDPTransport`. Wired by `mainStandaloneWorker`; absent in
+   * environments without a leader tray (the ops then reject clearly).
+   * See issue #848.
+   */
+  remoteCdp?: RemoteCdpPageBridge;
 }
 
 /**
@@ -304,6 +323,13 @@ export function createStandalonePanelRpcHandlers(
         throw new Error('host leave: tray leave is not available in this environment');
       }
       return await options.leaveTray({ workerBaseUrl, requestId });
+    },
+
+    'cherry-emit': async ({ runtimeId, name, detail }) => {
+      if (!options.emitCherrySliccEvent) {
+        throw new Error('cherry-emit: not available in this environment');
+      }
+      return { delivered: options.emitCherrySliccEvent(runtimeId, name, detail) };
     },
 
     'oauth-extras-set': ({ providerId, domains }) => {
@@ -553,6 +579,38 @@ export function createStandalonePanelRpcHandlers(
       return {
         targets: remote.map((p) => ({ targetId: p.targetId, title: p.title, url: p.url })),
       };
+    },
+
+    'remote-cdp-send': async ({ runtimeId, localTargetId, method, params, sessionId, timeout }) => {
+      if (!options.remoteCdp) throw new Error('remote-cdp bridge not available');
+      return options.remoteCdp.send({
+        runtimeId,
+        localTargetId,
+        method,
+        params,
+        sessionId,
+        timeout,
+      });
+    },
+
+    'remote-cdp-subscribe': async ({ runtimeId, localTargetId, event }) => {
+      if (!options.remoteCdp) throw new Error('remote-cdp bridge not available');
+      return options.remoteCdp.subscribe({ runtimeId, localTargetId, event });
+    },
+
+    'remote-cdp-unsubscribe': async ({ runtimeId, localTargetId, event }) => {
+      if (!options.remoteCdp) throw new Error('remote-cdp bridge not available');
+      return options.remoteCdp.unsubscribe({ runtimeId, localTargetId, event });
+    },
+
+    'remote-cdp-detach': async ({ runtimeId, localTargetId }) => {
+      if (!options.remoteCdp) throw new Error('remote-cdp bridge not available');
+      return options.remoteCdp.detach({ runtimeId, localTargetId });
+    },
+
+    'remote-open-tab': async ({ runtimeId, url }) => {
+      if (!options.remoteCdp) throw new Error('remote-cdp bridge not available');
+      return options.remoteCdp.openTab({ runtimeId, url });
     },
   };
 }

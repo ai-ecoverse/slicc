@@ -589,8 +589,8 @@ export interface BrowserFetchOptions {
 /**
  * Structured result returned by `browser.fetch`. `body` is parsed
  * JSON when the response Content-Type contains `application/json`,
- * otherwise raw text. Binary responses are out of scope for Wave 3.1
- * (the script returns the text decoding the page applies).
+ * otherwise raw text. Binary responses are out of scope (the script
+ * returns the text decoding the page applies).
  */
 export interface BrowserFetchResult {
   ok: boolean;

@@ -204,7 +204,7 @@ describe('MountCommands', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Phase 13 dispatcher coverage. The dispatcher rewrite added --source /
+  // Dispatcher coverage. The dispatcher rewrite added --source /
   // --profile / --no-probe / --max-body-mb / --clear-cache / --bodies and URL
   // scheme dispatch (s3:// / da://); these tests lock down that surface.
   // The cross-check pass found `--clear-cache` was a no-op because no test
