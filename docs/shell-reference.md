@@ -956,11 +956,40 @@ These mirror the `.jsh` runtime globals (see `jsh-runtime-extensions.md` in the 
 | `slicc.fetchToFile(url, path)`                                      | `Promise<number>`                                                                                                                             | Download a URL (via the proxied fetch) straight to a VFS file; resolves with the byte count.                                 |
 | `slicc.readFileBinary(path)` / `slicc.writeFileBinary(path, bytes)` | `Promise<Uint8Array>` / `Promise<void>`                                                                                                       | Binary VFS I/O (parity with the jsh `fs` global).                                                                            |
 
+### Stateful device surface
+
+Sprinkles (and trusted dips) get a `slicc.hid` / `slicc.serial` / `slicc.usb` surface that talks page-direct to the same shared device registries the worker reaches over panel-RPC. Handles created via the `hid` / `serial` / `usb` shell commands are visible here and vice versa.
+
+For HID, `open(handle)` automatically attaches an `inputreport` listener on the host; reports arrive over the existing host→iframe push channel as `dip-device-event` / `sprinkle-device-event` postMessages. `close(handle)` (or sprinkle / dip teardown) drops the subscription so the host doesn't leak listeners.
+
+```js
+const [info] = await slicc.hid.list();
+await slicc.hid.open(info.handle);
+slicc.hid.on('inputreport', ({ handle, reportId, data }) => {
+  console.log('got', reportId, Array.from(data));
+});
+await slicc.hid.sendReport(info.handle, 0, new Uint8Array([0x01, 0x02]));
+```
+
+| Method                                                   | Returns                       | Notes                                                                                            |
+| -------------------------------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------ |
+| `slicc.hid.list()`                                       | `Promise<HidDeviceInfo[]>`    | Already-granted devices; no picker.                                                              |
+| `slicc.hid.request(filters?)`                            | `Promise<HidDeviceInfo[]>`    | Shows the WebHID picker; every granted interface of a multi-interface device is registered.      |
+| `slicc.hid.open(handle)` / `slicc.hid.close(handle)`     | `Promise<void>`               | `open` auto-attaches the host's input-report listener; `close` (or sprinkle close) detaches it.  |
+| `slicc.hid.sendReport(handle, reportId, data)`           | `Promise<void>`               | `data` is `Uint8Array`.                                                                          |
+| `slicc.hid.on('inputreport', cb)` / `slicc.hid.off(...)` | `void`                        | `cb({handle, reportId, data})` — `data` is a `Uint8Array`. Subscriptions are torn down on close. |
+| `slicc.serial.list()` / `slicc.serial.request(filters?)` | `Promise<SerialDeviceInfo[]>` | Already-granted vs. picker; parity with `hid`.                                                   |
+| `slicc.serial.open(handle, options)` / `serial.close(h)` | `Promise<void>`               | `options` mirrors the Web Serial open shape (`baudRate`, `dataBits`, …).                         |
+| `slicc.usb.list()` / `slicc.usb.request(filters?)`       | `Promise<UsbDeviceInfo[]>`    | Already-granted vs. picker; parity with `hid`.                                                   |
+| `slicc.usb.open(handle)` / `slicc.usb.close(handle)`     | `Promise<void>`               | Control / bulk transfers stay on the realm-side `usb` global for v1.                             |
+
+Untrusted inline-chat dips (fenced ` ```shtml ` blocks emitted by the agent) NEVER receive `slicc.hid` / `serial` / `usb`. Any spoofed request from such an iframe is rejected with `device access not allowed for this dip` before it reaches the registry.
+
 ### Trust boundary
 
 - **Sprinkles** are sourced from the VFS (under `/shared/sprinkles/`, `/workspace/sprinkles/`, etc.) and always get the full bridge.
 - **Trusted dips** — `.shtml` loaded from an image reference under a known sprinkles directory — get `exec`/`agent` and the Tier 1 jsh globals too.
-- **Untrusted inline-chat dips** (fenced ` ```shtml ` blocks emitted by the agent) NEVER receive `exec`/`agent`/`browser` or the other realm-backed globals, so an attacker-controlled cone reply can't spawn shell commands or scoops. `slicc.browser` is trusted-only by construction.
+- **Untrusted inline-chat dips** (fenced ` ```shtml ` blocks emitted by the agent) NEVER receive `exec`/`agent`/`browser`, the other realm-backed globals, or the `hid` / `serial` / `usb` device surface, so an attacker-controlled cone reply can't spawn shell commands, scoops, or reach a connected device. `slicc.browser` and `slicc.{hid,serial,usb}` are trusted-only by construction.
 
 ---
 

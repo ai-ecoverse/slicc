@@ -492,6 +492,38 @@ export class SprinkleFollowerController {
         fetch: () =>
           Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
       },
+      // The page-side device registries live on the leader and aren't
+      // addressable from a follower. Reject every call with a clean
+      // error rather than silently no-op so follower sprinkles surface
+      // the unsupported path immediately.
+      hid: {
+        list: () => Promise.reject(new Error('hid not supported in follower-rendered sprinkle')),
+        request: () => Promise.reject(new Error('hid not supported in follower-rendered sprinkle')),
+        open: () => Promise.reject(new Error('hid not supported in follower-rendered sprinkle')),
+        close: () => Promise.reject(new Error('hid not supported in follower-rendered sprinkle')),
+        sendReport: () =>
+          Promise.reject(new Error('hid not supported in follower-rendered sprinkle')),
+        on: () => {
+          /* follower has no leader-side push channel for input reports */
+        },
+        off: () => {
+          /* follower has no leader-side push channel for input reports */
+        },
+      },
+      serial: {
+        list: () => Promise.reject(new Error('serial not supported in follower-rendered sprinkle')),
+        request: () =>
+          Promise.reject(new Error('serial not supported in follower-rendered sprinkle')),
+        open: () => Promise.reject(new Error('serial not supported in follower-rendered sprinkle')),
+        close: () =>
+          Promise.reject(new Error('serial not supported in follower-rendered sprinkle')),
+      },
+      usb: {
+        list: () => Promise.reject(new Error('usb not supported in follower-rendered sprinkle')),
+        request: () => Promise.reject(new Error('usb not supported in follower-rendered sprinkle')),
+        open: () => Promise.reject(new Error('usb not supported in follower-rendered sprinkle')),
+        close: () => Promise.reject(new Error('usb not supported in follower-rendered sprinkle')),
+      },
       readFileBinary: () =>
         Promise.reject(new Error('readFileBinary not supported in follower-rendered sprinkle')),
       writeFileBinary: () =>
@@ -500,6 +532,8 @@ export class SprinkleFollowerController {
         Promise.reject(new Error('fetchToFile not supported in follower-rendered sprinkle')),
       _jsh: () =>
         Promise.reject(new Error('jsh globals not supported in follower-rendered sprinkle')),
+      _device: () =>
+        Promise.reject(new Error('device ops not supported in follower-rendered sprinkle')),
     };
     return api;
   }
