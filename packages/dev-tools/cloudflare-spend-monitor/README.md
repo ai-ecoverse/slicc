@@ -12,9 +12,10 @@ fix).
 ```
 cron (daily) ─▶ check-spend.mjs ─▶ over_threshold? ─▶ create-or-update GitHub issue
                    │
-                   ├─ POST graphql  durableObjectsPeriodicGroups        (duration → GB-s)
-                   ├─ POST graphql  durableObjectsInvocationsAdaptive…  (DO requests)
-                   └─ POST graphql  workersInvocationsAdaptive          (Workers requests)
+                   └─ one GraphQL POST returning three meters:
+                        • durableObjectsPeriodicGroups            (duration → GB-s)
+                        • durableObjectsInvocationsAdaptiveGroups (DO requests)
+                        • workersInvocationsAdaptive              (Workers requests)
 ```
 
 1. **Window** — `previousUtcDay()` selects the last _complete_ UTC day (avoids
