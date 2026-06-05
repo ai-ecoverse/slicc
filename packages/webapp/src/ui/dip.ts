@@ -1200,8 +1200,8 @@ async function runHidPicker(
     const devices = (await (
       nav.hid.requestDevice as (opts: { filters: unknown[] }) => Promise<unknown>
     )({ filters })) as unknown[];
-    const device = Array.isArray(devices) ? devices[0] : devices;
-    if (!device) {
+    const granted = Array.isArray(devices) ? devices : devices ? [devices] : [];
+    if (granted.length === 0) {
       onLick(action, { cancelled: true });
       return;
     }
@@ -1209,9 +1209,15 @@ async function runHidPicker(
       '../kernel/hid-device-registry.js'
     );
     const registry = getSharedHidRegistry();
-    const handle = registry.register(device as Parameters<typeof registry.register>[0]);
-    const info = hidDeviceToInfo(handle, device as Parameters<typeof hidDeviceToInfo>[1]);
-    onLick(action, { granted: true, handle, info });
+    // Register EVERY granted interface so a multi-interface device
+    // (e.g. a VIA/QMK keyboard's raw-HID 0xFF60 interface) is reachable
+    // from the cone's subsequent `hid list` / `hid watch <handle>`.
+    const infos = granted.map((d) => {
+      const handle = registry.register(d as Parameters<typeof registry.register>[0]);
+      return hidDeviceToInfo(handle, d as Parameters<typeof hidDeviceToInfo>[1]);
+    });
+    const primary = infos[0];
+    onLick(action, { granted: true, handle: primary.handle, info: primary, devices: infos });
   } catch (err: unknown) {
     if (err instanceof Error && (err.name === 'AbortError' || err.name === 'NotFoundError')) {
       onLick(action, { cancelled: true });

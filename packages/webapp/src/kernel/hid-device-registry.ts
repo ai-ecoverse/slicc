@@ -30,12 +30,27 @@ export interface HidInputReportEvent {
   data: DataView;
 }
 
+/**
+ * Minimal subset of a WebHID collection. A real WebHID device exposes
+ * an array of collections; each collection has a top-level usagePage /
+ * usage pair plus nested input/output/feature reports. We only surface
+ * the top-level usagePage/usage of the first collection because that's
+ * what distinguishes the multiple `HIDDevice` objects a multi-interface
+ * device (e.g. a VIA/QMK keyboard's keyboard + consumer + raw-HID
+ * interfaces) returns to the same vid/pid.
+ */
+export interface HidCollectionInfo {
+  usagePage?: number;
+  usage?: number;
+}
+
 /** The subset of `HIDDevice` the registry and handlers touch. */
 export interface HidDevice {
   readonly vendorId: number;
   readonly productId: number;
   readonly productName?: string;
   readonly opened: boolean;
+  readonly collections?: ReadonlyArray<HidCollectionInfo>;
   open(): Promise<void>;
   close(): Promise<void>;
   sendReport(reportId: number, data: BufferSource): Promise<void>;
@@ -51,12 +66,19 @@ export interface HidApi {
   requestDevice(options: { filters: HidDeviceFilter[] }): Promise<HidDevice[]>;
 }
 
-/** Serializable device descriptor returned across the bridge. */
+/**
+ * Serializable device descriptor returned across the bridge. `usagePage`
+ * and `usage` are the first collection's top-level pair (when the
+ * device exposes one), used to distinguish a multi-interface device's
+ * separate `HIDDevice` objects in `hid list` / `hid request` output.
+ */
 export interface HidDeviceInfo {
   handle: string;
   vendorId: number;
   productId: number;
   productName?: string;
+  usagePage?: number;
+  usage?: number;
   opened: boolean;
 }
 
@@ -66,17 +88,28 @@ export function getNavigatorHid(): HidApi | null {
   return nav?.hid ?? null;
 }
 
+function firstUsageKey(device: HidDevice): string {
+  const c = device.collections?.[0];
+  if (!c) return '';
+  return `${c.usagePage ?? ''}:${c.usage ?? ''}`;
+}
+
 function sameDevice(a: HidDevice, b: HidDevice): boolean {
   if (a === b) return true;
-  // WebHID exposes no serial number, so value-equality is best-effort:
-  // dedupe devices sharing vendor/product/productName (a documented v1
-  // limitation — two identical units may share a handle). Reference
-  // identity above covers the common case where the browser returns
-  // stable `HIDDevice` objects across `getDevices()` calls.
+  // WebHID exposes no serial number, so value-equality is best-effort.
+  // Multi-interface devices (e.g. a VIA/QMK keyboard with keyboard +
+  // consumer + 0xFF60 raw-HID interfaces) share vendor/product/name but
+  // expose distinct `HIDDevice` objects whose first collection has
+  // different usagePage/usage. We MUST keep those as separate handles
+  // — collapsing them makes the raw-HID interface unreachable. Two
+  // identical units with the same usagePage still collapse (a documented
+  // v1 limitation), but reference identity above covers the common case
+  // where the browser returns stable objects across `getDevices()` calls.
   return (
     a.vendorId === b.vendorId &&
     a.productId === b.productId &&
     (a.productName ?? '') === (b.productName ?? '') &&
+    firstUsageKey(a) === firstUsageKey(b) &&
     !!a.productName
   );
 }
@@ -126,11 +159,14 @@ export const MAX_HID_REPORT_BYTES = 4 * 1024 * 1024;
 
 /** Build the serializable descriptor for a registered device. */
 export function hidDeviceToInfo(handle: string, device: HidDevice): HidDeviceInfo {
+  const first = device.collections?.[0];
   return {
     handle,
     vendorId: device.vendorId,
     productId: device.productId,
     ...(device.productName ? { productName: device.productName } : {}),
+    ...(first?.usagePage !== undefined ? { usagePage: first.usagePage } : {}),
+    ...(first?.usage !== undefined ? { usage: first.usage } : {}),
     opened: device.opened,
   };
 }

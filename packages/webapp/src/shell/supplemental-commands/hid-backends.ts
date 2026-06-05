@@ -34,7 +34,13 @@ export interface HidInputReport {
 
 export interface HidBackend {
   list(): Promise<HidDeviceInfo[]>;
-  request(filters: HidDeviceFilter[]): Promise<HidDeviceInfo>;
+  /**
+   * Open the chooser and return EVERY granted `HIDDevice` (a single
+   * pick on a multi-interface device yields one entry per interface).
+   * The first entry is the primary; the shell command may re-order
+   * based on `--usage-page` / `--usage` for display.
+   */
+  request(filters: HidDeviceFilter[]): Promise<HidDeviceInfo[]>;
   info(handle: string): Promise<HidDeviceInfo>;
   open(handle: string): Promise<void>;
   close(handle: string): Promise<void>;
@@ -63,22 +69,25 @@ class LocalHidBackend implements HidBackend {
   list() {
     return hidOps.hidList(this.registry, this.hid());
   }
-  async request(filters: HidDeviceFilter[]): Promise<HidDeviceInfo> {
+  async request(filters: HidDeviceFilter[]): Promise<HidDeviceInfo[]> {
     // Extension realms must route the chooser through a popup window;
-    // the side panel cannot host `requestDevice` reliably.
+    // the side panel cannot host `requestDevice` reliably. The popup
+    // returns only the picked device's vid/pid, so we re-enumerate via
+    // `getDevices()` and register every matching interface (mirrors the
+    // direct-chooser path so multi-interface devices stay reachable).
     if (canOpenHidPickerPopup()) {
       const res = await openHidPickerPopup(filters);
       if ('cancelled' in res) throw new Error('user cancelled the HID picker');
       if ('error' in res) throw new Error(res.error);
-      const device = await this.reacquire(res.info);
-      if (!device) throw new Error('granted device could not be re-acquired');
-      return hidDeviceToInfo(this.registry.register(device), device);
+      const devices = await this.reacquireAll(res.info);
+      if (devices.length === 0) throw new Error('granted device could not be re-acquired');
+      return devices.map((d) => hidDeviceToInfo(this.registry.register(d), d));
     }
     return hidOps.hidRequest(this.registry, this.hid(), filters);
   }
-  private async reacquire(info: { vendorId: number; productId: number }) {
+  private async reacquireAll(info: { vendorId: number; productId: number }) {
     const devices = await this.hid().getDevices();
-    return devices.find((d) => d.vendorId === info.vendorId && d.productId === info.productId);
+    return devices.filter((d) => d.vendorId === info.vendorId && d.productId === info.productId);
   }
   info(handle: string) {
     return Promise.resolve(hidOps.hidDeviceInfo(this.registry, handle));
@@ -121,7 +130,7 @@ class BridgedHidBackend implements HidBackend {
         { filters },
         { timeoutMs: BridgedHidBackend.REQUEST_TIMEOUT_MS }
       )
-    ).device;
+    ).devices;
   }
   async info(handle: string) {
     return (await this.rpc.call('hid-device-info', { handle })).device;

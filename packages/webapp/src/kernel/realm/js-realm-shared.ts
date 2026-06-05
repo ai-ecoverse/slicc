@@ -988,7 +988,16 @@ export function createHidBridge(rpc: DeviceRpc): RealmHidApi {
   return {
     list: async () =>
       (await rpc.call<HidDeviceInfo[]>('hid', 'list', [])).map((i) => makeHidDevice(rpc, i)),
-    request: async (filters) =>
-      makeHidDevice(rpc, await rpc.call<HidDeviceInfo>('hid', 'request', [asFilterArray(filters)])),
+    request: async (filters) => {
+      // The backend grants every interface of a multi-interface device
+      // (e.g. VIA/QMK keyboards) and returns the full list; the realm
+      // surface keeps a single-device shape and exposes the first
+      // granted interface. Realm code that needs a specific interface
+      // can fall back to `hid.list()` for siblings.
+      const granted = await rpc.call<HidDeviceInfo[]>('hid', 'request', [asFilterArray(filters)]);
+      const info = granted[0];
+      if (!info) throw new Error('No device selected.');
+      return makeHidDevice(rpc, info);
+    },
   };
 }

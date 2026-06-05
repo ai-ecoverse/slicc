@@ -33,7 +33,7 @@ function makeMockBackend(recorded: Recorded[], throwOn?: string): HidBackend {
     },
     request: async (filters) => {
       rec('request', [filters]);
-      return info('hid1');
+      return [info('hid1')];
     },
     info: async (h) => {
       rec('info', [h]);

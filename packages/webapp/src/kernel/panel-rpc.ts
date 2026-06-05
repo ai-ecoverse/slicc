@@ -378,7 +378,7 @@ export interface PanelRpcResults {
   'usb-transfer-out': { status: string; bytesWritten: number };
   'usb-reset': { done: true };
   'hid-list': { devices: HidDeviceInfo[] };
-  'hid-request': { device: HidDeviceInfo };
+  'hid-request': { devices: HidDeviceInfo[] };
   'hid-device-info': { device: HidDeviceInfo };
   'hid-open': { done: true };
   'hid-close': { done: true };
