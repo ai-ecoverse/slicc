@@ -1288,6 +1288,143 @@ describe('resolveCurrentModel with getModelDynamic returning undefined', () => {
   });
 });
 
+describe('OAuth provider: unknown model id NOT in getModelIds (cold cloud cone)', () => {
+  // Regression for the cloud-cone 401 "invalid x-api-key": when an OAuth
+  // provider's model list is cold (never fetched — e.g. the cone injected the
+  // account via saveOAuthAccount, which doesn't fetch models) AND the selected
+  // model id is unknown to pi-ai's registry (e.g. claude-opus-4-8), resolution
+  // fell back to a NATIVE Anthropic model and sent the OAuth token to
+  // api.anthropic.com. It must instead route the unknown id through the OAuth
+  // provider's proxy (api `${providerId}-anthropic`).
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  function setupColdOAuthProvider() {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('adobe', {
+      id: 'adobe',
+      name: 'Adobe',
+      description: 'Adobe provider',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      defaultModelId: 'sonnet',
+      // Cold: models never fetched, so only the default is known — NOT opus-4-8.
+      getModelIds: () => [{ id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+    mockGetRegisteredProviderIds.mockReturnValue([...providerConfigs.keys()]);
+
+    // pi-ai registry knows the legacy last-resort (claude-sonnet-4-0) but NOT
+    // claude-opus-4-8 / gpt-5-cold — mirrors models.generated.js (4-6 present,
+    // 4-8 absent; no Adobe-proxied OpenAI model in the registry either).
+    mockGetModel.mockImplementation((provider: string, modelId: string) => {
+      if (modelId === 'claude-opus-4-8' || modelId === 'gpt-5-cold') {
+        throw new Error('Unknown model');
+      }
+      return {
+        id: modelId,
+        name: modelId,
+        provider,
+        api: 'anthropic',
+        baseUrl: 'https://api.anthropic.com',
+      };
+    });
+
+    saveOAuthAccount({ providerId: 'adobe', accessToken: 'ims-token' });
+  }
+
+  it('resolveCurrentModel routes the unknown id through the OAuth proxy, not native Anthropic', () => {
+    setupColdOAuthProvider();
+    storage.set('selected-model', 'adobe:claude-opus-4-8');
+
+    const model = resolveCurrentModel();
+    expect(model.provider).toBe('adobe');
+    expect(String(model.api)).toBe('adobe-anthropic');
+    expect(model.id).toBe('claude-opus-4-8');
+  });
+
+  it('resolveModelById routes the unknown id through the OAuth proxy, not native Anthropic', () => {
+    setupColdOAuthProvider();
+    storage.set('selected-model', 'adobe:claude-opus-4-8');
+
+    const model = resolveModelById('claude-opus-4-8');
+    expect(model.provider).toBe('adobe');
+    expect(String(model.api)).toBe('adobe-anthropic');
+    expect(model.id).toBe('claude-opus-4-8');
+  });
+
+  it('resolveModelById resolves the REQUESTED unknown id, not the selected one', () => {
+    setupColdOAuthProvider();
+    // Selected model differs from the requested one.
+    storage.set('selected-model', 'adobe:claude-sonnet-4-6');
+
+    const model = resolveModelById('claude-opus-4-8');
+    expect(model.id).toBe('claude-opus-4-8');
+    expect(model.provider).toBe('adobe');
+    expect(String(model.api)).toBe('adobe-anthropic');
+  });
+
+  it('routes an unknown OpenAI-flavored id through the openai api on a cold cache', () => {
+    // The synthesized fallback must match the api the model will eventually
+    // resolve to once metadata warms — an OpenAI-flavored id needs adobe-openai
+    // (→ streamOpenAICompletions), not adobe-anthropic (→ wire-format failure).
+    setupColdOAuthProvider();
+    storage.set('selected-model', 'adobe:gpt-5-cold');
+
+    const model = resolveModelById('gpt-5-cold');
+    expect(model.provider).toBe('adobe');
+    expect(String(model.api)).toBe('adobe-openai');
+  });
+
+  it('synthesized model carries the pi-ai-required fields (guards streamAnthropic + GC)', () => {
+    // A regression that trims a field (e.g. contextWindow:0 → negative
+    // compaction threshold → compact every turn) must be caught here.
+    setupColdOAuthProvider();
+    storage.set('selected-model', 'adobe:claude-opus-4-8');
+
+    const model = resolveModelById('claude-opus-4-8');
+    expect(model.baseUrl).toBe('');
+    expect(model.input).toEqual(['text', 'image']);
+    expect(model.contextWindow).toBe(200000);
+    expect(model.maxTokens).toBe(16384);
+    expect(model.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+    expect(model.reasoning).toBe(true);
+  });
+
+  it('does NOT synthesize a provider-routed model for a non-OAuth provider', () => {
+    // The OAuth-only guard must hold: a non-OAuth provider with an unknown id
+    // falls to the native last-resort, never to `${providerId}-anthropic`.
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('custom-key', {
+      id: 'custom-key',
+      name: 'Custom Key',
+      description: '',
+      requiresApiKey: true,
+      requiresBaseUrl: false,
+      isOAuth: false,
+      getModelIds: () => [{ id: 'known-model', name: 'Known' }],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+    mockGetRegisteredProviderIds.mockReturnValue([...providerConfigs.keys()]);
+    mockGetModel.mockImplementation((provider: string, modelId: string) => {
+      if (modelId === 'ghost-id') throw new Error('Unknown model');
+      return { id: modelId, name: modelId, provider, api: 'anthropic', baseUrl: '' };
+    });
+    addAccount('custom-key', 'k');
+    storage.set('selected-model', 'custom-key:ghost-id');
+
+    const model = resolveModelById('ghost-id');
+    expect(String(model.api)).not.toBe('custom-key-anthropic');
+  });
+});
+
 describe('fallback model fields', () => {
   beforeEach(() => {
     storage.clear();
