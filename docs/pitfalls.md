@@ -938,40 +938,63 @@ that touched LLM call paths, a new code path is bypassing the wiring.
   reverts. `tests/providers/adobe-provider.test.ts` covers the
   provider-level `ensureSessionIdHeader` fallback behavior.
 
-## Adobe / Bedrock Claude: `temperature` is deprecated on Opus 4.7 / 4.8
+## Adobe / Bedrock Claude opus-4-8: `temperature` + adaptive-thinking quirks
 
-Bedrock-backed Claude **Opus 4.7 and 4.8** reject the `temperature`
-sampling parameter — Bedrock returns `400 "temperature is deprecated for
-this model."`. The Adobe proxy wraps that as a `502 upstream_error`, and
-the node-server fetch-proxy relays the upstream status verbatim
-(`res.status(upstream.status)`), so the agent sees a bare **502 on
-`/api/fetch-proxy`** with no hint that `temperature` is the cause.
+opus-4-8 is **newer than the pinned pi-ai (0.75.3)**, so pi-ai's
+model-capability detection doesn't know it and emits two request shapes
+Bedrock rejects. Both surface identically: Bedrock returns a `400`, the
+Adobe proxy wraps it as a `502 upstream_error`, and the node-server
+fetch-proxy relays the upstream status verbatim (`res.status(upstream.status)`),
+so the agent sees a bare **502 on `/api/fetch-proxy`** with no hint of the
+cause. **Fix both at the provider layer (a model capability), never at the
+call site** — and a pi-ai bump that learns opus-4-8 makes the shims no-ops.
 
-This bites the **thinking-disabled** helper calls: `ui/quick-llm.ts`
-sends `temperature: 0.3` for the scope-label and session-title helpers.
-pi-ai's `anthropic-messages` builder already drops `temperature` when
-extended thinking is enabled, so the **main cone stream is unaffected** —
-only the background helpers 502 (commonly noticed as a pile of 502s as a
-long conversation keeps refreshing its working-scope label). Message
-count is irrelevant: even a 24-token request fails.
+### 1. `temperature` is deprecated (Opus 4.7 / 4.8)
 
-**The fix lives at the provider layer, not the call site.** Temperature
-support is a model capability: `src/providers/temperature-support.ts`
-owns the single reject-list (`modelSupportsTemperature` /
-`withSupportedTemperature`). Both Bedrock-backed providers consult it —
-`providers/built-in/bedrock-camp.ts` omits it in the Converse payload and
-`providers/adobe.ts` strips it before `streamAnthropic` /
-`streamSimpleAnthropic`. **A new temperature-rejecting model is a one-line
-edit to `TEMPERATURE_UNSUPPORTED`** — do not re-add per-call-site guards.
+Bedrock returns `400 "temperature is deprecated for this model."`. This
+bites the **thinking-disabled** helper calls: `ui/quick-llm.ts` sends
+`temperature: 0.3` for the scope-label and session-title helpers. pi-ai's
+`anthropic-messages` builder already drops `temperature` when extended
+thinking is enabled, so the **main cone stream is unaffected** — only the
+background helpers 502 (commonly a pile of 502s as a long conversation
+keeps refreshing its working-scope label). Message count is irrelevant:
+even a 24-token request fails.
+
+Fix: `src/providers/temperature-support.ts` owns the single reject-list
+(`modelSupportsTemperature` / `withSupportedTemperature`). Both Bedrock-backed
+providers consult it — `providers/built-in/bedrock-camp.ts` omits it in the
+Converse payload and `providers/adobe.ts` strips it before `streamAnthropic` /
+`streamSimpleAnthropic`. A new temperature-rejecting model is a one-line edit
+to `TEMPERATURE_UNSUPPORTED`.
+
+### 2. Adaptive thinking required (Opus 4.8)
+
+With thinking **enabled**, Bedrock returns `400 "thinking.type.enabled is
+not supported for this model. Use thinking.type.adaptive and
+output_config.effort..."`. pi-ai's `supportsAdaptiveThinking()` recognizes
+opus-4-6/4-7 + sonnet-4-6 (emitting `thinking:{type:"adaptive"}` +
+`output_config.effort`) but **not opus-4-8**, so it falls back to the legacy
+`thinking:{type:"enabled",budget_tokens}` shape that Bedrock rejects. Unlike
+temperature, this hits the **main cone stream** (thinking on).
+
+Fix: `src/providers/adaptive-thinking.ts` — `providers/adobe.ts` passes an
+`onPayload` hook (pi-ai's `streamAnthropic` payload-rewrite seam, the same
+one `bedrock-camp` uses) that rewrites the emitted body
+`enabled → adaptive` + `output_config.effort` for the models in
+`ADAPTIVE_THINKING_SHIM_MODELS`. The rewrite only fires when the enabled
+shape is actually present, so it's a no-op when thinking is off or once
+pi-ai learns the model. **Immediate workaround:** set the thinking level to
+off (the model still reasons adaptively on its own).
 
 **Related**
 
-- Coverage: `tests/providers/temperature-support.test.ts` (the helper);
-  `tests/providers/built-in/bedrock-camp.test.ts` ("omits temperature for
-  Opus 4.8").
-- History: the original guard was Opus-4.7-only and inline in
-  `bedrock-camp.ts`; it was generalized into the shared helper and
-  extended to 4.8 (the Adobe path had no guard at all before).
+- Coverage: `tests/providers/temperature-support.test.ts`,
+  `tests/providers/adaptive-thinking.test.ts`, and the "omits temperature
+  for Opus 4.8" case in `tests/providers/built-in/bedrock-camp.test.ts`.
+- History: the temperature guard was Opus-4.7-only and inline in
+  `bedrock-camp.ts`; it was generalized into the shared helper, extended to
+  4.8, and applied to the (previously unguarded) Adobe path. The
+  adaptive-thinking shim was added alongside it.
 
 ## Detached popout: boot is the lock event
 

@@ -36,6 +36,7 @@ import {
   streamSimpleAnthropic,
   streamSimpleOpenAICompletions,
 } from '@earendil-works/pi-ai';
+import { withAdaptiveThinkingShim } from '../src/providers/adaptive-thinking.js';
 import {
   type AdobeModelMetadata,
   enrichAdobeModel,
@@ -750,9 +751,13 @@ const streamAdobe = (
           context,
           withSliccVersionHeader(
             ensureSessionIdHeader(
-              // Opus 4.7/4.8 reject `temperature` on Bedrock — strip it for
-              // thinking-disabled helper calls (the main stream omits it already).
-              withSupportedTemperature(model.id, model.name, { ...options, apiKey: accessToken }),
+              // opus-4-8 quirks the pinned pi-ai doesn't know: it rejects
+              // `temperature` (strip it), and needs adaptive thinking instead of
+              // the legacy enabled+budget shape pi-ai emits (rewrite via onPayload).
+              withAdaptiveThinkingShim(
+                model,
+                withSupportedTemperature(model.id, model.name, { ...options, apiKey: accessToken })
+              ),
               'streamAdobe[anthropic]'
             )
           )
@@ -806,9 +811,14 @@ const streamSimpleAdobe = (model: Model<Api>, context: Context, options?: Simple
           context,
           withSliccVersionHeader(
             ensureSessionIdHeader(
-              // Opus 4.7/4.8 reject `temperature` on Bedrock — strip it here so
-              // thinking-disabled helpers (quick-llm scope label / title) don't 502.
-              withSupportedTemperature(model.id, model.name, { ...options, apiKey: accessToken }),
+              // opus-4-8 quirks the pinned pi-ai doesn't know: it rejects
+              // `temperature` (strip it — also covers thinking-disabled quick-llm
+              // helpers), and needs adaptive thinking instead of the legacy
+              // enabled+budget shape pi-ai emits (rewrite via onPayload).
+              withAdaptiveThinkingShim(
+                model,
+                withSupportedTemperature(model.id, model.name, { ...options, apiKey: accessToken })
+              ),
               'streamSimpleAdobe[anthropic]'
             )
           ) as any
