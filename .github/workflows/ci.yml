@@ -24,6 +24,7 @@ jobs:
       extension: ${{ steps.filter.outputs.extension }}
       cloudflare-worker: ${{ steps.filter.outputs.cloudflare-worker }}
       cherry: ${{ steps.filter.outputs.cherry }}
+      dev-tools: ${{ steps.filter.outputs.dev-tools }}
       swift-server: ${{ steps.filter.outputs.swift-server }}
       swift-launcher: ${{ steps.filter.outputs.swift-launcher }}
       ios-app: ${{ steps.filter.outputs.ios-app }}
@@ -52,6 +53,8 @@ jobs:
               - 'packages/cloudflare-worker/**'
             cherry:
               - 'packages/cherry/**'
+            dev-tools:
+              - 'packages/dev-tools/**'
             swift-server:
               - 'packages/swift-server/**'
             swift-launcher:
@@ -60,12 +63,22 @@ jobs:
               - 'packages/ios-app/**'
             swift-config:
               - '.swiftlint.yml'
+              # Swift coverage floors + the gate script live outside the
+              # swift packages, so a threshold-only ratchet PR must still
+              # trigger the swift coverage jobs that consume them.
+              - 'coverage-thresholds.json'
+              - 'packages/dev-tools/tools/swift-coverage-check.sh'
             root-config:
               - 'package.json'
               - 'package-lock.json'
               - 'tsconfig*.json'
               - 'vitest*.config.*'
               - '.github/workflows/ci.yml'
+              # Coverage floors + the TS gate tooling gate every package
+              # job; a threshold-only ratchet PR must exercise them.
+              - 'coverage-thresholds.json'
+              - 'packages/dev-tools/tools/coverage-gate.mjs'
+              - 'packages/dev-tools/tools/coverage-ratchet-lib.mjs'
       - name: Check merge queue position
         id: queue-position
         env:
@@ -134,6 +147,7 @@ jobs:
       needs.changes.outputs.extension == 'true' ||
       needs.changes.outputs.cloudflare-worker == 'true' ||
       needs.changes.outputs.cherry == 'true' ||
+      needs.changes.outputs.dev-tools == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
     strategy:
@@ -484,6 +498,33 @@ jobs:
             sleep 15
           done
 
+  cloud-core:
+    needs: changes
+    if: >-
+      needs.changes.outputs.cloud-core == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: tsc --noEmit -p packages/cloud-core/tsconfig.json
+      - name: Test (with coverage threshold gate)
+        run: npm run test:coverage:cloud-core
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-cloud-core
+          path: coverage/
+          if-no-files-found: ignore
+      - name: Build
+        run: npm run build -w @slicc/cloud-core
+
   cherry:
     needs: changes
     if: >-
@@ -521,6 +562,12 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      # swift-coverage-check.sh reads its floors from coverage-thresholds.json
+      # via node, so pin Node (matches the other jobs) instead of relying on
+      # the runner's preinstalled version.
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
       - name: Install SwiftLint
         run: brew install swiftlint
       - name: Lint (SwiftLint)
@@ -530,7 +577,7 @@ jobs:
       - name: Test (with coverage threshold gate)
         run: |
           ./packages/dev-tools/tools/swift-coverage-check.sh \
-            packages/swift-server SliccServerPackageTests 40 40 35
+            packages/swift-server SliccServerPackageTests
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -583,7 +630,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           ./packages/dev-tools/tools/swift-coverage-check.sh \
-            packages/swift-launcher SliccstartPackageTests 5 5 8
+            packages/swift-launcher SliccstartPackageTests
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -704,6 +751,7 @@ jobs:
         node-server,
         chrome-extension,
         cloudflare-worker,
+        cloud-core,
         global-install,
         swift-launcher,
         swift-server,
