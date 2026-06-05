@@ -338,6 +338,14 @@ describe('bedrock-camp built-in provider', () => {
     expect(payload.inferenceConfig.temperature).toBeUndefined();
   });
 
+  it('omits temperature for Opus 4.8 (CAMP deprecates it)', async () => {
+    const payload = await capturePayload(
+      baseModel({ id: 'us.anthropic.claude-opus-4-8', name: 'Claude Opus 4.8 (US)' }),
+      { temperature: 0.5, reasoning: 'high' }
+    );
+    expect(payload.inferenceConfig.temperature).toBeUndefined();
+  });
+
   it('keeps temperature for other models', async () => {
     const fetchMock = mockOkResponse();
     vi.stubGlobal('fetch', fetchMock);
