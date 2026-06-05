@@ -22,8 +22,15 @@ import type {
   SerialOpenOptions,
   SerialOutputSignals,
 } from '../../kernel/serial-port-registry.js';
-import { MAX_SERIAL_TRANSFER_BYTES } from '../../kernel/serial-port-registry.js';
+import {
+  getNavigatorSerial,
+  getSharedSerialRegistry,
+  MAX_SERIAL_TRANSFER_BYTES,
+  deviceToInfo as serialPortToInfo,
+} from '../../kernel/serial-port-registry.js';
+import { getToolExecutionContext } from '../../tools/tool-ui.js';
 import { stdinAsLatin1 } from '../just-bash-compat.js';
+import { runDevicePickerApproval } from './picker-approval.js';
 import {
   resolveSerialBackend,
   type SerialBackend,
@@ -246,10 +253,35 @@ async function dispatch(
     }
     case 'request': {
       const resolved = flags.get('--__resolved');
-      const info = resolved
-        ? await backend.info(resolved)
-        : await backend.request(parseSerialFilters(flags));
-      return ok(`${formatDeviceInfo(info)}\n`);
+      if (resolved) return ok(`${formatDeviceInfo(await backend.info(resolved))}\n`);
+      const filters = parseSerialFilters(flags);
+      const toolCtx = getToolExecutionContext();
+      if (toolCtx) {
+        // Cone path: surface approval card; click drives chooser via
+        // dip (standalone) or unified popup (extension).
+        const approval = await runDevicePickerApproval('serial-port', filters, toolCtx);
+        if (approval.handle) {
+          return ok(`${formatDeviceInfo(await backend.info(approval.handle))}\n`);
+        }
+        const ident = approval.info as { usbVendorId?: number; usbProductId?: number };
+        const serial = getNavigatorSerial();
+        if (!serial) return fail('request: Web Serial unavailable for port re-acquire');
+        const ports = await serial.getPorts();
+        const port = ports.find((p) => {
+          const i = typeof p.getInfo === 'function' ? p.getInfo() : {};
+          return (
+            (ident.usbVendorId === undefined || i.usbVendorId === ident.usbVendorId) &&
+            (ident.usbProductId === undefined || i.usbProductId === ident.usbProductId)
+          );
+        });
+        if (!port) return fail('request: granted port could not be re-acquired');
+        const registry = getSharedSerialRegistry();
+        const handle = registry.register(port);
+        const entry = registry.get(handle);
+        if (!entry) return fail('request: failed to register granted port');
+        return ok(`${formatDeviceInfo(serialPortToInfo(handle, entry))}\n`);
+      }
+      return ok(`${formatDeviceInfo(await backend.request(filters))}\n`);
     }
     case 'open': {
       const handle = positionals[1];

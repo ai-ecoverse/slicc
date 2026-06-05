@@ -16,12 +16,17 @@ import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { getPanelRpcClient, hasLocalDom } from '../../kernel/panel-rpc.js';
 import {
+  deviceToInfo,
+  getNavigatorUsb,
+  getSharedUsbRegistry,
   MAX_USB_TRANSFER_BYTES,
   type UsbControlSetup,
   type UsbDeviceFilter,
   type UsbDeviceInfo,
 } from '../../kernel/usb-device-registry.js';
+import { getToolExecutionContext } from '../../tools/tool-ui.js';
 import { stdinAsLatin1 } from '../just-bash-compat.js';
+import { runDevicePickerApproval } from './picker-approval.js';
 import { resolveUsbBackend, type UsbBackend } from './usb-backends.js';
 
 type UsbCtx = Parameters<Parameters<typeof defineCommand>[1]>[1];
@@ -191,10 +196,39 @@ async function dispatch(args: string[], ctx: UsbCtx, backend: UsbBackend): Promi
     }
     case 'request': {
       const resolved = flags.get('--__resolved');
-      const info = resolved
-        ? await backend.info(resolved)
-        : await backend.request(parseUsbFilters(flags));
-      return ok(`${formatDeviceInfo(info)}\n`);
+      if (resolved) return ok(`${formatDeviceInfo(await backend.info(resolved))}\n`);
+      const filters = parseUsbFilters(flags);
+      const toolCtx = getToolExecutionContext();
+      if (toolCtx) {
+        // Cone path: agent-issued `usb request` arrives without a user
+        // gesture, so `navigator.usb.requestDevice` would fail. Surface
+        // an approval card in chat; the click drives the chooser via
+        // dip (standalone) or the unified popup (extension), then either
+        // returns a page-realm handle directly or identifiers we
+        // re-acquire in this realm.
+        const approval = await runDevicePickerApproval('usb-device', filters, toolCtx);
+        if (approval.handle) {
+          return ok(`${formatDeviceInfo(await backend.info(approval.handle))}\n`);
+        }
+        const ident = approval.info as {
+          vendorId: number;
+          productId: number;
+          serialNumber?: string;
+        };
+        const usb = getNavigatorUsb();
+        if (!usb) return fail('request: WebUSB unavailable for device re-acquire');
+        const devices = await usb.getDevices();
+        const device = devices.find(
+          (d) =>
+            d.vendorId === ident.vendorId &&
+            d.productId === ident.productId &&
+            (!ident.serialNumber || d.serialNumber === ident.serialNumber)
+        );
+        if (!device) return fail('request: granted device could not be re-acquired');
+        const handle = getSharedUsbRegistry().register(device);
+        return ok(`${formatDeviceInfo(deviceToInfo(handle, device))}\n`);
+      }
+      return ok(`${formatDeviceInfo(await backend.request(filters))}\n`);
     }
     case 'open':
     case 'close':

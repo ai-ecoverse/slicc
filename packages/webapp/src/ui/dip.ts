@@ -1064,17 +1064,38 @@ async function handleDipPickerAction(
   msg: { type: string; action: string; data?: unknown; picker?: string },
   onLick: (action: string, data: unknown) => void
 ): Promise<void> {
-  if (msg.picker !== 'directory') {
-    // Unknown picker kind — forward as a regular lick so the action
-    // still reaches the registry.
-    onLick(msg.action, msg.data);
-    return;
+  const data = (msg.data ?? null) as Record<string, unknown> | null;
+  const filters = Array.isArray(data?.filters) ? (data!.filters as unknown[]) : [];
+  switch (msg.picker) {
+    case 'directory':
+      await runDirectoryPicker(msg.action, onLick);
+      return;
+    case 'usb-device':
+      await runUsbPicker(msg.action, filters, onLick);
+      return;
+    case 'serial-port':
+      await runSerialPicker(msg.action, filters, onLick);
+      return;
+    case 'hid-device':
+      await runHidPicker(msg.action, filters, onLick);
+      return;
+    default:
+      // Unknown picker kind — forward as a regular lick so the action
+      // still reaches the registry.
+      onLick(msg.action, msg.data);
+      return;
   }
+}
+
+async function runDirectoryPicker(
+  action: string,
+  onLick: (action: string, data: unknown) => void
+): Promise<void> {
   const win = window as Window & {
     showDirectoryPicker?: (opts?: { mode?: string }) => Promise<FileSystemDirectoryHandle>;
   };
   if (typeof win.showDirectoryPicker !== 'function') {
-    onLick(msg.action, { error: 'File System Access API not available' });
+    onLick(action, { error: 'File System Access API not available' });
     return;
   }
   let handle: FileSystemDirectoryHandle;
@@ -1082,10 +1103,10 @@ async function handleDipPickerAction(
     handle = await win.showDirectoryPicker({ mode: 'readwrite' });
   } catch (err: unknown) {
     if (err instanceof Error && err.name === 'AbortError') {
-      onLick(msg.action, { cancelled: true });
+      onLick(action, { cancelled: true });
       return;
     }
-    onLick(msg.action, { error: err instanceof Error ? err.message : String(err) });
+    onLick(action, { error: err instanceof Error ? err.message : String(err) });
     return;
   }
   const idbKey = `pendingMount:dip-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -1093,12 +1114,111 @@ async function handleDipPickerAction(
     const { storePendingHandle } = await import('../fs/mount-picker-popup.js');
     await storePendingHandle(idbKey, handle);
   } catch (err: unknown) {
-    onLick(msg.action, {
+    onLick(action, {
       error: `failed to store directory handle: ${err instanceof Error ? err.message : String(err)}`,
     });
     return;
   }
-  onLick(msg.action, { handleInIdb: true, idbKey, dirName: handle.name });
+  onLick(action, { handleInIdb: true, idbKey, dirName: handle.name });
+}
+
+async function runUsbPicker(
+  action: string,
+  filters: unknown[],
+  onLick: (action: string, data: unknown) => void
+): Promise<void> {
+  const nav = (globalThis as unknown as { navigator?: { usb?: { requestDevice?: Function } } })
+    .navigator;
+  if (typeof nav?.usb?.requestDevice !== 'function') {
+    onLick(action, { error: 'WebUSB is not available' });
+    return;
+  }
+  try {
+    const device = await (
+      nav.usb.requestDevice as (opts: { filters: unknown[] }) => Promise<unknown>
+    )({ filters });
+    const { getSharedUsbRegistry, deviceToInfo } = await import('../kernel/usb-device-registry.js');
+    const registry = getSharedUsbRegistry();
+    const handle = registry.register(device as Parameters<typeof registry.register>[0]);
+    const info = deviceToInfo(handle, device as Parameters<typeof deviceToInfo>[1]);
+    onLick(action, { granted: true, handle, info });
+  } catch (err: unknown) {
+    if (err instanceof Error && (err.name === 'AbortError' || err.name === 'NotFoundError')) {
+      onLick(action, { cancelled: true });
+      return;
+    }
+    onLick(action, { error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+async function runSerialPicker(
+  action: string,
+  filters: unknown[],
+  onLick: (action: string, data: unknown) => void
+): Promise<void> {
+  const nav = (globalThis as unknown as { navigator?: { serial?: { requestPort?: Function } } })
+    .navigator;
+  if (typeof nav?.serial?.requestPort !== 'function') {
+    onLick(action, { error: 'Web Serial is not available' });
+    return;
+  }
+  try {
+    const port = await (
+      nav.serial.requestPort as (opts: { filters?: unknown[] }) => Promise<unknown>
+    )(filters.length ? { filters } : {});
+    if (!port) {
+      onLick(action, { cancelled: true });
+      return;
+    }
+    const serialMod = await import('../kernel/serial-port-registry.js');
+    const registry = serialMod.getSharedSerialRegistry();
+    const handle = registry.register(port as Parameters<typeof registry.register>[0]);
+    const entry = registry.get(handle);
+    const info = entry ? serialMod.deviceToInfo(handle, entry) : { handle };
+    onLick(action, { granted: true, handle, info });
+  } catch (err: unknown) {
+    if (err instanceof Error && (err.name === 'AbortError' || err.name === 'NotFoundError')) {
+      onLick(action, { cancelled: true });
+      return;
+    }
+    onLick(action, { error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+async function runHidPicker(
+  action: string,
+  filters: unknown[],
+  onLick: (action: string, data: unknown) => void
+): Promise<void> {
+  const nav = (globalThis as unknown as { navigator?: { hid?: { requestDevice?: Function } } })
+    .navigator;
+  if (typeof nav?.hid?.requestDevice !== 'function') {
+    onLick(action, { error: 'WebHID is not available' });
+    return;
+  }
+  try {
+    const devices = (await (
+      nav.hid.requestDevice as (opts: { filters: unknown[] }) => Promise<unknown>
+    )({ filters })) as unknown[];
+    const device = Array.isArray(devices) ? devices[0] : devices;
+    if (!device) {
+      onLick(action, { cancelled: true });
+      return;
+    }
+    const { getSharedHidRegistry, hidDeviceToInfo } = await import(
+      '../kernel/hid-device-registry.js'
+    );
+    const registry = getSharedHidRegistry();
+    const handle = registry.register(device as Parameters<typeof registry.register>[0]);
+    const info = hidDeviceToInfo(handle, device as Parameters<typeof hidDeviceToInfo>[1]);
+    onLick(action, { granted: true, handle, info });
+  } catch (err: unknown) {
+    if (err instanceof Error && (err.name === 'AbortError' || err.name === 'NotFoundError')) {
+      onLick(action, { cancelled: true });
+      return;
+    }
+    onLick(action, { error: err instanceof Error ? err.message : String(err) });
+  }
 }
 
 /**

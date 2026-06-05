@@ -127,15 +127,13 @@ and self-close, but DO NOT count as the canonical detached tab.
 - **Extension-relative scripts** must load statically in `<head>`, not via dynamic `createElement('script').src` (opaque origin blocks runtime loads).
 - See `docs/pitfalls.md` "Extension Sandbox: External Scripts & Opaque Origin" for the full reference.
 
-## Device Picker Popups
+## Device / Directory Picker Popups
 
-The `usb` / `serial` / `hid` shell commands call WebUSB / Web Serial / WebHID device pickers (`navigator.usb` / `navigator.serial` / `navigator.hid` `requestDevice`), which the side panel cannot host reliably. The extension runs each chooser in a dedicated popup window via `chrome.windows.create`, mirroring `mount-popup.html` / `voice-popup.html`. Three popup entry points are bundled (HTML + JS, plain static files copied into `dist/extension/` by the `closeBundle` hook in `vite.config.ts` — they are not Vite `rollupOptions.input` entries):
+The `mount` / `usb` / `serial` / `hid` shell commands call system choosers (`showDirectoryPicker` / `navigator.{usb,serial,hid}.request*`), which the side panel cannot host reliably. All four pickers share a single popup entry point — `picker-popup.html` + `picker-popup.js` — parameterized by `?kind=directory|usb-device|serial-port|hid-device`. The two files are copied into `dist/extension/` by the `closeBundle` hook in `vite.config.ts` (not Vite `rollupOptions.input` entries).
 
-- `usb-picker-popup.html` / `usb-picker-popup.js`
-- `serial-picker-popup.html` / `serial-picker-popup.js`
-- `hid-picker-popup.html` / `hid-picker-popup.js`
+The popup runs the chooser on its own button-click gesture (satisfying Chrome's user-gesture rule), then posts `{ source: 'picker-popup', kind, requestId, … }` back via `chrome.runtime` messaging. The page-side launcher is `openPickerPopup(kind, filters, requestId)` in `packages/webapp/src/shell/supplemental-commands/picker-popup.ts`; thin typed adapters (`openMountPickerPopup`, `openUsbPickerPopup`, `openSerialPickerPopup`, `openHidPickerPopup`) wrap it for the existing call sites. Directory results carry an opaque `{ handleInIdb, idbKey, dirName }` (the popup stashes the non-postable `FileSystemDirectoryHandle` in the shared `slicc-pending-mount` IDB store); device results carry identifiers (`vendorId/productId/serialNumber`) the caller re-acquires via `navigator.{usb,serial,hid}.getDevices()` in its own realm.
 
-Each popup runs `requestDevice` on its own button-click gesture (satisfying Chrome's user-gesture rule), then posts the granted device identifiers back via `chrome.runtime` messaging. The page-side launchers (`usb-picker.ts` / `serial-picker.ts` / `hid-picker.ts` in `packages/webapp/src/shell/supplemental-commands/`) re-acquire the now-granted device in their own realm. Any change to the `closeBundle` static-asset copy list must keep these six files listed or the picker windows 404.
+The cone (agent) path for `usb request` / `serial request` / `hid request` mirrors `mount`'s approval flow: the command surfaces a `showToolUI` approval card in chat (built by `picker-approval.ts`); the user click drives the chooser via dip (`handleDipPickerAction` in `dip.ts`) in standalone or via the unified popup transparent-swap in `tool-ui-renderer.ts` in extension. Any change to the `closeBundle` static-asset copy list must keep both `picker-popup.html` and `picker-popup.js` listed or all four picker windows 404.
 
 ## Dual-Context Shell Model
 

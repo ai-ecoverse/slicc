@@ -21,13 +21,18 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import {
+  getNavigatorHid,
+  getSharedHidRegistry,
   type HidDeviceFilter,
   type HidDeviceInfo,
+  hidDeviceToInfo,
   MAX_HID_REPORT_BYTES,
 } from '../../kernel/hid-device-registry.js';
 import { getPanelRpcClient, hasLocalDom } from '../../kernel/panel-rpc.js';
+import { getToolExecutionContext } from '../../tools/tool-ui.js';
 import { stdinAsLatin1 } from '../just-bash-compat.js';
 import { type HidBackend, type HidInputReport, resolveHidBackend } from './hid-backends.js';
+import { runDevicePickerApproval } from './picker-approval.js';
 
 type HidCtx = Parameters<Parameters<typeof defineCommand>[1]>[1];
 type CmdResult = { stdout: string; stderr: string; exitCode: number };
@@ -169,10 +174,28 @@ async function dispatch(args: string[], ctx: HidCtx, backend: HidBackend): Promi
     }
     case 'request': {
       const resolved = flags.get('--__resolved');
-      const info = resolved
-        ? await backend.info(resolved)
-        : await backend.request(parseHidFilters(flags));
-      return ok(`${formatDeviceInfo(info)}\n`);
+      if (resolved) return ok(`${formatDeviceInfo(await backend.info(resolved))}\n`);
+      const filters = parseHidFilters(flags);
+      const toolCtx = getToolExecutionContext();
+      if (toolCtx) {
+        // Cone path: surface approval card; click drives chooser via
+        // dip (standalone) or unified popup (extension).
+        const approval = await runDevicePickerApproval('hid-device', filters, toolCtx);
+        if (approval.handle) {
+          return ok(`${formatDeviceInfo(await backend.info(approval.handle))}\n`);
+        }
+        const ident = approval.info as { vendorId: number; productId: number };
+        const hid = getNavigatorHid();
+        if (!hid) return fail('request: WebHID unavailable for device re-acquire');
+        const devices = await hid.getDevices();
+        const device = devices.find(
+          (d) => d.vendorId === ident.vendorId && d.productId === ident.productId
+        );
+        if (!device) return fail('request: granted device could not be re-acquired');
+        const handle = getSharedHidRegistry().register(device);
+        return ok(`${formatDeviceInfo(hidDeviceToInfo(handle, device))}\n`);
+      }
+      return ok(`${formatDeviceInfo(await backend.request(filters))}\n`);
     }
     case 'open':
     case 'close': {
