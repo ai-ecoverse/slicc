@@ -1,6 +1,6 @@
 /**
  * Wave C2 — Copy a legacy LightningFS manifest into OPFS, verify
- * file-count + total-byte parity, then atomically write the
+ * file-count (presence) parity, then atomically write the
  * `/.slicc-migrated` sentinel as the final operation.
  *
  * This module is **pure transport**: all I/O is injected. The C1
@@ -8,9 +8,13 @@
  * bytes are read strictly READ-ONLY from the legacy LFS (the IDB is
  * the rollback escape hatch and must never be mutated; deletion is
  * deferred to C5), bytes are written into OPFS via the injected
- * target writer, the OPFS tree is then walked to confirm exact
- * parity, and only on success does the caller-supplied
- * `writeSentinel` run.
+ * target writer, the OPFS tree is then walked to confirm each
+ * manifest file is present, and only on success does the
+ * caller-supplied `writeSentinel` run. Byte totals are still
+ * collected and logged as a diagnostic but do NOT gate the sentinel:
+ * concurrent boot writes (orchestrator defaults, sidecar metadata)
+ * legitimately drift the OPFS byte total away from the manifest's
+ * snapshot.
  *
  * Logging is **counts only** — no filenames, contents, sizes per
  * file. Symmetric to C1's secret-safe logging.
@@ -50,7 +54,9 @@ export interface RunLegacyMigrationCopyOptions {
   /**
    * Count OPFS files + sum their bytes for the parity gate. Excludes
    * symlinks (counted separately in the manifest) and the sentinel
-   * (not yet written at parity-check time).
+   * (not yet written at parity-check time). The count is what gates
+   * the sentinel (presence-based parity); the byte total is logged
+   * as a diagnostic only.
    */
   countOpfsFiles: () => Promise<OpfsParityCount>;
   /**
@@ -61,10 +67,11 @@ export interface RunLegacyMigrationCopyOptions {
    */
   flushBeforeSentinel?: () => Promise<void>;
   /**
-   * Writes the sentinel atomically. Called LAST, only on exact parity.
-   * The runner typically implements this as a single `writeFile` to
-   * `/.slicc-migrated` (atomic at the OPFS layer for a single write
-   * call) followed by another sidecar flush.
+   * Writes the sentinel atomically. Called LAST, only on count
+   * (presence) parity. The runner typically implements this as a
+   * single `writeFile` to `/.slicc-migrated` (atomic at the OPFS
+   * layer for a single write call) followed by another sidecar
+   * flush.
    */
   writeSentinel: () => Promise<void>;
   /**
@@ -100,8 +107,12 @@ export type MigrationCopyResult =
  *   3. symlink all symlinks (after dirs/files so targets exist).
  *   4. flushBeforeSentinel() — persists metadata sidecar.
  *   5. countOpfsFiles() — parity walk over OPFS.
- *   6. ONLY on exact (count + bytes) parity match:
- *      writeSentinel() as the FINAL operation.
+ *   6. ONLY on count (presence) parity match — every manifest file
+ *      is present on OPFS — writeSentinel() runs as the FINAL
+ *      operation. Byte totals are logged as a diagnostic; drift
+ *      between manifest bytes and live OPFS bytes (boot rewrites,
+ *      orchestrator defaults) is expected and does NOT gate the
+ *      sentinel.
  *
  * On any copy error OR parity mismatch the function returns a
  * non-success result WITHOUT invoking `writeSentinel`. The OPFS state
@@ -224,16 +235,28 @@ export async function runLegacyMigrationCopy(
     }
   }
 
-  // 5. Parity walk over OPFS.
+  // 5. Parity walk over OPFS — presence (count) only. The byte total
+  // is informational: boot writes (orchestrator defaults, sidecar
+  // metadata) legitimately drift the OPFS byte total away from the
+  // manifest snapshot, so we log the delta but never fail on it.
   const actual = await opts.countOpfsFiles();
-  if (actual.fileCount !== expected.fileCount || actual.totalBytes !== expected.totalBytes) {
+  const byteDelta = actual.totalBytes - expected.totalBytes;
+  if (actual.fileCount !== expected.fileCount) {
     logger?.warn?.('[migration] parity mismatch — sentinel NOT written', {
       expectedFiles: expected.fileCount,
       actualFiles: actual.fileCount,
       expectedBytes: expected.totalBytes,
       actualBytes: actual.totalBytes,
+      byteDelta,
     });
     return { kind: 'parity-mismatch', expected, actual };
+  }
+  if (byteDelta !== 0) {
+    logger?.info?.('[migration] byte drift tolerated (count parity matched)', {
+      expectedBytes: expected.totalBytes,
+      actualBytes: actual.totalBytes,
+      byteDelta,
+    });
   }
 
   // 6. Atomic sentinel write — FINAL operation.
@@ -241,6 +264,8 @@ export async function runLegacyMigrationCopy(
   logger?.info?.('[migration] C2 copy complete, sentinel written', {
     files: actual.fileCount,
     totalBytes: actual.totalBytes,
+    expectedBytes: expected.totalBytes,
+    byteDelta,
     symlinks: manifest.symlinkCount,
     dirs: manifest.dirCount,
   });

@@ -158,18 +158,50 @@ describe('runLegacyMigrationCopy parity gate + error handling', () => {
     expect(sentinel).not.toHaveBeenCalled();
   });
 
-  it('does NOT write the sentinel when total-bytes parity fails', async () => {
+  it('writes the sentinel when count parity matches but bytes drift higher (boot rewrite)', async () => {
+    // Regression: a concurrent boot writer (orchestrator
+    // `ensureRootStructure`, default `/shared/CLAUDE.md`, sidecar
+    // metadata) bumps a manifest file's size on OPFS after the copy
+    // wrote it. Count parity still matches → sentinel MUST land. The
+    // byte delta is logged as a diagnostic but does NOT gate.
     const manifest = manifestOf([{ type: 'file', path: '/a.txt', size: 3 }], 1, 3);
     const sentinel = vi.fn(async () => {});
+    const infos: Array<{ msg: string; ctx?: unknown }> = [];
     const result = await runLegacyMigrationCopy({
       manifest,
       source: buildSource({ '/a.txt': new Uint8Array([1, 2, 3]) }),
       target: buildFakeWriter(),
       countOpfsFiles: async () => ({ fileCount: 1, totalBytes: 9999 }),
       writeSentinel: sentinel,
+      logger: { info: (msg, ctx) => infos.push({ msg, ctx }) },
     });
-    expect(result.kind).toBe('parity-mismatch');
-    expect(sentinel).not.toHaveBeenCalled();
+    expect(result).toEqual({ kind: 'success', fileCount: 1, totalBytes: 9999 });
+    expect(sentinel).toHaveBeenCalledTimes(1);
+    // The byte drift was surfaced as an informational log so operators
+    // can still see the delta.
+    const driftLogged = infos.some(
+      (entry) =>
+        entry.msg.includes('byte drift tolerated') ||
+        (entry.msg.includes('C2 copy complete') &&
+          (entry.ctx as { byteDelta?: number })?.byteDelta === 9996)
+    );
+    expect(driftLogged).toBe(true);
+  });
+
+  it('writes the sentinel when count parity matches but bytes drift lower', async () => {
+    // Symmetric: drift can also be negative (e.g. a boot-time
+    // compaction shrinks an entry). Count is the only gate.
+    const manifest = manifestOf([{ type: 'file', path: '/a.txt', size: 1000 }], 1, 1000);
+    const sentinel = vi.fn(async () => {});
+    const result = await runLegacyMigrationCopy({
+      manifest,
+      source: buildSource({ '/a.txt': new Uint8Array(1000) }),
+      target: buildFakeWriter(),
+      countOpfsFiles: async () => ({ fileCount: 1, totalBytes: 200 }),
+      writeSentinel: sentinel,
+    });
+    expect(result).toEqual({ kind: 'success', fileCount: 1, totalBytes: 200 });
+    expect(sentinel).toHaveBeenCalledTimes(1);
   });
 
   it('returns copy-error on writeFile failure and does NOT write the sentinel', async () => {

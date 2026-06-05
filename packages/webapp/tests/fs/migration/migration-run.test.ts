@@ -281,6 +281,66 @@ describe('runLegacyMigrationFromVfs', () => {
     expect(linkStat.symlinkTarget).toBe('/workspace/a.txt');
   });
 
+  it('writes the sentinel when post-copy OPFS bytes exceed the manifest snapshot (boot drift)', async () => {
+    // Wave 1 hotfix #2 regression: a manifest file ends up larger on
+    // OPFS than the manifest claims (a concurrent boot rewrite landed
+    // between detection and parity, or the reader returned more bytes
+    // than the recorded size). Presence parity still matches → the
+    // sentinel MUST land so the next boot is a fast no-op.
+    const tree: Record<string, MockEntry> = {
+      '/': { type: 'dir' },
+      '/shared': { type: 'dir' },
+      // Manifest says size=4 even though the bytes are longer — this
+      // simulates the live drift cleanly without timing tricks: the
+      // migration writes the bigger bytes (so OPFS lstat returns the
+      // bigger size) while the manifest snapshot still claims 4.
+      '/shared/CLAUDE.md': {
+        type: 'file',
+        size: 4,
+        bytes: new TextEncoder().encode('larger-than-the-manifest-size'),
+      },
+    };
+    const result = await runLegacyMigrationFromVfs(vfs, {
+      legacyLfsFactory: async () => buildLfsReader(tree),
+      legacyReaderFactory: async () => buildFileReader(tree),
+      probeLegacyDbExists: async () => true,
+    });
+    expect(result.kind).toBe('copied');
+    const copy = (result as { result: MigrationCopyResult }).result;
+    expect(copy.kind).toBe('success');
+    const sentinelStat = await vfs.stat(OPFS_MIGRATION_SENTINEL);
+    expect(sentinelStat.type).toBe('file');
+  });
+
+  it('does NOT write the sentinel when a manifest file is missing on OPFS', async () => {
+    // Genuinely incomplete copy: the target silently drops one of the
+    // manifest files. Presence parity drops → sentinel MUST NOT land.
+    const tree: Record<string, MockEntry> = {
+      '/': { type: 'dir' },
+      '/workspace': { type: 'dir' },
+      '/workspace/a.txt': { type: 'file', size: 3, bytes: new Uint8Array([1, 2, 3]) },
+      '/workspace/b.txt': { type: 'file', size: 1, bytes: new Uint8Array([9]) },
+    };
+    // Wrap writeFile so the second file is silently dropped.
+    const realWriteFile = vfs.writeFile.bind(vfs);
+    (vfs as unknown as { writeFile: typeof vfs.writeFile }).writeFile = ((
+      path: string,
+      ...rest: unknown[]
+    ) => {
+      if (path === '/workspace/b.txt') return Promise.resolve();
+      return (realWriteFile as (p: string, ...r: unknown[]) => Promise<void>)(path, ...rest);
+    }) as typeof vfs.writeFile;
+    const result = await runLegacyMigrationFromVfs(vfs, {
+      legacyLfsFactory: async () => buildLfsReader(tree),
+      legacyReaderFactory: async () => buildFileReader(tree),
+      probeLegacyDbExists: async () => true,
+    });
+    expect(result.kind).toBe('copied');
+    const copy = (result as { result: MigrationCopyResult }).result;
+    expect(copy.kind).toBe('parity-mismatch');
+    await expect(vfs.stat(OPFS_MIGRATION_SENTINEL)).rejects.toBeTruthy();
+  });
+
   it('forwards per-file copy progress to onProgress', async () => {
     const tree: Record<string, MockEntry> = {
       '/': { type: 'dir' },

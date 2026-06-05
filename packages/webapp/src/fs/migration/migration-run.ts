@@ -223,14 +223,17 @@ export async function countOpfsFiles(sharedFs: VirtualFS): Promise<OpfsParityCou
 /**
  * Manifest-bounded parity walk. Stats each file path the migration
  * manifest claims it copied; only those count toward the parity total.
- * Files missing on OPFS, or whose size disagrees with the manifest,
- * cause the count to come up short — `runLegacyMigrationCopy` then
- * returns `parity-mismatch` and refuses to write the sentinel.
+ * A manifest file that is MISSING on OPFS (or whose entry is no longer
+ * a regular file) drops the count below the manifest's `fileCount`,
+ * and `runLegacyMigrationCopy` returns `parity-mismatch` and refuses
+ * to write the sentinel.
  *
- * Any file the boot wrote *on top of* the migration target (e.g.
- * orchestrator's default `/shared/CLAUDE.md`) is fine: the migration's
- * own `writeFile` overwrites it back to the legacy bytes immediately
- * before this walk, so the stat still matches the manifest.
+ * The byte total is the sum of live `lstat` sizes for the present
+ * manifest files — boot writes on top of those paths (e.g.
+ * orchestrator's default `/shared/CLAUDE.md` re-write) shift the byte
+ * total away from the manifest snapshot. This drift is INFORMATIONAL
+ * ONLY in the new gate: parity is gated on count (presence), so the
+ * sentinel still lands and the byte delta is logged as a diagnostic.
  */
 async function countManifestFilesOnOpfs(
   sharedFs: VirtualFS,
