@@ -29,10 +29,10 @@ import {
   resolveCurrentModel,
 } from '../../../src/ui/provider-settings.js';
 
-const mk = (id: string, costIn: number, costOut: number, ctx = 1_000_000) => ({
+const mk = (id: string, costIn: number, costOut: number, ctx = 1_000_000, provider = 'adobe') => ({
   id,
   name: id,
-  provider: 'adobe',
+  provider,
   cost: { input: costIn, output: costOut, cacheRead: 0, cacheWrite: 0 },
   contextWindow: ctx,
   maxTokens: 128000,
@@ -96,5 +96,54 @@ describe('models command reports the resolved model (no guessing)', () => {
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain('claude-opus-4-8');
     expect(res.stdout).toMatch(/Currently using:\s*adobe:claude-opus-4-8/);
+  });
+
+  it('--json marks the RESOLVED model as selected, not the raw selection', async () => {
+    // JSON consumers (`.find(m => m.selected)`) must get the resolved model.
+    vi.mocked(getProviderModels).mockReturnValue([
+      mk('claude-opus-4-6', 5, 25),
+      mk('claude-opus-4-8', 0, 0),
+    ] as never);
+    vi.mocked(getSelectedModelId).mockReturnValue('claude-opus-4-6'); // selected = 4-6
+    vi.mocked(resolveCurrentModel).mockReturnValue({
+      id: 'claude-opus-4-8', // resolved = 4-8 (diverges)
+      provider: 'adobe',
+    } as never);
+
+    const res = await createModelsCommand().execute(
+      ['--json', '--all-versions', '--no-benchmarks'],
+      ctx() as never
+    );
+    expect(res.exitCode).toBe(0);
+    const models = JSON.parse(res.stdout) as Array<{ id: string; selected: boolean }>;
+    const selected = models.filter((m) => m.selected);
+    expect(selected).toHaveLength(1);
+    expect(selected[0].id).toBe('claude-opus-4-8');
+  });
+
+  it('--all reports the resolved model in a single global "Currently using" line', async () => {
+    vi.mocked(getAccounts).mockReturnValue([
+      { providerId: 'adobe' },
+      { providerId: 'anthropic' },
+    ] as never);
+    vi.mocked(getProviderConfig).mockImplementation(((id: string) => ({
+      id,
+      name: id === 'adobe' ? 'Adobe' : 'Anthropic',
+    })) as never);
+    vi.mocked(getProviderModels).mockImplementation(((id: string) =>
+      id === 'adobe'
+        ? [mk('claude-opus-4-8', 0, 0)]
+        : [mk('claude-sonnet-4-0', 3, 15, 200_000, 'anthropic')]) as never);
+    vi.mocked(getSelectedModelId).mockReturnValue('claude-opus-4-8');
+    vi.mocked(resolveCurrentModel).mockReturnValue({
+      id: 'claude-opus-4-8',
+      provider: 'adobe',
+    } as never);
+
+    const res = await createModelsCommand().execute(['--all', '--no-benchmarks'], ctx() as never);
+    expect(res.exitCode).toBe(0);
+    const usingLines = res.stdout.split('\n').filter((l) => l.includes('Currently using:'));
+    expect(usingLines).toHaveLength(1);
+    expect(usingLines[0]).toContain('adobe:claude-opus-4-8');
   });
 });

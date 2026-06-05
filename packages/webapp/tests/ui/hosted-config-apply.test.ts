@@ -71,4 +71,14 @@ describe('prewarmHostedModels', () => {
       prewarmHostedModels([{ providerId: 'adobe', kind: 'oauth', accessToken: 't' }], deps)
     ).resolves.toBeUndefined();
   });
+
+  it('does not hang on a refresh that never resolves (per-refresh timeout)', async () => {
+    // A hung /v1/models fetch must not block account application / cold start.
+    const deps = {
+      getRefreshModels: () => () => new Promise<void>(() => {}), // never resolves
+    };
+    await expect(
+      prewarmHostedModels([{ providerId: 'adobe', kind: 'oauth', accessToken: 't' }], deps, 10)
+    ).resolves.toBeUndefined();
+  });
 });

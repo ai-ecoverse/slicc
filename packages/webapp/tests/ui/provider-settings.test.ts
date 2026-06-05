@@ -1320,9 +1320,12 @@ describe('OAuth provider: unknown model id NOT in getModelIds (cold cloud cone)'
     mockGetRegisteredProviderIds.mockReturnValue([...providerConfigs.keys()]);
 
     // pi-ai registry knows the legacy last-resort (claude-sonnet-4-0) but NOT
-    // claude-opus-4-8 — mirrors models.generated.js (4-6 present, 4-8 absent).
+    // claude-opus-4-8 / gpt-5-cold — mirrors models.generated.js (4-6 present,
+    // 4-8 absent; no Adobe-proxied OpenAI model in the registry either).
     mockGetModel.mockImplementation((provider: string, modelId: string) => {
-      if (modelId === 'claude-opus-4-8') throw new Error('Unknown model');
+      if (modelId === 'claude-opus-4-8' || modelId === 'gpt-5-cold') {
+        throw new Error('Unknown model');
+      }
       return {
         id: modelId,
         name: modelId,
@@ -1364,6 +1367,61 @@ describe('OAuth provider: unknown model id NOT in getModelIds (cold cloud cone)'
     expect(model.id).toBe('claude-opus-4-8');
     expect(model.provider).toBe('adobe');
     expect(String(model.api)).toBe('adobe-anthropic');
+  });
+
+  it('routes an unknown OpenAI-flavored id through the openai api on a cold cache', () => {
+    // The synthesized fallback must match the api the model will eventually
+    // resolve to once metadata warms — an OpenAI-flavored id needs adobe-openai
+    // (→ streamOpenAICompletions), not adobe-anthropic (→ wire-format failure).
+    setupColdOAuthProvider();
+    storage.set('selected-model', 'adobe:gpt-5-cold');
+
+    const model = resolveModelById('gpt-5-cold');
+    expect(model.provider).toBe('adobe');
+    expect(String(model.api)).toBe('adobe-openai');
+  });
+
+  it('synthesized model carries the pi-ai-required fields (guards streamAnthropic + GC)', () => {
+    // A regression that trims a field (e.g. contextWindow:0 → negative
+    // compaction threshold → compact every turn) must be caught here.
+    setupColdOAuthProvider();
+    storage.set('selected-model', 'adobe:claude-opus-4-8');
+
+    const model = resolveModelById('claude-opus-4-8');
+    expect(model.baseUrl).toBe('');
+    expect(model.input).toEqual(['text', 'image']);
+    expect(model.contextWindow).toBe(200000);
+    expect(model.maxTokens).toBe(16384);
+    expect(model.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+    expect(model.reasoning).toBe(true);
+  });
+
+  it('does NOT synthesize a provider-routed model for a non-OAuth provider', () => {
+    // The OAuth-only guard must hold: a non-OAuth provider with an unknown id
+    // falls to the native last-resort, never to `${providerId}-anthropic`.
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('custom-key', {
+      id: 'custom-key',
+      name: 'Custom Key',
+      description: '',
+      requiresApiKey: true,
+      requiresBaseUrl: false,
+      isOAuth: false,
+      getModelIds: () => [{ id: 'known-model', name: 'Known' }],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+    mockGetRegisteredProviderIds.mockReturnValue([...providerConfigs.keys()]);
+    mockGetModel.mockImplementation((provider: string, modelId: string) => {
+      if (modelId === 'ghost-id') throw new Error('Unknown model');
+      return { id: modelId, name: modelId, provider, api: 'anthropic', baseUrl: '' };
+    });
+    addAccount('custom-key', 'k');
+    storage.set('selected-model', 'custom-key:ghost-id');
+
+    const model = resolveModelById('ghost-id');
+    expect(String(model.api)).not.toBe('custom-key-anthropic');
   });
 });
 

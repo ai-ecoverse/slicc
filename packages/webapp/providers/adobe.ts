@@ -109,6 +109,22 @@ const proxyConfigCache = new Map<string, ProxyConfig>();
 
 const proxyMetadataCache = new Map<string, AdobeModelMetadata>();
 
+/** Storage key for the enriched model list (read by cold consumers, e.g. the
+ * cloud cone's kernel worker on first resolve). */
+const ADOBE_MODELS_KEY = 'slicc-adobe-models';
+
+/**
+ * Persist the enriched model list so it survives a page refresh and is visible
+ * to other floats/contexts that share localStorage (page→worker shim). Named
+ * (rather than an inline `setItem`) so the side effect `refreshModels` relies on
+ * stays discoverable if `getModelIds` is ever refactored toward a pure read.
+ */
+function persistAdobeModels(models: unknown): void {
+  try {
+    localStorage.setItem(ADOBE_MODELS_KEY, JSON.stringify(models));
+  } catch {}
+}
+
 /**
  * Fetch client config from the proxy's /v1/config endpoint (unauthenticated).
  * Caches per endpoint so switching proxy URLs fetches fresh config.
@@ -261,10 +277,7 @@ export const config: ProviderConfig = {
     for (const models of modelsCache.values()) {
       if (models.length) {
         const result = models.map((m) => enrichModel({ id: m.id, name: m.name ?? m.id }));
-        // Persist so models survive page refresh
-        try {
-          localStorage.setItem('slicc-adobe-models', JSON.stringify(result));
-        } catch {}
+        persistAdobeModels(result); // survives refresh; read by cold consumers
         return result;
       }
     }
@@ -276,7 +289,7 @@ export const config: ProviderConfig = {
     }
     // Fall back to persisted models from a previous session
     try {
-      const persisted = localStorage.getItem('slicc-adobe-models');
+      const persisted = localStorage.getItem(ADOBE_MODELS_KEY);
       if (persisted) {
         const models = JSON.parse(persisted) as Array<
           { id: string; name?: string } & Record<string, any>
@@ -431,15 +444,17 @@ export const config: ProviderConfig = {
     return silentRenewToken();
   },
 
-  // Fetch + cache the proxy model list, then run getModelIds so the enriched
-  // list is persisted to localStorage. The cloud cone calls this (with the
-  // injected token, before the account is saved) so the kernel worker's cold
-  // getModelIds reads the full model set + 1M context window from localStorage
-  // on its first resolve — instead of the default sonnet. Normal floats get
-  // this for free during onOAuthLogin.
+  // Fetch + cache the proxy model list, then persist the enriched list to
+  // localStorage so a cold consumer (the cloud cone's kernel worker) reads the
+  // full model set + 1M context window on its first resolve instead of the
+  // default sonnet. The cloud cone calls this with the injected token, before
+  // the account is saved. `getModelIds()` returns the enriched list (and
+  // persists it via `persistAdobeModels`); we persist explicitly too so this
+  // path doesn't silently depend on that side effect.
   refreshModels: async (accessToken?: string) => {
     await getAdobeModels(accessToken);
-    config.getModelIds?.();
+    const enriched = config.getModelIds?.();
+    if (enriched?.length) persistAdobeModels(enriched);
   },
 };
 
@@ -851,7 +866,7 @@ const streamSimpleAdobe = (model: Model<Api>, context: Context, options?: Simple
 
 // ── Model list ──────────────────────────────────────────────────────
 
-async function fetchProxyModels(accessToken?: string): Promise<Model<Api>[]> {
+async function fetchProxyModels(accessToken?: string): Promise<Model<Api>[] | null> {
   try {
     // Pre-warm callers (cloud cone, before the account is persisted) pass the
     // token explicitly; everyone else reads it from the saved account.
@@ -920,19 +935,35 @@ async function fetchProxyModels(accessToken?: string): Promise<Model<Api>[]> {
     );
   }
 
-  const anthropicModels = getModels('anthropic' as any) as Model<Api>[];
-  return anthropicModels.map((m) => ({ ...m, provider: 'adobe', api: 'adobe-anthropic' as Api }));
+  // Fetch failed / returned no models — signal failure (null) so getAdobeModels
+  // can serve the Anthropic fallback WITHOUT caching it. Caching the fallback
+  // here would poison modelsCache (which is never invalidated) for the whole
+  // session, so a transient pre-warm failure would stick a degraded, 200K-window
+  // list even after a valid token is available.
+  return null;
 }
 
 const modelsCache = new Map<string, Model<Api>[]>();
+
+/** Anthropic-registry models tagged as Adobe — the best-effort fallback when
+ * the proxy `/v1/models` fetch fails. Intentionally NOT cached by callers. */
+function adobeAnthropicFallbackModels(): Model<Api>[] {
+  const anthropicModels = getModels('anthropic' as any) as Model<Api>[];
+  return anthropicModels.map((m) => ({ ...m, provider: 'adobe', api: 'adobe-anthropic' as Api }));
+}
 
 export async function getAdobeModels(accessToken?: string): Promise<Model<Api>[]> {
   const endpoint = getProxyEndpoint();
   const cached = modelsCache.get(endpoint);
   if (cached) return cached;
   const models = await fetchProxyModels(accessToken);
-  modelsCache.set(endpoint, models);
-  return models;
+  if (models) {
+    modelsCache.set(endpoint, models); // cache only a real /v1/models success
+    return models;
+  }
+  // Uncached fallback: a later call (with a valid saved token) retries and can
+  // populate the real list.
+  return adobeAnthropicFallbackModels();
 }
 
 // ── Registration ────────────────────────────────────────────────────
