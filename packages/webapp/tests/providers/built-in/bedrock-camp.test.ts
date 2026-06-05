@@ -70,7 +70,7 @@ describe('bedrock-camp built-in provider', () => {
   it('exports a valid ProviderConfig', () => {
     expect(config).toBeDefined();
     expect(config.id).toBe('bedrock-camp');
-    expect(config.name).toBe('AWS Bedrock (CAMP)');
+    expect(config.name).toBe('AWS Bedrock');
     expect(config.requiresApiKey).toBe(true);
     expect(config.requiresBaseUrl).toBe(true);
   });
@@ -333,6 +333,14 @@ describe('bedrock-camp built-in provider', () => {
   it('omits temperature for Opus 4.7 (CAMP deprecates it)', async () => {
     const payload = await capturePayload(
       baseModel({ id: 'us.anthropic.claude-opus-4-7', name: 'Claude Opus 4.7 (US)' }),
+      { temperature: 0.5, reasoning: 'high' }
+    );
+    expect(payload.inferenceConfig.temperature).toBeUndefined();
+  });
+
+  it('omits temperature for Opus 4.8 (CAMP deprecates it)', async () => {
+    const payload = await capturePayload(
+      baseModel({ id: 'us.anthropic.claude-opus-4-8', name: 'Claude Opus 4.8 (US)' }),
       { temperature: 0.5, reasoning: 'high' }
     );
     expect(payload.inferenceConfig.temperature).toBeUndefined();

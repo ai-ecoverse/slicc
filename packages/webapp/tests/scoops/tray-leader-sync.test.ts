@@ -2,13 +2,17 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import {
+  isCherryTarget,
   LeaderSyncManager,
   type LeaderSyncManagerOptions,
+  labelForFollower,
+  selectTeleportPool,
 } from '../../src/scoops/tray-leader-sync.js';
 import type {
   FollowerToLeaderMessage,
   LeaderToFollowerMessage,
 } from '../../src/scoops/tray-sync-protocol.js';
+import { CHERRY_RUNTIME_TAG } from '../../src/scoops/tray-sync-protocol.js';
 import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
 import type { AgentEvent, ChatMessage } from '../../src/ui/types.js';
 
@@ -76,6 +80,19 @@ function createManager(overrides?: Partial<LeaderSyncManagerOptions>) {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+describe('labelForFollower', () => {
+  it('maps known float types to readable labels', () => {
+    expect(labelForFollower('extension')).toBe('extension follower');
+    expect(labelForFollower('standalone')).toBe('standalone follower');
+    expect(labelForFollower('electron')).toBe('Electron follower');
+    expect(labelForFollower('ios')).toBe('iOS follower');
+  });
+  it('falls back to the raw runtime string for unknown', () => {
+    expect(labelForFollower('unknown', 'slicc-weird')).toBe('follower (slicc-weird)');
+    expect(labelForFollower('unknown')).toBe('follower');
+  });
+});
 
 describe('LeaderSyncManager', () => {
   it('sends a snapshot on addFollower', () => {
@@ -1585,6 +1602,67 @@ describe('LeaderSyncManager', () => {
       const best = manager.getBestFollowerForTeleport();
       expect(best!.floatType).toBe('extension');
     });
+
+    it('excludes a cherry follower by runtime tag even before it advertises targets', () => {
+      const { manager } = createManager();
+
+      const ch = new FakeChannel();
+      manager.addFollower('b1', ch, { runtime: CHERRY_RUNTIME_TAG });
+      // No advertise yet — the runtime-tag short-circuit must still exclude it,
+      // so it is never offered as a teleport target.
+      expect(manager.getBestFollowerForTeleport()).toBeNull();
+    });
+
+    it('skips a cherry follower and selects the real browser follower', () => {
+      const { manager } = createManager();
+
+      const chCherry = new FakeChannel();
+      manager.addFollower('b1', chCherry, { runtime: CHERRY_RUNTIME_TAG });
+      chCherry.simulateMessage({
+        type: 'targets.advertise',
+        targets: [
+          {
+            targetId: 'host',
+            title: 'Host',
+            url: 'https://host.example',
+            kind: 'cherry',
+            capabilities: { navigate: true, network: false, screenshot: true },
+          },
+        ],
+        runtimeId: 'f-cherry',
+      });
+
+      const chStd = new FakeChannel();
+      manager.addFollower('b2', chStd, { runtime: 'slicc-standalone' });
+      chStd.simulateMessage({ type: 'targets.advertise', targets: [], runtimeId: 'f-std' });
+
+      const best = manager.getBestFollowerForTeleport();
+      expect(best!.runtimeId).toBe('f-std');
+    });
+
+    it('excludes a non-cherry-tagged follower whose advertised targets are all cherry', () => {
+      const { manager } = createManager();
+
+      // Runtime tag is not cherry, but every advertised target is — so it
+      // cannot serve a network-requiring teleport and must be excluded.
+      const ch = new FakeChannel();
+      manager.addFollower('b1', ch, { runtime: 'slicc-standalone' });
+      ch.simulateMessage({
+        type: 'targets.advertise',
+        targets: [
+          {
+            targetId: 'host',
+            title: 'Host',
+            url: 'https://host.example',
+            kind: 'cherry',
+            capabilities: { navigate: true, network: false, screenshot: true },
+          },
+        ],
+        runtimeId: 'f-allcherry',
+      });
+
+      expect(manager.getBestFollowerForTeleport()).toBeNull();
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -2017,23 +2095,24 @@ describe('LeaderSyncManager', () => {
       expect(sent[0].error).toBe('disk full');
     });
 
-    it('sprinkle.lick invokes onSprinkleLick with name, body, and targetScoop', () => {
+    it('sprinkle.lick invokes onSprinkleLick with name, body, targetScoop, and origin label', () => {
       const onSprinkleLick = vi.fn();
       const { manager } = createManager({ onSprinkleLick });
       const channel = new FakeChannel();
-      manager.addFollower('b1', channel);
+      manager.addFollower('b1', channel, { runtime: 'slicc-ios' });
 
       channel.simulateMessage({
         type: 'sprinkle.lick',
         sprinkleName: 'welcome',
-        body: { action: 'click', data: { x: 1 } },
+        body: { action: 'click' },
         targetScoop: 'scoop-1',
       });
 
       expect(onSprinkleLick).toHaveBeenCalledWith(
         'welcome',
-        { action: 'click', data: { x: 1 } },
-        'scoop-1'
+        { action: 'click' },
+        'scoop-1',
+        'iOS follower'
       );
     });
 
@@ -2075,5 +2154,288 @@ describe('LeaderSyncManager', () => {
       });
       expect(onSprinkleLick).toHaveBeenCalledTimes(2);
     });
+  });
+
+  describe('inbound generic lick', () => {
+    it('stamps origin from the connection and calls onForwardedLick', () => {
+      const onForwardedLick = vi.fn();
+      const { manager } = createManager({ onForwardedLick });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel, { runtime: 'slicc-extension-offscreen' });
+
+      channel.simulateMessage({
+        type: 'lick',
+        event: { type: 'navigate', navigateUrl: 'https://x', timestamp: 't', body: { v: 1 } },
+      });
+
+      expect(onForwardedLick).toHaveBeenCalledTimes(1);
+      const [event, bootstrapId] = onForwardedLick.mock.calls[0];
+      expect(bootstrapId).toBe('b1');
+      expect(event).toMatchObject({
+        type: 'navigate',
+        originFollowerId: 'b1',
+        originLabel: 'extension follower',
+      });
+    });
+
+    it('rejects a non-forwardable lick type', () => {
+      const onForwardedLick = vi.fn();
+      const { manager } = createManager({ onForwardedLick });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel, { runtime: 'slicc-extension-offscreen' });
+
+      channel.simulateMessage({
+        type: 'lick',
+        event: { type: 'webhook', timestamp: 't', body: {} },
+      } as unknown as FollowerToLeaderMessage);
+
+      expect(onForwardedLick).not.toHaveBeenCalled();
+    });
+
+    it('scrubs follower-sent origin fields before stamping', () => {
+      const onForwardedLick = vi.fn();
+      const { manager } = createManager({ onForwardedLick });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel, { runtime: 'slicc-extension-offscreen' });
+
+      channel.simulateMessage({
+        type: 'lick',
+        event: {
+          type: 'navigate',
+          navigateUrl: 'https://x',
+          timestamp: 't',
+          body: {},
+          originFollowerId: 'SPOOFED',
+          originLabel: 'SPOOFED',
+        },
+      } as unknown as FollowerToLeaderMessage);
+
+      const [event] = onForwardedLick.mock.calls[0];
+      expect(event.originFollowerId).toBe('b1');
+      expect(event.originLabel).toBe('extension follower');
+    });
+
+    it('drops a follower-supplied targetScoop so forwarded licks target the cone', () => {
+      const onForwardedLick = vi.fn();
+      const { manager } = createManager({ onForwardedLick });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel, { runtime: 'slicc-extension-offscreen' });
+
+      channel.simulateMessage({
+        type: 'lick',
+        event: {
+          type: 'navigate',
+          navigateUrl: 'https://x',
+          timestamp: 't',
+          body: {},
+          targetScoop: 'some-scoop',
+        },
+      } as unknown as FollowerToLeaderMessage);
+
+      expect(onForwardedLick).toHaveBeenCalledTimes(1);
+      const [event] = onForwardedLick.mock.calls[0];
+      expect(event.targetScoop).toBeUndefined();
+    });
+
+    it('ignores a lick message with a missing event without crashing or forwarding', () => {
+      const onForwardedLick = vi.fn();
+      const { manager } = createManager({ onForwardedLick });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel, { runtime: 'slicc-extension-offscreen' });
+
+      expect(() =>
+        channel.simulateMessage({ type: 'lick' } as unknown as FollowerToLeaderMessage)
+      ).not.toThrow();
+      expect(onForwardedLick).not.toHaveBeenCalled();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Cherry event routing + tab.open gating (leader side)
+  // ---------------------------------------------------------------------------
+
+  describe('cherry leader-side methods', () => {
+    it('routes cherry.host_event to onCherryHostEvent with the owning runtime id', () => {
+      const onCherryHostEvent = vi.fn();
+      const { manager } = createManager({ onCherryHostEvent });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel);
+
+      // Advertise so the bootstrapId maps to a runtimeId.
+      channel.simulateMessage({
+        type: 'targets.advertise',
+        targets: [{ targetId: 'host1', title: 'Host', url: 'https://host.com' }],
+        runtimeId: 'follower-b1',
+      });
+
+      channel.simulateMessage({
+        type: 'cherry.host_event',
+        targetId: 'follower-b1:host1',
+        name: 'cart.updated',
+        detail: { items: 3 },
+      });
+
+      expect(onCherryHostEvent).toHaveBeenCalledTimes(1);
+      expect(onCherryHostEvent).toHaveBeenCalledWith('follower-b1', 'cart.updated', { items: 3 });
+    });
+
+    it('drops cherry.host_event without throwing when no onCherryHostEvent is wired', () => {
+      const { manager } = createManager(); // No onCherryHostEvent.
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel);
+
+      expect(() =>
+        channel.simulateMessage({
+          type: 'cherry.host_event',
+          targetId: 'follower-b1:host1',
+          name: 'cart.updated',
+          detail: { items: 3 },
+        })
+      ).not.toThrow();
+    });
+
+    it('emitCherrySliccEvent returns false for an unknown/disconnected runtime', () => {
+      const { manager } = createManager();
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel);
+      // No targets.advertise → no runtimeToBootstrap mapping for 'ghost'.
+
+      expect(manager.emitCherrySliccEvent('ghost:host1', 'open', { x: 1 })).toBe(false);
+    });
+
+    it('emitCherrySliccEvent sends cherry.slicc_event over the owning follower channel', () => {
+      const { manager } = createManager();
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel);
+
+      channel.simulateMessage({
+        type: 'targets.advertise',
+        targets: [{ targetId: 'host1', title: 'Host', url: 'https://host.com' }],
+        runtimeId: 'follower-b1',
+      });
+      channel.sent.length = 0;
+
+      const ok = manager.emitCherrySliccEvent('follower-b1:host1', 'open', { x: 1 });
+      expect(ok).toBe(true);
+
+      const sent = channel.parseSent();
+      const evt = sent.find((m) => m.type === 'cherry.slicc_event');
+      expect(evt).toBeDefined();
+      if (evt && evt.type === 'cherry.slicc_event') {
+        expect(evt.targetId).toBe('follower-b1:host1');
+        expect(evt.name).toBe('open');
+        expect(evt.detail).toEqual({ x: 1 });
+      }
+    });
+
+    it('openRemoteTab refuses a runtime whose advertised targets are all cherry', async () => {
+      const { manager } = createManager();
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel);
+
+      channel.simulateMessage({
+        type: 'targets.advertise',
+        targets: [
+          {
+            targetId: 'host1',
+            title: 'Host',
+            url: 'https://host.com',
+            kind: 'cherry',
+            capabilities: { navigate: true, network: false, screenshot: true },
+          },
+        ],
+        runtimeId: 'follower-b1',
+      });
+
+      await expect(manager.openRemoteTab('follower-b1', 'https://new.com')).rejects.toThrow(
+        /cherry host that cannot open tabs/i
+      );
+    });
+
+    it('openRemoteTab allows a runtime with at least one browser target', async () => {
+      const { manager } = createManager();
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel);
+
+      channel.simulateMessage({
+        type: 'targets.advertise',
+        targets: [
+          {
+            targetId: 'host1',
+            title: 'Host',
+            url: 'https://host.com',
+            kind: 'cherry',
+            capabilities: { navigate: true, network: false, screenshot: true },
+          },
+          { targetId: 'tab1', title: 'Real Tab', url: 'https://real.com', kind: 'browser' },
+        ],
+        runtimeId: 'follower-b1',
+      });
+      channel.sent.length = 0;
+
+      const promise = manager.openRemoteTab('follower-b1', 'https://new.com');
+
+      // It should NOT have rejected synchronously — instead it sent a tab.open.
+      const sent = channel.parseSent();
+      const tabOpen = sent.find((m) => m.type === 'tab.open');
+      expect(tabOpen).toBeDefined();
+      if (tabOpen && tabOpen.type === 'tab.open') {
+        channel.simulateMessage({
+          type: 'tab.opened',
+          requestId: tabOpen.requestId,
+          targetId: 'follower-b1:new-99',
+        });
+      }
+      await expect(promise).resolves.toBe('follower-b1:new-99');
+    });
+  });
+});
+
+describe('cherry teleport selection', () => {
+  const browserTarget = { targetId: 'b', kind: 'browser' as const };
+  const cherryTarget = {
+    targetId: 'c',
+    kind: 'cherry' as const,
+    capabilities: { navigate: true, network: false, screenshot: true },
+  };
+
+  it('isCherryTarget detects cherry kind', () => {
+    expect(isCherryTarget(cherryTarget)).toBe(true);
+    expect(isCherryTarget(browserTarget)).toBe(false);
+  });
+
+  it('selectTeleportPool excludes cherry targets when network is required', () => {
+    const pool = selectTeleportPool([browserTarget, cherryTarget], { requireNetwork: true });
+    expect(pool.map((t) => t.targetId)).toEqual(['b']);
+  });
+
+  it('selectTeleportPool includes cherry targets when network is not required', () => {
+    const pool = selectTeleportPool([browserTarget, cherryTarget], { requireNetwork: false });
+    expect(pool.map((t) => t.targetId).sort()).toEqual(['b', 'c']);
+  });
+
+  it('selectTeleportPool includes a cherry target that advertises network when network is required', () => {
+    const networkCherry = {
+      targetId: 'nc',
+      kind: 'cherry' as const,
+      capabilities: { navigate: true, network: true, screenshot: true },
+    };
+    const pool = selectTeleportPool([browserTarget, networkCherry], { requireNetwork: true });
+    expect(pool.map((t) => t.targetId).sort()).toEqual(['b', 'nc']);
+  });
+
+  it('fires onRemoteTransportsCleaned for each mapped runtime when a follower is removed', () => {
+    const onRemoteTransportsCleaned = vi.fn();
+    const { manager } = createManager({ onRemoteTransportsCleaned });
+    const ch1 = new FakeChannel();
+    manager.addFollower('b1', ch1);
+    // Advertise so runtimeToBootstrap maps 'follower-b1' → 'b1'.
+    ch1.simulateMessage({
+      type: 'targets.advertise',
+      targets: [{ targetId: 'tab1', title: 'Tab', url: 'https://example.com' }],
+      runtimeId: 'follower-b1',
+    });
+    manager.removeFollower('b1');
+    expect(onRemoteTransportsCleaned).toHaveBeenCalledWith('follower-b1');
   });
 });

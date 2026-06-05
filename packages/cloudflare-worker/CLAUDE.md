@@ -52,7 +52,7 @@ This package depends on `@slicc/cloud-core` (see [`packages/cloud-core/CLAUDE.md
 - `GET|POST /join/:token` — follower join and bootstrap polling flow
 - `GET|POST /controller/:token` — leader attach flow and leader WebSocket upgrade
 - `POST /webhook/:token/:webhookId` — forward webhook events into the live leader
-- `GET /auth/callback` — OAuth callback relay page (decodes `state` param with source/port/path/nonce, redirects to localhost for `source:'local'`, extension for `source:'extension'`, or allowlisted remote origin for `source:'remote'`)
+- `GET /auth/callback` — OAuth callback relay page (decodes `state` param with source/port/path/nonce, redirects to localhost for `source:'local'`, extension for `source:'extension'`, or allowlisted remote origin for `source:'remote'`). **Capture hop:** when hit with a provider response (`?code`/`?error`) and **no `state`** — i.e. the relay already bounced back to the dashboard's own origin — it instead serves a tiny page that `postMessage`s `{ type:'oauth-callback', redirectUrl }` to `window.opener`. This is the completion path for the webapp-served-by-worker (connect/cloud) context, which has no node-server callback page; the webapp's `launchOAuthCli` waits for that message. Used by connect-mode GitHub login (see `packages/webapp/providers/github.ts` `resolveGithubOAuthRedirect`).
 
 ### Signaling model
 
@@ -86,6 +86,7 @@ support laptop-orchestrated sandboxes that pause for days at a time.
 - Requests with `?json=true`, POST requests, and WebSocket upgrades always get the API/JSON response.
 - The browser tray follower code (`packages/webapp/src/scoops/tray-follower.ts`) appends `?json=true` to all fetch calls to ensure API responses.
 - The webapp must be built (`npm run build -w @slicc/webapp`) before the worker can be deployed.
+- **Cherry embed (`?cherry=1`)**: `serveSPA` branches on `url.searchParams.get('cherry') === '1'`. A cherry request gets `Content-Security-Policy: frame-ancestors <origins>`, where `<origins>` is the space-separated `ALLOWED_CHERRY_HOST_ORIGINS` env var (empty/unset → `'none'`, i.e. deny — the embed cannot be framed). Every **non-cherry** response gets `frame-ancestors 'none'`. Cherry responses also set `Cache-Control: no-store` and `Vary: Sec-Fetch-Dest` so a cherry (iframe) response and a non-cherry (top-level) response can never share a cache entry — the framing policy differs between the two and must not leak across them.
 - **25 MiB per-asset cap**: Cloudflare Workers Static Assets reject any single file in `dist/ui/` over 25 MiB, and `wrangler deploy` (incl. `--dry-run`) fails hard with `Asset too large`. A webapp change that bundles a large binary (e.g. the 33 MB `biome_wasm_bg.wasm`, stripped by `packages/webapp/vite-plugins/strip-biome-wasm-asset.ts`) breaks the deploy. The `cloudflare-worker` CI job runs `npm run build -w @slicc/cloudflare-worker` (the same `wrangler deploy --dry-run`) as a hard gate after building the webapp. The other deploy steps in that same job are `continue-on-error: true` and the finalize/smoke steps skip (rather than fail) when no deploy succeeds, so before this gate an oversized asset passed the PR and only broke later in the separate `release` workflow. The dry-run gate now fails the PR up front.
 
 ## Commands
@@ -139,15 +140,24 @@ Web feature shipped via Plan D. Spec at `docs/superpowers/specs/2026-05-26-cloud
 - `GET  /cloud` — dashboard SPA (CSP-enforced)
 - `GET  /auth/cloud-callback` — IMS popup callback (HTML)
 - `GET  /auth/cloud-callback.js` — IMS popup callback (JS, served inline by worker)
-- `POST /api/cloud/start` — start a new cone (auth + cap-checked)
+- `POST /api/cloud/start` — start a new cone (auth + cap-checked); optional `coneConfig` bundle (see below)
 - `GET  /api/cloud/list` — per-user cone list (reconciled with e2b per call)
+- `GET  /api/cloud/cone-config` — `?sandboxId=<id>`: returns the cone's **names-only** config index (model + account providerIds + secret names; no values) so the dashboard can show provisioned keys while the cone is paused
 - `POST /api/cloud/pause` — pause a cone
-- `POST /api/cloud/resume` — resume a paused cone (refreshes IMS token in sandbox)
+- `POST /api/cloud/resume` — resume a paused cone (refreshes IMS token in sandbox); optional `coneConfigDelta` (see below)
 - `POST /api/cloud/kill` — kill a cone (idempotent)
 - `POST /api/cloud/sign-out` — invalidate the auth cache entry for the bearer
 - `GET  /api/cloud/admin/stats` — admin-gated by `ADMIN_USER_IDS`
 
 All `/api/cloud/*` require `Authorization: Bearer <ims-access-token>` and route to `env.CLOUD_SESSIONS.idFromName(userId)` for per-user state. Lifecycle business logic lives inside the DurableObject (atomic via `state.blockConcurrencyWhile`), not in worker handlers.
+
+### Cone configuration (model, secrets, provider logins)
+
+A `ConeConfig` bundle (`{ model, accounts[], secrets[] }`, types + helpers in the side-effect-free `@slicc/cloud-core/cone-config` subpath) lets users pick the cone's model, provide flat secrets, and provision provider logins (API-key and OAuth). `accounts` carry `kind: 'oauth' | 'apikey'`. Flow (`src/cloud/cone-config-bridge.ts`):
+
+- **start:** `coneConfig` is validated (`validateConeConfig` + narrow `assertModelHasAccount` — the model's provider must have an account unless auth-optional), then `bundleToFiles` splits it into `/slicc/secrets.env` (flat secrets, what `startCone` already writes) and `/slicc/cone-config.json` (`{model,accounts}`). No `coneConfig` ⇒ the worker synthesizes the Adobe default from the cloud bearer (back-compat with old dashboards that send only `{ name }`). Body size is capped at `MAX_CONE_CONFIG_BYTES`.
+- **resume:** `coneConfigDelta` (`{ model?, upsert{accounts,secrets}, delete{providerIds,secretNames} }`) is merged into both files in-sandbox (read-modify-write, preserving unchanged values), then node-server is reloaded via the ordered hook `POST /api/secrets/reload` → leader-restart `Page.reload`. Pre-feature cones (only `secrets.env`, no `cone-config.json`) get a degenerate bundle synthesized on first resume.
+- **DO index:** `CloudSessionsDurableObject` persists a **names-only** `coneConfigIndex` on each `ConeEntry` (model + providerIds + secret names; **never values**), surfaced by `GET /api/cloud/cone-config`. The worker is a transient relay — it never persists bundle values and never logs them.
 
 ### Wrangler config
 

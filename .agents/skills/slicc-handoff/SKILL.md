@@ -1,3 +1,9 @@
+---
+name: slicc-handoff
+description: |
+  Use this skill when the user says things like `handoff to slicc`, `move this to slicc`, `move to the browser`, `test in the browser`, `handoff to browser`, `install this skill in slicc`, `upskill slicc with this repo`, `add this skill to slicc`, or otherwise asks you to continue the work in the SLICC browser agent or install a skill into it.
+---
+
 # slicc-handoff
 
 Use this skill when the user says things like `handoff to slicc`, `move this to slicc`, `move to the browser`, `test in the browser`, `handoff to browser`, `install this skill in slicc`, `upskill slicc with this repo`, `add this skill to slicc`, or otherwise asks you to continue the work in the SLICC browser agent or install a skill into it.

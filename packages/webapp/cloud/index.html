@@ -20,12 +20,50 @@
     </main>
 
     <main id="signed-in" class="hidden">
-      <section class="create-row">
-        <input id="cone-name" placeholder="name (optional)" autocomplete="off" />
-        <button id="create-btn">+ New cone</button>
-        <span id="create-status" class="status"></span>
+      <section id="create-card" class="card create-card">
+        <h2 class="card__title">New cone</h2>
+
+        <label class="field">
+          <span class="field__label">Name <span class="field__hint">optional</span></span>
+          <input id="cone-name" placeholder="my-cone" autocomplete="off" />
+        </label>
+
+        <div class="field">
+          <span class="field__label">Providers</span>
+          <p id="providers-empty" class="field__empty">
+            Connect a provider to choose a model and start a cone.
+          </p>
+          <div id="account-list" class="account-list"></div>
+          <div class="providers-actions">
+            <button id="connect-btn" class="btn-secondary">Connect a provider</button>
+            <button id="add-adobe-btn" class="btn-ghost hidden">+ Add Adobe (default)</button>
+          </div>
+        </div>
+
+        <label class="field gated">
+          <span class="field__label">Model</span>
+          <select id="cone-model">
+            <option value="">Select model…</option>
+          </select>
+        </label>
+
+        <div class="field gated">
+          <span class="field__label">Secrets <span class="field__hint">optional</span></span>
+          <p class="field__desc">
+            Injected into the cone's environment for the listed domains.
+          </p>
+          <div id="secret-rows" class="secret-rows"></div>
+          <button id="add-secret" class="btn-ghost">+ Add secret</button>
+        </div>
+
+        <div class="create-actions gated">
+          <button id="create-btn" class="btn-primary">+ Create cone</button>
+          <span id="create-status" class="status"></span>
+        </div>
       </section>
+
       <section class="list">
+        <h2 class="list__title">Your cones</h2>
         <ul id="cone-list"></ul>
         <div id="cap-info" class="cap-info"></div>
       </section>

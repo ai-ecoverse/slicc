@@ -13,6 +13,7 @@ import type { BrowserAPI } from '../../webapp/src/cdp/browser-api.js';
 import type { MessageAttachment } from '../../webapp/src/core/attachments.js';
 import type { Logger } from '../../webapp/src/core/logger.js';
 import type { VirtualFS } from '../../webapp/src/fs/virtual-fs.js';
+import type { LickManager } from '../../webapp/src/scoops/lick-manager.js';
 import type { Orchestrator } from '../../webapp/src/scoops/orchestrator.js';
 import { ThrottledErrorTracker } from '../../webapp/src/scoops/throttled-error-tracker.js';
 import {
@@ -25,10 +26,12 @@ import { LeaderSyncManager } from '../../webapp/src/scoops/tray-leader-sync.js';
 import type { SprinkleSummary } from '../../webapp/src/scoops/tray-sync-protocol.js';
 import { LeaderTrayPeerManager } from '../../webapp/src/scoops/tray-webrtc.js';
 import type { ChannelMessage } from '../../webapp/src/scoops/types.js';
+import { setCherryEmitter } from '../../webapp/src/shell/supplemental-commands/cherry-emit-command.js';
 import {
   setConnectedFollowersGetter,
   setTrayResetter,
 } from '../../webapp/src/shell/supplemental-commands/host-command.js';
+import { canonicalRuntimeId } from '../../webapp/src/ui/runtime-identity.js';
 import type { AgentEvent, ChatMessage } from '../../webapp/src/ui/types.js';
 import type { OffscreenLeaderSyncBridgeHandle } from './leader-sync-bridge.js';
 import type { LeaderTrayResetRequestMsg, LeaderTrayResetResponseMsg } from './messages.js';
@@ -93,7 +96,12 @@ export interface ExtensionLeaderBridge {
    *  push new entries, which is all `BufferLike` exposes. */
   getBuffer(jid: string): BufferLike;
   persistScoop(jid: string): void;
-  routeSprinkleLick(name: string, body: unknown, targetScoop?: string): Promise<void>;
+  routeSprinkleLick(
+    name: string,
+    body: unknown,
+    targetScoop?: string,
+    originLabel?: string
+  ): Promise<void>;
   notifyPanelIncomingMessage(jid: string, msg: ChannelMessage): void;
   onAgentEvent(handler: (scoopJid: string, event: AgentEvent) => void): () => void;
 }
@@ -106,6 +114,9 @@ export interface StartExtensionLeaderTrayOptions {
   browser: BrowserAPI;
   log: Logger;
   leaderBridge: OffscreenLeaderSyncBridgeHandle;
+
+  /** Offscreen LickManager — used to route follower-forwarded licks into the leader's cone. */
+  lickManager: LickManager;
 
   /** @internal */ _trayLeaderFactory?: (
     cfg: ConstructorParameters<typeof LeaderTrayManager>[0]
@@ -120,7 +131,8 @@ export interface StartExtensionLeaderTrayOptions {
 export function startExtensionLeaderTray(
   options: StartExtensionLeaderTrayOptions
 ): ExtensionLeaderTrayHandle {
-  const { workerBaseUrl, bridge, orchestrator, sharedFs, browser, leaderBridge } = options;
+  const { workerBaseUrl, bridge, orchestrator, sharedFs, browser, leaderBridge, lickManager } =
+    options;
   const refreshIntervalMs = options._refreshIntervalMs ?? 5000;
 
   let sync!: LeaderSyncManager;
@@ -168,14 +180,21 @@ export function startExtensionLeaderTray(
         return null;
       }
     },
-    onSprinkleLick: (name, body, targetScoop) => {
-      void bridge.routeSprinkleLick(name, body, targetScoop).catch((err) => {
+    onSprinkleLick: (name, body, targetScoop, originLabel) => {
+      void bridge.routeSprinkleLick(name, body, targetScoop, originLabel).catch((err) => {
         options.log.error('routeSprinkleLick failed', {
           name,
           targetScoop,
           error: err instanceof Error ? err.message : String(err),
         });
       });
+    },
+    onForwardedLick: (event) => {
+      // Leader-side: route the forwarded lick through our own LickManager
+      // so it hits defaultLickEventHandler → formatLickEventForCone (with
+      // the stamped origin label) → the cone. Terminal (no re-forward) only
+      // because a leader never has a forwarder installed.
+      lickManager.emitEvent(event);
     },
     onFollowerMessage: (text, messageId, attachments) => {
       const activeJid = getActiveJid();
@@ -233,6 +252,12 @@ export function startExtensionLeaderTray(
       const jid = getActiveJid();
       if (jid) orchestrator.stopScoop(jid);
     },
+    // Cherry host events route straight into the in-process LickManager via the
+    // orchestrator — no `lick-cherry-host-event` bridge hop, because the
+    // extension's lickManager is in-offscreen (parity with the `webhook.event`
+    // direct call below).
+    onCherryHostEvent: (cherryRuntimeId, name, detail) =>
+      orchestrator.handleCherryHostEvent(cherryRuntimeId, name, detail),
     browserAPI: browser,
     browserTransport: browser.getTransport?.() ?? undefined,
     vfs: sharedFs ?? undefined,
@@ -351,11 +376,17 @@ export function startExtensionLeaderTray(
   // future panel-realm caller.
   setConnectedFollowersGetter(() =>
     trayPeers.getPeers().map((p) => ({
-      runtimeId: p.bootstrapId,
+      runtimeId: canonicalRuntimeId(p.bootstrapId),
       runtime: p.runtime,
       connectedAt: p.connectedAt ?? undefined,
     }))
   );
+
+  // Outbound `cherry-emit` (cone → host `slicc.event`): the agent shell runs in
+  // this same offscreen realm as `sync`, so emit directly with no panel-RPC hop
+  // (the standalone float bridges worker→page instead). Mirror of the inbound
+  // `onCherryHostEvent` direct call.
+  setCherryEmitter((runtimeId, name, detail) => sync.emitCherrySliccEvent(runtimeId, name, detail));
 
   const resetSequence = async (): Promise<LeaderTrayRuntimeStatus> => {
     sync.stop();
@@ -373,7 +404,7 @@ export function startExtensionLeaderTray(
   // after construction mutates the live options.
   syncOptions.onFollowerCountChanged = (_count: number) => {
     const peers = trayPeers.getPeers().map((p) => ({
-      runtimeId: p.bootstrapId,
+      runtimeId: canonicalRuntimeId(p.bootstrapId),
       runtime: p.runtime,
       connectedAt: p.connectedAt ?? undefined,
     }));
@@ -459,6 +490,7 @@ export function startExtensionLeaderTray(
       trayPeers.stop();
       trayLeader.stop();
       setConnectedFollowersGetter(null);
+      setCherryEmitter(null);
       setTrayResetter(null);
       chrome.runtime.onMessage.removeListener(resetListener);
       leaderBridge.signalLeaderMode(false);

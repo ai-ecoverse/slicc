@@ -26,6 +26,7 @@
 
 import { OffscreenBridge } from '../../../chrome-extension/src/offscreen-bridge.js';
 import { BrowserAPI } from '../cdp/browser-api.js';
+import { createPanelRpcTrayProvider } from '../cdp/panel-rpc-tray-provider.js';
 // Provider registration is async-explicit (not side-effect import).
 // `providers/index.ts` switched to lazy `import.meta.glob` to break a
 // circular import chain (providers/index → built-in/azure-openai →
@@ -38,8 +39,10 @@ import { WorkerCdpProxy } from './cdp-worker-proxy.js';
 import { createKernelHost, type KernelHost } from './host.js';
 import { makeSameOriginBypassFetch } from './kernel-worker-fetch-bypass.js';
 import { makeKernelWorkerInitGuard } from './kernel-worker-init-guard.js';
+import { getPanelRpcClient } from './panel-rpc.js';
 import { createPanelTerminalHost } from './panel-terminal-host.js';
 import { createBridgeMessageChannelTransport } from './transport-message-channel.js';
+import { startVfsRpcHost } from './vfs-rpc-host.js';
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -80,6 +83,30 @@ export interface KernelWorkerInitMsg {
 /** Posted back over the kernel port once `createKernelHost` resolves. */
 export interface KernelWorkerReadyMsg {
   type: 'kernel-worker-ready';
+}
+
+/**
+ * Migration progress signals.
+ *
+ * The kernel host invokes `onMigrationStart` immediately before the
+ * OPFS migration runs, `onMigrationProgress` per file copied, and
+ * `onMigrationFinish` from a `finally` so a thrown runner still
+ * dismisses the modal. We post these raw on the kernel port —
+ * identical channel to `kernel-worker-ready` — so the page can wire
+ * a blocking modal without a new heavyweight transport. Flag-off
+ * floats never construct an OPFS-backed VFS, so these are never
+ * posted and the byte-identical legacy boot is preserved.
+ */
+export interface KernelMigrationStartedMsg {
+  type: 'kernel-migration-started';
+}
+export interface KernelMigrationProgressMsg {
+  type: 'kernel-migration-progress';
+  copied: number;
+  total: number;
+}
+export interface KernelMigrationFinishedMsg {
+  type: 'kernel-migration-finished';
 }
 
 // ---------------------------------------------------------------------------
@@ -151,6 +178,7 @@ function installLocalStorageShim(seed: Record<string, string>): void {
 
 let host: KernelHost | null = null;
 let stopTerminalHost: (() => void) | null = null;
+let stopVfsRpcHost: (() => void) | null = null;
 let panelRpcClient: { dispose: () => void } | null = null;
 
 /**
@@ -214,6 +242,23 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
     bridge,
     callbacks,
     logger: console,
+    onMigrationStart: () => {
+      init.kernelPort.postMessage({
+        type: 'kernel-migration-started',
+      } satisfies KernelMigrationStartedMsg);
+    },
+    onMigrationProgress: (progress) => {
+      init.kernelPort.postMessage({
+        type: 'kernel-migration-progress',
+        copied: progress.copied,
+        total: progress.total,
+      } satisfies KernelMigrationProgressMsg);
+    },
+    onMigrationFinish: () => {
+      init.kernelPort.postMessage({
+        type: 'kernel-migration-finished',
+      } satisfies KernelMigrationFinishedMsg);
+    },
   });
 
   // Publish a sprinkle-manager proxy on the worker's globalThis so the
@@ -242,6 +287,15 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
   panelRpcClient = createPanelRpcClient({ instanceId: init.instanceId });
   (globalThis as Record<string, unknown>).__slicc_panelRpc = panelRpcClient;
 
+  // Give the worker BrowserAPI a tray target provider so the cone can
+  // *drive* federated tray/cherry targets, not just list them. The
+  // provider tunnels each CDP op over panel-RPC to the page-side
+  // RemoteCDPTransport (which owns the WebRTC channel). Safe to set
+  // unconditionally: its methods run only for composite remote ids
+  // (which exist only when a tray is active), and with no panel-RPC
+  // client they fail closed. See issue #848.
+  browser.setTrayTargetProvider(createPanelRpcTrayProvider(getPanelRpcClient));
+
   // Take the process manager from the kernel host so scoop-turns
   // (registered by `ScoopContext`) and shell execs (registered by
   // `TerminalSessionHost`) land in the same table. `createKernelHost`
@@ -268,6 +322,26 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
       logger: console,
     });
     stopTerminalHost = handle.stop;
+    // Stand up the worker-side VFS read RPC surface on the same
+    // kernel transport. `VirtualFS` satisfies the `LocalVfsClient`
+    // shape structurally so we hand `sharedFs` in directly.
+    //
+    // Also wire `writableClient: sharedFs` so the host accepts
+    // `vfs-write-file` / `vfs-mkdir` / `vfs-rm` / `vfs-flush`
+    // envelopes from the page-side `WritableVfsClient`. `VirtualFS`
+    // satisfies the `WritableVfsBackend` shape structurally. With
+    // the OPFS flag off, the page never constructs the writable
+    // client so these write request types fan out into nobody —
+    // existing behavior is unchanged. With the flag on, the leader
+    // tab routes session-freezer + cone-memory writes through this
+    // handler.
+    const vfsHandle = startVfsRpcHost({
+      transport: bridgeTransport,
+      client: sharedFs,
+      writableClient: sharedFs,
+      logger: console,
+    });
+    stopVfsRpcHost = vfsHandle.stop;
   } else {
     console.warn('[kernel-worker] shared FS unavailable; terminal sessions will fail to open');
   }
@@ -284,6 +358,8 @@ self.addEventListener('message', (event: MessageEvent) => {
   if (data?.type !== 'kernel-worker-shutdown') return;
   stopTerminalHost?.();
   stopTerminalHost = null;
+  stopVfsRpcHost?.();
+  stopVfsRpcHost = null;
   panelRpcClient?.dispose();
   panelRpcClient = null;
   void host?.dispose();

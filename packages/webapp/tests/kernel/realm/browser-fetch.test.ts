@@ -1,5 +1,5 @@
 /**
- * Tests for `browser.fetch(tab, url, opts)` — Wave 3.1. Verifies the
+ * Tests for `browser.fetch(tab, url, opts)`. Verifies the
  * page-context script the bridge injects via `evalAsync` is a single
  * self-contained function (no temp-file, no base64 chunking, no
  * realm-side closures) and that the response shape matches the spec.

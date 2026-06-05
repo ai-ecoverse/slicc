@@ -28,6 +28,7 @@ import { createLogger } from '../../../packages/webapp/src/core/index.js';
 import { createKernelHost } from '../../../packages/webapp/src/kernel/host.js';
 import { createPanelTerminalHost } from '../../../packages/webapp/src/kernel/panel-terminal-host.js';
 import { createOffscreenChromeRuntimeTransport } from '../../../packages/webapp/src/kernel/transport-chrome-runtime.js';
+import { startVfsRpcHost } from '../../../packages/webapp/src/kernel/vfs-rpc-host.js';
 // Auto-discover and register all providers (built-in + external).
 // IMPORTANT: Keep in sync with packages/webapp/src/ui/main.ts — both
 // entry points need all providers. Registration is explicit (not
@@ -52,6 +53,7 @@ import {
 import { startFollowerWithAutoReconnect } from '../../../packages/webapp/src/scoops/tray-webrtc.js';
 import { installSudoTestHook } from '../../../packages/webapp/src/sudo/index.js';
 import { getApiKey } from '../../../packages/webapp/src/ui/provider-settings.js';
+import { canonicalRuntimeId } from '../../../packages/webapp/src/ui/runtime-identity.js';
 import { initTelemetry } from '../../../packages/webapp/src/ui/telemetry.js';
 import { applyTrayRuntimeUpdate as applyTrayRuntimeUpdateHelper } from './apply-tray-runtime-update.js';
 import {
@@ -148,6 +150,7 @@ async function init(): Promise<void> {
   // `TerminalSessionHost` AND the per-session `WasmShellHeadless`, so
   // `ps` / `kill` / `cat /proc/<pid>/...` work uniformly.
   let stopTerminalHost: (() => void) | null = null;
+  let stopVfsRpcHost: (() => void) | null = null;
   const sharedFs = host.sharedFs;
   if (sharedFs) {
     const handle = createPanelTerminalHost({
@@ -158,6 +161,23 @@ async function init(): Promise<void> {
       logger: log,
     });
     stopTerminalHost = handle.stop;
+    // Worker-side VFS read RPC surface, same wiring as the standalone
+    // DedicatedWorker (`kernel-worker.ts`).
+    //
+    // Also wire `writableClient: sharedFs` so the host accepts
+    // `vfs-write-file` / `vfs-mkdir` / `vfs-rm` / `vfs-flush`
+    // envelopes from the panel-side `WritableVfsClient`. `VirtualFS`
+    // satisfies the `WritableVfsBackend` shape structurally. With
+    // the OPFS flag off, the panel never constructs the writable
+    // client so these write request types fan out into nobody —
+    // existing behavior is unchanged.
+    const vfsHandle = startVfsRpcHost({
+      transport: bridgeTransport,
+      client: sharedFs,
+      writableClient: sharedFs,
+      logger: log,
+    });
+    stopVfsRpcHost = vfsHandle.stop;
   } else {
     log.warn('shared FS unavailable; panel terminal sessions will fail to open');
   }
@@ -171,6 +191,8 @@ async function init(): Promise<void> {
     () => {
       stopTerminalHost?.();
       stopTerminalHost = null;
+      stopVfsRpcHost?.();
+      stopVfsRpcHost = null;
       void host.dispose();
     },
     { once: true }
@@ -299,6 +321,12 @@ async function init(): Promise<void> {
     activeTrayRuntimeKey = nextTrayRuntimeKey;
 
     if (trayRuntimeConfig?.joinUrl) {
+      // Mark follower mode active for the whole join lifetime — sticky across
+      // transient WebRTC reconnects so panel→offscreen handlers (e.g.
+      // `sprinkle-lick`) know to log+drop instead of falling back to the
+      // local model-less cone when sync is briefly null between connects.
+      // Cleared in the matching `stopTrayRuntime` below.
+      bridge.setFollowerActive(true);
       let activeSync: FollowerSyncManager | null = null;
       let activeSprinkleBridge: ReturnType<typeof connectOffscreenFollowerSprinkleBridge> | null =
         null;
@@ -314,6 +342,7 @@ async function init(): Promise<void> {
         }
         if (!activeSync) return;
         bridge.setFollowerSync(null);
+        lickManager.setForwarder(null);
         browser.setTrayTargetProvider(null);
         activeSync.close();
         activeSync = null;
@@ -328,7 +357,7 @@ async function init(): Promise<void> {
           onConnected: (connection) => {
             log.info('Extension follower connected', { trayId: connection.trayId });
             detachSync();
-            const runtimeId = `follower-${connection.bootstrapId}`;
+            const runtimeId = canonicalRuntimeId(connection.bootstrapId);
             // Track our sprinkle bridge ahead of time so the FollowerSyncManager
             // callbacks can forward `sprinkles.list` / `sprinkle.update` to the
             // panel without a forward declaration. Bind is wrapped in a closure
@@ -439,6 +468,11 @@ async function init(): Promise<void> {
             activeSync = sync;
             browser.setTrayTargetProvider(sync);
             bridge.setFollowerSync(sync);
+            // Follower mode: forwardable licks (`navigate` — how SLICC handoffs
+            // arrive) observed locally must go to the LEADER's agent, not this
+            // follower's (model-less or invisible) local cone. The LickManager
+            // dispatch chokepoint ships them over the data channel.
+            lickManager.setForwarder((event) => sync.forwardLick(event));
             sync.requestSnapshot();
             targetRefreshInterval = setInterval(() => void refreshTargets(), 5000);
             void refreshTargets();
@@ -452,6 +486,9 @@ async function init(): Promise<void> {
       stopTrayRuntime = () => {
         detachSync();
         reconnectHandle.cancel();
+        // Clear sticky follower-mode marker — only on permanent leave, not
+        // on the transient detaches inside `detachSync` above.
+        bridge.setFollowerActive(false);
       };
       return;
     }
@@ -498,6 +535,7 @@ async function init(): Promise<void> {
         browser,
         log,
         leaderBridge,
+        lickManager,
       });
 
       // REGRESSION-SENSITIVE SITE: clearing `activeTrayRuntimeKey` and

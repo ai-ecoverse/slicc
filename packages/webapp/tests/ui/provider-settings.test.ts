@@ -2,7 +2,7 @@
  * Tests for provider settings — multi-account storage layer.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const storage = new Map<string, string>();
 const mockStorage = {
@@ -77,6 +77,14 @@ vi.mock('../../src/core/index.js', () => ({
   createLogger: mockCreateLogger,
 }));
 
+// `shouldIncludeProvider` defaults to allow-all so the bulk of the suite is
+// unaffected, but is a vi.fn so the build-exclusion tests can swap in a real
+// exclusion (e.g. dropping `amazon-bedrock`). Reset to allow-all in each
+// relevant beforeEach since vi.clearAllMocks() wipes the implementation.
+const { mockShouldIncludeProvider } = vi.hoisted(() => ({
+  mockShouldIncludeProvider: vi.fn((_id: string) => true),
+}));
+
 // Mock the providers/index.js module — return a minimal set of registered providers
 const { mockGetRegisteredProviderConfig, mockGetRegisteredProviderIds } = vi.hoisted(() => {
   const providerConfigs = new Map<string, Record<string, unknown>>([
@@ -104,7 +112,7 @@ const { mockGetRegisteredProviderConfig, mockGetRegisteredProviderIds } = vi.hoi
       'bedrock-camp',
       {
         id: 'bedrock-camp',
-        name: 'AWS Bedrock (CAMP)',
+        name: 'AWS Bedrock',
         description: 'CAMP',
         requiresApiKey: true,
         requiresBaseUrl: true,
@@ -161,7 +169,7 @@ const { mockGetRegisteredProviderConfig, mockGetRegisteredProviderIds } = vi.hoi
 vi.mock('../../src/providers/index.js', () => ({
   getRegisteredProviderConfig: mockGetRegisteredProviderConfig,
   getRegisteredProviderIds: mockGetRegisteredProviderIds,
-  shouldIncludeProvider: () => true,
+  shouldIncludeProvider: mockShouldIncludeProvider,
 }));
 
 vi.mock('../../src/providers/oauth-service.js', () => ({
@@ -189,7 +197,9 @@ import {
   getSelectedModelId,
   getSelectedProvider,
   logoutOAuthAccount,
+  maskOAuthTokenWithRetry,
   migrateLegacyAuthOnlySelection,
+  persistOAuthMaskViaServiceWorker,
   removeAccount,
   resolveCurrentModel,
   resolveModelById,
@@ -552,6 +562,71 @@ describe('getAllAvailableModels', () => {
     const groups = getAllAvailableModels();
     expect(groups).toHaveLength(1);
     expect(groups[0].providerId).toBe('anthropic');
+  });
+});
+
+describe('build-excluded pi-ai providers', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+    // Exercise the real exclusion: `amazon-bedrock` is a pi-ai provider whose
+    // pi browser stream is unsupported, so the build config drops it.
+    mockShouldIncludeProvider.mockImplementation((id: string) => id !== 'amazon-bedrock');
+  });
+
+  afterEach(() => {
+    // Restore allow-all so the leaked implementation doesn't affect other suites.
+    mockShouldIncludeProvider.mockImplementation(() => true);
+  });
+
+  it('getAllAvailableModels skips a stored amazon-bedrock account', () => {
+    addAccount('anthropic', 'ant-key');
+    addAccount('amazon-bedrock', 'bedrock-key');
+    const groups = getAllAvailableModels();
+    expect(groups.map((g) => g.providerId)).toEqual(['anthropic']);
+  });
+
+  it('leaves bedrock-camp untouched (registered, not a pi-ai provider)', () => {
+    // bedrock-camp is not in getProviders(), so the pi-provider exclusion must
+    // not drop its account row or clear its selection — it still resolves via
+    // amazon-bedrock's catalog elsewhere.
+    storage.set('selected-model', 'bedrock-camp:some-model');
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([{ providerId: 'bedrock-camp', apiKey: 'camp-key' }])
+    );
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBe('bedrock-camp:some-model');
+    const remaining = JSON.parse(storage.get('slicc_accounts') as string);
+    expect(remaining.map((a: { providerId: string }) => a.providerId)).toEqual(['bedrock-camp']);
+  });
+
+  it('migrateLegacyAuthOnlySelection clears a selected-model on amazon-bedrock', () => {
+    storage.set('selected-model', 'amazon-bedrock:anthropic.claude-3-sonnet');
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBeUndefined();
+  });
+
+  it('migrateLegacyAuthOnlySelection drops a stored amazon-bedrock account row', () => {
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([
+        { providerId: 'anthropic', apiKey: 'ant-key' },
+        { providerId: 'amazon-bedrock', apiKey: 'bedrock-key' },
+      ])
+    );
+    migrateLegacyAuthOnlySelection();
+    const remaining = JSON.parse(storage.get('slicc_accounts') as string);
+    expect(remaining.map((a: { providerId: string }) => a.providerId)).toEqual(['anthropic']);
+  });
+
+  it('migrateLegacyAuthOnlySelection preserves selection + account for an included provider', () => {
+    storage.set('selected-model', 'anthropic:claude-sonnet-4-6');
+    storage.set('slicc_accounts', JSON.stringify([{ providerId: 'anthropic', apiKey: 'ant-key' }]));
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBe('anthropic:claude-sonnet-4-6');
+    const remaining = JSON.parse(storage.get('slicc_accounts') as string);
+    expect(remaining.map((a: { providerId: string }) => a.providerId)).toEqual(['anthropic']);
   });
 });
 
@@ -1213,6 +1288,143 @@ describe('resolveCurrentModel with getModelDynamic returning undefined', () => {
   });
 });
 
+describe('OAuth provider: unknown model id NOT in getModelIds (cold cloud cone)', () => {
+  // Regression for the cloud-cone 401 "invalid x-api-key": when an OAuth
+  // provider's model list is cold (never fetched — e.g. the cone injected the
+  // account via saveOAuthAccount, which doesn't fetch models) AND the selected
+  // model id is unknown to pi-ai's registry (e.g. claude-opus-4-8), resolution
+  // fell back to a NATIVE Anthropic model and sent the OAuth token to
+  // api.anthropic.com. It must instead route the unknown id through the OAuth
+  // provider's proxy (api `${providerId}-anthropic`).
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  function setupColdOAuthProvider() {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('adobe', {
+      id: 'adobe',
+      name: 'Adobe',
+      description: 'Adobe provider',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      defaultModelId: 'sonnet',
+      // Cold: models never fetched, so only the default is known — NOT opus-4-8.
+      getModelIds: () => [{ id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+    mockGetRegisteredProviderIds.mockReturnValue([...providerConfigs.keys()]);
+
+    // pi-ai registry knows the legacy last-resort (claude-sonnet-4-0) but NOT
+    // claude-opus-4-8 / gpt-5-cold — mirrors models.generated.js (4-6 present,
+    // 4-8 absent; no Adobe-proxied OpenAI model in the registry either).
+    mockGetModel.mockImplementation((provider: string, modelId: string) => {
+      if (modelId === 'claude-opus-4-8' || modelId === 'gpt-5-cold') {
+        throw new Error('Unknown model');
+      }
+      return {
+        id: modelId,
+        name: modelId,
+        provider,
+        api: 'anthropic',
+        baseUrl: 'https://api.anthropic.com',
+      };
+    });
+
+    saveOAuthAccount({ providerId: 'adobe', accessToken: 'ims-token' });
+  }
+
+  it('resolveCurrentModel routes the unknown id through the OAuth proxy, not native Anthropic', () => {
+    setupColdOAuthProvider();
+    storage.set('selected-model', 'adobe:claude-opus-4-8');
+
+    const model = resolveCurrentModel();
+    expect(model.provider).toBe('adobe');
+    expect(String(model.api)).toBe('adobe-anthropic');
+    expect(model.id).toBe('claude-opus-4-8');
+  });
+
+  it('resolveModelById routes the unknown id through the OAuth proxy, not native Anthropic', () => {
+    setupColdOAuthProvider();
+    storage.set('selected-model', 'adobe:claude-opus-4-8');
+
+    const model = resolveModelById('claude-opus-4-8');
+    expect(model.provider).toBe('adobe');
+    expect(String(model.api)).toBe('adobe-anthropic');
+    expect(model.id).toBe('claude-opus-4-8');
+  });
+
+  it('resolveModelById resolves the REQUESTED unknown id, not the selected one', () => {
+    setupColdOAuthProvider();
+    // Selected model differs from the requested one.
+    storage.set('selected-model', 'adobe:claude-sonnet-4-6');
+
+    const model = resolveModelById('claude-opus-4-8');
+    expect(model.id).toBe('claude-opus-4-8');
+    expect(model.provider).toBe('adobe');
+    expect(String(model.api)).toBe('adobe-anthropic');
+  });
+
+  it('routes an unknown OpenAI-flavored id through the openai api on a cold cache', () => {
+    // The synthesized fallback must match the api the model will eventually
+    // resolve to once metadata warms — an OpenAI-flavored id needs adobe-openai
+    // (→ streamOpenAICompletions), not adobe-anthropic (→ wire-format failure).
+    setupColdOAuthProvider();
+    storage.set('selected-model', 'adobe:gpt-5-cold');
+
+    const model = resolveModelById('gpt-5-cold');
+    expect(model.provider).toBe('adobe');
+    expect(String(model.api)).toBe('adobe-openai');
+  });
+
+  it('synthesized model carries the pi-ai-required fields (guards streamAnthropic + GC)', () => {
+    // A regression that trims a field (e.g. contextWindow:0 → negative
+    // compaction threshold → compact every turn) must be caught here.
+    setupColdOAuthProvider();
+    storage.set('selected-model', 'adobe:claude-opus-4-8');
+
+    const model = resolveModelById('claude-opus-4-8');
+    expect(model.baseUrl).toBe('');
+    expect(model.input).toEqual(['text', 'image']);
+    expect(model.contextWindow).toBe(200000);
+    expect(model.maxTokens).toBe(16384);
+    expect(model.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+    expect(model.reasoning).toBe(true);
+  });
+
+  it('does NOT synthesize a provider-routed model for a non-OAuth provider', () => {
+    // The OAuth-only guard must hold: a non-OAuth provider with an unknown id
+    // falls to the native last-resort, never to `${providerId}-anthropic`.
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('custom-key', {
+      id: 'custom-key',
+      name: 'Custom Key',
+      description: '',
+      requiresApiKey: true,
+      requiresBaseUrl: false,
+      isOAuth: false,
+      getModelIds: () => [{ id: 'known-model', name: 'Known' }],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+    mockGetRegisteredProviderIds.mockReturnValue([...providerConfigs.keys()]);
+    mockGetModel.mockImplementation((provider: string, modelId: string) => {
+      if (modelId === 'ghost-id') throw new Error('Unknown model');
+      return { id: modelId, name: modelId, provider, api: 'anthropic', baseUrl: '' };
+    });
+    addAccount('custom-key', 'k');
+    storage.set('selected-model', 'custom-key:ghost-id');
+
+    const model = resolveModelById('ghost-id');
+    expect(String(model.api)).not.toBe('custom-key-anthropic');
+  });
+});
+
 describe('fallback model fields', () => {
   beforeEach(() => {
     storage.clear();
@@ -1792,5 +2004,114 @@ describe('logoutOAuthAccount', () => {
     // This is the exact finder used in showAvatarPopover — must return undefined after logout.
     const found = accounts.find((a) => !a.loggedOut && (a.userName || a.accessToken || a.apiKey));
     expect(found).toBeUndefined();
+  });
+});
+
+describe('maskOAuthTokenWithRetry (cold service worker — issue #847)', () => {
+  // A freshly-opened side panel can have a cold SW whose secrets pipeline isn't
+  // warm yet, so the first secrets.mask-oauth-token round-trip comes back with
+  // no maskedValue. Without a retry, saveOAuthAccount gave up and oauth-token
+  // reported "no masked value" until the panel was reopened. Retry briefly.
+  const noSleep = async () => {};
+
+  it('returns the masked value once the SW warms up (empty, empty, then value)', async () => {
+    const responses = [{}, {}, { maskedValue: 'MASK' }];
+    let i = 0;
+    const send = async () => responses[i++];
+    const result = await maskOAuthTokenWithRetry(send, { attempts: 3, sleep: noSleep });
+    expect(result.maskedValue).toBe('MASK');
+    expect(i).toBe(3); // retried past the two empty responses
+  });
+
+  it('returns immediately on first success without extra round-trips', async () => {
+    let calls = 0;
+    const send = async () => {
+      calls++;
+      return { maskedValue: 'M' };
+    };
+    expect((await maskOAuthTokenWithRetry(send, { attempts: 3, sleep: noSleep })).maskedValue).toBe(
+      'M'
+    );
+    expect(calls).toBe(1);
+  });
+
+  it('gives up with no maskedValue after exhausting attempts', async () => {
+    let calls = 0;
+    const send = async () => {
+      calls++;
+      return {};
+    };
+    const result = await maskOAuthTokenWithRetry(send, { attempts: 3, sleep: noSleep });
+    expect(result.maskedValue).toBeUndefined();
+    expect(calls).toBe(3); // bounded — does not loop forever
+  });
+
+  it('keeps retrying through a transient SW error (resp.error then value)', async () => {
+    const responses = [{ error: 'pipeline build failed' }, { maskedValue: 'MASK2' }];
+    let i = 0;
+    const send = async () => responses[i++];
+    expect((await maskOAuthTokenWithRetry(send, { attempts: 3, sleep: noSleep })).maskedValue).toBe(
+      'MASK2'
+    );
+  });
+
+  it('propagates the last SW error reason on give-up (for a prod-visible diagnostic)', async () => {
+    const send = async () => ({ error: 'entry missing after write' });
+    const result = await maskOAuthTokenWithRetry(send, { attempts: 2, sleep: noSleep });
+    expect(result.maskedValue).toBeUndefined();
+    expect(result.lastError).toBe('entry missing after write');
+  });
+});
+
+describe('persistOAuthMaskViaServiceWorker (#847 — offscreen has no chrome.storage)', () => {
+  // oauth-token runs in the offscreen document, which has chrome.runtime but
+  // NOT chrome.storage. The token+domains must travel IN the SW message so the
+  // SW (which owns chrome.storage) writes them — the caller must never touch
+  // chrome.storage. This helper does exactly that and persists the mask.
+  const noSleep = async () => {};
+
+  it('sends accessToken + comma-joined domains to the SW (so the SW can write storage) and persists the mask', async () => {
+    let payload: { providerId: string; accessToken: string; domains: string } | undefined;
+    const accounts = [{ providerId: 'github', apiKey: '', accessToken: 'tok' }] as never[];
+    await persistOAuthMaskViaServiceWorker(
+      { providerId: 'github', accessToken: 'tok', domains: ['github.com', 'api.github.com'] },
+      {
+        sendMaskRequest: async (p) => {
+          payload = p;
+          return { maskedValue: 'MASK' };
+        },
+        getAccounts: () => accounts,
+        saveAccounts: async () => {},
+      }
+    );
+    // The whole point: the token leaves via the message, not via chrome.storage.
+    expect(payload).toEqual({
+      providerId: 'github',
+      accessToken: 'tok',
+      domains: 'github.com,api.github.com',
+    });
+    expect((accounts[0] as { maskedValue?: string }).maskedValue).toBe('MASK');
+  });
+
+  it('leaves the account unmasked AND logs a prod-visible error WITH the SW reason', async () => {
+    const accounts = [{ providerId: 'github', apiKey: '', accessToken: 'tok' }] as never[];
+    mockLog.error.mockClear();
+    await persistOAuthMaskViaServiceWorker(
+      { providerId: 'github', accessToken: 'tok', domains: ['github.com'] },
+      {
+        // SW reports WHY it couldn't mask — the reason must reach the give-up log.
+        sendMaskRequest: async () => ({ error: 'entry missing after write' }),
+        getAccounts: () => accounts,
+        saveAccounts: async () => {},
+      },
+      { attempts: 2, sleep: noSleep }
+    );
+    expect((accounts[0] as { maskedValue?: string }).maskedValue).toBeUndefined();
+    // #847: the give-up must NOT be silent (log.warn is dropped at prod ERROR
+    // level) AND must carry the reason so cold-SW vs write-fault is diagnosable.
+    expect(mockLog.error).toHaveBeenCalledWith(
+      expect.stringContaining('give-up'),
+      expect.objectContaining({ providerId: 'github', reason: 'entry missing after write' })
+    );
   });
 });

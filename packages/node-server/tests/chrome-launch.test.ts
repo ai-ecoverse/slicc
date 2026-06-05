@@ -1,5 +1,5 @@
 import { type existsSync, existsSync as fsExistsSync, type readdirSync } from 'fs';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -11,11 +11,14 @@ import {
   ensureQaProfileScaffold,
   findChromeExecutable,
   getDefaultCdpLaunchTimeoutMs,
+  legacyChromeCandidates,
+  migrateLegacyDefaultChromeProfile,
   parseCdpPortFromStderr,
   planChromeSpawn,
   probeCdpAlive,
   resolveChromeAppBundle,
   resolveChromeLaunchProfile,
+  resolveProfilesDir,
   waitForCdpPort,
   waitForCdpPortFromActivePortFile,
   waitForCdpPortFromStderr,
@@ -27,8 +30,60 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
+describe('resolveProfilesDir', () => {
+  it('returns Application Support path on darwin', () => {
+    expect(resolveProfilesDir('darwin', '/Users/test', {})).toBe(
+      '/Users/test/Library/Application Support/Slicc/profiles'
+    );
+  });
+
+  it('returns ~/.local/state path on linux when XDG_STATE_HOME is not set', () => {
+    expect(resolveProfilesDir('linux', '/home/test', {})).toBe(
+      '/home/test/.local/state/slicc/profiles'
+    );
+  });
+
+  it('uses XDG_STATE_HOME on linux when set', () => {
+    expect(resolveProfilesDir('linux', '/home/test', { XDG_STATE_HOME: '/custom/state' })).toBe(
+      '/custom/state/slicc/profiles'
+    );
+  });
+
+  it('returns LOCALAPPDATA path on win32 when set', () => {
+    expect(resolveProfilesDir('win32', '/home/test', { LOCALAPPDATA: '/fake/AppData/Local' })).toBe(
+      join('/fake/AppData/Local', 'Slicc', 'profiles')
+    );
+  });
+
+  it('falls back to tmpdir on unknown platforms', () => {
+    expect(resolveProfilesDir('freebsd' as NodeJS.Platform, '/home/test', {})).toBe(tmpdir());
+  });
+});
+
+describe('legacyChromeCandidates', () => {
+  it('includes $TMPDIR-based path', () => {
+    const candidates = legacyChromeCandidates('browser-coding-agent-chrome', {
+      TMPDIR: '/private/tmp/userXYZ',
+    });
+    expect(candidates).toContain('/private/tmp/userXYZ/browser-coding-agent-chrome');
+  });
+
+  it('includes /tmp-based path', () => {
+    const candidates = legacyChromeCandidates('browser-coding-agent-chrome', {});
+    expect(candidates).toContain('/tmp/browser-coding-agent-chrome');
+  });
+});
+
 describe('chrome-launch', () => {
-  it('uses the legacy tmp profile when no QA profile is requested', () => {
+  it('defaults to platform-appropriate profiles dir when no tmpDir override is given', () => {
+    const profile = resolveChromeLaunchProfile({
+      projectRoot: '/repo',
+    });
+
+    expect(profile.userDataDir).not.toContain('.slicc');
+  });
+
+  it('uses an explicit tmpDir override when provided', () => {
     const profile = resolveChromeLaunchProfile({
       projectRoot: '/repo',
       tmpDir: '/tmp/test-root',
@@ -947,5 +1002,88 @@ describe('probeCdpAlive', () => {
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
+  });
+});
+
+describe('migrateLegacyDefaultChromeProfile', () => {
+  it('copies a legacy profile to the new stable location', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'slicc-migrate-'));
+    tempDirs.push(root);
+
+    const legacyProfile = join(root, 'legacy', 'browser-coding-agent-chrome');
+    await mkdir(legacyProfile, { recursive: true });
+    await writeFile(join(legacyProfile, 'marker.txt'), 'legacy-data');
+
+    const newProfile = join(root, 'new', 'browser-coding-agent-chrome');
+    await migrateLegacyDefaultChromeProfile(newProfile, [legacyProfile]);
+
+    expect(await readFile(join(newProfile, 'marker.txt'), 'utf8')).toBe('legacy-data');
+  });
+
+  it('skips migration when the new profile already exists', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'slicc-migrate-'));
+    tempDirs.push(root);
+
+    const newProfile = join(root, 'new', 'browser-coding-agent-chrome');
+    await mkdir(newProfile, { recursive: true });
+    await writeFile(join(newProfile, 'marker.txt'), 'existing-data');
+
+    const legacyProfile = join(root, 'legacy', 'browser-coding-agent-chrome');
+    await mkdir(legacyProfile, { recursive: true });
+    await writeFile(join(legacyProfile, 'marker.txt'), 'legacy-data');
+
+    await migrateLegacyDefaultChromeProfile(newProfile, [legacyProfile]);
+
+    expect(await readFile(join(newProfile, 'marker.txt'), 'utf8')).toBe('existing-data');
+  });
+
+  it('does not throw and leaves no partial copy when cp fails', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'slicc-migrate-'));
+    tempDirs.push(root);
+
+    const legacyProfile = join(root, 'legacy', 'browser-coding-agent-chrome');
+    await mkdir(legacyProfile, { recursive: true });
+    await writeFile(join(legacyProfile, 'marker.txt'), 'legacy-data');
+
+    // Make newDir's parent a file so cp fails with ENOTDIR — newDir itself does not exist,
+    // so the existsSync guard doesn't short-circuit.
+    const newParent = join(root, 'new');
+    await writeFile(newParent, 'i-am-a-file-not-a-dir');
+    const newProfile = join(newParent, 'browser-coding-agent-chrome');
+
+    await expect(
+      migrateLegacyDefaultChromeProfile(newProfile, [legacyProfile])
+    ).resolves.not.toThrow();
+    expect(fsExistsSync(newProfile)).toBe(false);
+  });
+
+  it('is a no-op when no legacy profile exists', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'slicc-migrate-'));
+    tempDirs.push(root);
+
+    const newProfile = join(root, 'new', 'browser-coding-agent-chrome');
+    const missingLegacy = join(root, 'legacy', 'browser-coding-agent-chrome');
+
+    await expect(
+      migrateLegacyDefaultChromeProfile(newProfile, [missingLegacy])
+    ).resolves.not.toThrow();
+    expect(fsExistsSync(newProfile)).toBe(false);
+  });
+
+  it('tries candidates in order and stops at the first match', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'slicc-migrate-'));
+    tempDirs.push(root);
+
+    const first = join(root, 'first', 'browser-coding-agent-chrome');
+    const second = join(root, 'second', 'browser-coding-agent-chrome');
+    await mkdir(first, { recursive: true });
+    await writeFile(join(first, 'marker.txt'), 'first-data');
+    await mkdir(second, { recursive: true });
+    await writeFile(join(second, 'marker.txt'), 'second-data');
+
+    const newProfile = join(root, 'new', 'browser-coding-agent-chrome');
+    await migrateLegacyDefaultChromeProfile(newProfile, [first, second]);
+
+    expect(await readFile(join(newProfile, 'marker.txt'), 'utf8')).toBe('first-data');
   });
 });

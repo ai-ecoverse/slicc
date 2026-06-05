@@ -85,7 +85,14 @@ describe('nuke command', () => {
         onblocked: null,
       }),
     });
-    vi.stubGlobal('navigator', { serviceWorker: { getRegistrations: async () => [] } });
+    vi.stubGlobal('navigator', {
+      serviceWorker: { getRegistrations: async () => [] },
+      storage: {
+        // Default to "no OPFS in this env": tests that exercise the
+        // OPFS-wipe path install their own stub via vi.stubGlobal.
+        getDirectory: undefined,
+      },
+    });
     vi.stubGlobal('localStorage', {
       removeItem: vi.fn(),
       getItem: () => null,
@@ -170,6 +177,56 @@ describe('nuke command', () => {
     expect(NUKE_LOCAL_STORAGE_KEYS).toContain('slicc:welcome-flow-fired');
     expect(NUKE_LOCAL_STORAGE_KEYS).toContain('slicc.trayJoinUrl');
     expect(NUKE_LOCAL_STORAGE_KEYS).toContain('slicc.trayWorkerBaseUrl');
+  });
+
+  it('recursively removes every OPFS root entry on the launch-code path', async () => {
+    // Post-ZenFS/OPFS migration the bulk of local state lives in OPFS
+    // (workspace files, scoops, mounts). Without this wipe a nuke
+    // would leave the prior workspace on disk and the user would
+    // boot back into stale state.
+    const removeEntry = vi.fn(async (_name: string, _opts?: { recursive: boolean }) => undefined);
+    const entries = ['slicc-fs', 'slicc-fs-global', 'leftover-mount'];
+    async function* keys(): AsyncIterableIterator<string> {
+      for (const name of entries) yield name;
+    }
+    vi.stubGlobal('navigator', {
+      serviceWorker: { getRegistrations: async () => [] },
+      storage: {
+        getDirectory: async () => ({ keys, removeEntry }),
+      },
+    });
+
+    const dispose = installNukeReloadListener(() => {});
+    const cmd = createNukeCommand();
+    await cmd.execute(['1234'], createMockCtx());
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(removeEntry).toHaveBeenCalledTimes(entries.length);
+    for (const name of entries) {
+      expect(removeEntry).toHaveBeenCalledWith(name, { recursive: true });
+    }
+    dispose();
+  });
+
+  it('still reloads cleanly when OPFS is unavailable', async () => {
+    // No `navigator.storage.getDirectory` (older browsers / some test
+    // envs). The wipe block must be best-effort and never block the
+    // reload broadcast — otherwise the user is stranded on a half-
+    // nuked instance.
+    vi.stubGlobal('navigator', {
+      serviceWorker: { getRegistrations: async () => [] },
+      storage: {},
+    });
+
+    const onReload = vi.fn();
+    const dispose = installNukeReloadListener(onReload);
+    const cmd = createNukeCommand();
+    const result = await cmd.execute(['1234'], createMockCtx());
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(result.exitCode).toBe(0);
+    expect(onReload).toHaveBeenCalledTimes(1);
+    dispose();
   });
 });
 

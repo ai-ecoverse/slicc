@@ -284,6 +284,16 @@ export interface ProviderConfig {
    */
   onSilentRenew?: () => Promise<string | null>;
   /**
+   * Optional: fetch and cache the provider's dynamic model list (and persist it
+   * so cold consumers — e.g. the cloud cone's kernel worker reading localStorage
+   * — see the full set + metadata on first resolve). `getModelIds` is sync and
+   * only reads caches; this is the async populate step normally run during
+   * `onOAuthLogin`. The cloud cone injects accounts without an interactive login,
+   * so it calls this explicitly (see `prewarmHostedModels`). The optional
+   * `accessToken` lets callers pre-warm before the account is persisted.
+   */
+  refreshModels?: (accessToken?: string) => Promise<void>;
+  /**
    * Domains this OAuth token should be unmasked for in fetch-proxy traffic.
    * Supports wildcards (e.g. '*.github.com').
    */

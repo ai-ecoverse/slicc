@@ -33,11 +33,11 @@ import type {
   TrayRuntimeStatusMsg,
 } from '../../../chrome-extension/src/messages.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
-import type { VirtualFS } from '../fs/index.js';
 import type { Orchestrator } from '../scoops/orchestrator.js';
 import type { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
 import type { RegisteredScoop, ThinkingLevel } from '../scoops/types.js';
 import type { AgentHandle, ChatMessage, AgentEvent as UIAgentEvent } from '../ui/types.js';
+import type { LocalVfsClient } from './local-vfs-client.js';
 
 // ---------------------------------------------------------------------------
 // 1. Wire — generic over today's panel/host message shapes.
@@ -164,9 +164,15 @@ export interface KernelClientFacade {
   onScoopSelected(handler: (jid: string) => void): () => void;
 
   // -------------------------------------------------------------------------
-  // Local FS handle (read-only mirror — same IndexedDB, no mounts)
+  // Local FS handle (read-only mirror — same IndexedDB or worker-RPC backed)
+  //
+  // Typed as `LocalVfsClient` (read-only subset) so panels that consume
+  // this surface cannot accidentally write through it. A `VirtualFS`
+  // instance satisfies `LocalVfsClient` structurally; a worker-backed
+  // `RemoteVfsClient` (under `slicc_opfs_vfs=opfs`) is the other
+  // legitimate producer.
   // -------------------------------------------------------------------------
-  setLocalFS(fs: VirtualFS): void;
+  setLocalFS(fs: LocalVfsClient): void;
 
   // -------------------------------------------------------------------------
   // Chat panel handle
@@ -190,8 +196,8 @@ export interface KernelClientFacade {
   // Memory & shared FS shim
   // -------------------------------------------------------------------------
   getGlobalMemory(): Promise<string>;
-  getScoopContext(jid: string): { getFS: () => VirtualFS | null } | undefined;
-  getSharedFS(): VirtualFS | null;
+  getScoopContext(jid: string): { getFS: () => LocalVfsClient | null } | undefined;
+  getSharedFS(): LocalVfsClient | null;
 
   // -------------------------------------------------------------------------
   // RPC operations
@@ -207,7 +213,12 @@ export interface KernelClientFacade {
   clearAllMessages(): Promise<void>;
   clearFilesystem(): void;
   requestState(): void;
-  sendSprinkleLick(sprinkleName: string, body: unknown, targetScoop?: string): void;
+  sendSprinkleLick(
+    sprinkleName: string,
+    body: unknown,
+    targetScoop?: string,
+    originLabel?: string
+  ): void;
   setSprinkleOpHandler(handler: (payload: unknown) => void): void;
 
   // -------------------------------------------------------------------------

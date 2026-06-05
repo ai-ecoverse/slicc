@@ -8,7 +8,14 @@
  * route to the cone via the onLick callback. Auto-height via ResizeObserver.
  */
 
-import FS from '@isomorphic-git/lightning-fs';
+import {
+  runJshOp,
+  type SprinkleAgentOptions,
+  type SprinkleAgentResult,
+  type SprinkleExecHandler,
+  type SprinkleExecResult,
+  type SprinkleFetchResult,
+} from './sprinkle-bridge.js';
 import { collectThemeCSS } from './sprinkle-renderer.js';
 import { isThemeLight, registerSprinkleWindow, unregisterSprinkleWindow } from './theme.js';
 
@@ -16,19 +23,79 @@ const isExtension =
   typeof chrome !== 'undefined' && !!(chrome as { runtime?: { id?: string } })?.runtime?.id;
 
 /**
- * Fallback VFS reader for `.shtml` dips. The preview service worker is
- * the canonical way to fetch VFS content (it normalizes mounts, MIME
- * types, etc.), but on the very first install of a page the SW may not
- * be controlling yet — `clients.claim()` happens asynchronously, so
- * `/preview/*` requests fall through to the dev server and 404. This
- * direct reader bypasses the network entirely and reads the same
- * LightningFS database the SW uses, so dips render correctly even on
- * the first uncontrolled boot.
+ * Fallback VFS read for `.shtml` dips when the preview service worker
+ * isn't yet controlling the page. Talks to the page-side `preview-vfs`
+ * BroadcastChannel responder (`preview-vfs-responder.ts`), which holds
+ * a live `VirtualFS` reference and serves both OPFS-rooted files and
+ * mounted directories. A 5s timeout matches the SW-side responder.
  */
-let lfsReader: FS.PromisifiedFS | null = null;
-function getLfsReader(): FS.PromisifiedFS {
-  if (!lfsReader) lfsReader = new FS('slicc-fs').promises;
-  return lfsReader;
+async function readShtmlFromVFS(vfsPath: string, signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+  const content = await readViaPreviewVfsBridge(vfsPath, true, signal);
+  if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+  if (content === null) throw new Error(`VFS read failed: ${vfsPath}`);
+  return typeof content === 'string' ? content : new TextDecoder().decode(content);
+}
+
+interface PreviewVfsBridgeChannel {
+  postMessage(data: unknown): void;
+  addEventListener(type: 'message', listener: (ev: MessageEvent) => void): void;
+  removeEventListener(type: 'message', listener: (ev: MessageEvent) => void): void;
+}
+
+let previewVfsBridgeChannel: PreviewVfsBridgeChannel | null = null;
+function getPreviewVfsBridge(): PreviewVfsBridgeChannel | null {
+  if (previewVfsBridgeChannel) return previewVfsBridgeChannel;
+  if (typeof BroadcastChannel === 'undefined') return null;
+  try {
+    previewVfsBridgeChannel = new BroadcastChannel('preview-vfs') as PreviewVfsBridgeChannel;
+  } catch {
+    return null;
+  }
+  return previewVfsBridgeChannel;
+}
+
+async function readViaPreviewVfsBridge(
+  vfsPath: string,
+  asText: boolean,
+  signal?: AbortSignal
+): Promise<string | Uint8Array | null> {
+  const bc = getPreviewVfsBridge();
+  if (!bc) return null;
+  const id = `dip-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return new Promise<string | Uint8Array | null>((resolve) => {
+    let settled = false;
+    const cleanup = () => {
+      bc.removeEventListener('message', handler);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const handler = (event: MessageEvent): void => {
+      if (settled) return;
+      if (event.data?.type !== 'preview-vfs-response' || event.data.id !== id) return;
+      settled = true;
+      cleanup();
+      if (event.data.error) {
+        resolve(null);
+        return;
+      }
+      resolve(event.data.content ?? null);
+    };
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(null);
+    };
+    bc.addEventListener('message', handler);
+    signal?.addEventListener('abort', onAbort);
+    setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(null);
+    }, 5000);
+    bc.postMessage({ type: 'preview-vfs-read', id, path: vfsPath, asText });
+  });
 }
 
 /**
@@ -71,16 +138,56 @@ function isTrustedDipReadPath(path: string): boolean {
 /** Iframes whose dip source was trusted — eligible for the VFS bridge. */
 const trustedDipWindows = new WeakSet<Window>();
 
-async function readShtmlFromVFS(vfsPath: string, signal?: AbortSignal): Promise<string> {
-  if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
-  const lfs = getLfsReader();
-  const raw = await lfs.readFile(vfsPath, 'utf8');
-  if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
-  return typeof raw === 'string' ? raw : new TextDecoder().decode(raw as Uint8Array);
-}
+/**
+ * Shell-exec bridge methods, injected into the dip `slicc` object only
+ * for TRUSTED dips. Untrusted inline-chat dips never receive these, so
+ * an attacker-controlled cone reply can't spawn shell commands / scoops.
+ * `exec` posts `dip-exec`; `agent` posts `dip-agent` — both route to the
+ * page-side `dipExecHandler` (same worker shell sprinkles use).
+ */
+const EXEC_BRIDGE_METHODS = `,
+    exec: Object.assign(function(cmd) {
+      return _vfsCall('dip-exec', { cmd: cmd }, function(m) { return m.result; });
+    }, { spawn: function(argv) {
+      return _vfsCall('dip-jsh', { op: 'spawn', args: [argv] }, function(m) { return m.result; });
+    } }),
+    agent: function(prompt, opts) {
+      return _vfsCall('dip-agent', { prompt: prompt, opts: opts || null },
+        function(m) { return m.result; });
+    }`;
+
+/**
+ * Tier 1 jsh globals injected into the dip `slicc` object alongside
+ * {@link EXEC_BRIDGE_METHODS} (TRUSTED dips only). Each routes through a
+ * single `dip-jsh` round-trip handled page-side by {@link runDipJsh},
+ * which runs the op in the same worker realm `slicc.exec` uses. `browser`
+ * is therefore trusted-only by construction — untrusted dips never get
+ * these methods at all. Binary-fs ops stay sprinkle-only.
+ */
+const JSH_BRIDGE_METHODS = `,
+    fetch: function(url, init) {
+      return _vfsCall('dip-jsh', { op: 'fetch', args: [url, init || null] }, function(m) { return m.result; });
+    },
+    http: { client: function(cfg) {
+      function mk(method) { return function(path, opts) { return _vfsCall('dip-jsh', { op: 'http', args: [cfg, method, path, opts || null] }, function(m) { return m.result; }); }; }
+      return { get: mk('get'), post: mk('post'), put: mk('put'), patch: mk('patch'), 'delete': mk('delete') };
+    } },
+    browser: {
+      findTab: function(q) { return _vfsCall('dip-jsh', { op: 'browser', args: ['findTab', q] }, function(m) { return m.result; }); },
+      ensureTab: function(url, options) { return _vfsCall('dip-jsh', { op: 'browser', args: ['ensureTab', url, options || {}] }, function(m) { return m.result; }); },
+      eval: function(tab, code) { return _vfsCall('dip-jsh', { op: 'browser', args: ['eval', tab, code] }, function(m) { return m.result; }); },
+      evalAsync: function(tab, code) { return _vfsCall('dip-jsh', { op: 'browser', args: ['evalAsync', tab, code] }, function(m) { return m.result; }); },
+      cookie: function(tab, name) { return _vfsCall('dip-jsh', { op: 'browser', args: ['cookie', tab, name] }, function(m) { return m.result; }); },
+      localStorage: function(tab, key) { return _vfsCall('dip-jsh', { op: 'browser', args: ['localStorage', tab, key] }, function(m) { return m.result; }); },
+      fetch: function(tab, url, opts) { return _vfsCall('dip-jsh', { op: 'browser', args: ['fetch', tab, url, opts || {}] }, function(m) { return m.result; }); }
+    },
+    fetchToFile: function(url, path) {
+      return _vfsCall('dip-jsh', { op: 'fetchToFile', args: [url, path] }, function(m) { return m.result; });
+    }`;
 
 /** Minimal bridge script: lick + read-only VFS + auto-height. */
-const BRIDGE_SCRIPT = `(function() {
+function buildBridgeScript(includeExec: boolean): string {
+  return `(function() {
   var _cbId = 0;
   var _callbacks = {};
 
@@ -114,7 +221,7 @@ const BRIDGE_SCRIPT = `(function() {
     },
     stat: function(path) {
       return _vfsCall('dip-stat', { path: path }, function(m) { return m.stat; });
-    }
+    }${includeExec ? EXEC_BRIDGE_METHODS : ''}${includeExec ? JSH_BRIDGE_METHODS : ''}
   };
   function reportHeight() {
     parent.postMessage({ type: 'dip-height',
@@ -157,8 +264,8 @@ const BRIDGE_SCRIPT = `(function() {
         if (actionData) { try { actionData = JSON.parse(actionData); } catch(ex) {} }
         /* Picker hint (e.g. data-picker="directory") needs the parent to
            run File System Access API on the click activation chain.
-           Phase 2b.6 — forward as a separate message so the parent can
-           run showDirectoryPicker, stash the handle in IDB, then dispatch
+           Forward as a separate message so the parent can run
+           showDirectoryPicker, stash the handle in IDB, then dispatch
            the lick with the IDB key. */
         var picker = el.dataset.picker;
         if (picker) {
@@ -192,6 +299,7 @@ const BRIDGE_SCRIPT = `(function() {
     }
   });
 })();`;
+}
 
 export interface DipInstance {
   dispose(): void;
@@ -320,7 +428,7 @@ const DRAFT_BRIDGE_EXTENSION = `(function(){
   });
 })();`;
 
-function buildDipSrcdoc(content: string, isDraft: boolean): string {
+function buildDipSrcdoc(content: string, isDraft: boolean, trusted = false): string {
   const themeCSS = collectThemeCSS();
   const htmlClass = isThemeLight() ? ' class="theme-light"' : '';
   // Drafts can't introspect content (it streams), so always include the
@@ -329,12 +437,14 @@ function buildDipSrcdoc(content: string, isDraft: boolean): string {
   const includeEditor = isDraft || content.includes('<slicc-editor');
   const includeDiff = isDraft || content.includes('<slicc-diff');
   const draftScript = isDraft ? `<script>${DRAFT_BRIDGE_EXTENSION}</script>` : '';
+  // Drafts are never trusted, so they never get the exec/agent methods.
+  const bridgeScript = buildBridgeScript(/* includeExec */ trusted && !isDraft);
   return `<!DOCTYPE html>
 <html${htmlClass}><head>
 <meta charset="utf-8">
 <style>${themeCSS}</style>
 <style>${DIP_HOST_STYLES}</style>
-<script>${BRIDGE_SCRIPT}</script>
+<script>${bridgeScript}</script>
 ${draftScript}
 ${includeEditor ? '<script src="/slicc-editor.js"></script>' : ''}
 ${includeDiff ? '<script src="/slicc-diff.js"></script>' : ''}
@@ -354,7 +464,7 @@ const liveDipWindows = new Set<Window>();
 /**
  * Post a `slicc-*` payload to every live dip iframe. Dips listen for
  * matching `slicc-message` CustomEvents on `document` (see
- * `BRIDGE_SCRIPT`). Closed/detached iframes are ignored automatically
+ * `buildBridgeScript`). Closed/detached iframes are ignored automatically
  * because they're removed from the registry on dispose().
  */
 export function broadcastToDips(payload: { type: string; [k: string]: unknown }): void {
@@ -368,6 +478,151 @@ export function broadcastToDips(payload: { type: string; [k: string]: unknown })
       /* Closed iframes throw — ignore. */
     }
   }
+}
+
+// ── Trusted-dip shell exec / agent bridge ──
+//
+// Only TRUSTED dips (image-sourced under TRUSTED_DIP_SOURCE_PREFIXES) get
+// `slicc.exec()` / `slicc.agent()`. The page routes those through the same
+// worker shell sprinkles use, wired by `ui/main.ts` via `setDipExecHandler`.
+// When unset (tests / no worker), exec surfaces a clean `127` result rather
+// than throwing — mirroring the sprinkle bridge's "missing handler" contract.
+
+/** Page→worker shell-exec transport for trusted dips. */
+let dipExecHandler: SprinkleExecHandler | undefined;
+
+/**
+ * Wire the page→worker shell-exec transport used by trusted dips'
+ * `slicc.exec()` / `slicc.agent()`. Called from `ui/main.ts` with the
+ * same handler handed to `SprinkleManager`. Pass `undefined` to clear.
+ */
+export function setDipExecHandler(handler: SprinkleExecHandler | undefined): void {
+  dipExecHandler = handler;
+}
+
+/**
+ * Single-quote a value for safe inclusion in a bash command line. Wraps
+ * in `'…'` and escapes embedded single quotes as `'\''`. Empty input
+ * becomes `''` so the token is still well-formed. Mirrors the sprinkle
+ * bridge's `shellQuote`.
+ */
+function shellQuoteDip(value: string): string {
+  if (value.length === 0) return `''`;
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/** Build the `agent …` shell command from a prompt + options (flags first). */
+function buildDipAgentCommand(prompt: string, opts?: SprinkleAgentOptions): string {
+  const cwd = opts?.cwd ?? '.';
+  const allowed = opts?.allowedCommands ?? '*';
+  const parts = ['agent'];
+  if (opts?.model) parts.push('--model', shellQuoteDip(opts.model));
+  if (opts?.thinking) parts.push('--thinking', shellQuoteDip(opts.thinking));
+  if (opts?.readOnly) parts.push('--read-only', shellQuoteDip(opts.readOnly));
+  parts.push(shellQuoteDip(cwd), shellQuoteDip(allowed), shellQuoteDip(prompt));
+  return parts.join(' ');
+}
+
+/**
+ * Run a command via the injected dip shell-exec transport, surfacing a
+ * clean `127` result when no handler is wired (rather than throwing).
+ */
+async function runDipExec(cmd: string): Promise<SprinkleExecResult> {
+  if (!dipExecHandler) {
+    return { stdout: '', stderr: 'exec: shell bridge not available\n', exitCode: 127 };
+  }
+  try {
+    return await dipExecHandler(cmd);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { stdout: '', stderr: `exec: ${message}\n`, exitCode: 1 };
+  }
+}
+
+/** Run an `agent` spawn, folding stderr into stdout like the sprinkle bridge. */
+async function runDipAgent(
+  prompt: string,
+  opts?: SprinkleAgentOptions
+): Promise<SprinkleAgentResult> {
+  const result = await runDipExec(buildDipAgentCommand(prompt, opts));
+  return { stdout: result.stdout || result.stderr, exitCode: result.exitCode };
+}
+
+/**
+ * Run a Tier 1 jsh op over the dip exec transport (same worker realm
+ * `slicc.exec` uses). `fetch` gets its base64 body decoded into UTF-8
+ * `body` text, matching the sprinkle bridge's `jshDispatch`. Throws when
+ * no exec handler is wired (parsed from the clean `127` exec result).
+ */
+async function runDipJsh(op: string, args: unknown[]): Promise<unknown> {
+  const value = await runJshOp(runDipExec, op, args);
+  if (op === 'fetch') {
+    const v = value as SprinkleFetchResult;
+    const bin = atob(v.bodyBase64);
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    return { ...v, body: new TextDecoder('utf-8').decode(u8) };
+  }
+  return value;
+}
+
+/**
+ * Handle a `dip-exec` / `dip-agent` request from a dip iframe. Gated on
+ * `trustedDipWindows` so even a spoofed message from an untrusted iframe
+ * can't reach the shell. Returns `true` when the message was handled.
+ */
+async function handleDipExecRequest(
+  iframeWindow: Window | null,
+  msg: {
+    type: string;
+    id?: number;
+    cmd?: string;
+    prompt?: string;
+    opts?: SprinkleAgentOptions;
+    op?: string;
+    args?: unknown[];
+  }
+): Promise<boolean> {
+  if (!iframeWindow || typeof msg.id !== 'number') return false;
+  const respond = (payload: Record<string, unknown>) => {
+    try {
+      iframeWindow.postMessage({ ...payload, id: msg.id }, '*');
+    } catch {
+      /* iframe gone — ignore */
+    }
+  };
+
+  if (!trustedDipWindows.has(iframeWindow)) {
+    respond({ type: `${msg.type}-response`, error: 'exec not allowed for this dip' });
+    return true;
+  }
+
+  if (msg.type === 'dip-exec') {
+    const result = await runDipExec(typeof msg.cmd === 'string' ? msg.cmd : '');
+    respond({ type: 'dip-exec-response', result });
+    return true;
+  }
+  if (msg.type === 'dip-agent') {
+    const result = await runDipAgent(typeof msg.prompt === 'string' ? msg.prompt : '', msg.opts);
+    respond({ type: 'dip-agent-response', result });
+    return true;
+  }
+  if (msg.type === 'dip-jsh') {
+    try {
+      const result = await runDipJsh(
+        typeof msg.op === 'string' ? msg.op : '',
+        Array.isArray(msg.args) ? msg.args : []
+      );
+      respond({ type: 'dip-jsh-response', result });
+    } catch (err) {
+      respond({
+        type: 'dip-jsh-response',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -385,7 +640,7 @@ export function mountDip(
   onLick: (action: string, data: unknown) => void,
   trusted = false
 ): DipInstance {
-  const srcdoc = buildDipSrcdoc(content, /* isDraft */ false);
+  const srcdoc = buildDipSrcdoc(content, /* isDraft */ false, trusted);
 
   if (isExtension) {
     return mountDipExtension(container, srcdoc, onLick, trusted);
@@ -433,12 +688,12 @@ export function mountDip(
     } else if (msg.type === 'dip-open-link') {
       openDipLink(msg.url);
     } else if (msg.type === 'dip-picker-action') {
-      // Phase 2b.6 — picker buttons (`data-picker="directory"`)
-      // post their click here instead of inline `dip-lick` so the
-      // parent can run `showDirectoryPicker` on the propagated
-      // user activation, stash the handle in IDB, then dispatch
-      // the lick with `{ handleInIdb, idbKey, dirName }`. Until
-      // this case landed, the message arrived at `mountDip` but
+      // Picker buttons (`data-picker="directory"`) post their click
+      // here instead of inline `dip-lick` so the parent can run
+      // `showDirectoryPicker` on the propagated user activation,
+      // stash the handle in IDB, then dispatch the lick with
+      // `{ handleInIdb, idbKey, dirName }`. Until this case landed,
+      // the message arrived at `mountDip` but
       // nothing dispatched to `handleDipPickerAction` — every
       // mount-dialog "Select directory" click was a silent no-op.
       void handleDipPickerAction(msg, onLick);
@@ -448,6 +703,8 @@ export function mountDip(
       msg.type === 'dip-stat'
     ) {
       void handleDipVfsRequest(iframe.contentWindow, msg);
+    } else if (msg.type === 'dip-exec' || msg.type === 'dip-agent' || msg.type === 'dip-jsh') {
+      void handleDipExecRequest(iframe.contentWindow, msg);
     }
   };
   window.addEventListener('message', messageHandler);
@@ -555,9 +812,11 @@ export function mountDraftDip(onLick: (action: string, data: unknown) => void): 
 
 /**
  * Handle a `dip-readfile` / `dip-exists` / `dip-stat` request from a
- * dip iframe. Reads from the same LightningFS the preview SW uses, so
- * onboarding markers / profiles / etc. are visible to the dip without
- * a parent-side handshake. Returns `true` when the message was handled.
+ * dip iframe. Reads through the page-side `preview-vfs` BroadcastChannel
+ * responder (`preview-vfs-responder.ts`) — the same OPFS-backed bridge
+ * the preview SW uses — so onboarding markers / profiles / etc. are
+ * visible to the dip without a parent-side handshake. Returns `true`
+ * when the message was handled.
  *
  * Two layers of access control:
  *
@@ -574,7 +833,6 @@ async function handleDipVfsRequest(
 ): Promise<boolean> {
   if (!iframeWindow || typeof msg.id !== 'number') return false;
   const path = typeof msg.path === 'string' ? msg.path : '';
-  const lfs = getLfsReader();
   const respond = (payload: Record<string, unknown>) => {
     try {
       iframeWindow.postMessage({ ...payload, id: msg.id }, '*');
@@ -593,45 +851,41 @@ async function handleDipVfsRequest(
   }
 
   if (msg.type === 'dip-readfile') {
-    try {
-      const raw = await lfs.readFile(path, 'utf8');
-      const content = typeof raw === 'string' ? raw : new TextDecoder().decode(raw as Uint8Array);
-      respond({ type: 'dip-readfile-response', content });
-    } catch (err) {
-      respond({
-        type: 'dip-readfile-response',
-        error: err instanceof Error ? err.message : 'Read failed',
-      });
+    const raw = await readViaPreviewVfsBridge(path, true);
+    if (raw === null) {
+      respond({ type: 'dip-readfile-response', error: 'Read failed' });
+      return true;
     }
+    const content = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+    respond({ type: 'dip-readfile-response', content });
     return true;
   }
   if (msg.type === 'dip-exists') {
-    try {
-      await lfs.stat(path);
-      respond({ type: 'dip-exists-response', exists: true });
-    } catch {
-      respond({ type: 'dip-exists-response', exists: false });
-    }
+    const raw = await readViaPreviewVfsBridge(path, true);
+    respond({ type: 'dip-exists-response', exists: raw !== null });
     return true;
   }
   if (msg.type === 'dip-stat') {
-    try {
-      const st = await lfs.stat(path);
-      respond({
-        type: 'dip-stat-response',
-        stat: {
-          isFile: st.isFile(),
-          isDirectory: st.isDirectory(),
-          size: st.size,
-          mtimeMs: st.mtimeMs,
-        },
-      });
-    } catch (err) {
-      respond({
-        type: 'dip-stat-response',
-        error: err instanceof Error ? err.message : 'Stat failed',
-      });
+    // Stat semantics are limited under the read-bridge: a successful
+    // read confirms existence + a file (mounted directories surface as
+    // EISDIR via the responder and resolve to null here). Size is the
+    // byte length of the fetched content; mtimeMs is not available
+    // through the preview-vfs envelope and reported as 0.
+    const raw = await readViaPreviewVfsBridge(path, false);
+    if (raw === null) {
+      respond({ type: 'dip-stat-response', error: 'Stat failed' });
+      return true;
     }
+    const size = typeof raw === 'string' ? raw.length : raw.byteLength;
+    respond({
+      type: 'dip-stat-response',
+      stat: {
+        isFile: true,
+        isDirectory: false,
+        size,
+        mtimeMs: 0,
+      },
+    });
     return true;
   }
   return false;
@@ -717,17 +971,18 @@ export function hydrateDips(
 
     // Resolve the .shtml content. Prefer the preview service worker
     // (handles mounts, MIME types, project-serve mode, etc.), but fall
-    // back to a direct LightningFS read for VFS-rooted paths so dips
-    // still render on the very first boot before the SW claims the
-    // page. Only paths starting with `/` are read directly; relative
-    // / cross-origin URLs always go through the network.
+    // back to a direct `preview-vfs` BroadcastChannel read (OPFS-backed)
+    // for VFS-rooted paths so dips still render on the very first boot
+    // before the SW claims the page. Only paths starting with `/` are
+    // read directly; relative / cross-origin URLs always go through the
+    // network.
     const isVfsPath = src.startsWith('/');
     const swControlled = typeof navigator !== 'undefined' && !!navigator.serviceWorker?.controller;
     const fetchUrl = isVfsPath ? `/preview${src}` : src;
 
     const resolveContent = async (): Promise<string> => {
       if (isVfsPath && !swControlled) {
-        // SW isn't controlling — go straight to LightningFS.
+        // SW isn't controlling — go straight to the preview-vfs responder.
         return readShtmlFromVFS(src, controller.signal);
       }
       // The extension side panel registers its own
@@ -736,7 +991,7 @@ export function hydrateDips(
       // standalone dev-server SW does. `navigator.serviceWorker.
       // controller` is still truthy, so we can't rely on `swControlled`
       // alone — wrap the fetch and treat any rejection as a signal to
-      // fall back to the direct LightningFS read for VFS paths.
+      // fall back to the preview-vfs responder for VFS paths.
       let resp: Response;
       try {
         resp = await fetch(fetchUrl, { signal: controller.signal });
@@ -747,8 +1002,8 @@ export function hydrateDips(
       }
       if (resp.ok) return resp.text();
       // Some dev-server responses bypass the SW even when it claims to
-      // be controlling (e.g. extension boot, stale registration).
-      // Retry once via direct LightningFS for VFS paths before failing.
+      // be controlling (e.g. extension boot, stale registration). Retry
+      // once via the preview-vfs responder for VFS paths before failing.
       if (isVfsPath) return readShtmlFromVFS(src, controller.signal);
       throw new Error(`HTTP ${resp.status}`);
     };
@@ -795,7 +1050,7 @@ export function disposeDips(instances: DipInstance[]): void {
  * `FileSystemDirectoryHandle` in the shared mount-handle IDB store,
  * then forward the click as an `onLick` carrying `{ handleInIdb,
  * idbKey, dirName }` so a worker-resident `LocalMountBackend.create`
- * (Phase 2b.6) can pick it up via `loadAndClearPendingHandle`.
+ * can pick it up via `loadAndClearPendingHandle`.
  *
  * In standalone-CLI (non-worker) mode the same plumbing works: the
  * agent's `onAction` handler already has the `handleInIdb` branch and
@@ -878,6 +1133,8 @@ function mountDipExtension(
       msg.type === 'dip-stat'
     ) {
       void handleDipVfsRequest(iframe.contentWindow, msg);
+    } else if (msg.type === 'dip-exec' || msg.type === 'dip-agent' || msg.type === 'dip-jsh') {
+      void handleDipExecRequest(iframe.contentWindow, msg);
     }
   };
   window.addEventListener('message', messageHandler);

@@ -129,12 +129,32 @@ class MockDirectoryHandle {
   }
 
   async *[Symbol.asyncIterator](): AsyncGenerator<[string, MockDirectoryHandle | MockFileHandle]> {
+    yield* this.entries();
+  }
+
+  // FileSystemDirectoryHandle exposes `entries()` / `keys()` / `values()`
+  // as async iterables; `@zenfs/dom`'s `WebAccessFS._loadHandles` calls
+  // `handle.entries()`. The legacy `Symbol.asyncIterator` route doesn't
+  // satisfy that call site, so duplicate the yield as a named method.
+  async *entries(): AsyncGenerator<[string, MockDirectoryHandle | MockFileHandle]> {
     for (const [name, entry] of this.node.entries) {
       if (entry.kind === 'directory') {
         yield [name, new MockDirectoryHandle(name, entry)];
       } else {
         yield [name, new MockFileHandle(name, entry)];
       }
+    }
+  }
+
+  async *keys(): AsyncGenerator<string> {
+    for (const name of this.node.entries.keys()) yield name;
+  }
+
+  async *values(): AsyncGenerator<MockDirectoryHandle | MockFileHandle> {
+    for (const [, entry] of this.node.entries) {
+      yield entry.kind === 'directory'
+        ? new MockDirectoryHandle('', entry)
+        : new MockFileHandle('', entry);
     }
   }
 

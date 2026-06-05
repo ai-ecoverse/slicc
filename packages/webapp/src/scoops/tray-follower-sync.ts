@@ -12,6 +12,7 @@ import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { AgentEvent, AgentHandle, ChatMessage } from '../ui/types.js';
 import { DataChannelKeepalive } from './data-channel-keepalive.js';
+import type { LickEvent } from './lick-manager.js';
 import {
   getFollowerTrayRuntimeStatus,
   setFollowerLastPingTime,
@@ -66,6 +67,22 @@ export interface FollowerSyncManagerOptions {
   onSprinklesList?: (sprinkles: SprinkleSummary[]) => void;
   /** Called when the leader sends a `sprinkle.update` payload (mirrors `SprinkleManager.sendToSprinkle`). */
   onSprinkleUpdate?: (sprinkleName: string, data: unknown) => void;
+  /**
+   * Called when the leader sends a `cherry.slicc_event` (cone → host page). Only
+   * a cherry follower wires this — it forwards the event to the host SDK via
+   * `CherryHostTransport.emitSliccEventToHost`. Non-cherry followers leave it
+   * unset, so the event falls through harmlessly. The wire `targetId` is not
+   * forwarded: a cherry follower owns exactly one host transport, so the event
+   * has only one destination.
+   */
+  onCherrySliccEvent?: (name: string, detail?: unknown) => void;
+  /**
+   * This follower's own runtime id, stamped onto outbound `cherry.host_event`
+   * messages (host page → cone) so the cone-side lick records which cherry
+   * runtime emitted it. The leader routes the event by connection identity, not
+   * by this field, so it is informational only. Only a cherry follower sets it.
+   */
+  selfRuntimeId?: string;
   /**
    * Bound on every `fetchSprinkleContent` call. If the leader never
    * answers a `sprinkle.fetch` (deadlocked agent, partial chunked
@@ -321,6 +338,21 @@ export class FollowerSyncManager implements AgentHandle {
     return this.targetEntries;
   }
 
+  /**
+   * Send a host-originated `cherry.host_event` (host page → cone) to the leader,
+   * where it surfaces as a `cherry` lick. Only a cherry follower calls this —
+   * its `CherryHostTransport.onHostEvent` is wired to forward host SDK
+   * `emitHostEvent` calls here.
+   */
+  sendCherryHostEvent(name: string, detail?: unknown): void {
+    this.sync.send({
+      type: 'cherry.host_event',
+      targetId: this.options.selfRuntimeId ?? '',
+      name,
+      detail,
+    });
+  }
+
   // ---------------------------------------------------------------------------
   // Sprinkle sync — mirrors `packages/ios-app/SliccFollower/App/AppState.swift`
   // (refreshSprinkles / fetchSprinkleContent / sendSprinkleLick / chunked
@@ -414,7 +446,19 @@ export class FollowerSyncManager implements AgentHandle {
 
   /** Forward a sprinkle lick (from a follower-rendered sprinkle) to the leader. */
   sendSprinkleLick(sprinkleName: string, body: unknown, targetScoop?: string): void {
-    this.sync.send({ type: 'sprinkle.lick', sprinkleName, body, targetScoop });
+    const ok = this.sync.send({ type: 'sprinkle.lick', sprinkleName, body, targetScoop });
+    if (!ok) log.warn('sendSprinkleLick dropped: tray channel closed', { sprinkleName });
+  }
+
+  /**
+   * Forward a generic lick (e.g. `navigate`) to the leader's agent.
+   * Returns false (and drops) if the channel is closed/failed — never
+   * falls back to local handling (that is the phantom-cone bug).
+   */
+  forwardLick(event: LickEvent): boolean {
+    const ok = this.sync.send({ type: 'lick', event });
+    if (!ok) log.warn('forwardLick dropped: tray channel closed', { type: event.type });
+    return ok;
   }
 
   /** Invalidate the cached .shtml content for one sprinkle (or all). */
@@ -627,6 +671,13 @@ export class FollowerSyncManager implements AgentHandle {
       case 'sprinkle.update':
         log.debug('Sprinkle update received', { sprinkleName: message.sprinkleName });
         this.options.onSprinkleUpdate?.(message.sprinkleName, message.data);
+        break;
+
+      case 'cherry.slicc_event':
+        // Cone → host page event. A cherry follower forwards it to the host
+        // SDK; non-cherry followers leave `onCherrySliccEvent` unset and it
+        // falls through harmlessly.
+        this.options.onCherrySliccEvent?.(message.name, message.detail);
         break;
 
       case 'ping': {
