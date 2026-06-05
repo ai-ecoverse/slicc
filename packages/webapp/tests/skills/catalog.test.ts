@@ -60,7 +60,13 @@ describe('discoverSkillCandidates', () => {
   });
 
   it('continues scanning until later reachable compatibility roots are visited', async () => {
-    for (let index = 0; index < 10_000; index += 1) {
+    // The historical `MAX_DISCOVERY_DIRECTORIES = 10_000` cap in catalog.ts
+    // was removed in d14f81c6; today the BFS walks the whole tree. The
+    // test now only needs to prove the queue does not stop early between
+    // an early lexicographic neighbour and a late `.claude` root. A
+    // modest synthetic count exercises the BFS past several pump rounds
+    // without spending 25-30s on ZenFS InMemory mkdir under Node 24/25.
+    for (let index = 0; index < 256; index += 1) {
       await fs.mkdir(`/node-${index.toString().padStart(5, '0')}`, { recursive: true });
     }
 
@@ -75,11 +81,7 @@ describe('discoverSkillCandidates', () => {
         path: '/zz-after-cap/.claude/skills/late-skill',
       })
     );
-    // Wave F2: ZenFS InMemory mkdir is meaningfully slower per-call
-    // than the pre-F2 LightningFS path (10k mkdirs lands in the 15-20s
-    // range vs ~5s on LFS). The test is a cap-stress, not a perf
-    // benchmark, so widen the budget rather than skip it.
-  }, 30_000);
+  });
 
   it('refreshes cached compatibility discovery after the same fs instance mutates', async () => {
     await fs.mkdir('/repo/.claude/skills/first-skill', { recursive: true });
