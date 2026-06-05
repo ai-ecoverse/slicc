@@ -578,11 +578,7 @@ export function createPanelRpcClient(options: { instanceId?: string } = {}): Pan
   const eventSubscribers = new Map<string, Set<(payload: unknown) => void>>();
 
   channel.addEventListener('message', (event: MessageEvent) => {
-    const msg = event.data as
-      | PanelRpcResponseMsg
-      | PanelRpcEventMsg
-      | PanelRpcPushMsg
-      | undefined;
+    const msg = event.data as PanelRpcResponseMsg | PanelRpcEventMsg | PanelRpcPushMsg | undefined;
     if (msg?.type === 'panel-rpc-event') {
       const subs = eventSubscribers.get(msg.channel);
       if (subs) {
