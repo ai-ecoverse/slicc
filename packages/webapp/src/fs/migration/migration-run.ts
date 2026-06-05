@@ -154,8 +154,10 @@ export async function runLegacyMigrationFromVfs(
 /**
  * Construct an {@link OpfsTargetWriter} backed by the shared
  * `VirtualFS`. `VirtualFS.mkdir({ recursive: true })` is idempotent
- * for existing dirs; `writeFile` accepts `Uint8Array`; `symlink` lands
- * in the Wave A metadata sidecar on the OPFS backend.
+ * for existing dirs; `writeFile` overwrites existing files; `symlink`
+ * is made idempotent here so a re-run over a partially-migrated OPFS
+ * (40 symlinks already present from an aborted prior run, EEXIST) can
+ * still reach the parity walk + sentinel write.
  */
 function buildVfsTargetWriter(sharedFs: VirtualFS): OpfsTargetWriter {
   return {
@@ -166,9 +168,32 @@ function buildVfsTargetWriter(sharedFs: VirtualFS): OpfsTargetWriter {
       await sharedFs.writeFile(path, content);
     },
     symlink: async (target: string, linkPath: string) => {
+      try {
+        await sharedFs.symlink(target, linkPath);
+        return;
+      } catch (err) {
+        if (errCode(err) !== 'EEXIST') throw err;
+      }
+      // EEXIST — an entry already exists at linkPath. If it's a
+      // symlink pointing at the same target the prior run already
+      // recorded it; treat as success. Otherwise replace it so the
+      // post-copy parity walk sees the manifest's expected state.
+      let existingTarget: string | undefined;
+      try {
+        existingTarget = await sharedFs.readlink(linkPath);
+      } catch {
+        /* not a symlink, or unreadable — fall through to replace */
+      }
+      if (existingTarget === target) return;
+      await sharedFs.rm(linkPath, { recursive: true });
       await sharedFs.symlink(target, linkPath);
     },
   };
+}
+
+function errCode(err: unknown): string | undefined {
+  const c = (err as { code?: unknown })?.code;
+  return typeof c === 'string' ? c : undefined;
 }
 
 /**

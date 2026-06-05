@@ -180,11 +180,22 @@ export async function runLegacyMigrationCopy(
   }
 
   // 3. Symlinks last so the targets/dirs they may point at exist.
+  // EEXIST is tolerated: the writer is expected to no-op on an
+  // identical existing link and replace a mismatched one, but if the
+  // writer surface still surfaces EEXIST (e.g. an underlying backend
+  // raced) we treat it as already-copied rather than aborting the
+  // whole re-run. Any other failure aborts so the sentinel is not
+  // written and the next boot retries against the legacy IDB.
+  let symlinkEexistSkipped = 0;
   for (const entry of symlinks) {
     if (entry.type !== 'symlink') continue;
     try {
       await target.symlink(entry.target, entry.path);
     } catch (err) {
+      if (errCode(err) === 'EEXIST') {
+        symlinkEexistSkipped++;
+        continue;
+      }
       logger?.warn?.('[migration] symlink failed during C2 copy', {
         copiedFiles,
         stage: 'symlink',
@@ -192,6 +203,12 @@ export async function runLegacyMigrationCopy(
       });
       return { kind: 'copy-error', expected, copiedFiles, stage: 'symlink' };
     }
+  }
+  if (symlinkEexistSkipped > 0) {
+    logger?.info?.('[migration] tolerated pre-existing symlinks during C2 re-run', {
+      skipped: symlinkEexistSkipped,
+      symlinks: manifest.symlinkCount,
+    });
   }
 
   // 4. Persist metadata sidecar (symlinks, filemode) before parity check.

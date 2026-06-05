@@ -230,6 +230,57 @@ describe('runLegacyMigrationFromVfs', () => {
     expect(sentinelStat.type).toBe('file');
   });
 
+  it('re-running after a partial aborted copy (leftover symlinks on OPFS) still reaches the sentinel', async () => {
+    // Simulate the Wave 1 hotfix scenario end-to-end against the real
+    // VFS: the first attempt's symlinks are already on OPFS when the
+    // re-run starts. The VFS-bound writer must treat an identical
+    // existing link as success rather than aborting with EEXIST.
+    const tree: Record<string, MockEntry> = {
+      '/': { type: 'dir' },
+      '/workspace': { type: 'dir' },
+      '/workspace/a.txt': { type: 'file', size: 3, bytes: new Uint8Array([1, 2, 3]) },
+      '/workspace/link': { type: 'symlink', target: '/workspace/a.txt' },
+    };
+    // Pre-create the symlink on OPFS the way an aborted prior run would
+    // have left it.
+    await vfs.mkdir('/workspace', { recursive: true });
+    await vfs.symlink('/workspace/a.txt', '/workspace/link');
+    const result = await runLegacyMigrationFromVfs(vfs, {
+      legacyLfsFactory: async () => buildLfsReader(tree),
+      legacyReaderFactory: async () => buildFileReader(tree),
+      probeLegacyDbExists: async () => true,
+    });
+    expect(result.kind).toBe('copied');
+    const copy = (result as { result: MigrationCopyResult }).result;
+    expect(copy.kind).toBe('success');
+    const sentinelStat = await vfs.stat(OPFS_MIGRATION_SENTINEL);
+    expect(sentinelStat.type).toBe('file');
+    // The pre-existing link still points at the same target.
+    const linkStat = await vfs.lstat('/workspace/link');
+    expect(linkStat.type).toBe('symlink');
+    expect(linkStat.symlinkTarget).toBe('/workspace/a.txt');
+  });
+
+  it('replaces a leftover symlink whose target diverges from the manifest', async () => {
+    const tree: Record<string, MockEntry> = {
+      '/': { type: 'dir' },
+      '/workspace': { type: 'dir' },
+      '/workspace/a.txt': { type: 'file', size: 3, bytes: new Uint8Array([1, 2, 3]) },
+      '/workspace/link': { type: 'symlink', target: '/workspace/a.txt' },
+    };
+    await vfs.mkdir('/workspace', { recursive: true });
+    // Pre-existing link points at a different target (stale prior run).
+    await vfs.symlink('/workspace/stale-target', '/workspace/link');
+    const result = await runLegacyMigrationFromVfs(vfs, {
+      legacyLfsFactory: async () => buildLfsReader(tree),
+      legacyReaderFactory: async () => buildFileReader(tree),
+      probeLegacyDbExists: async () => true,
+    });
+    expect(result.kind).toBe('copied');
+    const linkStat = await vfs.lstat('/workspace/link');
+    expect(linkStat.symlinkTarget).toBe('/workspace/a.txt');
+  });
+
   it('forwards per-file copy progress to onProgress', async () => {
     const tree: Record<string, MockEntry> = {
       '/': { type: 'dir' },

@@ -13,7 +13,9 @@ interface FakeWriter extends OpfsTargetWriter {
   files: Map<string, Uint8Array>;
 }
 
-function buildFakeWriter(opts: { failOn?: { stage: string; path?: string } } = {}): FakeWriter {
+function buildFakeWriter(
+  opts: { failOn?: { stage: string; path?: string; code?: string } } = {}
+): FakeWriter {
   const mkdirCalls: string[] = [];
   const writeCalls: Array<{ path: string; size: number }> = [];
   const symlinkCalls: Array<{ target: string; link: string }> = [];
@@ -34,7 +36,8 @@ function buildFakeWriter(opts: { failOn?: { stage: string; path?: string } } = {
     },
     async symlink(target, link) {
       if (opts.failOn?.stage === 'symlink' && (!opts.failOn.path || opts.failOn.path === link)) {
-        throw Object.assign(new Error('EEXIST'), { code: 'EEXIST' });
+        const code = opts.failOn.code ?? 'EEXIST';
+        throw Object.assign(new Error(code), { code });
       }
       symlinkCalls.push({ target, link });
     },
@@ -220,5 +223,85 @@ describe('runLegacyMigrationCopy parity gate + error handling', () => {
       expect(serialized).not.toContain('secret-name');
       expect(serialized).not.toContain('.txt');
     }
+  });
+
+  it('tolerates EEXIST on pre-existing symlinks (re-run after aborted prior copy)', async () => {
+    // Simulates the Wave 1 hotfix scenario: a prior migration partially
+    // wrote symlinks before aborting, leaving them on OPFS. The re-run's
+    // writer surfaces EEXIST for those entries; the copy must NOT abort
+    // and must still reach `writeSentinel`.
+    const manifest = manifestOf(
+      [
+        { type: 'file', path: '/a.txt', size: 3 },
+        { type: 'symlink', path: '/link-a', target: '/a.txt' },
+        { type: 'symlink', path: '/link-b', target: '/a.txt' },
+      ],
+      1,
+      3
+    );
+    const writer = buildFakeWriter({ failOn: { stage: 'symlink', code: 'EEXIST' } });
+    const sentinel = vi.fn(async () => {});
+    const result = await runLegacyMigrationCopy({
+      manifest,
+      source: buildSource({ '/a.txt': new Uint8Array([1, 2, 3]) }),
+      target: writer,
+      countOpfsFiles: async () => ({ fileCount: 1, totalBytes: 3 }),
+      writeSentinel: sentinel,
+    });
+    expect(result).toEqual({ kind: 'success', fileCount: 1, totalBytes: 3 });
+    expect(sentinel).toHaveBeenCalledTimes(1);
+  });
+
+  it('second copy run over a target carrying leftover symlinks still writes the sentinel', async () => {
+    // End-to-end re-run shape: the writer accepts the first pass and,
+    // for the second pass, throws EEXIST on every symlink (the leftover
+    // links the first pass already wrote). The second run must still
+    // succeed.
+    const manifest = manifestOf(
+      [
+        { type: 'dir', path: '/workspace' },
+        { type: 'file', path: '/workspace/a.txt', size: 3 },
+        { type: 'symlink', path: '/workspace/link', target: '/workspace/a.txt' },
+      ],
+      1,
+      3
+    );
+    // Run #1: clean writer, succeeds.
+    const writer1 = buildFakeWriter();
+    const r1 = await runLegacyMigrationCopy({
+      manifest,
+      source: buildSource({ '/workspace/a.txt': new Uint8Array([1, 2, 3]) }),
+      target: writer1,
+      countOpfsFiles: async () => ({ fileCount: 1, totalBytes: 3 }),
+      writeSentinel: async () => {},
+    });
+    expect(r1.kind).toBe('success');
+    // Run #2: writer rejects symlinks with EEXIST (leftover from #1).
+    const writer2 = buildFakeWriter({ failOn: { stage: 'symlink', code: 'EEXIST' } });
+    const sentinel2 = vi.fn(async () => {});
+    const r2 = await runLegacyMigrationCopy({
+      manifest,
+      source: buildSource({ '/workspace/a.txt': new Uint8Array([1, 2, 3]) }),
+      target: writer2,
+      countOpfsFiles: async () => ({ fileCount: 1, totalBytes: 3 }),
+      writeSentinel: sentinel2,
+    });
+    expect(r2).toEqual({ kind: 'success', fileCount: 1, totalBytes: 3 });
+    expect(sentinel2).toHaveBeenCalledTimes(1);
+  });
+
+  it('still aborts on non-EEXIST symlink errors (no false success)', async () => {
+    const manifest = manifestOf([{ type: 'symlink', path: '/link', target: '/missing' }], 0, 0);
+    const writer = buildFakeWriter({ failOn: { stage: 'symlink', code: 'EACCES' } });
+    const sentinel = vi.fn(async () => {});
+    const result = await runLegacyMigrationCopy({
+      manifest,
+      source: buildSource({}),
+      target: writer,
+      countOpfsFiles: async () => ({ fileCount: 0, totalBytes: 0 }),
+      writeSentinel: sentinel,
+    });
+    expect(result).toMatchObject({ kind: 'copy-error', stage: 'symlink' });
+    expect(sentinel).not.toHaveBeenCalled();
   });
 });
