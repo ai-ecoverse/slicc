@@ -42,13 +42,8 @@ type TrayBootstrapEventInput =
   | { type: 'bootstrap.failed'; failure: TrayBootstrapFailure };
 
 interface TrayWebSocketLike {
-  accept?: () => void;
   send(data: string): void;
   close(code?: number, reason?: string): void;
-  addEventListener(
-    type: 'message' | 'close' | 'error',
-    listener: (event: { data?: string }) => void
-  ): void;
 }
 
 export interface SessionTrayEnv {
@@ -64,6 +59,7 @@ interface SessionTrayOptions {
 
 const TRAY_STORAGE_KEY = 'tray';
 const TURN_CREDENTIAL_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+const LEADER_WS_TAG = 'leader';
 
 interface CachedIceServers {
   iceServers: TurnIceServer[];
@@ -114,6 +110,7 @@ export class SessionTrayDurableObject {
     }
 
     await this.loadTray();
+    this.restoreLeaderSocket();
     if (!this.tray) {
       return jsonResponse({ error: 'Tray not initialized', code: 'TRAY_NOT_INITIALIZED' }, 500);
     }
@@ -169,6 +166,41 @@ export class SessionTrayDurableObject {
     }
 
     return jsonResponse({ error: 'Not found', code: 'NOT_FOUND' }, 404);
+  }
+
+  async webSocketMessage(ws: TrayWebSocketLike, message: string | ArrayBuffer): Promise<void> {
+    this.leaderSocket = ws;
+    if (!this.tray) {
+      await this.loadTray();
+    }
+    const data = typeof message === 'string' ? message : new TextDecoder().decode(message);
+    await this.handleLeaderMessage(ws, data);
+  }
+
+  async webSocketClose(ws: TrayWebSocketLike): Promise<void> {
+    this.leaderSocket = ws;
+    if (!this.tray) {
+      await this.loadTray();
+    }
+    await this.markLeaderDisconnected(ws);
+  }
+
+  async webSocketError(ws: TrayWebSocketLike): Promise<void> {
+    this.leaderSocket = ws;
+    if (!this.tray) {
+      await this.loadTray();
+    }
+    await this.markLeaderDisconnected(ws);
+  }
+
+  private restoreLeaderSocket(): void {
+    if (this.leaderSocket || typeof this.state.getWebSockets !== 'function') {
+      return;
+    }
+    const [socket] = this.state.getWebSockets(LEADER_WS_TAG) as TrayWebSocketLike[];
+    if (socket) {
+      this.leaderSocket = socket;
+    }
   }
 
   private async handleCreate(request: Request): Promise<Response> {
@@ -476,21 +508,18 @@ export class SessionTrayDurableObject {
     }
 
     const { client, server } = this.webSocketPairFactory();
-    server.accept?.();
+    if (typeof this.state.acceptWebSocket !== 'function') {
+      throw new Error('Durable Object runtime does not support WebSocket hibernation');
+    }
+    // Hibernation API: the runtime evicts the object from memory between
+    // messages and delivers them via webSocketMessage/Close/Error, so we are
+    // not billed for idle connection time. The leader socket is recovered after
+    // eviction via getWebSockets(LEADER_WS_TAG).
+    this.state.acceptWebSocket(server, [LEADER_WS_TAG]);
     this.leaderSocket = server;
     tray.leader.connected = true;
     tray.leader.lastSeenAt = this.isoNow();
     tray.leader.disconnectedAt = undefined;
-
-    server.addEventListener('message', (event) => {
-      void this.handleLeaderMessage(server, event.data ?? '');
-    });
-    server.addEventListener('close', () => {
-      void this.markLeaderDisconnected(server);
-    });
-    server.addEventListener('error', () => {
-      void this.markLeaderDisconnected(server);
-    });
 
     await this.persistTray();
     server.send(

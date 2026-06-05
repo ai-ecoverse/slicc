@@ -35,6 +35,8 @@ export interface DurableObjectStorageLike {
 
 export interface DurableObjectStateLike {
   storage: DurableObjectStorageLike;
+  acceptWebSocket?(ws: unknown, tags?: string[]): void;
+  getWebSockets?(tag?: string): unknown[];
 }
 
 export interface ControllerRecord {
