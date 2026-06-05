@@ -25,7 +25,6 @@ import {
   getSharedHidRegistry,
   type HidDeviceFilter,
   type HidDeviceInfo,
-  hidDeviceToInfo,
   MAX_HID_REPORT_BYTES,
 } from '../../kernel/hid-device-registry.js';
 import { getPanelRpcClient, hasLocalDom } from '../../kernel/panel-rpc.js';
@@ -37,7 +36,16 @@ import { runDevicePickerApproval } from './picker-approval.js';
 type HidCtx = Parameters<Parameters<typeof defineCommand>[1]>[1];
 type CmdResult = { stdout: string; stderr: string; exitCode: number };
 
-const VALUE_FLAGS = new Set(['--vid', '--pid', '--usage-page', '--usage', '--__resolved']);
+const VALUE_FLAGS = new Set([
+  '--vid',
+  '--pid',
+  '--usage-page',
+  '--usage',
+  '--__resolved',
+  '--timeout',
+]);
+
+const DEFAULT_QUERY_TIMEOUT_MS = 1000;
 
 interface ParsedArgs {
   positionals: string[];
@@ -107,7 +115,43 @@ function hex4(n: number): string {
 function formatDeviceInfo(info: HidDeviceInfo): string {
   const name = info.productName || '(unknown)';
   const state = info.opened ? ' [open]' : '';
-  return `${info.handle}\t${hex4(info.vendorId)}:${hex4(info.productId)}\t${name}${state}`;
+  // Multi-interface devices (e.g. VIA/QMK keyboards) need the first
+  // collection's usagePage/usage in the display so users can tell which
+  // handle is the raw-HID interface (`FF60:0061`). Omitted when the
+  // device exposes no collections.
+  const usage =
+    info.usagePage !== undefined ? `\t${hex4(info.usagePage)}:${hex4(info.usage ?? 0)}` : '';
+  return `${info.handle}\t${hex4(info.vendorId)}:${hex4(info.productId)}${usage}\t${name}${state}`;
+}
+
+/**
+ * Re-order a freshly-granted device list so the entry matching the
+ * caller's `--usage-page` / `--usage` filter sits first. The picker
+ * doesn't honor those flags as a hard pre-select (Chromium's chooser
+ * shows the device as a single line), so the shell command surfaces
+ * the matched interface as the primary handle on output instead.
+ */
+function pickPrimaryAndOrder(
+  devices: HidDeviceInfo[],
+  filter: HidDeviceFilter | undefined
+): HidDeviceInfo[] {
+  const wantPage = filter?.usagePage;
+  const wantUsage = filter?.usage;
+  if (wantPage === undefined && wantUsage === undefined) return devices;
+  const matchIdx = devices.findIndex(
+    (d) =>
+      (wantPage === undefined || d.usagePage === wantPage) &&
+      (wantUsage === undefined || d.usage === wantUsage)
+  );
+  if (matchIdx <= 0) return devices;
+  const out = devices.slice();
+  const [match] = out.splice(matchIdx, 1);
+  out.unshift(match);
+  return out;
+}
+
+function formatDeviceList(devices: HidDeviceInfo[]): string {
+  return `${devices.map(formatDeviceInfo).join('\n')}\n`;
 }
 
 function formatReport(report: HidInputReport): string {
@@ -132,13 +176,16 @@ Subcommands:
   open <handle>                     Open a device
   close <handle>                    Close a device
   send <handle> <report-id>         Send an output report (payload from stdin)
+  query <handle> <report-id>        Send an output report and await one input
+                                    report (VIA-style request/response)
   feature-send <handle> <report-id> Send a feature report (payload from stdin)
   feature-get <handle> <report-id> <length>
                                     Receive a feature report
   watch <handle>                    Stream input reports as hex until Ctrl+C
 
 Options:
-  --raw     Emit raw bytes for feature-get (default: hex dump)
+  --raw            Emit raw bytes (feature-get, query); default is hex dump
+  --timeout <ms>   query: wait this long for an input report (default 1000)
   -h, --help
 
 Report payloads are capped at ${MAX_HID_REPORT_BYTES} bytes (4 MiB).
@@ -176,26 +223,45 @@ async function dispatch(args: string[], ctx: HidCtx, backend: HidBackend): Promi
       const resolved = flags.get('--__resolved');
       if (resolved) return ok(`${formatDeviceInfo(await backend.info(resolved))}\n`);
       const filters = parseHidFilters(flags);
+      const filter = filters[0];
       const toolCtx = getToolExecutionContext();
       if (toolCtx) {
         // Cone path: surface approval card; click drives chooser via
-        // dip (standalone) or unified popup (extension).
+        // dip (standalone) or unified popup (extension). After the
+        // user grants, enumerate ALL handles for the picked vid/pid so
+        // multi-interface devices (e.g. a VIA/QMK keyboard's raw-HID
+        // 0xFF60 interface) are individually addressable.
         const approval = await runDevicePickerApproval('hid-device', filters, toolCtx);
+        let primaryVid: number;
+        let primaryPid: number;
         if (approval.handle) {
-          return ok(`${formatDeviceInfo(await backend.info(approval.handle))}\n`);
+          const info = await backend.info(approval.handle);
+          primaryVid = info.vendorId;
+          primaryPid = info.productId;
+        } else {
+          const ident = approval.info as { vendorId: number; productId: number };
+          const hid = getNavigatorHid();
+          if (!hid) return fail('request: WebHID unavailable for device re-acquire');
+          const devices = await hid.getDevices();
+          const reg = getSharedHidRegistry();
+          const matched = devices.filter(
+            (d) => d.vendorId === ident.vendorId && d.productId === ident.productId
+          );
+          if (matched.length === 0) {
+            return fail('request: granted device could not be re-acquired');
+          }
+          for (const d of matched) reg.register(d);
+          primaryVid = ident.vendorId;
+          primaryPid = ident.productId;
         }
-        const ident = approval.info as { vendorId: number; productId: number };
-        const hid = getNavigatorHid();
-        if (!hid) return fail('request: WebHID unavailable for device re-acquire');
-        const devices = await hid.getDevices();
-        const device = devices.find(
-          (d) => d.vendorId === ident.vendorId && d.productId === ident.productId
-        );
-        if (!device) return fail('request: granted device could not be re-acquired');
-        const handle = getSharedHidRegistry().register(device);
-        return ok(`${formatDeviceInfo(hidDeviceToInfo(handle, device))}\n`);
+        const all = await backend.list();
+        const siblings = all.filter((d) => d.vendorId === primaryVid && d.productId === primaryPid);
+        const ordered = pickPrimaryAndOrder(siblings.length > 0 ? siblings : [], filter);
+        if (ordered.length === 0) return fail('request: granted device could not be re-acquired');
+        return ok(formatDeviceList(ordered));
       }
-      return ok(`${formatDeviceInfo(await backend.request(filters))}\n`);
+      const devices = await backend.request(filters);
+      return ok(formatDeviceList(pickPrimaryAndOrder(devices, filter)));
     }
     case 'open':
     case 'close': {
@@ -239,6 +305,43 @@ async function dispatch(args: string[], ctx: HidCtx, backend: HidBackend): Promi
         await unsubscribe();
       }
       return ok(lines.length ? `${lines.join('\n')}\n` : '');
+    }
+    case 'query': {
+      // VIA-style request/response: subscribe, send the output report,
+      // await the first input report, then always unsubscribe. The
+      // subscribe call auto-opens the device (Wave 3 ensureOpen).
+      const [, handle, reportIdStr] = positionals;
+      if (!handle || reportIdStr === undefined) {
+        return fail('query: handle and report-id required');
+      }
+      const reportId = parseIntArg(reportIdStr, 'report-id');
+      const bytes = stdinBytes(ctx);
+      if (bytes.length > MAX_HID_REPORT_BYTES) return fail('query payload exceeds 4 MiB limit');
+      const timeoutMs = flags.has('--timeout')
+        ? parseIntArg(flags.get('--timeout')!, 'timeout')
+        : DEFAULT_QUERY_TIMEOUT_MS;
+      let resolveReport: (report: HidInputReport) => void = () => {};
+      const reportPromise = new Promise<HidInputReport>((resolve) => {
+        resolveReport = resolve;
+      });
+      const unsubscribe = await backend.subscribeInputReports(handle, (report) => {
+        resolveReport(report);
+      });
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await backend.sendReport(handle, reportId, bytes);
+        const timeoutPromise = new Promise<'timeout'>((resolve) => {
+          timer = setTimeout(() => resolve('timeout'), timeoutMs);
+        });
+        const winner = await Promise.race([reportPromise, timeoutPromise]);
+        if (winner === 'timeout') {
+          return fail(`query: no input report within ${timeoutMs}ms`);
+        }
+        return raw ? emitBytes(winner.bytes, true) : ok(`${formatReport(winner)}\n`);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+        await unsubscribe();
+      }
     }
     default:
       return fail(`unknown subcommand '${sub ?? ''}'. Try 'hid --help'.`);

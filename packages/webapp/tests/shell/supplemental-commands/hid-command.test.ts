@@ -14,11 +14,19 @@ const INFO = {
   opened: false,
 };
 
-function cannedResult(op: string): unknown {
+function cannedResult(op: string, payload?: unknown): unknown {
   switch (op) {
     case 'hid-list':
       return { devices: [INFO] };
-    case 'hid-request':
+    case 'hid-request': {
+      const filters = (payload as { filters?: Array<Record<string, number>> } | undefined)?.filters;
+      // Mimic a multi-interface device: when no filter narrows the
+      // pick we return two distinct interfaces sharing one vid/pid.
+      if (!filters || filters.length === 0 || filters[0]?.vendorId === undefined) {
+        return { devices: [INFO] };
+      }
+      return { devices: [INFO] };
+    }
     case 'hid-device-info':
       return { device: INFO };
     case 'hid-receive-feature-report':
@@ -43,7 +51,7 @@ function installMockRpc(): {
   const handlers = new Map<string, Set<(payload: unknown) => void>>();
   const call = vi.fn(async (op: string, payload: unknown, opts?: { timeoutMs?: number }) => {
     calls.push({ op, payload, opts });
-    return cannedResult(op);
+    return cannedResult(op, payload);
   });
   const onEvent = (channel: string, handler: (payload: unknown) => void) => {
     let set = handlers.get(channel);
@@ -102,6 +110,7 @@ describe('hid command — help', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('hid - access HID devices');
     expect(result.stdout).toContain('watch');
+    expect(result.stdout).toContain('query');
   });
 
   it('prints help with --help and -h', async () => {
@@ -185,6 +194,46 @@ describe('hid command — bridged panel-rpc envelopes', () => {
     expect(raw.stdout).toBe('\xaa\xbb');
   });
 
+  it('query resolves with the first input report and unsubscribes', async () => {
+    const promise = createHidCommand().execute(['query', 'hid1', '0'], ctx('\x01'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    fireEvent('hid-input-report', {
+      handle: 'hid1',
+      reportId: 4,
+      bytes: new Uint8Array([0xfe, 0xed]).buffer,
+    });
+    const result = await promise;
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('04 fe ed\n');
+    expect(calls.some((c) => c.op === 'hid-subscribe-input-reports')).toBe(true);
+    expect(calls.some((c) => c.op === 'hid-send-report')).toBe(true);
+    expect(calls.some((c) => c.op === 'hid-unsubscribe-input-reports')).toBe(true);
+  });
+
+  it('query times out with a non-zero exit and still unsubscribes', async () => {
+    const result = await createHidCommand().execute(
+      ['query', 'hid1', '0', '--timeout', '5'],
+      ctx('\x01')
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('no input report within 5ms');
+    expect(calls.some((c) => c.op === 'hid-unsubscribe-input-reports')).toBe(true);
+  });
+
+  it('query honors --raw and emits raw bytes on success', async () => {
+    const promise = createHidCommand().execute(['query', 'hid1', '0', '--raw'], ctx('\x01'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    fireEvent('hid-input-report', {
+      handle: 'hid1',
+      reportId: 7,
+      bytes: new Uint8Array([0xaa, 0xbb]).buffer,
+    });
+    const result = await promise;
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('\xaa\xbb');
+    expect(calls.some((c) => c.op === 'hid-unsubscribe-input-reports')).toBe(true);
+  });
+
   it('watch subscribes, accumulates fired reports for the handle, and unsubscribes on abort', async () => {
     const controller = new AbortController();
     const promise = createHidCommand().execute(['watch', 'hid1'], ctx('', controller.signal));
@@ -210,6 +259,102 @@ describe('hid command — bridged panel-rpc envelopes', () => {
     expect(calls.some((c) => c.op === 'hid-subscribe-input-reports')).toBe(true);
     expect(calls.some((c) => c.op === 'hid-unsubscribe-input-reports')).toBe(true);
     expect(result.stdout).toBe('01 de ad\n02 be ef\n');
+  });
+});
+
+describe('hid command — multi-interface request', () => {
+  let calls: RpcCall[];
+  let cannedRequest: unknown;
+
+  beforeEach(() => {
+    delete (globalThis as any).window;
+    delete (globalThis as any).document;
+    calls = [];
+    cannedRequest = { devices: [INFO] };
+    const onEvent = (_c: string, _h: (p: unknown) => void) => () => {};
+    const call = vi.fn(async (op: string, payload: unknown, opts?: { timeoutMs?: number }) => {
+      calls.push({ op, payload, opts });
+      if (op === 'hid-request') return cannedRequest;
+      if (op === 'hid-list') {
+        return { devices: (cannedRequest as { devices: unknown[] }).devices };
+      }
+      if (op === 'hid-device-info') return { device: INFO };
+      return { done: true };
+    });
+    (globalThis as any).__slicc_panelRpc = { call, onEvent, dispose: vi.fn() };
+  });
+
+  afterEach(() => {
+    delete (globalThis as any).__slicc_panelRpc;
+  });
+
+  it('prints every granted interface with usage page on multi-interface grant', async () => {
+    cannedRequest = {
+      devices: [
+        {
+          handle: 'hid1',
+          vendorId: 0x320f,
+          productId: 0x5000,
+          opened: false,
+          usagePage: 1,
+          usage: 6,
+        },
+        {
+          handle: 'hid2',
+          vendorId: 0x320f,
+          productId: 0x5000,
+          opened: false,
+          usagePage: 0x0c,
+          usage: 1,
+        },
+        {
+          handle: 'hid3',
+          vendorId: 0x320f,
+          productId: 0x5000,
+          opened: false,
+          usagePage: 0xff60,
+          usage: 0x61,
+        },
+      ],
+    };
+    const result = await createHidCommand().execute(['request', '--vid', '0x320f'], ctx());
+    expect(result.exitCode).toBe(0);
+    const lines = result.stdout.trimEnd().split('\n');
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toContain('hid1');
+    expect(lines[2]).toContain('hid3');
+    expect(lines[2]).toContain('0xff60');
+  });
+
+  it('reorders the matching --usage-page interface to the top', async () => {
+    cannedRequest = {
+      devices: [
+        {
+          handle: 'hid1',
+          vendorId: 0x320f,
+          productId: 0x5000,
+          opened: false,
+          usagePage: 1,
+          usage: 6,
+        },
+        {
+          handle: 'hid3',
+          vendorId: 0x320f,
+          productId: 0x5000,
+          opened: false,
+          usagePage: 0xff60,
+          usage: 0x61,
+        },
+      ],
+    };
+    const result = await createHidCommand().execute(
+      ['request', '--vid', '0x320f', '--usage-page', '0xff60'],
+      ctx()
+    );
+    expect(result.exitCode).toBe(0);
+    const lines = result.stdout.trimEnd().split('\n');
+    expect(lines[0]).toContain('hid3');
+    expect(lines[0]).toContain('0xff60');
   });
 });
 
