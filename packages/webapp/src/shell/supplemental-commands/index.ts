@@ -16,6 +16,7 @@ import {
 import { createConvertCommand } from './convert-command.js';
 import { createCostCommand } from './cost-command.js';
 import { createCrontaskCommand } from './crontask-command.js';
+import { createDfCommand, createDiskutilCommand } from './df-command.js';
 import { createDigCommand } from './dig-command.js';
 import { createDiscoverCommand } from './discover-command.js';
 import { createEsbuildCommand } from './esbuild-command.js';
@@ -144,6 +145,8 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createKillCommand({ processManager: options.processManager }),
     createCherryEmitCommand({ registry: options.cherryRuntimeRegistry }),
     createSliccFsCleanupCommand({ fs: options.fs }),
+    createDfCommand({ fs: options.fs }),
+    createDiskutilCommand({ fs: options.fs }),
   ];
 
   if (options.fs) {
