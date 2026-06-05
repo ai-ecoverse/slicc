@@ -231,6 +231,36 @@ The bridge also reaches the **same worker shell** that `.jsh` scripts and `node 
 - `slicc.browser.*` — Playwright-style CDP surface (`findTab`, `ensureTab`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`), mirroring the jsh `browser` global.
 - `slicc.fetchToFile(url, path)` — download a URL (via the proxied fetch) straight to a VFS file; resolves with the byte count.
 - `slicc.readFileBinary(path)` / `slicc.writeFileBinary(path, bytes)` — binary VFS I/O (parity with the jsh `fs` global).
+- `slicc.hid.*` / `slicc.serial.*` / `slicc.usb.*` — stateful device surfaces for WebHID / Web Serial / WebUSB (Chromium-only; absent in the cloud / hosted-leader float). Same opaque handles (`hid1`, `serial1`, `usb1`, …) as the `hid` / `serial` / `usb` shell commands and the realm globals — discover via `list()` or trigger the OS picker via `request()` (a button-click is a real user gesture). For HID, `open(handle)` auto-attaches the input-report stream so every `slicc.hid.on('inputreport', cb)` listener receives `{ handle, reportId, data: Uint8Array }` until `close(handle)` or sprinkle teardown. Use this for keyboard configurators, gamepad dashboards, ESP32 monitor panels — anything that needs a persistent device session across multiple button clicks. The realm bridge in `slicc.exec('node -e …')` resets per call, so push handle ops through `slicc.hid|serial|usb` instead.
+
+```typescript
+// HID — stateful across the sprinkle's lifetime
+slicc.hid.list(): Promise<HidDeviceInfo[]>
+slicc.hid.request(filters?): Promise<HidDeviceInfo[]>    // needs button-click gesture
+slicc.hid.open(handle): Promise<void>                    // auto-subscribes inputreport
+slicc.hid.close(handle): Promise<void>
+slicc.hid.sendReport(handle, reportId, data: Uint8Array): Promise<void>
+slicc.hid.on('inputreport', cb): void                    // cb: ({ handle, reportId, data })
+slicc.hid.off('inputreport', cb): void
+
+// Serial / USB — parity list/request/open/close; streaming I/O stays on the realm API.
+slicc.serial.list() / request(filters?) / open(handle, options) / close(handle)
+slicc.usb.list()    / request(filters?) / open(handle) / close(handle)
+```
+
+```html
+<button
+  id="connect"
+  onclick="slicc.hid.request({vendorId:0x320f}).then(d => slicc.hid.open(d[0].handle))"
+>
+  Connect keyboard
+</button>
+<script>
+  slicc.hid.on('inputreport', ({ reportId, data }) => {
+    console.log('report', reportId, [...data].map((b) => b.toString(16)).join(' '));
+  });
+</script>
+```
 
 ```html
 <button
