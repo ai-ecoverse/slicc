@@ -530,6 +530,14 @@ describe('jsh node-command helpers', () => {
     expect(cmd.startsWith("node -e '")).toBe(true);
     expect(cmd.endsWith("'")).toBe(true);
     expect(cmd).toContain('exec.spawn');
+    // The realm awaits only the top-level AsyncFunction body, so the program
+    // must use top-level await rather than a detached `(async()=>{…})()`
+    // IIFE (the IIFE promise was never awaited → no sentinel on stdout).
+    expect(cmd).not.toContain('(async()=>');
+    expect(cmd).not.toContain('(async ()=>');
+    expect(cmd).not.toContain('})()');
+    expect(cmd).toContain('var REQ=');
+    expect(cmd).toContain('await exec.spawn');
   });
 
   it('parseJshResult returns the value behind the sentinel', () => {

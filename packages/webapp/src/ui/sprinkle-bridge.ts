@@ -156,11 +156,19 @@ function jshShellQuote(value: string): string {
  * Build the self-contained realm program for a Tier 1 jsh `op`. Args are
  * embedded as a JSON literal (so inner values are never shell-parsed) and
  * the structured result is written to stdout behind {@link JSH_RESULT_PREFIX}.
+ *
+ * The program uses TOP-LEVEL `await` rather than a detached `(async()=>{…})()`
+ * IIFE: the realm runner (`kernel/realm/js-realm-shared.ts:runJsRealm`) wraps
+ * `init.code` in an `AsyncFunction` body and awaits ONLY that body before
+ * posting `realm-done`. An un-awaited IIFE promise lets the realm flush
+ * stdout and exit before `await fetch`/`emit()` runs, so the sentinel never
+ * lands. Keeping the `try/catch → emit({ok:false,error})` shape ensures
+ * realm errors still serialize through the sentinel instead of falling
+ * through to the realm's stderr/exit-1 path.
  */
 export function buildJshNodeScript(op: string, args: unknown[]): string {
   const req = JSON.stringify({ op, args });
   return (
-    '(async()=>{' +
     `var REQ=${req};var P=${JSON.stringify(JSH_RESULT_PREFIX)};` +
     'function emit(o){process.stdout.write(P+JSON.stringify(o));}' +
     'try{var op=REQ.op,a=REQ.args||[],out;' +
@@ -180,8 +188,7 @@ export function buildJshNodeScript(op: string, args: unknown[]): string {
     "}else if(op==='fetchToFile'){out=await fs.fetchToFile(a[0],a[1]);" +
     '}else{throw new Error("unknown jsh op: "+op);}' +
     'emit({ok:true,value:out});' +
-    '}catch(e){emit({ok:false,error:(e&&e.message)?e.message:String(e)});}' +
-    '})()'
+    '}catch(e){emit({ok:false,error:(e&&e.message)?e.message:String(e)});}'
   );
 }
 
