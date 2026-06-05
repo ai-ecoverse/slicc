@@ -15,7 +15,7 @@
  * follow-up). Documented in plan §Risks.
  */
 
-import type { Command } from 'just-bash';
+import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { ProcessManager, ProcessOwner } from '../../kernel/process-manager.js';
 import {
@@ -25,6 +25,80 @@ import {
 import type { RealmFactory } from '../../kernel/realm/realm-runner.js';
 import { runInRealm } from '../../kernel/realm/realm-runner.js';
 import { stdinAsText } from '../just-bash-compat.js';
+
+/**
+ * Top-level names reserved by Pyodide/Emscripten. Mounting OPFS over
+ * any of these shadows Pyodide's own writable scratch dir, its
+ * built-in module tree, or the device pseudo-fs. `/tmp` is excluded
+ * here because we always include `/tmp` explicitly via the
+ * `OPFS_SYNC_FS` plugin (Pyodide's MEMFS `/tmp` would otherwise lose
+ * write-back to the kernel VFS). `bin`, `usr`, `etc` belong to no
+ * VFS root today but are reserved defensively so a future top-level
+ * `/usr` or `/bin` directory doesn't silently clobber the realm.
+ */
+const PYODIDE_BUILTIN_ROOT_NAMES = new Set([
+  'dev',
+  'proc',
+  'lib',
+  'bin',
+  'usr',
+  'etc',
+  'home',
+  'tmp',
+]);
+
+/**
+ * Build the list of absolute VFS directories to mount into the
+ * Python realm. Enumerates `/` via `fs.readdir`, keeps only
+ * directories, drops Pyodide/Emscripten built-in names, then always
+ * appends `/tmp` so the realm has a writable scratch dir whose
+ * mutations flush back through `OPFS_SYNC_FS`.
+ *
+ * Mounting the full non-conflicting VFS root (regardless of cwd) lets
+ * Python read `/workspace`, `/shared`, `/scoops`, `/sessions`, … by
+ * absolute path from any cwd. The legacy `[cwd, '/tmp']` restriction
+ * was a hedge against the cost of the pre-OPFS `walkTree` sync path;
+ * under `OPFS_SYNC_FS` mount setup is cheap and bounded to the
+ * `slicc-fs` subtree (external/remote mounts live elsewhere and are
+ * not preloaded).
+ *
+ * Failures enumerating `/` (e.g. a vfs adapter without `readdir`)
+ * collapse to `['/tmp']` — better to lose absolute-path coverage than
+ * to crash the command.
+ */
+export async function computePyodideMountDirs(
+  fs: CommandContext['fs'],
+  builtins: ReadonlySet<string> = PYODIDE_BUILTIN_ROOT_NAMES
+): Promise<string[]> {
+  const dirs: string[] = [];
+  const seen = new Set<string>();
+  try {
+    const names = await fs.readdir('/');
+    for (const name of names) {
+      if (!name || name.includes('/')) continue;
+      if (builtins.has(name)) continue;
+      const abs = `/${name}`;
+      let isDir = false;
+      try {
+        const st = await fs.stat(abs);
+        isDir = !!st.isDirectory;
+      } catch {
+        continue;
+      }
+      if (!isDir) continue;
+      if (seen.has(abs)) continue;
+      seen.add(abs);
+      dirs.push(abs);
+    }
+  } catch {
+    /* enumeration failure → fall through to /tmp-only mount */
+  }
+  if (!seen.has('/tmp')) {
+    seen.add('/tmp');
+    dirs.push('/tmp');
+  }
+  return dirs;
+}
 
 /**
  * Wave D1 / F1: the kernel worker's VFS lives at
@@ -148,17 +222,16 @@ export function createPython3LikeCommand(
       };
     }
 
-    // Sync directories: cwd, /tmp, and the script's directory
-    // when running a file. The realm worker syncs VFS→Pyodide-FS
-    // before exec and Pyodide-FS→VFS after, so file writes from
-    // Python persist back through the kernel's VFS.
-    const syncDirs = [ctx.cwd, '/tmp'];
-    if (filename !== '<stdin>' && filename !== '-c') {
-      const scriptDir = filename.includes('/')
-        ? filename.slice(0, filename.lastIndexOf('/'))
-        : ctx.cwd;
-      if (!syncDirs.includes(scriptDir)) syncDirs.push(scriptDir);
-    }
+    // Mount the full non-conflicting VFS root so Python can read
+    // any top-level directory (`/workspace`, `/shared`, `/scoops`,
+    // `/sessions`, …) by absolute path regardless of cwd. Built-in
+    // names (`dev`/`proc`/`lib`/`bin`/`usr`/`etc`/`home`/`tmp`) are
+    // dropped so we don't shadow Pyodide's writable scratch dir or
+    // its module tree; `/tmp` is appended explicitly so its writes
+    // flush back through `OPFS_SYNC_FS`. The realm worker syncs
+    // VFS→Pyodide-FS before exec and Pyodide-FS→VFS after, so file
+    // writes from Python persist back through the kernel's VFS.
+    const syncDirs = await computePyodideMountDirs(ctx.fs);
 
     const pm = options ? lookupGlobalPm() : null;
     const owner: ProcessOwner = { kind: 'system' };

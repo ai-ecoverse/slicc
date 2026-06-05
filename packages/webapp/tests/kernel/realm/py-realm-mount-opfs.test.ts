@@ -17,6 +17,7 @@ import type { PyodideInterface } from 'pyodide';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { OpfsSyncFsPlugin } from '../../../src/kernel/realm/opfs-sync-fs.js';
 import {
+  describeRealmError,
   flushOpfsRealmMounts,
   mountOpfsDirsAndSyncIn,
   type OpfsRealmMount,
@@ -207,6 +208,67 @@ describe('mountOpfsDirsAndSyncIn (Wave E2)', () => {
     expect(warnings.some((w) => w.includes('navigator.storage.getDirectory'))).toBe(true);
   });
 
+  it("fans out '/' to top-level OPFS children and skips Emscripten built-ins", async () => {
+    // cwd '/' must NOT mount over Emscripten's root (EBUSY). Instead
+    // each top-level OPFS child is mounted at its own absolute path;
+    // built-in names (dev/proc/lib/tmp/home) are skipped so we don't
+    // shadow Pyodide's runtime dirs.
+    const opfs = createMutableDirectoryHandle({
+      'slicc-fs': {
+        workspace: { 'a.txt': 'A' },
+        shared: { 'b.txt': 'B' },
+        scoops: {},
+        tmp: { 'leftover.txt': 'X' },
+        dev: {},
+        'top.txt': 'IGNORE_ME',
+      },
+    });
+    installNavigatorStub(opfs.handle);
+    const { pyodide, mountedAt, mountRecords } = makeFakePyodide();
+    const warnings: string[] = [];
+
+    const { mounts } = await mountOpfsDirsAndSyncIn(pyodide, ['/'], 'slicc-fs', (msg) =>
+      warnings.push(msg)
+    );
+
+    const mountpoints = mountRecords.map((r) => r.mountpoint).sort();
+    expect(mountpoints).toEqual(['/scoops', '/shared', '/workspace']);
+    expect(mountedAt.has('/workspace')).toBe(true);
+    expect(mountedAt.has('/shared')).toBe(true);
+    expect(mountedAt.has('/scoops')).toBe(true);
+    expect(mountedAt.has('/tmp')).toBe(false);
+    expect(mountedAt.has('/dev')).toBe(false);
+    expect(mounts.map((m) => m.pyPath).sort()).toEqual(['/scoops', '/shared', '/workspace']);
+    expect(warnings).toEqual([]);
+  });
+
+  it("warns and continues when a per-child mount fails during '/' fan-out", async () => {
+    const opfs = createMutableDirectoryHandle({
+      'slicc-fs': {
+        bad: {},
+        ok: { 'k.txt': 'K' },
+      },
+    });
+    installNavigatorStub(opfs.handle);
+    const { pyodide, mountedAt } = makeFakePyodide();
+    (pyodide.FS.mount as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (_plugin: unknown, opts: { rootHandle: FileSystemDirectoryHandle }, mountpoint: string) => {
+        if (mountpoint === '/bad') throw new Error('mount denied for bad');
+        mountedAt.set(mountpoint, opts.rootHandle);
+        return { mount: { opts, mountpoint, root: {} } };
+      }
+    );
+    const warnings: string[] = [];
+
+    const { mounts } = await mountOpfsDirsAndSyncIn(pyodide, ['/'], 'slicc-fs', (msg) =>
+      warnings.push(msg)
+    );
+
+    expect(mountedAt.has('/ok')).toBe(true);
+    expect(mounts.map((m) => m.pyPath)).toEqual(['/ok']);
+    expect(warnings.some((w) => w.includes('/bad') && w.includes('mount denied'))).toBe(true);
+  });
+
   it('warns and continues to the next dir when one mount rejects', async () => {
     const opfs = createMutableDirectoryHandle({
       'slicc-fs': { ok: { 'k.txt': 'K' } },
@@ -279,6 +341,32 @@ describe('flushOpfsRealmMounts (Wave E2)', () => {
 
   it('is a no-op when no mounts were registered', async () => {
     await expect(flushOpfsRealmMounts([])).resolves.toBeUndefined();
+  });
+});
+
+describe('describeRealmError', () => {
+  it('renders an Emscripten ErrnoError-shaped object with name, message, errno, and code', () => {
+    const err = { name: 'ErrnoError', message: 'FS error', errno: 16, code: 'EBUSY' };
+    expect(describeRealmError(err)).toBe('ErrnoError: FS error (errno 16, EBUSY)');
+  });
+
+  it('omits message when missing and still surfaces errno', () => {
+    const err = { name: 'ErrnoError', errno: 44 };
+    expect(describeRealmError(err)).toBe('ErrnoError (errno 44)');
+  });
+
+  it('falls back to Error.message for real Errors', () => {
+    expect(describeRealmError(new Error('boom'))).toBe('boom');
+  });
+
+  it('falls back to String(err) for primitives', () => {
+    expect(describeRealmError('plain string')).toBe('plain string');
+    expect(describeRealmError(undefined)).toBe('undefined');
+  });
+
+  it('never collapses an ErrnoError-shaped object to [object Object]', () => {
+    const err = { name: 'ErrnoError', errno: 16 };
+    expect(describeRealmError(err)).not.toBe('[object Object]');
   });
 });
 

@@ -124,8 +124,7 @@ export async function runPyRealm(
       );
       opfsMounts = mounted.mounts;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      pushWarning(`VFS→Pyodide OPFS mount failed: ${message}`);
+      pushWarning(`VFS→Pyodide OPFS mount failed: ${describeRealmError(err)}`);
     }
   }
 
@@ -191,6 +190,44 @@ export async function runPyRealm(
 // ---------------------------------------------------------------------------
 
 type WarningSink = (message: string) => void;
+
+/**
+ * Top-level directory names Emscripten / Pyodide already own when
+ * `loadPyodide` finishes. Mounting OPFS_SYNC_FS over any of these
+ * collides with the built-in mount (Emscripten rejects with EBUSY)
+ * or shadows runtime-critical state (`/lib` is Pyodide's stdlib).
+ * Used by the cwd=='/' fan-out so a kernel-side `/tmp` OPFS dir
+ * doesn't shadow Pyodide's writable scratch dir.
+ */
+const EMSCRIPTEN_BUILTIN_ROOT_DIRS = new Set(['dev', 'proc', 'lib', 'tmp', 'home']);
+
+/**
+ * Render any error from the realm mount/sync paths as a single
+ * human-readable line. Emscripten's `ErrnoError` carries `.errno`
+ * and (sometimes) `.code` but is not always `instanceof Error`, so
+ * `String(err)` collapses it to `[object Object]`. This helper
+ * surfaces the POSIX cause (name + message + errno + code) for
+ * Emscripten-shaped throws, the message for real `Error`s, and
+ * falls back to `String(err)` for everything else.
+ */
+export function describeRealmError(err: unknown): string {
+  if (err && typeof err === 'object') {
+    const e = err as { name?: unknown; message?: unknown; errno?: unknown; code?: unknown };
+    const hasErrno = typeof e.errno === 'number';
+    const hasCode = typeof e.code === 'string';
+    if (hasErrno || hasCode) {
+      const name = typeof e.name === 'string' && e.name ? e.name : 'Error';
+      const message = typeof e.message === 'string' ? e.message : '';
+      const detail: string[] = [];
+      if (hasErrno) detail.push(`errno ${e.errno as number}`);
+      if (hasCode) detail.push(e.code as string);
+      const suffix = detail.length ? ` (${detail.join(', ')})` : '';
+      return message ? `${name}: ${message}${suffix}` : `${name}${suffix}`;
+    }
+  }
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
 
 /**
  * Per-dir OPFS mount state the realm passes to
@@ -259,51 +296,99 @@ export async function mountOpfsDirsAndSyncIn(
   try {
     opfsRoot = await storage.getDirectory();
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    pushWarning(`VFS→Pyodide OPFS mount: getDirectory() failed: ${message}`);
+    pushWarning(`VFS→Pyodide OPFS mount: getDirectory() failed: ${describeRealmError(err)}`);
     return { mounts };
   }
   let kernelDbHandle: FileSystemDirectoryHandle;
   try {
     kernelDbHandle = await opfsRoot.getDirectoryHandle(opfsDbName, { create: true });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    pushWarning(`VFS→Pyodide OPFS mount: opening '${opfsDbName}' failed: ${message}`);
+    pushWarning(
+      `VFS→Pyodide OPFS mount: opening '${opfsDbName}' failed: ${describeRealmError(err)}`
+    );
     return { mounts };
   }
 
   const plugin = ensureOpfsSyncFsRegistered(pyodide);
 
   for (const dir of dirs) {
+    if (dir === '/') {
+      // Emscripten rejects `FS.mount(_, _, '/')` with EBUSY because
+      // its root MEMFS is already mounted. Fan out to the top-level
+      // children of the kernel OPFS subtree instead so Python can
+      // still reach the VFS by absolute path (`/workspace`, …) when
+      // the shell cwd is `/`. Built-in mount points are skipped so
+      // we don't shadow `/dev`, `/proc`, `/lib`, `/tmp`, `/home`.
+      try {
+        const iter = kernelDbHandle as unknown as AsyncIterable<
+          [string, FileSystemDirectoryHandle | FileSystemFileHandle]
+        >;
+        for await (const [name, childHandle] of iter) {
+          if ((childHandle as { kind: string }).kind !== 'directory') continue;
+          if (EMSCRIPTEN_BUILTIN_ROOT_DIRS.has(name)) continue;
+          const childPath = `/${name}`;
+          try {
+            await mountOpfsChild(
+              pyodide,
+              plugin,
+              childPath,
+              childHandle as FileSystemDirectoryHandle,
+              mounts
+            );
+          } catch (err) {
+            pushWarning(`VFS→Pyodide OPFS mount '${childPath}' failed: ${describeRealmError(err)}`);
+          }
+        }
+      } catch (err) {
+        pushWarning(`VFS→Pyodide OPFS mount '/' failed: ${describeRealmError(err)}`);
+      }
+      continue;
+    }
     try {
       let handle: FileSystemDirectoryHandle = kernelDbHandle;
       for (const part of dir.split('/').filter(Boolean)) {
         handle = await handle.getDirectoryHandle(part, { create: true });
       }
-      try {
-        pyodide.FS.stat(dir);
-      } catch {
-        pyodide.FS.mkdirTree(dir);
-      }
-      const prewalk = await prewalkOpfsTree(handle);
-      const buffered = createBufferedOpfsSahProvider();
-      await buffered.preload(prewalk);
-      const opts = { rootHandle: handle, prewalk, sahProvider: buffered.provider };
-      const fsMount = pyodide.FS as unknown as {
-        mount: (plugin: OpfsSyncFsPlugin, opts: unknown, dir: string) => unknown;
-      };
-      const rootNode = fsMount.mount(plugin, opts, dir) as { mount?: OpfsMount } | undefined;
-      const mount =
-        rootNode?.mount ??
-        ({ opts, mountpoint: dir, root: rootNode as never } as unknown as OpfsMount);
-      mounts.push({ pyPath: dir, mount, rootHandle: handle, flushBuffers: buffered.flush });
+      await mountOpfsChild(pyodide, plugin, dir, handle, mounts);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      pushWarning(`VFS→Pyodide OPFS mount '${dir}' failed: ${message}`);
+      pushWarning(`VFS→Pyodide OPFS mount '${dir}' failed: ${describeRealmError(err)}`);
     }
   }
 
   return { mounts };
+}
+
+/**
+ * Shared per-dir mount step: ensure the Pyodide-side directory
+ * exists (`mkdirTree`), prewalk the OPFS subtree, hand the plugin
+ * an `{ rootHandle, prewalk, sahProvider }` opts object, and record
+ * the resulting `OpfsRealmMount` so `flushOpfsRealmMounts` can drain
+ * queued ops + dirty buffers at `realm-done`.
+ */
+async function mountOpfsChild(
+  pyodide: PyodideInterface,
+  plugin: OpfsSyncFsPlugin,
+  pyPath: string,
+  handle: FileSystemDirectoryHandle,
+  mounts: OpfsRealmMount[]
+): Promise<void> {
+  try {
+    pyodide.FS.stat(pyPath);
+  } catch {
+    pyodide.FS.mkdirTree(pyPath);
+  }
+  const prewalk = await prewalkOpfsTree(handle);
+  const buffered = createBufferedOpfsSahProvider();
+  await buffered.preload(prewalk);
+  const opts = { rootHandle: handle, prewalk, sahProvider: buffered.provider };
+  const fsMount = pyodide.FS as unknown as {
+    mount: (plugin: OpfsSyncFsPlugin, opts: unknown, dir: string) => unknown;
+  };
+  const rootNode = fsMount.mount(plugin, opts, pyPath) as { mount?: OpfsMount } | undefined;
+  const mount =
+    rootNode?.mount ??
+    ({ opts, mountpoint: pyPath, root: rootNode as never } as unknown as OpfsMount);
+  mounts.push({ pyPath, mount, rootHandle: handle, flushBuffers: buffered.flush });
 }
 
 // ---------------------------------------------------------------------------
