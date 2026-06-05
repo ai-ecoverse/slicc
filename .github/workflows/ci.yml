@@ -24,6 +24,7 @@ jobs:
       extension: ${{ steps.filter.outputs.extension }}
       cloudflare-worker: ${{ steps.filter.outputs.cloudflare-worker }}
       cherry: ${{ steps.filter.outputs.cherry }}
+      dev-tools: ${{ steps.filter.outputs.dev-tools }}
       swift-server: ${{ steps.filter.outputs.swift-server }}
       swift-launcher: ${{ steps.filter.outputs.swift-launcher }}
       ios-app: ${{ steps.filter.outputs.ios-app }}
@@ -52,6 +53,8 @@ jobs:
               - 'packages/cloudflare-worker/**'
             cherry:
               - 'packages/cherry/**'
+            dev-tools:
+              - 'packages/dev-tools/**'
             swift-server:
               - 'packages/swift-server/**'
             swift-launcher:
@@ -134,6 +137,7 @@ jobs:
       needs.changes.outputs.extension == 'true' ||
       needs.changes.outputs.cloudflare-worker == 'true' ||
       needs.changes.outputs.cherry == 'true' ||
+      needs.changes.outputs.dev-tools == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
     strategy:
