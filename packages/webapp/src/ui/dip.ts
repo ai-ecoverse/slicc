@@ -812,9 +812,11 @@ export function mountDraftDip(onLick: (action: string, data: unknown) => void): 
 
 /**
  * Handle a `dip-readfile` / `dip-exists` / `dip-stat` request from a
- * dip iframe. Reads from the same LightningFS the preview SW uses, so
- * onboarding markers / profiles / etc. are visible to the dip without
- * a parent-side handshake. Returns `true` when the message was handled.
+ * dip iframe. Reads through the page-side `preview-vfs` BroadcastChannel
+ * responder (`preview-vfs-responder.ts`) — the same OPFS-backed bridge
+ * the preview SW uses — so onboarding markers / profiles / etc. are
+ * visible to the dip without a parent-side handshake. Returns `true`
+ * when the message was handled.
  *
  * Two layers of access control:
  *
@@ -969,17 +971,18 @@ export function hydrateDips(
 
     // Resolve the .shtml content. Prefer the preview service worker
     // (handles mounts, MIME types, project-serve mode, etc.), but fall
-    // back to a direct LightningFS read for VFS-rooted paths so dips
-    // still render on the very first boot before the SW claims the
-    // page. Only paths starting with `/` are read directly; relative
-    // / cross-origin URLs always go through the network.
+    // back to a direct `preview-vfs` BroadcastChannel read (OPFS-backed)
+    // for VFS-rooted paths so dips still render on the very first boot
+    // before the SW claims the page. Only paths starting with `/` are
+    // read directly; relative / cross-origin URLs always go through the
+    // network.
     const isVfsPath = src.startsWith('/');
     const swControlled = typeof navigator !== 'undefined' && !!navigator.serviceWorker?.controller;
     const fetchUrl = isVfsPath ? `/preview${src}` : src;
 
     const resolveContent = async (): Promise<string> => {
       if (isVfsPath && !swControlled) {
-        // SW isn't controlling — go straight to LightningFS.
+        // SW isn't controlling — go straight to the preview-vfs responder.
         return readShtmlFromVFS(src, controller.signal);
       }
       // The extension side panel registers its own
@@ -988,7 +991,7 @@ export function hydrateDips(
       // standalone dev-server SW does. `navigator.serviceWorker.
       // controller` is still truthy, so we can't rely on `swControlled`
       // alone — wrap the fetch and treat any rejection as a signal to
-      // fall back to the direct LightningFS read for VFS paths.
+      // fall back to the preview-vfs responder for VFS paths.
       let resp: Response;
       try {
         resp = await fetch(fetchUrl, { signal: controller.signal });
@@ -999,8 +1002,8 @@ export function hydrateDips(
       }
       if (resp.ok) return resp.text();
       // Some dev-server responses bypass the SW even when it claims to
-      // be controlling (e.g. extension boot, stale registration).
-      // Retry once via direct LightningFS for VFS paths before failing.
+      // be controlling (e.g. extension boot, stale registration). Retry
+      // once via the preview-vfs responder for VFS paths before failing.
       if (isVfsPath) return readShtmlFromVFS(src, controller.signal);
       throw new Error(`HTTP ${resp.status}`);
     };
