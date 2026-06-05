@@ -202,4 +202,51 @@ describe('runLegacyMigrationFromVfs', () => {
     });
     expect(result.kind).toBe('copied');
   });
+
+  it('writes the sentinel even when unrelated files exist on OPFS (concurrent boot writes)', async () => {
+    // Simulate the orchestrator's `ensureRootStructure` / default
+    // `/shared/CLAUDE.md` writes happening before the migration runs.
+    // Manifest-bounded parity must ignore these extra files instead of
+    // walking the whole subtree (the original sentinel-never-written bug).
+    await vfs.mkdir('/workspace', { recursive: true });
+    await vfs.mkdir('/shared', { recursive: true });
+    await vfs.writeFile('/shared/CLAUDE.md', 'default content from orchestrator boot');
+    await vfs.writeFile('/workspace/.cone-memory-migrated', 'sentinel from another migration');
+    const tree: Record<string, MockEntry> = {
+      '/': { type: 'dir' },
+      '/workspace': { type: 'dir' },
+      '/workspace/a.txt': { type: 'file', size: 3, bytes: new Uint8Array([1, 2, 3]) },
+    };
+    const result = await runLegacyMigrationFromVfs(vfs, {
+      legacyLfsFactory: async () => buildLfsReader(tree),
+      legacyReaderFactory: async () => buildFileReader(tree),
+      probeLegacyDbExists: async () => true,
+    });
+    expect(result.kind).toBe('copied');
+    const copy = (result as { result: MigrationCopyResult }).result;
+    expect(copy.kind).toBe('success');
+    // Sentinel landed despite the unrelated files already on OPFS.
+    const sentinelStat = await vfs.stat(OPFS_MIGRATION_SENTINEL);
+    expect(sentinelStat.type).toBe('file');
+  });
+
+  it('forwards per-file copy progress to onProgress', async () => {
+    const tree: Record<string, MockEntry> = {
+      '/': { type: 'dir' },
+      '/a.txt': { type: 'file', size: 1, bytes: new Uint8Array([1]) },
+      '/b.txt': { type: 'file', size: 1, bytes: new Uint8Array([2]) },
+      '/c.txt': { type: 'file', size: 1, bytes: new Uint8Array([3]) },
+    };
+    const progressLog: Array<{ copied: number; total: number }> = [];
+    const result = await runLegacyMigrationFromVfs(vfs, {
+      legacyLfsFactory: async () => buildLfsReader(tree),
+      legacyReaderFactory: async () => buildFileReader(tree),
+      probeLegacyDbExists: async () => true,
+      onProgress: (p) => progressLog.push(p),
+    });
+    expect(result.kind).toBe('copied');
+    // Initial tick (0/3) plus one per copied file.
+    expect(progressLog[0]).toEqual({ copied: 0, total: 3 });
+    expect(progressLog[progressLog.length - 1]).toEqual({ copied: 3, total: 3 });
+  });
 });

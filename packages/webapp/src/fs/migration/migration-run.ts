@@ -79,6 +79,12 @@ export interface RunLegacyMigrationFromVfsDeps {
    * callers leave this undefined — the guard snapshots `globalThis`.
    */
   callerEnv?: MigrationCallerEnv;
+  /**
+   * Optional per-file progress hook forwarded to the copy routine.
+   * Used by the kernel host to broadcast `kernel-migration-progress`
+   * frames to the page-side modal. Callers that don't care omit it.
+   */
+  onProgress?: (progress: { copied: number; total: number }) => void;
 }
 
 /**
@@ -119,7 +125,15 @@ export async function runLegacyMigrationFromVfs(
     manifest: detection.manifest,
     source,
     target,
-    countOpfsFiles: () => countOpfsFiles(sharedFs),
+    // Parity is computed strictly against the migration manifest's own
+    // file entries — we stat each expected path on OPFS and sum its
+    // size. Walking the whole OPFS subtree would let any concurrent
+    // boot writes (orchestrator's `ensureRootStructure`, default
+    // `/shared/CLAUDE.md`, sidecar metadata, /proc, ...) poison the
+    // count and silently skip the sentinel write on every reload —
+    // the original "sentinel never written" bug. Manifest-bounded
+    // parity is robust against unrelated writers.
+    countOpfsFiles: () => countManifestFilesOnOpfs(sharedFs, detection.manifest),
     flushBeforeSentinel: () => sharedFs.flush().catch(() => {}),
     writeSentinel: async () => {
       // Atomic at the OPFS layer: a single writeFile call replaces
@@ -130,6 +144,7 @@ export async function runLegacyMigrationFromVfs(
       // crash between writeFile and the next mount can't lose it.
       await sharedFs.flush().catch(() => {});
     },
+    onProgress: deps.onProgress,
     logger,
   });
 
@@ -161,6 +176,10 @@ function buildVfsTargetWriter(sharedFs: VirtualFS): OpfsTargetWriter {
  * sizes. Skips symlinks (counted separately in the C1 manifest), the
  * sentinel (not yet written at this point), and the ZenFS metadata
  * sidecar (`/.metadata.json`) since it's not legacy data.
+ *
+ * Retained for diagnostics and for any caller that wants a full-tree
+ * snapshot; the runner now uses {@link countManifestFilesOnOpfs} for
+ * parity so concurrent boot writes don't break the check.
  */
 export async function countOpfsFiles(sharedFs: VirtualFS): Promise<OpfsParityCount> {
   let fileCount = 0;
@@ -173,6 +192,39 @@ export async function countOpfsFiles(sharedFs: VirtualFS): Promise<OpfsParityCou
       totalBytes += stat.size ?? 0;
     }
   });
+  return { fileCount, totalBytes };
+}
+
+/**
+ * Manifest-bounded parity walk. Stats each file path the migration
+ * manifest claims it copied; only those count toward the parity total.
+ * Files missing on OPFS, or whose size disagrees with the manifest,
+ * cause the count to come up short — `runLegacyMigrationCopy` then
+ * returns `parity-mismatch` and refuses to write the sentinel.
+ *
+ * Any file the boot wrote *on top of* the migration target (e.g.
+ * orchestrator's default `/shared/CLAUDE.md`) is fine: the migration's
+ * own `writeFile` overwrites it back to the legacy bytes immediately
+ * before this walk, so the stat still matches the manifest.
+ */
+async function countManifestFilesOnOpfs(
+  sharedFs: VirtualFS,
+  manifest: import('./migration-detect.js').MigrationManifest
+): Promise<OpfsParityCount> {
+  let fileCount = 0;
+  let totalBytes = 0;
+  for (const entry of manifest.entries) {
+    if (entry.type !== 'file') continue;
+    let stat: { type: string; size?: number };
+    try {
+      stat = await sharedFs.lstat(entry.path);
+    } catch {
+      continue;
+    }
+    if (stat.type !== 'file') continue;
+    fileCount++;
+    totalBytes += stat.size ?? 0;
+  }
   return { fileCount, totalBytes };
 }
 

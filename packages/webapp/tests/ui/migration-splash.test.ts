@@ -1,19 +1,21 @@
 // @vitest-environment jsdom
 /**
- * Wave C3 — `createMigrationSplash` unit tests.
+ * `createMigrationSplash` unit tests.
  *
- * Pins the >1s walk threshold gate end-to-end:
- *   - splash appears when the migration exceeds the threshold (slow path)
- *   - splash never paints when the dismiss arrives before the threshold
+ * Pins both the >1s threshold gate AND the blocking-modal behavior:
+ *   - modal appears as a centered scrim once the threshold elapses
+ *   - modal never paints when the dismiss arrives before the threshold
  *     (fast path: sentinel-present no-op AND legacy-absent no-op both
  *     funnel through the same `disarm()` chokepoint, so this single
  *     test pins both)
- *   - the controller is allocated lazily by `mainStandaloneWorker`, so
- *     flag-off boots never instantiate one — the `arm()` / `disarm()`
- *     surface is what we test (the flag gate lives in `host.ts`).
- *   - idempotent arm + disarm so a noisy `kernel-migration-started`
- *     can't double-paint and a stale `kernel-migration-finished` can't
- *     throw.
+ *   - scrim is a full-viewport blocker (`pointer-events: auto`,
+ *     `position: fixed`, `inset: 0`) so input can't reach the booting
+ *     UI underneath
+ *   - card uses the brand Adobe Clean font stack rather than `system-ui`
+ *   - `updateProgress` reflects the file-count ratio in both the bar
+ *     fill width and the visible `copied / total files` counter
+ *   - idempotent arm + disarm so noisy migration signals can't
+ *     double-paint or throw on stale dismiss
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -48,10 +50,61 @@ describe('createMigrationSplash', () => {
     expect(root.querySelector(`#${MIGRATION_SPLASH_ELEMENT_ID}`)).toBeNull();
 
     vi.advanceTimersByTime(1);
-    const el = root.querySelector(`#${MIGRATION_SPLASH_ELEMENT_ID}`);
+    const el = root.querySelector(`#${MIGRATION_SPLASH_ELEMENT_ID}`) as HTMLElement | null;
     expect(el).not.toBeNull();
     expect(el?.getAttribute('role')).toBe('status');
     expect(el?.textContent).toMatch(/Upgrading|workspace|storage/i);
+  });
+
+  it('paints a centered, blocking scrim in the brand font', () => {
+    const splash = createMigrationSplash({ root, thresholdMs: 0 });
+    splash.forceShow();
+
+    const el = root.querySelector(`#${MIGRATION_SPLASH_ELEMENT_ID}`) as HTMLElement | null;
+    expect(el).not.toBeNull();
+    // Scrim spans the viewport and blocks input.
+    expect(el?.style.position).toBe('fixed');
+    expect(el?.style.inset).toBe('0px');
+    expect(el?.style.pointerEvents).toBe('auto');
+    expect(el?.style.display).toBe('flex');
+    expect(el?.style.alignItems).toBe('center');
+    expect(el?.style.justifyContent).toBe('center');
+    expect(el?.getAttribute('aria-modal')).toBe('true');
+    // Brand font stack — must NOT fall back to `system-ui`.
+    expect(el?.style.fontFamily).toMatch(/Adobe Clean/);
+    expect(el?.style.fontFamily).not.toMatch(/system-ui/);
+  });
+
+  it('renders a determinate progress bar that reflects updateProgress', () => {
+    const splash = createMigrationSplash({ root, thresholdMs: 0 });
+    splash.forceShow();
+    splash.updateProgress({ copied: 25, total: 100 });
+
+    const el = root.querySelector(`#${MIGRATION_SPLASH_ELEMENT_ID}`) as HTMLElement | null;
+    expect(el?.textContent).toContain('25 / 100 files');
+    // The fill is the only div with a non-zero/percent `width` style;
+    // grab it by walking children rather than relying on a brittle
+    // descendant selector.
+    const findFill = (host: HTMLElement | null): HTMLElement | null =>
+      (host?.querySelector('[data-slicc-migration-progress-fill]') as HTMLElement | null) ?? null;
+    const fill = findFill(el);
+    expect(fill).not.toBeNull();
+    expect(fill?.style.width).toBe('25%');
+
+    splash.updateProgress({ copied: 100, total: 100 });
+    expect(el?.textContent).toContain('100 / 100 files');
+    expect(findFill(el)?.style.width).toBe('100%');
+  });
+
+  it('remembers progress updates issued before the modal paints', () => {
+    const splash = createMigrationSplash({ root, thresholdMs: 1000 });
+    splash.arm();
+    splash.updateProgress({ copied: 7, total: 10 });
+    expect(root.querySelector(`#${MIGRATION_SPLASH_ELEMENT_ID}`)).toBeNull();
+
+    vi.advanceTimersByTime(1000);
+    const el = root.querySelector(`#${MIGRATION_SPLASH_ELEMENT_ID}`) as HTMLElement | null;
+    expect(el?.textContent).toContain('7 / 10 files');
   });
 
   it('hides when disarm fires AFTER the threshold (slow→done)', () => {

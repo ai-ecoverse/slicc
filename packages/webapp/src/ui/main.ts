@@ -2087,6 +2087,16 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       }
       migrationSplash.arm();
     },
+    onMigrationProgress: (progress) => {
+      // Lazy-allocate the controller in case `started` was missed (the
+      // page-side bridge swallows raw kernel-port messages prior to the
+      // first listener tick).
+      if (!migrationSplash) {
+        migrationSplash = createMigrationSplash({ root: document.body, logger: log });
+        migrationSplash.arm();
+      }
+      migrationSplash.updateProgress(progress);
+    },
     onMigrationFinish: () => {
       migrationSplash?.disarm();
     },

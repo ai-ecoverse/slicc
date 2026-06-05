@@ -67,6 +67,13 @@ export interface RunLegacyMigrationCopyOptions {
    * call) followed by another sidecar flush.
    */
   writeSentinel: () => Promise<void>;
+  /**
+   * Optional per-file progress hook. Invoked after each successful
+   * `writeFile` with the running copy count and the manifest's total
+   * file count. The runner uses this to plumb a UI progress bar over
+   * the kernel port; tests that don't care omit it.
+   */
+  onProgress?: (progress: { copied: number; total: number }) => void;
   logger?: MigrationLogger;
 }
 
@@ -134,6 +141,13 @@ export async function runLegacyMigrationCopy(
 
   // 2. File bytes.
   let copiedFiles = 0;
+  // Initial progress tick so the splash flips from "Preparing…" to a
+  // real ratio the moment the copy starts.
+  try {
+    opts.onProgress?.({ copied: 0, total: expected.fileCount });
+  } catch {
+    /* progress hook must never break the copy */
+  }
   for (const entry of files) {
     if (entry.type !== 'file') continue;
     let bytes: Uint8Array;
@@ -158,6 +172,11 @@ export async function runLegacyMigrationCopy(
       return { kind: 'copy-error', expected, copiedFiles, stage: 'writeFile' };
     }
     copiedFiles++;
+    try {
+      opts.onProgress?.({ copied: copiedFiles, total: expected.fileCount });
+    } catch {
+      /* progress hook must never break the copy */
+    }
   }
 
   // 3. Symlinks last so the targets/dirs they may point at exist.
