@@ -2199,6 +2199,52 @@ describe('SessionTrayDurableObject — hibernation', () => {
     expect(forwarded).toHaveLength(1);
     expect(forwarded[0]?.webhookId).toBe('hook-1');
   });
+
+  it('ignores a stale leader close when a newer leader socket is already live', async () => {
+    const now = Date.parse('2026-03-11T00:00:00.000Z');
+    const state = new FakeDurableObjectState();
+    const instance = new SessionTrayDurableObject(
+      state,
+      {},
+      { now: () => now, webSocketPairFactory: createFakeWebSocketPair }
+    );
+    state.instance = instance;
+
+    await instance.fetch(
+      new Request('https://tray.test/internal/create', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          trayId: 't-race',
+          createdAt: new Date(now).toISOString(),
+          joinToken: 'j',
+          controllerToken: 'c',
+          webhookToken: 'w',
+        }),
+      })
+    );
+    const attach = await instance.fetch(
+      new Request('https://tray.test/controller/c', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'lead-1' }),
+      })
+    );
+    const leader = (await attach.json()) as { websocket: { url: string } };
+    await instance.fetch(new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }));
+
+    const staleSocket = state.getWebSockets('leader')[0]!;
+
+    // The runtime accepts a replacement leader socket (reconnect) before it
+    // delivers the stale socket's webSocketClose.
+    const { server: newServer } = createFakeWebSocketPair();
+    state.acceptWebSocket(newServer, ['leader']);
+
+    await instance.webSocketClose(staleSocket);
+
+    const stored = (await state.storage.get('tray')) as TrayRecord;
+    expect(stored.leader?.connected).toBe(true);
+  });
 });
 
 describe('cherry framing policy', () => {

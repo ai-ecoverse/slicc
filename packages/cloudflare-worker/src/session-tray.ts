@@ -178,26 +178,44 @@ export class SessionTrayDurableObject {
   }
 
   async webSocketClose(ws: TrayWebSocketLike): Promise<void> {
-    this.leaderSocket = ws;
-    if (!this.tray) {
-      await this.loadTray();
-    }
-    await this.markLeaderDisconnected(ws);
+    await this.handleLeaderSocketGone(ws);
   }
 
   async webSocketError(ws: TrayWebSocketLike): Promise<void> {
-    this.leaderSocket = ws;
+    await this.handleLeaderSocketGone(ws);
+  }
+
+  // A close/error for the leader socket may be delivered after a newer leader
+  // socket has already reconnected (the runtime can deliver these late, and we
+  // may be a freshly re-created instance after hibernation). Treat the runtime's
+  // getWebSockets(LEADER_WS_TAG) as the source of truth: if another leader
+  // socket is still live, the gone socket is stale and must not tear down the
+  // tray; otherwise mark the leader disconnected.
+  private async handleLeaderSocketGone(ws: TrayWebSocketLike): Promise<void> {
     if (!this.tray) {
       await this.loadTray();
     }
+    const liveSockets = this.currentLeaderSockets().filter((socket) => socket !== ws);
+    if (liveSockets.length > 0) {
+      this.leaderSocket = liveSockets[0] ?? null;
+      return;
+    }
+    this.leaderSocket = ws;
     await this.markLeaderDisconnected(ws);
   }
 
+  private currentLeaderSockets(): TrayWebSocketLike[] {
+    if (typeof this.state.getWebSockets !== 'function') {
+      return this.leaderSocket ? [this.leaderSocket] : [];
+    }
+    return this.state.getWebSockets(LEADER_WS_TAG) as TrayWebSocketLike[];
+  }
+
   private restoreLeaderSocket(): void {
-    if (this.leaderSocket || typeof this.state.getWebSockets !== 'function') {
+    if (this.leaderSocket) {
       return;
     }
-    const [socket] = this.state.getWebSockets(LEADER_WS_TAG) as TrayWebSocketLike[];
+    const [socket] = this.currentLeaderSockets();
     if (socket) {
       this.leaderSocket = socket;
     }
