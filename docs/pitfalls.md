@@ -938,6 +938,41 @@ that touched LLM call paths, a new code path is bypassing the wiring.
   reverts. `tests/providers/adobe-provider.test.ts` covers the
   provider-level `ensureSessionIdHeader` fallback behavior.
 
+## Adobe / Bedrock Claude: `temperature` is deprecated on Opus 4.7 / 4.8
+
+Bedrock-backed Claude **Opus 4.7 and 4.8** reject the `temperature`
+sampling parameter — Bedrock returns `400 "temperature is deprecated for
+this model."`. The Adobe proxy wraps that as a `502 upstream_error`, and
+the node-server fetch-proxy relays the upstream status verbatim
+(`res.status(upstream.status)`), so the agent sees a bare **502 on
+`/api/fetch-proxy`** with no hint that `temperature` is the cause.
+
+This bites the **thinking-disabled** helper calls: `ui/quick-llm.ts`
+sends `temperature: 0.3` for the scope-label and session-title helpers.
+pi-ai's `anthropic-messages` builder already drops `temperature` when
+extended thinking is enabled, so the **main cone stream is unaffected** —
+only the background helpers 502 (commonly noticed as a pile of 502s as a
+long conversation keeps refreshing its working-scope label). Message
+count is irrelevant: even a 24-token request fails.
+
+**The fix lives at the provider layer, not the call site.** Temperature
+support is a model capability: `src/providers/temperature-support.ts`
+owns the single reject-list (`modelSupportsTemperature` /
+`withSupportedTemperature`). Both Bedrock-backed providers consult it —
+`providers/built-in/bedrock-camp.ts` omits it in the Converse payload and
+`providers/adobe.ts` strips it before `streamAnthropic` /
+`streamSimpleAnthropic`. **A new temperature-rejecting model is a one-line
+edit to `TEMPERATURE_UNSUPPORTED`** — do not re-add per-call-site guards.
+
+**Related**
+
+- Coverage: `tests/providers/temperature-support.test.ts` (the helper);
+  `tests/providers/built-in/bedrock-camp.test.ts` ("omits temperature for
+  Opus 4.8").
+- History: the original guard was Opus-4.7-only and inline in
+  `bedrock-camp.ts`; it was generalized into the shared helper and
+  extended to 4.8 (the Adobe path had no guard at all before).
+
 ## Detached popout: boot is the lock event
 
 The detached popout flow accepts three entry paths: the side-panel

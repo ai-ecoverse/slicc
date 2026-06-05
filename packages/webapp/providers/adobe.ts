@@ -42,6 +42,7 @@ import {
 } from '../src/providers/adobe-model-metadata.js';
 import { getOAuthPageOrigin } from '../src/providers/oauth-service.js';
 import { createSilentRenewBackoff } from '../src/providers/silent-renew-backoff.js';
+import { withSupportedTemperature } from '../src/providers/temperature-support.js';
 import type { OAuthLauncher, OAuthLoginOptions, ProviderConfig } from '../src/providers/types.js';
 import { getDailyAdobeUuid } from '../src/scoops/llm-session-id.js';
 import {
@@ -748,7 +749,12 @@ const streamAdobe = (
           proxyModel as any,
           context,
           withSliccVersionHeader(
-            ensureSessionIdHeader({ ...options, apiKey: accessToken }, 'streamAdobe[anthropic]')
+            ensureSessionIdHeader(
+              // Opus 4.7/4.8 reject `temperature` on Bedrock — strip it for
+              // thinking-disabled helper calls (the main stream omits it already).
+              withSupportedTemperature(model.id, model.name, { ...options, apiKey: accessToken }),
+              'streamAdobe[anthropic]'
+            )
           )
         );
         for await (const event of inner) stream.push(event as any);
@@ -800,7 +806,9 @@ const streamSimpleAdobe = (model: Model<Api>, context: Context, options?: Simple
           context,
           withSliccVersionHeader(
             ensureSessionIdHeader(
-              { ...options, apiKey: accessToken },
+              // Opus 4.7/4.8 reject `temperature` on Bedrock — strip it here so
+              // thinking-disabled helpers (quick-llm scope label / title) don't 502.
+              withSupportedTemperature(model.id, model.name, { ...options, apiKey: accessToken }),
               'streamSimpleAdobe[anthropic]'
             )
           ) as any
