@@ -8,17 +8,17 @@
  * leader/follower gating under `slicc_opfs_vfs === 'opfs'` is testable
  * without booting the full UI.
  *
- * Wave B4b (blueprint note d8860197): under the OPFS flag the write must
- * route through the page-side `WritableVfsClient` so it lands on the
- * worker-owned canonical OPFS store (B4 wired the same path for the
- * freezer / pending-enrichment). Only the OPFS-leader tab (B6 election)
- * may write — a follower's `writableFs` is the page-side LFS shadow which
- * the worker-OPFS-backed UI never reads, so its write would be a silent
- * orphan (matches the B4a follower-no-op for `scheduleBackgroundEnrichment`).
+ * Under the OPFS flag the write must route through the page-side
+ * `WritableVfsClient` so it lands on the worker-owned canonical OPFS
+ * store (matching the freezer / pending-enrichment reroute). Only
+ * the OPFS-leader tab may write — a follower's `writableFs` is the
+ * page-side LFS shadow which the worker-OPFS-backed UI never reads,
+ * so its write would be a silent orphan (matches the follower-no-op
+ * for `scheduleBackgroundEnrichment`).
  *
- * Flag off: `writableFs === localFs` (no remote client constructed) AND
- * `isWriter === true` (no election ran), so the call collapses to the
- * pre-B4b `localFs.writeFile('/shared/.welcomed', '1')` byte-for-byte.
+ * Flag off: `writableFs === localFs` (no remote client constructed)
+ * AND `isWriter === true` (no election ran), so the call collapses
+ * to `localFs.writeFile('/shared/.welcomed', '1')` byte-for-byte.
  */
 
 import { createLogger } from '../core/logger.js';

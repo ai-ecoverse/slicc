@@ -1,5 +1,5 @@
 /**
- * Wave A6 — Heavy-gated OPFS reload integrity test.
+ * Heavy-gated OPFS reload integrity test.
  *
  * Asserts that the OPFS-backed VirtualFS, configured with the
  * `metadata: '/.metadata.json'` sidecar, preserves three classes of
@@ -57,7 +57,7 @@ d('VirtualFS — OPFS reload integrity (heavy)', () => {
 
   it('exec filemode survives a reload', async () => {
     const { VirtualFS } = await import('../../src/fs/virtual-fs.js');
-    // Wave F2: `vfs.getLightningFS()` was deleted; reach the underlying
+    // `vfs.getLightningFS()` no longer exists; reach the underlying
     // ZenFS `fs.promises` directly here, since this test exercises a
     // POSIX surface (`chmod`) that VirtualFS does not re-expose.
     const { fs: zenfs } = await import('@zenfs/core');

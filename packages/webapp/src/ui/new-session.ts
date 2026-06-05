@@ -33,11 +33,11 @@ const FREEZER_SESSION_ANCHOR = 'ui-new-session';
 
 export interface RunNewSessionFreezeOptions {
   /**
-   * Writable VFS handle. Wave B4: under `slicc_opfs_vfs === 'opfs'` AND
-   * on the OPFS-leader tab, callers pass a `RemoteWritableVfsClient` so
+   * Writable VFS handle. Under `slicc_opfs_vfs === 'opfs'` AND on the
+   * OPFS-leader tab, callers pass a `RemoteWritableVfsClient` so
    * writes route to the worker's `VfsRpcHost` (canonical OPFS store).
-   * With the flag off the existing page-side `VirtualFS` satisfies the
-   * same shape structurally.
+   * With the flag off the existing page-side `VirtualFS` satisfies
+   * the same shape structurally.
    */
   vfs: WritableVfsClient;
 }
@@ -197,11 +197,12 @@ export async function enrichPendingSessions(
  * can't delay first paint; falls back to `setTimeout(0)` otherwise.
  * Never throws — `enrichPendingSessions` is already best-effort.
  *
- * Wave B4a: callers pass `isWriter: false` for non-leader tabs under
+ * Callers pass `isWriter: false` for non-leader tabs under
  * `slicc_opfs_vfs === 'opfs'`. Enrichment writes go via the supplied
  * VFS; on a follower that VFS is the page-side LFS shadow which the
  * worker-OPFS-backed UI never reads → silent orphan. Skip the pass
- * entirely on followers (read-only mode), matching the B6 banner.
+ * entirely on followers (read-only mode), matching the read-only
+ * banner.
  */
 export function scheduleBackgroundEnrichment(
   vfs: WritableVfsClient,

@@ -173,9 +173,9 @@ export class OffscreenClient implements KernelClientFacade {
   /**
    * Set a local VFS handle for the memory panel / file browser. Typed
    * as `LocalVfsClient` (read-only surface) so accidental panel-side
-   * writes fail at compile time. With `slicc_opfs_vfs=opfs` (Wave B2),
-   * callers pass a worker-RPC-backed `RemoteVfsClient`; with the flag
-   * off, a page-side `VirtualFS` satisfies the same structural type.
+   * writes fail at compile time. With `slicc_opfs_vfs=opfs`, callers
+   * pass a worker-RPC-backed `RemoteVfsClient`; with the flag off, a
+   * page-side `VirtualFS` satisfies the same structural type.
    */
   setLocalFS(fs: LocalVfsClient): void {
     this.localFs = fs;
@@ -183,12 +183,12 @@ export class OffscreenClient implements KernelClientFacade {
 
   /**
    * Expose the underlying kernel transport so the page can wire a
-   * `RemoteVfsClient` (Wave B2) onto the same wire when the
-   * `slicc_opfs_vfs` flag routes panel reads through the worker's
-   * `VfsRpcHost`. The transport is shared — RemoteVfsClient adds its
-   * own `onMessage` subscriber and only acts on `vfs-*-result`
-   * envelopes, so existing routing (`agent-event`, `scoop-list`,
-   * sprinkle ops, terminal events) keeps flowing untouched.
+   * `RemoteVfsClient` onto the same wire when the `slicc_opfs_vfs`
+   * flag routes panel reads through the worker's `VfsRpcHost`. The
+   * transport is shared — RemoteVfsClient adds its own `onMessage`
+   * subscriber and only acts on `vfs-*-result` envelopes, so existing
+   * routing (`agent-event`, `scoop-list`, sprinkle ops, terminal
+   * events) keeps flowing untouched.
    */
   getTransport(): KernelTransport<ExtensionMessage, PanelToOffscreenMessage> {
     return this.transport;

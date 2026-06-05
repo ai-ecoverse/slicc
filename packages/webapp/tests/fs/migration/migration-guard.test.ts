@@ -86,7 +86,7 @@ describe('migration-guard.assertMigrationNotInSidePanel', () => {
     expect(() => assertMigrationNotInSidePanel(env)).toThrow(MigrationFromSidePanelError);
   });
 
-  it('error message references Wave C4 and the kernel-ready RPC', () => {
+  it('error message references the kernel-ready RPC and the offending pathname', () => {
     const env = envOf({
       hasExtensionRuntime: true,
       hasDocument: true,
@@ -98,7 +98,9 @@ describe('migration-guard.assertMigrationNotInSidePanel', () => {
     } catch (err) {
       expect(err).toBeInstanceOf(MigrationFromSidePanelError);
       const msg = (err as Error).message;
-      expect(msg).toContain('Wave C4');
+      expect(msg).toContain(
+        'runLegacyMigrationFromVfs invoked from the chrome extension side panel'
+      );
       expect(msg).toContain('OffscreenClient.onReady');
       expect(msg).toContain('/index.html');
     }

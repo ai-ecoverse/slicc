@@ -6,12 +6,11 @@ import { describe, expect, it } from 'vitest';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /**
- * Phase 8 moved the extension's `node -e` execution out of
- * `node-command.ts` and into `sandbox.html` (per-task realm
- * iframe). The wrappedCode template that used `cdn.jsdelivr.net`
- * + indirect Function constructor lives there now. These
- * assertions pin the same load-module behavior in its new home so
- * the extension's `node -e require('lodash')` keeps working.
+ * The extension's `node -e` execution lives in `sandbox.html`
+ * (per-task realm iframe). The wrappedCode template that used
+ * `cdn.jsdelivr.net` + indirect Function constructor lives there.
+ * These assertions pin the load-module behavior so the extension's
+ * `node -e require('lodash')` keeps working.
  *
  * Chrome Web Store MV3 review string-matches full CDN URLs in
  * built JS, so the host is composed via token-array

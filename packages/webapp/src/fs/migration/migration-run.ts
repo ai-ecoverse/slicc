@@ -1,13 +1,14 @@
 /**
- * Wave C2 — VFS-bound migration runner.
+ * VFS-bound migration runner.
  *
- * Wraps the C1 detection module (`migration-detect.ts`) and the C2
- * pure copy module (`migration-copy.ts`) and wires them to the live
+ * Wraps the detection module (`migration-detect.ts`) and the pure
+ * copy module (`migration-copy.ts`) and wires them to the live
  * worker-owned `VirtualFS` instance plus a real LightningFS read
  * handle against the legacy `slicc-fs` IDB.
  *
  * Callers MUST guard on `sharedFs.backend === 'opfs'` so the flag-off
- * (LFS) path stays byte-identical and never imports this module. C1
+ * (LFS) path stays byte-identical and never imports this module.
+ * Detection
  * already does that at the kernel-host integration site
  * (`host.ts:349`).
  *
@@ -73,7 +74,7 @@ export interface RunLegacyMigrationFromVfsDeps {
   probeLegacyDbExists?: () => Promise<boolean>;
   logger?: MigrationLogger;
   /**
-   * Wave C4 caller-environment override. Tests pass a simulated env
+   * Caller-environment override. Tests pass a simulated env
    * (extension side panel, offscreen, worker, ...) so the side-panel
    * guard can be exercised without monkey-patching globals. Production
    * callers leave this undefined — the guard snapshots `globalThis`.
@@ -88,16 +89,16 @@ export interface RunLegacyMigrationFromVfsDeps {
 }
 
 /**
- * Worker-boot entry point. Runs C1 detection and, when needed, the
- * C2 copy + parity + sentinel write. Returns a structured result
+ * Worker-boot entry point. Runs detection and, when needed, the
+ * copy + parity + sentinel write. Returns a structured result
  * (no exceptions thrown to the caller — boot is fire-and-forget).
  */
 export async function runLegacyMigrationFromVfs(
   sharedFs: VirtualFS,
   deps: RunLegacyMigrationFromVfsDeps = {}
 ): Promise<MigrationRunResult> {
-  // Wave C4 — defensive guard: the side panel must never invoke the
-  // migration (the offscreen document is the sole VFS owner under the
+  // Defensive guard: the side panel must never invoke the migration
+  // (the offscreen document is the sole VFS owner under the
   // `slicc_opfs_vfs` flag). Today the panel boot path doesn't import
   // this module; the assert protects against future regressions.
   assertMigrationNotInSidePanel(deps.callerEnv);

@@ -683,14 +683,14 @@ describe('listPendingEnrichments', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Wave B2b: the read-only sessions-index API (`readSessionsIndex` +
+// The read-only sessions-index API (`readSessionsIndex` +
 // `listPendingEnrichments`) is typed against `LocalVfsClient`, so it works
 // end-to-end with a `RemoteVfsClient` over a real `MessageChannel +
 // VfsRpcHost` — the same RPC path the scoops panel takes under
 // `slicc_opfs_vfs=opfs`. Pins that the widened signatures actually accept
 // the worker-backed reader (not just a page-side `VirtualFS`).
 // ---------------------------------------------------------------------------
-describe('readSessionsIndex over RemoteVfsClient (Wave B2b)', () => {
+describe('readSessionsIndex over RemoteVfsClient', () => {
   it('reads /sessions/index.json through the RPC host', async () => {
     const { createRemoteVfsClient } = await import('../../src/kernel/remote-vfs-client.js');
     const { createBridgeMessageChannelTransport, createPanelMessageChannelTransport } =
@@ -1141,16 +1141,16 @@ describe('enrichPendingSession', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Wave B4 — freezer writes routed through the RemoteWritableVfsClient
+// Freezer writes routed through the RemoteWritableVfsClient
 // ---------------------------------------------------------------------------
 //
 // Verifies the rerouted write path under `slicc_opfs_vfs === 'opfs'`: every
 // freezer write (mkdir + writeFile + flush) round-trips over a real
 // MessageChannel into the worker-side `VfsRpcHost`, which dispatches to a
-// stub `WritableVfsBackend`. This pins the contract Wave B4 wires up in
-// `main.ts`: page-side `WritableVfsClient` ↔ worker-side `VfsRpcHost`
-// (writable) ↔ canonical OPFS store (stubbed here as an in-memory backend).
-describe('freezeConeSession — writes route through WritableVfsClient (Wave B4)', () => {
+// stub `WritableVfsBackend`. This pins the contract `main.ts` wires up:
+// page-side `WritableVfsClient` ↔ worker-side `VfsRpcHost` (writable) ↔
+// canonical OPFS store (stubbed here as an in-memory backend).
+describe('freezeConeSession — writes route through WritableVfsClient', () => {
   beforeEach(() => {
     mockRunOneOffCompactionCall.mockReset();
     mockApplyConeMemoryBudget.mockReset();

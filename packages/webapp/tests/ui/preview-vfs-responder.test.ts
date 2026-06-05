@@ -1,7 +1,6 @@
 /**
  * Tests for `installPreviewVfsResponder` — the page-side endpoint the
- * `/preview/*` service worker (`preview-sw.ts`) talks to. Wave B3 of
- * the worker-owned-OPFS migration (blueprint note d8860197).
+ * `/preview/*` service worker (`preview-sw.ts`) talks to.
  *
  * Pins:
  *  - `asText: true`  → `readFile({ encoding: 'utf-8' })`, response carries `content: string`.
@@ -10,7 +9,7 @@
  *  - The reader is resolved per-request, so a swap (e.g. `localFs` → `RemoteVfsClient`)
  *    takes effect on the next message without reinstalling the listener.
  *  - End-to-end with a real `VfsRpcHost` + `RemoteVfsClient` round-trips through
- *    the kernel transport (the canonical Wave B3 path).
+ *    the kernel transport (the canonical OPFS-flag-on path).
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -144,7 +143,7 @@ describe('installPreviewVfsResponder', () => {
     expect(ch.outbound).toHaveLength(0);
   });
 
-  it('reader swap takes effect on the next request (Wave B3 flag flip path)', async () => {
+  it('reader swap takes effect on the next request (flag flip path)', async () => {
     const ch = new FakeChannel();
     const initial = makeStubVfs();
     initial.readFile.mockResolvedValue('from-local');
@@ -179,8 +178,9 @@ describe('installPreviewVfsResponder', () => {
   });
 
   it('end-to-end: forwards through a real VfsRpcHost + RemoteVfsClient', async () => {
-    // Wave B3 canonical path: the swapped reader is a `RemoteVfsClient`
-    // talking to the kernel worker's `VfsRpcHost` over a MessageChannel.
+    // Canonical OPFS-flag-on path: the swapped reader is a
+    // `RemoteVfsClient` talking to the kernel worker's `VfsRpcHost`
+    // over a MessageChannel.
     const channel = new MessageChannel();
     const bridge = createBridgeMessageChannelTransport(channel.port2);
     const worker = makeStubVfs();

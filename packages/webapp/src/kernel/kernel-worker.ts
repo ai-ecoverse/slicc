@@ -322,19 +322,19 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
       logger: console,
     });
     stopTerminalHost = handle.stop;
-    // Wave B1 (issue d8860197): stand up the worker-side VFS read RPC
-    // surface on the same kernel transport. `VirtualFS` satisfies the
-    // `LocalVfsClient` shape structurally so we hand `sharedFs` in
-    // directly.
+    // Stand up the worker-side VFS read RPC surface on the same
+    // kernel transport. `VirtualFS` satisfies the `LocalVfsClient`
+    // shape structurally so we hand `sharedFs` in directly.
     //
-    // Wave B4: also wire `writableClient: sharedFs` so the host accepts
-    // `vfs-write-file` / `vfs-mkdir` / `vfs-rm` / `vfs-flush` envelopes
-    // from the page-side `WritableVfsClient` (Wave B2w). `VirtualFS`
-    // satisfies the `WritableVfsBackend` shape structurally. With the
-    // OPFS flag off, the page never constructs the writable client so
-    // these write request types fan out into nobody — existing behavior
-    // is unchanged. With the flag on, the leader tab routes session-
-    // freezer + cone-memory writes through this handler.
+    // Also wire `writableClient: sharedFs` so the host accepts
+    // `vfs-write-file` / `vfs-mkdir` / `vfs-rm` / `vfs-flush`
+    // envelopes from the page-side `WritableVfsClient`. `VirtualFS`
+    // satisfies the `WritableVfsBackend` shape structurally. With
+    // the OPFS flag off, the page never constructs the writable
+    // client so these write request types fan out into nobody —
+    // existing behavior is unchanged. With the flag on, the leader
+    // tab routes session-freezer + cone-memory writes through this
+    // handler.
     const vfsHandle = startVfsRpcHost({
       transport: bridgeTransport,
       client: sharedFs,

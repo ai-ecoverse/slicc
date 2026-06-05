@@ -1,13 +1,12 @@
 /**
  * `VfsRpcHost` — worker-side endpoint for the VFS RPC protocol.
  *
- * Wave B1 of the worker-owned-OPFS migration (blueprint note d8860197):
- * exposes `readDir` / `readFile` / `stat` from the worker (which owns
- * the ZenFS/OPFS VFS) over the existing kernel RPC transport so the
- * page can observe the VFS without touching OPFS itself. Wave B2w
- * extends the surface with `writeFile` / `mkdir` / `rm` / `flush` so
- * page-side callers (e.g. the session freezer) can mutate the
- * worker-owned VFS through the same wire.
+ * Exposes `readDir` / `readFile` / `stat` from the worker (which
+ * owns the ZenFS/OPFS VFS) over the existing kernel RPC transport
+ * so the page can observe the VFS without touching OPFS itself.
+ * Also extends the surface with `writeFile` / `mkdir` / `rm` /
+ * `flush` so page-side callers (e.g. the session freezer) can
+ * mutate the worker-owned VFS through the same wire.
  *
  * Co-resides with `OffscreenBridge` and `TerminalSessionHost` on the
  * same kernel port: each subscriber filters by the messages it cares
@@ -38,10 +37,10 @@
  * `EACCES` so a stray `WritableVfsClient` against a read-only host
  * fails fast rather than hanging.
  *
- * Wave B2w wiring is flag-gated by `slicc_opfs_vfs === 'opfs'` at the
- * call site (kernel-worker / offscreen boot). When the flag is off, no
- * page-side consumer subscribes and the new write request types fan
- * out into nobody — existing behavior is unchanged.
+ * Write-side wiring is flag-gated by `slicc_opfs_vfs === 'opfs'` at
+ * the call site (kernel-worker / offscreen boot). When the flag is
+ * off, no page-side consumer subscribes and the new write request
+ * types fan out into nobody — existing behavior is unchanged.
  */
 
 import type {
@@ -92,8 +91,8 @@ export interface VfsRpcHostOptions {
    */
   client: LocalVfsClient;
   /**
-   * Optional writable VFS backend (Wave B2w — `slicc_opfs_vfs === 'opfs'`
-   * gates wiring at the caller). When wired, the host accepts
+   * Optional writable VFS backend (`slicc_opfs_vfs === 'opfs'` gates
+   * wiring at the caller). When wired, the host accepts
    * `vfs-write-file` / `vfs-mkdir` / `vfs-rm` / `vfs-flush` request
    * envelopes and dispatches them. When absent, write requests are
    * answered with an `EACCES` failure envelope so a stray
@@ -287,7 +286,7 @@ class VfsRpcHost {
   }
 
   // -------------------------------------------------------------------------
-  // Write-side handlers (Wave B2w)
+  // Write-side handlers
   // -------------------------------------------------------------------------
 
   private async handleWriteRequest(req: VfsWriteRequestMsg): Promise<void> {

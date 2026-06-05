@@ -1,6 +1,6 @@
 /**
  * Tests for `RemoteVfsClient` — the page-side `LocalVfsClient`
- * implementation backed by the kernel transport (Wave B2).
+ * implementation backed by the kernel transport.
  *
  * Pins:
  *  - readDir / readFile (utf-8 + binary) / stat round-trip end-to-end

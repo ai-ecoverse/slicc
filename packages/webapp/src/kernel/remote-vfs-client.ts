@@ -1,11 +1,10 @@
 /**
  * `RemoteVfsClient` — page-side `LocalVfsClient` whose backing store is
- * the worker-side `VfsRpcHost` (Wave B1) over a shared `KernelTransport`.
+ * the worker-side `VfsRpcHost` over a shared `KernelTransport`.
  *
- * Wave B2 of the worker-owned-OPFS migration (blueprint note d8860197):
- * with `slicc_opfs_vfs === 'opfs'`, the page can no longer reach OPFS
- * directly, so panel-side file-browser / memory reads route through the
- * kernel transport. The wire shape is defined in
+ * With `slicc_opfs_vfs === 'opfs'`, the page can no longer reach
+ * OPFS directly, so panel-side file-browser / memory reads route
+ * through the kernel transport. The wire shape is defined in
  * `chrome-extension/src/messages.ts` (`VfsReadRequestMsg` /
  * `VfsReadResultMsg`); the host-side responder is `VfsRpcHost`.
  *

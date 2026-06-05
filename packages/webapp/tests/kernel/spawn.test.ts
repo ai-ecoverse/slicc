@@ -165,10 +165,10 @@ describe('bootstrapKernelWorker', () => {
   });
 
   it('routes kernel-migration-started/finished to the splash callbacks', async () => {
-    // Wave C3 — the worker posts these raw on the kernel port (same
-    // shape as `kernel-worker-ready`); the page-side listener
-    // dispatches them to the optional callbacks without disturbing
-    // the `ready` resolution.
+    // The worker posts these raw on the kernel port (same shape as
+    // `kernel-worker-ready`); the page-side listener dispatches them
+    // to the optional callbacks without disturbing the `ready`
+    // resolution.
     let stashedKernelPort: MessagePort | null = null;
     const worker: WorkerLike = {
       postMessage: (message: unknown) => {

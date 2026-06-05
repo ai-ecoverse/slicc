@@ -205,8 +205,8 @@ describe('scheduleBackgroundEnrichment — boot-time enrichment scheduler', () =
     expect(readFile).toHaveBeenCalled();
   });
 
-  // Wave B4a: gate the enrichment write path on OPFS leadership. A
-  // follower tab's `writableFs` is the page-side LFS shadow which the
+  // Gate the enrichment write path on OPFS leadership. A follower
+  // tab's `writableFs` is the page-side LFS shadow which the
   // worker-OPFS-backed UI never reads → a write here is silently
   // orphaned. The scheduler must short-circuit on followers.
   it('no-ops when isWriter is false (OPFS follower) — no rIC, no setTimeout, no VFS read', async () => {

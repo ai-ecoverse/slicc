@@ -1,9 +1,10 @@
 /**
- * Wave B4b — `persistWelcomeSentinel` gating tests.
+ * `persistWelcomeSentinel` gating tests.
  *
  * Confirms the three branches the call-site in `main.ts` relies on:
  *   - flag off  → write through the supplied VFS (which is `localFs` in
- *                 the production wiring, so byte-identical to pre-B4b)
+ *                 the production wiring, so byte-identical to the
+ *                 local-VFS baseline)
  *   - flag on + leader   → write through the writable VFS (which is the
  *                          `RemoteWritableVfsClient` page→worker bridge)
  *   - flag on + follower → no-op (skip the write so the marker isn't

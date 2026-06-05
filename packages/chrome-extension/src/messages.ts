@@ -388,7 +388,7 @@ export interface LocalStorageClearMsg {
 }
 
 // ---------------------------------------------------------------------------
-// VFS read RPCs (Wave B1 — issue #d8860197)
+// VFS read RPCs
 // ---------------------------------------------------------------------------
 // Read-only RPC surface that lets the panel observe the worker-owned VFS
 // without touching OPFS directly. Mirrors the `LocalVfsClient` interface
@@ -492,7 +492,7 @@ export type VfsStatResultMsg =
 export type VfsReadResultMsg = VfsReadDirResultMsg | VfsReadFileResultMsg | VfsStatResultMsg;
 
 // ---------------------------------------------------------------------------
-// VFS write RPCs (Wave B2w — issue #d8860197)
+// VFS write RPCs
 // ---------------------------------------------------------------------------
 // Write-side RPC surface that lets the panel mutate the worker-owned VFS
 // without touching OPFS directly. Mirrors the writable subset of
@@ -773,9 +773,10 @@ export type PanelToOffscreenMessage =
   // Panel-driven VFS read RPCs. Routed by the worker's `VfsRpcHost`,
   // ignored by `OffscreenBridge`. Defined above as `VfsReadRequestMsg`.
   | VfsReadRequestMsg
-  // Panel-driven VFS write RPCs (Wave B2w). Routed by the worker's
-  // `VfsRpcHost` when a writable backend is wired; otherwise the host
-  // replies with an EACCES failure envelope. Ignored by `OffscreenBridge`.
+  // Panel-driven VFS write RPCs. Routed by the worker's
+  // `VfsRpcHost` when a writable backend is wired; otherwise the
+  // host replies with an EACCES failure envelope. Ignored by
+  // `OffscreenBridge`.
   | VfsWriteRequestMsg
   | DetachedPopoutRequestMsg
   | DetachedClaimMsg
@@ -1103,8 +1104,8 @@ export type OffscreenToPanelMessage =
   // VFS read RPC responses emitted by the worker's `VfsRpcHost`.
   // Defined above as `VfsReadResultMsg`.
   | VfsReadResultMsg
-  // VFS write RPC responses emitted by the worker's `VfsRpcHost`
-  // (Wave B2w). Defined above as `VfsWriteResultMsg`.
+  // VFS write RPC responses emitted by the worker's `VfsRpcHost`.
+  // Defined above as `VfsWriteResultMsg`.
   | VfsWriteResultMsg
   | LeaderModeChangedMsg
   | LeaderTrayResetResponseMsg;

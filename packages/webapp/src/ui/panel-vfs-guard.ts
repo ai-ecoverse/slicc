@@ -1,10 +1,10 @@
 /**
- * Wave B5 / F1: the offscreen document is the sole canonical
- * `VirtualFS` constructor in extension mode; the side panel must
- * stay a pure RPC consumer of the worker's `VfsRpcHost`.
- * Constructing a second OPFS-backed `VirtualFS` from the panel
- * would race the offscreen on the same underlying storage and
- * undermine the canonical-owner invariant.
+ * The offscreen document is the sole canonical `VirtualFS`
+ * constructor in extension mode; the side panel must stay a pure
+ * RPC consumer of the worker's `VfsRpcHost`. Constructing a second
+ * OPFS-backed `VirtualFS` from the panel would race the offscreen
+ * on the same underlying storage and undermine the canonical-owner
+ * invariant.
  *
  * This is intentionally **convention enforcement plus a guard log** —
  * not a runtime block. We still allow `VirtualFS.create` to run (for
@@ -31,7 +31,7 @@ export function warnIfPanelVfsConstructionUnderOpfs(
 ): boolean {
   if (backend !== 'opfs') return false;
   logger.warn(
-    '[Wave B5] Side panel attempted VirtualFS.create with an OPFS-backed instance. ' +
+    'Side panel attempted VirtualFS.create with an OPFS-backed instance. ' +
       'Offscreen must be the sole VFS constructor; the panel should stay an RPC consumer.'
   );
   return true;

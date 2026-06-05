@@ -1,6 +1,5 @@
 /**
- * Tests for `VfsRpcHost` — the worker-side VFS read RPC surface
- * (Wave B1; blueprint note d8860197).
+ * Tests for `VfsRpcHost` — the worker-side VFS read RPC surface.
  *
  * Pins:
  *  - readDir / readFile / stat round-trip over a real MessageChannel

@@ -40,7 +40,7 @@ describe('FileBrowserPanel', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Wave B2: file browser renders via RemoteVfsClient over a real
+// File browser renders via RemoteVfsClient over a real
 // MessageChannel + VfsRpcHost. Pins the end-to-end RPC path the
 // standalone-worker uses when `slicc_opfs_vfs === 'opfs'`.
 // ---------------------------------------------------------------------------
@@ -95,7 +95,7 @@ function setupPanelOverRpc(): RpcCtx {
   };
 }
 
-describe('FileBrowserPanel — renders via RemoteVfsClient + VfsRpcHost (Wave B2)', () => {
+describe('FileBrowserPanel — renders via RemoteVfsClient + VfsRpcHost', () => {
   let ctx: RpcCtx | null = null;
   afterEach(() => {
     ctx?.dispose();

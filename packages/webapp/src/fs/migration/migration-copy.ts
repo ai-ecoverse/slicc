@@ -1,15 +1,16 @@
 /**
- * Wave C2 — Copy a legacy LightningFS manifest into OPFS, verify
- * file-count (presence) parity, then atomically write the
- * `/.slicc-migrated` sentinel as the final operation.
+ * Copy a legacy LightningFS manifest into OPFS, verify file-count
+ * (presence) parity, then atomically write the `/.slicc-migrated`
+ * sentinel as the final operation.
  *
- * This module is **pure transport**: all I/O is injected. The C1
- * manifest is taken as input (no re-walk of the legacy store), file
- * bytes are read strictly READ-ONLY from the legacy LFS (the IDB is
- * the rollback escape hatch and must never be mutated; deletion is
- * deferred to C5), bytes are written into OPFS via the injected
- * target writer, the OPFS tree is then walked to confirm each
- * manifest file is present, and only on success does the
+ * This module is **pure transport**: all I/O is injected. The
+ * detection manifest is taken as input (no re-walk of the legacy
+ * store), file bytes are read strictly READ-ONLY from the legacy
+ * LFS (the IDB is the rollback escape hatch and must never be
+ * mutated; deletion is deferred to a separate cleanup step), bytes
+ * are written into OPFS via the injected target writer, the OPFS
+ * tree is then walked to confirm each manifest file is present, and
+ * only on success does the
  * caller-supplied `writeSentinel` run. Byte totals are still
  * collected and logged as a diagnostic but do NOT gate the sentinel:
  * concurrent boot writes (orchestrator defaults, sidecar metadata)
@@ -33,7 +34,7 @@ export interface LegacyFileReader {
 /**
  * OPFS-side writer. Methods mirror the subset of ZenFS `fs.promises`
  * we need: idempotent recursive `mkdir`, byte `writeFile`, and
- * `symlink` (lands in the Wave A metadata sidecar).
+ * `symlink` (lands in the OPFS metadata sidecar).
  */
 export interface OpfsTargetWriter {
   mkdir(path: string): Promise<void>;

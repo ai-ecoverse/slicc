@@ -1,6 +1,6 @@
 /**
  * Tests for `WritableVfsClient` and the write-side extensions to
- * `VfsRpcHost` (Wave B2w; blueprint note d8860197).
+ * `VfsRpcHost`.
  *
  * Pins:
  *  - writeFile (utf-8 + binary) / mkdir / rm / flush round-trip over a

@@ -167,7 +167,7 @@ short name resolves on the PATH.
     return err(`mcp add: a server named "${name}" already exists`);
   }
 
-  // Phase 1: bare initialize (no auth)
+  // Step 1: bare initialize (no auth)
   const { McpClient, McpAuthRequiredError } = await import('../mcp/client.js');
   let client = new McpClient({ url, fetchImpl: deps.fetchImpl });
   let authBlock: McpServerEntry['auth'];
@@ -176,9 +176,9 @@ short name resolves on the PATH.
     await client.initialize();
   } catch (e) {
     if (!(e instanceof McpAuthRequiredError)) throw e;
-    // Phase 2: discover + register + run PKCE flow
+    // Step 2: discover + register + run PKCE flow
     authBlock = await runOAuthForAdd(url, name, e.resourceMetadataUrl, deps);
-    // Phase 3: retry initialize with token
+    // Step 3: retry initialize with token
     client = new McpClient({
       url,
       fetchImpl: deps.fetchImpl,
@@ -187,11 +187,11 @@ short name resolves on the PATH.
     await client.initialize();
   }
 
-  // Phase 4: fetch tools + apps
+  // Step 4: fetch tools + apps
   const tools = await client.toolsList();
   const apps = await client.appsList();
 
-  // Phase 5: persist
+  // Step 5: persist
   const now = new Date().toISOString();
   // Note: do NOT persist `sessionId`. Sessions are issued by the server on
   // every `initialize` and don't survive across reloads — sending a stale
@@ -206,13 +206,13 @@ short name resolves on the PATH.
   };
   await setServer(name, entry, deps.fs);
 
-  // Phase 6: alias shim
+  // Step 6: alias shim
   await writeAliasShim(name, deps);
 
-  // Phase 7: materialize Apps as sprinkles (best-effort)
+  // Step 7: materialize Apps as sprinkles (best-effort)
   const sprinkles = await materializeAppSprinklesSafe(name, apps, deps);
 
-  // Phase 8: register the provider in-session (if we set up OAuth)
+  // Step 8: register the provider in-session (if we set up OAuth)
   if (authBlock) {
     const { registerMcpProvider } = await import('../mcp/provider.js');
     registerMcpProvider({ name, serverUrl: url, auth: authBlock });

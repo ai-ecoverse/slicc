@@ -6,10 +6,10 @@
  * isomorphic-git the same way as the local OPFS/InMemory tree, and the
  * watcher / mount-index notifications fire normally.
  *
- * Wave F2: this adapter previously reached past `VirtualFS` for
- * non-mounted paths via the (now-removed) `getLightningFS()` escape
- * hatch. The fast-path shortcut is gone; `VirtualFS` itself owns
- * symlink resolution and watcher notification for every op.
+ * This adapter previously reached past `VirtualFS` for non-mounted
+ * paths via the (now-removed) `getLightningFS()` escape hatch. The
+ * fast-path shortcut is gone; `VirtualFS` itself owns symlink
+ * resolution and watcher notification for every op.
  */
 
 import type { VirtualFS } from '../fs/index.js';

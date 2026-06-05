@@ -1,8 +1,8 @@
 /**
- * Wave B6 (blueprint note d8860197): cross-tab OPFS leader election.
+ * Cross-tab OPFS leader election.
  *
  * `createSyncAccessHandle` is exclusive per OPFS file across all tabs
- * and workers (Spike 2). With the worker-owned-OPFS regime
+ * and workers. With the worker-owned-OPFS regime
  * (`slicc_opfs_vfs === 'opfs'`) every standalone tab would spawn its
  * own kernel-worker and race for the same OPFS handles on boot. This
  * module elects a single writer using a `BroadcastChannel`
@@ -26,8 +26,7 @@
  * Intentionally narrow: no leader hand-off, no liveness/failover, no
  * write-tool changes. The non-leader tab's UI gates writes via the
  * `OpfsLeaderElectionResult.isLeader` flag (banner in
- * `opfs-readonly-banner.ts`); the heavy two-tab integration check is
- * Wave B7.
+ * `opfs-readonly-banner.ts`).
  */
 
 /**

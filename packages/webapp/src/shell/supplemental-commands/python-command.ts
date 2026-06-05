@@ -3,7 +3,7 @@
  * inside a `kind:'py'` realm. SIGKILL terminates the realm worker
  * synchronously (`worker.terminate()`), so a runaway
  * `while True: pass` exits 137 in ~50 ms — the same hard-kill
- * guarantee `node -e` got from Phase 8.
+ * guarantee `node -e` provides.
  *
  * The realm worker (`kernel/realm/py-realm-worker.ts`) handles
  * `loadPyodide`, VFS↔Pyodide-FS sync via the `vfs` RPC channel,
@@ -101,17 +101,16 @@ export async function computePyodideMountDirs(
 }
 
 /**
- * Wave D1 / F1: the kernel worker's VFS lives at
- * `OPFS-root/slicc-fs/`. We pass the dbName through
- * `RealmInitMsg.opfsMountDbName` so the Python realm worker (a
- * separate `DedicatedWorker`) can resolve the same OPFS subtree
- * and mount it via the in-tree `OPFS_SYNC_FS` plugin. The dbName
- * mirrors `Orchestrator`'s primary `VirtualFS.create({ dbName:
- * 'slicc-fs' })` call site — kept in sync explicitly rather than
- * imported to avoid pulling the orchestrator into this command.
+ * The kernel worker's VFS lives at `OPFS-root/slicc-fs/`. We pass
+ * the dbName through `RealmInitMsg.opfsMountDbName` so the Python
+ * realm worker (a separate `DedicatedWorker`) can resolve the same
+ * OPFS subtree and mount it via the in-tree `OPFS_SYNC_FS` plugin.
+ * The dbName mirrors `Orchestrator`'s primary
+ * `VirtualFS.create({ dbName: 'slicc-fs' })` call site — kept in
+ * sync explicitly rather than imported to avoid pulling the
+ * orchestrator into this command.
  *
- * Wave F1 removed the `slicc_opfs_vfs` boot flag: production
- * always selects OPFS so the dbName is always set. The
+ * Production always selects OPFS so the dbName is always set. The
  * capability check exists only so Node-based test environments
  * without `navigator.storage.getDirectory` fall through to the
  * legacy `walkTree` sync path (same env-fallback used by

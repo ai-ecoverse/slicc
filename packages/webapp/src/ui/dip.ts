@@ -208,8 +208,8 @@ const BRIDGE_SCRIPT = `(function() {
         if (actionData) { try { actionData = JSON.parse(actionData); } catch(ex) {} }
         /* Picker hint (e.g. data-picker="directory") needs the parent to
            run File System Access API on the click activation chain.
-           Phase 2b.6 — forward as a separate message so the parent can
-           run showDirectoryPicker, stash the handle in IDB, then dispatch
+           Forward as a separate message so the parent can run
+           showDirectoryPicker, stash the handle in IDB, then dispatch
            the lick with the IDB key. */
         var picker = el.dataset.picker;
         if (picker) {
@@ -484,12 +484,12 @@ export function mountDip(
     } else if (msg.type === 'dip-open-link') {
       openDipLink(msg.url);
     } else if (msg.type === 'dip-picker-action') {
-      // Phase 2b.6 — picker buttons (`data-picker="directory"`)
-      // post their click here instead of inline `dip-lick` so the
-      // parent can run `showDirectoryPicker` on the propagated
-      // user activation, stash the handle in IDB, then dispatch
-      // the lick with `{ handleInIdb, idbKey, dirName }`. Until
-      // this case landed, the message arrived at `mountDip` but
+      // Picker buttons (`data-picker="directory"`) post their click
+      // here instead of inline `dip-lick` so the parent can run
+      // `showDirectoryPicker` on the propagated user activation,
+      // stash the handle in IDB, then dispatch the lick with
+      // `{ handleInIdb, idbKey, dirName }`. Until this case landed,
+      // the message arrived at `mountDip` but
       // nothing dispatched to `handleDipPickerAction` — every
       // mount-dialog "Select directory" click was a silent no-op.
       void handleDipPickerAction(msg, onLick);
@@ -841,7 +841,7 @@ export function disposeDips(instances: DipInstance[]): void {
  * `FileSystemDirectoryHandle` in the shared mount-handle IDB store,
  * then forward the click as an `onLick` carrying `{ handleInIdb,
  * idbKey, dirName }` so a worker-resident `LocalMountBackend.create`
- * (Phase 2b.6) can pick it up via `loadAndClearPendingHandle`.
+ * can pick it up via `loadAndClearPendingHandle`.
  *
  * In standalone-CLI (non-worker) mode the same plumbing works: the
  * agent's `onAction` handler already has the `handleInIdb` branch and

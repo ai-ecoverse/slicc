@@ -1,5 +1,5 @@
 /**
- * Wave B6 (blueprint note d8860197): cross-tab OPFS leader election.
+ * Cross-tab OPFS leader election.
  *
  * Pins:
  *  - Lone tab → becomes leader after the timeout elapses.
@@ -87,7 +87,7 @@ afterEach(() => {
   FakeChannel.reset();
 });
 
-describe('electOpfsLeader (Wave B6)', () => {
+describe('electOpfsLeader', () => {
   it('lone tab becomes leader after the election timeout', async () => {
     const result = await electOpfsLeader({
       channelName: CH,

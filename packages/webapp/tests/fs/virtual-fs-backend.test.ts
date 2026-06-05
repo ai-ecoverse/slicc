@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FsError, type FsErrorCode } from '../../src/fs/types.js';
 import { resolveVfsBackendFromEnv, VirtualFS } from '../../src/fs/virtual-fs.js';
 
-describe('VirtualFS — backend resolution (Wave F2)', () => {
+describe('VirtualFS — backend resolution', () => {
   let vfs: VirtualFS;
   beforeEach(async () => {
     vfs = await VirtualFS.create({ dbName: 'test-vfs-backend', wipe: true });
@@ -13,9 +13,9 @@ describe('VirtualFS — backend resolution (Wave F2)', () => {
   });
 
   it("falls back to 'memory' in Node test envs without OPFS support", () => {
-    // Wave F2 swapped the Node-test fallback off LightningFS onto
-    // ZenFS' `InMemory` backend. Node tests have no
-    // `navigator.storage`, so resolution falls through to `'memory'`.
+    // The Node-test fallback uses ZenFS' `InMemory` backend (no
+    // LightningFS). Node tests have no `navigator.storage`, so
+    // resolution falls through to `'memory'`.
     expect(vfs.backend).toBe('memory');
   });
 
@@ -54,7 +54,7 @@ describe('VirtualFS — backend resolution (Wave F2)', () => {
   });
 });
 
-describe('VirtualFS — ZenFS ErrnoError → FsError mapping (Wave A4)', () => {
+describe('VirtualFS — ZenFS ErrnoError → FsError mapping', () => {
   let vfs: VirtualFS;
   beforeEach(async () => {
     vfs = await VirtualFS.create({ dbName: 'test-vfs-errno', wipe: true });

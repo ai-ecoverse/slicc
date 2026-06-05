@@ -559,34 +559,33 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
 
   let selectedScoop: RegisteredScoop | null = null;
 
-  // Wave B5 (blueprint note d8860197): the offscreen document is the
-  // sole VFS constructor under `slicc_opfs_vfs === 'opfs'`. Emit a
-  // startup warning before the panel runs its own `VirtualFS.create`
-  // so the convention violation surfaces in dev/QA — no runtime block,
-  // since the LFS-shadow + mount-table-recovery paths still rely on
-  // the panel-side instance with the flag off.
+  // The offscreen document is the sole VFS constructor under
+  // `slicc_opfs_vfs === 'opfs'`. Emit a startup warning before the
+  // panel runs its own `VirtualFS.create` so the convention violation
+  // surfaces in dev/QA — no runtime block, since the LFS-shadow +
+  // mount-table-recovery paths still rely on the panel-side instance
+  // with the flag off.
   const panelBackend = resolveVfsBackendFromEnv();
   warnIfPanelVfsConstructionUnderOpfs(panelBackend, log);
 
-  // Wave B2 (blueprint note d8860197): with `slicc_opfs_vfs === 'opfs'`
-  // the worker owns the canonical OPFS-backed VFS, so panel reads must
-  // route through the kernel transport's `VfsRpcHost` instead of
-  // hitting OPFS twice from the page. Defer the file-browser wiring
-  // until after `client` is constructed in that case; with the flag
-  // off, keep the historical local-VFS path so the LFS shadow store
-  // still drives the file browser.
+  // With `slicc_opfs_vfs === 'opfs'` the worker owns the canonical
+  // OPFS-backed VFS, so panel reads must route through the kernel
+  // transport's `VfsRpcHost` instead of hitting OPFS twice from the
+  // page. Defer the file-browser wiring until after `client` is
+  // constructed in that case; with the flag off, keep the historical
+  // local-VFS path so the LFS shadow store still drives the file
+  // browser.
   const useRpcVfs = panelBackend === 'opfs';
 
   // Create a local VFS instance for the file browser and terminal.
   // IndexedDB is shared across all same-origin extension pages, so this
   // reads/writes the same data as the offscreen document's VFS.
   //
-  // Wave B4 (blueprint note d8860197): under `slicc_opfs_vfs === 'opfs'`
-  // force the page-side VFS to the InMemory backend so it no longer
-  // races the worker for OPFS handles (the worker is the canonical
-  // OPFS owner; the page keeps an in-process shadow only for legacy
-  // consumers like mount-recovery, attachment writer, and memory-panel
-  // reads). Wave F2 swapped LFS → ZenFS InMemory; the page shadow no
+  // Under `slicc_opfs_vfs === 'opfs'` force the page-side VFS to the
+  // InMemory backend so it no longer races the worker for OPFS handles
+  // (the worker is the canonical OPFS owner; the page keeps an
+  // in-process shadow only for legacy consumers like mount-recovery,
+  // attachment writer, and memory-panel reads). The page shadow no
   // longer persists across reloads.
   const localFs = await VirtualFS.create({
     dbName: 'slicc-fs',
@@ -622,11 +621,11 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   // Listen for preview SW file-read requests (falls back here for mounted dirs).
   // Uses BroadcastChannel because the SW's `/preview/` scope excludes this page.
   //
-  // Wave B3 (blueprint note d8860197): the reader is held in a `let` so that
-  // when `slicc_opfs_vfs === 'opfs'` the swap below (after `client` is up)
+  // The reader is held in a `let` so that when
+  // `slicc_opfs_vfs === 'opfs'` the swap below (after `client` is up)
   // rewires this responder to the worker's `VfsRpcHost` via the shared
-  // kernel transport. With the flag off, `localFs` stays in place and the
-  // path is byte-identical to pre-Wave-B behavior.
+  // kernel transport. With the flag off, `localFs` stays in place and
+  // the path is byte-identical to the local-VFS baseline.
   let previewVfsReader: LocalVfsClient = localFs;
   const previewVfsCh = new BroadcastChannel('preview-vfs');
   installPreviewVfsResponder({
@@ -887,16 +886,16 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   // Wire local VFS to client so memory panel can read CLAUDE.md files
   client.setLocalFS(localFs);
 
-  // Wave B2/B3: with `slicc_opfs_vfs === 'opfs'`, route file-browser reads
-  // AND the preview-vfs BroadcastChannel responder through the offscreen's
+  // With `slicc_opfs_vfs === 'opfs'`, route file-browser reads AND
+  // the preview-vfs BroadcastChannel responder through the offscreen's
   // `VfsRpcHost` instead of touching OPFS from the panel. The transport
   // is shared — the RemoteVfsClient only subscribes to `vfs-*-result`
   // envelopes and does not perturb the existing agent-event / scoop-list /
   // sprinkle-op routing.
   //
-  // Wave B4: also construct a `RemoteWritableVfsClient` so panel-side
-  // writers (session freezer, pending-enrichment) route to the offscreen
-  // VFS over the same wire. The extension is a singleton writer (one
+  // Also construct a `RemoteWritableVfsClient` so panel-side writers
+  // (session freezer, pending-enrichment) route to the offscreen VFS
+  // over the same wire. The extension is a singleton writer (one
   // offscreen document), so we do not gate on an OPFS leader election
   // here — the panel is always the canonical writer relative to the
   // offscreen.
@@ -1743,10 +1742,10 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   // `requestIdleCallback` (or `setTimeout(0)` as a fallback) so a slow
   // enrichment never blocks first paint.
   //
-  // Wave B4: routes through `writableFs` so under `slicc_opfs_vfs=opfs`
-  // the rename + index update lands on the worker-owned OPFS via the
+  // Routes through `writableFs` so under `slicc_opfs_vfs=opfs` the
+  // rename + index update lands on the worker-owned OPFS via the
   // `WritableVfsClient`. Flag off: `writableFs === localFs` (byte-
-  // identical to pre-B4 behavior).
+  // identical to the local-VFS baseline).
   scheduleBackgroundEnrichment(writableFs);
 }
 
@@ -1789,10 +1788,10 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   const { installPageStorageSync } = await import('../kernel/page-storage-sync.js');
   const { VirtualFS, resolveVfsBackendFromEnv } = await import('../fs/index.js');
   const { BrowserAPI } = await import('../cdp/index.js');
-  // Wave C3 — page-side companion to the worker's migration progress
-  // signals. The controller is allocated lazily on the first signal
-  // (see `spawnKernelWorker` callbacks below); the import is cheap and
-  // a no-op when the flag is off because the worker never posts the
+  // Page-side companion to the worker's migration progress signals.
+  // The controller is allocated lazily on the first signal (see
+  // `spawnKernelWorker` callbacks below); the import is cheap and a
+  // no-op when the flag is off because the worker never posts the
   // start signal in that case.
   const { createMigrationSplash } = await import('./migration-splash.js');
 
@@ -1872,25 +1871,24 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   await layout.panels.chat.initSession('session-cone');
   log.info('Session initialized (kernel-worker mode)');
 
-  // Wave B2 (blueprint note d8860197): with `slicc_opfs_vfs === 'opfs'`,
-  // the worker owns the canonical OPFS-backed VFS and panel reads must
-  // route through the kernel transport's `VfsRpcHost`. Defer the
-  // file-browser wiring until after `client` is available; with the
-  // flag off, keep the historical local-VFS path so the LFS shadow
-  // still drives the file browser.
+  // With `slicc_opfs_vfs === 'opfs'`, the worker owns the canonical
+  // OPFS-backed VFS and panel reads must route through the kernel
+  // transport's `VfsRpcHost`. Defer the file-browser wiring until
+  // after `client` is available; with the flag off, keep the
+  // historical local-VFS path so the LFS shadow still drives the
+  // file browser.
   const useRpcVfs = resolveVfsBackendFromEnv() === 'opfs';
 
   // Local VFS for the file browser + memory panel + preview-vfs fallback.
   // Same IndexedDB as the worker's VFS, so writes from the agent are
   // visible in the file browser without round-tripping the wire.
   //
-  // Wave B4 (blueprint note d8860197): under `slicc_opfs_vfs === 'opfs'`
-  // force the page-side VFS to the InMemory backend so it no longer
-  // races the worker for OPFS handles (the worker is the canonical
-  // OPFS owner; the page keeps an in-process shadow for legacy
-  // consumers like mount-recovery and attachment writer). Wave F2
-  // swapped LFS → ZenFS InMemory; the page shadow no longer persists
-  // across reloads.
+  // Under `slicc_opfs_vfs === 'opfs'` force the page-side VFS to the
+  // InMemory backend so it no longer races the worker for OPFS handles
+  // (the worker is the canonical OPFS owner; the page keeps an
+  // in-process shadow for legacy consumers like mount-recovery and
+  // attachment writer). The page shadow no longer persists across
+  // reloads.
   const localFs = await VirtualFS.create({
     dbName: 'slicc-fs',
     ...(useRpcVfs ? { backend: 'memory' as const } : {}),
@@ -1899,15 +1897,15 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
     layout.panels.fileBrowser.setFs(localFs);
   }
 
-  // Wave B6 (blueprint note d8860197): under the OPFS flag, run the
-  // cross-tab `slicc-opfs-leader` election BEFORE any code path
-  // that opens an OPFS handle. `createSyncAccessHandle` is exclusive
-  // per file (Spike 2); racing two kernel-workers on the same OPFS
-  // tree corrupts the store. First-writer-wins — newer tabs become
-  // followers and surface a non-blocking read-only banner. The full
+  // Under the OPFS flag, run the cross-tab `slicc-opfs-leader`
+  // election BEFORE any code path that opens an OPFS handle.
+  // `createSyncAccessHandle` is exclusive per file; racing two
+  // kernel-workers on the same OPFS tree corrupts the store.
+  // First-writer-wins — newer tabs become followers and surface a
+  // non-blocking read-only banner. The election + banner +
+  // `__slicc_opfs_leader` state surface gives downstream
   // worker-side gating (skipping OPFS open / cross-tab read routing)
-  // is the Wave B7 heavy harness; B6 lands the election + banner +
-  // `__slicc_opfs_leader` state surface so B7 has a single hook.
+  // a single hook.
   let opfsLeader: { isLeader: boolean; dispose: () => void } = {
     isLeader: true,
     dispose: () => {},
@@ -1954,11 +1952,11 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // when the worker hasn't booted yet or when the request resolves
   // against a panel-only mount.
   //
-  // Wave B3 (blueprint note d8860197): the reader is held in a `let` so
-  // that when `slicc_opfs_vfs === 'opfs'` the swap below (after `client`
-  // is up) rewires this responder to the kernel worker's `VfsRpcHost`
-  // via the shared transport. With the flag off, `localFs` stays in
-  // place and the path is byte-identical to pre-Wave-B behavior.
+  // The reader is held in a `let` so that when
+  // `slicc_opfs_vfs === 'opfs'` the swap below (after `client` is up)
+  // rewires this responder to the kernel worker's `VfsRpcHost` via
+  // the shared transport. With the flag off, `localFs` stays in place
+  // and the path is byte-identical to the local-VFS baseline.
   let previewVfsReader: LocalVfsClient = localFs;
   const previewVfsCh = new BroadcastChannel('preview-vfs');
   installPreviewVfsResponder({
@@ -2071,7 +2069,7 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   const { OffscreenClient } = await import('./offscreen-client.js');
   void OffscreenClient; // type import for the `client` variable above
 
-  // Wave C3 — lazily-allocated splash controller. We don't construct
+  // Lazily-allocated migration splash controller. We don't construct
   // it eagerly because the migration only runs on the OPFS flag path
   // AND only when the sentinel is absent; the controller is created
   // on first `onMigrationStart` so flag-off boots never touch
@@ -2244,24 +2242,24 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // mode — only the extension path was calling setLocalFS before.
   client.setLocalFS(localFs);
 
-  // Wave B2/B3: with `slicc_opfs_vfs === 'opfs'`, route file-browser reads
-  // AND the preview-vfs BroadcastChannel responder through the kernel
-  // worker's `VfsRpcHost` (deferred from the initial wiring above so we
-  // can reach `client.getTransport()`).
+  // With `slicc_opfs_vfs === 'opfs'`, route file-browser reads AND
+  // the preview-vfs BroadcastChannel responder through the kernel
+  // worker's `VfsRpcHost` (deferred from the initial wiring above so
+  // we can reach `client.getTransport()`).
   //
-  // Wave B2b: the scoops-panel frozen-sessions index + frozen-archive
-  // reader also need to read through the worker under the flag, since
-  // the worker owns the canonical OPFS-backed view and the page-side
+  // The scoops-panel frozen-sessions index + frozen-archive reader
+  // also need to read through the worker under the flag, since the
+  // worker owns the canonical OPFS-backed view and the page-side
   // `localFs` shadow can be stale. `panelReadVfs` is the read-only
   // handle handed to those consumers below.
   //
-  // Wave B4: also construct a `RemoteWritableVfsClient` so page-side
-  // writers (session freezer, pending-enrichment) route through the
-  // worker's `VfsRpcHost` write surface (B2w) and land on the canonical
-  // OPFS store. Only the OPFS leader (B6 election) is the writer —
-  // followers fall back to `localFs` (LFS shadow) so the New Session
-  // gesture doesn't hang on EACCES under contention. Flag off:
-  // `writableFs === localFs` (byte-identical to pre-B4 behavior).
+  // Also construct a `RemoteWritableVfsClient` so page-side writers
+  // (session freezer, pending-enrichment) route through the worker's
+  // `VfsRpcHost` write surface and land on the canonical OPFS store.
+  // Only the OPFS leader is the writer — followers fall back to
+  // `localFs` (LFS shadow) so the New Session gesture doesn't hang on
+  // EACCES under contention. Flag off: `writableFs === localFs`
+  // (byte-identical to the local-VFS baseline).
   let panelReadVfs: LocalVfsClient = localFs;
   let writableFs: WritableVfsClient = localFs;
   if (useRpcVfs) {
@@ -2293,13 +2291,13 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   //   - `freeze === false`                      → discard (long press).
   //     No archive entry is written.
   //
-  // Wave B4a: under `slicc_opfs_vfs=opfs`, only the OPFS leader (B6
-  // election) may write the archive — followers' `writableFs` is the
-  // page-side LFS shadow which the worker-OPFS-backed UI never reads,
-  // so a follower archive would be silently orphaned. Make the
-  // affordance a no-op on followers (matches the B6 read-only banner).
-  // Flag off: `opfsLeader.isLeader === true` (no election ran), so the
-  // gate is unreachable and behavior stays byte-identical.
+  // Under `slicc_opfs_vfs=opfs`, only the OPFS leader may write the
+  // archive — followers' `writableFs` is the page-side LFS shadow
+  // which the worker-OPFS-backed UI never reads, so a follower
+  // archive would be silently orphaned. Make the affordance a no-op
+  // on followers (matches the read-only banner). Flag off:
+  // `opfsLeader.isLeader === true` (no election ran), so the gate is
+  // unreachable and behavior stays byte-identical.
   layout.onClearChat = async (opts) => {
     if (useRpcVfs && !opfsLeader.isLeader) {
       log.info('New session affordance skipped (OPFS follower — read-only tab)');
@@ -2670,13 +2668,13 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       return true;
     }
     if (action === 'shortcut-migrate') {
-      // Wave B4b: route the sentinel write through `writableFs` so under
-      // `slicc_opfs_vfs=opfs` it lands on the worker-owned canonical OPFS
-      // (matching B4's freezer/enrichment reroute). Followers (B6
-      // election non-leader) no-op so the marker isn't silently orphaned
-      // in the page-side LFS shadow (mirrors B4a's enrichment gate).
-      // Flag off: `writableFs === localFs` AND `opfsLeader.isLeader ===
-      // true` (no election ran) → byte-identical to the pre-B4b path.
+      // Route the sentinel write through `writableFs` so under
+      // `slicc_opfs_vfs=opfs` it lands on the worker-owned canonical
+      // OPFS (matching the freezer/enrichment reroute). Non-leader
+      // followers no-op so the marker isn't silently orphaned in the
+      // page-side LFS shadow. Flag off: `writableFs === localFs` AND
+      // `opfsLeader.isLeader === true` (no election ran) →
+      // byte-identical to the local-VFS baseline.
       persistWelcomeSentinel({
         writableFs,
         isWriter: !useRpcVfs || opfsLeader.isLeader,
@@ -3053,7 +3051,7 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       //
       // NOTE: not unit-tested. main.ts has no test scaffold today; building one
       // for this 3-line branch isn't worth the cost. The behavior is covered
-      // indirectly by the live e2b harness (Phase 5.1) — a sandbox booted with
+      // indirectly by the live e2b harness — a sandbox booted with
       // a stale TRAY_JOIN_STORAGE_KEY would join an unreachable follower and
       // /tmp/slicc-join.json would never appear, surfacing in the start poll
       // timeout. If a regression slips, the live harness catches it.
@@ -3538,15 +3536,15 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // path for rationale). Fire-and-forget after the boot-critical wiring
   // is in place so a slow enrichment never blocks first paint.
   //
-  // Wave B4: routes through `writableFs` so the OPFS-leader tab lands
-  // the rename + index update on the worker-owned canonical OPFS via
-  // the `WritableVfsClient`. Followers (and flag-off) reuse `localFs`.
+  // Routes through `writableFs` so the OPFS-leader tab lands the
+  // rename + index update on the worker-owned canonical OPFS via the
+  // `WritableVfsClient`. Followers (and flag-off) reuse `localFs`.
   //
-  // Wave B4a: pass `isWriter` so the scheduler no-ops on followers
-  // under the OPFS flag. Otherwise the enrichment write would land in
-  // the page-side LFS shadow (silent orphan, never seen by the
+  // Pass `isWriter` so the scheduler no-ops on followers under the
+  // OPFS flag. Otherwise the enrichment write would land in the
+  // page-side LFS shadow (silent orphan, never seen by the
   // worker-OPFS sessions index). Flag off → `isWriter: true` (no
-  // election ran), behavior byte-identical to pre-B4a.
+  // election ran), behavior byte-identical to the local-VFS baseline.
   scheduleBackgroundEnrichment(writableFs, { isWriter: !useRpcVfs || opfsLeader.isLeader });
 
   log.info('Standalone kernel-worker UI ready');

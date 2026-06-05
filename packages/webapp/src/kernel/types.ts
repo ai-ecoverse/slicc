@@ -169,7 +169,7 @@ export interface KernelClientFacade {
   // Typed as `LocalVfsClient` (read-only subset) so panels that consume
   // this surface cannot accidentally write through it. A `VirtualFS`
   // instance satisfies `LocalVfsClient` structurally; a worker-backed
-  // `RemoteVfsClient` (Wave B2, `slicc_opfs_vfs=opfs`) is the other
+  // `RemoteVfsClient` (under `slicc_opfs_vfs=opfs`) is the other
   // legitimate producer.
   // -------------------------------------------------------------------------
   setLocalFS(fs: LocalVfsClient): void;

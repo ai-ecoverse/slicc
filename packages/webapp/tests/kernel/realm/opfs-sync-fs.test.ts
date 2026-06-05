@@ -1,16 +1,16 @@
 /**
- * Wave E1 — unit tests for the in-tree `OPFS_SYNC_FS` Emscripten-FS
- * plugin. Exercises `node_ops` + `stream_ops` against:
+ * Unit tests for the in-tree `OPFS_SYNC_FS` Emscripten-FS plugin.
+ * Exercises `node_ops` + `stream_ops` against:
  *   - the existing async FSA shim in `tests/fs/fsa-test-helpers.ts`
  *     (for the `prewalkOpfsTree` + queued OPFS mutations); and
  *   - an in-test `SyncAccessHandle` shim built around a backing
  *     `Uint8Array` (for the SAH-backed file I/O surface).
  *
  * The shim approach mirrors the test-helper pattern used by the
- * Wave D mount tests (`py-realm-mount-opfs.test.ts`) — no real
- * Pyodide / OPFS needed, just contract-level pinning of the ops
- * tables and the dir-handle cache so E2 can wire mount + register
- * without re-discovering this surface.
+ * mount tests (`py-realm-mount-opfs.test.ts`) — no real Pyodide /
+ * OPFS needed, just contract-level pinning of the ops tables and
+ * the dir-handle cache so the mount/register surface can be wired
+ * without re-discovering this internal API.
  */
 
 import { describe, expect, it } from 'vitest';

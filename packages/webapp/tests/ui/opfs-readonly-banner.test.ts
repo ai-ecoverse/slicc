@@ -1,9 +1,8 @@
 // @vitest-environment jsdom
 
 /**
- * Wave B6 (blueprint note d8860197): non-blocking read-only banner
- * shown to followers when this tab lost the cross-tab OPFS leader
- * election.
+ * Non-blocking read-only banner shown to followers when this tab
+ * lost the cross-tab OPFS leader election.
  *
  * Pins:
  *  - Mounts a single banner with `role=status` so screen readers
@@ -25,7 +24,7 @@ function clearBody(): void {
 beforeEach(clearBody);
 afterEach(clearBody);
 
-describe('showOpfsReadOnlyBanner (Wave B6)', () => {
+describe('showOpfsReadOnlyBanner', () => {
   it('mounts a single banner with role=status into the document', () => {
     const handle = showOpfsReadOnlyBanner({ doc: document });
     expect(handle.element.isConnected).toBe(true);

@@ -1,5 +1,5 @@
 /**
- * Wave E1+E2 — In-tree `OPFS_SYNC_FS` Emscripten-FS plugin.
+ * In-tree `OPFS_SYNC_FS` Emscripten-FS plugin.
  *
  * Mirrors the structure of Pyodide's `nativefs.ts` but goes
  * straight to the OPFS subtree via `FileSystemSyncAccessHandle`
@@ -27,9 +27,9 @@
  * durability. SAH-backed file I/O is sync end-to-end via the
  * injected `sahProvider`; production wires up
  * `createBufferedOpfsSahProvider` (preload-then-flush in-memory
- * backing) and a future wave can swap that for a real
+ * backing) and a future iteration can swap that for a real
  * `createSyncAccessHandle` pool once cross-worker leasing is firmed
- * up (Wave B6 leader-election + ZenFS SAH coordination).
+ * up (leader-election + ZenFS SAH coordination).
  *
  * Wired into Pyodide by `py-realm-shared.ts::mountOpfsDirsAndSyncIn`
  * on the `slicc_opfs_vfs === 'opfs'` flag-ON path; flag-off is
@@ -676,7 +676,7 @@ export async function flushPendingOpfsOps(mount: OpfsMount): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Wave E2: production-grade SAH provider for the realm worker
+// Production-grade SAH provider for the realm worker
 // ---------------------------------------------------------------------------
 
 /**
@@ -690,10 +690,10 @@ export async function flushPendingOpfsOps(mount: OpfsMount): Promise<void> {
  * Compromise vs real SAH: every accessed file's content lives in
  * memory for the duration of the realm turn (Python turns are
  * short-lived and the realm worker is killed/recycled per task, so
- * this bounds residency). A future wave can swap the in-memory
+ * this bounds residency). A future iteration can swap the in-memory
  * backing for `createSyncAccessHandle()` end-to-end once the
- * cross-tab / cross-worker leasing story (Wave B6 leader election
- * + ZenFS SAH coordination) is firmed up.
+ * cross-tab / cross-worker leasing story (leader election + ZenFS
+ * SAH coordination) is firmed up.
  */
 export interface OpfsBufferedSahProvider {
   /** Inject into `OpfsMountOpts.sahProvider` before `FS.mount`. */

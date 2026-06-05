@@ -1,6 +1,6 @@
 /**
  * `ws-subscribers.ts` — host-side registry + sink dispatcher for the
- * `browser.websocket` declarative observer (Wave 4.1).
+ * `browser.websocket` declarative observer.
  *
  * The registry is the trusted side of the security boundary: it
  * resolves every `forward.sink` against an audited gate (webhook

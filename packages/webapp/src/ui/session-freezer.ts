@@ -87,12 +87,12 @@ export interface FrozenSessionArchive {
 export interface FreezeConeSessionOptions {
   sessionStore: SessionStore;
   /**
-   * Writable VFS handle. Wave B4 (blueprint note d8860197): under
-   * `slicc_opfs_vfs === 'opfs'` AND on the OPFS-leader tab, callers
-   * pass a `RemoteWritableVfsClient` so writes route to the worker's
-   * `VfsRpcHost` and hit the canonical OPFS store. With the flag off
-   * the existing page-side `VirtualFS` satisfies the same shape
-   * structurally, keeping behavior byte-identical.
+   * Writable VFS handle. Under `slicc_opfs_vfs === 'opfs'` AND on the
+   * OPFS-leader tab, callers pass a `RemoteWritableVfsClient` so
+   * writes route to the worker's `VfsRpcHost` and hit the canonical
+   * OPFS store. With the flag off the existing page-side `VirtualFS`
+   * satisfies the same shape structurally, keeping behavior
+   * byte-identical.
    */
   vfs: WritableVfsClient;
   /**
@@ -456,7 +456,7 @@ async function updateSessionsIndex(
  * Read the sessions index (or empty array if missing/malformed). Typed
  * as `LocalVfsClient` (read-only surface) so panel-side callers can pass
  * either a page-side `VirtualFS` or a worker-RPC-backed `RemoteVfsClient`
- * (Wave B2, `slicc_opfs_vfs=opfs`).
+ * (under `slicc_opfs_vfs=opfs`).
  */
 export async function readSessionsIndex(vfs: LocalVfsClient): Promise<FrozenSessionIndexEntry[]> {
   try {
@@ -478,7 +478,7 @@ export function frozenSessionPath(entry: FrozenSessionIndexEntry): string {
  * Subset of the sessions index that still needs the LLM-driven enrichment
  * pass (memory extraction + title rewrite). Returns `[]` when the index
  * is missing, empty, or malformed — never throws. Read-only, so typed
- * against `LocalVfsClient` (Wave B2b widening).
+ * against `LocalVfsClient`.
  */
 export async function listPendingEnrichments(
   vfs: LocalVfsClient

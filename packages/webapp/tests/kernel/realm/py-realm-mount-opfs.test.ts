@@ -1,5 +1,5 @@
 /**
- * Wave E2 — pins the in-tree `OPFS_SYNC_FS` plugin mount path in
+ * Pins the in-tree `OPFS_SYNC_FS` plugin mount path in
  * `py-realm-shared.ts`. The realm worker has no `localStorage`
  * shim, so the kernel side detects the OPFS flag and threads the
  * dbName through `RealmInitMsg.opfsMountDbName`; presence of that
@@ -7,7 +7,7 @@
  *
  * These tests stub `navigator.storage.getDirectory` and a minimal
  * Pyodide-FS surface so the contract can be pinned without a real
- * Pyodide or OPFS instance. The mount path swaps the Wave D1
+ * Pyodide or OPFS instance. The mount path swaps the legacy
  * `mountNativeFS` + `syncfs(true)` round-trip for an in-tree
  * `FS.mount(OPFS_SYNC_FS, …)` call backed by `prewalkOpfsTree`,
  * `createBufferedOpfsSahProvider`, and `flushOpfsRealmMounts`.
@@ -115,7 +115,7 @@ function installNavigatorStub(rootHandle: FileSystemDirectoryHandle | null): voi
   );
 }
 
-describe('mountOpfsDirsAndSyncIn (Wave E2)', () => {
+describe('mountOpfsDirsAndSyncIn', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -298,7 +298,7 @@ describe('mountOpfsDirsAndSyncIn (Wave E2)', () => {
   });
 });
 
-describe('flushOpfsRealmMounts (Wave E2)', () => {
+describe('flushOpfsRealmMounts', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });

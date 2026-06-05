@@ -1,8 +1,8 @@
 /**
- * Wave B6 (blueprint note d8860197): non-blocking read-only banner
- * shown when this tab lost the cross-tab OPFS leader election. The
- * banner is purely informational — it does NOT capture pointer events
- * outside its own bounds. A small × dismisses it for this tab.
+ * Non-blocking read-only banner shown when this tab lost the
+ * cross-tab OPFS leader election. The banner is purely informational
+ * — it does NOT capture pointer events outside its own bounds. A
+ * small × dismisses it for this tab.
  *
  * Inline styles so the banner renders correctly in test harnesses,
  * popouts, and any context where the app stylesheet hasn't loaded.

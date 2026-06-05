@@ -52,10 +52,10 @@ const MAX_SYMLINK_DEPTH = 10;
 export type VfsBackend = 'memory' | 'opfs';
 
 /**
- * Resolve the default VFS backend (Wave F2). Production browsers always
- * select OPFS via `navigator.storage.getDirectory`; Node/Vitest
- * environments without OPFS fall back to ZenFS' `InMemory` backend so
- * tests stay self-contained (no IDB shim, no FS-Access mock).
+ * Resolve the default VFS backend. Production browsers always select
+ * OPFS via `navigator.storage.getDirectory`; Node/Vitest environments
+ * without OPFS fall back to ZenFS' `InMemory` backend so tests stay
+ * self-contained (no IDB shim, no FS-Access mock).
  */
 export function resolveVfsBackendFromEnv(): VfsBackend {
   try {
@@ -279,7 +279,7 @@ export class VirtualFS {
    * rooted at an OPFS subdirectory, with `metadata: '/.metadata.json'`
    * so filemode bits and symlinks survive a page reload (without the
    * sidecar the metadata lives only in IndexFS in-memory and is lost
-   * on every reload — see Spike 1 / Wave A3).
+   * on every reload).
    *
    * ZenFS' top-level `configure({ mounts: { '/': … } })` installs a
    * GLOBAL mount, so only one OPFS-backed VirtualFS instance can be
@@ -698,7 +698,7 @@ export class VirtualFS {
   // ---------------------------------------------------------------------------
   //
   // These methods historically reached into LightningFS' in-memory
-  // CacheFS tree. Wave F2 routes them through ZenFS' Node-compatible
+  // CacheFS tree. They now route through ZenFS' Node-compatible
   // sync API (`fs.statSync` / `fs.lstatSync` / `fs.readdirSync`).
   // Behavior:
   //   * On the `'memory'` backend (InMemory) sync ops succeed — tests
@@ -1810,10 +1810,10 @@ export class VirtualFS {
   /**
    * Convert LightningFS / ZenFS errors to {@link FsError}.
    *
-   * Wave A4: ZenFS throws `ErrnoError` instances with a `.code` POSIX
-   * string field (and `.errno: number`); LightningFS embeds the code
-   * in the message text. Try the structured `.code` form first so we
-   * carry through codes ZenFS reports verbatim, then fall back to
+   * ZenFS throws `ErrnoError` instances with a `.code` POSIX string
+   * field (and `.errno: number`); LightningFS embeds the code in the
+   * message text. Try the structured `.code` form first so we carry
+   * through codes ZenFS reports verbatim, then fall back to
    * substring matching for LightningFS.
    */
   private convertError(err: unknown, path: string): FsError {

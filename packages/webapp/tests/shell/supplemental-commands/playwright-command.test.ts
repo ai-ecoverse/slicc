@@ -4130,7 +4130,7 @@ describe('playwright-cli --discover surfaces browse.sh skills', () => {
 // browser Fetch API; the shims wrap a `SecureFetch` so those callers
 // inherit our CORS bypass + forbidden-header bridging. If the shim
 // drops `init.headers`, a caller-supplied `Origin` is silently lost on
-// the way to the proxy — breaking the Wave 1 Origin contract.
+// the way to the proxy — breaking the Origin contract.
 describe('asWebFetch — Origin propagation through SecureFetch shim', () => {
   function makeOkFetchResult() {
     return {

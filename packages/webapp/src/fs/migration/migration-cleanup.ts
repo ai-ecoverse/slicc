@@ -1,10 +1,11 @@
 /**
- * Wave C5 — Deferred legacy `slicc-fs` IndexedDB cleanup.
+ * Deferred legacy `slicc-fs` IndexedDB cleanup.
  *
- * After Wave C2 atomically writes `/.slicc-migrated` into the OPFS-backed
- * VFS, the legacy `slicc-fs` LightningFS IDB is intentionally KEPT for
- * at least one release as a one-version rollback escape hatch. This
- * module owns the explicit, user-invoked deletion path:
+ * After the OPFS migration atomically writes `/.slicc-migrated` into
+ * the OPFS-backed VFS, the legacy `slicc-fs` LightningFS IDB is
+ * intentionally KEPT for at least one release as a one-version
+ * rollback escape hatch. This module owns the explicit, user-invoked
+ * deletion path:
  *
  *   1. Refuse to delete unless the OPFS sentinel is present (refusing
  *      would otherwise destroy the only path back to LFS in a partial /

@@ -1,8 +1,8 @@
 /**
- * `slicc-fs-cleanup` — Wave C5 manual cleanup of the legacy
- * `slicc-fs` LightningFS IndexedDB.
+ * `slicc-fs-cleanup` — manual cleanup of the legacy `slicc-fs`
+ * LightningFS IndexedDB.
  *
- * After the C2 OPFS migration writes the `/.slicc-migrated` sentinel,
+ * After the OPFS migration writes the `/.slicc-migrated` sentinel,
  * the legacy IDB is intentionally KEPT for at least one release as a
  * rollback escape hatch. This one-shot command performs the deletion
  * ONLY on explicit user invocation and refuses unless the sentinel is

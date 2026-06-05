@@ -134,10 +134,10 @@ ${autoExtracted}
 
 export interface ApplyConeMemoryBudgetOptions {
   /**
-   * Writable VFS handle. Wave B4: callers under
-   * `slicc_opfs_vfs === 'opfs'` pass a `RemoteWritableVfsClient` so
-   * reads/writes route through the worker's `VfsRpcHost`; with the
-   * flag off, the page-side `VirtualFS` satisfies the same shape.
+   * Writable VFS handle. Callers under `slicc_opfs_vfs === 'opfs'`
+   * pass a `RemoteWritableVfsClient` so reads/writes route through
+   * the worker's `VfsRpcHost`; with the flag off, the page-side
+   * `VirtualFS` satisfies the same shape.
    */
   vfs: WritableVfsClient;
   model?: Model<Api>;

@@ -114,8 +114,8 @@ describe('parseGitHubRef', () => {
   });
 
   it('rejects http:// (https-only)', () => {
-    // Wave 6 follow-up: avoid silently installing a skill fetched over
-    // plaintext where a network attacker could substitute the response.
+    // Avoid silently installing a skill fetched over plaintext where
+    // a network attacker could substitute the response.
     expect(parseGitHubRef('http://github.com/owner/repo')).toBeNull();
   });
 
@@ -610,7 +610,7 @@ describe('upskill Tessl registry integration', () => {
   });
 
   it('--path flag overrides URL-implicit /tree/<branch>/<path> sub-path at dispatch', async () => {
-    // Wave 6 follow-up: code reading confirmed `effectiveSubPath = subPath ?? githubRef.path`,
+    // Code reading confirmed `effectiveSubPath = subPath ?? githubRef.path`,
     // i.e. an explicit --path wins over the implicit path baked into the URL.
     // This test locks that precedence in end-to-end through the command dispatcher:
     // the URL would naturally scope discovery to "implicit/", but --path "explicit"

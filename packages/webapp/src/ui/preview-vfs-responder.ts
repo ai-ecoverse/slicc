@@ -8,11 +8,11 @@
  *   - `mainExtension` — side panel responder.
  *   - `mainStandaloneWorker` — page responder (worker-owned VFS).
  *
- * Wave B3 (blueprint note d8860197): the reader is held by reference
- * (`getReader()`) so the caller can swap from the page-side `localFs`
- * to a kernel-RPC-backed `RemoteVfsClient` once the worker is up and
- * the `slicc_opfs_vfs` flag is on. The wire contract with `preview-sw.ts`
- * is unchanged — same envelope shape, same `asText` boolean.
+ * The reader is held by reference (`getReader()`) so the caller can
+ * swap from the page-side `localFs` to a kernel-RPC-backed
+ * `RemoteVfsClient` once the worker is up and the `slicc_opfs_vfs`
+ * flag is on. The wire contract with `preview-sw.ts` is unchanged —
+ * same envelope shape, same `asText` boolean.
  */
 
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';

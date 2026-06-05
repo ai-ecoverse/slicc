@@ -9,9 +9,9 @@ describe('discoverSkillCandidates', () => {
 
   beforeEach(async () => {
     globalThis.indexedDB = new IDBFactory();
-    // Wave F2: VirtualFS' memory backend caches stores per dbName so
-    // multiple alive instances share state. Pass `wipe: true` here so
-    // each test starts with a clean tree (the prior LightningFS path
+    // VirtualFS' memory backend caches stores per dbName so multiple
+    // alive instances share state. Pass `wipe: true` here so each
+    // test starts with a clean tree (the prior LightningFS path
     // relied on `new IDBFactory()` for the same effect).
     fs = await VirtualFS.create({ wipe: true });
   });

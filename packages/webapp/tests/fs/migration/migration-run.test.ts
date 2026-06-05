@@ -145,7 +145,7 @@ describe('runLegacyMigrationFromVfs', () => {
     expect(reader).not.toHaveBeenCalled();
   });
 
-  it('Wave C4 — rejects calls from the chrome extension side panel before touching the legacy IDB', async () => {
+  it('rejects calls from the chrome extension side panel before touching the legacy IDB', async () => {
     const reader = vi.fn(async () => buildFileReader({}));
     const lfs = vi.fn(async () => buildLfsReader({ '/': { type: 'dir' } }));
     const probe = vi.fn(async () => true);
@@ -160,14 +160,14 @@ describe('runLegacyMigrationFromVfs', () => {
           pathname: '/index.html',
         },
       })
-    ).rejects.toThrow(/Wave C4/);
+    ).rejects.toThrow(/runLegacyMigrationFromVfs invoked from the chrome extension side panel/);
     // None of the legacy handles or the OPFS sentinel probe were touched.
     expect(reader).not.toHaveBeenCalled();
     expect(lfs).not.toHaveBeenCalled();
     expect(probe).not.toHaveBeenCalled();
   });
 
-  it('Wave C4 — allows calls from the offscreen document (extension VFS owner)', async () => {
+  it('allows calls from the offscreen document (extension VFS owner)', async () => {
     const tree: Record<string, MockEntry> = {
       '/': { type: 'dir' },
       '/a.txt': { type: 'file', size: 1, bytes: new Uint8Array([7]) },
@@ -185,7 +185,7 @@ describe('runLegacyMigrationFromVfs', () => {
     expect(result.kind).toBe('copied');
   });
 
-  it('Wave C4 — allows calls from the standalone DedicatedWorker (no document)', async () => {
+  it('allows calls from the standalone DedicatedWorker (no document)', async () => {
     const tree: Record<string, MockEntry> = {
       '/': { type: 'dir' },
       '/a.txt': { type: 'file', size: 1, bytes: new Uint8Array([7]) },
@@ -231,7 +231,7 @@ describe('runLegacyMigrationFromVfs', () => {
   });
 
   it('re-running after a partial aborted copy (leftover symlinks on OPFS) still reaches the sentinel', async () => {
-    // Simulate the Wave 1 hotfix scenario end-to-end against the real
+    // Simulate the early-PR hotfix scenario end-to-end against the real
     // VFS: the first attempt's symlinks are already on OPFS when the
     // re-run starts. The VFS-bound writer must treat an identical
     // existing link as success rather than aborting with EEXIST.
@@ -282,7 +282,7 @@ describe('runLegacyMigrationFromVfs', () => {
   });
 
   it('writes the sentinel when post-copy OPFS bytes exceed the manifest snapshot (boot drift)', async () => {
-    // Wave 1 hotfix #2 regression: a manifest file ends up larger on
+    // Regression: a manifest file ends up larger on
     // OPFS than the manifest claims (a concurrent boot rewrite landed
     // between detection and parity, or the reader returned more bytes
     // than the recorded size). Presence parity still matches → the

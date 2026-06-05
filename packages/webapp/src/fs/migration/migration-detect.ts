@@ -1,10 +1,10 @@
 /**
- * Wave C1 — Worker migration detection + legacy IDB read-only walk.
+ * Worker migration detection + legacy IDB read-only walk.
  *
  * Under the `slicc_opfs_vfs` flag the worker boots into the OPFS-backed
  * VirtualFS. On first boot the legacy `slicc-fs` LightningFS IndexedDB
- * still holds the user's data; C2 will copy it across, gated by a
- * `/.slicc-migrated` sentinel in the worker-owned OPFS.
+ * still holds the user's data; the copy step will move it across, gated
+ * by a `/.slicc-migrated` sentinel in the worker-owned OPFS.
  *
  * This module is **detection only**:
  *   1. Sentinel present in OPFS → fast no-op; legacy IDB is NOT touched.
@@ -220,7 +220,7 @@ export async function detectLegacyMigrationFromVfs(
  * Best-effort IDB-existence probe via `indexedDB.databases()`. Older
  * runtimes that don't expose `databases()` fall through to `true` so the
  * walk still runs (LightningFS's lazy root-init is a no-data side
- * effect — see Wave C1 task brief).
+ * effect).
  */
 async function probeIdbExists(dbName: string): Promise<boolean> {
   try {

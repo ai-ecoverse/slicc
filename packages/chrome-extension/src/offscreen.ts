@@ -155,16 +155,16 @@ async function init(): Promise<void> {
       logger: log,
     });
     stopTerminalHost = handle.stop;
-    // Wave B1 (issue d8860197): worker-side VFS read RPC surface, same
-    // wiring as the standalone DedicatedWorker (`kernel-worker.ts`).
+    // Worker-side VFS read RPC surface, same wiring as the standalone
+    // DedicatedWorker (`kernel-worker.ts`).
     //
-    // Wave B4: also wire `writableClient: sharedFs` so the host accepts
-    // `vfs-write-file` / `vfs-mkdir` / `vfs-rm` / `vfs-flush` envelopes
-    // from the panel-side `WritableVfsClient` (Wave B2w). `VirtualFS`
-    // satisfies the `WritableVfsBackend` shape structurally. With the
-    // OPFS flag off, the panel never constructs the writable client so
-    // these write request types fan out into nobody — existing behavior
-    // is unchanged.
+    // Also wire `writableClient: sharedFs` so the host accepts
+    // `vfs-write-file` / `vfs-mkdir` / `vfs-rm` / `vfs-flush`
+    // envelopes from the panel-side `WritableVfsClient`. `VirtualFS`
+    // satisfies the `WritableVfsBackend` shape structurally. With
+    // the OPFS flag off, the panel never constructs the writable
+    // client so these write request types fan out into nobody —
+    // existing behavior is unchanged.
     const vfsHandle = startVfsRpcHost({
       transport: bridgeTransport,
       client: sharedFs,

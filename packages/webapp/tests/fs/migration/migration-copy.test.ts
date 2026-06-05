@@ -258,7 +258,7 @@ describe('runLegacyMigrationCopy parity gate + error handling', () => {
   });
 
   it('tolerates EEXIST on pre-existing symlinks (re-run after aborted prior copy)', async () => {
-    // Simulates the Wave 1 hotfix scenario: a prior migration partially
+    // Simulates the hotfix scenario: a prior migration partially
     // wrote symlinks before aborting, leaving them on OPFS. The re-run's
     // writer surfaces EEXIST for those entries; the copy must NOT abort
     // and must still reach `writeSentinel`.

@@ -173,7 +173,7 @@ describe('hydrateDips — preview-vfs bridge fallback for uncontrolled boots', (
     // Force "no controller" — this is the realistic state on the very
     // first boot before the SW claims the page. dip.ts then routes
     // .shtml reads through the `preview-vfs` BroadcastChannel bridge
-    // (post-Wave-F2 replacement for the direct LightningFS read).
+    // (the replacement for the legacy direct LightningFS read).
     Object.defineProperty(navigator, 'serviceWorker', {
       configurable: true,
       value: { controller: null },

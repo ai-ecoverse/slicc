@@ -1,14 +1,14 @@
 /**
- * Wave C4 — extension migration caller guard.
+ * Extension migration caller guard.
  *
- * The C1/C2 legacy `slicc-fs` → OPFS migration is run from
- * `host.ts` (`createKernelHost`), which boots in the **offscreen
- * document** under the extension float and in the **kernel worker**
- * under standalone. The chrome extension **side panel** is a pure RPC
+ * The legacy `slicc-fs` → OPFS migration is run from `host.ts`
+ * (`createKernelHost`), which boots in the **offscreen document**
+ * under the extension float and in the **kernel worker** under
+ * standalone. The chrome extension **side panel** is a pure RPC
  * consumer of the offscreen-owned VFS and must never touch the legacy
  * IDB or the OPFS sentinel itself — that would race the offscreen
  * document on the same backing storage and break the canonical-owner
- * invariant (Wave B5).
+ * invariant.
  *
  * Structurally the panel cannot reach the migration today: `main.ts`'s
  * `mainExtension` path uses `OffscreenClient` and never calls
@@ -75,7 +75,7 @@ export function isExtensionSidePanelCaller(env: MigrationCallerEnv): boolean {
 export class MigrationFromSidePanelError extends Error {
   constructor(env: MigrationCallerEnv) {
     super(
-      '[Wave C4] runLegacyMigrationFromVfs invoked from the chrome extension side panel ' +
+      'runLegacyMigrationFromVfs invoked from the chrome extension side panel ' +
         `(pathname='${env.pathname}'). Migration must run only in the offscreen document; ` +
         'the panel should wait on the kernel-ready RPC (OffscreenClient.onReady).'
     );

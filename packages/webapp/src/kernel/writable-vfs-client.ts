@@ -1,16 +1,15 @@
 /**
  * `WritableVfsClient` — page-side `LocalVfsClient` extension that adds
  * the writable subset of `VirtualFS` (`writeFile`, `mkdir`, `rm`,
- * `flush`) backed by the worker-side `VfsRpcHost` (Wave B2w) over a
- * shared `KernelTransport`.
+ * `flush`) backed by the worker-side `VfsRpcHost` over a shared
+ * `KernelTransport`.
  *
- * Wave B2w of the worker-owned-OPFS migration (blueprint note d8860197):
- * with `slicc_opfs_vfs === 'opfs'`, the page can no longer reach OPFS
- * directly, so page-side writers (e.g. `session-freezer.ts`) need to
- * route through the kernel transport. The wire shape is defined in
- * `chrome-extension/src/messages.ts` (`VfsWriteRequestMsg` /
- * `VfsWriteResultMsg`); the host-side responder is `VfsRpcHost` with
- * `writableClient` wired.
+ * With `slicc_opfs_vfs === 'opfs'`, the page can no longer reach
+ * OPFS directly, so page-side writers (e.g. `session-freezer.ts`)
+ * need to route through the kernel transport. The wire shape is
+ * defined in `chrome-extension/src/messages.ts`
+ * (`VfsWriteRequestMsg` / `VfsWriteResultMsg`); the host-side
+ * responder is `VfsRpcHost` with `writableClient` wired.
  *
  * Per-request lifecycle (mirror of `VfsRpcHost`):
  *   readDir(path)                  → `vfs-read-dir`   → `vfs-read-dir-result`
