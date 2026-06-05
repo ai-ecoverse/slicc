@@ -1,8 +1,8 @@
 import type { ChildProcess } from 'child_process';
 import { existsSync, readdirSync } from 'fs';
-import { mkdir, readFile, unlink, writeFile } from 'fs/promises';
+import { cp, mkdir, readFile, rm, unlink, writeFile } from 'fs/promises';
 import { request as httpRequest } from 'http';
-import { homedir } from 'os';
+import { homedir, platform as osPlatform, tmpdir } from 'os';
 import { dirname, join } from 'path';
 
 /**
@@ -111,12 +111,75 @@ export function resolveQaProfilesRoot(projectRoot: string): string {
   return join(projectRoot, ...QA_PROFILE_ROOT_SEGMENTS);
 }
 
+export function resolveProfilesDir(
+  platform: NodeJS.Platform = osPlatform(),
+  homeDir: string = homedir(),
+  env: NodeJS.ProcessEnv = process.env
+): string {
+  if (platform === 'darwin') {
+    return join(homeDir, 'Library', 'Application Support', 'Slicc', 'profiles');
+  }
+  if (platform === 'linux') {
+    const xdgState = env['XDG_STATE_HOME'] ?? join(homeDir, '.local', 'state');
+    return join(xdgState, 'slicc', 'profiles');
+  }
+  if (platform === 'win32') {
+    const localAppData = env['LOCALAPPDATA'] ?? join(homeDir, 'AppData', 'Local');
+    return join(localAppData, 'Slicc', 'profiles');
+  }
+  return tmpdir();
+}
+
 export function resolveDefaultChromeUserDataDir(
-  tmpDir = process.env['TMPDIR'] ?? '/tmp',
+  profilesDir = resolveProfilesDir(),
   servePort?: number
 ): string {
   const suffix = servePort && servePort !== 5710 ? `-${servePort}` : '';
-  return join(tmpDir, `${DEFAULT_USER_DATA_DIR_NAME}${suffix}`);
+  return join(profilesDir, `${DEFAULT_USER_DATA_DIR_NAME}${suffix}`);
+}
+
+/**
+ * Builds the ordered list of legacy candidate paths to check during migration.
+ * Checks $TMPDIR first (the macOS per-user temp dir used by terminal sessions),
+ * then /tmp (the fallback used by GUI apps that don't inherit TMPDIR).
+ * Also includes the previous ~/.slicc/profiles location so existing installs
+ * are migrated to the platform-appropriate directory on first run.
+ */
+export function legacyChromeCandidates(
+  profileDirName: string,
+  env: NodeJS.ProcessEnv = process.env
+): string[] {
+  const bases = new Set<string>();
+  if (env['TMPDIR']) bases.add(env['TMPDIR']);
+  bases.add('/tmp');
+  return [...bases].map((b) => join(b, profileDirName));
+}
+
+/**
+ * One-time migration: if `newDir` doesn't exist yet, copies the first matching
+ * candidate (legacy profile from $TMPDIR or /tmp) to the stable new location.
+ * Non-destructive — the old profile is left in place.
+ */
+export async function migrateLegacyDefaultChromeProfile(
+  newDir: string,
+  candidates: string[]
+): Promise<void> {
+  if (existsSync(newDir)) return;
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      try {
+        await cp(candidate, newDir, { recursive: true });
+        console.log(`Migrated Chrome profile: ${candidate} → ${newDir}`);
+      } catch (err) {
+        await rm(newDir, { recursive: true, force: true }).catch(() => {});
+        console.warn(
+          `Chrome profile migration failed (${candidate} → ${newDir}); continuing with a fresh profile.`,
+          err
+        );
+      }
+      return;
+    }
+  }
 }
 
 export function resolveChromeLaunchProfile(options: {

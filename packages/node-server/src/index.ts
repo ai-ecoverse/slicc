@@ -7,7 +7,7 @@ import { existsSync, readFileSync } from 'fs';
 import { createServer } from 'http';
 import { createServer as createNetServer } from 'net';
 import { homedir } from 'os';
-import { dirname, join, resolve, sep } from 'path';
+import { basename, dirname, join, resolve, sep } from 'path';
 import { Readable, Transform } from 'stream';
 import { StringDecoder } from 'string_decoder';
 import { fileURLToPath } from 'url';
@@ -17,6 +17,8 @@ import {
   clearStaleDevToolsActivePort,
   ensureQaProfileScaffold,
   findChromeExecutable,
+  legacyChromeCandidates,
+  migrateLegacyDefaultChromeProfile,
   planChromeSpawn,
   resolveChromeLaunchProfile,
   waitForCdpPort,
@@ -556,7 +558,6 @@ async function main() {
       try {
         const resolved = resolveChromeLaunchProfile({
           projectRoot: PROJECT_ROOT,
-          tmpDir: process.env['TMPDIR'] ?? '/tmp',
           profile: RUNTIME_FLAGS.profile,
           servePort: SERVE_PORT,
         });
@@ -582,6 +583,12 @@ async function main() {
 
     if (chromeProfile.id) {
       await ensureQaProfileScaffold(PROJECT_ROOT);
+    } else if (!RUNTIME_FLAGS.hosted) {
+      const profileDirName = basename(chromeProfile.userDataDir);
+      await migrateLegacyDefaultChromeProfile(
+        chromeProfile.userDataDir,
+        legacyChromeCandidates(profileDirName)
+      );
     }
 
     if (chromeProfile.extensionPath && !existsSync(chromeProfile.extensionPath)) {
