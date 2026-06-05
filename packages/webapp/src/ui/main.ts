@@ -43,6 +43,7 @@ import { recoverMounts } from '../fs/mount-recovery.js';
 import { getAllMountEntries } from '../fs/mount-table-store.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import { type PanelRpcPushMsg, panelRpcChannelName } from '../kernel/panel-rpc.js';
+import { createRemoteSprinkleVfs } from '../kernel/remote-sprinkle-vfs.js';
 import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
 // Auto-discover and register all providers (built-in + external).
 // IMPORTANT: This import must also appear in packages/chrome-extension/src/offscreen.ts
@@ -84,7 +85,7 @@ import { enterDetachedActiveState } from './detached-active.js';
 // the INEFFECTIVE_DYNAMIC_IMPORT warning), occasionally surfacing as a runtime
 // "o is not a function" error in the fs chunk because of the resulting
 // circular module-evaluation order.
-import { broadcastToDips } from './dip.js';
+import { broadcastToDips, setDipExecHandler } from './dip.js';
 import { createExtensionLeaderHooks } from './extension-leader-hooks.js';
 import { Layout } from './layout.js';
 import { isLickChannel, type LickChannel } from './lick-channels.js';
@@ -93,6 +94,7 @@ import {
   runNewSessionFreezeQuick,
   scheduleBackgroundEnrichment,
 } from './new-session.js';
+import type { OffscreenClient } from './offscreen-client.js';
 import { flushCredentialsToWorker, resolveDefaultModel } from './onboarding-helpers.js';
 import type { PageFollowerTrayHandle } from './page-follower-tray.js';
 import { CHERRY_RUNTIME_TAG, startPageFollowerTray } from './page-follower-tray.js';
@@ -122,6 +124,7 @@ import {
   findDroppedSkillTransferFile,
   hasDroppedFiles,
 } from './skill-drop.js';
+import type { SprinkleExecHandler } from './sprinkle-bridge.js';
 import { resolveSprinkleIconHtml } from './sprinkle-icon.js';
 import { SprinkleManager } from './sprinkle-manager.js';
 import { initTelemetry } from './telemetry.js';
@@ -131,6 +134,57 @@ import type { ChatMessage } from './types.js';
 import { persistWelcomeSentinel } from './welcome-sentinel.js';
 
 const log = createLogger('main');
+
+/**
+ * Build the page→worker shell-exec handler handed to `SprinkleManager`
+ * so `slicc.exec()` / `slicc.agent()` run in the same worker shell used
+ * by `.jsh` / `node -e`. Works in BOTH the standalone-worker and
+ * extension floats because it routes through the `OffscreenClient`
+ * transport (kernel-worker `MessageChannel` / extension `chrome.runtime`).
+ *
+ * The `TerminalSessionClient` + worker session are created lazily on the
+ * first `exec` and reused for subsequent calls. A failed open resets the
+ * cached session so a later call can retry rather than wedging on a
+ * rejected promise.
+ *
+ * Calls are serialized through a per-session promise queue: the worker
+ * `TerminalSessionHost.handleExec` only permits one in-flight exec per
+ * session (a concurrent second call exits 130), so chaining each new
+ * exec on the tail of the queue keeps the shared session usable for
+ * overlapping `slicc.exec()` / `slicc.agent()` calls — including the
+ * dip handler wired via `setDipExecHandler`, which shares this same
+ * session.
+ */
+function createSprinkleExecHandler(client: OffscreenClient): SprinkleExecHandler {
+  let sessionPromise: ReturnType<typeof openSession> | null = null;
+  let execChain: Promise<unknown> = Promise.resolve();
+  const openSession = async () => {
+    const { TerminalSessionClient } = await import('../kernel/terminal-session-client.js');
+    const session = new TerminalSessionClient({
+      client,
+      sid: `sprinkle-exec-${Date.now()}`,
+    });
+    await session.open({ cwd: '/' });
+    return session;
+  };
+  const ensureSession = (): ReturnType<typeof openSession> => {
+    if (!sessionPromise) {
+      sessionPromise = openSession().catch((err) => {
+        sessionPromise = null;
+        throw err;
+      });
+    }
+    return sessionPromise;
+  };
+  return async (cmd: string) => {
+    const run = execChain.then(
+      () => ensureSession().then((session) => session.exec(cmd)),
+      () => ensureSession().then((session) => session.exec(cmd))
+    );
+    execChain = run.catch(() => undefined);
+    return run;
+  };
+}
 
 /**
  * Welcome-flow lick actions that must fire at most ONCE per browser
@@ -1363,8 +1417,17 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   };
 
   // ── Sprinkle Manager (SHTML sprinkle panels) ────────────────────────
+  // Under `slicc_opfs_vfs=opfs` `localFs` is an empty memory VFS — the
+  // worker owns the canonical OPFS-backed tree. Bind the manager (and
+  // by extension `discoverSprinkles` / `SprinkleBridge`) to a
+  // worker-RPC-backed adapter in that mode so `.shtml` files actually
+  // surface. With the flag off, byte-identical to the previous direct
+  // `localFs` wiring.
+  const sprinkleFs = useRpcVfs
+    ? createRemoteSprinkleVfs({ reader: writableFs, writer: writableFs })
+    : localFs;
   const sprinkleManager = new SprinkleManager(
-    localFs,
+    sprinkleFs,
     async (event: LickEvent) => {
       // Route sprinkle licks to the offscreen orchestrator's cone
       if (event.type === 'sprinkle') {
@@ -1452,9 +1515,14 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
       onAttachImage: (base64, name, mimeType) =>
         layout.panels.chat.addImageAttachment(base64, name, mimeType),
       inlineSprinkles: INLINE_DIP_SPRINKLES,
+      execHandler: createSprinkleExecHandler(client),
     }
   );
   (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
+  // Trusted dips route `slicc.exec()` / `slicc.agent()` through the same
+  // worker shell sprinkles use. Untrusted inline-chat dips never expose
+  // these methods (see dip.ts), so this only ever serves trusted dips.
+  setDipExecHandler(createSprinkleExecHandler(client));
   (window as unknown as Record<string, unknown>).__slicc_reloadSkills = () => {
     chrome.runtime.sendMessage({
       source: 'panel',
@@ -2718,8 +2786,21 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
     client.sendSprinkleLick('inline', { action, data });
   };
 
+  // Under `slicc_opfs_vfs=opfs` `localFs` is an empty memory VFS — the
+  // kernel worker owns the canonical OPFS tree. Bind the manager (and
+  // by extension `discoverSprinkles` / `SprinkleBridge`) to the
+  // worker-RPC-backed read/write surface so `.shtml` discovery and
+  // `sprinkle list` see real files. Reads go through `panelReadVfs`
+  // (works on leader and follower); writes go through `writableFs`
+  // (RPC on leader, memory shadow on follower — follower sprinkle
+  // writes are best-effort and don't reach OPFS, matching the
+  // read-only banner). With the flag off, byte-identical to the
+  // previous direct `localFs` wiring.
+  const sprinkleFs = useRpcVfs
+    ? createRemoteSprinkleVfs({ reader: panelReadVfs, writer: writableFs })
+    : localFs;
   sprinkleManager = new SprinkleManager(
-    localFs,
+    sprinkleFs,
     async (event: LickEvent) => {
       if (event.type === 'sprinkle') {
         if (interceptWelcomeLick(event)) {
@@ -2759,9 +2840,14 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       onAttachImage: (base64, name, mimeType) =>
         layout.panels.chat.addImageAttachment(base64, name, mimeType),
       inlineSprinkles: INLINE_DIP_SPRINKLES,
+      execHandler: createSprinkleExecHandler(client),
     }
   );
   (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
+  // Trusted dips route `slicc.exec()` / `slicc.agent()` through the same
+  // worker shell sprinkles use. Untrusted inline-chat dips never expose
+  // these methods (see dip.ts), so this only ever serves trusted dips.
+  setDipExecHandler(createSprinkleExecHandler(client));
   const stopSprinkleHandler = installSprinkleManagerHandlerOverChannel(sprinkleManager, {
     instanceId,
   });

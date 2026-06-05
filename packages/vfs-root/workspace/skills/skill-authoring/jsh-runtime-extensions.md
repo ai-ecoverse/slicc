@@ -234,3 +234,7 @@ const api = http.client({
   token: (req) => (req?.method === 'GET' ? skill.token('read') : skill.token('write')),
 });
 ```
+
+## Reaching these from sprinkles & dips
+
+The high-value globals here — `exec` / `exec.spawn`, `fetch`, `http.client`, and `browser.*` — are also exposed to `.shtml` **sprinkles** and **trusted dips** through the `slicc.*` bridge, which routes each call into the **same worker shell** `.jsh` scripts run in. So a sprinkle button can `await slicc.exec('…')` to reach any supplemental command or `.jsh` script, or `await slicc.agent('…')` to spawn a one-shot sub-scoop. The bridge is trust-gated: VFS-sourced sprinkles and trusted dips get it; untrusted inline-chat dips never receive `exec` / `agent` / `browser`. See the sprinkles skill (`/workspace/skills/sprinkles/SKILL.md`) "Shell, agent, and jsh globals" section, and `docs/shell-reference.md` "Sprinkle & Dip Bridge" (developer-facing).

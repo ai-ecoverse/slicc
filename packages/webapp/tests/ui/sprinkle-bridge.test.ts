@@ -1,7 +1,36 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { VirtualFS } from '../../src/fs/index.js';
 import type { LickEvent } from '../../src/scoops/lick-manager.js';
-import { SprinkleBridge } from '../../src/ui/sprinkle-bridge.js';
+import {
+  buildJshNodeCommand,
+  clearSprinkleRoute,
+  getAllSprinkleRoutes,
+  getSprinkleRoute,
+  JSH_RESULT_PREFIX,
+  parseJshResult,
+  runJshOp,
+  SprinkleBridge,
+  type SprinkleExecResult,
+  setSprinkleRoute,
+} from '../../src/ui/sprinkle-bridge.js';
+
+/** Build a worker-shell stdout payload carrying a successful jsh result. */
+function jshOk(value: unknown): SprinkleExecResult {
+  return {
+    stdout: JSH_RESULT_PREFIX + JSON.stringify({ ok: true, value }),
+    stderr: '',
+    exitCode: 0,
+  };
+}
+
+/** Build a worker-shell stdout payload carrying a failed jsh result. */
+function jshErr(message: string): SprinkleExecResult {
+  return {
+    stdout: JSH_RESULT_PREFIX + JSON.stringify({ ok: false, error: message }),
+    stderr: '',
+    exitCode: 0,
+  };
+}
 
 describe('SprinkleBridge', () => {
   let bridge: SprinkleBridge;
@@ -229,6 +258,136 @@ describe('SprinkleBridge', () => {
     expect(attachImageHandlerMock).toHaveBeenCalledWith('abc123', undefined, undefined);
   });
 
+  it('exec() returns a clean 127 result when no exec handler is wired', async () => {
+    const api = bridge.createAPI('test-sprinkle');
+    const result = await api.exec('ls');
+    expect(result.exitCode).toBe(127);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('shell bridge not available');
+  });
+
+  it('exec() delegates to the injected exec handler', async () => {
+    const execHandler = vi.fn().mockResolvedValue({ stdout: 'hi\n', stderr: '', exitCode: 0 });
+    bridge = new SprinkleBridge(
+      mockFs,
+      lickHandler,
+      closeHandler,
+      minimizeHandlerMock,
+      stopConeHandlerMock,
+      attachImageHandlerMock,
+      captureScreenHandlerMock,
+      execHandler
+    );
+    const api = bridge.createAPI('test-sprinkle');
+    const result = await api.exec('echo hi');
+    expect(execHandler).toHaveBeenCalledWith('echo hi');
+    expect(result).toEqual({ stdout: 'hi\n', stderr: '', exitCode: 0 });
+  });
+
+  it('exec() surfaces a non-zero exit code without throwing', async () => {
+    const execHandler = vi.fn().mockResolvedValue({ stdout: '', stderr: 'nope\n', exitCode: 2 });
+    bridge = new SprinkleBridge(
+      mockFs,
+      lickHandler,
+      closeHandler,
+      minimizeHandlerMock,
+      stopConeHandlerMock,
+      attachImageHandlerMock,
+      captureScreenHandlerMock,
+      execHandler
+    );
+    const api = bridge.createAPI('test-sprinkle');
+    const result = await api.exec('false');
+    expect(result).toEqual({ stdout: '', stderr: 'nope\n', exitCode: 2 });
+  });
+
+  it('exec() catches a handler rejection and returns exitCode 1', async () => {
+    const execHandler = vi.fn().mockRejectedValue(new Error('boom'));
+    bridge = new SprinkleBridge(
+      mockFs,
+      lickHandler,
+      closeHandler,
+      minimizeHandlerMock,
+      stopConeHandlerMock,
+      attachImageHandlerMock,
+      captureScreenHandlerMock,
+      execHandler
+    );
+    const api = bridge.createAPI('test-sprinkle');
+    const result = await api.exec('explode');
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('boom');
+  });
+
+  it('agent() builds the default agent command and returns {stdout, exitCode}', async () => {
+    const execHandler = vi.fn().mockResolvedValue({ stdout: 'done\n', stderr: '', exitCode: 0 });
+    bridge = new SprinkleBridge(
+      mockFs,
+      lickHandler,
+      closeHandler,
+      minimizeHandlerMock,
+      stopConeHandlerMock,
+      attachImageHandlerMock,
+      captureScreenHandlerMock,
+      execHandler
+    );
+    const api = bridge.createAPI('test-sprinkle');
+    const result = await api.agent('say hi');
+    expect(execHandler).toHaveBeenCalledWith("agent '.' '*' 'say hi'");
+    expect(result).toEqual({ stdout: 'done\n', exitCode: 0 });
+  });
+
+  it('agent() forwards flags before positionals and quotes values', async () => {
+    const execHandler = vi.fn().mockResolvedValue({ stdout: 'ok\n', stderr: '', exitCode: 0 });
+    bridge = new SprinkleBridge(
+      mockFs,
+      lickHandler,
+      closeHandler,
+      minimizeHandlerMock,
+      stopConeHandlerMock,
+      attachImageHandlerMock,
+      captureScreenHandlerMock,
+      execHandler
+    );
+    const api = bridge.createAPI('test-sprinkle');
+    await api.agent("it's me", {
+      cwd: '/workspace',
+      allowedCommands: 'ls,cat',
+      model: 'claude-opus-4-6',
+      thinking: 'high',
+      readOnly: '/workspace/,/shared/',
+    });
+    expect(execHandler).toHaveBeenCalledWith(
+      "agent --model 'claude-opus-4-6' --thinking 'high' --read-only '/workspace/,/shared/' '/workspace' 'ls,cat' 'it'\\''s me'"
+    );
+  });
+
+  it('agent() folds stderr into stdout on a non-zero exit', async () => {
+    const execHandler = vi
+      .fn()
+      .mockResolvedValue({ stdout: '', stderr: 'agent: cwd not found\n', exitCode: 1 });
+    bridge = new SprinkleBridge(
+      mockFs,
+      lickHandler,
+      closeHandler,
+      minimizeHandlerMock,
+      stopConeHandlerMock,
+      attachImageHandlerMock,
+      captureScreenHandlerMock,
+      execHandler
+    );
+    const api = bridge.createAPI('test-sprinkle');
+    const result = await api.agent('do thing', { cwd: '/nope' });
+    expect(result).toEqual({ stdout: 'agent: cwd not found\n', exitCode: 1 });
+  });
+
+  it('agent() returns a clean 127 result when no exec handler is wired', async () => {
+    const api = bridge.createAPI('test-sprinkle');
+    const result = await api.agent('hello');
+    expect(result.exitCode).toBe(127);
+    expect(result.stdout).toContain('shell bridge not available');
+  });
+
   it('captureScreen() delegates to the captureScreen handler', async () => {
     const customCaptureScreenHandler = vi.fn().mockResolvedValue({
       base64: 'iVBORw0KGgo=',
@@ -254,5 +413,300 @@ describe('SprinkleBridge', () => {
       height: 1080,
       mimeType: 'image/png',
     });
+  });
+
+  describe('Tier 1 jsh globals', () => {
+    function bridgeWith(
+      execHandler: ReturnType<typeof vi.fn>,
+      fsOverride?: Partial<VirtualFS>
+    ): SprinkleBridge {
+      return new SprinkleBridge(
+        { ...mockFs, ...fsOverride } as unknown as VirtualFS,
+        lickHandler,
+        closeHandler,
+        minimizeHandlerMock,
+        stopConeHandlerMock,
+        attachImageHandlerMock,
+        captureScreenHandlerMock,
+        execHandler as unknown as (cmd: string) => Promise<SprinkleExecResult>
+      );
+    }
+
+    it('fetch() routes through a node -e realm command and returns a native Response', async () => {
+      const execHandler = vi.fn().mockResolvedValue(
+        jshOk({
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          url: 'https://api.example.com/x',
+          headers: { 'content-type': 'application/json' },
+          bodyBase64: btoa('{"hi":1}'),
+        })
+      );
+      const api = bridgeWith(execHandler).createAPI('s');
+      const res = await api.fetch('https://api.example.com/x', { method: 'GET' });
+      const cmd = execHandler.mock.calls[0][0] as string;
+      expect(cmd.startsWith('node -e ')).toBe(true);
+      expect(cmd).toContain('fetch');
+      // Realm has no Node Buffer global — base64 must use realm-available
+      // primitives (Uint8Array + chunked String.fromCharCode + btoa).
+      expect(cmd).not.toContain('Buffer.from');
+      expect(cmd).not.toContain('require("buffer")');
+      expect(cmd).toContain('new Uint8Array(await r.arrayBuffer())');
+      expect(cmd).toContain('String.fromCharCode.apply');
+      expect(cmd).toContain('bodyBase64:btoa(bin)');
+      expect(res).toBeInstanceOf(Response);
+      expect(res.status).toBe(200);
+      expect(res.statusText).toBe('OK');
+      expect(res.ok).toBe(true);
+      expect(res.url).toBe('https://api.example.com/x');
+      expect(res.headers).toBeInstanceOf(Headers);
+      expect(res.headers.get('content-type')).toBe('application/json');
+      expect(await res.text()).toBe('{"hi":1}');
+    });
+
+    it('fetch() parses JSON via the native Response.json()', async () => {
+      const execHandler = vi.fn().mockResolvedValue(
+        jshOk({
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          url: 'https://api.example.com/x',
+          headers: { 'content-type': 'application/json' },
+          bodyBase64: btoa('{"hi":1}'),
+        })
+      );
+      const api = bridgeWith(execHandler).createAPI('s');
+      const res = await api.fetch('https://api.example.com/x');
+      expect(await res.json()).toEqual({ hi: 1 });
+    });
+
+    it('fetch() handles null-body statuses (204) without throwing', async () => {
+      const execHandler = vi.fn().mockResolvedValue(
+        jshOk({
+          ok: true,
+          status: 204,
+          statusText: 'No Content',
+          url: 'https://api.example.com/empty',
+          headers: {},
+          bodyBase64: btoa(''),
+        })
+      );
+      const api = bridgeWith(execHandler).createAPI('s');
+      const res = await api.fetch('https://api.example.com/empty');
+      expect(res).toBeInstanceOf(Response);
+      expect(res.status).toBe(204);
+      expect(res.url).toBe('https://api.example.com/empty');
+      expect(await res.text()).toBe('');
+    });
+
+    it('fetch() handles out-of-range statuses by shadowing status/ok/statusText', async () => {
+      const execHandler = vi.fn().mockResolvedValue(
+        jshOk({
+          ok: false,
+          status: 999,
+          statusText: 'Custom',
+          url: 'https://api.example.com/weird',
+          headers: { 'x-trace': 'abc' },
+          bodyBase64: btoa('weird'),
+        })
+      );
+      const api = bridgeWith(execHandler).createAPI('s');
+      const res = await api.fetch('https://api.example.com/weird');
+      expect(res).toBeInstanceOf(Response);
+      expect(res.status).toBe(999);
+      expect(res.statusText).toBe('Custom');
+      expect(res.ok).toBe(false);
+      expect(res.url).toBe('https://api.example.com/weird');
+      expect(res.headers.get('x-trace')).toBe('abc');
+      expect(await res.text()).toBe('weird');
+    });
+
+    it('http.client().get() dispatches a raw http op and returns the structured response', async () => {
+      const execHandler = vi
+        .fn()
+        .mockResolvedValue(jshOk({ status: 201, headers: { etag: 'abc' }, body: { id: 7 } }));
+      const api = bridgeWith(execHandler).createAPI('s');
+      const res = await api.http.client({ baseUrl: 'https://h' }).get('/items');
+      expect(res).toEqual({ status: 201, headers: { etag: 'abc' }, body: { id: 7 } });
+      expect(execHandler.mock.calls[0][0]).toContain('http');
+    });
+
+    it('browser.findTab() dispatches a browser op (trusted surface)', async () => {
+      const execHandler = vi.fn().mockResolvedValue(jshOk({ targetId: 'T1' }));
+      const api = bridgeWith(execHandler).createAPI('s');
+      const tab = await api.browser.findTab({ domain: 'example.com' });
+      expect(tab).toEqual({ targetId: 'T1' });
+      expect(execHandler.mock.calls[0][0]).toContain('browser');
+    });
+
+    it('exec.spawn() runs the array-form op and returns an exec result', async () => {
+      const execHandler = vi
+        .fn()
+        .mockResolvedValue(jshOk({ stdout: 'ok\n', stderr: '', exitCode: 0 }));
+      const api = bridgeWith(execHandler).createAPI('s');
+      const res = await api.exec.spawn(['ls', '-la']);
+      expect(res).toEqual({ stdout: 'ok\n', stderr: '', exitCode: 0 });
+      expect(execHandler.mock.calls[0][0]).toContain('spawn');
+    });
+
+    it('exec is still callable as a one-shot string command', async () => {
+      const execHandler = vi.fn().mockResolvedValue({ stdout: 'hi\n', stderr: '', exitCode: 0 });
+      const api = bridgeWith(execHandler).createAPI('s');
+      const res = await api.exec('echo hi');
+      expect(execHandler).toHaveBeenCalledWith('echo hi');
+      expect(res).toEqual({ stdout: 'hi\n', stderr: '', exitCode: 0 });
+    });
+
+    it('fetchToFile() dispatches a fetchToFile op and returns the byte count', async () => {
+      const execHandler = vi.fn().mockResolvedValue(jshOk(1234));
+      const api = bridgeWith(execHandler).createAPI('s');
+      const bytes = await api.fetchToFile('https://h/file.bin', '/workspace/file.bin');
+      expect(bytes).toBe(1234);
+      expect(execHandler.mock.calls[0][0]).toContain('fetchToFile');
+    });
+
+    it('readFileBinary() reads raw bytes from the VFS (no realm round-trip)', async () => {
+      const execHandler = vi.fn();
+      const data = new Uint8Array([1, 2, 3, 250]);
+      const readFile = vi.fn().mockResolvedValue(data);
+      const api = bridgeWith(execHandler, { readFile } as Partial<VirtualFS>).createAPI('s');
+      const out = await api.readFileBinary('/workspace/bin.dat');
+      expect(Array.from(out)).toEqual([1, 2, 3, 250]);
+      expect(readFile).toHaveBeenCalledWith('/workspace/bin.dat', { encoding: 'binary' });
+      expect(execHandler).not.toHaveBeenCalled();
+    });
+
+    it('writeFileBinary() writes raw bytes to the VFS (no realm round-trip)', async () => {
+      const execHandler = vi.fn();
+      const writeFile = vi.fn().mockResolvedValue(undefined);
+      const api = bridgeWith(execHandler, { writeFile } as Partial<VirtualFS>).createAPI('s');
+      await api.writeFileBinary('/workspace/out.dat', new Uint8Array([9, 8, 7]));
+      expect(writeFile).toHaveBeenCalledTimes(1);
+      const [path, bytes] = writeFile.mock.calls[0];
+      expect(path).toBe('/workspace/out.dat');
+      expect(Array.from(bytes as Uint8Array)).toEqual([9, 8, 7]);
+      expect(execHandler).not.toHaveBeenCalled();
+    });
+
+    it('rejects when the realm reports a failure', async () => {
+      const execHandler = vi.fn().mockResolvedValue(jshErr('boom'));
+      const api = bridgeWith(execHandler).createAPI('s');
+      await expect(api.fetch('https://h')).rejects.toThrow('boom');
+    });
+  });
+});
+
+describe('jsh node-command helpers', () => {
+  it('buildJshNodeCommand embeds the op + args and quotes the script', () => {
+    const cmd = buildJshNodeCommand('spawn', [['echo', "it's"]]);
+    expect(cmd.startsWith("node -e '")).toBe(true);
+    expect(cmd.endsWith("'")).toBe(true);
+    expect(cmd).toContain('exec.spawn');
+    // The realm awaits only the top-level AsyncFunction body, so the program
+    // must use top-level await rather than a detached `(async()=>{…})()`
+    // IIFE (the IIFE promise was never awaited → no sentinel on stdout).
+    expect(cmd).not.toContain('(async()=>');
+    expect(cmd).not.toContain('(async ()=>');
+    expect(cmd).not.toContain('})()');
+    expect(cmd).toContain('var REQ=');
+    expect(cmd).toContain('await exec.spawn');
+  });
+
+  it('parseJshResult returns the value behind the sentinel', () => {
+    expect(parseJshResult(jshOk({ a: 1 }))).toEqual({ a: 1 });
+  });
+
+  it('parseJshResult throws the realm error message on ok:false', () => {
+    expect(() => parseJshResult(jshErr('nope'))).toThrow('nope');
+  });
+
+  it('parseJshResult throws a clear error when the sentinel is missing', () => {
+    expect(() => parseJshResult({ stdout: '', stderr: 'kaboom\n', exitCode: 1 })).toThrow(
+      /no result.*kaboom/
+    );
+  });
+
+  it('runJshOp builds the command, runs it, and parses the result', async () => {
+    const exec = vi.fn().mockResolvedValue(jshOk('done'));
+    const out = await runJshOp(exec, 'fetchToFile', ['https://h/a', '/a']);
+    expect(out).toBe('done');
+    expect((exec.mock.calls[0][0] as string).startsWith('node -e ')).toBe(true);
+  });
+});
+
+describe('sprinkle route helpers', () => {
+  let store: Record<string, string>;
+  const originalLocalStorage = (globalThis as { localStorage?: Storage }).localStorage;
+
+  beforeEach(() => {
+    store = {};
+    const polyfill: Storage = {
+      get length() {
+        return Object.keys(store).length;
+      },
+      clear: () => {
+        store = {};
+      },
+      getItem: (key: string) => (key in store ? store[key] : null),
+      key: (index: number) => Object.keys(store)[index] ?? null,
+      removeItem: (key: string) => {
+        delete store[key];
+      },
+      setItem: (key: string, value: string) => {
+        store[key] = String(value);
+      },
+    };
+    Object.defineProperty(globalThis, 'localStorage', {
+      value: polyfill,
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  afterEach(() => {
+    if (originalLocalStorage === undefined) {
+      delete (globalThis as { localStorage?: Storage }).localStorage;
+    } else {
+      Object.defineProperty(globalThis, 'localStorage', {
+        value: originalLocalStorage,
+        configurable: true,
+        writable: true,
+      });
+    }
+  });
+
+  it('returns undefined when no route is set', () => {
+    expect(getSprinkleRoute('foo')).toBeUndefined();
+    expect(getAllSprinkleRoutes()).toEqual({});
+  });
+
+  it('persists set and clears a route through localStorage', () => {
+    setSprinkleRoute('foo', 'scoop-a');
+    expect(getSprinkleRoute('foo')).toBe('scoop-a');
+    expect(getAllSprinkleRoutes()).toEqual({ foo: 'scoop-a' });
+    // Reuses the existing store on subsequent set, preserving siblings.
+    setSprinkleRoute('bar', 'scoop-b');
+    expect(getAllSprinkleRoutes()).toEqual({ foo: 'scoop-a', bar: 'scoop-b' });
+
+    clearSprinkleRoute('foo');
+    expect(getSprinkleRoute('foo')).toBeUndefined();
+    expect(getAllSprinkleRoutes()).toEqual({ bar: 'scoop-b' });
+  });
+
+  it('treats corrupted localStorage payloads as empty', () => {
+    (globalThis as { localStorage: Storage }).localStorage.setItem(
+      'slicc-sprinkle-routes',
+      '{not json'
+    );
+    expect(getAllSprinkleRoutes()).toEqual({});
+  });
+
+  it('silently swallows setItem failures (quota etc.)', () => {
+    const ls = (globalThis as { localStorage: Storage }).localStorage;
+    ls.setItem = () => {
+      throw new Error('QuotaExceeded');
+    };
+    expect(() => setSprinkleRoute('foo', 'scoop-a')).not.toThrow();
   });
 });

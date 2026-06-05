@@ -235,7 +235,76 @@ window.slicc = {
   attachImage: function(base64, name, mimeType) {
     parent.postMessage({ type: 'sprinkle-attach-image', base64: base64, name: name, mimeType: mimeType }, '*');
   },
+  exec: function(cmd) {
+    return new Promise(function(resolve, reject) {
+      var id = 'xc-' + Math.random().toString(36).slice(2);
+      function handler(event) {
+        if (event.data && event.data.type === 'sprinkle-exec-response' && event.data.id === id) {
+          removeEventListener('message', handler);
+          if (event.data.error) reject(new Error(event.data.error)); else resolve(event.data.result);
+        }
+      }
+      addEventListener('message', handler);
+      parent.postMessage({ type: 'sprinkle-exec', id: id, cmd: cmd }, '*');
+    });
+  },
+  agent: function(prompt, opts) {
+    return new Promise(function(resolve, reject) {
+      var id = 'ag-' + Math.random().toString(36).slice(2);
+      function handler(event) {
+        if (event.data && event.data.type === 'sprinkle-agent-response' && event.data.id === id) {
+          removeEventListener('message', handler);
+          if (event.data.error) reject(new Error(event.data.error)); else resolve(event.data.result);
+        }
+      }
+      addEventListener('message', handler);
+      parent.postMessage({ type: 'sprinkle-agent', id: id, prompt: prompt, opts: opts }, '*');
+    });
+  },
+  // ── Tier 1 jsh globals ──────────────────────────────────────────
+  // All route through one `sprinkle-jsh` round-trip; the parent runs
+  // them in the worker realm (proxied fetch, http, CDP browser, etc.).
+  _jsh: function(op, args) {
+    return new Promise(function(resolve, reject) {
+      var id = 'jsh-' + Math.random().toString(36).slice(2);
+      function handler(event) {
+        if (event.data && event.data.type === 'sprinkle-jsh-response' && event.data.id === id) {
+          removeEventListener('message', handler);
+          if (event.data.error) reject(new Error(event.data.error)); else resolve(event.data.result);
+        }
+      }
+      addEventListener('message', handler);
+      parent.postMessage({ type: 'sprinkle-jsh', id: id, op: op, args: args }, '*');
+    });
+  },
+  fetch: function(url, init) { return window.slicc._jsh('fetch', [url, init || null]); },
+  http: { client: function(cfg) {
+    function mk(method) { return function(path, opts) { return window.slicc._jsh('http', [cfg, method, path, opts || null]); }; }
+    return { get: mk('get'), post: mk('post'), put: mk('put'), patch: mk('patch'), 'delete': mk('delete') };
+  } },
+  browser: {
+    findTab: function(q) { return window.slicc._jsh('browser', ['findTab', q]); },
+    ensureTab: function(url, options) { return window.slicc._jsh('browser', ['ensureTab', url, options || {}]); },
+    eval: function(tab, code) { return window.slicc._jsh('browser', ['eval', tab, code]); },
+    evalAsync: function(tab, code) { return window.slicc._jsh('browser', ['evalAsync', tab, code]); },
+    cookie: function(tab, name) { return window.slicc._jsh('browser', ['cookie', tab, name]); },
+    localStorage: function(tab, key) { return window.slicc._jsh('browser', ['localStorage', tab, key]); },
+    fetch: function(tab, url, opts) { return window.slicc._jsh('browser', ['fetch', tab, url, opts || {}]); },
+  },
+  readFileBinary: function(path) {
+    return window.slicc._jsh('readFileBinary', [path]).then(function(r) {
+      var bin = atob(r.base64); var u8 = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+      return u8;
+    });
+  },
+  writeFileBinary: function(path, bytes) {
+    var bin = ''; for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return window.slicc._jsh('writeFileBinary', [path, btoa(bin)]);
+  },
+  fetchToFile: function(url, path) { return window.slicc._jsh('fetchToFile', [url, path]); },
 };
+window.slicc.exec.spawn = function(argv) { return window.slicc._jsh('spawn', [argv]); };
 window.bridge = window.slicc;
 
 // ── Helper: inject content into a full HTML document's <head> ─────
@@ -292,6 +361,9 @@ function buildNestedBridgeScript(savedState, savedStorage, name, isLight) {
         'parent.postMessage(m, "*");' +
       '});' +
     '}' +
+    'function _jshCall(op, args) { return _vfsCall("sprinkle-jsh", { op: op, args: args }, function(m) { return m.result; }); }' +
+    'function _b64ToU8(b64) { var bin = atob(b64); var u8 = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i); return u8; }' +
+    'function _u8ToB64(bytes) { var bin = ""; for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]); return btoa(bin); }' +
     'window.slicc = {' +
       'get name() { return window.__slicc_name; },' +
       'lick: function(event) {' +
@@ -338,8 +410,18 @@ function buildNestedBridgeScript(savedState, savedStorage, name, isLight) {
       'close: function() { parent.postMessage({ type: "sprinkle-close" }, "*"); },' +
       'minimize: function() { parent.postMessage({ type: "sprinkle-minimize" }, "*"); },' +
       'stopCone: function() { parent.postMessage({ type: "sprinkle-stop-cone" }, "*"); },' +
-      'attachImage: function(base64, name, mimeType) { parent.postMessage({ type: "sprinkle-attach-image", base64: base64, name: name, mimeType: mimeType }, "*"); }' +
+      'attachImage: function(base64, name, mimeType) { parent.postMessage({ type: "sprinkle-attach-image", base64: base64, name: name, mimeType: mimeType }, "*"); },' +
+      'exec: function(cmd) { return _vfsCall("sprinkle-exec", { cmd: cmd }, function(m) { return m.result; }); },' +
+      'agent: function(prompt, opts) { return _vfsCall("sprinkle-agent", { prompt: prompt, opts: opts }, function(m) { return m.result; }); },' +
+      'fetch: function(url, init) { return _jshCall("fetch", [url, init || null]); },' +
+      'http: { client: function(cfg) { function mk(method) { return function(path, opts) { return _jshCall("http", [cfg, method, path, opts || null]); }; } return { get: mk("get"), post: mk("post"), put: mk("put"), patch: mk("patch"), "delete": mk("delete") }; } },' +
+      'browser: { findTab: function(q) { return _jshCall("browser", ["findTab", q]); }, ensureTab: function(url, options) { return _jshCall("browser", ["ensureTab", url, options || {}]); }, eval: function(tab, code) { return _jshCall("browser", ["eval", tab, code]); }, evalAsync: function(tab, code) { return _jshCall("browser", ["evalAsync", tab, code]); }, cookie: function(tab, name) { return _jshCall("browser", ["cookie", tab, name]); }, localStorage: function(tab, key) { return _jshCall("browser", ["localStorage", tab, key]); }, fetch: function(tab, url, opts) { return _jshCall("browser", ["fetch", tab, url, opts || {}]); } },' +
+      'readFileBinary: function(path) { return _jshCall("readFileBinary", [path]).then(function(r) { return _b64ToU8(r.base64); }); },' +
+      'writeFileBinary: function(path, bytes) { return _jshCall("writeFileBinary", [path, _u8ToB64(bytes)]); },' +
+      'fetchToFile: function(url, path) { return _jshCall("fetchToFile", [url, path]); },' +
+      '_jsh: function(op, args) { return _jshCall(op, args); }' +
     '};' +
+    'window.slicc.exec.spawn = function(argv) { return _jshCall("spawn", [argv]); };' +
     'window.bridge = window.slicc;' +
     'addEventListener("message", function(e) {' +
       'var msg = e.data;' +
@@ -526,7 +608,9 @@ addEventListener('message', function(e) {
     'sprinkle-readdir-response', 'sprinkle-exists-response',
     'sprinkle-stat-response', 'sprinkle-mkdir-response', 'sprinkle-rm-response',
     'sprinkle-fetch-script-response',
-    'dip-readfile-response', 'dip-exists-response', 'dip-stat-response'
+    'sprinkle-exec-response', 'sprinkle-agent-response', 'sprinkle-jsh-response',
+    'dip-readfile-response', 'dip-exists-response', 'dip-stat-response', 'dip-jsh-response',
+    'dip-exec-response', 'dip-agent-response'
   ];
   if (responseTypes.indexOf(msg.type) !== -1) {
     if (window.__slicc_childIframe && window.__slicc_childIframe.contentWindow) {
@@ -574,8 +658,10 @@ addEventListener('message', function(e) {
       'sprinkle-stat', 'sprinkle-mkdir', 'sprinkle-rm',
       'sprinkle-storage-set', 'sprinkle-storage-remove', 'sprinkle-storage-clear',
       'sprinkle-fetch-script',
+      'sprinkle-exec', 'sprinkle-agent', 'sprinkle-jsh',
       'dip-lick', 'dip-height', 'dip-open-link',
-      'dip-readfile', 'dip-exists', 'dip-stat'
+      'dip-readfile', 'dip-exists', 'dip-stat', 'dip-jsh',
+      'dip-exec', 'dip-agent'
     ];
     if (bridgeTypes.indexOf(msg.type) !== -1) {
       parent.postMessage(msg, '*');
