@@ -16,6 +16,7 @@ import {
   previewSecret,
   SecretsPipeline,
   SessionSecretStore,
+  unmaskCdpFrame,
 } from '@slicc/shared-ts';
 import {
   type DaSignAndForwardEnvelope,
@@ -973,6 +974,56 @@ async function cdpCloseTarget(params: Record<string, unknown>): Promise<Record<s
   return { success: true };
 }
 
+/**
+ * CDP methods that carry whole-token secret fields on outgoing frames
+ * (Wave A D1). Anything else is forwarded verbatim to chrome.debugger.
+ * Kept in sync with `unmaskCdpFrame` in `@slicc/shared-ts`.
+ */
+const CDP_UNMASK_METHODS = new Set<string>([
+  'Runtime.evaluate',
+  'Runtime.callFunctionOn',
+  'Input.insertText',
+]);
+
+/**
+ * Resolve the target tab's CURRENT URL hostname and unmask whole-token
+ * secret fields against it. Fail-closed: any failure to resolve the URL
+ * (tab gone, missing url, unparseable) leaves the frame untouched.
+ */
+async function maybeUnmaskCdpFrame(
+  tabId: number,
+  method: string,
+  params: Record<string, unknown> | undefined
+): Promise<Record<string, unknown> | undefined> {
+  if (!CDP_UNMASK_METHODS.has(method)) return params;
+  if (!params || typeof params !== 'object') return params;
+
+  let hostname: string | null = null;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    const url = tab?.url;
+    if (typeof url === 'string' && url.length > 0) {
+      try {
+        hostname = new URL(url).hostname || null;
+      } catch {
+        hostname = null;
+      }
+    }
+  } catch {
+    hostname = null;
+  }
+  if (!hostname) return params;
+
+  const pipeline = await buildSecretsPipeline();
+  await pipeline.reload();
+  if (!pipeline.hasSecrets()) return params;
+
+  const { frame, changed } = unmaskCdpFrame({ method, params }, hostname, pipeline);
+  if (!changed) return params;
+  const nextParams = (frame as { params?: Record<string, unknown> }).params;
+  return nextParams ?? params;
+}
+
 async function cdpSendCommand(
   method: string,
   params?: Record<string, unknown>,
@@ -985,7 +1036,8 @@ async function cdpSendCommand(
     );
   }
 
-  const result = await chrome.debugger.sendCommand({ tabId }, method, params);
+  const effectiveParams = await maybeUnmaskCdpFrame(tabId, method, params);
+  const result = await chrome.debugger.sendCommand({ tabId }, method, effectiveParams);
   return result ?? {};
 }
 
