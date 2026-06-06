@@ -7,6 +7,8 @@ Platform-agnostic primitives shared across `@slicc/webapp`, `@slicc/node-server`
 - `secret-masking.ts` — HMAC-SHA256 masking, domain matching, scrubbing.
 - `secrets-pipeline.ts` — stateful unmask/scrub class; Basic-auth-aware, URL-credential-aware, byte-safe body unmask.
 - `oauth-extra-domains-storage.ts` — pure-JS read/write helpers over the `slicc_oauth_extra_domains` localStorage key. Lets the extension options page (`secrets.html`) share the per-provider extra-domains store with the webapp's `provider-settings.ts` without dragging in the heavier provider module.
+- `sigv4.ts` — pure SigV4 v4 request signer over Web Crypto (`crypto.subtle`), no AWS SDK. Verified against the canonical AWS test vectors in `tests/sigv4.test.ts`.
+- `sign-and-forward.ts` — S3 / Adobe da.live sign-and-forward orchestration (`executeS3SignAndForward` / `executeDaSignAndForward`). Validates an envelope, resolves credentials via an async `SecretGetter`, signs (S3) or attaches a Bearer token (DA), forwards, and returns a JSON-cloneable reply. Consumed by the webapp mount barrel, the node-server Express handlers (via a `SecretStore` adapter), and the extension service worker.
 
 ## Conventions
 

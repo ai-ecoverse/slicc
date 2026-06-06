@@ -4,7 +4,7 @@ import {
   executeS3SignAndForward,
   type S3SignAndForwardEnvelope,
   type SecretGetter,
-} from '../../../src/fs/mount/sign-and-forward-shared.js';
+} from '../src/sign-and-forward.js';
 
 // ----------------- helpers -----------------
 

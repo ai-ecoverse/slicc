@@ -4,23 +4,20 @@
  * The browser-side mount backends never compute SigV4 signatures or hold
  * credentials. They post envelopes through a transport (CLI: HTTP POST to
  * node-server's `/api/s3-sign-and-forward`; extension: `chrome.runtime`
- * message to the service worker). Both transports ultimately call into
- * this module, which validates the envelope, resolves credentials via a
- * pluggable async secret getter, signs (S3) or attaches a Bearer token
- * (DA), forwards to upstream, and returns a JSON-cloneable reply.
+ * message to the service worker). All transports ultimately call into this
+ * module, which validates the envelope, resolves credentials via a pluggable
+ * async secret getter, signs (S3) or attaches a Bearer token (DA), forwards
+ * to upstream, and returns a JSON-cloneable reply.
  *
- * `executeS3SignAndForward` is consumed by:
+ * `executeS3SignAndForward` / `executeDaSignAndForward` are consumed by:
  *   - `packages/chrome-extension/src/service-worker.ts` (extension path,
  *     reads from `chrome.storage.local`)
- *   - tests in `packages/webapp/tests/fs/mount/sign-and-forward-shared.test.ts`
- *
- * `packages/node-server/src/secrets/sign-and-forward.ts` mirrors this
- * logic in node-server source (the rootDir constraint blocks cross-import).
- * Both implementations are kept in sync by their respective test suites
- * exercising the same canonical envelope shapes.
+ *   - `packages/node-server/src/secrets/sign-and-forward.ts` (CLI path,
+ *     wraps these in Express handlers via a SecretStore adapter)
+ *   - tests in `packages/shared-ts/tests/sign-and-forward.test.ts`
  */
 
-import { signSigV4 } from './signing-s3.js';
+import { signSigV4 } from './sigv4.js';
 
 // ---------------- envelope contract ----------------
 
@@ -104,8 +101,7 @@ interface S3Profile {
 // ---------------- helpers ----------------
 
 function decodeBase64(b64: string): Uint8Array {
-  // Browser context uses atob; SW + tests both have it. Avoid Node's Buffer
-  // since this module is consumed in browser-side bundles.
+  // atob is a global in browsers, extension service workers, and Node 22+.
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {
@@ -124,6 +120,13 @@ function encodeBase64(bytes: Uint8Array): string {
 
 function isAllowedMethod(m: unknown): m is SignedMethod {
   return typeof m === 'string' && (ALLOWED_METHODS as readonly string[]).includes(m);
+}
+
+class ProfileNotConfiguredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ProfileNotConfiguredError';
+  }
 }
 
 async function resolveS3Profile(name: string, store: SecretGetter): Promise<S3Profile> {
@@ -151,13 +154,6 @@ async function resolveS3Profile(name: string, store: SecretGetter): Promise<S3Pr
     endpoint: await store.get(`s3.${name}.endpoint`),
     pathStyle: (await store.get(`s3.${name}.path_style`)) === 'true',
   };
-}
-
-class ProfileNotConfiguredError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'ProfileNotConfiguredError';
-  }
 }
 
 function buildS3Url(

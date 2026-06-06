@@ -12,20 +12,18 @@
  */
 
 import {
-  type FetchProxySecretSource,
-  previewSecret,
-  SecretsPipeline,
-  SessionSecretStore,
-  unmaskCdpFrame,
-} from '@slicc/shared-ts';
-import {
   type DaSignAndForwardEnvelope,
   executeDaSignAndForward,
   executeS3SignAndForward,
+  type FetchProxySecretSource,
+  previewSecret,
   type S3SignAndForwardEnvelope,
   type SecretGetter,
+  SecretsPipeline,
+  SessionSecretStore,
   type SignAndForwardReply,
-} from '../../webapp/src/fs/mount/sign-and-forward-shared.js';
+  unmaskCdpFrame,
+} from '@slicc/shared-ts';
 import {
   extractHandoffFromWebRequest,
   handoffFingerprint,
