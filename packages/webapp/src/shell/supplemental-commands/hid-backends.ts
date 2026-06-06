@@ -161,7 +161,14 @@ class BridgedHidBackend implements HidBackend {
       if (!p || p.handle !== handle) return;
       onReport({ reportId: p.reportId, bytes: new Uint8Array(p.bytes) });
     });
-    await this.rpc.call('hid-subscribe-input-reports', { handle });
+    // If the subscribe RPC rejects (e.g. unknown handle) the event
+    // listener must be torn down or it leaks for the worker's lifetime.
+    try {
+      await this.rpc.call('hid-subscribe-input-reports', { handle });
+    } catch (err) {
+      off();
+      throw err;
+    }
     return async () => {
       off();
       try {

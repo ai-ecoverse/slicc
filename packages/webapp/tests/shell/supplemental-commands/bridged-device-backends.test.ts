@@ -118,6 +118,21 @@ describe('resolveHidBackend + BridgedHidBackend', () => {
   it('returns null when neither DOM nor panelRpc is available', () => {
     expect(resolveHidBackend(false, null)).toBeNull();
   });
+
+  it('removes the input-report listener when the subscribe RPC rejects', async () => {
+    const offSpy = vi.fn();
+    const call = vi.fn(async (op: string) => {
+      if (op === 'hid-subscribe-input-reports') throw new Error('unknown handle');
+      return {};
+    });
+    const onEvent = vi.fn(() => offSpy);
+    const rpc = { call, onEvent } as never;
+    const backend = resolveHidBackend(false, rpc);
+    await expect(backend!.subscribeInputReports('hid1', () => {})).rejects.toThrow(
+      'unknown handle'
+    );
+    expect(offSpy).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('resolveSerialBackend + BridgedSerialBackend', () => {
