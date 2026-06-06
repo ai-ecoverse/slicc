@@ -16,8 +16,25 @@ function createContainer(): HTMLElement {
   return el;
 }
 
-function tick(ms = 5): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+/**
+ * Poll until `predicate` returns a non-null/non-false value or the timeout
+ * elapses. Used instead of a fixed `setTimeout` so the assertions don't
+ * race the real-MessageChannel RPC round-trips (readDir → stat → render)
+ * under CI load — a fixed wait flaked intermittently.
+ */
+async function waitFor<T>(
+  predicate: () => T | null | undefined | false,
+  { timeout = 2000, interval = 5 }: { timeout?: number; interval?: number } = {}
+): Promise<T> {
+  const start = Date.now();
+  for (;;) {
+    const value = predicate();
+    if (value != null && value !== false) return value;
+    if (Date.now() - start > timeout) {
+      throw new Error('waitFor: condition not met within timeout');
+    }
+    await new Promise((r) => setTimeout(r, interval));
+  }
 }
 
 describe('FileBrowserPanel', () => {
@@ -114,10 +131,14 @@ describe('FileBrowserPanel — renders via RemoteVfsClient + VfsRpcHost', () => 
       return [];
     });
     ctx.vfs.stat.mockResolvedValue({ type: 'file', size: 42, mtime: 0, ctime: 0 } as Stats);
-    // Allow the async refresh chain (readDir → stat for the file) to settle.
-    await tick(20);
-    const rows = Array.from(ctx.container.querySelectorAll('.file-browser__name')) as HTMLElement[];
-    const names = rows.map((r) => r.textContent);
+    // Poll the async refresh chain (readDir → stat for the file) to settle.
+    const names = await waitFor(() => {
+      const rows = Array.from(
+        ctx!.container.querySelectorAll('.file-browser__name')
+      ) as HTMLElement[];
+      const ns = rows.map((r) => r.textContent);
+      return ns.includes('workspace') && ns.includes('readme.txt') ? ns : null;
+    });
     expect(names).toEqual(expect.arrayContaining(['workspace', 'readme.txt']));
     expect(ctx.vfs.readDir).toHaveBeenCalledWith('/');
   });
@@ -129,9 +150,11 @@ describe('FileBrowserPanel — renders via RemoteVfsClient + VfsRpcHost', () => 
       return [];
     });
     ctx.vfs.stat.mockResolvedValue({ type: 'file', size: 2048, mtime: 0, ctime: 0 } as Stats);
-    await tick(20);
-    const size = ctx.container.querySelector('.file-browser__size') as HTMLElement | null;
-    expect(size?.textContent).toBe('2.0K');
+    const sizeText = await waitFor(() => {
+      const size = ctx!.container.querySelector('.file-browser__size') as HTMLElement | null;
+      return size?.textContent === '2.0K' ? size.textContent : null;
+    });
+    expect(sizeText).toBe('2.0K');
     expect(ctx.vfs.stat).toHaveBeenCalledWith('/big.bin');
   });
 });

@@ -117,6 +117,18 @@ export interface KernelFacade {
 
   /** Today's helper used by tray-leader to know which scoop is the cone. */
   getConeJid(): string | null;
+
+  /**
+   * Seed each registered scoop's chat buffer from its agent's restored
+   * canonical `AgentMessage[]`, immediately after `orchestrator.init()`
+   * and BEFORE any post-boot turn can `persistScoop`. The bridge's
+   * `messageBuffers` otherwise start empty on boot, so the first turn
+   * after a reload would persist only the new messages and overwrite the
+   * full conversation in the `browser-coding-agent` UI store — the
+   * "only the last few messages after a reboot" truncation. Idempotent
+   * and non-destructive: only seeds scoops whose buffer is still empty.
+   */
+  seedBuffersFromAgentState(): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
