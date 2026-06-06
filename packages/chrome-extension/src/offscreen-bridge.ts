@@ -909,8 +909,11 @@ export class OffscreenBridge implements KernelFacade {
    * persist only the new messages and overwrite the full conversation
    * in the `browser-coding-agent` UI store — the "only the last few
    * messages after a reboot" truncation. Non-destructive: only seeds
-   * scoops whose buffer is still empty, and persists the seeded buffer
-   * so a subsequent panel reload sees the canonical history immediately.
+   * scoops whose buffer is still empty, and AWAITS the persist of the
+   * seeded buffer so the `browser-coding-agent` store is repaired before
+   * `createKernelHost` signals `kernel-worker-ready` — otherwise a panel
+   * that mounts and reads the store on the next tick could still see the
+   * truncated snapshot.
    */
   async seedBuffersFromAgentState(): Promise<void> {
     if (!this.orchestrator) return;
@@ -922,7 +925,7 @@ export class OffscreenBridge implements KernelFacade {
       this.messageBuffers.set(scoop.jid, buf);
       this.currentMessageId.delete(scoop.jid);
       this.fanOutMessageId.delete(scoop.jid);
-      this.persistScoop(scoop.jid);
+      await this.persistScoopAwait(scoop.jid);
     }
   }
 
@@ -1082,19 +1085,33 @@ export class OffscreenBridge implements KernelFacade {
    * semantics as the standalone leader.
    */
   persistScoop(jid: string): void {
+    void this.persistScoopAwait(jid);
+  }
+
+  /**
+   * Awaitable variant of {@link persistScoop}. Callers that must KNOW the
+   * UI store has been written before proceeding — e.g. boot-time
+   * {@link seedBuffersFromAgentState}, which runs inside `createKernelHost`
+   * before `kernel-worker-ready` is signaled so the panel never mounts
+   * against a stale/truncated `browser-coding-agent` snapshot — await this
+   * instead. Errors are still swallowed so a failed write can't break boot.
+   */
+  private async persistScoopAwait(jid: string): Promise<void> {
     if (!this.sessionStore || !this.orchestrator) return;
     const scoop = this.orchestrator.getScoops().find((s) => s.jid === jid);
     if (!scoop) return;
     const sessionId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
     const buf = this.messageBuffers.get(jid);
     if (!buf || buf.length === 0) return;
-    // BufferedChatMessage is structurally compatible with ChatMessage
-    this.sessionStore.saveMessages(sessionId, buf as unknown as ChatMessage[]).catch((err) => {
+    try {
+      // BufferedChatMessage is structurally compatible with ChatMessage
+      await this.sessionStore.saveMessages(sessionId, buf as unknown as ChatMessage[]);
+    } catch (err) {
       log.error('persistScoop failed', {
         sessionId,
         error: err instanceof Error ? err.message : String(err),
       });
-    });
+    }
   }
 
   // -------------------------------------------------------------------------
