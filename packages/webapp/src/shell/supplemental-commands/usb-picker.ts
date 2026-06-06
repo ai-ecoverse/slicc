@@ -48,7 +48,9 @@ export function openUsbPickerPopup(filters: UsbDeviceFilter[]): Promise<UsbPicke
     };
     const timer = setTimeout(() => finish({ cancelled: true }), POPUP_TIMEOUT_MS);
 
-    openPickerPopup('usb-device', filters ?? [])
+    // Pass the same budget down so `openPickerPopup` can tear down its
+    // `chrome.runtime.onMessage` listener if the popup never posts back.
+    openPickerPopup('usb-device', filters ?? [], undefined, { timeoutMs: POPUP_TIMEOUT_MS })
       .then((raw) => {
         const m = raw as DevicePickerResult;
         if (m.cancelled) finish({ cancelled: true });

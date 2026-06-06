@@ -65,12 +65,24 @@ export type PickerPopupResult = DirectoryPickerResult | DevicePickerResult;
 
 /** Type guard for the extension globals the launcher needs. */
 function getChromeApis(): {
-  windows?: { create?: (opts: Record<string, unknown>) => Promise<{ id?: number }> };
+  windows?: {
+    create?: (opts: Record<string, unknown>) => Promise<{ id?: number }>;
+    onRemoved?: {
+      addListener: (l: (windowId: number) => void) => void;
+      removeListener: (l: (windowId: number) => void) => void;
+    };
+  };
   runtime?: { id?: string; onMessage?: { addListener: Function; removeListener: Function } };
 } | null {
   const c = (globalThis as { chrome?: unknown }).chrome as
     | {
-        windows?: { create?: (opts: Record<string, unknown>) => Promise<{ id?: number }> };
+        windows?: {
+          create?: (opts: Record<string, unknown>) => Promise<{ id?: number }>;
+          onRemoved?: {
+            addListener: (l: (windowId: number) => void) => void;
+            removeListener: (l: (windowId: number) => void) => void;
+          };
+        };
         runtime?: {
           id?: string;
           onMessage?: { addListener: Function; removeListener: Function };
@@ -79,6 +91,19 @@ function getChromeApis(): {
       }
     | undefined;
   return c ?? null;
+}
+
+export interface OpenPickerPopupOptions {
+  /**
+   * When the popup doesn't post a result back within this many ms, the
+   * `chrome.runtime.onMessage` listener is removed and the promise
+   * resolves with `{ cancelled: true }`. Without this safeguard a popup
+   * the user closes (or that never reaches its button) leaves the
+   * listener installed forever — the per-kind wrappers used to layer
+   * their own timeouts on top of this Promise, which kept their outer
+   * promises settled but never tore down the inner listener.
+   */
+  timeoutMs?: number;
 }
 
 /**
@@ -106,13 +131,15 @@ export function canOpenPickerPopup(): boolean {
 export async function openPickerPopup(
   kind: PickerKind,
   filters: unknown[] = [],
-  requestId: string = `picker-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  requestId: string = `picker-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  options: OpenPickerPopupOptions = {}
 ): Promise<PickerPopupResult> {
   const chromeApis = getChromeApis();
   if (!chromeApis?.runtime?.onMessage || !chromeApis.windows?.create) {
     throw new Error('picker popup: chrome.windows.create not available');
   }
   const onMessage = chromeApis.runtime.onMessage;
+  const onWindowRemoved = chromeApis.windows.onRemoved;
   const getURL = (chromeApis.runtime as { getURL?: (path: string) => string }).getURL?.bind(
     chromeApis.runtime
   );
@@ -126,6 +153,31 @@ export async function openPickerPopup(
 
   return new Promise<PickerPopupResult>((resolve) => {
     let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let popupWindowId: number | undefined;
+
+    const cleanup = () => {
+      try {
+        onMessage.removeListener(handler);
+      } catch {
+        /* listener already gone */
+      }
+      if (onWindowRemoved && windowRemovedHandler) {
+        try {
+          onWindowRemoved.removeListener(windowRemovedHandler);
+        } catch {
+          /* listener already gone */
+        }
+      }
+      if (timer !== undefined) clearTimeout(timer);
+    };
+
+    const finish = (result: PickerPopupResult) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    };
 
     const handler = (msg: unknown): void => {
       if (settled) return;
@@ -135,19 +187,31 @@ export async function openPickerPopup(
         requestId?: string;
       } & PickerPopupResult;
       if (m?.source !== 'picker-popup' || m.kind !== kind || m.requestId !== requestId) return;
-      settled = true;
-      try {
-        onMessage.removeListener(handler);
-      } catch {
-        /* listener already gone */
-      }
       const { source: _s, kind: _k, requestId: _r, ...rest } = m;
       void _s;
       void _k;
       void _r;
-      resolve(rest as PickerPopupResult);
+      finish(rest as PickerPopupResult);
     };
     onMessage.addListener(handler);
+
+    // Detect user closing the popup window without picking. Browsers that
+    // don't expose `chrome.windows.onRemoved` (or the test harness) fall
+    // back to the timeout below.
+    const windowRemovedHandler = onWindowRemoved
+      ? (windowId: number) => {
+          if (popupWindowId !== undefined && windowId === popupWindowId) {
+            finish({ cancelled: true });
+          }
+        }
+      : undefined;
+    if (onWindowRemoved && windowRemovedHandler) {
+      onWindowRemoved.addListener(windowRemovedHandler);
+    }
+
+    if (options.timeoutMs && options.timeoutMs > 0) {
+      timer = setTimeout(() => finish({ cancelled: true }), options.timeoutMs);
+    }
 
     chromeApis.windows!.create!({
       url: popupUrl,
@@ -158,26 +222,14 @@ export async function openPickerPopup(
     })
       .then((win) => {
         if (!win?.id) {
-          if (settled) return;
-          settled = true;
-          try {
-            onMessage.removeListener(handler);
-          } catch {
-            /* listener already gone */
-          }
-          resolve({ error: 'failed to open picker window' });
+          finish({ error: 'failed to open picker window' });
+          return;
         }
+        popupWindowId = win.id;
       })
       .catch((err: unknown) => {
-        if (settled) return;
-        settled = true;
-        try {
-          onMessage.removeListener(handler);
-        } catch {
-          /* listener already gone */
-        }
         log?.warn?.('picker popup window.create failed', err);
-        resolve({ error: err instanceof Error ? err.message : String(err) });
+        finish({ error: err instanceof Error ? err.message : String(err) });
       });
   });
 }

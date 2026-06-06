@@ -56,7 +56,9 @@ export function openMountPickerPopup(requestId?: string): Promise<DirectoryPicke
     };
     const timer = setTimeout(() => finish({ cancelled: true }), POPUP_TIMEOUT_MS);
 
-    openPickerPopup('directory', [], popupRequestId)
+    // Pass the same budget down so `openPickerPopup` can tear down its
+    // `chrome.runtime.onMessage` listener if the popup never posts back.
+    openPickerPopup('directory', [], popupRequestId, { timeoutMs: POPUP_TIMEOUT_MS })
       .then((result) => {
         const r = result as DirectoryPickerResult;
         if (r.error) {

@@ -47,7 +47,9 @@ export function openHidPickerPopup(filters: HidDeviceFilter[]): Promise<HidPicke
     };
     const timer = setTimeout(() => finish({ cancelled: true }), POPUP_TIMEOUT_MS);
 
-    openPickerPopup('hid-device', filters ?? [])
+    // Pass the same budget down so `openPickerPopup` can tear down its
+    // `chrome.runtime.onMessage` listener if the popup never posts back.
+    openPickerPopup('hid-device', filters ?? [], undefined, { timeoutMs: POPUP_TIMEOUT_MS })
       .then((raw) => {
         const m = raw as DevicePickerResult;
         if (m.cancelled) finish({ cancelled: true });

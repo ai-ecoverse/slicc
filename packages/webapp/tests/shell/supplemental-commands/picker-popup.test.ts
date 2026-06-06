@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   canOpenPickerPopup,
   openPickerPopup,
@@ -6,6 +6,7 @@ import {
 } from '../../../src/shell/supplemental-commands/picker-popup.js';
 
 type Listener = (msg: unknown) => void;
+type WindowRemovedListener = (windowId: number) => void;
 
 describe('canOpenPickerPopup', () => {
   afterEach(() => {
@@ -167,5 +168,107 @@ describe('openPickerPopup', () => {
     await expect(openPickerPopup('usb-device', [])).rejects.toThrow(
       /chrome\.windows\.create not available/
     );
+  });
+
+  it('removes the runtime.onMessage listener when timeoutMs elapses', async () => {
+    vi.useFakeTimers();
+    try {
+      const promise = openPickerPopup('usb-device', [], 'req-timeout', { timeoutMs: 1_000 });
+      expect(listeners).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      const result = await promise;
+      expect(result).toMatchObject({ cancelled: true });
+      expect(listeners).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('removes the listener and resolves cancelled when the popup window is closed', async () => {
+    let removedListeners: WindowRemovedListener[] = [];
+    (globalThis as unknown as { chrome: unknown }).chrome = {
+      runtime: {
+        id: 'ext-id',
+        getURL: (path: string) => `chrome-extension://ext-id/${path}`,
+        onMessage: {
+          addListener: (l: Listener) => {
+            listeners.push(l);
+          },
+          removeListener: (l: Listener) => {
+            listeners = listeners.filter((x) => x !== l);
+          },
+        },
+      },
+      windows: {
+        create: (opts: { url: string }) => {
+          createCalls.push({ url: opts.url });
+          return Promise.resolve({ id: 42 });
+        },
+        onRemoved: {
+          addListener: (l: WindowRemovedListener) => {
+            removedListeners.push(l);
+          },
+          removeListener: (l: WindowRemovedListener) => {
+            removedListeners = removedListeners.filter((x) => x !== l);
+          },
+        },
+      },
+    };
+    const promise = openPickerPopup('hid-device', [], 'req-closed');
+    // Microtask hop so window.create resolves and popupWindowId is captured.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(listeners).toHaveLength(1);
+    expect(removedListeners).toHaveLength(1);
+    removedListeners[0](42);
+    const result = await promise;
+    expect(result).toMatchObject({ cancelled: true });
+    expect(listeners).toHaveLength(0);
+    expect(removedListeners).toHaveLength(0);
+  });
+
+  it('ignores onRemoved events for other windows', async () => {
+    let removedListeners: WindowRemovedListener[] = [];
+    (globalThis as unknown as { chrome: unknown }).chrome = {
+      runtime: {
+        id: 'ext-id',
+        getURL: (path: string) => `chrome-extension://ext-id/${path}`,
+        onMessage: {
+          addListener: (l: Listener) => {
+            listeners.push(l);
+          },
+          removeListener: (l: Listener) => {
+            listeners = listeners.filter((x) => x !== l);
+          },
+        },
+      },
+      windows: {
+        create: () => Promise.resolve({ id: 7 }),
+        onRemoved: {
+          addListener: (l: WindowRemovedListener) => {
+            removedListeners.push(l);
+          },
+          removeListener: (l: WindowRemovedListener) => {
+            removedListeners = removedListeners.filter((x) => x !== l);
+          },
+        },
+      },
+    };
+    const promise = openPickerPopup('serial-port', [], 'req-other');
+    await Promise.resolve();
+    await Promise.resolve();
+    // Unrelated window id: must NOT settle the promise or tear down listeners.
+    removedListeners[0](99);
+    expect(listeners).toHaveLength(1);
+    // Real message still wins.
+    listeners[0]({
+      source: 'picker-popup',
+      kind: 'serial-port',
+      requestId: 'req-other',
+      cancelled: true,
+    });
+    const result = await promise;
+    expect(result).toMatchObject({ cancelled: true });
+    expect(listeners).toHaveLength(0);
   });
 });
