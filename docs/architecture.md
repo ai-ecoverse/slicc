@@ -619,9 +619,18 @@ Real secret values are scrubbed at every output boundary before reaching the age
 
 1. **Shell environment** — env vars contain masked values, not real ones (source-masking invariant: secrets enter the agent realm already masked, so most tool output is secret-free by construction)
 2. **Tool output** — every completed `bash`, `read_file`, and other tool-result buffer is forwarded to the active `SecretsPipeline` (SW in the extension float, node-server in CLI/Electron/hosted) for a single real→masked scrub pass before reaching the agent loop. Wired in `packages/webapp/src/core/tool-adapter.ts` via the `scrubToolResult` config that `scoop-context.ts` populates from `getToolResultScrubber()`; the SW handler is `secrets.scrub-tool-result` and the node-server endpoint is `POST /api/secrets/scrub`. Direction is real→masked ONLY, so the pass is idempotent — already-masked tokens and secret-free output round-trip unchanged — and never returns a secret to the agent. Scrub-RPC failure degrades to unscrubbed output rather than blocking the tool result; the env-var source-masking invariant remains the load-bearing defense
-3. **Fetch proxy (outbound)** — masked values in request headers are unmasked if the domain matches; 403 if not. Masked values in request bodies are unmasked for matching domains and passed through unchanged otherwise
-4. **Fetch proxy (inbound)** — response bodies and headers are scanned for real values and replaced with masks
-5. **Chat messages** — user-typed real values are scrubbed before entering the agent conversation
+3. **Offscreen `globalThis.fetch` outbound scrub** (extension float only) — `packages/chrome-extension/src/offscreen-outbound-scrub.ts` wraps the offscreen document's `globalThis.fetch` so any cross-origin http(s) request has its headers and body scrubbed real→masked before bytes leave the device. This is defense-in-depth for the agent's pi-ai LLM providers, which reach `globalThis.fetch` directly (bypassing the SW Port-backed `createProxiedFetch`) and have `host_permissions: <all_urls>` available. Direction is scrub-only with no domain gate (masking is always safe); response bodies pass through unchanged so streaming SSE is preserved; same-origin (`chrome-extension://`), non-http(s), `ReadableStream` / `FormData` bodies pass through untouched. Snapshot is RPC'd from the SW via `secrets.list-with-values-for-pipeline`. The unmask direction lives in the SW fetch-proxy where it belongs
+4. **Fetch proxy (outbound)** — masked values in request headers are unmasked if the domain matches; 403 if not. Masked values in request bodies are unmasked for matching domains and passed through unchanged otherwise
+5. **Fetch proxy (inbound)** — response bodies and headers are scanned for real values and replaced with masks
+6. **Chat messages** — user-typed real values are scrubbed before entering the agent conversation
+
+### CDP-wire transparent unmask
+
+Secret-typed page interactions (typing a credential into a login form, evaluating a `fetch` against a stored API key) need the **real** value at the browser, but the agent only ever holds the masked token. The CDP-wire helper unmasks whole-token masked fields inside a parsed CDP command frame at the transport boundary, gated per-frame by the target tab's hostname:
+
+- Helper: `packages/shared-ts/src/cdp-frame-unmask.ts` — `unmaskCdpFrame(frame, hostname, pipeline)` is pure and platform-agnostic, returning `{ frame, changed }`. When nothing applies the original reference is returned untouched (no clone, no mutation).
+- Methods covered (single, whole masked token per frame): `Runtime.evaluate` → `params.expression`; `Input.insertText` → `params.text`; `Runtime.callFunctionOn` → string entries in `params.arguments[].value`.
+- Domain gating reuses `SecretsPipeline.unmaskBody` semantics: a domain mismatch (or missing secret) leaves the value verbatim — no forbidden-surface error, masked tokens in conversation context are harmless. `pipeline.hasSecrets() === false` short-circuits.
 
 ### Storage Backends
 
@@ -650,6 +659,8 @@ File path resolution: `--env-file <path>` CLI flag → `SLICC_SECRETS_FILE` env 
 | `packages/webapp/src/scoops/scoop-context.ts`                             | Shell env population with masked values (filtered to POSIX-valid identifiers — dotted names like `s3.*` / `oauth.*` are NOT exposed in `$ENV`); wires the tool-output `scrubToolResult` into `adaptTools` once per scoop init                                                               |
 | `packages/webapp/src/core/tool-adapter.ts`                                | Tool-result boundary; applies `scrubToolResult` (real→masked, idempotent, single-pass) to the completed buffer before parsing into agent content blocks                                                                                                                                     |
 | `packages/webapp/src/core/secret-scrub.ts`                                | `getToolResultScrubber()` — returns the float-correct async scrubber (extension → `secrets.scrub-tool-result` SW message; CLI/Electron/hosted → `POST /api/secrets/scrub`). RPC failures degrade to identity                                                                                |
+| `packages/chrome-extension/src/offscreen-outbound-scrub.ts`               | Defense-in-depth real→masked wrapper around the offscreen document's `globalThis.fetch` (cross-origin http(s) only; same-origin / non-http(s) / streaming bodies pass through). Snapshot is RPC'd from the SW via `secrets.list-with-values-for-pipeline`                                   |
+| `packages/shared-ts/src/cdp-frame-unmask.ts`                              | `unmaskCdpFrame(frame, hostname, pipeline)` — pure helper that unmasks whole-token secret fields in `Runtime.evaluate` / `Input.insertText` / `Runtime.callFunctionOn` CDP frames, gated per-frame on the target tab's hostname via `SecretsPipeline.unmaskBody`                            |
 
 See [docs/secrets.md](secrets.md) for user-facing setup instructions.
 

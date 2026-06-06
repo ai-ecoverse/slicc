@@ -140,17 +140,48 @@ Brokers (`packages/webapp/src/sudo/`):
 All brokers **fail closed**: any transport error, malformed response, or missing
 gesture resolves to `deny`.
 
+### Explicit `sudo <cmd>` shell command
+
+The transparent `Cmnd` gate above prompts whenever the agent runs a command that
+matches a policy rule. The `sudo` supplemental command
+(`packages/webapp/src/shell/supplemental-commands/sudo-command.ts`) is the
+**explicit** elevation surface for the agent — `sudo <cmd> [args...]` routes a
+sensitive action through the broker on demand, even when no policy rule would
+have fired. Wiring mirrors the transparent gate: same `SudoBroker`, same
+"Allow" / "Always" / "Deny" verdict, same `/etc/sudoers.d/granted` sink on
+"Always".
+
+Behavior:
+
+- The inner `args` are forwarded verbatim to `ctx.exec` (no shell re-parsing), so
+  arguments containing spaces or glob characters survive intact — matching the
+  bash-builtin `sudo` semantics.
+- **Single-prompt invariant**: before dispatching the inner command, `sudo`
+  registers a one-shot bypass keyed by canonical subject
+  (`name + ' ' + args.join(' ')`) so the transparent `Cmnd` gate does not fire a
+  second prompt for the same invocation. A nested inner command that itself
+  runs a separately-gated subject still prompts once on its own.
+- **Deny** exits `1` with `sudo: approval denied`; the inner command does not
+  run.
+- **Always** persists the broker-supplied pattern (defaulting to the canonical
+  subject) via the same `persistCommandGrant` sink the transparent gate uses, so
+  the `NOPASSWD Cmnd` line appears in `/etc/sudoers.d/granted` and live-reload
+  picks it up immediately.
+- **No broker configured** (e.g. panel terminal — already the approver) exits
+  `1` with `sudo: command-level approval is not configured`.
+
 ### Files
 
-| Path                                              | Role                                |
-| ------------------------------------------------- | ----------------------------------- |
-| `packages/webapp/src/shell/sudo/sudoers.ts`       | Parser + matcher + self-protection  |
-| `packages/webapp/src/sudo/sudo-manager.ts`        | Live policy store + reload + broker |
-| `packages/webapp/src/fs/sudo-fs.ts`               | FS-level gate (`createSudoFs`)      |
-| `packages/webapp/src/shell/sudo/command-guard.ts` | Command-level gate                  |
-| `packages/webapp/src/sudo/*-broker.ts`            | Float-specific approval brokers     |
-| `packages/node-server/src/sudo/`                  | `/api/sudo-approve` + OS dialogs    |
-| `packages/vfs-root/etc/sudoers`                   | Default commented-out template      |
+| Path                                                              | Role                                  |
+| ----------------------------------------------------------------- | ------------------------------------- |
+| `packages/webapp/src/shell/sudo/sudoers.ts`                       | Parser + matcher + self-protection    |
+| `packages/webapp/src/sudo/sudo-manager.ts`                        | Live policy store + reload + broker   |
+| `packages/webapp/src/fs/sudo-fs.ts`                               | FS-level gate (`createSudoFs`)        |
+| `packages/webapp/src/shell/sudo/command-guard.ts`                 | Command-level gate                    |
+| `packages/webapp/src/shell/supplemental-commands/sudo-command.ts` | `sudo <cmd>` explicit-request surface |
+| `packages/webapp/src/sudo/*-broker.ts`                            | Float-specific approval brokers       |
+| `packages/node-server/src/sudo/`                                  | `/api/sudo-approve` + OS dialogs      |
+| `packages/vfs-root/etc/sudoers`                                   | Default commented-out template        |
 
 ---
 
