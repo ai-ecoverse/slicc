@@ -105,12 +105,12 @@ final class ChromeLauncherTests: XCTestCase {
         XCTAssertEqual(Array(args.suffix(chromeArgs.count)), chromeArgs)
     }
 
-    func testResolveUserDataDirDefaultsToSliccProfilesInHomeDir() {
+    func testResolveUserDataDirDefaultsToApplicationSupportInHomeDir() {
         let launcher = makeLauncher(homeDirectory: "/Users/test")
 
         XCTAssertEqual(
             launcher.resolveUserDataDir(),
-            "/Users/test/.slicc/profiles/browser-coding-agent-chrome"
+            "/Users/test/Library/Application Support/Slicc/profiles/browser-coding-agent-chrome"
         )
     }
 
@@ -119,11 +119,11 @@ final class ChromeLauncherTests: XCTestCase {
 
         XCTAssertEqual(
             launcher.resolveUserDataDir(servePort: 5720),
-            "/Users/test/.slicc/profiles/browser-coding-agent-chrome-5720"
+            "/Users/test/Library/Application Support/Slicc/profiles/browser-coding-agent-chrome-5720"
         )
         XCTAssertEqual(
             launcher.resolveUserDataDir(servePort: 5710),
-            "/Users/test/.slicc/profiles/browser-coding-agent-chrome"
+            "/Users/test/Library/Application Support/Slicc/profiles/browser-coding-agent-chrome"
         )
     }
 
@@ -133,6 +133,17 @@ final class ChromeLauncherTests: XCTestCase {
         XCTAssertEqual(
             launcher.resolveUserDataDir(tmpDir: "/custom/profiles", servePort: 5720),
             "/custom/profiles/browser-coding-agent-chrome-5720"
+        )
+    }
+
+    func testLegacyChromeCandidatesIncludesPreviousSliccProfilesInHomeDir() {
+        let launcher = makeLauncher(homeDirectory: "/Users/test")
+
+        let candidates = launcher.legacyChromeCandidates(profileDirName: "browser-coding-agent-chrome")
+
+        XCTAssertTrue(
+            candidates.contains("/Users/test/.slicc/profiles/browser-coding-agent-chrome"),
+            "expected legacy ~/.slicc/profiles path in candidates, got: \(candidates)"
         )
     }
 

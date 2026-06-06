@@ -238,7 +238,10 @@ struct ChromeLauncher: Sendable {
     func resolveUserDataDir(tmpDir: String? = nil, servePort: Int? = nil) -> String {
         let baseDir = normalizedPath(tmpDir)
             ?? URL(fileURLWithPath: homeDirectoryProvider(), isDirectory: true)
-                .appendingPathComponent(".slicc/profiles", isDirectory: true)
+                .appendingPathComponent("Library", isDirectory: true)
+                .appendingPathComponent("Application Support", isDirectory: true)
+                .appendingPathComponent("Slicc", isDirectory: true)
+                .appendingPathComponent("profiles", isDirectory: true)
                 .path
         let suffix = (servePort != nil && servePort != defaultServePort) ? "-\(servePort!)" : ""
         return URL(fileURLWithPath: baseDir, isDirectory: true)
@@ -268,7 +271,9 @@ struct ChromeLauncher: Sendable {
     }
 
     /// Builds the ordered list of legacy candidate paths for a given profile dir name.
-    /// Checks $TMPDIR first, then /tmp, deduplicating when they are the same.
+    /// Checks $TMPDIR first, then /tmp, then the previous `~/.slicc/profiles` location
+    /// so existing Sliccstart installs migrate forward on first launch. Deduplicates
+    /// when $TMPDIR is already `/tmp`.
     func legacyChromeCandidates(profileDirName: String) -> [String] {
         var bases: [String] = []
         let env = environmentProvider()
@@ -277,6 +282,13 @@ struct ChromeLauncher: Sendable {
         }
         if !bases.contains("/tmp") {
             bases.append("/tmp")
+        }
+        let legacyHomeBase = URL(fileURLWithPath: homeDirectoryProvider(), isDirectory: true)
+            .appendingPathComponent(".slicc", isDirectory: true)
+            .appendingPathComponent("profiles", isDirectory: true)
+            .path
+        if !bases.contains(legacyHomeBase) {
+            bases.append(legacyHomeBase)
         }
         return bases.map { URL(fileURLWithPath: $0).appendingPathComponent(profileDirName).path }
     }
