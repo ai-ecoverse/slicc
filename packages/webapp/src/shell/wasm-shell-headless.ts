@@ -217,6 +217,13 @@ export class WasmShellHeadless implements HeadlessShellLike {
    * defense-in-depth during command execution, so it must run outside the box.
    */
   private pendingCommandGrants: string[] = [];
+  /**
+   * One-shot bypass keys for the transparent `Cmnd` gate. Registered by the
+   * explicit `sudo` command after the human already approved a subject, so the
+   * inner dispatch does not prompt a second time. Multiset (counts) because
+   * the same subject can be re-approved repeatedly within a single bash exec.
+   */
+  private pendingSudoBypasses = new Map<string, number>();
 
   constructor(protected options: HeadlessShellOptions) {
     this.vfsAdapter = new VfsAdapter(options.fs);
@@ -277,6 +284,21 @@ export class WasmShellHeadless implements HeadlessShellLike {
       // inline standalone), the commands fall back to
       // `globalThis.__slicc_pm` (published by `createKernelHost`).
       processManager: options.processManager,
+      // Explicit `sudo <cmd...>` plumbing. Only wired when a sudo config is
+      // present so ungated shells still register `sudo` (which prints a clean
+      // "not configured" message) without leaking the broker or bypass hook.
+      sudoCommand: options.sudo
+        ? {
+            broker: options.sudo.broker,
+            // Queue "Always" grants for the post-exec flush; the actual VFS
+            // write must run outside just-bash's defense-in-depth box where
+            // async timers are blocked. Matches the transparent gate.
+            persistGrant: async (pattern) => {
+              this.pendingCommandGrants.push(pattern);
+            },
+            suppressNextGate: (subject) => this.registerSudoBypass(subject),
+          }
+        : undefined,
     });
     const mountCommand = this.createMountCustomCommand();
     const fetchFn = createProxiedFetch();
@@ -530,10 +552,20 @@ export class WasmShellHeadless implements HeadlessShellLike {
   private async gateCommandDispatch(name: string, args: string[]): Promise<ExecResult | null> {
     const sudo = this.options.sudo;
     if (!sudo) return null;
+
+    const subject = `${name} ${args.join(' ')}`.trim();
+
+    // Consume a one-shot bypass when the explicit `sudo` command already
+    // collected approval for this exact subject. Skips even the policy lookup
+    // so a separately-dispatched gated nested command (via $() / pipelines)
+    // still hits the transparent gate normally.
+    if (this.consumeSudoBypass(subject)) {
+      return null;
+    }
+
     const policy = sudo.getPolicy();
     if (!policy) return null;
 
-    const subject = `${name} ${args.join(' ')}`.trim();
     const result = await enforceCommandSudo(subject, {
       policy,
       broker: sudo.broker,
@@ -550,6 +582,33 @@ export class WasmShellHeadless implements HeadlessShellLike {
       stderr: `${result.message}\n`,
       exitCode: 1,
     };
+  }
+
+  /**
+   * Register a one-shot bypass for the next transparent `Cmnd` gate dispatch
+   * matching `subject`. Invoked by the explicit `sudo` command after it has
+   * already collected human approval, so the inner command does not prompt
+   * twice. Multiple registrations for the same subject stack (multiset).
+   */
+  private registerSudoBypass(subject: string): void {
+    const key = subject.trim();
+    if (!key) return;
+    this.pendingSudoBypasses.set(key, (this.pendingSudoBypasses.get(key) ?? 0) + 1);
+  }
+
+  /**
+   * Consume a pending bypass for `subject`. Returns `true` when a bypass was
+   * pending (and was decremented), `false` otherwise.
+   */
+  private consumeSudoBypass(subject: string): boolean {
+    const count = this.pendingSudoBypasses.get(subject);
+    if (!count) return false;
+    if (count === 1) {
+      this.pendingSudoBypasses.delete(subject);
+    } else {
+      this.pendingSudoBypasses.set(subject, count - 1);
+    }
+    return true;
   }
 
   /**

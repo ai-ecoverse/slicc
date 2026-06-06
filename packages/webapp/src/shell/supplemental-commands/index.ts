@@ -51,6 +51,7 @@ import { createServeCommand } from './serve-command.js';
 import { createSliccFsCleanupCommand } from './slicc-fs-cleanup-command.js';
 import { createSprinkleCommand } from './sprinkle-command.js';
 import { createSqliteCommand } from './sqlite-command.js';
+import { createSudoCommand, type SudoCommandOptions } from './sudo-command.js';
 import { createTestCommand } from './test-command.js';
 import { createTscCommand } from './tsc-command.js';
 import { createUnameCommand } from './uname-command.js';
@@ -92,6 +93,14 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
   processManager?: ProcessManager;
   /** Leader-side cherry runtime registry. Absent outside leader contexts. */
   cherryRuntimeRegistry?: CherryRuntimeRegistry;
+  /**
+   * Hooks for the explicit `sudo <cmd...>` command. Includes the broker, the
+   * persist-grant sink, and the one-shot bypass that lets `sudo` run the
+   * inner command without re-firing the transparent `Cmnd` gate. Absent in
+   * environments without sudo support — `sudo` then prints a clean
+   * "not configured" message.
+   */
+  sudoCommand?: SudoCommandOptions;
 }
 
 export function createSupplementalCommands(options: SupplementalCommandsConfig = {}): Command[] {
@@ -155,6 +164,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createSliccFsCleanupCommand({ fs: options.fs }),
     createDfCommand({ fs: options.fs }),
     createDiskutilCommand({ fs: options.fs }),
+    createSudoCommand(options.sudoCommand),
   ];
 
   if (options.fs) {

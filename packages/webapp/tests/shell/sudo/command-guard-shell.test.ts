@@ -155,6 +155,91 @@ describe('WasmShell command-level sudo enforcement', () => {
     });
   });
 
+  it('explicit "sudo <cmd>" prompts exactly once for a policy-gated inner command', async () => {
+    // `git push *` is policy-gated. If the user types `sudo git push origin main`,
+    // the broker must be called ONCE (by the sudo command itself), and the
+    // transparent wrap must NOT re-prompt when the inner `git` dispatches.
+    const broker = brokerReturning({ decision: 'allow' });
+    const shell = makeShell({ getPolicy: () => GIT_POLICY, broker });
+
+    const result = await shell.executeCommand('sudo git push origin main');
+
+    expect(broker.requestApproval).toHaveBeenCalledTimes(1);
+    expect(broker.requestApproval).toHaveBeenCalledWith({
+      kind: 'command',
+      detail: 'git push origin main',
+    });
+    // git fails outside a repo, but exit code is irrelevant — we only care
+    // that approval was checked exactly once and the inner command was
+    // actually dispatched (i.e., NOT blocked with the sudo-deny stderr).
+    expect(result.stderr).not.toContain('sudo: approval denied');
+  });
+
+  it('explicit "sudo" still gates a SEPARATE policy-gated nested command in $()', async () => {
+    // Outer `sudo touch /workspace/gated.txt` is approved once. The inner
+    // command substitution `$(git push origin main)` is a different subject
+    // and must hit the transparent gate (one prompt) on its own.
+    const broker = brokerReturning({ decision: 'allow' });
+    const combined = parseSudoers('Cmnd  touch /workspace/gated*\nCmnd  git push*');
+    const shell = makeShell({ getPolicy: () => combined, broker });
+
+    await shell.executeCommand('sudo touch /workspace/gated.txt $(git push origin main)');
+
+    const calls = (broker.requestApproval as unknown as { mock: { calls: unknown[][] } }).mock
+      .calls;
+    const subjects = calls.map((c) => (c[0] as { detail: string }).detail);
+    expect(subjects).toContain('git push origin main');
+    expect(subjects.filter((s) => s.startsWith('touch /workspace/gated'))).toHaveLength(1);
+  });
+
+  it('sudo with no args exits 1 without prompting', async () => {
+    const broker = brokerReturning({ decision: 'deny' });
+    const shell = makeShell({ getPolicy: () => GIT_POLICY, broker });
+
+    const result = await shell.executeCommand('sudo');
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('usage: sudo');
+    expect(broker.requestApproval).not.toHaveBeenCalled();
+  });
+
+  it('sudo --help exits 0 without prompting', async () => {
+    const broker = brokerReturning({ decision: 'deny' });
+    const shell = makeShell({ getPolicy: () => GIT_POLICY, broker });
+
+    const result = await shell.executeCommand('sudo --help');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('usage: sudo');
+    expect(broker.requestApproval).not.toHaveBeenCalled();
+  });
+
+  it('sudo on "Always" persists a NOPASSWD grant for the inner subject', async () => {
+    const broker = brokerReturning({
+      decision: 'always',
+      pattern: 'touch /workspace/gated*',
+    });
+    const shell = makeShell({ getPolicy: () => POLICY, broker });
+
+    await shell.executeCommand('sudo touch /workspace/gated.txt');
+
+    expect(broker.requestApproval).toHaveBeenCalledTimes(1);
+    const granted = (await fs.readFile('/etc/sudoers.d/granted')) as string;
+    expect(granted).toContain('NOPASSWD Cmnd  touch /workspace/gated*');
+    expect(await fs.exists('/workspace/gated.txt')).toBe(true);
+  });
+
+  it('sudo on deny blocks the inner command (no execution)', async () => {
+    const broker = brokerReturning({ decision: 'deny' });
+    const shell = makeShell({ getPolicy: () => POLICY, broker });
+
+    const result = await shell.executeCommand('sudo touch /workspace/gated.txt');
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('sudo: approval denied');
+    expect(await fs.exists('/workspace/gated.txt')).toBe(false);
+  });
+
   it('sanitizes a newline-bearing "Always" pattern before persisting', async () => {
     const broker = brokerReturning({
       decision: 'always',
