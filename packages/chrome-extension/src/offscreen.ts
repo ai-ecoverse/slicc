@@ -67,6 +67,7 @@ import {
 import { connectOffscreenLeaderSyncBridge } from './leader-sync-bridge.js';
 import type { ExtensionMessage } from './messages.js';
 import { OffscreenBridge } from './offscreen-bridge.js';
+import { fetchOutboundScrubSnapshot, installOutboundScrubber } from './offscreen-outbound-scrub.js';
 
 const log = createLogger('offscreen');
 
@@ -81,6 +82,17 @@ console.log('[slicc-offscreen] Script loaded');
 
 async function init(): Promise<void> {
   console.log('[slicc-offscreen] init() starting...');
+
+  // Install the defense-in-depth outbound LLM-wire scrub BEFORE anything else
+  // here can issue a `fetch`. Wraps `globalThis.fetch` so cross-origin http(s)
+  // request bodies/headers are scrubbed real → masked. Same-origin and
+  // non-http(s) (chrome-extension:, blob:, data:) pass through. Response
+  // streams are NOT buffered — SSE survives intact. See
+  // `offscreen-outbound-scrub.ts` for details.
+  installOutboundScrubber({
+    getSnapshot: fetchOutboundScrubSnapshot,
+    logger: log,
+  });
 
   // Initialize RUM telemetry so beacons fire from the offscreen WasmShell
   // — `trackShellCommand` and friends silently no-op until `sampleRUM` is

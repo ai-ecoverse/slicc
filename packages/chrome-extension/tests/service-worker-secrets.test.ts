@@ -180,6 +180,55 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
     expect(github.value).toBeUndefined();
   });
 
+  it('secrets.list-with-values-for-pipeline returns {sessionId, entries} merging persisted+session', async () => {
+    await import('../src/service-worker.js');
+    // Seed a session-only secret first so the merge path is exercised.
+    let setResp: any;
+    for (const l of messageListeners) {
+      const result = l(
+        {
+          type: 'secrets.session.set',
+          name: 'SESS_KEY',
+          value: 'sess-real',
+          domains: ['api.session.com'],
+        },
+        {},
+        (r: any) => {
+          setResp = r;
+        }
+      );
+      if (result === true) break;
+    }
+    await new Promise((r) => setTimeout(r, 10));
+    expect(setResp).toEqual({ ok: true });
+
+    let response: any;
+    let kept = false;
+    for (const l of messageListeners) {
+      const result = l({ type: 'secrets.list-with-values-for-pipeline' }, {}, (r: any) => {
+        response = r;
+      });
+      if (result === true) {
+        kept = true;
+        break;
+      }
+    }
+    expect(kept).toBe(true);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(response).toBeDefined();
+    expect(typeof response.sessionId).toBe('string');
+    expect(response.sessionId.length).toBeGreaterThan(0);
+    expect(Array.isArray(response.entries)).toBe(true);
+    const persisted = response.entries.find((e: any) => e.name === 'GITHUB_TOKEN');
+    expect(persisted).toBeDefined();
+    expect(persisted.value).toBe('ghp_real');
+    expect(persisted.domains).toEqual(['api.github.com']);
+    const session = response.entries.find((e: any) => e.name === 'SESS_KEY');
+    expect(session).toBeDefined();
+    expect(session.value).toBe('sess-real');
+    expect(session.domains).toEqual(['api.session.com']);
+  });
+
   it('secrets.set writes {name, name_DOMAINS} to chrome.storage.local', async () => {
     await import('../src/service-worker.js');
     let response: any;
