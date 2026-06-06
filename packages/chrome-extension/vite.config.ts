@@ -254,8 +254,8 @@ export default defineConfig(({ mode }) => ({
         copyFileSync(resolve(Dirname, 'voice-popup.js'), resolve(outDir, 'voice-popup.js'));
         copyFileSync(resolve(Dirname, 'capture-popup.html'), resolve(outDir, 'capture-popup.html'));
         copyFileSync(resolve(Dirname, 'capture-popup.js'), resolve(outDir, 'capture-popup.js'));
-        copyFileSync(resolve(Dirname, 'mount-popup.html'), resolve(outDir, 'mount-popup.html'));
-        copyFileSync(resolve(Dirname, 'mount-popup.js'), resolve(outDir, 'mount-popup.js'));
+        copyFileSync(resolve(Dirname, 'picker-popup.html'), resolve(outDir, 'picker-popup.html'));
+        copyFileSync(resolve(Dirname, 'picker-popup.js'), resolve(outDir, 'picker-popup.js'));
         copyFileSync(resolve(Dirname, 'secrets.html'), resolve(outDir, 'secrets.html'));
         // secrets.js is built from src/secrets-entry.ts via esbuild below;
         // see the 'build-secrets-page' plugin.

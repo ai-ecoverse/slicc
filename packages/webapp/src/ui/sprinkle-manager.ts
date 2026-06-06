@@ -366,7 +366,15 @@ export class SprinkleManager {
       stopConeHandler,
       options.onAttachImage ?? (() => {}),
       captureScreenHandler,
-      options.execHandler
+      options.execHandler,
+      // Forward host-pushed device events (currently `hid:inputreport`)
+      // to the open sprinkle's iframe via the renderer's
+      // `pushDeviceEvent`. Inline-mode sprinkles never go through here
+      // — their listeners are invoked directly inside the bridge.
+      (name, channel, payload) => {
+        const entry = this.openSprinkles.get(name);
+        entry?.renderer.pushDeviceEvent(channel, payload);
+      }
     );
     this.callbacks = callbacks;
     this.autoOpenBehavior = options.autoOpenBehavior ?? 'activate';

@@ -9,6 +9,25 @@
  */
 
 import {
+  getNavigatorHid,
+  getSharedHidRegistry,
+  type HidDeviceFilter,
+} from '../kernel/hid-device-registry.js';
+import * as hidOps from '../kernel/hid-operations.js';
+import * as serialOps from '../kernel/serial-operations.js';
+import {
+  getNavigatorSerial,
+  getSharedSerialRegistry,
+  type SerialFilter,
+  type SerialOpenOptions,
+} from '../kernel/serial-port-registry.js';
+import {
+  getNavigatorUsb,
+  getSharedUsbRegistry,
+  type UsbDeviceFilter,
+} from '../kernel/usb-device-registry.js';
+import * as usbOps from '../kernel/usb-operations.js';
+import {
   runJshOp,
   type SprinkleAgentOptions,
   type SprinkleAgentResult,
@@ -185,11 +204,50 @@ const JSH_BRIDGE_METHODS = `,
       return _vfsCall('dip-jsh', { op: 'fetchToFile', args: [url, path] }, function(m) { return m.result; });
     }`;
 
+/**
+ * Stateful device bridge for TRUSTED dips — `slicc.hid` / `slicc.serial` /
+ * `slicc.usb`. Mirrors the sprinkle bridge surface: `list`/`request`/
+ * `open`/`close`/`sendReport`, plus an `on('inputreport', cb)` listener
+ * whose events arrive over the existing host→iframe push channel as
+ * `dip-device-event` postMessages. `open(handle)` auto-attaches the
+ * underlying host-side `inputreport` listener for this dip window; the
+ * dip's `dispose()` tears every subscription down to keep the host
+ * registry clean.
+ */
+const DEVICE_BRIDGE_METHODS = `,
+    _device: function(channel, op, args) {
+      return _vfsCall('dip-device-op',
+        { channel: channel, op: op, args: args || [] },
+        function(m) { return m.result; });
+    },
+    hid: {
+      list: function() { return _vfsCall('dip-device-op', { channel: 'hid', op: 'list', args: [] }, function(m) { return m.result; }); },
+      request: function(filters) { return _vfsCall('dip-device-op', { channel: 'hid', op: 'request', args: [filters || []] }, function(m) { return m.result; }); },
+      open: function(handle) { return _vfsCall('dip-device-op', { channel: 'hid', op: 'open', args: [handle] }, function(m) { return m.result; }).then(function() {}); },
+      close: function(handle) { return _vfsCall('dip-device-op', { channel: 'hid', op: 'close', args: [handle] }, function(m) { return m.result; }).then(function() {}); },
+      sendReport: function(handle, reportId, data) { return _vfsCall('dip-device-op', { channel: 'hid', op: 'sendReport', args: [handle, reportId, data] }, function(m) { return m.result; }).then(function() {}); },
+      on: function(event, cb) { if (event === 'inputreport') _hidInputReportListeners.add(cb); },
+      off: function(event, cb) { if (event === 'inputreport') _hidInputReportListeners.delete(cb); }
+    },
+    serial: {
+      list: function() { return _vfsCall('dip-device-op', { channel: 'serial', op: 'list', args: [] }, function(m) { return m.result; }); },
+      request: function(filters) { return _vfsCall('dip-device-op', { channel: 'serial', op: 'request', args: [filters || []] }, function(m) { return m.result; }); },
+      open: function(handle, options) { return _vfsCall('dip-device-op', { channel: 'serial', op: 'open', args: [handle, options] }, function(m) { return m.result; }).then(function() {}); },
+      close: function(handle) { return _vfsCall('dip-device-op', { channel: 'serial', op: 'close', args: [handle] }, function(m) { return m.result; }).then(function() {}); }
+    },
+    usb: {
+      list: function() { return _vfsCall('dip-device-op', { channel: 'usb', op: 'list', args: [] }, function(m) { return m.result; }); },
+      request: function(filters) { return _vfsCall('dip-device-op', { channel: 'usb', op: 'request', args: [filters || []] }, function(m) { return m.result; }); },
+      open: function(handle) { return _vfsCall('dip-device-op', { channel: 'usb', op: 'open', args: [handle] }, function(m) { return m.result; }).then(function() {}); },
+      close: function(handle) { return _vfsCall('dip-device-op', { channel: 'usb', op: 'close', args: [handle] }, function(m) { return m.result; }).then(function() {}); }
+    }`;
+
 /** Minimal bridge script: lick + read-only VFS + auto-height. */
 function buildBridgeScript(includeExec: boolean): string {
   return `(function() {
   var _cbId = 0;
   var _callbacks = {};
+  var _hidInputReportListeners = new Set();
 
   function _vfsCall(type, params, extractResult) {
     return new Promise(function(resolve, reject) {
@@ -221,7 +279,7 @@ function buildBridgeScript(includeExec: boolean): string {
     },
     stat: function(path) {
       return _vfsCall('dip-stat', { path: path }, function(m) { return m.stat; });
-    }${includeExec ? EXEC_BRIDGE_METHODS : ''}${includeExec ? JSH_BRIDGE_METHODS : ''}
+    }${includeExec ? EXEC_BRIDGE_METHODS : ''}${includeExec ? JSH_BRIDGE_METHODS : ''}${includeExec ? DEVICE_BRIDGE_METHODS : ''}
   };
   function reportHeight() {
     parent.postMessage({ type: 'dip-height',
@@ -231,6 +289,15 @@ function buildBridgeScript(includeExec: boolean): string {
     if (!e.data || typeof e.data.type !== 'string') return;
     if (e.data.type === 'slicc-theme') {
       document.documentElement.classList.toggle('theme-light', !!e.data.isLight);
+      return;
+    }
+    /* Pushed device events (currently 'hid:inputreport'). The host
+       attaches the underlying listener on slicc.hid.open(handle) for
+       this dip; teardown happens automatically on dispose. */
+    if (e.data.type === 'dip-device-event' && e.data.channel === 'hid:inputreport') {
+      _hidInputReportListeners.forEach(function(cb) {
+        try { cb(e.data.payload); } catch(ex) {}
+      });
       return;
     }
     /* VFS callback responses target the originating call by id. */
@@ -567,6 +634,272 @@ async function runDipJsh(op: string, args: unknown[]): Promise<unknown> {
 }
 
 /**
+ * Per-dip-iframe HID input-report subscriptions, keyed by the dip's
+ * iframe window. `WeakMap` so disposed iframes drop their entry
+ * automatically; explicit teardown in `dispose()` calls every `off()`
+ * synchronously to free the host-side device listener immediately.
+ */
+const dipHidSubs = new WeakMap<Window, Map<string, () => void | Promise<void>>>();
+
+/**
+ * Push an HID `inputreport` payload to a single dip iframe. Mirrors the
+ * sprinkle bridge's `iframePusher` hook — used only from inside
+ * `attachDipHidInputReports` below.
+ */
+function pushDipHidInputReport(
+  iframeWindow: Window,
+  payload: { handle: string; reportId: number; data: Uint8Array }
+): void {
+  try {
+    iframeWindow.postMessage(
+      { type: 'dip-device-event', channel: 'hid:inputreport', payload },
+      '*'
+    );
+  } catch {
+    /* iframe gone — ignore */
+  }
+}
+
+/** Subscribe to a device's input reports for `iframeWindow`. Idempotent. */
+async function attachDipHidInputReports(iframeWindow: Window, handle: string): Promise<void> {
+  let map = dipHidSubs.get(iframeWindow);
+  if (!map) {
+    map = new Map();
+    dipHidSubs.set(iframeWindow, map);
+  }
+  if (map.has(handle)) return;
+  const off = await hidOps.hidSubscribeInputReports(getSharedHidRegistry(), handle, (report) => {
+    const bytes = report.bytes instanceof Uint8Array ? report.bytes : new Uint8Array(report.bytes);
+    pushDipHidInputReport(iframeWindow, {
+      handle,
+      reportId: report.reportId,
+      data: bytes,
+    });
+  });
+  map.set(handle, off);
+}
+
+/** Tear down a single `inputreport` subscription for a dip iframe. */
+async function detachDipHidInputReports(iframeWindow: Window, handle: string): Promise<void> {
+  const map = dipHidSubs.get(iframeWindow);
+  if (!map) return;
+  const off = map.get(handle);
+  if (off) {
+    map.delete(handle);
+    try {
+      await Promise.resolve(off());
+    } catch {
+      /* best-effort teardown */
+    }
+  }
+  if (map.size === 0) dipHidSubs.delete(iframeWindow);
+}
+
+/**
+ * Synchronous teardown for `dispose()` — fires every `off()` in the
+ * background without awaiting, then drops the per-window entry. Keeps
+ * the dip iframe close path non-async while still freeing host-side
+ * `inputreport` listeners.
+ */
+function disposeDipHidSubs(iframeWindow: Window): void {
+  const map = dipHidSubs.get(iframeWindow);
+  if (!map) return;
+  for (const off of map.values()) {
+    try {
+      void Promise.resolve(off()).catch(() => {});
+    } catch {
+      /* best-effort */
+    }
+  }
+  dipHidSubs.delete(iframeWindow);
+}
+
+/**
+ * Coerce a Uint8Array / ArrayBuffer / ArrayBufferView argument (whichever
+ * shape survives a postMessage round trip) into a Uint8Array suitable
+ * for the kernel device ops. Mirrors the helper in `sprinkle-bridge.ts`.
+ */
+function toDipUint8Array(value: unknown): Uint8Array {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) {
+    const view = value as ArrayBufferView;
+    return new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
+  }
+  if (Array.isArray(value)) return new Uint8Array(value as number[]);
+  throw new Error('expected Uint8Array, ArrayBuffer, or number[]');
+}
+
+/**
+ * Page-direct dispatch for the trusted-dip `slicc.{hid,serial,usb}`
+ * namespaces. Uses the same page-side shared device registries the
+ * panel-RPC handlers and sprinkle bridge use, so handles created via
+ * the worker (`hid request` shell command, sprinkle bridge, etc.) are
+ * visible to dips and vice versa. `hid.open` auto-attaches the
+ * `inputreport` listener for this dip window; `hid.close` and dispose
+ * tear it down.
+ */
+async function runDipDeviceOp(
+  iframeWindow: Window,
+  channel: 'hid' | 'serial' | 'usb',
+  op: string,
+  args: readonly unknown[]
+): Promise<unknown> {
+  if (channel === 'hid') {
+    const reg = getSharedHidRegistry();
+    switch (op) {
+      case 'list': {
+        const hid = getNavigatorHid();
+        if (!hid) throw new Error('WebHID is unavailable in this browser');
+        return hidOps.hidList(reg, hid);
+      }
+      case 'request': {
+        const hid = getNavigatorHid();
+        if (!hid) throw new Error('WebHID is unavailable in this browser');
+        return hidOps.hidRequest(reg, hid, (args[0] as HidDeviceFilter[]) ?? []);
+      }
+      case 'info':
+        return hidOps.hidDeviceInfo(reg, args[0] as string);
+      case 'open': {
+        const handle = args[0] as string;
+        await hidOps.hidOpen(reg, handle);
+        await attachDipHidInputReports(iframeWindow, handle);
+        return { ok: true };
+      }
+      case 'close': {
+        const handle = args[0] as string;
+        await detachDipHidInputReports(iframeWindow, handle);
+        await hidOps.hidClose(reg, handle);
+        return { ok: true };
+      }
+      case 'sendReport': {
+        const handle = args[0] as string;
+        const reportId = args[1] as number;
+        const bytes = toDipUint8Array(args[2]);
+        const buf = bytes.buffer.slice(
+          bytes.byteOffset,
+          bytes.byteOffset + bytes.byteLength
+        ) as ArrayBuffer;
+        await hidOps.hidSendReport(reg, handle, reportId, buf);
+        return { ok: true };
+      }
+      default:
+        throw new Error(`hid: unknown op '${op}'`);
+    }
+  }
+  if (channel === 'serial') {
+    const reg = getSharedSerialRegistry();
+    switch (op) {
+      case 'list': {
+        const serial = getNavigatorSerial();
+        if (!serial) throw new Error('Web Serial is unavailable in this browser');
+        return serialOps.serialList(reg, serial);
+      }
+      case 'request': {
+        const serial = getNavigatorSerial();
+        if (!serial) throw new Error('Web Serial is unavailable in this browser');
+        return serialOps.serialRequest(reg, serial, (args[0] as SerialFilter[]) ?? []);
+      }
+      case 'info':
+        return serialOps.serialDeviceInfo(reg, args[0] as string);
+      case 'open': {
+        const handle = args[0] as string;
+        const options = (args[1] as SerialOpenOptions) ?? { baudRate: 9600 };
+        await serialOps.serialOpen(reg, handle, options);
+        return { ok: true };
+      }
+      case 'close': {
+        await serialOps.serialClose(reg, args[0] as string);
+        return { ok: true };
+      }
+      default:
+        throw new Error(`serial: unknown op '${op}'`);
+    }
+  }
+  if (channel === 'usb') {
+    const reg = getSharedUsbRegistry();
+    switch (op) {
+      case 'list': {
+        const usb = getNavigatorUsb();
+        if (!usb) throw new Error('WebUSB is unavailable in this browser');
+        return usbOps.usbList(reg, usb);
+      }
+      case 'request': {
+        const usb = getNavigatorUsb();
+        if (!usb) throw new Error('WebUSB is unavailable in this browser');
+        return usbOps.usbRequest(reg, usb, (args[0] as UsbDeviceFilter[]) ?? []);
+      }
+      case 'info':
+        return usbOps.usbDeviceInfo(reg, args[0] as string);
+      case 'open': {
+        await usbOps.usbOpen(reg, args[0] as string);
+        return { ok: true };
+      }
+      case 'close': {
+        await usbOps.usbClose(reg, args[0] as string);
+        return { ok: true };
+      }
+      default:
+        throw new Error(`usb: unknown op '${op}'`);
+    }
+  }
+  throw new Error(`unknown device channel '${channel}'`);
+}
+
+/**
+ * Handle a `dip-device-op` request from a dip iframe. Gated on
+ * `trustedDipWindows` so an attacker-controlled cone reply embedded as
+ * an untrusted inline ```shtml block can't reach the device registries.
+ * Returns `true` when the message was handled.
+ */
+async function handleDipDeviceRequest(
+  iframeWindow: Window | null,
+  msg: {
+    type: string;
+    id?: number;
+    channel?: string;
+    op?: string;
+    args?: unknown[];
+  }
+): Promise<boolean> {
+  if (!iframeWindow || typeof msg.id !== 'number') return false;
+  const respond = (payload: Record<string, unknown>) => {
+    try {
+      iframeWindow.postMessage({ ...payload, id: msg.id }, '*');
+    } catch {
+      /* iframe gone — ignore */
+    }
+  };
+
+  if (!trustedDipWindows.has(iframeWindow)) {
+    respond({ type: 'dip-device-op-response', error: 'device access not allowed for this dip' });
+    return true;
+  }
+
+  const channel = msg.channel;
+  if (channel !== 'hid' && channel !== 'serial' && channel !== 'usb') {
+    respond({ type: 'dip-device-op-response', error: `unknown device channel '${channel}'` });
+    return true;
+  }
+
+  try {
+    const result = await runDipDeviceOp(
+      iframeWindow,
+      channel,
+      typeof msg.op === 'string' ? msg.op : '',
+      Array.isArray(msg.args) ? msg.args : []
+    );
+    respond({ type: 'dip-device-op-response', result });
+  } catch (err) {
+    respond({
+      type: 'dip-device-op-response',
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return true;
+}
+
+/**
  * Handle a `dip-exec` / `dip-agent` request from a dip iframe. Gated on
  * `trustedDipWindows` so even a spoofed message from an untrusted iframe
  * can't reach the shell. Returns `true` when the message was handled.
@@ -705,6 +1038,8 @@ export function mountDip(
       void handleDipVfsRequest(iframe.contentWindow, msg);
     } else if (msg.type === 'dip-exec' || msg.type === 'dip-agent' || msg.type === 'dip-jsh') {
       void handleDipExecRequest(iframe.contentWindow, msg);
+    } else if (msg.type === 'dip-device-op') {
+      void handleDipDeviceRequest(iframe.contentWindow, msg);
     }
   };
   window.addEventListener('message', messageHandler);
@@ -716,6 +1051,7 @@ export function mountDip(
       if (iframe.contentWindow) {
         liveDipWindows.delete(iframe.contentWindow);
         trustedDipWindows.delete(iframe.contentWindow);
+        disposeDipHidSubs(iframe.contentWindow);
       }
       iframe.remove();
     },
@@ -1064,17 +1400,38 @@ async function handleDipPickerAction(
   msg: { type: string; action: string; data?: unknown; picker?: string },
   onLick: (action: string, data: unknown) => void
 ): Promise<void> {
-  if (msg.picker !== 'directory') {
-    // Unknown picker kind — forward as a regular lick so the action
-    // still reaches the registry.
-    onLick(msg.action, msg.data);
-    return;
+  const data = (msg.data ?? null) as Record<string, unknown> | null;
+  const filters = Array.isArray(data?.filters) ? (data!.filters as unknown[]) : [];
+  switch (msg.picker) {
+    case 'directory':
+      await runDirectoryPicker(msg.action, onLick);
+      return;
+    case 'usb-device':
+      await runUsbPicker(msg.action, filters, onLick);
+      return;
+    case 'serial-port':
+      await runSerialPicker(msg.action, filters, onLick);
+      return;
+    case 'hid-device':
+      await runHidPicker(msg.action, filters, onLick);
+      return;
+    default:
+      // Unknown picker kind — forward as a regular lick so the action
+      // still reaches the registry.
+      onLick(msg.action, msg.data);
+      return;
   }
+}
+
+async function runDirectoryPicker(
+  action: string,
+  onLick: (action: string, data: unknown) => void
+): Promise<void> {
   const win = window as Window & {
     showDirectoryPicker?: (opts?: { mode?: string }) => Promise<FileSystemDirectoryHandle>;
   };
   if (typeof win.showDirectoryPicker !== 'function') {
-    onLick(msg.action, { error: 'File System Access API not available' });
+    onLick(action, { error: 'File System Access API not available' });
     return;
   }
   let handle: FileSystemDirectoryHandle;
@@ -1082,10 +1439,10 @@ async function handleDipPickerAction(
     handle = await win.showDirectoryPicker({ mode: 'readwrite' });
   } catch (err: unknown) {
     if (err instanceof Error && err.name === 'AbortError') {
-      onLick(msg.action, { cancelled: true });
+      onLick(action, { cancelled: true });
       return;
     }
-    onLick(msg.action, { error: err instanceof Error ? err.message : String(err) });
+    onLick(action, { error: err instanceof Error ? err.message : String(err) });
     return;
   }
   const idbKey = `pendingMount:dip-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -1093,12 +1450,117 @@ async function handleDipPickerAction(
     const { storePendingHandle } = await import('../fs/mount-picker-popup.js');
     await storePendingHandle(idbKey, handle);
   } catch (err: unknown) {
-    onLick(msg.action, {
+    onLick(action, {
       error: `failed to store directory handle: ${err instanceof Error ? err.message : String(err)}`,
     });
     return;
   }
-  onLick(msg.action, { handleInIdb: true, idbKey, dirName: handle.name });
+  onLick(action, { handleInIdb: true, idbKey, dirName: handle.name });
+}
+
+async function runUsbPicker(
+  action: string,
+  filters: unknown[],
+  onLick: (action: string, data: unknown) => void
+): Promise<void> {
+  const nav = (globalThis as unknown as { navigator?: { usb?: { requestDevice?: Function } } })
+    .navigator;
+  if (typeof nav?.usb?.requestDevice !== 'function') {
+    onLick(action, { error: 'WebUSB is not available' });
+    return;
+  }
+  try {
+    const device = await (
+      nav.usb.requestDevice as (opts: { filters: unknown[] }) => Promise<unknown>
+    )({ filters });
+    const { getSharedUsbRegistry, deviceToInfo } = await import('../kernel/usb-device-registry.js');
+    const registry = getSharedUsbRegistry();
+    const handle = registry.register(device as Parameters<typeof registry.register>[0]);
+    const info = deviceToInfo(handle, device as Parameters<typeof deviceToInfo>[1]);
+    onLick(action, { granted: true, handle, info });
+  } catch (err: unknown) {
+    if (err instanceof Error && (err.name === 'AbortError' || err.name === 'NotFoundError')) {
+      onLick(action, { cancelled: true });
+      return;
+    }
+    onLick(action, { error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+async function runSerialPicker(
+  action: string,
+  filters: unknown[],
+  onLick: (action: string, data: unknown) => void
+): Promise<void> {
+  const nav = (globalThis as unknown as { navigator?: { serial?: { requestPort?: Function } } })
+    .navigator;
+  if (typeof nav?.serial?.requestPort !== 'function') {
+    onLick(action, { error: 'Web Serial is not available' });
+    return;
+  }
+  try {
+    const port = await (
+      nav.serial.requestPort as (opts: { filters?: unknown[] }) => Promise<unknown>
+    )(filters.length ? { filters } : {});
+    if (!port) {
+      onLick(action, { cancelled: true });
+      return;
+    }
+    const serialMod = await import('../kernel/serial-port-registry.js');
+    const registry = serialMod.getSharedSerialRegistry();
+    const handle = registry.register(port as Parameters<typeof registry.register>[0]);
+    const entry = registry.get(handle);
+    const info = entry ? serialMod.deviceToInfo(handle, entry) : { handle };
+    onLick(action, { granted: true, handle, info });
+  } catch (err: unknown) {
+    if (err instanceof Error && (err.name === 'AbortError' || err.name === 'NotFoundError')) {
+      onLick(action, { cancelled: true });
+      return;
+    }
+    onLick(action, { error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+async function runHidPicker(
+  action: string,
+  filters: unknown[],
+  onLick: (action: string, data: unknown) => void
+): Promise<void> {
+  const nav = (globalThis as unknown as { navigator?: { hid?: { requestDevice?: Function } } })
+    .navigator;
+  if (typeof nav?.hid?.requestDevice !== 'function') {
+    onLick(action, { error: 'WebHID is not available' });
+    return;
+  }
+  try {
+    const devices = (await (
+      nav.hid.requestDevice as (opts: { filters: unknown[] }) => Promise<unknown>
+    )({ filters })) as unknown[];
+    const granted = Array.isArray(devices) ? devices : devices ? [devices] : [];
+    if (granted.length === 0) {
+      onLick(action, { cancelled: true });
+      return;
+    }
+    const { getSharedHidRegistry, hidDeviceToInfo } = await import(
+      '../kernel/hid-device-registry.js'
+    );
+    const registry = getSharedHidRegistry();
+    // Register EVERY granted interface so a multi-interface device
+    // (e.g. a VIA/QMK keyboard's raw-HID 0xFF60 interface) is reachable
+    // from the cone's subsequent `hid list` / `hid watch <handle>`.
+    const infos = granted.map((d) => {
+      const handle = registry.register(d as Parameters<typeof registry.register>[0]);
+      return hidDeviceToInfo(handle, d as Parameters<typeof hidDeviceToInfo>[1]);
+    });
+    const primary = infos[0];
+    onLick(action, { granted: true, handle: primary.handle, info: primary, devices: infos });
+  } catch (err: unknown) {
+    if (err instanceof Error && (err.name === 'AbortError' || err.name === 'NotFoundError')) {
+      onLick(action, { cancelled: true });
+      return;
+    }
+    onLick(action, { error: err instanceof Error ? err.message : String(err) });
+  }
 }
 
 /**
@@ -1135,6 +1597,8 @@ function mountDipExtension(
       void handleDipVfsRequest(iframe.contentWindow, msg);
     } else if (msg.type === 'dip-exec' || msg.type === 'dip-agent' || msg.type === 'dip-jsh') {
       void handleDipExecRequest(iframe.contentWindow, msg);
+    } else if (msg.type === 'dip-device-op') {
+      void handleDipDeviceRequest(iframe.contentWindow, msg);
     }
   };
   window.addEventListener('message', messageHandler);
@@ -1162,6 +1626,7 @@ function mountDipExtension(
       if (iframe.contentWindow) {
         liveDipWindows.delete(iframe.contentWindow);
         trustedDipWindows.delete(iframe.contentWindow);
+        disposeDipHidSubs(iframe.contentWindow);
       }
       iframe.remove();
     },

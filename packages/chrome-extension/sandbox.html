@@ -1054,15 +1054,91 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     websocket: websocketBridge,
   };
 
+  // `usb` / `serial` / `hid` device globals — mirror of the bridges in
+  // kernel/realm/js-realm-shared.ts. `request` / `list` resolve device
+  // objects whose methods carry the opaque handle and forward every op
+  // over the matching realm-RPC channel. Binary payloads cross as
+  // Uint8Array; in-transfer results are re-wrapped as DataViews. Keep in
+  // lockstep with js-realm-shared.ts (parity asserted by
+  // tests/kernel/realm/js-realm-helpers.test.ts).
+  const toRealmBytes = (data) => {
+    if (data instanceof Uint8Array) return data;
+    if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    if (data instanceof ArrayBuffer) return new Uint8Array(data);
+    throw new TypeError('expected an ArrayBuffer or typed array');
+  };
+  const bytesToDataView = (bytes) => new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const asFilterArray = (filters) => {
+    if (filters === undefined || filters === null) return [];
+    return Array.isArray(filters) ? filters : [filters];
+  };
+  function makeUsbDevice(info) {
+    const h = info.handle;
+    const toData = (r) => ({ status: r.status, data: bytesToDataView(r.bytes) });
+    return Object.assign({}, info, {
+      open: () => rpcCall('usb', 'open', [h]),
+      close: () => rpcCall('usb', 'close', [h]),
+      reset: () => rpcCall('usb', 'reset', [h]),
+      selectConfiguration: (value) => rpcCall('usb', 'selectConfig', [h, value]),
+      claimInterface: (n) => rpcCall('usb', 'claim', [h, n]),
+      releaseInterface: (n) => rpcCall('usb', 'release', [h, n]),
+      controlTransferIn: (setup, length) => rpcCall('usb', 'controlIn', [h, setup, length]).then(toData),
+      controlTransferOut: (setup, data) => rpcCall('usb', 'controlOut', [h, setup, toRealmBytes(data)]),
+      transferIn: (ep, length) => rpcCall('usb', 'transferIn', [h, ep, length]).then(toData),
+      transferOut: (ep, data) => rpcCall('usb', 'transferOut', [h, ep, toRealmBytes(data)]),
+    });
+  }
+  const usbBridge = {
+    list: () => rpcCall('usb', 'list', []).then((items) => items.map(makeUsbDevice)),
+    request: (filters) => rpcCall('usb', 'request', [asFilterArray(filters)]).then(makeUsbDevice),
+  };
+  function makeSerialPort(info) {
+    const h = info.handle;
+    return Object.assign({}, info, {
+      open: (options) => rpcCall('serial', 'open', [h, options]),
+      close: () => rpcCall('serial', 'close', [h]),
+      read: (params) => {
+        params = params || {};
+        return rpcCall('serial', 'read', [h, {
+          maxBytes: params.maxBytes !== undefined ? params.maxBytes : params.bytes,
+          until: params.until ? toRealmBytes(params.until) : undefined,
+          timeoutMs: params.timeoutMs,
+        }]);
+      },
+      write: (data) => rpcCall('serial', 'write', [h, toRealmBytes(data)]),
+      getSignals: () => rpcCall('serial', 'getSignals', [h]),
+      setSignals: (signals) => rpcCall('serial', 'setSignals', [h, signals]),
+    });
+  }
+  const serialBridge = {
+    list: () => rpcCall('serial', 'list', []).then((items) => items.map(makeSerialPort)),
+    request: (filters) => rpcCall('serial', 'request', [asFilterArray(filters)]).then(makeSerialPort),
+  };
+  function makeHidDevice(info) {
+    const h = info.handle;
+    return Object.assign({}, info, {
+      open: () => rpcCall('hid', 'open', [h]),
+      close: () => rpcCall('hid', 'close', [h]),
+      sendReport: (reportId, data) => rpcCall('hid', 'sendReport', [h, reportId, toRealmBytes(data)]),
+      sendFeatureReport: (reportId, data) => rpcCall('hid', 'sendFeatureReport', [h, reportId, toRealmBytes(data)]),
+      receiveFeatureReport: (reportId) => rpcCall('hid', 'receiveFeatureReport', [h, reportId]).then((r) => bytesToDataView(r.bytes)),
+    });
+  }
+  const hidBridge = {
+    list: () => rpcCall('hid', 'list', []).then((items) => items.map(makeHidDevice)),
+    request: (filters) => rpcCall('hid', 'request', [asFilterArray(filters)]).then(makeHidDevice),
+  };
+
   let exitCode = 0;
   try {
     const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
     const fn = new AsyncFunction(
       'fs', 'process', 'console', 'require', 'module', 'exports', 'exec', 'fetch', 'skill', 'http', 'browser',
+      'usb', 'serial', 'hid',
       'cli', 'c', 'time', 'fmt', 'pool',
       '"use strict";\n' + init.code
     );
-    await fn(fsBridge, processShim, consoleShim, requireShim, moduleShim, moduleShim.exports, execBridge, realmFetch, skillGlobal, httpGlobal, browserBridge, cliApi, colorApi, time, fmt, pool);
+    await fn(fsBridge, processShim, consoleShim, requireShim, moduleShim, moduleShim.exports, execBridge, realmFetch, skillGlobal, httpGlobal, browserBridge, usbBridge, serialBridge, hidBridge, cliApi, colorApi, time, fmt, pool);
   } catch (err) {
     if (err && typeof err === 'object' && NODE_EXIT in err) {
       exitCode = err[NODE_EXIT];
