@@ -38,7 +38,8 @@ export type { DaSignAndForwardEnvelope, S3SignAndForwardEnvelope } from '@slicc/
 /**
  * Map a structured failure code onto the HTTP status the CLI float returns.
  * Setup/validation errors are client errors (400); an upstream fetch failure
- * is a bad gateway (502); anything unrecognized is an internal error (500).
+ * is a bad gateway (502); an internal error is 500. The `never` default makes
+ * a future addition to `SignAndForwardErrorCode` fail the typecheck here.
  */
 function statusForErrorCode(code: SignAndForwardErrorCode): number {
   switch (code) {
@@ -48,8 +49,12 @@ function statusForErrorCode(code: SignAndForwardErrorCode): number {
       return 400;
     case 'fetch_failed':
       return 502;
-    default:
+    case 'internal':
       return 500;
+    default: {
+      const _exhaustive: never = code;
+      return 500;
+    }
   }
 }
 
