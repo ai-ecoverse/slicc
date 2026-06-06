@@ -224,6 +224,14 @@ export class WasmShellHeadless implements HeadlessShellLike {
    * the same subject can be re-approved repeatedly within a single bash exec.
    */
   private pendingSudoBypasses = new Map<string, number>();
+  /**
+   * Env writes performed by supplemental commands during a `bash.exec()` call
+   * (currently only `secret set` injecting a masked value). `bash.exec()`
+   * returns its own snapshot of the working env that overwrites `lastEnv` on
+   * return — these pending writes are reapplied after that overwrite so they
+   * survive into the next exec call.
+   */
+  private pendingEnvWrites = new Map<string, string>();
 
   constructor(protected options: HeadlessShellOptions) {
     this.vfsAdapter = new VfsAdapter(options.fs);
@@ -299,6 +307,14 @@ export class WasmShellHeadless implements HeadlessShellLike {
             suppressNextGate: (subject) => this.registerSudoBypass(subject),
           }
         : undefined,
+      // Lets `secret set` write the masked value into the owning shell's
+      // env after a successful set (parity with container-loaded secrets).
+      // The write is queued and reapplied after `bash.exec` returns its
+      // snapshot of `result.env`, so the var survives into the next exec.
+      setEnv: (name, value) => {
+        this.pendingEnvWrites.set(name, value);
+        this.lastEnv[name] = value;
+      },
     });
     const mountCommand = this.createMountCustomCommand();
     const fetchFn = createProxiedFetch();
@@ -502,6 +518,16 @@ export class WasmShellHeadless implements HeadlessShellLike {
     await this.flushPendingCommandGrants();
     if (result.env) {
       this.lastEnv = { ...result.env };
+    }
+    // Reapply env writes performed by supplemental commands during this exec
+    // (e.g. `secret set` injecting a masked value). `bash.exec`'s `result.env`
+    // does not include them — without this re-merge the next exec would not see
+    // `$NAME`.
+    if (this.pendingEnvWrites.size > 0) {
+      for (const [k, v] of this.pendingEnvWrites) {
+        this.lastEnv[k] = v;
+      }
+      this.pendingEnvWrites.clear();
     }
     if (result.env?.PWD) {
       this.cwd = result.env.PWD;

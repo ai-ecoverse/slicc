@@ -101,6 +101,13 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
    * "not configured" message.
    */
   sudoCommand?: SudoCommandOptions;
+  /**
+   * Optional hook that writes a `name=value` pair into the owning shell's live
+   * env. Threaded into `createSecretCommand` so a successful `secret set`
+   * injects the masked value into `$NAME` for the next command in the same
+   * shell session (LLM-context parity with container-loaded secrets).
+   */
+  setEnv?: (name: string, value: string) => void;
 }
 
 export function createSupplementalCommands(options: SupplementalCommandsConfig = {}): Command[] {
@@ -139,7 +146,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createOAuthTokenCommand(),
     createOAuthDomainCommand(),
     createLocalLlmCommand(),
-    createSecretCommand(),
+    createSecretCommand({ setEnv: options.setEnv }),
     createRsyncCommand({ fs: options.fs }),
     createScreencaptureCommand(),
     createPbcopyCommand(),

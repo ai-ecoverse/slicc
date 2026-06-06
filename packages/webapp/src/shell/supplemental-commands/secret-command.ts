@@ -1,8 +1,10 @@
 import { isAllowedDomain } from '@slicc/shared-ts';
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import { isValidShellEnvName } from '../../core/secret-env.js';
 import { createSudoBroker } from '../../sudo/index.js';
 import type { SudoBroker } from '../../sudo/types.js';
+import { stdinAsText } from '../just-bash-compat.js';
 import { commandGlobToRegExp } from '../sudo/sudoers.js';
 import { createDefaultSecretBackend, type SecretBackend } from './secret-backends.js';
 
@@ -124,6 +126,15 @@ export interface SecretCommandDeps {
   grants?: Set<string>;
   /** Override extension detection (tests). */
   isExtension?: boolean;
+  /**
+   * Optional hook that writes a `name=value` pair into the owning shell's live
+   * env. When supplied, `secret set` calls this with the masked value after a
+   * successful session/persisted set so the LLM context only sees the masked
+   * token (parity with container-loaded secrets injected via
+   * `fetchSecretEnvVars`). Names that fail the POSIX-identifier filter are
+   * skipped; a null `getMasked` lookup is also skipped silently.
+   */
+  setEnv?: (name: string, value: string) => void;
 }
 
 export function createSecretCommand(deps: SecretCommandDeps = {}): Command {
@@ -159,7 +170,24 @@ export function createSecretCommand(deps: SecretCommandDeps = {}): Command {
 
   const denied = () => ({ stdout: '', stderr: 'secret: approval denied\n', exitCode: 1 });
 
-  return defineCommand('secret', async (args) => {
+  // Best-effort masked-value injection into the owning shell's live env, called
+  // after a successful session/persisted set. The agent's $K then reads the same
+  // masked token the fetch proxy will unmask — LLM context parity with
+  // container-loaded secrets. Skipped silently on non-POSIX names, missing
+  // masked record, or backend error: env injection must never fail a set the
+  // user already approved.
+  const injectMaskedEnv = async (name: string): Promise<void> => {
+    if (!deps.setEnv) return;
+    if (!isValidShellEnvName(name)) return;
+    try {
+      const masked = await backend.getMasked(name);
+      if (masked) deps.setEnv(name, masked.maskedValue);
+    } catch {
+      /* best-effort */
+    }
+  };
+
+  return defineCommand('secret', async (args, ctx) => {
     if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
       return { stdout: helpText(), stderr: '', exitCode: 0 };
     }
@@ -173,13 +201,37 @@ export function createSecretCommand(deps: SecretCommandDeps = {}): Command {
           if (!name || name.startsWith('-')) {
             return { stdout: '', stderr: 'secret: set requires a <name>\n', exitCode: 1 };
           }
-          const value = args[2] && !args[2].startsWith('-') ? args[2] : undefined;
-          if (!value) {
+          const argValue = args[2] && !args[2].startsWith('-') ? args[2] : undefined;
+
+          // Pipeline-friendly: `echo $TOKEN | secret set NAME` keeps the literal
+          // value out of the agent's tool-call argv (and thus out of the LLM
+          // transcript). Trim exactly one trailing newline so `echo` and
+          // `printf '%s\n'` both work; preserve any embedded newlines verbatim
+          // since some token formats carry them.
+          const rawStdin = stdinAsText(ctx.stdin);
+          const trimmedStdin = rawStdin.endsWith('\r\n')
+            ? rawStdin.slice(0, -2)
+            : rawStdin.endsWith('\n')
+              ? rawStdin.slice(0, -1)
+              : rawStdin;
+          const stdinValue = rawStdin.length > 0 ? trimmedStdin : undefined;
+
+          if (argValue !== undefined && stdinValue !== undefined) {
+            return {
+              stdout: '',
+              stderr: 'secret: provide <value> as an argument OR via stdin, not both\n',
+              exitCode: 1,
+            };
+          }
+
+          const value = argValue ?? stdinValue;
+          if (value === undefined) {
             return {
               stdout: '',
               stderr:
                 'secret: set requires a <value>: ' +
-                'secret set <name> <value> [--domain <patterns>] [--persist]\n',
+                'secret set <name> <value> [--domain <patterns>] [--persist]\n  ' +
+                'or pipe the value on stdin: echo "$TOKEN" | secret set <name> [--domain ...]\n',
               exitCode: 1,
             };
           }
@@ -198,6 +250,7 @@ export function createSecretCommand(deps: SecretCommandDeps = {}): Command {
             }
             if (!(await gate('persist', name))) return denied();
             await backend.setPersisted(name, value, domains);
+            await injectMaskedEnv(name);
             return {
               stdout: `Persisted "${name}" (domains: ${domains.join(', ')})\n`,
               stderr: '',
@@ -210,6 +263,7 @@ export function createSecretCommand(deps: SecretCommandDeps = {}): Command {
           const info = await backend.getInfo(name);
           if (info && !(await gate('value', name))) return denied();
           await backend.setSession(name, value, domains);
+          await injectMaskedEnv(name);
           const scope = domains.length > 0 ? ` (domains: ${domains.join(', ')})` : '';
           return {
             stdout: `Set session secret "${name}"${scope} — in-memory only, not persisted.\n`,
