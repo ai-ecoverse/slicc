@@ -15,13 +15,17 @@ vi.mock('../../../src/providers/index.js', () => ({
 
 vi.mock('../../../src/providers/oauth-service.js', () => ({
   createOAuthLauncher: vi.fn(() => vi.fn()),
+  createInterceptingOAuthLauncherForCurrentRuntime: vi.fn(),
 }));
 
 import {
   getRegisteredProviderConfig,
   getRegisteredProviderIds,
 } from '../../../src/providers/index.js';
-import { createOAuthLauncher } from '../../../src/providers/oauth-service.js';
+import {
+  createInterceptingOAuthLauncherForCurrentRuntime,
+  createOAuthLauncher,
+} from '../../../src/providers/oauth-service.js';
 import { createOAuthTokenCommand } from '../../../src/shell/supplemental-commands/oauth-token-command.js';
 import {
   getAccounts,
@@ -35,6 +39,9 @@ const mockGetRegisteredProviderConfig = vi.mocked(getRegisteredProviderConfig);
 const mockGetRegisteredProviderIds = vi.mocked(getRegisteredProviderIds);
 const mockGetAccounts = vi.mocked(getAccounts);
 const mockCreateOAuthLauncher = vi.mocked(createOAuthLauncher);
+const mockCreateInterceptingOAuthLauncherForCurrentRuntime = vi.mocked(
+  createInterceptingOAuthLauncherForCurrentRuntime
+);
 
 function createMockCtx() {
   const fs: Partial<IFileSystem> = {
@@ -574,5 +581,78 @@ describe('oauth-token command', () => {
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('no onSilentRenew hook');
+  });
+
+  it('--from-file reads JSON via ctx.fs and runs the intercept launcher', async () => {
+    const config = {
+      authorizeUrl: 'https://auth.example.com/authorize?client_id=abc',
+      redirectUriPattern: 'http://127.0.0.1:56121/*',
+    };
+    const launcher = vi.fn(async () => 'http://127.0.0.1:56121/?code=captured-code');
+    mockCreateInterceptingOAuthLauncherForCurrentRuntime.mockResolvedValue(launcher);
+
+    const ctx = createMockCtx();
+    const readFile = vi.fn(async () => JSON.stringify(config));
+    (ctx.fs as unknown as { readFile: typeof readFile }).readFile = readFile;
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(
+      ['--from-file', 'oauth/xai.json'],
+      ctx as unknown as Parameters<typeof cmd.execute>[1]
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('http://127.0.0.1:56121/?code=captured-code\n');
+    // Relative path was resolved against cwd before reading.
+    expect(readFile).toHaveBeenCalledWith('/home/oauth/xai.json');
+    expect(launcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('--from-file passes absolute paths through unchanged', async () => {
+    const config = {
+      authorizeUrl: 'https://auth.example.com/authorize',
+      redirectUriPattern: 'http://127.0.0.1:56121/*',
+    };
+    const launcher = vi.fn(async () => 'http://127.0.0.1:56121/?code=abs');
+    mockCreateInterceptingOAuthLauncherForCurrentRuntime.mockResolvedValue(launcher);
+
+    const ctx = createMockCtx();
+    const readFile = vi.fn(async () => JSON.stringify(config));
+    (ctx.fs as unknown as { readFile: typeof readFile }).readFile = readFile;
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(
+      ['--from-file', '/workspace/.slicc/oauth/xai.json'],
+      ctx as unknown as Parameters<typeof cmd.execute>[1]
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(readFile).toHaveBeenCalledWith('/workspace/.slicc/oauth/xai.json');
+  });
+
+  it('--from-file surfaces a read failure as a "failed to read" error', async () => {
+    const ctx = createMockCtx();
+    const readFile = vi.fn(async () => {
+      throw new Error('ENOENT: no such file');
+    });
+    (ctx.fs as unknown as { readFile: typeof readFile }).readFile = readFile;
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(
+      ['--from-file', 'missing.json'],
+      ctx as unknown as Parameters<typeof cmd.execute>[1]
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('failed to read missing.json');
+    expect(result.stderr).toContain('ENOENT');
+    expect(mockCreateInterceptingOAuthLauncherForCurrentRuntime).not.toHaveBeenCalled();
+  });
+
+  it('--from-file requires a path', async () => {
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['--from-file'], createMockCtx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--from-file requires a path');
   });
 });
