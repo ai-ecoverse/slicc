@@ -2399,7 +2399,14 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // displays it in the chat panel read-only — matching the affordance
   // of clicking a live scoop (which also opens the chat view rather
   // than a file).
-  layout.panels.scoops.setVfs(panelReadVfs);
+  //
+  // NOTE: `setVfs()` eagerly reads `/sessions/index.json`, but under
+  // `slicc_opfs_vfs=opfs` `panelReadVfs` is a worker-RPC client and the
+  // worker's `VfsRpcHost` only starts listening at the tail of boot.
+  // Wiring it is therefore deferred until after `await host.ready`
+  // below — otherwise the read fires before any responder exists, the
+  // request is dropped, and the frozen-sessions list renders empty even
+  // though the archives are present on OPFS.
   layout.onFrozenSessionOpen = (entry) => {
     void (async () => {
       try {
@@ -2461,6 +2468,14 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
     throw err;
   }
   client.requestState();
+
+  // Wire the frozen-sessions sidebar now that the worker's `VfsRpcHost`
+  // is live (it starts at the tail of `boot()`, just before the
+  // ready signal). `setVfs` eagerly reads `/sessions/index.json` through
+  // `panelReadVfs`; doing it pre-ready under `slicc_opfs_vfs=opfs` would
+  // drop the read against a not-yet-listening worker and leave the list
+  // empty. Flag off (`panelReadVfs === localFs`) this is equally correct.
+  layout.panels.scoops.setVfs(panelReadVfs);
 
   // Install localStorage sync interceptor immediately — before any
   // onboarding or provider-settings writes can happen. Placing this

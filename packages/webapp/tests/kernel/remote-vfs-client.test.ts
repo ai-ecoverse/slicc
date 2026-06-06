@@ -252,6 +252,79 @@ describe('RemoteVfsClient — envelope filtering', () => {
   });
 });
 
+describe('RemoteVfsClient — request timeout', () => {
+  it('rejects with EIO when no response arrives within requestTimeoutMs', async () => {
+    // Transport that never replies — mirrors a read issued before the
+    // worker's VfsRpcHost is listening (the frozen-sessions bug).
+    const transport: KernelTransport<ExtensionMessage, PanelToOffscreenMessage> = {
+      onMessage: () => () => {},
+      send: () => {},
+    };
+    const client = createRemoteVfsClient({
+      transport,
+      requestTimeoutMs: 20,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+    });
+    await expect(client.readFile('/sessions/index.json')).rejects.toMatchObject({
+      name: 'FsError',
+      code: 'EIO',
+      path: '/sessions/index.json',
+    });
+    client.dispose();
+  });
+
+  it('requestTimeoutMs <= 0 disables the timeout (stays pending until dispose)', async () => {
+    const transport: KernelTransport<ExtensionMessage, PanelToOffscreenMessage> = {
+      onMessage: () => () => {},
+      send: () => {},
+    };
+    const client = createRemoteVfsClient({
+      transport,
+      requestTimeoutMs: 0,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+    });
+    const p = client.readDir('/hang');
+    // Well past any plausible timer — the request must still be pending.
+    await tick(40);
+    client.dispose();
+    await expect(p).rejects.toMatchObject({ name: 'FsError', code: 'EBADF' });
+  });
+
+  it('a response received before the timeout cancels it (resolves, no late rejection)', async () => {
+    let handler: ((m: ExtensionMessage) => void) | null = null;
+    const transport: KernelTransport<ExtensionMessage, PanelToOffscreenMessage> = {
+      onMessage(h) {
+        handler = h;
+        return () => {
+          handler = null;
+        };
+      },
+      send(payload) {
+        const req = payload as { type: string; requestId: string };
+        handler?.({
+          source: 'offscreen',
+          payload: {
+            type: 'vfs-read-dir-result',
+            requestId: req.requestId,
+            ok: true,
+            entries: [],
+          } as VfsReadDirResultMsg,
+        } as ExtensionMessage);
+      },
+    };
+    const client = createRemoteVfsClient({
+      transport,
+      requestTimeoutMs: 20,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+    });
+    await expect(client.readDir('/x')).resolves.toEqual([]);
+    // Idle past the timeout window — a leaked timer would have fired by
+    // now; the already-settled promise must not flip to a rejection.
+    await tick(40);
+    client.dispose();
+  });
+});
+
 describe('RemoteVfsClient — dispose semantics', () => {
   it('rejects pending requests on dispose', async () => {
     // Transport that never replies, so the pending request stays open
