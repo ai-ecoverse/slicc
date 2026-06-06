@@ -287,11 +287,7 @@ mount unmount --clear-cache /mnt/r2  # drops cache as well
 
 ### Approval flow
 
-Only **local** mounts render an approval card. The card is not a consent gate — it's the click that satisfies Chrome's user-gesture rule for the File System Access API, since `showDirectoryPicker()` must be invoked from inside a user event handler. In the extension, the click also routes through a popup window because Chrome crashes if the picker is invoked from side-panel context for system directories.
-
-**S3** and **DA** mounts have no approval card. The trust boundary lives at the credential profile resolver in node-server (`/api/s3-sign-and-forward`, `/api/da-sign-and-forward`) or the SW signing path in extension mode — not in the chat. The probe at mount time will fail with an actionable error if the profile is misconfigured.
-
-Local mounts are gated to cone context only because the directory picker requires a real user gesture. S3 and DA mounts are allowed from scoops since their credentials come from the secret store and no UI gesture is required.
+Local mounts surface a one-click approval card; S3 / DA mounts have none. The full gesture-bridge and trust-boundary model is documented in [`docs/approvals.md` — Local mount picker](./approvals.md#local-mount-picker). Local mounts are cone-only because the directory picker requires a real user gesture; S3 / DA mounts work from scoops because their credentials come from the secret store.
 
 ---
 
@@ -540,11 +536,9 @@ esptool --baud 921600 write_flash --erase 0x1000 bootloader.bin 0x10000 app.bin
 
 ## Gesture bridge (usb / serial / hid)
 
-`usb request`, `serial request`, `hid request`, and `esptool` without `--port` all call a WebUSB / Web Serial / WebHID device picker, which the browser only allows from inside a user-gesture handler. The kernel worker that runs shell commands has no `window`, so these pickers cannot run there directly — mirroring the `mount` local-picker constraint (see [mount → Approval flow](#approval-flow)).
+`usb request`, `serial request`, `hid request`, and `esptool` without `--port` all call a WebUSB / Web Serial / WebHID device picker that the browser only allows from inside a user-gesture handler. The kernel worker has no `window`, so the panel terminal pre-intercepts the keystroke and runs the picker in the page realm, forwarding a rewritten command carrying `--__resolved <handle>`. Picker subcommands therefore do **not** work from an agent `bash` tool call or a scoop with no UI — only from the panel terminal (cone) or an extension popup. Already-granted handles can be operated on from any realm via panel-RPC.
 
-The panel terminal bridges the gesture: `RemoteTerminalView` (`packages/webapp/src/kernel/remote-terminal-view.ts`) pre-intercepts a `<cmd> request` line on the Enter keystroke, runs the picker in the page realm while the gesture is still live, then forwards a rewritten command carrying `--__resolved <handle>` so the worker-side command body fetches the already-granted device info instead of prompting. In the extension, the picker additionally routes through a dedicated popup window (`usb-picker-popup.html` / `serial-picker-popup.html` / `hid-picker-popup.html`) because the side panel cannot host `requestDevice` reliably.
-
-Because the gesture must originate from a real keystroke, the picker subcommands do **not** work from an agent `bash` tool call or a scoop with no UI — only from the panel terminal (cone) or an extension popup. Already-granted handles (from `*list`/`*request`) can be operated on from any realm via panel-RPC.
+Full gesture-bridge mechanics, extension popup routing, and the shared trust model are documented in [`docs/approvals.md` — usb / serial / hid / esptool](./approvals.md#usb--serial--hid--esptool).
 
 ---
 

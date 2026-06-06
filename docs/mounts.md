@@ -114,7 +114,7 @@ mount refresh [--bodies] <target-path>
 
 Flags:
 
-- `--source <url>` — `s3://bucket[/prefix]` or `da://org/repo[/path]`. Without it, falls back to the local FS-Access picker (cone only).
+- `--source <url>` — `s3://bucket[/prefix]` or `da://org/repo[/path]`. Without it, falls back to the local FS-Access picker (cone only — needs a user gesture; see [`docs/approvals.md` — Local mount picker](./approvals.md#local-mount-picker)).
 - `--profile <name>` — selects which `s3.<profile>.*` keys to use. Defaults to `default`. Accepted for symmetry on DA but DA has only one identity in v1.
 - `--no-probe` — skip the mount-time `HEAD bucket` / `GET /list` probe. Use when you want the mount to land even if the source is temporarily unreachable; the first read or write surfaces any auth error instead.
 - `--max-body-mb <n>` — override the per-mount body-size limit. Defaults: S3 25 MB, DA 5 MB.
@@ -123,14 +123,14 @@ Flags:
 
 ## Common error patterns
 
-| Error                                                                                    | What it means                                                           | Fix                                                                                          |
-| ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `mount: probe failed for s3://… — profile 'aws' missing required field 'access_key_id'.` | The named profile isn't fully configured                                | Walk the user through `secret set s3.<profile>.*` (CLI) or open the Options page (extension) |
-| `EACCES: s3 access denied`                                                               | Wrong credentials, wrong region for the bucket, or bucket policy denies | Verify with the AWS CLI: `aws s3 ls s3://<bucket>`                                           |
-| `EACCES: da access denied`                                                               | IMS token expired or user not authed against the Adobe provider         | Re-auth Adobe in Settings → Providers                                                        |
-| `EBUSY: remote modified since last read — re-read and retry`                             | Another writer changed the file between your read and your write        | Re-read with `read_file` then retry the edit                                                 |
-| `EFBIG: body exceeds maxBodyBytes`                                                       | File is larger than the per-mount limit (S3 25 MB / DA 5 MB)            | Pass `--max-body-mb <n>` at mount time, or use AWS CLI / DA UI for very large files          |
-| `mount: cannot mount local directories from a scoop (no UI).`                            | Local mounts need a user gesture                                        | Have the cone do the mount, or use S3/DA which work in scoops                                |
+| Error                                                                                    | What it means                                                                     | Fix                                                                                          |
+| ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `mount: probe failed for s3://… — profile 'aws' missing required field 'access_key_id'.` | The named profile isn't fully configured                                          | Walk the user through `secret set s3.<profile>.*` (CLI) or open the Options page (extension) |
+| `EACCES: s3 access denied`                                                               | Wrong credentials, wrong region for the bucket, or bucket policy denies           | Verify with the AWS CLI: `aws s3 ls s3://<bucket>`                                           |
+| `EACCES: da access denied`                                                               | IMS token expired or user not authed against the Adobe provider                   | Re-auth Adobe in Settings → Providers                                                        |
+| `EBUSY: remote modified since last read — re-read and retry`                             | Another writer changed the file between your read and your write                  | Re-read with `read_file` then retry the edit                                                 |
+| `EFBIG: body exceeds maxBodyBytes`                                                       | File is larger than the per-mount limit (S3 25 MB / DA 5 MB)                      | Pass `--max-body-mb <n>` at mount time, or use AWS CLI / DA UI for very large files          |
+| `mount: cannot mount local directories from a scoop (no UI).`                            | Local mounts need a user gesture ([approvals](./approvals.md#local-mount-picker)) | Have the cone do the mount, or use S3/DA which work in scoops                                |
 
 ## Caching and conflict semantics
 

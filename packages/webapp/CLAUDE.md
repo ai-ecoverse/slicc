@@ -103,7 +103,7 @@ Deep reference: `docs/kernel/process-model.md`.
 - Wiring happens in `scoops/scoop-context.ts`: the agent's FS handle is wrapped once with `createSudoFs` and that single gated handle backs BOTH the file tools and the shell, so reads/writes funnel through one `matchPath` check; the shell also gets `SudoManager.getShellConfig()` for command-level gating. The panel terminal is intentionally NOT gated — the human typing there is the approver.
 - Brokers are float-specific (`createSudoBroker`): the offscreen/agent realm relays to the side-panel responder, standalone/Electron POSTs `/api/sudo-approve`. The agent can request approval but can never fabricate the decision.
 - Self-protection is hardcoded in `matchPath`: writes to `/etc/sudoers` + `/etc/sudoers.d/*` always require approval regardless of policy. "Always" command grants are appended to `/etc/sudoers.d/granted` via the manager's raw-FS sink (so the grant write itself does not re-prompt).
-- Deep reference: `docs/sudo.md`.
+- Deep reference: `docs/approvals.md` (sudo policy section).
 
 ### Tray Sync (multi-browser leader/follower)
 

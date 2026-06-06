@@ -32,8 +32,7 @@ Often missed:
 - `agent <cwd> <cmds> <prompt>` — one-shot fire-and-forget scoop
 - `serve <dir>` — host a VFS dir over HTTP
 - `ffmpeg` — on-demand WASM; `-f avfoundation` captures img/vid/mic
-- `usb`/`serial`/`hid` — WebUSB/Serial/HID. `<cmd> request` opens a picker (panel terminal gesture). HID devices accept `addEventListener('inputreport', cb)` in `node -e`/`.jsh` (subscribe before sending); sprinkles/trusted dips get `slicc.hid|serial|usb`.
-- `esptool` — flash + inspect ESP32/8266 over `serial` (`read_flash`/`read_reg`/`flash_id`/`erase_region`/`run`). Chromium panel only.
+- `usb`/`serial`/`hid`/`esptool` — WebUSB/Serial/HID + ESP flash; picker needs a panel keystroke. Chromium only.
 
 ## Principles
 
@@ -67,9 +66,7 @@ Scoops return on `scoop-notify` / `scoop-idle` / `scoop-wait`.
 
 ## Approvals (sudo)
 
-Actions matching `/etc/sudoers` trigger a native human approval prompt you cannot bypass or auto-answer. Denied command exits 1 (`sudo: approval denied`); denied file op throws `EACCES`.
-
-Edit policy by writing `/etc/sudoers` (one rule/line): `Cmnd <glob>` gates command segments (`git push*`); `Read`/`Write <glob>` gate paths; `NOPASSWD` prefix grants without prompt. Writing `/etc/sudoers*` ALWAYS prompts (self-protection); "Always" appends a grant to `/etc/sudoers.d/granted`. `cat /etc/sudoers` shows the full format.
+`/etc/sudoers` gates actions; deny → exit 1 / `EACCES`. Rules: `Cmnd`/`Read`/`Write <glob>` (+`NOPASSWD`); `/etc/sudoers*` writes always prompt; "Always" → `/etc/sudoers.d/granted`. `cat /etc/sudoers` for syntax.
 
 ## Style
 
