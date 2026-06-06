@@ -1203,6 +1203,64 @@ chrome.runtime.onMessage.addListener(
       })();
       return true;
     }
+    // Tool-output real→masked scrub. The offscreen agent realm holds
+    // only masked entries (no real values), so the scrub runs here
+    // against the SW-owned `SecretsPipeline`. Direction is real→masked
+    // ONLY; idempotent for already-masked tokens and secret-free
+    // output. Errors degrade to the input text so a transient SW issue
+    // never blocks a tool result from reaching the agent loop.
+    if (
+      typeof msg === 'object' &&
+      msg != null &&
+      'type' in msg &&
+      msg.type === 'secrets.scrub-tool-result' &&
+      'text' in msg &&
+      typeof msg.text === 'string'
+    ) {
+      const text = msg.text;
+      (async () => {
+        try {
+          const pipeline = await buildSecretsPipeline();
+          await pipeline.reload();
+          sendResponse({ text: pipeline.scrubResponse(text) });
+        } catch (err) {
+          console.error('[sw] secrets.scrub-tool-result failed', err);
+          sendResponse({ text, error: err instanceof Error ? err.message : String(err) });
+        }
+      })();
+      return true;
+    }
+    // Offscreen-only: snapshot the secrets needed to seed the outbound-scrub
+    // pipeline (defense-in-depth real → masked scrub on the LLM-wire `fetch`
+    // leg). The offscreen has no `chrome.storage`, so it RPCs here for the
+    // sessionId + merged {persisted, session} entry list. Mirrors
+    // `buildSecretsPipeline()` above so the offscreen's pipeline produces the
+    // same masked values as the SW fetch-proxy pipeline.
+    if (
+      typeof msg === 'object' &&
+      msg != null &&
+      'type' in msg &&
+      msg.type === 'secrets.list-with-values-for-pipeline'
+    ) {
+      (async () => {
+        try {
+          const sessionId = await readOrCreateSwSessionId();
+          const persisted = await listSecretsWithValues(chrome.storage.local as any);
+          const persistedNames = new Set(persisted.map((e) => e.name));
+          const session = sessionSecretStore.listAll().filter((s) => !persistedNames.has(s.name));
+          const entries = [...persisted, ...session];
+          sendResponse({ sessionId, entries });
+        } catch (err) {
+          console.error('[sw] secrets.list-with-values-for-pipeline failed', err);
+          sendResponse({
+            sessionId: undefined,
+            entries: [],
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      })();
+      return true;
+    }
     // The panel-terminal `secret` command can't touch chrome.storage directly:
     // it runs in the offscreen document, which lacks chrome.storage even when
     // the manifest grants it (MV3 quirk). Route the management ops through

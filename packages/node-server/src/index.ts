@@ -1253,6 +1253,27 @@ async function main() {
     }
   });
 
+  // Tool-output real→masked scrub. The browser-side agent realm
+  // never holds real secret values, so the defense-in-depth scrub of
+  // bash / read_file / other tool results runs here against the
+  // node-server-owned `SecretProxyManager`. Direction is real→masked
+  // ONLY (`scrubResponse`), so it is always safe and is idempotent
+  // for already-masked tokens and secret-free output. The caller
+  // (`packages/webapp/src/core/secret-scrub.ts`) treats any non-2xx
+  // or malformed response as "return input unchanged" — the scrub is
+  // defense-in-depth, not the primary defense.
+  app.post('/api/secrets/scrub', express.json({ limit: '32mb' }), (req, res) => {
+    const text = req.body?.text;
+    if (typeof text !== 'string') {
+      return res.status(400).json({ error: 'bad-request' });
+    }
+    try {
+      res.json({ text: secretProxy.scrubResponse(text) });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'scrub failed', text });
+    }
+  });
+
   // Masked secrets endpoint — returns name + maskedValue pairs for shell env population.
   // The browser fetches this at shell init to populate env vars with masked values.
   // Real values are never exposed; only deterministic session-scoped masks.

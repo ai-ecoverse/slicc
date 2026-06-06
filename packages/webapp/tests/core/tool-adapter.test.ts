@@ -433,3 +433,87 @@ describe('adaptTool — process manager wiring', () => {
     });
   });
 });
+
+describe('adaptTool — tool-output secret scrub', () => {
+  function makeTool(content: string, isError = false): ToolDefinition {
+    return {
+      name: 'bash',
+      description: 'shell',
+      inputSchema: { type: 'object' },
+      async execute() {
+        return { content, isError };
+      },
+    };
+  }
+
+  it('runs the scrubber once over the completed tool-result text', async () => {
+    const calls: string[] = [];
+    const scrubToolResult = async (text: string) => {
+      calls.push(text);
+      return text.split('ghp_realToken').join('ghp_MASKED____');
+    };
+    const adapted = adaptTool(makeTool('token=ghp_realToken value'), undefined, {
+      scrubToolResult,
+    });
+    const result = await adapted.execute('id', {});
+    const block = (result.content as any[])[0];
+    expect(calls).toEqual(['token=ghp_realToken value']);
+    expect(block.text).toBe('token=ghp_MASKED____ value');
+  });
+
+  it('leaves already-masked / secret-free output untouched (idempotent)', async () => {
+    const scrubToolResult = async (text: string) =>
+      text.split('ghp_realToken').join('ghp_MASKED____');
+    const adapted = adaptTool(makeTool('all clean here, no tokens'), undefined, {
+      scrubToolResult,
+    });
+    const result = await adapted.execute('id', {});
+    const block = (result.content as any[])[0];
+    expect(block.text).toBe('all clean here, no tokens');
+
+    // Second pass over already-masked content is a no-op.
+    const adapted2 = adaptTool(makeTool('token=ghp_MASKED____ value'), undefined, {
+      scrubToolResult,
+    });
+    const result2 = await adapted2.execute('id', {});
+    expect((result2.content as any[])[0].text).toBe('token=ghp_MASKED____ value');
+  });
+
+  it('skips the RPC entirely for empty tool-result text', async () => {
+    let called = 0;
+    const scrubToolResult = async (text: string) => {
+      called++;
+      return text;
+    };
+    const adapted = adaptTool(makeTool(''), undefined, { scrubToolResult });
+    await adapted.execute('id', {});
+    expect(called).toBe(0);
+  });
+
+  it('falls back to unscrubbed content when the scrubber throws', async () => {
+    const scrubToolResult = async () => {
+      throw new Error('boom');
+    };
+    const adapted = adaptTool(makeTool('token=ghp_realToken value'), undefined, {
+      scrubToolResult,
+    });
+    const result = await adapted.execute('id', {});
+    expect((result.content as any[])[0].text).toBe('token=ghp_realToken value');
+  });
+
+  it('preserves isError when scrubbing an error result', async () => {
+    const scrubToolResult = async (text: string) => text.replace('secret', 'MASK');
+    const adapted = adaptTool(makeTool('boom: secret leaked', true), undefined, {
+      scrubToolResult,
+    });
+    const result = await adapted.execute('id', {});
+    expect(result.details).toEqual({ isError: true });
+    expect((result.content as any[])[0].text).toBe('boom: MASK leaked');
+  });
+
+  it('is a no-op when no secretsConfig is supplied', async () => {
+    const adapted = adaptTool(makeTool('token=ghp_realToken value'));
+    const result = await adapted.execute('id', {});
+    expect((result.content as any[])[0].text).toBe('token=ghp_realToken value');
+  });
+});

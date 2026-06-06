@@ -26,6 +26,7 @@ import type {
 } from '../core/index.js';
 import { Agent, adaptTools, createLogger } from '../core/index.js';
 import { fetchSecretEnvVars } from '../core/secret-env.js';
+import { getToolResultScrubber } from '../core/secret-scrub.js';
 import type { SessionStore } from '../core/session.js';
 import type { VirtualFS } from '../fs/index.js';
 import type { RestrictedFS } from '../fs/restricted-fs.js';
@@ -413,16 +414,29 @@ export class ScoopContext {
       // right turn's pid is always visible — tools fired between
       // turns (e.g. proactive tool-use; rare) get `ppid: undefined`
       // (defaults to 1).
+      //
+      // The secrets config threads the active per-session
+      // `SecretsPipeline` (owned by the SW in extension floats or
+      // the node-server in CLI/Electron/hosted) into the adapter so
+      // every completed tool-result text gets a single real→masked
+      // scrub pass before reaching the agent loop — defense-in-depth
+      // for bash/read_file output that bypasses the fetch-proxy
+      // inbound scrub.
+      const secretsConfig = { scrubToolResult: getToolResultScrubber() };
       const tools = this.processManager
-        ? adaptTools(legacyTools, {
-            processManager: this.processManager,
-            owner: {
-              kind: this.scoop.isCone ? 'cone' : 'scoop',
-              scoopJid: this.scoop.jid,
+        ? adaptTools(
+            legacyTools,
+            {
+              processManager: this.processManager,
+              owner: {
+                kind: this.scoop.isCone ? 'cone' : 'scoop',
+                scoopJid: this.scoop.jid,
+              },
+              getParentPid: () => this.currentTurnProcess?.pid,
             },
-            getParentPid: () => this.currentTurnProcess?.pid,
-          })
-        : adaptTools(legacyTools);
+            secretsConfig
+          )
+        : adaptTools(legacyTools, undefined, secretsConfig);
 
       // Load scoop memory
       const memoryPath = this.scoop.isCone
