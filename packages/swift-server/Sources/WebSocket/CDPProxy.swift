@@ -21,6 +21,7 @@ actor CDPProxy {
     private let maxBufferSize = 1_000
     private let reconnectDelayNanoseconds: UInt64
     private let sleep: @Sendable (UInt64) async throws -> Void
+    private let secretInjector: SecretInjector?
 
     private var cdpPort: Int?
     private var cachedCDPPort: Int?
@@ -32,13 +33,21 @@ actor CDPProxy {
     private var activeClient: ClientHandle?
     private var messageBuffer: [ProxyMessage]?
 
+    // Session→URL tracking populated by sniffing Chrome→Client frames. Used
+    // to gate Client→Chrome secret unmasking by the target tab's current
+    // hostname. Empty/no-entry means we cannot resolve the URL → fail closed.
+    private var sessionToUrl: [String: String] = [:]
+    private var sessionToTargetId: [String: String] = [:]
+    private var sessionToRootFrame: [String: String] = [:]
+
     init(
         logger: Logger = Logger(label: "slicc.cdp-proxy"),
         maxMessageSize: Int = CDPProxy.defaultMaxMessageSize,
         discoverer: (@Sendable (Int) async throws -> String)? = nil,
         chromeConnector: ChromeSocketConnector? = nil,
         reconnectDelayNanoseconds: UInt64 = CDPProxy.defaultReconnectDelayNanoseconds,
-        sleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) }
+        sleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) },
+        secretInjector: SecretInjector? = nil
     ) {
         self.logger = logger
         self.maxMessageSize = maxMessageSize
@@ -53,6 +62,7 @@ actor CDPProxy {
         }
         self.reconnectDelayNanoseconds = reconnectDelayNanoseconds
         self.sleep = sleep
+        self.secretInjector = secretInjector
         self.logDedup = CliLogDedup(prefix: "[cdp-proxy]", sink: { summary in
             logger.debug("\(summary)")
         })
@@ -159,7 +169,8 @@ actor CDPProxy {
             return
         }
 
-        let preview = message.preview
+        let outgoing = self.maybeUnmaskClientFrame(message)
+        let preview = outgoing.preview
         if let chromeSocket, chromeSocket.isOpen(), self.messageBuffer == nil {
             let logLine = "[cdp-proxy] Client→Chrome: \(preview)"
             if self.logDedup.shouldLog(logLine) {
@@ -167,16 +178,16 @@ actor CDPProxy {
             }
 
             do {
-                try await chromeSocket.send(message)
+                try await chromeSocket.send(outgoing)
             } catch {
                 self.logger.error("[cdp-proxy] Chrome WS error: \(String(describing: error))")
                 self.handleChromeDisconnect(
                     reason: "send failure: \(String(describing: error))",
-                    bufferMessage: message
+                    bufferMessage: outgoing
                 )
             }
         } else if self.messageBuffer != nil {
-            self.appendBufferedMessage(message)
+            self.appendBufferedMessage(outgoing)
             let logLine = "[cdp-proxy] Client→Chrome (buffered): \(preview)"
             if self.logDedup.shouldLog(logLine) {
                 self.logger.debug("\(logLine)")
@@ -269,6 +280,10 @@ actor CDPProxy {
             return
         }
 
+        if self.secretInjector != nil, case .text(let text) = message {
+            self.sniffSessionTracking(text: text)
+        }
+
         let logLine = "[cdp-proxy] Chrome→Client: \(message.preview)"
         if self.logDedup.shouldLog(logLine) {
             self.logger.debug("\(logLine)")
@@ -286,6 +301,152 @@ actor CDPProxy {
                 self.activeClient = nil
             }
         }
+    }
+
+    // MARK: - Session→URL tracking + Client→Chrome unmask
+    //
+    // Mirrors the field surface of `packages/shared-ts/src/cdp-frame-unmask.ts`
+    // (the TS helper cannot be imported into Swift). Three CDP methods carry
+    // a single whole masked token in one frame: `Runtime.callFunctionOn`
+    // (string entries in `params.arguments[].value`), `Runtime.evaluate`
+    // (`params.expression`), and `Input.insertText` (`params.text`). The
+    // hostname is resolved from the per-session URL populated by sniffing
+    // `Target.attachedToTarget`, `Target.targetInfoChanged`, and
+    // `Page.frameNavigated` events on the Chrome→Client leg. Fail-closed:
+    // when no URL is available, the frame is forwarded verbatim.
+
+    func sessionURLSnapshot() -> [String: String] { self.sessionToUrl }
+
+    func sessionRootFrameSnapshot() -> [String: String] { self.sessionToRootFrame }
+
+    private func sniffSessionTracking(text: String) {
+        guard let data = text.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return
+        }
+        guard let method = obj["method"] as? String,
+              let params = obj["params"] as? [String: Any] else {
+            return
+        }
+        switch method {
+        case "Target.attachedToTarget":
+            guard let sid = params["sessionId"] as? String,
+                  let info = params["targetInfo"] as? [String: Any] else { return }
+            if let url = info["url"] as? String, !url.isEmpty {
+                self.sessionToUrl[sid] = url
+            }
+            if let tid = info["targetId"] as? String {
+                self.sessionToTargetId[sid] = tid
+            }
+        case "Target.detachedFromTarget":
+            if let sid = params["sessionId"] as? String {
+                self.sessionToUrl.removeValue(forKey: sid)
+                self.sessionToTargetId.removeValue(forKey: sid)
+                self.sessionToRootFrame.removeValue(forKey: sid)
+            }
+        case "Target.targetInfoChanged":
+            guard let info = params["targetInfo"] as? [String: Any],
+                  let tid = info["targetId"] as? String,
+                  let url = info["url"] as? String, !url.isEmpty else { return }
+            for (sid, mappedTid) in self.sessionToTargetId where mappedTid == tid {
+                self.sessionToUrl[sid] = url
+            }
+        case "Page.frameNavigated":
+            guard let sid = obj["sessionId"] as? String,
+                  let frame = params["frame"] as? [String: Any] else { return }
+            // Only update on main-frame navigations. CDP frames carry a
+            // `parentId` field for subframes; main frames omit it (or send
+            // an empty string).
+            let parentId = (frame["parentId"] as? String) ?? ""
+            guard parentId.isEmpty else { return }
+            if let fid = frame["id"] as? String {
+                self.sessionToRootFrame[sid] = fid
+            }
+            if let url = frame["url"] as? String, !url.isEmpty {
+                self.sessionToUrl[sid] = url
+            }
+        default:
+            break
+        }
+    }
+
+    func maybeUnmaskClientFrame(_ message: ProxyMessage) -> ProxyMessage {
+        guard let injector = self.secretInjector else { return message }
+        guard case .text(let text) = message else { return message }
+        return Self.unmaskClientFrame(
+            text: text,
+            injector: injector,
+            urlForSession: { [sessionToUrl] sid in sessionToUrl[sid] }
+        ).map { ProxyMessage.text($0) } ?? message
+    }
+
+    static func unmaskClientFrame(
+        text: String,
+        injector: SecretInjector,
+        urlForSession: (String) -> String?
+    ) -> String? {
+        guard !injector.isEmpty else { return nil }
+        guard let data = text.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let method = obj["method"] as? String else {
+            return nil
+        }
+        let targets: Set<String> = ["Runtime.callFunctionOn", "Runtime.evaluate", "Input.insertText"]
+        guard targets.contains(method) else { return nil }
+        // Fail closed: any missing piece (sessionId, URL, hostname) → no unmask.
+        guard let sid = obj["sessionId"] as? String,
+              let url = urlForSession(sid),
+              let host = URL(string: url)?.host,
+              !host.isEmpty else {
+            return nil
+        }
+        guard var params = obj["params"] as? [String: Any] else { return nil }
+        var changed = false
+        switch method {
+        case "Runtime.evaluate":
+            if let expr = params["expression"] as? String {
+                let unmasked = injector.injectBody(text: expr, hostname: host)
+                if unmasked != expr {
+                    params["expression"] = unmasked
+                    changed = true
+                }
+            }
+        case "Input.insertText":
+            if let t = params["text"] as? String {
+                let unmasked = injector.injectBody(text: t, hostname: host)
+                if unmasked != t {
+                    params["text"] = unmasked
+                    changed = true
+                }
+            }
+        case "Runtime.callFunctionOn":
+            guard var args = params["arguments"] as? [Any] else { return nil }
+            var argsChanged = false
+            for i in args.indices {
+                guard var arg = args[i] as? [String: Any],
+                      let value = arg["value"] as? String else { continue }
+                let unmasked = injector.injectBody(text: value, hostname: host)
+                if unmasked != value {
+                    arg["value"] = unmasked
+                    args[i] = arg
+                    argsChanged = true
+                }
+            }
+            if argsChanged {
+                params["arguments"] = args
+                changed = true
+            }
+        default:
+            break
+        }
+        guard changed else { return nil }
+        var newObj = obj
+        newObj["params"] = params
+        guard let newData = try? JSONSerialization.data(withJSONObject: newObj, options: []),
+              let newText = String(data: newData, encoding: .utf8) else {
+            return nil
+        }
+        return newText
     }
 
     private func handleChromeEvent(_ event: ChromeSocketEvent, connectionID: UUID) async {

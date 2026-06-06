@@ -186,7 +186,10 @@ struct ServerCommand: AsyncParsableCommand {
         }
 
         let lickSystem = LickSystem()
-        let cdpProxy = CDPProxy(logger: Logger(label: "slicc.cdp-proxy"))
+        let cdpProxy = CDPProxy(
+            logger: Logger(label: "slicc.cdp-proxy"),
+            secretInjector: secretInjector
+        )
         let httpClient = HTTPClient(eventLoopGroupProvider: .singleton)
         let startupLatch = ServerStartupLatch()
         let staticRoot = Self.resolveStaticRoot(explicitStaticRoot: config.staticRoot, repositoryRoot: repositoryRoot)

@@ -253,6 +253,221 @@ final class CDPProxyTests: XCTestCase {
         XCTAssertEqual(recordedMessages, ["{\"id\":1}", "{\"id\":2}"])
         XCTAssertEqual(finalEvents, ["closed: code=nil"])
     }
+
+    // MARK: - Client→Chrome unmask + session→URL tracking (Wave A Task 4)
+
+    private func makeProxyWithInjector(
+        harness: ChromeConnectorHarness,
+        secrets: [SecretInjector.LoadedSecret]
+    ) -> (CDPProxy, SecretInjector) {
+        let injector = SecretInjector(secrets: secrets)
+        let proxy = CDPProxy(
+            logger: Logger(label: "test.cdp-proxy"),
+            discoverer: { _ in "ws://127.0.0.1:9222/devtools/browser/test" },
+            chromeConnector: { url, onMessage, onEvent in
+                try await harness.connect(url: url, onMessage: onMessage, onEvent: onEvent)
+            },
+            secretInjector: injector
+        )
+        return (proxy, injector)
+    }
+
+    /// `addClient` seeds an empty `messageBuffer` so subsequent `receive()`
+    /// calls buffer instead of forwarding directly; production drains the
+    /// buffer by calling `prepareClientConnection` right after `addClient`.
+    /// Tests mirror that ordering so frames flow through to Chrome.
+    private func setupClientWithFlush(
+        proxy: CDPProxy,
+        client: ClientRecorder
+    ) async {
+        await proxy.addClient(client.handle)
+        await proxy.prepareClientConnection(for: client.handle.id, cdpPort: 9222)
+    }
+
+    private static let inDomainSecret = SecretInjector.LoadedSecret(
+        name: "API_KEY",
+        realValue: "sk-realValue123",
+        maskedValue: mask(sessionId: "session-fixed", secretName: "API_KEY", realValue: "sk-realValue123"),
+        domains: ["example.com"]
+    )
+
+    func testClientFrameUnmaskRuntimeEvaluateInDomain() async throws {
+        let harness = ChromeConnectorHarness()
+        let (proxy, _) = self.makeProxyWithInjector(harness: harness, secrets: [Self.inDomainSecret])
+        let client = ClientRecorder()
+        await self.setupClientWithFlush(proxy: proxy, client: client)
+
+        // Seed session→URL via a sniffed Target.attachedToTarget event.
+        let attached = #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://example.com/path"}}}"#
+        await harness.emitText(attached)
+
+        let masked = Self.inDomainSecret.maskedValue
+        let outbound = #"{"id":42,"method":"Runtime.evaluate","params":{"expression":"submit(\#(masked))","returnByValue":true},"sessionId":"S1"}"#
+        await proxy.receive(.text(outbound), from: client.handle.id)
+
+        let sent = harness.sentTextsSnapshot()
+        XCTAssertEqual(sent.count, 1)
+        let parsed = try JSONSerialization.jsonObject(with: Data(sent[0].utf8)) as? [String: Any]
+        XCTAssertEqual(parsed?["id"] as? Int, 42)
+        XCTAssertEqual(parsed?["sessionId"] as? String, "S1")
+        XCTAssertEqual(parsed?["method"] as? String, "Runtime.evaluate")
+        let params = parsed?["params"] as? [String: Any]
+        XCTAssertEqual(params?["expression"] as? String, "submit(sk-realValue123)")
+        XCTAssertEqual(params?["returnByValue"] as? Bool, true)
+    }
+
+    func testClientFrameOutOfDomainPassesThroughMasked() async throws {
+        let harness = ChromeConnectorHarness()
+        let (proxy, _) = self.makeProxyWithInjector(harness: harness, secrets: [Self.inDomainSecret])
+        let client = ClientRecorder()
+        await self.setupClientWithFlush(proxy: proxy, client: client)
+
+        let attached = #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://evil.example.org/"}}}"#
+        await harness.emitText(attached)
+
+        let masked = Self.inDomainSecret.maskedValue
+        let outbound = #"{"id":1,"method":"Runtime.evaluate","params":{"expression":"\#(masked)"},"sessionId":"S1"}"#
+        await proxy.receive(.text(outbound), from: client.handle.id)
+
+        XCTAssertEqual(harness.sentTextsSnapshot(), [outbound])
+    }
+
+    func testClientFrameFailsClosedWhenSessionURLUnresolved() async throws {
+        let harness = ChromeConnectorHarness()
+        let (proxy, _) = self.makeProxyWithInjector(harness: harness, secrets: [Self.inDomainSecret])
+        let client = ClientRecorder()
+        await self.setupClientWithFlush(proxy: proxy, client: client)
+
+        // No Target.attachedToTarget emitted → fail-closed (forward verbatim).
+        let masked = Self.inDomainSecret.maskedValue
+        let outbound = #"{"id":1,"method":"Runtime.evaluate","params":{"expression":"\#(masked)"},"sessionId":"unknown"}"#
+        await proxy.receive(.text(outbound), from: client.handle.id)
+
+        XCTAssertEqual(harness.sentTextsSnapshot(), [outbound])
+    }
+
+    func testClientFrameNonTargetMethodIsForwardedVerbatim() async throws {
+        let harness = ChromeConnectorHarness()
+        let (proxy, _) = self.makeProxyWithInjector(harness: harness, secrets: [Self.inDomainSecret])
+        let client = ClientRecorder()
+        await self.setupClientWithFlush(proxy: proxy, client: client)
+
+        let attached = #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://example.com/"}}}"#
+        await harness.emitText(attached)
+
+        let masked = Self.inDomainSecret.maskedValue
+        let outbound = #"{"id":1,"method":"Input.dispatchKeyEvent","params":{"type":"char","text":"\#(masked)"},"sessionId":"S1"}"#
+        await proxy.receive(.text(outbound), from: client.handle.id)
+
+        XCTAssertEqual(harness.sentTextsSnapshot(), [outbound])
+    }
+
+    func testClientBinaryFrameForwardedUntouched() async throws {
+        let harness = ChromeConnectorHarness()
+        let (proxy, _) = self.makeProxyWithInjector(harness: harness, secrets: [Self.inDomainSecret])
+        let client = ClientRecorder()
+        await self.setupClientWithFlush(proxy: proxy, client: client)
+
+        var buffer = ByteBuffer()
+        buffer.writeBytes([0x01, 0x02, 0x03])
+        await proxy.receive(.binary(buffer), from: client.handle.id)
+        XCTAssertEqual(harness.sentTextsSnapshot(), ["<binary 3>"])
+    }
+
+    func testInsertTextInDomainUnmaskFlow() async throws {
+        let harness = ChromeConnectorHarness()
+        let (proxy, _) = self.makeProxyWithInjector(harness: harness, secrets: [Self.inDomainSecret])
+        let client = ClientRecorder()
+        await self.setupClientWithFlush(proxy: proxy, client: client)
+
+        let attached = #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://example.com/"}}}"#
+        await harness.emitText(attached)
+
+        let masked = Self.inDomainSecret.maskedValue
+        let outbound = #"{"id":7,"method":"Input.insertText","params":{"text":"\#(masked)"},"sessionId":"S1"}"#
+        await proxy.receive(.text(outbound), from: client.handle.id)
+
+        let sent = harness.sentTextsSnapshot()
+        XCTAssertEqual(sent.count, 1)
+        let parsed = try JSONSerialization.jsonObject(with: Data(sent[0].utf8)) as? [String: Any]
+        let params = parsed?["params"] as? [String: Any]
+        XCTAssertEqual(params?["text"] as? String, "sk-realValue123")
+    }
+
+    func testCallFunctionOnUnmaskOnlyStringArguments() async throws {
+        let harness = ChromeConnectorHarness()
+        let (proxy, _) = self.makeProxyWithInjector(harness: harness, secrets: [Self.inDomainSecret])
+        let client = ClientRecorder()
+        await self.setupClientWithFlush(proxy: proxy, client: client)
+
+        let attached = #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://example.com/"}}}"#
+        await harness.emitText(attached)
+
+        let masked = Self.inDomainSecret.maskedValue
+        let argsJSON = "[{\"value\":\"\(masked)\"},{\"value\":42},{\"objectId\":\"obj-1\"},"
+            + "{\"value\":\"prefix \(masked) suffix\"}]"
+        let paramsJSON = "{\"functionDeclaration\":\"function(v){this.value=v}\"," + "\"arguments\":\(argsJSON)}"
+        let outbound = "{\"id\":3,\"method\":\"Runtime.callFunctionOn\",\"params\":\(paramsJSON),\"sessionId\":\"S1\"}"
+        await proxy.receive(.text(outbound), from: client.handle.id)
+
+        let sent = harness.sentTextsSnapshot()
+        XCTAssertEqual(sent.count, 1)
+        let parsed = try JSONSerialization.jsonObject(with: Data(sent[0].utf8)) as? [String: Any]
+        let params = parsed?["params"] as? [String: Any]
+        let args = params?["arguments"] as? [[String: Any]]
+        XCTAssertEqual(args?[0]["value"] as? String, "sk-realValue123")
+        XCTAssertEqual(args?[1]["value"] as? Int, 42)
+        XCTAssertEqual(args?[2]["objectId"] as? String, "obj-1")
+        XCTAssertEqual(args?[3]["value"] as? String, "prefix sk-realValue123 suffix")
+    }
+
+    func testSessionURLTrackerPageFrameNavigatedUpdatesMainFrameOnly() async throws {
+        let harness = ChromeConnectorHarness()
+        let (proxy, _) = self.makeProxyWithInjector(harness: harness, secrets: [Self.inDomainSecret])
+        let client = ClientRecorder()
+        await self.setupClientWithFlush(proxy: proxy, client: client)
+
+        await harness.emitText(#"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://example.com/"}}}"#)
+        // Subframe navigation should NOT update the tracked URL.
+        await harness.emitText(#"{"method":"Page.frameNavigated","params":{"frame":{"id":"sub-frame","parentId":"main-frame","url":"https://evil.example.org/"}},"sessionId":"S1"}"#)
+        let urlsAfterSub = await proxy.sessionURLSnapshot()
+        XCTAssertEqual(urlsAfterSub["S1"], "https://example.com/")
+
+        // Main-frame navigation (no parentId) updates the URL.
+        await harness.emitText(#"{"method":"Page.frameNavigated","params":{"frame":{"id":"main-frame","url":"https://example.com/new"}},"sessionId":"S1"}"#)
+        let urlsAfterMain = await proxy.sessionURLSnapshot()
+        XCTAssertEqual(urlsAfterMain["S1"], "https://example.com/new")
+    }
+
+    func testSessionURLTrackerTargetInfoChangedUpdatesURL() async throws {
+        let harness = ChromeConnectorHarness()
+        let (proxy, _) = self.makeProxyWithInjector(harness: harness, secrets: [Self.inDomainSecret])
+        let client = ClientRecorder()
+        await self.setupClientWithFlush(proxy: proxy, client: client)
+
+        await harness.emitText(#"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://example.com/old"}}}"#)
+        await harness.emitText(#"{"method":"Target.targetInfoChanged","params":{"targetInfo":{"targetId":"T1","url":"https://example.com/new"}}}"#)
+        let urls = await proxy.sessionURLSnapshot()
+        XCTAssertEqual(urls["S1"], "https://example.com/new")
+    }
+
+    func testNoInjectorIsNoOpPassthrough() async throws {
+        let harness = ChromeConnectorHarness()
+        // No SecretInjector passed → must be a complete passthrough.
+        let proxy = CDPProxy(
+            logger: Logger(label: "test.cdp-proxy"),
+            discoverer: { _ in "ws://127.0.0.1:9222/devtools/browser/test" },
+            chromeConnector: { url, onMessage, onEvent in
+                try await harness.connect(url: url, onMessage: onMessage, onEvent: onEvent)
+            }
+        )
+        let client = ClientRecorder()
+        await self.setupClientWithFlush(proxy: proxy, client: client)
+
+        let outbound = #"{"id":1,"method":"Runtime.evaluate","params":{"expression":"anything"},"sessionId":"S1"}"#
+        await proxy.receive(.text(outbound), from: client.handle.id)
+        XCTAssertEqual(harness.sentTextsSnapshot(), [outbound])
+    }
 }
 
 private final class ClientRecorder: @unchecked Sendable {
