@@ -37,6 +37,7 @@
 import type { FitAddon } from '@xterm/addon-fit';
 import type { Terminal } from '@xterm/xterm';
 import { storePendingHandle } from '../fs/mount-picker-popup.js';
+import { parseEsptoolArgs } from '../shell/supplemental-commands/esptool-command.js';
 import { parseHidArgs, parseHidFilters } from '../shell/supplemental-commands/hid-command.js';
 import {
   parseSerialArgs,
@@ -671,6 +672,16 @@ export class RemoteTerminalView {
       void this.runRemoteWithSerialPicker(serialFilters);
       return;
     }
+    // Pre-intercept `esptool <sub>` (without `--port`). The worker
+    // command would otherwise call `serial.requestPort` after the
+    // panel-RPC hop has discarded the keystroke's user activation and
+    // Chromium would reject the chooser. Run the picker here, then
+    // forward the original line with `--port <handle>` appended.
+    const esptoolFilters = parseEsptoolPickerCommand(command);
+    if (esptoolFilters) {
+      void this.runRemoteWithEsptoolPicker(command, esptoolFilters);
+      return;
+    }
     void this.runRemote(command);
   }
 
@@ -785,6 +796,45 @@ export class RemoteTerminalView {
         return;
       }
       await this.runRemoteImpl(`serial request --__resolved ${handle}`);
+    } finally {
+      this.isExecuting = false;
+      this.showPrompt();
+    }
+  }
+
+  /**
+   * Run the Web Serial chooser on the Enter-keystroke gesture for an
+   * `esptool` invocation that omitted `--port`, register the granted
+   * port, and forward the ORIGINAL command line with `--port <handle>`
+   * appended so the worker command reuses the resolved port instead of
+   * trying its own (gesture-less) `requestPort`. Cancellation surfaces
+   * as a terminal line and skips the worker exec.
+   */
+  private async runRemoteWithEsptoolPicker(
+    command: string,
+    filters: SerialFilter[]
+  ): Promise<void> {
+    this.isExecuting = true;
+    try {
+      const serial = getNavigatorSerial();
+      if (!serial) {
+        this.terminal?.writeln('esptool: Web Serial is not available in this browser');
+        return;
+      }
+      let handle: string;
+      try {
+        const port = await serial.requestPort(filters.length ? { filters } : {});
+        handle = getSharedSerialRegistry().register(port);
+      } catch (err: unknown) {
+        const name = err instanceof Error ? err.name : '';
+        if (name === 'NotFoundError' || name === 'AbortError') {
+          this.terminal?.writeln('esptool: cancelled');
+          return;
+        }
+        this.terminal?.writeln(`esptool: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
+      await this.runRemoteImpl(`${command.trim()} --port ${handle}`);
     } finally {
       this.isExecuting = false;
       this.showPrompt();
@@ -1029,6 +1079,25 @@ function parseSerialRequestCommand(line: string): SerialFilter[] | null {
     return null;
   }
   const { flags } = parseSerialArgs(tokens.slice(2));
+  return parseSerialFilters(flags);
+}
+
+/**
+ * Parse a typed command line and return the Web Serial filters when it
+ * is an `esptool <subcommand>` that will need the serial picker —
+ * i.e. there is a subcommand positional, no `--port`, and no help
+ * flag. Returns `null` for `esptool` with no subcommand (the worker
+ * prints HELP) or when `--port` is already resolved so the worker
+ * handles it directly.
+ */
+function parseEsptoolPickerCommand(line: string): SerialFilter[] | null {
+  const tokens = line.trim().split(/\s+/);
+  if (tokens[0] !== 'esptool') return null;
+  if (tokens.includes('--port') || tokens.includes('--help') || tokens.includes('-h')) {
+    return null;
+  }
+  const { positionals, flags } = parseEsptoolArgs(tokens.slice(1));
+  if (positionals.length === 0) return null;
   return parseSerialFilters(flags);
 }
 
