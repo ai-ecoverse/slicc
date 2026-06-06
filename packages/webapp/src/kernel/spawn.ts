@@ -66,14 +66,16 @@ export interface KernelWorkerSpawnOptions {
   readyTimeoutMs?: number;
   /**
    * Stall watchdog for an in-progress legacy→OPFS migration, in ms.
-   * Default 60s. While the worker is migrating, the {@link readyTimeoutMs}
-   * boot clock is SUSPENDED — a one-time data migration can legitimately
-   * run far longer than the boot timeout, so it must never trip it.
-   * This watchdog replaces the boot clock for the duration of the
-   * migration and is re-armed on every `kernel-migration-progress`
-   * heartbeat, so a steadily-advancing (legitimately slow) migration is
-   * never stopped. It only rejects if the migration makes NO progress
-   * for this long, which indicates a genuinely hung worker.
+   * Default 60s. On `kernel-migration-started` the {@link readyTimeoutMs}
+   * boot clock is SUSPENDED with no replacement timer — the worker's
+   * unbounded pre-copy work (dynamic import, legacy-IDB manifest walk,
+   * directory creation) emits no progress, so any timeout during that
+   * phase could wrongly reject a legitimate large-workspace migration.
+   * The watchdog is armed on the FIRST `kernel-migration-progress`
+   * heartbeat and re-armed on every subsequent one, so a steadily-
+   * advancing (legitimately slow) copy is never stopped regardless of
+   * total duration. It only rejects if the copy, once started, makes NO
+   * progress for this long — a genuinely hung worker.
    */
   migrationStallTimeoutMs?: number;
   /**
@@ -214,10 +216,16 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
         reject(new Error(`Kernel worker did not signal ready within ${readyTimeoutMs}ms`));
       }, readyTimeoutMs);
     };
-    // Arm the migration stall watchdog. Re-armed on every progress
-    // heartbeat so a legitimately slow but steadily-advancing migration
-    // is NEVER stopped. Only a migration that makes no progress for
-    // `migrationStallTimeoutMs` (a genuinely hung worker) rejects.
+    // Arm the migration stall watchdog. Armed on the FIRST progress
+    // heartbeat and re-armed on every subsequent one, so a legitimately
+    // slow but steadily-advancing copy is NEVER stopped. Only a copy
+    // that makes no progress for `migrationStallTimeoutMs` (a genuinely
+    // hung worker) rejects. It is intentionally NOT armed at
+    // `kernel-migration-started`: the worker does unbounded pre-copy
+    // work (dynamic import, legacy-IDB manifest walk, directory
+    // creation) before the first heartbeat, and that phase emits no
+    // progress — arming here would let the watchdog reject a legitimate
+    // large-workspace migration mid-walk.
     const armMigrationWatchdog = (): void => {
       clearTimer();
       timeoutId = setTimeout(() => {
@@ -251,12 +259,14 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
       // after a migration signal arrives so the worker can still
       // post `kernel-worker-ready` when it eventually finishes.
       if (data?.type === 'kernel-migration-started') {
-        // SUSPEND the boot clock and hand over to the stall watchdog.
-        // A one-time legacy→OPFS data copy can run far longer than
-        // `readyTimeoutMs`; letting the boot timeout fire here was the
-        // bug that stranded the page behind a frozen, input-blocking
-        // migration splash while the worker quietly finished the copy.
-        armMigrationWatchdog();
+        // SUSPEND the boot clock entirely — but do NOT arm the stall
+        // watchdog yet. The worker's pre-copy phase (dynamic import,
+        // legacy-IDB manifest walk, directory creation) emits no
+        // progress and is unbounded for a large workspace; any timeout
+        // armed here could reject a legitimate slow migration mid-walk,
+        // recreating the very fatal boot path this change fixes. The
+        // watchdog starts on the first progress heartbeat below.
+        clearTimer();
         try {
           options.onMigrationStart?.();
         } catch {
@@ -265,8 +275,9 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
         return;
       }
       if (data?.type === 'kernel-migration-progress') {
-        // Heartbeat — reset the stall watchdog so a slow-but-advancing
-        // migration is never aborted, regardless of total duration.
+        // First heartbeat arms the stall watchdog; subsequent ones reset
+        // it, so a slow-but-advancing copy is never aborted regardless
+        // of total duration.
         armMigrationWatchdog();
         try {
           const progress = data as Partial<KernelMigrationProgressMsg>;
