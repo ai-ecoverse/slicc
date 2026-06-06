@@ -1,0 +1,150 @@
+name: SLICC Oversight Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - main
+      - develop
+
+permissions:
+  pull-requests: write
+  contents: read
+  issues: write
+
+jobs:
+  oversight-review:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout slicc PR
+        uses: actions/checkout@v4
+        with:
+          repository: ai-ecoverse/slicc
+          path: slicc
+          fetch-depth: 0
+
+      - name: Get PR metadata
+        id: pr-info
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd slicc
+          gh pr view ${{ github.event.pull_request.number }} \
+            --json number,title,body,url,files,changedFiles > /tmp/pr_metadata.json
+          
+          echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          
+          # Show what we're reviewing
+          echo "Reviewing PR #${{ github.event.pull_request.number }}"
+          jq -r '.title' /tmp/pr_metadata.json
+          jq -r '.changedFiles' /tmp/pr_metadata.json
+          echo " files changed"
+
+      - name: Fetch PR diff
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd slicc
+          gh pr diff ${{ steps.pr-info.outputs.pr_number }} > /tmp/pr.diff
+          
+          echo "Diff size: $(wc -l < /tmp/pr.diff) lines"
+
+      - name: Trigger Augment via Webhook
+        id: augment-webhook
+        env:
+          AUGMENT_WEBHOOK_URL: ${{ secrets.AUGMENT_WEBHOOK_URL }}
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+        run: |
+          # Prepare PR summary for the webhook
+          PR_TITLE=$(jq -r '.title' /tmp/pr_metadata.json)
+          PR_BODY=$(jq -r '.body // ""' /tmp/pr_metadata.json)
+          CHANGED_FILES=$(jq -r '.changedFiles' /tmp/pr_metadata.json)
+          
+          # Get diff summary (first 5000 chars to avoid payload size issues)
+          DIFF_SUMMARY=$(head -c 5000 /tmp/pr.diff)
+          
+          # Prepare webhook payload
+          cat > /tmp/webhook_payload.json <<EOF
+          {
+            "event_type": "slicc_pr_review",
+            "pr_number": ${{ steps.pr-info.outputs.pr_number }},
+            "pr_title": "$PR_TITLE",
+            "pr_url": "https://github.com/ai-ecoverse/slicc/pull/${{ steps.pr-info.outputs.pr_number }}",
+            "repository": "ai-ecoverse/slicc",
+            "changed_files": $CHANGED_FILES,
+            "instruction": "Review this PR using the SLICC Oversight Reviewer skill. Analyze for recurring blind spots: (1) Error path coverage gaps, (2) UI state preservation, (3) Cross-runtime consistency across 5 runtimes (Browser, Extension, Node, Swift, iOS), (4) CDP integration edge cases, (5) macOS permissions, (6) Test coverage. Cite historical PRs where similar patterns caused issues. Post your review as a comment to the PR.",
+            "diff_preview": "$DIFF_SUMMARY"
+          }
+          EOF
+          
+          # Trigger webhook
+          WEBHOOK_RESPONSE=$(curl -X POST \
+            -H "Authorization: Bearer $AWS_BEARER_TOKEN_BEDROCK" \
+            -H "Content-Type: application/json" \
+            --data @/tmp/webhook_payload.json \
+            "$AUGMENT_WEBHOOK_URL" \
+            --fail-with-body \
+            -w "\n%{http_code}" \
+            2>&1)
+          
+          HTTP_CODE=$(echo "$WEBHOOK_RESPONSE" | tail -1)
+          
+          if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "202" ]; then
+            echo "Webhook trigger failed (HTTP $HTTP_CODE):"
+            echo "$WEBHOOK_RESPONSE"
+            echo "has_findings=error" >> $GITHUB_OUTPUT
+            echo "error_message=Webhook returned HTTP $HTTP_CODE" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "Webhook triggered successfully (HTTP $HTTP_CODE)"
+          echo "has_findings=triggered" >> $GITHUB_OUTPUT
+
+      - name: Post webhook trigger confirmation
+        if: steps.augment-webhook.outputs.has_findings == 'triggered'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd slicc
+          
+          gh pr comment ${{ steps.pr-info.outputs.pr_number }} --body "## AI-Powered SLICC Oversight Review - In Progress
+
+AI-powered oversight review has been triggered for this PR.
+
+**Analyzing for:**
+- Error path coverage gaps (timeouts, retries, error handling)
+- UI state preservation issues
+- Cross-runtime consistency (5 runtimes: Browser, Extension, Node, Swift, iOS)
+- CDP/Chrome integration edge cases
+- macOS permissions (TCC, entitlements, keychain)
+- Test coverage blind spots
+
+**The AI agent will:**
+1. Analyze the PR diff with contextual understanding
+2. Reference 500+ historical PRs for pattern recognition
+3. Post detailed findings with remediation guidance
+4. Apply labels if critical issues are detected
+
+_Review should complete within 2-3 minutes..._"
+
+      - name: Handle webhook errors
+        if: steps.augment-webhook.outputs.has_findings == 'error'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd slicc
+          
+          gh pr comment ${{ steps.pr-info.outputs.pr_number }} --body "## SLICC Oversight Review - Webhook Error
+
+The automated oversight review webhook trigger failed.
+
+Error: ${{ steps.augment-webhook.outputs.error_message }}
+
+This may indicate:
+- Missing or invalid AUGMENT_WEBHOOK_URL secret
+- Missing or invalid AWS_BEARER_TOKEN_BEDROCK secret
+- Webhook endpoint is temporarily unavailable
+- Network connectivity issues
+
+Please check workflow logs and retry, or request manual review."
