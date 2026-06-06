@@ -1034,7 +1034,7 @@ npm run build -w @slicc/chrome-extension
 
 ## 14. Add Interactive Tool UI (Approval Dialogs, Forms)
 
-**When**: A shell command or tool needs user interaction before proceeding (e.g., permission approval, file picker, form input). Tool UI solves the "user gesture" problem — browser APIs like `showDirectoryPicker()` require a user click, but agent-driven tool calls have no gesture context.
+**When**: A shell command or tool needs user interaction before proceeding (e.g., permission approval, file picker, form input). Tool UI solves the "user gesture" problem — browser APIs like `showDirectoryPicker()` require a user click, but agent-driven tool calls have no gesture context. For the broader gate-pattern context (sudo, device gates, OS capture gates), see [`docs/approvals.md`](./approvals.md).
 
 **Files to modify**:
 

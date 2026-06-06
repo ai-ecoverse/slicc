@@ -56,9 +56,19 @@ export { compactContext, createCompactContext } from './context-compaction.js';
 export type { Logger } from './logger.js';
 export { createLogger, getLogLevel, LogLevel, setLogLevel } from './logger.js';
 export { getMimeType } from './mime-types.js';
+export {
+  getIdentityToolResultScrubber,
+  getToolResultScrubber,
+  type ToolResultScrubber,
+} from './secret-scrub.js';
 // Local utilities
 export { SessionStore } from './session.js';
-export { adaptTool, adaptTools } from './tool-adapter.js';
+export {
+  adaptTool,
+  adaptTools,
+  type ToolAdapterProcessConfig,
+  type ToolAdapterSecretsConfig,
+} from './tool-adapter.js';
 export { ToolRegistry } from './tool-registry.js';
 
 // Local types

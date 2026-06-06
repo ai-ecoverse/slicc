@@ -51,6 +51,7 @@ import {
   resolveTrayRuntimeConfig,
 } from '../../../packages/webapp/src/scoops/tray-runtime-config.js';
 import { startFollowerWithAutoReconnect } from '../../../packages/webapp/src/scoops/tray-webrtc.js';
+import { installSudoTestHook } from '../../../packages/webapp/src/sudo/index.js';
 import { getApiKey } from '../../../packages/webapp/src/ui/provider-settings.js';
 import { canonicalRuntimeId } from '../../../packages/webapp/src/ui/runtime-identity.js';
 import { initTelemetry } from '../../../packages/webapp/src/ui/telemetry.js';
@@ -66,6 +67,7 @@ import {
 import { connectOffscreenLeaderSyncBridge } from './leader-sync-bridge.js';
 import type { ExtensionMessage } from './messages.js';
 import { OffscreenBridge } from './offscreen-bridge.js';
+import { fetchOutboundScrubSnapshot, installOutboundScrubber } from './offscreen-outbound-scrub.js';
 
 const log = createLogger('offscreen');
 
@@ -80,6 +82,17 @@ console.log('[slicc-offscreen] Script loaded');
 
 async function init(): Promise<void> {
   console.log('[slicc-offscreen] init() starting...');
+
+  // Install the defense-in-depth outbound LLM-wire scrub BEFORE anything else
+  // here can issue a `fetch`. Wraps `globalThis.fetch` so cross-origin http(s)
+  // request bodies/headers are scrubbed real → masked. Same-origin and
+  // non-http(s) (chrome-extension:, blob:, data:) pass through. Response
+  // streams are NOT buffered — SSE survives intact. See
+  // `offscreen-outbound-scrub.ts` for details.
+  installOutboundScrubber({
+    getSnapshot: fetchOutboundScrubSnapshot,
+    logger: log,
+  });
 
   // Initialize RUM telemetry so beacons fire from the offscreen WasmShell
   // — `trackShellCommand` and friends silently no-op until `sampleRUM` is
@@ -135,6 +148,11 @@ async function init(): Promise<void> {
   const { orchestrator, lickManager } = host;
   console.log('[slicc-offscreen] Kernel host ready, scoops:', orchestrator.getScoops().length);
 
+  // Publish the manual sudo test hook in the offscreen (agent) realm. It
+  // relays approval requests to the side-panel responder via
+  // chrome.runtime.sendMessage. No enforcement is wired yet — test surface.
+  installSudoTestHook();
+
   // Stand up the terminal-RPC host on the same kernel transport — the
   // panel's `RemoteTerminalView` opens sessions here so panel-typed
   // commands hit the same `ProcessManager` and `/proc` view as the
@@ -152,6 +170,11 @@ async function init(): Promise<void> {
       fs: sharedFs,
       browser,
       processManager: host.processManager,
+      // Thread the orchestrator's SudoManager through so the panel
+      // shell's explicit `sudo <cmd...>` prompts the human via the same
+      // broker the offscreen agent uses. The factory pins
+      // `transparentGating: false` so plain commands stay ungated.
+      sudoManager: host.orchestrator.getSudoManager(),
       logger: log,
     });
     stopTerminalHost = handle.stop;

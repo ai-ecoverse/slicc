@@ -51,6 +51,7 @@ import { createServeCommand } from './serve-command.js';
 import { createSliccFsCleanupCommand } from './slicc-fs-cleanup-command.js';
 import { createSprinkleCommand } from './sprinkle-command.js';
 import { createSqliteCommand } from './sqlite-command.js';
+import { createSudoCommand, type SudoCommandOptions } from './sudo-command.js';
 import { createTestCommand } from './test-command.js';
 import { createTscCommand } from './tsc-command.js';
 import { createUnameCommand } from './uname-command.js';
@@ -92,6 +93,21 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
   processManager?: ProcessManager;
   /** Leader-side cherry runtime registry. Absent outside leader contexts. */
   cherryRuntimeRegistry?: CherryRuntimeRegistry;
+  /**
+   * Hooks for the explicit `sudo <cmd...>` command. Includes the broker, the
+   * persist-grant sink, and the one-shot bypass that lets `sudo` run the
+   * inner command without re-firing the transparent `Cmnd` gate. Absent in
+   * environments without sudo support — `sudo` then prints a clean
+   * "not configured" message.
+   */
+  sudoCommand?: SudoCommandOptions;
+  /**
+   * Optional hook that writes a `name=value` pair into the owning shell's live
+   * env. Threaded into `createSecretCommand` so a successful `secret set`
+   * injects the masked value into `$NAME` for the next command in the same
+   * shell session (LLM-context parity with container-loaded secrets).
+   */
+  setEnv?: (name: string, value: string) => void;
 }
 
 export function createSupplementalCommands(options: SupplementalCommandsConfig = {}): Command[] {
@@ -130,7 +146,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createOAuthTokenCommand(),
     createOAuthDomainCommand(),
     createLocalLlmCommand(),
-    createSecretCommand(),
+    createSecretCommand({ setEnv: options.setEnv }),
     createRsyncCommand({ fs: options.fs }),
     createScreencaptureCommand(),
     createPbcopyCommand(),
@@ -155,6 +171,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createSliccFsCleanupCommand({ fs: options.fs }),
     createDfCommand({ fs: options.fs }),
     createDiskutilCommand({ fs: options.fs }),
+    createSudoCommand(options.sudoCommand),
   ];
 
   if (options.fs) {

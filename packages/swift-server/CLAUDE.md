@@ -53,6 +53,7 @@ violations.
 - `GET|POST /api/oauth-result`
 - `GET /api/secrets`, `GET /api/secrets/masked`
 - `POST /api/s3-sign-and-forward`, `POST /api/da-sign-and-forward` — server-side request signing for S3 and Adobe da.live mounts. Mirrors `packages/node-server/src/secrets/sign-and-forward.ts`; resolves S3 credentials from the Keychain (`SecretStore`) and accepts a transient IMS bearer for DA. See `Sources/Server/SignAndForward.swift`.
+- `POST /api/sudo-approve` — native sudo approval for the in-browser broker. Mirrors `packages/node-server/src/sudo/` (`endpoint.ts` + `dialog-backends.ts`): validates a `{ kind, detail, suggestedPattern? }` envelope (invalid → 400) and raises the same native `osascript` dialog by shelling out via `Process`. Loopback-only by construction; fail-closed to `{ decision: "deny" }` on any error. See `Sources/Server/SudoApprove.swift`.
 - `ALL /api/fetch-proxy` — accepts standard verbs (`GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`) plus the WebDAV (RFC 4918) and CalDAV (RFC 4791) verbs `PROPFIND`, `PROPPATCH`, `MKCOL`, `MKCALENDAR`, `REPORT`, `COPY`, `MOVE`, `LOCK`, `UNLOCK`. Unknown verbs are forwarded to AsyncHTTPClient via `HTTPMethod.RAW(value:)`.
 
 WebSocket routes are installed separately for CDP proxying and the lick system.

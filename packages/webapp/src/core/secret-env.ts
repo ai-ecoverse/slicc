@@ -38,7 +38,7 @@ export interface MaskedSecretEntry {
  * agent runs. Without this filter every dotted credential — including
  * AWS-shaped access keys — would be shell-visible.
  */
-function isValidShellEnvName(name: string): boolean {
+export function isValidShellEnvName(name: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
 }
 

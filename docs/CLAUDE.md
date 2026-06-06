@@ -32,6 +32,7 @@ Subsystems:
 - `tools-reference.md` — agent tool surface reference
 - `mounts.md` — `mount` setup for local FS Access, S3/R2/MinIO, and Adobe da.live
 - `secrets.md` — secrets storage, masking, and domain-scoped injection
+- `approvals.md` — capability approval gates: shared pattern + authority axis, sudo policy, device & gesture gates, OS capture gates
 - `oauth-intercept.md` — provider OAuth intercept and silent renewal
 - `operational-telemetry.md` — Helix RUM beacons and debug sampling
 - `slicc-handoff.md` — external handoff protocol (RFC 8288 `Link` header + `navigate` lick)
