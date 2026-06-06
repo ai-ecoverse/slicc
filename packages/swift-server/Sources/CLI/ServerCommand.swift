@@ -164,10 +164,7 @@ struct ServerCommand: AsyncParsableCommand {
                 config: config,
                 environment: environment
             )
-            let userDataDir = chromeLauncher.resolveUserDataDir(
-                tmpDir: environment["TMPDIR"],
-                servePort: servePort
-            )
+            let userDataDir = chromeLauncher.resolveUserDataDir(servePort: servePort)
 
             let launchedChrome = try await chromeLauncher.launch(
                 config: ChromeLaunchConfig(

@@ -238,7 +238,10 @@ struct ChromeLauncher: Sendable {
     func resolveUserDataDir(tmpDir: String? = nil, servePort: Int? = nil) -> String {
         let baseDir = normalizedPath(tmpDir)
             ?? URL(fileURLWithPath: homeDirectoryProvider(), isDirectory: true)
-                .appendingPathComponent(".slicc/profiles", isDirectory: true)
+                .appendingPathComponent("Library", isDirectory: true)
+                .appendingPathComponent("Application Support", isDirectory: true)
+                .appendingPathComponent("Slicc", isDirectory: true)
+                .appendingPathComponent("profiles", isDirectory: true)
                 .path
         let suffix = (servePort != nil && servePort != defaultServePort) ? "-\(servePort!)" : ""
         return URL(fileURLWithPath: baseDir, isDirectory: true)
@@ -247,8 +250,8 @@ struct ChromeLauncher: Sendable {
     }
 
     /// One-time migration: if `newDir` doesn't exist yet, copies the first matching
-    /// candidate (legacy profile from $TMPDIR or /tmp) to the stable new location.
-    /// Non-destructive — the old profile is left in place.
+    /// candidate (legacy profile from `~/.slicc/profiles`, `$TMPDIR`, or `/tmp`) to
+    /// the stable new location. Non-destructive — the old profile is left in place.
     func migrateLegacyDefaultChromeProfile(newDir: String, candidates: [String]) {
         guard !FileManager.default.fileExists(atPath: newDir) else { return }
         for candidate in candidates {
@@ -268,11 +271,21 @@ struct ChromeLauncher: Sendable {
     }
 
     /// Builds the ordered list of legacy candidate paths for a given profile dir name.
-    /// Checks $TMPDIR first, then /tmp, deduplicating when they are the same.
+    /// Checks the previous `~/.slicc/profiles` location first because that was the
+    /// most recent stable default and therefore holds the freshest profile — so it
+    /// should migrate forward before the older `$TMPDIR` / `/tmp` fallbacks. Then
+    /// `$TMPDIR/<name>` (if set), then `/tmp/<name>`. Deduplicates so we never add
+    /// `/tmp` twice when `$TMPDIR == /tmp`, or `~/.slicc/profiles` twice if it ever
+    /// coincides with a temp base.
     func legacyChromeCandidates(profileDirName: String) -> [String] {
         var bases: [String] = []
+        let legacyHomeBase = URL(fileURLWithPath: homeDirectoryProvider(), isDirectory: true)
+            .appendingPathComponent(".slicc", isDirectory: true)
+            .appendingPathComponent("profiles", isDirectory: true)
+            .path
+        bases.append(legacyHomeBase)
         let env = environmentProvider()
-        if let tmpDir = env["TMPDIR"] {
+        if let tmpDir = env["TMPDIR"], !bases.contains(tmpDir) {
             bases.append(tmpDir)
         }
         if !bases.contains("/tmp") {

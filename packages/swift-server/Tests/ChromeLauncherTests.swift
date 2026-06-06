@@ -105,12 +105,12 @@ final class ChromeLauncherTests: XCTestCase {
         XCTAssertEqual(Array(args.suffix(chromeArgs.count)), chromeArgs)
     }
 
-    func testResolveUserDataDirDefaultsToSliccProfilesInHomeDir() {
+    func testResolveUserDataDirDefaultsToApplicationSupportInHomeDir() {
         let launcher = makeLauncher(homeDirectory: "/Users/test")
 
         XCTAssertEqual(
             launcher.resolveUserDataDir(),
-            "/Users/test/.slicc/profiles/browser-coding-agent-chrome"
+            "/Users/test/Library/Application Support/Slicc/profiles/browser-coding-agent-chrome"
         )
     }
 
@@ -119,11 +119,11 @@ final class ChromeLauncherTests: XCTestCase {
 
         XCTAssertEqual(
             launcher.resolveUserDataDir(servePort: 5720),
-            "/Users/test/.slicc/profiles/browser-coding-agent-chrome-5720"
+            "/Users/test/Library/Application Support/Slicc/profiles/browser-coding-agent-chrome-5720"
         )
         XCTAssertEqual(
             launcher.resolveUserDataDir(servePort: 5710),
-            "/Users/test/.slicc/profiles/browser-coding-agent-chrome"
+            "/Users/test/Library/Application Support/Slicc/profiles/browser-coding-agent-chrome"
         )
     }
 
@@ -133,6 +133,47 @@ final class ChromeLauncherTests: XCTestCase {
         XCTAssertEqual(
             launcher.resolveUserDataDir(tmpDir: "/custom/profiles", servePort: 5720),
             "/custom/profiles/browser-coding-agent-chrome-5720"
+        )
+    }
+
+    func testLegacyChromeCandidatesOrdersPreviousSliccProfilesFirst() {
+        // Empty environment: TMPDIR is unset, so the candidate list is just
+        // the previous stable default followed by /tmp. ~/.slicc/profiles
+        // must come first because it holds the freshest profile from the
+        // most recent Sliccstart release and should migrate forward before
+        // the older $TMPDIR / /tmp fallbacks.
+        let launcher = makeLauncher(homeDirectory: "/Users/test")
+
+        let candidates = launcher.legacyChromeCandidates(profileDirName: "browser-coding-agent-chrome")
+
+        XCTAssertEqual(
+            candidates,
+            [
+                "/Users/test/.slicc/profiles/browser-coding-agent-chrome",
+                "/tmp/browser-coding-agent-chrome",
+            ]
+        )
+    }
+
+    func testLegacyChromeCandidatesIncludesTmpDirBetweenHomeAndTmp() {
+        // With TMPDIR set to a distinct path, it slots in between
+        // ~/.slicc/profiles (freshest) and /tmp (oldest, hard-coded
+        // fallback). Order is asserted exactly so a future refactor that
+        // reshuffles candidates breaks this test.
+        let launcher = makeLauncher(
+            environment: ["TMPDIR": "/var/tmpx"],
+            homeDirectory: "/Users/test"
+        )
+
+        let candidates = launcher.legacyChromeCandidates(profileDirName: "browser-coding-agent-chrome")
+
+        XCTAssertEqual(
+            candidates,
+            [
+                "/Users/test/.slicc/profiles/browser-coding-agent-chrome",
+                "/var/tmpx/browser-coding-agent-chrome",
+                "/tmp/browser-coding-agent-chrome",
+            ]
         )
     }
 
