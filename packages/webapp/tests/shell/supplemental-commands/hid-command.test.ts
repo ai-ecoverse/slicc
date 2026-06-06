@@ -158,6 +158,63 @@ describe('hid command — bridged panel-rpc envelopes', () => {
     expect(calls[0]).toMatchObject({ op: 'hid-device-info', payload: { handle: 'hid1' } });
   });
 
+  it('request with --__resolved <h1,h2,h3> renders every gesture-acquired interface', async () => {
+    // RemoteTerminalView's gesture bridge registers every granted
+    // interface and forwards them all on the rewrite. The worker must
+    // render each one — losing siblings hides the raw-HID 0xFF60
+    // interface on a VIA/QMK keyboard.
+    const INFOS: Record<string, Record<string, unknown>> = {
+      hid1: {
+        handle: 'hid1',
+        vendorId: 0x320f,
+        productId: 0x5000,
+        productName: 'Keychron Q1',
+        opened: false,
+        usagePage: 1,
+        usage: 6,
+      },
+      hid2: {
+        handle: 'hid2',
+        vendorId: 0x320f,
+        productId: 0x5000,
+        productName: 'Keychron Q1',
+        opened: false,
+        usagePage: 0x0c,
+        usage: 1,
+      },
+      hid3: {
+        handle: 'hid3',
+        vendorId: 0x320f,
+        productId: 0x5000,
+        productName: 'Keychron Q1',
+        opened: false,
+        usagePage: 0xff60,
+        usage: 0x61,
+      },
+    };
+    (globalThis as any).__slicc_panelRpc = {
+      call: vi.fn(async (op: string, payload: unknown) => {
+        if (op === 'hid-device-info') {
+          const handle = (payload as { handle: string }).handle;
+          return { device: INFOS[handle] };
+        }
+        return { done: true };
+      }),
+      onEvent: (_c: string, _h: (p: unknown) => void) => () => {},
+      dispose: vi.fn(),
+    };
+    const result = await createHidCommand().execute(
+      ['request', '--__resolved', 'hid1,hid2,hid3', '--usage-page', '0xff60'],
+      ctx()
+    );
+    expect(result.exitCode).toBe(0);
+    const lines = result.stdout.trimEnd().split('\n');
+    expect(lines).toHaveLength(3);
+    // --usage-page 0xff60 reorders the raw-HID interface to the top.
+    expect(lines[0]).toContain('hid3');
+    expect(lines[0]).toContain('0xff60');
+  });
+
   it('open and close forward the handle', async () => {
     await createHidCommand().execute(['open', 'hid1'], ctx());
     await createHidCommand().execute(['close', 'hid1'], ctx());

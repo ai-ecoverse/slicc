@@ -221,9 +221,18 @@ async function dispatch(args: string[], ctx: HidCtx, backend: HidBackend): Promi
     }
     case 'request': {
       const resolved = flags.get('--__resolved');
-      if (resolved) return ok(`${formatDeviceInfo(await backend.info(resolved))}\n`);
       const filters = parseHidFilters(flags);
       const filter = filters[0];
+      if (resolved) {
+        // `RemoteTerminalView` runs the chooser on the Enter-keystroke
+        // gesture and forwards every granted interface as a comma-
+        // separated handle list so multi-interface devices (e.g. a
+        // VIA/QMK keyboard) print every collection, not just the first.
+        const handles = resolved.split(',').filter((h) => h.length > 0);
+        if (handles.length === 0) return fail('request: missing resolved handle');
+        const infos = await Promise.all(handles.map((h) => backend.info(h)));
+        return ok(formatDeviceList(pickPrimaryAndOrder(infos, filter)));
+      }
       const toolCtx = getToolExecutionContext();
       if (toolCtx) {
         // Cone path: surface approval card; click drives chooser via

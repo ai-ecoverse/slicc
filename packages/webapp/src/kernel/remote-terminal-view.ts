@@ -710,11 +710,17 @@ export class RemoteTerminalView {
   }
 
   /**
-   * Run the WebHID chooser on the Enter-keystroke gesture, register the
-   * granted device in the page-side registry, then forward
-   * `hid request --__resolved <handle>` so the worker command renders
-   * the device descriptor. `navigator.hid.requestDevice` resolves with
-   * an array; an empty array (or NotFound/Abort) means cancellation.
+   * Run the WebHID chooser on the Enter-keystroke gesture, register
+   * EVERY granted interface in the page-side registry, then forward
+   * `hid request --__resolved <h1,h2,…>` so the worker command renders
+   * each one. `navigator.hid.requestDevice` resolves with an array —
+   * for a multi-interface device (e.g. a VIA/QMK keyboard) a single
+   * chooser pick maps to one `HIDDevice` per interface, and the
+   * raw-HID (0xFF60) interface is often NOT the first entry. Dropping
+   * all but `devices[0]` would silently lose those siblings; the
+   * `--usage-page`/`--usage` filter flags are preserved on the rewrite
+   * so the resolved branch can reorder the matching interface to the
+   * top, matching the worker-side `hid request` behavior.
    */
   private async runRemoteWithHidPicker(filters: HidDeviceFilter[]): Promise<void> {
     this.isExecuting = true;
@@ -724,15 +730,15 @@ export class RemoteTerminalView {
         this.terminal?.writeln('hid: WebHID is not available in this browser');
         return;
       }
-      let handle: string;
+      let handles: string[];
       try {
         const devices = await hid.requestDevice({ filters });
-        const device = devices[0];
-        if (!device) {
+        if (devices.length === 0) {
           this.terminal?.writeln('hid: cancelled');
           return;
         }
-        handle = getSharedHidRegistry().register(device);
+        const registry = getSharedHidRegistry();
+        handles = devices.map((d) => registry.register(d));
       } catch (err: unknown) {
         const name = err instanceof Error ? err.name : '';
         if (name === 'NotFoundError' || name === 'AbortError') {
@@ -742,7 +748,8 @@ export class RemoteTerminalView {
         this.terminal?.writeln(`hid: ${err instanceof Error ? err.message : String(err)}`);
         return;
       }
-      await this.runRemoteImpl(`hid request --__resolved ${handle}`);
+      const usageSuffix = serializeHidUsageFlags(filters[0]);
+      await this.runRemoteImpl(`hid request --__resolved ${handles.join(',')}${usageSuffix}`);
     } finally {
       this.isExecuting = false;
       this.showPrompt();
@@ -987,6 +994,26 @@ function parseHidRequestCommand(line: string): HidDeviceFilter[] | null {
   }
   const { flags } = parseHidArgs(tokens.slice(2));
   return parseHidFilters(flags);
+}
+
+/**
+ * Re-serialize the picker's `--usage-page` / `--usage` filter flags
+ * onto the resolved-handle rewrite so the worker `hid request` can
+ * reorder a multi-interface device to put the matching collection
+ * first. The picker itself doesn't honor these as a hard pre-select
+ * (Chromium's chooser is single-line per device), so they only steer
+ * the post-grant display.
+ */
+function serializeHidUsageFlags(filter: HidDeviceFilter | undefined): string {
+  if (!filter) return '';
+  const parts: string[] = [];
+  if (filter.usagePage !== undefined) {
+    parts.push(`--usage-page 0x${filter.usagePage.toString(16)}`);
+  }
+  if (filter.usage !== undefined) {
+    parts.push(`--usage 0x${filter.usage.toString(16)}`);
+  }
+  return parts.length > 0 ? ` ${parts.join(' ')}` : '';
 }
 
 /**
