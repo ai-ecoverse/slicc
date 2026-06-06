@@ -158,6 +158,11 @@ async function init(): Promise<void> {
       fs: sharedFs,
       browser,
       processManager: host.processManager,
+      // Thread the orchestrator's SudoManager through so the panel
+      // shell's explicit `sudo <cmd...>` prompts the human via the same
+      // broker the offscreen agent uses. The factory pins
+      // `transparentGating: false` so plain commands stay ungated.
+      sudoManager: host.orchestrator.getSudoManager(),
       logger: log,
     });
     stopTerminalHost = handle.stop;

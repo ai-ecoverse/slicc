@@ -254,3 +254,86 @@ describe('WasmShell command-level sudo enforcement', () => {
     expect(granted).not.toContain('/etc/sudoers');
   });
 });
+
+describe('WasmShell sudo with transparentGating: false (human terminal)', () => {
+  let fs: VirtualFS;
+  let dbCounter = 0;
+
+  beforeEach(async () => {
+    fs = await VirtualFS.create({ dbName: `test-cmd-sudo-tg-${dbCounter++}`, wipe: true });
+  });
+
+  function makeShell(sudo: ShellSudoConfig): WasmShell {
+    return new WasmShell({ fs, sudo });
+  }
+
+  it('does not prompt for a policy-gated plain command (transparent gate disabled)', async () => {
+    const broker = brokerReturning({ decision: 'deny' });
+    const shell = makeShell({
+      getPolicy: () => POLICY,
+      broker,
+      transparentGating: false,
+    });
+
+    const result = await shell.executeCommand('touch /workspace/gated.txt');
+
+    // Command ran; the broker was never consulted because the transparent
+    // dispatch gate is off. This is the human-terminal invariant: the
+    // human typing IS the approval.
+    expect(result.exitCode).toBe(0);
+    expect(await fs.exists('/workspace/gated.txt')).toBe(true);
+    expect(broker.requestApproval).toHaveBeenCalledTimes(0);
+  });
+
+  it('explicit `sudo <cmd>` still prompts and runs on approval', async () => {
+    const broker = brokerReturning({ decision: 'allow' });
+    const shell = makeShell({
+      getPolicy: () => POLICY,
+      broker,
+      transparentGating: false,
+    });
+
+    const result = await shell.executeCommand('sudo touch /workspace/gated.txt');
+
+    expect(result.exitCode).toBe(0);
+    expect(await fs.exists('/workspace/gated.txt')).toBe(true);
+    // Exactly one prompt (the explicit sudo); no second prompt for the
+    // inner dispatch since the transparent gate is off anyway.
+    expect(broker.requestApproval).toHaveBeenCalledTimes(1);
+    const call = (broker.requestApproval as unknown as { mock: { calls: unknown[][] } }).mock
+      .calls[0];
+    expect((call[0] as { detail: string }).detail).toBe('touch /workspace/gated.txt');
+  });
+
+  it('explicit `sudo <cmd>` blocks the inner command on denial', async () => {
+    const broker = brokerReturning({ decision: 'deny' });
+    const shell = makeShell({
+      getPolicy: () => POLICY,
+      broker,
+      transparentGating: false,
+    });
+
+    const result = await shell.executeCommand('sudo touch /workspace/gated.txt');
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('sudo: approval denied');
+    expect(await fs.exists('/workspace/gated.txt')).toBe(false);
+  });
+
+  it('persists an "Always" grant from an explicit `sudo` even with transparent gating off', async () => {
+    const broker = brokerReturning({
+      decision: 'always',
+      pattern: 'touch /workspace/gated*',
+    });
+    const shell = makeShell({
+      getPolicy: () => POLICY,
+      broker,
+      transparentGating: false,
+    });
+
+    await shell.executeCommand('sudo touch /workspace/gated.txt');
+
+    const granted = (await fs.readFile('/etc/sudoers.d/granted')) as string;
+    expect(granted).toContain('NOPASSWD Cmnd  touch /workspace/gated*');
+  });
+});

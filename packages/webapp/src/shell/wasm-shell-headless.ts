@@ -128,6 +128,15 @@ export interface ShellSudoConfig {
    * the grant append still hits the raw VFS and does not re-prompt.
    */
   persistCommandGrant?: (pattern: string) => Promise<void>;
+  /**
+   * Whether to wrap every dispatched command with the transparent `Cmnd` gate.
+   * Defaults to `true` (the agent-shell behavior: any policy-gated command
+   * prompts on dispatch). Set to `false` for the human terminal — the explicit
+   * `sudo <cmd...>` command is still registered (and still gathers approval
+   * + persists "Always" grants), but plain commands run ungated. The human
+   * typing into the panel IS the approver for everything they type.
+   */
+  transparentGating?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -371,9 +380,11 @@ export class WasmShellHeadless implements HeadlessShellLike {
     // already-registered command's `execute` so the `Cmnd` policy is checked at
     // actual dispatch — this covers `$(...)`/backticks/pipelines for free since
     // just-bash routes those back through this same registry. Only wrap when a
-    // sudo config is present so ungated shells add zero prompts and zero
-    // overhead. Newly-registered `.jsh` commands are wrapped in `doSyncJshCommands`.
-    if (this.options.sudo) {
+    // sudo config is present AND transparent gating is enabled — the human
+    // terminal opts out via `transparentGating: false` so plain commands run
+    // ungated even though `sudo <cmd...>` is still available. Newly-registered
+    // `.jsh` commands are wrapped in `doSyncJshCommands` via the same chokepoint.
+    if (this.isTransparentGatingEnabled()) {
       const registry = this.bash as unknown as { commands: Map<string, Command> };
       for (const [name, cmd] of registry.commands) {
         registry.commands.set(name, this.wrapCommandForSudo(cmd));
@@ -549,14 +560,25 @@ export class WasmShellHeadless implements HeadlessShellLike {
   // -------------------------------------------------------------------------
 
   /**
+   * True when the dispatch-time transparent `Cmnd` gate should wrap every
+   * command. Requires a sudo config AND `transparentGating !== false` —
+   * defaults to enabled (agent-shell behavior) when the flag is omitted.
+   */
+  private isTransparentGatingEnabled(): boolean {
+    const sudo = this.options.sudo;
+    return !!sudo && sudo.transparentGating !== false;
+  }
+
+  /**
    * Decorate a command's `execute` with the dispatch-time sudo guard. When no
-   * sudo config is present the command is returned unchanged (zero overhead).
+   * sudo config is present, or `transparentGating` is explicitly false (the
+   * human terminal), the command is returned unchanged (zero overhead).
    * Otherwise the wrapper runs the `Cmnd` check against the
    * already-tokenized `name + args` subject before delegating to the wrapped
    * `execute`, returning an exit-1 result (without running it) on denial.
    */
   private wrapCommandForSudo(command: Command): Command {
-    if (!this.options.sudo) return command;
+    if (!this.isTransparentGatingEnabled()) return command;
     const guard = (args: string[]) => this.gateCommandDispatch(command.name, args);
     return {
       name: command.name,

@@ -16,6 +16,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import type { BrowserAPI } from '../../src/cdp/index.js';
+import { FsWatcher } from '../../src/fs/fs-watcher.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { createPanelTerminalHost } from '../../src/kernel/panel-terminal-host.js';
 import { ProcessManager } from '../../src/kernel/process-manager.js';
@@ -24,6 +25,8 @@ import {
   createBridgeMessageChannelTransport,
   createPanelMessageChannelTransport,
 } from '../../src/kernel/transport-message-channel.js';
+import { SudoManager } from '../../src/sudo/sudo-manager.js';
+import type { SudoBroker, SudoDecision } from '../../src/sudo/types.js';
 import { OffscreenClient } from '../../src/ui/offscreen-client.js';
 
 function tick(ms = 5): Promise<void> {
@@ -356,5 +359,143 @@ describe('createPanelTerminalHost — parity wiring', () => {
     // up the same PM, not a different one.
     expect(procs[0].owner.kind).toBe('system');
     w.stop();
+  });
+});
+
+describe('createPanelTerminalHost — sudo wiring (human terminal)', () => {
+  // The panel terminal MUST register the explicit `sudo <cmd...>` command
+  // when a SudoManager is threaded in, but MUST NOT prompt the human for
+  // ordinary commands (transparentGating is pinned to false by the factory).
+
+  async function wireWithSudoManager(): Promise<{
+    pm: ProcessManager;
+    client: TerminalSessionClient;
+    broker: SudoBroker & { requestApproval: ReturnType<typeof vi.fn> };
+    fs: VirtualFS;
+    stop: () => void;
+  }> {
+    const fs = await VirtualFS.create({
+      dbName: `pthost-sudo-${Math.random().toString(36).slice(2)}`,
+      wipe: true,
+    });
+    const watcher = new FsWatcher();
+    fs.setWatcher(watcher);
+    // Seed an active policy that gates `touch /workspace/gated*` — proves
+    // the transparent gate is OFF (otherwise the broker would be consulted
+    // for the plain command below).
+    await fs.mkdir('/etc', { recursive: true });
+    await fs.writeFile('/etc/sudoers', 'Cmnd  touch /workspace/gated*\n');
+    const broker = {
+      requestApproval: vi.fn(async (): Promise<SudoDecision> => ({ decision: 'allow' })),
+    };
+    const sudoManager = new SudoManager({ fs, watcher, broker });
+    await sudoManager.init();
+
+    const pm = new ProcessManager();
+    const channel = new MessageChannel();
+    const bridgeTransport = createBridgeMessageChannelTransport(channel.port2);
+    const handle = createPanelTerminalHost({
+      transport: bridgeTransport,
+      fs,
+      browser: {} as BrowserAPI,
+      processManager: pm,
+      sudoManager,
+      logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    });
+
+    const panelTransport = createPanelMessageChannelTransport(channel.port1);
+    const panelClient = new OffscreenClient(
+      {
+        onStatusChange: vi.fn(),
+        onScoopCreated: vi.fn(),
+        onScoopListUpdate: vi.fn(),
+        onIncomingMessage: vi.fn(),
+      },
+      panelTransport
+    );
+    const client = new TerminalSessionClient({ client: panelClient, sid: 'sudo1' });
+
+    return {
+      pm,
+      client,
+      broker,
+      fs,
+      stop: () => {
+        client.close();
+        handle.stop();
+        channel.port1.close();
+        channel.port2.close();
+        sudoManager.dispose();
+      },
+    };
+  }
+
+  it('plain commands run without prompting (transparent gate off in panel)', async () => {
+    const w = await wireWithSudoManager();
+    await w.client.open();
+
+    // `touch /workspace/gated.txt` matches the active policy. The agent
+    // shell would prompt for this; the panel shell must NOT.
+    const result = await w.client.exec('touch /workspace/gated.txt');
+    expect(result.exitCode).toBe(0);
+    expect(await w.fs.exists('/workspace/gated.txt')).toBe(true);
+    expect(w.broker.requestApproval).toHaveBeenCalledTimes(0);
+
+    w.stop();
+  });
+
+  it('explicit `sudo <cmd>` prompts the human and runs on allow', async () => {
+    const w = await wireWithSudoManager();
+    await w.client.open();
+
+    const result = await w.client.exec('sudo touch /workspace/gated.txt');
+    expect(result.exitCode).toBe(0);
+    expect(await w.fs.exists('/workspace/gated.txt')).toBe(true);
+    expect(w.broker.requestApproval).toHaveBeenCalledTimes(1);
+    const call = w.broker.requestApproval.mock.calls[0];
+    expect((call[0] as { kind: string; detail: string }).kind).toBe('command');
+    expect((call[0] as { kind: string; detail: string }).detail).toBe('touch /workspace/gated.txt');
+
+    w.stop();
+  });
+
+  it('`sudo` without a SudoManager prints a clean "not configured" message', async () => {
+    // No sudoManager arg → the explicit `sudo` command falls back to its
+    // "not configured" message rather than crashing or hanging.
+    const fs = await VirtualFS.create({
+      dbName: `pthost-no-sudo-${Math.random().toString(36).slice(2)}`,
+      wipe: true,
+    });
+    const pm = new ProcessManager();
+    const channel = new MessageChannel();
+    const bridgeTransport = createBridgeMessageChannelTransport(channel.port2);
+    const handle = createPanelTerminalHost({
+      transport: bridgeTransport,
+      fs,
+      browser: {} as BrowserAPI,
+      processManager: pm,
+      logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    });
+    const panelTransport = createPanelMessageChannelTransport(channel.port1);
+    const panelClient = new OffscreenClient(
+      {
+        onStatusChange: vi.fn(),
+        onScoopCreated: vi.fn(),
+        onScoopListUpdate: vi.fn(),
+        onIncomingMessage: vi.fn(),
+      },
+      panelTransport
+    );
+    const client = new TerminalSessionClient({ client: panelClient, sid: 'no-sudo' });
+    await client.open();
+
+    const result = await client.exec('sudo echo hi');
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('not configured');
+
+    client.close();
+    handle.stop();
+    channel.port1.close();
+    channel.port2.close();
   });
 });

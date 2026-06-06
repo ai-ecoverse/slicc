@@ -115,6 +115,26 @@ describe('SudoManager', () => {
     mgr.dispose();
   });
 
+  it('getShellConfig() defaults transparentGating to true (agent shell)', async () => {
+    const mgr = new SudoManager({ fs: vfs, watcher, broker });
+    await mgr.init();
+    expect(mgr.getShellConfig().transparentGating).toBe(true);
+    expect(mgr.getShellConfig({}).transparentGating).toBe(true);
+    mgr.dispose();
+  });
+
+  it('getShellConfig({ transparentGating: false }) propagates the flag (human terminal)', async () => {
+    const mgr = new SudoManager({ fs: vfs, watcher, broker });
+    await mgr.init();
+    const cfg = mgr.getShellConfig({ transparentGating: false });
+    expect(cfg.transparentGating).toBe(false);
+    // Broker + persist sink are still wired — the explicit `sudo` command
+    // depends on them.
+    expect(cfg.broker).toBe(mgr.getBroker());
+    expect(cfg.persistCommandGrant).toBeTypeOf('function');
+    mgr.dispose();
+  });
+
   it('stops reacting to changes after dispose()', async () => {
     const mgr = new SudoManager({ fs: vfs, watcher, broker });
     await mgr.init();

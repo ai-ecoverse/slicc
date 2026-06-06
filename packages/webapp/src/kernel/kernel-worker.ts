@@ -319,6 +319,11 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
       fs: sharedFs,
       browser,
       processManager: pm,
+      // Thread the orchestrator's SudoManager through so the panel
+      // shell's explicit `sudo <cmd...>` prompts the human via the same
+      // broker the agent uses. The factory pins `transparentGating: false`
+      // so plain commands the human types still run ungated.
+      sudoManager: host.orchestrator.getSudoManager(),
       logger: console,
     });
     stopTerminalHost = handle.stop;

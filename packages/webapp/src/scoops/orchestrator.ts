@@ -617,6 +617,17 @@ export class Orchestrator {
     return this.sessionStore;
   }
 
+  /**
+   * Get the live {@link SudoManager} for this float, or `null` before
+   * `init()` resolves. The panel-terminal host boot reads this to thread the
+   * same broker + persist sink into the human Terminal's shell — with
+   * `transparentGating: false` so plain commands still run ungated and only
+   * the explicit `sudo <cmd...>` invocation prompts.
+   */
+  getSudoManager(): SudoManager | null {
+    return this.sudoManager;
+  }
+
   /** Set the LickManager for guarding scoop removal against active licks */
   setLickManager(lickManager: LickManager): void {
     this.lickManager = lickManager;

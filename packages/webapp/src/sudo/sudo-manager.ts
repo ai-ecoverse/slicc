@@ -83,12 +83,20 @@ export class SudoManager {
     return this.policy;
   }
 
-  /** Command-guard config for a {@link WasmShell}: gated via this manager. */
-  getShellConfig(): ShellSudoConfig {
+  /**
+   * Command-guard config for a {@link WasmShell}: gated via this manager.
+   *
+   * `transparentGating` controls whether every dispatched command is wrapped
+   * with the `Cmnd` policy gate. Defaults to `true` (agent-shell behavior).
+   * Pass `false` for the human terminal — `sudo <cmd...>` still works
+   * (broker + persist sink remain wired) but plain commands run ungated.
+   */
+  getShellConfig(opts: { transparentGating?: boolean } = {}): ShellSudoConfig {
     return {
       getPolicy: () => this.policy,
       broker: this.broker,
       persistCommandGrant: (pattern) => this.persistCommandGrant(pattern),
+      transparentGating: opts.transparentGating ?? true,
     };
   }
 
