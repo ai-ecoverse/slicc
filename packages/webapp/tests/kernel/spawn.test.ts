@@ -234,6 +234,146 @@ describe('bootstrapKernelWorker', () => {
     host.dispose();
   });
 
+  it('suspends the boot timeout while a migration is in progress', async () => {
+    // A migration that runs longer than `readyTimeoutMs` must NOT trip
+    // the boot timeout — this is the exact bug that stranded the page
+    // behind a frozen migration splash. With the boot clock suspended
+    // on `kernel-migration-started`, the worker can copy for as long as
+    // it keeps posting progress and still resolve `ready` afterwards.
+    let port: MessagePort | null = null;
+    const worker: WorkerLike = {
+      postMessage: (message: unknown) => {
+        const data = message as { type?: string; kernelPort?: MessagePort };
+        if (data?.type === 'kernel-worker-init' && data.kernelPort) {
+          port = data.kernelPort;
+          port.start();
+        }
+      },
+      terminate: () => undefined,
+    };
+    const host = bootstrapKernelWorker({
+      worker,
+      realCdpTransport: makeStubCdpTransport(),
+      callbacks: makeStubCallbacks(),
+      // Tiny boot timeout — the old code would reject ~30ms in.
+      readyTimeoutMs: 30,
+      migrationStallTimeoutMs: 500,
+    });
+    expect(port).not.toBeNull();
+
+    port!.postMessage({ type: 'kernel-migration-started' });
+    // Idle well past `readyTimeoutMs` while migrating.
+    await new Promise((r) => setTimeout(r, 80));
+    port!.postMessage({ type: 'kernel-migration-progress', copied: 1, total: 2 });
+    await new Promise((r) => setTimeout(r, 80));
+    // Finish + ready back-to-back so the re-armed boot clock can't fire.
+    port!.postMessage({ type: 'kernel-migration-finished' });
+    port!.postMessage({ type: 'kernel-worker-ready' });
+
+    await expect(host.ready).resolves.toBeUndefined();
+    host.dispose();
+  });
+
+  it('progress heartbeats keep resetting the stall watchdog', async () => {
+    // Total migration time exceeds both timeouts, but each gap between
+    // progress ticks stays under `migrationStallTimeoutMs`, so the
+    // watchdog never fires.
+    let port: MessagePort | null = null;
+    const worker: WorkerLike = {
+      postMessage: (message: unknown) => {
+        const data = message as { type?: string; kernelPort?: MessagePort };
+        if (data?.type === 'kernel-worker-init' && data.kernelPort) {
+          port = data.kernelPort;
+          port.start();
+        }
+      },
+      terminate: () => undefined,
+    };
+    const onMigrationProgress = vi.fn();
+    const host = bootstrapKernelWorker({
+      worker,
+      realCdpTransport: makeStubCdpTransport(),
+      callbacks: makeStubCallbacks(),
+      readyTimeoutMs: 40,
+      migrationStallTimeoutMs: 60,
+      onMigrationProgress,
+    });
+    expect(port).not.toBeNull();
+
+    port!.postMessage({ type: 'kernel-migration-started' });
+    for (let i = 1; i <= 5; i++) {
+      await new Promise((r) => setTimeout(r, 30)); // < 60ms watchdog each
+      port!.postMessage({ type: 'kernel-migration-progress', copied: i, total: 5 });
+    }
+    port!.postMessage({ type: 'kernel-migration-finished' });
+    port!.postMessage({ type: 'kernel-worker-ready' });
+
+    await expect(host.ready).resolves.toBeUndefined();
+    expect(onMigrationProgress).toHaveBeenCalledTimes(5);
+    host.dispose();
+  });
+
+  it('rejects when a migration starts but makes no progress (hung worker)', async () => {
+    // The watchdog is the safety net: if `kernel-migration-started`
+    // arrives but no progress follows within `migrationStallTimeoutMs`,
+    // the worker is genuinely hung and `ready` must reject rather than
+    // hang forever.
+    let port: MessagePort | null = null;
+    const worker: WorkerLike = {
+      postMessage: (message: unknown) => {
+        const data = message as { type?: string; kernelPort?: MessagePort };
+        if (data?.type === 'kernel-worker-init' && data.kernelPort) {
+          port = data.kernelPort;
+          port.start();
+        }
+      },
+      terminate: () => undefined,
+    };
+    const host = bootstrapKernelWorker({
+      worker,
+      realCdpTransport: makeStubCdpTransport(),
+      callbacks: makeStubCallbacks(),
+      readyTimeoutMs: 1_000,
+      migrationStallTimeoutMs: 40,
+    });
+    expect(port).not.toBeNull();
+
+    port!.postMessage({ type: 'kernel-migration-started' });
+    await expect(host.ready).rejects.toThrow(/migration stalled/);
+    host.dispose();
+  });
+
+  it('restores the boot timeout after a migration finishes', async () => {
+    // Once migration finishes, the rest of boot should complete
+    // promptly; a worker that finishes the copy but then hangs must
+    // still trip the normal boot-ready timeout.
+    let port: MessagePort | null = null;
+    const worker: WorkerLike = {
+      postMessage: (message: unknown) => {
+        const data = message as { type?: string; kernelPort?: MessagePort };
+        if (data?.type === 'kernel-worker-init' && data.kernelPort) {
+          port = data.kernelPort;
+          port.start();
+        }
+      },
+      terminate: () => undefined,
+    };
+    const host = bootstrapKernelWorker({
+      worker,
+      realCdpTransport: makeStubCdpTransport(),
+      callbacks: makeStubCallbacks(),
+      readyTimeoutMs: 40,
+      migrationStallTimeoutMs: 1_000,
+    });
+    expect(port).not.toBeNull();
+
+    port!.postMessage({ type: 'kernel-migration-started' });
+    port!.postMessage({ type: 'kernel-migration-finished' });
+    // No `kernel-worker-ready` follows — the re-armed boot clock fires.
+    await expect(host.ready).rejects.toThrow(/did not signal ready/);
+    host.dispose();
+  });
+
   it('a stale kernel-worker-ready arriving after timeout does not resolve ready', async () => {
     // Catches the original leak: if the timeout path forgot to remove
     // the listener, a later `kernel-worker-ready` posted on the port

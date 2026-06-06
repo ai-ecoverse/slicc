@@ -2143,6 +2143,12 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // on first `onMigrationStart` so flag-off boots never touch
   // `document.body`.
   let migrationSplash: ReturnType<typeof createMigrationSplash> | null = null;
+  // Tear down the blocking splash. Wrapped so the boot-failure path can
+  // reuse it without tripping control-flow narrowing of the closure-
+  // assigned `migrationSplash` binding.
+  const disarmMigrationSplash = (): void => {
+    migrationSplash?.disarm();
+  };
 
   const host = spawnKernelWorker({
     realCdpTransport,
@@ -2164,7 +2170,7 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       migrationSplash.updateProgress(progress);
     },
     onMigrationFinish: () => {
-      migrationSplash?.disarm();
+      disarmMigrationSplash();
     },
     callbacks: {
       onStatusChange: (scoopJid, status) => {
@@ -2458,6 +2464,12 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
     log.info('Worker boot handshake complete');
   } catch (err) {
     log.error('Worker failed to signal ready', err);
+    // Tear down the blocking migration splash on any boot failure so a
+    // failed/timed-out boot never strands the user behind a frozen,
+    // input-blocking scrim. With the migration-aware ready timeout a
+    // legitimately slow migration no longer reaches this path, but a
+    // genuine boot failure must still release the modal.
+    disarmMigrationSplash();
     throw err;
   }
   client.requestState();
