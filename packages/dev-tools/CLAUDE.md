@@ -13,7 +13,7 @@ This file covers the repo's developer-tooling surface.
 - **QA setup**: `packages/node-server/src/qa-setup.ts` plus the root `npm run qa:*` scripts
 - **Visual/integration helpers**: `tests/test-dips.mjs` and related targeted test utilities
 - **RUM error triage** (error-to-insight pipeline): `packages/dev-tools/rum-error-triage/` — run `node packages/dev-tools/rum-error-triage/triage-rum-errors.mjs` to query RUM for new SLICC errors and write triage candidates; pure logic in `lib.mjs` (tested via the `dev-tools` vitest project). Driven nightly by `.github/workflows/rum-error-triage.yml`. See its `README.md`.
-- **Doc size check** (`npm run lint:docs`): `packages/dev-tools/tools/check-doc-sizes.mjs` — enforces root `CLAUDE.md` ≤ 30000 chars and `packages/vfs-root/shared/CLAUDE.md` ≤ 3000 bytes; non-zero exit on violation.
+- **Doc size check** (`npm run lint:docs`): `packages/dev-tools/tools/check-doc-sizes.mjs` — enforces root `CLAUDE.md` ≤ 30000 chars and `packages/vfs-root/shared/CLAUDE.md` ≤ 3000 bytes; non-zero exit on violation. Also runs in the `pre-commit` hook via `lint-staged` on staged markdown/doc files (after `prettier --write`).
 - **Skill lint** (`npm run lint:skills`): `packages/dev-tools/tools/lint-skills.mjs` — runs tessl skill import + lint over all 12 `SKILL.md` skills via the `@tessl/cli` npm path (ephemeral plugin metadata in a temp copy, never committed). Warns and skips (exit 0) when tessl is unresolvable; pass `--strict` (CI) to fail instead.
 
 ## What Lives Here Conceptually
