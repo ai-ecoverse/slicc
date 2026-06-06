@@ -616,6 +616,21 @@ export class BrowserAPI {
   }
 
   /**
+   * Insert text into the currently focused element as a single composition
+   * event (`Input.insertText`). Unlike `type()`, this delivers the whole
+   * string in one CDP frame, which is what the per-frame whole-token
+   * unmask gate in the node-server proxy keys on — a multi-keystroke
+   * `Input.dispatchKeyEvent` loop fragments masked tokens across many
+   * frames and cannot be unmasked. Falls back to `type()` for any frame
+   * the upstream proxy might still split.
+   */
+  async insertText(text: string): Promise<void> {
+    await this.ensureConnected();
+    this.ensureAttached();
+    await this.client.send('Input.insertText', { text }, this.sessionId!);
+  }
+
+  /**
    * Wait for a CSS selector to appear in the DOM.
    */
   async waitForSelector(selector: string, options?: WaitForSelectorOptions): Promise<void> {

@@ -74,6 +74,16 @@ export class SecretProxyManager {
     return this._sessionId;
   }
 
+  /**
+   * Underlying pipeline. Exposed for CDP proxy unmasking, which needs to
+   * call `unmaskCdpFrame(frame, hostname, pipeline)` (whole-token, gated
+   * on the target tab's current hostname). Do not use for new fetch-proxy
+   * paths — prefer the typed `unmask*` methods above.
+   */
+  get rawPipeline(): SecretsPipeline {
+    return this.pipeline;
+  }
+
   async reload(): Promise<void> {
     await this.pipeline.reload();
   }

@@ -56,6 +56,7 @@ function createMockBrowser(overrides: Partial<BrowserAPI> = {}): BrowserAPI {
     closePage: vi.fn().mockResolvedValue(undefined),
     sendCDP: vi.fn().mockResolvedValue({}),
     type: vi.fn().mockResolvedValue(undefined),
+    insertText: vi.fn().mockResolvedValue(undefined),
     getAccessibilityTree: vi.fn().mockResolvedValue({
       role: 'RootWebArea',
       name: 'Test Page',
@@ -553,7 +554,11 @@ describe('playwright-cli type and fill', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Filled e3 with: search term');
     expect(browser.clickByBackendNodeId).toHaveBeenCalledWith(44);
-    expect(browser.type).toHaveBeenCalledWith('search term');
+    // fill uses Input.insertText (single whole-token frame) so the
+    // node-server proxy's per-frame unmask gate can replace a masked
+    // secret in one shot — keystroke-by-keystroke type() would fragment it.
+    expect(browser.insertText).toHaveBeenCalledWith('search term');
+    expect(browser.type).not.toHaveBeenCalled();
   });
 
   it('uses native setter fallback when value does not match after typing (React-controlled input)', async () => {
@@ -670,7 +675,11 @@ describe('playwright-cli type and fill', () => {
 
     expect(result.exitCode).toBe(0);
     expect(browser.click).toHaveBeenCalled();
-    expect(browser.type).toHaveBeenCalledWith('hello');
+    // fill uses Input.insertText (single whole-token frame) so the
+    // node-server proxy's per-frame unmask gate can replace a masked
+    // secret in one shot — keystroke-by-keystroke type() would fragment it.
+    expect(browser.insertText).toHaveBeenCalledWith('hello');
+    expect(browser.type).not.toHaveBeenCalled();
     expect(clickedSelector).toContain('[contenteditable]');
     expect(clickedSelector).toContain(',');
     expect(clearScript).toBeDefined();

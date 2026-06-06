@@ -13,6 +13,8 @@ import { Readable, Transform } from 'stream';
 import { StringDecoder } from 'string_decoder';
 import { fileURLToPath } from 'url';
 import { WebSocket, WebSocketServer } from 'ws';
+import { applyCdpUnmask } from './cdp-proxy/cdp-unmask.js';
+import { createCdpSessionUrlTracker } from './cdp-proxy/session-url-tracker.js';
 import {
   buildChromeLaunchArgs,
   clearStaleDevToolsActivePort,
@@ -1785,6 +1787,10 @@ async function main() {
   let activeClientWs: WebSocket | null = null;
   let messageBuffer: unknown[] | null = null;
   const cdpDedup = new CliLogDedup();
+  // Tracks per-session current URL by sniffing Chrome→Client events; feeds
+  // the Client→Chrome unmask gate so per-frame unmasking is scoped to
+  // the target tab's actual hostname (fail-closed when unknown).
+  const cdpSessionUrls = createCdpSessionUrlTracker();
 
   // Ensure everything is cleaned up when CLI exits
   const gracefulShutdown = async () => {
@@ -1877,13 +1883,26 @@ async function main() {
     }
   });
 
+  // Apply the Client→Chrome unmask gate to a buffered frame on flush.
+  // Defined here so both buffer-drain sites (ensureChromeConnection
+  // already-open path + chromeWs 'open' handler) share one
+  // implementation; falls back to the original bytes on any error.
+  const flushClientFrame = (target: WebSocket, raw: unknown): void => {
+    const original = String(raw);
+    const { output } = applyCdpUnmask(original, {
+      tracker: cdpSessionUrls,
+      pipeline: secretProxy.rawPipeline,
+    });
+    target.send(output);
+  };
+
   function ensureChromeConnection(url: string): Promise<void> {
     return new Promise((resolve, reject) => {
       if (chromeWs && chromeWs.readyState === WebSocket.OPEN) {
         // Already connected — flush any buffered messages and go direct
         if (messageBuffer) {
           for (const msg of messageBuffer) {
-            chromeWs.send(String(msg));
+            flushClientFrame(chromeWs, msg);
           }
           messageBuffer = null;
         }
@@ -1917,7 +1936,7 @@ async function main() {
         // Flush buffered messages
         if (messageBuffer) {
           for (const msg of messageBuffer) {
-            chromeWs!.send(String(msg));
+            flushClientFrame(chromeWs!, msg);
           }
           messageBuffer = null;
         }
@@ -1991,6 +2010,9 @@ async function main() {
         const preview = str.slice(0, 200);
         const msg = `[cdp-proxy] Chrome→Client: ${preview}`;
         if (cdpDedup.shouldLog(msg)) console.debug(msg);
+        // Sniff Target.attachedToTarget / targetInfoChanged / Page.frameNavigated
+        // so the Client→Chrome unmask gate can resolve per-session hostnames.
+        cdpSessionUrls.observeChromeToClient(str);
         if (activeClientWs && activeClientWs.readyState === WebSocket.OPEN) {
           activeClientWs.send(str);
         }
@@ -2028,12 +2050,19 @@ async function main() {
 
       // Register ALL handlers BEFORE any async work so no messages are lost
       clientWs.on('message', (data) => {
-        const preview = String(data).slice(0, 200);
+        const original = String(data);
+        const preview = original.slice(0, 200);
         if (chromeWs && chromeWs.readyState === WebSocket.OPEN && messageBuffer === null) {
           const msg = `[cdp-proxy] Client→Chrome: ${preview}`;
           if (cdpDedup.shouldLog(msg)) console.debug(msg);
-          chromeWs.send(String(data));
+          const { output } = applyCdpUnmask(original, {
+            tracker: cdpSessionUrls,
+            pipeline: secretProxy.rawPipeline,
+          });
+          chromeWs.send(output);
         } else if (messageBuffer !== null) {
+          // Buffer the ORIGINAL bytes; unmask runs on flush so the
+          // hostname tracker reflects the state at send time.
           messageBuffer.push(data);
           const msg = `[cdp-proxy] Client→Chrome (buffered): ${preview}`;
           if (cdpDedup.shouldLog(msg)) console.debug(msg);
