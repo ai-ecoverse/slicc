@@ -1998,3 +1998,94 @@ describe('OffscreenBridge handleRequestScoopMessages', () => {
     );
   });
 });
+
+describe('OffscreenBridge seedBuffersFromAgentState', () => {
+  let bridge: InstanceType<typeof OffscreenBridge>;
+
+  const coneScoop = {
+    jid: 'cone_1',
+    name: 'Cone',
+    folder: 'cone',
+    isCone: true,
+    assistantLabel: 'sliccy',
+  };
+  const makeContext = (messages: any[]) => ({ getAgentMessages: vi.fn(() => messages) });
+  const restoredHistory = [
+    { role: 'user', content: [{ type: 'text', text: 'first question' }], timestamp: 1 },
+    {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'first answer' }],
+      timestamp: 2,
+      api: 'anthropic-messages',
+      provider: 'anthropic',
+      model: 'claude-haiku-4-5',
+      stopReason: 'stop',
+    },
+  ];
+
+  beforeEach(() => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+    bridge = new OffscreenBridge();
+  });
+
+  it('seeds an empty buffer from the restored agent messages and persists it', async () => {
+    const context = makeContext(restoredHistory);
+    await bridge.bind({
+      getScoops: vi.fn(() => [coneScoop]),
+      getScoopContext: vi.fn(() => context),
+    } as any);
+    const store = (bridge as any).sessionStore;
+
+    await bridge.seedBuffersFromAgentState();
+
+    const buf = (bridge as any).getBuffer('cone_1');
+    expect(buf).toHaveLength(2);
+    expect(buf[0]).toMatchObject({ role: 'user', content: 'first question' });
+    expect(buf[1]).toMatchObject({ role: 'assistant', content: 'first answer' });
+    // Repairs the UI store immediately (the truncation fix).
+    expect(store.saveMessages).toHaveBeenCalledWith('session-cone', expect.any(Array));
+    const persisted = store.saveMessages.mock.calls[0][1];
+    expect(persisted).toHaveLength(2);
+  });
+
+  it('does not overwrite a buffer that already has live messages', async () => {
+    const context = makeContext(restoredHistory);
+    await bridge.bind({
+      getScoops: vi.fn(() => [coneScoop]),
+      getScoopContext: vi.fn(() => context),
+    } as any);
+    const store = (bridge as any).sessionStore;
+    const buf = (bridge as any).getBuffer('cone_1');
+    buf.push({ id: 'live-1', role: 'user', content: 'live', timestamp: 100 });
+
+    await bridge.seedBuffersFromAgentState();
+
+    const after = (bridge as any).getBuffer('cone_1');
+    expect(after).toHaveLength(1);
+    expect(after[0].id).toBe('live-1');
+    // Skipped before even reading the context — no clobber, no persist.
+    expect(context.getAgentMessages).not.toHaveBeenCalled();
+    expect(store.saveMessages).not.toHaveBeenCalled();
+  });
+
+  it('skips scoops with no restored agent messages (no buffer, no persist)', async () => {
+    const context = makeContext([]);
+    await bridge.bind({
+      getScoops: vi.fn(() => [coneScoop]),
+      getScoopContext: vi.fn(() => context),
+    } as any);
+    const store = (bridge as any).sessionStore;
+
+    await bridge.seedBuffersFromAgentState();
+
+    expect((bridge as any).messageBuffers.get('cone_1')).toBeUndefined();
+    expect(store.saveMessages).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when the orchestrator is not bound', async () => {
+    const fresh = new OffscreenBridge();
+    await expect(fresh.seedBuffersFromAgentState()).resolves.toBeUndefined();
+  });
+});

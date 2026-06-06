@@ -863,6 +863,70 @@ export class OffscreenBridge implements KernelFacade {
   }
 
   /**
+   * Translate a scoop's restored canonical `AgentMessage[]` into the
+   * buffered chat shape. Returns `null` when there is no context or no
+   * agent messages yet. Lazy-imports the translator so it doesn't pull
+   * pi-ai types into the bridge's hot path until needed. Shared by
+   * {@link handleRequestScoopMessages} and {@link seedBuffersFromAgentState}.
+   */
+  private async buildBufferFromAgentMessages(
+    scoop: RegisteredScoop
+  ): Promise<BufferedChatMessage[] | null> {
+    const context = this.orchestrator?.getScoopContext(scoop.jid);
+    if (!context) return null;
+    const agentMessages = context.getAgentMessages();
+    if (agentMessages.length === 0) return null;
+    const { agentMessagesToChatMessages } = await import(
+      '../../../packages/webapp/src/scoops/agent-message-to-chat.js'
+    );
+    const chatMessages = agentMessagesToChatMessages(agentMessages, {
+      source: scoop.isCone ? 'cone' : (scoop.name ?? scoop.folder),
+    });
+    return chatMessages.map((m) => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      attachments: m.attachments,
+      timestamp: m.timestamp,
+      source: m.source,
+      channel: m.channel,
+      toolCalls: m.toolCalls?.map((tc) => ({
+        id: tc.id,
+        name: tc.name,
+        input: tc.input,
+        result: tc.result,
+        isError: tc.isError,
+      })),
+      isStreaming: false,
+    }));
+  }
+
+  /**
+   * Seed each registered scoop's chat buffer from its agent's restored
+   * canonical history at boot, BEFORE any post-boot turn can run
+   * `persistScoop`. The bridge's `messageBuffers` otherwise start empty
+   * on a fresh boot, so the first agent turn after a reload would
+   * persist only the new messages and overwrite the full conversation
+   * in the `browser-coding-agent` UI store — the "only the last few
+   * messages after a reboot" truncation. Non-destructive: only seeds
+   * scoops whose buffer is still empty, and persists the seeded buffer
+   * so a subsequent panel reload sees the canonical history immediately.
+   */
+  async seedBuffersFromAgentState(): Promise<void> {
+    if (!this.orchestrator) return;
+    for (const scoop of this.orchestrator.getScoops()) {
+      const existing = this.messageBuffers.get(scoop.jid);
+      if (existing && existing.length > 0) continue;
+      const buf = await this.buildBufferFromAgentMessages(scoop);
+      if (!buf) continue;
+      this.messageBuffers.set(scoop.jid, buf);
+      this.currentMessageId.delete(scoop.jid);
+      this.fanOutMessageId.delete(scoop.jid);
+      this.persistScoop(scoop.jid);
+    }
+  }
+
+  /**
    * Rebuild the panel's chat history for a scoop from the live agent
    * state. Replies via `scoop-messages-replaced`. Used after a panel
    * remount (HMR or full reload) to override the panel's own
@@ -890,58 +954,30 @@ export class OffscreenBridge implements KernelFacade {
       return;
     }
 
-    // Translate from the agent's canonical conversation. Lazy-import the
-    // translator so it doesn't pull pi-ai types into the bridge's hot
-    // path until needed.
-    const context = this.orchestrator.getScoopContext(scoopJid);
-    if (context) {
-      const { agentMessagesToChatMessages } = await import(
-        '../../../packages/webapp/src/scoops/agent-message-to-chat.js'
-      );
-      const agentMessages = context.getAgentMessages();
-      if (agentMessages.length > 0) {
-        const chatMessages = agentMessagesToChatMessages(agentMessages, {
-          source: scoop.isCone ? 'cone' : (scoop.name ?? scoop.folder),
-        });
-        // Hydrate the buffer so subsequent agent events extend the
-        // restored history instead of starting from empty (which
-        // would silently overwrite the UI store via persistScoop).
-        // Clear `currentMessageId` for the same reason: a stale id
-        // pointing at a (now non-existent) buffer entry would have
-        // `getOrCreateAssistantMsg` write into the rehydrated buffer
-        // under an unrelated id.
-        const buf: BufferedChatMessage[] = chatMessages.map((m) => ({
-          id: m.id,
-          role: m.role,
-          content: m.content,
-          attachments: m.attachments,
-          timestamp: m.timestamp,
-          source: m.source,
-          channel: m.channel,
-          toolCalls: m.toolCalls?.map((tc) => ({
-            id: tc.id,
-            name: tc.name,
-            input: tc.input,
-            result: tc.result,
-            isError: tc.isError,
-          })),
-          isStreaming: false,
-        }));
-        this.messageBuffers.set(scoopJid, buf);
-        this.currentMessageId.delete(scoopJid);
-        this.fanOutMessageId.delete(scoopJid);
-        // Persist the rebuilt buffer back to the UI session store so
-        // a subsequent panel reload (without further agent activity)
-        // sees the canonical history instead of whatever truncated
-        // snapshot the panel last wrote during the remount race.
-        this.persistScoop(scoopJid);
-        this.emit({
-          type: 'scoop-messages-replaced',
-          scoopJid,
-          messages: buf,
-        });
-        return;
-      }
+    // Translate from the agent's canonical conversation.
+    const buf = await this.buildBufferFromAgentMessages(scoop);
+    if (buf) {
+      // Hydrate the buffer so subsequent agent events extend the
+      // restored history instead of starting from empty (which would
+      // silently overwrite the UI store via persistScoop). Clear
+      // `currentMessageId`/`fanOutMessageId` for the same reason: a
+      // stale id pointing at a (now non-existent) buffer entry would
+      // have `getOrCreateAssistantMsg` write into the rehydrated buffer
+      // under an unrelated id.
+      this.messageBuffers.set(scoopJid, buf);
+      this.currentMessageId.delete(scoopJid);
+      this.fanOutMessageId.delete(scoopJid);
+      // Persist the rebuilt buffer back to the UI session store so
+      // a subsequent panel reload (without further agent activity)
+      // sees the canonical history instead of whatever truncated
+      // snapshot the panel last wrote during the remount race.
+      this.persistScoop(scoopJid);
+      this.emit({
+        type: 'scoop-messages-replaced',
+        scoopJid,
+        messages: buf,
+      });
+      return;
     }
 
     // Last resort: load from the UI session store. Hydrate the buffer
