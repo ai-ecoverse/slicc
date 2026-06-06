@@ -55,6 +55,16 @@ export interface RemoteVfsClientOptions {
    */
   generateRequestId?: () => string;
   /**
+   * Per-request timeout in ms. Defaults to 30s. A request that gets no
+   * matching response within this window rejects with `FsError('EIO',
+   * …)` instead of hanging forever. This matters because the worker's
+   * `VfsRpcHost` only attaches its listener at the tail of boot — a
+   * read issued before the host is live (or a response otherwise lost
+   * on the shared wire) would never be answered, silently stranding
+   * the caller. Pass `0` (or negative) to disable the timeout.
+   */
+  requestTimeoutMs?: number;
+  /**
    * Optional logger — defaults to `console`. Override in tests to
    * silence expected warnings.
    */
@@ -91,12 +101,18 @@ interface PendingRequest {
   expect: ResultMsg['type'];
   /** Path argument, echoed onto a synthesised error if the responder dies. */
   path: string;
+  /** Timeout handle, cleared when the response lands (or on dispose). */
+  timer: ReturnType<typeof setTimeout> | null;
 }
+
+/** Default per-request timeout (ms). */
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 class RemoteVfsClient implements RemoteVfsClientHandle {
   private readonly transport: KernelTransport<ExtensionMessage, PanelToOffscreenMessage>;
   private readonly log: NonNullable<RemoteVfsClientOptions['logger']>;
   private readonly genId: () => string;
+  private readonly requestTimeoutMs: number;
   private readonly pending = new Map<string, PendingRequest>();
   private unsubscribe: (() => void) | null = null;
   private counter = 0;
@@ -104,6 +120,7 @@ class RemoteVfsClient implements RemoteVfsClientHandle {
   constructor(opts: RemoteVfsClientOptions) {
     this.transport = opts.transport;
     this.log = opts.logger ?? console;
+    this.requestTimeoutMs = opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.genId =
       opts.generateRequestId ??
       (() => {
@@ -149,6 +166,7 @@ class RemoteVfsClient implements RemoteVfsClientHandle {
     // Reject any in-flight requests so callers don't hang forever after
     // teardown (e.g. panel-detach mid-readDir refresh).
     for (const [, p] of this.pending) {
+      if (p.timer !== null) clearTimeout(p.timer);
       p.reject(new FsError('EBADF', 'RemoteVfsClient disposed', p.path));
     }
     this.pending.clear();
@@ -165,16 +183,34 @@ class RemoteVfsClient implements RemoteVfsClientHandle {
     payload: VfsReadDirRequestMsg | VfsReadFileRequestMsg | VfsStatRequestMsg
   ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      if (this.requestTimeoutMs > 0) {
+        timer = setTimeout(() => {
+          // No matching response arrived in time — the responder is
+          // either not up yet or the reply was lost on the shared wire.
+          // Reject so the caller fails fast instead of hanging forever.
+          if (!this.pending.delete(requestId)) return;
+          reject(
+            new FsError(
+              'EIO',
+              `vfs-rpc request timed out after ${this.requestTimeoutMs}ms (${expect})`,
+              path
+            )
+          );
+        }, this.requestTimeoutMs);
+      }
       this.pending.set(requestId, {
         resolve: resolve as (value: unknown) => void,
         reject,
         expect,
         path,
+        timer,
       });
       try {
         this.transport.send(payload as PanelToOffscreenMessage);
       } catch (err) {
         this.pending.delete(requestId);
+        if (timer !== null) clearTimeout(timer);
         reject(err);
       }
     });
@@ -191,6 +227,8 @@ class RemoteVfsClient implements RemoteVfsClientHandle {
       });
       return;
     }
+    // A response landed — cancel the timeout before settling.
+    if (pending.timer !== null) clearTimeout(pending.timer);
     if (pending.expect !== msg.type) {
       // Type-discriminator mismatch — shouldn't happen with the typed
       // host, but guard against a future cross-route bug.
