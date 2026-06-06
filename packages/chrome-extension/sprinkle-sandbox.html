@@ -28,6 +28,7 @@
 // ── Shared state on window (avoids closure scoping issues) ─────────
 window.__slicc_sd = {};           // localStorage backing store
 window.__slicc_listeners = new Set();
+window.__slicc_hid_inputreport_listeners = new Set();
 window.__slicc_name = '';
 window.__slicc_state = null;
 
@@ -303,6 +304,48 @@ window.slicc = {
     return window.slicc._jsh('writeFileBinary', [path, btoa(bin)]);
   },
   fetchToFile: function(url, path) { return window.slicc._jsh('fetchToFile', [url, path]); },
+  // ── Stateful device namespaces ────────────────────────────────
+  // The host bridge dispatches `list`/`request`/`open`/`close`/
+  // `sendReport` against the shared page-side device registries.
+  // For HID, `open` auto-attaches an `inputreport` listener on the
+  // host so reports flow over the push channel below; `close` and
+  // sprinkle removal tear it down.
+  _device: function(channel, op, args) {
+    return new Promise(function(resolve, reject) {
+      var id = 'dev-' + Math.random().toString(36).slice(2);
+      function handler(event) {
+        if (event.data && event.data.type === 'sprinkle-device-op-response' && event.data.id === id) {
+          removeEventListener('message', handler);
+          if (event.data.error) reject(new Error(event.data.error)); else resolve(event.data.result);
+        }
+      }
+      addEventListener('message', handler);
+      parent.postMessage({ type: 'sprinkle-device-op', id: id, channel: channel, op: op, args: args || [] }, '*');
+    });
+  },
+  hid: {
+    list: function() { return window.slicc._device('hid', 'list', []); },
+    request: function(filters) { return window.slicc._device('hid', 'request', [filters || []]); },
+    open: function(handle) { return window.slicc._device('hid', 'open', [handle]).then(function() {}); },
+    close: function(handle) { return window.slicc._device('hid', 'close', [handle]).then(function() {}); },
+    sendReport: function(handle, reportId, data) {
+      return window.slicc._device('hid', 'sendReport', [handle, reportId, data]).then(function() {});
+    },
+    on: function(event, cb) { if (event === 'inputreport') window.__slicc_hid_inputreport_listeners.add(cb); },
+    off: function(event, cb) { if (event === 'inputreport') window.__slicc_hid_inputreport_listeners.delete(cb); }
+  },
+  serial: {
+    list: function() { return window.slicc._device('serial', 'list', []); },
+    request: function(filters) { return window.slicc._device('serial', 'request', [filters || []]); },
+    open: function(handle, options) { return window.slicc._device('serial', 'open', [handle, options]).then(function() {}); },
+    close: function(handle) { return window.slicc._device('serial', 'close', [handle]).then(function() {}); }
+  },
+  usb: {
+    list: function() { return window.slicc._device('usb', 'list', []); },
+    request: function(filters) { return window.slicc._device('usb', 'request', [filters || []]); },
+    open: function(handle) { return window.slicc._device('usb', 'open', [handle]).then(function() {}); },
+    close: function(handle) { return window.slicc._device('usb', 'close', [handle]).then(function() {}); }
+  },
 };
 window.slicc.exec.spawn = function(argv) { return window.slicc._jsh('spawn', [argv]); };
 window.bridge = window.slicc;
@@ -349,6 +392,7 @@ function buildNestedBridgeScript(savedState, savedStorage, name, isLight) {
       'try { Object.defineProperty(Window.prototype, "localStorage", { get: function() { return window.__slicc_storage; }, configurable: true }); } catch(e2) {}' +
     '}' +
     'window.__slicc_listeners = new Set();' +
+    'window.__slicc_hid_inputreport_listeners = new Set();' +
     'window.__slicc_name = ' + nameJson + ';' +
     'window.__slicc_state = ' + stateJson + ';' +
     'var _cbId = 0, _cbs = {};' +
@@ -362,6 +406,7 @@ function buildNestedBridgeScript(savedState, savedStorage, name, isLight) {
       '});' +
     '}' +
     'function _jshCall(op, args) { return _vfsCall("sprinkle-jsh", { op: op, args: args }, function(m) { return m.result; }); }' +
+    'function _deviceCall(channel, op, args) { return _vfsCall("sprinkle-device-op", { channel: channel, op: op, args: args || [] }, function(m) { return m.result; }); }' +
     'function _b64ToU8(b64) { var bin = atob(b64); var u8 = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i); return u8; }' +
     'function _u8ToB64(bytes) { var bin = ""; for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]); return btoa(bin); }' +
     'window.slicc = {' +
@@ -419,7 +464,29 @@ function buildNestedBridgeScript(savedState, savedStorage, name, isLight) {
       'readFileBinary: function(path) { return _jshCall("readFileBinary", [path]).then(function(r) { return _b64ToU8(r.base64); }); },' +
       'writeFileBinary: function(path, bytes) { return _jshCall("writeFileBinary", [path, _u8ToB64(bytes)]); },' +
       'fetchToFile: function(url, path) { return _jshCall("fetchToFile", [url, path]); },' +
-      '_jsh: function(op, args) { return _jshCall(op, args); }' +
+      '_jsh: function(op, args) { return _jshCall(op, args); },' +
+      '_device: function(channel, op, args) { return _deviceCall(channel, op, args); },' +
+      'hid: {' +
+        'list: function() { return _deviceCall("hid", "list", []); },' +
+        'request: function(filters) { return _deviceCall("hid", "request", [filters || []]); },' +
+        'open: function(handle) { return _deviceCall("hid", "open", [handle]).then(function() {}); },' +
+        'close: function(handle) { return _deviceCall("hid", "close", [handle]).then(function() {}); },' +
+        'sendReport: function(handle, reportId, data) { return _deviceCall("hid", "sendReport", [handle, reportId, data]).then(function() {}); },' +
+        'on: function(event, cb) { if (event === "inputreport") window.__slicc_hid_inputreport_listeners.add(cb); },' +
+        'off: function(event, cb) { if (event === "inputreport") window.__slicc_hid_inputreport_listeners.delete(cb); }' +
+      '},' +
+      'serial: {' +
+        'list: function() { return _deviceCall("serial", "list", []); },' +
+        'request: function(filters) { return _deviceCall("serial", "request", [filters || []]); },' +
+        'open: function(handle, options) { return _deviceCall("serial", "open", [handle, options]).then(function() {}); },' +
+        'close: function(handle) { return _deviceCall("serial", "close", [handle]).then(function() {}); }' +
+      '},' +
+      'usb: {' +
+        'list: function() { return _deviceCall("usb", "list", []); },' +
+        'request: function(filters) { return _deviceCall("usb", "request", [filters || []]); },' +
+        'open: function(handle) { return _deviceCall("usb", "open", [handle]).then(function() {}); },' +
+        'close: function(handle) { return _deviceCall("usb", "close", [handle]).then(function() {}); }' +
+      '}' +
     '};' +
     'window.slicc.exec.spawn = function(argv) { return _jshCall("spawn", [argv]); };' +
     'window.bridge = window.slicc;' +
@@ -428,6 +495,8 @@ function buildNestedBridgeScript(savedState, savedStorage, name, isLight) {
       'if (!msg || !msg.type) return;' +
       'if (msg.type === "sprinkle-update") {' +
         'window.__slicc_listeners.forEach(function(cb) { try { cb(msg.data); } catch(err) {} });' +
+      '} else if (msg.type === "sprinkle-device-event" && msg.channel === "hid:inputreport") {' +
+        'window.__slicc_hid_inputreport_listeners.forEach(function(cb) { try { cb(msg.payload); } catch(err) {} });' +
       '} else if (msg.type === "slicc-theme") {' +
         'document.documentElement.classList.toggle("theme-light", !!msg.isLight);' +
       '} else if (msg.id && _cbs[msg.id]) {' +
@@ -602,6 +671,22 @@ addEventListener('message', function(e) {
     });
   }
 
+  // Pushed device events (currently `hid:inputreport`) — fan to
+  // top-level listeners AND forward into the nested child iframe so
+  // full-doc sprinkles receive them. The host attaches the underlying
+  // device listener on `slicc.hid.open(handle)`; sprinkle close tears
+  // it down, so no manual subscribe op is required.
+  if (msg.type === 'sprinkle-device-event') {
+    if (window.__slicc_childIframe && window.__slicc_childIframe.contentWindow) {
+      window.__slicc_childIframe.contentWindow.postMessage(msg, '*');
+    }
+    if (msg.channel === 'hid:inputreport') {
+      window.__slicc_hid_inputreport_listeners.forEach(function(cb) {
+        try { cb(msg.payload); } catch(e) { /* ignore */ }
+      });
+    }
+  }
+
   // Forward VFS responses to nested child iframe
   var responseTypes = [
     'sprinkle-readfile-response', 'sprinkle-writefile-response',
@@ -609,8 +694,9 @@ addEventListener('message', function(e) {
     'sprinkle-stat-response', 'sprinkle-mkdir-response', 'sprinkle-rm-response',
     'sprinkle-fetch-script-response',
     'sprinkle-exec-response', 'sprinkle-agent-response', 'sprinkle-jsh-response',
+    'sprinkle-device-op-response',
     'dip-readfile-response', 'dip-exists-response', 'dip-stat-response', 'dip-jsh-response',
-    'dip-exec-response', 'dip-agent-response'
+    'dip-exec-response', 'dip-agent-response', 'dip-device-op-response'
   ];
   if (responseTypes.indexOf(msg.type) !== -1) {
     if (window.__slicc_childIframe && window.__slicc_childIframe.contentWindow) {
@@ -659,9 +745,10 @@ addEventListener('message', function(e) {
       'sprinkle-storage-set', 'sprinkle-storage-remove', 'sprinkle-storage-clear',
       'sprinkle-fetch-script',
       'sprinkle-exec', 'sprinkle-agent', 'sprinkle-jsh',
+      'sprinkle-device-op',
       'dip-lick', 'dip-height', 'dip-open-link',
       'dip-readfile', 'dip-exists', 'dip-stat', 'dip-jsh',
-      'dip-exec', 'dip-agent'
+      'dip-exec', 'dip-agent', 'dip-device-op'
     ];
     if (bridgeTypes.indexOf(msg.type) !== -1) {
       parent.postMessage(msg, '*');

@@ -88,7 +88,7 @@ export interface RealmErrorMsg {
 }
 
 /** Channels the kernel host exposes to user code. */
-export type RealmRpcChannel = 'vfs' | 'exec' | 'fetch' | 'browser';
+export type RealmRpcChannel = 'vfs' | 'exec' | 'fetch' | 'browser' | 'usb' | 'serial' | 'hid';
 
 /**
  * Tab handle returned to realm code by `browser.findTab` /
@@ -123,6 +123,21 @@ export interface RealmRpcResponse {
   result?: unknown;
   /** Present iff the call threw — string-formatted host-side. */
   error?: string;
+}
+
+/**
+ * Host → realm push event. Unlike `realm-rpc-res` (one per request id),
+ * events are fire-and-forget: the host emits them on a named `channel`
+ * and any in-realm subscriber registered via `RealmRpcClient.onEvent`
+ * receives them. Used today by the HID bridge to stream `inputreport`
+ * payloads to in-realm device listeners (channel `hid-input-report`,
+ * payload `{ handle, reportId, bytes }`), mirroring the `panel-rpc-event`
+ * page→worker fan-out one layer below.
+ */
+export interface RealmEventMsg {
+  type: 'realm-event';
+  channel: string;
+  payload: unknown;
 }
 
 /**
@@ -227,4 +242,4 @@ export interface WsSubscriberInfo {
 export type RealmOutbound = RealmDoneMsg | RealmErrorMsg | RealmRpcRequest | RealmIframeReadyMsg;
 
 /** Inbound to the realm. */
-export type RealmInbound = RealmInitMsg | RealmRpcResponse | RealmPortInitMsg;
+export type RealmInbound = RealmInitMsg | RealmRpcResponse | RealmPortInitMsg | RealmEventMsg;

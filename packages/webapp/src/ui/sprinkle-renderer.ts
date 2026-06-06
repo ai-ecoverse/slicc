@@ -358,6 +358,23 @@ export class SprinkleRenderer {
               '*'
             )
         );
+      } else if (msg.type === 'sprinkle-device-op') {
+        this.bridge._device(msg.channel, msg.op, msg.args ?? []).then(
+          (result) =>
+            iframe.contentWindow?.postMessage(
+              { type: 'sprinkle-device-op-response', id: msg.id, result },
+              '*'
+            ),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-device-op-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
+        );
       } else if (msg.type === 'sprinkle-fetch-script') {
         const url = msg.url as string;
         const id = msg.id as string;
@@ -460,6 +477,22 @@ export class SprinkleRenderer {
     }
   }
 
+  /**
+   * Push a host-side device event (e.g. `hid:inputreport`) into the
+   * sprinkle's iframe. The iframe-side bridge fans the payload out to
+   * the listener set registered via `slicc.hid.on('inputreport', cb)`.
+   * Inline-mode sprinkles never go through this path — their listeners
+   * are invoked directly inside the bridge.
+   */
+  pushDeviceEvent(channel: string, payload: unknown): void {
+    if (this.iframe?.contentWindow) {
+      this.iframe.contentWindow.postMessage(
+        { type: 'sprinkle-device-event', channel, payload },
+        '*'
+      );
+    }
+  }
+
   /** Collect CSS custom properties and sprinkle component rules from the parent page. */
   private collectThemeCSS(): string {
     return collectThemeCSS();
@@ -469,6 +502,7 @@ export class SprinkleRenderer {
   private generateBridgeScript(): string {
     return `(function() {
   var _updateListeners = new Set();
+  var _hidInputReportListeners = new Set();
   var _sprinkleName = '';
   var _state = null;
   var _cbId = 0;
@@ -483,6 +517,12 @@ export class SprinkleRenderer {
       if (window.slicc) window.slicc.name = _sprinkleName;
     } else if (msg.type === 'sprinkle-update') {
       _updateListeners.forEach(function(cb) { try { cb(msg.data); } catch(e) { console.error(e); } });
+    } else if (msg.type === 'sprinkle-device-event') {
+      if (msg.channel === 'hid:inputreport') {
+        _hidInputReportListeners.forEach(function(cb) {
+          try { cb(msg.payload); } catch(e) { console.error(e); }
+        });
+      }
     } else if (msg.type === 'slicc-theme') {
       document.documentElement.classList.toggle('theme-light', !!msg.isLight);
     } else if (msg.id && _callbacks[msg.id]) {
@@ -507,6 +547,10 @@ export class SprinkleRenderer {
 
   function _jshCall(op, args) {
     return _vfsCall('sprinkle-jsh', { op: op, args: args }, function(m) { return m.result; });
+  }
+  function _deviceCall(channel, op, args) {
+    return _vfsCall('sprinkle-device-op', { channel: channel, op: op, args: args || [] },
+      function(m) { return m.result; });
   }
   function _b64ToU8(b64) {
     var bin = atob(b64); var u8 = new Uint8Array(bin.length);
@@ -606,6 +650,29 @@ export class SprinkleRenderer {
       cookie: function(tab, name) { return _jshCall('browser', ['cookie', tab, name]); },
       localStorage: function(tab, key) { return _jshCall('browser', ['localStorage', tab, key]); },
       fetch: function(tab, url, opts) { return _jshCall('browser', ['fetch', tab, url, opts || {}]); }
+    },
+    hid: {
+      list: function() { return _deviceCall('hid', 'list', []); },
+      request: function(filters) { return _deviceCall('hid', 'request', [filters || []]); },
+      open: function(handle) { return _deviceCall('hid', 'open', [handle]).then(function() {}); },
+      close: function(handle) { return _deviceCall('hid', 'close', [handle]).then(function() {}); },
+      sendReport: function(handle, reportId, data) {
+        return _deviceCall('hid', 'sendReport', [handle, reportId, data]).then(function() {});
+      },
+      on: function(event, cb) { if (event === 'inputreport') _hidInputReportListeners.add(cb); },
+      off: function(event, cb) { if (event === 'inputreport') _hidInputReportListeners['delete'](cb); }
+    },
+    serial: {
+      list: function() { return _deviceCall('serial', 'list', []); },
+      request: function(filters) { return _deviceCall('serial', 'request', [filters || []]); },
+      open: function(handle, options) { return _deviceCall('serial', 'open', [handle, options]).then(function() {}); },
+      close: function(handle) { return _deviceCall('serial', 'close', [handle]).then(function() {}); }
+    },
+    usb: {
+      list: function() { return _deviceCall('usb', 'list', []); },
+      request: function(filters) { return _deviceCall('usb', 'request', [filters || []]); },
+      open: function(handle) { return _deviceCall('usb', 'open', [handle]).then(function() {}); },
+      close: function(handle) { return _deviceCall('usb', 'close', [handle]).then(function() {}); }
     },
     readFileBinary: function(path) { return _jshCall('readFileBinary', [path]).then(function(r) { return _b64ToU8(r.base64); }); },
     writeFileBinary: function(path, bytes) { return _jshCall('writeFileBinary', [path, _u8ToB64(bytes)]); },
@@ -899,6 +966,23 @@ export class SprinkleRenderer {
             iframe.contentWindow?.postMessage(
               {
                 type: 'sprinkle-jsh-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
+        );
+      } else if (msg.type === 'sprinkle-device-op') {
+        this.bridge._device(msg.channel, msg.op, msg.args ?? []).then(
+          (result) =>
+            iframe.contentWindow?.postMessage(
+              { type: 'sprinkle-device-op-response', id: msg.id, result },
+              '*'
+            ),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-device-op-response',
                 id: msg.id,
                 error: err instanceof Error ? err.message : String(err),
               },

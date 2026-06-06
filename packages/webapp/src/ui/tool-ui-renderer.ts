@@ -12,6 +12,9 @@
 
 import { createLogger } from '../core/logger.js';
 import { openMountPickerPopup } from '../fs/mount-picker-popup.js';
+import { openHidPickerPopup } from '../shell/supplemental-commands/hid-picker.js';
+import { openSerialPickerPopup } from '../shell/supplemental-commands/serial-picker.js';
+import { openUsbPickerPopup } from '../shell/supplemental-commands/usb-picker.js';
 import { toolUIRegistry } from '../tools/tool-ui.js';
 import { type DipInstance, mountDip } from './dip.js';
 import { collectThemeCSS } from './sprinkle-renderer.js';
@@ -163,8 +166,20 @@ export class ToolUIRenderer {
   ): Promise<void> {
     let actionData = data;
 
-    if (picker === 'directory') {
-      actionData = await openMountPickerPopup(this.requestId);
+    if (picker) {
+      const dataObj = (data ?? null) as Record<string, unknown> | null;
+      const filters = Array.isArray(dataObj?.filters) ? (dataObj!.filters as unknown[]) : [];
+      if (picker === 'directory') {
+        actionData = await openMountPickerPopup(this.requestId);
+      } else if (picker === 'usb-device') {
+        actionData = await openUsbPickerPopup(filters as Parameters<typeof openUsbPickerPopup>[0]);
+      } else if (picker === 'serial-port') {
+        actionData = await openSerialPickerPopup(
+          filters as Parameters<typeof openSerialPickerPopup>[0]
+        );
+      } else if (picker === 'hid-device') {
+        actionData = await openHidPickerPopup(filters as Parameters<typeof openHidPickerPopup>[0]);
+      }
     }
 
     chrome.runtime

@@ -20,9 +20,11 @@ import { createDfCommand, createDiskutilCommand } from './df-command.js';
 import { createDigCommand } from './dig-command.js';
 import { createDiscoverCommand } from './discover-command.js';
 import { createEsbuildCommand } from './esbuild-command.js';
+import { createEsptoolCommand } from './esptool-command.js';
 import { createFfmpegCommand } from './ffmpeg-command.js';
 import { createFsWatchCommand } from './fswatch-command.js';
 import { createCommandsCommand } from './help-command.js';
+import { createHidCommand } from './hid-command.js';
 import { createHostCommand } from './host-command.js';
 import type { ImgcatCommandOptions } from './imgcat-command.js';
 import { createImgcatCommand } from './imgcat-command.js';
@@ -44,6 +46,7 @@ import { createRsyncCommand } from './rsync-command.js';
 import { createSayCommand } from './say-command.js';
 import { createScreencaptureCommand } from './screencapture-command.js';
 import { createSecretCommand } from './secret-command.js';
+import { createSerialCommand } from './serial-command.js';
 import { createServeCommand } from './serve-command.js';
 import { createSliccFsCleanupCommand } from './slicc-fs-cleanup-command.js';
 import { createSprinkleCommand } from './sprinkle-command.js';
@@ -52,6 +55,7 @@ import { createTestCommand } from './test-command.js';
 import { createTscCommand } from './tsc-command.js';
 import { createUnameCommand } from './uname-command.js';
 import { createUnzipCommand } from './unzip-command.js';
+import { createUsbCommand } from './usb-command.js';
 import { createWebhookCommand } from './webhook-command.js';
 import { createWebsocatCommand } from './websocat-command.js';
 import { createWhichCommand } from './which-command.js';
@@ -143,6 +147,10 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createDiscoverCommand(),
     createPsCommand({ processManager: options.processManager }),
     createKillCommand({ processManager: options.processManager }),
+    createUsbCommand(),
+    createHidCommand(),
+    createSerialCommand(),
+    createEsptoolCommand(),
     createCherryEmitCommand({ registry: options.cherryRuntimeRegistry }),
     createSliccFsCleanupCommand({ fs: options.fs }),
     createDfCommand({ fs: options.fs }),
