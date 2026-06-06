@@ -1,8 +1,18 @@
 {
   "$comment": "Single source of truth for per-package coverage floors. Edited automatically by the nightly coverage ratchet (packages/dev-tools/tools/coverage-ratchet.mjs), which only ever raises floors and keeps <=1% headroom below measured coverage. Consumed by the CI gates via coverage-gate.mjs (TypeScript) and swift-coverage-check.sh (Swift). Do not hand-lower these values.",
   "typescript": {
-    "cloudflare-worker": { "lines": 82, "statements": 81, "functions": 92, "branches": 69 },
-    "node-server": { "lines": 72, "statements": 70, "functions": 75, "branches": 62 },
+    "cloudflare-worker": {
+      "lines": 82,
+      "statements": 81,
+      "functions": 92,
+      "branches": 69
+    },
+    "node-server": {
+      "lines": 73,
+      "statements": 71,
+      "functions": 75,
+      "branches": 62
+    },
     "chrome-extension": {
       "lines": 69,
       "statements": 67,
@@ -26,12 +36,35 @@
         "packages/node-server/src/**"
       ]
     },
-    "webapp": { "lines": 71, "statements": 69, "functions": 70, "branches": 60 },
-    "cherry": { "lines": 72, "statements": 71, "functions": 88, "branches": 50 },
-    "cloud-core": { "lines": 80, "statements": 78, "functions": 72, "branches": 75 }
+    "webapp": {
+      "lines": 71,
+      "statements": 69,
+      "functions": 70,
+      "branches": 60
+    },
+    "cherry": {
+      "lines": 72,
+      "statements": 71,
+      "functions": 88,
+      "branches": 50
+    },
+    "cloud-core": {
+      "lines": 80,
+      "statements": 78,
+      "functions": 72,
+      "branches": 75
+    }
   },
   "swift": {
-    "swift-server": { "lines": 53, "functions": 53, "regions": 48 },
-    "swift-launcher": { "lines": 21, "functions": 25, "regions": 29 }
+    "swift-server": {
+      "lines": 54,
+      "functions": 54,
+      "regions": 49
+    },
+    "swift-launcher": {
+      "lines": 21,
+      "functions": 25,
+      "regions": 29
+    }
   }
 }
