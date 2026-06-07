@@ -282,6 +282,62 @@ describe('executeS3SignAndForward — successful sign + forward', () => {
     expect(reply.ok).toBe(false);
     if (!reply.ok) expect(reply.errorCode).toBe('fetch_failed');
   });
+
+  it('round-trips base64 via the atob/btoa fallback when Buffer is unavailable', async () => {
+    // The Node test runtime has Buffer, so the existing round-trip tests cover
+    // the fast-path. Drop the global to force the browser / service-worker path
+    // and confirm both the decode and encode fallbacks stay correct. A
+    // hand-rolled response keeps undici (which constructs Response via the
+    // `node:buffer` module) out of the no-Buffer window — only our base64
+    // helpers run while the global is gone.
+    const upstreamBytes = new Uint8Array([4, 2, 0, 255]);
+    const upstreamHeaders = new Headers({ etag: '"e4"' });
+    const sentBodies: Array<RequestInit['body']> = [];
+    const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+      sentBodies.push(init?.body);
+      return {
+        status: 200,
+        headers: upstreamHeaders,
+        arrayBuffer: async () =>
+          upstreamBytes.buffer.slice(
+            upstreamBytes.byteOffset,
+            upstreamBytes.byteOffset + upstreamBytes.byteLength
+          ),
+      } as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    const payload = new TextEncoder().encode('hello world');
+    let binary = '';
+    for (let i = 0; i < payload.length; i++) binary += String.fromCharCode(payload[i]);
+    const bodyBase64 = btoa(binary);
+
+    const original = globalThis.Buffer;
+    (globalThis as { Buffer?: unknown }).Buffer = undefined;
+    let reply: Awaited<ReturnType<typeof executeS3SignAndForward>>;
+    try {
+      reply = await executeS3SignAndForward(
+        { profile: 'aws', method: 'PUT', bucket: 'my-bucket', key: 'foo.txt', bodyBase64 },
+        store,
+        fetchImpl
+      );
+    } finally {
+      (globalThis as { Buffer?: unknown }).Buffer = original;
+    }
+
+    // decode fallback: the request body round-trips back to the original bytes
+    const sentBody = sentBodies[0];
+    expect(sentBody).toBeInstanceOf(Uint8Array);
+    expect(new TextDecoder().decode(sentBody as Uint8Array)).toBe('hello world');
+
+    // encode fallback: upstream bytes round-trip through reply.bodyBase64
+    expect(reply.ok).toBe(true);
+    if (reply.ok) {
+      const decoded = atob(reply.bodyBase64);
+      const out = new Uint8Array(decoded.length);
+      for (let i = 0; i < decoded.length; i++) out[i] = decoded.charCodeAt(i);
+      expect(Array.from(out)).toEqual([4, 2, 0, 255]);
+    }
+  });
 });
 
 // ----------------- DA -----------------

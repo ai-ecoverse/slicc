@@ -101,6 +101,13 @@ interface S3Profile {
 // ---------------- helpers ----------------
 
 function decodeBase64(b64: string): Uint8Array {
+  // Node fast-path: Buffer.from decodes the multi-MB S3 mount payloads the CLI
+  // float moves far faster than the per-byte atob loop. Feature-detected so the
+  // browser and extension service-worker bundles (no Buffer global) fall back to
+  // the universal path. Buffer extends Uint8Array, so the return type holds.
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(b64, 'base64');
+  }
   // atob is a global in browsers, extension service workers, and Node 22+.
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);
@@ -111,6 +118,10 @@ function decodeBase64(b64: string): Uint8Array {
 }
 
 function encodeBase64(bytes: Uint8Array): string {
+  // Node fast-path — see decodeBase64.
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(bytes).toString('base64');
+  }
   let binary = '';
   for (let i = 0; i < bytes.length; i++) {
     binary += String.fromCharCode(bytes[i]);

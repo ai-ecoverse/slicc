@@ -12,7 +12,7 @@ Platform-agnostic primitives shared across `@slicc/webapp`, `@slicc/node-server`
 
 ## Conventions
 
-- Pure functions only (no DOM / Node specifics). Uses `crypto.subtle`, `TextEncoder`, `Headers` (globals in both targets).
+- Prefer universal globals (`crypto.subtle`, `TextEncoder`, `Headers`, `atob`/`btoa`) so one build runs unchanged in the browser, the extension service worker, and the Node 22+ server. A platform-specific fast-path is allowed when it is feature-detected and falls back to the universal implementation — e.g. `sign-and-forward.ts` base64 uses Node's `Buffer` behind `typeof Buffer !== 'undefined'` (materially faster for multi-MB S3 payloads on the CLI float) and falls back to `atob`/`btoa` elsewhere. The package must never _require_ a DOM- or Node-only API.
 - `SecretsPipeline.unmaskHeaders` mutates its input parameter in place — matches `SecretProxyManager`'s legacy semantics so existing CLI callers compile unchanged.
 - Build: `npm run build -w @slicc/shared-ts` (must run before `@slicc/node-server` build in the chain — wired into root `build` script).
 - LSP/IDE: uses `tsconfig.json` (noEmit, includes src + tests). Build uses `tsconfig.build.json` (rootDir=src, emits to dist).
