@@ -8,16 +8,16 @@
       "branches": 69
     },
     "node-server": {
-      "lines": 73,
-      "statements": 71,
+      "lines": 74,
+      "statements": 72,
       "functions": 75,
-      "branches": 62
+      "branches": 64
     },
     "chrome-extension": {
-      "lines": 69,
-      "statements": 67,
-      "functions": 62,
-      "branches": 56,
+      "lines": 73,
+      "statements": 71,
+      "functions": 65,
+      "branches": 60,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -39,7 +39,7 @@
     "webapp": {
       "lines": 71,
       "statements": 69,
-      "functions": 70,
+      "functions": 71,
       "branches": 60
     },
     "cherry": {
@@ -57,9 +57,9 @@
   },
   "swift": {
     "swift-server": {
-      "lines": 54,
-      "functions": 54,
-      "regions": 49
+      "lines": 55,
+      "functions": 55,
+      "regions": 51
     },
     "swift-launcher": {
       "lines": 21,
