@@ -84,7 +84,7 @@ jobs:
 
       - name: Hunt the sin and file an issue
         if: github.event.inputs.dry_run != 'true'
-        uses: anthropics/claude-code-action@64de744025ca9e24df2b88204b4f1e968f39f009 # v1
+        uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1 # v1
         env:
           # Bedrock path: authenticate with an Amazon Bedrock API key (the Adobe
           # CAMP `ABSK...` bearer token). Set the AWS_BEARER_TOKEN_BEDROCK secret
