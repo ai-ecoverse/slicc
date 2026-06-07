@@ -100,13 +100,27 @@ interface S3Profile {
 
 // ---------------- helpers ----------------
 
+// Structural view of the bits of Node's `Buffer` constructor we use, declared
+// locally so this package keeps building without `@types/node` (it must stay
+// platform-agnostic — see CLAUDE.md). The global is reached via `globalThis`
+// so a bare `Buffer` reference never has to resolve at compile time.
+interface NodeBufferCtor {
+  from(input: string, encoding: 'base64'): Uint8Array;
+  from(input: Uint8Array): { toString(encoding: 'base64'): string };
+}
+
+function nodeBuffer(): NodeBufferCtor | undefined {
+  return (globalThis as { Buffer?: NodeBufferCtor }).Buffer;
+}
+
 function decodeBase64(b64: string): Uint8Array {
   // Node fast-path: Buffer.from decodes the multi-MB S3 mount payloads the CLI
   // float moves far faster than the per-byte atob loop. Feature-detected so the
   // browser and extension service-worker bundles (no Buffer global) fall back to
   // the universal path. Buffer extends Uint8Array, so the return type holds.
-  if (typeof Buffer !== 'undefined') {
-    return Buffer.from(b64, 'base64');
+  const B = nodeBuffer();
+  if (B) {
+    return B.from(b64, 'base64');
   }
   // atob is a global in browsers, extension service workers, and Node 22+.
   const binary = atob(b64);
@@ -119,8 +133,9 @@ function decodeBase64(b64: string): Uint8Array {
 
 function encodeBase64(bytes: Uint8Array): string {
   // Node fast-path — see decodeBase64.
-  if (typeof Buffer !== 'undefined') {
-    return Buffer.from(bytes).toString('base64');
+  const B = nodeBuffer();
+  if (B) {
+    return B.from(bytes).toString('base64');
   }
   let binary = '';
   for (let i = 0; i < bytes.length; i++) {
