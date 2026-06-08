@@ -10,11 +10,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { setupElectronOverlay } from '../../../src/ui/boot/setup-electron-overlay.js';
+import { ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE } from '../../../src/ui/runtime-mode.js';
 
-type FakeLayout = { setActiveTab: ReturnType<typeof vi.fn> };
+type FakeLayout = {
+  setActiveTab: ReturnType<typeof vi.fn>;
+  setShowElectronOverlayClose: ReturnType<typeof vi.fn>;
+};
 
 function makeFakeLayout(): FakeLayout {
-  return { setActiveTab: vi.fn() };
+  return {
+    setActiveTab: vi.fn(),
+    setShowElectronOverlayClose: vi.fn(),
+  };
 }
 
 beforeEach(() => {
@@ -93,5 +100,45 @@ describe('setupElectronOverlay', () => {
     window.dispatchEvent(event);
 
     expect(layout.setActiveTab).not.toHaveBeenCalled();
+  });
+
+  it('mounts an electron-overlay close button that posts a close message when embedded', () => {
+    const layout = makeFakeLayout();
+    // jsdom: window.parent === window by default, so use a stub window with
+    // a distinct parent to model the embedded-overlay case.
+    const postMessage = vi.fn();
+    const fakeParent = { postMessage } as unknown as Window;
+    const fakeWin = {
+      parent: fakeParent,
+      location: { href: 'http://localhost/?tab=chat' },
+      addEventListener: vi.fn(),
+    } as unknown as Window;
+
+    setupElectronOverlay({
+      layout: layout as unknown as Parameters<typeof setupElectronOverlay>[0]['layout'],
+      isElectronOverlay: true,
+      window: fakeWin,
+      document,
+    });
+
+    expect(layout.setShowElectronOverlayClose).toHaveBeenCalledTimes(1);
+    const handler = layout.setShowElectronOverlayClose.mock.calls[0][0] as () => void;
+    expect(typeof handler).toBe('function');
+
+    handler();
+    expect(postMessage).toHaveBeenCalledWith({ type: ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE }, '*');
+  });
+
+  it('clears the electron-overlay close button when opened top-level (parent === self)', () => {
+    const layout = makeFakeLayout();
+
+    setupElectronOverlay({
+      layout: layout as unknown as Parameters<typeof setupElectronOverlay>[0]['layout'],
+      isElectronOverlay: true,
+      window,
+      document,
+    });
+
+    expect(layout.setShowElectronOverlayClose).toHaveBeenCalledWith(null);
   });
 });

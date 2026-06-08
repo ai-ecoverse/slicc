@@ -11,13 +11,19 @@
  * No-op when `isElectronOverlay` is false.
  */
 
-import { getElectronOverlayInitialTab, isElectronOverlaySetTabMessage } from '../runtime-mode.js';
+import {
+  ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE,
+  getElectronOverlayInitialTab,
+  isElectronOverlaySetTabMessage,
+} from '../runtime-mode.js';
 import type { ElectronOverlaySetupDeps } from './types.js';
 
 /**
  * Apply electron-overlay tweaks to the mounted {@link Layout}: hide the
  * tab-bar (Electron's chrome owns it), set the initial tab from the URL
- * hash, listen for parent-frame `set-tab` messages, and bind ⌘;
+ * hash, mount a close button in the inner thread header (left of the
+ * scoop switcher) that posts a close message to the parent overlay
+ * shell, listen for parent-frame `set-tab` messages, and bind ⌘;
  * (Cmd-+-Semicolon) to toggle the overlay window. Returns immediately
  * for non-overlay floats.
  */
@@ -27,6 +33,18 @@ export function setupElectronOverlay(deps: ElectronOverlaySetupDeps): void {
 
   const initialTab = getElectronOverlayInitialTab(win.location.href);
   layout.setActiveTab(initialTab);
+
+  // Only mount the close button when actually embedded in a parent frame
+  // (the overlay shell). When `/electron` is opened top-level, posting a
+  // close message to `win.parent` would target the page itself and close
+  // nothing — render no button instead of a dead control.
+  if (win.parent !== win) {
+    layout.setShowElectronOverlayClose(() => {
+      win.parent.postMessage({ type: ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE }, '*');
+    });
+  } else {
+    layout.setShowElectronOverlayClose(null);
+  }
 
   const runtimeStyle = doc.createElement('style');
   runtimeStyle.id = 'slicc-electron-overlay-runtime-style';
