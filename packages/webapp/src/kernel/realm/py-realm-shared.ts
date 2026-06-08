@@ -24,7 +24,7 @@ import {
   prewalkOpfsTree,
 } from './opfs-sync-fs.js';
 import { type RealmPortLike, RealmRpcClient } from './realm-rpc.js';
-import type { RealmDoneMsg, RealmErrorMsg, RealmInitMsg } from './realm-types.js';
+import type { RealmDoneMsg, RealmErrorMsg, RealmInitMsg, RealmMountPoint } from './realm-types.js';
 
 export const PYODIDE_VERSION = resolvePinnedPackageVersion('pyodide', pyodidePackageVersion);
 export const PYODIDE_CDN = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
@@ -114,18 +114,55 @@ export async function runPyRealm(
   // same-origin OPFS subtree the kernel owns; queued mutations are
   // flushed via `flushOpfsRealmMounts` before `realm-done` so the
   // on-disk view is consistent when the kernel takes back over.
+  // Mount paths that exactly match a syncDir are skipped here so
+  // the realm-mount materialization step can mount MEMFS over them
+  // without an EBUSY collision against an OPFS subtree.
+  const mountPoints: RealmMountPoint[] = init.mountPoints ?? [];
+  const exactMountPaths = new Set(mountPoints.map((m) => m.path));
   if (init.opfsMountDbName !== undefined) {
     try {
       const mounted = await mountOpfsDirsAndSyncIn(
         pyodide,
         syncDirs,
         init.opfsMountDbName,
-        pushWarning
+        pushWarning,
+        { skipMountPaths: exactMountPaths }
       );
       opfsMounts = mounted.mounts;
     } catch (err) {
       pushWarning(`VFS→Pyodide OPFS mount failed: ${describeRealmError(err)}`);
     }
+  }
+
+  // Materialize VFS mount subtrees into MEMFS via the `vfs` RPC
+  // channel. Local FS Access mounts always materialize; remote
+  // (s3/da) mounts are subject to `remoteMountCapBytes` (0 = skip).
+  // Cap exceeded throws — caught below to fail the invocation with
+  // a clear error before user code runs.
+  let mountMaterializationFailure: string | null = null;
+  if (mountPoints.length > 0) {
+    try {
+      await materializeRealmMounts(
+        pyodide,
+        mountPoints,
+        init.remoteMountCapBytes,
+        rpc,
+        pushWarning
+      );
+    } catch (err) {
+      mountMaterializationFailure = err instanceof Error ? err.message : String(err);
+    }
+  }
+  if (mountMaterializationFailure !== null) {
+    rpc.dispose();
+    const done: RealmDoneMsg = {
+      type: 'realm-done',
+      stdout: '',
+      stderr: stderrChunks.join('') + mountMaterializationFailure + '\n',
+      exitCode: 1,
+    };
+    port.postMessage(done);
+    return;
   }
 
   try {
@@ -284,9 +321,11 @@ export async function mountOpfsDirsAndSyncIn(
   pyodide: PyodideInterface,
   dirs: string[],
   opfsDbName: string,
-  pushWarning: WarningSink = () => {}
+  pushWarning: WarningSink = () => {},
+  opts: { skipMountPaths?: ReadonlySet<string> } = {}
 ): Promise<MountedOpfsResult> {
   const mounts: OpfsRealmMount[] = [];
+  const skip = opts.skipMountPaths ?? new Set<string>();
   const storage = (navigator as unknown as { storage?: StorageManager }).storage;
   if (!storage?.getDirectory) {
     pushWarning('VFS→Pyodide OPFS mount skipped: navigator.storage.getDirectory unavailable');
@@ -327,6 +366,11 @@ export async function mountOpfsDirsAndSyncIn(
           if ((childHandle as { kind: string }).kind !== 'directory') continue;
           if (EMSCRIPTEN_BUILTIN_ROOT_DIRS.has(name)) continue;
           const childPath = `/${name}`;
+          // Skip OPFS mount when this path is itself a VFS mount —
+          // the realm-mount materialization step will mount MEMFS at
+          // the same path, and Emscripten cannot stack two mounts on
+          // one node.
+          if (skip.has(childPath)) continue;
           try {
             await mountOpfsChild(
               pyodide,
@@ -344,6 +388,7 @@ export async function mountOpfsDirsAndSyncIn(
       }
       continue;
     }
+    if (skip.has(dir)) continue;
     try {
       let handle: FileSystemDirectoryHandle = kernelDbHandle;
       for (const part of dir.split('/').filter(Boolean)) {
@@ -411,5 +456,208 @@ export async function flushOpfsRealmMounts(mounts: OpfsRealmMount[]): Promise<vo
   for (const entry of mounts) {
     await flushPendingOpfsOps(entry.mount);
     await entry.flushBuffers(entry.rootHandle);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mount materialization (VFS mount subtrees → MEMFS in the realm)
+// ---------------------------------------------------------------------------
+
+/**
+ * One file/dir entry discovered while walking a mount subtree via
+ * the `vfs` RPC channel. `size` is only meaningful for files; dirs
+ * report 0 since the cap only counts file bytes.
+ */
+interface MountListingEntry {
+  absPath: string;
+  type: 'file' | 'directory';
+  size: number;
+}
+
+/**
+ * Recursively enumerate every file and directory under `root` via
+ * the realm RPC channel. Calls `vfs.readDir` per directory and
+ * `vfs.stat` per entry to discover the listing + file sizes. Used
+ * for both the cap pre-check and the materialization populate pass.
+ *
+ * Per-entry failures are best-effort: a single bad `stat` skips
+ * that entry rather than failing the whole walk. The caller surfaces
+ * a warning if the entire walk fails.
+ */
+async function walkMountViaRpc(rpc: RealmRpcClient, root: string): Promise<MountListingEntry[]> {
+  const out: MountListingEntry[] = [];
+  async function visit(path: string): Promise<void> {
+    let names: string[];
+    try {
+      names = await rpc.call<string[]>('vfs', 'readDir', [path]);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      const child = path === '/' ? `/${name}` : `${path}/${name}`;
+      let st: { isDirectory: boolean; isFile: boolean; size: number };
+      try {
+        st = await rpc.call<{ isDirectory: boolean; isFile: boolean; size: number }>(
+          'vfs',
+          'stat',
+          [child]
+        );
+      } catch {
+        continue;
+      }
+      if (st.isDirectory) {
+        out.push({ absPath: child, type: 'directory', size: 0 });
+        await visit(child);
+      } else if (st.isFile) {
+        out.push({ absPath: child, type: 'file', size: st.size ?? 0 });
+      }
+    }
+  }
+  await visit(root);
+  return out;
+}
+
+/**
+ * Build the actionable cap-exceeded error message used to fail the
+ * Python invocation. Names each remote mount with its individual
+ * contribution plus the cap, and suggests the two escape hatches
+ * ({@code --remote-mount-cap=0} or a higher value).
+ */
+function formatCapExceededError(
+  totalBytes: number,
+  capBytes: number,
+  perMount: { path: string; bytes: number }[]
+): string {
+  const offenders = perMount.filter((e) => e.bytes > 0);
+  const lines = offenders.map((e) => `  ${e.path}: ${e.bytes} bytes`);
+  return (
+    `remote-mount cap exceeded: ${totalBytes} bytes across ${offenders.length} ` +
+    `remote mount(s) > cap ${capBytes} bytes\n` +
+    lines.join('\n') +
+    (lines.length > 0 ? '\n' : '') +
+    `Re-run with --remote-mount-cap=0 (disable remote mounts) or a higher value.`
+  );
+}
+
+/**
+ * Materialize each {@link RealmMountPoint} into the Pyodide FS so
+ * Python reads of `<mountPath>/…` return real backend content. For
+ * each overlapping mount this:
+ *   1. ensures the mount path exists in the Pyodide FS;
+ *   2. mounts MEMFS over it (so the OPFS placeholder underneath is
+ *      shadowed);
+ *   3. populates the MEMFS subtree with files + dirs walked via the
+ *      `vfs` RPC channel (`readDir` / `stat` / `readFileBinary`).
+ *
+ * Remote-mount cap enforcement: BEFORE fetching any file bodies the
+ * function sums the listing sizes of all remote (s3/da) mounts. If
+ * the total exceeds `remoteMountCapBytes`, it throws an error whose
+ * message names the offending mount(s) and the total vs cap — the
+ * caller converts this throw into a `realm-done` with exit 1 so the
+ * `python3` invocation fails cleanly before user code runs. A cap
+ * of `0` short-circuits remote materialization (remote mounts appear
+ * as empty MEMFS dirs; no fetches, no error). `undefined` disables
+ * the cap entirely. Local FS Access mounts are exempt and always
+ * materialize.
+ */
+export async function materializeRealmMounts(
+  pyodide: PyodideInterface,
+  mountPoints: readonly RealmMountPoint[],
+  remoteMountCapBytes: number | undefined,
+  rpc: RealmRpcClient,
+  pushWarning: WarningSink = () => {}
+): Promise<void> {
+  if (mountPoints.length === 0) return;
+  const skipRemoteFetch = remoteMountCapBytes === 0;
+  const listings = new Map<string, MountListingEntry[]>();
+  const sizes = new Map<string, number>();
+
+  // Phase 1: list every overlapping mount up-front so the cap check
+  // sees the total before any body fetch happens.
+  for (const mp of mountPoints) {
+    if (mp.kind !== 'local' && skipRemoteFetch) {
+      listings.set(mp.path, []);
+      sizes.set(mp.path, 0);
+      continue;
+    }
+    try {
+      const listing = await walkMountViaRpc(rpc, mp.path);
+      listings.set(mp.path, listing);
+      let total = 0;
+      for (const e of listing) if (e.type === 'file') total += e.size;
+      sizes.set(mp.path, total);
+    } catch (err) {
+      pushWarning(`mount '${mp.path}': listing failed: ${describeRealmError(err)}`);
+      listings.set(mp.path, []);
+      sizes.set(mp.path, 0);
+    }
+  }
+
+  // Phase 2: enforce remote cap. Local mounts are exempt; only s3/da
+  // count toward the budget.
+  if (remoteMountCapBytes !== undefined && remoteMountCapBytes > 0) {
+    const perRemote: { path: string; bytes: number }[] = [];
+    let total = 0;
+    for (const mp of mountPoints) {
+      if (mp.kind === 'local') continue;
+      const bytes = sizes.get(mp.path) ?? 0;
+      total += bytes;
+      perRemote.push({ path: mp.path, bytes });
+    }
+    if (total > remoteMountCapBytes) {
+      throw new Error(formatCapExceededError(total, remoteMountCapBytes, perRemote));
+    }
+  }
+
+  // Phase 3: mount MEMFS over each path + populate.
+  const FS = pyodide.FS as unknown as {
+    stat: (path: string) => unknown;
+    mkdirTree: (path: string) => void;
+    mount: (plugin: unknown, opts: unknown, dir: string) => unknown;
+    writeFile: (path: string, data: Uint8Array) => void;
+    filesystems: Record<string, unknown>;
+  };
+  const MEMFS = FS.filesystems.MEMFS;
+  for (const mp of mountPoints) {
+    try {
+      try {
+        FS.stat(mp.path);
+      } catch {
+        FS.mkdirTree(mp.path);
+      }
+      if (MEMFS) {
+        try {
+          FS.mount(MEMFS, {}, mp.path);
+        } catch (err) {
+          pushWarning(`mount '${mp.path}': MEMFS overlay failed: ${describeRealmError(err)}`);
+        }
+      }
+      if (mp.kind !== 'local' && skipRemoteFetch) continue;
+      const listing = listings.get(mp.path) ?? [];
+      for (const entry of listing) {
+        if (entry.type === 'directory') {
+          try {
+            FS.mkdirTree(entry.absPath);
+          } catch {
+            /* exists */
+          }
+          continue;
+        }
+        try {
+          const bytes = await rpc.call<Uint8Array>('vfs', 'readFileBinary', [entry.absPath]);
+          const parent = entry.absPath.slice(0, entry.absPath.lastIndexOf('/')) || '/';
+          try {
+            FS.mkdirTree(parent);
+          } catch {
+            /* exists */
+          }
+          FS.writeFile(entry.absPath, bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+        } catch (err) {
+          pushWarning(`mount '${entry.absPath}': read failed: ${describeRealmError(err)}`);
+        }
+      }
+    } catch (err) {
+      pushWarning(`mount '${mp.path}': materialize failed: ${describeRealmError(err)}`);
+    }
   }
 }

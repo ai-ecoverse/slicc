@@ -9,7 +9,13 @@
 
 import type { IFileSystem } from 'just-bash';
 import { describe, expect, it, vi } from 'vitest';
-import { computePyodideMountDirs } from '../../../src/shell/supplemental-commands/python-command.js';
+import {
+  computeOverlappingMountPoints,
+  computePyodideMountDirs,
+  DEFAULT_REMOTE_MOUNT_CAP,
+  extractRemoteMountCap,
+  parseHumanSize,
+} from '../../../src/shell/supplemental-commands/python-command.js';
 
 function makeFs(
   entries: Array<{ name: string; isDir?: boolean; statThrows?: boolean }>,
@@ -118,5 +124,76 @@ describe('computePyodideMountDirs', () => {
     ]);
     const dirs = await computePyodideMountDirs(fs);
     expect(dirs).toEqual(['/workspace', '/tmp']);
+  });
+});
+
+describe('parseHumanSize', () => {
+  it('handles bare integers as bytes', () => {
+    expect(parseHumanSize('0')).toBe(0);
+    expect(parseHumanSize('1024')).toBe(1024);
+  });
+  it('handles k/m/g (and kb/mb/gb) suffixes case-insensitively', () => {
+    expect(parseHumanSize('5m')).toBe(5 * 1024 * 1024);
+    expect(parseHumanSize('512K')).toBe(512 * 1024);
+    expect(parseHumanSize('1g')).toBe(1024 ** 3);
+    expect(parseHumanSize('2MB')).toBe(2 * 1024 * 1024);
+    expect(parseHumanSize('1.5m')).toBe(Math.floor(1.5 * 1024 * 1024));
+  });
+  it('throws on invalid input', () => {
+    expect(() => parseHumanSize('abc')).toThrow();
+    expect(() => parseHumanSize('-1')).toThrow();
+    expect(() => parseHumanSize('5x')).toThrow();
+  });
+});
+
+describe('extractRemoteMountCap', () => {
+  it('returns the default 5m when the flag is absent', () => {
+    const r = extractRemoteMountCap(['-c', 'print(1)']);
+    expect(r.remaining).toEqual(['-c', 'print(1)']);
+    expect(r.remoteMountCapBytes).toBe(parseHumanSize(DEFAULT_REMOTE_MOUNT_CAP));
+  });
+  it('parses --remote-mount-cap=<size> and removes it from argv', () => {
+    const r = extractRemoteMountCap(['--remote-mount-cap=10m', '-c', 'pass']);
+    expect(r.remaining).toEqual(['-c', 'pass']);
+    expect(r.remoteMountCapBytes).toBe(10 * 1024 * 1024);
+  });
+  it('parses two-token --remote-mount-cap <size>', () => {
+    const r = extractRemoteMountCap(['--remote-mount-cap', '0', 'script.py']);
+    expect(r.remaining).toEqual(['script.py']);
+    expect(r.remoteMountCapBytes).toBe(0);
+  });
+  it('throws when the two-token form is missing its argument', () => {
+    expect(() => extractRemoteMountCap(['--remote-mount-cap'])).toThrow();
+  });
+});
+
+describe('computeOverlappingMountPoints', () => {
+  function fsWithMounts(mounts: { path: string; kind: 'local' | 's3' | 'da' | 'proc' }[]) {
+    return { listMountPoints: () => mounts } as unknown as IFileSystem;
+  }
+  it('returns [] when the FS does not expose listMountPoints (test stub)', () => {
+    expect(computeOverlappingMountPoints({} as IFileSystem, ['/workspace'])).toEqual([]);
+  });
+  it('tags each overlapping mount with its kind, drops internal proc mounts', () => {
+    const fs = fsWithMounts([
+      { path: '/mnt/myapp', kind: 'local' },
+      { path: '/mnt/s3', kind: 's3' },
+      { path: '/workspace/repo', kind: 'da' },
+      { path: '/proc', kind: 'proc' },
+    ]);
+    const out = computeOverlappingMountPoints(fs, ['/workspace', '/mnt', '/tmp']);
+    expect(out).toEqual([
+      { path: '/mnt/myapp', kind: 'local' },
+      { path: '/mnt/s3', kind: 's3' },
+      { path: '/workspace/repo', kind: 'da' },
+    ]);
+  });
+  it('drops mounts that do not overlap any sync dir', () => {
+    const fs = fsWithMounts([
+      { path: '/somewhere-else', kind: 's3' },
+      { path: '/workspace/x', kind: 'local' },
+    ]);
+    const out = computeOverlappingMountPoints(fs, ['/workspace']);
+    expect(out).toEqual([{ path: '/workspace/x', kind: 'local' }]);
   });
 });

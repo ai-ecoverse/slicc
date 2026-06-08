@@ -33,7 +33,13 @@ import type { CommandContext } from 'just-bash';
 import type { ProcessKind, ProcessManager, ProcessOwner } from '../process-manager.js';
 import { attachRealmHost, type RealmHostHandle } from './realm-host.js';
 import type { RealmPortLike } from './realm-rpc.js';
-import type { RealmDoneMsg, RealmErrorMsg, RealmInitMsg, RealmKind } from './realm-types.js';
+import type {
+  RealmDoneMsg,
+  RealmErrorMsg,
+  RealmInitMsg,
+  RealmKind,
+  RealmMountPoint,
+} from './realm-types.js';
 
 // ---------------------------------------------------------------------------
 // Realm abstraction
@@ -106,6 +112,23 @@ export interface RunInRealmOptions {
    * `flushOpfsRealmMounts` before `realm-done`.
    */
   opfsMountDbName?: string;
+  /**
+   * Forwarded to `RealmInitMsg.mountPoints` — VFS mount points
+   * overlapping {@link pyodideMountDirs}. The Python realm worker
+   * materializes these via the `vfs` RPC channel into a MEMFS subtree
+   * mounted over the OPFS placeholder so Python sees real backend
+   * content instead of the empty placeholder. Currently only consumed
+   * when `kind:'py'`.
+   */
+  mountPoints?: RealmMountPoint[];
+  /**
+   * Forwarded to `RealmInitMsg.remoteMountCapBytes` — cap on the
+   * combined size of remote-backend ({@link mountPoints}) content the
+   * realm will materialize. Cap exceeded → realm aborts before
+   * fetching bodies and fails with an actionable error. `0` skips
+   * remote materialization entirely. Only consumed when `kind:'py'`.
+   */
+  remoteMountCapBytes?: number;
   /**
    * Override the `ProcessKind` used to register the process. Defaults
    * to `'jsh'` (Python migration overrides this with `'py'` once the
@@ -228,6 +251,8 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
       pyodideIndexURL: opts.pyodideIndexURL,
       pyodideMountDirs: opts.pyodideMountDirs,
       opfsMountDbName: opts.opfsMountDbName,
+      mountPoints: opts.mountPoints,
+      remoteMountCapBytes: opts.remoteMountCapBytes,
     };
     realm.controlPort.postMessage(init);
   });

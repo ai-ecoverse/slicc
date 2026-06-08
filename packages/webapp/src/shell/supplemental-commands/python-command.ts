@@ -24,6 +24,7 @@ import {
 } from '../../kernel/realm/realm-factory.js';
 import type { RealmFactory } from '../../kernel/realm/realm-runner.js';
 import { runInRealm } from '../../kernel/realm/realm-runner.js';
+import type { RealmMountPoint } from '../../kernel/realm/realm-types.js';
 import { stdinAsText } from '../just-bash-compat.js';
 
 /**
@@ -100,6 +101,97 @@ export async function computePyodideMountDirs(
   return dirs;
 }
 
+/** Default cap for combined remote (s3/da) mount content materialized into the realm. */
+export const DEFAULT_REMOTE_MOUNT_CAP = '5m';
+
+/**
+ * Parse a human-readable size spec ('5m', '512k', '1g', '0', or a
+ * bare integer). Returns the byte count. Case-insensitive suffix;
+ * accepts `k`, `kb`, `m`, `mb`, `g`, `gb`. Throws on invalid input.
+ *
+ * `0` is allowed and means "no remote-mount materialization" — the
+ * realm short-circuits and remote mounts appear empty.
+ */
+export function parseHumanSize(spec: string): number {
+  const m = /^(\d+(?:\.\d+)?)\s*([kmg]b?)?$/i.exec(spec.trim());
+  if (!m) throw new Error(`invalid size '${spec}'`);
+  const n = parseFloat(m[1]);
+  if (!Number.isFinite(n) || n < 0) throw new Error(`invalid size '${spec}'`);
+  const unit = (m[2] ?? '').toLowerCase();
+  const mult =
+    unit === '' ? 1 : unit.startsWith('k') ? 1024 : unit.startsWith('m') ? 1024 * 1024 : 1024 ** 3;
+  return Math.floor(n * mult);
+}
+
+/**
+ * Extract the `--remote-mount-cap=<size>` (or two-token `--remote-mount-cap <size>`)
+ * flag from `args`, returning the parsed byte count + the residual argv
+ * with the flag removed. Default is {@link DEFAULT_REMOTE_MOUNT_CAP} when
+ * the flag is absent. Throws on invalid size strings; callers translate
+ * the throw into a usage error.
+ */
+export function extractRemoteMountCap(args: string[]): {
+  remaining: string[];
+  remoteMountCapBytes: number;
+} {
+  let cap = parseHumanSize(DEFAULT_REMOTE_MOUNT_CAP);
+  const remaining: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const tok = args[i];
+    if (tok.startsWith('--remote-mount-cap=')) {
+      cap = parseHumanSize(tok.slice('--remote-mount-cap='.length));
+      continue;
+    }
+    if (tok === '--remote-mount-cap') {
+      const next = args[i + 1];
+      if (next === undefined) throw new Error("option '--remote-mount-cap' requires an argument");
+      cap = parseHumanSize(next);
+      i++;
+      continue;
+    }
+    remaining.push(tok);
+  }
+  return { remaining, remoteMountCapBytes: cap };
+}
+
+/**
+ * Compute the set of user-visible VFS mount points that overlap any
+ * of `syncDirs`. A mount overlaps when its path is exactly a syncDir,
+ * is contained within a syncDir, or is an ancestor of a syncDir. Each
+ * overlapping mount is tagged with its backend `kind` so the realm
+ * can distinguish remote mounts (cap-subject) from local FS Access
+ * mounts (always materialized). Internal mounts (`/proc`, …) are
+ * skipped by `VirtualFS.listMountPoints`.
+ *
+ * Returns `[]` when the wrapped FS doesn't expose `listMountPoints`
+ * (test stubs, scoop-restricted FS) — the realm then runs without any
+ * mount materialization, identical to the legacy OPFS-only path.
+ */
+export function computeOverlappingMountPoints(
+  fs: CommandContext['fs'],
+  syncDirs: readonly string[]
+): RealmMountPoint[] {
+  const wrapped = fs as unknown as {
+    listMountPoints?: () => { path: string; kind: 'local' | 's3' | 'da' | 'proc' }[];
+  };
+  if (typeof wrapped.listMountPoints !== 'function') return [];
+  const overlap = (mountPath: string): boolean => {
+    for (const dir of syncDirs) {
+      if (mountPath === dir) return true;
+      if (mountPath.startsWith(dir === '/' ? '/' : dir + '/')) return true;
+      if (dir.startsWith(mountPath + '/')) return true;
+    }
+    return false;
+  };
+  const out: RealmMountPoint[] = [];
+  for (const entry of wrapped.listMountPoints()) {
+    if (entry.kind === 'proc') continue;
+    if (!overlap(entry.path)) continue;
+    out.push({ path: entry.path, kind: entry.kind });
+  }
+  return out;
+}
+
 /**
  * The kernel worker's VFS lives at `OPFS-root/slicc-fs/`. We pass
  * the dbName through `RealmInitMsg.opfsMountDbName` so the Python
@@ -164,6 +256,24 @@ export function createPython3LikeCommand(
   return defineCommand(name, async (args, ctx) => {
     if (args.includes('--help') || args.includes('-h')) return pythonHelp();
     if (args.includes('--version') || args.includes('-V')) return pythonVersion();
+
+    // Strip `--remote-mount-cap=<size>` (or `--remote-mount-cap <size>`)
+    // before main arg parsing so the rest of the parser doesn't trip on
+    // it. Default cap applies when the flag is absent.
+    let remoteMountCapBytes: number;
+    let parsedArgs: string[];
+    try {
+      const extracted = extractRemoteMountCap(args);
+      parsedArgs = extracted.remaining;
+      remoteMountCapBytes = extracted.remoteMountCapBytes;
+    } catch (err) {
+      return {
+        stdout: '',
+        stderr: `${name}: ${err instanceof Error ? err.message : String(err)}\n`,
+        exitCode: 2,
+      };
+    }
+    args = parsedArgs;
 
     let code = '';
     let filename = '<stdin>';
@@ -231,6 +341,11 @@ export function createPython3LikeCommand(
     // VFS→Pyodide-FS before exec and Pyodide-FS→VFS after, so file
     // writes from Python persist back through the kernel's VFS.
     const syncDirs = await computePyodideMountDirs(ctx.fs);
+    // Tag every mount that overlaps the sync dirs with its backend
+    // `kind` so the realm can distinguish local FS Access mounts
+    // (always materialized) from remote (s3/da) mounts (subject to
+    // `remoteMountCapBytes`).
+    const mountPoints = computeOverlappingMountPoints(ctx.fs, syncDirs);
 
     const pm = options ? lookupGlobalPm() : null;
     const owner: ProcessOwner = { kind: 'system' };
@@ -257,6 +372,8 @@ export function createPython3LikeCommand(
         pyodideIndexURL,
         pyodideMountDirs: syncDirs,
         opfsMountDbName,
+        mountPoints,
+        remoteMountCapBytes,
       });
     }
 
@@ -276,6 +393,8 @@ export function createPython3LikeCommand(
       pyodideIndexURL,
       pyodideMountDirs: syncDirs,
       opfsMountDbName,
+      mountPoints,
+      remoteMountCapBytes,
       procKind: 'py',
     });
   });
@@ -314,6 +433,8 @@ async function runWithEphemeralPm(args: {
   pyodideIndexURL: string;
   pyodideMountDirs: string[];
   opfsMountDbName: string | undefined;
+  mountPoints?: RealmMountPoint[];
+  remoteMountCapBytes?: number;
 }) {
   if (!EphemeralPm) {
     const { ProcessManager: PM } = await import('../../kernel/process-manager.js');
@@ -334,6 +455,8 @@ async function runWithEphemeralPm(args: {
     stdin: args.stdin,
     pyodideIndexURL: args.pyodideIndexURL,
     pyodideMountDirs: args.pyodideMountDirs,
+    mountPoints: args.mountPoints,
+    remoteMountCapBytes: args.remoteMountCapBytes,
     opfsMountDbName: args.opfsMountDbName,
     procKind: 'py',
   });
