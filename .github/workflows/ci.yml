@@ -74,6 +74,7 @@ jobs:
             root-config:
               - 'package.json'
               - 'package-lock.json'
+              - 'patches/**'
               - 'tsconfig*.json'
               - 'vitest*.config.*'
               - '.github/workflows/ci.yml'
@@ -153,7 +154,7 @@ jobs:
             "${{ github.event.pull_request.head.sha }}"
 
   # Lightweight test matrix that re-runs the TypeScript test suites across
-  # supported Node majors (currently 24, 25, and 26). The package engines
+  # tested Node majors (currently 24, 25, and 26). The package engines
   # field is `>=22.13.0`, so any one-version pin in the heavier per-package
   # jobs misses regressions that only surface on newer runtimes (e.g. jsdom
   # + Node >= 25 quirks around vi.unstubAllGlobals + localStorage). Build/E2E

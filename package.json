@@ -70,7 +70,7 @@
     "package:release": "node dist/node-server/release-package.js",
     "publish:chrome": "node dist/node-server/publish-chrome-web-store.js",
     "publish:worker": "bash packages/cloudflare-worker/scripts/publish-worker.sh",
-    "postinstall": "if [ -d patches ]; then patch-package; fi && if [ -d packages/shared-ts ]; then npm run build -w @slicc/shared-ts; fi && if [ -d packages/cloud-core ]; then npm run build -w @slicc/cloud-core; fi",
+    "postinstall": "if [ -d patches ]; then npx --no-install patch-package || { echo \"ERROR: patches/ present but patch-package not installed (run a full 'npm ci' incl. devDependencies)\"; exit 1; }; fi && if [ -d packages/shared-ts ]; then npm run build -w @slicc/shared-ts; fi && if [ -d packages/cloud-core ]; then npm run build -w @slicc/cloud-core; fi",
     "prepare": "husky"
   },
   "dependencies": {
