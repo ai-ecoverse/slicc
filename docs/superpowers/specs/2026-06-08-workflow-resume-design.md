@@ -27,21 +27,28 @@ Claude-Code-parity run control, **within the session**: **resume** a stopped/int
 
 - **Cache key = a hash of the agent call's full effective context**, not just the prompt:
   `hash(prompt, canonical(opts.schema), opts.model, opts.agentType, __agentCwd, allowedCommands)`.
-  Distinct calls get distinct keys regardless of initiation order. For **identical** calls that
-  legitimately repeat (e.g. a loop issuing the same prompt), append an **occurrence ordinal**
-  (`key#n`); the ordinal is the one residual order-dependence and is handled best-effort.
-- **Prelude (modify):** at `agent()` entry compute the content hash and pass it on the spawn
-  argv (`--call-key <hash>`); the host assigns the occurrence ordinal per key.
-- **Run manager (modify):** `cache: Map<string, result>` per run. On an `agent` spawn from the
-  exec-tap (which wraps **`ctx.exec`**, per SP2): if the key (with ordinal) is cached → return it
-  (no scoop); else spawn live and cache.
-- **Resume:** `workflow resume <runId>` re-runs the **exact stored source** (`WorkflowRunState.source`)
-  with the existing cache attached; cache hits short-circuit, misses run live.
-- **Best-effort, never stale:** on any ambiguity — ordinal collision, key not seen in the
-  original run (control-flow diverged), or edited source — the manager treats it as a **miss and
-  re-runs** that agent (logged), never returning a stale/mismatched result. Well-behaved
-  deterministic scripts resume cleanly; scripts that leak nondeterminism simply re-run more
-  agents. (Reliable, exact resume is a goal of the deferred realm-native hardening.)
+- **Uniqueness rule (codex review — no ordinals).** An occurrence ordinal (`key#n`) is *not*
+  safe: when two identical calls replay in swapped order, both `key#1` and `key#2` already exist,
+  so neither is "unseen" and the tap could return the wrong cached result. So: **only cache a
+  content hash that is UNIQUE within the run.** If the same hash occurs ≥2 times, mark it
+  **non-cacheable** → every such call **re-runs live** on resume. This *guarantees* never-stale;
+  the cost is re-running legitimately-identical repeated calls (rare — the determinism guidance is
+  to vary prompts/labels by index, which makes them distinct).
+- **Limitation (codex review — document, don't hide):** the hash covers the *call params* but
+  **cannot** cover agent-visible **workspace/VFS state**. A source-identical resume *after the
+  workspace changed* can return a result computed against the old state. This is an explicit
+  best-effort limitation, not a correctness guarantee.
+- **Prelude (modify):** at `agent()` entry compute the content hash and pass it on the spawn argv
+  (`--call-key <hash>`).
+- **Run manager (modify):** `cache: Map<string, result>` of **unique** keys per run (+ a set of
+  keys seen ≥2× = non-cacheable). The exec-tap (which wraps **`ctx.exec`**, per SP2): cached &
+  unique → return it (no scoop); else spawn live.
+- **Resume:** `workflow resume <runId>` re-runs the **stored source** with the **stored
+  invocation inputs** — `WorkflowRunState` must retain not just `source` but `args`, `budget`,
+  `concurrency`, and the prelude/sentinel version, so the replay is faithful. Cache hits
+  short-circuit, everything else runs live.
+- **Best-effort, never stale:** unique-key hit → reuse; duplicate/unseen-key/edited-source → re-run
+  (logged). Reliable exact resume is a goal of the deferred realm-native hardening.
 
 ## 4. Pause / resume
 
@@ -54,7 +61,7 @@ Pause is **cooperative and lives entirely in the run manager's exec-tap** (no pr
 
 ## 5. Restart-agent
 
-`workflow restart <runId> <callKey>` invalidates `cache[callKey]` and re-spawns that one agent. **Codex review — two regimes:**
+`workflow restart <runId> <callKey>` invalidates `cache[callKey]` and re-spawns that one agent. `callKey` is the **content hash** (only *unique*, cacheable keys are restartable — non-unique/duplicate calls aren't individually addressable, consistent with the §3 uniqueness rule). **Codex review — two regimes:**
 
 - **Settled run (the supported path):** restart invalidates the cache entry and re-runs via the **resume** path (§3) from that point. Clean and naturally promise-compatible.
 - **Live, already-resolved or in-flight call:** "replacing" a pending/awaited `agent()` result in place is **not supported by today's `AgentBridge`** — `spawn()` awaits `sendPrompt` and exposes **no jid / cancel handle / pending resolver** (`scoops/agent-bridge.ts`). Doing this needs **new bridge + run-manager control plumbing** (a cancel handle + a way to replace a pending tap promise). SP5 therefore scopes restart to the **settled-run resume path**; live in-place restart is **backlog** pending that plumbing.
@@ -84,7 +91,7 @@ run interrupted (stop / agent crash) — cache holds completed agents' results (
 
 ## 8. Error handling
 
-- **Hash mismatch on resume** (edited script / leaked nondeterminism) → cache miss for that idx, re-run live, log a warning. No stale results.
+- **Unseen key / edited script / non-unique hash** → not a cache hit, re-run live, log a warning. No stale results.
 - **Restart of an already-settled run** → routes through resume (re-run from the invalidated point).
 - **Pause then teardown** → in-memory state lost (no cross-session persistence — by scope); completed result files persist on the VFS.
 
@@ -107,6 +114,6 @@ Cross-session / IndexedDB persistence (separate follow-up); approval card; budge
 
 ## 12. Open questions (resolve during planning)
 
-1. `(prompt, opts)` hash function + how strict the mismatch policy is.
-2. Restart-agent semantics when the run is still live and concurrently awaiting that index (replace in place vs. resume-from-point).
-3. Whether pause should also surface to a workflow's progress sprinkle (SP4) as a `paused` status (it should — it's already in `WorkflowRunState.status`).
+1. Exact content-hash function + canonicalization (schema/opts ordering) — keep it stable across runs.
+2. ~~Live restart semantics~~ — **resolved:** restart is scoped to the settled-run resume path; live in-place restart is backlog (needs new `AgentBridge` cancel/replace plumbing) — see §5.
+3. `paused` surfaces to SP4's progress view via `WorkflowRunState.status` (already in the SP2 enum).

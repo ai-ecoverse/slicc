@@ -24,10 +24,11 @@ Make a running workflow's progress **visible** — a minimal inline glance out o
 
 ### Subscription bridge
 
-SP2 exposes `observeRun(runId, handler)`. SP4 adds a **bridge** that connects that stream to the **existing** sprinkle/dip push mechanisms — **codex review corrected the wire shapes** (the earlier "route like sprinkle licks / a new `wf-progress` shape" was wrong: sprinkle licks go to the *cone/agent* handler, not a UI subscription, and `wf-progress` isn't an existing push):
+SP2 exposes `observeRun(runId, handler)`. The push direction (host→panel) already exists; the **subscribe direction (panel→host) does not** (codex review: today's `sprinkle-op` transports are worker/offscreen→page manager proxies, and the public `.shtml` bridge has no subscribe/request method). SP4 handles this by **splitting the two consumers**:
 
-- **panel→host (subscribe):** route through the **sprinkle bridge op channel** (`ui/sprinkle-bridge.ts` / the offscreen `sprinkle-proxy`), **not** the lick path — a `subscribe-workflow`/`unsubscribe-workflow` op handled host-side by the bridge (so it reaches the run manager, not the cone).
-- **host→panel (push):** reuse the **real** shapes — for sprinkles, `SprinkleManager.sendToSprinkle(name, data)` → `slicc.on('update')`; for dips, the existing `slicc-*` host-push / `broadcastToDips` channel (dips already support host→panel push — the earlier "lick-only/post-stream" claim was stale).
+- **Built-in minimal dip — NO ingress needed (the default path).** Because the dip is **manager-injected** (the manager creates it and knows its id + the `runId`), the manager simply **pushes** `observeRun` snapshots to that dip via the existing host→panel channel — no panel→host subscribe is required. This is the path that must work for SP1+SP2.
+- **User-authored sprinkles subscribing to an arbitrary run — needs a NEW ingress.** This requires a new **panel→host `subscribe-workflow`/`unsubscribe-workflow` op** on the sprinkle/dip bridge (a reverse-direction op that doesn't exist yet) plus a `.shtml` `slicc.subscribeWorkflow(runId)` API. SP4 specifies it, but it can land *after* the built-in dip (it's the extensibility tier, not the acceptance path).
+- **host→panel (push), the real shapes:** for sprinkles, `SprinkleManager.sendToSprinkle(name, data)` → `slicc.on('update')`; for dips, the existing `slicc-*` host-push / `broadcastToDips` channel (dips already support host→panel push).
 - **Subscription identity + cleanup (codex review):** a subscription is keyed by `{ runId, subscriberId }` (a sprinkle name or a dip instance id), **not** `runId` alone — multiple panels can watch one run. The consumer's dispose path **must** drop its `observeRun` listener (anonymous dips broadcast today, so SP4 adds explicit per-subscriber teardown to avoid leaked observers).
 - **Coalescing (codex review):** `sendToSprinkle`/the bridge have no coalescing and the tray fan-out broadcasts every update — so the bridge **throttles/coalesces** snapshots (e.g. trailing-edge per animation frame / ~250 ms) and sends `logs` as deltas, not the full array each tick.
 - **Dual-mode (corrected path):** standalone worker→page uses the **BroadcastChannel sprinkle bridge** (`scoops/sprinkle-bridge-channel.ts`); extension offscreen→panel uses the **`sprinkle-proxy`** + side-panel op handler. (The tray `sprinkle.update` path is *remote follower replication*, not this local path — do not use it.)
@@ -38,7 +39,7 @@ The bridge is the entire reusable surface — the minimal dip and any workflow-p
 
 When a non-blocking run starts, the **run manager injects** a small ` ```shtml ` progress dip into the chat (decided 2026-06-08 — reliable, not dependent on the model emitting it). The dip subscribes (via the sprinkle bridge op) and renders snapshots in place via the dip `slicc-*` push channel.
 
-**Injection path (codex review):** a worker/offscreen→chat dip injection is needed; the precedent is the page-side `postDipReference` used by onboarding (`ui/onboarding-orchestrator.ts`). SP4 wires the run manager's launch to that path (worker/offscreen → page → chat). Dips already support host→panel push (`slicc-*`/`broadcastToDips`), so **no new inline-sprinkle primitive is invented** (the earlier "lightweight inline sprinkle" idea is dropped — `SprinkleManager.open()` makes a tab/panel, not an inline element; the inline `.shtml` primitive *is* the dip).
+**Injection path (codex review):** a worker/offscreen→chat dip injection is needed; the precedent is `postDipReference` (`scoops/onboarding-orchestrator.ts`, wired in `ui/main.ts`). SP4 wires the run manager's launch to that path (worker/offscreen → page → chat). Dips already support host→panel push (`slicc-*`/`broadcastToDips`), so **no new inline-sprinkle primitive is invented** (the earlier "lightweight inline sprinkle" idea is dropped — `SprinkleManager.open()` makes a tab/panel, not an inline element; the inline `.shtml` primitive *is* the dip).
 
 ### Components (files)
 
@@ -61,9 +62,9 @@ workflow run (non-blocking) → run starts (SP2)
 
 ## 5. Testing
 
-- **Bridge:** `wf-subscribe` yields an initial snapshot then one push per `observeRun` tick; `wf-unsubscribe` stops pushes; `wf-done` on settle.
-- **Dip/sprinkle render:** a subscribing panel updates in place as snapshots arrive (mock the bridge).
-- **Dual-mode:** standalone page path and the extension offscreen→panel sprinkle-sync path both deliver `wf-progress`.
+- **Built-in dip push:** the manager injects a dip and pushes coalesced `observeRun` snapshots to it via the real host→panel dip channel (`slicc-*`/`broadcastToDips`); the dip renders in place and shows the final status on settle. Assert coalescing (N rapid `observeRun` ticks → ≤1 push per window) and that dispose drops the `observeRun` listener (no leak).
+- **Subscribe ingress (extensibility):** the new `subscribe-workflow`/`unsubscribe-workflow` op delivers an initial snapshot then coalesced updates to a subscribing sprinkle; `unsubscribe`/dispose stops them.
+- **Dual-mode:** standalone worker→page via the BroadcastChannel sprinkle bridge; extension offscreen→panel via `sprinkle-proxy` + the side-panel op handler (NOT tray follower-sync).
 
 ## 6. Documentation
 

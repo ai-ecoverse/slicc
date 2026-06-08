@@ -164,10 +164,10 @@ see §13.)
 
 | Unit | File | Responsibility |
 | --- | --- | --- |
-| `workflow` command | `shell/supplemental-commands/workflow-command.ts` (new) | Parse `meta` statically; build `prelude + transformed script`; run it (offscreen-proxied in ext, see below); split the sentinel result line out of stdout; print the result + the run log. |
-| workflow prelude | `shell/supplemental-commands/workflow-prelude.ts` (new) | A JS string: determinism guard (const-shadow `Date`/`Math`); capture `exec.spawn` then null `fs`/`exec`/`fetch`/`require`; define `agent`/`parallel`/`pipeline`/`phase`/`log`/`budget`/`args`/`workflow`; the concurrency semaphore + caps. |
-| script transform | inside `workflow-command.ts` | Strip `export` off `const meta`; wrap the remaining body in `const __r = await (async () => { … })();`; append `console.log(SENTINEL + JSON.stringify(__r ?? null))`. |
-| `agent --schema` extension | `shell/supplemental-commands/agent-command.ts` + `scoops/agent-bridge.ts` + `scoops/types.ts` + `scoops/scoop-context.ts` | New `--schema-b64` (and `--model` already exists) flag → `AgentSpawnOptions.structuredOutputSchema` → `ScoopConfig.structuredOutputSchema` → `ScoopContext` injects a `StructuredOutput` `ToolDefinition`, forces `toolChoice` via the `streamWithSessionId` wrapper, captures validated args via an `afterToolCall` hook, and the bridge returns the captured JSON as `finalText`. **The main net-new agent-side work.** |
+| `workflow` command | `shell/supplemental-commands/workflow-command.ts` (new) | Parse `meta` statically; build `prelude + transformed script`; run via `executeJsCode` (no proxy — panel terminal is already offscreen-backed); split the random-sentinel result line out of stdout; print the result + the run log. |
+| workflow prelude | `shell/supplemental-commands/workflow-prelude.ts` (new) | A JS string: determinism guard (const-shadow `Date`/`Math`/`crypto`/`performance`/timers/`globalThis`); capture `exec.spawn` + `cwd` from `__WF`, then null the **full** injected param set (`exec`/`fs`/`fetch`/`require`/`process`/`module`/`exports`/`skill`/`http`/`browser`/`usb`/`serial`/`hid`/`cli`/`c`/`time`/`fmt`/`pool`); define `agent`/`parallel`/`pipeline`/`phase`/`log`/`budget`/`args`/`workflow`; the concurrency semaphore + caps. |
+| script transform | inside `workflow-command.ts` | Strip `export` off `const meta`; wrap the remaining body in `const __r = await (async () => { … })();`; append `console.log(<random sentinel> + JSON.stringify(__r ?? null))`. |
+| `agent --schema` extension | `shell/supplemental-commands/agent-command.ts` + `scoops/agent-bridge.ts` + `scoops/types.ts` + `scoops/scoop-context.ts` | New `--schema-b64` flag (`--model` already exists) → `AgentSpawnOptions.structuredOutputSchema` → `ScoopConfig.structuredOutputSchema` → `ScoopContext` injects a `StructuredOutput` `ToolDefinition`, **instructs** the scoop (via `systemPromptAppend`) that calling it is how it returns (**not** a global `toolChoice` force — that would block its research; see §7), captures validated args via an `afterToolCall` hook, ≤2 nudges, and the bridge returns the captured JSON as `finalText`. **The main net-new agent-side work.** |
 | ~~offscreen proxy~~ | — | **Removed.** The panel terminal is already offscreen-backed (`RemoteTerminalView`→`TerminalSessionHost`), so terminal and cone runs both execute in offscreen with no extra wiring. |
 
 ### How `agent()` works (no new RPC)
@@ -183,7 +183,8 @@ async function agent(prompt, opts = {}) {
     const argv = ['agent',
       ...(opts.model ? ['--model', opts.model] : []),
       ...(opts.schema ? ['--schema-b64', b64utf8(JSON.stringify(opts.schema))] : []),
-      __agentCwd, '*', String(prompt)];      // see cwd note below
+      '--read-only', '/workspace/',           // constrain READ scope (panel cwd is '/' — see note)
+      __agentCwd, '*', String(prompt)];       // __agentCwd = WRITE scope (per-run scratch; created by the command)
     const r = await __execSpawn(argv);       // captured ref to exec.spawn
     if (r.exitCode !== 0) return null;       // failed/skipped → null (CC contract)
     return opts.schema ? JSON.parse(r.stdout) : r.stdout.replace(/\n+$/, '');
@@ -191,11 +192,15 @@ async function agent(prompt, opts = {}) {
 }
 ```
 
-**`agent()` cwd (codex review):** the spawned scoop's writable prefix must NOT default to the
-invoking realm cwd — in the extension panel that's `/`, and `AgentBridge` would make `/` writable
-for every fan-out agent. Use a **constrained per-run prefix** `__agentCwd` (e.g.
-`/shared/workflow-runs/<runId>/scratch/`, supplied via `__WF`); agents still read `/workspace`
-read-only via the bridge defaults.
+**`agent()` cwd + read-scope (codex review):** the spawned scoop's writable prefix must NOT
+default to the invoking realm cwd — in the extension panel that's `/`, and `AgentBridge` would
+make `/` writable AND union the invoking cwd (`/`) into the read set, exposing the whole VFS.
+Fixes: (1) **write scope** = a constrained per-run prefix `__agentCwd`
+(`/shared/workflow-runs/<runId>/scratch/`, supplied via `__WF`); (2) **read scope** = pass
+`--read-only /workspace/` explicitly (pure-replace, so the implicit `/` read add is dropped);
+(3) the **command/​run-manager must `mkdir` `__agentCwd` before the run** — `agent` rejects a
+missing cwd *before* spawning (`agent-command.ts`), so without it every `agent()` degrades to
+`null`.
 
 ### Isolation & determinism (with the honest caveat)
 
@@ -371,16 +376,16 @@ the prelude (§5 "Caps").
 
 ```
 workflow run audit.js [--args JSON] [--budget N] [--concurrency K]        (shell command)
-   │ parse meta (static) ; code = prelude + transform(strip export, wrap IIFE, append sentinel)
-   │ EXT & side-panel shell? → forward run to offscreen (chrome.runtime)  ;  else run in-place
+   │ parse meta (static) ; code = prelude + transform(strip export, wrap IIFE, append random sentinel)
+   │ mkdir /shared/workflow-runs/<runId>/scratch/  (so the agent cwd exists)
    ▼
-executeJsCode(code, ['workflow', file], ctx)                       (existing; kind:'js')
+executeJsCode(code, ['workflow', file], ctx)                       (existing; kind:'js'; offscreen in ext)
    │ runInRealm → Worker[standalone] / sandbox-iframe[ext, parented to offscreen]
    ▼
 [ realm: prelude + wrapped user script ]
-   │ determinism guard ; const __execSpawn = exec.spawn ; exec/fs/fetch/require = undefined
+   │ determinism guard ; const __execSpawn = exec.spawn ; null the FULL injected param set
    │ agent("audit X",{schema}) → sem.acquire(≤4) ; ++total≤1000
-   │    __execSpawn(['agent','--schema-b64',b64, cwd,'*',prompt])
+   │    __execSpawn(['agent','--schema-b64',b64,'--read-only','/workspace/', __agentCwd,'*',prompt])
    │       → host WasmShell `agent` → __slicc_agent → ephemeral scoop
    │       → (schema: StructuredOutput tool + afterToolCall capture) → JSON/text on stdout
    │    ← parse ; exit≠0 → null  ⇒ resolves agent()
@@ -427,11 +432,12 @@ workflow run --script '<inline js>' [...]          # inline script, no temp file
 
 Vitest, mirroring `packages/webapp/tests/` by subsystem; `fake-indexeddb/auto` where VFS is touched.
 
-- **Unit — prelude:** `parallel` returns nulls for failing thunks and never rejects;
-  `pipeline` streams per-item (assert item A reaches stage 2 before item B finishes stage 1
-  via a controllable mock), drops a throwing item to `null`, passes `(prev, item, index)`;
-  `parallel`/`pipeline` reject at `> 4096` items; determinism guard throws on
-  `Date.now`/`Math.random`/`new Date()`.
+- **Unit — prelude:** `parallel` maps failing thunks to `null` (never rejects) **but rethrows
+  fatal `WorkflowError`s** (cap/budget/determinism) instead of swallowing them; `pipeline`
+  streams per-item (assert item A reaches stage 2 before item B finishes stage 1 via a
+  controllable mock), drops a throwing item to `null` (same fatal exception), passes
+  `(prev, item, index)`; `parallel`/`pipeline` reject at `> 4096` items; determinism guard throws
+  on `Date.now`/`Math.random`/`new Date()` **and** `crypto.randomUUID`/`performance.now`/`setTimeout`.
 - **Unit — prelude caps:** the semaphore never exceeds the configured cap (default 4); the
   1000-total counter throws at 1001; `> 4096` items throws; `budget` is a no-op stub (`spent()===0`).
 - **Unit — script transform:** `export const meta` is stripped, the body wraps in an async IIFE,
@@ -481,8 +487,10 @@ Resolved by the 2026-06-08 cross-check (three investigation passes; file:line co
   `runInRealm({kind:'js'})` **unchanged**; it already picks worker (standalone) vs sandbox
   iframe (extension). No new kind, no `sandbox.html` change.
 - **Global injection & suppression** — *resolved.* The realm compiles user code as an
-  `AsyncFunction` with the globals as **named params**; const-shadow `Date`/`Math`, and
-  capture-then-null the `exec`/`fs`/`fetch`/`require` params.
+  `AsyncFunction` with the globals as **named params**; const-shadow `Date`/`Math`/`crypto`/
+  `performance`/timers/`globalThis`, and capture-then-null the **full** injected param set
+  (`exec`/`fs`/`fetch`/`require`/`process`/`module`/`exports`/`skill`/`http`/`browser`/`usb`/
+  `serial`/`hid`/`cli`/`c`/`time`/`fmt`/`pool`).
 - **Return-value capture** — *resolved.* The realm discards the body's return value, so we use
   the **IIFE + stdout sentinel** (no `realm-done` change).
 - **`StructuredOutput` injection point** — *resolved.* Tool assembly at `scoop-context.ts:406`;

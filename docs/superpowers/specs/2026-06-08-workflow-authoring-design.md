@@ -23,9 +23,9 @@ Make workflows ergonomic and SLICC-native: teach the **cone** to write and run a
 
 ## 3. Architecture
 
-### The cone skill (the trigger)
+### The workflow skill (the trigger)
 
-A native skill package bundled via `packages/vfs-root/workspace/skills/workflows/SKILL.md`, auto-loaded into the system prompt by the skills engine (progressive disclosure — the cone reads the full body on demand). Content: the globals + semantics (from the spec §3 API table), the "when to use a workflow" guidance (codebase-wide sweeps, large migrations, cross-checked research, multi-angle planning), an authoring example, and the run/results model (non-blocking; result arrives as a new turn with a path + preview). **No code change makes this a trigger** — the cone simply uses the `workflow` command when the skill tells it to. This is the SLICC-idiomatic "skills over hardcoded features."
+A **native skill** package bundled via `packages/vfs-root/workspace/skills/workflows/SKILL.md`, auto-loaded into the system prompt by the skills engine (progressive disclosure — read the full body on demand). **Note (codex review):** native `/workspace/skills` are loaded by *every* scoop context (`scoop-context.ts`), not just the cone — so this is a "native workflow skill," not literally cone-only. That's fine (any agent that can run `workflow` benefits); if cone-only gating is ever wanted it's a separate skill-scoping feature. Content: the globals + semantics (from the spec §3 API table), the "when to use a workflow" guidance (codebase-wide sweeps, large migrations, cross-checked research, multi-angle planning), an authoring example, and the run/results model (non-blocking; result arrives as a new turn with a path + preview). **No code change makes this a trigger** — the cone simply uses the `workflow` command when the skill tells it to. This is the SLICC-idiomatic "skills over hardcoded features."
 
 ### Save
 
@@ -33,21 +33,24 @@ A native skill package bundled via `packages/vfs-root/workspace/skills/workflows
 
 ### Discovery → bare command
 
-A new `workflow-discovery.ts` (mirroring `jsh-discovery.ts`) scans the standard roots for `*.workflow.js` and feeds the shared `ScriptCatalog` (`shell/script-catalog.ts`), which already powers `which`/command resolution for `.jsh`. Each discovered file registers a command named by its basename (minus `.workflow.js`).
+**Codex review correction:** `ScriptCatalog` (`shell/script-catalog.ts`) is only a *discovery/cache* service — it does **not** register commands. Bare-command registration lives in **`WasmShellHeadless.doSyncJshCommands`** (`shell/wasm-shell-headless.ts`), which today scans `.jsh` and registers each name routing to `executeJsCode`. So SP3 owns changes there, not just a new discovery file:
 
-- **Routing nuance (must not reuse the `.jsh` path):** a `.jsh` command runs its file *as a jsh script* via `executeJsCode`. A `.workflow.js` command must instead route to the **workflow runner** (parse `meta` → build prelude+transform → `WorkflowRunManager.start`), **not** `executeJsCode` on the raw file. So discovery registers a handler whose body is the workflow run-path. Two implementations to weigh in planning: (a) give `ScriptCatalog` a per-type handler so a discovered `.workflow.js` resolves to a workflow-runner command; or (b) the discovery synthesizes a command that simply shells `workflow run <path>` (zero catalog change, one indirection). Confirm `ScriptCatalog` can host a typed third entry (option a) vs. forking (option b).
-- Runs **non-blocking by default** (consistent with SP2's `workflow run`); `--wait` honored. A trailing JSON argument is forwarded as `args`.
-- Discovery roots (SP3): `/workspace/.workflows/` (saved) plus the existing catalog roots, so a workflow dropped anywhere reachable is runnable. (Skill-bundled workflows under `/workspace/skills/*/` can be added later if useful.)
-- Collision/precedence: built-in supplemental commands win over discovered `*.workflow.js`; among discovered files, first-found wins (catalog's existing rule), logged on shadow.
+- **Registration owner + routing:** add `*.workflow.js` discovery (`shell/workflow-discovery.ts`) feeding `ScriptCatalog`, **and** extend `WasmShellHeadless` to register each discovered name with a handler that routes to the **workflow runner** (parse `meta` → build prelude+transform → `WorkflowRunManager.start`) — **never** `executeJsCode` on the raw file (that would run it as a trusted jsh script with full fs/exec). Concretely: an in-memory command wrapper that calls the `workflow run` path (keeps the single-file goal; no on-disk `.jsh` shim).
+- **Save → re-sync:** today `syncJshCommands()` runs once at startup and the watcher only reacts to `.jsh` paths. `workflow save` must trigger a workflow re-sync (or extend the watcher to `*.workflow.js`) so the new bare command appears without a reload.
+- **`which`/`commands` visibility:** these are `.jsh`-specific (`SupplementalCommandsConfig.getJshCommands`, `which-command.ts`, `help-command.ts`). Add a parallel `getWorkflowCommands` so saved workflows show in `which`/`commands` with a "workflow" label.
+- **`args` coercion (align with SP1):** match `workflow run`'s `--args <json>` — a single trailing argument is parsed as JSON when valid, else passed as a string; multiple positional args → a string array; no arg → `undefined`. (Resolves the SP1↔SP3 conflict: `args` is real JSON, not a stringified list.) `--wait` honored.
+- **Cross-type precedence:** built-in supplemental commands win over both `.jsh` and `.workflow.js`. Between a `foo.jsh` and a `foo.workflow.js`, define a deterministic order (e.g. `.jsh` wins, since it predates workflows) rather than sync-order; log the shadow. Among `*.workflow.js`, first-found wins (catalog rule).
+- Discovery roots: `/workspace/.workflows/` (saved) plus the existing catalog roots.
 
 ### Components (files)
 
 | Unit | File | Responsibility |
 | --- | --- | --- |
-| cone skill | `packages/vfs-root/workspace/skills/workflows/SKILL.md` (new) | Teach the API + when/how to author & run a workflow. |
-| `workflow save` | `shell/supplemental-commands/workflow-command.ts` (modify) | Persist a run's `source` to `/workspace/.workflows/<name>.workflow.js`. |
-| discovery | `shell/workflow-discovery.ts` (new) + `shell/script-catalog.ts` (modify) | Discover `*.workflow.js`; register each as a bare command. |
-| saved-command runner | `shell/supplemental-commands/workflow-command.ts` (modify) | The discovered command path: read file → build code → run via the run manager → pass `args`. |
+| workflow skill | `packages/vfs-root/workspace/skills/workflows/SKILL.md` (new) | Teach the API + when/how to author & run a workflow (native skill; loaded by all scoops). |
+| `workflow save` | `shell/supplemental-commands/workflow-command.ts` (modify) | Persist a run's `source` to `/workspace/.workflows/<name>.workflow.js`; trigger a workflow re-sync. |
+| discovery | `shell/workflow-discovery.ts` (new) + `shell/script-catalog.ts` (modify) | Discover `*.workflow.js`; feed the catalog (discovery/cache only). |
+| **registration + routing** | `shell/wasm-shell-headless.ts` (modify) | Register each discovered name as a bare command whose handler routes to the **workflow runner** (not `executeJsCode`); watcher/`save` re-sync; cross-type precedence. |
+| `which`/`commands` visibility | `shell/supplemental-commands/{index,which-command,help-command}.ts` (modify) | Add `getWorkflowCommands` so saved workflows appear with a "workflow" label. |
 
 ## 4. Data flow
 
@@ -79,6 +82,11 @@ Keyword/`ultracode` triggers; `.claude/workflows/` layout; plugins/marketplaces/
 
 ## 8. Open questions (resolve during planning)
 
-1. Confirm `ScriptCatalog` can host a third discovered type cleanly (vs. forking a parallel catalog).
-2. `args` coercion rule for the saved-command path (single JSON arg vs. multiple positional args → array).
-3. Whether a discovered command should run **non-blocking by default** (consistent with SP2's `workflow run`) — yes, with `--wait` honored.
+Resolved by the codex review (now in §3): registration owner is `WasmShellHeadless` (not
+`ScriptCatalog`, which is discovery-only) routing to the workflow runner; `args` coercion matches
+`workflow run --args` (JSON-or-string, multi→array, none→undefined); non-blocking default with
+`--wait`; `save`→re-sync; `which`/`commands` plumbing; deterministic `.jsh`-vs-`.workflow.js`
+precedence; "native workflow skill" (loaded by all scoops, not literally cone-only).
+
+Still open: 1. exact cross-type precedence rule (`.jsh` wins, or by mtime?) — pick one in planning.
+2. whether to also discover skill-bundled `*.workflow.js` under `/workspace/skills/*/`.
