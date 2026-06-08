@@ -291,6 +291,9 @@ export class ScoopContext {
   private skillsDir: string = '/workspace/skills';
   private sudoManager: SudoManager | null = null;
 
+  private structuredOutputValue: unknown;
+  private structuredOutputCaptured = false;
+
   constructor(
     scoop: RegisteredScoop,
     callbacks: ScoopContextCallbacks,
@@ -313,6 +316,10 @@ export class ScoopContext {
     // conversations can be restored by `SessionStore.load`. The outgoing
     // Adobe `X-Session-Id` is computed separately in `init()`.
     this.sessionId = scoop.jid;
+  }
+
+  getStructuredOutput() {
+    return { captured: this.structuredOutputCaptured, value: this.structuredOutputValue };
   }
 
   /** Initialize the scoop's environment */
@@ -408,6 +415,18 @@ export class ScoopContext {
         createBashTool(this.shell),
         ...scoopManagementTools,
       ];
+
+      // Inject StructuredOutput tool when schema is configured
+      if (this.scoop.config?.structuredOutputSchema) {
+        const { createStructuredOutputTool } = await import('./structured-output-tool.js');
+        legacyTools.push(
+          createStructuredOutputTool(this.scoop.config.structuredOutputSchema, (v) => {
+            this.structuredOutputValue = v;
+            this.structuredOutputCaptured = true;
+          })
+        );
+      }
+
       // Thread the process manager so each tool call registers a
       // `kind:'tool'` process under the active scoop-turn.
       // `getParentPid` is a closure over `currentTurnProcess` so the
@@ -584,6 +603,17 @@ export class ScoopContext {
         getApiKey: () => getApiKey() ?? undefined,
         transformContext: compactFn,
         streamFn: streamWithSessionId,
+        afterToolCall: async (context) => {
+          // Defensive backstop: capture validated StructuredOutput args
+          if (
+            this.scoop.config?.structuredOutputSchema &&
+            context.toolCall.name === 'StructuredOutput'
+          ) {
+            this.structuredOutputValue = context.args;
+            this.structuredOutputCaptured = true;
+          }
+          return undefined;
+        },
       });
 
       // Subscribe to agent events
@@ -1419,7 +1449,11 @@ When using send_message:
 - Use it for progress updates on long tasks
 - Use it when you want to send multiple messages
 - Your final output is also sent, so don't repeat yourself
-
+${
+  this.scoop.config?.structuredOutputSchema
+    ? '\n\nIMPORTANT: your final action MUST be a single call to the StructuredOutput tool; its arguments are your return value and must satisfy the schema. Do not answer in prose.'
+    : ''
+}
 ${this.scoop.config?.systemPromptAppend ?? ''}`;
 
     // Build the full prompt with memories and skills

@@ -77,6 +77,7 @@ function makeMockOrchestrator(): {
       };
     }),
     getScoops: vi.fn(() => knownScoops),
+    getScoopContext: vi.fn(() => undefined),
   };
 
   return {
@@ -904,6 +905,103 @@ describe('createAgentBridge — cleanup', () => {
     );
     expect(scratchWarnings.length).toBeGreaterThan(0);
     warnSpy.mockRestore();
+  });
+});
+
+describe('createAgentBridge — structured output capture', () => {
+  /**
+   * Helper to build a fake orchestrator whose getScoopContext returns a stub
+   * getStructuredOutput() that flips to captured after a set number of
+   * sendPrompt calls.
+   */
+  function fakeOrchWithStructuredOutput(captureOnPrompt: number) {
+    let prompts = 0;
+    const ctx = {
+      getStructuredOutput: () => ({ captured: prompts >= captureOnPrompt, value: { ok: true } }),
+    };
+    const mock: Partial<Orchestrator> = {
+      registerScoop: vi.fn(async () => {}),
+      unregisterScoop: vi.fn(async () => {}),
+      observeScoop: vi.fn(() => () => {}),
+      getScoops: vi.fn(() => []),
+      getScoopContext: vi.fn(() => ctx),
+      sendPrompt: vi.fn(async () => {
+        prompts++;
+      }),
+    };
+    return {
+      orchestrator: mock as unknown as Orchestrator,
+      get prompts() {
+        return prompts;
+      },
+    };
+  }
+
+  it('returns captured JSON when StructuredOutput is called (no nudge needed)', async () => {
+    const fake = fakeOrchWithStructuredOutput(1);
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(fake.orchestrator, fs, null, { generateUid: () => 'u' });
+
+    const result = await bridge.spawn({
+      cwd: '/workspace',
+      allowedCommands: ['*'],
+      prompt: 'test',
+      structuredOutputSchema: { type: 'object' },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.finalText)).toEqual({ ok: true });
+    expect(fake.prompts).toBe(1); // initial only, no nudges
+  });
+
+  it('nudges up to 2x, then returns error when never called', async () => {
+    const fake = fakeOrchWithStructuredOutput(99);
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(fake.orchestrator, fs, null, { generateUid: () => 'u' });
+
+    const result = await bridge.spawn({
+      cwd: '/workspace',
+      allowedCommands: ['*'],
+      prompt: 'test',
+      structuredOutputSchema: { type: 'object' },
+    });
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.finalText).toContain('did not produce StructuredOutput');
+    expect(fake.prompts).toBe(3); // initial + 2 nudges
+  });
+
+  it('captures after first nudge (2 total prompts)', async () => {
+    const fake = fakeOrchWithStructuredOutput(2);
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(fake.orchestrator, fs, null, { generateUid: () => 'u' });
+
+    const result = await bridge.spawn({
+      cwd: '/workspace',
+      allowedCommands: ['*'],
+      prompt: 'test',
+      structuredOutputSchema: { type: 'object' },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.finalText)).toEqual({ ok: true });
+    expect(fake.prompts).toBe(2); // initial + 1 nudge
+  });
+
+  it('does not nudge when no schema is configured', async () => {
+    const { orchestrator, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, { generateName: () => 'test-agent' });
+    scripts.set('agent_test_agent', (obs) => obs.onSendMessage?.('regular response'));
+
+    const result = await bridge.spawn({
+      cwd: '/workspace',
+      allowedCommands: ['*'],
+      prompt: 'test',
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.finalText).toBe('regular response');
   });
 });
 

@@ -388,6 +388,26 @@ export function createAgentBridge(
         return { finalText: scoopError, exitCode: 1 };
       }
 
+      // When structuredOutputSchema is configured, capture the validated
+      // output with up to 2 nudges.
+      if (options.structuredOutputSchema) {
+        const ctxRef = orchestrator.getScoopContext(jid);
+        let so = ctxRef?.getStructuredOutput?.();
+        for (let nudge = 0; nudge < 2 && !so?.captured; nudge++) {
+          await orchestrator.sendPrompt(
+            jid,
+            'You did not call StructuredOutput. Call it now with your result, matching the schema.',
+            'agent',
+            'agent'
+          );
+          so = ctxRef?.getStructuredOutput?.();
+        }
+        if (so?.captured) {
+          return { finalText: JSON.stringify(so.value), exitCode: 0 };
+        }
+        return { finalText: 'agent: scoop did not produce StructuredOutput', exitCode: 1 };
+      }
+
       const finalText =
         sendMessages.length > 0 ? sendMessages[sendMessages.length - 1] : responseBuffer;
       return { finalText, exitCode: 0 };
