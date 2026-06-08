@@ -19,8 +19,11 @@ import {
   shouldSnapElectronOverlayLauncher,
   toggleElectronOverlay,
 } from './overlay-shell-state.js';
-import { ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE } from './runtime-mode.js';
-import { EXTENSION_TAB_SPECS, type ExtensionTabId, normalizeExtensionTabId } from './tabbed-ui.js';
+import {
+  ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE,
+  ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE,
+} from './runtime-mode.js';
+import { type ExtensionTabId, normalizeExtensionTabId } from './tabbed-ui.js';
 
 export const ELECTRON_OVERLAY_HOST_ID = 'slicc-electron-overlay-root';
 export const ELECTRON_OVERLAY_TAG_NAME = 'slicc-electron-overlay';
@@ -434,7 +437,6 @@ class SliccElectronLauncherElement extends HTMLElement {
 class SliccElectronSidebarElement extends HTMLElement {
   static observedAttributes = ['open', 'active-tab', 'app-url', 'corner'];
 
-  private tabButtons = new Map<ExtensionTabId, HTMLButtonElement>();
   private iframe: HTMLIFrameElement | null = null;
   private emptyState: HTMLElement | null = null;
   private currentAppUrl = DEFAULT_APP_URL;
@@ -453,7 +455,6 @@ class SliccElectronSidebarElement extends HTMLElement {
   private render(): void {
     const root = this.attachShadow({ mode: 'open' });
     const doc = this.ownerDocument;
-    const activeTab = normalizeExtensionTabId(this.getAttribute('active-tab'));
 
     // Create style
     root.appendChild(
@@ -499,14 +500,6 @@ class SliccElectronSidebarElement extends HTMLElement {
         transform: translateY(calc(100% + 28px));
       }
       :host([open][corner="bottom"]) .sidebar { transform: translateY(0); }
-      .header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px 12px; border-bottom: 1px solid var(--s2-border-subtle); background: color-mix(in srgb, var(--s2-bg-layer-1) 92%, transparent); }
-      .header__brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
-      .header__title { font-size: 15px; font-weight: 700; letter-spacing: 0.01em; }
-      .header__subtitle { font-size: 11px; color: var(--s2-content-secondary); }
-      .header__close { appearance: none; border: 1px solid var(--s2-border-subtle); background: var(--s2-bg-layer-2); color: var(--s2-content-default); width: 32px; height: 32px; border-radius: 50%; cursor: pointer; font-size: 18px; line-height: 1; }
-      .tab-bar { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--s2-border-subtle); background: color-mix(in srgb, var(--s2-bg-layer-1) 96%, transparent); }
-      .tab-bar__tab { appearance: none; border: 1px solid var(--s2-border-subtle); border-radius: var(--s2-radius-default); background: var(--s2-bg-layer-2); color: var(--s2-content-secondary); padding: 9px 8px; font-size: 12px; font-weight: 600; cursor: pointer; transition: background var(--s2-transition-default), color var(--s2-transition-default), border-color var(--s2-transition-default); }
-      .tab-bar__tab--active { background: color-mix(in srgb, var(--s2-accent) 18%, var(--s2-bg-layer-2)); color: var(--s2-content-default); border-color: color-mix(in srgb, var(--s2-accent) 45%, var(--s2-border-default)); }
       .viewport { position: relative; flex: 1; min-height: 0; background: var(--s2-bg-sunken); }
       iframe { border: 0; width: 100%; height: 100%; display: block; background: var(--s2-bg-base); }
       .empty-state { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; text-align: center; color: var(--s2-content-secondary); font-size: 13px; line-height: 1.5; }
@@ -524,69 +517,15 @@ class SliccElectronSidebarElement extends HTMLElement {
     });
     root.appendChild(backdrop);
 
-    // Create sidebar
+    // Create sidebar — the outer shell now renders only the iframe
+    // viewport. The header (brand + close) and tab-bar were removed
+    // when the inner app's thread header absorbed the close affordance
+    // (in electron-overlay mode it shows a close button left of the
+    // scoop switcher) and the right-side rail covers tab switching.
     const aside = doc.createElement('aside');
     aside.className = 'sidebar';
     aside.setAttribute('part', 'sidebar');
     aside.setAttribute('aria-label', 'SLICC overlay sidebar');
-
-    // Header
-    const header = doc.createElement('header');
-    header.className = 'header';
-
-    const brand = doc.createElement('div');
-    brand.className = 'header__brand';
-
-    const titleContainer = doc.createElement('div');
-    const title = doc.createElement('div');
-    title.className = 'header__title';
-    title.textContent = 'slicc';
-    const subtitle = doc.createElement('div');
-    subtitle.className = 'header__subtitle';
-    subtitle.textContent = 'electron float';
-    titleContainer.appendChild(title);
-    titleContainer.appendChild(subtitle);
-    brand.appendChild(titleContainer);
-    header.appendChild(brand);
-
-    const closeBtn = doc.createElement('button');
-    closeBtn.type = 'button';
-    closeBtn.className = 'header__close';
-    closeBtn.setAttribute('aria-label', 'Close SLICC overlay');
-    closeBtn.textContent = '×';
-    closeBtn.addEventListener('click', () => {
-      this.dispatchEvent(new CustomEvent('slicc-overlay-close', { bubbles: true, composed: true }));
-    });
-    header.appendChild(closeBtn);
-    aside.appendChild(header);
-
-    // Tab bar
-    const tabBar = doc.createElement('div');
-    tabBar.className = 'tab-bar';
-    tabBar.setAttribute('role', 'tablist');
-    tabBar.setAttribute('aria-label', 'SLICC overlay tabs');
-
-    for (const { id, label } of EXTENSION_TAB_SPECS) {
-      const tabBtn = doc.createElement('button');
-      tabBtn.type = 'button';
-      tabBtn.className = 'tab-bar__tab' + (id === activeTab ? ' tab-bar__tab--active' : '');
-      tabBtn.setAttribute('role', 'tab');
-      tabBtn.setAttribute('aria-selected', String(id === activeTab));
-      tabBtn.dataset.tab = id;
-      tabBtn.textContent = label;
-      this.tabButtons.set(id, tabBtn);
-      tabBtn.addEventListener('click', () => {
-        this.dispatchEvent(
-          new CustomEvent('slicc-overlay-select-tab', {
-            bubbles: true,
-            composed: true,
-            detail: { tab: id },
-          })
-        );
-      });
-      tabBar.appendChild(tabBtn);
-    }
-    aside.appendChild(tabBar);
 
     // Viewport
     const viewport = doc.createElement('div');
@@ -609,21 +548,11 @@ class SliccElectronSidebarElement extends HTMLElement {
 
     aside.appendChild(viewport);
     root.appendChild(aside);
-    this.iframe?.addEventListener('load', () => {
-      this.frameLoaded = true;
-      this.postActiveTab();
-    });
   }
 
   private sync(): void {
     const activeTab = normalizeExtensionTabId(this.getAttribute('active-tab'));
     const appUrl = this.getAttribute('app-url')?.trim() ?? DEFAULT_APP_URL;
-
-    for (const [tabId, button] of this.tabButtons) {
-      const active = tabId === activeTab;
-      button.classList.toggle('tab-bar__tab--active', active);
-      button.setAttribute('aria-selected', String(active));
-    }
 
     this.emptyState?.toggleAttribute('hidden', Boolean(appUrl));
     this.syncFrameUrl(appUrl, activeTab);
@@ -805,15 +734,34 @@ export class SliccElectronOverlayElement extends HTMLElement {
   };
 
   private onMessage = (event: MessageEvent): void => {
-    if (
-      event.data &&
-      typeof event.data === 'object' &&
-      'type' in event.data &&
-      (event.data as Record<string, unknown>).type === ELECTRON_OVERLAY_TOGGLE_MESSAGE_TYPE
-    ) {
+    if (!event.data || typeof event.data !== 'object' || !('type' in event.data)) return;
+    // Reject messages from the host window itself — only the embedded app
+    // iframe (or another foreign window) may drive toggle/close, never the
+    // page that hosts this overlay.
+    if (event.source === this.ownerDocument.defaultView) return;
+    // When appUrl is a valid absolute URL, require event.origin to match its
+    // origin. Empty / relative appUrl skips this check (no origin to compare
+    // against), but the source guard above still applies.
+    const expectedOrigin = this.parseAppOrigin();
+    if (expectedOrigin !== null && event.origin !== expectedOrigin) return;
+    const type = (event.data as Record<string, unknown>).type;
+    if (type === ELECTRON_OVERLAY_TOGGLE_MESSAGE_TYPE) {
       this.toggle();
+      return;
+    }
+    if (type === ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE) {
+      this.hideSidebar();
     }
   };
+
+  private parseAppOrigin(): string | null {
+    if (!this.appUrlValue) return null;
+    try {
+      return new URL(this.appUrlValue).origin;
+    } catch {
+      return null;
+    }
+  }
 
   private render(): void {
     const root = this.attachShadow({ mode: 'open' });
@@ -849,15 +797,14 @@ export class SliccElectronOverlayElement extends HTMLElement {
     });
     root.appendChild(launcher);
 
-    // Create sidebar
+    // Create sidebar — the sidebar element no longer fires
+    // `slicc-overlay-select-tab` (the in-shell tab bar was removed
+    // when the inner app's rail absorbed tab switching) so only the
+    // `slicc-overlay-close` event (from the backdrop click) is wired.
     const sidebar = doc.createElement(
       ELECTRON_OVERLAY_SIDEBAR_TAG_NAME
     ) as SliccElectronSidebarElement;
     sidebar.addEventListener('slicc-overlay-close', () => this.hideSidebar());
-    sidebar.addEventListener('slicc-overlay-select-tab', (event: Event) => {
-      const tab = (event as CustomEvent<{ tab?: string }>).detail?.tab;
-      this.applyState(setElectronOverlayTab(this.state, tab));
-    });
     root.appendChild(sidebar);
   }
 

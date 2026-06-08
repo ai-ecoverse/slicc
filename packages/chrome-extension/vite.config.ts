@@ -30,6 +30,12 @@ export default defineConfig(({ mode }) => ({
     __SLICC_RELEASED_AT__: JSON.stringify(sliccReleasedAt),
   },
   resolve: {
+    // pi-coding-agent ships its own physical copy of pi-ai / pi-agent-core /
+    // pi-tui under its nested node_modules even when the versions match the
+    // hoisted ones. Without deduping, Rolldown pulls two full pi trees into the
+    // extension graph, which overflows the native "rendering chunks" pass and
+    // fails the build with no diagnostic. Force a single copy of each.
+    dedupe: ['@earendil-works/pi-ai', '@earendil-works/pi-agent-core', '@earendil-works/pi-tui'],
     alias: {
       // Workspace `@slicc/shared-ts` points at source so esbuild/Rolldown for the
       // SW IIFE and the extension's worker entries resolve without requiring
@@ -248,8 +254,8 @@ export default defineConfig(({ mode }) => ({
         copyFileSync(resolve(Dirname, 'voice-popup.js'), resolve(outDir, 'voice-popup.js'));
         copyFileSync(resolve(Dirname, 'capture-popup.html'), resolve(outDir, 'capture-popup.html'));
         copyFileSync(resolve(Dirname, 'capture-popup.js'), resolve(outDir, 'capture-popup.js'));
-        copyFileSync(resolve(Dirname, 'mount-popup.html'), resolve(outDir, 'mount-popup.html'));
-        copyFileSync(resolve(Dirname, 'mount-popup.js'), resolve(outDir, 'mount-popup.js'));
+        copyFileSync(resolve(Dirname, 'picker-popup.html'), resolve(outDir, 'picker-popup.html'));
+        copyFileSync(resolve(Dirname, 'picker-popup.js'), resolve(outDir, 'picker-popup.js'));
         copyFileSync(resolve(Dirname, 'secrets.html'), resolve(outDir, 'secrets.html'));
         // secrets.js is built from src/secrets-entry.ts via esbuild below;
         // see the 'build-secrets-page' plugin.

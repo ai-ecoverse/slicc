@@ -9,6 +9,7 @@ import * as isoGit from 'isomorphic-git';
 import { GLOBAL_FS_DB_NAME } from '../../src/fs/global-db.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { GitCommands } from '../../src/git/git-commands.js';
+import { createIsomorphicGitFs } from '../../src/git/vfs-fs-adapter.js';
 
 describe('GitCommands', () => {
   let vfs: VirtualFS;
@@ -84,7 +85,7 @@ describe('GitCommands', () => {
     await vfs.rm('/project/file.txt');
     await git.execute(['add', '.'], '/project');
 
-    const matrix = await isoGit.statusMatrix({ fs: vfs.getLightningFS(), dir: '/project' });
+    const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
     const row = matrix.find((r) => r[0] === 'file.txt');
     expect(row).toBeTruthy();
     // git add . should NOT stage deletions — file remains as unstaged deletion
@@ -1016,7 +1017,7 @@ describe('GitCommands', () => {
       const result = await git.execute(['reset', 'file1.txt'], '/project');
       expect(result.exitCode).toBe(0);
 
-      const matrix = await isoGit.statusMatrix({ fs: vfs.getLightningFS(), dir: '/project' });
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
       const file1 = matrix.find((r) => r[0] === 'file1.txt');
       const file2 = matrix.find((r) => r[0] === 'file2.txt');
       expect(file1?.slice(1)).toEqual([0, 2, 0]);
@@ -1031,7 +1032,7 @@ describe('GitCommands', () => {
       const result = await git.execute(['reset', 'HEAD', 'file.txt'], '/project');
       expect(result.exitCode).toBe(0);
 
-      const matrix = await isoGit.statusMatrix({ fs: vfs.getLightningFS(), dir: '/project' });
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
       const row = matrix.find((r) => r[0] === 'file.txt');
       expect(row?.slice(1)).toEqual([0, 2, 0]);
     });
@@ -1046,7 +1047,7 @@ describe('GitCommands', () => {
       const result = await git.execute(['reset'], '/project');
       expect(result.exitCode).toBe(0);
 
-      const matrix = await isoGit.statusMatrix({ fs: vfs.getLightningFS(), dir: '/project' });
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
       for (const [, , , stage] of matrix) {
         expect(stage).toBe(0);
       }
@@ -1059,7 +1060,7 @@ describe('GitCommands', () => {
       await git.execute(['commit', '-m', 'first'], '/project');
 
       const firstCommit = await isoGit.resolveRef({
-        fs: vfs.getLightningFS(),
+        fs: createIsomorphicGitFs(vfs),
         dir: '/project',
         ref: 'HEAD',
       });
@@ -1073,7 +1074,7 @@ describe('GitCommands', () => {
       expect(result.stdout).toContain('HEAD is now at');
 
       const headOid = await isoGit.resolveRef({
-        fs: vfs.getLightningFS(),
+        fs: createIsomorphicGitFs(vfs),
         dir: '/project',
         ref: 'HEAD',
       });
@@ -1082,7 +1083,7 @@ describe('GitCommands', () => {
       const content = await vfs.readTextFile('/project/file.txt');
       expect(content).toBe('v2');
 
-      const matrix = await isoGit.statusMatrix({ fs: vfs.getLightningFS(), dir: '/project' });
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
       const row = matrix.find((r) => r[0] === 'file.txt');
       expect(row?.slice(1)).toEqual([1, 2, 2]);
     });
@@ -1094,7 +1095,7 @@ describe('GitCommands', () => {
       await git.execute(['commit', '-m', 'first'], '/project');
 
       const firstCommit = await isoGit.resolveRef({
-        fs: vfs.getLightningFS(),
+        fs: createIsomorphicGitFs(vfs),
         dir: '/project',
         ref: 'HEAD',
       });
@@ -1107,7 +1108,7 @@ describe('GitCommands', () => {
       expect(result.exitCode).toBe(0);
 
       const headOid = await isoGit.resolveRef({
-        fs: vfs.getLightningFS(),
+        fs: createIsomorphicGitFs(vfs),
         dir: '/project',
         ref: 'HEAD',
       });
@@ -1116,7 +1117,7 @@ describe('GitCommands', () => {
       const content = await vfs.readTextFile('/project/file.txt');
       expect(content).toBe('v2');
 
-      const matrix = await isoGit.statusMatrix({ fs: vfs.getLightningFS(), dir: '/project' });
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
       const row = matrix.find((r) => r[0] === 'file.txt');
       expect(row?.slice(1)).toEqual([1, 2, 1]);
     });
@@ -1128,7 +1129,7 @@ describe('GitCommands', () => {
       await git.execute(['commit', '-m', 'first'], '/project');
 
       const firstCommit = await isoGit.resolveRef({
-        fs: vfs.getLightningFS(),
+        fs: createIsomorphicGitFs(vfs),
         dir: '/project',
         ref: 'HEAD',
       });
@@ -1142,7 +1143,7 @@ describe('GitCommands', () => {
       expect(result.exitCode).toBe(0);
 
       const headOid = await isoGit.resolveRef({
-        fs: vfs.getLightningFS(),
+        fs: createIsomorphicGitFs(vfs),
         dir: '/project',
         ref: 'HEAD',
       });
@@ -1154,7 +1155,7 @@ describe('GitCommands', () => {
       const exists = await vfs.exists('/project/extra.txt');
       expect(exists).toBe(false);
 
-      const matrix = await isoGit.statusMatrix({ fs: vfs.getLightningFS(), dir: '/project' });
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
       for (const [, head, workdir, stage] of matrix) {
         expect(head).toBe(1);
         expect(workdir).toBe(stage);
@@ -1209,7 +1210,7 @@ describe('GitCommands', () => {
       expect(content).toBe('feature work');
 
       // Verify the merge commit has two parents
-      const logs = await isoGit.log({ fs: vfs.getLightningFS(), dir: '/project', depth: 1 });
+      const logs = await isoGit.log({ fs: createIsomorphicGitFs(vfs), dir: '/project', depth: 1 });
       expect(logs[0].commit.parent.length).toBe(2);
     });
 
@@ -1292,7 +1293,7 @@ describe('GitCommands', () => {
 
       await git.execute(['add', '-A'], '/project');
 
-      const matrix = await isoGit.statusMatrix({ fs: vfs.getLightningFS(), dir: '/project' });
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
       const newRow = matrix.find((r) => r[0] === 'newfile.txt');
       const trackedRow = matrix.find((r) => r[0] === 'tracked.txt');
       expect(newRow?.slice(1)).toEqual([0, 2, 2]); // new file staged
@@ -1308,7 +1309,7 @@ describe('GitCommands', () => {
       await vfs.rm('/project/file.txt');
       await git.execute(['add', '--all'], '/project');
 
-      const matrix = await isoGit.statusMatrix({ fs: vfs.getLightningFS(), dir: '/project' });
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
       const row = matrix.find((r) => r[0] === 'file.txt');
       expect(row?.slice(1)).toEqual([1, 0, 0]); // staged deletion
     });
@@ -1327,7 +1328,7 @@ describe('GitCommands', () => {
 
       await git.execute(['add', '-u'], '/project');
 
-      const matrix = await isoGit.statusMatrix({ fs: vfs.getLightningFS(), dir: '/project' });
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
       const trackedRow = matrix.find((r) => r[0] === 'tracked.txt');
       const untrackedRow = matrix.find((r) => r[0] === 'untracked.txt');
       expect(trackedRow?.slice(1)).toEqual([1, 2, 2]); // modification staged
@@ -1343,7 +1344,7 @@ describe('GitCommands', () => {
       await vfs.rm('/project/file.txt');
       await git.execute(['add', '--update'], '/project');
 
-      const matrix = await isoGit.statusMatrix({ fs: vfs.getLightningFS(), dir: '/project' });
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
       const row = matrix.find((r) => r[0] === 'file.txt');
       expect(row?.slice(1)).toEqual([1, 0, 0]); // staged deletion
     });
@@ -1364,7 +1365,7 @@ describe('GitCommands', () => {
       expect(result.stdout).toContain('auto-staged');
 
       // Verify file is committed
-      const matrix = await isoGit.statusMatrix({ fs: vfs.getLightningFS(), dir: '/project' });
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
       const row = matrix.find((r) => r[0] === 'file.txt');
       expect(row?.slice(1)).toEqual([1, 1, 1]); // clean
     });
@@ -1396,7 +1397,7 @@ describe('GitCommands', () => {
       expect(result.exitCode).toBe(0);
 
       // Untracked file should still be untracked
-      const matrix = await isoGit.statusMatrix({ fs: vfs.getLightningFS(), dir: '/project' });
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
       const untrackedRow = matrix.find((r) => r[0] === 'untracked.txt');
       expect(untrackedRow?.slice(1)).toEqual([0, 2, 0]);
     });
@@ -1649,7 +1650,7 @@ describe('GitCommands', () => {
       expect(exists).toBe(false);
 
       // Deletion should be staged
-      const matrix = await isoGit.statusMatrix({ fs: vfs.getLightningFS(), dir: '/project' });
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
       const row = matrix.find((r) => r[0] === 'file.txt');
       expect(row?.slice(1)).toEqual([1, 0, 0]);
     });
@@ -1668,7 +1669,7 @@ describe('GitCommands', () => {
       expect(exists).toBe(true);
 
       // Should be removed from index (shows as untracked)
-      const matrix = await isoGit.statusMatrix({ fs: vfs.getLightningFS(), dir: '/project' });
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
       const row = matrix.find((r) => r[0] === 'file.txt');
       // After removing from index: head=1, workdir=2, stage=0
       expect(row).toBeTruthy();
@@ -1732,7 +1733,7 @@ describe('GitCommands', () => {
       expect(content).toBe('content');
 
       // Status should show rename as deletion + addition
-      const matrix = await isoGit.statusMatrix({ fs: vfs.getLightningFS(), dir: '/project' });
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
       const oldRow = matrix.find((r) => r[0] === 'old.txt');
       const newRow = matrix.find((r) => r[0] === 'new.txt');
       expect(oldRow?.slice(1)).toEqual([1, 0, 0]); // staged deletion
@@ -1825,7 +1826,7 @@ describe('GitCommands', () => {
 
       // Tag should resolve to the first commit
       const tagOid = await isoGit.resolveRef({
-        fs: vfs.getLightningFS(),
+        fs: createIsomorphicGitFs(vfs),
         dir: '/project',
         ref: 'old-tag',
       });
@@ -2077,7 +2078,7 @@ describe('GitCommands', () => {
       await git.execute(['commit', '-m', 'first'], '/project');
 
       const firstCommit = await isoGit.resolveRef({
-        fs: vfs.getLightningFS(),
+        fs: createIsomorphicGitFs(vfs),
         dir: '/project',
         ref: 'HEAD',
       });
@@ -2210,7 +2211,7 @@ describe('GitCommands', () => {
       // git add . should stage the new file but NOT the deletion
       await git.execute(['add', '.'], '/project');
 
-      const matrix = await isoGit.statusMatrix({ fs: vfs.getLightningFS(), dir: '/project' });
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
       const deletedRow = matrix.find((r) => r[0] === 'delete-me.txt');
       const newRow = matrix.find((r) => r[0] === 'new.txt');
 
@@ -2229,7 +2230,7 @@ describe('GitCommands', () => {
       await vfs.rm('/project/file.txt');
       await git.execute(['add', '-A'], '/project');
 
-      const matrix = await isoGit.statusMatrix({ fs: vfs.getLightningFS(), dir: '/project' });
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
       const row = matrix.find((r) => r[0] === 'file.txt');
       expect(row?.slice(1)).toEqual([1, 0, 0]); // staged deletion
     });
@@ -2244,7 +2245,7 @@ describe('GitCommands', () => {
     async function readLatestAuthor(
       cwd: string
     ): Promise<{ name: string; email: string } | undefined> {
-      const log = await isoGit.log({ fs: vfs.getLightningFS(), dir: cwd, depth: 1 });
+      const log = await isoGit.log({ fs: createIsomorphicGitFs(vfs), dir: cwd, depth: 1 });
       const entry = log[0];
       return entry
         ? { name: entry.commit.author.name, email: entry.commit.author.email }

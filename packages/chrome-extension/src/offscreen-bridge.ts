@@ -863,6 +863,73 @@ export class OffscreenBridge implements KernelFacade {
   }
 
   /**
+   * Translate a scoop's restored canonical `AgentMessage[]` into the
+   * buffered chat shape. Returns `null` when there is no context or no
+   * agent messages yet. Lazy-imports the translator so it doesn't pull
+   * pi-ai types into the bridge's hot path until needed. Shared by
+   * {@link handleRequestScoopMessages} and {@link seedBuffersFromAgentState}.
+   */
+  private async buildBufferFromAgentMessages(
+    scoop: RegisteredScoop
+  ): Promise<BufferedChatMessage[] | null> {
+    const context = this.orchestrator?.getScoopContext(scoop.jid);
+    if (!context) return null;
+    const agentMessages = context.getAgentMessages();
+    if (agentMessages.length === 0) return null;
+    const { agentMessagesToChatMessages } = await import(
+      '../../../packages/webapp/src/scoops/agent-message-to-chat.js'
+    );
+    const chatMessages = agentMessagesToChatMessages(agentMessages, {
+      source: scoop.isCone ? 'cone' : (scoop.name ?? scoop.folder),
+    });
+    return chatMessages.map((m) => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      attachments: m.attachments,
+      timestamp: m.timestamp,
+      source: m.source,
+      channel: m.channel,
+      toolCalls: m.toolCalls?.map((tc) => ({
+        id: tc.id,
+        name: tc.name,
+        input: tc.input,
+        result: tc.result,
+        isError: tc.isError,
+      })),
+      isStreaming: false,
+    }));
+  }
+
+  /**
+   * Seed each registered scoop's chat buffer from its agent's restored
+   * canonical history at boot, BEFORE any post-boot turn can run
+   * `persistScoop`. The bridge's `messageBuffers` otherwise start empty
+   * on a fresh boot, so the first agent turn after a reload would
+   * persist only the new messages and overwrite the full conversation
+   * in the `browser-coding-agent` UI store — the "only the last few
+   * messages after a reboot" truncation. Non-destructive: only seeds
+   * scoops whose buffer is still empty, and AWAITS the persist of the
+   * seeded buffer so the `browser-coding-agent` store is repaired before
+   * `createKernelHost` signals `kernel-worker-ready` — otherwise a panel
+   * that mounts and reads the store on the next tick could still see the
+   * truncated snapshot.
+   */
+  async seedBuffersFromAgentState(): Promise<void> {
+    if (!this.orchestrator) return;
+    for (const scoop of this.orchestrator.getScoops()) {
+      const existing = this.messageBuffers.get(scoop.jid);
+      if (existing && existing.length > 0) continue;
+      const buf = await this.buildBufferFromAgentMessages(scoop);
+      if (!buf) continue;
+      this.messageBuffers.set(scoop.jid, buf);
+      this.currentMessageId.delete(scoop.jid);
+      this.fanOutMessageId.delete(scoop.jid);
+      await this.persistScoopAwait(scoop.jid);
+    }
+  }
+
+  /**
    * Rebuild the panel's chat history for a scoop from the live agent
    * state. Replies via `scoop-messages-replaced`. Used after a panel
    * remount (HMR or full reload) to override the panel's own
@@ -890,58 +957,30 @@ export class OffscreenBridge implements KernelFacade {
       return;
     }
 
-    // Translate from the agent's canonical conversation. Lazy-import the
-    // translator so it doesn't pull pi-ai types into the bridge's hot
-    // path until needed.
-    const context = this.orchestrator.getScoopContext(scoopJid);
-    if (context) {
-      const { agentMessagesToChatMessages } = await import(
-        '../../../packages/webapp/src/scoops/agent-message-to-chat.js'
-      );
-      const agentMessages = context.getAgentMessages();
-      if (agentMessages.length > 0) {
-        const chatMessages = agentMessagesToChatMessages(agentMessages, {
-          source: scoop.isCone ? 'cone' : (scoop.name ?? scoop.folder),
-        });
-        // Hydrate the buffer so subsequent agent events extend the
-        // restored history instead of starting from empty (which
-        // would silently overwrite the UI store via persistScoop).
-        // Clear `currentMessageId` for the same reason: a stale id
-        // pointing at a (now non-existent) buffer entry would have
-        // `getOrCreateAssistantMsg` write into the rehydrated buffer
-        // under an unrelated id.
-        const buf: BufferedChatMessage[] = chatMessages.map((m) => ({
-          id: m.id,
-          role: m.role,
-          content: m.content,
-          attachments: m.attachments,
-          timestamp: m.timestamp,
-          source: m.source,
-          channel: m.channel,
-          toolCalls: m.toolCalls?.map((tc) => ({
-            id: tc.id,
-            name: tc.name,
-            input: tc.input,
-            result: tc.result,
-            isError: tc.isError,
-          })),
-          isStreaming: false,
-        }));
-        this.messageBuffers.set(scoopJid, buf);
-        this.currentMessageId.delete(scoopJid);
-        this.fanOutMessageId.delete(scoopJid);
-        // Persist the rebuilt buffer back to the UI session store so
-        // a subsequent panel reload (without further agent activity)
-        // sees the canonical history instead of whatever truncated
-        // snapshot the panel last wrote during the remount race.
-        this.persistScoop(scoopJid);
-        this.emit({
-          type: 'scoop-messages-replaced',
-          scoopJid,
-          messages: buf,
-        });
-        return;
-      }
+    // Translate from the agent's canonical conversation.
+    const buf = await this.buildBufferFromAgentMessages(scoop);
+    if (buf) {
+      // Hydrate the buffer so subsequent agent events extend the
+      // restored history instead of starting from empty (which would
+      // silently overwrite the UI store via persistScoop). Clear
+      // `currentMessageId`/`fanOutMessageId` for the same reason: a
+      // stale id pointing at a (now non-existent) buffer entry would
+      // have `getOrCreateAssistantMsg` write into the rehydrated buffer
+      // under an unrelated id.
+      this.messageBuffers.set(scoopJid, buf);
+      this.currentMessageId.delete(scoopJid);
+      this.fanOutMessageId.delete(scoopJid);
+      // Persist the rebuilt buffer back to the UI session store so
+      // a subsequent panel reload (without further agent activity)
+      // sees the canonical history instead of whatever truncated
+      // snapshot the panel last wrote during the remount race.
+      this.persistScoop(scoopJid);
+      this.emit({
+        type: 'scoop-messages-replaced',
+        scoopJid,
+        messages: buf,
+      });
+      return;
     }
 
     // Last resort: load from the UI session store. Hydrate the buffer
@@ -975,6 +1014,69 @@ export class OffscreenBridge implements KernelFacade {
   }
 
   /**
+   * Side-effect-free transcript fetch for the scoop-switcher's scope
+   * label tooltip. Distinct from {@link handleRequestScoopMessages},
+   * which emits a `scoop-messages-replaced` that the chat panel
+   * wholesale-applies. Replies with a `scoop-transcript` envelope
+   * (correlated by `requestId`) carrying a flattened `user: …` /
+   * `assistant: …` transcript string — empty on unknown scoop or no
+   * history yet.
+   *
+   * Resolution order mirrors the message-replace path:
+   *   1. In-flight `messageBuffers` (current session, including
+   *      streaming tail).
+   *   2. Live `ScoopContext.getAgentMessages()` translated to the
+   *      chat shape so tool-use blocks become readable text.
+   */
+  private async handleRequestScoopTranscript(requestId: string, scoopJid: string): Promise<void> {
+    const empty = (): void => {
+      this.emit({ type: 'scoop-transcript', requestId, scoopJid, transcript: '' });
+    };
+    if (!this.orchestrator) {
+      empty();
+      return;
+    }
+    const scoop = this.orchestrator.getScoops().find((s) => s.jid === scoopJid);
+    if (!scoop) {
+      empty();
+      return;
+    }
+
+    const buffered = this.messageBuffers.get(scoopJid);
+    if (buffered && buffered.length > 0) {
+      this.emit({
+        type: 'scoop-transcript',
+        requestId,
+        scoopJid,
+        transcript: formatTranscript(buffered),
+      });
+      return;
+    }
+
+    const context = this.orchestrator.getScoopContext(scoopJid);
+    if (context) {
+      const { agentMessagesToChatMessages } = await import(
+        '../../../packages/webapp/src/scoops/agent-message-to-chat.js'
+      );
+      const agentMessages = context.getAgentMessages();
+      if (agentMessages.length > 0) {
+        const chatMessages = agentMessagesToChatMessages(agentMessages, {
+          source: scoop.isCone ? 'cone' : (scoop.name ?? scoop.folder),
+        });
+        this.emit({
+          type: 'scoop-transcript',
+          requestId,
+          scoopJid,
+          transcript: formatTranscript(chatMessages),
+        });
+        return;
+      }
+    }
+
+    empty();
+  }
+
+  /**
    * Persist a scoop's message buffer to the shared UI session store.
    * Fire-and-forget — errors are swallowed to avoid blocking agent processing.
    *
@@ -983,19 +1085,33 @@ export class OffscreenBridge implements KernelFacade {
    * semantics as the standalone leader.
    */
   persistScoop(jid: string): void {
+    void this.persistScoopAwait(jid);
+  }
+
+  /**
+   * Awaitable variant of {@link persistScoop}. Callers that must KNOW the
+   * UI store has been written before proceeding — e.g. boot-time
+   * {@link seedBuffersFromAgentState}, which runs inside `createKernelHost`
+   * before `kernel-worker-ready` is signaled so the panel never mounts
+   * against a stale/truncated `browser-coding-agent` snapshot — await this
+   * instead. Errors are still swallowed so a failed write can't break boot.
+   */
+  private async persistScoopAwait(jid: string): Promise<void> {
     if (!this.sessionStore || !this.orchestrator) return;
     const scoop = this.orchestrator.getScoops().find((s) => s.jid === jid);
     if (!scoop) return;
     const sessionId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
     const buf = this.messageBuffers.get(jid);
     if (!buf || buf.length === 0) return;
-    // BufferedChatMessage is structurally compatible with ChatMessage
-    this.sessionStore.saveMessages(sessionId, buf as unknown as ChatMessage[]).catch((err) => {
+    try {
+      // BufferedChatMessage is structurally compatible with ChatMessage
+      await this.sessionStore.saveMessages(sessionId, buf as unknown as ChatMessage[]);
+    } catch (err) {
       log.error('persistScoop failed', {
         sessionId,
         error: err instanceof Error ? err.message : String(err),
       });
-    });
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -1191,6 +1307,11 @@ export class OffscreenBridge implements KernelFacade {
 
       case 'request-scoop-messages': {
         await this.handleRequestScoopMessages(msg.scoopJid);
+        break;
+      }
+
+      case 'request-scoop-transcript': {
+        await this.handleRequestScoopTranscript(msg.requestId, msg.scoopJid);
         break;
       }
 
@@ -1454,4 +1575,20 @@ export class OffscreenBridge implements KernelFacade {
 
 function uid(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+/**
+ * Flatten a list of chat-shaped messages into a single `role: content`
+ * transcript string suitable for the scope-label LLM call. Empty
+ * `content` entries are skipped so a streaming-only assistant message
+ * with no text yet doesn't insert blank lines.
+ */
+function formatTranscript(messages: ReadonlyArray<{ role: string; content: string }>): string {
+  const lines: string[] = [];
+  for (const m of messages) {
+    const text = (m.content ?? '').trim();
+    if (text.length === 0) continue;
+    lines.push(`${m.role}: ${text}`);
+  }
+  return lines.join('\n');
 }

@@ -54,7 +54,38 @@ export interface RealmInitMsg {
   /** `loadPyodide({indexURL})` for `kind:'py'`. */
   pyodideIndexURL?: string;
   /** Initial directories synced VFS↔Pyodide-FS for `kind:'py'`. */
-  pyodideSyncDirs?: string[];
+  pyodideMountDirs?: string[];
+  /**
+   * The Python realm worker resolves each `pyodideMountDirs` entry
+   * against the same-origin OPFS root at `<opfsMountDbName>/<vfsPath>`
+   * and mounts it via `pyodide.FS.mount(OPFS_SYNC_FS, …)`. The in-tree
+   * plugin builds the FS tree synchronously from a prewalk snapshot
+   * and queues OPFS mutations, which are drained via
+   * `flushOpfsRealmMounts` / `flushPendingOpfsOps` before `realm-done`.
+   * The realm worker has no `localStorage` shim, so the kernel side
+   * passes the dbName through this field.
+   */
+  opfsMountDbName?: string;
+  /**
+   * VFS mount points that overlap `pyodideMountDirs`. The realm
+   * overlays a throwing FS plugin (`MOUNT_BOMB_FS`) at each `path`
+   * so any synchronous access from Python (stdlib `open`,
+   * `os.listdir`, pandas, …) raises an OSError pointing the caller
+   * at the async `slicc.fs` module. `kind` is informational only
+   * (no cap, no materialization). Internal mounts (`/proc`, …) are
+   * excluded by the kernel before this list is built.
+   */
+  mountPoints?: RealmMountPoint[];
+}
+
+/**
+ * One entry of {@link RealmInitMsg.mountPoints}. `kind` mirrors
+ * `MountBackend.kind` ('local' | 's3' | 'da'). Internal mounts
+ * (`/proc`, …) are excluded by the kernel before this list is built.
+ */
+export interface RealmMountPoint {
+  path: string;
+  kind: 'local' | 's3' | 'da';
 }
 
 /** Posted by the realm after a clean exit (incl. user-code throw → exit 1). */
@@ -77,7 +108,7 @@ export interface RealmErrorMsg {
 }
 
 /** Channels the kernel host exposes to user code. */
-export type RealmRpcChannel = 'vfs' | 'exec' | 'fetch' | 'browser';
+export type RealmRpcChannel = 'vfs' | 'exec' | 'fetch' | 'browser' | 'usb' | 'serial' | 'hid';
 
 /**
  * Tab handle returned to realm code by `browser.findTab` /
@@ -115,6 +146,21 @@ export interface RealmRpcResponse {
 }
 
 /**
+ * Host → realm push event. Unlike `realm-rpc-res` (one per request id),
+ * events are fire-and-forget: the host emits them on a named `channel`
+ * and any in-realm subscriber registered via `RealmRpcClient.onEvent`
+ * receives them. Used today by the HID bridge to stream `inputreport`
+ * payloads to in-realm device listeners (channel `hid-input-report`,
+ * payload `{ handle, reportId, bytes }`), mirroring the `panel-rpc-event`
+ * page→worker fan-out one layer below.
+ */
+export interface RealmEventMsg {
+  type: 'realm-event';
+  channel: string;
+  payload: unknown;
+}
+
+/**
  * Sandbox iframe handshake: posted from inside the iframe when its
  * bootstrap has loaded and is ready to receive a port. The host
  * responds with a `realm-port-init` carrying the transferred port.
@@ -146,46 +192,6 @@ export interface SerializedFetchResponse {
   body: Uint8Array;
   /** `response.url` after redirect resolution (or '' if unknown). */
   url: string;
-}
-
-/**
- * One entry in a `vfs.walkTree` response. Paths are absolute (host
- * already resolved against `ctx.cwd`).
- *
- * Discriminated on `isDir` so directory entries can't pretend to
- * carry a `size`/`content` and file entries always carry a `size`.
- * `content` is omitted ONLY when the file exceeded the per-call
- * `maxFileBytes` cap or could not be read — see the realm-side
- * skip-with-warning path in `py-realm-shared.ts`.
- *
- * `content` is `Uint8Array`, not `string`: walkTree must round-trip
- * binary files (PNG, sqlite, .whl, …) byte-for-byte. The realm
- * transfers ownership to avoid copying.
- */
-export type WalkTreeEntry =
-  | { path: string; isDir: true }
-  | { path: string; isDir: false; size: number; content?: Uint8Array };
-
-/**
- * Bulk-write payload for `vfs.writeBatch`. Directories are created
- * before files; ordering across the two arrays is host-controlled.
- * `content` is `Uint8Array` for the same reason as `WalkTreeEntry`.
- */
-export interface WriteBatchPayload {
-  mkdirs?: readonly string[];
-  files?: ReadonlyArray<{ path: string; content: Uint8Array }>;
-}
-
-/**
- * Per-entry result of a `vfs.writeBatch`. The host applies
- * everything best-effort and reports back which paths it couldn't
- * write so the realm can surface them as stderr warnings instead
- * of silently losing the user's files.
- */
-export interface WriteBatchResult {
-  ok: true;
-  failedMkdirs: ReadonlyArray<{ path: string; error: string }>;
-  failedFiles: ReadonlyArray<{ path: string; error: string }>;
 }
 
 /**
@@ -256,4 +262,4 @@ export interface WsSubscriberInfo {
 export type RealmOutbound = RealmDoneMsg | RealmErrorMsg | RealmRpcRequest | RealmIframeReadyMsg;
 
 /** Inbound to the realm. */
-export type RealmInbound = RealmInitMsg | RealmRpcResponse | RealmPortInitMsg;
+export type RealmInbound = RealmInitMsg | RealmRpcResponse | RealmPortInitMsg | RealmEventMsg;

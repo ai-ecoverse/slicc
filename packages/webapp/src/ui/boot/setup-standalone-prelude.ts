@@ -1,0 +1,119 @@
+/**
+ * `setup-standalone-prelude.ts` — early boot for the standalone-worker
+ * float: installs the sudo manual-test hook, resolves the tray
+ * runtime-config (staging vs. production worker base URL),
+ * instantiates the page-side `BrowserAPI` (or wires the cherry
+ * follower transport when running embedded), proactively connects
+ * the underlying `CDPClient`, publishes `globalThis.__slicc_browser`,
+ * and mints the per-instance `instanceId` used to scope panel-RPC
+ * channels.
+ *
+ * Extracted verbatim from `mainStandaloneWorker` (~main.ts:264–358).
+ * The CDP eager-connect is load-bearing: the worker-side `BrowserAPI`
+ * has its own `ensureConnected()`, but every `cdp-cmd` envelope it
+ * forwards lands in `startPageCdpForwarder` → `realTransport.send(...)`.
+ * Without the eager connect the first agent CDP command throws
+ * "CDP client is not connected".
+ */
+
+import type { CherryHostTransport } from '../../cdp/cherry-host-transport.js';
+import type { BrowserAPI, CDPTransport } from '../../cdp/index.js';
+import {
+  DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
+  DEFAULT_STAGING_TRAY_WORKER_BASE_URL,
+  fetchRuntimeConfig,
+  resolveTrayRuntimeConfig,
+} from '../../scoops/tray-runtime-config.js';
+import type { UiRuntimeMode } from '../runtime-mode.js';
+import { shouldUseRuntimeModeTrayDefaults } from '../runtime-mode.js';
+import { setupSudoStandalone } from './setup-sudo.js';
+import type { BootStageLogger } from './types.js';
+
+export interface StandalonePreludeDeps {
+  runtimeMode: UiRuntimeMode;
+  envBaseUrl: string | null;
+  window: Window;
+  log: BootStageLogger;
+}
+
+export interface StandalonePreludeResult {
+  browser: BrowserAPI;
+  realCdpTransport: CDPTransport;
+  cherryJoinUrl?: string;
+  cherryTransport?: CherryHostTransport;
+  instanceId: string;
+  isElectronOverlay: boolean;
+}
+
+function mintInstanceId(): string {
+  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `slicc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export async function setupStandalonePrelude(
+  deps: StandalonePreludeDeps
+): Promise<StandalonePreludeResult> {
+  const { runtimeMode, envBaseUrl, window: win, log } = deps;
+  const isElectronOverlay = runtimeMode === 'electron-overlay';
+  log.info('starting standalone with kernel worker');
+
+  const { BrowserAPI } = await import('../../cdp/index.js');
+
+  await setupSudoStandalone({ log });
+
+  const runtimeConfig = await fetchRuntimeConfig();
+  const runtimeDefaultWorkerBaseUrl = shouldUseRuntimeModeTrayDefaults(
+    isElectronOverlay ? 'electron-overlay' : 'standalone',
+    runtimeConfig !== null
+  )
+    ? __DEV__
+      ? DEFAULT_STAGING_TRAY_WORKER_BASE_URL
+      : DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL
+    : null;
+  await resolveTrayRuntimeConfig({
+    locationHref: win.location.href,
+    storage: win.localStorage,
+    envBaseUrl,
+    defaultWorkerBaseUrl: runtimeDefaultWorkerBaseUrl,
+    runtimeConfigFetcher: async () => runtimeConfig,
+  });
+
+  let browser: BrowserAPI;
+  let cherryJoinUrl: string | undefined;
+  let cherryTransport: CherryHostTransport | undefined;
+  if (runtimeMode === 'cherry') {
+    const { setupCherryFollower } = await import('../main-cherry.js');
+    const cherry = await setupCherryFollower();
+    browser = cherry.browser;
+    cherryJoinUrl = cherry.joinUrl;
+    cherryTransport = cherry.transport;
+  } else {
+    browser = new BrowserAPI();
+    try {
+      await browser.connect();
+    } catch (err) {
+      log.warn(
+        'Initial CDP connect failed; worker-forwarded commands will retry on demand',
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+  }
+  const realCdpTransport = browser.getTransport();
+
+  // Expose the page-side BrowserAPI so the OAuth intercept launcher
+  // (active-transport.ts) can resolve a CDP transport from the main
+  // thread — the kernel-worker publishes its own __slicc_browser in
+  // host.ts, but the settings dialog and OAuth click handlers run on
+  // the page realm where that global isn't visible.
+  (globalThis as Record<string, unknown>).__slicc_browser = browser;
+
+  return {
+    browser,
+    realCdpTransport,
+    cherryJoinUrl,
+    cherryTransport,
+    instanceId: mintInstanceId(),
+    isElectronOverlay,
+  };
+}

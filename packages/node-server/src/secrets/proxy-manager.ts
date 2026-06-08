@@ -9,7 +9,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { type FetchProxySecretSource, SecretsPipeline } from '@slicc/shared-ts';
+import { type FetchProxySecretSource, SecretsPipeline, SessionSecretStore } from '@slicc/shared-ts';
 import type { EnvSecretStore } from './env-secret-store.js';
 import type { OauthSecretStore } from './oauth-secret-store.js';
 
@@ -18,14 +18,23 @@ export class SecretProxyManager {
   private readonly _sessionId: string;
   private _envStore?: EnvSecretStore;
   private _oauthStore?: OauthSecretStore;
+  /** In-memory session secrets, layered into the pipeline; never persisted. */
+  readonly sessionStore: SessionSecretStore;
 
-  constructor(store?: EnvSecretStore, sessionId?: string, oauthStore?: OauthSecretStore) {
+  constructor(
+    store?: EnvSecretStore,
+    sessionId?: string,
+    oauthStore?: OauthSecretStore,
+    sessionStore?: SessionSecretStore
+  ) {
     this._sessionId = sessionId ?? randomUUID();
     this._envStore = store;
     this._oauthStore = oauthStore;
+    this.sessionStore = sessionStore ?? new SessionSecretStore();
     this.pipeline = new SecretsPipeline({
       sessionId: this._sessionId,
       source: this.buildSource(),
+      sessionStore: this.sessionStore,
     });
   }
 
@@ -63,6 +72,16 @@ export class SecretProxyManager {
 
   get sessionId(): string {
     return this._sessionId;
+  }
+
+  /**
+   * Underlying pipeline. Exposed for CDP proxy unmasking, which needs to
+   * call `unmaskCdpFrame(frame, hostname, pipeline)` (whole-token, gated
+   * on the target tab's current hostname). Do not use for new fetch-proxy
+   * paths — prefer the typed `unmask*` methods above.
+   */
+  get rawPipeline(): SecretsPipeline {
+    return this.pipeline;
   }
 
   async reload(): Promise<void> {

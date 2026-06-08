@@ -1,46 +1,70 @@
 // packages/webapp/tests/e2e/helpers.ts
 import type { Page } from '@playwright/test';
-import { createRequire } from 'module';
-
-const require = createRequire(import.meta.url);
-const LFS_SCRIPT = require.resolve('@isomorphic-git/lightning-fs/dist/lightning-fs.min.js');
 
 /**
- * Suppress the one-shot SW-claim reload baked into `main.ts`.
+ * sessionStorage key holding the JSON-encoded seed map. Survives
+ * same-tab navigations (e.g. `/` → `/preview/...`) so the seed
+ * responder can answer from whichever page is alive when the SW
+ * asks via BroadcastChannel.
+ */
+const SEED_STORAGE_KEY = '__sliccE2EPreviewSeed';
+
+/**
+ * Suppress the one-shot SW-claim reload baked into `main.ts` AND install
+ * a synchronous `preview-vfs` BroadcastChannel responder that serves
+ * files seeded via {@link seedVFS}.
  *
- * On a fresh page load the app registers the preview service worker with
- * scope `/preview/`. Because the bootstrap page lives at `/`, it is outside
- * that scope and `clients.claim()` will never make it the controller — but
- * the bootstrap waits 1.5s for `controllerchange` and then forces a single
- * `location.reload()`, gated by `sessionStorage['slicc-sw-reloaded']`. That
- * reload races with `waitForSW`'s polling `page.evaluate`, killing its
- * execution context and producing the spurious "Preview SW did not activate
- * within 15s" failures we see in CI.
+ * SW reload: on a fresh page load the app registers the preview service
+ * worker with scope `/preview/`. Because the bootstrap page lives at `/`,
+ * it is outside that scope and `clients.claim()` will never make it the
+ * controller — but the bootstrap waits 1.5s for `controllerchange` and
+ * then forces a single `location.reload()`, gated by
+ * `sessionStorage['slicc-sw-reloaded']`. That reload races with
+ * `waitForSW`'s polling `page.evaluate`, killing its execution context
+ * and producing spurious "Preview SW did not activate within 15s"
+ * failures. Pre-seeding the flag short-circuits the reload.
  *
- * Pre-seeding the sessionStorage flag short-circuits the reload, which is
- * harmless here: the only thing the reload buys is a controlled bootstrap
- * page, which the e2e suite doesn't rely on (every test navigates into
- * `/preview/...` itself, where the SW does control the page).
+ * Seed responder: post-OPFS migration the SW no longer reads any
+ * IndexedDB store directly; every `/preview/*` read is satisfied by the
+ * page-side `preview-vfs` BroadcastChannel responder, which reads from
+ * the OPFS-backed `VirtualFS` (`localFs`, later swapped to the worker's
+ * `remoteVfs`). Writing test fixtures into LightningFS IDB therefore no
+ * longer reaches the responder. Instead this init script registers a
+ * synchronous BC listener that reads the JSON-encoded seed map from
+ * sessionStorage and replies immediately for any seeded path — beating
+ * the page's async OPFS-backed responder to the SW's one-shot waiter.
+ * Misses are silent so {@link installVfsFallbackResponder}'s ENOENT
+ * fallback still drives the 404 tests.
  */
 export async function seedSkipSwReload(page: Page): Promise<void> {
-  await page.addInitScript(() => {
+  await page.addInitScript((storageKey: string) => {
     try {
       sessionStorage.setItem('slicc-sw-reloaded', '1');
     } catch {
       /* sessionStorage may be unavailable for opaque origins */
     }
-  });
-}
-
-/** Minimal interface for the LightningFS promises API used in seedVFS. */
-interface LightningFSPromises {
-  mkdir(path: string): Promise<void>;
-  writeFile(path: string, content: string): Promise<void>;
-}
-
-/** Shape of the LightningFS constructor exposed on window by the UMD bundle. */
-interface LightningFSConstructor {
-  new (dbName: string): { promises: LightningFSPromises };
+    try {
+      const bc = new BroadcastChannel('preview-vfs');
+      bc.addEventListener('message', (event: MessageEvent) => {
+        const data = event.data as
+          | { type?: string; id?: string; path?: string; asText?: boolean }
+          | undefined;
+        if (data?.type !== 'preview-vfs-read' || !data.id || !data.path) return;
+        let map: Record<string, string> | null = null;
+        try {
+          const raw = sessionStorage.getItem(storageKey);
+          map = raw ? (JSON.parse(raw) as Record<string, string>) : null;
+        } catch {
+          map = null;
+        }
+        if (!map || !(data.path in map)) return;
+        const content = map[data.path];
+        bc.postMessage({ type: 'preview-vfs-response', id: data.id, content });
+      });
+    } catch {
+      /* BroadcastChannel may be unavailable for opaque origins */
+    }
+  }, SEED_STORAGE_KEY);
 }
 
 /**
@@ -86,26 +110,19 @@ export async function installVfsFallbackResponder(page: Page): Promise<void> {
 }
 
 /**
- * Seed files into LightningFS IndexedDB (database 'slicc-fs').
- * The preview SW reads from this same database.
- * Must be called after the page has loaded (needs a page context to evaluate JS).
+ * Seed files for the `/preview/*` SW to serve.
+ *
+ * Populates a JSON map in sessionStorage that the seed responder
+ * (installed in {@link seedSkipSwReload}) reads when the SW issues
+ * `preview-vfs-read` envelopes. Must be called after
+ * {@link seedSkipSwReload} + `page.goto('/')` so the page exists and
+ * the init script has registered its BC listener.
  */
 export async function seedVFS(page: Page, files: Record<string, string>): Promise<void> {
-  await page.addScriptTag({ path: LFS_SCRIPT });
-  await page.evaluate(async (fileMap: Record<string, string>) => {
-    const LFS = (window as Window & { LightningFS: LightningFSConstructor }).LightningFS;
-    const fs = new LFS('slicc-fs').promises;
-    for (const [filePath, content] of Object.entries(fileMap)) {
-      const parts = filePath.split('/').filter(Boolean);
-      for (let i = 1; i < parts.length; i++) {
-        const dir = '/' + parts.slice(0, i).join('/');
-        try {
-          await fs.mkdir(dir);
-        } catch {
-          /* directory already exists */
-        }
-      }
-      await fs.writeFile(filePath, content);
-    }
-  }, files);
+  await page.evaluate(
+    ({ storageKey, fileMap }: { storageKey: string; fileMap: Record<string, string> }) => {
+      sessionStorage.setItem(storageKey, JSON.stringify(fileMap));
+    },
+    { storageKey: SEED_STORAGE_KEY, fileMap: files }
+  );
 }

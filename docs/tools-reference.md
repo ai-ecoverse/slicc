@@ -462,14 +462,21 @@ LLM-summarized context compaction (`packages/webapp/src/core/context-compaction.
 **Constants** (from pi-coding-agent's `DEFAULT_COMPACTION_SETTINGS`):
 
 ```typescript
-contextWindow = 200000; // Claude's context window
 reserveTokens = 16384; // Headroom below context limit
 keepRecentTokens = 20000; // Recent messages to preserve
 ```
 
+`contextWindow` is **not** a fixed constant — `scoops/scoop-context.ts` forwards the
+resolved `model.contextWindow` into `createCompactContext`, so the threshold scales
+to the active model (e.g. ~983K for a 1M-window Adobe Sonnet/Opus 4.x, ~183K for a
+200K model). It falls back to a `200000` default only when the model reports no
+window (or a non-positive one — passing `0` would make the threshold negative and
+compact every turn). Sizing GC off the real window avoids compacting — and running
+the cone's memory-extraction call — at a fraction of a large model's capacity.
+
 **Algorithm**:
 
-1. **Threshold check**: Triggers when estimated tokens exceed `contextWindow - reserveTokens` (~183K tokens)
+1. **Threshold check**: Triggers when estimated tokens exceed `contextWindow - reserveTokens`
 2. **Cut point**: Walks backward from newest, keeping ~`keepRecentTokens` of recent messages. Never splits assistant+toolResult pairs.
 3. **LLM summarization**: Calls `generateSummary()` to produce a structured summary (Goal, Progress, Key Decisions, Next Steps, Critical Context)
 4. **Fallback**: If LLM call fails or no API key, falls back to naive message dropping with a compaction marker

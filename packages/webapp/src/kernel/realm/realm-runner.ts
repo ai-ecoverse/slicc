@@ -33,7 +33,13 @@ import type { CommandContext } from 'just-bash';
 import type { ProcessKind, ProcessManager, ProcessOwner } from '../process-manager.js';
 import { attachRealmHost, type RealmHostHandle } from './realm-host.js';
 import type { RealmPortLike } from './realm-rpc.js';
-import type { RealmDoneMsg, RealmErrorMsg, RealmInitMsg, RealmKind } from './realm-types.js';
+import type {
+  RealmDoneMsg,
+  RealmErrorMsg,
+  RealmInitMsg,
+  RealmKind,
+  RealmMountPoint,
+} from './realm-types.js';
 
 // ---------------------------------------------------------------------------
 // Realm abstraction
@@ -95,7 +101,25 @@ export interface RunInRealmOptions {
   /** Pyodide indexURL — only consumed when `kind:'py'`. */
   pyodideIndexURL?: string;
   /** Pyodide VFS sync directories — only consumed when `kind:'py'`. */
-  pyodideSyncDirs?: string[];
+  pyodideMountDirs?: string[];
+  /**
+   * Forwarded to `RealmInitMsg.opfsMountDbName`. Always set to
+   * `'slicc-fs'` by the Python command — the Python realm worker
+   * uses `pyodide.FS.mount(OPFS_SYNC_FS, …)`
+   * against the same OPFS subtree the kernel worker owns — the
+   * in-tree plugin builds the FS tree synchronously from a prewalk
+   * snapshot and queues OPFS mutations, which are drained via
+   * `flushOpfsRealmMounts` before `realm-done`.
+   */
+  opfsMountDbName?: string;
+  /**
+   * Forwarded to `RealmInitMsg.mountPoints` — VFS mount points
+   * overlapping {@link pyodideMountDirs}. The Python realm worker
+   * overlays a throwing FS plugin at each path so any synchronous
+   * access from Python raises an OSError pointing at the async
+   * `slicc.fs` module. Only consumed when `kind:'py'`.
+   */
+  mountPoints?: RealmMountPoint[];
   /**
    * Override the `ProcessKind` used to register the process. Defaults
    * to `'jsh'` (Python migration overrides this with `'py'` once the
@@ -216,7 +240,9 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
       filename: opts.filename,
       stdin: opts.stdin,
       pyodideIndexURL: opts.pyodideIndexURL,
-      pyodideSyncDirs: opts.pyodideSyncDirs,
+      pyodideMountDirs: opts.pyodideMountDirs,
+      opfsMountDbName: opts.opfsMountDbName,
+      mountPoints: opts.mountPoints,
     };
     realm.controlPort.postMessage(init);
   });

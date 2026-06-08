@@ -114,8 +114,8 @@ describe('parseGitHubRef', () => {
   });
 
   it('rejects http:// (https-only)', () => {
-    // Wave 6 follow-up: avoid silently installing a skill fetched over
-    // plaintext where a network attacker could substitute the response.
+    // Avoid silently installing a skill fetched over plaintext where
+    // a network attacker could substitute the response.
     expect(parseGitHubRef('http://github.com/owner/repo')).toBeNull();
   });
 
@@ -243,11 +243,7 @@ describe('upskill command GitHub flows', () => {
 
   afterEach(async () => {
     _resetGlobalFsCache();
-    await Promise.allSettled(
-      createdFileSystems.map((instance) =>
-        (instance.getLightningFS() as { _deactivate?: () => Promise<void> })._deactivate?.()
-      )
-    );
+    await Promise.allSettled(createdFileSystems.map((instance) => instance.dispose()));
     vi.restoreAllMocks();
   });
 
@@ -407,11 +403,7 @@ describe('upskill Tessl registry integration', () => {
 
   afterEach(async () => {
     _resetGlobalFsCache();
-    await Promise.allSettled(
-      createdFileSystems.map((instance) =>
-        (instance.getLightningFS() as { _deactivate?: () => Promise<void> })._deactivate?.()
-      )
-    );
+    await Promise.allSettled(createdFileSystems.map((instance) => instance.dispose()));
     vi.restoreAllMocks();
   });
 
@@ -618,7 +610,7 @@ describe('upskill Tessl registry integration', () => {
   });
 
   it('--path flag overrides URL-implicit /tree/<branch>/<path> sub-path at dispatch', async () => {
-    // Wave 6 follow-up: code reading confirmed `effectiveSubPath = subPath ?? githubRef.path`,
+    // Code reading confirmed `effectiveSubPath = subPath ?? githubRef.path`,
     // i.e. an explicit --path wins over the implicit path baked into the URL.
     // This test locks that precedence in end-to-end through the command dispatcher:
     // the URL would naturally scope discovery to "implicit/", but --path "explicit"
@@ -935,11 +927,7 @@ describe('upskill recommendations subcommand', () => {
 
   afterEach(async () => {
     _resetGlobalFsCache();
-    await Promise.allSettled(
-      createdFileSystems.map((instance) =>
-        (instance.getLightningFS() as { _deactivate?: () => Promise<void> })._deactivate?.()
-      )
-    );
+    await Promise.allSettled(createdFileSystems.map((instance) => instance.dispose()));
     vi.restoreAllMocks();
   });
 
@@ -1270,11 +1258,7 @@ describe('installRecommendedSkills helper (no-shell entry point)', () => {
 
   afterEach(async () => {
     _resetGlobalFsCache();
-    await Promise.allSettled(
-      createdFileSystems.map((instance) =>
-        (instance.getLightningFS() as { _deactivate?: () => Promise<void> })._deactivate?.()
-      )
-    );
+    await Promise.allSettled(createdFileSystems.map((instance) => instance.dispose()));
     vi.restoreAllMocks();
   });
 
@@ -1796,7 +1780,7 @@ describe('upskill command — shell-injection defense', () => {
 
   afterEach(async () => {
     _resetGlobalFsCache();
-    await (fs.getLightningFS() as { _deactivate?: () => Promise<void> })._deactivate?.();
+    await fs.dispose();
     vi.restoreAllMocks();
   });
 
@@ -1981,11 +1965,7 @@ describe('upskill browse.sh registry integration', () => {
   afterEach(async () => {
     _resetGlobalFsCache();
     _resetBrowseShCatalogCache();
-    await Promise.allSettled(
-      createdFileSystems.map((instance) =>
-        (instance.getLightningFS() as { _deactivate?: () => Promise<void> })._deactivate?.()
-      )
-    );
+    await Promise.allSettled(createdFileSystems.map((instance) => instance.dispose()));
     vi.restoreAllMocks();
   });
 
@@ -2407,11 +2387,7 @@ describe('upskill tabs', () => {
   afterEach(async () => {
     _resetGlobalFsCache();
     _resetBrowseShCatalogCache();
-    await Promise.allSettled(
-      createdFileSystems.map((instance) =>
-        (instance.getLightningFS() as { _deactivate?: () => Promise<void> })._deactivate?.()
-      )
-    );
+    await Promise.allSettled(createdFileSystems.map((instance) => instance.dispose()));
     vi.restoreAllMocks();
   });
 

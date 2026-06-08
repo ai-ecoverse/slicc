@@ -416,24 +416,18 @@ export function getProviderModels(providerId: string): Model<Api>[] {
         const apiType = pm.api === 'openai' ? 'openai' : 'anthropic';
         const customApi = `${providerId}-${apiType}` as Api;
         const base = modelMap.get(pm.id);
-        const model: Record<string, any> = base
-          ? { ...base, api: customApi, provider: providerId }
-          : {
-              id: pm.id,
-              name: pm.name ?? pm.id,
-              provider: providerId,
-              api: customApi,
-              baseUrl: '',
-              contextWindow: 200000,
-              maxTokens: 16384,
-              input: ['text', 'image'],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              inputCost: 0,
-              outputCost: 0,
-              cacheReadCost: 0,
-              cacheWriteCost: 0,
-              reasoning: true,
-            };
+        let model: Record<string, any>;
+        if (base) {
+          model = { ...base, api: customApi, provider: providerId };
+        } else {
+          // Single source for the synthesized-model shape (api is known here
+          // from proxy metadata, so pass it explicitly rather than inferring).
+          model = buildProviderRoutedModel(providerId, pm.id, '', customApi) as unknown as Record<
+            string,
+            any
+          >;
+          if (pm.name) model.name = pm.name; // proxy display name; else keep the id
+        }
 
         // Apply modelOverrides (layer 2) then getModelIds metadata (layer 3).
         // pm is a superset of ModelMetadata (adds id/name) — applyModelMetadata
@@ -1312,6 +1306,51 @@ export async function clearAllSettings(): Promise<void> {
 }
 
 /**
+ * Cold-cache heuristic for the proxy API family of a model id pi-ai's registry
+ * doesn't know. The real `api` comes from the provider's model metadata once
+ * the list is fetched; until then we guess from the id so an OpenAI-flavored
+ * model routes through the OpenAI API instead of Anthropic (which would fail at
+ * the wire-format level). Conservative — only well-known OpenAI families map to
+ * `openai`; everything else (incl. all current Adobe `claude-*` models) stays
+ * `anthropic`. Self-corrects once the model list warms.
+ */
+function inferProviderApiType(modelId: string): 'anthropic' | 'openai' {
+  return /^(?:gpt[-.]?|o[0-9]|chatgpt)/i.test(modelId) ? 'openai' : 'anthropic';
+}
+
+/**
+ * Build a provider-routed model for a model id that pi-ai's registry does not
+ * know. OAuth/custom providers (Adobe, etc.) proxy arbitrary model ids, so an
+ * unknown id must still route through the provider rather than degrading to a
+ * native Anthropic model — otherwise the provider's token (e.g. an Adobe IMS
+ * token) is sent to api.anthropic.com and rejected with `401 invalid x-api-key`.
+ *
+ * `api` is passed by callers that already know it (e.g. `getProviderModels`,
+ * from proxy metadata); when omitted (the cold-cache resolver path) it's
+ * inferred from the id via `inferProviderApiType`. Context-window/max-tokens
+ * are conservative defaults; the real metadata arrives once the list is fetched.
+ */
+function buildProviderRoutedModel(
+  providerId: string,
+  modelId: string,
+  baseUrl: string | null,
+  api?: Api
+): Model<Api> {
+  return {
+    id: modelId,
+    name: modelId,
+    provider: providerId,
+    api: api ?? (`${providerId}-${inferProviderApiType(modelId)}` as Api),
+    baseUrl: baseUrl ?? '',
+    contextWindow: 200000,
+    maxTokens: 16384,
+    input: ['text', 'image'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    reasoning: true,
+  } as Model<Api>;
+}
+
+/**
  * Resolve a specific model by ID, using the current provider's
  * baseUrl and API routing. Falls back to resolveCurrentModel() if
  * modelId is not provided.
@@ -1321,9 +1360,9 @@ export function resolveModelById(modelId?: string): Model<Api> {
 
   const providerId = getSelectedProvider();
   const baseUrl = getBaseUrlForProvider(providerId);
+  const providerConfig = getProviderConfig(providerId);
 
   try {
-    const providerConfig = getProviderConfig(providerId);
     const effectiveProvider = providerConfig.isOAuth
       ? 'anthropic'
       : providerId === 'azure-ai-foundry'
@@ -1355,7 +1394,26 @@ export function resolveModelById(modelId?: string): Model<Api> {
       resolved = { ...resolved, baseUrl };
     }
     return resolved;
-  } catch {
+  } catch (err) {
+    // Common, benign case: the id is simply unknown to pi-ai. Keep at debug so
+    // an *unexpected* throw (registry/override bug) leaves a breadcrumb instead
+    // of resolving silently.
+    log.debug('resolveModelById: pi-ai lookup miss, using provider fallback', {
+      providerId,
+      modelId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    // Unknown to pi-ai (threw or returned no id). For an OAuth/custom provider,
+    // resolve the REQUESTED id through the provider — prefer its own model list,
+    // else synthesize a provider-routed model. Never fall through to
+    // resolveCurrentModel() (which resolves the *selected* model, not the
+    // requested one) or to a native Anthropic model (which would leak the
+    // OAuth token → 401 invalid x-api-key). See the cloud-cone regression.
+    if (providerConfig.isOAuth) {
+      const providerModel = getProviderModels(providerId).find((m) => m.id === modelId);
+      if (providerModel) return baseUrl ? { ...providerModel, baseUrl } : providerModel;
+      return buildProviderRoutedModel(providerId, modelId, baseUrl);
+    }
     return resolveCurrentModel();
   }
 }
@@ -1411,11 +1469,23 @@ export function resolveCurrentModel(): Model<Api> {
     }
 
     return resolved;
-  } catch {
+  } catch (err) {
+    log.debug('resolveCurrentModel: pi-ai lookup miss, using provider fallback', {
+      providerId,
+      effectiveModelId,
+      error: err instanceof Error ? err.message : String(err),
+    });
     // Model not in pi-ai registry — try provider's custom model list first
     const customModel = models.find((m) => m.id === effectiveModelId);
     if (customModel) {
       return baseUrl ? { ...customModel, baseUrl } : customModel;
+    }
+    // OAuth/custom providers proxy arbitrary model ids — route the unknown id
+    // through the provider rather than returning a native Anthropic model,
+    // which would send the provider's token (e.g. Adobe IMS) to
+    // api.anthropic.com → 401 invalid x-api-key. See the cloud-cone regression.
+    if (providerConfig.isOAuth) {
+      return buildProviderRoutedModel(providerId, effectiveModelId, baseUrl);
     }
     // Last resort fallback
     return getModelDynamic('anthropic', 'claude-sonnet-4-0');

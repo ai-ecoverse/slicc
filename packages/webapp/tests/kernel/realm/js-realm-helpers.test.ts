@@ -298,7 +298,7 @@ describe('sandbox.html mirror parity', () => {
       'utf-8'
     );
     // Surfaces the realm wires into AsyncFunction's named parameters.
-    for (const id of ['cli', 'c', 'time', 'fmt', 'pool', 'skill', 'http']) {
+    for (const id of ['cli', 'c', 'time', 'fmt', 'pool', 'skill', 'http', 'usb', 'serial', 'hid']) {
       expect(sandbox).toContain(`'${id}'`);
     }
     // Symbols whose presence we want pinned so a refactor removing
@@ -309,6 +309,18 @@ describe('sandbox.html mirror parity', () => {
       'gmailDate',
       'parseDuration',
       'NO_COLOR',
+      // usb / serial / hid device-bridge surfaces (parity with the
+      // createUsbBridge / createSerialBridge / createHidBridge factories).
+      'makeUsbDevice',
+      'makeSerialPort',
+      'makeHidDevice',
+      'transferIn',
+      'controlTransferOut',
+      'sendReport',
+      'receiveFeatureReport',
+      'getSignals',
+      'bytesToDataView',
+      'asFilterArray',
     ]) {
       expect(sandbox).toContain(needle);
     }

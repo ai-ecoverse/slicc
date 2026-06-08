@@ -1,6 +1,6 @@
 {
   "name": "sliccy",
-  "version": "3.29.0",
+  "version": "3.43.0",
   "description": "Browser-based coding agent with thin CLI server",
   "license": "Apache-2.0",
   "type": "module",
@@ -46,11 +46,14 @@
     "pretest": "npm run preflight",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:coverage:cloudflare-worker": "vitest run --project cloudflare-worker --coverage --coverage.include='packages/cloudflare-worker/src/**' --coverage.thresholds.lines=75 --coverage.thresholds.statements=75 --coverage.thresholds.functions=85 --coverage.thresholds.branches=65",
-    "test:coverage:node-server": "vitest run --project node-server --coverage --coverage.thresholds.lines=65 --coverage.thresholds.statements=65 --coverage.thresholds.functions=65 --coverage.thresholds.branches=55",
-    "test:coverage:chrome-extension": "vitest run --project chrome-extension --coverage --coverage.exclude='**/node_modules/**' --coverage.exclude='**/dist/**' --coverage.exclude='**/tests/**' --coverage.exclude='**/*.d.ts' --coverage.exclude='**/*.config.{ts,js,mjs}' --coverage.exclude='**/types.ts' --coverage.exclude='**/index.html' --coverage.exclude='**/shims/**' --coverage.exclude='packages/*/src/**/*.test.ts' --coverage.exclude='packages/webapp/src/scoops/**' --coverage.exclude='packages/webapp/src/net/**' --coverage.exclude='packages/webapp/src/shell/**' --coverage.exclude='packages/webapp/src/fs/**' --coverage.exclude='packages/webapp/src/core/proxy-error.ts' --coverage.exclude='packages/node-server/src/**' --coverage.thresholds.lines=55 --coverage.thresholds.statements=55 --coverage.thresholds.functions=60 --coverage.thresholds.branches=45",
-    "test:coverage:webapp": "vitest run --project webapp --coverage",
-    "test:coverage:cherry": "vitest run --project cherry --coverage",
+    "test:coverage:cloudflare-worker": "node packages/dev-tools/tools/coverage-gate.mjs cloudflare-worker",
+    "test:coverage:node-server": "node packages/dev-tools/tools/coverage-gate.mjs node-server",
+    "test:coverage:chrome-extension": "node packages/dev-tools/tools/coverage-gate.mjs chrome-extension",
+    "test:coverage:webapp": "node packages/dev-tools/tools/coverage-gate.mjs webapp",
+    "test:coverage:cherry": "node packages/dev-tools/tools/coverage-gate.mjs cherry",
+    "test:coverage:cloud-core": "node packages/dev-tools/tools/coverage-gate.mjs cloud-core",
+    "test:coverage:shared": "node packages/dev-tools/tools/coverage-gate.mjs shared",
+    "coverage:ratchet": "node packages/dev-tools/tools/coverage-ratchet.mjs",
     "test:server-integration": "vitest run --config packages/node-server/tests/integration/server/vitest.config.ts",
     "test:e2e": "npx playwright test --config packages/webapp/tests/e2e/playwright.config.ts",
     "start:extension": "npm run build -w @slicc/chrome-extension && npm run dev -- --profile=extension",
@@ -67,7 +70,7 @@
     "package:release": "node dist/node-server/release-package.js",
     "publish:chrome": "node dist/node-server/publish-chrome-web-store.js",
     "publish:worker": "bash packages/cloudflare-worker/scripts/publish-worker.sh",
-    "postinstall": "if [ -d packages/shared-ts ]; then npm run build -w @slicc/shared-ts; fi && if [ -d packages/cloud-core ]; then npm run build -w @slicc/cloud-core; fi",
+    "postinstall": "if [ -d patches ]; then npx --no-install patch-package || { echo \"ERROR: patches/ present but patch-package not installed (run a full 'npm ci' incl. devDependencies)\"; exit 1; }; fi && if [ -d packages/shared-ts ]; then npm run build -w @slicc/shared-ts; fi && if [ -d packages/cloud-core ]; then npm run build -w @slicc/cloud-core; fi",
     "prepare": "husky"
   },
   "dependencies": {
@@ -87,13 +90,14 @@
     "esbuild": "0.28.0",
     "husky": "9.1.7",
     "knip": "^6.11.0",
-    "lint-staged": "17.0.5",
+    "lint-staged": "17.0.7",
+    "patch-package": "8.0.1",
     "prettier": "3.8.3",
     "semantic-release": "25.0.3",
-    "tsx": "4.22.3",
+    "tsx": "4.22.4",
     "typescript": "^6.0.0",
-    "vite": "8.0.14",
-    "vitest": "4.1.7"
+    "vite": "8.0.16",
+    "vitest": "4.1.8"
   },
   "lint-staged": {
     "**/*.{ts,tsx,js,jsx,mjs,cjs,json,jsonc,css}": [

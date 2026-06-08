@@ -3,7 +3,7 @@
  * inside a `kind:'py'` realm. SIGKILL terminates the realm worker
  * synchronously (`worker.terminate()`), so a runaway
  * `while True: pass` exits 137 in ~50 ms — the same hard-kill
- * guarantee `node -e` got from Phase 8.
+ * guarantee `node -e` provides.
  *
  * The realm worker (`kernel/realm/py-realm-worker.ts`) handles
  * `loadPyodide`, VFS↔Pyodide-FS sync via the `vfs` RPC channel,
@@ -15,7 +15,7 @@
  * follow-up). Documented in plan §Risks.
  */
 
-import type { Command } from 'just-bash';
+import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { ProcessManager, ProcessOwner } from '../../kernel/process-manager.js';
 import {
@@ -24,7 +24,148 @@ import {
 } from '../../kernel/realm/realm-factory.js';
 import type { RealmFactory } from '../../kernel/realm/realm-runner.js';
 import { runInRealm } from '../../kernel/realm/realm-runner.js';
+import type { RealmMountPoint } from '../../kernel/realm/realm-types.js';
 import { stdinAsText } from '../just-bash-compat.js';
+
+/**
+ * Top-level names reserved by Pyodide/Emscripten. Mounting OPFS over
+ * any of these shadows Pyodide's own writable scratch dir, its
+ * built-in module tree, or the device pseudo-fs. `/tmp` is excluded
+ * here because we always include `/tmp` explicitly via the
+ * `OPFS_SYNC_FS` plugin (Pyodide's MEMFS `/tmp` would otherwise lose
+ * write-back to the kernel VFS). `bin`, `usr`, `etc` belong to no
+ * VFS root today but are reserved defensively so a future top-level
+ * `/usr` or `/bin` directory doesn't silently clobber the realm.
+ */
+const PYODIDE_BUILTIN_ROOT_NAMES = new Set([
+  'dev',
+  'proc',
+  'lib',
+  'bin',
+  'usr',
+  'etc',
+  'home',
+  'tmp',
+]);
+
+/**
+ * Build the list of absolute VFS directories to mount into the
+ * Python realm. Enumerates `/` via `fs.readdir`, keeps only
+ * directories, drops Pyodide/Emscripten built-in names, then always
+ * appends `/tmp` so the realm has a writable scratch dir whose
+ * mutations flush back through `OPFS_SYNC_FS`.
+ *
+ * Mounting the full non-conflicting VFS root (regardless of cwd) lets
+ * Python read `/workspace`, `/shared`, `/scoops`, `/sessions`, … by
+ * absolute path from any cwd. The legacy `[cwd, '/tmp']` restriction
+ * was a hedge against the cost of the pre-OPFS `walkTree` sync path;
+ * under `OPFS_SYNC_FS` mount setup is cheap and bounded to the
+ * `slicc-fs` subtree (external/remote mounts live elsewhere and are
+ * not preloaded).
+ *
+ * Failures enumerating `/` (e.g. a vfs adapter without `readdir`)
+ * collapse to `['/tmp']` — better to lose absolute-path coverage than
+ * to crash the command.
+ */
+export async function computePyodideMountDirs(
+  fs: CommandContext['fs'],
+  builtins: ReadonlySet<string> = PYODIDE_BUILTIN_ROOT_NAMES
+): Promise<string[]> {
+  const dirs: string[] = [];
+  const seen = new Set<string>();
+  try {
+    const names = await fs.readdir('/');
+    for (const name of names) {
+      if (!name || name.includes('/')) continue;
+      if (builtins.has(name)) continue;
+      const abs = `/${name}`;
+      let isDir = false;
+      try {
+        const st = await fs.stat(abs);
+        isDir = !!st.isDirectory;
+      } catch {
+        continue;
+      }
+      if (!isDir) continue;
+      if (seen.has(abs)) continue;
+      seen.add(abs);
+      dirs.push(abs);
+    }
+  } catch {
+    /* enumeration failure → fall through to /tmp-only mount */
+  }
+  if (!seen.has('/tmp')) {
+    seen.add('/tmp');
+    dirs.push('/tmp');
+  }
+  return dirs;
+}
+
+/**
+ * Compute the set of user-visible VFS mount points that overlap any
+ * of `syncDirs`. A mount overlaps when its path is exactly a syncDir,
+ * is contained within a syncDir, or is an ancestor of a syncDir. Each
+ * overlapping mount is tagged with its backend `kind` (informational
+ * only — every kind bombs identically on sync access). Internal
+ * mounts (`/proc`, …) are skipped by `VirtualFS.listMountPoints`.
+ *
+ * Returns `[]` when the wrapped FS doesn't expose `listMountPoints`
+ * (test stubs, scoop-restricted FS) — the realm then runs with no
+ * bomb overlays and the OPFS placeholder is what Python sees.
+ */
+export function computeOverlappingMountPoints(
+  fs: CommandContext['fs'],
+  syncDirs: readonly string[]
+): RealmMountPoint[] {
+  const wrapped = fs as unknown as {
+    listMountPoints?: () => { path: string; kind: 'local' | 's3' | 'da' | 'proc' }[];
+  };
+  if (typeof wrapped.listMountPoints !== 'function') return [];
+  const overlap = (mountPath: string): boolean => {
+    for (const dir of syncDirs) {
+      if (mountPath === dir) return true;
+      if (mountPath.startsWith(dir === '/' ? '/' : dir + '/')) return true;
+      if (dir.startsWith(mountPath + '/')) return true;
+    }
+    return false;
+  };
+  const out: RealmMountPoint[] = [];
+  for (const entry of wrapped.listMountPoints()) {
+    if (entry.kind === 'proc') continue;
+    if (!overlap(entry.path)) continue;
+    out.push({ path: entry.path, kind: entry.kind });
+  }
+  return out;
+}
+
+/**
+ * The kernel worker's VFS lives at `OPFS-root/slicc-fs/`. We pass
+ * the dbName through `RealmInitMsg.opfsMountDbName` so the Python
+ * realm worker (a separate `DedicatedWorker`) can resolve the same
+ * OPFS subtree and mount it via the in-tree `OPFS_SYNC_FS` plugin.
+ * The dbName mirrors `Orchestrator`'s primary
+ * `VirtualFS.create({ dbName: 'slicc-fs' })` call site — kept in
+ * sync explicitly rather than imported to avoid pulling the
+ * orchestrator into this command.
+ *
+ * Production always selects OPFS so the dbName is always set. The
+ * capability check exists only so Node-based test environments
+ * without `navigator.storage.getDirectory` fall through to the
+ * legacy `walkTree` sync path (same env-fallback used by
+ * `resolveVfsBackendFromEnv`).
+ */
+const OPFS_KERNEL_DB_NAME = 'slicc-fs';
+
+function resolveOpfsMountDbName(): string | undefined {
+  try {
+    const storage = (globalThis as { navigator?: { storage?: { getDirectory?: unknown } } })
+      .navigator?.storage;
+    if (typeof storage?.getDirectory === 'function') return OPFS_KERNEL_DB_NAME;
+  } catch {
+    /* navigator may be unavailable in some test contexts */
+  }
+  return undefined;
+}
 
 export interface PythonCommandOptions {
   /**
@@ -118,17 +259,21 @@ export function createPython3LikeCommand(
       };
     }
 
-    // Sync directories: cwd, /tmp, and the script's directory
-    // when running a file. The realm worker syncs VFS→Pyodide-FS
-    // before exec and Pyodide-FS→VFS after, so file writes from
-    // Python persist back through the kernel's VFS.
-    const syncDirs = [ctx.cwd, '/tmp'];
-    if (filename !== '<stdin>' && filename !== '-c') {
-      const scriptDir = filename.includes('/')
-        ? filename.slice(0, filename.lastIndexOf('/'))
-        : ctx.cwd;
-      if (!syncDirs.includes(scriptDir)) syncDirs.push(scriptDir);
-    }
+    // Mount the full non-conflicting VFS root so Python can read
+    // any top-level directory (`/workspace`, `/shared`, `/scoops`,
+    // `/sessions`, …) by absolute path regardless of cwd. Built-in
+    // names (`dev`/`proc`/`lib`/`bin`/`usr`/`etc`/`home`/`tmp`) are
+    // dropped so we don't shadow Pyodide's writable scratch dir or
+    // its module tree; `/tmp` is appended explicitly so its writes
+    // flush back through `OPFS_SYNC_FS`. The realm worker syncs
+    // VFS→Pyodide-FS before exec and Pyodide-FS→VFS after, so file
+    // writes from Python persist back through the kernel's VFS.
+    const syncDirs = await computePyodideMountDirs(ctx.fs);
+    // Tag every mount that overlaps the sync dirs with its backend
+    // `kind`. The realm overlays a throwing FS plugin at each path
+    // so any synchronous Python access raises an OSError directing
+    // the caller at the async `slicc.fs` module.
+    const mountPoints = computeOverlappingMountPoints(ctx.fs, syncDirs);
 
     const pm = options ? lookupGlobalPm() : null;
     const owner: ProcessOwner = { kind: 'system' };
@@ -138,6 +283,7 @@ export function createPython3LikeCommand(
     // must not re-read its own code as input — mirror the `node` command's
     // empty-stdin behavior in that branch.
     const realmStdin = filename === '<stdin>' ? '' : stdinAsText(ctx.stdin);
+    const opfsMountDbName = resolveOpfsMountDbName();
 
     if (!pm) {
       return runWithEphemeralPm({
@@ -152,7 +298,9 @@ export function createPython3LikeCommand(
         ctx,
         stdin: realmStdin,
         pyodideIndexURL,
-        pyodideSyncDirs: syncDirs,
+        pyodideMountDirs: syncDirs,
+        opfsMountDbName,
+        mountPoints,
       });
     }
 
@@ -170,7 +318,9 @@ export function createPython3LikeCommand(
       ctx,
       stdin: realmStdin,
       pyodideIndexURL,
-      pyodideSyncDirs: syncDirs,
+      pyodideMountDirs: syncDirs,
+      opfsMountDbName,
+      mountPoints,
       procKind: 'py',
     });
   });
@@ -207,7 +357,9 @@ async function runWithEphemeralPm(args: {
   ctx: Parameters<typeof runInRealm>[0]['ctx'];
   stdin?: string;
   pyodideIndexURL: string;
-  pyodideSyncDirs: string[];
+  pyodideMountDirs: string[];
+  opfsMountDbName: string | undefined;
+  mountPoints?: RealmMountPoint[];
 }) {
   if (!EphemeralPm) {
     const { ProcessManager: PM } = await import('../../kernel/process-manager.js');
@@ -227,7 +379,9 @@ async function runWithEphemeralPm(args: {
     ctx: args.ctx,
     stdin: args.stdin,
     pyodideIndexURL: args.pyodideIndexURL,
-    pyodideSyncDirs: args.pyodideSyncDirs,
+    pyodideMountDirs: args.pyodideMountDirs,
+    mountPoints: args.mountPoints,
+    opfsMountDbName: args.opfsMountDbName,
     procKind: 'py',
   });
 }

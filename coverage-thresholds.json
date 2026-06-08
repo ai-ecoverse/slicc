@@ -1,0 +1,88 @@
+{
+  "$comment": "Single source of truth for per-package coverage floors. Edited automatically by the nightly coverage ratchet (packages/dev-tools/tools/coverage-ratchet.mjs), which only ever raises floors and keeps <=1% headroom below measured coverage. Consumed by the CI gates via coverage-gate.mjs (TypeScript) and swift-coverage-check.sh (Swift). Do not hand-lower these values.",
+  "typescript": {
+    "cloudflare-worker": {
+      "lines": 82,
+      "statements": 81,
+      "functions": 92,
+      "branches": 69,
+      "coverageExclude": [
+        "**/node_modules/**",
+        "**/dist/**",
+        "**/tests/**",
+        "**/*.d.ts",
+        "**/*.config.{ts,js,mjs}",
+        "**/types.ts",
+        "**/shims/**",
+        "packages/*/src/**/*.test.ts",
+        "packages/shared-ts/**",
+        "packages/cloud-core/**"
+      ]
+    },
+    "node-server": {
+      "lines": 74,
+      "statements": 72,
+      "functions": 76,
+      "branches": 64
+    },
+    "chrome-extension": {
+      "lines": 73,
+      "statements": 71,
+      "functions": 66,
+      "branches": 60,
+      "coverageExclude": [
+        "**/node_modules/**",
+        "**/dist/**",
+        "**/tests/**",
+        "**/*.d.ts",
+        "**/*.config.{ts,js,mjs}",
+        "**/types.ts",
+        "**/index.html",
+        "**/shims/**",
+        "packages/*/src/**/*.test.ts",
+        "packages/webapp/src/scoops/**",
+        "packages/webapp/src/net/**",
+        "packages/webapp/src/shell/**",
+        "packages/webapp/src/fs/**",
+        "packages/webapp/src/core/proxy-error.ts",
+        "packages/node-server/src/**"
+      ]
+    },
+    "webapp": {
+      "lines": 71,
+      "statements": 69,
+      "functions": 71,
+      "branches": 60
+    },
+    "cherry": {
+      "lines": 72,
+      "statements": 71,
+      "functions": 88,
+      "branches": 50
+    },
+    "cloud-core": {
+      "lines": 80,
+      "statements": 78,
+      "functions": 72,
+      "branches": 75
+    },
+    "shared": {
+      "lines": 94,
+      "statements": 93,
+      "functions": 92,
+      "branches": 84
+    }
+  },
+  "swift": {
+    "swift-server": {
+      "lines": 55,
+      "functions": 55,
+      "regions": 51
+    },
+    "swift-launcher": {
+      "lines": 21,
+      "functions": 25,
+      "regions": 29
+    }
+  }
+}

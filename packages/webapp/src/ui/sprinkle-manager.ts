@@ -7,7 +7,11 @@ import { createLogger } from '../core/logger.js';
 import type { FsWatcher, VirtualFS } from '../fs/index.js';
 import { getPanelRpcClient, hasLocalDom } from '../kernel/panel-rpc.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
-import { type CaptureScreenResult, SprinkleBridge } from './sprinkle-bridge.js';
+import {
+  type CaptureScreenResult,
+  SprinkleBridge,
+  type SprinkleExecHandler,
+} from './sprinkle-bridge.js';
 import { discoverSprinkles, type Sprinkle } from './sprinkle-discovery.js';
 import { SprinkleRenderer } from './sprinkle-renderer.js';
 import { trackSprinkleView } from './telemetry.js';
@@ -198,6 +202,15 @@ export interface SprinkleManagerOptions {
    * discovered sprinkle gets a rail icon.
    */
   inlineSprinkles?: ReadonlySet<string>;
+  /**
+   * Page→worker shell-exec transport handed to the `SprinkleBridge` so
+   * `slicc.exec()` / `slicc.agent()` run in the same worker shell used
+   * by `.jsh` / `node -e`. Wired by `ui/main.ts` over a
+   * `TerminalSessionClient` on both the standalone-worker and extension
+   * boot paths. When unset, the bridge surfaces a clean
+   * "shell bridge not available" result instead of throwing.
+   */
+  execHandler?: SprinkleExecHandler;
 }
 
 /**
@@ -352,7 +365,16 @@ export class SprinkleManager {
       (name) => this.minimize(name),
       stopConeHandler,
       options.onAttachImage ?? (() => {}),
-      captureScreenHandler
+      captureScreenHandler,
+      options.execHandler,
+      // Forward host-pushed device events (currently `hid:inputreport`)
+      // to the open sprinkle's iframe via the renderer's
+      // `pushDeviceEvent`. Inline-mode sprinkles never go through here
+      // — their listeners are invoked directly inside the bridge.
+      (name, channel, payload) => {
+        const entry = this.openSprinkles.get(name);
+        entry?.renderer.pushDeviceEvent(channel, payload);
+      }
     );
     this.callbacks = callbacks;
     this.autoOpenBehavior = options.autoOpenBehavior ?? 'activate';

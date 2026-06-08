@@ -127,6 +127,14 @@ and self-close, but DO NOT count as the canonical detached tab.
 - **Extension-relative scripts** must load statically in `<head>`, not via dynamic `createElement('script').src` (opaque origin blocks runtime loads).
 - See `docs/pitfalls.md` "Extension Sandbox: External Scripts & Opaque Origin" for the full reference.
 
+## Device / Directory Picker Popups
+
+The `mount` / `usb` / `serial` / `hid` shell commands call system choosers (`showDirectoryPicker` / `navigator.{usb,serial,hid}.request*`), which the side panel cannot host reliably. All four pickers share a single popup entry point — `picker-popup.html` + `picker-popup.js` — parameterized by `?kind=directory|usb-device|serial-port|hid-device`. The two files are copied into `dist/extension/` by the `closeBundle` hook in `vite.config.ts` (not Vite `rollupOptions.input` entries).
+
+The popup runs the chooser on its own button-click gesture (satisfying Chrome's user-gesture rule), then posts `{ source: 'picker-popup', kind, requestId, … }` back via `chrome.runtime` messaging. The page-side launcher is `openPickerPopup(kind, filters, requestId)` in `packages/webapp/src/shell/supplemental-commands/picker-popup.ts`; thin typed adapters (`openMountPickerPopup`, `openUsbPickerPopup`, `openSerialPickerPopup`, `openHidPickerPopup`) wrap it for the existing call sites. Directory results carry an opaque `{ handleInIdb, idbKey, dirName }` (the popup stashes the non-postable `FileSystemDirectoryHandle` in the shared `slicc-pending-mount` IDB store); device results carry identifiers (`vendorId/productId/serialNumber`) the caller re-acquires via `navigator.{usb,serial,hid}.getDevices()` in its own realm.
+
+The cone (agent) path for `usb request` / `serial request` / `hid request` mirrors `mount`'s approval flow: the command surfaces a `showToolUI` approval card in chat (built by `picker-approval.ts`); the user click drives the chooser via dip (`handleDipPickerAction` in `dip.ts`) in standalone or via the unified popup transparent-swap in `tool-ui-renderer.ts` in extension. Any change to the `closeBundle` static-asset copy list must keep both `picker-popup.html` and `picker-popup.js` listed or all four picker windows 404.
+
 ## Dual-Context Shell Model
 
 The extension has **two WasmShell instances**:
@@ -338,6 +346,9 @@ The SW also exposes message handlers:
 - `secrets.list-masked-entries` — used by the page's `fetchSecretEnvVars()` to populate the agent shell env with masked values
 - `secrets.mask-oauth-token` — round-trip mask for an OAuth provider after `saveOAuthAccount`
 - `secrets.list` / `secrets.set` / `secrets.delete` — management ops for the panel-terminal `secret` shell command. Offscreen documents don't expose `chrome.storage` (MV3 quirk), so these proxy the storage call through the SW. See `docs/pitfalls.md` "Offscreen Documents: Smaller chrome.\* Surface than the SW".
+- `secrets.session.set` / `secrets.session.list` — in-memory **session-only** secrets held in a module-level `SessionSecretStore` (never written to `chrome.storage`; vanish when the SW is evicted). Layered into every `buildSecretsPipeline()` so the fetch proxy unmasks them like persisted ones. The agent sets these with `secret set <name> <value>` (no sudo prompt).
+- `secrets.peek` — returns a redacted preview (first/last chars, middle elided) of a session or persisted value; the full value never leaves the SW.
+- `secrets.set-domains` — scope edit (the sudo-gated `secret scope` op); updates a session secret's domains or rewrites a persisted secret's `_DOMAINS` while preserving its value.
 
 The webapp's `createProxiedFetch()` extension branch uses the Port handler instead of direct fetch, providing full secret injection equivalent to CLI mode.
 

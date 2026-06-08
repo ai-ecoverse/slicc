@@ -682,6 +682,81 @@ describe('listPendingEnrichments', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// The read-only sessions-index API (`readSessionsIndex` +
+// `listPendingEnrichments`) is typed against `LocalVfsClient`, so it works
+// end-to-end with a `RemoteVfsClient` over a real `MessageChannel +
+// VfsRpcHost` — the same RPC path the scoops panel takes under
+// `slicc_opfs_vfs=opfs`. Pins that the widened signatures actually accept
+// the worker-backed reader (not just a page-side `VirtualFS`).
+// ---------------------------------------------------------------------------
+describe('readSessionsIndex over RemoteVfsClient', () => {
+  it('reads /sessions/index.json through the RPC host', async () => {
+    const { createRemoteVfsClient } = await import('../../src/kernel/remote-vfs-client.js');
+    const { createBridgeMessageChannelTransport, createPanelMessageChannelTransport } =
+      await import('../../src/kernel/transport-message-channel.js');
+    const { startVfsRpcHost } = await import('../../src/kernel/vfs-rpc-host.js');
+
+    const channel = new MessageChannel();
+    const bridge = createBridgeMessageChannelTransport(channel.port2);
+    const panel = createPanelMessageChannelTransport(channel.port1);
+
+    const indexPayload = JSON.stringify([
+      {
+        filename: '2026-05-13T19-30-00-000Z-fix-build.md',
+        title: 'fix build',
+        frozenAt: '2026-05-13T19:30:00.000Z',
+        messageCount: 12,
+      },
+      {
+        filename: 'pending-xyz.md',
+        title: 'rough',
+        frozenAt: '2026-05-14T08:00:00.000Z',
+        messageCount: 5,
+        pendingEnrichment: true,
+      },
+    ]);
+
+    const readFile = vi.fn(async (path: string) => {
+      if (path === '/sessions/index.json') return indexPayload;
+      const err = new Error(`ENOENT: ${path}`);
+      (err as unknown as { code: string }).code = 'ENOENT';
+      throw err;
+    });
+
+    const host = startVfsRpcHost({
+      transport: bridge,
+      client: {
+        readDir: async () => [],
+        readFile,
+        stat: async () => ({ type: 'file', size: 0, mtime: 0, ctime: 0 }),
+      },
+      logger: { warn: vi.fn(), debug: vi.fn() },
+    });
+    const remoteVfs = createRemoteVfsClient({
+      transport: panel,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+    });
+
+    try {
+      const all = await readSessionsIndex(remoteVfs);
+      expect(all).toHaveLength(2);
+      expect(all[0].filename).toBe('2026-05-13T19-30-00-000Z-fix-build.md');
+
+      const pending = await listPendingEnrichments(remoteVfs);
+      expect(pending).toHaveLength(1);
+      expect(pending[0].filename).toBe('pending-xyz.md');
+
+      expect(readFile).toHaveBeenCalledWith('/sessions/index.json', expect.anything());
+    } finally {
+      remoteVfs.dispose();
+      host.stop();
+      channel.port1.close();
+      channel.port2.close();
+    }
+  });
+});
+
 describe('enrichPendingSession', () => {
   beforeEach(() => {
     mockRunOneOffCompactionCall.mockReset();
@@ -1062,5 +1137,142 @@ describe('enrichPendingSession', () => {
     // other's read-modify-write.
     expect(filenames).toContain(resA!.filename);
     expect(filenames).toContain(resB!.filename);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Freezer writes routed through the RemoteWritableVfsClient
+// ---------------------------------------------------------------------------
+//
+// Verifies the rerouted write path under `slicc_opfs_vfs === 'opfs'`: every
+// freezer write (mkdir + writeFile + flush) round-trips over a real
+// MessageChannel into the worker-side `VfsRpcHost`, which dispatches to a
+// stub `WritableVfsBackend`. This pins the contract `main.ts` wires up:
+// page-side `WritableVfsClient` ↔ worker-side `VfsRpcHost` (writable) ↔
+// canonical OPFS store (stubbed here as an in-memory backend).
+describe('freezeConeSession — writes route through WritableVfsClient', () => {
+  beforeEach(() => {
+    mockRunOneOffCompactionCall.mockReset();
+    mockApplyConeMemoryBudget.mockReset();
+    mockApplyConeMemoryBudget.mockResolvedValue({
+      restructured: false,
+      reason: 'no-llm',
+    });
+  });
+
+  it('routes every freezer write through the RPC wire', async () => {
+    const [
+      { startVfsRpcHost: startHost },
+      { createRemoteWritableVfsClient: createClient },
+      transportMod,
+      { FsError },
+    ] = await Promise.all([
+      import('../../src/kernel/vfs-rpc-host.js'),
+      import('../../src/kernel/writable-vfs-client.js'),
+      import('../../src/kernel/transport-message-channel.js'),
+      import('../../src/fs/types.js'),
+    ]);
+
+    // In-memory backend behind the host. Mirrors the surface that
+    // `VirtualFS` exposes; the freezer never sees it directly — every
+    // op crosses the MessageChannel.
+    const files = new Map<string, string>();
+    const mkdirCalls: string[] = [];
+    const flushes = { count: 0 };
+    const backend = {
+      async writeFile(path: string, content: string | Uint8Array): Promise<void> {
+        files.set(path, typeof content === 'string' ? content : new TextDecoder().decode(content));
+      },
+      async mkdir(path: string): Promise<void> {
+        mkdirCalls.push(path);
+      },
+      async rm(path: string): Promise<void> {
+        if (!files.has(path)) throw new FsError('ENOENT', `missing ${path}`, path);
+        files.delete(path);
+      },
+      async flush(): Promise<void> {
+        flushes.count++;
+      },
+    };
+    const readClient = {
+      async readDir(): Promise<never[]> {
+        return [];
+      },
+      async readFile(path: string, opts?: { encoding?: 'utf-8' | 'binary' }): Promise<string> {
+        const encoding = opts?.encoding ?? 'utf-8';
+        if (encoding !== 'utf-8') throw new FsError('EINVAL', 'binary not used here', path);
+        const value = files.get(path);
+        if (value === undefined) throw new FsError('ENOENT', `missing ${path}`, path);
+        return value;
+      },
+      async stat(): Promise<never> {
+        throw new FsError('EIO', 'stat not used by the freezer', '');
+      },
+    };
+
+    const channel = new MessageChannel();
+    const bridge = transportMod.createBridgeMessageChannelTransport(channel.port2);
+    const panel = transportMod.createPanelMessageChannelTransport(channel.port1);
+    const host = startHost({
+      transport: bridge,
+      client: readClient,
+      writableClient: backend,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+    });
+    const writableClient = createClient({
+      transport: panel,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+    });
+
+    try {
+      mockRunOneOffCompactionCall
+        .mockResolvedValueOnce('- always run lint before commit')
+        .mockResolvedValueOnce('Wire B4 freezer route');
+
+      const messages: ChatMessage[] = [
+        userMessage('plan the migration'),
+        assistantMessage('ok'),
+        userMessage('go'),
+        assistantMessage('done'),
+      ];
+      const store = makeFakeStore({
+        id: 'session-cone',
+        messages,
+        createdAt: 100,
+        updatedAt: 200,
+      });
+
+      const result = await freezeConeSession({
+        sessionStore: store,
+        vfs: writableClient,
+        model: fakeModel,
+        apiKey: 'k',
+      });
+
+      expect(result).not.toBeNull();
+      const archivePath = `/sessions/${result!.filename}`;
+      // Archive markdown landed on the backend via the RPC wire.
+      expect(files.has(archivePath)).toBe(true);
+      expect(files.get(archivePath)).toContain('# Wire B4 freezer route');
+      // Index file rewritten.
+      const indexRaw = files.get('/sessions/index.json');
+      expect(indexRaw).toBeTruthy();
+      const indexParsed = JSON.parse(indexRaw!);
+      expect(indexParsed[0].title).toBe('Wire B4 freezer route');
+      // Memory bullets appended to /workspace/CLAUDE.md (the
+      // `appendConeMemoryViaVfs` write path also went through the wire).
+      const memoryDoc = files.get('/workspace/CLAUDE.md');
+      expect(memoryDoc).toContain('always run lint before commit');
+      // ensureDir crossed the wire for both /sessions and /workspace.
+      expect(mkdirCalls).toEqual(expect.arrayContaining(['/sessions', '/workspace']));
+      // flush() crossed the wire so LightningFS-style debounced writes
+      // can't strand the freshly-created paths.
+      expect(flushes.count).toBeGreaterThanOrEqual(1);
+    } finally {
+      writableClient.dispose();
+      host.stop();
+      channel.port1.close();
+      channel.port2.close();
+    }
   });
 });

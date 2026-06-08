@@ -1,4 +1,4 @@
-import type { Command } from 'just-bash';
+import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
 
 function helpText(): string {
@@ -56,7 +56,7 @@ Examples:
 }
 
 export function createOAuthTokenCommand(): Command {
-  return defineCommand('oauth-token', async (args) => {
+  return defineCommand('oauth-token', async (args, ctx) => {
     // Lazy imports — same pattern as other supplemental commands that
     // import from browser modules.
     const { getOAuthAccountInfo, getSelectedProvider, getAccounts } = await import(
@@ -90,7 +90,7 @@ export function createOAuthTokenCommand(): Command {
     // print the captured redirect URL to stdout, and exit. No tokens are
     // persisted to the slicc account store — that's the provider's job.
     if (args.includes('--from-file') || args.includes('--intercept')) {
-      return runDeclarativeIntercept(args);
+      return runDeclarativeIntercept(args, ctx);
     }
 
     // Parse --scope flag
@@ -339,7 +339,8 @@ function describeAccount(
  * inspecting / testing OAuth flows without writing a provider module.
  */
 async function runDeclarativeIntercept(
-  args: string[]
+  args: string[],
+  ctx: CommandContext
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const { parseInterceptOAuthConfig } = await import('../../providers/intercepted-oauth.js');
   const { createInterceptingOAuthLauncherForCurrentRuntime } = await import(
@@ -352,13 +353,11 @@ async function runDeclarativeIntercept(
     const path = args[fromFileIdx + 1];
     if (!path) return errResult('oauth-token: --from-file requires a path');
     try {
-      // Slicc's VFS exposes file reads via the global filesystem proxy used
-      // by the rest of the shell. Lazy-import to avoid a hard dependency
-      // when this branch is unused.
-      const { VirtualFS } = await import('../../fs/index.js');
-      const { GLOBAL_FS_DB_NAME } = await import('../../fs/global-db.js');
-      const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
-      const raw = await fs.readFile(path);
+      // Read the intercept config from the shell's primary VFS (the same
+      // filesystem every other shell command sees via `ctx.fs`). Absolute
+      // paths pass through; relative paths resolve against `ctx.cwd`.
+      const resolved = ctx.fs.resolvePath(ctx.cwd, path);
+      const raw = await ctx.fs.readFile(resolved);
       rawConfig = JSON.parse(typeof raw === 'string' ? raw : new TextDecoder().decode(raw));
     } catch (err) {
       return errResult(

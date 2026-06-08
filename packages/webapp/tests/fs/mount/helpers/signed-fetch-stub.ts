@@ -7,10 +7,10 @@
  * — they assert on the same wire-level shape.
  */
 
+import { signSigV4 } from '@slicc/shared-ts';
 import type { SignedFetchDa, SignedFetchDaRequest } from '../../../../src/fs/mount/backend-da.js';
 import type { SignedFetchS3, SignedFetchS3Request } from '../../../../src/fs/mount/backend-s3.js';
 import type { DaProfile, S3Profile } from '../../../../src/fs/mount/profile.js';
-import { signSigV4 } from '../../../../src/fs/mount/signing-s3.js';
 
 /**
  * Build an in-memory `SignedFetchS3` that mirrors the server-side flow:

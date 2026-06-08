@@ -33,11 +33,11 @@ import type {
   TrayRuntimeStatusMsg,
 } from '../../../chrome-extension/src/messages.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
-import type { VirtualFS } from '../fs/index.js';
 import type { Orchestrator } from '../scoops/orchestrator.js';
 import type { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
 import type { RegisteredScoop, ThinkingLevel } from '../scoops/types.js';
 import type { AgentHandle, ChatMessage, AgentEvent as UIAgentEvent } from '../ui/types.js';
+import type { LocalVfsClient } from './local-vfs-client.js';
 
 // ---------------------------------------------------------------------------
 // 1. Wire — generic over today's panel/host message shapes.
@@ -117,6 +117,18 @@ export interface KernelFacade {
 
   /** Today's helper used by tray-leader to know which scoop is the cone. */
   getConeJid(): string | null;
+
+  /**
+   * Seed each registered scoop's chat buffer from its agent's restored
+   * canonical `AgentMessage[]`, immediately after `orchestrator.init()`
+   * and BEFORE any post-boot turn can `persistScoop`. The bridge's
+   * `messageBuffers` otherwise start empty on boot, so the first turn
+   * after a reload would persist only the new messages and overwrite the
+   * full conversation in the `browser-coding-agent` UI store — the
+   * "only the last few messages after a reboot" truncation. Idempotent
+   * and non-destructive: only seeds scoops whose buffer is still empty.
+   */
+  seedBuffersFromAgentState(): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -164,9 +176,15 @@ export interface KernelClientFacade {
   onScoopSelected(handler: (jid: string) => void): () => void;
 
   // -------------------------------------------------------------------------
-  // Local FS handle (read-only mirror — same IndexedDB, no mounts)
+  // Local FS handle (read-only mirror — same IndexedDB or worker-RPC backed)
+  //
+  // Typed as `LocalVfsClient` (read-only subset) so panels that consume
+  // this surface cannot accidentally write through it. A `VirtualFS`
+  // instance satisfies `LocalVfsClient` structurally; a worker-backed
+  // `RemoteVfsClient` (under `slicc_opfs_vfs=opfs`) is the other
+  // legitimate producer.
   // -------------------------------------------------------------------------
-  setLocalFS(fs: VirtualFS): void;
+  setLocalFS(fs: LocalVfsClient): void;
 
   // -------------------------------------------------------------------------
   // Chat panel handle
@@ -190,8 +208,8 @@ export interface KernelClientFacade {
   // Memory & shared FS shim
   // -------------------------------------------------------------------------
   getGlobalMemory(): Promise<string>;
-  getScoopContext(jid: string): { getFS: () => VirtualFS | null } | undefined;
-  getSharedFS(): VirtualFS | null;
+  getScoopContext(jid: string): { getFS: () => LocalVfsClient | null } | undefined;
+  getSharedFS(): LocalVfsClient | null;
 
   // -------------------------------------------------------------------------
   // RPC operations

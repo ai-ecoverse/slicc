@@ -89,7 +89,7 @@ Manifest sandbox pages (`sandbox.html`, `sprinkle-sandbox.html`, `tool-ui-sandbo
 
 **macOS TCC and Side Panel Crashes**
 
-Chrome's side panel cannot host macOS TCC (Transparency, Consent, and Control) permission dialogs, and it also crashes (rather than throwing a normal error) when `showDirectoryPicker()` is called against a system folder Chrome refuses to share (Documents, Downloads, Desktop, the home directory). Solution: never call `showDirectoryPicker()` from the side panel — route directory selection through a popup window where TCC and the system-folder rejection render correctly. The pattern is implemented by `packages/chrome-extension/mount-popup.html` and the shared helpers in `packages/webapp/src/fs/mount-picker-popup.ts` (`openMountPickerPopup` + `loadAndClearPendingHandle` + `reactivateHandle`). All three extension-side mount entry points use it: the shell `mount` command, agent-driven approval dips, and the welcome sprinkle's `request-mount` lick.
+Chrome's side panel cannot host macOS TCC (Transparency, Consent, and Control) permission dialogs, and it also crashes (rather than throwing a normal error) when `showDirectoryPicker()` is called against a system folder Chrome refuses to share (Documents, Downloads, Desktop, the home directory). Solution: never call `showDirectoryPicker()` from the side panel — route directory selection through a popup window where TCC and the system-folder rejection render correctly. The popup pattern and its three extension-side entry points are documented in [`docs/approvals.md` — Local mount picker](./approvals.md#local-mount-picker).
 
 ## WASM & Bundled Assets in Extension Mode
 
@@ -140,27 +140,107 @@ the closure returns.
 | `core/image-processor.ts`                        | Snapshots via `new Uint8Array(data)`                                               |
 | `cdp/browser-api.ts`                             | Consumes the view inside the callback to build base64 (no escape)                  |
 
-## Python Realm: VFS Sync Is Diff-Aware and Size-Capped
+## Python Realm: Mounts Are Async-Only Via `slicc.fs`
 
-**File**: `packages/webapp/src/kernel/realm/py-realm-shared.ts`
+**Files**: `packages/webapp/src/kernel/realm/py-realm-shared.ts`,
+`packages/webapp/src/kernel/realm/mount-bomb-fs.ts`,
+`packages/webapp/src/kernel/realm/slicc-fs-module.ts`
 
-Pre- and post-execution sync between the VFS and Pyodide's emscripten FS uses
-two bulk RPCs — `vfs.walkTree` (host → realm: paths + sizes + content) and
-`vfs.writeBatch` (realm → host: mkdirs + file writes). The naive per-file
-`readDir`/`stat`/`readFile` chatter took minutes on workspace-sized cwds; the
-bulk path collapses that to two round-trips regardless of file count.
+Synchronous access to a mounted path from Python (stdlib `open`,
+`os.listdir`, `pathlib`, pandas, …) is **intentionally disabled**. The realm
+overlays a throwing FS plugin (`MOUNT_BOMB_FS`) at every VFS mount path that
+overlaps the Python sync dirs, so the first sync touch raises immediately
+with an actionable `OSError` instead of stalling on per-file RPC traffic. To
+read or write under a mount, use the async `slicc.fs` Python module (or copy
+the file into the VFS first).
 
-| Behavior                             | Why                                                                                                                                                                                                                                                                                                                                                                                    |
-| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **10 MB file-size cap**              | Files above the cap are listed (Python sees the directory entry + the `size` field) but their content is not pre-loaded. `open()` raises ENOENT. Cap-exceeded files are **silently** skipped — a documented constraint, not an error worth surfacing on every invocation. Files that are within the cap but fail to read from the host DO warn so the user can debug the real failure. |
-| **Size-only diff**                   | Post-sync compares Pyodide-FS size against the pre-execution snapshot; same-size content changes can slip through. The trade-off is intentional; if it ever flips to hash-based diffing, the test pinning this should be updated, not deleted.                                                                                                                                         |
-| **Binary content via Uint8Array**    | `walkTree`/`writeBatch` carry content as `Uint8Array`, not `string`, so PNG / PDF / wheel / sqlite files in cwd round-trip byte-for-byte. The previous string-based path silently corrupted any non-UTF-8 byte via `TextDecoder()` on the way out.                                                                                                                                     |
-| **Per-entry write failures surface** | `writeBatch` returns `{ failedFiles, failedMkdirs }`; the realm pushes each into stderr so a Python script's `open('x','w').write(...)` failure can't disappear into the void.                                                                                                                                                                                                         |
+This replaces the previous "eager materialization" model, which walked the
+mount over the `vfs` RPC channel before user code ran. On a workspace-sized
+local mount (~11k files) that produced ~24k sequential RPCs and hung
+`python3` startup for minutes; the bomb overlay is instant — no walk, no
+preload, no RPC traffic.
 
-When extending the sync (attribute mirroring, hash-based diffing, etc.), keep
-the two-RPC shape — adding round-trips inside the loop reintroduces the
-minutes-long stall — and keep `content: Uint8Array` so binary outputs don't
-regress to the TextDecoder corruption path.
+### The bomb error
+
+Any sync `node_ops` or `stream_ops` call under a mounted path raises an
+`OSError` (errno `EIO`) carrying:
+
+```text
+slicc: synchronous access to mounted path '<mountPath>' is not supported.
+Use the async slicc.fs module (e.g. `await slicc.fs.read_text('<mountPath>')`
+or `await slicc.fs.listdir('<mountPath>')`), or copy the file into the VFS
+first (`await slicc.fs.read_bytes('<mountPath>/<file>')` then write it under
+/tmp).
+```
+
+All mount kinds (`local` / `s3` / `da`) bomb identically — `kind` is
+informational on the mount descriptor only, with no per-kind cap or
+materialization budget. The cwd and `/tmp` (the default Python sync dirs,
+overridable via `pyodideMountDirs`) remain directly accessible as before;
+only paths under a registered VFS mount bomb. Mount paths that exactly match
+a sync dir are excluded from the OPFS overlay so the bomb plugin can stack
+without an `EBUSY` collision.
+
+### The `slicc.fs` async API
+
+`slicc.fs` is registered into `sys.modules` at realm startup (always — cheap
+and harmless even when no mounts overlap) and is backed by the same `vfs`
+RPC channel the file tools use, so reads under a mount path route through
+the kernel-side `MountBackend` (local FS Access, S3, DA) transparently.
+Every method is `async` and must be `await`ed.
+
+| Method                              | Returns                                     | Notes                                                                                                |
+| ----------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `listdir(path)`                     | `list[str]`                                 | Entry names (not full paths).                                                                        |
+| `read_bytes(path)`                  | `bytes`                                     | Binary-safe; no encoding step.                                                                       |
+| `read_text(path, encoding="utf-8")` | `str`                                       | Convenience wrapper over `read_bytes` + `decode`.                                                    |
+| `write_bytes(path, data)`           | `None`                                      | `data` must be `bytes` / `bytearray` / `memoryview`. Passing `str` raises `TypeError`.               |
+| `write_text(path, text, …)`         | `None`                                      | Convenience wrapper over `write_bytes` + `encode`.                                                   |
+| `stat(path)`                        | `dict` with `isDirectory`, `isFile`, `size` | Minimal cross-backend shape; not a full `os.stat_result`.                                            |
+| `exists(path)`                      | `bool`                                      |                                                                                                      |
+| `mkdir(path, parents=False)`        | `None`                                      | Recursive on the host; `parents=False` raises `FileExistsError` when the target already exists.      |
+| `remove(path)`                      | `None`                                      | Routes through `vfs.rm`.                                                                             |
+| `walk(path)`                        | `list[tuple[str, list[str], list[str]]]`    | `os.walk`-shaped, but eager — entire subtree is materialized into the returned list before yielding. |
+
+Example:
+
+```python
+import slicc
+
+# Read from a mounted path — always await.
+text = await slicc.fs.read_text("/mnt/aws/site/index.html")
+print(text[:200])
+
+# Write back through the same channel.
+await slicc.fs.write_text("/mnt/aws/site/new.html", "<h1>hi</h1>\n")
+
+# "Copy first" pattern for stdlib code that needs a real sync handle.
+data = await slicc.fs.read_bytes("/mnt/da/docs/report.pdf")
+with open("/tmp/report.pdf", "wb") as f:
+    f.write(data)
+import pdfplumber  # noqa: now reads from /tmp synchronously
+```
+
+The "copy first" pattern is the documented escape hatch for libraries that
+take a path and read synchronously (`pdfplumber`, `pandas.read_csv`,
+`sqlite3.connect`, …): `await slicc.fs.read_bytes(<mount path>)` then write
+the bytes under `/tmp` (or another sync dir) and hand the library the local
+path. The cwd and `/tmp` are OPFS-backed in the realm, so subsequent stdlib
+access against them is synchronous.
+
+### When extending this surface
+
+- Keep the bomb instant: `mount(mount)` returns a single root `FsNode` with
+  no preload, no walk, no RPC. Anything that adds RPC traffic at mount time
+  reintroduces the hang the bomb overlay was added to fix.
+- Keep `slicc.fs` the only documented escape hatch. Adding a second async
+  Python surface (`slicc.io`, a `slicc.path` module, …) fragments the
+  recovery story baked into the bomb's error message.
+- Write-back is no longer a thing for mount paths — `slicc.fs.write_*`
+  routes through `vfs` directly, so backend writes are applied as they
+  happen rather than flushed at `realm-done`. Re-introducing a deferred
+  write-back would silently swallow per-write errors that currently surface
+  inline.
 
 ## Runtime Detection: Workers Have No `window` Either
 
@@ -300,7 +380,7 @@ All paths in VirtualFS must follow these rules:
 
 **The Problem**
 
-Chrome extension side panels cannot trigger mic permission prompts. `navigator.mediaDevices.getUserMedia()` silently fails.
+Chrome extension side panels cannot trigger mic permission prompts. `navigator.mediaDevices.getUserMedia()` silently fails. This is one of the OS-capture gates catalogued in [`docs/approvals.md` — OS capture gates](./approvals.md#os-capture-gates).
 
 **The Solution**
 
@@ -937,6 +1017,64 @@ that touched LLM call paths, a new code path is bypassing the wiring.
   both wiring points use the same identifier; gates against future
   reverts. `tests/providers/adobe-provider.test.ts` covers the
   provider-level `ensureSessionIdHeader` fallback behavior.
+
+## Adobe / Bedrock Claude opus-4-8: `temperature` + adaptive-thinking quirks
+
+opus-4-8 is **newer than the pinned pi-ai (0.75.3)**, so pi-ai's
+model-capability detection doesn't know it and emits two request shapes
+Bedrock rejects. Both surface identically: Bedrock returns a `400`, the
+Adobe proxy wraps it as a `502 upstream_error`, and the node-server
+fetch-proxy relays the upstream status verbatim (`res.status(upstream.status)`),
+so the agent sees a bare **502 on `/api/fetch-proxy`** with no hint of the
+cause. **Fix both at the provider layer (a model capability), never at the
+call site** — and a pi-ai bump that learns opus-4-8 makes the shims no-ops.
+
+### 1. `temperature` is deprecated (Opus 4.7 / 4.8)
+
+Bedrock returns `400 "temperature is deprecated for this model."`. This
+bites the **thinking-disabled** helper calls: `ui/quick-llm.ts` sends
+`temperature: 0.3` for the scope-label and session-title helpers. pi-ai's
+`anthropic-messages` builder already drops `temperature` when extended
+thinking is enabled, so the **main cone stream is unaffected** — only the
+background helpers 502 (commonly a pile of 502s as a long conversation
+keeps refreshing its working-scope label). Message count is irrelevant:
+even a 24-token request fails.
+
+Fix: `src/providers/temperature-support.ts` owns the single reject-list
+(`modelSupportsTemperature` / `withSupportedTemperature`). Both Bedrock-backed
+providers consult it — `providers/built-in/bedrock-camp.ts` omits it in the
+Converse payload and `providers/adobe.ts` strips it before `streamAnthropic` /
+`streamSimpleAnthropic`. A new temperature-rejecting model is a one-line edit
+to `TEMPERATURE_UNSUPPORTED`.
+
+### 2. Adaptive thinking required (Opus 4.8)
+
+With thinking **enabled**, Bedrock returns `400 "thinking.type.enabled is
+not supported for this model. Use thinking.type.adaptive and
+output_config.effort..."`. pi-ai's `supportsAdaptiveThinking()` recognizes
+opus-4-6/4-7 + sonnet-4-6 (emitting `thinking:{type:"adaptive"}` +
+`output_config.effort`) but **not opus-4-8**, so it falls back to the legacy
+`thinking:{type:"enabled",budget_tokens}` shape that Bedrock rejects. Unlike
+temperature, this hits the **main cone stream** (thinking on).
+
+Fix: `src/providers/adaptive-thinking.ts` — `providers/adobe.ts` passes an
+`onPayload` hook (pi-ai's `streamAnthropic` payload-rewrite seam, the same
+one `bedrock-camp` uses) that rewrites the emitted body
+`enabled → adaptive` + `output_config.effort` for the models in
+`ADAPTIVE_THINKING_SHIM_MODELS`. The rewrite only fires when the enabled
+shape is actually present, so it's a no-op when thinking is off or once
+pi-ai learns the model. **Immediate workaround:** set the thinking level to
+off (the model still reasons adaptively on its own).
+
+**Related**
+
+- Coverage: `tests/providers/temperature-support.test.ts`,
+  `tests/providers/adaptive-thinking.test.ts`, and the "omits temperature
+  for Opus 4.8" case in `tests/providers/built-in/bedrock-camp.test.ts`.
+- History: the temperature guard was Opus-4.7-only and inline in
+  `bedrock-camp.ts`; it was generalized into the shared helper, extended to
+  4.8, and applied to the (previously unguarded) Adobe path. The
+  adaptive-thinking shim was added alongside it.
 
 ## Detached popout: boot is the lock event
 

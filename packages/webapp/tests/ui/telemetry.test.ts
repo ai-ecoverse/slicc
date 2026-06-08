@@ -91,6 +91,16 @@ describe('telemetry', () => {
     expect(mockSampleRUM).toHaveBeenCalledWith('fill', { source: 'git' });
   });
 
+  it('initTelemetry registers the shell telemetry sink so emitShellCommand reaches RUM', async () => {
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { emitShellCommand } = await import('../../src/shell/telemetry-hook.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    emitShellCommand('node');
+    expect(mockSampleRUM).toHaveBeenCalledWith('fill', { source: 'node' });
+  });
+
   it('trackSprinkleView emits viewblock', async () => {
     const { initTelemetry, trackSprinkleView } = await import('../../src/ui/telemetry.js');
     await initTelemetry();

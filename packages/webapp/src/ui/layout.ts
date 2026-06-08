@@ -28,6 +28,7 @@
 import { ChatPanel } from './chat-panel.js';
 import { FileBrowserPanel } from './file-browser-panel.js';
 import { MemoryPanel } from './memory-panel.js';
+import { ScoopScopeLabeler } from './scoop-scope-label.js';
 import { ScoopSwitcher } from './scoop-switcher.js';
 import { ScoopsPanel } from './scoops-panel.js';
 import type { FrozenSessionIndexEntry } from './session-freezer.js';
@@ -130,6 +131,9 @@ export class Layout {
   private popoutClickHandler?: () => void;
   private detachedActiveOverlayEl?: HTMLDivElement;
 
+  // Electron-overlay close button (electron-overlay mode only)
+  private electronOverlayCloseBtnEl?: HTMLButtonElement;
+
   // User avatar element
   private avatarEl!: HTMLElement;
 
@@ -213,6 +217,30 @@ export class Layout {
     this.scoopSwitcher?.setOrchestrator(orchestrator);
   }
 
+  /**
+   * Wire the extension scoop-switcher with a scope-label generator
+   * backed by the side-effect-free transcript accessor on
+   * `OffscreenClient`. Same shape as the standalone rail's labeler;
+   * the only difference is the transcript source (panel→offscreen
+   * round-trip vs. direct `Orchestrator.getMessagesForScoop`).
+   */
+  setScoopSwitcherTranscriptSource?(fetchTranscript: (jid: string) => Promise<string>): void {
+    if (!this.scoopSwitcher) return;
+    const labeler = new ScoopScopeLabeler(fetchTranscript);
+    this.scoopSwitcher.setLabeler(labeler, fetchTranscript);
+  }
+
+  /**
+   * Wire the standalone scoops rail with the same side-effect-free
+   * transcript source. Required because the standalone rail is wired
+   * with the `OffscreenClient` shim, which does not implement
+   * `Orchestrator.getMessagesForScoop` — without this hook the rail
+   * tooltip's scope line never populates.
+   */
+  setScoopsRailTranscriptSource?(fetchTranscript: (jid: string) => Promise<string>): void {
+    this.panels.scoops?.setScopeTranscriptSource(fetchTranscript);
+  }
+
   /** Update scoop switcher status (extension mode). */
   updateScoopSwitcherStatus?(scoopJid: string, status: ScoopTabState['status']): void {
     this.scoopSwitcher?.updateStatus(scoopJid, status);
@@ -281,6 +309,40 @@ export class Layout {
     if (this.popoutButtonEl) {
       this.popoutButtonEl.disabled = false;
     }
+  }
+
+  /**
+   * Show/hide a close button in the thread header, positioned to the LEFT
+   * of the scoop switcher. Used ONLY in electron-overlay mode — clicking
+   * it posts a close message to the parent overlay shell which collapses
+   * the drawer to the launcher pill. Standalone and extension thread
+   * headers must not get this button.
+   */
+  setShowElectronOverlayClose(handler: (() => void) | null): void {
+    if (!handler) {
+      this.electronOverlayCloseBtnEl?.remove();
+      this.electronOverlayCloseBtnEl = undefined;
+      return;
+    }
+    if (this.electronOverlayCloseBtnEl) return;
+
+    const titleEl = this.threadHeaderEl?.querySelector(
+      '.thread-header__title'
+    ) as HTMLElement | null;
+    if (!titleEl) return;
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'thread-header__electron-overlay-close';
+    btn.title = 'Close SLICC';
+    btn.setAttribute('aria-label', 'Close SLICC');
+    btn.innerHTML =
+      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
+    btn.addEventListener('click', () => handler());
+    // Insert at the very start of the title slot so the button lands to
+    // the LEFT of the scoop-switcher dropdown.
+    titleEl.insertBefore(btn, titleEl.firstChild);
+    this.electronOverlayCloseBtnEl = btn;
   }
 
   /**

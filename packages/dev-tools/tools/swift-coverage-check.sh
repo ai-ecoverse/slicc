@@ -7,15 +7,32 @@
 # Usage:
 #   swift-coverage-check.sh \
 #     <package-dir> <test-bundle-name> \
-#     <line-threshold> <function-threshold> <region-threshold>
+#     [<line-threshold> <function-threshold> <region-threshold>]
+#
+# When the three numeric thresholds are omitted, they are read from the
+# repo-root coverage-thresholds.json (key: basename of <package-dir>),
+# which is the single source of truth maintained by the coverage ratchet.
 
 set -euo pipefail
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+
 PACKAGE_DIR="${1:?package directory required}"
 TEST_BUNDLE_NAME="${2:?test bundle name required}"
-LINE_THRESHOLD="${3:?line threshold required}"
-FUNCTION_THRESHOLD="${4:?function threshold required}"
-REGION_THRESHOLD="${5:?region threshold required}"
+PACKAGE_NAME="$(basename "$PACKAGE_DIR")"
+
+read_floor() {
+  node -e "const t=require('$REPO_ROOT/coverage-thresholds.json').swift['$PACKAGE_NAME']||{};process.stdout.write(String(t['$1']??''))"
+}
+
+LINE_THRESHOLD="${3:-$(read_floor lines)}"
+FUNCTION_THRESHOLD="${4:-$(read_floor functions)}"
+REGION_THRESHOLD="${5:-$(read_floor regions)}"
+
+if [[ -z "$LINE_THRESHOLD" || -z "$FUNCTION_THRESHOLD" || -z "$REGION_THRESHOLD" ]]; then
+  echo "::error::No Swift coverage floors for '$PACKAGE_NAME' (pass args or add to coverage-thresholds.json)"
+  exit 1
+fi
 
 cd "$PACKAGE_DIR"
 
@@ -74,6 +91,13 @@ LINE_COV=$(echo "$TOTAL_LINE" | awk '{ gsub("%",""); print $10 }')
 cmp_lt() {
   awk -v a="$1" -v b="$2" 'BEGIN { exit !(a + 0 < b + 0) }'
 }
+
+# Emit measured percentages for the coverage ratchet. Written before the
+# threshold comparison so the ratchet can read actuals even if this run is
+# below floor (which would also fail CI separately).
+mkdir -p .build/coverage
+printf '{"lines":%s,"functions":%s,"regions":%s}\n' \
+  "$LINE_COV" "$FUNCTION_COV" "$REGION_COV" >.build/coverage/summary.json
 
 echo
 echo "Coverage summary:"

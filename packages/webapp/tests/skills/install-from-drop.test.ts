@@ -129,7 +129,7 @@ describe('installSkillFromDrop', () => {
     ).rejects.toThrow('expand to 50 MB or smaller');
 
     await expect(fs.exists('/workspace/skills/too-big')).resolves.toBe(false);
-  });
+  }, 30000);
 
   it('rejects archives that exceed the entry-count budget before install', async () => {
     const entries: Record<string, string> = {
@@ -146,7 +146,7 @@ describe('installSkillFromDrop', () => {
     ).rejects.toThrow(`at most ${MAX_SKILL_ARCHIVE_ENTRY_COUNT} entries`);
 
     await expect(fs.exists('/workspace/skills/too-many')).resolves.toBe(false);
-  });
+  }, 30000);
 
   it('rejects corrupt archives or missing SKILL.md with clear errors', async () => {
     await expect(

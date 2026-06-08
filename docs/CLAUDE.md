@@ -32,6 +32,7 @@ Subsystems:
 - `tools-reference.md` — agent tool surface reference
 - `mounts.md` — `mount` setup for local FS Access, S3/R2/MinIO, and Adobe da.live
 - `secrets.md` — secrets storage, masking, and domain-scoped injection
+- `approvals.md` — capability approval gates: shared pattern + authority axis, sudo policy, device & gesture gates, OS capture gates
 - `oauth-intercept.md` — provider OAuth intercept and silent renewal
 - `operational-telemetry.md` — Helix RUM beacons and debug sampling
 - `slicc-handoff.md` — external handoff protocol (RFC 8288 `Link` header + `navigate` lick)
@@ -39,9 +40,10 @@ Subsystems:
 - `urls.md` — production URL inventory
 - `electron.md` — Electron float workflow
 
-Gotchas:
+Review & gotchas:
 
 - `pitfalls.md` — runtime and extension gotchas (CSP, dual-mode runtime detection, WASM heap views, etc.)
+- `review-patterns.md` — source of truth for the automated PR reviewers (Claude action, Codex, Copilot): the six recurring blind-spot categories, the five-runtime parity matrix, and the severity rubric
 
 Other:
 

@@ -99,11 +99,30 @@ export interface ToolAdapterProcessConfig {
 }
 
 /**
+ * Optional secrets config for `adaptTool` / `adaptTools`. When
+ * supplied, the adapter runs a single real→masked scrub pass over
+ * the completed tool-result text before parsing it into agent
+ * content blocks. The scrub is the defense-in-depth tool-output
+ * boundary that complements env-var masking and the fetch-proxy
+ * inbound scrub — the agent never sees real secret values even if
+ * a tool happens to produce them.
+ *
+ * Direction is real→masked ONLY (`SecretsPipeline.scrubResponse`),
+ * so the pass is idempotent: already-masked tokens and secret-free
+ * output round-trip unchanged. The scrub runs once on the completed
+ * buffer; no streaming reassembly.
+ */
+export interface ToolAdapterSecretsConfig {
+  scrubToolResult: (text: string) => Promise<string>;
+}
+
+/**
  * Wrap a legacy ToolDefinition as a pi-compatible AgentTool.
  */
 export function adaptTool(
   tool: ToolDefinition,
-  pmConfig?: ToolAdapterProcessConfig
+  pmConfig?: ToolAdapterProcessConfig,
+  secretsConfig?: ToolAdapterSecretsConfig
 ): AgentTool<any> {
   return {
     name: tool.name,
@@ -184,15 +203,33 @@ export function adaptTool(
           (params ?? {}) as Record<string, unknown>,
           effectiveSignal
         );
+        // Defense-in-depth real→masked scrub at the tool-result
+        // boundary — one pass over the completed buffer before any
+        // parsing. Idempotent: already-masked tokens have no real
+        // value to find, and secret-free output round-trips
+        // unchanged. Scrub failures degrade to the original text
+        // (the scrubber implementation owns its own error logging).
+        let scrubbedText = result.content;
+        if (secretsConfig && typeof scrubbedText === 'string' && scrubbedText.length > 0) {
+          try {
+            scrubbedText = await secretsConfig.scrubToolResult(scrubbedText);
+          } catch (err) {
+            log.warn('Tool-result scrub failed, falling back to unscrubbed content', {
+              tool: tool.name,
+              error: err instanceof Error ? err.message : String(err),
+            });
+            scrubbedText = result.content;
+          }
+        }
         let content: (TextContent | ImageContent)[];
         try {
-          content = await parseToolResultContent(result.content);
+          content = await parseToolResultContent(scrubbedText);
         } catch (err) {
           log.warn('Image processing failed, falling back to raw content', {
             tool: tool.name,
             error: err instanceof Error ? err.message : String(err),
           });
-          content = parseToolResultContentRaw(result.content);
+          content = parseToolResultContentRaw(scrubbedText);
         }
         if (proc && pmConfig) {
           pmConfig.processManager.exit(proc.pid, result.isError ? 1 : 0);
@@ -228,9 +265,10 @@ export function adaptTool(
  */
 export function adaptTools(
   tools: ToolDefinition[],
-  pmConfig?: ToolAdapterProcessConfig
+  pmConfig?: ToolAdapterProcessConfig,
+  secretsConfig?: ToolAdapterSecretsConfig
 ): AgentTool<any>[] {
-  return tools.map((t) => adaptTool(t, pmConfig));
+  return tools.map((t) => adaptTool(t, pmConfig, secretsConfig));
 }
 
 /**

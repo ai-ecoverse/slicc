@@ -39,6 +39,7 @@ import {
   clampReasoning,
 } from '@earendil-works/pi-ai/dist/providers/simple-options.js';
 import { transformMessages } from '@earendil-works/pi-ai/dist/providers/transform-messages.js';
+import { modelSupportsTemperature } from '../temperature-support.js';
 import type { ProviderConfig } from '../types.js';
 
 export const config: ProviderConfig = {
@@ -99,10 +100,11 @@ export function isBedrockCampCompatible(model: { id: string }, region?: string |
   return profileMatchesRegion(prefix, region);
 }
 
-// Opus 4.7 returns 400 "temperature is deprecated for this model" when the
-// param is set. Keep temperature for every other model.
+// `temperature` support is a model capability shared with the Adobe provider
+// (both route Opus 4.7 / 4.8 to Bedrock, which rejects the param). The
+// reject-list lives in ../temperature-support.ts so a new model is one edit.
 function supportsTemperature(modelId: string, modelName?: string): boolean {
-  return !matchesAny(modelId, modelName, ['claude-opus-4-7', 'opus-4-7']);
+  return modelSupportsTemperature(modelId, modelName);
 }
 
 export type BedrockCampThinkingDisplay = 'summarized' | 'omitted';

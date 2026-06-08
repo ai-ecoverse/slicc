@@ -3,7 +3,39 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { ToolDefinition } from '../../src/core/types.js';
 import { VirtualFS } from '../../src/fs/index.js';
 import { WasmShell } from '../../src/shell/index.js';
-import { createBashTool } from '../../src/tools/bash-tool.js';
+import { createBashTool, splitCommandSegments } from '../../src/tools/bash-tool.js';
+
+describe('splitCommandSegments', () => {
+  it('splits on ;, |, && and ||', () => {
+    const segments = splitCommandSegments('a | b && c || d ; e')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    expect(segments).toEqual(['a', 'b', 'c', 'd', 'e']);
+  });
+
+  it('splits "a || b" into two segments with no spurious empty segment', () => {
+    expect(splitCommandSegments('a || b').map((s) => s.trim())).toEqual(['a', 'b']);
+  });
+
+  it('does not split a lone & (background)', () => {
+    expect(splitCommandSegments('git push & echo done').map((s) => s.trim())).toEqual([
+      'git push & echo done',
+    ]);
+  });
+
+  it('ignores separators inside quotes and after escapes', () => {
+    expect(splitCommandSegments('echo "a | b" ; ls').map((s) => s.trim())).toEqual([
+      'echo "a | b"',
+      'ls',
+    ]);
+    expect(splitCommandSegments('echo a\\|b').map((s) => s.trim())).toEqual(['echo a\\|b']);
+  });
+
+  it('returns a trailing empty segment after a final separator', () => {
+    const segs = splitCommandSegments('ls |');
+    expect((segs[segs.length - 1] ?? '').trim()).toBe('');
+  });
+});
 
 describe('Bash Tool', () => {
   let fs: VirtualFS;

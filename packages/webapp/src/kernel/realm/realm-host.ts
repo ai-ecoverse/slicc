@@ -14,16 +14,34 @@
 
 import type { CommandContext } from 'just-bash';
 import type { BrowserAPI } from '../../cdp/browser-api.js';
+import {
+  type HidBackend,
+  resolveHidBackend,
+} from '../../shell/supplemental-commands/hid-backends.js';
 import { createNodeFetchAdapter } from '../../shell/supplemental-commands/node-fetch-adapter.js';
+import {
+  resolveSerialBackend,
+  type SerialBackend,
+} from '../../shell/supplemental-commands/serial-backends.js';
+import {
+  resolveUsbBackend,
+  type UsbBackend,
+} from '../../shell/supplemental-commands/usb-backends.js';
+import type { HidDeviceFilter } from '../hid-device-registry.js';
+import { getPanelRpcClient, hasLocalDom } from '../panel-rpc.js';
+import type {
+  SerialFilter,
+  SerialOpenOptions,
+  SerialOutputSignals,
+} from '../serial-port-registry.js';
+import type { UsbControlSetup, UsbDeviceFilter } from '../usb-device-registry.js';
 import type { RealmPortLike } from './realm-rpc.js';
 import type {
+  RealmEventMsg,
   RealmRpcRequest,
   RealmRpcResponse,
   SerializedFetchResponse,
   TabHandle,
-  WalkTreeEntry,
-  WriteBatchPayload,
-  WriteBatchResult,
   WsObserveRequest,
   WsSelector,
   WsSubscriberInfo,
@@ -57,6 +75,17 @@ export interface RealmHostOptions {
    * trusted host side.
    */
   scoopJid?: string;
+  /**
+   * Optional overrides for the WebUSB / Web Serial / WebHID backends
+   * used by the `usb` / `serial` / `hid` channels. Production callers
+   * omit them and the host resolves the same dual-path backend the
+   * shell commands use (`resolve*Backend(hasLocalDom, getPanelRpcClient)`):
+   * the local `navigator.*` in a DOM realm, the panel-RPC bridge in the
+   * kernel worker. Tests inject in-memory backends directly.
+   */
+  usbBackend?: UsbBackend;
+  serialBackend?: SerialBackend;
+  hidBackend?: HidBackend;
 }
 
 /**
@@ -70,20 +99,48 @@ export function attachRealmHost(
   ctx: CommandContext,
   opts: RealmHostOptions = {}
 ): RealmHostHandle {
+  // Per-port HID `inputreport` subscriptions, keyed by device handle.
+  // The realm side calls `hid.subscribeInputReports(h)` to start the
+  // backend listener and `unsubscribeInputReports(h)` to stop it;
+  // `dispose()` drains the map so realm teardown can never leak a
+  // page-side `inputreport` listener (DOD: "no leaked subscriptions
+  // on realm teardown").
+  const hidSubscriptions = new Map<string, () => void | Promise<void>>();
+  let disposed = false;
+  const pushEvent = (msg: RealmEventMsg, transfer: Transferable[] = []): void => {
+    if (disposed) return;
+    try {
+      port.postMessage(msg, transfer);
+    } catch {
+      // Disposed ports / detached transferables — best-effort, the
+      // listener-cleanup happens via `dispose()`.
+    }
+  };
+  const hidCtx: HidDispatchCtx = { subscriptions: hidSubscriptions, pushEvent };
   const handler = (event: MessageEvent): void => {
     const data = event.data as { type?: string };
     if (data?.type !== 'realm-rpc-req') return;
     const req = event.data as RealmRpcRequest;
-    void respond(port, req, ctx, opts);
+    void respond(port, req, ctx, opts, hidCtx);
   };
   port.addEventListener('message', handler);
   port.start?.();
-  let disposed = false;
   return {
     dispose: () => {
       if (disposed) return;
       disposed = true;
       port.removeEventListener('message', handler);
+      // Drain HID subscriptions best-effort; sync and async unsubscribes
+      // are both honored. We don't await — `dispose()` is sync, and the
+      // backend's unsubscribe surface accepts fire-and-forget here.
+      for (const unsub of hidSubscriptions.values()) {
+        try {
+          void Promise.resolve(unsub()).catch(() => {});
+        } catch {
+          /* swallow — realm teardown must not throw */
+        }
+      }
+      hidSubscriptions.clear();
     },
   };
 }
@@ -92,10 +149,11 @@ async function respond(
   port: RealmPortLike,
   req: RealmRpcRequest,
   ctx: CommandContext,
-  opts: RealmHostOptions
+  opts: RealmHostOptions,
+  hidCtx: HidDispatchCtx
 ): Promise<void> {
   try {
-    const result = await dispatch(req, ctx, opts);
+    const result = await dispatch(req, ctx, opts, hidCtx);
     const res: RealmRpcResponse = { type: 'realm-rpc-res', id: req.id, result };
     // Body bytes need to be transferred so we don't structured-clone
     // potentially-large response bodies on every fetch.
@@ -111,7 +169,8 @@ async function respond(
 async function dispatch(
   req: RealmRpcRequest,
   ctx: CommandContext,
-  opts: RealmHostOptions
+  opts: RealmHostOptions,
+  hidCtx: HidDispatchCtx
 ): Promise<unknown> {
   switch (req.channel) {
     case 'vfs':
@@ -122,6 +181,12 @@ async function dispatch(
       return dispatchFetch(req.op, req.args, ctx);
     case 'browser':
       return dispatchBrowser(req.op, req.args, resolveBrowser(opts), opts);
+    case 'usb':
+      return dispatchUsb(req.op, req.args, resolveUsbBackendForHost(opts));
+    case 'serial':
+      return dispatchSerial(req.op, req.args, resolveSerialBackendForHost(opts));
+    case 'hid':
+      return dispatchHid(req.op, req.args, resolveHidBackendForHost(opts), hidCtx);
     default:
       throw new Error(`realm-host: unknown channel '${req.channel}'`);
   }
@@ -153,6 +218,35 @@ function resolveWsSubscribers(opts: RealmHostOptions): WsSubscriberRegistry {
   const g = globalThis as { __slicc_wsSubscribers?: WsSubscriberRegistry };
   if (g.__slicc_wsSubscribers) return g.__slicc_wsSubscribers;
   throw new Error('browser.websocket is not available in this runtime');
+}
+
+/**
+ * Resolve the WebUSB / Web Serial / WebHID backend for the device
+ * channels. Tests inject one through `opts`; production paths resolve
+ * the same dual-path backend the shell commands use — the local
+ * `navigator.*` in a DOM realm (extension), the panel-RPC bridge in the
+ * kernel worker (standalone). A missing backend throws a clear
+ * "unavailable in this runtime" error.
+ */
+function resolveUsbBackendForHost(opts: RealmHostOptions): UsbBackend {
+  if (opts.usbBackend) return opts.usbBackend;
+  const backend = resolveUsbBackend(hasLocalDom(), getPanelRpcClient());
+  if (!backend) throw new Error('usb is not available in this runtime');
+  return backend;
+}
+
+function resolveSerialBackendForHost(opts: RealmHostOptions): SerialBackend {
+  if (opts.serialBackend) return opts.serialBackend;
+  const backend = resolveSerialBackend(hasLocalDom(), getPanelRpcClient());
+  if (!backend) throw new Error('serial is not available in this runtime');
+  return backend;
+}
+
+function resolveHidBackendForHost(opts: RealmHostOptions): HidBackend {
+  if (opts.hidBackend) return opts.hidBackend;
+  const backend = resolveHidBackend(hasLocalDom(), getPanelRpcClient());
+  if (!backend) throw new Error('hid is not available in this runtime');
+  return backend;
 }
 
 // ---------------------------------------------------------------------------
@@ -189,96 +283,8 @@ async function dispatchVfs(op: string, args: unknown[], ctx: CommandContext): Pr
       return true;
     case 'resolvePath':
       return ctx.fs.resolvePath(ctx.cwd, args[0] as string);
-    case 'walkTree': {
-      // Recursive subtree dump in a single RPC. Replaces the
-      // per-file readDir/stat/readFile chatter that made
-      // VFS↔Pyodide sync take minutes on large `cwd` trees.
-      // Content is shipped as `Uint8Array` so binary files round-
-      // trip byte-for-byte; the realm-side sync hands them to
-      // Pyodide's `FS.writeFile` which accepts both.
-      const opts = (args[1] as { maxFileBytes?: number } | undefined) ?? {};
-      const maxBytes = typeof opts.maxFileBytes === 'number' ? opts.maxFileBytes : Infinity;
-      const entries: WalkTreeEntry[] = [];
-      await collectTree(ctx, resolved!, maxBytes, entries);
-      return entries;
-    }
-    case 'writeBatch': {
-      // Bulk apply of a `{mkdirs, files}` payload. Used by the
-      // post-sync diff path so a python invocation that only
-      // wrote one file pays a single round-trip rather than N.
-      // Per-entry failures are collected and returned so the realm
-      // can surface them as stderr warnings instead of silently
-      // losing user output — see `WriteBatchResult`.
-      const payload = (args[0] as WriteBatchPayload | undefined) ?? {};
-      const failedMkdirs: Array<{ path: string; error: string }> = [];
-      const failedFiles: Array<{ path: string; error: string }> = [];
-      for (const dir of payload.mkdirs ?? []) {
-        const resolvedDir = ctx.fs.resolvePath(ctx.cwd, dir);
-        try {
-          await ctx.fs.mkdir(resolvedDir, { recursive: true });
-        } catch (err) {
-          // EEXIST is expected and ignored; everything else surfaces.
-          const message = err instanceof Error ? err.message : String(err);
-          if (!/EEXIST/i.test(message)) failedMkdirs.push({ path: dir, error: message });
-        }
-      }
-      for (const file of payload.files ?? []) {
-        const resolvedFile = ctx.fs.resolvePath(ctx.cwd, file.path);
-        try {
-          await ctx.fs.writeFile(resolvedFile, file.content);
-        } catch (err) {
-          failedFiles.push({
-            path: file.path,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-      const result: WriteBatchResult = { ok: true, failedMkdirs, failedFiles };
-      return result;
-    }
     default:
       throw new Error(`realm-host: unknown vfs op '${op}'`);
-  }
-}
-
-async function collectTree(
-  ctx: CommandContext,
-  root: string,
-  maxBytes: number,
-  out: WalkTreeEntry[]
-): Promise<void> {
-  let names: string[];
-  try {
-    names = await ctx.fs.readdir(root);
-  } catch {
-    return;
-  }
-  for (const name of names) {
-    const full = root === '/' ? `/${name}` : `${root}/${name}`;
-    let st: { isDirectory: boolean; isFile: boolean; size: number };
-    try {
-      st = await ctx.fs.stat(full);
-    } catch {
-      continue;
-    }
-    if (st.isDirectory) {
-      out.push({ path: full, isDir: true });
-      await collectTree(ctx, full, maxBytes, out);
-    } else if (st.isFile) {
-      if (st.size <= maxBytes) {
-        try {
-          // `readFileBuffer` returns the raw bytes — critical for
-          // binary round-trip. `readFile` defaults to UTF-8 and
-          // would mojibake any non-text payload.
-          const content = await ctx.fs.readFileBuffer(full);
-          out.push({ path: full, isDir: false, size: st.size, content });
-          continue;
-        } catch {
-          /* leave content unset; realm will warn and skip */
-        }
-      }
-      out.push({ path: full, isDir: false, size: st.size });
-    }
   }
 }
 
@@ -630,26 +636,177 @@ function safeOrigin(url: string): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// Channels: usb / serial / hid
+// ---------------------------------------------------------------------------
+
+/**
+ * Dispatch a `usb` channel RPC against the resolved backend. Op names
+ * match the realm-side device-method semantics; binary results (`bytes`)
+ * are handed back to the realm verbatim and transferred by
+ * `collectTransferables`. The realm bridge re-wraps them as `DataView`s.
+ */
+async function dispatchUsb(op: string, args: unknown[], backend: UsbBackend): Promise<unknown> {
+  switch (op) {
+    case 'list':
+      return backend.list();
+    case 'request':
+      return backend.request((args[0] as UsbDeviceFilter[]) ?? []);
+    case 'info':
+      return backend.info(args[0] as string);
+    case 'open':
+      return backend.open(args[0] as string);
+    case 'close':
+      return backend.close(args[0] as string);
+    case 'reset':
+      return backend.reset(args[0] as string);
+    case 'selectConfig':
+      return backend.selectConfig(args[0] as string, args[1] as number);
+    case 'claim':
+      return backend.claim(args[0] as string, args[1] as number);
+    case 'release':
+      return backend.release(args[0] as string, args[1] as number);
+    case 'controlIn':
+      return backend.controlIn(args[0] as string, args[1] as UsbControlSetup, args[2] as number);
+    case 'controlOut':
+      return backend.controlOut(
+        args[0] as string,
+        args[1] as UsbControlSetup,
+        args[2] as Uint8Array
+      );
+    case 'transferIn':
+      return backend.transferIn(args[0] as string, args[1] as number, args[2] as number);
+    case 'transferOut':
+      return backend.transferOut(args[0] as string, args[1] as number, args[2] as Uint8Array);
+    default:
+      throw new Error(`realm-host: unknown usb op '${op}'`);
+  }
+}
+
+/** Dispatch a `serial` channel RPC against the resolved backend. */
+async function dispatchSerial(
+  op: string,
+  args: unknown[],
+  backend: SerialBackend
+): Promise<unknown> {
+  switch (op) {
+    case 'list':
+      return backend.list();
+    case 'request':
+      return backend.request((args[0] as SerialFilter[]) ?? []);
+    case 'info':
+      return backend.info(args[0] as string);
+    case 'open':
+      return backend.open(args[0] as string, args[1] as SerialOpenOptions);
+    case 'close':
+      return backend.close(args[0] as string);
+    case 'read': {
+      const params =
+        (args[1] as { maxBytes?: number; until?: Uint8Array; timeoutMs?: number } | undefined) ??
+        {};
+      return backend.read(args[0] as string, params);
+    }
+    case 'write':
+      return backend.write(args[0] as string, args[1] as Uint8Array);
+    case 'getSignals':
+      return backend.getSignals(args[0] as string);
+    case 'setSignals':
+      return backend.setSignals(args[0] as string, args[1] as SerialOutputSignals);
+    default:
+      throw new Error(`realm-host: unknown serial op '${op}'`);
+  }
+}
+
+/**
+ * Per-port state the HID dispatch needs beyond the backend itself:
+ * the subscription map (so subscribe/unsubscribe are idempotent and
+ * realm teardown can drain leftovers) and the push hook (so backend
+ * `inputreport` callbacks fan back to the realm over the same port
+ * the RPC arrived on). Lives in `attachRealmHost`'s closure.
+ */
+interface HidDispatchCtx {
+  subscriptions: Map<string, () => void | Promise<void>>;
+  pushEvent(msg: RealmEventMsg, transfer?: Transferable[]): void;
+}
+
+/** Dispatch a `hid` channel RPC against the resolved backend. */
+async function dispatchHid(
+  op: string,
+  args: unknown[],
+  backend: HidBackend,
+  hidCtx: HidDispatchCtx
+): Promise<unknown> {
+  switch (op) {
+    case 'list':
+      return backend.list();
+    case 'request':
+      return backend.request((args[0] as HidDeviceFilter[]) ?? []);
+    case 'info':
+      return backend.info(args[0] as string);
+    case 'open':
+      return backend.open(args[0] as string);
+    case 'close':
+      return backend.close(args[0] as string);
+    case 'sendReport':
+      return backend.sendReport(args[0] as string, args[1] as number, args[2] as Uint8Array);
+    case 'sendFeatureReport':
+      return backend.sendFeatureReport(args[0] as string, args[1] as number, args[2] as Uint8Array);
+    case 'receiveFeatureReport':
+      return backend.receiveFeatureReport(args[0] as string, args[1] as number);
+    case 'subscribeInputReports': {
+      // Idempotent: a second subscribe for the same handle is a no-op so
+      // a realm caller that hangs multiple listeners on one device only
+      // opens one backend subscription. The matching unsubscribe runs on
+      // `unsubscribeInputReports` or on realm-host `dispose()`.
+      const handle = args[0] as string;
+      if (hidCtx.subscriptions.has(handle)) return true;
+      const off = await backend.subscribeInputReports(handle, (report) => {
+        const bytes =
+          report.bytes instanceof Uint8Array ? report.bytes : new Uint8Array(report.bytes);
+        const msg: RealmEventMsg = {
+          type: 'realm-event',
+          channel: 'hid-input-report',
+          payload: { handle, reportId: report.reportId, bytes },
+        };
+        hidCtx.pushEvent(msg, [bytes.buffer as Transferable]);
+      });
+      hidCtx.subscriptions.set(handle, off);
+      return true;
+    }
+    case 'unsubscribeInputReports': {
+      const handle = args[0] as string;
+      const off = hidCtx.subscriptions.get(handle);
+      if (!off) return true;
+      hidCtx.subscriptions.delete(handle);
+      await off();
+      return true;
+    }
+    default:
+      throw new Error(`realm-host: unknown hid op '${op}'`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Transferables
 // ---------------------------------------------------------------------------
 
 /**
- * Collect transferable buffers from a result tree. Currently only
- * walks `Uint8Array` / `ArrayBuffer` at the top level and inside
- * `SerializedFetchResponse.body` — the only places we hand back
- * binary data today.
+ * Collect transferable buffers from a result tree. Walks `Uint8Array` /
+ * `ArrayBuffer` at the top level (e.g. `serial read`) and inside the
+ * `body` (`SerializedFetchResponse`) / `bytes` (USB/HID in-transfers)
+ * fields — the only places we hand back binary data today.
  */
 function collectTransferables(result: unknown): Transferable[] {
   if (result instanceof Uint8Array) {
     return [result.buffer as Transferable];
   }
-  if (
-    result &&
-    typeof result === 'object' &&
-    'body' in result &&
-    (result as { body?: unknown }).body instanceof Uint8Array
-  ) {
-    return [(result as { body: Uint8Array }).body.buffer as Transferable];
+  if (result && typeof result === 'object') {
+    const obj = result as { body?: unknown; bytes?: unknown };
+    if (obj.body instanceof Uint8Array) {
+      return [obj.body.buffer as Transferable];
+    }
+    if (obj.bytes instanceof Uint8Array) {
+      return [obj.bytes.buffer as Transferable];
+    }
   }
   return [];
 }

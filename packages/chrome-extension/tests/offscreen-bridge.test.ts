@@ -1538,3 +1538,554 @@ describe('OffscreenBridge follower-forwarding bridge', () => {
     ).resolves.toBeUndefined();
   });
 });
+
+describe('OffscreenBridge request-scoop-transcript', () => {
+  let bridge: InstanceType<typeof OffscreenBridge>;
+
+  beforeEach(async () => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+    bridge = new OffscreenBridge();
+    await bridge.bind({
+      getScoops: vi.fn(() => [
+        { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+      ]),
+      handleMessage: vi.fn().mockResolvedValue(undefined),
+      getScoopContext: vi.fn(() => undefined),
+    } as any);
+  });
+
+  it('flattens buffered messages and replies with correlated requestId', async () => {
+    const buf = (bridge as any).getBuffer('cone_1');
+    buf.push(
+      { id: 'u1', role: 'user', content: 'help me refactor auth', timestamp: 100 },
+      { id: 'a1', role: 'assistant', content: 'starting now', timestamp: 200 },
+      { id: 'a2', role: 'assistant', content: '   ', timestamp: 300 } // empty after trim — skip
+    );
+
+    await (bridge as any).handlePanelMessage({
+      type: 'request-scoop-transcript',
+      requestId: 'tr-test-1',
+      scoopJid: 'cone_1',
+    });
+
+    const reply = sentMessages.find((m: any) => m.payload?.type === 'scoop-transcript') as any;
+    expect(reply).toBeDefined();
+    expect(reply.payload.requestId).toBe('tr-test-1');
+    expect(reply.payload.scoopJid).toBe('cone_1');
+    expect(reply.payload.transcript).toBe('user: help me refactor auth\nassistant: starting now');
+  });
+
+  it('returns empty transcript for an unknown scoop', async () => {
+    await (bridge as any).handlePanelMessage({
+      type: 'request-scoop-transcript',
+      requestId: 'tr-test-2',
+      scoopJid: 'does-not-exist',
+    });
+
+    const reply = sentMessages.find((m: any) => m.payload?.type === 'scoop-transcript') as any;
+    expect(reply).toBeDefined();
+    expect(reply.payload.requestId).toBe('tr-test-2');
+    expect(reply.payload.transcript).toBe('');
+  });
+
+  it('does NOT emit scoop-messages-replaced (side-effect-free vs request-scoop-messages)', async () => {
+    const buf = (bridge as any).getBuffer('cone_1');
+    buf.push({ id: 'u1', role: 'user', content: 'hi', timestamp: 100 });
+
+    await (bridge as any).handlePanelMessage({
+      type: 'request-scoop-transcript',
+      requestId: 'tr-test-3',
+      scoopJid: 'cone_1',
+    });
+
+    const replacedReply = sentMessages.find(
+      (m: any) => m.payload?.type === 'scoop-messages-replaced'
+    );
+    expect(replacedReply).toBeUndefined();
+  });
+});
+
+describe('OffscreenBridge handlePanelMessage dispatch', () => {
+  let bridge: InstanceType<typeof OffscreenBridge>;
+  let mockOrchestrator: any;
+
+  beforeEach(async () => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+    bridge = new OffscreenBridge();
+    mockOrchestrator = {
+      getScoops: vi.fn(() => [
+        { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+        {
+          jid: 'scoop_a',
+          name: 'A',
+          folder: 'a-scoop',
+          isCone: false,
+          assistantLabel: 'a-scoop',
+        },
+      ]),
+      handleMessage: vi.fn().mockResolvedValue(undefined),
+      registerScoop: vi.fn().mockResolvedValue(undefined),
+      unregisterScoop: vi.fn().mockResolvedValue(undefined),
+      delegateToScoop: vi.fn().mockResolvedValue(undefined),
+      updateModel: vi.fn(),
+      setScoopThinkingLevel: vi.fn().mockResolvedValue(undefined),
+      resetFilesystem: vi.fn().mockResolvedValue(undefined),
+      reloadAllSkills: vi.fn().mockResolvedValue(undefined),
+      handleWebhookEvent: vi.fn(),
+      stopScoop: vi.fn(),
+      clearQueuedMessages: vi.fn().mockResolvedValue(undefined),
+      clearScoopMessages: vi.fn().mockResolvedValue(undefined),
+      getScoopContext: vi.fn(() => undefined),
+      createScoopTab: vi.fn(),
+    };
+    await bridge.bind(mockOrchestrator);
+  });
+
+  it('cone-create registers a new cone scoop and emits scoop-created', async () => {
+    await (bridge as any).handlePanelMessage({ type: 'cone-create', name: 'NewCone' });
+    expect(mockOrchestrator.registerScoop).toHaveBeenCalledTimes(1);
+    const registered = mockOrchestrator.registerScoop.mock.calls[0][0];
+    expect(registered.isCone).toBe(true);
+    expect(registered.name).toBe('NewCone');
+    expect(registered.folder).toBe('cone');
+    expect(registered.assistantLabel).toBe('sliccy');
+    const event = sentMessages.find((m: any) => m.payload?.type === 'scoop-created') as
+      | { payload: { scoop: { isCone: boolean; name: string } } }
+      | undefined;
+    expect(event?.payload.scoop.isCone).toBe(true);
+    expect(event?.payload.scoop.name).toBe('NewCone');
+  });
+
+  it('scoop-feed dispatches to orchestrator.delegateToScoop with "sliccy"', async () => {
+    await (bridge as any).handlePanelMessage({
+      type: 'scoop-feed',
+      scoopJid: 'scoop_a',
+      prompt: 'go do the thing',
+    });
+    expect(mockOrchestrator.delegateToScoop).toHaveBeenCalledWith(
+      'scoop_a',
+      'go do the thing',
+      'sliccy'
+    );
+  });
+
+  it('set-model triggers orchestrator.updateModel', async () => {
+    await (bridge as any).handlePanelMessage({
+      type: 'set-model',
+      provider: 'anthropic',
+      model: 'claude-opus-4-6',
+      apiKey: 'test',
+    });
+    expect(mockOrchestrator.updateModel).toHaveBeenCalledTimes(1);
+  });
+
+  it('refresh-model triggers orchestrator.updateModel', async () => {
+    await (bridge as any).handlePanelMessage({ type: 'refresh-model' });
+    expect(mockOrchestrator.updateModel).toHaveBeenCalledTimes(1);
+  });
+
+  it('request-state emits a state-snapshot', async () => {
+    await (bridge as any).handlePanelMessage({ type: 'request-state' });
+    const snapshot = sentMessages.find((m: any) => m.payload?.type === 'state-snapshot');
+    expect(snapshot).toBeDefined();
+  });
+
+  it('clear-filesystem calls orchestrator.resetFilesystem', async () => {
+    await (bridge as any).handlePanelMessage({ type: 'clear-filesystem' });
+    expect(mockOrchestrator.resetFilesystem).toHaveBeenCalledTimes(1);
+  });
+
+  it('clear-filesystem swallows orchestrator errors', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockOrchestrator.resetFilesystem.mockRejectedValueOnce(new Error('boom'));
+    await expect(
+      (bridge as any).handlePanelMessage({ type: 'clear-filesystem' })
+    ).resolves.toBeUndefined();
+    errSpy.mockRestore();
+  });
+
+  it('set-thinking-level forwards to orchestrator.setScoopThinkingLevel', async () => {
+    await (bridge as any).handlePanelMessage({
+      type: 'set-thinking-level',
+      scoopJid: 'cone_1',
+      level: 'high',
+    });
+    expect(mockOrchestrator.setScoopThinkingLevel).toHaveBeenCalledWith('cone_1', 'high');
+  });
+
+  it('set-thinking-level swallows orchestrator errors', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockOrchestrator.setScoopThinkingLevel.mockRejectedValueOnce(new Error('bad level'));
+    await expect(
+      (bridge as any).handlePanelMessage({
+        type: 'set-thinking-level',
+        scoopJid: 'cone_1',
+        level: 'xhigh',
+      })
+    ).resolves.toBeUndefined();
+    errSpy.mockRestore();
+  });
+
+  it('reload-skills triggers orchestrator.reloadAllSkills', async () => {
+    await (bridge as any).handlePanelMessage({ type: 'reload-skills' });
+    expect(mockOrchestrator.reloadAllSkills).toHaveBeenCalledTimes(1);
+  });
+
+  it('reload-skills swallows orchestrator errors', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockOrchestrator.reloadAllSkills.mockRejectedValueOnce(new Error('no skills dir'));
+    await expect(
+      (bridge as any).handlePanelMessage({ type: 'reload-skills' })
+    ).resolves.toBeUndefined();
+    // Microtask drain for the fire-and-forget .catch handler
+    await new Promise((r) => setTimeout(r, 5));
+    warnSpy.mockRestore();
+  });
+
+  it('lick-webhook-event forwards to orchestrator.handleWebhookEvent', async () => {
+    await (bridge as any).handlePanelMessage({
+      type: 'lick-webhook-event',
+      webhookId: 'wh-1',
+      headers: { 'x-test': 'true' },
+      body: { hello: 'world' },
+    });
+    expect(mockOrchestrator.handleWebhookEvent).toHaveBeenCalledWith(
+      'wh-1',
+      { 'x-test': 'true' },
+      { hello: 'world' }
+    );
+  });
+
+  it('abort calls stopScoop and clears queued messages', async () => {
+    await (bridge as any).handlePanelMessage({ type: 'abort', scoopJid: 'cone_1' });
+    expect(mockOrchestrator.stopScoop).toHaveBeenCalledWith('cone_1');
+    expect(mockOrchestrator.clearQueuedMessages).toHaveBeenCalledWith('cone_1');
+  });
+
+  it('local-storage-set writes through to globalThis.localStorage', async () => {
+    const ls = {
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+      clear: vi.fn(),
+      getItem: vi.fn(),
+      key: vi.fn(),
+      length: 0,
+    };
+    (globalThis as any).localStorage = ls;
+    try {
+      await (bridge as any).handlePanelMessage({
+        type: 'local-storage-set',
+        key: 'k',
+        value: 'v',
+      });
+      expect(ls.setItem).toHaveBeenCalledWith('k', 'v');
+    } finally {
+      delete (globalThis as any).localStorage;
+    }
+  });
+
+  it('local-storage-remove writes through to globalThis.localStorage', async () => {
+    const ls = {
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+      clear: vi.fn(),
+      getItem: vi.fn(),
+      key: vi.fn(),
+      length: 0,
+    };
+    (globalThis as any).localStorage = ls;
+    try {
+      await (bridge as any).handlePanelMessage({ type: 'local-storage-remove', key: 'k' });
+      expect(ls.removeItem).toHaveBeenCalledWith('k');
+    } finally {
+      delete (globalThis as any).localStorage;
+    }
+  });
+
+  it('local-storage-clear writes through to globalThis.localStorage', async () => {
+    const ls = {
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+      clear: vi.fn(),
+      getItem: vi.fn(),
+      key: vi.fn(),
+      length: 0,
+    };
+    (globalThis as any).localStorage = ls;
+    try {
+      await (bridge as any).handlePanelMessage({ type: 'local-storage-clear' });
+      expect(ls.clear).toHaveBeenCalledTimes(1);
+    } finally {
+      delete (globalThis as any).localStorage;
+    }
+  });
+
+  it('local-storage-set swallows setItem errors', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    (globalThis as any).localStorage = {
+      setItem: vi.fn(() => {
+        throw new Error('quota');
+      }),
+      removeItem: vi.fn(),
+      clear: vi.fn(),
+      getItem: vi.fn(),
+      key: vi.fn(),
+      length: 0,
+    };
+    try {
+      await expect(
+        (bridge as any).handlePanelMessage({ type: 'local-storage-set', key: 'k', value: 'v' })
+      ).resolves.toBeUndefined();
+    } finally {
+      delete (globalThis as any).localStorage;
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('local-storage-remove swallows removeItem errors', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    (globalThis as any).localStorage = {
+      setItem: vi.fn(),
+      removeItem: vi.fn(() => {
+        throw new Error('forbidden');
+      }),
+      clear: vi.fn(),
+      getItem: vi.fn(),
+      key: vi.fn(),
+      length: 0,
+    };
+    try {
+      await expect(
+        (bridge as any).handlePanelMessage({ type: 'local-storage-remove', key: 'k' })
+      ).resolves.toBeUndefined();
+    } finally {
+      delete (globalThis as any).localStorage;
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('local-storage-clear swallows clear errors', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    (globalThis as any).localStorage = {
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+      clear: vi.fn(() => {
+        throw new Error('forbidden');
+      }),
+      getItem: vi.fn(),
+      key: vi.fn(),
+      length: 0,
+    };
+    try {
+      await expect(
+        (bridge as any).handlePanelMessage({ type: 'local-storage-clear' })
+      ).resolves.toBeUndefined();
+    } finally {
+      delete (globalThis as any).localStorage;
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('scoop-drop with no sessionStore does not throw', async () => {
+    // Force sessionStore to null by reaching past bind()
+    (bridge as any).sessionStore = null;
+    await expect(
+      (bridge as any).handlePanelMessage({ type: 'scoop-drop', scoopJid: 'scoop_a' })
+    ).resolves.toBeUndefined();
+    expect(mockOrchestrator.unregisterScoop).toHaveBeenCalledWith('scoop_a');
+  });
+});
+
+describe('OffscreenBridge handleRequestScoopMessages', () => {
+  let bridge: InstanceType<typeof OffscreenBridge>;
+  let mockOrchestrator: any;
+
+  beforeEach(async () => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+    bridge = new OffscreenBridge();
+    mockOrchestrator = {
+      getScoops: vi.fn(() => [
+        { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+      ]),
+      handleMessage: vi.fn().mockResolvedValue(undefined),
+      getScoopContext: vi.fn(() => undefined),
+    };
+    await bridge.bind(mockOrchestrator);
+  });
+
+  it('emits scoop-messages-replaced from the buffered chat when present', async () => {
+    const buf = (bridge as any).getBuffer('cone_1');
+    buf.push({ id: 'u1', role: 'user', content: 'hi', timestamp: 100 });
+    await (bridge as any).handlePanelMessage({
+      type: 'request-scoop-messages',
+      scoopJid: 'cone_1',
+    });
+    const replaced = sentMessages.find((m: any) => m.payload?.type === 'scoop-messages-replaced') as
+      | { payload: { messages: Array<{ id: string }> } }
+      | undefined;
+    expect(replaced?.payload.messages).toHaveLength(1);
+    expect(replaced?.payload.messages[0].id).toBe('u1');
+  });
+
+  it('is a no-op when the orchestrator is not bound', async () => {
+    const fresh = new OffscreenBridge();
+    await (fresh as any).handlePanelMessage({
+      type: 'request-scoop-messages',
+      scoopJid: 'cone_1',
+    });
+    // No emit happens — orchestrator is null
+    expect(sentMessages.filter((m: any) => m.payload?.type === 'scoop-messages-replaced')).toEqual(
+      []
+    );
+  });
+
+  it('is a no-op when scoopJid does not match any scoop', async () => {
+    await (bridge as any).handlePanelMessage({
+      type: 'request-scoop-messages',
+      scoopJid: 'does-not-exist',
+    });
+    expect(sentMessages.filter((m: any) => m.payload?.type === 'scoop-messages-replaced')).toEqual(
+      []
+    );
+  });
+
+  it('loads from sessionStore when no buffer and no agent messages', async () => {
+    const store = (bridge as any).sessionStore;
+    store.load = vi.fn().mockResolvedValue({
+      messages: [{ id: 'm1', role: 'user', content: 'previous', timestamp: 50 }],
+    });
+    await (bridge as any).handlePanelMessage({
+      type: 'request-scoop-messages',
+      scoopJid: 'cone_1',
+    });
+    const replaced = sentMessages.find((m: any) => m.payload?.type === 'scoop-messages-replaced') as
+      | { payload: { messages: Array<{ id: string }> } }
+      | undefined;
+    expect(store.load).toHaveBeenCalledWith('session-cone');
+    expect(replaced?.payload.messages).toHaveLength(1);
+    expect(replaced?.payload.messages[0].id).toBe('m1');
+  });
+
+  it('swallows sessionStore.load errors without emitting', async () => {
+    const store = (bridge as any).sessionStore;
+    store.load = vi.fn().mockRejectedValue(new Error('idb closed'));
+    await expect(
+      (bridge as any).handlePanelMessage({
+        type: 'request-scoop-messages',
+        scoopJid: 'cone_1',
+      })
+    ).resolves.toBeUndefined();
+    expect(sentMessages.filter((m: any) => m.payload?.type === 'scoop-messages-replaced')).toEqual(
+      []
+    );
+  });
+
+  it('emits nothing when sessionStore returns no messages', async () => {
+    const store = (bridge as any).sessionStore;
+    store.load = vi.fn().mockResolvedValue({ messages: [] });
+    await (bridge as any).handlePanelMessage({
+      type: 'request-scoop-messages',
+      scoopJid: 'cone_1',
+    });
+    expect(sentMessages.filter((m: any) => m.payload?.type === 'scoop-messages-replaced')).toEqual(
+      []
+    );
+  });
+});
+
+describe('OffscreenBridge seedBuffersFromAgentState', () => {
+  let bridge: InstanceType<typeof OffscreenBridge>;
+
+  const coneScoop = {
+    jid: 'cone_1',
+    name: 'Cone',
+    folder: 'cone',
+    isCone: true,
+    assistantLabel: 'sliccy',
+  };
+  const makeContext = (messages: any[]) => ({ getAgentMessages: vi.fn(() => messages) });
+  const restoredHistory = [
+    { role: 'user', content: [{ type: 'text', text: 'first question' }], timestamp: 1 },
+    {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'first answer' }],
+      timestamp: 2,
+      api: 'anthropic-messages',
+      provider: 'anthropic',
+      model: 'claude-haiku-4-5',
+      stopReason: 'stop',
+    },
+  ];
+
+  beforeEach(() => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+    bridge = new OffscreenBridge();
+  });
+
+  it('seeds an empty buffer from the restored agent messages and persists it', async () => {
+    const context = makeContext(restoredHistory);
+    await bridge.bind({
+      getScoops: vi.fn(() => [coneScoop]),
+      getScoopContext: vi.fn(() => context),
+    } as any);
+    const store = (bridge as any).sessionStore;
+
+    await bridge.seedBuffersFromAgentState();
+
+    const buf = (bridge as any).getBuffer('cone_1');
+    expect(buf).toHaveLength(2);
+    expect(buf[0]).toMatchObject({ role: 'user', content: 'first question' });
+    expect(buf[1]).toMatchObject({ role: 'assistant', content: 'first answer' });
+    // Repairs the UI store immediately (the truncation fix).
+    expect(store.saveMessages).toHaveBeenCalledWith('session-cone', expect.any(Array));
+    const persisted = store.saveMessages.mock.calls[0][1];
+    expect(persisted).toHaveLength(2);
+  });
+
+  it('does not overwrite a buffer that already has live messages', async () => {
+    const context = makeContext(restoredHistory);
+    await bridge.bind({
+      getScoops: vi.fn(() => [coneScoop]),
+      getScoopContext: vi.fn(() => context),
+    } as any);
+    const store = (bridge as any).sessionStore;
+    const buf = (bridge as any).getBuffer('cone_1');
+    buf.push({ id: 'live-1', role: 'user', content: 'live', timestamp: 100 });
+
+    await bridge.seedBuffersFromAgentState();
+
+    const after = (bridge as any).getBuffer('cone_1');
+    expect(after).toHaveLength(1);
+    expect(after[0].id).toBe('live-1');
+    // Skipped before even reading the context — no clobber, no persist.
+    expect(context.getAgentMessages).not.toHaveBeenCalled();
+    expect(store.saveMessages).not.toHaveBeenCalled();
+  });
+
+  it('skips scoops with no restored agent messages (no buffer, no persist)', async () => {
+    const context = makeContext([]);
+    await bridge.bind({
+      getScoops: vi.fn(() => [coneScoop]),
+      getScoopContext: vi.fn(() => context),
+    } as any);
+    const store = (bridge as any).sessionStore;
+
+    await bridge.seedBuffersFromAgentState();
+
+    expect((bridge as any).messageBuffers.get('cone_1')).toBeUndefined();
+    expect(store.saveMessages).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when the orchestrator is not bound', async () => {
+    const fresh = new OffscreenBridge();
+    await expect(fresh.seedBuffersFromAgentState()).resolves.toBeUndefined();
+  });
+});

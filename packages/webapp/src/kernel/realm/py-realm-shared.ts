@@ -15,14 +15,19 @@
 import type { PyodideInterface } from 'pyodide';
 import { version as pyodidePackageVersion } from 'pyodide/package.json';
 import { resolvePinnedPackageVersion } from '../../shell/supplemental-commands/shared.js';
+import { installMountBombs } from './mount-bomb-fs.js';
+import {
+  createBufferedOpfsSahProvider,
+  createOpfsSyncFs,
+  flushPendingOpfsOps,
+  type OpfsMount,
+  type OpfsSyncFsPlugin,
+  prewalkOpfsTree,
+} from './opfs-sync-fs.js';
+import { installPythonMountGuard } from './python-mount-guard.js';
 import { type RealmPortLike, RealmRpcClient } from './realm-rpc.js';
-import type {
-  RealmDoneMsg,
-  RealmErrorMsg,
-  RealmInitMsg,
-  WalkTreeEntry,
-  WriteBatchResult,
-} from './realm-types.js';
+import type { RealmDoneMsg, RealmErrorMsg, RealmInitMsg, RealmMountPoint } from './realm-types.js';
+import { registerSliccFsModule } from './slicc-fs-module.js';
 
 export const PYODIDE_VERSION = resolvePinnedPackageVersion('pyodide', pyodidePackageVersion);
 export const PYODIDE_CDN = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
@@ -62,9 +67,10 @@ except BaseException:
 /**
  * Run a `kind:'py'` realm against `port`. Loads Pyodide via the
  * supplied `loaderImport` (default: dynamic `import('pyodide')`),
- * syncs VFS↔Pyodide-FS via the `vfs` RPC channel, runs the user
- * code, then posts `realm-done`. Used by both `py-realm-worker.ts`
- * (worker context) and the in-process test factory.
+ * mounts the per-dir OPFS subtrees via `OPFS_SYNC_FS`, runs the
+ * user code, flushes the mounts, then posts `realm-done`. Used by
+ * both `py-realm-worker.ts` (worker context) and the in-process
+ * test factory.
  */
 export async function runPyRealm(
   init: RealmInitMsg,
@@ -98,17 +104,81 @@ export async function runPyRealm(
   // would mirror the entire workspace into Pyodide's FS on every
   // invocation — minutes per `python3 -c "print(1)"` even with the
   // bulk-RPC path. Callers that need wider visibility pass an
-  // explicit `pyodideSyncDirs`.
-  const syncDirs = init.pyodideSyncDirs ?? [init.cwd, '/tmp'];
+  // explicit `pyodideMountDirs`.
+  const syncDirs = init.pyodideMountDirs ?? [init.cwd, '/tmp'];
   const pushWarning = (msg: string): void => {
     stderrChunks.push(`Warning: ${msg}\n`);
   };
-  let preSyncSnapshot: PreSyncSnapshot = { files: new Map(), dirs: new Set() };
+  let opfsMounts: OpfsRealmMount[] = [];
+  // The kernel detects the OPFS-backed VFS and passes the dbName
+  // through `init.opfsMountDbName`. The realm worker has no
+  // `localStorage` shim, so this is the only signal we get. The
+  // in-tree `OPFS_SYNC_FS` plugin mounts each syncDir against the
+  // same-origin OPFS subtree the kernel owns; queued mutations are
+  // flushed via `flushOpfsRealmMounts` before `realm-done` so the
+  // on-disk view is consistent when the kernel takes back over.
+  // Mount paths that exactly match a syncDir are skipped here so
+  // the realm-mount materialization step can mount MEMFS over them
+  // without an EBUSY collision against an OPFS subtree.
+  const mountPoints: RealmMountPoint[] = init.mountPoints ?? [];
+  const exactMountPaths = new Set(mountPoints.map((m) => m.path));
+  if (init.opfsMountDbName !== undefined) {
+    try {
+      const mounted = await mountOpfsDirsAndSyncIn(
+        pyodide,
+        syncDirs,
+        init.opfsMountDbName,
+        pushWarning,
+        { skipMountPaths: exactMountPaths }
+      );
+      opfsMounts = mounted.mounts;
+    } catch (err) {
+      pushWarning(`VFS→Pyodide OPFS mount failed: ${describeRealmError(err)}`);
+    }
+  }
+
+  // Overlay a throwing FS plugin at every overlapping mount path so
+  // any synchronous access from Python (stdlib `open`, `os.listdir`,
+  // pandas, …) under those paths raises an OSError pointing the
+  // caller at `await slicc.fs.…` (or to copy the file in first).
+  // Instant — no walk, no preload, no RPC traffic. Replaces the
+  // eager materialization that previously hung on large mounts
+  // (~24k sequential vfs RPCs for the 11k-file repro).
+  if (mountPoints.length > 0) {
+    try {
+      installMountBombs(
+        pyodide.FS as unknown as Parameters<typeof installMountBombs>[0],
+        mountPoints.map((mp) => mp.path),
+        pushWarning
+      );
+    } catch (err) {
+      pushWarning(`bomb overlay install failed: ${describeRealmError(err)}`);
+    }
+    // Python-level guard: the bomb FS sets a friendly `.message` on
+    // its `ErrnoError`, but CPython rebuilds the OSError from the raw
+    // integer errno for stdlib calls, so only "I/O error" survives.
+    // This wraps the hot stdlib entry points and raises an OSError
+    // carrying the guidance directly. Bomb FS remains as the C-level
+    // backstop for paths the Python wrappers can't see (pandas fopen,
+    // C extensions).
+    try {
+      await installPythonMountGuard(
+        pyodide,
+        mountPoints.map((mp) => mp.path)
+      );
+    } catch (err) {
+      pushWarning(`python mount guard install failed: ${describeRealmError(err)}`);
+    }
+  }
+
+  // Register the async `slicc.fs` Python module backed by the `vfs`
+  // RPC channel. Always registered (cheap, harmless) so user code
+  // can `await slicc.fs.read_text('/workspace/foo.py')` regardless
+  // of whether any mount overlays were installed.
   try {
-    preSyncSnapshot = await syncVfsToPyodide(rpc, pyodide, syncDirs, pushWarning);
+    await registerSliccFsModule(pyodide, rpc);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    pushWarning(`VFS→Pyodide sync failed: ${message}`);
+    pushWarning(`slicc.fs registration failed: ${describeRealmError(err)}`);
   }
 
   try {
@@ -149,11 +219,17 @@ export async function runPyRealm(
     /* best-effort cleanup */
   }
 
-  try {
-    await syncPyodideToVfs(rpc, pyodide, syncDirs, preSyncSnapshot, pushWarning);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    pushWarning(`Pyodide→VFS sync failed: ${message}`);
+  // Mount write-back is no longer needed: the bomb overlay refuses
+  // synchronous writes from Python, and `slicc.fs.write_*` routes
+  // through the `vfs` RPC channel directly (so backend writes are
+  // applied as they happen, not flushed at the end).
+  if (init.opfsMountDbName !== undefined) {
+    try {
+      await flushOpfsRealmMounts(opfsMounts);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      pushWarning(`Pyodide→VFS OPFS flush failed: ${message}`);
+    }
   }
 
   rpc.dispose();
@@ -167,257 +243,238 @@ export async function runPyRealm(
 }
 
 // ---------------------------------------------------------------------------
-// VFS ↔ Pyodide-FS sync (over RPC)
+// OPFS-native mount path (OPFS_SYNC_FS plugin)
 // ---------------------------------------------------------------------------
-
-/**
- * Cap on per-file content shipped in `walkTree`. Files above the cap
- * are listed in the walk (Pyodide sees the directory entry and the
- * `size`) but their content is not pre-loaded — Python `open()` on
- * one fails with ENOENT and the realm pushes a stderr warning naming
- * the file so the symptom is debuggable. The trade-off is
- * intentional: the previous unbounded sync took minutes on workspace-
- * sized trees because every large file blocked the channel. 10 MB
- * covers nearly every text artefact agents actually script against;
- * anything bigger should be read via the shell layer instead.
- */
-const WALK_TREE_MAX_FILE_BYTES = 10 * 1024 * 1024;
 
 type WarningSink = (message: string) => void;
 
 /**
- * Snapshot of what pre-sync put into Pyodide-FS. The post-sync diff
- * uses it to tell "user code created this" apart from "pre-sync
- * mirrored it in." Files are size-keyed (same-size content edits
- * slip through — documented trade-off); directories are tracked as
- * a Set because we only need to know whether they pre-existed.
- *
- * Tracking dirs is load-bearing: without it the post-sync emits
- * mkdir for every directory it sees in Pyodide-FS, and read-only
- * VFS mounts like `/proc` (procfs-shaped, emits PID dirs at read
- * time) flood stderr with `EACCES: read-only filesystem` warnings
- * on every python invocation.
+ * Top-level directory names Emscripten / Pyodide already own when
+ * `loadPyodide` finishes. Mounting OPFS_SYNC_FS over any of these
+ * collides with the built-in mount (Emscripten rejects with EBUSY)
+ * or shadows runtime-critical state (`/lib` is Pyodide's stdlib).
+ * Used by the cwd=='/' fan-out so a kernel-side `/tmp` OPFS dir
+ * doesn't shadow Pyodide's writable scratch dir.
  */
-export interface PreSyncSnapshot {
-  files: Map<string, number>;
-  dirs: Set<string>;
+const EMSCRIPTEN_BUILTIN_ROOT_DIRS = new Set(['dev', 'proc', 'lib', 'tmp', 'home']);
+
+/**
+ * Render any error from the realm mount/sync paths as a single
+ * human-readable line. Emscripten's `ErrnoError` carries `.errno`
+ * and (sometimes) `.code` but is not always `instanceof Error`, so
+ * `String(err)` collapses it to `[object Object]`. This helper
+ * surfaces the POSIX cause (name + message + errno + code) for
+ * Emscripten-shaped throws, the message for real `Error`s, and
+ * falls back to `String(err)` for everything else.
+ */
+export function describeRealmError(err: unknown): string {
+  if (err && typeof err === 'object') {
+    const e = err as { name?: unknown; message?: unknown; errno?: unknown; code?: unknown };
+    const hasErrno = typeof e.errno === 'number';
+    const hasCode = typeof e.code === 'string';
+    if (hasErrno || hasCode) {
+      const name = typeof e.name === 'string' && e.name ? e.name : 'Error';
+      const message = typeof e.message === 'string' ? e.message : '';
+      const detail: string[] = [];
+      if (hasErrno) detail.push(`errno ${e.errno as number}`);
+      if (hasCode) detail.push(e.code as string);
+      const suffix = detail.length ? ` (${detail.join(', ')})` : '';
+      return message ? `${name}: ${message}${suffix}` : `${name}${suffix}`;
+    }
+  }
+  if (err instanceof Error) return err.message;
+  return String(err);
 }
 
 /**
- * Mirror VFS → Pyodide-FS for `dirs` in a single `walkTree` RPC per
- * directory. Returns the `PreSyncSnapshot` for the post-execution
- * diff so it can tell new/modified entries apart from ones that
- * pre-sync just mirrored in.
- *
- * Skipped files (cap-exceeded, unreadable, missing dir) are surfaced
- * through `pushWarning` so the user can correlate Python's
- * `FileNotFoundError` against the real cause instead of guessing.
+ * Per-dir OPFS mount state the realm passes to
+ * `flushOpfsRealmMounts` before `realm-done` to drain queued
+ * mutations + write dirty buffers back.
  */
-export async function syncVfsToPyodide(
-  rpc: RealmRpcClient,
+export interface OpfsRealmMount {
+  pyPath: string;
+  mount: OpfsMount;
+  rootHandle: FileSystemDirectoryHandle;
+  flushBuffers: (rootHandle: FileSystemDirectoryHandle) => Promise<void>;
+}
+
+export interface MountedOpfsResult {
+  mounts: OpfsRealmMount[];
+}
+
+/**
+ * Lazily register the in-tree `OPFS_SYNC_FS` plugin on
+ * `pyodide.FS.filesystems`. Idempotent — re-mount calls share the
+ * single plugin object so node-op identity stays stable across
+ * mount points. Emscripten's mount table is keyed on the plugin
+ * reference, so re-creating it would shadow the in-flight mounts.
+ */
+function ensureOpfsSyncFsRegistered(pyodide: PyodideInterface): OpfsSyncFsPlugin {
+  const filesystems = (pyodide.FS as unknown as { filesystems: Record<string, unknown> })
+    .filesystems;
+  let plugin = filesystems.OPFS_SYNC_FS as OpfsSyncFsPlugin | undefined;
+  if (!plugin) {
+    plugin = createOpfsSyncFs(pyodide.FS as unknown as Parameters<typeof createOpfsSyncFs>[0]);
+    filesystems.OPFS_SYNC_FS = plugin;
+  }
+  return plugin;
+}
+
+/**
+ * For each `dir`, resolve the same-origin OPFS handle the kernel
+ * worker owns (`OPFS-root / <opfsDbName> / <vfsPath…>`), `prewalk`
+ * the subtree, then `pyodide.FS.mount(OPFS_SYNC_FS, …, dir)`. The
+ * plugin builds the Pyodide-FS tree from the prewalk snapshot
+ * synchronously, so Python sees the OPFS contents the instant the
+ * mount returns — no `syncfs(true)` round trip needed.
+ *
+ * Sub-handles are created with `{ create: true }` so a fresh OPFS
+ * subtree boots cleanly — `/tmp` and freshly-created cwds don't
+ * exist on disk yet but Python expects them to be writable.
+ *
+ * Write-back relies on the mount's own queued-op chain + buffered
+ * provider rather than a Pyodide-FS walk. Per-dir failures (handle
+ * resolution, prewalk, mount) surface through `pushWarning` and the
+ * loop continues with the next dir.
+ */
+export async function mountOpfsDirsAndSyncIn(
   pyodide: PyodideInterface,
   dirs: string[],
-  pushWarning: WarningSink = () => {}
-): Promise<PreSyncSnapshot> {
-  const FS = pyodide.FS;
-  const snapshot: PreSyncSnapshot = {
-    files: new Map<string, number>(),
-    dirs: new Set<string>(),
-  };
-
-  function ensurePyDir(path: string): void {
-    try {
-      FS.stat(path);
-    } catch {
-      FS.mkdirTree(path);
-    }
-    snapshot.dirs.add(path);
+  opfsDbName: string,
+  pushWarning: WarningSink = () => {},
+  opts: { skipMountPaths?: ReadonlySet<string> } = {}
+): Promise<MountedOpfsResult> {
+  const mounts: OpfsRealmMount[] = [];
+  const skip = opts.skipMountPaths ?? new Set<string>();
+  const storage = (navigator as unknown as { storage?: StorageManager }).storage;
+  if (!storage?.getDirectory) {
+    pushWarning('VFS→Pyodide OPFS mount skipped: navigator.storage.getDirectory unavailable');
+    return { mounts };
+  }
+  let opfsRoot: FileSystemDirectoryHandle;
+  try {
+    opfsRoot = await storage.getDirectory();
+  } catch (err) {
+    pushWarning(`VFS→Pyodide OPFS mount: getDirectory() failed: ${describeRealmError(err)}`);
+    return { mounts };
+  }
+  let kernelDbHandle: FileSystemDirectoryHandle;
+  try {
+    kernelDbHandle = await opfsRoot.getDirectoryHandle(opfsDbName, { create: true });
+  } catch (err) {
+    pushWarning(
+      `VFS→Pyodide OPFS mount: opening '${opfsDbName}' failed: ${describeRealmError(err)}`
+    );
+    return { mounts };
   }
 
-  /**
-   * Recursively record every dir/file Pyodide already has under
-   * `pyPath` into the snapshot. emscripten boots with a few
-   * built-ins inside `/proc` and `/dev` (notably `/proc/self/fd`
-   * for file-descriptor tracking) that the VFS procfs mount
-   * doesn't expose via `walkTree`. Without this seeding the
-   * post-sync diff would flag those as "new" and emit `mkdir`
-   * back to the read-only mount.
-   */
-  function recordExisting(pyPath: string): void {
-    let st: { mode: number; size: number };
-    try {
-      st = FS.stat(pyPath) as { mode: number; size: number };
-    } catch {
-      return;
-    }
-    if (FS.isDir(st.mode)) {
-      snapshot.dirs.add(pyPath);
-      let names: string[];
-      try {
-        names = (FS.readdir(pyPath) as string[]).filter((n) => n !== '.' && n !== '..');
-      } catch {
-        return;
-      }
-      for (const name of names) {
-        const full = pyPath === '/' ? `/${name}` : `${pyPath}/${name}`;
-        recordExisting(full);
-      }
-    } else if (FS.isFile(st.mode)) {
-      // Size-keyed so a same-size overwrite by the agent's
-      // Python still won't re-emit it. New files written by
-      // user code aren't in the snapshot, so they DO surface.
-      snapshot.files.set(pyPath, st.size);
-    }
-  }
+  const plugin = ensureOpfsSyncFsRegistered(pyodide);
 
   for (const dir of dirs) {
-    ensurePyDir(dir);
-    recordExisting(dir);
-    let entries: WalkTreeEntry[];
-    try {
-      entries = await rpc.call<WalkTreeEntry[]>('vfs', 'walkTree', [
-        dir,
-        { maxFileBytes: WALK_TREE_MAX_FILE_BYTES },
-      ]);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      pushWarning(`VFS→Pyodide sync skipped '${dir}': ${message}`);
+    if (dir === '/') {
+      // Emscripten rejects `FS.mount(_, _, '/')` with EBUSY because
+      // its root MEMFS is already mounted. Fan out to the top-level
+      // children of the kernel OPFS subtree instead so Python can
+      // still reach the VFS by absolute path (`/workspace`, …) when
+      // the shell cwd is `/`. Built-in mount points are skipped so
+      // we don't shadow `/dev`, `/proc`, `/lib`, `/tmp`, `/home`.
+      try {
+        const iter = kernelDbHandle as unknown as AsyncIterable<
+          [string, FileSystemDirectoryHandle | FileSystemFileHandle]
+        >;
+        for await (const [name, childHandle] of iter) {
+          if ((childHandle as { kind: string }).kind !== 'directory') continue;
+          if (EMSCRIPTEN_BUILTIN_ROOT_DIRS.has(name)) continue;
+          const childPath = `/${name}`;
+          // Skip OPFS mount when this path is itself a VFS mount —
+          // the realm-mount materialization step will mount MEMFS at
+          // the same path, and Emscripten cannot stack two mounts on
+          // one node.
+          if (skip.has(childPath)) continue;
+          try {
+            await mountOpfsChild(
+              pyodide,
+              plugin,
+              childPath,
+              childHandle as FileSystemDirectoryHandle,
+              mounts
+            );
+          } catch (err) {
+            pushWarning(`VFS→Pyodide OPFS mount '${childPath}' failed: ${describeRealmError(err)}`);
+          }
+        }
+      } catch (err) {
+        pushWarning(`VFS→Pyodide OPFS mount '/' failed: ${describeRealmError(err)}`);
+      }
       continue;
     }
-    for (const entry of entries) {
-      try {
-        if (entry.isDir) {
-          ensurePyDir(entry.path);
-          continue;
-        }
-        if (entry.content === undefined) {
-          // File listed without content — either above the
-          // WALK_TREE_MAX_FILE_BYTES cap or unreadable by the host.
-          // Don't write a stub: an empty file at the same path
-          // would mask the failure. Let the listing show through
-          // (via `readdir`) but `open()` will surface ENOENT.
-          //
-          // Warning policy: cap-exceeded files are a documented
-          // constraint, not an error — surfacing one on every
-          // `python3 -c "..."` invocation just because the user
-          // happens to have a large screenshot in cwd is noise the
-          // agent reacts to as a fault to fix. Silently skip. By
-          // contrast, an unreadable file IS an error worth
-          // flagging — those still warn.
-          if (entry.size <= WALK_TREE_MAX_FILE_BYTES) {
-            pushWarning(`VFS→Pyodide skipped '${entry.path}': unreadable from VFS`);
-          }
-          continue;
-        }
-        // Parent dir guaranteed by the walk order (directories are
-        // emitted before their contents); still defensive.
-        const lastSlash = entry.path.lastIndexOf('/');
-        if (lastSlash > 0) ensurePyDir(entry.path.slice(0, lastSlash));
-        FS.writeFile(entry.path, entry.content);
-        snapshot.files.set(entry.path, entry.size);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        pushWarning(`VFS→Pyodide entry '${entry.path}' failed: ${message}`);
+    if (skip.has(dir)) continue;
+    try {
+      let handle: FileSystemDirectoryHandle = kernelDbHandle;
+      for (const part of dir.split('/').filter(Boolean)) {
+        handle = await handle.getDirectoryHandle(part, { create: true });
       }
+      await mountOpfsChild(pyodide, plugin, dir, handle, mounts);
+    } catch (err) {
+      pushWarning(`VFS→Pyodide OPFS mount '${dir}' failed: ${describeRealmError(err)}`);
     }
   }
 
-  return snapshot;
+  return { mounts };
 }
 
 /**
- * Mirror Pyodide-FS → VFS for `dirs`, but only for files that are
- * new or whose size changed since `preSyncSnapshot`. Sends one
- * `writeBatch` RPC carrying all the diff entries; for a
- * `python -c "print('hi')"` with no FS writes that's zero RPCs
- * instead of N writeFile round-trips.
- *
- * Size-only diffing is a deliberate trade — same-size content
- * changes can slip through. The previous implementation also
- * re-wrote every file every run, so callers that round-trip JSON or
- * other structured data hit it then too; the recommended workaround
- * is the same: write to a fresh path or change the byte count.
- *
- * Binary outputs (PIL writing PNGs, numpy `.npy`, …) round-trip
- * byte-for-byte: `FS.readFile` returns a `Uint8Array` and we ship
- * it via `WriteBatchPayload.files[].content` (also `Uint8Array`).
- * The previous TextDecoder-based path silently corrupted any
- * non-UTF-8 bytes — fixed here.
- *
- * Host-side per-entry write failures come back in `WriteBatchResult`
- * and surface as stderr warnings so the user notices when their
- * Python output didn't reach VFS.
+ * Shared per-dir mount step: ensure the Pyodide-side directory
+ * exists (`mkdirTree`), prewalk the OPFS subtree, hand the plugin
+ * an `{ rootHandle, prewalk, sahProvider }` opts object, and record
+ * the resulting `OpfsRealmMount` so `flushOpfsRealmMounts` can drain
+ * queued ops + dirty buffers at `realm-done`.
  */
-export async function syncPyodideToVfs(
-  rpc: RealmRpcClient,
+async function mountOpfsChild(
   pyodide: PyodideInterface,
-  dirs: string[],
-  preSyncSnapshot: PreSyncSnapshot,
-  pushWarning: WarningSink = () => {}
+  plugin: OpfsSyncFsPlugin,
+  pyPath: string,
+  handle: FileSystemDirectoryHandle,
+  mounts: OpfsRealmMount[]
 ): Promise<void> {
-  const FS = pyodide.FS;
-  const newDirs = new Set<string>();
-  const changedFiles: Array<{ path: string; content: Uint8Array }> = [];
-
-  function walkBack(pyPath: string): void {
-    let entries: string[];
-    try {
-      entries = (FS.readdir(pyPath) as string[]).filter((n) => n !== '.' && n !== '..');
-    } catch {
-      return;
-    }
-    for (const name of entries) {
-      const full = pyPath === '/' ? `/${name}` : `${pyPath}/${name}`;
-      let st: { mode: number; size: number };
-      try {
-        st = FS.stat(full) as { mode: number; size: number };
-      } catch {
-        continue;
-      }
-      if (FS.isDir(st.mode)) {
-        // Only emit mkdir for directories user code actually
-        // created. Pre-sync mirrors VFS dirs (incl. read-only
-        // mounts like /proc) into Pyodide-FS; without this check
-        // we'd try to mkdir them back into the read-only mount
-        // and spam EACCES warnings on every python invocation.
-        if (!preSyncSnapshot.dirs.has(full)) newDirs.add(full);
-        walkBack(full);
-      } else if (FS.isFile(st.mode)) {
-        const previousSize = preSyncSnapshot.files.get(full);
-        if (previousSize === undefined || previousSize !== st.size) {
-          try {
-            const content = FS.readFile(full) as Uint8Array;
-            // Copy out of WASM heap: emscripten can reuse the view
-            // after the next FS call, same trap as magick-wasm.
-            changedFiles.push({ path: full, content: new Uint8Array(content) });
-          } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            pushWarning(`Pyodide→VFS read '${full}' failed: ${message}`);
-          }
-        }
-      }
-    }
-  }
-
-  for (const dir of dirs) walkBack(dir);
-
-  if (newDirs.size === 0 && changedFiles.length === 0) return;
-  let result: WriteBatchResult | undefined;
   try {
-    result = await rpc.call<WriteBatchResult>('vfs', 'writeBatch', [
-      { mkdirs: [...newDirs], files: changedFiles },
-    ]);
-  } catch (err) {
-    // Top-level reject means the channel is gone — partial
-    // failures are reported via `result` instead.
-    const message = err instanceof Error ? err.message : String(err);
-    pushWarning(`Pyodide→VFS writeBatch RPC failed: ${message}`);
-    return;
+    pyodide.FS.stat(pyPath);
+  } catch {
+    pyodide.FS.mkdirTree(pyPath);
   }
-  for (const f of result.failedFiles) {
-    pushWarning(`Pyodide→VFS write '${f.path}' failed: ${f.error}`);
-  }
-  for (const d of result.failedMkdirs) {
-    pushWarning(`Pyodide→VFS mkdir '${d.path}' failed: ${d.error}`);
+  const prewalk = await prewalkOpfsTree(handle);
+  const buffered = createBufferedOpfsSahProvider();
+  await buffered.preload(prewalk);
+  const opts = { rootHandle: handle, prewalk, sahProvider: buffered.provider };
+  const fsMount = pyodide.FS as unknown as {
+    mount: (plugin: OpfsSyncFsPlugin, opts: unknown, dir: string) => unknown;
+  };
+  const rootNode = fsMount.mount(plugin, opts, pyPath) as { mount?: OpfsMount } | undefined;
+  const mount =
+    rootNode?.mount ??
+    ({ opts, mountpoint: pyPath, root: rootNode as never } as unknown as OpfsMount);
+  mounts.push({ pyPath, mount, rootHandle: handle, flushBuffers: buffered.flush });
+}
+
+// ---------------------------------------------------------------------------
+// OPFS-native write-back (flush queued ops + dirty buffers)
+// ---------------------------------------------------------------------------
+
+/**
+ * Drain every mount's queued OPFS mutation chain (`mknod`, `unlink`,
+ * `rename`, …) then write each buffered SAH's dirty bytes back to
+ * the OPFS subtree. Must run before the realm posts `realm-done`
+ * so the kernel sees a consistent on-disk view — the plugin's
+ * `node_ops` return synchronously after enqueueing async work, and
+ * without this flush the kernel can race the still-pending writes.
+ *
+ * Errors propagate to the caller; `runPyRealm` wraps the call in a
+ * `pushWarning` try/catch so a flush failure still emits
+ * `realm-done` with the partial output.
+ */
+export async function flushOpfsRealmMounts(mounts: OpfsRealmMount[]): Promise<void> {
+  for (const entry of mounts) {
+    await flushPendingOpfsOps(entry.mount);
+    await entry.flushBuffers(entry.rootHandle);
   }
 }

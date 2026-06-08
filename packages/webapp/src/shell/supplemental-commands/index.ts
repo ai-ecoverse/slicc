@@ -16,12 +16,15 @@ import {
 import { createConvertCommand } from './convert-command.js';
 import { createCostCommand } from './cost-command.js';
 import { createCrontaskCommand } from './crontask-command.js';
+import { createDfCommand, createDiskutilCommand } from './df-command.js';
 import { createDigCommand } from './dig-command.js';
 import { createDiscoverCommand } from './discover-command.js';
 import { createEsbuildCommand } from './esbuild-command.js';
+import { createEsptoolCommand } from './esptool-command.js';
 import { createFfmpegCommand } from './ffmpeg-command.js';
 import { createFsWatchCommand } from './fswatch-command.js';
 import { createCommandsCommand } from './help-command.js';
+import { createHidCommand } from './hid-command.js';
 import { createHostCommand } from './host-command.js';
 import type { ImgcatCommandOptions } from './imgcat-command.js';
 import { createImgcatCommand } from './imgcat-command.js';
@@ -43,13 +46,17 @@ import { createRsyncCommand } from './rsync-command.js';
 import { createSayCommand } from './say-command.js';
 import { createScreencaptureCommand } from './screencapture-command.js';
 import { createSecretCommand } from './secret-command.js';
+import { createSerialCommand } from './serial-command.js';
 import { createServeCommand } from './serve-command.js';
+import { createSliccFsCleanupCommand } from './slicc-fs-cleanup-command.js';
 import { createSprinkleCommand } from './sprinkle-command.js';
 import { createSqliteCommand } from './sqlite-command.js';
+import { createSudoCommand, type SudoCommandOptions } from './sudo-command.js';
 import { createTestCommand } from './test-command.js';
 import { createTscCommand } from './tsc-command.js';
 import { createUnameCommand } from './uname-command.js';
 import { createUnzipCommand } from './unzip-command.js';
+import { createUsbCommand } from './usb-command.js';
 import { createWebhookCommand } from './webhook-command.js';
 import { createWebsocatCommand } from './websocat-command.js';
 import { createWhichCommand } from './which-command.js';
@@ -86,6 +93,21 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
   processManager?: ProcessManager;
   /** Leader-side cherry runtime registry. Absent outside leader contexts. */
   cherryRuntimeRegistry?: CherryRuntimeRegistry;
+  /**
+   * Hooks for the explicit `sudo <cmd...>` command. Includes the broker, the
+   * persist-grant sink, and the one-shot bypass that lets `sudo` run the
+   * inner command without re-firing the transparent `Cmnd` gate. Absent in
+   * environments without sudo support — `sudo` then prints a clean
+   * "not configured" message.
+   */
+  sudoCommand?: SudoCommandOptions;
+  /**
+   * Optional hook that writes a `name=value` pair into the owning shell's live
+   * env. Threaded into `createSecretCommand` so a successful `secret set`
+   * injects the masked value into `$NAME` for the next command in the same
+   * shell session (LLM-context parity with container-loaded secrets).
+   */
+  setEnv?: (name: string, value: string) => void;
 }
 
 export function createSupplementalCommands(options: SupplementalCommandsConfig = {}): Command[] {
@@ -124,7 +146,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createOAuthTokenCommand(),
     createOAuthDomainCommand(),
     createLocalLlmCommand(),
-    createSecretCommand(),
+    createSecretCommand({ setEnv: options.setEnv }),
     createRsyncCommand({ fs: options.fs }),
     createScreencaptureCommand(),
     createPbcopyCommand(),
@@ -141,7 +163,15 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createDiscoverCommand(),
     createPsCommand({ processManager: options.processManager }),
     createKillCommand({ processManager: options.processManager }),
+    createUsbCommand(),
+    createHidCommand(),
+    createSerialCommand(),
+    createEsptoolCommand(),
     createCherryEmitCommand({ registry: options.cherryRuntimeRegistry }),
+    createSliccFsCleanupCommand({ fs: options.fs }),
+    createDfCommand({ fs: options.fs }),
+    createDiskutilCommand({ fs: options.fs }),
+    createSudoCommand(options.sudoCommand),
   ];
 
   if (options.fs) {

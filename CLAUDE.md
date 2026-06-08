@@ -168,7 +168,7 @@ Virtual Filesystem (packages/webapp/src/fs/) → RestrictedFS → Shell (package
 
 **Mount backends** (`packages/webapp/src/fs/mount/`): `LocalMountBackend` (FS Access), `S3MountBackend`, `DaMountBackend` are **signing-naive** in the browser bundle — they construct logical requests and call an injected `SignedFetch*` transport. The transport routes to `/api/s3-sign-and-forward` / `/api/da-sign-and-forward` (CLI; node-server resolves credentials, signs SigV4, forwards) or to `chrome.runtime.sendMessage` (extension; service worker reads `s3.<profile>.*` from `chrome.storage.local`, signs, forwards via `host_permissions: <all_urls>`). The agent never holds S3 credentials in either deployment. The IMS bearer token for DA flows transiently in the envelope; v2 will move that OAuth flow server-side too.
 
-**Shell** (`packages/webapp/src/shell/`): WasmShell wraps just-bash 3.0.1 (WASM). Just-bash builtins plus ~50 supplemental commands registered in `shell/supplemental-commands/index.ts` and `shell/wasm-shell-headless.ts` (notable: `git`, `node -e`, `python3 -c`, `playwright-cli`, `open`, `serve`, `sqlite3`, `tsc`, `test`, `biome`, `esbuild`, `ffmpeg`, `convert`, `pdftk`, `upskill`, `discover`, `webhook`, `crontask`, `fswatch`, `mount`, `oauth-token`, `oauth-domain`, `secret`, `agent`, `mcp`, `host`, `ps`, `kill`, plus macOS-style helpers `say`/`afplay`/`pbcopy`/`pbpaste`/`screencapture`). See [`docs/shell-reference.md`](docs/shell-reference.md) for the authoritative per-command list. `agent` spawns a one-shot sub-scoop via AgentBridge — shell surface for scoop delegation from any float. `mcp` (`add`/`list`/`delete`/`invoke`/`refresh`) auto-writes a `.jsh` alias shim at `/workspace/.mcp/aliases/<name>.jsh`, registers `mcp:<name>` OAuth providers, and materializes MCP Apps as sprinkles under `/workspace/.mcp/sprinkles/<name>/`; lazy re-registration from `/workspace/.mcp/servers.json`. Any `*.jsh` file on VFS is auto-discovered as a command. Extension CSP workaround: dynamic code routes through `sandbox.html`. **Two shell contexts in extension mode**: side panel has its own WasmShell (mounted in terminal tab), offscreen document has the agent's WasmShell (runs bash tool calls). Commands that affect the UI must handle both — use `window.__slicc_*` hooks for direct calls (panel) and `chrome.runtime.sendMessage` relay for offscreen→panel communication.
+**Shell** (`packages/webapp/src/shell/`): WasmShell wraps just-bash 3.0.1 (WASM). Just-bash builtins plus ~50 supplemental commands registered in `shell/supplemental-commands/index.ts` and `shell/wasm-shell-headless.ts` (notable: `git`, `node -e`, `python3 -c`, `playwright-cli`, `open`, `serve`, `sqlite3`, `tsc`, `test`, `biome`, `esbuild`, `ffmpeg`, `convert`, `pdftk`, `upskill`, `discover`, `webhook`, `crontask`, `fswatch`, `mount`, `usb`, `serial`, `hid`, `esptool`, `oauth-token`, `oauth-domain`, `secret`, `agent`, `mcp`, `host`, `ps`, `kill`, plus macOS-style helpers `say`/`afplay`/`pbcopy`/`pbpaste`/`screencapture`). See [`docs/shell-reference.md`](docs/shell-reference.md) for the authoritative per-command list. `agent` spawns a one-shot sub-scoop via AgentBridge — shell surface for scoop delegation from any float. `mcp` (`add`/`list`/`delete`/`invoke`/`refresh`) auto-writes a `.jsh` alias shim at `/workspace/.mcp/aliases/<name>.jsh`, registers `mcp:<name>` OAuth providers, and materializes MCP Apps as sprinkles under `/workspace/.mcp/sprinkles/<name>/`; lazy re-registration from `/workspace/.mcp/servers.json`. **USB / Serial / HID gesture bridge**: `usb`/`serial`/`hid` expose WebUSB / Web Serial / WebHID via opaque page-side handles (`usb1`, `serial1`, `hid1`), and `esptool` flashes ESP32/ESP8266 over the `serial` handle namespace. The kernel worker has no `window`, so device ops forward to the page realm over panel-RPC. The `<cmd> request` device picker needs a real user gesture — `RemoteTerminalView` runs it on the Enter keystroke and forwards a rewritten command carrying `--__resolved` (parallel to `mount`'s local-picker gesture path); in the extension it routes through a popup window. Chromium-only; unavailable in the cloud / hosted-leader float. Any `*.jsh` file on VFS is auto-discovered as a command. Extension CSP workaround: dynamic code routes through `sandbox.html`. **Two shell contexts in extension mode**: side panel has its own WasmShell (mounted in terminal tab), offscreen document has the agent's WasmShell (runs bash tool calls). Commands that affect the UI must handle both — use `window.__slicc_*` hooks for direct calls (panel) and `chrome.runtime.sendMessage` relay for offscreen→panel communication.
 
 **CDP** (`packages/webapp/src/cdp/`): `CDPTransport` interface with WebSocket (CLI) and `chrome.debugger` (extension) implementations. `BrowserAPI` provides Playwright-style API (listPages, navigate, screenshot, evaluate, click, etc.). Screenshots normalize DPR to 1.
 
@@ -176,7 +176,7 @@ Virtual Filesystem (packages/webapp/src/fs/) → RestrictedFS → Shell (package
 
 **Core Agent** (`packages/webapp/src/core/`): Uses pi-agent-core for agent loop, pi-ai for LLM streaming. `tool-adapter.ts` bridges legacy ToolDefinition to pi-compatible AgentTool. `SessionStore` persists conversations to IndexedDB.
 
-**Context Compaction** (`packages/webapp/src/core/context-compaction.ts`): LLM-summarized compaction at ~183K tokens. Images auto-resized before LLM (5MB base64 limit). Overflow recovery replaces oversized messages (>40K chars) with placeholders.
+**Context Compaction** (`packages/webapp/src/core/context-compaction.ts`): LLM-summarized compaction at `model.contextWindow - reserveTokens` — the resolved model's real window, forwarded by `scoop-context.ts` (e.g. ~983K for a 1M-window Adobe Sonnet/Opus 4.x); falls back to a 200K default only when the model reports no window. Images auto-resized before LLM (5MB base64 limit). Overflow recovery replaces oversized messages (>40K chars) with placeholders.
 
 **UI** (`packages/webapp/src/ui/`): Vanilla TypeScript, no framework. Unified split-pane layout for both floats — `Layout(root, isExtension)` toggles density (scoops rail, switcher, avatar). Extension mode: side panel UI with Chat panel and Terminal/Files/Memory rail items pinned. Standalone: resizable split layout with all panels visible. Detached popout (`?detached=1`) uses `isExtension=false` for full standalone UX. `main.ts` delegates to `mainExtension()` (OffscreenClient) or bootstraps Orchestrator directly. Tab bar is fully dynamic — `TabZone.addTab()`/`removeTab()` adds/removes tabs at runtime (used by sprinkle panels).
 
@@ -234,22 +234,24 @@ Every change must satisfy **tests**, **docs**, and **verification**.
 - **Coverage thresholds are enforced in CI** for every package. New code
   must keep coverage at or above the current floor — CI fails if any of
   the tracked metrics drops below the threshold for that package.
-  - **TypeScript packages**: `vitest --coverage` (v8 provider). Run
-    `npm run test:coverage:<package>` locally; CI runs the same script
-    as the package's only test step. Per-package floors:
-    - `cloudflare-worker`: 75% lines/statements, 65% branches, 85% functions
-    - `node-server`: 65% lines/statements/functions, 55% branches
-    - `chrome-extension`: 55% lines/statements, 45% branches, 60% functions
-    - `webapp`: global default 50% lines/statements/functions, 40% branches
+  - **Single source of truth**: `coverage-thresholds.json` at the repo root
+    holds every per-package floor. It is maintained automatically by the
+    nightly coverage ratchet
+    (`packages/dev-tools/tools/coverage-ratchet.mjs` →
+    `.github/workflows/coverage-ratchet.yml`), which only ever raises floors
+    toward measured coverage (whole-point steps, <1% headroom) and opens a
+    PR when anything changed. Never hand-lower these values.
+  - **TypeScript packages**: `vitest --coverage` (v8 provider) via
+    `npm run test:coverage:<package>`, which runs `coverage-gate.mjs` to read
+    the package's floors from `coverage-thresholds.json`. CI runs the same
+    script as the package's only test step.
   - **Swift packages**: `swift test --enable-code-coverage` plus
     `xcrun llvm-cov report` via
-    `packages/dev-tools/tools/swift-coverage-check.sh`. Tests/.build
-    paths are excluded; the TOTAL row is checked against per-package
-    floors:
-    - `swift-server`: 40% lines, 40% functions, 35% regions
-    - `swift-launcher`: 5% lines, 5% functions, 8% regions
-      (most of the bundle is SwiftUI views that resist unit tests; the
-      floor exists to prevent regression below the current baseline)
+    `packages/dev-tools/tools/swift-coverage-check.sh`, which reads its
+    lines/functions/regions floors from `coverage-thresholds.json` when not
+    passed explicitly. Tests/.build paths are excluded; the TOTAL row is
+    checked against the floors (the swift-launcher floor stays low because
+    most of the bundle is SwiftUI views that resist unit tests).
 
 ### Documentation
 
@@ -275,3 +277,16 @@ npm run build -w @slicc/chrome-extension
 **Always run `npm run lint` before committing.** It runs `biome check --write .` over JS/TS/JSON/CSS and `prettier --write .` over the remaining doc / config-text formats (Markdown, YAML, HTML), then `lint:docs` (CLAUDE.md size limits) and `lint:skills` (tessl `SKILL.md` lint). CI runs the check-only/strict equivalents (`npm run lint:ci`) as a hard gate and will reject any unformatted code. This is the most common CI failure — don't skip it.
 
 CI runs these gates in `.github/workflows/ci.yml`.
+
+## Automated PR Review Checklist
+
+Automated reviewers — the Claude action (`.github/workflows/claude-pr-review.yml`), Codex (via `AGENTS.md` → this file), and Copilot (`.github/copilot-instructions.md`) — plus human reviewers check changed code against these recurring blind spots. Full catalog with trigger patterns, verified historical precedents, the five-runtime parity matrix, and the severity rubric: [`docs/review-patterns.md`](docs/review-patterns.md).
+
+1. **Error-path coverage** — external calls (`fetch`, `Sandbox.create`/`connect`) need timeouts/retries/`.catch`; bound every async operation (precedent: PR #779).
+2. **UI state preservation** — capture and restore live UI state around `innerHTML`/`replaceChildren` and reflow/navigation rebuilds (PR #566/#567).
+3. **Cross-runtime parity** — a change to one of `webapp`/`chrome-extension`/`node-server`/`swift-server`/`ios-app` usually needs the peers updated or an explicit "N/A" note (PR #565; see the parity matrix).
+4. **CDP edge cases** — foreground the page (`bringToFront`) before screenshots; validate the CDP target/port before trusting it (PR #361, #673).
+5. **Native/macOS permissions** — keychain/TCC/screen-recording need the right entitlements and graceful denial handling.
+6. **Test coverage** — source changes ship with mirrored `tests/`; bug fixes ship a regression test; keep coverage at/above the package floor.
+
+When you change a category, update `docs/review-patterns.md` (source of truth) and the ≤4,000-char `.github/copilot-instructions.md` so all reviewers stay in sync.

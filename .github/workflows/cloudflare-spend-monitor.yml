@@ -1,0 +1,104 @@
+name: Cloudflare Spend Monitor
+
+# Daily tripwire for Cloudflare overspend. Cloudflare has no per-day billing
+# API, so this estimates usage-based spend for the previous full UTC day from
+# the GraphQL Analytics API (Durable Objects duration & requests, Workers
+# requests) and opens/updates a GitHub issue when it exceeds the threshold
+# (default $3/day). It exists to catch cost regressions like the Durable
+# Objects duration blow-up fixed in packages/cloudflare-worker/src/session-tray.ts.
+#
+# Required:
+#   secrets.CLOUDFLARE_API_TOKEN   must include "Account Analytics: Read"
+#   vars.CLOUDFLARE_ACCOUNT_ID     already used by the worker deploy workflows
+# Optional:
+#   vars.CLOUDFLARE_SPEND_THRESHOLD_USD   override the $3/day default
+#
+# The estimate logic is pure and unit-tested in
+# packages/dev-tools/cloudflare-spend-monitor/lib.test.mjs.
+
+on:
+  schedule:
+    - cron: '30 6 * * *' # daily at 06:30 UTC (after the UTC day has fully closed)
+  workflow_dispatch:
+    inputs:
+      threshold_usd:
+        description: 'Alert threshold in USD/day'
+        required: false
+        default: '3'
+      dry_run:
+        description: 'Query + estimate only; do not open/close issues'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: cloudflare-spend-monitor
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Third-party actions pinned to immutable commit SHAs (matching the other
+      # workflows) — this job has issues:write.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+
+      - name: Estimate Cloudflare daily spend
+        id: spend
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          SPEND_THRESHOLD_USD: ${{ github.event.inputs.threshold_usd || vars.CLOUDFLARE_SPEND_THRESHOLD_USD || '3' }}
+          REPORT_FILE: cloudflare-spend-report.md
+        run: node packages/dev-tools/cloudflare-spend-monitor/check-spend.mjs
+
+      - name: Ensure label exists
+        if: github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh label create cloudflare-spend --color B60205 --description "Cloudflare overspend tripwire" --force
+
+      - name: Open or update the overspend issue
+        if: steps.spend.outputs.over_threshold == 'true' && github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DAY: ${{ steps.spend.outputs.day }}
+          USD: ${{ steps.spend.outputs.estimated_usd }}
+          REPORT_FILE: ${{ steps.spend.outputs.report_file }}
+        run: |
+          set -euo pipefail
+          existing=$(gh issue list --label cloudflare-spend --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "Updating existing issue #$existing"
+            gh issue comment "$existing" --body-file "$REPORT_FILE"
+          else
+            echo "Creating new overspend issue"
+            gh issue create \
+              --title "Cloudflare daily spend over threshold (\$$USD on $DAY)" \
+              --label cloudflare-spend \
+              --body-file "$REPORT_FILE"
+          fi
+
+      - name: Resolve the issue when spend is back to normal
+        if: steps.spend.outputs.over_threshold == 'false' && github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DAY: ${{ steps.spend.outputs.day }}
+          USD: ${{ steps.spend.outputs.estimated_usd }}
+          THRESHOLD: ${{ steps.spend.outputs.threshold_usd }}
+        run: |
+          set -euo pipefail
+          existing=$(gh issue list --label cloudflare-spend --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Estimated Cloudflare spend for **$DAY (UTC)** was **\$$USD**, back under the \$$THRESHOLD/day threshold. Auto-closing."
+            gh issue close "$existing"
+          fi

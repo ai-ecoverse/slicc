@@ -21,9 +21,11 @@ jobs:
       assets: ${{ steps.filter.outputs.assets }}
       cloud-core: ${{ steps.filter.outputs.cloud-core }}
       node-server: ${{ steps.filter.outputs.node-server }}
+      shared: ${{ steps.filter.outputs.shared }}
       extension: ${{ steps.filter.outputs.extension }}
       cloudflare-worker: ${{ steps.filter.outputs.cloudflare-worker }}
       cherry: ${{ steps.filter.outputs.cherry }}
+      dev-tools: ${{ steps.filter.outputs.dev-tools }}
       swift-server: ${{ steps.filter.outputs.swift-server }}
       swift-launcher: ${{ steps.filter.outputs.swift-launcher }}
       ios-app: ${{ steps.filter.outputs.ios-app }}
@@ -46,12 +48,16 @@ jobs:
               - 'packages/cloud-core/**'
             node-server:
               - 'packages/node-server/**'
+            shared:
+              - 'packages/shared-ts/**'
             extension:
               - 'packages/chrome-extension/**'
             cloudflare-worker:
               - 'packages/cloudflare-worker/**'
             cherry:
               - 'packages/cherry/**'
+            dev-tools:
+              - 'packages/dev-tools/**'
             swift-server:
               - 'packages/swift-server/**'
             swift-launcher:
@@ -60,12 +66,23 @@ jobs:
               - 'packages/ios-app/**'
             swift-config:
               - '.swiftlint.yml'
+              # Swift coverage floors + the gate script live outside the
+              # swift packages, so a threshold-only ratchet PR must still
+              # trigger the swift coverage jobs that consume them.
+              - 'coverage-thresholds.json'
+              - 'packages/dev-tools/tools/swift-coverage-check.sh'
             root-config:
               - 'package.json'
               - 'package-lock.json'
+              - 'patches/**'
               - 'tsconfig*.json'
               - 'vitest*.config.*'
               - '.github/workflows/ci.yml'
+              # Coverage floors + the TS gate tooling gate every package
+              # job; a threshold-only ratchet PR must exercise them.
+              - 'coverage-thresholds.json'
+              - 'packages/dev-tools/tools/coverage-gate.mjs'
+              - 'packages/dev-tools/tools/coverage-ratchet-lib.mjs'
       - name: Check merge queue position
         id: queue-position
         env:
@@ -94,6 +111,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Full history so the function-size boy-scout gate
+          # (check-touched-size-exemptions.mjs) can resolve merge-base
+          # against $GITHUB_BASE_REF.
+          fetch-depth: 0
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24
@@ -101,6 +123,11 @@ jobs:
       - run: npm ci
       - name: Lint (biome + prettier + CLAUDE.md sizes + tessl skill lint)
         run: npm run lint:ci
+      - name: Function-size debt list boy-scout gate
+        # Fail when this PR touches a file that is still on the
+        # biome.json size-exemption (debt) list without removing its
+        # override entry. Skips automatically on merge_group / push.
+        run: node packages/dev-tools/tools/check-touched-size-exemptions.mjs
       - name: Check Chrome Web Store manifest justifications
         # Fail if the extension manifest gains/drops a permission without a
         # matching reviewer justification in docs/chrome-web-store-submission.md
@@ -117,12 +144,32 @@ jobs:
         # silently diverge from the documented local command.
         run: npm run deadcode -- --no-progress --reporter compact
 
+  # The merge queue lands PRs with a linear history (rebase, no merge
+  # commits). A branch that merged `main` in — instead of rebasing onto it —
+  # is rejected late, after the PR has already gone green and burned a full
+  # CI run. Catch it here, at PR time. PR-only: in the merge_group the history
+  # is linear by construction, so this is skipped (= passing).
+  linear-history:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Full history so base..head can be walked for merge commits.
+          fetch-depth: 0
+      - name: Check linear history
+        run: |
+          bash packages/dev-tools/tools/check-linear-history.sh \
+            "${{ github.event.pull_request.base.sha }}" \
+            "${{ github.event.pull_request.head.sha }}"
+
   # Lightweight test matrix that re-runs the TypeScript test suites across
-  # supported Node majors. The package engines field is `>=22.13.0`, so
-  # any one-version pin in the heavier per-package jobs misses regressions
-  # that only surface on newer runtimes (e.g. jsdom + Node >= 25 quirks
-  # around vi.unstubAllGlobals + localStorage). Build/E2E stay on a single
-  # Node version in the per-package jobs to keep CI time bounded.
+  # tested Node majors (currently 24, 25, and 26). The package engines
+  # field is `>=22.13.0`, so any one-version pin in the heavier per-package
+  # jobs misses regressions that only surface on newer runtimes (e.g. jsdom
+  # + Node >= 25 quirks around vi.unstubAllGlobals + localStorage). Build/E2E
+  # stay on a single Node version in the per-package jobs to keep CI time
+  # bounded.
   node-matrix-tests:
     needs: changes
     if: >-
@@ -131,15 +178,17 @@ jobs:
       needs.changes.outputs.assets == 'true' ||
       needs.changes.outputs.cloud-core == 'true' ||
       needs.changes.outputs.node-server == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
       needs.changes.outputs.extension == 'true' ||
       needs.changes.outputs.cloudflare-worker == 'true' ||
       needs.changes.outputs.cherry == 'true' ||
+      needs.changes.outputs.dev-tools == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        node-version: ['24', '25']
+        node-version: ['24', '25', '26']
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -151,6 +200,7 @@ jobs:
         run: npm run test
         env:
           NODE_OPTIONS: '--max-old-space-size=6144'
+          SLICC_CDP_LAUNCH_TIMEOUT_MS: '60000'
 
   webapp:
     needs: changes
@@ -158,6 +208,7 @@ jobs:
       needs.changes.outputs.webapp == 'true' ||
       needs.changes.outputs.vfs-root == 'true' ||
       needs.changes.outputs.assets == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -236,6 +287,7 @@ jobs:
     if: >-
       needs.changes.outputs.cloud-core == 'true' ||
       needs.changes.outputs.node-server == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -268,6 +320,7 @@ jobs:
       needs.changes.outputs.webapp == 'true' ||
       needs.changes.outputs.vfs-root == 'true' ||
       needs.changes.outputs.assets == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -484,6 +537,60 @@ jobs:
             sleep 15
           done
 
+  cloud-core:
+    needs: changes
+    if: >-
+      needs.changes.outputs.cloud-core == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: tsc --noEmit -p packages/cloud-core/tsconfig.json
+      - name: Test (with coverage threshold gate)
+        run: npm run test:coverage:cloud-core
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-cloud-core
+          path: coverage/
+          if-no-files-found: ignore
+      - name: Build
+        run: npm run build -w @slicc/cloud-core
+
+  shared:
+    needs: changes
+    if: >-
+      needs.changes.outputs.shared == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck -w @slicc/shared-ts
+      - name: Test (with coverage threshold gate)
+        run: npm run test:coverage:shared
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-shared
+          path: coverage/
+          if-no-files-found: ignore
+      - name: Build
+        run: npm run build -w @slicc/shared-ts
+
   cherry:
     needs: changes
     if: >-
@@ -521,6 +628,12 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      # swift-coverage-check.sh reads its floors from coverage-thresholds.json
+      # via node, so pin Node (matches the other jobs) instead of relying on
+      # the runner's preinstalled version.
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
       - name: Install SwiftLint
         run: brew install swiftlint
       - name: Lint (SwiftLint)
@@ -530,7 +643,7 @@ jobs:
       - name: Test (with coverage threshold gate)
         run: |
           ./packages/dev-tools/tools/swift-coverage-check.sh \
-            packages/swift-server SliccServerPackageTests 40 40 35
+            packages/swift-server SliccServerPackageTests
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -583,7 +696,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           ./packages/dev-tools/tools/swift-coverage-check.sh \
-            packages/swift-launcher SliccstartPackageTests 5 5 8
+            packages/swift-launcher SliccstartPackageTests
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -645,6 +758,7 @@ jobs:
     if: >-
       needs.changes.outputs.cloud-core == 'true' ||
       needs.changes.outputs.node-server == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -699,11 +813,14 @@ jobs:
       [
         changes,
         lint,
+        linear-history,
         node-matrix-tests,
         webapp,
         node-server,
         chrome-extension,
         cloudflare-worker,
+        cloud-core,
+        shared,
         global-install,
         swift-launcher,
         swift-server,

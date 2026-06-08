@@ -10,7 +10,6 @@
  * for paths outside allowed areas — hard enforcement.
  */
 
-import type FS from '@isomorphic-git/lightning-fs';
 import type { FsWatchCallback, FsWatchFilter } from './fs-watcher.js';
 import { normalizePath } from './path-utils.js';
 import type {
@@ -134,11 +133,6 @@ export class RestrictedFS {
   /** Get the underlying unrestricted VirtualFS (cone-only escape hatch). */
   getUnderlyingFS(): VirtualFS {
     return this.vfs;
-  }
-
-  /** Get the underlying LightningFS (needed by isomorphic-git). */
-  getLightningFS(): FS.PromisifiedFS {
-    return this.vfs.getLightningFS();
   }
 
   /**

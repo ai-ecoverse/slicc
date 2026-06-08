@@ -5,12 +5,12 @@ let package = Package(
     name: "SliccServer",
     platforms: [.macOS(.v14)],
     dependencies: [
-        .package(url: "https://github.com/hummingbird-project/hummingbird", from: "2.24.0"),
+        .package(url: "https://github.com/hummingbird-project/hummingbird", from: "2.25.0"),
         .package(url: "https://github.com/hummingbird-project/hummingbird-websocket", from: "2.7.0"),
         .package(url: "https://github.com/swift-server/async-http-client", from: "1.33.1"),
         .package(url: "https://github.com/vapor/websocket-kit", from: "2.16.2"),
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.8.1"),
-        .package(url: "https://github.com/apple/swift-log", from: "1.13.0"),
+        .package(url: "https://github.com/apple/swift-log", from: "1.13.1"),
     ],
     targets: [
         .executableTarget(

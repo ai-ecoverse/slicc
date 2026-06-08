@@ -1,1 +1,10 @@
+set -e
+
 npx lint-staged
+
+# Enforce instruction-file size budgets when a budgeted file is staged
+# (root/agent CLAUDE.md or a GitHub Copilot instruction file).
+# Runs once, after lint-staged formatting (race-free).
+if git diff --cached --name-only | grep -qE '^(CLAUDE\.md|packages/vfs-root/shared/CLAUDE\.md|\.github/copilot-instructions\.md|\.github/instructions/.*\.instructions\.md)$'; then
+  node packages/dev-tools/tools/check-doc-sizes.mjs
+fi

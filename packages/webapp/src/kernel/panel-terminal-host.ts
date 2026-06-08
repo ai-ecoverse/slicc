@@ -25,6 +25,7 @@ import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { MediaPreviewItem } from '../shell/supplemental-commands/imgcat-command.js';
 import type { TerminalMediaPreviewMsg, TerminalSessionId } from '../shell/terminal-protocol.js';
 import { WasmShellHeadless } from '../shell/wasm-shell-headless.js';
+import type { SudoManager } from '../sudo/sudo-manager.js';
 import type { ProcessManager } from './process-manager.js';
 import type { TerminalSessionHostOptions } from './terminal-session-host.js';
 import { TerminalSessionHost } from './terminal-session-host.js';
@@ -39,6 +40,14 @@ export interface PanelTerminalHostOptions {
   browser: BrowserAPI;
   /** The kernel host's ProcessManager — pinned into BOTH the host AND the shell. */
   processManager: ProcessManager;
+  /**
+   * Orchestrator-owned {@link SudoManager}. When supplied, the per-session
+   * `WasmShellHeadless` is constructed with the manager's shell config in
+   * `transparentGating: false` mode — the explicit `sudo <cmd...>` command
+   * works (broker + persist-grant wired) but plain commands the human types
+   * still run ungated. Omit to leave the panel shell completely sudo-free.
+   */
+  sudoManager?: SudoManager | null;
   /** Optional logger override. Defaults to `console`. */
   logger?: TerminalSessionHostOptions['logger'];
 }
@@ -81,8 +90,14 @@ class PanelTerminalShell extends WasmShellHeadless {
 export function createPanelTerminalHost(
   options: PanelTerminalHostOptions
 ): PanelTerminalHostHandle {
-  const { transport, fs, browser, processManager } = options;
+  const { transport, fs, browser, processManager, sudoManager } = options;
   const logger = options.logger ?? console;
+  // Build the per-session shell sudo config once. `transparentGating: false`
+  // keeps plain panel-typed commands ungated while still wiring the broker +
+  // persist sink so `sudo <cmd...>` prompts the human and persists "Always"
+  // grants. Absent manager → undefined → `sudo` prints a clean
+  // "not configured" message.
+  const shellSudo = sudoManager?.getShellConfig({ transparentGating: false });
   const host = new TerminalSessionHost({
     transport,
     processManager,
@@ -94,6 +109,7 @@ export function createPanelTerminalHost(
         browserAPI: browser,
         processManager,
         processOwner: { kind: 'system' },
+        sudo: shellSudo,
       }),
     logger,
   });

@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE,
   ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE,
   getElectronOverlayInitialTab,
   getLickWebSocketUrl,
   getTrayWebhookUrl,
   getWebhookUrl,
+  isElectronOverlayCloseMessage,
   isElectronOverlaySetTabMessage,
   resolveUiRuntimeMode,
   shouldUseRuntimeModeTrayDefaults,
@@ -93,6 +95,24 @@ describe('runtime-mode', () => {
     ).toBe(true);
     expect(isElectronOverlaySetTabMessage({ type: 'something-else' })).toBe(false);
     expect(isElectronOverlaySetTabMessage(null)).toBe(false);
+  });
+
+  it('exposes the dedicated overlay close message type', () => {
+    expect(ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE).toBe('slicc-electron-overlay:close');
+    // The close message must NOT be confused with the toggle or set-tab
+    // messages — the parent shell routes each to a different action.
+    expect(ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE).not.toBe(ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE);
+  });
+
+  it('recognizes overlay close messages', () => {
+    expect(isElectronOverlayCloseMessage({ type: ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE })).toBe(true);
+    expect(isElectronOverlayCloseMessage({ type: ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE })).toBe(
+      false
+    );
+    expect(isElectronOverlayCloseMessage({ type: 'something-else' })).toBe(false);
+    expect(isElectronOverlayCloseMessage(null)).toBe(false);
+    expect(isElectronOverlayCloseMessage(undefined)).toBe(false);
+    expect(isElectronOverlayCloseMessage({})).toBe(false);
   });
 });
 

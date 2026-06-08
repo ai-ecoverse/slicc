@@ -74,4 +74,118 @@ final class CrossImplementationTests: XCTestCase {
             )
         }
     }
+
+    // MARK: - CDP frame unmask parity (mirrors packages/shared-ts/tests/cdp-frame-unmask.test.ts)
+    //
+    // Pins the same fixture (sessionId='session-fixed', API_KEY='sk-realValue123'
+    // gated on example.com) and the same per-method output as the TS helper.
+    // The wrapper JSON's key order is not part of the contract — we compare the
+    // re-parsed params field. The masked → real substring substitution itself
+    // is byte-identical across implementations (same HMAC mask + plain
+    // String/Data replace).
+
+    private static let frameSessionId = "session-fixed"
+    private static let frameSecret = SecretInjector.LoadedSecret(
+        name: "API_KEY",
+        realValue: "sk-realValue123",
+        maskedValue: mask(sessionId: "session-fixed", secretName: "API_KEY", realValue: "sk-realValue123"),
+        domains: ["example.com"]
+    )
+
+    private func frameInjector() -> SecretInjector {
+        SecretInjector(secrets: [Self.frameSecret])
+    }
+
+    func testCdpFrameUnmaskRuntimeEvaluateInDomain() throws {
+        let masked = Self.frameSecret.maskedValue
+        let frame = #"{"id":1,"sessionId":"S1","method":"Runtime.evaluate","params":{"expression":"submit(\#(masked))","returnByValue":true}}"#
+        let out = CDPProxy.unmaskClientFrame(
+            text: frame,
+            injector: self.frameInjector(),
+            urlForSession: { _ in "https://example.com/" }
+        )
+        let parsed = try XCTUnwrap(out.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] })
+        XCTAssertEqual(parsed["id"] as? Int, 1)
+        XCTAssertEqual(parsed["sessionId"] as? String, "S1")
+        let params = parsed["params"] as? [String: Any]
+        XCTAssertEqual(params?["expression"] as? String, "submit(sk-realValue123)")
+        XCTAssertEqual(params?["returnByValue"] as? Bool, true)
+    }
+
+    func testCdpFrameUnmaskRuntimeEvaluateOutOfDomain() {
+        let masked = Self.frameSecret.maskedValue
+        let frame = #"{"sessionId":"S1","method":"Runtime.evaluate","params":{"expression":"submit(\#(masked))"}}"#
+        let out = CDPProxy.unmaskClientFrame(
+            text: frame,
+            injector: self.frameInjector(),
+            urlForSession: { _ in "https://evil.example.org/" }
+        )
+        XCTAssertNil(out, "out-of-domain frames must be untouched (nil → passthrough)")
+    }
+
+    func testCdpFrameUnmaskInsertTextInDomain() throws {
+        let masked = Self.frameSecret.maskedValue
+        let frame = #"{"sessionId":"S1","method":"Input.insertText","params":{"text":"\#(masked)"}}"#
+        let out = CDPProxy.unmaskClientFrame(
+            text: frame,
+            injector: self.frameInjector(),
+            urlForSession: { _ in "https://example.com/" }
+        )
+        let parsed = try XCTUnwrap(out.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] })
+        let params = parsed["params"] as? [String: Any]
+        XCTAssertEqual(params?["text"] as? String, "sk-realValue123")
+    }
+
+    func testCdpFrameUnmaskCallFunctionOnStringArgsOnly() throws {
+        let masked = Self.frameSecret.maskedValue
+        let argsJSON = "[{\"value\":\"\(masked)\"},{\"value\":42},{\"objectId\":\"obj-1\"},"
+            + "{\"value\":\"prefix \(masked) suffix\"}]"
+        let paramsJSON = "{\"functionDeclaration\":\"function(v){this.value=v}\"," + "\"arguments\":\(argsJSON)}"
+        let frame = "{\"sessionId\":\"S1\",\"method\":\"Runtime.callFunctionOn\",\"params\":\(paramsJSON)}"
+        let out = CDPProxy.unmaskClientFrame(
+            text: frame,
+            injector: self.frameInjector(),
+            urlForSession: { _ in "https://example.com/" }
+        )
+        let parsed = try XCTUnwrap(out.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] })
+        let params = parsed["params"] as? [String: Any]
+        let args = params?["arguments"] as? [[String: Any]]
+        XCTAssertEqual(args?[0]["value"] as? String, "sk-realValue123")
+        XCTAssertEqual(args?[1]["value"] as? Int, 42)
+        XCTAssertEqual(args?[2]["objectId"] as? String, "obj-1")
+        XCTAssertEqual(args?[3]["value"] as? String, "prefix sk-realValue123 suffix")
+    }
+
+    func testCdpFrameUnmaskUnrelatedMethodPassesThrough() {
+        let masked = Self.frameSecret.maskedValue
+        let frame = #"{"sessionId":"S1","method":"Input.dispatchKeyEvent","params":{"type":"char","text":"\#(masked)"}}"#
+        let out = CDPProxy.unmaskClientFrame(
+            text: frame,
+            injector: self.frameInjector(),
+            urlForSession: { _ in "https://example.com/" }
+        )
+        XCTAssertNil(out, "unrelated methods must be untouched (nil → passthrough)")
+    }
+
+    func testCdpFrameUnmaskFailsClosedWhenURLUnavailable() {
+        let masked = Self.frameSecret.maskedValue
+        let frame = #"{"sessionId":"S1","method":"Runtime.evaluate","params":{"expression":"submit(\#(masked))"}}"#
+        let out = CDPProxy.unmaskClientFrame(
+            text: frame,
+            injector: self.frameInjector(),
+            urlForSession: { _ in nil }
+        )
+        XCTAssertNil(out, "unresolved URL must fail closed (nil → passthrough)")
+    }
+
+    func testCdpFrameUnmaskEmptyInjectorIsNoOp() {
+        let masked = Self.frameSecret.maskedValue
+        let frame = #"{"sessionId":"S1","method":"Runtime.evaluate","params":{"expression":"submit(\#(masked))"}}"#
+        let out = CDPProxy.unmaskClientFrame(
+            text: frame,
+            injector: SecretInjector(secrets: []),
+            urlForSession: { _ in "https://example.com/" }
+        )
+        XCTAssertNil(out, "empty injector must be a no-op")
+    }
 }

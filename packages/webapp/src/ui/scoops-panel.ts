@@ -9,12 +9,47 @@
  */
 
 import { createLogger } from '../core/logger.js';
-import type { VirtualFS } from '../fs/index.js';
+import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { Orchestrator } from '../scoops/orchestrator.js';
-import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
+import type { ChannelMessage, RegisteredScoop, ScoopTabState } from '../scoops/types.js';
+import { extractLatestUserPrompt, ScoopScopeLabeler } from './scoop-scope-label.js';
 import { type FrozenSessionIndexEntry, readSessionsIndex } from './session-freezer.js';
 
 const log = createLogger('scoops-panel');
+
+/** Tail of recent ChannelMessages we hand to the scope labeler. */
+const SCOPE_TRANSCRIPT_TAIL = 12;
+/** Per-message clip — keeps the LLM prompt small without dropping context. */
+const SCOPE_MESSAGE_MAX_CHARS = 600;
+/** Fallback prompt line shown until / unless an LLM label is available. */
+const SCOPE_FALLBACK_MAX_CHARS = 80;
+
+/** Flatten the tail of a scoop's ChannelMessage history into the short
+ *  `role: text` transcript shape the labeler feeds to `quickLabel`. */
+function flattenScoopTranscript(messages: ChannelMessage[]): string {
+  if (messages.length === 0) return '';
+  const tail = messages.slice(-SCOPE_TRANSCRIPT_TAIL);
+  const lines: string[] = [];
+  for (const m of tail) {
+    const role = m.fromAssistant ? 'assistant' : m.senderName || 'user';
+    const content = (m.content ?? '').replace(/\s+/g, ' ').trim();
+    if (content.length === 0) continue;
+    const clipped =
+      content.length > SCOPE_MESSAGE_MAX_CHARS
+        ? `${content.slice(0, SCOPE_MESSAGE_MAX_CHARS)}…`
+        : content;
+    lines.push(`${role}: ${clipped}`);
+  }
+  return lines.join('\n');
+}
+
+/** Truncate the latest user prompt for the fallback tooltip line. */
+function truncateFallbackPrompt(text: string): string {
+  const cleaned = (text ?? '').replace(/\s+/g, ' ').trim();
+  if (cleaned.length === 0) return '';
+  if (cleaned.length <= SCOPE_FALLBACK_MAX_CHARS) return cleaned;
+  return `${cleaned.slice(0, SCOPE_FALLBACK_MAX_CHARS - 1)}…`;
+}
 
 export interface ScoopsPanelCallbacks {
   /** Called when user selects a scoop */
@@ -39,7 +74,7 @@ export class ScoopsPanel {
   private selectedScoopJid: string | null = null;
   private scoopStatuses: Map<string, ScoopTabState['status']> = new Map();
   private expanded = false;
-  private vfs: VirtualFS | null = null;
+  private vfs: LocalVfsClient | null = null;
   private frozenSessions: FrozenSessionIndexEntry[] = [];
 
   // Roaming eyes state
@@ -51,6 +86,22 @@ export class ScoopsPanel {
   private rightPupilGroup: SVGGElement | null = null;
   private eyesSvg: SVGSVGElement | null = null;
   private mouseMoveBound: ((e: MouseEvent) => void) | null = null;
+
+  // Scope-label state (rail hover tooltip line 2)
+  private scopeLabeler: ScoopScopeLabeler | null = null;
+  /** Latest user prompt per scoop, used as the immediate fallback line
+   *  until an LLM label is available. Populated as a side-effect of the
+   *  labeler's transcript fetch. */
+  private readonly lastUserPrompts = new Map<string, string>();
+  /** Currently-visible rail tooltip; updated when the labeler resolves
+   *  a new label while the user is still hovering the same item. */
+  private activeTooltip: { jid: string; scopeEl: HTMLElement } | null = null;
+  /** Optional side-effect-free transcript fetcher. When wired (e.g.
+   *  standalone mode injecting `OffscreenClient.getScoopTranscript`),
+   *  the rail labeler routes through this instead of the orchestrator's
+   *  `getMessagesForScoop`, which the standalone shim doesn't implement.
+   *  Falls back to the orchestrator-backed path when null. */
+  private transcriptSource: ((jid: string) => Promise<string>) | null = null;
 
   constructor(container: HTMLElement, callbacks: ScoopsPanelCallbacks) {
     this.container = container;
@@ -72,6 +123,9 @@ export class ScoopsPanel {
     document.querySelectorAll('.scoop-fixed-tooltip').forEach((t) => {
       t.remove();
     });
+    this.activeTooltip = null;
+    this.lastUserPrompts.clear();
+    this.scopeLabeler = null;
   }
 
   /** Toggle the nav rail expanded/collapsed state */
@@ -234,15 +288,88 @@ export class ScoopsPanel {
   /** Set the orchestrator instance */
   setOrchestrator(orchestrator: Orchestrator): void {
     this.orchestrator = orchestrator;
+    this.rebuildScopeLabeler();
     this.refreshScoops();
+  }
+
+  /**
+   * Wire a side-effect-free transcript source for the rail's scope
+   * labeler. When set, the labeler routes through this fetcher (e.g.
+   * `OffscreenClient.getScoopTranscript` in standalone mode) and
+   * derives the fallback "latest user prompt" line from the flat
+   * transcript string via `extractLatestUserPrompt` — symmetric to the
+   * extension scoop-switcher. When NOT set, the labeler falls back to
+   * `Orchestrator.getMessagesForScoop` so any real-Orchestrator caller
+   * (and existing unit tests) keeps working unchanged.
+   */
+  setScopeTranscriptSource(fetchTranscript: (jid: string) => Promise<string>): void {
+    this.transcriptSource = fetchTranscript;
+    this.rebuildScopeLabeler();
+  }
+
+  /** (Re)build `scopeLabeler` against whichever source is currently
+   *  wired — transcript source wins over orchestrator. */
+  private rebuildScopeLabeler(): void {
+    if (this.transcriptSource) {
+      const fetch = this.transcriptSource;
+      this.scopeLabeler = new ScoopScopeLabeler(async (jid) => {
+        let transcript = '';
+        try {
+          transcript = await fetch(jid);
+        } catch (err) {
+          log.debug('Transcript source threw for scope label', {
+            jid,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          return '';
+        }
+        const trimmed = truncateFallbackPrompt(extractLatestUserPrompt(transcript));
+        if (trimmed.length > 0) this.lastUserPrompts.set(jid, trimmed);
+        return transcript;
+      });
+      return;
+    }
+
+    const orchestrator = this.orchestrator;
+    if (!orchestrator) {
+      this.scopeLabeler = null;
+      return;
+    }
+    // Build the scope labeler against this orchestrator. The transcript
+    // fetcher also caches the latest user prompt so the tooltip has an
+    // immediate fallback line before the LLM label resolves.
+    this.scopeLabeler = new ScoopScopeLabeler(async (jid) => {
+      try {
+        const messages = await orchestrator.getMessagesForScoop(jid);
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const m = messages[i];
+          if (!m.fromAssistant && m.content && m.content.trim().length > 0) {
+            const trimmed = truncateFallbackPrompt(m.content);
+            if (trimmed.length > 0) {
+              this.lastUserPrompts.set(jid, trimmed);
+              break;
+            }
+          }
+        }
+        return flattenScoopTranscript(messages);
+      } catch (err) {
+        log.debug('Transcript fetch failed for scope label', {
+          jid,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return '';
+      }
+    });
   }
 
   /**
    * Wire the VFS so the panel can render the "Frozen sessions" section
    * from `/sessions/index.json`. Standalone-only — extension mode hides
-   * the scoops panel entirely.
+   * the scoops panel entirely. Typed as `LocalVfsClient` (read-only
+   * surface) so callers can pass a page-side `VirtualFS` or, under
+   * `slicc_opfs_vfs=opfs`, a worker-RPC-backed `RemoteVfsClient`.
    */
-  setVfs(vfs: VirtualFS): void {
+  setVfs(vfs: LocalVfsClient): void {
     this.vfs = vfs;
     void this.refreshFrozenSessions();
   }
@@ -269,8 +396,72 @@ export class ScoopsPanel {
     this.scoopStatuses.set(jid, status);
     if (status === 'processing') {
       this.lastProcessingJid = jid;
+      // Pre-warm the scope label so it is likely ready before the user
+      // hovers. The labeler dedupes / skips when the transcript signature
+      // is unchanged, so repeated processing transitions are cheap.
+      this.requestScopeLabel(jid);
     }
     this.refreshScoops();
+  }
+
+  /** Kick the labeler for `jid` and route the resolved label to the
+   *  active rail tooltip if the user is still hovering that item. */
+  private requestScopeLabel(jid: string): void {
+    if (!this.scopeLabeler) return;
+    this.scopeLabeler.request(jid, (resolvedJid, label) => {
+      if (this.activeTooltip?.jid !== resolvedJid) return;
+      const { scopeEl } = this.activeTooltip;
+      scopeEl.textContent = label;
+      scopeEl.style.display = '';
+    });
+  }
+
+  /** Build the two-line rail tooltip. Line 1 is the scoop/cone name;
+   *  line 2 is the cached scope label, falling back to the latest user
+   *  prompt (truncated), and hidden entirely when neither is available
+   *  so a name-only tooltip never carries an empty second row. */
+  private attachRailTooltip(item: HTMLElement, jid: string, name: string): void {
+    item.addEventListener('mouseenter', () => {
+      if (this.expanded) return;
+      const tip = document.createElement('div');
+      tip.className = 'scoop-fixed-tooltip scoop-fixed-tooltip--multiline';
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'scoop-fixed-tooltip__name';
+      nameEl.textContent = name;
+      tip.appendChild(nameEl);
+
+      const scopeEl = document.createElement('div');
+      scopeEl.className = 'scoop-fixed-tooltip__scope';
+      const cached = this.scopeLabeler?.getCached(jid) ?? null;
+      const fallback = cached ?? truncateFallbackPrompt(this.lastUserPrompts.get(jid) ?? '');
+      if (fallback.length > 0) {
+        scopeEl.textContent = fallback;
+      } else {
+        scopeEl.style.display = 'none';
+      }
+      tip.appendChild(scopeEl);
+
+      document.body.appendChild(tip);
+      const rect = item.getBoundingClientRect();
+      tip.style.top = `${rect.top + rect.height / 2}px`;
+      tip.style.left = `${rect.right + 8}px`;
+      (item as any).__tip = tip;
+      this.activeTooltip = { jid, scopeEl };
+
+      // Refresh on hover so the label keeps up with new activity.
+      this.requestScopeLabel(jid);
+    });
+    item.addEventListener('mouseleave', () => {
+      const tip = (item as any).__tip;
+      if (tip) {
+        tip.remove();
+        (item as any).__tip = null;
+      }
+      if (this.activeTooltip?.jid === jid) {
+        this.activeTooltip = null;
+      }
+    });
   }
 
   /** Refresh the scoop list */
@@ -409,26 +600,8 @@ export class ScoopsPanel {
           this.moveEyes();
         });
 
-        // Collapsed-mode tooltip
-        const label = cone.assistantLabel;
-        coneItem.addEventListener('mouseenter', () => {
-          if (this.expanded) return;
-          const tip = document.createElement('div');
-          tip.className = 'scoop-fixed-tooltip';
-          tip.textContent = label;
-          document.body.appendChild(tip);
-          const rect = coneItem.getBoundingClientRect();
-          tip.style.top = `${rect.top + rect.height / 2}px`;
-          tip.style.left = `${rect.right + 8}px`;
-          (coneItem as any).__tip = tip;
-        });
-        coneItem.addEventListener('mouseleave', () => {
-          const tip = (coneItem as any).__tip;
-          if (tip) {
-            tip.remove();
-            (coneItem as any).__tip = null;
-          }
-        });
+        // Collapsed-mode tooltip: name + working-scope line
+        this.attachRailTooltip(coneItem, cone.jid, cone.assistantLabel);
 
         coneHeaderEl.appendChild(coneItem);
       }
@@ -545,25 +718,8 @@ export class ScoopsPanel {
         this.moveEyes();
       });
 
-      // Collapsed-mode tooltip
-      item.addEventListener('mouseenter', () => {
-        if (this.expanded) return;
-        const tip = document.createElement('div');
-        tip.className = 'scoop-fixed-tooltip';
-        tip.textContent = displayName;
-        document.body.appendChild(tip);
-        const rect = item.getBoundingClientRect();
-        tip.style.top = `${rect.top + rect.height / 2}px`;
-        tip.style.left = `${rect.right + 8}px`;
-        (item as any).__tip = tip;
-      });
-      item.addEventListener('mouseleave', () => {
-        const tip = (item as any).__tip;
-        if (tip) {
-          tip.remove();
-          (item as any).__tip = null;
-        }
-      });
+      // Collapsed-mode tooltip: name + working-scope line
+      this.attachRailTooltip(item, scoop.jid, displayName);
 
       listEl.appendChild(item);
     }
@@ -1183,6 +1339,29 @@ export class ScoopsPanel {
         pointer-events: none;
         z-index: 10000;
         line-height: 1.3;
+      }
+      /* Two-line variant: per-line nowrap + ellipsis keeps the
+         single-line frozen-session tooltip behavior intact while
+         capping each rail line to a readable width. */
+      .scoop-fixed-tooltip--multiline {
+        white-space: normal;
+        max-width: 280px;
+        padding: 6px 10px;
+      }
+      .scoop-fixed-tooltip__name {
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .scoop-fixed-tooltip__scope {
+        margin-top: 2px;
+        font-size: 11px;
+        font-weight: 400;
+        color: var(--s2-gray-100, rgba(255, 255, 255, 0.75));
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
 `;

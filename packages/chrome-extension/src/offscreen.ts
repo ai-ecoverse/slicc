@@ -28,6 +28,7 @@ import { createLogger } from '../../../packages/webapp/src/core/index.js';
 import { createKernelHost } from '../../../packages/webapp/src/kernel/host.js';
 import { createPanelTerminalHost } from '../../../packages/webapp/src/kernel/panel-terminal-host.js';
 import { createOffscreenChromeRuntimeTransport } from '../../../packages/webapp/src/kernel/transport-chrome-runtime.js';
+import { startVfsRpcHost } from '../../../packages/webapp/src/kernel/vfs-rpc-host.js';
 // Auto-discover and register all providers (built-in + external).
 // IMPORTANT: Keep in sync with packages/webapp/src/ui/main.ts — both
 // entry points need all providers. Registration is explicit (not
@@ -50,6 +51,7 @@ import {
   resolveTrayRuntimeConfig,
 } from '../../../packages/webapp/src/scoops/tray-runtime-config.js';
 import { startFollowerWithAutoReconnect } from '../../../packages/webapp/src/scoops/tray-webrtc.js';
+import { installSudoTestHook } from '../../../packages/webapp/src/sudo/index.js';
 import { getApiKey } from '../../../packages/webapp/src/ui/provider-settings.js';
 import { canonicalRuntimeId } from '../../../packages/webapp/src/ui/runtime-identity.js';
 import { initTelemetry } from '../../../packages/webapp/src/ui/telemetry.js';
@@ -65,6 +67,7 @@ import {
 import { connectOffscreenLeaderSyncBridge } from './leader-sync-bridge.js';
 import type { ExtensionMessage } from './messages.js';
 import { OffscreenBridge } from './offscreen-bridge.js';
+import { fetchOutboundScrubSnapshot, installOutboundScrubber } from './offscreen-outbound-scrub.js';
 
 const log = createLogger('offscreen');
 
@@ -79,6 +82,17 @@ console.log('[slicc-offscreen] Script loaded');
 
 async function init(): Promise<void> {
   console.log('[slicc-offscreen] init() starting...');
+
+  // Install the defense-in-depth outbound LLM-wire scrub BEFORE anything else
+  // here can issue a `fetch`. Wraps `globalThis.fetch` so cross-origin http(s)
+  // request bodies/headers are scrubbed real → masked. Same-origin and
+  // non-http(s) (chrome-extension:, blob:, data:) pass through. Response
+  // streams are NOT buffered — SSE survives intact. See
+  // `offscreen-outbound-scrub.ts` for details.
+  installOutboundScrubber({
+    getSnapshot: fetchOutboundScrubSnapshot,
+    logger: log,
+  });
 
   // Initialize RUM telemetry so beacons fire from the offscreen WasmShell
   // — `trackShellCommand` and friends silently no-op until `sampleRUM` is
@@ -134,6 +148,11 @@ async function init(): Promise<void> {
   const { orchestrator, lickManager } = host;
   console.log('[slicc-offscreen] Kernel host ready, scoops:', orchestrator.getScoops().length);
 
+  // Publish the manual sudo test hook in the offscreen (agent) realm. It
+  // relays approval requests to the side-panel responder via
+  // chrome.runtime.sendMessage. No enforcement is wired yet — test surface.
+  installSudoTestHook();
+
   // Stand up the terminal-RPC host on the same kernel transport — the
   // panel's `RemoteTerminalView` opens sessions here so panel-typed
   // commands hit the same `ProcessManager` and `/proc` view as the
@@ -143,6 +162,7 @@ async function init(): Promise<void> {
   // `TerminalSessionHost` AND the per-session `WasmShellHeadless`, so
   // `ps` / `kill` / `cat /proc/<pid>/...` work uniformly.
   let stopTerminalHost: (() => void) | null = null;
+  let stopVfsRpcHost: (() => void) | null = null;
   const sharedFs = host.sharedFs;
   if (sharedFs) {
     const handle = createPanelTerminalHost({
@@ -150,9 +170,31 @@ async function init(): Promise<void> {
       fs: sharedFs,
       browser,
       processManager: host.processManager,
+      // Thread the orchestrator's SudoManager through so the panel
+      // shell's explicit `sudo <cmd...>` prompts the human via the same
+      // broker the offscreen agent uses. The factory pins
+      // `transparentGating: false` so plain commands stay ungated.
+      sudoManager: host.orchestrator.getSudoManager(),
       logger: log,
     });
     stopTerminalHost = handle.stop;
+    // Worker-side VFS read RPC surface, same wiring as the standalone
+    // DedicatedWorker (`kernel-worker.ts`).
+    //
+    // Also wire `writableClient: sharedFs` so the host accepts
+    // `vfs-write-file` / `vfs-mkdir` / `vfs-rm` / `vfs-flush`
+    // envelopes from the panel-side `WritableVfsClient`. `VirtualFS`
+    // satisfies the `WritableVfsBackend` shape structurally. With
+    // the OPFS flag off, the panel never constructs the writable
+    // client so these write request types fan out into nobody —
+    // existing behavior is unchanged.
+    const vfsHandle = startVfsRpcHost({
+      transport: bridgeTransport,
+      client: sharedFs,
+      writableClient: sharedFs,
+      logger: log,
+    });
+    stopVfsRpcHost = vfsHandle.stop;
   } else {
     log.warn('shared FS unavailable; panel terminal sessions will fail to open');
   }
@@ -166,6 +208,8 @@ async function init(): Promise<void> {
     () => {
       stopTerminalHost?.();
       stopTerminalHost = null;
+      stopVfsRpcHost?.();
+      stopVfsRpcHost = null;
       void host.dispose();
     },
     { once: true }

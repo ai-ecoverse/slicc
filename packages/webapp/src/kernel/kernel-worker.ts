@@ -42,6 +42,7 @@ import { makeKernelWorkerInitGuard } from './kernel-worker-init-guard.js';
 import { getPanelRpcClient } from './panel-rpc.js';
 import { createPanelTerminalHost } from './panel-terminal-host.js';
 import { createBridgeMessageChannelTransport } from './transport-message-channel.js';
+import { startVfsRpcHost } from './vfs-rpc-host.js';
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -82,6 +83,30 @@ export interface KernelWorkerInitMsg {
 /** Posted back over the kernel port once `createKernelHost` resolves. */
 export interface KernelWorkerReadyMsg {
   type: 'kernel-worker-ready';
+}
+
+/**
+ * Migration progress signals.
+ *
+ * The kernel host invokes `onMigrationStart` immediately before the
+ * OPFS migration runs, `onMigrationProgress` per file copied, and
+ * `onMigrationFinish` from a `finally` so a thrown runner still
+ * dismisses the modal. We post these raw on the kernel port —
+ * identical channel to `kernel-worker-ready` — so the page can wire
+ * a blocking modal without a new heavyweight transport. Flag-off
+ * floats never construct an OPFS-backed VFS, so these are never
+ * posted and the byte-identical legacy boot is preserved.
+ */
+export interface KernelMigrationStartedMsg {
+  type: 'kernel-migration-started';
+}
+export interface KernelMigrationProgressMsg {
+  type: 'kernel-migration-progress';
+  copied: number;
+  total: number;
+}
+export interface KernelMigrationFinishedMsg {
+  type: 'kernel-migration-finished';
 }
 
 // ---------------------------------------------------------------------------
@@ -153,6 +178,7 @@ function installLocalStorageShim(seed: Record<string, string>): void {
 
 let host: KernelHost | null = null;
 let stopTerminalHost: (() => void) | null = null;
+let stopVfsRpcHost: (() => void) | null = null;
 let panelRpcClient: { dispose: () => void } | null = null;
 
 /**
@@ -216,6 +242,23 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
     bridge,
     callbacks,
     logger: console,
+    onMigrationStart: () => {
+      init.kernelPort.postMessage({
+        type: 'kernel-migration-started',
+      } satisfies KernelMigrationStartedMsg);
+    },
+    onMigrationProgress: (progress) => {
+      init.kernelPort.postMessage({
+        type: 'kernel-migration-progress',
+        copied: progress.copied,
+        total: progress.total,
+      } satisfies KernelMigrationProgressMsg);
+    },
+    onMigrationFinish: () => {
+      init.kernelPort.postMessage({
+        type: 'kernel-migration-finished',
+      } satisfies KernelMigrationFinishedMsg);
+    },
   });
 
   // Publish a sprinkle-manager proxy on the worker's globalThis so the
@@ -276,9 +319,34 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
       fs: sharedFs,
       browser,
       processManager: pm,
+      // Thread the orchestrator's SudoManager through so the panel
+      // shell's explicit `sudo <cmd...>` prompts the human via the same
+      // broker the agent uses. The factory pins `transparentGating: false`
+      // so plain commands the human types still run ungated.
+      sudoManager: host.orchestrator.getSudoManager(),
       logger: console,
     });
     stopTerminalHost = handle.stop;
+    // Stand up the worker-side VFS read RPC surface on the same
+    // kernel transport. `VirtualFS` satisfies the `LocalVfsClient`
+    // shape structurally so we hand `sharedFs` in directly.
+    //
+    // Also wire `writableClient: sharedFs` so the host accepts
+    // `vfs-write-file` / `vfs-mkdir` / `vfs-rm` / `vfs-flush`
+    // envelopes from the page-side `WritableVfsClient`. `VirtualFS`
+    // satisfies the `WritableVfsBackend` shape structurally. With
+    // the OPFS flag off, the page never constructs the writable
+    // client so these write request types fan out into nobody —
+    // existing behavior is unchanged. With the flag on, the leader
+    // tab routes session-freezer + cone-memory writes through this
+    // handler.
+    const vfsHandle = startVfsRpcHost({
+      transport: bridgeTransport,
+      client: sharedFs,
+      writableClient: sharedFs,
+      logger: console,
+    });
+    stopVfsRpcHost = vfsHandle.stop;
   } else {
     console.warn('[kernel-worker] shared FS unavailable; terminal sessions will fail to open');
   }
@@ -295,6 +363,8 @@ self.addEventListener('message', (event: MessageEvent) => {
   if (data?.type !== 'kernel-worker-shutdown') return;
   stopTerminalHost?.();
   stopTerminalHost = null;
+  stopVfsRpcHost?.();
+  stopVfsRpcHost = null;
   panelRpcClient?.dispose();
   panelRpcClient = null;
   void host?.dispose();

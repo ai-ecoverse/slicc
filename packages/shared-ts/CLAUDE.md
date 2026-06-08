@@ -7,10 +7,12 @@ Platform-agnostic primitives shared across `@slicc/webapp`, `@slicc/node-server`
 - `secret-masking.ts` — HMAC-SHA256 masking, domain matching, scrubbing.
 - `secrets-pipeline.ts` — stateful unmask/scrub class; Basic-auth-aware, URL-credential-aware, byte-safe body unmask.
 - `oauth-extra-domains-storage.ts` — pure-JS read/write helpers over the `slicc_oauth_extra_domains` localStorage key. Lets the extension options page (`secrets.html`) share the per-provider extra-domains store with the webapp's `provider-settings.ts` without dragging in the heavier provider module.
+- `sigv4.ts` — pure SigV4 v4 request signer over Web Crypto (`crypto.subtle`), no AWS SDK. Verified against the canonical AWS test vectors in `tests/sigv4.test.ts`.
+- `sign-and-forward.ts` — S3 / Adobe da.live sign-and-forward orchestration (`executeS3SignAndForward` / `executeDaSignAndForward`). Validates an envelope, resolves credentials via an async `SecretGetter`, signs (S3) or attaches a Bearer token (DA), forwards, and returns a JSON-cloneable reply. Consumed by the webapp mount barrel, the node-server Express handlers (via a `SecretStore` adapter), and the extension service worker.
 
 ## Conventions
 
-- Pure functions only (no DOM / Node specifics). Uses `crypto.subtle`, `TextEncoder`, `Headers` (globals in both targets).
+- Prefer universal globals (`crypto.subtle`, `TextEncoder`, `Headers`, `atob`/`btoa`) so one build runs unchanged in the browser, the extension service worker, and the Node 22+ server. A platform-specific fast-path is allowed when it is feature-detected and falls back to the universal implementation — e.g. `sign-and-forward.ts` base64 reaches Node's `Buffer` via `globalThis` behind a runtime feature check (materially faster for multi-MB S3 payloads on the CLI float) and falls back to `atob`/`btoa` elsewhere. The global is accessed through `globalThis` with a local structural type so the package keeps building without `@types/node`. The package must never _require_ a DOM- or Node-only API.
 - `SecretsPipeline.unmaskHeaders` mutates its input parameter in place — matches `SecretProxyManager`'s legacy semantics so existing CLI callers compile unchanged.
 - Build: `npm run build -w @slicc/shared-ts` (must run before `@slicc/node-server` build in the chain — wired into root `build` script).
 - LSP/IDE: uses `tsconfig.json` (noEmit, includes src + tests). Build uses `tsconfig.build.json` (rootDir=src, emits to dist).

@@ -20,6 +20,7 @@
  * approve a picker, so they get an immediate error.
  */
 
+import { buildApprovalCardHtml } from '../../shell/supplemental-commands/picker-approval.js';
 import { showToolUI, type ToolExecutionContext, toolUIRegistry } from '../../tools/tool-ui.js';
 import {
   loadAndClearPendingHandle,
@@ -117,15 +118,7 @@ export class LocalMountBackend implements MountBackend {
       const rawUiPromise = showToolUI(
         {
           id: uiRequestId,
-          html: `
-          <div class="sprinkle-action-card">
-            <div class="sprinkle-action-card__header">Mount local directory <span class="sprinkle-badge sprinkle-badge--notice">approval</span></div>
-            <div class="sprinkle-action-card__actions">
-              <button class="sprinkle-btn sprinkle-btn--secondary" data-action="deny">Deny</button>
-              <button class="sprinkle-btn sprinkle-btn--primary" data-action="approve" data-picker="directory">Select directory</button>
-            </div>
-          </div>
-        `,
+          html: buildApprovalCardHtml('directory'),
           onAction: async (action, data) => {
             if (action === 'approve') {
               const d = data as Record<string, unknown> | undefined;

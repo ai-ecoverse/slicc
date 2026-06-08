@@ -234,3 +234,66 @@ const api = http.client({
   token: (req) => (req?.method === 'GET' ? skill.token('read') : skill.token('write')),
 });
 ```
+
+### `hid.*` / `serial.*` / `usb.*` — native device scripting
+
+Realm globals for WebHID / Web Serial / WebUSB. The top-level entry points are `hid.list()` / `hid.request(filters?)` (and parity `serial.*` / `usb.*`); each device returned carries its opaque handle and methods that round-trip via panel-RPC. The handle namespace is shared with the `hid` / `serial` / `usb` shell commands — a port from `serial request` is reachable as `(await serial.list()).find(p => p.handle === 'serial1')`. Chromium-only; unavailable in the cloud / hosted-leader float. `hid.request()` still needs a user gesture (same as the shell `hid request`).
+
+HID devices expose an `EventTarget`-shaped surface so a VIA-style **request/response in one script** doesn't race: subscribe `'inputreport'` first, then `sendReport`, await the callback. The first listener lazily subscribes the kernel-side relay; the last `removeEventListener` (or realm teardown) unsubscribes — no leaked page-side listeners.
+
+```typescript
+hid.list(): Promise<HidDevice[]>
+hid.request(filters?: HidDeviceFilter | HidDeviceFilter[]): Promise<HidDevice>
+
+// On each HidDevice (carries `handle`, `vendorId`, `productId`, `productName`, `collections`):
+device.open(): Promise<void>
+device.close(): Promise<void>
+device.sendReport(reportId: number, data: ArrayBuffer | ArrayBufferView): Promise<void>
+device.sendFeatureReport(reportId: number, data: ArrayBuffer | ArrayBufferView): Promise<void>
+device.receiveFeatureReport(reportId: number): Promise<DataView>
+device.addEventListener('inputreport', cb): void   // event: { reportId, data: DataView }
+device.removeEventListener('inputreport', cb): void
+device.addEventListener('disconnect', cb): void    // registers; no backend emit yet
+device.onInputReport(cb): void                     // alias for addEventListener('inputreport', cb)
+```
+
+```javascript
+// VIA-style protocol-version round-trip as a single .jsh script.
+// Subscribe BEFORE sendReport so the reply can't beat the listener.
+const [device] = await hid.list();
+await device.open();
+const reply = new Promise((resolve, reject) => {
+  const t = setTimeout(() => reject(new Error('timeout')), 1000);
+  device.addEventListener('inputreport', function once(e) {
+    clearTimeout(t);
+    device.removeEventListener('inputreport', once);
+    resolve(new Uint8Array(e.data.buffer, e.data.byteOffset, e.data.byteLength));
+  });
+});
+await device.sendReport(0, new Uint8Array([0x01]));
+const bytes = await reply;
+console.log([...bytes].map((b) => b.toString(16).padStart(2, '0')).join(' '));
+```
+
+`serial.*` and `usb.*` mirror the shell surface (`open` / `close` / `read` / `write` / `getSignals` / `setSignals` on serial ports; `open` / `close` / `claim` / `release` / `controlIn` / `controlOut` / `transferIn` / `transferOut` on usb devices). They don't carry the `EventTarget` shape — those transports are explicit-poll.
+
+For ESP32 / ESP8266 work, drive `esptool` through `exec(...)` (no realm global). Beyond the existing `chip_id` / `read_mac` / `erase_flash` / `write_flash` verbs, the read/inspect set is now `flash_id`, `read_reg <addr>`, `read_flash <addr> <size> <outfile>`, `erase_region <addr> <size>`, and `run`. Pass `--port <handle>` to reuse a port from `serial request` so no second picker fires:
+
+```javascript
+const port = (await serial.list())[0] ?? (await serial.request());
+const { stdout } = await exec(`esptool --port ${port.handle} flash_id`);
+console.log(stdout);
+await exec.spawn([
+  'esptool',
+  '--port',
+  port.handle,
+  'read_flash',
+  '0',
+  '0x1000',
+  '/tmp/header.bin',
+]);
+```
+
+## Reaching these from sprinkles & dips
+
+The high-value globals here — `exec` / `exec.spawn`, `fetch`, `http.client`, `browser.*`, and the device APIs (`hid.*` / `serial.*` / `usb.*`) — are also exposed to `.shtml` **sprinkles** and **trusted dips** through the `slicc.*` bridge, which routes each call into the **same worker shell** `.jsh` scripts run in. So a sprinkle button can `await slicc.exec('…')` to reach any supplemental command or `.jsh` script, `await slicc.agent('…')` to spawn a one-shot sub-scoop, or `slicc.hid.on('inputreport', cb)` + `slicc.hid.sendReport(handle, reportId, bytes)` to drive a VIA-style keyboard from a UI panel (handles persist across button clicks). The bridge is trust-gated: VFS-sourced sprinkles and trusted dips get it; untrusted inline-chat dips never receive `exec` / `agent` / `browser` / device globals. See the sprinkles skill (`/workspace/skills/sprinkles/SKILL.md`) "Shell, agent, and jsh globals" section, and `docs/shell-reference.md` "Sprinkle & Dip Bridge" (developer-facing).

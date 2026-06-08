@@ -62,8 +62,12 @@ export function createMessageChannelTransport<In, Out>(
         port.removeEventListener('message', listener as EventListener);
       };
     },
-    send: (message) => {
-      port.postMessage(message);
+    send: (message, transfer) => {
+      if (transfer && transfer.length > 0) {
+        port.postMessage(message, transfer);
+      } else {
+        port.postMessage(message);
+      }
     },
   };
 }
@@ -75,7 +79,7 @@ export function createMessageChannelTransport<In, Out>(
  * `WebWorker` lib) doesn't have to drag in the full DOM `Worker` type.
  */
 export interface MessagePortLike {
-  postMessage(message: unknown): void;
+  postMessage(message: unknown, transfer?: Transferable[]): void;
   addEventListener(type: 'message', listener: EventListener): void;
   removeEventListener(type: 'message', listener: EventListener): void;
   /** Optional — only `MessagePort` from `MessageChannel` exposes start(). */
@@ -118,8 +122,8 @@ export function createBridgeMessageChannelTransport(
   const inner = createMessageChannelTransport<ExtensionMessage, ExtensionMessage>(port);
   return {
     onMessage: (handler) => inner.onMessage(handler),
-    send: (payload) => {
-      inner.send({ source: 'offscreen', payload } as ExtensionMessage);
+    send: (payload, transfer) => {
+      inner.send({ source: 'offscreen', payload } as ExtensionMessage, transfer);
     },
   };
 }
@@ -136,8 +140,8 @@ export function createPanelMessageChannelTransport(
   const inner = createMessageChannelTransport<ExtensionMessage, ExtensionMessage>(port);
   return {
     onMessage: (handler) => inner.onMessage(handler),
-    send: (payload) => {
-      inner.send({ source: 'panel', payload } as ExtensionMessage);
+    send: (payload, transfer) => {
+      inner.send({ source: 'panel', payload } as ExtensionMessage, transfer);
     },
   };
 }

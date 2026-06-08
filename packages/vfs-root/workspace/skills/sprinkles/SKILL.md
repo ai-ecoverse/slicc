@@ -220,6 +220,58 @@ Available as `slicc` in `<script>` tags and `onclick` attributes:
 - `slicc.screenshot(selector?)` — capture sprinkle DOM as base64 PNG data URL. Note: the screenshot captures a DOM clone using SVG foreignObject. External stylesheets and some computed styles may not be fully reproduced. For best results, use inline styles on elements you intend to screenshot.
 - `slicc.captureScreen()` — capture a screen, window, or browser tab via Chrome's native picker. Takes no arguments. Returns `Promise<{base64: string, width: number, height: number, mimeType: string}>`. The picker appears immediately; the Promise resolves once the user selects a target and the frame is grabbed. Rejects if the user cancels or screen capture is unavailable. Use `slicc.attachImage(shot.base64, 'screenshot.png', shot.mimeType)` to send the result to the agent. Key difference from `screenshot()`: this captures external content (any tab/window/screen), not the sprinkle's own DOM.
 
+### Shell, agent, and jsh globals
+
+The bridge also reaches the **same worker shell** that `.jsh` scripts and `node -e` run in, so a sprinkle can call any supplemental command, any `.jsh` script, or spawn a sub-scoop directly from a button. These are the same Tier 1 globals documented in `/workspace/skills/skill-authoring/jsh-runtime-extensions.md`.
+
+- `slicc.exec(cmd)` — run a shell command in the worker shell. Returns `Promise<{stdout, stderr, exitCode}>`. A non-zero `exitCode` (or `127` when the shell bridge is unavailable) is returned in the result, never thrown. Use `slicc.exec.spawn(argv)` to bypass shell parsing for untrusted args.
+- `slicc.agent(prompt, opts?)` — spawn a one-shot sub-scoop, feed it `prompt`, block until it completes, and resolve with its final message on `stdout`. Returns `Promise<{stdout, exitCode}>`. `opts`: `{cwd?, allowedCommands?, model?, thinking?, readOnly?}`. Sugar over `slicc.exec` building the `agent` command — the same handoff-free delegation as the `agent` shell command. On failure the error text comes back on `stdout` with a non-zero `exitCode`, never thrown.
+- `slicc.fetch(url, init?)` — proxied, secret-injecting fetch (NOT the iframe's CORS-bound native fetch). Resolves to a native `Response` (with `.json()`/`.text()`/`.arrayBuffer()`/`.blob()` and `.ok`/`.status`/`.headers`/`.url`).
+- `slicc.http.client(config)` — higher-level API client over the proxied fetch (`get`/`post`/`put`/`patch`/`delete`). `config`: `{baseUrl?, token?, headers?, retry?, timeoutMs?}`.
+- `slicc.browser.*` — Playwright-style CDP surface (`findTab`, `ensureTab`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`), mirroring the jsh `browser` global.
+- `slicc.fetchToFile(url, path)` — download a URL (via the proxied fetch) straight to a VFS file; resolves with the byte count.
+- `slicc.readFileBinary(path)` / `slicc.writeFileBinary(path, bytes)` — binary VFS I/O (parity with the jsh `fs` global).
+- `slicc.hid.*` / `slicc.serial.*` / `slicc.usb.*` — stateful device surfaces for WebHID / Web Serial / WebUSB (Chromium-only; absent in the cloud / hosted-leader float). Same opaque handles (`hid1`, `serial1`, `usb1`, …) as the `hid` / `serial` / `usb` shell commands and the realm globals — discover via `list()` or trigger the OS picker via `request()` (a button-click is a real user gesture). For HID, `open(handle)` auto-attaches the input-report stream so every `slicc.hid.on('inputreport', cb)` listener receives `{ handle, reportId, data: Uint8Array }` until `close(handle)` or sprinkle teardown. Use this for keyboard configurators, gamepad dashboards, ESP32 monitor panels — anything that needs a persistent device session across multiple button clicks. The realm bridge in `slicc.exec('node -e …')` resets per call, so push handle ops through `slicc.hid|serial|usb` instead.
+
+```typescript
+// HID — stateful across the sprinkle's lifetime
+slicc.hid.list(): Promise<HidDeviceInfo[]>
+slicc.hid.request(filters?): Promise<HidDeviceInfo[]>    // needs button-click gesture
+slicc.hid.open(handle): Promise<void>                    // auto-subscribes inputreport
+slicc.hid.close(handle): Promise<void>
+slicc.hid.sendReport(handle, reportId, data: Uint8Array): Promise<void>
+slicc.hid.on('inputreport', cb): void                    // cb: ({ handle, reportId, data })
+slicc.hid.off('inputreport', cb): void
+
+// Serial / USB — parity list/request/open/close; streaming I/O stays on the realm API.
+slicc.serial.list() / request(filters?) / open(handle, options) / close(handle)
+slicc.usb.list()    / request(filters?) / open(handle) / close(handle)
+```
+
+```html
+<button
+  id="connect"
+  onclick="slicc.hid.request({vendorId:0x320f}).then(d => slicc.hid.open(d[0].handle))"
+>
+  Connect keyboard
+</button>
+<script>
+  slicc.hid.on('inputreport', ({ reportId, data }) => {
+    console.log('report', reportId, [...data].map((b) => b.toString(16)).join(' '));
+  });
+</script>
+```
+
+```html
+<button
+  onclick="slicc.exec('git status -s').then(r => slicc.lick({action: 'status', data: r.stdout}))"
+>
+  Refresh status
+</button>
+```
+
+> Prefer `slicc.exec`/`slicc.agent` for transactional work that should NOT grow the owning scoop's conversation (see "Cheap interactions via `agent`" above). These run in the same worker shell, so all ~50 supplemental commands and any `.jsh` script are reachable.
+
 **onclick attributes**: always use `slicc` — e.g. `onclick="slicc.lick({action: 'add-year'})"`. The `slicc` variable is automatically resolved per-sprinkle, so multiple sprinkles won't collide. Do NOT use `bridge` or any other variable name in onclick.
 
 **CSS components**: do NOT write custom CSS. Use the built-in `.sprinkle-*` classes: cards, tables, badges, buttons, text fields, progress bars, meters, layout utilities, and more. For inputs use `class="sprinkle-text-field"`, never inline border/padding styles. Run `read_file /workspace/skills/sprinkles/style-guide.md` for the full component reference with markup examples.

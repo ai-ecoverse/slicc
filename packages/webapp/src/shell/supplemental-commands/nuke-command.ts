@@ -115,6 +115,30 @@ export function createNukeCommand(): Command {
           /* indexedDB.databases unsupported on some browsers — fall through */
         }
 
+        // Wipe the OPFS-backed VFS tree. Since the ZenFS/OPFS migration
+        // the bulk of local state (workspace files, scoops, mounts) lives
+        // in OPFS, not IndexedDB, so a nuke that only wipes IDB would
+        // leave the user's prior workspace on disk. Guard on
+        // `navigator.storage.getDirectory` (mirrors
+        // `resolveVfsBackendFromEnv`) so contexts without OPFS — older
+        // browsers, some test envs — fall through cleanly.
+        try {
+          const storage = (navigator as unknown as { storage?: StorageManager }).storage;
+          if (typeof storage?.getDirectory === 'function') {
+            const root = (await storage.getDirectory()) as unknown as {
+              keys: () => AsyncIterableIterator<string>;
+              removeEntry: (name: string, options?: { recursive: boolean }) => Promise<void>;
+            };
+            const names: string[] = [];
+            for await (const name of root.keys()) names.push(name);
+            await Promise.all(
+              names.map((name) => root.removeEntry(name, { recursive: true }).catch(() => {}))
+            );
+          }
+        } catch {
+          /* OPFS unavailable / blocked — best effort, never block reload */
+        }
+
         triggerReload(NUKE_LOCAL_STORAGE_KEYS);
       })();
       return { stdout: 'Nuking everything…\n', stderr: '', exitCode: 0 };

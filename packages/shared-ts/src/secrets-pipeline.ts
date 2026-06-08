@@ -4,6 +4,7 @@ import {
   matchesDomains,
   type SecretPair,
 } from './secret-masking.js';
+import type { SessionSecretStore } from './session-secret-store.js';
 
 function indexOfBytes(haystack: Uint8Array, needle: Uint8Array, from = 0): number {
   outer: for (let i = from; i <= haystack.length - needle.length; i++) {
@@ -76,6 +77,13 @@ export interface ExtractedUrlCreds {
 export interface SecretsPipelineOpts {
   sessionId: string;
   source: FetchProxySecretSource;
+  /**
+   * Optional in-memory session-secret store. Its entries are layered on top
+   * of `source` at every `reload()` so the fetch proxy can unmask session
+   * secrets like persisted ones. Persisted secrets win on a name collision
+   * (the agent cannot shadow a real persisted secret's masking).
+   */
+  sessionStore?: SessionSecretStore;
 }
 
 /**
@@ -105,18 +113,25 @@ export interface SecretsPipelineOpts {
 export class SecretsPipeline {
   public readonly sessionId: string;
   private readonly source: FetchProxySecretSource;
+  private readonly sessionStore?: SessionSecretStore;
   private maskedToSecret = new Map<string, MaskedSecret>();
   private scrubber: (text: string) => string = (t) => t;
 
   constructor(opts: SecretsPipelineOpts) {
     this.sessionId = opts.sessionId;
     this.source = opts.source;
+    this.sessionStore = opts.sessionStore;
   }
 
   async reload(): Promise<void> {
     const all = await this.source.listAll();
+    // Layer session secrets on top of persisted ones; persisted wins on a
+    // name collision so a free session-set can't shadow a real secret.
+    const persistedNames = new Set(all.map((s) => s.name));
+    const session = (this.sessionStore?.listAll() ?? []).filter((s) => !persistedNames.has(s.name));
+    const merged = [...all, ...session];
     const next = new Map<string, MaskedSecret>();
-    for (const s of all) {
+    for (const s of merged) {
       const maskedValue = await cryptoMask(this.sessionId, s.name, s.value);
       next.set(maskedValue, {
         name: s.name,

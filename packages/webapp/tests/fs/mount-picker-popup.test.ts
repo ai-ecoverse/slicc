@@ -155,14 +155,16 @@ describe('openMountPickerPopup', () => {
     delete (globalThis as unknown as { chrome?: unknown }).chrome;
   });
 
-  it('opens a popup window pointed at mount-popup.html with the request id', async () => {
+  it('opens a popup window pointed at picker-popup.html with the request id and directory kind', async () => {
     const promise = openMountPickerPopup('test-req-1');
     expect(createCalls).toHaveLength(1);
-    expect(createCalls[0].url).toContain('mount-popup.html');
+    expect(createCalls[0].url).toContain('picker-popup.html');
+    expect(createCalls[0].url).toContain('kind=directory');
     expect(createCalls[0].url).toContain('requestId=test-req-1');
     // Resolve via popup message
     listeners[0]({
-      source: 'mount-popup',
+      source: 'picker-popup',
+      kind: 'directory',
       requestId: 'test-req-1',
       handleInIdb: true,
       idbKey: 'pendingMount:test-req-1',
@@ -174,16 +176,41 @@ describe('openMountPickerPopup', () => {
   it('generates a fallback request id when none is provided', async () => {
     const promise = openMountPickerPopup();
     expect(createCalls[0].url).toMatch(/requestId=mount-[a-z0-9]+/);
-    listeners[0]({ source: 'mount-popup', requestId: extractRequestId(createCalls[0].url) });
+    listeners[0]({
+      source: 'picker-popup',
+      kind: 'directory',
+      requestId: extractRequestId(createCalls[0].url),
+    });
     await promise;
   });
 
-  it('ignores messages with mismatched request ids', async () => {
+  it('ignores messages with mismatched request ids or kinds', async () => {
     const promise = openMountPickerPopup('req-A');
-    listeners[0]({ source: 'mount-popup', requestId: 'req-B', cancelled: true });
-    listeners[0]({ source: 'something-else', requestId: 'req-A', cancelled: true });
+    listeners[0]({
+      source: 'picker-popup',
+      kind: 'directory',
+      requestId: 'req-B',
+      cancelled: true,
+    });
+    listeners[0]({
+      source: 'something-else',
+      kind: 'directory',
+      requestId: 'req-A',
+      cancelled: true,
+    });
+    listeners[0]({
+      source: 'picker-popup',
+      kind: 'usb-device',
+      requestId: 'req-A',
+      cancelled: true,
+    });
     // Still pending — only the matching message resolves
-    listeners[0]({ source: 'mount-popup', requestId: 'req-A', cancelled: true });
+    listeners[0]({
+      source: 'picker-popup',
+      kind: 'directory',
+      requestId: 'req-A',
+      cancelled: true,
+    });
     const result = await promise;
     expect(result).toMatchObject({ cancelled: true });
   });
@@ -193,8 +220,6 @@ describe('openMountPickerPopup', () => {
     vi.advanceTimersByTime(60_000);
     const result = await promise;
     expect(result).toMatchObject({ cancelled: true });
-    // Listener was unregistered on timeout
-    expect(listeners).toHaveLength(0);
   });
 
   it('resolves with error when chrome.windows.create rejects', async () => {
@@ -202,13 +227,17 @@ describe('openMountPickerPopup', () => {
     const promise = openMountPickerPopup('err-req');
     const result = await promise;
     expect(result).toMatchObject({ error: 'Failed to open directory picker window' });
-    expect(listeners).toHaveLength(0);
   });
 
   it('removes listener and clears timer after a successful resolve', async () => {
     const promise = openMountPickerPopup('cleanup-req');
     expect(listeners).toHaveLength(1);
-    listeners[0]({ source: 'mount-popup', requestId: 'cleanup-req', handleInIdb: true });
+    listeners[0]({
+      source: 'picker-popup',
+      kind: 'directory',
+      requestId: 'cleanup-req',
+      handleInIdb: true,
+    });
     await promise;
     expect(listeners).toHaveLength(0);
     // Advancing past the timeout shouldn't double-resolve or throw

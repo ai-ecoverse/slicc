@@ -83,12 +83,30 @@ The swift-server also supports `--env-file` for loading additional secrets from 
 
 Inside the SLICC shell, the `secret` command manages secrets:
 
-| Command                    | Description                                                  |
-| -------------------------- | ------------------------------------------------------------ |
-| `secret list`              | Show configured secrets (names and domains, never values)    |
-| `secret set <name>`        | Show instructions for adding a secret via Keychain or `.env` |
-| `secret delete <name>`     | Show instructions for removing a secret                      |
-| `secret test <name> <url>` | Check whether a secret would be injected for a given URL     |
+| Command                                              | Approval   | Description                                                                                                                |
+| ---------------------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `secret set <name> <value> [--domain <pat>]`         | None       | Create an in-memory **session-only** secret (never persisted). Changing the value of an existing secret requires approval. |
+| `secret get <name>` / `secret read <name>`           | None       | Show the masked value and scope.                                                                                           |
+| `secret peek <name>`                                 | None       | Show the first/last characters of the unmasked value (middle elided).                                                      |
+| `secret list`                                        | None       | Show secrets (names, domains, and `SESSION`/`SAVED` type — never values).                                                  |
+| `secret test <name> <url>`                           | None       | Check whether a secret would be injected for a given URL.                                                                  |
+| `secret set <name> <value> --domain <pat> --persist` | **Prompt** | Persist to `.env` / Keychain / `chrome.storage.local`.                                                                     |
+| `secret scope <name> --domain <pat>`                 | **Prompt** | Edit the allowed host/domain scope of an existing secret.                                                                  |
+| `secret delete <name>`                               | None       | Remove a secret (or show how, in CLI mode).                                                                                |
+
+### Session secrets and the sudo model
+
+`secret set <name> <value>` creates a **session-only** secret: it lives in an
+in-memory `SessionSecretStore` (in node-server for CLI, in the service worker
+for the extension), is layered into the masking pipeline so the fetch proxy can
+use it, and is **never** written to disk/Keychain/`chrome.storage`. It vanishes
+when the session ends. Creating a new session secret needs no approval.
+
+Three operations are gated behind a native sudo prompt (intrinsic gates,
+independent of `/etc/sudoers`): **persisting** a secret (`--persist`), **editing
+scope** (`secret scope`), and **changing the value** of an existing secret.
+A deny blocks the mutation; choosing **"Always"** records a NOPASSWD-style grant
+that skips future prompts for that operation for the rest of the session.
 
 `secret test` is useful for verifying domain restrictions before making real requests:
 

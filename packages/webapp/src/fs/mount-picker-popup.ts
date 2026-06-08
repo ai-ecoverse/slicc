@@ -17,6 +17,10 @@
  */
 
 import { createLogger } from '../core/logger.js';
+import {
+  type DirectoryPickerResult,
+  openPickerPopup,
+} from '../shell/supplemental-commands/picker-popup.js';
 
 const log = createLogger('mount-picker-popup');
 
@@ -24,54 +28,59 @@ const PENDING_MOUNT_DB = 'slicc-pending-mount';
 const POPUP_TIMEOUT_MS = 60_000;
 
 /**
- * Opens `mount-popup.html` and resolves with the popup's response message.
- * The response shape is one of:
+ * Opens the shared `picker-popup.html?kind=directory` window and resolves
+ * with the popup's response message. The response shape is one of:
  *   - `{ handleInIdb: true, idbKey, dirName }` — handle was stored in IDB;
  *     callers must use {@link loadAndClearPendingHandle} to retrieve it,
  *     then {@link reactivateHandle} before using it. The handle itself is
  *     never sent through the runtime message channel — only the IDB key.
  *   - `{ cancelled: true }` — user closed the popup or aborted the picker
- *   - `{ error: string }` — popup failed (e.g. window.create rejected); the
- *     full error is logged separately, callers get a generic message
+ *   - `{ error: string }` — popup failed (e.g. window.create rejected)
+ *
+ * Behavior — including the 60s timeout safeguard — is identical to the
+ * previous mount-specific launcher; this is now a thin wrapper over the
+ * unified picker abstraction in `picker-popup.ts`.
  *
  * @param requestId Optional request id used to correlate the popup result
  *   with a caller-managed registry entry. Generated if omitted.
  */
-export function openMountPickerPopup(requestId?: string): Promise<Record<string, unknown>> {
+export function openMountPickerPopup(requestId?: string): Promise<DirectoryPickerResult> {
   const popupRequestId = requestId ?? `mount-${Date.now().toString(36)}`;
   return new Promise((resolve) => {
-    const url = chrome.runtime.getURL(
-      `mount-popup.html?requestId=${encodeURIComponent(popupRequestId)}`
-    );
-
-    const cleanup = () => {
+    let settled = false;
+    const finish = (result: DirectoryPickerResult) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
-      chrome.runtime.onMessage.removeListener(listener);
+      resolve(result);
     };
+    const timer = setTimeout(() => finish({ cancelled: true }), POPUP_TIMEOUT_MS);
 
-    const timer = setTimeout(() => {
-      cleanup();
-      resolve({ cancelled: true });
-    }, POPUP_TIMEOUT_MS);
-
-    const listener = (msg: unknown) => {
-      const m = msg as Record<string, unknown>;
-      if (m?.source !== 'mount-popup' || m.requestId !== popupRequestId) return;
-      cleanup();
-      resolve(m);
-    };
-    chrome.runtime.onMessage.addListener(listener);
-
-    chrome.windows
-      .create({ url, type: 'popup', width: 300, height: 80, focused: true })
+    // Pass the same budget down so `openPickerPopup` can tear down its
+    // `chrome.runtime.onMessage` listener if the popup never posts back.
+    openPickerPopup('directory', [], popupRequestId, { timeoutMs: POPUP_TIMEOUT_MS })
+      .then((result) => {
+        const r = result as DirectoryPickerResult;
+        if (r.error) {
+          // Mask the underlying create / runtime error with the generic
+          // message the mount UI has surfaced historically; the full
+          // error is logged for debugging.
+          log.error('picker popup launch failed for directory kind', {
+            requestId: popupRequestId,
+            error: r.error,
+          });
+          finish({ error: 'Failed to open directory picker window' });
+          return;
+        }
+        finish(r);
+      })
       .catch((err: unknown) => {
-        cleanup();
-        log.error('chrome.windows.create failed for mount picker popup', {
+        log.error('picker popup launch threw for directory kind', {
           requestId: popupRequestId,
           error: err instanceof Error ? err.message : String(err),
           name: err instanceof Error ? err.name : undefined,
         });
-        resolve({ error: 'Failed to open directory picker window' });
+        finish({ error: 'Failed to open directory picker window' });
       });
   });
 }

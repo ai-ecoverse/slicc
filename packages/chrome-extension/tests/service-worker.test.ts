@@ -312,7 +312,7 @@ describe('extension service worker', () => {
   // listener registered by service-worker.ts. These tests verify the type
   // guard, chrome.storage.local credential resolution, and the structured
   // reply envelope. The actual SigV4 signing logic is covered by the
-  // signing-s3 test suites (webapp + node-server mirror).
+  // shared sigv4 test suite in @slicc/shared-ts.
 
   it('rejects malformed mount sign-and-forward messages via the type guard', async () => {
     // Message has the right top-level type but no envelope — fails the guard.

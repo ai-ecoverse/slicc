@@ -3,6 +3,7 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FsWatcher } from '../../src/fs/fs-watcher.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
+import { createRemoteSprinkleVfs } from '../../src/kernel/remote-sprinkle-vfs.js';
 import type { LickEvent } from '../../src/scoops/lick-manager.js';
 import {
   readOpenSprinklesFromUrl,
@@ -127,6 +128,52 @@ describe('SprinkleManager', () => {
     expect(sprinkles.length).toBe(1);
     expect(sprinkles[0].name).toBe('dash');
     expect(sprinkles[0].title).toBe('Dashboard');
+  });
+
+  // Regression: under `slicc_opfs_vfs=opfs` the page-side `localFs` is
+  // an empty memory VFS — passing it straight to `SprinkleManager`
+  // stranded discovery (`fs.walk('/')` yielded nothing) so
+  // `sprinkle list` returned zero even when `.shtml` files lived in the
+  // OPFS-owned tree. `main.ts` now wraps the worker-RPC clients with
+  // `createRemoteSprinkleVfs`; this test pins that wiring shape end-
+  // to-end: a manager built over the adapter discovers a sprinkle that
+  // only exists in the backing (canonical) VFS, not in any
+  // page-side memory shadow.
+  it('discovers sprinkles through createRemoteSprinkleVfs adapter (OPFS wiring)', async () => {
+    const canonical = await VirtualFS.create({
+      dbName: `test-sprinkle-manager-canonical-${dbCounter++}`,
+      wipe: true,
+    });
+    await canonical.writeFile(
+      '/shared/sprinkles/remote/remote.shtml',
+      '<title>Remote</title><div>via RPC</div>'
+    );
+    const adapter = createRemoteSprinkleVfs({ reader: canonical, writer: canonical });
+    const remoteMgr = new SprinkleManager(
+      adapter,
+      lickHandler,
+      {
+        addSprinkle: addSprinkle as unknown as (
+          name: string,
+          title: string,
+          element: HTMLElement
+        ) => void,
+        removeSprinkle: removeSprinkle as unknown as (name: string) => void,
+        minimizeSprinkle: minimizeSprinkle as unknown as (name: string) => void,
+        registerSprinkle: registerSprinkle as unknown as (name: string, title: string) => void,
+        unregisterSprinkle: unregisterSprinkle as unknown as (name: string) => void,
+        closeSprinkleContent: closeSprinkleContent as unknown as (name: string) => void,
+      },
+      vi.fn()
+    );
+    await remoteMgr.refresh();
+    const sprinkles = remoteMgr.available();
+    expect(sprinkles.length).toBe(1);
+    expect(sprinkles[0].name).toBe('remote');
+    expect(sprinkles[0].title).toBe('Remote');
+    // The page-side `vfs` in this describe block has no entries — the
+    // adapter must NOT be reading from it.
+    expect(await vfs.exists('/shared/sprinkles/remote/remote.shtml')).toBe(false);
   });
 
   it('available() returns empty when no sprinkles', async () => {

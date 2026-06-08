@@ -11,15 +11,19 @@
  * Chrome extension API types provided by ./chrome.d.ts
  */
 
-import { type FetchProxySecretSource, SecretsPipeline } from '@slicc/shared-ts';
 import {
   type DaSignAndForwardEnvelope,
   executeDaSignAndForward,
   executeS3SignAndForward,
+  type FetchProxySecretSource,
+  previewSecret,
   type S3SignAndForwardEnvelope,
   type SecretGetter,
+  SecretsPipeline,
+  SessionSecretStore,
   type SignAndForwardReply,
-} from '../../webapp/src/fs/mount/sign-and-forward-shared.js';
+  unmaskCdpFrame,
+} from '@slicc/shared-ts';
 import {
   extractHandoffFromWebRequest,
   handoffFingerprint,
@@ -968,6 +972,56 @@ async function cdpCloseTarget(params: Record<string, unknown>): Promise<Record<s
   return { success: true };
 }
 
+/**
+ * CDP methods that carry whole-token secret fields on outgoing frames
+ * (Wave A D1). Anything else is forwarded verbatim to chrome.debugger.
+ * Kept in sync with `unmaskCdpFrame` in `@slicc/shared-ts`.
+ */
+const CDP_UNMASK_METHODS = new Set<string>([
+  'Runtime.evaluate',
+  'Runtime.callFunctionOn',
+  'Input.insertText',
+]);
+
+/**
+ * Resolve the target tab's CURRENT URL hostname and unmask whole-token
+ * secret fields against it. Fail-closed: any failure to resolve the URL
+ * (tab gone, missing url, unparseable) leaves the frame untouched.
+ */
+async function maybeUnmaskCdpFrame(
+  tabId: number,
+  method: string,
+  params: Record<string, unknown> | undefined
+): Promise<Record<string, unknown> | undefined> {
+  if (!CDP_UNMASK_METHODS.has(method)) return params;
+  if (!params || typeof params !== 'object') return params;
+
+  let hostname: string | null = null;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    const url = tab?.url;
+    if (typeof url === 'string' && url.length > 0) {
+      try {
+        hostname = new URL(url).hostname || null;
+      } catch {
+        hostname = null;
+      }
+    }
+  } catch {
+    hostname = null;
+  }
+  if (!hostname) return params;
+
+  const pipeline = await buildSecretsPipeline();
+  await pipeline.reload();
+  if (!pipeline.hasSecrets()) return params;
+
+  const { frame, changed } = unmaskCdpFrame({ method, params }, hostname, pipeline);
+  if (!changed) return params;
+  const nextParams = (frame as { params?: Record<string, unknown> }).params;
+  return nextParams ?? params;
+}
+
 async function cdpSendCommand(
   method: string,
   params?: Record<string, unknown>,
@@ -980,7 +1034,8 @@ async function cdpSendCommand(
     );
   }
 
-  const result = await chrome.debugger.sendCommand({ tabId }, method, params);
+  const effectiveParams = await maybeUnmaskCdpFrame(tabId, method, params);
+  const result = await chrome.debugger.sendCommand({ tabId }, method, effectiveParams);
   return result ?? {};
 }
 
@@ -1070,16 +1125,24 @@ chrome.debugger.onDetach.addListener((source: { tabId: number }, _reason: string
 // Secrets-aware fetch-proxy connection handler
 // ---------------------------------------------------------------------------
 
+// Session-only secrets: in-memory, never written to chrome.storage. Lives for
+// the service worker's lifetime (MV3 may evict it — that matches the
+// "vanish on session end" semantics). Layered into every pipeline build so the
+// fetch proxy unmasks session secrets like persisted ones.
+const sessionSecretStore = new SessionSecretStore();
+
 async function buildSecretsPipeline(): Promise<SecretsPipeline> {
   const sessionId = await readOrCreateSwSessionId();
   const source: FetchProxySecretSource = {
     get: async (name) => {
+      const fromSession = sessionSecretStore.get(name);
+      if (fromSession !== undefined) return fromSession;
       const got = (await chrome.storage.local.get(name)) as Record<string, string | undefined>;
       return got[name];
     },
     listAll: () => listSecretsWithValues(chrome.storage.local as any),
   };
-  return new SecretsPipeline({ sessionId, source });
+  return new SecretsPipeline({ sessionId, source, sessionStore: sessionSecretStore });
 }
 
 chrome.runtime.onConnect.addListener((port) => {
@@ -1131,6 +1194,64 @@ chrome.runtime.onMessage.addListener(
           // populates the agent shell with an empty env.
           console.error('[sw] secrets.list-masked-entries failed', err);
           sendResponse({
+            entries: [],
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      })();
+      return true;
+    }
+    // Tool-output real→masked scrub. The offscreen agent realm holds
+    // only masked entries (no real values), so the scrub runs here
+    // against the SW-owned `SecretsPipeline`. Direction is real→masked
+    // ONLY; idempotent for already-masked tokens and secret-free
+    // output. Errors degrade to the input text so a transient SW issue
+    // never blocks a tool result from reaching the agent loop.
+    if (
+      typeof msg === 'object' &&
+      msg != null &&
+      'type' in msg &&
+      msg.type === 'secrets.scrub-tool-result' &&
+      'text' in msg &&
+      typeof msg.text === 'string'
+    ) {
+      const text = msg.text;
+      (async () => {
+        try {
+          const pipeline = await buildSecretsPipeline();
+          await pipeline.reload();
+          sendResponse({ text: pipeline.scrubResponse(text) });
+        } catch (err) {
+          console.error('[sw] secrets.scrub-tool-result failed', err);
+          sendResponse({ text, error: err instanceof Error ? err.message : String(err) });
+        }
+      })();
+      return true;
+    }
+    // Offscreen-only: snapshot the secrets needed to seed the outbound-scrub
+    // pipeline (defense-in-depth real → masked scrub on the LLM-wire `fetch`
+    // leg). The offscreen has no `chrome.storage`, so it RPCs here for the
+    // sessionId + merged {persisted, session} entry list. Mirrors
+    // `buildSecretsPipeline()` above so the offscreen's pipeline produces the
+    // same masked values as the SW fetch-proxy pipeline.
+    if (
+      typeof msg === 'object' &&
+      msg != null &&
+      'type' in msg &&
+      msg.type === 'secrets.list-with-values-for-pipeline'
+    ) {
+      (async () => {
+        try {
+          const sessionId = await readOrCreateSwSessionId();
+          const persisted = await listSecretsWithValues(chrome.storage.local as any);
+          const persistedNames = new Set(persisted.map((e) => e.name));
+          const session = sessionSecretStore.listAll().filter((s) => !persistedNames.has(s.name));
+          const entries = [...persisted, ...session];
+          sendResponse({ sessionId, entries });
+        } catch (err) {
+          console.error('[sw] secrets.list-with-values-for-pipeline failed', err);
+          sendResponse({
+            sessionId: undefined,
             entries: [],
             error: err instanceof Error ? err.message : String(err),
           });
@@ -1198,6 +1319,112 @@ chrome.runtime.onMessage.addListener(
           sendResponse({ ok: true });
         } catch (err) {
           console.error('[sw] secrets.delete failed', err);
+          sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) });
+        }
+      })();
+      return true;
+    }
+    // Session-secret set — in-memory only, never written to chrome.storage.
+    if (
+      typeof msg === 'object' &&
+      msg != null &&
+      'type' in msg &&
+      msg.type === 'secrets.session.set' &&
+      'name' in msg &&
+      typeof msg.name === 'string' &&
+      'value' in msg &&
+      typeof msg.value === 'string' &&
+      'domains' in msg &&
+      Array.isArray(msg.domains)
+    ) {
+      const name = msg.name;
+      const value = msg.value;
+      const domains = (msg.domains as unknown[]).filter((d): d is string => typeof d === 'string');
+      sessionSecretStore.set(name, value, domains);
+      sendResponse({ ok: true });
+      return true;
+    }
+    if (
+      typeof msg === 'object' &&
+      msg != null &&
+      'type' in msg &&
+      msg.type === 'secrets.session.list'
+    ) {
+      sendResponse({ entries: sessionSecretStore.list() });
+      return true;
+    }
+    // Peek — returns an elided preview of the unmasked value (session or
+    // persisted). The full value never leaves the SW.
+    if (
+      typeof msg === 'object' &&
+      msg != null &&
+      'type' in msg &&
+      msg.type === 'secrets.peek' &&
+      'name' in msg &&
+      typeof msg.name === 'string'
+    ) {
+      const name = msg.name;
+      (async () => {
+        try {
+          const sessionRec = sessionSecretStore.getRecord(name);
+          if (sessionRec) {
+            sendResponse({
+              record: {
+                name,
+                preview: previewSecret(sessionRec.value),
+                domains: sessionRec.domains,
+              },
+            });
+            return;
+          }
+          const all = await listSecretsWithValues(chrome.storage.local as any);
+          const found = all.find((e) => e.name === name);
+          sendResponse({
+            record: found
+              ? { name, preview: previewSecret(found.value), domains: found.domains }
+              : undefined,
+          });
+        } catch (err) {
+          console.error('[sw] secrets.peek failed', err);
+          sendResponse({
+            record: undefined,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      })();
+      return true;
+    }
+    // Scope edit — update the allowed domains of an existing secret (session or
+    // persisted), preserving the value.
+    if (
+      typeof msg === 'object' &&
+      msg != null &&
+      'type' in msg &&
+      msg.type === 'secrets.set-domains' &&
+      'name' in msg &&
+      typeof msg.name === 'string' &&
+      'domains' in msg &&
+      Array.isArray(msg.domains)
+    ) {
+      const name = msg.name;
+      const domains = (msg.domains as unknown[]).filter((d): d is string => typeof d === 'string');
+      (async () => {
+        try {
+          if (sessionSecretStore.has(name)) {
+            sessionSecretStore.setDomains(name, domains);
+            sendResponse({ ok: true });
+            return;
+          }
+          const all = await listSecretsWithValues(chrome.storage.local as any);
+          const found = all.find((e) => e.name === name);
+          if (!found) {
+            sendResponse({ ok: false, error: `no secret named "${name}"` });
+            return;
+          }
+          await setSecret(chrome.storage.local as any, name, found.value, domains);
+          sendResponse({ ok: true });
+        } catch (err) {
+          console.error('[sw] secrets.set-domains failed', err);
           sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) });
         }
       })();

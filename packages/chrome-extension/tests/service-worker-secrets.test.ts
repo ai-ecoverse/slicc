@@ -180,6 +180,55 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
     expect(github.value).toBeUndefined();
   });
 
+  it('secrets.list-with-values-for-pipeline returns {sessionId, entries} merging persisted+session', async () => {
+    await import('../src/service-worker.js');
+    // Seed a session-only secret first so the merge path is exercised.
+    let setResp: any;
+    for (const l of messageListeners) {
+      const result = l(
+        {
+          type: 'secrets.session.set',
+          name: 'SESS_KEY',
+          value: 'sess-real',
+          domains: ['api.session.com'],
+        },
+        {},
+        (r: any) => {
+          setResp = r;
+        }
+      );
+      if (result === true) break;
+    }
+    await new Promise((r) => setTimeout(r, 10));
+    expect(setResp).toEqual({ ok: true });
+
+    let response: any;
+    let kept = false;
+    for (const l of messageListeners) {
+      const result = l({ type: 'secrets.list-with-values-for-pipeline' }, {}, (r: any) => {
+        response = r;
+      });
+      if (result === true) {
+        kept = true;
+        break;
+      }
+    }
+    expect(kept).toBe(true);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(response).toBeDefined();
+    expect(typeof response.sessionId).toBe('string');
+    expect(response.sessionId.length).toBeGreaterThan(0);
+    expect(Array.isArray(response.entries)).toBe(true);
+    const persisted = response.entries.find((e: any) => e.name === 'GITHUB_TOKEN');
+    expect(persisted).toBeDefined();
+    expect(persisted.value).toBe('ghp_real');
+    expect(persisted.domains).toEqual(['api.github.com']);
+    const session = response.entries.find((e: any) => e.name === 'SESS_KEY');
+    expect(session).toBeDefined();
+    expect(session.value).toBe('sess-real');
+    expect(session.domains).toEqual(['api.session.com']);
+  });
+
   it('secrets.set writes {name, name_DOMAINS} to chrome.storage.local', async () => {
     await import('../src/service-worker.js');
     let response: any;
@@ -227,6 +276,81 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
     expect(response).toEqual({ ok: true });
     expect(storageMap.GITHUB_TOKEN).toBeUndefined();
     expect(storageMap.GITHUB_TOKEN_DOMAINS).toBeUndefined();
+  });
+
+  async function dispatch(msg: any): Promise<any> {
+    let response: any;
+    let kept = false;
+    for (const l of messageListeners) {
+      const result = l(msg, {}, (r: any) => {
+        response = r;
+      });
+      if (result === true) {
+        kept = true;
+        break;
+      }
+    }
+    expect(kept).toBe(true);
+    await new Promise((r) => setTimeout(r, 20));
+    return response;
+  }
+
+  it('secrets.session.set stores in-memory only (never chrome.storage)', async () => {
+    await import('../src/service-worker.js');
+    const resp = await dispatch({
+      type: 'secrets.session.set',
+      name: 'SESSION_KEY',
+      value: 'sess-real',
+      domains: ['api.session.com'],
+    });
+    expect(resp).toEqual({ ok: true });
+    // Crucially, nothing was written to chrome.storage.
+    expect(storageMap.SESSION_KEY).toBeUndefined();
+    const list = await dispatch({ type: 'secrets.session.list' });
+    expect(list.entries).toEqual([{ name: 'SESSION_KEY', domains: ['api.session.com'] }]);
+  });
+
+  it('secrets.session.set values reach the masking pipeline (unmaskable)', async () => {
+    await import('../src/service-worker.js');
+    await dispatch({
+      type: 'secrets.session.set',
+      name: 'SESSION_KEY',
+      value: 'sess-real',
+      domains: ['api.session.com'],
+    });
+    const masked = await dispatch({ type: 'secrets.list-masked-entries' });
+    const entry = masked.entries.find((e: any) => e.name === 'SESSION_KEY');
+    expect(entry).toBeDefined();
+    expect(entry.domains).toEqual(['api.session.com']);
+  });
+
+  it('secrets.peek returns an elided preview, never the full value', async () => {
+    await import('../src/service-worker.js');
+    await dispatch({
+      type: 'secrets.session.set',
+      name: 'SESSION_KEY',
+      value: 'sk-proj-ABCDEFGH1234',
+      domains: ['x'],
+    });
+    const peeked = await dispatch({ type: 'secrets.peek', name: 'SESSION_KEY' });
+    expect(peeked.record.preview).toBe('sk-p…1234');
+    expect(peeked.record.preview).not.toContain('ABCDEFGH');
+    // Persisted secrets are peekable too.
+    const persisted = await dispatch({ type: 'secrets.peek', name: 'GITHUB_TOKEN' });
+    expect(persisted.record.name).toBe('GITHUB_TOKEN');
+    expect(persisted.record.domains).toEqual(['api.github.com']);
+  });
+
+  it('secrets.set-domains edits scope of a persisted secret, preserving value', async () => {
+    await import('../src/service-worker.js');
+    const resp = await dispatch({
+      type: 'secrets.set-domains',
+      name: 'GITHUB_TOKEN',
+      domains: ['api.github.com', '*.github.com'],
+    });
+    expect(resp).toEqual({ ok: true });
+    expect(storageMap.GITHUB_TOKEN).toBe('ghp_real');
+    expect(storageMap.GITHUB_TOKEN_DOMAINS).toBe('api.github.com,*.github.com');
   });
 
   it('secrets.mask-oauth-token returns the masked value for an oauth.<id>.token entry', async () => {

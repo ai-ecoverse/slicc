@@ -20,6 +20,7 @@ import type {
   ScoopListMsg,
   ScoopMessagesReplacedMsg,
   ScoopStatusMsg,
+  ScoopTranscriptMsg,
   StateSnapshotMsg,
   TrayFollowerStatusSnapshot,
   TrayLeaderStatusSnapshot,
@@ -27,7 +28,7 @@ import type {
 } from '../../../chrome-extension/src/messages.js';
 import type { MessageAttachment } from '../core/attachments.js';
 import { createLogger } from '../core/logger.js';
-import type { VirtualFS } from '../fs/index.js';
+import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import { createPanelChromeRuntimeTransport } from '../kernel/transport-chrome-runtime.js';
 import type { KernelClientFacade, KernelTransport } from '../kernel/types.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
@@ -88,12 +89,18 @@ export class OffscreenClient implements KernelClientFacade {
   private currentMessageId = new Map<string, string>();
   private ready = false;
   private stateRetryTimer: ReturnType<typeof setInterval> | null = null;
-  private localFs: VirtualFS | null = null;
+  private localFs: LocalVfsClient | null = null;
   /**
    * Pending `clear-chat` requests awaiting the bridge's ack. Keyed by
    * `requestId`; resolved when a `clear-chat-ack` envelope arrives.
    */
   private pendingClearAcks = new Map<string, () => void>();
+  /**
+   * Pending `request-scoop-transcript` requests awaiting the bridge's
+   * reply. Keyed by `requestId`; resolved with the transcript string
+   * (or `''` on timeout) when a `scoop-transcript` envelope arrives.
+   */
+  private pendingTranscriptRequests = new Map<string, (transcript: string) => void>();
   /**
    * KernelTransport — defaults to the chrome.runtime adapter.
    * A `MessageChannel`-backed transport can be passed via the
@@ -163,9 +170,28 @@ export class OffscreenClient implements KernelClientFacade {
     this.setupMessageListener();
   }
 
-  /** Set a local VFS instance (same IndexedDB as offscreen) for memory panel / file browser. */
-  setLocalFS(fs: VirtualFS): void {
+  /**
+   * Set a local VFS handle for the memory panel / file browser. Typed
+   * as `LocalVfsClient` (read-only surface) so accidental panel-side
+   * writes fail at compile time. With `slicc_opfs_vfs=opfs`, callers
+   * pass a worker-RPC-backed `RemoteVfsClient`; with the flag off, a
+   * page-side `VirtualFS` satisfies the same structural type.
+   */
+  setLocalFS(fs: LocalVfsClient): void {
     this.localFs = fs;
+  }
+
+  /**
+   * Expose the underlying kernel transport so the page can wire a
+   * `RemoteVfsClient` onto the same wire when the `slicc_opfs_vfs`
+   * flag routes panel reads through the worker's `VfsRpcHost`. The
+   * transport is shared — RemoteVfsClient adds its own `onMessage`
+   * subscriber and only acts on `vfs-*-result` envelopes, so existing
+   * routing (`agent-event`, `scoop-list`, sprinkle ops, terminal
+   * events) keeps flowing untouched.
+   */
+  getTransport(): KernelTransport<ExtensionMessage, PanelToOffscreenMessage> {
+    return this.transport;
   }
 
   // -------------------------------------------------------------------------
@@ -263,15 +289,15 @@ export class OffscreenClient implements KernelClientFacade {
 
   /** Return a lightweight context facade for the memory panel.
    *  The memory panel only calls context.getFS() to read CLAUDE.md files. */
-  getScoopContext(_jid: string): { getFS: () => VirtualFS | null } | undefined {
+  getScoopContext(_jid: string): { getFS: () => LocalVfsClient | null } | undefined {
     if (!this.localFs) return undefined;
     // Return a facade that gives the memory panel access to the shared VFS.
     // The memory panel reads scoop memory at /scoops/{folder}/CLAUDE.md or /workspace/CLAUDE.md.
     return { getFS: () => this.localFs };
   }
 
-  /** Return the shared VFS. */
-  getSharedFS(): VirtualFS | null {
+  /** Return the shared VFS handle (read-only surface). */
+  getSharedFS(): LocalVfsClient | null {
     return this.localFs;
   }
 
@@ -351,6 +377,33 @@ export class OffscreenClient implements KernelClientFacade {
    */
   requestScoopMessages(scoopJid: string): void {
     this.send({ type: 'request-scoop-messages', scoopJid } as PanelToOffscreenMessage);
+  }
+
+  /**
+   * Side-effect-free transcript accessor. Distinct from
+   * {@link requestScoopMessages}, which mutates the chat panel via
+   * `scoop-messages-replaced`. The worker replies with a
+   * `scoop-transcript` envelope carrying the same `requestId` so this
+   * Promise can resolve cleanly without touching panel state. Used by
+   * the scoop-switcher's scope-label tooltip. Resolves to an empty
+   * string on timeout or unknown scoop.
+   */
+  async getScoopTranscript(scoopJid: string): Promise<string> {
+    const requestId = `tr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const reply = new Promise<string>((resolve) => {
+      this.pendingTranscriptRequests.set(requestId, resolve);
+    });
+    this.send({
+      type: 'request-scoop-transcript',
+      requestId,
+      scoopJid,
+    } as PanelToOffscreenMessage);
+    const result = await Promise.race([
+      reply,
+      new Promise<string>((resolve) => setTimeout(() => resolve(''), 5000)),
+    ]);
+    this.pendingTranscriptRequests.delete(requestId);
+    return result;
   }
 
   /** Request full state from offscreen. Retries until state arrives. */
@@ -536,6 +589,16 @@ export class OffscreenClient implements KernelClientFacade {
       case 'scoop-messages-replaced': {
         const m = msg as ScoopMessagesReplacedMsg;
         this.callbacks.onScoopMessagesReplaced?.(m.scoopJid, m.messages);
+        break;
+      }
+
+      case 'scoop-transcript': {
+        const m = msg as ScoopTranscriptMsg;
+        const resolve = this.pendingTranscriptRequests.get(m.requestId);
+        if (resolve) {
+          this.pendingTranscriptRequests.delete(m.requestId);
+          resolve(m.transcript);
+        }
         break;
       }
 

@@ -19,11 +19,11 @@
  * browser-side exposure.
  */
 
+import type { SignAndForwardReply } from '@slicc/shared-ts';
 import { FsError } from '../types.js';
 import type { SignedFetchDa, SignedFetchDaRequest } from './backend-da.js';
 import type { SignedFetchS3, SignedFetchS3Request } from './backend-s3.js';
 import { getDefaultImsClient } from './profile.js';
-import type { SignAndForwardReply } from './sign-and-forward-shared.js';
 
 function isExtensionContext(): boolean {
   return (
@@ -51,7 +51,7 @@ function encodeBase64(bytes: Uint8Array): string {
 
 /**
  * The set of `errorCode` values the orchestrator can return. Kept in sync
- * with `SignAndForwardErrorCode` in `sign-and-forward-shared.ts`. If the
+ * with `SignAndForwardErrorCode` in `@slicc/shared-ts`. If the
  * server adds a new code that isn't listed here, `envelopeToResponse`
  * surfaces `EINVAL` with the raw text rather than silently mapping to
  * `EIO` — that way the new code is debuggable.

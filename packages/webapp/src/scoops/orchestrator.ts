@@ -22,6 +22,7 @@ import {
   registerSessionCostsProvider,
   type ScoopCostData,
 } from '../shell/supplemental-commands/cost-command.js';
+import { SudoManager } from '../sudo/sudo-manager.js';
 import { applyConeMemoryBudget, CONE_MEMORY_PATH } from './cone-memory-budget.js';
 import * as db from './db.js';
 import { isExternalLickChannel } from './lick-formatting.js';
@@ -135,6 +136,8 @@ export class Orchestrator {
   private lickManager: LickManager | null = null;
   private sessionStore: SessionStore | null = null;
   private fsWatcher: FsWatcher | null = null;
+  /** Owns the live sudoers policy + shared approval broker for this float. */
+  private sudoManager: SudoManager | null = null;
   /** Tracks idle timers for scoops that haven't started work after becoming ready. */
   private idleTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   /** Preserves cost data for scoops that have been dropped. */
@@ -235,6 +238,13 @@ export class Orchestrator {
     this.sharedFs.setWatcher(this.fsWatcher);
     (globalThis as any).__slicc_fs_watcher = this.fsWatcher;
     await this.ensureRootStructure();
+
+    // Stand up the sudo policy manager: seeds the default /etc/sudoers
+    // template, loads + merges the live policy, and watches for changes so
+    // edits (and "Always" grants) take effect with no restart. The same
+    // manager is threaded into every ScoopContext below.
+    this.sudoManager = new SudoManager({ fs: this.sharedFs, watcher: this.fsWatcher });
+    await this.sudoManager.init();
 
     const savedScoops = await db.getAllScoops();
 
@@ -605,6 +615,17 @@ export class Orchestrator {
    */
   getSessionStore(): SessionStore | null {
     return this.sessionStore;
+  }
+
+  /**
+   * Get the live {@link SudoManager} for this float, or `null` before
+   * `init()` resolves. The panel-terminal host boot reads this to thread the
+   * same broker + persist sink into the human Terminal's shell — with
+   * `transparentGating: false` so plain commands still run ungated and only
+   * the explicit `sudo <cmd...>` invocation prompts.
+   */
+  getSudoManager(): SudoManager | null {
+    return this.sudoManager;
   }
 
   /** Set the LickManager for guarding scoop removal against active licks */
@@ -1436,6 +1457,11 @@ export class Orchestrator {
         error: err instanceof Error ? err.message : String(err),
       });
     });
+    // Rebuild the sudo manager against the fresh VFS: re-seeds the default
+    // /etc/sudoers template and re-attaches the live-reload watcher.
+    this.sudoManager?.dispose();
+    this.sudoManager = new SudoManager({ fs: this.sharedFs, watcher: this.fsWatcher });
+    await this.sudoManager.init();
     this.droppedScoopCosts = [];
     log.info('Filesystem reset and defaults re-seeded');
   }
@@ -1872,7 +1898,8 @@ export class Orchestrator {
       this.sessionStore ?? undefined,
       this.sharedFs ?? undefined,
       coneJid,
-      this.processManager ?? undefined
+      this.processManager ?? undefined,
+      this.sudoManager
     );
 
     this.contexts.set(jid, context);
@@ -2385,6 +2412,10 @@ export class Orchestrator {
     for (const jid of this.contexts.keys()) {
       await this.destroyScoopTab(jid);
     }
+
+    // Drop the sudoers live-reload watcher subscription.
+    this.sudoManager?.dispose();
+    this.sudoManager = null;
 
     log.info('Orchestrator shutdown');
   }

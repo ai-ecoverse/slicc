@@ -468,7 +468,61 @@ struct InlineSprinkleView: UIViewRepresentable {
         setState: function() {},
         getState: function() { return null; },
         close: function() {},
-        stopCone: function() { send('lick', { body: { action: '__stopCone__' } }); }
+        stopCone: function() { send('lick', { body: { action: '__stopCone__' } }); },
+        // The follower has no addressable worker shell on the leader, so
+        // shell exec / agent spawn degrade to a clean non-zero result
+        // rather than throwing into the sprinkle (mirrors the web
+        // follower bridge in sprinkle-follower-controller.ts).
+        exec: Object.assign(function() {
+          return Promise.resolve({
+            stdout: '',
+            stderr: 'exec not supported in follower-rendered sprinkle\\n',
+            exitCode: 127
+          });
+        }, { spawn: function() {
+          return Promise.resolve({
+            stdout: '',
+            stderr: 'exec.spawn not supported in follower-rendered sprinkle\\n',
+            exitCode: 127
+          });
+        } }),
+        agent: function() {
+          return Promise.resolve({
+            stdout: 'agent not supported in follower-rendered sprinkle\\n',
+            exitCode: 127
+          });
+        },
+        // The Tier 1 jsh globals all need the leader's worker realm, which
+        // the follower can't reach, so they reject with a clear error
+        // (matches sprinkle-follower-controller.ts). `browser` is therefore
+        // unavailable on followers, satisfying its trusted-only contract.
+        fetch: function() {
+          return Promise.reject(new Error('fetch not supported in follower-rendered sprinkle'));
+        },
+        http: { client: function() {
+          var reject = function() {
+            return Promise.reject(new Error('http not supported in follower-rendered sprinkle'));
+          };
+          return { get: reject, post: reject, put: reject, patch: reject, 'delete': reject };
+        } },
+        browser: {
+          findTab: function() { return Promise.reject(new Error('browser not supported in follower-rendered sprinkle')); },
+          ensureTab: function() { return Promise.reject(new Error('browser not supported in follower-rendered sprinkle')); },
+          eval: function() { return Promise.reject(new Error('browser not supported in follower-rendered sprinkle')); },
+          evalAsync: function() { return Promise.reject(new Error('browser not supported in follower-rendered sprinkle')); },
+          cookie: function() { return Promise.reject(new Error('browser not supported in follower-rendered sprinkle')); },
+          localStorage: function() { return Promise.reject(new Error('browser not supported in follower-rendered sprinkle')); },
+          fetch: function() { return Promise.reject(new Error('browser not supported in follower-rendered sprinkle')); }
+        },
+        readFileBinary: function() {
+          return Promise.reject(new Error('readFileBinary not supported in follower-rendered sprinkle'));
+        },
+        writeFileBinary: function() {
+          return Promise.reject(new Error('writeFileBinary not supported in follower-rendered sprinkle'));
+        },
+        fetchToFile: function() {
+          return Promise.reject(new Error('fetchToFile not supported in follower-rendered sprinkle'));
+        }
       };
       window.slicc = bridge;
       window.bridge = bridge;

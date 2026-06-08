@@ -296,6 +296,139 @@ describeIfConfigured('deployed tray worker', () => {
     expect(body.capabilities.controller.url).toBeTruthy();
     expect(body.capabilities.webhook.url).toBeTruthy();
   }, 15_000);
+
+  // Hibernation regression guard. With the WebSocket Hibernation API the runtime
+  // can evict the Durable Object from memory while the leader socket stays open,
+  // so a webhook POST arrives on a *separate* invocation that must recover the
+  // socket via getWebSockets() rather than an in-memory field. This is the exact
+  // path that the duration-cost fix changed, and it is otherwise unexercised
+  // live (the existing webhook checks only hit the WEBHOOK_ID_REQUIRED branch).
+  it('forwards a webhook to a hibernatable leader socket on a separate request', async () => {
+    const baseUrl = new URL(workerBaseUrl!);
+    const createResponse = await fetch(new URL('/tray', baseUrl), { method: 'POST' });
+    expect(createResponse.status).toBe(201);
+    const created = (await createResponse.json()) as CreateTrayResponse;
+
+    const attachResponse = await fetch(created.capabilities.controller.url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ controllerId: 'ci-webhook-leader', runtime: 'github-actions' }),
+    });
+    expect(attachResponse.status).toBe(200);
+    const controller = (await attachResponse.json()) as ControllerAttachResponse;
+    expect(controller.websocket?.url).toBeTruthy();
+
+    const { socket, nextMessage } = await openWebSocket(controller.websocket!.url);
+    try {
+      const connected = await nextMessage();
+      expect(connected).toMatchObject({ type: 'leader.connected', trayId: created.trayId });
+
+      const webhookResponse = await fetch(`${created.capabilities.webhook.url}/ci-hook-1`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'opened', repo: 'ci/repo' }),
+      });
+      expect(webhookResponse.status).toBe(202);
+      await expect(webhookResponse.json()).resolves.toMatchObject({ ok: true, accepted: true });
+
+      const forwarded = await nextMessage();
+      expect(forwarded).toMatchObject({
+        type: 'webhook.event',
+        webhookId: 'ci-hook-1',
+        body: { action: 'opened', repo: 'ci/repo' },
+      });
+    } finally {
+      socket.close();
+    }
+  }, 30_000);
+
+  // Idle gap long enough for the runtime to potentially hibernate the object.
+  // The test passes whether or not eviction actually happens, but if the leader
+  // socket were pinned in an in-memory field (the pre-fix behavior) a rehydration
+  // bug would only ever surface here, after the object has been reclaimed.
+  it('still delivers webhooks to the leader after an idle gap that may trigger hibernation', async () => {
+    const baseUrl = new URL(workerBaseUrl!);
+    const created = (await (
+      await fetch(new URL('/tray', baseUrl), { method: 'POST' })
+    ).json()) as CreateTrayResponse;
+    const controller = (await (
+      await fetch(created.capabilities.controller.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'ci-idle-leader', runtime: 'github-actions' }),
+      })
+    ).json()) as ControllerAttachResponse;
+    expect(controller.websocket?.url).toBeTruthy();
+
+    const { socket, nextMessage } = await openWebSocket(controller.websocket!.url);
+    try {
+      await nextMessage(); // leader.connected
+
+      await new Promise((resolve) => setTimeout(resolve, 10_000));
+
+      const webhookResponse = await fetch(
+        `${created.capabilities.webhook.url}/ci-hook-after-idle`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ phase: 'after-idle' }),
+        }
+      );
+      expect(webhookResponse.status).toBe(202);
+
+      const forwarded = await nextMessage();
+      expect(forwarded).toMatchObject({
+        type: 'webhook.event',
+        webhookId: 'ci-hook-after-idle',
+        body: { phase: 'after-idle' },
+      });
+    } finally {
+      socket.close();
+    }
+  }, 30_000);
+
+  // After the leader socket closes, the runtime delivers webSocketClose on a
+  // possibly-fresh instance. Liveness must drop so webhooks are rejected with
+  // NO_LIVE_LEADER instead of being silently dropped against a dead socket.
+  it('drops leader liveness after the socket closes so webhooks are rejected', async () => {
+    const baseUrl = new URL(workerBaseUrl!);
+    const created = (await (
+      await fetch(new URL('/tray', baseUrl), { method: 'POST' })
+    ).json()) as CreateTrayResponse;
+    const controller = (await (
+      await fetch(created.capabilities.controller.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'ci-close-leader', runtime: 'github-actions' }),
+      })
+    ).json()) as ControllerAttachResponse;
+    expect(controller.websocket?.url).toBeTruthy();
+
+    const { socket, nextMessage } = await openWebSocket(controller.websocket!.url);
+    await nextMessage(); // leader.connected
+    await new Promise<void>((resolve) => {
+      socket.once('close', () => resolve());
+      socket.close();
+    });
+
+    // webSocketClose is processed asynchronously by the runtime; poll until the
+    // tray no longer reports a live leader.
+    let rejected = false;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const webhookResponse = await fetch(`${created.capabilities.webhook.url}/ci-hook-closed`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ phase: 'after-close' }),
+      });
+      if (webhookResponse.status === 410) {
+        await expect(webhookResponse.json()).resolves.toMatchObject({ code: 'NO_LIVE_LEADER' });
+        rejected = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+    expect(rejected).toBe(true);
+  }, 30_000);
 });
 
 describe('cloud routes smoke', () => {

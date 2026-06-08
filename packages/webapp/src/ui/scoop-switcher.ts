@@ -5,6 +5,7 @@
 
 import type { Orchestrator } from '../scoops/orchestrator.js';
 import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
+import { extractLatestUserPrompt, type ScoopScopeLabeler } from './scoop-scope-label.js';
 
 export interface ScoopSwitcherCallbacks {
   onScoopSelect: (scoop: RegisteredScoop) => void;
@@ -19,6 +20,19 @@ export class ScoopSwitcher {
   private statuses: Map<string, ScoopTabState['status']> = new Map();
   private dropdownOpen = false;
   private lastBadgeCount = 0;
+  /** Scope-label cache + LLM driver. When unset, the tooltip still
+   *  renders with the name only — same fallback as the standalone
+   *  rail's no-API-key path. */
+  private labeler: ScoopScopeLabeler | null = null;
+  /** Fallback transcript source used to populate the tooltip while
+   *  the LLM label is still resolving (or when no API key is
+   *  available). Yields the same flat-text shape `labeler` expects. */
+  private fetchFallbackTranscript: ((jid: string) => Promise<string>) | null = null;
+  /** Per-jid pending fallback line — last user prompt extracted from
+   *  the transcript for the no-scope-label branch. Populated lazily on
+   *  hover so we don't fan-out transcript fetches before the user
+   *  actually opens the dropdown. */
+  private fallbackLines = new Map<string, string>();
 
   constructor(container: HTMLElement, callbacks: ScoopSwitcherCallbacks) {
     this.container = container;
@@ -34,6 +48,19 @@ export class ScoopSwitcher {
     });
   }
 
+  /** Wire the scope-label generator + fallback transcript source.
+   *  `fetchFallbackTranscript` is the SAME accessor the labeler uses;
+   *  the switcher needs a direct hook so it can extract the latest
+   *  user prompt for the no-LLM fallback line without re-implementing
+   *  the round-trip. Safe to call once after construction. */
+  setLabeler(
+    labeler: ScoopScopeLabeler,
+    fetchFallbackTranscript: (jid: string) => Promise<string>
+  ): void {
+    this.labeler = labeler;
+    this.fetchFallbackTranscript = fetchFallbackTranscript;
+  }
+
   setOrchestrator(orchestrator: Orchestrator): void {
     this.orchestrator = orchestrator;
     this.render();
@@ -45,7 +72,15 @@ export class ScoopSwitcher {
   }
 
   updateStatus(jid: string, status: ScoopTabState['status']): void {
+    const prev = this.statuses.get(jid);
     this.statuses.set(jid, status);
+    // Pre-warm the scope label whenever a scoop transitions INTO
+    // 'processing' — that's the same edge `ChatPanel` produces when
+    // the user sends input. Mirrors the standalone rail's pre-warm
+    // hook on `Orchestrator.updateScoopStatus`.
+    if (status === 'processing' && prev !== 'processing') {
+      this.requestLabel(jid);
+    }
     this.render();
   }
 
@@ -91,6 +126,12 @@ export class ScoopSwitcher {
     trigger.addEventListener('click', (e) => {
       e.stopPropagation();
       this.dropdownOpen = !this.dropdownOpen;
+      // Refresh labels for every listed scoop when the dropdown
+      // opens. `request` dedupes against the cached signature, so a
+      // rapid open/close doesn't burn extra LLM calls.
+      if (this.dropdownOpen) {
+        for (const s of scoops) this.requestLabel(s.jid);
+      }
       this.render();
     });
 
@@ -150,9 +191,12 @@ export class ScoopSwitcher {
         item.addEventListener('click', () => {
           this.selectedJid = scoop.jid;
           this.dropdownOpen = false;
+          this.hideTooltip(item);
           this.render();
           this.callbacks.onScoopSelect(scoop);
         });
+
+        this.attachItemTooltip(item, scoop);
 
         menu.appendChild(item);
       }
@@ -174,6 +218,125 @@ export class ScoopSwitcher {
       icon.style.background = SCOOP_COLORS[scoopIndex % SCOOP_COLORS.length];
     }
     return icon;
+  }
+
+  /** Wire hover-tooltip listeners on a dropdown item. Extracted from
+   *  `render` so the dropdown-item assembly stays readable and the
+   *  function complexity stays bounded as new affordances land. */
+  private attachItemTooltip(item: HTMLElement, scoop: RegisteredScoop): void {
+    const displayName = scoop.isCone ? 'cone' : scoop.assistantLabel;
+    item.addEventListener('mouseenter', () => {
+      this.showTooltip(item, scoop, displayName);
+    });
+    item.addEventListener('mouseleave', () => {
+      this.hideTooltip(item);
+    });
+  }
+
+  /** Trigger a scope-label refresh for `jid`. The labeler dedupes
+   *  against the cached transcript signature, so this is safe to call
+   *  on every `processing` transition and every dropdown open. */
+  private requestLabel(jid: string): void {
+    if (!this.labeler) return;
+    this.labeler.request(jid, (resolvedJid) => {
+      const tip = this.activeTooltip;
+      if (tip && tip.dataset.jid === resolvedJid) {
+        this.applyTooltipContent(tip, resolvedJid);
+      }
+    });
+  }
+
+  /** Currently-mounted hover tooltip element, if any. Tracked so the
+   *  labeler's async resolution can update the open tooltip in place
+   *  without searching the DOM. */
+  private activeTooltip: HTMLDivElement | null = null;
+
+  private showTooltip(item: HTMLElement, scoop: RegisteredScoop, displayName: string): void {
+    // Clear any stale tooltip (e.g. dropdown was just opened by
+    // hovering one item and then moving to another without leaving
+    // the menu).
+    document.querySelectorAll('.scoop-switcher-tooltip').forEach((t) => {
+      t.remove();
+    });
+
+    const tip = document.createElement('div');
+    tip.className = 'scoop-switcher-tooltip';
+    tip.dataset.jid = scoop.jid;
+    tip.dataset.name = displayName;
+    document.body.appendChild(tip);
+
+    const rect = item.getBoundingClientRect();
+    tip.style.top = `${rect.top + rect.height / 2}px`;
+    tip.style.left = `${rect.right + 8}px`;
+
+    this.activeTooltip = tip;
+    (item as HTMLElement & { __tip?: HTMLDivElement }).__tip = tip;
+
+    // Initial paint with whatever is currently cached. The labeler
+    // request below may resolve in the same tick (cache hit) or later;
+    // either way `requestLabel`'s onResolved patches the tooltip in
+    // place via `activeTooltip`.
+    this.applyTooltipContent(tip, scoop.jid);
+    this.requestLabel(scoop.jid);
+    void this.warmFallbackLine(scoop.jid);
+  }
+
+  private hideTooltip(item: HTMLElement): void {
+    const owned = (item as HTMLElement & { __tip?: HTMLDivElement }).__tip;
+    if (owned) {
+      owned.remove();
+      (item as HTMLElement & { __tip?: HTMLDivElement }).__tip = undefined;
+    }
+    if (this.activeTooltip && !document.body.contains(this.activeTooltip)) {
+      this.activeTooltip = null;
+    } else if (this.activeTooltip === owned) {
+      this.activeTooltip = null;
+    }
+  }
+
+  /** Render the tooltip content. Always starts with the scoop name on
+   *  its own line; appends the LLM scope label when available, else
+   *  the latest user prompt (truncated). Never shows "null" or an
+   *  empty body. */
+  private applyTooltipContent(tip: HTMLDivElement, jid: string): void {
+    while (tip.firstChild) tip.removeChild(tip.firstChild);
+    const name = tip.dataset.name ?? '';
+    const nameEl = document.createElement('div');
+    nameEl.className = 'scoop-switcher-tooltip__name';
+    nameEl.textContent = name;
+    tip.appendChild(nameEl);
+
+    const scope = this.labeler?.getCached(jid) ?? null;
+    const fallback = this.fallbackLines.get(jid) ?? '';
+    const line = scope ?? truncate(fallback, 80);
+    if (line.length > 0) {
+      const scopeEl = document.createElement('div');
+      scopeEl.className = 'scoop-switcher-tooltip__scope';
+      scopeEl.textContent = line;
+      tip.appendChild(scopeEl);
+    }
+  }
+
+  /** Extract the most recent `user: …` line from the transcript so
+   *  the tooltip has something to show before the labeler resolves
+   *  (or when no API key is configured). Cached per jid. */
+  private async warmFallbackLine(jid: string): Promise<void> {
+    if (!this.fetchFallbackTranscript) return;
+    let transcript = '';
+    try {
+      transcript = await this.fetchFallbackTranscript(jid);
+    } catch {
+      return;
+    }
+    const latestUser = extractLatestUserPrompt(transcript);
+    if (latestUser.length === 0) return;
+    const previous = this.fallbackLines.get(jid);
+    if (previous === latestUser) return;
+    this.fallbackLines.set(jid, latestUser);
+    const tip = this.activeTooltip;
+    if (tip && tip.dataset.jid === jid) {
+      this.applyTooltipContent(tip, jid);
+    }
   }
 
   private addStyles(): void {
@@ -359,7 +522,43 @@ export class ScoopSwitcher {
         50% { transform: scale(1.3); }
         100% { transform: scale(1); }
       }
+
+      /* Hover tooltip for dropdown items — same fixed-position
+         pattern as the standalone rail's .scoop-fixed-tooltip. */
+      .scoop-switcher-tooltip {
+        position: fixed;
+        transform: translateY(-50%);
+        max-width: 240px;
+        padding: 6px 10px;
+        background: var(--s2-gray-900);
+        color: var(--s2-gray-25);
+        font-size: 12px;
+        font-family: var(--s2-font-family);
+        border-radius: var(--s2-radius-default);
+        box-shadow: var(--s2-shadow-elevated);
+        z-index: 1100;
+        pointer-events: none;
+        line-height: 1.3;
+      }
+
+      .scoop-switcher-tooltip__name {
+        font-weight: 600;
+      }
+
+      .scoop-switcher-tooltip__scope {
+        margin-top: 2px;
+        opacity: 0.85;
+        font-weight: 400;
+        white-space: normal;
+        overflow-wrap: anywhere;
+      }
     `;
     document.head.appendChild(style);
   }
+}
+
+function truncate(text: string, max: number): string {
+  const cleaned = text.replace(/\s+/g, ' ').trim();
+  if (cleaned.length <= max) return cleaned;
+  return `${cleaned.slice(0, max - 1)}\u2026`;
 }

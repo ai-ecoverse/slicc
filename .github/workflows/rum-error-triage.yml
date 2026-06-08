@@ -80,7 +80,7 @@ jobs:
 
       - name: Classify candidates and file issues
         if: steps.query.outputs.has_candidates == 'true' && github.event.inputs.dry_run != 'true'
-        uses: anthropics/claude-code-action@36a69b6a90b850823f86de06fdfd56264772ad98 # v1
+        uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1 # v1
         env:
           # Bedrock path: authenticate with an Amazon Bedrock API key (the Adobe
           # CAMP `ABSK...` bearer token). Set the AWS_BEARER_TOKEN_BEDROCK secret
@@ -97,6 +97,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         with:
           use_bedrock: 'true'
+          # Pass the workflow's GITHUB_TOKEN explicitly so the action uses it
+          # directly instead of attempting an OIDC -> GitHub App token exchange
+          # (which fails with "User does not have write access" when the Claude
+          # GitHub App is not installed on this repo). Job permissions above
+          # (contents/issues/pull-requests: write) scope this token appropriately.
+          github_token: ${{ github.token }}
+          # On `schedule` events GitHub sets the actor to the last actor on the
+          # default branch, which in this merge-queue repo is `github-merge-queue`
+          # (a bot). claude-code-action's human-actor gate otherwise rejects the
+          # nightly run with "Workflow initiated by non-human actor". Allow all
+          # bots so the cron can run unattended.
+          allowed_bots: '*'
           # Print Claude's full turn-by-turn output to the Actions log on manual
           # dispatch (to inspect its reasoning); kept off for the nightly cron so
           # routine runs don't log tool output that may contain sensitive data.

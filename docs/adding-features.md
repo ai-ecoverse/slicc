@@ -968,6 +968,10 @@ type OAuthLauncher = (authorizeUrl: string) => Promise<string | null>;
 
 **`modelOverrides`**: Static per-model overrides applied to all models for this provider. Useful for config-only providers (like Azure AI Foundry) that can't implement `getModelIds()` but need custom context windows. Example: `modelOverrides: { 'claude-opus-4-6': { context_window: 1000000 } }`.
 
+**`refreshModels`** (optional, `(accessToken?) => Promise<void>`): the async populate step for a dynamic model list. `getModelIds()` is synchronous and only reads caches; `refreshModels` is where the provider fetches its `/v1/models`-style list, caches it, and persists the enriched result to `localStorage` (so cold consumers — notably the **cloud cone's kernel worker**, which reads `localStorage` — see the full set + metadata on first resolve). Normally this runs inside `onOAuthLogin`. Floats that inject an account _without_ an interactive login (the cloud cone, via `applyHostedAccounts`) must call it explicitly — `prewarmHostedModels` in `ui/hosted-config-apply.ts` does this **before** applying the account (the account write triggers the worker's model resolution, so the list must be warm first). The optional `accessToken` lets callers pre-warm before the account is persisted. Without it, an OAuth model id pi-ai's registry doesn't know (e.g. `claude-opus-4-8`) still routes through the provider (see resolution note below) but with default metadata until the list warms.
+
+**OAuth-safe resolution**: `resolveModelById` / `resolveCurrentModel` (`ui/provider-settings.ts`) never fall back to a native Anthropic model for an OAuth/custom provider. An unknown model id is routed through the provider (`api: '${providerId}-anthropic'`) via `buildProviderRoutedModel` — otherwise the provider's token (e.g. an Adobe IMS token) would be sent to `api.anthropic.com` and rejected with `401 invalid x-api-key`.
+
 **Three-layer merge**: Model capabilities resolve as pi-ai registry (defaults) → `modelOverrides` (static overrides) → `getModelIds()` metadata (dynamic, highest priority). Each layer only overrides fields it provides.
 
 **Model ID pitfall**: Use pi-ai alias IDs (e.g., `claude-opus-4-6`) not dated IDs (e.g., `claude-opus-4-6-20250626`). In the browser bundle, `getModel()` returns `undefined` for unknown IDs instead of throwing, and `{ ...undefined }` silently produces `{}`. The alias resolves to a full model from the registry with all required fields.
@@ -1030,7 +1034,7 @@ npm run build -w @slicc/chrome-extension
 
 ## 14. Add Interactive Tool UI (Approval Dialogs, Forms)
 
-**When**: A shell command or tool needs user interaction before proceeding (e.g., permission approval, file picker, form input). Tool UI solves the "user gesture" problem — browser APIs like `showDirectoryPicker()` require a user click, but agent-driven tool calls have no gesture context.
+**When**: A shell command or tool needs user interaction before proceeding (e.g., permission approval, file picker, form input). Tool UI solves the "user gesture" problem — browser APIs like `showDirectoryPicker()` require a user click, but agent-driven tool calls have no gesture context. For the broader gate-pattern context (sudo, device gates, OS capture gates), see [`docs/approvals.md`](./approvals.md).
 
 **Files to modify**:
 

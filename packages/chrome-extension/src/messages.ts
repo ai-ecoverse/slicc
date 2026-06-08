@@ -145,6 +145,31 @@ export interface RequestScoopMessagesMsg {
   scoopJid: string;
 }
 
+/**
+ * Side-effect-free transcript fetch for a scoop. Distinct from
+ * `request-scoop-messages` (which triggers the chat panel to
+ * wholesale-replace its render via `scoop-messages-replaced`): this
+ * one is a pure read used by the scoop-switcher's scope-label
+ * tooltip. The worker resolves the most recent transcript it has
+ * (in-flight buffer, then live agent state) and flattens it into a
+ * single string. The `requestId` correlates the reply.
+ */
+export interface RequestScoopTranscriptMsg {
+  type: 'request-scoop-transcript';
+  requestId: string;
+  scoopJid: string;
+}
+
+/** Reply to {@link RequestScoopTranscriptMsg}. `transcript` is the
+ *  flattened text the labeler hands to `quickLabel`; empty string if
+ *  the scoop is unknown or has no history yet. */
+export interface ScoopTranscriptMsg {
+  type: 'scoop-transcript';
+  requestId: string;
+  scoopJid: string;
+  transcript: string;
+}
+
 export interface ClearChatMsg {
   type: 'clear-chat';
   /** Correlation id so the panel can await the bridge's ack and avoid
@@ -362,6 +387,216 @@ export interface LocalStorageClearMsg {
   type: 'local-storage-clear';
 }
 
+// ---------------------------------------------------------------------------
+// VFS read RPCs
+// ---------------------------------------------------------------------------
+// Read-only RPC surface that lets the panel observe the worker-owned VFS
+// without touching OPFS directly. Mirrors the `LocalVfsClient` interface
+// shape in `packages/webapp/src/kernel/local-vfs-client.ts`.
+//
+// Mirrored (not imported) for the same reason as `SprinkleSummaryEnvelope`
+// above — the `fs/types.ts` import would drag the webapp fs module graph
+// into the webapp-worker tsconfig (`lib: ["ES2022","WebWorker"]`,
+// `types: []`), which `transport-message-channel.ts` pulls this file in
+// for. A structural-mirror keeps the envelope free of webapp imports;
+// `vfs-rpc-host.ts` casts between the wire shape and the real `Stats` /
+// `DirEntry` types.
+
+/** Wire mirror of `DirEntry` from `webapp/src/fs/types.ts`. */
+export interface VfsDirEntryEnvelope {
+  name: string;
+  type: 'file' | 'directory' | 'symlink';
+}
+
+/** Wire mirror of `Stats` from `webapp/src/fs/types.ts`. */
+export interface VfsStatsEnvelope {
+  type: 'file' | 'directory' | 'symlink';
+  size: number;
+  mtime: number;
+  ctime: number;
+  isSymlink?: boolean;
+  symlinkTarget?: string;
+}
+
+/**
+ * Error envelope carried on the failure branch of every VFS RPC
+ * response. `code` mirrors `FsErrorCode` from `webapp/src/fs/types.ts`
+ * (POSIX-shaped: `ENOENT`, `ENOTDIR`, `EISDIR`, …) so panel-side
+ * callers can branch on it without an enum import.
+ */
+export interface VfsErrorEnvelope {
+  code: string;
+  message: string;
+  path?: string;
+}
+
+/** Panel → worker: list directory entries at `path`. */
+export interface VfsReadDirRequestMsg {
+  type: 'vfs-read-dir';
+  /** Correlation id echoed on the matching `vfs-read-dir-result`. */
+  requestId: string;
+  path: string;
+}
+
+/** Panel → worker: read a file at `path`. */
+export interface VfsReadFileRequestMsg {
+  type: 'vfs-read-file';
+  /** Correlation id echoed on the matching `vfs-read-file-result`. */
+  requestId: string;
+  path: string;
+  /** Default `'utf-8'` (matches `VirtualFS.readFile`). */
+  encoding?: 'utf-8' | 'binary';
+}
+
+/** Panel → worker: stat the entry at `path`. */
+export interface VfsStatRequestMsg {
+  type: 'vfs-stat';
+  /** Correlation id echoed on the matching `vfs-stat-result`. */
+  requestId: string;
+  path: string;
+}
+
+export type VfsReadRequestMsg = VfsReadDirRequestMsg | VfsReadFileRequestMsg | VfsStatRequestMsg;
+
+/** Worker → panel: response to `vfs-read-dir`. */
+export type VfsReadDirResultMsg =
+  | { type: 'vfs-read-dir-result'; requestId: string; ok: true; entries: VfsDirEntryEnvelope[] }
+  | { type: 'vfs-read-dir-result'; requestId: string; ok: false; error: VfsErrorEnvelope };
+
+/**
+ * Worker → panel: response to `vfs-read-file`.
+ *
+ * Binary reads carry the raw `Uint8Array` so the worker can hand
+ * ownership of the underlying `ArrayBuffer` to the panel via the
+ * transport's transfer list (`MessageChannel.postMessage(msg, [buf])`).
+ * The chrome.runtime adapter does not support transferables and silently
+ * structured-clones the bytes instead — the wire shape is identical
+ * either way. Text reads stay as `string` (no transfer benefit).
+ */
+export type VfsReadFileResultMsg =
+  | { type: 'vfs-read-file-result'; requestId: string; ok: true; encoding: 'utf-8'; data: string }
+  | {
+      type: 'vfs-read-file-result';
+      requestId: string;
+      ok: true;
+      encoding: 'binary';
+      data: Uint8Array;
+    }
+  | { type: 'vfs-read-file-result'; requestId: string; ok: false; error: VfsErrorEnvelope };
+
+/** Worker → panel: response to `vfs-stat`. */
+export type VfsStatResultMsg =
+  | { type: 'vfs-stat-result'; requestId: string; ok: true; stats: VfsStatsEnvelope }
+  | { type: 'vfs-stat-result'; requestId: string; ok: false; error: VfsErrorEnvelope };
+
+export type VfsReadResultMsg = VfsReadDirResultMsg | VfsReadFileResultMsg | VfsStatResultMsg;
+
+// ---------------------------------------------------------------------------
+// VFS write RPCs
+// ---------------------------------------------------------------------------
+// Write-side RPC surface that lets the panel mutate the worker-owned VFS
+// without touching OPFS directly. Mirrors the writable subset of
+// `VirtualFS` used by `session-freezer.ts` (`writeFile`, `mkdir`, `rm`,
+// `flush`).
+//
+// Mirrored (not imported) for the same reason as `VfsReadDirRequestMsg`
+// above — the `fs/types.ts` import would drag the webapp fs module
+// graph into the webapp-worker tsconfig.
+//
+// Binary `writeFile` payloads carry the raw `Uint8Array` and request
+// transfer of the backing `ArrayBuffer` (zero-copy on the
+// `MessageChannel` adapter; structured-clone copy on chrome.runtime,
+// which silently ignores the transfer list). Text payloads stay as
+// `string` (no transfer benefit).
+
+/** Panel → worker: write file content at `path`. */
+export type VfsWriteFileRequestMsg =
+  | {
+      type: 'vfs-write-file';
+      /** Correlation id echoed on the matching `vfs-write-file-result`. */
+      requestId: string;
+      path: string;
+      encoding: 'utf-8';
+      data: string;
+      /** Create parent directories if they don't exist. Default: false. */
+      recursive?: boolean;
+    }
+  | {
+      type: 'vfs-write-file';
+      requestId: string;
+      path: string;
+      encoding: 'binary';
+      data: Uint8Array;
+      recursive?: boolean;
+    };
+
+/** Panel → worker: create directory at `path`. */
+export interface VfsMkdirRequestMsg {
+  type: 'vfs-mkdir';
+  /** Correlation id echoed on the matching `vfs-mkdir-result`. */
+  requestId: string;
+  path: string;
+  /** Create parent directories if they don't exist. Default: false. */
+  recursive?: boolean;
+}
+
+/** Panel → worker: remove the entry at `path`. */
+export interface VfsRmRequestMsg {
+  type: 'vfs-rm';
+  /** Correlation id echoed on the matching `vfs-rm-result`. */
+  requestId: string;
+  path: string;
+  /** Remove directories and their contents recursively. Default: false. */
+  recursive?: boolean;
+}
+
+/**
+ * Panel → worker: flush the VFS to durable storage. Used by the freezer
+ * after a sequence of writes so the bytes land on disk before a
+ * subsequent `location.reload()` could race the IndexedDB debounce.
+ */
+export interface VfsFlushRequestMsg {
+  type: 'vfs-flush';
+  /** Correlation id echoed on the matching `vfs-flush-result`. */
+  requestId: string;
+}
+
+export type VfsWriteRequestMsg =
+  | VfsWriteFileRequestMsg
+  | VfsMkdirRequestMsg
+  | VfsRmRequestMsg
+  | VfsFlushRequestMsg;
+
+/**
+ * Worker → panel: response to `vfs-write-file`. Success branch carries
+ * no payload (writes are void); failure branch carries an error envelope
+ * shaped like the read-side failures.
+ */
+export type VfsWriteFileResultMsg =
+  | { type: 'vfs-write-file-result'; requestId: string; ok: true }
+  | { type: 'vfs-write-file-result'; requestId: string; ok: false; error: VfsErrorEnvelope };
+
+/** Worker → panel: response to `vfs-mkdir`. */
+export type VfsMkdirResultMsg =
+  | { type: 'vfs-mkdir-result'; requestId: string; ok: true }
+  | { type: 'vfs-mkdir-result'; requestId: string; ok: false; error: VfsErrorEnvelope };
+
+/** Worker → panel: response to `vfs-rm`. */
+export type VfsRmResultMsg =
+  | { type: 'vfs-rm-result'; requestId: string; ok: true }
+  | { type: 'vfs-rm-result'; requestId: string; ok: false; error: VfsErrorEnvelope };
+
+/** Worker → panel: response to `vfs-flush`. */
+export type VfsFlushResultMsg =
+  | { type: 'vfs-flush-result'; requestId: string; ok: true }
+  | { type: 'vfs-flush-result'; requestId: string; ok: false; error: VfsErrorEnvelope };
+
+export type VfsWriteResultMsg =
+  | VfsWriteFileResultMsg
+  | VfsMkdirResultMsg
+  | VfsRmResultMsg
+  | VfsFlushResultMsg;
+
 // Detached popout messages — panel ↔ SW coordination.
 // See docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md.
 
@@ -545,6 +780,7 @@ export type PanelToOffscreenMessage =
   | SetModelMsg
   | RequestStateMsg
   | RequestScoopMessagesMsg
+  | RequestScoopTranscriptMsg
   | ClearChatMsg
   | ClearFilesystemMsg
   | RefreshModelMsg
@@ -569,6 +805,14 @@ export type PanelToOffscreenMessage =
   // `TerminalSessionHost`, ignored by `OffscreenBridge`. The full
   // envelope shape lives in `terminal-protocol.ts`.
   | TerminalControlMsg
+  // Panel-driven VFS read RPCs. Routed by the worker's `VfsRpcHost`,
+  // ignored by `OffscreenBridge`. Defined above as `VfsReadRequestMsg`.
+  | VfsReadRequestMsg
+  // Panel-driven VFS write RPCs. Routed by the worker's
+  // `VfsRpcHost` when a writable backend is wired; otherwise the
+  // host replies with an EACCES failure envelope. Ignored by
+  // `OffscreenBridge`.
+  | VfsWriteRequestMsg
   | DetachedPopoutRequestMsg
   | DetachedClaimMsg
   | LeaderSprinklesSnapshotMsg
@@ -881,6 +1125,7 @@ export type OffscreenToPanelMessage =
   | ScoopCreatedMsg
   | IncomingMessageMsg
   | ScoopMessagesReplacedMsg
+  | ScoopTranscriptMsg
   | PanelCdpResponseMsg
   | OAuthResultMsg
   | TrayRuntimeStatusMsg
@@ -892,6 +1137,12 @@ export type OffscreenToPanelMessage =
   // Terminal session events emitted by the worker's `TerminalSessionHost`.
   // Consumed by the panel's `TerminalSessionClient`.
   | TerminalEventMsg
+  // VFS read RPC responses emitted by the worker's `VfsRpcHost`.
+  // Defined above as `VfsReadResultMsg`.
+  | VfsReadResultMsg
+  // VFS write RPC responses emitted by the worker's `VfsRpcHost`.
+  // Defined above as `VfsWriteResultMsg`.
+  | VfsWriteResultMsg
   | LeaderModeChangedMsg
   | LeaderTrayResetResponseMsg
   | TrayOpenPreviewResponseMsg;

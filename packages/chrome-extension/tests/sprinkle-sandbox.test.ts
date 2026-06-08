@@ -131,6 +131,20 @@ describe('sprinkle-sandbox.html extension sandbox fixes', () => {
   });
 });
 
+describe('sprinkle-sandbox.html dip exec/agent relay allowlists', () => {
+  it('includes dip-exec and dip-agent in the child→parent bridgeTypes relay array', () => {
+    const scripts = extractScriptBlocks(sandboxHtml);
+    expect(scripts.some((s) => s.includes("'dip-exec'"))).toBe(true);
+    expect(scripts.some((s) => s.includes("'dip-agent'"))).toBe(true);
+  });
+
+  it('includes dip-exec-response and dip-agent-response in the parent→child responseTypes relay array', () => {
+    const scripts = extractScriptBlocks(sandboxHtml);
+    expect(scripts.some((s) => s.includes("'dip-exec-response'"))).toBe(true);
+    expect(scripts.some((s) => s.includes("'dip-agent-response'"))).toBe(true);
+  });
+});
+
 describe('sprinkle-sandbox.html streaming-draft dip support', () => {
   it('handles dip-draft-render by mounting a non-interactive child iframe', () => {
     const scripts = extractScriptBlocks(sandboxHtml);

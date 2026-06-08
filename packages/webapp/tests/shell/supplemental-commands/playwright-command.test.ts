@@ -56,6 +56,7 @@ function createMockBrowser(overrides: Partial<BrowserAPI> = {}): BrowserAPI {
     closePage: vi.fn().mockResolvedValue(undefined),
     sendCDP: vi.fn().mockResolvedValue({}),
     type: vi.fn().mockResolvedValue(undefined),
+    insertText: vi.fn().mockResolvedValue(undefined),
     getAccessibilityTree: vi.fn().mockResolvedValue({
       role: 'RootWebArea',
       name: 'Test Page',
@@ -553,7 +554,11 @@ describe('playwright-cli type and fill', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Filled e3 with: search term');
     expect(browser.clickByBackendNodeId).toHaveBeenCalledWith(44);
-    expect(browser.type).toHaveBeenCalledWith('search term');
+    // fill uses Input.insertText (single whole-token frame) so the
+    // node-server proxy's per-frame unmask gate can replace a masked
+    // secret in one shot — keystroke-by-keystroke type() would fragment it.
+    expect(browser.insertText).toHaveBeenCalledWith('search term');
+    expect(browser.type).not.toHaveBeenCalled();
   });
 
   it('uses native setter fallback when value does not match after typing (React-controlled input)', async () => {
@@ -670,7 +675,11 @@ describe('playwright-cli type and fill', () => {
 
     expect(result.exitCode).toBe(0);
     expect(browser.click).toHaveBeenCalled();
-    expect(browser.type).toHaveBeenCalledWith('hello');
+    // fill uses Input.insertText (single whole-token frame) so the
+    // node-server proxy's per-frame unmask gate can replace a masked
+    // secret in one shot — keystroke-by-keystroke type() would fragment it.
+    expect(browser.insertText).toHaveBeenCalledWith('hello');
+    expect(browser.type).not.toHaveBeenCalled();
     expect(clickedSelector).toContain('[contenteditable]');
     expect(clickedSelector).toContain(',');
     expect(clearScript).toBeDefined();
@@ -3495,8 +3504,9 @@ const FRAME_HTML = `<!DOCTYPE html>
 
 const chromePath = findChromeExecutable();
 const describeIntegration = chromePath ? describe : describe.skip;
+const INTEGRATION_CDP_LAUNCH_TIMEOUT_MS = Math.max(getDefaultCdpLaunchTimeoutMs(), 60_000);
 
-describeIntegration('iframe integration', { timeout: 60_000 }, () => {
+describeIntegration('iframe integration', { timeout: 90_000 }, () => {
   let server: http.Server;
   let serverPort: number;
   let chromeProcess: ChildProcess;
@@ -3530,6 +3540,7 @@ describeIntegration('iframe integration', { timeout: 60_000 }, () => {
       '--no-first-run',
       '--no-default-browser-check',
       '--disable-gpu',
+      '--disable-dev-shm-usage',
       '--disable-crash-reporter',
       `--user-data-dir=${tmpDir}`,
       'about:blank',
@@ -3543,7 +3554,7 @@ describeIntegration('iframe integration', { timeout: 60_000 }, () => {
     // because GitHub runners commonly pay a 10+ second cold-start tax.
     const cdpPort = await waitForCdpPort(chromeProcess, {
       userDataDir: tmpDir,
-      timeoutMs: Math.max(getDefaultCdpLaunchTimeoutMs(), 25_000),
+      timeoutMs: INTEGRATION_CDP_LAUNCH_TIMEOUT_MS,
     });
 
     // 3. Fetch the browser WS URL from /json/version
@@ -3558,7 +3569,7 @@ describeIntegration('iframe integration', { timeout: 60_000 }, () => {
 
     // 5. Create a mock FS for the command
     mockFs = createMockFS();
-  }, 30_000);
+  }, INTEGRATION_CDP_LAUNCH_TIMEOUT_MS + 15_000);
 
   afterAll(async () => {
     try {
@@ -4130,7 +4141,7 @@ describe('playwright-cli --discover surfaces browse.sh skills', () => {
 // browser Fetch API; the shims wrap a `SecureFetch` so those callers
 // inherit our CORS bypass + forbidden-header bridging. If the shim
 // drops `init.headers`, a caller-supplied `Origin` is silently lost on
-// the way to the proxy — breaking the Wave 1 Origin contract.
+// the way to the proxy — breaking the Origin contract.
 describe('asWebFetch — Origin propagation through SecureFetch shim', () => {
   function makeOkFetchResult() {
     return {

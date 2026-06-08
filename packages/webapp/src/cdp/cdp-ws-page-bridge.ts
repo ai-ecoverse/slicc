@@ -1,6 +1,6 @@
 /**
  * `cdp-ws-page-bridge.ts` — CDP adapter implementing `WsPageBridge`
- * for the Wave 4.1 `WsSubscriberRegistry`.
+ * for `WsSubscriberRegistry`.
  *
  * Installs the runtime-owned router (`ws-router-page.ts`) into the
  * target tab via `Page.addScriptToEvaluateOnNewDocument` (so it runs

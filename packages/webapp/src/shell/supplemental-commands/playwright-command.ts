@@ -2641,7 +2641,11 @@ export function createPlaywrightCommand(
                   sessionId!
                 );
               }
-              await browser.type(fillText);
+              // Single Input.insertText frame so the per-frame whole-token
+              // unmask gate in the node-server CDP proxy can replace a
+              // masked secret with its real value (a per-character
+              // Input.dispatchKeyEvent loop fragments the token).
+              await browser.insertText(fillText);
               // Verify value and use native setter fallback for React-controlled inputs
               if (obj?.objectId) {
                 const readResult = await transport.send(
@@ -2686,7 +2690,11 @@ export function createPlaywrightCommand(
                 return false;
               })()`
             );
-            await browser.type(fillText);
+            // Single Input.insertText frame so the per-frame whole-token
+            // unmask gate in the node-server CDP proxy can replace a
+            // masked secret with its real value (a per-character
+            // Input.dispatchKeyEvent loop fragments the token).
+            await browser.insertText(fillText);
             // Verify value and use native setter fallback for React-controlled inputs
             {
               const currentValue = (await browser.evaluate(

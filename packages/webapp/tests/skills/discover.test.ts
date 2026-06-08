@@ -11,7 +11,10 @@ describe('discoverSkills', () => {
 
   beforeEach(async () => {
     globalThis.indexedDB = new IDBFactory();
-    fs = await VirtualFS.create();
+    // VirtualFS' memory backend caches stores per dbName so multiple
+    // alive instances share state. Pass `wipe: true` here so each
+    // test starts with a clean tree.
+    fs = await VirtualFS.create({ wipe: true });
   });
 
   it('finds a skill with a SKILL.md file and uses the directory name', async () => {

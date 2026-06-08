@@ -15,10 +15,26 @@ const log = createLogger('tool:bash');
 const SEARCH_COMMAND_PREFIX =
   /^(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*(?:command\s+)?(?:grep|egrep|fgrep|rg)\b/;
 
-function getLastCommandSegment(command: string): string {
+/**
+ * Split a command line into its top-level segments, honoring quotes and
+ * escapes. Segments are separated by `;`, `|`, `&&`, and `||`; a lone `&`
+ * (background) is not treated as a separator. Raw (untrimmed) segments are
+ * returned, including any empty trailing segment after a final separator.
+ *
+ * Shared by `getLastCommandSegment` (search-output heuristic) and the
+ * command-level sudo guard, which matches each non-empty segment against the
+ * `Cmnd` policy.
+ */
+export function splitCommandSegments(command: string): string[] {
+  const segments: string[] = [];
   let current = '';
   let quote: '"' | "'" | null = null;
   let escaped = false;
+
+  const flush = () => {
+    segments.push(current);
+    current = '';
+  };
 
   for (let i = 0; i < command.length; i++) {
     const char = command[i];
@@ -47,21 +63,27 @@ function getLastCommandSegment(command: string): string {
       continue;
     }
 
-    if (char === ';' || char === '|') {
-      current = '';
+    if ((char === '&' || char === '|') && command[i + 1] === char) {
+      flush();
+      i++;
       continue;
     }
 
-    if ((char === '&' || char === '|') && command[i + 1] === char) {
-      current = '';
-      i++;
+    if (char === ';' || char === '|') {
+      flush();
       continue;
     }
 
     current += char;
   }
 
-  return current.trim();
+  flush();
+  return segments;
+}
+
+function getLastCommandSegment(command: string): string {
+  const segments = splitCommandSegments(command);
+  return (segments[segments.length - 1] ?? '').trim();
 }
 
 function isExpectedNoMatchSearch(command: string, exitCode: number, stderr: string): boolean {

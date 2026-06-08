@@ -36,8 +36,14 @@ import {
   streamSimpleAnthropic,
   streamSimpleOpenAICompletions,
 } from '@earendil-works/pi-ai';
+import { withAdaptiveThinkingShim } from '../src/providers/adaptive-thinking.js';
+import {
+  type AdobeModelMetadata,
+  enrichAdobeModel,
+} from '../src/providers/adobe-model-metadata.js';
 import { getOAuthPageOrigin } from '../src/providers/oauth-service.js';
 import { createSilentRenewBackoff } from '../src/providers/silent-renew-backoff.js';
+import { withSupportedTemperature } from '../src/providers/temperature-support.js';
 import type { OAuthLauncher, OAuthLoginOptions, ProviderConfig } from '../src/providers/types.js';
 import { getDailyAdobeUuid } from '../src/scoops/llm-session-id.js';
 import {
@@ -90,24 +96,34 @@ interface ProxyConfig {
   clientId?: string;
   scopes?: string;
   imsEnvironment?: string;
-  models?: Array<{ id: string; name?: string }>;
+  // The /v1/config response carries full per-model metadata (context_window,
+  // max_tokens, etc.) — not just id/name. Typing it as AdobeModelMetadata lets
+  // getModelIds propagate the real window through the unauthenticated fallback
+  // path, before the authenticated /v1/models cache is populated.
+  models?: AdobeModelMetadata[];
 }
 
 const proxyConfigCache = new Map<string, ProxyConfig>();
 
 // ── Proxy model metadata cache ──────────────────────────────────────
 
-interface ProxyModelEntry {
-  id: string;
-  name?: string;
-  api?: 'anthropic' | 'openai';
-  context_window?: number;
-  max_tokens?: number;
-  reasoning?: boolean;
-  input?: string[];
-}
+const proxyMetadataCache = new Map<string, AdobeModelMetadata>();
 
-const proxyMetadataCache = new Map<string, ProxyModelEntry>();
+/** Storage key for the enriched model list (read by cold consumers, e.g. the
+ * cloud cone's kernel worker on first resolve). */
+const ADOBE_MODELS_KEY = 'slicc-adobe-models';
+
+/**
+ * Persist the enriched model list so it survives a page refresh and is visible
+ * to other floats/contexts that share localStorage (page→worker shim). Named
+ * (rather than an inline `setItem`) so the side effect `refreshModels` relies on
+ * stays discoverable if `getModelIds` is ever refactored toward a pure read.
+ */
+function persistAdobeModels(models: unknown): void {
+  try {
+    localStorage.setItem(ADOBE_MODELS_KEY, JSON.stringify(models));
+  } catch {}
+}
 
 /**
  * Fetch client config from the proxy's /v1/config endpoint (unauthenticated).
@@ -250,51 +266,30 @@ export const config: ProviderConfig = {
   ],
 
   getModelIds: () => {
-    // Helper to propagate metadata from cache
-    const enrichModel = (m: { id: string; name?: string }) => {
-      const entry: any = { id: m.id, name: m.name ?? m.id };
-      const meta = proxyMetadataCache.get(m.id);
-      if (meta?.api) entry.api = meta.api;
-      if (meta?.context_window !== undefined) entry.context_window = meta.context_window;
-      if (meta?.max_tokens !== undefined) entry.max_tokens = meta.max_tokens;
-      if (meta?.reasoning !== undefined) entry.reasoning = meta.reasoning;
-      if (meta?.input) entry.input = meta.input;
-      // Adobe's IMS proxy forwards Anthropic-Messages requests to AWS Bedrock.
-      // Bedrock's Haiku endpoints currently 400 on `tools[].eager_input_streaming`
-      // ("Extra inputs are not permitted"); the same field works on Opus and
-      // Sonnet. pi-ai 0.70+ adds the field to every tool definition by default,
-      // so we turn it off only for Haiku here. pi-ai's anthropic provider then
-      // omits the field and sends the legacy
-      // `fine-grained-tool-streaming-2025-05-14` beta header instead, which
-      // Haiku-on-Bedrock accepts. The compat object travels with the
-      // ModelMetadata returned by getModelIds and is merged onto the streaming
-      // Model<Api> by provider-settings.ts:applyModelMetadata. Both
-      // getProviderModels (the picker / fallback path) and resolveModelById /
-      // resolveCurrentModel (the streaming path) preserve it.
-      if (/haiku/i.test(m.id)) {
-        entry.compat = { supportsEagerToolInputStreaming: false };
-      }
-      return entry;
-    };
+    // Merge each model with cached /v1/models metadata; the entry itself fills
+    // any gaps. The Haiku `compat` workaround and the cache-vs-entry precedence
+    // live in the pure helper (src/providers/adobe-model-metadata.ts) so they
+    // can be unit-tested without importing this DOM/chrome-bound module.
+    const enrichModel = (m: AdobeModelMetadata) =>
+      enrichAdobeModel(m, proxyMetadataCache.get(m.id));
 
     // Prefer the authenticated /v1/models response (has all available models)
     for (const models of modelsCache.values()) {
       if (models.length) {
         const result = models.map((m) => enrichModel({ id: m.id, name: m.name ?? m.id }));
-        // Persist so models survive page refresh
-        try {
-          localStorage.setItem('slicc-adobe-models', JSON.stringify(result));
-        } catch {}
+        persistAdobeModels(result); // survives refresh; read by cold consumers
         return result;
       }
     }
-    // Fall back to /v1/config response (unauthenticated, may be incomplete)
+    // Fall back to /v1/config response (unauthenticated). Entries carry their
+    // own context_window/max_tokens, so the real window survives this path even
+    // though proxyMetadataCache is empty until /v1/models is fetched.
     for (const config of proxyConfigCache.values()) {
-      if (config.models?.length) return config.models.map(enrichModel);
+      if (config.models?.length) return config.models.map((m) => enrichModel(m));
     }
     // Fall back to persisted models from a previous session
     try {
-      const persisted = localStorage.getItem('slicc-adobe-models');
+      const persisted = localStorage.getItem(ADOBE_MODELS_KEY);
       if (persisted) {
         const models = JSON.parse(persisted) as Array<
           { id: string; name?: string } & Record<string, any>
@@ -447,6 +442,19 @@ export const config: ProviderConfig = {
     const account = getAdobeAccount();
     if (!account?.accessToken) return null;
     return silentRenewToken();
+  },
+
+  // Fetch + cache the proxy model list, then persist the enriched list to
+  // localStorage so a cold consumer (the cloud cone's kernel worker) reads the
+  // full model set + 1M context window on its first resolve instead of the
+  // default sonnet. The cloud cone calls this with the injected token, before
+  // the account is saved. `getModelIds()` returns the enriched list (and
+  // persists it via `persistAdobeModels`); we persist explicitly too so this
+  // path doesn't silently depend on that side effect.
+  refreshModels: async (accessToken?: string) => {
+    await getAdobeModels(accessToken);
+    const enriched = config.getModelIds?.();
+    if (enriched?.length) persistAdobeModels(enriched);
   },
 };
 
@@ -768,7 +776,16 @@ const streamAdobe = (
           proxyModel as any,
           context,
           withSliccVersionHeader(
-            ensureSessionIdHeader({ ...options, apiKey: accessToken }, 'streamAdobe[anthropic]')
+            ensureSessionIdHeader(
+              // opus-4-8 quirks the pinned pi-ai doesn't know: it rejects
+              // `temperature` (strip it), and needs adaptive thinking instead of
+              // the legacy enabled+budget shape pi-ai emits (rewrite via onPayload).
+              withAdaptiveThinkingShim(
+                model,
+                withSupportedTemperature(model.id, model.name, { ...options, apiKey: accessToken })
+              ),
+              'streamAdobe[anthropic]'
+            )
           )
         );
         for await (const event of inner) stream.push(event as any);
@@ -820,7 +837,14 @@ const streamSimpleAdobe = (model: Model<Api>, context: Context, options?: Simple
           context,
           withSliccVersionHeader(
             ensureSessionIdHeader(
-              { ...options, apiKey: accessToken },
+              // opus-4-8 quirks the pinned pi-ai doesn't know: it rejects
+              // `temperature` (strip it — also covers thinking-disabled quick-llm
+              // helpers), and needs adaptive thinking instead of the legacy
+              // enabled+budget shape pi-ai emits (rewrite via onPayload).
+              withAdaptiveThinkingShim(
+                model,
+                withSupportedTemperature(model.id, model.name, { ...options, apiKey: accessToken })
+              ),
               'streamSimpleAdobe[anthropic]'
             )
           ) as any
@@ -842,13 +866,15 @@ const streamSimpleAdobe = (model: Model<Api>, context: Context, options?: Simple
 
 // ── Model list ──────────────────────────────────────────────────────
 
-async function fetchProxyModels(): Promise<Model<Api>[]> {
+async function fetchProxyModels(accessToken?: string): Promise<Model<Api>[] | null> {
   try {
-    const accessToken = await getValidAccessToken();
+    // Pre-warm callers (cloud cone, before the account is persisted) pass the
+    // token explicitly; everyone else reads it from the saved account.
+    const token = accessToken ?? (await getValidAccessToken());
     const endpoint = getProxyEndpoint();
     const res = await fetch(`${endpoint}/v1/models`, {
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        Authorization: `Bearer ${token}`,
         [SLICC_VERSION_HEADER]: __SLICC_VERSION__,
       },
     });
@@ -857,7 +883,7 @@ async function fetchProxyModels(): Promise<Model<Api>[]> {
       if (data.data?.length) {
         // Store metadata from proxy response for later use in getModelIds()
         for (const pm of data.data) {
-          const entry: ProxyModelEntry = { id: pm.id, name: pm.name };
+          const entry: AdobeModelMetadata = { id: pm.id, name: pm.name };
           if (pm.api !== undefined) entry.api = pm.api;
           if (pm.context_window !== undefined) entry.context_window = pm.context_window;
           if (pm.max_tokens !== undefined) entry.max_tokens = pm.max_tokens;
@@ -909,19 +935,35 @@ async function fetchProxyModels(): Promise<Model<Api>[]> {
     );
   }
 
-  const anthropicModels = getModels('anthropic' as any) as Model<Api>[];
-  return anthropicModels.map((m) => ({ ...m, provider: 'adobe', api: 'adobe-anthropic' as Api }));
+  // Fetch failed / returned no models — signal failure (null) so getAdobeModels
+  // can serve the Anthropic fallback WITHOUT caching it. Caching the fallback
+  // here would poison modelsCache (which is never invalidated) for the whole
+  // session, so a transient pre-warm failure would stick a degraded, 200K-window
+  // list even after a valid token is available.
+  return null;
 }
 
 const modelsCache = new Map<string, Model<Api>[]>();
 
-export async function getAdobeModels(): Promise<Model<Api>[]> {
+/** Anthropic-registry models tagged as Adobe — the best-effort fallback when
+ * the proxy `/v1/models` fetch fails. Intentionally NOT cached by callers. */
+function adobeAnthropicFallbackModels(): Model<Api>[] {
+  const anthropicModels = getModels('anthropic' as any) as Model<Api>[];
+  return anthropicModels.map((m) => ({ ...m, provider: 'adobe', api: 'adobe-anthropic' as Api }));
+}
+
+export async function getAdobeModels(accessToken?: string): Promise<Model<Api>[]> {
   const endpoint = getProxyEndpoint();
   const cached = modelsCache.get(endpoint);
   if (cached) return cached;
-  const models = await fetchProxyModels();
-  modelsCache.set(endpoint, models);
-  return models;
+  const models = await fetchProxyModels(accessToken);
+  if (models) {
+    modelsCache.set(endpoint, models); // cache only a real /v1/models success
+    return models;
+  }
+  // Uncached fallback: a later call (with a valid saved token) retries and can
+  // populate the real list.
+  return adobeAnthropicFallbackModels();
 }
 
 // ── Registration ────────────────────────────────────────────────────

@@ -61,6 +61,22 @@ describe('SecretProxyManager', () => {
     expect(result.text).toBe('Bearer ghp_realtoken123456789abcdef');
   });
 
+  it('layers session secrets into the pipeline without persisting them', async () => {
+    manager.sessionStore.set('SESSION_KEY', 'sess-real-value', ['api.session.com']);
+    await manager.reload();
+
+    const entry = manager.getMaskedEntries().find((e) => e.name === 'SESSION_KEY');
+    expect(entry).toBeDefined();
+    expect(entry!.domains).toEqual(['api.session.com']);
+
+    const result = manager.unmask(`Bearer ${entry!.maskedValue}`, 'api.session.com');
+    expect(result.forbidden).toBeUndefined();
+    expect(result.text).toBe('Bearer sess-real-value');
+
+    // The persisted env file is untouched by the session secret.
+    expect(new EnvSecretStore(filePath).get('SESSION_KEY')).toBeNull();
+  });
+
   it('blocks unmask when domain is not allowed', async () => {
     await manager.reload();
     const gh = manager.getMaskedEntries().find((e) => e.name === 'GITHUB_TOKEN')!;

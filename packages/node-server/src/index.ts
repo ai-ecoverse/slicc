@@ -1,22 +1,27 @@
 #!/usr/bin/env node
 import { promises as fsPromises } from 'node:fs';
 import { createSubstrate } from '@slicc/cloud-core';
+import { previewSecret } from '@slicc/shared-ts';
 import { type ChildProcess, spawn } from 'child_process';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { existsSync, readFileSync } from 'fs';
 import { createServer } from 'http';
 import { createServer as createNetServer } from 'net';
 import { homedir } from 'os';
-import { dirname, join, resolve, sep } from 'path';
+import { basename, dirname, join, resolve, sep } from 'path';
 import { Readable, Transform } from 'stream';
 import { StringDecoder } from 'string_decoder';
 import { fileURLToPath } from 'url';
 import { WebSocket, WebSocketServer } from 'ws';
+import { applyCdpUnmask } from './cdp-proxy/cdp-unmask.js';
+import { createCdpSessionUrlTracker } from './cdp-proxy/session-url-tracker.js';
 import {
   buildChromeLaunchArgs,
   clearStaleDevToolsActivePort,
   ensureQaProfileScaffold,
   findChromeExecutable,
+  legacyChromeCandidates,
+  migrateLegacyDefaultChromeProfile,
   planChromeSpawn,
   resolveChromeLaunchProfile,
   waitForCdpPort,
@@ -49,6 +54,7 @@ import { SecretProxyManager } from './secrets/proxy-manager.js';
 import { readOrCreateSessionId } from './secrets/session-id-file.js';
 import { handleDaSignAndForward, handleS3SignAndForward } from './secrets/sign-and-forward.js';
 import { registerSecretsReloadEndpoint } from './secrets-reload-endpoint.js';
+import { registerSudoApproveEndpoint } from './sudo/endpoint.js';
 
 const Dirname = fileURLToPath(new URL('.', import.meta.url));
 const PROJECT_ROOT = resolve(Dirname, '..', '..');
@@ -556,7 +562,6 @@ async function main() {
       try {
         const resolved = resolveChromeLaunchProfile({
           projectRoot: PROJECT_ROOT,
-          tmpDir: process.env['TMPDIR'] ?? '/tmp',
           profile: RUNTIME_FLAGS.profile,
           servePort: SERVE_PORT,
         });
@@ -582,6 +587,12 @@ async function main() {
 
     if (chromeProfile.id) {
       await ensureQaProfileScaffold(PROJECT_ROOT);
+    } else if (!RUNTIME_FLAGS.hosted) {
+      const profileDirName = basename(chromeProfile.userDataDir);
+      await migrateLegacyDefaultChromeProfile(
+        chromeProfile.userDataDir,
+        legacyChromeCandidates(profileDirName)
+      );
     }
 
     if (chromeProfile.extensionPath && !existsSync(chromeProfile.extensionPath)) {
@@ -1094,6 +1105,96 @@ async function main() {
     }
   });
 
+  // Persisted-set — write a secret to ~/.slicc/secrets.env. Gated by the agent's
+  // intrinsic sudo prompt before the request is ever sent.
+  app.post('/api/secrets', express.json(), async (req, res) => {
+    const { name, value, domains } = req.body ?? {};
+    if (
+      typeof name !== 'string' ||
+      typeof value !== 'string' ||
+      !Array.isArray(domains) ||
+      domains.some((d) => typeof d !== 'string')
+    ) {
+      return res.status(400).json({ error: 'bad-request' });
+    }
+    try {
+      secretStore.set(name, value, domains);
+      await secretProxy.reload();
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to set secret' });
+    }
+  });
+
+  // Scope edit — update the allowed domains of an existing secret (persisted or
+  // session), preserving the value. Gated by the agent before sending.
+  app.post('/api/secrets/scope', express.json(), async (req, res) => {
+    const { name, domains } = req.body ?? {};
+    if (
+      typeof name !== 'string' ||
+      !Array.isArray(domains) ||
+      domains.some((d) => typeof d !== 'string')
+    ) {
+      return res.status(400).json({ error: 'bad-request' });
+    }
+    try {
+      if (secretProxy.sessionStore.has(name)) {
+        secretProxy.sessionStore.setDomains(name, domains);
+      } else {
+        const existing = secretStore.get(name);
+        if (!existing) return res.status(404).json({ error: `no secret named "${name}"` });
+        secretStore.set(name, existing.value, domains);
+      }
+      await secretProxy.reload();
+      res.json({ ok: true });
+    } catch (err) {
+      res
+        .status(500)
+        .json({ error: err instanceof Error ? err.message : 'Failed to update scope' });
+    }
+  });
+
+  // Session secrets — in-memory only, never written to disk. Free for the agent
+  // to create; the masking pipeline picks them up on the reload below.
+  app.get('/api/secrets/session', (_req, res) => {
+    res.json(secretProxy.sessionStore.list());
+  });
+
+  app.post('/api/secrets/session', express.json(), async (req, res) => {
+    const { name, value, domains } = req.body ?? {};
+    if (
+      typeof name !== 'string' ||
+      typeof value !== 'string' ||
+      (domains !== undefined &&
+        (!Array.isArray(domains) || domains.some((d) => typeof d !== 'string')))
+    ) {
+      return res.status(400).json({ error: 'bad-request' });
+    }
+    secretProxy.sessionStore.set(name, value, Array.isArray(domains) ? domains : []);
+    await secretProxy.reload();
+    res.json({ ok: true });
+  });
+
+  // Peek — elided preview of the unmasked value (session or persisted). The
+  // full value never leaves the server.
+  app.get('/api/secrets/peek', (req, res) => {
+    const name = typeof req.query.name === 'string' ? req.query.name : '';
+    if (!name) return res.status(400).json({ error: 'bad-request' });
+    const session = secretProxy.sessionStore.getRecord(name);
+    if (session) {
+      return res.json({ name, preview: previewSecret(session.value), domains: session.domains });
+    }
+    const persisted = secretStore.get(name);
+    if (persisted) {
+      return res.json({
+        name,
+        preview: previewSecret(persisted.value),
+        domains: persisted.domains,
+      });
+    }
+    return res.status(404).json({ error: `no secret named "${name}"` });
+  });
+
   // S3 sign-and-forward — browser-side mount backend posts envelopes here;
   // server resolves the s3.<profile>.* secrets, signs SigV4 v4, forwards to
   // the upstream, returns the response as a JSON envelope. The browser
@@ -1152,6 +1253,27 @@ async function main() {
     }
   });
 
+  // Tool-output real→masked scrub. The browser-side agent realm
+  // never holds real secret values, so the defense-in-depth scrub of
+  // bash / read_file / other tool results runs here against the
+  // node-server-owned `SecretProxyManager`. Direction is real→masked
+  // ONLY (`scrubResponse`), so it is always safe and is idempotent
+  // for already-masked tokens and secret-free output. The caller
+  // (`packages/webapp/src/core/secret-scrub.ts`) treats any non-2xx
+  // or malformed response as "return input unchanged" — the scrub is
+  // defense-in-depth, not the primary defense.
+  app.post('/api/secrets/scrub', express.json({ limit: '32mb' }), (req, res) => {
+    const text = req.body?.text;
+    if (typeof text !== 'string') {
+      return res.status(400).json({ error: 'bad-request' });
+    }
+    try {
+      res.json({ text: secretProxy.scrubResponse(text) });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'scrub failed', text });
+    }
+  });
+
   // Masked secrets endpoint — returns name + maskedValue pairs for shell env population.
   // The browser fetches this at shell init to populate env vars with masked values.
   // Real values are never exposed; only deterministic session-scoped masks.
@@ -1204,6 +1326,11 @@ async function main() {
     registerHostedBootstrapEndpoint(app, { secretStore });
     registerSecretsReloadEndpoint(app, { secretProxy });
   }
+
+  // Sudo approval endpoint — raises a native OS dialog / TTY prompt from this
+  // trusted process so the in-browser agent can request, but never fabricate,
+  // an approval. Loopback-only; selects a backend by environment at call time.
+  registerSudoApproveEndpoint(app);
 
   // Fetch proxy — forwards cross-origin requests from the browser to bypass CORS.
   // Used by just-bash's curl which calls the browser's fetch() API.
@@ -1681,6 +1808,10 @@ async function main() {
   let activeClientWs: WebSocket | null = null;
   let messageBuffer: unknown[] | null = null;
   const cdpDedup = new CliLogDedup();
+  // Tracks per-session current URL by sniffing Chrome→Client events; feeds
+  // the Client→Chrome unmask gate so per-frame unmasking is scoped to
+  // the target tab's actual hostname (fail-closed when unknown).
+  const cdpSessionUrls = createCdpSessionUrlTracker();
 
   // Ensure everything is cleaned up when CLI exits
   const gracefulShutdown = async () => {
@@ -1773,13 +1904,26 @@ async function main() {
     }
   });
 
+  // Apply the Client→Chrome unmask gate to a buffered frame on flush.
+  // Defined here so both buffer-drain sites (ensureChromeConnection
+  // already-open path + chromeWs 'open' handler) share one
+  // implementation; falls back to the original bytes on any error.
+  const flushClientFrame = (target: WebSocket, raw: unknown): void => {
+    const original = String(raw);
+    const { output } = applyCdpUnmask(original, {
+      tracker: cdpSessionUrls,
+      pipeline: secretProxy.rawPipeline,
+    });
+    target.send(output);
+  };
+
   function ensureChromeConnection(url: string): Promise<void> {
     return new Promise((resolve, reject) => {
       if (chromeWs && chromeWs.readyState === WebSocket.OPEN) {
         // Already connected — flush any buffered messages and go direct
         if (messageBuffer) {
           for (const msg of messageBuffer) {
-            chromeWs.send(String(msg));
+            flushClientFrame(chromeWs, msg);
           }
           messageBuffer = null;
         }
@@ -1813,7 +1957,7 @@ async function main() {
         // Flush buffered messages
         if (messageBuffer) {
           for (const msg of messageBuffer) {
-            chromeWs!.send(String(msg));
+            flushClientFrame(chromeWs!, msg);
           }
           messageBuffer = null;
         }
@@ -1887,6 +2031,9 @@ async function main() {
         const preview = str.slice(0, 200);
         const msg = `[cdp-proxy] Chrome→Client: ${preview}`;
         if (cdpDedup.shouldLog(msg)) console.debug(msg);
+        // Sniff Target.attachedToTarget / targetInfoChanged / Page.frameNavigated
+        // so the Client→Chrome unmask gate can resolve per-session hostnames.
+        cdpSessionUrls.observeChromeToClient(str);
         if (activeClientWs && activeClientWs.readyState === WebSocket.OPEN) {
           activeClientWs.send(str);
         }
@@ -1924,12 +2071,19 @@ async function main() {
 
       // Register ALL handlers BEFORE any async work so no messages are lost
       clientWs.on('message', (data) => {
-        const preview = String(data).slice(0, 200);
+        const original = String(data);
+        const preview = original.slice(0, 200);
         if (chromeWs && chromeWs.readyState === WebSocket.OPEN && messageBuffer === null) {
           const msg = `[cdp-proxy] Client→Chrome: ${preview}`;
           if (cdpDedup.shouldLog(msg)) console.debug(msg);
-          chromeWs.send(String(data));
+          const { output } = applyCdpUnmask(original, {
+            tracker: cdpSessionUrls,
+            pipeline: secretProxy.rawPipeline,
+          });
+          chromeWs.send(output);
         } else if (messageBuffer !== null) {
+          // Buffer the ORIGINAL bytes; unmask runs on flush so the
+          // hostname tracker reflects the state at send time.
           messageBuffer.push(data);
           const msg = `[cdp-proxy] Client→Chrome (buffered): ${preview}`;
           if (cdpDedup.shouldLog(msg)) console.debug(msg);

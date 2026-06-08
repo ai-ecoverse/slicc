@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sliccy Error Logo Preview</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        background: #f5f5f5;
+        color: #333;
+        min-height: 100vh;
+        padding: 20px;
+      }
+      h1 {
+        font-size: 1.4em;
+        margin-bottom: 20px;
+      }
+      .controls {
+        background: #fff;
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        padding: 16px 20px;
+        margin-bottom: 24px;
+        max-width: 1000px;
+      }
+      .control-group {
+        margin-bottom: 12px;
+      }
+      .control-group:last-child {
+        margin-bottom: 0;
+      }
+      label {
+        display: block;
+        margin-bottom: 5px;
+        font-size: 0.9em;
+      }
+      input[type='range'] {
+        width: 100%;
+        max-width: 400px;
+        vertical-align: middle;
+      }
+      .value-display {
+        font-size: 0.85em;
+        color: #666;
+        margin-left: 8px;
+      }
+      .mode-section {
+        margin-bottom: 28px;
+      }
+      .mode-section h2 {
+        font-size: 1em;
+        margin-bottom: 10px;
+        padding-bottom: 4px;
+        border-bottom: 1px solid #ccc;
+      }
+      .tile-row {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .tile {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        width: 140px;
+      }
+      .tile-label {
+        font-size: 0.75em;
+        margin-bottom: 4px;
+        opacity: 0.7;
+      }
+      .tile-canvas {
+        width: 140px;
+        height: 140px;
+        position: relative;
+        border: 1px dashed #ccc;
+      }
+      .mode-section.mono-dark .tile-canvas {
+        background: #1a1a1a;
+        border-color: #444;
+      }
+      .mode-section.mono-dark h2 {
+        color: #555;
+      }
+      .tile-canvas svg {
+        width: 100%;
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>🍦 Sliccy Error Logo Preview (crossed-out eyes)</h1>
+
+    <div class="controls">
+      <div class="control-group">
+        <label
+          >Cross length (× eye radius):
+          <span class="value-display" id="cross-length-val">0.50</span></label
+        >
+        <input type="range" id="cross-length" min="0.5" max="2" step="0.05" value="0.5" />
+      </div>
+      <div class="control-group">
+        <label
+          >Cross thickness (SVG units):
+          <span class="value-display" id="cross-thickness-val">15</span></label
+        >
+        <input type="range" id="cross-thickness" min="4" max="40" step="1" value="15" />
+      </div>
+    </div>
+
+    <div class="mode-section" data-mode="color">
+      <h2>Color</h2>
+      <div class="tile-row" id="row-color"></div>
+    </div>
+    <div class="mode-section" data-mode="mono-light">
+      <h2>Mono Light</h2>
+      <div class="tile-row" id="row-mono-light"></div>
+    </div>
+    <div class="mode-section mono-dark" data-mode="mono-dark">
+      <h2>Mono Dark</h2>
+      <div class="tile-row" id="row-mono-dark"></div>
+    </div>
+
+    <script>
+      // Eye geometry (from Sliccy Logo.svg, reused from logo-editor.html).
+      const RIGHT_EYE_C = { x: 383.4, y: 216.12 };
+      const LEFT_EYE_C = { x: 175.1, y: 250.34 };
+      const EYE_RADIUS = 64.78;
+
+      // Palettes mirror logo-editor.html so the colors match across previews.
+      const coneColors = {
+        base: '#D2691E',
+        crosshatch: '#E8A75C',
+        outline: '#8B4513',
+      };
+      const scoopColors = [
+        { base: '#FFB6C1', dark: '#E89AAB' },
+        { base: '#98FB98', dark: '#7FD87F' },
+        { base: '#87CEEB', dark: '#6BB6D8' },
+        { base: '#DDA0DD', dark: '#C77DC7' },
+        { base: '#F0E68C', dark: '#D4C970' },
+        { base: '#FFD700', dark: '#E6C200' },
+        { base: '#FFA07A', dark: '#E88A64' },
+        { base: '#DEB887', dark: '#C8A277' },
+        { base: '#F08080', dark: '#D86A6A' },
+        { base: '#E0BBE4', dark: '#C9A5CD' },
+      ];
+
+      // Fixed defaults from logo-editor.html so layout matches its previews.
+      const LAYOUT = {
+        offset: 95,
+        scaleDecay: 0.95,
+        wobble: 14,
+        angularWobble: 8,
+        conePush: -21,
+        midrangeScale: 1.0,
+        midrangeY: 0,
+      };
+
+      const MODES = ['color', 'mono-light', 'mono-dark'];
+      const SCOOP_COUNTS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+      let scoopTemplate = null;
+      let coneTemplate = null;
+
+      // Canonical wobble seeds derived from sliccy-color-10scoops.svg so the
+      // error variants line up scoop-for-scoop with the existing logos.
+      // Each entry is { x: (tx-288)/14, angle: rot/8 } from that file's
+      // scoop transforms; index 0 is the base scoop with no wobble.
+      const wobbleSeeds = [
+        { x: 0, angle: 0 },
+        { x: -0.310039355037763, angle: 0.1913388171901651 },
+        { x: -0.8384358170484104, angle: 0.9362698756918275 },
+        { x: 0.47107200968630586, angle: 0.4856391041079866 },
+        { x: -0.41444869051984157, angle: -0.7088205120681517 },
+        { x: 0.33928351181225885, angle: -0.08562223417652248 },
+        { x: 0.10576171047799628, angle: 0.9003392078419594 },
+        { x: 0.5975725564377277, angle: 0.7722797611907217 },
+        { x: 0.5300881075925759, angle: 0.12269125761071353 },
+        { x: 0.9181585249482599, angle: -0.21553873797191025 },
+      ];
+
+      async function loadSVG() {
+        const response = await fetch('Sliccy Logo.svg');
+        const text = await response.text();
+        const svgDoc = new DOMParser().parseFromString(text, 'image/svg+xml');
+        scoopTemplate = {
+          outline: svgDoc.getElementById('Scoop_Outline').cloneNode(true),
+          rightEye: svgDoc.getElementById('Right_Eye').cloneNode(true),
+          leftEye: svgDoc.getElementById('Left_Eye').cloneNode(true),
+        };
+        coneTemplate = svgDoc.getElementById('Cone').cloneNode(true);
+
+        buildTiles();
+        render();
+      }
+
+      function buildTiles() {
+        MODES.forEach((mode) => {
+          const row = document.getElementById(`row-${mode}`);
+          row.innerHTML = '';
+          SCOOP_COUNTS.forEach((count) => {
+            const tile = document.createElement('div');
+            tile.className = 'tile';
+            tile.innerHTML = `
+              <div class="tile-label">${count} scoop${count === 1 ? '' : 's'}</div>
+              <div class="tile-canvas" id="canvas-${mode}-${count}"></div>
+            `;
+            row.appendChild(tile);
+          });
+        });
+      }
+
+      function applyConeColors(cone, colorMode) {
+        if (colorMode === 'mono-light') {
+          cone.querySelectorAll('[style*="fill"]').forEach((e) => {
+            e.style.fill = e.id === 'Cone_Bottom' || e.id === 'Cone_Top' ? '#fff' : '#000';
+          });
+          cone
+            .querySelectorAll('path:not([style*="fill"]), rect:not([style*="fill"])')
+            .forEach((e) => {
+              e.style.fill = '#000';
+            });
+          cone.querySelectorAll('[style*="stroke"]').forEach((e) => {
+            e.style.stroke = '#000';
+          });
+        } else if (colorMode === 'mono-dark') {
+          cone.querySelectorAll('[style*="fill"]').forEach((e) => {
+            e.style.fill = e.id === 'Cone_Bottom' || e.id === 'Cone_Top' ? '#222' : '#fff';
+          });
+          cone
+            .querySelectorAll('path:not([style*="fill"]), rect:not([style*="fill"])')
+            .forEach((e) => {
+              e.style.fill = '#fff';
+            });
+          cone.querySelectorAll('[style*="stroke"]').forEach((e) => {
+            e.style.stroke = '#fff';
+          });
+        } else {
+          cone.querySelectorAll('[style*="fill"]').forEach((e) => {
+            e.style.fill =
+              e.id === 'Cone_Bottom' || e.id === 'Cone_Top'
+                ? coneColors.base
+                : coneColors.crosshatch;
+          });
+          cone
+            .querySelectorAll('path:not([style*="fill"]), rect:not([style*="fill"])')
+            .forEach((e) => {
+              e.style.fill = coneColors.crosshatch;
+            });
+          cone.querySelectorAll('[style*="stroke"]').forEach((e) => {
+            e.style.stroke = coneColors.outline;
+          });
+        }
+      }
+
+      function applyEyeColors(rightEye, leftEye, colorMode) {
+        [rightEye, leftEye].forEach((eye) => {
+          const outline = eye.querySelector('circle');
+          const pupil = eye.querySelector('path');
+          if (colorMode === 'mono-dark') {
+            if (outline) {
+              outline.style.fill = '#000';
+              outline.style.stroke = '#fff';
+            }
+            if (pupil) pupil.style.fill = '#fff';
+          } else {
+            // mono-light and color share the same eye palette in logo-editor
+            if (outline) {
+              outline.style.fill = '#fff';
+              outline.style.stroke = '#000';
+            }
+            if (pupil) pupil.style.fill = '#000';
+          }
+        });
+      }
+
+      function makeCross(center, arm, thickness, color) {
+        const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        const mkLine = (x1, y1, x2, y2) => {
+          const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+          line.setAttribute('x1', x1);
+          line.setAttribute('y1', y1);
+          line.setAttribute('x2', x2);
+          line.setAttribute('y2', y2);
+          line.setAttribute('stroke', color);
+          line.setAttribute('stroke-width', thickness);
+          line.setAttribute('stroke-linecap', 'round');
+          return line;
+        };
+        // Diagonal from top-left to bottom-right
+        group.appendChild(
+          mkLine(center.x - arm, center.y - arm, center.x + arm, center.y + arm)
+        );
+        // Diagonal from bottom-left to top-right
+        group.appendChild(
+          mkLine(center.x - arm, center.y + arm, center.x + arm, center.y - arm)
+        );
+        return group;
+      }
+
+      function darkenColor(hex, percent = 20) {
+        const r = parseInt(hex.slice(1, 3), 16);
+        const g = parseInt(hex.slice(3, 5), 16);
+        const b = parseInt(hex.slice(5, 7), 16);
+        const f = (v) => Math.max(0, Math.floor(v * (1 - percent / 100)));
+        return `#${[f(r), f(g), f(b)].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+      }
+
+      function applyScoopColors(outline, scoopIndex, colorMode, svgRoot, idPrefix) {
+        if (colorMode === 'mono-light') {
+          outline.style.fill = '#fff';
+          outline.style.stroke = '#000';
+        } else if (colorMode === 'mono-dark') {
+          outline.style.fill = '#222';
+          outline.style.stroke = '#fff';
+        } else {
+          const colorData = scoopColors[scoopIndex % scoopColors.length];
+          const baseColor = colorData.base;
+          const darkColor = colorData.dark;
+          const outlineColor = darkenColor(darkColor, 20);
+
+          // IDs must be unique across the page (33 SVGs in the same DOM),
+          // so namespace the gradient by mode + count + scoop index.
+          const gradientId = `scoop-gradient-${idPrefix}-${scoopIndex}`;
+
+          let defs = svgRoot.querySelector('defs');
+          if (!defs) {
+            defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+            svgRoot.insertBefore(defs, svgRoot.firstChild);
+          }
+
+          const gradient = document.createElementNS(
+            'http://www.w3.org/2000/svg',
+            'linearGradient'
+          );
+          gradient.setAttribute('id', gradientId);
+          gradient.setAttribute('x1', '0%');
+          gradient.setAttribute('y1', '0%');
+          gradient.setAttribute('x2', '100%');
+          gradient.setAttribute('y2', '100%');
+
+          const stop1 = document.createElementNS('http://www.w3.org/2000/svg', 'stop');
+          stop1.setAttribute('offset', '0%');
+          stop1.setAttribute('style', `stop-color:${baseColor};stop-opacity:1`);
+          const stop2 = document.createElementNS('http://www.w3.org/2000/svg', 'stop');
+          stop2.setAttribute('offset', '100%');
+          stop2.setAttribute('style', `stop-color:${darkColor};stop-opacity:1`);
+          gradient.appendChild(stop1);
+          gradient.appendChild(stop2);
+          defs.appendChild(gradient);
+
+          outline.style.fill = `url(#${gradientId})`;
+          outline.style.stroke = outlineColor;
+        }
+      }
+
+      // Strip the pupil <path> from each eye and append two crossing <line>s
+      // so the error treatment scales with whatever parent group the eyes
+      // live in (cone group for count=0, top scoop group otherwise).
+      function applyErrorEyes(rightEye, leftEye, parent, armLength, thickness, crossColor) {
+        [rightEye, leftEye].forEach((eye) => {
+          eye.querySelectorAll('path').forEach((p) => p.remove());
+        });
+        parent.appendChild(makeCross(RIGHT_EYE_C, armLength, thickness, crossColor));
+        parent.appendChild(makeCross(LEFT_EYE_C, armLength, thickness, crossColor));
+      }
+
+      // Ported from logo-editor.html renderLogo(), using the constant LAYOUT
+      // defaults and skipping the eye-transform / animation knobs (all 1.0 / 0).
+      function renderLogo(container, count, colorMode, idPrefix, armLength, thickness) {
+        const { offset, scaleDecay, wobble, angularWobble, conePush, midrangeScale, midrangeY } =
+          LAYOUT;
+        const crossColor = colorMode === 'mono-dark' ? '#fff' : '#000';
+
+        const t = count / 10;
+        let baseY = -175 + t * (512 - -175);
+        let overallScale = 1.25 + t * (1.1 - 1.25);
+
+        if (count >= 1 && count <= 9) {
+          let scaleFactor;
+          if (count <= 2) {
+            scaleFactor = 0.9;
+          } else if (count <= 5) {
+            scaleFactor = 0.9 + ((count - 2) * (0.95 - 0.9)) / (5 - 2);
+          } else {
+            scaleFactor = 0.95 + (Math.min(count - 5, 2) * (1.0 - 0.95)) / (7 - 5);
+          }
+          let yOffset;
+          if (count === 1) yOffset = 100;
+          else if (count <= 5) yOffset = 120;
+          else if (count === 6) yOffset = 115;
+          else if (count === 7) yOffset = 110;
+          else if (count === 8) yOffset = 80;
+          else yOffset = 50;
+          overallScale *= scaleFactor * midrangeScale;
+          baseY += yOffset + midrangeY;
+        }
+
+        const viewBoxWidth = 1024;
+        const viewBoxHeight = 1024;
+        const contentWidth = 576.75;
+        const xOffset = (viewBoxWidth - contentWidth) / 2;
+
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('viewBox', `0 0 ${viewBoxWidth} ${viewBoxHeight}`);
+        svg.setAttribute('width', '100%');
+        svg.setAttribute('height', '100%');
+
+        const mainGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        const conePushTotal = (count - 1) * conePush;
+        const totalHeight = 887.3 + (count - 1) * offset + conePushTotal;
+        const sf = Math.min(1, 900 / totalHeight) * overallScale;
+        const translateY = (viewBoxHeight - totalHeight * sf) / 2 + baseY;
+        const translateX = xOffset + (contentWidth - contentWidth * sf) / 2;
+        mainGroup.setAttribute('transform', `translate(${translateX}, ${translateY}) scale(${sf})`);
+
+        const coneGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        coneGroup.setAttribute('transform', `translate(0, ${conePushTotal})`);
+        const cone = coneTemplate.cloneNode(true);
+        applyConeColors(cone, colorMode);
+        coneGroup.appendChild(cone);
+
+        // 0 scoops: eyes sit on the cone itself — that's the "error" target here.
+        if (count === 0) {
+          const rightEye = scoopTemplate.rightEye.cloneNode(true);
+          const leftEye = scoopTemplate.leftEye.cloneNode(true);
+          applyEyeColors(rightEye, leftEye, colorMode);
+          coneGroup.appendChild(rightEye);
+          coneGroup.appendChild(leftEye);
+          applyErrorEyes(rightEye, leftEye, coneGroup, armLength, thickness, crossColor);
+        }
+        mainGroup.appendChild(coneGroup);
+
+        for (let i = 0; i < count; i++) {
+          const scoopGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+          const scoopsAbove = count - 1 - i;
+          const pushDown = scoopsAbove * conePush;
+          const scoopY = -i * offset + pushDown;
+          const scoopX = i > 0 ? wobbleSeeds[i].x * wobble : 0;
+          const scoopAngle = i > 0 ? wobbleSeeds[i].angle * angularWobble : 0;
+          const scoopScale = Math.pow(scaleDecay, i);
+          const centerX = 288;
+          const centerY = 250;
+          scoopGroup.setAttribute(
+            'transform',
+            `translate(${centerX + scoopX}, ${centerY + scoopY}) rotate(${scoopAngle}) scale(${scoopScale}) translate(${-centerX}, ${-centerY})`
+          );
+
+          const outline = scoopTemplate.outline.cloneNode(true);
+          applyScoopColors(outline, i, colorMode, svg, idPrefix);
+          scoopGroup.appendChild(outline);
+
+          // Eyes (and the X) only on the top scoop.
+          if (i === count - 1) {
+            const rightEye = scoopTemplate.rightEye.cloneNode(true);
+            const leftEye = scoopTemplate.leftEye.cloneNode(true);
+            applyEyeColors(rightEye, leftEye, colorMode);
+            scoopGroup.appendChild(rightEye);
+            scoopGroup.appendChild(leftEye);
+            applyErrorEyes(rightEye, leftEye, scoopGroup, armLength, thickness, crossColor);
+          }
+          mainGroup.appendChild(scoopGroup);
+        }
+
+        svg.appendChild(mainGroup);
+        container.innerHTML = '';
+        container.appendChild(svg);
+      }
+
+      function render() {
+        if (!coneTemplate) return;
+        const lengthMult = parseFloat(document.getElementById('cross-length').value);
+        const thickness = parseInt(document.getElementById('cross-thickness').value);
+        const armLength = EYE_RADIUS * lengthMult;
+        MODES.forEach((mode) => {
+          SCOOP_COUNTS.forEach((count) => {
+            const container = document.getElementById(`canvas-${mode}-${count}`);
+            renderLogo(container, count, mode, `${mode}-${count}`, armLength, thickness);
+          });
+        });
+      }
+
+      document.getElementById('cross-length').addEventListener('input', (e) => {
+        document.getElementById('cross-length-val').textContent =
+          parseFloat(e.target.value).toFixed(2);
+        render();
+      });
+      document.getElementById('cross-thickness').addEventListener('input', (e) => {
+        document.getElementById('cross-thickness-val').textContent = e.target.value;
+        render();
+      });
+
+      loadSVG();
+    </script>
+  </body>
+</html>

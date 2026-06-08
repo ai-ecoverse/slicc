@@ -105,17 +105,126 @@ final class ChromeLauncherTests: XCTestCase {
         XCTAssertEqual(Array(args.suffix(chromeArgs.count)), chromeArgs)
     }
 
+    func testResolveUserDataDirDefaultsToApplicationSupportInHomeDir() {
+        let launcher = makeLauncher(homeDirectory: "/Users/test")
+
+        XCTAssertEqual(
+            launcher.resolveUserDataDir(),
+            "/Users/test/Library/Application Support/Slicc/profiles/browser-coding-agent-chrome"
+        )
+    }
+
     func testResolveUserDataDirAddsSuffixForNonDefaultServePort() {
-        let launcher = makeLauncher(environment: ["TMPDIR": "/tmp/runtime"])
+        let launcher = makeLauncher(homeDirectory: "/Users/test")
 
         XCTAssertEqual(
             launcher.resolveUserDataDir(servePort: 5720),
-            "/tmp/runtime/browser-coding-agent-chrome-5720"
+            "/Users/test/Library/Application Support/Slicc/profiles/browser-coding-agent-chrome-5720"
         )
         XCTAssertEqual(
             launcher.resolveUserDataDir(servePort: 5710),
-            "/tmp/runtime/browser-coding-agent-chrome"
+            "/Users/test/Library/Application Support/Slicc/profiles/browser-coding-agent-chrome"
         )
+    }
+
+    func testResolveUserDataDirHonorsExplicitTmpDirOverride() {
+        let launcher = makeLauncher(homeDirectory: "/Users/test")
+
+        XCTAssertEqual(
+            launcher.resolveUserDataDir(tmpDir: "/custom/profiles", servePort: 5720),
+            "/custom/profiles/browser-coding-agent-chrome-5720"
+        )
+    }
+
+    func testLegacyChromeCandidatesOrdersPreviousSliccProfilesFirst() {
+        // Empty environment: TMPDIR is unset, so the candidate list is just
+        // the previous stable default followed by /tmp. ~/.slicc/profiles
+        // must come first because it holds the freshest profile from the
+        // most recent Sliccstart release and should migrate forward before
+        // the older $TMPDIR / /tmp fallbacks.
+        let launcher = makeLauncher(homeDirectory: "/Users/test")
+
+        let candidates = launcher.legacyChromeCandidates(profileDirName: "browser-coding-agent-chrome")
+
+        XCTAssertEqual(
+            candidates,
+            [
+                "/Users/test/.slicc/profiles/browser-coding-agent-chrome",
+                "/tmp/browser-coding-agent-chrome",
+            ]
+        )
+    }
+
+    func testLegacyChromeCandidatesIncludesTmpDirBetweenHomeAndTmp() {
+        // With TMPDIR set to a distinct path, it slots in between
+        // ~/.slicc/profiles (freshest) and /tmp (oldest, hard-coded
+        // fallback). Order is asserted exactly so a future refactor that
+        // reshuffles candidates breaks this test.
+        let launcher = makeLauncher(
+            environment: ["TMPDIR": "/var/tmpx"],
+            homeDirectory: "/Users/test"
+        )
+
+        let candidates = launcher.legacyChromeCandidates(profileDirName: "browser-coding-agent-chrome")
+
+        XCTAssertEqual(
+            candidates,
+            [
+                "/Users/test/.slicc/profiles/browser-coding-agent-chrome",
+                "/var/tmpx/browser-coding-agent-chrome",
+                "/tmp/browser-coding-agent-chrome",
+            ]
+        )
+    }
+
+    func testMigrateLegacyProfileCopiesFromOldLocationToNew() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+
+        let legacyProfile = root.appendingPathComponent("legacy/browser-coding-agent-chrome")
+        try fm.createDirectory(at: legacyProfile, withIntermediateDirectories: true)
+        fm.createFile(atPath: legacyProfile.appendingPathComponent("marker.txt").path, contents: Data("legacy-data".utf8))
+
+        let newProfile = root.appendingPathComponent("new/browser-coding-agent-chrome")
+        let launcher = makeLauncher()
+        launcher.migrateLegacyDefaultChromeProfile(newDir: newProfile.path, candidates: [legacyProfile.path])
+
+        let content = try String(contentsOfFile: newProfile.appendingPathComponent("marker.txt").path, encoding: .utf8)
+        XCTAssertEqual(content, "legacy-data")
+    }
+
+    func testMigrateLegacyProfileSkipsWhenNewProfileExists() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+
+        let newProfile = root.appendingPathComponent("new/browser-coding-agent-chrome")
+        try fm.createDirectory(at: newProfile, withIntermediateDirectories: true)
+        fm.createFile(atPath: newProfile.appendingPathComponent("marker.txt").path, contents: Data("existing-data".utf8))
+
+        let legacyProfile = root.appendingPathComponent("legacy/browser-coding-agent-chrome")
+        try fm.createDirectory(at: legacyProfile, withIntermediateDirectories: true)
+        fm.createFile(atPath: legacyProfile.appendingPathComponent("marker.txt").path, contents: Data("legacy-data".utf8))
+
+        let launcher = makeLauncher()
+        launcher.migrateLegacyDefaultChromeProfile(newDir: newProfile.path, candidates: [legacyProfile.path])
+
+        let content = try String(contentsOfFile: newProfile.appendingPathComponent("marker.txt").path, encoding: .utf8)
+        XCTAssertEqual(content, "existing-data")
+    }
+
+    func testMigrateLegacyProfileIsNoOpWhenNoLegacyExists() {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+
+        let newProfile = root.appendingPathComponent("new/browser-coding-agent-chrome")
+        let missingLegacy = root.appendingPathComponent("legacy/browser-coding-agent-chrome")
+        let launcher = makeLauncher()
+
+        launcher.migrateLegacyDefaultChromeProfile(newDir: newProfile.path, candidates: [missingLegacy.path])
+        XCTAssertFalse(fm.fileExists(atPath: newProfile.path))
     }
 
     func testParseCdpPortFromStderrExtractsPort() {

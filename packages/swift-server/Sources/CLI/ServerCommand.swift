@@ -164,10 +164,7 @@ struct ServerCommand: AsyncParsableCommand {
                 config: config,
                 environment: environment
             )
-            let userDataDir = chromeLauncher.resolveUserDataDir(
-                tmpDir: environment["TMPDIR"],
-                servePort: servePort
-            )
+            let userDataDir = chromeLauncher.resolveUserDataDir(servePort: servePort)
 
             let launchedChrome = try await chromeLauncher.launch(
                 config: ChromeLaunchConfig(
@@ -186,7 +183,10 @@ struct ServerCommand: AsyncParsableCommand {
         }
 
         let lickSystem = LickSystem()
-        let cdpProxy = CDPProxy(logger: Logger(label: "slicc.cdp-proxy"))
+        let cdpProxy = CDPProxy(
+            logger: Logger(label: "slicc.cdp-proxy"),
+            secretInjector: secretInjector
+        )
         let httpClient = HTTPClient(eventLoopGroupProvider: .singleton)
         let startupLatch = ServerStartupLatch()
         let staticRoot = Self.resolveStaticRoot(explicitStaticRoot: config.staticRoot, repositoryRoot: repositoryRoot)

@@ -4,11 +4,15 @@
  * The agent's `bash` tool calls run here. Owns just-bash,
  * the VFS adapter, custom commands (git, mount, supplemental), the
  * `.jsh` discovery + sync loop, and the `executeCommand` /
- * `executeScriptFile` primitives. Zero DOM — the file lives outside
- * `tsconfig.webapp-worker.json`'s include list today only because of
- * its transitive imports, but every line of this class is worker-
- * safe in principle (`setInterval`, `IndexedDB`-backed VFS, no
- * `window`/`document`).
+ * `executeScriptFile` primitives. Zero DOM in this class's own code
+ * (`setInterval`, `IndexedDB`-backed VFS only). Shell-command
+ * telemetry is emitted through the dependency-inverted
+ * `telemetry-hook.ts` sink (the UI registers `trackShellCommand`)
+ * rather than importing `ui/telemetry.ts` directly, so the shell no
+ * longer carries a back-edge into the `ui/` layer. The file still
+ * lives outside `tsconfig.webapp-worker.json`'s no-DOM include
+ * because its remaining (type-only) `cdp/` imports transitively reach
+ * the DOM-bound CDP transports.
  *
  * The view layer — `WasmShell` in `wasm-shell.ts` — extends this
  * class and adds xterm mounting, the line editor, history, and
@@ -25,14 +29,14 @@
  * envelope emit.
  */
 
-import type { BashExecResult, Command, CommandName } from 'just-bash';
+import type { BashExecResult, Command, CommandContext, CommandName, ExecResult } from 'just-bash';
 import { Bash, defineCommand, getCommandNames, getNetworkCommandNames } from 'just-bash';
 import type { BrowserAPI } from '../cdp/index.js';
 import type { FsWatcher, VirtualFS } from '../fs/index.js';
 import { MountCommands } from '../fs/mount-commands.js';
 import { GitCommands } from '../git/git-commands.js';
 import type { ProcessManager, ProcessOwner } from '../kernel/process-manager.js';
-import { trackShellCommand } from '../ui/telemetry.js';
+import type { SudoBroker } from '../sudo/types.js';
 import type { BshDiscoveryFS } from './bsh-discovery.js';
 import type { JshDiscoveryFS } from './jsh-discovery.js';
 import type { JshProcessConfig } from './jsh-executor.js';
@@ -41,12 +45,15 @@ import { EMPTY_BYTES } from './just-bash-compat.js';
 import { parseShellArgs } from './parse-shell-args.js';
 import { createProxiedFetch } from './proxied-fetch.js';
 import { ScriptCatalog } from './script-catalog.js';
+import { enforceCommandSudo } from './sudo/command-guard.js';
+import { SUDOERS_D_DIR, type SudoersPolicy, sanitizeGrantPattern } from './sudo/sudoers.js';
 import {
   createSkillCommand,
   createUpskillCommand,
 } from './supplemental-commands/upskill-command.js';
 import type { MediaPreviewItem } from './supplemental-commands.js';
 import { createSupplementalCommands } from './supplemental-commands.js';
+import { emitShellCommand } from './telemetry-hook.js';
 import { VfsAdapter } from './vfs-adapter.js';
 
 // ---------------------------------------------------------------------------
@@ -98,6 +105,38 @@ export interface HeadlessShellOptions {
    * show them but as orphans.
    */
   getCurrentShellPid?: () => number | undefined;
+  /**
+   * Optional command-level sudo enforcement. When omitted (or when
+   * `getPolicy()` returns `null`), commands run ungated with zero added
+   * prompts. Wired by the kernel host / orchestrator once the sudoers policy
+   * and broker are available.
+   */
+  sudo?: ShellSudoConfig;
+}
+
+/** Command-level sudo enforcement hooks supplied to the shell. */
+export interface ShellSudoConfig {
+  /** Returns the current (live-reloadable) policy, or `null` to disable gating. */
+  getPolicy: () => SudoersPolicy | null;
+  /** Trusted-realm approval broker (the agent can only request, never fabricate). */
+  broker: SudoBroker;
+  /**
+   * Optional sink that persists a human-confirmed `NOPASSWD Cmnd` grant. When
+   * supplied, the shell routes "Always" grants here instead of writing through
+   * `options.fs` directly — this lets the shell run on the FS-gated handle (so
+   * the `/etc/sudoers` self-protection invariant covers shell writes too) while
+   * the grant append still hits the raw VFS and does not re-prompt.
+   */
+  persistCommandGrant?: (pattern: string) => Promise<void>;
+  /**
+   * Whether to wrap every dispatched command with the transparent `Cmnd` gate.
+   * Defaults to `true` (the agent-shell behavior: any policy-gated command
+   * prompts on dispatch). Set to `false` for the human terminal — the explicit
+   * `sudo <cmd...>` command is still registered (and still gathers approval
+   * + persists "Always" grants), but plain commands run ungated. The human
+   * typing into the panel IS the approver for everything they type.
+   */
+  transparentGating?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -180,6 +219,28 @@ export class WasmShellHeadless implements HeadlessShellLike {
   private jshSyncInflight: Promise<void> | null = null;
   /** Re-sync requested while one was already in flight. */
   private jshSyncDirty = false;
+  /**
+   * "Always" command grants confirmed mid-dispatch, queued for persistence
+   * after the current `bash.exec()` returns. The grant write touches the
+   * IndexedDB-backed VFS, whose async timers are blocked by just-bash's
+   * defense-in-depth during command execution, so it must run outside the box.
+   */
+  private pendingCommandGrants: string[] = [];
+  /**
+   * One-shot bypass keys for the transparent `Cmnd` gate. Registered by the
+   * explicit `sudo` command after the human already approved a subject, so the
+   * inner dispatch does not prompt a second time. Multiset (counts) because
+   * the same subject can be re-approved repeatedly within a single bash exec.
+   */
+  private pendingSudoBypasses = new Map<string, number>();
+  /**
+   * Env writes performed by supplemental commands during a `bash.exec()` call
+   * (currently only `secret set` injecting a masked value). `bash.exec()`
+   * returns its own snapshot of the working env that overwrites `lastEnv` on
+   * return — these pending writes are reapplied after that overwrite so they
+   * survive into the next exec call.
+   */
+  private pendingEnvWrites = new Map<string, string>();
 
   constructor(protected options: HeadlessShellOptions) {
     this.vfsAdapter = new VfsAdapter(options.fs);
@@ -240,6 +301,29 @@ export class WasmShellHeadless implements HeadlessShellLike {
       // inline standalone), the commands fall back to
       // `globalThis.__slicc_pm` (published by `createKernelHost`).
       processManager: options.processManager,
+      // Explicit `sudo <cmd...>` plumbing. Only wired when a sudo config is
+      // present so ungated shells still register `sudo` (which prints a clean
+      // "not configured" message) without leaking the broker or bypass hook.
+      sudoCommand: options.sudo
+        ? {
+            broker: options.sudo.broker,
+            // Queue "Always" grants for the post-exec flush; the actual VFS
+            // write must run outside just-bash's defense-in-depth box where
+            // async timers are blocked. Matches the transparent gate.
+            persistGrant: async (pattern) => {
+              this.pendingCommandGrants.push(pattern);
+            },
+            suppressNextGate: (subject) => this.registerSudoBypass(subject),
+          }
+        : undefined,
+      // Lets `secret set` write the masked value into the owning shell's
+      // env after a successful set (parity with container-loaded secrets).
+      // The write is queued and reapplied after `bash.exec` returns its
+      // snapshot of `result.env`, so the var survives into the next exec.
+      setEnv: (name, value) => {
+        this.pendingEnvWrites.set(name, value);
+        this.lastEnv[name] = value;
+      },
     });
     const mountCommand = this.createMountCustomCommand();
     const fetchFn = createProxiedFetch();
@@ -289,6 +373,21 @@ export class WasmShellHeadless implements HeadlessShellLike {
         if (!this.isCommandAllowed(name)) {
           bashInternals.commands.delete(name);
         }
+      }
+    }
+
+    // Command-level sudo enforcement (dispatch-time chokepoint). Decorate every
+    // already-registered command's `execute` so the `Cmnd` policy is checked at
+    // actual dispatch — this covers `$(...)`/backticks/pipelines for free since
+    // just-bash routes those back through this same registry. Only wrap when a
+    // sudo config is present AND transparent gating is enabled — the human
+    // terminal opts out via `transparentGating: false` so plain commands run
+    // ungated even though `sudo <cmd...>` is still available. Newly-registered
+    // `.jsh` commands are wrapped in `doSyncJshCommands` via the same chokepoint.
+    if (this.isTransparentGatingEnabled()) {
+      const registry = this.bash as unknown as { commands: Map<string, Command> };
+      for (const [name, cmd] of registry.commands) {
+        registry.commands.set(name, this.wrapCommandForSudo(cmd));
       }
     }
 
@@ -414,7 +513,7 @@ export class WasmShellHeadless implements HeadlessShellLike {
    */
   protected async runCommand(command: string, signal?: AbortSignal): Promise<BashExecResult> {
     const commandName = command.trim().split(/\s+/)[0] || 'unknown';
-    trackShellCommand(commandName);
+    emitShellCommand(commandName);
 
     // just-bash's published ExecOptions type does not yet expose
     // AbortSignal, but we still forward it so external callers and
@@ -425,8 +524,21 @@ export class WasmShellHeadless implements HeadlessShellLike {
       signal,
     };
     const result = await this.bash.exec(command, execOptions);
+    // Persist any "Always" command grants confirmed during dispatch now that we
+    // are outside just-bash's execution box (where VFS async timers are blocked).
+    await this.flushPendingCommandGrants();
     if (result.env) {
       this.lastEnv = { ...result.env };
+    }
+    // Reapply env writes performed by supplemental commands during this exec
+    // (e.g. `secret set` injecting a masked value). `bash.exec`'s `result.env`
+    // does not include them — without this re-merge the next exec would not see
+    // `$NAME`.
+    if (this.pendingEnvWrites.size > 0) {
+      for (const [k, v] of this.pendingEnvWrites) {
+        this.lastEnv[k] = v;
+      }
+      this.pendingEnvWrites.clear();
     }
     if (result.env?.PWD) {
       this.cwd = result.env.PWD;
@@ -446,6 +558,154 @@ export class WasmShellHeadless implements HeadlessShellLike {
   // -------------------------------------------------------------------------
   // Internal
   // -------------------------------------------------------------------------
+
+  /**
+   * True when the dispatch-time transparent `Cmnd` gate should wrap every
+   * command. Requires a sudo config AND `transparentGating !== false` —
+   * defaults to enabled (agent-shell behavior) when the flag is omitted.
+   */
+  private isTransparentGatingEnabled(): boolean {
+    const sudo = this.options.sudo;
+    return !!sudo && sudo.transparentGating !== false;
+  }
+
+  /**
+   * Decorate a command's `execute` with the dispatch-time sudo guard. When no
+   * sudo config is present, or `transparentGating` is explicitly false (the
+   * human terminal), the command is returned unchanged (zero overhead).
+   * Otherwise the wrapper runs the `Cmnd` check against the
+   * already-tokenized `name + args` subject before delegating to the wrapped
+   * `execute`, returning an exit-1 result (without running it) on denial.
+   */
+  private wrapCommandForSudo(command: Command): Command {
+    if (!this.isTransparentGatingEnabled()) return command;
+    const guard = (args: string[]) => this.gateCommandDispatch(command.name, args);
+    return {
+      name: command.name,
+      trusted: command.trusted,
+      async execute(args: string[], ctx: CommandContext): Promise<ExecResult> {
+        const denial = await guard(args);
+        if (denial) return denial;
+        return command.execute(args, ctx);
+      },
+    };
+  }
+
+  /**
+   * Run the command-level sudo guard for a single dispatch. Returns a denial
+   * `ExecResult` (exit 1, no execution) when approval was refused; `null` when
+   * the command may run. No-op when sudo is unconfigured or the active policy
+   * is null.
+   */
+  private async gateCommandDispatch(name: string, args: string[]): Promise<ExecResult | null> {
+    const sudo = this.options.sudo;
+    if (!sudo) return null;
+
+    const subject = `${name} ${args.join(' ')}`.trim();
+
+    // Consume a one-shot bypass when the explicit `sudo` command already
+    // collected approval for this exact subject. Skips even the policy lookup
+    // so a separately-dispatched gated nested command (via $() / pipelines)
+    // still hits the transparent gate normally.
+    if (this.consumeSudoBypass(subject)) {
+      return null;
+    }
+
+    const policy = sudo.getPolicy();
+    if (!policy) return null;
+
+    const result = await enforceCommandSudo(subject, {
+      policy,
+      broker: sudo.broker,
+      // Queue the grant; the actual write runs post-exec (see runCommand)
+      // because just-bash blocks the VFS's async timers mid-dispatch.
+      persistGrant: async (pattern) => {
+        this.pendingCommandGrants.push(pattern);
+      },
+    });
+    if (result.allowed) return null;
+
+    return {
+      stdout: '',
+      stderr: `${result.message}\n`,
+      exitCode: 1,
+    };
+  }
+
+  /**
+   * Register a one-shot bypass for the next transparent `Cmnd` gate dispatch
+   * matching `subject`. Invoked by the explicit `sudo` command after it has
+   * already collected human approval, so the inner command does not prompt
+   * twice. Multiple registrations for the same subject stack (multiset).
+   */
+  private registerSudoBypass(subject: string): void {
+    const key = subject.trim();
+    if (!key) return;
+    this.pendingSudoBypasses.set(key, (this.pendingSudoBypasses.get(key) ?? 0) + 1);
+  }
+
+  /**
+   * Consume a pending bypass for `subject`. Returns `true` when a bypass was
+   * pending (and was decremented), `false` otherwise.
+   */
+  private consumeSudoBypass(subject: string): boolean {
+    const count = this.pendingSudoBypasses.get(subject);
+    if (!count) return false;
+    if (count === 1) {
+      this.pendingSudoBypasses.delete(subject);
+    } else {
+      this.pendingSudoBypasses.set(subject, count - 1);
+    }
+    return true;
+  }
+
+  /**
+   * Drain {@link pendingCommandGrants}, persisting each confirmed "Always"
+   * grant. Called from `runCommand` after `bash.exec()` returns, so the writes
+   * happen outside just-bash's timer-blocked execution box. Failures are
+   * swallowed per-grant so a persistence error never fails the command the user
+   * already approved.
+   */
+  private async flushPendingCommandGrants(): Promise<void> {
+    if (this.pendingCommandGrants.length === 0) return;
+    const grants = this.pendingCommandGrants;
+    this.pendingCommandGrants = [];
+    for (const pattern of grants) {
+      try {
+        await this.persistCommandGrant(pattern);
+      } catch {
+        /* best-effort: a failed grant write must not fail an approved command */
+      }
+    }
+  }
+
+  /**
+   * Append a human-confirmed `NOPASSWD Cmnd` grant to `/etc/sudoers.d/granted`.
+   * Prefers the injected `persistCommandGrant` sink (which writes through the
+   * raw VFS, so the self-protection invariant does not re-prompt on the grant
+   * write); falls back to `options.fs` directly when no sink is supplied.
+   */
+  private async persistCommandGrant(pattern: string): Promise<void> {
+    const sink = this.options.sudo?.persistCommandGrant;
+    if (sink) {
+      await sink(pattern);
+      return;
+    }
+    const safe = sanitizeGrantPattern(pattern);
+    if (!safe) return;
+    const path = `${SUDOERS_D_DIR}/granted`;
+    const fs = this.options.fs;
+    let existing = '';
+    try {
+      if (await fs.exists(path)) {
+        existing = (await fs.readFile(path)) as string;
+      }
+    } catch {
+      existing = '';
+    }
+    const prefix = existing && !existing.endsWith('\n') ? `${existing}\n` : existing;
+    await fs.writeFile(path, `${prefix}NOPASSWD Cmnd  ${safe}\n`);
+  }
 
   /** True when `name` is registrable/executable under the allow-list. */
   private isCommandAllowed(name: string): boolean {
@@ -522,7 +782,7 @@ export class WasmShellHeadless implements HeadlessShellLike {
           },
         };
 
-        this.bash.registerCommand(command);
+        this.bash.registerCommand(this.wrapCommandForSudo(command));
         this.registeredJshCommands.set(name, scriptPath);
         this.builtinCommandNames.add(name);
       }

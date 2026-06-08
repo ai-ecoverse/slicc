@@ -31,7 +31,13 @@
 import type { CDPTransport } from '../cdp/transport.js';
 import { OffscreenClient, type OffscreenClientCallbacks } from '../ui/offscreen-client.js';
 import { startPageCdpForwarder } from './cdp-worker-proxy.js';
-import type { KernelWorkerInitMsg, KernelWorkerReadyMsg } from './kernel-worker.js';
+import type {
+  KernelMigrationFinishedMsg,
+  KernelMigrationProgressMsg,
+  KernelMigrationStartedMsg,
+  KernelWorkerInitMsg,
+  KernelWorkerReadyMsg,
+} from './kernel-worker.js';
 import { createPanelMessageChannelTransport } from './transport-message-channel.js';
 
 // ---------------------------------------------------------------------------
@@ -59,6 +65,20 @@ export interface KernelWorkerSpawnOptions {
   /** Boot timeout in ms. Default 30s. */
   readyTimeoutMs?: number;
   /**
+   * Stall watchdog for an in-progress legacy→OPFS migration, in ms.
+   * Default 60s. On `kernel-migration-started` the {@link readyTimeoutMs}
+   * boot clock is SUSPENDED with no replacement timer — the worker's
+   * unbounded pre-copy work (dynamic import, legacy-IDB manifest walk,
+   * directory creation) emits no progress, so any timeout during that
+   * phase could wrongly reject a legitimate large-workspace migration.
+   * The watchdog is armed on the FIRST `kernel-migration-progress`
+   * heartbeat and re-armed on every subsequent one, so a steadily-
+   * advancing (legitimately slow) copy is never stopped regardless of
+   * total duration. It only rejects if the copy, once started, makes NO
+   * progress for this long — a genuinely hung worker.
+   */
+  migrationStallTimeoutMs?: number;
+  /**
    * Optional snapshot of `window.localStorage` for the worker's shim.
    * Workers don't have a real `localStorage`; we seed a read-only
    * shim from the page's snapshot so `provider-settings.getApiKey()`
@@ -73,6 +93,18 @@ export interface KernelWorkerSpawnOptions {
    * scoped to one tab/worker pair. Optional.
    */
   instanceId?: string;
+  /**
+   * Invoked when the worker posts `kernel-migration-started` over the
+   * kernel port (only when the OPFS migration runner is about to walk
+   * legacy IDB → OPFS). Page wires this to the blocking modal arm.
+   * Optional: callers that don't care omit them and the incoming
+   * messages are swallowed.
+   */
+  onMigrationStart?: () => void;
+  /** Invoked per file copied, carrying `{ copied, total }`. */
+  onMigrationProgress?: (progress: { copied: number; total: number }) => void;
+  /** Invoked when the worker posts `kernel-migration-finished`. */
+  onMigrationFinish?: () => void;
 }
 
 export interface KernelWorkerBootstrapOptions {
@@ -80,6 +112,8 @@ export interface KernelWorkerBootstrapOptions {
   realCdpTransport: CDPTransport;
   callbacks: OffscreenClientCallbacks;
   readyTimeoutMs?: number;
+  /** See `KernelWorkerSpawnOptions.migrationStallTimeoutMs`. */
+  migrationStallTimeoutMs?: number;
   localStorageSeed?: Record<string, string>;
   /**
    * Per-instance discriminator forwarded to the worker so same-origin
@@ -87,6 +121,12 @@ export interface KernelWorkerBootstrapOptions {
    * scoped to one tab/worker pair. Optional.
    */
   instanceId?: string;
+  /** See `KernelWorkerSpawnOptions.onMigrationStart`. */
+  onMigrationStart?: () => void;
+  /** See `KernelWorkerSpawnOptions.onMigrationProgress`. */
+  onMigrationProgress?: (progress: { copied: number; total: number }) => void;
+  /** See `KernelWorkerSpawnOptions.onMigrationFinish`. */
+  onMigrationFinish?: () => void;
 }
 
 /**
@@ -132,6 +172,7 @@ export interface SpawnedKernelHost {
 export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): SpawnedKernelHost {
   const { worker, realCdpTransport, callbacks } = options;
   const readyTimeoutMs = options.readyTimeoutMs ?? 30_000;
+  const migrationStallTimeoutMs = options.migrationStallTimeoutMs ?? 60_000;
   const localStorageSeed = options.localStorageSeed ?? {};
 
   const kernelChannel = new MessageChannel();
@@ -151,34 +192,121 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
   // a second listener that resolves on the boot signal.
   //
   // Single cleanup path: `cleanupReady()` removes the listener AND clears
-  // the timeout. Called from the success branch, the timeout branch, AND
-  // from `dispose()` so a caller that disposes before the worker replies
-  // doesn't leave the listener attached for the worker's lifetime.
+  // whichever timer is armed. Called from the success branch, the timeout
+  // branch, AND from `dispose()` so a caller that disposes before the
+  // worker replies doesn't leave the listener attached for the worker's
+  // lifetime.
   let cleanupReady: (() => void) | null = null;
   const ready = new Promise<void>((resolve, reject) => {
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
     let listener: ((event: MessageEvent) => void) | null = null;
-    cleanupReady = (): void => {
-      if (listener !== null) {
-        kernelChannel.port1.removeEventListener('message', listener as EventListener);
-        listener = null;
-      }
+
+    const clearTimer = (): void => {
       if (timeoutId !== null) {
         clearTimeout(timeoutId);
         timeoutId = null;
       }
     };
+    // Arm the boot-ready clock. Used for the initial boot wait and
+    // re-armed once a migration finishes (the rest of boot is quick).
+    const armReadyTimeout = (): void => {
+      clearTimer();
+      timeoutId = setTimeout(() => {
+        cleanupReady?.();
+        reject(new Error(`Kernel worker did not signal ready within ${readyTimeoutMs}ms`));
+      }, readyTimeoutMs);
+    };
+    // Arm the migration stall watchdog. Armed on the FIRST progress
+    // heartbeat and re-armed on every subsequent one, so a legitimately
+    // slow but steadily-advancing copy is NEVER stopped. Only a copy
+    // that makes no progress for `migrationStallTimeoutMs` (a genuinely
+    // hung worker) rejects. It is intentionally NOT armed at
+    // `kernel-migration-started`: the worker does unbounded pre-copy
+    // work (dynamic import, legacy-IDB manifest walk, directory
+    // creation) before the first heartbeat, and that phase emits no
+    // progress — arming here would let the watchdog reject a legitimate
+    // large-workspace migration mid-walk.
+    const armMigrationWatchdog = (): void => {
+      clearTimer();
+      timeoutId = setTimeout(() => {
+        cleanupReady?.();
+        reject(
+          new Error(
+            `Kernel worker migration stalled — no progress within ${migrationStallTimeoutMs}ms`
+          )
+        );
+      }, migrationStallTimeoutMs);
+    };
+
+    cleanupReady = (): void => {
+      if (listener !== null) {
+        kernelChannel.port1.removeEventListener('message', listener as EventListener);
+        listener = null;
+      }
+      clearTimer();
+    };
     listener = (event: MessageEvent): void => {
-      const data = event.data as Partial<KernelWorkerReadyMsg> | null;
+      const data = event.data as
+        | Partial<KernelWorkerReadyMsg>
+        | Partial<KernelMigrationStartedMsg>
+        | Partial<KernelMigrationProgressMsg>
+        | Partial<KernelMigrationFinishedMsg>
+        | null;
+      // Migration signals share the kernel port with
+      // `kernel-worker-ready` (deliberately raw, not enveloped,
+      // because the page-side `OffscreenClient` only routes `source:
+      // 'panel'`-tagged messages). The `ready` listener stays armed
+      // after a migration signal arrives so the worker can still
+      // post `kernel-worker-ready` when it eventually finishes.
+      if (data?.type === 'kernel-migration-started') {
+        // SUSPEND the boot clock entirely — but do NOT arm the stall
+        // watchdog yet. The worker's pre-copy phase (dynamic import,
+        // legacy-IDB manifest walk, directory creation) emits no
+        // progress and is unbounded for a large workspace; any timeout
+        // armed here could reject a legitimate slow migration mid-walk,
+        // recreating the very fatal boot path this change fixes. The
+        // watchdog starts on the first progress heartbeat below.
+        clearTimer();
+        try {
+          options.onMigrationStart?.();
+        } catch {
+          /* swallow — splash callback must never break boot */
+        }
+        return;
+      }
+      if (data?.type === 'kernel-migration-progress') {
+        // First heartbeat arms the stall watchdog; subsequent ones reset
+        // it, so a slow-but-advancing copy is never aborted regardless
+        // of total duration.
+        armMigrationWatchdog();
+        try {
+          const progress = data as Partial<KernelMigrationProgressMsg>;
+          options.onMigrationProgress?.({
+            copied: progress.copied ?? 0,
+            total: progress.total ?? 0,
+          });
+        } catch {
+          /* swallow — splash callback must never break boot */
+        }
+        return;
+      }
+      if (data?.type === 'kernel-migration-finished') {
+        // Migration done — restore the normal boot-ready clock for the
+        // remainder of boot (which should complete promptly).
+        armReadyTimeout();
+        try {
+          options.onMigrationFinish?.();
+        } catch {
+          /* swallow — splash callback must never break boot */
+        }
+        return;
+      }
       if (data?.type !== 'kernel-worker-ready') return;
       cleanupReady?.();
       resolve();
     };
     kernelChannel.port1.addEventListener('message', listener as EventListener);
-    timeoutId = setTimeout(() => {
-      cleanupReady?.();
-      reject(new Error(`Kernel worker did not signal ready within ${readyTimeoutMs}ms`));
-    }, readyTimeoutMs);
+    armReadyTimeout();
   });
 
   // Hand the worker its ports. After `postMessage` with a transferable
@@ -254,7 +382,11 @@ export function spawnKernelWorker(options: KernelWorkerSpawnOptions): SpawnedKer
     realCdpTransport: options.realCdpTransport,
     callbacks: options.callbacks,
     readyTimeoutMs: options.readyTimeoutMs,
+    migrationStallTimeoutMs: options.migrationStallTimeoutMs,
     localStorageSeed: options.localStorageSeed ?? collectLocalStorageSeed(),
     instanceId: options.instanceId,
+    onMigrationStart: options.onMigrationStart,
+    onMigrationProgress: options.onMigrationProgress,
+    onMigrationFinish: options.onMigrationFinish,
   });
 }

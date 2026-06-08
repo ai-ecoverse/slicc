@@ -15,6 +15,7 @@ For architecture philosophy and principles, see the project's `CLAUDE.md` file.
 | Build, run, or debug              | [development.md](./development.md)                                                      |
 | Run or debug Electron mode        | [electron.md](./electron.md) + [development.md](./development.md)                       |
 | Avoid breaking the extension      | [pitfalls.md](./pitfalls.md)                                                            |
+| Review a PR (or tune the bots)    | [review-patterns.md](./review-patterns.md)                                              |
 | Add a UI panel or skill           | [adding-features.md](./adding-features.md)                                              |
 | Add a provider (API key or OAuth) | [adding-features.md](./adding-features.md)                                              |
 

@@ -47,7 +47,13 @@ jobs:
     # Skip fork PRs: secrets are unavailable on `pull_request` from forks, and
     # reviewing them safely would require `pull_request_target` + a security
     # review (out of scope). Only run when the PR head lives in this repo.
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    # Also skip bot-authored PRs (e.g. Renovate dependency bumps): they don't
+    # need an AI review, and claude-code-action rejects bot-initiated runs by
+    # default ("Workflow initiated by non-human actor"), which only produced
+    # noisy failed runs.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.type != 'Bot'
     steps:
       - name: Wait 5 minutes for personal/human reviewers
         run: sleep 300
@@ -82,7 +88,7 @@ jobs:
 
       - name: Claude PR review
         if: steps.gate.outputs.should_review == 'true'
-        uses: anthropics/claude-code-action@36a69b6a90b850823f86de06fdfd56264772ad98 # v1
+        uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1 # v1
         env:
           # Bedrock path: authenticate with an Amazon Bedrock API key (the Adobe
           # CAMP `ABSK...` bearer token). Mirrors rum-error-triage.yml — the
@@ -101,7 +107,7 @@ jobs:
           claude_args: |
             --model ${{ vars.PR_REVIEW_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Read,Grep,Glob"
-            --max-turns 40
+            --max-turns 200
           prompt: |
             You are performing an automated code review for the SLICC codebase.
 
@@ -119,6 +125,14 @@ jobs:
             - Repo conventions: follow the guidance in the nearest CLAUDE.md
               (shell-first, browser-first, dual-mode CLI/extension, SHA-pinned
               actions, tests + docs for behaviour changes, etc.).
+
+            Then `Read docs/review-patterns.md` and check the diff against the
+            recurring blind-spot categories it documents (error-path coverage,
+            UI state preservation, cross-runtime parity across the five
+            runtimes, CDP edge cases, native/macOS permissions, test coverage).
+            Apply the severity rubric from that file (Critical/Major/Minor) when
+            labelling findings, and reason contextually — only flag a category
+            when the surrounding code does not already handle it.
 
             Post specific, actionable feedback as INLINE comments on the exact
             changed lines using the

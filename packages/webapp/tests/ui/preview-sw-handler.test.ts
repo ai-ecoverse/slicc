@@ -1,0 +1,148 @@
+/**
+ * Tests for the pure `/preview/*` request handler extracted from
+ * `preview-sw.ts`. The point of these tests is the regression that
+ * motivated the extraction: after OPFS migration the SW used to read
+ * the legacy IDB-backed VFS first and serve stale bytes. The handler
+ * must now route every read through the responder channel and always
+ * return whatever the responder says is current.
+ *
+ * Pins:
+ *  - A write that lands in the responder between two requests is
+ *    visible on the second request (no SW-side caching).
+ *  - ENOENT from the responder → 404 (silent).
+ *  - EISDIR from the responder → retry once with `/index.html`.
+ *  - Other errors → 500 with the error text.
+ *  - Responder timeout → 404 (treated as "not found", not 5xx).
+ */
+
+import { describe, expect, it } from 'vitest';
+import {
+  getMimeType,
+  handlePreviewRequest,
+  isSliccAppPath,
+  type PreviewChannel,
+} from '../../src/ui/preview-sw-handler.js';
+
+type ResponderReply =
+  | { content: string | Uint8Array }
+  | { error: string }
+  | { drop: true } /* never reply — to exercise the timeout branch */;
+
+/**
+ * In-memory `BroadcastChannel` stand-in plus a programmable responder
+ * that mimics `installPreviewVfsResponder`'s wire shape.
+ */
+class FakeChannel implements PreviewChannel {
+  private listeners = new Set<(ev: MessageEvent) => void>();
+  reads: Array<{ path: string; asText: boolean }> = [];
+  reply: (path: string) => ResponderReply = () => ({ error: 'ENOENT: no such file' });
+
+  postMessage(data: unknown): void {
+    const msg = data as { type?: string; id?: string; path?: string; asText?: boolean } | undefined;
+    if (msg?.type !== 'preview-vfs-read' || !msg.id || !msg.path) return;
+    this.reads.push({ path: msg.path, asText: !!msg.asText });
+    const out = this.reply(msg.path);
+    if ('drop' in out) return;
+    queueMicrotask(() => {
+      const env = { type: 'preview-vfs-response', id: msg.id, ...out };
+      for (const l of this.listeners) l({ data: env } as MessageEvent);
+    });
+  }
+  addEventListener(_t: 'message', l: (ev: MessageEvent) => void): void {
+    this.listeners.add(l);
+  }
+  removeEventListener(_t: 'message', l: (ev: MessageEvent) => void): void {
+    this.listeners.delete(l);
+  }
+}
+
+describe('getMimeType', () => {
+  it('maps common extensions and falls back to octet-stream', () => {
+    expect(getMimeType('/a/b.html')).toBe('text/html');
+    expect(getMimeType('/a/b.css')).toBe('text/css');
+    expect(getMimeType('/a/b.png')).toBe('image/png');
+    expect(getMimeType('/a/b.unknownext')).toBe('application/octet-stream');
+  });
+});
+
+describe('isSliccAppPath', () => {
+  it('excludes slicc app paths from project-serve interception', () => {
+    expect(isSliccAppPath('/api/fetch-proxy')).toBe(true);
+    expect(isSliccAppPath('/@vite/client')).toBe(true);
+    expect(isSliccAppPath('/node_modules/foo/x.js')).toBe(true);
+    expect(isSliccAppPath('/')).toBe(true);
+    expect(isSliccAppPath('/styles/main.css')).toBe(false);
+  });
+});
+
+describe('handlePreviewRequest', () => {
+  it('serves the current responder bytes on every request (no stale-read cache)', async () => {
+    const ch = new FakeChannel();
+    let bytes = 'first';
+    ch.reply = () => ({ content: bytes });
+
+    const r1 = await handlePreviewRequest(ch, '/shared/post.html');
+    expect(r1.status).toBe(200);
+    expect(r1.headers.get('Content-Type')).toBe('text/html');
+    expect(await r1.text()).toBe('first');
+
+    // Mutate the responder-backed VFS between requests. A cached SW
+    // would still return 'first'; the handler must reflect 'second'.
+    bytes = 'second';
+    const r2 = await handlePreviewRequest(ch, '/shared/post.html');
+    expect(r2.status).toBe(200);
+    expect(await r2.text()).toBe('second');
+
+    expect(ch.reads).toHaveLength(2);
+    expect(ch.reads.every((r) => r.path === '/shared/post.html')).toBe(true);
+    expect(ch.reads.every((r) => r.asText === true)).toBe(true);
+  });
+
+  it('requests binary for non-text mime types', async () => {
+    const ch = new FakeChannel();
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    ch.reply = () => ({ content: png });
+
+    const r = await handlePreviewRequest(ch, '/shared/logo.png');
+    expect(r.status).toBe(200);
+    expect(r.headers.get('Content-Type')).toBe('image/png');
+    const buf = new Uint8Array(await r.arrayBuffer());
+    expect(Array.from(buf)).toEqual([0x89, 0x50, 0x4e, 0x47]);
+    expect(ch.reads[0]?.asText).toBe(false);
+  });
+
+  it('returns 404 on ENOENT', async () => {
+    const ch = new FakeChannel();
+    ch.reply = () => ({ error: 'ENOENT: missing /x.html' });
+    const r = await handlePreviewRequest(ch, '/x.html');
+    expect(r.status).toBe(404);
+  });
+
+  it('retries with /index.html on EISDIR', async () => {
+    const ch = new FakeChannel();
+    ch.reply = (path) =>
+      path === '/site/index.html'
+        ? { content: '<h1>idx</h1>' }
+        : { error: 'EISDIR: is a directory' };
+    const r = await handlePreviewRequest(ch, '/site');
+    expect(r.status).toBe(200);
+    expect(r.headers.get('Content-Type')).toBe('text/html');
+    expect(await r.text()).toBe('<h1>idx</h1>');
+    expect(ch.reads.map((x) => x.path)).toEqual(['/site', '/site/index.html']);
+  });
+
+  it('returns 500 on other responder errors', async () => {
+    const ch = new FakeChannel();
+    ch.reply = () => ({ error: 'EACCES: permission denied' });
+    const r = await handlePreviewRequest(ch, '/locked.html');
+    expect(r.status).toBe(500);
+    expect(await r.text()).toContain('EACCES');
+  });
+
+  it('returns 404 when the responder never replies', async () => {
+    const ch = new FakeChannel();
+    ch.reply = () => ({ drop: true });
+    const r = await handlePreviewRequest(ch, '/never.html', 25);
+    expect(r.status).toBe(404);
+  });
+});

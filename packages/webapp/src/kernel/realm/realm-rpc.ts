@@ -10,7 +10,12 @@
  * `cdp-bridge.ts` + `transport-message-channel.ts` pattern.
  */
 
-import type { RealmRpcChannel, RealmRpcRequest, RealmRpcResponse } from './realm-types.js';
+import type {
+  RealmEventMsg,
+  RealmRpcChannel,
+  RealmRpcRequest,
+  RealmRpcResponse,
+} from './realm-types.js';
 
 /**
  * Structural slice of a port-like object that both sides need:
@@ -39,21 +44,45 @@ export class RealmRpcClient {
     number,
     { resolve: (value: unknown) => void; reject: (error: Error) => void }
   >();
+  /**
+   * Per-channel push subscribers for `realm-event` fan-out. Mirrors the
+   * `panel-rpc-event` Map<channel, Set<handler>> shape one layer down.
+   * Multiple in-realm callers can subscribe to the same channel; each
+   * receives every payload posted on it. Cleared on `dispose()` so a
+   * realm-shutdown drops every subscription without an explicit
+   * detach from the caller.
+   */
+  private readonly eventSubscribers = new Map<string, Set<(payload: unknown) => void>>();
   private readonly handler: (event: MessageEvent) => void;
   private disposed = false;
 
   constructor(private readonly port: RealmPortLike) {
     this.handler = (event: MessageEvent): void => {
       const data = event.data as { type?: string };
-      if (data?.type !== 'realm-rpc-res') return;
-      const res = event.data as RealmRpcResponse;
-      const slot = this.pending.get(res.id);
-      if (!slot) return;
-      this.pending.delete(res.id);
-      if (typeof res.error === 'string') {
-        slot.reject(new Error(res.error));
-      } else {
-        slot.resolve(res.result);
+      if (data?.type === 'realm-rpc-res') {
+        const res = event.data as RealmRpcResponse;
+        const slot = this.pending.get(res.id);
+        if (!slot) return;
+        this.pending.delete(res.id);
+        if (typeof res.error === 'string') {
+          slot.reject(new Error(res.error));
+        } else {
+          slot.resolve(res.result);
+        }
+        return;
+      }
+      if (data?.type === 'realm-event') {
+        const evt = event.data as RealmEventMsg;
+        const subs = this.eventSubscribers.get(evt.channel);
+        if (!subs) return;
+        for (const sub of [...subs]) {
+          try {
+            sub(evt.payload);
+          } catch {
+            // Subscriber failures must not poison the dispatch loop —
+            // mirrors the swallow-in-fan-out pattern in `panel-rpc.ts`.
+          }
+        }
       }
     };
     port.addEventListener('message', this.handler);
@@ -72,6 +101,30 @@ export class RealmRpcClient {
     });
   }
 
+  /**
+   * Subscribe to host-pushed `realm-event` messages on a named channel.
+   * Returns an unsubscribe; the realm side does not call back to the
+   * host on detach — turning the relay on/off is the caller's job (e.g.
+   * the HID bridge pairs this with `hid.subscribeInputReports`/
+   * `hid.unsubscribeInputReports` RPC calls). Subscribers added after
+   * `dispose()` are no-ops.
+   */
+  onEvent(channel: string, handler: (payload: unknown) => void): () => void {
+    if (this.disposed) return () => {};
+    let subs = this.eventSubscribers.get(channel);
+    if (!subs) {
+      subs = new Set();
+      this.eventSubscribers.set(channel, subs);
+    }
+    subs.add(handler);
+    return () => {
+      const set = this.eventSubscribers.get(channel);
+      if (!set) return;
+      set.delete(handler);
+      if (set.size === 0) this.eventSubscribers.delete(channel);
+    };
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -79,5 +132,6 @@ export class RealmRpcClient {
     const err = new Error('realm-rpc: client disposed');
     for (const slot of this.pending.values()) slot.reject(err);
     this.pending.clear();
+    this.eventSubscribers.clear();
   }
 }
