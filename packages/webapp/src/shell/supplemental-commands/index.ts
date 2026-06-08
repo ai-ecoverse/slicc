@@ -60,6 +60,7 @@ import { createUsbCommand } from './usb-command.js';
 import { createWebhookCommand } from './webhook-command.js';
 import { createWebsocatCommand } from './websocat-command.js';
 import { createWhichCommand } from './which-command.js';
+import { createWorkflowCommand } from './workflow-command.js';
 import { createZipCommand } from './zip-command.js';
 
 export type {
@@ -172,6 +173,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createDfCommand({ fs: options.fs }),
     createDiskutilCommand({ fs: options.fs }),
     createSudoCommand(options.sudoCommand),
+    createWorkflowCommand(),
   ];
 
   if (options.fs) {

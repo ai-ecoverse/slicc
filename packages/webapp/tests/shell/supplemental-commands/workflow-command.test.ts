@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
 import { VirtualFS } from '../../../src/fs/index.js';
+import { createSupplementalCommands } from '../../../src/shell/supplemental-commands/index.js';
 import { createWorkflowCommand } from '../../../src/shell/supplemental-commands/workflow-command.js';
 import { VfsAdapter } from '../../../src/shell/vfs-adapter.js';
 
@@ -22,6 +23,9 @@ async function ctxWith(
 }
 
 describe('workflow run', () => {
+  it('is registered', () => {
+    expect(createSupplementalCommands().some((c) => c.name === 'workflow')).toBe(true);
+  });
   it('runs a fan-out workflow and prints the returned value', async () => {
     const fs = await VirtualFS.create({ dbName: `wf-${Math.random()}`, wipe: true });
     await fs.mkdir('/workspace', { recursive: true });
