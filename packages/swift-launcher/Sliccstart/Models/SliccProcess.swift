@@ -88,6 +88,11 @@ final class SliccProcess {
         let startedAt: Date
         var observedAppPID: pid_t?
         var staticRoot: String?
+        /// Leader join URL captured at launch time (Electron followers
+        /// only — nil for chromiumBrowser). Copied into
+        /// `PersistedLaunchRecord` so reattach can re-thread `--join`
+        /// across a smooth update.
+        var joinUrl: String?
     }
 
     /// SLICC helper/server processes keyed by AppTarget.id.
@@ -285,7 +290,8 @@ final class SliccProcess {
                 env: ["PORT": "\(port)"],
                 cdpPort: cdpPort,
                 servePort: port,
-                electronAppPath: app.path
+                electronAppPath: app.path,
+                joinUrl: leaderJoinUrl
             )
         } catch {
             recordStartFailure(for: app, message: error.localizedDescription)
@@ -496,7 +502,8 @@ final class SliccProcess {
                 electronAppPath: record.electronAppPath,
                 servePort: record.servePort,
                 cdpPort: record.cdpPort,
-                staticRoot: uiOverlayRoot
+                staticRoot: uiOverlayRoot,
+                joinUrl: record.joinUrl
             )
             return (id, nil as AppTarget?, persisted)
         }
@@ -550,7 +557,8 @@ final class SliccProcess {
         servePort: UInt16,
         electronAppPath: String? = nil,
         targetName: String,
-        staticRoot: String? = nil
+        staticRoot: String? = nil,
+        joinUrl: String? = nil
     ) {
         launchRecords[id] = LaunchRecord(
             process: process,
@@ -562,7 +570,8 @@ final class SliccProcess {
             targetName: targetName,
             startedAt: Date(),
             observedAppPID: nil,
-            staticRoot: staticRoot
+            staticRoot: staticRoot,
+            joinUrl: joinUrl
         )
     }
 
@@ -586,7 +595,8 @@ final class SliccProcess {
                 electronAppPath: record.electronAppPath,
                 servePort: record.servePort,
                 cdpPort: record.cdpPort,
-                staticRoot: record.staticRoot
+                staticRoot: record.staticRoot,
+                joinUrl: record.joinUrl
             )
         }
         do {
@@ -635,6 +645,39 @@ final class SliccProcess {
         return reattached
     }
 
+    /// Args handed to slicc-server when reattaching to a surviving runtime
+    /// across a smooth update. Mirrors `electronAppArgs` /
+    /// `standaloneBrowserArgs` — extracted into a pure builder so unit tests
+    /// can pin the flag set (including `--join=`) without spawning a real
+    /// process. The `--join=<url>` flag is gated identically to
+    /// `electronAppArgs`: appended only for Electron followers with a
+    /// non-nil, non-empty `joinUrl`.
+    static func reattachArgs(
+        targetType: AppTargetType,
+        electronAppPath: String?,
+        cdpPort: UInt16,
+        joinUrl: String?,
+        overlay: String?
+    ) -> [String] {
+        var args: [String] = [
+            "--serve-only",
+            "--cdp-port=\(cdpPort)",
+        ]
+        if targetType == .electronApp {
+            if let electronAppPath {
+                args.append("--electron-app=\(electronAppPath)")
+            }
+            args.append("--electron")
+            if let joinUrl, !joinUrl.isEmpty {
+                args.append("--join=\(joinUrl)")
+            }
+        }
+        if let overlay, !overlay.isEmpty {
+            args.append("--static-root=\(overlay)")
+        }
+        return args
+    }
+
     private func reattach(target: AppTarget, record: PersistedLaunchRecord) throws {
         // Re-spawn slicc-server in --serve-only mode so it reuses the
         // existing browser/Electron without re-launching it. Same ports
@@ -642,17 +685,13 @@ final class SliccProcess {
         guard !Self.isPortInUse(record.servePort) else {
             throw LaunchError.portInUse(record.servePort)
         }
-        var extraArgs: [String] = [
-            "--serve-only",
-            "--cdp-port=\(record.cdpPort)",
-        ]
-        if target.type == .electronApp {
-            extraArgs.append("--electron-app=\(target.path)")
-            extraArgs.append("--electron")
-        }
-        if let staticRoot = record.staticRoot ?? uiOverlayRoot, !staticRoot.isEmpty {
-            extraArgs.append("--static-root=\(staticRoot)")
-        }
+        let extraArgs = Self.reattachArgs(
+            targetType: target.type,
+            electronAppPath: target.type == .electronApp ? target.path : nil,
+            cdpPort: record.cdpPort,
+            joinUrl: record.joinUrl,
+            overlay: record.staticRoot ?? uiOverlayRoot
+        )
         var env: [String: String] = ["PORT": "\(record.servePort)"]
         if target.type == .chromiumBrowser {
             env["CHROME_PATH"] = target.executablePath
@@ -671,7 +710,8 @@ final class SliccProcess {
             env: env,
             cdpPort: record.cdpPort,
             servePort: record.servePort,
-            electronAppPath: record.electronAppPath
+            electronAppPath: record.electronAppPath,
+            joinUrl: record.joinUrl
         )
     }
 
@@ -703,7 +743,8 @@ final class SliccProcess {
         env: [String: String],
         cdpPort: UInt16,
         servePort: UInt16,
-        electronAppPath: String?
+        electronAppPath: String?,
+        joinUrl: String? = nil
     ) throws {
         let launchConfig = try Self.resolveLaunchConfiguration(sliccDir: sliccDir, extraArgs: extraArgs)
         log.info("spawn: \(launchConfig.executablePath, privacy: .public) \(launchConfig.arguments.joined(separator: " "), privacy: .public)")
@@ -771,7 +812,8 @@ final class SliccProcess {
             targetName: target.name,
             startedAt: Date(),
             observedAppPID: nil,
-            staticRoot: uiOverlayRoot
+            staticRoot: uiOverlayRoot,
+            joinUrl: joinUrl
         )
     }
 

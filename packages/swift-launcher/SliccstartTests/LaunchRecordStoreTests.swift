@@ -35,7 +35,8 @@ final class LaunchRecordStoreTests: XCTestCase {
                 electronAppPath: nil,
                 servePort: 5710,
                 cdpPort: 9222,
-                staticRoot: nil
+                staticRoot: nil,
+                joinUrl: nil
             ),
             PersistedLaunchRecord(
                 targetId: "/Applications/Slack.app",
@@ -44,13 +45,39 @@ final class LaunchRecordStoreTests: XCTestCase {
                 electronAppPath: "/Applications/Slack.app",
                 servePort: 5711,
                 cdpPort: 9223,
-                staticRoot: "/tmp/ui-overlays/2.55.0"
+                staticRoot: "/tmp/ui-overlays/2.55.0",
+                joinUrl: "https://www.sliccy.ai/join/abc.def"
             ),
         ]
 
         try store.save(records)
         XCTAssertTrue(FileManager.default.fileExists(atPath: storeURL.path))
         XCTAssertEqual(store.load(), records)
+    }
+
+    func testDecodeLegacyJSONWithoutJoinUrlFieldDefaultsToNil() throws {
+        // JSON written by older Sliccstart versions does not carry the
+        // `joinUrl` key. Persisted records must continue to load with
+        // `joinUrl == nil` instead of failing the whole snapshot.
+        let legacyJSON = """
+        [
+          {
+            "targetId": "/Applications/Slack.app",
+            "targetName": "Slack",
+            "targetType": "electronApp",
+            "electronAppPath": "/Applications/Slack.app",
+            "servePort": 5711,
+            "cdpPort": 9223,
+            "staticRoot": null
+          }
+        ]
+        """
+        try legacyJSON.write(to: storeURL, atomically: true, encoding: .utf8)
+
+        let loaded = store.load()
+        XCTAssertEqual(loaded.count, 1)
+        XCTAssertEqual(loaded.first?.targetName, "Slack")
+        XCTAssertNil(loaded.first?.joinUrl)
     }
 
     func testClearRemovesFile() throws {

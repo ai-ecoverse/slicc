@@ -109,4 +109,76 @@ final class SliccProcessLaunchArgsTests: XCTestCase {
         XCTAssertEqual(args.last, "--static-root=/tmp/overlay")
         XCTAssertTrue(args.contains("--join=https://example.test/join/abc.def"))
     }
+
+    // MARK: - Reattach args (smooth-update / overlay-respawn paths)
+
+    func testReattachArgsChromiumBrowserOmitsJoinAndElectronFlags() {
+        let args = SliccProcess.reattachArgs(
+            targetType: .chromiumBrowser,
+            electronAppPath: nil,
+            cdpPort: 9222,
+            joinUrl: nil,
+            overlay: nil
+        )
+        XCTAssertEqual(args, ["--serve-only", "--cdp-port=9222"])
+    }
+
+    func testReattachArgsElectronWithJoinUrlIncludesJoinFlag() {
+        // The P2 regression Codex flagged: reattach into a surviving
+        // Electron follower must re-thread `--join=<url>` so the
+        // follower keeps auto-attaching to the leader.
+        let args = SliccProcess.reattachArgs(
+            targetType: .electronApp,
+            electronAppPath: "/Applications/Slack.app",
+            cdpPort: 9223,
+            joinUrl: "https://example.test/join/abc.def",
+            overlay: nil
+        )
+        XCTAssertEqual(args, [
+            "--serve-only",
+            "--cdp-port=9223",
+            "--electron-app=/Applications/Slack.app",
+            "--electron",
+            "--join=https://example.test/join/abc.def",
+        ])
+    }
+
+    func testReattachArgsElectronWithoutJoinUrlOmitsJoinFlag() {
+        let args = SliccProcess.reattachArgs(
+            targetType: .electronApp,
+            electronAppPath: "/Applications/Slack.app",
+            cdpPort: 9223,
+            joinUrl: nil,
+            overlay: nil
+        )
+        XCTAssertEqual(args, [
+            "--serve-only",
+            "--cdp-port=9223",
+            "--electron-app=/Applications/Slack.app",
+            "--electron",
+        ])
+        XCTAssertFalse(args.contains { $0.hasPrefix("--join=") })
+    }
+
+    func testReattachArgsElectronTreatsEmptyJoinUrlAsAbsent() {
+        let args = SliccProcess.reattachArgs(
+            targetType: .electronApp,
+            electronAppPath: "/Applications/Slack.app",
+            cdpPort: 9223,
+            joinUrl: "",
+            overlay: nil
+        )
+        XCTAssertFalse(args.contains { $0.hasPrefix("--join=") })
+    }
+
+    func testReattachArgsAppendStaticRootOverlay() {
+        let args = SliccProcess.reattachArgs(
+            targetType: .electronApp,
+            electronAppPath: "/Applications/Slack.app",
+            cdpPort: 9223,
+            joinUrl: "https://example.test/join/abc.def",
+            overlay: "/tmp/overlay"
+        )
+        XCTAssertEqual(args.last, "--static-root=/tmp/overlay")
+    }
 }

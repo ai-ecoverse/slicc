@@ -23,6 +23,14 @@ struct PersistedLaunchRecord: Codable, Equatable {
     /// Optional UI overlay path (Phase C). When set, the relaunched
     /// slicc-server is spawned with --static-root pointing here.
     var staticRoot: String?
+    /// Leader join URL captured at launch time for Electron followers.
+    /// Nil for chromiumBrowser records. Persisted so reattach can re-thread
+    /// `--join=<url>` to the new slicc-server and keep the follower
+    /// auto-attached to the leader after a smooth update. Decoding uses
+    /// the synthesized `decodeIfPresent` for Optional properties, so
+    /// JSON written by older Sliccstart versions (which omit the key)
+    /// still loads with `joinUrl == nil`.
+    var joinUrl: String?
 }
 
 /// Disk-backed store for `PersistedLaunchRecord`s. JSON, single file under
