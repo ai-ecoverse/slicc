@@ -693,6 +693,278 @@ export class ElectronOverlayInjector {
     });
   }
 
+  /**
+   * Build a script that sets the SLICC theme preference in localStorage to
+   * match the target app's detected theme, then runs the bootstrap.
+   */
+  private buildThemedBootstrap(theme: 'light' | 'dark'): string {
+    const themeScript = `try{localStorage.setItem('slicc-theme',${JSON.stringify(theme)})}catch(e){}`;
+    return `${themeScript}\n${this.bootstrapScript}`;
+  }
+
+  /**
+   * Handle the initial CDP `ws.on('open', ...)` event for a target: enable
+   * Runtime/Page, set CSP bypass, detect theme, inject the overlay, and (on a
+   * first connect) probe whether the overlay iframe actually loaded — falling
+   * back to a CSP-bypass reload by setting `state.pendingReload` and
+   * `state.pendingCspEscalation` for the message handler to continue from.
+   *
+   * Mutating flow flags (`pendingReload`, `pendingCspEscalation`,
+   * `fetchProxyActive`) live on the shared `state` object so this helper
+   * preserves the original closure-driven control flow exactly.
+   */
+  private handleSocketOpen(
+    ws: WebSocket,
+    send: (method: string, params?: Record<string, unknown>) => number,
+    target: ElectronInspectableTarget,
+    state: ConnectFlowState
+  ): void {
+    const alreadyBypassed = this.cspBypassedTargets.has(target.url);
+    console.log(
+      `[electron-float] Connected to target, bypassed=${alreadyBypassed}, url=${target.url}`
+    );
+
+    send('Runtime.enable');
+    send('Page.enable');
+
+    // Set CSP bypass — affects future resource loads on the current page
+    send('Page.setBypassCSP', { enabled: true });
+
+    if (alreadyBypassed) {
+      // Already reloaded with CSP bypass previously — detect theme and inject
+      console.log(
+        `[electron-float] Detecting theme and injecting overlay (CSP already bypassed)...`
+      );
+      void detectAppThemeFromScreenshot(ws, send).then((theme) => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        send('Runtime.evaluate', {
+          expression: this.buildThemedBootstrap(theme),
+          awaitPromise: false,
+        });
+      });
+      return;
+    }
+
+    // First connection to this target URL: detect theme, then inject overlay.
+    // After injection, probe whether the iframe loaded; if CSP blocked it, fall
+    // back to reload+proxy. We probe/escalate regardless of URL scheme — file://
+    // (and app://-style local) Electron renderers can still ship a meta CSP
+    // (e.g. AEM Desktop's `default-src 'self'`) that blocks the overlay iframe.
+    console.log(`[electron-float] Detecting theme before first overlay injection...`);
+    void detectAppThemeFromScreenshot(ws, send).then((theme) => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      console.log(`[electron-float] Injecting overlay (first attempt, theme=${theme})...`);
+      send('Runtime.evaluate', {
+        expression: this.buildThemedBootstrap(theme),
+        awaitPromise: false,
+      });
+
+      // After a short delay, probe whether the overlay iframe loaded.
+      // If CSP blocked it, reload the page so Page.setBypassCSP takes effect.
+      // If that still doesn't work, escalate to the Fetch proxy.
+      setTimeout(async () => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+
+        const loaded = await this.probeOverlayIframeLoaded(ws, send);
+        if (loaded) {
+          console.log(`[electron-float] Overlay iframe loaded successfully — no CSP reload needed`);
+          this.cspBypassedTargets.add(target.url);
+          return;
+        }
+
+        // Phase 2: Page.setBypassCSP was already set — a simple reload should
+        // make the browser ignore CSP headers on the fresh navigation.
+        // Deliberately do NOT recordBypassed yet — if the CDP session
+        // disconnects mid-reload (AEM Desktop's bootstrap recreates the
+        // execution context, which closes our WS), the next reconnect
+        // needs to re-run the reload path. Only record once the post-reload
+        // probe confirms the iframe loaded. Mirrors swift-server d1c9f14d
+        // (`shouldRecordBypassedAfter(probeAction:)` returns false for
+        // `.reloadWithBypass`).
+        console.log(
+          `[electron-float] Overlay iframe blocked by CSP, reloading with bypass: ${target.url}`
+        );
+        state.pendingReload = true;
+        state.pendingCspEscalation = true;
+        send('Page.reload', { ignoreCache: true });
+      }, this.probeDelayMs);
+    });
+  }
+
+  /**
+   * Handle `Page.loadEventFired` after a CSP-bypass reload: re-inject the
+   * themed overlay, then (if this load came from the simple-reload path) probe
+   * the iframe again and, if still blocked, escalate to the Fetch HTTP proxy
+   * which strips CSP from the document response. The proxy reload also sets
+   * `pendingReload` again so the next `loadEventFired` re-injects on top of
+   * the stripped response.
+   */
+  private handlePageLoadAfterReload(
+    ws: WebSocket,
+    send: (method: string, params?: Record<string, unknown>) => number,
+    target: ElectronInspectableTarget,
+    state: ConnectFlowState
+  ): void {
+    state.pendingReload = false;
+    console.log(
+      `[electron-float] Page loaded after CSP reload, detecting theme and injecting overlay...`
+    );
+    if (ws.readyState !== WebSocket.OPEN) return;
+    void detectAppThemeFromScreenshot(ws, send).then((theme) => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      send('Runtime.evaluate', {
+        expression: this.buildThemedBootstrap(theme),
+        awaitPromise: false,
+      });
+    });
+
+    // If this was a simple reload (no proxy), check if the iframe loads now.
+    // If it still doesn't, escalate to the Fetch proxy as a last resort.
+    if (state.pendingCspEscalation) {
+      state.pendingCspEscalation = false;
+      setTimeout(async () => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        const loaded = await this.probeOverlayIframeLoaded(ws, send);
+        if (loaded) {
+          console.log(`[electron-float] Overlay iframe loaded after CSP reload — no proxy needed`);
+          this.cspBypassedTargets.add(target.url);
+          return;
+        }
+
+        const fetchOrigin = resolveFetchProxyOrigin(target.url, this.servePort);
+        console.log(
+          `[electron-float] CSP reload insufficient, escalating to Fetch proxy: target=${target.url} origin=${fetchOrigin}`
+        );
+        state.fetchProxyActive = true;
+        send('Fetch.enable', {
+          patterns: [{ urlPattern: `${fetchOrigin}/*`, requestStage: 'Request' }],
+        });
+        state.pendingReload = true;
+        send('Page.reload', { ignoreCache: true });
+      }, this.probeDelayMs);
+    }
+  }
+
+  /**
+   * Handle a single `Fetch.requestPaused` event under the active Fetch proxy:
+   * pass non-HTML requests straight through with `Fetch.continueRequest`, and
+   * proxy HTML document requests through Node http/https so the response can
+   * be returned via `Fetch.fulfillRequest` with CSP and hop-by-hop headers
+   * stripped. `Fetch.fulfillRequest` is intentionally fire-and-forget — there
+   * is no CDP reply for fulfill, and the response body is the document body.
+   */
+  private handleFetchRequestPaused(
+    ws: WebSocket,
+    send: (method: string, params?: Record<string, unknown>) => number,
+    msg: { params?: { requestId?: string; request?: Record<string, unknown> } }
+  ): void {
+    const requestId = msg.params?.requestId;
+    if (!requestId) {
+      console.warn('[electron-float] Fetch.requestPaused without requestId, skipping');
+      return;
+    }
+    const request = (msg.params?.request ?? {}) as {
+      url?: string;
+      method?: string;
+      headers?: Record<string, string>;
+      postData?: string;
+    };
+    const url = request.url || '';
+    const method = request.method || 'GET';
+    const requestHeaders = request.headers || {};
+    const postData = request.postData;
+
+    // Only proxy HTML document requests (Accept header contains text/html)
+    const acceptHeader = requestHeaders['Accept'] || requestHeaders['accept'] || '';
+    if (!acceptHeader.includes('text/html')) {
+      send('Fetch.continueRequest', { requestId });
+      return;
+    }
+
+    console.log(`[electron-float] Proxying request to strip CSP: ${url.substring(0, 60)}`);
+
+    // Make the request ourselves using Node.js http/https
+    const parsedUrl = new URL(url);
+    const transport = parsedUrl.protocol === 'https:' ? https : http;
+
+    const options = {
+      hostname: parsedUrl.hostname,
+      port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
+      path: parsedUrl.pathname + parsedUrl.search,
+      method: method,
+      headers: requestHeaders,
+    };
+
+    const proxyReq = transport.request(options, (proxyRes) => {
+      const bodyChunks: Buffer[] = [];
+      proxyRes.on('data', (chunk: Buffer) => bodyChunks.push(chunk));
+      proxyRes.on('end', () => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+
+        const fullBody = Buffer.concat(bodyChunks);
+
+        // Build response headers, stripping CSP and hop-by-hop headers
+        // that are invalid in Fetch.fulfillRequest responses
+        const HOP_BY_HOP = new Set([
+          'content-security-policy',
+          'content-security-policy-report-only',
+          'transfer-encoding',
+          'connection',
+          'keep-alive',
+        ]);
+        const responseHeaders: Array<{ name: string; value: string }> = [];
+        let strippedCSP = false;
+        for (const [name, value] of Object.entries(proxyRes.headers)) {
+          const lower = name.toLowerCase();
+          if (lower.includes('content-security-policy')) {
+            strippedCSP = true;
+            continue;
+          }
+          if (HOP_BY_HOP.has(lower)) continue;
+          // Update content-length to match actual body size
+          if (lower === 'content-length') {
+            responseHeaders.push({ name, value: String(fullBody.length) });
+            continue;
+          }
+          if (Array.isArray(value)) {
+            value.forEach((v) => {
+              responseHeaders.push({ name, value: v });
+            });
+          } else if (value) {
+            responseHeaders.push({ name, value });
+          }
+        }
+
+        if (strippedCSP) {
+          console.log(`[electron-float] Stripped CSP from: ${url.substring(0, 60)}`);
+        }
+
+        send('Fetch.fulfillRequest', {
+          requestId,
+          responseCode: proxyRes.statusCode || 200,
+          responseHeaders,
+          body: fullBody.toString('base64'),
+        });
+      });
+    });
+
+    proxyReq.on('error', (err) => {
+      console.error(
+        `[electron-float] Proxy request failed for ${url.substring(0, 60)}:`,
+        err.message
+      );
+      if (ws.readyState === WebSocket.OPEN) {
+        send('Fetch.failRequest', { requestId, errorReason: 'Failed' });
+      }
+    });
+
+    // Forward request body if present (for POST/PUT requests)
+    if (postData) {
+      proxyReq.write(postData);
+    }
+    proxyReq.end();
+  }
+
   private connectToTarget(target: ElectronInspectableTarget): void {
     const targetId = target.webSocketDebuggerUrl!;
     const ws = new WebSocket(targetId);
@@ -705,91 +977,14 @@ export class ElectronOverlayInjector {
       return id;
     };
 
-    const cspBypassedTargets = this.cspBypassedTargets;
-    const bootstrapScript = this.bootstrapScript;
-    let pendingReload = false;
-    let pendingCspEscalation = false;
-    let fetchProxyActive = false;
-
-    /**
-     * Build a script that sets the SLICC theme preference in localStorage
-     * to match the target app's detected theme, then runs the bootstrap.
-     */
-    const buildThemedBootstrap = (theme: 'light' | 'dark'): string => {
-      const themeScript = `try{localStorage.setItem('slicc-theme',${JSON.stringify(theme)})}catch(e){}`;
-      return `${themeScript}\n${bootstrapScript}`;
+    const state: ConnectFlowState = {
+      pendingReload: false,
+      pendingCspEscalation: false,
+      fetchProxyActive: false,
     };
 
     ws.on('open', () => {
-      const alreadyBypassed = cspBypassedTargets.has(target.url);
-      console.log(
-        `[electron-float] Connected to target, bypassed=${alreadyBypassed}, url=${target.url}`
-      );
-
-      send('Runtime.enable');
-      send('Page.enable');
-
-      // Set CSP bypass — affects future resource loads on the current page
-      send('Page.setBypassCSP', { enabled: true });
-
-      if (alreadyBypassed) {
-        // Already reloaded with CSP bypass previously — detect theme and inject
-        console.log(
-          `[electron-float] Detecting theme and injecting overlay (CSP already bypassed)...`
-        );
-        void detectAppThemeFromScreenshot(ws, send).then((theme) => {
-          if (ws.readyState !== WebSocket.OPEN) return;
-          send('Runtime.evaluate', {
-            expression: buildThemedBootstrap(theme),
-            awaitPromise: false,
-          });
-        });
-        return;
-      }
-
-      // First connection to this target URL: detect theme, then inject overlay.
-      // After injection, probe whether the iframe loaded; if CSP blocked it, fall
-      // back to reload+proxy. We probe/escalate regardless of URL scheme — file://
-      // (and app://-style local) Electron renderers can still ship a meta CSP
-      // (e.g. AEM Desktop's `default-src 'self'`) that blocks the overlay iframe.
-      console.log(`[electron-float] Detecting theme before first overlay injection...`);
-      void detectAppThemeFromScreenshot(ws, send).then((theme) => {
-        if (ws.readyState !== WebSocket.OPEN) return;
-        console.log(`[electron-float] Injecting overlay (first attempt, theme=${theme})...`);
-        send('Runtime.evaluate', { expression: buildThemedBootstrap(theme), awaitPromise: false });
-
-        // After a short delay, probe whether the overlay iframe loaded.
-        // If CSP blocked it, reload the page so Page.setBypassCSP takes effect.
-        // If that still doesn't work, escalate to the Fetch proxy.
-        setTimeout(async () => {
-          if (ws.readyState !== WebSocket.OPEN) return;
-
-          const loaded = await this.probeOverlayIframeLoaded(ws, send);
-          if (loaded) {
-            console.log(
-              `[electron-float] Overlay iframe loaded successfully — no CSP reload needed`
-            );
-            cspBypassedTargets.add(target.url);
-            return;
-          }
-
-          // Phase 2: Page.setBypassCSP was already set — a simple reload should
-          // make the browser ignore CSP headers on the fresh navigation.
-          // Deliberately do NOT recordBypassed yet — if the CDP session
-          // disconnects mid-reload (AEM Desktop's bootstrap recreates the
-          // execution context, which closes our WS), the next reconnect
-          // needs to re-run the reload path. Only record once the post-reload
-          // probe confirms the iframe loaded. Mirrors swift-server d1c9f14d
-          // (`shouldRecordBypassedAfter(probeAction:)` returns false for
-          // `.reloadWithBypass`).
-          console.log(
-            `[electron-float] Overlay iframe blocked by CSP, reloading with bypass: ${target.url}`
-          );
-          pendingReload = true;
-          pendingCspEscalation = true;
-          send('Page.reload', { ignoreCache: true });
-        }, this.probeDelayMs);
-      });
+      this.handleSocketOpen(ws, send, target, state);
     });
 
     // Handle CDP events: lifecycle events and Fetch interception
@@ -798,149 +993,12 @@ export class ElectronOverlayInjector {
         const msg = JSON.parse(data.toString());
 
         // Inject overlay after page load completes (after CSP-bypass reload)
-        if (msg.method === 'Page.loadEventFired' && pendingReload) {
-          pendingReload = false;
-          console.log(
-            `[electron-float] Page loaded after CSP reload, detecting theme and injecting overlay...`
-          );
-          if (ws.readyState !== WebSocket.OPEN) return;
-          void detectAppThemeFromScreenshot(ws, send).then((theme) => {
-            if (ws.readyState !== WebSocket.OPEN) return;
-            send('Runtime.evaluate', {
-              expression: buildThemedBootstrap(theme),
-              awaitPromise: false,
-            });
-          });
-
-          // If this was a simple reload (no proxy), check if the iframe loads now.
-          // If it still doesn't, escalate to the Fetch proxy as a last resort.
-          if (pendingCspEscalation) {
-            pendingCspEscalation = false;
-            setTimeout(async () => {
-              if (ws.readyState !== WebSocket.OPEN) return;
-              const loaded = await this.probeOverlayIframeLoaded(ws, send);
-              if (loaded) {
-                console.log(
-                  `[electron-float] Overlay iframe loaded after CSP reload — no proxy needed`
-                );
-                cspBypassedTargets.add(target.url);
-                return;
-              }
-
-              const fetchOrigin = resolveFetchProxyOrigin(target.url, this.servePort);
-              console.log(
-                `[electron-float] CSP reload insufficient, escalating to Fetch proxy: target=${target.url} origin=${fetchOrigin}`
-              );
-              fetchProxyActive = true;
-              send('Fetch.enable', {
-                patterns: [{ urlPattern: `${fetchOrigin}/*`, requestStage: 'Request' }],
-              });
-              pendingReload = true;
-              send('Page.reload', { ignoreCache: true });
-            }, this.probeDelayMs);
-          }
+        if (msg.method === 'Page.loadEventFired' && state.pendingReload) {
+          this.handlePageLoadAfterReload(ws, send, target, state);
         }
 
-        if (msg.method === 'Fetch.requestPaused' && fetchProxyActive) {
-          const requestId = msg.params?.requestId;
-          if (!requestId) {
-            console.warn('[electron-float] Fetch.requestPaused without requestId, skipping');
-            return;
-          }
-          const url = msg.params?.request?.url || '';
-          const method = msg.params?.request?.method || 'GET';
-          const requestHeaders = msg.params?.request?.headers || {};
-          const postData = msg.params?.request?.postData;
-
-          // Only proxy HTML document requests (Accept header contains text/html)
-          const acceptHeader = requestHeaders['Accept'] || requestHeaders['accept'] || '';
-          if (!acceptHeader.includes('text/html')) {
-            send('Fetch.continueRequest', { requestId });
-            return;
-          }
-
-          console.log(`[electron-float] Proxying request to strip CSP: ${url.substring(0, 60)}`);
-
-          // Make the request ourselves using Node.js http/https
-          const parsedUrl = new URL(url);
-          const transport = parsedUrl.protocol === 'https:' ? https : http;
-
-          const options = {
-            hostname: parsedUrl.hostname,
-            port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
-            path: parsedUrl.pathname + parsedUrl.search,
-            method: method,
-            headers: requestHeaders,
-          };
-
-          const proxyReq = transport.request(options, (proxyRes) => {
-            const bodyChunks: Buffer[] = [];
-            proxyRes.on('data', (chunk: Buffer) => bodyChunks.push(chunk));
-            proxyRes.on('end', () => {
-              if (ws.readyState !== WebSocket.OPEN) return;
-
-              const fullBody = Buffer.concat(bodyChunks);
-
-              // Build response headers, stripping CSP and hop-by-hop headers
-              // that are invalid in Fetch.fulfillRequest responses
-              const HOP_BY_HOP = new Set([
-                'content-security-policy',
-                'content-security-policy-report-only',
-                'transfer-encoding',
-                'connection',
-                'keep-alive',
-              ]);
-              const responseHeaders: Array<{ name: string; value: string }> = [];
-              let strippedCSP = false;
-              for (const [name, value] of Object.entries(proxyRes.headers)) {
-                const lower = name.toLowerCase();
-                if (lower.includes('content-security-policy')) {
-                  strippedCSP = true;
-                  continue;
-                }
-                if (HOP_BY_HOP.has(lower)) continue;
-                // Update content-length to match actual body size
-                if (lower === 'content-length') {
-                  responseHeaders.push({ name, value: String(fullBody.length) });
-                  continue;
-                }
-                if (Array.isArray(value)) {
-                  value.forEach((v) => {
-                    responseHeaders.push({ name, value: v });
-                  });
-                } else if (value) {
-                  responseHeaders.push({ name, value });
-                }
-              }
-
-              if (strippedCSP) {
-                console.log(`[electron-float] Stripped CSP from: ${url.substring(0, 60)}`);
-              }
-
-              send('Fetch.fulfillRequest', {
-                requestId,
-                responseCode: proxyRes.statusCode || 200,
-                responseHeaders,
-                body: fullBody.toString('base64'),
-              });
-            });
-          });
-
-          proxyReq.on('error', (err) => {
-            console.error(
-              `[electron-float] Proxy request failed for ${url.substring(0, 60)}:`,
-              err.message
-            );
-            if (ws.readyState === WebSocket.OPEN) {
-              send('Fetch.failRequest', { requestId, errorReason: 'Failed' });
-            }
-          });
-
-          // Forward request body if present (for POST/PUT requests)
-          if (postData) {
-            proxyReq.write(postData);
-          }
-          proxyReq.end();
+        if (msg.method === 'Fetch.requestPaused' && state.fetchProxyActive) {
+          this.handleFetchRequestPaused(ws, send, msg);
         }
       } catch {
         // Ignore parse errors for non-JSON messages
@@ -964,4 +1022,16 @@ export class ElectronOverlayInjector {
       }
     });
   }
+}
+
+/**
+ * Per-connection control-flow flags shared between `handleSocketOpen`,
+ * `handlePageLoadAfterReload`, and the message-loop in `connectToTarget`.
+ * Lifted out of the closure so the helpers stay below the function-size cap
+ * while preserving the original mutate-from-multiple-handlers semantics.
+ */
+interface ConnectFlowState {
+  pendingReload: boolean;
+  pendingCspEscalation: boolean;
+  fetchProxyActive: boolean;
 }
