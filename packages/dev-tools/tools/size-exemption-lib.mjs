@@ -53,14 +53,33 @@ export function extractExemptionGlobsFor(biomeConfig, ruleKey) {
   return [...out];
 }
 
-// Thin wrappers bound to the function-size rule key, preserving the original
-// public surface used by `check-touched-exemptions.mjs`.
+// Backward-compatible size-only wrappers, bound to the function-size rule key,
+// preserving the original public surface for external/legacy callers and tests.
 export function isSizeExemptionOverride(override) {
   return isExemptionOverrideFor(override, SIZE_RULE_KEY);
 }
 
 export function extractSizeExemptionGlobs(biomeConfig) {
   return extractExemptionGlobsFor(biomeConfig, SIZE_RULE_KEY);
+}
+
+// Set difference of two glob lists, returning the entries present in
+// `currentGlobs` but not in `baseGlobs`. Order-preserving (in the order they
+// appear in `currentGlobs`), deduped. Non-array inputs are treated as empty.
+export function findAddedExemptions(baseGlobs, currentGlobs) {
+  const current = Array.isArray(currentGlobs) ? currentGlobs : [];
+  const base = Array.isArray(baseGlobs) ? baseGlobs : [];
+  const baseSet = new Set(base);
+  const seen = new Set();
+  const out = [];
+  for (const g of current) {
+    if (typeof g !== 'string' || g.length === 0) continue;
+    if (baseSet.has(g)) continue;
+    if (seen.has(g)) continue;
+    seen.add(g);
+    out.push(g);
+  }
+  return out;
 }
 
 // Convert a biome-style include glob into an anchored RegExp.

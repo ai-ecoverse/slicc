@@ -3,6 +3,7 @@ import {
   COMPLEXITY_RULE_KEY,
   extractExemptionGlobsFor,
   extractSizeExemptionGlobs,
+  findAddedExemptions,
   findTouchedExemptions,
   globToRegex,
   isExemptionOverrideFor,
@@ -238,5 +239,58 @@ describe('findTouchedExemptions', () => {
   it('returns [] for empty inputs', () => {
     expect(findTouchedExemptions([], exemptions)).toEqual([]);
     expect(findTouchedExemptions(['x'], [])).toEqual([]);
+  });
+});
+
+describe('findAddedExemptions', () => {
+  it('returns globs present in current but not in base', () => {
+    expect(
+      findAddedExemptions(
+        ['packages/a.ts', 'packages/b.ts'],
+        ['packages/a.ts', 'packages/b.ts', 'packages/c.ts', 'packages/d.ts']
+      )
+    ).toEqual(['packages/c.ts', 'packages/d.ts']);
+  });
+
+  it('returns [] when current is a subset of (or equal to) base', () => {
+    expect(
+      findAddedExemptions(['packages/a.ts', 'packages/b.ts'], ['packages/a.ts', 'packages/b.ts'])
+    ).toEqual([]);
+    expect(findAddedExemptions(['packages/a.ts', 'packages/b.ts'], ['packages/a.ts'])).toEqual([]);
+  });
+
+  it('returns all current entries when base is empty (caller decides bootstrapping)', () => {
+    expect(findAddedExemptions([], ['packages/a.ts', 'packages/b.ts'])).toEqual([
+      'packages/a.ts',
+      'packages/b.ts',
+    ]);
+  });
+
+  it('returns [] when current is empty', () => {
+    expect(findAddedExemptions(['packages/a.ts'], [])).toEqual([]);
+  });
+
+  it('treats non-array inputs as empty', () => {
+    expect(findAddedExemptions(null, ['packages/a.ts'])).toEqual(['packages/a.ts']);
+    expect(findAddedExemptions(undefined, ['packages/a.ts'])).toEqual(['packages/a.ts']);
+    expect(findAddedExemptions(['packages/a.ts'], null)).toEqual([]);
+    expect(findAddedExemptions(['packages/a.ts'], undefined)).toEqual([]);
+    expect(findAddedExemptions(null, null)).toEqual([]);
+  });
+
+  it('dedupes current and preserves first-seen order', () => {
+    expect(
+      findAddedExemptions(
+        ['packages/a.ts'],
+        ['packages/c.ts', 'packages/b.ts', 'packages/c.ts', 'packages/b.ts', 'packages/d.ts']
+      )
+    ).toEqual(['packages/c.ts', 'packages/b.ts', 'packages/d.ts']);
+  });
+
+  it('skips empty/non-string current entries', () => {
+    expect(findAddedExemptions([], ['packages/a.ts', '', 'packages/b.ts'])).toEqual([
+      'packages/a.ts',
+      'packages/b.ts',
+    ]);
   });
 });
