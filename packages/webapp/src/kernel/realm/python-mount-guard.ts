@@ -35,9 +35,16 @@ export function formatPythonMountGuardMessage(mountPath: string): string {
 }
 
 /**
- * Python source for the guard. Reads two module-globals
- * (`__slicc_mount_prefixes`, `__slicc_mount_messages`) set by
+ * Python source for the guard. Reads one module-global
+ * (`__slicc_mount_data`, a JSON string) set by
  * {@link installPythonMountGuard} immediately before this runs.
+ *
+ * The JSON boundary sidesteps Pyodide's `JsProxy` wrapper entirely —
+ * a raw JS array/object set via `pyodide.globals.set` arrives in
+ * Python as a `JsProxy` that is not iterable, so `list(...)`/`dict(...)`
+ * over it would raise `TypeError`. Round-tripping through a JSON
+ * string keeps the payload as native Python `list`/`dict` after
+ * `json.loads`.
  *
  * The guard captures the originals once (so re-running this is
  * idempotent against a freshly-imported stdlib) and wraps each entry
@@ -61,9 +68,12 @@ import io as _slicc_io
 import os as _slicc_os
 import os.path as _slicc_osp
 import errno as _slicc_errno
+import json as _slicc_json
 
-_slicc_mount_prefixes = list(__slicc_mount_prefixes)
-_slicc_mount_messages = dict(__slicc_mount_messages)
+_slicc_data = _slicc_json.loads(__slicc_mount_data)
+_slicc_mount_prefixes = list(_slicc_data['prefixes'])
+_slicc_mount_messages = dict(_slicc_data['messages'])
+del _slicc_data
 
 def _slicc_match_mount_prefix(path):
     if path is None:
@@ -152,13 +162,16 @@ _slicc_os.rename = _slicc_guarded_rename
  * Install the Python mount guard for the given mount prefixes.
  * No-op when {@link mountPaths} is empty.
  *
- * Sets two short-lived module globals (`__slicc_mount_prefixes`,
- * `__slicc_mount_messages`) for the guard to consume, runs the
- * wrapper, then deletes the globals so they don't leak into user
- * code. Failures bubble to the caller — {@link runPyRealm} wraps the
- * call in `try/catch` + `pushWarning` like the other registration
- * helpers, so a guard install failure degrades to the bomb-FS-only
- * mode (which still raises, just with the generic strerror).
+ * Sets one short-lived module global (`__slicc_mount_data`, a JSON
+ * string carrying `{ prefixes, messages }`) for the guard to consume,
+ * runs the wrapper, then deletes the global so it doesn't leak into
+ * user code. The JSON boundary is deliberate: a raw JS array/object
+ * passed through `pyodide.globals.set` would arrive in Python as a
+ * non-iterable `JsProxy` and crash the guard at install time. Failures
+ * bubble to the caller — {@link runPyRealm} wraps the call in
+ * `try/catch` + `pushWarning` like the other registration helpers, so
+ * a guard install failure degrades to the bomb-FS-only mode (which
+ * still raises, just with the generic strerror).
  */
 export async function installPythonMountGuard(
   pyodide: PyodideInterface,
@@ -169,13 +182,13 @@ export async function installPythonMountGuard(
   for (const path of mountPaths) {
     messages[path] = formatPythonMountGuardMessage(path);
   }
-  pyodide.globals.set('__slicc_mount_prefixes', mountPaths as unknown as string[]);
-  pyodide.globals.set('__slicc_mount_messages', messages);
+  const payload = JSON.stringify({ prefixes: mountPaths, messages });
+  pyodide.globals.set('__slicc_mount_data', payload);
   try {
     await pyodide.runPythonAsync(PYTHON_MOUNT_GUARD_SOURCE);
   } finally {
     try {
-      pyodide.runPython('del __slicc_mount_prefixes, __slicc_mount_messages');
+      pyodide.runPython('del __slicc_mount_data');
     } catch {
       /* best-effort cleanup */
     }

@@ -109,9 +109,17 @@ describe('PYTHON_MOUNT_GUARD_SOURCE', () => {
     expect(PYTHON_MOUNT_GUARD_SOURCE).toContain('raise OSError(_slicc_errno.EIO, msg, str(path))');
   });
 
-  it('reads the two short-lived globals the installer sets', () => {
-    expect(PYTHON_MOUNT_GUARD_SOURCE).toContain('__slicc_mount_prefixes');
-    expect(PYTHON_MOUNT_GUARD_SOURCE).toContain('__slicc_mount_messages');
+  it('reads the short-lived global the installer sets via JSON', () => {
+    // The installer sets a single `__slicc_mount_data` global as a
+    // JSON string; the guard parses it with `json.loads` to obtain
+    // native Python list/dict values. This crosses the JS→Python
+    // boundary without going through Pyodide's `JsProxy`, which is
+    // not iterable and would crash `list(...)` / `dict(...)`.
+    expect(PYTHON_MOUNT_GUARD_SOURCE).toContain('__slicc_mount_data');
+    expect(PYTHON_MOUNT_GUARD_SOURCE).toContain('import json as _slicc_json');
+    expect(PYTHON_MOUNT_GUARD_SOURCE).toContain('_slicc_json.loads(__slicc_mount_data)');
+    expect(PYTHON_MOUNT_GUARD_SOURCE).toContain("_slicc_data['prefixes']");
+    expect(PYTHON_MOUNT_GUARD_SOURCE).toContain("_slicc_data['messages']");
   });
 });
 
@@ -123,27 +131,47 @@ describe('installPythonMountGuard', () => {
     expect(ran).toEqual([]);
   });
 
-  it('passes mount prefixes + per-prefix messages into Python', async () => {
+  it('passes mount prefixes + per-prefix messages into Python as a JSON string', async () => {
     const { pyodide, globalsSet, ran } = makeFakePyodide();
     const paths = ['/mnt/kb', '/workspace/repo'];
     await installPythonMountGuard(pyodide, paths);
-    const prefixesEntry = globalsSet.find((g) => g.name === '__slicc_mount_prefixes');
-    const messagesEntry = globalsSet.find((g) => g.name === '__slicc_mount_messages');
-    expect(prefixesEntry?.value).toEqual(paths);
-    expect(messagesEntry?.value).toEqual({
+    const dataEntry = globalsSet.find((g) => g.name === '__slicc_mount_data');
+    expect(dataEntry).toBeDefined();
+    // Regression: the boundary value MUST be a JSON string, never a
+    // raw JS array/object. Pyodide wraps raw JS values as `JsProxy`,
+    // which is not iterable — `list(...)`/`dict(...)` at the top of
+    // the guard source would crash, the installer would throw, and
+    // mount access would fall back to the generic `[Errno 29]`.
+    expect(typeof dataEntry?.value).toBe('string');
+    const parsed = JSON.parse(dataEntry?.value as string);
+    expect(parsed.prefixes).toEqual(paths);
+    expect(parsed.messages).toEqual({
       '/mnt/kb': formatBombMessage('/mnt/kb'),
       '/workspace/repo': formatBombMessage('/workspace/repo'),
     });
     expect(ran).toEqual([PYTHON_MOUNT_GUARD_SOURCE]);
   });
 
-  it('cleans up the temporary globals after the guard runs', async () => {
-    const { pyodide, syncRan } = makeFakePyodide();
+  it('only sets one boundary global (no raw JS containers leak through)', async () => {
+    // Belt-and-suspenders for the JsProxy regression: even if a
+    // future refactor adds a second global, it must also be a string
+    // (or anything other than a non-string iterable container) so
+    // the Python side never has to iterate a `JsProxy`.
+    const { pyodide, globalsSet } = makeFakePyodide();
     await installPythonMountGuard(pyodide, ['/mnt/kb']);
-    expect(syncRan).toEqual(['del __slicc_mount_prefixes, __slicc_mount_messages']);
+    expect(globalsSet).toHaveLength(1);
+    for (const entry of globalsSet) {
+      expect(typeof entry.value).toBe('string');
+    }
   });
 
-  it('cleans up globals even when runPythonAsync throws', async () => {
+  it('cleans up the temporary global after the guard runs', async () => {
+    const { pyodide, syncRan } = makeFakePyodide();
+    await installPythonMountGuard(pyodide, ['/mnt/kb']);
+    expect(syncRan).toEqual(['del __slicc_mount_data']);
+  });
+
+  it('cleans up the global even when runPythonAsync throws', async () => {
     const globalsSet: { name: string; value: unknown }[] = [];
     const syncRan: string[] = [];
     const pyodide = {
@@ -160,6 +188,6 @@ describe('installPythonMountGuard', () => {
       },
     } as unknown as Parameters<typeof installPythonMountGuard>[0];
     await expect(installPythonMountGuard(pyodide, ['/mnt/kb'])).rejects.toThrow(/python boom/);
-    expect(syncRan).toEqual(['del __slicc_mount_prefixes, __slicc_mount_messages']);
+    expect(syncRan).toEqual(['del __slicc_mount_data']);
   });
 });
