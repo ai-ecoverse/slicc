@@ -24,6 +24,7 @@ import {
   type OpfsSyncFsPlugin,
   prewalkOpfsTree,
 } from './opfs-sync-fs.js';
+import { installPythonMountGuard } from './python-mount-guard.js';
 import { type RealmPortLike, RealmRpcClient } from './realm-rpc.js';
 import type { RealmDoneMsg, RealmErrorMsg, RealmInitMsg, RealmMountPoint } from './realm-types.js';
 import { registerSliccFsModule } from './slicc-fs-module.js';
@@ -152,6 +153,21 @@ export async function runPyRealm(
       );
     } catch (err) {
       pushWarning(`bomb overlay install failed: ${describeRealmError(err)}`);
+    }
+    // Python-level guard: the bomb FS sets a friendly `.message` on
+    // its `ErrnoError`, but CPython rebuilds the OSError from the raw
+    // integer errno for stdlib calls, so only "I/O error" survives.
+    // This wraps the hot stdlib entry points and raises an OSError
+    // carrying the guidance directly. Bomb FS remains as the C-level
+    // backstop for paths the Python wrappers can't see (pandas fopen,
+    // C extensions).
+    try {
+      await installPythonMountGuard(
+        pyodide,
+        mountPoints.map((mp) => mp.path)
+      );
+    } catch (err) {
+      pushWarning(`python mount guard install failed: ${describeRealmError(err)}`);
     }
   }
 
