@@ -140,15 +140,56 @@ the closure returns.
 | `core/image-processor.ts`                        | Snapshots via `new Uint8Array(data)`                                               |
 | `cdp/browser-api.ts`                             | Consumes the view inside the callback to build base64 (no escape)                  |
 
-## Python Realm: VFS Sync Is Diff-Aware and Size-Capped
+## Python Realm: Hybrid Mount Visibility + Diff-Aware VFS Sync
 
 **File**: `packages/webapp/src/kernel/realm/py-realm-shared.ts`
 
-Pre- and post-execution sync between the VFS and Pyodide's emscripten FS uses
-two bulk RPCs — `vfs.walkTree` (host → realm: paths + sizes + content) and
-`vfs.writeBatch` (realm → host: mkdirs + file writes). The naive per-file
-`readDir`/`stat`/`readFile` chatter took minutes on workspace-sized cwds; the
-bulk path collapses that to two round-trips regardless of file count.
+The Python realm's view of the host VFS uses two distinct mechanisms, picked
+per directory by backend kind. Pre- and post-execution sync between the VFS
+and Pyodide's emscripten FS uses two bulk RPCs — `vfs.walkTree` (host → realm:
+paths + sizes + content) and `vfs.writeBatch` (realm → host: mkdirs + file
+writes). The naive per-file `readDir`/`stat`/`readFile` chatter took minutes
+on workspace-sized cwds; the bulk path collapses that to two round-trips
+regardless of file count. Mounted directories — both OPFS-backed and remote
+(S3 / DA) — are visible and writable from Python; the framing of the previous
+"empty-mount" warning no longer applies.
+
+### Mount visibility (hybrid OPFS + VFS-RPC)
+
+`runPyRealm` materializes mount subtrees into the realm before user code runs
+and flushes Python's edits back after it exits. The transport differs by
+backend kind:
+
+| Mount kind             | Read path (host → realm)                                                                                                                                                                                                                           | Write-back path (realm → host)                                                                                                                                                      |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **OPFS-backed mounts** | `mountOpfsDirsAndSyncIn` resolves the same-origin `FileSystemDirectoryHandle` and mounts it via the in-tree `OPFS_SYNC_FS` plugin. Python sees the OPFS contents synchronously the instant the mount returns — no full-tree copy through bulk RPC. | `flushOpfsRealmMounts` drains the mount's queued op chain + writes each buffered SAH's dirty bytes back to OPFS before `realm-done`.                                                |
+| **Remote mounts**      | `materializeRealmMounts` walks the mount via the `vfs` RPC channel (`readDir` / `stat` / `readFileBinary`), mounts MEMFS over the path in the Pyodide FS, and populates the subtree from the listing. Subject to `--remote-mount-cap` (see below). | `flushRealmMountWriteBack` diffs the current MEMFS state against the materialized baseline and routes created / modified / removed entries back through `vfs.writeBatch` per mount. |
+
+Mount paths that exactly match a syncDir are skipped on the OPFS pass so the
+MEMFS overlay used by remote materialization can stack without an EBUSY
+collision against an OPFS subtree.
+
+### Remote mount cap (`--remote-mount-cap`)
+
+`python3 [--remote-mount-cap=<size>]` controls how much remote (S3 / DA)
+mount content the realm is willing to materialize per invocation. Default is
+`5m` (5 MB). The cap counts file bytes across all remote mounts combined;
+local FS Access mounts are exempt and always materialize.
+
+| Form                          | Behavior                                                                                                  |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `--remote-mount-cap=5m`       | Default — materialize remote mounts up to 5 MB total.                                                     |
+| `--remote-mount-cap=0`        | Skip remote materialization entirely. Remote mount paths exist as empty MEMFS dirs; no fetches; no error. |
+| `--remote-mount-cap=<higher>` | Raise the budget. Accepts human-readable sizes (`k`/`kb`, `m`/`mb`, `g`/`gb`) or a bare byte count.       |
+
+When the listing total exceeds the cap, the invocation fails before user code
+runs with an error of the form `remote-mount cap exceeded: <total> bytes across <n> remote mount(s) > cap <cap> bytes`,
+naming each offending mount and pointing at the two escape hatches
+(`--remote-mount-cap=0` to disable, or a higher value to raise it). This is by
+design — silently truncating a remote mount would hand Python a
+half-materialized view it can't tell from the real thing.
+
+### Sync constraints (apply to the bulk-RPC paths above)
 
 | Behavior                             | Why                                                                                                                                                                                                                                                                                                                                                                                    |
 | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -160,7 +201,10 @@ bulk path collapses that to two round-trips regardless of file count.
 When extending the sync (attribute mirroring, hash-based diffing, etc.), keep
 the two-RPC shape — adding round-trips inside the loop reintroduces the
 minutes-long stall — and keep `content: Uint8Array` so binary outputs don't
-regress to the TextDecoder corruption path.
+regress to the TextDecoder corruption path. When extending mount handling,
+preserve the OPFS-direct vs. VFS-RPC split — collapsing OPFS mounts onto the
+bulk-RPC path reintroduces the full-tree copy cost the OPFS plugin was added
+to avoid.
 
 ## Runtime Detection: Workers Have No `window` Either
 
