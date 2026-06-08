@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { signSigV4 } from '../../../src/fs/mount/signing-s3.js';
+import { signSigV4 } from '../src/sigv4.js';
 
 /**
  * Canonical SigV4 v4 test vectors from AWS's official suite.
@@ -10,7 +10,7 @@ import { signSigV4 } from '../../../src/fs/mount/signing-s3.js';
  *   - region: us-east-1
  *   - service: service (the suite is service-agnostic; not 's3', so our
  *     impl skips the x-amz-content-sha256 header for these cases — see
- *     the gate in signing-s3.ts)
+ *     the gate in sigv4.ts)
  *   - now: 2015-08-30T12:36:00Z
  *
  * Vectors embedded inline rather than vendored as fixture files so the

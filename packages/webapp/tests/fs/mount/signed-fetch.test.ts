@@ -15,8 +15,8 @@
  * failure the indirect backend tests miss.
  */
 
+import type { SignAndForwardReply } from '@slicc/shared-ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { SignAndForwardReply } from '../../../src/fs/mount/sign-and-forward-shared.js';
 import { makeSignedFetchS3 } from '../../../src/fs/mount/signed-fetch.js';
 
 // ----------------- helpers -----------------

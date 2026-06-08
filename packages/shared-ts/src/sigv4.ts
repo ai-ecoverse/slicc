@@ -1,24 +1,15 @@
 /**
- * AWS SigV4 v4 signing — node-server copy.
- *
- * **Mirrored from `packages/webapp/src/fs/mount/signing-s3.ts`.** Both files
- * are byte-for-byte equivalent in behavior and must stay in sync. The reason
- * for two copies is that `tsconfig.cli.json` pins `rootDir` to
- * `packages/node-server/src`, so cross-importing the webapp source under
- * NodeNext resolution is rejected by the compiler. Sharing via a workspace
- * package is a larger change than this PR's scope.
- *
- * Drift between the two copies is caught by both test suites running the
- * same canonical AWS test vectors:
- *  - `packages/webapp/tests/fs/mount/signing-s3.test.ts`
- *  - `packages/node-server/tests/secrets/signing-s3.test.ts`
- *
- * If you change one, change the other and verify both test suites pass.
+ * AWS SigV4 v4 signing — single platform-agnostic implementation.
  *
  * Pure function — given a request + credentials + region + service + clock,
  * produces the same request with an `Authorization` header attached. Uses
  * Web Crypto (`crypto.subtle`) which works in browsers, extension service
- * workers, and Node 22+ (where it lives on `globalThis.crypto`).
+ * workers, extension offscreen documents, and Node 22+ (where it lives on
+ * `globalThis.crypto`).
+ *
+ * Consumed via `@slicc/shared-ts` by the webapp/extension mount backends and
+ * the node-server sign-and-forward handlers. Verified against the canonical
+ * AWS SigV4 v4 test vectors in `packages/shared-ts/tests/sigv4.test.ts`.
  */
 
 export interface SigV4Request {

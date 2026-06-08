@@ -1,6 +1,18 @@
 // Barrel for the mount module.
 
 export type {
+  DaSignAndForwardEnvelope,
+  S3SignAndForwardEnvelope,
+  SecretGetter,
+  SignAndForwardErrorCode,
+  SignAndForwardFailure,
+  SignAndForwardReply,
+  SignAndForwardSuccess,
+  SigV4Credentials,
+  SigV4Request,
+} from '@slicc/shared-ts';
+export { executeDaSignAndForward, executeS3SignAndForward, signSigV4 } from '@slicc/shared-ts';
+export type {
   MountBackend,
   MountDescription,
   MountDirEntry,
@@ -27,16 +39,4 @@ export {
 } from './profile.js';
 export type { CachedBody, CachedListing, RemoteMountCacheOptions } from './remote-cache.js';
 export { RemoteMountCache } from './remote-cache.js';
-export type {
-  DaSignAndForwardEnvelope,
-  S3SignAndForwardEnvelope,
-  SecretGetter,
-  SignAndForwardErrorCode,
-  SignAndForwardFailure,
-  SignAndForwardReply,
-  SignAndForwardSuccess,
-} from './sign-and-forward-shared.js';
-export { executeDaSignAndForward, executeS3SignAndForward } from './sign-and-forward-shared.js';
 export { makeSignedFetchDa, makeSignedFetchS3 } from './signed-fetch.js';
-export type { SigV4Credentials, SigV4Request } from './signing-s3.js';
-export { signSigV4 } from './signing-s3.js';
