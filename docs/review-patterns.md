@@ -169,8 +169,11 @@ This file is the source of truth. When a category changes, update the two conden
    category. Mind the 30,000-char budget enforced by
    `packages/dev-tools/tools/check-doc-sizes.mjs`. `AGENTS.md` symlinks to it, so this is
    also what Codex reads.
-2. **`.github/copilot-instructions.md`** — a self-contained summary that must stay under
-   **4,000 chars** (Copilot ignores everything past that). Lead with the highest-value rules.
+2. **`.github/copilot-instructions.md`** (and any `.github/instructions/*.instructions.md`)
+   — a self-contained summary; lead with the highest-value rules. Each file must stay under
+   **4,000 chars** because Copilot ignores everything past that. Both budgets above are
+   enforced automatically by `check-doc-sizes.mjs` (`npm run lint:docs`), so you don't have
+   to remember the numbers — overrun fails the build.
 
 The Claude action needs no change — it reads this file directly.
 
