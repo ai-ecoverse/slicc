@@ -126,6 +126,14 @@ jobs:
               (shell-first, browser-first, dual-mode CLI/extension, SHA-pinned
               actions, tests + docs for behaviour changes, etc.).
 
+            Then `Read docs/review-patterns.md` and check the diff against the
+            recurring blind-spot categories it documents (error-path coverage,
+            UI state preservation, cross-runtime parity across the five
+            runtimes, CDP edge cases, native/macOS permissions, test coverage).
+            Apply the severity rubric from that file (Critical/Major/Minor) when
+            labelling findings, and reason contextually — only flag a category
+            when the surrounding code does not already handle it.
+
             Post specific, actionable feedback as INLINE comments on the exact
             changed lines using the
             `mcp__github_inline_comment__create_inline_comment` tool. Then post

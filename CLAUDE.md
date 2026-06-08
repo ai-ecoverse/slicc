@@ -275,3 +275,16 @@ npm run build -w @slicc/chrome-extension
 **Always run `npm run lint` before committing.** It runs `biome check --write .` over JS/TS/JSON/CSS and `prettier --write .` over the remaining doc / config-text formats (Markdown, YAML, HTML), then `lint:docs` (CLAUDE.md size limits) and `lint:skills` (tessl `SKILL.md` lint). CI runs the check-only/strict equivalents (`npm run lint:ci`) as a hard gate and will reject any unformatted code. This is the most common CI failure — don't skip it.
 
 CI runs these gates in `.github/workflows/ci.yml`.
+
+## Automated PR Review Checklist
+
+Automated reviewers — the Claude action (`.github/workflows/claude-pr-review.yml`), Codex (via `AGENTS.md` → this file), and Copilot (`.github/copilot-instructions.md`) — plus human reviewers check changed code against these recurring blind spots. Full catalog with trigger patterns, verified historical precedents, the five-runtime parity matrix, and the severity rubric: [`docs/review-patterns.md`](docs/review-patterns.md).
+
+1. **Error-path coverage** — external calls (`fetch`, `Sandbox.create`/`connect`) need timeouts/retries/`.catch`; bound every async operation (precedent: PR #779).
+2. **UI state preservation** — capture and restore live UI state around `innerHTML`/`replaceChildren` and reflow/navigation rebuilds (PR #566/#567).
+3. **Cross-runtime parity** — a change to one of `webapp`/`chrome-extension`/`node-server`/`swift-server`/`ios-app` usually needs the peers updated or an explicit "N/A" note (PR #565; see the parity matrix).
+4. **CDP edge cases** — foreground the page (`bringToFront`) before screenshots; validate the CDP target/port before trusting it (PR #361, #673).
+5. **Native/macOS permissions** — keychain/TCC/screen-recording need the right entitlements and graceful denial handling.
+6. **Test coverage** — source changes ship with mirrored `tests/`; bug fixes ship a regression test; keep coverage at/above the package floor.
+
+When you change a category, update `docs/review-patterns.md` (source of truth) and the ≤4,000-char `.github/copilot-instructions.md` so all reviewers stay in sync.
