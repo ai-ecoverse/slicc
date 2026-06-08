@@ -28,7 +28,7 @@
 import { createLogger } from '../core/logger.js';
 import { getLickWebSocketUrl, getTrayWebhookUrl, getWebhookUrl } from '../ui/runtime-mode.js';
 import type { LickManager } from './lick-manager.js';
-import { getLeaderTrayRuntimeStatus } from './tray-leader.js';
+import { getLeaderStatusWithFallback, getLeaderTrayRuntimeStatus } from './tray-leader.js';
 
 const log = createLogger('lick-ws-bridge');
 
@@ -389,7 +389,13 @@ export function startLickWsBridge(
             : { type: 'response', requestId, data: { error: 'Cron task not found' } };
         }
         case 'tray_status': {
-          const leaderStatus = getLeaderTrayRuntimeStatus();
+          // In standalone mode the kernel worker hosts this bridge, but
+          // the leader tray itself runs on the page — the worker's own
+          // module global stays `inactive`. Use the shared shim-aware
+          // fallback so `/api/tray-status` (which feeds Sliccstart's row
+          // gating + Electron auto-attach) sees the live leader state.
+          // Mirrors `host`'s `getLeaderStatusWithFallback` behavior.
+          const leaderStatus = getLeaderStatusWithFallback();
           return {
             type: 'response',
             requestId,

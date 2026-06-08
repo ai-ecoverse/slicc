@@ -359,6 +359,95 @@ describe('startLickWsBridge', () => {
     handle.stop();
   });
 
+  // In standalone mode the kernel worker hosts this bridge, but the
+  // leader tray runs on the page — the worker's `setLeaderTrayRuntimeStatus`
+  // module global stays `inactive`. The page mirrors the live status into
+  // the `slicc.leaderTrayStatus` localStorage shim (forwarded by
+  // installPageStorageSync), and `tray_status` must read that shim so
+  // `/api/tray-status` reflects an active leader. Mirrors the
+  // `host-command.ts` localStorage-fallback test.
+  describe('localStorage fallback (standalone-worker path)', () => {
+    beforeEach(() => {
+      const store = new Map<string, string>();
+      const shim: Storage = {
+        get length() {
+          return store.size;
+        },
+        key: (i) => Array.from(store.keys())[i] ?? null,
+        getItem: (k) => store.get(k) ?? null,
+        setItem: (k, v) => {
+          store.set(k, v);
+        },
+        removeItem: (k) => {
+          store.delete(k);
+        },
+        clear: () => {
+          store.clear();
+        },
+      };
+      Object.defineProperty(globalThis, 'localStorage', {
+        value: shim,
+        configurable: true,
+        writable: true,
+      });
+    });
+
+    afterEach(() => {
+      delete (globalThis as Record<string, unknown>).localStorage;
+    });
+
+    it('tray_status reads leader status from localStorage when module global is inactive', async () => {
+      // Worker module global is `inactive` (set by the outer `beforeEach`),
+      // but the page-side shim carries the live leader status.
+      (globalThis as { localStorage?: Storage }).localStorage?.setItem(
+        'slicc.leaderTrayStatus',
+        JSON.stringify({
+          state: 'leader',
+          session: SESSION,
+          error: null,
+        })
+      );
+
+      const { startLickWsBridge } = await loadBridge();
+      const handle = startLickWsBridge(buildLickManagerMock(), {
+        locationHref: LOCATION,
+        webSocketFactory: (url) => new FakeWebSocket(url),
+      });
+      const ws = FakeWebSocket.instances[0];
+
+      ws.emit({ type: 'tray_status', requestId: 'r-shim' });
+      await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
+      const reply = JSON.parse(ws.sent[0]);
+      expect(reply.data).toEqual({
+        state: 'leader',
+        joinUrl: SESSION.joinUrl,
+        workerBaseUrl: SESSION.workerBaseUrl,
+        trayId: SESSION.trayId,
+      });
+      handle.stop();
+    });
+
+    it('tray_status returns inactive when neither module global nor shim is set', async () => {
+      const { startLickWsBridge } = await loadBridge();
+      const handle = startLickWsBridge(buildLickManagerMock(), {
+        locationHref: LOCATION,
+        webSocketFactory: (url) => new FakeWebSocket(url),
+      });
+      const ws = FakeWebSocket.instances[0];
+
+      ws.emit({ type: 'tray_status', requestId: 'r-empty' });
+      await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
+      const reply = JSON.parse(ws.sent[0]);
+      expect(reply.data).toEqual({
+        state: 'inactive',
+        joinUrl: null,
+        workerBaseUrl: null,
+        trayId: null,
+      });
+      handle.stop();
+    });
+  });
+
   it('reconnects after the socket closes', async () => {
     const { startLickWsBridge } = await loadBridge();
     const setTimeoutFn = vi.fn().mockImplementation((cb: () => void) => {
