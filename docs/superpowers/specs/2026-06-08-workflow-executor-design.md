@@ -165,7 +165,7 @@ see §13.)
 | Unit | File | Responsibility |
 | --- | --- | --- |
 | `workflow` command | `shell/supplemental-commands/workflow-command.ts` (new) | Parse `meta` statically; build `prelude + transformed script`; run via `executeJsCode` (no proxy — panel terminal is already offscreen-backed); split the random-sentinel result line out of stdout; print the result + the run log. |
-| workflow prelude | `shell/supplemental-commands/workflow-prelude.ts` (new) | A JS string: determinism guard (const-shadow `Date`/`Math`/`crypto`/`performance`/timers/`globalThis`); capture `exec.spawn` + `cwd` from `__WF`, then null the **full** injected param set (`exec`/`fs`/`fetch`/`require`/`process`/`module`/`exports`/`skill`/`http`/`browser`/`usb`/`serial`/`hid`/`cli`/`c`/`time`/`fmt`/`pool`); define `agent`/`parallel`/`pipeline`/`phase`/`log`/`budget`/`args`/`workflow`; the concurrency semaphore + caps. |
+| workflow prelude | `shell/supplemental-commands/workflow-prelude.ts` (new) | A JS string: determinism guard (const-shadow `Date`/`Math`/`crypto`/`performance`/timers — **not** `globalThis`, which would TDZ-break the prelude and is the documented soft-isolation escape); capture `exec.spawn` + `cwd` from `__WF`, then null the **full** injected param set (`exec`/`fs`/`fetch`/`require`/`process`/`module`/`exports`/`skill`/`http`/`browser`/`usb`/`serial`/`hid`/`cli`/`c`/`time`/`fmt`/`pool`); define `agent`/`parallel`/`pipeline`/`phase`/`log`/`budget`/`args`/`workflow`; the concurrency semaphore + caps. |
 | script transform | inside `workflow-command.ts` | Strip `export` off `const meta`; wrap the remaining body in `const __r = await (async () => { … })();`; append `console.log(<random sentinel> + JSON.stringify(__r ?? null))`. |
 | `agent --schema` extension | `shell/supplemental-commands/agent-command.ts` + `scoops/agent-bridge.ts` + `scoops/types.ts` + `scoops/scoop-context.ts` | New `--schema-b64` flag (`--model` already exists) → `AgentSpawnOptions.structuredOutputSchema` → `ScoopConfig.structuredOutputSchema` → `ScoopContext` injects a `StructuredOutput` `ToolDefinition`, **instructs** the scoop (via `systemPromptAppend`) that calling it is how it returns (**not** a global `toolChoice` force — that would block its research; see §7), captures validated args via an `afterToolCall` hook, ≤2 nudges, and the bridge returns the captured JSON as `finalText`. **The main net-new agent-side work.** |
 | ~~offscreen proxy~~ | — | **Removed.** The panel terminal is already offscreen-backed (`RemoteTerminalView`→`TerminalSessionHost`), so terminal and cone runs both execute in offscreen with no extra wiring. |
@@ -205,7 +205,8 @@ missing cwd *before* spawning (`agent-command.ts`), so without it every `agent()
 ### Isolation & determinism (with the honest caveat)
 
 - **Determinism guard:** the prelude `const`-shadows the nondeterministic globals for the user
-  scope — `Date`, `Math.random`, `crypto`, `performance.now`, timers, `globalThis` (see §6).
+  scope — `Date`, `Math.random`, `crypto`, `performance.now`, timers (see §6). `globalThis` is **not**
+  shadowed (TDZ + it's the soft-isolation escape).
 - **Suppression:** capture `exec.spawn` (and take `cwd` from `__WF.cwd`), then null the **full**
   injected param set — not just `exec/fs/fetch/require` but also `process/module/exports/skill/
   http/browser/usb/serial/hid/cli/c/time/fmt/pool`, several of which re-expose fs/shell/fetch.
@@ -220,9 +221,10 @@ missing cwd *before* spawning (`agent-command.ts`), so without it every `agent()
 a sentinel-prefixed JSON line carrying its return value; the command splits that line out as the
 result and prints the remaining stdout (the `log`/`phase`/`console` output). To prevent a user
 `console.log` from **spoofing** the result (codex review), the sentinel is a **random per-run
-token** the command generates and injects via `__WF`, and the command parses **only the single
-wrapper-emitted line** that carries it (the last line bearing the token). A throw in the body
-rejects the IIFE → the realm's existing `catch` → exit 1 + stderr, which the command surfaces.
+token** that the command **inlines as a string literal in the emit line only** — it is **not**
+placed in `__WF` (which the user script can read/mutate), so user code can neither learn nor forge
+it. The command parses **only the single wrapper-emitted line** bearing the token (the last such
+line). A throw in the body rejects the IIFE → the realm's existing `catch` → exit 1 + stderr.
 
 ### Extension durability (offscreen hosting) — no bespoke forwarding needed
 
@@ -295,9 +297,11 @@ nulled).
 - **Determinism guard** (installed first, broadened per the 2026-06-08 codex review): shadow the
   nondeterministic globals with `const` throwers for the user scope — `Date` (argless `new Date`
   + `Date.now`), `Math.random`, **`crypto`** (`getRandomValues`/`randomUUID`),
-  **`performance.now`**, **timers** (`setTimeout`/`setInterval`/`queueMicrotask` used for timing),
-  and `globalThis`. Note two residual holes that make SP1 isolation/determinism **soft, not
-  hard**: (a) a script can still reach `globalThis.Date`/`globalThis.fetch`/dynamic `import()`;
+  **`performance.now`**, **timers** (`setTimeout`/`setInterval`/`queueMicrotask` used for timing).
+  **Do NOT shadow `globalThis`** — a `const globalThis = undefined` is a TDZ error (the guard reads
+  `globalThis.Date` earlier) *and* pointless. Note two residual holes that make SP1
+  isolation/determinism **soft, not hard**: (a) a script can still reach
+  `globalThis.Date`/`globalThis.fetch`/dynamic `import()`;
   (b) the realm **pre-loads `require()` specifiers before** the prelude nulls `require`
   (`js-realm-shared.ts` pre-scan). True hardness needs the deferred realm-native fork; SP5 resume
   is therefore **best-effort** (see SP5 spec).
@@ -488,7 +492,7 @@ Resolved by the 2026-06-08 cross-check (three investigation passes; file:line co
   iframe (extension). No new kind, no `sandbox.html` change.
 - **Global injection & suppression** — *resolved.* The realm compiles user code as an
   `AsyncFunction` with the globals as **named params**; const-shadow `Date`/`Math`/`crypto`/
-  `performance`/timers/`globalThis`, and capture-then-null the **full** injected param set
+  `performance`/timers (**not** `globalThis` — TDZ), and capture-then-null the **full** injected param set
   (`exec`/`fs`/`fetch`/`require`/`process`/`module`/`exports`/`skill`/`http`/`browser`/`usb`/
   `serial`/`hid`/`cli`/`c`/`time`/`fmt`/`pool`).
 - **Return-value capture** — *resolved.* The realm discards the body's return value, so we use

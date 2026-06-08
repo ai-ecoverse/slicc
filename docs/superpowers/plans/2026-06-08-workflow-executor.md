@@ -63,12 +63,17 @@ describe('workflow-script', () => {
       body: "export const meta = {}\nreturn { ok: true }",
       sentinel: 'WF_RESULT_xyz',
     });
-    expect(code).toContain('"cap":4'); expect(code).toContain('"sentinel":"WF_RESULT_xyz"');
+    expect(code).toContain('"cap":4');
+    expect(code).not.toContain('sentinel');          // NOT exposed via __WF (anti-spoof)
     expect(code).not.toContain('"args"');            // undefined omitted by JSON.stringify
     expect(code).toContain('/*P*/');
     expect(code).toContain('const __r = await (async () => {');
     expect(code).toContain('const meta = {}');       // export stripped
-    expect(code).toContain('console.log(__WF.sentinel + JSON.stringify(__r ?? null))');
+    expect(code).toContain('console.log("WF_RESULT_xyz" + JSON.stringify(__r ?? null))');  // literal token
+  });
+  it('does not expose the sentinel to user code (anti-spoof)', () => {
+    const code = buildWorkflowCode({ prelude: '', config: { cap: 4, budget: null, cwd: '/', agentCwd: '/s/' }, body: 'return typeof __WF.sentinel', sentinel: 'WF_RESULT_secret' });
+    expect(code).not.toContain('WF_RESULT_secret\\"');   // never a JSON value in __WF
   });
   it('splits the sentinel result line from the log (token param)', () => {
     const out = `WFLOG hi\nWF_RESULT_xyz{"ok":true}\n`;
@@ -101,9 +106,13 @@ export interface WorkflowConfig {
   budget: number | null;
   cwd: string;
   agentCwd: string;        // constrained per-run scratch the command mkdir's before launch
-  sentinel: string;
+  // NOTE: the result sentinel is NOT in __WF (user code could read/mutate it → spoof). It is
+  // inlined as a string literal in the emit line by buildWorkflowCode (see below).
 }
 
+// Extracts name/description for the banner. `meta` is REQUIRED — Task 3's command errors if
+// `name` is absent (CC parity). `meta.phases` titles are display-only and parsed in SP4 (no UI
+// in SP1), so we intentionally don't extract them here.
 export function parseMetaBanner(src: string): { name: string | null; description: string | null } {
   const block = extractMetaBlock(src);
   if (block === null) return { name: null, description: null };
@@ -120,13 +129,13 @@ export function buildWorkflowCode(opts: {
   body: string;
   sentinel: string;
 }): string {
-  const cfg = { ...opts.config, sentinel: opts.sentinel };
-  // JSON.stringify drops keys whose value is `undefined`, so an absent `args` yields `__WF.args === undefined`.
+  // The sentinel is inlined as a LITERAL in the emit (NOT placed in __WF) so user code can neither
+  // read nor mutate it. JSON.stringify drops `undefined`, so an absent `args` → `__WF.args === undefined`.
   return (
-    `const __WF = ${JSON.stringify(cfg)};\n` +
+    `const __WF = ${JSON.stringify(opts.config)};\n` +
     `${opts.prelude}\n` +
     `const __r = await (async () => {\n${stripExports(opts.body)}\n})();\n` +
-    `console.log(__WF.sentinel + JSON.stringify(__r ?? null));\n`
+    `console.log(${JSON.stringify(opts.sentinel)} + JSON.stringify(__r ?? null));\n`
   );
 }
 
@@ -297,6 +306,8 @@ let __total = 0;
 
 async function agent(prompt, opts) {
   opts = opts || {};
+  // opts.phase / opts.label are ACCEPTED but display-only — they group/label progress in the UI,
+  // which is SP4. SP1 honors them as no-ops (no execution effect). opts.isolation/agentType: SP6.
   if (__total >= 1000) throw new WorkflowAgentCapError('1000-agent total cap reached');
   __total++;
   await __slots.acquire();
@@ -314,7 +325,7 @@ async function agent(prompt, opts) {
 }
 
 async function parallel(thunks) {
-  if (!Array.isArray(thunks)) throw new WorkflowError('parallel() expects an array of functions');
+  if (!Array.isArray(thunks) || thunks.some((t) => typeof t !== 'function')) throw new WorkflowError('parallel() expects an array of functions');
   if (thunks.length > 4096) throw new WorkflowError('parallel(): at most 4096 items per call');
   return Promise.all(thunks.map(async (t) => { try { return await t(); } catch (e) { if (e instanceof WorkflowError) throw e; return null; } }));
 }
@@ -336,7 +347,36 @@ function workflow() { throw new WorkflowNestingUnsupportedError('nested workflow
 `;
 ```
 
-- [ ] **Also assert** (spec-tightening, codex note): the **1000-agent total cap** throws a fatal error on the 1001st `agent()` (drive with a stubbed `exec.spawn` + a tiny cap loop); `budget.spent() === 0` and `remaining()` honours `__WF.budget`; and `pipeline` is **no-barrier** (item A reaches stage 2 before item B finishes stage 1, via a controllable deferred mock). (Note: the Task-2 *test* injects `__WF` as a param for convenience; in the real flow `buildWorkflowCode` prepends `const __WF = {…}` ahead of the prelude — equivalent in scope.)
+- [ ] **Also add these concrete asserts** (codex spec-tightening):
+
+```ts
+it('full suppression: every injected global is nulled in user scope', async () => {
+  await run('globalThis.__all = ["fs","exec","fetch","require","process","module","exports","skill","http","browser","usb","serial","hid","cli","c","time","fmt","pool"].map(n=>eval("typeof "+n)).every(t=>t==="undefined");', { spawn: async () => ({}) }, WF);
+  expect((globalThis as any).__all).toBe(true);
+});
+it('1000-agent total cap throws fatal on the 1001st call', async () => {
+  const exec = { spawn: async () => ({ stdout: '', stderr: '', exitCode: 0 }) };
+  await run('globalThis.__cap = await (async()=>{ for(let i=0;i<1001;i++){ try{ await agent("x") }catch(e){ return "threw@"+i } } return "no" })();', exec, WF);
+  expect((globalThis as any).__cap).toBe('threw@1000');
+});
+it('budget stub: spent()===0; remaining honors total', async () => {
+  await run('globalThis.__b = [budget.spent(), budget.remaining()];', { spawn: async () => ({}) }, { ...WF, budget: 5000 });
+  expect((globalThis as any).__b).toEqual([0, 5000]);
+});
+it('pipeline is no-barrier (item A reaches stage 2 before item B finishes stage 1)', async () => {
+  // stage1 for item index 1 never resolves until item index 0 has reached stage2:
+  const order: string[] = []; let release1: () => void; const gate1 = new Promise<void>((r) => { release1 = r; });
+  await run(
+    'globalThis.__np = await pipeline([0,1],' +
+    ' (v,_i,idx)=> idx===1 ? __g.then(()=>"s1-"+idx) : Promise.resolve("s1-"+idx),' +
+    ' (p,_i,idx)=>{ __o.push("s2-"+idx); if(idx===0) __rel(); return p; });',
+    { spawn: async () => ({}) },
+    Object.assign({ ...WF }, { /* __g/__o/__rel injected below via globals */ }),
+  ); // wire __g=gate1, __o=order, __rel=release1 as test globals on the runner before exec
+  expect(order[0]).toBe('s2-0'); // item 0 reached stage 2 while item 1 is still blocked in stage 1
+});
+```
+(Note: the Task-2 *test* injects `__WF` as a param for convenience; in the real flow `buildWorkflowCode` prepends `const __WF = {…}` ahead of the prelude — equivalent in scope. The no-barrier test wires `__g`/`__o`/`__rel` onto the runner globals; adapt to the `run()` helper.)
 
 Run → PASS. **Commit:** `feat(workflow): user-space prelude (determinism guard, suppression, caps, fatal rethrow)`.
 
@@ -424,14 +464,16 @@ interface Parsed { help?: boolean; error?: string; file?: string; script?: strin
 
 function parse(a: string[]): Parsed {
   if (a[0] !== 'run') return a.length === 0 || a.includes('-h') || a.includes('--help') ? { help: true } : { error: `workflow: unknown subcommand '${a[0]}' (only 'run' in SP1)` };
-  const o: Parsed = { budget: null, cap: 4 };
+  const cores = (globalThis as { navigator?: { hardwareConcurrency?: number } }).navigator?.hardwareConcurrency ?? 8;
+  const maxCap = Math.min(16, Math.max(1, cores - 2));        // spec cap: min(16, cores-2)
+  const o: Parsed = { budget: null, cap: Math.min(4, maxCap) }; // default 4, clamped to maxCap (covers low-core)
   for (let i = 1; i < a.length; i++) {
     const t = a[i];
     if (t === '-h' || t === '--help') return { help: true };
     else if (t === '--script') o.script = a[++i];
     else if (t === '--args') { try { o.args = JSON.parse(a[++i] ?? ''); o.hasArgs = true; } catch { return { error: 'workflow: --args must be valid JSON' }; } }
     else if (t === '--budget') { const n = Number(a[++i]); if (!Number.isFinite(n)) return { error: 'workflow: --budget must be a number' }; o.budget = n; }
-    else if (t === '--concurrency') { const n = Number(a[++i]); if (!Number.isFinite(n)) return { error: 'workflow: --concurrency must be a number' }; const cores = (globalThis as { navigator?: { hardwareConcurrency?: number } }).navigator?.hardwareConcurrency ?? 8; o.cap = Math.min(Math.max(1, cores - 2), 16, Math.max(1, Math.trunc(n))); }
+    else if (t === '--concurrency') { const n = Number(a[++i]); if (!Number.isFinite(n)) return { error: 'workflow: --concurrency must be a number' }; o.cap = Math.min(maxCap, Math.max(1, Math.trunc(n))); }
     else if (t.startsWith('-')) return { error: `workflow: unknown flag '${t}'` };
     else if (o.file === undefined) o.file = t;
     else return { error: 'workflow: too many arguments' };
@@ -455,13 +497,14 @@ export function createWorkflowCommand(): Command {
     }
 
     const banner = parseMetaBanner(source);
+    if (!banner.name) return { stdout: '', stderr: 'workflow: script must export a meta block with a name (and description)\n', exitCode: 1 };
     const runId = makeSentinel().slice('WF_RESULT_'.length, 'WF_RESULT_'.length + 12) || `${Date.now()}`;
     const agentCwd = `/shared/workflow-runs/${runId}/scratch/`;
     await ctx.fs.mkdir(agentCwd, { recursive: true });   // agent rejects a missing cwd → would null every call
     const sentinel = makeSentinel();
     const code = buildWorkflowCode({
       prelude: WORKFLOW_PRELUDE,
-      config: { ...(p.hasArgs ? { args: p.args } : {}), cap: p.cap ?? 4, budget: p.budget ?? null, cwd: ctx.cwd, agentCwd, sentinel },
+      config: { ...(p.hasArgs ? { args: p.args } : {}), cap: p.cap ?? 4, budget: p.budget ?? null, cwd: ctx.cwd, agentCwd },  // NOTE: sentinel passed separately (not in __WF — anti-spoof)
       body: source,
       sentinel,
     });
@@ -607,6 +650,25 @@ for (let nudge = 0; nudge < 2 && !so?.captured; nudge++) {
 if (so?.captured) return { finalText: JSON.stringify(so.value), exitCode: 0 };
 return { finalText: 'agent: scoop did not produce StructuredOutput', exitCode: 1 };
 ```
+- [ ] **Step 4b — concrete bridge test** (failing first). Drive the 2-nudge logic with a fake orchestrator whose `getScoopContext(jid)` returns a stub `getStructuredOutput()` that flips to `captured` after a set number of `sendPrompt` calls, and count `sendPrompt` invocations:
+```ts
+function fakeOrch(captureOnPrompt: number) {
+  let prompts = 0; const ctx = { getStructuredOutput: () => ({ captured: prompts >= captureOnPrompt, value: { ok: true } }) };
+  return { sendPrompt: async () => { prompts++; }, getScoopContext: () => ctx,
+    registerScoop: async () => {}, unregisterScoop: async () => {}, observeScoop: () => () => {}, getScoops: () => [],
+    get prompts() { return prompts; } } as any;
+}
+it('returns captured JSON when StructuredOutput is called (no nudge needed)', async () => {
+  const orch = fakeOrch(1); const bridge = createAgentBridge(orch, fakeFs, null);
+  const r = await bridge.spawn({ cwd: '/workspace', allowedCommands: ['*'], prompt: 'p', structuredOutputSchema: { type: 'object' } });
+  expect(r.exitCode).toBe(0); expect(JSON.parse(r.finalText)).toEqual({ ok: true }); expect(orch.prompts).toBe(1);
+});
+it('nudges up to 2x, then null when never called', async () => {
+  const orch = fakeOrch(99); const bridge = createAgentBridge(orch, fakeFs, null);
+  const r = await bridge.spawn({ cwd: '/workspace', allowedCommands: ['*'], prompt: 'p', structuredOutputSchema: { type: 'object' } });
+  expect(r.exitCode).not.toBe(0); expect(orch.prompts).toBe(3); // initial + 2 nudges
+});
+```
 - [ ] **Step 5 — typecheck** `npm run typecheck` → 0 new errors (fix accessor signatures). **Commit:** `feat(scoops): StructuredOutput injection + capture (instruct + 2 nudges, no forced toolChoice)`.
 
 ---
@@ -631,12 +693,30 @@ const confirmed = found.flat().filter(Boolean).filter((x) => x.real)
 log(`confirmed ${confirmed.length}`)
 return { confirmed }
 ```
-- [ ] **Test** — mock `exec.spawn` to answer schema-shaped JSON per argv, track peak concurrency:
+- [ ] **Test** — this is a **wiring** test (the real `agent --schema-b64`→`AgentBridge`→`StructuredOutput` path is covered by Task 7's unit tests + Task 9's e2e). The mock intercepts `exec.spawn` and honors `--schema-b64` by returning schema-shaped JSON. **The fixture must be written into the VFS** (the real `readFileSync` host content → `fs.writeFile`), because `workflow run <path>` reads from the VFS, not the host fs:
+
 ```ts
-// load the fixture via readFileSync(fileURLToPath(new URL('../../fixtures/workflows/repo-audit.workflow.js', import.meta.url)))
-// spawn: --schema-b64 present + prompt startsWith 'Find bugs' → {"bugs":["x","y"]}; startsWith 'Verify' → {"real": prompt.includes('"x"')}
-// run via createWorkflowCommand().execute(['run', path, '--args', '{"files":["a.ts","b.ts"]}', '--concurrency','4'], ctx)
-// assert: exitCode 0; parsed.confirmed all bug 'x'; peak concurrency > 1 and ≤ 4.
+import { readFileSync } from 'node:fs'; import { fileURLToPath } from 'node:url';
+const FIXTURE = readFileSync(fileURLToPath(new URL('../../fixtures/workflows/repo-audit.workflow.js', import.meta.url)), 'utf8');
+// in the test:
+await fs.mkdir('/workspace', { recursive: true });
+await fs.writeFile('/workspace/repo-audit.workflow.js', FIXTURE);   // <- into the VFS, not a host path
+const peak = { cur: 0, max: 0 };
+const spawn = async (a: string[]) => {
+  peak.cur++; peak.max = Math.max(peak.max, peak.cur); await Promise.resolve();
+  const prompt = a[a.length - 1]; const hasSchema = a.includes('--schema-b64');
+  let stdout = '';
+  if (hasSchema && prompt.startsWith('Find bugs')) stdout = JSON.stringify({ bugs: ['x', 'y'] });
+  else if (hasSchema && prompt.startsWith('Verify')) stdout = JSON.stringify({ real: prompt.includes('"x"') });
+  peak.cur--; return { stdout, stderr: '', exitCode: 0 };
+};
+const res = await createWorkflowCommand().execute(
+  ['run', '/workspace/repo-audit.workflow.js', '--args', '{"files":["a.ts","b.ts"]}', '--concurrency', '4'],
+  await ctxWith(fs, spawn));
+expect(res.exitCode).toBe(0);
+const parsed = JSON.parse(res.stdout.slice(res.stdout.lastIndexOf('{')));
+expect(parsed.confirmed.every((c: any) => c.bug === 'x')).toBe(true);  // only "x" verifies real
+expect(peak.max).toBeGreaterThan(1); expect(peak.max).toBeLessThanOrEqual(4);
 ```
 Run → PASS. **Commit:** `test(workflow): schema fan-out acceptance fixture (mock-scoop, concurrency-bounded)`.
 
