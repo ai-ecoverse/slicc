@@ -466,17 +466,46 @@ async function loadElectronOverlayBundleSource(options: {
   return await readFile(getElectronOverlayEntryDistPath(options.projectRoot), 'utf8');
 }
 
+/**
+ * Resolve the `Fetch.enable` origin pattern for CSP-bypass escalation. Mirrors
+ * swift-server's `OverlayTargetSession.fetchProxyOrigin` (Wave 5): prefer the
+ * parent page's http(s) origin so interception is byte-for-byte the same as
+ * before, but for `file://` (or other no-http-origin) targets fall back to the
+ * overlay iframe's own `http://localhost:<servePort>` origin — that is what
+ * actually needs unblocking when the parent is a local file.
+ */
+export function resolveFetchProxyOrigin(targetUrl: string, servePort: number): string {
+  try {
+    const url = new URL(targetUrl);
+    if (url.protocol === 'http:' || url.protocol === 'https:') {
+      return url.origin;
+    }
+  } catch {
+    // Fall through to the localhost fallback below.
+  }
+  return `http://localhost:${servePort}`;
+}
+
 export class ElectronOverlayInjector {
   private readonly cdpPort: number;
+  private readonly servePort: number;
   private readonly bootstrapScript: string;
+  private readonly probeDelayMs: number;
   private readonly connections = new Map<string, WebSocket>();
   private readonly cspBypassedTargets = new Set<string>();
   private syncTimer: ReturnType<typeof setInterval> | null = null;
   private syncing = false;
 
-  private constructor(cdpPort: number, bootstrapScript: string) {
+  private constructor(
+    cdpPort: number,
+    servePort: number,
+    bootstrapScript: string,
+    probeDelayMs: number = 1500
+  ) {
     this.cdpPort = cdpPort;
+    this.servePort = servePort;
     this.bootstrapScript = bootstrapScript;
+    this.probeDelayMs = probeDelayMs;
   }
 
   static async create(options: {
@@ -491,7 +520,53 @@ export class ElectronOverlayInjector {
       appUrl: buildElectronOverlayAppUrl(getElectronServeOrigin(options.servePort)),
     });
 
-    return new ElectronOverlayInjector(options.cdpPort, bootstrapScript);
+    return new ElectronOverlayInjector(options.cdpPort, options.servePort, bootstrapScript);
+  }
+
+  /**
+   * Test-only factory: skips bundle loading and lets tests drive the per-target
+   * connect flow directly with a controllable probe delay. Mirrors swift-server's
+   * `_testing_*` hooks on `ElectronOverlayInjector`.
+   */
+  static _createForTesting(options: {
+    cdpPort?: number;
+    servePort: number;
+    bootstrapScript?: string;
+    probeDelayMs?: number;
+  }): ElectronOverlayInjector {
+    return new ElectronOverlayInjector(
+      options.cdpPort ?? 9223,
+      options.servePort,
+      options.bootstrapScript ?? '/* test-noop */',
+      options.probeDelayMs ?? 1500
+    );
+  }
+
+  /** Test-only: drive the per-target connect flow without going through `start`. */
+  _testingConnectToTarget(target: ElectronInspectableTarget): void {
+    this.connectToTarget(target);
+  }
+
+  /** Test-only: seed the per-target "already bypassed" guard. */
+  _testingSeedBypassedTarget(url: string): void {
+    this.cspBypassedTargets.add(url);
+  }
+
+  /** Test-only: snapshot the per-target "already bypassed" guard set. */
+  _testingBypassedTargets(): ReadonlySet<string> {
+    return new Set(this.cspBypassedTargets);
+  }
+
+  /** Test-only: close any sockets opened by `_testingConnectToTarget`. */
+  _testingCloseConnections(): void {
+    for (const connection of this.connections.values()) {
+      try {
+        connection.close();
+      } catch {
+        // Ignore connection cleanup failures.
+      }
+    }
+    this.connections.clear();
   }
 
   async start(): Promise<void> {
@@ -646,10 +721,9 @@ export class ElectronOverlayInjector {
     };
 
     ws.on('open', () => {
-      const isWebContent = target.url.startsWith('https://');
       const alreadyBypassed = cspBypassedTargets.has(target.url);
       console.log(
-        `[electron-float] Connected to target, web=${isWebContent}, bypassed=${alreadyBypassed}, url=${target.url}`
+        `[electron-float] Connected to target, bypassed=${alreadyBypassed}, url=${target.url}`
       );
 
       send('Runtime.enable');
@@ -674,17 +748,15 @@ export class ElectronOverlayInjector {
       }
 
       // First connection to this target URL: detect theme, then inject overlay.
-      // After injection, check if the iframe loaded. If CSP blocked it, fall back to reload+proxy.
+      // After injection, probe whether the iframe loaded; if CSP blocked it, fall
+      // back to reload+proxy. We probe/escalate regardless of URL scheme — file://
+      // (and app://-style local) Electron renderers can still ship a meta CSP
+      // (e.g. AEM Desktop's `default-src 'self'`) that blocks the overlay iframe.
       console.log(`[electron-float] Detecting theme before first overlay injection...`);
       void detectAppThemeFromScreenshot(ws, send).then((theme) => {
         if (ws.readyState !== WebSocket.OPEN) return;
         console.log(`[electron-float] Injecting overlay (first attempt, theme=${theme})...`);
         send('Runtime.evaluate', { expression: buildThemedBootstrap(theme), awaitPromise: false });
-
-        if (!isWebContent) {
-          // Local content (file://, app protocol) — CSP is not an issue
-          return;
-        }
 
         // After a short delay, probe whether the overlay iframe loaded.
         // If CSP blocked it, reload the page so Page.setBypassCSP takes effect.
@@ -710,7 +782,7 @@ export class ElectronOverlayInjector {
           pendingReload = true;
           pendingCspEscalation = true;
           send('Page.reload', { ignoreCache: true });
-        }, 1500);
+        }, this.probeDelayMs);
       });
     });
 
@@ -748,17 +820,17 @@ export class ElectronOverlayInjector {
                 return;
               }
 
+              const fetchOrigin = resolveFetchProxyOrigin(target.url, this.servePort);
               console.log(
-                `[electron-float] CSP reload insufficient, escalating to Fetch proxy: ${target.url}`
+                `[electron-float] CSP reload insufficient, escalating to Fetch proxy: target=${target.url} origin=${fetchOrigin}`
               );
               fetchProxyActive = true;
-              const urlOrigin = new URL(target.url).origin;
               send('Fetch.enable', {
-                patterns: [{ urlPattern: `${urlOrigin}/*`, requestStage: 'Request' }],
+                patterns: [{ urlPattern: `${fetchOrigin}/*`, requestStage: 'Request' }],
               });
               pendingReload = true;
               send('Page.reload', { ignoreCache: true });
-            }, 1500);
+            }, this.probeDelayMs);
           }
         }
 
