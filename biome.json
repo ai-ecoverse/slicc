@@ -35,7 +35,8 @@
       "!packages/ios-app/**",
       "!**/*.min.js",
       "!packages/webapp/src/ui/rum.js",
-      "!packages/webapp/src/ui/lucide-icons.ts"
+      "!packages/webapp/src/ui/lucide-icons.ts",
+      "!**/tests/fixtures/workflows/**"
     ]
   },
   "formatter": {
@@ -72,11 +73,16 @@
       "complexity": {
         "noExcessiveCognitiveComplexity": {
           "level": "error",
-          "options": { "maxAllowedComplexity": 25 }
+          "options": {
+            "maxAllowedComplexity": 25
+          }
         },
         "noExcessiveLinesPerFunction": {
           "level": "error",
-          "options": { "maxLines": 150, "skipIifes": true }
+          "options": {
+            "maxLines": 150,
+            "skipIifes": true
+          }
         },
         "noForEach": "off",
         "noBannedTypes": "off",
@@ -117,33 +123,47 @@
             "requireAscii": true,
             "conventions": [
               {
-                "selector": { "kind": "function" },
+                "selector": {
+                  "kind": "function"
+                },
                 "match": "_*(.+?)_*",
                 "formats": ["camelCase", "PascalCase"]
               },
               {
-                "selector": { "kind": "classMember" },
+                "selector": {
+                  "kind": "classMember"
+                },
                 "match": "_*(.+?)_*",
                 "formats": ["camelCase", "PascalCase", "CONSTANT_CASE"]
               },
               {
-                "selector": { "kind": "objectLiteralProperty" },
+                "selector": {
+                  "kind": "objectLiteralProperty"
+                },
                 "match": ".*"
               },
               {
-                "selector": { "kind": "typeProperty" },
+                "selector": {
+                  "kind": "typeProperty"
+                },
                 "match": ".*"
               },
               {
-                "selector": { "kind": "enumMember" },
+                "selector": {
+                  "kind": "enumMember"
+                },
                 "formats": ["camelCase", "PascalCase", "CONSTANT_CASE"]
               },
               {
-                "selector": { "kind": "typeLike" },
+                "selector": {
+                  "kind": "typeLike"
+                },
                 "formats": ["PascalCase"]
               },
               {
-                "selector": { "kind": "variable" },
+                "selector": {
+                  "kind": "variable"
+                },
                 "match": "_*\\$?(.+?)_*",
                 "formats": ["camelCase", "PascalCase", "CONSTANT_CASE"]
               }
@@ -182,7 +202,9 @@
         "noSparseArray": "error",
         "noDoubleEquals": {
           "level": "error",
-          "options": { "ignoreNull": true }
+          "options": {
+            "ignoreNull": true
+          }
         },
         "noDebugger": "error",
         "noDuplicateCase": "error",
@@ -267,10 +289,8 @@
         "packages/webapp/src/kernel/host.ts",
         "packages/webapp/src/kernel/realm/js-realm-shared.ts",
         "packages/webapp/src/kernel/realm/opfs-sync-fs.ts",
-        "packages/webapp/src/scoops/agent-bridge.ts",
         "packages/webapp/src/scoops/lick-ws-bridge.ts",
         "packages/webapp/src/scoops/orchestrator.ts",
-        "packages/webapp/src/scoops/scoop-context.ts",
         "packages/webapp/src/scoops/scoop-management-tools.ts",
         "packages/webapp/src/scoops/tray-leader-sync.ts",
         "packages/webapp/src/shell/supplemental-commands/convert-command.ts",
@@ -351,21 +371,18 @@
         "packages/webapp/src/net/link-header.ts",
         "packages/webapp/src/providers/built-in/azure-openai.ts",
         "packages/webapp/src/providers/built-in/bedrock-camp.ts",
-        "packages/webapp/src/scoops/agent-bridge.ts",
         "packages/webapp/src/scoops/agent-message-to-chat.ts",
         "packages/webapp/src/scoops/db.ts",
         "packages/webapp/src/scoops/lick-formatting.ts",
         "packages/webapp/src/scoops/lick-ws-bridge.ts",
         "packages/webapp/src/scoops/onboarding-orchestrator.ts",
         "packages/webapp/src/scoops/orchestrator.ts",
-        "packages/webapp/src/scoops/scoop-context.ts",
         "packages/webapp/src/scoops/scoop-management-tools.ts",
         "packages/webapp/src/scoops/tray-leader-sync.ts",
         "packages/webapp/src/scoops/tray-webrtc.ts",
         "packages/webapp/src/shell/mcp/oauth.ts",
         "packages/webapp/src/shell/proxied-fetch.ts",
         "packages/webapp/src/shell/supplemental-commands/afplay-command.ts",
-        "packages/webapp/src/shell/supplemental-commands/agent-command.ts",
         "packages/webapp/src/shell/supplemental-commands/biome-command.ts",
         "packages/webapp/src/shell/supplemental-commands/cherry-emit-command.ts",
         "packages/webapp/src/shell/supplemental-commands/convert-command.ts",

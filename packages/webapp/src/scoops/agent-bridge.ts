@@ -104,6 +104,12 @@ export interface AgentSpawnOptions {
    * direct programmatic / extension callers also hit this path.
    */
   thinkingLevel?: ThinkingLevel;
+  /**
+   * Optional JSON Schema to enforce on the scoop's final output. When set,
+   * a `StructuredOutput` tool is injected and the scoop must return its
+   * result in the specified schema shape.
+   */
+  structuredOutputSchema?: Record<string, unknown>;
 }
 
 /** Result returned by {@link AgentBridge.spawn}. */
@@ -161,6 +167,228 @@ export const AGENT_BRIDGE_GLOBAL_KEY = '__slicc_agent';
  */
 export const AGENT_SPAWN_REQUEST_TYPE = 'agent-spawn-request';
 
+/** Context for bridge spawn helpers - closed over by the factory. */
+interface BridgeContext {
+  orchestrator: Orchestrator;
+  sharedFs: VirtualFS;
+  sessionStore: SessionStore | null | undefined;
+  generateName: () => string;
+  generateUid: () => string;
+  resolveModel: (modelId: string) => string | null;
+}
+
+/**
+ * Pick a fresh `<adjective>-<flavor>` that doesn't collide with any
+ * currently-registered scoop jid. Falls back to hex uid after 8 tries.
+ */
+function pickFreshNameToken(ctx: BridgeContext): string {
+  const MAX_TRIES = 8;
+  for (let i = 0; i < MAX_TRIES; i++) {
+    const candidate = ctx.generateName();
+    const candidateJid = `agent_${tokenToJid(candidate)}`;
+    if (!ctx.orchestrator.getScoops().some((s) => s.jid === candidateJid)) {
+      return candidate;
+    }
+  }
+  return ctx.generateUid();
+}
+
+/**
+ * Look up the parent scoop's modelId from the orchestrator registry.
+ */
+function resolveParentModelId(
+  orchestrator: Orchestrator,
+  parentJid: string | undefined
+): string | null {
+  if (parentJid === undefined) return null;
+  const parent = orchestrator.getScoops().find((s) => s.jid === parentJid);
+  if (!parent) return null;
+  const modelId = parent.config?.modelId;
+  return modelId && modelId.length > 0 ? modelId : null;
+}
+
+/**
+ * Look up the parent scoop's thinkingLevel from the orchestrator registry.
+ */
+function resolveParentThinkingLevel(
+  orchestrator: Orchestrator,
+  parentJid: string | undefined
+): ThinkingLevel | null {
+  if (parentJid === undefined) return null;
+  const parent = orchestrator.getScoops().find((s) => s.jid === parentJid);
+  if (!parent) return null;
+  const level = parent.config?.thinkingLevel;
+  return level && isThinkingLevel(level) ? level : null;
+}
+
+/**
+ * Validate model and thinking level options. Returns error result on failure.
+ */
+function validateSpawnOptions(
+  options: AgentSpawnOptions,
+  resolveModel: (modelId: string) => string | null
+): AgentSpawnResult | undefined {
+  const requestedModelId = options.modelId;
+  if (requestedModelId !== undefined) {
+    if (requestedModelId === '' || resolveModel(requestedModelId) === null) {
+      return {
+        finalText: `agent: unknown model: ${requestedModelId}`,
+        exitCode: 1,
+      };
+    }
+  }
+
+  const requestedLevel = options.thinkingLevel;
+  if (requestedLevel !== undefined && !isThinkingLevel(requestedLevel)) {
+    return {
+      finalText: `agent: invalid thinking level: ${String(requestedLevel)} (one of: ${THINKING_LEVELS.join(', ')})`,
+      exitCode: 1,
+    };
+  }
+
+  return undefined;
+}
+
+/**
+ * Build the scoop config from spawn options and resolved settings.
+ */
+function buildScoopConfig(
+  options: AgentSpawnOptions,
+  effectiveModelId: string,
+  effectiveThinkingLevel: ThinkingLevel | undefined,
+  scratchFolder: string
+): NonNullable<RegisteredScoop['config']> {
+  const cwdPrefix = normalizeRwPrefix(options.cwd);
+  const visiblePaths = resolveVisiblePaths(options);
+  const writablePaths = dedupePrefixes([cwdPrefix, '/shared/', `${scratchFolder}/`, '/tmp/']);
+
+  const scoopConfig: NonNullable<RegisteredScoop['config']> = {
+    visiblePaths,
+    writablePaths,
+    allowedCommands: options.allowedCommands,
+  };
+  if (effectiveModelId) {
+    scoopConfig.modelId = effectiveModelId;
+  }
+  if (effectiveThinkingLevel !== undefined) {
+    scoopConfig.thinkingLevel = effectiveThinkingLevel;
+  }
+  if (options.structuredOutputSchema !== undefined) {
+    scoopConfig.structuredOutputSchema = options.structuredOutputSchema;
+  }
+
+  return scoopConfig;
+}
+
+/**
+ * Register observer callbacks to capture scoop events.
+ * Returns state object (mutated by callbacks) plus unsubscribe function.
+ */
+function registerScoopObserver(orchestrator: Orchestrator, jid: string) {
+  const state = {
+    sendMessages: [] as string[],
+    responseBuffer: '',
+    scoopError: null as string | null,
+    unsubscribe: null as (() => void) | null,
+  };
+
+  state.unsubscribe = orchestrator.observeScoop(jid, {
+    onSendMessage: (text) => {
+      state.sendMessages.push(text);
+    },
+    onResponse: (text, isPartial) => {
+      if (isPartial) {
+        state.responseBuffer += text;
+      } else {
+        state.responseBuffer = text;
+      }
+    },
+    onError: (errMsg) => {
+      if (state.scoopError === null) {
+        state.scoopError = errMsg;
+      }
+    },
+  });
+
+  return state;
+}
+
+/**
+ * Prompt scoop and optionally nudge for structured output.
+ */
+async function runScoopAndCaptureOutput(
+  orchestrator: Orchestrator,
+  jid: string,
+  prompt: string,
+  structuredOutputSchema: Record<string, unknown> | undefined,
+  observerState: ReturnType<typeof registerScoopObserver>
+): Promise<AgentSpawnResult | null> {
+  await orchestrator.sendPrompt(jid, prompt, 'agent', 'agent');
+
+  if (observerState.scoopError !== null) {
+    return { finalText: observerState.scoopError, exitCode: 1 };
+  }
+
+  if (structuredOutputSchema) {
+    const ctxRef = orchestrator.getScoopContext(jid);
+    let so = ctxRef?.getStructuredOutput?.();
+    for (let nudge = 0; nudge < 2 && !so?.captured; nudge++) {
+      await orchestrator.sendPrompt(
+        jid,
+        'You did not call StructuredOutput. Call it now with your result, matching the schema.',
+        'agent',
+        'agent'
+      );
+      // Each nudge is its own LLM round-trip: surface a real error (rate limit,
+      // 5xx, capability shim) instead of masking it as "did not produce output".
+      if (observerState.scoopError !== null) {
+        return { finalText: observerState.scoopError, exitCode: 1 };
+      }
+      so = ctxRef?.getStructuredOutput?.();
+    }
+    if (so?.captured) {
+      return { finalText: JSON.stringify(so.value), exitCode: 0 };
+    }
+    return { finalText: 'agent: scoop did not produce StructuredOutput', exitCode: 1 };
+  }
+
+  const finalText =
+    observerState.sendMessages.length > 0
+      ? observerState.sendMessages[observerState.sendMessages.length - 1]
+      : observerState.responseBuffer;
+  return { finalText, exitCode: 0 };
+}
+
+/**
+ * Best-effort cleanup: unregister scoop, remove scratch folder, delete session.
+ */
+async function cleanupScoop(
+  ctx: BridgeContext,
+  jid: string,
+  folder: string,
+  scratchFolder: string
+): Promise<void> {
+  try {
+    await ctx.orchestrator.unregisterScoop(jid);
+  } catch (err) {
+    log.warn('unregisterScoop failed', { jid, error: errText(err) });
+  }
+  try {
+    await ctx.sharedFs.rm(scratchFolder, { recursive: true });
+  } catch (err) {
+    if (!isFsErrorCode(err, 'ENOENT')) {
+      log.warn('scratch folder cleanup failed', { folder, error: errText(err) });
+    }
+  }
+  if (ctx.sessionStore) {
+    try {
+      await ctx.sessionStore.delete(jid);
+    } catch (err) {
+      log.warn('sessionStore.delete failed', { jid, error: errText(err) });
+    }
+  }
+}
+
 /**
  * Create an {@link AgentBridge} bound to an orchestrator + shared VFS.
  *
@@ -174,139 +402,40 @@ export function createAgentBridge(
   sessionStore: SessionStore | null | undefined = null,
   deps: AgentBridgeDeps = {}
 ): AgentBridge {
-  const generateName = deps.generateName ?? defaultGenerateName;
-  const generateUid = deps.generateUid ?? defaultGenerateUid;
-  const resolveModel = deps.resolveModel ?? defaultResolveModel;
-
-  /**
-   * Pick a fresh `<adjective>-<flavor>` that doesn't collide with any
-   * currently-registered scoop jid. If we get unlucky eight times in a
-   * row, fall back to the hex uid generator so we never infinite-loop.
-   */
-  function pickFreshNameToken(): string {
-    const MAX_TRIES = 8;
-    for (let i = 0; i < MAX_TRIES; i++) {
-      const candidate = generateName();
-      const candidateJid = `agent_${tokenToJid(candidate)}`;
-      if (!orchestrator.getScoops().some((s) => s.jid === candidateJid)) {
-        return candidate;
-      }
-    }
-    return generateUid();
-  }
-
-  /**
-   * Look up the parent scoop by jid in the orchestrator registry and return
-   * its configured `modelId`. Returns `null` when parent is missing or has
-   * no `config.modelId` — typical for the cone, which tracks the UI
-   * selection through `ScoopContext.init()` instead of storing it.
-   */
-  function resolveParentModelId(parentJid: string | undefined): string | null {
-    if (parentJid === undefined) return null;
-    const parent = orchestrator.getScoops().find((s) => s.jid === parentJid);
-    if (!parent) return null;
-    const modelId = parent.config?.modelId;
-    return modelId && modelId.length > 0 ? modelId : null;
-  }
-
-  /**
-   * Mirror of {@link resolveParentModelId} for `thinkingLevel`. Returns
-   * `null` when the parent is missing or has no persisted
-   * `config.thinkingLevel`.
-   *
-   * Reads from the registered scoop's config for any parent jid (cone or
-   * scoop) — `Orchestrator.setScoopThinkingLevel` persists into
-   * `scoop.config.thinkingLevel` for both, so a cone with a UI-set level
-   * will inherit it down to ephemeral `agent` sub-scoops. When the cone
-   * never had a level set (the common case), this returns `null` and
-   * the bridge falls back to `undefined`, which `ScoopContext.init()`
-   * then resolves to `'off'`.
-   */
-  function resolveParentThinkingLevel(parentJid: string | undefined): ThinkingLevel | null {
-    if (parentJid === undefined) return null;
-    const parent = orchestrator.getScoops().find((s) => s.jid === parentJid);
-    if (!parent) return null;
-    const level = parent.config?.thinkingLevel;
-    return level && isThinkingLevel(level) ? level : null;
-  }
+  const ctx: BridgeContext = {
+    orchestrator,
+    sharedFs,
+    sessionStore,
+    generateName: deps.generateName ?? defaultGenerateName,
+    generateUid: deps.generateUid ?? defaultGenerateUid,
+    resolveModel: deps.resolveModel ?? defaultResolveModel,
+  };
 
   async function spawn(options: AgentSpawnOptions): Promise<AgentSpawnResult> {
-    // Model validation first. An explicit `--model foo` with no matching
-    // provider is a clean no-op — we never create the scratch folder or
-    // register a scoop when the model id is unknown.
+    const validationError = validateSpawnOptions(options, ctx.resolveModel);
+    if (validationError) return validationError;
+
     const requestedModelId = options.modelId;
-    if (requestedModelId !== undefined) {
-      if (requestedModelId === '' || resolveModel(requestedModelId) === null) {
-        return {
-          finalText: `agent: unknown model: ${requestedModelId}`,
-          exitCode: 1,
-        };
-      }
-    }
+    const effectiveModelId =
+      requestedModelId ?? resolveParentModelId(ctx.orchestrator, options.parentJid) ?? '';
 
-    // Model precedence: explicit > parent scoop > undefined (ScoopContext
-    // then falls back to the UI selection via `resolveCurrentModel`).
-    const effectiveModelId = requestedModelId ?? resolveParentModelId(options.parentJid) ?? '';
-
-    // Validate explicit thinkingLevel up-front. agent-command.ts already
-    // rejects unknown values, but defense-in-depth: programmatic callers
-    // (and the extension proxy) reach this path too.
     const requestedLevel = options.thinkingLevel;
-    if (requestedLevel !== undefined && !isThinkingLevel(requestedLevel)) {
-      return {
-        finalText: `agent: invalid thinking level: ${String(requestedLevel)} (one of: ${THINKING_LEVELS.join(', ')})`,
-        exitCode: 1,
-      };
-    }
-
-    // Thinking-level precedence mirrors model precedence:
-    //   explicit > parent scoop > undefined (ScoopContext resolves
-    //   undefined to 'off' via `resolveThinkingLevel`).
     const effectiveThinkingLevel =
-      requestedLevel ?? resolveParentThinkingLevel(options.parentJid) ?? undefined;
+      requestedLevel ??
+      resolveParentThinkingLevel(ctx.orchestrator, options.parentJid) ??
+      undefined;
 
-    // Friendly `<adjective>-<flavor>` naming (on-brand with the ice-cream
-    // vocabulary). Folder uses dashes; jid uses underscores. Falls back
-    // to the old hex uid if we hit eight consecutive collisions.
-    const nameToken = pickFreshNameToken();
+    const nameToken = pickFreshNameToken(ctx);
     const folder = `agent-${nameToken}`;
     const jid = `agent_${tokenToJid(nameToken)}`;
     const scratchFolder = `/scoops/${folder}`;
 
-    // Normalize the caller-supplied cwd into a RestrictedFS-compatible
-    // prefix (trailing slash required by the prefix-match semantics).
-    const cwdPrefix = normalizeRwPrefix(options.cwd);
-
-    // Resolve visiblePaths:
-    //   - Explicit `--read-only` list → pure replace (no implicit
-    //     `invokingCwd` add). Mirrors `scoop_scoop` semantics exactly;
-    //     the user is opting out of the default.
-    //   - No `--read-only` → union of the historical default
-    //     `['/workspace/']` with the caller's invokingCwd (when present
-    //     and not already covered by the default), so the spawned scoop
-    //     can READ the directory it was launched from. De-duped on the
-    //     normalized trailing-slash prefix so repeating callers don't
-    //     bloat the list.
-    const visiblePaths = resolveVisiblePaths(options);
-
-    // Resolve writablePaths: the positional cwd and /shared/ plus the
-    // scoop's own scratch folder (historical), AND `/tmp/` — an always-on
-    // ambient scratch root. `/tmp/` is NOT reachable via any flag; it's
-    // present here unconditionally so agents always have a writable
-    // temp-file location without the caller having to opt in.
-    const writablePaths = dedupePrefixes([cwdPrefix, '/shared/', `${scratchFolder}/`, '/tmp/']);
-
-    const scoopConfig: NonNullable<RegisteredScoop['config']> = {
-      visiblePaths,
-      writablePaths,
-      allowedCommands: options.allowedCommands,
-    };
-    if (effectiveModelId) {
-      scoopConfig.modelId = effectiveModelId;
-    }
-    if (effectiveThinkingLevel !== undefined) {
-      scoopConfig.thinkingLevel = effectiveThinkingLevel;
-    }
+    const scoopConfig = buildScoopConfig(
+      options,
+      effectiveModelId,
+      effectiveThinkingLevel,
+      scratchFolder
+    );
 
     const scoop: RegisteredScoop = {
       jid,
@@ -319,103 +448,33 @@ export function createAgentBridge(
       addedAt: new Date().toISOString(),
       config: scoopConfig,
       configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
-      // Ephemeral scoops: we already drain send_message / response via
-      // `observeScoop` below, so the orchestrator's default cone-notify
-      // side effect would only duplicate that work and bill an extra cone
-      // turn. See `RegisteredScoop.notifyOnComplete` for details.
       notifyOnComplete: false,
     };
 
-    // Observer state. The orchestrator's per-scoop observer fires these
-    // callbacks synchronously from the normal `OrchestratorCallbacks`
-    // chain, so we never race the scoop's lifecycle.
-    const sendMessages: string[] = [];
-    let responseBuffer = '';
-    let scoopError: string | null = null;
-
-    const unsubscribe = orchestrator.observeScoop(jid, {
-      onSendMessage: (text) => {
-        sendMessages.push(text);
-      },
-      onResponse: (text, isPartial) => {
-        // Mirror the orchestrator's `scoopResponseBuffer` semantics:
-        // partial deltas accumulate, non-partial replaces (for non-stream
-        // providers that emit the full text once).
-        if (isPartial) {
-          responseBuffer += text;
-        } else {
-          responseBuffer = text;
-        }
-      },
-      onError: (errMsg) => {
-        // Preserve the first specific error over later generic follow-ups
-        // (e.g., "Agent not initialized" after an init failure). This is
-        // the `scoopError` preservation that #430 accrued over three
-        // rounds of live-testing; we keep the semantic but collapse the
-        // machinery to a single `??` below.
-        if (scoopError === null) {
-          scoopError = errMsg;
-        }
-      },
-    });
+    const observerHandle = registerScoopObserver(ctx.orchestrator, jid);
 
     try {
-      // registerScoop awaits createScoopTab (post-#441), so init races
-      // are impossible. If init fails, ScoopContext surfaces the error
-      // through `onError` (captured above) and registerScoop itself
-      // rolls back the in-memory + on-disk records.
       try {
-        await orchestrator.registerScoop(scoop);
+        await ctx.orchestrator.registerScoop(scoop);
       } catch (err) {
-        return { finalText: scoopError ?? errText(err), exitCode: 1 };
+        return { finalText: observerHandle.scoopError ?? errText(err), exitCode: 1 };
       }
 
-      // sendPrompt runs the agent loop to completion. Errors surface via
-      // the observer above rather than as a rejection (pi-agent-core
-      // treats stream `error` events as terminal but non-throwing).
-      await orchestrator.sendPrompt(jid, options.prompt, 'agent', 'agent');
+      const result = await runScoopAndCaptureOutput(
+        ctx.orchestrator,
+        jid,
+        options.prompt,
+        options.structuredOutputSchema,
+        observerHandle
+      );
+      if (result) return result;
 
-      if (scoopError !== null) {
-        return { finalText: scoopError, exitCode: 1 };
-      }
-
-      const finalText =
-        sendMessages.length > 0 ? sendMessages[sendMessages.length - 1] : responseBuffer;
-      return { finalText, exitCode: 0 };
+      return { finalText: observerHandle.scoopError ?? '', exitCode: 1 };
     } catch (err) {
-      // Any thrown error from sendPrompt (rare — usually surfaces via
-      // onError) falls through here.
-      return { finalText: scoopError ?? errText(err), exitCode: 1 };
+      return { finalText: observerHandle.scoopError ?? errText(err), exitCode: 1 };
     } finally {
-      unsubscribe();
-
-      // Cleanup is best-effort and never throws. Each step logs a warning
-      // on failure but doesn't abort subsequent steps — leaving a partial
-      // unregister is worse than a loud but survivable cleanup error.
-      try {
-        await orchestrator.unregisterScoop(jid);
-      } catch (err) {
-        log.warn('unregisterScoop failed', { jid, error: errText(err) });
-      }
-      try {
-        await sharedFs.rm(scratchFolder, { recursive: true });
-      } catch (err) {
-        // ENOENT is expected when registerScoop rolled back before the
-        // scratch folder was ever created (ScoopContext.init() creates it
-        // on first write). Don't pollute logs with that case — surface
-        // anything else (EACCES, EBUSY, etc.) since it could indicate a
-        // real cleanup failure.
-        if (!isFsErrorCode(err, 'ENOENT')) {
-          log.warn('scratch folder cleanup failed', { folder, error: errText(err) });
-        }
-      }
-      if (sessionStore) {
-        try {
-          await sessionStore.delete(jid);
-        } catch (err) {
-          log.warn('sessionStore.delete failed', { jid, error: errText(err) });
-        }
-      }
+      observerHandle.unsubscribe?.();
+      await cleanupScoop(ctx, jid, folder, scratchFolder);
     }
   }
 

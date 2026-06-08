@@ -1,4 +1,5 @@
 import type { IFileSystem } from 'just-bash';
+import { unsafeBytesFromLatin1 } from 'just-bash';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAgentCommand } from '../../../src/shell/supplemental-commands/agent-command.js';
 
@@ -10,6 +11,7 @@ interface SpawnArgs {
   visiblePaths?: string[];
   invokingCwd?: string;
   thinkingLevel?: string;
+  structuredOutputSchema?: Record<string, unknown>;
 }
 
 interface SpawnResult {
@@ -55,7 +57,7 @@ function createMockCtx(cwd = '/home', fsOptions: MockFsOptions = {}) {
     fs: fs as unknown as IFileSystem,
     cwd,
     env: new Map<string, string>(),
-    stdin: '',
+    stdin: unsafeBytesFromLatin1(''),
   };
 }
 
@@ -1019,6 +1021,92 @@ describe('agent command', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toMatch(/--thinking/);
       expect(result.stdout).toMatch(/off, minimal, low, medium, high, xhigh/);
+    });
+  });
+
+  describe('--schema-b64 flag', () => {
+    it('--schema-b64 forwards a decoded schema to the bridge', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: '{}', exitCode: 0 };
+      });
+      const schema = { type: 'object', properties: { n: { type: 'number' } } };
+      const b64 = Buffer.from(JSON.stringify(schema), 'utf8').toString('base64');
+      await createAgentCommand().execute(
+        ['--schema-b64', b64, '.', '*', 'go'],
+        createMockCtx('/home')
+      );
+      expect(captured?.structuredOutputSchema).toEqual(schema);
+    });
+
+    it('errors when --schema-b64 has no value', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(['--schema-b64'], createMockCtx());
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toMatch(/--schema-b64/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('errors when --schema-b64 has a flag-looking value', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(
+        ['--schema-b64', '--help', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toMatch(/--schema-b64/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('errors when --schema-b64 value is not valid base64', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(
+        ['--schema-b64', '!!!invalid!!!', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toMatch(/--schema-b64/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('errors when --schema-b64 decodes to non-JSON', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const b64 = Buffer.from('not json', 'utf8').toString('base64');
+      const result = await createAgentCommand().execute(
+        ['--schema-b64', b64, '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toMatch(/--schema-b64/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('errors when --schema-b64 decodes to non-object JSON', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const b64 = Buffer.from('"a string"', 'utf8').toString('base64');
+      const result = await createAgentCommand().execute(
+        ['--schema-b64', b64, '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toMatch(/--schema-b64/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('does NOT pass structuredOutputSchema when --schema-b64 is absent', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: 'x', exitCode: 0 };
+      });
+      await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      expect(captured?.structuredOutputSchema).toBeUndefined();
     });
   });
 });

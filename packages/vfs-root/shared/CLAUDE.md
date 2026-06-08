@@ -26,13 +26,7 @@ Personal assistant inside SLICC, a browser-native AI agent runtime. You code, au
 
 Often missed:
 
-- `oauth-token <provider>` / `--list` — stored OAuth tokens (adobe, github, …)
-- `mcp add <url>` — registers MCP server as `<name>` command
-- `webhook` / `crontask` — register HTTP-webhook or cron lick handlers
-- `agent <cwd> <cmds> <prompt>` — one-shot fire-and-forget scoop
-- `serve <dir>` — host a VFS dir over HTTP
-- `ffmpeg` — on-demand WASM; `-f avfoundation` captures img/vid/mic
-- `usb`/`serial`/`hid`/`esptool` — WebUSB/Serial/HID + ESP flash; picker needs a panel keystroke. Chromium only.
+- `oauth-token`, `mcp add`, `webhook`, `crontask`, `agent`, `serve`, `ffmpeg`, `usb`/`serial`/`hid`/`esptool`, `workflow`
 
 ## Principles
 
@@ -63,6 +57,10 @@ Events arrive as `[<Event>: <name>]` with JSON body:
 - **Sprinkle**: route to owning scoop; **Session Reload / Upgrade**: handler inline
 
 Scoops return on `scoop-notify` / `scoop-idle` / `scoop-wait`.
+
+## Workflows
+
+Parallel fan-out: `workflow run <file.js>`. API: `agent(prompt, {schema?})`, `parallel([fns])`, `pipeline(items, ...stages)`, `phase`/`log`. Must be deterministic — `Date`/`Math.random`/`crypto`/timers throw. `workflow -h` for usage.
 
 ## Approvals (sudo)
 

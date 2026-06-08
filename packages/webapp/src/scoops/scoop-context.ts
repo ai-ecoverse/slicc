@@ -291,6 +291,9 @@ export class ScoopContext {
   private skillsDir: string = '/workspace/skills';
   private sudoManager: SudoManager | null = null;
 
+  private structuredOutputValue: unknown;
+  private structuredOutputCaptured = false;
+
   constructor(
     scoop: RegisteredScoop,
     callbacks: ScoopContextCallbacks,
@@ -315,6 +318,194 @@ export class ScoopContext {
     this.sessionId = scoop.jid;
   }
 
+  getStructuredOutput() {
+    return { captured: this.structuredOutputCaptured, value: this.structuredOutputValue };
+  }
+
+  /** Create shell and load skills. */
+  private async initShellAndSkills() {
+    const cwd = this.scoop.isCone ? '/' : `/scoops/${this.scoop.folder}/workspace`;
+    const browser = this.callbacks.getBrowserAPI();
+    this.skillsDir = '/workspace/skills';
+
+    if (this.scoop.isCone) {
+      await createDefaultSkills(this.fs as VirtualFS, this.skillsDir);
+    }
+
+    const effectiveSkillsFs = (this.skillsFs ?? this.fs) as VirtualFS;
+    const secretEnv = await fetchSecretEnvVars();
+
+    const gatedFs = (
+      this.sudoManager
+        ? createSudoFs(this.fs!, {
+            broker: this.sudoManager.getBroker(),
+            getPolicy: () => this.sudoManager!.getPolicy(),
+          })
+        : this.fs!
+    ) as VirtualFS;
+
+    this.shell = new WasmShell({
+      fs: gatedFs,
+      cwd,
+      env: Object.keys(secretEnv).length > 0 ? secretEnv : undefined,
+      browserAPI: browser,
+      jshDiscoveryFs: this.skillsFs ? effectiveSkillsFs : undefined,
+      allowedCommands: this.scoop.config?.allowedCommands,
+      getParentJid: () => this.scoop.jid,
+      isScoop: () => !this.scoop.isCone,
+      sudo: this.sudoManager?.getShellConfig(),
+    });
+
+    log.info('WasmShell initialized', { folder: this.scoop.folder });
+    const skills = await loadSkills(effectiveSkillsFs, this.skillsDir);
+    return { gatedFs, skills };
+  }
+
+  /** Build tools for the agent. */
+  private async buildTools(gatedFs: VirtualFS) {
+    const scoopManagementToolsConfig: ScoopManagementToolsConfig = {
+      scoop: this.scoop,
+      onSendMessage: this.callbacks.onSendMessage,
+      getScoops: this.callbacks.getScoops,
+      getScoopTabState: this.callbacks.getScoopTabState,
+      onFeedScoop: this.callbacks.onFeedScoop,
+      onScoopScoop: this.callbacks.onScoopScoop,
+      onDropScoop: this.callbacks.onDropScoop,
+      onMuteScoops: this.callbacks.onMuteScoops,
+      onUnmuteScoops: this.callbacks.onUnmuteScoops,
+      onScheduleScoopWait: this.callbacks.onScheduleScoopWait,
+      onSetGlobalMemory: this.callbacks.setGlobalMemory,
+      getGlobalMemory: this.callbacks.getGlobalMemory,
+    };
+    const scoopManagementTools = createScoopManagementTools(scoopManagementToolsConfig);
+
+    const legacyTools = [
+      ...createFileTools(gatedFs),
+      createBashTool(this.shell!),
+      ...scoopManagementTools,
+    ];
+
+    if (this.scoop.config?.structuredOutputSchema) {
+      const { createStructuredOutputTool } = await import('./structured-output-tool.js');
+      legacyTools.push(
+        createStructuredOutputTool(this.scoop.config.structuredOutputSchema, (v) => {
+          this.structuredOutputValue = v;
+          this.structuredOutputCaptured = true;
+        })
+      );
+    }
+
+    const secretsConfig = { scrubToolResult: getToolResultScrubber() };
+    return this.processManager
+      ? adaptTools(
+          legacyTools,
+          {
+            processManager: this.processManager,
+            owner: {
+              kind: this.scoop.isCone ? 'cone' : 'scoop',
+              scoopJid: this.scoop.jid,
+            },
+            getParentPid: () => this.currentTurnProcess?.pid,
+          },
+          secretsConfig
+        )
+      : adaptTools(legacyTools, undefined, secretsConfig);
+  }
+
+  /** Load scoop memory and global memory. */
+  private async loadMemories() {
+    const memoryPath = this.scoop.isCone
+      ? '/workspace/CLAUDE.md'
+      : `/scoops/${this.scoop.folder}/CLAUDE.md`;
+    let scoopMemory = '';
+    try {
+      const content = await this.fs!.readFile(memoryPath, { encoding: 'utf-8' });
+      scoopMemory = typeof content === 'string' ? content : new TextDecoder().decode(content);
+    } catch {
+      // No memory file yet
+    }
+
+    const globalMemory = await this.callbacks.getGlobalMemory();
+    if (globalMemory && this.scoop.isCone) {
+      try {
+        const underlying =
+          'getUnderlyingFS' in this.fs!
+            ? (this.fs! as RestrictedFS).getUnderlyingFS()
+            : (this.fs! as VirtualFS);
+        await underlying.writeFile('/shared/CLAUDE.md', globalMemory);
+      } catch {
+        // /shared may not be accessible
+      }
+    }
+
+    return { scoopMemory, globalMemory };
+  }
+
+  /** Restore agent session from storage. */
+  private async restoreSession(): Promise<AgentMessage[]> {
+    if (!this.sessionStore) return [];
+
+    try {
+      const saved = await this.sessionStore.load(this.sessionId);
+      if (saved) {
+        const restoredMessages = stripOrphanedToolResults(saved.messages);
+        this.sessionCreatedAt = saved.createdAt;
+        log.info('Restored agent session', {
+          folder: this.scoop.folder,
+          messageCount: restoredMessages.length,
+          droppedOrphans: saved.messages.length - restoredMessages.length,
+        });
+        return restoredMessages;
+      }
+    } catch (err) {
+      log.error('Failed to restore agent session', {
+        folder: this.scoop.folder,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      this.callbacks.onError(`Conversation history could not be restored. Starting fresh.`);
+    }
+    return [];
+  }
+
+  /** Build Adobe session ID and streaming/compaction helpers. */
+  private async buildSessionHelpers(model: Model<Api>) {
+    const adobeSessionId = await getAdobeSessionId(this.scoop, this.coneJid);
+    const streamWithSessionId: typeof streamSimple = (m, ctx, opts) => {
+      if (m.provider !== 'adobe') return streamSimple(m, ctx, opts);
+      return streamSimple(m, ctx, {
+        ...opts,
+        headers: { ...opts?.headers, 'X-Session-Id': adobeSessionId },
+      });
+    };
+
+    const compactionHeaders =
+      model.provider === 'adobe' ? { 'X-Session-Id': adobeSessionId } : undefined;
+    const onMemoryUpdates =
+      this.scoop.isCone && this.callbacks.appendConeMemory
+        ? (bullets: string) =>
+            this.callbacks.appendConeMemory!(bullets, {
+              source: 'compaction',
+              model,
+              apiKey: getApiKey() ?? undefined,
+              headers: compactionHeaders,
+            })
+        : undefined;
+
+    const compactFn = createCompactContext({
+      model,
+      contextWindow:
+        typeof model.contextWindow === 'number' && model.contextWindow > 0
+          ? model.contextWindow
+          : undefined,
+      getApiKey: () => getApiKey() ?? undefined,
+      headers: compactionHeaders,
+      onMemoryUpdates,
+      onCompactionStateChange: this.callbacks.onCompactionStateChange,
+    });
+
+    return { streamWithSessionId, compactFn };
+  }
+
   /** Initialize the scoop's environment */
   async init(): Promise<void> {
     this.setStatus('initializing');
@@ -323,159 +514,14 @@ export class ScoopContext {
       if (!this.fs) throw new Error('Filesystem not provided');
 
       log.info('Filesystem ready', { folder: this.scoop.folder });
-
-      // Ensure directory structure
       await this.ensureDirectoryStructure();
 
-      // Create shell — cone starts at /, scoops at /scoops/{folder}/workspace
-      const cwd = this.scoop.isCone ? '/' : `/scoops/${this.scoop.folder}/workspace`;
-      const browser = this.callbacks.getBrowserAPI();
+      const { gatedFs, skills } = await this.initShellAndSkills();
+      const tools = await this.buildTools(gatedFs);
+      const { scoopMemory, globalMemory } = await this.loadMemories();
 
-      // Always load skills from the cone's /workspace/skills/ directory.
-      // Scoops now have read access to /workspace/ via RestrictedFS ACL,
-      // so no per-scoop skill copying is needed.
-      this.skillsDir = '/workspace/skills';
-
-      // Seed bundled defaults only for the cone
-      if (this.scoop.isCone) {
-        await createDefaultSkills(this.fs as VirtualFS, this.skillsDir);
-      }
-
-      const effectiveSkillsFs = (this.skillsFs ?? this.fs) as VirtualFS;
-
-      // Fetch masked secret values from the server to populate shell environment.
-      // Real values never leave the server — only deterministic masked values are used.
-      const secretEnv = await fetchSecretEnvVars();
-
-      // Wrap the agent's FS handle with the sudo gate. This single gated handle
-      // backs BOTH the file tools and the shell's bash file ops, so reads/writes
-      // (and the always-on /etc/sudoers self-protection) funnel through one
-      // `matchPath` check against the live policy. The shell's "Always" command
-      // grants are routed through the manager's raw-FS sink (see getShellConfig)
-      // so they don't re-prompt on the grant write.
-      const gatedFs = (
-        this.sudoManager
-          ? createSudoFs(this.fs, {
-              broker: this.sudoManager.getBroker(),
-              getPolicy: () => this.sudoManager!.getPolicy(),
-            })
-          : this.fs
-      ) as VirtualFS;
-
-      // Pass effectiveSkillsFs for JSH discovery so scoops can find .jsh files from all loaded skills
-      this.shell = new WasmShell({
-        fs: gatedFs,
-        cwd,
-        env: Object.keys(secretEnv).length > 0 ? secretEnv : undefined,
-        browserAPI: browser,
-        jshDiscoveryFs: this.skillsFs ? effectiveSkillsFs : undefined,
-        allowedCommands: this.scoop.config?.allowedCommands,
-        // Forward this scoop's jid so the `agent` supplemental command can
-        // tell the AgentBridge which scoop is the parent of any nested
-        // `agent <cwd> ... <prompt>` invocation — used for model inheritance.
-        getParentJid: () => this.scoop.jid,
-        // Mark non-cone scoops as non-interactive so commands like `mount`
-        // that need a human gesture fail fast instead of hanging on a tool
-        // UI nobody will see (issue #508).
-        isScoop: () => !this.scoop.isCone,
-        // Command-level sudo enforcement. Shares the same broker + live policy
-        // as the FS gate; "Always" grants persist via the manager's raw-FS sink.
-        sudo: this.sudoManager?.getShellConfig(),
-      });
-      log.info('WasmShell initialized', { folder: this.scoop.folder });
-      const skills = await loadSkills(effectiveSkillsFs, this.skillsDir);
-
-      // Create scoop-management tools (send_message, scoop management)
-      const scoopManagementToolsConfig: ScoopManagementToolsConfig = {
-        scoop: this.scoop,
-        onSendMessage: this.callbacks.onSendMessage,
-        getScoops: this.callbacks.getScoops,
-        getScoopTabState: this.callbacks.getScoopTabState,
-        onFeedScoop: this.callbacks.onFeedScoop,
-        onScoopScoop: this.callbacks.onScoopScoop,
-        onDropScoop: this.callbacks.onDropScoop,
-        onMuteScoops: this.callbacks.onMuteScoops,
-        onUnmuteScoops: this.callbacks.onUnmuteScoops,
-        onScheduleScoopWait: this.callbacks.onScheduleScoopWait,
-        onSetGlobalMemory: this.callbacks.setGlobalMemory,
-        getGlobalMemory: this.callbacks.getGlobalMemory,
-      };
-      const scoopManagementTools = createScoopManagementTools(scoopManagementToolsConfig);
-
-      // Create tools (browser automation and search are now via shell commands through bash)
-      const legacyTools = [
-        ...createFileTools(gatedFs),
-        createBashTool(this.shell),
-        ...scoopManagementTools,
-      ];
-      // Thread the process manager so each tool call registers a
-      // `kind:'tool'` process under the active scoop-turn.
-      // `getParentPid` is a closure over `currentTurnProcess` so the
-      // right turn's pid is always visible — tools fired between
-      // turns (e.g. proactive tool-use; rare) get `ppid: undefined`
-      // (defaults to 1).
-      //
-      // The secrets config threads the active per-session
-      // `SecretsPipeline` (owned by the SW in extension floats or
-      // the node-server in CLI/Electron/hosted) into the adapter so
-      // every completed tool-result text gets a single real→masked
-      // scrub pass before reaching the agent loop — defense-in-depth
-      // for bash/read_file output that bypasses the fetch-proxy
-      // inbound scrub.
-      const secretsConfig = { scrubToolResult: getToolResultScrubber() };
-      const tools = this.processManager
-        ? adaptTools(
-            legacyTools,
-            {
-              processManager: this.processManager,
-              owner: {
-                kind: this.scoop.isCone ? 'cone' : 'scoop',
-                scoopJid: this.scoop.jid,
-              },
-              getParentPid: () => this.currentTurnProcess?.pid,
-            },
-            secretsConfig
-          )
-        : adaptTools(legacyTools, undefined, secretsConfig);
-
-      // Load scoop memory
-      const memoryPath = this.scoop.isCone
-        ? '/workspace/CLAUDE.md'
-        : `/scoops/${this.scoop.folder}/CLAUDE.md`;
-      let scoopMemory = '';
-      try {
-        const content = await this.fs.readFile(memoryPath, { encoding: 'utf-8' });
-        scoopMemory = typeof content === 'string' ? content : new TextDecoder().decode(content);
-      } catch {
-        // No memory file yet
-      }
-
-      // Load global memory and sync it to /shared/CLAUDE.md
-      const globalMemory = await this.callbacks.getGlobalMemory();
-      if (globalMemory) {
-        try {
-          // Only cone writes to /shared — scoops read it via their allowed paths
-          if (this.scoop.isCone) {
-            const underlying =
-              'getUnderlyingFS' in this.fs
-                ? (this.fs as RestrictedFS).getUnderlyingFS()
-                : (this.fs as VirtualFS);
-            await underlying.writeFile('/shared/CLAUDE.md', globalMemory);
-          }
-        } catch {
-          // /shared may not be accessible for restricted scoops, that's fine
-        }
-      }
-
-      // Create agent
       const apiKey = getApiKey();
       if (!apiKey) {
-        // No credentials configured yet — defer agent creation rather
-        // than surfacing a hard error. The deterministic onboarding
-        // flow (welcome wizard → connect-llm dip) is expected to
-        // collect a key before the user tries to chat. `prompt()`
-        // performs a lazy re-init so the agent comes up the moment
-        // a key lands.
         log.info('ScoopContext init deferred — no API key yet', {
           folder: this.scoop.folder,
         });
@@ -490,85 +536,9 @@ export class ScoopContext {
       console.log(`[model] ${label} using model: ${model.id} (provider: ${model.provider})`);
 
       const systemPrompt = this.buildSystemPrompt(globalMemory, scoopMemory, skills);
+      const restoredMessages = await this.restoreSession();
+      const { streamWithSessionId, compactFn } = await this.buildSessionHelpers(model);
 
-      // Restore agent messages from previous session
-      let restoredMessages: AgentMessage[] = [];
-      if (this.sessionStore) {
-        try {
-          const saved = await this.sessionStore.load(this.sessionId);
-          if (saved) {
-            restoredMessages = stripOrphanedToolResults(saved.messages);
-            this.sessionCreatedAt = saved.createdAt;
-            log.info('Restored agent session', {
-              folder: this.scoop.folder,
-              messageCount: restoredMessages.length,
-              droppedOrphans: saved.messages.length - restoredMessages.length,
-            });
-          }
-        } catch (err) {
-          log.error('Failed to restore agent session', {
-            folder: this.scoop.folder,
-            error: err instanceof Error ? err.message : String(err),
-          });
-          this.callbacks.onError(`Conversation history could not be restored. Starting fresh.`);
-        }
-      }
-
-      // Compute the Adobe session identifier once per init. It is a
-      // daily-rotating random UUID for the cone, and `<uuid>/<hash(folder, uuid)>`
-      // for scoops — salted with the UUID so the scoop folder name never
-      // reaches the provider. Only sent as the `X-Session-Id` header for the
-      // Adobe proxy; other providers receive no such header.
-      const adobeSessionId = await getAdobeSessionId(this.scoop, this.coneJid);
-      const streamWithSessionId: typeof streamSimple = (m, ctx, opts) => {
-        if (m.provider !== 'adobe') return streamSimple(m, ctx, opts);
-        return streamSimple(m, ctx, {
-          ...opts,
-          headers: { ...opts?.headers, 'X-Session-Id': adobeSessionId },
-        });
-      };
-
-      // Compaction hits the LLM via pi-coding-agent's `completeSimple`, which
-      // bypasses our `streamWithSessionId` wrapper. Forward the same Adobe
-      // session header through `createCompactContext` so summarization calls
-      // join the same session as the agent's tool turns.
-      const compactionHeaders =
-        model.provider === 'adobe' ? { 'X-Session-Id': adobeSessionId } : undefined;
-      // Auto-extracted memory is cone-only — scoops keep their own local
-      // memory files curated by the user. Wiring the callback only for the
-      // cone also skips the second compaction LLM call entirely for scoops.
-      // Forward the active model + key + adobe headers so the sink can run
-      // its budget-driven restructure pass against the same provider.
-      const onMemoryUpdates =
-        this.scoop.isCone && this.callbacks.appendConeMemory
-          ? (bullets: string) =>
-              this.callbacks.appendConeMemory!(bullets, {
-                source: 'compaction',
-                model,
-                apiKey: getApiKey() ?? undefined,
-                headers: compactionHeaders,
-              })
-          : undefined;
-      const compactFn = createCompactContext({
-        model,
-        // Size GC to the model's real context window. The Adobe proxy reports
-        // up to 1M tokens for Sonnet/Opus 4.x; without this, compaction (and
-        // its cone memory-extraction call) would fire at the hardcoded 200K
-        // default — ~18% of capacity — on every long session. A 0/missing
-        // window falls back to createCompactContext's default; passing 0 would
-        // make the threshold (window - reserveTokens) negative and compact on
-        // every turn.
-        contextWindow:
-          typeof model.contextWindow === 'number' && model.contextWindow > 0
-            ? model.contextWindow
-            : undefined,
-        getApiKey: () => getApiKey() ?? undefined,
-        headers: compactionHeaders,
-        onMemoryUpdates,
-        onCompactionStateChange: this.callbacks.onCompactionStateChange,
-      });
-
-      // Guard: dispose() may have run while init() was awaiting above.
       if (this.disposed) return;
 
       const thinkingLevel = resolveThinkingLevel(this.scoop.config?.thinkingLevel, model);
@@ -584,9 +554,18 @@ export class ScoopContext {
         getApiKey: () => getApiKey() ?? undefined,
         transformContext: compactFn,
         streamFn: streamWithSessionId,
+        afterToolCall: async (context) => {
+          if (
+            this.scoop.config?.structuredOutputSchema &&
+            context.toolCall.name === 'StructuredOutput'
+          ) {
+            this.structuredOutputValue = context.args;
+            this.structuredOutputCaptured = true;
+          }
+          return undefined;
+        },
       });
 
-      // Subscribe to agent events
       this.unsubscribe = this.agent.subscribe((event) => this.handleAgentEvent(event));
 
       this.setStatus('ready');
@@ -600,51 +579,245 @@ export class ScoopContext {
     }
   }
 
-  /** Send a prompt to this scoop's agent. If already processing, queues it via followUp(). */
-  async prompt(text: string, images: ImageContent[] = []): Promise<void> {
-    if (!this.agent) {
-      // Lazy-init: credentials may have been added since the initial
-      // init() — re-run it so the agent comes up on first prompt.
-      await this.init();
-      if (!this.agent) {
-        let provider = '';
-        try {
-          provider = getSelectedProvider();
-        } catch {
-          /* test env may have no localStorage — fall back to a generic message */
-        }
-        this.callbacks.onError(
-          provider
-            ? `No API key configured for provider "${provider}". Open Settings to add one.`
-            : 'No API key configured. Open Settings to add one.'
-        );
-        return;
-      }
-    }
+  /** Ensure agent is initialized. Returns false if initialization failed. */
+  private async ensureAgentReady(): Promise<boolean> {
+    if (this.agent) return true;
 
-    // Check both our flag AND the agent's internal state to avoid race conditions.
-    // If the agent is streaming (tool executing, etc), use followUp() to queue.
-    const agentIsStreaming = this.agent.state?.isStreaming ?? false;
+    await this.init();
+    if (!this.agent) {
+      let provider = '';
+      try {
+        provider = getSelectedProvider();
+      } catch {
+        /* test env may have no localStorage — fall back to a generic message */
+      }
+      this.callbacks.onError(
+        provider
+          ? `No API key configured for provider "${provider}". Open Settings to add one.`
+          : 'No API key configured. Open Settings to add one.'
+      );
+      return false;
+    }
+    return true;
+  }
+
+  /** Queue prompt if agent is busy. Returns true if queued. */
+  private queuePromptIfBusy(text: string, images: ImageContent[]): boolean {
+    const agentIsStreaming = this.agent!.state?.isStreaming ?? false;
     if (this.isProcessing || agentIsStreaming) {
       log.info('Queueing prompt via followUp while processing', {
         folder: this.scoop.folder,
         isProcessing: this.isProcessing,
         agentIsStreaming,
       });
-      // Use pi-agent-core's followUp() to queue message for after current turn
-      this.agent.followUp({
+      this.agent!.followUp({
         role: 'user',
         content: [{ type: 'text', text }, ...images],
         timestamp: Date.now(),
       });
-      return;
+      return true;
+    }
+    return false;
+  }
+
+  /** Register turn process with process manager. */
+  private registerTurnProcess(text: string, abortController: AbortController): Process | null {
+    if (!this.processManager) return null;
+
+    const turnArgv = ['prompt', text.length > 200 ? text.slice(0, 197) + '…' : text];
+    return this.processManager.spawn({
+      kind: 'scoop-turn',
+      argv: turnArgv,
+      cwd: this.scoop.isCone ? '/' : `/scoops/${this.scoop.folder}/workspace`,
+      owner: {
+        kind: this.scoop.isCone ? 'cone' : 'scoop',
+        scoopJid: this.scoop.jid,
+      },
+      adoptAbort: abortController,
+    });
+  }
+
+  /** Handle non-retryable error. Returns true if handled. */
+  private handleNonRetryableError(message: string): boolean {
+    if (!isNonRetryableError(message)) return false;
+
+    log.error('Non-retryable agent error', {
+      folder: this.scoop.folder,
+      error: message,
+    });
+    this.setStatus('error');
+    if (this.callbacks.onFatalError) {
+      this.callbacks.onFatalError(
+        `Scoop "${this.scoop.name}" failed with unrecoverable error: ${message}`
+      );
+    } else {
+      this.callbacks.onError(message);
+    }
+    return true;
+  }
+
+  /** Handle retryable error with exponential backoff. Returns true if should retry. */
+  private async handleRetryableError(
+    message: string,
+    attempt: number,
+    maxRetries: number,
+    baseDelayMs: number,
+    abortSignal: AbortSignal
+  ): Promise<boolean> {
+    if (!isRetryableError(message) || attempt >= maxRetries) return false;
+
+    const delay = baseDelayMs * Math.pow(2, attempt - 1);
+    log.warn('Retryable agent error, will retry', {
+      folder: this.scoop.folder,
+      error: message,
+      attempt,
+      maxRetries,
+      delayMs: delay,
+    });
+    const aborted = await abortableSleep(delay, abortSignal);
+    return !aborted && !this.disposed;
+  }
+
+  /** Handle final error after retries exhausted. */
+  private handleExhaustedRetries(error: Error, maxRetries: number): void {
+    const message = error.message;
+    log.error('Agent error after retries exhausted', {
+      folder: this.scoop.folder,
+      error: message,
+      maxRetries,
+    });
+    this.setStatus('error');
+    if (this.callbacks.onFatalError) {
+      this.callbacks.onFatalError(
+        `Scoop "${this.scoop.name}" failed after ${maxRetries} attempts: ${message}`
+      );
+    } else {
+      this.callbacks.onError(message);
+    }
+  }
+
+  /** Clean up turn process and state. */
+  private cleanupPromptState(
+    abortController: AbortController,
+    turnProcess: Process | null,
+    lastError: Error | null,
+    abortSignal: AbortSignal
+  ): void {
+    this.isProcessing = false;
+    if (!this.disposed && this.status === 'processing') {
+      this.setStatus('ready');
+    }
+    if (this.promptAbortController === abortController) {
+      this.promptAbortController = null;
+    }
+    if (turnProcess && this.processManager) {
+      if (lastError && !abortSignal.aborted) {
+        this.processManager.exit(turnProcess.pid, 1);
+      } else {
+        this.processManager.exit(turnProcess.pid, abortSignal.aborted ? null : 0);
+      }
+    }
+    if (this.currentTurnProcess === turnProcess) {
+      this.currentTurnProcess = null;
+    }
+  }
+
+  /** Try a single agent prompt attempt. Returns error or null on success. */
+  private async tryAgentPrompt(
+    agent: Agent,
+    text: string,
+    images: ImageContent[]
+  ): Promise<Error | null> {
+    this.didStreamDeltas = false;
+    this.promptStreamErrorMessage = null;
+    try {
+      await agent.prompt(text, images);
+      if (this.promptStreamErrorMessage) {
+        return new Error(this.promptStreamErrorMessage);
+      }
+      return null;
+    } catch (err) {
+      return err instanceof Error ? err : new Error(String(err));
+    }
+  }
+
+  /** Handle error after a failed attempt. Returns true if should return early. */
+  private async handlePromptAttemptError(
+    error: Error,
+    attempt: number,
+    maxRetries: number,
+    baseDelayMs: number,
+    abortSignal: AbortSignal
+  ): Promise<boolean> {
+    const message = error.message;
+
+    if (this.handleNonRetryableError(message)) return true;
+
+    const shouldRetry = await this.handleRetryableError(
+      message,
+      attempt,
+      maxRetries,
+      baseDelayMs,
+      abortSignal
+    );
+    if (shouldRetry) return false;
+
+    log.error('Agent error', {
+      folder: this.scoop.folder,
+      error: message,
+      attempt,
+      isRetryable: isRetryableError(message),
+    });
+
+    if (attempt < maxRetries) {
+      const delay = baseDelayMs * Math.pow(2, attempt - 1);
+      const aborted = await abortableSleep(delay, abortSignal);
+      if (aborted || this.disposed) return true;
     }
 
-    // Capture agent reference to avoid null access if dispose() runs mid-retry
-    const agent = this.agent;
+    return false;
+  }
 
-    // Replace any stale controller from a previous aborted run and capture
-    // the signal locally so stop()/dispose() can interrupt backoff sleeps.
+  /** Run agent prompt with retry loop. Returns the last error if any. */
+  private async runAgentWithRetries(
+    agent: Agent,
+    text: string,
+    images: ImageContent[],
+    abortSignal: AbortSignal
+  ): Promise<Error | null> {
+    const MAX_RETRIES = 3;
+    const BASE_DELAY_MS = 1000;
+    let lastError: Error | null = null;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      if (this.disposed || abortSignal.aborted) return null;
+
+      const error = await this.tryAgentPrompt(agent, text, images);
+      if (!error) return null;
+
+      if (this.disposed || abortSignal.aborted) return null;
+
+      lastError = error;
+      const shouldReturn = await this.handlePromptAttemptError(
+        error,
+        attempt,
+        MAX_RETRIES,
+        BASE_DELAY_MS,
+        abortSignal
+      );
+      if (shouldReturn) return null;
+    }
+
+    return lastError;
+  }
+
+  /** Send a prompt to this scoop's agent. If already processing, queues it via followUp(). */
+  async prompt(text: string, images: ImageContent[] = []): Promise<void> {
+    if (!(await this.ensureAgentReady())) return;
+    if (this.queuePromptIfBusy(text, images)) return;
+
+    const agent = this.agent!;
+
     this.promptAbortController?.abort();
     const abortController = new AbortController();
     this.promptAbortController = abortController;
@@ -653,169 +826,27 @@ export class ScoopContext {
     this.isProcessing = true;
     this.setStatus('processing');
 
-    // Register the scoop turn as a process. The `Process.abort`
-    // adopts `abortController` so existing callers that hold the
-    // controller (stop/dispose) keep working; `pm.signal(pid, …)`
-    // is the path the `kill` shell command takes. Truncate the
-    // prompt text to a reasonable length for `argv` (full text
-    // would be visible in `/proc/<pid>/cmdline` — fine, but
-    // hundreds-of-KB prompts shouldn't blow up that file).
-    const turnArgv = ['prompt', text.length > 200 ? text.slice(0, 197) + '…' : text];
-    const turnProcess = this.processManager
-      ? this.processManager.spawn({
-          kind: 'scoop-turn',
-          argv: turnArgv,
-          cwd: this.scoop.isCone ? '/' : `/scoops/${this.scoop.folder}/workspace`,
-          owner: {
-            kind: this.scoop.isCone ? 'cone' : 'scoop',
-            scoopJid: this.scoop.jid,
-          },
-          adoptAbort: abortController,
-        })
-      : null;
+    const turnProcess = this.registerTurnProcess(text, abortController);
     this.currentTurnProcess = turnProcess;
 
-    const MAX_RETRIES = 3;
-    const BASE_DELAY_MS = 1000;
+    // Hoisted so the `finally` can thread it into cleanupPromptState, which uses
+    // it to set the turn process exit code (1 on failure, 0 on clean completion).
     let lastError: Error | null = null;
-
     try {
-      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-        // Check disposal / cancellation before each attempt
-        if (this.disposed || abortSignal.aborted) return;
+      lastError = await this.runAgentWithRetries(agent, text, images, abortSignal);
 
-        // Reset streaming state for each attempt to avoid stale state from previous attempts
-        this.didStreamDeltas = false;
-
-        try {
-          this.promptStreamErrorMessage = null;
-          await agent.prompt(text, images);
-          if (this.promptStreamErrorMessage) {
-            const streamError = this.promptStreamErrorMessage;
-            this.promptStreamErrorMessage = null;
-            throw new Error(streamError);
-          }
-          // Success - exit retry loop
-          lastError = null;
-          break;
-        } catch (err) {
-          // Check disposal / cancellation after await
-          if (this.disposed || abortSignal.aborted) return;
-
-          lastError = err instanceof Error ? err : new Error(String(err));
-          const message = lastError.message;
-
-          // Check if this is a non-retryable error (4xx auth/model errors, etc.)
-          if (isNonRetryableError(message)) {
-            log.error('Non-retryable agent error', {
-              folder: this.scoop.folder,
-              error: message,
-              attempt,
-            });
-            // Fatal error - notify cone immediately, bypassing mute
-            this.setStatus('error');
-            if (this.callbacks.onFatalError) {
-              this.callbacks.onFatalError(
-                `Scoop "${this.scoop.name}" failed with unrecoverable error: ${message}`
-              );
-            } else {
-              this.callbacks.onError(message);
-            }
-            return;
-          }
-
-          // Check if this is a retryable error
-          if (isRetryableError(message) && attempt < MAX_RETRIES) {
-            const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1); // Exponential backoff
-            log.warn('Retryable agent error, will retry', {
-              folder: this.scoop.folder,
-              error: message,
-              attempt,
-              maxRetries: MAX_RETRIES,
-              delayMs: delay,
-            });
-            // Abortable backoff — stop()/dispose() cancels immediately
-            const aborted = await abortableSleep(delay, abortSignal);
-            if (aborted || this.disposed) return;
-            continue;
-          }
-
-          // Unknown error type or final retry - log and continue to failure handling
-          log.error('Agent error', {
-            folder: this.scoop.folder,
-            error: message,
-            attempt,
-            isRetryable: isRetryableError(message),
-          });
-
-          // If we've exhausted retries, break out
-          if (attempt === MAX_RETRIES) {
-            break;
-          }
-
-          // For unknown errors, also apply abortable exponential backoff
-          const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1);
-          const aborted = await abortableSleep(delay, abortSignal);
-          if (aborted || this.disposed) return;
-        }
-      }
-
-      // If we exited the loop with an error, handle final failure
       if (lastError && !this.disposed && !abortSignal.aborted) {
-        const message = lastError.message;
-        log.error('Agent error after retries exhausted', {
-          folder: this.scoop.folder,
-          error: message,
-          maxRetries: MAX_RETRIES,
-        });
-        // Treat exhausted retries as fatal - notify cone bypassing mute
-        this.setStatus('error');
-        if (this.callbacks.onFatalError) {
-          this.callbacks.onFatalError(
-            `Scoop "${this.scoop.name}" failed after ${MAX_RETRIES} attempts: ${message}`
-          );
-        } else {
-          this.callbacks.onError(message);
-        }
+        this.handleExhaustedRetries(lastError, 3);
         return;
       }
 
-      if (!this.disposed && !abortSignal.aborted) {
+      // Only set 'ready' if status hasn't been changed to 'error' by a fatal handler.
+      // handleNonRetryableError sets 'error' before returning, so we preserve that.
+      if (!this.disposed && !abortSignal.aborted && this.status !== 'error') {
         this.setStatus('ready');
       }
     } finally {
-      this.isProcessing = false;
-      // Bug fix: every early-return path above (disposed, aborted,
-      // retry-loop bail-outs) skips the `setStatus('ready')` line
-      // at the bottom of the try block, so the panel never gets a
-      // wire-level signal to clear its "processing" spinner. Flip
-      // status here as a backstop — but only if it's still
-      // 'processing'. The non-retryable / retries-exhausted paths
-      // already set 'error' before returning; we don't want to
-      // overwrite that. When the scoop is disposed entirely,
-      // setStatus is a no-op (guarded inside).
-      if (!this.disposed && this.status === 'processing') {
-        this.setStatus('ready');
-      }
-      // Only clear the reference if it's still ours — a later prompt() may
-      // have already installed a new controller.
-      if (this.promptAbortController === abortController) {
-        this.promptAbortController = null;
-      }
-      // Exit the scoop-turn process. Pass `null` so the manager
-      // derives the conventional exit code from `terminatedBy`
-      // (130 SIGINT, 143 SIGTERM, 137 SIGKILL); a clean turn or a
-      // turn that exhausted retries without an abort gets 0.
-      if (turnProcess && this.processManager) {
-        if (lastError && !abortSignal.aborted) {
-          this.processManager.exit(turnProcess.pid, 1);
-        } else {
-          this.processManager.exit(turnProcess.pid, abortSignal.aborted ? null : 0);
-        }
-      }
-      if (this.currentTurnProcess === turnProcess) {
-        this.currentTurnProcess = null;
-      }
+      this.cleanupPromptState(abortController, turnProcess, lastError, abortSignal);
     }
   }
 
@@ -976,6 +1007,78 @@ export class ScoopContext {
     this.callbacks.onStatusChange(status);
   }
 
+  /** Handle tool UI events. */
+  private handleToolUIEvents(event: { partialResult: unknown; toolName: string }): void {
+    const partialResult = event.partialResult as {
+      content?: Array<{ type: string; requestId?: string; html?: string }>;
+    };
+    for (const c of partialResult?.content ?? []) {
+      if (c.type === 'tool_ui' && c.requestId && c.html) {
+        this.callbacks.onToolUI?.(event.toolName, c.requestId, c.html);
+      } else if (c.type === 'tool_ui_done' && c.requestId) {
+        this.callbacks.onToolUIDone?.(c.requestId);
+      }
+    }
+  }
+
+  /** Handle tool result formatting. */
+  private formatToolResult(event: { result: unknown; toolName: string; isError: boolean }): void {
+    const result = event.result as {
+      content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+    };
+    const parts: string[] = [];
+    for (const c of result?.content ?? []) {
+      if (c.type === 'text' && c.text) parts.push(c.text);
+      if (c.type === 'image' && c.data && c.mimeType)
+        parts.push(`<img:data:${c.mimeType};base64,${c.data}>`);
+    }
+    this.callbacks.onToolEnd?.(event.toolName, parts.join('\n'), event.isError);
+  }
+
+  /** Handle agent_end error recovery and persistence. */
+  private handleAgentEndEvent(messages: AgentMessage[]): void {
+    if (messages.length > 0) {
+      const last = messages[messages.length - 1];
+      if (last.role === 'assistant' && (last as AssistantMessage).errorMessage) {
+        const errorMsg = (last as AssistantMessage).errorMessage!;
+        if (!this.isRecovering && isImageProcessingError(errorMsg)) {
+          this.recoverFromImageError(messages);
+          return;
+        }
+        if (!this.isRecovering && isContextOverflow(last as PiAssistantMessage)) {
+          this.recoverFromOverflow(messages);
+          return;
+        }
+        if (!this.isRecovering && this.isProcessing && !this.didStreamDeltas) {
+          this.promptStreamErrorMessage = errorMsg;
+          return;
+        }
+        this.isRecovering = false;
+        this.callbacks.onError(errorMsg);
+      } else {
+        this.isRecovering = false;
+      }
+    }
+
+    const persistMessages = this.agent?.state?.messages ?? messages;
+    if (this.sessionStore && persistMessages.length > 0) {
+      this.sessionStore
+        .save({
+          id: this.sessionId,
+          messages: persistMessages,
+          config: {},
+          createdAt: this.sessionCreatedAt || Date.now(),
+          updatedAt: Date.now(),
+        })
+        .catch((err) => {
+          log.error('Failed to save agent session', {
+            folder: this.scoop.folder,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+    }
+  }
+
   private handleAgentEvent(event: CoreAgentEvent): void {
     if (this.disposed) return;
     switch (event.type) {
@@ -994,31 +1097,12 @@ export class ScoopContext {
       }
 
       case 'tool_execution_update': {
-        // Handle tool UI requests from onUpdate
-        const partialResult = event.partialResult as {
-          content?: Array<{ type: string; requestId?: string; html?: string }>;
-        };
-        for (const c of partialResult?.content ?? []) {
-          if (c.type === 'tool_ui' && c.requestId && c.html) {
-            this.callbacks.onToolUI?.(event.toolName, c.requestId, c.html);
-          } else if (c.type === 'tool_ui_done' && c.requestId) {
-            this.callbacks.onToolUIDone?.(c.requestId);
-          }
-        }
+        this.handleToolUIEvents(event);
         break;
       }
 
       case 'tool_execution_end': {
-        const result = event.result as {
-          content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
-        };
-        const parts: string[] = [];
-        for (const c of result?.content ?? []) {
-          if (c.type === 'text' && c.text) parts.push(c.text);
-          if (c.type === 'image' && c.data && c.mimeType)
-            parts.push(`<img:data:${c.mimeType};base64,${c.data}>`);
-        }
-        this.callbacks.onToolEnd?.(event.toolName, parts.join('\n'), event.isError);
+        this.formatToolResult(event);
         break;
       }
 
@@ -1030,7 +1114,6 @@ export class ScoopContext {
             .map((c) => c.text)
             .join('');
 
-          // Only emit full text if we haven't been streaming deltas
           if (fullText && !this.didStreamDeltas) {
             this.callbacks.onResponse(fullText, false);
           }
@@ -1044,74 +1127,68 @@ export class ScoopContext {
       }
 
       case 'agent_end': {
-        const messages = event.messages;
-
-        if (messages.length > 0) {
-          const last = messages[messages.length - 1];
-          if (last.role === 'assistant' && (last as AssistantMessage).errorMessage) {
-            const errorMsg = (last as AssistantMessage).errorMessage!;
-            // Check for image processing error first, then context overflow.
-            // Skip persistence — recovery will re-prompt and a subsequent
-            // agent_end will save the repaired history.
-            if (!this.isRecovering && isImageProcessingError(errorMsg)) {
-              this.recoverFromImageError(messages);
-              break;
-            }
-            if (!this.isRecovering && isContextOverflow(last as PiAssistantMessage)) {
-              this.recoverFromOverflow(messages);
-              break;
-            }
-            if (!this.isRecovering && this.isProcessing && !this.didStreamDeltas) {
-              // Transparent retry is only safe when no partial assistant
-              // text has been streamed yet. Once deltas have hit the UI/
-              // orchestrator buffers, retrying would render the new
-              // response on top of the broken one (or as a duplicate
-              // bubble), so surface the error instead.
-              this.promptStreamErrorMessage = errorMsg;
-              break;
-            }
-            // Already recovering, no prompt() retry loop is active, or a
-            // partial response has already been streamed — surface error.
-            this.isRecovering = false;
-            this.callbacks.onError(errorMsg);
-          } else {
-            // Successful completion — reset recovery flag
-            this.isRecovering = false;
-          }
-        }
-
-        // Persist session after recovery checks pass. Use the agent's full
-        // accumulated state, not event.messages (which only contains the
-        // current prompt cycle's messages).
-        const persistMessages = this.agent?.state?.messages ?? event.messages;
-        if (this.sessionStore && persistMessages.length > 0) {
-          this.sessionStore
-            .save({
-              id: this.sessionId,
-              messages: persistMessages,
-              config: {},
-              createdAt: this.sessionCreatedAt || Date.now(),
-              updatedAt: Date.now(),
-            })
-            .catch((err) => {
-              log.error('Failed to save agent session', {
-                folder: this.scoop.folder,
-                error: err instanceof Error ? err.message : String(err),
-              });
-            });
-        }
+        this.handleAgentEndEvent(event.messages);
         break;
       }
     }
   }
 
+  /** Trim oversized messages for overflow recovery. Returns trimmed messages + count. */
+  private trimOversizedMessages(messages: AgentMessage[]): {
+    trimmed: AgentMessage[];
+    replaced: number;
+  } {
+    const trimmed = messages.slice(0, -1);
+    const TOKEN_THRESHOLD = 10000;
+    const CHAR_THRESHOLD = TOKEN_THRESHOLD * 4;
+    let replaced = 0;
+
+    for (let i = trimmed.length - 1; i >= 0 && replaced < 5; i--) {
+      const msg = trimmed[i] as RecoveryMessage;
+      if (!Array.isArray(msg.content)) continue;
+
+      let msgSize = 0;
+      for (const block of msg.content) {
+        if (block.type === 'text' && block.text) msgSize += block.text.length;
+        if (block.type === 'image' && block.data) msgSize += block.data.length;
+      }
+
+      if (msgSize > CHAR_THRESHOLD) {
+        const role = msg.role === 'toolResult' ? 'tool result' : msg.role;
+        const placeholder = {
+          type: 'text' as const,
+          text: `[Content removed: ${role} was too large for context window (${Math.round(msgSize / 1000)}K chars). The operation completed but output could not be retained.]`,
+        };
+
+        if (msg.role === 'assistant') {
+          const toolCalls = msg.content.filter((block) => block.type === 'toolCall');
+          trimmed[i] = {
+            ...msg,
+            content: [placeholder, ...toolCalls],
+          } as AgentMessage;
+        } else {
+          trimmed[i] = {
+            ...msg,
+            content: [placeholder],
+          } as AgentMessage;
+        }
+        replaced++;
+        log.info('Replaced oversized message', {
+          index: i,
+          role: msg.role,
+          size: msgSize,
+          preservedToolCalls:
+            msg.role === 'assistant' ? msg.content.filter((b) => b.type === 'toolCall').length : 0,
+        });
+      }
+    }
+
+    return { trimmed, replaced };
+  }
+
   /**
    * Recover from a context overflow error by trimming oversized messages
    * and re-prompting the agent with an explanation.
-   *
-   * Strategy: remove the error assistant message, find and replace oversized
-   * content (>10K estimated tokens) in recent messages with placeholders,
-   * then re-prompt so transformContext (compaction) runs on the next attempt.
    */
   private recoverFromOverflow(messages: AgentMessage[]): void {
     if (!this.agent) return;
@@ -1122,72 +1199,15 @@ export class ScoopContext {
     });
 
     this.isRecovering = 'overflow';
-
-    // Notify the user that recovery is in progress
     this.callbacks.onResponse(
       'Context window exceeded — recovering by trimming oversized messages...',
       false
     );
 
     try {
-      // Remove the error assistant message (last message)
-      const trimmed = messages.slice(0, -1);
-
-      // Walk backward through recent messages and replace oversized content.
-      // 10K tokens ≈ 40K chars — anything larger is a candidate for replacement.
-      const TOKEN_THRESHOLD = 10000;
-      const CHAR_THRESHOLD = TOKEN_THRESHOLD * 4;
-      let replaced = 0;
-
-      for (let i = trimmed.length - 1; i >= 0 && replaced < 5; i--) {
-        const msg = trimmed[i] as RecoveryMessage;
-        if (!Array.isArray(msg.content)) continue;
-
-        let msgSize = 0;
-        for (const block of msg.content) {
-          if (block.type === 'text' && block.text) msgSize += block.text.length;
-          if (block.type === 'image' && block.data) msgSize += block.data.length;
-        }
-
-        if (msgSize > CHAR_THRESHOLD) {
-          const role = msg.role === 'toolResult' ? 'tool result' : msg.role;
-          const placeholder = {
-            type: 'text' as const,
-            text: `[Content removed: ${role} was too large for context window (${Math.round(msgSize / 1000)}K chars). The operation completed but output could not be retained.]`,
-          };
-
-          // For assistant messages, preserve ToolCall blocks — they're small and
-          // must stay paired with subsequent toolResult messages. Only replace
-          // text/image/thinking content blocks.
-          if (msg.role === 'assistant') {
-            const toolCalls = msg.content.filter((block) => block.type === 'toolCall');
-            trimmed[i] = {
-              ...msg,
-              content: [placeholder, ...toolCalls],
-            } as AgentMessage;
-          } else {
-            trimmed[i] = {
-              ...msg,
-              content: [placeholder],
-            } as AgentMessage;
-          }
-          replaced++;
-          log.info('Replaced oversized message', {
-            index: i,
-            role: msg.role,
-            size: msgSize,
-            preservedToolCalls:
-              msg.role === 'assistant'
-                ? msg.content.filter((b) => b.type === 'toolCall').length
-                : 0,
-          });
-        }
-      }
-
-      // Replace the agent's message history with the trimmed version
+      const { trimmed, replaced } = this.trimOversizedMessages(messages);
       this.agent.state.messages = trimmed;
 
-      // Re-prompt with an explanation so the agent can adapt
       const explanation =
         replaced > 0
           ? `[System: Context overflow recovered. ${replaced} oversized message(s) were replaced with placeholders to fit within the context window. The conversation continues — you may need to re-read files or re-run commands if their output was removed.]`
@@ -1419,7 +1439,11 @@ When using send_message:
 - Use it for progress updates on long tasks
 - Use it when you want to send multiple messages
 - Your final output is also sent, so don't repeat yourself
-
+${
+  this.scoop.config?.structuredOutputSchema
+    ? '\n\nIMPORTANT: your final action MUST be a single call to the StructuredOutput tool; its arguments are your return value and must satisfy the schema. Do not answer in prose.'
+    : ''
+}
 ${this.scoop.config?.systemPromptAppend ?? ''}`;
 
     // Build the full prompt with memories and skills
