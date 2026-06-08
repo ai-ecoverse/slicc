@@ -1031,6 +1031,22 @@ export class VirtualFS {
   }
 
   /**
+   * Like {@link listMounts}, but also returns each mount's backend
+   * `kind` ('local' | 's3' | 'da' | 'proc'). Used by the `python`
+   * command to compute the overlap of user mounts with the realm sync
+   * dirs and tag remote ones for the remote-mount size cap. Internal
+   * mounts are excluded for the same reason `listMounts()` hides them.
+   */
+  listMountPoints(): { path: string; kind: MountBackend['kind'] }[] {
+    const out: { path: string; kind: MountBackend['kind'] }[] = [];
+    for (const [path, backend] of this.mountPoints) {
+      if (this.internalMounts.has(path)) continue;
+      out.push({ path, kind: backend.kind });
+    }
+    return out;
+  }
+
+  /**
    * Register a backend at `absolutePath` without persistence or
    * peer-sync. Used by the kernel for `/proc` and reserved for
    * any future kernel-only mount (`/dev`, `/sys`, …) that should

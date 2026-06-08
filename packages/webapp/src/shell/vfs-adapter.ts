@@ -82,6 +82,22 @@ export class VfsAdapter implements IFileSystem {
   }
 
   /**
+   * Expose the underlying VFS's user-visible mount points
+   * (`{ path, kind }[]`) so shell commands can route mount-overlapping
+   * paths through the appropriate backend instead of the raw OPFS
+   * fast path. Used today by the `python` command to materialize
+   * mount subtrees into the Pyodide realm via the `vfs` RPC channel.
+   * Returns an empty array when the wrapped FS doesn't expose mount
+   * metadata (e.g. test stubs).
+   */
+  listMountPoints(): { path: string; kind: 'local' | 's3' | 'da' | 'proc' }[] {
+    const wrapped = this.vfs as unknown as {
+      listMountPoints?: () => { path: string; kind: 'local' | 's3' | 'da' | 'proc' }[];
+    };
+    return typeof wrapped.listMountPoints === 'function' ? wrapped.listMountPoints() : [];
+  }
+
+  /**
    * Run an async FS operation inside `DefenseInDepthBox.runTrustedAsync` so
    * the just-bash v3 sandbox permits LightningFS / fake-indexeddb's internal
    * `setTimeout`, `Promise.then`, and friends. The trusted scope is bounded
