@@ -68,31 +68,20 @@ export interface RealmInitMsg {
   opfsMountDbName?: string;
   /**
    * VFS mount points that overlap `pyodideMountDirs`. The realm
-   * materializes these via the `vfs` RPC channel (`readDir`/`stat`/
-   * `readFile`) into a MEMFS subtree mounted over the OPFS placeholder
-   * so Python sees real content under `path` instead of the empty
-   * placeholder directory. `kind` selects which mounts are subject to
-   * {@link remoteMountCapBytes} — only `s3` / `da` count; `local`
-   * (FS Access) materializes unconditionally.
+   * overlays a throwing FS plugin (`MOUNT_BOMB_FS`) at each `path`
+   * so any synchronous access from Python (stdlib `open`,
+   * `os.listdir`, pandas, …) raises an OSError pointing the caller
+   * at the async `slicc.fs` module. `kind` is informational only
+   * (no cap, no materialization). Internal mounts (`/proc`, …) are
+   * excluded by the kernel before this list is built.
    */
   mountPoints?: RealmMountPoint[];
-  /**
-   * Cap (bytes) for the combined size of remote (`s3` / `da`)
-   * {@link mountPoints} content materialized into the realm. When the
-   * pre-fetch listing totals exceed this, the realm refuses to fetch
-   * bodies and the invocation fails with an actionable error naming
-   * the offending mount(s). `0` skips remote materialization entirely
-   * (remote mounts appear empty). `undefined` disables the cap (uncapped).
-   */
-  remoteMountCapBytes?: number;
 }
 
 /**
  * One entry of {@link RealmInitMsg.mountPoints}. `kind` mirrors
- * `MountBackend.kind` ('local' | 's3' | 'da') so the realm can
- * distinguish remote backends (cap-subject) from local FS Access
- * mounts (always materialized). Internal mounts (`/proc`, …) are
- * excluded by the kernel before this list is built.
+ * `MountBackend.kind` ('local' | 's3' | 'da'). Internal mounts
+ * (`/proc`, …) are excluded by the kernel before this list is built.
  */
 export interface RealmMountPoint {
   path: string;

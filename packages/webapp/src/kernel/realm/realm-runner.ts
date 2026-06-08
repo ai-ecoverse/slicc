@@ -115,20 +115,11 @@ export interface RunInRealmOptions {
   /**
    * Forwarded to `RealmInitMsg.mountPoints` — VFS mount points
    * overlapping {@link pyodideMountDirs}. The Python realm worker
-   * materializes these via the `vfs` RPC channel into a MEMFS subtree
-   * mounted over the OPFS placeholder so Python sees real backend
-   * content instead of the empty placeholder. Currently only consumed
-   * when `kind:'py'`.
+   * overlays a throwing FS plugin at each path so any synchronous
+   * access from Python raises an OSError pointing at the async
+   * `slicc.fs` module. Only consumed when `kind:'py'`.
    */
   mountPoints?: RealmMountPoint[];
-  /**
-   * Forwarded to `RealmInitMsg.remoteMountCapBytes` — cap on the
-   * combined size of remote-backend ({@link mountPoints}) content the
-   * realm will materialize. Cap exceeded → realm aborts before
-   * fetching bodies and fails with an actionable error. `0` skips
-   * remote materialization entirely. Only consumed when `kind:'py'`.
-   */
-  remoteMountCapBytes?: number;
   /**
    * Override the `ProcessKind` used to register the process. Defaults
    * to `'jsh'` (Python migration overrides this with `'py'` once the
@@ -252,7 +243,6 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
       pyodideMountDirs: opts.pyodideMountDirs,
       opfsMountDbName: opts.opfsMountDbName,
       mountPoints: opts.mountPoints,
-      remoteMountCapBytes: opts.remoteMountCapBytes,
     };
     realm.controlPort.postMessage(init);
   });

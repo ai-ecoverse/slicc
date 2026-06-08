@@ -12,9 +12,6 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   computeOverlappingMountPoints,
   computePyodideMountDirs,
-  DEFAULT_REMOTE_MOUNT_CAP,
-  extractRemoteMountCap,
-  parseHumanSize,
 } from '../../../src/shell/supplemental-commands/python-command.js';
 
 function makeFs(
@@ -124,46 +121,6 @@ describe('computePyodideMountDirs', () => {
     ]);
     const dirs = await computePyodideMountDirs(fs);
     expect(dirs).toEqual(['/workspace', '/tmp']);
-  });
-});
-
-describe('parseHumanSize', () => {
-  it('handles bare integers as bytes', () => {
-    expect(parseHumanSize('0')).toBe(0);
-    expect(parseHumanSize('1024')).toBe(1024);
-  });
-  it('handles k/m/g (and kb/mb/gb) suffixes case-insensitively', () => {
-    expect(parseHumanSize('5m')).toBe(5 * 1024 * 1024);
-    expect(parseHumanSize('512K')).toBe(512 * 1024);
-    expect(parseHumanSize('1g')).toBe(1024 ** 3);
-    expect(parseHumanSize('2MB')).toBe(2 * 1024 * 1024);
-    expect(parseHumanSize('1.5m')).toBe(Math.floor(1.5 * 1024 * 1024));
-  });
-  it('throws on invalid input', () => {
-    expect(() => parseHumanSize('abc')).toThrow();
-    expect(() => parseHumanSize('-1')).toThrow();
-    expect(() => parseHumanSize('5x')).toThrow();
-  });
-});
-
-describe('extractRemoteMountCap', () => {
-  it('returns the default 5m when the flag is absent', () => {
-    const r = extractRemoteMountCap(['-c', 'print(1)']);
-    expect(r.remaining).toEqual(['-c', 'print(1)']);
-    expect(r.remoteMountCapBytes).toBe(parseHumanSize(DEFAULT_REMOTE_MOUNT_CAP));
-  });
-  it('parses --remote-mount-cap=<size> and removes it from argv', () => {
-    const r = extractRemoteMountCap(['--remote-mount-cap=10m', '-c', 'pass']);
-    expect(r.remaining).toEqual(['-c', 'pass']);
-    expect(r.remoteMountCapBytes).toBe(10 * 1024 * 1024);
-  });
-  it('parses two-token --remote-mount-cap <size>', () => {
-    const r = extractRemoteMountCap(['--remote-mount-cap', '0', 'script.py']);
-    expect(r.remaining).toEqual(['script.py']);
-    expect(r.remoteMountCapBytes).toBe(0);
-  });
-  it('throws when the two-token form is missing its argument', () => {
-    expect(() => extractRemoteMountCap(['--remote-mount-cap'])).toThrow();
   });
 });
 
