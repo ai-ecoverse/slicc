@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,15 +13,39 @@ const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
 const docGlob = '**/*.{md,html,yaml,yml}';
 const checkScript = 'node packages/dev-tools/tools/check-doc-sizes.mjs';
 
+// Capture the script's output even when it exits non-zero (execFileSync throws,
+// but stashes stdout/stderr on the error), so assertions see the `ok:` lines.
+function runCheckDocSizes() {
+  try {
+    return execFileSync(
+      'node',
+      [resolve(repoRoot, 'packages/dev-tools/tools/check-doc-sizes.mjs')],
+      {
+        encoding: 'utf8',
+      }
+    );
+  } catch (err) {
+    return `${err.stdout ?? ''}${err.stderr ?? ''}`;
+  }
+}
+
 describe('pre-commit doc-size wiring (husky hook)', () => {
   it('invokes the doc-size script with node', () => {
     expect(hook).toContain(checkScript);
   });
 
-  it('guards the doc-size check with a staged-files grep on CLAUDE.md', () => {
-    const guardPattern =
-      /if\s+git\s+diff\s+--cached\s+--name-only\s*\|\s*grep\s+-qE\s+'\^\(CLAUDE\\\.md\|packages\/vfs-root\/shared\/CLAUDE\\\.md\)\$'/;
-    expect(hook).toMatch(guardPattern);
+  it('guards the doc-size check with a staged-files grep covering every budgeted file', () => {
+    expect(hook).toMatch(/git\s+diff\s+--cached\s+--name-only\s*\|\s*grep\s+-qE/);
+    // Every budgeted path must appear in the guard alternation so that staging
+    // it triggers the size check locally (CI runs the check unconditionally).
+    for (const token of [
+      'CLAUDE\\.md',
+      'packages/vfs-root/shared/CLAUDE\\.md',
+      '.github/copilot-instructions\\.md',
+      '.github/instructions/.*\\.instructions\\.md',
+    ]) {
+      expect(hook).toContain(token);
+    }
   });
 
   it('runs the doc-size check AFTER npx lint-staged', () => {
@@ -39,6 +64,20 @@ describe('pre-commit doc-size wiring (husky hook)', () => {
     expect(fiIdx).toBeGreaterThan(guardIdx);
     expect(checkIdx).toBeGreaterThan(guardIdx);
     expect(checkIdx).toBeLessThan(fiIdx);
+  });
+});
+
+describe('check-doc-sizes budgets the GitHub Copilot instruction files', () => {
+  const output = runCheckDocSizes();
+
+  it('budgets the repo-wide Copilot instructions at 4000 chars', () => {
+    expect(output).toMatch(/ok: \.github\/copilot-instructions\.md is \d+\/4000 chars/);
+  });
+
+  it('budgets path-specific *.instructions.md files at 4000 chars', () => {
+    expect(output).toMatch(
+      /ok: \.github\/instructions\/cross-runtime\.instructions\.md is \d+\/4000 chars/
+    );
   });
 });
 
