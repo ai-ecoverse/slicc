@@ -775,10 +775,16 @@ export class ElectronOverlayInjector {
 
           // Phase 2: Page.setBypassCSP was already set — a simple reload should
           // make the browser ignore CSP headers on the fresh navigation.
+          // Deliberately do NOT recordBypassed yet — if the CDP session
+          // disconnects mid-reload (AEM Desktop's bootstrap recreates the
+          // execution context, which closes our WS), the next reconnect
+          // needs to re-run the reload path. Only record once the post-reload
+          // probe confirms the iframe loaded. Mirrors swift-server d1c9f14d
+          // (`shouldRecordBypassedAfter(probeAction:)` returns false for
+          // `.reloadWithBypass`).
           console.log(
             `[electron-float] Overlay iframe blocked by CSP, reloading with bypass: ${target.url}`
           );
-          cspBypassedTargets.add(target.url);
           pendingReload = true;
           pendingCspEscalation = true;
           send('Page.reload', { ignoreCache: true });
@@ -817,6 +823,7 @@ export class ElectronOverlayInjector {
                 console.log(
                   `[electron-float] Overlay iframe loaded after CSP reload — no proxy needed`
                 );
+                cspBypassedTargets.add(target.url);
                 return;
               }
 

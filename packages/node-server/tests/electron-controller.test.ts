@@ -500,6 +500,147 @@ describe('ElectronOverlayInjector connect flow (file:// parity with swift-server
     }
   });
 
+  it('does NOT record bypass when the WS disconnects mid-reload (re-runs full bypass flow on reconnect)', async () => {
+    // Regression for the mid-reload disconnect hazard (swift parity with
+    // d1c9f14d's `shouldRecordBypassedAfter(probeAction:)` returning false for
+    // `.reloadWithBypass`). If the CDP WS drops between `Page.reload` and the
+    // post-reload probe, the target must NOT be marked bypassed — otherwise
+    // the reconnect's `alreadyBypassed` guard would skip the reload path and
+    // the iframe would stay permanently CSP-blocked.
+    const servePort = 5711;
+    const targetUrl = 'file:///Applications/AEM%20Desktop.app/index.html';
+
+    const harness = await startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+      if (
+        msg.method === 'Runtime.evaluate' &&
+        typeof msg.id === 'number' &&
+        typeof msg.params?.expression === 'string' &&
+        (msg.params.expression as string).includes('slicc-electron-overlay-root')
+      ) {
+        // First probe fails → injector escalates to reload-with-bypass.
+        socket.send(
+          JSON.stringify({
+            id: msg.id,
+            result: { result: { type: 'string', value: 'no-host' } },
+          })
+        );
+      }
+    });
+
+    try {
+      const injector = ElectronOverlayInjector._createForTesting({
+        servePort,
+        probeDelayMs: 20,
+      });
+
+      injector._testingConnectToTarget({
+        id: '1',
+        type: 'page',
+        title: 'AEM Desktop',
+        url: targetUrl,
+        webSocketDebuggerUrl: harness.url,
+      });
+
+      // Drive the flow up to Page.reload (the post-reload probe never runs
+      // because we never send loadEventFired here — simulating a mid-reload
+      // WS drop).
+      await harness.waitFor((m) => m.method === 'Page.setBypassCSP', 'Page.setBypassCSP');
+      await harness.waitFor(
+        (m) =>
+          m.method === 'Runtime.evaluate' &&
+          typeof m.params?.expression === 'string' &&
+          (m.params.expression as string).includes('slicc-electron-overlay-root'),
+        'first probe Runtime.evaluate'
+      );
+      await harness.waitFor(
+        (m) => m.method === 'Page.reload',
+        'Page.reload after first probe failure'
+      );
+
+      // The fix: target must NOT be in cspBypassedTargets yet. The previous
+      // code recorded it BEFORE the post-reload probe confirmed load, which
+      // meant a mid-reload disconnect would permanently mark it bypassed and
+      // skip the reload path on reconnect.
+      expect(injector._testingBypassedTargets().has(targetUrl)).toBe(false);
+
+      injector._testingCloseConnections();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('records bypass only after the post-reload probe confirms the iframe loaded', async () => {
+    // Companion to the mid-reload-disconnect regression: once the post-reload
+    // probe returns loaded=true, the target IS recorded so subsequent
+    // reconnects use the inject-only fast path. Mirrors swift's
+    // `shouldRecordBypassedAfter(postReloadAction: .done)` = true.
+    const servePort = 5711;
+    const targetUrl = 'file:///opt/app/index.html';
+    let probeCount = 0;
+
+    const harness = await startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+      if (
+        msg.method === 'Runtime.evaluate' &&
+        typeof msg.id === 'number' &&
+        typeof msg.params?.expression === 'string' &&
+        (msg.params.expression as string).includes('slicc-electron-overlay-root')
+      ) {
+        probeCount++;
+        // First probe (pre-reload) fails so we escalate; second probe
+        // (post-reload) succeeds so we should record bypass.
+        const value = probeCount === 1 ? 'no-host' : 'ok';
+        socket.send(
+          JSON.stringify({
+            id: msg.id,
+            result: { result: { type: 'string', value } },
+          })
+        );
+      }
+    });
+
+    try {
+      const injector = ElectronOverlayInjector._createForTesting({
+        servePort,
+        probeDelayMs: 20,
+      });
+
+      injector._testingConnectToTarget({
+        id: '1',
+        type: 'page',
+        title: 'Local',
+        url: targetUrl,
+        webSocketDebuggerUrl: harness.url,
+      });
+
+      await harness.waitFor((m) => m.method === 'Page.reload', 'Page.reload');
+      // Mid-reload: still not recorded.
+      expect(injector._testingBypassedTargets().has(targetUrl)).toBe(false);
+
+      harness.socket()?.send(JSON.stringify({ method: 'Page.loadEventFired', params: {} }));
+
+      // Wait for the post-reload probe (probeCount === 2) to run, then give
+      // the injector a beat to record the bypass.
+      const deadline = Date.now() + 2000;
+      while (probeCount < 2 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(probeCount).toBeGreaterThanOrEqual(2);
+      expect(injector._testingBypassedTargets().has(targetUrl)).toBe(true);
+
+      injector._testingCloseConnections();
+    } finally {
+      await harness.close();
+    }
+  });
+
   it('already-bypassed guard skips probe + reload + Fetch.enable for file:// targets', async () => {
     const servePort = 5711;
     const targetUrl = 'file:///tmp/index.html';

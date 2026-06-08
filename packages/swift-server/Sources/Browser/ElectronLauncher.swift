@@ -1290,7 +1290,16 @@ final class OverlayTargetSession: @unchecked Sendable {
     }
 
     static func overlayOrigin(for urlString: String) -> String? {
-        guard let url = URL(string: urlString), let scheme = url.scheme, let host = url.host else {
+        // Gate on http/https only. `URL` happily parses `app://something/foo`
+        // with scheme="app" and host="something", which would key
+        // `Fetch.enable` patterns on a non-http origin that CDP cannot
+        // intercept. Match node-server (`resolveFetchProxyOrigin`) by falling
+        // back to the overlay iframe's `http://localhost:<servePort>` origin
+        // for any non-http parent — file://, app://, etc.
+        guard let url = URL(string: urlString),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = url.host else {
             return nil
         }
         if let port = url.port { return "\(scheme)://\(host):\(port)" }

@@ -176,6 +176,30 @@ final class ElectronLauncherTests: XCTestCase {
         XCTAssertNil(OverlayTargetSession.overlayOrigin(for: "file:///tmp/index.html"))
     }
 
+    func testOverlayOriginReturnsNilForCustomScheme() {
+        // Custom schemes like `app://` (Electron `protocol.registerSchemesAsPrivileged`)
+        // parse with a host component, so without the http/https gate
+        // `URL.host` would return e.g. "renderer" and we'd key `Fetch.enable`
+        // on `app://renderer` — a pattern CDP cannot intercept. The fix
+        // forces these to fall back to `http://localhost:<servePort>` via
+        // `fetchProxyOrigin` so the overlay iframe load is still covered.
+        XCTAssertNil(OverlayTargetSession.overlayOrigin(for: "app://renderer/index.html"))
+        XCTAssertNil(OverlayTargetSession.overlayOrigin(for: "chrome-extension://abc/popup.html"))
+    }
+
+    func testFetchProxyOriginFallsBackForCustomScheme() {
+        // Companion: `fetchProxyOrigin` must thread the localhost fallback
+        // for any non-http parent, not just file://. Matches node-server's
+        // `resolveFetchProxyOrigin`.
+        XCTAssertEqual(
+            OverlayTargetSession.fetchProxyOrigin(
+                targetURL: "app://renderer/index.html",
+                servePort: 5711
+            ),
+            "http://localhost:5711"
+        )
+    }
+
     // MARK: - Fetch-proxy origin fallback for file:// parents
 
     func testFetchProxyOriginUsesParentOriginWhenHttp() {
