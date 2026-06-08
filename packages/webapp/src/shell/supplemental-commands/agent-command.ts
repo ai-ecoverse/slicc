@@ -26,6 +26,8 @@ interface AgentSpawnOptions {
   invokingCwd?: string;
   /** Forwarded to the bridge as the spawned scoop's thinking-level override. */
   thinkingLevel?: ThinkingLevel;
+  /** Structured output schema for the spawned scoop. */
+  structuredOutputSchema?: Record<string, unknown>;
 }
 
 /** Options accepted by {@link createAgentCommand}. */
@@ -107,6 +109,7 @@ interface ParsedArgs {
   modelId?: string;
   visiblePaths?: string[];
   thinkingLevel?: ThinkingLevel;
+  structuredOutputSchema?: Record<string, unknown>;
   error?: string;
 }
 
@@ -127,6 +130,7 @@ function parseArgs(args: string[]): ParsedArgs {
   let modelId: string | undefined;
   let visiblePaths: string[] | undefined;
   let thinkingLevel: ThinkingLevel | undefined;
+  let schemaOut: Record<string, unknown> | undefined;
 
   let i = 0;
   while (i < args.length) {
@@ -208,6 +212,27 @@ function parseArgs(args: string[]): ParsedArgs {
       continue;
     }
 
+    if (arg === '--schema-b64') {
+      const next = args[i + 1];
+      if (next === undefined || next === '' || (next.length > 0 && next.startsWith('-'))) {
+        return { help: false, error: 'agent: --schema-b64 requires a value' };
+      }
+      try {
+        const bin = atob(next);
+        const decoded = JSON.parse(
+          new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)))
+        );
+        if (typeof decoded !== 'object' || decoded === null) {
+          return { help: false, error: 'agent: --schema-b64 must decode to a JSON object' };
+        }
+        schemaOut = decoded as Record<string, unknown>;
+      } catch {
+        return { help: false, error: 'agent: --schema-b64 must be valid base64-encoded JSON' };
+      }
+      i += 2;
+      continue;
+    }
+
     // Any other leading-dash token in a non-prompt slot is an unknown flag.
     if (arg.length > 0 && arg.startsWith('-')) {
       return { help: false, error: `agent: unknown flag '${arg}'` };
@@ -231,7 +256,16 @@ function parseArgs(args: string[]): ParsedArgs {
   }
 
   const [cwd, allowedCommandsRaw, prompt] = positionals;
-  return { help: false, cwd, allowedCommandsRaw, prompt, modelId, visiblePaths, thinkingLevel };
+  return {
+    help: false,
+    cwd,
+    allowedCommandsRaw,
+    prompt,
+    modelId,
+    visiblePaths,
+    thinkingLevel,
+    structuredOutputSchema: schemaOut,
+  };
 }
 
 /**
@@ -394,6 +428,9 @@ export function createAgentCommand(options: AgentCommandOptions = {}): Command {
     }
     if (parsed.thinkingLevel !== undefined) {
       spawnOptions.thinkingLevel = parsed.thinkingLevel;
+    }
+    if (parsed.structuredOutputSchema !== undefined) {
+      spawnOptions.structuredOutputSchema = parsed.structuredOutputSchema;
     }
     // Forward the invoking shell's cwd. The bridge uses it as an
     // implicit read-only root (visiblePaths) ONLY when `--read-only`
