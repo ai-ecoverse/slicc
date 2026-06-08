@@ -25,7 +25,7 @@ Make a workflow run **without blocking the cone**: launch it in the background, 
 SP2 reuses SP1 wholesale and confirms its forward-compat seams:
 
 - **Result channel:** SP2's run manager reads the same `executeJsCode` stdout and extracts the value with SP1's `splitSentinel`. Unchanged.
-- **Progress seam:** SP1's `phase`/`log` already emit `WFPHASE`/`WFLOG` markers. SP2 adds a *parallel* fire-and-forget `exec.spawn(['__wf_progress', …])` emit in the prelude (the prelude captured `exec.spawn`; `exec` itself is nulled) so progress is tappable live at the host's `ctx.exec` (see §5). The `console.log` markers remain (for `--wait`/terminal stdout). This is a one-file prelude edit, additive.
+- **Progress seam:** SP1's `phase`/`log` already emit `WFPHASE`/`WFLOG` markers. SP2 adds a _parallel_ fire-and-forget `exec.spawn(['__wf_progress', …])` emit in the prelude (the prelude captured `exec.spawn`; `exec` itself is nulled) so progress is tappable live at the host's `ctx.exec` (see §5). The `console.log` markers remain (for `--wait`/terminal stdout). This is a one-file prelude edit, additive.
 - **Command:** SP1's `workflow run` owns the `executeJsCode` call; SP2 refactors it to **delegate to the run manager** (`start` returns a `runId`). `--wait` preserves the SP1 path. A natural SP2 change, not an SP1 prerequisite.
 
 ## 4. Existing substrate (reused, not rebuilt)
@@ -46,14 +46,14 @@ A new **`WorkflowRunManager`** in the durable realm (kernel worker standalone / 
 ```ts
 interface WorkflowRunManager {
   start(opts: {
-    code: string;            // SP1-built prelude+transform output (what the realm runs)
-    source: string;          // ORIGINAL user script — retained in run state for SP3 `workflow save`
-    name: string | null;     // from parseMetaBanner
+    code: string; // SP1-built prelude+transform output (what the realm runs)
+    source: string; // ORIGINAL user script — retained in run state for SP3 `workflow save`
+    name: string | null; // from parseMetaBanner
     filename: string;
     origin: { kind: 'cone'; jid: string } | { kind: 'scoop'; jid: string } | { kind: 'terminal' };
-    ctx: CommandContext;     // base context; the manager wraps ctx.exec to tap progress
-    wait?: boolean;          // --wait: block until completion (SP1 foreground behavior) instead of returning a runId
-  }): Promise<{ runId: string }>;            // resolves as soon as the run is launched (or on completion when wait)
+    ctx: CommandContext; // base context; the manager wraps ctx.exec to tap progress
+    wait?: boolean; // --wait: block until completion (SP1 foreground behavior) instead of returning a runId
+  }): Promise<{ runId: string }>; // resolves as soon as the run is launched (or on completion when wait)
   getRun(runId: string): WorkflowRunState | null;
   listRuns(): WorkflowRunState[];
   observeRun(runId: string, handler: (s: WorkflowRunState) => void): () => void;
@@ -62,19 +62,19 @@ interface WorkflowRunManager {
 interface WorkflowRunState {
   id: string;
   name: string | null;
-  source: string;                 // the original user script (so SP3 `workflow save` can persist it)
-  origin: 'cone' | 'scoop' | 'terminal';   // only 'cone' triggers a completion lick
-  status: 'running' | 'paused' | 'done' | 'error' | 'killed';  // 'paused' used by SP5
+  source: string; // the original user script (so SP3 `workflow save` can persist it)
+  origin: 'cone' | 'scoop' | 'terminal'; // only 'cone' triggers a completion lick
+  status: 'running' | 'paused' | 'done' | 'error' | 'killed'; // 'paused' used by SP5
   currentPhase: string | null;
   agentsStarted: number;
   agentsDone: number;
-  logs: string[];                 // phase/log lines, in order
+  logs: string[]; // phase/log lines, in order
   startedAt: string;
   finishedAt: string | null;
-  resultPath: string | null;      // /shared/workflow-runs/<id>.json when done
-  preview: string | null;         // short string preview of the result
+  resultPath: string | null; // /shared/workflow-runs/<id>.json when done
+  preview: string | null; // short string preview of the result
   error: string | null;
-  pid: number | null;             // for `kill -KILL <pid>`
+  pid: number | null; // for `kill -KILL <pid>`
 }
 ```
 
@@ -82,7 +82,7 @@ interface WorkflowRunState {
 
 `start` calls `executeJsCode(code, ['workflow', filename], wrappedCtx, …)` **without awaiting**, stashes the promise, and attaches `.then`/`.catch` for completion. The realm is a background `ProcessManager` pid. **Pid capture (codex review):** `executeJsCode` returns only `{stdout,stderr,exitCode}` and `runInRealm` creates the pid internally, so the manager captures it via a scoped **`ProcessManager.on('spawn')`** listener around the launch (or a small `executeJsCode` option that surfaces the pid) → `runState.pid`, used by `workflow stop` (`kill -KILL`). `start` resolves with the `runId` as soon as the run is registered — the command returns immediately.
 
-**Stop semantics (codex review):** `kill -KILL <pid>` terminates the **realm**, but in-flight `agent()` calls are host-side awaits (`AgentBridge.spawn`→`orchestrator.sendPrompt`) that the realm teardown does **not** cancel. SP2 stop therefore means *no new agents start; already-spawned scoops run to completion (their results are discarded)*; true mid-flight cancellation is backlog. Held/pending tap promises are rejected on stop.
+**Stop semantics (codex review):** `kill -KILL <pid>` terminates the **realm**, but in-flight `agent()` calls are host-side awaits (`AgentBridge.spawn`→`orchestrator.sendPrompt`) that the realm teardown does **not** cancel. SP2 stop therefore means _no new agents start; already-spawned scoops run to completion (their results are discarded)_; true mid-flight cancellation is backlog. Held/pending tap promises are rejected on stop.
 
 **Per-run exec isolation (codex review):** a backgrounded run keeps calling back into `ctx.exec` after `workflow run` returned, and `WasmShellHeadless` mutates shared `lastEnv`/`cwd` (no general reentrancy guard). The manager gives each run its **own exec context / shell instance** (or serializes access) so a background run can't corrupt the foreground shell's state.
 
@@ -118,7 +118,7 @@ workflow list                # table of recent runs (id, name, status, agents, s
 workflow stop <runId>        # kill -KILL the run's pid (stop semantics below)
 ```
 
-`workflow run` defaults to non-blocking → prints `▶ workflow '<name>' started (run <id>). Watch: workflow status <id>`. With `--wait` it blocks and prints the result (SP1 behavior). **Origin (codex review):** `getParentJid()` returns the owning jid for *both* the cone and non-cone scoops, so "has a parent" ≠ "cone-origin". Classify `origin='cone'` only when the parent jid **is the cone's jid** (compare against the orchestrator's cone jid); otherwise `'terminal'` (no parent) or `'scoop'` (a non-cone scoop launched it — treat like terminal: no cone turn, surfaced via `workflow status`).
+`workflow run` defaults to non-blocking → prints `▶ workflow '<name>' started (run <id>). Watch: workflow status <id>`. With `--wait` it blocks and prints the result (SP1 behavior). **Origin (codex review):** `getParentJid()` returns the owning jid for _both_ the cone and non-cone scoops, so "has a parent" ≠ "cone-origin". Classify `origin='cone'` only when the parent jid **is the cone's jid** (compare against the orchestrator's cone jid); otherwise `'terminal'` (no parent) or `'scoop'` (a non-cone scoop launched it — treat like terminal: no cone turn, surfaced via `workflow status`).
 
 ### Dual-mode / durability
 
@@ -126,14 +126,14 @@ The run manager lives in the **offscreen** document (extension) / kernel worker 
 
 ## 6. Components (files)
 
-| Unit | File | Responsibility |
-| --- | --- | --- |
-| `WorkflowRunManager` | `packages/webapp/src/scoops/workflow-run-manager.ts` (new) | Lifecycle: `start` (non-blocking), run-state registry, exec-tap wrapper, completion → file + lick, `getRun`/`listRuns`/`observeRun`. |
-| run-manager publish | `packages/webapp/src/scoops/workflow-run-manager.ts` + `kernel/host.ts` | `publishWorkflowRunManager` on `__slicc_workflows` (no panel proxy — the panel terminal is already offscreen-backed). |
-| `__wf_progress` command | `packages/webapp/src/shell/supplemental-commands/wf-progress-command.ts` (new) | No-op (exit 0) so the prelude's progress emit is safe in untapped contexts. |
-| prelude progress emit | `packages/webapp/src/shell/supplemental-commands/workflow-prelude.ts` (modify) | `phase`/`log` also fire `exec.spawn(['__wf_progress', kind, text])` (fire-and-forget). |
-| command | `packages/webapp/src/shell/supplemental-commands/workflow-command.ts` (modify) | Non-blocking default via the run manager; `--wait`; `status`/`list` subcommands; origin via `getParentJid`. |
-| `workflow` lick | `packages/webapp/src/scoops/lick-manager.ts` + `scoops/lick-formatting.ts` (modify) | New lick type + cone-facing formatting for completion delivery. |
+| Unit                    | File                                                                                | Responsibility                                                                                                                       |
+| ----------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `WorkflowRunManager`    | `packages/webapp/src/scoops/workflow-run-manager.ts` (new)                          | Lifecycle: `start` (non-blocking), run-state registry, exec-tap wrapper, completion → file + lick, `getRun`/`listRuns`/`observeRun`. |
+| run-manager publish     | `packages/webapp/src/scoops/workflow-run-manager.ts` + `kernel/host.ts`             | `publishWorkflowRunManager` on `__slicc_workflows` (no panel proxy — the panel terminal is already offscreen-backed).                |
+| `__wf_progress` command | `packages/webapp/src/shell/supplemental-commands/wf-progress-command.ts` (new)      | No-op (exit 0) so the prelude's progress emit is safe in untapped contexts.                                                          |
+| prelude progress emit   | `packages/webapp/src/shell/supplemental-commands/workflow-prelude.ts` (modify)      | `phase`/`log` also fire `exec.spawn(['__wf_progress', kind, text])` (fire-and-forget).                                               |
+| command                 | `packages/webapp/src/shell/supplemental-commands/workflow-command.ts` (modify)      | Non-blocking default via the run manager; `--wait`; `status`/`list` subcommands; origin via `getParentJid`.                          |
+| `workflow` lick         | `packages/webapp/src/scoops/lick-manager.ts` + `scoops/lick-formatting.ts` (modify) | New lick type + cone-facing formatting for completion delivery.                                                                      |
 
 ## 7. Data flow
 

@@ -19,7 +19,7 @@ Claude-Code-parity run control, **within the session**: **resume** a stopped/int
 ## 3. The key idea: deterministic replay + a **best-effort content-keyed cache**
 
 > **Codex review correction (2026-06-08):** a monotonic initiation index is **not** a stable
-> cache key. SP1's `pipeline` is *streaming* — a later stage's `agent()` is initiated in
+> cache key. SP1's `pipeline` is _streaming_ — a later stage's `agent()` is initiated in
 > prior-stage **completion** order, not array order; and on replay, cache hits resolve instantly
 > while misses resolve later, so the interleaving (and thus any counter) shifts between the
 > original run and the resume. We therefore key by **content**, not by call order, and accept
@@ -27,16 +27,16 @@ Claude-Code-parity run control, **within the session**: **resume** a stopped/int
 
 - **Cache key = a hash of the agent call's full effective context**, not just the prompt:
   `hash(prompt, canonical(opts.schema), opts.model, opts.agentType, __agentCwd, allowedCommands)`.
-- **Uniqueness rule (codex review — no ordinals).** An occurrence ordinal (`key#n`) is *not*
+- **Uniqueness rule (codex review — no ordinals).** An occurrence ordinal (`key#n`) is _not_
   safe: when two identical calls replay in swapped order, both `key#1` and `key#2` already exist,
   so neither is "unseen" and the tap could return the wrong cached result. So: **only cache a
   content hash that is UNIQUE within the run.** If the same hash occurs ≥2 times, mark it
-  **non-cacheable** → every such call **re-runs live** on resume. This *guarantees* never-stale;
+  **non-cacheable** → every such call **re-runs live** on resume. This _guarantees_ never-stale;
   the cost is re-running legitimately-identical repeated calls (rare — the determinism guidance is
   to vary prompts/labels by index, which makes them distinct).
-- **Limitation (codex review — document, don't hide):** the hash covers the *call params* but
-  **cannot** cover agent-visible **workspace/VFS state**. A source-identical resume *after the
-  workspace changed* can return a result computed against the old state. This is an explicit
+- **Limitation (codex review — document, don't hide):** the hash covers the _call params_ but
+  **cannot** cover agent-visible **workspace/VFS state**. A source-identical resume _after the
+  workspace changed_ can return a result computed against the old state. This is an explicit
   best-effort limitation, not a correctness guarantee.
 - **Prelude (modify):** at `agent()` entry compute the content hash and pass it on the spawn argv
   (`--call-key <hash>`).
@@ -54,28 +54,28 @@ Claude-Code-parity run control, **within the session**: **resume** a stopped/int
 
 Pause is **cooperative and lives entirely in the run manager's exec-tap** (no prelude change): while a run is `paused`, the tap **holds new `agent` spawns** (awaits a resume signal before forwarding to the real `ctx.exec` call — per SP2, the tap wraps `ctx.exec`); in-flight scoops finish. `pause`/`resume` flip the flag and (on resume) release the held spawns. This needs no realm cooperation because the tap already mediates every spawn.
 
-- **Honest limit (codex review):** this is a *spawn gate*, not a true paused run — CPU work, non-`agent` awaits, and `phase`/`log` keep executing until the next spawn. Good enough for "stop spending on new agents."
+- **Honest limit (codex review):** this is a _spawn gate_, not a true paused run — CPU work, non-`agent` awaits, and `phase`/`log` keep executing until the next spawn. Good enough for "stop spending on new agents."
 - `workflow pause <runId>` → `status='paused'`; queued/holding spawns wait.
 - `workflow resume <runId>` → release holds; if the run had fully stopped (process gone), re-run with the cache (§3).
 - **Held-spawn release on kill (codex review):** if a paused run is killed, the manager must **reject** every held/pending tap promise (SIGKILL tears down the realm but does not settle host-side promises already parked in the tap).
 
 ## 5. Restart-agent
 
-`workflow restart <runId> <callKey>` invalidates `cache[callKey]` and re-spawns that one agent. `callKey` is the **content hash** (only *unique*, cacheable keys are restartable — non-unique/duplicate calls aren't individually addressable, consistent with the §3 uniqueness rule). **Codex review — two regimes:**
+`workflow restart <runId> <callKey>` invalidates `cache[callKey]` and re-spawns that one agent. `callKey` is the **content hash** (only _unique_, cacheable keys are restartable — non-unique/duplicate calls aren't individually addressable, consistent with the §3 uniqueness rule). **Codex review — two regimes:**
 
 - **Settled run (the supported path):** restart invalidates the cache entry and re-runs via the **resume** path (§3) from that point. Clean and naturally promise-compatible.
 - **Live, already-resolved or in-flight call:** "replacing" a pending/awaited `agent()` result in place is **not supported by today's `AgentBridge`** — `spawn()` awaits `sendPrompt` and exposes **no jid / cancel handle / pending resolver** (`scoops/agent-bridge.ts`). Doing this needs **new bridge + run-manager control plumbing** (a cancel handle + a way to replace a pending tap promise). SP5 therefore scopes restart to the **settled-run resume path**; live in-place restart is **backlog** pending that plumbing.
 
 ## 6. Components (files)
 
-| Unit | File | Responsibility |
-| --- | --- | --- |
-| call-key | `shell/supplemental-commands/workflow-prelude.ts` (modify) | Compute the content hash per `agent()` call (prompt + canonical opts + cwd/model/allowed/agentType); pass `--call-key <hash>` on the spawn argv. |
-| cache + replay | `scoops/workflow-run-manager.ts` (modify) | Per-run `Map<string,result>` keyed by content hash + occurrence ordinal; resume = re-run stored source with the cache; tap returns cached results, re-runs on ambiguity. |
-| pause gate | `scoops/workflow-run-manager.ts` (modify) | Exec-tap holds `agent` spawns while paused; release on resume. |
-| restart | `scoops/workflow-run-manager.ts` (modify) | Invalidate one cache entry + re-spawn. |
-| commands | `shell/supplemental-commands/workflow-command.ts` (modify) | `resume` / `pause` / `restart` subcommands. |
-| (optional) UI controls | SP4 sprinkle | Buttons that emit licks → these commands. |
+| Unit                   | File                                                       | Responsibility                                                                                                                                                           |
+| ---------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| call-key               | `shell/supplemental-commands/workflow-prelude.ts` (modify) | Compute the content hash per `agent()` call (prompt + canonical opts + cwd/model/allowed/agentType); pass `--call-key <hash>` on the spawn argv.                         |
+| cache + replay         | `scoops/workflow-run-manager.ts` (modify)                  | Per-run `Map<string,result>` keyed by content hash + occurrence ordinal; resume = re-run stored source with the cache; tap returns cached results, re-runs on ambiguity. |
+| pause gate             | `scoops/workflow-run-manager.ts` (modify)                  | Exec-tap holds `agent` spawns while paused; release on resume.                                                                                                           |
+| restart                | `scoops/workflow-run-manager.ts` (modify)                  | Invalidate one cache entry + re-spawn.                                                                                                                                   |
+| commands               | `shell/supplemental-commands/workflow-command.ts` (modify) | `resume` / `pause` / `restart` subcommands.                                                                                                                              |
+| (optional) UI controls | SP4 sprinkle                                               | Buttons that emit licks → these commands.                                                                                                                                |
 
 ## 7. Data flow (resume)
 
