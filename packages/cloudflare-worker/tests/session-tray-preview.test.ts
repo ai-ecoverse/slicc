@@ -17,6 +17,31 @@ class FakeStorage {
 
 class FakeDurableObjectState implements DurableObjectStateLike {
   readonly storage = new FakeStorage();
+  instance: SessionTrayDurableObject | null = null;
+  private readonly sockets: Array<{ ws: FakeWebSocket; tags: string[] }> = [];
+
+  acceptWebSocket(ws: FakeWebSocket, tags: string[] = []): void {
+    this.sockets.push({ ws, tags });
+    ws.addEventListener('message', (event) => {
+      void this.instance?.webSocketMessage(ws, event.data ?? '');
+    });
+    ws.addEventListener('close', () => {
+      const index = this.sockets.findIndex((entry) => entry.ws === ws);
+      if (index >= 0) {
+        this.sockets.splice(index, 1);
+      }
+      void this.instance?.webSocketClose(ws);
+    });
+    ws.addEventListener('error', () => {
+      void this.instance?.webSocketError(ws);
+    });
+  }
+
+  getWebSockets(tag?: string): FakeWebSocket[] {
+    return this.sockets
+      .filter((entry) => tag === undefined || entry.tags.includes(tag))
+      .map((entry) => entry.ws);
+  }
 }
 
 class FakeWebSocket {
@@ -86,11 +111,13 @@ class FakeNamespace {
     const key = id.toString();
     let instance = this.instances.get(key);
     if (!instance) {
+      const state = new FakeDurableObjectState();
       instance = new SessionTrayDurableObject(
-        new FakeDurableObjectState(),
+        state,
         {},
         { now: () => Date.now(), webSocketPairFactory: createFakeWebSocketPair }
       );
+      state.instance = instance;
       this.instances.set(key, instance);
     }
     return instance;
@@ -358,6 +385,46 @@ describe('preview HTTP handler', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/html');
     expect(await res.text()).toBe('<h1>hello</h1>');
+  });
+
+  it('joins servedRoot with the URL subpath when path is not /', async () => {
+    const { env, namespace } = createTestHarness();
+    const { trayId, controllerToken, clientSocket } = await createTrayAttachLeaderWithSocket(
+      env,
+      namespace
+    );
+    const { url } = await mintPreviewViaWorker(env, trayId, controllerToken);
+
+    let observedVfsPath: string | undefined;
+    clientSocket.addEventListener('message', (event) => {
+      const msg = JSON.parse(event.data ?? '{}') as {
+        type: string;
+        reqId?: string;
+        vfsPath?: string;
+      };
+      if (msg.type === 'preview.request' && msg.reqId) {
+        observedVfsPath = msg.vfsPath;
+        clientSocket.send(
+          JSON.stringify({
+            type: 'preview.response',
+            reqId: msg.reqId,
+            ok: true,
+            mime: 'text/css',
+            chunkIndex: 0,
+            totalChunks: 1,
+            content: 'body { color: red; }',
+            encoding: 'utf-8',
+          })
+        );
+      }
+    });
+
+    // Hit a subpath rather than `/` — exercises joinUnderRoot under servedRoot.
+    const subpathUrl = new URL(url);
+    subpathUrl.pathname = '/css/site.css';
+    const res = await handleWorkerRequest(new Request(subpathUrl.toString()), env);
+    expect(res.status).toBe(200);
+    expect(observedVfsPath).toBe('/workspace/dist/css/site.css');
   });
 
   it('returns 404 for unknown token host', async () => {

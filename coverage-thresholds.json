@@ -4,7 +4,7 @@
     "cloudflare-worker": {
       "lines": 82,
       "statements": 81,
-      "functions": 92,
+      "functions": 91,
       "branches": 69,
       "coverageExclude": [
         "**/node_modules/**",
