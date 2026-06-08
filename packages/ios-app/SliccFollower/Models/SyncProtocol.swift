@@ -188,6 +188,7 @@ enum LeaderToFollowerMessage: Codable {
         sessionId: String?)
     case targetsRegistry(targets: [TrayTargetEntry])
     case tabOpen(requestId: String, url: String)
+    case previewOpen(requestId: String, url: String)
     case cherrySliccEvent(targetId: String, name: String, detail: AnyCodable?)
     case ping
     case pong
@@ -269,6 +270,11 @@ enum LeaderToFollowerMessage: Codable {
                 requestId: try container.decode(String.self, forKey: .requestId),
                 url: try container.decode(String.self, forKey: .url)
             )
+        case "preview.open":
+            self = .previewOpen(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                url: try container.decode(String.self, forKey: .url)
+            )
         case "cherry.slicc_event":
             self = .cherrySliccEvent(
                 targetId: try container.decode(String.self, forKey: .targetId),
@@ -342,6 +348,10 @@ enum LeaderToFollowerMessage: Codable {
             try container.encode(targets, forKey: .targets)
         case let .tabOpen(requestId, url):
             try container.encode("tab.open", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encode(url, forKey: .url)
+        case let .previewOpen(requestId, url):
+            try container.encode("preview.open", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(url, forKey: .url)
         case let .cherrySliccEvent(targetId, name, detail):
