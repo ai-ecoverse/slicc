@@ -62,9 +62,11 @@ export function createSliccFsBridge(rpc: RealmRpcClient): SliccFsJsBridge {
       return bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
     },
     async writeBytes(path: string, data: Uint8Array): Promise<void> {
-      // The realm host's writeFileBinary expects a Uint8Array; the
-      // Python wrapper hands us a JS-typed array via toJs() which
-      // is already a Uint8Array, so we forward verbatim.
+      // The realm host's writeFileBinary expects a Uint8Array. The
+      // Python wrapper hands us a real JS Uint8Array (constructed via
+      // `js.Uint8Array.new(payload)` so the buffer is a structured-
+      // cloneable typed array, not a PyProxy over Python bytes) and
+      // we forward it verbatim across the `vfs` RPC postMessage.
       await rpc.call<true>('vfs', 'writeFileBinary', [path, data]);
     },
     stat(path: string): Promise<{ isDirectory: boolean; isFile: boolean; size: number }> {
@@ -110,6 +112,7 @@ export function createSliccFsBridge(rpc: RealmRpcClient): SliccFsJsBridge {
 export const PYTHON_SLICC_WRAPPER = `
 import sys
 import types
+import js
 
 def _build_slicc_module(_bridge):
     fs_module = types.ModuleType("slicc.fs")
@@ -138,7 +141,13 @@ def _build_slicc_module(_bridge):
             payload = bytes(data)
         else:
             payload = bytes(data)
-        await _bridge.writeBytes(path, payload)
+        # Convert Python bytes to a real JS Uint8Array before crossing
+        # the realm RPC boundary. The bridge call ultimately hits
+        # \`port.postMessage\` (see realm-rpc.ts), which structured-
+        # clones its argument; a Python \`bytes\` would arrive as a
+        # PyProxy and trigger DataCloneError. \`js.Uint8Array.new\`
+        # copies the buffer into a JS typed array that clones cleanly.
+        await _bridge.writeBytes(path, js.Uint8Array.new(payload))
 
     async def write_text(path, text, encoding="utf-8"):
         if not isinstance(text, str):

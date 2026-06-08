@@ -10,6 +10,8 @@
  * cover the JS bridge that the wrapper calls into, since fake
  * `pyodide.FS` doesn't run real Python.
  */
+import { resolve } from 'node:path';
+import { loadPyodide } from 'pyodide';
 import { describe, expect, it } from 'vitest';
 import type { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
 import {
@@ -183,5 +185,82 @@ describe('PYTHON_SLICC_WRAPPER bootstrap: imports the registered module by name'
     const importMatch = ran[0].match(/import\s+(\w+)\s+as\s+\w+/);
     expect(importMatch).not.toBeNull();
     expect(importMatch?.[1]).toBe(REGISTERED_NAME);
+  });
+});
+
+describe('PYTHON_SLICC_WRAPPER write paths: hand a real JS Uint8Array to the bridge', () => {
+  // Regression for the Codex P1 on PR #922: `slicc.fs.write_bytes` /
+  // `write_text` used to pass a Python `bytes` object straight to
+  // `_bridge.writeBytes`. Pyodide hands that to JS as a `PyProxy`,
+  // and the realm RPC client posts the bridge args through
+  // `port.postMessage`, which structured-clones — a `PyProxy` is not
+  // cloneable and the call would fail with `DataCloneError` at
+  // runtime. The fix converts the buffer to a real JS `Uint8Array`
+  // (via `js.Uint8Array.new(payload)`) in the Python wrapper before
+  // crossing the boundary. These tests boot real Pyodide (the only
+  // way to actually catch the bug — fake-Pyodide harnesses never
+  // execute the wrapper) and assert that what reaches the mocked
+  // bridge is a structured-clone-safe typed array.
+  //
+  // Single boot per describe (~1.4s on a warm cache) is amortized
+  // across both assertions below.
+  const PYODIDE_INDEX_URL = resolve(__dirname, '../../../../../node_modules/pyodide/');
+
+  it('write_bytes: payload reaching _bridge.writeBytes is a real JS Uint8Array', async () => {
+    const pyodide = await loadPyodide({ indexURL: PYODIDE_INDEX_URL, fullStdLib: false });
+    const calls: { path: string; data: unknown }[] = [];
+    const bridge = {
+      writeBytes(path: string, data: unknown): Promise<void> {
+        calls.push({ path, data });
+        return Promise.resolve();
+      },
+    };
+    pyodide.registerJsModule('_slicc_fs_js', bridge);
+    await pyodide.runPythonAsync(PYTHON_SLICC_WRAPPER);
+    await pyodide.runPythonAsync(
+      `import slicc\nawait slicc.fs.write_bytes('/out.bin', b"hello world")`
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].path).toBe('/out.bin');
+    const data = calls[0].data;
+    // Real Uint8Array — not a PyProxy — so postMessage's structured
+    // clone would succeed. The old `_bridge.writeBytes(path, payload)`
+    // (raw Python bytes) failed this assertion because Pyodide hands
+    // `bytes` to JS as a `PyProxy` whose constructor name is
+    // `PyBuffer` / `PyProxy`, not `Uint8Array`.
+    expect(data).toBeInstanceOf(Uint8Array);
+    expect((data as Uint8Array).constructor.name).toBe('Uint8Array');
+    expect(Array.from(data as Uint8Array)).toEqual([
+      104, 101, 108, 108, 111, 32, 119, 111, 114, 108, 100,
+    ]);
+    // Belt-and-suspenders: the buffer must be structured-cloneable
+    // through `postMessage`. `structuredClone` is the same algorithm
+    // and fails identically on a `PyProxy`.
+    expect(() => structuredClone(data)).not.toThrow();
+  });
+
+  it('write_text round-trips through write_bytes as a real JS Uint8Array', async () => {
+    const pyodide = await loadPyodide({ indexURL: PYODIDE_INDEX_URL, fullStdLib: false });
+    const calls: { path: string; data: unknown }[] = [];
+    const bridge = {
+      writeBytes(path: string, data: unknown): Promise<void> {
+        calls.push({ path, data });
+        return Promise.resolve();
+      },
+    };
+    pyodide.registerJsModule('_slicc_fs_js', bridge);
+    await pyodide.runPythonAsync(PYTHON_SLICC_WRAPPER);
+    await pyodide.runPythonAsync(`import slicc\nawait slicc.fs.write_text('/out.txt', 'héllo 🌍')`);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].path).toBe('/out.txt');
+    const data = calls[0].data;
+    expect(data).toBeInstanceOf(Uint8Array);
+    // UTF-8 round-trip: 'héllo 🌍' encodes to the same bytes the
+    // Python wrapper produces via `text.encode('utf-8')`.
+    const decoded = new TextDecoder('utf-8').decode(data as Uint8Array);
+    expect(decoded).toBe('héllo 🌍');
+    expect(() => structuredClone(data)).not.toThrow();
   });
 });
