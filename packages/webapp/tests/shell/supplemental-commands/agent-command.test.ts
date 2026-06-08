@@ -1,4 +1,5 @@
 import type { IFileSystem } from 'just-bash';
+import { unsafeBytesFromLatin1 } from 'just-bash';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAgentCommand } from '../../../src/shell/supplemental-commands/agent-command.js';
 
@@ -56,7 +57,7 @@ function createMockCtx(cwd = '/home', fsOptions: MockFsOptions = {}) {
     fs: fs as unknown as IFileSystem,
     cwd,
     env: new Map<string, string>(),
-    stdin: '',
+    stdin: unsafeBytesFromLatin1(''),
   };
 }
 
