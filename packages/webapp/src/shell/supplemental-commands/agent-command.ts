@@ -113,6 +113,168 @@ interface ParsedArgs {
   error?: string;
 }
 
+/** Parse a flag with value. Returns error or { value, consumed } on success. */
+function parseFlagWithValue(
+  flag: string,
+  args: string[],
+  i: number
+): { error: string } | { value: string; consumed: number } {
+  const next = args[i + 1];
+  if (next === undefined) {
+    return { error: `agent: ${flag} requires a value` };
+  }
+  if (next.length > 0 && next.startsWith('-')) {
+    return { error: `agent: ${flag} requires a value` };
+  }
+  if (next === '') {
+    return { error: `agent: ${flag} requires a non-empty value` };
+  }
+  return { value: next, consumed: 2 };
+}
+
+/** Parse --thinking or --effort flag. */
+function parseThinkingFlag(
+  flag: string,
+  args: string[],
+  i: number
+): { error?: string; value?: ThinkingLevel; consumed: number } {
+  const result = parseFlagWithValue(flag, args, i);
+  if ('error' in result) return { error: result.error, consumed: 0 };
+
+  if (!isThinkingLevel(result.value)) {
+    return {
+      error: `agent: ${flag} must be one of: ${THINKING_LEVELS.join(', ')}`,
+      consumed: 0,
+    };
+  }
+  return { value: result.value, consumed: result.consumed };
+}
+
+/** Parse --read-only flag. */
+function parseReadOnlyFlag(
+  args: string[],
+  i: number
+): { error?: string; value?: string[]; consumed: number } {
+  const result = parseFlagWithValue('--read-only', args, i);
+  if ('error' in result) return { error: result.error, consumed: 0 };
+
+  const parsed = parseReadOnlyPaths(result.value);
+  if (parsed.length === 0) {
+    return { error: 'agent: --read-only requires a non-empty value', consumed: 0 };
+  }
+  return { value: parsed, consumed: result.consumed };
+}
+
+/** Parse --schema-b64 flag. */
+function parseSchemaFlag(
+  args: string[],
+  i: number
+): { error?: string; value?: Record<string, unknown>; consumed: number } {
+  const next = args[i + 1];
+  if (next === undefined || next === '' || (next.length > 0 && next.startsWith('-'))) {
+    return { error: 'agent: --schema-b64 requires a value', consumed: 0 };
+  }
+  try {
+    const bin = atob(next);
+    const decoded = JSON.parse(
+      new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)))
+    );
+    if (typeof decoded !== 'object' || decoded === null) {
+      return { error: 'agent: --schema-b64 must decode to a JSON object', consumed: 0 };
+    }
+    return { value: decoded as Record<string, unknown>, consumed: 2 };
+  } catch {
+    return { error: 'agent: --schema-b64 must be valid base64-encoded JSON', consumed: 0 };
+  }
+}
+
+/** State accumulated during arg parsing. */
+interface ParseState {
+  positionals: string[];
+  help: boolean;
+  modelId?: string;
+  visiblePaths?: string[];
+  thinkingLevel?: ThinkingLevel;
+  schemaOut?: Record<string, unknown>;
+}
+
+/** Process one argument. Returns error or null and consumed count. */
+function processArg(
+  arg: string,
+  args: string[],
+  i: number,
+  state: ParseState
+): { error?: string; consumed: number } {
+  if (state.positionals.length === 2) {
+    state.positionals.push(arg);
+    return { consumed: 1 };
+  }
+
+  if (arg === '-h' || arg === '--help') {
+    state.help = true;
+    return { consumed: 1 };
+  }
+
+  if (arg === '--model') {
+    const result = parseFlagWithValue(arg, args, i);
+    if ('error' in result) return { error: result.error, consumed: 0 };
+    state.modelId = result.value;
+    return { consumed: result.consumed };
+  }
+
+  if (arg === '--thinking' || arg === '--effort') {
+    const result = parseThinkingFlag(arg, args, i);
+    if (result.error) return { error: result.error, consumed: 0 };
+    state.thinkingLevel = result.value;
+    return { consumed: result.consumed };
+  }
+
+  if (arg === '--read-only') {
+    const result = parseReadOnlyFlag(args, i);
+    if (result.error) return { error: result.error, consumed: 0 };
+    state.visiblePaths = result.value;
+    return { consumed: result.consumed };
+  }
+
+  if (arg === '--schema-b64') {
+    const result = parseSchemaFlag(args, i);
+    if (result.error) return { error: result.error, consumed: 0 };
+    state.schemaOut = result.value;
+    return { consumed: result.consumed };
+  }
+
+  if (arg.length > 0 && arg.startsWith('-')) {
+    return { error: `agent: unknown flag '${arg}'`, consumed: 0 };
+  }
+
+  state.positionals.push(arg);
+  return { consumed: 1 };
+}
+
+/** Validate positional args. Returns error or parsed result. */
+function validatePositionals(
+  state: ParseState
+):
+  | { help: true }
+  | { error: string }
+  | { cwd: string; allowedCommandsRaw: string; prompt: string } {
+  if (state.help) {
+    return { help: true };
+  }
+
+  if (state.positionals.length < 3) {
+    const missing = ['<cwd>', '<allowed-commands>', '<prompt>'][state.positionals.length];
+    return { error: `agent: missing required argument ${missing}` };
+  }
+
+  if (state.positionals.length > 3) {
+    return { error: 'agent: too many arguments' };
+  }
+
+  const [cwd, allowedCommandsRaw, prompt] = state.positionals;
+  return { cwd, allowedCommandsRaw, prompt };
+}
+
 /**
  * Parse the command line following these rules:
  *   - `-h` / `--help` are always flags EXCEPT when exactly two positional args
@@ -125,146 +287,41 @@ interface ParsedArgs {
  *     error.
  */
 function parseArgs(args: string[]): ParsedArgs {
-  const positionals: string[] = [];
-  let help = false;
-  let modelId: string | undefined;
-  let visiblePaths: string[] | undefined;
-  let thinkingLevel: ThinkingLevel | undefined;
-  let schemaOut: Record<string, unknown> | undefined;
+  const state: ParseState = {
+    positionals: [],
+    help: false,
+  };
 
   let i = 0;
   while (i < args.length) {
-    const arg = args[i];
-
-    // When the next positional slot is the prompt, accept the arg verbatim —
-    // flag parsing does NOT apply at this position. This preserves prompts
-    // like "-h" or "--model".
-    if (positionals.length === 2) {
-      positionals.push(arg);
-      i += 1;
-      continue;
-    }
-
-    if (arg === '-h' || arg === '--help') {
-      help = true;
-      i += 1;
-      continue;
-    }
-
-    if (arg === '--model') {
-      const next = args[i + 1];
-      if (next === undefined) {
-        return { help: false, error: 'agent: --model requires a value' };
-      }
-      // A flag-looking value is rejected (e.g., `--model --help`).
-      if (next.length > 0 && next.startsWith('-')) {
-        return { help: false, error: 'agent: --model requires a value' };
-      }
-      if (next === '') {
-        return { help: false, error: 'agent: --model requires a non-empty value' };
-      }
-      modelId = next;
-      i += 2;
-      continue;
-    }
-
-    if (arg === '--thinking' || arg === '--effort') {
-      const next = args[i + 1];
-      if (next === undefined) {
-        return { help: false, error: `agent: ${arg} requires a value` };
-      }
-      // A flag-looking value is rejected (e.g., `--thinking --help`).
-      if (next.length > 0 && next.startsWith('-')) {
-        return { help: false, error: `agent: ${arg} requires a value` };
-      }
-      if (next === '') {
-        return { help: false, error: `agent: ${arg} requires a non-empty value` };
-      }
-      if (!isThinkingLevel(next)) {
-        return {
-          help: false,
-          error: `agent: ${arg} must be one of: ${THINKING_LEVELS.join(', ')}`,
-        };
-      }
-      thinkingLevel = next;
-      i += 2;
-      continue;
-    }
-
-    if (arg === '--read-only') {
-      const next = args[i + 1];
-      if (next === undefined) {
-        return { help: false, error: 'agent: --read-only requires a value' };
-      }
-      // A flag-looking value is rejected (e.g., `--read-only --help`).
-      if (next.length > 0 && next.startsWith('-')) {
-        return { help: false, error: 'agent: --read-only requires a value' };
-      }
-      if (next === '') {
-        return { help: false, error: 'agent: --read-only requires a non-empty value' };
-      }
-      const parsed = parseReadOnlyPaths(next);
-      if (parsed.length === 0) {
-        return { help: false, error: 'agent: --read-only requires a non-empty value' };
-      }
-      visiblePaths = parsed;
-      i += 2;
-      continue;
-    }
-
-    if (arg === '--schema-b64') {
-      const next = args[i + 1];
-      if (next === undefined || next === '' || (next.length > 0 && next.startsWith('-'))) {
-        return { help: false, error: 'agent: --schema-b64 requires a value' };
-      }
-      try {
-        const bin = atob(next);
-        const decoded = JSON.parse(
-          new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)))
-        );
-        if (typeof decoded !== 'object' || decoded === null) {
-          return { help: false, error: 'agent: --schema-b64 must decode to a JSON object' };
-        }
-        schemaOut = decoded as Record<string, unknown>;
-      } catch {
-        return { help: false, error: 'agent: --schema-b64 must be valid base64-encoded JSON' };
-      }
-      i += 2;
-      continue;
-    }
-
-    // Any other leading-dash token in a non-prompt slot is an unknown flag.
-    if (arg.length > 0 && arg.startsWith('-')) {
-      return { help: false, error: `agent: unknown flag '${arg}'` };
-    }
-
-    positionals.push(arg);
-    i += 1;
+    const result = processArg(args[i], args, i, state);
+    if (result.error) return { help: false, error: result.error };
+    i += result.consumed;
   }
 
-  if (help) {
+  const validation = validatePositionals(state);
+  if ('help' in validation) {
     return { help: true };
   }
-
-  if (positionals.length < 3) {
-    const missing = ['<cwd>', '<allowed-commands>', '<prompt>'][positionals.length];
-    return { help: false, error: `agent: missing required argument ${missing}` };
+  if ('error' in validation) {
+    return { help: false, error: validation.error };
   }
 
-  if (positionals.length > 3) {
-    return { help: false, error: 'agent: too many arguments' };
-  }
+  const positionals = validation as {
+    cwd: string;
+    allowedCommandsRaw: string;
+    prompt: string;
+  };
 
-  const [cwd, allowedCommandsRaw, prompt] = positionals;
   return {
     help: false,
-    cwd,
-    allowedCommandsRaw,
-    prompt,
-    modelId,
-    visiblePaths,
-    thinkingLevel,
-    structuredOutputSchema: schemaOut,
+    cwd: positionals.cwd,
+    allowedCommandsRaw: positionals.allowedCommandsRaw,
+    prompt: positionals.prompt,
+    modelId: state.modelId,
+    visiblePaths: state.visiblePaths,
+    thinkingLevel: state.thinkingLevel,
+    structuredOutputSchema: state.schemaOut,
   };
 }
 
@@ -320,6 +377,68 @@ function getBridge(): AgentBridge | undefined {
   return hook;
 }
 
+/** Validate cwd exists and is a directory. Returns error message or null. */
+/**
+ * Map a cwd `stat` outcome to an error message (or null if valid). Kept sync so
+ * the command body can `await ctx.fs.stat` INLINE — wrapping the await in an
+ * async helper adds a microtask hop before `spawn`, which the bridge-ordering
+ * test (`blocks until the bridge promise resolves`) is calibrated against.
+ */
+function cwdValidationError(
+  stat: { isDirectory: boolean } | null,
+  missing: boolean,
+  cwdArg: string
+): string | null {
+  if (missing) return `agent: cwd not found: ${cwdArg}\n`;
+  if (stat && !stat.isDirectory) return `agent: cwd not a directory: ${cwdArg}\n`;
+  return null;
+}
+
+/** Check cwd is writable (sandbox escape guard). Returns error message or null. */
+function checkCwdWritable(fs: unknown, resolvedCwd: string, cwdArg: string): string | null {
+  const fsWithCanWrite = fs as { canWrite?: (p: string) => boolean };
+  if (typeof fsWithCanWrite.canWrite === 'function' && !fsWithCanWrite.canWrite(resolvedCwd)) {
+    return `agent: cwd not writable: ${cwdArg}\n`;
+  }
+  return null;
+}
+
+/** Build spawn options from parsed args and context. */
+function buildSpawnOptions(
+  parsed: ParsedArgs,
+  resolvedCwd: string,
+  allowedCommands: string[],
+  prompt: string,
+  ctx: { cwd: string },
+  getParentJid?: () => string | undefined
+): AgentSpawnOptions {
+  const spawnOptions: AgentSpawnOptions = {
+    cwd: resolvedCwd,
+    allowedCommands,
+    prompt,
+  };
+  if (parsed.modelId !== undefined) {
+    spawnOptions.modelId = parsed.modelId;
+  }
+  if (parsed.visiblePaths !== undefined) {
+    spawnOptions.visiblePaths = parsed.visiblePaths;
+  }
+  if (parsed.thinkingLevel !== undefined) {
+    spawnOptions.thinkingLevel = parsed.thinkingLevel;
+  }
+  if (parsed.structuredOutputSchema !== undefined) {
+    spawnOptions.structuredOutputSchema = parsed.structuredOutputSchema;
+  }
+  if (ctx.cwd && ctx.cwd.length > 0) {
+    spawnOptions.invokingCwd = ctx.cwd;
+  }
+  const parentJid = getParentJid?.();
+  if (parentJid !== undefined && parentJid.length > 0) {
+    spawnOptions.parentJid = parentJid;
+  }
+  return spawnOptions;
+}
+
 /**
  * Create the `agent` supplemental command.
  *
@@ -357,121 +476,66 @@ export function createAgentCommand(options: AgentCommandOptions = {}): Command {
 
     const cwdArg = parsed.cwd ?? '';
     if (cwdArg === '') {
-      return {
-        stdout: '',
-        stderr: 'agent: <cwd> must not be empty\n',
-        exitCode: 1,
-      };
+      return { stdout: '', stderr: 'agent: <cwd> must not be empty\n', exitCode: 1 };
     }
 
     const resolvedCwd = resolveCwd(cwdArg, ctx.cwd);
     const allowedCommands = parseAllowedCommands(parsed.allowedCommandsRaw ?? '');
     const prompt = parsed.prompt ?? '';
 
-    // Validate the resolved cwd exists and is a directory BEFORE invoking the
-    // orchestrator bridge. This keeps bad paths from spawning a scoop that
-    // would immediately fail with a less actionable error.
+    let cwdStat: { isDirectory: boolean } | null = null;
+    let cwdMissing = false;
     try {
-      const stat = await ctx.fs.stat(resolvedCwd);
-      if (!stat.isDirectory) {
-        return {
-          stdout: '',
-          stderr: `agent: cwd not a directory: ${cwdArg}\n`,
-          exitCode: 1,
-        };
-      }
+      cwdStat = await ctx.fs.stat(resolvedCwd);
     } catch {
-      return {
-        stdout: '',
-        stderr: `agent: cwd not found: ${cwdArg}\n`,
-        exitCode: 1,
-      };
+      cwdMissing = true;
+    }
+    const cwdError = cwdValidationError(cwdStat, cwdMissing, cwdArg);
+    if (cwdError) {
+      return { stdout: '', stderr: cwdError, exitCode: 1 };
     }
 
-    // Sandbox-escape guard: when the invoking shell is a scoop, `ctx.fs` is a
-    // RestrictedFS whose `stat` intentionally succeeds on sandbox *parents*
-    // (so the shell can probe PATH and traverse toward allowed prefixes).
-    // Without this check a scoop could pass `/scoops` as `<cwd>` and the
-    // orchestrator bridge would happily grant it a writable prefix covering
-    // every sibling scoop. Require `cwd` to be writable by the caller before
-    // forwarding to the bridge. Terminal shells wrap an unrestricted
-    // VirtualFS (via `VfsAdapter.canWrite`, which returns `true`), so this
-    // predicate is a no-op for top-level invocations.
-    const fsWithCanWrite = ctx.fs as unknown as { canWrite?: (p: string) => boolean };
-    if (typeof fsWithCanWrite.canWrite === 'function' && !fsWithCanWrite.canWrite(resolvedCwd)) {
-      return {
-        stdout: '',
-        stderr: `agent: cwd not writable: ${cwdArg}\n`,
-        exitCode: 1,
-      };
+    const writableError = checkCwdWritable(ctx.fs, resolvedCwd, cwdArg);
+    if (writableError) {
+      return { stdout: '', stderr: writableError, exitCode: 1 };
     }
 
     const bridge = getBridge();
     if (!bridge) {
-      return {
-        stdout: '',
-        stderr: 'agent: orchestrator bridge not available\n',
-        exitCode: 1,
-      };
+      return { stdout: '', stderr: 'agent: orchestrator bridge not available\n', exitCode: 1 };
     }
 
-    const spawnOptions: AgentSpawnOptions = {
-      cwd: resolvedCwd,
+    const spawnOptions = buildSpawnOptions(
+      parsed,
+      resolvedCwd,
       allowedCommands,
       prompt,
-    };
-    if (parsed.modelId !== undefined) {
-      spawnOptions.modelId = parsed.modelId;
-    }
-    if (parsed.visiblePaths !== undefined) {
-      spawnOptions.visiblePaths = parsed.visiblePaths;
-    }
-    if (parsed.thinkingLevel !== undefined) {
-      spawnOptions.thinkingLevel = parsed.thinkingLevel;
-    }
-    if (parsed.structuredOutputSchema !== undefined) {
-      spawnOptions.structuredOutputSchema = parsed.structuredOutputSchema;
-    }
-    // Forward the invoking shell's cwd. The bridge uses it as an
-    // implicit read-only root (visiblePaths) ONLY when `--read-only`
-    // was NOT passed — that flag is pure-replace, so we don't sneak an
-    // extra entry into a list the user explicitly opted out of. A
-    // caller who still wants the ctx.cwd visible alongside `--read-only`
-    // can pass `--read-only foo/,$(pwd)` to re-add it.
-    if (ctx.cwd && ctx.cwd.length > 0) {
-      spawnOptions.invokingCwd = ctx.cwd;
-    }
-    // Forward the parent scoop's JID when available so the bridge can
-    // inherit the parent's model id (see `AgentSpawnOptions.parentJid` in
-    // `agent-bridge.ts`). The hook is omitted for top-level terminal
-    // invocations where no scoop owns the shell.
-    const parentJid = getParentJid?.();
-    if (parentJid !== undefined && parentJid.length > 0) {
-      spawnOptions.parentJid = parentJid;
-    }
+      ctx,
+      getParentJid
+    );
 
-    try {
-      const result = await bridge.spawn(spawnOptions);
-      const exitCode = typeof result?.exitCode === 'number' ? result.exitCode : 0;
-      const finalText = result?.finalText;
-
-      if (exitCode === 0) {
-        return { stdout: formatForStdout(finalText), stderr: '', exitCode: 0 };
-      }
-
-      return {
-        stdout: '',
-        stderr: formatForStderr(finalText),
-        exitCode,
-      };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log.error('agent bridge threw', err);
-      return {
-        stdout: '',
-        stderr: `${message}\n`,
-        exitCode: 1,
-      };
-    }
+    // `runSpawn` calls `bridge.spawn` synchronously before its first await, so
+    // spawn-start is still reached promptly (no extra microtask before spawn).
+    return runSpawn(bridge, spawnOptions);
   });
+}
+
+/** Await the bridge spawn and map its result/throw to a command result. */
+async function runSpawn(
+  bridge: AgentBridge,
+  spawnOptions: AgentSpawnOptions
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  try {
+    const result = await bridge.spawn(spawnOptions);
+    const exitCode = typeof result?.exitCode === 'number' ? result.exitCode : 0;
+    const finalText = result?.finalText;
+    if (exitCode === 0) {
+      return { stdout: formatForStdout(finalText), stderr: '', exitCode: 0 };
+    }
+    return { stdout: '', stderr: formatForStderr(finalText), exitCode };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.error('agent bridge threw', err);
+    return { stdout: '', stderr: `${message}\n`, exitCode: 1 };
+  }
 }
