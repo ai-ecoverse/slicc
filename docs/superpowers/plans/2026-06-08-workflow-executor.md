@@ -336,6 +336,8 @@ function workflow() { throw new WorkflowNestingUnsupportedError('nested workflow
 `;
 ```
 
+- [ ] **Also assert** (spec-tightening, codex note): the **1000-agent total cap** throws a fatal error on the 1001st `agent()` (drive with a stubbed `exec.spawn` + a tiny cap loop); `budget.spent() === 0` and `remaining()` honours `__WF.budget`; and `pipeline` is **no-barrier** (item A reaches stage 2 before item B finishes stage 1, via a controllable deferred mock). (Note: the Task-2 *test* injects `__WF` as a param for convenience; in the real flow `buildWorkflowCode` prepends `const __WF = {…}` ahead of the prelude — equivalent in scope.)
+
 Run → PASS. **Commit:** `feat(workflow): user-space prelude (determinism guard, suppression, caps, fatal rethrow)`.
 
 ---
@@ -429,7 +431,7 @@ function parse(a: string[]): Parsed {
     else if (t === '--script') o.script = a[++i];
     else if (t === '--args') { try { o.args = JSON.parse(a[++i] ?? ''); o.hasArgs = true; } catch { return { error: 'workflow: --args must be valid JSON' }; } }
     else if (t === '--budget') { const n = Number(a[++i]); if (!Number.isFinite(n)) return { error: 'workflow: --budget must be a number' }; o.budget = n; }
-    else if (t === '--concurrency') { const n = Number(a[++i]); if (!Number.isFinite(n)) return { error: 'workflow: --concurrency must be a number' }; o.cap = Math.min(16, Math.max(1, Math.trunc(n))); }
+    else if (t === '--concurrency') { const n = Number(a[++i]); if (!Number.isFinite(n)) return { error: 'workflow: --concurrency must be a number' }; const cores = (globalThis as { navigator?: { hardwareConcurrency?: number } }).navigator?.hardwareConcurrency ?? 8; o.cap = Math.min(Math.max(1, cores - 2), 16, Math.max(1, Math.trunc(n))); }
     else if (t.startsWith('-')) return { error: `workflow: unknown flag '${t}'` };
     else if (o.file === undefined) o.file = t;
     else return { error: 'workflow: too many arguments' };
