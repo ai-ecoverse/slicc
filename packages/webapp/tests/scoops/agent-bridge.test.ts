@@ -1003,6 +1003,43 @@ describe('createAgentBridge — structured output capture', () => {
     expect(result.exitCode).toBe(0);
     expect(result.finalText).toBe('regular response');
   });
+
+  it('surfaces a scoopError raised during a nudge (not the generic message)', async () => {
+    let prompts = 0;
+    let observer: { onError?: (m: string) => void } | undefined;
+    const ctx = { getStructuredOutput: () => ({ captured: false, value: undefined }) };
+    const mock: Partial<Orchestrator> = {
+      registerScoop: vi.fn(async () => {}),
+      unregisterScoop: vi.fn(async () => {}),
+      observeScoop: vi.fn((_jid: string, handler: unknown) => {
+        observer = handler as { onError?: (m: string) => void };
+        return () => {};
+      }),
+      getScoops: vi.fn(() => []),
+      getScoopContext: vi.fn(() => ctx),
+      sendPrompt: vi.fn(async () => {
+        prompts++;
+        // Fail on the first nudge (2nd round-trip), as a real LLM error would.
+        if (prompts === 2) observer?.onError?.('adobe proxy 502 (capability shim)');
+      }),
+    };
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(mock as unknown as Orchestrator, fs, null, {
+      generateUid: () => 'u',
+    });
+
+    const result = await bridge.spawn({
+      cwd: '/workspace',
+      allowedCommands: ['*'],
+      prompt: 'test',
+      structuredOutputSchema: { type: 'object' },
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.finalText).toContain('502');
+    expect(result.finalText).not.toContain('did not produce StructuredOutput');
+    expect(prompts).toBe(2); // initial + 1 nudge, then bailed on the real error
+  });
 });
 
 describe('publishAgentBridge', () => {

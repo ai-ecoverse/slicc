@@ -339,6 +339,11 @@ async function runScoopAndCaptureOutput(
         'agent',
         'agent'
       );
+      // Each nudge is its own LLM round-trip: surface a real error (rate limit,
+      // 5xx, capability shim) instead of masking it as "did not produce output".
+      if (observerState.scoopError !== null) {
+        return { finalText: observerState.scoopError, exitCode: 1 };
+      }
       so = ctxRef?.getStructuredOutput?.();
     }
     if (so?.captured) {

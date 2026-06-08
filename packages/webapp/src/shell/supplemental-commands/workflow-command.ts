@@ -122,8 +122,9 @@ export function createWorkflowCommand(): Command {
         stderr: 'workflow: script must export a meta block with a name (and description)\n',
         exitCode: 1,
       };
-    const runId =
-      makeSentinel().slice('WF_RESULT_'.length, 'WF_RESULT_'.length + 12) || `${Date.now()}`;
+    // runId is just the per-run scratch-dir key; a slice of a fresh random
+    // sentinel is a convenient unguessable source (always non-empty).
+    const runId = makeSentinel().slice('WF_RESULT_'.length, 'WF_RESULT_'.length + 12);
     const agentCwd = `/shared/workflow-runs/${runId}/scratch/`;
     await ctx.fs.mkdir(agentCwd, { recursive: true }); // agent rejects a missing cwd → would null every call
     const sentinel = makeSentinel();

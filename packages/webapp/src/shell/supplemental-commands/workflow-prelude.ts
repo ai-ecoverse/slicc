@@ -57,7 +57,8 @@ async function agent(prompt, opts) {
     const r = await __execSpawn(argv);
     if (!r || r.exitCode !== 0) return null;
     const out = String(r.stdout || '').replace(/\n+$/, '');
-    return opts.schema ? JSON.parse(out) : out;
+    if (!opts.schema) return out;
+    try { return JSON.parse(out); } catch (e) { console.error('agent: schema response was not valid JSON: ' + out.slice(0, 120)); return null; }
   } finally { __slots.release(); }
 }
 
