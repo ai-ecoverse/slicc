@@ -232,6 +232,42 @@ nulled, so the user script has no other path to spawn scoops. (Host-side cap enf
 require the RPC namespace we're intentionally avoiding; it is part of the deferred realm-native
 hardening.)
 
+### Execution model: SP1 blocking → SP2/SP4 non-blocking + live progress
+
+**How Claude Code does it:** the `Workflow` tool launches a **background runtime** and the
+session **stays responsive** — you keep talking to the agent, a `/workflows` view + a
+task-panel line update live, and the **result arrives asynchronously as a new message** when
+the run finishes. There is **no mid-run user input** (only agent permission prompts pause it).
+
+**SP1 (this doc) is blocking, by deliberate scope:**
+
+- Run from the **terminal** (`workflow run …`) — this blocks only the terminal tab, **not the
+  cone**; the cone stays fully responsive. This is the intended SP1 usage.
+- Run from the **cone** (its `bash` tool) — the cone's *turn* is occupied until the run
+  returns. Acceptable for the POC; removed in SP2.
+- `phase()`/`log()` emit `WFPHASE`/`WFLOG` markers to stdout, surfaced **at completion** (no
+  mid-run streaming, since just-bash commands return output as a unit).
+
+**The non-blocking future maps onto existing SLICC machinery (SP2 + SP4), no rework of the
+SP1 prelude API:**
+
+- **SP2 (non-blocking launch):** start the realm as a **background `ProcessManager` process**
+  (it already is a tracked pid) and return a **run id** immediately so the cone turn ends and
+  the cone stays responsive. Deliver the final result back to the cone via the existing
+  **scoop-completion-notification / lick** path — i.e. as a fresh cone turn, exactly like CC's
+  "results arrive as separate messages." No mid-run user input (matches CC). `workflow stop` =
+  `kill -KILL <pid>` (already wired).
+- **SP4 (live progress):** stream `phase`/`log`/per-agent events out of the run into a
+  **workflow progress sprinkle** (`.shtml`, SLICC's `/workflows` analog) + a task-panel line,
+  updated from the host via `SprinkleManager.sendToSprinkle` — **independent of the cone's
+  turn**, so progress is live whether or not the cone is busy. (This needs a progress
+  side-channel out of the realm — incremental console streaming or a tiny progress hook — a
+  small additive change; the `WFPHASE`/`WFLOG` markers are the forward-compatible seam.)
+
+So SP1 keeps the cone responsive **today** as long as workflows are launched from the terminal;
+cone-launched, non-blocking, progress-reporting workflows are the SP2+SP4 step, and the SP1
+design does not block that path.
+
 ## 6. The prelude (exact semantics)
 
 The prelude is a JS string the `workflow` command prepends to the (transformed) user script,
