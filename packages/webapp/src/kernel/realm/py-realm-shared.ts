@@ -138,11 +138,13 @@ export async function runPyRealm(
   // channel. Local FS Access mounts always materialize; remote
   // (s3/da) mounts are subject to `remoteMountCapBytes` (0 = skip).
   // Cap exceeded throws — caught below to fail the invocation with
-  // a clear error before user code runs.
+  // a clear error before user code runs. The returned snapshots feed
+  // `flushRealmMountWriteBack` after user code completes.
   let mountMaterializationFailure: string | null = null;
+  let mountSnapshots: RealmMountSnapshot[] = [];
   if (mountPoints.length > 0) {
     try {
-      await materializeRealmMounts(
+      mountSnapshots = await materializeRealmMounts(
         pyodide,
         mountPoints,
         init.remoteMountCapBytes,
@@ -201,6 +203,20 @@ export async function runPyRealm(
     pyodide.runPython('del __slicc_code, __slicc_filename, __slicc_argv, __slicc_exit_code');
   } catch {
     /* best-effort cleanup */
+  }
+
+  // Mount write-back: diff each materialized mount subtree against
+  // its current MEMFS state and route created/modified/removed
+  // entries back through the `vfs` RPC channel so the source backend
+  // (local FS Access / S3 / DA) persists Python's edits. Runs before
+  // the OPFS flush so backend errors surface as warnings before
+  // realm-done.
+  if (mountSnapshots.length > 0) {
+    try {
+      await flushRealmMountWriteBack(pyodide, mountSnapshots, rpc, pushWarning);
+    } catch (err) {
+      pushWarning(`mount write-back failed: ${describeRealmError(err)}`);
+    }
   }
 
   if (init.opfsMountDbName !== undefined) {
@@ -566,8 +582,8 @@ export async function materializeRealmMounts(
   remoteMountCapBytes: number | undefined,
   rpc: RealmRpcClient,
   pushWarning: WarningSink = () => {}
-): Promise<void> {
-  if (mountPoints.length === 0) return;
+): Promise<RealmMountSnapshot[]> {
+  if (mountPoints.length === 0) return [];
   const skipRemoteFetch = remoteMountCapBytes === 0;
   const listings = new Map<string, MountListingEntry[]>();
   const sizes = new Map<string, number>();
@@ -609,7 +625,10 @@ export async function materializeRealmMounts(
     }
   }
 
-  // Phase 3: mount MEMFS over each path + populate.
+  // Phase 3: mount MEMFS over each path + populate. Capture per-mount
+  // snapshots (the files we wrote and the dirs we created) so the
+  // post-exec write-back can diff MEMFS against the materialized
+  // baseline.
   const FS = pyodide.FS as unknown as {
     stat: (path: string) => unknown;
     mkdirTree: (path: string) => void;
@@ -618,7 +637,10 @@ export async function materializeRealmMounts(
     filesystems: Record<string, unknown>;
   };
   const MEMFS = FS.filesystems.MEMFS;
+  const snapshots: RealmMountSnapshot[] = [];
   for (const mp of mountPoints) {
+    const files = new Map<string, Uint8Array>();
+    const dirs = new Set<string>();
     try {
       try {
         FS.stat(mp.path);
@@ -632,32 +654,244 @@ export async function materializeRealmMounts(
           pushWarning(`mount '${mp.path}': MEMFS overlay failed: ${describeRealmError(err)}`);
         }
       }
-      if (mp.kind !== 'local' && skipRemoteFetch) continue;
-      const listing = listings.get(mp.path) ?? [];
-      for (const entry of listing) {
-        if (entry.type === 'directory') {
-          try {
-            FS.mkdirTree(entry.absPath);
-          } catch {
-            /* exists */
+      if (mp.kind === 'local' || !skipRemoteFetch) {
+        const listing = listings.get(mp.path) ?? [];
+        for (const entry of listing) {
+          if (entry.type === 'directory') {
+            try {
+              FS.mkdirTree(entry.absPath);
+              dirs.add(entry.absPath);
+            } catch {
+              /* exists */
+            }
+            continue;
           }
-          continue;
-        }
-        try {
-          const bytes = await rpc.call<Uint8Array>('vfs', 'readFileBinary', [entry.absPath]);
-          const parent = entry.absPath.slice(0, entry.absPath.lastIndexOf('/')) || '/';
           try {
-            FS.mkdirTree(parent);
-          } catch {
-            /* exists */
+            const bytes = await rpc.call<Uint8Array>('vfs', 'readFileBinary', [entry.absPath]);
+            const parent = entry.absPath.slice(0, entry.absPath.lastIndexOf('/')) || '/';
+            try {
+              FS.mkdirTree(parent);
+            } catch {
+              /* exists */
+            }
+            const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+            FS.writeFile(entry.absPath, data);
+            files.set(entry.absPath, data);
+          } catch (err) {
+            pushWarning(`mount '${entry.absPath}': read failed: ${describeRealmError(err)}`);
           }
-          FS.writeFile(entry.absPath, bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
-        } catch (err) {
-          pushWarning(`mount '${entry.absPath}': read failed: ${describeRealmError(err)}`);
         }
       }
     } catch (err) {
       pushWarning(`mount '${mp.path}': materialize failed: ${describeRealmError(err)}`);
     }
+    snapshots.push({ path: mp.path, kind: mp.kind, files, dirs });
+  }
+  return snapshots;
+}
+
+// ---------------------------------------------------------------------------
+// Mount write-back (MEMFS → backend via the `vfs` RPC channel)
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-mount snapshot captured at the end of {@link materializeRealmMounts}.
+ * The {@link files} map carries the exact bytes written into MEMFS
+ * (keyed by absolute Pyodide-FS path) and {@link dirs} carries every
+ * directory created under the mount root. {@link flushRealmMountWriteBack}
+ * diffs the current MEMFS state against this baseline to decide what
+ * to write, create, or remove on the backend.
+ */
+export interface RealmMountSnapshot {
+  path: string;
+  kind: RealmMountPoint['kind'];
+  files: Map<string, Uint8Array>;
+  dirs: Set<string>;
+}
+
+/**
+ * Synchronously walk a Pyodide MEMFS subtree rooted at `root` and
+ * collect every file's bytes plus every directory path. Used by the
+ * write-back diff — Emscripten's `FS.readdir`/`stat`/`readFile` are
+ * all sync so the walk is a tight loop with no RPC traffic.
+ *
+ * Per-entry failures (transient lookup errors, unreadable nodes) are
+ * skipped silently so a single bad entry doesn't drop the rest of
+ * the diff. The caller surfaces backend-side errors when it actually
+ * tries to flush the result.
+ */
+function walkPyMemfsTree(
+  pyodide: PyodideInterface,
+  root: string
+): { files: Map<string, Uint8Array>; dirs: Set<string> } {
+  const files = new Map<string, Uint8Array>();
+  const dirs = new Set<string>();
+  const FS = pyodide.FS as unknown as {
+    readdir: (path: string) => string[];
+    stat: (path: string) => { mode: number };
+    isDir: (mode: number) => boolean;
+    isFile: (mode: number) => boolean;
+    readFile: (path: string, opts: { encoding: 'binary' }) => Uint8Array;
+  };
+  function visit(path: string): void {
+    let names: string[];
+    try {
+      names = FS.readdir(path);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      if (name === '.' || name === '..') continue;
+      const child = path === '/' ? `/${name}` : `${path}/${name}`;
+      let mode: number;
+      try {
+        mode = FS.stat(child).mode;
+      } catch {
+        continue;
+      }
+      if (FS.isDir(mode)) {
+        dirs.add(child);
+        visit(child);
+      } else if (FS.isFile(mode)) {
+        try {
+          files.set(child, FS.readFile(child, { encoding: 'binary' }));
+        } catch {
+          /* unreadable — skip */
+        }
+      }
+    }
+  }
+  visit(root);
+  return { files, dirs };
+}
+
+/** Byte-wise equality for two Uint8Arrays — distinguishes content changes from no-ops. */
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+/**
+ * Reduce a set of removed paths to just the top-level entries — any
+ * path whose ancestor is also in the set is dropped, since `vfs.rm`
+ * routes through `VirtualFS.rm` with `recursive:true` and would
+ * cascade through the descendants anyway. Removes the duplicate
+ * `rm` traffic and the spurious ENOENT warnings the descendants
+ * would emit if issued after the parent.
+ */
+function topLevelRemovals(removed: ReadonlySet<string>): string[] {
+  const out: string[] = [];
+  for (const path of removed) {
+    const parts = path.split('/').filter(Boolean);
+    let hasAncestor = false;
+    for (let i = 1; i < parts.length; i++) {
+      const ancestor = '/' + parts.slice(0, i).join('/');
+      if (removed.has(ancestor)) {
+        hasAncestor = true;
+        break;
+      }
+    }
+    if (!hasAncestor) out.push(path);
+  }
+  return out;
+}
+
+/**
+ * For each {@link RealmMountSnapshot}, walk the current MEMFS subtree,
+ * diff it against the materialized baseline, and route the differences
+ * back through the `vfs` RPC channel:
+ *
+ *   • file present now but absent (or with different bytes) in the
+ *     snapshot → `vfs.writeFileBinary`
+ *   • directory present now but absent in the snapshot → `vfs.mkdir`
+ *   • file or directory in the snapshot but absent now → `vfs.rm`
+ *     (top-level only — recursive rm cascades through descendants)
+ *
+ * `VirtualFS.writeFile` / `mkdir` / `rm` route mount-resident paths
+ * through `MountBackend` so the source (local FS Access / S3 / DA)
+ * receives the write. Per-entry backend rejections are surfaced as
+ * stderr warnings via {@link pushWarning} and the diff continues —
+ * one failed PUT must not strand other writes from the same run.
+ */
+async function tryVfsRpc(
+  rpc: RealmRpcClient,
+  op: 'writeFileBinary' | 'mkdir' | 'rm',
+  args: unknown[],
+  onError: (err: unknown) => void
+): Promise<void> {
+  try {
+    await rpc.call('vfs', op, args);
+  } catch (err) {
+    onError(err);
+  }
+}
+
+function collectRemovedPaths(
+  snap: RealmMountSnapshot,
+  current: { files: Map<string, Uint8Array>; dirs: Set<string> }
+): Set<string> {
+  const removed = new Set<string>();
+  for (const path of snap.files.keys()) {
+    if (!current.files.has(path)) removed.add(path);
+  }
+  for (const path of snap.dirs) {
+    if (!current.dirs.has(path)) removed.add(path);
+  }
+  return removed;
+}
+
+async function flushOneMountWriteBack(
+  pyodide: PyodideInterface,
+  snap: RealmMountSnapshot,
+  rpc: RealmRpcClient,
+  pushWarning: WarningSink
+): Promise<void> {
+  let current: { files: Map<string, Uint8Array>; dirs: Set<string> };
+  try {
+    current = walkPyMemfsTree(pyodide, snap.path);
+  } catch (err) {
+    pushWarning(`mount '${snap.path}': write-back walk failed: ${describeRealmError(err)}`);
+    return;
+  }
+
+  // Writes: new or changed files.
+  for (const [path, bytes] of current.files) {
+    const orig = snap.files.get(path);
+    if (orig && bytesEqual(orig, bytes)) continue;
+    await tryVfsRpc(rpc, 'writeFileBinary', [path, bytes], (err) =>
+      pushWarning(
+        `mount '${snap.path}': write-back of '${path}' failed: ${describeRealmError(err)}`
+      )
+    );
+  }
+
+  // New directories: those in current MEMFS but not in snapshot.
+  for (const path of current.dirs) {
+    if (snap.dirs.has(path)) continue;
+    await tryVfsRpc(rpc, 'mkdir', [path], (err) =>
+      pushWarning(`mount '${snap.path}': mkdir of '${path}' failed: ${describeRealmError(err)}`)
+    );
+  }
+
+  // Removals: in snapshot but no longer in MEMFS. Collapse to top-
+  // level entries so recursive rm cascades through descendants.
+  for (const path of topLevelRemovals(collectRemovedPaths(snap, current))) {
+    await tryVfsRpc(rpc, 'rm', [path], (err) =>
+      pushWarning(`mount '${snap.path}': remove of '${path}' failed: ${describeRealmError(err)}`)
+    );
+  }
+}
+
+export async function flushRealmMountWriteBack(
+  pyodide: PyodideInterface,
+  snapshots: readonly RealmMountSnapshot[],
+  rpc: RealmRpcClient,
+  pushWarning: WarningSink = () => {}
+): Promise<void> {
+  for (const snap of snapshots) {
+    await flushOneMountWriteBack(pyodide, snap, rpc, pushWarning);
   }
 }
