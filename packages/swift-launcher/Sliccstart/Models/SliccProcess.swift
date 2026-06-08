@@ -113,6 +113,13 @@ final class SliccProcess {
     /// re-gate after the user closes the leader.
     var leaderJoinUrl: String?
 
+    /// Active re-probe loop. Cancelled and replaced on every
+    /// `startLeaderProbe` invocation so launch + reattach (or repeated
+    /// launches) don't stack concurrent loops. The loop exits on its
+    /// own when the chromiumBrowser record goes away or `leaderJoinUrl`
+    /// is set, so callers rarely need to cancel explicitly.
+    private var leaderProbeTask: Task<Void, Never>?
+
     /// One-shot latch tracking whether `detachAll()` already ran. The
     /// full-app update path calls it from `onBeginUpdate` and the
     /// delegate calls it again from `applicationWillTerminate`; without
@@ -345,31 +352,75 @@ final class SliccProcess {
         return applyOverlay(args, overlay: overlay)
     }
 
-    /// Fire-and-forget tray-status probe. Captures `self` weakly because
-    /// the probe can outlive the user closing the browser; the assignment
-    /// is gated on the chromiumBrowser record still being present so we
-    /// don't poison a fresh launch with a stale poll from a prior one.
-    private func startLeaderProbe(servePort: UInt16) {
+    /// Fire-and-forget tray-status probe that keeps trying until the
+    /// leader is actually ready. The bounded `discoverJoinUrl` retry
+    /// only covers a ~10s window, so when Chrome auto-launches at
+    /// startup the tray often isn't minted in time and a one-shot probe
+    /// would leave `leaderJoinUrl` permanently nil. This outer loop
+    /// re-schedules `discoverJoinUrl` until (a) it returns a URL while
+    /// the chromiumBrowser record is still alive, (b) the browser
+    /// record goes away, or (c) `leaderJoinUrl` is set by another path
+    /// (e.g. a parallel call). Cancels any prior loop so launch +
+    /// reattach don't stack.
+    ///
+    /// `innerMaxAttempts`/`innerRetryDelay`/`outerBackoff` exist only so
+    /// unit tests can drive the loop quickly; production callers omit
+    /// them and inherit the defaults.
+    func startLeaderProbe(
+        servePort: UInt16,
+        innerMaxAttempts: Int = 8,
+        innerRetryDelay: TimeInterval = 1.5,
+        outerBackoff: TimeInterval = 2.0
+    ) {
         let probe = trayStatusProbe
         let serveOrigin = "http://127.0.0.1:\(servePort)"
+
+        leaderProbeTask?.cancel()
         // Capture `self` weakly into the detached Task, then hop to the
         // main actor and re-derive a strong reference there. Doing the
         // re-derive inside `MainActor.run` (rather than the outer Task
         // closure) avoids the Swift 6 sendable-capture warning about
         // mutating a captured `var self` from a concurrent context.
-        Task { [weak self] in
-            guard let joinUrl = await probe.discoverJoinUrl(serveOrigin: serveOrigin) else {
-                return
-            }
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                let hasBrowser = self.launchRecords.values.contains { $0.targetType == .chromiumBrowser }
-                guard hasBrowser else {
-                    log.info("startLeaderProbe: discarding join URL — browser already gone")
+        leaderProbeTask = Task { [weak self] in
+            while !Task.isCancelled {
+                // Stop conditions checked on the main actor before each
+                // round: a join URL set by another path or a missing
+                // chromiumBrowser record both mean the loop has nothing
+                // left to do (matches `clearLeaderIfNoBrowserRunning`
+                // and `stopAll` semantics).
+                let shouldProbe: Bool = await MainActor.run { [weak self] in
+                    guard let self else { return false }
+                    if self.leaderJoinUrl != nil { return false }
+                    return self.launchRecords.values.contains { $0.targetType == .chromiumBrowser }
+                }
+                guard shouldProbe else {
+                    log.info("startLeaderProbe: stop condition reached, exiting loop")
                     return
                 }
-                self.leaderJoinUrl = joinUrl
-                log.info("startLeaderProbe: leader join URL ready")
+
+                let joinUrl = await probe.discoverJoinUrl(
+                    serveOrigin: serveOrigin,
+                    maxAttempts: innerMaxAttempts,
+                    retryDelay: innerRetryDelay
+                )
+                if let joinUrl {
+                    await MainActor.run { [weak self] in
+                        guard let self else { return }
+                        let hasBrowser = self.launchRecords.values.contains { $0.targetType == .chromiumBrowser }
+                        guard hasBrowser else {
+                            log.info("startLeaderProbe: discarding join URL — browser already gone")
+                            return
+                        }
+                        guard self.leaderJoinUrl == nil else { return }
+                        self.leaderJoinUrl = joinUrl
+                        log.info("startLeaderProbe: leader join URL ready")
+                    }
+                    return
+                }
+
+                // discoverJoinUrl gave up — wait a short outer backoff
+                // then re-check the stop conditions and probe again.
+                try? await Task.sleep(nanoseconds: UInt64(outerBackoff * 1_000_000_000))
             }
         }
     }
