@@ -28,38 +28,69 @@ interface Parsed {
   cap?: number;
 }
 
-function parse(a: string[]): Parsed {
-  if (a[0] !== 'run')
-    return a.length === 0 || a.includes('-h') || a.includes('--help')
-      ? { help: true }
-      : { error: `workflow: unknown subcommand '${a[0]}' (only 'run' in SP1)` };
+function resolveMaxCap(): number {
   const cores =
     (globalThis as { navigator?: { hardwareConcurrency?: number } }).navigator
       ?.hardwareConcurrency ?? 8;
-  const maxCap = Math.min(16, Math.max(1, cores - 2)); // spec cap: min(16, cores-2)
-  const o: Parsed = { budget: null, cap: Math.min(4, maxCap) }; // default 4, clamped to maxCap (covers low-core)
-  for (let i = 1; i < a.length; i++) {
-    const t = a[i];
-    if (t === '-h' || t === '--help') return { help: true };
-    else if (t === '--script') o.script = a[++i];
-    else if (t === '--args') {
+  return Math.min(16, Math.max(1, cores - 2)); // spec cap: min(16, cores-2)
+}
+
+// Apply one CLI token, mutating `o`; returns the (possibly advanced) index or a
+// help/error signal. Split out of `parse` so each unit's branching stays shallow.
+function applyToken(
+  o: Parsed,
+  a: string[],
+  i: number,
+  maxCap: number
+): { i: number; help?: boolean; error?: string } {
+  const t = a[i];
+  switch (t) {
+    case '-h':
+    case '--help':
+      return { i, help: true };
+    case '--script':
+      o.script = a[++i];
+      return { i };
+    case '--args':
       try {
         o.args = JSON.parse(a[++i] ?? '');
         o.hasArgs = true;
       } catch {
-        return { error: 'workflow: --args must be valid JSON' };
+        return { i, error: 'workflow: --args must be valid JSON' };
       }
-    } else if (t === '--budget') {
+      return { i };
+    case '--budget': {
       const n = Number(a[++i]);
-      if (!Number.isFinite(n)) return { error: 'workflow: --budget must be a number' };
+      if (!Number.isFinite(n)) return { i, error: 'workflow: --budget must be a number' };
       o.budget = n;
-    } else if (t === '--concurrency') {
+      return { i };
+    }
+    case '--concurrency': {
       const n = Number(a[++i]);
-      if (!Number.isFinite(n)) return { error: 'workflow: --concurrency must be a number' };
+      if (!Number.isFinite(n)) return { i, error: 'workflow: --concurrency must be a number' };
       o.cap = Math.min(maxCap, Math.max(1, Math.trunc(n)));
-    } else if (t.startsWith('-')) return { error: `workflow: unknown flag '${t}'` };
-    else if (o.file === undefined) o.file = t;
-    else return { error: 'workflow: too many arguments' };
+      return { i };
+    }
+    default:
+      if (t.startsWith('-')) return { i, error: `workflow: unknown flag '${t}'` };
+      if (o.file !== undefined) return { i, error: 'workflow: too many arguments' };
+      o.file = t;
+      return { i };
+  }
+}
+
+function parse(a: string[]): Parsed {
+  if (a[0] !== 'run') {
+    if (a.length === 0 || a.includes('-h') || a.includes('--help')) return { help: true };
+    return { error: `workflow: unknown subcommand '${a[0]}' (only 'run' in SP1)` };
+  }
+  const maxCap = resolveMaxCap();
+  const o: Parsed = { budget: null, cap: Math.min(4, maxCap) }; // default 4, clamped to maxCap
+  for (let i = 1; i < a.length; i++) {
+    const r = applyToken(o, a, i, maxCap);
+    if (r.help) return { help: true };
+    if (r.error) return { error: r.error };
+    i = r.i;
   }
   if (o.script === undefined && o.file === undefined)
     return { error: 'workflow: a <file.js> or --script is required' };
@@ -121,23 +152,33 @@ export function createWorkflowCommand(): Command {
       };
     }
 
-    const { result: value, log: runLog, hadResult } = splitSentinel(result.stdout, sentinel);
-    const head = banner.name
-      ? `workflow: ${banner.name}${banner.description ? ' — ' + banner.description : ''}\n`
-      : '';
-    const logBlock = runLog ? renderLog(runLog) + '\n' : '';
-    if (result.exitCode !== 0 || !hadResult)
-      return {
-        stdout: head + logBlock,
-        stderr: result.stderr || (hadResult ? '' : 'workflow: script produced no result\n'),
-        exitCode: result.exitCode || 1,
-      };
-    return {
-      stdout: head + logBlock + (typeof value === 'string' ? value : JSON.stringify(value)) + '\n',
-      stderr: result.stderr,
-      exitCode: 0,
-    };
+    return renderResult(banner, result, sentinel);
   });
+}
+
+// Compose the command output from the realm result: banner + rendered progress
+// log + the sentinel-extracted return value. Split out to keep the handler shallow.
+function renderResult(
+  banner: { name: string | null; description: string | null },
+  result: { stdout: string; stderr: string; exitCode: number },
+  sentinel: string
+): { stdout: string; stderr: string; exitCode: number } {
+  const { result: value, log: runLog, hadResult } = splitSentinel(result.stdout, sentinel);
+  const head = banner.name
+    ? `workflow: ${banner.name}${banner.description ? ' — ' + banner.description : ''}\n`
+    : '';
+  const logBlock = runLog ? renderLog(runLog) + '\n' : '';
+  if (result.exitCode !== 0 || !hadResult)
+    return {
+      stdout: head + logBlock,
+      stderr: result.stderr || (hadResult ? '' : 'workflow: script produced no result\n'),
+      exitCode: result.exitCode || 1,
+    };
+  return {
+    stdout: head + logBlock + (typeof value === 'string' ? value : JSON.stringify(value)) + '\n',
+    stderr: result.stderr,
+    exitCode: 0,
+  };
 }
 
 function renderLog(raw: string): string {
