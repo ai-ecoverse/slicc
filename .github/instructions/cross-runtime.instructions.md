@@ -1,5 +1,5 @@
 ---
-applyTo: 'packages/{node-server,swift-server}/**'
+applyTo: 'packages/node-server/**,packages/swift-server/**'
 ---
 
 # Cross-runtime parity (node-server ↔ swift-server)
