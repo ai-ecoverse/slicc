@@ -60,6 +60,7 @@ interface WorkflowRunManager {
 interface WorkflowRunState {
   id: string;
   name: string | null;
+  source: string;                 // the original user script (so SP3 `workflow save` can persist it)
   origin: 'cone' | 'terminal';
   status: 'running' | 'done' | 'error' | 'killed';
   currentPhase: string | null;
