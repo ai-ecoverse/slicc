@@ -9,7 +9,7 @@
 // cap and remove the entry in the same PR.
 //
 // The pure functions here (no IO) are unit-tested by the `dev-tools` vitest
-// project. The thin IO + CLI driver lives in `check-touched-size-exemptions.mjs`.
+// project. The thin IO + CLI driver lives in `check-touched-exemptions.mjs`.
 
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -54,7 +54,7 @@ export function extractExemptionGlobsFor(biomeConfig, ruleKey) {
 }
 
 // Thin wrappers bound to the function-size rule key, preserving the original
-// public surface used by `check-touched-size-exemptions.mjs`.
+// public surface used by `check-touched-exemptions.mjs`.
 export function isSizeExemptionOverride(override) {
   return isExemptionOverrideFor(override, SIZE_RULE_KEY);
 }
