@@ -25,7 +25,10 @@ import {
 } from '../../webapp/src/scoops/tray-leader.js';
 import type { LeaderSyncManagerOptions } from '../../webapp/src/scoops/tray-leader-sync.js';
 import { LeaderSyncManager } from '../../webapp/src/scoops/tray-leader-sync.js';
-import { CHERRY_RUNTIME_TAG, type SprinkleSummary } from '../../webapp/src/scoops/tray-sync-protocol.js';
+import {
+  CHERRY_RUNTIME_TAG,
+  type SprinkleSummary,
+} from '../../webapp/src/scoops/tray-sync-protocol.js';
 import { LeaderTrayPeerManager } from '../../webapp/src/scoops/tray-webrtc.js';
 import type { ChannelMessage } from '../../webapp/src/scoops/types.js';
 import { setCherryEmitter } from '../../webapp/src/shell/supplemental-commands/cherry-emit-command.js';

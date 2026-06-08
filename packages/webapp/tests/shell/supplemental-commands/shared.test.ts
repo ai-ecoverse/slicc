@@ -302,9 +302,9 @@ describe('resolvePyodideIndexURL', () => {
 describe('isPreviewUrl', () => {
   it('matches the legacy local SW path /preview/<vfs-path>', () => {
     expect(isPreviewUrl('http://localhost:5710/preview/workspace/app/index.html')).toBe(true);
-    expect(
-      isPreviewUrl('chrome-extension://akggccfpkleihhemkkikggopnifgelbk/preview/x.html')
-    ).toBe(true);
+    expect(isPreviewUrl('chrome-extension://akggccfpkleihhemkkikggopnifgelbk/preview/x.html')).toBe(
+      true
+    );
   });
 
   it('matches the unified worker preview host (prod and staging)', () => {

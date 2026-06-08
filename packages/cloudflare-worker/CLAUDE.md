@@ -52,6 +52,10 @@ This package depends on `@slicc/cloud-core` (see [`packages/cloud-core/CLAUDE.md
 - `GET|POST /join/:token` — follower join and bootstrap polling flow
 - `GET|POST /controller/:token` — leader attach flow and leader WebSocket upgrade
 - `POST /webhook/:token/:webhookId` — forward webhook events into the live leader
+- `POST /api/tray/:trayId/preview` — mint a preview token (Bearer = controllerToken); response `{ previewToken, url }`. The URL is a `<token>.preview.<env>.sliccy.ai` host that routes back to this worker via the wildcard route.
+- `POST /api/tray/:trayId/preview/stop` — revoke a previewToken (Bearer = controllerToken); response `{ revoked }`.
+- `GET /api/tray/:trayId/previews` — list active previews for a tray (Bearer = controllerToken).
+- `GET <token>.preview.<env>.sliccy.ai/*` — preview HTTP pipe (`src/preview-handler.ts`). Parses the token from the host, resolves the `PreviewRecord` via DO `/internal/preview/resolve`, sends `preview.request` to the live leader over the controller WS, awaits `preview.response` chunks (30s timeout via `PreviewAssembler`), reassembles, and streams the bytes back. No `Access-Control-Allow-Origin` — preview subdomains can't fetch each other. 502 on disconnected leader / timeout, 404 / 403 / 500 forwarded from the leader.
 - `GET /auth/callback` — OAuth callback relay page (decodes `state` param with source/port/path/nonce, redirects to localhost for `source:'local'`, extension for `source:'extension'`, or allowlisted remote origin for `source:'remote'`). **Capture hop:** when hit with a provider response (`?code`/`?error`) and **no `state`** — i.e. the relay already bounced back to the dashboard's own origin — it instead serves a tiny page that `postMessage`s `{ type:'oauth-callback', redirectUrl }` to `window.opener`. This is the completion path for the webapp-served-by-worker (connect/cloud) context, which has no node-server callback page; the webapp's `launchOAuthCli` waits for that message. Used by connect-mode GitHub login (see `packages/webapp/providers/github.ts` `resolveGithubOAuthRedirect`).
 
 ### Signaling model
