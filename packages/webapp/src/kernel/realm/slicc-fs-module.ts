@@ -221,10 +221,10 @@ def _build_slicc_module(_bridge):
     sys.modules["slicc.fs"] = fs_module
     return slicc_module
 
-import js as _js
-_build_slicc_module(_js._slicc_fs_js)
+import _slicc_fs_js as _bridge
+_build_slicc_module(_bridge)
 del _build_slicc_module
-del _js
+del _bridge
 `;
 
 /**

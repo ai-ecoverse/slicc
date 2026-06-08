@@ -12,7 +12,11 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
-import { createSliccFsBridge } from '../../../src/kernel/realm/slicc-fs-module.js';
+import {
+  createSliccFsBridge,
+  PYTHON_SLICC_WRAPPER,
+  registerSliccFsModule,
+} from '../../../src/kernel/realm/slicc-fs-module.js';
 
 interface RpcCall {
   channel: string;
@@ -142,4 +146,42 @@ describe('createSliccFsBridge: parity across mount kinds', () => {
       ]);
     });
   }
+});
+
+describe('PYTHON_SLICC_WRAPPER bootstrap: imports the registered module by name', () => {
+  // Regression for the real-Pyodide failure: registerJsModule attaches
+  // the bridge to sys.modules but NOT to the `js` module, so reading
+  // it as `js._slicc_fs_js` raises AttributeError at runtime. The fake
+  // Pyodide harness used elsewhere doesn't execute the wrapper against
+  // a real interpreter, so this string contract guards the bootstrap.
+  const REGISTERED_NAME = '_slicc_fs_js';
+
+  it(`imports '${REGISTERED_NAME}' as a top-level module (not via js.*)`, () => {
+    expect(PYTHON_SLICC_WRAPPER).toMatch(new RegExp(`import\\s+${REGISTERED_NAME}\\s+as\\s+\\w+`));
+  });
+
+  it('does not read the bridge as an attribute of the js module', () => {
+    expect(PYTHON_SLICC_WRAPPER).not.toContain('_js._slicc_fs_js');
+    expect(PYTHON_SLICC_WRAPPER).not.toContain('js._slicc_fs_js');
+  });
+
+  it('registerSliccFsModule registers the same name the wrapper imports', async () => {
+    const registered: string[] = [];
+    const ran: string[] = [];
+    const fakePyodide = {
+      registerJsModule(name: string, _obj: unknown): void {
+        registered.push(name);
+      },
+      async runPythonAsync(code: string): Promise<void> {
+        ran.push(code);
+      },
+    } as unknown as Parameters<typeof registerSliccFsModule>[0];
+    const { rpc } = makeFakeRpc({});
+    await registerSliccFsModule(fakePyodide, rpc);
+    expect(registered).toEqual([REGISTERED_NAME]);
+    expect(ran).toHaveLength(1);
+    const importMatch = ran[0].match(/import\s+(\w+)\s+as\s+\w+/);
+    expect(importMatch).not.toBeNull();
+    expect(importMatch?.[1]).toBe(REGISTERED_NAME);
+  });
 });
