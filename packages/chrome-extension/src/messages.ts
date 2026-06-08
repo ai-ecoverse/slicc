@@ -495,6 +495,41 @@ export type LeaderTrayResetResponseMsg =
       error: string;
     };
 
+/**
+ * Panel → offscreen: mint a preview URL via the offscreen leader's controller
+ * token and broadcast `preview.open` to followers. This is the extension's
+ * panel-terminal mint path; the offscreen-agent mint path uses the in-realm
+ * `setPreviewMinter` hook instead. Intent flags (`bridge`/`noBridge`) flow
+ * through; each mint site computes the effective `allowLive` locally.
+ */
+export interface TrayOpenPreviewRequestMsg {
+  type: 'tray-open-preview';
+  requestId: string;
+  entryPath: string;
+  servedRoot: string;
+  bridge: boolean;
+  noBridge: boolean;
+}
+
+/**
+ * Offscreen → panel: response to a `tray-open-preview` request.
+ * Discriminated by `ok`. Success returns `url` + `pushed` (follower count).
+ */
+export type TrayOpenPreviewResponseMsg =
+  | {
+      type: 'tray-open-preview-response';
+      requestId: string;
+      ok: true;
+      url: string;
+      pushed: number;
+    }
+  | {
+      type: 'tray-open-preview-response';
+      requestId: string;
+      ok: false;
+      error: string;
+    };
+
 // NOTE: not every member of this union actually reaches the offscreen
 // document. Several (e.g., OAuthRequestMsg, DetachedPopoutRequestMsg,
 // DetachedClaimMsg) are panel→SW messages that the SW handles directly
@@ -541,7 +576,8 @@ export type PanelToOffscreenMessage =
   | LeaderUserMessageEchoMsg
   | LeaderActiveScoopMsg
   | LeaderRequestLeaderModeStateMsg
-  | LeaderTrayResetRequestMsg;
+  | LeaderTrayResetRequestMsg
+  | TrayOpenPreviewRequestMsg;
 
 // ---------------------------------------------------------------------------
 // Offscreen → Side Panel (via service worker relay)
@@ -857,7 +893,8 @@ export type OffscreenToPanelMessage =
   // Consumed by the panel's `TerminalSessionClient`.
   | TerminalEventMsg
   | LeaderModeChangedMsg
-  | LeaderTrayResetResponseMsg;
+  | LeaderTrayResetResponseMsg
+  | TrayOpenPreviewResponseMsg;
 
 // ---------------------------------------------------------------------------
 // Offscreen ↔ Service Worker (CDP proxy)

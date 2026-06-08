@@ -27,6 +27,8 @@ import type {
   LeaderTrayRuntimeStatusEnvelope,
   LeaderUserMessageEchoMsg,
   SprinkleSummaryEnvelope,
+  TrayOpenPreviewRequestMsg,
+  TrayOpenPreviewResponseMsg,
 } from './messages.js';
 
 // Re-export the shared transport interfaces so existing consumers
@@ -44,6 +46,11 @@ export interface ActiveScoopSink {
 // Panel-side proxy
 // -----------------------------------------------------------------------------
 
+export interface TrayOpenPreviewResult {
+  url: string;
+  pushed: number;
+}
+
 export class PanelLeaderSyncProxy {
   private disposed = false;
   private readonly unsubscribe: () => void;
@@ -56,6 +63,15 @@ export class PanelLeaderSyncProxy {
     }
   >();
   private nextResetId = 1;
+  private readonly pendingPreviews = new Map<
+    string,
+    {
+      resolve: (result: TrayOpenPreviewResult) => void;
+      reject: (err: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+  private nextPreviewId = 1;
 
   constructor(
     private readonly sender: PanelMessageSender,
@@ -86,6 +102,24 @@ export class PanelLeaderSyncProxy {
         // would bypass the discriminated-union requirement and produce
         // `Error: undefined`. Defence-in-depth fallback below.
         else pending.reject(new Error(resp.error ?? 'leader-tray-reset failed (no error message)'));
+        return;
+      }
+      const previewResp = discriminateMsg<TrayOpenPreviewResponseMsg>(
+        envelope.payload,
+        'tray-open-preview-response'
+      );
+      if (previewResp) {
+        const pending = this.pendingPreviews.get(previewResp.requestId);
+        if (!pending) return;
+        this.pendingPreviews.delete(previewResp.requestId);
+        clearTimeout(pending.timer);
+        if (previewResp.ok) {
+          pending.resolve({ url: previewResp.url, pushed: previewResp.pushed });
+        } else {
+          pending.reject(
+            new Error(previewResp.error ?? 'tray-open-preview failed (no error message)')
+          );
+        }
         return;
       }
     });
@@ -147,6 +181,37 @@ export class PanelLeaderSyncProxy {
     });
   }
 
+  /**
+   * Round-trip a `tray-open-preview` to the offscreen leader. Used by the
+   * extension side-panel `serve` command — the panel terminal has no
+   * panel-RPC channel and no in-realm minter, so it bridges through the
+   * leader-sync envelope. Standalone uses panel-RPC; offscreen agent
+   * uses the in-realm `setPreviewMinter` hook.
+   */
+  openPreview(
+    opts: { entryPath: string; servedRoot: string; bridge: boolean; noBridge: boolean },
+    timeoutMs = 30_000
+  ): Promise<TrayOpenPreviewResult> {
+    if (this.disposed) return Promise.reject(new Error('PanelLeaderSyncProxy disposed'));
+    const requestId = `tray-open-preview-${Date.now()}-${this.nextPreviewId++}`;
+    return new Promise<TrayOpenPreviewResult>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingPreviews.delete(requestId);
+        reject(new Error(`tray-open-preview timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      this.pendingPreviews.set(requestId, { resolve, reject, timer });
+      const payload: TrayOpenPreviewRequestMsg = {
+        type: 'tray-open-preview',
+        requestId,
+        entryPath: opts.entryPath,
+        servedRoot: opts.servedRoot,
+        bridge: opts.bridge,
+        noBridge: opts.noBridge,
+      };
+      this.sender.send({ source: 'panel', payload });
+    });
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -156,6 +221,11 @@ export class PanelLeaderSyncProxy {
       entry.reject(new Error('PanelLeaderSyncProxy disposed'));
     }
     this.pendingResets.clear();
+    for (const entry of this.pendingPreviews.values()) {
+      clearTimeout(entry.timer);
+      entry.reject(new Error('PanelLeaderSyncProxy disposed'));
+    }
+    this.pendingPreviews.clear();
   }
 }
 

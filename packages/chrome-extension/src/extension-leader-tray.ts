@@ -37,7 +37,12 @@ import { mintPreviewViaWorker } from '../../webapp/src/shell/supplemental-comman
 import { canonicalRuntimeId } from '../../webapp/src/ui/runtime-identity.js';
 import type { AgentEvent, ChatMessage } from '../../webapp/src/ui/types.js';
 import type { OffscreenLeaderSyncBridgeHandle } from './leader-sync-bridge.js';
-import type { LeaderTrayResetRequestMsg, LeaderTrayResetResponseMsg } from './messages.js';
+import type {
+  LeaderTrayResetRequestMsg,
+  LeaderTrayResetResponseMsg,
+  TrayOpenPreviewRequestMsg,
+  TrayOpenPreviewResponseMsg,
+} from './messages.js';
 import { ServiceWorkerLeaderTraySocket } from './tray-socket-proxy.js';
 
 export interface ExtensionLeaderTrayHandle {
@@ -527,6 +532,64 @@ export function startExtensionLeaderTray(
   };
   chrome.runtime.onMessage.addListener(resetListener);
 
+  // tray-open-preview RPC listener. Side-panel terminal `serve` command sends
+  // `{ source: 'panel', payload: { type: 'tray-open-preview', requestId, ... } }`.
+  // Reuses the in-realm minter that we just registered above so all three
+  // extension mint paths (agent shell, panel terminal, in-realm) go through
+  // the same code.
+  const previewListener = (message: unknown): boolean => {
+    if (typeof message !== 'object' || message === null) return false;
+    const env = message as { source?: string; payload?: { type?: string } };
+    if (env.source !== 'panel') return false;
+    if (env.payload?.type !== 'tray-open-preview') return false;
+    const req = env.payload as TrayOpenPreviewRequestMsg;
+    const sendReply = (reply: TrayOpenPreviewResponseMsg): void => {
+      chrome.runtime.sendMessage({ source: 'offscreen', payload: reply }).catch((err: unknown) => {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (/receiving end does not exist/i.test(errMsg)) return;
+        options.log.error('Failed to deliver tray-open-preview-response', {
+          requestId: req.requestId,
+          ok: reply.ok,
+          error: errMsg,
+        });
+      });
+    };
+    void (async () => {
+      try {
+        const status = getLeaderTrayRuntimeStatus();
+        const session = status.session;
+        if (!session) throw new Error('No active leader tray; cannot mint preview');
+        const controllerUrl = new URL(session.controllerUrl);
+        const controllerToken = controllerUrl.pathname.split('/').pop() ?? '';
+        const { url } = await mintPreviewViaWorker({
+          workerBaseUrl: session.workerBaseUrl,
+          trayId: session.trayId,
+          controllerToken,
+          servedRoot: req.servedRoot,
+          entryPath: req.entryPath,
+          allowLive: false,
+        });
+        sync.broadcastPreviewOpen(url);
+        sendReply({
+          type: 'tray-open-preview-response',
+          requestId: req.requestId,
+          ok: true,
+          url,
+          pushed: trayPeers.getPeers().length,
+        });
+      } catch (err) {
+        sendReply({
+          type: 'tray-open-preview-response',
+          requestId: req.requestId,
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })();
+    return false;
+  };
+  chrome.runtime.onMessage.addListener(previewListener);
+
   return {
     /**
      * Canonical teardown order (mirrors `page-leader-tray.ts`):
@@ -550,6 +613,7 @@ export function startExtensionLeaderTray(
       setPreviewMinter(null);
       setTrayResetter(null);
       chrome.runtime.onMessage.removeListener(resetListener);
+      chrome.runtime.onMessage.removeListener(previewListener);
       leaderBridge.signalLeaderMode(false);
       leaderBridge.detach();
     },
