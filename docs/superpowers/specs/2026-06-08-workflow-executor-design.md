@@ -22,6 +22,19 @@ SP1 is deliberately a **clean, usable POC**: a **blocking** `workflow run` comma
 executes a **non-nesting** workflow to completion. No background execution, no resume, no
 UI beyond streamed progress lines. Those are later sub-projects.
 
+**Acceptance (the POC must clear this bar — settled with the user 2026-06-08):**
+
+- A self-contained, deterministic **fan-out/verify workflow over repo files** (the test
+  fixture) runs to completion via real scoops and returns the correct value — in **both** the
+  standalone **and** extension floats (strict dual-mode at SP1, not standalone-first).
+- `agent(prompt, {schema})` returns a **validated object** — the `StructuredOutput` path is
+  **in scope for SP1**.
+- **Real concurrency:** independent `agent()` calls run in parallel up to the cap, which
+  **defaults to 4** for the POC (raisable via `--concurrency` toward `min(16, cores−2)`).
+- **Stretch goal (not required to land):** a `/deep-research`-style script
+  (Scope→Search→Fetch→Verify→Synthesize) runs, contingent on the spawned scoops having
+  web/search tools available.
+
 ## 2. Fidelity decision (settled)
 
 We replicate the **workflow-file runtime API faithfully**, so a CC-authored workflow runs
@@ -212,10 +225,11 @@ The `agent` RPC namespace handler (added to `attachRealmHost`) runs in the Orche
 and owns the bridge logic:
 
 1. Receive `('agent','spawn',[{prompt, opts}])` from the realm.
-2. **Caps (host-side, authoritative):** acquire a semaphore slot
-   (`min(16, navigator.hardwareConcurrency − 2)`, lowerable via `--concurrency`); reject if the
-   run's total agent count would exceed **1000** (`WorkflowAgentCapError`). (Budget ceiling is a
-   no-op in SP1 per §6; it activates in SP2.)
+2. **Caps (host-side, authoritative):** acquire a semaphore slot — the POC default is **4**
+   (bounds token cost while still proving real parallel fan-out), raisable via `--concurrency`
+   up to `min(16, navigator.hardwareConcurrency − 2)`; reject if the run's total agent count
+   would exceed **1000** (`WorkflowAgentCapError`). (Budget ceiling is a no-op in SP1 per §6;
+   it activates in SP2.)
 3. Call `AgentBridge.spawn({ cwd, allowedCommands, prompt, … })` — an ephemeral
    `notifyOnComplete:false` scoop with its own sandboxed `RestrictedFS` (no cone turn triggered).
    - **No `schema`:** resolve `spawn().finalText`.
@@ -279,6 +293,8 @@ workflow run --script '<inline js>' [...]          # inline script, no temp file
 
 - Prints the parsed `meta.name`/`description` banner, streams `log()`/`phase()` lines, and on
   completion prints the returned value (JSON-stringified if non-string).
+- `--concurrency` defaults to **4** (POC), clamped to `min(16, cores−2)`. `--budget` sets
+  `budget.total` (non-enforcing in SP1 per §6). `--args` is parsed as JSON and exposed as `args`.
 - **Out of scope for SP1:** `workflow save`, `workflow list`, `workflow resume`,
   `workflow stop`, trigger keywords. (SP2/SP3.)
 
@@ -295,14 +311,18 @@ Vitest, mirroring `packages/webapp/tests/` by subsystem; `fake-indexeddb/auto` w
   budget hard-ceiling throws; envelope (de)serialization round-trips.
 - **Unit — schema:** valid args resolve the object; mismatch retries; "no call after 2 nudges"
   → `null`.
-- **Integration (float-agnostic):** run a faithful **deep-research-style fixture**
-  (Scope → Search → Fetch → Verify → Synthesize, using `pipeline`/`parallel`/`agent({schema})`)
-  with `agent()` backed by a deterministic **mock scoop**; assert the final value and that
-  concurrency stayed ≤ cap.
-- **Dual-mode:** dual-mode execution is inherited from the realm runner (worker standalone /
-  sandbox iframe extension), already covered by `realm-factory` tests. Add a workflow-kind smoke
-  test that the prelude globals are injected and `fs`/`exec`/`fetch` are absent; the `agent` RPC
-  + caps tests run against a worker realm and are float-agnostic.
+- **Integration (acceptance fixture):** the **self-contained repo fan-out/verify workflow**
+  (`pipeline`/`parallel`/`agent({schema})` over repo files) with `agent()` backed by a
+  deterministic **mock scoop**; assert the final value, that the `{schema}` path returns a
+  validated object (and retries/nudges/null on bad output), and that concurrency stayed ≤ cap
+  while genuinely overlapping. A `/deep-research`-style script is a **separate stretch test**
+  (mock-scoped, or live behind an opt-in env flag).
+- **Dual-mode (both floats required at SP1):** verify **standalone** (worker realm) **and**
+  **extension** (sandbox-iframe realm + the offscreen `AgentBridge` proxy path). The realm
+  factory already abstracts the transport, but the extension path is a hard acceptance gate —
+  add a workflow-kind smoke test (prelude globals injected, `fs`/`exec`/`fetch` absent) plus an
+  extension-float verification of an end-to-end `workflow run` (test harness where possible,
+  documented manual check otherwise).
 
 ## 12. Documentation to update (part of the change, not after)
 
