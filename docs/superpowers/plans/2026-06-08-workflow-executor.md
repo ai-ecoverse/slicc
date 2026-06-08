@@ -4,7 +4,7 @@
 
 **Goal:** Ship a blocking `workflow run` shell command that executes a non-nesting, Claude-Code-format dynamic-workflow `.js` to completion via real SLICC scoops, in both the standalone and extension floats.
 
-**Architecture:** No realm fork. The command prepends a **user-space JS prelude** (which defines `agent`/`parallel`/`pipeline`/`phase`/`log`/`budget`/`args`/`workflow`, a determinism guard, and a concurrency semaphore) to a lightly-transformed user script, then runs the whole thing through the **existing** `executeJsCode` → `runInRealm({kind:'js'})` path. `agent()` shells out to the **existing `agent` command** via the realm's `exec.spawn`; the result is returned via a stdout sentinel. The `{schema}` path extends the `agent` command + `AgentBridge` + `ScoopContext` to inject a `StructuredOutput` tool. In the extension, a side-panel `workflow run` forwards execution to the offscreen document so the run survives a panel close.
+**Architecture:** No realm fork. The command prepends a **user-space JS prelude** (which defines `agent`/`parallel`/`pipeline`/`phase`/`log`/`budget`/`args`/`workflow`, a determinism guard, and a concurrency semaphore) to a lightly-transformed user script, then runs the whole thing through the **existing** `executeJsCode` → `runInRealm({kind:'js'})` path. `agent()` shells out to the **existing `agent` command** via the realm's `exec.spawn`; the result is returned via a **random per-run** stdout sentinel. The `{schema}` path extends the `agent` command + `AgentBridge` + `ScoopContext` to inject a `StructuredOutput` tool. In the extension, **no forwarding is needed** — the side-panel terminal is already offscreen-backed (`RemoteTerminalView`→`TerminalSessionHost`), so a terminal `workflow run` already runs in offscreen and survives a panel close.
 
 **Tech Stack:** TypeScript, just-bash supplemental commands, the `kernel/realm/` runner, pi-agent-core/pi-ai (tool validation via `typebox`), Vitest.
 
@@ -28,7 +28,7 @@ npm install
 npm test -w @slicc/webapp -- --run tests/shell 2>&1 | tail -5   # baseline: pre-existing suite green
 ```
 
-Constants used across tasks: the stdout result sentinel is `"WF_RESULT"`; progress markers are `"WFPHASE"` / `"WFLOG"`.
+Constants used across tasks: the stdout result sentinel is `"WF_RESULT"`; progress markers are `"WFPHASE"` / `"WFLOG"`.
 
 ---
 
@@ -84,10 +84,10 @@ describe('workflow-script', () => {
   });
 
   it('splits the sentinel result line from the log output', () => {
-    const stdout = `WFLOG hi\n${SENTINEL}{"ok":true}\n`;
+    const stdout = `WFLOG hi\n${SENTINEL}{"ok":true}\n`;
     expect(splitSentinel(stdout)).toEqual({
       result: { ok: true },
-      log: 'WFLOG hi',
+      log: 'WFLOG hi',
       hadResult: true,
     });
   });
@@ -117,8 +117,19 @@ Expected: FAIL — `Cannot find module '.../workflow-script.js'`.
  * sentinel result parsing. No realm/IO here so these are trivially testable.
  */
 
-/** Marker the wrapped script prints to carry its return value back via stdout. */
-export const SENTINEL = 'WF_RESULT';
+/**
+ * Marker the wrapped script prints to carry its return value back via stdout.
+ * REVIEW FIX: must be a RANDOM PER-RUN token so a user `console.log` can't spoof the result.
+ * The command generates it (`makeSentinel()`), injects it via `__WF.sentinel`, and threads it
+ * into `buildWorkflowCode({sentinel})` (emit) and `splitSentinel(stdout, sentinel)` (parse) —
+ * there is NO module-level constant in the real impl. The `SENTINEL` const below is test-only.
+ */
+export function makeSentinel(): string {
+  const rnd = globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+  return `WF_RESULT_${rnd}`;
+}
+/** Test-only fixed token; the real command uses `makeSentinel()` per run. */
+export const SENTINEL = 'WF_RESULT';
 
 /** Config literal injected ahead of the prelude (read by the prelude as `__WF`). */
 export interface WorkflowConfig {
@@ -306,8 +317,8 @@ describe('workflow-prelude', () => {
     await run({ spawn: async () => ({}) }, proc, c, undefined, undefined, undefined, WF);
     expect((globalThis as any).__args).toEqual({ q: 'hi' });
     expect((globalThis as any).__rem).toBe(Infinity);
-    expect(c.out.some((l) => l.startsWith('WFPHASEScan'))).toBe(true);
-    expect(c.out.some((l) => l.startsWith('WFLOGhi'))).toBe(true);
+    expect(c.out.some((l) => l.startsWith('WFPHASEScan'))).toBe(true);
+    expect(c.out.some((l) => l.startsWith('WFLOGhi'))).toBe(true);
   });
 });
 ```
@@ -353,15 +364,22 @@ const Math = new Proxy(globalThis.Math, {
     return typeof v === 'function' ? v.bind(target) : v;
   },
 });
+// Broadened guard (review fix): also shadow crypto / performance / timers / globalThis for the
+// user scope. NOTE: this is SOFT — globalThis.* and dynamic import() remain reachable (documented).
+const __wfDet = (what) => () => { throw new Error('WorkflowDeterminismError: ' + what + ' is banned (nondeterministic)'); };
+const crypto = { getRandomValues: __wfDet('crypto.getRandomValues'), randomUUID: __wfDet('crypto.randomUUID') };
+const performance = { now: __wfDet('performance.now') };
+const setTimeout = __wfDet('setTimeout'), setInterval = __wfDet('setInterval'), queueMicrotask = __wfDet('queueMicrotask');
+const globalThis = undefined;  // block the obvious escape (residual: realm self/window still reachable — soft)
 
-// --- suppression: capture exec.spawn, then blank the IO globals ---
+// --- suppression: capture exec.spawn, then blank the FULL injected param set (review fix) ---
+// The realm injects many globals; several re-expose fs/shell/fetch (skill.config/token, http.client).
 const __execSpawn = (typeof exec !== 'undefined' && exec && exec.spawn) ? exec.spawn.bind(exec) : null;
-try { exec = undefined; } catch (e) {}
-try { fs = undefined; } catch (e) {}
-try { fetch = undefined; } catch (e) {}
-try { require = undefined; } catch (e) {}
+try { exec = fs = fetch = require = process = module = exports = skill = http = browser = usb =
+      serial = hid = cli = c = time = fmt = pool = undefined; } catch (e) {}
 
-const __cwd = (typeof process !== 'undefined' && process.cwd) ? process.cwd() : '/workspace';
+const __cwd = __WF.cwd || '/workspace';            // per-run agent scratch prefix from the command (NOT process.cwd)
+const __agentCwd = __WF.agentCwd || __cwd;         // constrained: /shared/workflow-runs/<runId>/scratch/
 const args = __WF.args;
 
 function __b64(s) {
@@ -393,7 +411,7 @@ async function agent(prompt, opts) {
     const flags = [];
     if (opts.model) flags.push('--model', String(opts.model));
     if (opts.schema) flags.push('--schema-b64', __b64(JSON.stringify(opts.schema)));
-    const argv = ['agent'].concat(flags, [__cwd, '*', String(prompt)]);
+    const argv = ['agent'].concat(flags, [__agentCwd, '*', String(prompt)]);
     const r = await __execSpawn(argv);
     if (!r || r.exitCode !== 0) return null;
     const out = String(r.stdout || '').replace(/\n+$/, '');
@@ -419,8 +437,8 @@ async function pipeline(items, ...stages) {
   }));
 }
 
-function phase(title) { __phase = String(title); console.log('WFPHASE' + __phase); }
-function log(message) { console.log('WFLOG' + String(message)); }
+function phase(title) { __phase = String(title); console.log('WFPHASE' + __phase); }
+function log(message) { console.log('WFLOG' + String(message)); }
 
 const budget = {
   total: (__WF.budget == null ? null : __WF.budget),
@@ -573,13 +591,9 @@ function parse(args: string[]): Parsed {
   return out;
 }
 
-/** Options for {@link createWorkflowCommand}. Extension wiring (Task 10) supplies a forwarder. */
-export interface WorkflowCommandOptions {
-  /** When set (extension side panel), forward the run to offscreen instead of running locally. */
-  runRemote?: (code: string, filename: string, ctx: CommandContext) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
-}
-
-export function createWorkflowCommand(options: WorkflowCommandOptions = {}): Command {
+// NOTE (review fix): no `runRemote`/offscreen-forwarding seam — the panel terminal is already
+// offscreen-backed, so the realm runs in offscreen either way.
+export function createWorkflowCommand(): Command {
   return defineCommand('workflow', async (args, ctx) => {
     const parsed = parse(args);
     if (parsed.help) return { stdout: HELP + '\n', stderr: '', exitCode: 0 };
@@ -606,9 +620,7 @@ export function createWorkflowCommand(options: WorkflowCommandOptions = {}): Com
 
     let result: { stdout: string; stderr: string; exitCode: number };
     try {
-      result = options.runRemote
-        ? await options.runRemote(code, filename, ctx)
-        : await executeJsCode(code, ['workflow', filename], ctx, undefined, { filename });
+      result = await executeJsCode(code, ['workflow', filename], ctx, undefined, { filename });
     } catch (err) {
       log.error('workflow run failed', err);
       return { stdout: '', stderr: `workflow: ${err instanceof Error ? err.message : String(err)}\n`, exitCode: 1 };
@@ -630,7 +642,7 @@ export function createWorkflowCommand(options: WorkflowCommandOptions = {}): Com
 function renderLog(raw: string): string {
   return raw
     .split('\n')
-    .map((l) => l.replace(/^WFPHASE/, '▸ ').replace(/^WFLOG/, '· '))
+    .map((l) => l.replace(/^WFPHASE/, '▸ ').replace(/^WFLOG/, '· '))
     .join('\n');
 }
 ```
@@ -1087,7 +1099,7 @@ it('uses runRemote when provided (extension side-panel path)', async () => {
   await fs.mkdir('/workspace', { recursive: true });
   await fs.writeFile('/workspace/w.js', `export const meta={name:'x',description:'d'}\nreturn 1`);
   let remoteCalled = false;
-  const runRemote = async () => { remoteCalled = true; return { stdout: `WF_RESULT1\n`, stderr: '', exitCode: 0 }; };
+  const runRemote = async () => { remoteCalled = true; return { stdout: `WF_RESULT1\n`, stderr: '', exitCode: 0 }; };
   const cmd = createWorkflowCommand({ runRemote });
   const res = await cmd.handler(['run', '/workspace/w.js'], await ctxWith(fs, async () => ({ stdout: '', stderr: '', exitCode: 0 })));
   expect(remoteCalled).toBe(true);

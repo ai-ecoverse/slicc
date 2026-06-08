@@ -44,19 +44,19 @@ When a non-blocking run starts, the **run manager injects** a small ` ```shtml `
 
 | Unit | File | Responsibility |
 | --- | --- | --- |
-| progress bridge | `ui/workflow-progress-bridge.ts` (new) | Wire `observeRun` ↔ the sprinkle/dip channel (`wf-subscribe`/`wf-progress`/`wf-unsubscribe`); dual-mode. |
-| dip live channel | `ui/dip.ts` (modify) **or** a lightweight inline sprinkle | Receive `wf-progress` pushes for the minimal glance (per the nuance above). |
-| minimal dip template | bundled helper / the SP3 skill | The compact ` ```shtml ` the cone emits on launch. |
+| progress bridge | `ui/workflow-progress-bridge.ts` (new) | Wire `observeRun` ↔ the **real** sprinkle/dip push channels (subscribe via the sprinkle-bridge op; push via `sendToSprinkle`/`slicc.on('update')` and dip `slicc-*`/`broadcastToDips`); coalesce; dual-mode via `sprinkle-proxy`/BroadcastChannel. |
+| dip live push | `ui/dip.ts` (modify) | Render progress pushes for the minimal glance via the existing dip `slicc-*` channel. (No new inline-sprinkle primitive — dropped.) |
+| minimal dip injection | run manager → `postDipReference`-style path | The run manager **injects** the compact progress dip into the chat on launch (not the cone/skill). |
 
 ## 4. Data flow
 
 ```
-workflow run (cone-origin, non-blocking) → run starts (SP2)
-  → cone turn includes a progress dip:  ```shtml … wf-subscribe(runId) … ```
-  → bridge: observeRun(runId) → wf-progress snapshots → dip renders live (phase, n/m agents, status)
-  → run settles → wf-done → dip shows final status (+ link to /shared/workflow-runs/<id>.json)
+workflow run (non-blocking) → run starts (SP2)
+  → run manager INJECTS a progress dip into the chat (postDipReference-style) that subscribes (runId)
+  → bridge: observeRun(runId) → coalesced snapshots → dip slicc-* push → renders live (phase, n/m agents, status)
+  → run settles → terminal push → dip shows final status (+ link to /shared/workflow-runs/<id>.json)
 
-(optional) a workflow/skill ships its own sprinkle → wf-subscribe(runId) → same stream → richer UI
+(optional) a workflow/skill ships its own sprinkle → subscribe(runId) via the bridge op → same stream → richer UI
 ```
 
 ## 5. Testing
@@ -77,6 +77,6 @@ A fixed `/workflows` tab; a task-panel element; pause/stop/restart controls (SP5
 
 ## 8. Open questions (resolve during planning)
 
-1. Dip live-push vs. lightweight inline sprinkle for the minimal glance (the §3 nuance).
-2. Snapshot cadence / coalescing (avoid flooding on large fan-outs — throttle `wf-progress`).
-3. Who emits the minimal dip — the SP3 skill instructs the cone, or the run manager auto-injects it on cone-origin launches.
+1. ~~Dip vs. inline sprinkle~~ — **resolved:** use the existing dip `slicc-*` push; the inline-sprinkle idea is dropped.
+2. ~~Who emits the dip~~ — **resolved:** the run manager **injects** it (not the cone/skill).
+3. Exact coalescing cadence (e.g. trailing-edge ~250 ms) and `logs`-as-deltas wire format — tune during planning.

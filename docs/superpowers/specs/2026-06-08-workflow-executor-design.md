@@ -322,10 +322,10 @@ nulled).
 - `budget` (SP1 stub) → object with the right shape; `total` from `--budget` (or `null`);
   `remaining()` = `max(0, total - spent())` or `Infinity`. **Honest SP1 limitation:** the
   `agent` command / `AgentBridge` surface no token usage, so `spent()` returns `0` in SP1 and
-  the hard-ceiling never trips. Precise accounting + ceiling enforcement land in **SP2**
-  alongside a usage observer (see §14). The shape is present so CC scripts that *read*
+  the hard-ceiling never trips. Precise accounting + ceiling enforcement land in the **SP6
+  budget-pool backlog** alongside a usage observer (see §14). The shape is present so CC scripts that *read*
   `budget` don't crash.
-- `workflow(...)` → **throws** `WorkflowNestingUnsupportedError` in SP1 (real nesting is SP5).
+- `workflow(...)` → **throws** `WorkflowNestingUnsupportedError` in SP1 (real nesting is SP6 backlog).
 - `args` → the command passes `--args` JSON through the realm `env`/`argv`; the prelude parses
   it and exposes the global `args` (or `undefined`).
 
@@ -365,7 +365,7 @@ the prelude (§5 "Caps").
      corrective nudges (matching CC), then returns exit≠0 → the prelude maps that to `null`.
 5. **Isolation:** each `AgentBridge` scoop already gets its own `/scoops/<name>/` scratch +
    `RestrictedFS` — matching `isolation:'worktree'`'s intent. `opts.model` →
-   `agent --model`; `opts.agentType` is **deferred** (logged, default persona) — SP5.
+   `agent --model`; `opts.agentType` is **deferred** (logged, default persona) — SP6 backlog.
 
 ## 8. Data flow
 
@@ -493,7 +493,7 @@ Resolved by the 2026-06-08 cross-check (three investigation passes; file:line co
   JSON Schema via `typebox` (`validateToolArguments`); **no ajv/zod** to add.
 - **`agent()` no-`schema` return** — *resolved.* `AgentBridge.spawn → {finalText, exitCode}`.
 - **`budget.spent()` source** — *resolved (negatively).* No token usage is surfaced → SP1
-  `spent()` returns `0`; usage observer + enforcement = SP2.
+  `spent()` returns `0`; usage observer + enforcement = SP6 budget-pool backlog.
 
 Still open (small, resolve during planning):
 

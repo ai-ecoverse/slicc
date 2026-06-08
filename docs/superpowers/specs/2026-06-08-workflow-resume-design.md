@@ -64,7 +64,7 @@ Pause is **cooperative and lives entirely in the run manager's exec-tap** (no pr
 | Unit | File | Responsibility |
 | --- | --- | --- |
 | call-key | `shell/supplemental-commands/workflow-prelude.ts` (modify) | Compute the content hash per `agent()` call (prompt + canonical opts + cwd/model/allowed/agentType); pass `--call-key <hash>` on the spawn argv. |
-| cache + replay | `scoops/workflow-run-manager.ts` (modify) | Per-run `Map<idx,result>` + hash check; resume = re-run with the cache; tap returns cached results. |
+| cache + replay | `scoops/workflow-run-manager.ts` (modify) | Per-run `Map<string,result>` keyed by content hash + occurrence ordinal; resume = re-run stored source with the cache; tap returns cached results, re-runs on ambiguity. |
 | pause gate | `scoops/workflow-run-manager.ts` (modify) | Exec-tap holds `agent` spawns while paused; release on resume. |
 | restart | `scoops/workflow-run-manager.ts` (modify) | Invalidate one cache entry + re-spawn. |
 | commands | `shell/supplemental-commands/workflow-command.ts` (modify) | `resume` / `pause` / `restart` subcommands. |
@@ -98,7 +98,7 @@ run interrupted (stop / agent crash) — cache holds completed agents' results (
 ## 10. Documentation
 
 - `docs/shell-reference.md` — `workflow resume`/`pause`/`restart`.
-- `docs/architecture.md` — the resume model (deterministic replay + call-indexed cache; why the SP1 guard exists).
+- `docs/architecture.md` — the resume model (deterministic replay + best-effort content-keyed cache; why the SP1 guard exists).
 - `packages/vfs-root/shared/CLAUDE.md` — note that runs are resumable within a session and the determinism rules that make it work.
 
 ## 11. Non-goals (SP5)
