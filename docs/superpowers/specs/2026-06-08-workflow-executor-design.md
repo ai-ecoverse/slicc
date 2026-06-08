@@ -98,121 +98,161 @@ export const meta = {
 
 | Sub-project | Owns | Hand-off line |
 | --- | --- | --- |
-| **SP1** (this doc) | Sandbox executor, prelude globals, `agent()`→scoop bridge, determinism guard, `StructuredOutput`, caps, `budget` **stub**, **blocking** `workflow run` | — |
+| **SP1** (this doc) | Workflow realm capability (reuses `runInRealm`), prelude globals, `agent` RPC → `AgentBridge`, determinism guard, `StructuredOutput`, caps, `budget` **stub**, **blocking** `workflow run` | — |
 | SP2 | Background execution, IDB persistence, **resume** (deterministic call-order cache), pause/stop, approval card, full `budget` pool | SP1 runs blocking → SP2 makes it background + durable |
 | SP3 | Cone authoring skill, `workflow save` → `*.jsh`-style discovered `/<name>`, trigger keyword, `args` plumbing (SLICC-native; no `.claude/` layout) | runtime API ↔ everything-else-is-SLICC-native |
 | SP4 | `/workflows`-style progress sprinkle, task-panel line, pause/stop wired | — |
 | SP5 (optional) | Real nested `workflow()`, `agent()` `model` routing + per-phase model, `agentType` mapping, bundled `/deep-research` analog | — |
 
-## 5. Architecture (Approach B — uniform sandbox iframe)
+## 4.5 Existing substrate (reused, not rebuilt)
 
-The script runs in a **CSP-exempt sandbox iframe** ("headless sprinkle"), genuinely
-isolated from fs/shell/network. The injected globals are postMessage shims; the host owns
-orchestration. This is dual-mode by construction and reuses SLICC's most battle-tested
-primitive (the sprinkle/dip sandbox + panel-RPC), the same way `mount`/`usb`/`serial`
-forward to the page realm.
+A codebase cross-check (2026-06-08) found that SLICC **already ships the load-bearing
+primitives**. SP1 builds on these rather than reinventing them:
+
+- **`kernel/realm/` runner** (`realm-runner.ts:runInRealm`, `realm-factory.ts`,
+  `realm-host.ts`, `js-realm-shared.ts`). A generalized, **hard-killable, dual-mode
+  sandboxed JS executor**: a `DedicatedWorker` in standalone, a **per-task sandbox iframe**
+  in the extension (CSP-safe). It injects globals (`fs`/`exec`/`fetch`/`skill`/`require`/
+  `http`) by building RPC shims off the realm's control port, proxied kernel-side by
+  `attachRealmHost`. It registers a `ProcessManager` pid (so `ps`/`kill` see it) and
+  `SIGKILL → realm.terminate()` (exit 137). **This is exactly the "sandbox executor" the
+  earlier draft proposed building.** It already powers `node`/`.jsh`/`python`/`test`
+  (the `test` command runs each file in its own realm via `executeJsCode`).
+- **`AgentBridge`** (`scoops/agent-bridge.ts`, `globalThis.__slicc_agent`). `spawn(opts)`
+  registers an ephemeral `notifyOnComplete:false` scoop, runs its loop to completion, and
+  returns `{ finalText, exitCode }` (`finalText` = last `send_message` or accumulated
+  response). **This is the no-`schema` `agent()` path, essentially for free.** It does
+  **not** surface token usage and has **no** structured-output/tool injection.
+- **`ProcessManager`** (`kernel/process-manager.ts`). Pid tracking + signals for every
+  long-running unit. The realm integration means a workflow run is a tracked pid — `kill
+  -KILL <pid>` already terminates it. (This is the substrate SP2's pause/stop builds on.)
+- **`tool-adapter.ts`** (`core/`) bridges legacy tool defs into the pi-compatible tool
+  layer — the seam for wiring the `StructuredOutput` tool.
+
+The cross-check also confirmed there is **no existing `workflow` feature** to collide with.
+
+## 5. Architecture (reuse the realm runner)
+
+The workflow script runs inside the **existing realm runner** (`runInRealm`) — the same
+dual-mode (worker / sandbox-iframe), hard-killable, RPC-proxied sandbox that already runs
+`node`/`.jsh`/`python`. We add a **workflow capability**: the realm bootstrap injects the
+workflow globals and **suppresses** `fs`/`exec`/`fetch`/`require`/`skill`/`http` (the CC
+contract forbids fs/shell from the script), and `realm-host` gains an **`agent` RPC
+namespace** that bridges to `AgentBridge`. This is dual-mode by construction (the realm
+factory already picks worker-vs-iframe per float) and inherits `ps`/`kill`/SIGKILL for free.
 
 ### Units
 
-| Unit | Realm | Single responsibility |
+| Unit | Where | Single responsibility |
 | --- | --- | --- |
-| `WorkflowSandbox` | DOM (page in CLI / offscreen in ext) | Owns the sandbox-iframe lifecycle; relays postMessage. **Pure transport — no logic.** |
-| `workflow-prelude` (runs in the iframe) | iframe | Installs the determinism guard; defines `agent`/`pipeline`/`parallel`/`phase`/`log`/`budget`/`workflow` + `args`; concatenated before the user script. |
-| `WorkflowRunController` | Orchestrator realm (worker / offscreen) | The brain: semaphore + total/per-call caps, dispatch `agent()` → scoop, schema-validate, collect phase/log, resolve the final value. **Realm-agnostic logic + pluggable transport.** |
-| `ScoopAgentAdapter` | Orchestrator realm | Map one `agent()` call → a one-shot `AgentBridge` scoop (`notifyOnComplete:false`); when `schema` present, wire a `StructuredOutput` tool and treat its call as the return value; capture final text otherwise. |
-| `schema-tool` | Orchestrator realm | Build a schema-typed `StructuredOutput` tool def (via `tool-adapter.ts`); validate args; surface mismatch so the model retries; 2 nudges → `null`. |
-| `workflow` command (`run`) | shell (supplemental command) | Entry point; wires controller ↔ sandbox via the float transport; prints the final value; streams `phase`/`log`. |
+| **workflow realm capability** | `kernel/realm/` (extend `js-realm-shared` bootstrap + `realm-types`) | A `kind:'workflow'` (or a caps flag on `realm-init`) that injects the workflow prelude globals and suppresses `fs`/`exec`/`fetch`/`require`/`skill`/`http`. |
+| `workflow-prelude` (runs in the realm) | bundled `?raw`, concatenated before the user script | Installs the determinism guard; defines `agent`/`parallel`/`pipeline`/`phase`/`log`/`budget`/`workflow` + `args` as shims over the realm `agent` RPC. |
+| **`agent` RPC namespace** | `kernel/realm/realm-host.ts` | `rpc.call('agent','spawn',[{prompt,opts}])` → `AgentBridge.spawn` (+ schema path). **Enforces the host-side caps**: `min(16,cores−2)` semaphore, 1000-total counter, budget ceiling. Also `('agent','progress',…)` for `phase`/`log`. |
+| `AgentBridge` schema extension | `scoops/agent-bridge.ts` + `scoop-context.ts` | When `opts.schema` is set: register a `StructuredOutput` tool on the ephemeral scoop, capture its validated args as the return value (instead of `finalText`), retry on mismatch, 2 nudges → `null`. **Net-new agent-side work.** |
+| return-value capture | `kernel/realm/` (`realm-done` payload) | Extend the realm done-protocol so the workflow's returned value (structured-clonable) comes back, not just stdout/stderr/exit. |
+| `workflow` command (`run`) | `shell/supplemental-commands/workflow-command.ts` | Entry point; parse `meta` statically; call `runInRealm({kind:'workflow', code: prelude+script, …})`; print the final value; stream `phase`/`log`. |
 
-### Realms & transport (identical envelopes, different wiring)
+### Why no new transport
 
-- **Extension:** iframe (offscreen child) ⇄ offscreen (controller + Orchestrator in-realm). **1 hop.**
-- **CLI:** iframe (page) ⇄ page (dumb relay) ⇄ worker (controller + Orchestrator) via panel-RPC. **2 hops.**
+The realm runner already owns the dual-mode boundary: `realm-factory` builds a
+`DedicatedWorker` (standalone) or a sandbox iframe (extension), and `attachRealmHost` wires
+RPC against the caller's `CommandContext` — in the kernel worker (standalone) or the
+offscreen document (extension), wherever the Orchestrator + `AgentBridge` already live. The
+earlier draft's bespoke `WorkflowSandbox` + `wf:*` postMessage envelopes + panel-RPC relay
+are **subsumed** by `realm-init`/`realm-done` + the realm RPC channel. We only add the
+`agent` RPC namespace and extend the done payload.
 
-The kernel worker has no DOM, so in CLI the iframe element lives in the page and the
-worker-side controller drives it over panel-RPC. In the extension the offscreen document
-hosts the iframe and the Orchestrator in the same realm, so no panel-RPC hop is needed.
+### Protocol (extends the existing realm protocol)
 
-### Message envelopes
-
-| Type | Direction | Payload |
+| Mechanism | Direction | Payload |
 | --- | --- | --- |
-| `wf:init` | host → iframe | `{ script, args, caps }` |
-| `wf:agent` | iframe → host | `{ callId, prompt, opts }` |
-| `wf:agent-result` | host → iframe | `{ callId, ok, value? , error? }` (a failed agent is `ok:true, value:null`, not an error) |
-| `wf:phase` | iframe → host | `{ title }` |
-| `wf:log` | iframe → host | `{ message }` |
-| `wf:done` | iframe → host | `{ value }` |
-| `wf:error` | iframe → host | `{ message, stack }` (script threw, or a thrown `budget`/cap error escaped) |
+| `realm-init` (existing, + workflow kind) | host → realm | `{ kind:'workflow', code: prelude+script, argv, env, cwd, … }`; `args` passed via `argv`/env |
+| `agent` RPC `spawn` (new namespace) | realm → host | `[{ prompt, opts }]` → resolves `string \| object \| null` (a failed/skipped agent resolves `null`, per CC) |
+| `agent` RPC `progress` (new) | realm → host | `phase(title)` / `log(message)` → streamed to stdout in SP1 (SP4 routes to the UI) |
+| `realm-done` (existing, + `result`) | realm → host | adds the workflow's returned value (structured-clonable) alongside `stdout`/`stderr`/`exitCode` |
+| `realm-error` (existing) | realm → host | script threw, or a `budget`/cap/determinism error escaped → exit 1 + message |
+| SIGKILL (existing) | host → realm | `realm.terminate()`, exit 137 — already wired; becomes `workflow stop` in SP2 |
 
 ## 6. The prelude (exact semantics)
 
-The prelude is concatenated before the user script and runs inside the iframe.
+The prelude is concatenated before the user script and runs **inside the workflow realm**
+(a `DedicatedWorker` in standalone, a sandbox iframe in the extension). Its shims call the
+realm `agent` RPC namespace over the existing realm control port.
 
 - **Determinism guard** (installed first): replace `Date.now`, `Math.random`, and the argless
-  `Date` constructor with functions that throw a clear `WorkflowDeterminismError`. (A CC
-  script never calls these; one that does should fail the same way it does in CC.)
-- `agent(prompt, opts)` → assigns a `callId`, posts `wf:agent`, returns a Promise resolved by
-  the matching `wf:agent-result`. Rejects only on a thrown host error (cap/budget); a *failed*
-  agent resolves `null`.
+  `Date` constructor — *in the user script's scope* — with functions that throw a clear
+  `WorkflowDeterminismError`. (A CC script never calls these; one that does should fail the
+  same way it does in CC. Realm-infra code captures its own references before the override.)
+- `agent(prompt, opts)` → `rpc.call('agent','spawn',[{prompt,opts}])`; returns the Promise.
+  Rejects only on a thrown host error (cap/budget); a *failed/skipped* agent resolves `null`.
 - `parallel(thunks)` → validate it's an array of functions, `length ≤ 4096` (else throw),
   run all, **catch per-thunk → `null`**, return the array (never rejects).
 - `pipeline(items, ...stages)` → validate `items.length ≤ 4096`; for **each item
   independently**, thread it through the stages (`stage(prev, originalItem, index)`); a stage
   throw drops that item to `null`; resolve when every item has finished its chain. Per-item
   streaming, no inter-stage barrier.
-- `phase(title)` → post `wf:phase`; set the module-level "current phase" used to tag agents
-  that don't pass an explicit `opts.phase`.
-- `log(message)` → post `wf:log`.
-- `budget` (SP1 stub) → `total` from `--budget` (or `null`); `spent()` returns the running
-  sum of agent token usage reported back on each `wf:agent-result`; `remaining()` =
-  `max(0, total - spent())` or `Infinity`. The hard-ceiling check lives **host-side**: the
-  controller rejects an `agent()` whose start would exceed `total`, surfaced as a thrown error.
+- `phase(title)` → `rpc.call('agent','progress',…)`; set the module-level "current phase" used
+  to tag agents that don't pass an explicit `opts.phase`.
+- `log(message)` → `rpc.call('agent','progress',…)`.
+- `budget` (SP1 stub) → object with the right shape; `total` from `--budget` (or `null`);
+  `remaining()` = `max(0, total - spent())` or `Infinity`. **Honest SP1 limitation:**
+  `AgentBridge.spawn` surfaces no token usage, so `spent()` returns `0` in SP1 and the
+  hard-ceiling never trips. Precise token accounting + ceiling enforcement land in **SP2**
+  alongside a usage observer (see §14). The shape is present so CC scripts that *read*
+  `budget` don't crash.
 - `workflow(...)` → **throws** `WorkflowNestingUnsupportedError` in SP1 (real nesting is SP5).
-- `args` → injected via `wf:init`.
+- `args` → injected via `realm-init` (`argv`/`env`).
 
 The user script's `export const meta = {...}` is parsed **statically** (pure literal) before
 execution to obtain `name`/`description`/`phases` for the command banner and progress labels.
 
 ## 7. `agent()` → scoop bridge
 
-1. `WorkflowRunController` receives `wf:agent{callId, prompt, opts}`.
-2. **Caps:** acquire a semaphore slot (`min(16, navigator.hardwareConcurrency − 2)`, lowerable
-   via `--concurrency`); reject the call if the run's total agent count would exceed **1000**
-   (`WorkflowAgentCapError`); reject if `budget.total` would be exceeded.
-3. `ScoopAgentAdapter` spawns a **one-shot scoop** via `AgentBridge`
-   (`globalThis.__slicc_agent`, `notifyOnComplete:false` so the spawn never triggers a cone turn).
-   - **No `schema`:** the scoop runs; its final assistant text is the result.
-   - **With `schema`:** register a `StructuredOutput` tool (input schema = `opts.schema`) on the
-     scoop and instruct it that calling the tool *is* how it returns. `tool-adapter.ts` validates
-     the args; on mismatch the model retries; if the scoop ends without calling it, nudge up to
-     **2×**, then resolve `null`.
-4. On settle: release the semaphore, add token usage to the budget tally, post
-   `wf:agent-result{callId, ok:true, value}` (a failed/skipped agent is `value:null`).
-5. **Isolation:** SP1 relies on SLICC's existing per-scoop sandboxed FS (which already matches
-   `isolation:'worktree'`'s intent). `opts.model` / `opts.agentType` are accepted and **logged
-   as deferred** in SP1 (the scoop uses the session model and the default workflow persona).
+The `agent` RPC namespace handler (added to `attachRealmHost`) runs in the Orchestrator realm
+and owns the bridge logic:
+
+1. Receive `('agent','spawn',[{prompt, opts}])` from the realm.
+2. **Caps (host-side, authoritative):** acquire a semaphore slot
+   (`min(16, navigator.hardwareConcurrency − 2)`, lowerable via `--concurrency`); reject if the
+   run's total agent count would exceed **1000** (`WorkflowAgentCapError`). (Budget ceiling is a
+   no-op in SP1 per §6; it activates in SP2.)
+3. Call `AgentBridge.spawn({ cwd, allowedCommands, prompt, … })` — an ephemeral
+   `notifyOnComplete:false` scoop with its own sandboxed `RestrictedFS` (no cone turn triggered).
+   - **No `schema`:** resolve `spawn().finalText`.
+   - **With `schema`:** the **extended bridge** registers a `StructuredOutput` tool (input schema
+     = `opts.schema`) on the scoop via `tool-adapter.ts` and instructs it that calling the tool
+     *is* how it returns. Args are validated; on mismatch the model retries; if the scoop ends
+     without calling it, nudge up to **2×**, then resolve `null`. **This is the main net-new
+     agent-side work** — today's `AgentBridge` has no tool-injection or structured return.
+4. On settle: release the semaphore; resolve the RPC with `string | object | null` (a
+   failed/skipped agent resolves `null`, per CC).
+5. **Isolation:** SP1 relies on SLICC's existing per-scoop sandboxed FS — which already matches
+   `isolation:'worktree'`'s intent (each `AgentBridge` scoop gets its own `/scoops/<name>/`
+   scratch + `RestrictedFS`). `opts.model` / `opts.agentType` map onto `AgentSpawnOptions.modelId`
+   and the scoop registry respectively but are **deferred in SP1** (logged, not honored beyond
+   the session model / default persona) — wiring them is SP5.
 
 ## 8. Data flow
 
 ```
-workflow run audit.js [--args <json>] [--budget N] [--concurrency K]
-   (shell · Orchestrator realm: worker[CLI] / offscreen[ext])
-   │ parse meta (static), concat prelude + script
+workflow run audit.js [--args <json>] [--budget N] [--concurrency K]   (shell)
+   │ parse meta (static); code = prelude + script
    ▼
-WorkflowRunController ──wf:init(script,args,caps)──▶ WorkflowSandbox (DOM realm)
-                                                        │ load CSP-exempt iframe
-                                                        ▼
-                                                [ iframe: prelude + user script ]
-                                                        │ agent("audit X", {schema})
-                              ◀──── wf:agent{callId} ───┤
-   acquire sem; ++total≤1000; budget check             │ (awaiting Promise)
-   ScoopAgentAdapter → AgentBridge one-shot scoop       │
-   (schema → StructuredOutput tool, validate/retry)     │
-                              ──── wf:agent-result ─────▶│ resolves agent() (or null)
-                              ◀──── wf:phase / wf:log ───┤ parallel([...]) / pipeline([...])
-                                                        │ (streamed to stdout)
-                              ◀──────── wf:done{value} ──┘
-   print final value to the caller
+runInRealm({ kind:'workflow', code, … })           (existing realm runner)
+   │ pm.spawn(pid)  ·  realmFactory → Worker[standalone] / sandbox-iframe[ext]
+   │ attachRealmHost(controlPort, ctx) + agent RPC namespace
+   ├──────────── realm-init(code, argv=args) ───────────▶ [ realm: prelude + user script ]
+   │                                                          │ agent("audit X", {schema})
+   │ ◀──────── rpc: ('agent','spawn',[{prompt,opts}]) ────────┤  (awaiting Promise)
+   │   sem(≤min(16,cores-2)); ++total≤1000                    │
+   │   AgentBridge.spawn → ephemeral scoop                    │
+   │   (schema → StructuredOutput tool, validate/retry/null)  │
+   │ ─────────── resolve: string | object | null ────────────▶│ resolves agent()
+   │ ◀──────── rpc: ('agent','progress', phase/log) ──────────┤ parallel([...]) / pipeline([...])
+   │   (streamed to stdout)                                   │ return finalReport
+   │ ◀──────────── realm-done({ result, exitCode }) ──────────┘
+   ▼
+print the returned value to the caller   ·   SIGKILL → realm.terminate() (137)  [→ SP2 stop]
 ```
 
 ## 9. Error handling (nothing swallowed)
@@ -259,8 +299,10 @@ Vitest, mirroring `packages/webapp/tests/` by subsystem; `fake-indexeddb/auto` w
   (Scope → Search → Fetch → Verify → Synthesize, using `pipeline`/`parallel`/`agent({schema})`)
   with `agent()` backed by a deterministic **mock scoop**; assert the final value and that
   concurrency stayed ≤ cap.
-- **Dual-mode:** a transport-contract test per side (CLI panel-RPC relay; extension in-realm),
-  asserting identical envelope behavior; the controller logic test is shared.
+- **Dual-mode:** dual-mode execution is inherited from the realm runner (worker standalone /
+  sandbox iframe extension), already covered by `realm-factory` tests. Add a workflow-kind smoke
+  test that the prelude globals are injected and `fs`/`exec`/`fetch` are absent; the `agent` RPC
+  + caps tests run against a worker realm and are float-agnostic.
 
 ## 12. Documentation to update (part of the change, not after)
 
@@ -278,14 +320,26 @@ save-as-command + discovery; trigger keywords; authoring skill; rich `/workflows
 `agent()` `model` routing; real `isolation`/`agentType` behavior beyond scoop defaults; **real
 nested `workflow()`**; mirroring the `.claude/` layout or plugins.
 
-## 14. Open questions (resolve during planning)
+Resolved by the 2026-06-08 cross-check:
 
-1. **JSON-Schema validator:** reuse an existing bundle dependency if present, else a minimal
-   subset validator. (Confirm what `tool-adapter.ts` / pi-ai already use for tool-arg validation.)
-2. **AgentBridge one-shot return:** confirm the exact surface by which a `notifyOnComplete:false`
-   scoop's final assistant text + token usage are obtained synchronously by the adapter.
-3. **`budget.spent()` source:** confirm scoop/pi-ai token-usage reporting is available per
-   one-shot scoop for the stub tally.
-4. **Sandbox host in CLI:** confirm the page realm can host the iframe and be driven from the
-   worker over the existing panel-RPC channel (parallel to `mount`'s gesture/`--__resolved` path).
-5. **Static `meta` parse:** confirm a safe pure-literal extraction (no eval) for the banner/labels.
+- **Sandbox host / dual-mode transport** — *resolved.* The realm runner (`realm-factory` +
+  `attachRealmHost`) already owns the worker/iframe boundary; no bespoke `WorkflowSandbox`,
+  `wf:*` envelopes, or panel-RPC relay are needed (§4.5, §5).
+- **`agent()` no-`schema` return** — *resolved.* `AgentBridge.spawn` returns `{finalText,
+  exitCode}` (`finalText` = last `send_message` or accumulated response).
+- **`budget.spent()` source** — *resolved (negatively).* `AgentBridge`/`observeScoop` surface
+  **no token usage**, so SP1's `budget.spent()` returns `0` (non-enforcing); a usage observer +
+  ceiling enforcement move to **SP2**.
+
+Still open (resolve during planning):
+
+1. **Workflow realm capability:** confirm `js-realm-shared`'s bootstrap can be gated by a
+   `kind:'workflow'` / caps flag to inject the workflow globals and **suppress**
+   `fs`/`exec`/`fetch`/`require`/`skill`/`http`, rather than forking the bootstrap.
+2. **Return-value capture:** confirm how the realm wraps user code (async fn for top-level
+   `await`/`return`?) and extend `realm-done` to carry a structured-clonable `result`.
+3. **`StructuredOutput` injection point:** confirm where in `scoop-context.ts` /
+   `orchestrator` to register a per-scoop ephemeral tool and capture its validated call args.
+4. **JSON-Schema validator:** what `tool-adapter.ts` / pi-ai already use for tool-arg
+   validation (reuse it) vs. a minimal subset validator.
+5. **Static `meta` parse:** a safe pure-literal extraction (no eval) for the banner/labels.
