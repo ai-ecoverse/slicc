@@ -631,6 +631,26 @@ describe('createAgentBridge — thinking level resolution', () => {
   });
 });
 
+describe('createAgentBridge — structured output schema', () => {
+  it('copies structuredOutputSchema into scoop.config', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
+
+    const schema = { type: 'object' };
+    await bridge.spawn({
+      ...BASE_OPTS,
+      structuredOutputSchema: schema,
+    });
+
+    expect(registerCalls).toHaveLength(1);
+    expect(registerCalls[0].config?.structuredOutputSchema).toEqual(schema);
+  });
+});
+
 describe('createAgentBridge — output capture', () => {
   it('returns the last send_message as finalText', async () => {
     const { orchestrator, scripts } = makeMockOrchestrator();

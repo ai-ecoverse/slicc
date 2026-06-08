@@ -148,6 +148,12 @@ export interface ScoopConfig {
    * scoop's shell, including through pipelines and substitution.
    */
   allowedCommands?: readonly string[];
+  /**
+   * JSON Schema to enforce on the scoop's final output. When set,
+   * a `StructuredOutput` tool is injected so the agent must return
+   * its result in the specified schema shape.
+   */
+  structuredOutputSchema?: Record<string, unknown>;
 }
 
 /** Message from any channel */

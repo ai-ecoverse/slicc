@@ -104,6 +104,12 @@ export interface AgentSpawnOptions {
    * direct programmatic / extension callers also hit this path.
    */
   thinkingLevel?: ThinkingLevel;
+  /**
+   * Optional JSON Schema to enforce on the scoop's final output. When set,
+   * a `StructuredOutput` tool is injected and the scoop must return its
+   * result in the specified schema shape.
+   */
+  structuredOutputSchema?: Record<string, unknown>;
 }
 
 /** Result returned by {@link AgentBridge.spawn}. */
@@ -306,6 +312,9 @@ export function createAgentBridge(
     }
     if (effectiveThinkingLevel !== undefined) {
       scoopConfig.thinkingLevel = effectiveThinkingLevel;
+    }
+    if (options.structuredOutputSchema !== undefined) {
+      scoopConfig.structuredOutputSchema = options.structuredOutputSchema;
     }
 
     const scoop: RegisteredScoop = {
