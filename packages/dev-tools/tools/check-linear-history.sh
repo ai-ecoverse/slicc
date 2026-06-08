@@ -43,7 +43,11 @@ if [[ -n "$MERGES" ]]; then
   done <<<"$MERGES"
   echo "" >&2
   echo "The merge queue requires a linear history. Rebase your branch onto" >&2
-  echo "$BASE (git rebase) instead of merging it in, then force-push." >&2
+  echo "$BASE instead of merging it in, then force-push:" >&2
+  echo "" >&2
+  echo "  git fetch origin" >&2
+  echo "  git rebase $BASE" >&2
+  echo "  git push --force-with-lease" >&2
   exit 1
 fi
 
