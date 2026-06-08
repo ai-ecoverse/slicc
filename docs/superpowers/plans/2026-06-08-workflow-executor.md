@@ -10,6 +10,17 @@
 
 **Spec:** `docs/superpowers/specs/2026-06-08-workflow-executor-design.md`. Read it before starting.
 
+> **⚠ Corrections from the 2026-06-08 codex review — apply throughout (override the code blocks below where they conflict):**
+> 1. **Suppression (Task 2):** the realm injects many globals — null the **full** set after capturing `exec.spawn` and taking `cwd` from `__WF.cwd` (not `process`): `exec = fs = fetch = require = process = module = exports = skill = http = browser = usb = serial = hid = cli = c = time = fmt = pool = undefined;` (`skill`/`http` otherwise re-expose FS/shell/fetch).
+> 2. **Determinism guard (Task 2):** broaden beyond `Date`/`Math.random` to also shadow `crypto`, `performance.now`, timers (`setTimeout`/`setInterval`/`queueMicrotask`), and `globalThis`. Document the residual soft-isolation holes (`globalThis.*`, dynamic `import()`, pre-loaded `require()`).
+> 3. **Fatal errors (Task 2):** `parallel`/`pipeline` must **rethrow** `WorkflowError` subclasses (cap/budget/determinism) instead of catch-to-`null`.
+> 4. **Sentinel (Tasks 1–3):** use a **random per-run** sentinel token (injected via `__WF`), and parse **only** the single wrapper-emitted line bearing it (a user `console.log` must not be able to spoof the result).
+> 5. **`agent()` cwd (Task 2):** spawn scoops with a **constrained per-run prefix** (`/shared/workflow-runs/<runId>/scratch/`), not the invoking realm cwd (which is `/` in the ext panel).
+> 6. **StructuredOutput nudges (Task 7):** **2** corrective nudges (not 1) before resolving `null`, to match the spec.
+> 7. **Task 9 removed:** the panel terminal is already offscreen-backed (`RemoteTerminalView`→`TerminalSessionHost`), so no `workflow-run` chrome-message forwarding / `runRemote` seam is needed — drop it. (The `WorkflowCommandOptions.runRemote` parameter and Task 9 are obsolete.)
+> 8. **Exec tap (for SP2/SP5, not SP1):** the host-side progress/cache tap wraps **`ctx.exec`**, not `ctx.exec.spawn`.
+> 9. After `npm install`, **re-confirm** pi-agent-core exposes `afterToolCall` (Task 7) before relying on it.
+
 **Prep (once):** This worktree needs its own install before vitest/build resolve pi-ai deep imports:
 ```bash
 cd /Users/kpauls/projects/adobe/github/slicc/.claude/worktrees/workflow-executor
@@ -926,7 +937,7 @@ Expected: PASS.
       if (so?.captured) {
         return { finalText: JSON.stringify(so.value), exitCode: 0 };
       }
-      // Not called → one corrective nudge, then give up → null (prelude maps exit!=0 to null).
+      // Not called → up to TWO corrective nudges (spec parity), then give up → null (prelude maps exit!=0 to null).
       await orchestrator.sendPrompt(jid, 'You did not call StructuredOutput. Call it now with your result.', 'agent', 'agent');
       const so2 = context.getStructuredOutput?.();
       if (so2?.captured) return { finalText: JSON.stringify(so2.value), exitCode: 0 };
@@ -1053,15 +1064,20 @@ git commit -m "test(workflow): acceptance fixture — repo fan-out/verify with s
 
 ---
 
-## Task 9: Extension durability — forward terminal runs to offscreen
+## Task 9: ~~Extension durability — forward terminal runs to offscreen~~ → REMOVED (codex review)
 
-**Files:**
-- Modify: `packages/chrome-extension/src/messages.ts` (add a `workflow-run` request/response type)
-- Modify: `packages/chrome-extension/src/offscreen-bridge.ts` (handle it: run `executeJsCode` in offscreen)
-- Modify: `packages/webapp/src/shell/supplemental-commands/index.ts` (pass `runRemote` to `createWorkflowCommand` when in the side panel)
-- Test: `packages/webapp/tests/shell/supplemental-commands/workflow-command.test.ts` (add a `runRemote` path test)
+**This task is obsolete.** The extension side-panel terminal is already a `RemoteTerminalView`
+over the **offscreen** `TerminalSessionHost` (`packages/webapp/src/ui/main.ts:976`,
+`packages/chrome-extension/src/offscreen.ts`), so a terminal `workflow run` **already executes
+in offscreen** — its realm survives a side-panel close with no extra wiring. Do **not** add a
+`workflow-run` chrome message or a `runRemote` seam (remove that param from Task 3's command).
 
-The `runRemote` seam already exists on the command (Task 3). Cone-invoked runs need nothing (they execute in offscreen already); this task only covers the side-panel-terminal case.
+**Replacement step (verification only):**
+- [ ] In the extension build, run a small workflow from the **side-panel terminal**, close + reopen
+  the panel mid-run, and confirm via `ps` / logs that the offscreen realm process kept running
+  (process survival). Reading the result after reopen is SP2's job. Record the result in the PR.
+
+<details><summary>Original (obsolete) steps — do not implement</summary>
 
 - [ ] **Step 1: Write the failing test** (the command uses `runRemote` when provided)
 
@@ -1124,6 +1140,8 @@ Record the result in the PR description.
 git add packages/chrome-extension/src/messages.ts packages/chrome-extension/src/offscreen-bridge.ts packages/webapp/src/shell/supplemental-commands/index.ts packages/webapp/tests/shell/supplemental-commands/workflow-command.test.ts
 git commit -m "feat(workflow): forward side-panel runs to offscreen (survives panel close)"
 ```
+
+</details>
 
 ---
 

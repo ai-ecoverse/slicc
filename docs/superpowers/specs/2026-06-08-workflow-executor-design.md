@@ -112,10 +112,11 @@ export const meta = {
 | Sub-project | Owns | Hand-off line |
 | --- | --- | --- |
 | **SP1** (this doc) | User-space prelude over the existing `kind:'js'` realm (no fork), `agent()` via the existing `agent` command, `--schema`/`StructuredOutput`, determinism guard, in-prelude caps, `budget` **stub**, offscreen-hosted **blocking** `workflow run` | — |
-| SP2 | Background execution, IDB persistence, **resume** (deterministic call-order cache), pause/stop, approval card, full `budget` pool | SP1 runs blocking → SP2 makes it background + durable |
-| SP3 | Cone authoring skill, `workflow save` → `*.jsh`-style discovered `/<name>`, trigger keyword, `args` plumbing (SLICC-native; no `.claude/` layout) | runtime API ↔ everything-else-is-SLICC-native |
-| SP4 | `/workflows`-style progress sprinkle, task-panel line, pause/stop wired | — |
-| SP5 (optional) | Real nested `workflow()`, `agent()` `model` routing + per-phase model, `agentType` mapping, bundled `/deep-research` analog | — |
+| SP2 | Background execution (non-blocking default, `--wait`), live progress events, async result via a `workflow` lick | SP1 runs blocking → SP2 makes it background + reports results |
+| SP3 | Cone authoring skill (skill-driven trigger, no keyword), `workflow save` → single `.workflow.js` auto-discovered as a **bare command**, `args` (SLICC-native; no `.claude/` layout) | runtime API ↔ everything-else-is-SLICC-native |
+| SP4 | Progress **subscription bridge** (`observeRun`→sprinkle/dip) + a minimal manager-injected progress **dip**; rich views = opt-in workflow/skill sprinkles | consumes SP2's `observeRun` |
+| SP5 | **Resume** (best-effort: deterministic-replay + content-hash agent cache), pause/resume, restart-agent — within-session | uses SP1's determinism guard |
+| Backlog (SP6+) | Approval card + `budget`-pool enforcement; reach features (nested `workflow()`, model routing, `agentType`, `/deep-research`); cross-session persistence; realm-native isolation hardening | — |
 
 ## 4.5 Existing substrate (reused, not rebuilt)
 
@@ -167,7 +168,7 @@ see §13.)
 | workflow prelude | `shell/supplemental-commands/workflow-prelude.ts` (new) | A JS string: determinism guard (const-shadow `Date`/`Math`); capture `exec.spawn` then null `fs`/`exec`/`fetch`/`require`; define `agent`/`parallel`/`pipeline`/`phase`/`log`/`budget`/`args`/`workflow`; the concurrency semaphore + caps. |
 | script transform | inside `workflow-command.ts` | Strip `export` off `const meta`; wrap the remaining body in `const __r = await (async () => { … })();`; append `console.log(SENTINEL + JSON.stringify(__r ?? null))`. |
 | `agent --schema` extension | `shell/supplemental-commands/agent-command.ts` + `scoops/agent-bridge.ts` + `scoops/types.ts` + `scoops/scoop-context.ts` | New `--schema-b64` (and `--model` already exists) flag → `AgentSpawnOptions.structuredOutputSchema` → `ScoopConfig.structuredOutputSchema` → `ScoopContext` injects a `StructuredOutput` `ToolDefinition`, forces `toolChoice` via the `streamWithSessionId` wrapper, captures validated args via an `afterToolCall` hook, and the bridge returns the captured JSON as `finalText`. **The main net-new agent-side work.** |
-| offscreen proxy | extension wiring (a `workflow-run` message type in `chrome-extension/src/` + an offscreen handler) | When `workflow run` is invoked in the **side-panel** shell, forward the whole run to the **offscreen** document so the realm lives in the durable context (mirrors `publishAgentBridgeProxy`). Cone-invoked runs already execute in offscreen — no proxy needed. |
+| ~~offscreen proxy~~ | — | **Removed.** The panel terminal is already offscreen-backed (`RemoteTerminalView`→`TerminalSessionHost`), so terminal and cone runs both execute in offscreen with no extra wiring. |
 
 ### How `agent()` works (no new RPC)
 
@@ -182,7 +183,7 @@ async function agent(prompt, opts = {}) {
     const argv = ['agent',
       ...(opts.model ? ['--model', opts.model] : []),
       ...(opts.schema ? ['--schema-b64', b64utf8(JSON.stringify(opts.schema))] : []),
-      __cwd, '*', String(prompt)];
+      __agentCwd, '*', String(prompt)];      // see cwd note below
     const r = await __execSpawn(argv);       // captured ref to exec.spawn
     if (r.exitCode !== 0) return null;       // failed/skipped → null (CC contract)
     return opts.schema ? JSON.parse(r.stdout) : r.stdout.replace(/\n+$/, '');
@@ -190,35 +191,46 @@ async function agent(prompt, opts = {}) {
 }
 ```
 
+**`agent()` cwd (codex review):** the spawned scoop's writable prefix must NOT default to the
+invoking realm cwd — in the extension panel that's `/`, and `AgentBridge` would make `/` writable
+for every fan-out agent. Use a **constrained per-run prefix** `__agentCwd` (e.g.
+`/shared/workflow-runs/<runId>/scratch/`, supplied via `__WF`); agents still read `/workspace`
+read-only via the bridge defaults.
+
 ### Isolation & determinism (with the honest caveat)
 
-- **Determinism guard:** `Date`/`Math` are real globals (not realm params), so the prelude
-  `const Date = <throws>` and a `Math` proxy whose `random()` throws cleanly shadow them for
-  the user script's scope without touching realm infra.
-- **fs/exec/fetch/require** are realm *parameters*; the prelude captures the one it needs
-  (`const __execSpawn = exec.spawn`) then reassigns the rest to `undefined` so the user script
-  can't see them.
-- **Caveat (documented SP1 limitation):** a determined script could still reach
-  `globalThis.fetch` / `globalThis` to escape — this is "globals not injected + determinism
-  shadow," **not** a hard sandbox. Acceptable for Claude-authored POC scripts; true isolation
+- **Determinism guard:** the prelude `const`-shadows the nondeterministic globals for the user
+  scope — `Date`, `Math.random`, `crypto`, `performance.now`, timers, `globalThis` (see §6).
+- **Suppression:** capture `exec.spawn` (and take `cwd` from `__WF.cwd`), then null the **full**
+  injected param set — not just `exec/fs/fetch/require` but also `process/module/exports/skill/
+  http/browser/usb/serial/hid/cli/c/time/fmt/pool`, several of which re-expose fs/shell/fetch.
+- **Caveat (documented SP1 limitation):** this is **soft** isolation — a determined script can
+  still reach `globalThis.*` (e.g. `globalThis.fetch`, `globalThis.Date`), dynamic `import()`,
+  and pre-loaded `require()` modules. Acceptable for Claude-authored POC scripts; a hard sandbox
   is the deferred realm-native fork.
 
 ### Result channel (no protocol change)
 
-`executeJsCode` returns the realm's full `stdout`. The transform makes the script
-`console.log` a sentinel-prefixed JSON line carrying its return value; the command splits that
-line out as the result and prints the remaining stdout (the `log`/`phase`/`console` output). A
-throw in the body rejects the IIFE → the realm's existing `catch` → exit 1 + stderr, which the
-command surfaces.
+`executeJsCode` returns the realm's full `stdout`. The transform makes the script `console.log`
+a sentinel-prefixed JSON line carrying its return value; the command splits that line out as the
+result and prints the remaining stdout (the `log`/`phase`/`console` output). To prevent a user
+`console.log` from **spoofing** the result (codex review), the sentinel is a **random per-run
+token** the command generates and injects via `__WF`, and the command parses **only the single
+wrapper-emitted line** that carries it (the last line bearing the token). A throw in the body
+rejects the IIFE → the realm's existing `catch` → exit 1 + stderr, which the command surfaces.
 
-### Extension durability (offscreen hosting)
+### Extension durability (offscreen hosting) — no bespoke forwarding needed
 
-- **Cone-invoked** `workflow run` runs in the **offscreen** WasmShell already → its realm is
-  parented to the offscreen document → **survives a side-panel close**. No extra work.
-- **Terminal-invoked** (side-panel shell) `workflow run` → the command **forwards the run to
-  offscreen** via a `chrome.runtime` message (mirroring `AGENT_SPAWN_REQUEST_TYPE` /
-  `publishAgentBridgeProxy`); offscreen runs `executeJsCode` and returns `stdout`/`exitCode`.
-  Closing the panel does not kill the offscreen run.
+**Codex review (2026-06-08) corrected the earlier draft here.** The extension side-panel
+terminal is **already** a `RemoteTerminalView` over the **offscreen** `TerminalSessionHost`,
+which builds its own `WasmShellHeadless` (`packages/webapp/src/ui/main.ts:976`,
+`packages/chrome-extension/src/offscreen.ts`, `kernel/terminal-session-host.ts`). So:
+
+- **Both** cone-invoked (`bash` tool) **and** terminal-invoked `workflow run` already execute in
+  the **offscreen** shell → the realm is parented to offscreen → **survives a side-panel close**.
+- **No `workflow-run` chrome message / `publishAgentBridgeProxy`-style forwarding is needed** —
+  it would duplicate/​bypass the existing terminal/session/process plumbing. The
+  `WorkflowCommandOptions.runRemote` seam and the offscreen-proxy unit are **removed from SP1**.
 - **Standalone:** the realm is a `DedicatedWorker` in the normal context; no side-panel concept.
 - **Caveat:** SP1 is blocking — closing mid-run completes the work in offscreen but the result
   is not re-readable after reopening (reattach = SP2).
@@ -275,26 +287,38 @@ so it runs **inside the existing `kind:'js'` realm**, in the same function scope
 code. All shims are plain JS; the only outward call is `exec.spawn` (captured, then `exec`
 nulled).
 
-- **Determinism guard** (installed first): `const Date = <throws WorkflowDeterminismError>` and
-  a `Math` whose `random()` throws — `Date`/`Math` are real globals, so a prelude `const`
-  cleanly shadows them for the user script's scope without touching realm infra. (A CC script
-  never calls these; one that does fails the same way it does in CC.)
-- **Suppression:** `const __execSpawn = exec.spawn; exec = undefined; fs = undefined;
-  fetch = undefined; require = undefined;` — capture the one ref we need, then blank the rest
-  (they are realm parameters, reassignable under `"use strict"`).
+- **Determinism guard** (installed first, broadened per the 2026-06-08 codex review): shadow the
+  nondeterministic globals with `const` throwers for the user scope — `Date` (argless `new Date`
+  + `Date.now`), `Math.random`, **`crypto`** (`getRandomValues`/`randomUUID`),
+  **`performance.now`**, **timers** (`setTimeout`/`setInterval`/`queueMicrotask` used for timing),
+  and `globalThis`. Note two residual holes that make SP1 isolation/determinism **soft, not
+  hard**: (a) a script can still reach `globalThis.Date`/`globalThis.fetch`/dynamic `import()`;
+  (b) the realm **pre-loads `require()` specifiers before** the prelude nulls `require`
+  (`js-realm-shared.ts` pre-scan). True hardness needs the deferred realm-native fork; SP5 resume
+  is therefore **best-effort** (see SP5 spec).
+- **Suppression** (broadened per review): the realm injects **many** params, several re-exposing
+  fs/shell/fetch (`skill.config()` reads FS, `skill.token()` shells out, `http.client()` wraps
+  fetch). Capture only what the prelude needs (`const __execSpawn = exec.spawn`; `cwd` comes from
+  `__WF.cwd`, **not** `process`), then null the **full** injected set:
+  `exec = fs = fetch = require = process = module = exports = skill = http = browser = usb =
+  serial = hid = cli = c = time = fmt = pool = undefined;` (all are realm parameters, reassignable
+  under `"use strict"`).
 - `agent(prompt, opts)` → acquire the semaphore, `__execSpawn(['agent', …flags, __cwd, '*',
   prompt])`, release; `exitCode !== 0` → `null`; `opts.schema` → `JSON.parse(stdout)`, else
   trimmed text. (See §5 for the exact body.)
 - `parallel(thunks)` → validate it's an array of functions, `length ≤ 4096` (else throw),
-  run all, **catch per-thunk → `null`**, return the array (never rejects).
+  run all, **catch per-thunk → `null`**, return the array (never rejects). **Exception (codex
+  review):** *fatal* `WorkflowError` subclasses (`WorkflowAgentCapError`, budget-exhausted,
+  `WorkflowDeterminismError`) **rethrow** rather than being caught-to-`null`, so a real failure
+  aborts the run instead of silently becoming `null`.
 - `pipeline(items, ...stages)` → validate `items.length ≤ 4096`; for **each item
   independently**, thread it through the stages (`stage(prev, originalItem, index)`); a stage
-  throw drops that item to `null`; resolve when every item has finished its chain. Per-item
-  streaming, no inter-stage barrier.
-- `phase(title)` → `console.log(' WFPHASE ' + title)`; set the module-level "current
+  throw drops that item to `null` (same fatal-error exception as `parallel`); resolve when every
+  item has finished its chain. Per-item streaming, no inter-stage barrier.
+- `phase(title)` → `console.log('WFPHASE' + title)`; set the module-level "current
   phase" used to tag agents that don't pass an explicit `opts.phase`. (Goes to realm stdout;
   the command renders it. SP4 gives it real UI.)
-- `log(message)` → `console.log(' WFLOG ' + message)`.
+- `log(message)` → `console.log('WFLOG' + message)`.
 - `budget` (SP1 stub) → object with the right shape; `total` from `--budget` (or `null`);
   `remaining()` = `max(0, total - spent())` or `Infinity`. **Honest SP1 limitation:** the
   `agent` command / `AgentBridge` surface no token usage, so `spent()` returns `0` in SP1 and
@@ -420,12 +444,13 @@ Vitest, mirroring `packages/webapp/tests/` by subsystem; `fake-indexeddb/auto` w
   validated object (and retries/nudges/null on bad output), and that concurrency stayed ≤ cap
   while genuinely overlapping. A `/deep-research`-style script is a **separate stretch test**
   (mock-scoped, or live behind an opt-in env flag).
-- **Dual-mode (both floats required at SP1):** verify **standalone** (worker realm) **and**
-  **extension** (sandbox-iframe realm + the offscreen `AgentBridge` proxy path). The realm
-  factory already abstracts the transport, but the extension path is a hard acceptance gate —
-  add a workflow-kind smoke test (prelude globals injected, `fs`/`exec`/`fetch` absent) plus an
-  extension-float verification of an end-to-end `workflow run` (test harness where possible,
-  documented manual check otherwise).
+- **Dual-mode (both floats required at SP1):** verify **standalone** (`DedicatedWorker` realm)
+  **and** **extension** (sandbox-iframe realm; the panel terminal is already offscreen-backed via
+  `RemoteTerminalView`→`TerminalSessionHost`, so no proxy to test). The realm factory abstracts
+  the transport, but the extension path is a hard acceptance gate — add a smoke test (prelude
+  globals injected, the full suppressed set incl. `fs`/`exec`/`fetch`/`skill`/`http` absent) plus
+  an extension-float end-to-end `workflow run` check (test harness where possible, documented
+  manual check otherwise).
 
 ## 12. Documentation to update (part of the change, not after)
 
@@ -440,8 +465,10 @@ Vitest, mirroring `packages/webapp/tests/` by subsystem; `fake-indexeddb/auto` w
 
 Background execution; persistence; **resume**; pause/stop/restart-agent; approval card;
 save-as-command + discovery; trigger keywords; authoring skill; rich `/workflows` progress UI;
-`agent()` `model` routing; real `isolation`/`agentType` behavior beyond scoop defaults; **real
-nested `workflow()`**; mirroring the `.claude/` layout or plugins. **Also deferred:** the
+per-phase/`meta.phases[].model` routing (the simple `opts.model` → `agent --model` passthrough
+**is** in scope — `agent --model` already exists); real `isolation`/`agentType` behavior beyond
+scoop defaults; **real nested `workflow()`**; mirroring the `.claude/` layout or plugins.
+**Also deferred:** the
 realm-native isolation fork (`kind:'workflow'` + `sandbox.html` duplication) that would give a
 hard sandbox and a clean structured-result channel — SP1 accepts the user-space prelude's
 softer isolation (§5).
@@ -473,7 +500,12 @@ Still open (small, resolve during planning):
 1. **Static `meta` parse:** a safe pure-literal extraction (no eval) for the banner/labels.
 2. **Concurrency safety:** confirm the orchestrator runs N concurrent ephemeral `AgentBridge`
    scoops cleanly (default cap 4 bounds it); add a test.
-3. **Offscreen proxy wiring:** the terminal-invoked `workflow run` forward — confirm the
-   `chrome.runtime` message + offscreen handler analog to `AGENT_SPAWN_REQUEST_TYPE`.
-4. **`exec.spawn` contract:** confirm it returns `{stdout, stderr, exitCode}` and that long
-   prompts + the base64 schema pass cleanly as **argv entries** (no shell quoting needed).
+3. ~~Offscreen proxy wiring~~ — **resolved (removed).** The panel terminal is already
+   offscreen-backed (`RemoteTerminalView`→`TerminalSessionHost`), so terminal and cone runs both
+   execute in offscreen; no `workflow-run` chrome message is needed.
+4. **`exec.spawn` contract** — *confirmed by review:* `realm-host` lowers realm `exec.spawn(argv)`
+   → `ctx.exec(cmd,{args})` and returns `{stdout,stderr,exitCode}`; long prompts + base64 schema
+   pass as argv entries (no shell quoting). (SP2/SP5 progress/cache taps therefore wrap
+   **`ctx.exec`**, not `ctx.exec.spawn`.)
+5. **`afterToolCall` re-verify:** confirmed in the main checkout's `pi-agent-core`; re-confirm in
+   this worktree after `npm install` (the worktree had no `node_modules` at review time).

@@ -8,7 +8,7 @@
 
 ## 1. Goal
 
-Claude-Code-parity run control, **within the session**: **resume** a stopped/interrupted run by re-running its deterministic script and short-circuiting already-completed agents from a cache; **pause/resume** a live run; and **restart a single agent**. No cross-session persistence (a reload restarts fresh, exactly like quitting CC).
+Claude-Code-parity run control, **within the session**: **resume** a stopped/interrupted run by re-running its deterministic script and short-circuiting already-completed agents from a **best-effort, content-keyed cache** (codex review: see §3 — user-space determinism is soft, so resume re-runs on ambiguity rather than risking stale results); **pause/resume** a live run; and **restart a single agent**. No cross-session persistence (a reload restarts fresh, exactly like quitting CC).
 
 ## 2. Scope
 
@@ -16,31 +16,54 @@ Claude-Code-parity run control, **within the session**: **resume** a stopped/int
 
 **Out:** cross-session/IndexedDB persistence (deferred — a browser-reload-resilient variant is a separate, larger follow-up); approval card; budget token pool.
 
-## 3. The key idea: deterministic replay + a call-indexed cache
+## 3. The key idea: deterministic replay + a **best-effort content-keyed cache**
 
-SP1's determinism guard (`Date.now`/`Math.random`/argless `new Date()` throw) guarantees that **re-executing the same script initiates the same `agent()` calls, in the same order, with the same `(prompt, opts)`.** Even with `parallel`/`pipeline` concurrency, *initiation order* is deterministic (array/program order); only *completion* order varies. So we key the cache by **initiation index**, assigned synchronously at `agent()` entry.
+> **Codex review correction (2026-06-08):** a monotonic initiation index is **not** a stable
+> cache key. SP1's `pipeline` is *streaming* — a later stage's `agent()` is initiated in
+> prior-stage **completion** order, not array order; and on replay, cache hits resolve instantly
+> while misses resolve later, so the interleaving (and thus any counter) shifts between the
+> original run and the resume. We therefore key by **content**, not by call order, and accept
+> that resume is **best-effort** (the user-space determinism guard is soft — §1, SP1 §6).
 
-- **Prelude (modify):** at the top of `agent()` (before any `await`), `const __idx = __nextIdx++`; pass it on the spawn argv as `--call-idx <N>`.
-- **Run manager (modify):** maintain `cache: Map<number, result>` per run. On an `agent` spawn from the exec-tap: if `cache.has(idx)` → return the cached result immediately (no scoop). Else spawn live, then `cache.set(idx, result)`.
-- **Resume:** `workflow resume <runId>` re-invokes `executeJsCode` with the **same code** and the **existing cache** attached. Completed agents (cached) return instantly; only the unfinished ones run live. Determinism makes the indices line up across the original run and the resume.
-- **Safety check:** alongside `idx`, the spawn carries a short hash of `(prompt, opts)`; if a cached entry's hash mismatches on resume (script edited, non-determinism leaked), the manager treats it as a miss and re-runs that agent (logged), rather than returning a stale result.
+- **Cache key = a hash of the agent call's full effective context**, not just the prompt:
+  `hash(prompt, canonical(opts.schema), opts.model, opts.agentType, __agentCwd, allowedCommands)`.
+  Distinct calls get distinct keys regardless of initiation order. For **identical** calls that
+  legitimately repeat (e.g. a loop issuing the same prompt), append an **occurrence ordinal**
+  (`key#n`); the ordinal is the one residual order-dependence and is handled best-effort.
+- **Prelude (modify):** at `agent()` entry compute the content hash and pass it on the spawn
+  argv (`--call-key <hash>`); the host assigns the occurrence ordinal per key.
+- **Run manager (modify):** `cache: Map<string, result>` per run. On an `agent` spawn from the
+  exec-tap (which wraps **`ctx.exec`**, per SP2): if the key (with ordinal) is cached → return it
+  (no scoop); else spawn live and cache.
+- **Resume:** `workflow resume <runId>` re-runs the **exact stored source** (`WorkflowRunState.source`)
+  with the existing cache attached; cache hits short-circuit, misses run live.
+- **Best-effort, never stale:** on any ambiguity — ordinal collision, key not seen in the
+  original run (control-flow diverged), or edited source — the manager treats it as a **miss and
+  re-runs** that agent (logged), never returning a stale/mismatched result. Well-behaved
+  deterministic scripts resume cleanly; scripts that leak nondeterminism simply re-run more
+  agents. (Reliable, exact resume is a goal of the deferred realm-native hardening.)
 
 ## 4. Pause / resume
 
-Pause is **cooperative and lives entirely in the run manager's exec-tap** (no prelude change): while a run is `paused`, the tap **holds new `agent` spawns** (awaits a resume signal before forwarding to the real `exec.spawn`); in-flight scoops finish. `pause`/`resume` flip the flag and (on resume) release the held spawns. This needs no realm cooperation because the tap already mediates every spawn.
+Pause is **cooperative and lives entirely in the run manager's exec-tap** (no prelude change): while a run is `paused`, the tap **holds new `agent` spawns** (awaits a resume signal before forwarding to the real `ctx.exec` call — per SP2, the tap wraps `ctx.exec`); in-flight scoops finish. `pause`/`resume` flip the flag and (on resume) release the held spawns. This needs no realm cooperation because the tap already mediates every spawn.
 
+- **Honest limit (codex review):** this is a *spawn gate*, not a true paused run — CPU work, non-`agent` awaits, and `phase`/`log` keep executing until the next spawn. Good enough for "stop spending on new agents."
 - `workflow pause <runId>` → `status='paused'`; queued/holding spawns wait.
 - `workflow resume <runId>` → release holds; if the run had fully stopped (process gone), re-run with the cache (§3).
+- **Held-spawn release on kill (codex review):** if a paused run is killed, the manager must **reject** every held/pending tap promise (SIGKILL tears down the realm but does not settle host-side promises already parked in the tap).
 
 ## 5. Restart-agent
 
-`workflow restart <runId> <callIdx>` invalidates `cache[callIdx]` and re-spawns that one agent live; the new result replaces the cache entry and (if the run is still live and awaiting it) resolves the pending `agent()`; if the run already settled, restarting re-runs from that point via the resume path. Targets a failed/`null`/stuck agent.
+`workflow restart <runId> <callKey>` invalidates `cache[callKey]` and re-spawns that one agent. **Codex review — two regimes:**
+
+- **Settled run (the supported path):** restart invalidates the cache entry and re-runs via the **resume** path (§3) from that point. Clean and naturally promise-compatible.
+- **Live, already-resolved or in-flight call:** "replacing" a pending/awaited `agent()` result in place is **not supported by today's `AgentBridge`** — `spawn()` awaits `sendPrompt` and exposes **no jid / cancel handle / pending resolver** (`scoops/agent-bridge.ts`). Doing this needs **new bridge + run-manager control plumbing** (a cancel handle + a way to replace a pending tap promise). SP5 therefore scopes restart to the **settled-run resume path**; live in-place restart is **backlog** pending that plumbing.
 
 ## 6. Components (files)
 
 | Unit | File | Responsibility |
 | --- | --- | --- |
-| call-index | `shell/supplemental-commands/workflow-prelude.ts` (modify) | Assign `__nextIdx++` per `agent()` call; pass `--call-idx`/hash on the spawn argv. |
+| call-key | `shell/supplemental-commands/workflow-prelude.ts` (modify) | Compute the content hash per `agent()` call (prompt + canonical opts + cwd/model/allowed/agentType); pass `--call-key <hash>` on the spawn argv. |
 | cache + replay | `scoops/workflow-run-manager.ts` (modify) | Per-run `Map<idx,result>` + hash check; resume = re-run with the cache; tap returns cached results. |
 | pause gate | `scoops/workflow-run-manager.ts` (modify) | Exec-tap holds `agent` spawns while paused; release on resume. |
 | restart | `scoops/workflow-run-manager.ts` (modify) | Invalidate one cache entry + re-spawn. |
@@ -50,12 +73,13 @@ Pause is **cooperative and lives entirely in the run manager's exec-tap** (no pr
 ## 7. Data flow (resume)
 
 ```
-run interrupted (stop / agent crash) — cache holds completed agents' results (by call-idx)
+run interrupted (stop / agent crash) — cache holds completed agents' results (by content key)
   → workflow resume <runId>
-       → executeJsCode(sameCode, …) again   (determinism guard ⇒ same call sequence)
-       → agent() #k → exec.spawn(['agent','--call-idx',k,…])
-            → tap: cache.has(k)? → return cached result (no scoop)   : spawn live → cache.set(k)
-       → only unfinished agents run live → run completes → result delivered (SP2 path)
+       → executeJsCode(stored source, …) again   (soft-deterministic replay)
+       → agent() → exec.spawn(['agent','--call-key',hash,…]) → realm-host lowers to ctx.exec(...)
+            → tap (wraps ctx.exec): cache.has(key#n)? → return cached (no scoop)
+                                    : miss/ambiguous → spawn live → cache.set(key#n)
+       → only unfinished/ambiguous agents run live → run completes → result delivered (SP2 path)
 ```
 
 ## 8. Error handling
@@ -67,7 +91,7 @@ run interrupted (stop / agent crash) — cache holds completed agents' results (
 ## 9. Testing
 
 - **Replay cache:** a resumed run does **not** re-spawn cached agents (assert spawn count), returns identical results, and finishes the unfinished ones.
-- **Determinism alignment:** two runs of the same script initiate `agent()` calls with identical `--call-idx` sequences; a hash mismatch forces a re-run.
+- **Content-key stability:** two runs of the same deterministic script produce the same set of `--call-key` hashes regardless of completion-order interleaving; an unseen key or ordinal collision forces a live re-run (never a stale result).
 - **Pause/resume:** pausing holds new spawns (no new scoops start) while in-flight finish; resume releases them.
 - **Restart-agent:** invalidates exactly one cache entry and re-spawns only that agent.
 

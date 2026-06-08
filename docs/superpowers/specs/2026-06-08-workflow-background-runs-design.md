@@ -33,7 +33,7 @@ SP2 reuses SP1 wholesale and confirms its forward-compat seams:
 - **`ProcessManager`** — the realm is already a tracked background pid; `start` simply does not `await` it. `workflow stop` = `kill -KILL <pid>` (already wired).
 - **`executeJsCode` / realm runner** — unchanged; runs the SP1 code in the dual-mode realm.
 - **`AgentBridge` / the `agent` command** — `agent()` already routes through `exec.spawn`; SP2 taps that boundary for progress (no bridge change).
-- **`LickManager`** (`scoops/lick-manager.ts`) — the established "external event → cone turn" mechanism (webhook/cron/navigate/cherry). SP2 adds a `workflow` lick type to deliver the completion turn. `lick-formatting.ts` renders it as a chat chip.
+- **`LickManager`** (`scoops/lick-manager.ts`) — the established "external event → cone turn" mechanism (webhook/cron/navigate/cherry). **`workflow` is not a lick channel today** (codex review: absent from `LickEvent['type']`, `EXTERNAL_LICK_CHANNELS`, and the formatter — forcing it through falls back to the cron formatter). SP2 must **register it explicitly**: add `'workflow'` to `LickEvent['type']` and `EXTERNAL_LICK_CHANNELS` (`scoops/lick-formatting.ts`) and add a `formatLickEventForCone` case. Then delivery uses the same dispatch path as webhook/cron.
 - **Scoop-completion pattern** (`/shared/scoop-notifications/`) — the precedent for "write the full output to a VFS path, hand the cone a path + preview." SP2 mirrors it at `/shared/workflow-runs/`.
 - **Offscreen durability** — the run manager lives in the durable realm (offscreen/worker), exactly like the Orchestrator + `AgentBridge`; the side panel proxies to it.
 
@@ -62,7 +62,7 @@ interface WorkflowRunState {
   name: string | null;
   source: string;                 // the original user script (so SP3 `workflow save` can persist it)
   origin: 'cone' | 'terminal';
-  status: 'running' | 'done' | 'error' | 'killed';
+  status: 'running' | 'paused' | 'done' | 'error' | 'killed';  // 'paused' used by SP5
   currentPhase: string | null;
   agentsStarted: number;
   agentsDone: number;
@@ -78,13 +78,17 @@ interface WorkflowRunState {
 
 ### Non-blocking launch
 
-`start` calls `executeJsCode(code, ['workflow', filename], wrappedCtx, …)` **without awaiting**, stashes the promise, and attaches `.then`/`.catch` for completion. The realm is a background `ProcessManager` pid (captured into `runState.pid` for `kill`). `start` resolves with the `runId` as soon as the run is registered — the command returns immediately.
+`start` calls `executeJsCode(code, ['workflow', filename], wrappedCtx, …)` **without awaiting**, stashes the promise, and attaches `.then`/`.catch` for completion. The realm is a background `ProcessManager` pid. **Pid capture (codex review):** `executeJsCode` returns only `{stdout,stderr,exitCode}` and `runInRealm` creates the pid internally, so the manager captures it via a scoped **`ProcessManager.on('spawn')`** listener around the launch (or a small `executeJsCode` option that surfaces the pid) → `runState.pid`, used by `workflow stop` (`kill -KILL`). `start` resolves with the `runId` as soon as the run is registered — the command returns immediately.
+
+**Stop semantics (codex review):** `kill -KILL <pid>` terminates the **realm**, but in-flight `agent()` calls are host-side awaits (`AgentBridge.spawn`→`orchestrator.sendPrompt`) that the realm teardown does **not** cancel. SP2 stop therefore means *no new agents start; already-spawned scoops run to completion (their results are discarded)*; true mid-flight cancellation is backlog. Held/pending tap promises are rejected on stop.
+
+**Per-run exec isolation (codex review):** a backgrounded run keeps calling back into `ctx.exec` after `workflow run` returned, and `WasmShellHeadless` mutates shared `lastEnv`/`cwd` (no general reentrancy guard). The manager gives each run its **own exec context / shell instance** (or serializes access) so a background run can't corrupt the foreground shell's state.
 
 `--wait` (foreground): `start({ wait: true })` awaits completion and the command prints the result, i.e. SP1's behavior, for scripts/tests.
 
 ### Progress tap (Approach A — exec boundary, no realm changes)
 
-The manager wraps `ctx.exec.spawn` for the run's context. The realm's `agent()` and `phase`/`log` both reach the host through `exec.spawn`:
+The manager wraps **`ctx.exec`** for the run's context (codex review: `realm-host` `dispatchExec('spawn')` lowers the realm-side `exec.spawn(argv)` to **`ctx.exec(cmd, {args})`** — wrapping `ctx.exec.spawn` would observe nothing). The realm's `agent()` and `phase`/`log` both reach the host through that `ctx.exec` call:
 
 - `argv[0] === 'agent'` → `agentsStarted++`; parse `--phase`/label if present; call the real `exec.spawn`; on settle `agentsDone++`; pass the result through unchanged.
 - `argv[0] === '__wf_progress'` → `argv[1]` is `'phase'|'log'`, `argv[2]` the text → update `currentPhase` / append to `logs`; return `{stdout:'',stderr:'',exitCode:0}` **without** invoking a real command.
@@ -111,18 +115,18 @@ workflow status <runId>      # one run's state + preview/result path
 workflow list                # table of recent runs (id, name, status, agents, started)
 ```
 
-`workflow run` defaults to non-blocking → prints `▶ workflow '<name>' started (run <id>). Watch: workflow status <id>`. With `--wait` it blocks and prints the result (SP1 behavior). `origin` is derived from `getParentJid()` (cone vs terminal), reusing the `agent` command's pattern.
+`workflow run` defaults to non-blocking → prints `▶ workflow '<name>' started (run <id>). Watch: workflow status <id>`. With `--wait` it blocks and prints the result (SP1 behavior). **Origin (codex review):** `getParentJid()` returns the owning jid for *both* the cone and non-cone scoops, so "has a parent" ≠ "cone-origin". Classify `origin='cone'` only when the parent jid **is the cone's jid** (compare against the orchestrator's cone jid); otherwise `'terminal'` (no parent) or `'scoop'` (a non-cone scoop launched it — treat like terminal: no cone turn, surfaced via `workflow status`).
 
 ### Dual-mode / durability
 
-The run manager lives in the **offscreen** document (extension) / kernel worker (standalone), published via `kernel/host.ts`. The side-panel `workflow` command proxies `start`/`status`/`list` to offscreen (generalizing SP1's offscreen forwarding into a `__slicc_workflows` proxy, mirroring `publishAgentBridgeProxy`). Cone-invoked calls hit the manager directly. Because the run + manager live in offscreen, a **backgrounded run survives a side-panel close**, and — unlike SP1 — its result is **re-readable** after reopening via `workflow status` (the run manager + result file persist for the session).
+The run manager lives in the **offscreen** document (extension) / kernel worker (standalone), published via `kernel/host.ts` on `globalThis.__slicc_workflows`. **No panel→offscreen proxy is needed (codex review):** the panel terminal is already offscreen-backed (`RemoteTerminalView`→`TerminalSessionHost`), so `workflow run`/`status`/`list` typed there already execute in offscreen and reach `__slicc_workflows` directly — as do cone-invoked calls. Because the run + manager live in offscreen, a **backgrounded run survives a side-panel close**, and its result is **re-readable** after reopening via `workflow status` (the run manager + result file persist for the session).
 
 ## 6. Components (files)
 
 | Unit | File | Responsibility |
 | --- | --- | --- |
 | `WorkflowRunManager` | `packages/webapp/src/scoops/workflow-run-manager.ts` (new) | Lifecycle: `start` (non-blocking), run-state registry, exec-tap wrapper, completion → file + lick, `getRun`/`listRuns`/`observeRun`. |
-| run-manager publish/proxy | `packages/webapp/src/scoops/workflow-run-manager.ts` + `kernel/host.ts` | `publishWorkflowRunManager` on `__slicc_workflows`; a panel-side proxy forwarding to offscreen. |
+| run-manager publish | `packages/webapp/src/scoops/workflow-run-manager.ts` + `kernel/host.ts` | `publishWorkflowRunManager` on `__slicc_workflows` (no panel proxy — the panel terminal is already offscreen-backed). |
 | `__wf_progress` command | `packages/webapp/src/shell/supplemental-commands/wf-progress-command.ts` (new) | No-op (exit 0) so the prelude's progress emit is safe in untapped contexts. |
 | prelude progress emit | `packages/webapp/src/shell/supplemental-commands/workflow-prelude.ts` (modify) | `phase`/`log` also fire `exec.spawn(['__wf_progress', kind, text])` (fire-and-forget). |
 | command | `packages/webapp/src/shell/supplemental-commands/workflow-command.ts` (modify) | Non-blocking default via the run manager; `--wait`; `status`/`list` subcommands; origin via `getParentJid`. |
@@ -135,7 +139,7 @@ workflow run wf.js            (non-blocking default)
    │ build code (SP1) ; origin = getParentJid() ? cone : terminal
    ▼
 __slicc_workflows.start({ code, name, origin, ctx })     [run manager, durable realm]
-   │ register runState(id, status:'running', pid) ; wrap ctx.exec.spawn
+   │ register runState(id, status:'running') ; capture pid via pm.on('spawn') ; wrap ctx.exec
    │ executeJsCode(code, …, wrappedCtx)   ← NOT awaited (background pid)
    └─▶ returns { runId }  ──▶ command prints "▶ started run <id>"   (cone turn ends)
         ⋮ (run continues in background)
@@ -165,7 +169,7 @@ Vitest, mirroring `packages/webapp/tests/`.
 - **Unit — prelude:** `phase`/`log` emit both the `console.log` marker **and** `exec.spawn(['__wf_progress',…])` (extend the SP1 prelude test).
 - **Unit — command:** non-blocking default returns the `runId` line immediately; `--wait` blocks and prints the result; `status`/`list` render run state; origin derived from `getParentJid`.
 - **Integration:** background a fan-out workflow (mock `agent`), poll `getRun` until `done`, assert the result file contents, that `agentsDone` advanced past 1 concurrently, and (cone-origin) that a `workflow` lick was delivered with the path + preview.
-- **Dual-mode:** the side-panel proxy forwards `start`/`status`/`list` to the offscreen manager; the manager logic is float-agnostic.
+- **Dual-mode:** in the extension, panel-terminal `workflow run`/`status`/`list` already execute in offscreen (no proxy) and reach `__slicc_workflows`; the manager logic is float-agnostic. Test the manager in a worker context + assert the offscreen path reaches it.
 
 ## 10. Documentation
 
@@ -181,6 +185,6 @@ Resume; cross-session persistence of in-flight runs; pause/resume/restart-agent;
 ## 12. Open questions (resolve during planning)
 
 1. **Lick delivery:** confirm `LickManager` can deliver a synthetic `workflow` lick that triggers a cone turn the same way `webhook`/`cron` do (it should — same dispatch path).
-2. **Exec-tap point:** confirm `realm-host` `dispatchExec('spawn')` calls `ctx.exec.spawn(argv)` so wrapping `ctx.exec.spawn` taps both `agent` and `__wf_progress` (the SP1 cross-check indicated `spawn` is handled; pin the exact call).
+2. ~~Exec-tap point~~ — **resolved (codex review):** `dispatchExec('spawn')` lowers to `ctx.exec(cmd,{args})`, so the tap wraps **`ctx.exec`** (not `ctx.exec.spawn`).
 3. **runId format + `workflow list` columns** (cosmetic).
-4. **Panel proxy generalization:** confirm the SP1 offscreen-forwarding message can carry `start`/`status`/`list` (a small `__slicc_workflows` proxy, mirroring `publishAgentBridgeProxy`).
+4. ~~Panel proxy generalization~~ — **resolved (removed):** the panel terminal is already offscreen-backed, so no `__slicc_workflows` proxy is needed.

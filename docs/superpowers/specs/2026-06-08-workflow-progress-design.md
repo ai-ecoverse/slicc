@@ -15,7 +15,7 @@ Make a running workflow's progress **visible** — a minimal inline glance out o
 **In:**
 
 - **Progress subscription bridge** — any `.shtml` (sprinkle or dip) can subscribe to a `runId` and receive live progress snapshots (`{status, currentPhase, agentsStarted, agentsDone, logs, finishedAt, preview}`) pushed as SP2's `observeRun` fires. Dual-mode (standalone page + extension offscreen→panel via the existing sprinkle sync).
-- **Minimal built-in glance** — a **lightweight inline dip** the cone emits when it launches a workflow: a small ` ```shtml ` block that subscribes to the run and renders a compact, in-place-updating view (current phase + agent counts + status). No dedicated task-panel element.
+- **Minimal built-in glance** — a **lightweight inline dip**, **injected by the run manager** when a run starts (decided 2026-06-08; not skill-dependent), that subscribes to the run and renders a compact, in-place-updating view (current phase + agent counts + status). No dedicated task-panel element.
 - **Extensibility** — a workflow or skill can ship its **own** progress sprinkle subscribing to the same stream (a richer `/workflows`-style panel, a custom dashboard, etc.).
 
 **Out:** a fixed/bundled `/workflows` tab; a task-panel UI element; pause/stop/restart **controls** (SP5 owns those; SP4 only *displays* — though a workflow's own sprinkle may add control buttons once SP5 exposes the commands).
@@ -24,19 +24,21 @@ Make a running workflow's progress **visible** — a minimal inline glance out o
 
 ### Subscription bridge
 
-SP2 exposes `observeRun(runId, handler)`. SP4 adds a **bridge** that connects that stream to the sprinkle/dip postMessage channel:
+SP2 exposes `observeRun(runId, handler)`. SP4 adds a **bridge** that connects that stream to the **existing** sprinkle/dip push mechanisms — **codex review corrected the wire shapes** (the earlier "route like sprinkle licks / a new `wf-progress` shape" was wrong: sprinkle licks go to the *cone/agent* handler, not a UI subscription, and `wf-progress` isn't an existing push):
 
-- panel→host: `wf-subscribe { runId }` / `wf-unsubscribe { runId }` (routed like existing sprinkle licks).
-- host→panel: `wf-progress { runId, state }` — an initial snapshot on subscribe, then one per `observeRun` tick (status/phase/agent counts/logs/preview), and a terminal `wf-done` when the run settles.
-- Dual-mode: standalone wires it page-side; extension routes via the existing offscreen→panel sprinkle sync (`SprinkleManager.sendToSprinkle` / the follower-sync sprinkle.update path), so progress reaches a panel sprinkle the same way sprinkle content already does.
+- **panel→host (subscribe):** route through the **sprinkle bridge op channel** (`ui/sprinkle-bridge.ts` / the offscreen `sprinkle-proxy`), **not** the lick path — a `subscribe-workflow`/`unsubscribe-workflow` op handled host-side by the bridge (so it reaches the run manager, not the cone).
+- **host→panel (push):** reuse the **real** shapes — for sprinkles, `SprinkleManager.sendToSprinkle(name, data)` → `slicc.on('update')`; for dips, the existing `slicc-*` host-push / `broadcastToDips` channel (dips already support host→panel push — the earlier "lick-only/post-stream" claim was stale).
+- **Subscription identity + cleanup (codex review):** a subscription is keyed by `{ runId, subscriberId }` (a sprinkle name or a dip instance id), **not** `runId` alone — multiple panels can watch one run. The consumer's dispose path **must** drop its `observeRun` listener (anonymous dips broadcast today, so SP4 adds explicit per-subscriber teardown to avoid leaked observers).
+- **Coalescing (codex review):** `sendToSprinkle`/the bridge have no coalescing and the tray fan-out broadcasts every update — so the bridge **throttles/coalesces** snapshots (e.g. trailing-edge per animation frame / ~250 ms) and sends `logs` as deltas, not the full array each tick.
+- **Dual-mode (corrected path):** standalone worker→page uses the **BroadcastChannel sprinkle bridge** (`scoops/sprinkle-bridge-channel.ts`); extension offscreen→panel uses the **`sprinkle-proxy`** + side-panel op handler. (The tray `sprinkle.update` path is *remote follower replication*, not this local path — do not use it.)
 
-The bridge is the entire reusable surface — sprinkles and the minimal dip are just two consumers of it.
+The bridge is the entire reusable surface — the minimal dip and any workflow-provided sprinkle are just consumers of it.
 
 ### Minimal built-in dip
 
-When a non-blocking, cone-origin run starts, the cone's turn (guided by the SP3 skill, or auto-injected by the run manager) includes a small ` ```shtml ` progress block that calls `wf-subscribe(runId)` and renders the snapshots in place.
+When a non-blocking run starts, the **run manager injects** a small ` ```shtml ` progress dip into the chat (decided 2026-06-08 — reliable, not dependent on the model emitting it). The dip subscribes (via the sprinkle bridge op) and renders snapshots in place via the dip `slicc-*` push channel.
 
-**Honest nuance (resolve in planning):** dips today have a *minimal, lick-only, post-stream* bridge (`ui/dip.ts`) — host→dip *push* of live progress is a small extension. Two clean options: (a) extend the dip bridge with the `wf-progress` push channel; or (b) make the minimal glance a **lightweight inline sprinkle** (sprinkles already have host→panel push via `sendToSprinkle`) rendered compactly. Planning picks the lighter path; the user-facing intent is identical — a minimal, inline, live progress view, no task-panel.
+**Injection path (codex review):** a worker/offscreen→chat dip injection is needed; the precedent is the page-side `postDipReference` used by onboarding (`ui/onboarding-orchestrator.ts`). SP4 wires the run manager's launch to that path (worker/offscreen → page → chat). Dips already support host→panel push (`slicc-*`/`broadcastToDips`), so **no new inline-sprinkle primitive is invented** (the earlier "lightweight inline sprinkle" idea is dropped — `SprinkleManager.open()` makes a tab/panel, not an inline element; the inline `.shtml` primitive *is* the dip).
 
 ### Components (files)
 

@@ -33,8 +33,10 @@ A native skill package bundled via `packages/vfs-root/workspace/skills/workflows
 
 ### Discovery → bare command
 
-A new `workflow-discovery.ts` (mirroring `jsh-discovery.ts`) scans the standard roots for `*.workflow.js` and feeds the shared `ScriptCatalog` (`shell/script-catalog.ts`), which already powers `which`/command resolution for `.jsh`. Each discovered file registers a command named by its basename (minus `.workflow.js`). Invoking that command runs the file's script through the **same path as `workflow run <file>`** (build code + hand to the run manager), forwarding any trailing argument as `args`.
+A new `workflow-discovery.ts` (mirroring `jsh-discovery.ts`) scans the standard roots for `*.workflow.js` and feeds the shared `ScriptCatalog` (`shell/script-catalog.ts`), which already powers `which`/command resolution for `.jsh`. Each discovered file registers a command named by its basename (minus `.workflow.js`).
 
+- **Routing nuance (must not reuse the `.jsh` path):** a `.jsh` command runs its file *as a jsh script* via `executeJsCode`. A `.workflow.js` command must instead route to the **workflow runner** (parse `meta` → build prelude+transform → `WorkflowRunManager.start`), **not** `executeJsCode` on the raw file. So discovery registers a handler whose body is the workflow run-path. Two implementations to weigh in planning: (a) give `ScriptCatalog` a per-type handler so a discovered `.workflow.js` resolves to a workflow-runner command; or (b) the discovery synthesizes a command that simply shells `workflow run <path>` (zero catalog change, one indirection). Confirm `ScriptCatalog` can host a typed third entry (option a) vs. forking (option b).
+- Runs **non-blocking by default** (consistent with SP2's `workflow run`); `--wait` honored. A trailing JSON argument is forwarded as `args`.
 - Discovery roots (SP3): `/workspace/.workflows/` (saved) plus the existing catalog roots, so a workflow dropped anywhere reachable is runnable. (Skill-bundled workflows under `/workspace/skills/*/` can be added later if useful.)
 - Collision/precedence: built-in supplemental commands win over discovered `*.workflow.js`; among discovered files, first-found wins (catalog's existing rule), logged on shadow.
 
