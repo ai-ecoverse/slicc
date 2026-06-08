@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
+  COMPLEXITY_RULE_KEY,
+  extractExemptionGlobsFor,
   extractSizeExemptionGlobs,
   findTouchedExemptions,
   globToRegex,
+  isExemptionOverrideFor,
   isSizeExemptionOverride,
   matchesAnyGlob,
+  SIZE_RULE_KEY,
 } from './size-exemption-lib.mjs';
 
 describe('isSizeExemptionOverride', () => {
@@ -78,6 +82,98 @@ describe('extractSizeExemptionGlobs', () => {
   it('returns an empty array when no debt block exists', () => {
     expect(extractSizeExemptionGlobs({ overrides: [] })).toEqual([]);
     expect(extractSizeExemptionGlobs({})).toEqual([]);
+  });
+});
+
+describe('isExemptionOverrideFor (parameterized by rule key)', () => {
+  const sizeOnly = {
+    includes: ['packages/x.ts'],
+    linter: { rules: { complexity: { noExcessiveLinesPerFunction: 'off' } } },
+  };
+  const complexityOnly = {
+    includes: ['packages/y.ts'],
+    linter: { rules: { complexity: { noExcessiveCognitiveComplexity: 'off' } } },
+  };
+  const multiRule = {
+    includes: ['**/*.test.ts'],
+    linter: {
+      rules: {
+        complexity: {
+          noExcessiveCognitiveComplexity: 'off',
+          noExcessiveLinesPerFunction: 'off',
+        },
+      },
+    },
+  };
+
+  it('matches a complexity-only debt block for the complexity key but not the size key', () => {
+    expect(isExemptionOverrideFor(complexityOnly, COMPLEXITY_RULE_KEY)).toBe(true);
+    expect(isExemptionOverrideFor(complexityOnly, SIZE_RULE_KEY)).toBe(false);
+  });
+
+  it('matches a size-only debt block for the size key but not the complexity key', () => {
+    expect(isExemptionOverrideFor(sizeOnly, SIZE_RULE_KEY)).toBe(true);
+    expect(isExemptionOverrideFor(sizeOnly, COMPLEXITY_RULE_KEY)).toBe(false);
+  });
+
+  it('rejects a multi-rule block for either key', () => {
+    expect(isExemptionOverrideFor(multiRule, SIZE_RULE_KEY)).toBe(false);
+    expect(isExemptionOverrideFor(multiRule, COMPLEXITY_RULE_KEY)).toBe(false);
+  });
+
+  it('rejects rules at a non-off level for the requested key', () => {
+    expect(
+      isExemptionOverrideFor(
+        {
+          includes: ['packages/y.ts'],
+          linter: { rules: { complexity: { noExcessiveCognitiveComplexity: 'warn' } } },
+        },
+        COMPLEXITY_RULE_KEY
+      )
+    ).toBe(false);
+  });
+});
+
+describe('extractExemptionGlobsFor (parameterized by rule key)', () => {
+  const cfg = {
+    overrides: [
+      {
+        includes: ['**/*.test.ts'],
+        linter: { rules: { suspicious: { noExplicitAny: 'off' } } },
+      },
+      {
+        includes: ['packages/size-a.ts', 'packages/size-b.ts'],
+        linter: { rules: { complexity: { noExcessiveLinesPerFunction: 'off' } } },
+      },
+      {
+        includes: ['packages/cx-a.ts', 'packages/cx-b.ts'],
+        linter: { rules: { complexity: { noExcessiveCognitiveComplexity: 'off' } } },
+      },
+      {
+        includes: ['packages/size-b.ts', 'packages/size-c.ts'],
+        linter: { rules: { complexity: { noExcessiveLinesPerFunction: 'off' } } },
+      },
+    ],
+  };
+
+  it('returns only size-rule globs for the size key', () => {
+    expect(extractExemptionGlobsFor(cfg, SIZE_RULE_KEY)).toEqual([
+      'packages/size-a.ts',
+      'packages/size-b.ts',
+      'packages/size-c.ts',
+    ]);
+  });
+
+  it('returns only complexity-rule globs for the complexity key', () => {
+    expect(extractExemptionGlobsFor(cfg, COMPLEXITY_RULE_KEY)).toEqual([
+      'packages/cx-a.ts',
+      'packages/cx-b.ts',
+    ]);
+  });
+
+  it('returns [] when no debt block exists for the key', () => {
+    expect(extractExemptionGlobsFor({ overrides: [] }, COMPLEXITY_RULE_KEY)).toEqual([]);
+    expect(extractExemptionGlobsFor({}, COMPLEXITY_RULE_KEY)).toEqual([]);
   });
 });
 

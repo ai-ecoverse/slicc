@@ -1,10 +1,12 @@
-// Shared logic for the PR-level "boy-scout" size-exemption gate.
+// Shared logic for the PR-level "boy-scout" debt-list exemption gates.
 //
-// The function-size cap (`complexity.noExcessiveLinesPerFunction`) is set in
-// `biome.json`; the same file lists current offenders in a dedicated
-// `overrides` block that disables ONLY that rule. That block is the debt list:
-// it can never grow, and any PR that touches a file still on the list must
-// bring its functions under the cap and remove the entry in the same PR.
+// Biome's `complexity` group hosts two caps that each get a parallel debt
+// list in `biome.json`: function size (`noExcessiveLinesPerFunction`) and
+// cognitive complexity (`noExcessiveCognitiveComplexity`). For each rule,
+// current offenders are listed in dedicated `overrides` blocks that disable
+// ONLY that one rule — those blocks are the debt list: they can never grow,
+// and any PR that touches a file still on the list must bring it under the
+// cap and remove the entry in the same PR.
 //
 // The pure functions here (no IO) are unit-tested by the `dev-tools` vitest
 // project. The thin IO + CLI driver lives in `check-touched-size-exemptions.mjs`.
@@ -17,12 +19,13 @@ export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../
 export const biomeConfigPath = resolve(repoRoot, 'biome.json');
 
 export const SIZE_RULE_KEY = 'noExcessiveLinesPerFunction';
+export const COMPLEXITY_RULE_KEY = 'noExcessiveCognitiveComplexity';
 
-// Identify the debt-list `overrides` entries: blocks whose ONLY linter rule
-// customization is `complexity.noExcessiveLinesPerFunction: "off"`. Other
+// Identify a debt-list `overrides` entry for a given rule key: blocks whose
+// ONLY linter rule customization is `complexity.<ruleKey>: "off"`. Other
 // overrides (e.g. the test-file block, which disables many rules) are
 // general policy, not debt, and are intentionally excluded.
-export function isSizeExemptionOverride(override) {
+export function isExemptionOverrideFor(override, ruleKey) {
   const rules = override?.linter?.rules;
   if (!rules || typeof rules !== 'object') return false;
   const groups = Object.keys(rules);
@@ -30,23 +33,34 @@ export function isSizeExemptionOverride(override) {
   const complexity = rules.complexity;
   if (!complexity || typeof complexity !== 'object') return false;
   const ruleKeys = Object.keys(complexity);
-  if (ruleKeys.length !== 1 || ruleKeys[0] !== SIZE_RULE_KEY) return false;
-  return complexity[SIZE_RULE_KEY] === 'off';
+  if (ruleKeys.length !== 1 || ruleKeys[0] !== ruleKey) return false;
+  return complexity[ruleKey] === 'off';
 }
 
 // Parse a biome config object and return the deduped list of exempted globs
-// (the union of `includes` from every debt-list override block).
-export function extractSizeExemptionGlobs(biomeConfig) {
+// for the given rule key (the union of `includes` from every matching
+// debt-list override block).
+export function extractExemptionGlobsFor(biomeConfig, ruleKey) {
   const overrides = Array.isArray(biomeConfig?.overrides) ? biomeConfig.overrides : [];
   const out = new Set();
   for (const override of overrides) {
-    if (!isSizeExemptionOverride(override)) continue;
+    if (!isExemptionOverrideFor(override, ruleKey)) continue;
     const includes = Array.isArray(override.includes) ? override.includes : [];
     for (const glob of includes) {
       if (typeof glob === 'string' && glob.length > 0) out.add(glob);
     }
   }
   return [...out];
+}
+
+// Thin wrappers bound to the function-size rule key, preserving the original
+// public surface used by `check-touched-size-exemptions.mjs`.
+export function isSizeExemptionOverride(override) {
+  return isExemptionOverrideFor(override, SIZE_RULE_KEY);
+}
+
+export function extractSizeExemptionGlobs(biomeConfig) {
+  return extractExemptionGlobsFor(biomeConfig, SIZE_RULE_KEY);
 }
 
 // Convert a biome-style include glob into an anchored RegExp.
