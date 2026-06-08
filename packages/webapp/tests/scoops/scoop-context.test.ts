@@ -2028,6 +2028,43 @@ describe('ScoopContext — process manager wiring', () => {
     // prompt() path doesn't throw without a pm.
     expect((ctx as any).processManager).toBeNull();
   });
+
+  it('exits the turn process with code 1 when retryable errors exhaust all retries', async () => {
+    // Regression guard: cleanupPromptState must receive the real lastError so a
+    // failed turn records exitCode 1, not 0 (see prompt()'s hoisted lastError).
+    vi.useFakeTimers();
+    try {
+      const { ProcessManager } = await import('../../src/kernel/process-manager.js');
+      const pm = new ProcessManager();
+      const callbacks = createMockCallbacks();
+      const ctx = new ScoopContext(
+        testScoop,
+        callbacks,
+        {} as any,
+        undefined,
+        undefined,
+        undefined,
+        pm
+      );
+      // Fail every attempt with a retryable stream error so all retries exhaust.
+      injectMockAgent(ctx, async () => {
+        (ctx as any).handleAgentEvent({
+          type: 'agent_end',
+          messages: [{ role: 'assistant', content: [], errorMessage: 'Failed to fetch' }],
+        });
+      });
+
+      const promptPromise = ctx.prompt('boom');
+      await vi.advanceTimersByTimeAsync(20000); // cover all retry backoffs
+      await promptPromise;
+
+      const proc = pm.list()[0];
+      expect(proc.status).toBe('exited');
+      expect(proc.exitCode).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('ScoopContext — spinner cleanup on early-return paths (regression fix)', () => {

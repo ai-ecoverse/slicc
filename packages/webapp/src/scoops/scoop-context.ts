@@ -829,8 +829,11 @@ export class ScoopContext {
     const turnProcess = this.registerTurnProcess(text, abortController);
     this.currentTurnProcess = turnProcess;
 
+    // Hoisted so the `finally` can thread it into cleanupPromptState, which uses
+    // it to set the turn process exit code (1 on failure, 0 on clean completion).
+    let lastError: Error | null = null;
     try {
-      const lastError = await this.runAgentWithRetries(agent, text, images, abortSignal);
+      lastError = await this.runAgentWithRetries(agent, text, images, abortSignal);
 
       if (lastError && !this.disposed && !abortSignal.aborted) {
         this.handleExhaustedRetries(lastError, 3);
@@ -843,7 +846,7 @@ export class ScoopContext {
         this.setStatus('ready');
       }
     } finally {
-      this.cleanupPromptState(abortController, turnProcess, null, abortSignal);
+      this.cleanupPromptState(abortController, turnProcess, lastError, abortSignal);
     }
   }
 

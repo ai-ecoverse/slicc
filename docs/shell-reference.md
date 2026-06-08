@@ -173,7 +173,7 @@ workflow run --script '<inline js>' [...]
 
 ### Meta block (required)
 
-Every workflow must start with a pure-literal `meta` export:
+Every workflow must define a pure-literal `meta` object with a `name` (conventionally `export const meta` at the top — the parser locates it anywhere in the file and `name` is the only required field):
 
 ```js
 export const meta = {
@@ -217,9 +217,9 @@ Each `agent(prompt, opts)` call:
 
 1. Acquires a concurrency slot (defaults to 4, waits if full)
 2. Spawns an ephemeral scoop via the `agent` shell command
-3. Read scope: `/workspace/` + a per-run scratch cwd (`/shared/workflow-runs/<runId>/scratch/`)
-4. Write scope: the per-run scratch cwd only
-5. With `schema`: injects `StructuredOutput` tool, instructs the scoop to call it, captures validated args, issues up to 2 nudges on mismatch, returns the object JSON-parsed
+3. Read scope: `/workspace/` (read-only) + the per-run scratch cwd (`/shared/workflow-runs/<runId>/scratch/`)
+4. Write scope: the scratch cwd **plus the ambient `/shared/`, `/tmp/`, and the agent's own `/scoops/<name>/`** (the standard scoop sandbox — `--read-only` only narrows _read_ roots, not writable ones). Concurrent runs share `/shared/`, so a workflow agent can in principle touch another run's `/shared/workflow-runs/*`.
+5. With `schema`: injects a `StructuredOutput` tool and instructs the scoop to call it. pi validates the tool-call args against the schema (mismatch → error fed back to the model → retry); the validated args are captured and returned JSON-parsed. Up to 2 nudges if the scoop never calls the tool.
 6. Without `schema`: returns the final text (last `send_message` or accumulated response)
 7. On failure (exit ≠ 0 or no valid `StructuredOutput` call after nudges): resolves `null`
 

@@ -87,3 +87,68 @@ describe('workflow run', () => {
     expect(res.stderr).toMatch(/kaboom/);
   });
 });
+
+describe('workflow run — argument validation', () => {
+  const noop = async () => ({ stdout: '', stderr: '', exitCode: 0 });
+  const freshFs = () => VirtualFS.create({ dbName: `wf-${Math.random()}`, wipe: true });
+  const run = async (args: string[]) =>
+    createWorkflowCommand().execute(args, await ctxWith(await freshFs(), noop));
+
+  it('no args → help on stdout, exit 0', async () => {
+    const res = await run([]);
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toMatch(/usage: workflow run/);
+  });
+  it('unknown subcommand → exit 1', async () => {
+    const res = await run(['bogus']);
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toMatch(/unknown subcommand/);
+  });
+  it('--args invalid JSON → exit 1', async () => {
+    const res = await run(['run', '--args', '{bad', '/workspace/x.js']);
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toMatch(/--args must be valid JSON/);
+  });
+  it('--budget non-number → exit 1', async () => {
+    const res = await run(['run', '--budget', 'abc', '/workspace/x.js']);
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toMatch(/--budget must be a number/);
+  });
+  it('--concurrency non-number → exit 1', async () => {
+    const res = await run(['run', '--concurrency', 'abc', '/workspace/x.js']);
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toMatch(/--concurrency must be a number/);
+  });
+  it('unknown flag → exit 1', async () => {
+    const res = await run(['run', '--bogus', '/workspace/x.js']);
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toMatch(/unknown flag/);
+  });
+  it('too many positional args → exit 1', async () => {
+    const res = await run(['run', 'a.js', 'b.js']);
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toMatch(/too many arguments/);
+  });
+  it('meta without a name → exit 1', async () => {
+    const fs = await freshFs();
+    await fs.mkdir('/workspace', { recursive: true });
+    await fs.writeFile(
+      '/workspace/noname.js',
+      `export const meta = { description: 'd' }\nreturn 1`
+    );
+    const res = await createWorkflowCommand().execute(
+      ['run', '/workspace/noname.js'],
+      await ctxWith(fs, noop)
+    );
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toMatch(/must define a meta block with a name/);
+  });
+  it('--script runs an inline workflow (no file)', async () => {
+    const res = await createWorkflowCommand().execute(
+      ['run', '--script', `export const meta = { name: 's' }\nreturn 42`],
+      await ctxWith(await freshFs(), noop)
+    );
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout.trim().split('\n').pop()).toBe('42');
+  });
+});

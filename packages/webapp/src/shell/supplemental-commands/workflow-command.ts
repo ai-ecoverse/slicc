@@ -119,7 +119,7 @@ export function createWorkflowCommand(): Command {
     if (!banner.name)
       return {
         stdout: '',
-        stderr: 'workflow: script must export a meta block with a name (and description)\n',
+        stderr: 'workflow: script must define a meta block with a name (description optional)\n',
         exitCode: 1,
       };
     // runId is just the per-run scratch-dir key; a slice of a fresh random

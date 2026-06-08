@@ -55,7 +55,12 @@ async function agent(prompt, opts) {
     if (opts.schema) flags.push('--schema-b64', __b64(JSON.stringify(opts.schema)));
     const argv = ['agent'].concat(flags, ['--read-only', '/workspace/', __agentCwd, '*', String(prompt)]);
     const r = await __execSpawn(argv);
-    if (!r || r.exitCode !== 0) return null;
+    if (!r || r.exitCode !== 0) {
+      // Surface the subagent's real failure (bad model, 5xx, scoop error) before
+      // degrading to null, so parallel/pipeline collapsing it stays debuggable.
+      if (r && r.stderr) console.error('agent: subagent failed: ' + String(r.stderr).slice(0, 200));
+      return null;
+    }
     const out = String(r.stdout || '').replace(/\n+$/, '');
     if (!opts.schema) return out;
     try { return JSON.parse(out); } catch (e) { console.error('agent: schema response was not valid JSON: ' + out.slice(0, 120)); return null; }

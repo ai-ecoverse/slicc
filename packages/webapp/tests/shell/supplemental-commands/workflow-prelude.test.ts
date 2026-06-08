@@ -31,7 +31,12 @@ function run(body: string, exec: unknown, wf: unknown, out: string[] = []) {
     ...a: string[]
   ) => (...a: unknown[]) => Promise<unknown>;
   const fn = new AsyncFn(...PARAMS, `"use strict";\n${WORKFLOW_PRELUDE}\n${body}`);
-  const con = { log: (s: unknown) => out.push(String(s)) };
+  // Mirror the real realm console (js-realm-shared.ts): log + warn + error.
+  const con = {
+    log: (s: unknown) => out.push(String(s)),
+    warn: (s: unknown) => out.push(String(s)),
+    error: (s: unknown) => out.push(String(s)),
+  };
   const args = PARAMS.map((p) =>
     p === 'console' ? con : p === 'exec' ? exec : p === '__WF' ? wf : undefined
   );
@@ -71,13 +76,19 @@ describe('workflow-prelude', () => {
     expect((globalThis as any).__t).toEqual({ n: 1 });
     expect(calls[0]).toContain('--schema-b64');
   });
-  it('agent() → null on non-zero exit', async () => {
+  it('agent() → null on non-zero exit, and logs the subagent stderr breadcrumb', async () => {
+    const out: string[] = [];
     await run(
       'globalThis.__t = await agent("q");',
-      { spawn: async () => ({ stdout: '', stderr: 'x', exitCode: 1 }) },
-      WF
+      { spawn: async () => ({ stdout: '', stderr: 'boom-detail', exitCode: 1 }) },
+      WF,
+      out
     );
     expect((globalThis as any).__t).toBeNull();
+    // The real failure must be surfaced (not silently dropped) before returning null.
+    expect(out.some((l) => l.includes('agent: subagent failed') && l.includes('boom-detail'))).toBe(
+      true
+    );
   });
   it('suppression: fs/exec/fetch/require/process/skill/http nulled in user scope', async () => {
     await run(
