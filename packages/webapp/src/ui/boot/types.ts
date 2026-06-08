@@ -19,6 +19,7 @@ import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
 import type { KernelTransport } from '../../kernel/types.js';
 import type { WritableVfsClient } from '../../kernel/writable-vfs-client.js';
 import type { Layout } from '../layout.js';
+import type { PageLeaderTrayHandle } from '../page-leader-tray.js';
 
 /** Minimal logger surface used by the boot stages. */
 export interface BootStageLogger {
@@ -180,4 +181,134 @@ export interface FrozenSessionsHandle {
    * `VfsRpcHost` only starts listening at the tail of `boot()`.
    */
   attachScoopsVfs(): void;
+}
+
+/**
+ * Minimal layout surface used by `createLeaderTraySetup()` — the
+ * chat panel's `setOnLocalUserMessage` hook is the only Layout call
+ * the leader-hooks need.
+ */
+export interface TraySetupLayout {
+  panels: {
+    chat: {
+      setOnLocalUserMessage(
+        cb:
+          | ((
+              text: string,
+              messageId: string,
+              attachments?: import('../../core/attachments.js').MessageAttachment[]
+            ) => void)
+          | undefined
+      ): void;
+    };
+  };
+}
+
+/**
+ * Minimal sprinkle-manager surface used by `createLeaderTraySetup()`.
+ * Only the `setSendToSprinkleHook` setter is touched.
+ */
+export interface TraySetupSprinkleManager {
+  setSendToSprinkleHook(hook: ((name: string, data: unknown) => void) | undefined): void;
+}
+
+/**
+ * Minimal remote-CDP bridge surface used by `createLeaderTraySetup()`.
+ * Only `disposeAll()` is invoked on `clearLeaderHooks`.
+ */
+export interface TraySetupRemoteCdpBridge {
+  disposeAll(): void;
+}
+
+/**
+ * Dependencies for `createLeaderTraySetup()` — builds the
+ * `wireLeaderHooks` / `clearLeaderHooks` pair the standalone-worker
+ * orchestrator calls when a leader-tray handle is started, switched,
+ * or torn down. Extracted verbatim from `mainStandaloneWorker`
+ * (~main.ts:2812 / 2829) so behavior is unchanged.
+ */
+export interface TraySetupDeps {
+  /** Page layout — only the chat panel's local-user-message hook is used. */
+  layout: TraySetupLayout;
+  /** Sprinkle manager — only the `setSendToSprinkleHook` setter is used. */
+  sprinkleManager: TraySetupSprinkleManager;
+  /** Page-side remote-CDP bridge — `disposeAll()` runs on clear. */
+  remoteCdpBridge: TraySetupRemoteCdpBridge;
+}
+
+/**
+ * Handle returned by `createLeaderTraySetup()`. The orchestrator
+ * threads these into `startPageLeaderTray()` call sites and the
+ * `performTrayLeave` runtime helper.
+ */
+export interface TrayHandle {
+  /**
+   * Wire the leader-only hooks against the live handle. Call after
+   * `startPageLeaderTray` resolves successfully (both at boot and on
+   * `performTrayLeave` role-switch).
+   */
+  wireLeaderHooks(handle: PageLeaderTrayHandle): void;
+  /**
+   * Clear every hook `wireLeaderHooks` installed and dispose the
+   * remote-CDP bridge sessions. Called on tray leave / leader stop.
+   */
+  clearLeaderHooks(): void;
+}
+
+/**
+ * Dependencies for `setupSudoStandalone()` / `setupSudoExtension()` —
+ * thin async wrappers around the sudo broker hooks the boot path
+ * publishes. Extracted from `mainStandaloneWorker`
+ * (~main.ts:1864–1869) and `mainExtension` (~main.ts:604, 619).
+ */
+export interface SudoSetupDeps {
+  /** Logger for status messages from the install path. */
+  log: BootStageLogger;
+}
+
+/**
+ * Minimal orchestrator surface used by `runFirstRunDetection()`. The
+ * detection caller hands a `handleFirstRun()` lambda; we keep the
+ * orchestrator type internal so the boot stage can stay free of the
+ * `OnboardingOrchestrator` import graph (which pulls in dip + chat
+ * helpers).
+ */
+export interface OnboardingFirstRunHandler {
+  handleFirstRun(): void;
+}
+
+/**
+ * Dependencies for `runFirstRunDetection()` — wraps the
+ * `detectWelcomeFirstRun(...).then(...)` chain duplicated between
+ * `mainStandaloneWorker` (~main.ts:3355–3369) and `mainExtension`
+ * (~main.ts:1759–1784). Behavior is identical: the caller body
+ * just differs in *which* orchestrator + dedup ledger it routes
+ * through (the standalone vs extension ledger lives in `main.ts`).
+ */
+export interface OnboardingSetupDeps {
+  /** Page-side VirtualFS used for the `/shared/.welcomed` probe. */
+  vfs: VirtualFS;
+  /** Page-side `localStorage` — checked for an active tray-join URL. */
+  storage: Storage;
+  /**
+   * The in-memory dedup ledger. Mutated when a stale entry is
+   * cleared or a fresh first-run is recorded.
+   */
+  firedWelcomeActions: Set<string>;
+  /**
+   * Persist the dedup ledger to `localStorage` after mutation.
+   * Injected so the boot stage stays free of the page-only ledger
+   * persistence helper in `main.ts`.
+   */
+  persistFiredWelcomeActions(set: Set<string>): void;
+  /**
+   * Resolver for the onboarding orchestrator — kept lazy so the
+   * standalone vs extension orchestrators (different singletons) can
+   * be supplied without dragging the orchestrator types into this
+   * module. Invoked only after `detectWelcomeFirstRun` confirms a
+   * genuine first-run boot.
+   */
+  getOrchestrator(): OnboardingFirstRunHandler;
+  /** Logger for the warn/info trace from the detection chain. */
+  log: BootStageLogger;
 }
