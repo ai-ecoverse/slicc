@@ -173,136 +173,9 @@ export class SessionTrayDurableObject {
       return this.handleCreate(request);
     }
 
-    if (url.pathname === '/internal/preview/mint' && request.method === 'POST') {
-      const body = (await request.json()) as {
-        controllerToken: string;
-        servedRoot: string;
-        entryPath: string;
-        allowLive: boolean;
-        workerBaseUrl: string;
-      };
-      await this.loadTray();
-      if (!this.tray) {
-        return jsonResponse({ error: 'Not found', code: 'TRAY_NOT_INITIALIZED' }, 404);
-      }
-      try {
-        const result = await this.mintPreview(body);
-        return jsonResponse(result, 200);
-      } catch (err) {
-        return jsonResponse({ error: (err as Error).message }, 403);
-      }
-    }
-
-    if (url.pathname === '/internal/preview/stop' && request.method === 'POST') {
-      const body = (await request.json()) as {
-        controllerToken: string;
-        previewToken: string;
-      };
-      await this.loadTray();
-      if (!this.tray) {
-        return jsonResponse({ error: 'Not found', code: 'TRAY_NOT_INITIALIZED' }, 404);
-      }
-      if (!this.matchesToken(body.controllerToken, this.tray.controllerToken)) {
-        return jsonResponse({ error: 'Invalid controller capability' }, 403);
-      }
-      const result = await this.revokePreview(body.previewToken);
-      return jsonResponse(result, 200);
-    }
-
-    if (url.pathname === '/internal/preview/list' && request.method === 'GET') {
-      const controllerToken = request.headers.get('x-controller-token') ?? '';
-      await this.loadTray();
-      if (!this.tray) {
-        return jsonResponse({ error: 'Not found', code: 'TRAY_NOT_INITIALIZED' }, 404);
-      }
-      if (!this.matchesToken(controllerToken, this.tray.controllerToken)) {
-        return jsonResponse({ error: 'Invalid controller capability' }, 403);
-      }
-      return jsonResponse({ previews: await this.listPreviews() }, 200);
-    }
-
-    // `/internal/preview/resolve?token=<previewToken>` — unauthenticated lookup
-    // used by the worker-side host dispatcher (`preview-handler.ts`) to fetch
-    // the PreviewRecord before round-tripping with the leader. The token is
-    // itself the capability (unguessable secret); no controller bearer needed.
-    if (url.pathname === '/internal/preview/resolve' && request.method === 'GET') {
-      const token = url.searchParams.get('token') ?? '';
-      await this.loadTray();
-      if (!this.tray) {
-        return jsonResponse({ error: 'Not found', code: 'TRAY_NOT_INITIALIZED' }, 404);
-      }
-      const rec = await this.resolvePreview(token);
-      if (!rec) {
-        return jsonResponse({ error: 'Not found' }, 404);
-      }
-      return jsonResponse(rec, 200);
-    }
-
-    // `/internal/preview/fetch` — worker-side dispatcher round-trips a preview
-    // GET through the leader. Sends `preview.request` over the controller WS,
-    // waits up to 30s for `preview.response` chunks, returns the assembled
-    // bytes. 502 when no live leader; 504 on timeout; 4xx pass-through from
-    // the leader's `ok:false` responses.
-    if (url.pathname === '/internal/preview/fetch' && request.method === 'POST') {
-      await this.loadTray();
-      if (!this.tray) {
-        return jsonResponse({ error: 'Not found', code: 'TRAY_NOT_INITIALIZED' }, 404);
-      }
-      let body: { reqId: string; servedRoot: string; vfsPath: string; asText: boolean };
-      try {
-        body = (await request.json()) as {
-          reqId: string;
-          servedRoot: string;
-          vfsPath: string;
-          asText: boolean;
-        };
-      } catch {
-        return jsonResponse({ error: 'invalid body' }, 400);
-      }
-      if (!this.hasLiveLeader()) {
-        return new Response('Bad gateway: leader disconnected', { status: 502 });
-      }
-      const assembler = new PreviewAssembler();
-      this.pendingPreviews.set(body.reqId, assembler);
-      let timer: ReturnType<typeof setTimeout> | null = null;
-      try {
-        const sent = this.sendToLeader({
-          type: 'preview.request',
-          reqId: body.reqId,
-          servedRoot: body.servedRoot,
-          vfsPath: body.vfsPath,
-          asText: body.asText,
-        });
-        if (!sent) {
-          return new Response('Bad gateway: leader disconnected', { status: 502 });
-        }
-        const timeoutPromise = new Promise<AssemblerResult>((resolve) => {
-          timer = setTimeout(
-            () => resolve({ ok: false, status: 504, reason: 'leader timeout' }),
-            30_000
-          );
-        });
-        const result = await Promise.race([assembler.done, timeoutPromise]);
-        if (!result.ok) {
-          return new Response(result.reason ?? 'error', { status: result.status });
-        }
-        const responseBody =
-          result.encoding === 'base64'
-            ? Uint8Array.from(atob(result.content), (c) => c.charCodeAt(0))
-            : result.content;
-        // Deliberately NO access-control-allow-origin header — preview
-        // subdomains must not be able to fetch from each other cross-origin.
-        return new Response(responseBody, {
-          status: 200,
-          headers: {
-            'content-type': result.mime,
-            'cache-control': 'no-cache',
-          },
-        });
-      } finally {
-        if (timer) clearTimeout(timer);
-        this.pendingPreviews.delete(body.reqId);
-      }
+    if (url.pathname.startsWith('/internal/preview/')) {
+      const previewRoute = await this.handleInternalPreviewRoute(url, request);
+      if (previewRoute) return previewRoute;
     }
 
     await this.loadTray();
@@ -1561,6 +1434,149 @@ export class SessionTrayDurableObject {
 
   private isoNow(): string {
     return new Date(this.now()).toISOString();
+  }
+
+  /**
+   * Dispatch a `/internal/preview/*` request to the matching method. Extracted
+   * from `fetch()` so the dispatcher stays under the per-function lines cap.
+   * Returns `null` when no preview route matches so `fetch()` can keep falling
+   * through to the normal join/controller/webhook routes.
+   */
+  private async handleInternalPreviewRoute(url: URL, request: Request): Promise<Response | null> {
+    const pathname = url.pathname;
+    const method = request.method;
+    if (pathname === '/internal/preview/mint' && method === 'POST') {
+      const body = (await request.json()) as {
+        controllerToken: string;
+        servedRoot: string;
+        entryPath: string;
+        allowLive: boolean;
+        workerBaseUrl: string;
+      };
+      await this.loadTray();
+      if (!this.tray) {
+        return jsonResponse({ error: 'Not found', code: 'TRAY_NOT_INITIALIZED' }, 404);
+      }
+      try {
+        const result = await this.mintPreview(body);
+        return jsonResponse(result, 200);
+      } catch (err) {
+        return jsonResponse({ error: (err as Error).message }, 403);
+      }
+    }
+    if (pathname === '/internal/preview/stop' && method === 'POST') {
+      const body = (await request.json()) as {
+        controllerToken: string;
+        previewToken: string;
+      };
+      await this.loadTray();
+      if (!this.tray) {
+        return jsonResponse({ error: 'Not found', code: 'TRAY_NOT_INITIALIZED' }, 404);
+      }
+      if (!this.matchesToken(body.controllerToken, this.tray.controllerToken)) {
+        return jsonResponse({ error: 'Invalid controller capability' }, 403);
+      }
+      const result = await this.revokePreview(body.previewToken);
+      return jsonResponse(result, 200);
+    }
+    if (pathname === '/internal/preview/list' && method === 'GET') {
+      const controllerToken = request.headers.get('x-controller-token') ?? '';
+      await this.loadTray();
+      if (!this.tray) {
+        return jsonResponse({ error: 'Not found', code: 'TRAY_NOT_INITIALIZED' }, 404);
+      }
+      if (!this.matchesToken(controllerToken, this.tray.controllerToken)) {
+        return jsonResponse({ error: 'Invalid controller capability' }, 403);
+      }
+      return jsonResponse({ previews: await this.listPreviews() }, 200);
+    }
+    // `/internal/preview/resolve?token=<previewToken>` — unauthenticated lookup
+    // used by the worker-side host dispatcher (`preview-handler.ts`) to fetch
+    // the PreviewRecord before round-tripping with the leader. The token is
+    // itself the capability (unguessable secret); no controller bearer needed.
+    if (pathname === '/internal/preview/resolve' && method === 'GET') {
+      const token = url.searchParams.get('token') ?? '';
+      await this.loadTray();
+      if (!this.tray) {
+        return jsonResponse({ error: 'Not found', code: 'TRAY_NOT_INITIALIZED' }, 404);
+      }
+      const rec = await this.resolvePreview(token);
+      if (!rec) {
+        return jsonResponse({ error: 'Not found' }, 404);
+      }
+      return jsonResponse(rec, 200);
+    }
+    // `/internal/preview/fetch` — worker-side dispatcher round-trips a preview
+    // GET through the leader. Sends `preview.request` over the controller WS,
+    // waits up to 30s for `preview.response` chunks, returns the assembled
+    // bytes. 502 when no live leader; 504 on timeout; 4xx pass-through from
+    // the leader's `ok:false` responses.
+    if (pathname === '/internal/preview/fetch' && method === 'POST') {
+      return await this.handleInternalPreviewFetch(request);
+    }
+    return null;
+  }
+
+  private async handleInternalPreviewFetch(request: Request): Promise<Response> {
+    await this.loadTray();
+    if (!this.tray) {
+      return jsonResponse({ error: 'Not found', code: 'TRAY_NOT_INITIALIZED' }, 404);
+    }
+    let body: { reqId: string; servedRoot: string; vfsPath: string; asText: boolean };
+    try {
+      body = (await request.json()) as {
+        reqId: string;
+        servedRoot: string;
+        vfsPath: string;
+        asText: boolean;
+      };
+    } catch {
+      return jsonResponse({ error: 'invalid body' }, 400);
+    }
+    if (!this.hasLiveLeader()) {
+      return new Response('Bad gateway: leader disconnected', { status: 502 });
+    }
+    const assembler = new PreviewAssembler();
+    this.pendingPreviews.set(body.reqId, assembler);
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    try {
+      const sent = this.sendToLeader({
+        type: 'preview.request',
+        reqId: body.reqId,
+        servedRoot: body.servedRoot,
+        vfsPath: body.vfsPath,
+        asText: body.asText,
+      });
+      if (!sent) {
+        return new Response('Bad gateway: leader disconnected', { status: 502 });
+      }
+      const timeoutPromise = new Promise<AssemblerResult>((resolve) => {
+        timer = setTimeout(
+          () => resolve({ ok: false, status: 504, reason: 'leader timeout' }),
+          30_000
+        );
+      });
+      const result = await Promise.race([assembler.done, timeoutPromise]);
+      if (!result.ok) {
+        return new Response(result.reason ?? 'error', { status: result.status });
+      }
+      const responseBody =
+        result.encoding === 'base64'
+          ? Uint8Array.from(atob(result.content), (c) => c.charCodeAt(0))
+          : result.content;
+      // Deliberately NO access-control-allow-origin header — preview
+      // subdomains must not be able to fetch from each other cross-origin.
+      return new Response(responseBody, {
+        status: 200,
+        headers: {
+          'content-type': result.mime,
+          'cache-control': 'no-cache',
+        },
+      });
+    } finally {
+      if (timer) clearTimeout(timer);
+      this.pendingPreviews.delete(body.reqId);
+    }
   }
 
   async mintPreview(req: {
