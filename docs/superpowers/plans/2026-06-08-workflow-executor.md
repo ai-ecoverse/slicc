@@ -185,10 +185,11 @@ The prelude is injected into the realm's AsyncFunction body (globals are named p
 import { describe, expect, it } from 'vitest';
 import { WORKFLOW_PRELUDE } from '../../../src/shell/supplemental-commands/workflow-prelude.js';
 
-// Real realm param order (js-realm-shared.ts): fs, process, console, require, module, exports,
-// exec, fetch, skill, http, browser, usb, serial, hid, cli, c, time, fmt, pool, __WF.
+// Real realm params (js-realm-shared.ts) stop at `pool`. `__WF` is NOT a realm param — in the
+// real flow buildWorkflowCode prepends `const __WF = {…}`. The test appends `__WF` as a trailing
+// param purely so the runner can pass the config without prepending it. Same in-scope effect.
 const PARAMS = ['fs','process','console','require','module','exports','exec','fetch','skill','http',
-  'browser','usb','serial','hid','cli','c','time','fmt','pool','__WF'];
+  'browser','usb','serial','hid','cli','c','time','fmt','pool','__WF' /* test-only convenience */];
 function run(body: string, exec: unknown, wf: unknown, out: string[] = []) {
   const AsyncFn = Object.getPrototypeOf(async () => {}).constructor as new (...a: string[]) => (...a: unknown[]) => Promise<unknown>;
   const fn = new AsyncFn(...PARAMS, `"use strict";\n${WORKFLOW_PRELUDE}\n${body}`);
@@ -363,22 +364,28 @@ it('budget stub: spent()===0; remaining honors total', async () => {
   await run('globalThis.__b = [budget.spent(), budget.remaining()];', { spawn: async () => ({}) }, { ...WF, budget: 5000 });
   expect((globalThis as any).__b).toEqual([0, 5000]);
 });
-it('pipeline is no-barrier (item A reaches stage 2 before item B finishes stage 1)', async () => {
-  // stage1 for item index 1 never resolves until item index 0 has reached stage2:
-  const order: string[] = []; let release1: () => void; const gate1 = new Promise<void>((r) => { release1 = r; });
+it('pipeline is no-barrier (item 0 reaches stage 2 before item 1 finishes stage 1)', async () => {
+  const order: string[] = []; let release: () => void = () => {};
+  const gate = new Promise<void>((r) => { release = r; });
+  // globalThis is NOT shadowed, so the realm body can reach these test handles:
+  (globalThis as any).__gate = gate; (globalThis as any).__order = order; (globalThis as any).__release = release;
   await run(
     'globalThis.__np = await pipeline([0,1],' +
-    ' (v,_i,idx)=> idx===1 ? __g.then(()=>"s1-"+idx) : Promise.resolve("s1-"+idx),' +
-    ' (p,_i,idx)=>{ __o.push("s2-"+idx); if(idx===0) __rel(); return p; });',
-    { spawn: async () => ({}) },
-    Object.assign({ ...WF }, { /* __g/__o/__rel injected below via globals */ }),
-  ); // wire __g=gate1, __o=order, __rel=release1 as test globals on the runner before exec
-  expect(order[0]).toBe('s2-0'); // item 0 reached stage 2 while item 1 is still blocked in stage 1
+    '  (v,_i,idx)=> idx===1 ? globalThis.__gate.then(()=>"s1-"+idx) : Promise.resolve("s1-"+idx),' +
+    '  (p,_i,idx)=>{ globalThis.__order.push("s2-"+idx); if(idx===0) globalThis.__release(); return p; });',
+    { spawn: async () => ({}) }, WF);
+  expect(order[0]).toBe('s2-0');              // item 0 finished stage 2 while item 1 was still blocked in stage 1
+  expect((globalThis as any).__np).toEqual(['s1-0', 's1-1']);
 });
 ```
 (Note: the Task-2 *test* injects `__WF` as a param for convenience; in the real flow `buildWorkflowCode` prepends `const __WF = {…}` ahead of the prelude — equivalent in scope. The no-barrier test wires `__g`/`__o`/`__rel` onto the runner globals; adapt to the `run()` helper.)
 
-Run → PASS. **Commit:** `feat(workflow): user-space prelude (determinism guard, suppression, caps, fatal rethrow)`.
+- [ ] **Step 3 — hardening (apply + test live; cooperative threat model).** The flat prelude above is *trivially* bypassable: because the user body shares the prelude's lexical scope, a script could call `__execSpawn`, read the real `Date`, mutate `__total`, or patch `console.log` to forge the result. SP1's threat model is **cooperative** (the user's own Claude-authored scripts), so this is acceptable in principle — but cheap structural hardening makes the caps/determinism/result robust against the *fixed* script (closes the codex blockers for that model). Implement and verify against the running realm:
+  - **Hide privileged internals in an inner IIFE that returns only the public API.** `buildWorkflowCode` should emit roughly: define `WorkflowError` classes + `crypto`/`performance`/timer throwers + a captured `const __emit = console.log.bind(console)` in the **outer** scope; then ``const { agent, parallel, pipeline, phase, log, budget, args, workflow, Date, Math } = (function(){ <PRELUDE: captures `exec.spawn`, nulls the outer IO params, builds Date/Math proxies over locally-captured reals, defines the API> return { agent, parallel, pipeline, phase, log, budget, args, workflow, Date, Math }; })();`` then the user IIFE, then `__emit(<random literal sentinel> + JSON.stringify(__r ?? null))`. The privileged refs (`__execSpawn`, the real `Date`/`Math`, the counters) stay **inside the IIFE** → a fixed script can't name them; `Date`/`Math` reach the user as un-unwrappable Proxies. (`WorkflowError` lives in the outer scope so both the outer throwers and the prelude's `parallel`/`pipeline` rethrow check share the class.)
+  - **Result integrity:** the random sentinel is a **literal** in the `__emit(...)` line (never in `__WF`), and `__emit` is the **pre-captured** `console.log` — so user code can neither learn the token nor intercept the emission. Add a test: a body that patches `console.log` and prints `WF_RESULT_…`-looking lines cannot change the parsed result.
+  - **Residual (documented non-goal):** `globalThis.*`, `eval`, dynamic `import()` remain reachable — hard enforcement is the realm-native fork (SP6 backlog).
+
+Run → PASS. **Commit:** `feat(workflow): user-space prelude (determinism guard, suppression, caps, fatal rethrow) + IIFE-scope hardening`.
 
 ---
 
@@ -419,7 +426,7 @@ describe('workflow run', () => {
     await fs.mkdir('/workspace', { recursive: true });
     await fs.writeFile('/workspace/wf.js', `export const meta={name:'x',description:'d'}\nreturn await agent('hi')`);
     const seen: string[] = [];
-    const spawn = async (a: string[]) => { seen.push(a[a.indexOf('--read-only')+3] ?? ''); return { stdout:'ok', stderr:'', exitCode:0 }; };
+    const spawn = async (a: string[]) => { seen.push(a[a.indexOf('--read-only')+2] ?? ''); return { stdout:'ok', stderr:'', exitCode:0 }; }; // +1='/workspace/', +2=__agentCwd, +3='*'
     await createWorkflowCommand().execute(['run','/workspace/wf.js'], await ctxWith(fs, spawn));
     // the agentCwd passed to `agent` must exist on the VFS
     expect(await fs.exists(seen[0])).toBe(true);
@@ -714,7 +721,7 @@ const res = await createWorkflowCommand().execute(
   ['run', '/workspace/repo-audit.workflow.js', '--args', '{"files":["a.ts","b.ts"]}', '--concurrency', '4'],
   await ctxWith(fs, spawn));
 expect(res.exitCode).toBe(0);
-const parsed = JSON.parse(res.stdout.slice(res.stdout.lastIndexOf('{')));
+const parsed = JSON.parse(res.stdout.trim().split('\n').pop()!);  // the command prints the result as the LAST line
 expect(parsed.confirmed.every((c: any) => c.bug === 'x')).toBe(true);  // only "x" verifies real
 expect(peak.max).toBeGreaterThan(1); expect(peak.max).toBeLessThanOrEqual(4);
 ```

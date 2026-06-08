@@ -245,11 +245,22 @@ which builds its own `WasmShellHeadless` (`packages/webapp/src/ui/main.ts:976`,
 ### Caps
 
 The concurrency semaphore (**default 4**, raisable to `min(16, cores−2)`), the **1000**-total
-counter, and the **≤4096**-per-call check live **in the prelude**. This is sufficient because
-`agent()`/`parallel()`/`pipeline()` are the *only* injected spawn primitives and `exec` is
-nulled, so the user script has no other path to spawn scoops. (Host-side cap enforcement would
-require the RPC namespace we're intentionally avoiding; it is part of the deferred realm-native
-hardening.)
+counter, and the **≤4096**-per-call check live **in the prelude**.
+
+**Threat model — be honest (codex review).** These caps, the determinism guard, the global
+suppression, and the result sentinel are **cooperative-script guarantees, not a security
+boundary.** SP1 runs the user's *own* Claude-authored (or user-pasted CC) workflows — a
+*cooperative* threat model — so for well-behaved scripts the API is the only path. But because
+the script is concatenated into the **same lexical scope** as the prelude, a script that
+*deliberately* references prelude internals, reaches `globalThis.*`, uses `eval`/dynamic
+`import()`, or monkey-patches `console` can bypass any of them. SP1 raises the bar with two
+cheap, build-time hardenings (recommended, see the plan): (1) **hide the privileged internals**
+in an inner IIFE that returns only the public API (`agent`/`parallel`/…/`Date`/`Math`), so a
+fixed script can't name `__execSpawn`/the real `Date`/the counters; (2) **capture the emit
+function** (`console.log.bind`) before user code and emit the result with a **random literal
+sentinel**, so the result can't be intercepted or forged. Even so, the `globalThis`/`eval`
+residual remains — **hard enforcement against adversarial scripts is explicitly a non-goal of
+SP1** and is the job of the deferred **realm-native fork** (separate scope/realm).
 
 ### Execution model: SP1 blocking → SP2/SP4 non-blocking + live progress
 
