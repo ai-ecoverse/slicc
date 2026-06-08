@@ -1,1 +1,9 @@
+set -e
+
 npx lint-staged
+
+# Enforce CLAUDE.md size budgets when a budgeted CLAUDE.md is staged.
+# Runs once, after lint-staged formatting (race-free).
+if git diff --cached --name-only | grep -qE '^(CLAUDE\.md|packages/vfs-root/shared/CLAUDE\.md)$'; then
+  node packages/dev-tools/tools/check-doc-sizes.mjs
+fi
