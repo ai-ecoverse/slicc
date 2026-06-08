@@ -16,7 +16,7 @@
  *   Copilot code review only reads the first 4,000 characters of any
  *   instruction file and silently ignores the rest.
  */
-import { readFileSync, readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 

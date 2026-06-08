@@ -17,9 +17,13 @@ const checkScript = 'node packages/dev-tools/tools/check-doc-sizes.mjs';
 // but stashes stdout/stderr on the error), so assertions see the `ok:` lines.
 function runCheckDocSizes() {
   try {
-    return execFileSync('node', [resolve(repoRoot, 'packages/dev-tools/tools/check-doc-sizes.mjs')], {
-      encoding: 'utf8',
-    });
+    return execFileSync(
+      'node',
+      [resolve(repoRoot, 'packages/dev-tools/tools/check-doc-sizes.mjs')],
+      {
+        encoding: 'utf8',
+      }
+    );
   } catch (err) {
     return `${err.stdout ?? ''}${err.stderr ?? ''}`;
   }
