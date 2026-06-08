@@ -35,31 +35,32 @@ describe('workflow acceptance', () => {
     await fs.writeFile('/workspace/repo-audit.workflow.js', FIXTURE);
 
     const peak = { cur: 0, max: 0 };
-    // Deterministically observe concurrency without relying on event-loop timing.
-    // The pipeline issues both "Find bugs" agents together (cap 4 ≥ 2), so hold
-    // the first two spawns until both are in flight, then release — guaranteeing
-    // peak.max ≥ 2. A safety timeout prevents any deadlock if they never overlap.
-    // (Bare `await Promise.resolve()` flaked: under load the first spawn could
-    // resolve before the second was issued, leaving peak.max === 1.)
+    // Deterministically prove bounded-concurrent fan-out with NO wall-clock timing.
+    // The pipeline issues both "Find bugs" agents together (semaphore cap 4 ≥ 2) and
+    // the runtime dispatches both execs before either returns (the realm host answers
+    // exec RPCs fire-and-forget, so neither spawn is gated on the other completing).
+    // We therefore hold the first PROBE spawns until PROBE are concurrently in flight;
+    // the PROBE-th arrival releases the whole wave. This pins peak.max ≥ PROBE
+    // regardless of the realm factory (in-process vs Worker) or event-loop scheduling,
+    // and cannot deadlock because both execs are guaranteed in flight. vitest's own
+    // test timeout is the only backstop (we widen it below for starved CI runners).
+    //
+    // The previous version used `setTimeout(release, 2000)` as a safety escape; on a
+    // CPU-starved CI runner the timer fired BETWEEN the two spawns (real Worker-realm
+    // exec round-trips are macrotasks), releasing the first spawn alone → peak.max === 1.
+    // A count-only barrier removes that wall-clock dependency entirely.
     const PROBE = 2;
-    const firstWave: Array<() => void> = [];
-    let probed = false;
-    const releaseFirstWave = (): void => {
-      probed = true;
-      for (const r of firstWave.splice(0)) r();
-    };
+    let releaseWave!: () => void;
+    const waveReady = new Promise<void>((resolve) => {
+      releaseWave = resolve;
+    });
+    let arrived = 0;
     const spawn = async (a: string[]) => {
       peak.cur++;
       peak.max = Math.max(peak.max, peak.cur);
-      if (probed) {
-        await Promise.resolve();
-      } else {
-        await new Promise<void>((resolve) => {
-          firstWave.push(resolve);
-          if (firstWave.length >= PROBE) releaseFirstWave();
-          else setTimeout(releaseFirstWave, 2000);
-        });
-      }
+      const index = arrived++;
+      if (arrived >= PROBE) releaseWave(); // the PROBE-th concurrent spawn frees the wave
+      if (index < PROBE) await waveReady; // only the first wave blocks; later spawns flow
       const prompt = a[a.length - 1];
       const hasSchema = a.includes('--schema-b64');
       let stdout = '';
@@ -96,5 +97,8 @@ describe('workflow acceptance', () => {
     // Concurrency: max should be > 1 (parallel execution) but <= 4 (cap)
     expect(peak.max).toBeGreaterThan(1);
     expect(peak.max).toBeLessThanOrEqual(4);
-  });
+    // 30s timeout: the count-only barrier releases the instant both spawns are in
+    // flight, so this is just a generous backstop for a starved CI runner — never the
+    // normal path. (Default 5s could false-fail if the 2nd exec dispatch is delayed.)
+  }, 30000);
 });
