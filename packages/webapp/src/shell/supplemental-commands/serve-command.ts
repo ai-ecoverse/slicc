@@ -220,19 +220,14 @@ export function createServeCommand(browserAPI?: BrowserAPI, _vfs?: VirtualFS): C
         'serve: --project is obsolete; ignored (root-absolute paths work natively under unified preview)\n';
     }
 
-    // Resolve effective allowLive locally for the in-realm path. The
-    // panel-RPC path forwards raw intent and lets the page-side handler
-    // (which has access to leader-side state Cherry attachment etc.)
-    // compute it.
-    //
-    // --no-bridge wins over --bridge per the spec; the default is false.
-    const allowLive = parsed.bridge && !parsed.noBridge;
-
     // Two-context mint: in-realm minter (extension) → panel-RPC
-    // (standalone). Auto-enable of the tray when no leader is active
-    // is out of scope for v1; if the mint fails because there's no
-    // leader, we surface the error with a hint to enable multi-browser
-    // sync.
+    // (standalone). Both paths forward the raw --bridge / --no-bridge
+    // user intent unchanged — the mint site combines them with the
+    // Cherry-follower runtime check to compute effectiveAllowLive
+    // (Cherry-attached followers default-on; --no-bridge always wins).
+    // Auto-enable of the tray when no leader is active is out of scope
+    // for v1; if the mint fails because there's no leader, we surface
+    // the error with a hint to enable multi-browser sync.
     let result: MintPreviewResult;
     const inRealm = getPreviewMinter();
     if (inRealm) {
@@ -240,7 +235,8 @@ export function createServeCommand(browserAPI?: BrowserAPI, _vfs?: VirtualFS): C
         result = await inRealm({
           entryPath,
           servedRoot: fullDirectory,
-          allowLive,
+          bridge: parsed.bridge,
+          noBridge: parsed.noBridge,
         });
       } catch (err) {
         return {

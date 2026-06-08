@@ -25,7 +25,7 @@ import {
 } from '../../webapp/src/scoops/tray-leader.js';
 import type { LeaderSyncManagerOptions } from '../../webapp/src/scoops/tray-leader-sync.js';
 import { LeaderSyncManager } from '../../webapp/src/scoops/tray-leader-sync.js';
-import type { SprinkleSummary } from '../../webapp/src/scoops/tray-sync-protocol.js';
+import { CHERRY_RUNTIME_TAG, type SprinkleSummary } from '../../webapp/src/scoops/tray-sync-protocol.js';
 import { LeaderTrayPeerManager } from '../../webapp/src/scoops/tray-webrtc.js';
 import type { ChannelMessage } from '../../webapp/src/scoops/types.js';
 import { setCherryEmitter } from '../../webapp/src/shell/supplemental-commands/cherry-emit-command.js';
@@ -437,13 +437,18 @@ export function startExtensionLeaderTray(
     if (!session) throw new Error('No active leader tray; cannot mint preview');
     const controllerUrl = new URL(session.controllerUrl);
     const controllerToken = controllerUrl.pathname.split('/').pop() ?? '';
+    // Cherry-attached followers default --bridge:true; --no-bridge always wins.
+    const hasCherryFollower = sync
+      .getConnectedFollowers()
+      .some((f) => f.runtime === CHERRY_RUNTIME_TAG);
+    const effectiveAllowLive = !opts.noBridge && (opts.bridge || hasCherryFollower);
     const { url } = await mintPreviewViaWorker({
       workerBaseUrl: session.workerBaseUrl,
       trayId: session.trayId,
       controllerToken,
       servedRoot: opts.servedRoot,
       entryPath: opts.entryPath,
-      allowLive: opts.allowLive,
+      allowLive: effectiveAllowLive,
     });
     sync.broadcastPreviewOpen(url);
     return { url, pushed: trayPeers.getPeers().length };
@@ -561,13 +566,18 @@ export function startExtensionLeaderTray(
         if (!session) throw new Error('No active leader tray; cannot mint preview');
         const controllerUrl = new URL(session.controllerUrl);
         const controllerToken = controllerUrl.pathname.split('/').pop() ?? '';
+        // Cherry-attached followers default --bridge:true; --no-bridge always wins.
+        const hasCherryFollower = sync
+          .getConnectedFollowers()
+          .some((f) => f.runtime === CHERRY_RUNTIME_TAG);
+        const effectiveAllowLive = !req.noBridge && (req.bridge || hasCherryFollower);
         const { url } = await mintPreviewViaWorker({
           workerBaseUrl: session.workerBaseUrl,
           trayId: session.trayId,
           controllerToken,
           servedRoot: req.servedRoot,
           entryPath: req.entryPath,
-          allowLive: false,
+          allowLive: effectiveAllowLive,
         });
         sync.broadcastPreviewOpen(url);
         sendReply({

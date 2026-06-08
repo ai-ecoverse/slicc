@@ -89,7 +89,8 @@ describe('serve command (unified preview)', () => {
     expect(minter).toHaveBeenCalledWith({
       entryPath: '/workspace/app/index.html',
       servedRoot: '/workspace/app',
-      allowLive: false,
+      bridge: false,
+      noBridge: false,
     });
     expect(result.stdout).toContain('Preview URL: https://abc123.preview.sliccy.ai/index.html');
     expect(result.stdout).toContain('Pushed to 3 followers');
@@ -147,7 +148,7 @@ describe('serve command (unified preview)', () => {
     );
   });
 
-  it('--bridge passes allowLive=true to the in-realm minter', async () => {
+  it('--bridge passes bridge=true to the in-realm minter', async () => {
     const minter = vi
       .fn()
       .mockResolvedValue({ url: 'https://x.preview.sliccy.ai/i.html', pushed: 0 });
@@ -164,11 +165,12 @@ describe('serve command (unified preview)', () => {
     expect(minter).toHaveBeenCalledWith({
       entryPath: '/workspace/app/index.html',
       servedRoot: '/workspace/app',
-      allowLive: true,
+      bridge: true,
+      noBridge: false,
     });
   });
 
-  it('--no-bridge forces allowLive=false at the in-realm minter', async () => {
+  it('--no-bridge passes noBridge=true to the in-realm minter (mint site enforces --no-bridge wins)', async () => {
     const minter = vi
       .fn()
       .mockResolvedValue({ url: 'https://x.preview.sliccy.ai/i.html', pushed: 0 });
@@ -185,11 +187,12 @@ describe('serve command (unified preview)', () => {
     expect(minter).toHaveBeenCalledWith({
       entryPath: '/workspace/app/index.html',
       servedRoot: '/workspace/app',
-      allowLive: false,
+      bridge: false,
+      noBridge: true,
     });
   });
 
-  it('--bridge combined with --no-bridge: no-bridge wins (allowLive=false)', async () => {
+  it('--bridge combined with --no-bridge: both flags forwarded; mint site resolves precedence', async () => {
     const minter = vi
       .fn()
       .mockResolvedValue({ url: 'https://x.preview.sliccy.ai/i.html', pushed: 0 });
@@ -206,7 +209,8 @@ describe('serve command (unified preview)', () => {
     expect(minter).toHaveBeenCalledWith({
       entryPath: '/workspace/app/index.html',
       servedRoot: '/workspace/app',
-      allowLive: false,
+      bridge: true,
+      noBridge: true,
     });
   });
 

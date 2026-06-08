@@ -865,13 +865,11 @@ describe('startExtensionLeaderTray host-command + reset', () => {
   it('leader-tray-reset envelope triggers reset + replies with status', async () => {
     const { handle } = startWithCapture();
     sentMessages.length = 0;
-    // Find the reset listener — it's installed in the constructor flow.
-    const listener = messageListeners[messageListeners.length - 1]!;
-    listener(
-      { source: 'panel', payload: { type: 'leader-tray-reset', requestId: 'r-1' } },
-      {},
-      () => {}
-    );
+    // Multiple listeners are installed in the constructor flow (reset, preview).
+    // Fan the envelope out to all of them — chrome.runtime fires every
+    // registered listener in real life and each early-returns on mismatch.
+    const env = { source: 'panel', payload: { type: 'leader-tray-reset', requestId: 'r-1' } };
+    for (const listener of messageListeners) listener(env, {}, () => {});
     await new Promise((r) => setTimeout(r, 10));
     const reply = sentMessages.find(
       (m: any) => m?.payload?.type === 'leader-tray-reset-response'
@@ -992,11 +990,15 @@ describe('startExtensionLeaderTray teardown', () => {
       calls.push('leader');
     });
     handle.stop();
+    // Two listeners are removed (leader-tray-reset + tray-open-preview), so
+    // removeListener appears twice in the call order between leader.stop and
+    // signalLeaderMode(false).
     expect(calls).toEqual([
       'unsubAgent',
       'sync',
       'peers',
       'leader',
+      'removeListener',
       'removeListener',
       'signalLeaderMode(false)',
       'leaderBridge.detach',

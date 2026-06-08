@@ -16,7 +16,15 @@
 export interface MintPreviewOpts {
   entryPath: string;
   servedRoot: string;
-  allowLive: boolean;
+  /**
+   * `--bridge` user intent: opt in to leader-managed live updates.
+   * The mint site combines this with `noBridge` and the
+   * Cherry-follower runtime check to compute `effectiveAllowLive`.
+   * (Cherry-attached followers default-on; `--no-bridge` always wins.)
+   */
+  bridge: boolean;
+  /** `--no-bridge` user intent: force-off override. Wins over both `bridge` and Cherry-default-on. */
+  noBridge: boolean;
 }
 
 export interface MintPreviewResult {

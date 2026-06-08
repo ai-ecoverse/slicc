@@ -2766,7 +2766,7 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       // can mint a preview URL via the page-side leader's controllerToken,
       // then broadcast preview.open through the page-side LeaderSyncManager.
       // Extension uses the in-realm `setPreviewMinter` hook instead.
-      mintPreview: async ({ entryPath, servedRoot, bridge: _bridge, noBridge: _noBridge }) => {
+      mintPreview: async ({ entryPath, servedRoot, bridge, noBridge }) => {
         const sync = pageLeaderTray?.currentLeaderSync;
         if (!sync) {
           throw new Error('serve: no active leader tray; cannot mint preview');
@@ -2778,16 +2778,22 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
         }
         const controllerUrl = new URL(session.controllerUrl);
         const controllerToken = controllerUrl.pathname.split('/').pop() ?? '';
+        const { CHERRY_RUNTIME_TAG } = await import('../scoops/tray-sync-protocol.js');
         const { mintPreviewViaWorker } = await import(
           '../shell/supplemental-commands/preview-mint-client.js'
         );
+        // Cherry-attached followers default --bridge:true; --no-bridge always wins.
+        const hasCherryFollower = sync
+          .getConnectedFollowers()
+          .some((f) => f.runtime === CHERRY_RUNTIME_TAG);
+        const effectiveAllowLive = !noBridge && (bridge || hasCherryFollower);
         const { url } = await mintPreviewViaWorker({
           workerBaseUrl: session.workerBaseUrl,
           trayId: session.trayId,
           controllerToken,
           servedRoot,
           entryPath,
-          allowLive: false,
+          allowLive: effectiveAllowLive,
         });
         sync.broadcastPreviewOpen(url);
         return { url, pushed: sync.getConnectedFollowers().length };
