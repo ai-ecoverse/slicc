@@ -277,11 +277,15 @@
         const rightEye = rightEyeTemplate.cloneNode(true);
         const leftEye = leftEyeTemplate.cloneNode(true);
         applyEyeColors(rightEye, leftEye, colorMode);
+        // Error mode: remove the pupil from each eye, keep only the circle outline.
+        [rightEye, leftEye].forEach((eye) => {
+          eye.querySelectorAll('path').forEach((p) => p.remove());
+        });
         coneGroup.appendChild(rightEye);
         coneGroup.appendChild(leftEye);
 
-        // Draw the X over each eye (after the eyes so it sits on top;
-        // pupils remain visible underneath because the X is stroke-only).
+        // Draw the X over each eye (after the eyes so it sits on top of the
+        // white circle outline).
         coneGroup.appendChild(makeCross(RIGHT_EYE_C, armLength, thickness, crossColor));
         coneGroup.appendChild(makeCross(LEFT_EYE_C, armLength, thickness, crossColor));
 
