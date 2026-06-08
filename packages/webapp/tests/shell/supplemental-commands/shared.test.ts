@@ -8,6 +8,7 @@ import {
   isExtensionRuntime,
   isLikelyUrl,
   isNodeRuntime,
+  isPreviewUrl,
   isSafeServeEntry,
   joinPath,
   resolveNodePackageBaseUrl,
@@ -295,5 +296,32 @@ describe('resolvePyodideIndexURL', () => {
     } finally {
       (globalThis as { chrome?: unknown }).chrome = savedChrome;
     }
+  });
+});
+
+describe('isPreviewUrl', () => {
+  it('matches the legacy local SW path /preview/<vfs-path>', () => {
+    expect(isPreviewUrl('http://localhost:5710/preview/workspace/app/index.html')).toBe(true);
+    expect(
+      isPreviewUrl('chrome-extension://akggccfpkleihhemkkikggopnifgelbk/preview/x.html')
+    ).toBe(true);
+  });
+
+  it('matches the unified worker preview host (prod and staging)', () => {
+    expect(isPreviewUrl('https://abc.def0123.preview.sliccy.ai/')).toBe(true);
+    expect(isPreviewUrl('https://abc.def0123.preview.sliccy.ai/index.html')).toBe(true);
+    expect(isPreviewUrl('https://abc.def0123.preview.staging.sliccy.ai/x.css')).toBe(true);
+  });
+
+  it('does NOT match the SLICC app origin or arbitrary URLs', () => {
+    expect(isPreviewUrl('https://www.sliccy.ai/')).toBe(false);
+    expect(isPreviewUrl('https://sliccy.ai/cloud')).toBe(false);
+    expect(isPreviewUrl('https://example.com/preview-page')).toBe(false);
+    expect(isPreviewUrl('https://preview.sliccy.ai/')).toBe(false); // missing the token subdomain
+  });
+
+  it('returns false for malformed inputs without throwing', () => {
+    expect(isPreviewUrl('')).toBe(false);
+    expect(isPreviewUrl('not a url')).toBe(false);
   });
 });

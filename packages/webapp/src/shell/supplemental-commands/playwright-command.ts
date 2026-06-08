@@ -25,6 +25,7 @@ import {
 import { CHERRY_RUNTIME_TAG } from '../../scoops/tray-sync-protocol.js';
 import { createProxiedFetch } from '../proxied-fetch.js';
 import { normalizeHeadersInit } from '../proxy-headers.js';
+import { isPreviewUrl } from './shared.js';
 import {
   type BrowseShSkillSummary,
   fetchBrowseShCatalog,
@@ -465,7 +466,7 @@ async function resolveAppTabId(browser: BrowserAPI, state: PlaywrightState): Pro
   if (state.appTabId) return;
   const pages = await browser.listPages();
   const appOrigin = await resolveAppOrigin();
-  const appTab = pages.find((p) => p.url.startsWith(appOrigin) && !p.url.includes('/preview/'));
+  const appTab = pages.find((p) => p.url.startsWith(appOrigin) && !isPreviewUrl(p.url));
   if (appTab) state.appTabId = appTab.targetId;
 }
 
