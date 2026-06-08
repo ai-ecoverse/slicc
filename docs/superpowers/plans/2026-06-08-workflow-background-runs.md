@@ -80,9 +80,10 @@ export interface LickEvent {
 }
 ```
 
-- [ ] **Step 2: Write the failing formatter test.** Append to `packages/webapp/tests/scoops/lick-formatting.test.ts`:
+- [ ] **Step 2: Write the failing formatter test.** Append to `packages/webapp/tests/scoops/lick-formatting.test.ts`. **Note:** `lick-formatting.test.ts:2` already imports `formatLickEventForCone` — do NOT add a second import. Instead, widen the existing import to also pull in `EXTERNAL_LICK_CHANNELS` (the import block below shows the desired final shape), then append only the `it(...)` block:
 
 ```ts
+// EXISTING import at top of file — widen it, do not duplicate:
 import {
   EXTERNAL_LICK_CHANNELS,
   formatLickEventForCone,
@@ -392,11 +393,13 @@ function makeDeps(overrides: Partial<Parameters<typeof createWorkflowRunManager>
       exitCode: 0,
     })),
     makeRunId: () => 'run1',
-    sentinelFor: () => 'WF_RESULT_x',
     splitResult: (stdout: string) => ({ result: { ok: true }, log: '', hadResult: true }),
     ...overrides,
   };
 }
+
+// NOTE: `sentinel` is a required field on WorkflowStartOptions — every `mgr.start({...})`
+// call below passes `sentinel: 'WF_RESULT_x'` (shown on the first call; add it to each).
 
 describe('WorkflowRunManager', () => {
   it('start() returns a runId without awaiting completion; status running → done; observeRun fires', async () => {
@@ -411,6 +414,7 @@ describe('WorkflowRunManager', () => {
       name: 'demo',
       filename: 'wf.js',
       parentJid: undefined,
+      sentinel: 'WF_RESULT_x',
       ctx: { cwd: '/', env: new Map(), stdin: '', exec: vi.fn() } as any,
     });
     expect(runId).toBe('run1');
@@ -469,7 +473,12 @@ export interface WorkflowStartOptions {
   filename: string;
   parentJid: string | undefined;
   ctx: CommandContextLike;
-  wait?: boolean;
+  /**
+   * The result sentinel. Built ONCE by the command (Task 7) and passed into BOTH
+   * `buildWorkflowCode({ sentinel })` (the realm code) and here, so `splitResult`
+   * matches exactly what the realm emits. The manager does not invent its own.
+   */
+  sentinel: string;
 }
 
 // Minimal shell ctx shape the manager needs (subset of just-bash CommandContext).
@@ -504,7 +513,6 @@ export interface WorkflowRunManagerDeps {
   // Injectable launch — production wires executeJsCode; tests stub it.
   runRealm: (code: string, argv: string[], ctx: CommandContextLike) => Promise<ExecResultLike>;
   makeRunId: () => string;
-  sentinelFor: (runId: string) => string;
   splitResult: (
     stdout: string,
     sentinel: string
@@ -541,7 +549,7 @@ export function createWorkflowRunManager(deps: WorkflowRunManagerDeps): Workflow
 
   async function start(opts: WorkflowStartOptions): Promise<{ runId: string }> {
     const runId = deps.makeRunId();
-    const sentinel = deps.sentinelFor(runId);
+    const sentinel = opts.sentinel; // built by the command; never invented here
     const state: WorkflowRunState = {
       id: runId,
       name: opts.name,
@@ -562,56 +570,76 @@ export function createWorkflowRunManager(deps: WorkflowRunManagerDeps): Workflow
     runs.set(runId, state);
 
     // Task 5 replaces `opts.ctx` with a tapped context + adds pid capture here.
-    const launch = deps
+    // The manager is ALWAYS non-blocking: it kicks off the realm and returns the runId
+    // immediately. `--wait` is NOT handled here — the command bypasses the manager entirely
+    // for `--wait` (Task 7 Step 4) and runs the SP1 inline path, so `start` never awaits.
+    void deps
       .runRealm(opts.code, ['workflow', opts.filename], opts.ctx)
       .then((result) => finish(runId, sentinel, result))
       .catch((err) => fail(runId, err instanceof Error ? err.message : String(err)));
 
-    if (opts.wait) await launch;
     return { runId };
   }
 
   async function finish(runId: string, sentinel: string, result: ExecResultLike): Promise<void> {
-    const state = runs.get(runId);
-    if (!state) return;
     const { result: value, hadResult } = deps.splitResult(result.stdout, sentinel);
+    if (result.exitCode === 137) {
+      // SIGKILL (kill -KILL) → 'killed', not 'error' (spec §8).
+      return complete(runId, 'killed', null, result.stderr || 'killed (SIGKILL)');
+    }
     if (result.exitCode !== 0 || !hadResult) {
-      return fail(
+      return complete(
         runId,
+        'error',
+        null,
         result.stderr || (hadResult ? `exit ${result.exitCode}` : 'script produced no result')
       );
     }
-    const resultPath = `${RUNS_DIR}/${runId}.json`;
-    await deps.sharedFs.mkdir(RUNS_DIR, { recursive: true });
-    await deps.sharedFs.writeFile(
-      resultPath,
-      JSON.stringify(
-        {
-          name: state.name,
-          status: 'done',
-          result: value,
-          logs: state.logs,
-          startedAt: state.startedAt,
-          finishedAt: new Date().toISOString(),
-        },
-        null,
-        2
-      )
-    );
-    state.status = 'done';
-    state.finishedAt = new Date().toISOString();
-    state.resultPath = resultPath;
-    state.preview = previewOf(value);
-    notify(runId);
-    deliver(state);
+    return complete(runId, 'done', value, null);
   }
 
-  function fail(runId: string, error: string): void {
+  // Thrown launch error (realm crash) → error.
+  function fail(runId: string, error: string): Promise<void> {
+    return complete(runId, 'error', null, error);
+  }
+
+  // Single completion path: writes the run file for success AND failure (spec §8
+  // requires errors captured in the file too), updates state, notifies, delivers.
+  async function complete(
+    runId: string,
+    status: 'done' | 'error' | 'killed',
+    value: unknown,
+    error: string | null
+  ): Promise<void> {
     const state = runs.get(runId);
     if (!state) return;
-    state.status = 'error';
+    const resultPath = `${RUNS_DIR}/${runId}.json`;
+    try {
+      await deps.sharedFs.mkdir(RUNS_DIR, { recursive: true });
+      await deps.sharedFs.writeFile(
+        resultPath,
+        JSON.stringify(
+          {
+            name: state.name,
+            status,
+            result: status === 'done' ? value : null,
+            error,
+            logs: state.logs,
+            startedAt: state.startedAt,
+            finishedAt: new Date().toISOString(),
+          },
+          null,
+          2
+        )
+      );
+      state.resultPath = resultPath;
+    } catch (e) {
+      log.warn('failed to write run result file', e); // best-effort; state still updates
+    }
+    state.status = status;
     state.error = error;
     state.finishedAt = new Date().toISOString();
+    state.preview = status === 'done' ? previewOf(value) : (error ?? '');
     notify(runId);
     deliver(state);
   }
@@ -844,8 +872,10 @@ In `start`, wrap the ctx and capture the pid:
 ```ts
 const wrappedCtx = wrapCtx(opts.ctx, runId);
 const offSpawn = deps.processManager.on('spawn', (proc) => {
-  // The realm launch is a kind:'js' process whose argv starts with 'workflow'.
-  if (state.pid === null && proc.kind === 'js' && proc.argv[0] === 'workflow') {
+  // Match by argv, NOT kind: runInRealm registers the JS execution as ProcessKind
+  // 'jsh' ('js' is the realm kind, not the process kind), and argv is the
+  // ['workflow', filename] we pass to executeJsCode — specific + reliable.
+  if (state.pid === null && proc.argv[0] === 'workflow' && proc.argv[1] === opts.filename) {
     state.pid = proc.pid;
     notify(runId);
   }
@@ -857,7 +887,7 @@ const launch = deps
   .finally(() => offSpawn());
 ```
 
-Per-run exec isolation: because each run gets its own `wrapCtx(...)` (a fresh object spreading the base ctx with a new `exec`), background runs don't share the wrapper. If the base `ctx`'s underlying shell mutates shared `cwd`/`env` state, the manager already isolates the _exec wrapper_; if a stronger guarantee is needed (shared `WasmShellHeadless.lastEnv`), serialize real-exec calls per run with a promise chain — add only if a test surfaces interleave corruption (YAGNI for SP2's mock-driven tests).
+**Per-run exec isolation (spec §5 — resolved as "safe for SP2"):** the spec calls for a background run's exec to be isolated from the foreground shell because `WasmShellHeadless` shares `cwd`/`lastEnv` (`wasm-shell-headless.ts:522,531`). For SP2 this corruption **cannot occur**: a workflow's realm exec surface is ONLY `agent` and `__wf_progress` (the prelude suppresses `fs`/`exec`/etc.), and **neither command mutates the shell's `cwd`/`lastEnv`** (no `cd`, no env-export) — they read `ctx.cwd` but don't write shell state. So reusing the launching `ctx.exec` (via `wrapCtx`) is safe. Add a guard test: interleave a backgrounded run's `agent` execs with a foreground `cd /tmp` on the same shell and assert the foreground `cwd` is unchanged. A dedicated per-run shell is deferred to whenever a future command surface (e.g. SP6 nesting) lets a workflow run state-mutating commands — leave a one-line comment in `wrapCtx` recording this invariant.
 
 - [ ] **Step 4: Run the test to confirm it passes.**
 
@@ -914,7 +944,7 @@ git commit -m "feat(workflow): exec-tap progress + realm pid capture in Workflow
 - Modify: `packages/webapp/src/shell/jsh-executor.ts` **only if** you choose to expose a pid hook — NOT required (the `pm.on('spawn')` capture from Task 5 needs no executor change).
 - Test: `packages/webapp/tests/scoops/workflow-run-manager.test.ts` (publish test)
 
-Why: the command and the cone reach the manager via `globalThis.__slicc_workflows`, exactly like `__slicc_agent`. The production `runRealm` is `executeJsCode`; the production `splitResult` is `splitSentinel`; `sentinelFor`/`makeRunId` use `makeSentinel`.
+Why: the command and the cone reach the manager via `globalThis.__slicc_workflows`, exactly like `__slicc_agent`. The production `runRealm` is `executeJsCode`; the production `splitResult` is `splitSentinel`; `makeRunId` derives a short id from `makeSentinel()` (the sentinel itself is owned by the command — see "Sentinel ownership" below).
 
 - [ ] **Step 1: Write the failing publish test.**
 
@@ -966,20 +996,68 @@ if (sharedFs) {
         filename: argv[1],
       }),
     makeRunId: () => makeSentinel().slice('WF_RESULT_'.length, 'WF_RESULT_'.length + 12),
-    sentinelFor: () => makeSentinel(),
     splitResult: (stdout, sentinel) => splitSentinel(stdout, sentinel),
   });
 }
 ```
 
-**Important sentinel coupling:** `makeRunId` and `sentinelFor` are independent here, but the manager must run the realm with the SAME sentinel it later splits with. Refactor `start` (Task 4) to derive ONE sentinel per run and inject it into the built `code`. **However** — the `code` is built by the _command_ (Task 8) via `buildWorkflowCode({ sentinel })`, so the sentinel is decided there and passed in. Change `WorkflowStartOptions` to carry `sentinel: string` (built by the command) instead of `sentinelFor` on deps. **Action:** in Task 4's `start`, replace `const sentinel = deps.sentinelFor(runId)` with `const sentinel = opts.sentinel`, add `sentinel: string` to `WorkflowStartOptions`, and drop `sentinelFor` from `WorkflowRunManagerDeps`. Update the Task 4/5 tests to pass `sentinel: 'WF_RESULT_x'` in `start(...)`. (Make this edit now; re-run the manager tests.)
+**Sentinel ownership:** the manager NEVER invents a sentinel. The _command_ (Task 7) builds the realm `code` via `buildWorkflowCode({ sentinel })`, so the sentinel is decided there and passed through `WorkflowStartOptions.sentinel`. The manager runs the realm with that exact sentinel and later splits the realm stdout with the same one (`deps.splitResult(stdout, opts.sentinel)`). This is why `WorkflowStartOptions` carries `sentinel: string` and `WorkflowRunManagerDeps` has no `sentinelFor` — Task 4's `start` reads `const sentinel = opts.sentinel`. Tests pass `sentinel: 'WF_RESULT_x'` in every `start(...)` call.
 
-- [ ] **Step 5: Run the manager tests + typecheck host.**
+- [ ] **Step 5: Write the failing dual-mode (offscreen/worker) test** (spec §9 "Dual-mode"). This proves the panel terminal — which is already offscreen-backed — reaches the manager via the shared global with **no panel→offscreen proxy**, and that the manager + its publish path are float-agnostic (no `window`/`document`). The vitest env is `node` (no DOM), so successful construction in this context _is_ the worker-context assertion; we make it explicit and then assert the command's resolution path reads the same global key the host publishes under.
+
+**Note:** this test lives in `workflow-run-manager.test.ts` but drives the command, so add these imports to that file (it already imports the manager symbols and `vi`):
+
+```ts
+import { VirtualFS } from '../../src/fs/index.js';
+import { VfsAdapter } from '../../src/shell/vfs-adapter.js';
+import { createWorkflowCommand } from '../../src/shell/supplemental-commands/workflow-command.js';
+```
+
+```ts
+it('dual-mode: manager publishes in a no-DOM (offscreen/worker) context and the command resolves it via the shared global — no proxy', async () => {
+  // Worker/offscreen has no DOM. vitest `environment: node` mirrors that, so a clean
+  // construct+publish here IS the worker-context assertion (any window/document touch throws).
+  expect(typeof window).toBe('undefined');
+  expect(typeof document).toBe('undefined');
+
+  delete (globalThis as Record<string, unknown>)[WORKFLOW_MANAGER_GLOBAL_KEY];
+  // Publish exactly as host.ts does — float-agnostic deps (sharedFs/processManager/fireLick/runRealm).
+  const mgr = publishWorkflowRunManager(makeDeps() as any);
+  expect((globalThis as Record<string, unknown>)[WORKFLOW_MANAGER_GLOBAL_KEY]).toBe(mgr);
+
+  // The command does NOT receive the manager by injection — it resolves it from the SAME
+  // global key the host published under. That is the offscreen path: panel terminal
+  // (offscreen-backed) → globalThis.__slicc_workflows → manager, with no proxy hop.
+  const spy = vi.spyOn(mgr, 'start');
+  const fs = await VirtualFS.create({ dbName: `wf-${Math.random()}`, wipe: true });
+  await fs.mkdir('/workspace', { recursive: true });
+  await fs.writeFile('/workspace/wf.js', `export const meta={name:'demo'}\nreturn 1`);
+  const ctx = {
+    fs: new VfsAdapter(fs),
+    cwd: '/workspace',
+    env: new Map<string, string>(),
+    stdin: '',
+    exec: Object.assign(async () => ({ stdout: '', stderr: '', exitCode: 0 }), {
+      spawn: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
+    }),
+  } as any;
+  const res = await createWorkflowCommand().execute(['run', '/workspace/wf.js'], ctx);
+  expect(res.exitCode).toBe(0);
+  expect(spy).toHaveBeenCalledTimes(1); // command reached the published manager, not a proxy/local copy
+});
+```
+
+- [ ] **Step 6: Run it to confirm it fails, then passes once Steps 3–4 + Task 7 land.**
+
+Run: `npm test -w @slicc/webapp -- --run tests/scoops/workflow-run-manager.test.ts`
+Expected before Step 3: FAIL (`publishWorkflowRunManager` not exported). After Steps 3–4 and Task 7's command delegates to the global manager: PASS. (If you author this test before Task 7, mark it `it.skip` with a `// unskip after Task 7` breadcrumb and unskip it in Task 7 Step 7.)
+
+- [ ] **Step 7: Run the manager tests + typecheck host.**
 
 Run: `npm test -w @slicc/webapp -- --run tests/scoops/workflow-run-manager.test.ts` → PASS.
 Run: `npx tsc --noEmit -p tsconfig.json 2>&1 | grep -E "host|workflow-run-manager" || echo clean` → `clean`.
 
-- [ ] **Step 6: Lint + commit.**
+- [ ] **Step 8: Lint + commit.**
 
 ```bash
 npm run lint
@@ -1012,10 +1090,15 @@ function getRunManager(): WorkflowRunManager | undefined {
 }
 ```
 
-- [ ] **Step 2: Write the failing non-blocking test.** In `workflow-command.test.ts`, install a fake manager on `globalThis` and assert `run` returns the started line without awaiting:
+- [ ] **Step 2: Write the failing non-blocking test.** In `workflow-command.test.ts`, install a fake manager on `globalThis` and assert `run` returns the started line without awaiting. **Note:** the existing `workflow-command.test.ts:1` import line is `import { describe, expect, it } from 'vitest';` — these snippets use `vi.fn`, so widen that import to `import { describe, expect, it, vi } from 'vitest';`. Also add an `afterEach(() => { delete (globalThis as Record<string, unknown>)[WORKFLOW_MANAGER_GLOBAL_KEY]; });` so the fake manager from one test does not leak into the next (and import `afterEach` from vitest too).
 
 ```ts
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WORKFLOW_MANAGER_GLOBAL_KEY } from '../../../src/scoops/workflow-run-manager.js';
+
+afterEach(() => {
+  delete (globalThis as Record<string, unknown>)[WORKFLOW_MANAGER_GLOBAL_KEY];
+});
 
 function installFakeManager(over: Partial<any> = {}) {
   const runs = new Map<string, any>();
@@ -1070,33 +1153,29 @@ Expected: FAIL.
 - [ ] **Step 4: Refactor the `run` body to delegate.** Replace the `executeJsCode` call + `renderResult` return in the `run` branch with manager delegation. Keep the SP1 path under `--wait` (block + print result via `renderResult`). After building `code`/`sentinel`/`banner`:
 
 ```ts
-const mgr = getRunManager();
-if (!mgr) return { stdout: '', stderr: 'workflow: run manager not available\n', exitCode: 1 };
-const parentJid = options.getParentJid?.();
-
 if (p.wait) {
-  // Foreground (SP1 behavior): block, then print the result file's value.
-  const { runId } = await mgr.start({
-    code,
-    source,
-    name: banner.name,
-    filename,
-    parentJid,
-    ctx,
-    sentinel,
-    wait: true,
-  });
-  const st = mgr.getRun(runId);
-  if (!st || st.status === 'error') {
+  // --wait preserves SP1 foreground behavior EXACTLY: run the realm inline, print
+  // the FULL result, and do NOT register a run or fire a completion lick. (Routing
+  // --wait through the manager would only surface a preview and would fire an async
+  // 'workflow' lick for cone-origin runs — neither of which SP1 did.) The run
+  // manager is NOT required on this path.
+  let result: { stdout: string; stderr: string; exitCode: number };
+  try {
+    result = await executeJsCode(code, ['workflow', filename], ctx, undefined, { filename });
+  } catch (err) {
     return {
-      stdout: renderHead(banner),
-      stderr: (st?.error ?? 'workflow: failed') + '\n',
+      stdout: '',
+      stderr: `workflow: ${err instanceof Error ? err.message : String(err)}\n`,
       exitCode: 1,
     };
   }
-  return { stdout: renderHead(banner) + (st.preview ?? '') + '\n', stderr: '', exitCode: 0 };
+  return renderResult(banner, result, sentinel); // SP1 helper — full result, no lick
 }
 
+// Non-blocking (default): delegate to the run manager.
+const mgr = getRunManager();
+if (!mgr) return { stdout: '', stderr: 'workflow: run manager not available\n', exitCode: 1 };
+const parentJid = options.getParentJid?.();
 const { runId } = await mgr.start({
   code,
   source,
@@ -1113,7 +1192,7 @@ return {
 };
 ```
 
-Add a small `renderHead(banner)` helper (the `workflow: <name> — <desc>` line, extracted from the SP1 `renderResult`). Note: `--wait` now reports the run's `preview` (≤200 chars) rather than the full stdout result — acceptable for SP2's foreground/test use; if a test needs the full value, read `st.resultPath` from the VFS. (Keep `renderResult`/`renderLog` for now; they're still used by tests asserting log markers under `--wait` — if unused after this refactor, delete them to satisfy `noUnusedExports`/biome and update the SP1 command tests accordingly.)
+`renderResult`/`renderLog` (the SP1 helpers) **stay** — `--wait` still uses them to print the full result + log markers exactly as SP1 did, so the SP1 command tests that assert that output continue to pass unchanged. Only the non-blocking (default) path is new. `executeJsCode` stays imported (used by `--wait`).
 
 - [ ] **Step 5: Add `status`/`list`/`stop` subcommands.** Extend `parse` so `a[0]` can be `status`/`list`/`stop`. Implement before the `run` logic in the command body:
 
@@ -1210,7 +1289,7 @@ it('list / status / stop render run state', async () => {
 });
 ```
 
-Run the file → PASS. Also re-run the SP1 command tests in the same file (the file-not-found / thrown-body cases now go through the manager — adjust those tests to install the fake manager, or assert the new non-blocking line; update as needed so the whole file is green).
+Run the file → PASS. Also re-run the SP1 command tests in the same file (the file-not-found / thrown-body cases now go through the manager — adjust those tests to install the fake manager, or assert the new non-blocking line; update as needed so the whole file is green). **If you `it.skip`'d the Task 6 Step 5 dual-mode test** (because the command wasn't wired yet), unskip it now and run `npm test -w @slicc/webapp -- --run tests/scoops/workflow-run-manager.test.ts` → PASS.
 
 - [ ] **Step 8: origin-classification unit (manager already covers it; add a command-level guard if you wired origin in the command).** If you pass `parentJid` to the manager (recommended — the manager classifies), no extra command test is needed beyond confirming `start` is called with the right `parentJid`. Add:
 
@@ -1364,14 +1443,17 @@ git commit -m "docs(workflow): SP2 background runs — non-blocking default, sta
 - [ ] **Step 3: `node packages/dev-tools/tools/check-touched-exemptions.mjs origin/main`** → OK (no touched file still on a complexity debt list; if `lick-manager.ts`/`lick-formatting.ts`/`host.ts` are listed and you touched them, de-debt their functions + remove the entries in this PR — see the boy-scout note up top).
 - [ ] **Step 4: `npm test`** → all pass; then `npm run test:coverage:webapp` → at/above the floor in `coverage-thresholds.json` (the new `workflow-run-manager.ts` carries its own tests; add cases if it dips below).
 - [ ] **Step 5: `npm run build -w @slicc/webapp && npm run build -w @slicc/chrome-extension`** → both succeed.
-- [ ] **Step 6: Manual dual-float smoke** (real scoops; record in the PR body). Standalone (`npm run dev`) and extension (`npm run dev -- --profile=extension`, production build): in the terminal run `workflow run --script 'export const meta={name:"bg"}; phase("go"); const r=await agent("Reply with one word: ok"); return {r}'` — confirm it prints `▶ … started (run <id>)` immediately, `workflow status <id>` shows progress then `done`, and (from the **cone chat**, not the terminal) the same run delivers a `[Workflow: bg] … Full result: …` turn. Close + reopen the extension side panel mid-run and confirm `workflow status <id>` still resolves (offscreen durability).
+- [ ] **Step 6: Manual dual-float smoke** (real scoops; record in the PR body). Standalone (`npm run dev`) and extension (`npm run dev -- --profile=extension`, production build). The script: `workflow run --script 'export const meta={name:"bg"}; phase("go"); const r=await agent("Reply with one word: ok"); return {r}'`.
+  - **Terminal-origin (no cone turn):** run it in the **terminal** → prints `▶ … started (run <id>)` immediately; `workflow status <id>` shows progress then `done` with the result file; **the cone chat gets NO turn** (terminal-origin must not notify the cone — spec §5).
+  - **Cone-origin (delivers a turn):** ask the **cone in chat** to run the same command via bash → on completion the cone receives a new `[Workflow: bg] … Full result: /shared/workflow-runs/<id>.json` turn (this is the cone-origin lick path).
+  - **Survival:** start a longer run, close + reopen the extension side panel mid-run, confirm `workflow status <id>` still resolves (offscreen durability).
 - [ ] **Step 7:** Commit any fixups, then `superpowers:finishing-a-development-branch` to rebase onto current `main` (NOT merge — the `linear-history` gate rejects merge commits; use `git fetch && git rebase origin/main && git push --force-with-lease`) and open the PR with the manual dual-float result in the body.
 
 ---
 
 ## Self-review (run before handing off)
 
-- **Spec coverage:** §2 non-blocking launch (Task 4/7), live progress (Task 3 emit + Task 5 tap), async result delivery (Task 6 file + Task 1 lick); §5 manager API (Task 4–6), `--wait` (Task 7), origin classification (Task 4 `classifyOrigin` + Task 7 parentJid), stop semantics (Task 7 `stop` → `kill -KILL`), per-run exec isolation (Task 5 `wrapCtx`); §6 every file has a task; §9 all test bullets mapped (manager unit, prelude, command, integration, dual-mode in Task 10); §10 docs (Task 9). **No SP1 changes** beyond the additive prelude emit (Task 3) — matches §3.
+- **Spec coverage:** §2 non-blocking launch (Task 4/7), live progress (Task 3 emit + Task 5 tap), async result delivery (Task 6 file + Task 1 lick); §5 manager API (Task 4–6), `--wait` (Task 7), origin classification (Task 4 `classifyOrigin` + Task 7 parentJid), stop semantics (Task 7 `stop` → `kill -KILL`), per-run exec isolation (Task 5 `wrapCtx`); §6 every file has a task; §9 all test bullets mapped (manager unit Task 4–5, prelude Task 3, command Task 7, integration Task 8, automated dual-mode/offscreen-resolution Task 6 Step 5 + manual dual-float smoke Task 10 Step 6); §10 docs (Task 9). **No SP1 changes** beyond the additive prelude emit (Task 3) — matches §3.
 - **Sentinel coupling (the one cross-task subtlety):** Task 6 Step 4 resolves it — the command builds ONE `sentinel`, passes it into both `buildWorkflowCode({sentinel})` (the realm code) and `mgr.start({sentinel})` (used by `splitResult`). Ensure Tasks 4/5 tests pass `sentinel` in `start(...)` and the `WorkflowStartOptions` type carries it (drop `sentinelFor` from deps).
 - **Type consistency:** `WorkflowRunState`/`WorkflowStartOptions`/`WorkflowRunManagerDeps`/`WORKFLOW_MANAGER_GLOBAL_KEY` are used identically across Tasks 4–7; `LickEvent` workflow fields (`workflowRunId`/`workflowName`/`resultPath`/`preview`) match between Task 1 (definition) and Task 6 (`deliver`) and Task 1's `formatLickEventForCone`/`defaultLickEventHandler` reads.
 - **Stop reality (spec §5):** `kill -KILL <pid>` ends the realm but in-flight `agent()` host-awaits are not cancelled — documented in Task 9; `stop` only guarantees no NEW agents start. Don't over-promise in the status output.
