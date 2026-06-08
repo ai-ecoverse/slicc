@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SLICC Chat Background Shaders &mdash; Liquid &amp; Molten</title>
+    <style>
+      :root {
+        --bg: #0d0f14;
+        --panel: #151820;
+        --ink: #e8eaf0;
+        --muted: #8b91a3;
+        --line: #232838;
+        --btn: #1d2230;
+        --btn-h: #262c3d;
+        --bubble-them: rgba(20, 24, 34, 0.55);
+        --bubble-them-line: rgba(255, 255, 255, 0.12);
+        --composer-bg: rgba(10, 12, 18, 0.5);
+        --composer-line: rgba(255, 255, 255, 0.14);
+        --icon-bg: rgba(0, 0, 0, 0.35);
+        --icon-line: rgba(255, 255, 255, 0.18);
+        --who-shadow: rgba(0, 0, 0, 0.6);
+        --tag-bg: rgba(0, 0, 0, 0.4);
+      }
+      body.light {
+        --bg: #eef1f6;
+        --panel: #ffffff;
+        --ink: #1b2130;
+        --muted: #5a6173;
+        --line: #d4dae6;
+        --btn: #ffffff;
+        --btn-h: #e7ebf3;
+        --bubble-them: rgba(255, 255, 255, 0.7);
+        --bubble-them-line: rgba(0, 0, 0, 0.1);
+        --composer-bg: rgba(255, 255, 255, 0.6);
+        --composer-line: rgba(0, 0, 0, 0.12);
+        --icon-bg: rgba(255, 255, 255, 0.6);
+        --icon-line: rgba(0, 0, 0, 0.12);
+        --who-shadow: rgba(255, 255, 255, 0.7);
+        --tag-bg: rgba(255, 255, 255, 0.65);
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        background: var(--bg);
+        color: var(--ink);
+        font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        display: flex;
+        flex-direction: column;
+        min-height: 100vh;
+      }
+      header.app {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 12px 18px;
+        border-bottom: 1px solid var(--line);
+        flex-wrap: wrap;
+      }
+      header.app h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: 0.3px; }
+      header.app .sub { color: var(--muted); font-size: 12px; }
+      .controls { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+      .controls button {
+        background: var(--btn);
+        color: var(--ink);
+        border: 1px solid var(--line);
+        padding: 7px 12px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 12px;
+        transition: transform 0.08s ease, background 0.15s ease;
+      }
+      .controls button:hover { background: var(--btn-h); }
+      .controls button:active { transform: scale(0.95); }
+      .controls button.user { border-color: #3a6df0; }
+      .controls button.agent { border-color: #c77dff; }
+      .controls button.lick { border-color: #2dd4bf; }
+      .grid {
+        flex: 1;
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 14px;
+        padding: 14px;
+        min-height: 0;
+      }
+      @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+      .panel {
+        position: relative;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        overflow: hidden;
+        min-height: 420px;
+        background: var(--bg);
+      }
+      .panel canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+      .chat {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        padding: 14px;
+        z-index: 2;
+        pointer-events: none;
+      }
+      .chat .who {
+        display: flex; align-items: center; gap: 10px;
+        font-weight: 600; letter-spacing: 0.3px;
+        text-shadow: 0 1px 8px var(--who-shadow);
+      }
+      .chat .icon {
+        width: 34px; height: 34px; border-radius: 10px;
+        display: grid; place-items: center; font-size: 18px;
+        background: var(--icon-bg); backdrop-filter: blur(4px);
+        border: 1px solid var(--icon-line);
+      }
+      .chat .msgs { margin-top: auto; display: flex; flex-direction: column; gap: 8px; }
+      .bubble {
+        max-width: 78%;
+        padding: 9px 12px;
+        border-radius: 14px;
+        font-size: 13px;
+        backdrop-filter: blur(6px);
+        box-shadow: 0 2px 14px rgba(0,0,0,0.35);
+      }
+      .bubble.me { align-self: flex-end; background: rgba(58,109,240,0.42); border: 1px solid rgba(120,160,255,0.4); color: #fff; }
+      .bubble.them { align-self: flex-start; background: var(--bubble-them); border: 1px solid var(--bubble-them-line); }
+      .composer {
+        margin-top: 10px;
+        height: 40px; border-radius: 12px;
+        background: var(--composer-bg);
+        border: 1px solid var(--composer-line);
+        backdrop-filter: blur(6px);
+        display: flex; align-items: center; padding: 0 12px;
+        color: var(--muted); font-size: 13px;
+      }
+      .tag {
+        position: absolute; top: 12px; right: 12px; z-index: 3;
+        font-size: 11px; color: var(--muted);
+        background: var(--tag-bg); padding: 3px 8px; border-radius: 999px;
+        border: 1px solid var(--line);
+      }
+    </style>
+  </head>
+  <body>
+    <header class="app">
+      <h1>SLICC Chat Background Shaders</h1>
+      <span class="sub">WebGL exploration &mdash; liquid &amp; molten &middot; cone / scoop / freezer</span>
+      <div class="controls">
+        <button class="user" data-evt="user">User message</button>
+        <button class="agent" data-evt="agent">Agent message</button>
+        <button class="lick" data-evt="lick">Lick event</button>
+        <button data-evt="burst">Burst (all)</button>
+        <button id="theme-toggle">☀️ Light</button>
+      </div>
+    </header>
+    <main class="grid">
+      <section class="panel" id="p-cone">
+        <canvas data-shader="cone"></canvas>
+        <span class="tag">cone &middot; molten batter</span>
+        <div class="chat">
+          <div class="who"><span class="icon">🍦</span> sliccy</div>
+          <div class="msgs">
+            <div class="bubble them">Pouring the waffle batter…</div>
+            <div class="bubble me">Make it drip and gleam.</div>
+          </div>
+          <div class="composer">Message the cone…</div>
+        </div>
+      </section>
+      <section class="panel" id="p-scoop">
+        <canvas data-shader="scoop"></canvas>
+        <span class="tag">scoop &middot; melting metaballs</span>
+        <div class="chat">
+          <div class="who"><span class="icon">🍨</span> scoop</div>
+          <div class="msgs">
+            <div class="bubble them">Blobs are merging together.</div>
+            <div class="bubble me">Looks delicious.</div>
+          </div>
+          <div class="composer">Message the scoop…</div>
+        </div>
+      </section>
+      <section class="panel" id="p-freezer">
+        <canvas data-shader="freezer"></canvas>
+        <span class="tag">freezer &middot; crystallizing &middot; dbl-click to thaw</span>
+        <div class="chat">
+          <div class="who"><span class="icon">❄️</span> freezer</div>
+          <div class="msgs">
+            <div class="bubble them">Water freezing into ice…</div>
+          </div>
+          <div class="composer">Frozen.</div>
+        </div>
+      </section>
+    </main>
+    <script>
+      const VERT = `attribute vec2 a_pos; void main(){ gl_Position = vec4(a_pos,0.0,1.0); }`;
+
+      const HEAD = `
+        precision highp float;
+        uniform vec2 u_res;
+        uniform float u_time;
+        uniform float u_energy;
+        uniform vec2 u_center;
+        uniform vec3 u_evt;
+        uniform float u_freeze;
+        uniform float u_dark;
+        vec3 themeBg(){ return mix(vec3(0.93,0.95,0.97), vec3(0.05,0.06,0.08), u_dark); }`;
+
+      const NOISE = `
+        float hash21(vec2 p){ p=fract(p*vec2(123.34,456.21)); p+=dot(p,p+45.32); return fract(p.x*p.y); }
+        float vnoise(vec2 p){ vec2 i=floor(p),f=fract(p);
+          float a=hash21(i),b=hash21(i+vec2(1.,0.)),c=hash21(i+vec2(0.,1.)),d=hash21(i+vec2(1.,1.));
+          vec2 u=f*f*(3.-2.*f); return mix(mix(a,b,u.x),mix(c,d,u.x),u.y); }
+        float fbm(vec2 p){ float v=0.,a=0.5; for(int i=0;i<5;i++){ v+=a*vnoise(p); p=p*2.02+vec2(7.1,3.7); a*=0.5;} return v; }
+        float smin(float a, float b, float k){ float h=clamp(0.5+0.5*(b-a)/k,0.0,1.0); return mix(b,a,h)-k*h*(1.0-h); }`;
+
+      const FRAG_CONE = HEAD + NOISE + `
+        // molten waffle batter: rounded merging blobs (smooth-min SDF) with glossy highlights
+        void main(){
+          vec2 uv = gl_FragCoord.xy/u_res;
+          float aspect = u_res.x/u_res.y;
+          vec2 p = uv-0.5; p.x*=aspect;
+          vec2 c = u_center-0.5; c.x*=aspect;
+          vec3 bg = themeBg();
+          vec2 sp = p - c;
+          float dist = length(sp);
+
+          // gentle idle breathing + event-driven viscous wobble
+          float breathe = 1.0 + 0.06*sin(u_time*0.5);
+          float k = 0.14*breathe + 0.05*u_energy;
+
+          // several gooey droplets orbit/sag toward the center, merged with smin
+          float d = 1e3;
+          for(int i=0;i<5;i++){
+            float fi = float(i);
+            float ph = fi*1.7;
+            float sp2 = 0.18 + 0.05*sin(u_time*0.27 + ph);
+            // slow viscous drift, with a downward "drip" bias
+            vec2 o = vec2(
+              0.16*sin(u_time*0.21 + ph) * (1.0 + 0.4*u_energy),
+              0.13*cos(u_time*0.18 + ph*1.3) - 0.04*fi
+            );
+            o += 0.05*vec2(fbm(sp*3.0 + ph + u_time*0.1)-0.5, fbm(sp*3.0 - ph - u_time*0.08)-0.5);
+            float rad = sp2*(0.7 + 0.5*hash21(vec2(fi,3.0)));
+            float di = length(sp - o) - rad;
+            d = smin(d, di, k);
+          }
+          // surface ripple in the goo
+          d += 0.025*fbm(sp*5.0 + u_time*0.15);
+
+          // blob field -> coverage, confined to ~1/3 around the floating center
+          float blob = smoothstep(0.02, -0.06, d);
+          float mask = smoothstep(0.50, 0.10, dist);
+          float cover = clamp(blob*mask, 0.0, 1.0);
+
+          // shading: glossy molten batter, warm golden
+          vec3 deep = mix(vec3(0.55,0.34,0.12), vec3(0.62,0.40,0.16), u_dark);
+          vec3 warm = mix(vec3(0.86,0.60,0.26), vec3(0.95,0.72,0.34), u_dark);
+          float depth = smoothstep(0.06,-0.10,d);
+          vec3 batter = mix(deep, warm, depth);
+
+          // pseudo-normal pointing out from the blob field, for a specular highlight
+          vec2 n2 = normalize(sp + 0.001);
+          vec2 ldir = normalize(vec2(-0.5, 0.7));
+          float spec = pow(clamp(dot(n2, ldir),0.0,1.0), 6.0) * depth;
+          // bright rolling glints on the wet surface
+          float glint = smoothstep(0.7,1.0, fbm(sp*7.0 - u_time*0.4)) * depth;
+          batter += spec*vec3(1.0,0.92,0.7)*0.6;
+          batter += glint*vec3(1.0,0.95,0.8)*0.35;
+
+          // event tint pulses through the goo
+          batter += u_evt * u_energy * 0.22 * depth * exp(-dist*dist*4.0);
+
+          vec3 col = mix(bg, batter, cover);
+          gl_FragColor = vec4(col, 1.0);
+        }`;
+
+      const FRAG_SCOOP = HEAD + NOISE + `
+        // pick one of three flavors without dynamic array indexing (WebGL1-safe)
+        vec3 flavor(float idx){
+          vec3 strawberry = vec3(1.0,0.52,0.66);
+          vec3 vanilla    = vec3(1.0,0.95,0.82);
+          vec3 pistachio  = vec3(0.66,0.86,0.55);
+          float m = mod(idx, 3.0);
+          if(m < 0.5) return strawberry;
+          if(m < 1.5) return vanilla;
+          return pistachio;
+        }
+        // merging ice-cream metaballs: strawberry / vanilla / pistachio oozing and blending
+        void main(){
+          vec2 uv = gl_FragCoord.xy/u_res;
+          float aspect = u_res.x/u_res.y;
+          vec2 p = uv-0.5; p.x*=aspect;
+          vec2 c = u_center-0.5; c.x*=aspect;
+          vec3 bg = themeBg();
+          vec2 sp = p - c;
+          float dist = length(sp);
+
+          float breathe = 1.0 + 0.06*sin(u_time*0.4);
+          float k = 0.16*breathe + 0.06*u_energy;
+
+          vec3 vanilla = vec3(1.0,0.95,0.82);
+
+          // metaball accumulation: smooth-min the distances, track nearest flavor
+          float d = 1e3;
+          float wsum = 0.0;
+          vec3 colorAcc = vec3(0.0);
+          for(int i=0;i<6;i++){
+            float fi = float(i);
+            float ph = fi*1.05;
+            float orbit = 0.14 + 0.05*sin(u_time*0.23 + ph);
+            float spd = 0.18 + 0.04*hash21(vec2(fi,7.0));
+            vec2 o = vec2(cos(u_time*spd + ph), sin(u_time*spd*1.1 + ph*1.3)) * orbit;
+            o.y -= 0.03*fi;
+            o += (1.0+0.6*u_energy) * 0.03 * vec2(
+              fbm(sp*2.5 + ph + u_time*0.12) - 0.5,
+              fbm(sp*2.5 - ph - u_time*0.1) - 0.5);
+            float rad = 0.11 + 0.04*sin(u_time*0.3 + ph) + 0.03*u_energy;
+            float di = length(sp - o) - rad;
+            d = smin(d, di, k);
+            // weight flavor by proximity for soft blending
+            float w = exp(-max(di,0.0)*7.0) + smoothstep(0.05,-0.05,di);
+            colorAcc += flavor(fi)*w; wsum += w;
+          }
+          d += 0.022*fbm(sp*6.0 + u_time*0.13);
+          vec3 cream = wsum>0.0 ? colorAcc/wsum : vanilla;
+
+          float blob = smoothstep(0.02, -0.06, d);
+          float mask = smoothstep(0.48, 0.10, dist);
+          float cover = clamp(blob*mask, 0.0, 1.0);
+
+          float depth = smoothstep(0.06,-0.12,d);
+          // glossy creamy highlight
+          vec2 n2 = normalize(sp + 0.001);
+          vec2 ldir = normalize(vec2(-0.4,0.7));
+          float spec = pow(clamp(dot(n2,ldir),0.0,1.0), 5.0)*depth;
+          float sheen = smoothstep(0.65,1.0, fbm(sp*6.0 - u_time*0.3))*depth;
+          cream += spec*vec3(1.0,0.97,0.9)*0.45;
+          cream += sheen*vec3(1.0,1.0,0.95)*0.25;
+          cream = mix(cream, cream*1.05, u_dark); // a touch brighter in dark mode
+
+          cream += u_evt * u_energy * 0.2 * depth * exp(-dist*1.6);
+
+          vec3 col = mix(bg, cream, cover);
+          gl_FragColor = vec4(col, 1.0);
+        }`;
+
+      const FRAG_FREEZER = HEAD + NOISE + `
+        // liquid water crystallizing into ice, creeping from the bottom-left corner
+        void main(){
+          vec2 uv = gl_FragCoord.xy/u_res;
+          float aspect = u_res.x/u_res.y;
+          vec2 p = (uv-0.5); p.x*=aspect;
+          vec3 bg = themeBg();
+
+          // distance from the bottom-left corner drives the freezing front
+          float dc = distance(uv, vec2(0.0,0.0));
+          // organic, ragged ice front so the boundary looks crystalline, not circular
+          float ragged = 0.10*fbm(uv*6.0 + 3.0) + 0.05*fbm(uv*14.0);
+          float front = u_freeze*0.66 + ragged - 0.05;
+          float edge = front - dc;
+          // capped near one third of the panel via the front scale above
+          float frozen = smoothstep(-0.04, 0.06, edge);
+          // wet -> frosted transition band near the leading edge
+          float wetBand = smoothstep(0.12, 0.0, abs(edge));
+
+          // mostly-static crystal lattice with very subtle slow ripple
+          float ripple = 0.015*sin(dc*40.0 - u_time*0.4) * frozen;
+          vec2 q = uv*aspect + vec2(ripple, ripple*0.5);
+          float crystals = fbm(q*9.0);
+          crystals += 0.5*fbm(q*20.0 + 4.0);
+          crystals /= 1.5;
+          // sharp feathery crystal facets
+          float facet = smoothstep(0.45,0.55, crystals);
+          float veins = smoothstep(0.03,0.0, abs(fract(crystals*6.0)-0.5)-0.02);
+
+          // colors: cool icy blue, brighter glints in dark mode
+          vec3 iceCol = mix(vec3(0.62,0.76,0.92), vec3(0.78,0.88,1.0), u_dark);
+          vec3 deepIce = mix(vec3(0.40,0.56,0.78), vec3(0.50,0.66,0.88), u_dark);
+
+          vec3 col = bg;
+          // glossy wet water film just ahead of the frost front
+          vec3 wet = mix(bg, iceCol, 0.5);
+          float wetSpec = pow(clamp(fbm(uv*10.0 - u_time*0.2),0.0,1.0), 2.0);
+          wet += wetSpec*vec3(1.0)*0.25;
+          col = mix(col, wet, wetBand*0.55);
+
+          // frosted ice fills the frozen region
+          vec3 frost = mix(deepIce, iceCol, facet);
+          frost += veins*vec3(1.0)*0.25;          // bright crystal veins
+          // sparse twinkling sparkles, very slow
+          float spark = smoothstep(0.92,1.0, fbm(uv*30.0)) * (0.5+0.5*sin(u_time*0.6 + crystals*20.0));
+          frost += spark*vec3(1.0)*0.4*frozen;
+          col = mix(col, frost, frozen*0.85);
+
+          // glossy bright rim right at the freezing front
+          float rim = smoothstep(0.05,0.0, abs(edge))*0.6;
+          col += rim*iceCol;
+
+          gl_FragColor = vec4(col, 1.0);
+        }`;
+
+      function compile(gl, type, src) {
+        const s = gl.createShader(type);
+        gl.shaderSource(s, src);
+        gl.compileShader(s);
+        if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+        return s;
+      }
+      function program(gl, vs, fs) {
+        const p = gl.createProgram();
+        gl.attachShader(p, compile(gl, gl.VERTEX_SHADER, vs));
+        gl.attachShader(p, compile(gl, gl.FRAGMENT_SHADER, fs));
+        gl.linkProgram(p);
+        if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+        return p;
+      }
+
+      const SHADERS = { cone: FRAG_CONE, scoop: FRAG_SCOOP, freezer: FRAG_FREEZER };
+      const panels = [];
+      document.querySelectorAll("canvas[data-shader]").forEach((cv) => {
+        const gl = cv.getContext("webgl") || cv.getContext("experimental-webgl");
+        if (!gl) { return; }
+        const prog = program(gl, VERT, SHADERS[cv.dataset.shader]);
+        const buf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+        const loc = gl.getAttribLocation(prog, "a_pos");
+        const U = (name) => gl.getUniformLocation(prog, name);
+        panels.push({
+          cv, gl, prog, buf, loc, kind: cv.dataset.shader, energy: 0, evt: [1, 0.8, 0.45],
+          u: { res: U("u_res"), time: U("u_time"), energy: U("u_energy"), center: U("u_center"), evt: U("u_evt"), freeze: U("u_freeze"), dark: U("u_dark") },
+        });
+      });
+
+      function resize(pl) {
+        const dpr = Math.min(2, window.devicePixelRatio || 1);
+        const w = (pl.cv.clientWidth * dpr) | 0;
+        const h = (pl.cv.clientHeight * dpr) | 0;
+        if (pl.cv.width !== w || pl.cv.height !== h) { pl.cv.width = w; pl.cv.height = h; }
+      }
+
+      function centerFor(t) {
+        const s = 0.5 + 0.5 * Math.sin(t * 0.12);
+        const s2 = 0.5 + 0.5 * Math.sin(t * 0.097 + 1.0);
+        const cx = 0.12 * (1 - s) + 0.5 * s;
+        const cy = 0.86 * (1 - s2) + 0.2 * s2;
+        return [cx, cy];
+      }
+
+      const EVT = {
+        user: { e: 1.0, c: [0.35, 0.55, 1.0] },
+        agent: { e: 1.3, c: [0.78, 0.5, 1.0] },
+        lick: { e: 0.9, c: [0.18, 0.85, 0.75] },
+      };
+      let freeze = 0;
+      function fire(kind) {
+        if (kind === "burst") { ["user", "agent", "lick"].forEach(fire); freeze = Math.min(1, freeze + 0.1); return; }
+        const d = EVT[kind];
+        for (const pl of panels) {
+          if (pl.kind === "freezer") continue;
+          pl.energy = Math.min(2.5, pl.energy + d.e);
+          pl.evt = d.c;
+        }
+      }
+      document.querySelectorAll(".controls button[data-evt]").forEach((b) => b.addEventListener("click", () => fire(b.dataset.evt)));
+      const fz = document.getElementById("p-freezer");
+      if (fz) fz.addEventListener("dblclick", () => { freeze = 0; });
+
+      let dark = true;
+      const themeBtn = document.getElementById("theme-toggle");
+      function applyTheme() {
+        document.body.classList.toggle("light", !dark);
+        if (themeBtn) themeBtn.textContent = dark ? "☀️ Light" : "🌙 Dark";
+      }
+      if (themeBtn) themeBtn.addEventListener("click", () => { dark = !dark; applyTheme(); });
+      applyTheme();
+
+      let last = performance.now() / 1000;
+      const start = last;
+      function frame() {
+        const now = performance.now() / 1000;
+        const dt = Math.min(0.1, now - last);
+        last = now;
+        const t = now - start;
+        freeze = Math.min(1, freeze + dt / 75);
+        const [cx, cy] = centerFor(t);
+        for (const pl of panels) {
+          resize(pl);
+          const gl = pl.gl;
+          gl.viewport(0, 0, pl.cv.width, pl.cv.height);
+          gl.useProgram(pl.prog);
+          gl.bindBuffer(gl.ARRAY_BUFFER, pl.buf);
+          gl.enableVertexAttribArray(pl.loc);
+          gl.vertexAttribPointer(pl.loc, 2, gl.FLOAT, false, 0, 0);
+          gl.uniform2f(pl.u.res, pl.cv.width, pl.cv.height);
+          gl.uniform1f(pl.u.time, t);
+          gl.uniform1f(pl.u.energy, pl.energy);
+          gl.uniform2f(pl.u.center, cx, cy);
+          gl.uniform3f(pl.u.evt, pl.evt[0], pl.evt[1], pl.evt[2]);
+          gl.uniform1f(pl.u.freeze, freeze);
+          gl.uniform1f(pl.u.dark, dark ? 1.0 : 0.0);
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
+          pl.energy *= Math.exp(-dt * 1.8);
+        }
+        requestAnimationFrame(frame);
+      }
+      requestAnimationFrame(frame);
+    </script>
+  </body>
+</html>
