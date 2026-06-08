@@ -130,6 +130,25 @@ jobs:
         # silently diverge from the documented local command.
         run: npm run deadcode -- --no-progress --reporter compact
 
+  # The merge queue lands PRs with a linear history (rebase, no merge
+  # commits). A branch that merged `main` in — instead of rebasing onto it —
+  # is rejected late, after the PR has already gone green and burned a full
+  # CI run. Catch it here, at PR time. PR-only: in the merge_group the history
+  # is linear by construction, so this is skipped (= passing).
+  linear-history:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Full history so base..head can be walked for merge commits.
+          fetch-depth: 0
+      - name: Check linear history
+        run: |
+          bash packages/dev-tools/tools/check-linear-history.sh \
+            "${{ github.event.pull_request.base.sha }}" \
+            "${{ github.event.pull_request.head.sha }}"
+
   # Lightweight test matrix that re-runs the TypeScript test suites across
   # supported Node majors. The package engines field is `>=22.13.0`, so
   # any one-version pin in the heavier per-package jobs misses regressions
@@ -746,6 +765,7 @@ jobs:
       [
         changes,
         lint,
+        linear-history,
         node-matrix-tests,
         webapp,
         node-server,
