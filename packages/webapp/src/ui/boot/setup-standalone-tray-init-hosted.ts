@@ -24,7 +24,9 @@ export async function runHostedBootstrap(deps: RunHostedBootstrapDeps): Promise<
   const { log } = deps;
   await new Promise((r) => setTimeout(r, 5000));
   try {
-    const res = await fetch('/api/hosted-bootstrap');
+    const res = await fetch('/api/hosted-bootstrap', {
+      signal: AbortSignal.timeout(10000),
+    });
     if (!res.ok) return;
     const boot = (await res.json()) as {
       model?: string;

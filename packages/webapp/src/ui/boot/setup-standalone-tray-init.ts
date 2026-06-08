@@ -118,6 +118,7 @@ async function startHostedLeader(deps: StandaloneTrayInitDeps): Promise<PageLead
           runtime: session.runtime,
           sliccVersion: __SLICC_VERSION__,
         }),
+        signal: AbortSignal.timeout(10000),
       }).catch((err) => {
         log.error('failed to POST /api/cloud-status', { error: String(err) });
       });
