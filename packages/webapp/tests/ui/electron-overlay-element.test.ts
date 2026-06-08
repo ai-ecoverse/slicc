@@ -22,6 +22,7 @@ import {
 } from '../../src/ui/electron-overlay.js';
 import {
   ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE,
+  ELECTRON_OVERLAY_FOLLOWER_STATUS_MESSAGE_TYPE,
   ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE,
 } from '../../src/ui/runtime-mode.js';
 
@@ -469,6 +470,58 @@ describe('SliccElectronOverlayElement — message handling', () => {
     });
     expect(overlay.open).toBe(false);
   });
+
+  it('forwards a follower-status message to the launcher attribute', () => {
+    const overlay = mount();
+    const launcher = overlay.shadowRoot!.querySelector(LAUNCHER_TAG) as HTMLElement;
+    // Default attribute is "disconnected" so the icon never starts in a
+    // misleading "connected" state before the first push arrives.
+    expect(launcher.getAttribute('follower-status')).toBe('disconnected');
+    dispatchMessage({
+      data: { type: ELECTRON_OVERLAY_FOLLOWER_STATUS_MESSAGE_TYPE, status: 'connected' },
+      source: foreignSource,
+      origin: 'anywhere',
+    });
+    expect(launcher.getAttribute('follower-status')).toBe('connected');
+    dispatchMessage({
+      data: { type: ELECTRON_OVERLAY_FOLLOWER_STATUS_MESSAGE_TYPE, status: 'error' },
+      source: foreignSource,
+      origin: 'anywhere',
+    });
+    expect(launcher.getAttribute('follower-status')).toBe('error');
+    dispatchMessage({
+      data: { type: ELECTRON_OVERLAY_FOLLOWER_STATUS_MESSAGE_TYPE, status: 'disconnected' },
+      source: foreignSource,
+      origin: 'anywhere',
+    });
+    expect(launcher.getAttribute('follower-status')).toBe('disconnected');
+  });
+
+  it('rejects malformed follower-status payloads', () => {
+    const overlay = mount();
+    const launcher = overlay.shadowRoot!.querySelector(LAUNCHER_TAG) as HTMLElement;
+    dispatchMessage({
+      data: { type: ELECTRON_OVERLAY_FOLLOWER_STATUS_MESSAGE_TYPE, status: 'bogus' },
+      source: foreignSource,
+    });
+    expect(launcher.getAttribute('follower-status')).toBe('disconnected');
+    dispatchMessage({
+      data: { type: ELECTRON_OVERLAY_FOLLOWER_STATUS_MESSAGE_TYPE },
+      source: foreignSource,
+    });
+    expect(launcher.getAttribute('follower-status')).toBe('disconnected');
+  });
+
+  it('rejects follower-status from the host window itself', () => {
+    const overlay = mount();
+    const launcher = overlay.shadowRoot!.querySelector(LAUNCHER_TAG) as HTMLElement;
+    dispatchMessage({
+      data: { type: ELECTRON_OVERLAY_FOLLOWER_STATUS_MESSAGE_TYPE, status: 'connected' },
+      source: window,
+      origin: 'anywhere',
+    });
+    expect(launcher.getAttribute('follower-status')).toBe('disconnected');
+  });
 });
 
 describe('SliccElectronOverlayElement — children + slot wiring', () => {
@@ -632,8 +685,9 @@ describe('SliccElectronLauncherElement — render + click flows', () => {
     expect(button.title).toContain(';');
     expect(button.getAttribute('aria-pressed')).toBe('true');
     expect(button.getAttribute('aria-label')).toBe('Toggle SLICC overlay');
-    // Both monochrome logo variants are embedded so CSS can pick.
-    expect(launcher.shadowRoot!.querySelectorAll('.logo-icon')).toHaveLength(2);
+    // Three follower states × two color-scheme variants = six embedded icons.
+    expect(launcher.shadowRoot!.querySelectorAll('.logo-icon')).toHaveLength(6);
+    expect(launcher.shadowRoot!.querySelectorAll('.logo-state')).toHaveLength(3);
   });
 
   it('emits slicc-overlay-toggle on a normal button click', () => {

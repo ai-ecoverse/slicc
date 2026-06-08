@@ -12,9 +12,16 @@
  */
 
 import {
+  type FollowerTrayRuntimeStatus,
+  getFollowerTrayRuntimeStatus,
+  subscribeToFollowerTrayRuntimeStatus,
+} from '../../scoops/tray-follower-status.js';
+import {
   ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE,
+  ELECTRON_OVERLAY_FOLLOWER_STATUS_MESSAGE_TYPE,
   getElectronOverlayInitialTab,
   isElectronOverlaySetTabMessage,
+  mapFollowerStateToOverlayStatus,
 } from '../runtime-mode.js';
 import type { ElectronOverlaySetupDeps } from './types.js';
 
@@ -44,6 +51,27 @@ export function setupElectronOverlay(deps: ElectronOverlaySetupDeps): void {
     });
   } else {
     layout.setShowElectronOverlayClose(null);
+  }
+
+  // Bridge follower connection state to the outer overlay shell so the
+  // floating launcher pill reflects the live follower status (one scoop
+  // when connected, no scoop while disconnected / connecting / reconnecting,
+  // crossed-eyes icon on error). Mirrors the close-button gate: only post
+  // when actually embedded — top-level /electron has no overlay shell.
+  if (win.parent !== win) {
+    const postFollowerStatus = (status: FollowerTrayRuntimeStatus): void => {
+      win.parent.postMessage(
+        {
+          type: ELECTRON_OVERLAY_FOLLOWER_STATUS_MESSAGE_TYPE,
+          status: mapFollowerStateToOverlayStatus(status.state),
+        },
+        '*'
+      );
+    };
+    // Push the current snapshot immediately so the launcher matches the
+    // worker's state before any subsequent change fires.
+    postFollowerStatus(getFollowerTrayRuntimeStatus());
+    subscribeToFollowerTrayRuntimeStatus(postFollowerStatus);
   }
 
   const runtimeStyle = doc.createElement('style');

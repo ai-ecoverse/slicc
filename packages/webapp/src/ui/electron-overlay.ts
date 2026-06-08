@@ -5,7 +5,12 @@
 // uses a plugin to resolve ?raw to the .svg with text loader.
 // "dark" SVG = dark fill + white outlines → visible on dark backgrounds.
 // "light" SVG = white fill + black outlines → visible on light backgrounds.
+
+import sliccyDarkErrorSvg from '../../../assets/logos/sliccy-error-mono-dark-0scoops.svg?raw';
+import sliccyLightErrorSvg from '../../../assets/logos/sliccy-error-mono-light-0scoops.svg?raw';
+import sliccyDarkDisconnectedSvg from '../../../assets/logos/sliccy-mono-dark-0scoops.svg?raw';
 import sliccyDarkSvg from '../../../assets/logos/sliccy-mono-dark-1scoops.svg?raw';
+import sliccyLightDisconnectedSvg from '../../../assets/logos/sliccy-mono-light-0scoops.svg?raw';
 import sliccyLightSvg from '../../../assets/logos/sliccy-mono-light-1scoops.svg?raw';
 import {
   createElectronOverlayShellState,
@@ -22,6 +27,8 @@ import {
 import {
   ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE,
   ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE,
+  type ElectronOverlayFollowerStatus,
+  isElectronOverlayFollowerStatusMessage,
 } from './runtime-mode.js';
 import { type ExtensionTabId, normalizeExtensionTabId } from './tabbed-ui.js';
 
@@ -133,8 +140,10 @@ function withTabQuery(appUrl: string, activeTab: ExtensionTabId): string {
   }
 }
 
+const LAUNCHER_FOLLOWER_STATUS_ATTR = 'follower-status';
+
 class SliccElectronLauncherElement extends HTMLElement {
-  static observedAttributes = ['open', 'corner'];
+  static observedAttributes = ['open', 'corner', LAUNCHER_FOLLOWER_STATUS_ATTR];
 
   private button: HTMLButtonElement | null = null;
   private pointerState: LauncherPointerState | null = null;
@@ -254,6 +263,17 @@ class SliccElectronLauncherElement extends HTMLElement {
       :host([corner="right"]) .logo-icon { width: 22px; height: 22px; }
 
       .logo-icon { width: 32px; height: 32px; pointer-events: none; }
+      /* Three follower states render side-by-side; the host attribute
+         selects which state-wrapper is visible, and each wrapper contains
+         a dark + light variant gated by the page color scheme. The
+         missing-attribute case (no status posted yet) falls back to
+         "disconnected" so the launcher never starts in a misleading
+         "connected" icon. */
+      .logo-state { display: none; }
+      :host(:not([${LAUNCHER_FOLLOWER_STATUS_ATTR}])) .logo-state-disconnected,
+      :host([${LAUNCHER_FOLLOWER_STATUS_ATTR}="disconnected"]) .logo-state-disconnected,
+      :host([${LAUNCHER_FOLLOWER_STATUS_ATTR}="connected"]) .logo-state-connected,
+      :host([${LAUNCHER_FOLLOWER_STATUS_ATTR}="error"]) .logo-state-error { display: contents; }
       /* Dark host: dark SVG (dark fill, white outlines) */
       .logo-for-dark { display: block; }
       .logo-for-light { display: none; }
@@ -266,7 +286,10 @@ class SliccElectronLauncherElement extends HTMLElement {
       )
     );
 
-    // Create button with Sliccy logo — both variants embedded, CSS toggles visibility.
+    // Create button with Sliccy logo — three state-wrappers (disconnected /
+    // connected / error) each carry both dark + light variants. CSS picks
+    // which wrapper is visible from the `follower-status` attribute and
+    // which variant inside it from the page color scheme.
     const button = doc.createElement('button');
     button.type = 'button';
     const isMac = navigator.platform?.startsWith('Mac') || navigator.userAgent?.includes('Mac');
@@ -274,22 +297,41 @@ class SliccElectronLauncherElement extends HTMLElement {
     button.setAttribute('aria-label', 'Toggle SLICC overlay');
     button.title = `Toggle SLICC (${shortcutLabel})`;
 
-    const forDark = doc.createElement('div');
-    forDark.className = 'logo-icon logo-for-dark';
-    forDark.appendChild(parseSvgFragment(doc, stripXmlDeclaration(sliccyDarkSvg)));
-    forDark.setAttribute('aria-hidden', 'true');
+    const stateIcons: Array<{
+      state: ElectronOverlayFollowerStatus;
+      darkSvg: string;
+      lightSvg: string;
+    }> = [
+      {
+        state: 'disconnected',
+        darkSvg: sliccyDarkDisconnectedSvg,
+        lightSvg: sliccyLightDisconnectedSvg,
+      },
+      { state: 'connected', darkSvg: sliccyDarkSvg, lightSvg: sliccyLightSvg },
+      { state: 'error', darkSvg: sliccyDarkErrorSvg, lightSvg: sliccyLightErrorSvg },
+    ];
+    for (const { state, darkSvg, lightSvg } of stateIcons) {
+      const wrapper = doc.createElement('div');
+      wrapper.className = `logo-state logo-state-${state}`;
+      wrapper.setAttribute('aria-hidden', 'true');
 
-    const forLight = doc.createElement('div');
-    forLight.className = 'logo-icon logo-for-light';
-    forLight.appendChild(parseSvgFragment(doc, stripXmlDeclaration(sliccyLightSvg)));
-    forLight.setAttribute('aria-hidden', 'true');
+      const forDark = doc.createElement('div');
+      forDark.className = 'logo-icon logo-for-dark';
+      forDark.appendChild(parseSvgFragment(doc, stripXmlDeclaration(darkSvg)));
+
+      const forLight = doc.createElement('div');
+      forLight.className = 'logo-icon logo-for-light';
+      forLight.appendChild(parseSvgFragment(doc, stripXmlDeclaration(lightSvg)));
+
+      wrapper.appendChild(forDark);
+      wrapper.appendChild(forLight);
+      button.appendChild(wrapper);
+    }
 
     const tabLabel = doc.createElement('span');
     tabLabel.className = 'tab-label';
     tabLabel.textContent = 'SLICC';
 
-    button.appendChild(forDark);
-    button.appendChild(forLight);
     button.appendChild(tabLabel);
     root.appendChild(button);
 
@@ -602,6 +644,7 @@ export class SliccElectronOverlayElement extends HTMLElement {
 
   private state: ElectronOverlayShellState = createElectronOverlayShellState();
   private appUrlValue = DEFAULT_APP_URL;
+  private followerStatus: ElectronOverlayFollowerStatus = 'disconnected';
   private syncingAttributes = false;
 
   connectedCallback(): void {
@@ -751,8 +794,18 @@ export class SliccElectronOverlayElement extends HTMLElement {
     }
     if (type === ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE) {
       this.hideSidebar();
+      return;
+    }
+    if (isElectronOverlayFollowerStatusMessage(event.data)) {
+      this.applyFollowerStatus(event.data.status);
     }
   };
+
+  private applyFollowerStatus(status: ElectronOverlayFollowerStatus): void {
+    if (this.followerStatus === status) return;
+    this.followerStatus = status;
+    this.syncChildren();
+  }
 
   private parseAppOrigin(): string | null {
     if (!this.appUrlValue) return null;
@@ -822,6 +875,7 @@ export class SliccElectronOverlayElement extends HTMLElement {
 
     launcher.toggleAttribute('open', this.state.open);
     launcher.setAttribute('corner', this.state.corner);
+    launcher.setAttribute(LAUNCHER_FOLLOWER_STATUS_ATTR, this.followerStatus);
     sidebar.toggleAttribute('open', this.state.open);
     sidebar.setAttribute('corner', this.state.corner);
     sidebar.setAttribute('active-tab', this.state.activeTab);
