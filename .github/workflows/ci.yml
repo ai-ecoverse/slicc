@@ -176,6 +176,7 @@ jobs:
       needs.changes.outputs.webapp == 'true' ||
       needs.changes.outputs.vfs-root == 'true' ||
       needs.changes.outputs.assets == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -254,6 +255,7 @@ jobs:
     if: >-
       needs.changes.outputs.cloud-core == 'true' ||
       needs.changes.outputs.node-server == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -286,6 +288,7 @@ jobs:
       needs.changes.outputs.webapp == 'true' ||
       needs.changes.outputs.vfs-root == 'true' ||
       needs.changes.outputs.assets == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -723,6 +726,7 @@ jobs:
     if: >-
       needs.changes.outputs.cloud-core == 'true' ||
       needs.changes.outputs.node-server == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
     steps:
