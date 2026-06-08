@@ -35,10 +35,31 @@ describe('workflow acceptance', () => {
     await fs.writeFile('/workspace/repo-audit.workflow.js', FIXTURE);
 
     const peak = { cur: 0, max: 0 };
+    // Deterministically observe concurrency without relying on event-loop timing.
+    // The pipeline issues both "Find bugs" agents together (cap 4 ≥ 2), so hold
+    // the first two spawns until both are in flight, then release — guaranteeing
+    // peak.max ≥ 2. A safety timeout prevents any deadlock if they never overlap.
+    // (Bare `await Promise.resolve()` flaked: under load the first spawn could
+    // resolve before the second was issued, leaving peak.max === 1.)
+    const PROBE = 2;
+    const firstWave: Array<() => void> = [];
+    let probed = false;
+    const releaseFirstWave = (): void => {
+      probed = true;
+      for (const r of firstWave.splice(0)) r();
+    };
     const spawn = async (a: string[]) => {
       peak.cur++;
       peak.max = Math.max(peak.max, peak.cur);
-      await Promise.resolve();
+      if (probed) {
+        await Promise.resolve();
+      } else {
+        await new Promise<void>((resolve) => {
+          firstWave.push(resolve);
+          if (firstWave.length >= PROBE) releaseFirstWave();
+          else setTimeout(releaseFirstWave, 2000);
+        });
+      }
       const prompt = a[a.length - 1];
       const hasSchema = a.includes('--schema-b64');
       let stdout = '';
