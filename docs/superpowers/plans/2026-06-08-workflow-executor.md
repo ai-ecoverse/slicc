@@ -69,7 +69,7 @@ describe('workflow-script', () => {
     expect(code).toContain('/*P*/');
     expect(code).toContain('const __r = await (async () => {');
     expect(code).toContain('const meta = {}');       // export stripped
-    expect(code).toContain('console.log("WF_RESULT_xyz" + JSON.stringify(__r ?? null))');  // literal token
+    expect(code).toContain('__emit("WF_RESULT_xyz" + __stringify(__r ?? null))');  // literal token via captured emit/stringify
   });
   it('does not expose the sentinel to user code (anti-spoof)', () => {
     const code = buildWorkflowCode({ prelude: '', config: { cap: 4, budget: null, cwd: '/', agentCwd: '/s/' }, body: 'return typeof __WF.sentinel', sentinel: 'WF_RESULT_secret' });
@@ -132,10 +132,14 @@ export function buildWorkflowCode(opts: {
   // The sentinel is inlined as a LITERAL in the emit (NOT placed in __WF) so user code can neither
   // read nor mutate it. JSON.stringify drops `undefined`, so an absent `args` → `__WF.args === undefined`.
   return (
+    // Capture console.log + JSON.stringify BEFORE user code so a script can't patch them to
+    // intercept/forge the result. The sentinel is an unguessable literal (never in __WF).
+    `const __emit = console.log.bind(console);\n` +
+    `const __stringify = JSON.stringify.bind(JSON);\n` +
     `const __WF = ${JSON.stringify(opts.config)};\n` +
     `${opts.prelude}\n` +
     `const __r = await (async () => {\n${stripExports(opts.body)}\n})();\n` +
-    `console.log(${JSON.stringify(opts.sentinel)} + JSON.stringify(__r ?? null));\n`
+    `__emit(${JSON.stringify(opts.sentinel)} + __stringify(__r ?? null));\n`
   );
 }
 
@@ -731,11 +735,12 @@ Run → PASS. **Commit:** `test(workflow): schema fan-out acceptance fixture (mo
 
 ## Task 9: Real-scoop dual-float acceptance (manual/e2e — the spec's hard gate)
 
-No code/proxy. The spec requires the fan-out fixture to run via **real scoops in both floats**, which is inherently an e2e check.
+No code/proxy. The spec requires the fan-out fixture to **return the correct value via real scoops in both floats** — inherently an e2e check. First copy the fixture into the VFS so `workflow run` (which reads the VFS) can find it: `cp packages/webapp/tests/fixtures/workflows/repo-audit.workflow.js` content into `/workspace/repo-audit.workflow.js` (or author it there).
 
-- [ ] **Standalone:** `npm install && npm run dev`; in the terminal run `workflow run packages/webapp/tests/fixtures/workflows/repo-audit.workflow.js --args '{"files":["src/foo.ts"]}'`; confirm real scoops run, the schema path returns validated objects, and a final `{ confirmed }` prints.
-- [ ] **Extension:** `npm run build -w @slicc/chrome-extension`, load `dist/extension`; run the same from the **side-panel terminal**; **close + reopen the panel mid-run** and confirm via `ps` (or logs) the offscreen realm process kept running (process-survival). Reading the result after reopen is SP2.
-- [ ] Record both results in the PR description.
+- [ ] **Standalone (value):** `npm install && npm run dev`; in the terminal run `workflow run /workspace/repo-audit.workflow.js --args '{"files":["src/foo.ts"]}'`; confirm real scoops run, the schema path returns validated objects, and a correct final `{ confirmed }` **prints**.
+- [ ] **Extension (value):** `npm run build -w @slicc/chrome-extension`, load `dist/extension`; run the same from the **side-panel terminal with the panel kept open**; confirm the correct final `{ confirmed }` **prints** (this is the spec's "returns correct value in the extension float" gate — distinct from survival).
+- [ ] **Extension (survival):** start a longer run, **close + reopen the panel mid-run**, and confirm via `ps`/logs the offscreen realm process kept running (process-survival). Re-reading the result after reopen is SP2.
+- [ ] Record all three results in the PR description.
 
 ---
 
