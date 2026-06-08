@@ -49,6 +49,10 @@ struct AppListView: View {
                                 onCreateDebugBuild(target)
                             } else if runtimeState == .cannotStart(.needsPermission) {
                                 appManagementPermission.openSystemSettings()
+                            } else if runtimeState == .cannotStart(.needsLeader) {
+                                // Row is disabled in this state, but defend
+                                // against future call sites: do nothing.
+                                return
                             } else {
                                 onLaunchElectron(target)
                             }
@@ -177,6 +181,7 @@ enum AppRowStatusDot {
     case runningWithoutDebug
     case needsPermission
     case needsDebugBuild
+    case needsLeader
     case failed
 }
 
@@ -185,6 +190,10 @@ struct AppRow: View {
     let runtimeState: AppRuntimeState
     let onLaunch: () -> Void
     let onCreateDebugBuild: (() -> Void)?
+
+    private var isDisabled: Bool {
+        runtimeState == .cannotStart(.needsLeader)
+    }
 
     var body: some View {
         Button { onLaunch() } label: {
@@ -221,7 +230,12 @@ struct AppRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .help(isDisabled ? AppRowStatusDot.needsLeader.help : "")
         .onHover { hovering in
+            // Avoid the pointing-hand affordance when the row is disabled
+            // — the user can't actually start the app without a leader.
+            guard !isDisabled else { return }
             if hovering {
                 NSCursor.pointingHand.push()
             } else {
@@ -244,6 +258,8 @@ struct AppRow: View {
             return .needsDebugBuild
         case .cannotStart(.needsPermission):
             return .needsPermission
+        case .cannotStart(.needsLeader):
+            return .needsLeader
         }
     }
 
@@ -264,11 +280,13 @@ struct AppRow: View {
             return "Needs Debug Build"
         case .cannotStart(.needsPermission):
             return "Needs Permission"
+        case .cannotStart(.needsLeader):
+            return "Start a browser first"
         }
     }
 }
 
-private extension AppRowStatusDot {
+extension AppRowStatusDot {
     var color: Color {
         switch self {
         case .runningWithDebug:
@@ -277,6 +295,8 @@ private extension AppRowStatusDot {
             return .yellow
         case .needsDebugBuild, .failed:
             return .red
+        case .needsLeader:
+            return .gray
         }
     }
 
@@ -290,6 +310,8 @@ private extension AppRowStatusDot {
             return "Remote debugging disabled. Click to create a debug build."
         case .needsPermission:
             return "App Management permission required. Click to open System Settings."
+        case .needsLeader:
+            return "Start a browser first to enable this app."
         case .failed:
             return "The last start attempt failed. Click to retry."
         }
