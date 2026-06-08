@@ -1,16 +1,19 @@
 #!/usr/bin/env node
-// PR-level "boy-scout" gate for the function-size debt list.
+// PR-level "boy-scout" gate for both biome complexity debt lists.
 //
 // Computes the PR's changed files via `git diff --name-only <base>...HEAD`
-// and intersects them with the size-exemption globs parsed from `biome.json`
-// (see size-exemption-lib.mjs). Exits non-zero with a fix-it message if any
-// touched file is still on the debt list — the PR author must refactor the
-// file under the function-size cap and delete its `overrides` entry in the
-// same PR. Skips gracefully on non-PR events.
+// and intersects them with BOTH per-rule exemption globs parsed from
+// `biome.json` (see size-exemption-lib.mjs): the function-size debt list
+// (`complexity.noExcessiveLinesPerFunction: "off"`) and the cognitive-
+// complexity debt list (`complexity.noExcessiveCognitiveComplexity: "off"`).
+// Exits non-zero with a rule-appropriate fix-it message if any touched file
+// is still on EITHER list — the PR author must bring the file under the
+// configured biome cap and delete its `overrides` entry in the same PR.
+// Skips gracefully on non-PR events.
 //
 // Usage:
-//   node packages/dev-tools/tools/check-touched-size-exemptions.mjs [base-ref]
-//   CHANGED_FILES=path1,path2 node packages/dev-tools/tools/check-touched-size-exemptions.mjs
+//   node packages/dev-tools/tools/check-touched-exemptions.mjs [base-ref]
+//   CHANGED_FILES=path1,path2 node packages/dev-tools/tools/check-touched-exemptions.mjs
 //
 // Base-ref resolution order:
 //   1. positional arg
@@ -20,11 +23,36 @@
 
 import { spawnSync } from 'node:child_process';
 import {
-  extractSizeExemptionGlobs,
+  COMPLEXITY_RULE_KEY,
+  extractExemptionGlobsFor,
   findTouchedExemptions,
   readBiomeConfig,
   repoRoot,
+  SIZE_RULE_KEY,
 } from './size-exemption-lib.mjs';
+
+const SCRIPT = 'check-touched-exemptions';
+
+const RULES = [
+  {
+    key: SIZE_RULE_KEY,
+    label: 'function-size',
+    overrideName: 'complexity.noExcessiveLinesPerFunction',
+    fixIt:
+      'Fix: in this same PR, refactor each file so every function is under the\n' +
+      'configured biome cap (complexity.noExcessiveLinesPerFunction.maxLines), then\n' +
+      'remove its entry from the debt-list `overrides` block in biome.json.',
+  },
+  {
+    key: COMPLEXITY_RULE_KEY,
+    label: 'cognitive-complexity',
+    overrideName: 'complexity.noExcessiveCognitiveComplexity',
+    fixIt:
+      "Fix: in this same PR, reduce each file's cognitive complexity under the\n" +
+      'configured biome cap (complexity.noExcessiveCognitiveComplexity.maxAllowedComplexity),\n' +
+      'then remove its entry from the debt-list `overrides` block in biome.json.',
+  },
+];
 
 function resolveBaseRef(argv) {
   if (argv[2]) return argv[2];
@@ -67,59 +95,64 @@ function isPullRequestEvent() {
   return process.env.GITHUB_EVENT_NAME === 'pull_request' || !!process.env.GITHUB_BASE_REF;
 }
 
+function resolveChangedFiles() {
+  const envFiles = getChangedFilesFromEnv();
+  if (envFiles) return { changedFiles: envFiles };
+  const baseRef = resolveBaseRef(process.argv);
+  try {
+    return { changedFiles: getChangedFilesFromGit(baseRef) };
+  } catch (err) {
+    return { error: err.message };
+  }
+}
+
 function main() {
   // Skip gracefully on non-PR CI events (push, merge_group). The gate is
   // PR-only by design; merge_group runs against the queue commit and has no
   // meaningful merge base to diff against.
   if (process.env.GITHUB_ACTIONS === 'true' && !isPullRequestEvent()) {
-    console.log('check-touched-size-exemptions: skipped (not a pull_request event)');
+    console.log(`${SCRIPT}: skipped (not a pull_request event)`);
     return 0;
   }
 
   const biomeConfig = readBiomeConfig();
-  const exemptions = extractSizeExemptionGlobs(biomeConfig);
-  if (exemptions.length === 0) {
-    console.log(
-      'check-touched-size-exemptions: no debt list found in biome.json — nothing to gate'
-    );
+  const ruleStates = RULES.map((rule) => ({
+    ...rule,
+    globs: extractExemptionGlobsFor(biomeConfig, rule.key),
+  }));
+
+  if (ruleStates.every((r) => r.globs.length === 0)) {
+    console.log(`${SCRIPT}: no debt lists found in biome.json — nothing to gate`);
     return 0;
   }
 
-  let changedFiles;
-  const envFiles = getChangedFilesFromEnv();
-  if (envFiles) {
-    changedFiles = envFiles;
-  } else {
-    const baseRef = resolveBaseRef(process.argv);
-    try {
-      changedFiles = getChangedFilesFromGit(baseRef);
-    } catch (err) {
-      console.error(`check-touched-size-exemptions: ${err.message}`);
-      console.error(
-        'Hint: in CI, checkout with `fetch-depth: 0` so the merge-base can be resolved.'
-      );
-      return 2;
-    }
+  const resolved = resolveChangedFiles();
+  if (resolved.error) {
+    console.error(`${SCRIPT}: ${resolved.error}`);
+    console.error('Hint: in CI, checkout with `fetch-depth: 0` so the merge-base can be resolved.');
+    return 2;
   }
+  const { changedFiles } = resolved;
 
-  const touched = findTouchedExemptions(changedFiles, exemptions);
-  if (touched.length === 0) {
-    console.log(
-      `check-touched-size-exemptions: OK (${changedFiles.length} changed file(s), 0 still on the debt list)`
-    );
+  const violations = ruleStates
+    .map((rule) => ({ rule, touched: findTouchedExemptions(changedFiles, rule.globs) }))
+    .filter((v) => v.touched.length > 0);
+
+  if (violations.length === 0) {
+    console.log(`${SCRIPT}: OK (${changedFiles.length} changed file(s), 0 still on any debt list)`);
     return 0;
   }
 
-  console.error('check-touched-size-exemptions: FAIL');
-  console.error('');
-  console.error('The following changed files are still on the function-size debt list');
-  console.error('(biome.json `overrides` → complexity.noExcessiveLinesPerFunction = off):');
-  console.error('');
-  for (const f of touched) console.error(`  - ${f}`);
-  console.error('');
-  console.error('Fix: in this same PR, refactor each file so every function is under the');
-  console.error('configured biome cap (complexity.noExcessiveLinesPerFunction.maxLines), then');
-  console.error('remove its entry from the debt-list `overrides` block in biome.json.');
+  console.error(`${SCRIPT}: FAIL`);
+  for (const { rule, touched } of violations) {
+    console.error('');
+    console.error(`The following changed files are still on the ${rule.label} debt list`);
+    console.error(`(biome.json \`overrides\` → ${rule.overrideName} = off):`);
+    console.error('');
+    for (const f of touched) console.error(`  - ${f}  [${rule.label}]`);
+    console.error('');
+    console.error(rule.fixIt);
+  }
   return 1;
 }
 
