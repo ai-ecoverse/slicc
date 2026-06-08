@@ -1912,9 +1912,17 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
     const initialTab = getElectronOverlayInitialTab(window.location.href);
     layout.setActiveTab(initialTab);
 
-    layout.setShowElectronOverlayClose(() => {
-      window.parent.postMessage({ type: ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE }, '*');
-    });
+    // Only mount the close button when actually embedded in a parent frame
+    // (the overlay shell). When `/electron` is opened top-level, posting a
+    // close message to `window.parent` would target the page itself and
+    // close nothing — render no button instead of a dead control.
+    if (window.parent !== window) {
+      layout.setShowElectronOverlayClose(() => {
+        window.parent.postMessage({ type: ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE }, '*');
+      });
+    } else {
+      layout.setShowElectronOverlayClose(null);
+    }
 
     const runtimeStyle = document.createElement('style');
     runtimeStyle.id = 'slicc-electron-overlay-runtime-style';

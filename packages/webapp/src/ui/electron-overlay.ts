@@ -735,6 +735,15 @@ export class SliccElectronOverlayElement extends HTMLElement {
 
   private onMessage = (event: MessageEvent): void => {
     if (!event.data || typeof event.data !== 'object' || !('type' in event.data)) return;
+    // Reject messages from the host window itself — only the embedded app
+    // iframe (or another foreign window) may drive toggle/close, never the
+    // page that hosts this overlay.
+    if (event.source === this.ownerDocument.defaultView) return;
+    // When appUrl is a valid absolute URL, require event.origin to match its
+    // origin. Empty / relative appUrl skips this check (no origin to compare
+    // against), but the source guard above still applies.
+    const expectedOrigin = this.parseAppOrigin();
+    if (expectedOrigin !== null && event.origin !== expectedOrigin) return;
     const type = (event.data as Record<string, unknown>).type;
     if (type === ELECTRON_OVERLAY_TOGGLE_MESSAGE_TYPE) {
       this.toggle();
@@ -744,6 +753,15 @@ export class SliccElectronOverlayElement extends HTMLElement {
       this.hideSidebar();
     }
   };
+
+  private parseAppOrigin(): string | null {
+    if (!this.appUrlValue) return null;
+    try {
+      return new URL(this.appUrlValue).origin;
+    } catch {
+      return null;
+    }
+  }
 
   private render(): void {
     const root = this.attachShadow({ mode: 'open' });

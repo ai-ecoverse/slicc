@@ -133,12 +133,37 @@ describe('SliccElectronOverlayElement — close-message round-trip', () => {
     registerElectronOverlayElements();
   });
 
-  it('hides the sidebar when ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE is posted', async () => {
+  function mountOverlay(appUrl?: string): SliccElectronOverlayElement {
     const overlay = document.createElement(
       ELECTRON_OVERLAY_TAG_NAME
     ) as SliccElectronOverlayElement;
     overlay.setAttribute('open', '');
+    if (appUrl !== undefined) overlay.setAttribute('app-url', appUrl);
     document.body.appendChild(overlay);
+    return overlay;
+  }
+
+  /**
+   * Synthesize a MessageEvent with caller-controlled `source` and `origin`
+   * so we can prove the source/origin guards reject hostile cases. The
+   * `window.postMessage` self-post path in jsdom leaves `source` null, so
+   * we dispatch the event directly to exercise the source==window branch.
+   */
+  function dispatchMessage(detail: {
+    data: unknown;
+    source?: MessageEventSource | null;
+    origin?: string;
+  }): void {
+    const event = new MessageEvent('message', {
+      data: detail.data,
+      source: detail.source ?? null,
+      origin: detail.origin ?? '',
+    });
+    window.dispatchEvent(event);
+  }
+
+  it('hides the sidebar when ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE is posted', async () => {
+    const overlay = mountOverlay();
     expect(overlay.open).toBe(true);
 
     window.postMessage({ type: ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE }, '*');
@@ -146,14 +171,106 @@ describe('SliccElectronOverlayElement — close-message round-trip', () => {
   });
 
   it('ignores foreign message types', async () => {
-    const overlay = document.createElement(
-      ELECTRON_OVERLAY_TAG_NAME
-    ) as SliccElectronOverlayElement;
-    overlay.setAttribute('open', '');
-    document.body.appendChild(overlay);
+    const overlay = mountOverlay();
 
     window.postMessage({ type: 'slicc-electron-overlay:other' }, '*');
     await new Promise((r) => setTimeout(r, 10));
     expect(overlay.open).toBe(true);
+  });
+
+  it('rejects messages whose source is the host window itself', () => {
+    const overlay = mountOverlay();
+
+    dispatchMessage({
+      data: { type: ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE },
+      source: window,
+      origin: window.location.origin,
+    });
+    expect(overlay.open).toBe(true);
+
+    dispatchMessage({
+      data: { type: 'slicc-electron-overlay:toggle' },
+      source: window,
+      origin: window.location.origin,
+    });
+    expect(overlay.open).toBe(true);
+  });
+
+  it('rejects messages whose origin does not match the iframe app origin', () => {
+    const overlay = mountOverlay('https://app.example.com/electron');
+
+    dispatchMessage({
+      data: { type: ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE },
+      source: { postMessage: () => {} } as unknown as MessageEventSource,
+      origin: 'https://evil.example.com',
+    });
+    expect(overlay.open).toBe(true);
+  });
+
+  it('accepts messages whose origin matches the iframe app origin', () => {
+    const overlay = mountOverlay('https://app.example.com/electron');
+
+    dispatchMessage({
+      data: { type: ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE },
+      source: { postMessage: () => {} } as unknown as MessageEventSource,
+      origin: 'https://app.example.com',
+    });
+    expect(overlay.open).toBe(false);
+  });
+
+  it('skips origin validation when appUrl is empty (relies on source guard alone)', () => {
+    const overlay = mountOverlay();
+
+    dispatchMessage({
+      data: { type: ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE },
+      source: { postMessage: () => {} } as unknown as MessageEventSource,
+      origin: 'https://anywhere.example.com',
+    });
+    expect(overlay.open).toBe(false);
+  });
+});
+
+describe('main.ts electron-overlay close-button gating — embedded vs top-level', () => {
+  beforeEach(() => {
+    document.body.replaceChildren();
+  });
+
+  /**
+   * Mirrors the gating in `main.ts`: when `/electron` is opened top-level,
+   * `window.parent === window`, so `setShowElectronOverlayClose(null)` is
+   * called and no button must be mounted — otherwise the button would post
+   * a close message to itself and close nothing.
+   */
+  it('top-level frame branch (null) does not mount a close button', () => {
+    const { layout, titleEl } = makeLayoutFixture();
+    const isEmbedded = window.parent !== window;
+    // jsdom default: `window.parent === window`, so we exercise the same
+    // branch main.ts takes for top-level `/electron`.
+    expect(isEmbedded).toBe(false);
+    if (isEmbedded) {
+      layout.setShowElectronOverlayClose(() => {});
+    } else {
+      layout.setShowElectronOverlayClose(null);
+    }
+    expect(titleEl.querySelector(BTN_SEL)).toBeNull();
+  });
+
+  /**
+   * Mirrors the gating in `main.ts`: when actually embedded in the overlay
+   * shell, `window.parent !== window`, so a handler is passed and the
+   * button IS mounted. We cannot make jsdom satisfy that predicate without
+   * a real iframe, so we exercise the embedded branch directly.
+   */
+  it('embedded frame branch (handler) mounts a close button that posts to parent', () => {
+    const { layout, titleEl } = makeLayoutFixture();
+    const postSpy = vi.fn();
+    // Same closure shape as the production code path.
+    layout.setShowElectronOverlayClose(() => {
+      postSpy({ type: ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE });
+    });
+    const btn = titleEl.querySelector<HTMLButtonElement>(BTN_SEL);
+    expect(btn).not.toBeNull();
+    btn!.click();
+    expect(postSpy).toHaveBeenCalledWith({ type: ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE });
   });
 });
