@@ -1,4 +1,5 @@
 import Foundation
+import Logging
 import XCTest
 @testable import slicc_server
 
@@ -215,6 +216,121 @@ final class ElectronLauncherTests: XCTestCase {
             ),
             "http://localhost:5730"
         )
+    }
+
+    // MARK: - Bypassed-state recording timing
+    //
+    // The reload-with-bypass path must NOT mark the URL as bypassed before
+    // the iframe is confirmed loaded — if the CDP session disconnects
+    // mid-reload (AEM Desktop's renderer recreates its execution context
+    // during bootstrap, which closes our WS), the next reconnect would see
+    // `alreadyBypassed=true` and `openAction` would skip the probe+reload
+    // entirely, leaving the iframe permanently blocked.
+
+    func testBypassedRecordedAfterImmediateLoadSuccess() {
+        XCTAssertTrue(ElectronOverlayInjector.shouldRecordBypassedAfter(probeAction: .done))
+    }
+
+    func testBypassedNotRecordedAfterReloadDecision() {
+        XCTAssertFalse(
+            ElectronOverlayInjector.shouldRecordBypassedAfter(probeAction: .reloadWithBypass),
+            "Recording bypassed=true before the reload completes would skip the reload on a mid-flight reconnect"
+        )
+    }
+
+    func testBypassedRecordedAfterPostReloadDoneOnly() {
+        XCTAssertTrue(ElectronOverlayInjector.shouldRecordBypassedAfter(postReloadAction: .done))
+    }
+
+    func testBypassedNotRecordedAfterPostReloadEscalation() {
+        XCTAssertFalse(
+            ElectronOverlayInjector.shouldRecordBypassedAfter(postReloadAction: .escalateToFetchProxy),
+            "Escalation means the iframe is still blocked — don't record until Fetch-proxy confirms load"
+        )
+    }
+
+    func testBypassedNotRecordedAfterNoEscalation() {
+        XCTAssertFalse(
+            ElectronOverlayInjector.shouldRecordBypassedAfter(postReloadAction: .noEscalationRequested)
+        )
+    }
+
+    // MARK: - Disconnect-during-probe must fail in-flight continuations
+    //
+    // The original bug: `runReceiveLoop`'s catch path called `onClose()` but
+    // not `stop()`, so the in-flight `sendCommand(awaitResponse:true)`
+    // continuation (e.g. inside `probeOverlayLoaded`) never resolved →
+    // `runConnectFlow` hung forever → the reload-with-bypass + Fetch-proxy
+    // escalation never fired → iframe stayed CSP-blocked. The fix is to call
+    // `stop()` on disconnect, which resumes every pending waiter with `nil`.
+
+    func testStopResumesPendingWaitersWithNil() async {
+        let session = OverlayTargetSession(
+            target: ElectronInspectableTarget(
+                type: "page",
+                title: nil,
+                url: "file:///tmp/x.html",
+                webSocketDebuggerURL: "ws://127.0.0.1:9999/devtools/page/1"
+            ),
+            bootstrapScript: "/* noop */",
+            servePort: 5711,
+            session: .shared,
+            logger: Logger(label: "test"),
+            probeDelayNanoseconds: 1_000_000,
+            commandTimeoutNanoseconds: 60_000_000_000,
+            isAlreadyBypassed: { _ in false },
+            recordBypassed: { _ in },
+            onClose: { _ in }
+        )
+
+        let waiterTask = Task<[String: Any]?, Never> {
+            await session._testing_awaitSyntheticWaiter()
+        }
+
+        // Wait until the waiter is registered (Task.yield isn't enough here
+        // because withCheckedContinuation runs on its own executor).
+        let registered = await waitFor(timeout: 1.0) {
+            session._testing_pendingWaiterCount() == 1
+        }
+        XCTAssertTrue(registered, "synthetic waiter never registered")
+
+        session.stop()
+
+        let result = await waiterTask.value
+        XCTAssertNil(result, "stop() must resume the pending waiter with nil")
+        XCTAssertEqual(session._testing_pendingWaiterCount(), 0)
+    }
+
+    func testStopIsIdempotent() async {
+        let session = OverlayTargetSession(
+            target: ElectronInspectableTarget(
+                type: "page",
+                title: nil,
+                url: "file:///tmp/x.html",
+                webSocketDebuggerURL: "ws://127.0.0.1:9999/devtools/page/1"
+            ),
+            bootstrapScript: "/* noop */",
+            servePort: 5711,
+            session: .shared,
+            logger: Logger(label: "test"),
+            probeDelayNanoseconds: 1_000_000,
+            commandTimeoutNanoseconds: 60_000_000_000,
+            isAlreadyBypassed: { _ in false },
+            recordBypassed: { _ in },
+            onClose: { _ in }
+        )
+        session.stop()
+        session.stop()
+        XCTAssertEqual(session._testing_pendingWaiterCount(), 0)
+    }
+
+    private func waitFor(timeout seconds: Double, predicate: @Sendable () -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if predicate() { return true }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        return predicate()
     }
 
     private func makeTempDirectory() throws -> URL {

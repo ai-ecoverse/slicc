@@ -476,6 +476,24 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         return loaded ? .done : .escalateToFetchProxy
     }
 
+    /// Whether to record the target URL as CSP-bypassed after a post-probe
+    /// decision. The reload-with-bypass path must NOT record yet — if the CDP
+    /// session disconnects mid-reload (observed on AEM Desktop where the
+    /// renderer recreates its execution context during bootstrap), the next
+    /// reconnect would see `alreadyBypassed=true` and skip the reload entirely
+    /// via `openAction`, leaving the iframe permanently blocked. Only record
+    /// once we have confirmed the iframe actually loaded.
+    static func shouldRecordBypassedAfter(probeAction action: OverlayPostProbeAction) -> Bool {
+        action == .done
+    }
+
+    /// Whether to record the target URL as CSP-bypassed after a post-reload
+    /// decision. Same rationale as `probeAction` — only record on confirmed
+    /// `.done` (iframe loaded after the bypassed reload).
+    static func shouldRecordBypassedAfter(postReloadAction action: OverlayPostReloadAction) -> Bool {
+        action == .done
+    }
+
     private func runPollingLoop() async {
         logger.info("Overlay polling loop started")
         while !Task.isCancelled {
@@ -642,6 +660,7 @@ final class OverlayTargetSession: @unchecked Sendable {
     private let urlSession: URLSession
     private let logger: Logger
     private let probeDelayNanoseconds: UInt64
+    private let commandTimeoutNanoseconds: UInt64
     private let isAlreadyBypassed: @Sendable (String) -> Bool
     private let recordBypassed: @Sendable (String) -> Void
     private let onClose: @Sendable (String) -> Void
@@ -665,6 +684,7 @@ final class OverlayTargetSession: @unchecked Sendable {
         session: URLSession,
         logger: Logger,
         probeDelayNanoseconds: UInt64,
+        commandTimeoutNanoseconds: UInt64 = 10_000_000_000,
         isAlreadyBypassed: @escaping @Sendable (String) -> Bool,
         recordBypassed: @escaping @Sendable (String) -> Void,
         onClose: @escaping @Sendable (String) -> Void
@@ -675,6 +695,7 @@ final class OverlayTargetSession: @unchecked Sendable {
         self.urlSession = session
         self.logger = logger
         self.probeDelayNanoseconds = probeDelayNanoseconds
+        self.commandTimeoutNanoseconds = commandTimeoutNanoseconds
         self.isAlreadyBypassed = isAlreadyBypassed
         self.recordBypassed = recordBypassed
         self.onClose = onClose
@@ -773,13 +794,19 @@ final class OverlayTargetSession: @unchecked Sendable {
 
     private func handlePostProbe(loaded: Bool) async {
         let decision = ElectronOverlayInjector.postProbeAction(loaded: loaded)
+        if ElectronOverlayInjector.shouldRecordBypassedAfter(probeAction: decision) {
+            recordBypassed(target.url)
+        }
         switch decision {
         case .done:
             logger.info("Overlay iframe loaded successfully — no CSP reload needed", metadata: ["target": .string(target.url)])
-            recordBypassed(target.url)
         case .reloadWithBypass:
+            // Deliberately do NOT recordBypassed yet — if the CDP session
+            // disconnects mid-reload (AEM Desktop's bootstrap recreates the
+            // execution context, which closes our WS), the next reconnect
+            // needs to re-run the reload path. Only record once
+            // `handleLoadEventFired` confirms the iframe loaded.
             logger.info("Overlay iframe blocked by CSP, reloading with bypass", metadata: ["target": .string(target.url)])
-            recordBypassed(target.url)
             stateQueue.sync {
                 pendingReload = true
                 pendingCspEscalation = true
@@ -810,12 +837,19 @@ final class OverlayTargetSession: @unchecked Sendable {
                 }
             } catch {
                 if !isClosed() {
-                    logger.debug("Overlay session receive loop ended", metadata: [
+                    let pendingCount = stateQueue.sync { responseWaiters.count }
+                    logger.warning("Overlay session disconnected, failing in-flight CDP requests", metadata: [
                         "target": .string(target.url),
-                        "error": .string(error.localizedDescription)
+                        "error": .string(error.localizedDescription),
+                        "pendingWaiters": .stringConvertible(pendingCount)
                     ])
                 }
                 let targetID = target.webSocketDebuggerURL ?? target.url
+                // Fail all pending continuations and cancel the socket so the
+                // `runConnectFlow` (or `handleLoadEventFired`) awaiting a
+                // response unblocks instead of hanging forever. The injector's
+                // polling loop will then reconnect with a fresh session.
+                stop()
                 onClose(targetID)
                 return
             }
@@ -859,10 +893,19 @@ final class OverlayTargetSession: @unchecked Sendable {
         if Task.isCancelled || isClosed() { return }
         let loaded = await probeOverlayLoaded()
         let decision = ElectronOverlayInjector.postReloadAction(loaded: loaded, escalationRequested: true)
+        if ElectronOverlayInjector.shouldRecordBypassedAfter(postReloadAction: decision) {
+            recordBypassed(target.url)
+        }
         switch decision {
         case .done, .noEscalationRequested:
-            logger.info("Overlay iframe loaded successfully after CSP reload — no proxy needed", metadata: ["target": .string(target.url)])
+            logger.info("Overlay iframe loaded successfully after CSP reload — no proxy needed", metadata: [
+                "target": .string(target.url),
+                "decision": .string(String(describing: decision))
+            ])
         case .escalateToFetchProxy:
+            logger.warning("Overlay iframe still blocked after bypass reload — escalating to Fetch proxy", metadata: [
+                "target": .string(target.url)
+            ])
             await activateFetchProxy()
         }
     }
@@ -1110,6 +1153,28 @@ final class OverlayTargetSession: @unchecked Sendable {
                     cont.resume(returning: nil)
                     return
                 }
+                // Belt-and-suspenders timeout so a wedged CDP call (e.g. the
+                // socket silently buffering against a dead peer) cannot stall
+                // the connect/post-reload pipeline. The receive-loop's
+                // disconnect handler also fails pending waiters via `stop()`,
+                // so the timeout is the fallback when no error surfaces.
+                let timeoutNs = self.commandTimeoutNanoseconds
+                let methodName = method
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: timeoutNs)
+                    guard let self else { return }
+                    let waiter: CheckedContinuation<[String: Any]?, Never>? = self.stateQueue.sync {
+                        self.responseWaiters.removeValue(forKey: id)
+                    }
+                    if let waiter {
+                        self.logger.warning("CDP command timed out, failing waiter", metadata: [
+                            "target": .string(self.target.url),
+                            "method": .string(methodName),
+                            "id": .stringConvertible(id)
+                        ])
+                        waiter.resume(returning: nil)
+                    }
+                }
                 Task { [weak self] in
                     do {
                         let data = try JSONSerialization.data(withJSONObject: msg)
@@ -1145,6 +1210,24 @@ final class OverlayTargetSession: @unchecked Sendable {
 
     private func isClosed() -> Bool {
         stateQueue.sync { closed }
+    }
+
+    /// Test-only: register a synthetic pending waiter (no socket I/O) so a
+    /// unit test can drive `stop()` and assert the continuation resolves
+    /// with `nil`. Verifies the receive-loop disconnect path that previously
+    /// hung the connect/post-reload pipeline.
+    func _testing_awaitSyntheticWaiter() async -> [String: Any]? {
+        await withCheckedContinuation { (cont: CheckedContinuation<[String: Any]?, Never>) in
+            stateQueue.sync {
+                messageIdCounter += 1
+                responseWaiters[messageIdCounter] = cont
+            }
+        }
+    }
+
+    /// Test-only: current count of registered response waiters.
+    func _testing_pendingWaiterCount() -> Int {
+        stateQueue.sync { responseWaiters.count }
     }
 
     static func overlayOrigin(for urlString: String) -> String? {
