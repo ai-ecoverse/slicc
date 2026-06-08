@@ -148,6 +148,34 @@
   flex-shrink: 0;
 }
 
+/* Close-overlay button (electron-overlay mode only) — sits at the
+   leftmost edge of the thread header's title slot, to the LEFT of the
+   scoop-switcher dropdown. Posts a close message to the parent shell
+   which collapses the overlay drawer to the launcher pill. */
+.thread-header__electron-overlay-close {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  margin-right: 4px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--s2-content-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    background var(--s2-transition-default),
+    color var(--s2-transition-default);
+}
+.thread-header__electron-overlay-close:hover {
+  background: var(--s2-bg-layer-2);
+  color: var(--s2-content-default);
+}
+
 /* Extension mode: the thread header hosts the scoop-switcher
    dropdown in place of the static chat icon + scoop name. The
    dropdown sets its own internal styles so we just need to make

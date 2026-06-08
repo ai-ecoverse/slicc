@@ -112,6 +112,7 @@ import {
 import { createRemoteCdpPageBridge } from './remote-cdp-page-bridge.js';
 import { canonicalRuntimeId } from './runtime-identity.js';
 import {
+  ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE,
   getElectronOverlayInitialTab,
   isElectronOverlaySetTabMessage,
   resolveUiRuntimeMode,
@@ -1902,12 +1903,26 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   if (isElectronOverlay) {
     // Electron-overlay specifics: hide the tab-bar (Electron's chrome
     // has its own), set the initial tab from the URL hash, listen for
-    // parent-frame `set-tab` messages, and bind ⌘; (Cmd-+-Semicolon)
-    // to toggle the overlay window. Ported from the legacy inline
-    // path so the worker mode handles overlay correctly when it's
-    // the only standalone path.
+    // parent-frame `set-tab` messages, mount a close button in the
+    // inner thread header (left of the scoop switcher) that posts a
+    // close message to the parent overlay shell, and bind ⌘;
+    // (Cmd-+-Semicolon) to toggle the overlay window. Ported from the
+    // legacy inline path so the worker mode handles overlay correctly
+    // when it's the only standalone path.
     const initialTab = getElectronOverlayInitialTab(window.location.href);
     layout.setActiveTab(initialTab);
+
+    // Only mount the close button when actually embedded in a parent frame
+    // (the overlay shell). When `/electron` is opened top-level, posting a
+    // close message to `window.parent` would target the page itself and
+    // close nothing — render no button instead of a dead control.
+    if (window.parent !== window) {
+      layout.setShowElectronOverlayClose(() => {
+        window.parent.postMessage({ type: ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE }, '*');
+      });
+    } else {
+      layout.setShowElectronOverlayClose(null);
+    }
 
     const runtimeStyle = document.createElement('style');
     runtimeStyle.id = 'slicc-electron-overlay-runtime-style';
