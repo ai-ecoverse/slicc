@@ -21,6 +21,7 @@ export const ELECTRON_OVERLAY_RUNTIME_QUERY_VALUE = 'electron-overlay';
 export const HOSTED_LEADER_RUNTIME_QUERY_VALUE = 'hosted-leader';
 export const ELECTRON_OVERLAY_RUNTIME_PATH = '/electron';
 export const ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE = 'slicc-electron-overlay:set-tab';
+export const ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE = 'slicc-electron-overlay:close';
 // Re-export shared detached-runtime constants from chrome-extension/messages.ts
 // so panel-side code (resolveUiRuntimeMode) and SW-side code share the same
 // source of truth.
@@ -32,6 +33,10 @@ export {
 export interface ElectronOverlaySetTabMessage {
   type: typeof ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE;
   tab?: string;
+}
+
+export interface ElectronOverlayCloseMessage {
+  type: typeof ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE;
 }
 
 export function resolveUiRuntimeMode(locationHref: string, isExtension: boolean): UiRuntimeMode {
@@ -120,5 +125,16 @@ export function isElectronOverlaySetTabMessage(
     value !== null &&
     'type' in value &&
     (value as Record<string, unknown>).type === ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE
+  );
+}
+
+export function isElectronOverlayCloseMessage(
+  value: unknown
+): value is ElectronOverlayCloseMessage {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'type' in value &&
+    (value as Record<string, unknown>).type === ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE
   );
 }
