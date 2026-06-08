@@ -1,0 +1,77 @@
+/**
+ * `setup-standalone-panel-rpc.ts` — installs the page-side panel-RPC
+ * handler so DOM-bound shell commands run by the kernel worker
+ * (`screencapture` / `say` / `afplay` / clipboard / `open`, plus the
+ * playwright app-origin lookup, plus the leader-tray `host reset` /
+ * `host leave` / `cherry-emit` bridges) can reach the page realm.
+ *
+ * Extracted verbatim from `mainStandaloneWorker` (~main.ts:699–758).
+ * `imgcat` is intentionally terminal-only and stays out of the
+ * bridge — it's meant for the in-panel terminal, not the agent.
+ */
+
+import type { BrowserAPI } from '../../cdp/index.js';
+import type { TrayLeaveResult } from '../../scoops/tray-leave.js';
+import type { PageLeaderTrayHandle } from '../page-leader-tray.js';
+import type { RemoteCdpPageBridge } from '../remote-cdp-page-bridge.js';
+
+export interface StandalonePanelRpcDeps {
+  instanceId: string;
+  browser: BrowserAPI;
+  remoteCdpBridge: RemoteCdpPageBridge;
+  remoteCdpPushChannel: BroadcastChannel | null;
+  /** Lazy accessor — reads the live binding so post-install assignments are visible. */
+  getLeader(): PageLeaderTrayHandle | null;
+  performTrayLeaveLocally(opts: {
+    workerBaseUrl: string | null;
+    requestId?: string;
+  }): Promise<TrayLeaveResult>;
+  window: Window;
+}
+
+export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Promise<void> {
+  const {
+    instanceId,
+    browser,
+    remoteCdpBridge,
+    remoteCdpPushChannel,
+    getLeader,
+    performTrayLeaveLocally,
+    window: win,
+  } = deps;
+
+  const { installPanelRpcHandler, createPanelRpcEventEmitter } = await import(
+    '../../kernel/panel-rpc.js'
+  );
+  const { createStandalonePanelRpcHandlers } = await import('../panel-rpc-handlers.js');
+  const panelRpcEventEmitter = createPanelRpcEventEmitter({ instanceId });
+  const stopPanelRpcHandler = installPanelRpcHandler({
+    instanceId,
+    handlers: createStandalonePanelRpcHandlers({
+      resetTray: async () => {
+        const leader = getLeader();
+        if (!leader) {
+          throw new Error('no active tray session to reset');
+        }
+        return await leader.reset();
+      },
+      leaveTray: async ({ workerBaseUrl, requestId }) =>
+        await performTrayLeaveLocally({ workerBaseUrl, requestId }),
+      emitEvent: (channel, payload) => panelRpcEventEmitter.emit(channel, payload),
+      emitCherrySliccEvent: (runtimeId, name, detail) =>
+        getLeader()?.sync.emitCherrySliccEvent(runtimeId, name, detail) ?? false,
+      listRemoteTargets: () => browser.listAllTargets(),
+      remoteCdp: remoteCdpBridge,
+    }),
+  });
+  win.addEventListener(
+    'beforeunload',
+    () => {
+      stopPanelRpcHandler();
+      panelRpcEventEmitter.dispose();
+      remoteCdpBridge.disposeAll();
+      remoteCdpPushChannel?.close();
+    },
+    { once: true }
+  );
+}

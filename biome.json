@@ -74,6 +74,10 @@
           "level": "warn",
           "options": { "maxAllowedComplexity": 25 }
         },
+        "noExcessiveLinesPerFunction": {
+          "level": "error",
+          "options": { "maxLines": 150, "skipIifes": true }
+        },
         "noForEach": "off",
         "noBannedTypes": "off",
         "noUselessConstructor": "off",
@@ -221,7 +225,8 @@
             "useNamingConvention": "off"
           },
           "complexity": {
-            "noExcessiveCognitiveComplexity": "off"
+            "noExcessiveCognitiveComplexity": "off",
+            "noExcessiveLinesPerFunction": "off"
           }
         }
       }
@@ -245,6 +250,57 @@
       "includes": ["**/*.json", "**/*.jsonc", "**/tsconfig*.json", "**/.releaserc.json"],
       "linter": {
         "enabled": false
+      }
+    },
+    {
+      "includes": [
+        "packages/chrome-extension/src/extension-leader-tray.ts",
+        "packages/chrome-extension/src/offscreen-bridge.ts",
+        "packages/chrome-extension/src/offscreen.ts",
+        "packages/chrome-extension/src/service-worker.ts",
+        "packages/chrome-extension/vite.config.ts",
+        "packages/cloudflare-worker/src/index.ts",
+        "packages/node-server/src/electron-controller.ts",
+        "packages/node-server/src/index.ts",
+        "packages/webapp/cloud/app.js",
+        "packages/webapp/src/core/context-compaction.ts",
+        "packages/webapp/src/kernel/host.ts",
+        "packages/webapp/src/kernel/realm/js-realm-shared.ts",
+        "packages/webapp/src/kernel/realm/opfs-sync-fs.ts",
+        "packages/webapp/src/scoops/agent-bridge.ts",
+        "packages/webapp/src/scoops/lick-ws-bridge.ts",
+        "packages/webapp/src/scoops/orchestrator.ts",
+        "packages/webapp/src/scoops/scoop-context.ts",
+        "packages/webapp/src/scoops/scoop-management-tools.ts",
+        "packages/webapp/src/scoops/tray-leader-sync.ts",
+        "packages/webapp/src/shell/supplemental-commands/convert-command.ts",
+        "packages/webapp/src/shell/supplemental-commands/crontask-command.ts",
+        "packages/webapp/src/shell/supplemental-commands/ffmpeg-command.ts",
+        "packages/webapp/src/shell/supplemental-commands/open-command.ts",
+        "packages/webapp/src/shell/supplemental-commands/pdftk-command.ts",
+        "packages/webapp/src/shell/supplemental-commands/playwright-command.ts",
+        "packages/webapp/src/shell/supplemental-commands/secret-command.ts",
+        "packages/webapp/src/shell/supplemental-commands/upskill-command.ts",
+        "packages/webapp/src/shell/supplemental-commands/websocat-command.ts",
+        "packages/webapp/src/ui/api-key-dialog.ts",
+        "packages/webapp/src/ui/chat-fixture.ts",
+        "packages/webapp/src/ui/chat-panel.ts",
+        "packages/webapp/src/ui/layout.ts",
+        "packages/webapp/src/ui/migration-splash.ts",
+        "packages/webapp/src/ui/page-leader-tray.ts",
+        "packages/webapp/src/ui/panel-rpc-handlers.ts",
+        "packages/webapp/src/ui/provider-settings.ts",
+        "packages/webapp/src/ui/scoops-panel.ts",
+        "packages/webapp/src/ui/sprinkle-bridge.ts",
+        "packages/webapp/src/ui/sprinkle-renderer.ts",
+        "packages/webapp/vite.config.ts"
+      ],
+      "linter": {
+        "rules": {
+          "complexity": {
+            "noExcessiveLinesPerFunction": "off"
+          }
+        }
       }
     }
   ]
