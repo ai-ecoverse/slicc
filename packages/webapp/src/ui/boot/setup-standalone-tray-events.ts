@@ -15,10 +15,6 @@
 
 import type { BrowserAPI } from '../../cdp/index.js';
 import type { TrayLeaveResult } from '../../scoops/tray-leave.js';
-import {
-  setConnectedFollowersGetter,
-  setTrayResetter,
-} from '../../shell/supplemental-commands/host-command.js';
 import type { Layout } from '../layout.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import type { PageFollowerTrayHandle } from '../page-follower-tray.js';
@@ -40,6 +36,13 @@ export interface StandaloneTrayEventsDeps {
   client: OffscreenClient;
   browser: BrowserAPI;
   sprinkleManager: SprinkleManager;
+  /**
+   * Null every leader hook AND dispose the remote-CDP bridge — same
+   * teardown used by `clearLeaderHooks` in `setup-tray.ts`, threaded in
+   * so a leader→follower role-switch doesn't leak federated CDP
+   * transports. Must be a superset of the four leader hook clears.
+   */
+  clearLeaderHooks(): void;
   performTrayLeaveLocally(opts: {
     workerBaseUrl: string | null;
     requestId?: string;
@@ -75,13 +78,10 @@ function teardownForJoin(deps: StandaloneTrayEventsDeps): {
   leaderToStop: PageLeaderTrayHandle | null;
   previousFollower: PageFollowerTrayHandle | null;
 } {
-  const { getLeader, setLeader, getFollower, setFollower, layout, sprinkleManager, log } = deps;
+  const { getLeader, setLeader, getFollower, setFollower, clearLeaderHooks, log } = deps;
   const leaderToStop = getLeader();
   setLeader(null);
-  setConnectedFollowersGetter(null);
-  setTrayResetter(null);
-  layout.panels.chat.setOnLocalUserMessage(undefined);
-  sprinkleManager.setSendToSprinkleHook(undefined);
+  clearLeaderHooks();
   const previousFollower = getFollower();
   setFollower(null);
   try {

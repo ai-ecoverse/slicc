@@ -39,6 +39,8 @@ export interface StandaloneTrayBootstrapDeps {
   sprinkleManager: InstanceType<typeof SprinkleManager>;
   buildLeaderTrayOptions(workerBaseUrl: string): StartPageLeaderTrayOptions;
   wireLeaderHooks(handle: PageLeaderTrayHandle): void;
+  /** Null leader hooks and dispose remote-CDP bridge — see `setup-tray.ts`. */
+  clearLeaderHooks(): void;
   performTrayLeaveLocally(opts: {
     workerBaseUrl: string | null;
     requestId?: string;
@@ -65,6 +67,7 @@ export async function setupStandaloneTrayBootstrap(
     sprinkleManager,
     buildLeaderTrayOptions,
     wireLeaderHooks,
+    clearLeaderHooks,
     performTrayLeaveLocally,
     getLeader,
     setLeader,
@@ -103,6 +106,7 @@ export async function setupStandaloneTrayBootstrap(
     client,
     browser,
     sprinkleManager,
+    clearLeaderHooks,
     performTrayLeaveLocally,
     window: win,
     log,

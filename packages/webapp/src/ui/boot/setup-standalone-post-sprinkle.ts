@@ -81,6 +81,7 @@ export async function setupStandalonePostSprinkle(deps: StandalonePostSprinkleDe
   const {
     buildLeaderTrayOptions,
     wireLeaderHooks,
+    clearLeaderHooks,
     performTrayLeaveLocally,
     remoteCdpBridge,
     remoteCdpPushChannel,
@@ -124,6 +125,7 @@ export async function setupStandalonePostSprinkle(deps: StandalonePostSprinkleDe
     sprinkleManager,
     buildLeaderTrayOptions,
     wireLeaderHooks,
+    clearLeaderHooks,
     performTrayLeaveLocally,
     getLeader,
     setLeader,
