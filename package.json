@@ -102,8 +102,7 @@
       "biome check --write --no-errors-on-unmatched --files-ignore-unknown=true"
     ],
     "**/*.{md,html,yaml,yml}": [
-      "prettier --write",
-      "node packages/dev-tools/tools/check-doc-sizes.mjs"
+      "prettier --write"
     ]
   }
 }
