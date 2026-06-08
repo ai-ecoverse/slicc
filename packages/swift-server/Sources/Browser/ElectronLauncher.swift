@@ -545,6 +545,7 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         return OverlayTargetSession(
             target: target,
             bootstrapScript: bootstrapScript,
+            servePort: servePort,
             session: session,
             logger: logger,
             probeDelayNanoseconds: probeDelayNanoseconds,
@@ -637,6 +638,7 @@ final class ElectronOverlayInjector: @unchecked Sendable {
 final class OverlayTargetSession: @unchecked Sendable {
     private let target: ElectronInspectableTarget
     private let bootstrapScript: String
+    private let servePort: Int
     private let urlSession: URLSession
     private let logger: Logger
     private let probeDelayNanoseconds: UInt64
@@ -652,12 +654,14 @@ final class OverlayTargetSession: @unchecked Sendable {
     private var pendingReload = false
     private var pendingCspEscalation = false
     private var fetchProxyActive = false
+    private var addedScriptIdentifier: String?
     private var responseWaiters: [Int: CheckedContinuation<[String: Any]?, Never>] = [:]
     private var closed = false
 
     init(
         target: ElectronInspectableTarget,
         bootstrapScript: String,
+        servePort: Int,
         session: URLSession,
         logger: Logger,
         probeDelayNanoseconds: UInt64,
@@ -667,6 +671,7 @@ final class OverlayTargetSession: @unchecked Sendable {
     ) {
         self.target = target
         self.bootstrapScript = bootstrapScript
+        self.servePort = servePort
         self.urlSession = session
         self.logger = logger
         self.probeDelayNanoseconds = probeDelayNanoseconds
@@ -742,15 +747,23 @@ final class OverlayTargetSession: @unchecked Sendable {
         _ = await sendCommand(method: "Runtime.enable", awaitResponse: true)
         _ = await sendCommand(method: "Page.enable", awaitResponse: true)
         _ = await sendCommand(method: "Page.setBypassCSP", params: ["enabled": true], awaitResponse: true)
+        // Install the bootstrap as a permanent new-document hook so it
+        // re-runs automatically after the reload below (and after any
+        // additional navigation the host app's own bootstrap may trigger
+        // — observed in AEM Desktop where Runtime.evaluate after
+        // Page.loadEventFired raced a fresh document and did not stick).
+        await registerNewDocumentScript()
 
         let action = ElectronOverlayInjector.openAction(alreadyCSPBypassed: alreadyBypassed)
         switch action {
         case .injectOnly:
             logger.info("Injecting overlay (CSP already bypassed)", metadata: ["target": .string(target.url)])
             await sendBootstrap()
+            _ = await verifyOverlayPresent(context: "inject-only")
         case .injectThenProbe:
             logger.info("Injecting overlay (first attempt)", metadata: ["target": .string(target.url)])
             await sendBootstrap()
+            _ = await verifyOverlayPresent(context: "first-inject")
             try? await Task.sleep(nanoseconds: probeDelayNanoseconds)
             if Task.isCancelled || isClosed() { return }
             let loaded = await probeOverlayLoaded()
@@ -835,6 +848,9 @@ final class OverlayTargetSession: @unchecked Sendable {
         // but re-arm it defensively to match node-server.
         _ = await sendCommand(method: "Page.setBypassCSP", params: ["enabled": true], awaitResponse: true)
         await sendBootstrap()
+        // Read back the global so a "didn't stick" reinject shows up in logs
+        // immediately instead of silently failing the second-probe later.
+        _ = await verifyOverlayPresent(context: "post-reload-inject")
 
         let escalationRequested = snapshot.escalation
         guard escalationRequested else { return }
@@ -845,18 +861,21 @@ final class OverlayTargetSession: @unchecked Sendable {
         let decision = ElectronOverlayInjector.postReloadAction(loaded: loaded, escalationRequested: true)
         switch decision {
         case .done, .noEscalationRequested:
-            logger.info("Overlay iframe loaded after CSP reload — no proxy needed", metadata: ["target": .string(target.url)])
+            logger.info("Overlay iframe loaded successfully after CSP reload — no proxy needed", metadata: ["target": .string(target.url)])
         case .escalateToFetchProxy:
             await activateFetchProxy()
         }
     }
 
     private func activateFetchProxy() async {
-        guard let origin = OverlayTargetSession.overlayOrigin(for: target.url) else {
-            logger.warning("Cannot escalate to Fetch proxy: invalid origin", metadata: ["target": .string(target.url)])
-            return
-        }
-        logger.warning("CSP reload insufficient, escalating to Fetch proxy", metadata: ["target": .string(target.url)])
+        // For file:// (or other no-http-origin) targets, fall back to the
+        // overlay iframe's own http origin — Fetch.enable patterns must be
+        // http(s) and the iframe is what we ultimately need unblocked.
+        let origin = OverlayTargetSession.fetchProxyOrigin(targetURL: target.url, servePort: servePort)
+        logger.warning("CSP reload insufficient, escalating to Fetch proxy", metadata: [
+            "target": .string(target.url),
+            "origin": .string(origin)
+        ])
         stateQueue.sync {
             fetchProxyActive = true
             pendingReload = true
@@ -983,6 +1002,66 @@ final class OverlayTargetSession: @unchecked Sendable {
         ])
     }
 
+    /// Install the bootstrap as a `Page.addScriptToEvaluateOnNewDocument`
+    /// hook so it re-runs automatically on every new document — including
+    /// ones the host app's own bootstrap may create after our reload (the
+    /// AEM Desktop case where the re-evaluate after `Page.loadEventFired`
+    /// would otherwise race a fresh document and not stick).
+    private func registerNewDocumentScript() async {
+        let result = await sendCommand(method: "Page.addScriptToEvaluateOnNewDocument", params: [
+            "source": bootstrapScript
+        ], awaitResponse: true)
+        if let identifier = result?["identifier"] as? String {
+            stateQueue.sync { addedScriptIdentifier = identifier }
+            logger.debug("Registered new-document overlay bootstrap", metadata: [
+                "target": .string(target.url),
+                "identifier": .string(identifier)
+            ])
+        } else {
+            logger.warning("Page.addScriptToEvaluateOnNewDocument returned no identifier", metadata: [
+                "target": .string(target.url)
+            ])
+        }
+    }
+
+    /// Read back `window.__SLICC_ELECTRON_OVERLAY__` (and the overlay host)
+    /// right after injection so a silently-lost inject (e.g. a stale
+    /// execution context the bootstrap script ran in) shows up in the logs
+    /// instead of only being detected later by the iframe probe.
+    @discardableResult
+    private func verifyOverlayPresent(context: String) async -> Bool {
+        let expression = """
+        (function() {
+          try {
+            var hasGlobal = typeof window.__SLICC_ELECTRON_OVERLAY__ !== 'undefined';
+            var hasRoot = !!document.getElementById('slicc-electron-overlay-root');
+            return (hasGlobal ? 'g' : '-') + (hasRoot ? 'r' : '-');
+          } catch (e) { return 'err:' + String(e); }
+        })()
+        """
+        let result = await sendCommand(method: "Runtime.evaluate", params: [
+            "expression": expression,
+            "awaitPromise": false,
+            "returnByValue": true
+        ], awaitResponse: true)
+        let value = (result?["result"] as? [String: Any])?["value"] as? String ?? ""
+        let stuck = value.hasPrefix("g")
+        if stuck {
+            logger.info("Overlay inject verified present", metadata: [
+                "target": .string(target.url),
+                "context": .string(context),
+                "marker": .string(value)
+            ])
+        } else {
+            logger.warning("Overlay inject did NOT take effect — likely stale execution context", metadata: [
+                "target": .string(target.url),
+                "context": .string(context),
+                "marker": .string(value)
+            ])
+        }
+        return stuck
+    }
+
     private func probeOverlayLoaded() async -> Bool {
         // Mirrors node-server's `probeOverlayIframeLoaded`: walks host →
         // shadowRoot → sidebar → iframe and only reports success when the
@@ -1074,5 +1153,17 @@ final class OverlayTargetSession: @unchecked Sendable {
         }
         if let port = url.port { return "\(scheme)://\(host):\(port)" }
         return "\(scheme)://\(host)"
+    }
+
+    /// Resolve the Fetch.enable origin pattern: prefer the parent page's
+    /// http origin (matches node-server byte-for-byte), but for file:// (or
+    /// other no-http-origin) targets fall back to the overlay iframe's own
+    /// `http://localhost:<servePort>` origin so the iframe load is at least
+    /// covered by Fetch interception.
+    static func fetchProxyOrigin(targetURL: String, servePort: Int) -> String {
+        if let origin = overlayOrigin(for: targetURL) {
+            return origin
+        }
+        return "http://localhost:\(servePort)"
     }
 }

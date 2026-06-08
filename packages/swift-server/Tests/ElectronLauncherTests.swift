@@ -169,9 +169,52 @@ final class ElectronLauncherTests: XCTestCase {
 
     func testOverlayOriginReturnsNilForFileURL() {
         // file:// URLs have no host, so they cannot anchor a Fetch.enable
-        // pattern. The injector's open flow handles CSP via setBypassCSP +
-        // reload for these targets instead of the Fetch-proxy escalation.
+        // pattern on their own. The injector falls back to the overlay
+        // iframe's http origin (see `fetchProxyOrigin`) for these targets
+        // so the escalation path doesn't silently bail.
         XCTAssertNil(OverlayTargetSession.overlayOrigin(for: "file:///tmp/index.html"))
+    }
+
+    // MARK: - Fetch-proxy origin fallback for file:// parents
+
+    func testFetchProxyOriginUsesParentOriginWhenHttp() {
+        // Matches node-server byte-for-byte: pattern keyed on the parent
+        // page's http origin so we intercept the page's own resources to
+        // strip CSP headers from the response.
+        XCTAssertEqual(
+            OverlayTargetSession.fetchProxyOrigin(
+                targetURL: "https://teams.example/calendar",
+                servePort: 5711
+            ),
+            "https://teams.example"
+        )
+    }
+
+    func testFetchProxyOriginFallsBackToIframeHttpOriginForFileURL() {
+        // For file:// renderers (e.g. AEM Desktop) the parent has no http
+        // origin, so the previous build's escalation bailed silently. The
+        // fix is to use the overlay iframe's own http origin so the iframe
+        // load (http://localhost:<servePort>/electron) is at least covered
+        // by Fetch interception.
+        XCTAssertEqual(
+            OverlayTargetSession.fetchProxyOrigin(
+                targetURL: "file:///Applications/AEM%20Desktop.app/Contents/Resources/app.asar/src/renderer/index.html",
+                servePort: 5711
+            ),
+            "http://localhost:5711"
+        )
+    }
+
+    func testFetchProxyOriginUsesServePortInFallback() {
+        // The fallback must thread the actual served port through —
+        // OverlayTargetSession's `servePort` value, not a hardcoded one.
+        XCTAssertEqual(
+            OverlayTargetSession.fetchProxyOrigin(
+                targetURL: "file:///opt/app/index.html",
+                servePort: 5730
+            ),
+            "http://localhost:5730"
+        )
     }
 
     private func makeTempDirectory() throws -> URL {
