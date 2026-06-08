@@ -35,7 +35,8 @@
       "!packages/ios-app/**",
       "!**/*.min.js",
       "!packages/webapp/src/ui/rum.js",
-      "!packages/webapp/src/ui/lucide-icons.ts"
+      "!packages/webapp/src/ui/lucide-icons.ts",
+      "!**/tests/fixtures/workflows/**"
     ]
   },
   "formatter": {
