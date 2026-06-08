@@ -61,6 +61,7 @@ Custom commands implemented in TypeScript and registered in just-bash.
 | **esbuild**                                 | `esbuild-command.ts`       | esbuild bundler / transpiler. The 10 MB wasm binary is fetched on demand. A VFS plugin routes local paths through `ctx.fs` and bare specifiers through `https://esm.sh/`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | `esbuild <entry>`, `--bundle`, `--transform`, `--format`, `--minify`, `--sourcemap`, `--target`, `--loader`, `--outfile`                                                                                                                                                                                                     |
 | **ffmpeg**                                  | `ffmpeg-command.ts`        | ffmpeg.wasm — audio/video transcoding and processing.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | `ffmpeg -i input.mp4 -vcodec libx264 output.mp4`                                                                                                                                                                                                                                                                             |
 | **fswatch**                                 | `fswatch-command.ts`       | Watch a VFS path for changes via `globalThis.__slicc_fs_watcher` and route each change through `globalThis.__slicc_lick_handler` to a target scoop. Maintains an in-process `activeWatches` map.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | `fswatch create --path <path> --pattern <glob> [--scoop <name>] [--name <name>]`, `fswatch list`, `fswatch delete <id>`                                                                                                                                                                                                      |
+| **workflow**                                | `workflow-command.ts`      | Run Claude Code dynamic workflows natively. SP1: blocking, non-nesting. A workflow is a plain-JavaScript file that orchestrates parallel subagents while keeping intermediate results in script variables instead of the model's context window. Workflows are deterministic and sandboxed: `Date.now()`, `Math.random()`, `crypto`, `performance.now`, and timers throw `WorkflowDeterminismError`. No filesystem, Node APIs, or imports from the script (only agents touch files). Concurrency defaults to 4, capped at `min(16, cores-2)`. The 1000-agent total cap and ≤4096-per-call limit prevent runaway loops. Scripts must start with a `meta` export (`name` required, `description`/`phases` optional). Outputs workflow name/description banner, progress markers, and the final JSON return value.           | `workflow run <file.js>`, `workflow run --script '<inline js>' [...]`, `--args <json>`, `--budget <n>`, `--concurrency <n>`                                                                                                                                                                                                  |
 | **ps**                                      | `ps-command.ts`            | List active processes from `ProcessManager` — scoop turns, tool calls, shell execs, jsh/python scripts. Equivalent to inspecting `/proc/` directly.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `ps`, `--all`                                                                                                                                                                                                                                                                                                                |
 | **kill**                                    | `kill-command.ts`          | Send a signal to a `ProcessManager`-tracked process. `SIGKILL` is uncatchable (worker.terminate() / iframe.remove(), exit 137).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | `kill <pid>`, `kill -<SIGNAL> <pid>` (`SIGINT`/`SIGTERM`/`SIGKILL`/`SIGSTOP`/`SIGCONT`)                                                                                                                                                                                                                                      |
 | **rsync**                                   | `rsync-command.ts`         | Diff-aware copy between VFS paths (or mounted backends). Used for syncing workspace state into a mount, or vice versa.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | `rsync <src> <dst>`, `--dry-run`, `--delete`                                                                                                                                                                                                                                                                                 |
@@ -148,6 +149,129 @@ imgcat screenshot.png
 # Schedule a cron job
 crontask add "daily-backup" "0 2 * * *" backup-scoop "Backup all files"
 ```
+
+---
+
+## workflow
+
+Run Claude Code dynamic workflows natively. A workflow is a plain-JavaScript orchestration script that fans out work to many parallel subagents while keeping intermediate results in script variables rather than stuffing them into the model's context window.
+
+**SP1 is blocking and non-nesting.** Run from the terminal to keep the cone responsive; running from the cone's bash tool blocks that turn until completion.
+
+### Usage
+
+```bash
+workflow run <file.js> [--args <json>] [--budget <n>] [--concurrency <n>]
+workflow run --script '<inline js>' [...]
+```
+
+- `<file.js>` — path to a workflow `.js` file
+- `--script '<code>'` — inline script (no temp file)
+- `--args <json>` — parsed JSON exposed as the `args` global
+- `--budget <n>` — token budget (stub in SP1: `budget.total` set but not enforced)
+- `--concurrency <n>` — parallel agent limit (default 4, capped at `min(16, cores-2)`)
+
+### Meta block (required)
+
+Every workflow must start with a pure-literal `meta` export:
+
+```js
+export const meta = {
+  name: 'review-changes', // required
+  description: 'one-line summary', // optional (shown in the run banner)
+};
+// body uses injected globals below
+```
+
+### Orchestration API
+
+| Global        | Signature & semantics                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent`       | `agent(prompt: string, opts?: {model?, schema?, phase?, label?}): Promise<any>`. No `schema` → text string. With `schema` (JSON Schema) → subagent calls `StructuredOutput` tool, returns validated object. Resolves `null` on failure/skip. `model` overrides session model. `schema` path enforces structured output with up to 2 in-conversation nudges; terminal failure → `null`. |
+| `parallel`    | `parallel(thunks: Array<() => Promise<any>>): Promise<any[]>`. Barrier — awaits all. Never rejects; failing thunks → `null` in result array. Use when you genuinely need all results together. ≤4096 items per call (throws `WorkflowError` if exceeded).                                                                                                                              |
+| `pipeline`    | `pipeline(items, stage1, stage2, ...): Promise<any[]>`. Streaming per-item, NO barrier — item A can be in stage 3 while B is in stage 1. Each stage callback receives `(prevResult, originalItem, index)`. A throwing stage drops that item to `null` and skips its remaining stages. ≤4096 items per call (throws `WorkflowError` if exceeded). The default for multi-stage work.     |
+| `phase`       | `phase(title: string): void`. Start a progress group; subsequent `agent()` calls group under it (SP4 UI; SP1 emits `WFPHASE` marker to stdout).                                                                                                                                                                                                                                        |
+| `log`         | `log(message: string): void`. Narrator line above progress (SP1 emits `WFLOG` marker to stdout).                                                                                                                                                                                                                                                                                       |
+| `args`        | `any` — the value passed via `--args`, verbatim (`undefined` if absent).                                                                                                                                                                                                                                                                                                               |
+| `budget`      | `{ total: number\|null, spent(): number, remaining(): number }`. SP1 stub: `spent()` returns `0` (agents don't surface token usage yet), so hard ceiling never trips. Shape present so CC scripts that read `budget` don't crash. Precise accounting + enforcement deferred to SP6.                                                                                                    |
+| `workflow`    | `workflow(name \| {scriptPath}, args?): Promise<any>`. Throws `WorkflowNestingUnsupportedError` in SP1 (real nesting is SP6 backlog).                                                                                                                                                                                                                                                  |
+| `Date`        | Shadowed: argless `new Date()` and `Date.now()` throw `WorkflowDeterminismError`. Pass time via `args`.                                                                                                                                                                                                                                                                                |
+| `Math`        | Shadowed: `Math.random()` throws `WorkflowDeterminismError`. Vary by index instead.                                                                                                                                                                                                                                                                                                    |
+| `crypto`      | Shadowed: `crypto.getRandomValues()` / `crypto.randomUUID()` throw `WorkflowDeterminismError`.                                                                                                                                                                                                                                                                                         |
+| `performance` | Shadowed: `performance.now()` throws `WorkflowDeterminismError`.                                                                                                                                                                                                                                                                                                                       |
+| timers        | `setTimeout` / `setInterval` / `queueMicrotask` throw `WorkflowDeterminismError`.                                                                                                                                                                                                                                                                                                      |
+
+Workflow scripts have NO access to `fs`, `exec`, `fetch`, `require`, `process`, `module`, `exports`, `skill`, `http`, `browser`, `usb`, `serial`, `hid`, `cli`, `c`, `time`, `fmt`, or `pool` — only agents touch files/shell.
+
+### Constraints
+
+- **Concurrency cap:** defaults to 4; `--concurrency` clamps to `[1, min(16, cores-2)]`
+- **Total cap:** 1000 agents per run (runaway-loop backstop); exceeding throws `WorkflowAgentCapError`
+- **Per-call cap:** `parallel` / `pipeline` accept ≤4096 items; exceeding throws `WorkflowError`
+- **Determinism:** `Date.now()`, `Math.random()`, `crypto`, `performance.now`, timers throw `WorkflowDeterminismError` so runs are replayable
+- **Isolation:** soft (cooperative). Script runs in the same scope as the prelude; determined scripts can reach `globalThis.*` or use `eval`. Hard enforcement deferred to SP6 realm-native fork.
+
+### Agent spawning
+
+Each `agent(prompt, opts)` call:
+
+1. Acquires a concurrency slot (defaults to 4, waits if full)
+2. Spawns an ephemeral scoop via the `agent` shell command
+3. Read scope: `/workspace/` + a per-run scratch cwd (`/shared/workflow-runs/<runId>/scratch/`)
+4. Write scope: the per-run scratch cwd only
+5. With `schema`: injects `StructuredOutput` tool, instructs the scoop to call it, captures validated args, issues up to 2 nudges on mismatch, returns the object JSON-parsed
+6. Without `schema`: returns the final text (last `send_message` or accumulated response)
+7. On failure (exit ≠ 0 or no valid `StructuredOutput` call after nudges): resolves `null`
+
+### Example
+
+```js
+export const meta = {
+  name: 'repo-audit',
+  description: 'Fan-out verification over repo files',
+};
+
+const files = ['src/index.ts', 'src/util.ts', 'src/helper.ts'];
+
+phase('Verify files');
+const results = await parallel(
+  files.map(
+    (f) => async () =>
+      agent(`Check ${f} for type safety issues`, {
+        schema: {
+          type: 'object',
+          properties: { ok: { type: 'boolean' }, issues: { type: 'array' } },
+          required: ['ok', 'issues'],
+        },
+      })
+  )
+);
+
+const valid = results.filter(Boolean).filter((r) => r.ok);
+log(`${valid.length}/${files.length} files passed`);
+
+return { passed: valid.length, total: files.length };
+```
+
+### Output
+
+```
+workflow: repo-audit — Fan-out verification over repo files
+▸ Verify files
+· 3/3 files passed
+{"passed":3,"total":3}
+```
+
+### Error handling
+
+- **Script throw** → exit 1 + stderr with message + stack
+- **Agent failure/skip** → that `agent()` resolves `null` (not surfaced as run error)
+- **Schema mismatch** → validation error fed back to model → retry; terminal failure after nudges → `null`
+- **Cap exceeded** (1000 total, 4096 per call) → thrown `WorkflowAgentCapError` / `WorkflowError` (script can catch)
+- **Determinism violation** → thrown `WorkflowDeterminismError`
+- **Realm crash / SIGKILL** → exit 1 / 137; no partial-success masquerading as success
+
+No silent fallbacks.
 
 ---
 
