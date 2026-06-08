@@ -43,7 +43,13 @@ for (const mode of MODES) {
     if (svgStart === -1) throw new Error(`<svg> not found inside ${id}`);
     const svgEnd = dom.indexOf('</svg>', svgStart);
     if (svgEnd === -1) throw new Error(`</svg> not found inside ${id}`);
-    const svg = dom.slice(svgStart, svgEnd + '</svg>'.length);
+    let svg = dom.slice(svgStart, svgEnd + '</svg>'.length);
+    // The preview builds the SVG with createElementNS, but the dumped DOM
+    // serialization drops xmlns on the root element. Inject it so the file
+    // renders standalone (file:// in browsers, image viewers, etc.).
+    if (!/^<svg[^>]*\sxmlns=/.test(svg)) {
+      svg = svg.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+    }
     const out = `<?xml version="1.0" encoding="UTF-8"?>\n${svg}\n`;
     const file = join(HERE, `sliccy-error-${mode}-${count}scoops.svg`);
     writeFileSync(file, out);

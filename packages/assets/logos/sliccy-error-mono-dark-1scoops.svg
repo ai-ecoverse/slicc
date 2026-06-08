@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg viewBox="0 0 1024 1024" width="100%" height="100%"><g transform="translate(191.47118749999993, 12.583024999999978) scale(1.1115000000000002)"><g transform="translate(0, 0)"><g id="Cone">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="100%" height="100%"><g transform="translate(191.47118749999993, 12.583024999999978) scale(1.1115000000000002)"><g transform="translate(0, 0)"><g id="Cone">
     <path id="Cone_Bottom" data-name="Cone Bottom" d="M108.22,414.88l189.84,460.03c1.36,3.3,6.09,3.16,7.25-.22l159.34-463.34c.87-2.53-1.03-5.16-3.7-5.13l-349.18,3.32c-2.74.03-4.59,2.82-3.55,5.35Z" style="fill: rgb(34, 34, 34); stroke: rgb(255, 255, 255); stroke-linejoin: round; stroke-width: 20px;"></path>
     <g id="Waffle_Cross-Hatch" data-name="Waffle Cross-Hatch">
       <path d="M261.93,482.48h0c15.03-15.03,4.46-40.72-16.79-40.83h0c-21.37-.11-32.14,25.72-17.03,40.83h0c9.34,9.34,24.48,9.34,33.82,0Z" style="fill: rgb(255, 255, 255);"></path>
