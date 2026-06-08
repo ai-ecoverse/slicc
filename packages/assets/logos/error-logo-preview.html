@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sliccy Error Logo Preview</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        background: #f5f5f5;
+        color: #333;
+        min-height: 100vh;
+        padding: 20px;
+      }
+      h1 {
+        font-size: 1.4em;
+        margin-bottom: 20px;
+      }
+      .controls {
+        background: #fff;
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        padding: 16px 20px;
+        margin-bottom: 24px;
+        max-width: 1000px;
+      }
+      .control-group {
+        margin-bottom: 12px;
+      }
+      .control-group:last-child {
+        margin-bottom: 0;
+      }
+      label {
+        display: block;
+        margin-bottom: 5px;
+        font-size: 0.9em;
+      }
+      input[type='range'] {
+        width: 100%;
+        max-width: 400px;
+        vertical-align: middle;
+      }
+      .value-display {
+        font-size: 0.85em;
+        color: #666;
+        margin-left: 8px;
+      }
+      .logo-variants {
+        display: flex;
+        gap: 20px;
+        flex-wrap: wrap;
+      }
+      .logo-variant {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+      .logo-variant-label {
+        font-size: 0.85em;
+        margin-bottom: 8px;
+        opacity: 0.7;
+      }
+      .logo-container {
+        width: 300px;
+        height: 300px;
+        position: relative;
+        border: 1px dashed #ccc;
+      }
+      .logo-container.mono-dark {
+        background: #1a1a1a;
+        border-color: #444;
+      }
+      .logo-container svg {
+        width: 100%;
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>🍦 Sliccy Error Logo Preview (crossed-out eyes)</h1>
+
+    <div class="controls">
+      <div class="control-group">
+        <label
+          >Cross length (× eye radius):
+          <span class="value-display" id="cross-length-val">1.00</span></label
+        >
+        <input
+          type="range"
+          id="cross-length"
+          min="0.5"
+          max="2"
+          step="0.05"
+          value="1.0"
+        />
+      </div>
+      <div class="control-group">
+        <label
+          >Cross thickness (SVG units):
+          <span class="value-display" id="cross-thickness-val">12</span></label
+        >
+        <input type="range" id="cross-thickness" min="4" max="40" step="1" value="12" />
+      </div>
+    </div>
+
+    <div class="logo-variants">
+      <div class="logo-variant">
+        <div class="logo-variant-label">Color</div>
+        <div class="logo-container" id="logo-color"></div>
+      </div>
+      <div class="logo-variant">
+        <div class="logo-variant-label">Mono Light</div>
+        <div class="logo-container" id="logo-mono-light"></div>
+      </div>
+      <div class="logo-variant">
+        <div class="logo-variant-label">Mono Dark</div>
+        <div class="logo-container mono-dark" id="logo-mono-dark"></div>
+      </div>
+    </div>
+
+    <script>
+      // Eye geometry (from Sliccy Logo.svg, reused from logo-editor.html)
+      const RIGHT_EYE_C = { x: 383.4, y: 216.12 };
+      const LEFT_EYE_C = { x: 175.1, y: 250.34 };
+      const EYE_RADIUS = 64.78;
+
+      const coneColors = {
+        base: '#D2691E',
+        crosshatch: '#E8A75C',
+        outline: '#8B4513',
+      };
+
+      let coneTemplate = null;
+      let rightEyeTemplate = null;
+      let leftEyeTemplate = null;
+
+      async function loadSVG() {
+        const response = await fetch('Sliccy Logo.svg');
+        const text = await response.text();
+        const svgDoc = new DOMParser().parseFromString(text, 'image/svg+xml');
+        coneTemplate = svgDoc.getElementById('Cone').cloneNode(true);
+        rightEyeTemplate = svgDoc.getElementById('Right_Eye').cloneNode(true);
+        leftEyeTemplate = svgDoc.getElementById('Left_Eye').cloneNode(true);
+        render();
+      }
+
+      function applyConeColors(cone, colorMode) {
+        if (colorMode === 'mono-light') {
+          cone.querySelectorAll('[style*="fill"]').forEach((e) => {
+            e.style.fill = e.id === 'Cone_Bottom' || e.id === 'Cone_Top' ? '#fff' : '#000';
+          });
+          cone
+            .querySelectorAll('path:not([style*="fill"]), rect:not([style*="fill"])')
+            .forEach((e) => {
+              e.style.fill = '#000';
+            });
+          cone.querySelectorAll('[style*="stroke"]').forEach((e) => {
+            e.style.stroke = '#000';
+          });
+        } else if (colorMode === 'mono-dark') {
+          cone.querySelectorAll('[style*="fill"]').forEach((e) => {
+            e.style.fill = e.id === 'Cone_Bottom' || e.id === 'Cone_Top' ? '#222' : '#fff';
+          });
+          cone
+            .querySelectorAll('path:not([style*="fill"]), rect:not([style*="fill"])')
+            .forEach((e) => {
+              e.style.fill = '#fff';
+            });
+          cone.querySelectorAll('[style*="stroke"]').forEach((e) => {
+            e.style.stroke = '#fff';
+          });
+        } else {
+          cone.querySelectorAll('[style*="fill"]').forEach((e) => {
+            e.style.fill =
+              e.id === 'Cone_Bottom' || e.id === 'Cone_Top'
+                ? coneColors.base
+                : coneColors.crosshatch;
+          });
+          cone
+            .querySelectorAll('path:not([style*="fill"]), rect:not([style*="fill"])')
+            .forEach((e) => {
+              e.style.fill = coneColors.crosshatch;
+            });
+          cone.querySelectorAll('[style*="stroke"]').forEach((e) => {
+            e.style.stroke = coneColors.outline;
+          });
+        }
+      }
+
+      function applyEyeColors(rightEye, leftEye, colorMode) {
+        [rightEye, leftEye].forEach((eye) => {
+          const outline = eye.querySelector('circle');
+          const pupil = eye.querySelector('path');
+          if (colorMode === 'mono-dark') {
+            if (outline) {
+              outline.style.fill = '#000';
+              outline.style.stroke = '#fff';
+            }
+            if (pupil) pupil.style.fill = '#fff';
+          } else {
+            // mono-light and color share the same eye palette in logo-editor
+            if (outline) {
+              outline.style.fill = '#fff';
+              outline.style.stroke = '#000';
+            }
+            if (pupil) pupil.style.fill = '#000';
+          }
+        });
+      }
+
+      function makeCross(center, arm, thickness, color) {
+        const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        const mkLine = (x1, y1, x2, y2) => {
+          const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+          line.setAttribute('x1', x1);
+          line.setAttribute('y1', y1);
+          line.setAttribute('x2', x2);
+          line.setAttribute('y2', y2);
+          line.setAttribute('stroke', color);
+          line.setAttribute('stroke-width', thickness);
+          line.setAttribute('stroke-linecap', 'round');
+          return line;
+        };
+        // Diagonal from top-left to bottom-right
+        group.appendChild(
+          mkLine(center.x - arm, center.y - arm, center.x + arm, center.y + arm)
+        );
+        // Diagonal from bottom-left to top-right
+        group.appendChild(
+          mkLine(center.x - arm, center.y + arm, center.x + arm, center.y - arm)
+        );
+        return group;
+      }
+
+      function renderVariant(container, colorMode, params) {
+        const { armLength, thickness } = params;
+        const crossColor = colorMode === 'mono-dark' ? '#fff' : '#000';
+
+        // Layout constants taken from logo-editor.html count=0 path:
+        // baseY = -175, overallScale = 1.25, conePush default = -21,
+        // conePushTotal = (0-1)*conePush = 21; totalHeight ≈ 887.3 + 21 = 908.3
+        const viewBoxWidth = 1024;
+        const viewBoxHeight = 1024;
+        const contentWidth = 576.75;
+        const xOffset = (viewBoxWidth - contentWidth) / 2;
+        const conePush = -21;
+        const conePushTotal = -1 * conePush; // count=0
+        const overallScale = 1.25;
+        const totalHeight = 887.3 + conePushTotal;
+        const scaleFactor = Math.min(1, 900 / totalHeight) * overallScale;
+        const translateY = (viewBoxHeight - totalHeight * scaleFactor) / 2 + -175;
+        const translateX = xOffset + (contentWidth - contentWidth * scaleFactor) / 2;
+
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('viewBox', `0 0 ${viewBoxWidth} ${viewBoxHeight}`);
+        svg.setAttribute('width', '100%');
+        svg.setAttribute('height', '100%');
+
+        const mainGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        mainGroup.setAttribute(
+          'transform',
+          `translate(${translateX}, ${translateY}) scale(${scaleFactor})`
+        );
+
+        const coneGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        coneGroup.setAttribute('transform', `translate(0, ${conePushTotal})`);
+
+        const cone = coneTemplate.cloneNode(true);
+        applyConeColors(cone, colorMode);
+        coneGroup.appendChild(cone);
+
+        const rightEye = rightEyeTemplate.cloneNode(true);
+        const leftEye = leftEyeTemplate.cloneNode(true);
+        applyEyeColors(rightEye, leftEye, colorMode);
+        coneGroup.appendChild(rightEye);
+        coneGroup.appendChild(leftEye);
+
+        // Draw the X over each eye (after the eyes so it sits on top;
+        // pupils remain visible underneath because the X is stroke-only).
+        coneGroup.appendChild(makeCross(RIGHT_EYE_C, armLength, thickness, crossColor));
+        coneGroup.appendChild(makeCross(LEFT_EYE_C, armLength, thickness, crossColor));
+
+        mainGroup.appendChild(coneGroup);
+        svg.appendChild(mainGroup);
+        container.innerHTML = '';
+        container.appendChild(svg);
+      }
+
+      function render() {
+        if (!coneTemplate) return;
+        const lengthMult = parseFloat(document.getElementById('cross-length').value);
+        const thickness = parseInt(document.getElementById('cross-thickness').value);
+        const params = {
+          armLength: EYE_RADIUS * lengthMult,
+          thickness,
+        };
+        renderVariant(document.getElementById('logo-color'), 'color', params);
+        renderVariant(document.getElementById('logo-mono-light'), 'mono-light', params);
+        renderVariant(document.getElementById('logo-mono-dark'), 'mono-dark', params);
+      }
+
+      document.getElementById('cross-length').addEventListener('input', (e) => {
+        document.getElementById('cross-length-val').textContent =
+          parseFloat(e.target.value).toFixed(2);
+        render();
+      });
+      document.getElementById('cross-thickness').addEventListener('input', (e) => {
+        document.getElementById('cross-thickness-val').textContent = e.target.value;
+        render();
+      });
+
+      loadSVG();
+    </script>
+  </body>
+</html>
