@@ -2,6 +2,7 @@
 // Render error-logo-preview.html once via headless Chrome, extract each
 // tile's <svg> outerHTML, and write the 33 sliccy-error-*-*scoops.svg files.
 // Run with a static server already serving this folder at PORT (default 8765).
+// Override the Chrome binary with the CHROME_PATH env var if needed.
 
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -9,7 +10,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME =
+  process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const PORT = process.env.PORT || '8765';
 const URL = `http://127.0.0.1:${PORT}/error-logo-preview.html`;
 
@@ -27,7 +29,7 @@ const dom = execFileSync(
     '--dump-dom',
     URL,
   ],
-  { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+  { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 30000 },
 );
 
 mkdirSync(HERE, { recursive: true });

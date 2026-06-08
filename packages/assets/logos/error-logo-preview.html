@@ -168,7 +168,23 @@
 
       let scoopTemplate = null;
       let coneTemplate = null;
-      let wobbleSeeds = [];
+
+      // Canonical wobble seeds derived from sliccy-color-10scoops.svg so the
+      // error variants line up scoop-for-scoop with the existing logos.
+      // Each entry is { x: (tx-288)/14, angle: rot/8 } from that file's
+      // scoop transforms; index 0 is the base scoop with no wobble.
+      const wobbleSeeds = [
+        { x: 0, angle: 0 },
+        { x: -0.310039355037763, angle: 0.1913388171901651 },
+        { x: -0.8384358170484104, angle: 0.9362698756918275 },
+        { x: 0.47107200968630586, angle: 0.4856391041079866 },
+        { x: -0.41444869051984157, angle: -0.7088205120681517 },
+        { x: 0.33928351181225885, angle: -0.08562223417652248 },
+        { x: 0.10576171047799628, angle: 0.9003392078419594 },
+        { x: 0.5975725564377277, angle: 0.7722797611907217 },
+        { x: 0.5300881075925759, angle: 0.12269125761071353 },
+        { x: 0.9181585249482599, angle: -0.21553873797191025 },
+      ];
 
       async function loadSVG() {
         const response = await fetch('Sliccy Logo.svg');
@@ -180,15 +196,6 @@
           leftEye: svgDoc.getElementById('Left_Eye').cloneNode(true),
         };
         coneTemplate = svgDoc.getElementById('Cone').cloneNode(true);
-
-        // Stable wobble seeds, generated once so all 33 tiles agree on placement.
-        wobbleSeeds = [];
-        for (let i = 0; i < 11; i++) {
-          wobbleSeeds.push({
-            x: Math.random() * 2 - 1,
-            angle: Math.random() * 2 - 1,
-          });
-        }
 
         buildTiles();
         render();
