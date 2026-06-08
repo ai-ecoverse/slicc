@@ -33,7 +33,13 @@ import type { CommandContext } from 'just-bash';
 import type { ProcessKind, ProcessManager, ProcessOwner } from '../process-manager.js';
 import { attachRealmHost, type RealmHostHandle } from './realm-host.js';
 import type { RealmPortLike } from './realm-rpc.js';
-import type { RealmDoneMsg, RealmErrorMsg, RealmInitMsg, RealmKind } from './realm-types.js';
+import type {
+  RealmDoneMsg,
+  RealmErrorMsg,
+  RealmInitMsg,
+  RealmKind,
+  RealmMountPoint,
+} from './realm-types.js';
 
 // ---------------------------------------------------------------------------
 // Realm abstraction
@@ -106,6 +112,14 @@ export interface RunInRealmOptions {
    * `flushOpfsRealmMounts` before `realm-done`.
    */
   opfsMountDbName?: string;
+  /**
+   * Forwarded to `RealmInitMsg.mountPoints` — VFS mount points
+   * overlapping {@link pyodideMountDirs}. The Python realm worker
+   * overlays a throwing FS plugin at each path so any synchronous
+   * access from Python raises an OSError pointing at the async
+   * `slicc.fs` module. Only consumed when `kind:'py'`.
+   */
+  mountPoints?: RealmMountPoint[];
   /**
    * Override the `ProcessKind` used to register the process. Defaults
    * to `'jsh'` (Python migration overrides this with `'py'` once the
@@ -228,6 +242,7 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
       pyodideIndexURL: opts.pyodideIndexURL,
       pyodideMountDirs: opts.pyodideMountDirs,
       opfsMountDbName: opts.opfsMountDbName,
+      mountPoints: opts.mountPoints,
     };
     realm.controlPort.postMessage(init);
   });

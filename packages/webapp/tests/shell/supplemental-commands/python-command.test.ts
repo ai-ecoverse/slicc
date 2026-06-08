@@ -9,7 +9,10 @@
 
 import type { IFileSystem } from 'just-bash';
 import { describe, expect, it, vi } from 'vitest';
-import { computePyodideMountDirs } from '../../../src/shell/supplemental-commands/python-command.js';
+import {
+  computeOverlappingMountPoints,
+  computePyodideMountDirs,
+} from '../../../src/shell/supplemental-commands/python-command.js';
 
 function makeFs(
   entries: Array<{ name: string; isDir?: boolean; statThrows?: boolean }>,
@@ -118,5 +121,36 @@ describe('computePyodideMountDirs', () => {
     ]);
     const dirs = await computePyodideMountDirs(fs);
     expect(dirs).toEqual(['/workspace', '/tmp']);
+  });
+});
+
+describe('computeOverlappingMountPoints', () => {
+  function fsWithMounts(mounts: { path: string; kind: 'local' | 's3' | 'da' | 'proc' }[]) {
+    return { listMountPoints: () => mounts } as unknown as IFileSystem;
+  }
+  it('returns [] when the FS does not expose listMountPoints (test stub)', () => {
+    expect(computeOverlappingMountPoints({} as IFileSystem, ['/workspace'])).toEqual([]);
+  });
+  it('tags each overlapping mount with its kind, drops internal proc mounts', () => {
+    const fs = fsWithMounts([
+      { path: '/mnt/myapp', kind: 'local' },
+      { path: '/mnt/s3', kind: 's3' },
+      { path: '/workspace/repo', kind: 'da' },
+      { path: '/proc', kind: 'proc' },
+    ]);
+    const out = computeOverlappingMountPoints(fs, ['/workspace', '/mnt', '/tmp']);
+    expect(out).toEqual([
+      { path: '/mnt/myapp', kind: 'local' },
+      { path: '/mnt/s3', kind: 's3' },
+      { path: '/workspace/repo', kind: 'da' },
+    ]);
+  });
+  it('drops mounts that do not overlap any sync dir', () => {
+    const fs = fsWithMounts([
+      { path: '/somewhere-else', kind: 's3' },
+      { path: '/workspace/x', kind: 'local' },
+    ]);
+    const out = computeOverlappingMountPoints(fs, ['/workspace']);
+    expect(out).toEqual([{ path: '/workspace/x', kind: 'local' }]);
   });
 });

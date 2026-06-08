@@ -66,6 +66,26 @@ export interface RealmInitMsg {
    * passes the dbName through this field.
    */
   opfsMountDbName?: string;
+  /**
+   * VFS mount points that overlap `pyodideMountDirs`. The realm
+   * overlays a throwing FS plugin (`MOUNT_BOMB_FS`) at each `path`
+   * so any synchronous access from Python (stdlib `open`,
+   * `os.listdir`, pandas, …) raises an OSError pointing the caller
+   * at the async `slicc.fs` module. `kind` is informational only
+   * (no cap, no materialization). Internal mounts (`/proc`, …) are
+   * excluded by the kernel before this list is built.
+   */
+  mountPoints?: RealmMountPoint[];
+}
+
+/**
+ * One entry of {@link RealmInitMsg.mountPoints}. `kind` mirrors
+ * `MountBackend.kind` ('local' | 's3' | 'da'). Internal mounts
+ * (`/proc`, …) are excluded by the kernel before this list is built.
+ */
+export interface RealmMountPoint {
+  path: string;
+  kind: 'local' | 's3' | 'da';
 }
 
 /** Posted by the realm after a clean exit (incl. user-code throw → exit 1). */

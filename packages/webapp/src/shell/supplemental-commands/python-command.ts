@@ -24,6 +24,7 @@ import {
 } from '../../kernel/realm/realm-factory.js';
 import type { RealmFactory } from '../../kernel/realm/realm-runner.js';
 import { runInRealm } from '../../kernel/realm/realm-runner.js';
+import type { RealmMountPoint } from '../../kernel/realm/realm-types.js';
 import { stdinAsText } from '../just-bash-compat.js';
 
 /**
@@ -98,6 +99,43 @@ export async function computePyodideMountDirs(
     dirs.push('/tmp');
   }
   return dirs;
+}
+
+/**
+ * Compute the set of user-visible VFS mount points that overlap any
+ * of `syncDirs`. A mount overlaps when its path is exactly a syncDir,
+ * is contained within a syncDir, or is an ancestor of a syncDir. Each
+ * overlapping mount is tagged with its backend `kind` (informational
+ * only — every kind bombs identically on sync access). Internal
+ * mounts (`/proc`, …) are skipped by `VirtualFS.listMountPoints`.
+ *
+ * Returns `[]` when the wrapped FS doesn't expose `listMountPoints`
+ * (test stubs, scoop-restricted FS) — the realm then runs with no
+ * bomb overlays and the OPFS placeholder is what Python sees.
+ */
+export function computeOverlappingMountPoints(
+  fs: CommandContext['fs'],
+  syncDirs: readonly string[]
+): RealmMountPoint[] {
+  const wrapped = fs as unknown as {
+    listMountPoints?: () => { path: string; kind: 'local' | 's3' | 'da' | 'proc' }[];
+  };
+  if (typeof wrapped.listMountPoints !== 'function') return [];
+  const overlap = (mountPath: string): boolean => {
+    for (const dir of syncDirs) {
+      if (mountPath === dir) return true;
+      if (mountPath.startsWith(dir === '/' ? '/' : dir + '/')) return true;
+      if (dir.startsWith(mountPath + '/')) return true;
+    }
+    return false;
+  };
+  const out: RealmMountPoint[] = [];
+  for (const entry of wrapped.listMountPoints()) {
+    if (entry.kind === 'proc') continue;
+    if (!overlap(entry.path)) continue;
+    out.push({ path: entry.path, kind: entry.kind });
+  }
+  return out;
 }
 
 /**
@@ -231,6 +269,11 @@ export function createPython3LikeCommand(
     // VFS→Pyodide-FS before exec and Pyodide-FS→VFS after, so file
     // writes from Python persist back through the kernel's VFS.
     const syncDirs = await computePyodideMountDirs(ctx.fs);
+    // Tag every mount that overlaps the sync dirs with its backend
+    // `kind`. The realm overlays a throwing FS plugin at each path
+    // so any synchronous Python access raises an OSError directing
+    // the caller at the async `slicc.fs` module.
+    const mountPoints = computeOverlappingMountPoints(ctx.fs, syncDirs);
 
     const pm = options ? lookupGlobalPm() : null;
     const owner: ProcessOwner = { kind: 'system' };
@@ -257,6 +300,7 @@ export function createPython3LikeCommand(
         pyodideIndexURL,
         pyodideMountDirs: syncDirs,
         opfsMountDbName,
+        mountPoints,
       });
     }
 
@@ -276,6 +320,7 @@ export function createPython3LikeCommand(
       pyodideIndexURL,
       pyodideMountDirs: syncDirs,
       opfsMountDbName,
+      mountPoints,
       procKind: 'py',
     });
   });
@@ -314,6 +359,7 @@ async function runWithEphemeralPm(args: {
   pyodideIndexURL: string;
   pyodideMountDirs: string[];
   opfsMountDbName: string | undefined;
+  mountPoints?: RealmMountPoint[];
 }) {
   if (!EphemeralPm) {
     const { ProcessManager: PM } = await import('../../kernel/process-manager.js');
@@ -334,6 +380,7 @@ async function runWithEphemeralPm(args: {
     stdin: args.stdin,
     pyodideIndexURL: args.pyodideIndexURL,
     pyodideMountDirs: args.pyodideMountDirs,
+    mountPoints: args.mountPoints,
     opfsMountDbName: args.opfsMountDbName,
     procKind: 'py',
   });

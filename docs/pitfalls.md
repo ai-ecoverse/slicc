@@ -140,27 +140,107 @@ the closure returns.
 | `core/image-processor.ts`                        | Snapshots via `new Uint8Array(data)`                                               |
 | `cdp/browser-api.ts`                             | Consumes the view inside the callback to build base64 (no escape)                  |
 
-## Python Realm: VFS Sync Is Diff-Aware and Size-Capped
+## Python Realm: Mounts Are Async-Only Via `slicc.fs`
 
-**File**: `packages/webapp/src/kernel/realm/py-realm-shared.ts`
+**Files**: `packages/webapp/src/kernel/realm/py-realm-shared.ts`,
+`packages/webapp/src/kernel/realm/mount-bomb-fs.ts`,
+`packages/webapp/src/kernel/realm/slicc-fs-module.ts`
 
-Pre- and post-execution sync between the VFS and Pyodide's emscripten FS uses
-two bulk RPCs — `vfs.walkTree` (host → realm: paths + sizes + content) and
-`vfs.writeBatch` (realm → host: mkdirs + file writes). The naive per-file
-`readDir`/`stat`/`readFile` chatter took minutes on workspace-sized cwds; the
-bulk path collapses that to two round-trips regardless of file count.
+Synchronous access to a mounted path from Python (stdlib `open`,
+`os.listdir`, `pathlib`, pandas, …) is **intentionally disabled**. The realm
+overlays a throwing FS plugin (`MOUNT_BOMB_FS`) at every VFS mount path that
+overlaps the Python sync dirs, so the first sync touch raises immediately
+with an actionable `OSError` instead of stalling on per-file RPC traffic. To
+read or write under a mount, use the async `slicc.fs` Python module (or copy
+the file into the VFS first).
 
-| Behavior                             | Why                                                                                                                                                                                                                                                                                                                                                                                    |
-| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **10 MB file-size cap**              | Files above the cap are listed (Python sees the directory entry + the `size` field) but their content is not pre-loaded. `open()` raises ENOENT. Cap-exceeded files are **silently** skipped — a documented constraint, not an error worth surfacing on every invocation. Files that are within the cap but fail to read from the host DO warn so the user can debug the real failure. |
-| **Size-only diff**                   | Post-sync compares Pyodide-FS size against the pre-execution snapshot; same-size content changes can slip through. The trade-off is intentional; if it ever flips to hash-based diffing, the test pinning this should be updated, not deleted.                                                                                                                                         |
-| **Binary content via Uint8Array**    | `walkTree`/`writeBatch` carry content as `Uint8Array`, not `string`, so PNG / PDF / wheel / sqlite files in cwd round-trip byte-for-byte. The previous string-based path silently corrupted any non-UTF-8 byte via `TextDecoder()` on the way out.                                                                                                                                     |
-| **Per-entry write failures surface** | `writeBatch` returns `{ failedFiles, failedMkdirs }`; the realm pushes each into stderr so a Python script's `open('x','w').write(...)` failure can't disappear into the void.                                                                                                                                                                                                         |
+This replaces the previous "eager materialization" model, which walked the
+mount over the `vfs` RPC channel before user code ran. On a workspace-sized
+local mount (~11k files) that produced ~24k sequential RPCs and hung
+`python3` startup for minutes; the bomb overlay is instant — no walk, no
+preload, no RPC traffic.
 
-When extending the sync (attribute mirroring, hash-based diffing, etc.), keep
-the two-RPC shape — adding round-trips inside the loop reintroduces the
-minutes-long stall — and keep `content: Uint8Array` so binary outputs don't
-regress to the TextDecoder corruption path.
+### The bomb error
+
+Any sync `node_ops` or `stream_ops` call under a mounted path raises an
+`OSError` (errno `EIO`) carrying:
+
+```text
+slicc: synchronous access to mounted path '<mountPath>' is not supported.
+Use the async slicc.fs module (e.g. `await slicc.fs.read_text('<mountPath>')`
+or `await slicc.fs.listdir('<mountPath>')`), or copy the file into the VFS
+first (`await slicc.fs.read_bytes('<mountPath>/<file>')` then write it under
+/tmp).
+```
+
+All mount kinds (`local` / `s3` / `da`) bomb identically — `kind` is
+informational on the mount descriptor only, with no per-kind cap or
+materialization budget. The cwd and `/tmp` (the default Python sync dirs,
+overridable via `pyodideMountDirs`) remain directly accessible as before;
+only paths under a registered VFS mount bomb. Mount paths that exactly match
+a sync dir are excluded from the OPFS overlay so the bomb plugin can stack
+without an `EBUSY` collision.
+
+### The `slicc.fs` async API
+
+`slicc.fs` is registered into `sys.modules` at realm startup (always — cheap
+and harmless even when no mounts overlap) and is backed by the same `vfs`
+RPC channel the file tools use, so reads under a mount path route through
+the kernel-side `MountBackend` (local FS Access, S3, DA) transparently.
+Every method is `async` and must be `await`ed.
+
+| Method                              | Returns                                     | Notes                                                                                                |
+| ----------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `listdir(path)`                     | `list[str]`                                 | Entry names (not full paths).                                                                        |
+| `read_bytes(path)`                  | `bytes`                                     | Binary-safe; no encoding step.                                                                       |
+| `read_text(path, encoding="utf-8")` | `str`                                       | Convenience wrapper over `read_bytes` + `decode`.                                                    |
+| `write_bytes(path, data)`           | `None`                                      | `data` must be `bytes` / `bytearray` / `memoryview`. Passing `str` raises `TypeError`.               |
+| `write_text(path, text, …)`         | `None`                                      | Convenience wrapper over `write_bytes` + `encode`.                                                   |
+| `stat(path)`                        | `dict` with `isDirectory`, `isFile`, `size` | Minimal cross-backend shape; not a full `os.stat_result`.                                            |
+| `exists(path)`                      | `bool`                                      |                                                                                                      |
+| `mkdir(path, parents=False)`        | `None`                                      | Recursive on the host; `parents=False` raises `FileExistsError` when the target already exists.      |
+| `remove(path)`                      | `None`                                      | Routes through `vfs.rm`.                                                                             |
+| `walk(path)`                        | `list[tuple[str, list[str], list[str]]]`    | `os.walk`-shaped, but eager — entire subtree is materialized into the returned list before yielding. |
+
+Example:
+
+```python
+import slicc
+
+# Read from a mounted path — always await.
+text = await slicc.fs.read_text("/mnt/aws/site/index.html")
+print(text[:200])
+
+# Write back through the same channel.
+await slicc.fs.write_text("/mnt/aws/site/new.html", "<h1>hi</h1>\n")
+
+# "Copy first" pattern for stdlib code that needs a real sync handle.
+data = await slicc.fs.read_bytes("/mnt/da/docs/report.pdf")
+with open("/tmp/report.pdf", "wb") as f:
+    f.write(data)
+import pdfplumber  # noqa: now reads from /tmp synchronously
+```
+
+The "copy first" pattern is the documented escape hatch for libraries that
+take a path and read synchronously (`pdfplumber`, `pandas.read_csv`,
+`sqlite3.connect`, …): `await slicc.fs.read_bytes(<mount path>)` then write
+the bytes under `/tmp` (or another sync dir) and hand the library the local
+path. The cwd and `/tmp` are OPFS-backed in the realm, so subsequent stdlib
+access against them is synchronous.
+
+### When extending this surface
+
+- Keep the bomb instant: `mount(mount)` returns a single root `FsNode` with
+  no preload, no walk, no RPC. Anything that adds RPC traffic at mount time
+  reintroduces the hang the bomb overlay was added to fix.
+- Keep `slicc.fs` the only documented escape hatch. Adding a second async
+  Python surface (`slicc.io`, a `slicc.path` module, …) fragments the
+  recovery story baked into the bomb's error message.
+- Write-back is no longer a thing for mount paths — `slicc.fs.write_*`
+  routes through `vfs` directly, so backend writes are applied as they
+  happen rather than flushed at `realm-done`. Re-introducing a deferred
+  write-back would silently swallow per-write errors that currently surface
+  inline.
 
 ## Runtime Detection: Workers Have No `window` Either
 
