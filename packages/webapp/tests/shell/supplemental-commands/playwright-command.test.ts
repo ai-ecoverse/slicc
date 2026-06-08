@@ -3504,8 +3504,9 @@ const FRAME_HTML = `<!DOCTYPE html>
 
 const chromePath = findChromeExecutable();
 const describeIntegration = chromePath ? describe : describe.skip;
+const INTEGRATION_CDP_LAUNCH_TIMEOUT_MS = Math.max(getDefaultCdpLaunchTimeoutMs(), 60_000);
 
-describeIntegration('iframe integration', { timeout: 60_000 }, () => {
+describeIntegration('iframe integration', { timeout: 90_000 }, () => {
   let server: http.Server;
   let serverPort: number;
   let chromeProcess: ChildProcess;
@@ -3539,6 +3540,7 @@ describeIntegration('iframe integration', { timeout: 60_000 }, () => {
       '--no-first-run',
       '--no-default-browser-check',
       '--disable-gpu',
+      '--disable-dev-shm-usage',
       '--disable-crash-reporter',
       `--user-data-dir=${tmpDir}`,
       'about:blank',
@@ -3552,7 +3554,7 @@ describeIntegration('iframe integration', { timeout: 60_000 }, () => {
     // because GitHub runners commonly pay a 10+ second cold-start tax.
     const cdpPort = await waitForCdpPort(chromeProcess, {
       userDataDir: tmpDir,
-      timeoutMs: Math.max(getDefaultCdpLaunchTimeoutMs(), 25_000),
+      timeoutMs: INTEGRATION_CDP_LAUNCH_TIMEOUT_MS,
     });
 
     // 3. Fetch the browser WS URL from /json/version
@@ -3567,7 +3569,7 @@ describeIntegration('iframe integration', { timeout: 60_000 }, () => {
 
     // 5. Create a mock FS for the command
     mockFs = createMockFS();
-  }, 30_000);
+  }, INTEGRATION_CDP_LAUNCH_TIMEOUT_MS + 15_000);
 
   afterAll(async () => {
     try {

@@ -188,6 +188,7 @@ jobs:
         run: npm run test
         env:
           NODE_OPTIONS: '--max-old-space-size=6144'
+          SLICC_CDP_LAUNCH_TIMEOUT_MS: '60000'
 
   webapp:
     needs: changes
