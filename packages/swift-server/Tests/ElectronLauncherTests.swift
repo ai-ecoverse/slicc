@@ -324,6 +324,99 @@ final class ElectronLauncherTests: XCTestCase {
         XCTAssertEqual(session._testing_pendingWaiterCount(), 0)
     }
 
+    // MARK: - Bootstrap-script frame/origin guard
+    //
+    // `Page.addScriptToEvaluateOnNewDocument` runs in EVERY new document
+    // including our own overlay iframe at `http://localhost:<servePort>`.
+    // Without the guard the Slicc webapp inside the iframe re-runs the
+    // bootstrap and injects another launcher inside itself, nesting up to
+    // N levels — exactly the "Slicc buttons inside the Slicc iframe"
+    // regression observed on AEM Desktop. node-server doesn't hit this
+    // because it doesn't register an all-frames script.
+
+    func testBootstrapScriptGuardsAgainstSubframes() {
+        let script = buildElectronOverlayBootstrapScript(
+            bundleSource: "/* bundle */",
+            appURL: "http://localhost:5711/electron"
+        )
+        XCTAssertTrue(
+            script.contains("window.top!==window.self"),
+            "bootstrap must early-return when not running in the top frame"
+        )
+    }
+
+    func testBootstrapScriptGuardsAgainstOverlayOrigin() {
+        let script = buildElectronOverlayBootstrapScript(
+            bundleSource: "/* bundle */",
+            appURL: "http://localhost:5711/electron"
+        )
+        XCTAssertTrue(
+            script.contains("location.origin===new URL(\"http://localhost:5711/electron\").origin"),
+            "bootstrap must early-return when running inside the overlay iframe's own origin"
+        )
+    }
+
+    func testBootstrapScriptWrapsInjectionInIIFE() {
+        // Both guards must precede the injection call so `return` aborts
+        // the call without running it.
+        let script = buildElectronOverlayBootstrapScript(
+            bundleSource: "/* bundle */",
+            appURL: "http://localhost:5711/electron"
+        )
+        XCTAssertTrue(script.contains("(function(){"))
+        XCTAssertTrue(script.contains("})();"))
+    }
+
+    func testBootstrapScriptEscapesAppURLInOriginGuard() {
+        let script = buildElectronOverlayBootstrapScript(
+            bundleSource: "/* bundle */",
+            appURL: "http://example.com/path\"with-quote"
+        )
+        XCTAssertTrue(
+            script.contains("\\\"with-quote"),
+            "app URL must be JS-escaped wherever it appears in the bootstrap"
+        )
+    }
+
+    // MARK: - Idempotent new-document registration
+    //
+    // `Page.addScriptToEvaluateOnNewDocument` is only meaningful once per
+    // session — registering twice would install a duplicate hook and waste
+    // CDP work. The pure helper drives the skip decision.
+
+    func testShouldSkipNewDocumentRegistrationWhenAlreadyRegistered() {
+        XCTAssertTrue(
+            ElectronOverlayInjector.shouldSkipNewDocumentRegistration(currentIdentifier: "1")
+        )
+    }
+
+    func testShouldNotSkipNewDocumentRegistrationOnFirstCall() {
+        XCTAssertFalse(
+            ElectronOverlayInjector.shouldSkipNewDocumentRegistration(currentIdentifier: nil)
+        )
+    }
+
+    // MARK: - Overlay host removal expression
+    //
+    // On graceful session teardown we send a small Runtime.evaluate that
+    // removes the overlay host so a slicc-server restart against the same
+    // Electron app starts with a clean DOM. The expression prefers the
+    // overlay's own `remove()` API and falls back to a direct DOM removal.
+
+    func testOverlayHostRemovalExpressionCallsOverlayRemove() {
+        let expression = ElectronOverlayInjector.overlayHostRemovalExpression()
+        XCTAssertTrue(expression.contains("__SLICC_ELECTRON_OVERLAY__"))
+        XCTAssertTrue(expression.contains(".remove"))
+    }
+
+    func testOverlayHostRemovalExpressionFallsBackToDOMRemoval() {
+        let expression = ElectronOverlayInjector.overlayHostRemovalExpression()
+        XCTAssertTrue(
+            expression.contains("getElementById('slicc-electron-overlay-root')"),
+            "expression must fall back to direct DOM removal so a stale bundle without remove() is still cleaned up"
+        )
+    }
+
     private func waitFor(timeout seconds: Double, predicate: @Sendable () -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(seconds)
         while Date() < deadline {

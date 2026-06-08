@@ -314,7 +314,17 @@ func buildElectronOverlayAppURL(servePort: Int) -> String {
 func buildElectronOverlayBootstrapScript(bundleSource: String, appURL: String) -> String {
     let escapedAppURL = appURL.replacingOccurrences(of: "\\", with: "\\\\")
         .replacingOccurrences(of: "\"", with: "\\\"")
-    let injectionCall = "if(document.body){window.__SLICC_ELECTRON_OVERLAY__?.inject({appUrl:\"\(escapedAppURL)\"});}else{document.addEventListener('DOMContentLoaded',function(){window.__SLICC_ELECTRON_OVERLAY__?.inject({appUrl:\"\(escapedAppURL)\"});});}"
+    // Gate the inject call on a top-frame + non-overlay-origin check so the
+    // bootstrap no-ops when `Page.addScriptToEvaluateOnNewDocument` runs it
+    // inside our own overlay iframe at `http://localhost:<servePort>/electron`
+    // (or any other subframe). Without this, the Slicc webapp inside the
+    // overlay iframe re-runs the bootstrap and injects another launcher
+    // inside itself, recursing up to N levels deep. node-server doesn't hit
+    // this because it doesn't register an all-frames script.
+    let frameGuard = "try{if(window.top!==window.self)return;}catch(e){return;}"
+    let originGuard = "try{if(location.origin===new URL(\"\(escapedAppURL)\").origin)return;}catch(e){}"
+    let injectBody = "if(document.body){window.__SLICC_ELECTRON_OVERLAY__?.inject({appUrl:\"\(escapedAppURL)\"});}else{document.addEventListener('DOMContentLoaded',function(){window.__SLICC_ELECTRON_OVERLAY__?.inject({appUrl:\"\(escapedAppURL)\"});});}"
+    let injectionCall = "(function(){\(frameGuard)\(originGuard)\(injectBody)})();"
     return bundleSource + "\n" + injectionCall
 }
 
@@ -450,8 +460,12 @@ final class ElectronOverlayInjector: @unchecked Sendable {
             sessions.removeAll()
             return snapshot
         }
+        // Best-effort graceful teardown so a slicc-server restart against
+        // the same Electron app starts with a clean DOM (no stale overlay
+        // host element from the prior session). The async detach is fire-
+        // and-forget — `stop()` itself is sync so we don't block on it.
         for session in toClose {
-            session.stop()
+            Task { await session.gracefulShutdown() }
         }
     }
 
@@ -492,6 +506,23 @@ final class ElectronOverlayInjector: @unchecked Sendable {
     /// `.done` (iframe loaded after the bypassed reload).
     static func shouldRecordBypassedAfter(postReloadAction action: OverlayPostReloadAction) -> Bool {
         action == .done
+    }
+
+    /// Whether to skip registering the new-document overlay bootstrap. We
+    /// only need it registered once per `OverlayTargetSession`; re-running
+    /// `Page.addScriptToEvaluateOnNewDocument` would install a duplicate
+    /// hook and waste CDP work.
+    static func shouldSkipNewDocumentRegistration(currentIdentifier: String?) -> Bool {
+        currentIdentifier != nil
+    }
+
+    /// JS expression that removes the overlay host element from the
+    /// document on a graceful session teardown so a reopen starts with a
+    /// clean DOM. Calls the overlay's own `remove()` API first and falls
+    /// back to a direct DOM removal so a stale bundle that doesn't expose
+    /// `remove` is still cleaned up.
+    static func overlayHostRemovalExpression() -> String {
+        "try{window.__SLICC_ELECTRON_OVERLAY__&&window.__SLICC_ELECTRON_OVERLAY__.remove&&window.__SLICC_ELECTRON_OVERLAY__.remove();var e=document.getElementById('slicc-electron-overlay-root');if(e&&e.remove)e.remove();}catch(e){}"
     }
 
     private func runPollingLoop() async {
@@ -756,6 +787,21 @@ final class OverlayTargetSession: @unchecked Sendable {
         snapshot.connectTask?.cancel()
     }
 
+    /// Graceful teardown variant: best-effort sends a Runtime.evaluate that
+    /// removes the overlay host element from the document, then calls
+    /// `stop()`. Use this on a clean shutdown path so a slicc-server restart
+    /// against the same Electron app starts with a fresh DOM. The eval is
+    /// fire-and-forget; if the socket is already dead this is a no-op.
+    func gracefulShutdown() async {
+        let alreadyClosed = stateQueue.sync { closed }
+        if alreadyClosed { return }
+        _ = await sendCommand(method: "Runtime.evaluate", params: [
+            "expression": ElectronOverlayInjector.overlayHostRemovalExpression(),
+            "awaitPromise": false
+        ])
+        stop()
+    }
+
     // MARK: Connection flow
 
     private func runConnectFlow() async {
@@ -954,12 +1000,17 @@ final class OverlayTargetSession: @unchecked Sendable {
         logger.info("Proxying request to strip CSP", metadata: ["url": .string(String(urlString.prefix(80)))])
         do {
             let proxied = try await fetchAndStripCSP(urlString: urlString, method: method, headers: headers, postData: postData)
+            // Fire-and-forget to match node-server (electron-controller.ts
+            // `send('Fetch.fulfillRequest', ...)` with no await). Awaiting
+            // here is what previously tripped the 10s command timeout on
+            // every cycle, producing the "CDP command timed out" /
+            // "Client disconnected" loop in AEM Desktop.
             _ = await sendCommand(method: "Fetch.fulfillRequest", params: [
                 "requestId": requestId,
                 "responseCode": proxied.statusCode,
                 "responseHeaders": proxied.headers,
                 "body": proxied.bodyBase64
-            ], awaitResponse: true)
+            ])
             if proxied.strippedCSP {
                 logger.info("Stripped CSP", metadata: ["url": .string(String(urlString.prefix(80)))])
             }
@@ -1051,6 +1102,14 @@ final class OverlayTargetSession: @unchecked Sendable {
     /// AEM Desktop case where the re-evaluate after `Page.loadEventFired`
     /// would otherwise race a fresh document and not stick).
     private func registerNewDocumentScript() async {
+        let currentIdentifier = stateQueue.sync { addedScriptIdentifier }
+        if ElectronOverlayInjector.shouldSkipNewDocumentRegistration(currentIdentifier: currentIdentifier) {
+            logger.debug("Overlay bootstrap already registered, skipping", metadata: [
+                "target": .string(target.url),
+                "identifier": .string(currentIdentifier ?? "")
+            ])
+            return
+        }
         let result = await sendCommand(method: "Page.addScriptToEvaluateOnNewDocument", params: [
             "source": bootstrapScript
         ], awaitResponse: true)
