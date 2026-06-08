@@ -10,13 +10,13 @@
     "node-server": {
       "lines": 74,
       "statements": 72,
-      "functions": 75,
+      "functions": 76,
       "branches": 64
     },
     "chrome-extension": {
       "lines": 73,
       "statements": 71,
-      "functions": 65,
+      "functions": 66,
       "branches": 60,
       "coverageExclude": [
         "**/node_modules/**",
