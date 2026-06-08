@@ -52,6 +52,7 @@
     "test:coverage:webapp": "node packages/dev-tools/tools/coverage-gate.mjs webapp",
     "test:coverage:cherry": "node packages/dev-tools/tools/coverage-gate.mjs cherry",
     "test:coverage:cloud-core": "node packages/dev-tools/tools/coverage-gate.mjs cloud-core",
+    "test:coverage:shared": "node packages/dev-tools/tools/coverage-gate.mjs shared",
     "coverage:ratchet": "node packages/dev-tools/tools/coverage-ratchet.mjs",
     "test:server-integration": "vitest run --config packages/node-server/tests/integration/server/vitest.config.ts",
     "test:e2e": "npx playwright test --config packages/webapp/tests/e2e/playwright.config.ts",

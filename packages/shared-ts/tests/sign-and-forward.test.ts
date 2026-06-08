@@ -311,7 +311,7 @@ describe('executeS3SignAndForward — successful sign + forward', () => {
     for (let i = 0; i < payload.length; i++) binary += String.fromCharCode(payload[i]);
     const bodyBase64 = btoa(binary);
 
-    const original = globalThis.Buffer;
+    const original = (globalThis as { Buffer?: unknown }).Buffer;
     (globalThis as { Buffer?: unknown }).Buffer = undefined;
     let reply: Awaited<ReturnType<typeof executeS3SignAndForward>>;
     try {
