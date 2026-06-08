@@ -18,7 +18,7 @@ const __RealMath = globalThis.Math;
 const Date = new Proxy(__RealDate, {
   construct(t, a) { if (a.length === 0) throw new WorkflowDeterminismError('argless new Date() banned — pass time via args'); return new t(...a); },
   get(t, p) { if (p === 'now') return () => { throw new WorkflowDeterminismError('Date.now() banned'); }; const v = t[p]; return typeof v === 'function' ? v.bind(t) : v; },
-  apply(t, _s, a) { return t(...a); },
+  apply() { throw new WorkflowDeterminismError('Date() as a function is banned (nondeterministic) — use new Date(arg)'); },
 });
 const Math = new Proxy(__RealMath, {
   get(t, p) { if (p === 'random') return () => { throw new WorkflowDeterminismError('Math.random() banned — vary by index'); }; const v = t[p]; return typeof v === 'function' ? v.bind(t) : v; },

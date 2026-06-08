@@ -119,14 +119,14 @@ describe('workflow-prelude', () => {
     );
     expect((globalThis as any).__e).toMatch(/4096/);
   });
-  it('determinism guard throws for Date.now/Math.random/crypto/performance/timers/new Date; new Date(arg) ok', async () => {
+  it('determinism guard throws for Date.now/Math.random/crypto/performance/timers/new Date/Date(); new Date(arg) ok', async () => {
     const chk = (expr: string) => `(()=>{try{${expr};return "no"}catch(e){return "yes"}})()`;
     await run(
-      `globalThis.__d = [${chk('Date.now()')},${chk('Math.random()')},${chk('crypto.randomUUID()')},${chk('performance.now()')},${chk('setTimeout(()=>{},0)')},${chk('new Date()')}]; globalThis.__ok = new Date(0).getTime();`,
+      `globalThis.__d = [${chk('Date.now()')},${chk('Math.random()')},${chk('crypto.randomUUID()')},${chk('performance.now()')},${chk('setTimeout(()=>{},0)')},${chk('new Date()')},${chk('Date()')}]; globalThis.__ok = new Date(0).getTime();`,
       { spawn: async () => ({}) },
       WF
     );
-    expect((globalThis as any).__d).toEqual(['yes', 'yes', 'yes', 'yes', 'yes', 'yes']);
+    expect((globalThis as any).__d).toEqual(['yes', 'yes', 'yes', 'yes', 'yes', 'yes', 'yes']);
     expect((globalThis as any).__ok).toBe(0);
   });
   it('args/budget/phase/log', async () => {
