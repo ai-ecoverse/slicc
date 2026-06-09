@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { DoorOpen, Sparkles } from 'lucide';
+import { DoorOpen, Sparkles, Workflow } from 'lucide';
 import { describe, expect, it } from 'vitest';
 import { getLickDescriptor } from '../../src/ui/lick-view.js';
 import type { ChatMessage } from '../../src/ui/types.js';
@@ -8,14 +8,12 @@ import type { ChatMessage } from '../../src/ui/types.js';
 function makeLick(channel: string, content: string): ChatMessage {
   return {
     id: 'm1',
-    chatJid: 'cone',
-    senderId: channel,
-    senderName: `${channel}:test`,
+    role: 'user',
     content,
-    timestamp: new Date().toISOString(),
-    fromAssistant: false,
+    timestamp: Date.now(),
+    source: 'lick',
     channel,
-  } as ChatMessage;
+  };
 }
 
 describe('getLickDescriptor', () => {
@@ -38,5 +36,14 @@ describe('getLickDescriptor', () => {
     const msg = makeLick('sprinkle', 'no header here');
     const desc = getLickDescriptor(msg);
     expect(desc.icon).toBe(Sparkles as unknown);
+  });
+
+  it('returns a non-default workflow descriptor for workflow completion licks', () => {
+    const msg = makeLick('workflow', '[Workflow Event: my-flow]\n\ndone');
+    const desc = getLickDescriptor(msg);
+    expect(desc.label).toBe('workflow');
+    // Must be the bespoke Workflow glyph, not the fallback Bell/'event'.
+    expect(desc.label).not.toBe('event');
+    expect(desc.icon).toBe(Workflow as unknown);
   });
 });
