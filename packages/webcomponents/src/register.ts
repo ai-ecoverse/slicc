@@ -9,6 +9,9 @@ import './chat/slicc-delegation-line.js';
 import './chat/slicc-handoff-card.js';
 import './chat/slicc-lick-card.js';
 import './chat/slicc-user-message.js';
+import './composer/slicc-composer-meta.js';
+import './composer/slicc-composer.js';
+import './composer/slicc-input-card.js';
 import './pill/slicc-pill.js';
 import './primitives/slicc-avatar.js';
 import './primitives/slicc-collapse-btn.js';
@@ -25,6 +28,8 @@ import './primitives/slicc-send-button.js';
 import './primitives/slicc-snowflake.js';
 import './primitives/slicc-swatch.js';
 import './primitives/slicc-tag.js';
+import './switcher/slicc-scoop-overflow.js';
+import './switcher/slicc-scoop-switcher.js';
 import './theme/slicc-theme-toggle.js';
 import './theme/slicc-theme.js';
 
