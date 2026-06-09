@@ -68,6 +68,9 @@ import { Orchestrator } from '../scoops/orchestrator.js';
 import { subscribeToFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 import { subscribeToLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import type { ChannelMessage, RegisteredScoop } from '../scoops/types.js';
+import { publishWorkflowRunManager } from '../scoops/workflow-run-manager.js';
+import { executeJsCode } from '../shell/jsh-executor.js';
+import { makeSentinel, splitSentinel } from '../shell/supplemental-commands/workflow-script.js';
 import { ProcMountBackend } from './proc-mount.js';
 import { ProcessManager } from './process-manager.js';
 import type { KernelFacade } from './types.js';
@@ -454,6 +457,36 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   const lickHandler = config.lickEventHandler ?? defaultLickEventHandler;
   const routingCtx: LickRoutingContext = { orchestrator, lickManager, log };
   lickManager.setEventHandler((event) => lickHandler(event, routingCtx));
+
+  // 7b. Publish the workflow run manager on `globalThis.__slicc_workflows`
+  //     so the `workflow` shell command + the cone resolve it the same way
+  //     they resolve `__slicc_agent`. Wired here (after `lickManager`) so
+  //     `orchestrator`, `processManager`, `sharedFs`, and `lickManager` are
+  //     all in scope. Sentinel ownership: the manager NEVER invents a
+  //     sentinel — the command builds it and threads it through
+  //     `WorkflowStartOptions.sentinel`; production deps only supply
+  //     `makeRunId` (a short id derived from `makeSentinel()`) and
+  //     `splitResult` (`splitSentinel`).
+  if (sharedFs) {
+    publishWorkflowRunManager({
+      sharedFs,
+      getConeJid: () => orchestrator.getScoops().find((s) => s.isCone)?.jid,
+      fireLick: (event) => lickManager.emitEvent(event),
+      processManager,
+      runRealm: (code, argv, ctx) =>
+        executeJsCode(
+          code,
+          argv,
+          ctx as unknown as Parameters<typeof executeJsCode>[2],
+          undefined,
+          {
+            filename: argv[1],
+          }
+        ),
+      makeRunId: () => makeSentinel().slice('WF_RESULT_'.length, 'WF_RESULT_'.length + 12),
+      splitResult: (stdout, sentinel) => splitSentinel(stdout, sentinel),
+    });
+  }
 
   // 8. Expose lickManager on globalThis for the `crontask` / `webhook`
   //    shell commands. globalThis is identical in worker + page.

@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
+import { VirtualFS } from '../../src/fs/index.js';
 import {
   createWorkflowRunManager,
+  publishWorkflowRunManager,
+  WORKFLOW_MANAGER_GLOBAL_KEY,
   type WorkflowRunState,
 } from '../../src/scoops/workflow-run-manager.js';
+import { createWorkflowCommand } from '../../src/shell/supplemental-commands/workflow-command.js';
+import { VfsAdapter } from '../../src/shell/vfs-adapter.js';
 
 function deferred<T>() {
   let resolve!: (v: T) => void;
@@ -216,5 +221,47 @@ describe('WorkflowRunManager', () => {
     expect(mgr.listRuns()[0].status).toBe('killed');
     expect(sharedFs.writeFile).toHaveBeenCalledTimes(1);
     expect(fireLick).toHaveBeenCalledTimes(1);
+  });
+
+  it('publishWorkflowRunManager sets globalThis.__slicc_workflows', () => {
+    delete (globalThis as Record<string, unknown>)[WORKFLOW_MANAGER_GLOBAL_KEY];
+    const mgr = publishWorkflowRunManager(makeDeps() as any);
+    expect((globalThis as Record<string, unknown>)[WORKFLOW_MANAGER_GLOBAL_KEY]).toBe(mgr);
+  });
+
+  // unskip after Task 7 — the command's delegation to the published manager
+  // (`globalThis.__slicc_workflows`) is wired in Task 7. Until then
+  // `createWorkflowCommand().execute(['run', ...])` runs the SP1 inline path and
+  // never reaches `mgr.start`, so this assertion can't pass yet.
+  it.skip('dual-mode: manager publishes in a no-DOM (offscreen/worker) context and the command resolves it via the shared global — no proxy', async () => {
+    // Worker/offscreen has no DOM. vitest `environment: node` mirrors that, so a clean
+    // construct+publish here IS the worker-context assertion (any window/document touch throws).
+    expect(typeof window).toBe('undefined');
+    expect(typeof document).toBe('undefined');
+
+    delete (globalThis as Record<string, unknown>)[WORKFLOW_MANAGER_GLOBAL_KEY];
+    // Publish exactly as host.ts does — float-agnostic deps (sharedFs/processManager/fireLick/runRealm).
+    const mgr = publishWorkflowRunManager(makeDeps() as any);
+    expect((globalThis as Record<string, unknown>)[WORKFLOW_MANAGER_GLOBAL_KEY]).toBe(mgr);
+
+    // The command does NOT receive the manager by injection — it resolves it from the SAME
+    // global key the host published under. That is the offscreen path: panel terminal
+    // (offscreen-backed) → globalThis.__slicc_workflows → manager, with no proxy hop.
+    const spy = vi.spyOn(mgr, 'start');
+    const fs = await VirtualFS.create({ dbName: `wf-${Math.random()}`, wipe: true });
+    await fs.mkdir('/workspace', { recursive: true });
+    await fs.writeFile('/workspace/wf.js', `export const meta={name:'demo'}\nreturn 1`);
+    const ctx = {
+      fs: new VfsAdapter(fs),
+      cwd: '/workspace',
+      env: new Map<string, string>(),
+      stdin: '',
+      exec: Object.assign(async () => ({ stdout: '', stderr: '', exitCode: 0 }), {
+        spawn: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
+      }),
+    } as any;
+    const res = await createWorkflowCommand().execute(['run', '/workspace/wf.js'], ctx);
+    expect(res.exitCode).toBe(0);
+    expect(spy).toHaveBeenCalledTimes(1); // command reached the published manager, not a proxy/local copy
   });
 });

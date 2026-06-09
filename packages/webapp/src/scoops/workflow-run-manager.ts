@@ -62,9 +62,13 @@ export interface WorkflowRunManagerDeps {
   getConeJid: () => string | undefined;
   fireLick: (event: import('./lick-manager.js').LickEvent) => void;
   processManager: {
+    // `proc` is structurally compatible with the kernel `Process` (argv is
+    // `readonly string[]`, kind is a `ProcessKind` union widened to string)
+    // so the concrete `ProcessManager` is assignable without a cast at the
+    // host call site.
     on(
       event: 'spawn',
-      fn: (proc: { pid: number; argv: string[]; kind: string }) => void
+      fn: (proc: { pid: number; argv: readonly string[]; kind: string }) => void
     ): () => void;
   };
   // Injectable launch — production wires executeJsCode; tests stub it.
@@ -251,6 +255,20 @@ export function createWorkflowRunManager(deps: WorkflowRunManagerDeps): Workflow
       return () => set!.delete(handler);
     },
   };
+}
+
+/**
+ * Bootstrap helper for the kernel host. Constructs the run manager and
+ * publishes it on `globalThis.__slicc_workflows` so the `workflow`
+ * supplemental command (and the cone) can resolve it the same way the
+ * `agent` command resolves `__slicc_agent`. Returns the manager so the
+ * caller can also hold a direct reference.
+ */
+export function publishWorkflowRunManager(deps: WorkflowRunManagerDeps): WorkflowRunManager {
+  const mgr = createWorkflowRunManager(deps);
+  (globalThis as Record<string, unknown>)[WORKFLOW_MANAGER_GLOBAL_KEY] = mgr;
+  log.info('workflow run manager published on globalThis.__slicc_workflows');
+  return mgr;
 }
 
 function previewOf(value: unknown): string {
