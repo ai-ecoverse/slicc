@@ -188,7 +188,7 @@ Virtual Filesystem (packages/webapp/src/fs/) → RestrictedFS → Shell (package
 
 **Dips** (`packages/webapp/src/ui/dip.ts`): Agent ` ```shtml ` code blocks in chat messages are hydrated into sandboxed iframes after streaming completes. Minimal bridge (lick-only, no state) via postMessage. Auto-height via ResizeObserver. CLI mode: direct srcdoc iframe. Extension mode: routes through `sprinkle-sandbox.html` (same CSP-exempt sandbox as panel sprinkles). Lick events route to the cone via `routeLickToScoop` (CLI) or `client.sendSprinkleLick` (extension). CSS: `.msg__dip` container, `.sprinkle-action-card` component.
 
-**Skills** (`packages/webapp/src/skills/`, `packages/webapp/src/scoops/skills.ts`): native `/workspace/skills/` packages auto-load into the system prompt alongside accessible compatibility skills discovered from `.agents/skills/*/SKILL.md` and `.claude/skills/*/SKILL.md` anywhere in the reachable VFS. Only native `/workspace/skills/` entries are install-managed; compatibility roots stay read-only.
+**Skills** (`packages/webapp/src/skills/`, `packages/webapp/src/scoops/skills.ts`): native `/workspace/skills/` packages auto-load into the system prompt alongside accessible compatibility skills discovered from `.agents/skills/*/SKILL.md` and `.claude/skills/*/SKILL.md` anywhere in the reachable VFS, and marketplace skills discovered from any `.claude-plugin/marketplace.json` manifest (skills at `<plugin-source>/skills/<name>/SKILL.md`). Only native `/workspace/skills/` entries are install-managed; compatibility and marketplace roots stay read-only. Precedence: native → agents → claude → marketplace.
 
 ### Data Flow
 

@@ -158,7 +158,7 @@ Deep reference: `docs/kernel/process-model.md`.
 
 - Path: `packages/webapp/src/skills/`
 - Discovers install-managed native skills from `/workspace/skills/`.
-- Also discovers compatible read-only skill roots under `.agents/skills/*/SKILL.md` and `.claude/skills/*/SKILL.md`.
+- Also discovers compatible read-only skill roots under `.agents/skills/*/SKILL.md` and `.claude/skills/*/SKILL.md`, and marketplace skills from any `.claude-plugin/marketplace.json` manifest found in the VFS (skills at `<plugin-source>/skills/<name>/SKILL.md`). Precedence: native → agents → claude → marketplace.
 
 ### Sprinkle Rendering
 
