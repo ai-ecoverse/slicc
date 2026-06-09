@@ -35,6 +35,7 @@ export const EXTERNAL_LICK_CHANNELS: ReadonlySet<LickEvent['type']> = new Set<Li
   'navigate',
   'upgrade',
   'cherry',
+  'workflow',
 ]);
 
 export function isExternalLickChannel(
@@ -56,6 +57,7 @@ export function formatLickEventForCone(event: LickEvent): FormattedLick | null {
   const isNavigate = event.type === 'navigate';
   const isUpgrade = event.type === 'upgrade';
   const isCherry = event.type === 'cherry';
+  const isWorkflow = event.type === 'workflow';
 
   const eventName = isWebhook
     ? (event as { webhookName?: string }).webhookName
@@ -73,7 +75,9 @@ export function formatLickEventForCone(event: LickEvent): FormattedLick | null {
                 }`
               : isCherry
                 ? (event as { cherryName?: string }).cherryName
-                : (event as { cronName?: string }).cronName;
+                : isWorkflow
+                  ? (event as { workflowName?: string }).workflowName
+                  : (event as { cronName?: string }).cronName;
 
   const label = isWebhook
     ? 'Webhook Event'
@@ -89,7 +93,9 @@ export function formatLickEventForCone(event: LickEvent): FormattedLick | null {
               ? 'Upgrade Event'
               : isCherry
                 ? 'Cherry Event'
-                : 'Cron Event';
+                : isWorkflow
+                  ? 'Workflow Event'
+                  : 'Cron Event';
 
   if (isSessionReload) {
     const body = event.body as
@@ -131,6 +137,19 @@ export function formatLickEventForCone(event: LickEvent): FormattedLick | null {
       content:
         `[${label}: ${name}] from ${origin} (runtime ${runtime})\n` +
         `\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``,
+    };
+  }
+
+  if (isWorkflow) {
+    const name = event.workflowName ?? 'workflow';
+    const path = event.resultPath ?? '(no result file)';
+    const preview = event.preview ?? '';
+    const status = (event.body as { status?: string } | undefined)?.status ?? 'complete';
+    return {
+      label,
+      content:
+        `[${label}: ${name}] ${status} — ${preview}\n` +
+        `Full result: ${path} (read it only if you need the whole thing).`,
     };
   }
 

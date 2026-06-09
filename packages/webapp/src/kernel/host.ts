@@ -229,6 +229,7 @@ export function defaultLickEventHandler(
   const isNavigate = event.type === 'navigate';
   const isUpgrade = event.type === 'upgrade';
   const isSessionReload = event.type === 'session-reload';
+  const isWorkflow = event.type === 'workflow';
   const eventName = isWebhook
     ? event.webhookName
     : isSprinkle
@@ -241,7 +242,9 @@ export function defaultLickEventHandler(
             ? `${event.upgradeFromVersion ?? 'unknown'}→${event.upgradeToVersion ?? 'unknown'}`
             : isSessionReload
               ? 'mount-recovery'
-              : event.cronName;
+              : isWorkflow
+                ? (event.workflowName ?? event.workflowRunId ?? 'workflow')
+                : event.cronName;
   const eventId = isWebhook
     ? event.webhookId
     : isSprinkle
@@ -254,7 +257,9 @@ export function defaultLickEventHandler(
             ? `upgrade-${event.upgradeToVersion ?? 'unknown'}`
             : isSessionReload
               ? `session-reload-${event.timestamp}`
-              : event.cronId;
+              : isWorkflow
+                ? `workflow-${event.workflowRunId ?? 'unknown'}`
+                : event.cronId;
   const channel = event.type;
 
   const scoops = orchestrator.getScoops();

@@ -42,7 +42,8 @@ export interface LickEvent {
     | 'session-reload'
     | 'navigate'
     | 'upgrade'
-    | 'cherry';
+    | 'cherry'
+    | 'workflow';
   webhookId?: string;
   webhookName?: string;
   cronId?: string;
@@ -71,6 +72,11 @@ export interface LickEvent {
    */
   originFollowerId?: string;
   originLabel?: string;
+  /** Workflow completion (SP2): set by WorkflowRunManager on cone-origin runs. */
+  workflowRunId?: string;
+  workflowName?: string;
+  resultPath?: string;
+  preview?: string;
   timestamp: string;
   headers?: Record<string, string>;
   body: unknown;
