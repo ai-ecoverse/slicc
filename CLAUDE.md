@@ -124,7 +124,7 @@ Each instance gets an isolated Chrome profile (keyed by port) and separate CDP p
 
 - **Cone**: Main agent ("sliccy"). Full filesystem access, all tools. Code: `orchestrator.ts`, `RegisteredScoop` with `isCone: true`.
 - **Scoops**: Isolated sub-agents with sandboxed filesystem (`/scoops/{name}/` + `/shared/`), own shell/conversation. Tools: `scoop_scoop`, `feed_scoop`, `drop_scoop`. Code: `scoop-context.ts`, `restricted-fs.ts`.
-- **Licks**: External events triggering scoops (webhooks, cron tasks). Code: `LickManager`, `LickEvent`. Shell: `webhook`, `crontask`.
+- **Licks**: External events triggering scoops (webhooks, cron tasks, workflow completions). Code: `LickManager`, `LickEvent`, `WorkflowRunManager` (`__slicc_workflows`). Shell: `webhook`, `crontask`, `workflow status/list/stop`.
 - **Floats**: Runtime environments — CLI (`packages/node-server/src/`), Extension (`packages/chrome-extension/src/`), Electron (`packages/node-server/src/electron-main.ts`), Sliccstart (`packages/swift-launcher/` — native macOS launcher), **hosted-leader (cloud)** (`@slicc/cloud-core` owns the substrate / start / resume / pause / kill operations; `packages/node-server/src/cloud/` is the CLI adapter that spawns an e2b sandbox running `node-server --hosted`; see `packages/dev-tools/e2b-template/`), **Cherry (embedded follower garnish)** (`packages/cherry/` host SDK `mountSlicc` embeds the webapp with `?cherry=1` in a third-party page's iframe and lends that page to a remote leader as a capability-limited synthetic-CDP target).
 
 Use ice cream terms over technical jargon (e.g., "feed_scoop" not "delegate_to_scoop").
