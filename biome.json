@@ -356,7 +356,6 @@
         "packages/webapp/src/fs/mount/backend-local.ts",
         "packages/webapp/src/fs/virtual-fs.ts",
         "packages/webapp/src/git/diff.ts",
-        "packages/webapp/src/git/git-commands.ts",
         "packages/webapp/src/git/git-config.ts",
         "packages/webapp/src/kernel/host.ts",
         "packages/webapp/src/kernel/panel-rpc.ts",

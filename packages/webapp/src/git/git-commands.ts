@@ -425,46 +425,55 @@ Available commands:
     }
 
     if (allFlag) {
-      // Stage ALL changes (new, modified, deleted)
-      const matrix = await git.statusMatrix({ fs: this.lfs, dir: cwd });
-      for (const [file, , workdir, stage] of matrix) {
-        if (workdir === stage) continue;
-        if (workdir === 0) {
-          await git.remove({ fs: this.lfs, dir: cwd, filepath: file });
-        } else {
-          await git.add({ fs: this.lfs, dir: cwd, filepath: file, force });
-        }
-      }
+      await this.addAll(cwd, force);
     } else if (paths.includes('.')) {
-      // Stage new and modified files, but NOT deletions (unlike -A/--all)
-      const matrix = await git.statusMatrix({ fs: this.lfs, dir: cwd });
-      for (const [file, , workdir, stage] of matrix) {
-        if (workdir === stage) continue;
-        // Skip deletions — git add . does not stage removals
-        if (workdir === 0) continue;
-        await git.add({ fs: this.lfs, dir: cwd, filepath: file, force });
-      }
+      await this.addDot(cwd, force);
     } else if (updateFlag) {
-      // Stage modifications and deletions of tracked files only (no new/untracked files)
-      const matrix = await git.statusMatrix({ fs: this.lfs, dir: cwd });
-      for (const [file, head, workdir, stage] of matrix) {
-        // Only tracked files (head !== 0) that have changed
-        if (head === 0) continue;
-        if (workdir === stage) continue;
-        if (workdir === 0) {
-          await git.remove({ fs: this.lfs, dir: cwd, filepath: file });
-        } else {
-          await git.add({ fs: this.lfs, dir: cwd, filepath: file, force });
-        }
-      }
+      await this.addUpdate(cwd, force);
     } else {
-      // Add specific files
       for (const filepath of paths) {
         await git.add({ fs: this.lfs, dir: cwd, filepath, force });
       }
     }
 
     return { stdout: '', stderr: '', exitCode: 0 };
+  }
+
+  /** Stage ALL changes (new, modified, deleted). */
+  private async addAll(cwd: string, force: boolean): Promise<void> {
+    const matrix = await git.statusMatrix({ fs: this.lfs, dir: cwd });
+    for (const [file, , workdir, stage] of matrix) {
+      if (workdir === stage) continue;
+      if (workdir === 0) {
+        await git.remove({ fs: this.lfs, dir: cwd, filepath: file });
+      } else {
+        await git.add({ fs: this.lfs, dir: cwd, filepath: file, force });
+      }
+    }
+  }
+
+  /** Stage new and modified files, but NOT deletions (git add .). */
+  private async addDot(cwd: string, force: boolean): Promise<void> {
+    const matrix = await git.statusMatrix({ fs: this.lfs, dir: cwd });
+    for (const [file, , workdir, stage] of matrix) {
+      if (workdir === stage) continue;
+      if (workdir === 0) continue;
+      await git.add({ fs: this.lfs, dir: cwd, filepath: file, force });
+    }
+  }
+
+  /** Stage modifications and deletions of tracked files only (no new/untracked files). */
+  private async addUpdate(cwd: string, force: boolean): Promise<void> {
+    const matrix = await git.statusMatrix({ fs: this.lfs, dir: cwd });
+    for (const [file, head, workdir, stage] of matrix) {
+      if (head === 0) continue;
+      if (workdir === stage) continue;
+      if (workdir === 0) {
+        await git.remove({ fs: this.lfs, dir: cwd, filepath: file });
+      } else {
+        await git.add({ fs: this.lfs, dir: cwd, filepath: file, force });
+      }
+    }
   }
 
   private async status(cwd: string, args: string[]): Promise<GitCommandResult> {
@@ -485,20 +494,24 @@ Available commands:
     }
 
     const matrix = await git.statusMatrix({ fs: this.lfs, dir: cwd });
+    const { staged, unstaged, untracked } = this.classifyStatusMatrix(matrix);
 
+    output += this.formatStatusLong(staged, unstaged, untracked);
+
+    return { stdout: output, stderr: '', exitCode: 0 };
+  }
+
+  /** Classify status matrix entries into staged, unstaged, and untracked buckets. */
+  private classifyStatusMatrix(matrix: [string, number, number, number][]): {
+    staged: string[];
+    unstaged: string[];
+    untracked: string[];
+  } {
     const staged: string[] = [];
     const unstaged: string[] = [];
     const untracked: string[] = [];
 
     for (const [file, head, workdir, stage] of matrix) {
-      // [HEAD, WORKDIR, STAGE]
-      // [0, 2, 0] - new untracked file
-      // [0, 2, 2] - new staged file
-      // [1, 2, 1] - modified unstaged
-      // [1, 2, 2] - modified staged
-      // [1, 0, 0] - deleted unstaged
-      // [1, 0, 1] - deleted staged
-
       if (head === 0 && workdir === 2 && stage === 0) {
         untracked.push(file);
       } else if (stage === 2 || (head === 1 && stage === 0 && workdir === 0)) {
@@ -509,6 +522,13 @@ Available commands:
         unstaged.push(file + ' (deleted)');
       }
     }
+
+    return { staged, unstaged, untracked };
+  }
+
+  /** Format long-form status output from classified file lists. */
+  private formatStatusLong(staged: string[], unstaged: string[], untracked: string[]): string {
+    let output = '';
 
     if (staged.length > 0) {
       output += 'Changes to be committed:\n';
@@ -541,7 +561,7 @@ Available commands:
       output += 'nothing to commit, working tree clean\n';
     }
 
-    return { stdout: output, stderr: '', exitCode: 0 };
+    return output;
   }
 
   /**
@@ -553,48 +573,26 @@ Available commands:
     let output = '';
 
     for (const [file, head, workdir, stage] of matrix) {
-      let indexCode = ' ';
-      let workdirCode = ' ';
-
-      if (head === 0 && workdir === 2 && stage === 0) {
-        // Untracked
-        indexCode = '?';
-        workdirCode = '?';
-      } else if (head === 0 && workdir === 2 && stage === 2) {
-        // New file, staged
-        indexCode = 'A';
-      } else if (head === 0 && workdir === 2 && stage === 3) {
-        // New file, staged with unstaged modifications
-        indexCode = 'A';
-        workdirCode = 'M';
-      } else if (head === 1 && workdir === 2 && stage === 1) {
-        // Modified, not staged
-        workdirCode = 'M';
-      } else if (head === 1 && workdir === 2 && stage === 2) {
-        // Modified, staged
-        indexCode = 'M';
-      } else if (head === 1 && workdir === 2 && stage === 3) {
-        // Modified, staged with additional unstaged modifications
-        indexCode = 'M';
-        workdirCode = 'M';
-      } else if (head === 1 && workdir === 0 && stage === 0) {
-        // Deleted, staged
-        indexCode = 'D';
-      } else if (head === 1 && workdir === 0 && stage === 1) {
-        // Deleted in workdir, not staged
-        workdirCode = 'D';
-      } else if (head === 1 && workdir === 1 && stage === 1) {
-        // Unchanged
-        continue;
-      } else {
-        // Fallback: skip unchanged files
-        continue;
-      }
-
-      output += `${indexCode}${workdirCode} ${file}\n`;
+      const codes = this.shortStatusCodes(head, workdir, stage);
+      if (!codes) continue;
+      output += `${codes[0]}${codes[1]} ${file}\n`;
     }
 
     return { stdout: output, stderr: '', exitCode: 0 };
+  }
+
+  /** Return [indexCode, workdirCode] for a status matrix entry, or null to skip. */
+  private shortStatusCodes(head: number, workdir: number, stage: number): [string, string] | null {
+    if (head === 0 && workdir === 2 && stage === 0) return ['?', '?'];
+    if (head === 0 && workdir === 2 && stage === 2) return ['A', ' '];
+    if (head === 0 && workdir === 2 && stage === 3) return ['A', 'M'];
+    if (head === 1 && workdir === 2 && stage === 1) return [' ', 'M'];
+    if (head === 1 && workdir === 2 && stage === 2) return ['M', ' '];
+    if (head === 1 && workdir === 2 && stage === 3) return ['M', 'M'];
+    if (head === 1 && workdir === 0 && stage === 0) return ['D', ' '];
+    if (head === 1 && workdir === 0 && stage === 1) return [' ', 'D'];
+    if (head === 1 && workdir === 1 && stage === 1) return null;
+    return null;
   }
 
   private async commit(cwd: string, args: string[]): Promise<GitCommandResult> {
@@ -904,6 +902,7 @@ Available commands:
 
   private async checkout(cwd: string, args: string[]): Promise<GitCommandResult> {
     const createBranch = args.includes('-b');
+    const force = args.includes('-f') || args.includes('--force');
 
     // Detect file restoration mode: git checkout [<commit>] -- <file>...
     const ddIdx = args.indexOf('--');
@@ -936,7 +935,14 @@ Available commands:
       const bIdx = args.indexOf('-b');
       const afterB = args.slice(bIdx + 1).filter((a) => !a.startsWith('-'));
       const startPoint = afterB.length > 1 ? afterB[1] : undefined;
-      await git.branch({ fs: this.lfs, dir: cwd, ref, object: startPoint, checkout: true });
+      await git.branch({
+        fs: this.lfs,
+        dir: cwd,
+        ref,
+        object: startPoint,
+        checkout: true,
+        force,
+      });
       return {
         stdout: `Switched to a new branch '${ref}'\n`,
         stderr: '',
@@ -944,7 +950,7 @@ Available commands:
       };
     }
 
-    await git.checkout({ fs: this.lfs, dir: cwd, ref });
+    await git.checkout({ fs: this.lfs, dir: cwd, ref, force });
     return {
       stdout: `Switched to branch '${ref}'\n`,
       stderr: '',
@@ -990,98 +996,7 @@ Available commands:
       return this.diffCommits(cwd, nonFlags[0], nonFlags[1], { nameOnly, stat: showStat });
     }
 
-    type FileChange = {
-      filepath: string;
-      oldContent: string;
-      newContent: string;
-    };
-
-    const changes: FileChange[] = [];
-
-    if (staged) {
-      // --staged: compare HEAD tree vs index using walk
-      await git.walk({
-        fs: this.lfs,
-        dir: cwd,
-        trees: [git.TREE({ ref: 'HEAD' }), git.STAGE()],
-        map: async (filepath, [headEntry, stageEntry]) => {
-          if (filepath === '.' || filepath.startsWith('.git')) return undefined;
-          const headType = headEntry ? await headEntry.type() : undefined;
-          const stageType = stageEntry ? await stageEntry.type() : undefined;
-          if (headType === 'tree' || stageType === 'tree') return undefined;
-
-          const headOid = headEntry ? await headEntry.oid() : undefined;
-          const stageOid = stageEntry ? await stageEntry.oid() : undefined;
-          if (headOid === stageOid) return undefined;
-
-          let oldText = '';
-          if (headOid) {
-            try {
-              const { blob } = await git.readBlob({ fs: this.lfs, dir: cwd, oid: headOid });
-              oldText = new TextDecoder().decode(blob);
-            } catch {
-              /* not in HEAD */
-            }
-          }
-
-          let newText = '';
-          if (stageOid) {
-            try {
-              const { blob } = await git.readBlob({ fs: this.lfs, dir: cwd, oid: stageOid });
-              newText = new TextDecoder().decode(blob);
-            } catch {
-              /* not in stage */
-            }
-          }
-
-          changes.push({ filepath, oldContent: oldText, newContent: newText });
-          return undefined;
-        },
-      });
-    } else {
-      // Default: compare index (stage) vs workdir — shows only unstaged changes
-      // Collect all index entries with their OIDs
-      const indexEntries = new Map<string, string>();
-      await git.walk({
-        fs: this.lfs,
-        dir: cwd,
-        trees: [git.STAGE()],
-        map: async (filepath, [entry]) => {
-          if (filepath === '.' || filepath.startsWith('.git') || !entry) return undefined;
-          const type = await entry.type();
-          if (type !== 'blob') return undefined;
-          const oid = await entry.oid();
-          if (oid) indexEntries.set(filepath, oid);
-          return undefined;
-        },
-      });
-
-      // Compare each index entry with workdir content directly
-      // (bypasses statusMatrix stat-caching issues for same-length modifications)
-      for (const [file, stageOid] of indexEntries) {
-        let oldText = '';
-        try {
-          const { blob } = await git.readBlob({ fs: this.lfs, dir: cwd, oid: stageOid });
-          oldText = new TextDecoder().decode(blob);
-        } catch {
-          /* not readable */
-        }
-
-        let newText = '';
-        try {
-          newText = await this.options.fs.readTextFile(`${cwd}/${file}`);
-        } catch {
-          /* file deleted in workdir */
-        }
-
-        if (oldText !== newText) {
-          changes.push({ filepath: file, oldContent: oldText, newContent: newText });
-        }
-      }
-
-      // Also check for tracked files deleted in workdir but still in index
-      // (handled above since deleted workdir files would have newText = '')
-    }
+    const changes = staged ? await this.diffStagedChanges(cwd) : await this.diffWorkdirChanges(cwd);
 
     if (changes.length === 0) {
       return { stdout: '', stderr: '', exitCode: 0 };
@@ -1108,6 +1023,89 @@ Available commands:
     }
 
     return { stdout: output, stderr: '', exitCode: 0 };
+  }
+
+  /** Collect staged changes by comparing HEAD tree vs index. */
+  private async diffStagedChanges(
+    cwd: string
+  ): Promise<{ filepath: string; oldContent: string; newContent: string }[]> {
+    const changes: { filepath: string; oldContent: string; newContent: string }[] = [];
+
+    await git.walk({
+      fs: this.lfs,
+      dir: cwd,
+      trees: [git.TREE({ ref: 'HEAD' }), git.STAGE()],
+      map: async (filepath, [headEntry, stageEntry]) => {
+        if (filepath === '.' || filepath.startsWith('.git')) return undefined;
+        const headType = headEntry ? await headEntry.type() : undefined;
+        const stageType = stageEntry ? await stageEntry.type() : undefined;
+        if (headType === 'tree' || stageType === 'tree') return undefined;
+
+        const headOid = headEntry ? await headEntry.oid() : undefined;
+        const stageOid = stageEntry ? await stageEntry.oid() : undefined;
+        if (headOid === stageOid) return undefined;
+
+        const oldText = await this.readBlobText(cwd, headOid);
+        const newText = await this.readBlobText(cwd, stageOid);
+
+        changes.push({ filepath, oldContent: oldText, newContent: newText });
+        return undefined;
+      },
+    });
+
+    return changes;
+  }
+
+  /** Collect unstaged changes by comparing index vs workdir. */
+  private async diffWorkdirChanges(
+    cwd: string
+  ): Promise<{ filepath: string; oldContent: string; newContent: string }[]> {
+    const changes: { filepath: string; oldContent: string; newContent: string }[] = [];
+
+    // Collect all index entries with their OIDs
+    const indexEntries = new Map<string, string>();
+    await git.walk({
+      fs: this.lfs,
+      dir: cwd,
+      trees: [git.STAGE()],
+      map: async (filepath, [entry]) => {
+        if (filepath === '.' || filepath.startsWith('.git') || !entry) return undefined;
+        const type = await entry.type();
+        if (type !== 'blob') return undefined;
+        const oid = await entry.oid();
+        if (oid) indexEntries.set(filepath, oid);
+        return undefined;
+      },
+    });
+
+    // Compare each index entry with workdir content directly
+    for (const [file, stageOid] of indexEntries) {
+      const oldText = await this.readBlobText(cwd, stageOid);
+
+      let newText = '';
+      try {
+        newText = await this.options.fs.readTextFile(`${cwd}/${file}`);
+      } catch {
+        /* file deleted in workdir */
+      }
+
+      if (oldText !== newText) {
+        changes.push({ filepath: file, oldContent: oldText, newContent: newText });
+      }
+    }
+
+    return changes;
+  }
+
+  /** Read a blob as text by OID, returning empty string if OID is undefined or unreadable. */
+  private async readBlobText(cwd: string, oid: string | undefined): Promise<string> {
+    if (!oid) return '';
+    try {
+      const { blob } = await git.readBlob({ fs: this.lfs, dir: cwd, oid });
+      return new TextDecoder().decode(blob);
+    } catch {
+      return '';
+    }
   }
 
   private async diffCommits(
@@ -1562,34 +1560,39 @@ Available commands:
 
       return { stdout: 'Merge complete.\n', stderr: '', exitCode: 0 };
     } catch (err: unknown) {
-      if (err instanceof Error && err.name === 'MergeConflictError') {
-        const data = (err as Error & { data?: { filepaths?: string[] } }).data;
-        const files = data?.filepaths ?? [];
-        let output = 'Auto-merging failed. Fix conflicts and then commit the result.\n';
-        if (files.length > 0) {
-          output += 'CONFLICT (content): Merge conflict in:\n';
-          for (const f of files) {
-            output += `  ${f}\n`;
-          }
-        }
-        return { stdout: '', stderr: output, exitCode: 1 };
-      }
-      if (err instanceof Error && err.name === 'MergeNotSupportedError') {
-        return {
-          stdout: '',
-          stderr: 'fatal: merge is not possible because you have unmerged files.\n',
-          exitCode: 128,
-        };
-      }
-      if (err instanceof Error && err.name === 'FastForwardError') {
-        return {
-          stdout: '',
-          stderr: 'fatal: Not possible to fast-forward, aborting.\n',
-          exitCode: 128,
-        };
-      }
-      throw err;
+      return this.handleMergeError(err);
     }
+  }
+
+  /** Handle merge errors and return appropriate GitCommandResult, or rethrow. */
+  private handleMergeError(err: unknown): GitCommandResult {
+    if (err instanceof Error && err.name === 'MergeConflictError') {
+      const data = (err as Error & { data?: { filepaths?: string[] } }).data;
+      const files = data?.filepaths ?? [];
+      let output = 'Auto-merging failed. Fix conflicts and then commit the result.\n';
+      if (files.length > 0) {
+        output += 'CONFLICT (content): Merge conflict in:\n';
+        for (const f of files) {
+          output += `  ${f}\n`;
+        }
+      }
+      return { stdout: '', stderr: output, exitCode: 1 };
+    }
+    if (err instanceof Error && err.name === 'MergeNotSupportedError') {
+      return {
+        stdout: '',
+        stderr: 'fatal: merge is not possible because you have unmerged files.\n',
+        exitCode: 128,
+      };
+    }
+    if (err instanceof Error && err.name === 'FastForwardError') {
+      return {
+        stdout: '',
+        stderr: 'fatal: Not possible to fast-forward, aborting.\n',
+        exitCode: 128,
+      };
+    }
+    throw err;
   }
 
   private async tag(cwd: string, args: string[]): Promise<GitCommandResult> {
@@ -1672,47 +1675,44 @@ Available commands:
     const modified = args.includes('--modified') || args.includes('-m');
     const others = args.includes('--others') || args.includes('-o');
     const deleted = args.includes('--deleted') || args.includes('-d');
-    // --cached/-c is the default behavior
 
     const matrix = await git.statusMatrix({ fs: this.lfs, dir: cwd });
     const files: string[] = [];
 
+    const mode = others ? 'others' : modified ? 'modified' : deleted ? 'deleted' : 'cached';
     for (const [file, head, workdir, stage] of matrix) {
-      if (others) {
-        // Untracked files: not in HEAD and not in index
-        if (head === 0 && stage === 0 && workdir === 2) {
-          files.push(file);
-        }
-      } else if (modified) {
-        // Modified in workdir vs index
-        if (workdir !== 0 && workdir !== stage && head !== 0) {
-          files.push(file);
-        }
-      } else if (deleted) {
-        // Deleted from workdir but still tracked
-        if (workdir === 0 && (head !== 0 || stage !== 0)) {
-          files.push(file);
-        }
-      } else {
-        // Default (--cached): files in the index
-        if (stage !== 0 || head !== 0) {
-          // Show files that are tracked (in HEAD or staged)
-          if (workdir === 0 && stage === 0 && head !== 0) {
-            // Deleted and staged for removal — still in HEAD but removed from index
-            // Don't show these as "cached"
-          } else if (stage !== 0) {
-            files.push(file);
-          } else if (head !== 0 && workdir !== 0) {
-            // In HEAD and still in workdir (not staged but tracked)
-            files.push(file);
-          }
-        }
+      if (this.lsFilesMatch(mode, head, workdir, stage)) {
+        files.push(file);
       }
     }
 
     files.sort();
     const output = files.map((f) => `${f}\n`).join('');
     return { stdout: output, stderr: '', exitCode: 0 };
+  }
+
+  /** Determine if a file matches the given ls-files mode. */
+  private lsFilesMatch(
+    mode: 'others' | 'modified' | 'deleted' | 'cached',
+    head: number,
+    workdir: number,
+    stage: number
+  ): boolean {
+    switch (mode) {
+      case 'others':
+        return head === 0 && stage === 0 && workdir === 2;
+      case 'modified':
+        return workdir !== 0 && workdir !== stage && head !== 0;
+      case 'deleted':
+        return workdir === 0 && (head !== 0 || stage !== 0);
+      case 'cached':
+        if (stage !== 0 || head !== 0) {
+          if (workdir === 0 && stage === 0 && head !== 0) return false;
+          if (stage !== 0) return true;
+          if (head !== 0 && workdir !== 0) return true;
+        }
+        return false;
+    }
   }
 
   private async showRef(cwd: string, args: string[]): Promise<GitCommandResult> {
@@ -1753,45 +1753,15 @@ Available commands:
     // Find the config key (contains a dot, not a flag)
     const path = args.find((a) => !a.startsWith('-') && a.includes('.'));
 
-    // --list: show all config entries
     if (listFlag) {
       return this.configList(cwd, globalFlag);
     }
 
-    // --unset: remove a config entry
     if (unsetFlag) {
-      if (!path) {
-        return { stdout: '', stderr: 'error: key required for --unset\n', exitCode: 1 };
-      }
-      if (path === 'credential.token' || path === 'github.token') {
-        await this.setGithubToken('');
-        return { stdout: '', stderr: '', exitCode: 0 };
-      }
-      if (globalFlag) {
-        const globalFs = await this.getGlobalFs();
-        try {
-          const content = await globalFs.readTextFile(GLOBAL_GITCONFIG_PATH);
-          const newContent = removeGitConfigKey(content, path);
-          await globalFs.writeFile(GLOBAL_GITCONFIG_PATH, newContent);
-        } catch {
-          /* file may not exist */
-        }
-      } else {
-        // isomorphic-git doesn't have a deleteConfig, so we set to empty then remove from file
-        try {
-          const configPath = `${cwd}/.git/config`;
-          const content = await this.options.fs.readTextFile(configPath);
-          const newContent = removeGitConfigKey(content, path);
-          await this.options.fs.writeFile(configPath, newContent);
-        } catch {
-          /* ignore */
-        }
-      }
-      return { stdout: '', stderr: '', exitCode: 0 };
+      return this.configUnset(cwd, path, globalFlag);
     }
 
     if (!path) {
-      // No key and no --list: show usage hint
       return {
         stdout: '',
         stderr: 'usage: git config [--global] [--list] [--unset] <key> [<value>]\n',
@@ -1810,26 +1780,75 @@ Available commands:
     }
 
     if (value !== undefined) {
-      // Handle special credential config
-      if (path === 'credential.token' || path === 'github.token') {
-        await this.setGithubToken(value);
-        return { stdout: '', stderr: '', exitCode: 0 };
-      }
+      return this.configSet(cwd, path, value, globalFlag);
+    }
 
-      if (globalFlag) {
-        // Store in global config file
-        await writeGlobalGitConfigValue(await this.getGlobalFs(), path, value);
-      } else {
-        // Set config in repo
-        await git.setConfig({ fs: this.lfs, dir: cwd, path, value });
+    return this.configGet(cwd, path, globalFlag);
+  }
+
+  /** Unset a config key. */
+  private async configUnset(
+    cwd: string,
+    path: string | undefined,
+    globalFlag: boolean
+  ): Promise<GitCommandResult> {
+    if (!path) {
+      return { stdout: '', stderr: 'error: key required for --unset\n', exitCode: 1 };
+    }
+    if (path === 'credential.token' || path === 'github.token') {
+      await this.setGithubToken('');
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
+    if (globalFlag) {
+      const globalFs = await this.getGlobalFs();
+      try {
+        const content = await globalFs.readTextFile(GLOBAL_GITCONFIG_PATH);
+        const newContent = removeGitConfigKey(content, path);
+        await globalFs.writeFile(GLOBAL_GITCONFIG_PATH, newContent);
+      } catch {
+        /* file may not exist */
       }
-      // Update local author info if applicable
-      if (path === 'user.name') this.authorName = value;
-      if (path === 'user.email') this.authorEmail = value;
+    } else {
+      try {
+        const configPath = `${cwd}/.git/config`;
+        const content = await this.options.fs.readTextFile(configPath);
+        const newContent = removeGitConfigKey(content, path);
+        await this.options.fs.writeFile(configPath, newContent);
+      } catch {
+        /* ignore */
+      }
+    }
+    return { stdout: '', stderr: '', exitCode: 0 };
+  }
+
+  /** Set a config key to a value. */
+  private async configSet(
+    cwd: string,
+    path: string,
+    value: string,
+    globalFlag: boolean
+  ): Promise<GitCommandResult> {
+    if (path === 'credential.token' || path === 'github.token') {
+      await this.setGithubToken(value);
       return { stdout: '', stderr: '', exitCode: 0 };
     }
 
-    // Get config
+    if (globalFlag) {
+      await writeGlobalGitConfigValue(await this.getGlobalFs(), path, value);
+    } else {
+      await git.setConfig({ fs: this.lfs, dir: cwd, path, value });
+    }
+    if (path === 'user.name') this.authorName = value;
+    if (path === 'user.email') this.authorEmail = value;
+    return { stdout: '', stderr: '', exitCode: 0 };
+  }
+
+  /** Get a config value. */
+  private async configGet(
+    cwd: string,
+    path: string,
+    globalFlag: boolean
+  ): Promise<GitCommandResult> {
     if (path === 'credential.token' || path === 'github.token') {
       return {
         stdout: this.githubToken ? `${this.githubToken}\n` : '',
@@ -1838,7 +1857,6 @@ Available commands:
       };
     }
 
-    // When --global, only read global config; otherwise try repo first, then global
     let result: string | undefined;
     if (globalFlag) {
       result = await readGlobalGitConfigValue(await this.getGlobalFs(), path);
@@ -2110,7 +2128,6 @@ Available commands:
     }
 
     // Detect dirty files by directly comparing HEAD content with VFS content.
-    // statusMatrix may miss workdir modifications due to LightningFS stat caching.
     const headFiles = await git.listFiles({ fs: this.lfs, dir: cwd, ref: 'HEAD' });
     const indexFiles = await git.listFiles({ fs: this.lfs, dir: cwd });
     const allTracked = new Set([...headFiles, ...indexFiles]);
@@ -2121,50 +2138,12 @@ Available commands:
       if (head === 0 && stage !== 0) allTracked.add(file);
     }
 
-    type DirtyFile = { file: string; inHead: boolean; existsInWorkdir: boolean };
-    const dirtyFiles: DirtyFile[] = [];
-    const indexEntries: { filepath: string; oid: string }[] = [];
-
-    for (const filepath of allTracked) {
-      const inHead = headFiles.includes(filepath);
-
-      let workdirContent: string | undefined;
-      try {
-        workdirContent = await this.options.fs.readTextFile(`${cwd}/${filepath}`);
-      } catch {
-        /* file doesn't exist in workdir */
-      }
-
-      if (inHead) {
-        const { blob } = await git.readBlob({ fs: this.lfs, dir: cwd, oid: headOid, filepath });
-        const headContent = new TextDecoder().decode(blob);
-
-        if (workdirContent === undefined) {
-          dirtyFiles.push({ file: filepath, inHead: true, existsInWorkdir: false });
-        } else if (workdirContent !== headContent) {
-          dirtyFiles.push({ file: filepath, inHead: true, existsInWorkdir: true });
-          const oid = await git.writeBlob({
-            fs: this.lfs,
-            dir: cwd,
-            blob: new TextEncoder().encode(workdirContent),
-          });
-          indexEntries.push({ filepath, oid });
-        } else {
-          // Unchanged — include in stash tree as-is
-          const blobOid = await git.writeBlob({ fs: this.lfs, dir: cwd, blob });
-          indexEntries.push({ filepath, oid: blobOid });
-        }
-      } else if (workdirContent !== undefined) {
-        // New file not in HEAD
-        dirtyFiles.push({ file: filepath, inHead: false, existsInWorkdir: true });
-        const oid = await git.writeBlob({
-          fs: this.lfs,
-          dir: cwd,
-          blob: new TextEncoder().encode(workdirContent),
-        });
-        indexEntries.push({ filepath, oid });
-      }
-    }
+    const { dirtyFiles, indexEntries } = await this.stashCollectDirty(
+      cwd,
+      headOid,
+      allTracked,
+      headFiles
+    );
 
     if (dirtyFiles.length === 0) {
       return { stdout: '', stderr: 'No local changes to save\n', exitCode: 1 };
@@ -2199,9 +2178,78 @@ Available commands:
     await git.writeRef({ fs: this.lfs, dir: cwd, ref: 'refs/stash', value: stashOid, force: true });
 
     // Restore workdir to HEAD state
+    await this.stashRestoreWorkdir(cwd, headOid, dirtyFiles);
+
+    return {
+      stdout: `Saved working directory and index state ${message}\n`,
+      stderr: '',
+      exitCode: 0,
+    };
+  }
+
+  /** Collect dirty files and build index entries for stash. */
+  private async stashCollectDirty(
+    cwd: string,
+    headOid: string,
+    allTracked: Set<string>,
+    headFiles: string[]
+  ): Promise<{
+    dirtyFiles: { file: string; inHead: boolean; existsInWorkdir: boolean }[];
+    indexEntries: { filepath: string; oid: string }[];
+  }> {
+    const dirtyFiles: { file: string; inHead: boolean; existsInWorkdir: boolean }[] = [];
+    const indexEntries: { filepath: string; oid: string }[] = [];
+
+    for (const filepath of allTracked) {
+      const inHead = headFiles.includes(filepath);
+
+      let workdirContent: string | undefined;
+      try {
+        workdirContent = await this.options.fs.readTextFile(`${cwd}/${filepath}`);
+      } catch {
+        /* file doesn't exist in workdir */
+      }
+
+      if (inHead) {
+        const { blob } = await git.readBlob({ fs: this.lfs, dir: cwd, oid: headOid, filepath });
+        const headContent = new TextDecoder().decode(blob);
+
+        if (workdirContent === undefined) {
+          dirtyFiles.push({ file: filepath, inHead: true, existsInWorkdir: false });
+        } else if (workdirContent !== headContent) {
+          dirtyFiles.push({ file: filepath, inHead: true, existsInWorkdir: true });
+          const oid = await git.writeBlob({
+            fs: this.lfs,
+            dir: cwd,
+            blob: new TextEncoder().encode(workdirContent),
+          });
+          indexEntries.push({ filepath, oid });
+        } else {
+          const blobOid = await git.writeBlob({ fs: this.lfs, dir: cwd, blob });
+          indexEntries.push({ filepath, oid: blobOid });
+        }
+      } else if (workdirContent !== undefined) {
+        dirtyFiles.push({ file: filepath, inHead: false, existsInWorkdir: true });
+        const oid = await git.writeBlob({
+          fs: this.lfs,
+          dir: cwd,
+          blob: new TextEncoder().encode(workdirContent),
+        });
+        indexEntries.push({ filepath, oid });
+      }
+    }
+
+    return { dirtyFiles, indexEntries };
+  }
+
+  /** Restore workdir to HEAD state after stash. */
+  private async stashRestoreWorkdir(
+    cwd: string,
+    headOid: string,
+    dirtyFiles: { file: string; inHead: boolean; existsInWorkdir: boolean }[]
+  ): Promise<void> {
     for (const dirty of dirtyFiles) {
       if (!dirty.inHead) {
-        // New file — remove from workdir and index
         try {
           await this.options.fs.rm(`${cwd}/${dirty.file}`);
         } catch {
@@ -2213,7 +2261,6 @@ Available commands:
           /* ignore */
         }
       } else {
-        // Modified/deleted — restore from HEAD
         const { blob } = await git.readBlob({
           fs: this.lfs,
           dir: cwd,
@@ -2224,12 +2271,6 @@ Available commands:
         await git.resetIndex({ fs: this.lfs, dir: cwd, filepath: dirty.file, ref: headOid });
       }
     }
-
-    return {
-      stdout: `Saved working directory and index state ${message}\n`,
-      stderr: '',
-      exitCode: 0,
-    };
   }
 
   private async buildTreeFromEntries(
@@ -2518,52 +2559,65 @@ Available commands:
     }
 
     for (const filepath of paths) {
-      const fullPath = filepath.startsWith('/') ? filepath : `${cwd}/${filepath}`;
+      const result = await this.rmOne(cwd, filepath, cached, recursive);
+      if (result) return result;
+    }
 
-      let isDir = false;
-      try {
-        const stat = await this.options.fs.stat(fullPath);
-        isDir = stat.type === 'directory';
-      } catch {
-        /* file might not exist in workdir */
+    return { stdout: '', stderr: '', exitCode: 0 };
+  }
+
+  /** Remove a single path from index (and optionally workdir). Returns error result or null. */
+  private async rmOne(
+    cwd: string,
+    filepath: string,
+    cached: boolean,
+    recursive: boolean
+  ): Promise<GitCommandResult | null> {
+    const fullPath = filepath.startsWith('/') ? filepath : `${cwd}/${filepath}`;
+
+    let isDir = false;
+    try {
+      const stat = await this.options.fs.stat(fullPath);
+      isDir = stat.type === 'directory';
+    } catch {
+      /* file might not exist in workdir */
+    }
+
+    if (isDir) {
+      if (!recursive) {
+        return {
+          stdout: '',
+          stderr: `fatal: not removing '${filepath}' recursively without -r\n`,
+          exitCode: 128,
+        };
       }
+      const indexFiles = await git.listFiles({ fs: this.lfs, dir: cwd });
+      const matchingFiles = indexFiles.filter(
+        (f) => f === filepath || f.startsWith(filepath + '/')
+      );
 
-      if (isDir) {
-        if (!recursive) {
-          return {
-            stdout: '',
-            stderr: `fatal: not removing '${filepath}' recursively without -r\n`,
-            exitCode: 128,
-          };
-        }
-        const indexFiles = await git.listFiles({ fs: this.lfs, dir: cwd });
-        const matchingFiles = indexFiles.filter(
-          (f) => f === filepath || f.startsWith(filepath + '/')
-        );
-
-        for (const file of matchingFiles) {
-          await git.remove({ fs: this.lfs, dir: cwd, filepath: file });
-          if (!cached) {
-            try {
-              await this.options.fs.rm(`${cwd}/${file}`);
-            } catch {
-              /* ignore */
-            }
-          }
-        }
-      } else {
-        await git.remove({ fs: this.lfs, dir: cwd, filepath });
+      for (const file of matchingFiles) {
+        await git.remove({ fs: this.lfs, dir: cwd, filepath: file });
         if (!cached) {
           try {
-            await this.options.fs.rm(fullPath);
+            await this.options.fs.rm(`${cwd}/${file}`);
           } catch {
             /* ignore */
           }
         }
       }
+    } else {
+      await git.remove({ fs: this.lfs, dir: cwd, filepath });
+      if (!cached) {
+        try {
+          await this.options.fs.rm(fullPath);
+        } catch {
+          /* ignore */
+        }
+      }
     }
 
-    return { stdout: '', stderr: '', exitCode: 0 };
+    return null;
   }
 
   private async mv(cwd: string, args: string[]): Promise<GitCommandResult> {
