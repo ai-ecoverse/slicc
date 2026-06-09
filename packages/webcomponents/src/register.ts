@@ -1,13 +1,23 @@
-// Side-effect registration of every SLICC custom element. Each component module
-// self-registers on import; this barrel imports them all so a single call
-// guarantees the full set is defined. Extend the import list as components land.
+// Side-effect registration of every SLICC custom element (generated).
+// Each component module self-registers on import; importing them all guarantees
+// the full set is defined. Safe to call repeatedly (registration is guarded).
+import './primitives/slicc-avatar.js';
+import './primitives/slicc-collapse-btn.js';
+import './primitives/slicc-day-separator.js';
+import './primitives/slicc-floatbar.js';
+import './primitives/slicc-googly-eyes.js';
+import './primitives/slicc-icon-button.js';
 import './primitives/slicc-logo.js';
+import './primitives/slicc-pane-tag.js';
+import './primitives/slicc-pane.js';
+import './primitives/slicc-send-button.js';
+import './primitives/slicc-snowflake.js';
+import './primitives/slicc-swatch.js';
+import './primitives/slicc-tag.js';
+import './theme/slicc-theme-toggle.js';
+import './theme/slicc-theme.js';
 
-/**
- * Import every component module for side-effect registration. Safe to call
- * multiple times — registration is guarded against duplicates.
- */
+/** Import every component module for side-effect registration. */
 export function registerAllSliccComponents(): void {
-  // Intentionally empty: the imports above register on module evaluation. This
-  // function exists so consumers have an explicit, tree-shake-proof entry point.
+  // Imports above register on module evaluation; this is the explicit entry point.
 }
