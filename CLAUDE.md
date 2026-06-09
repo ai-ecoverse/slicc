@@ -6,21 +6,22 @@ This root file is the repo navigation hub. Keep package-specific architecture an
 
 ### Packages
 
-| Path                          | Purpose                                                                                                            |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `packages/webapp/`            | Browser app core: UI, VFS, shell, CDP, tools, providers, skills, scoops                                            |
-| `packages/cherry/`            | Host-side embed SDK (`mountSlicc`) lending a third-party page to a leader as a target                              |
-| `packages/chrome-extension/`  | Manifest V3 extension entry points, HTML shells, and message bridges                                               |
-| `packages/cloudflare-worker/` | Tray hub worker for session coordination, signaling, TURN credentials, and the `sliccy.ai/cloud` cone dashboard    |
-| `packages/node-server/`       | Node.js CLI/Electron server: Chrome launch, CDP proxy, dev serving, hosted-leader mode                             |
-| `packages/cloud-core/`        | `@slicc/cloud-core` — shared sandbox-lifecycle library consumed by both `node-server --cloud …` and the worker     |
-| `packages/shared-ts/`         | `@slicc/shared-ts` — platform-agnostic primitives (secret masking, secrets pipeline) shared across all TS packages |
-| `packages/vfs-root/`          | Default VFS content copied into the app on init/reset                                                              |
-| `packages/swift-launcher/`    | Native macOS SwiftUI launcher app (`Sliccstart`)                                                                   |
-| `packages/swift-server/`      | Native macOS Hummingbird server (`slicc-server`)                                                                   |
-| `packages/ios-app/`           | Native iOS SwiftUI follower app (`SliccFollower`) — joins a leader over WebRTC (SPM project, not an npm workspace) |
-| `packages/dev-tools/`         | Repo-level tooling: build helpers, QA setup, providers build filter, e2b template for hosted cones                 |
-| `packages/assets/`            | Shared static files (logos, fonts, favicon) used by multiple packages (folder, not an npm workspace)               |
+| Path                          | Purpose                                                                                                                                              |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/webapp/`            | Browser app core: UI, VFS, shell, CDP, tools, providers, skills, scoops                                                                              |
+| `packages/cherry/`            | Host-side embed SDK (`mountSlicc`) lending a third-party page to a leader as a target                                                                |
+| `packages/chrome-extension/`  | Manifest V3 extension entry points, HTML shells, and message bridges                                                                                 |
+| `packages/cloudflare-worker/` | Tray hub worker for session coordination, signaling, TURN credentials, and the `sliccy.ai/cloud` cone dashboard                                      |
+| `packages/node-server/`       | Node.js CLI/Electron server: Chrome launch, CDP proxy, dev serving, hosted-leader mode                                                               |
+| `packages/cloud-core/`        | `@slicc/cloud-core` — shared sandbox-lifecycle library consumed by both `node-server --cloud …` and the worker                                       |
+| `packages/shared-ts/`         | `@slicc/shared-ts` — platform-agnostic primitives (secret masking, secrets pipeline) shared across all TS packages                                   |
+| `packages/webcomponents/`     | `@slicc/webcomponents` — standalone web-component library extracted from the UI prototype (Storybook + `@vitest/browser`), not yet wired into webapp |
+| `packages/vfs-root/`          | Default VFS content copied into the app on init/reset                                                                                                |
+| `packages/swift-launcher/`    | Native macOS SwiftUI launcher app (`Sliccstart`)                                                                                                     |
+| `packages/swift-server/`      | Native macOS Hummingbird server (`slicc-server`)                                                                                                     |
+| `packages/ios-app/`           | Native iOS SwiftUI follower app (`SliccFollower`) — joins a leader over WebRTC (SPM project, not an npm workspace)                                   |
+| `packages/dev-tools/`         | Repo-level tooling: build helpers, QA setup, providers build filter, e2b template for hosted cones                                                   |
+| `packages/assets/`            | Shared static files (logos, fonts, favicon) used by multiple packages (folder, not an npm workspace)                                                 |
 
 ### Other Top-Level Directories
 
@@ -51,6 +52,7 @@ For runtime-specific commands, use the nearest guide:
 - [`packages/node-server/CLAUDE.md`](packages/node-server/CLAUDE.md)
 - [`packages/cloud-core/CLAUDE.md`](packages/cloud-core/CLAUDE.md)
 - [`packages/shared-ts/CLAUDE.md`](packages/shared-ts/CLAUDE.md)
+- [`packages/webcomponents/CLAUDE.md`](packages/webcomponents/CLAUDE.md)
 - [`packages/vfs-root/CLAUDE.md`](packages/vfs-root/CLAUDE.md)
 - [`packages/swift-launcher/CLAUDE.md`](packages/swift-launcher/CLAUDE.md)
 - [`packages/swift-server/CLAUDE.md`](packages/swift-server/CLAUDE.md)
