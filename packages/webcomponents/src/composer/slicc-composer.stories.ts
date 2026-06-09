@@ -1,8 +1,14 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
-// Earlier-wave siblings composed into the footer (registered on import).
+// Compose the footer by tag from real library siblings — importing each module
+// registers its custom element so the markup below upgrades on mount. The input
+// card itself composes the add-menu + send-button; we still import those leaves
+// directly so the custom send-button (with a gravatar `email`) we slot in is
+// registered too, and so the meta row's model/thinking pills are available.
 import '../add-menu/slicc-add-menu.js';
 import '../primitives/slicc-send-button.js';
+import './slicc-composer-meta.js';
 import './slicc-composer.js';
+import './slicc-input-card.js';
 import type { SliccComposer } from './slicc-composer.js';
 
 interface ComposerArgs {
@@ -24,75 +30,71 @@ const meta: Meta<ComposerArgs> = {
 export default meta;
 type Story = StoryObj<ComposerArgs>;
 
-/** The brain/thinking glyph from the prototype's `.tsel` thinking control. */
-const BRAIN_SVG =
-  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color:var(--violet);vertical-align:-2px;"><path d="M12 18V5"/><path d="M15 13a4.17 4.17 0 0 1-3-4 4.17 4.17 0 0 1-3 4"/><path d="M17.598 6.5A3 3 0 1 0 12 5a3 3 0 1 0-5.598 1.5"/><path d="M17.997 5.125a4 4 0 0 1 2.526 5.77"/><path d="M18 18a4 4 0 0 0 2-7.464"/><path d="M19.967 17.483A4 4 0 1 1 12 18a4 4 0 1 1-7.967-.517"/><path d="M6 18a4 4 0 0 1-2-7.464"/><path d="M6.003 5.125a4 4 0 0 0-2.526 5.77"/></svg>';
-
 /**
- * Prototype footer chrome (`.inputcard` / `.toolbar` / `.meta` / `.ctl`) that
- * lives in `proto/StellarRubySwift.html` but NOT in this library — inlined here
- * as demo presentation so the container is reviewable with its real contents.
- * Scoped to the story wrapper class to avoid leaking into the docs page.
+ * A realistic gravatar seed for the send button's face. The send button hashes
+ * this with SHA-256 and paints the resolved gravatar as the circular ground
+ * (falling back to the rainbow gradient until/unless it resolves).
  */
-const DEMO_CSS = `
-.composer-demo .inputcard { border:1px solid var(--line); border-radius:16px; background:var(--canvas); padding:14px 12px 10px 16px; display:flex; flex-direction:column; gap:9px; box-shadow:rgba(10,10,10,.05) 0 2px 12px -2px; transition:.14s; }
-.composer-demo .inputcard:focus-within { border-color:var(--violet); box-shadow:0 0 0 3px color-mix(in srgb,var(--violet) 15%,transparent),rgba(10,10,10,.05) 0 2px 12px -2px; }
-.composer-demo .ta { border:none; outline:none; resize:none; background:transparent; font:inherit; font-family:var(--ui); font-size:16px; line-height:1.5; color:var(--ink); min-height:28px; max-height:140px; width:100%; box-sizing:border-box; }
-.composer-demo .toolbar { display:flex; align-items:center; gap:7px; }
-.composer-demo .toolbar .spacer { flex:1; }
-.composer-demo .meta { display:flex; align-items:center; gap:8px; max-width:680px; margin:11px auto 0; }
-.composer-demo .meta .mspacer { flex:1; }
-.composer-demo .ctl { height:30px; border:1px solid var(--line); border-radius:8px; background:var(--canvas); color:var(--ink); font:inherit; font-family:var(--ui); font-size:12.5px; font-weight:500; padding:0 9px; display:inline-flex; align-items:center; gap:7px; cursor:pointer; white-space:nowrap; flex:0 0 auto; }
-.composer-demo .ctl:hover { background:var(--ghost); }
-.composer-demo .ctl.tsel.x { border-color:color-mix(in srgb,var(--violet) 35%,var(--line)); }
-.composer-demo .ctl .ic { background:var(--rainbow); -webkit-background-clip:text; background-clip:text; color:transparent; font-weight:700; }
-.composer-demo .ctl .cx { color:var(--txt-3); font-size:10px; }
-.composer-demo .meta .hint { font-size:11px; color:var(--txt-3); display:inline-flex; align-items:center; gap:7px; }
-.composer-demo .meta .hint .kbd { font-family:var(--ui); border:1px solid var(--line); border-radius:5px; padding:1px 6px; color:var(--txt-2); }
-.composer-demo .meta .hint .sep { width:3px; height:3px; border-radius:50%; background:var(--line); }
-`;
+const DEMO_EMAIL = 'lars@trieloff.net';
 
-let demoCssInjected = false;
-/** Inject the demo chrome stylesheet once into the Storybook document. */
-function ensureDemoCss(): void {
-  if (demoCssInjected) return;
-  demoCssInjected = true;
-  const style = document.createElement('style');
-  style.textContent = DEMO_CSS;
-  document.head.appendChild(style);
+/** Realistic, prototype-flavored placeholder copy for the composer textarea. */
+const PLACEHOLDER = 'Ask sliccy, or describe a change — e.g. “make the landing hero feel warmer”…';
+
+/**
+ * Build the fully-populated `<slicc-input-card>`: a real card composing, via its
+ * `toolbar` slot, the `<slicc-add-menu>` (which slides its searchbox in next to
+ * the +/× trigger) and a `<slicc-send-button>` carrying a gravatar `email` so it
+ * paints a real face. A flex spacer pushes the send button to the right edge,
+ * matching the prototype `.toolbar` (`add-menu · spacer · send`).
+ */
+function inputCard(): HTMLElement {
+  const card = document.createElement('slicc-input-card');
+  card.setAttribute('placeholder', PLACEHOLDER);
+  card.setAttribute(
+    'value',
+    'Audit the cold landing hero, then redesign it in a live sprinkle. ' +
+      'Verify the before/after in the browser and open a PR.'
+  );
+
+  const addMenu = document.createElement('slicc-add-menu');
+  addMenu.setAttribute('slot', 'toolbar');
+
+  const spacer = document.createElement('div');
+  spacer.setAttribute('slot', 'toolbar');
+  spacer.style.flex = '1';
+
+  const send = document.createElement('slicc-send-button');
+  send.setAttribute('slot', 'toolbar');
+  send.setAttribute('email', DEMO_EMAIL);
+
+  card.append(addMenu, spacer, send);
+  return card;
 }
 
-/** Build the populated `.composer-inner` contents (input card + meta row). */
-function footerContents(): string {
-  return `
-    <div class="inputcard">
-      <textarea class="ta" rows="1" placeholder="Ask sliccy, or describe a change…"></textarea>
-      <div class="toolbar">
-        <slicc-add-menu></slicc-add-menu>
-        <div class="spacer"></div>
-        <slicc-send-button></slicc-send-button>
-      </div>
-    </div>
-    <div class="meta">
-      <button class="ctl msel"><span class="ic">✦</span> Opus 4.8 <span class="cx">▾</span></button>
-      <button class="ctl tsel x">${BRAIN_SVG} bombastica <span class="cx">▾</span></button>
-      <div class="mspacer"></div>
-      <span class="hint slicc-composer__hint" data-composer-hint><span class="kbd">⏎</span> send <span class="sep"></span> <span class="kbd">⇧⏎</span> newline <span class="sep"></span> review before shipping</span>
-    </div>`;
+/** Build the populated `<slicc-composer-meta>` row (model + thinking + hint). */
+function metaRow(narrow: boolean): HTMLElement {
+  const row = document.createElement('slicc-composer-meta');
+  row.setAttribute('model', 'Opus 4.8');
+  row.setAttribute('thinking', 'bombastica');
+  // Narrow-chat: the composer's own [open] CSS hides any `.slicc-composer__hint`
+  // / `[data-composer-hint]`, but the meta row keeps its hint inside a shadow
+  // root — so also flag the row `narrow` to drop its hint in the tight column.
+  if (narrow) row.setAttribute('narrow', '');
+  return row;
 }
 
 /**
- * Build a populated composer mounted in a column shell, so the frosted footer
- * band reads against a chat-thread-like surface above it (the prototype layout).
+ * Build a fully-populated composer mounted in a chat-column shell, so the
+ * frosted footer band reads against a chat-thread-like surface above it (the
+ * prototype layout). The footer is composed entirely from real library
+ * components: `<slicc-input-card>` (add-menu + gravatar send button) + a
+ * `<slicc-composer-meta>` row. Light/dark is driven by the global theme toolbar.
  */
 function composer({ open }: ComposerArgs): HTMLElement {
-  ensureDemoCss();
-
   // A chat-column shell: faux thread above, composer footer pinned below.
   const shell = document.createElement('div');
-  shell.className = 'composer-demo';
   shell.style.cssText =
-    'display:flex;flex-direction:column;height:420px;width:100%;background:var(--bg);overflow:hidden;font-family:var(--ui);';
+    'display:flex;flex-direction:column;height:460px;width:100%;background:var(--bg);overflow:hidden;font-family:var(--ui);';
 
   const thread = document.createElement('div');
   thread.style.cssText =
@@ -104,21 +106,30 @@ function composer({ open }: ComposerArgs): HTMLElement {
 
   const el = document.createElement('slicc-composer') as SliccComposer;
   if (open) el.setAttribute('open', '');
-  el.innerHTML = footerContents();
+  el.append(inputCard(), metaRow(Boolean(open)));
 
   shell.append(thread, el);
   return shell;
 }
 
-/** Default — full-width chat: input card + meta row with the keyboard hint visible. */
+/**
+ * Default — full-width chat. The frosted footer band composes a real
+ * `<slicc-input-card>` (its `<slicc-add-menu>` toolbar + a gravatar
+ * `<slicc-send-button>`) over a `<slicc-composer-meta>` row whose keyboard hint
+ * (Enter to send, Shift+Enter for a newline, "review before shipping") stays
+ * visible. Every glyph is a real lucide `<svg>` from the composed components —
+ * never an emoji. Flip the global theme toolbar for dark mode; widen via the
+ * viewport toolbar.
+ */
 export const Default: Story = {
   args: {},
   render: composer,
 };
 
 /**
- * Narrow / shell-open — the 34% chat pane: the meta keyboard hint is hidden,
- * keeping just model + thinking. Mirrors `.shell.open .meta .hint`.
+ * Narrow / shell-open — the 34% chat pane. The composer's `open` attribute (plus
+ * the meta row's `narrow` flag) hides the keyboard hint, keeping just the model
+ * pill and the thinking pill. Mirrors the prototype's `.shell.open .meta .hint`.
  */
 export const Narrow: Story = {
   args: { open: true },
