@@ -68,6 +68,12 @@ import { Orchestrator } from '../scoops/orchestrator.js';
 import { subscribeToFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 import { subscribeToLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import type { ChannelMessage, RegisteredScoop } from '../scoops/types.js';
+import {
+  publishWorkflowRunManager,
+  WORKFLOW_MANAGER_GLOBAL_KEY,
+} from '../scoops/workflow-run-manager.js';
+import { executeJsCode } from '../shell/jsh-executor.js';
+import { makeSentinel, splitSentinel } from '../shell/supplemental-commands/workflow-script.js';
 import { ProcMountBackend } from './proc-mount.js';
 import { ProcessManager } from './process-manager.js';
 import type { KernelFacade } from './types.js';
@@ -207,6 +213,58 @@ export interface KernelHost {
 // ---------------------------------------------------------------------------
 
 /**
+ * Resolve the `eventName` used to label the routed `ChannelMessage`
+ * (`senderName = "<channel>:<eventName>"`). Mirrors the original nested
+ * ternary chain in `defaultLickEventHandler` exactly.
+ */
+function resolveLickEventName(event: LickEvent): string | undefined {
+  switch (event.type) {
+    case 'webhook':
+      return event.webhookName;
+    case 'sprinkle':
+      return event.sprinkleName;
+    case 'fswatch':
+      return event.fswatchName;
+    case 'navigate':
+      return event.navigateUrl;
+    case 'upgrade':
+      return `${event.upgradeFromVersion ?? 'unknown'}→${event.upgradeToVersion ?? 'unknown'}`;
+    case 'session-reload':
+      return 'mount-recovery';
+    case 'workflow':
+      return event.workflowName ?? event.workflowRunId ?? 'workflow';
+    default:
+      return event.cronName;
+  }
+}
+
+/**
+ * Resolve the `eventId` baked into the `ChannelMessage` id
+ * (`"<channel>-<eventId>-<Date.now()>"`). Mirrors the original nested
+ * ternary chain in `defaultLickEventHandler` exactly.
+ */
+function resolveLickEventId(event: LickEvent): string | undefined {
+  switch (event.type) {
+    case 'webhook':
+      return event.webhookId;
+    case 'sprinkle':
+      return event.sprinkleName;
+    case 'fswatch':
+      return event.fswatchId;
+    case 'navigate':
+      return event.navigateUrl;
+    case 'upgrade':
+      return `upgrade-${event.upgradeToVersion ?? 'unknown'}`;
+    case 'session-reload':
+      return `session-reload-${event.timestamp}`;
+    case 'workflow':
+      return `workflow-${event.workflowRunId ?? 'unknown'}`;
+    default:
+      return event.cronId;
+  }
+}
+
+/**
  * Default lick event handler. Formats the event via
  * `formatLickEventForCone`, resolves a target scoop (named target or
  * cone), and hands the resulting `ChannelMessage` to
@@ -223,38 +281,8 @@ export function defaultLickEventHandler(
     return;
   }
 
-  const isWebhook = event.type === 'webhook';
-  const isSprinkle = event.type === 'sprinkle';
-  const isFsWatch = event.type === 'fswatch';
-  const isNavigate = event.type === 'navigate';
-  const isUpgrade = event.type === 'upgrade';
-  const isSessionReload = event.type === 'session-reload';
-  const eventName = isWebhook
-    ? event.webhookName
-    : isSprinkle
-      ? event.sprinkleName
-      : isFsWatch
-        ? event.fswatchName
-        : isNavigate
-          ? event.navigateUrl
-          : isUpgrade
-            ? `${event.upgradeFromVersion ?? 'unknown'}→${event.upgradeToVersion ?? 'unknown'}`
-            : isSessionReload
-              ? 'mount-recovery'
-              : event.cronName;
-  const eventId = isWebhook
-    ? event.webhookId
-    : isSprinkle
-      ? event.sprinkleName
-      : isFsWatch
-        ? event.fswatchId
-        : isNavigate
-          ? event.navigateUrl
-          : isUpgrade
-            ? `upgrade-${event.upgradeToVersion ?? 'unknown'}`
-            : isSessionReload
-              ? `session-reload-${event.timestamp}`
-              : event.cronId;
+  const eventName = resolveLickEventName(event);
+  const eventId = resolveLickEventId(event);
   const channel = event.type;
 
   const scoops = orchestrator.getScoops();
@@ -290,20 +318,30 @@ export function defaultLickEventHandler(
 }
 
 // ---------------------------------------------------------------------------
-// Factory
+// Boot-phase helpers (extracted from createKernelHost for size/complexity).
+// Each takes the locals it needs and returns what the body threads onward;
+// ordering of side effects is preserved by the call order in the factory.
 // ---------------------------------------------------------------------------
 
-export async function createKernelHost(config: KernelHostConfig): Promise<KernelHost> {
-  const {
-    container,
-    browser,
-    bridge,
-    callbacks,
-    skipConeBootstrap = false,
-    isExtension = false,
-  } = config;
-  const log: KernelHostLogger = config.logger ?? console;
-
+/**
+ * Steps 1–4b: construct the orchestrator + process manager, publish their
+ * globals, bind the bridge, wire tray-runtime subscriptions, init the
+ * orchestrator, and seed the bridge's chat buffers. Ordering of these side
+ * effects is load-bearing and preserved verbatim from the original inline
+ * sequence. Returns the locals the factory threads onward.
+ */
+async function bootOrchestrator(
+  container: HTMLElement,
+  browser: BrowserAPI,
+  bridge: KernelFacade,
+  callbacks: Omit<OrchestratorCallbacks, 'getBrowserAPI'>
+): Promise<{
+  processManager: ProcessManager;
+  orchestrator: OrchestratorType;
+  unsubLeader: () => void;
+  unsubFollower: () => void;
+  sharedFs: VirtualFS | null;
+}> {
   // 1. Construct orchestrator + process manager. The manager is the
   // single source of truth for live processes — every scoop turn,
   // tool call, shell exec, jsh script registers here. Surfaced via
@@ -346,94 +384,22 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   // `browser-coding-agent` UI store with only the new messages.
   await bridge.seedBuffersFromAgentState();
 
-  // 5. Publish agent bridge for the `agent` shell command.
+  // 5 (caller): publish agent bridge for the `agent` shell command.
   const sharedFs = orchestrator.getSharedFS();
-  if (sharedFs) {
-    publishAgentBridge(orchestrator, sharedFs, orchestrator.getSessionStore());
-  } else {
-    log.warn('AgentBridge not published — orchestrator.getSharedFS() returned null');
-  }
+  return { processManager, orchestrator, unsubLeader, unsubFollower, sharedFs };
+}
 
-  // 5b. Mount /proc on the shared FS. `mountInternal` keeps it out
-  // of `listMounts()` (so scoops can't see it), out of `mount list`,
-  // and unpersisted (every reload starts fresh). The backend reads
-  // from the same `processManager` the kernel host uses, so
-  // `cat /proc/<pid>/status` always reflects the live table.
-  if (sharedFs) {
-    try {
-      await sharedFs.mountInternal('/proc', new ProcMountBackend(processManager));
-    } catch (err) {
-      log.warn('Failed to mount /proc', err);
-    }
-  }
-
-  // 5c. Legacy IDB → OPFS migration RUN — BLOCKING.
-  //
-  // Guarded on `backend === 'opfs'` so the LFS-default path is
-  // byte-identical and never imports the migration module. The runner
-  // re-uses C1 detection (sentinel-present → fast no-op; legacy-absent
-  // → no-op) and on `needs-migration` performs the copy, parity-checks
-  // file-count + total-bytes against the manifest, and atomically
-  // writes the sentinel as the FINAL operation.
-  //
-  // We `await` the runner so any post-migration boot writes (lick
-  // manager state, /licks-ws bridge, cone bootstrap, upgrade detection)
-  // happen strictly AFTER the sentinel has either landed or been
-  // refused. Without this, the previous fire-and-forget IIFE let those
-  // writes race the parity walk and silently break the sentinel write.
-  //
-  // Boot resilience: any runner error is caught and the splash is
-  // dismissed via `onMigrationFinish` in `finally`, so a failed
-  // migration still lets the app come up (read-only fallback over
-  // OPFS, legacy `slicc-fs` IDB untouched — read-only throughout).
-  if (sharedFs && sharedFs.backend === 'opfs') {
-    // Signal start before the dynamic import so the page-side modal
-    // timer arms even if the first await hop is already past the
-    // threshold. `onMigrationFinish` runs in a `finally` so any
-    // thrown error still dismisses the modal.
-    try {
-      config.onMigrationStart?.();
-    } catch (err) {
-      log.warn('onMigrationStart callback threw (non-fatal)', err);
-    }
-    try {
-      const { runLegacyMigrationFromVfs } = await import('../fs/migration/migration-run.js');
-      const result = await runLegacyMigrationFromVfs(sharedFs, {
-        logger: log,
-        onProgress: (progress) => {
-          try {
-            config.onMigrationProgress?.(progress);
-          } catch (err) {
-            log.warn('onMigrationProgress callback threw (non-fatal)', err);
-          }
-        },
-      });
-      // Deferred IDB deletion. When the sentinel is present
-      // (already-migrated OR just-copied) AND the legacy `slicc-fs`
-      // IDB is still present, emit a one-shot per-boot log telling
-      // the user it's safe to clear via the `slicc-fs-cleanup` shell
-      // command. Counts only — no paths or contents.
-      if (result.kind === 'sentinel-present' || result.kind === 'copied') {
-        const { probeLegacyIdbExistsDefault } = await import(
-          '../fs/migration/migration-cleanup.js'
-        );
-        if (await probeLegacyIdbExistsDefault()) {
-          log.info(
-            '[migration] legacy slicc-fs IDB still present after migration — safe to clear with `slicc-fs-cleanup`'
-          );
-        }
-      }
-    } catch (err) {
-      log.warn('legacy migration run failed (non-fatal)', err);
-    } finally {
-      try {
-        config.onMigrationFinish?.();
-      } catch (err) {
-        log.warn('onMigrationFinish callback threw (non-fatal)', err);
-      }
-    }
-  }
-
+/**
+ * Steps 6 + 7: register the session-costs provider for the `cost` shell
+ * command, then init the LickManager, attach it to the orchestrator, and
+ * install the lick→cone routing handler (the caller's override, or
+ * `defaultLickEventHandler`). Returns the initialized LickManager.
+ */
+async function initCostsAndLickManager(
+  orchestrator: OrchestratorType,
+  config: KernelHostConfig,
+  log: KernelHostLogger
+): Promise<LickManager> {
   // 6. Register session-costs provider for the `cost` shell command.
   const { registerSessionCostsProvider } = await import(
     '../shell/supplemental-commands/cost-command.js'
@@ -449,18 +415,135 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   const lickHandler = config.lickEventHandler ?? defaultLickEventHandler;
   const routingCtx: LickRoutingContext = { orchestrator, lickManager, log };
   lickManager.setEventHandler((event) => lickHandler(event, routingCtx));
+  return lickManager;
+}
 
-  // 8. Expose lickManager on globalThis for the `crontask` / `webhook`
-  //    shell commands. globalThis is identical in worker + page.
-  (globalThis as Record<string, unknown>).__slicc_lickManager = lickManager;
+/**
+ * Step 10: bootstrap a cone scoop if none exists. The caller gates on
+ * `!skipConeBootstrap`.
+ */
+async function bootstrapCone(orchestrator: OrchestratorType): Promise<void> {
+  const allScoops = orchestrator.getScoops();
+  const hasCone = allScoops.some((s) => s.isCone);
+  if (!hasCone) {
+    await orchestrator.registerScoop({
+      jid: `cone_${Date.now()}`,
+      name: 'Cone',
+      folder: 'cone',
+      isCone: true,
+      type: 'cone',
+      requiresTrigger: false,
+      assistantLabel: 'sliccy',
+      addedAt: new Date().toISOString(),
+    });
+  }
+}
 
-  // 8a-pre. browser.websocket subscriber registry. The registry owns
-  //    the resolved sink dispatchers + the page-side CDP bridge so
-  //    `browser.websocket` is end-to-end functional in both floats
-  //    (WebSocket CDP standalone, chrome.debugger extension). The
-  //    realm-host resolves `globalThis.__slicc_wsSubscribers` at
-  //    `wsObserve`/`wsUpdate`/etc. call time. `unregisterScoop`
-  //    auto-cleans up subscribers via `dropForScoop`.
+/**
+ * Step 5c: blocking legacy IDB → OPFS migration. Gated by the caller on
+ * `sharedFs.backend === 'opfs'`. Signals start before the dynamic import
+ * so the page-side modal timer arms; `onMigrationFinish` runs in a
+ * `finally` so a thrown error still dismisses the modal. All callbacks
+ * and the runner are wrapped so a failure never blocks boot.
+ */
+async function runLegacyOpfsMigration(
+  sharedFs: VirtualFS,
+  config: KernelHostConfig,
+  log: KernelHostLogger
+): Promise<void> {
+  try {
+    config.onMigrationStart?.();
+  } catch (err) {
+    log.warn('onMigrationStart callback threw (non-fatal)', err);
+  }
+  try {
+    const { runLegacyMigrationFromVfs } = await import('../fs/migration/migration-run.js');
+    const result = await runLegacyMigrationFromVfs(sharedFs, {
+      logger: log,
+      onProgress: (progress) => {
+        try {
+          config.onMigrationProgress?.(progress);
+        } catch (err) {
+          log.warn('onMigrationProgress callback threw (non-fatal)', err);
+        }
+      },
+    });
+    // Deferred IDB deletion. When the sentinel is present
+    // (already-migrated OR just-copied) AND the legacy `slicc-fs`
+    // IDB is still present, emit a one-shot per-boot log telling
+    // the user it's safe to clear via the `slicc-fs-cleanup` shell
+    // command. Counts only — no paths or contents.
+    if (result.kind === 'sentinel-present' || result.kind === 'copied') {
+      const { probeLegacyIdbExistsDefault } = await import('../fs/migration/migration-cleanup.js');
+      if (await probeLegacyIdbExistsDefault()) {
+        log.info(
+          '[migration] legacy slicc-fs IDB still present after migration — safe to clear with `slicc-fs-cleanup`'
+        );
+      }
+    }
+  } catch (err) {
+    log.warn('legacy migration run failed (non-fatal)', err);
+  } finally {
+    try {
+      config.onMigrationFinish?.();
+    } catch (err) {
+      log.warn('onMigrationFinish callback threw (non-fatal)', err);
+    }
+  }
+}
+
+/**
+ * Step 7b: publish the workflow run manager on `globalThis.__slicc_workflows`.
+ * Sentinel ownership: the manager NEVER invents a sentinel — the command builds
+ * it and threads it through `WorkflowStartOptions.sentinel`. For sentinel
+ * handling, the deps supply only `makeRunId` (a short id derived from
+ * `makeSentinel()`, the fallback when the command doesn't pass its own runId)
+ * and `splitResult` (`splitSentinel`) — the sentinel itself is built by the
+ * command and threaded via `WorkflowStartOptions.sentinel`. (The deps also wire
+ * the float-specific `runRealm`/`sharedFs`/`processManager`/`fireLick`/
+ * `getConeJid`.)
+ */
+function publishWorkflowRunManagerForHost(deps: {
+  orchestrator: OrchestratorType;
+  processManager: ProcessManager;
+  lickManager: LickManager;
+  sharedFs: VirtualFS;
+}): void {
+  const { orchestrator, processManager, lickManager, sharedFs } = deps;
+  publishWorkflowRunManager({
+    sharedFs,
+    getConeJid: () => orchestrator.getScoops().find((s) => s.isCone)?.jid,
+    fireLick: (event) => lickManager.emitEvent(event),
+    processManager,
+    // `CommandContextLike` is a structural subset of `executeJsCode`'s ctx
+    // param, so this cast is safe — the real full ctx flows through at runtime.
+    runRealm: (code, argv, ctx) =>
+      executeJsCode(code, argv, ctx as unknown as Parameters<typeof executeJsCode>[2], undefined, {
+        filename: argv[1],
+      }),
+    // Takes a 12-char id from the sentinel; collision risk is acceptable
+    // because run ids are session-scoped and live only in the in-memory
+    // registry Map.
+    makeRunId: () => makeSentinel().slice('WF_RESULT_'.length, 'WF_RESULT_'.length + 12),
+    splitResult: (stdout, sentinel) => splitSentinel(stdout, sentinel),
+  });
+}
+
+/**
+ * Step 8a-pre: construct the `browser.websocket` subscriber registry +
+ * page-side CDP bridge. The registry owns the resolved sink dispatchers so
+ * `browser.websocket` is end-to-end functional in both floats. Returns both
+ * so the caller can publish the registry on globalThis and dispose both on
+ * teardown.
+ */
+async function buildWsSubscriberRegistry(deps: {
+  browser: BrowserAPI;
+  lickManager: LickManager;
+  orchestrator: OrchestratorType;
+  sharedFs: VirtualFS | null | undefined;
+  log: KernelHostLogger;
+}): Promise<{ wsBridge: { dispose(): void }; wsRegistry: { dispose(): void } }> {
+  const { browser, lickManager, orchestrator, sharedFs, log } = deps;
   const { CdpWsPageBridge } = await import('../cdp/cdp-ws-page-bridge.js');
   const { WsSubscriberRegistry } = await import('./realm/ws-subscribers.js');
   const wsBridge = new CdpWsPageBridge({ browser });
@@ -506,6 +589,262 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
       },
     },
   });
+  return { wsBridge, wsRegistry };
+}
+
+/**
+ * Step 8a: start the `/licks-ws` bridge to the node-server (non-extension
+ * floats only — the caller gates on `!isExtension`). Returns the stop handle
+ * or `null` on failure. Bridge failure is functionally identical to
+ * webhook/crontask/handoff lick delivery being non-functional for the rest of
+ * the session — so it's surfaced via `error` (falling back through `warn` and
+ * a console fallback so we NEVER throw a TypeError inside the catch and lose
+ * the original failure).
+ */
+async function startLickWsBridgeForHost(
+  lickManager: LickManager,
+  log: KernelHostLogger
+): Promise<(() => void) | null> {
+  try {
+    const { startLickWsBridge } = await import('../scoops/lick-ws-bridge.js');
+    const handle = startLickWsBridge(lickManager, {
+      locationHref: self.location.href,
+    });
+    return handle.stop;
+  } catch (err) {
+    const errFn =
+      log.error?.bind(log) ??
+      log.warn.bind(log) ??
+      ((msg: string, fields?: unknown) => console.error('[lick-ws-bridge]', msg, fields));
+    errFn(
+      'Failed to start lick-ws bridge — webhook / crontask / handoff lick delivery is non-functional in this session',
+      { error: err instanceof Error ? err.message : String(err) }
+    );
+    return null;
+  }
+}
+
+/**
+ * Step 8b: start the CDP-level NavigationWatcher (standalone / kernel-worker
+ * only — the caller gates on `!isExtension`). The extension float observes
+ * main-frame `Link` headers via `chrome.webRequest`, so booting a CDP watcher
+ * there would double-fire. Construction + `void start()` are synchronous (as
+ * in the original inline block); returns the async stop handle or `null`.
+ */
+function startNavigationWatcherForHost(
+  browser: BrowserAPI,
+  lickManager: LickManager,
+  log: KernelHostLogger
+): (() => Promise<void>) | null {
+  try {
+    const navWatcher = new NavigationWatcher(browser.getTransport(), (event) => {
+      const body: Record<string, unknown> = {
+        url: event.url,
+        verb: event.verb,
+        target: event.target,
+      };
+      if (event.instruction != null) body.instruction = event.instruction;
+      if (event.branch != null) body.branch = event.branch;
+      if (event.path != null) body.path = event.path;
+      if (event.title != null) body.title = event.title;
+      lickManager.emitEvent({
+        type: 'navigate',
+        navigateUrl: event.url,
+        targetScoop: undefined,
+        timestamp: new Date().toISOString(),
+        body,
+      });
+    });
+    void navWatcher.start();
+    return () => navWatcher.stop();
+  } catch (err) {
+    log.warn('Failed to start NavigationWatcher', err);
+    return null;
+  }
+}
+
+/**
+ * Step 9: restore persisted mounts (fire-and-forget). MUST run AFTER
+ * `setEventHandler` so the `session-reload` lick this may emit routes through
+ * the installed handler. The caller gates on `sharedFs` being present.
+ */
+function scheduleMountRecovery(
+  sharedFs: VirtualFS,
+  lickManager: LickManager,
+  log: KernelHostLogger
+): void {
+  void (async () => {
+    try {
+      const { getAllMountEntries } = await import('../fs/mount-table-store.js');
+      const { recoverMounts } = await import('../fs/mount-recovery.js');
+      const entries = await getAllMountEntries();
+      if (entries.length === 0) return;
+      const { needsRecovery } = await recoverMounts(entries, sharedFs, log);
+      if (needsRecovery.length === 0) return;
+      lickManager.emitEvent({
+        type: 'session-reload',
+        targetScoop: undefined,
+        timestamp: new Date().toISOString(),
+        body: { reason: 'mount-recovery', mounts: needsRecovery },
+      });
+    } catch (err) {
+      log.warn('mount recovery failed', err);
+    }
+  })();
+}
+
+/**
+ * Step 11: upgrade detection (fire-and-forget). MUST run after cone bootstrap
+ * so an upgrade lick has a routable target. The caller gates on `sharedFs`.
+ */
+function scheduleUpgradeDetection(lickManager: LickManager, log: KernelHostLogger): void {
+  void (async () => {
+    try {
+      const { detectUpgrade, recordVersionSeen } = await import('../scoops/upgrade-detection.js');
+      const result = await detectUpgrade();
+      if (!result.isUpgrade || result.lastSeen === null) return;
+      lickManager.emitEvent({
+        type: 'upgrade',
+        targetScoop: undefined,
+        timestamp: new Date().toISOString(),
+        upgradeFromVersion: result.lastSeen,
+        upgradeToVersion: result.bundled.version,
+        body: {
+          from: result.lastSeen,
+          to: result.bundled.version,
+          releasedAt: result.bundled.releasedAt,
+        },
+      });
+      await recordVersionSeen(result.bundled.version);
+    } catch (err) {
+      log.warn('Upgrade detection failed', err);
+    }
+  })();
+}
+
+/**
+ * Step 12: start the BshWatchdog + ScriptCatalog. The caller gates on
+ * `sharedFs`. Returns the two teardown handles (or `null`s on failure) so the
+ * factory can wire them into `dispose()`.
+ */
+async function startBshWatchdogForHost(
+  sharedFs: VirtualFS,
+  browser: BrowserAPI,
+  log: KernelHostLogger
+): Promise<{ bshWatchdogStop: (() => void) | null; scriptCatalogDispose: (() => void) | null }> {
+  try {
+    const { BshWatchdog } = await import('../shell/bsh-watchdog.js');
+    const { ScriptCatalog } = await import('../shell/script-catalog.js');
+    const sc = new ScriptCatalog({
+      jshFs: sharedFs,
+      bshFs: sharedFs,
+      watcher: sharedFs.getWatcher(),
+    });
+    const wd = new BshWatchdog({
+      browserAPI: browser,
+      scriptCatalog: sc,
+      fs: sharedFs,
+    });
+    void wd.start();
+    return { bshWatchdogStop: () => wd.stop(), scriptCatalogDispose: () => sc.dispose() };
+  } catch (err) {
+    log.warn('Failed to start BSH watchdog', err);
+    return { bshWatchdogStop: null, scriptCatalogDispose: null };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Factory
+// ---------------------------------------------------------------------------
+
+export async function createKernelHost(config: KernelHostConfig): Promise<KernelHost> {
+  const {
+    container,
+    browser,
+    bridge,
+    callbacks,
+    skipConeBootstrap = false,
+    isExtension = false,
+  } = config;
+  const log: KernelHostLogger = config.logger ?? console;
+
+  // Steps 1–4b: construct + init the orchestrator, bind the bridge, wire tray
+  // subs, seed chat buffers. See `bootOrchestrator` for the per-step detail.
+  const { processManager, orchestrator, unsubLeader, unsubFollower, sharedFs } =
+    await bootOrchestrator(container, browser, bridge, callbacks);
+  if (sharedFs) {
+    publishAgentBridge(orchestrator, sharedFs, orchestrator.getSessionStore());
+  } else {
+    log.warn('AgentBridge not published — orchestrator.getSharedFS() returned null');
+  }
+
+  // 5b. Mount /proc on the shared FS. `mountInternal` keeps it out
+  // of `listMounts()` (so scoops can't see it), out of `mount list`,
+  // and unpersisted (every reload starts fresh). The backend reads
+  // from the same `processManager` the kernel host uses, so
+  // `cat /proc/<pid>/status` always reflects the live table.
+  if (sharedFs) {
+    try {
+      await sharedFs.mountInternal('/proc', new ProcMountBackend(processManager));
+    } catch (err) {
+      log.warn('Failed to mount /proc', err);
+    }
+  }
+
+  // 5c. Legacy IDB → OPFS migration RUN — BLOCKING.
+  //
+  // Guarded on `backend === 'opfs'` so the LFS-default path is
+  // byte-identical and never imports the migration module. The runner
+  // re-uses C1 detection (sentinel-present → fast no-op; legacy-absent
+  // → no-op) and on `needs-migration` performs the copy, parity-checks
+  // file-count + total-bytes against the manifest, and atomically
+  // writes the sentinel as the FINAL operation.
+  //
+  // We `await` the runner so any post-migration boot writes (lick
+  // manager state, /licks-ws bridge, cone bootstrap, upgrade detection)
+  // happen strictly AFTER the sentinel has either landed or been
+  // refused. Without this, the previous fire-and-forget IIFE let those
+  // writes race the parity walk and silently break the sentinel write.
+  //
+  // Boot resilience: any runner error is caught and the splash is
+  // dismissed via `onMigrationFinish` in `finally`, so a failed
+  // migration still lets the app come up (read-only fallback over
+  // OPFS, legacy `slicc-fs` IDB untouched — read-only throughout).
+  if (sharedFs && sharedFs.backend === 'opfs') {
+    await runLegacyOpfsMigration(sharedFs, config, log);
+  }
+
+  // 6. Register session-costs provider for the `cost` shell command;
+  //    7. init the LickManager + wire lick→cone routing.
+  const lickManager = await initCostsAndLickManager(orchestrator, config, log);
+
+  // 7b. Publish the workflow run manager on `globalThis.__slicc_workflows`
+  //     so the `workflow` shell command + the cone resolve it the same way
+  //     they resolve `__slicc_agent`. Wired here (after `lickManager`) so
+  //     `orchestrator`, `processManager`, `sharedFs`, and `lickManager` are
+  //     all in scope.
+  if (sharedFs) {
+    publishWorkflowRunManagerForHost({ orchestrator, processManager, lickManager, sharedFs });
+  }
+
+  // 8. Expose lickManager on globalThis for the `crontask` / `webhook`
+  //    shell commands. globalThis is identical in worker + page.
+  (globalThis as Record<string, unknown>).__slicc_lickManager = lickManager;
+
+  // 8a-pre. browser.websocket subscriber registry. The registry owns
+  //    the resolved sink dispatchers + the page-side CDP bridge so
+  //    `browser.websocket` is end-to-end functional in both floats
+  //    (WebSocket CDP standalone, chrome.debugger extension). The
+  //    realm-host resolves `globalThis.__slicc_wsSubscribers` at
+  //    `wsObserve`/`wsUpdate`/etc. call time. `unregisterScoop`
+  //    auto-cleans up subscribers via `dropForScoop`.
+  const { wsBridge, wsRegistry } = await buildWsSubscriberRegistry({
+    browser,
+    lickManager,
+    orchestrator,
+    sharedFs,
+    log,
+  });
   (globalThis as Record<string, unknown>).__slicc_wsSubscribers = wsRegistry;
 
   // 8a. /licks-ws bridge to the node-server. The extension offscreen
@@ -514,28 +853,7 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   //     shape.
   let lickWsBridgeStop: (() => void) | null = null;
   if (!isExtension) {
-    try {
-      const { startLickWsBridge } = await import('../scoops/lick-ws-bridge.js');
-      const handle = startLickWsBridge(lickManager, {
-        locationHref: self.location.href,
-      });
-      lickWsBridgeStop = handle.stop;
-    } catch (err) {
-      // Bridge failure is functionally identical to webhook/crontask/
-      // handoff lick delivery being non-functional for the rest of the
-      // session — must be visible in prod where `log.warn` is suppressed.
-      // `KernelHostLogger.error` is optional; chain through warn, then
-      // a console fallback so we NEVER throw a TypeError inside this
-      // catch and lose the original failure.
-      const errFn =
-        log.error?.bind(log) ??
-        log.warn.bind(log) ??
-        ((msg: string, fields?: unknown) => console.error('[lick-ws-bridge]', msg, fields));
-      errFn(
-        'Failed to start lick-ws bridge — webhook / crontask / handoff lick delivery is non-functional in this session',
-        { error: err instanceof Error ? err.message : String(err) }
-      );
-    }
+    lickWsBridgeStop = await startLickWsBridgeForHost(lickManager, log);
   }
 
   // 8b. CDP-level NavigationWatcher (standalone / kernel-worker only).
@@ -548,124 +866,36 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   //     watcher is what makes navigate-licks fire at all.
   let navigationWatcherStop: (() => Promise<void>) | null = null;
   if (!isExtension) {
-    try {
-      const navWatcher = new NavigationWatcher(browser.getTransport(), (event) => {
-        const body: Record<string, unknown> = {
-          url: event.url,
-          verb: event.verb,
-          target: event.target,
-        };
-        if (event.instruction != null) body.instruction = event.instruction;
-        if (event.branch != null) body.branch = event.branch;
-        if (event.path != null) body.path = event.path;
-        if (event.title != null) body.title = event.title;
-        lickManager.emitEvent({
-          type: 'navigate',
-          navigateUrl: event.url,
-          targetScoop: undefined,
-          timestamp: new Date().toISOString(),
-          body,
-        });
-      });
-      void navWatcher.start();
-      navigationWatcherStop = () => navWatcher.stop();
-    } catch (err) {
-      log.warn('Failed to start NavigationWatcher', err);
-    }
+    navigationWatcherStop = startNavigationWatcherForHost(browser, lickManager, log);
   }
 
   // 9. Restore persisted mounts. MUST run AFTER setEventHandler so the
   //    `session-reload` lick we may emit below routes through the
   //    handler installed above.
   if (sharedFs) {
-    void (async () => {
-      try {
-        const { getAllMountEntries } = await import('../fs/mount-table-store.js');
-        const { recoverMounts } = await import('../fs/mount-recovery.js');
-        const entries = await getAllMountEntries();
-        if (entries.length === 0) return;
-        const { needsRecovery } = await recoverMounts(entries, sharedFs, log);
-        if (needsRecovery.length === 0) return;
-        lickManager.emitEvent({
-          type: 'session-reload',
-          targetScoop: undefined,
-          timestamp: new Date().toISOString(),
-          body: { reason: 'mount-recovery', mounts: needsRecovery },
-        });
-      } catch (err) {
-        log.warn('mount recovery failed', err);
-      }
-    })();
+    scheduleMountRecovery(sharedFs, lickManager, log);
   }
 
   // 10. Cone bootstrap.
   if (!skipConeBootstrap) {
-    const allScoops = orchestrator.getScoops();
-    const hasCone = allScoops.some((s) => s.isCone);
-    if (!hasCone) {
-      await orchestrator.registerScoop({
-        jid: `cone_${Date.now()}`,
-        name: 'Cone',
-        folder: 'cone',
-        isCone: true,
-        type: 'cone',
-        requiresTrigger: false,
-        assistantLabel: 'sliccy',
-        addedAt: new Date().toISOString(),
-      });
-    }
+    await bootstrapCone(orchestrator);
   }
 
   // 11. Upgrade detection. Must run after cone bootstrap so an upgrade
   //     lick has a routable target.
   if (sharedFs) {
-    void (async () => {
-      try {
-        const { detectUpgrade, recordVersionSeen } = await import('../scoops/upgrade-detection.js');
-        const result = await detectUpgrade();
-        if (!result.isUpgrade || result.lastSeen === null) return;
-        lickManager.emitEvent({
-          type: 'upgrade',
-          targetScoop: undefined,
-          timestamp: new Date().toISOString(),
-          upgradeFromVersion: result.lastSeen,
-          upgradeToVersion: result.bundled.version,
-          body: {
-            from: result.lastSeen,
-            to: result.bundled.version,
-            releasedAt: result.bundled.releasedAt,
-          },
-        });
-        await recordVersionSeen(result.bundled.version);
-      } catch (err) {
-        log.warn('Upgrade detection failed', err);
-      }
-    })();
+    scheduleUpgradeDetection(lickManager, log);
   }
 
   // 12. BshWatchdog start.
   let bshWatchdogStop: (() => void) | null = null;
   let scriptCatalogDispose: (() => void) | null = null;
   if (sharedFs) {
-    try {
-      const { BshWatchdog } = await import('../shell/bsh-watchdog.js');
-      const { ScriptCatalog } = await import('../shell/script-catalog.js');
-      const sc = new ScriptCatalog({
-        jshFs: sharedFs,
-        bshFs: sharedFs,
-        watcher: sharedFs.getWatcher(),
-      });
-      const wd = new BshWatchdog({
-        browserAPI: browser,
-        scriptCatalog: sc,
-        fs: sharedFs,
-      });
-      void wd.start();
-      bshWatchdogStop = () => wd.stop();
-      scriptCatalogDispose = () => sc.dispose();
-    } catch (err) {
-      log.warn('Failed to start BSH watchdog', err);
-    }
+    ({ bshWatchdogStop, scriptCatalogDispose } = await startBshWatchdogForHost(
+      sharedFs,
+      browser,
+      log
+    ));
   }
 
   let disposed = false;
@@ -679,47 +909,85 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
     async dispose(): Promise<void> {
       if (disposed) return;
       disposed = true;
-      unsubLeader?.();
-      unsubFollower?.();
-      bshWatchdogStop?.();
-      scriptCatalogDispose?.();
-      lickWsBridgeStop?.();
-      // Tear down the NavigationWatcher's CDP subscriptions so a
-      // new-session reload doesn't leave a stray observer attached to
-      // every page target.
-      if (navigationWatcherStop) {
-        try {
-          await navigationWatcherStop();
-        } catch (err) {
-          log.warn('NavigationWatcher.stop() failed', err);
-        }
-      }
-      // Tear down /proc. Best-effort: a missing entry (sharedFs
-      // unavailable at boot, or mountInternal failed) throws ENOENT
-      // we swallow.
-      if (sharedFs) {
-        try {
-          await sharedFs.unmountInternal('/proc');
-        } catch {
-          /* not mounted */
-        }
-      }
-      // Tear down the browser.websocket subscriber registry. Drops
-      // the page-side bridge's binding-called listener so we don't
-      // keep delivering frames after the host is gone.
-      try {
-        wsRegistry.dispose();
-      } catch (err) {
-        log.warn('WsSubscriberRegistry.dispose() failed', err);
-      }
-      try {
-        wsBridge.dispose();
-      } catch (err) {
-        log.warn('CdpWsPageBridge.dispose() failed', err);
-      }
-      releaseHostGlobals({ processManager, lickManager, browser, wsRegistry });
+      await disposeKernelHost({
+        unsubLeader,
+        unsubFollower,
+        bshWatchdogStop,
+        scriptCatalogDispose,
+        lickWsBridgeStop,
+        navigationWatcherStop,
+        sharedFs,
+        wsRegistry,
+        wsBridge,
+        processManager,
+        lickManager,
+        browser,
+        log,
+      });
     },
   };
+}
+
+/**
+ * Run the kernel host's teardown. Extracted from `createKernelHost`'s
+ * `dispose()` body — same order, same best-effort error handling. The caller
+ * owns the idempotency guard (`disposed` flag); this does the work once.
+ */
+async function disposeKernelHost(h: {
+  unsubLeader: (() => void) | null | undefined;
+  unsubFollower: (() => void) | null | undefined;
+  bshWatchdogStop: (() => void) | null;
+  scriptCatalogDispose: (() => void) | null;
+  lickWsBridgeStop: (() => void) | null;
+  navigationWatcherStop: (() => Promise<void>) | null;
+  sharedFs: VirtualFS | null | undefined;
+  wsRegistry: { dispose(): void };
+  wsBridge: { dispose(): void };
+  processManager: ProcessManager;
+  lickManager: LickManager;
+  browser: BrowserAPI;
+  log: KernelHostLogger;
+}): Promise<void> {
+  const { sharedFs, wsRegistry, wsBridge, processManager, lickManager, browser, log } = h;
+  h.unsubLeader?.();
+  h.unsubFollower?.();
+  h.bshWatchdogStop?.();
+  h.scriptCatalogDispose?.();
+  h.lickWsBridgeStop?.();
+  // Tear down the NavigationWatcher's CDP subscriptions so a
+  // new-session reload doesn't leave a stray observer attached to
+  // every page target.
+  if (h.navigationWatcherStop) {
+    try {
+      await h.navigationWatcherStop();
+    } catch (err) {
+      log.warn('NavigationWatcher.stop() failed', err);
+    }
+  }
+  // Tear down /proc. Best-effort: a missing entry (sharedFs
+  // unavailable at boot, or mountInternal failed) throws ENOENT
+  // we swallow.
+  if (sharedFs) {
+    try {
+      await sharedFs.unmountInternal('/proc');
+    } catch {
+      /* not mounted */
+    }
+  }
+  // Tear down the browser.websocket subscriber registry. Drops
+  // the page-side bridge's binding-called listener so we don't
+  // keep delivering frames after the host is gone.
+  try {
+    wsRegistry.dispose();
+  } catch (err) {
+    log.warn('WsSubscriberRegistry.dispose() failed', err);
+  }
+  try {
+    wsBridge.dispose();
+  } catch (err) {
+    log.warn('CdpWsPageBridge.dispose() failed', err);
+  }
+  releaseHostGlobals({ processManager, lickManager, browser, wsRegistry });
 }
 
 /**
@@ -745,4 +1013,9 @@ export function releaseHostGlobals(refs: {
   if (refs.wsRegistry && g.__slicc_wsSubscribers === refs.wsRegistry) {
     delete g.__slicc_wsSubscribers;
   }
+  // Release the workflow run manager so we don't leak a manager closed over a
+  // disposed orchestrator / lickManager. Symmetric with the globals above; the
+  // workflow manager has no shell-script fallback (unlike `__slicc_pm`), so an
+  // unconditional clear is safe — a second host re-publishes its own on boot.
+  delete g[WORKFLOW_MANAGER_GLOBAL_KEY];
 }

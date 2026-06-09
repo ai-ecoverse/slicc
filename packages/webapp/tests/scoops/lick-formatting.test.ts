@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { formatLickEventForCone } from '../../src/scoops/lick-formatting.js';
+import {
+  EXTERNAL_LICK_CHANNELS,
+  formatLickEventForCone,
+} from '../../src/scoops/lick-formatting.js';
 import type { LickEvent } from '../../src/scoops/lick-manager.js';
 
 describe('formatLickEventForCone', () => {
@@ -169,4 +172,21 @@ describe('cherry lick formatting', () => {
     expect(formatted!.content).toContain('checkout-complete');
     expect(formatted!.content).toContain('shop.example');
   });
+});
+
+it("formats a 'workflow' completion lick", () => {
+  expect(EXTERNAL_LICK_CHANNELS.has('workflow')).toBe(true);
+  const formatted = formatLickEventForCone({
+    type: 'workflow',
+    workflowRunId: 'abc123',
+    workflowName: 'repo-audit',
+    resultPath: '/shared/workflow-runs/abc123.json',
+    preview: '{"confirmed":3}',
+    timestamp: '2026-06-08T00:00:00.000Z',
+    body: { runId: 'abc123' },
+  });
+  expect(formatted).not.toBeNull();
+  expect(formatted!.content).toContain('repo-audit');
+  expect(formatted!.content).toContain('/shared/workflow-runs/abc123.json');
+  expect(formatted!.content).toContain('{"confirmed":3}');
 });

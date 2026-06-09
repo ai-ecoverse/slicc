@@ -19,6 +19,7 @@ import {
   RotateCcw,
   Sparkles,
   Webhook,
+  Workflow,
 } from 'lucide';
 import type { ChatMessage } from './types.js';
 
@@ -65,6 +66,10 @@ const DESCRIPTORS: Record<string, LickDescriptor> = {
   upgrade: {
     icon: ArrowUpCircle as unknown as IconNode,
     label: 'upgrade',
+  },
+  workflow: {
+    icon: Workflow as unknown as IconNode,
+    label: 'workflow',
   },
   'scoop-notify': {
     icon: IceCream as unknown as IconNode,

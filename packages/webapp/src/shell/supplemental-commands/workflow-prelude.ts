@@ -82,9 +82,27 @@ async function pipeline(items, ...stages) {
   }));
 }
 
+function __wfProgress(kind, text) {
+  if (__execSpawn) {
+    try {
+      const __p = __execSpawn(['__wf_progress', kind, String(text)]);
+      // Fire-and-forget: swallow async rejection too (e.g. realm disposed mid-flight),
+      // not just a sync throw — otherwise it surfaces as an unhandled rejection.
+      if (__p && typeof __p.then === 'function') __p.then(undefined, function () {});
+    } catch (e) {}
+  }
+}
 let __phase = null;
-function phase(title) { __phase = String(title); console.log('WFPHASE' + __phase); }
-function log(message) { console.log('WFLOG' + String(message)); }
+function phase(title) {
+  __phase = String(title);
+  console.log('WFPHASE' + __phase);
+  __wfProgress('phase', __phase);
+}
+function log(message) {
+  const m = String(message);
+  console.log('WFLOG' + m);
+  __wfProgress('log', m);
+}
 const budget = { total: (__WF.budget == null ? null : __WF.budget), spent() { return 0; }, remaining() { return this.total == null ? Infinity : Math.max(0, this.total - this.spent()); } };
 function workflow() { throw new WorkflowNestingUnsupportedError('nested workflow() unsupported in SP1'); }
 `;

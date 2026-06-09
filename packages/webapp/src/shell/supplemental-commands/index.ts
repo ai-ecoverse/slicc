@@ -59,6 +59,7 @@ import { createUnzipCommand } from './unzip-command.js';
 import { createUsbCommand } from './usb-command.js';
 import { createWebhookCommand } from './webhook-command.js';
 import { createWebsocatCommand } from './websocat-command.js';
+import { createWfProgressCommand } from './wf-progress-command.js';
 import { createWhichCommand } from './which-command.js';
 import { createWorkflowCommand } from './workflow-command.js';
 import { createZipCommand } from './zip-command.js';
@@ -173,7 +174,8 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createDfCommand({ fs: options.fs }),
     createDiskutilCommand({ fs: options.fs }),
     createSudoCommand(options.sudoCommand),
-    createWorkflowCommand(),
+    createWorkflowCommand({ getParentJid: options.getParentJid }),
+    createWfProgressCommand(),
   ];
 
   if (options.fs) {
