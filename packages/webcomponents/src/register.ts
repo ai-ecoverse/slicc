@@ -19,6 +19,7 @@ import './freezer/slicc-freezer-card.js';
 import './freezer/slicc-freezer-new.js';
 import './freezer/slicc-freezer.js';
 import './freezer/slicc-frost-shader.js';
+import './freezer/slicc-shader.js';
 import './memory/slicc-memrow.js';
 import './memory/slicc-memtag.js';
 import './memory/slicc-palette-cell.js';

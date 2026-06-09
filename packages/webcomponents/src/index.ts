@@ -20,6 +20,7 @@ export { SliccFreezer } from './freezer/slicc-freezer.js';
 export { SliccFreezerCard } from './freezer/slicc-freezer-card.js';
 export { SliccFreezerNew } from './freezer/slicc-freezer-new.js';
 export { SliccFrostShader } from './freezer/slicc-frost-shader.js';
+export { SliccShader } from './freezer/slicc-shader.js';
 export { define } from './internal/define.js';
 export { escapeHtml } from './internal/html.js';
 export { hasIcon, iconSvg } from './internal/icons.js';
