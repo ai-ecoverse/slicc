@@ -5,7 +5,7 @@ interface DockItemArgs {
   itemId?: string;
   kind?: 'tool' | 'sprinkle';
   hue?: string;
-  glyph?: string;
+  icon?: string;
   tip?: string;
   active?: boolean;
   lit?: boolean;
@@ -26,7 +26,21 @@ const meta: Meta<DockItemArgs> = {
       description: 'sprinkle adds the colored status dot',
     },
     hue: { control: 'color', description: 'Per-kind accent (--h); defaults to var(--violet)' },
-    glyph: { control: 'text', description: 'Glyph rendered inside the button' },
+    icon: {
+      control: 'select',
+      options: [
+        'sparkles',
+        'globe',
+        'layout',
+        'folder',
+        'square-terminal',
+        'brain',
+        'database',
+        'plus',
+        'square',
+      ],
+      description: 'lucide icon name (kebab-case); default `square`',
+    },
     tip: { control: 'text', description: 'Tooltip label shown on hover' },
     active: { control: 'boolean', description: 'Open/active state (.di.on) — ctx glow' },
     lit: {
@@ -34,12 +48,12 @@ const meta: Meta<DockItemArgs> = {
       description: 'Transient lit state (.di.lit) — kind-hue ring + tint',
     },
   },
-  render: ({ itemId, kind, hue, glyph, tip, active, lit }) => {
+  render: ({ itemId, kind, hue, icon, tip, active, lit }) => {
     const el = document.createElement('slicc-dock-item');
     if (itemId) el.setAttribute('item-id', itemId);
     if (kind) el.setAttribute('kind', kind);
     if (hue) el.setAttribute('hue', hue);
-    if (glyph) el.setAttribute('glyph', glyph);
+    if (icon) el.setAttribute('icon', icon);
     if (tip) el.setAttribute('tip', tip);
     if (active) el.toggleAttribute('active', true);
     if (lit) el.toggleAttribute('lit', true);
@@ -50,34 +64,34 @@ const meta: Meta<DockItemArgs> = {
 export default meta;
 type Story = StoryObj<DockItemArgs>;
 
-/** Idle tool launcher — transparent, muted glyph. Hover for the tooltip. */
+/** Idle tool launcher — transparent, muted lucide glyph. Hover for the tooltip. */
 export const Tool: Story = {
-  args: { itemId: 'browser', glyph: '◳', tip: 'Browser · CDP' },
+  args: { itemId: 'browser', icon: 'globe', tip: 'Browser · CDP' },
 };
 
 /** Active/open tool (.di.on) — ctx-tinted fill, ring and outer glow. */
 export const ToolActive: Story = {
-  args: { itemId: 'files', glyph: '⌗', tip: 'Files · VFS', active: true },
+  args: { itemId: 'files', icon: 'folder', tip: 'Files · VFS', active: true },
 };
 
 /** Lit tool (.di.lit) — a transient kind-hue ring + tint (here violet). */
 export const ToolLit: Story = {
-  args: { itemId: 'memory', glyph: '◉', tip: 'Memory', lit: true },
+  args: { itemId: 'memory', icon: 'brain', tip: 'Memory', lit: true },
 };
 
-/** The "new sprinkle" plus glyph — a tool launcher with no status dot. */
+/** The "new sprinkle" plus launcher — a tool launcher with no status dot. */
 export const NewSprinkle: Story = {
-  args: { glyph: '＋', tip: 'New sprinkle' },
+  args: { icon: 'plus', tip: 'New sprinkle' },
 };
 
-/** Sprinkle launcher (.di.sp) — `✦` glyph plus a violet status dot (default hue). */
+/** Sprinkle launcher (.di.sp) — `sparkles` glyph plus a violet status dot (default hue). */
 export const Sprinkle: Story = {
-  args: { itemId: 'hero', kind: 'sprinkle', glyph: '✦', tip: 'Hero studio', hue: '#8b5cf6' },
+  args: { itemId: 'hero', kind: 'sprinkle', icon: 'sparkles', tip: 'Hero studio', hue: '#8b5cf6' },
 };
 
 /** Amber sprinkle (the prototype palette launcher) — status dot in --h. */
 export const SprinkleAmber: Story = {
-  args: { itemId: 'palette', kind: 'sprinkle', glyph: '✦', tip: 'palette', hue: '#f59e0b' },
+  args: { itemId: 'palette', kind: 'sprinkle', icon: 'sparkles', tip: 'palette', hue: '#f59e0b' },
 };
 
 /** Active sprinkle — open surface glow plus the kind status dot. */
@@ -85,7 +99,7 @@ export const SprinkleActive: Story = {
   args: {
     itemId: 'hero',
     kind: 'sprinkle',
-    glyph: '✦',
+    icon: 'sparkles',
     tip: 'Hero studio',
     hue: '#8b5cf6',
     active: true,
@@ -97,10 +111,63 @@ export const SprinkleLit: Story = {
   args: {
     itemId: 'palette',
     kind: 'sprinkle',
-    glyph: '✦',
+    icon: 'sparkles',
     tip: 'palette',
     hue: '#f59e0b',
     lit: true,
+  },
+};
+
+/**
+ * The lucide mapping for the prototype's hand-drawn dock glyphs, laid out as a
+ * legend: sprinkles → `sparkles`, browser → `globe` (or `layout`), files →
+ * `folder`, terminal → `square-terminal`, memory → `brain` (or `database`),
+ * new → `plus`.
+ */
+export const IconMapping: Story = {
+  render: () => {
+    const row = document.createElement('div');
+    Object.assign(row.style, {
+      display: 'flex',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      gap: '14px',
+      padding: '12px',
+      fontFamily: 'var(--ui)',
+      color: 'var(--ink)',
+    } as Partial<CSSStyleDeclaration>);
+
+    const items: Array<{ icon: string; tip: string; kind?: 'sprinkle' }> = [
+      { icon: 'sparkles', tip: 'sprinkles → sparkles', kind: 'sprinkle' },
+      { icon: 'globe', tip: 'browser → globe' },
+      { icon: 'layout', tip: 'browser → layout' },
+      { icon: 'folder', tip: 'files → folder' },
+      { icon: 'square-terminal', tip: 'terminal → square-terminal' },
+      { icon: 'brain', tip: 'memory → brain' },
+      { icon: 'database', tip: 'memory → database' },
+      { icon: 'plus', tip: 'new → plus' },
+    ];
+
+    for (const { icon, tip, kind } of items) {
+      const cell = document.createElement('div');
+      Object.assign(cell.style, {
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: '4px',
+        fontSize: '10px',
+        color: 'var(--txt-2)',
+      } as Partial<CSSStyleDeclaration>);
+      const el = document.createElement('slicc-dock-item');
+      el.setAttribute('icon', icon);
+      el.setAttribute('tip', tip);
+      if (kind) el.setAttribute('kind', kind);
+      const label = document.createElement('span');
+      label.textContent = icon;
+      cell.append(el, label);
+      row.appendChild(cell);
+    }
+    return row;
   },
 };
 
@@ -132,13 +199,19 @@ export const DockRail: Story = {
       make({
         'item-id': 'hero',
         kind: 'sprinkle',
-        glyph: '✦',
+        icon: 'sparkles',
         tip: 'Hero studio',
         hue: '#8b5cf6',
         active: true,
       }),
-      make({ 'item-id': 'palette', kind: 'sprinkle', glyph: '✦', tip: 'palette', hue: '#f59e0b' }),
-      make({ glyph: '＋', tip: 'New sprinkle' })
+      make({
+        'item-id': 'palette',
+        kind: 'sprinkle',
+        icon: 'sparkles',
+        tip: 'palette',
+        hue: '#f59e0b',
+      }),
+      make({ icon: 'plus', tip: 'New sprinkle' })
     );
 
     const grow = document.createElement('div');
@@ -156,10 +229,10 @@ export const DockRail: Story = {
     dock.appendChild(divider);
 
     dock.append(
-      make({ 'item-id': 'browser', glyph: '◳', tip: 'Browser · CDP' }),
-      make({ 'item-id': 'files', glyph: '⌗', tip: 'Files · VFS' }),
-      make({ 'item-id': 'term', glyph: '>_', tip: 'Terminal' }),
-      make({ 'item-id': 'memory', glyph: '◉', tip: 'Memory' })
+      make({ 'item-id': 'browser', icon: 'globe', tip: 'Browser · CDP' }),
+      make({ 'item-id': 'files', icon: 'folder', tip: 'Files · VFS' }),
+      make({ 'item-id': 'term', icon: 'square-terminal', tip: 'Terminal' }),
+      make({ 'item-id': 'memory', icon: 'brain', tip: 'Memory' })
     );
 
     return dock;

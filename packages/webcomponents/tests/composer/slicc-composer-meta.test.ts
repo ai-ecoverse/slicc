@@ -45,12 +45,32 @@ describe('slicc-composer-meta', () => {
       expect(el.shadowRoot?.querySelector('.mspacer')).toBeTruthy();
     });
 
-    it('renders the sparkle rainbow icon in the model pill', () => {
+    it('renders a lucide sparkles <svg> (not the ✦ emoji) in the model pill', () => {
       const el = mount();
-      const ic = modelPill(el).querySelector('.ic') as HTMLElement;
-      expect(ic.textContent).toBe('✦');
-      // Real-browser fidelity: the rainbow gradient resolves as a background image.
-      expect(getComputedStyle(ic).backgroundImage).toContain('gradient');
+      const ic = modelPill(el).querySelector('.ic') as SVGSVGElement;
+      // The model glyph is a real lucide <svg>, rendered via iconSvg('sparkles').
+      expect(ic).toBeTruthy();
+      expect(ic.tagName.toLowerCase()).toBe('svg');
+      expect(ic.querySelector('path')).toBeTruthy();
+      // No bespoke unicode-symbol glyph remains anywhere on the pill.
+      expect(modelPill(el).textContent ?? '').not.toContain('✦');
+    });
+
+    it('strokes the sparkles glyph with the rainbow gradient', () => {
+      const el = mount();
+      const ic = modelPill(el).querySelector('.ic') as SVGSVGElement;
+      // The .ctl .ic rule paints the lucide stroke from the shadow-root gradient.
+      expect(getComputedStyle(ic).stroke).toContain('meta-rainbow');
+      // The gradient <defs> the stroke references is present in the shadow root.
+      expect(el.shadowRoot?.querySelector('#meta-rainbow')).toBeTruthy();
+    });
+
+    it('renders a lucide chevron-down <svg> caret (not the ▾ glyph) in each pill', () => {
+      const el = mount();
+      const carets = el.shadowRoot?.querySelectorAll('.cx svg') as NodeListOf<SVGSVGElement>;
+      expect(carets).toHaveLength(2);
+      for (const c of carets) expect(c.tagName.toLowerCase()).toBe('svg');
+      expect(el.shadowRoot?.querySelector('.meta')?.textContent ?? '').not.toContain('▾');
     });
 
     it('renders the default keyboard hint (two kbd chips + dot separators)', () => {
@@ -148,11 +168,25 @@ describe('slicc-composer-meta', () => {
       expect(accentedBorder).not.toBe(plainBorder);
     });
 
-    it('renders the brain glyph tinted violet', () => {
+    it('renders a lucide brain <svg> tinted violet (not a hand-rolled glyph)', () => {
       const el = mount();
-      const brain = el.shadowRoot?.querySelector('.brain') as HTMLElement;
+      const brain = el.shadowRoot?.querySelector('.brain') as unknown as SVGSVGElement;
+      // The thinking glyph is a real lucide <svg>, rendered via iconSvg('brain').
+      expect(brain).toBeTruthy();
+      expect(brain.tagName.toLowerCase()).toBe('svg');
+      expect(brain.querySelector('path')).toBeTruthy();
       // --violet: #8b5cf6 → rgb(139, 92, 246).
-      expect(getComputedStyle(brain).color).toBe('rgb(139, 92, 246)');
+      expect(getComputedStyle(brain as unknown as Element).color).toBe('rgb(139, 92, 246)');
+    });
+
+    it('exposes the model-icon, brain, and caret ::part hooks on lucide <svg>s', () => {
+      const el = mount();
+      const root = el.shadowRoot;
+      const modelIcon = root?.querySelector('[part="model-icon"]') as SVGSVGElement;
+      const brain = root?.querySelector('[part="brain"]') as unknown as SVGSVGElement;
+      expect(modelIcon?.tagName.toLowerCase()).toBe('svg');
+      expect(brain?.tagName.toLowerCase()).toBe('svg');
+      expect(root?.querySelectorAll('[part="caret"]')).toHaveLength(2);
     });
   });
 

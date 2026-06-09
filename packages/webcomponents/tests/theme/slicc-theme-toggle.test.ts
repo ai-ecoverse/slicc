@@ -13,11 +13,28 @@ function button(el: SliccThemeToggle): HTMLButtonElement {
   return el.shadowRoot?.querySelector('button.themetgl') as HTMLButtonElement;
 }
 
-function visibleGlyph(el: SliccThemeToggle): string {
-  // The slot whose `hidden` attribute is absent is the active glyph.
+/** The named slot (`glyph-light` / `glyph-dark`) currently visible (no `hidden`). */
+function activeSlot(el: SliccThemeToggle): HTMLSlotElement {
   const slots = Array.from(el.shadowRoot?.querySelectorAll('slot') ?? []);
-  const active = slots.find((s) => !s.hasAttribute('hidden'));
-  return (active?.textContent ?? '').trim();
+  return slots.find((s) => !s.hasAttribute('hidden')) as HTMLSlotElement;
+}
+
+/** Name of the visible glyph slot — `glyph-light` (moon) or `glyph-dark` (sun). */
+function visibleGlyphSlot(el: SliccThemeToggle): string | null {
+  return activeSlot(el)?.getAttribute('name') ?? null;
+}
+
+/** The `<svg>` rendered as the default content of the visible glyph slot. */
+function visibleSvg(el: SliccThemeToggle): SVGSVGElement | null {
+  return activeSlot(el)?.querySelector('svg') ?? null;
+}
+
+/** All emoji / unicode-symbol glyphs that must never appear in the shadow text. */
+const FORBIDDEN_GLYPHS = ['🌙', '☀', '☀️', '🌞', '🌜'];
+
+/** Concatenated text of the whole shadow root — used to assert no emoji leaked in. */
+function shadowText(el: SliccThemeToggle): string {
+  return el.shadowRoot?.textContent ?? '';
 }
 
 describe('slicc-theme-toggle', () => {
@@ -51,7 +68,9 @@ describe('slicc-theme-toggle', () => {
     expect(el.theme).toBe('light');
     expect(el.pressed).toBe(false);
     expect(button(el).getAttribute('aria-pressed')).toBe('false');
-    expect(visibleGlyph(el)).toBe('🌙');
+    // Light mode shows the `moon` (the icon names where the click takes you: dark).
+    expect(visibleGlyphSlot(el)).toBe('glyph-light');
+    expect(visibleSvg(el)).toBeInstanceOf(SVGSVGElement);
     expect(document.body.classList.contains('dark')).toBe(false);
   });
 
@@ -60,7 +79,9 @@ describe('slicc-theme-toggle', () => {
     expect(el.theme).toBe('dark');
     expect(el.pressed).toBe(true);
     expect(button(el).getAttribute('aria-pressed')).toBe('true');
-    expect(visibleGlyph(el)).toBe('☀');
+    // Dark mode shows the `sun` (clicking takes you to light).
+    expect(visibleGlyphSlot(el)).toBe('glyph-dark');
+    expect(visibleSvg(el)).toBeInstanceOf(SVGSVGElement);
     expect(document.body.classList.contains('dark')).toBe(true);
   });
 
@@ -86,14 +107,18 @@ describe('slicc-theme-toggle', () => {
     expect(el.theme).toBe('dark');
     expect(btn.getAttribute('aria-pressed')).toBe('true');
     expect(btn.title).toBe('Switch to light mode');
-    expect(visibleGlyph(el)).toBe('☀');
+    // Now the `sun` (glyph-dark) is the visible glyph.
+    expect(visibleGlyphSlot(el)).toBe('glyph-dark');
+    expect(visibleSvg(el)).toBeInstanceOf(SVGSVGElement);
     expect(document.body.classList.contains('dark')).toBe(true);
 
     btn.click();
     expect(el.theme).toBe('light');
     expect(btn.getAttribute('aria-pressed')).toBe('false');
     expect(btn.title).toBe('Switch to dark mode');
-    expect(visibleGlyph(el)).toBe('🌙');
+    // Back to the `moon` (glyph-light).
+    expect(visibleGlyphSlot(el)).toBe('glyph-light');
+    expect(visibleSvg(el)).toBeInstanceOf(SVGSVGElement);
     expect(document.body.classList.contains('dark')).toBe(false);
   });
 
@@ -144,6 +169,46 @@ describe('slicc-theme-toggle', () => {
   it('tolerates peers that do not exist yet (no throw)', () => {
     const el = mount();
     expect(() => button(el).click()).not.toThrow();
+  });
+
+  it('renders lucide <svg> glyphs (not emoji) in both slots', () => {
+    const el = mount();
+    const slots = Array.from(el.shadowRoot?.querySelectorAll('slot') ?? []);
+    const light = slots.find((s) => s.getAttribute('name') === 'glyph-light');
+    const dark = slots.find((s) => s.getAttribute('name') === 'glyph-dark');
+    // Each glyph slot's default content is an inline lucide <svg>.
+    expect(light?.querySelector('svg')).toBeInstanceOf(SVGSVGElement);
+    expect(dark?.querySelector('svg')).toBeInstanceOf(SVGSVGElement);
+    // Light = moon (a single <path>, no <circle>); dark = sun (has a <circle>).
+    expect(light?.querySelector('svg circle')).toBeNull();
+    expect(light?.querySelector('svg path')).toBeTruthy();
+    expect(dark?.querySelector('svg circle')).toBeTruthy();
+  });
+
+  it('renders the lucide glyph at the requested 16px size', () => {
+    const el = mount();
+    const svg = visibleSvg(el);
+    expect(svg?.getAttribute('width')).toBe('16');
+    expect(svg?.getAttribute('height')).toBe('16');
+  });
+
+  it('contains no emoji / unicode-symbol glyph in the shadow text (light or dark)', () => {
+    const el = mount();
+    for (const g of FORBIDDEN_GLYPHS) expect(shadowText(el)).not.toContain(g);
+
+    el.theme = 'dark';
+    for (const g of FORBIDDEN_GLYPHS) expect(shadowText(el)).not.toContain(g);
+
+    // The visible glyph is purely SVG — its slot carries no textual glyph.
+    expect(activeSlot(el)?.textContent?.trim()).toBe('');
+  });
+
+  it('tints the glyph via currentColor / inherited --ink (real Chromium)', () => {
+    const el = mount();
+    const svg = visibleSvg(el) as SVGSVGElement;
+    // Lucide strokes with currentColor, so the rendered stroke follows --ink.
+    expect(svg.getAttribute('stroke')).toBe('currentColor');
+    expect(getComputedStyle(svg).color).not.toBe('');
   });
 
   it('renders a circular var(--ctl-h) square with token surface (real Chromium)', () => {

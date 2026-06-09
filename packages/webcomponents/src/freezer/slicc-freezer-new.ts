@@ -1,12 +1,16 @@
 import { define } from '../internal/define.js';
 import { escapeHtml } from '../internal/html.js';
+import { iconSvg } from '../internal/icons.js';
 
 /**
- * Pencil / new-chat glyph, lifted verbatim from the prototype `.fznew` button
- * markup (a 14×14 stroke icon on the 0 0 16 16 viewBox). Stroke inherits
- * `currentColor`, so the `.nico` badge's `--ctx` color drives the glyph.
+ * New-chat glyph — a **lucide** `square-pen` icon rendered via the shared
+ * `iconSvg` helper (never emoji or bespoke unicode). Sized ~16px to sit inside
+ * the 28px circular `.nico` badge; the stroke inherits `currentColor`, so the
+ * badge's `--ctx` context accent drives the glyph color.
  */
-const PENCIL_SVG = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11.5 2.5l2 2L6 12l-3 1 1-3z"/><line x1="9.5" y1="4.5" x2="11.5" y2="6.5"/></svg>`;
+const NEW_CHAT_ICON = 'square-pen';
+/** Rendered lucide glyph size (px) inside the 28×28 `.nico` badge. */
+const ICON_SIZE = 16;
 
 const DEFAULT_LABEL = 'New chat';
 
@@ -91,20 +95,31 @@ const STYLE = `
   opacity: 1;
   transition: opacity .25s .15s;
 }
+
+/* Respect prefers-reduced-motion: no fade, just hold the static end state. */
+@media (prefers-reduced-motion: reduce) {
+  .fznew, .nlbl { transition: none; }
+}
 `;
 
 /**
  * `<slicc-freezer-new>` — the **New Chat Affordance** at the top of the
  * prototype's freezer rail (`.fznew`): a full-width ghost-hover button wrapping
  * a 28px circular `.nico` badge (tinted with `--ctx`, the active context accent)
- * around a pencil/new-chat glyph, plus a `.nlbl` "New chat" label that fades in
- * when the rail is expanded.
+ * around a **lucide** `square-pen` new-chat glyph, plus a `.nlbl` "New chat"
+ * label that fades in when the rail is expanded.
+ *
+ * The glyph is rendered via the shared `iconSvg` helper (never emoji or a
+ * bespoke unicode symbol) and inherits the badge's `--ctx` color through
+ * `currentColor`. Slotting a custom glyph into the named `icon` slot overrides
+ * the lucide default.
  *
  * The prototype gates the expanded label on the parent `.freezer.open` class;
  * this self-contained element exposes that as the `expanded` boolean attribute.
  * Collapsed it is icon-only (label width 0, centered); expanded the label fades
  * in. The badge tint, hover ghost, and dark mode all derive from inherited
- * tokens, so theme/context changes flip it automatically.
+ * tokens, so theme/context changes flip it automatically. The label fade is
+ * suppressed (held at its end state) under `prefers-reduced-motion: reduce`.
  *
  * Emits a composed, bubbling `new-session` `CustomEvent` on click.
  *
@@ -112,8 +127,9 @@ const STYLE = `
  * @attr label - the label text / accessible name (default "New chat")
  * @csspart button - the inner `<button>` element (the `.fznew` node)
  * @csspart badge - the circular `.nico` icon badge
+ * @csspart icon - the lucide `<svg>` glyph inside the badge
  * @csspart label - the `.nlbl` text span
- * @slot icon - overrides the default pencil glyph inside the badge
+ * @slot icon - overrides the default lucide glyph inside the badge
  * @slot - default slot overrides the label text
  * @fires new-session - when the affordance is activated
  */
@@ -162,7 +178,10 @@ export class SliccFreezerNew extends HTMLElement {
       `<button class="fznew" part="button" type="button" aria-label="${escapeHtml(
         label
       )}" title="${escapeHtml(label)}">` +
-      `<span class="nico" part="badge"><slot name="icon">${PENCIL_SVG}</slot></span>` +
+      `<span class="nico" part="badge"><slot name="icon">${iconSvg(NEW_CHAT_ICON, {
+        size: ICON_SIZE,
+        part: 'icon',
+      })}</slot></span>` +
       `<span class="nlbl" part="label"><slot>${escapeHtml(label)}</slot></span>` +
       `</button>`;
     this.#button = this.#root.querySelector('button');

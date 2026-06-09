@@ -11,8 +11,8 @@ import {
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
 
 const SPRINKLES: DockItemDescriptor[] = [
-  { id: 'hero', glyph: '✦', label: 'Hero studio', kind: 'sprinkle', hue: 'var(--violet)' },
-  { id: 'palette', glyph: '✦', label: 'palette', kind: 'sprinkle', hue: 'var(--amber)' },
+  { id: 'hero', icon: 'sparkles', label: 'Hero studio', kind: 'sprinkle', hue: 'var(--violet)' },
+  { id: 'palette', icon: 'palette', label: 'palette', kind: 'sprinkle', hue: 'var(--amber)' },
 ];
 
 /** Mount a dock with the given sprinkles, optionally with the system tools + active. */
@@ -82,13 +82,13 @@ describe('slicc-dock', () => {
       const newItem = itemById(el, 'new');
       // The dock forwards the descriptor label as the dock-item's `tip`.
       expect(newItem?.getAttribute('tip')).toBe('New sprinkle');
-      expect(newItem?.getAttribute('glyph')).toBe('＋');
+      expect(newItem?.getAttribute('icon')).toBe('plus');
     });
 
-    it('forwards glyph, label (→tip), kind and hue to each item', () => {
+    it('forwards icon, label (→tip), kind and hue to each item', () => {
       const el = mount();
       const hero = itemById(el, 'hero');
-      expect(hero?.getAttribute('glyph')).toBe('✦');
+      expect(hero?.getAttribute('icon')).toBe('sparkles');
       expect(hero?.getAttribute('tip')).toBe('Hero studio');
       expect(hero?.getAttribute('kind')).toBe('sprinkle');
       // The hue is forwarded as the dock-item's `hue` attribute (it sets --h itself).
@@ -119,8 +119,8 @@ describe('slicc-dock', () => {
       expect(el.querySelector('.div')).not.toBeNull();
       expect(itemById(el, 'browser')?.getAttribute('tip')).toBe('Browser · CDP');
       expect(itemById(el, 'files')?.getAttribute('tip')).toBe('Files · VFS');
-      expect(itemById(el, 'term')?.getAttribute('glyph')).toBe('>_');
-      expect(itemById(el, 'memory')?.getAttribute('glyph')).toBe('◉');
+      expect(itemById(el, 'term')?.getAttribute('icon')).toBe('square-terminal');
+      expect(itemById(el, 'memory')?.getAttribute('icon')).toBe('brain');
       // The pinned tools are marked as tools, not sprinkles.
       expect(itemById(el, 'files')?.getAttribute('kind')).toBe('tool');
     });
@@ -147,7 +147,7 @@ describe('slicc-dock', () => {
 
     it('re-renders when the items list is replaced', () => {
       const el = mount();
-      el.items = [{ id: 'solo', glyph: '✦', label: 'Solo', kind: 'sprinkle' }];
+      el.items = [{ id: 'solo', icon: 'sparkles', label: 'Solo', kind: 'sprinkle' }];
       // solo + the New launcher.
       expect(dockItems(el).map((i) => i.dataset.t)).toEqual(['solo', 'new']);
     });

@@ -105,22 +105,25 @@ describe('slicc-delegation-line', () => {
   });
 
   describe('kind glyph', () => {
-    it('feed renders the → arrow and the feed_scoop verb', () => {
+    it('feed renders an arrow icon and the feed_scoop verb', () => {
       const el = mount((e) => {
         e.kind = 'feed';
         e.scoop = 'researcher';
       });
-      expect(arrow(el).textContent).toBe('→');
+      // The leading darrow is now a lucide <svg> (arrow-right), never a glyph char.
+      expect(arrow(el).querySelector('svg')).not.toBeNull();
+      expect(arrow(el).textContent?.trim()).toBe('');
       expect(el.shadowRoot?.querySelector('.verb')?.textContent).toBe('feed_scoop');
     });
 
-    it('sprinkle renders the ✦ glyph and no default verb', () => {
+    it('sprinkle renders a sparkles icon and no default verb', () => {
       const el = mount((e) => {
         e.kind = 'sprinkle';
         e.scoop = 'designer';
         e.label = 'opened Hero studio';
       });
-      expect(arrow(el).textContent).toBe('✦');
+      expect(arrow(el).querySelector('svg')).not.toBeNull();
+      expect(arrow(el).textContent?.trim()).toBe('');
       expect(el.shadowRoot?.querySelector('.verb')).toBeNull();
     });
 

@@ -1,5 +1,6 @@
 import { define } from '../internal/define.js';
 import { escapeHtml } from '../internal/html.js';
+import { iconSvg } from '../internal/icons.js';
 
 const STYLE = `
 :host { display: inline-flex; flex: 0 0 auto; }
@@ -20,28 +21,41 @@ const STYLE = `
   line-height: 1;
 }
 .col:hover { background: var(--ghost); color: var(--ink); }
+.icon { display: inline-flex; place-items: center; pointer-events: none; }
+.icon svg { display: block; }
 `;
 
-const DEFAULT_GLYPH = '⤡'; // ⤡ north-west / south-east arrow (collapse)
+/**
+ * Default lucide icon — `panel-right-close` reads as "collapse the workbench"
+ * (the workbench is the right-hand shell panel; this glyph depicts that side
+ * panel folding shut). The icon inherits the button's `currentColor`, so it
+ * tracks the idle (`--txt-2`) / hover (`--ink`) palette automatically.
+ */
+const DEFAULT_ICON = 'panel-right-close';
 const DEFAULT_LABEL = 'Collapse';
+/** Rendered lucide glyph size (px) inside the 28px-tall button. */
+const ICON_SIZE = 16;
 
 /**
  * `<slicc-collapse-btn>` — the icon button at the right of the workbench header
- * (`.wbhead .col`) in the prototype. A 28px-tall canvas-backed button with a
- * `⤡` collapse glyph that hovers to `--ghost` / `--ink`. Self-contained shadow
- * DOM; themes via inherited tokens (--canvas, --line, --txt-2, --ghost, --ink,
- * --ui) so it flips with light/dark automatically.
+ * (`.wbhead .col`) in the prototype. A 28px-tall canvas-backed button whose
+ * glyph is a **lucide** `panel-right-close` icon (rendered via the shared
+ * `iconSvg` helper — never emoji or bespoke unicode symbols) that hovers to
+ * `--ghost` / `--ink`. Self-contained shadow DOM; themes via inherited tokens
+ * (--canvas, --line, --txt-2, --ghost, --ink, --ui) so it flips with
+ * light/dark automatically.
  *
  * Emits a composed, bubbling `collapse` `CustomEvent` on click.
  *
  * @attr label - accessible label / title for the button (default "Collapse")
- * @attr glyph - override the button glyph (default ⤡)
- * @slot - default slot overrides the glyph entirely with custom content
+ * @attr icon - lucide icon name, kebab-case (default `panel-right-close`)
+ * @slot - default slot overrides the icon entirely with custom content
  * @csspart button - the inner `<button>` element
+ * @csspart icon - the lucide `<svg>` glyph
  * @fires collapse - when the button is activated
  */
 export class SliccCollapseBtn extends HTMLElement {
-  static readonly observedAttributes = ['label', 'glyph'];
+  static readonly observedAttributes = ['label', 'icon'];
 
   readonly #root: ShadowRoot;
   #button: HTMLButtonElement | null = null;
@@ -69,21 +83,22 @@ export class SliccCollapseBtn extends HTMLElement {
     else this.setAttribute('label', value);
   }
 
-  /** The button glyph (reflected to the `glyph` attribute). */
-  get glyph(): string {
-    return this.getAttribute('glyph') ?? DEFAULT_GLYPH;
+  /** The lucide icon name (kebab-case); falls back to `panel-right-close`. */
+  get icon(): string {
+    return this.getAttribute('icon') ?? DEFAULT_ICON;
   }
 
-  set glyph(value: string | null) {
-    if (value == null) this.removeAttribute('glyph');
-    else this.setAttribute('glyph', value);
+  set icon(value: string | null) {
+    if (value == null) this.removeAttribute('icon');
+    else this.setAttribute('icon', value);
   }
 
   #render(): void {
     const label = this.label;
+    const glyph = iconSvg(this.icon, { size: ICON_SIZE, part: 'icon' });
     this.#root.innerHTML = `<style>${STYLE}</style><button class="col" part="button" type="button" aria-label="${escapeHtml(
       label
-    )}" title="${escapeHtml(label)}"><slot>${escapeHtml(this.glyph)}</slot></button>`;
+    )}" title="${escapeHtml(label)}"><slot><span class="icon">${glyph}</span></slot></button>`;
     this.#button = this.#root.querySelector('button');
     this.#button?.addEventListener('click', this.#onClick);
   }

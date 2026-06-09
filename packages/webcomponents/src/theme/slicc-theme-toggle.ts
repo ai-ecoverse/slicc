@@ -1,4 +1,5 @@
 import { define } from '../internal/define.js';
+import { iconSvg } from '../internal/icons.js';
 import { type SliccTheme, setTheme } from './tokens.js';
 
 // Lifted verbatim from the prototype `.themetgl` rule (proto/StellarRubySwift.html):
@@ -20,10 +21,22 @@ const STYLE = `
   padding: 0;
 }
 .themetgl:hover { background: color-mix(in srgb, var(--ink) 8%, var(--ghost)); }
+.themetgl svg { display: block; }
 `;
 
-/** Emoji glyph shown for each resolved theme (light shows the moon, dark the sun). */
-const GLYPH: Record<SliccTheme, string> = { light: '🌙', dark: '☀' };
+/** Square pixel size of the lucide glyph, matching the prototype's 14px control band. */
+const ICON_SIZE = 16;
+
+/**
+ * Lucide glyph shown for each resolved theme — the icon names the action's
+ * destination (light shows a `moon` because clicking switches *to* dark; dark
+ * shows a `sun` because clicking switches *to* light), matching the prototype.
+ * Rendered via the shared `iconSvg` helper — never emoji.
+ */
+const GLYPH: Record<SliccTheme, string> = {
+  light: iconSvg('moon', { size: ICON_SIZE }),
+  dark: iconSvg('sun', { size: ICON_SIZE }),
+};
 
 /** Button `title` (tooltip) for each resolved theme — describes the action the click performs. */
 const TITLE: Record<SliccTheme, string> = {
@@ -36,8 +49,9 @@ const TITLE: Record<SliccTheme, string> = {
  * between light and dark (the prototype's `.themetgl` button, `#themeToggle`).
  *
  * It is the control that *owns* the theme: a click toggles `body.dark` via
- * `setTheme`, swaps its glyph (🌙 in light, ☀ in dark), updates `aria-pressed`
- * + `title`, and forwards the resolved theme as a `theme` attribute onto every
+ * `setTheme`, swaps its lucide glyph (a `moon` in light, a `sun` in dark — the
+ * icon names where the click will take you), updates `aria-pressed` + `title`,
+ * and forwards the resolved theme as a `theme` attribute onto every
  * `<slicc-pill>` and `<slicc-add-menu>` in the document so those components do
  * not fall back to `prefers-color-scheme`. Defaults to light on connect and
  * emits a composed, bubbling `slicc-theme-change` event carrying the new theme.
@@ -47,8 +61,8 @@ const TITLE: Record<SliccTheme, string> = {
  * @fires slicc-theme-change - `CustomEvent<{ theme: 'light' | 'dark' }>`,
  *   composed + bubbling, dispatched whenever the resolved theme changes.
  * @csspart button - the circular toggle button (`.themetgl`).
- * @slot glyph-light - overrides the light-mode glyph (default 🌙).
- * @slot glyph-dark - overrides the dark-mode glyph (default ☀).
+ * @slot glyph-light - overrides the light-mode glyph (default: lucide `moon`).
+ * @slot glyph-dark - overrides the dark-mode glyph (default: lucide `sun`).
  */
 export class SliccThemeToggle extends HTMLElement {
   static readonly observedAttributes = ['theme'];

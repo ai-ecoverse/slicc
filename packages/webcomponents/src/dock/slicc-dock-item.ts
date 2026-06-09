@@ -1,5 +1,6 @@
 import { define } from '../internal/define.js';
 import { escapeHtml } from '../internal/html.js';
+import { iconSvg } from '../internal/icons.js';
 
 /**
  * Per-instance stylesheet for the dock launcher button, lifted verbatim from the
@@ -96,16 +97,31 @@ const STYLE = `
 .di:hover .tip { opacity: 1; }
 
 .glyph { display: grid; place-items: center; line-height: 1; }
+.glyph svg { display: block; }
 `;
 
 /** Item kind: `tool` (no status dot) vs `sprinkle` (`.sp`, colored status dot). */
 export type DockItemKind = 'tool' | 'sprinkle';
 
+/** Default lucide icon when no `icon` attribute (and no slotted glyph) is set. */
+const DEFAULT_ICON = 'square';
+/** Rendered lucide glyph size (px) inside the 34×34 dock button. */
+const ICON_SIZE = 18;
+
 /**
  * `<slicc-dock-item>` — the prototype dock launcher button (`.dock .di`): a
- * 34×34 rounded-square icon button with a glyph (e.g. `✦` for sprinkles, or
- * `◳ ⌗ >_ ◉ ＋` for tools) and a `.tip` tooltip that fades in on hover, pinned
- * to the button's left so it never reflows the rail.
+ * 34×34 rounded-square icon button with a **lucide** glyph and a `.tip` tooltip
+ * that fades in on hover, pinned to the button's left so it never reflows the
+ * rail.
+ *
+ * The glyph is a lucide icon named by the kebab-case `icon` attribute (default
+ * `square`), rendered via the shared `iconSvg` helper at 18px — never emoji or
+ * bespoke unicode symbols. The prototype's hand-drawn dock glyphs map to lucide:
+ * sprinkles → `sparkles`, browser → `globe` (or `layout`), files → `folder`,
+ * terminal → `square-terminal`, memory → `brain` (or `database`), new → `plus`.
+ * The icon inherits the button's `currentColor`, so it tracks the idle / hover /
+ * active palette automatically. Slotting a custom `<svg>` into the default slot
+ * overrides the lucide `icon` entirely.
  *
  * States mirror the prototype dock:
  *   - idle: transparent surface, `--txt-2` glyph
@@ -119,13 +135,12 @@ export type DockItemKind = 'tool' | 'sprinkle';
  *   - `collapse` when the item is already `active` (i.e. its surface is open),
  *     matching the prototype's "click the open dock item to collapse the shell".
  *
- * Self-contained shadow DOM; themes via inherited tokens. Place the glyph in the
- * default slot, or omit it and set the `glyph` attribute.
+ * Self-contained shadow DOM; themes via inherited tokens.
  *
  * @attr item-id - logical id for this launcher (the prototype `data-t`); echoed in events
  * @attr kind - `tool` (default) | `sprinkle`; sprinkle adds the colored status dot
  * @attr hue - CSS color for the per-kind accent (`--h`); defaults to `var(--violet)`
- * @attr glyph - glyph text rendered inside the button when the default slot is empty
+ * @attr icon - lucide icon name, kebab-case (default `square`)
  * @attr tip - tooltip label shown on hover (also used as the accessible name)
  * @attr active - boolean; the open/active state (`.di.on`) — ctx glow
  * @attr lit - boolean; the transient lit state (`.di.lit`) — kind-hue ring + tint
@@ -133,11 +148,12 @@ export type DockItemKind = 'tool' | 'sprinkle';
  * @fires collapse - `CustomEvent<{ id: string | null }>` when an already-active item is clicked
  * @csspart button - the inner `.di` button
  * @csspart glyph - the glyph wrapper
+ * @csspart icon - the lucide `<svg>` glyph
  * @csspart tip - the tooltip
- * @slot - the glyph rendered inside the button (falls back to the `glyph` attribute)
+ * @slot - a custom glyph that overrides the lucide `icon` (e.g. a bespoke `<svg>`)
  */
 export class SliccDockItem extends HTMLElement {
-  static readonly observedAttributes = ['item-id', 'kind', 'hue', 'glyph', 'tip', 'active', 'lit'];
+  static readonly observedAttributes = ['item-id', 'kind', 'hue', 'icon', 'tip', 'active', 'lit'];
 
   readonly #root: ShadowRoot;
 
@@ -183,14 +199,14 @@ export class SliccDockItem extends HTMLElement {
     else this.setAttribute('hue', value);
   }
 
-  /** Glyph text rendered when the default slot is empty. */
-  get glyph(): string | null {
-    return this.getAttribute('glyph');
+  /** The lucide icon name (kebab-case); falls back to `square`. */
+  get icon(): string {
+    return this.getAttribute('icon') ?? DEFAULT_ICON;
   }
 
-  set glyph(value: string | null) {
-    if (value == null) this.removeAttribute('glyph');
-    else this.setAttribute('glyph', value);
+  set icon(value: string | null) {
+    if (value == null) this.removeAttribute('icon');
+    else this.setAttribute('icon', value);
   }
 
   /** Tooltip label (also the accessible name). */
@@ -233,8 +249,9 @@ export class SliccDockItem extends HTMLElement {
     const tip = this.tip;
     const tipHtml = tip ? `<span class="tip" part="tip">${escapeHtml(tip)}</span>` : '';
 
-    const glyph = this.glyph;
-    const glyphInner = glyph != null ? escapeHtml(glyph) : '<slot></slot>';
+    // A slotted custom glyph wins; otherwise render the lucide icon. The slot's
+    // fallback content is the lucide `<svg>`, so consumers can override it.
+    const glyph = iconSvg(this.icon, { size: ICON_SIZE, part: 'icon' });
 
     // The tooltip doubles as the accessible name; fall back to the item id.
     const aria = escapeHtml(tip ?? this.itemId ?? 'dock item');
@@ -244,7 +261,7 @@ export class SliccDockItem extends HTMLElement {
       `<style>${STYLE}</style>` +
       `<button type="button" part="button" class="${classes.join(' ')}"${styleAttr} ` +
       `aria-label="${aria}" aria-pressed="${pressed}">` +
-      `<span class="glyph" part="glyph">${glyphInner}</span>` +
+      `<span class="glyph" part="glyph"><slot>${glyph}</slot></span>` +
       tipHtml +
       '</button>';
 

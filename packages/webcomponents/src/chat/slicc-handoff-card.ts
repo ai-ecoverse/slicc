@@ -1,5 +1,6 @@
 import { define } from '../internal/define.js';
 import { escapeHtml } from '../internal/html.js';
+import { iconSvg } from '../internal/icons.js';
 
 /**
  * Per-instance stylesheet, lifted verbatim from the prototype's handoff rules
@@ -13,7 +14,8 @@ import { escapeHtml } from '../internal/html.js';
  *   `b` the violet bold name.
  * - `.handoff p` — the body paragraph.
  * - `.opened` — the compact ghost-bg pill-card (`--ghost` ground, `11px` radius)
- *   with a rainbow `.sg` glyph chip and `--ink` bold target text.
+ *   with a rainbow `.sg` glyph chip (a lucide `sparkles` `<svg>`, never an emoji
+ *   or unicode symbol) and `--ink` bold target text.
  *
  * Dark mode: the prototype routes the avatar's violet-over-`#fff` tint to
  * violet-over-`var(--canvas)` (`body.dark .handoff .av`). Shadow DOM does not
@@ -37,12 +39,18 @@ const STYLE = `
 :host-context(.dark) .handoff .av,
 :host-context([data-theme="dark"]) .handoff .av{background:color-mix(in srgb,var(--violet) 24%,var(--canvas));}
 .opened{display:flex;align-items:center;gap:9px;border:1px solid var(--line);background:var(--ghost);border-radius:11px;padding:9px 11px;margin:2px 0 18px;font-size:13px;color:var(--txt-2);}
-.opened .sg{width:20px;height:20px;border-radius:6px;display:grid;place-items:center;font-size:10px;color:#fff;background:var(--rainbow);flex:0 0 auto;}
+.opened .sg{width:20px;height:20px;border-radius:6px;display:grid;place-items:center;color:#fff;background:var(--rainbow);flex:0 0 auto;}
+.opened .sg svg{display:block;}
 .opened b{color:var(--ink);font-weight:600;}
 `;
 
-/** The glyph rendered in the rainbow `.sg` chip of the `opened` variant. */
-const SG_GLYPH = '✦';
+/**
+ * The lucide `sparkles` glyph rendered in the rainbow `.sg` chip of the
+ * `opened` variant (replacing the prototype's bespoke `✦` symbol). The chip is
+ * 20×20; a 12px icon centers cleanly with room to breathe. It inherits the
+ * chip's white `color` via `stroke: currentColor`.
+ */
+const SG_GLYPH = iconSvg('sparkles', { size: 12 });
 
 /** Default micro-label prefix for the handoff approval card. */
 const DEFAULT_PRE = 'Handoff request from';

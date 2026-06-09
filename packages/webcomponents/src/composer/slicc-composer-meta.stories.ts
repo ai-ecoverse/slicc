@@ -33,9 +33,11 @@ export default meta;
 type Story = StoryObj<MetaArgs>;
 
 /**
- * Default meta row — Opus 4.8 model pill, `bombastica` thinking (violet border),
- * and the full keyboard hint. Click the model pill to fire `model-change`;
- * click the thinking pill to cycle the effort level.
+ * Default meta row — Opus 4.8 model pill (lucide `sparkles` glyph with a rainbow
+ * stroke), `bombastica` thinking (lucide `brain`, violet border), each pill
+ * capped by a lucide `chevron-down` caret, and the full keyboard hint. Click the
+ * model pill to fire `model-change`; click the thinking pill to cycle the effort
+ * level. No glyph is an emoji or bespoke unicode symbol.
  */
 export const Default: Story = { args: { model: 'Opus 4.8', thinking: 'bombastica' } };
 
@@ -53,6 +55,16 @@ export const AltModel: Story = { args: { model: 'Sonnet 4.8', thinking: 'piccolo
 
 /** Narrow chat column — the keyboard hint is hidden, leaving only the two pills. */
 export const Narrow: Story = { args: { model: 'Opus 4.8', thinking: 'bombastica', narrow: true } };
+
+/**
+ * Glyph showcase — the row stripped to its two pills so the lucide `sparkles`
+ * (rainbow-stroked) and `brain` (violet) icons, plus the `chevron-down` carets,
+ * are easy to eyeball against light/dark. Cycle the thinking pill to confirm the
+ * brain glyph stays a real `<svg>` across every effort level.
+ */
+export const IconShowcase: Story = {
+  args: { model: 'Opus 4.8', thinking: 'grande', narrow: true },
+};
 
 /** A realistic composer context: the meta row beneath an input card. */
 export const InComposer: Story = {

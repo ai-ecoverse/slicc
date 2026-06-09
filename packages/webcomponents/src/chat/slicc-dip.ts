@@ -1,5 +1,6 @@
 import { define } from '../internal/define.js';
 import { escapeHtml } from '../internal/html.js';
+import { iconSvg } from '../internal/icons.js';
 
 /**
  * Confetti-sprinkle colors for the drifting particle field behind the dip,
@@ -58,7 +59,8 @@ let dipSeq = 0;
  * Per-instance stylesheet, lifted verbatim from the prototype dip
  * (`proto/StellarRubySwift.html` — `.dip`, `.sprk`, `.dh`, `.sg`, `.nm`, `.tag`,
  * `.dbody`, `.dprompt`, `.pgrid`, `.dfoot`, `.dapply`, `.dnote`). The hue token
- * `--c` (falling back to `--violet`) tints the header glyph chip and the tag
+ * `--c` (falling back to `--violet`) tints the header glyph chip (a lucide
+ * `sparkles` icon) and the tag
  * pill; the frosted header and the swatch surfaces mix over the inherited
  * `--canvas`. Tokens (`--c`, `--canvas`, `--line`, `--violet`, `--ink`,
  * `--txt-2`, `--ui`) inherit through the shadow boundary and are NOT redeclared.
@@ -103,10 +105,10 @@ canvas.sprk {
   border-radius: 6px;
   display: grid;
   place-items: center;
-  font-size: 11px;
   color: #fff;
   background: var(--c, var(--violet));
 }
+.sg svg { display: block; }
 .nm { color: var(--ink); font-weight: 500; }
 .tag {
   margin-left: auto;
@@ -161,7 +163,8 @@ interface Swatch {
 /**
  * `<slicc-dip>` — the in-chat interactive "Sprinkle Dip" card from the prototype
  * Hero-studio sprinkle (`proto/StellarRubySwift.html` — `.dip`). A rounded card
- * with a frosted `.dh` header (accent glyph chip `.sg`, filename `.nm`, and a
+ * with a frosted `.dh` header (accent glyph chip `.sg` holding a lucide
+ * `sparkles` icon, filename `.nm`, and a
  * `sprinkle · dip` `.tag` pill), a `.dbody` holding a `.dprompt` line and two
  * four-column `.pgrid` swatch grids (a `canvas` group and an `accent` group),
  * and a `.dfoot` with the `.dapply` apply button and a `.dnote` selection
@@ -317,7 +320,7 @@ export class SliccDip extends HTMLElement {
       `<style>${STYLE}</style>` +
       '<canvas class="sprk" part="field" aria-hidden="true"></canvas>' +
       `<div class="dh" part="header"${styleHue}>` +
-      '<span class="sg" part="glyph">✦</span>' +
+      `<span class="sg" part="glyph">${iconSvg('sparkles', { size: 12 })}</span>` +
       `<span class="nm" part="name">${escapeHtml(this.name)}</span>` +
       '<span class="tag" part="tag">sprinkle · dip</span>' +
       '</div>' +

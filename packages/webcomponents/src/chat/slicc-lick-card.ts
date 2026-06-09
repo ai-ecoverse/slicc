@@ -1,5 +1,6 @@
 import { define } from '../internal/define.js';
 import { escapeHtml } from '../internal/html.js';
+import { iconSvg } from '../internal/icons.js';
 
 // ---------------------------------------------------------------------------
 // Lifted from proto/StellarRubySwift.html (`.lick` / `.lh` / `.bell` / `.lk` /
@@ -10,6 +11,10 @@ import { escapeHtml } from '../internal/html.js';
 //     <div class="lh"><span class="bell">🔔</span> lick · <kind> <span class="lk">event</span></div>
 //     <div class="lb"><html></div>
 //   </div>
+//
+// The prototype's 🔔 emoji in `.bell` is replaced here by the lucide `bell`
+// icon (`iconSvg('bell', { size: 14 })`) — the library never ships emoji or
+// bespoke unicode glyphs; every symbol comes from lucide via the shared helper.
 //
 // An amber-tinted rounded card with a bell-iconed "lick · <kind>" header, an
 // amber "event" pill pushed to the right (`.lk`), and a body line (`.lb`) whose
@@ -24,8 +29,8 @@ import { escapeHtml } from '../internal/html.js';
 // reproduced verbatim (amber 9% over #fff, amber-45%/line border, #9a6300 header).
 // ---------------------------------------------------------------------------
 
-/** Default bell glyph for the header (prototype `.bell` content). */
-const BELL = '🔔';
+/** Pixel size of the lucide `bell` icon in the header (replaces the prototype `🔔`). */
+const BELL_ICON_SIZE = 14;
 /** Default text of the right-aligned `.lk` pill (prototype: "event"). */
 const DEFAULT_EVENT_LABEL = 'event';
 
@@ -71,7 +76,9 @@ const STYLE = `
   font-family:var(--ui);font-size:10.5px;color:var(--lick-head);
   margin-bottom:4px;
 }
-.lh .bell{font-size:12px;}
+/* The lucide bell icon inherits the header color via stroke:currentColor. */
+.lh .bell{display:inline-flex;flex:0 0 auto;align-items:center;color:var(--lick-head);}
+.lh .bell svg{display:block;}
 /* The clickable affordance only exists while collapsible. */
 :host([collapsible]) .lh{cursor:pointer;user-select:none;}
 .lk{
@@ -114,7 +121,7 @@ const STYLE = `
  * @attr theme - `light` | `dark`; per-element override of the inherited theme
  * @csspart card - the outer `.lick` card
  * @csspart header - the `.lh` header row
- * @csspart bell - the `.bell` icon span
+ * @csspart bell - the `.bell` span wrapping the lucide `bell` `<svg>`
  * @csspart kind - the "lick · <kind>" label span
  * @csspart event - the right-aligned amber `.lk` pill
  * @csspart body - the `.lb` body line
@@ -255,7 +262,7 @@ export class SliccLickCard extends HTMLElement {
       `<style>${STYLE}</style>` +
       '<div class="lick" part="card">' +
       `<div class="lh" part="header"${headerExtra}>` +
-      `<span class="bell" part="bell" aria-hidden="true">${BELL}</span> ` +
+      `<span class="bell" part="bell" aria-hidden="true">${iconSvg('bell', { size: BELL_ICON_SIZE })}</span> ` +
       `<span class="kind" part="kind">${kindHtml} </span>` +
       `<span class="lk" part="event">${escapeHtml(eventLabel)}</span>` +
       '</div>' +

@@ -23,8 +23,15 @@ const meta: Meta<TabArgs> = {
       description: 'Tool (plain) or sprinkle (defined chip + sparkle badge)',
     },
     active: { control: 'boolean', description: 'Selected `.on` state' },
-    closable: { control: 'boolean', description: 'Render the `.x` close affordance' },
-    badge: { control: 'text', description: 'Sprinkle badge glyph (sprinkle kind)' },
+    closable: {
+      control: 'boolean',
+      description: 'Render the `.x` close affordance (lucide `x` svg)',
+    },
+    badge: {
+      control: 'text',
+      description:
+        'Sprinkle badge lucide icon name, kebab-case (sprinkle kind; default `sparkles`)',
+    },
     glyph: { control: 'text', description: 'Leading `.gl` glyph (tool kind)' },
     label: { control: 'text', description: 'Tab label' },
   },
@@ -57,9 +64,14 @@ export const ToolWithGlyph: Story = {
   args: { kind: 'tool', label: 'Terminal', 'tab-id': 'term', glyph: '>_' },
 };
 
-/** Sprinkle tab, idle — a defined `--canvas` chip with the rainbow sparkle badge. */
+/** Sprinkle tab, idle — a defined `--canvas` chip with the rainbow lucide `sparkles` badge. */
 export const SprinkleIdle: Story = {
   args: { kind: 'sprinkle', label: 'Hero studio', 'tab-id': 'hero' },
+};
+
+/** Sprinkle tab with a custom badge icon (any lucide name, e.g. `wand-sparkles`). */
+export const SprinkleCustomBadge: Story = {
+  args: { kind: 'sprinkle', label: 'palette', 'tab-id': 'palette', badge: 'wand-sparkles' },
 };
 
 /** Sprinkle tab, active — violet-tinted `.sp.on` fill + border. */

@@ -54,12 +54,30 @@ describe('slicc-freezer-new', () => {
     expect(label.getAttribute('part')).toBe('label');
   });
 
-  it('renders the inline pencil SVG inside the badge by default', () => {
+  it('renders a lucide square-pen <svg> inside the badge by default', () => {
     const el = mount();
     const svg = badgeOf(el).querySelector('svg');
     expect(svg).toBeTruthy();
-    expect(svg?.querySelector('path')).toBeTruthy();
-    expect(svg?.querySelector('line')).toBeTruthy();
+    // lucide glyph: 24×24 viewBox, currentColor stroke, sized to ~16px, path-only.
+    expect(svg?.getAttribute('viewBox')).toBe('0 0 24 24');
+    expect(svg?.getAttribute('stroke')).toBe('currentColor');
+    expect(svg?.getAttribute('width')).toBe('16');
+    expect(svg?.getAttribute('height')).toBe('16');
+    // square-pen is built from <path> elements (no bespoke <line> like the old glyph).
+    expect(svg?.querySelectorAll('path').length).toBeGreaterThan(0);
+    // the lucide glyph carries the shared ::part="icon" hook for host styling.
+    expect(svg?.getAttribute('part')).toBe('icon');
+  });
+
+  it('uses a lucide icon, not an emoji or bespoke unicode glyph', () => {
+    const el = mount();
+    const badge = badgeOf(el);
+    // the glyph is a real <svg>, not a text-symbol node.
+    expect(badge.querySelector('svg')).toBeTruthy();
+    // no emoji / pictographic / glyph symbol leaked into the badge text.
+    const text = badge.textContent ?? '';
+    const FORBIDDEN = ['✦', '❄', '🔔', '🌙', '☀', '＋', '✎', '✏', '⤡'];
+    expect(FORBIDDEN.some((g) => text.includes(g))).toBe(false);
   });
 
   it('exposes named "icon" and default slots for overriding glyph + label', () => {

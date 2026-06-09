@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
+import { iconSvg } from '../internal/icons.js';
 import './slicc-freezer-new.js';
 
 interface FreezerNewArgs {
@@ -57,3 +58,27 @@ export const Hover: Story = {
 
 /** Custom label text (also overridable via the default slot). */
 export const CustomLabel: Story = { args: { expanded: true, label: 'Start fresh' } };
+
+/**
+ * Custom glyph — the named `icon` slot overrides the default lucide `square-pen`
+ * with another lucide icon (here `plus`), demonstrating the slot escape hatch
+ * while keeping the context-tinted badge.
+ */
+export const CustomIcon: Story = {
+  render: () => {
+    const el = document.createElement('slicc-freezer-new');
+    el.setAttribute('expanded', '');
+    el.setAttribute('label', 'New chat');
+    const icon = document.createElement('span');
+    icon.slot = 'icon';
+    icon.innerHTML = iconSvg('plus', { size: 16 });
+    el.appendChild(icon);
+    return railFrame(el, true);
+  },
+};
+
+/**
+ * Collapsed rail with the lucide glyph centered in the badge — the icon-only
+ * resting state, mirrored against the expanded states above for review.
+ */
+export const CollapsedIconOnly: Story = { args: { expanded: false } };
