@@ -74,6 +74,11 @@
     <div class="panel">
       <h2>Eye tuning</h2>
       <div class="tune" id="tune"></div>
+      <div class="knob" id="pupil-knob" style="max-width:420px;margin-top:4px">
+        <span class="knob-label">Pupil</span>
+        <input type="range" id="pupil-input" min="0.4" max="2.2" step="0.05" value="1">
+        <span class="knob-val" id="pupil-val">1.00×</span>
+      </div>
       <div class="tune-foot">
         <pre id="tune-out"></pre>
         <button id="tune-copy" type="button">copy config</button>
@@ -119,6 +124,19 @@
       <div class="hint">No <code>theme</code> attribute — follows the OS <code>prefers-color-scheme</code>.</div>
     </div>
 
+    <div class="panel">
+      <h2>Pupil size · context fill</h2>
+      <div class="row">
+        <slicc-pill theme="dark" type="cone" pupil="0.6">sliccy · 12%</slicc-pill>
+        <slicc-pill theme="dark" type="cone" pupil="1.0">sliccy · 48%</slicc-pill>
+        <slicc-pill theme="dark" type="cone" pupil="1.6">sliccy · 82%</slicc-pill>
+        <slicc-pill theme="dark" type="scoop" color="#22d3ee" pupil="0.6">researcher · 15%</slicc-pill>
+        <slicc-pill theme="dark" type="scoop" color="#f59e0b" pupil="1.5">triage · 90%</slicc-pill>
+        <slicc-pill theme="dark" type="scoop" color="#e11d48" pupil="2.1">packed · 99%</slicc-pill>
+      </div>
+      <div class="hint">Bigger pupils = fuller context window. Drag the <strong>Pupil</strong> slider in the tuning panel to preview every pill live.</div>
+    </div>
+
     <script>
       (() => {
         // --- Eye geometry (mirrors packages/webapp/src/ui/scoops-panel.ts) ---
@@ -133,7 +151,7 @@
         const TYPE = {
           cone: {
             vb: '70 330 440 570',
-            eyes: { top: 0, left: 17, width: 70, height: 44 },
+            eyes: { top: -18.5, left: 17, width: 70, height: 44 },
             zoom: 3.0, glyph: 96,
           },
           scoop: {
@@ -187,12 +205,12 @@
         }
 
         // --- eyes overlay builders ---
-        function eyeOpen(cx, cy, r, side) {
+        function eyeOpen(cx, cy, r, side, pr) {
           return (
             `<circle cx="${cx}" cy="${cy}" r="${r}" fill="#fff" stroke="#000" stroke-width="4"/>` +
             `<g class="pupil pupil-${side}">` +
-            `<circle cx="${cx}" cy="${cy}" r="${PUPIL_R}" fill="#000"/>` +
-            `<circle cx="${cx - PUPIL_R * 0.3}" cy="${cy - PUPIL_R * 0.35}" r="${PUPIL_R * 0.4}" fill="#fff"/>` +
+            `<circle cx="${cx}" cy="${cy}" r="${pr}" fill="#000"/>` +
+            `<circle cx="${cx - pr * 0.3}" cy="${cy - pr * 0.35}" r="${pr * 0.4}" fill="#fff"/>` +
             `</g>`
           );
         }
@@ -203,19 +221,19 @@
             `<line x1="${cx + 15}" y1="${cy - 15}" x2="${cx - 15}" y2="${cy + 15}" stroke="#000" stroke-width="8" stroke-linecap="round"/>`
           );
         }
-        function eyesSvg(state) {
+        function eyesSvg(state, pr = PUPIL_R) {
           if (state === 'none') return '';
           const L = LEFT_EYE, R = RIGHT_EYE;
           const body =
             state === 'dead'
               ? eyeDead(L.cx, L.cy, L.r) + eyeDead(R.cx, R.cy, R.r)
-              : eyeOpen(L.cx, L.cy, L.r, 'l') + eyeOpen(R.cx, R.cy, R.r, 'r');
+              : eyeOpen(L.cx, L.cy, L.r, 'l', pr) + eyeOpen(R.cx, R.cy, R.r, 'r', pr);
           return `<svg class="eyes-svg" viewBox="0 0 200 100" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">${body}</svg>`;
         }
 
-        function place(g, cx, cy, mx, my) {
+        function place(g, cx, cy, mx, my, maxOff = MAX_OFFSET) {
           const dx = mx - cx, dy = my - cy;
-          const d = Math.hypot(dx, dy), c = Math.min(d, MAX_OFFSET);
+          const d = Math.hypot(dx, dy), c = Math.min(d, maxOff);
           const tx = d > 0 ? (dx / d) * c : 0, ty = d > 0 ? (dy / d) * c : 0;
           g.setAttribute('transform', `translate(${tx},${ty})`);
         }
@@ -293,7 +311,7 @@
 
         const INSTANCES = new Set();
         class SliccPill extends HTMLElement {
-          static get observedAttributes() { return ['type', 'color', 'eyes', 'active', 'label']; }
+          static get observedAttributes() { return ['type', 'color', 'eyes', 'active', 'label', 'pupil']; }
           connectedCallback() { INSTANCES.add(this); this.render(); this._bindTracking(); }
           disconnectedCallback() {
             INSTANCES.delete(this);
@@ -305,6 +323,12 @@
           get eyeState() {
             const e = this.getAttribute('eyes');
             return e === 'none' || e === 'dead' ? e : 'open';
+          }
+          // Pupil size multiplier (1 = base PUPIL_R). Use it to signal state such
+          // as a filling context window — bigger pupils = fuller context.
+          get pupilScale() {
+            const v = parseFloat(this.getAttribute('pupil'));
+            return isFinite(v) ? Math.max(0.3, Math.min(2.4, v)) : 1;
           }
 
           render() {
@@ -338,13 +362,17 @@
             const oZoom = Math.min(1, 1 / Math.max(bx1 - bx0, by1 - by0));
             const ox = ((0.5 - oZoom * (bx0 + bx1) / 2) * 100).toFixed(2);
             const oy = ((0.5 - oZoom * (by0 + by1) / 2) * 100).toFixed(2);
+            // Pupil radius scales with the `pupil` attribute; shrink the tracking
+            // travel as the pupil grows so it stays seated inside the sclera.
+            const pr = PUPIL_R * this.pupilScale;
+            this._maxOffset = Math.max(2, Math.min(MAX_OFFSET, LEFT_EYE.r - pr - 4));
             this.shadowRoot.innerHTML =
               `<style>${STYLE}</style>` +
               `<button class="pill ${active ? 'active' : ''}" part="pill" style="--accent:${color}">` +
               `<span class="icon" part="icon">` +
               `<span class="icon-inner" style="--tx:${tx}%;--ty:${ty}%;--zoom:${cfg.zoom};--ox:${ox}%;--oy:${oy}%;--ozoom:${oZoom.toFixed(4)}">` +
               `<svg class="glyph" viewBox="${cfg.vb}" preserveAspectRatio="xMidYMid meet" style="--g:${cfg.glyph}%">${glyph}</svg>` +
-              `<span class="eyes" style="top:${e.top}%;left:${e.left}%;width:${e.width}%;height:${e.height}%">${eyesSvg(this.eyeState)}</span>` +
+              `<span class="eyes" style="top:${e.top}%;left:${e.left}%;width:${e.width}%;height:${e.height}%">${eyesSvg(this.eyeState, pr)}</span>` +
               `</span></span>` +
               `<span class="label">${label != null ? escapeHtml(label) : '<slot></slot>'}</span>` +
               `</button>`;
@@ -370,8 +398,8 @@
             if (!r.width || !r.height) return;
             const mx = (ev.clientX - r.left) * (200 / r.width);
             const my = (ev.clientY - r.top) * (100 / r.height);
-            place(this._pl, LEFT_EYE.cx, LEFT_EYE.cy, mx, my);
-            place(this._pr, RIGHT_EYE.cx, RIGHT_EYE.cy, mx, my);
+            place(this._pl, LEFT_EYE.cx, LEFT_EYE.cy, mx, my, this._maxOffset);
+            place(this._pr, RIGHT_EYE.cx, RIGHT_EYE.cy, mx, my, this._maxOffset);
           }
         }
 
@@ -436,6 +464,16 @@
           navigator.clipboard?.writeText(readout.textContent);
           ev.target.textContent = 'copied!';
           setTimeout(() => { ev.target.textContent = 'copy config'; }, 1200);
+        });
+
+        // Global pupil-size slider: sets the `pupil` attribute on every pill so
+        // the "context fill" effect can be previewed live across the page.
+        const pupilInput = document.getElementById('pupil-input');
+        const pupilVal = document.getElementById('pupil-val');
+        pupilInput.addEventListener('input', () => {
+          const v = parseFloat(pupilInput.value);
+          pupilVal.textContent = v.toFixed(2) + '×';
+          document.querySelectorAll('slicc-pill').forEach((p) => p.setAttribute('pupil', v));
         });
       })();
     </script>
