@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
+import { h } from '../internal/dom.js';
 import type { CheckItem, SliccAgentMessage } from './slicc-agent-message.js';
 import './slicc-agent-message.js';
 
@@ -34,9 +35,19 @@ type Story = StoryObj<MessageArgs>;
 export const Prose: Story = {
   render: () => {
     const el = buildMessage({});
-    el.innerHTML =
-      '<p>Sure — I dug through the <code>warm-hero</code> branch and the redesign is mostly there. ' +
-      'A few <strong>follow-ups</strong> remain before it ships, but nothing structural.</p>';
+    // Pre-existing light children are relocated into `.body` on connect; build
+    // them via DOM construction rather than an HTML string.
+    el.append(
+      h(
+        'p',
+        null,
+        'Sure — I dug through the ',
+        h('code', null, 'warm-hero'),
+        ' branch and the redesign is mostly there. A few ',
+        h('strong', null, 'follow-ups'),
+        ' remain before it ships, but nothing structural.'
+      )
+    );
     return el;
   },
 };

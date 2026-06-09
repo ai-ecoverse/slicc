@@ -1,4 +1,5 @@
 import { define } from '../internal/define.js';
+import { append, h } from '../internal/dom.js';
 
 /**
  * Scoped, document-level stylesheet for `<slicc-action-row>`. Light-DOM
@@ -267,15 +268,16 @@ export class SliccActionRow extends HTMLElement {
     this.#head.type = 'button';
     this.#head.className = 'slicc-act__head';
     this.#head.setAttribute('part', 'head');
-    this.#head.innerHTML =
-      '<span class="slicc-act__ic" part="icon"></span>' +
-      '<span class="slicc-act__label" part="label"></span>' +
-      '<span class="slicc-act__badge" part="badge"></span>' +
-      '<span class="slicc-act__chev" part="chevron" aria-hidden="true">▸</span>';
 
-    this.#icon = this.#head.querySelector('.slicc-act__ic') as HTMLElement;
-    this.#label = this.#head.querySelector('.slicc-act__label') as HTMLElement;
-    this.#badge = this.#head.querySelector('.slicc-act__badge') as HTMLElement;
+    this.#icon = h('span', { class: 'slicc-act__ic', part: 'icon' });
+    this.#label = h('span', { class: 'slicc-act__label', part: 'label' });
+    this.#badge = h('span', { class: 'slicc-act__badge', part: 'badge' });
+    append(this.#head, [
+      this.#icon,
+      this.#label,
+      this.#badge,
+      h('span', { class: 'slicc-act__chev', part: 'chevron', 'aria-hidden': 'true' }, '▸'),
+    ]);
 
     this.#body = this.ownerDocument.createElement('div');
     this.#body.className = 'slicc-act__body';

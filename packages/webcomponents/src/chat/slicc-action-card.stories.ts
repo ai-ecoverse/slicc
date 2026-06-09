@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
-import { iconSvg } from '../internal/icons.js';
+import { append, type HChild, h } from '../internal/dom.js';
+import { iconEl } from '../internal/icons.js';
 // Importing the row registers `<slicc-action-row>` so the ToolCluster story can
 // compose both affordances by tag, exactly as they appear in a chat turn.
 import './slicc-action-row.js';
@@ -18,7 +19,8 @@ interface ActionCardArgs {
   add?: string;
   del?: string;
   checks?: string;
-  body?: string;
+  /** Terminal body content, built as live DOM nodes / text (tool/light). */
+  body?: () => HChild[];
   /** Lucide icon name for the glyph chip (replaces the text `glyph` attribute). */
   icon?: string;
 }
@@ -34,11 +36,17 @@ const MARK = 12;
 
 // Inline lucide markers for the monospace bodies — the prototype's prompt /
 // tick / warning / diff symbols are real vector icons here, never glyph chars.
-const PROMPT = iconSvg('chevron-right', { size: MARK }); // prototype prompt caret
-const OK = iconSvg('check', { size: MARK }); // success tick
-const WARN = iconSvg('triangle-alert', { size: MARK }); // warning marker
-const ADD = iconSvg('plus', { size: 11 }); // diff add marker
-const DEL = iconSvg('minus', { size: 11 }); // diff del marker
+// Each is a factory (live `<svg>` elements can't be shared across appends).
+const prompt = (): SVGSVGElement => iconEl('chevron-right', { size: MARK }); // prompt caret
+const ok = (): SVGSVGElement => iconEl('check', { size: MARK }); // success tick
+const warn = (): SVGSVGElement => iconEl('triangle-alert', { size: MARK }); // warning marker
+const add = (): SVGSVGElement => iconEl('plus', { size: 11 }); // diff add marker
+const del = (): SVGSVGElement => iconEl('minus', { size: 11 }); // diff del marker
+
+/** A `<span class="cls">` body line carrying a leading icon then text. */
+function line(cls: string, icon: Node, text: string): HTMLElement {
+  return h('span', { class: cls }, icon, text);
+}
 
 /**
  * Drop a lucide `<svg>` into the chip well of a freshly-mounted card/row. The
@@ -48,10 +56,10 @@ const DEL = iconSvg('minus', { size: 11 }); // diff del marker
  */
 function setChip(el: HTMLElement, selector: string, name: string): void {
   const ic = el.querySelector(selector);
-  if (ic) ic.innerHTML = iconSvg(name, { size: CHIP });
+  if (ic) ic.replaceChildren(iconEl(name, { size: CHIP }));
 }
 
-/** Build a populated action card from args, filling the terminal body via innerHTML. */
+/** Build a populated action card from args, filling the terminal body with DOM. */
 function build(args: ActionCardArgs): HTMLElement {
   const el = document.createElement('slicc-action-card');
   el.style.maxWidth = '520px';
@@ -72,7 +80,7 @@ function build(args: ActionCardArgs): HTMLElement {
     const v = args[key];
     if (v != null) el.setAttribute(key, v);
   }
-  if (args.body != null) el.innerHTML = args.body;
+  if (args.body != null) append(el, args.body());
   // PR cards carry their git glyph in the `.gi` well; tool/light cards in `.ic`.
   const icon = args.icon ?? (args.variant === 'pr' ? 'git-pull-request' : undefined);
   if (icon) {
@@ -107,7 +115,7 @@ const meta: Meta<ActionCardArgs> = {
     add: { control: 'text', description: 'PR additions delta' },
     del: { control: 'text', description: 'PR deletions delta' },
     checks: { control: 'text', description: 'PR checks summary' },
-    body: { control: 'text', description: 'Terminal body HTML (tool/light)' },
+    body: { table: { disable: true } },
     glyph: { table: { disable: true } },
   },
   render: (args) => build(args),
@@ -123,10 +131,13 @@ export const Tool: Story = {
     icon: 'terminal',
     tone: 'ink',
     title: 'bash · run tests',
-    body:
-      `<span class="p">${PROMPT}</span> npm test\n` +
-      `<span class="ok">${OK} 128 passed</span>\n` +
-      '<span class="mut">0 failed · 1.2s</span>',
+    body: () => [
+      h('span', { class: 'p' }, prompt()),
+      ' npm test\n',
+      line('ok', ok(), ' 128 passed'),
+      '\n',
+      h('span', { class: 'mut' }, '0 failed · 1.2s'),
+    ],
   },
 };
 
@@ -138,10 +149,14 @@ export const ToolWithBadge: Story = {
     tone: 'gh',
     title: 'git · commit + push',
     badge: 'warm-hero',
-    body:
-      `<span class="p">${PROMPT}</span> git commit -am "feat(hero): warm redesign"\n` +
-      `<span class="ok">[warm-hero 9f2a1c] 2 files changed, ${ADD}38 ${DEL}21</span>\n` +
-      `<span class="p">${PROMPT}</span> git push -u origin warm-hero`,
+    body: () => [
+      h('span', { class: 'p' }, prompt()),
+      ' git commit -am "feat(hero): warm redesign"\n',
+      h('span', { class: 'ok' }, '[warm-hero 9f2a1c] 2 files changed, ', add(), '38 ', del(), '21'),
+      '\n',
+      h('span', { class: 'p' }, prompt()),
+      ' git push -u origin warm-hero',
+    ],
   },
 };
 
@@ -152,7 +167,10 @@ export const ToneCyan: Story = {
     icon: 'eye',
     tone: 'cy',
     title: 'read_file · hero.css',
-    body: '<span class="mut">42 lines</span>\n.hero{background:#0b1120;color:#e2e8f0;}',
+    body: () => [
+      h('span', { class: 'mut' }, '42 lines'),
+      '\n.hero{background:#0b1120;color:#e2e8f0;}',
+    ],
   },
 };
 
@@ -163,7 +181,11 @@ export const ToneViolet: Story = {
     icon: 'sparkles',
     tone: 'vi',
     title: 'sprinkle · hero preview',
-    body: `<span class="ok">${OK} rendered</span> <span class="mut">live in workbench</span>`,
+    body: () => [
+      line('ok', ok(), ' rendered'),
+      ' ',
+      h('span', { class: 'mut' }, 'live in workbench'),
+    ],
   },
 };
 
@@ -174,7 +196,11 @@ export const ToneAmber: Story = {
     icon: 'flask-conical',
     tone: 'am',
     title: 'test · a11y audit',
-    body: `<span class="warn">${WARN} 1 contrast issue</span>\n<span class="mut">CTA on mobile</span>`,
+    body: () => [
+      line('warn', warn(), ' 1 contrast issue'),
+      '\n',
+      h('span', { class: 'mut' }, 'CTA on mobile'),
+    ],
   },
 };
 
@@ -185,11 +211,15 @@ export const ToneGithubDiff: Story = {
     icon: 'file-diff',
     tone: 'gh',
     title: 'edit_file · hero.css',
-    body:
-      `<span class="del">${DEL} background:#0b1120;</span>\n` +
-      `<span class="add">${ADD} background:#fff7ed;</span>\n` +
-      `<span class="del">${DEL} color:#e2e8f0;</span>\n` +
-      `<span class="add">${ADD} color:#7c2d12;</span>`,
+    body: () => [
+      line('del', del(), ' background:#0b1120;'),
+      '\n',
+      line('add', add(), ' background:#fff7ed;'),
+      '\n',
+      line('del', del(), ' color:#e2e8f0;'),
+      '\n',
+      line('add', add(), ' color:#7c2d12;'),
+    ],
   },
 };
 
@@ -200,7 +230,11 @@ export const Light: Story = {
     icon: 'file-code',
     tone: 'cy',
     title: 'cat · package.json',
-    body: '<span class="mut">{</span>\n  "name": "@slicc/webapp",\n  "version": "3.46.0"\n<span class="mut">}</span>',
+    body: () => [
+      h('span', { class: 'mut' }, '{'),
+      '\n  "name": "@slicc/webapp",\n  "version": "3.46.0"\n',
+      h('span', { class: 'mut' }, '}'),
+    ],
   },
 };
 
@@ -239,18 +273,25 @@ export const ToolCluster: Story = {
     editRow.setAttribute('open', '');
     editRow.setAttribute('tone', 'vi');
     editRow.setAttribute('result', '4 changes');
-    const editLabel = document.createElement('span');
-    editLabel.innerHTML =
-      'edit_file · <a class="vlink" data-file="fcss" data-kind="css">hero.css</a>';
+    const editLabel = h(
+      'span',
+      null,
+      'edit_file · ',
+      h('a', { class: 'vlink', 'data-file': 'fcss', 'data-kind': 'css' }, 'hero.css')
+    );
     editRow.appendChild(editLabel);
-    const editBody = document.createElement('div');
-    editBody.setAttribute('slot', 'body');
-    editBody.innerHTML =
-      `<span class="del">${DEL} background: #0e0e0f;</span>\n` +
-      `<span class="add">${ADD} background: #faf6f1;</span>\n` +
-      `<span class="del">${DEL} font-family: ui-monospace;</span>\n` +
-      `<span class="add">${ADD} font-family: Fraunces, serif;</span>\n` +
-      `<span class="ok">${OK} live-reloaded at /preview/hero</span>`;
+    const editBody = h('div', { slot: 'body' });
+    append(editBody, [
+      line('del', del(), ' background: #0e0e0f;'),
+      '\n',
+      line('add', add(), ' background: #faf6f1;'),
+      '\n',
+      line('del', del(), ' font-family: ui-monospace;'),
+      '\n',
+      line('add', add(), ' font-family: Fraunces, serif;'),
+      '\n',
+      line('ok', ok(), ' live-reloaded at /preview/hero'),
+    ]);
     editRow.appendChild(editBody);
     wrap.appendChild(editRow);
 
@@ -261,14 +302,18 @@ export const ToolCluster: Story = {
     testRow.setAttribute('tone', 'am');
     testRow.setAttribute('label', 'tester · vitest');
     testRow.setAttribute('result', '3 passed');
-    const testBody = document.createElement('div');
-    testBody.setAttribute('slot', 'body');
-    testBody.innerHTML =
-      `<span class="p">${PROMPT}</span> npm test -- hero\n` +
-      `<span class="ok">${OK} hero renders warm canvas</span>\n` +
-      `<span class="ok">${OK} single accessible CTA</span>\n` +
-      `<span class="ok">${OK} contrast >= 4.5:1</span>\n` +
-      '<span class="mut">0 failed · 1.2s</span>';
+    const testBody = h('div', { slot: 'body' });
+    append(testBody, [
+      h('span', { class: 'p' }, prompt()),
+      ' npm test -- hero\n',
+      line('ok', ok(), ' hero renders warm canvas'),
+      '\n',
+      line('ok', ok(), ' single accessible CTA'),
+      '\n',
+      line('ok', ok(), ' contrast >= 4.5:1'),
+      '\n',
+      h('span', { class: 'mut' }, '0 failed · 1.2s'),
+    ]);
     testRow.appendChild(testBody);
     wrap.appendChild(testRow);
 
@@ -279,10 +324,22 @@ export const ToolCluster: Story = {
       tone: 'gh',
       title: 'git · commit + push',
       badge: 'warm-hero',
-      body:
-        `<span class="p">${PROMPT}</span> git checkout -b warm-hero\n` +
-        `<span class="ok">[warm-hero 9f2a1c] 2 files changed, ${ADD}38 ${DEL}21</span>\n` +
-        `<span class="p">${PROMPT}</span> git push -u origin warm-hero`,
+      body: () => [
+        h('span', { class: 'p' }, prompt()),
+        ' git checkout -b warm-hero\n',
+        h(
+          'span',
+          { class: 'ok' },
+          '[warm-hero 9f2a1c] 2 files changed, ',
+          add(),
+          '38 ',
+          del(),
+          '21'
+        ),
+        '\n',
+        h('span', { class: 'p' }, prompt()),
+        ' git push -u origin warm-hero',
+      ],
     });
     gitCard.style.maxWidth = '100%';
     wrap.appendChild(gitCard);
@@ -293,7 +350,11 @@ export const ToolCluster: Story = {
       icon: 'file-code',
       tone: 'cy',
       title: 'cat · package.json',
-      body: '<span class="mut">{</span>\n  "name": "@slicc/webapp",\n  "version": "3.46.0"\n<span class="mut">}</span>',
+      body: () => [
+        h('span', { class: 'mut' }, '{'),
+        '\n  "name": "@slicc/webapp",\n  "version": "3.46.0"\n',
+        h('span', { class: 'mut' }, '}'),
+      ],
     });
     lightCard.style.maxWidth = '100%';
     wrap.appendChild(lightCard);

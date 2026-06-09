@@ -14,7 +14,8 @@ import './slicc-delegation-line.js';
 import './slicc-dip.js';
 import './slicc-lick-card.js';
 import './slicc-user-message.js';
-import { iconSvg } from '../internal/icons.js';
+import { h } from '../internal/dom.js';
+import { iconEl } from '../internal/icons.js';
 
 interface ThreadArgs {
   open?: boolean;
@@ -38,21 +39,23 @@ type Story = StoryObj<ThreadArgs>;
 
 // ---------------------------------------------------------------------------
 // Glyphs — every icon rendered by these stories comes from lucide via the
-// shared `iconSvg` helper (never an emoji or bespoke unicode symbol). The
-// terminal-prompt arrow and the inline success/warning marks live inside the
-// monospace bodies, where they inherit the body's `currentColor`.
+// shared `iconEl` helper (a live `<svg>` element, never an emoji, bespoke
+// unicode symbol, or HTML string). The terminal-prompt arrow and the inline
+// success/warning marks live inside the monospace bodies, where they inherit
+// the body's `currentColor`. Each factory returns a FRESH element per call,
+// since one node cannot be in two places at once.
 // ---------------------------------------------------------------------------
 
-/** A monospace prompt arrow (lucide `chevron-right`) for terminal/diff bodies. */
-const PROMPT = iconSvg('chevron-right', { size: 12 });
-/** An inline success mark (lucide `check`) for `.ok` spans. */
-const OK = iconSvg('check', { size: 12 });
-/** An inline warning mark (lucide `triangle-alert`) for `.warn` spans. */
-const WARN = iconSvg('triangle-alert', { size: 12 });
+/** A fresh monospace prompt arrow (lucide `chevron-right`) for terminal/diff bodies. */
+const promptGlyph = (): SVGSVGElement => iconEl('chevron-right', { size: 12 });
+/** A fresh inline success mark (lucide `check`) for `.ok` spans. */
+const okGlyph = (): SVGSVGElement => iconEl('check', { size: 12 });
+/** A fresh inline warning mark (lucide `triangle-alert`) for `.warn` spans. */
+const warnGlyph = (): SVGSVGElement => iconEl('triangle-alert', { size: 12 });
 
-/** Wrap an inline lucide glyph so it baseline-aligns inside monospace text. */
-function inline(svg: string): string {
-  return `<span style="display:inline-flex;vertical-align:-2px;">${svg}</span>`;
+/** Wrap an inline lucide glyph element so it baseline-aligns inside monospace text. */
+function inline(svg: SVGSVGElement): HTMLElement {
+  return h('span', { style: 'display:inline-flex;vertical-align:-2px;' }, svg);
 }
 
 // ---------------------------------------------------------------------------
@@ -68,10 +71,14 @@ function userMsg(text: string): HTMLElement {
   return el;
 }
 
-/** An agent prose message (`<slicc-agent-message>`) with trusted body HTML. */
-function agentProse(html: string): SliccAgentMessage {
+/**
+ * An agent prose message (`<slicc-agent-message>`) whose body is supplied as
+ * constructed light children (the component relocates them into its `.body`).
+ * Built via DOM nodes — no HTML string.
+ */
+function agentProse(...body: (Node | string)[]): SliccAgentMessage {
   const el = document.createElement('slicc-agent-message') as SliccAgentMessage;
-  el.innerHTML = html;
+  el.append(...body);
   return el;
 }
 
@@ -99,18 +106,27 @@ function editFileRow(): HTMLElement {
   row.setAttribute('result', '4 changes');
   row.dataset.icon = 'pen'; // injected post-connect (see decorateIcons)
 
-  const label = document.createElement('span');
-  label.innerHTML = 'edit_file · <a class="vlink" data-file="hero" data-kind="css">hero.css</a>';
+  const label = h(
+    'span',
+    null,
+    'edit_file · ',
+    h('a', { class: 'vlink', 'data-file': 'hero', 'data-kind': 'css' }, 'hero.css')
+  );
   row.appendChild(label);
 
-  const body = document.createElement('div');
-  body.setAttribute('slot', 'body');
-  body.innerHTML =
-    '<span class="del">- background: #0b1120;</span>\n' +
-    '<span class="add">+ background: #faf6f1;</span>\n' +
-    '<span class="del">- color: #e2e8f0;</span>\n' +
-    '<span class="add">+ color: #7c2d12;</span>\n' +
-    `<span class="ok">${inline(OK)} live-reloaded at /preview/hero</span>`;
+  const body = h(
+    'div',
+    { slot: 'body' },
+    h('span', { class: 'del' }, '- background: #0b1120;'),
+    '\n',
+    h('span', { class: 'add' }, '+ background: #faf6f1;'),
+    '\n',
+    h('span', { class: 'del' }, '- color: #e2e8f0;'),
+    '\n',
+    h('span', { class: 'add' }, '+ color: #7c2d12;'),
+    '\n',
+    h('span', { class: 'ok' }, inline(okGlyph()), ' live-reloaded at /preview/hero')
+  );
   row.appendChild(body);
   return row;
 }
@@ -123,10 +139,17 @@ function terminalCard(): HTMLElement {
   el.setAttribute('title', 'bash · run suite');
   el.setAttribute('badge', 'warm-hero');
   el.dataset.glyph = 'terminal'; // injected post-connect (see decorateIcons)
-  el.innerHTML =
-    `<span class="p">${inline(PROMPT)}</span> npm test -- hero\n` +
-    `<span class="ok">${inline(OK)} 128 passed</span> <span class="mut">0 failed · 1.2s</span>\n` +
-    `<span class="warn">${inline(WARN)} 1 a11y contrast note</span> <span class="mut">CTA on mobile</span>`;
+  el.append(
+    h('span', { class: 'p' }, inline(promptGlyph())),
+    ' npm test -- hero\n',
+    h('span', { class: 'ok' }, inline(okGlyph()), ' 128 passed'),
+    ' ',
+    h('span', { class: 'mut' }, '0 failed · 1.2s'),
+    '\n',
+    h('span', { class: 'warn' }, inline(warnGlyph()), ' 1 a11y contrast note'),
+    ' ',
+    h('span', { class: 'mut' }, 'CTA on mobile')
+  );
   return el;
 }
 
@@ -151,8 +174,11 @@ function lickCard(): HTMLElement {
   const el = document.createElement('slicc-lick-card');
   el.setAttribute('kind', 'webhook');
   el.setAttribute('no-animate', '');
-  el.innerHTML =
-    'A <b>lick</b> arrives — a support webhook pings the session. sliccy queues a triage scoop.';
+  el.append(
+    'A ',
+    h('b', null, 'lick'),
+    ' arrives — a support webhook pings the session. sliccy queues a triage scoop.'
+  );
   return el;
 }
 
@@ -174,11 +200,11 @@ function dip(): HTMLElement {
 function decorateIcons(root: ParentNode): void {
   for (const row of root.querySelectorAll<HTMLElement>('slicc-action-row[data-icon]')) {
     const chip = row.querySelector('.slicc-act__ic');
-    if (chip) chip.innerHTML = iconSvg(row.dataset.icon ?? 'square', { size: 12 });
+    if (chip) chip.replaceChildren(iconEl(row.dataset.icon ?? 'square', { size: 12 }));
   }
   for (const card of root.querySelectorAll<HTMLElement>('slicc-action-card[data-glyph]')) {
     const chip = card.querySelector('.tcard .ic, .prcard .gi');
-    if (chip) chip.innerHTML = iconSvg(card.dataset.glyph ?? 'square', { size: 12 });
+    if (chip) chip.replaceChildren(iconEl(card.dataset.glyph ?? 'square', { size: 12 }));
   }
 }
 
@@ -197,8 +223,12 @@ function populate(el: SliccChatThread): void {
 
   el.append(
     agentProse(
-      '<p>On it. I&rsquo;ll warm the canvas, collapse the CTAs to one, and verify contrast. ' +
-        'Here&rsquo;s the plan:</p>'
+      h(
+        'p',
+        null,
+        'On it. I’ll warm the canvas, collapse the CTAs to one, and verify contrast. ' +
+          'Here’s the plan:'
+      )
     )
   );
 
@@ -239,8 +269,13 @@ function populate(el: SliccChatThread): void {
   el.append(userMsg('Nice. Can I tune the palette live before you open the PR for real?'));
   el.append(
     agentProse(
-      '<p>Absolutely — here&rsquo;s a <b>dip</b>. Pick a canvas and accent, then apply ' +
-        'to push it straight into the hero:</p>'
+      h(
+        'p',
+        null,
+        'Absolutely — here’s a ',
+        h('b', null, 'dip'),
+        '. Pick a canvas and accent, then apply to push it straight into the hero:'
+      )
     )
   );
 
@@ -347,7 +382,11 @@ export const ContextSwap: Story = {
           const sep = document.createElement('slicc-day-separator');
           sep.setAttribute('label', `${id} scoop`);
           el.append(sep);
-          el.append(agentProse(`<p style="margin:0;">Switched to the <b>${id}</b> context.</p>`));
+          el.append(
+            agentProse(
+              h('p', { style: 'margin:0;' }, 'Switched to the ', h('b', null, id), ' context.')
+            )
+          );
         }
       });
       bar.appendChild(b);

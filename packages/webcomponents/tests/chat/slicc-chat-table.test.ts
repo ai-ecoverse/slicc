@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { SliccChatTable } from '../../src/chat/slicc-chat-table.js';
+import { h } from '../../src/internal/dom.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
 
 /** Build a `<tr>` via DOM (so `<tr>`/`<td>` survive) with the prototype tones. */
@@ -7,17 +8,8 @@ function compareRow(label: string, was: string, now: string, code = false): HTML
   const tr = document.createElement('tr');
   const head = document.createElement('td');
   head.textContent = label;
-  const wasCell = document.createElement('td');
-  wasCell.className = 'was';
-  const nowCell = document.createElement('td');
-  nowCell.className = 'now';
-  if (code) {
-    wasCell.innerHTML = `<code>${was}</code>`;
-    nowCell.innerHTML = `<code>${now}</code>`;
-  } else {
-    wasCell.textContent = was;
-    nowCell.textContent = now;
-  }
+  const wasCell = h('td', { class: 'was' }, code ? h('code', null, was) : was);
+  const nowCell = h('td', { class: 'now' }, code ? h('code', null, now) : now);
   tr.append(head, wasCell, nowCell);
   return tr;
 }

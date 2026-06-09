@@ -1,6 +1,6 @@
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
-import { iconSvg } from '../internal/icons.js';
+import { h, sheet } from '../internal/dom.js';
+import { iconEl } from '../internal/icons.js';
 
 /**
  * Per-instance stylesheet, lifted verbatim from the prototype's
@@ -51,10 +51,12 @@ code {
 }
 `;
 
-/** Leading glyph per delegation/event kind, lifted from the prototype. */
+const SHEET = sheet(STYLE);
+
+/** Leading lucide icon name per delegation/event kind, lifted from the prototype. */
 const GLYPH: Record<'feed' | 'sprinkle', string> = {
-  feed: iconSvg('arrow-right', { size: 13 }), // feed_scoop
-  sprinkle: iconSvg('sparkles', { size: 13 }), // sprinkle-opened
+  feed: 'arrow-right', // feed_scoop
+  sprinkle: 'sparkles', // sprinkle-opened
 };
 
 /** Split a comma/whitespace-free args attribute into discrete `<code>` chips. */
@@ -104,6 +106,7 @@ export class SliccDelegationLine extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+    this.#root.adoptedStyleSheets = [SHEET];
   }
 
   connectedCallback(): void {
@@ -194,22 +197,26 @@ export class SliccDelegationLine extends HTMLElement {
     if (hue) this.style.setProperty('--c', hue);
     else this.style.removeProperty('--c');
 
-    const glyph = GLYPH[kind];
-    const scoopColor = hue ? ` style="color:${escapeHtml(hue)}"` : '';
+    // Leading glyph slot — a live lucide <svg> as the default content.
+    const arrowSlot = h('slot', { name: 'arrow' }, iconEl(GLYPH[kind], { size: 13 }));
+    const arrowSpan = h('span', { class: 'darrow', part: 'arrow' }, arrowSlot);
 
-    const verbHtml = verb ? `<span class="verb">${escapeHtml(verb)}</span>` : '';
-    const scoopHtml = scoop
-      ? `<b class="scoop" part="scoop"${scoopColor}>${escapeHtml(scoop)}</b>`
-      : '';
-    const labelHtml = label ? `<span class="prose">${escapeHtml(label)}</span>` : '';
+    // Label slot — verb + bold scoop name + trailing prose as default content.
+    const labelSlot = h('slot', { name: 'label' });
+    if (verb) labelSlot.append(h('span', { class: 'verb' }, verb));
+    if (scoop) {
+      labelSlot.append(
+        h('b', { class: 'scoop', part: 'scoop', style: hue ? `color:${hue}` : undefined }, scoop)
+      );
+    }
+    if (label) labelSlot.append(h('span', { class: 'prose' }, label));
+    const labelSpan = h('span', { class: 'label', part: 'label' }, labelSlot);
 
-    const codeChips = args.map((a) => `<code part="code">${escapeHtml(a)}</code>`).join('');
+    // Args slot — one <code> chip per arg as default content.
+    const argsSlot = h('slot', { name: 'args' });
+    for (const a of args) argsSlot.append(h('code', { part: 'code' }, a));
 
-    this.#root.innerHTML =
-      `<style>${STYLE}</style>` +
-      `<span class="darrow" part="arrow"><slot name="arrow">${glyph}</slot></span>` +
-      `<span class="label" part="label"><slot name="label">${verbHtml}${scoopHtml}${labelHtml}</slot></span>` +
-      `<slot name="args">${codeChips}</slot>`;
+    this.#root.replaceChildren(arrowSpan, labelSpan, argsSlot);
   }
 }
 

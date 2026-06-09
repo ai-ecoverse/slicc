@@ -1,11 +1,12 @@
 import { define } from '../internal/define.js';
+import { h, sheet } from '../internal/dom.js';
 // Renders these child custom elements internally — owns their registration.
 import '../primitives/slicc-googly-eyes.js';
-import { escapeHtml } from '../internal/html.js';
-import { iconSvg } from '../internal/icons.js';
+import { iconEl } from '../internal/icons.js';
 
 /**
- * Per-instance stylesheet, lifted verbatim from the prototype's handoff rules
+ * Stylesheet body for `<slicc-handoff-card>` (adopted as a shared constructable
+ * sheet — see `SHEET` below), lifted verbatim from the prototype's handoff rules
  * (StellarRubySwift.html `.handoff` / `.opened`):
  *
  * - `.handoff` — bordered approval card (`--line` border, `13px` radius).
@@ -46,13 +47,8 @@ const STYLE = `
 .opened b{color:var(--ink);font-weight:600;}
 `;
 
-/**
- * The lucide `sparkles` glyph rendered in the rainbow `.sg` chip of the
- * `opened` variant (replacing the prototype's bespoke `✦` symbol). The chip is
- * 20×20; a 12px icon centers cleanly with room to breathe. It inherits the
- * chip's white `color` via `stroke: currentColor`.
- */
-const SG_GLYPH = iconSvg('sparkles', { size: 12 });
+/** Shared constructable stylesheet adopted by every instance's shadow root. */
+const SHEET = sheet(STYLE);
 
 /** Default micro-label prefix for the handoff approval card. */
 const DEFAULT_PRE = 'Handoff request from';
@@ -95,6 +91,7 @@ export class SliccHandoffCard extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+    this.#root.adoptedStyleSheets = [SHEET];
   }
 
   connectedCallback(): void {
@@ -158,37 +155,56 @@ export class SliccHandoffCard extends HTMLElement {
     else this.#renderHandoff();
   }
 
+  /** Body node: the `text` attribute as an escaped text node, else a `<slot>`. */
+  #bodyChild(): Node {
+    const text = this.text;
+    return text != null ? document.createTextNode(text) : h('slot');
+  }
+
   #renderHandoff(): void {
     const pre = this.pre ?? DEFAULT_PRE;
     const name = this.name;
-    const text = this.text;
-    const body = text != null ? escapeHtml(text) : '<slot></slot>';
-    const nameHtml = name != null ? `<b part="name">${escapeHtml(name)}</b>` : '';
-    const eyes = this.eyes === 'dead' ? ' eyes="dead"' : '';
 
-    this.#root.innerHTML =
-      `<style>${STYLE}</style>` +
-      `<div class="handoff" part="card">` +
-      `<div class="top" part="top">` +
-      `<span class="av" part="avatar"><slicc-googly-eyes${eyes} class="eyes"></slicc-googly-eyes></span>` +
-      `<span class="lbl2" part="label"><span class="pre">${escapeHtml(pre)}</span> ${nameHtml}</span>` +
-      `</div>` +
-      `<p part="text">${body}</p>` +
-      `</div>`;
+    // The round violet avatar well housing the googly eyes (composed by tag).
+    const eyes = h('slicc-googly-eyes', { class: 'eyes' });
+    if (this.eyes === 'dead') eyes.setAttribute('eyes', 'dead');
+    const avatar = h('span', { class: 'av', part: 'avatar' }, eyes);
+
+    // The micro-label: muted prefix + (optional) violet bold name.
+    const label = h(
+      'span',
+      { class: 'lbl2', part: 'label' },
+      h('span', { class: 'pre' }, pre),
+      ' ',
+      name != null ? h('b', { part: 'name' }, name) : null
+    );
+
+    const top = h('div', { class: 'top', part: 'top' }, avatar, label);
+    const body = h('p', { part: 'text' }, this.#bodyChild());
+
+    this.#root.replaceChildren(h('div', { class: 'handoff', part: 'card' }, top, body));
   }
 
   #renderOpened(): void {
     const name = this.name;
-    const text = this.text;
-    const body = text != null ? escapeHtml(text) : '<slot></slot>';
-    const nameHtml = name != null ? `<b part="name">${escapeHtml(name)}</b> ` : '';
 
-    this.#root.innerHTML =
-      `<style>${STYLE}</style>` +
-      `<div class="opened" part="card">` +
-      `<span class="sg" part="glyph" aria-hidden="true">${SG_GLYPH}</span>` +
-      `<span part="text">${nameHtml}${body}</span>` +
-      `</div>`;
+    // The rainbow glyph chip — a live lucide `sparkles` <svg> (never an emoji).
+    const glyph = h(
+      'span',
+      { class: 'sg', part: 'glyph', 'aria-hidden': 'true' },
+      iconEl('sparkles', { size: 12 })
+    );
+
+    // Bold target text (when present) followed by the body/slot.
+    const text = h(
+      'span',
+      { part: 'text' },
+      name != null ? h('b', { part: 'name' }, name) : null,
+      name != null ? ' ' : null,
+      this.#bodyChild()
+    );
+
+    this.#root.replaceChildren(h('div', { class: 'opened', part: 'card' }, glyph, text));
   }
 }
 
