@@ -39,7 +39,7 @@
     "esptool-js": "^0.6.0",
     "fflate": "^0.8.2",
     "isomorphic-dompurify": "^3.1.0",
-    "isomorphic-git": "1.38.3",
+    "isomorphic-git": "1.38.4",
     "just-bash": "^3.0.1",
     "lucide": "^1.8.0",
     "marked": "^18.0.0",

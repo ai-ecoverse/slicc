@@ -61,7 +61,7 @@ jobs:
       # Trusted checkout: the PR BASE revision contains the gate script. The gate
       # must not run PR-authored code (it gates a privileged job), so we never
       # check out the PR head before the gate decides.
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 1
@@ -80,7 +80,7 @@ jobs:
 
       # Only now (and only if the gate approved) check out the PR head so the
       # review step sees the proposed changes.
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         if: steps.gate.outputs.should_review == 'true'
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -88,7 +88,7 @@ jobs:
 
       - name: Claude PR review
         if: steps.gate.outputs.should_review == 'true'
-        uses: anthropics/claude-code-action@593d7a5c4e0073569f74772c2b7b64c30ec14707 # v1
+        uses: anthropics/claude-code-action@11ba60486e4aec9ddfeafcf4bb3f00b028ac2c16 # v1
         env:
           # Bedrock path: authenticate with an Amazon Bedrock API key (the Adobe
           # CAMP `ABSK...` bearer token). Mirrors rum-error-triage.yml — the
