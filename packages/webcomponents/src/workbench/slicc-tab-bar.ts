@@ -1,4 +1,6 @@
 import { define } from '../internal/define.js';
+// Renders these child custom elements internally — owns their registration.
+import './slicc-tab.js';
 import { escapeHtml } from '../internal/html.js';
 
 /**

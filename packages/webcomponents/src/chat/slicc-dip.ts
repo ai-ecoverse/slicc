@@ -1,4 +1,6 @@
 import { define } from '../internal/define.js';
+// Renders these child custom elements internally — owns their registration.
+import '../memory/slicc-palette-cell.js';
 import { escapeHtml } from '../internal/html.js';
 import { iconSvg } from '../internal/icons.js';
 

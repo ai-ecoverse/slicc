@@ -1,4 +1,6 @@
 import { define } from '../internal/define.js';
+// Renders these child custom elements internally — owns their registration.
+import './slicc-memtag.js';
 
 /**
  * Scoped, document-level stylesheet for `<slicc-memrow>`. A light-DOM component
