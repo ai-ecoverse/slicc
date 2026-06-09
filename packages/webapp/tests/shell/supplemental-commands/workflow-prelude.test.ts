@@ -219,4 +219,28 @@ describe('workflow-prelude', () => {
     expect(calls).toContainEqual(['__wf_progress', 'phase', 'Scan']);
     expect(calls).toContainEqual(['__wf_progress', 'log', 'hi']);
   });
+  it('agent({thinking}) adds --thinking <level>', async () => {
+    const calls: string[][] = [];
+    const exec = {
+      spawn: async (a: string[]) => {
+        calls.push(a);
+        return { stdout: 'ok\n', stderr: '', exitCode: 0 };
+      },
+    };
+    await run('globalThis.__t = await agent("q",{thinking:"high"});', exec, WF);
+    const i = calls[0].indexOf('--thinking');
+    expect(i).toBeGreaterThan(-1);
+    expect(calls[0][i + 1]).toBe('high');
+  });
+  it('agent() without thinking omits --thinking', async () => {
+    const calls: string[][] = [];
+    const exec = {
+      spawn: async (a: string[]) => {
+        calls.push(a);
+        return { stdout: 'ok\n', stderr: '', exitCode: 0 };
+      },
+    };
+    await run('globalThis.__t = await agent("q");', exec, WF);
+    expect(calls[0]).not.toContain('--thinking');
+  });
 });

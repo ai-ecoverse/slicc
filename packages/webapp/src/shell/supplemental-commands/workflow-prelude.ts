@@ -43,8 +43,10 @@ let __total = 0;
 
 async function agent(prompt, opts) {
   opts = opts || {};
-  // opts.phase / opts.label are ACCEPTED but display-only — they group/label progress in the UI,
-  // which is SP4. SP1 honors them as no-ops (no execution effect). opts.isolation/agentType: SP6.
+  // Recognized opts: model (→ --model), thinking (→ --thinking <level>: off|minimal|low|medium|
+  // high|xhigh; invalid is the agent command's own error → failed subagent → null), schema (→ a
+  // StructuredOutput contract; result is JSON-parsed). phase/label are ACCEPTED but display-only
+  // (SP4 progress grouping). isolation/agentType: SP6.
   if (__total >= 1000) throw new WorkflowAgentCapError('1000-agent total cap reached');
   __total++;
   await __slots.acquire();
@@ -52,6 +54,7 @@ async function agent(prompt, opts) {
     if (!__execSpawn) throw new WorkflowError('agent runtime unavailable');
     const flags = [];
     if (opts.model) flags.push('--model', String(opts.model));
+    if (opts.thinking) flags.push('--thinking', String(opts.thinking));
     if (opts.schema) flags.push('--schema-b64', __b64(JSON.stringify(opts.schema)));
     const argv = ['agent'].concat(flags, ['--read-only', '/workspace/', __agentCwd, '*', String(prompt)]);
     const r = await __execSpawn(argv);
