@@ -441,6 +441,407 @@ final class ElectronLauncherTests: XCTestCase {
         )
     }
 
+    // MARK: - Pure helpers: overlay app URL + target filter
+
+    func testBuildElectronOverlayAppURLUsesServePort() {
+        XCTAssertEqual(buildElectronOverlayAppURL(servePort: 5711), "http://localhost:5711/electron")
+        XCTAssertEqual(buildElectronOverlayAppURL(servePort: 9999), "http://localhost:9999/electron")
+    }
+
+    func testShouldInjectElectronOverlayTargetAcceptsHttpsPage() {
+        let target = ElectronInspectableTarget(
+            type: "page",
+            title: "Example",
+            url: "https://example.com/",
+            webSocketDebuggerURL: "ws://127.0.0.1:9223/devtools/page/1"
+        )
+        XCTAssertTrue(shouldInjectElectronOverlayTarget(target))
+    }
+
+    func testShouldInjectElectronOverlayTargetRejectsNonPageType() {
+        let target = ElectronInspectableTarget(
+            type: "service_worker",
+            title: nil,
+            url: "https://example.com/sw.js",
+            webSocketDebuggerURL: "ws://127.0.0.1:9223/devtools/page/1"
+        )
+        XCTAssertFalse(shouldInjectElectronOverlayTarget(target))
+    }
+
+    func testShouldInjectElectronOverlayTargetRejectsMissingDebuggerURL() {
+        let target = ElectronInspectableTarget(
+            type: "page",
+            title: "no ws",
+            url: "https://example.com/",
+            webSocketDebuggerURL: nil
+        )
+        XCTAssertFalse(shouldInjectElectronOverlayTarget(target))
+    }
+
+    func testShouldInjectElectronOverlayTargetRejectsEmptyDebuggerURL() {
+        let target = ElectronInspectableTarget(
+            type: "page",
+            title: "empty ws",
+            url: "https://example.com/",
+            webSocketDebuggerURL: ""
+        )
+        XCTAssertFalse(shouldInjectElectronOverlayTarget(target))
+    }
+
+    func testShouldInjectElectronOverlayTargetRejectsEmptyURL() {
+        let target = ElectronInspectableTarget(
+            type: "page",
+            title: "blank",
+            url: "   ",
+            webSocketDebuggerURL: "ws://x"
+        )
+        XCTAssertFalse(shouldInjectElectronOverlayTarget(target))
+    }
+
+    func testShouldInjectElectronOverlayTargetRejectsDevtoolsScheme() {
+        let target = ElectronInspectableTarget(
+            type: "page",
+            title: "dt",
+            url: "devtools://devtools/bundled/inspector.html",
+            webSocketDebuggerURL: "ws://x"
+        )
+        XCTAssertFalse(shouldInjectElectronOverlayTarget(target))
+    }
+
+    func testShouldInjectElectronOverlayTargetRejectsChromeAndExtensionSchemes() {
+        let chromeTarget = ElectronInspectableTarget(
+            type: "page",
+            title: "settings",
+            url: "chrome://settings/",
+            webSocketDebuggerURL: "ws://x"
+        )
+        let extensionTarget = ElectronInspectableTarget(
+            type: "page",
+            title: "popup",
+            url: "chrome-extension://abc/popup.html",
+            webSocketDebuggerURL: "ws://x"
+        )
+        XCTAssertFalse(shouldInjectElectronOverlayTarget(chromeTarget))
+        XCTAssertFalse(shouldInjectElectronOverlayTarget(extensionTarget))
+    }
+
+    func testSelectBestOverlayTargetsReturnsEmptyForNoInput() {
+        XCTAssertEqual(selectBestOverlayTargets([]), [])
+    }
+
+    func testSelectBestOverlayTargetsKeepsSingleInjectableTarget() {
+        let only = ElectronInspectableTarget(
+            type: "page",
+            title: "Solo",
+            url: "https://solo.example/",
+            webSocketDebuggerURL: "ws://127.0.0.1:9223/devtools/page/solo"
+        )
+        XCTAssertEqual(
+            selectBestOverlayTargets([only]).map(\.webSocketDebuggerURL),
+            ["ws://127.0.0.1:9223/devtools/page/solo"]
+        )
+    }
+
+    func testSelectBestOverlayTargetsDropsNonInjectableTargets() {
+        let pageTarget = ElectronInspectableTarget(
+            type: "page",
+            title: "Real",
+            url: "https://example.com/",
+            webSocketDebuggerURL: "ws://127.0.0.1:9223/devtools/page/1"
+        )
+        let serviceWorker = ElectronInspectableTarget(
+            type: "service_worker",
+            title: nil,
+            url: "https://example.com/sw.js",
+            webSocketDebuggerURL: "ws://127.0.0.1:9223/devtools/page/2"
+        )
+        XCTAssertEqual(
+            selectBestOverlayTargets([pageTarget, serviceWorker]).map(\.webSocketDebuggerURL),
+            ["ws://127.0.0.1:9223/devtools/page/1"]
+        )
+    }
+
+    // MARK: - ElectronInspectableTarget Codable round-trip
+
+    func testElectronInspectableTargetCodableRoundTrip() throws {
+        let original = ElectronInspectableTarget(
+            type: "page",
+            title: "Example",
+            url: "https://example.com/",
+            webSocketDebuggerURL: "ws://127.0.0.1:9223/devtools/page/x"
+        )
+        let encoded = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(ElectronInspectableTarget.self, from: encoded)
+        XCTAssertEqual(decoded, original)
+    }
+
+    func testElectronInspectableTargetDecodesWebSocketDebuggerUrlCodingKey() throws {
+        // The CodingKey maps webSocketDebuggerURL ↔ webSocketDebuggerUrl in JSON.
+        let json = """
+        {"type":"page","title":"Hi","url":"https://example.com","webSocketDebuggerUrl":"ws://x/y"}
+        """.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(ElectronInspectableTarget.self, from: json)
+        XCTAssertEqual(decoded.webSocketDebuggerURL, "ws://x/y")
+        XCTAssertEqual(decoded.title, "Hi")
+    }
+
+    func testElectronInspectableTargetDecodesMissingOptionalFields() throws {
+        let json = """
+        {"type":"page","url":"https://example.com"}
+        """.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(ElectronInspectableTarget.self, from: json)
+        XCTAssertNil(decoded.title)
+        XCTAssertNil(decoded.webSocketDebuggerURL)
+    }
+
+    // MARK: - Error types: errorDescription coverage
+
+    func testElectronAppAlreadyRunningErrorExposesMessage() {
+        let error = ElectronAppAlreadyRunningError(message: "Slack is already running")
+        XCTAssertEqual(error.errorDescription, "Slack is already running")
+    }
+
+    func testElectronLaunchErrorAppAlreadyRunningDescription() {
+        let error = ElectronLaunchError.appAlreadyRunning("App running")
+        XCTAssertEqual(error.errorDescription, "App running")
+    }
+
+    func testElectronLaunchErrorCDPNotAvailableDescription() {
+        let error = ElectronLaunchError.cdpNotAvailable("no cdp")
+        XCTAssertEqual(error.errorDescription, "no cdp")
+    }
+
+    func testElectronLaunchErrorRemoteDebuggingDisabledDescription() {
+        let error = ElectronLaunchError.remotDebuggingDisabled("rdb off")
+        XCTAssertEqual(error.errorDescription, "rdb off")
+    }
+
+    // MARK: - ElectronResolvedApp minimal shape
+
+    func testElectronResolvedAppIsAppBundleFlag() {
+        let bundleURL = URL(fileURLWithPath: "/Applications/Sample.app")
+        let executableURL = bundleURL.appendingPathComponent("Contents/MacOS/Sample")
+        let resolved = ElectronResolvedApp(
+            inputURL: bundleURL,
+            bundleURL: bundleURL,
+            executableURL: executableURL,
+            displayName: "Sample"
+        )
+        XCTAssertTrue(resolved.isAppBundle)
+        XCTAssertEqual(resolved.displayName, "Sample")
+
+        let bareExecutable = URL(fileURLWithPath: "/usr/local/bin/some-bin")
+        let bareResolved = ElectronResolvedApp(
+            inputURL: bareExecutable,
+            bundleURL: nil,
+            executableURL: bareExecutable,
+            displayName: "some-bin"
+        )
+        XCTAssertFalse(bareResolved.isAppBundle)
+    }
+
+    // MARK: - ElectronLauncher.resolveApp & resolveExecutableURL paths
+
+    func testResolveAppForAppBundleReturnsBundleURL() throws {
+        let tempDirectory = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+
+        let bundleURL = tempDirectory.appendingPathComponent("Hello.app")
+        let macOSDirectory = bundleURL.appendingPathComponent("Contents/MacOS", isDirectory: true)
+        try FileManager.default.createDirectory(at: macOSDirectory, withIntermediateDirectories: true)
+        let executableURL = macOSDirectory.appendingPathComponent("Hello")
+        FileManager.default.createFile(atPath: executableURL.path, contents: Data())
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
+
+        let launcher = ElectronLauncher()
+        let resolved = try launcher.resolveApp(bundleURL.path)
+        XCTAssertNotNil(resolved.bundleURL)
+        XCTAssertTrue(resolved.isAppBundle)
+        XCTAssertEqual(resolved.displayName, "Hello")
+        XCTAssertEqual(resolved.executableURL.lastPathComponent, "Hello")
+    }
+
+    func testResolveAppForBareExecutablePathReturnsNilBundle() throws {
+        let tempDirectory = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+
+        let executableURL = tempDirectory.appendingPathComponent("bare-exe")
+        FileManager.default.createFile(atPath: executableURL.path, contents: Data())
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
+
+        let launcher = ElectronLauncher()
+        let resolved = try launcher.resolveApp(executableURL.path)
+        XCTAssertNil(resolved.bundleURL)
+        XCTAssertFalse(resolved.isAppBundle)
+        XCTAssertEqual(resolved.executableURL.lastPathComponent, "bare-exe")
+    }
+
+    func testResolveAppForBareExecutableInsideAppBundleRecoversBundleURL() throws {
+        let tempDirectory = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+
+        let bundleURL = tempDirectory.appendingPathComponent("Wrap.app")
+        let macOSDirectory = bundleURL.appendingPathComponent("Contents/MacOS", isDirectory: true)
+        try FileManager.default.createDirectory(at: macOSDirectory, withIntermediateDirectories: true)
+        let helperURL = macOSDirectory.appendingPathComponent("Wrap Helper")
+        FileManager.default.createFile(atPath: helperURL.path, contents: Data())
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helperURL.path)
+
+        let launcher = ElectronLauncher()
+        let resolved = try launcher.resolveApp(helperURL.path)
+        XCTAssertNotNil(resolved.bundleURL)
+        XCTAssertEqual(resolved.bundleURL?.lastPathComponent, "Wrap.app")
+        XCTAssertEqual(resolved.displayName, "Wrap")
+    }
+
+    func testResolveExecutableURLThrowsWhenBundleHasNoExecutable() throws {
+        let tempDirectory = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+
+        let bundleURL = tempDirectory.appendingPathComponent("Empty.app")
+        let macOSDirectory = bundleURL.appendingPathComponent("Contents/MacOS", isDirectory: true)
+        try FileManager.default.createDirectory(at: macOSDirectory, withIntermediateDirectories: true)
+
+        let launcher = ElectronLauncher()
+        XCTAssertThrowsError(try launcher.resolveExecutableURL(in: bundleURL))
+    }
+
+    func testResolveExecutableURLSkipsHelperBinaries() throws {
+        let tempDirectory = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+
+        let bundleURL = tempDirectory.appendingPathComponent("WithHelpers.app")
+        let macOSDirectory = bundleURL.appendingPathComponent("Contents/MacOS", isDirectory: true)
+        try FileManager.default.createDirectory(at: macOSDirectory, withIntermediateDirectories: true)
+
+        // Helpers plus a non-helper binary that does NOT match the bundle's
+        // display name — exercises the directory-scan fallback that skips
+        // helper/crash/gpu/etc. suffixes and picks the remaining real binary.
+        for name in ["Main Helper (Renderer)", "Main Helper (GPU)", "Plugin Tool", "Real"] {
+            let helperURL = macOSDirectory.appendingPathComponent(name)
+            FileManager.default.createFile(atPath: helperURL.path, contents: Data())
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helperURL.path)
+        }
+
+        let launcher = ElectronLauncher()
+        let executable = try launcher.resolveExecutableURL(in: bundleURL)
+        XCTAssertEqual(executable.lastPathComponent, "Real")
+    }
+
+    // MARK: - findRunningInstances / terminateRunningApp safety paths
+
+    func testFindRunningInstancesReturnsEmptyForFakeBundle() throws {
+        let tempDirectory = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+
+        let bundleURL = tempDirectory.appendingPathComponent("Unlikely.app")
+        let macOSDirectory = bundleURL.appendingPathComponent("Contents/MacOS", isDirectory: true)
+        try FileManager.default.createDirectory(at: macOSDirectory, withIntermediateDirectories: true)
+        let executableURL = macOSDirectory.appendingPathComponent("Unlikely")
+        FileManager.default.createFile(atPath: executableURL.path, contents: Data())
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
+
+        let launcher = ElectronLauncher()
+        let running = try launcher.findRunningInstances(appPath: bundleURL.path)
+        XCTAssertTrue(running.isEmpty)
+    }
+
+    func testTerminateRunningAppIsNoOpWhenNothingMatches() async throws {
+        let tempDirectory = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+
+        let bundleURL = tempDirectory.appendingPathComponent("AlsoUnlikely.app")
+        let macOSDirectory = bundleURL.appendingPathComponent("Contents/MacOS", isDirectory: true)
+        try FileManager.default.createDirectory(at: macOSDirectory, withIntermediateDirectories: true)
+        let executableURL = macOSDirectory.appendingPathComponent("AlsoUnlikely")
+        FileManager.default.createFile(atPath: executableURL.path, contents: Data())
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
+
+        let launcher = ElectronLauncher()
+        try await launcher.terminateRunningApp(appPath: bundleURL.path)
+    }
+
+    // MARK: - ElectronOverlayInjector init + start + stop lifecycle
+
+    func testElectronOverlayInjectorStartStopDoesNotCrash() async {
+        let injector = ElectronOverlayInjector(
+            cdpPort: 0,
+            servePort: 0,
+            projectRoot: FileManager.default.temporaryDirectory,
+            probeDelayNanoseconds: 1_000_000
+        )
+        // First call wires up the polling task; the second hits the
+        // alreadyRunning guard.
+        injector.start()
+        injector.start()
+        XCTAssertTrue(injector._testing_bypassedURLs().isEmpty)
+        injector.stop()
+        // Idempotent stop: subsequent calls must remain safe.
+        injector.stop()
+    }
+
+    func testElectronOverlayInjectorRunsAtLeastOnePollCycleAgainstClosedPort() async {
+        // cdpPort 1 will refuse the /json connection — the polling loop must
+        // catch the error and continue, then cleanly shut down on stop().
+        let injector = ElectronOverlayInjector(
+            cdpPort: 1,
+            servePort: 5711,
+            projectRoot: FileManager.default.temporaryDirectory,
+            probeDelayNanoseconds: 1_000_000
+        )
+        injector.start()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        injector.stop()
+        XCTAssertTrue(injector._testing_bypassedURLs().isEmpty)
+    }
+
+    // MARK: - Bootstrap script content + escaping
+
+    func testBootstrapScriptIncludesBundleSourceAndInjectionCall() {
+        let script = buildElectronOverlayBootstrapScript(
+            bundleSource: "/* MARKER_BUNDLE_42 */",
+            appURL: "http://localhost:5711/electron"
+        )
+        XCTAssertTrue(script.contains("/* MARKER_BUNDLE_42 */"))
+        XCTAssertTrue(script.contains("window.__SLICC_ELECTRON_OVERLAY__"))
+        XCTAssertTrue(script.contains("DOMContentLoaded"))
+    }
+
+    func testBootstrapScriptEscapesBackslashesInAppURL() {
+        let script = buildElectronOverlayBootstrapScript(
+            bundleSource: "",
+            appURL: "http://example.com/back\\slash"
+        )
+        XCTAssertTrue(script.contains("back\\\\slash"))
+    }
+
+    // MARK: - OverlayTargetSession gracefulShutdown on already-closed session
+
+    func testGracefulShutdownOnClosedSessionIsNoOp() async {
+        let session = OverlayTargetSession(
+            target: ElectronInspectableTarget(
+                type: "page",
+                title: nil,
+                url: "file:///tmp/x.html",
+                webSocketDebuggerURL: "ws://127.0.0.1:9999/devtools/page/1"
+            ),
+            bootstrapScript: "/* noop */",
+            servePort: 5711,
+            session: .shared,
+            logger: Logger(label: "test"),
+            probeDelayNanoseconds: 1_000_000,
+            commandTimeoutNanoseconds: 60_000_000_000,
+            isAlreadyBypassed: { _ in false },
+            recordBypassed: { _ in },
+            onClose: { _ in }
+        )
+        session.stop()
+        await session.gracefulShutdown()
+        XCTAssertEqual(session._testing_pendingWaiterCount(), 0)
+    }
+
+    // MARK: - Test helpers
+
     private func waitFor(timeout seconds: Double, predicate: @Sendable () -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(seconds)
         while Date() < deadline {
