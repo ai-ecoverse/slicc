@@ -119,5 +119,5 @@ jobs:
           claude_args: |
             --model ${{ vars.SINS_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
             --allowedTools "Read,Grep,Glob,Bash(gh issue:*),Bash(gh pr:*),Bash(gh label:*),Bash(git:*)"
-            --max-turns 40
+            --max-turns 200
           prompt: ${{ steps.sin.outputs.prompt }}
