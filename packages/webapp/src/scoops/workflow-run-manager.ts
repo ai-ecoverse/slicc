@@ -140,19 +140,24 @@ export function createWorkflowRunManager(deps: WorkflowRunManagerDeps): Workflow
     // for `--wait` (Task 7 Step 4) and runs the SP1 inline path, so `start` never awaits.
     const wrappedCtx = wrapRunCtx(opts.ctx, runId);
     const offSpawn = deps.processManager.on('spawn', (proc) => {
-      // Match by argv, NOT kind: runInRealm registers the JS execution as ProcessKind
-      // 'jsh' ('js' is the realm kind, not the process kind), and argv is the
-      // ['workflow', filename] we pass to runRealm — specific + reliable.
-      if (state.pid === null && proc.argv[0] === 'workflow' && proc.argv[1] === opts.filename) {
+      // Match by the unique runId in argv[2], NOT by kind or filename. Filename
+      // is NOT unique (two concurrent runs of the same file — and ALL `--script`
+      // runs, which share `<workflow>` — would alias to whichever pid spawned
+      // first). The realm argv is `['workflow', filename, runId]`; `runInRealm`
+      // registers the process with that full argv (kind is irrelevant — it's
+      // 'jsh' for every realm-JS process), so argv[2] === runId is the only
+      // reliable per-run discriminator.
+      if (state.pid === null && proc.argv[0] === 'workflow' && proc.argv[2] === runId) {
         state.pid = proc.pid;
         notify(runId);
       }
     });
     void deps
-      .runRealm(opts.code, ['workflow', opts.filename], wrappedCtx)
+      .runRealm(opts.code, ['workflow', opts.filename, runId], wrappedCtx)
       .then((result) => finish(runId, sentinel, result))
       .catch((err) => fail(runId, err instanceof Error ? err.message : String(err)))
-      .finally(() => offSpawn());
+      .finally(() => offSpawn())
+      .catch((e) => log.warn('workflow run lifecycle error', e));
 
     return { runId };
   }
@@ -190,6 +195,8 @@ export function createWorkflowRunManager(deps: WorkflowRunManagerDeps): Workflow
     const state = runs.get(runId);
     if (!state) return;
     const resultPath = `${RUNS_DIR}/${runId}.json`;
+    // One timestamp per completion so the run file and the in-memory state agree.
+    const finishedAt = new Date().toISOString();
     try {
       await deps.sharedFs.mkdir(RUNS_DIR, { recursive: true });
       await deps.sharedFs.writeFile(
@@ -202,7 +209,7 @@ export function createWorkflowRunManager(deps: WorkflowRunManagerDeps): Workflow
             error,
             logs: state.logs,
             startedAt: state.startedAt,
-            finishedAt: new Date().toISOString(),
+            finishedAt,
           },
           null,
           2
@@ -214,7 +221,7 @@ export function createWorkflowRunManager(deps: WorkflowRunManagerDeps): Workflow
     }
     state.status = status;
     state.error = error;
-    state.finishedAt = new Date().toISOString();
+    state.finishedAt = finishedAt;
     state.preview = status === 'done' ? previewOf(value) : (error ?? '');
     notify(runId);
     deliver(state);

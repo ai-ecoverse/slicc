@@ -186,12 +186,79 @@ describe('WorkflowRunManager', () => {
       ctx: { exec: vi.fn() } as any,
     });
     // Real realm-JS processes are kind:'jsh' (runInRealm default). The production filter
-    // matches on argv ([0]==='workflow' && [1]===filename), NOT kind, so kind here is just
-    // realistic fixture data — must match reality so the test isn't misleading.
-    spawnHandler?.({ pid: 4242, kind: 'jsh', argv: ['workflow', 'f'] });
+    // matches on argv ([0]==='workflow' && [2]===runId), NOT kind, so kind here is just
+    // realistic fixture data — must match reality so the test isn't misleading. argv[2]
+    // is the unique runId the manager threads in (makeRunId returns 'run1' here).
+    spawnHandler?.({ pid: 4242, kind: 'jsh', argv: ['workflow', 'f', 'run1'] });
     expect(mgr.getRun(runId)!.pid).toBe(4242);
     realmDone.resolve({ stdout: `WF_RESULT_x${JSON.stringify({})}`, stderr: '', exitCode: 0 });
     await vi.waitFor(() => expect(mgr.getRun(runId)!.status).toBe('done'));
+  });
+
+  it('concurrent same-file runs capture DISTINCT pids (no aliasing) — matched by runId in argv[2]', async () => {
+    // Every `start()` registers its own spawn listener. Capture them all so we can
+    // replay each run's spawn event to every listener — exactly what the real PM does
+    // (it broadcasts each spawn to all subscribers). Each listener must only claim the
+    // pid whose argv[2] matches ITS runId.
+    const handlers: ((p: any) => void)[] = [];
+    const pm = {
+      on: vi.fn((_e: string, fn: any) => {
+        handlers.push(fn);
+        return () => {
+          const i = handlers.indexOf(fn);
+          if (i >= 0) handlers.splice(i, 1);
+        };
+      }),
+    };
+    // Distinct run ids from a counter — same filename for both runs.
+    let n = 0;
+    const realm1 = deferred<any>();
+    const realm2 = deferred<any>();
+    const realms = [realm1.promise, realm2.promise];
+    let r = 0;
+    const deps = makeDeps({
+      processManager: pm as any,
+      makeRunId: () => `run${++n}`,
+      runRealm: vi.fn(() => realms[r++]),
+    });
+    const mgr = createWorkflowRunManager(deps as any);
+
+    const a = await mgr.start({
+      code: 'C',
+      source: 'S',
+      name: 'n',
+      filename: 'f', // SAME file
+      parentJid: undefined,
+      sentinel: 'WF_RESULT_x',
+      ctx: { exec: vi.fn() } as any,
+    });
+    const b = await mgr.start({
+      code: 'C',
+      source: 'S',
+      name: 'n',
+      filename: 'f', // SAME file — pre-fix this aliased both runs to one pid
+      parentJid: undefined,
+      sentinel: 'WF_RESULT_x',
+      ctx: { exec: vi.fn() } as any,
+    });
+    expect(a.runId).toBe('run1');
+    expect(b.runId).toBe('run2');
+
+    // Broadcast each run's spawn (identical argv[0..1], unique argv[2]=runId) to ALL listeners.
+    const broadcast = (p: any) => {
+      for (const h of handlers) h(p);
+    };
+    broadcast({ pid: 100, kind: 'jsh', argv: ['workflow', 'f', 'run1'] });
+    broadcast({ pid: 200, kind: 'jsh', argv: ['workflow', 'f', 'run2'] });
+
+    // Each run captured its OWN pid — no aliasing.
+    expect(mgr.getRun('run1')!.pid).toBe(100);
+    expect(mgr.getRun('run2')!.pid).toBe(200);
+
+    realm1.resolve({ stdout: `WF_RESULT_x${JSON.stringify({})}`, stderr: '', exitCode: 0 });
+    realm2.resolve({ stdout: `WF_RESULT_x${JSON.stringify({})}`, stderr: '', exitCode: 0 });
+    await vi.waitFor(() => expect(mgr.getRun('run1')!.status).toBe('done'));
+    await vi.waitFor(() => expect(mgr.getRun('run2')!.status).toBe('done'));
   });
 
   it('exit 137 (SIGKILL) → status killed (not error)', async () => {

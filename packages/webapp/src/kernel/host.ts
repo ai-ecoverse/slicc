@@ -68,7 +68,10 @@ import { Orchestrator } from '../scoops/orchestrator.js';
 import { subscribeToFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 import { subscribeToLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import type { ChannelMessage, RegisteredScoop } from '../scoops/types.js';
-import { publishWorkflowRunManager } from '../scoops/workflow-run-manager.js';
+import {
+  publishWorkflowRunManager,
+  WORKFLOW_MANAGER_GLOBAL_KEY,
+} from '../scoops/workflow-run-manager.js';
 import { executeJsCode } from '../shell/jsh-executor.js';
 import { makeSentinel, splitSentinel } from '../shell/supplemental-commands/workflow-script.js';
 import { ProcMountBackend } from './proc-mount.js';
@@ -1006,4 +1009,9 @@ export function releaseHostGlobals(refs: {
   if (refs.wsRegistry && g.__slicc_wsSubscribers === refs.wsRegistry) {
     delete g.__slicc_wsSubscribers;
   }
+  // Release the workflow run manager so we don't leak a manager closed over a
+  // disposed orchestrator / lickManager. Symmetric with the globals above; the
+  // workflow manager has no shell-script fallback (unlike `__slicc_pm`), so an
+  // unconditional clear is safe — a second host re-publishes its own on boot.
+  delete g[WORKFLOW_MANAGER_GLOBAL_KEY];
 }

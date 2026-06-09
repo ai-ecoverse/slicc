@@ -260,8 +260,15 @@ async function runSubcommand(args: string[], ctx: CommandContext): Promise<ExecR
     return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
   }
   // stop
-  if (st.pid != null) await ctx.exec?.('kill', { cwd: ctx.cwd, args: ['-KILL', String(st.pid)] });
-  return { stdout: `stopped run ${st.id} (pid ${st.pid ?? '?'})\n`, stderr: '', exitCode: 0 };
+  if (st.pid == null) {
+    return {
+      stdout: `workflow: run ${st.id} has not started a realm process yet (nothing to stop)\n`,
+      stderr: '',
+      exitCode: 0,
+    };
+  }
+  await ctx.exec?.('kill', { cwd: ctx.cwd, args: ['-KILL', String(st.pid)] });
+  return { stdout: `stopped run ${st.id} (pid ${st.pid})\n`, stderr: '', exitCode: 0 };
 }
 
 // Compose the command output from the realm result: banner + rendered progress
