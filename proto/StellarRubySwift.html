@@ -4,31 +4,26 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SLICC — interactive walkthrough (press → to advance)</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<link rel="preconnect" href="https://use.typekit.net" crossorigin="">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://use.typekit.net/mge7bvf.css">
 <style>
   :root{
-    --canvas:#fff;--bg:#f4f4f6;--ghost:#ececef;--desk:#ececef;--ink:#0a0a0a;--deep:#000;
-    --txt-2:#737373;--txt-3:#a1a1a1;--line:#e5e5e5;
+    --canvas:#fdfbf5;--bg:#f5f1e6;--ghost:#ece8db;--desk:#ece8db;--ink:#0a0a0a;--deep:#000;
+    --txt-2:#737073;--txt-3:#a19e96;--line:#e5e1d5;
     --red:#c22b10;--green:#168a35;--green-bg:#ecf8ef;--green-line:#cbe9d3;
     --rose:#f43f5e;--cyan:#06b6d4;--violet:#8b5cf6;--amber:#f59e0b;
     --rainbow:linear-gradient(90deg,#f43f5e 0%,#f59e0b 28%,#06b6d4 64%,#8b5cf6 100%);
-    --ui:'Inter',system-ui,sans-serif;--mono:'IBM Plex Mono',ui-monospace,monospace;
+    --ui:'adobe-clean','Inter',system-ui,sans-serif;--mono:'IBM Plex Mono',ui-monospace,monospace;
     --shadow-pane:rgba(10,10,10,.06) 0 8px 26px -10px;
   }
   body.dark{
-    --canvas:#161618;--bg:#0e0e10;--ghost:#1f1f22;--desk:#1f1f22;--ink:#f5f5f7;--deep:#f5f5f7;
-    --txt-2:#9b9ba1;--txt-3:#6c6c72;--line:#2a2a2e;
+    --canvas:#181715;--bg:#100f0c;--ghost:#211f1c;--desk:#211f1c;--ink:#f5f5f2;--deep:#f5f5f2;
+    --txt-2:#9b9892;--txt-3:#6c6a64;--line:#2b2a26;
     --shadow-pane:rgba(0,0,0,.35) 0 8px 26px -10px;
   }
-  /* dark-mode overrides for surfaces that hardcode #fff or light-blue tints */
-  body.dark .freezer{background:color-mix(in srgb,#1e2a3a 75%,#0e0e10);border-right-color:#26323f;box-shadow:rgba(0,0,0,.35) 1px 0 14px -4px;}
-  body.dark .freezer .fzh{background:color-mix(in srgb,#1e2a3a 55%,transparent);border-bottom-color:#26323f;}
-  body.dark .freezer .fztgl{background:color-mix(in srgb,#26323f 80%,transparent);border-color:#36465a;color:#9fc1ea;}
-  body.dark .freezer .fztgl:hover{background:#2c3a4d;}
-  body.dark .freezer .fzsearch{background:color-mix(in srgb,#26323f 70%,transparent);border-color:#36465a;color:var(--ink);}
-  body.dark .freezer .fzsearch:focus{background:#1e2a3a;border-color:#5b8cd9;}
-  body.dark .freezer .fzcard:hover{background:color-mix(in srgb,#2c3a4d 55%,transparent);}
-  body.dark .freezer .fzcard .snow{background:color-mix(in srgb,#26323f 80%,#161618);border-color:#36465a;color:#9fc1ea;}
+  /* freezer dark surfaces — base styles use vars so no per-element override needed; tweak shadow only */
+  body.dark .freezer{box-shadow:rgba(0,0,0,.35) 1px 0 14px -4px;}
   body.dark .demobar{background:rgba(30,30,33,.96);border-color:#2a2a2e;}
   body.dark .demobar .dbtn{background:#1f1f22;color:#c0c0c4;border-color:#2a2a2e;}
   body.dark .demobar .dbtn:hover{background:#26262a;color:#e5e5e7;}
@@ -47,7 +42,6 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   body.dark .tree .f.on{background:color-mix(in srgb,var(--violet) 22%,var(--canvas));}
   body.dark .dip .dh .tag{background:color-mix(in srgb,var(--c,var(--violet)) 22%,var(--canvas));border-color:color-mix(in srgb,var(--c,var(--violet)) 38%,var(--line));}
   body.dark .msg.deleg.src{background:color-mix(in srgb,var(--c,var(--violet)) 16%,var(--canvas));border-color:color-mix(in srgb,var(--c,var(--violet)) 36%,var(--line));}
-  body.dark .freezer .fzcard.thawed .snow{background:color-mix(in srgb,var(--rose) 22%,#161618);border-color:color-mix(in srgb,var(--rose) 45%,#36465a);color:#ffb0c3;}
   /* palette chips carry inline-style light cream/blush backgrounds — tone them down for dark mode */
   body.dark .palcell{background:var(--canvas);}
   body.dark .palcell .ch{filter:brightness(.55) saturate(.85);}
@@ -61,7 +55,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   .app{height:100vh;display:flex;flex-direction:column;background:var(--bg);}
 
   :root{--barh:52px;}
-  .nav{display:flex;align-items:center;gap:14px;padding:0 24px;min-height:var(--barh);background:var(--canvas);border-bottom:1px solid var(--line);flex:0 0 auto;z-index:4;}
+  .nav{display:flex;align-items:center;gap:14px;padding:0 24px;min-height:var(--barh);background:color-mix(in srgb,var(--canvas) 68%,transparent);backdrop-filter:blur(18px) saturate(1.4);-webkit-backdrop-filter:blur(18px) saturate(1.4);border-bottom:1px solid var(--line);flex:0 0 auto;z-index:4;}
   .logo{font-weight:600;font-size:14px;letter-spacing:-.02em;flex:0 0 auto;} .logo .b{font-family:var(--ui);font-weight:500;font-size:12px;margin-left:7px;background:var(--rainbow);-webkit-background-clip:text;background-clip:text;color:transparent;}
   .switcher{display:flex;gap:6px;margin-left:14px;flex-wrap:nowrap;min-width:0;overflow:hidden;}
   .switcher .scoop{flex:0 0 auto;}
@@ -147,8 +141,8 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   .opened .sg{width:20px;height:20px;border-radius:6px;display:grid;place-items:center;font-size:10px;color:#fff;background:var(--rainbow);}
   .opened b{color:var(--ink);font-weight:600;}
 
-  /* composer (polished, with model + thinking in the action bar). Solid theme bg so the shader stays behind the reading area only. */
-  .composer{flex:0 0 auto;border-top:1px solid var(--line);background:var(--bg);padding:14px 16px 14px;position:relative;z-index:2;}
+  /* composer (polished, with model + thinking in the action bar). Frosted glass — content faintly visible behind. */
+  .composer{flex:0 0 auto;border-top:1px solid var(--line);background:color-mix(in srgb,var(--bg) 68%,transparent);backdrop-filter:blur(18px) saturate(1.4);-webkit-backdrop-filter:blur(18px) saturate(1.4);padding:14px 16px 14px;position:relative;z-index:2;}
   .composer-inner{max-width:680px;margin:0 auto;} /* constant max-width → slides left with the column like the thread */
   /* more prominent input card — white, lifted on the off-white bg */
   .inputcard{border:1px solid var(--line);border-radius:16px;background:var(--canvas);padding:14px 12px 10px 16px;display:flex;flex-direction:column;gap:9px;box-shadow:rgba(10,10,10,.05) 0 2px 12px -2px;transition:.14s;}
@@ -230,8 +224,6 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   .palcell{border:1px solid var(--line);border-radius:10px;overflow:hidden;} .palcell .ch{height:54px;} .palcell .cl{font-family:var(--ui);font-size:10px;color:var(--txt-2);padding:6px 8px;}
 
   .stamp{position:fixed;left:18px;bottom:11px;z-index:60;font-family:var(--ui);font-size:10px;color:var(--txt-3);} .stamp b{background:var(--rainbow);-webkit-background-clip:text;background-clip:text;color:transparent;}
-  ::-webkit-scrollbar{width:9px;height:9px;} ::-webkit-scrollbar-thumb{background:var(--line);border:3px solid var(--canvas);border-radius:99px;}
-  .term::-webkit-scrollbar-thumb{background:#2a2a30;border-color:#0c0c0e;}
 
   /* ===== walkthrough additions ===== */
   /* runtime float pill */
@@ -356,23 +348,23 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   body.freezer-open .app{padding-left:260px;}
   .chatpane{background:transparent;}
 
-  /* ===== freezer sidebar (past frozen sessions) ===== */
-  .freezer{position:fixed;left:0;top:0;bottom:0;width:44px;z-index:6;background:color-mix(in srgb,#dbeafe 40%,#fff);border-right:1px solid color-mix(in srgb,#bfdbfe 60%,var(--line));transition:width .4s cubic-bezier(.4,0,.2,1);overflow:hidden;display:flex;flex-direction:column;box-shadow:rgba(96,135,199,.08) 1px 0 14px -4px;}
+  /* ===== freezer sidebar (past frozen sessions) — neutral palette, matches .dock ===== */
+  .freezer{position:fixed;left:0;top:0;bottom:0;width:44px;z-index:6;background:var(--bg);border-right:1px solid var(--line);transition:width .4s cubic-bezier(.4,0,.2,1);overflow:hidden;display:flex;flex-direction:column;box-shadow:rgba(10,10,10,.06) 1px 0 14px -4px;}
   .freezer.open{width:260px;}
-  .freezer .fzh{position:relative;z-index:1;display:flex;align-items:center;gap:8px;padding:0 10px;min-height:var(--barh);border-bottom:1px solid color-mix(in srgb,#bfdbfe 55%,var(--line));backdrop-filter:blur(3px);background:color-mix(in srgb,#fff 55%,transparent);flex:0 0 auto;}
-  .freezer .fztgl{font:inherit;font-size:14px;line-height:1;width:26px;height:26px;border-radius:8px;border:1px solid color-mix(in srgb,#bfdbfe 70%,var(--line));background:color-mix(in srgb,#fff 70%,transparent);color:#3b6cb2;cursor:pointer;display:grid;place-items:center;flex:0 0 auto;}
-  .freezer .fztgl:hover{background:color-mix(in srgb,#dbeafe 80%,#fff);}
-  .freezer .fzsearch{display:none;flex:1;min-width:0;font:inherit;font-size:12px;color:var(--ink);background:color-mix(in srgb,#fff 70%,transparent);border:1px solid color-mix(in srgb,#bfdbfe 65%,var(--line));border-radius:8px;padding:5px 9px;outline:none;}
+  .freezer .fzh{position:relative;z-index:1;display:flex;align-items:center;gap:8px;padding:0 10px;min-height:var(--barh);border-bottom:1px solid var(--line);background:transparent;flex:0 0 auto;}
+  .freezer .fztgl{font:inherit;font-size:14px;line-height:1;width:26px;height:26px;border-radius:8px;border:1px solid var(--line);background:var(--canvas);color:var(--txt-2);cursor:pointer;display:grid;place-items:center;flex:0 0 auto;}
+  .freezer .fztgl:hover{background:var(--ghost);color:var(--ink);}
+  .freezer .fzsearch{display:none;flex:1;min-width:0;font:inherit;font-size:12px;color:var(--ink);background:var(--canvas);border:1px solid var(--line);border-radius:8px;padding:5px 9px;outline:none;}
   .freezer .fzsearch::placeholder{color:var(--txt-3);}
-  .freezer .fzsearch:focus{border-color:color-mix(in srgb,#93c5fd 90%,var(--violet));background:#fff;}
+  .freezer .fzsearch:focus{border-color:var(--txt-3);background:var(--canvas);}
   .freezer.open .fzsearch{display:block;}
   .freezer .fzrail{position:relative;z-index:1;flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding:11px 0;align-items:center;}
   .freezer.open .fzrail{align-items:stretch;padding:11px 8px 16px;}
   /* unified session rows — collapsed shows snow icon only, expanded fades in title + meta */
   .freezer .fzcard{display:flex;align-items:center;gap:10px;min-height:36px;padding:4px 8px;border-radius:8px;cursor:pointer;flex:0 0 auto;transition:background-color .15s;}
   .freezer:not(.open) .fzcard{gap:0;justify-content:center;padding:4px 0;}
-  .freezer .fzcard:hover{background:color-mix(in srgb,#dbeafe 55%,transparent);}
-  .freezer .fzcard .snow{width:28px;height:28px;display:grid;place-items:center;border-radius:50%;background:color-mix(in srgb,#dbeafe 70%,#fff);border:1px solid color-mix(in srgb,#bfdbfe 70%,var(--line));color:#3b6cb2;font-size:14px;flex:0 0 auto;}
+  .freezer .fzcard:hover{background:var(--ghost);}
+  .freezer .fzcard .snow{width:28px;height:28px;display:grid;place-items:center;border-radius:50%;background:var(--ghost);border:1px solid var(--line);color:var(--txt-2);font-size:14px;flex:0 0 auto;}
   .freezer .fzcard .ftext{flex:1;min-width:0;opacity:0;transition:opacity .18s;}
   .freezer:not(.open) .fzcard .ftext{width:0;min-width:0;flex:0 0 0;overflow:hidden;}
   .freezer.open .fzcard .ftext{opacity:1;transition:opacity .25s .15s;}
@@ -380,7 +372,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   .freezer .fzcard .fzm{margin-top:2px;font-family:var(--ui);font-size:10.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .freezer.open .fzcard.match-hidden{display:none;}
   .freezer .fzcard.thawed{background:color-mix(in srgb,var(--rose) 12%,transparent);}
-  .freezer .fzcard.thawed .snow{border-color:color-mix(in srgb,var(--rose) 45%,var(--line));background:color-mix(in srgb,var(--rose) 14%,#fff);color:#b91c4d;}
+  .freezer .fzcard.thawed .snow{border-color:color-mix(in srgb,var(--rose) 45%,var(--line));background:color-mix(in srgb,var(--rose) 14%,var(--canvas));color:#b91c4d;}
 </style>
 </head>
 <body>
