@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>&lt;slicc-pill&gt; — standalone web component</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+        margin: 0;
+        padding: 32px;
+        background: #0f1115;
+        color: #e7e9ee;
+      }
+      h1 { font-size: 18px; font-weight: 650; margin: 0 0 4px; }
+      p.sub { margin: 0 0 26px; color: #9aa0aa; font-size: 13px; max-width: 60ch; line-height: 1.5; }
+      .panel {
+        background: #171a21;
+        border: 1px solid #262b35;
+        border-radius: 14px;
+        padding: 18px 20px;
+        margin-bottom: 18px;
+      }
+      .panel h2 {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.09em;
+        color: #9aa0aa;
+        margin: 0 0 14px;
+        font-weight: 650;
+      }
+      .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+      code { background: #11141a; padding: 2px 6px; border-radius: 5px; font-size: 12px; color: #c8cdd6; }
+      .hint { color: #6b7280; font-size: 12px; margin-top: 12px; }
+    </style>
+  </head>
+  <body>
+    <h1>&lt;slicc-pill&gt;</h1>
+    <p class="sub">
+      A standalone custom element: a label pill with a cone/scoop icon. The icon has the
+      rolling-eye effect, parametrizable <code>color</code>, and an <code>eyes</code> state
+      (<code>open</code> / <code>none</code> / <code>dead</code>). The pill clips the icon to a
+      circle — by default zoomed in on the eyes; hover (or focus) zooms out to the full icon.
+    </p>
+
+    <div class="panel">
+      <h2>Variants &amp; eye states</h2>
+      <div class="row">
+        <slicc-pill type="cone" active>sliccy · cone</slicc-pill>
+        <slicc-pill type="scoop" color="#22d3ee">researcher</slicc-pill>
+        <slicc-pill type="scoop" color="#8b5cf6">designer</slicc-pill>
+        <slicc-pill type="scoop" color="#10b981">triage</slicc-pill>
+        <slicc-pill type="scoop" color="#f59e0b" eyes="dead">crashed</slicc-pill>
+        <slicc-pill type="scoop" color="#94a3b8" eyes="none">idle</slicc-pill>
+      </div>
+      <div class="hint">Move your mouse — the pupils follow it. Hover any pill to zoom out.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Parametrized color</h2>
+      <div class="row">
+        <slicc-pill type="cone">cone (default)</slicc-pill>
+        <slicc-pill type="cone" color="#e11d48">cherry cone</slicc-pill>
+        <slicc-pill type="scoop" color="#FFB6C1">strawberry</slicc-pill>
+        <slicc-pill type="scoop" color="#87CEEB">blueberry</slicc-pill>
+        <slicc-pill type="scoop" color="#F0E68C" active>vanilla (active)</slicc-pill>
+        <slicc-pill type="scoop" color="#DDA0DD" eyes="dead">grape · dead</slicc-pill>
+      </div>
+    </div>
+
+    <script>
+      (() => {
+        // --- Eye geometry (mirrors packages/webapp/src/ui/scoops-panel.ts) ---
+        const PUPIL_R = 18;
+        const MAX_OFFSET = 16;
+        const LEFT_EYE = { cx: 55, cy: 50, r: 38 };
+        const RIGHT_EYE = { cx: 145, cy: 50, r: 38 };
+
+        // Per-type config: viewBox, eye-overlay box (% of icon viewport),
+        // eye-region center (ex, ey as fractions), default zoom, glyph size (%).
+        const TYPE = {
+          cone: {
+            vb: '70 330 440 570',
+            eyes: { top: 4, left: 25.5, width: 64, height: 44 },
+            ex: 0.575, ey: 0.26, zoom: 3.0, glyph: 96,
+          },
+          scoop: {
+            vb: '0 0 580 470',
+            eyes: { top: 26, left: 24, width: 70, height: 45 },
+            ex: 0.59, ey: 0.485, zoom: 2.9, glyph: 96,
+          },
+        };
+        const DEFAULT_COLOR = { cone: '#D2691E', scoop: '#FFB6C1' };
+
+        // --- color helpers ---
+        function hexToRgb(h) {
+          h = h.replace('#', '');
+          if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+          const n = parseInt(h, 16);
+          return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+        }
+        function toHex(r, g, b) {
+          return '#' + [r, g, b].map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('');
+        }
+        // amt < 0 darkens toward black, amt > 0 lightens toward white
+        function shade(hex, amt) {
+          const { r, g, b } = hexToRgb(hex);
+          const t = amt < 0 ? 0 : 255, p = Math.abs(amt);
+          return toHex(r + (t - r) * p, g + (t - g) * p, b + (t - b) * p);
+        }
+
+        // --- icon glyph builders (paths copied from scoops-panel.ts) ---
+        function coneInner(base, outline, waffle) {
+          return (
+            `<path d="M108.22,414.88l189.84,460.03c1.36,3.3,6.09,3.16,7.25-.22l159.34-463.34c.87-2.53-1.03-5.16-3.7-5.13l-349.18,3.32c-2.74.03-4.59,2.82-3.55,5.35Z" fill="${base}" stroke="${outline}" stroke-linejoin="round" stroke-width="20"/>` +
+            `<path d="M261.93,482.48h0c15.03-15.03,4.46-40.72-16.79-40.83h0c-21.37-.11-32.14,25.72-17.03,40.83h0c9.34,9.34,24.48,9.34,33.82,0Z" fill="${waffle}"/>` +
+            `<path d="M384.85,527.49l-51.82,51.82c-2.24,2.24-2.24,5.86,0,8.1l55.71,55.71c2.24,2.24,5.86,2.24,8.1,0h0c.62-.62,1.08-1.36,1.37-2.19l26.52-77.11c.71-2.07.18-4.36-1.37-5.91l-30.41-30.41c-2.24-2.24-5.86-2.24-8.1,0Z" fill="${waffle}"/>` +
+            `<rect x="274.59" y="463.59" width="84.73" height="95.66" rx="42.36" ry="42.36" transform="translate(-268.79 373.91) rotate(-45)" fill="${waffle}"/>` +
+            `<rect x="291.06" y="603.84" width="72.24" height="90.24" rx="36.12" ry="36.12" transform="translate(-363.06 421.43) rotate(-45)" fill="${waffle}"/>` +
+            `<path d="M371.7,684.58l-25.94,25.94c-2.24,2.24-2.24,5.86,0,8.1l12.67,12.67c2.99,2.99,8.09,1.82,9.46-2.19l13.28-38.61c1.97-5.74-5.17-10.2-9.46-5.91Z" fill="${waffle}"/>` +
+            `<path d="M159.42,564.14l2.73,6.83c1.52,3.82,6.46,4.83,9.37,1.93l2.05-2.05c2.24-2.24,2.24-5.86,0-8.1l-4.78-4.78c-4.4-4.4-11.67.39-9.37,6.17Z" fill="${waffle}"/>` +
+            `<path d="M243.92,633.11l-48.65-48.65c-5.24-5.24-13.74-5.24-18.99,0h0c-3.8,3.8-4.97,9.49-2.98,14.47l27.77,69.54c3.58,8.95,15.14,11.33,21.96,4.51l20.89-20.89c5.24-5.24,5.24-13.74,0-18.99Z" fill="${waffle}"/>` +
+            `<path d="M211.32,533.1h0c14.11-14.11,14.11-36.98,0-51.08l-34.94-34.94c-.72-.72-.72-1.89,0-2.62h0c1.16-1.16.34-3.15-1.3-3.16l-11.23-.06c-25.62-.13-43.23,25.72-33.73,49.51l5.37,13.45c1.82,4.55,4.54,8.68,8,12.15l16.74,16.74c14.11,14.11,36.98,14.11,51.08,0Z" fill="${waffle}"/>` +
+            `<path d="M263.74,792.53h0c-5.69,5.69-7.45,14.23-4.46,21.71l22.5,56.36c6.92,17.34,31.68,16.74,37.75-.92l8.66-25.2c2.5-7.28.64-15.35-4.8-20.79l-31.17-31.17c-7.87-7.87-20.62-7.87-28.48,0Z" fill="${waffle}"/>` +
+            `<path d="M392.94,503.07l40.81-40.81c2.24-2.24,5.86-2.24,8.1,0l.06.06c2.24,2.24,2.24,5.86,0,8.1l-40.81,40.81c-2.24,2.24-2.24,5.86,0,8.1l22.48,22.48c2.99,2.99,8.09,1.82,9.46-2.19l30.71-89.32c1.27-3.71-1.47-7.57-5.39-7.59l-120.63-.6c-5.11-.03-7.69,6.16-4.08,9.77l51.18,51.18c2.24,2.24,5.86,2.24,8.1,0Z" fill="${waffle}"/>` +
+            `<rect x="217.18" y="527.25" width="72.24" height="95.66" rx="36.12" ry="36.12" transform="translate(-332.45 347.55) rotate(-45)" fill="${waffle}"/>` +
+            `<path d="M350.28,739.46h0c-9.24-9.24-24.22-9.24-33.46,0l-13.94,13.94c-9.24,9.24-9.24,24.22,0,33.46l6.81,6.81c12.37,12.37,33.42,7.5,39.1-9.04l7.13-20.75c2.94-8.55.75-18.03-5.64-24.42Z" fill="${waffle}"/>` +
+            `<path d="M234.18,749.12l13.2,33.06c1.52,3.82,6.46,4.83,9.37,1.93l9.93-9.93c2.24-2.24,2.24-5.86,0-8.1l-23.13-23.13c-4.4-4.4-11.67.39-9.37,6.17Z" fill="${waffle}"/>` +
+            `<rect x="236.26" y="661.25" width="67.04" height="90.24" rx="33.52" ry="33.52" transform="translate(-420.46 397.65) rotate(-45)" fill="${waffle}"/>` +
+            `<ellipse cx="288.37" cy="404.38" rx="182.34" ry="67.01" fill="${base}" stroke="${outline}" stroke-miterlimit="10" stroke-width="20"/>`
+          );
+        }
+        function scoopInner(fill, outline) {
+          return `<path d="M566.75,340.67c0-29.85-12.97-56.87-33.96-76.47,4.8-9.98,7.44-20.71,7.44-31.9,0-38.29-30.62-71.33-74.92-86.77.33-3.07.51-6.17.51-9.3,0-69.72-84.29-126.24-188.26-126.24s-188.26,56.52-188.26,126.24c0,4,.29,7.95.83,11.86-34.94,15.4-58.48,44.25-58.48,77.34,0,18.21,7.15,35.15,19.39,49.26-25.1,19.88-41.05,49.47-41.05,82.54,0,59.85,52.15,108.37,116.49,108.37,10.83,0,21.3-1.4,31.26-3.98,31.42,41.91,83.55,69.34,142.55,69.34,64.73,0,121.2-33,151.11-81.94,63.8-.57,115.34-48.85,115.34-108.34Z" fill="${fill}" stroke="${outline}" stroke-width="20"/>`;
+        }
+
+        // --- eyes overlay builders ---
+        function eyeOpen(cx, cy, r, side) {
+          return (
+            `<circle cx="${cx}" cy="${cy}" r="${r}" fill="#fff" stroke="#000" stroke-width="4"/>` +
+            `<g class="pupil pupil-${side}">` +
+            `<circle cx="${cx}" cy="${cy}" r="${PUPIL_R}" fill="#000"/>` +
+            `<circle cx="${cx - PUPIL_R * 0.3}" cy="${cy - PUPIL_R * 0.35}" r="${PUPIL_R * 0.4}" fill="#fff"/>` +
+            `</g>`
+          );
+        }
+        function eyeDead(cx, cy, r) {
+          return (
+            `<circle cx="${cx}" cy="${cy}" r="${r}" fill="#fff" stroke="#000" stroke-width="4"/>` +
+            `<line x1="${cx - 15}" y1="${cy - 15}" x2="${cx + 15}" y2="${cy + 15}" stroke="#000" stroke-width="8" stroke-linecap="round"/>` +
+            `<line x1="${cx + 15}" y1="${cy - 15}" x2="${cx - 15}" y2="${cy + 15}" stroke="#000" stroke-width="8" stroke-linecap="round"/>`
+          );
+        }
+        function eyesSvg(state) {
+          if (state === 'none') return '';
+          const L = LEFT_EYE, R = RIGHT_EYE;
+          const body =
+            state === 'dead'
+              ? eyeDead(L.cx, L.cy, L.r) + eyeDead(R.cx, R.cy, R.r)
+              : eyeOpen(L.cx, L.cy, L.r, 'l') + eyeOpen(R.cx, R.cy, R.r, 'r');
+          return `<svg class="eyes-svg" viewBox="0 0 200 100" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">${body}</svg>`;
+        }
+
+        function place(g, cx, cy, mx, my) {
+          const dx = mx - cx, dy = my - cy;
+          const d = Math.hypot(dx, dy), c = Math.min(d, MAX_OFFSET);
+          const tx = d > 0 ? (dx / d) * c : 0, ty = d > 0 ? (dy / d) * c : 0;
+          g.setAttribute('transform', `translate(${tx},${ty})`);
+        }
+        function escapeHtml(s) {
+          return s.replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[m]);
+        }
+
+        const STYLE = `
+          :host { display: inline-block; }
+          * { box-sizing: border-box; }
+          .pill {
+            display: inline-flex; align-items: center; gap: 7px;
+            font: 500 13px ui-sans-serif, system-ui, -apple-system, sans-serif;
+            color: var(--accent); background: transparent;
+            border: 1.5px solid var(--accent); border-radius: 9999px;
+            padding: 4px 13px 4px 4px; cursor: pointer; line-height: 1;
+            transition: background 0.2s ease, color 0.2s ease;
+          }
+          .pill.active { background: var(--accent); color: #fff; }
+          .pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+          .icon {
+            position: relative; width: 26px; height: 26px;
+            border-radius: 50%; overflow: hidden; flex: 0 0 auto;
+            background: color-mix(in oklab, var(--accent) 22%, transparent);
+          }
+          .icon-inner {
+            position: absolute; inset: 0; transform-origin: 0 0;
+            transform: translate(var(--tx), var(--ty)) scale(var(--zoom));
+            transition: transform 0.4s cubic-bezier(0.34, 1.4, 0.5, 1);
+          }
+          .pill:hover .icon-inner, .pill:focus-visible .icon-inner { transform: none; }
+          .glyph {
+            position: absolute; left: 50%; top: 50%;
+            transform: translate(-50%, -50%);
+            width: var(--g); height: var(--g); display: block; overflow: visible;
+          }
+          .eyes { position: absolute; pointer-events: none; }
+          .eyes-svg { display: block; overflow: visible; }
+          .label { white-space: nowrap; }
+        `;
+
+        class SliccPill extends HTMLElement {
+          static get observedAttributes() { return ['type', 'color', 'eyes', 'active', 'label']; }
+          connectedCallback() { this.render(); this._bindTracking(); }
+          disconnectedCallback() {
+            if (this._move) { document.removeEventListener('mousemove', this._move); this._move = null; }
+          }
+          attributeChangedCallback() { if (this.isConnected) { this.render(); this._bindTracking(); } }
+
+          get type() { return this.getAttribute('type') === 'cone' ? 'cone' : 'scoop'; }
+          get eyeState() {
+            const e = this.getAttribute('eyes');
+            return e === 'none' || e === 'dead' ? e : 'open';
+          }
+
+          render() {
+            if (!this.shadowRoot) this.attachShadow({ mode: 'open' });
+            const t = this.type, cfg = TYPE[t];
+            const color = this.getAttribute('color') || DEFAULT_COLOR[t];
+            const active = this.hasAttribute('active');
+            const label = this.getAttribute('label');
+            const glyph =
+              t === 'cone'
+                ? coneInner(color, shade(color, -0.38), shade(color, 0.3))
+                : scoopInner(color, shade(color, -0.32));
+            // transform-origin 0 0: translate so the eye-region center lands at
+            // the viewport center, then scale by zoom (see formula in summary).
+            const tx = ((0.5 - cfg.zoom * cfg.ex) * 100).toFixed(2);
+            const ty = ((0.5 - cfg.zoom * cfg.ey) * 100).toFixed(2);
+            const e = cfg.eyes;
+            this.shadowRoot.innerHTML =
+              `<style>${STYLE}</style>` +
+              `<button class="pill ${active ? 'active' : ''}" part="pill" style="--accent:${color}">` +
+              `<span class="icon" part="icon">` +
+              `<span class="icon-inner" style="--tx:${tx}%;--ty:${ty}%;--zoom:${cfg.zoom}">` +
+              `<svg class="glyph" viewBox="${cfg.vb}" preserveAspectRatio="xMidYMid meet" style="--g:${cfg.glyph}%">${glyph}</svg>` +
+              `<span class="eyes" style="top:${e.top}%;left:${e.left}%;width:${e.width}%;height:${e.height}%">${eyesSvg(this.eyeState)}</span>` +
+              `</span></span>` +
+              `<span class="label">${label != null ? escapeHtml(label) : '<slot></slot>'}</span>` +
+              `</button>`;
+            this._pl = this.shadowRoot.querySelector('.pupil-l');
+            this._pr = this.shadowRoot.querySelector('.pupil-r');
+            this._esvg = this.shadowRoot.querySelector('.eyes-svg');
+          }
+
+          _bindTracking() {
+            const need = this.eyeState === 'open';
+            if (need && !this._move) {
+              this._move = (ev) => this._track(ev);
+              document.addEventListener('mousemove', this._move);
+            } else if (!need && this._move) {
+              document.removeEventListener('mousemove', this._move);
+              this._move = null;
+            }
+          }
+
+          _track(ev) {
+            if (!this._esvg || !this._pl || !this._pr) return;
+            const r = this._esvg.getBoundingClientRect();
+            if (!r.width || !r.height) return;
+            const mx = (ev.clientX - r.left) * (200 / r.width);
+            const my = (ev.clientY - r.top) * (100 / r.height);
+            place(this._pl, LEFT_EYE.cx, LEFT_EYE.cy, mx, my);
+            place(this._pr, RIGHT_EYE.cx, RIGHT_EYE.cy, mx, my);
+          }
+        }
+
+        customElements.define('slicc-pill', SliccPill);
+      })();
+    </script>
+  </body>
+</html>
