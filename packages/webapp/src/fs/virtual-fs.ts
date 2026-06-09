@@ -688,12 +688,15 @@ export class VirtualFS {
     if (this.backend !== 'opfs' || !this.opfsBackendFs) return;
     const fs = this.opfsBackendFs as unknown as {
       index: { delete: (path: string) => boolean };
-      _handles: Map<string, unknown>;
+      // Private field on @zenfs/dom WebAccessFS — pinned at v1.2.9.
+      // If a future bump removes it, the guard below will no-op and
+      // reads will still hit OPFS (just without handle-cache eviction).
+      _handles?: Map<string, unknown>;
     };
     for (const raw of paths) {
       const path = normalizePath(raw);
       fs.index.delete(path);
-      fs._handles.delete(path);
+      fs._handles?.delete(path);
     }
   }
 

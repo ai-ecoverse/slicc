@@ -77,6 +77,9 @@ const S_IFDIR = 0o040000;
 const S_IFREG = 0o100000;
 const S_IFLNK = 0o120000;
 
+/** Emscripten open-flag for truncate-on-open. */
+const O_TRUNC = 0o1000;
+
 const DEFAULT_DIR_MODE = S_IFDIR | 0o755;
 const DEFAULT_FILE_MODE = S_IFREG | 0o644;
 const DEFAULT_LINK_MODE = S_IFLNK | 0o777;
@@ -500,7 +503,12 @@ function buildStreamOps(Fs: EmscriptenFsApi): StreamOps {
       if (!Fs.isFile(node.mode)) return;
       const sah = node.mount.opts.sahProvider.acquire(node.opfs.relPath, node.opfs.fileHandle);
       stream.sah = sah;
-      node.opfs.size = sah.getSize();
+      if (stream.flags !== undefined && stream.flags & O_TRUNC) {
+        sah.truncate(0);
+        node.opfs.size = 0;
+      } else {
+        node.opfs.size = sah.getSize();
+      }
     },
 
     close(stream: FsStream): void {

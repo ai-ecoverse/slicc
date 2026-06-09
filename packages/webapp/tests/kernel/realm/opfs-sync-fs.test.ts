@@ -237,11 +237,17 @@ async function setup(tree: Record<string, unknown>): Promise<{
   return { fs, plugin, mount, root, sah, rootDir };
 }
 
-function openStream(plugin: ReturnType<typeof createOpfsSyncFs>, node: FsNode): FsStream {
-  const stream: FsStream = { node, position: 0 };
+function openStream(
+  plugin: ReturnType<typeof createOpfsSyncFs>,
+  node: FsNode,
+  flags = 0
+): FsStream {
+  const stream: FsStream = { node, position: 0, flags };
   plugin.stream_ops.open(stream);
   return stream;
 }
+
+const O_TRUNC = 0o1000;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -504,6 +510,31 @@ describe('OPFS_SYNC_FS — setattr truncate via SAH provider', () => {
     const backing = sah.backings.get('a.txt');
     expect(backing?.data.length).toBe(17);
     expect(new TextDecoder().decode(backing?.data)).toBe('hello from python');
+  });
+
+  it('O_TRUNC open on existing file truncates synchronously (shorter overwrite)', async () => {
+    const { plugin, root, mount, sah } = await setup({ 'a.txt': 'AAAAAAAA' });
+    const a = plugin.node_ops.lookup(root, 'a.txt');
+    a.opfs.size = 8;
+
+    // Emscripten calls setattr(size=0) then opens with O_TRUNC.
+    plugin.node_ops.setattr(a, { size: 0 });
+    const stream = openStream(plugin, a, O_TRUNC);
+
+    // After open with O_TRUNC, size must be 0 regardless of original.
+    expect(a.opfs.size).toBe(0);
+
+    // Write shorter content than the original file.
+    const data = new TextEncoder().encode('Hi');
+    plugin.stream_ops.write(stream, data, 0, data.length, 0);
+    expect(a.opfs.size).toBe(2);
+    plugin.stream_ops.close(stream);
+
+    await flushPendingOpfsOps(mount);
+
+    const backing = sah.backings.get('a.txt');
+    expect(backing?.data.length).toBe(2);
+    expect(new TextDecoder().decode(backing?.data)).toBe('Hi');
   });
 });
 

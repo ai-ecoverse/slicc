@@ -550,6 +550,9 @@ export class VfsAdapter implements IFileSystem {
   }
 
   invalidatePaths(paths: string[]): void {
-    this.vfs.invalidatePaths(paths);
+    const vfs = this.vfs as { invalidatePaths?: (paths: string[]) => void };
+    if (vfs.invalidatePaths) {
+      vfs.invalidatePaths(paths);
+    }
   }
 }
