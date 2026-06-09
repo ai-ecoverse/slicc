@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>&lt;slicc-add-menu&gt; — standalone web component</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+        margin: 0;
+        padding: 32px;
+        background: #0f1115;
+        color: #e7e9ee;
+      }
+      h1 { font-size: 18px; font-weight: 650; margin: 0 0 4px; }
+      p.sub { margin: 0 0 26px; color: #9aa0aa; font-size: 13px; max-width: 64ch; line-height: 1.5; }
+      .panel {
+        background: #171a21;
+        border: 1px solid #262b35;
+        border-radius: 14px;
+        padding: 18px 20px;
+        margin-bottom: 18px;
+      }
+      .panel h2 {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.09em;
+        color: #9aa0aa;
+        margin: 0 0 14px;
+        font-weight: 650;
+      }
+      code { background: #11141a; padding: 2px 6px; border-radius: 5px; font-size: 12px; color: #c8cdd6; }
+      .hint { color: #6b7280; font-size: 12px; margin-top: 12px; }
+      .panel.light { background: #f4f5f7; border-color: #dfe3ea; }
+      .panel.light h2 { color: #5b6472; }
+      .panel.light .hint { color: #8a93a3; }
+
+      /* ---- Mock composer (mirrors .chat__input-wrapper in webapp) ---- */
+      .composer {
+        display: flex;
+        flex-direction: column;
+        border-radius: 16px;
+        border: 1px solid #3a3a3a;
+        background: #1a1a1a;
+        padding: 14px;
+        min-height: 108px;
+      }
+      .composer:focus-within { border-color: #3562ff; }
+      .composer .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+      .composer .chips:empty { display: none; }
+      .chip {
+        display: inline-flex; align-items: center; gap: 6px;
+        font: 500 12px ui-sans-serif, system-ui, sans-serif;
+        background: color-mix(in oklab, #3562ff 22%, transparent);
+        color: #cdd7ff; border: 1px solid color-mix(in oklab, #3562ff 40%, transparent);
+        border-radius: 9999px; padding: 3px 6px 3px 9px;
+      }
+      .chip b { font-weight: 600; }
+      .chip .x { cursor: pointer; opacity: 0.7; font-size: 14px; line-height: 1; padding: 0 2px; }
+      .chip .x:hover { opacity: 1; }
+      .composer textarea {
+        flex: 1; resize: none; min-height: 38px; border: none; outline: none;
+        background: transparent; color: #e8e8e8;
+        font: 400 14px/18px ui-sans-serif, system-ui, sans-serif;
+      }
+      .composer textarea::placeholder { color: #8a8a8a; }
+      .composer .bar { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+      .composer .spacer { flex: 1; }
+      .send {
+        width: 32px; height: 32px; border: none; border-radius: 8px;
+        background: #3562ff; color: #fff; cursor: pointer;
+        display: flex; align-items: center; justify-content: center;
+      }
+      .composer.light { background: #fff; border-color: #e1e1e1; }
+      .composer.light textarea { color: #131313; }
+      .composer.light textarea::placeholder { color: #717171; }
+      .composer.light .send { background: #3b63fb; }
+
+      /* event log */
+      .log { font: 12px/1.6 ui-monospace, "SF Mono", Menlo, monospace; color: #8a93a3; }
+      .log b { color: #c8cdd6; }
+      .panel.light .log b { color: #2b3240; }
+    </style>
+  </head>
+  <body>
+    <h1>&lt;slicc-add-menu&gt;</h1>
+    <p class="sub">
+      A standalone custom element: the <code>+</code> trigger that lives in the prompt bar and
+      opens an "add to prompt" dialog. The dialog lets you <b>upload from this computer</b> (drag &amp;
+      drop or browse), <b>take a photo / screenshot</b>, and run a <b>typeahead search</b> across files
+      in the virtual filesystem, skills, and past conversations. It adapts to light/dark (auto via
+      <code>prefers-color-scheme</code>, or forced with <code>theme="light|dark"</code>) and emits a
+      <code>slicc-add</code> event when something is picked. Demo data is baked in.
+    </p>
+
+    <div class="panel">
+      <h2>Dark theme</h2>
+      <div class="composer" id="composer-dark">
+        <div class="chips" data-chips></div>
+        <textarea rows="1" placeholder="Ask sliccy anything…"></textarea>
+        <div class="bar">
+          <slicc-add-menu theme="dark"></slicc-add-menu>
+          <span class="spacer"></span>
+          <button class="send" title="Send">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path d="M10 1.25C5.167 1.25 1.25 5.167 1.25 10s3.917 8.75 8.75 8.75 8.75-3.918 8.75-8.75S14.833 1.25 10 1.25zm3.527 8.284a.75.75 0 0 1-1.06 0L10.75 7.82v6.172a.75.75 0 0 1-1.5 0V7.812L7.527 9.534a.75.75 0 1 1-1.06-1.06l2.998-2.998a.75.75 0 0 1 1.06-.001l3.002 2.998a.75.75 0 0 1 0 1.061z"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="hint">Click <code>+</code>, then type to filter — or drag a file onto the dialog. ↑/↓ to navigate, Enter to add, Esc to close.</div>
+    </div>
+
+    <div class="panel light">
+      <h2>Light theme</h2>
+      <div class="composer light" id="composer-light">
+        <div class="chips" data-chips></div>
+        <textarea rows="1" placeholder="Ask sliccy anything…"></textarea>
+        <div class="bar">
+          <slicc-add-menu theme="light"></slicc-add-menu>
+          <span class="spacer"></span>
+          <button class="send" title="Send">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path d="M10 1.25C5.167 1.25 1.25 5.167 1.25 10s3.917 8.75 8.75 8.75 8.75-3.918 8.75-8.75S14.833 1.25 10 1.25zm3.527 8.284a.75.75 0 0 1-1.06 0L10.75 7.82v6.172a.75.75 0 0 1-1.5 0V7.812L7.527 9.534a.75.75 0 1 1-1.06-1.06l2.998-2.998a.75.75 0 0 1 1.06-.001l3.002 2.998a.75.75 0 0 1 0 1.061z"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Emitted events</h2>
+      <div class="log" id="log">Nothing added yet.</div>
+    </div>
+
+    <script>
+      (() => {
+        // --- inline lucide-style icons (no CDN; works under strict CSP) ---
+        const ICON = {
+          plus: 'M12 5v14M5 12h14',
+          search: ['M11 11m-8 0a8 8 0 1 0 16 0a8 8 0 1 0-16 0', 'm21 21-4.3-4.3'],
+          upload: ['M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4', 'M17 8l-5-5-5 5', 'M12 3v12'],
+          camera: ['M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z', 'M12 16m-3 0a3 3 0 1 0 6 0a3 3 0 1 0-6 0'],
+          monitor: ['M2 4h20v12H2z', 'M8 21h8M12 17v4'],
+          file: ['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z', 'M14 2v6h6'],
+          spark: ['M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z'],
+          chat: ['M21 11.5a8.4 8.4 0 0 1-9 8.4 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.2A8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5z'],
+        };
+        function svg(name, size = 18) {
+          const d = ICON[name];
+          const paths = (Array.isArray(d) ? d : [d]).map((p) => `<path d="${p}"/>`).join('');
+          return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+        }
+        function esc(s) {
+          return String(s).replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[m]);
+        }
+
+        // --- baked-in demo data (a real composer would query the VFS) ---
+        const DEMO = {
+          file: [
+            { id: '/workspace/README.md', label: 'README.md', sub: '/workspace' },
+            { id: '/workspace/src/main.ts', label: 'main.ts', sub: '/workspace/src' },
+            { id: '/workspace/src/orchestrator.ts', label: 'orchestrator.ts', sub: '/workspace/src' },
+            { id: '/workspace/notes/launch-plan.md', label: 'launch-plan.md', sub: '/workspace/notes' },
+            { id: '/shared/CLAUDE.md', label: 'CLAUDE.md', sub: '/shared' },
+            { id: '/tmp/screenshot-3.png', label: 'screenshot-3.png', sub: '/tmp' },
+          ],
+          skill: [
+            { id: 'slicc-handoff', label: 'slicc-handoff', sub: 'Continue work in the SLICC browser agent' },
+            { id: 'playwright-cli', label: 'playwright-cli', sub: 'Automate browser interactions' },
+            { id: 'mixtape', label: 'mixtape', sub: 'Curate themed music playlists' },
+            { id: 'wavespeed', label: 'wavespeed', sub: 'Generate images, video and speech' },
+            { id: 'save-the-cat', label: 'save-the-cat', sub: 'Screenwriting beat sheets' },
+          ],
+          conversation: [
+            { id: 'c1', label: 'Dark mode toggle', sub: 'Frozen · 2h ago' },
+            { id: 'c2', label: 'Refactor the mount backend', sub: 'Frozen · yesterday' },
+            { id: 'c3', label: 'Add slash menu (declined)', sub: 'Frozen · 3 days ago' },
+            { id: 'c4', label: 'WebGL shader walkthrough', sub: 'Frozen · last week' },
+          ],
+        };
+        const SECTIONS = [
+          { kind: 'file', label: 'Files', icon: 'file' },
+          { kind: 'skill', label: 'Skills', icon: 'spark' },
+          { kind: 'conversation', label: 'Conversations', icon: 'chat' },
+        ];
+
+        const STYLE = `
+          :host {
+            display: inline-block; position: relative;
+            --bg: #2c2c2c; --bg-sunken: #141414; --fg: #e8e8e8; --fg-2: #a1a1a1; --fg-3: #8a8a8a;
+            --border: #3a3a3a; --accent: #3562ff;
+            --accent-subtle: color-mix(in oklab, var(--accent) 22%, transparent);
+            --hover: rgba(255,255,255,0.06);
+            --shadow: 0 4px 16px rgba(0,0,0,0.4), 0 1px 4px rgba(0,0,0,0.3);
+            font: 400 13px ui-sans-serif, system-ui, -apple-system, sans-serif;
+          }
+          @media (prefers-color-scheme: light) { :host(:not([theme="dark"])) { ${''}
+            --bg:#fff; --bg-sunken:#f3f3f3; --fg:#131313; --fg-2:#505050; --fg-3:#717171;
+            --border:#e1e1e1; --accent:#3b63fb; --accent-subtle: color-mix(in oklab, var(--accent) 12%, #fff);
+            --hover: rgba(0,0,0,0.05); --shadow: 0 4px 12px rgba(0,0,0,0.12), 0 1px 4px rgba(0,0,0,0.08);
+          } }
+          :host([theme="light"]) {
+            --bg:#fff; --bg-sunken:#f3f3f3; --fg:#131313; --fg-2:#505050; --fg-3:#717171;
+            --border:#e1e1e1; --accent:#3b63fb; --accent-subtle: color-mix(in oklab, var(--accent) 12%, #fff);
+            --hover: rgba(0,0,0,0.05); --shadow: 0 4px 12px rgba(0,0,0,0.12), 0 1px 4px rgba(0,0,0,0.08);
+          }
+          * { box-sizing: border-box; }
+          .trigger {
+            width: 32px; height: 32px; border: none; border-radius: 8px;
+            background: transparent; color: var(--fg); cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            transition: background .13s ease, color .13s ease, transform .13s ease;
+          }
+          .trigger:hover { background: var(--hover); }
+          .trigger[aria-expanded="true"] { background: var(--accent-subtle); color: var(--accent); transform: rotate(45deg); }
+          .pop {
+            position: absolute; bottom: calc(100% + 10px); left: 0;
+            width: 320px; max-width: 86vw; background: var(--bg); color: var(--fg);
+            border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow);
+            padding: 8px; z-index: 50; display: none;
+          }
+          .pop.open { display: block; }
+          .search { position: relative; margin: 2px 2px 8px; }
+          .search .si { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--fg-3); display: flex; }
+          .search input {
+            width: 100%; border: 1px solid var(--border); background: var(--bg-sunken);
+            color: var(--fg); border-radius: 9px; padding: 8px 10px 8px 32px;
+            font: inherit; outline: none;
+          }
+          .search input:focus { border-color: var(--accent); }
+          .body { max-height: 320px; overflow-y: auto; }
+          .sec { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--fg-3); font-weight: 650; margin: 8px 8px 4px; }
+          .item {
+            display: flex; align-items: center; gap: 10px; width: 100%;
+            padding: 8px; border-radius: 9px; cursor: pointer; text-align: left; color: var(--fg);
+          }
+          .item .ic { flex: 0 0 auto; color: var(--fg-2); display: flex; }
+          .item.quick .ic { color: var(--accent); }
+          .item .tx { min-width: 0; }
+          .item .lb { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+          .item .sb { font-size: 11px; color: var(--fg-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+          .item.active, .item:hover { background: var(--accent-subtle); }
+          .empty { padding: 18px 10px; text-align: center; color: var(--fg-3); font-size: 12px; }
+          .sep { height: 1px; background: var(--border); margin: 6px 4px; }
+          .drop {
+            position: absolute; inset: 0; border-radius: 14px; display: none;
+            align-items: center; justify-content: center; text-align: center;
+            background: var(--accent-subtle); border: 2px dashed var(--accent); color: var(--accent);
+            font-size: 13px; font-weight: 600; pointer-events: none;
+          }
+          .pop.dropping .drop { display: flex; }
+        `;
+
+        class SliccAddMenu extends HTMLElement {
+          connectedCallback() {
+            this._open = false;
+            this._q = '';
+            this._active = 0;
+            this._items = [];
+            this.render();
+            this._onDoc = (e) => { if (!this.contains(e.target) && this._open) this.close(); };
+          }
+          disconnectedCallback() { document.removeEventListener('mousedown', this._onDoc); }
+
+          render() {
+            if (!this.shadowRoot) this.attachShadow({ mode: 'open' });
+            this.shadowRoot.innerHTML =
+              `<style>${STYLE}</style>` +
+              `<button class="trigger" part="trigger" aria-haspopup="dialog" aria-expanded="false" title="Add to prompt">${svg('plus', 20)}</button>` +
+              `<input type="file" multiple hidden />` +
+              `<div class="pop" part="popover" role="dialog">` +
+              `<div class="search"><span class="si">${svg('search', 16)}</span>` +
+              `<input type="text" placeholder="Search files, skills, conversations…" /></div>` +
+              `<div class="body"></div>` +
+              `<div class="drop">Drop files to add</div>` +
+              `</div>`;
+            this._trigger = this.shadowRoot.querySelector('.trigger');
+            this._pop = this.shadowRoot.querySelector('.pop');
+            this._search = this.shadowRoot.querySelector('.search input');
+            this._bodyEl = this.shadowRoot.querySelector('.body');
+            this._file = this.shadowRoot.querySelector('input[type=file]');
+            this._bind();
+            this.renderBody();
+          }
+
+          _bind() {
+            this._trigger.addEventListener('click', () => this.toggle());
+            this._search.addEventListener('input', () => { this._q = this._search.value; this._active = 0; this.renderBody(); });
+            this._search.addEventListener('keydown', (e) => this._onKey(e));
+            this._file.addEventListener('change', () => {
+              for (const f of this._file.files) this._emit({ kind: 'upload', name: f.name, size: f.size });
+              this._file.value = '';
+              this.close();
+            });
+            ['dragenter', 'dragover'].forEach((t) =>
+              this._pop.addEventListener(t, (e) => { e.preventDefault(); this._pop.classList.add('dropping'); }));
+            ['dragleave', 'drop'].forEach((t) =>
+              this._pop.addEventListener(t, (e) => {
+                e.preventDefault();
+                if (t === 'dragleave' && this._pop.contains(e.relatedTarget)) return;
+                this._pop.classList.remove('dropping');
+              }));
+            this._pop.addEventListener('drop', (e) => {
+              const files = e.dataTransfer && e.dataTransfer.files;
+              if (files && files.length) {
+                for (const f of files) this._emit({ kind: 'upload', name: f.name, size: f.size });
+                this.close();
+              }
+            });
+          }
+
+          toggle() { this._open ? this.close() : this.open(); }
+          open() {
+            this._open = true;
+            this._pop.classList.add('open');
+            this._trigger.setAttribute('aria-expanded', 'true');
+            document.addEventListener('mousedown', this._onDoc);
+            this._q = '';
+            this._search.value = '';
+            this._active = 0;
+            this.renderBody();
+            requestAnimationFrame(() => this._search.focus());
+          }
+          close() {
+            this._open = false;
+            this._pop.classList.remove('open', 'dropping');
+            this._trigger.setAttribute('aria-expanded', 'false');
+            document.removeEventListener('mousedown', this._onDoc);
+          }
+
+          _collect() {
+            const q = this._q.trim().toLowerCase();
+            const match = (e) => !q || (e.label + ' ' + (e.sub || '')).toLowerCase().includes(q);
+            const items = [];
+            const quick = [
+              { kind: 'upload', icon: 'upload', label: 'Upload from this computer', sub: 'Drag & drop or click to browse', quick: true },
+              { kind: 'capture', mode: 'photo', icon: 'camera', label: 'Take a photo', quick: true },
+              { kind: 'capture', mode: 'screenshot', icon: 'monitor', label: 'Take a screenshot', quick: true },
+            ];
+            if (!q) for (const a of quick) items.push({ type: 'quick', data: a });
+            else if ('upload take a photo screenshot'.includes(q))
+              for (const a of quick) if (a.label.toLowerCase().includes(q)) items.push({ type: 'quick', data: a });
+            for (const sec of SECTIONS) {
+              const hits = DEMO[sec.kind].filter(match).slice(0, q ? 8 : 4);
+              if (hits.length) {
+                items.push({ type: 'sec', label: sec.label });
+                for (const h of hits) items.push({ type: 'row', sec, data: h });
+              }
+            }
+            return items;
+          }
+
+          renderBody() {
+            const list = this._collect();
+            this._items = [];
+            let html = '';
+            let prevQuick = false;
+            for (const it of list) {
+              if (it.type === 'sec') {
+                if (prevQuick) html += `<div class="sep"></div>`;
+                html += `<div class="sec">${esc(it.label)}</div>`;
+                prevQuick = false;
+              } else if (it.type === 'quick') {
+                const i = this._items.length; this._items.push(it.data);
+                html += `<div class="item quick" data-i="${i}"><span class="ic">${svg(it.data.icon)}</span>` +
+                  `<span class="tx"><div class="lb">${esc(it.data.label)}</div>${it.data.sub ? `<div class="sb">${esc(it.data.sub)}</div>` : ''}</span></div>`;
+                prevQuick = true;
+              } else {
+                const d = { kind: it.sec.kind, id: it.data.id, label: it.data.label };
+                const i = this._items.length; this._items.push(d);
+                html += `<div class="item" data-i="${i}"><span class="ic">${svg(it.sec.icon)}</span>` +
+                  `<span class="tx"><div class="lb">${esc(it.data.label)}</div><div class="sb">${esc(it.data.sub || '')}</div></span></div>`;
+              }
+            }
+            this._bodyEl.innerHTML = html || `<div class="empty">No matches for “${esc(this._q)}”.</div>`;
+            this._bodyEl.querySelectorAll('.item').forEach((el) => {
+              const i = +el.dataset.i;
+              el.addEventListener('mouseenter', () => this._setActive(i));
+              el.addEventListener('click', () => this._select(i));
+            });
+            if (this._active >= this._items.length) this._active = 0;
+            this._paint();
+          }
+
+          _paint() {
+            this._bodyEl.querySelectorAll('.item').forEach((el) =>
+              el.classList.toggle('active', +el.dataset.i === this._active));
+          }
+          _setActive(i) { this._active = i; this._paint(); }
+          _move(d) {
+            if (!this._items.length) return;
+            this._active = (this._active + d + this._items.length) % this._items.length;
+            this._paint();
+            const el = this._bodyEl.querySelector(`.item[data-i="${this._active}"]`);
+            if (el) el.scrollIntoView({ block: 'nearest' });
+          }
+          _onKey(e) {
+            if (e.key === 'ArrowDown') { e.preventDefault(); this._move(1); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); this._move(-1); }
+            else if (e.key === 'Enter') { e.preventDefault(); this._select(this._active); }
+            else if (e.key === 'Escape') { e.preventDefault(); this.close(); this._trigger.focus(); }
+          }
+          _select(i) {
+            const it = this._items[i];
+            if (!it) return;
+            if (it.kind === 'upload') { this._file.click(); return; }
+            this._emit(it);
+            this.close();
+          }
+          _emit(detail) {
+            this.dispatchEvent(new CustomEvent('slicc-add', { detail, bubbles: true, composed: true }));
+          }
+        }
+        customElements.define('slicc-add-menu', SliccAddMenu);
+
+        // --- demo wiring: turn emitted events into composer chips + a log ---
+        const logEl = document.getElementById('log');
+        const lines = [];
+        function describe(d) {
+          if (d.kind === 'upload') return `upload <b>${esc(d.name)}</b>`;
+          if (d.kind === 'capture') return `capture <b>${esc(d.mode)}</b>`;
+          return `${esc(d.kind)} <b>${esc(d.label || d.id)}</b>`;
+        }
+        function chipLabel(d) {
+          if (d.kind === 'upload') return d.name;
+          if (d.kind === 'capture') return d.mode === 'photo' ? 'Photo' : 'Screenshot';
+          return d.label || d.id;
+        }
+        for (const id of ['composer-dark', 'composer-light']) {
+          const composer = document.getElementById(id);
+          const chips = composer.querySelector('[data-chips]');
+          composer.addEventListener('slicc-add', (e) => {
+            const d = e.detail;
+            const chip = document.createElement('span');
+            chip.className = 'chip';
+            chip.innerHTML = `<b>${esc(chipLabel(d))}</b><span class="x">×</span>`;
+            chip.querySelector('.x').addEventListener('click', () => chip.remove());
+            chips.appendChild(chip);
+            lines.unshift(`<div>+ ${describe(d)}</div>`);
+            logEl.innerHTML = lines.slice(0, 12).join('');
+          });
+        }
+      })();
+    </script>
+  </body>
+</html>
