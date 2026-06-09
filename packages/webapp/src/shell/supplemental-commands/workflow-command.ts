@@ -253,10 +253,18 @@ async function runSave(
   ctx: CommandContext,
   options: { syncScriptCommands?: () => void | Promise<void> }
 ): Promise<ExecResult> {
-  const rest = args.slice(1).filter((a) => a !== '--force');
-  const force = args.includes('--force');
-  const [runId, name] = rest;
-  if (!runId || !name)
+  // Positional parse: `--force` is a flag (it may appear anywhere); the first two NON-flag
+  // tokens are <runId> <name>. Reject extra positionals so a typo'd invocation fails loudly
+  // instead of silently ignoring trailing args. (`SAVE_NAME` below also rejects a name that
+  // looks like a flag, so a stray `--force` can never be mistaken for the name.)
+  let force = false;
+  const positionals: string[] = [];
+  for (const a of args.slice(1)) {
+    if (a === '--force') force = true;
+    else positionals.push(a);
+  }
+  const [runId, name, ...extra] = positionals;
+  if (!runId || !name || extra.length > 0)
     return { stdout: '', stderr: 'usage: workflow save <runId> <name> [--force]\n', exitCode: 1 };
   if (!SAVE_NAME.test(name))
     return {
@@ -305,7 +313,16 @@ async function runSave(
   await ctx.fs.writeFile(path, run.source);
   await options.syncScriptCommands?.();
 
-  return { stdout: `saved workflow '${name}' → ${path} (run: ${name})\n`, stderr: '', exitCode: 0 };
+  // Don't over-promise the bare name: precedence is `built-in > .jsh > saved-workflow`,
+  // so on a `--force` overwrite a `.jsh` that appeared since the original save could shadow
+  // it. Always surface the canonical `workflow run <path>` escape hatch.
+  return {
+    stdout:
+      `saved workflow '${name}' → ${path}\n` +
+      `run it as '${name}' (or 'workflow run ${path}' if a built-in/.jsh shadows the name)\n`,
+    stderr: '',
+    exitCode: 0,
+  };
 }
 
 // Read/stop subcommands. Resolves the manager from globalThis at call time (the cone and

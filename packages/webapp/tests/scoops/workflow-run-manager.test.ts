@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { VirtualFS } from '../../src/fs/index.js';
 import {
   createWorkflowRunManager,
+  evictOldRuns,
   publishWorkflowRunManager,
   WORKFLOW_MANAGER_GLOBAL_KEY,
   type WorkflowRunState,
@@ -530,5 +531,40 @@ describe('WorkflowRunManager', () => {
     const res = await createWorkflowCommand().execute(['run', '/workspace/wf.js'], ctx);
     expect(res.exitCode).toBe(0);
     expect(spy).toHaveBeenCalledTimes(1); // command reached the published manager, not a proxy/local copy
+  });
+});
+
+describe('evictOldRuns (memory bound)', () => {
+  const mk = (id: string, status: string, at: string): WorkflowRunState =>
+    ({
+      id,
+      status,
+      startedAt: at,
+      finishedAt: status === 'running' ? null : at,
+      name: null,
+      source: '',
+    }) as unknown as WorkflowRunState;
+
+  it('evicts the oldest TERMINAL runs over the cap, never a running one', () => {
+    const runs = new Map<string, WorkflowRunState>([
+      ['a', mk('a', 'done', '2026-01-01')],
+      ['b', mk('b', 'running', '2026-01-02')],
+      ['c', mk('c', 'done', '2026-01-03')],
+    ]);
+    const observers = new Map<string, Set<(s: WorkflowRunState) => void>>([
+      ['a', new Set()],
+      ['c', new Set()],
+    ]);
+    evictOldRuns(runs, observers, 2); // 3 runs, cap 2 → evict 1 oldest terminal = 'a'
+    expect(runs.has('a')).toBe(false); // oldest terminal evicted
+    expect(runs.has('b')).toBe(true); // running is never evicted
+    expect(runs.has('c')).toBe(true);
+    expect(observers.has('a')).toBe(false); // its observers dropped too
+  });
+
+  it('is a no-op at or under the cap', () => {
+    const runs = new Map<string, WorkflowRunState>([['x', mk('x', 'done', 't')]]);
+    evictOldRuns(runs, new Map(), 100);
+    expect(runs.size).toBe(1);
   });
 });

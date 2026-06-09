@@ -4,6 +4,12 @@ import { createLogger } from '../core/logger.js';
 const log = createLogger('workflow-run-manager');
 export const WORKFLOW_MANAGER_GLOBAL_KEY = '__slicc_workflows';
 const RUNS_DIR = '/shared/workflow-runs';
+// Memory bounds: a chatty/looping workflow's logs and a long session's run history would
+// otherwise grow without limit. Cap per-run log lines (oldest dropped), and evict the
+// oldest TERMINAL runs once the retained count exceeds the cap. Never evicts a running/
+// paused run; the durable result file under /shared/workflow-runs/ survives either way.
+const MAX_LOG_LINES = 1000;
+const MAX_RETAINED_RUNS = 100;
 
 export interface WorkflowRunState {
   id: string;
@@ -150,6 +156,7 @@ export function createWorkflowRunManager(deps: WorkflowRunManagerDeps): Workflow
       pid: null,
     };
     runs.set(runId, state);
+    evictOldRuns(runs, observers);
 
     // The manager is ALWAYS non-blocking: it kicks off the realm and returns the runId
     // immediately. `--wait` is NOT handled here — the command bypasses the manager entirely
@@ -300,6 +307,31 @@ function previewOf(value: unknown): string {
   return (s ?? 'null').slice(0, 200);
 }
 
+/**
+ * Evict the oldest TERMINAL runs once the retained count exceeds `max`. Never evicts a
+ * running/paused run. Only drops in-memory state (and its observers) — the durable result
+ * file (`/shared/workflow-runs/<id>.json`) persists, so a long-since-finished run's RESULT
+ * is never lost; only the ability to `workflow save`/`status` it by id after ~`max` later
+ * runs (acceptable — you save/inspect a run right after it finishes, not 100 runs later).
+ */
+export function evictOldRuns(
+  runs: Map<string, WorkflowRunState>,
+  observers: Map<string, Set<(s: WorkflowRunState) => void>>,
+  max = MAX_RETAINED_RUNS
+): void {
+  if (runs.size <= max) return;
+  const terminal = [...runs.values()]
+    .filter((s) => s.status !== 'running' && s.status !== 'paused')
+    .sort((a, b) => (a.finishedAt ?? a.startedAt).localeCompare(b.finishedAt ?? b.startedAt));
+  let over = runs.size - max;
+  for (const s of terminal) {
+    if (over <= 0) break;
+    runs.delete(s.id);
+    observers.delete(s.id);
+    over--;
+  }
+}
+
 // Subscribe to the kernel ProcessManager and capture THIS run's realm pid.
 // Match by the unique runId ANYWHERE in argv, NOT by kind or filename. Filename is NOT
 // unique (two concurrent runs of the same file — and ALL `--script` runs, which share
@@ -378,6 +410,7 @@ function tapProgress(
     } else if (kind === 'log') {
       s.logs.push(text);
     }
+    if (s.logs.length > MAX_LOG_LINES) s.logs.splice(0, s.logs.length - MAX_LOG_LINES);
     notify();
   }
   return { stdout: '', stderr: '', exitCode: 0 };

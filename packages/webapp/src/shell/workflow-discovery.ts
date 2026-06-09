@@ -18,9 +18,13 @@ const log = createLogger('workflow-discovery');
 const SAVED_ROOT = '/workspace/.workflows';
 const SKILLS_ROOT = '/workspace/skills';
 const SUFFIX = '.workflow.js';
-// Same charset install-from-drop.ts enforces for skill dirs; a `:` (or other reserved
-// char) would break the `<skill>:<name>` namespace, so such dirs are skipped.
-const VALID_SKILL_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+// Valid command-name segment (same charset install-from-drop.ts enforces for skill dirs).
+// Applied to BOTH the skill segment AND the workflow stem so the discovery layer is the
+// single source of truth for "what is a valid workflow command name" — `workflow save`
+// already enforces this, but a file placed by other means (manual `cp`, `git checkout`,
+// hand-editing) must not register an undispatchable name (spaces, `:`, `/`, …) or one
+// that breaks the `<skill>:<name>` namespace.
+const VALID_NAME_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export interface WorkflowCommandEntry {
   path: string;
@@ -33,32 +37,44 @@ export async function discoverWorkflowCommands(
   fs: JshDiscoveryFS
 ): Promise<Map<string, WorkflowCommandEntry>> {
   const out = new Map<string, WorkflowCommandEntry>();
-
-  // Saved workflows → bare names.
-  if (await fs.exists(SAVED_ROOT)) {
-    for await (const path of fs.walk(SAVED_ROOT)) {
-      if (!path.endsWith(SUFFIX)) continue;
-      const name = stem(path);
-      if (name && !out.has(name)) out.set(name, { path, kind: 'saved' });
-    }
-  }
-
-  // Skill-bundled workflows → `<skill>:<name>` (always namespaced).
-  if (await fs.exists(SKILLS_ROOT)) {
-    for await (const path of fs.walk(SKILLS_ROOT)) {
-      if (!path.endsWith(SUFFIX)) continue;
-      const skill = skillSegment(path);
-      if (!skill) continue;
-      if (!VALID_SKILL_SEGMENT.test(skill)) {
-        log.warn(`skipping workflow under invalid skill dir name: ${skill} (${path})`);
-        continue;
-      }
-      const name = `${skill}:${stem(path)}`;
-      if (!out.has(name)) out.set(name, { path, kind: 'skill', skill });
-    }
-  }
-
+  if (await fs.exists(SAVED_ROOT)) await scanSavedRoot(fs, out);
+  if (await fs.exists(SKILLS_ROOT)) await scanSkillsRoot(fs, out);
   return out;
+}
+
+/** Saved workflows (`/workspace/.workflows/`) → bare command names. */
+async function scanSavedRoot(
+  fs: JshDiscoveryFS,
+  out: Map<string, WorkflowCommandEntry>
+): Promise<void> {
+  for await (const path of fs.walk(SAVED_ROOT)) {
+    if (!path.endsWith(SUFFIX)) continue;
+    const name = stem(path);
+    if (!VALID_NAME_SEGMENT.test(name)) {
+      log.warn(`skipping saved workflow with invalid command name: '${name}' (${path})`);
+      continue;
+    }
+    if (!out.has(name)) out.set(name, { path, kind: 'saved' });
+  }
+}
+
+/** Skill-bundled workflows (`/workspace/skills/<skill>/.workflows/`) → `<skill>:<name>`. */
+async function scanSkillsRoot(
+  fs: JshDiscoveryFS,
+  out: Map<string, WorkflowCommandEntry>
+): Promise<void> {
+  for await (const path of fs.walk(SKILLS_ROOT)) {
+    if (!path.endsWith(SUFFIX)) continue;
+    const skill = skillSegment(path);
+    if (!skill) continue;
+    const name = stem(path);
+    if (!VALID_NAME_SEGMENT.test(skill) || !VALID_NAME_SEGMENT.test(name)) {
+      log.warn(`skipping skill workflow with invalid name segment: '${skill}:${name}' (${path})`);
+      continue;
+    }
+    const qualified = `${skill}:${name}`;
+    if (!out.has(qualified)) out.set(qualified, { path, kind: 'skill', skill });
+  }
 }
 
 /** `/a/b/foo.workflow.js` → `foo` (basename minus the `.workflow.js` suffix). */
@@ -83,7 +99,9 @@ function skillSegment(path: string): string | null {
  * argv. Arg coercion is intentionally MORE LENIENT than `workflow run --args` (which is
  * strict JSON): a single arg is passed verbatim when it parses as JSON, else JSON-string-
  * wrapped; multiple args → a JSON string array; none → no `--args`. `--wait` is lifted to
- * a `workflow run` flag; `--` forces the remainder to be treated as literal positionals.
+ * a `workflow run` flag wherever it appears *before* `--`; after `--` (literal mode) a
+ * `--wait` token is treated as a literal positional like everything else. So pass
+ * `<name> -- --wait` to feed a literal `--wait` arg rather than blocking.
  */
 export function buildWorkflowRunArgv(path: string, rawArgs: string[]): string[] {
   let wait = false;

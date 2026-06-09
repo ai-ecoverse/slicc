@@ -427,4 +427,31 @@ describe('workflow save', () => {
     expect(r2.exitCode).toBe(0);
     expect(await fs.readFile('/workspace/.workflows/audit.workflow.js')).toContain('return 2');
   });
+
+  it('rejects extra positional arguments', async () => {
+    const mgr = installFakeManager();
+    mgr.getRun = (id: string) => ({ id, source: "export const meta={name:'x'}\nreturn 1" }) as any;
+    const fs = await VirtualFS.create({ dbName: `wf-extra-${Math.random()}`, wipe: true });
+    const res = await createWorkflowCommand().execute(
+      ['save', 'r1', 'audit', 'oops'],
+      await ctxWith(fs, async () => ({ stdout: '', stderr: '', exitCode: 0 }))
+    );
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toMatch(/usage/);
+  });
+
+  it('accepts --force in any position (flag, not a positional)', async () => {
+    const mgr = installFakeManager();
+    mgr.getRun = (id: string) =>
+      ({ id, source: "export const meta={name:'audit'}\nreturn 9" }) as any;
+    const fs = await VirtualFS.create({ dbName: `wf-force-pos-${Math.random()}`, wipe: true });
+    await fs.mkdir('/workspace/.workflows', { recursive: true });
+    await fs.writeFile('/workspace/.workflows/audit.workflow.js', 'old');
+    const res = await createWorkflowCommand().execute(
+      ['save', '--force', 'r1', 'audit'], // --force ahead of the positionals
+      await ctxWith(fs, async () => ({ stdout: '', stderr: '', exitCode: 0 }))
+    );
+    expect(res.exitCode).toBe(0);
+    expect(await fs.readFile('/workspace/.workflows/audit.workflow.js')).toContain('return 9');
+  });
 });

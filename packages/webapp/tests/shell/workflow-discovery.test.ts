@@ -50,6 +50,26 @@ describe('discoverWorkflowCommands', () => {
     expect(map.size).toBe(0);
   });
 
+  it('skips a saved workflow whose stem has invalid chars (single source of truth)', async () => {
+    // A file placed by means other than `workflow save` (cp/git) must not register an
+    // undispatchable command name. ':' is not in the command-name charset.
+    const fs = await fsWith({
+      '/workspace/.workflows/weird:name.workflow.js': 'return 1',
+      '/workspace/.workflows/ok-name.workflow.js': 'return 1',
+    });
+    const map = await discoverWorkflowCommands(fs);
+    expect(map.has('weird:name')).toBe(false);
+    expect(map.has('ok-name')).toBe(true);
+  });
+
+  it('skips a skill workflow whose stem has invalid chars', async () => {
+    const fs = await fsWith({
+      '/workspace/skills/triage/.workflows/bad name.workflow.js': 'return 1',
+    });
+    const map = await discoverWorkflowCommands(fs);
+    expect(map.size).toBe(0);
+  });
+
   it('ignores non-.workflow.js files', async () => {
     const fs = await fsWith({ '/workspace/.workflows/notes.md': 'hi' });
     const map = await discoverWorkflowCommands(fs);
