@@ -1,5 +1,10 @@
 import { define } from '../internal/define.js';
 import { escapeHtml } from '../internal/html.js';
+// The switcher instantiates <slicc-pill> chips and the <slicc-scoop-overflow>
+// more-popup, so it owns their registration (side-effect imports) — otherwise
+// the created elements would be inert empty boxes.
+import '../pill/slicc-pill.js';
+import './slicc-scoop-overflow.js';
 import type {
   SliccScoopOverflow,
   SliccScoopOverflowItem,
@@ -80,7 +85,11 @@ const STYLE = `
   min-width: 0;
   overflow: hidden;
 }
-.slicc-scoop-switcher .scoop { flex: 0 0 auto; --h: var(--rose); }
+/* Each chip carries an explicit width: as a flex item the pill is blockified,
+   so its inline-block shadow content no longer establishes an intrinsic size and
+   the chip (and the whole switcher) would collapse to 0. --pill-w is the pill's
+   own width token. */
+.slicc-scoop-switcher .scoop { flex: 0 0 auto; width: var(--pill-w, 140px); --h: var(--rose); }
 .slicc-scoop-switcher .scoop[data-k=cone] { --h: var(--waffle); }
 .slicc-scoop-switcher .scoop[data-k=researcher] { --h: var(--cyan); }
 .slicc-scoop-switcher .scoop[data-k=designer] { --h: var(--violet); }
@@ -167,6 +176,8 @@ export class SliccScoopSwitcher extends HTMLElement {
   #scoops: ScoopDescriptor[] = [];
   #overflow: SliccScoopOverflow | null = null;
   #ro: ResizeObserver | null = null;
+  /** Guards against ResizeObserver re-entering reflow mid-pass. */
+  #reflowing = false;
   #onClick: ((e: Event) => void) | null = null;
   #initialized = false;
 
@@ -234,7 +245,16 @@ export class SliccScoopSwitcher extends HTMLElement {
    * after a layout change.
    */
   reflow(): void {
-    if (!this.isConnected) return;
+    if (!this.isConnected || this.#reflowing) return;
+    this.#reflowing = true;
+    try {
+      this.#reflowOnce();
+    } finally {
+      this.#reflowing = false;
+    }
+  }
+
+  #reflowOnce(): void {
     const chips = [...this.querySelectorAll<HTMLElement>('slicc-pill.scoop')];
     // Reset so previously-hidden chips can be re-measured at full width.
     for (const c of chips) c.classList.remove('hide');
@@ -243,8 +263,21 @@ export class SliccScoopSwitcher extends HTMLElement {
       this.#feedOverflow([]);
       return;
     }
-    const overflowW = this.#overflow ? this.#overflow.offsetWidth : 0;
-    const avail = this.clientWidth + overflowW;
+    // Available width is the switcher's OWN box (overflow:hidden, sized by the
+    // nav) — a stable measurement. Do NOT fold in the more-button width: it
+    // exists only while overflowing, so adding it makes the overflow decision
+    // flip-flop on every ResizeObserver tick and the boundary chip flickers at
+    // frame rate. Room for the more-button is reserved below via MORE_RESERVE.
+    const avail = this.clientWidth;
+    // Not laid out yet (width 0): show every chip and retry once layout settles,
+    // rather than hiding everything against a bogus 0 width.
+    if (avail <= 0) {
+      this.#feedOverflow([]);
+      requestAnimationFrame(() => {
+        if (this.isConnected && this.clientWidth > 0) this.reflow();
+      });
+      return;
+    }
     const widths = visible.map((c) => c.offsetWidth + CHIP_GAP);
     const total = widths.reduce((a, b) => a + b, 0);
     if (total <= avail + 1) {

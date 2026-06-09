@@ -16,6 +16,7 @@ import '../dock/slicc-dock.js';
 import '../freezer/slicc-freezer-card.js';
 import '../freezer/slicc-freezer-new.js';
 import '../freezer/slicc-freezer.js';
+import '../freezer/slicc-shader.js';
 import '../nav/slicc-nav.js';
 import '../primitives/slicc-avatar.js';
 import '../primitives/slicc-day-separator.js';
@@ -184,24 +185,40 @@ function workbench(open: boolean): HTMLElement {
   return wb;
 }
 
-/** The full app: a freezer rail beside the split shell. */
+/** The full app: cone shader behind a contained freezer rail + the split shell. */
 function app(open: boolean): HTMLElement {
   const frame = el('div');
+  // `transform` makes the frame the containing block for the freezer's
+  // position:fixed, so the rail anchors to the frame (not the viewport).
   frame.style.cssText =
-    'display:flex;height:680px;width:1180px;background:var(--bg);border:1px solid var(--line);border-radius:14px;overflow:hidden;font-family:var(--ui);';
+    'position:relative;transform:translateZ(0);height:680px;width:1180px;background:var(--bg);' +
+    'border:1px solid var(--line);border-radius:14px;overflow:hidden;font-family:var(--ui);';
 
-  // Freezer rail stays open (260px) so the frozen-session text is reviewable;
-  // its [open] CSS expands the cards/new-chat label.
+  // The cone background field (the chat context's animated waffle lattice).
+  const shader = el('slicc-shader', { mode: 'cone', tint: 'var(--waffle)' });
+  shader.style.cssText = 'position:absolute;inset:0;z-index:0;';
+  frame.append(shader);
+
+  // Freezer rail (260px, open so the frozen-session text reads). Fixed → now
+  // contained to the frame; sits above the shader on the left.
   const freezer = el('slicc-freezer', { open: '' });
+  freezer.style.zIndex = '6';
   freezer.append(el('slicc-freezer-new', { expanded: '' }));
   for (const f of FROZEN) {
     freezer.append(el('slicc-freezer-card', { title: f.title, meta: f.meta, slug: f.slug }));
   }
+  frame.append(freezer);
 
+  // App body reserves the 260px rail and layers over the shader. The chat pane
+  // is made transparent so the cone field shows through its frosted surfaces.
+  const body = el('div');
+  body.style.cssText = 'position:relative;z-index:1;height:100%;margin-left:260px;';
   const shell = el('slicc-shell', open ? { open: '' } : {});
-  shell.append(chatpane(open), workbench(open), el('slicc-dock'));
-
-  frame.append(freezer, shell);
+  const pane = chatpane(open);
+  pane.style.background = 'transparent';
+  shell.append(pane, workbench(open), el('slicc-dock'));
+  body.append(shell);
+  frame.append(body);
   return frame;
 }
 

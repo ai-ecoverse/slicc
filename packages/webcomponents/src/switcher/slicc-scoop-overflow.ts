@@ -1,5 +1,7 @@
 import { define } from '../internal/define.js';
 import { escapeHtml } from '../internal/html.js';
+// The popup renders <slicc-pill> clones, so it owns the registration.
+import '../pill/slicc-pill.js';
 
 // ---------------------------------------------------------------------------
 // Lifted from proto/StellarRubySwift.html: the switcher overflow popup
