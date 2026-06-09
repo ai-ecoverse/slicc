@@ -12,7 +12,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
     --canvas:#fff;--bg:#f4f4f6;--ghost:#ececef;--desk:#ececef;--ink:#0a0a0a;--deep:#000;
     --txt-2:#737373;--txt-3:#a1a1a1;--line:#e5e5e5;
     --red:#c22b10;--green:#168a35;--green-bg:#ecf8ef;--green-line:#cbe9d3;
-    --rose:#f43f5e;--cyan:#06b6d4;--violet:#8b5cf6;--amber:#f59e0b;
+    --rose:#f43f5e;--cyan:#06b6d4;--violet:#8b5cf6;--amber:#f59e0b;--waffle:#b07823;
     --ctx:#f59e0b;
     --shaderbg:#f7f2e3;
     --rainbow:linear-gradient(90deg,#f43f5e 0%,#f59e0b 28%,#06b6d4 64%,#8b5cf6 100%);
@@ -75,7 +75,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   .switcher-more.open .pop{display:flex;}
   .switcher-more .pop slicc-pill.scoop{display:block;width:100%;--pill-w:100%;}
   .scoop{--h:var(--rose);display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:500;color:var(--txt-2);background:transparent;border:1px solid var(--line);border-radius:9999px;padding:5px 13px;cursor:pointer;}
-  .scoop[data-k=cone]{--h:var(--rose);}.scoop[data-k=researcher]{--h:var(--cyan);}.scoop[data-k=designer]{--h:var(--violet);}.scoop[data-k=tester]{--h:var(--amber);}
+  .scoop[data-k=cone]{--h:var(--waffle);}.scoop[data-k=researcher]{--h:var(--cyan);}.scoop[data-k=designer]{--h:var(--violet);}.scoop[data-k=tester]{--h:var(--amber);}
   .scoop:not(.active)::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--h);}
   .scoop.active{background:var(--h);color:#fff;border-color:var(--h);}
   .scoop .eyes{display:inline-flex;gap:3px;} .eye{width:9px;height:9px;border-radius:50%;background:#fff;border:1.3px solid #000;position:relative;display:inline-block;}
@@ -447,7 +447,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
     <div class="nav">
       <span class="logo">sliccy</span>
       <div class="switcher" id="switcher">
-        <slicc-pill class="scoop active" data-k="cone" type="cone" color="#f43f5e" eyes="open" label="Sliccy" active></slicc-pill>
+        <slicc-pill class="scoop active" data-k="cone" type="cone" color="#b07823" eyes="open" label="Sliccy" active></slicc-pill>
         <slicc-pill class="scoop" data-k="researcher" type="scoop" color="#06b6d4" eyes="none" label="researcher"></slicc-pill>
         <slicc-pill class="scoop" data-k="designer" type="scoop" color="#8b5cf6" eyes="none" label="designer"></slicc-pill>
         <slicc-pill class="scoop" data-k="tester" type="scoop" color="#f59e0b" eyes="dead" label="tester"></slicc-pill>
@@ -1334,7 +1334,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
     // per-scoop accent colors — mixed into FRAG_SCOOP so the gradient reads as
     // that scoop's hue. Cone/freezer shaders ignore u_tint (uniform unused).
     const SCOOP_TINT = {
-      cone:       [0.957, 0.247, 0.369], // rose
+      cone:       [0.690, 0.471, 0.137], // waffle
       researcher: [0.024, 0.714, 0.831], // cyan
       designer:   [0.545, 0.361, 0.965], // violet
       tester:     [0.961, 0.620, 0.043], // amber
@@ -1484,7 +1484,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
 
   // ============ guided walkthrough engine ============
   (function(){
-    const SC={cone:'#f43f5e',researcher:'#06b6d4',designer:'#8b5cf6',tester:'#f59e0b'}, SP={hero:'#8b5cf6',palette:'#f59e0b'}, GREEN='#10b981';
+    const SC={cone:'#b07823',researcher:'#06b6d4',designer:'#8b5cf6',tester:'#f59e0b'}, SP={hero:'#8b5cf6',palette:'#f59e0b'}, GREEN='#10b981';
     const byId=id=>document.getElementById(id);
     const scoopEl=k=>document.querySelector('.scoop[data-k="'+k+'"]');
     const dockEl=k=>document.querySelector('.dock .di[data-t="'+k+'"]');
