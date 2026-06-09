@@ -12,6 +12,27 @@ interface LickCardArgs {
   theme?: 'light' | 'dark';
 }
 
+/**
+ * Project the demo `bodyHtml` (plain text with `<b>…</b>` emphasis) into the
+ * card's default slot as real DOM — text nodes plus `<b>` elements — instead of
+ * an HTML-string assignment. The library builds markup by DOM construction,
+ * stories included.
+ */
+function appendRichBody(el: HTMLElement, markup: string): void {
+  // A capture-group split yields alternating segments: even indices are the
+  // surrounding plain text, odd indices are the inner text of each `<b>…</b>`.
+  markup.split(/<b>(.*?)<\/b>/g).forEach((part, i) => {
+    if (part === '') return;
+    if (i % 2 === 1) {
+      const b = document.createElement('b');
+      b.textContent = part;
+      el.append(b);
+    } else {
+      el.append(document.createTextNode(part));
+    }
+  });
+}
+
 function build(args: LickCardArgs): HTMLElement {
   const el = document.createElement('slicc-lick-card');
   if (args.kind != null) el.setAttribute('kind', args.kind);
@@ -21,7 +42,7 @@ function build(args: LickCardArgs): HTMLElement {
   if (args.collapsed) el.setAttribute('collapsed', '');
   if (args.theme) el.setAttribute('theme', args.theme);
   // Rich slotted markup wins over the plain `body` attribute when supplied.
-  if (args.bodyHtml != null) el.innerHTML = args.bodyHtml;
+  if (args.bodyHtml != null) appendRichBody(el, args.bodyHtml);
   else if (args.body != null) el.setAttribute('body', args.body);
   return el;
 }
@@ -56,7 +77,7 @@ export const Webhook: Story = {
 
 /**
  * Focuses the header affordance: the prototype's 🔔 emoji is now the lucide
- * `bell` icon (`iconSvg('bell', { size: 14 })`), inheriting the amber header
+ * `bell` icon (`iconEl('bell', { size: 14 })`), inheriting the amber header
  * color via `stroke: currentColor`. Review the crisp vector glyph here.
  */
 export const BellIcon: Story = {

@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
+import { append, frag, type HChild, h } from '../internal/dom.js';
 import './slicc-action-row.js';
 
 interface ActionRowArgs {
@@ -7,10 +8,25 @@ interface ActionRowArgs {
   tone?: 'ink' | 'vi' | 'am' | 'cy' | 'gh';
   label?: string;
   result?: string;
-  /** Raw monospace body HTML (carries `.add`/`.del`/`.ok`/`.p`/`.mut`). */
-  body?: string;
-  /** Optional label HTML override (e.g. a `.vlink` filename) for the default slot. */
-  labelHtml?: string;
+  /** Monospace body content builder (spans carry `.add`/`.del`/`.ok`/`.p`/`.mut`). */
+  body?: () => HChild[];
+  /** Optional rich label builder (e.g. a `.vlink` filename) for the default slot. */
+  labelNodes?: () => HChild[];
+}
+
+/** A monospace body span with one of the prototype syntax classes. */
+function span(cls: string, text: string): HTMLElement {
+  return h('span', { class: cls }, text);
+}
+
+/** Interleave the given nodes with literal newline text nodes (one body line each). */
+function lines(...rows: HChild[]): HChild[] {
+  const out: HChild[] = [];
+  rows.forEach((row, i) => {
+    if (i > 0) out.push('\n');
+    out.push(row);
+  });
+  return out;
 }
 
 /** Build a populated action row so each story is reviewable end-to-end. */
@@ -21,7 +37,7 @@ function buildRow({
   label,
   result,
   body,
-  labelHtml,
+  labelNodes,
 }: ActionRowArgs): HTMLElement {
   const row = document.createElement('slicc-action-row');
   row.style.width = '440px';
@@ -30,18 +46,17 @@ function buildRow({
   if (tone) row.setAttribute('tone', tone);
   if (result != null) row.setAttribute('result', result);
 
-  if (labelHtml) {
+  if (labelNodes) {
     // Default-slot rich label (e.g. `edit_file · hero.css` with a clickable file).
-    const span = document.createElement('span');
-    span.innerHTML = labelHtml;
-    row.appendChild(span);
+    const wrap = h('span');
+    append(wrap, labelNodes());
+    row.appendChild(wrap);
   } else if (label != null) {
     row.setAttribute('label', label);
   }
 
-  const bodyEl = document.createElement('div');
-  bodyEl.setAttribute('slot', 'body');
-  bodyEl.innerHTML = body ?? '';
+  const bodyEl = h('div', { slot: 'body' });
+  if (body) append(bodyEl, body());
   row.appendChild(bodyEl);
 
   return row;
@@ -61,8 +76,8 @@ const meta: Meta<ActionRowArgs> = {
     },
     label: { control: 'text', description: 'Header label (escaped)' },
     result: { control: 'text', description: 'Right-aligned result badge (hidden when empty)' },
-    body: { control: 'text', description: 'Monospace body HTML' },
-    labelHtml: { control: 'text', description: 'Rich label HTML (default slot) override' },
+    body: { control: false, description: 'Monospace body content builder' },
+    labelNodes: { control: false, description: 'Rich label content builder (default slot)' },
   },
   render: (args) => buildRow(args),
 };
@@ -77,12 +92,14 @@ export const Closed: Story = {
     tone: 'am',
     label: 'tester · vitest',
     result: '3 passed',
-    body:
-      '<span class="p">❯</span> npm test -- hero\n' +
-      '<span class="ok">✓ hero renders warm canvas</span>\n' +
-      '<span class="ok">✓ single accessible CTA</span>\n' +
-      '<span class="ok">✓ contrast ≥ 4.5:1</span>\n' +
-      '<span class="mut">0 failed · 1.2s</span>',
+    body: () =>
+      lines(
+        frag(span('p', '❯'), ' npm test -- hero'),
+        span('ok', '✓ hero renders warm canvas'),
+        span('ok', '✓ single accessible CTA'),
+        span('ok', '✓ contrast ≥ 4.5:1'),
+        span('mut', '0 failed · 1.2s')
+      ),
   },
 };
 
@@ -93,13 +110,18 @@ export const OpenDiff: Story = {
     icon: '✎',
     tone: 'vi',
     result: '4 changes',
-    labelHtml: 'edit_file · <a class="vlink" data-file="fcss" data-kind="css">hero.css</a>',
-    body:
-      '<span class="del">- background: #0e0e0f;</span>\n' +
-      '<span class="add">+ background: #faf6f1;</span>\n' +
-      '<span class="del">- font-family: ui-monospace;</span>\n' +
-      '<span class="add">+ font-family: Fraunces, serif;</span>\n' +
-      '<span class="ok">✓ live-reloaded at /preview/hero</span>',
+    labelNodes: () => [
+      'edit_file · ',
+      h('a', { class: 'vlink', 'data-file': 'fcss', 'data-kind': 'css' }, 'hero.css'),
+    ],
+    body: () =>
+      lines(
+        span('del', '- background: #0e0e0f;'),
+        span('add', '+ background: #faf6f1;'),
+        span('del', '- font-family: ui-monospace;'),
+        span('add', '+ font-family: Fraunces, serif;'),
+        span('ok', '✓ live-reloaded at /preview/hero')
+      ),
   },
 };
 
@@ -111,10 +133,12 @@ export const ToneInk: Story = {
     tone: 'ink',
     label: 'Use Computer · playwright screenshot',
     result: '2 shots',
-    body:
-      '<span class="p">❯</span> playwright screenshot --selector .hero before.png\n' +
-      '<span class="p">❯</span> playwright screenshot --selector .hero after.png\n' +
-      '<span class="ok">✓ DPR normalized → see the Browser panel</span>',
+    body: () =>
+      lines(
+        frag(span('p', '❯'), ' playwright screenshot --selector .hero before.png'),
+        frag(span('p', '❯'), ' playwright screenshot --selector .hero after.png'),
+        span('ok', '✓ DPR normalized → see the Browser panel')
+      ),
   },
 };
 
@@ -126,7 +150,7 @@ export const ToneViolet: Story = {
     tone: 'vi',
     label: 'designer · edit',
     result: '2 changes',
-    body: '<span class="add">+ accent applied</span>',
+    body: () => [span('add', '+ accent applied')],
   },
 };
 
@@ -138,7 +162,7 @@ export const ToneAmber: Story = {
     tone: 'am',
     label: 'tester · vitest',
     result: '3 passed',
-    body: '<span class="ok">✓ all green</span>\n<span class="mut">0 failed · 1.2s</span>',
+    body: () => lines(span('ok', '✓ all green'), span('mut', '0 failed · 1.2s')),
   },
 };
 
@@ -150,7 +174,7 @@ export const ToneCyan: Story = {
     tone: 'cy',
     label: 'researcher · audit',
     result: 'done',
-    body: '<span class="mut">scanned 12 files</span>',
+    body: () => [span('mut', 'scanned 12 files')],
   },
 };
 
@@ -162,11 +186,13 @@ export const ToneGitHub: Story = {
     tone: 'gh',
     label: 'git · commit + push',
     result: 'warm-hero',
-    body:
-      '<span class="p">❯</span> git checkout -b warm-hero\n' +
-      '<span class="p">❯</span> git commit -am "feat(hero): warm redesign"\n' +
-      '<span class="ok">[warm-hero 9f2a1c] 2 files changed, +38 −21</span>\n' +
-      '<span class="p">❯</span> git push -u origin warm-hero',
+    body: () =>
+      lines(
+        frag(span('p', '❯'), ' git checkout -b warm-hero'),
+        frag(span('p', '❯'), ' git commit -am "feat(hero): warm redesign"'),
+        span('ok', '[warm-hero 9f2a1c] 2 files changed, +38 −21'),
+        frag(span('p', '❯'), ' git push -u origin warm-hero')
+      ),
   },
 };
 
@@ -177,8 +203,10 @@ export const NoBadge: Story = {
     icon: '✦',
     tone: 'ink',
     label: 'upskill · brand-voice',
-    body:
-      '<span class="p">❯</span> upskill https://github.com/acme/brand-voice\n' +
-      '<span class="ok">✓ installed skill → /workspace/skills/</span>',
+    body: () =>
+      lines(
+        frag(span('p', '❯'), ' upskill https://github.com/acme/brand-voice'),
+        span('ok', '✓ installed skill → /workspace/skills/')
+      ),
   },
 };

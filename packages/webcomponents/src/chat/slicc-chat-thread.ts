@@ -105,8 +105,14 @@ export class SliccChatThread extends HTMLElement {
   #built = false;
   #onClick: ((e: MouseEvent) => void) | null = null;
 
-  /** Per-context snapshots of the inner column markup, keyed by context id. */
-  readonly #snapshots = new Map<string, string>();
+  /**
+   * Per-context snapshots of the inner column content, keyed by context id.
+   * Each snapshot is a detached fragment of cloned child nodes (no HTML string);
+   * restoring re-clones it so the swapped-in nodes are fresh and inert — the
+   * same "rebuilt from a snapshot, listeners not carried" semantics the old
+   * HTML-string round-trip had, minus the markup-string surface.
+   */
+  readonly #snapshots = new Map<string, DocumentFragment>();
 
   connectedCallback(): void {
     ensureThreadStyle(this.ownerDocument);
@@ -173,10 +179,10 @@ export class SliccChatThread extends HTMLElement {
     this.#build();
     const previous = this.context;
     if (id === previous) return;
-    if (previous != null) this.#snapshots.set(previous, this.#inner.innerHTML);
+    if (previous != null) this.#snapshots.set(previous, this.#snapshot());
 
     const saved = this.#snapshots.get(id);
-    this.#inner.innerHTML = saved ?? '';
+    this.#inner.replaceChildren(...(saved ? Array.from(saved.cloneNode(true).childNodes) : []));
 
     this.context = id;
     this.dispatchEvent(
@@ -199,6 +205,18 @@ export class SliccChatThread extends HTMLElement {
   /** Scroll the thread wrapper to the bottom (latest message). */
   scrollToBottom(): void {
     this.scrollTop = this.scrollHeight;
+  }
+
+  /**
+   * Capture the current inner column as a detached fragment of cloned child
+   * nodes — the HTML-string-free snapshot used by {@link switchContext}. Cloning
+   * (rather than moving) keeps the live column intact for the duration of the
+   * swap and yields a fresh, inert tree to restore later.
+   */
+  #snapshot(): DocumentFragment {
+    const frag = this.ownerDocument.createDocumentFragment();
+    for (const node of Array.from(this.#inner.childNodes)) frag.appendChild(node.cloneNode(true));
+    return frag;
   }
 
   /** Mirror the inherited (or forced) accent onto the local `--ctx` token. */

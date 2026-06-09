@@ -1,5 +1,5 @@
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
+import { h } from '../internal/dom.js';
 
 /**
  * Scoped, document-level stylesheet for `<slicc-chat-table>`. Light-DOM
@@ -201,8 +201,9 @@ export class SliccChatTable extends HTMLElement {
       this.#head.replaceChildren();
       return;
     }
-    const cells = labels.map((label) => `<th>${escapeHtml(label)}</th>`).join('');
-    this.#head.innerHTML = `<tr data-slicc-generated="">${cells}</tr>`;
+    const row = h('tr', { 'data-slicc-generated': '' });
+    for (const label of labels) row.append(h('th', null, label));
+    this.#head.replaceChildren(row);
   }
 }
 

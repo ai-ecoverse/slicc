@@ -1,5 +1,5 @@
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
+import { append, h } from '../internal/dom.js';
 
 /**
  * Scoped, document-level stylesheet for `<slicc-action-card>`, lifted verbatim
@@ -371,23 +371,24 @@ export class SliccActionCard extends HTMLElement {
     const tone = this.tone;
     const title = this.title;
     const badge = this.badge;
-    const toneClass = tone === 'ink' ? '' : ` ${tone}`;
-    const glyphHtml = glyph != null ? escapeHtml(glyph) : '';
-    const badgeHtml =
-      badge != null ? `<span class="badge" part="badge">${escapeHtml(badge)}</span>` : '';
+    const iconClass = tone === 'ink' ? 'ic' : `ic ${tone}`;
 
-    this.replaceChildren();
-    this.innerHTML =
-      `<div class="tcard${light ? ' light' : ''}" part="card">` +
-      `<div class="th" part="header">` +
-      `<span class="ic${toneClass}" part="icon">${glyphHtml}</span> ` +
-      `<span class="nm" part="title">${escapeHtml(title)}</span>${badgeHtml}` +
-      `</div>` +
-      `<div class="tb" part="body"></div>` +
-      `</div>`;
+    const header = h('div', { class: 'th', part: 'header' });
+    append(header, [
+      h('span', { class: iconClass, part: 'icon' }, glyph != null ? glyph : null),
+      // Preserve the literal space that separated the chip from the title.
+      ' ',
+      h('span', { class: 'nm', part: 'title' }, title),
+      badge != null ? h('span', { class: 'badge', part: 'badge' }, badge) : null,
+    ]);
 
-    const body = this.querySelector('.tb') as HTMLElement;
+    const body = h('div', { class: 'tb', part: 'body' });
     body.append(...this.#slotted);
+
+    const cardClass = light ? 'tcard light' : 'tcard';
+    const card = h('div', { class: cardClass, part: 'card' }, header, body);
+
+    this.replaceChildren(card);
   }
 
   /** Render the `.prcard` (`pr`) form: `.ph` header + `.pmeta` stats row. */
@@ -401,43 +402,37 @@ export class SliccActionCard extends HTMLElement {
     const del = this.del;
     const checks = this.checks;
 
-    const numberHtml =
-      number != null ? `<span class="pn" part="number">${escapeHtml(number)}</span>` : '';
+    const header = h('div', { class: 'ph', part: 'header' });
+    append(header, [
+      h('span', { class: 'gi', part: 'icon' }, '⎇'),
+      h('span', { class: 'pt', part: 'title' }, title),
+      number != null ? h('span', { class: 'pn', part: 'number' }, number) : null,
+      h('span', { class: 'open', part: 'status' }, status),
+    ]);
+
+    const meta = h('div', { class: 'pmeta', part: 'meta' });
 
     // A `meta` slot wins over the attribute-derived stats row.
     const metaSlot = this.#slotted.filter(
       (n) => n instanceof HTMLElement && n.getAttribute('slot') === 'meta'
     );
 
-    let metaInner = '';
-    if (metaSlot.length === 0) {
-      const cells: string[] = [];
-      if (branch != null) cells.push(`<span>${escapeHtml(branch)}</span>`);
-      if (files != null) cells.push(`<span><b>${escapeHtml(files)}</b> files</span>`);
-      if (add != null) cells.push(`<span class="add">+${escapeHtml(add)}</span>`);
-      if (del != null) cells.push(`<span class="del">−${escapeHtml(del)}</span>`);
-      if (checks != null) {
-        cells.push(`<span>checks <b style="color:#1a7f37">${escapeHtml(checks)}</b></span>`);
-      }
-      metaInner = cells.join('');
-    }
-
-    this.replaceChildren();
-    this.innerHTML =
-      `<div class="prcard" part="card">` +
-      `<div class="ph" part="header">` +
-      `<span class="gi" part="icon">⎇</span>` +
-      `<span class="pt" part="title">${escapeHtml(title)}</span>` +
-      `${numberHtml}` +
-      `<span class="open" part="status">${escapeHtml(status)}</span>` +
-      `</div>` +
-      `<div class="pmeta" part="meta">${metaInner}</div>` +
-      `</div>`;
-
     if (metaSlot.length > 0) {
-      const meta = this.querySelector('.pmeta') as HTMLElement;
       meta.append(...metaSlot);
+    } else {
+      append(meta, [
+        branch != null ? h('span', null, branch) : null,
+        files != null ? h('span', null, h('b', null, files), ' files') : null,
+        add != null ? h('span', { class: 'add' }, `+${add}`) : null,
+        del != null ? h('span', { class: 'del' }, `−${del}`) : null,
+        checks != null
+          ? h('span', null, 'checks ', h('b', { style: 'color:#1a7f37' }, checks))
+          : null,
+      ]);
     }
+
+    const card = h('div', { class: 'prcard', part: 'card' }, header, meta);
+    this.replaceChildren(card);
   }
 
   /**

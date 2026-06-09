@@ -1,8 +1,8 @@
 import { define } from '../internal/define.js';
 // Renders these child custom elements internally — owns their registration.
 import '../memory/slicc-palette-cell.js';
-import { escapeHtml } from '../internal/html.js';
-import { iconSvg } from '../internal/icons.js';
+import { h, sheet } from '../internal/dom.js';
+import { iconEl } from '../internal/icons.js';
 
 /**
  * Confetti-sprinkle colors for the drifting particle field behind the dip,
@@ -155,6 +155,7 @@ canvas.sprk {
   canvas.sprk { display: none; }
 }
 `;
+const SHEET = sheet(STYLE);
 
 /** A swatch descriptor for one selectable palette cell. */
 interface Swatch {
@@ -187,7 +188,7 @@ interface Swatch {
  *
  * @attr name - the dip filename shown in the header `.nm` (default `palette.shtml`)
  * @attr hue - the accent hue (`--c`) tinting the glyph chip and tag pill
- * @attr prompt - the `.dprompt` instruction line (HTML-escaped)
+ * @attr prompt - the `.dprompt` instruction line (rendered as a plain text node)
  * @csspart card - the host card surface (also styleable via the element itself)
  * @csspart header - the frosted `.dh` header row
  * @csspart glyph - the accent `.sg` glyph chip
@@ -228,6 +229,7 @@ export class SliccDip extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+    this.#root.adoptedStyleSheets = [SHEET];
   }
 
   connectedCallback(): void {
@@ -311,29 +313,52 @@ export class SliccDip extends HTMLElement {
     }
   }
 
+  /**
+   * Build the default `.dprompt` content (used when no `prompt` attribute is
+   * set): "Tune the hero's <b>canvas</b> & <b>accent</b>, then apply:" — with
+   * the bold words as real `<b>` element nodes, never an HTML string.
+   */
+  #defaultPromptNodes(): Node[] {
+    return [
+      document.createTextNode('Tune the hero’s '),
+      h('b', null, 'canvas'),
+      document.createTextNode(' & '),
+      h('b', null, 'accent'),
+      document.createTextNode(', then apply:'),
+    ];
+  }
+
   #render(): void {
     const hue = this.hue;
-    const styleHue = hue ? ` style="--c:${escapeHtml(hue)}"` : '';
-    const promptHtml = this.prompt
-      ? escapeHtml(this.prompt)
-      : 'Tune the hero&rsquo;s <b>canvas</b> &amp; <b>accent</b>, then apply:';
+    const hueStyle = hue ? `--c:${hue}` : undefined;
 
-    this.#root.innerHTML =
-      `<style>${STYLE}</style>` +
-      '<canvas class="sprk" part="field" aria-hidden="true"></canvas>' +
-      `<div class="dh" part="header"${styleHue}>` +
-      `<span class="sg" part="glyph">${iconSvg('sparkles', { size: 12 })}</span>` +
-      `<span class="nm" part="name">${escapeHtml(this.name)}</span>` +
-      '<span class="tag" part="tag">sprinkle · dip</span>' +
-      '</div>' +
-      `<div class="dbody" part="body"${styleHue}>` +
-      `<p class="dprompt" part="prompt"><slot name="prompt">${promptHtml}</slot></p>` +
-      '<div class="pgrid canvas" part="grid-canvas"><slot name="canvas"></slot></div>' +
-      '<div class="pgrid accent" part="grid-accent"><slot name="accent"></slot></div>' +
-      '<div class="dfoot">' +
-      '<button class="dapply" part="apply" type="button">Apply to hero →</button>' +
-      '<span class="dnote" part="note"></span>' +
-      '</div></div>';
+    const promptSlot = h('slot', { name: 'prompt' });
+    if (this.prompt) promptSlot.append(this.prompt);
+    else promptSlot.append(...this.#defaultPromptNodes());
+
+    this.#root.replaceChildren(
+      h('canvas', { class: 'sprk', part: 'field', 'aria-hidden': 'true' }),
+      h(
+        'div',
+        { class: 'dh', part: 'header', style: hueStyle },
+        h('span', { class: 'sg', part: 'glyph' }, iconEl('sparkles', { size: 12 })),
+        h('span', { class: 'nm', part: 'name' }, this.name),
+        h('span', { class: 'tag', part: 'tag' }, 'sprinkle · dip')
+      ),
+      h(
+        'div',
+        { class: 'dbody', part: 'body', style: hueStyle },
+        h('p', { class: 'dprompt', part: 'prompt' }, promptSlot),
+        h('div', { class: 'pgrid canvas', part: 'grid-canvas' }, h('slot', { name: 'canvas' })),
+        h('div', { class: 'pgrid accent', part: 'grid-accent' }, h('slot', { name: 'accent' })),
+        h(
+          'div',
+          { class: 'dfoot' },
+          h('button', { class: 'dapply', part: 'apply', type: 'button' }, 'Apply to hero →'),
+          h('span', { class: 'dnote', part: 'note' })
+        )
+      )
+    );
 
     // Compose the default swatch cells BY TAG (skipped if the user slotted any).
     this.#buildGroup(`canvas:${this.#id}`, CANVAS_SWATCHES, 'paper');

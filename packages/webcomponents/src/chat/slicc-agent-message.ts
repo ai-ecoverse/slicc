@@ -1,5 +1,5 @@
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
+import { h } from '../internal/dom.js';
 
 /**
  * Scoped, document-level stylesheet for `<slicc-agent-message>`. Lifted verbatim
@@ -61,7 +61,7 @@ export type CheckVariant = '' | 'r' | 'cy' | 'vi' | 'am';
 
 /** A single `.check` row: a check badge (with optional accent) and its text. */
 export interface CheckItem {
-  /** Row text (escaped). */
+  /** Row text. */
   text: string;
   /** Badge accent: default green, or rose/cyan/violet/amber. */
   variant?: CheckVariant;
@@ -71,29 +71,32 @@ export interface CheckItem {
 
 const CHECK_VARIANTS: ReadonlySet<string> = new Set(['', 'r', 'cy', 'vi', 'am']);
 
-/** Build the bouncing three-dot thinking row markup (rose / cyan / violet). */
-function thinkRowHtml(): string {
-  const dots = THINK_DOT_HUES.map((h) => `<i style="--d:${h}"></i>`).join('');
-  return `<div class="dots" part="dots" aria-hidden="true">${dots}</div>`;
+/** Build the bouncing three-dot thinking row (rose / cyan / violet) as a live node. */
+function thinkRowEl(): HTMLElement {
+  const dots = h('div', { class: 'dots', part: 'dots', 'aria-hidden': 'true' });
+  for (const hue of THINK_DOT_HUES) dots.append(h('i', { style: `--d:${hue}` }));
+  return dots;
 }
 
 /** Build a `ul.plan` from plain strings; the first three bullets cycle rose/violet/cyan. */
-function planHtml(items: readonly string[]): string {
-  const lis = items.map((t) => `<li>${escapeHtml(t)}</li>`).join('');
-  return `<ul class="plan" part="plan">${lis}</ul>`;
+function planEl(items: readonly string[]): HTMLElement {
+  const ul = h('ul', { class: 'plan', part: 'plan' });
+  for (const text of items) ul.append(h('li', null, text));
+  return ul;
 }
 
 /** Build a `ul.check` with per-row check badges (`.ck` + optional `.r/.cy/.vi/.am`). */
-function checkHtml(items: readonly CheckItem[]): string {
-  const lis = items
-    .map((item) => {
-      const variant = item.variant && CHECK_VARIANTS.has(item.variant) ? item.variant : '';
-      const cls = variant ? `ck ${variant}` : 'ck';
-      const glyph = escapeHtml(item.glyph ?? '✓');
-      return `<li><span class="${cls}">${glyph}</span><span class="ctext">${escapeHtml(item.text)}</span></li>`;
-    })
-    .join('');
-  return `<ul class="check" part="check">${lis}</ul>`;
+function checkEl(items: readonly CheckItem[]): HTMLElement {
+  const ul = h('ul', { class: 'check', part: 'check' });
+  for (const item of items) {
+    const variant = item.variant && CHECK_VARIANTS.has(item.variant) ? item.variant : '';
+    const cls = variant ? `ck ${variant}` : 'ck';
+    const glyph = item.glyph ?? '✓';
+    ul.append(
+      h('li', null, h('span', { class: cls }, glyph), h('span', { class: 'ctext' }, item.text))
+    );
+  }
+  return ul;
 }
 
 /**
@@ -189,12 +192,15 @@ export class SliccAgentMessage extends HTMLElement {
   /**
    * Replace the body content with already-rendered (trusted) HTML. The
    * marked/DOMPurify sanitization pipeline is deferred to wire-in — callers are
-   * responsible for sanitizing untrusted input before passing it here.
+   * responsible for sanitizing untrusted input before passing it here. The
+   * trusted string is parsed into nodes via a contextual fragment (no HTML
+   * sink) so the body is committed purely by DOM construction.
    */
   setBodyHtml(html: string): void {
     this.#build();
-    this.#body.innerHTML = html;
-    this.#syncStreaming();
+    const range = this.ownerDocument.createRange();
+    range.selectNodeContents(this.#body);
+    this.#setBody(range.createContextualFragment(html));
   }
 
   /**
@@ -203,7 +209,7 @@ export class SliccAgentMessage extends HTMLElement {
    * content.
    */
   setPlan(items: readonly string[]): void {
-    this.setBodyHtml(planHtml(items));
+    this.#setBody(planEl(items));
   }
 
   /**
@@ -212,7 +218,14 @@ export class SliccAgentMessage extends HTMLElement {
    * Replaces existing body content.
    */
   setCheck(items: readonly CheckItem[]): void {
-    this.setBodyHtml(checkHtml(items));
+    this.#setBody(checkEl(items));
+  }
+
+  /** Replace the body subtree with the given node(s) and re-sync the caret. */
+  #setBody(content: Node): void {
+    this.#build();
+    this.#body.replaceChildren(content);
+    this.#syncStreaming();
   }
 
   /**
@@ -247,9 +260,7 @@ export class SliccAgentMessage extends HTMLElement {
     if (thinking) {
       this.#body.style.display = 'none';
       if (!this.#dots) {
-        const wrap = this.ownerDocument.createElement('div');
-        wrap.innerHTML = thinkRowHtml();
-        this.#dots = wrap.firstElementChild as HTMLElement;
+        this.#dots = thinkRowEl();
         this.insertBefore(this.#dots, this.#body);
       }
     } else {

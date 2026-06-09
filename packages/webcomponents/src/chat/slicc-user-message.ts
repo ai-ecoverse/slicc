@@ -1,8 +1,8 @@
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
+import { h, sheet } from '../internal/dom.js';
 
 /**
- * Per-instance stylesheet, lifted verbatim from the prototype's chat rules:
+ * Shared constructable stylesheet, lifted verbatim from the prototype's chat rules:
  *
  * - `.msg` — the message row metrics (`margin-bottom`, `line-height`).
  * - `.msg.user` — flex row, right-aligned (`justify-content:flex-end`).
@@ -23,6 +23,7 @@ const STYLE = `
 :host-context(.dark) .b,
 :host-context([data-theme="dark"]) .b{color:#0a0a0a;}
 `;
+const SHEET = sheet(STYLE);
 
 /**
  * `<slicc-user-message>` — the user's chat bubble from the prototype
@@ -49,6 +50,7 @@ export class SliccUserMessage extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+    this.#root.adoptedStyleSheets = [SHEET];
   }
 
   connectedCallback(): void {
@@ -71,10 +73,10 @@ export class SliccUserMessage extends HTMLElement {
 
   #render(): void {
     const text = this.text;
-    const body = text != null ? escapeHtml(text) : '<slot></slot>';
-    this.#root.innerHTML =
-      `<style>${STYLE}</style>` +
-      `<div class="msg user" part="message"><div class="b" part="bubble">${body}</div></div>`;
+    const body: Node | string = text != null ? text : h('slot');
+    const bubble = h('div', { class: 'b', part: 'bubble' }, body);
+    const row = h('div', { class: 'msg user', part: 'message' }, bubble);
+    this.#root.replaceChildren(row);
   }
 }
 

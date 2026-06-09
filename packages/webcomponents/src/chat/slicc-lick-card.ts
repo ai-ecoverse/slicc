@@ -1,6 +1,6 @@
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
-import { iconSvg } from '../internal/icons.js';
+import { h, sheet } from '../internal/dom.js';
+import { iconEl } from '../internal/icons.js';
 
 // ---------------------------------------------------------------------------
 // Lifted from proto/StellarRubySwift.html (`.lick` / `.lh` / `.bell` / `.lk` /
@@ -13,7 +13,7 @@ import { iconSvg } from '../internal/icons.js';
 //   </div>
 //
 // The prototype's 🔔 emoji in `.bell` is replaced here by the lucide `bell`
-// icon (`iconSvg('bell', { size: 14 })`) — the library never ships emoji or
+// icon (`iconEl('bell', { size: 14 })`) — the library never ships emoji or
 // bespoke unicode glyphs; every symbol comes from lucide via the shared helper.
 //
 // An amber-tinted rounded card with a bell-iconed "lick · <kind>" header, an
@@ -93,6 +93,10 @@ const STYLE = `
 
 @keyframes lickIn{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}
 `;
+const SHEET = sheet(STYLE);
+
+/** Hair-spaced middot separator in the "lick · <kind>" header (prototype `&middot;`). */
+const MIDDOT = '·';
 
 /**
  * `<slicc-lick-card>` — the **lick notification card** from the prototype chat
@@ -146,6 +150,7 @@ export class SliccLickCard extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+    this.#root.adoptedStyleSheets = [SHEET];
   }
 
   connectedCallback(): void {
@@ -249,25 +254,38 @@ export class SliccLickCard extends HTMLElement {
 
     // Header label preserves the prototype's exact "lick · <kind>" wording with
     // a hair-space around the middot. When no kind is set we still show "lick ·".
-    const kindHtml = kind ? `lick &middot; ${escapeHtml(kind)}` : 'lick &middot;';
+    const kindText = kind ? `lick ${MIDDOT} ${kind}` : `lick ${MIDDOT}`;
 
-    // Body: rich slotted content wins; otherwise the escaped `body` attribute.
-    const bodyHtml = body != null ? escapeHtml(body) : '<slot></slot>';
+    // Bell affordance: a live lucide <svg> element inside the `.bell` span.
+    const bell = h('span', { class: 'bell', part: 'bell', 'aria-hidden': true });
+    bell.append(iconEl('bell', { size: BELL_ICON_SIZE }));
 
-    const headerExtra = collapsible
-      ? ' tabindex="0" role="button" aria-expanded="' + (this.collapsed ? 'false' : 'true') + '"'
-      : '';
+    // The header keeps the prototype's trailing-space text nodes after the bell
+    // span and after the kind label (`</span> ` / `${kindHtml} `) verbatim.
+    const headerProps: Record<string, string | number | boolean> = {
+      class: 'lh',
+      part: 'header',
+    };
+    if (collapsible) {
+      headerProps.tabindex = '0';
+      headerProps.role = 'button';
+      headerProps['aria-expanded'] = this.collapsed ? 'false' : 'true';
+    }
+    const headerRow = h(
+      'div',
+      headerProps,
+      bell,
+      ' ',
+      h('span', { class: 'kind', part: 'kind' }, `${kindText} `),
+      h('span', { class: 'lk', part: 'event' }, eventLabel)
+    );
 
-    this.#root.innerHTML =
-      `<style>${STYLE}</style>` +
-      '<div class="lick" part="card">' +
-      `<div class="lh" part="header"${headerExtra}>` +
-      `<span class="bell" part="bell" aria-hidden="true">${iconSvg('bell', { size: BELL_ICON_SIZE })}</span> ` +
-      `<span class="kind" part="kind">${kindHtml} </span>` +
-      `<span class="lk" part="event">${escapeHtml(eventLabel)}</span>` +
-      '</div>' +
-      `<div class="lb" part="body">${bodyHtml}</div>` +
-      '</div>';
+    // Body: rich slotted content wins; otherwise the escaped `body` attribute
+    // (a text node escapes by construction — no markup interpolation).
+    const bodyRow = h('div', { class: 'lb', part: 'body' }, body != null ? body : h('slot'));
+
+    const cardEl = h('div', { class: 'lick', part: 'card' }, headerRow, bodyRow);
+    this.#root.replaceChildren(cardEl);
 
     this.#bindHeader();
   }
