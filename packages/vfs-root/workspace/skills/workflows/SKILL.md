@@ -56,15 +56,28 @@ return findings.filter(Boolean);
 ## Running
 
 ```bash
-workflow run my.workflow.js            # non-blocking — returns a run id; result arrives as a turn
-workflow run my.workflow.js --wait     # block and print the full result
-workflow status <runId>                # progress
+workflow run my.workflow.js            # non-blocking (default) — returns a run id immediately
+workflow run my.workflow.js --wait     # block and print the full result inline
+workflow status <runId>                # one-shot progress check (NOT for polling loops)
 workflow list                          # all runs
 ```
 
-Default is non-blocking: you get a run id immediately and the result comes back as a new
-turn (with a path + preview) when it finishes. Run non-blocking when you intend to save —
-only backgrounded runs can be saved.
+**Non-blocking is the default, and it is lick-driven — do NOT sleep or poll to wait for it.**
+`workflow run` returns a run id and your turn ends. When the run finishes, its result is delivered
+back to you automatically as a **new turn** (a completion _lick_) carrying the result path plus a
+preview — you will be re-invoked then. So the pattern is: **launch it, then stop.** Never `sleep`,
+and never loop on `workflow status` waiting for completion — the lick is how you get the result, and
+manually waiting just wastes a turn (and `setTimeout`/`sleep` inside the workflow itself is banned by
+the determinism guard anyway).
+
+You do **not** need to wait for a run to finish before saving it: `workflow save` persists the
+script _source_, which exists the moment the run starts. So the idiomatic flow is **launch
+non-blocking → `workflow save <runId> <name>` right away → end your turn**; the result lick arrives
+on its own.
+
+Use `--wait` ONLY when you genuinely need the full result inline in the current turn (it blocks until
+the run finishes). Note `--wait` runs are **not** saveable (they have no tracked run id) — run
+non-blocking when you intend to save.
 
 ## Saving as a reusable command
 
