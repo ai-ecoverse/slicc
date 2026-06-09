@@ -65,7 +65,8 @@
         font: 400 14px/18px ui-sans-serif, system-ui, sans-serif;
       }
       .composer textarea::placeholder { color: #8a8a8a; }
-      .composer .bar { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+      .composer .bar { display: flex; align-items: flex-end; gap: 8px; margin-top: 10px; }
+      .composer slicc-add-menu { flex: 1; min-width: 0; }
       .composer .spacer { flex: 1; }
       .send {
         width: 32px; height: 32px; border: none; border-radius: 8px;
@@ -86,12 +87,14 @@
   <body>
     <h1>&lt;slicc-add-menu&gt;</h1>
     <p class="sub">
-      A standalone custom element: the <code>+</code> trigger that lives in the prompt bar and
-      opens an "add to prompt" dialog. The dialog lets you <b>upload from this computer</b> (drag &amp;
-      drop or browse), <b>take a photo / screenshot</b>, and run a <b>typeahead search</b> across files
-      in the virtual filesystem, skills, and past conversations. It adapts to light/dark (auto via
-      <code>prefers-color-scheme</code>, or forced with <code>theme="light|dark"</code>) and emits a
-      <code>slicc-add</code> event when something is picked. Demo data is baked in.
+      A standalone custom element: the <code>+</code> trigger that lives in the prompt bar. Instead of
+      popping a menu, it <b>grows the composer</b> — the search field slides in next to the <code>+/×</code>
+      icon and matching suggestions stack <b>right above it</b>. It lets you <b>upload from this computer</b>
+      (drag &amp; drop or browse), <b>take a photo / screenshot</b>, and run a <b>typeahead search</b> across
+      files in the virtual filesystem, skills, and past conversations. It adapts to light/dark (auto via
+      <code>prefers-color-scheme</code>, or forced with <code>theme="light|dark"</code>), uses
+      <a href="https://lucide.dev">Lucide</a> icons, and emits a <code>slicc-add</code> event when something
+      is picked. Demo data is baked in.
     </p>
 
     <div class="panel">
@@ -101,13 +104,12 @@
         <textarea rows="1" placeholder="Ask sliccy anything…"></textarea>
         <div class="bar">
           <slicc-add-menu theme="dark"></slicc-add-menu>
-          <span class="spacer"></span>
           <button class="send" title="Send">
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path d="M10 1.25C5.167 1.25 1.25 5.167 1.25 10s3.917 8.75 8.75 8.75 8.75-3.918 8.75-8.75S14.833 1.25 10 1.25zm3.527 8.284a.75.75 0 0 1-1.06 0L10.75 7.82v6.172a.75.75 0 0 1-1.5 0V7.812L7.527 9.534a.75.75 0 1 1-1.06-1.06l2.998-2.998a.75.75 0 0 1 1.06-.001l3.002 2.998a.75.75 0 0 1 0 1.061z"/></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m16 12-4-4-4 4"/><path d="M12 16V8"/></svg>
           </button>
         </div>
       </div>
-      <div class="hint">Click <code>+</code>, then type to filter — or drag a file onto the dialog. ↑/↓ to navigate, Enter to add, Esc to close.</div>
+      <div class="hint">Click <code>+</code> — the box grows, the search field appears next to the <code>×</code>, and results stack above it. Type to filter, ↑/↓ to navigate, Enter to add, Esc to close. Drag a file onto it to upload.</div>
     </div>
 
     <div class="panel light">
@@ -117,9 +119,8 @@
         <textarea rows="1" placeholder="Ask sliccy anything…"></textarea>
         <div class="bar">
           <slicc-add-menu theme="light"></slicc-add-menu>
-          <span class="spacer"></span>
           <button class="send" title="Send">
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path d="M10 1.25C5.167 1.25 1.25 5.167 1.25 10s3.917 8.75 8.75 8.75 8.75-3.918 8.75-8.75S14.833 1.25 10 1.25zm3.527 8.284a.75.75 0 0 1-1.06 0L10.75 7.82v6.172a.75.75 0 0 1-1.5 0V7.812L7.527 9.534a.75.75 0 1 1-1.06-1.06l2.998-2.998a.75.75 0 0 1 1.06-.001l3.002 2.998a.75.75 0 0 1 0 1.061z"/></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m16 12-4-4-4 4"/><path d="M12 16V8"/></svg>
           </button>
         </div>
       </div>
@@ -132,21 +133,22 @@
 
     <script>
       (() => {
-        // --- inline lucide-style icons (no CDN; works under strict CSP) ---
+        // --- Lucide icons (inline geometry; no CDN, works under strict CSP) ---
+        // Paths copied verbatim from lucide.dev (ISC licensed) so they render pixel-identical.
         const ICON = {
-          plus: 'M12 5v14M5 12h14',
-          search: ['M11 11m-8 0a8 8 0 1 0 16 0a8 8 0 1 0-16 0', 'm21 21-4.3-4.3'],
-          upload: ['M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4', 'M17 8l-5-5-5 5', 'M12 3v12'],
-          camera: ['M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z', 'M12 16m-3 0a3 3 0 1 0 6 0a3 3 0 1 0-6 0'],
-          monitor: ['M2 4h20v12H2z', 'M8 21h8M12 17v4'],
-          file: ['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z', 'M14 2v6h6'],
-          spark: ['M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z'],
-          chat: ['M21 11.5a8.4 8.4 0 0 1-9 8.4 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.2A8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5z'],
+          plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+          search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+          upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>',
+          camera:
+            '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/>',
+          monitor: '<rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>',
+          file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+          sparkles:
+            '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/>',
+          message: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
         };
         function svg(name, size = 18) {
-          const d = ICON[name];
-          const paths = (Array.isArray(d) ? d : [d]).map((p) => `<path d="${p}"/>`).join('');
-          return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+          return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[name]}</svg>`;
         }
         function esc(s) {
           return String(s).replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[m]);
@@ -178,56 +180,57 @@
         };
         const SECTIONS = [
           { kind: 'file', label: 'Files', icon: 'file' },
-          { kind: 'skill', label: 'Skills', icon: 'spark' },
-          { kind: 'conversation', label: 'Conversations', icon: 'chat' },
+          { kind: 'skill', label: 'Skills', icon: 'sparkles' },
+          { kind: 'conversation', label: 'Conversations', icon: 'message' },
         ];
 
         const STYLE = `
           :host {
-            display: inline-block; position: relative;
+            display: block; width: 100%;
             --bg: #2c2c2c; --bg-sunken: #141414; --fg: #e8e8e8; --fg-2: #a1a1a1; --fg-3: #8a8a8a;
             --border: #3a3a3a; --accent: #3562ff;
             --accent-subtle: color-mix(in oklab, var(--accent) 22%, transparent);
             --hover: rgba(255,255,255,0.06);
-            --shadow: 0 4px 16px rgba(0,0,0,0.4), 0 1px 4px rgba(0,0,0,0.3);
             font: 400 13px ui-sans-serif, system-ui, -apple-system, sans-serif;
           }
-          @media (prefers-color-scheme: light) { :host(:not([theme="dark"])) { ${''}
+          @media (prefers-color-scheme: light) { :host(:not([theme="dark"])) {
             --bg:#fff; --bg-sunken:#f3f3f3; --fg:#131313; --fg-2:#505050; --fg-3:#717171;
             --border:#e1e1e1; --accent:#3b63fb; --accent-subtle: color-mix(in oklab, var(--accent) 12%, #fff);
-            --hover: rgba(0,0,0,0.05); --shadow: 0 4px 12px rgba(0,0,0,0.12), 0 1px 4px rgba(0,0,0,0.08);
+            --hover: rgba(0,0,0,0.05);
           } }
           :host([theme="light"]) {
             --bg:#fff; --bg-sunken:#f3f3f3; --fg:#131313; --fg-2:#505050; --fg-3:#717171;
             --border:#e1e1e1; --accent:#3b63fb; --accent-subtle: color-mix(in oklab, var(--accent) 12%, #fff);
-            --hover: rgba(0,0,0,0.05); --shadow: 0 4px 12px rgba(0,0,0,0.12), 0 1px 4px rgba(0,0,0,0.08);
+            --hover: rgba(0,0,0,0.05);
           }
           * { box-sizing: border-box; }
+          .wrap { display: flex; flex-direction: column; }
+          .row { display: flex; align-items: center; gap: 8px; }
           .trigger {
-            width: 32px; height: 32px; border: none; border-radius: 8px;
+            flex: 0 0 auto; width: 32px; height: 32px; border: none; border-radius: 8px;
             background: transparent; color: var(--fg); cursor: pointer;
             display: flex; align-items: center; justify-content: center;
-            transition: background .13s ease, color .13s ease, transform .13s ease;
+            transition: background .13s ease, color .13s ease, transform .16s ease;
           }
           .trigger:hover { background: var(--hover); }
           .trigger[aria-expanded="true"] { background: var(--accent-subtle); color: var(--accent); transform: rotate(45deg); }
-          .pop {
-            position: absolute; bottom: calc(100% + 10px); left: 0;
-            width: 320px; max-width: 86vw; background: var(--bg); color: var(--fg);
-            border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow);
-            padding: 8px; z-index: 50; display: none;
-          }
-          .pop.open { display: block; }
-          .search { position: relative; margin: 2px 2px 8px; }
-          .search .si { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--fg-3); display: flex; }
-          .search input {
+          /* the search field slides in beside the +/× — collapsed until open */
+          .searchbox { flex: 1; min-width: 0; position: relative; display: none; }
+          :host([data-open]) .searchbox { display: block; }
+          .searchbox .si { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--fg-3); display: flex; pointer-events: none; }
+          .searchbox input {
             width: 100%; border: 1px solid var(--border); background: var(--bg-sunken);
-            color: var(--fg); border-radius: 9px; padding: 8px 10px 8px 32px;
+            color: var(--fg); border-radius: 9px; padding: 7px 10px 7px 32px;
             font: inherit; outline: none;
           }
-          .search input:focus { border-color: var(--accent); }
-          .body { max-height: 320px; overflow-y: auto; }
-          .sec { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--fg-3); font-weight: 650; margin: 8px 8px 4px; }
+          .searchbox input:focus { border-color: var(--accent); }
+          /* results grow the composer in-flow (no floating popover) and stack above the row */
+          .results {
+            position: relative; max-height: 0; overflow: hidden; opacity: 0;
+            transition: max-height .18s ease, opacity .14s ease;
+          }
+          :host([data-open]) .results { max-height: 300px; overflow-y: auto; opacity: 1; margin-bottom: 8px; }
+          .sec { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--fg-3); font-weight: 650; margin: 8px 6px 4px; }
           .item {
             display: flex; align-items: center; gap: 10px; width: 100%;
             padding: 8px; border-radius: 9px; cursor: pointer; text-align: left; color: var(--fg);
@@ -241,12 +244,12 @@
           .empty { padding: 18px 10px; text-align: center; color: var(--fg-3); font-size: 12px; }
           .sep { height: 1px; background: var(--border); margin: 6px 4px; }
           .drop {
-            position: absolute; inset: 0; border-radius: 14px; display: none;
+            position: absolute; inset: 0; border-radius: 10px; display: none;
             align-items: center; justify-content: center; text-align: center;
             background: var(--accent-subtle); border: 2px dashed var(--accent); color: var(--accent);
             font-size: 13px; font-weight: 600; pointer-events: none;
           }
-          .pop.dropping .drop { display: flex; }
+          :host([data-dropping]) .drop { display: flex; }
         `;
 
         class SliccAddMenu extends HTMLElement {
@@ -264,18 +267,19 @@
             if (!this.shadowRoot) this.attachShadow({ mode: 'open' });
             this.shadowRoot.innerHTML =
               `<style>${STYLE}</style>` +
-              `<button class="trigger" part="trigger" aria-haspopup="dialog" aria-expanded="false" title="Add to prompt">${svg('plus', 20)}</button>` +
               `<input type="file" multiple hidden />` +
-              `<div class="pop" part="popover" role="dialog">` +
-              `<div class="search"><span class="si">${svg('search', 16)}</span>` +
+              `<div class="wrap" part="wrap">` +
+              `<div class="results" part="results" role="listbox"><div class="body"></div>` +
+              `<div class="drop">Drop files to add</div></div>` +
+              `<div class="row">` +
+              `<button class="trigger" part="trigger" aria-haspopup="true" aria-expanded="false" title="Add to prompt">${svg('plus', 20)}</button>` +
+              `<div class="searchbox"><span class="si">${svg('search', 16)}</span>` +
               `<input type="text" placeholder="Search files, skills, conversations…" /></div>` +
-              `<div class="body"></div>` +
-              `<div class="drop">Drop files to add</div>` +
-              `</div>`;
+              `</div></div>`;
             this._trigger = this.shadowRoot.querySelector('.trigger');
-            this._pop = this.shadowRoot.querySelector('.pop');
-            this._search = this.shadowRoot.querySelector('.search input');
-            this._bodyEl = this.shadowRoot.querySelector('.body');
+            this._wrap = this.shadowRoot.querySelector('.wrap');
+            this._search = this.shadowRoot.querySelector('.searchbox input');
+            this._bodyEl = this.shadowRoot.querySelector('.results .body');
             this._file = this.shadowRoot.querySelector('input[type=file]');
             this._bind();
             this.renderBody();
@@ -291,14 +295,14 @@
               this.close();
             });
             ['dragenter', 'dragover'].forEach((t) =>
-              this._pop.addEventListener(t, (e) => { e.preventDefault(); this._pop.classList.add('dropping'); }));
+              this._wrap.addEventListener(t, (e) => { e.preventDefault(); if (!this._open) this.open(); this.setAttribute('data-dropping', ''); }));
             ['dragleave', 'drop'].forEach((t) =>
-              this._pop.addEventListener(t, (e) => {
+              this._wrap.addEventListener(t, (e) => {
                 e.preventDefault();
-                if (t === 'dragleave' && this._pop.contains(e.relatedTarget)) return;
-                this._pop.classList.remove('dropping');
+                if (t === 'dragleave' && this._wrap.contains(e.relatedTarget)) return;
+                this.removeAttribute('data-dropping');
               }));
-            this._pop.addEventListener('drop', (e) => {
+            this._wrap.addEventListener('drop', (e) => {
               const files = e.dataTransfer && e.dataTransfer.files;
               if (files && files.length) {
                 for (const f of files) this._emit({ kind: 'upload', name: f.name, size: f.size });
@@ -309,8 +313,9 @@
 
           toggle() { this._open ? this.close() : this.open(); }
           open() {
+            if (this._open) return;
             this._open = true;
-            this._pop.classList.add('open');
+            this.setAttribute('data-open', '');
             this._trigger.setAttribute('aria-expanded', 'true');
             document.addEventListener('mousedown', this._onDoc);
             this._q = '';
@@ -320,8 +325,10 @@
             requestAnimationFrame(() => this._search.focus());
           }
           close() {
+            if (!this._open) return;
             this._open = false;
-            this._pop.classList.remove('open', 'dropping');
+            this.removeAttribute('data-open');
+            this.removeAttribute('data-dropping');
             this._trigger.setAttribute('aria-expanded', 'false');
             document.removeEventListener('mousedown', this._onDoc);
           }
