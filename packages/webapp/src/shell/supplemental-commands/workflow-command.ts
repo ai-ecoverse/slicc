@@ -217,10 +217,9 @@ async function startRun(opts: {
     name: opts.name,
     filename: opts.filename,
     parentJid,
-    // CommandContextLike is the manager's minimal subset of just-bash's CommandContext;
-    // the only divergence is the branded `stdin` (ByteString vs string), which the manager
-    // never reads — it only uses `cwd`/`exec`. Cast through the shared seam type.
-    ctx: opts.ctx as unknown as CommandContextLike,
+    // The exec signature diverges (just-bash's CommandExecOptions vs our optional subset);
+    // the manager never reads stdin (now typed as unknown), so cast is minimal.
+    ctx: opts.ctx as CommandContextLike,
     sentinel: opts.sentinel,
   });
   return {

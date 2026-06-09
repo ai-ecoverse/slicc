@@ -42,7 +42,9 @@ export interface WorkflowStartOptions {
 export interface CommandContextLike {
   cwd: string;
   env: Map<string, string>;
-  stdin: string;
+  // stdin is never read by the manager (the tap reads cwd/exec); typed loosely so the real
+  // just-bash CommandContext (branded ByteString stdin) is assignable without a lossy double-cast.
+  stdin: unknown;
   exec?: ((cmd: string, opts?: { cwd?: string; args?: string[] }) => Promise<ExecResultLike>) & {
     spawn?: (argv: string[]) => Promise<ExecResultLike>;
   };
