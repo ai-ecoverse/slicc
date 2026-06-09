@@ -491,7 +491,7 @@ function formatDiscoveredSkills(discovered: DiscoveredSkill[], heading: string):
   const nameWidth = Math.max(4, ...discovered.map((s) => s.name.length));
   const sourceWidth = 11; // 'marketplace'.length
   // 2 indent + nameWidth + 2 sep + sourceWidth + 1 sep = fixed overhead
-  const descWidth = Math.max(20, 120 - 2 - nameWidth - 2 - sourceWidth - 1);
+  const descWidth = Math.max(20, 99 - 2 - nameWidth - 2 - sourceWidth - 1);
 
   const header = 'NAME'.padEnd(nameWidth);
   const divider = '─'.repeat(2 + nameWidth + 2 + sourceWidth + 1 + descWidth);
