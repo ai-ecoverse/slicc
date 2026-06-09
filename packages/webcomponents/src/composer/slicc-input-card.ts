@@ -1,4 +1,7 @@
 import { define } from '../internal/define.js';
+// Renders these child custom elements internally — owns their registration.
+import '../add-menu/slicc-add-menu.js';
+import '../primitives/slicc-send-button.js';
 
 /**
  * Scoped, document-level stylesheet for `<slicc-input-card>`. A light-DOM
