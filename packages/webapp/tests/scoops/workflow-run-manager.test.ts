@@ -229,11 +229,10 @@ describe('WorkflowRunManager', () => {
     expect((globalThis as Record<string, unknown>)[WORKFLOW_MANAGER_GLOBAL_KEY]).toBe(mgr);
   });
 
-  // unskip after Task 7 — the command's delegation to the published manager
-  // (`globalThis.__slicc_workflows`) is wired in Task 7. Until then
-  // `createWorkflowCommand().execute(['run', ...])` runs the SP1 inline path and
-  // never reaches `mgr.start`, so this assertion can't pass yet.
-  it.skip('dual-mode: manager publishes in a no-DOM (offscreen/worker) context and the command resolves it via the shared global — no proxy', async () => {
+  // The command's delegation to the published manager (`globalThis.__slicc_workflows`)
+  // is wired in Task 7, so `createWorkflowCommand().execute(['run', ...])` now reaches
+  // `mgr.start` via the shared global — no proxy hop.
+  it('dual-mode: manager publishes in a no-DOM (offscreen/worker) context and the command resolves it via the shared global — no proxy', async () => {
     // Worker/offscreen has no DOM. vitest `environment: node` mirrors that, so a clean
     // construct+publish here IS the worker-context assertion (any window/document touch throws).
     expect(typeof window).toBe('undefined');

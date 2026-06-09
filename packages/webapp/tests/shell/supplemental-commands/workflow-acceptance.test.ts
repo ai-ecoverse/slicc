@@ -82,6 +82,7 @@ describe('workflow acceptance', () => {
     const res = await createWorkflowCommand().execute(
       [
         'run',
+        '--wait', // SP2: default run is non-blocking; --wait keeps the full-result assertion below
         '/workspace/repo-audit.workflow.js',
         '--args',
         '{"files":["a.ts","b.ts"]}',

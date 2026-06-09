@@ -174,7 +174,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createDfCommand({ fs: options.fs }),
     createDiskutilCommand({ fs: options.fs }),
     createSudoCommand(options.sudoCommand),
-    createWorkflowCommand(),
+    createWorkflowCommand({ getParentJid: options.getParentJid }),
     createWfProgressCommand(),
   ];
 

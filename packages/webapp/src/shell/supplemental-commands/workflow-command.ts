@@ -1,7 +1,9 @@
 // packages/webapp/src/shell/supplemental-commands/workflow-command.ts
-import type { Command } from 'just-bash';
+import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { createLogger } from '../../core/logger.js';
+import type { CommandContextLike, WorkflowRunManager } from '../../scoops/workflow-run-manager.js';
+import { WORKFLOW_MANAGER_GLOBAL_KEY } from '../../scoops/workflow-run-manager.js';
 import { executeJsCode } from '../jsh-executor.js';
 import { WORKFLOW_PRELUDE } from './workflow-prelude.js';
 import {
@@ -13,9 +15,15 @@ import {
 
 const log = createLogger('workflow-command');
 
-const HELP = `usage: workflow run <file.js> [--args <json>] [--budget <n>] [--concurrency <n>]
+const HELP = `usage: workflow run <file.js> [--args <json>] [--budget <n>] [--concurrency <n>] [--wait]
        workflow run --script '<inline js>' [...]
-Runs a Claude-Code-format dynamic workflow to completion (SP1: blocking, non-nesting).`;
+       workflow list
+       workflow status <runId>
+       workflow stop <runId>
+Runs a Claude-Code-format dynamic workflow. Default is non-blocking (returns a run id);
+pass --wait to block and print the full result.`;
+
+type ExecResult = { stdout: string; stderr: string; exitCode: number };
 
 interface Parsed {
   help?: boolean;
@@ -26,6 +34,13 @@ interface Parsed {
   hasArgs?: boolean;
   budget?: number | null;
   cap?: number;
+  wait?: boolean;
+}
+
+function getRunManager(): WorkflowRunManager | undefined {
+  return (globalThis as Record<string, unknown>)[WORKFLOW_MANAGER_GLOBAL_KEY] as
+    | WorkflowRunManager
+    | undefined;
 }
 
 function resolveMaxCap(): number {
@@ -50,6 +65,9 @@ function applyToken(
       return { i, help: true };
     case '--script':
       o.script = a[++i];
+      return { i };
+    case '--wait':
+      o.wait = true;
       return { i };
     case '--args':
       try {
@@ -97,8 +115,13 @@ function parse(a: string[]): Parsed {
   return o;
 }
 
-export function createWorkflowCommand(): Command {
+export function createWorkflowCommand(
+  options: { getParentJid?: () => string | undefined } = {}
+): Command {
   return defineCommand('workflow', async (args, ctx) => {
+    if (args[0] === 'list' || args[0] === 'status' || args[0] === 'stop')
+      return runSubcommand(args, ctx);
+
     const p = parse(args);
     if (p.help) return { stdout: HELP + '\n', stderr: '', exitCode: 0 };
     if (p.error) return { stdout: '', stderr: p.error + '\n', exitCode: 1 };
@@ -141,20 +164,101 @@ export function createWorkflowCommand(): Command {
       sentinel,
     });
 
-    let result: { stdout: string; stderr: string; exitCode: number };
-    try {
-      result = await executeJsCode(code, ['workflow', filename], ctx, undefined, { filename });
-    } catch (err) {
-      log.error('workflow run failed', err);
-      return {
-        stdout: '',
-        stderr: `workflow: ${err instanceof Error ? err.message : String(err)}\n`,
-        exitCode: 1,
-      };
-    }
-
-    return renderResult(banner, result, sentinel);
+    if (p.wait) return runWait(code, filename, sentinel, banner, ctx);
+    return startRun({ code, source, name: banner.name, filename, sentinel, ctx, options });
   });
+}
+
+// `--wait` preserves SP1 foreground behavior EXACTLY: run the realm inline, print the
+// FULL result, and do NOT register a run or fire a completion lick. (Routing --wait
+// through the manager would only surface a preview and would fire an async 'workflow'
+// lick for cone-origin runs — neither of which SP1 did.) The run manager is NOT required.
+async function runWait(
+  code: string,
+  filename: string,
+  sentinel: string,
+  banner: { name: string | null; description: string | null },
+  ctx: CommandContext
+): Promise<ExecResult> {
+  let result: ExecResult;
+  try {
+    result = await executeJsCode(code, ['workflow', filename], ctx, undefined, { filename });
+  } catch (err) {
+    log.error('workflow run failed', err);
+    return {
+      stdout: '',
+      stderr: `workflow: ${err instanceof Error ? err.message : String(err)}\n`,
+      exitCode: 1,
+    };
+  }
+  return renderResult(banner, result, sentinel); // SP1 helper — full result, no lick
+}
+
+// Non-blocking (default): delegate to the run manager and print the started line.
+async function startRun(opts: {
+  code: string;
+  source: string;
+  name: string;
+  filename: string;
+  sentinel: string;
+  ctx: CommandContext;
+  options: { getParentJid?: () => string | undefined };
+}): Promise<ExecResult> {
+  const mgr = getRunManager();
+  if (!mgr) return { stdout: '', stderr: 'workflow: run manager not available\n', exitCode: 1 };
+  const parentJid = opts.options.getParentJid?.();
+  const { runId } = await mgr.start({
+    code: opts.code,
+    source: opts.source,
+    name: opts.name,
+    filename: opts.filename,
+    parentJid,
+    // CommandContextLike is the manager's minimal subset of just-bash's CommandContext;
+    // the only divergence is the branded `stdin` (ByteString vs string), which the manager
+    // never reads — it only uses `cwd`/`exec`. Cast through the shared seam type.
+    ctx: opts.ctx as unknown as CommandContextLike,
+    sentinel: opts.sentinel,
+  });
+  return {
+    stdout: `▶ workflow '${opts.name}' started (run ${runId}). Watch: workflow status ${runId}\n`,
+    stderr: '',
+    exitCode: 0,
+  };
+}
+
+// Read/stop subcommands. Resolves the manager from globalThis at call time (the cone and
+// the panel terminal share the same published manager — no injection).
+async function runSubcommand(args: string[], ctx: CommandContext): Promise<ExecResult> {
+  const mgr = getRunManager();
+  if (args[0] === 'list') {
+    if (!mgr) return { stdout: '', stderr: 'workflow: run manager not available\n', exitCode: 1 };
+    const rows = mgr
+      .listRuns()
+      .map(
+        (r) => `${r.id}  ${r.status.padEnd(7)}  ${r.agentsDone}/${r.agentsStarted}  ${r.name ?? ''}`
+      );
+    return {
+      stdout: (rows.length ? rows.join('\n') : '(no runs)') + '\n',
+      stderr: '',
+      exitCode: 0,
+    };
+  }
+  const id = args[1];
+  const st = mgr?.getRun(id ?? '');
+  if (!st) return { stdout: '', stderr: `workflow: no run '${id}'\n`, exitCode: 1 };
+  if (args[0] === 'status') {
+    const lines = [
+      `run ${st.id}  (${st.name ?? 'unnamed'})  status=${st.status}`,
+      `agents ${st.agentsDone}/${st.agentsStarted}  phase=${st.currentPhase ?? '-'}`,
+      st.resultPath ? `result: ${st.resultPath}` : '',
+      st.preview ? `preview: ${st.preview}` : '',
+      st.error ? `error: ${st.error}` : '',
+    ].filter(Boolean);
+    return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
+  }
+  // stop
+  if (st.pid != null) await ctx.exec?.('kill', { cwd: ctx.cwd, args: ['-KILL', String(st.pid)] });
+  return { stdout: `stopped run ${st.id} (pid ${st.pid ?? '?'})\n`, stderr: '', exitCode: 0 };
 }
 
 // Compose the command output from the realm result: banner + rendered progress
