@@ -1,0 +1,286 @@
+import { beforeEach, describe, expect, it } from 'vitest';
+import { SliccAgentMessage } from '../../src/chat/slicc-agent-message.js';
+import { ensureGlobalTokens } from '../../src/theme/tokens.js';
+
+function mount(setup?: (el: SliccAgentMessage) => void): SliccAgentMessage {
+  const el = document.createElement('slicc-agent-message') as SliccAgentMessage;
+  setup?.(el);
+  document.body.appendChild(el);
+  return el;
+}
+
+/** The `.body` prose region inside the light-DOM host. */
+function bodyOf(el: SliccAgentMessage): HTMLElement {
+  return el.querySelector('.body') as HTMLElement;
+}
+
+describe('slicc-agent-message', () => {
+  beforeEach(() => {
+    ensureGlobalTokens();
+    document.body.replaceChildren();
+  });
+
+  it('registers the custom element', () => {
+    expect(customElements.get('slicc-agent-message')).toBe(SliccAgentMessage);
+  });
+
+  it('renders into light DOM (no shadow root) as a .msg.bot block with a body part', () => {
+    const el = mount();
+    expect(el.shadowRoot).toBeNull();
+    expect(el.classList.contains('msg')).toBe(true);
+    expect(el.classList.contains('bot')).toBe(true);
+    const body = bodyOf(el);
+    expect(body).not.toBeNull();
+    expect(body.getAttribute('part')).toBe('body');
+    expect(el.querySelector('[part="body"]')).not.toBeNull();
+  });
+
+  it('preserves host classes set before connect', () => {
+    const el = document.createElement('slicc-agent-message') as SliccAgentMessage;
+    el.classList.add('custom-host');
+    document.body.appendChild(el);
+    expect(el.classList.contains('custom-host')).toBe(true);
+    expect(el.classList.contains('msg')).toBe(true);
+  });
+
+  it('relocates pre-existing light children into the body', () => {
+    const el = document.createElement('slicc-agent-message') as SliccAgentMessage;
+    const p = document.createElement('p');
+    p.textContent = 'rendered markdown';
+    el.appendChild(p);
+    document.body.appendChild(el);
+    expect(bodyOf(el).contains(p)).toBe(true);
+  });
+
+  describe('attribute ↔ property reflection', () => {
+    it('reflects thinking', () => {
+      const el = mount();
+      expect(el.thinking).toBe(false);
+      el.thinking = true;
+      expect(el.hasAttribute('thinking')).toBe(true);
+      expect(el.thinking).toBe(true);
+      el.thinking = false;
+      expect(el.hasAttribute('thinking')).toBe(false);
+    });
+
+    it('reflects streaming', () => {
+      const el = mount();
+      expect(el.streaming).toBe(false);
+      el.streaming = true;
+      expect(el.hasAttribute('streaming')).toBe(true);
+      el.streaming = false;
+      expect(el.hasAttribute('streaming')).toBe(false);
+    });
+  });
+
+  describe('prose body', () => {
+    it('hosts rendered HTML via setBodyHtml', () => {
+      const el = mount();
+      el.setBodyHtml('<p>hello <strong>world</strong></p>');
+      expect(bodyOf(el).querySelector('strong')?.textContent).toBe('world');
+    });
+
+    it('exposes the body element via the body getter', () => {
+      const el = mount();
+      expect(el.body).toBe(bodyOf(el));
+    });
+  });
+
+  describe('plan variant', () => {
+    it('renders a colored-dot ul.plan via setPlan', () => {
+      const el = mount();
+      el.setPlan(['first', 'second', 'third']);
+      const plan = el.querySelector('ul.plan') as HTMLUListElement;
+      expect(plan).not.toBeNull();
+      expect(plan.getAttribute('part')).toBe('plan');
+      expect(plan.querySelectorAll('li')).toHaveLength(3);
+      expect(plan.querySelector('li')?.textContent).toBe('first');
+    });
+
+    it('escapes plan item text', () => {
+      const el = mount();
+      el.setPlan(['<script>x</script>']);
+      expect(el.querySelector('.plan li script')).toBeNull();
+      expect((el.querySelector('.plan li') as HTMLElement).textContent).toBe('<script>x</script>');
+    });
+
+    it('paints the first three bullets rose / violet / cyan', () => {
+      const el = mount();
+      el.setPlan(['a', 'b', 'c']);
+      const lis = el.querySelectorAll('.plan li');
+      // ::before background — --rose #f43f5e, --violet #8b5cf6, --cyan #06b6d4.
+      expect(getComputedStyle(lis[0], '::before').backgroundColor).toBe('rgb(244, 63, 94)');
+      expect(getComputedStyle(lis[1], '::before').backgroundColor).toBe('rgb(139, 92, 246)');
+      expect(getComputedStyle(lis[2], '::before').backgroundColor).toBe('rgb(6, 182, 212)');
+    });
+  });
+
+  describe('check variant', () => {
+    it('renders a ul.check with default green badges via setCheck', () => {
+      const el = mount();
+      el.setCheck([{ text: 'done' }, { text: 'also done' }]);
+      const check = el.querySelector('ul.check') as HTMLUListElement;
+      expect(check).not.toBeNull();
+      expect(check.getAttribute('part')).toBe('check');
+      const badges = check.querySelectorAll('.ck');
+      expect(badges).toHaveLength(2);
+      // Default badge background #1a7f37 → rgb(26, 127, 55).
+      expect(getComputedStyle(badges[0]).backgroundColor).toBe('rgb(26, 127, 55)');
+      expect(badges[0].textContent).toBe('✓');
+    });
+
+    it('applies the r/cy/vi/am badge accents', () => {
+      const el = mount();
+      el.setCheck([
+        { text: 'rose', variant: 'r' },
+        { text: 'cyan', variant: 'cy' },
+        { text: 'violet', variant: 'vi' },
+        { text: 'amber', variant: 'am' },
+      ]);
+      const badges = el.querySelectorAll('.check .ck');
+      expect(getComputedStyle(badges[0]).backgroundColor).toBe('rgb(244, 63, 94)'); // --rose
+      expect(getComputedStyle(badges[1]).backgroundColor).toBe('rgb(6, 182, 212)'); // --cyan
+      expect(getComputedStyle(badges[2]).backgroundColor).toBe('rgb(139, 92, 246)'); // --violet
+      expect(getComputedStyle(badges[3]).backgroundColor).toBe('rgb(245, 158, 11)'); // --amber
+    });
+
+    it('ignores unknown variants (falls back to default green)', () => {
+      const el = mount();
+      // @ts-expect-error — exercising runtime guard against an invalid variant.
+      el.setCheck([{ text: 'x', variant: 'bogus' }]);
+      const badge = el.querySelector('.check .ck') as HTMLElement;
+      expect(badge.className).toBe('ck');
+    });
+
+    it('escapes check row text and a custom glyph', () => {
+      const el = mount();
+      el.setCheck([{ text: '<b>x</b>', glyph: '<i>!</i>' }]);
+      const li = el.querySelector('.check li') as HTMLElement;
+      expect(li.querySelector('b')).toBeNull();
+      expect((li.querySelector('.ctext') as HTMLElement).textContent).toBe('<b>x</b>');
+      expect((li.querySelector('.ck') as HTMLElement).textContent).toBe('<i>!</i>');
+    });
+  });
+
+  describe('thinking state', () => {
+    it('shows three bouncing dots and hides the body when thinking', () => {
+      const el = mount((e) => {
+        e.setBodyHtml('<p>typed plan</p>');
+        e.thinking = true;
+      });
+      expect(el.classList.contains('thinkrow')).toBe(true);
+      const dots = el.querySelector('.dots');
+      expect(dots).not.toBeNull();
+      expect(dots?.querySelectorAll('i')).toHaveLength(3);
+      expect(getComputedStyle(bodyOf(el)).display).toBe('none');
+    });
+
+    it('colors the three dots rose / cyan / violet', () => {
+      const el = mount((e) => {
+        e.thinking = true;
+      });
+      const dots = el.querySelectorAll('.dots i');
+      expect(getComputedStyle(dots[0]).backgroundColor).toBe('rgb(244, 63, 94)'); // rose
+      expect(getComputedStyle(dots[1]).backgroundColor).toBe('rgb(6, 182, 212)'); // cyan
+      expect(getComputedStyle(dots[2]).backgroundColor).toBe('rgb(139, 92, 246)'); // violet
+    });
+
+    it('replaces the dots with the typed body when thinking clears', () => {
+      const el = mount((e) => {
+        e.setBodyHtml('<p>typed plan</p>');
+        e.thinking = true;
+      });
+      el.thinking = false;
+      expect(el.classList.contains('thinkrow')).toBe(false);
+      expect(el.querySelector('.dots')).toBeNull();
+      expect(getComputedStyle(bodyOf(el)).display).not.toBe('none');
+      expect(bodyOf(el).textContent).toContain('typed plan');
+    });
+  });
+
+  describe('streaming state', () => {
+    it('appends a typewriter caret to the body while streaming', () => {
+      const el = mount((e) => {
+        e.setBodyHtml('<p>partial</p>');
+        e.streaming = true;
+      });
+      const caret = bodyOf(el).querySelector('.tw-caret') as HTMLElement;
+      expect(caret).not.toBeNull();
+      expect(caret.getAttribute('part')).toBe('caret');
+      // The caret renders with the --ink color (#0a0a0a → rgb(10, 10, 10)).
+      expect(getComputedStyle(caret).backgroundColor).toBe('rgb(10, 10, 10)');
+    });
+
+    it('keeps the caret last after a body re-render', () => {
+      const el = mount((e) => {
+        e.streaming = true;
+      });
+      el.setBodyHtml('<p>new content</p>');
+      const body = bodyOf(el);
+      expect(body.lastElementChild?.classList.contains('tw-caret')).toBe(true);
+      // Still exactly one caret.
+      expect(body.querySelectorAll('.tw-caret')).toHaveLength(1);
+    });
+
+    it('removes the caret when streaming stops', () => {
+      const el = mount((e) => {
+        e.streaming = true;
+      });
+      expect(bodyOf(el).querySelector('.tw-caret')).not.toBeNull();
+      el.streaming = false;
+      expect(bodyOf(el).querySelector('.tw-caret')).toBeNull();
+    });
+  });
+
+  describe('events', () => {
+    it('fires a composed, bubbling thinking event on state change', () => {
+      const el = mount();
+      let detail: { thinking: boolean } | null = null;
+      document.body.addEventListener('slicc-agent-message-thinking', (e) => {
+        detail = (e as CustomEvent<{ thinking: boolean }>).detail;
+      });
+      el.thinking = true;
+      expect(detail).toEqual({ thinking: true });
+      detail = null;
+      el.thinking = false;
+      expect(detail).toEqual({ thinking: false });
+    });
+
+    it('fires a composed, bubbling streaming event on state change', () => {
+      const el = mount();
+      let detail: { streaming: boolean } | null = null;
+      document.body.addEventListener('slicc-agent-message-streaming', (e) => {
+        detail = (e as CustomEvent<{ streaming: boolean }>).detail;
+      });
+      el.streaming = true;
+      expect(detail).toEqual({ streaming: true });
+      detail = null;
+      el.streaming = false;
+      expect(detail).toEqual({ streaming: false });
+    });
+  });
+
+  describe('appearance', () => {
+    it('renders inline code with the ghost background and mono font', () => {
+      const el = mount();
+      el.setBodyHtml('<p>run <code>npm test</code></p>');
+      const code = el.querySelector('code') as HTMLElement;
+      const cs = getComputedStyle(code);
+      // --ghost #ececef → rgb(236, 236, 239).
+      expect(cs.backgroundColor).toBe('rgb(236, 236, 239)');
+      expect(cs.fontFamily).toContain('Mono');
+    });
+
+    it('flips inline code to the dark ghost background under a dark scope', () => {
+      const wrap = document.createElement('div');
+      wrap.className = 'dark';
+      const el = document.createElement('slicc-agent-message') as SliccAgentMessage;
+      wrap.appendChild(el);
+      document.body.appendChild(wrap);
+      el.setBodyHtml('<p><code>x</code></p>');
+      const code = el.querySelector('code') as HTMLElement;
+      // dark --ghost #1f1f22 → rgb(31, 31, 34).
+      expect(getComputedStyle(code).backgroundColor).toBe('rgb(31, 31, 34)');
+    });
+  });
+});
