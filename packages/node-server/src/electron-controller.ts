@@ -246,22 +246,16 @@ export async function launchElectronApp(options: {
 // ---------------------------------------------------------------------------
 
 /**
- * Decode a base64 PNG into raw RGBA pixel data by parsing chunks and inflating.
- * Returns { width, height, pixels } where pixels is a Buffer of RGBA bytes.
+ * Parse the IHDR/IDAT/IEND chunks of a PNG buffer (signature already validated).
+ * Other chunk types are intentionally skipped.
  */
-export function decodePngPixels(base64Data: string): {
+function parsePngChunks(buf: Buffer): {
   width: number;
   height: number;
-  pixels: Buffer;
+  bitDepth: number;
+  colorType: number;
+  idatChunks: Buffer[];
 } {
-  const buf = Buffer.from(base64Data, 'base64');
-
-  // Validate PNG signature
-  const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-  if (buf.subarray(0, 8).compare(PNG_SIGNATURE) !== 0) {
-    throw new Error('Not a valid PNG');
-  }
-
   let width = 0;
   let height = 0;
   let bitDepth = 0;
@@ -288,6 +282,68 @@ export function decodePngPixels(base64Data: string): {
     offset += 12 + chunkLength; // 4 (length) + 4 (type) + data + 4 (CRC)
   }
 
+  return { width, height, bitDepth, colorType, idatChunks };
+}
+
+/**
+ * Apply a single PNG row filter in place. Filter 0 (None) is a no-op so this
+ * helper is not called for it. See the PNG spec §9 Filtering for details.
+ */
+function applyPngRowFilter(
+  row: Buffer,
+  prevRow: Buffer,
+  filter: number,
+  bytesPerPixel: number,
+  rowBytes: number
+): void {
+  for (let i = 0; i < rowBytes; i++) {
+    const a = i >= bytesPerPixel ? row[i - bytesPerPixel]! : 0;
+    const b = prevRow[i]!;
+    const c = i >= bytesPerPixel ? prevRow[i - bytesPerPixel]! : 0;
+
+    switch (filter) {
+      case 1: // Sub
+        row[i] = (row[i]! + a) & 0xff;
+        break;
+      case 2: // Up
+        row[i] = (row[i]! + b) & 0xff;
+        break;
+      case 3: // Average
+        row[i] = (row[i]! + ((a + b) >>> 1)) & 0xff;
+        break;
+      case 4: {
+        // Paeth
+        const p = a + b - c;
+        const pa = Math.abs(p - a);
+        const pb = Math.abs(p - b);
+        const pc = Math.abs(p - c);
+        row[i] = (row[i]! + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c)) & 0xff;
+        break;
+      }
+      // case 0: None — no transformation needed
+    }
+  }
+}
+
+/**
+ * Decode a base64 PNG into raw RGBA pixel data by parsing chunks and inflating.
+ * Returns { width, height, pixels } where pixels is a Buffer of RGBA bytes.
+ */
+export function decodePngPixels(base64Data: string): {
+  width: number;
+  height: number;
+  pixels: Buffer;
+} {
+  const buf = Buffer.from(base64Data, 'base64');
+
+  // Validate PNG signature
+  const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  if (buf.subarray(0, 8).compare(PNG_SIGNATURE) !== 0) {
+    throw new Error('Not a valid PNG');
+  }
+
+  const { width, height, bitDepth, colorType, idatChunks } = parsePngChunks(buf);
+
   if (width === 0 || height === 0) throw new Error('Missing IHDR chunk');
   if (bitDepth !== 8) throw new Error(`Unsupported bit depth: ${bitDepth}`);
 
@@ -309,34 +365,7 @@ export function decodePngPixels(base64Data: string): {
     const filter = inflated[rowStart]!;
     const row = Buffer.from(inflated.subarray(rowStart + 1, rowStart + 1 + rowBytes));
 
-    // Apply PNG row filters
-    for (let i = 0; i < rowBytes; i++) {
-      const a = i >= bytesPerPixel ? row[i - bytesPerPixel]! : 0;
-      const b = prevRow[i]!;
-      const c = i >= bytesPerPixel ? prevRow[i - bytesPerPixel]! : 0;
-
-      switch (filter) {
-        case 1: // Sub
-          row[i] = (row[i]! + a) & 0xff;
-          break;
-        case 2: // Up
-          row[i] = (row[i]! + b) & 0xff;
-          break;
-        case 3: // Average
-          row[i] = (row[i]! + ((a + b) >>> 1)) & 0xff;
-          break;
-        case 4: {
-          // Paeth
-          const p = a + b - c;
-          const pa = Math.abs(p - a);
-          const pb = Math.abs(p - b);
-          const pc = Math.abs(p - c);
-          row[i] = (row[i]! + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c)) & 0xff;
-          break;
-        }
-        // case 0: None — no transformation needed
-      }
-    }
+    applyPngRowFilter(row, prevRow, filter, bytesPerPixel, rowBytes);
 
     for (let x = 0; x < width; x++) {
       const srcIdx = x * bytesPerPixel;
@@ -484,6 +513,49 @@ export function resolveFetchProxyOrigin(targetUrl: string, servePort: number): s
     // Fall through to the localhost fallback below.
   }
   return `http://localhost:${servePort}`;
+}
+
+/**
+ * Translate a Node http(s) response's headers into the array shape required by
+ * `Fetch.fulfillRequest`, stripping CSP and other hop-by-hop headers that are
+ * invalid in fulfill responses and rewriting `content-length` to match the
+ * actually-buffered body length. Returns whether any CSP header was stripped
+ * so the caller can log it.
+ */
+function buildFulfillResponseHeaders(
+  rawHeaders: http.IncomingHttpHeaders,
+  contentLength: number
+): { responseHeaders: Array<{ name: string; value: string }>; strippedCSP: boolean } {
+  const HOP_BY_HOP = new Set([
+    'content-security-policy',
+    'content-security-policy-report-only',
+    'transfer-encoding',
+    'connection',
+    'keep-alive',
+  ]);
+  const responseHeaders: Array<{ name: string; value: string }> = [];
+  let strippedCSP = false;
+  for (const [name, value] of Object.entries(rawHeaders)) {
+    const lower = name.toLowerCase();
+    if (lower.includes('content-security-policy')) {
+      strippedCSP = true;
+      continue;
+    }
+    if (HOP_BY_HOP.has(lower)) continue;
+    // Update content-length to match actual body size
+    if (lower === 'content-length') {
+      responseHeaders.push({ name, value: String(contentLength) });
+      continue;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((v) => {
+        responseHeaders.push({ name, value: v });
+      });
+    } else if (value) {
+      responseHeaders.push({ name, value });
+    }
+  }
+  return { responseHeaders, strippedCSP };
 }
 
 export class ElectronOverlayInjector {
@@ -902,38 +974,10 @@ export class ElectronOverlayInjector {
         if (ws.readyState !== WebSocket.OPEN) return;
 
         const fullBody = Buffer.concat(bodyChunks);
-
-        // Build response headers, stripping CSP and hop-by-hop headers
-        // that are invalid in Fetch.fulfillRequest responses
-        const HOP_BY_HOP = new Set([
-          'content-security-policy',
-          'content-security-policy-report-only',
-          'transfer-encoding',
-          'connection',
-          'keep-alive',
-        ]);
-        const responseHeaders: Array<{ name: string; value: string }> = [];
-        let strippedCSP = false;
-        for (const [name, value] of Object.entries(proxyRes.headers)) {
-          const lower = name.toLowerCase();
-          if (lower.includes('content-security-policy')) {
-            strippedCSP = true;
-            continue;
-          }
-          if (HOP_BY_HOP.has(lower)) continue;
-          // Update content-length to match actual body size
-          if (lower === 'content-length') {
-            responseHeaders.push({ name, value: String(fullBody.length) });
-            continue;
-          }
-          if (Array.isArray(value)) {
-            value.forEach((v) => {
-              responseHeaders.push({ name, value: v });
-            });
-          } else if (value) {
-            responseHeaders.push({ name, value });
-          }
-        }
+        const { responseHeaders, strippedCSP } = buildFulfillResponseHeaders(
+          proxyRes.headers,
+          fullBody.length
+        );
 
         if (strippedCSP) {
           console.log(`[electron-float] Stripped CSP from: ${url.substring(0, 60)}`);
