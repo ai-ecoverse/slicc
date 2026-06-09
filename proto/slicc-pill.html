@@ -36,6 +36,28 @@
       .panel.light { background: #f4f5f7; border-color: #dfe3ea; }
       .panel.light h2 { color: #5b6472; }
       .panel.light .hint { color: #8a93a3; }
+      .tune { display: flex; gap: 28px; flex-wrap: wrap; }
+      .tune-col { flex: 1 1 280px; }
+      .tune-col h3 {
+        font-size: 12px; font-weight: 650; margin: 0 0 10px;
+        text-transform: capitalize; color: #c8cdd6;
+      }
+      .knob { display: grid; grid-template-columns: 56px 1fr 60px; align-items: center; gap: 10px; margin-bottom: 8px; }
+      .knob-label { font-size: 12px; color: #9aa0aa; }
+      .knob input[type="range"] { width: 100%; accent-color: #6ea8fe; }
+      .knob-val { font-size: 12px; color: #c8cdd6; text-align: right; font-variant-numeric: tabular-nums; }
+      .tune-foot { margin-top: 14px; display: flex; align-items: flex-start; gap: 12px; }
+      #tune-out {
+        flex: 1 1 auto; margin: 0; padding: 10px 12px; background: #11141a;
+        border: 1px solid #262b35; border-radius: 8px; color: #c8cdd6;
+        font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+        white-space: pre-wrap; word-break: break-word;
+      }
+      #tune-copy {
+        flex: 0 0 auto; background: #232834; color: #e7e9ee; border: 1px solid #333a47;
+        border-radius: 7px; padding: 7px 12px; font-size: 12px; cursor: pointer;
+      }
+      #tune-copy:hover { background: #2c3340; }
     </style>
   </head>
   <body>
@@ -48,6 +70,16 @@
       rides above the icon, and the component adapts to light/dark (auto via
       <code>prefers-color-scheme</code>, or forced with <code>theme="light|dark"</code>).
     </p>
+
+    <div class="panel">
+      <h2>Eye tuning</h2>
+      <div class="tune" id="tune"></div>
+      <div class="tune-foot">
+        <pre id="tune-out"></pre>
+        <button id="tune-copy" type="button">copy config</button>
+      </div>
+      <div class="hint">Drag the sliders to reposition the eyes live across every pill. The zoom auto-centers on the eye box.</div>
+    </div>
 
     <div class="panel">
       <h2>Dark theme</h2>
@@ -96,17 +128,18 @@
         const RIGHT_EYE = { cx: 145, cy: 50, r: 38 };
 
         // Per-type config: viewBox, eye-overlay box (% of icon viewport),
-        // eye-region center (ex, ey as fractions), default zoom, glyph size (%).
+        // default zoom, glyph size (%). The zoom auto-centers on the eye box,
+        // so moving/resizing the eyes re-frames the default zoomed view.
         const TYPE = {
           cone: {
             vb: '70 330 440 570',
             eyes: { top: 4, left: 25.5, width: 64, height: 44 },
-            ex: 0.575, ey: 0.26, zoom: 3.0, glyph: 96,
+            zoom: 3.0, glyph: 96,
           },
           scoop: {
             vb: '0 0 580 470',
             eyes: { top: 26, left: 24, width: 70, height: 45 },
-            ex: 0.59, ey: 0.485, zoom: 2.9, glyph: 96,
+            zoom: 2.9, glyph: 96,
           },
         };
         const DEFAULT_COLOR = { cone: '#D2691E', scoop: '#FFB6C1' };
@@ -195,6 +228,7 @@
              prefers-color-scheme, and either can be forced with theme="light|dark". */
           :host {
             display: inline-block;
+            --pill-w: 190px;
             --label: #eef1f6;
             --icon-tint: color-mix(in oklab, var(--accent) 22%, transparent);
           }
@@ -216,6 +250,7 @@
           .pill {
             position: relative;
             display: inline-flex; align-items: center; gap: 8px;
+            width: var(--pill-w);
             font: 500 13px ui-sans-serif, system-ui, -apple-system, sans-serif;
             color: var(--accent); background: transparent;
             border: 1.5px solid var(--accent); border-radius: 9999px;
@@ -247,13 +282,19 @@
           }
           .eyes { position: absolute; pointer-events: none; }
           .eyes-svg { display: block; overflow: visible; }
-          .label { position: relative; z-index: 1; color: var(--label); white-space: nowrap; }
+          .label {
+            position: relative; z-index: 1; flex: 1 1 auto; min-width: 0;
+            color: var(--label); text-align: right; white-space: nowrap;
+            overflow: hidden; text-overflow: ellipsis;
+          }
         `;
 
+        const INSTANCES = new Set();
         class SliccPill extends HTMLElement {
           static get observedAttributes() { return ['type', 'color', 'eyes', 'active', 'label']; }
-          connectedCallback() { this.render(); this._bindTracking(); }
+          connectedCallback() { INSTANCES.add(this); this.render(); this._bindTracking(); }
           disconnectedCallback() {
+            INSTANCES.delete(this);
             if (this._move) { document.removeEventListener('mousemove', this._move); this._move = null; }
           }
           attributeChangedCallback() { if (this.isConnected) { this.render(); this._bindTracking(); } }
@@ -274,11 +315,15 @@
               t === 'cone'
                 ? coneInner(color, shade(color, -0.38), shade(color, 0.3))
                 : scoopInner(color, shade(color, -0.32));
-            // transform-origin 0 0: translate so the eye-region center lands at
-            // the viewport center, then scale by zoom (see formula in summary).
-            const tx = ((0.5 - cfg.zoom * cfg.ex) * 100).toFixed(2);
-            const ty = ((0.5 - cfg.zoom * cfg.ey) * 100).toFixed(2);
             const e = cfg.eyes;
+            // Zoom auto-centers on the eye box: the center fractions are derived
+            // from the box itself, so moving/resizing the eyes re-frames the view.
+            const ex = (e.left + e.width / 2) / 100;
+            const ey = (e.top + e.height / 2) / 100;
+            // transform-origin 0 0: translate so the eye-region center lands at
+            // the viewport center, then scale by zoom.
+            const tx = ((0.5 - cfg.zoom * ex) * 100).toFixed(2);
+            const ty = ((0.5 - cfg.zoom * ey) * 100).toFixed(2);
             this.shadowRoot.innerHTML =
               `<style>${STYLE}</style>` +
               `<button class="pill ${active ? 'active' : ''}" part="pill" style="--accent:${color}">` +
@@ -317,6 +362,64 @@
         }
 
         customElements.define('slicc-pill', SliccPill);
+
+        // --- Live tuning panel: mutate TYPE and re-render every pill ---
+        const reRenderAll = () => {
+          INSTANCES.forEach((el) => { el.render(); el._bindTracking(); });
+        };
+        const KNOBS = [
+          { key: 'left', label: 'Eye X', min: 0, max: 60, step: 0.5, unit: '%' },
+          { key: 'top', label: 'Eye Y', min: 0, max: 60, step: 0.5, unit: '%' },
+          { key: 'width', label: 'Eye W', min: 20, max: 100, step: 0.5, unit: '%' },
+          { key: 'height', label: 'Eye H', min: 20, max: 80, step: 0.5, unit: '%' },
+          { key: 'zoom', label: 'Zoom', min: 1, max: 5, step: 0.05, unit: '×' },
+        ];
+        const valOf = (t, k) => (k === 'zoom' ? TYPE[t][k] : TYPE[t].eyes[k]);
+        const setOf = (t, k, v) => { if (k === 'zoom') TYPE[t][k] = v; else TYPE[t].eyes[k] = v; };
+
+        const tuneRoot = document.getElementById('tune');
+        const readout = document.getElementById('tune-out');
+        const syncReadout = () => {
+          const fmt = (t) => {
+            const e = TYPE[t].eyes;
+            return `${t}: { vb: '${TYPE[t].vb}', eyes: { top: ${e.top}, left: ${e.left}, ` +
+              `width: ${e.width}, height: ${e.height} }, zoom: ${TYPE[t].zoom}, glyph: ${TYPE[t].glyph} }`;
+          };
+          readout.textContent = fmt('cone') + '\n' + fmt('scoop');
+        };
+        ['cone', 'scoop'].forEach((t) => {
+          const col = document.createElement('div');
+          col.className = 'tune-col';
+          col.innerHTML = `<h3>${t}</h3>`;
+          KNOBS.forEach((kn) => {
+            const wrap = document.createElement('label');
+            wrap.className = 'knob';
+            const out = document.createElement('span');
+            out.className = 'knob-val';
+            const input = document.createElement('input');
+            input.type = 'range';
+            input.min = kn.min; input.max = kn.max; input.step = kn.step;
+            input.value = valOf(t, kn.key);
+            out.textContent = input.value + kn.unit;
+            input.addEventListener('input', () => {
+              const v = parseFloat(input.value);
+              setOf(t, kn.key, v);
+              out.textContent = v + kn.unit;
+              reRenderAll();
+              syncReadout();
+            });
+            wrap.innerHTML = `<span class="knob-label">${kn.label}</span>`;
+            wrap.append(input, out);
+            col.appendChild(wrap);
+          });
+          tuneRoot.appendChild(col);
+        });
+        syncReadout();
+        document.getElementById('tune-copy').addEventListener('click', (ev) => {
+          navigator.clipboard?.writeText(readout.textContent);
+          ev.target.textContent = 'copied!';
+          setTimeout(() => { ev.target.textContent = 'copy config'; }, 1200);
+        });
       })();
     </script>
   </body>
