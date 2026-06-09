@@ -163,6 +163,7 @@ Run Claude Code dynamic workflows natively. A workflow is a plain-JavaScript orc
 ```bash
 workflow run <file.js> [--args <json>] [--budget <n>] [--concurrency <n>] [--wait]
 workflow run --script '<inline js>' [...]
+workflow save <runId> <name> [--force]
 workflow status <id>
 workflow list
 workflow stop <id>
@@ -177,8 +178,9 @@ workflow stop <id>
 
 **Background run:** `workflow run` prints `▶ workflow '<name>' started (run <id>). Watch: workflow status <id>` and returns immediately. The workflow executes in the background; cone-initiated runs deliver completion as a new turn with the result path + preview. Terminal/scoop runs surface via `workflow status <id>`.
 
-**Status/list/stop:**
+**Save/status/list/stop:**
 
+- `workflow save <runId> <name> [--force]` — persist a backgrounded run's source to `/workspace/.workflows/<name>.workflow.js`. Only backgrounded (non-`--wait`) runs are saveable (a `--wait` run has no run id). Rejects a name already taken by a built-in or existing command; `--force` overwrites an existing saved workflow.
 - `workflow status <id>` — show live progress and final result for a run
 - `workflow list` — list all runs with status
 - `workflow stop <id>` — kill a running workflow (SIGKILL)
@@ -197,21 +199,21 @@ export const meta = {
 
 ### Orchestration API
 
-| Global        | Signature & semantics                                                                                                                                                                                                                                                                                                                                                                  |
-| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent`       | `agent(prompt: string, opts?: {model?, schema?, phase?, label?}): Promise<any>`. No `schema` → text string. With `schema` (JSON Schema) → subagent calls `StructuredOutput` tool, returns validated object. Resolves `null` on failure/skip. `model` overrides session model. `schema` path enforces structured output with up to 2 in-conversation nudges; terminal failure → `null`. |
-| `parallel`    | `parallel(thunks: Array<() => Promise<any>>): Promise<any[]>`. Barrier — awaits all. Never rejects; failing thunks → `null` in result array. Use when you genuinely need all results together. ≤4096 items per call (throws `WorkflowError` if exceeded).                                                                                                                              |
-| `pipeline`    | `pipeline(items, stage1, stage2, ...): Promise<any[]>`. Streaming per-item, NO barrier — item A can be in stage 3 while B is in stage 1. Each stage callback receives `(prevResult, originalItem, index)`. A throwing stage drops that item to `null` and skips its remaining stages. ≤4096 items per call (throws `WorkflowError` if exceeded). The default for multi-stage work.     |
-| `phase`       | `phase(title: string): void`. Start a progress group; subsequent `agent()` calls group under it (SP4 UI; SP1 emits `WFPHASE` marker to stdout).                                                                                                                                                                                                                                        |
-| `log`         | `log(message: string): void`. Narrator line above progress (SP1 emits `WFLOG` marker to stdout).                                                                                                                                                                                                                                                                                       |
-| `args`        | `any` — the value passed via `--args`, verbatim (`undefined` if absent).                                                                                                                                                                                                                                                                                                               |
-| `budget`      | `{ total: number\|null, spent(): number, remaining(): number }`. SP1 stub: `spent()` returns `0` (agents don't surface token usage yet), so hard ceiling never trips. Shape present so CC scripts that read `budget` don't crash. Precise accounting + enforcement deferred to SP6.                                                                                                    |
-| `workflow`    | `workflow(name \| {scriptPath}, args?): Promise<any>`. Throws `WorkflowNestingUnsupportedError` in SP1 (real nesting is SP6 backlog).                                                                                                                                                                                                                                                  |
-| `Date`        | Shadowed: argless `new Date()` and `Date.now()` throw `WorkflowDeterminismError`. Pass time via `args`.                                                                                                                                                                                                                                                                                |
-| `Math`        | Shadowed: `Math.random()` throws `WorkflowDeterminismError`. Vary by index instead.                                                                                                                                                                                                                                                                                                    |
-| `crypto`      | Shadowed: `crypto.getRandomValues()` / `crypto.randomUUID()` throw `WorkflowDeterminismError`.                                                                                                                                                                                                                                                                                         |
-| `performance` | Shadowed: `performance.now()` throws `WorkflowDeterminismError`.                                                                                                                                                                                                                                                                                                                       |
-| timers        | `setTimeout` / `setInterval` / `queueMicrotask` throw `WorkflowDeterminismError`.                                                                                                                                                                                                                                                                                                      |
+| Global        | Signature & semantics                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent`       | `agent(prompt: string, opts?: {model?, schema?, phase?, label?, thinking?}): Promise<any>`. No `schema` → text string. With `schema` (JSON Schema) → subagent calls `StructuredOutput` tool, returns validated object. Resolves `null` on failure/skip. `model` overrides session model. `thinking` sets thinking level (`'off'\|'minimal'\|'low'\|'medium'\|'high'\|'xhigh'`). `schema` path enforces structured output with up to 2 in-conversation nudges; terminal failure → `null`. |
+| `parallel`    | `parallel(thunks: Array<() => Promise<any>>): Promise<any[]>`. Barrier — awaits all. Never rejects; failing thunks → `null` in result array. Use when you genuinely need all results together. ≤4096 items per call (throws `WorkflowError` if exceeded).                                                                                                                                                                                                                                |
+| `pipeline`    | `pipeline(items, stage1, stage2, ...): Promise<any[]>`. Streaming per-item, NO barrier — item A can be in stage 3 while B is in stage 1. Each stage callback receives `(prevResult, originalItem, index)`. A throwing stage drops that item to `null` and skips its remaining stages. ≤4096 items per call (throws `WorkflowError` if exceeded). The default for multi-stage work.                                                                                                       |
+| `phase`       | `phase(title: string): void`. Start a progress group; subsequent `agent()` calls group under it (SP4 UI; SP1 emits `WFPHASE` marker to stdout).                                                                                                                                                                                                                                                                                                                                          |
+| `log`         | `log(message: string): void`. Narrator line above progress (SP1 emits `WFLOG` marker to stdout).                                                                                                                                                                                                                                                                                                                                                                                         |
+| `args`        | `any` — the value passed via `--args`, verbatim (`undefined` if absent).                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `budget`      | `{ total: number\|null, spent(): number, remaining(): number }`. SP1 stub: `spent()` returns `0` (agents don't surface token usage yet), so hard ceiling never trips. Shape present so CC scripts that read `budget` don't crash. Precise accounting + enforcement deferred to SP6.                                                                                                                                                                                                      |
+| `workflow`    | `workflow(name \| {scriptPath}, args?): Promise<any>`. Throws `WorkflowNestingUnsupportedError` in SP1 (real nesting is SP6 backlog).                                                                                                                                                                                                                                                                                                                                                    |
+| `Date`        | Shadowed: argless `new Date()` and `Date.now()` throw `WorkflowDeterminismError`. Pass time via `args`.                                                                                                                                                                                                                                                                                                                                                                                  |
+| `Math`        | Shadowed: `Math.random()` throws `WorkflowDeterminismError`. Vary by index instead.                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `crypto`      | Shadowed: `crypto.getRandomValues()` / `crypto.randomUUID()` throw `WorkflowDeterminismError`.                                                                                                                                                                                                                                                                                                                                                                                           |
+| `performance` | Shadowed: `performance.now()` throws `WorkflowDeterminismError`.                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| timers        | `setTimeout` / `setInterval` / `queueMicrotask` throw `WorkflowDeterminismError`.                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 Workflow scripts have NO access to `fs`, `exec`, `fetch`, `require`, `process`, `module`, `exports`, `skill`, `http`, `browser`, `usb`, `serial`, `hid`, `cli`, `c`, `time`, `fmt`, or `pool` — only agents touch files/shell.
 
@@ -284,6 +286,30 @@ workflow: repo-audit — Fan-out verification over repo files
 - **Realm crash / SIGKILL** → exit 1 / 137; no partial-success masquerading as success
 
 No silent fallbacks.
+
+### Saved & skill workflows as commands
+
+`*.workflow.js` files auto-discover as shell commands:
+
+- **Saved workflows** (`/workspace/.workflows/<name>.workflow.js`) → bare `<name>` command
+- **Skill-bundled workflows** (`/workspace/skills/<skill>/.workflows/<name>.workflow.js`) → `<skill>:<name>` command
+
+Bare-name dispatch precedence: `built-in > .jsh > saved-workflow`. A saved workflow shadowed by a built-in or `.jsh` file remains runnable via `workflow run /workspace/.workflows/<name>.workflow.js`.
+
+**Args:** Invoke as `<name> '<json>'` (or `<skill>:<name> '<json>'`). A single JSON-valid arg is passed verbatim; a non-JSON arg is passed as a string; multiple args are passed as a JSON array. Use `--` to force literal positionals. `--wait` runs inline (foreground) instead of backgrounding.
+
+**Examples:**
+
+```bash
+# Save a good run as a reusable command
+workflow save wf_abc123 repo-audit
+
+# Run it later
+repo-audit '{"paths": ["src/"]}'
+
+# Skill workflow
+codebase:sweep --wait
+```
 
 ---
 
