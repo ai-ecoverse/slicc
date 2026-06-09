@@ -260,4 +260,15 @@ describe('commands command', () => {
     expect(listing).toContain('esbuild');
     expect(listing).toContain('test');
   });
+
+  it('lists workflow commands under a Workflows section', async () => {
+    const cmd = createCommandsCommand({
+      getWorkflowCommands: async () => ['audit', 'triage:sweep'],
+    });
+    const ctx: any = { cwd: '/', env: new Map(), getRegisteredCommands: () => ['ls'] };
+    const res = await cmd.execute([], ctx);
+    expect(res.stdout).toMatch(/Workflows:/);
+    expect(res.stdout).toContain('audit');
+    expect(res.stdout).toContain('triage:sweep');
+  });
 });

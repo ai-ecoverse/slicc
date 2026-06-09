@@ -3,10 +3,55 @@ import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 import { discoverJshCommands } from '../jsh-discovery.js';
 import type { ScriptCatalog } from '../script-catalog.js';
+import { discoverWorkflowCommands, type WorkflowCommandEntry } from '../workflow-discovery.js';
 
 export interface WhichCommandOptions {
   fs?: VirtualFS;
   scriptCatalog?: ScriptCatalog;
+  getStaticBuiltins?: () => string[];
+}
+
+/** Discovers .jsh commands from catalog or direct FS scan. */
+async function getJshMap(opts: WhichCommandOptions): Promise<Map<string, string>> {
+  if (opts.scriptCatalog) return opts.scriptCatalog.getJshCommands();
+  if (opts.fs) return discoverJshCommands(opts.fs);
+  return new Map();
+}
+
+/** Discovers workflow commands from catalog or direct FS scan. */
+async function getWorkflowMap(
+  opts: WhichCommandOptions
+): Promise<Map<string, WorkflowCommandEntry>> {
+  if (opts.scriptCatalog) return opts.scriptCatalog.getWorkflowCommands();
+  if (opts.fs) return discoverWorkflowCommands(opts.fs);
+  return new Map();
+}
+
+/** Resolves the path(s) for a single command name according to precedence rules. */
+function resolveCommandPath(
+  name: string,
+  jshPath: string | undefined,
+  wf: WorkflowCommandEntry | undefined,
+  staticBuiltins: Set<string>,
+  builtinSet: Set<string>
+): { lines: string[]; found: boolean } {
+  if (staticBuiltins.has(name)) {
+    const lines = [`/usr/bin/${name}`];
+    if (jshPath || wf) lines.push(`  (shadowed by built-in ${name})`);
+    return { lines, found: true };
+  }
+  if (jshPath) {
+    const lines = [jshPath];
+    if (wf) lines.push(`  ${wf.path} (workflow, shadowed by .jsh)`);
+    return { lines, found: true };
+  }
+  if (wf) {
+    return { lines: [`${wf.path} (workflow)`], found: true };
+  }
+  if (builtinSet.has(name)) {
+    return { lines: [`/usr/bin/${name}`], found: true };
+  }
+  return { lines: [], found: false };
 }
 
 export function createWhichCommand(options: WhichCommandOptions | VirtualFS = {}): Command {
@@ -48,27 +93,25 @@ Exit code 0 if all commands found, 1 if any not found.
     const registeredCommands = ctx.getRegisteredCommands?.() ?? [];
     const builtinSet = new Set(registeredCommands);
 
-    // Discover .jsh commands via the shared discovery module
-    const jshCommands = resolvedOptions.scriptCatalog
-      ? await resolvedOptions.scriptCatalog.getJshCommands()
-      : resolvedOptions.fs
-        ? await discoverJshCommands(resolvedOptions.fs)
-        : new Map<string, string>();
+    const jshCommands = await getJshMap(resolvedOptions);
+    const workflowCommands = await getWorkflowMap(resolvedOptions);
+
+    // Static built-ins (echo, ls, …) win over any same-named script. Falls back to the
+    // registered set when not supplied (legacy fs-only construction).
+    const staticBuiltins =
+      typeof resolvedOptions.getStaticBuiltins === 'function'
+        ? new Set(resolvedOptions.getStaticBuiltins())
+        : builtinSet;
 
     const stdoutLines: string[] = [];
     let allFound = true;
 
     for (const name of args) {
-      if (builtinSet.has(name)) {
-        stdoutLines.push(`/usr/bin/${name}`);
-      } else {
-        const jshPath = jshCommands.get(name);
-        if (jshPath) {
-          stdoutLines.push(jshPath);
-        } else {
-          allFound = false;
-        }
-      }
+      const jshPath = jshCommands.get(name);
+      const wf = workflowCommands.get(name);
+      const result = resolveCommandPath(name, jshPath, wf, staticBuiltins, builtinSet);
+      stdoutLines.push(...result.lines);
+      if (!result.found) allFound = false;
     }
 
     return {

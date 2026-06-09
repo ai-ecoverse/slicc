@@ -207,6 +207,8 @@ export class WasmShellHeadless implements HeadlessShellLike {
   protected cwd: string;
   /** Set of all built-in + custom command names (for shadowing protection). */
   protected builtinCommandNames: Set<string>;
+  /** Built-in/custom command names captured BEFORE any .jsh/workflow registration. */
+  protected readonly staticBuiltinNames: Set<string>;
   /**
    * Allow-list of command names. `null` means unrestricted — every command is
    * permitted. Otherwise only names in the set may be registered or executed.
@@ -297,6 +299,7 @@ export class WasmShellHeadless implements HeadlessShellLike {
       getJshCommands: () => this.getJshCommandNames(),
       getWorkflowCommands: () => this.getWorkflowCommandNames(),
       syncScriptCommands: () => this.syncJshCommands(),
+      getStaticBuiltins: () => [...this.staticBuiltinNames],
       fs: options.fs,
       scriptCatalog: this.scriptCatalog,
       browserAPI: options.browserAPI,
@@ -402,6 +405,7 @@ export class WasmShellHeadless implements HeadlessShellLike {
       ...getNetworkCommandNames(),
     ];
     this.builtinCommandNames = new Set([...registeredBuiltinNames, ...customCommandNames]);
+    this.staticBuiltinNames = new Set(this.builtinCommandNames); // snapshot before scripts
     this.vfsAdapter.setRegisteredCommandsFn(() => [...this.builtinCommandNames]);
 
     this.lastEnv = { ...initialEnv };

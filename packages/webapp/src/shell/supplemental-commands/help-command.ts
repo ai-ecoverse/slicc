@@ -109,9 +109,18 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
   ['Process', ['ps', 'kill']],
 ]);
 
-function formatHelp(commands: string[], jshCommands: string[] = []): string {
+function formatHelp(
+  commands: string[],
+  jshCommands: string[] = [],
+  workflowCommands: string[] = []
+): string {
   const lines: string[] = [];
   const available = new Set(commands);
+
+  // Dedup: jsh + workflow names are already in `commands` because they're registered
+  // into builtinCommandNames. Remove them from the registered set to prevent duplication.
+  for (const n of jshCommands) available.delete(n);
+  for (const n of workflowCommands) available.delete(n);
 
   lines.push('Available commands:\n');
 
@@ -142,6 +151,11 @@ function formatHelp(commands: string[], jshCommands: string[] = []): string {
     lines.push(`    ${jshCommands.sort().join(', ')}\n`);
   }
 
+  if (workflowCommands.length > 0) {
+    lines.push('  Workflows:');
+    lines.push(`    ${workflowCommands.sort().join(', ')}\n`);
+  }
+
   lines.push("Use '<command> --help' for details on a specific command.");
 
   return lines.join('\n') + '\n';
@@ -150,6 +164,7 @@ function formatHelp(commands: string[], jshCommands: string[] = []): string {
 export interface CommandsCommandOptions {
   /** Function that returns discovered .jsh command names. */
   getJshCommands?: () => Promise<string[]>;
+  getWorkflowCommands?: () => Promise<string[]>;
 }
 
 export function createCommandsCommand(options: CommandsCommandOptions = {}): Command {
@@ -182,8 +197,9 @@ Note: This is an enhanced version of 'help' that shows all custom commands.
     // Get all registered commands
     const commands = ctx.getRegisteredCommands?.() ?? [];
     const jshCommands = (await options.getJshCommands?.()) ?? [];
+    const workflowCommands = (await options.getWorkflowCommands?.()) ?? [];
     return {
-      stdout: formatHelp(commands, jshCommands),
+      stdout: formatHelp(commands, jshCommands, workflowCommands),
       stderr: '',
       exitCode: 0,
     };
