@@ -33,6 +33,9 @@
       .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
       code { background: #11141a; padding: 2px 6px; border-radius: 5px; font-size: 12px; color: #c8cdd6; }
       .hint { color: #6b7280; font-size: 12px; margin-top: 12px; }
+      .panel.light { background: #f4f5f7; border-color: #dfe3ea; }
+      .panel.light h2 { color: #5b6472; }
+      .panel.light .hint { color: #8a93a3; }
     </style>
   </head>
   <body>
@@ -40,25 +43,39 @@
     <p class="sub">
       A standalone custom element: a label pill with a cone/scoop icon. The icon has the
       rolling-eye effect, parametrizable <code>color</code>, and an <code>eyes</code> state
-      (<code>open</code> / <code>none</code> / <code>dead</code>). The pill clips the icon to a
-      circle — by default zoomed in on the eyes; hover (or focus) zooms out to the full icon.
+      (<code>open</code> / <code>none</code> / <code>dead</code>). The pill itself is the clip path —
+      by default zoomed in on the eyes; hover (or focus) zooms out to the full icon. The label
+      rides above the icon, and the component adapts to light/dark (auto via
+      <code>prefers-color-scheme</code>, or forced with <code>theme="light|dark"</code>).
     </p>
 
     <div class="panel">
-      <h2>Variants &amp; eye states</h2>
+      <h2>Dark theme</h2>
       <div class="row">
-        <slicc-pill type="cone" active>sliccy · cone</slicc-pill>
-        <slicc-pill type="scoop" color="#22d3ee">researcher</slicc-pill>
-        <slicc-pill type="scoop" color="#8b5cf6">designer</slicc-pill>
-        <slicc-pill type="scoop" color="#10b981">triage</slicc-pill>
-        <slicc-pill type="scoop" color="#f59e0b" eyes="dead">crashed</slicc-pill>
-        <slicc-pill type="scoop" color="#94a3b8" eyes="none">idle</slicc-pill>
+        <slicc-pill theme="dark" type="cone" active>sliccy · cone</slicc-pill>
+        <slicc-pill theme="dark" type="scoop" color="#22d3ee">researcher</slicc-pill>
+        <slicc-pill theme="dark" type="scoop" color="#8b5cf6">designer</slicc-pill>
+        <slicc-pill theme="dark" type="scoop" color="#10b981">triage</slicc-pill>
+        <slicc-pill theme="dark" type="scoop" color="#f59e0b" eyes="dead">crashed</slicc-pill>
+        <slicc-pill theme="dark" type="scoop" color="#94a3b8" eyes="none">idle</slicc-pill>
       </div>
       <div class="hint">Move your mouse — the pupils follow it. Hover any pill to zoom out.</div>
     </div>
 
+    <div class="panel light">
+      <h2>Light theme</h2>
+      <div class="row">
+        <slicc-pill theme="light" type="cone" active>sliccy · cone</slicc-pill>
+        <slicc-pill theme="light" type="scoop" color="#0891b2">researcher</slicc-pill>
+        <slicc-pill theme="light" type="scoop" color="#7c3aed">designer</slicc-pill>
+        <slicc-pill theme="light" type="scoop" color="#059669">triage</slicc-pill>
+        <slicc-pill theme="light" type="scoop" color="#d97706" eyes="dead">crashed</slicc-pill>
+        <slicc-pill theme="light" type="scoop" color="#64748b" eyes="none">idle</slicc-pill>
+      </div>
+    </div>
+
     <div class="panel">
-      <h2>Parametrized color</h2>
+      <h2>Parametrized color (auto theme)</h2>
       <div class="row">
         <slicc-pill type="cone">cone (default)</slicc-pill>
         <slicc-pill type="cone" color="#e11d48">cherry cone</slicc-pill>
@@ -67,6 +84,7 @@
         <slicc-pill type="scoop" color="#F0E68C" active>vanilla (active)</slicc-pill>
         <slicc-pill type="scoop" color="#DDA0DD" eyes="dead">grape · dead</slicc-pill>
       </div>
+      <div class="hint">No <code>theme</code> attribute — follows the OS <code>prefers-color-scheme</code>.</div>
     </div>
 
     <script>
@@ -173,22 +191,48 @@
         }
 
         const STYLE = `
-          :host { display: inline-block; }
+          /* Theme tokens. Dark is the default; light is applied via the host's
+             prefers-color-scheme, and either can be forced with theme="light|dark". */
+          :host {
+            display: inline-block;
+            --label: #eef1f6;
+            --icon-tint: color-mix(in oklab, var(--accent) 22%, transparent);
+          }
+          @media (prefers-color-scheme: light) {
+            :host(:not([theme="dark"])) {
+              --label: #1b2030;
+              --icon-tint: color-mix(in oklab, var(--accent) 30%, #fff);
+            }
+          }
+          :host([theme="light"]) {
+            --label: #1b2030;
+            --icon-tint: color-mix(in oklab, var(--accent) 30%, #fff);
+          }
+          :host([theme="dark"]) {
+            --label: #eef1f6;
+            --icon-tint: color-mix(in oklab, var(--accent) 22%, transparent);
+          }
           * { box-sizing: border-box; }
           .pill {
-            display: inline-flex; align-items: center; gap: 7px;
+            position: relative;
+            display: inline-flex; align-items: center; gap: 8px;
             font: 500 13px ui-sans-serif, system-ui, -apple-system, sans-serif;
             color: var(--accent); background: transparent;
             border: 1.5px solid var(--accent); border-radius: 9999px;
-            padding: 4px 13px 4px 4px; cursor: pointer; line-height: 1;
+            padding: 0 14px 0 0; cursor: pointer; line-height: 1;
+            overflow: hidden;
             transition: background 0.2s ease, color 0.2s ease;
           }
-          .pill.active { background: var(--accent); color: #fff; }
+          .pill.active { background: var(--accent); }
+          .pill.active .label { color: #fff; }
           .pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+          /* The pill itself is the clip path (overflow:hidden + stadium radius).
+             The icon sits flush in the left cap with no clip of its own; the
+             label rides above it via z-index so the eyes can peek behind it. */
           .icon {
-            position: relative; width: 26px; height: 26px;
-            border-radius: 50%; overflow: hidden; flex: 0 0 auto;
-            background: color-mix(in oklab, var(--accent) 22%, transparent);
+            position: relative; z-index: 0; width: 30px; height: 30px;
+            flex: 0 0 auto;
+            background: var(--icon-tint);
           }
           .icon-inner {
             position: absolute; inset: 0; transform-origin: 0 0;
@@ -203,7 +247,7 @@
           }
           .eyes { position: absolute; pointer-events: none; }
           .eyes-svg { display: block; overflow: visible; }
-          .label { white-space: nowrap; }
+          .label { position: relative; z-index: 1; color: var(--label); white-space: nowrap; }
         `;
 
         class SliccPill extends HTMLElement {
