@@ -72,6 +72,12 @@ export type {
 export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
   /** Function that returns discovered .jsh command names (for `commands` listing). */
   getJshCommands?: () => Promise<string[]>;
+  /** Discovered workflow command names (for `commands`/`which`). */
+  getWorkflowCommands?: () => Promise<string[]>;
+  /** Re-run script-command registration (jsh + workflows) after a `workflow save`. */
+  syncScriptCommands?: () => void | Promise<void>;
+  /** Built-in command names (excludes dynamically-registered .jsh/workflow names). */
+  getStaticBuiltins?: () => string[];
   /** VirtualFS instance for .jsh discovery, `which`, and playwright-cli session files. */
   fs?: VirtualFS;
   /** Shared script discovery service for `.jsh`/`.bsh` lookup. */
@@ -114,7 +120,10 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
 
 export function createSupplementalCommands(options: SupplementalCommandsConfig = {}): Command[] {
   const commands: Command[] = [
-    createCommandsCommand({ getJshCommands: options.getJshCommands }),
+    createCommandsCommand({
+      getJshCommands: options.getJshCommands,
+      getWorkflowCommands: options.getWorkflowCommands,
+    }),
     createHostCommand(),
     createServeCommand(options.browserAPI, options.fs),
     createOpenCommand(),
@@ -141,7 +150,11 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createPdftkCommand('pdf'),
     createConvertCommand('convert'),
     createConvertCommand('magick'),
-    createWhichCommand({ fs: options.fs, scriptCatalog: options.scriptCatalog }),
+    createWhichCommand({
+      fs: options.fs,
+      scriptCatalog: options.scriptCatalog,
+      getStaticBuiltins: options.getStaticBuiltins,
+    }),
     createUnameCommand(),
     createManCommand(),
     createDigCommand(),
@@ -174,7 +187,10 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createDfCommand({ fs: options.fs }),
     createDiskutilCommand({ fs: options.fs }),
     createSudoCommand(options.sudoCommand),
-    createWorkflowCommand({ getParentJid: options.getParentJid }),
+    createWorkflowCommand({
+      getParentJid: options.getParentJid,
+      syncScriptCommands: options.syncScriptCommands,
+    }),
     createWfProgressCommand(),
   ];
 

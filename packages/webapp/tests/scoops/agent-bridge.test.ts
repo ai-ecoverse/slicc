@@ -13,8 +13,27 @@ import {
   AGENT_BRIDGE_GLOBAL_KEY,
   type AgentSpawnOptions,
   createAgentBridge,
+  defaultResolveModel,
   publishAgentBridge,
 } from '../../src/scoops/agent-bridge.js';
+
+// Mock only the two model-list accessors defaultResolveModel uses; keep every other
+// provider-settings export real so the rest of the suite is unaffected. The full
+// adobe list here includes claude-haiku-4-5 (which the real picker hides via
+// PICKER_HIDDEN_MODEL_PATTERNS) — the regression: a picker-hidden model must still
+// validate for an explicit sub-agent target.
+vi.mock('../../src/ui/provider-settings.js', async (importActual) => {
+  const actual = await importActual<typeof import('../../src/ui/provider-settings.js')>();
+  return {
+    ...actual,
+    getAccounts: () => [{ providerId: 'adobe', accessToken: 'x' }],
+    getProviderModels: (providerId: string) =>
+      providerId === 'adobe'
+        ? [{ id: 'claude-sonnet-4-6' }, { id: 'claude-haiku-4-5' }, { id: 'claude-opus-4-8' }]
+        : [],
+  };
+});
+
 import type { Orchestrator, ScoopObserver } from '../../src/scoops/orchestrator.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
 import { CURRENT_SCOOP_CONFIG_VERSION } from '../../src/scoops/types.js';
@@ -1058,5 +1077,20 @@ describe('publishAgentBridge', () => {
     const bridge = publishAgentBridge(orchestrator, fs, null);
 
     expect((globalThis as Record<string, unknown>)[AGENT_BRIDGE_GLOBAL_KEY]).toBe(bridge);
+  });
+});
+
+describe('defaultResolveModel', () => {
+  it('accepts a model in the full provider list even if hidden from the picker', () => {
+    // claude-haiku-4-5 is hidden from the cone picker (PICKER_HIDDEN_MODEL_PATTERNS),
+    // so it is absent from getAllAvailableModels() — but it IS a real provider model and
+    // a valid explicit sub-agent target. Regression: it must validate, not be rejected.
+    expect(defaultResolveModel('claude-haiku-4-5')).toBe('claude-haiku-4-5');
+    expect(defaultResolveModel('claude-sonnet-4-6')).toBe('claude-sonnet-4-6');
+    expect(defaultResolveModel('claude-opus-4-8')).toBe('claude-opus-4-8');
+  });
+
+  it('rejects a model no configured provider advertises', () => {
+    expect(defaultResolveModel('gpt-does-not-exist')).toBeNull();
   });
 });

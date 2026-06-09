@@ -361,4 +361,16 @@ describe('ScriptCatalog', () => {
       '/workspace/login.example.com.bsh',
     ]);
   });
+
+  it('getWorkflowCommands discovers saved + skill workflows', async () => {
+    const fs = await VirtualFS.create({ dbName: `cat-wf-${Math.random()}`, wipe: true });
+    await fs.mkdir('/workspace/.workflows', { recursive: true });
+    await fs.writeFile('/workspace/.workflows/audit.workflow.js', 'return 1');
+    await fs.mkdir('/workspace/skills/triage/.workflows', { recursive: true });
+    await fs.writeFile('/workspace/skills/triage/.workflows/sweep.workflow.js', 'return 1');
+    const catalog = new ScriptCatalog({ jshFs: fs });
+    const map = await catalog.getWorkflowCommands();
+    expect(map.get('audit')?.kind).toBe('saved');
+    expect(map.get('triage:sweep')?.kind).toBe('skill');
+  });
 });

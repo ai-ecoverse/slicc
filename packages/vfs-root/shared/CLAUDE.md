@@ -60,7 +60,7 @@ Scoops return on `scoop-notify` / `scoop-idle` / `scoop-wait`.
 
 ## Workflows
 
-`workflow run <file.js>` — parallel fan-out. Runs in the background; cone runs report completion as a new turn: result at `/shared/workflow-runs/<id>.json`. Use `--wait` to block. API: `agent(prompt, {schema?})`, `parallel([fns])`, `pipeline(items, ...stages)`, `phase`/`log`. Deterministic — `Date`/`Math.random`/`crypto`/timers throw. `workflow status <id>`, `list`, `stop <id>`.
+`workflow run <file.js>` — parallel fan-out. Runs in the background; cone runs report completion as a new turn: result at `/shared/workflow-runs/<id>.json`. Use `--wait` to block. API: `agent(prompt, {schema?, thinking?})`, `parallel`, `pipeline`, `phase`, `log`. Deterministic — `Date`/`Math.random`/`crypto`/timers throw. `workflow status|list|stop|save <id> [<name>]`.
 
 ## Approvals (sudo)
 

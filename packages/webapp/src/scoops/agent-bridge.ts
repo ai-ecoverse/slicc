@@ -33,7 +33,7 @@ import { createLogger } from '../core/logger.js';
 import type { SessionStore } from '../core/session.js';
 import type { VirtualFS } from '../fs/index.js';
 import { normalizePath } from '../fs/path-utils.js';
-import { getAllAvailableModels } from '../ui/provider-settings.js';
+import { getAccounts, getProviderModels } from '../ui/provider-settings.js';
 import type { Orchestrator } from './orchestrator.js';
 import {
   CURRENT_SCOOP_CONFIG_VERSION,
@@ -150,7 +150,8 @@ export interface AgentBridgeDeps {
   generateUid?: () => string;
   /**
    * Validate a model id. Returns the input on success, null when unknown.
-   * Default looks up via `getAllAvailableModels()` from provider-settings.
+   * Default looks up via each provider's full `getProviderModels()` list
+   * (NOT the picker-filtered `getAllAvailableModels()`).
    */
   resolveModel?: (modelId: string) => string | null;
 }
@@ -702,18 +703,32 @@ function tokenToJid(token: string): string {
 }
 
 /**
- * Default model resolver. Returns the input id if any configured provider
- * advertises a matching model; otherwise null. Tests can replace this via
- * `deps.resolveModel` without touching provider-settings state.
+ * Default model resolver. Returns the input id if any configured provider's
+ * FULL model list advertises it; otherwise null. Validates against
+ * `getProviderModels()` (the unfiltered per-provider list), NOT
+ * `getAllAvailableModels()` — the latter is picker-filtered
+ * (`PICKER_HIDDEN_MODEL_PATTERNS`, e.g. `/haiku/i`), so a model hidden from the
+ * cone picker would be wrongly rejected here as "unknown". A picker-hidden
+ * model is still a legitimate explicit sub-agent target (the very "haiku scoop
+ * for cheap throwaway work" the picker hides it to avoid as a *cone* default).
+ * Tests can replace this via `deps.resolveModel` without touching
+ * provider-settings state.
  */
-function defaultResolveModel(modelId: string): string | null {
+export function defaultResolveModel(modelId: string): string | null {
   try {
-    const groups = getAllAvailableModels();
-    for (const group of groups) {
-      if (group.models.some((m) => m.id === modelId)) return modelId;
+    for (const account of getAccounts()) {
+      if (getProviderModels(account.providerId).some((m) => m.id === modelId)) return modelId;
     }
     return null;
-  } catch {
+  } catch (err) {
+    // getAccounts/getProviderModels normally return [] (and self-log) on a provider/parse
+    // failure; the only throws that reach here are residual storage/environment faults
+    // (e.g. a SecurityError, or a missing storage shim). Without a breadcrumb the caller
+    // gets a misleading "unknown model: <id>" for what is really an environment fault.
+    log.warn('defaultResolveModel: provider/account lookup threw; treating model as unknown', {
+      modelId,
+      error: err instanceof Error ? err.message : String(err),
+    });
     return null;
   }
 }

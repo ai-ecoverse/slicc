@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { VirtualFS } from '../../src/fs/index.js';
 import {
   createWorkflowRunManager,
+  evictOldRuns,
   publishWorkflowRunManager,
   WORKFLOW_MANAGER_GLOBAL_KEY,
   type WorkflowRunState,
@@ -163,6 +164,40 @@ describe('WorkflowRunManager', () => {
     expect(realExecCalls.find((c) => c[0] === '__wf_progress')).toBeUndefined();
     expect(realExecCalls.find((c) => c[0] === 'agent')).toBeDefined();
     expect(realExecCalls.find((c) => c[0] === 'ls')).toBeDefined();
+  });
+
+  it('caps per-run logs at MAX_LOG_LINES — oldest dropped, newest kept', async () => {
+    const baseCtx = {
+      cwd: '/',
+      env: new Map<string, string>(),
+      stdin: '',
+      exec: Object.assign(async () => ({ stdout: 'ok', stderr: '', exitCode: 0 }), {
+        spawn: async () => ({ stdout: 'ok', stderr: '', exitCode: 0 }),
+      }),
+    } as any;
+    const deps = makeDeps({
+      runRealm: vi.fn(async (_code: string, _argv: string[], ctx: any) => {
+        // Emit 1100 log lines (> the 1000 cap) the way a chatty/looping workflow would.
+        for (let i = 0; i < 1100; i++)
+          await ctx.exec('__wf_progress', { args: ['log', `line-${i}`] });
+        return { stdout: `WF_RESULT_x${JSON.stringify({ ok: true })}`, stderr: '', exitCode: 0 };
+      }),
+    });
+    const mgr = createWorkflowRunManager(deps as any);
+    const { runId } = await mgr.start({
+      code: 'C',
+      source: 'S',
+      name: 'n',
+      filename: 'f',
+      parentJid: undefined,
+      sentinel: 'WF_RESULT_x',
+      ctx: baseCtx,
+    });
+    await vi.waitFor(() => expect(mgr.getRun(runId)!.status).toBe('done'));
+    const logs = mgr.getRun(runId)!.logs;
+    expect(logs.length).toBe(1000); // capped at MAX_LOG_LINES
+    expect(logs[logs.length - 1]).toBe('line-1099'); // newest retained
+    expect(logs[0]).toBe('line-100'); // oldest 100 dropped (kept last 1000)
   });
 
   it('captures the realm pid via pm.on(spawn)', async () => {
@@ -530,5 +565,40 @@ describe('WorkflowRunManager', () => {
     const res = await createWorkflowCommand().execute(['run', '/workspace/wf.js'], ctx);
     expect(res.exitCode).toBe(0);
     expect(spy).toHaveBeenCalledTimes(1); // command reached the published manager, not a proxy/local copy
+  });
+});
+
+describe('evictOldRuns (memory bound)', () => {
+  const mk = (id: string, status: string, at: string): WorkflowRunState =>
+    ({
+      id,
+      status,
+      startedAt: at,
+      finishedAt: status === 'running' ? null : at,
+      name: null,
+      source: '',
+    }) as unknown as WorkflowRunState;
+
+  it('evicts the oldest TERMINAL runs over the cap, never a running one', () => {
+    const runs = new Map<string, WorkflowRunState>([
+      ['a', mk('a', 'done', '2026-01-01')],
+      ['b', mk('b', 'running', '2026-01-02')],
+      ['c', mk('c', 'done', '2026-01-03')],
+    ]);
+    const observers = new Map<string, Set<(s: WorkflowRunState) => void>>([
+      ['a', new Set()],
+      ['c', new Set()],
+    ]);
+    evictOldRuns(runs, observers, 2); // 3 runs, cap 2 → evict 1 oldest terminal = 'a'
+    expect(runs.has('a')).toBe(false); // oldest terminal evicted
+    expect(runs.has('b')).toBe(true); // running is never evicted
+    expect(runs.has('c')).toBe(true);
+    expect(observers.has('a')).toBe(false); // its observers dropped too
+  });
+
+  it('is a no-op at or under the cap', () => {
+    const runs = new Map<string, WorkflowRunState>([['x', mk('x', 'done', 't')]]);
+    evictOldRuns(runs, new Map(), 100);
+    expect(runs.size).toBe(1);
   });
 });

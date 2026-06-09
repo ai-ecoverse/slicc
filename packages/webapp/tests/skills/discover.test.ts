@@ -116,6 +116,16 @@ describe('discoverSkills', () => {
       ],
     });
   });
+
+  it('discovers the bundled workflows skill', async () => {
+    await fs.mkdir('/workspace/skills/workflows', { recursive: true });
+    await fs.writeFile(
+      '/workspace/skills/workflows/SKILL.md',
+      '---\nname: workflows\ndescription: Use when a task warrants a dynamic workflow.\n---\n# Workflows\n'
+    );
+    const skills = await discoverSkills(fs);
+    expect(skills.some((s) => s.name === 'workflows')).toBe(true);
+  });
 });
 
 describe('getSkillInfo', () => {

@@ -55,6 +55,7 @@ import type { MediaPreviewItem } from './supplemental-commands.js';
 import { createSupplementalCommands } from './supplemental-commands.js';
 import { emitShellCommand } from './telemetry-hook.js';
 import { VfsAdapter } from './vfs-adapter.js';
+import { buildWorkflowRunArgv, type WorkflowCommandEntry } from './workflow-discovery.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -206,6 +207,8 @@ export class WasmShellHeadless implements HeadlessShellLike {
   protected cwd: string;
   /** Set of all built-in + custom command names (for shadowing protection). */
   protected builtinCommandNames: Set<string>;
+  /** Built-in/custom command names captured BEFORE any .jsh/workflow registration. */
+  protected readonly staticBuiltinNames: Set<string>;
   /**
    * Allow-list of command names. `null` means unrestricted — every command is
    * permitted. Otherwise only names in the set may be registered or executed.
@@ -215,6 +218,8 @@ export class WasmShellHeadless implements HeadlessShellLike {
   protected readonly ownsScriptCatalog: boolean;
   /** Maps .jsh command names to their registered script paths. */
   protected registeredJshCommands = new Map<string, string>();
+  /** Workflow command names we've registered (handler is dynamic, so a Set suffices). */
+  protected registeredWorkflowCommands = new Set<string>();
   /** Promise for the currently in-flight jsh sync. */
   private jshSyncInflight: Promise<void> | null = null;
   /** Re-sync requested while one was already in flight. */
@@ -281,7 +286,7 @@ export class WasmShellHeadless implements HeadlessShellLike {
     if (scriptWatcher) {
       scriptWatcher.watch(
         '/',
-        (path) => path.endsWith('.jsh'),
+        (path) => path.endsWith('.jsh') || path.endsWith('.workflow.js'),
         () => {
           void this.syncJshCommands().catch(() => undefined);
         }
@@ -292,6 +297,9 @@ export class WasmShellHeadless implements HeadlessShellLike {
     const supplementalCommands = createSupplementalCommands({
       onMediaPreview: async (items) => this.renderMediaPreview(items),
       getJshCommands: () => this.getJshCommandNames(),
+      getWorkflowCommands: () => this.getWorkflowCommandNames(),
+      syncScriptCommands: () => this.syncJshCommands(),
+      getStaticBuiltins: () => [...this.staticBuiltinNames],
       fs: options.fs,
       scriptCatalog: this.scriptCatalog,
       browserAPI: options.browserAPI,
@@ -397,6 +405,7 @@ export class WasmShellHeadless implements HeadlessShellLike {
       ...getNetworkCommandNames(),
     ];
     this.builtinCommandNames = new Set([...registeredBuiltinNames, ...customCommandNames]);
+    this.staticBuiltinNames = new Set(this.builtinCommandNames); // snapshot before scripts
     this.vfsAdapter.setRegisteredCommandsFn(() => [...this.builtinCommandNames]);
 
     this.lastEnv = { ...initialEnv };
@@ -715,75 +724,31 @@ export class WasmShellHeadless implements HeadlessShellLike {
   private async doSyncJshCommands(): Promise<void> {
     try {
       const jshMap = await this.scriptCatalog.getJshCommands();
-      const discoveryFs = this.options.jshDiscoveryFs ?? this.options.fs;
+      const wfMap = await this.getFilteredWorkflowCommands();
 
+      // .jsh names: keep the existing path-keyed registry + guard.
       for (const [name, scriptPath] of jshMap) {
         if (!this.isCommandAllowed(name)) continue;
-        if (this.builtinCommandNames.has(name) && !this.registeredJshCommands.has(name)) {
+        if (this.builtinCommandNames.has(name) && !this.registeredJshCommands.has(name)) continue;
+        if (this.registeredJshCommands.get(name) === scriptPath) continue;
+        this.bash.registerCommand(this.wrapCommandForSudo(this.makeScriptCommand(name)));
+        this.registeredJshCommands.set(name, scriptPath);
+        this.builtinCommandNames.add(name);
+      }
+
+      // Workflow names: register the SAME unified handler ONCE per name (it resolves
+      // .jsh-vs-workflow at dispatch, so the order between the two loops is irrelevant).
+      for (const name of wfMap.keys()) {
+        if (this.registeredWorkflowCommands.has(name)) continue; // already handled
+        if (this.registeredJshCommands.has(name)) {
+          // A .jsh already installed the unified handler for this name; it already resolves
+          // the workflow fallback at dispatch. Just record it so we don't reconsider.
+          this.registeredWorkflowCommands.add(name);
           continue;
         }
-        if (this.registeredJshCommands.get(name) === scriptPath) continue;
-
-        const catalog = this.scriptCatalog;
-        const shell = this;
-        const cmdName = name;
-
-        const command: Command = {
-          name,
-          // just-bash v3 monkey-patches async primitives in the defense-
-          // in-depth sandbox for untrusted commands. The `.jsh` executor
-          // reads the script from the VFS and runs it in a worker realm,
-          // both of which require unpatched async I/O. Mark the command
-          // trusted so just-bash runs it inside
-          // `DefenseInDepthBox.runTrustedAsync`, matching how `git`,
-          // `mount`, and other host-extension commands are registered.
-          trusted: true,
-          async execute(args: string[], ctx) {
-            const currentMap = await catalog.getJshCommands();
-            const currentPath = currentMap.get(cmdName);
-            if (!currentPath) {
-              return {
-                stdout: '',
-                stderr: `jsh: command '${cmdName}' no longer exists\n`,
-                exitCode: 127,
-              };
-            }
-            let code: string;
-            try {
-              const raw = await discoveryFs.readFile(currentPath, { encoding: 'utf-8' });
-              code = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-            } catch {
-              return {
-                stdout: '',
-                stderr: `jsh: cannot read script '${currentPath}'\n`,
-                exitCode: 127,
-              };
-            }
-            const argv = ['node', currentPath, ...args];
-            const execFn: typeof ctx.exec =
-              ctx.exec ??
-              ((cmd, opts) =>
-                shell.bash.exec(cmd, {
-                  env: Object.fromEntries(ctx.env),
-                  cwd: opts?.cwd ?? ctx.cwd,
-                }));
-            return executeJsCode(
-              code,
-              argv,
-              {
-                fs: ctx.fs,
-                cwd: ctx.cwd,
-                env: ctx.env,
-                stdin: ctx.stdin,
-                exec: execFn,
-              },
-              shell.buildJshProcessConfig()
-            );
-          },
-        };
-
-        this.bash.registerCommand(this.wrapCommandForSudo(command));
-        this.registeredJshCommands.set(name, scriptPath);
+        if (this.builtinCommandNames.has(name)) continue; // never override a real built-in
+        this.bash.registerCommand(this.wrapCommandForSudo(this.makeScriptCommand(name)));
+        this.registeredWorkflowCommands.add(name);
         this.builtinCommandNames.add(name);
       }
     } finally {
@@ -793,6 +758,71 @@ export class WasmShellHeadless implements HeadlessShellLike {
         void this.syncJshCommands().catch(() => undefined);
       }
     }
+  }
+
+  /**
+   * One late-binding handler per script-command name. Resolves precedence at DISPATCH
+   * against current VFS state: built-in > .jsh > saved-workflow. (just-bash has no
+   * unregister, so we never rebuild the table — the handler reads live discovery each call.)
+   */
+  private makeScriptCommand(name: string): Command {
+    const catalog = this.scriptCatalog;
+    const shell = this;
+    const discoveryFs = this.options.jshDiscoveryFs ?? this.options.fs;
+    const cmdName = name;
+    return {
+      name,
+      // just-bash v3 monkey-patches async primitives in the defense-in-depth sandbox for
+      // untrusted commands. The `.jsh` executor reads the script from the VFS and runs it
+      // in a worker realm, both of which require unpatched async I/O. Mark the command
+      // trusted so just-bash runs it inside `DefenseInDepthBox.runTrustedAsync`, matching
+      // how `git`, `mount`, and other host-extension commands are registered.
+      trusted: true,
+      async execute(args: string[], ctx) {
+        const execFn: typeof ctx.exec =
+          ctx.exec ??
+          ((cmd, opts) =>
+            // Forward `args` — the workflow branch passes the `workflow run …` argv via
+            // opts.args; dropping it would run a bare `workflow` (just-bash's Bash.exec
+            // appends opts.args to the command).
+            shell.bash.exec(cmd, {
+              env: Object.fromEntries(ctx.env),
+              cwd: opts?.cwd ?? ctx.cwd,
+              args: opts?.args,
+            }));
+
+        // 1) .jsh wins the bare name.
+        const jshMap = await catalog.getJshCommands();
+        const jshPath = jshMap.get(cmdName);
+        if (jshPath) {
+          let code: string;
+          try {
+            const raw = await discoveryFs.readFile(jshPath, { encoding: 'utf-8' });
+            code = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+          } catch {
+            return { stdout: '', stderr: `jsh: cannot read script '${jshPath}'\n`, exitCode: 127 };
+          }
+          return executeJsCode(
+            code,
+            ['node', jshPath, ...args],
+            { fs: ctx.fs, cwd: ctx.cwd, env: ctx.env, stdin: ctx.stdin, exec: execFn },
+            shell.buildJshProcessConfig()
+          );
+        }
+
+        // 2) Else a workflow (saved bare or skill <skill>:<name>) — route through the
+        //    `workflow run` command path (NOT executeJsCode on the raw file).
+        const wfMap = await catalog.getWorkflowCommands();
+        const wf = wfMap.get(cmdName);
+        if (wf) {
+          const argv = buildWorkflowRunArgv(wf.path, args);
+          return execFn(argv[0], { args: argv.slice(1), cwd: ctx.cwd });
+        }
+
+        // 3) Gone.
+        return { stdout: '', stderr: `${cmdName}: command no longer exists\n`, exitCode: 127 };
+      },
+    };
   }
 
   private createGitCustomCommand(): Command {
@@ -830,6 +860,20 @@ export class WasmShellHeadless implements HeadlessShellLike {
       filtered.set(name, path);
     }
     return filtered;
+  }
+
+  private async getFilteredWorkflowCommands(): Promise<Map<string, WorkflowCommandEntry>> {
+    const all = await this.scriptCatalog.getWorkflowCommands();
+    const filtered = new Map<string, WorkflowCommandEntry>();
+    for (const [name, entry] of all) {
+      if (!this.isCommandAllowed(name)) continue;
+      filtered.set(name, entry);
+    }
+    return filtered;
+  }
+
+  async getWorkflowCommandNames(): Promise<string[]> {
+    return [...(await this.getFilteredWorkflowCommands()).keys()];
   }
 
   /** `.jsh` fallback when bash returns 127. */

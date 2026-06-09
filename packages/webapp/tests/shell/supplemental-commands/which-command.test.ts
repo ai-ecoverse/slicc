@@ -1,6 +1,8 @@
+import 'fake-indexeddb/auto';
 import type { IFileSystem } from 'just-bash';
 import { describe, expect, it } from 'vitest';
-import type { VirtualFS } from '../../../src/fs/index.js';
+import { VirtualFS } from '../../../src/fs/index.js';
+import { ScriptCatalog } from '../../../src/shell/script-catalog.js';
 import { createWhichCommand } from '../../../src/shell/supplemental-commands/which-command.js';
 
 function createMockCtx(
@@ -92,5 +94,73 @@ describe('which command', () => {
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('/workspace/skills/test-skill/hello.jsh\n');
+  });
+
+  it('resolves a saved workflow to its path labeled (workflow)', async () => {
+    const fs = await VirtualFS.create({
+      dbName: `which-wf-${Math.random()}`,
+      wipe: true,
+    });
+    await fs.mkdir('/workspace/.workflows', { recursive: true });
+    await fs.writeFile('/workspace/.workflows/audit.workflow.js', 'return 1');
+    const catalog = new ScriptCatalog({ jshFs: fs });
+    const ctx: any = {
+      cwd: '/workspace',
+      env: new Map(),
+      getRegisteredCommands: () => ['ls', 'cat', 'audit'], // audit is dynamically registered
+    };
+    const res = await createWhichCommand({
+      fs,
+      scriptCatalog: catalog,
+      getStaticBuiltins: () => ['ls', 'cat'], // audit is NOT a static builtin
+    }).execute(['audit'], ctx);
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain('/workspace/.workflows/audit.workflow.js');
+    expect(res.stdout).toContain('(workflow)');
+  });
+
+  it('shows the .jsh path and marks the workflow shadowed when both exist', async () => {
+    const fs = await VirtualFS.create({
+      dbName: `which-wf2-${Math.random()}`,
+      wipe: true,
+    });
+    await fs.mkdir('/workspace/.workflows', { recursive: true });
+    await fs.writeFile('/workspace/.workflows/foo.workflow.js', 'return 1');
+    await fs.writeFile('/workspace/foo.jsh', 'x');
+    const catalog = new ScriptCatalog({ jshFs: fs });
+    const ctx: any = {
+      cwd: '/workspace',
+      env: new Map(),
+      getRegisteredCommands: () => ['ls', 'cat', 'foo'], // foo is dynamically registered
+    };
+    const res = await createWhichCommand({
+      fs,
+      scriptCatalog: catalog,
+      getStaticBuiltins: () => ['ls', 'cat'], // foo is NOT a static builtin
+    }).execute(['foo'], ctx);
+    expect(res.stdout).toContain('/workspace/foo.jsh');
+    expect(res.stdout).toMatch(/shadow/i);
+  });
+
+  it('a static built-in wins over a same-named saved workflow (shadowed by built-in)', async () => {
+    const fs = await VirtualFS.create({
+      dbName: `which-wf3-${Math.random()}`,
+      wipe: true,
+    });
+    await fs.mkdir('/workspace/.workflows', { recursive: true });
+    await fs.writeFile('/workspace/.workflows/test.workflow.js', 'return 1');
+    const catalog = new ScriptCatalog({ jshFs: fs });
+    const ctx: any = {
+      cwd: '/workspace',
+      env: new Map(),
+      getRegisteredCommands: () => ['ls', 'cat', 'test'],
+    };
+    const res = await createWhichCommand({
+      fs,
+      scriptCatalog: catalog,
+      getStaticBuiltins: () => ['ls', 'cat', 'test'], // 'test' IS a static built-in
+    }).execute(['test'], ctx);
+    expect(res.stdout).toContain('/usr/bin/test'); // built-in wins
+    expect(res.stdout).toMatch(/shadowed by built-in/i);
   });
 });
