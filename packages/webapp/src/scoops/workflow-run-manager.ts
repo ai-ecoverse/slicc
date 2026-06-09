@@ -104,6 +104,9 @@ export function createWorkflowRunManager(deps: WorkflowRunManagerDeps): Workflow
     return parentJid === deps.getConeJid() ? 'cone' : 'scoop';
   };
 
+  const wrapRunCtx = (ctx: CommandContextLike, runId: string) =>
+    wrapCtx(ctx, runId, runs, () => notify(runId));
+
   async function start(opts: WorkflowStartOptions): Promise<{ runId: string }> {
     const runId = deps.makeRunId();
     const sentinel = opts.sentinel; // built by the command; never invented here
@@ -126,14 +129,24 @@ export function createWorkflowRunManager(deps: WorkflowRunManagerDeps): Workflow
     };
     runs.set(runId, state);
 
-    // Task 5 replaces `opts.ctx` with a tapped context + adds pid capture here.
     // The manager is ALWAYS non-blocking: it kicks off the realm and returns the runId
     // immediately. `--wait` is NOT handled here — the command bypasses the manager entirely
     // for `--wait` (Task 7 Step 4) and runs the SP1 inline path, so `start` never awaits.
+    const wrappedCtx = wrapRunCtx(opts.ctx, runId);
+    const offSpawn = deps.processManager.on('spawn', (proc) => {
+      // Match by argv, NOT kind: runInRealm registers the JS execution as ProcessKind
+      // 'jsh' ('js' is the realm kind, not the process kind), and argv is the
+      // ['workflow', filename] we pass to runRealm — specific + reliable.
+      if (state.pid === null && proc.argv[0] === 'workflow' && proc.argv[1] === opts.filename) {
+        state.pid = proc.pid;
+        notify(runId);
+      }
+    });
     void deps
-      .runRealm(opts.code, ['workflow', opts.filename], opts.ctx)
+      .runRealm(opts.code, ['workflow', opts.filename], wrappedCtx)
       .then((result) => finish(runId, sentinel, result))
-      .catch((err) => fail(runId, err instanceof Error ? err.message : String(err)));
+      .catch((err) => fail(runId, err instanceof Error ? err.message : String(err)))
+      .finally(() => offSpawn());
 
     return { runId };
   }
@@ -243,4 +256,68 @@ export function createWorkflowRunManager(deps: WorkflowRunManagerDeps): Workflow
 function previewOf(value: unknown): string {
   const s = typeof value === 'string' ? value : JSON.stringify(value);
   return (s ?? 'null').slice(0, 200);
+}
+
+// Tap the run's `ctx.exec` (the lowering point `realm-host.dispatchExec` calls — NOT
+// `ctx.exec.spawn`): `__wf_progress` calls are intercepted (phase/log → state, never
+// passed through to a real command); `agent` calls bump agentsStarted/Done around a
+// pass-through; everything else passes through unchanged. Returns `ctx` unchanged when it
+// has no `exec` so runs whose ctx lacks an exec surface stay transparent.
+//
+// PER-RUN EXEC ISOLATION INVARIANT (spec §5 — SP2 accepts a narrow, documented risk):
+// we reuse the launching `ctx.exec` rather than backing each run with its own shell. The
+// documented workflow API (`agent`/`parallel`/`pipeline`/`phase`/`log`) never mutates the
+// shell's cwd/lastEnv, so in-contract workflows are safe. The undocumented internal
+// `__execSpawn(['cd',…])` / `__execSpawn(['secret','set',…])` escape hatch CAN corrupt the
+// launching shell when backgrounded — out of contract, pre-existing in SP1, deferred to SP6
+// (hide `__execSpawn` behind an IIFE, or give each run its own cwd/lastEnv-owning shell).
+function wrapCtx(
+  ctx: CommandContextLike,
+  runId: string,
+  runs: Map<string, WorkflowRunState>,
+  notify: () => void
+): CommandContextLike {
+  const realExec = ctx.exec;
+  if (!realExec) return ctx;
+  const tappedExec = (async (
+    cmd: string,
+    opts?: { cwd?: string; args?: string[] }
+  ): Promise<ExecResultLike> => {
+    const args = opts?.args ?? [];
+    if (cmd === '__wf_progress') {
+      const kind = args[0];
+      const text = args[1] ?? '';
+      const s = runs.get(runId);
+      if (s) {
+        if (kind === 'phase') {
+          s.currentPhase = text;
+          s.logs.push(text);
+        } else if (kind === 'log') {
+          s.logs.push(text);
+        }
+        notify();
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
+    if (cmd === 'agent') {
+      const s = runs.get(runId);
+      if (s) {
+        s.agentsStarted++;
+        notify();
+      }
+      try {
+        return await realExec(cmd, opts);
+      } finally {
+        const s2 = runs.get(runId);
+        if (s2) {
+          s2.agentsDone++;
+          notify();
+        }
+      }
+    }
+    return realExec(cmd, opts);
+  }) as CommandContextLike['exec'];
+  // Preserve the .spawn surface realm-host doesn't use, but keep parity.
+  (tappedExec as { spawn?: unknown }).spawn = (ctx.exec as { spawn?: unknown }).spawn;
+  return { ...ctx, exec: tappedExec };
 }

@@ -114,6 +114,81 @@ describe('WorkflowRunManager', () => {
     expect(fireLick).toHaveBeenCalledTimes(1);
   });
 
+  it('exec-tap: agent argv bumps agentsStarted/Done; __wf_progress updates phase/logs; others pass through', async () => {
+    const realExecCalls: string[][] = [];
+    const baseCtx = {
+      cwd: '/',
+      env: new Map<string, string>(),
+      stdin: '',
+      exec: Object.assign(
+        async (cmd: string, opts?: { args?: string[] }) => {
+          realExecCalls.push([cmd, ...(opts?.args ?? [])]);
+          return { stdout: 'ok', stderr: '', exitCode: 0 };
+        },
+        { spawn: async () => ({ stdout: 'ok', stderr: '', exitCode: 0 }) }
+      ),
+    } as any;
+    // runRealm drives the tapped ctx the way the realm would, then resolves.
+    const deps = makeDeps({
+      runRealm: vi.fn(async (_code: string, _argv: string[], ctx: any) => {
+        await ctx.exec('__wf_progress', { args: ['phase', 'Scan'] });
+        await ctx.exec('__wf_progress', { args: ['log', 'hello'] });
+        await ctx.exec('agent', { args: ['--read-only', '/workspace/', '/s', '*', 'do it'] });
+        await ctx.exec('ls', { args: ['/workspace'] });
+        return { stdout: `WF_RESULT_x${JSON.stringify({ ok: true })}`, stderr: '', exitCode: 0 };
+      }),
+    });
+    const mgr = createWorkflowRunManager(deps as any);
+    const { runId } = await mgr.start({
+      code: 'C',
+      source: 'S',
+      name: 'n',
+      filename: 'f',
+      parentJid: undefined,
+      sentinel: 'WF_RESULT_x',
+      ctx: baseCtx,
+    });
+    await vi.waitFor(() => expect(mgr.getRun(runId)!.status).toBe('done'));
+    const s = mgr.getRun(runId)!;
+    expect(s.currentPhase).toBe('Scan');
+    expect(s.logs).toEqual(['Scan', 'hello']); // phase title + log message, in order; currentPhase tracked separately
+    expect(s.agentsStarted).toBe(1);
+    expect(s.agentsDone).toBe(1);
+    // __wf_progress was intercepted (not passed through); agent + ls were:
+    expect(realExecCalls.find((c) => c[0] === '__wf_progress')).toBeUndefined();
+    expect(realExecCalls.find((c) => c[0] === 'agent')).toBeDefined();
+    expect(realExecCalls.find((c) => c[0] === 'ls')).toBeDefined();
+  });
+
+  it('captures the realm pid via pm.on(spawn)', async () => {
+    let spawnHandler: ((p: any) => void) | undefined;
+    const pm = {
+      on: vi.fn((_e: string, fn: any) => {
+        spawnHandler = fn;
+        return () => {};
+      }),
+    };
+    const realmDone = deferred<any>();
+    const deps = makeDeps({ processManager: pm as any, runRealm: vi.fn(() => realmDone.promise) });
+    const mgr = createWorkflowRunManager(deps as any);
+    const { runId } = await mgr.start({
+      code: 'C',
+      source: 'S',
+      name: 'n',
+      filename: 'f',
+      parentJid: undefined,
+      sentinel: 'WF_RESULT_x',
+      ctx: { exec: vi.fn() } as any,
+    });
+    // Real realm-JS processes are kind:'jsh' (runInRealm default). The production filter
+    // matches on argv ([0]==='workflow' && [1]===filename), NOT kind, so kind here is just
+    // realistic fixture data — must match reality so the test isn't misleading.
+    spawnHandler?.({ pid: 4242, kind: 'jsh', argv: ['workflow', 'f'] });
+    expect(mgr.getRun(runId)!.pid).toBe(4242);
+    realmDone.resolve({ stdout: `WF_RESULT_x${JSON.stringify({})}`, stderr: '', exitCode: 0 });
+    await vi.waitFor(() => expect(mgr.getRun(runId)!.status).toBe('done'));
+  });
+
   it('exit 137 (SIGKILL) → status killed (not error)', async () => {
     const fireLick = vi.fn();
     const sharedFs = { mkdir: vi.fn(async () => {}), writeFile: vi.fn(async () => {}) };
