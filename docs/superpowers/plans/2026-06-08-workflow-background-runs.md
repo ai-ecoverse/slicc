@@ -1084,15 +1084,16 @@ git commit -m "feat(workflow): publish WorkflowRunManager on __slicc_workflows +
 
 ---
 
-## Task 7: `workflow` command — delegate to the manager (non-blocking + `--wait` + `status`/`list`/`stop`)
+## Task 7: `workflow` command — delegate to the manager (non-blocking + `--wait` + `status`/`list`/`stop`) + raise the concurrency cap
 
 **Files:**
 
-- Modify: `packages/webapp/src/shell/supplemental-commands/workflow-command.ts`
+- Modify: `packages/webapp/src/shell/supplemental-commands/workflow-command.ts` (delegate `run`; add subcommands; **Step 10:** raise `resolveMaxCap` + default)
 - Modify: `packages/webapp/src/shell/supplemental-commands/index.ts` (thread `getParentJid` into `createWorkflowCommand`)
-- Test: `packages/webapp/tests/shell/supplemental-commands/workflow-command.test.ts` (extend)
+- Modify: `docs/shell-reference.md` (Step 10d — concurrency-cap policy)
+- Test: `packages/webapp/tests/shell/supplemental-commands/workflow-command.test.ts` (extend; export + test `resolveMaxCap`)
 
-Why: SP1's command owns `executeJsCode`. SP2 refactors `run` to build the code (unchanged) then **delegate to `__slicc_workflows.start`** (non-blocking default; `--wait` blocks and prints the result), and adds read/stop subcommands. Origin = `'cone'` only when the parent jid equals the cone jid.
+Why: SP1's command owns `executeJsCode`. SP2 refactors `run` to build the code (unchanged) then **delegate to `__slicc_workflows.start`** (non-blocking default; `--wait` blocks and prints the result), and adds read/stop subcommands. Origin = `'cone'` only when the parent jid equals the cone jid. **Step 10 (folded in per review)** also fixes the scoop concurrency cap — SP1's `min(16, cores−2)` collapses to 1 on small boxes; replace with `min(16, max(8, cores×4))`, default 8.
 
 - [ ] **Step 1: Accept `getParentJid` + a manager accessor.** Change `createWorkflowCommand()` to `createWorkflowCommand(options: { getParentJid?: () => string | undefined } = {})` and add a `--wait` flag to `parse`/`applyToken` (a boolean flag, no value: in `applyToken`, `case '--wait': o.wait = true; return { i };`, and add `wait?: boolean` to `Parsed`). Resolve the manager from `globalThis`:
 
@@ -1352,6 +1353,75 @@ git add packages/webapp/src/shell/supplemental-commands/workflow-command.ts pack
 git commit -m "feat(workflow): non-blocking run via WorkflowRunManager + status/list/stop + --wait"
 ```
 
+- [ ] **Step 10: Raise the scoop concurrency cap (scoop-appropriate policy — folded in per review).**
+
+**Why:** SP1's cap is `resolveMaxCap() = min(16, max(1, cores − 2))`, defaulting to 4. That is **CPU-bound reasoning applied to I/O-bound work**: a scoop spawned by `agent()` spends ~all its wall-clock awaiting the LLM API, not burning local CPU, so cores barely bound how many can run concurrently. On a 2–3 core box (small cloud cone, the macOS CI runner) `cores − 2` collapses the cap to **1**, forcing every `parallel`/`pipeline` fan-out to run serially. New policy (decided in review): **~4 scoops/core, floored at 8, ceilinged at 16**, default fan-out **8**. The real bounds are provider rate limits + browser memory, which the ceiling of 16 protects; the floor of 8 stops small boxes from starving (and, incidentally, keeps `--concurrency ≤ 8` always honored).
+
+- [ ] **Step 10a: Write the failing cap test.** `resolveMaxCap` is currently a private function — **export it** so it's unit-testable. In `workflow-command.test.ts` (add `afterEach`/`vi` to the vitest import if not already present):
+
+```ts
+import { resolveMaxCap } from '../../../src/shell/supplemental-commands/workflow-command.js';
+
+describe('workflow concurrency cap (scoop-appropriate: 4/core, clamp [8,16])', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const capForCores = (cores: number): number => {
+    vi.stubGlobal('navigator', { hardwareConcurrency: cores });
+    return resolveMaxCap();
+  };
+  it('clamps cores*4 into [8,16]', () => {
+    expect(capForCores(1)).toBe(8); // 1*4=4 → floored to 8
+    expect(capForCores(2)).toBe(8); // 2*4=8
+    expect(capForCores(3)).toBe(12); // 3*4=12
+    expect(capForCores(4)).toBe(16); // 4*4=16
+    expect(capForCores(8)).toBe(16); // 8*4=32 → ceilinged to 16
+    expect(capForCores(64)).toBe(16);
+  });
+  it('falls back to 8 cores when navigator is absent → cap 16', () => {
+    vi.stubGlobal('navigator', undefined); // typeof navigator stays defined-but-undefined → ?? 8
+    expect(resolveMaxCap()).toBe(16); // 8*4=32 → 16
+  });
+});
+```
+
+Run: `npm test -w @slicc/webapp -- --run tests/shell/supplemental-commands/workflow-command.test.ts` → FAIL (`resolveMaxCap` not exported / old formula returns different values).
+
+- [ ] **Step 10b: Change the formula + default + export.** In `workflow-command.ts`:
+
+```ts
+export function resolveMaxCap(): number {
+  const cores =
+    (globalThis as { navigator?: { hardwareConcurrency?: number } }).navigator
+      ?.hardwareConcurrency ?? 8;
+  // Scoops are I/O-bound (LLM/network), not CPU-bound — so scale generously with cores
+  // (~4 scoops/core) and floor at 8 so small boxes (2-core cloud cones) still fan out;
+  // ceiling 16 protects provider rate limits + browser memory. (Was min(16, cores-2),
+  // which collapsed to 1 on 2-3 core machines.)
+  return Math.min(16, Math.max(8, cores * 4));
+}
+```
+
+And raise the default fan-out from 4 to 8 in `parse`:
+
+```ts
+const o: Parsed = { budget: null, cap: Math.min(8, maxCap) }; // default 8 (was 4), clamped to maxCap
+```
+
+(`applyToken`'s `--concurrency` clamp `Math.min(maxCap, Math.max(1, n))` is unchanged — it now clamps to the new, higher `maxCap`.)
+
+- [ ] **Step 10c: Run the cap test → PASS**, and re-run the full command + acceptance files to confirm no regression:
+
+Run: `npm test -w @slicc/webapp -- --run tests/shell/supplemental-commands/workflow-command.test.ts tests/shell/supplemental-commands/workflow-acceptance.test.ts` → PASS. (The acceptance test passes `--concurrency 4`, so its effective cap stays 4 regardless; with the floor of 8 its `navigator` stub from the main-unblock fix is now redundant — leave it, it's harmless, or drop it and update the comment.)
+
+- [ ] **Step 10d: Update docs.** In `docs/shell-reference.md` replace the three cap references (lines ~64, ~172, ~208: "default 4, capped at `min(16, cores-2)`") with the new policy: **"parallel agent limit — defaults to 8, clamped to `[1, min(16, max(8, cores×4))]`"**. (Agent-facing `docs/shell-reference.md` lives on main; the SP1 spec/plan are branch-only historical artifacts — optionally add a one-line "superseded by SP2" note at `docs/superpowers/specs/2026-06-08-workflow-executor-design.md:96`, not required.)
+
+- [ ] **Step 10e: Lint + commit.**
+
+```bash
+npm run lint
+git add packages/webapp/src/shell/supplemental-commands/workflow-command.ts packages/webapp/tests/shell/supplemental-commands/workflow-command.test.ts docs/shell-reference.md
+git commit -m "feat(workflow): scoop-appropriate concurrency cap (4/core, clamp [8,16], default 8)"
+```
+
 ---
 
 ## Task 8: Integration test — background fan-out, progress, file, lick
@@ -1500,6 +1570,7 @@ git commit -m "docs(workflow): SP2 background runs — non-blocking default, sta
 - **Spec coverage:** §2 non-blocking launch (Task 4/7), live progress (Task 3 emit + Task 5 tap), async result delivery (Task 6 file + Task 1 lick); §5 manager API (Task 4–6), `--wait` (Task 7), origin classification (Task 4 `classifyOrigin` + Task 7 parentJid), stop semantics (Task 7 `stop` → `kill -KILL`), per-run exec isolation (Task 5 — **accepted-with-documented-risk for SP2, not implemented**: real isolation deferred to SP6; see the Task 5 note); §6 every file has a task; §9 all test bullets mapped (manager unit Task 4–5, prelude Task 3, command Task 7, integration Task 8, automated dual-mode/offscreen-resolution Task 6 Step 5 + manual dual-float smoke Task 10 Step 6); §10 docs (Task 9). **SP1-file edits:** the prelude gets an additive-only progress emit (Task 3, no behavior change) and the SP1 `workflow-command.ts` is refactored (Task 7) to make `run` non-blocking by default (`--wait` preserves the SP1 blocking path) + add `status`/`list`/`stop` — this `run`-default change is the intended SP2 behavior shift, matching §2/§3.
 - **Exec isolation (codex re-review, accepted risk):** SP2 reuses the launching `ctx.exec`. The documented API (`agent`/`parallel`/`pipeline`/`phase`/`log`) cannot mutate shell `cwd`/`lastEnv`, but the undocumented internal `__execSpawn` is reachable from user code and CAN (e.g. `__execSpawn(['cd',…])`). This is **out of contract** for SP2 and pre-exists from SP1; real isolation (hide `__execSpawn` or per-run shell) is deferred to SP6. Documented in Task 5 + a `wrapCtx` comment; the guard test covers only the in-contract guarantee.
 - **Boy-scout gate (codex re-review):** `host.ts` is on biome's debt list (`biome.json:267`) and SP2 touches it (Tasks 1 + 6) → this PR MUST de-debt `host.ts` and remove its entry (Task 10 Step 3, concrete). No other touched file is listed.
+- **Concurrency cap (folded in per review — Task 7 Step 10):** SP1's `resolveMaxCap = min(16, cores−2)` (CPU-bound logic for I/O-bound scoops) collapses to 1 on 2–3 core machines, serializing all fan-out. Replaced with `min(16, max(8, cores×4))` (~4 scoops/core, floored 8, ceilinged 16) + default fan-out raised 4→8. `resolveMaxCap` is exported for unit testing; `docs/shell-reference.md` updated. This is a product behavior change (real workflows fan out wider), distinct from background-runs but folded into Task 7 since it edits the same file.
 - **Sentinel coupling (the one cross-task subtlety):** Task 6 Step 4 resolves it — the command builds ONE `sentinel`, passes it into both `buildWorkflowCode({sentinel})` (the realm code) and `mgr.start({sentinel})` (used by `splitResult`). Ensure Tasks 4/5 tests pass `sentinel` in `start(...)` and the `WorkflowStartOptions` type carries it (drop `sentinelFor` from deps).
 - **Type consistency:** `WorkflowRunState`/`WorkflowStartOptions`/`WorkflowRunManagerDeps`/`WORKFLOW_MANAGER_GLOBAL_KEY` are used identically across Tasks 4–7; `LickEvent` workflow fields (`workflowRunId`/`workflowName`/`resultPath`/`preview`) match between Task 1 (definition) and Task 6 (`deliver`) and Task 1's `formatLickEventForCone`/`defaultLickEventHandler` reads.
 - **Stop reality (spec §5):** `kill -KILL <pid>` ends the realm but in-flight `agent()` host-awaits are not cancelled — documented in Task 9; `stop` only guarantees no NEW agents start. Don't over-promise in the status output.
