@@ -133,13 +133,13 @@
         const TYPE = {
           cone: {
             vb: '70 330 440 570',
-            eyes: { top: 4, left: 25.5, width: 64, height: 44 },
+            eyes: { top: 0, left: 17, width: 70, height: 44 },
             zoom: 3.0, glyph: 96,
           },
           scoop: {
             vb: '0 0 580 470',
-            eyes: { top: 26, left: 24, width: 70, height: 45 },
-            zoom: 2.9, glyph: 96,
+            eyes: { top: 30, left: 15, width: 70, height: 45 },
+            zoom: 2.65, glyph: 96,
           },
         };
         const DEFAULT_COLOR = { cone: '#D2691E', scoop: '#FFB6C1' };
@@ -367,9 +367,11 @@
         const reRenderAll = () => {
           INSTANCES.forEach((el) => { el.render(); el._bindTracking(); });
         };
+        // `min` may be a number, or a per-type map (e.g. cone Eye Y allows
+        // negative values so the eyes can sit above the icon viewport).
         const KNOBS = [
           { key: 'left', label: 'Eye X', min: 0, max: 60, step: 0.5, unit: '%' },
-          { key: 'top', label: 'Eye Y', min: 0, max: 60, step: 0.5, unit: '%' },
+          { key: 'top', label: 'Eye Y', min: { cone: -40, scoop: 0 }, max: 60, step: 0.5, unit: '%' },
           { key: 'width', label: 'Eye W', min: 20, max: 100, step: 0.5, unit: '%' },
           { key: 'height', label: 'Eye H', min: 20, max: 80, step: 0.5, unit: '%' },
           { key: 'zoom', label: 'Zoom', min: 1, max: 5, step: 0.05, unit: '×' },
@@ -398,7 +400,8 @@
             out.className = 'knob-val';
             const input = document.createElement('input');
             input.type = 'range';
-            input.min = kn.min; input.max = kn.max; input.step = kn.step;
+            input.min = typeof kn.min === 'object' ? kn.min[t] : kn.min;
+            input.max = kn.max; input.step = kn.step;
             input.value = valOf(t, kn.key);
             out.textContent = input.value + kn.unit;
             input.addEventListener('input', () => {
