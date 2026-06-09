@@ -245,7 +245,12 @@ export class SliccInputCard extends HTMLElement {
     if (ta.value !== value) ta.value = value;
   }
 
-  #onInput = (): void => {
+  #onInput = (e: Event): void => {
+    // The textarea is a light-DOM child, so its native `input` bubbles through
+    // the host. Stop it here so external listeners receive only our re-emitted
+    // CustomEvent('input') (which carries detail.value) — not the bare native
+    // event with no detail.
+    e.stopPropagation();
     // Keep the reflected attribute in step without clobbering the caret: only
     // touch the attribute, never re-assign `.value` mid-edit.
     const v = this.#textarea.value;
