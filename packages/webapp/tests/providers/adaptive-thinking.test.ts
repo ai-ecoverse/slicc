@@ -9,18 +9,27 @@ import {
 
 describe('modelNeedsAdaptiveThinkingShim', () => {
   it.each([
+    // Models pi-ai already emits adaptive for — the rewrite is still safe (no-op
+    // unless thinking.type === 'enabled' is present in the payload).
+    ['claude-opus-4-6'],
+    ['claude-opus-4-7'],
+    ['us.anthropic.claude-sonnet-4-6'],
+    // Models pi-ai 0.75.3 misses — these actually need the rewrite.
     ['claude-opus-4-8'],
     ['us.anthropic.claude-opus-4-8'],
     ['claude opus 4 8'],
-  ])('returns true for opus-4-8 form %s (pi-ai 0.75.3 does not know it)', (id) => {
+    // Future releases (Opus 4.9, Sonnet 4.7) are picked up automatically by
+    // the version threshold.
+    ['claude-opus-4-9'],
+    ['claude-sonnet-4-7'],
+  ])('returns true for adaptive-capable %s', (id) => {
     expect(modelNeedsAdaptiveThinkingShim(id)).toBe(true);
   });
 
   it.each([
-    // pi-ai already emits adaptive for these — no shim needed.
-    ['claude-opus-4-6'],
-    ['claude-opus-4-7'],
-    ['us.anthropic.claude-sonnet-4-6'],
+    // Older Claude families that pre-date adaptive thinking.
+    ['claude-opus-4-5'],
+    ['claude-sonnet-4-5'],
     // unrelated models
     ['gpt-4o'],
   ])('returns false for %s', (id) => {
@@ -110,9 +119,29 @@ describe('withAdaptiveThinkingShim', () => {
     expect(out.output_config).toEqual({ effort: 'high' });
   });
 
-  it('returns the options unchanged for a model pi-ai already handles', () => {
+  it('returns the options unchanged for a model that pre-dates adaptive thinking', () => {
     const input = { reasoning: 'high', apiKey: 'tok' };
-    const out = withAdaptiveThinkingShim({ id: 'claude-opus-4-7' }, input);
+    const out = withAdaptiveThinkingShim({ id: 'claude-opus-4-5' }, input);
     expect(out).toBe(input);
+  });
+
+  it('returns the options unchanged for a non-Claude model', () => {
+    const input = { reasoning: 'high', apiKey: 'tok' };
+    const out = withAdaptiveThinkingShim({ id: 'gpt-4o' }, input);
+    expect(out).toBe(input);
+  });
+
+  it('attaches an onPayload that is a no-op for adaptive-already payloads (opus-4-7)', async () => {
+    const opts = withAdaptiveThinkingShim(
+      { id: 'claude-opus-4-7', name: 'Claude Opus 4.7' },
+      { reasoning: 'high', apiKey: 'tok' }
+    );
+    // Hook is attached even though pi-ai already emits adaptive for opus-4-7,
+    // but it only rewrites when thinking.type === 'enabled' is present.
+    expect(typeof opts.onPayload).toBe('function');
+    const adaptiveIn = { thinking: { type: 'adaptive', display: 'summarized' } };
+    const out = await opts.onPayload!(adaptiveIn, {} as never);
+    expect(out.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
+    expect(out).not.toHaveProperty('output_config');
   });
 });

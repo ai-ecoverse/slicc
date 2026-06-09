@@ -2,44 +2,41 @@
  * Adaptive-thinking shim for Bedrock-backed Claude models that the pinned pi-ai
  * does not yet recognize.
  *
- * Newer Claude models (Opus 4.7/4.8, Sonnet 4.6, …) use **adaptive** thinking:
- * the request must carry `thinking: { type: 'adaptive' }` + `output_config.effort`
+ * Claude Opus and Sonnet at version ≥ 4.6 use **adaptive** thinking: the
+ * request must carry `thinking: { type: 'adaptive' }` + `output_config.effort`
  * rather than the legacy `thinking: { type: 'enabled', budget_tokens }`. pi-ai's
- * `supportsAdaptiveThinking()` decides which shape to emit from a hardcoded model
- * list — and the pinned pi-ai (0.75.3) knows opus-4-6/4-7 + sonnet-4-6 but NOT
- * opus-4-8. For opus-4-8 it therefore emits the legacy shape, and Bedrock rejects
- * it: `400 "thinking.type.enabled is not supported for this model. Use
- * thinking.type.adaptive and output_config.effort..."` (surfaced via the Adobe
- * proxy as a 502).
+ * `supportsAdaptiveThinking()` decides which shape to emit from a hardcoded
+ * model list — and the pinned pi-ai (0.75.3) knows opus-4-6/4-7 + sonnet-4-6
+ * but NOT opus-4-8 (or any future Opus 4.9 / Sonnet 4.7 / 5.x). For those it
+ * emits the legacy shape, and Bedrock rejects it: `400 "thinking.type.enabled
+ * is not supported for this model. Use thinking.type.adaptive and
+ * output_config.effort..."` (surfaced via the Adobe proxy as a 502).
  *
  * pi-ai's `streamAnthropic` exposes an `onPayload(params, model)` hook (the same
  * one `bedrock-camp` uses). This module builds an `onPayload` that rewrites the
- * emitted body from the enabled shape into the adaptive shape for the models
- * pi-ai misses. Sibling of `temperature-support.ts` — both work around the same
- * gap (the pinned pi-ai predates opus-4-8). A pi-ai bump that learns these models
- * makes the rewrite a no-op (it only fires when the enabled shape is present).
+ * emitted body from the enabled shape into the adaptive shape for any Claude
+ * Opus / Sonnet ≥ 4.6. Sibling of `temperature-support.ts` — both delegate to
+ * the shared `claude-model-version` helper so new releases are handled
+ * automatically. The rewrite is a no-op when the enabled shape is not present
+ * (thinking off, or pi-ai already emitted the adaptive shape itself), so it is
+ * safe to fire for all of them.
  *
  * See `docs/pitfalls.md`.
  */
 
 import type { ThinkingLevel, ThinkingLevelMap } from '@earendil-works/pi-ai';
 
-/** Models pi-ai 0.75.3 omits from `supportsAdaptiveThinking()` but that need it. */
-const ADAPTIVE_THINKING_SHIM_MODELS = ['claude-opus-4-8', 'opus-4-8'] as const;
+import { claudeSupportsAdaptiveThinking } from './claude-model-version.js';
 
-/** lower-case + separator-normalized comparison candidates (mirrors temperature-support.ts). */
-function matchCandidates(modelId: string, modelName?: string): string[] {
-  const values = modelName ? [modelId, modelName] : [modelId];
-  return values.flatMap((value) => {
-    const lower = value.toLowerCase();
-    return [lower, lower.replace(/[\s_.:]+/g, '-')];
-  });
-}
-
-/** True when the model needs the adaptive-thinking payload rewrite. */
+/**
+ * True when the model needs the adaptive-thinking payload rewrite. Returns true
+ * for any Claude Opus / Sonnet ≥ 4.6; the rewrite itself is gated on the
+ * presence of `thinking.type === 'enabled'`, so models pi-ai already emits the
+ * adaptive shape for (opus-4-6/4-7, sonnet-4-6) are unaffected even though this
+ * returns true for them.
+ */
 export function modelNeedsAdaptiveThinkingShim(modelId: string, modelName?: string): boolean {
-  const candidates = matchCandidates(modelId, modelName);
-  return candidates.some((c) => ADAPTIVE_THINKING_SHIM_MODELS.some((needle) => c.includes(needle)));
+  return claudeSupportsAdaptiveThinking(modelId, modelName);
 }
 
 /**

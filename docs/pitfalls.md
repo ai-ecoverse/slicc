@@ -1029,7 +1029,11 @@ so the agent sees a bare **502 on `/api/fetch-proxy`** with no hint of the
 cause. **Fix both at the provider layer (a model capability), never at the
 call site** — and a pi-ai bump that learns opus-4-8 makes the shims no-ops.
 
-### 1. `temperature` is deprecated (Opus 4.7 / 4.8)
+Both shims now share a single version-threshold parser
+(`src/providers/claude-model-version.ts`) so future releases (Opus 4.9,
+Sonnet 4.7, 5.x) are picked up automatically without per-release edits.
+
+### 1. `temperature` is deprecated (Opus ≥ 4.7)
 
 Bedrock returns `400 "temperature is deprecated for this model."`. This
 bites the **thinking-disabled** helper calls: `ui/quick-llm.ts` sends
@@ -1040,41 +1044,48 @@ background helpers 502 (commonly a pile of 502s as a long conversation
 keeps refreshing its working-scope label). Message count is irrelevant:
 even a 24-token request fails.
 
-Fix: `src/providers/temperature-support.ts` owns the single reject-list
-(`modelSupportsTemperature` / `withSupportedTemperature`). Both Bedrock-backed
-providers consult it — `providers/built-in/bedrock-camp.ts` omits it in the
-Converse payload and `providers/adobe.ts` strips it before `streamAnthropic` /
-`streamSimpleAnthropic`. A new temperature-rejecting model is a one-line edit
-to `TEMPERATURE_UNSUPPORTED`.
+Fix: `src/providers/temperature-support.ts` exposes
+`modelSupportsTemperature` / `withSupportedTemperature`, both delegating to
+`claudeRejectsTemperature` (Opus ≥ 4.7) in `claude-model-version.ts`. Both
+Bedrock-backed providers consult it — `providers/built-in/bedrock-camp.ts`
+omits it in the Converse payload and `providers/adobe.ts` strips it before
+`streamAnthropic` / `streamSimpleAnthropic`. Future Opus releases are
+covered by the version threshold; no per-release edit is needed.
 
-### 2. Adaptive thinking required (Opus 4.8)
+### 2. Adaptive thinking required (Opus ≥ 4.8 in pi-ai 0.75.3)
 
 With thinking **enabled**, Bedrock returns `400 "thinking.type.enabled is
 not supported for this model. Use thinking.type.adaptive and
 output_config.effort..."`. pi-ai's `supportsAdaptiveThinking()` recognizes
 opus-4-6/4-7 + sonnet-4-6 (emitting `thinking:{type:"adaptive"}` +
-`output_config.effort`) but **not opus-4-8**, so it falls back to the legacy
-`thinking:{type:"enabled",budget_tokens}` shape that Bedrock rejects. Unlike
-temperature, this hits the **main cone stream** (thinking on).
+`output_config.effort`) but **not opus-4-8** — and would similarly miss
+opus-4-9 / sonnet-4-7 — so it falls back to the legacy
+`thinking:{type:"enabled",budget_tokens}` shape that Bedrock rejects.
+Unlike temperature, this hits the **main cone stream** (thinking on).
 
 Fix: `src/providers/adaptive-thinking.ts` — `providers/adobe.ts` passes an
 `onPayload` hook (pi-ai's `streamAnthropic` payload-rewrite seam, the same
 one `bedrock-camp` uses) that rewrites the emitted body
-`enabled → adaptive` + `output_config.effort` for the models in
-`ADAPTIVE_THINKING_SHIM_MODELS`. The rewrite only fires when the enabled
-shape is actually present, so it's a no-op when thinking is off or once
-pi-ai learns the model. **Immediate workaround:** set the thinking level to
-off (the model still reasons adaptively on its own).
+`enabled → adaptive` + `output_config.effort` for any Claude Opus/Sonnet
+≥ 4.6 (via `claudeSupportsAdaptiveThinking`). The rewrite only fires when
+the enabled shape is actually present, so it's a no-op when thinking is
+off or for models pi-ai already emits the adaptive shape for. **Immediate
+workaround:** set the thinking level to off (the model still reasons
+adaptively on its own).
 
 **Related**
 
-- Coverage: `tests/providers/temperature-support.test.ts`,
+- Coverage: `tests/providers/claude-model-version.test.ts`,
+  `tests/providers/temperature-support.test.ts`,
   `tests/providers/adaptive-thinking.test.ts`, and the "omits temperature
-  for Opus 4.8" case in `tests/providers/built-in/bedrock-camp.test.ts`.
+  for Opus 4.8" + parametrized adaptive cases in
+  `tests/providers/built-in/bedrock-camp.test.ts`.
 - History: the temperature guard was Opus-4.7-only and inline in
   `bedrock-camp.ts`; it was generalized into the shared helper, extended to
   4.8, and applied to the (previously unguarded) Adobe path. The
-  adaptive-thinking shim was added alongside it.
+  adaptive-thinking shim was added alongside it. Both were then consolidated
+  onto a shared version-threshold parser so opus-4-9 / sonnet-4-7 are
+  handled automatically.
 
 ## Detached popout: boot is the lock event
 

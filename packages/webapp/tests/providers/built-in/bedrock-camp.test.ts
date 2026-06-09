@@ -179,8 +179,10 @@ describe('bedrock-camp built-in provider', () => {
     ['us.anthropic.claude-opus-4-6', 'max'],
     ['us.anthropic.claude-opus-4-7', 'xhigh'],
     ['global.anthropic.claude-opus-4-7', 'xhigh'],
+    ['us.anthropic.claude-opus-4-8', 'xhigh'],
+    ['us.anthropic.claude-opus-4-9', 'xhigh'],
     ['us.anthropic.claude-sonnet-4-6', 'high'],
-  ])('uses adaptive thinking for Claude 4.6 / Opus 4.7 (%s -> effort=%s)', async (modelId, expectedEffort) => {
+  ])('uses adaptive thinking for Opus/Sonnet ≥ 4.6 (%s -> effort=%s)', async (modelId, expectedEffort) => {
     const payload = await capturePayload(baseModel({ id: modelId, name: modelId }), {
       reasoning: 'xhigh',
     });

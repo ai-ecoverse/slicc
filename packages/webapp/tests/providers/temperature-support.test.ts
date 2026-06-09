@@ -12,6 +12,10 @@ describe('modelSupportsTemperature', () => {
     ['global.anthropic.claude-opus-4-8'],
     ['claude-opus-4-7'],
     ['us.anthropic.claude-opus-4-7'],
+    // Future Opus releases (4.9, 5.x) inherit the reject behavior via the
+    // shared version threshold.
+    ['claude-opus-4-9'],
+    ['us.anthropic.claude-opus-4-9'],
   ])('returns false for temperature-rejecting model id %s', (id) => {
     expect(modelSupportsTemperature(id)).toBe(false);
   });

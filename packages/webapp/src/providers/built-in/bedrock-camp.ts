@@ -39,6 +39,11 @@ import {
   clampReasoning,
 } from '@earendil-works/pi-ai/dist/providers/simple-options.js';
 import { transformMessages } from '@earendil-works/pi-ai/dist/providers/transform-messages.js';
+import {
+  claudeSupportsAdaptiveThinking,
+  claudeSupportsMaxEffort,
+  claudeSupportsNativeXhighEffort,
+} from '../claude-model-version.js';
 import { modelSupportsTemperature } from '../temperature-support.js';
 import type { ProviderConfig } from '../types.js';
 
@@ -185,11 +190,6 @@ function getModelMatchCandidates(modelId: string, modelName?: string): string[] 
     const lower = value.toLowerCase();
     return [lower, lower.replace(/[\s_.:]+/g, '-')];
   });
-}
-
-function matchesAny(modelId: string, modelName: string | undefined, needles: string[]): boolean {
-  const candidates = getModelMatchCandidates(modelId, modelName);
-  return candidates.some((s) => needles.some((n) => s.includes(n)));
 }
 
 // ── Message conversion ──────────────────────────────────────────────
@@ -350,22 +350,24 @@ function supportsThinkingSignature(model: Model<Api>): boolean {
   return isAnthropicClaudeModel(model);
 }
 
-// Adaptive thinking is currently supported by Claude Opus 4.6, Opus 4.7,
-// and Sonnet 4.6 only. Other Claude 4.x models stay on legacy
-// `thinking.type=enabled` with a token budget. This list is kept in lockstep
-// with pi-ai's amazon-bedrock provider.
+// Adaptive thinking is the `thinking:{type:"adaptive"}` + `output_config.effort`
+// shape Claude Opus and Sonnet ship at version ≥ 4.6. Older Claude 4.x models
+// stay on legacy `thinking.type=enabled` with a token budget. Delegates to the
+// shared `claude-model-version` helper so new releases (Opus 4.9, Sonnet 4.7,
+// future 5.x) work automatically.
 function supportsAdaptiveThinking(modelId: string, modelName?: string): boolean {
-  return matchesAny(modelId, modelName, ['opus-4-6', 'opus-4-7', 'sonnet-4-6']);
+  return claudeSupportsAdaptiveThinking(modelId, modelName);
 }
 
-// Opus 4.7 introduced a native `effort: "xhigh"` tier above `high`. Older
-// Opus 4.6 clamps xhigh to `"max"`. Anything else clamps to `"high"`.
+// Opus introduced a native `effort: "xhigh"` tier above `high` at 4.7 (and
+// later releases inherit it). Opus 4.6 clamps xhigh to `"max"`. Anything else
+// clamps to `"high"`.
 function supportsNativeXhighEffort(modelId: string, modelName?: string): boolean {
-  return matchesAny(modelId, modelName, ['opus-4-7']);
+  return claudeSupportsNativeXhighEffort(modelId, modelName);
 }
 
 function supportsMaxEffort(modelId: string, modelName?: string): boolean {
-  return matchesAny(modelId, modelName, ['opus-4-6']);
+  return claudeSupportsMaxEffort(modelId, modelName);
 }
 
 // ── Tool config ─────────────────────────────────────────────────────
