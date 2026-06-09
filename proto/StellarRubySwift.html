@@ -1,5 +1,5 @@
-<!DOCTYPE html><html lang="en"><head><style>body {transition: opacity ease-in 0.2s; } 
-body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relative; } 
+<!DOCTYPE html><html lang="en"><head><style>body {transition: opacity ease-in 0.2s; }
+body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relative; }
 </style>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SLICC — interactive walkthrough (press → to advance)</title>
@@ -78,6 +78,23 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   .scoop.active{background:var(--h);color:#fff;border-color:var(--h);}
   .scoop .eyes{display:inline-flex;gap:3px;} .eye{width:9px;height:9px;border-radius:50%;background:#fff;border:1.3px solid #000;position:relative;display:inline-block;}
   .scoop.active .eye{border-color:#fff;}
+  /* slicc-pill renders its own pill in shadow DOM — strip the legacy .scoop chrome on the host */
+  slicc-pill.scoop{display:inline-block;padding:0;border:none;background:transparent;border-radius:9999px;--pill-w:auto;line-height:1;}
+  slicc-pill.scoop::before{content:none;}
+  slicc-pill.scoop.ephemeral::part(pill){border-style:dashed;}
+  slicc-pill.scoop.lit::part(pill){box-shadow:0 0 0 3px color-mix(in srgb,var(--h) 45%,transparent);}
+  /* slicc-add-menu replaces the legacy "+" iconbtn — fills the toolbar so its
+     searchbox can slide in next to the +/× and results grow the composer upward in-flow */
+  .toolbar slicc-add-menu{flex:1;min-width:0;}
+  /* in dark mode the composer uses backdrop-blur over the textured shader/sprinkles,
+     so the closed +'s bare SVG stroke reads as low-contrast against the varying glass.
+     Give the closed trigger a definite dark surface (matching .iconbtn) via
+     ::part(trigger) so the + anchors as a visible button regardless of what's blurred
+     behind. !important inverts the shadow-tree cascade so the outer rule wins over the
+     inlined .trigger{background:transparent}. Leaves light mode and the open/× state
+     (handled inside the shadow by .trigger[aria-expanded="true"]) untouched. */
+  body.dark .composer slicc-add-menu:not([data-open])::part(trigger){background:var(--canvas) !important;box-shadow:inset 0 0 0 1px var(--line) !important;color:var(--ink) !important;}
+  body.dark .composer slicc-add-menu:not([data-open])::part(trigger):hover{background:var(--ghost) !important;color:var(--ink) !important;}
   .eye::after{content:"";position:absolute;width:42%;height:42%;border-radius:50%;background:#000;left:50%;top:55%;transform:translate(calc(-50% + var(--px,0px)),calc(-50% + var(--py,0px)));}
   .scoop.active .eye::after{background:#fff;}
   .nav .spacer{flex:1;} .me{width:30px;height:30px;border-radius:9999px;background:var(--rainbow);color:#fff;font-size:11px;font-weight:600;display:grid;place-items:center;}
@@ -96,7 +113,8 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   .dock{flex:0 0 48px;display:flex;flex-direction:column;align-items:center;gap:8px;background:color-mix(in srgb,var(--ctx) 12%,var(--bg));border-left:1px solid var(--line);padding:10px 0;position:relative;z-index:2;}
   .dock .di{position:relative;width:34px;height:34px;border-radius:9px;border:1px solid transparent;background:transparent;color:var(--txt-2);cursor:pointer;display:grid;place-items:center;font-size:14px;font-family:var(--ui);}
   .dock .di:hover{background:var(--ghost);color:var(--ink);}
-  .dock .di.on{background:var(--ink);color:#fff;}
+  /* active sprinkle: subtle outer glow in the active context accent — no blinding solid fill in dark mode */
+  .dock .di.on{background:color-mix(in srgb,var(--ctx) 14%,transparent);color:var(--ink);border-color:color-mix(in srgb,var(--ctx) 35%,transparent);box-shadow:0 0 0 1px color-mix(in srgb,var(--ctx) 45%,transparent),0 0 12px 2px color-mix(in srgb,var(--ctx) 38%,transparent);}
   .dock .di.sp{font-family:var(--ui);} .dock .di.sp::after{content:"";position:absolute;right:5px;top:6px;width:5px;height:5px;border-radius:50%;background:var(--h,var(--violet));}
   .dock .di[data-t=hero]{--h:var(--violet);} .dock .di[data-t=palette]{--h:var(--amber);}
   .dock .div{width:22px;height:1px;background:var(--line);margin:2px 0;}
@@ -115,9 +133,12 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   .dip .db2{display:flex;gap:6px;padding:13px;} .dip .db2 .sw{width:30px;height:30px;border-radius:8px;border:1px solid var(--line);}
 
   /* ---- chat (condensed) ---- */
-  /* feather the frosted reading column: intersect a horizontal + vertical linear-gradient mask so both the translucent fill and the blur taper to transparent on all 4 edges */
-  .thread{flex:1;overflow-y:auto;} .inner{max-width:680px;margin:0 auto;padding:8px 24px 20px;background:color-mix(in srgb,var(--shaderbg) 72%,transparent);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);border-radius:14px;-webkit-mask-image:linear-gradient(to right,transparent 0,#000 72px,#000 calc(100% - 72px),transparent 100%),linear-gradient(to bottom,transparent 0,#000 56px,#000 calc(100% - 56px),transparent 100%);-webkit-mask-composite:source-in;mask-image:linear-gradient(to right,transparent 0,#000 72px,#000 calc(100% - 72px),transparent 100%),linear-gradient(to bottom,transparent 0,#000 56px,#000 calc(100% - 56px),transparent 100%);mask-composite:intersect;}
-  .shell.open .inner{padding:0 18px 16px;}
+  /* feather the frosted reading column outward: padding (72px sides / 56px top+bottom) ≥ mask feather, so the
+     gradient lives entirely in the padding gutter and never eats into the readable text. Tinted with --ctx so
+     the panel sits on its own per-context shader (cone amber / scoop hue / freezer ice) in both themes. */
+  .thread{flex:1;overflow-y:auto;} .inner{max-width:776px;margin:0 auto;padding:56px 72px;background:color-mix(in srgb,var(--ctx) 14%,color-mix(in srgb,var(--shaderbg) 80%,transparent));backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);border-radius:14px;-webkit-mask-image:linear-gradient(to right,transparent 0,#000 72px,#000 calc(100% - 72px),transparent 100%),linear-gradient(to bottom,transparent 0,#000 56px,#000 calc(100% - 56px),transparent 100%);-webkit-mask-composite:source-in;mask-image:linear-gradient(to right,transparent 0,#000 72px,#000 calc(100% - 72px),transparent 100%),linear-gradient(to bottom,transparent 0,#000 56px,#000 calc(100% - 56px),transparent 100%);mask-composite:intersect;}
+  /* shell-open: chat column is narrower, so use a tighter feather (32px / 24px) with matching padding */
+  .shell.open .inner{padding:24px 32px;-webkit-mask-image:linear-gradient(to right,transparent 0,#000 32px,#000 calc(100% - 32px),transparent 100%),linear-gradient(to bottom,transparent 0,#000 24px,#000 calc(100% - 24px),transparent 100%);mask-image:linear-gradient(to right,transparent 0,#000 32px,#000 calc(100% - 32px),transparent 100%),linear-gradient(to bottom,transparent 0,#000 24px,#000 calc(100% - 24px),transparent 100%);}
   .daylabel{display:flex;align-items:center;gap:12px;margin:18px 0 16px;font-family:var(--ui);font-size:11px;color:var(--txt-3);text-transform:uppercase;letter-spacing:.08em;}
   .daylabel::before,.daylabel::after{content:"";flex:1;height:1px;background:var(--line);}
   .msg{margin-bottom:18px;font-size:15px;line-height:1.5;} .msg.user{display:flex;justify-content:flex-end;}
@@ -376,6 +397,18 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   .freezer.open .fzcard.match-hidden{display:none;}
   .freezer .fzcard.thawed{background:color-mix(in srgb,var(--rose) 12%,transparent);}
   .freezer .fzcard.thawed .snow{border-color:color-mix(in srgb,var(--rose) 45%,var(--line));background:color-mix(in srgb,var(--rose) 14%,var(--canvas));color:#b91c4d;}
+  /* fzToggle: distinct panel-toggle SVG (not the snowflake the cards use). Mirrors when expanded. */
+  .freezer .fztgl svg{display:block;transition:transform .25s cubic-bezier(.4,0,.2,1);}
+  .freezer .fztgl[aria-expanded="true"] svg{transform:scaleX(-1);}
+  /* "new chat" affordance at the top of the rail — works collapsed (icon only) + expanded (icon + label) */
+  .freezer .fznew{display:flex;align-items:center;gap:10px;min-height:36px;padding:4px 8px;margin-bottom:4px;border-radius:8px;cursor:pointer;flex:0 0 auto;background:transparent;border:none;color:var(--ink);font:inherit;text-align:left;width:100%;transition:background-color .15s;}
+  .freezer:not(.open) .fznew{gap:0;justify-content:center;padding:4px 0;width:auto;align-self:center;}
+  .freezer .fznew:hover{background:var(--ghost);}
+  .freezer .fznew .nico{width:28px;height:28px;display:grid;place-items:center;border-radius:50%;background:color-mix(in srgb,var(--ctx) 14%,var(--canvas));border:1px solid color-mix(in srgb,var(--ctx) 40%,var(--line));color:var(--ctx);flex:0 0 auto;}
+  .freezer .fznew .nico svg{display:block;}
+  .freezer .fznew .nlbl{flex:1;min-width:0;font-size:12.5px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0;transition:opacity .18s;}
+  .freezer:not(.open) .fznew .nlbl{width:0;min-width:0;flex:0 0 0;overflow:hidden;}
+  .freezer.open .fznew .nlbl{opacity:1;transition:opacity .25s .15s;}
 </style>
 </head>
 <body>
@@ -384,10 +417,11 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   <!-- ===== freezer sidebar: past frozen sessions (collapsed by default) ===== -->
   <aside class="freezer" id="freezer" aria-label="Past sessions (freezer)">
     <div class="fzh">
-      <button class="fztgl" id="fzToggle" title="Expand freezer" aria-expanded="false">❄</button>
+      <button class="fztgl" id="fzToggle" title="Expand freezer" aria-expanded="false" aria-label="Toggle freezer"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/><line x1="6" y1="3.5" x2="6" y2="12.5"/><polyline points="9,6.5 10.5,8 9,9.5"/></svg></button>
       <input class="fzsearch" id="fzSearch" type="text" placeholder="search past sessions" aria-label="Search past sessions">
     </div>
     <div class="fzrail" id="fzRail">
+      <button class="fznew" id="fzNew" title="New chat" aria-label="New chat"><span class="nico"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11.5 2.5l2 2L6 12l-3 1 1-3z"/><line x1="9.5" y1="4.5" x2="11.5" y2="6.5"/></svg></span><span class="nlbl">New chat</span></button>
       <div class="fzcard" data-s="warm-hero" title="warm hero redesign — 2h ago"><span class="snow">❄</span><div class="ftext"><div class="fzt">warm hero redesign</div><div class="fzm">2h ago · 18 turns · PR #128</div></div></div>
       <div class="fzcard" data-s="checkout-audit" title="checkout funnel audit — yesterday"><span class="snow">❄</span><div class="ftext"><div class="fzt">checkout funnel audit</div><div class="fzm">yesterday · 11 turns · 4 scoops</div></div></div>
       <div class="fzcard" data-s="dark-mode" title="dark-mode polish — 3d ago"><span class="snow">❄</span><div class="ftext"><div class="fzt">dark-mode polish</div><div class="fzm">3d ago · 7 turns · PR #119</div></div></div>
@@ -404,11 +438,11 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
     <div class="nav">
       <span class="logo">sliccy</span>
       <div class="switcher" id="switcher">
-        <button class="scoop active" data-k="cone"><span class="eyes"><span class="eye" style="--px: 1.59px; --py: 2.55px;"></span><span class="eye" style="--px: 1.53px; --py: 2.58px;"></span></span> sliccy · cone</button>
-        <button class="scoop" data-k="researcher" style=""><span class="eyes"><span class="eye" style="--px: 0.75px; --py: 2.90px;"></span><span class="eye" style="--px: 0.67px; --py: 2.92px;"></span></span> researcher</button>
-        <button class="scoop" data-k="designer" style="--c: #8b5cf6;"><span class="eyes"><span class="eye" style="--px: -0.25px; --py: 2.99px;"></span><span class="eye" style="--px: -0.33px; --py: 2.98px;"></span></span> designer</button>
-        <button class="scoop" data-k="tester" style=""><span class="eyes"><span class="eye" style="--px: -1.10px; --py: 2.79px;"></span><span class="eye" style="--px: -1.17px; --py: 2.76px;"></span></span> tester</button>
-      <button class="scoop ephemeral" data-k="triage" style="--h: #10b981;"><span class="eyes"><span class="eye" style="--px: -1.66px; --py: 2.50px;"></span><span class="eye" style="--px: -1.71px; --py: 2.47px;"></span></span> triage</button></div>
+        <slicc-pill class="scoop active" data-k="cone" type="cone" color="#f43f5e" active>sliccy · cone</slicc-pill>
+        <slicc-pill class="scoop" data-k="researcher" type="scoop" color="#06b6d4">researcher</slicc-pill>
+        <slicc-pill class="scoop" data-k="designer" type="scoop" color="#8b5cf6">designer</slicc-pill>
+        <slicc-pill class="scoop" data-k="tester" type="scoop" color="#f59e0b">tester</slicc-pill>
+      <slicc-pill class="scoop ephemeral" data-k="triage" type="scoop" color="#10b981" style="--h: #10b981;">triage</slicc-pill></div>
       <div class="switcher-more" id="switcherMore"><button class="morebtn" id="moreBtn" title="More scoops" aria-haspopup="true" aria-expanded="false">⋯</button><div class="pop" id="morePop"></div></div>
       <div class="spacer"></div>
       <div class="floatbar linked" id="floatbar" title="Runtime float"><span class="fdot"></span> <span id="floattext">CLI · tray · 1 follower</span></div>
@@ -442,8 +476,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
           <div class="inputcard">
             <textarea class="ta" id="ta" rows="1" placeholder="Ask sliccy, or describe a change…"></textarea>
             <div class="toolbar">
-              <button class="iconbtn" title="Attach">＋</button>
-              <div class="spacer"></div>
+              <slicc-add-menu></slicc-add-menu>
               <button class="send" title="Send">↑</button>
             </div>
           </div>
@@ -556,6 +589,269 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   </div>
 
   <script>addEventListener('mousemove',e=>{document.querySelectorAll('.eye').forEach(eye=>{const r=eye.getBoundingClientRect();const ex=r.left+r.width/2,ey=r.top+r.height/2;const a=Math.atan2(e.clientY-ey,e.clientX-ex);const d=Math.min(3,Math.hypot(e.clientX-ex,e.clientY-ey)/45);eye.style.setProperty('--px',(Math.cos(a)*d).toFixed(2)+'px');eye.style.setProperty('--py',(Math.sin(a)*d).toFixed(2)+'px');});});</script>
+  <!-- ===== inlined web components: <slicc-pill>, <slicc-add-menu> ===== -->
+  <!-- Copied verbatim from proto/slicc-pill.html and proto/slicc-add-menu.html
+       (component-definition portions only — demo/tuning UI omitted). The add-menu's
+       native in-flow behavior is preserved: opening it grows the composer upward
+       (results stack above the row, searchbox slides in next to the +/× icon). -->
+  <script>
+  (() => {
+    // ---------- <slicc-pill> ----------
+    const PUPIL_R = 18, MAX_OFFSET = 16;
+    const FILL_FLAT = 50, FILL_FULL = 85, PUPIL_MAX = 2.2;
+    function fillToPupil(fill){if(fill<=FILL_FLAT)return 1;if(fill>=FILL_FULL)return PUPIL_MAX;return 1+((fill-FILL_FLAT)/(FILL_FULL-FILL_FLAT))*(PUPIL_MAX-1);}
+    const LEFT_EYE={cx:55,cy:50,r:38}, RIGHT_EYE={cx:145,cy:50,r:38};
+    const TYPE = {
+      cone:  {vb:'70 330 440 570', eyes:{top:-18.5,left:17,width:70,height:44}, zoom:3.0,  glyph:96},
+      scoop: {vb:'0 0 580 470',     eyes:{top:30,   left:15,width:70,height:45}, zoom:2.65, glyph:96},
+    };
+    const DEFAULT_COLOR = {cone:'#D2691E', scoop:'#FFB6C1'};
+    function hexToRgb(h){h=h.replace('#','');if(h.length===3)h=h.split('').map(c=>c+c).join('');const n=parseInt(h,16);return{r:(n>>16)&255,g:(n>>8)&255,b:n&255};}
+    function toHex(r,g,b){return '#'+[r,g,b].map(v=>Math.max(0,Math.min(255,Math.round(v))).toString(16).padStart(2,'0')).join('');}
+    function shade(hex,amt){const {r,g,b}=hexToRgb(hex);const t=amt<0?0:255,p=Math.abs(amt);return toHex(r+(t-r)*p,g+(t-g)*p,b+(t-b)*p);}
+    function coneInner(base,outline,waffle){return (
+      `<path d="M108.22,414.88l189.84,460.03c1.36,3.3,6.09,3.16,7.25-.22l159.34-463.34c.87-2.53-1.03-5.16-3.7-5.13l-349.18,3.32c-2.74.03-4.59,2.82-3.55,5.35Z" fill="${base}" stroke="${outline}" stroke-linejoin="round" stroke-width="20"/>`+
+      `<path d="M261.93,482.48h0c15.03-15.03,4.46-40.72-16.79-40.83h0c-21.37-.11-32.14,25.72-17.03,40.83h0c9.34,9.34,24.48,9.34,33.82,0Z" fill="${waffle}"/>`+
+      `<path d="M384.85,527.49l-51.82,51.82c-2.24,2.24-2.24,5.86,0,8.1l55.71,55.71c2.24,2.24,5.86,2.24,8.1,0h0c.62-.62,1.08-1.36,1.37-2.19l26.52-77.11c.71-2.07.18-4.36-1.37-5.91l-30.41-30.41c-2.24-2.24-5.86-2.24-8.1,0Z" fill="${waffle}"/>`+
+      `<rect x="274.59" y="463.59" width="84.73" height="95.66" rx="42.36" ry="42.36" transform="translate(-268.79 373.91) rotate(-45)" fill="${waffle}"/>`+
+      `<rect x="291.06" y="603.84" width="72.24" height="90.24" rx="36.12" ry="36.12" transform="translate(-363.06 421.43) rotate(-45)" fill="${waffle}"/>`+
+      `<path d="M371.7,684.58l-25.94,25.94c-2.24,2.24-2.24,5.86,0,8.1l12.67,12.67c2.99,2.99,8.09,1.82,9.46-2.19l13.28-38.61c1.97-5.74-5.17-10.2-9.46-5.91Z" fill="${waffle}"/>`+
+      `<path d="M159.42,564.14l2.73,6.83c1.52,3.82,6.46,4.83,9.37,1.93l2.05-2.05c2.24-2.24,2.24-5.86,0-8.1l-4.78-4.78c-4.4-4.4-11.67.39-9.37,6.17Z" fill="${waffle}"/>`+
+      `<path d="M243.92,633.11l-48.65-48.65c-5.24-5.24-13.74-5.24-18.99,0h0c-3.8,3.8-4.97,9.49-2.98,14.47l27.77,69.54c3.58,8.95,15.14,11.33,21.96,4.51l20.89-20.89c5.24-5.24,5.24-13.74,0-18.99Z" fill="${waffle}"/>`+
+      `<path d="M211.32,533.1h0c14.11-14.11,14.11-36.98,0-51.08l-34.94-34.94c-.72-.72-.72-1.89,0-2.62h0c1.16-1.16.34-3.15-1.3-3.16l-11.23-.06c-25.62-.13-43.23,25.72-33.73,49.51l5.37,13.45c1.82,4.55,4.54,8.68,8,12.15l16.74,16.74c14.11,14.11,36.98,14.11,51.08,0Z" fill="${waffle}"/>`+
+      `<path d="M263.74,792.53h0c-5.69,5.69-7.45,14.23-4.46,21.71l22.5,56.36c6.92,17.34,31.68,16.74,37.75-.92l8.66-25.2c2.5-7.28.64-15.35-4.8-20.79l-31.17-31.17c-7.87-7.87-20.62-7.87-28.48,0Z" fill="${waffle}"/>`+
+      `<path d="M392.94,503.07l40.81-40.81c2.24-2.24,5.86-2.24,8.1,0l.06.06c2.24,2.24,2.24,5.86,0,8.1l-40.81,40.81c-2.24,2.24-2.24,5.86,0,8.1l22.48,22.48c2.99,2.99,8.09,1.82,9.46-2.19l30.71-89.32c1.27-3.71-1.47-7.57-5.39-7.59l-120.63-.6c-5.11-.03-7.69,6.16-4.08,9.77l51.18,51.18c2.24,2.24,5.86,2.24,8.1,0Z" fill="${waffle}"/>`+
+      `<rect x="217.18" y="527.25" width="72.24" height="95.66" rx="36.12" ry="36.12" transform="translate(-332.45 347.55) rotate(-45)" fill="${waffle}"/>`+
+      `<path d="M350.28,739.46h0c-9.24-9.24-24.22-9.24-33.46,0l-13.94,13.94c-9.24,9.24-9.24,24.22,0,33.46l6.81,6.81c12.37,12.37,33.42,7.5,39.1-9.04l7.13-20.75c2.94-8.55.75-18.03-5.64-24.42Z" fill="${waffle}"/>`+
+      `<path d="M234.18,749.12l13.2,33.06c1.52,3.82,6.46,4.83,9.37,1.93l9.93-9.93c2.24-2.24,2.24-5.86,0-8.1l-23.13-23.13c-4.4-4.4-11.67.39-9.37,6.17Z" fill="${waffle}"/>`+
+      `<rect x="236.26" y="661.25" width="67.04" height="90.24" rx="33.52" ry="33.52" transform="translate(-420.46 397.65) rotate(-45)" fill="${waffle}"/>`+
+      `<ellipse cx="288.37" cy="404.38" rx="182.34" ry="67.01" fill="${base}" stroke="${outline}" stroke-miterlimit="10" stroke-width="20"/>`
+    );}
+    function scoopInner(fill,outline){return `<path d="M566.75,340.67c0-29.85-12.97-56.87-33.96-76.47,4.8-9.98,7.44-20.71,7.44-31.9,0-38.29-30.62-71.33-74.92-86.77.33-3.07.51-6.17.51-9.3,0-69.72-84.29-126.24-188.26-126.24s-188.26,56.52-188.26,126.24c0,4,.29,7.95.83,11.86-34.94,15.4-58.48,44.25-58.48,77.34,0,18.21,7.15,35.15,19.39,49.26-25.1,19.88-41.05,49.47-41.05,82.54,0,59.85,52.15,108.37,116.49,108.37,10.83,0,21.3-1.4,31.26-3.98,31.42,41.91,83.55,69.34,142.55,69.34,64.73,0,121.2-33,151.11-81.94,63.8-.57,115.34-48.85,115.34-108.34Z" fill="${fill}" stroke="${outline}" stroke-width="20"/>`;}
+    function eyeOpen(cx,cy,r,side,pr){return (
+      `<circle cx="${cx}" cy="${cy}" r="${r}" fill="#fff" stroke="#000" stroke-width="4"/>`+
+      `<g class="pupil pupil-${side}">`+
+      `<circle cx="${cx}" cy="${cy}" r="${pr}" fill="#000"/>`+
+      `<circle cx="${cx-pr*0.3}" cy="${cy-pr*0.35}" r="${pr*0.4}" fill="#fff"/>`+
+      `</g>`
+    );}
+    function eyeDead(cx,cy,r){return (
+      `<circle cx="${cx}" cy="${cy}" r="${r}" fill="#fff" stroke="#000" stroke-width="4"/>`+
+      `<line x1="${cx-15}" y1="${cy-15}" x2="${cx+15}" y2="${cy+15}" stroke="#000" stroke-width="8" stroke-linecap="round"/>`+
+      `<line x1="${cx+15}" y1="${cy-15}" x2="${cx-15}" y2="${cy+15}" stroke="#000" stroke-width="8" stroke-linecap="round"/>`
+    );}
+    function eyesSvg(state,pr){if(state==='none')return '';const L=LEFT_EYE,R=RIGHT_EYE;const body=state==='dead'?eyeDead(L.cx,L.cy,L.r)+eyeDead(R.cx,R.cy,R.r):eyeOpen(L.cx,L.cy,L.r,'l',pr)+eyeOpen(R.cx,R.cy,R.r,'r',pr);return `<svg class="eyes-svg" viewBox="0 0 200 100" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">${body}</svg>`;}
+    function place(g,cx,cy,mx,my,maxOff){const dx=mx-cx,dy=my-cy;const d=Math.hypot(dx,dy),c=Math.min(d,maxOff);const tx=d>0?(dx/d)*c:0,ty=d>0?(dy/d)*c:0;g.setAttribute('transform',`translate(${tx},${ty})`);}
+    function escHtml(s){return s.replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[m]);}
+    const PILL_STYLE = `
+      :host{display:inline-block;--pill-w:190px;--label:#eef1f6;--icon-tint:color-mix(in oklab,var(--accent) 22%,transparent);}
+      @media (prefers-color-scheme: light){:host(:not([theme="dark"])){--label:#1b2030;--icon-tint:color-mix(in oklab,var(--accent) 30%,#fff);}}
+      :host([theme="light"]){--label:#1b2030;--icon-tint:color-mix(in oklab,var(--accent) 30%,#fff);}
+      :host([theme="dark"]){--label:#eef1f6;--icon-tint:color-mix(in oklab,var(--accent) 22%,transparent);}
+      *{box-sizing:border-box;}
+      .pill{position:relative;display:inline-flex;align-items:center;gap:8px;width:var(--pill-w);font:500 13px ui-sans-serif,system-ui,-apple-system,sans-serif;color:var(--accent);background:transparent;border:1.5px solid var(--accent);border-radius:9999px;padding:0 14px 0 0;cursor:pointer;line-height:1;overflow:hidden;transition:background .2s ease,color .2s ease;}
+      .pill.active{background:var(--accent);} .pill.active .label{color:#fff;}
+      .pill:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+      .icon{position:relative;z-index:0;width:30px;height:30px;flex:0 0 auto;background:var(--icon-tint);}
+      .icon-inner{position:absolute;inset:0;transform-origin:0 0;transform:translate(var(--tx),var(--ty)) scale(var(--zoom));transition:transform .4s cubic-bezier(.34,1.4,.5,1);}
+      .pill:hover .icon-inner,.pill:focus-visible .icon-inner{transform:translate(var(--ox,0%),var(--oy,0%)) scale(var(--ozoom,1));}
+      .glyph{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:var(--g);height:var(--g);display:block;overflow:visible;}
+      .eyes{position:absolute;pointer-events:none;} .eyes-svg{display:block;overflow:visible;}
+      .label{position:relative;z-index:1;flex:1 1 auto;min-width:0;color:var(--label);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    `;
+    class SliccPill extends HTMLElement {
+      static get observedAttributes(){return ['type','color','eyes','active','label','pupil','fill'];}
+      connectedCallback(){this.render();this._bindTracking();}
+      disconnectedCallback(){if(this._move){document.removeEventListener('mousemove',this._move);this._move=null;}}
+      attributeChangedCallback(){if(this.isConnected){this.render();this._bindTracking();}}
+      get type(){return this.getAttribute('type')==='cone'?'cone':'scoop';}
+      get eyeState(){const e=this.getAttribute('eyes');return e==='none'||e==='dead'?e:'open';}
+      get pupilScale(){const p=parseFloat(this.getAttribute('pupil'));if(isFinite(p))return Math.max(0.3,Math.min(2.4,p));const f=parseFloat(this.getAttribute('fill'));return isFinite(f)?fillToPupil(Math.max(0,Math.min(100,f))):1;}
+      render(){
+        if(!this.shadowRoot)this.attachShadow({mode:'open'});
+        const t=this.type,cfg=TYPE[t];
+        const color=this.getAttribute('color')||DEFAULT_COLOR[t];
+        const active=this.hasAttribute('active');
+        const label=this.getAttribute('label');
+        const glyph=t==='cone'?coneInner(color,shade(color,-0.38),shade(color,0.3)):scoopInner(color,shade(color,-0.32));
+        const e=cfg.eyes;
+        const ex=(e.left+e.width/2)/100, ey=(e.top+e.height/2)/100;
+        const tx=((0.5-cfg.zoom*ex)*100).toFixed(2), ty=((0.5-cfg.zoom*ey)*100).toFixed(2);
+        const ex0=e.left/100, ex1=(e.left+e.width)/100, ey0=e.top/100, ey1=(e.top+e.height)/100;
+        const bx0=Math.min(0,ex0), bx1=Math.max(1,ex1), by0=Math.min(0,ey0), by1=Math.max(1,ey1);
+        const oZoom=Math.min(1, 1/Math.max(bx1-bx0, by1-by0));
+        const ox=((0.5-oZoom*(bx0+bx1)/2)*100).toFixed(2), oy=((0.5-oZoom*(by0+by1)/2)*100).toFixed(2);
+        const pr=PUPIL_R*this.pupilScale;
+        this._maxOffset=Math.max(2,Math.min(MAX_OFFSET,LEFT_EYE.r-pr-4));
+        this.shadowRoot.innerHTML =
+          `<style>${PILL_STYLE}</style>`+
+          `<button class="pill ${active?'active':''}" part="pill" style="--accent:${color}">`+
+          `<span class="icon" part="icon">`+
+          `<span class="icon-inner" style="--tx:${tx}%;--ty:${ty}%;--zoom:${cfg.zoom};--ox:${ox}%;--oy:${oy}%;--ozoom:${oZoom.toFixed(4)}">`+
+          `<svg class="glyph" viewBox="${cfg.vb}" preserveAspectRatio="xMidYMid meet" style="--g:${cfg.glyph}%">${glyph}</svg>`+
+          `<span class="eyes" style="top:${e.top}%;left:${e.left}%;width:${e.width}%;height:${e.height}%">${eyesSvg(this.eyeState,pr)}</span>`+
+          `</span></span>`+
+          `<span class="label">${label!=null?escHtml(label):'<slot></slot>'}</span>`+
+          `</button>`;
+        this._pl=this.shadowRoot.querySelector('.pupil-l');
+        this._pr=this.shadowRoot.querySelector('.pupil-r');
+        this._esvg=this.shadowRoot.querySelector('.eyes-svg');
+      }
+      _bindTracking(){const need=this.eyeState==='open';if(need&&!this._move){this._move=(ev)=>this._track(ev);document.addEventListener('mousemove',this._move);}else if(!need&&this._move){document.removeEventListener('mousemove',this._move);this._move=null;}}
+      _track(ev){if(!this._esvg||!this._pl||!this._pr)return;const r=this._esvg.getBoundingClientRect();if(!r.width||!r.height)return;const mx=(ev.clientX-r.left)*(200/r.width);const my=(ev.clientY-r.top)*(100/r.height);place(this._pl,LEFT_EYE.cx,LEFT_EYE.cy,mx,my,this._maxOffset);place(this._pr,RIGHT_EYE.cx,RIGHT_EYE.cy,mx,my,this._maxOffset);}
+    }
+    if(!customElements.get('slicc-pill'))customElements.define('slicc-pill',SliccPill);
+
+    // ---------- <slicc-add-menu> ----------
+    const ICON = {
+      plus:'<path d="M5 12h14"/><path d="M12 5v14"/>',
+      search:'<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+      upload:'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>',
+      camera:'<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/>',
+      monitor:'<rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>',
+      file:'<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+      sparkles:'<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/>',
+      message:'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+    };
+    function svgIcon(name,size){size=size||18;return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[name]}</svg>`;}
+    function escAdd(s){return String(s).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[m]);}
+    const DEMO = {
+      file:[
+        {id:'/workspace/README.md',label:'README.md',sub:'/workspace'},
+        {id:'/workspace/src/main.ts',label:'main.ts',sub:'/workspace/src'},
+        {id:'/workspace/src/orchestrator.ts',label:'orchestrator.ts',sub:'/workspace/src'},
+        {id:'/workspace/notes/launch-plan.md',label:'launch-plan.md',sub:'/workspace/notes'},
+        {id:'/shared/CLAUDE.md',label:'CLAUDE.md',sub:'/shared'},
+        {id:'/tmp/screenshot-3.png',label:'screenshot-3.png',sub:'/tmp'},
+      ],
+      skill:[
+        {id:'slicc-handoff',label:'slicc-handoff',sub:'Continue work in the SLICC browser agent'},
+        {id:'playwright-cli',label:'playwright-cli',sub:'Automate browser interactions'},
+        {id:'mixtape',label:'mixtape',sub:'Curate themed music playlists'},
+        {id:'wavespeed',label:'wavespeed',sub:'Generate images, video and speech'},
+        {id:'save-the-cat',label:'save-the-cat',sub:'Screenwriting beat sheets'},
+      ],
+      conversation:[
+        {id:'c1',label:'Dark mode toggle',sub:'Frozen · 2h ago'},
+        {id:'c2',label:'Refactor the mount backend',sub:'Frozen · yesterday'},
+        {id:'c3',label:'Add slash menu (declined)',sub:'Frozen · 3 days ago'},
+        {id:'c4',label:'WebGL shader walkthrough',sub:'Frozen · last week'},
+      ],
+    };
+    const SECTIONS=[{kind:'file',label:'Files',icon:'file'},{kind:'skill',label:'Skills',icon:'sparkles'},{kind:'conversation',label:'Conversations',icon:'message'}];
+    // STYLE copied from proto/slicc-add-menu.html — the .results panel sits in
+    // normal flow ABOVE the row, so opening grows the composer upward in-flow
+    // (no absolute-positioned popover, no pinned composer height).
+    const ADD_STYLE = `
+      :host{display:block;width:100%;
+        --bg:#2c2c2c;--bg-sunken:#141414;--fg:#e8e8e8;--fg-2:#a1a1a1;--fg-3:#8a8a8a;
+        --border:#3a3a3a;--accent:#3562ff;
+        --accent-subtle:color-mix(in oklab,var(--accent) 22%,transparent);
+        --hover:rgba(255,255,255,0.06);
+        font:400 13px "Adobe Clean","Source Sans Pro",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}
+      @media (prefers-color-scheme: light){:host(:not([theme="dark"])){--bg:#fff;--bg-sunken:#f3f3f3;--fg:#131313;--fg-2:#505050;--fg-3:#717171;--border:#e1e1e1;--accent:#3b63fb;--accent-subtle:color-mix(in oklab,var(--accent) 12%,#fff);--hover:rgba(0,0,0,0.05);}}
+      :host([theme="light"]){--bg:#fff;--bg-sunken:#f3f3f3;--fg:#131313;--fg-2:#505050;--fg-3:#717171;--border:#e1e1e1;--accent:#3b63fb;--accent-subtle:color-mix(in oklab,var(--accent) 12%,#fff);--hover:rgba(0,0,0,0.05);}
+      *{box-sizing:border-box;}
+      .wrap{display:flex;flex-direction:column;}
+      .row{display:flex;align-items:center;gap:8px;}
+      .trigger{flex:0 0 auto;width:32px;height:32px;border:none;border-radius:8px;background:transparent;color:var(--fg);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .13s ease,color .13s ease,transform .16s ease;}
+      .trigger:hover{background:var(--hover);}
+      .trigger[aria-expanded="true"]{background:var(--accent-subtle);color:var(--accent);transform:rotate(45deg);}
+      /* the search field slides in beside the +/× — collapsed until open */
+      .searchbox{flex:1;min-width:0;position:relative;display:none;}
+      :host([data-open]) .searchbox{display:block;}
+      .searchbox .si{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--fg-3);display:flex;pointer-events:none;}
+      .searchbox input{width:100%;border:1px solid var(--border);background:var(--bg-sunken);color:var(--fg);border-radius:9px;padding:7px 10px 7px 32px;font:inherit;outline:none;}
+      .searchbox input:focus{border-color:var(--accent);}
+      /* results grow the composer in-flow (no floating popover) and stack above the row */
+      .results{position:relative;max-height:0;overflow:hidden;opacity:0;transition:max-height .18s ease,opacity .14s ease;}
+      :host([data-open]) .results{max-height:300px;overflow-y:auto;opacity:1;margin-bottom:8px;}
+      .sec{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--fg-3);font-weight:650;margin:8px 6px 4px;}
+      .item{display:flex;align-items:center;gap:10px;width:100%;padding:8px;border-radius:9px;cursor:pointer;text-align:left;color:var(--fg);}
+      .item .ic{flex:0 0 auto;color:var(--fg-2);display:flex;} .item.quick .ic{color:var(--accent);}
+      .item .tx{min-width:0;} .item .lb{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;} .item .sb{font-size:11px;color:var(--fg-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+      .item.active,.item:hover{background:var(--accent-subtle);}
+      .empty{padding:18px 10px;text-align:center;color:var(--fg-3);font-size:12px;}
+      .sep{height:1px;background:var(--border);margin:6px 4px;}
+      .drop{position:absolute;inset:0;border-radius:10px;display:none;align-items:center;justify-content:center;text-align:center;background:var(--accent-subtle);border:2px dashed var(--accent);color:var(--accent);font-size:13px;font-weight:600;pointer-events:none;}
+      :host([data-dropping]) .drop{display:flex;}
+    `;
+    class SliccAddMenu extends HTMLElement {
+      connectedCallback(){this._open=false;this._q='';this._active=0;this._items=[];this.render();this._onDoc=(e)=>{if(!this.contains(e.target)&&this._open)this.close();};}
+      disconnectedCallback(){document.removeEventListener('mousedown',this._onDoc);}
+      render(){
+        if(!this.shadowRoot)this.attachShadow({mode:'open'});
+        this.shadowRoot.innerHTML =
+          `<style>${ADD_STYLE}</style>`+
+          `<input type="file" multiple hidden />`+
+          `<div class="wrap" part="wrap">`+
+          `<div class="results" part="results" role="listbox"><div class="body"></div>`+
+          `<div class="drop">Drop files to add</div></div>`+
+          `<div class="row">`+
+          `<button class="trigger" part="trigger" aria-haspopup="true" aria-expanded="false" title="Add to prompt">${svgIcon('plus',20)}</button>`+
+          `<div class="searchbox"><span class="si">${svgIcon('search',16)}</span>`+
+          `<input type="text" placeholder="Search files, skills, conversations…" /></div>`+
+          `</div></div>`;
+        this._trigger=this.shadowRoot.querySelector('.trigger');
+        this._wrap=this.shadowRoot.querySelector('.wrap');
+        this._search=this.shadowRoot.querySelector('.searchbox input');
+        this._bodyEl=this.shadowRoot.querySelector('.results .body');
+        this._file=this.shadowRoot.querySelector('input[type=file]');
+        this._bind();
+        this.renderBody();
+      }
+      _bind(){
+        this._trigger.addEventListener('click',()=>this.toggle());
+        this._search.addEventListener('input',()=>{this._q=this._search.value;this._active=0;this.renderBody();});
+        this._search.addEventListener('keydown',(e)=>this._onKey(e));
+        this._file.addEventListener('change',()=>{for(const f of this._file.files)this._emit({kind:'upload',name:f.name,size:f.size});this._file.value='';this.close();});
+        ['dragenter','dragover'].forEach((t)=>this._wrap.addEventListener(t,(e)=>{e.preventDefault();if(!this._open)this.open();this.setAttribute('data-dropping','');}));
+        ['dragleave','drop'].forEach((t)=>this._wrap.addEventListener(t,(e)=>{e.preventDefault();if(t==='dragleave'&&this._wrap.contains(e.relatedTarget))return;this.removeAttribute('data-dropping');}));
+        this._wrap.addEventListener('drop',(e)=>{const files=e.dataTransfer&&e.dataTransfer.files;if(files&&files.length){for(const f of files)this._emit({kind:'upload',name:f.name,size:f.size});this.close();}});
+      }
+      toggle(){this._open?this.close():this.open();}
+      open(){if(this._open)return;this._open=true;this.setAttribute('data-open','');this._trigger.setAttribute('aria-expanded','true');document.addEventListener('mousedown',this._onDoc);this._q='';this._search.value='';this._active=0;this.renderBody();requestAnimationFrame(()=>this._search.focus());}
+      close(){if(!this._open)return;this._open=false;this.removeAttribute('data-open');this.removeAttribute('data-dropping');this._trigger.setAttribute('aria-expanded','false');document.removeEventListener('mousedown',this._onDoc);}
+      _collect(){
+        const q=this._q.trim().toLowerCase();
+        const match=(e)=>!q||(e.label+' '+(e.sub||'')).toLowerCase().includes(q);
+        const items=[];
+        const quick=[
+          {kind:'upload',icon:'upload',label:'Upload from this computer',sub:'Drag & drop or click to browse',quick:true},
+          {kind:'capture',mode:'photo',icon:'camera',label:'Take a photo',quick:true},
+          {kind:'capture',mode:'screenshot',icon:'monitor',label:'Take a screenshot',quick:true},
+        ];
+        if(!q)for(const a of quick)items.push({type:'quick',data:a});
+        else if('upload take a photo screenshot'.includes(q))for(const a of quick)if(a.label.toLowerCase().includes(q))items.push({type:'quick',data:a});
+        for(const sec of SECTIONS){const hits=DEMO[sec.kind].filter(match).slice(0,q?8:4);if(hits.length){items.push({type:'sec',label:sec.label});for(const h of hits)items.push({type:'row',sec,data:h});}}
+        return items;
+      }
+      renderBody(){
+        const list=this._collect();
+        this._items=[];
+        let html='';
+        let prevQuick=false;
+        for(const it of list){
+          if(it.type==='sec'){if(prevQuick)html+=`<div class="sep"></div>`;html+=`<div class="sec">${escAdd(it.label)}</div>`;prevQuick=false;}
+          else if(it.type==='quick'){const i=this._items.length;this._items.push(it.data);html+=`<div class="item quick" data-i="${i}"><span class="ic">${svgIcon(it.data.icon)}</span><span class="tx"><div class="lb">${escAdd(it.data.label)}</div>${it.data.sub?`<div class="sb">${escAdd(it.data.sub)}</div>`:''}</span></div>`;prevQuick=true;}
+          else{const d={kind:it.sec.kind,id:it.data.id,label:it.data.label};const i=this._items.length;this._items.push(d);html+=`<div class="item" data-i="${i}"><span class="ic">${svgIcon(it.sec.icon)}</span><span class="tx"><div class="lb">${escAdd(it.data.label)}</div><div class="sb">${escAdd(it.data.sub||'')}</div></span></div>`;}
+        }
+        this._bodyEl.innerHTML=html||`<div class="empty">No matches for &ldquo;${escAdd(this._q)}&rdquo;.</div>`;
+        this._bodyEl.querySelectorAll('.item').forEach((el)=>{const i=+el.dataset.i;el.addEventListener('mouseenter',()=>this._setActive(i));el.addEventListener('click',()=>this._select(i));});
+        if(this._active>=this._items.length)this._active=0;
+        this._paint();
+      }
+      _paint(){this._bodyEl.querySelectorAll('.item').forEach((el)=>el.classList.toggle('active',+el.dataset.i===this._active));}
+      _setActive(i){this._active=i;this._paint();}
+      _move(d){if(!this._items.length)return;this._active=(this._active+d+this._items.length)%this._items.length;this._paint();const el=this._bodyEl.querySelector(`.item[data-i="${this._active}"]`);if(el)el.scrollIntoView({block:'nearest'});}
+      _onKey(e){if(e.key==='ArrowDown'){e.preventDefault();this._move(1);}else if(e.key==='ArrowUp'){e.preventDefault();this._move(-1);}else if(e.key==='Enter'){e.preventDefault();this._select(this._active);}else if(e.key==='Escape'){e.preventDefault();this.close();this._trigger.focus();}}
+      _select(i){const it=this._items[i];if(!it)return;if(it.kind==='upload'){this._file.click();return;}this._emit(it);this.close();}
+      _emit(detail){this.dispatchEvent(new CustomEvent('slicc-add',{detail,bubbles:true,composed:true}));}
+    }
+    if(!customElements.get('slicc-add-menu'))customElements.define('slicc-add-menu',SliccAddMenu);
+  })();
+  </script>
+
   <script>
     // ===== chat context registry + bg-shader context switch =====
     // Each scoop chip and each freezer card maps to its own chat thread snapshot
@@ -599,7 +895,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
       }
       const isScoop = id.indexOf('freezer:')!==0;
       if (isScoop) {
-        document.querySelectorAll('.scoop').forEach(s=>s.classList.toggle('active',s.dataset.k===id));
+        document.querySelectorAll('.scoop').forEach(s=>{const on=s.dataset.k===id;s.classList.toggle('active',on);s.toggleAttribute('active',on);});
       }
       const shader = id.indexOf('freezer:')===0 ? 'freezer' : (SHADER_FOR[id]||'scoop');
       if (typeof window.__sliccSetShader==='function') window.__sliccSetShader(shader);
@@ -1109,6 +1405,8 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
       btn.setAttribute('aria-pressed', dark ? 'true' : 'false');
       btn.textContent = dark ? '☀' : '🌙';
       btn.title = dark ? 'Switch to light mode' : 'Switch to dark mode';
+      // forward the explicit theme to web components so they don't fall back to prefers-color-scheme
+      document.querySelectorAll('slicc-pill, slicc-add-menu').forEach(el=>el.setAttribute('theme', dark ? 'dark' : 'light'));
     }
     btn.addEventListener('click', () => apply(!document.body.classList.contains('dark')));
     apply(false); // default to light mode on load
@@ -1128,6 +1426,11 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
       if (fzToggle) { fzToggle.setAttribute('aria-expanded', open?'true':'false'); fzToggle.title = open?'Collapse freezer':'Expand freezer'; }
     }
     if (fzToggle) fzToggle.addEventListener('click', () => setFreezer(!freezerEl.classList.contains('open')));
+    // "new chat": route to the cone context (fresh thread) — stub action for the prototype
+    const fzNew = document.getElementById('fzNew');
+    if (fzNew) fzNew.addEventListener('click', () => {
+      if (typeof window.__sliccSwitchContext === 'function') window.__sliccSwitchContext('cone');
+    });
     // clicking a card: expand if collapsed, thaw + switch context (chat + bg shader)
     document.querySelectorAll('.freezer .fzcard').forEach(c => c.addEventListener('click', () => {
       const wasCollapsed = !freezerEl.classList.contains('open');
@@ -1183,7 +1486,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
 
     // ---- deterministic state mutations (safe to replay) ----
     const showScoop=k=>{const e=scoopEl(k);if(e)e.style.display='';};
-    const activate=k=>document.querySelectorAll('.scoop').forEach(s=>s.classList.toggle('active',s.dataset.k===k));
+    const activate=k=>document.querySelectorAll('.scoop').forEach(s=>{const on=s.dataset.k===k;s.classList.toggle('active',on);s.toggleAttribute('active',on);});
     const srcOn=(e,c)=>{if(!e)return;if(c)e.style.setProperty('--c',c);if(AN){e.classList.add('src');setTimeout(()=>e.classList.remove('src'),1700);}};
     const litEl=e=>{if(!e||!AN)return;e.classList.add('lit');setTimeout(()=>e.classList.remove('lit'),1400);};
     const litDock=t=>litEl(dockEl(t));
@@ -1238,7 +1541,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
       +'<div class="dfoot"><button class="dapply">Apply to hero →</button><span class="dnote">paper · violet</span></div></div></div>'));
       d.style.setProperty('--c',color);sprinkleField(d);return d;};
     const lick=(kind,html)=>add(el('<div class="lick"><div class="lh"><span class="bell">🔔</span> lick · '+kind+' <span class="lk">event</span></div><div class="lb">'+html+'</div></div>'));
-    const ephemeral=k=>{ if(scoopEl(k))return scoopEl(k); const b=el('<button class="scoop ephemeral" data-k="'+k+'"><span class="eyes"><span class="eye"></span><span class="eye"></span></span> '+k+'</button>'); b.style.setProperty('--h',GREEN); document.querySelector('.switcher').appendChild(b); if(typeof window.__sliccReflowSwitcher==='function')window.__sliccReflowSwitcher(); return b; };
+    const ephemeral=k=>{ if(scoopEl(k))return scoopEl(k); const b=el('<slicc-pill class="scoop ephemeral" data-k="'+k+'" type="scoop" color="'+GREEN+'">'+k+'</slicc-pill>'); b.style.setProperty('--h',GREEN); b.setAttribute('theme', document.body.classList.contains('dark') ? 'dark' : 'light'); document.querySelector('.switcher').appendChild(b); if(typeof window.__sliccReflowSwitcher==='function')window.__sliccReflowSwitcher(); return b; };
     const addMemory=()=>byId('membody').insertBefore(el('<div class="memrow fresh"><div class="mt"><b>palette preference: warm paper</b><span class="mtag us">user</span></div><div class="ms">Prefers paper #faf6f1 canvas + violet accent + single pill CTA for marketing pages.</div></div>'),byId('membody').firstChild);
     const setTerm=h=>byId('termbody').innerHTML=h;
     const setFile=kind=>{byId('fileview').innerHTML = kind==='css' ? FILE_CSS : FILE0;};
@@ -1392,7 +1695,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
       inner.innerHTML=INNER0; setTerm(TERM0); byId('membody').innerHTML=MEM0; byId('fileview').innerHTML=FILE0;
       const ta=byId('ta'); if(ta)ta.value='';
       document.querySelectorAll('.scoop.ephemeral').forEach(s=>s.remove());
-      document.querySelectorAll('.scoop').forEach(s=>{s.classList.remove('lit','src');s.classList.toggle('active',s.dataset.k==='cone'); if(s.dataset.k!=='cone')s.style.display='none';});
+      document.querySelectorAll('.scoop').forEach(s=>{s.classList.remove('lit','src');const isCone=s.dataset.k==='cone';s.classList.toggle('active',isCone);s.toggleAttribute('active',isCone); if(!isCone)s.style.display='none';});
       document.querySelectorAll('.dock .di').forEach(b=>b.classList.remove('lit'));
       byId('floattext').textContent='CLI float'; byId('floatbar').classList.remove('linked');
       if (window.__sliccFreezer) window.__sliccFreezer.close();
