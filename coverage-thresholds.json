@@ -61,10 +61,10 @@
       "branches": 84
     },
     "webcomponents": {
-      "lines": 50,
-      "statements": 50,
-      "functions": 50,
-      "branches": 40
+      "lines": 95,
+      "statements": 91,
+      "functions": 95,
+      "branches": 80
     }
   },
   "swift": {

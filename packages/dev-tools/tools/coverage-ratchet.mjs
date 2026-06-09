@@ -29,19 +29,31 @@ const flags = new Set(process.argv.slice(2));
 const doTs = !flags.has('--swift-only');
 const doSwift = !flags.has('--ts-only');
 const write = !flags.has('--no-write');
+// `--only=<pkg>` restricts measurement to a single package (useful for
+// verifying one package's coverage path without re-measuring the whole repo).
+const onlyArg = process.argv.slice(2).find((a) => a.startsWith('--only='));
+const only = onlyArg ? onlyArg.slice('--only='.length) : null;
 
 const SWIFT_BUNDLES = {
   'swift-server': 'SliccServerPackageTests',
   'swift-launcher': 'SliccstartPackageTests',
 };
 
+// Packages whose coverage is produced by a dedicated vitest config (e.g.
+// browser-mode packages) rather than a root `--project`. Measured with that
+// config so the ratchet numbers match the CI gate (npm run test:coverage:<pkg>).
+const TS_CONFIG_OVERRIDES = {
+  webcomponents: 'packages/webcomponents/vitest.config.ts',
+};
+
 function measureTs(pkg, floors) {
   const out = mkdtempSync(join(tmpdir(), `cov-${pkg}-`));
+  const configPath = TS_CONFIG_OVERRIDES[pkg];
+  const selector = configPath ? ['--config', configPath] : ['--project', pkg];
   const args = [
     'vitest',
     'run',
-    '--project',
-    pkg,
+    ...selector,
     '--coverage',
     '--coverage.reporter=json-summary',
     `--coverage.reportsDirectory=${out}`,
@@ -90,6 +102,7 @@ const measured = { typescript: {}, swift: {} };
 
 if (doTs) {
   for (const pkg of Object.keys(thresholds.typescript ?? {})) {
+    if (only && pkg !== only) continue;
     console.error(`==> measuring TypeScript: ${pkg}`);
     const m = measureTs(pkg, thresholds.typescript[pkg]);
     if (m) measured.typescript[pkg] = m;
@@ -97,6 +110,7 @@ if (doTs) {
 }
 if (doSwift) {
   for (const pkg of Object.keys(thresholds.swift ?? {})) {
+    if (only && pkg !== only) continue;
     console.error(`==> measuring Swift: ${pkg}`);
     const m = measureSwift(pkg);
     if (m) measured.swift[pkg] = m;

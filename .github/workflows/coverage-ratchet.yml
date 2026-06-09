@@ -37,6 +37,12 @@ jobs:
       - name: Build swift-server (Swift launcher dependency)
         run: cd packages/swift-server && swift build -c release
 
+      # Browser-mode packages (e.g. @slicc/webcomponents) measure coverage in
+      # real Chromium via the Playwright provider; install it so the ratchet
+      # measures them instead of skipping.
+      - name: Install Chromium (browser-mode coverage)
+        run: npx playwright install chromium
+
       - name: Run coverage ratchet
         id: ratchet
         env:
