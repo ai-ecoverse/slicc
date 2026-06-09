@@ -24,7 +24,11 @@ You have **zero assumed context**. Read these before starting:
 
 **Conventions (CLAUDE.md):** `createLogger('namespace')` for logging; tests mirror `src/` under `packages/*/tests/`; run a single test file with `npm test -w @slicc/webapp -- --run <relative/path.test.ts>`; **`npm run lint` before every commit** (CI rejects unformatted code); use pi-ai model aliases not snapshots; features must work in **both** standalone and extension (this feature is float-agnostic — it runs in the durable realm and the panel terminal is already offscreen-backed, so no proxy is needed). Commit messages end with `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
 
-**Boy-scout complexity gate:** if a task modifies a file on biome.json's debt lists (`scoop-context.ts`, `agent-bridge.ts`, `agent-command.ts`, … — check `biome.json` `overrides`), the `check-touched-exemptions` CI step requires bringing every function in that file under the caps (cognitive ≤ 25, lines ≤ 150) and removing its debt-list entry **in the same PR**. The new files here are not on the list; `workflow-prelude.ts` and `workflow-command.ts` are not on the list (verify with `node packages/dev-tools/tools/check-touched-exemptions.mjs origin/main` after edits). `lick-manager.ts`/`lick-formatting.ts` — verify before committing.
+**Boy-scout complexity gate — `host.ts` is on the debt list and SP2 MUST touch it (concrete, not conditional).** The `check-touched-exemptions` CI step fails if a PR modifies any file on biome.json's `overrides` debt lists without (a) bringing **every** function in that file under the caps (cognitive ≤ 25, lines ≤ 150, `skipIifes`) AND (b) removing that file's debt-list entry in the same PR. Verified against `biome.json` for this feature:
+
+- **`packages/webapp/src/kernel/host.ts` IS on the list** (`biome.json:267`). SP2 edits it in **Task 1** (`defaultLickEventHandler` workflow name/id branch) and **Task 6** (publish the run manager). Any edit triggers the gate, so this PR must fully de-debt `host.ts` and delete its `biome.json:267` entry. **Treat this as required work, not a final check** — see Task 10 Step 3 for the concrete actions. To keep the de-debt small, push the workflow additions into helpers in their own files (a `formatWorkflowLick`-style branch already lives in `lick-formatting.ts`; keep the host touch to the minimal name/id routing + one `publishWorkflowRunManager(...)` call) and extract any host.ts function that exceeds the caps into named helpers within host.ts.
+- **NOT on the list (verified — no de-debt needed):** `lick-manager.ts`, `lick-formatting.ts`, `workflow-command.ts`, `workflow-prelude.ts`, and all new files (`workflow-run-manager.ts`, `__wf_progress` command). (Codex's claim that `lick-formatting.ts` is listed is incorrect — `grep -n lick-formatting biome.json` is empty.)
+- Re-verify after edits: `node packages/dev-tools/tools/check-touched-exemptions.mjs origin/main` must print OK.
 
 ---
 
@@ -698,6 +702,7 @@ it('terminal-origin does NOT fire a lick; cone-origin does', async () => {
     name: 'n',
     filename: 'f',
     parentJid: undefined,
+    sentinel: 'WF_RESULT_x',
     ctx: {} as any,
   });
   await vi.waitFor(() => expect(mgr.listRuns()[0].status).toBe('done'));
@@ -711,6 +716,7 @@ it('terminal-origin does NOT fire a lick; cone-origin does', async () => {
     name: 'n',
     filename: 'f',
     parentJid: 'cone_1',
+    sentinel: 'WF_RESULT_x',
     ctx: {} as any,
   });
   await vi.waitFor(() => expect(fireLick2).toHaveBeenCalledTimes(1));
@@ -732,6 +738,7 @@ it('non-zero exit → status error + error notification', async () => {
     name: 'n',
     filename: 'f',
     parentJid: 'cone_1',
+    sentinel: 'WF_RESULT_x',
     ctx: {} as any,
   });
   await vi.waitFor(() => expect(mgr.listRuns()[0].status).toBe('error'));
@@ -795,6 +802,7 @@ it('exec-tap: agent argv bumps agentsStarted/Done; __wf_progress updates phase/l
     name: 'n',
     filename: 'f',
     parentJid: undefined,
+    sentinel: 'WF_RESULT_x',
     ctx: baseCtx,
   });
   await vi.waitFor(() => expect(mgr.getRun(runId)!.status).toBe('done'));
@@ -887,7 +895,12 @@ const launch = deps
   .finally(() => offSpawn());
 ```
 
-**Per-run exec isolation (spec §5 — resolved as "safe for SP2"):** the spec calls for a background run's exec to be isolated from the foreground shell because `WasmShellHeadless` shares `cwd`/`lastEnv` (`wasm-shell-headless.ts:522,531`). For SP2 this corruption **cannot occur**: a workflow's realm exec surface is ONLY `agent` and `__wf_progress` (the prelude suppresses `fs`/`exec`/etc.), and **neither command mutates the shell's `cwd`/`lastEnv`** (no `cd`, no env-export) — they read `ctx.cwd` but don't write shell state. So reusing the launching `ctx.exec` (via `wrapCtx`) is safe. Add a guard test: interleave a backgrounded run's `agent` execs with a foreground `cd /tmp` on the same shell and assert the foreground `cwd` is unchanged. A dedicated per-run shell is deferred to whenever a future command surface (e.g. SP6 nesting) lets a workflow run state-mutating commands — leave a one-line comment in `wrapCtx` recording this invariant.
+**Per-run exec isolation (spec §5 — SP2 decision: accept + document the narrow risk).** The spec wants a background run's exec isolated from the foreground shell because `WasmShellHeadless` shares `cwd`/`lastEnv` (`wasm-shell-headless.ts:522,531`). SP2 reuses the launching `ctx.exec` (via `wrapCtx`) and does NOT add a per-run shell. The honest risk picture (corrected from an earlier draft — do not restate the false "exec surface is only agent/\_\_wf_progress" claim):
+
+- The **documented** workflow API the user body is meant to use — `agent` / `parallel` / `pipeline` / `phase` / `log` — only ever spawns `agent` and `__wf_progress`, and **neither mutates the shell's `cwd`/`lastEnv`** (no `cd`, no env-export; they read `ctx.cwd` but don't write shell state). For workflows that stay within this API, reusing `ctx.exec` is safe.
+- **However**, the prelude binds `const __execSpawn = exec.spawn.bind(exec)` (`workflow-prelude.ts:31-33`) at a scope the appended user body closes over (`buildWorkflowCode` emits the prelude, then the body inside `(async () => { … })()` in the SAME function — `workflow-script.ts:46-54`). So a workflow that deliberately calls the **undocumented internal** `__execSpawn(['cd', …])` / `__execSpawn(['secret','set',…])` reaches `ctx.exec` directly (`realm-host.ts:302-315`) and CAN mutate the launching shell's `cwd`/`lastEnv` (`secret set` → `setEnv`, `wasm-shell-headless.ts:319-325`). In a backgrounded run that mutation happens asynchronously against the foreground shell = real corruption.
+- **SP2 stance:** reaching `__execSpawn` is **out of contract** — it's an internal, not part of the workflow API surface, and this exposure already exists in SP1 (synchronous `workflow run`). SP2 does not widen it; it only makes it asynchronous. We accept it for SP2 and **defer real isolation to SP6** (the proper fixes: hide `__execSpawn` behind an IIFE so the user body can't see it, OR back the run with a per-run shell that owns its own `cwd`/`lastEnv`). Leave a one-line comment in `wrapCtx` recording this invariant and pointing at SP6.
+- **Guard test (covers the in-contract guarantee only):** interleave a backgrounded run's documented-API `agent` execs with a foreground `cd /tmp` on the same shell and assert the foreground `cwd` is unchanged. Add a comment in the test stating it does NOT cover the out-of-contract `__execSpawn` escape hatch (tracked for SP6).
 
 - [ ] **Step 4: Run the test to confirm it passes.**
 
@@ -914,9 +927,13 @@ it('captures the realm pid via pm.on(spawn)', async () => {
     name: 'n',
     filename: 'f',
     parentJid: undefined,
+    sentinel: 'WF_RESULT_x',
     ctx: { exec: vi.fn() } as any,
   });
-  spawnHandler?.({ pid: 4242, kind: 'js', argv: ['workflow', 'f'] });
+  // Real realm-JS processes are kind:'jsh' (runInRealm default). The production filter
+  // matches on argv ([0]==='workflow' && [1]===filename), NOT kind, so kind here is just
+  // realistic fixture data — must match reality so the test isn't misleading.
+  spawnHandler?.({ pid: 4242, kind: 'jsh', argv: ['workflow', 'f'] });
   expect(mgr.getRun(runId)!.pid).toBe(4242);
   realmDone.resolve({ stdout: 'WF_RESULT_x' + JSON.stringify({}), stderr: '', exitCode: 0 });
   await vi.waitFor(() => expect(mgr.getRun(runId)!.status).toBe('done'));
@@ -1238,13 +1255,14 @@ if (args[0] === 'stop') {
 - [ ] **Step 7: Write the `--wait` + `status`/`list`/`stop` tests, run, confirm pass.**
 
 ```ts
-it('--wait blocks and prints the result preview', async () => {
-  installFakeManager({
-    start: vi.fn(async (opts: any) => {
-      return { runId: 'r1' };
-    }),
-    getRun: () => ({ status: 'done', preview: '{"ok":true}', name: 'demo' }),
-  });
+it('--wait blocks and prints the full result (inline SP1 path — bypasses the manager)', async () => {
+  // IMPORTANT: --wait does NOT touch the run manager. It runs the real realm via
+  // executeJsCode and the realm SELF-EMITS the sentinel line for `return {ok:true}`
+  // (buildWorkflowCode appends `__emit(sentinel + stringify(__r))`), which renderResult
+  // then extracts. So no installFakeManager and no mock-spawn stdout is involved — the
+  // workflow body has no agent() calls, so ctxWith's spawn is never invoked. (Do NOT
+  // install a fake manager here; it would be dead code and imply the result comes from
+  // the manager, which is the non-blocking path's job, not --wait's.)
   const fs = await VirtualFS.create({ dbName: `wf-${Math.random()}`, wipe: true });
   await fs.mkdir('/workspace', { recursive: true });
   await fs.writeFile('/workspace/wf.js', `export const meta={name:'demo'}\nreturn {ok:true}`);
@@ -1290,6 +1308,25 @@ it('list / status / stop render run state', async () => {
 ```
 
 Run the file → PASS. Also re-run the SP1 command tests in the same file (the file-not-found / thrown-body cases now go through the manager — adjust those tests to install the fake manager, or assert the new non-blocking line; update as needed so the whole file is green). **If you `it.skip`'d the Task 6 Step 5 dual-mode test** (because the command wasn't wired yet), unskip it now and run `npm test -w @slicc/webapp -- --run tests/scoops/workflow-run-manager.test.ts` → PASS.
+
+- [ ] **Step 7b: Update the SP1 acceptance test for the non-blocking default (REQUIRED — it breaks otherwise).** `packages/webapp/tests/shell/supplemental-commands/workflow-acceptance.test.ts` runs `workflow run …` and parses the LAST stdout line as the JSON result (`expect(parsed.confirmed)…`). After this task, default `workflow run` returns the `▶ … started (run <id>)` line and the JSON result is no longer printed — so that parse breaks. Fix: add `--wait` to the args so the acceptance test keeps exercising the full fan-out/verify result via the inline SP1 path (it does not touch the manager, and the test's `spawn` mock still drives the `agent` calls):
+
+```ts
+const res = await createWorkflowCommand().execute(
+  [
+    'run',
+    '--wait', // SP2: default run is non-blocking; --wait keeps the full-result assertion below
+    '/workspace/repo-audit.workflow.js',
+    '--args',
+    '{"files":["a.ts","b.ts"]}',
+    '--concurrency',
+    '4',
+  ],
+  await ctxWith(fs, spawn)
+);
+```
+
+Everything else in that test (the count-only concurrency barrier, the `peak.max` assertions) is unchanged. Run: `npm test -w @slicc/webapp -- --run tests/shell/supplemental-commands/workflow-acceptance.test.ts` → PASS. (Note: this file currently lives on `main` with a deterministic concurrency barrier from the main-unblock fix — keep that barrier; only add `--wait`.)
 
 - [ ] **Step 8: origin-classification unit (manager already covers it; add a command-level guard if you wired origin in the command).** If you pass `parentJid` to the manager (recommended — the manager classifies), no extra command test is needed beyond confirming `start` is called with the right `parentJid`. Add:
 
@@ -1440,7 +1477,14 @@ git commit -m "docs(workflow): SP2 background runs — non-blocking default, sta
 
 - [ ] **Step 1: `npm run lint`** → clean (do first; most common CI failure).
 - [ ] **Step 2: `npm run typecheck`** → 0 errors (6 tsc projects).
-- [ ] **Step 3: `node packages/dev-tools/tools/check-touched-exemptions.mjs origin/main`** → OK (no touched file still on a complexity debt list; if `lick-manager.ts`/`lick-formatting.ts`/`host.ts` are listed and you touched them, de-debt their functions + remove the entries in this PR — see the boy-scout note up top).
+- [ ] **Step 3: De-debt `host.ts` (REQUIRED — SP2 touches it) + verify the gate.** SP2 modifies `packages/webapp/src/kernel/host.ts` (Task 1 lick branch + Task 6 manager publish), and it is on biome.json's complexity debt list (`biome.json:267`). The `check-touched-exemptions` gate therefore requires this PR to:
+  1. Run `npx biome lint packages/webapp/src/kernel/host.ts` (with the override removed) to list every function over the caps (cognitive ≤ 25, lines ≤ 150 `skipIifes`).
+  2. Extract those functions' bodies into named helpers within `host.ts` until each is under the caps. Keep the SP2 additions minimal (one `publishWorkflowRunManager(...)` call; the workflow lick name/id routing as a small helper) so the de-debt surface stays small.
+  3. Delete the `"packages/webapp/src/kernel/host.ts"` line from the `biome.json` `overrides` debt list (`biome.json:267`).
+  4. Run `node packages/dev-tools/tools/check-touched-exemptions.mjs origin/main` → must print **OK**, and `npx biome check packages/webapp/src/kernel/host.ts` → clean.
+
+  (No other touched file is on the list — see the boy-scout note up top.)
+
 - [ ] **Step 4: `npm test`** → all pass; then `npm run test:coverage:webapp` → at/above the floor in `coverage-thresholds.json` (the new `workflow-run-manager.ts` carries its own tests; add cases if it dips below).
 - [ ] **Step 5: `npm run build -w @slicc/webapp && npm run build -w @slicc/chrome-extension`** → both succeed.
 - [ ] **Step 6: Manual dual-float smoke** (real scoops; record in the PR body). Standalone (`npm run dev`) and extension (`npm run dev -- --profile=extension`, production build). The script: `workflow run --script 'export const meta={name:"bg"}; phase("go"); const r=await agent("Reply with one word: ok"); return {r}'`.
@@ -1453,7 +1497,9 @@ git commit -m "docs(workflow): SP2 background runs — non-blocking default, sta
 
 ## Self-review (run before handing off)
 
-- **Spec coverage:** §2 non-blocking launch (Task 4/7), live progress (Task 3 emit + Task 5 tap), async result delivery (Task 6 file + Task 1 lick); §5 manager API (Task 4–6), `--wait` (Task 7), origin classification (Task 4 `classifyOrigin` + Task 7 parentJid), stop semantics (Task 7 `stop` → `kill -KILL`), per-run exec isolation (Task 5 `wrapCtx`); §6 every file has a task; §9 all test bullets mapped (manager unit Task 4–5, prelude Task 3, command Task 7, integration Task 8, automated dual-mode/offscreen-resolution Task 6 Step 5 + manual dual-float smoke Task 10 Step 6); §10 docs (Task 9). **No SP1 changes** beyond the additive prelude emit (Task 3) — matches §3.
+- **Spec coverage:** §2 non-blocking launch (Task 4/7), live progress (Task 3 emit + Task 5 tap), async result delivery (Task 6 file + Task 1 lick); §5 manager API (Task 4–6), `--wait` (Task 7), origin classification (Task 4 `classifyOrigin` + Task 7 parentJid), stop semantics (Task 7 `stop` → `kill -KILL`), per-run exec isolation (Task 5 — **accepted-with-documented-risk for SP2, not implemented**: real isolation deferred to SP6; see the Task 5 note); §6 every file has a task; §9 all test bullets mapped (manager unit Task 4–5, prelude Task 3, command Task 7, integration Task 8, automated dual-mode/offscreen-resolution Task 6 Step 5 + manual dual-float smoke Task 10 Step 6); §10 docs (Task 9). **No SP1 changes** beyond the additive prelude emit (Task 3) — matches §3.
+- **Exec isolation (codex re-review, accepted risk):** SP2 reuses the launching `ctx.exec`. The documented API (`agent`/`parallel`/`pipeline`/`phase`/`log`) cannot mutate shell `cwd`/`lastEnv`, but the undocumented internal `__execSpawn` is reachable from user code and CAN (e.g. `__execSpawn(['cd',…])`). This is **out of contract** for SP2 and pre-exists from SP1; real isolation (hide `__execSpawn` or per-run shell) is deferred to SP6. Documented in Task 5 + a `wrapCtx` comment; the guard test covers only the in-contract guarantee.
+- **Boy-scout gate (codex re-review):** `host.ts` is on biome's debt list (`biome.json:267`) and SP2 touches it (Tasks 1 + 6) → this PR MUST de-debt `host.ts` and remove its entry (Task 10 Step 3, concrete). No other touched file is listed.
 - **Sentinel coupling (the one cross-task subtlety):** Task 6 Step 4 resolves it — the command builds ONE `sentinel`, passes it into both `buildWorkflowCode({sentinel})` (the realm code) and `mgr.start({sentinel})` (used by `splitResult`). Ensure Tasks 4/5 tests pass `sentinel` in `start(...)` and the `WorkflowStartOptions` type carries it (drop `sentinelFor` from deps).
 - **Type consistency:** `WorkflowRunState`/`WorkflowStartOptions`/`WorkflowRunManagerDeps`/`WORKFLOW_MANAGER_GLOBAL_KEY` are used identically across Tasks 4–7; `LickEvent` workflow fields (`workflowRunId`/`workflowName`/`resultPath`/`preview`) match between Task 1 (definition) and Task 6 (`deliver`) and Task 1's `formatLickEventForCone`/`defaultLickEventHandler` reads.
 - **Stop reality (spec §5):** `kill -KILL <pid>` ends the realm but in-flight `agent()` host-awaits are not cancelled — documented in Task 9; `stop` only guarantees no NEW agents start. Don't over-promise in the status output.
