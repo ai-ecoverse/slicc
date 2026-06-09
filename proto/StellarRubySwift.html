@@ -14,6 +14,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
     --red:#c22b10;--green:#168a35;--green-bg:#ecf8ef;--green-line:#cbe9d3;
     --rose:#f43f5e;--cyan:#06b6d4;--violet:#8b5cf6;--amber:#f59e0b;
     --ctx:#f59e0b;
+    --shaderbg:#f7f2e3;
     --rainbow:linear-gradient(90deg,#f43f5e 0%,#f59e0b 28%,#06b6d4 64%,#8b5cf6 100%);
     --ui:'adobe-clean','Inter',system-ui,sans-serif;--mono:'IBM Plex Mono',ui-monospace,monospace;
     --shadow-pane:rgba(10,10,10,.06) 0 8px 26px -10px;
@@ -21,6 +22,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   body.dark{
     --canvas:#161618;--bg:#0e0e10;--ghost:#1f1f22;--desk:#1f1f22;--ink:#f5f5f2;--deep:#f5f5f2;
     --txt-2:#9b9ba1;--txt-3:#6c6c72;--line:#2a2a2e;
+    --shaderbg:#171410;
     --shadow-pane:rgba(0,0,0,.35) 0 8px 26px -10px;
   }
   /* freezer dark surfaces — base styles use vars so no per-element override needed; tweak shadow only */
@@ -114,7 +116,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
 
   /* ---- chat (condensed) ---- */
   /* feather the frosted reading column: intersect a horizontal + vertical linear-gradient mask so both the translucent fill and the blur taper to transparent on all 4 edges */
-  .thread{flex:1;overflow-y:auto;} .inner{max-width:680px;margin:0 auto;padding:8px 24px 20px;background:color-mix(in srgb,var(--bg) 72%,transparent);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);border-radius:14px;-webkit-mask-image:linear-gradient(to right,transparent 0,#000 36px,#000 calc(100% - 36px),transparent 100%),linear-gradient(to bottom,transparent 0,#000 28px,#000 calc(100% - 28px),transparent 100%);-webkit-mask-composite:source-in;mask-image:linear-gradient(to right,transparent 0,#000 36px,#000 calc(100% - 36px),transparent 100%),linear-gradient(to bottom,transparent 0,#000 28px,#000 calc(100% - 28px),transparent 100%);mask-composite:intersect;}
+  .thread{flex:1;overflow-y:auto;} .inner{max-width:680px;margin:0 auto;padding:8px 24px 20px;background:color-mix(in srgb,var(--shaderbg) 72%,transparent);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);border-radius:14px;-webkit-mask-image:linear-gradient(to right,transparent 0,#000 72px,#000 calc(100% - 72px),transparent 100%),linear-gradient(to bottom,transparent 0,#000 56px,#000 calc(100% - 56px),transparent 100%);-webkit-mask-composite:source-in;mask-image:linear-gradient(to right,transparent 0,#000 72px,#000 calc(100% - 72px),transparent 100%),linear-gradient(to bottom,transparent 0,#000 56px,#000 calc(100% - 56px),transparent 100%);mask-composite:intersect;}
   .shell.open .inner{padding:0 18px 16px;}
   .daylabel{display:flex;align-items:center;gap:12px;margin:18px 0 16px;font-family:var(--ui);font-size:11px;color:var(--txt-3);text-transform:uppercase;letter-spacing:.08em;}
   .daylabel::before,.daylabel::after{content:"";flex:1;height:1px;background:var(--line);}
@@ -909,7 +911,9 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
         float aspect=u_res.x/u_res.y;
         vec2 p=uv-0.5; p.x*=aspect;
         vec2 c=u_center-0.5; c.x*=aspect;
-        vec3 bg=themeBg();
+        // wash the periphery toward the active scoop accent so the field reads
+        // as one hue family with the surrounding chrome --ctx tint
+        vec3 bg=mix(themeBg(), u_tint, 0.14);
         vec2 sp=p-c;
         float r=length(sp);
         float a=atan(sp.y,sp.x);
@@ -930,8 +934,9 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
         ice=mix(ice, u_tint, clamp(0.32 + hl*0.30, 0.0, 0.85));
         ice+=u_energy*u_evt*0.4*exp(-r*1.5);
         ice*=0.95+0.08*sin(u_time*0.4);
-        float mask=smoothstep(0.46,0.08,r);
-        vec3 col=mix(bg, ice, clamp(mask,0.0,1.0)*0.92);
+        // widened mask + lower peak so the dominant ribbon color eases in
+        float mask=smoothstep(0.62,0.0,r);
+        vec3 col=mix(bg, ice, clamp(mask,0.0,1.0)*0.80);
         col += ice * mask * hl * 0.12;
         gl_FragColor=vec4(col,1.0);
       }`;
@@ -943,7 +948,11 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
         vec2 uv = gl_FragCoord.xy/u_res;
         float aspect = u_res.x/u_res.y;
         vec2 p = (uv-0.5); p.x*=aspect;
-        vec3 bg = themeBg();
+        vec3 iceCol = mix(vec3(0.62,0.76,0.92), vec3(0.78,0.88,1.0), u_dark);
+        vec3 deepIce = mix(vec3(0.40,0.56,0.78), vec3(0.50,0.66,0.88), u_dark);
+        // wash periphery toward the freezer's ice-blue so the corner-growth
+        // front feathers into the surrounding warm chrome instead of a hard edge
+        vec3 bg = mix(themeBg(), iceCol, 0.12);
         float dc = distance(uv, vec2(0.0,0.0));
         float ragged = 0.10*fbm(uv*6.0 + 3.0) + 0.05*fbm(uv*14.0);
         float front = u_freeze*0.66 + ragged - 0.05;
@@ -957,18 +966,16 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
         crystals /= 1.5;
         float facet = smoothstep(0.45,0.55, crystals);
         float veins = smoothstep(0.03,0.0, abs(fract(crystals*6.0)-0.5)-0.02);
-        vec3 iceCol = mix(vec3(0.62,0.76,0.92), vec3(0.78,0.88,1.0), u_dark);
-        vec3 deepIce = mix(vec3(0.40,0.56,0.78), vec3(0.50,0.66,0.88), u_dark);
         vec3 col = bg;
         vec3 wet = mix(bg, iceCol, 0.5);
         float wetSpec = pow(clamp(fbm(uv*10.0 - u_time*0.2),0.0,1.0), 2.0);
         wet += wetSpec*vec3(1.0)*0.25;
-        col = mix(col, wet, wetBand*0.55);
+        col = mix(col, wet, wetBand*0.45);
         vec3 frost = mix(deepIce, iceCol, facet);
         frost += veins*vec3(1.0)*0.25;
         float spark = smoothstep(0.92,1.0, fbm(uv*30.0)) * (0.5+0.5*sin(u_time*0.6 + crystals*20.0));
         frost += spark*vec3(1.0)*0.4*frozen;
-        col = mix(col, frost, frozen*0.85);
+        col = mix(col, frost, frozen*0.75);
         float rim = smoothstep(0.05,0.0, abs(edge))*0.6;
         col += rim*iceCol;
         gl_FragColor = vec4(col, 1.0);
