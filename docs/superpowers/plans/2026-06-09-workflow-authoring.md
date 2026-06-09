@@ -92,7 +92,7 @@ if (opts.schema) flags.push('--schema-b64', __b64(JSON.stringify(opts.schema)));
 
 - [ ] **Step 4: Update the JSDoc**
 
-Replace the comment block at the top of `agent()` (the lines describing `opts.phase`/`opts.label`) with:
+The current `agent()` opens with `opts = opts || {};` followed by the `opts.phase / opts.label …` comment block. Replace **that existing `opts = opts || {};` line plus the comment block below it** (do not add a second `opts = opts || {};`) with:
 
 ```js
 opts = opts || {};
@@ -175,6 +175,12 @@ describe('discoverWorkflowCommands', () => {
 
   it('skips a skill dir whose name has a reserved char', async () => {
     const fs = await fsWith({ '/workspace/skills/bad:name/.workflows/x.workflow.js': 'return 1' });
+    const map = await discoverWorkflowCommands(fs);
+    expect(map.size).toBe(0);
+  });
+
+  it('ignores a skill *.workflow.js outside the .workflows dir', async () => {
+    const fs = await fsWith({ '/workspace/skills/triage/scripts/x.workflow.js': 'return 1' });
     const map = await discoverWorkflowCommands(fs);
     expect(map.size).toBe(0);
   });
@@ -314,11 +320,15 @@ function stem(path: string): string {
   return base.endsWith(SUFFIX) ? base.slice(0, -SUFFIX.length) : base;
 }
 
-/** For `/workspace/skills/<skill>/.workflows/x.workflow.js` → `<skill>`; else `null`. */
+/**
+ * For `/workspace/skills/<skill>/.workflows/x.workflow.js` → `<skill>`; else `null`.
+ * REQUIRES the `.workflows/` segment so a stray `*.workflow.js` elsewhere in a skill
+ * (e.g. `skills/foo/scripts/x.workflow.js`) is NOT picked up.
+ */
 function skillSegment(path: string): string | null {
   const rest = path.slice(SKILLS_ROOT.length + 1); // strip "/workspace/skills/"
-  const slash = rest.indexOf('/');
-  return slash > 0 ? rest.slice(0, slash) : null;
+  const parts = rest.split('/'); // [<skill>, '.workflows', …, 'x.workflow.js']
+  return parts.length >= 3 && parts[1] === '.workflows' ? parts[0] : null;
 }
 
 /**
@@ -739,7 +749,14 @@ Then add the unified handler method (it is the old `.jsh` `execute`, plus a work
         const execFn: typeof ctx.exec =
           ctx.exec ??
           ((cmd, opts) =>
-            shell.bash.exec(cmd, { env: Object.fromEntries(ctx.env), cwd: opts?.cwd ?? ctx.cwd }));
+            // Forward `args` — the workflow branch (below) passes the `workflow run …` argv
+            // via opts.args; dropping it would run a bare `workflow` (just-bash's Bash.exec
+            // appends opts.args to the command).
+            shell.bash.exec(cmd, {
+              env: Object.fromEntries(ctx.env),
+              cwd: opts?.cwd ?? ctx.cwd,
+              args: opts?.args,
+            }));
 
         // 1) .jsh wins the bare name.
         const jshMap = await catalog.getJshCommands();
@@ -862,8 +879,12 @@ describe('workflow save', () => {
     await fs.mkdir('/workspace/.workflows', { recursive: true });
     await fs.writeFile('/workspace/.workflows/audit.workflow.js', 'old');
     const ctx = await ctxWith(fs, async () => ({ stdout: '', stderr: '', exitCode: 0 }));
+    // After Task 4, a saved workflow's name is a registered command. --force must still
+    // overwrite OUR OWN saved workflow (the collision check only applies to NEW names).
+    (ctx as any).getRegisteredCommands = () => ['audit'];
     const r1 = await createWorkflowCommand().execute(['save', 'r1', 'audit'], ctx);
-    expect(r1.exitCode).toBe(1);
+    expect(r1.exitCode).toBe(1); // exists, no --force
+    expect(r1.stderr).toMatch(/already exists/i); // NOT "already a command"
     const r2 = await createWorkflowCommand().execute(['save', 'r1', 'audit', '--force'], ctx);
     expect(r2.exitCode).toBe(0);
     expect(await fs.readFile('/workspace/.workflows/audit.workflow.js')).toContain('return 2');
@@ -924,16 +945,6 @@ async function runSave(
       exitCode: 1,
     };
 
-  // Reject-at-save: don't shadow a built-in / existing command (the dispatch-time precedence
-  // would otherwise let a .jsh/built-in keep the bare name and silently shadow this workflow).
-  const existing = new Set(ctx.getRegisteredCommands?.() ?? []);
-  if (existing.has(name))
-    return {
-      stdout: '',
-      stderr: `workflow: '${name}' is already a command — choose another name\n`,
-      exitCode: 1,
-    };
-
   const mgr = getRunManager();
   const run = mgr?.getRun(runId);
   if (!run)
@@ -946,12 +957,29 @@ async function runSave(
     return { stdout: '', stderr: `workflow: run '${runId}' has no source to save\n`, exitCode: 1 };
 
   const path = `${SAVED_WORKFLOWS_DIR}/${name}.workflow.js`;
-  if (!force && (await ctx.fs.exists(path)))
-    return {
-      stdout: '',
-      stderr: `workflow: ${path} already exists (pass --force to overwrite)\n`,
-      exitCode: 1,
-    };
+  const targetExists = await ctx.fs.exists(path);
+  if (targetExists) {
+    // Overwriting an EXISTING saved workflow of the same name. `name` is in the registered-
+    // command set, but only because THIS workflow registered it — so skip the collision check
+    // and gate purely on --force. (Without this, re-saving over your own workflow would always
+    // be rejected once Task 4 registers it.)
+    if (!force)
+      return {
+        stdout: '',
+        stderr: `workflow: ${path} already exists (pass --force to overwrite)\n`,
+        exitCode: 1,
+      };
+  } else {
+    // New name — reject-at-save if it collides with a built-in or any existing command, so
+    // dispatch-time precedence can't later let a built-in/.jsh silently shadow this workflow.
+    const existing = new Set(ctx.getRegisteredCommands?.() ?? []);
+    if (existing.has(name))
+      return {
+        stdout: '',
+        stderr: `workflow: '${name}' is already a command — choose another name\n`,
+        exitCode: 1,
+      };
+  }
 
   await ctx.fs.mkdir(SAVED_WORKFLOWS_DIR, { recursive: true });
   await ctx.fs.writeFile(path, run.source);
@@ -965,9 +993,11 @@ async function runSave(
 
 In `index.ts`:
 
-1. Add to `SupplementalCommandsConfig`:
+1. Add **both** fields to `SupplementalCommandsConfig` now (the shell passes both in this task, so both must be declared here or `wasm-shell-headless.ts` won't typecheck — `getWorkflowCommands` is consumed by Task 6's `commands`/`which`):
 
 ```ts
+  /** Discovered workflow command names (for `commands`/`which`). */
+  getWorkflowCommands?: () => Promise<string[]>;
   /** Re-run script-command registration (jsh + workflows) after a `workflow save`. */
   syncScriptCommands?: () => void | Promise<void>;
 ```
@@ -981,7 +1011,7 @@ In `index.ts`:
     }),
 ```
 
-In `wasm-shell-headless.ts`, in the `createSupplementalCommands({ … })` call, add:
+In `wasm-shell-headless.ts`, in the `createSupplementalCommands({ … })` call, add the three lines:
 
 ```ts
       getJshCommands: () => this.getJshCommandNames(),
@@ -989,7 +1019,7 @@ In `wasm-shell-headless.ts`, in the `createSupplementalCommands({ … })` call, 
       syncScriptCommands: () => this.syncJshCommands(),
 ```
 
-(`getWorkflowCommands` here is consumed by Task 6's `commands`/`which`; `syncJshCommands` is the unified sync from Task 4.)
+(`getJshCommands` is already passed today — keep it; add the two new ones. `getWorkflowCommands` is unused until Task 6 wires `createCommandsCommand`, but declaring + passing it here keeps this task self-contained and typecheck-clean. `syncJshCommands` is the unified sync from Task 4.)
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
@@ -1075,9 +1105,48 @@ it('lists workflow commands under a Workflows section', async () => {
 Run: `npm test -w @slicc/webapp -- tests/shell/supplemental-commands/which-command.test.ts tests/shell/supplemental-commands/help-command.test.ts --run`
 Expected: FAIL — no `(workflow)` label / no `Workflows:` section / `getWorkflowCommands` not an option.
 
-- [ ] **Step 3: Update `which`**
+- [ ] **Step 3a: Snapshot the static built-in set + plumb it (wasm-shell-headless + index + config)**
 
-In `which-command.ts`: import `discoverWorkflowCommands`, fetch the workflow map, and reorder resolution so scripts win over the `builtin`-registered name and workflows are labeled. Replace the resolution block (the loop that builds `stdoutLines`):
+`which` cannot tell `echo.jsh` (shadowed by the built-in `echo`) from `mycmd.jsh` (active) using `getRegisteredCommands()` alone — both end up in `builtinCommandNames` once scripts register. So expose the **static** built-in set captured before any script registration.
+
+In `wasm-shell-headless.ts`, add a field and snapshot it in the constructor immediately after `this.builtinCommandNames = new Set([...])` (line ~399, **before** the initial `void this.syncJshCommands()` at ~406):
+
+```ts
+  /** Built-in/custom command names captured BEFORE any .jsh/workflow registration. */
+  protected readonly staticBuiltinNames: Set<string>;
+```
+
+```ts
+this.builtinCommandNames = new Set([...registeredBuiltinNames, ...customCommandNames]);
+this.staticBuiltinNames = new Set(this.builtinCommandNames); // snapshot before scripts
+```
+
+In the `createSupplementalCommands({ … })` call, add:
+
+```ts
+      getStaticBuiltins: () => [...this.staticBuiltinNames],
+```
+
+In `index.ts`, add to `SupplementalCommandsConfig`:
+
+```ts
+  /** Built-in command names (excludes dynamically-registered .jsh/workflow names). */
+  getStaticBuiltins?: () => string[];
+```
+
+and pass it to `which` at its call site:
+
+```ts
+    createWhichCommand({
+      fs: options.fs,
+      scriptCatalog: options.scriptCatalog,
+      getStaticBuiltins: options.getStaticBuiltins,
+    }),
+```
+
+- [ ] **Step 3b: Update `which`**
+
+In `which-command.ts`: add `getStaticBuiltins?: () => string[];` to `WhichCommandOptions`, import `discoverWorkflowCommands`, fetch the workflow map, and replace the resolution loop. The static-built-in set decides "real built-in" (which wins per precedence); otherwise `.jsh` wins over a saved workflow; a workflow is labeled and marked shadowed when a `.jsh`/built-in outranks it:
 
 ```ts
 const jshCommands = resolvedOptions.scriptCatalog
@@ -1090,6 +1159,12 @@ const workflowCommands = resolvedOptions.scriptCatalog
   : resolvedOptions.fs
     ? await discoverWorkflowCommands(resolvedOptions.fs)
     : new Map();
+// Static built-ins (echo, ls, …) win over any same-named script. Falls back to the
+// registered set when not supplied (legacy fs-only construction).
+const staticBuiltins =
+  typeof resolvedOptions.getStaticBuiltins === 'function'
+    ? new Set(resolvedOptions.getStaticBuiltins())
+    : builtinSet;
 
 const stdoutLines: string[] = [];
 let allFound = true;
@@ -1097,13 +1172,16 @@ let allFound = true;
 for (const name of args) {
   const jshPath = jshCommands.get(name);
   const wf = workflowCommands.get(name);
-  if (jshPath) {
-    stdoutLines.push(jshPath); // .jsh wins the bare name
+  if (staticBuiltins.has(name)) {
+    stdoutLines.push(`/usr/bin/${name}`); // built-in wins
+    if (jshPath || wf) stdoutLines.push(`  (shadowed by built-in ${name})`);
+  } else if (jshPath) {
+    stdoutLines.push(jshPath); // .jsh wins over a saved workflow
     if (wf) stdoutLines.push(`${wf.path} (workflow, shadowed by .jsh)`);
   } else if (wf) {
     stdoutLines.push(`${wf.path} (workflow)`);
   } else if (builtinSet.has(name)) {
-    stdoutLines.push(`/usr/bin/${name}`); // real built-in
+    stdoutLines.push(`/usr/bin/${name}`); // registered (custom) command, no backing script
   } else {
     allFound = false;
   }
@@ -1114,7 +1192,17 @@ Add the import: `import { discoverWorkflowCommands } from '../workflow-discovery
 
 - [ ] **Step 4: Update `commands`**
 
-In `help-command.ts`: add `getWorkflowCommands?: () => Promise<string[]>;` to `CommandsCommandOptions`; fetch it; pass to `formatHelp`; render a section. In `formatHelp(commands, jshCommands = [], workflowCommands = [])` add after the `.jsh` block:
+In `help-command.ts`: add `getWorkflowCommands?: () => Promise<string[]>;` to `CommandsCommandOptions`; fetch it; pass to `formatHelp`; render a section. Change the signature to `formatHelp(commands, jshCommands = [], workflowCommands = [])`.
+
+First, **dedup**: jsh and workflow names are in `commands` (they're registered into `builtinCommandNames` → `getRegisteredCommands()`), so they'd otherwise also land in the "Other" bucket. Remove them from `available` right after it's built (this also fixes the pre-existing jsh leak):
+
+```ts
+const available = new Set(commands);
+for (const n of jshCommands) available.delete(n);
+for (const n of workflowCommands) available.delete(n);
+```
+
+Then add, after the `.jsh` block:
 
 ```ts
 if (workflowCommands.length > 0) {
@@ -1144,7 +1232,7 @@ return {
     }),
 ```
 
-Add `getWorkflowCommands?: () => Promise<string[]>;` to `SupplementalCommandsConfig` (the shell already passes it from Task 5 Step 5).
+(`getWorkflowCommands?` is already declared on `SupplementalCommandsConfig` and passed by the shell from Task 5 — do NOT re-declare it here. `getStaticBuiltins?` was added in Step 3a.)
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
@@ -1155,7 +1243,7 @@ Expected: PASS.
 
 ```bash
 npm run lint
-git add packages/webapp/src/shell/supplemental-commands/which-command.ts packages/webapp/src/shell/supplemental-commands/help-command.ts packages/webapp/src/shell/supplemental-commands/index.ts packages/webapp/tests/shell/supplemental-commands/which-command.test.ts packages/webapp/tests/shell/supplemental-commands/help-command.test.ts
+git add packages/webapp/src/shell/supplemental-commands/which-command.ts packages/webapp/src/shell/supplemental-commands/help-command.ts packages/webapp/src/shell/supplemental-commands/index.ts packages/webapp/src/shell/wasm-shell-headless.ts packages/webapp/tests/shell/supplemental-commands/which-command.test.ts packages/webapp/tests/shell/supplemental-commands/help-command.test.ts
 git commit -m "feat(workflow): surface workflows in which/commands with precedence labels
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
@@ -1191,10 +1279,11 @@ it('discovers the bundled workflows skill', async () => {
 
 (Match the exact `discoverSkills` signature used elsewhere in that file.)
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [ ] **Step 2: Run the test**
 
 Run: `npm test -w @slicc/webapp -- tests/skills/discover.test.ts --run`
-Expected: FAIL (the in-test write makes it pass already if `discoverSkills` works — if so, this test mainly guards the format; keep it as a regression). If it passes immediately, that's fine — proceed to author the real bundled file (Step 3), which is the actual deliverable.
+
+This test is a **frontmatter/format regression guard**, not a fail-first test: it writes the same `SKILL.md` shape the bundled file ships and asserts `discoverSkills` parses `name`/`description`. Because `discoverSkills` already works, it passes immediately — its value is locking the frontmatter shape and documenting that the bundled file is the real deliverable (Step 3). If it errors (e.g. the `discoverSkills` signature differs), fix the test to match the file's existing idiom, then proceed.
 
 - [ ] **Step 3: Author the skill**
 
@@ -1255,7 +1344,6 @@ const findings = await parallel(
 );
 return findings.filter(Boolean);
 ```
-````
 
 ## Running
 
@@ -1284,7 +1372,6 @@ Skills can also ship workflows under `skills/<skill>/.workflows/`, which registe
 (a built-in or `.jsh` keeps the bare name; the workflow is still runnable via
 `workflow run /workspace/.workflows/<name>.workflow.js`). `workflow save` rejects a name
 that's already a command, so pick another.
-
 ````
 
 - [ ] **Step 3b: Verify the skill lints (tessl SKILL.md lint)**
@@ -1305,7 +1392,7 @@ git add packages/vfs-root/workspace/skills/workflows/SKILL.md packages/webapp/te
 git commit -m "feat(workflow): add workflows authoring skill
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
-````
+```
 
 ---
 
