@@ -15,6 +15,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  createBufferedOpfsSahProvider,
   createOpfsSyncFs,
   type EmscriptenFsApi,
   ERRNO,
@@ -236,11 +237,17 @@ async function setup(tree: Record<string, unknown>): Promise<{
   return { fs, plugin, mount, root, sah, rootDir };
 }
 
-function openStream(plugin: ReturnType<typeof createOpfsSyncFs>, node: FsNode): FsStream {
-  const stream: FsStream = { node, position: 0 };
+function openStream(
+  plugin: ReturnType<typeof createOpfsSyncFs>,
+  node: FsNode,
+  flags = 0
+): FsStream {
+  const stream: FsStream = { node, position: 0, flags };
   plugin.stream_ops.open(stream);
   return stream;
 }
+
+const O_TRUNC = 0o1000;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -479,6 +486,56 @@ describe('OPFS_SYNC_FS — setattr truncate via SAH provider', () => {
     const backing = sah.backings.get('a.txt');
     expect(backing?.data.length ?? 0).toBe(2);
   });
+
+  it('skips the queued truncate when a stream write has grown the file past the target', async () => {
+    const { plugin, root, mount, sah } = await setup({ 'a.txt': 'AAAA' });
+    const a = plugin.node_ops.lookup(root, 'a.txt');
+    a.opfs.size = 4;
+
+    // Emscripten's open('w') calls setattr(size=0) THEN opens the stream.
+    plugin.node_ops.setattr(a, { size: 0 });
+    expect(a.opfs.size).toBe(0);
+
+    // Stream open + write simulates Python writing new content.
+    const stream = openStream(plugin, a);
+    const data = new TextEncoder().encode('hello from python');
+    plugin.stream_ops.write(stream, data, 0, data.length, 0);
+    expect(a.opfs.size).toBe(17);
+    plugin.stream_ops.close(stream);
+
+    // Flush drains the queued truncate — but it must be skipped because
+    // node.opfs.size (17) > sizeAtEnqueue (0).
+    await flushPendingOpfsOps(mount);
+
+    const backing = sah.backings.get('a.txt');
+    expect(backing?.data.length).toBe(17);
+    expect(new TextDecoder().decode(backing?.data)).toBe('hello from python');
+  });
+
+  it('O_TRUNC open on existing file truncates synchronously (shorter overwrite)', async () => {
+    const { plugin, root, mount, sah } = await setup({ 'a.txt': 'AAAAAAAA' });
+    const a = plugin.node_ops.lookup(root, 'a.txt');
+    a.opfs.size = 8;
+
+    // Emscripten calls setattr(size=0) then opens with O_TRUNC.
+    plugin.node_ops.setattr(a, { size: 0 });
+    const stream = openStream(plugin, a, O_TRUNC);
+
+    // After open with O_TRUNC, size must be 0 regardless of original.
+    expect(a.opfs.size).toBe(0);
+
+    // Write shorter content than the original file.
+    const data = new TextEncoder().encode('Hi');
+    plugin.stream_ops.write(stream, data, 0, data.length, 0);
+    expect(a.opfs.size).toBe(2);
+    plugin.stream_ops.close(stream);
+
+    await flushPendingOpfsOps(mount);
+
+    const backing = sah.backings.get('a.txt');
+    expect(backing?.data.length).toBe(2);
+    expect(new TextDecoder().decode(backing?.data)).toBe('Hi');
+  });
 });
 
 describe('ERRNO mapping', () => {
@@ -490,5 +547,49 @@ describe('ERRNO mapping', () => {
     expect(ERRNO.ENOTEMPTY).toBe(55);
     expect(ERRNO.EBADF).toBe(8);
     expect(ERRNO.EINVAL).toBe(28);
+  });
+});
+
+describe('createBufferedOpfsSahProvider dirty tracking', () => {
+  it('getDirtyPaths returns paths written through the provider', () => {
+    const buffered = createBufferedOpfsSahProvider();
+    const sah = buffered.provider.acquire('foo/bar.txt');
+    const bytes = new TextEncoder().encode('hello');
+    sah.write(bytes, { at: 0 });
+    sah.close();
+
+    expect(buffered.getDirtyPaths()).toContain('foo/bar.txt');
+  });
+
+  it('getDirtyPaths does not include preloaded files that were not written', async () => {
+    const root = createMutableDirectoryHandle({ 'existing.txt': 'EXISTING' });
+    const prewalk = await prewalkOpfsTree(root.handle);
+    const buffered = createBufferedOpfsSahProvider();
+    await buffered.preload(prewalk);
+
+    expect(buffered.getDirtyPaths()).toEqual([]);
+  });
+
+  it('getDirtyPaths includes preloaded files that were subsequently written', async () => {
+    const root = createMutableDirectoryHandle({ 'existing.txt': 'OLD' });
+    const prewalk = await prewalkOpfsTree(root.handle);
+    const buffered = createBufferedOpfsSahProvider();
+    await buffered.preload(prewalk);
+
+    const sah = buffered.provider.acquire('existing.txt');
+    const bytes = new TextEncoder().encode('NEW CONTENT');
+    sah.write(bytes, { at: 0 });
+    sah.close();
+
+    expect(buffered.getDirtyPaths()).toContain('existing.txt');
+  });
+
+  it('tracks newly created files (no pre-existing fileHandle)', () => {
+    const buffered = createBufferedOpfsSahProvider();
+    const sah = buffered.provider.acquire('brand-new.txt');
+    sah.write(new TextEncoder().encode('fresh'), { at: 0 });
+    sah.close();
+
+    expect(buffered.getDirtyPaths()).toContain('brand-new.txt');
   });
 });

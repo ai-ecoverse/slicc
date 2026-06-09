@@ -375,4 +375,40 @@ describe('VirtualFS', () => {
       expect(vfs.canWrite('/scoops/other-scoop/secret.txt')).toBe(true);
     });
   });
+
+  describe('invalidatePaths', () => {
+    it('is a no-op on the memory backend', () => {
+      // Should not throw — early-returns because backend !== 'opfs'
+      expect(() => vfs.invalidatePaths(['/foo.txt', '/bar/baz.txt'])).not.toThrow();
+    });
+
+    it('deletes entries from index and _handles when opfs backend is present', () => {
+      const fakeIndex = new Map<string, unknown>([
+        ['/tmp/test.txt', { size: 100 }],
+        ['/workspace/keep.txt', { size: 50 }],
+      ]);
+      const fakeHandles = new Map<string, unknown>([
+        ['/tmp/test.txt', {}],
+        ['/workspace/keep.txt', {}],
+      ]);
+      // Inject a fake OPFS backend to bypass the early return
+      const internal = vfs as unknown as {
+        backend: string;
+        opfsBackendFs: unknown;
+      };
+      internal.backend = 'opfs';
+      internal.opfsBackendFs = {
+        index: { delete: (p: string) => fakeIndex.delete(p) },
+        _handles: fakeHandles,
+      };
+
+      vfs.invalidatePaths(['/tmp/test.txt']);
+
+      expect(fakeIndex.has('/tmp/test.txt')).toBe(false);
+      expect(fakeHandles.has('/tmp/test.txt')).toBe(false);
+      // Unrelated paths are untouched
+      expect(fakeIndex.has('/workspace/keep.txt')).toBe(true);
+      expect(fakeHandles.has('/workspace/keep.txt')).toBe(true);
+    });
+  });
 });

@@ -283,6 +283,14 @@ async function dispatchVfs(op: string, args: unknown[], ctx: CommandContext): Pr
       return true;
     case 'resolvePath':
       return ctx.fs.resolvePath(ctx.cwd, args[0] as string);
+    case 'invalidatePaths': {
+      const paths = args[0] as string[];
+      const vfs = ctx.fs as { invalidatePaths?: (paths: string[]) => void };
+      if (vfs.invalidatePaths) {
+        vfs.invalidatePaths(paths);
+      }
+      return true;
+    }
     default:
       throw new Error(`realm-host: unknown vfs op '${op}'`);
   }

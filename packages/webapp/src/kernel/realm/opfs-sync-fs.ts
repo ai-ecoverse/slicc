@@ -77,6 +77,9 @@ const S_IFDIR = 0o040000;
 const S_IFREG = 0o100000;
 const S_IFLNK = 0o120000;
 
+/** Emscripten open-flag for truncate-on-open. */
+const O_TRUNC = 0o1000;
+
 const DEFAULT_DIR_MODE = S_IFDIR | 0o755;
 const DEFAULT_FILE_MODE = S_IFREG | 0o644;
 const DEFAULT_LINK_MODE = S_IFLNK | 0o777;
@@ -324,6 +327,286 @@ function joinRel(parent: string, name: string): string {
 }
 
 /**
+ * Build the `node_ops` object for the plugin. Extracted to keep the
+ * main factory under the line-count lint threshold.
+ */
+function buildNodeOps(Fs: EmscriptenFsApi, plugin: OpfsSyncFsPlugin): NodeOps {
+  return {
+    getattr(node: FsNode): NodeAttr {
+      const isDir = Fs.isDir(node.mode);
+      const isLink = Fs.isLink(node.mode);
+      const size = isLink ? (node.opfs.linkTarget?.length ?? 0) : isDir ? 4096 : node.opfs.size;
+      const t = new Date(node.opfs.mtime || node.timestamp);
+      return {
+        dev: 1,
+        ino: node.id,
+        mode: node.mode,
+        nlink: 1,
+        uid: 0,
+        gid: 0,
+        rdev: 0,
+        size,
+        atime: t,
+        mtime: t,
+        ctime: t,
+        blksize: 4096,
+        blocks: Math.ceil(size / 4096),
+      };
+    },
+
+    setattr(node: FsNode, attr: Partial<NodeAttr>): void {
+      if (attr.mode !== undefined) {
+        node.mode = (node.mode & S_IFMT) | (attr.mode & ~S_IFMT);
+      }
+      if (attr.size !== undefined && Fs.isFile(node.mode)) {
+        const newSize = attr.size;
+        node.opfs.size = newSize;
+        const sizeAtEnqueue = newSize;
+        enqueueOpfsOp(node.mount, async () => {
+          if (node.opfs.size > sizeAtEnqueue) return;
+          const fileHandle = await ensureFileHandle(node);
+          const sah = node.mount.opts.sahProvider.acquire(node.opfs.relPath, fileHandle);
+          try {
+            sah.truncate(newSize);
+            sah.flush();
+          } finally {
+            sah.close();
+            node.mount.opts.sahProvider.release(node.opfs.relPath);
+          }
+        });
+      }
+      if (attr.mtime !== undefined) {
+        const ts = attr.mtime.getTime();
+        node.opfs.mtime = ts;
+        node.timestamp = ts;
+      }
+    },
+
+    lookup(parent: FsNode, name: string): FsNode {
+      const child = parent.opfs.children?.get(name);
+      if (!child) throw new Fs.ErrnoError(ERRNO.ENOENT);
+      return child;
+    },
+
+    mknod(parent: FsNode, name: string, mode: number, dev: number): FsNode {
+      if (parent.opfs.children?.has(name)) {
+        throw new Fs.ErrnoError(ERRNO.EEXIST);
+      }
+      const node = plugin.createNode(parent, name, mode, dev);
+      parent.opfs.children?.set(name, node);
+      if (Fs.isDir(mode)) {
+        enqueueOpfsOp(parent.mount, async () => {
+          const parentDir = await ensureDirHandle(parent);
+          const newDir = await parentDir.getDirectoryHandle(name, { create: true });
+          node.opfs.dirHandle = newDir;
+        });
+      } else if (Fs.isFile(mode)) {
+        enqueueOpfsOp(parent.mount, async () => {
+          const parentDir = await ensureDirHandle(parent);
+          const newFile = await parentDir.getFileHandle(name, { create: true });
+          node.opfs.fileHandle = newFile;
+        });
+      }
+      return node;
+    },
+
+    rename(oldNode: FsNode, newDir: FsNode, newName: string): void {
+      const oldParent = oldNode.parent;
+      const oldName = oldNode.name;
+      if (oldName === newName && oldParent === newDir) return;
+      if (newDir.opfs.children?.has(newName)) {
+        throw new Fs.ErrnoError(ERRNO.EEXIST);
+      }
+      oldParent.opfs.children?.delete(oldName);
+      newDir.opfs.children?.set(newName, oldNode);
+      oldNode.name = newName;
+      oldNode.parent = newDir;
+      renameSubtreeRelPaths(oldNode, joinRel(newDir.opfs.relPath, newName));
+      if (Fs.isFile(oldNode.mode)) {
+        enqueueOpfsOp(oldNode.mount, () =>
+          opfsRenameFile(oldNode, oldParent, oldName, newDir, newName)
+        );
+      } else if (Fs.isDir(oldNode.mode)) {
+        enqueueOpfsOp(oldNode.mount, () =>
+          opfsRenameDir(oldNode, oldParent, oldName, newDir, newName)
+        );
+      }
+    },
+
+    unlink(parent: FsNode, name: string): void {
+      const child = parent.opfs.children?.get(name);
+      if (!child) throw new Fs.ErrnoError(ERRNO.ENOENT);
+      if (Fs.isDir(child.mode)) throw new Fs.ErrnoError(ERRNO.EISDIR);
+      parent.opfs.children?.delete(name);
+      if (Fs.isFile(child.mode)) {
+        enqueueOpfsOp(parent.mount, async () => {
+          try {
+            parent.mount.opts.sahProvider.release(child.opfs.relPath);
+          } catch {
+            // Released defensively — best effort.
+          }
+          const parentDir = await ensureDirHandle(parent);
+          await parentDir.removeEntry(name);
+        });
+      }
+    },
+
+    rmdir(parent: FsNode, name: string): void {
+      const child = parent.opfs.children?.get(name);
+      if (!child) throw new Fs.ErrnoError(ERRNO.ENOENT);
+      if (!Fs.isDir(child.mode)) throw new Fs.ErrnoError(ERRNO.ENOTDIR);
+      if ((child.opfs.children?.size ?? 0) > 0) {
+        throw new Fs.ErrnoError(ERRNO.ENOTEMPTY);
+      }
+      parent.opfs.children?.delete(name);
+      enqueueOpfsOp(parent.mount, async () => {
+        const parentDir = await ensureDirHandle(parent);
+        await parentDir.removeEntry(name);
+      });
+    },
+
+    readdir(node: FsNode): string[] {
+      if (!Fs.isDir(node.mode)) throw new Fs.ErrnoError(ERRNO.ENOTDIR);
+      const names = ['.', '..'];
+      for (const childName of node.opfs.children?.keys() ?? []) {
+        names.push(childName);
+      }
+      return names;
+    },
+
+    symlink(parent: FsNode, newName: string, oldPath: string): FsNode {
+      if (parent.opfs.children?.has(newName)) {
+        throw new Fs.ErrnoError(ERRNO.EEXIST);
+      }
+      const node = plugin.createNode(parent, newName, DEFAULT_LINK_MODE, 0);
+      node.opfs.linkTarget = oldPath;
+      parent.opfs.children?.set(newName, node);
+      return node;
+    },
+
+    readlink(node: FsNode): string {
+      if (!Fs.isLink(node.mode)) throw new Fs.ErrnoError(ERRNO.EINVAL);
+      return node.opfs.linkTarget ?? '';
+    },
+  };
+}
+
+/**
+ * Build the `stream_ops` object for the plugin. Extracted to keep the
+ * main factory under the line-count lint threshold.
+ */
+function buildStreamOps(Fs: EmscriptenFsApi): StreamOps {
+  return {
+    open(stream: FsStream): void {
+      const node = stream.node;
+      if (Fs.isDir(node.mode)) return;
+      if (!Fs.isFile(node.mode)) return;
+      const sah = node.mount.opts.sahProvider.acquire(node.opfs.relPath, node.opfs.fileHandle);
+      stream.sah = sah;
+      if (stream.flags !== undefined && stream.flags & O_TRUNC) {
+        sah.truncate(0);
+        node.opfs.size = 0;
+      } else {
+        node.opfs.size = sah.getSize();
+      }
+    },
+
+    close(stream: FsStream): void {
+      const sah = stream.sah;
+      if (!sah) return;
+      try {
+        sah.flush();
+      } finally {
+        sah.close();
+        stream.node.mount.opts.sahProvider.release(stream.node.opfs.relPath);
+        stream.sah = undefined;
+      }
+    },
+
+    read(
+      stream: FsStream,
+      buffer: Uint8Array,
+      offset: number,
+      length: number,
+      position: number
+    ): number {
+      const sah = stream.sah;
+      if (!sah) throw new Fs.ErrnoError(ERRNO.EBADF);
+      const view = new Uint8Array(buffer.buffer, buffer.byteOffset + offset, length);
+      return sah.read(view, { at: position });
+    },
+
+    write(
+      stream: FsStream,
+      buffer: Uint8Array,
+      offset: number,
+      length: number,
+      position: number
+    ): number {
+      const sah = stream.sah;
+      if (!sah) throw new Fs.ErrnoError(ERRNO.EBADF);
+      const view = new Uint8Array(buffer.buffer, buffer.byteOffset + offset, length);
+      const written = sah.write(view, { at: position });
+      const newSize = Math.max(stream.node.opfs.size, position + written);
+      stream.node.opfs.size = newSize;
+      stream.node.opfs.mtime = Date.now();
+      stream.node.timestamp = stream.node.opfs.mtime;
+      return written;
+    },
+
+    llseek(stream: FsStream, offset: number, whence: number): number {
+      let position = offset;
+      if (whence === 1) position = stream.position + offset;
+      else if (whence === 2) {
+        const sah = stream.sah;
+        const size = sah ? sah.getSize() : stream.node.opfs.size;
+        position = size + offset;
+      }
+      if (position < 0) throw new Fs.ErrnoError(ERRNO.EINVAL);
+      stream.position = position;
+      return position;
+    },
+  };
+}
+
+/**
+ * Materialize the prewalk snapshot into an in-memory node tree so
+ * `lookup` / `readdir` are pure cache hits.
+ */
+function materializePrewalk(
+  Fs: EmscriptenFsApi,
+  plugin: OpfsSyncFsPlugin,
+  root: FsNode,
+  prewalk: OpfsPrewalkSnapshot
+): void {
+  for (const [relPath, entry] of prewalk.entries) {
+    if (relPath === '') continue;
+    const parts = relPath.split('/');
+    let parent = root;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const childName = parts[i];
+      const existing = parent.opfs.children?.get(childName);
+      if (!existing) throw new Fs.ErrnoError(ERRNO.EIO);
+      parent = existing;
+    }
+    const name = parts[parts.length - 1];
+    if (entry.kind === 'directory') {
+      const node = plugin.createNode(parent, name, DEFAULT_DIR_MODE, 0);
+      node.opfs.dirHandle = entry.dirHandle;
+      node.opfs.children = new Map();
+      parent.opfs.children?.set(name, node);
+    } else {
+      const node = plugin.createNode(parent, name, DEFAULT_FILE_MODE, 0);
+      node.opfs.fileHandle = entry.fileHandle;
+      node.opfs.size = entry.size;
+      node.opfs.mtime = entry.mtime;
+      node.timestamp = entry.mtime;
+      parent.opfs.children?.set(name, node);
+    }
+  }
+}
+
+/**
  * Construct the `OPFS_SYNC_FS` plugin. The plugin is parameterized
  * on `FS` (the Emscripten FS surface) because we need
  * `FS.createNode` + `FS.ErrnoError` to fit into Emscripten's node
@@ -342,34 +625,7 @@ export function createOpfsSyncFs(Fs: EmscriptenFsApi): OpfsSyncFsPlugin {
       root.mount = mount;
       root.opfs.dirHandle = rootEntry.dirHandle;
       root.opfs.children = new Map();
-      // Materialize the entire snapshot up-front so `lookup` /
-      // `readdir` are pure cache hits. The prewalk already paid
-      // the async cost; building the tree is just bookkeeping.
-      for (const [relPath, entry] of prewalk.entries) {
-        if (relPath === '') continue;
-        const parts = relPath.split('/');
-        let parent = root;
-        for (let i = 0; i < parts.length - 1; i++) {
-          const childName = parts[i];
-          const existing = parent.opfs.children?.get(childName);
-          if (!existing) throw new Fs.ErrnoError(ERRNO.EIO);
-          parent = existing;
-        }
-        const name = parts[parts.length - 1];
-        if (entry.kind === 'directory') {
-          const node = plugin.createNode(parent, name, DEFAULT_DIR_MODE, 0);
-          node.opfs.dirHandle = entry.dirHandle;
-          node.opfs.children = new Map();
-          parent.opfs.children?.set(name, node);
-        } else {
-          const node = plugin.createNode(parent, name, DEFAULT_FILE_MODE, 0);
-          node.opfs.fileHandle = entry.fileHandle;
-          node.opfs.size = entry.size;
-          node.opfs.mtime = entry.mtime;
-          node.timestamp = entry.mtime;
-          parent.opfs.children?.set(name, node);
-        }
-      }
+      materializePrewalk(Fs, plugin, root, prewalk);
       return root;
     },
 
@@ -382,9 +638,6 @@ export function createOpfsSyncFs(Fs: EmscriptenFsApi): OpfsSyncFsPlugin {
       node.node_ops = plugin.node_ops;
       node.stream_ops = plugin.stream_ops;
       node.timestamp = Date.now();
-      // Inherit the mount object from the parent so newly-created
-      // nodes can enqueue OPFS mutations against the same chain.
-      // The root assigns `node.mount` explicitly in `plugin.mount`.
       if (parent !== null) node.mount = parent.mount;
       node.opfs = {
         relPath,
@@ -395,249 +648,12 @@ export function createOpfsSyncFs(Fs: EmscriptenFsApi): OpfsSyncFsPlugin {
       return node;
     },
 
-    node_ops: {
-      getattr(node: FsNode): NodeAttr {
-        const isDir = Fs.isDir(node.mode);
-        const isLink = Fs.isLink(node.mode);
-        const size = isLink ? (node.opfs.linkTarget?.length ?? 0) : isDir ? 4096 : node.opfs.size;
-        const t = new Date(node.opfs.mtime || node.timestamp);
-        return {
-          dev: 1,
-          ino: node.id,
-          mode: node.mode,
-          nlink: 1,
-          uid: 0,
-          gid: 0,
-          rdev: 0,
-          size,
-          atime: t,
-          mtime: t,
-          ctime: t,
-          blksize: 4096,
-          blocks: Math.ceil(size / 4096),
-        };
-      },
-
-      setattr(node: FsNode, attr: Partial<NodeAttr>): void {
-        if (attr.mode !== undefined) {
-          // Preserve the type bits; only the permission bits are
-          // user-settable via chmod (matches POSIX semantics).
-          node.mode = (node.mode & S_IFMT) | (attr.mode & ~S_IFMT);
-        }
-        if (attr.size !== undefined && Fs.isFile(node.mode)) {
-          const newSize = attr.size;
-          node.opfs.size = newSize;
-          // `setattr` has no access to the stream, so any open SAH on
-          // this node is owned by `stream.sah` and not visible here.
-          // Always queue an async truncate through a transient SAH
-          // lease so the on-disk file matches the new size. E2 can
-          // reintroduce a stream-level fast path by threading the
-          // open SAH (if any) into this call.
-          enqueueOpfsOp(node.mount, async () => {
-            const fileHandle = await ensureFileHandle(node);
-            const sah = node.mount.opts.sahProvider.acquire(node.opfs.relPath, fileHandle);
-            try {
-              sah.truncate(newSize);
-              sah.flush();
-            } finally {
-              sah.close();
-              node.mount.opts.sahProvider.release(node.opfs.relPath);
-            }
-          });
-        }
-        if (attr.mtime !== undefined) {
-          const ts = attr.mtime.getTime();
-          node.opfs.mtime = ts;
-          node.timestamp = ts;
-        }
-      },
-
-      lookup(parent: FsNode, name: string): FsNode {
-        const child = parent.opfs.children?.get(name);
-        if (!child) throw new Fs.ErrnoError(ERRNO.ENOENT);
-        return child;
-      },
-
-      mknod(parent: FsNode, name: string, mode: number, dev: number): FsNode {
-        if (parent.opfs.children?.has(name)) {
-          throw new Fs.ErrnoError(ERRNO.EEXIST);
-        }
-        const node = plugin.createNode(parent, name, mode, dev);
-        parent.opfs.children?.set(name, node);
-        if (Fs.isDir(mode)) {
-          enqueueOpfsOp(parent.mount, async () => {
-            const parentDir = await ensureDirHandle(parent);
-            const newDir = await parentDir.getDirectoryHandle(name, { create: true });
-            node.opfs.dirHandle = newDir;
-          });
-        } else if (Fs.isFile(mode)) {
-          enqueueOpfsOp(parent.mount, async () => {
-            const parentDir = await ensureDirHandle(parent);
-            const newFile = await parentDir.getFileHandle(name, { create: true });
-            node.opfs.fileHandle = newFile;
-          });
-        }
-        // Symlinks intentionally stay in-memory only — matches MEMFS
-        // (Pyodide's default) which also doesn't persist them.
-        return node;
-      },
-
-      rename(oldNode: FsNode, newDir: FsNode, newName: string): void {
-        const oldParent = oldNode.parent;
-        const oldName = oldNode.name;
-        if (oldName === newName && oldParent === newDir) return;
-        if (newDir.opfs.children?.has(newName)) {
-          throw new Fs.ErrnoError(ERRNO.EEXIST);
-        }
-        oldParent.opfs.children?.delete(oldName);
-        newDir.opfs.children?.set(newName, oldNode);
-        oldNode.name = newName;
-        oldNode.parent = newDir;
-        renameSubtreeRelPaths(oldNode, joinRel(newDir.opfs.relPath, newName));
-        // The FSA spec has no native rename — emulate it by
-        // re-creating + deleting the underlying handle. Files use
-        // the SAH for content; directories recurse. Queued so the
-        // sync FS op returns immediately.
-        if (Fs.isFile(oldNode.mode)) {
-          enqueueOpfsOp(oldNode.mount, () =>
-            opfsRenameFile(oldNode, oldParent, oldName, newDir, newName)
-          );
-        } else if (Fs.isDir(oldNode.mode)) {
-          enqueueOpfsOp(oldNode.mount, () =>
-            opfsRenameDir(oldNode, oldParent, oldName, newDir, newName)
-          );
-        }
-      },
-
-      unlink(parent: FsNode, name: string): void {
-        const child = parent.opfs.children?.get(name);
-        if (!child) throw new Fs.ErrnoError(ERRNO.ENOENT);
-        if (Fs.isDir(child.mode)) throw new Fs.ErrnoError(ERRNO.EISDIR);
-        parent.opfs.children?.delete(name);
-        if (Fs.isFile(child.mode)) {
-          enqueueOpfsOp(parent.mount, async () => {
-            try {
-              parent.mount.opts.sahProvider.release(child.opfs.relPath);
-            } catch {
-              // Released defensively — best effort.
-            }
-            const parentDir = await ensureDirHandle(parent);
-            await parentDir.removeEntry(name);
-          });
-        }
-      },
-
-      rmdir(parent: FsNode, name: string): void {
-        const child = parent.opfs.children?.get(name);
-        if (!child) throw new Fs.ErrnoError(ERRNO.ENOENT);
-        if (!Fs.isDir(child.mode)) throw new Fs.ErrnoError(ERRNO.ENOTDIR);
-        if ((child.opfs.children?.size ?? 0) > 0) {
-          throw new Fs.ErrnoError(ERRNO.ENOTEMPTY);
-        }
-        parent.opfs.children?.delete(name);
-        enqueueOpfsOp(parent.mount, async () => {
-          const parentDir = await ensureDirHandle(parent);
-          await parentDir.removeEntry(name);
-        });
-      },
-
-      readdir(node: FsNode): string[] {
-        if (!Fs.isDir(node.mode)) throw new Fs.ErrnoError(ERRNO.ENOTDIR);
-        const names = ['.', '..'];
-        for (const childName of node.opfs.children?.keys() ?? []) {
-          names.push(childName);
-        }
-        return names;
-      },
-
-      symlink(parent: FsNode, newName: string, oldPath: string): FsNode {
-        if (parent.opfs.children?.has(newName)) {
-          throw new Fs.ErrnoError(ERRNO.EEXIST);
-        }
-        const node = plugin.createNode(parent, newName, DEFAULT_LINK_MODE, 0);
-        node.opfs.linkTarget = oldPath;
-        parent.opfs.children?.set(newName, node);
-        return node;
-      },
-
-      readlink(node: FsNode): string {
-        if (!Fs.isLink(node.mode)) throw new Fs.ErrnoError(ERRNO.EINVAL);
-        return node.opfs.linkTarget ?? '';
-      },
-    },
-
-    stream_ops: {
-      open(stream: FsStream): void {
-        const node = stream.node;
-        if (Fs.isDir(node.mode)) return;
-        if (!Fs.isFile(node.mode)) return;
-        // `fileHandle` is `undefined` immediately after `mknod` —
-        // the queued OPFS creation hasn't run yet. The provider
-        // owns the backing in that case (see `OpfsSahProvider`).
-        const sah = node.mount.opts.sahProvider.acquire(node.opfs.relPath, node.opfs.fileHandle);
-        stream.sah = sah;
-        // Refresh cached size from the live handle in case another
-        // writer mutated it since the prewalk snapshot.
-        node.opfs.size = sah.getSize();
-      },
-
-      close(stream: FsStream): void {
-        const sah = stream.sah;
-        if (!sah) return;
-        try {
-          sah.flush();
-        } finally {
-          sah.close();
-          stream.node.mount.opts.sahProvider.release(stream.node.opfs.relPath);
-          stream.sah = undefined;
-        }
-      },
-
-      read(
-        stream: FsStream,
-        buffer: Uint8Array,
-        offset: number,
-        length: number,
-        position: number
-      ): number {
-        const sah = stream.sah;
-        if (!sah) throw new Fs.ErrnoError(ERRNO.EBADF);
-        const view = new Uint8Array(buffer.buffer, buffer.byteOffset + offset, length);
-        return sah.read(view, { at: position });
-      },
-
-      write(
-        stream: FsStream,
-        buffer: Uint8Array,
-        offset: number,
-        length: number,
-        position: number
-      ): number {
-        const sah = stream.sah;
-        if (!sah) throw new Fs.ErrnoError(ERRNO.EBADF);
-        const view = new Uint8Array(buffer.buffer, buffer.byteOffset + offset, length);
-        const written = sah.write(view, { at: position });
-        const newSize = Math.max(stream.node.opfs.size, position + written);
-        stream.node.opfs.size = newSize;
-        stream.node.opfs.mtime = Date.now();
-        stream.node.timestamp = stream.node.opfs.mtime;
-        return written;
-      },
-
-      llseek(stream: FsStream, offset: number, whence: number): number {
-        let position = offset;
-        if (whence === 1) position = stream.position + offset;
-        else if (whence === 2) {
-          const sah = stream.sah;
-          const size = sah ? sah.getSize() : stream.node.opfs.size;
-          position = size + offset;
-        }
-        if (position < 0) throw new Fs.ErrnoError(ERRNO.EINVAL);
-        stream.position = position;
-        return position;
-      },
-    },
+    node_ops: undefined!,
+    stream_ops: undefined!,
   };
+
+  plugin.node_ops = buildNodeOps(Fs, plugin);
+  plugin.stream_ops = buildStreamOps(Fs);
 
   return plugin;
 }
@@ -699,6 +715,8 @@ export interface OpfsBufferedSahProvider {
   preload(prewalk: OpfsPrewalkSnapshot): Promise<void>;
   /** Write every dirty buffer back to OPFS under `rootHandle`. */
   flush(rootHandle: FileSystemDirectoryHandle): Promise<void>;
+  /** Return relative paths that were written (dirty) during this session. */
+  getDirtyPaths(): string[];
 }
 
 interface BufferedBacking {
@@ -750,6 +768,7 @@ class BufferedSyncAccessHandle implements OpfsSyncAccessHandle {
 
 export function createBufferedOpfsSahProvider(): OpfsBufferedSahProvider {
   const backings = new Map<string, BufferedBacking>();
+  const dirtyPaths = new Set<string>();
   const leased = new Set<string>();
   const provider: OpfsSahProvider = {
     acquire(relPath: string, _fileHandle?: FileSystemFileHandle): OpfsSyncAccessHandle {
@@ -761,9 +780,11 @@ export function createBufferedOpfsSahProvider(): OpfsBufferedSahProvider {
       if (!backing) {
         backing = { data: new Uint8Array(), dirty: true };
         backings.set(relPath, backing);
+        dirtyPaths.add(relPath);
       }
       return new BufferedSyncAccessHandle(backing, () => {
         leased.delete(relPath);
+        if (backing!.dirty) dirtyPaths.add(relPath);
       });
     },
     release(relPath: string): void {
@@ -790,17 +811,15 @@ export function createBufferedOpfsSahProvider(): OpfsBufferedSahProvider {
         }
         const fileHandle = await cursor.getFileHandle(parts[parts.length - 1], { create: true });
         const writable = await fileHandle.createWritable();
-        // Copy into a fresh ArrayBuffer-backed view so the dom
-        // `FileSystemWriteChunkType` overload (which requires a
-        // strict `ArrayBuffer`, not `ArrayBufferLike`) accepts it
-        // without forcing every backing.data slot to carry a wider
-        // type than the SAH-shaped reads need.
         const buf = new ArrayBuffer(backing.data.byteLength);
         new Uint8Array(buf).set(backing.data);
         await writable.write(buf);
         await writable.close();
         backing.dirty = false;
       }
+    },
+    getDirtyPaths(): string[] {
+      return [...dirtyPaths];
     },
   };
 }

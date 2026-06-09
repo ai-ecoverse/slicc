@@ -677,6 +677,30 @@ export class VirtualFS {
   }
 
   /**
+   * Evict stale entries from the ZenFS in-memory cache for paths that
+   * were written externally (e.g. by the Python realm via OPFS).
+   * After invalidation, the next async `stat()` on these paths triggers
+   * `WebAccessFS.stat()`'s ENOENT fallback which re-reads fresh
+   * metadata from the OPFS handles. The handle cache is also cleared
+   * so new files get their handles resolved from the OPFS tree.
+   */
+  invalidatePaths(paths: string[]): void {
+    if (this.backend !== 'opfs' || !this.opfsBackendFs) return;
+    const fs = this.opfsBackendFs as unknown as {
+      index: { delete: (path: string) => boolean };
+      // Private field on @zenfs/dom WebAccessFS — pinned at v1.2.9.
+      // If a future bump removes it, the guard below will no-op and
+      // reads will still hit OPFS (just without handle-cache eviction).
+      _handles?: Map<string, unknown>;
+    };
+    for (const raw of paths) {
+      const path = normalizePath(raw);
+      fs.index.delete(path);
+      fs._handles?.delete(path);
+    }
+  }
+
+  /**
    * Writability predicate — the unrestricted VirtualFS has no ACL, so every
    * path is writable. Exists to mirror {@link RestrictedFS.canWrite} so
    * callers (e.g., the `agent` shell command) can duck-type across both
@@ -1318,77 +1342,84 @@ export class VirtualFS {
     const normalized = normalizePath(path);
     const mount = this.findMount(normalized);
     if (mount) {
-      // Fast path: use MountIndex if available
-      const indexedEntries = this.mountIndex.getDirectoryEntries(mount.path, normalized);
-      if (indexedEntries !== undefined) {
-        const entries = new Map<string, DirEntry>();
-        for (const entry of indexedEntries) {
-          entries.set(entry.name, { name: entry.name, type: entry.type });
-        }
-        // Also include nested mount points as virtual directories
-        const childPrefix = normalized === '/' ? '/' : `${normalized}/`;
-        for (const mountPath of this.mountPoints.keys()) {
-          if (mountPath === normalized || !mountPath.startsWith(childPrefix)) continue;
-          const relPath = mountPath.slice(childPrefix.length);
-          if (!relPath || relPath.includes('/')) continue;
-          if (!entries.has(relPath)) {
-            entries.set(relPath, { name: relPath, type: 'directory' });
-          }
-        }
-        return [...entries.values()];
-      }
+      return this.readDirMounted(normalized, mount);
+    }
+    return this.readDirLocal(normalized);
+  }
 
-      // Slow path: backend.readDir
-      const relPath = mount.relParts.join('/') || '/';
-      let dirEntries;
-      try {
-        dirEntries = await mount.backend.readDir(relPath);
-      } catch (err) {
-        VirtualFS.rebrandFsError(err, normalized);
-      }
+  /** readDir implementation for mounted paths (index fast path or backend slow path). */
+  private async readDirMounted(
+    normalized: string,
+    mount: { path: string; backend: MountBackend; relParts: string[] }
+  ): Promise<DirEntry[]> {
+    // Fast path: use MountIndex if available
+    const indexedEntries = this.mountIndex.getDirectoryEntries(mount.path, normalized);
+    if (indexedEntries !== undefined) {
       const entries = new Map<string, DirEntry>();
-      for (const entry of dirEntries) {
-        entries.set(entry.name, {
-          name: entry.name,
-          type: entry.kind === 'directory' ? 'directory' : 'file',
-        });
+      for (const entry of indexedEntries) {
+        entries.set(entry.name, { name: entry.name, type: entry.type });
       }
-
-      const childPrefix = normalized === '/' ? '/' : `${normalized}/`;
-      for (const mountPath of this.mountPoints.keys()) {
-        if (mountPath === normalized || !mountPath.startsWith(childPrefix)) continue;
-        const relPath2 = mountPath.slice(childPrefix.length);
-        if (!relPath2 || relPath2.includes('/')) continue;
-        if (!entries.has(relPath2)) {
-          entries.set(relPath2, { name: relPath2, type: 'directory' });
-        }
-      }
+      this.addNestedMountEntries(entries, normalized);
       return [...entries.values()];
     }
-    // Resolve symlinks in the directory path itself
+
+    // Slow path: backend.readDir
+    const relPath = mount.relParts.join('/') || '/';
+    let dirEntries;
+    try {
+      dirEntries = await mount.backend.readDir(relPath);
+    } catch (err) {
+      VirtualFS.rebrandFsError(err, normalized);
+    }
+    const entries = new Map<string, DirEntry>();
+    for (const entry of dirEntries) {
+      entries.set(entry.name, {
+        name: entry.name,
+        type: entry.kind === 'directory' ? 'directory' : 'file',
+      });
+    }
+    this.addNestedMountEntries(entries, normalized);
+    return [...entries.values()];
+  }
+
+  /** readDir implementation for local (non-mounted) paths. */
+  private async readDirLocal(normalized: string): Promise<DirEntry[]> {
     const resolved = await this.resolveSymlinks(normalized);
     try {
       const names = await this.lfs.readdir(resolved);
       const entries: DirEntry[] = [];
       for (const name of names) {
-        const childPath = resolved === '/' ? `/${name}` : `${resolved}/${name}`;
-        try {
-          const s = await this.lfs.lstat(childPath);
-          if (s.isSymbolicLink()) {
-            entries.push({ name, type: 'symlink' });
-          } else {
-            entries.push({
-              name,
-              type: s.isDirectory() ? 'directory' : 'file',
-            });
-          }
-        } catch {
-          // Skip entries we can't stat
-        }
+        const entry = await this.statDirEntry(resolved, name);
+        if (entry) entries.push(entry);
       }
       return entries;
     } catch (err) {
       throw this.convertError(err, normalized);
+    }
+  }
+
+  /** Stat a single directory entry, returning null if it cannot be stat'd. */
+  private async statDirEntry(parentResolved: string, name: string): Promise<DirEntry | null> {
+    const childPath = parentResolved === '/' ? `/${name}` : `${parentResolved}/${name}`;
+    try {
+      const s = await this.lfs.lstat(childPath);
+      if (s.isSymbolicLink()) return { name, type: 'symlink' };
+      return { name, type: s.isDirectory() ? 'directory' : 'file' };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Add nested mount points as virtual directory entries. */
+  private addNestedMountEntries(entries: Map<string, DirEntry>, normalized: string): void {
+    const childPrefix = normalized === '/' ? '/' : `${normalized}/`;
+    for (const mountPath of this.mountPoints.keys()) {
+      if (mountPath === normalized || !mountPath.startsWith(childPrefix)) continue;
+      const rel = mountPath.slice(childPrefix.length);
+      if (!rel || rel.includes('/')) continue;
+      if (!entries.has(rel)) {
+        entries.set(rel, { name: rel, type: 'directory' });
+      }
     }
   }
 
@@ -1624,26 +1655,14 @@ export class VirtualFS {
   async *walk(path: string, _visited?: Set<string>): AsyncGenerator<string> {
     const normalized = normalizePath(path);
 
-    // Fast path: check if this path is exactly a mount point with a ready index.
-    // We check on every call (including recursive) so that walking from '/' can
-    // switch to indexed iteration when it enters a mounted subtree.
-    // Only use fast path when:
-    // 1. The path IS the mount point (not a subdirectory of it)
-    // 2. The mount's index is ready
-    // 3. There are no nested mounts under this path
-    if (this.mountPoints.size > 0 && this.mountPoints.has(normalized)) {
-      const hasNestedMounts = [...this.mountPoints.keys()].some(
-        (mp) => mp !== normalized && mp.startsWith(normalized + '/')
-      );
-
-      if (!hasNestedMounts && this.mountIndex.isReady(normalized)) {
-        const files = this.mountIndex.getFiles(normalized);
-        if (files) {
-          for (const filePath of files) {
-            yield filePath;
-          }
-          return;
+    // Fast path: indexed mount with no nested mounts
+    if (this.canUseWalkFastPath(normalized)) {
+      const files = this.mountIndex.getFiles(normalized);
+      if (files) {
+        for (const filePath of files) {
+          yield filePath;
         }
+        return;
       }
     }
 
@@ -1651,36 +1670,65 @@ export class VirtualFS {
     const visited = _visited ?? new Set<string>();
 
     // Track the real path to detect symlink loops
-    let realPath: string;
-    try {
-      realPath = await this.realpath(normalized);
-    } catch {
-      realPath = normalized;
-    }
-    if (visited.has(realPath)) return; // Avoid infinite loops
+    const realPath = await this.safeRealpath(normalized);
+    if (visited.has(realPath)) return;
     visited.add(realPath);
 
     const entries = await this.readDir(normalized);
 
     for (const entry of entries) {
       const childPath = normalized === '/' ? `/${entry.name}` : `${normalized}/${entry.name}`;
-      if (entry.type === 'file') {
+      yield* this.walkEntry(entry, childPath, visited);
+    }
+  }
+
+  /** Check whether the walk fast path (indexed mount, no nested mounts) is available. */
+  private canUseWalkFastPath(normalized: string): boolean {
+    if (this.mountPoints.size === 0 || !this.mountPoints.has(normalized)) return false;
+    if (!this.mountIndex.isReady(normalized)) return false;
+    const hasNestedMounts = [...this.mountPoints.keys()].some(
+      (mp) => mp !== normalized && mp.startsWith(normalized + '/')
+    );
+    return !hasNestedMounts;
+  }
+
+  /** Resolve realpath, falling back to the input path on any error. */
+  private async safeRealpath(normalized: string): Promise<string> {
+    try {
+      return await this.realpath(normalized);
+    } catch {
+      return normalized;
+    }
+  }
+
+  /** Yield files from a single walk entry (file, symlink, or directory). */
+  private async *walkEntry(
+    entry: DirEntry,
+    childPath: string,
+    visited: Set<string>
+  ): AsyncGenerator<string> {
+    if (entry.type === 'file') {
+      yield childPath;
+      return;
+    }
+    if (entry.type === 'symlink') {
+      yield* this.walkSymlink(childPath, visited);
+      return;
+    }
+    yield* this.walk(childPath, visited);
+  }
+
+  /** Follow a symlink during walk — yield as file or recurse as directory. */
+  private async *walkSymlink(childPath: string, visited: Set<string>): AsyncGenerator<string> {
+    try {
+      const targetStat = await this.stat(childPath);
+      if (targetStat.type === 'file') {
         yield childPath;
-      } else if (entry.type === 'symlink') {
-        // Determine if symlink points to a file or directory
-        try {
-          const targetStat = await this.stat(childPath);
-          if (targetStat.type === 'file') {
-            yield childPath;
-          } else if (targetStat.type === 'directory') {
-            yield* this.walk(childPath, visited);
-          }
-        } catch {
-          // Dangling symlink — skip
-        }
-      } else {
+      } else if (targetStat.type === 'directory') {
         yield* this.walk(childPath, visited);
       }
+    } catch {
+      // Dangling symlink — skip
     }
   }
 
@@ -1809,49 +1857,84 @@ export class VirtualFS {
     const normalized = normalizePath(path);
     const mount = this.findMount(normalized);
     if (mount) return normalized; // Mount paths are already real
-    let hops = 0;
+
     // Component-walk: build the resolved path one segment at a time,
     // resolving any symlink encountered against the already-resolved
     // prefix so directory-component symlinks (`/alias/file.txt`) work.
     const parts = normalized.split('/').filter(Boolean);
     let resolved = '/';
+    let hops = 0;
     for (let i = 0; i < parts.length; i++) {
-      let next = resolved === '/' ? `/${parts[i]}` : `${resolved}/${parts[i]}`;
-      // Follow symlinks at this component up to the hop limit.
-      while (true) {
-        let stats: FsStatsLike;
-        try {
-          stats = await this.lfs.lstat(next);
-        } catch (err) {
-          // Non-existent tail component is allowed (realpath of a
-          // not-yet-created file still has a canonical form); rethrow
-          // for ENOTDIR/EACCES/etc.
-          const converted = this.convertError(err, normalized);
-          if (converted.code === 'ENOENT' && i === parts.length - 1) {
-            resolved = next;
-            return resolved;
-          }
-          throw converted;
-        }
-        if (!stats.isSymbolicLink()) {
-          resolved = next;
-          break;
-        }
-        if (++hops > MAX_SYMLINK_DEPTH) {
-          throw new FsError('ELOOP', 'too many symbolic links encountered', normalized);
-        }
-        let target: string;
-        try {
-          target = await this.lfs.readlink(next);
-        } catch (err) {
-          throw this.convertError(err, normalized);
-        }
-        next = target.startsWith('/')
-          ? normalizePath(target)
-          : normalizePath(joinPath(splitPath(next).dir, target));
-      }
+      const result = await this.resolveRealpathComponent(
+        resolved,
+        parts[i],
+        i === parts.length - 1,
+        normalized,
+        hops
+      );
+      resolved = result.resolved;
+      hops = result.hops;
     }
     return resolved;
+  }
+
+  /**
+   * Resolve a single path component for realpath, following symlinks up to the hop limit.
+   * Returns the updated resolved path and hop count.
+   */
+  private async resolveRealpathComponent(
+    resolved: string,
+    part: string,
+    isTail: boolean,
+    originalPath: string,
+    hops: number
+  ): Promise<{ resolved: string; hops: number }> {
+    let next = resolved === '/' ? `/${part}` : `${resolved}/${part}`;
+    while (true) {
+      const stats = await this.lstatOrThrow(next, isTail, originalPath);
+      if (stats === null) {
+        // ENOENT on tail component — canonical form is current next
+        return { resolved: next, hops };
+      }
+      if (!stats.isSymbolicLink()) {
+        return { resolved: next, hops };
+      }
+      if (++hops > MAX_SYMLINK_DEPTH) {
+        throw new FsError('ELOOP', 'too many symbolic links encountered', originalPath);
+      }
+      next = await this.readAndResolveLink(next, originalPath);
+    }
+  }
+
+  /**
+   * lstat a path for realpath. Returns null if ENOENT on the tail component
+   * (allowed per POSIX realpath). Throws for all other errors.
+   */
+  private async lstatOrThrow(
+    next: string,
+    isTail: boolean,
+    originalPath: string
+  ): Promise<FsStatsLike | null> {
+    try {
+      return await this.lfs.lstat(next);
+    } catch (err) {
+      const converted = this.convertError(err, originalPath);
+      if (converted.code === 'ENOENT' && isTail) return null;
+      throw converted;
+    }
+  }
+
+  /** Read a symlink target and resolve it to an absolute normalized path. */
+  private async readAndResolveLink(linkPath: string, originalPath: string): Promise<string> {
+    let target: string;
+    try {
+      target = await this.lfs.readlink(linkPath);
+    } catch (err) {
+      throw this.convertError(err, originalPath);
+    }
+    return target.startsWith('/')
+      ? normalizePath(target)
+      : normalizePath(joinPath(splitPath(linkPath).dir, target));
   }
 
   /**

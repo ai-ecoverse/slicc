@@ -135,6 +135,10 @@ export class RestrictedFS {
     return this.vfs;
   }
 
+  invalidatePaths(paths: string[]): void {
+    this.vfs.invalidatePaths(paths);
+  }
+
   /**
    * Mount-membership query — needed by the isomorphic-git fs adapter,
    * which routes mount-backed paths through the async VFS API instead of

@@ -97,6 +97,44 @@ export async function runPyRealm(
     return;
   }
 
+  const pushWarning = (msg: string): void => {
+    stderrChunks.push(`Warning: ${msg}\n`);
+  };
+
+  const opfsMounts = await mountOpfsIfNeeded(pyodide, init, pushWarning);
+  await installMountOverlays(pyodide, init, pushWarning);
+  await registerSliccFsModuleSafe(pyodide, rpc, pushWarning);
+
+  try {
+    pyodide.FS.chdir(init.cwd);
+  } catch {
+    /* dir may not exist in Pyodide FS */
+  }
+
+  configurePyodideIo(pyodide, init, stdoutChunks, stderrChunks);
+
+  const exitCode = await executePythonCode(pyodide, stderrChunks);
+
+  await flushOpfsIfNeeded(opfsMounts, init, rpc, pushWarning);
+
+  rpc.dispose();
+  const done: RealmDoneMsg = {
+    type: 'realm-done',
+    stdout: stdoutChunks.join(''),
+    stderr: stderrChunks.join(''),
+    exitCode,
+  };
+  port.postMessage(done);
+}
+
+/** Mount OPFS dirs if the kernel provided an opfsMountDbName. */
+async function mountOpfsIfNeeded(
+  pyodide: PyodideInterface,
+  init: RealmInitMsg,
+  pushWarning: WarningSink
+): Promise<OpfsRealmMount[]> {
+  if (init.opfsMountDbName === undefined) return [];
+
   // Default `[cwd, '/tmp']` is deliberate: those are the two
   // directories Python code almost always reads from (the working
   // directory the user invoked from + the conventional scratch
@@ -106,87 +144,80 @@ export async function runPyRealm(
   // bulk-RPC path. Callers that need wider visibility pass an
   // explicit `pyodideMountDirs`.
   const syncDirs = init.pyodideMountDirs ?? [init.cwd, '/tmp'];
-  const pushWarning = (msg: string): void => {
-    stderrChunks.push(`Warning: ${msg}\n`);
-  };
-  let opfsMounts: OpfsRealmMount[] = [];
-  // The kernel detects the OPFS-backed VFS and passes the dbName
-  // through `init.opfsMountDbName`. The realm worker has no
-  // `localStorage` shim, so this is the only signal we get. The
-  // in-tree `OPFS_SYNC_FS` plugin mounts each syncDir against the
-  // same-origin OPFS subtree the kernel owns; queued mutations are
-  // flushed via `flushOpfsRealmMounts` before `realm-done` so the
-  // on-disk view is consistent when the kernel takes back over.
-  // Mount paths that exactly match a syncDir are skipped here so
-  // the realm-mount materialization step can mount MEMFS over them
-  // without an EBUSY collision against an OPFS subtree.
   const mountPoints: RealmMountPoint[] = init.mountPoints ?? [];
   const exactMountPaths = new Set(mountPoints.map((m) => m.path));
-  if (init.opfsMountDbName !== undefined) {
-    try {
-      const mounted = await mountOpfsDirsAndSyncIn(
-        pyodide,
-        syncDirs,
-        init.opfsMountDbName,
-        pushWarning,
-        { skipMountPaths: exactMountPaths }
-      );
-      opfsMounts = mounted.mounts;
-    } catch (err) {
-      pushWarning(`VFS→Pyodide OPFS mount failed: ${describeRealmError(err)}`);
-    }
+
+  try {
+    const mounted = await mountOpfsDirsAndSyncIn(
+      pyodide,
+      syncDirs,
+      init.opfsMountDbName,
+      pushWarning,
+      { skipMountPaths: exactMountPaths }
+    );
+    return mounted.mounts;
+  } catch (err) {
+    pushWarning(`VFS→Pyodide OPFS mount failed: ${describeRealmError(err)}`);
+    return [];
+  }
+}
+
+/** Install mount bombs and Python mount guard for overlapping mount paths. */
+async function installMountOverlays(
+  pyodide: PyodideInterface,
+  init: RealmInitMsg,
+  pushWarning: WarningSink
+): Promise<void> {
+  const mountPoints: RealmMountPoint[] = init.mountPoints ?? [];
+  if (mountPoints.length === 0) return;
+
+  try {
+    installMountBombs(
+      pyodide.FS as unknown as Parameters<typeof installMountBombs>[0],
+      mountPoints.map((mp) => mp.path),
+      pushWarning
+    );
+  } catch (err) {
+    pushWarning(`bomb overlay install failed: ${describeRealmError(err)}`);
   }
 
-  // Overlay a throwing FS plugin at every overlapping mount path so
-  // any synchronous access from Python (stdlib `open`, `os.listdir`,
-  // pandas, …) under those paths raises an OSError pointing the
-  // caller at `await slicc.fs.…` (or to copy the file in first).
-  // Instant — no walk, no preload, no RPC traffic. Replaces the
-  // eager materialization that previously hung on large mounts
-  // (~24k sequential vfs RPCs for the 11k-file repro).
-  if (mountPoints.length > 0) {
-    try {
-      installMountBombs(
-        pyodide.FS as unknown as Parameters<typeof installMountBombs>[0],
-        mountPoints.map((mp) => mp.path),
-        pushWarning
-      );
-    } catch (err) {
-      pushWarning(`bomb overlay install failed: ${describeRealmError(err)}`);
-    }
-    // Python-level guard: the bomb FS sets a friendly `.message` on
-    // its `ErrnoError`, but CPython rebuilds the OSError from the raw
-    // integer errno for stdlib calls, so only "I/O error" survives.
-    // This wraps the hot stdlib entry points and raises an OSError
-    // carrying the guidance directly. Bomb FS remains as the C-level
-    // backstop for paths the Python wrappers can't see (pandas fopen,
-    // C extensions).
-    try {
-      await installPythonMountGuard(
-        pyodide,
-        mountPoints.map((mp) => mp.path)
-      );
-    } catch (err) {
-      pushWarning(`python mount guard install failed: ${describeRealmError(err)}`);
-    }
+  // Python-level guard: the bomb FS sets a friendly `.message` on
+  // its `ErrnoError`, but CPython rebuilds the OSError from the raw
+  // integer errno for stdlib calls, so only "I/O error" survives.
+  // This wraps the hot stdlib entry points and raises an OSError
+  // carrying the guidance directly. Bomb FS remains as the C-level
+  // backstop for paths the Python wrappers can't see (pandas fopen,
+  // C extensions).
+  try {
+    await installPythonMountGuard(
+      pyodide,
+      mountPoints.map((mp) => mp.path)
+    );
+  } catch (err) {
+    pushWarning(`python mount guard install failed: ${describeRealmError(err)}`);
   }
+}
 
-  // Register the async `slicc.fs` Python module backed by the `vfs`
-  // RPC channel. Always registered (cheap, harmless) so user code
-  // can `await slicc.fs.read_text('/workspace/foo.py')` regardless
-  // of whether any mount overlays were installed.
+/** Register the async `slicc.fs` Python module with warning on failure. */
+async function registerSliccFsModuleSafe(
+  pyodide: PyodideInterface,
+  rpc: RealmRpcClient,
+  pushWarning: WarningSink
+): Promise<void> {
   try {
     await registerSliccFsModule(pyodide, rpc);
   } catch (err) {
     pushWarning(`slicc.fs registration failed: ${describeRealmError(err)}`);
   }
+}
 
-  try {
-    pyodide.FS.chdir(init.cwd);
-  } catch {
-    /* dir may not exist in Pyodide FS */
-  }
-
+/** Configure stdout, stderr, stdin, and globals for user code execution. */
+function configurePyodideIo(
+  pyodide: PyodideInterface,
+  init: RealmInitMsg,
+  stdoutChunks: string[],
+  stderrChunks: string[]
+): void {
   pyodide.setStdout({ batched: (msg: string) => stdoutChunks.push(msg + '\n') });
   pyodide.setStderr({ batched: (msg: string) => stderrChunks.push(msg + '\n') });
 
@@ -201,7 +232,13 @@ export async function runPyRealm(
   pyodide.globals.set('__slicc_code', init.code);
   pyodide.globals.set('__slicc_filename', init.filename);
   pyodide.globals.set('__slicc_argv', init.argv);
+}
 
+/** Execute the Python runner and return the exit code. */
+async function executePythonCode(
+  pyodide: PyodideInterface,
+  stderrChunks: string[]
+): Promise<number> {
   let exitCode: number;
   try {
     await pyodide.runPythonAsync(PYTHON_RUNNER);
@@ -218,28 +255,33 @@ export async function runPyRealm(
   } catch {
     /* best-effort cleanup */
   }
+  return exitCode;
+}
 
-  // Mount write-back is no longer needed: the bomb overlay refuses
-  // synchronous writes from Python, and `slicc.fs.write_*` routes
-  // through the `vfs` RPC channel directly (so backend writes are
-  // applied as they happen, not flushed at the end).
-  if (init.opfsMountDbName !== undefined) {
-    try {
-      await flushOpfsRealmMounts(opfsMounts);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      pushWarning(`Pyodide→VFS OPFS flush failed: ${message}`);
-    }
+/** Flush OPFS mounts and invalidate kernel VFS cache if applicable. */
+async function flushOpfsIfNeeded(
+  opfsMounts: OpfsRealmMount[],
+  init: RealmInitMsg,
+  rpc: RealmRpcClient,
+  pushWarning: WarningSink
+): Promise<void> {
+  if (init.opfsMountDbName === undefined) return;
+
+  try {
+    await flushOpfsRealmMounts(opfsMounts);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    pushWarning(`Pyodide→VFS OPFS flush failed: ${message}`);
   }
-
-  rpc.dispose();
-  const done: RealmDoneMsg = {
-    type: 'realm-done',
-    stdout: stdoutChunks.join(''),
-    stderr: stderrChunks.join(''),
-    exitCode,
-  };
-  port.postMessage(done);
+  // Invalidate the kernel VFS's in-memory cache for paths Python
+  // wrote to via synchronous `open()`. The OPFS layer already has
+  // the correct data (flushed above); this makes the kernel re-read
+  // from OPFS on next access instead of serving stale cached content.
+  try {
+    await invalidateDirtyPathsInKernelVfs(opfsMounts, rpc);
+  } catch (err) {
+    pushWarning(`Pyodide→kernel VFS invalidation failed: ${describeRealmError(err)}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -296,6 +338,7 @@ export interface OpfsRealmMount {
   mount: OpfsMount;
   rootHandle: FileSystemDirectoryHandle;
   flushBuffers: (rootHandle: FileSystemDirectoryHandle) => Promise<void>;
+  getDirtyPaths: () => string[];
 }
 
 export interface MountedOpfsResult {
@@ -372,40 +415,7 @@ export async function mountOpfsDirsAndSyncIn(
 
   for (const dir of dirs) {
     if (dir === '/') {
-      // Emscripten rejects `FS.mount(_, _, '/')` with EBUSY because
-      // its root MEMFS is already mounted. Fan out to the top-level
-      // children of the kernel OPFS subtree instead so Python can
-      // still reach the VFS by absolute path (`/workspace`, …) when
-      // the shell cwd is `/`. Built-in mount points are skipped so
-      // we don't shadow `/dev`, `/proc`, `/lib`, `/tmp`, `/home`.
-      try {
-        const iter = kernelDbHandle as unknown as AsyncIterable<
-          [string, FileSystemDirectoryHandle | FileSystemFileHandle]
-        >;
-        for await (const [name, childHandle] of iter) {
-          if ((childHandle as { kind: string }).kind !== 'directory') continue;
-          if (EMSCRIPTEN_BUILTIN_ROOT_DIRS.has(name)) continue;
-          const childPath = `/${name}`;
-          // Skip OPFS mount when this path is itself a VFS mount —
-          // the realm-mount materialization step will mount MEMFS at
-          // the same path, and Emscripten cannot stack two mounts on
-          // one node.
-          if (skip.has(childPath)) continue;
-          try {
-            await mountOpfsChild(
-              pyodide,
-              plugin,
-              childPath,
-              childHandle as FileSystemDirectoryHandle,
-              mounts
-            );
-          } catch (err) {
-            pushWarning(`VFS→Pyodide OPFS mount '${childPath}' failed: ${describeRealmError(err)}`);
-          }
-        }
-      } catch (err) {
-        pushWarning(`VFS→Pyodide OPFS mount '/' failed: ${describeRealmError(err)}`);
-      }
+      await mountRootChildren(pyodide, plugin, kernelDbHandle, skip, mounts, pushWarning);
       continue;
     }
     if (skip.has(dir)) continue;
@@ -421,6 +431,52 @@ export async function mountOpfsDirsAndSyncIn(
   }
 
   return { mounts };
+}
+
+/**
+ * Emscripten rejects `FS.mount(_, _, '/')` with EBUSY because its root
+ * MEMFS is already mounted. Fan out to the top-level children of the
+ * kernel OPFS subtree instead so Python can still reach the VFS by
+ * absolute path (`/workspace`, …) when the shell cwd is `/`. Built-in
+ * mount points are skipped so we don't shadow `/dev`, `/proc`, `/lib`,
+ * `/tmp`, `/home`.
+ */
+async function mountRootChildren(
+  pyodide: PyodideInterface,
+  plugin: OpfsSyncFsPlugin,
+  kernelDbHandle: FileSystemDirectoryHandle,
+  skip: ReadonlySet<string>,
+  mounts: OpfsRealmMount[],
+  pushWarning: WarningSink
+): Promise<void> {
+  try {
+    const iter = kernelDbHandle as unknown as AsyncIterable<
+      [string, FileSystemDirectoryHandle | FileSystemFileHandle]
+    >;
+    for await (const [name, childHandle] of iter) {
+      if ((childHandle as { kind: string }).kind !== 'directory') continue;
+      if (EMSCRIPTEN_BUILTIN_ROOT_DIRS.has(name)) continue;
+      const childPath = `/${name}`;
+      // Skip OPFS mount when this path is itself a VFS mount —
+      // the realm-mount materialization step will mount MEMFS at
+      // the same path, and Emscripten cannot stack two mounts on
+      // one node.
+      if (skip.has(childPath)) continue;
+      try {
+        await mountOpfsChild(
+          pyodide,
+          plugin,
+          childPath,
+          childHandle as FileSystemDirectoryHandle,
+          mounts
+        );
+      } catch (err) {
+        pushWarning(`VFS→Pyodide OPFS mount '${childPath}' failed: ${describeRealmError(err)}`);
+      }
+    }
+  } catch (err) {
+    pushWarning(`VFS→Pyodide OPFS mount '/' failed: ${describeRealmError(err)}`);
+  }
 }
 
 /**
@@ -453,7 +509,13 @@ async function mountOpfsChild(
   const mount =
     rootNode?.mount ??
     ({ opts, mountpoint: pyPath, root: rootNode as never } as unknown as OpfsMount);
-  mounts.push({ pyPath, mount, rootHandle: handle, flushBuffers: buffered.flush });
+  mounts.push({
+    pyPath,
+    mount,
+    rootHandle: handle,
+    flushBuffers: buffered.flush,
+    getDirtyPaths: buffered.getDirtyPaths,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -476,5 +538,25 @@ export async function flushOpfsRealmMounts(mounts: OpfsRealmMount[]): Promise<vo
   for (const entry of mounts) {
     await flushPendingOpfsOps(entry.mount);
     await entry.flushBuffers(entry.rootHandle);
+  }
+}
+
+/**
+ * After OPFS flush, tell the kernel VFS to invalidate its in-memory
+ * cache for paths Python wrote to. The kernel's `WebAccessFS.stat()`
+ * fallback will re-read fresh metadata from OPFS on next access.
+ */
+async function invalidateDirtyPathsInKernelVfs(
+  mounts: OpfsRealmMount[],
+  rpc: RealmRpcClient
+): Promise<void> {
+  const absPaths: string[] = [];
+  for (const entry of mounts) {
+    for (const relPath of entry.getDirtyPaths()) {
+      absPaths.push(entry.pyPath === '/' ? `/${relPath}` : `${entry.pyPath}/${relPath}`);
+    }
+  }
+  if (absPaths.length > 0) {
+    await rpc.call('vfs', 'invalidatePaths', [absPaths]);
   }
 }
