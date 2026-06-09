@@ -68,6 +68,50 @@ slicc-press-button {
   transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
   will-change: width, height;
 }
+/*
+ * Click / double-click delight animations. Toggled as classes on the inner
+ * <button> from JS and removed on \`animationend\` (so they re-fire every press
+ * and stay testable). \`transform-origin: center\` keeps the squish/wobble
+ * pivoting around the button's middle.
+ *
+ * Single press → a quick tactile "squish" (scale down and spring back).
+ * Double press → a distinct playful "wobble" (a side-to-side rubber-band tilt).
+ */
+.slicc-press-btn__btn {
+  transform-origin: center;
+}
+.slicc-press-btn__btn.is-squish {
+  animation: slicc-press-squish 220ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.slicc-press-btn__btn.is-wobble {
+  animation: slicc-press-wobble 520ms cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+@keyframes slicc-press-squish {
+  0% { transform: scale(1); }
+  35% { transform: scale(0.82); }
+  70% { transform: scale(1.06); }
+  100% { transform: scale(1); }
+}
+@keyframes slicc-press-wobble {
+  0% { transform: rotate(0deg) scale(1); }
+  15% { transform: rotate(-9deg) scale(1.08); }
+  30% { transform: rotate(7deg) scale(1.08); }
+  45% { transform: rotate(-5deg) scale(1.04); }
+  60% { transform: rotate(3deg) scale(1.02); }
+  75% { transform: rotate(-1.5deg) scale(1.01); }
+  100% { transform: rotate(0deg) scale(1); }
+}
+/*
+ * Respect prefers-reduced-motion: no animation, hold the static end state.
+ * The classes may still be toggled by JS (events are unaffected) but paint
+ * nothing — the button stays put.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .slicc-press-btn__btn.is-squish,
+  .slicc-press-btn__btn.is-wobble {
+    animation: none;
+  }
+}
 `;
 
 const STYLE_ID = 'slicc-press-button-style';
@@ -86,6 +130,15 @@ export const DEFAULT_DOUBLE_CLICK_MS = 350;
 
 /** BEM-ish base class for the component's own DOM hooks. */
 const BASE = 'slicc-press-btn';
+
+/**
+ * Animation hook classes toggled on the inner `<button>`. Exported so tests
+ * (and curious hosts) can assert which delight animation a gesture triggered:
+ * a single press squishes, a double-press wobbles. Each class is removed on
+ * `animationend` so the next press re-fires it.
+ */
+export const SQUISH_CLASS = 'is-squish';
+export const WOBBLE_CLASS = 'is-wobble';
 
 /**
  * `<slicc-press-button>` — a reusable click + long-press + double-click button
@@ -112,6 +165,13 @@ const BASE = 'slicc-press-btn';
  * its parent (rail item, header button, copy button). The inner button fills the
  * host (`width/height: 100%`) so the ripple's bounding rect matches what the
  * user sees as "the button".
+ *
+ * Delight animations: alongside the ripple, the inner button plays a quick
+ * tactile **squish** ({@link SQUISH_CLASS}) on a committed single press and a
+ * distinct playful **wobble** ({@link WOBBLE_CLASS}) on a double-press. The
+ * classes are toggled in JS and self-remove on `animationend`, so they re-fire
+ * on every press and stay assertable. Both no-op under
+ * `prefers-reduced-motion: reduce` (the CSS holds the static end state).
  *
  * @attr label - forwarded to the inner button's `aria-label`
  * @attr tooltip - forwarded to the inner button's `data-tooltip`
@@ -143,6 +203,8 @@ export class SliccPressButton extends HTMLElement {
   private initialized = false;
   private pendingShortTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingShortEvent: MouseEvent | null = null;
+  /** The live `animationend` listener for an in-flight delight animation. */
+  private animEndListener: ((e: AnimationEvent) => void) | null = null;
 
   connectedCallback(): void {
     ensurePressButtonStyle(this.ownerDocument);
@@ -164,6 +226,10 @@ export class SliccPressButton extends HTMLElement {
     this.handle = null;
     this.clearPendingShort();
     this.clearRipple();
+    // Drop any in-flight delight animation (class + animationend listener) so a
+    // detach-then-reattach doesn't surface a button frozen mid-squish/-wobble
+    // or leak a listener that can never fire.
+    this.clearAnimation();
   }
 
   attributeChangedCallback(): void {
@@ -285,8 +351,54 @@ export class SliccPressButton extends HTMLElement {
   }
 
   private emit(type: 'short-click' | 'long-press' | 'double-click', source?: MouseEvent): void {
+    // Play the matching delight animation before the event fires so a
+    // handler that, say, removes the button still gets one frame of feedback.
+    // A single press squishes; a double-press wobbles. Long-press stays calm
+    // (the ripple already telegraphs the hold).
+    if (type === 'short-click') this.playAnimation(SQUISH_CLASS);
+    else if (type === 'double-click') this.playAnimation(WOBBLE_CLASS);
+
     const detail = source ? { sourceEvent: source } : {};
     this.dispatchEvent(new CustomEvent(type, { bubbles: true, cancelable: true, detail }));
+  }
+
+  /**
+   * Toggle a one-shot animation class on the inner button. The two classes are
+   * mutually exclusive (a rapid double-press shouldn't squish and wobble at
+   * once) and each self-removes on `animationend` so the next press re-fires it.
+   *
+   * Exactly one `animationend` listener is kept alive at a time
+   * ({@link clearAnimation} detaches any prior one before each play). That keeps
+   * it leak-free under `prefers-reduced-motion: reduce` too: there the CSS sets
+   * `animation: none`, so `animationend` never fires — but the next press (or a
+   * disconnect) still tears the stale listener down.
+   */
+  private playAnimation(cls: typeof SQUISH_CLASS | typeof WOBBLE_CLASS): void {
+    const btn = this.innerBtn;
+    if (!btn) return;
+    // Detach any prior in-flight listener + class so this play is the only one.
+    this.clearAnimation();
+    // Force a reflow so re-adding the same class restarts the animation when a
+    // press lands again before the previous one finished.
+    void btn.offsetWidth;
+    btn.classList.add(cls);
+    const onEnd = (e: AnimationEvent): void => {
+      if (e.target !== btn) return;
+      this.clearAnimation();
+    };
+    this.animEndListener = onEnd;
+    btn.addEventListener('animationend', onEnd);
+  }
+
+  /** Remove any in-flight delight animation class + its `animationend` listener. */
+  private clearAnimation(): void {
+    const btn = this.innerBtn;
+    if (!btn) return;
+    if (this.animEndListener) {
+      btn.removeEventListener('animationend', this.animEndListener);
+      this.animEndListener = null;
+    }
+    btn.classList.remove(SQUISH_CLASS, WOBBLE_CLASS);
   }
 
   private clearPendingShort(): void {

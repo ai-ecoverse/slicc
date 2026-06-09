@@ -3,12 +3,19 @@ import { LONG_PRESS_MS } from '../../src/internal/long-press.js';
 import {
   DEFAULT_DOUBLE_CLICK_MS,
   SliccPressButton,
+  SQUISH_CLASS,
+  WOBBLE_CLASS,
 } from '../../src/primitives/slicc-press-button.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
 
 /** The inner `<button>` the component renders into its light DOM. */
 function btnOf(el: SliccPressButton): HTMLButtonElement {
   return el.querySelector('.slicc-press-btn__btn') as HTMLButtonElement;
+}
+
+/** Dispatch an `animationend` on the inner button (the class self-removal hook). */
+function fireAnimationEnd(btn: HTMLButtonElement): void {
+  btn.dispatchEvent(new AnimationEvent('animationend', { bubbles: true }));
 }
 
 /** Sized so the ripple geometry + layout assertions have real pixels. */
@@ -279,5 +286,118 @@ describe('slicc-press-button', () => {
     expect(btnRect.width).toBeCloseTo(hostRect.width, 0);
     expect(btnRect.height).toBeCloseTo(hostRect.height, 0);
     expect(getComputedStyle(el).display).toBe('inline-flex');
+  });
+
+  describe('delight animations', () => {
+    it('plays the squish animation hook on a committed single press', () => {
+      vi.useFakeTimers();
+      const el = makeButton();
+      document.body.appendChild(el);
+      const btn = btnOf(el);
+
+      fire(el, 'click');
+      // Animation is keyed to the committed short-click, which is deferred by
+      // the double-click window — nothing yet.
+      expect(btn.classList.contains(SQUISH_CLASS)).toBe(false);
+      vi.advanceTimersByTime(DEFAULT_DOUBLE_CLICK_MS);
+      // Squish is applied when the short-click commits; wobble is NOT.
+      expect(btn.classList.contains(SQUISH_CLASS)).toBe(true);
+      expect(btn.classList.contains(WOBBLE_CLASS)).toBe(false);
+    });
+
+    it('plays a DISTINCT wobble animation hook on a double-press (not squish)', () => {
+      vi.useFakeTimers();
+      const el = makeButton();
+      document.body.appendChild(el);
+      const btn = btnOf(el);
+
+      fire(el, 'click');
+      vi.advanceTimersByTime(DEFAULT_DOUBLE_CLICK_MS - 50);
+      fire(el, 'click');
+
+      // The double-press wobbles, and the squish is never left applied.
+      expect(btn.classList.contains(WOBBLE_CLASS)).toBe(true);
+      expect(btn.classList.contains(SQUISH_CLASS)).toBe(false);
+      // The suppressed deferred short-click must not later add a squish.
+      vi.advanceTimersByTime(DEFAULT_DOUBLE_CLICK_MS);
+      expect(btn.classList.contains(SQUISH_CLASS)).toBe(false);
+    });
+
+    it('plays the squish immediately when disable-double-click is set', () => {
+      const el = makeButton();
+      el.setAttribute('disable-double-click', '');
+      document.body.appendChild(el);
+      const btn = btnOf(el);
+
+      fire(el, 'click');
+      // No deferral — the squish lands synchronously with the short-click.
+      expect(btn.classList.contains(SQUISH_CLASS)).toBe(true);
+    });
+
+    it('removes the animation class on animationend so it can re-fire', () => {
+      const el = makeButton();
+      el.setAttribute('disable-double-click', '');
+      document.body.appendChild(el);
+      const btn = btnOf(el);
+
+      fire(el, 'click');
+      expect(btn.classList.contains(SQUISH_CLASS)).toBe(true);
+      fireAnimationEnd(btn);
+      expect(btn.classList.contains(SQUISH_CLASS)).toBe(false);
+
+      // A second press re-applies the hook (the listener didn't leak/stick).
+      fire(el, 'click');
+      expect(btn.classList.contains(SQUISH_CLASS)).toBe(true);
+    });
+
+    it('does not animate (squish/wobble) on a long-press', () => {
+      vi.useFakeTimers();
+      const el = makeButton();
+      el.setAttribute('long-press-ms', '300');
+      document.body.appendChild(el);
+      const btn = btnOf(el);
+
+      fire(el, 'mousedown', { clientX: 5, clientY: 5 });
+      vi.advanceTimersByTime(300);
+      expect(btn.classList.contains(SQUISH_CLASS)).toBe(false);
+      expect(btn.classList.contains(WOBBLE_CLASS)).toBe(false);
+    });
+
+    it('clears any in-flight animation class on disconnect', () => {
+      const el = makeButton();
+      el.setAttribute('disable-double-click', '');
+      document.body.appendChild(el);
+      const btn = btnOf(el);
+
+      fire(el, 'click');
+      expect(btn.classList.contains(SQUISH_CLASS)).toBe(true);
+      el.remove();
+      // Detach drops the hook so a reattach never surfaces a frozen frame.
+      expect(btn.classList.contains(SQUISH_CLASS)).toBe(false);
+    });
+
+    it('no-ops the animation under prefers-reduced-motion (animation: none) while still firing events', () => {
+      // Real Chromium honors the emulated media query; assert the CSS holds the
+      // static end state even though the class hook is present.
+      const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const el = makeButton();
+      el.setAttribute('disable-double-click', '');
+      document.body.appendChild(el);
+      const btn = btnOf(el);
+      const onShort = vi.fn();
+      el.addEventListener('short-click', onShort);
+
+      fire(el, 'click');
+      // The event still fires regardless of motion preference.
+      expect(onShort).toHaveBeenCalledTimes(1);
+      // The hook class is toggled either way; under reduced-motion the
+      // computed animation-name resolves to "none" so nothing paints.
+      expect(btn.classList.contains(SQUISH_CLASS)).toBe(true);
+      if (reduced) {
+        expect(getComputedStyle(btn).animationName).toBe('none');
+      } else {
+        expect(getComputedStyle(btn).animationName).toBe('slicc-press-squish');
+      }
+    });
   });
 });

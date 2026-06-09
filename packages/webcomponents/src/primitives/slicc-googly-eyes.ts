@@ -46,6 +46,8 @@ const STYLE = `
   position: relative;
   display: inline-block;
   box-sizing: border-box;
+  /* Eyelid pivot is the eye centre so the lid closes top-and-bottom. */
+  transform-origin: center;
 }
 .eye::after {
   content: "";
@@ -78,6 +80,31 @@ const STYLE = `
   user-select: none;
 }
 :host([inverted]) .x { color: #fff; }
+
+/*
+ * Blinking — the eyelid closes briefly then reopens on a slow loop. Squashing
+ * the eye's vertical scale to ~0.1 reads as a blink; because the pupil
+ * (.eye::after) is a child, it squashes with the lid, while its own --px/--py
+ * translate keeps composing with cursor-tracking. The two eyes use slightly
+ * different cycle lengths (~3.4s / ~4.6s) so the loop lands in the 3-5s band
+ * and never feels metronomic. Dead eyes (no live pupil) never blink.
+ */
+@keyframes slicc-eye-blink {
+  /* The lid is open for the vast majority of the cycle; the brief dip lives in
+     the last few percent. The 95%->97.5%->100% close+reopen spans ~5% of the
+     cycle: ~170ms at 3.4s and ~230ms at 4.6s — a quick, natural blink. */
+  0%, 95%, 100% { transform: scaleY(1); }
+  97.5% { transform: scaleY(0.1); }
+}
+:host([blink]:not([eyes="dead"])) .eye {
+  animation: slicc-eye-blink 3.4s ease-in-out infinite;
+}
+:host([blink]:not([eyes="dead"])) [part~="eye-right"] {
+  animation-duration: 4.6s;
+}
+@media (prefers-reduced-motion: reduce) {
+  :host([blink]) .eye { animation: none; }
+}
 `;
 
 /**
@@ -89,9 +116,18 @@ const STYLE = `
  * page-level script. Colors are fixed (`#fff` sclera / `#000` pupil); the
  * `inverted` variant flips them to white-on-transparent.
  *
+ * The optional `blink` attribute layers a slow CSS-only eyelid blink on top of
+ * the live pupil tracking: the eye's `scaleY` squashes to ~0.1 for ~120ms on a
+ * 3–5s loop (the two eyes run at slightly different cycle lengths so the blink
+ * never feels metronomic). It composes with cursor-tracking — the pupil squashes
+ * with the lid while still following the `--px`/`--py` translate — and no-ops
+ * under `prefers-reduced-motion: reduce` and in the `dead` state.
+ *
  * @attr inverted - boolean; white border + white pupil (for dark/active chrome)
  * @attr tracking - boolean; pupils follow the cursor. Defaults to ON; remove or
  *   set `tracking="off"` to centre the pupils (idle).
+ * @attr blink - boolean; periodic eyelid blink (CSS @keyframes `scaleY`). No-op
+ *   under reduced-motion and when `eyes="dead"`.
  * @attr eyes - `open` (default) | `dead` (renders "X X")
  * @attr size - eye diameter in CSS pixels (default 9)
  * @csspart eyes - the inline-flex container holding both eyes
@@ -102,7 +138,7 @@ const STYLE = `
  * @slot - optional adornment rendered between the two eyes (e.g. a nose)
  */
 export class SliccGooglyEyes extends HTMLElement {
-  static readonly observedAttributes = ['inverted', 'tracking', 'eyes', 'size'];
+  static readonly observedAttributes = ['inverted', 'tracking', 'blink', 'eyes', 'size'];
 
   readonly #root: ShadowRoot;
   #eyeNodes: HTMLElement[] = [];
@@ -130,7 +166,8 @@ export class SliccGooglyEyes extends HTMLElement {
     } else if (name === 'tracking') {
       this.#syncTracking();
     } else {
-      // `inverted` is pure CSS via :host([inverted]); nothing to re-render.
+      // `inverted` and `blink` are pure CSS (:host([inverted]) /
+      // :host([blink])); nothing to re-render.
     }
   }
 
@@ -155,6 +192,18 @@ export class SliccGooglyEyes extends HTMLElement {
   set tracking(value: boolean) {
     if (value) this.setAttribute('tracking', 'on');
     else this.setAttribute('tracking', 'off');
+  }
+
+  /**
+   * Whether the eyes periodically blink (CSS-only eyelid `scaleY` animation).
+   * No-op under `prefers-reduced-motion: reduce` and in the `dead` state.
+   */
+  get blink(): boolean {
+    return this.hasAttribute('blink');
+  }
+
+  set blink(value: boolean) {
+    this.toggleAttribute('blink', value);
   }
 
   /** Eye state: `open` (cursor-tracking pupils) or `dead` ("X X"). */

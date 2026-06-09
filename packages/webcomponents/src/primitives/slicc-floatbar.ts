@@ -1,7 +1,21 @@
 import { define } from '../internal/define.js';
 import { escapeHtml } from '../internal/html.js';
+import { iconSvg } from '../internal/icons.js';
 
 const DEFAULT_LABEL = 'CLI float';
+
+/**
+ * Format a spend value into a `$2.41` string. Accepts a number or a numeric
+ * string; non-numeric / blank input yields `null` (no cost segment rendered).
+ */
+function formatSpent(raw: string | null): string | null {
+  if (raw == null) return null;
+  const trimmed = raw.trim();
+  if (trimmed === '') return null;
+  const n = Number.parseFloat(trimmed.replace(/^\$/, ''));
+  if (!Number.isFinite(n)) return null;
+  return `$${n.toFixed(2)}`;
+}
 
 const STYLE = `
 :host {
@@ -38,6 +52,30 @@ const STYLE = `
 }
 
 .label { white-space: nowrap; }
+
+/* thin divider between the label and the cost segment */
+.sep {
+  width: 1px;
+  height: 12px;
+  flex: 0 0 auto;
+  background: var(--line);
+}
+
+/* $ SPENT cost segment: lucide coin icon + formatted amount */
+.spent {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.spent svg {
+  display: block;
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+}
 `;
 
 /**
@@ -51,12 +89,16 @@ const STYLE = `
  * @attr label - the runtime label text (defaults to "CLI float")
  * @attr linked - boolean; rose-tints the border to signal a linked runtime
  * @attr online - boolean; shows the green status dot
+ * @attr spent - cost spent, a number or numeric string (e.g. `2.41`); renders a
+ *   coin-icon + formatted `$2.41` cost segment after a thin divider
  * @csspart dot - the green status dot (present only when `online`)
  * @csspart label - the runtime label span
+ * @csspart sep - the thin divider before the cost segment (present only when `spent`)
+ * @csspart spent - the cost segment wrapper (present only when `spent`)
  * @slot - default slot overrides the label text
  */
 export class SliccFloatbar extends HTMLElement {
-  static readonly observedAttributes = ['label', 'linked', 'online'];
+  static readonly observedAttributes = ['label', 'linked', 'online', 'spent'];
 
   readonly #root: ShadowRoot;
 
@@ -101,10 +143,26 @@ export class SliccFloatbar extends HTMLElement {
     this.toggleAttribute('online', !!value);
   }
 
+  /** Raw `spent` attribute value (number/string), or `null` when unset. */
+  get spent(): string | null {
+    return this.getAttribute('spent');
+  }
+
+  set spent(value: string | number | null) {
+    if (value == null) this.removeAttribute('spent');
+    else this.setAttribute('spent', String(value));
+  }
+
   #render(): void {
     const dotHtml = this.online ? '<span class="fdot" part="dot"></span>' : '';
     const label = escapeHtml(this.label);
-    this.#root.innerHTML = `<style>${STYLE}</style>${dotHtml}<span class="label" part="label"><slot>${label}</slot></span>`;
+    const amount = formatSpent(this.spent);
+    const spentHtml =
+      amount != null
+        ? `<span class="sep" part="sep"></span>` +
+          `<span class="spent" part="spent">${iconSvg('circle-dollar-sign', { size: 12 })}<span class="amount">${escapeHtml(amount)}</span></span>`
+        : '';
+    this.#root.innerHTML = `<style>${STYLE}</style>${dotHtml}<span class="label" part="label"><slot>${label}</slot></span>${spentHtml}`;
   }
 }
 

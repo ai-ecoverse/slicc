@@ -1,5 +1,6 @@
 import { define } from '../internal/define.js';
 import { escapeHtml } from '../internal/html.js';
+import { iconSvg } from '../internal/icons.js';
 
 const STYLE = `
 :host { display: inline-grid; }
@@ -28,7 +29,14 @@ const STYLE = `
   opacity: 0.45;
 }
 .iconbtn:disabled:hover { background: var(--canvas); color: var(--txt-2); }
+.icon { display: grid; place-items: center; pointer-events: none; }
+.icon svg { display: block; }
 `;
+
+/** Default lucide icon when no `icon` attribute is supplied. */
+const DEFAULT_ICON = 'plus';
+/** Rendered lucide glyph size (px) inside the 30×30 button. */
+const ICON_SIZE = 16;
 
 /**
  * `<slicc-icon-button>` — the prototype's `.iconbtn`: a generic 30×30 square
@@ -37,18 +45,25 @@ const STYLE = `
  * DOM; themes via inherited tokens (--canvas, --line, --txt-2, --ghost, --ink,
  * --ui) which flip automatically in dark mode.
  *
- * Place the glyph (emoji, character, or inline SVG) in the default slot. The
- * inner `<button>` mirrors the host `disabled` attribute and carries the
+ * The glyph is a **lucide** icon named by the kebab-case `icon` attribute
+ * (default `plus`), rendered via the shared `iconSvg` helper — never emoji or
+ * bespoke unicode symbols. The icon inherits the button's `currentColor`, so it
+ * tracks the idle / hover / disabled palette automatically. Slotting a custom
+ * `<svg>` into the default slot overrides the lucide glyph entirely.
+ *
+ * The inner `<button>` mirrors the host `disabled` attribute and carries the
  * accessible name from `label`; a native click on the button bubbles out of the
  * host as the usual composed `click` event.
  *
+ * @attr icon - lucide icon name, kebab-case (default `plus`)
  * @attr disabled - when present, the button is non-interactive and dimmed
  * @attr label - accessible name applied as `aria-label` + `title`
- * @slot - the icon glyph rendered inside the button
+ * @slot - custom glyph that overrides the lucide `icon` (e.g. a bespoke `<svg>`)
  * @csspart button - the inner `<button>` element
+ * @csspart icon - the lucide `<svg>` glyph
  */
 export class SliccIconButton extends HTMLElement {
-  static readonly observedAttributes = ['disabled', 'label'];
+  static readonly observedAttributes = ['icon', 'disabled', 'label'];
 
   readonly #root: ShadowRoot;
 
@@ -63,6 +78,16 @@ export class SliccIconButton extends HTMLElement {
 
   attributeChangedCallback(): void {
     if (this.isConnected) this.#render();
+  }
+
+  /** The lucide icon name (kebab-case); falls back to `plus`. */
+  get icon(): string {
+    return this.getAttribute('icon') ?? DEFAULT_ICON;
+  }
+
+  set icon(value: string | null) {
+    if (value == null) this.removeAttribute('icon');
+    else this.setAttribute('icon', value);
   }
 
   get disabled(): boolean {
@@ -87,7 +112,8 @@ export class SliccIconButton extends HTMLElement {
     const label = this.label;
     const ariaAttr = label ? ` aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"` : '';
     const disabledAttr = this.disabled ? ' disabled' : '';
-    this.#root.innerHTML = `<style>${STYLE}</style><button type="button" class="iconbtn" part="button"${ariaAttr}${disabledAttr}><slot></slot></button>`;
+    const glyph = iconSvg(this.icon, { size: ICON_SIZE, part: 'icon' });
+    this.#root.innerHTML = `<style>${STYLE}</style><button type="button" class="iconbtn" part="button"${ariaAttr}${disabledAttr}><slot><span class="icon">${glyph}</span></slot></button>`;
   }
 }
 

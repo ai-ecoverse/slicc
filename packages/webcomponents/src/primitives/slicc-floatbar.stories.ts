@@ -5,6 +5,7 @@ interface FloatbarArgs {
   label?: string;
   linked?: boolean;
   online?: boolean;
+  spent?: string;
 }
 
 const meta: Meta<FloatbarArgs> = {
@@ -15,12 +16,14 @@ const meta: Meta<FloatbarArgs> = {
     label: { control: 'text', description: 'Runtime label text' },
     linked: { control: 'boolean', description: 'Rose-tinted border (linked runtime)' },
     online: { control: 'boolean', description: 'Show the green status dot' },
+    spent: { control: 'text', description: '$ spent — number/string, renders a coin + $amount' },
   },
-  render: ({ label, linked, online }) => {
+  render: ({ label, linked, online, spent }) => {
     const el = document.createElement('slicc-floatbar');
     if (label != null) el.setAttribute('label', label);
     if (linked) el.toggleAttribute('linked', true);
     if (online) el.toggleAttribute('online', true);
+    if (spent != null && spent !== '') el.setAttribute('spent', spent);
     return el;
   },
 };
@@ -44,4 +47,14 @@ export const Online: Story = {
 /** The prototype nav state: linked, online, full label. */
 export const LinkedOnline: Story = {
   args: { label: 'CLI · tray · 1 follower', linked: true, online: true },
+};
+
+/** With a `$ SPENT` cost segment — coin icon + `$2.41` after a thin divider. */
+export const WithSpent: Story = {
+  args: { label: 'CLI float', spent: '2.41' },
+};
+
+/** Online + spent — green dot, label, divider, and the cost segment together. */
+export const OnlineSpent: Story = {
+  args: { label: 'CLI · tray · 1 follower', online: true, spent: '12.07' },
 };

@@ -2,17 +2,27 @@ import type { Meta, StoryObj } from '@storybook/web-components-vite';
 import './slicc-icon-button.js';
 
 interface IconButtonArgs {
+  icon?: string;
   label?: string;
   disabled?: boolean;
-  glyph?: string;
 }
 
-function build({ label, disabled, glyph }: IconButtonArgs): HTMLElement {
+function build({ icon, label, disabled }: IconButtonArgs): HTMLElement {
   const el = document.createElement('slicc-icon-button');
+  if (icon) el.setAttribute('icon', icon);
   if (label) el.setAttribute('label', label);
   if (disabled) el.setAttribute('disabled', '');
-  el.textContent = glyph ?? '+';
   return el;
+}
+
+/** A labelled row of icon buttons (used by the gallery story). */
+function row(items: Array<{ icon: string; label: string }>): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.style.display = 'flex';
+  wrap.style.gap = '10px';
+  wrap.style.alignItems = 'center';
+  for (const { icon, label } of items) wrap.appendChild(build({ icon, label }));
+  return wrap;
 }
 
 const meta: Meta<IconButtonArgs> = {
@@ -20,9 +30,9 @@ const meta: Meta<IconButtonArgs> = {
   component: 'slicc-icon-button',
   tags: ['autodocs'],
   argTypes: {
+    icon: { control: 'text', description: 'Lucide icon name (kebab-case, default `plus`)' },
     label: { control: 'text', description: 'Accessible name (aria-label + title)' },
     disabled: { control: 'boolean', description: 'Non-interactive, dimmed state' },
-    glyph: { control: 'text', description: 'Slotted icon glyph' },
   },
   render: build,
 };
@@ -30,19 +40,41 @@ const meta: Meta<IconButtonArgs> = {
 export default meta;
 type Story = StoryObj<IconButtonArgs>;
 
-export const Default: Story = { args: { label: 'Add', glyph: '+' } };
+/** Default state — the `plus` lucide glyph. */
+export const Default: Story = { args: { icon: 'plus', label: 'Add' } };
 
-export const Disabled: Story = { args: { label: 'Add', glyph: '+', disabled: true } };
+/** Each named lucide icon the prototype toolbars use. */
+export const Plus: Story = { args: { icon: 'plus', label: 'Add' } };
+export const Paperclip: Story = { args: { icon: 'paperclip', label: 'Attach' } };
+export const Settings: Story = { args: { icon: 'settings', label: 'Settings' } };
+export const Search: Story = { args: { icon: 'search', label: 'Search' } };
+export const Mic: Story = { args: { icon: 'mic', label: 'Record' } };
 
-export const WithEmojiGlyph: Story = { args: { label: 'Attach', glyph: '📎' } };
+/** Non-interactive, dimmed. */
+export const Disabled: Story = { args: { icon: 'plus', label: 'Add', disabled: true } };
 
-export const WithSvgGlyph: Story = {
+/** The toolbar icon set side by side (icons inherit idle/hover/disabled color). */
+export const Gallery: Story = {
+  render: () =>
+    row([
+      { icon: 'plus', label: 'Add' },
+      { icon: 'paperclip', label: 'Attach' },
+      { icon: 'settings', label: 'Settings' },
+      { icon: 'search', label: 'Search' },
+      { icon: 'mic', label: 'Record' },
+    ]),
+};
+
+/** A slotted custom `<svg>` overrides the lucide `icon` entirely. */
+export const CustomSvgOverride: Story = {
   render: ({ label }) => {
     const el = document.createElement('slicc-icon-button');
     if (label) el.setAttribute('label', label);
+    // `icon` is ignored because the default slot is populated.
+    el.setAttribute('icon', 'plus');
     el.innerHTML =
-      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9 12l2 2 4-4"/></svg>';
     return el;
   },
-  args: { label: 'Add' },
+  args: { label: 'Confirm' },
 };
