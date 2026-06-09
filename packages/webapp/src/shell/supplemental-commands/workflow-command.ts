@@ -43,11 +43,15 @@ function getRunManager(): WorkflowRunManager | undefined {
     | undefined;
 }
 
-function resolveMaxCap(): number {
+export function resolveMaxCap(): number {
   const cores =
     (globalThis as { navigator?: { hardwareConcurrency?: number } }).navigator
       ?.hardwareConcurrency ?? 8;
-  return Math.min(16, Math.max(1, cores - 2)); // spec cap: min(16, cores-2)
+  // Scoops are I/O-bound (LLM/network), not CPU-bound — so scale generously with cores
+  // (~4 scoops/core) and floor at 8 so small boxes (2-core cloud cones) still fan out;
+  // ceiling 16 protects provider rate limits + browser memory. (Was min(16, cores-2),
+  // which collapsed to 1 on 2-3 core machines.)
+  return Math.min(16, Math.max(8, cores * 4));
 }
 
 // Apply one CLI token, mutating `o`; returns the (possibly advanced) index or a
@@ -103,7 +107,7 @@ function parse(a: string[]): Parsed {
     return { error: `workflow: unknown subcommand '${a[0]}' (only 'run' in SP1)` };
   }
   const maxCap = resolveMaxCap();
-  const o: Parsed = { budget: null, cap: Math.min(4, maxCap) }; // default 4, clamped to maxCap
+  const o: Parsed = { budget: null, cap: Math.min(8, maxCap) }; // default 8 (was 4), clamped to maxCap
   for (let i = 1; i < a.length; i++) {
     const r = applyToken(o, a, i, maxCap);
     if (r.help) return { help: true };
@@ -155,7 +159,7 @@ export function createWorkflowCommand(
       prelude: WORKFLOW_PRELUDE,
       config: {
         ...(p.hasArgs ? { args: p.args } : {}),
-        cap: p.cap ?? 4,
+        cap: p.cap ?? 8,
         budget: p.budget ?? null,
         cwd: ctx.cwd,
         agentCwd,

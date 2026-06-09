@@ -3,7 +3,10 @@ import 'fake-indexeddb/auto';
 import { VirtualFS } from '../../../src/fs/index.js';
 import { WORKFLOW_MANAGER_GLOBAL_KEY } from '../../../src/scoops/workflow-run-manager.js';
 import { createSupplementalCommands } from '../../../src/shell/supplemental-commands/index.js';
-import { createWorkflowCommand } from '../../../src/shell/supplemental-commands/workflow-command.js';
+import {
+  createWorkflowCommand,
+  resolveMaxCap,
+} from '../../../src/shell/supplemental-commands/workflow-command.js';
 import { VfsAdapter } from '../../../src/shell/vfs-adapter.js';
 
 async function ctxWith(
@@ -288,5 +291,25 @@ describe('workflow run — argument validation', () => {
     );
     expect(res.exitCode).toBe(0);
     expect(res.stdout.trim().split('\n').pop()).toBe('42');
+  });
+});
+
+describe('workflow concurrency cap (scoop-appropriate: 4/core, clamp [8,16])', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const capForCores = (cores: number): number => {
+    vi.stubGlobal('navigator', { hardwareConcurrency: cores });
+    return resolveMaxCap();
+  };
+  it('clamps cores*4 into [8,16]', () => {
+    expect(capForCores(1)).toBe(8); // 1*4=4 → floored to 8
+    expect(capForCores(2)).toBe(8); // 2*4=8
+    expect(capForCores(3)).toBe(12); // 3*4=12
+    expect(capForCores(4)).toBe(16); // 4*4=16
+    expect(capForCores(8)).toBe(16); // 8*4=32 → ceilinged to 16
+    expect(capForCores(64)).toBe(16);
+  });
+  it('falls back to 8 cores when navigator is absent → cap 16', () => {
+    vi.stubGlobal('navigator', undefined); // typeof navigator stays defined-but-undefined → ?? 8
+    expect(resolveMaxCap()).toBe(16); // 8*4=32 → 16
   });
 });
