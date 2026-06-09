@@ -493,7 +493,8 @@ function formatDiscoveredSkills(discovered: DiscoveredSkill[], heading: string):
   output += '  ─────────────────────────────────────────────────────────────\n';
 
   for (const skill of discovered) {
-    const description = skill.description || '';
+    const raw = skill.description || '';
+    const description = raw.length > 60 ? raw.slice(0, 59) + '…' : raw;
     output += `  ${skill.name.padEnd(20)} ${formatSkillSource(skill.source).padEnd(9)} ${description}\n`;
   }
 
