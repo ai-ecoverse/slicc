@@ -85,7 +85,10 @@ async function pipeline(items, ...stages) {
 function __wfProgress(kind, text) {
   if (__execSpawn) {
     try {
-      __execSpawn(['__wf_progress', kind, String(text)]);
+      const __p = __execSpawn(['__wf_progress', kind, String(text)]);
+      // Fire-and-forget: swallow async rejection too (e.g. realm disposed mid-flight),
+      // not just a sync throw — otherwise it surfaces as an unhandled rejection.
+      if (__p && typeof __p.then === 'function') __p.then(undefined, function () {});
     } catch (e) {}
   }
 }
