@@ -1,6 +1,6 @@
 // Side-effect registration of every SLICC custom element (generated).
-// Each component module self-registers on import; importing them all guarantees
-// the full set is defined. Safe to call repeatedly (registration is guarded).
+import './add-menu/slicc-add-menu.js';
+import './pill/slicc-pill.js';
 import './primitives/slicc-avatar.js';
 import './primitives/slicc-collapse-btn.js';
 import './primitives/slicc-day-separator.js';
@@ -18,6 +18,4 @@ import './theme/slicc-theme-toggle.js';
 import './theme/slicc-theme.js';
 
 /** Import every component module for side-effect registration. */
-export function registerAllSliccComponents(): void {
-  // Imports above register on module evaluation; this is the explicit entry point.
-}
+export function registerAllSliccComponents(): void {}

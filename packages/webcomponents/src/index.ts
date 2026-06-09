@@ -1,11 +1,9 @@
 // @slicc/webcomponents — public barrel (generated; see register.ts).
-//
-// Importing a component module self-registers its custom element (internal/define.ts).
-// Re-export each class for typed construction plus the theme utilities. Call
-// registerAllSliccComponents() to register the full set for side effects.
 
+export { SliccAddMenu } from './add-menu/slicc-add-menu.js';
 export { define } from './internal/define.js';
 export { escapeHtml } from './internal/html.js';
+export { SliccPill } from './pill/slicc-pill.js';
 export { SliccAvatar } from './primitives/slicc-avatar.js';
 export { SliccCollapseBtn } from './primitives/slicc-collapse-btn.js';
 export { SliccDaySeparator } from './primitives/slicc-day-separator.js';
