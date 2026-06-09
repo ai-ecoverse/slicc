@@ -6,6 +6,7 @@ import {
   findMatchingScripts,
 } from './bsh-discovery.js';
 import { discoverJshCommands, type JshDiscoveryFS } from './jsh-discovery.js';
+import { discoverWorkflowCommands, type WorkflowCommandEntry } from './workflow-discovery.js';
 
 const BSH_ROOTS = ['/workspace', '/shared'] as const;
 
@@ -25,6 +26,12 @@ export interface ScriptCatalogOptions {
 
 function cloneJshCommands(commands: Map<string, string>): Map<string, string> {
   return new Map(commands);
+}
+
+function cloneWorkflowCommands(
+  commands: Map<string, WorkflowCommandEntry>
+): Map<string, WorkflowCommandEntry> {
+  return new Map([...commands].map(([k, v]) => [k, { ...v }]));
 }
 
 function cloneBshEntries(entries: readonly BshEntry[]): BshEntry[] {
@@ -71,8 +78,11 @@ export class ScriptCatalog {
   private jshInflight: Promise<Map<string, string>> | null = null;
   private bshCache: BshEntry[] | null = null;
   private bshInflight: Promise<BshEntry[]> | null = null;
+  private workflowCache: Map<string, WorkflowCommandEntry> | null = null;
+  private workflowInflight: Promise<Map<string, WorkflowCommandEntry>> | null = null;
   private jshGeneration = 0;
   private bshGeneration = 0;
+  private workflowGeneration = 0;
 
   constructor(options: ScriptCatalogOptions) {
     this.jshFs = options.jshFs;
@@ -84,7 +94,10 @@ export class ScriptCatalog {
         this.watcher.watch(
           '/',
           () => true,
-          () => this.invalidateJsh()
+          () => {
+            this.invalidateJsh();
+            this.invalidateWorkflows();
+          }
         )
       );
 
@@ -111,6 +124,7 @@ export class ScriptCatalog {
   invalidateAll(): void {
     this.invalidateJsh();
     this.invalidateBsh();
+    this.invalidateWorkflows();
   }
 
   invalidateJsh(): void {
@@ -123,6 +137,12 @@ export class ScriptCatalog {
     this.bshGeneration++;
     this.bshCache = null;
     this.bshInflight = null;
+  }
+
+  invalidateWorkflows(): void {
+    this.workflowGeneration++;
+    this.workflowCache = null;
+    this.workflowInflight = null;
   }
 
   async getJshCommands(): Promise<Map<string, string>> {
@@ -144,6 +164,11 @@ export class ScriptCatalog {
     if (!this.bshFs) return [];
     const entries = await this.loadBshEntries();
     return cloneBshEntries(findMatchingScripts(entries, url));
+  }
+
+  async getWorkflowCommands(): Promise<Map<string, WorkflowCommandEntry>> {
+    const commands = await this.loadWorkflowCommands();
+    return cloneWorkflowCommands(commands);
   }
 
   private shouldCacheJsh(): boolean {
@@ -204,5 +229,30 @@ export class ScriptCatalog {
     }
 
     return this.bshInflight;
+  }
+
+  private async loadWorkflowCommands(): Promise<Map<string, WorkflowCommandEntry>> {
+    const shouldCache = this.shouldCacheJsh();
+    if (shouldCache && this.workflowCache) return this.workflowCache;
+
+    if (!this.workflowInflight) {
+      const generation = this.workflowGeneration;
+      const inflight = discoverWorkflowCommands(this.jshFs)
+        .then((commands) => {
+          const cloned = cloneWorkflowCommands(commands);
+          if (shouldCache && this.workflowGeneration === generation) {
+            this.workflowCache = cloned;
+          }
+          return cloned;
+        })
+        .finally(() => {
+          if (this.workflowInflight === inflight) {
+            this.workflowInflight = null;
+          }
+        });
+      this.workflowInflight = inflight;
+    }
+
+    return this.workflowInflight;
   }
 }
