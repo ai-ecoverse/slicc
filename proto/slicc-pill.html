@@ -274,7 +274,9 @@
             transform: translate(var(--tx), var(--ty)) scale(var(--zoom));
             transition: transform 0.4s cubic-bezier(0.34, 1.4, 0.5, 1);
           }
-          .pill:hover .icon-inner, .pill:focus-visible .icon-inner { transform: none; }
+          .pill:hover .icon-inner, .pill:focus-visible .icon-inner {
+            transform: translate(var(--ox, 0%), var(--oy, 0%)) scale(var(--ozoom, 1));
+          }
           .glyph {
             position: absolute; left: 50%; top: 50%;
             transform: translate(-50%, -50%);
@@ -324,11 +326,23 @@
             // the viewport center, then scale by zoom.
             const tx = ((0.5 - cfg.zoom * ex) * 100).toFixed(2);
             const ty = ((0.5 - cfg.zoom * ey) * 100).toFixed(2);
+            // Zoom-out (hover) framing. Baseline is the icon viewport [0,1]; the
+            // eyes can now sit outside the cone's box (negative Eye Y), so expand
+            // the framed region to the union of the viewport and the eye box and
+            // fit it back in. When the eyes stay inside [0,1] this collapses to a
+            // 1:1 identity transform (the original "full icon" view).
+            const ex0 = e.left / 100, ex1 = (e.left + e.width) / 100;
+            const ey0 = e.top / 100, ey1 = (e.top + e.height) / 100;
+            const bx0 = Math.min(0, ex0), bx1 = Math.max(1, ex1);
+            const by0 = Math.min(0, ey0), by1 = Math.max(1, ey1);
+            const oZoom = Math.min(1, 1 / Math.max(bx1 - bx0, by1 - by0));
+            const ox = ((0.5 - oZoom * (bx0 + bx1) / 2) * 100).toFixed(2);
+            const oy = ((0.5 - oZoom * (by0 + by1) / 2) * 100).toFixed(2);
             this.shadowRoot.innerHTML =
               `<style>${STYLE}</style>` +
               `<button class="pill ${active ? 'active' : ''}" part="pill" style="--accent:${color}">` +
               `<span class="icon" part="icon">` +
-              `<span class="icon-inner" style="--tx:${tx}%;--ty:${ty}%;--zoom:${cfg.zoom}">` +
+              `<span class="icon-inner" style="--tx:${tx}%;--ty:${ty}%;--zoom:${cfg.zoom};--ox:${ox}%;--oy:${oy}%;--ozoom:${oZoom.toFixed(4)}">` +
               `<svg class="glyph" viewBox="${cfg.vb}" preserveAspectRatio="xMidYMid meet" style="--g:${cfg.glyph}%">${glyph}</svg>` +
               `<span class="eyes" style="top:${e.top}%;left:${e.left}%;width:${e.width}%;height:${e.height}%">${eyesSvg(this.eyeState)}</span>` +
               `</span></span>` +
