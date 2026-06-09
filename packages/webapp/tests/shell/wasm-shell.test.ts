@@ -3,9 +3,10 @@
  */
 
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserAPI } from '../../src/cdp/index.js';
 import { FsWatcher, VirtualFS } from '../../src/fs/index.js';
+import { WORKFLOW_MANAGER_GLOBAL_KEY } from '../../src/scoops/workflow-run-manager.js';
 import {
   decodeForbiddenResponseHeaders,
   encodeForbiddenRequestHeaders,
@@ -574,5 +575,82 @@ describe('WasmShell command allow-list', () => {
     // accidentally removed it, we'd see 127 / "command not found" instead.
     expect(result.exitCode).not.toBe(127);
     expect(result.stderr).not.toMatch(/not found/i);
+  });
+});
+
+function installFakeWfManager(): void {
+  (globalThis as Record<string, unknown>)[WORKFLOW_MANAGER_GLOBAL_KEY] = {
+    start: async () => ({ runId: 'r1' }),
+    getRun: () => null,
+    listRuns: () => [],
+    observeRun: () => () => {},
+  };
+}
+
+describe('WasmShell workflow command registration', () => {
+  let fs: VirtualFS;
+  beforeEach(async () => {
+    fs = await VirtualFS.create({ dbName: `test-wf-reg-${Math.random()}`, wipe: true });
+  });
+  afterEach(async () => {
+    delete (globalThis as Record<string, unknown>)[WORKFLOW_MANAGER_GLOBAL_KEY];
+    await fs.dispose();
+  });
+
+  it('registers a saved workflow as a bare command that runs non-blocking', async () => {
+    installFakeWfManager();
+    await fs.mkdir('/workspace/.workflows', { recursive: true });
+    await fs.writeFile(
+      '/workspace/.workflows/audit.workflow.js',
+      "export const meta = { name: 'audit' };\nreturn 1"
+    );
+    const shell = new WasmShell({ fs });
+    await shell.syncJshCommands();
+    const res = await shell.executeCommand('audit');
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toMatch(/started/i);
+  });
+
+  it('a skill workflow is reachable as <skill>:<name>', async () => {
+    installFakeWfManager();
+    await fs.mkdir('/workspace/skills/triage/.workflows', { recursive: true });
+    await fs.writeFile(
+      '/workspace/skills/triage/.workflows/sweep.workflow.js',
+      "export const meta = { name: 'sweep' };\nreturn 1"
+    );
+    const shell = new WasmShell({ fs });
+    await shell.syncJshCommands();
+    const res = await shell.executeCommand('triage:sweep');
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toMatch(/started/i);
+  });
+
+  it('a .jsh wins the bare name over a saved workflow (precedence at dispatch)', async () => {
+    installFakeWfManager();
+    await fs.mkdir('/workspace/.workflows', { recursive: true });
+    await fs.writeFile(
+      '/workspace/.workflows/foo.workflow.js',
+      "export const meta={name:'foo'};\nreturn 1"
+    );
+    await fs.writeFile('/workspace/foo.jsh', "console.log('JSH-WON');");
+    const shell = new WasmShell({ fs });
+    await shell.syncJshCommands();
+    const res = await shell.executeCommand('foo');
+    expect(res.stdout).toContain('JSH-WON');
+  });
+
+  it('deleting the .jsh falls back to the workflow at dispatch (no re-register)', async () => {
+    installFakeWfManager();
+    await fs.mkdir('/workspace/.workflows', { recursive: true });
+    await fs.writeFile(
+      '/workspace/.workflows/foo.workflow.js',
+      "export const meta={name:'foo'};\nreturn 1"
+    );
+    await fs.writeFile('/workspace/foo.jsh', "console.log('JSH-WON');");
+    const shell = new WasmShell({ fs });
+    await shell.syncJshCommands();
+    await fs.rm('/workspace/foo.jsh');
+    const res = await shell.executeCommand('foo');
+    expect(res.stdout).toMatch(/started/i);
   });
 });
