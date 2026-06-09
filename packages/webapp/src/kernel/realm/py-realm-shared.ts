@@ -219,16 +219,21 @@ export async function runPyRealm(
     /* best-effort cleanup */
   }
 
-  // Mount write-back is no longer needed: the bomb overlay refuses
-  // synchronous writes from Python, and `slicc.fs.write_*` routes
-  // through the `vfs` RPC channel directly (so backend writes are
-  // applied as they happen, not flushed at the end).
   if (init.opfsMountDbName !== undefined) {
     try {
       await flushOpfsRealmMounts(opfsMounts);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       pushWarning(`Pyodide→VFS OPFS flush failed: ${message}`);
+    }
+    // Invalidate the kernel VFS's in-memory cache for paths Python
+    // wrote to via synchronous `open()`. The OPFS layer already has
+    // the correct data (flushed above); this makes the kernel re-read
+    // from OPFS on next access instead of serving stale cached content.
+    try {
+      await invalidateDirtyPathsInKernelVfs(opfsMounts, rpc);
+    } catch (err) {
+      pushWarning(`Pyodide→kernel VFS invalidation failed: ${describeRealmError(err)}`);
     }
   }
 
@@ -296,6 +301,7 @@ export interface OpfsRealmMount {
   mount: OpfsMount;
   rootHandle: FileSystemDirectoryHandle;
   flushBuffers: (rootHandle: FileSystemDirectoryHandle) => Promise<void>;
+  getDirtyPaths: () => string[];
 }
 
 export interface MountedOpfsResult {
@@ -453,7 +459,13 @@ async function mountOpfsChild(
   const mount =
     rootNode?.mount ??
     ({ opts, mountpoint: pyPath, root: rootNode as never } as unknown as OpfsMount);
-  mounts.push({ pyPath, mount, rootHandle: handle, flushBuffers: buffered.flush });
+  mounts.push({
+    pyPath,
+    mount,
+    rootHandle: handle,
+    flushBuffers: buffered.flush,
+    getDirtyPaths: buffered.getDirtyPaths,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -476,5 +488,25 @@ export async function flushOpfsRealmMounts(mounts: OpfsRealmMount[]): Promise<vo
   for (const entry of mounts) {
     await flushPendingOpfsOps(entry.mount);
     await entry.flushBuffers(entry.rootHandle);
+  }
+}
+
+/**
+ * After OPFS flush, tell the kernel VFS to invalidate its in-memory
+ * cache for paths Python wrote to. The kernel's `WebAccessFS.stat()`
+ * fallback will re-read fresh metadata from OPFS on next access.
+ */
+async function invalidateDirtyPathsInKernelVfs(
+  mounts: OpfsRealmMount[],
+  rpc: RealmRpcClient
+): Promise<void> {
+  const absPaths: string[] = [];
+  for (const entry of mounts) {
+    for (const relPath of entry.getDirtyPaths()) {
+      absPaths.push(entry.pyPath === '/' ? `/${relPath}` : `${entry.pyPath}/${relPath}`);
+    }
+  }
+  if (absPaths.length > 0) {
+    await rpc.call('vfs', 'invalidatePaths', [absPaths]);
   }
 }

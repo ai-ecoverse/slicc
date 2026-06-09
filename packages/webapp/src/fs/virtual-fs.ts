@@ -677,6 +677,27 @@ export class VirtualFS {
   }
 
   /**
+   * Evict stale entries from the ZenFS in-memory cache for paths that
+   * were written externally (e.g. by the Python realm via OPFS).
+   * After invalidation, the next async `stat()` on these paths triggers
+   * `WebAccessFS.stat()`'s ENOENT fallback which re-reads fresh
+   * metadata from the OPFS handles. The handle cache is also cleared
+   * so new files get their handles resolved from the OPFS tree.
+   */
+  invalidatePaths(paths: string[]): void {
+    if (this.backend !== 'opfs' || !this.opfsBackendFs) return;
+    const fs = this.opfsBackendFs as unknown as {
+      index: { delete: (path: string) => boolean };
+      _handles: Map<string, unknown>;
+    };
+    for (const raw of paths) {
+      const path = normalizePath(raw);
+      fs.index.delete(path);
+      fs._handles.delete(path);
+    }
+  }
+
+  /**
    * Writability predicate — the unrestricted VirtualFS has no ACL, so every
    * path is writable. Exists to mirror {@link RestrictedFS.canWrite} so
    * callers (e.g., the `agent` shell command) can duck-type across both

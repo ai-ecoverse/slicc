@@ -538,4 +538,8 @@ export class VfsAdapter implements IFileSystem {
   async utimes(path: string, _atime: Date, _mtime: Date): Promise<void> {
     // Our VFS doesn't support setting times — no-op
   }
+
+  invalidatePaths(paths: string[]): void {
+    this.vfs.invalidatePaths(paths);
+  }
 }

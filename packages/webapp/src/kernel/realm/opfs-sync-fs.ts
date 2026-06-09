@@ -427,13 +427,13 @@ export function createOpfsSyncFs(Fs: EmscriptenFsApi): OpfsSyncFsPlugin {
         if (attr.size !== undefined && Fs.isFile(node.mode)) {
           const newSize = attr.size;
           node.opfs.size = newSize;
-          // `setattr` has no access to the stream, so any open SAH on
-          // this node is owned by `stream.sah` and not visible here.
-          // Always queue an async truncate through a transient SAH
-          // lease so the on-disk file matches the new size. E2 can
-          // reintroduce a stream-level fast path by threading the
-          // open SAH (if any) into this call.
+          // Queued truncate is stale-guarded: `stream_ops.write` updates
+          // `node.opfs.size` synchronously, and `flushPendingOpfsOps`
+          // only drains after the stream closes (Python exits), so the
+          // comparison below is guaranteed to see the final written size.
+          const sizeAtEnqueue = newSize;
           enqueueOpfsOp(node.mount, async () => {
+            if (node.opfs.size > sizeAtEnqueue) return;
             const fileHandle = await ensureFileHandle(node);
             const sah = node.mount.opts.sahProvider.acquire(node.opfs.relPath, fileHandle);
             try {
@@ -699,6 +699,8 @@ export interface OpfsBufferedSahProvider {
   preload(prewalk: OpfsPrewalkSnapshot): Promise<void>;
   /** Write every dirty buffer back to OPFS under `rootHandle`. */
   flush(rootHandle: FileSystemDirectoryHandle): Promise<void>;
+  /** Return relative paths that were written (dirty) during this session. */
+  getDirtyPaths(): string[];
 }
 
 interface BufferedBacking {
@@ -750,6 +752,7 @@ class BufferedSyncAccessHandle implements OpfsSyncAccessHandle {
 
 export function createBufferedOpfsSahProvider(): OpfsBufferedSahProvider {
   const backings = new Map<string, BufferedBacking>();
+  const dirtyPaths = new Set<string>();
   const leased = new Set<string>();
   const provider: OpfsSahProvider = {
     acquire(relPath: string, _fileHandle?: FileSystemFileHandle): OpfsSyncAccessHandle {
@@ -761,9 +764,11 @@ export function createBufferedOpfsSahProvider(): OpfsBufferedSahProvider {
       if (!backing) {
         backing = { data: new Uint8Array(), dirty: true };
         backings.set(relPath, backing);
+        dirtyPaths.add(relPath);
       }
       return new BufferedSyncAccessHandle(backing, () => {
         leased.delete(relPath);
+        if (backing!.dirty) dirtyPaths.add(relPath);
       });
     },
     release(relPath: string): void {
@@ -790,17 +795,15 @@ export function createBufferedOpfsSahProvider(): OpfsBufferedSahProvider {
         }
         const fileHandle = await cursor.getFileHandle(parts[parts.length - 1], { create: true });
         const writable = await fileHandle.createWritable();
-        // Copy into a fresh ArrayBuffer-backed view so the dom
-        // `FileSystemWriteChunkType` overload (which requires a
-        // strict `ArrayBuffer`, not `ArrayBufferLike`) accepts it
-        // without forcing every backing.data slot to carry a wider
-        // type than the SAH-shaped reads need.
         const buf = new ArrayBuffer(backing.data.byteLength);
         new Uint8Array(buf).set(backing.data);
         await writable.write(buf);
         await writable.close();
         backing.dirty = false;
       }
+    },
+    getDirtyPaths(): string[] {
+      return [...dirtyPaths];
     },
   };
 }

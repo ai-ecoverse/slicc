@@ -386,3 +386,45 @@ function writeViaProvider(
   sah.flush();
   sah.close();
 }
+
+describe('getDirtyPaths on OpfsRealmMount', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('reports paths written via the buffered provider', async () => {
+    const opfs = createMutableDirectoryHandle({
+      'slicc-fs': {
+        workspace: { 'existing.txt': 'OLD' },
+      },
+    });
+    installNavigatorStub(opfs.handle);
+    const { pyodide } = makeFakePyodide();
+
+    const { mounts } = await mountOpfsDirsAndSyncIn(pyodide, ['/workspace'], 'slicc-fs');
+
+    writeViaProvider(mounts, '/workspace', 'output.html', '<html>BRAND REVIEW</html>');
+    writeViaProvider(mounts, '/workspace', 'sub/nested.txt', 'nested content');
+    await flushOpfsRealmMounts(mounts);
+
+    const mount = mounts.find((m) => m.pyPath === '/workspace')!;
+    const dirtyPaths = mount.getDirtyPaths().sort();
+    expect(dirtyPaths).toEqual(['output.html', 'sub/nested.txt']);
+  });
+
+  it('does not report preloaded but unmodified files', async () => {
+    const opfs = createMutableDirectoryHandle({
+      'slicc-fs': {
+        workspace: { 'untouched.txt': 'ORIGINAL' },
+      },
+    });
+    installNavigatorStub(opfs.handle);
+    const { pyodide } = makeFakePyodide();
+
+    const { mounts } = await mountOpfsDirsAndSyncIn(pyodide, ['/workspace'], 'slicc-fs');
+    await flushOpfsRealmMounts(mounts);
+
+    const mount = mounts.find((m) => m.pyPath === '/workspace')!;
+    expect(mount.getDirtyPaths()).toEqual([]);
+  });
+});

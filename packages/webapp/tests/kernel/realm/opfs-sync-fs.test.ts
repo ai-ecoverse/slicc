@@ -15,6 +15,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  createBufferedOpfsSahProvider,
   createOpfsSyncFs,
   type EmscriptenFsApi,
   ERRNO,
@@ -490,5 +491,49 @@ describe('ERRNO mapping', () => {
     expect(ERRNO.ENOTEMPTY).toBe(55);
     expect(ERRNO.EBADF).toBe(8);
     expect(ERRNO.EINVAL).toBe(28);
+  });
+});
+
+describe('createBufferedOpfsSahProvider dirty tracking', () => {
+  it('getDirtyPaths returns paths written through the provider', () => {
+    const buffered = createBufferedOpfsSahProvider();
+    const sah = buffered.provider.acquire('foo/bar.txt');
+    const bytes = new TextEncoder().encode('hello');
+    sah.write(bytes, { at: 0 });
+    sah.close();
+
+    expect(buffered.getDirtyPaths()).toContain('foo/bar.txt');
+  });
+
+  it('getDirtyPaths does not include preloaded files that were not written', async () => {
+    const root = createMutableDirectoryHandle({ 'existing.txt': 'EXISTING' });
+    const prewalk = await prewalkOpfsTree(root.handle);
+    const buffered = createBufferedOpfsSahProvider();
+    await buffered.preload(prewalk);
+
+    expect(buffered.getDirtyPaths()).toEqual([]);
+  });
+
+  it('getDirtyPaths includes preloaded files that were subsequently written', async () => {
+    const root = createMutableDirectoryHandle({ 'existing.txt': 'OLD' });
+    const prewalk = await prewalkOpfsTree(root.handle);
+    const buffered = createBufferedOpfsSahProvider();
+    await buffered.preload(prewalk);
+
+    const sah = buffered.provider.acquire('existing.txt');
+    const bytes = new TextEncoder().encode('NEW CONTENT');
+    sah.write(bytes, { at: 0 });
+    sah.close();
+
+    expect(buffered.getDirtyPaths()).toContain('existing.txt');
+  });
+
+  it('tracks newly created files (no pre-existing fileHandle)', () => {
+    const buffered = createBufferedOpfsSahProvider();
+    const sah = buffered.provider.acquire('brand-new.txt');
+    sah.write(new TextEncoder().encode('fresh'), { at: 0 });
+    sah.close();
+
+    expect(buffered.getDirtyPaths()).toContain('brand-new.txt');
   });
 });
