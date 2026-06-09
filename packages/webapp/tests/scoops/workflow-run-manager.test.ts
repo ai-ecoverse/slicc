@@ -166,6 +166,40 @@ describe('WorkflowRunManager', () => {
     expect(realExecCalls.find((c) => c[0] === 'ls')).toBeDefined();
   });
 
+  it('caps per-run logs at MAX_LOG_LINES — oldest dropped, newest kept', async () => {
+    const baseCtx = {
+      cwd: '/',
+      env: new Map<string, string>(),
+      stdin: '',
+      exec: Object.assign(async () => ({ stdout: 'ok', stderr: '', exitCode: 0 }), {
+        spawn: async () => ({ stdout: 'ok', stderr: '', exitCode: 0 }),
+      }),
+    } as any;
+    const deps = makeDeps({
+      runRealm: vi.fn(async (_code: string, _argv: string[], ctx: any) => {
+        // Emit 1100 log lines (> the 1000 cap) the way a chatty/looping workflow would.
+        for (let i = 0; i < 1100; i++)
+          await ctx.exec('__wf_progress', { args: ['log', `line-${i}`] });
+        return { stdout: `WF_RESULT_x${JSON.stringify({ ok: true })}`, stderr: '', exitCode: 0 };
+      }),
+    });
+    const mgr = createWorkflowRunManager(deps as any);
+    const { runId } = await mgr.start({
+      code: 'C',
+      source: 'S',
+      name: 'n',
+      filename: 'f',
+      parentJid: undefined,
+      sentinel: 'WF_RESULT_x',
+      ctx: baseCtx,
+    });
+    await vi.waitFor(() => expect(mgr.getRun(runId)!.status).toBe('done'));
+    const logs = mgr.getRun(runId)!.logs;
+    expect(logs.length).toBe(1000); // capped at MAX_LOG_LINES
+    expect(logs[logs.length - 1]).toBe('line-1099'); // newest retained
+    expect(logs[0]).toBe('line-100'); // oldest 100 dropped (kept last 1000)
+  });
+
   it('captures the realm pid via pm.on(spawn)', async () => {
     let spawnHandler: ((p: any) => void) | undefined;
     const pm = {

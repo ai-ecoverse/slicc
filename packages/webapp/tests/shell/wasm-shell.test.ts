@@ -653,4 +653,24 @@ describe('WasmShell workflow command registration', () => {
     const res = await shell.executeCommand('foo');
     expect(res.stdout).toMatch(/started/i);
   });
+
+  it('a .jsh added AFTER a workflow is registered wins at dispatch (reverse transition)', async () => {
+    installFakeWfManager();
+    await fs.mkdir('/workspace/.workflows', { recursive: true });
+    await fs.writeFile(
+      '/workspace/.workflows/foo.workflow.js',
+      "export const meta={name:'foo'};\nreturn 1"
+    );
+    const shell = new WasmShell({ fs });
+    await shell.syncJshCommands();
+    const before = await shell.executeCommand('foo');
+    expect(before.stdout).toMatch(/started/i); // workflow-only → runs the workflow
+    // A .jsh of the same name appears later. The jsh sync skips re-registering (the name is
+    // already a registered script command), but the single late-binding handler resolves
+    // .jsh-first at dispatch — so the next invocation must run the .jsh.
+    await fs.writeFile('/workspace/foo.jsh', "console.log('JSH-LATER');");
+    await shell.syncJshCommands();
+    const after = await shell.executeCommand('foo');
+    expect(after.stdout).toContain('JSH-LATER');
+  });
 });

@@ -2,9 +2,11 @@
  * Workflow discovery — scan VirtualFS for `*.workflow.js` files and build a map of
  * command name → entry. Saved workflows (`/workspace/.workflows/`) get the bare stem;
  * skill-bundled workflows (`/workspace/skills/<skill>/.workflows/`) get `<skill>:<stem>`
- * (collision-free — `:` is outside the skill/workflow name charset). Skill segments are
- * validated against VALID_SKILL_NAME and skipped (with a warning) when they contain a
- * reserved char, so a raw directory name can never break the `<skill>:<name>` contract.
+ * (collision-free — `:` is outside the skill/workflow name charset). Both the skill segment
+ * and the workflow stem are validated against `VALID_NAME_SEGMENT` (the same charset
+ * `install-from-drop.ts`'s `VALID_SKILL_NAME` enforces) and skipped (with a warning) on a
+ * reserved char, so a raw filename can never break the `<skill>:<name>` contract or register
+ * an undispatchable command name.
  *
  * Mirrors jsh-discovery.ts (first occurrence of a name wins). Naming model + precedence
  * are specified in docs/superpowers/specs/2026-06-08-workflow-authoring-design.md §3.
@@ -37,8 +39,20 @@ export async function discoverWorkflowCommands(
   fs: JshDiscoveryFS
 ): Promise<Map<string, WorkflowCommandEntry>> {
   const out = new Map<string, WorkflowCommandEntry>();
-  if (await fs.exists(SAVED_ROOT)) await scanSavedRoot(fs, out);
-  if (await fs.exists(SKILLS_ROOT)) await scanSkillsRoot(fs, out);
+  // Contain a walk failure (e.g. a directory that becomes unreadable mid-scan) so a corrupt
+  // subtree under one root doesn't reject the whole discovery — that would make every
+  // workflow command silently vanish and surface as a raw rejection in callers (e.g. the
+  // `workflow save` re-sync). Log + return what we collected; each root is independent.
+  try {
+    if (await fs.exists(SAVED_ROOT)) await scanSavedRoot(fs, out);
+  } catch (err) {
+    log.warn(`workflow discovery: ${SAVED_ROOT} scan failed`, err);
+  }
+  try {
+    if (await fs.exists(SKILLS_ROOT)) await scanSkillsRoot(fs, out);
+  } catch (err) {
+    log.warn(`workflow discovery: ${SKILLS_ROOT} scan failed`, err);
+  }
   return out;
 }
 

@@ -720,7 +720,15 @@ export function defaultResolveModel(modelId: string): string | null {
       if (getProviderModels(account.providerId).some((m) => m.id === modelId)) return modelId;
     }
     return null;
-  } catch {
+  } catch (err) {
+    // getAccounts/getProviderModels normally return [] (and self-log) on a provider/parse
+    // failure; the only throws that reach here are residual storage/environment faults
+    // (e.g. a SecurityError, or a missing storage shim). Without a breadcrumb the caller
+    // gets a misleading "unknown model: <id>" for what is really an environment fault.
+    log.warn('defaultResolveModel: provider/account lookup threw; treating model as unknown', {
+      modelId,
+      error: err instanceof Error ? err.message : String(err),
+    });
     return null;
   }
 }

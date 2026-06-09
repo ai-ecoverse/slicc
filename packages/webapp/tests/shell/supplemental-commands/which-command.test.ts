@@ -141,4 +141,26 @@ describe('which command', () => {
     expect(res.stdout).toContain('/workspace/foo.jsh');
     expect(res.stdout).toMatch(/shadow/i);
   });
+
+  it('a static built-in wins over a same-named saved workflow (shadowed by built-in)', async () => {
+    const fs = await VirtualFS.create({
+      dbName: `which-wf3-${Math.random()}`,
+      wipe: true,
+    });
+    await fs.mkdir('/workspace/.workflows', { recursive: true });
+    await fs.writeFile('/workspace/.workflows/test.workflow.js', 'return 1');
+    const catalog = new ScriptCatalog({ jshFs: fs });
+    const ctx: any = {
+      cwd: '/workspace',
+      env: new Map(),
+      getRegisteredCommands: () => ['ls', 'cat', 'test'],
+    };
+    const res = await createWhichCommand({
+      fs,
+      scriptCatalog: catalog,
+      getStaticBuiltins: () => ['ls', 'cat', 'test'], // 'test' IS a static built-in
+    }).execute(['test'], ctx);
+    expect(res.stdout).toContain('/usr/bin/test'); // built-in wins
+    expect(res.stdout).toMatch(/shadowed by built-in/i);
+  });
 });

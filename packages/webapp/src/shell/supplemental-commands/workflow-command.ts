@@ -311,7 +311,17 @@ async function runSave(
 
   await ctx.fs.mkdir(SAVED_WORKFLOWS_DIR, { recursive: true });
   await ctx.fs.writeFile(path, run.source);
-  await options.syncScriptCommands?.();
+  // The file is now persisted. A re-sync failure (e.g. a VFS walk throwing mid-scan) must
+  // NOT surface as a raw rejection on an operation that already succeeded — downgrade to a
+  // warning; the watcher re-syncs on the next tick, so the command still appears.
+  try {
+    await options.syncScriptCommands?.();
+  } catch (err) {
+    log.warn('workflow save: command re-sync failed; workflow saved, will register on next sync', {
+      name,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   // Don't over-promise the bare name: precedence is `built-in > .jsh > saved-workflow`,
   // so on a `--force` overwrite a `.jsh` that appeared since the original save could shadow
