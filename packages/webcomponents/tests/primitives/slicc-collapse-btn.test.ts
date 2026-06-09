@@ -122,7 +122,9 @@ describe('slicc-collapse-btn', () => {
   it('hover state: ghost bg / ink text (real Chromium :hover rule resolves the tokens)', () => {
     const el = document.createElement('slicc-collapse-btn');
     document.body.appendChild(el);
-    const sheet = (el.shadowRoot as ShadowRoot).styleSheets[0];
+    // CSS now lives in a constructable sheet, not a <style> node, so read it
+    // from adoptedStyleSheets (shadowRoot.styleSheets reflects only <style>/<link>).
+    const sheet = (el.shadowRoot as ShadowRoot).adoptedStyleSheets[0];
     const rules = Array.from(sheet.cssRules) as CSSStyleRule[];
     const hoverRule = rules.find((r) => r.selectorText === '.col:hover');
     expect(hoverRule).toBeDefined();

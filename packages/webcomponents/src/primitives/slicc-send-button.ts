@@ -1,7 +1,7 @@
 import { define } from '../internal/define.js';
+import { h, sheet } from '../internal/dom.js';
 import { gravatarUrl } from '../internal/gravatar.js';
-import { escapeHtml } from '../internal/html.js';
-import { iconSvg } from '../internal/icons.js';
+import { iconEl } from '../internal/icons.js';
 
 const STYLE = `
 :host { display: inline-flex; }
@@ -99,6 +99,7 @@ const STYLE = `
   }
 }
 `;
+const SHEET = sheet(STYLE);
 
 /** Pixel size for the overlaid lucide glyphs inside the 36px circle. */
 const GLYPH_SIZE = 18;
@@ -148,6 +149,7 @@ export class SliccSendButton extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+    this.#root.adoptedStyleSheets = [SHEET];
   }
 
   connectedCallback(): void {
@@ -273,22 +275,35 @@ export class SliccSendButton extends HTMLElement {
   #render(): void {
     const busy = this.busy;
     const disabled = this.disabled;
-    const label = escapeHtml(this.label ?? (busy ? 'Stop' : 'Send'));
+    const label = this.label ?? (busy ? 'Stop' : 'Send');
     const inner = busy
-      ? `<slot name="busy"><span class="stop" part="stop">${iconSvg('square', { size: GLYPH_SIZE })}</span></slot>`
-      : `<slot><span class="glyph" part="glyph">${iconSvg('arrow-up', { size: GLYPH_SIZE })}</span></slot>`;
+      ? h(
+          'slot',
+          { name: 'busy' },
+          h('span', { class: 'stop', part: 'stop' }, iconEl('square', { size: GLYPH_SIZE }))
+        )
+      : h(
+          'slot',
+          null,
+          h('span', { class: 'glyph', part: 'glyph' }, iconEl('arrow-up', { size: GLYPH_SIZE }))
+        );
 
-    this.#root.innerHTML = `<style>${STYLE}</style><button
-      part="button"
-      class="send${busy ? ' is-busy' : ''}"
-      type="button"
-      title="${label}"
-      aria-label="${label}"
-      ${disabled ? 'disabled' : ''}
-    >${inner}</button>`;
+    const button = h(
+      'button',
+      {
+        part: 'button',
+        class: `send${busy ? ' is-busy' : ''}`,
+        type: 'button',
+        title: label,
+        'aria-label': label,
+        disabled: disabled || undefined,
+      },
+      inner
+    ) as HTMLButtonElement;
 
-    this.#button = this.#root.querySelector('button');
-    this.#button?.addEventListener('click', this.#onClick);
+    this.#root.replaceChildren(button);
+    this.#button = button;
+    this.#button.addEventListener('click', this.#onClick);
     this.#applyFace();
   }
 }

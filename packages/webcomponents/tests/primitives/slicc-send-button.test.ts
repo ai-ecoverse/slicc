@@ -282,13 +282,23 @@ describe('slicc-send-button', () => {
 
   it('guards the whoosh/pulse motion behind prefers-reduced-motion (animation: none)', () => {
     // CSS @media (prefers-reduced-motion) is evaluated by the browser, not by a
-    // JS matchMedia mock, so assert the shadow stylesheet carries the guard that
+    // JS matchMedia mock, so assert the adopted stylesheet carries the guard that
     // neutralizes the animations. The click path itself still fires send/stop.
     const el = mount();
-    const css = el.shadowRoot?.querySelector('style')?.textContent ?? '';
-    const guard = css.replace(/\s+/g, ' ');
-    expect(guard).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/);
-    const block = guard.slice(guard.indexOf('prefers-reduced-motion'));
-    expect(block).toMatch(/animation:\s*none/);
+    // Walk the adopted sheet for a prefers-reduced-motion media block whose
+    // nested rule(s) set animation-name: none.
+    let guarded = false;
+    for (const s of el.shadowRoot?.adoptedStyleSheets ?? []) {
+      for (const rule of s.cssRules) {
+        if (rule instanceof CSSMediaRule && rule.conditionText.includes('prefers-reduced-motion')) {
+          for (const inner of rule.cssRules) {
+            if (inner instanceof CSSStyleRule && inner.style.animationName === 'none') {
+              guarded = true;
+            }
+          }
+        }
+      }
+    }
+    expect(guarded).toBe(true);
   });
 });

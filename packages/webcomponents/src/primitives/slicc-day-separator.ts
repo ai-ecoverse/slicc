@@ -1,5 +1,5 @@
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
+import { h, sheet } from '../internal/dom.js';
 
 const STYLE = `
 :host {
@@ -31,6 +31,7 @@ const STYLE = `
   background: var(--line, #e5e5e5);
 }
 `;
+const SHEET = sheet(STYLE);
 
 /**
  * `<slicc-day-separator>` — the thread "day label" divider from the prototype
@@ -54,6 +55,7 @@ export class SliccDaySeparator extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+    this.#root.adoptedStyleSheets = [SHEET];
   }
 
   connectedCallback(): void {
@@ -75,8 +77,8 @@ export class SliccDaySeparator extends HTMLElement {
 
   #render(): void {
     const label = this.label;
-    const inner = label != null ? escapeHtml(label) : '<slot></slot>';
-    this.#root.innerHTML = `<style>${STYLE}</style><span class="label" part="label">${inner}</span>`;
+    const inner = label != null ? label : h('slot');
+    this.#root.replaceChildren(h('span', { class: 'label', part: 'label' }, inner));
   }
 }
 

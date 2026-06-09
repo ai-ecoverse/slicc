@@ -1,5 +1,5 @@
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
+import { h, sheet } from '../internal/dom.js';
 
 /** Recognized pane kinds. Anything else hides the badge. */
 const KINDS = ['tool', 'sprinkle'] as const;
@@ -39,6 +39,7 @@ const STYLE = `
   border-color: color-mix(in srgb, var(--violet) 38%, var(--line));
 }
 `;
+const SHEET = sheet(STYLE);
 
 /**
  * `<slicc-pane-tag>` — the violet "kind" badge from the workbench header
@@ -58,6 +59,7 @@ export class SliccPaneTag extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+    this.#root.adoptedStyleSheets = [SHEET];
   }
 
   connectedCallback(): void {
@@ -82,8 +84,9 @@ export class SliccPaneTag extends HTMLElement {
   #render(): void {
     const label = this.kind ?? '';
     // A default <slot> lets a host override the label; absent slotted content
-    // falls back to the kind text.
-    this.#root.innerHTML = `<style>${STYLE}</style><span class="ptag" part="tag"><slot>${escapeHtml(label)}</slot></span>`;
+    // falls back to the kind text (a text-node child of the slot).
+    const tag = h('span', { class: 'ptag', part: 'tag' }, h('slot', null, label));
+    this.#root.replaceChildren(tag);
   }
 }
 

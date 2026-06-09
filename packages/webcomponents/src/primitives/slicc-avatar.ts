@@ -1,5 +1,5 @@
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
+import { h, sheet } from '../internal/dom.js';
 
 const STYLE = `
 :host {
@@ -45,6 +45,7 @@ const STYLE = `
   display: block;
 }
 `;
+const SHEET = sheet(STYLE);
 
 /**
  * `<slicc-avatar>` — the circular user avatar from the prototype nav (`.me`).
@@ -87,6 +88,7 @@ export class SliccAvatar extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+    this.#root.adoptedStyleSheets = [SHEET];
     this.addEventListener('click', this.#onActivate);
     this.addEventListener('keydown', this.#onKeydown);
   }
@@ -220,10 +222,11 @@ export class SliccAvatar extends HTMLElement {
 
     // Precedence: explicit `src` > `email` (gravatar) > initials/name.
     const inner = src
-      ? `<img class="img" part="image" src="${escapeHtml(src)}" alt="${escapeHtml(a11yLabel)}">`
-      : `<span class="ini" part="initials">${escapeHtml(initials)}</span>`;
+      ? h('img', { class: 'img', part: 'image', src, alt: a11yLabel })
+      : h('span', { class: 'ini', part: 'initials' }, initials);
 
-    this.#root.innerHTML = `<style>${STYLE}</style><div class="me" part="avatar"><slot>${inner}</slot></div>`;
+    const me = h('div', { class: 'me', part: 'avatar' }, h('slot', null, inner));
+    this.#root.replaceChildren(me);
 
     // Gravatar only applies when there is no explicit image; render initials now
     // and async-swap to the gravatar background once the hash resolves and the

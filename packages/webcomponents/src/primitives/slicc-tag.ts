@@ -1,5 +1,5 @@
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
+import { h, sheet } from '../internal/dom.js';
 
 /**
  * Supported tint hues. Each maps to a prototype accent token (`var(--rose)`
@@ -71,6 +71,7 @@ const STYLE = `
 :host-context(.dark)[hue="waffle"] .tag, :host-context([data-theme="dark"])[hue="waffle"] .tag { background: color-mix(in srgb, var(--waffle) 22%, var(--canvas)); border-color: color-mix(in srgb, var(--waffle) 38%, var(--line)); }
 :host-context(.dark)[hue="green"] .tag, :host-context([data-theme="dark"])[hue="green"] .tag { background: color-mix(in srgb, var(--green) 22%, var(--canvas)); border-color: color-mix(in srgb, var(--green) 38%, var(--line)); }
 `;
+const SHEET = sheet(STYLE);
 
 /**
  * `<slicc-tag>` — a small tinted pill/badge derived from the prototype's
@@ -99,6 +100,7 @@ export class SliccTag extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+    this.#root.adoptedStyleSheets = [SHEET];
   }
 
   connectedCallback(): void {
@@ -142,10 +144,15 @@ export class SliccTag extends HTMLElement {
 
   #render(): void {
     const label = this.label;
-    const dotHtml = this.dot ? '<span class="dot" part="dot"></span>' : '';
     // The default slot wins when populated; otherwise fall back to the attr.
-    const labelHtml = label != null ? escapeHtml(label) : '<slot></slot>';
-    this.#root.innerHTML = `<style>${STYLE}</style><span class="tag" part="tag">${dotHtml}<span class="label" part="label">${labelHtml}</span></span>`;
+    const labelChild: Node | string = label != null ? label : h('slot');
+    const tag = h(
+      'span',
+      { class: 'tag', part: 'tag' },
+      this.dot ? h('span', { class: 'dot', part: 'dot' }) : null,
+      h('span', { class: 'label', part: 'label' }, labelChild)
+    );
+    this.#root.replaceChildren(tag);
   }
 }
 

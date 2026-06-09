@@ -1,4 +1,5 @@
 import { define } from '../internal/define.js';
+import { h, sheet } from '../internal/dom.js';
 
 /**
  * Default eye diameter in pixels, lifted verbatim from the prototype's `.eye`
@@ -14,7 +15,8 @@ const MAX_OFFSET = 3;
 const DISTANCE_DIVISOR = 45;
 
 /**
- * Per-instance stylesheet for `<slicc-googly-eyes>`.
+ * Stylesheet body for `<slicc-googly-eyes>` (adopted as a shared constructable
+ * sheet — see `SHEET` below).
  *
  * Faithful to the prototype `.eyes` / `.eye` / `.eye::after` rules
  * (StellarRubySwift.html): a 9×9 white sclera with a 1.3px black border and a
@@ -107,6 +109,9 @@ const STYLE = `
 }
 `;
 
+/** Shared constructable stylesheet adopted by every instance's shadow root. */
+const SHEET = sheet(STYLE);
+
 /**
  * `<slicc-googly-eyes>` — the wiggly scoop-avatar eyes from the prototype
  * (`.eyes` / `.eye` / `.eye::after`). A pair of 9×9 white circles whose black
@@ -147,6 +152,7 @@ export class SliccGooglyEyes extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+    this.#root.adoptedStyleSheets = [SHEET];
   }
 
   connectedCallback(): void {
@@ -229,14 +235,27 @@ export class SliccGooglyEyes extends HTMLElement {
     const size = this.size;
     const border = (1.3 / BASE_SIZE) * size;
     const dead = this.eyes === 'dead';
-    const inner = dead ? '<span class="x" aria-hidden="true">×</span>' : '';
-    this.#root.innerHTML =
-      `<style>${STYLE}</style>` +
-      `<span class="eyes" part="eyes" style="--_eye:${size}px;--_border:${border}px" role="img" aria-label="${dead ? 'dead eyes' : 'googly eyes'}">` +
-      `<span class="eye" part="eye eye-left">${inner}</span>` +
-      '<slot></slot>' +
-      `<span class="eye" part="eye eye-right">${inner}</span>` +
-      '</span>';
+    // Build each eye as a `.eye` span, optionally holding the dead "X" glyph.
+    const eye = (part: string): HTMLElement =>
+      h(
+        'span',
+        { class: 'eye', part },
+        dead ? h('span', { class: 'x', 'aria-hidden': 'true' }, '×') : null
+      );
+    const container = h(
+      'span',
+      {
+        class: 'eyes',
+        part: 'eyes',
+        style: `--_eye:${size}px;--_border:${border}px`,
+        role: 'img',
+        'aria-label': dead ? 'dead eyes' : 'googly eyes',
+      },
+      eye('eye eye-left'),
+      h('slot'),
+      eye('eye eye-right')
+    );
+    this.#root.replaceChildren(container);
     this.#eyeNodes = Array.from(this.#root.querySelectorAll<HTMLElement>('.eye'));
     this.#center();
   }

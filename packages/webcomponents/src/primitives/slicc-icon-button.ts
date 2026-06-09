@@ -1,6 +1,6 @@
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
-import { iconSvg } from '../internal/icons.js';
+import { h, sheet } from '../internal/dom.js';
+import { iconEl } from '../internal/icons.js';
 
 const STYLE = `
 :host { display: inline-grid; }
@@ -32,6 +32,7 @@ const STYLE = `
 .icon { display: grid; place-items: center; pointer-events: none; }
 .icon svg { display: block; }
 `;
+const SHEET = sheet(STYLE);
 
 /** Default lucide icon when no `icon` attribute is supplied. */
 const DEFAULT_ICON = 'plus';
@@ -46,7 +47,7 @@ const ICON_SIZE = 16;
  * --ui) which flip automatically in dark mode.
  *
  * The glyph is a **lucide** icon named by the kebab-case `icon` attribute
- * (default `plus`), rendered via the shared `iconSvg` helper — never emoji or
+ * (default `plus`), rendered via the shared `iconEl` helper — never emoji or
  * bespoke unicode symbols. The icon inherits the button's `currentColor`, so it
  * tracks the idle / hover / disabled palette automatically. Slotting a custom
  * `<svg>` into the default slot overrides the lucide glyph entirely.
@@ -70,6 +71,7 @@ export class SliccIconButton extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+    this.#root.adoptedStyleSheets = [SHEET];
   }
 
   connectedCallback(): void {
@@ -110,10 +112,21 @@ export class SliccIconButton extends HTMLElement {
 
   #render(): void {
     const label = this.label;
-    const ariaAttr = label ? ` aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"` : '';
-    const disabledAttr = this.disabled ? ' disabled' : '';
-    const glyph = iconSvg(this.icon, { size: ICON_SIZE, part: 'icon' });
-    this.#root.innerHTML = `<style>${STYLE}</style><button type="button" class="iconbtn" part="button"${ariaAttr}${disabledAttr}><slot><span class="icon">${glyph}</span></slot></button>`;
+    const glyph = iconEl(this.icon, { size: ICON_SIZE, part: 'icon' });
+    const slot = h('slot', null, h('span', { class: 'icon' }, glyph));
+    const button = h(
+      'button',
+      {
+        type: 'button',
+        class: 'iconbtn',
+        part: 'button',
+        'aria-label': label ?? undefined,
+        title: label ?? undefined,
+        disabled: this.disabled,
+      },
+      slot
+    );
+    this.#root.replaceChildren(button);
   }
 }
 
