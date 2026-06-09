@@ -12,8 +12,8 @@ import { escapeHtml } from '../internal/html.js';
 export interface DockItemDescriptor {
   /** Stable id (the prototype's `data-t`); becomes the item's `item-id`. */
   id: string;
-  /** Glyph rune shown in the rail (e.g. `✦`, `＋`, `◳`, `⌗`, `>_`, `◉`). */
-  glyph?: string;
+  /** Lucide icon name shown in the rail (e.g. `sparkles`, `plus`, `globe`, `folder`). */
+  icon?: string;
   /** Tooltip / accessible label (e.g. `Hero studio`, `Browser · CDP`). */
   label?: string;
   /** `sprinkle` (top, with the accent status dot) or `tool` (pinned at the bottom). */
@@ -41,16 +41,16 @@ export interface DockCollapseDetail {
 
 /** The pinned system tools anchored at the rail bottom, in prototype order. */
 const SYSTEM_TOOLS: readonly DockItemDescriptor[] = [
-  { id: 'browser', glyph: '◳', label: 'Browser · CDP', kind: 'tool' },
-  { id: 'files', glyph: '⌗', label: 'Files · VFS', kind: 'tool' },
-  { id: 'term', glyph: '>_', label: 'Terminal', kind: 'tool' },
-  { id: 'memory', glyph: '◉', label: 'Memory', kind: 'tool' },
+  { id: 'browser', icon: 'globe', label: 'Browser · CDP', kind: 'tool' },
+  { id: 'files', icon: 'folder', label: 'Files · VFS', kind: 'tool' },
+  { id: 'term', icon: 'square-terminal', label: 'Terminal', kind: 'tool' },
+  { id: 'memory', icon: 'brain', label: 'Memory', kind: 'tool' },
 ] as const;
 
 /** The always-present `New +` sprinkle launcher (prototype "New sprinkle"). */
 const NEW_ITEM: DockItemDescriptor = {
   id: 'new',
-  glyph: '＋',
+  icon: 'plus',
   label: 'New sprinkle',
   kind: 'sprinkle',
 };
@@ -263,7 +263,7 @@ export class SliccDock extends HTMLElement {
       if (kind === 'tool' || id === 'new' || id === '') continue;
       adopted.push({
         id,
-        glyph: el.getAttribute('glyph') ?? el.textContent?.trim() ?? undefined,
+        icon: el.getAttribute('icon') ?? undefined,
         label: el.getAttribute('tip') ?? undefined,
         kind: 'sprinkle',
         hue: el.getAttribute('hue') ?? undefined,
@@ -286,13 +286,13 @@ export class SliccDock extends HTMLElement {
   #itemHtml(item: DockItemDescriptor, active: string | null): string {
     const id = item.id;
     const kind = normalizeKind(item.kind);
-    const glyph = item.glyph ?? '';
+    const icon = item.icon ?? '';
     const label = item.label ?? id;
     const isActive = active != null && active === id;
     const hue = item.hue;
     return (
       `<slicc-dock-item data-t="${escapeHtml(id)}" item-id="${escapeHtml(id)}" kind="${kind}"` +
-      (glyph ? ` glyph="${escapeHtml(glyph)}"` : '') +
+      (icon ? ` icon="${escapeHtml(icon)}"` : '') +
       ` tip="${escapeHtml(label)}"` +
       (hue ? ` hue="${escapeHtml(hue)}"` : '') +
       (isActive ? ' active' : '') +

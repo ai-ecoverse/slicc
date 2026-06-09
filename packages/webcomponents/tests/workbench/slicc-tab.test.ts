@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { iconSvg } from '../../src/internal/icons.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
 import { SliccTab } from '../../src/workbench/slicc-tab.js';
 
@@ -13,6 +14,22 @@ function mount(setup?: (el: SliccTab) => void): SliccTab {
 function tab(el: SliccTab): HTMLElement {
   return el.shadowRoot?.querySelector('.tab') as HTMLElement;
 }
+
+/** lucide registry path/shape children for `name`, serialized for comparison. */
+function lucideShapeKey(name: string): string {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = iconSvg(name, { size: 13 });
+  const svg = tmp.querySelector('svg') as SVGSVGElement;
+  return [...svg.children].map((c) => c.outerHTML).join('');
+}
+
+/**
+ * Matches emoji / pictographic / arrow / dingbat / unicode-symbol glyphs
+ * (e.g. ✦ ✕ ❄ 🔔 🌙 ☀ ↑ ⤡ ＋) — none of which may appear in the rendered
+ * tab: the badge and close affordance must use lucide `<svg>` glyphs only.
+ */
+const EMOJI_RE =
+  /[\u{1F000}-\u{1FAFF}]|[\u{2600}-\u{27BF}]|[\u{2190}-\u{21FF}]|[\u{2900}-\u{297F}]|[\u{2B00}-\u{2BFF}]|[\u{FF00}-\u{FFEF}]/u;
 
 describe('slicc-tab', () => {
   beforeEach(() => {
@@ -76,10 +93,10 @@ describe('slicc-tab', () => {
       expect(el.shadowRoot?.querySelector('.x')).toBeNull();
     });
 
-    it('reflects badge and glyph getters/setters', () => {
+    it('reflects badge (lucide icon name) and glyph getters/setters', () => {
       const el = mount();
-      el.badge = '★';
-      expect(el.getAttribute('badge')).toBe('★');
+      el.badge = 'star';
+      expect(el.getAttribute('badge')).toBe('star');
       el.badge = null;
       expect(el.hasAttribute('badge')).toBe(false);
       el.glyph = '>_';
@@ -155,7 +172,7 @@ describe('slicc-tab', () => {
       expect(cs.color).toBe('rgb(10, 10, 10)'); // --ink
     });
 
-    it('renders the rainbow .sg sparkle badge (default ✦) at 14x14', () => {
+    it('renders the rainbow .sg badge as a lucide `sparkles` <svg> (no emoji) at 14x14', () => {
       const el = mount((e) => {
         e.kind = 'sprinkle';
         e.label = 'Hero studio';
@@ -163,19 +180,29 @@ describe('slicc-tab', () => {
       const sg = el.shadowRoot?.querySelector('.sg') as HTMLElement;
       expect(sg).toBeTruthy();
       expect(sg.getAttribute('part')).toBe('badge');
-      expect(sg.textContent).toBe('✦');
+      // The badge is a lucide <svg> (default `sparkles`) — never an emoji glyph.
+      const svg = sg.querySelector('svg');
+      expect(svg).toBeInstanceOf(SVGSVGElement);
+      expect(svg?.innerHTML).toBe(lucideShapeKey('sparkles'));
+      expect(EMOJI_RE.test(sg.textContent ?? '')).toBe(false);
+      expect(EMOJI_RE.test(sg.innerHTML)).toBe(false);
       const cs = getComputedStyle(sg);
       expect(cs.width).toBe('14px');
       expect(cs.height).toBe('14px');
     });
 
-    it('honors a custom badge glyph', () => {
+    it('honors a custom badge lucide icon name', () => {
       const el = mount((e) => {
         e.kind = 'sprinkle';
-        e.badge = '✸';
+        e.badge = 'star';
         e.label = 'palette';
       });
-      expect((el.shadowRoot?.querySelector('.sg') as HTMLElement).textContent).toBe('✸');
+      const sg = el.shadowRoot?.querySelector('.sg') as HTMLElement;
+      const svg = sg.querySelector('svg');
+      expect(svg).toBeInstanceOf(SVGSVGElement);
+      expect(svg?.innerHTML).toBe(lucideShapeKey('star'));
+      expect(svg?.innerHTML).not.toBe(lucideShapeKey('sparkles'));
+      expect(EMOJI_RE.test(sg.innerHTML)).toBe(false);
     });
 
     it('active sprinkle tab tints the fill and border toward violet', () => {
@@ -209,6 +236,26 @@ describe('slicc-tab', () => {
       const cs = getComputedStyle(x);
       expect(cs.width).toBe('15px');
       expect(cs.height).toBe('15px');
+    });
+
+    it('renders the close glyph as a lucide `x` <svg> (no emoji) with an accessible name', () => {
+      const el = mount((e) => {
+        e.kind = 'sprinkle';
+        e.label = 'Hero studio';
+        e.closable = true;
+      });
+      const x = el.shadowRoot?.querySelector('.x') as HTMLElement;
+      // The host keeps the button role + accessible name; the svg itself is hidden.
+      expect(x.getAttribute('role')).toBe('button');
+      expect(x.getAttribute('aria-label')).toBe('Close tab');
+      const svg = x.querySelector('svg');
+      expect(svg).toBeInstanceOf(SVGSVGElement);
+      expect(svg?.getAttribute('aria-hidden')).toBe('true');
+      expect(svg?.innerHTML).toBe(lucideShapeKey('x'));
+      // The close svg inherits currentColor so it tracks the --txt-3 → --ink palette.
+      expect(svg?.getAttribute('stroke')).toBe('currentColor');
+      expect(EMOJI_RE.test(x.textContent ?? '')).toBe(false);
+      expect(EMOJI_RE.test(x.innerHTML)).toBe(false);
     });
   });
 
@@ -263,6 +310,30 @@ describe('slicc-tab', () => {
       expect(parentSawBubble).toBe(false);
     });
 
+    it('clicking the close <svg> child still routes to close (not select)', () => {
+      const el = mount((e) => {
+        e.tabId = 'palette';
+        e.label = 'palette';
+        e.kind = 'sprinkle';
+        e.closable = true;
+      });
+      let selectFired = false;
+      let closeDetail: { tabId: string | null } | null = null;
+      el.addEventListener('select', () => {
+        selectFired = true;
+      });
+      el.addEventListener('close', (e) => {
+        closeDetail = (e as CustomEvent<{ tabId: string | null }>).detail;
+      });
+      // Dispatch a click whose target is the inner lucide <svg>, not the .x span:
+      // closest('[data-close]') must still walk up to the close affordance.
+      const svg = el.shadowRoot?.querySelector('.x svg') as SVGSVGElement;
+      expect(svg).toBeTruthy();
+      svg.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
+      expect(closeDetail).toEqual({ tabId: 'palette' });
+      expect(selectFired).toBe(false);
+    });
+
     it('select bubbles to an ancestor (composes through the shadow boundary)', () => {
       const host = document.createElement('div');
       document.body.appendChild(host);
@@ -276,6 +347,24 @@ describe('slicc-tab', () => {
       });
       tab(el).click();
       expect(seen).toBe('files');
+    });
+  });
+
+  describe('icon glyphs (no emoji)', () => {
+    it('a fully-loaded sprinkle tab renders only lucide <svg> glyphs — no emoji anywhere', () => {
+      const el = mount((e) => {
+        e.kind = 'sprinkle';
+        e.label = 'Hero studio';
+        e.active = true;
+        e.closable = true;
+      });
+      const root = el.shadowRoot as ShadowRoot;
+      // Both affordances are svg-backed.
+      expect(root.querySelector('.sg svg')).toBeInstanceOf(SVGSVGElement);
+      expect(root.querySelector('.x svg')).toBeInstanceOf(SVGSVGElement);
+      // No emoji / unicode-symbol glyph survives anywhere in the rendered markup.
+      expect(EMOJI_RE.test(root.innerHTML)).toBe(false);
+      expect(EMOJI_RE.test(root.textContent ?? '')).toBe(false);
     });
   });
 

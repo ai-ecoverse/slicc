@@ -1,8 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SliccHandoffCard } from '../../src/chat/slicc-handoff-card.js';
+import { iconSvg } from '../../src/internal/icons.js';
 // Composed by tag inside the avatar — import so it is registered when tests run.
 import { SliccGooglyEyes } from '../../src/primitives/slicc-googly-eyes.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
+
+/**
+ * Matches emoji / pictographic / arrow / dingbat / unicode-symbol glyphs
+ * (e.g. ✦ ❄ 🔔 🌙 ☀ ↑ ⤡ ＋) — none of which may appear in the rendered card:
+ * the `opened` chip must use a lucide `<svg>` glyph, never a bespoke symbol.
+ */
+const EMOJI_RE =
+  /[\u{1F000}-\u{1FAFF}]|[\u{2600}-\u{27BF}]|[\u{2190}-\u{21FF}]|[\u{2900}-\u{297F}]|[\u{2B00}-\u{2BFF}]|[\u{FF00}-\u{FFEF}]/u;
+
+/** lucide registry shape children for `name`, serialized for comparison. */
+function lucideShapeKey(name: string): string {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = iconSvg(name, { size: 12 });
+  const svg = tmp.querySelector('svg') as SVGSVGElement;
+  return [...svg.children].map((c) => c.outerHTML).join('');
+}
 
 function mount(attrs: Record<string, string> = {}): SliccHandoffCard {
   const el = document.createElement('slicc-handoff-card');
@@ -154,12 +171,38 @@ describe('slicc-handoff-card', () => {
       const el = mount({ variant: 'opened', name: 'Hero studio', text: '· interactive sprinkle' });
       const card = el.shadowRoot?.querySelector('.opened');
       expect(card).not.toBeNull();
-      expect(el.shadowRoot?.querySelector('.opened .sg')?.textContent).toBe('✦');
+      // glyph chip is present (svg asserted separately below)
+      expect(el.shadowRoot?.querySelector('.opened .sg')).not.toBeNull();
       expect(el.shadowRoot?.querySelector('.opened b')?.textContent).toBe('Hero studio');
       expect(el.shadowRoot?.textContent).toContain('· interactive sprinkle');
       // handoff card not rendered
       expect(el.shadowRoot?.querySelector('.handoff')).toBeNull();
       expect(el.shadowRoot?.querySelector('slicc-googly-eyes')).toBeNull();
+    });
+
+    it('renders the rainbow chip as a lucide sparkles <svg> — never the ✦ glyph', () => {
+      const el = mount({ variant: 'opened', name: 'Hero studio' });
+      const chip = el.shadowRoot?.querySelector('.opened .sg') as HTMLElement;
+      const svg = chip.querySelector('svg');
+      // the glyph is an actual <svg>, not a text symbol
+      expect(svg).toBeInstanceOf(SVGSVGElement);
+      // it is the lucide `sparkles` icon at the 12px size
+      expect(svg?.innerHTML).toBe(lucideShapeKey('sparkles'));
+      expect(svg?.getAttribute('width')).toBe('12');
+      expect(svg?.getAttribute('height')).toBe('12');
+      // no ✦ (or any emoji / unicode-symbol) text remains in the chip or card
+      expect((chip.textContent ?? '').trim()).toBe('');
+      expect(chip.textContent ?? '').not.toContain('✦');
+      expect(EMOJI_RE.test(el.shadowRoot?.textContent ?? '')).toBe(false);
+      expect(EMOJI_RE.test(chip.outerHTML)).toBe(false);
+    });
+
+    it('tints the sparkles glyph via currentColor (white chip text)', () => {
+      const el = mount({ variant: 'opened', name: 'Hero studio' });
+      const svg = el.shadowRoot?.querySelector('.opened .sg svg') as SVGSVGElement;
+      // lucide strokes use currentColor; the chip sets color:#fff
+      expect(svg.getAttribute('stroke')).toBe('currentColor');
+      expect(getComputedStyle(svg).color).toBe('rgb(255, 255, 255)');
     });
 
     it('paints the rainbow glyph chip as a gradient', () => {

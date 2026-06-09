@@ -10,6 +10,7 @@ function mount(setup?: (el: SliccSnowflake) => void): SliccSnowflake {
 }
 
 const badgeOf = (el: SliccSnowflake) => el.shadowRoot?.querySelector('.snow') as HTMLElement;
+const glyphOf = (el: SliccSnowflake) => el.shadowRoot?.querySelector('.ic') as SVGElement;
 
 describe('slicc-snowflake', () => {
   beforeEach(() => {
@@ -28,11 +29,32 @@ describe('slicc-snowflake', () => {
     expect(badge.getAttribute('part')).toBe('badge');
   });
 
-  it('renders the ❄ glyph by default via the slot fallback', () => {
+  // --- lucide glyph (no emoji) ----------------------------------------------
+
+  it('renders the lucide snowflake as an inline <svg>, not an emoji', () => {
     const el = mount();
-    const glyph = el.shadowRoot?.querySelector('.glyph') as HTMLElement;
-    expect(glyph?.textContent).toBe('❄');
-    expect(glyph?.getAttribute('part')).toBe('glyph');
+    const svg = glyphOf(el);
+    expect(svg).toBeTruthy();
+    expect(svg.tagName.toLowerCase()).toBe('svg');
+    // lucide renders the snowflake as a stack of <path>/<line> children.
+    expect(svg.querySelectorAll('path, line').length).toBeGreaterThanOrEqual(6);
+    expect(svg.getAttribute('part')).toBe('glyph');
+    expect(svg.getAttribute('width')).toBe('14');
+    expect(svg.getAttribute('height')).toBe('14');
+  });
+
+  it('exposes the glyph via the ::part(glyph) hook', () => {
+    const el = mount();
+    const glyph = el.shadowRoot?.querySelector('[part="glyph"]');
+    expect(glyph).toBe(glyphOf(el));
+  });
+
+  it('contains no ❄ (or any emoji) glyph anywhere in its shadow root', () => {
+    const el = mount();
+    const html = el.shadowRoot?.innerHTML ?? '';
+    // No Unicode-symbol / emoji glyph survives — only the lucide vector.
+    const FORBIDDEN = ['❄', '❅', '❆', '☀', '✦', '🔔', '🌙'];
+    expect(FORBIDDEN.some((g) => html.includes(g))).toBe(false);
   });
 
   it('exposes a default slot so the glyph can be overridden', () => {
@@ -63,15 +85,6 @@ describe('slicc-snowflake', () => {
     expect(el.thawed).toBe(true);
   });
 
-  it('reflects the svg property to the attribute and back', () => {
-    const el = mount();
-    expect(el.svg).toBe(false);
-    el.svg = true;
-    expect(el.hasAttribute('svg')).toBe(true);
-    el.removeAttribute('svg');
-    expect(el.svg).toBe(false);
-  });
-
   // --- frozen / idle appearance (real Chromium) ----------------------------
 
   it('is a fixed 28×28 circular ghost-fill badge with a 1px line border (frozen)', () => {
@@ -89,6 +102,12 @@ describe('slicc-snowflake', () => {
     expect(badge.borderTopWidth).toBe('1px');
     expect(badge.borderTopColor).toBe('rgb(229, 229, 229)');
     expect(badge.color).toBe('rgb(115, 115, 115)');
+  });
+
+  it('tints the lucide glyph with the frozen --txt-2 color (currentColor)', () => {
+    const el = mount();
+    // stroke="currentColor" resolves to the badge's --txt-2 in the frozen state.
+    expect(getComputedStyle(glyphOf(el)).color).toBe('rgb(115, 115, 115)');
   });
 
   // --- thawing flash (real Chromium) ---------------------------------------
@@ -109,6 +128,14 @@ describe('slicc-snowflake', () => {
     expect(r).toBeGreaterThan(b);
   });
 
+  it('inherits the rose glyph color into the lucide SVG when thawed', () => {
+    const el = mount((node) => {
+      node.thawed = true;
+    });
+    // stroke="currentColor" resolves to the badge's #b91c4d in the thawed state.
+    expect(getComputedStyle(glyphOf(el)).color).toBe('rgb(185, 28, 77)');
+  });
+
   it('toggling thawed off restores the frozen appearance', () => {
     const el = mount((node) => {
       node.thawed = true;
@@ -116,37 +143,5 @@ describe('slicc-snowflake', () => {
     expect(getComputedStyle(badgeOf(el)).color).toBe('rgb(185, 28, 77)');
     el.thawed = false;
     expect(getComputedStyle(badgeOf(el)).color).toBe('rgb(115, 115, 115)');
-  });
-
-  // --- glyph vs crisp inline SVG (real Chromium) ---------------------------
-
-  it('hides the inline SVG and shows the ❄ glyph by default', () => {
-    const el = mount();
-    const svg = el.shadowRoot?.querySelector('.ic') as SVGElement;
-    const slot = el.shadowRoot?.querySelector('.glyphslot') as HTMLElement;
-    expect(svg).toBeTruthy();
-    expect(getComputedStyle(svg).display).toBe('none');
-    expect(getComputedStyle(slot).display).not.toBe('none');
-  });
-
-  it('shows the crisp inline six-point SVG and hides the ❄ glyph in svg mode', () => {
-    const el = mount((node) => {
-      node.svg = true;
-    });
-    const svg = el.shadowRoot?.querySelector('.ic') as SVGElement;
-    const slot = el.shadowRoot?.querySelector('.glyphslot') as HTMLElement;
-    expect(svg.querySelectorAll('path').length).toBeGreaterThanOrEqual(6);
-    expect(getComputedStyle(svg).display).toBe('block');
-    expect(getComputedStyle(slot).display).toBe('none');
-  });
-
-  it('inherits the rose glyph color into the inline SVG when thawed', () => {
-    const el = mount((node) => {
-      node.svg = true;
-      node.thawed = true;
-    });
-    const svg = el.shadowRoot?.querySelector('.ic') as SVGElement;
-    // stroke="currentColor" resolves to the badge's #b91c4d in the thawed state.
-    expect(getComputedStyle(svg).color).toBe('rgb(185, 28, 77)');
   });
 });

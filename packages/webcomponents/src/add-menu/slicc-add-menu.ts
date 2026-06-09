@@ -1,5 +1,6 @@
 import { define } from '../internal/define.js';
 import { escapeHtml } from '../internal/html.js';
+import { iconSvg } from '../internal/icons.js';
 
 // ---------------------------------------------------------------------------
 // Lifted from proto/StellarRubySwift.html (ADD_STYLE ~L756, class SliccAddMenu
@@ -8,6 +9,11 @@ import { escapeHtml } from '../internal/html.js';
 // upward out of the footer band (`part="wrap"` / `part="results"`), the
 // `data-open` / `data-dropping` host states, and the bubbling+composed
 // `slicc-add` CustomEvent emitted on selection / upload / drop.
+//
+// Icons: every glyph is a lucide `<svg>` rendered via the shared `iconSvg`
+// helper (`../internal/icons.js`) — NOT emoji or hand-rolled path data. The
+// trigger swaps between the lucide `plus` (closed) and `x` (open) glyphs, and
+// the same 45° rotate/transition from the prototype rides on top of the swap.
 //
 // Theming change vs. the prototype: the prototype declared a self-contained
 // palette (`--bg`, `--fg`, `--accent`, …) on `:host`. Those names collide with
@@ -20,25 +26,12 @@ import { escapeHtml } from '../internal/html.js';
 // override, exactly as in the prototype.
 // ---------------------------------------------------------------------------
 
-/** Lucide-style 24×24 glyph path data, lifted verbatim from the prototype. */
-const ICON: Record<string, string> = {
-  plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
-  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
-  upload:
-    '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>',
-  camera:
-    '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/>',
-  monitor:
-    '<rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>',
-  file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
-  sparkles:
-    '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/>',
-  message: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
-};
-
-function svgIcon(name: string, size = 18): string {
-  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[name] ?? ''}</svg>`;
-}
+/** Glyph size (px) for the +/× trigger. */
+const TRIGGER_ICON_SIZE = 20;
+/** Glyph size (px) for the search-box leading icon. */
+const SEARCH_ICON_SIZE = 16;
+/** Glyph size (px) for the result-row and quick-action icons. */
+const ROW_ICON_SIZE = 18;
 
 const STYLE = `
 :host{display:block;width:100%;
@@ -61,9 +54,17 @@ const STYLE = `
    menu opens. */
 .wrap{display:flex;flex-direction:column;position:relative;}
 .row{display:flex;align-items:center;gap:8px;}
-.trigger{flex:0 0 auto;width:32px;height:32px;border:none;border-radius:8px;background:transparent;color:var(--ink,#131313);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .13s ease,color .13s ease,transform .16s ease;}
+.trigger{flex:0 0 auto;width:32px;height:32px;border:none;border-radius:8px;background:transparent;color:var(--ink,#131313);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .13s ease,color .13s ease;}
 .trigger:hover{background:var(--am-hover);}
-.trigger[aria-expanded="true"]{background:var(--am-accent-subtle);color:var(--am-accent);transform:rotate(45deg);}
+.trigger[aria-expanded="true"]{background:var(--am-accent-subtle);color:var(--am-accent);}
+/* The glyph itself swaps plus -> x; the quarter-turn rides on the swap so the
+   open state spins in. The lucide x glyph is symmetric under a 90deg rotation,
+   so the rotation is purely motion -- it never corrupts the rendered glyph. */
+.trigger .ti{display:flex;transition:transform .16s ease;}
+.trigger[aria-expanded="true"] .ti{transform:rotate(90deg);}
+.trigger .ti svg{display:block;}
+/* Respect prefers-reduced-motion: hold the static end state, no spin. */
+@media (prefers-reduced-motion: reduce){.trigger .ti{transition:none;}}
 /* the search field slides in beside the +/× — collapsed until open */
 .searchbox{flex:1;min-width:0;position:relative;display:none;}
 :host([data-open]) .searchbox{display:block;}
@@ -106,7 +107,7 @@ export interface SliccAddSection {
   kind: string;
   /** Section heading. */
   label: string;
-  /** Glyph name from the built-in icon set (`file` / `sparkles` / `message` / …). */
+  /** Lucide icon name (kebab-case, e.g. `file` / `sparkles` / `message-square`). */
   icon: string;
   /** Rows belonging to this section. */
   entries: SliccAddEntry[];
@@ -177,7 +178,7 @@ const DEMO_SECTIONS: SliccAddSection[] = [
   {
     kind: 'conversation',
     label: 'Conversations',
-    icon: 'message',
+    icon: 'message-square',
     entries: [
       { id: 'c1', label: 'Dark mode toggle', sub: 'Frozen · 2h ago' },
       { id: 'c2', label: 'Refactor the mount backend', sub: 'Frozen · yesterday' },
@@ -195,17 +196,23 @@ const QUICK_ACTIONS: QuickAction[] = [
     sub: 'Drag & drop or click to browse',
     quick: true,
   },
-  { kind: 'capture', mode: 'photo', icon: 'camera', label: 'Take a photo', quick: true },
+  { kind: 'capture', mode: 'photo', icon: 'image', label: 'Take a photo', quick: true },
   { kind: 'capture', mode: 'screenshot', icon: 'monitor', label: 'Take a screenshot', quick: true },
 ];
 
 /**
- * `<slicc-add-menu>` — the prototype's composer "add to prompt" menu. A `+`
- * trigger that rotates into an `×` and slides in a search box; the matching
- * results pop upward out of the footer band into an absolutely-positioned panel
- * so the surrounding layout never reflows. Quick actions (upload / photo /
- * screenshot) sit above Files / Skills / Conversations sections, all keyboard
- * navigable. Files can also be added by drag-and-drop onto the wrap.
+ * `<slicc-add-menu>` — the prototype's composer "add to prompt" menu. A trigger
+ * whose glyph swaps between the lucide `plus` (closed) and `x` (open) — with the
+ * prototype's quarter-turn rotate riding on the swap — slides in a search box;
+ * the matching results pop upward out of the footer band into an
+ * absolutely-positioned panel so the surrounding layout never reflows. Quick
+ * actions (upload / photo / screenshot, rendered with the lucide `upload` /
+ * `image` / `monitor` glyphs) sit above Files / Skills / Conversations sections,
+ * all keyboard navigable. Files can also be added by drag-and-drop onto the wrap.
+ *
+ * All glyphs are lucide `<svg>`s via the shared `iconSvg` helper — never emoji
+ * or bespoke unicode symbols. The trigger spin holds a static end state under
+ * `prefers-reduced-motion: reduce`.
  *
  * Self-contained shadow DOM. Surfaces map onto inherited library tokens
  * (`--canvas`, `--ink`, `--txt-2`, `--txt-3`, `--line`, `--ui`) so dark flips
@@ -248,6 +255,8 @@ export class SliccAddMenu extends HTMLElement {
 
   // Element refs (populated by #render).
   #trigger!: HTMLButtonElement;
+  /** The +/× glyph wrapper inside the trigger (swaps plus -> x on open). */
+  #triggerIcon!: HTMLSpanElement;
   #wrap!: HTMLDivElement;
   #search!: HTMLInputElement;
   #bodyEl!: HTMLDivElement;
@@ -320,12 +329,13 @@ export class SliccAddMenu extends HTMLElement {
       `<div class="results" part="results" role="listbox"><div class="body"></div>` +
       `<div class="drop">Drop files to add</div></div>` +
       `<div class="row">` +
-      `<button class="trigger" part="trigger" aria-haspopup="true" aria-expanded="false" title="Add to prompt">${svgIcon('plus', 20)}</button>` +
-      `<div class="searchbox"><span class="si">${svgIcon('search', 16)}</span>` +
+      `<button class="trigger" part="trigger" aria-haspopup="true" aria-expanded="false" title="Add to prompt"><span class="ti">${iconSvg('plus', { size: TRIGGER_ICON_SIZE })}</span></button>` +
+      `<div class="searchbox"><span class="si">${iconSvg('search', { size: SEARCH_ICON_SIZE })}</span>` +
       `<input type="text" placeholder="Search files, skills, conversations…" /></div>` +
       `</div></div>`;
 
     this.#trigger = this.#root.querySelector('.trigger') as HTMLButtonElement;
+    this.#triggerIcon = this.#root.querySelector('.trigger .ti') as HTMLSpanElement;
     this.#wrap = this.#root.querySelector('.wrap') as HTMLDivElement;
     this.#search = this.#root.querySelector('.searchbox input') as HTMLInputElement;
     this.#bodyEl = this.#root.querySelector('.results .body') as HTMLDivElement;
@@ -381,11 +391,17 @@ export class SliccAddMenu extends HTMLElement {
     else this.open();
   }
 
+  /** Swap the trigger glyph to the lucide `plus` (closed) or `x` (open). */
+  #setTriggerGlyph(open: boolean): void {
+    this.#triggerIcon.innerHTML = iconSvg(open ? 'x' : 'plus', { size: TRIGGER_ICON_SIZE });
+  }
+
   open(): void {
     if (this.#open) return;
     this.#open = true;
     this.setAttribute('data-open', '');
     this.#trigger.setAttribute('aria-expanded', 'true');
+    this.#setTriggerGlyph(true);
     document.addEventListener('mousedown', this.#onDoc);
     this.#query = '';
     this.#search.value = '';
@@ -400,6 +416,7 @@ export class SliccAddMenu extends HTMLElement {
     this.removeAttribute('data-open');
     this.removeAttribute('data-dropping');
     this.#trigger.setAttribute('aria-expanded', 'false');
+    this.#setTriggerGlyph(false);
     document.removeEventListener('mousedown', this.#onDoc);
   }
 
@@ -464,14 +481,14 @@ export class SliccAddMenu extends HTMLElement {
         );
         const subHtml = it.data.sub ? `<div class="sb">${escapeHtml(it.data.sub)}</div>` : '';
         html +=
-          `<div class="item quick" data-i="${i}"><span class="ic">${svgIcon(it.data.icon)}</span>` +
+          `<div class="item quick" data-i="${i}"><span class="ic">${iconSvg(it.data.icon, { size: ROW_ICON_SIZE })}</span>` +
           `<span class="tx"><div class="lb">${escapeHtml(it.data.label)}</div>${subHtml}</span></div>`;
         prevQuick = true;
       } else {
         const i = this.#items.length;
         this.#items.push({ kind: it.section.kind, id: it.data.id, label: it.data.label });
         html +=
-          `<div class="item" data-i="${i}"><span class="ic">${svgIcon(it.section.icon)}</span>` +
+          `<div class="item" data-i="${i}"><span class="ic">${iconSvg(it.section.icon, { size: ROW_ICON_SIZE })}</span>` +
           `<span class="tx"><div class="lb">${escapeHtml(it.data.label)}</div>` +
           `<div class="sb">${escapeHtml(it.data.sub ?? '')}</div></span></div>`;
       }

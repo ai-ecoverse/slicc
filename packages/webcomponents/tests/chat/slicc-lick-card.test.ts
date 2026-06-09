@@ -47,13 +47,31 @@ describe('slicc-lick-card', () => {
     expect(root?.querySelector('.lick .lb')).toBeTruthy();
   });
 
-  it('renders the bell glyph and the "lick · <kind>" header wording', () => {
+  it('renders a lucide bell <svg> (not the 🔔 emoji) and the "lick · <kind>" header wording', () => {
     const el = mount((e) => {
       e.kind = 'webhook';
     });
-    expect((el.shadowRoot?.querySelector('.bell') as HTMLElement).textContent).toBe('🔔');
+    const bell = el.shadowRoot?.querySelector('.bell') as HTMLElement;
+    // The bell affordance is now a lucide <svg>, never the 🔔 emoji glyph.
+    const svg = bell.querySelector('svg');
+    expect(svg).toBeTruthy();
+    expect(svg?.namespaceURI).toBe('http://www.w3.org/2000/svg');
+    // lucide bell renders path geometry (not an empty fallback <svg>).
+    expect(svg?.querySelector('path')).toBeTruthy();
+    // Requested 14px size flows through to the rendered icon.
+    expect(svg?.getAttribute('width')).toBe('14');
+    expect(svg?.getAttribute('height')).toBe('14');
+    // No 🔔 character survives anywhere in the bell span (or the header).
+    expect(bell.textContent ?? '').not.toContain('🔔');
     const kindEl = el.shadowRoot?.querySelector('.kind') as HTMLElement;
     expect(kindEl.textContent?.replace(/\s+/g, ' ').trim()).toBe('lick · webhook');
+  });
+
+  it('keeps the entire shadow root free of the 🔔 emoji glyph', () => {
+    const el = mount((e) => {
+      e.kind = 'webhook';
+    });
+    expect(el.shadowRoot?.innerHTML ?? '').not.toContain('🔔');
   });
 
   it('defaults the event pill to "event"', () => {

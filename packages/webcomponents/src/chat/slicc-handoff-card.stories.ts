@@ -54,12 +54,26 @@ export const Handoff: Story = {
   },
 };
 
-/** The opened receipt: rainbow glyph chip + bold target text on a ghost ground. */
+/**
+ * The opened receipt: a lucide **sparkles** glyph chip (rainbow ground) + bold
+ * target text on a ghost ground. The chip glyph is an `<svg>`, never an emoji.
+ */
 export const Opened: Story = {
   args: {
     variant: 'opened',
     name: 'Hero studio',
     text: '· opened a sprinkle in the workbench',
+  },
+};
+
+/**
+ * The opened receipt with only a bold target and no trailing text — the
+ * tightest form of the sparkles chip pill.
+ */
+export const OpenedBare: Story = {
+  args: {
+    variant: 'opened',
+    name: 'palette.shtml',
   },
 };
 
@@ -71,5 +85,35 @@ export const HandoffDeadEyes: Story = {
     name: 'staging.acme.com',
     text: 'This handoff was declined — the session stays on the host page.',
     eyes: 'dead',
+  },
+};
+
+/**
+ * Both variants stacked, so the sparkles glyph chip can be reviewed against the
+ * violet googly-eyes avatar in one frame (toggle the theme + viewport toolbars).
+ */
+export const Gallery: Story = {
+  render: () => {
+    const wrap = document.createElement('div');
+    wrap.style.display = 'grid';
+    wrap.style.gap = '4px';
+    wrap.style.maxWidth = '680px';
+
+    const handoff = document.createElement('slicc-handoff-card');
+    handoff.setAttribute('variant', 'handoff');
+    handoff.setAttribute('pre', 'Handoff request from');
+    handoff.setAttribute('name', 'acme.com');
+    handoff.setAttribute(
+      'text',
+      'Continue work in the SLICC browser agent. Approve to let sliccy pick up this session.'
+    );
+
+    const opened = document.createElement('slicc-handoff-card');
+    opened.setAttribute('variant', 'opened');
+    opened.setAttribute('name', 'Hero studio');
+    opened.setAttribute('text', '· opened a sprinkle in the workbench');
+
+    wrap.append(handoff, opened);
+    return wrap;
   },
 };

@@ -22,12 +22,24 @@ describe('slicc-dip', () => {
     expect(customElements.get('slicc-dip')).toBe(SliccDip);
     const el = mount();
     const r = el.shadowRoot;
-    expect(r?.querySelector('[part="header"] [part="glyph"]')?.textContent).toBe('✦');
+    expect(r?.querySelector('[part="header"] [part="glyph"]')).not.toBeNull();
     expect(r?.querySelector('[part="tag"]')?.textContent).toContain('sprinkle');
     expect(r?.querySelector('[part="grid-canvas"]')).not.toBeNull();
     expect(r?.querySelector('[part="grid-accent"]')).not.toBeNull();
     expect(r?.querySelector('[part="apply"]')).not.toBeNull();
     expect(r?.querySelector('canvas.sprk')).not.toBeNull();
+  });
+
+  it('renders the header glyph chip as a lucide <svg>, never the ✦ emoji glyph', () => {
+    const el = mount();
+    const glyph = el.shadowRoot?.querySelector('[part="glyph"]');
+    // The accent chip is a lucide sparkles <svg>, not a bespoke unicode glyph.
+    const svg = glyph?.querySelector('svg');
+    expect(svg).not.toBeNull();
+    expect(svg?.querySelector('path')).not.toBeNull();
+    // No emoji / bespoke glyph survives in the chip.
+    expect(glyph?.textContent ?? '').not.toContain('✦');
+    expect((glyph?.textContent ?? '').trim()).toBe('');
   });
 
   it('defaults the filename and reflects/escapes name + hue + prompt', () => {

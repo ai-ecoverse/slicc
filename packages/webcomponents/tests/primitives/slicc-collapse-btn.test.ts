@@ -29,16 +29,30 @@ describe('slicc-collapse-btn', () => {
     expect(btn?.getAttribute('part')).toBe('button');
   });
 
-  it('defaults to the ⤡ glyph and "Collapse" label', () => {
+  it('renders a lucide <svg> glyph (no emoji / unicode-symbol char) by default', () => {
     const el = document.createElement('slicc-collapse-btn');
     document.body.appendChild(el);
-    const slot = el.shadowRoot?.querySelector('slot');
-    expect(slot?.textContent).toBe('⤡');
+    const svg = el.shadowRoot?.querySelector('button .icon svg');
+    expect(svg).not.toBeNull();
+    expect(svg?.namespaceURI).toBe('http://www.w3.org/2000/svg');
+    // an actual icon body was rendered, not the empty fallback <svg>
+    expect(svg?.childElementCount ?? 0).toBeGreaterThan(0);
+    expect(svg?.getAttribute('part')).toBe('icon');
+    // none of the old / forbidden glyph chars survive anywhere in the shadow root
+    const text = el.shadowRoot?.textContent ?? '';
+    for (const glyph of ['⤡', '⤢', '✦', '❄', '🔔', '🌙', '☀', '↑', '＋']) {
+      expect(text).not.toContain(glyph);
+    }
+  });
+
+  it('defaults to the panel-right-close icon and "Collapse" label', () => {
+    const el = document.createElement('slicc-collapse-btn');
+    document.body.appendChild(el);
     const btn = el.shadowRoot?.querySelector('button');
     expect(btn?.getAttribute('aria-label')).toBe('Collapse');
     expect(btn?.getAttribute('title')).toBe('Collapse');
     // property mirrors the default when the attribute is absent
-    expect(el.glyph).toBe('⤡');
+    expect(el.icon).toBe('panel-right-close');
     expect(el.label).toBe('Collapse');
   });
 
@@ -52,24 +66,25 @@ describe('slicc-collapse-btn', () => {
     expect(btn?.getAttribute('title')).toBe('Hide panel');
   });
 
-  it('reflects the glyph property to the attribute and rendered text', () => {
+  it('reflects the icon property to the attribute and renders that lucide glyph', () => {
     const el = document.createElement('slicc-collapse-btn');
-    el.glyph = '⤢';
+    el.icon = 'chevrons-right-left';
     document.body.appendChild(el);
-    expect(el.getAttribute('glyph')).toBe('⤢');
-    expect(el.shadowRoot?.querySelector('slot')?.textContent).toBe('⤢');
+    expect(el.getAttribute('icon')).toBe('chevrons-right-left');
+    const svg = el.shadowRoot?.querySelector('button .icon svg');
+    expect(svg).not.toBeNull();
+    // a recognized icon renders a non-empty body (not the empty fallback)
+    expect(svg?.childElementCount ?? 0).toBeGreaterThan(0);
   });
 
-  it('escapes label and glyph text', () => {
+  it('escapes the label text', () => {
     const el = document.createElement('slicc-collapse-btn');
     el.label = '<img src=x>';
-    el.glyph = '<b>x</b>';
     document.body.appendChild(el);
     const btn = el.shadowRoot?.querySelector('button');
     expect(btn?.getAttribute('aria-label')).toBe('<img src=x>');
-    const slot = el.shadowRoot?.querySelector('slot');
-    expect(slot?.querySelector('b')).toBeNull();
-    expect(slot?.textContent).toBe('<b>x</b>');
+    // the unsafe label is attribute-escaped, never parsed into a real element
+    expect(el.shadowRoot?.querySelector('img')).toBeNull();
   });
 
   it('emits a composed, bubbling collapse event on click', () => {

@@ -18,8 +18,8 @@ interface DockArgs {
 
 /** The prototype's default sprinkle launchers (hero = violet, palette = amber). */
 const SPRINKLES: DockItemDescriptor[] = [
-  { id: 'hero', glyph: '✦', label: 'Hero studio', kind: 'sprinkle', hue: 'var(--violet)' },
-  { id: 'palette', glyph: '✦', label: 'palette', kind: 'sprinkle', hue: 'var(--amber)' },
+  { id: 'hero', icon: 'sparkles', label: 'Hero studio', kind: 'sprinkle', hue: 'var(--violet)' },
+  { id: 'palette', icon: 'palette', label: 'palette', kind: 'sprinkle', hue: 'var(--amber)' },
 ];
 
 /**
@@ -116,8 +116,8 @@ export const ManySprinkles: Story = {
   args: {
     items: [
       ...SPRINKLES,
-      { id: 'chart', glyph: '✦', label: 'chart', kind: 'sprinkle', hue: 'var(--cyan)' },
-      { id: 'notes', glyph: '✦', label: 'notes', kind: 'sprinkle', hue: 'var(--rose)' },
+      { id: 'chart', icon: 'chart-pie', label: 'chart', kind: 'sprinkle', hue: 'var(--cyan)' },
+      { id: 'notes', icon: 'notebook-pen', label: 'notes', kind: 'sprinkle', hue: 'var(--rose)' },
     ],
     active: 'palette',
     systemTools: true,

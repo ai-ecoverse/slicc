@@ -54,6 +54,28 @@ export const Webhook: Story = {
   },
 };
 
+/**
+ * Focuses the header affordance: the prototype's 🔔 emoji is now the lucide
+ * `bell` icon (`iconSvg('bell', { size: 14 })`), inheriting the amber header
+ * color via `stroke: currentColor`. Review the crisp vector glyph here.
+ */
+export const BellIcon: Story = {
+  args: {
+    kind: 'webhook',
+    'no-animate': true,
+    bodyHtml: 'The header bell is a <b>lucide</b> icon, not an emoji — vector, themeable, crisp.',
+  },
+};
+
+/** Explicit dark variant — amber re-mixes over the canvas and the bell lightens to #e5b35a. */
+export const Dark: Story = {
+  args: {
+    kind: 'webhook',
+    theme: 'dark',
+    bodyHtml: 'A <b>lick</b> in dark mode — the lucide bell inherits the lightened header color.',
+  },
+};
+
 /** A cron-triggered lick — kind variant via the header text. */
 export const Cron: Story = {
   args: {

@@ -1,8 +1,9 @@
 import { define } from '../internal/define.js';
 import { escapeHtml } from '../internal/html.js';
+import { iconSvg } from '../internal/icons.js';
 
 /**
- * Workbench tab styles, lifted verbatim from the prototype `.tab` / `.tab.sp`
+ * Workbench tab styles, lifted from the prototype `.tab` / `.tab.sp`
  * / `.tab.on` / `.gl` / `.sg` / `.x` rules (proto/StellarRubySwift.html lines
  * 202-210, 43).
  *
@@ -12,6 +13,12 @@ import { escapeHtml } from '../internal/html.js';
  * matching the prototype light value (canvas is `#fff` in light) while reading
  * correctly in dark. An explicit `theme="dark"` host attribute opts into the
  * prototype's heavier dark percentages (violet 18% bg / 40% border).
+ *
+ * The sprinkle badge (`.sg`) and close affordance (`.x`) render **lucide**
+ * `<svg>` glyphs (`sparkles` / `x`) via the shared `iconSvg` helper — never
+ * emoji or bespoke unicode symbols. The badge svg is white (`#fff`) on the
+ * rainbow chip; the close svg inherits `currentColor` so it tracks the idle /
+ * hover `--txt-3` → `--ink` palette automatically.
  */
 const STYLE = `
 :host{display:inline-flex;white-space:nowrap;}
@@ -25,23 +32,23 @@ const STYLE = `
 .tab.sp:hover{border-color:color-mix(in srgb,var(--violet) 30%,var(--line));background:var(--canvas);}
 .tab.sp.on{background:color-mix(in srgb,var(--violet) 9%,var(--canvas));border-color:color-mix(in srgb,var(--violet) 34%,var(--line));color:var(--ink);}
 :host([theme="dark"]) .tab.sp.on{background:color-mix(in srgb,var(--violet) 18%,var(--canvas));border-color:color-mix(in srgb,var(--violet) 40%,var(--line));}
-.sg{display:inline-grid;place-items:center;width:14px;height:14px;border-radius:4px;font-size:8px;color:#fff;background:var(--rainbow);}
-.x{margin-left:3px;width:15px;height:15px;border-radius:4px;display:grid;place-items:center;font-size:10px;color:var(--txt-3);}
+.sg{display:inline-grid;place-items:center;width:14px;height:14px;border-radius:4px;color:#fff;background:var(--rainbow);}
+.x{margin-left:3px;width:15px;height:15px;border-radius:4px;display:grid;place-items:center;color:var(--txt-3);}
 .x:hover{background:var(--line);color:var(--ink);}
+.sg svg,.x svg{display:block;}
 `;
 
-/** Default sparkle glyph for a sprinkle badge (prototype `✦`). */
-const DEFAULT_BADGE = '✦';
-/** Close-button glyph (prototype `✕`). */
-const CLOSE_GLYPH = '✕';
+/** Rendered lucide glyph size (px) for the `.sg` badge and `.x` close icons. */
+const ICON_SIZE = 13;
 
 /**
  * `<slicc-tab>` — a single workbench tab chip from the prototype tab strip
  * (`.tab`). A quiet ghost chip by default: tool tabs are plain (transparent
  * bg/border, `--txt-2`, with an optional leading `.gl` glyph), sprinkle tabs
  * (`kind="sprinkle"`) read as defined chips (`--canvas` bg, `--line` border)
- * carrying a rainbow `.sg` sparkle badge and violet-tinted when active. An
- * optional `.x` close affordance can be enabled with `closable`.
+ * carrying a rainbow `.sg` badge — a lucide `sparkles` `<svg>` — and
+ * violet-tinted when active. An optional `.x` close affordance (a lucide `x`
+ * `<svg>`) can be enabled with `closable`.
  *
  * Self-contained shadow DOM; all colors/spacing/fonts come from inherited
  * prototype tokens (`--canvas`, `--ink`, `--ghost`, `--line`, `--violet`,
@@ -59,13 +66,13 @@ const CLOSE_GLYPH = '✕';
  * @attr kind - `tool` (default) | `sprinkle`; sprinkle adds the chip frame + `.sg` badge
  * @attr active - boolean; the `.on` selected state
  * @attr closable - boolean; render the `.x` close affordance
- * @attr badge - sprinkle badge glyph (sprinkle kind only; defaults to `✦`)
+ * @attr badge - sprinkle badge lucide icon name, kebab-case (sprinkle kind only; defaults to `sparkles`)
  * @attr glyph - optional leading `.gl` glyph (tool kind only)
  * @attr theme - `dark` opts into the prototype's heavier dark sprinkle-active tint
  * @csspart tab - the tab button
- * @csspart badge - the sprinkle `.sg` sparkle badge
+ * @csspart badge - the sprinkle `.sg` badge (lucide `sparkles` svg)
  * @csspart glyph - the tool `.gl` leading glyph
- * @csspart close - the `.x` close button
+ * @csspart close - the `.x` close button (lucide `x` svg)
  * @slot - the tab label (used when no text is otherwise provided)
  * @fires select - `{ tabId }`; the tab body was clicked (not the close affordance)
  * @fires close - `{ tabId }`; the close affordance was clicked
@@ -140,7 +147,7 @@ export class SliccTab extends HTMLElement {
     this.toggleAttribute('closable', value);
   }
 
-  /** Sprinkle badge glyph (sprinkle kind only). */
+  /** Sprinkle badge lucide icon name, kebab-case (sprinkle kind only). */
   get badge(): string | null {
     return this.getAttribute('badge');
   }
@@ -177,8 +184,8 @@ export class SliccTab extends HTMLElement {
 
     let lead = '';
     if (isSprinkle) {
-      const badge = this.badge ?? DEFAULT_BADGE;
-      lead = `<span class="sg" part="badge" aria-hidden="true">${escapeHtml(badge)}</span>`;
+      const badgeIcon = this.badge ?? 'sparkles';
+      lead = `<span class="sg" part="badge" aria-hidden="true">${iconSvg(badgeIcon, { size: ICON_SIZE })}</span>`;
     } else if (this.glyph != null) {
       lead = `<span class="gl" part="glyph" aria-hidden="true">${escapeHtml(this.glyph)}</span>`;
     }
@@ -187,7 +194,7 @@ export class SliccTab extends HTMLElement {
     const labelHtml = label != null ? escapeHtml(label) : '<slot></slot>';
 
     const close = this.closable
-      ? `<span class="x" part="close" data-close="" role="button" aria-label="Close tab">${CLOSE_GLYPH}</span>`
+      ? `<span class="x" part="close" data-close="" role="button" aria-label="Close tab">${iconSvg('x', { size: ICON_SIZE })}</span>`
       : '';
 
     this.#root.innerHTML =

@@ -1,5 +1,6 @@
 import { define } from '../internal/define.js';
 import { escapeHtml } from '../internal/html.js';
+import { iconSvg } from '../internal/icons.js';
 
 /**
  * Per-instance stylesheet, lifted verbatim from the prototype's
@@ -52,8 +53,8 @@ code {
 
 /** Leading glyph per delegation/event kind, lifted from the prototype. */
 const GLYPH: Record<'feed' | 'sprinkle', string> = {
-  feed: '→', // → feed_scoop
-  sprinkle: '✦', // ✦ sprinkle-opened
+  feed: iconSvg('arrow-right', { size: 13 }), // feed_scoop
+  sprinkle: iconSvg('sparkles', { size: 13 }), // sprinkle-opened
 };
 
 /** Split a comma/whitespace-free args attribute into discrete `<code>` chips. */

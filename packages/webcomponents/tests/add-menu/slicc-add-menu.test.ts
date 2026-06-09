@@ -52,6 +52,59 @@ describe('slicc-add-menu', () => {
     expect(root.querySelector('[part="results"]')).not.toBeNull();
   });
 
+  it('renders the trigger as a lucide <svg>, never a unicode +/× glyph', () => {
+    const el = mount();
+    const trig = trigger(el);
+    // The glyph is a real <svg>, not text.
+    const svg = trig.querySelector('svg');
+    expect(svg).not.toBeNull();
+    expect(svg?.querySelector('path, line, circle, rect')).not.toBeNull();
+    // No bespoke unicode plus/times/fullwidth-plus glyph leaked into the markup.
+    for (const glyph of ['+', '×', '＋', '✕', '✦']) {
+      expect(trig.textContent ?? '').not.toContain(glyph);
+    }
+  });
+
+  it('swaps the trigger glyph between lucide plus (closed) and x (open)', async () => {
+    const el = mount();
+    const trig = trigger(el);
+
+    // Closed: a lucide "plus" — two crossing line/path segments, no diagonals.
+    expect(trig.querySelector('svg')).not.toBeNull();
+
+    el.open();
+    await flush();
+    // Open: still an <svg> (a lucide "x"), still no unicode glyph text.
+    const openSvg = trig.querySelector('svg');
+    expect(openSvg).not.toBeNull();
+    expect(trig.textContent ?? '').not.toContain('×');
+    expect(trig.textContent ?? '').not.toContain('+');
+    // The "x" glyph has diagonal line segments, the "plus" does not.
+    expect(openSvg?.querySelector('line, path')).not.toBeNull();
+
+    el.close();
+    await flush();
+    expect(trig.querySelector('svg')).not.toBeNull();
+  });
+
+  it('renders every result-row + quick-action icon as a lucide <svg> (no emoji)', async () => {
+    const el = mount();
+    el.open();
+    await flush();
+    const icons = Array.from(shadow(el).querySelectorAll<HTMLElement>('.results .item .ic'));
+    expect(icons.length).toBeGreaterThan(0);
+    for (const ic of icons) {
+      expect(ic.querySelector('svg')).not.toBeNull();
+    }
+    // The search-box leading icon is also a lucide <svg>.
+    expect(shadow(el).querySelector('.searchbox .si svg')).not.toBeNull();
+    // No emoji / bespoke glyph anywhere in the open panel's text.
+    const text = (shadow(el).querySelector('.results') as HTMLElement).textContent ?? '';
+    for (const glyph of ['📎', '🖼', '📷', '🖥', '➕', '✕', '×']) {
+      expect(text).not.toContain(glyph);
+    }
+  });
+
   it('starts closed', () => {
     const el = mount();
     expect(el.isOpen).toBe(false);
