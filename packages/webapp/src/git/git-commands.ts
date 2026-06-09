@@ -933,7 +933,10 @@ Available commands:
     }
 
     if (createBranch) {
-      await git.branch({ fs: this.lfs, dir: cwd, ref, checkout: true });
+      const bIdx = args.indexOf('-b');
+      const afterB = args.slice(bIdx + 1).filter((a) => !a.startsWith('-'));
+      const startPoint = afterB.length > 1 ? afterB[1] : undefined;
+      await git.branch({ fs: this.lfs, dir: cwd, ref, object: startPoint, checkout: true });
       return {
         stdout: `Switched to a new branch '${ref}'\n`,
         stderr: '',

@@ -132,6 +132,30 @@ describe('GitCommands', () => {
     expect(result.stdout).toContain("Switched to branch 'feature'");
   });
 
+  it('checkout -b with start point creates branch at the specified commit', async () => {
+    await git.execute(['init'], '/project');
+    await vfs.writeFile('/project/file.txt', 'v1');
+    await git.execute(['add', 'file.txt'], '/project');
+    await git.execute(['commit', '-m', 'first'], '/project');
+
+    await vfs.writeFile('/project/file.txt', 'v2');
+    await vfs.writeFile('/project/new.txt', 'hello');
+    await git.execute(['add', '-A'], '/project');
+    await git.execute(['commit', '-m', 'second'], '/project');
+
+    const logResult = await git.execute(['log', '--format', '%H'], '/project');
+    const commits = logResult.stdout.trim().split('\n');
+    const firstCommit = commits[commits.length - 1];
+
+    const result = await git.execute(['checkout', '-b', 'feature', firstCommit], '/project');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Switched to a new branch 'feature'");
+
+    // Branch HEAD should point at the start point, not at current main
+    const headResult = await git.execute(['log', '--format', '%H', '-1'], '/project');
+    expect(headResult.stdout.trim()).toBe(firstCommit);
+  });
+
   it('sets and gets config', async () => {
     await git.execute(['init'], '/project');
 
