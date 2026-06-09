@@ -62,7 +62,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
 
   :root{--barh:52px;}
   .nav{display:flex;align-items:center;gap:14px;padding:0 24px;min-height:var(--barh);background:var(--canvas);border-bottom:1px solid var(--line);flex:0 0 auto;z-index:4;}
-  .logo{font-weight:600;font-size:14px;letter-spacing:-.02em;flex:0 0 auto;} .logo .b{font-family:var(--mono);font-weight:500;font-size:12px;margin-left:7px;background:var(--rainbow);-webkit-background-clip:text;background-clip:text;color:transparent;}
+  .logo{font-weight:600;font-size:14px;letter-spacing:-.02em;flex:0 0 auto;} .logo .b{font-family:var(--ui);font-weight:500;font-size:12px;margin-left:7px;background:var(--rainbow);-webkit-background-clip:text;background-clip:text;color:transparent;}
   .switcher{display:flex;gap:6px;margin-left:14px;flex-wrap:nowrap;min-width:0;overflow:hidden;}
   .switcher .scoop{flex:0 0 auto;}
   .scoop.hide{display:none;}
@@ -97,7 +97,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
 
   /* right dock — the launcher rail (always visible). Solid theme bg so the shader stays behind the reading area only. */
   .dock{flex:0 0 48px;display:flex;flex-direction:column;align-items:center;gap:8px;background:var(--bg);border-left:1px solid var(--line);padding:10px 0;position:relative;z-index:2;}
-  .dock .di{position:relative;width:34px;height:34px;border-radius:9px;border:1px solid transparent;background:transparent;color:var(--txt-2);cursor:pointer;display:grid;place-items:center;font-size:14px;font-family:var(--mono);}
+  .dock .di{position:relative;width:34px;height:34px;border-radius:9px;border:1px solid transparent;background:transparent;color:var(--txt-2);cursor:pointer;display:grid;place-items:center;font-size:14px;font-family:var(--ui);}
   .dock .di:hover{background:var(--ghost);color:var(--ink);}
   .dock .di.on{background:var(--ink);color:#fff;}
   .dock .di.sp{font-family:var(--ui);} .dock .di.sp::after{content:"";position:absolute;right:5px;top:6px;width:5px;height:5px;border-radius:50%;background:var(--h,var(--violet));}
@@ -109,10 +109,10 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   /* magic dust overlay + demo controls + inline sprinkle */
   #dust{position:fixed;inset:0;z-index:9000;pointer-events:none;}
   .dustbar{display:inline-flex;align-items:center;gap:5px;}
-  .dustbar .dl{font-family:var(--mono);font-size:11px;color:var(--txt-3);margin-right:2px;}
+  .dustbar .dl{font-family:var(--ui);font-size:11px;color:var(--txt-3);margin-right:2px;}
   .db{font:inherit;font-size:12px;font-weight:500;color:var(--ink);background:var(--canvas);border:1px solid var(--line);border-radius:9999px;padding:5px 10px;cursor:pointer;} .db:hover{background:var(--ghost);}
   .dip{border:1px solid var(--line);border-radius:13px;overflow:hidden;margin:14px 0 6px;background:var(--canvas);box-shadow:rgba(10,10,10,.05) 0 4px 14px -6px;}
-  .dip .dh{display:flex;align-items:center;gap:9px;padding:9px 13px;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:12px;color:var(--txt-2);}
+  .dip .dh{display:flex;align-items:center;gap:9px;padding:9px 13px;border-bottom:1px solid var(--line);font-family:var(--ui);font-size:12px;color:var(--txt-2);}
   .dip .dh .sg{width:20px;height:20px;border-radius:6px;display:grid;place-items:center;font-size:11px;color:#fff;background:var(--c,var(--violet));}
   .dip .dh .nm{color:var(--ink);font-weight:500;} .dip .dh .tag{margin-left:auto;font-size:10px;color:var(--c,var(--violet));background:color-mix(in srgb,var(--c,var(--violet)) 12%,#fff);border:1px solid color-mix(in srgb,var(--c,var(--violet)) 30%,var(--line));border-radius:26px;padding:2px 9px;}
   .dip .db2{display:flex;gap:6px;padding:13px;} .dip .db2 .sw{width:30px;height:30px;border-radius:8px;border:1px solid var(--line);}
@@ -121,15 +121,12 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   /* feather the frosted reading column: intersect a horizontal + vertical linear-gradient mask so both the translucent fill and the blur taper to transparent on all 4 edges */
   .thread{flex:1;overflow-y:auto;} .inner{max-width:680px;margin:0 auto;padding:8px 24px 20px;background:color-mix(in srgb,var(--bg) 72%,transparent);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);border-radius:14px;-webkit-mask-image:linear-gradient(to right,transparent 0,#000 36px,#000 calc(100% - 36px),transparent 100%),linear-gradient(to bottom,transparent 0,#000 28px,#000 calc(100% - 28px),transparent 100%);-webkit-mask-composite:source-in;mask-image:linear-gradient(to right,transparent 0,#000 36px,#000 calc(100% - 36px),transparent 100%),linear-gradient(to bottom,transparent 0,#000 28px,#000 calc(100% - 28px),transparent 100%);mask-composite:intersect;}
   .shell.open .inner{padding:0 18px 16px;}
-  .daylabel{display:flex;align-items:center;gap:12px;margin:18px 0 16px;font-family:var(--mono);font-size:11px;color:var(--txt-3);text-transform:uppercase;letter-spacing:.08em;}
+  .daylabel{display:flex;align-items:center;gap:12px;margin:18px 0 16px;font-family:var(--ui);font-size:11px;color:var(--txt-3);text-transform:uppercase;letter-spacing:.08em;}
   .daylabel::before,.daylabel::after{content:"";flex:1;height:1px;background:var(--line);}
   .msg{margin-bottom:18px;font-size:15px;line-height:1.5;} .msg.user{display:flex;justify-content:flex-end;}
   .msg.user .b{background:var(--deep);color:#fff;padding:10px 14px;border-radius:16px 16px 4px 16px;font-size:14px;max-width:80%;}
-  .msg.bot .lbl{font-family:var(--mono);font-size:11px;color:var(--txt-3);margin-bottom:7px;display:flex;align-items:center;gap:6px;}
-  .msg.bot .lbl .tag{background:var(--rose);color:#fff;border-radius:26px;padding:1px 8px;font-size:10px;font-weight:500;}
-  .msg.bot .lbl .tag.cy{background:var(--cyan);} .msg.bot .lbl .tag.vi{background:var(--violet);}
   /* delegation / event lines — the dust source */
-  .msg.deleg{font-family:var(--mono);font-size:12px;color:var(--txt-2);display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:-4px 0 18px;padding:7px 10px;border:1px solid transparent;border-radius:9px;transition:background .25s,border-color .25s;}
+  .msg.deleg{font-family:var(--ui);font-size:12px;color:var(--txt-2);display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:-4px 0 18px;padding:7px 10px;border:1px solid transparent;border-radius:9px;transition:background .25s,border-color .25s;}
   .msg.deleg .darrow{color:var(--txt-3);} .msg.deleg b{font-weight:600;} .msg.deleg code{font-family:var(--mono);font-size:11.5px;background:var(--ghost);border-radius:5px;padding:1px 5px;}
   .msg.deleg.src{background:color-mix(in srgb,var(--c,var(--violet)) 8%,#fff);border-color:color-mix(in srgb,var(--c,var(--violet)) 28%,var(--line));}
   /* landing highlight on scoop chips + dock icons */
@@ -144,7 +141,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   .handoff .top{display:flex;align-items:center;gap:10px;margin-bottom:9px;}
   .handoff .av{width:26px;height:26px;border-radius:9999px;border:1px solid color-mix(in srgb,var(--violet) 40%,var(--line));display:grid;place-items:center;background:color-mix(in srgb,var(--violet) 14%,#fff);}
   .handoff .av .eyes{display:inline-flex;gap:3px;}
-  .handoff .lbl2{font-family:var(--mono);font-size:11px;color:var(--txt-2);} .handoff .lbl2 .pre{color:var(--txt-3);} .handoff .lbl2 b{color:var(--violet);font-weight:600;}
+  .handoff .lbl2{font-family:var(--ui);font-size:11px;color:var(--txt-2);} .handoff .lbl2 .pre{color:var(--txt-3);} .handoff .lbl2 b{color:var(--violet);font-weight:600;}
   .handoff p{margin:0;font-size:14px;}
   .opened{display:flex;align-items:center;gap:9px;border:1px solid var(--line);background:var(--ghost);border-radius:11px;padding:9px 11px;margin:2px 0 18px;font-size:13px;color:var(--txt-2);}
   .opened .sg{width:20px;height:20px;border-radius:6px;display:grid;place-items:center;font-size:10px;color:#fff;background:var(--rainbow);}
@@ -162,20 +159,20 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   .ctl{height:30px;border:1px solid var(--line);border-radius:8px;background:var(--canvas);color:var(--ink);font:inherit;font-size:12.5px;font-weight:500;padding:0 9px;display:inline-flex;align-items:center;gap:7px;cursor:pointer;white-space:nowrap;flex:0 0 auto;} .ctl:hover{background:var(--ghost);}
   .ctl .ic{background:var(--rainbow);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:700;} .ctl .cx{color:var(--txt-3);font-size:10px;}
   .ctl.tsel.x{border-color:color-mix(in srgb,var(--violet) 35%,var(--line));}
-  .gauge{display:inline-flex;align-items:flex-end;gap:2px;height:13px;} .gauge i{width:3px;border-radius:1px;background:var(--line);} .gauge i:nth-child(1){height:5px;}.gauge i:nth-child(2){height:8px;}.gauge i:nth-child(3){height:10px;}.gauge i:nth-child(4){height:13px;} .gauge i.on{background:var(--violet);}
+  .brain{color:var(--violet);display:inline-block;vertical-align:-2px;flex:0 0 auto;}
   .toolbar .spacer{flex:1;} .send{width:36px;height:36px;border-radius:9999px;border:none;cursor:pointer;background:var(--rainbow);color:#fff;font-size:16px;} .send:hover{filter:brightness(1.06);}
   /* model + thinking moved BELOW the input (Steep-style meta row) */
   .meta{display:flex;align-items:center;gap:8px;max-width:680px;margin:11px auto 0;}
   .meta .mspacer{flex:1;}
   .meta .hint{font-size:11px;color:var(--txt-3);display:inline-flex;align-items:center;gap:7px;}
-  .meta .hint .kbd{font-family:var(--mono);border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:var(--txt-2);}
+  .meta .hint .kbd{font-family:var(--ui);border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:var(--txt-2);}
   .meta .hint .sep{width:3px;height:3px;border-radius:50%;background:var(--line);}
   .shell.open .meta .hint{display:none;} /* narrow chat: keep just model + thinking */
 
   /* ---- workbench tab strip ---- */
   .wbhead{flex:0 0 auto;display:flex;align-items:center;gap:6px;padding:8px 12px;border-bottom:1px solid var(--line);overflow:hidden;}
   .tabstrip{display:flex;align-items:center;gap:4px;min-width:0;overflow-x:auto;}
-  .tab{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:12px;color:var(--txt-2);background:transparent;border:1px solid transparent;border-radius:8px;padding:6px 10px;cursor:pointer;white-space:nowrap;}
+  .tab{display:inline-flex;align-items:center;gap:7px;font-family:var(--ui);font-size:12px;color:var(--txt-2);background:transparent;border:1px solid transparent;border-radius:8px;padding:6px 10px;cursor:pointer;white-space:nowrap;}
   .tab:hover{background:var(--ghost);color:var(--ink);} .tab.on{color:var(--ink);background:var(--ghost);}
   .tab .gl{font-size:11px;color:var(--txt-3);} .tab.on .gl{color:var(--ink);}
   /* sprinkle tabs read as defined chips (more visible), violet-tinted when active */
@@ -186,8 +183,8 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   .tab .x{margin-left:3px;width:15px;height:15px;border-radius:4px;display:grid;place-items:center;font-size:10px;color:var(--txt-3);} .tab .x:hover{background:var(--line);color:var(--ink);}
   .tdiv{width:1px;height:18px;background:var(--line);margin:0 4px;flex:0 0 auto;}
   .wbhead .spacer{flex:1;}
-  .wbhead .ptag{font-family:var(--mono);font-size:10px;color:var(--violet);background:color-mix(in srgb,var(--violet) 12%,#fff);border:1px solid color-mix(in srgb,var(--violet) 30%,var(--line));border-radius:26px;padding:2px 9px;flex:0 0 auto;}
-  .wbhead .col{flex:0 0 auto;border:1px solid var(--line);background:var(--canvas);border-radius:8px;height:28px;padding:0 9px;cursor:pointer;color:var(--txt-2);font-family:var(--mono);font-size:12px;} .wbhead .col:hover{background:var(--ghost);color:var(--ink);}
+  .wbhead .ptag{font-family:var(--ui);font-size:10px;color:var(--violet);background:color-mix(in srgb,var(--violet) 12%,#fff);border:1px solid color-mix(in srgb,var(--violet) 30%,var(--line));border-radius:26px;padding:2px 9px;flex:0 0 auto;}
+  .wbhead .col{flex:0 0 auto;border:1px solid var(--line);background:var(--canvas);border-radius:8px;height:28px;padding:0 9px;cursor:pointer;color:var(--txt-2);font-family:var(--ui);font-size:12px;} .wbhead .col:hover{background:var(--ghost);color:var(--ink);}
 
   .wbbody{flex:1;min-height:0;position:relative;}
   /* bottom tool bar (Files / Terminal / Memory) */
@@ -201,16 +198,16 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
 
   /* files / VFS — tree + preview */
   .files{min-height:0;}
-  .tree{width:190px;flex:0 0 auto;border-right:1px solid var(--line);overflow:auto;padding:10px 8px;font-family:var(--mono);font-size:12px;}
+  .tree{width:190px;flex:0 0 auto;border-right:1px solid var(--line);overflow:auto;padding:10px 8px;font-family:var(--ui);font-size:12px;}
   .tree .grp{color:var(--txt-3);padding:5px 8px 3px;} .tree .f{display:flex;align-items:center;gap:7px;padding:4px 8px;border-radius:7px;color:var(--ink);cursor:pointer;} .tree .f:hover{background:var(--ghost);} .tree .f.on{background:color-mix(in srgb,var(--violet) 10%,#fff);color:var(--violet);}
   .tree .f::before{content:"";width:5px;height:5px;border-radius:1px;background:var(--txt-3);} .tree .f.on::before{background:var(--violet);}
-  .fileview{flex:1;overflow:auto;padding:14px 16px;font-family:var(--mono);font-size:12.5px;line-height:1.7;color:var(--ink);white-space:pre-wrap;}
+  .fileview{flex:1;overflow:auto;padding:14px 16px;font-family:var(--ui);font-size:12.5px;line-height:1.7;color:var(--ink);white-space:pre-wrap;}
   .fileview .fh{color:var(--txt-3);font-size:11px;margin-bottom:10px;} .fileview .k{color:var(--violet);} .fileview .s{color:var(--green);} .fileview .c{color:var(--txt-3);}
 
   /* memory list */
   .mem{flex:1;overflow:auto;padding:14px 16px;}
   .memrow{border:1px solid var(--line);border-radius:11px;padding:11px 13px;margin-bottom:9px;}
-  .memrow .mt{display:flex;align-items:center;gap:8px;} .memrow .mt b{font-size:13px;font-weight:600;} .memrow .mtag{margin-left:auto;font-family:var(--mono);font-size:10px;border-radius:26px;padding:1px 8px;}
+  .memrow .mt{display:flex;align-items:center;gap:8px;} .memrow .mt b{font-size:13px;font-weight:600;} .memrow .mtag{margin-left:auto;font-family:var(--ui);font-size:10px;border-radius:26px;padding:1px 8px;}
   .mtag.fb{color:var(--cyan);background:color-mix(in srgb,var(--cyan) 12%,#fff);border:1px solid color-mix(in srgb,var(--cyan) 28%,var(--line));}
   .mtag.pj{color:var(--violet);background:color-mix(in srgb,var(--violet) 12%,#fff);border:1px solid color-mix(in srgb,var(--violet) 28%,var(--line));}
   .memrow .ms{font-size:12.5px;color:var(--txt-2);margin-top:5px;line-height:1.5;}
@@ -218,10 +215,10 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   /* hero studio sprinkle */
   .hs{min-height:0;}
   .controls{width:212px;flex:0 0 auto;border-right:1px solid var(--line);padding:15px 13px;overflow-y:auto;background:var(--canvas);}
-  .controls .grp{margin-bottom:17px;} .controls .lbl3{font-family:var(--mono);font-size:10px;color:var(--txt-3);text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px;}
+  .controls .grp{margin-bottom:17px;} .controls .lbl3{font-family:var(--ui);font-size:10px;color:var(--txt-3);text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px;}
   .swatches{display:flex;gap:6px;flex-wrap:wrap;} .sw{width:28px;height:28px;border-radius:8px;border:1px solid var(--line);cursor:pointer;} .sw.on{box-shadow:0 0 0 2px #fff,0 0 0 4px var(--violet);} .sw.hue{border:none;}
-  input[type=range]{width:100%;accent-color:var(--violet);} .rngval{font-family:var(--mono);font-size:11px;color:var(--txt-2);float:right;}
-  .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;} .seg button{font:inherit;font-family:var(--mono);font-size:11px;color:var(--txt-2);background:var(--canvas);border:none;padding:5px 9px;cursor:pointer;} .seg button.on{background:var(--ink);color:#fff;}
+  input[type=range]{width:100%;accent-color:var(--violet);} .rngval{font-family:var(--ui);font-size:11px;color:var(--txt-2);float:right;}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;} .seg button{font:inherit;font-family:var(--ui);font-size:11px;color:var(--txt-2);background:var(--canvas);border:none;padding:5px 9px;cursor:pointer;} .seg button.on{background:var(--ink);color:#fff;}
   .stage{flex:1;min-width:0;display:flex;align-items:center;justify-content:center;padding:24px;background:radial-gradient(circle at 1px 1px,color-mix(in srgb,var(--ink) 7%,transparent) 1px,transparent 0) 0 0/22px 22px,#fafafa;}
   .hero{background:#faf6f1;border:1px solid var(--line);border-radius:14px;box-shadow:rgba(10,10,10,.06) 0 10px 30px -8px;overflow:hidden;max-width:560px;}
   .hero .hn{display:flex;align-items:center;gap:12px;padding:13px 20px;font-size:11px;color:#6b6b6b;} .hero .hn .lg{font-weight:700;color:#111;margin-right:auto;font-size:14px;}
@@ -230,15 +227,15 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
 
   /* palette sprinkle (a second, simpler sprinkle) */
   .pal{flex:1;overflow:auto;padding:18px;} .pal h4{margin:0 0 12px;font-size:13px;font-weight:600;} .palgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:10px;}
-  .palcell{border:1px solid var(--line);border-radius:10px;overflow:hidden;} .palcell .ch{height:54px;} .palcell .cl{font-family:var(--mono);font-size:10px;color:var(--txt-2);padding:6px 8px;}
+  .palcell{border:1px solid var(--line);border-radius:10px;overflow:hidden;} .palcell .ch{height:54px;} .palcell .cl{font-family:var(--ui);font-size:10px;color:var(--txt-2);padding:6px 8px;}
 
-  .stamp{position:fixed;left:18px;bottom:11px;z-index:60;font-family:var(--mono);font-size:10px;color:var(--txt-3);} .stamp b{background:var(--rainbow);-webkit-background-clip:text;background-clip:text;color:transparent;}
+  .stamp{position:fixed;left:18px;bottom:11px;z-index:60;font-family:var(--ui);font-size:10px;color:var(--txt-3);} .stamp b{background:var(--rainbow);-webkit-background-clip:text;background-clip:text;color:transparent;}
   ::-webkit-scrollbar{width:9px;height:9px;} ::-webkit-scrollbar-thumb{background:var(--line);border:3px solid var(--canvas);border-radius:99px;}
   .term::-webkit-scrollbar-thumb{background:#2a2a30;border-color:#0c0c0e;}
 
   /* ===== walkthrough additions ===== */
   /* runtime float pill */
-  .floatbar{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11px;color:var(--txt-2);border:1px solid var(--line);background:var(--canvas);border-radius:9999px;padding:5px 12px;margin-right:10px;white-space:nowrap;}
+  .floatbar{display:inline-flex;align-items:center;gap:7px;font-family:var(--ui);font-size:11px;color:var(--txt-2);border:1px solid var(--line);background:var(--canvas);border-radius:9999px;padding:5px 12px;margin-right:10px;white-space:nowrap;}
   .floatbar .fdot{width:7px;height:7px;border-radius:50%;background:#22c55e;box-shadow:0 0 0 3px color-mix(in srgb,#22c55e 22%,transparent);}
   .floatbar.linked{border-color:color-mix(in srgb,var(--rose) 40%,var(--line));}
 
@@ -249,23 +246,22 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   .demobar .dbtn.primary{background:#6b6b72;color:#fff;border-color:#6b6b72;width:40px;height:34px;font-size:17px;}
   .demobar .dbtn.primary:hover{background:#56565c;}
   .dcap{min-width:210px;max-width:300px;}
-  .dcap .dstep{font-family:var(--mono);font-size:9.5px;letter-spacing:.05em;color:#8a8a90;text-transform:uppercase;margin-bottom:2px;display:flex;align-items:center;gap:6px;}
+  .dcap .dstep{font-family:var(--ui);font-size:9.5px;letter-spacing:.05em;color:#8a8a90;text-transform:uppercase;margin-bottom:2px;display:flex;align-items:center;gap:6px;}
   .dcap .dstep .chip{border-radius:26px;padding:0 7px;font-size:9px;font-weight:600;color:#fff;background:#8a8a90;}
   .dcap .dtext{font-size:12px;line-height:1.32;color:#3a3a3e;} .dcap .dtext b{font-weight:600;color:#222;}
   .dprog{position:absolute;left:9px;right:9px;bottom:3px;height:2px;border-radius:2px;background:#d6d6db;overflow:hidden;}
   .dprog i{display:block;height:100%;width:0;background:#9a9aa1;transition:width .3s;}
 
-  /* lick toasts */
-  .licks{position:fixed;right:16px;top:60px;z-index:9400;display:flex;flex-direction:column;gap:9px;width:300px;}
-  .lick{border:1px solid color-mix(in srgb,var(--amber) 45%,var(--line));background:color-mix(in srgb,var(--amber) 9%,#fff);border-radius:12px;padding:10px 12px;box-shadow:rgba(10,10,10,.1) 0 10px 26px -10px;animation:lickIn .4s ease both;}
-  .lick .lh{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:10.5px;color:#9a6300;margin-bottom:4px;} .lick .lh .bell{font-size:12px;}
+  /* lick — inline notification card inside the chat feed */
+  .lick{margin:2px 0 16px;border:1px solid color-mix(in srgb,var(--amber) 45%,var(--line));background:color-mix(in srgb,var(--amber) 9%,#fff);border-radius:12px;padding:10px 12px;box-shadow:rgba(10,10,10,.05) 0 4px 14px -6px;animation:lickIn .4s ease both;}
+  .lick .lh{display:flex;align-items:center;gap:7px;font-family:var(--ui);font-size:10.5px;color:#9a6300;margin-bottom:4px;} .lick .lh .bell{font-size:12px;}
   .lick .lk{margin-left:auto;border-radius:26px;background:var(--amber);color:#3a2600;font-size:9px;font-weight:700;padding:1px 7px;}
   .lick .lb{font-size:12.5px;color:var(--ink);line-height:1.4;} .lick .lb b{font-weight:600;}
   @keyframes lickIn{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}
 
   /* in-chat tool / terminal / git cards */
   .tcard{border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:2px 0 18px;background:var(--canvas);}
-  .tcard .th{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:11px;color:var(--txt-2);}
+  .tcard .th{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line);font-family:var(--ui);font-size:11px;color:var(--txt-2);}
   .tcard .th .ic{width:18px;height:18px;border-radius:5px;display:grid;place-items:center;font-size:10px;color:#fff;background:var(--ink);}
   .tcard .th .ic.cy{background:var(--cyan);}.tcard .th .ic.vi{background:var(--violet);}.tcard .th .ic.am{background:var(--amber);}.tcard .th .ic.gh{background:#1f2328;}
   .tcard .th .nm{color:var(--ink);font-weight:500;} .tcard .th .badge{margin-left:auto;font-size:9px;border-radius:26px;padding:1px 8px;background:var(--ghost);color:var(--txt-2);}
@@ -276,9 +272,9 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   .prcard{border:1px solid var(--line);border-radius:12px;margin:2px 0 18px;background:var(--canvas);overflow:hidden;}
   .prcard .ph{display:flex;align-items:center;gap:9px;padding:11px 13px;}
   .prcard .ph .gi{width:22px;height:22px;border-radius:6px;background:#1f2328;color:#fff;display:grid;place-items:center;font-size:12px;}
-  .prcard .ph .pt{font-weight:600;font-size:13.5px;} .prcard .ph .pn{font-family:var(--mono);color:var(--txt-3);font-size:12px;}
+  .prcard .ph .pt{font-weight:600;font-size:13.5px;} .prcard .ph .pn{font-family:var(--ui);color:var(--txt-3);font-size:12px;}
   .prcard .ph .open{margin-left:auto;font-size:10px;font-weight:700;color:#fff;background:#1a7f37;border-radius:26px;padding:3px 10px;}
-  .prcard .pmeta{display:flex;gap:14px;padding:0 13px 12px;font-family:var(--mono);font-size:11px;color:var(--txt-2);} .prcard .pmeta b{color:var(--ink);}
+  .prcard .pmeta{display:flex;gap:14px;padding:0 13px 12px;font-family:var(--ui);font-size:11px;color:var(--txt-2);} .prcard .pmeta b{color:var(--ink);}
   .prcard .pmeta .add{color:#1a7f37;}.prcard .pmeta .del{color:#cf222e;}
   /* checklist (summary) */
   .check{list-style:none;margin:6px 0 0;padding:0;} .check li{display:flex;align-items:center;gap:9px;font-size:13.5px;margin:6px 0;}
@@ -290,9 +286,9 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   .surface.browser.on{flex-direction:column;background:#fafafa;}
   .bbar{display:flex;align-items:center;gap:7px;padding:9px 13px;border-bottom:1px solid var(--line);background:var(--canvas);}
   .bbar .bd{width:10px;height:10px;border-radius:50%;}.bbar .bd.r{background:#ff5f57;}.bbar .bd.y{background:#febc2e;}.bbar .bd.g{background:#28c840;}
-  .bbar .burl{margin-left:10px;font-family:var(--mono);font-size:11px;color:var(--txt-2);background:var(--ghost);border-radius:8px;padding:4px 11px;}
+  .bbar .burl{margin-left:10px;font-family:var(--ui);font-size:11px;color:var(--txt-2);background:var(--ghost);border-radius:8px;padding:4px 11px;}
   .bcompare{flex:1;display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:18px;min-height:0;}
-  .bcol{display:flex;flex-direction:column;gap:8px;min-height:0;} .blab{font-family:var(--mono);font-size:10px;color:var(--txt-3);text-transform:uppercase;letter-spacing:.06em;} .blab.warm{color:var(--violet);}
+  .bcol{display:flex;flex-direction:column;gap:8px;min-height:0;} .blab{font-family:var(--ui);font-size:10px;color:var(--txt-3);text-transform:uppercase;letter-spacing:.06em;} .blab.warm{color:var(--violet);}
   .bshot{flex:1;border:1px solid var(--line);border-radius:12px;overflow:hidden;padding:22px;display:flex;flex-direction:column;justify-content:center;}
   .bshot.cold{background:#0e0e0f;} .bshot.cold .bh{color:#fff;font-size:26px;font-weight:700;} .bshot.cold .brow{display:flex;gap:7px;margin-top:16px;} .bshot.cold .brow span{width:54px;height:20px;border-radius:5px;background:#26262b;}
   .bshot.warm{background:#faf6f1;} .bshot.warm .bnav{display:flex;gap:12px;align-items:center;font-size:11px;color:#6b6b6b;margin-bottom:18px;} .bshot.warm .bnav b{color:#111;font-size:14px;margin-right:auto;} .bshot.warm .bnav i{font-style:normal;}
@@ -314,14 +310,14 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   @keyframes cblink{50%{opacity:0;}}
 
   /* subtle expandable action row (edit_file / playwright / vitest / mcp / upskill) — quiet, not dev-y */
-  .act{margin:-2px 0 16px;font-family:var(--mono);}
+  .act{margin:-2px 0 16px;font-family:var(--ui);}
   .acth{display:flex;align-items:center;gap:8px;width:100%;background:none;border:1px solid transparent;border-radius:9px;padding:7px 10px;font:inherit;font-size:12px;color:var(--txt-2);cursor:pointer;text-align:left;transition:background .15s;}
   .acth:hover{background:var(--ghost);}
   .acth .ic{width:18px;height:18px;border-radius:5px;display:grid;place-items:center;font-size:10px;color:#fff;background:var(--ink);flex:0 0 auto;}
   .acth .ic.vi{background:var(--violet);}.acth .ic.am{background:var(--amber);}.acth .ic.cy{background:var(--cyan);}.acth .ic.gh{background:#1f2328;}
   .acth .al{color:var(--ink);font-weight:500;} .acth .ab{margin-left:auto;color:var(--txt-3);} .acth .acx{color:var(--txt-3);transition:transform .15s;}
   .act.open .acth .acx{transform:rotate(90deg);}
-  .actb{display:none;margin:3px 0 0 28px;background:var(--ghost);border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-size:11.5px;line-height:1.65;white-space:pre-wrap;color:var(--txt-2);}
+  .actb{display:none;margin:3px 0 0 28px;background:var(--ghost);border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-family:var(--mono);font-size:11.5px;line-height:1.65;white-space:pre-wrap;color:var(--txt-2);}
   .act.open .actb{display:block;}
   .actb .add{color:#1a7f37;}.actb .del{color:#cf222e;}.actb .ok{color:#1a7f37;}.actb .p{color:#6b6b6b;}.actb .mut{color:var(--txt-3);}
 
@@ -347,7 +343,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   .dip .pgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;}
   .dip .pcell{border:1px solid var(--line);border-radius:9px;overflow:hidden;cursor:pointer;background:color-mix(in srgb,var(--canvas) 86%,transparent);transition:.12s;}
   .dip .pcell:hover{transform:translateY(-1px);} .dip .pcell.sel{box-shadow:0 0 0 2px #fff,0 0 0 4px var(--violet);}
-  .dip .pcell .ch{height:38px;} .dip .pcell .cl{font-family:var(--mono);font-size:10px;color:var(--txt-2);padding:5px 7px;background:var(--canvas);}
+  .dip .pcell .ch{height:38px;} .dip .pcell .cl{font-family:var(--ui);font-size:10px;color:var(--txt-2);padding:5px 7px;background:var(--canvas);}
   .dip .dfoot{display:flex;align-items:center;gap:10px;}
   .dip .dapply{font:inherit;font-size:12px;font-weight:600;color:#fff;background:var(--violet);border:none;border-radius:9999px;padding:8px 16px;cursor:pointer;}
   .dip .dapply:hover{filter:brightness(1.08);}
@@ -381,7 +377,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   .freezer:not(.open) .fzcard .ftext{width:0;min-width:0;flex:0 0 0;overflow:hidden;}
   .freezer.open .fzcard .ftext{opacity:1;transition:opacity .25s .15s;}
   .freezer .fzcard .fzt{font-size:12.5px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  .freezer .fzcard .fzm{margin-top:2px;font-family:var(--mono);font-size:10.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .freezer .fzcard .fzm{margin-top:2px;font-family:var(--ui);font-size:10.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .freezer.open .fzcard.match-hidden{display:none;}
   .freezer .fzcard.thawed{background:color-mix(in srgb,var(--rose) 12%,transparent);}
   .freezer .fzcard.thawed .snow{border-color:color-mix(in srgb,var(--rose) 45%,var(--line));background:color-mix(in srgb,var(--rose) 14%,#fff);color:#b91c4d;}
@@ -430,12 +426,12 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
       <div class="chatpane">
         <div class="thread" id="thread"><div class="inner" id="inner">
           <div class="daylabel">Today</div>
-          <div class="msg bot"><div class="lbl"><span class="tag">sliccy</span> · cone</div><div class="body"><p>Hey — I'm <b>sliccy</b>, your <b>cone</b>. Tell me what you want and I'll pull in <b>scoops</b> (sub-agents), open <b>sprinkles</b> (live panels), run tools, and ship it. Press <span class="kbd">→</span> to watch a real session.</p></div></div>
-        <div class="msg user"><div class="b">Our landing hero feels cold and dev-ish. Research it, redesign it warmer, run the tests, and open a PR. Also keep an eye on the support inbox.</div></div><div class="msg bot"><div class="lbl"><span class="tag ">sliccy</span> · cone</div><div class="body"><p>Here’s the plan:</p><ul class="plan"><li>Audit the current hero with a <b>scoop</b>.</li><li>Redesign warmer in a live <b>Hero studio</b> sprinkle.</li><li>Verify in the real browser, test, then open a PR.</li></ul></div></div><div class="msg deleg" id="dlg-researcher" style="--c: #06b6d4;"><span class="darrow">→</span> feed_scoop <b style="color:#06b6d4">researcher</b> · audit <code>hero.tsx</code>, <code>tokens.css</code></div><div class="msg bot"><div class="lbl"><span class="tag cy">researcher</span> · result</div><div class="body"><p>Here’s the full audit. The current hero leads with a near-black canvas and a monospaced headline, which signals "developer tool" more than "product". The button row offers six equally-weighted actions, so nothing reads as the primary path, and the small mono body copy slips below a comfortable contrast ratio. My recommendation: a warm paper canvas, one large display headline, and a single high-contrast CTA — leaving the rest of the tokens intact so the change stays low-risk.</p></div></div><table class="ctable"><thead><tr><th>Element</th><th>Current</th><th>Proposed</th></tr></thead><tbody><tr><td>Canvas</td><td class="was"><code>#0e0e0f</code></td><td class="now"><code>#faf6f1</code></td></tr><tr><td>Headline</td><td class="was">mono · 28px</td><td class="now">Fraunces · 64px</td></tr><tr><td>Primary actions</td><td class="was">6 buttons</td><td class="now">1 pill CTA</td></tr><tr><td>Body contrast</td><td class="was">3.1 : 1</td><td class="now">5.2 : 1</td></tr></tbody></table><div class="msg deleg" id="dlg-designer" style="--c: #8b5cf6;"><span class="darrow">→</span> feed_scoop <b style="color:#8b5cf6">designer</b> · warm hero from the findings</div><div class="msg bot"><div class="lbl"><span class="tag vi">designer</span> · result</div><div class="body"><p>Warmed it — paper <code>#faf6f1</code>, a display headline, and one soft CTA.</p></div></div><div class="act"><button class="acth"><span class="ic vi">✎</span> <span class="al">edit_file · <a class="vlink" data-file="fcss" data-kind="css">hero.css</a></span> <span class="ab">4 changes</span> <span class="acx">▸</span></button><div class="actb"><span class="del">- background: #0e0e0f;</span>
+          <div class="msg bot"><div class="body"><p>Hey — I'm <b>sliccy</b>, your <b>cone</b>. Tell me what you want and I'll pull in <b>scoops</b> (sub-agents), open <b>sprinkles</b> (live panels), run tools, and ship it. Press <span class="kbd">→</span> to watch a real session.</p></div></div>
+        <div class="msg user"><div class="b">Our landing hero feels cold and dev-ish. Research it, redesign it warmer, run the tests, and open a PR. Also keep an eye on the support inbox.</div></div><div class="msg bot"><div class="body"><p>Here’s the plan:</p><ul class="plan"><li>Audit the current hero with a <b>scoop</b>.</li><li>Redesign warmer in a live <b>Hero studio</b> sprinkle.</li><li>Verify in the real browser, test, then open a PR.</li></ul></div></div><div class="msg deleg" id="dlg-researcher" style="--c: #06b6d4;"><span class="darrow">→</span> feed_scoop <b style="color:#06b6d4">researcher</b> · audit <code>hero.tsx</code>, <code>tokens.css</code></div><div class="msg bot"><div class="body"><p>Here’s the full audit. The current hero leads with a near-black canvas and a monospaced headline, which signals "developer tool" more than "product". The button row offers six equally-weighted actions, so nothing reads as the primary path, and the small mono body copy slips below a comfortable contrast ratio. My recommendation: a warm paper canvas, one large display headline, and a single high-contrast CTA — leaving the rest of the tokens intact so the change stays low-risk.</p></div></div><table class="ctable"><thead><tr><th>Element</th><th>Current</th><th>Proposed</th></tr></thead><tbody><tr><td>Canvas</td><td class="was"><code>#0e0e0f</code></td><td class="now"><code>#faf6f1</code></td></tr><tr><td>Headline</td><td class="was">mono · 28px</td><td class="now">Fraunces · 64px</td></tr><tr><td>Primary actions</td><td class="was">6 buttons</td><td class="now">1 pill CTA</td></tr><tr><td>Body contrast</td><td class="was">3.1 : 1</td><td class="now">5.2 : 1</td></tr></tbody></table><div class="msg deleg" id="dlg-designer" style="--c: #8b5cf6;"><span class="darrow">→</span> feed_scoop <b style="color:#8b5cf6">designer</b> · warm hero from the findings</div><div class="msg bot"><div class="body"><p>Warmed it — paper <code>#faf6f1</code>, a display headline, and one soft CTA.</p></div></div><div class="act"><button class="acth"><span class="ic vi">✎</span> <span class="al">edit_file · <a class="vlink" data-file="fcss" data-kind="css">hero.css</a></span> <span class="ab">4 changes</span> <span class="acx">▸</span></button><div class="actb"><span class="del">- background: #0e0e0f;</span>
 <span class="add">+ background: #faf6f1;</span>
 <span class="del">- font-family: ui-monospace;</span>
 <span class="add">+ font-family: Fraunces, serif;</span>
-<span class="ok">✓ live-reloaded at /preview/hero</span></div></div><div class="msg deleg" id="dlg-hero" style="--c: #8b5cf6;"><span class="darrow">✦</span> <b style="color:#8b5cf6">designer</b> opened <b>Hero studio</b> · interactive sprinkle</div><div class="dip" style="--c: #f59e0b;"><canvas class="sprk" width="1264" height="546"></canvas><div class="dh"><span class="sg">✦</span> <span class="nm">palette.shtml</span> <span class="tag">sprinkle · dip</span></div><div class="dbody"><p class="dprompt">Tune the hero’s <b>canvas</b> &amp; <b>accent</b>, then apply:</p><div class="pgrid" data-grp="canvas"><div class="pcell sel" data-c="#faf6f1" data-l="paper"><div class="ch" style="background:#faf6f1"></div><div class="cl">paper</div></div><div class="pcell" data-c="#fff7ed" data-l="cream"><div class="ch" style="background:#fff7ed"></div><div class="cl">cream</div></div><div class="pcell" data-c="#f5f3ff" data-l="lilac"><div class="ch" style="background:#f5f3ff"></div><div class="cl">lilac</div></div><div class="pcell" data-c="#fef2f2" data-l="blush"><div class="ch" style="background:#fef2f2"></div><div class="cl">blush</div></div></div><div class="pgrid" data-grp="accent" style="margin-top:-2px"><div class="pcell" data-c="#8b5cf6" data-l="violet"><div class="ch" style="background:#8b5cf6"></div><div class="cl">violet</div></div><div class="pcell" data-c="#f43f5e" data-l="rose"><div class="ch" style="background:#f43f5e"></div><div class="cl">rose</div></div><div class="pcell" data-c="#06b6d4" data-l="cyan"><div class="ch" style="background:#06b6d4"></div><div class="cl">cyan</div></div><div class="pcell sel" data-c="#ef7000" data-l="cone"><div class="ch" style="background:#ef7000"></div><div class="cl">cone</div></div></div><div class="dfoot"><button class="dapply">Apply to hero →</button><span class="dnote">blush · cyan</span></div></div></div><div class="act"><button class="acth"><span class="ic ">◳</span> <span class="al">bash · playwright screenshot</span> <span class="ab">2 shots</span> <span class="acx">▸</span></button><div class="actb"><span class="p">❯</span> playwright screenshot --selector .hero before.png
+<span class="ok">✓ live-reloaded at /preview/hero</span></div></div><div class="msg deleg" id="dlg-hero" style="--c: #8b5cf6;"><span class="darrow">✦</span> <b style="color:#8b5cf6">designer</b> opened <b>Hero studio</b> · interactive sprinkle</div><div class="dip" style="--c: #f59e0b;"><canvas class="sprk" width="1264" height="546"></canvas><div class="dh"><span class="sg">✦</span> <span class="nm">palette.shtml</span> <span class="tag">sprinkle · dip</span></div><div class="dbody"><p class="dprompt">Tune the hero’s <b>canvas</b> &amp; <b>accent</b>, then apply:</p><div class="pgrid" data-grp="canvas"><div class="pcell sel" data-c="#faf6f1" data-l="paper"><div class="ch" style="background:#faf6f1"></div><div class="cl">paper</div></div><div class="pcell" data-c="#fff7ed" data-l="cream"><div class="ch" style="background:#fff7ed"></div><div class="cl">cream</div></div><div class="pcell" data-c="#f5f3ff" data-l="lilac"><div class="ch" style="background:#f5f3ff"></div><div class="cl">lilac</div></div><div class="pcell" data-c="#fef2f2" data-l="blush"><div class="ch" style="background:#fef2f2"></div><div class="cl">blush</div></div></div><div class="pgrid" data-grp="accent" style="margin-top:-2px"><div class="pcell" data-c="#8b5cf6" data-l="violet"><div class="ch" style="background:#8b5cf6"></div><div class="cl">violet</div></div><div class="pcell" data-c="#f43f5e" data-l="rose"><div class="ch" style="background:#f43f5e"></div><div class="cl">rose</div></div><div class="pcell" data-c="#06b6d4" data-l="cyan"><div class="ch" style="background:#06b6d4"></div><div class="cl">cyan</div></div><div class="pcell sel" data-c="#ef7000" data-l="cone"><div class="ch" style="background:#ef7000"></div><div class="cl">cone</div></div></div><div class="dfoot"><button class="dapply">Apply to hero →</button><span class="dnote">blush · cyan</span></div></div></div><div class="act"><button class="acth"><span class="ic ">◳</span> <span class="al">Use Computer · playwright screenshot</span> <span class="ab">2 shots</span> <span class="acx">▸</span></button><div class="actb"><span class="p">❯</span> playwright screenshot --selector .hero before.png
 <span class="p">❯</span> playwright screenshot --selector .hero after.png
 <span class="ok">✓ DPR normalized → see the Browser panel</span></div></div><div class="msg deleg" id="dlg-tester" style="--c: #f59e0b;"><span class="darrow">→</span> feed_scoop <b style="color:#f59e0b">tester</b> · vitest + contrast check</div><div class="act"><button class="acth"><span class="ic am">✓</span> <span class="al">tester · vitest</span> <span class="ab">3 passed</span> <span class="acx">▸</span></button><div class="actb"><span class="p">❯</span> npm test -- hero
 <span class="ok">✓ hero renders warm canvas</span>
@@ -444,9 +440,9 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
 <span class="mut">0 failed · 1.2s</span></div></div><div class="act"><button class="acth"><span class="ic gh">⎇</span> <span class="al">git · commit + push</span> <span class="ab">warm-hero</span> <span class="acx">▸</span></button><div class="actb"><span class="p">❯</span> git checkout -b warm-hero
 <span class="p">❯</span> git commit -am "feat(hero): warm redesign"
 <span class="ok">[warm-hero 9f2a1c] 2 files changed, +38 −21</span>
-<span class="p">❯</span> git push -u origin warm-hero</div></div><div class="prcard"><div class="ph"><span class="gi">⎇</span><span class="pt">feat(hero): warm redesign</span><span class="pn">#128</span><span class="open">Open</span></div><div class="pmeta"><span>warm-hero → main</span><span><b>2</b> files</span><span class="add">+38</span><span class="del">−21</span><span>checks <b style="color:#1a7f37">✓ passing</b></span></div></div><div class="msg bot"><div class="lbl"><span class="tag ">sliccy</span> · cone</div><div class="body"><p>Triaging that webhook with a quick one-shot scoop…</p></div></div><div class="act"><button class="acth"><span class="ic ">◈</span> <span class="al">mcp · linear createIssue</span> <span class="ab">LIN-482</span> <span class="acx">▸</span></button><div class="actb"><span class="p">❯</span> mcp invoke linear createIssue --title "CTA contrast on mobile"
-<span class="ok">✓ LIN-482 created · linked to PR #128</span></div></div><div class="msg bot"><div class="lbl"><span class="tag cy">triage</span> · result</div><div class="body"><p>Filed <code>LIN-482</code> via the Linear <b>MCP</b> server and linked it to PR #128.</p></div></div><div class="act"><button class="acth"><span class="ic ">✦</span> <span class="al">upskill · brand-voice</span> <span class="ab">installed</span> <span class="acx">▸</span></button><div class="actb"><span class="p">❯</span> upskill https://github.com/acme/brand-voice
-<span class="ok">✓ installed skill → /workspace/skills/</span></div></div><div class="msg bot"><div class="lbl"><span class="tag ">sliccy</span> · cone</div><div class="body"><p>Picked up a new <b>skill</b> — <code>brand-voice</code> — now available to every scoop.</p></div></div><div class="msg bot"><div class="lbl"><span class="tag ">sliccy</span> · cone</div><div class="body"><p>This session is mirrored over the <b>tray</b>: a teammate joined via <b>Cherry</b> on acme.com, and I can <b>teleport</b> into their tab when I need to.</p></div></div><div class="msg bot"><div class="lbl"><span class="tag ">sliccy</span> · cone</div><div class="body"><p>All wrapped up:</p><ul class="check"><li><span class="ck cy">✓</span> Audited the cold hero (researcher scoop)</li><li><span class="ck vi">✓</span> Redesigned in a live sprinkle (designer scoop)</li><li><span class="ck">✓</span> Verified before/after in the browser</li><li><span class="ck am">✓</span> Tests green (tester scoop)</li><li><span class="ck">✓</span> PR #128 opened + LIN-482 filed via MCP</li><li><span class="ck r">✓</span> Support lick triaged by a one-shot scoop</li></ul></div></div></div></div>
+<span class="p">❯</span> git push -u origin warm-hero</div></div><div class="prcard"><div class="ph"><span class="gi">⎇</span><span class="pt">feat(hero): warm redesign</span><span class="pn">#128</span><span class="open">Open</span></div><div class="pmeta"><span>warm-hero → main</span><span><b>2</b> files</span><span class="add">+38</span><span class="del">−21</span><span>checks <b style="color:#1a7f37">✓ passing</b></span></div></div><div class="msg bot"><div class="body"><p>Triaging that webhook with a quick one-shot scoop…</p></div></div><div class="act"><button class="acth"><span class="ic ">◈</span> <span class="al">mcp · linear createIssue</span> <span class="ab">LIN-482</span> <span class="acx">▸</span></button><div class="actb"><span class="p">❯</span> mcp invoke linear createIssue --title "CTA contrast on mobile"
+<span class="ok">✓ LIN-482 created · linked to PR #128</span></div></div><div class="msg bot"><div class="body"><p>Filed <code>LIN-482</code> via the Linear <b>MCP</b> server and linked it to PR #128.</p></div></div><div class="act"><button class="acth"><span class="ic ">✦</span> <span class="al">upskill · brand-voice</span> <span class="ab">installed</span> <span class="acx">▸</span></button><div class="actb"><span class="p">❯</span> upskill https://github.com/acme/brand-voice
+<span class="ok">✓ installed skill → /workspace/skills/</span></div></div><div class="msg bot"><div class="body"><p>Picked up a new <b>skill</b> — <code>brand-voice</code> — now available to every scoop.</p></div></div><div class="msg bot"><div class="body"><p>This session is mirrored over the <b>tray</b>: a teammate joined via <b>Cherry</b> on acme.com, and I can <b>teleport</b> into their tab when I need to.</p></div></div><div class="msg bot"><div class="body"><p>All wrapped up:</p><ul class="check"><li><span class="ck cy">✓</span> Audited the cold hero (researcher scoop)</li><li><span class="ck vi">✓</span> Redesigned in a live sprinkle (designer scoop)</li><li><span class="ck">✓</span> Verified before/after in the browser</li><li><span class="ck am">✓</span> Tests green (tester scoop)</li><li><span class="ck">✓</span> PR #128 opened + LIN-482 filed via MCP</li><li><span class="ck r">✓</span> Support lick triaged by a one-shot scoop</li></ul></div></div></div></div>
         <div class="composer"><div class="composer-inner">
           <div class="inputcard">
             <textarea class="ta" id="ta" rows="1" placeholder="Ask sliccy, or describe a change…"></textarea>
@@ -458,7 +454,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
           </div>
           <div class="meta">
             <button class="ctl msel"><span class="ic">✦</span> Opus 4.8 <span class="cx">▾</span></button>
-            <button class="ctl tsel x" id="tsel"><span class="gauge"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span> <span id="tlabel">xhigh</span> <span class="cx">▾</span></button>
+            <button class="ctl tsel x" id="tsel"><svg class="brain" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 18V5"/><path d="M15 13a4.17 4.17 0 0 1-3-4 4.17 4.17 0 0 1-3 4"/><path d="M17.598 6.5A3 3 0 1 0 12 5a3 3 0 1 0-5.598 1.5"/><path d="M17.997 5.125a4 4 0 0 1 2.526 5.77"/><path d="M18 18a4 4 0 0 0 2-7.464"/><path d="M19.967 17.483A4 4 0 1 1 12 18a4 4 0 1 1-7.967-.517"/><path d="M6 18a4 4 0 0 1-2-7.464"/><path d="M6.003 5.125a4 4 0 0 0-2.526 5.77"/></svg> <span id="tlabel">bombastica</span> <span class="cx">▾</span></button>
             <div class="mspacer"></div>
             <span class="hint"><span class="kbd">⏎</span> send <span class="sep"></span> <span class="kbd">⇧⏎</span> newline <span class="sep"></span> review before shipping</span>
           </div>
@@ -577,15 +573,15 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
     function buildScoopStub(k){
       const color=SCOOP_COLORS[k]||'#8b5cf6';
       return '<div class="daylabel">'+k+' scoop</div>'
-        +'<div class="msg bot"><div class="lbl"><span class="tag" style="background:'+color+'">'+k+'</span> · scoop</div>'
+        +'<div class="msg bot">'
         +'<div class="body"><p>Isolated <b>'+k+'</b> scoop — its own sandboxed VFS and conversation. Switch back to <b>sliccy · cone</b> to see the orchestration.</p></div></div>';
     }
     function buildFrozenStub(slug){
       const card=document.querySelector('.freezer .fzcard[data-s="'+slug+'"]');
       const title=card?card.querySelector('.fzt').textContent.trim():slug;
       const meta=card?card.querySelector('.fzm').textContent.trim():'frozen session';
-      return '<div class="daylabel">'+meta+'</div>'
-        +'<div class="msg bot"><div class="lbl"><span class="tag">sliccy</span> · cone · frozen</div>'
+      return '<div class="daylabel">'+meta+' · frozen</div>'
+        +'<div class="msg bot">'
         +'<div class="body"><p>Thawed: <b>'+title.replace(/^❄\s*/,'')+'</b>. This past session is parked in the freezer — its chat history would resume here.</p></div></div>';
     }
     function switchContext(id){
@@ -706,10 +702,10 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
       if(tab.classList.contains('on')) select('files');
     }));
 
-    // thinking cycle
-    const levels=[['low',1],['medium',2],['high',3],['xhigh',4]]; let li=3;
-    const tsel=document.getElementById('tsel'), tlabel=document.getElementById('tlabel'), bars=tsel.querySelectorAll('.gauge i');
-    tsel.addEventListener('click',()=>{li=(li+1)%levels.length;const[lab,n]=levels[li];tlabel.textContent=lab;bars.forEach((b,i)=>b.classList.toggle('on',i<n));tsel.classList.toggle('x',lab==='xhigh');});
+    // thinking cycle — gelateria sizing
+    const levels=['bambino','piccolo','grande','bombastica']; let li=3;
+    const tsel=document.getElementById('tsel'), tlabel=document.getElementById('tlabel');
+    tsel.addEventListener('click',()=>{li=(li+1)%levels.length;const lab=levels[li];tlabel.textContent=lab;tsel.classList.toggle('x',lab==='bombastica');});
 
     // hero studio controls
     const hero=document.getElementById('hero'),hh=document.getElementById('hh'),hc=document.getElementById('hc');
@@ -723,7 +719,6 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
     const p=new URLSearchParams(location.search).get('t'); if(p) select(p);
   </script>
 
-  <div class="licks" id="licks"><div class="lick"><div class="lh"><span class="bell">🔔</span> lick · support webhook <span class="lk">event</span></div><div class="lb"><b>New message:</b> "Love the new hero — but the CTA is a bit hard to read on mobile."</div></div><div class="lick"><div class="lh"><span class="bell">🔔</span> lick · cron · 09:00 <span class="lk">event</span></div><div class="lb">Daily digest: 3 new sign-ups overnight, 0 errors.</div></div></div>
   <div class="demobar">
     <button class="dbtn" id="dPrev" title="Back (←)">←</button>
     <div class="dcap">
@@ -1190,7 +1185,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
 
     // ---- chat / panel builders ----
     const userMsg=t=>add(el('<div class="msg user"><div class="b">'+t+'</div></div>'));
-    const botMsg=(label,cls,sub,html,speed)=>{const n=add(el('<div class="msg bot"><div class="lbl"><span class="tag '+cls+'">'+label+'</span> · '+sub+'</div><div class="body">'+html+'</div></div>'));typeNode(n.querySelector('.body'),speed);return n;};
+    const botMsg=(label,cls,sub,html,speed)=>{const n=add(el('<div class="msg bot"><div class="body">'+html+'</div></div>'));typeNode(n.querySelector('.body'),speed);return n;};
     const deleg=(id,color,html)=>{const n=add(el('<div class="msg deleg" id="'+id+'">'+html+'</div>'));n.style.setProperty('--c',color);return n;};
     // deferred finishers — if you advance before a typing animation completes, finish it now (don't lose it)
     let deferred=[];
@@ -1237,7 +1232,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
       +'</div>'
       +'<div class="dfoot"><button class="dapply">Apply to hero →</button><span class="dnote">paper · violet</span></div></div></div>'));
       d.style.setProperty('--c',color);sprinkleField(d);return d;};
-    const lick=(kind,html)=>byId('licks').appendChild(el('<div class="lick"><div class="lh"><span class="bell">🔔</span> lick · '+kind+' <span class="lk">event</span></div><div class="lb">'+html+'</div></div>'));
+    const lick=(kind,html)=>add(el('<div class="lick"><div class="lh"><span class="bell">🔔</span> lick · '+kind+' <span class="lk">event</span></div><div class="lb">'+html+'</div></div>'));
     const ephemeral=k=>{ if(scoopEl(k))return scoopEl(k); const b=el('<button class="scoop ephemeral" data-k="'+k+'"><span class="eyes"><span class="eye"></span><span class="eye"></span></span> '+k+'</button>'); b.style.setProperty('--h',GREEN); document.querySelector('.switcher').appendChild(b); if(typeof window.__sliccReflowSwitcher==='function')window.__sliccReflowSwitcher(); return b; };
     const addMemory=()=>byId('membody').insertBefore(el('<div class="memrow fresh"><div class="mt"><b>palette preference: warm paper</b><span class="mtag us">user</span></div><div class="ms">Prefers paper #faf6f1 canvas + violet accent + single pill CTA for marketing pages.</div></div>'),byId('membody').firstChild);
     const setTerm=h=>byId('termbody').innerHTML=h;
@@ -1319,7 +1314,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
 
       { chip:'browser', text:'The <b>browser is the OS</b> — sliccy drives the real page over CDP. Screenshots show before vs after.', fn:()=>{
         select('browser'); litDock('browser');
-        actCard('','◳','bash · playwright screenshot','2 shots','<span class="p">❯</span> playwright screenshot --selector .hero before.png\n<span class="p">❯</span> playwright screenshot --selector .hero after.png\n<span class="ok">✓ DPR normalized → see the Browser panel</span>'); }},
+        actCard('','◳','Use Computer · playwright screenshot','2 shots','<span class="p">❯</span> playwright screenshot --selector .hero before.png\n<span class="p">❯</span> playwright screenshot --selector .hero after.png\n<span class="ok">✓ DPR normalized → see the Browser panel</span>'); }},
 
       { chip:'scoop', text:'A <b>tester scoop</b> runs the suite — shown as a quiet line; expand it for the run.', fn:()=>{
         showScoop('tester');
@@ -1342,7 +1337,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
         lick('cron · 09:00','Daily digest: 3 new sign-ups overnight, 0 errors.');
         ephemeral('triage');
         coneThink('<p>Triaging that webhook with a quick one-shot scoop…</p>');
-        after(160,()=>{ const src=byId('licks').firstElementChild||scoopEl('cone'); if(AN)Dust.stream(src,scoopEl('triage'),GREEN,{arrive:()=>litEl(scoopEl('triage'))}); activate('triage'); }); }},
+        after(160,()=>{ const src=inner.querySelector('.lick:last-of-type')||scoopEl('cone'); if(AN)Dust.stream(src,scoopEl('triage'),GREEN,{arrive:()=>litEl(scoopEl('triage'))}); activate('triage'); }); }},
 
       { chip:'mcp', text:'Through <b>MCP</b>, sliccy files a follow-up issue — a quiet line, expand for the call.', fn:()=>{
         actCard('','◈','mcp · linear createIssue','LIN-482','<span class="p">❯</span> mcp invoke linear createIssue --title "CTA contrast on mobile"\n<span class="ok">✓ LIN-482 created · linked to PR #128</span>');
@@ -1394,7 +1389,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
       document.querySelectorAll('.scoop.ephemeral').forEach(s=>s.remove());
       document.querySelectorAll('.scoop').forEach(s=>{s.classList.remove('lit','src');s.classList.toggle('active',s.dataset.k==='cone'); if(s.dataset.k!=='cone')s.style.display='none';});
       document.querySelectorAll('.dock .di').forEach(b=>b.classList.remove('lit'));
-      byId('licks').innerHTML=''; byId('floattext').textContent='CLI float'; byId('floatbar').classList.remove('linked');
+      byId('floattext').textContent='CLI float'; byId('floatbar').classList.remove('linked');
       if (window.__sliccFreezer) window.__sliccFreezer.close();
       document.querySelectorAll('.freezer .fzcard.thawed').forEach(c=>c.classList.remove('thawed'));
       if (typeof window.__sliccReflowSwitcher==='function') window.__sliccReflowSwitcher();
