@@ -50,38 +50,45 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   body.dark .palcell .ch{filter:brightness(.55) saturate(.85);}
   /* user bubble: --deep flips to near-white in dark, so dark text keeps the iMessage-style inverted look readable */
   body.dark .msg.user .b{color:#0a0a0a;}
-  /* theme toggle button in nav */
-  .themetgl{font:inherit;font-size:14px;line-height:1;width:30px;height:30px;border-radius:9999px;background:var(--ghost);color:var(--ink);border:1px solid var(--line);cursor:pointer;display:grid;place-items:center;flex:0 0 auto;}
+  /* theme toggle button in nav (height matches the shared --ctl-h control row) */
+  .themetgl{font:inherit;font-size:14px;line-height:1;width:var(--ctl-h,30px);height:var(--ctl-h,30px);border-radius:9999px;background:var(--ghost);color:var(--ink);border:1px solid var(--line);cursor:pointer;display:grid;place-items:center;flex:0 0 auto;}
   .themetgl:hover{background:color-mix(in srgb,var(--ink) 8%,var(--ghost));}
   *{box-sizing:border-box;} html,body{height:100%;}
   body{margin:0;font-family:var(--ui);color:var(--ink);background:var(--bg);-webkit-font-smoothing:antialiased;overflow:hidden;}
   .app{height:100vh;display:flex;flex-direction:column;background:var(--bg);}
 
-  :root{--barh:52px;}
-  .nav{display:flex;align-items:center;gap:14px;padding:0 24px;min-height:var(--barh);background:color-mix(in srgb,var(--ctx) 12%,color-mix(in srgb,var(--canvas) 68%,transparent));backdrop-filter:blur(18px) saturate(1.4);-webkit-backdrop-filter:blur(18px) saturate(1.4);border-bottom:1px solid var(--line);flex:0 0 auto;z-index:4;}
-  .logo{font-weight:600;font-size:14px;letter-spacing:-.02em;flex:0 0 auto;} .logo .b{font-family:var(--ui);font-weight:500;font-size:12px;margin-left:7px;background:var(--rainbow);-webkit-background-clip:text;background-clip:text;color:transparent;}
+  /* Wave 11d: header height = collapsed freezer rail width (44px); all header
+     children share a single control height (--ctl-h, 30px). */
+  :root{--barh:44px;--ctl-h:30px;}
+  .nav{display:flex;align-items:center;gap:14px;padding:0 24px;height:var(--barh);min-height:var(--barh);background:color-mix(in srgb,var(--ctx) 12%,color-mix(in srgb,var(--canvas) 68%,transparent));backdrop-filter:blur(18px) saturate(1.4);-webkit-backdrop-filter:blur(18px) saturate(1.4);border-bottom:1px solid var(--line);flex:0 0 auto;z-index:4;}
+  .logo{font-weight:600;font-size:14px;letter-spacing:-.02em;flex:0 0 auto;display:inline-flex;align-items:center;height:var(--ctl-h,30px);} .logo .b{font-family:var(--ui);font-weight:500;font-size:12px;margin-left:7px;background:var(--rainbow);-webkit-background-clip:text;background-clip:text;color:transparent;}
   .switcher{display:flex;gap:6px;margin-left:14px;flex-wrap:nowrap;min-width:0;overflow:hidden;}
   .switcher .scoop{flex:0 0 auto;}
   .scoop.hide{display:none;}
   .switcher-more{position:relative;flex:0 0 auto;}
-  .switcher-more .morebtn{display:none;font:inherit;font-size:13px;font-weight:600;color:var(--txt-2);background:transparent;border:1px solid var(--line);border-radius:9999px;padding:5px 11px;cursor:pointer;line-height:1;}
+  .switcher-more .morebtn{display:none;font:inherit;font-size:13px;font-weight:600;color:var(--txt-2);background:transparent;border:1px solid var(--line);border-radius:9999px;height:var(--ctl-h,30px);padding:0 11px;cursor:pointer;line-height:1;align-items:center;}
   .switcher-more .morebtn:hover{background:var(--ghost);color:var(--ink);}
-  .switcher-more.has-overflow .morebtn{display:inline-block;}
-  .switcher-more .pop{display:none;position:absolute;top:calc(100% + 6px);left:0;min-width:160px;background:var(--canvas);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow-pane);padding:5px;z-index:20;flex-direction:column;gap:2px;}
+  .switcher-more.has-overflow .morebtn{display:inline-flex;}
+  /* Wave 11d: vertical overflow popup — same <slicc-pill> instances as the header,
+     stacked column-wise. Pills inside stretch to fill the popup width. */
+  .switcher-more .pop{display:none;position:absolute;top:calc(100% + 6px);left:0;min-width:180px;background:var(--canvas);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow-pane);padding:6px;z-index:20;flex-direction:column;gap:4px;}
   .switcher-more.open .pop{display:flex;}
-  .switcher-more .pop button{font:inherit;font-size:13px;color:var(--ink);background:transparent;border:none;border-radius:7px;padding:6px 10px;text-align:left;cursor:pointer;display:flex;align-items:center;gap:7px;}
-  .switcher-more .pop button:hover{background:var(--ghost);}
-  .switcher-more .pop button::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--h,var(--txt-3));}
+  .switcher-more .pop slicc-pill.scoop{display:block;width:100%;--pill-w:100%;}
   .scoop{--h:var(--rose);display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:500;color:var(--txt-2);background:transparent;border:1px solid var(--line);border-radius:9999px;padding:5px 13px;cursor:pointer;}
   .scoop[data-k=cone]{--h:var(--rose);}.scoop[data-k=researcher]{--h:var(--cyan);}.scoop[data-k=designer]{--h:var(--violet);}.scoop[data-k=tester]{--h:var(--amber);}
   .scoop:not(.active)::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--h);}
   .scoop.active{background:var(--h);color:#fff;border-color:var(--h);}
   .scoop .eyes{display:inline-flex;gap:3px;} .eye{width:9px;height:9px;border-radius:50%;background:#fff;border:1.3px solid #000;position:relative;display:inline-block;}
   .scoop.active .eye{border-color:#fff;}
-  /* slicc-pill renders its own pill in shadow DOM — strip the legacy .scoop chrome on the host */
-  slicc-pill.scoop{display:inline-block;padding:0;border:none;background:transparent;border-radius:9999px;--pill-w:auto;line-height:1;}
+  /* slicc-pill renders its own pill in shadow DOM — strip the legacy .scoop chrome on the host.
+     Wave 11d: --pill-w fixed (equal width); the icon part is shrunk via ::part(icon) so the
+     pill's total height (icon + 1.5px border × 2) matches the other header controls (--ctl-h).
+     Focus rings and any dashed-border treatment are dropped per Wave 11d. */
+  slicc-pill.scoop{display:inline-block;padding:0;border:none;background:transparent;border-radius:9999px;--pill-w:140px;line-height:1;vertical-align:middle;}
   slicc-pill.scoop::before{content:none;}
-  slicc-pill.scoop.ephemeral::part(pill){border-style:dashed;}
+  slicc-pill.scoop::part(icon){width:27px;height:27px;}
+  slicc-pill.scoop::part(pill){outline:none;}
+  slicc-pill.scoop:focus,slicc-pill.scoop:focus-visible{outline:none;}
   slicc-pill.scoop.lit::part(pill){box-shadow:0 0 0 3px color-mix(in srgb,var(--h) 45%,transparent);}
   /* slicc-add-menu replaces the legacy "+" iconbtn — fills the toolbar so its
      searchbox can slide in next to the +/×. Wave 11e: the results panel is absolutely
@@ -99,7 +106,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   body.dark .composer slicc-add-menu:not([data-open])::part(trigger):hover{background:var(--ghost) !important;color:var(--ink) !important;}
   .eye::after{content:"";position:absolute;width:42%;height:42%;border-radius:50%;background:#000;left:50%;top:55%;transform:translate(calc(-50% + var(--px,0px)),calc(-50% + var(--py,0px)));}
   .scoop.active .eye::after{background:#fff;}
-  .nav .spacer{flex:1;} .me{width:30px;height:30px;border-radius:9999px;background:var(--rainbow);color:#fff;font-size:11px;font-weight:600;display:grid;place-items:center;}
+  .nav .spacer{flex:1;} .me{width:var(--ctl-h,30px);height:var(--ctl-h,30px);border-radius:9999px;background:var(--rainbow);color:#fff;font-size:11px;font-weight:600;display:grid;place-items:center;flex:0 0 auto;}
 
   /* shell: chat | workbench | dock */
   .shell{flex:1;display:flex;padding:0;min-height:0;}
@@ -253,7 +260,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
 
   /* ===== walkthrough additions ===== */
   /* runtime float pill */
-  .floatbar{display:inline-flex;align-items:center;gap:7px;font-family:var(--ui);font-size:11px;color:var(--txt-2);border:1px solid var(--line);background:var(--canvas);border-radius:9999px;padding:5px 12px;margin-right:10px;white-space:nowrap;}
+  .floatbar{display:inline-flex;align-items:center;gap:7px;font-family:var(--ui);font-size:11px;color:var(--txt-2);border:1px solid var(--line);background:var(--canvas);border-radius:9999px;height:var(--ctl-h,30px);padding:0 12px;margin-right:10px;white-space:nowrap;flex:0 0 auto;}
   .floatbar .fdot{width:7px;height:7px;border-radius:50%;background:#22c55e;box-shadow:0 0 0 3px color-mix(in srgb,#22c55e 22%,transparent);}
   .floatbar.linked{border-color:color-mix(in srgb,var(--rose) 40%,var(--line));}
 
@@ -298,8 +305,8 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   .check{list-style:none;margin:6px 0 0;padding:0;} .check li{display:flex;align-items:center;gap:9px;font-size:13.5px;margin:6px 0;}
   .check li .ck{width:18px;height:18px;border-radius:50%;background:#1a7f37;color:#fff;display:grid;place-items:center;font-size:11px;flex:0 0 auto;}
   .check li .ck.r{background:var(--rose);}.check li .ck.cy{background:var(--cyan);}.check li .ck.vi{background:var(--violet);}.check li .ck.am{background:var(--amber);}
-  /* ephemeral / one-shot scoop chip */
-  .scoop.ephemeral{border-style:dashed;}
+  /* Wave 11d: ephemeral / one-shot scoop chip — no dashed outline anymore;
+     the host class is kept as a marker for cleanup in the walkthrough reset. */
   /* browser surface */
   .surface.browser.on{flex-direction:column;background:#fafafa;}
   .bbar{display:flex;align-items:center;gap:7px;padding:9px 13px;border-bottom:1px solid var(--line);background:var(--canvas);}
@@ -440,11 +447,11 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
     <div class="nav">
       <span class="logo">sliccy</span>
       <div class="switcher" id="switcher">
-        <slicc-pill class="scoop active" data-k="cone" type="cone" color="#f43f5e" active>sliccy · cone</slicc-pill>
-        <slicc-pill class="scoop" data-k="researcher" type="scoop" color="#06b6d4">researcher</slicc-pill>
-        <slicc-pill class="scoop" data-k="designer" type="scoop" color="#8b5cf6">designer</slicc-pill>
-        <slicc-pill class="scoop" data-k="tester" type="scoop" color="#f59e0b">tester</slicc-pill>
-      <slicc-pill class="scoop ephemeral" data-k="triage" type="scoop" color="#10b981" style="--h: #10b981;">triage</slicc-pill></div>
+        <slicc-pill class="scoop active" data-k="cone" type="cone" color="#f43f5e" eyes="open" label="Sliccy" active></slicc-pill>
+        <slicc-pill class="scoop" data-k="researcher" type="scoop" color="#06b6d4" eyes="none" label="researcher"></slicc-pill>
+        <slicc-pill class="scoop" data-k="designer" type="scoop" color="#8b5cf6" eyes="none" label="designer"></slicc-pill>
+        <slicc-pill class="scoop" data-k="tester" type="scoop" color="#f59e0b" eyes="dead" label="tester"></slicc-pill>
+      <slicc-pill class="scoop ephemeral" data-k="triage" type="scoop" color="#10b981" eyes="none" label="triage" style="--h: #10b981;"></slicc-pill></div>
       <div class="switcher-more" id="switcherMore"><button class="morebtn" id="moreBtn" title="More scoops" aria-haspopup="true" aria-expanded="false">⋯</button><div class="pop" id="morePop"></div></div>
       <div class="spacer"></div>
       <div class="floatbar linked" id="floatbar" title="Runtime float"><span class="fdot"></span> <span id="floattext">CLI · tray · 1 follower</span></div>
@@ -963,13 +970,23 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
         });
         wrap.classList.toggle('has-overflow', hidden.length>0);
         pop.innerHTML='';
+        // Wave 11d: vertical overflow popup uses the same <slicc-pill> instances as the
+        // header switcher so eye-state, color, and label stay consistent. Pills inside
+        // .pop stretch to full width via .switcher-more .pop slicc-pill.scoop CSS.
         hidden.forEach(c=>{
-          const item=document.createElement('button');
-          const label=(c.textContent||'').replace(/\s+/g,' ').trim() || c.dataset.k;
-          item.textContent=label;
+          const item=document.createElement('slicc-pill');
+          item.className='scoop';
           item.dataset.k=c.dataset.k;
+          const type=c.getAttribute('type')||'scoop';
+          const color=c.getAttribute('color')||SCOOP_COLORS[c.dataset.k]||'';
+          const eyes=c.getAttribute('eyes')||'none';
+          const label=c.getAttribute('label')||(c.textContent||'').replace(/\s+/g,' ').trim()||c.dataset.k;
+          item.setAttribute('type',type);
+          if(color)item.setAttribute('color',color);
+          item.setAttribute('eyes',eyes);
+          item.setAttribute('label',label);
           const hue=c.style.getPropertyValue('--h')||SCOOP_COLORS[c.dataset.k]||'';
-          if (hue) item.style.setProperty('--h',hue);
+          if(hue)item.style.setProperty('--h',hue);
           item.addEventListener('click',()=>{ wrap.classList.remove('open'); switchContext(c.dataset.k); });
           pop.appendChild(item);
         });
@@ -1556,7 +1573,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
       +'<div class="dfoot"><button class="dapply">Apply to hero →</button><span class="dnote">paper · violet</span></div></div></div>'));
       d.style.setProperty('--c',color);sprinkleField(d);return d;};
     const lick=(kind,html)=>add(el('<div class="lick"><div class="lh"><span class="bell">🔔</span> lick · '+kind+' <span class="lk">event</span></div><div class="lb">'+html+'</div></div>'));
-    const ephemeral=k=>{ if(scoopEl(k))return scoopEl(k); const b=el('<slicc-pill class="scoop ephemeral" data-k="'+k+'" type="scoop" color="'+GREEN+'">'+k+'</slicc-pill>'); b.style.setProperty('--h',GREEN); b.setAttribute('theme', document.body.classList.contains('dark') ? 'dark' : 'light'); document.querySelector('.switcher').appendChild(b); if(typeof window.__sliccReflowSwitcher==='function')window.__sliccReflowSwitcher(); return b; };
+    const ephemeral=k=>{ if(scoopEl(k))return scoopEl(k); const b=el('<slicc-pill class="scoop ephemeral" data-k="'+k+'" type="scoop" color="'+GREEN+'" eyes="none" label="'+k+'"></slicc-pill>'); b.style.setProperty('--h',GREEN); b.setAttribute('theme', document.body.classList.contains('dark') ? 'dark' : 'light'); document.querySelector('.switcher').appendChild(b); if(typeof window.__sliccReflowSwitcher==='function')window.__sliccReflowSwitcher(); return b; };
     const addMemory=()=>byId('membody').insertBefore(el('<div class="memrow fresh"><div class="mt"><b>palette preference: warm paper</b><span class="mtag us">user</span></div><div class="ms">Prefers paper #faf6f1 canvas + violet accent + single pill CTA for marketing pages.</div></div>'),byId('membody').firstChild);
     const setTerm=h=>byId('termbody').innerHTML=h;
     const setFile=kind=>{byId('fileview').innerHTML = kind==='css' ? FILE_CSS : FILE0;};
