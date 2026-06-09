@@ -281,6 +281,30 @@ describe('parseCliRuntimeFlags', () => {
     });
   });
 
+  // Parity with slicc-server (swift-server): the Electron-follower auto-attach
+  // flow is invoked as `node-server --electron <app> --join <url>`, and the
+  // launch-time joinUrl must flow into `/api/runtime-config.trayJoinUrl`
+  // (via `discoveredTrayJoinUrl = RUNTIME_FLAGS.joinUrl` in `src/index.ts`).
+  // This test locks the flag-parsing half of that contract so the join URL
+  // survives an explicit Electron launch combo and the Electron CDP port
+  // default (9223) is not clobbered.
+  it('parses --electron <app> --join <url> together for the follower auto-attach flow', () => {
+    expect(
+      parseCliRuntimeFlags([
+        '--electron',
+        '/Applications/Slack.app',
+        '--join',
+        'https://tray.example.com/base/join/tray-123.secret',
+      ])
+    ).toMatchObject({
+      electron: true,
+      electronApp: '/Applications/Slack.app',
+      cdpPort: DEFAULT_ELECTRON_ATTACH_CDP_PORT,
+      join: true,
+      joinUrl: 'https://tray.example.com/base/join/tray-123.secret',
+    });
+  });
+
   it('parses --log-level flag', () => {
     expect(parseCliRuntimeFlags(['--log-level=debug']).logLevel).toBe('debug');
     expect(parseCliRuntimeFlags(['--log-level=error']).logLevel).toBe('error');

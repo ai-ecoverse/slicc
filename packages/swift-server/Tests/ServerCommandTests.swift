@@ -75,6 +75,109 @@ final class ServerCommandTests: XCTestCase {
         XCTAssertEqual(config.joinURL?.absoluteString, "https://join.example/session")
     }
 
+    // Parity with node-server's `runtime-flags.ts`: `slicc-server --join <url>`
+    // must parse the URL as the option value and populate `config.joinUrl`,
+    // which `/api/runtime-config` surfaces as `trayJoinUrl` for the
+    // embedded Electron-overlay follower's auto-attach flow.
+    func testJoinFlagParsesUrlAsValue() throws {
+        let parsed = try ServerCommand.parseAsRoot([
+            "--electron", "--electron-app", "/Applications/Slack.app",
+            "--join", "https://tray.example.com/base/join/tray-123.secret"
+        ])
+        let command = try XCTUnwrap(parsed as? ServerCommand)
+        let config = ServerConfig.resolve(
+            from: command,
+            arguments: [
+                "slicc-server",
+                "--electron", "--electron-app", "/Applications/Slack.app",
+                "--join", "https://tray.example.com/base/join/tray-123.secret"
+            ]
+        )
+
+        XCTAssertTrue(config.electron)
+        XCTAssertTrue(config.join)
+        XCTAssertEqual(config.joinUrl, "https://tray.example.com/base/join/tray-123.secret")
+        XCTAssertEqual(
+            config.joinURL?.absoluteString,
+            "https://tray.example.com/base/join/tray-123.secret"
+        )
+    }
+
+    func testJoinFlagEqualsSyntaxParsesUrl() throws {
+        let parsed = try ServerCommand.parseAsRoot([
+            "--join=https://tray.example.com/base/join/tray-123.secret"
+        ])
+        let command = try XCTUnwrap(parsed as? ServerCommand)
+        let config = ServerConfig.resolve(
+            from: command,
+            arguments: [
+                "slicc-server",
+                "--join=https://tray.example.com/base/join/tray-123.secret"
+            ]
+        )
+
+        XCTAssertTrue(config.join)
+        XCTAssertEqual(config.joinUrl, "https://tray.example.com/base/join/tray-123.secret")
+    }
+
+    // End-to-end parity for the Electron-follower auto-attach launch flow:
+    // `slicc-server --electron <app> --join <url>` must (a) parse the join
+    // URL into `config.joinUrl` (covered above) and (b) hand the leader's
+    // browser a canonical `?tray=<encoded-join-url>` launch URL via
+    // `resolveBrowserLaunchURL`. `node-server` performs the equivalent
+    // assembly in `resolveCliBrowserLaunchUrl` (see `launch-url.test.ts`).
+    func testResolveBrowserLaunchURLBuildsCanonicalTrayUrlForJoinFlow() throws {
+        let parsed = try ServerCommand.parseAsRoot([
+            "--join", "https://tray.example.com/base/join/tray-123.secret"
+        ])
+        let command = try XCTUnwrap(parsed as? ServerCommand)
+        let config = ServerConfig.resolve(
+            from: command,
+            arguments: [
+                "slicc-server",
+                "--join", "https://tray.example.com/base/join/tray-123.secret"
+            ]
+        )
+
+        let launchURL = try ServerCommand.resolveBrowserLaunchURL(
+            serveOrigin: "http://localhost:5710",
+            config: config,
+            environment: [:]
+        )
+
+        XCTAssertEqual(
+            launchURL,
+            "http://localhost:5710?tray=https://tray.example.com/base/join/tray-123.secret"
+        )
+    }
+
+    // `--lead` and `--join` are mutually exclusive launch flows; the runtime
+    // must reject the combination at startup rather than silently picking
+    // one and confusing the follower auto-attach contract.
+    func testResolveBrowserLaunchURLRejectsLeadAndJoinTogether() throws {
+        let parsed = try ServerCommand.parseAsRoot([
+            "--lead-worker-base-url", "https://worker.example",
+            "--join", "https://tray.example.com/base/join/tray-123.secret"
+        ])
+        let command = try XCTUnwrap(parsed as? ServerCommand)
+        let config = ServerConfig.resolve(
+            from: command,
+            arguments: [
+                "slicc-server",
+                "--lead-worker-base-url", "https://worker.example",
+                "--join", "https://tray.example.com/base/join/tray-123.secret"
+            ]
+        )
+
+        XCTAssertThrowsError(
+            try ServerCommand.resolveBrowserLaunchURL(
+                serveOrigin: "http://localhost:5710",
+                config: config,
+                environment: [:]
+            )
+        )
+    }
+
     func testStaticRootIsCapturedInResolvedConfig() throws {
         let parsed = try ServerCommand.parseAsRoot(["--static-root", "/tmp/slicc/dist/ui"])
         let command = try XCTUnwrap(parsed as? ServerCommand)

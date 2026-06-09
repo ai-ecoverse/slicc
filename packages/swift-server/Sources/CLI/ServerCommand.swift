@@ -41,10 +41,15 @@ struct ServerCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Chrome profile name")
     var profile: String?
 
-    @Flag(name: .long, help: "Join mode")
-    var join: Bool = false
-
-    @Option(name: .long, help: "Join URL")
+    // Tray join URL. Accepts both `--join <url>` (parity with node-server's
+    // `runtime-flags.ts`) and the legacy `--join-url <url>` kebab-case form.
+    // The boolean "join mode" is fully derivable from `joinUrl != nil` —
+    // `resolveBrowserLaunchURL` already rejects a join flow without a URL,
+    // so there is no behavior loss in dropping the standalone `--join` flag.
+    @Option(
+        name: [.customLong("join"), .customLong("join-url")],
+        help: "Tray join URL (accepts --join <url> or --join-url <url>)"
+    )
     var joinUrl: String?
 
     @Option(name: .long, help: "Log level")
@@ -362,7 +367,7 @@ struct ServerConfig: Sendable, Equatable {
         let positiveCdpPort = command.cdpPort > 0 ? command.cdpPort : defaultCliCdpPort
         let resolvedElectron = command.electron || normalizedElectronApp != nil
         let resolvedLead = command.lead || normalizedLeadWorkerBaseUrl != nil
-        let resolvedJoin = command.join || normalizedJoinUrl != nil
+        let resolvedJoin = normalizedJoinUrl != nil
         let resolvedCdpPort = resolvedElectron && !explicitCdpPort
             ? defaultElectronAttachCdpPort
             : positiveCdpPort

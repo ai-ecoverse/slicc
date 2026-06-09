@@ -314,7 +314,17 @@ func buildElectronOverlayAppURL(servePort: Int) -> String {
 func buildElectronOverlayBootstrapScript(bundleSource: String, appURL: String) -> String {
     let escapedAppURL = appURL.replacingOccurrences(of: "\\", with: "\\\\")
         .replacingOccurrences(of: "\"", with: "\\\"")
-    let injectionCall = "if(document.body){window.__SLICC_ELECTRON_OVERLAY__?.inject({appUrl:\"\(escapedAppURL)\"});}else{document.addEventListener('DOMContentLoaded',function(){window.__SLICC_ELECTRON_OVERLAY__?.inject({appUrl:\"\(escapedAppURL)\"});});}"
+    // Gate the inject call on a top-frame + non-overlay-origin check so the
+    // bootstrap no-ops when `Page.addScriptToEvaluateOnNewDocument` runs it
+    // inside our own overlay iframe at `http://localhost:<servePort>/electron`
+    // (or any other subframe). Without this, the Slicc webapp inside the
+    // overlay iframe re-runs the bootstrap and injects another launcher
+    // inside itself, recursing up to N levels deep. node-server doesn't hit
+    // this because it doesn't register an all-frames script.
+    let frameGuard = "try{if(window.top!==window.self)return;}catch(e){return;}"
+    let originGuard = "try{if(location.origin===new URL(\"\(escapedAppURL)\").origin)return;}catch(e){}"
+    let injectBody = "if(document.body){window.__SLICC_ELECTRON_OVERLAY__?.inject({appUrl:\"\(escapedAppURL)\"});}else{document.addEventListener('DOMContentLoaded',function(){window.__SLICC_ELECTRON_OVERLAY__?.inject({appUrl:\"\(escapedAppURL)\"});});}"
+    let injectionCall = "(function(){\(frameGuard)\(originGuard)\(injectBody)})();"
     return bundleSource + "\n" + injectionCall
 }
 
@@ -369,14 +379,46 @@ private func scoreOverlayTarget(_ target: ElectronInspectableTarget) -> Int {
     return score
 }
 
+/// Pure decisions for the overlay injector's per-target state machine.
+/// Extracted so unit tests can cover the reload/escalation logic without
+/// spinning up real CDP sockets.
+enum OverlayInjectionAction: Equatable {
+    /// CSP was bypassed on a prior connection — inject the overlay and stop.
+    case injectOnly
+    /// First connection for this target URL — inject, then probe whether the
+    /// overlay iframe actually loaded.
+    case injectThenProbe
+}
+
+enum OverlayPostProbeAction: Equatable {
+    /// Probe reported the overlay iframe is loaded; nothing more to do.
+    case done
+    /// Probe reported the iframe was blocked (e.g. by CSP). Reload the page
+    /// so `Page.setBypassCSP` takes effect on the fresh navigation.
+    case reloadWithBypass
+}
+
+enum OverlayPostReloadAction: Equatable {
+    /// Bypassed-reload was not requested — nothing more to do beyond
+    /// re-injecting the overlay script.
+    case noEscalationRequested
+    /// Probe reported the overlay iframe is loaded after the bypassed reload.
+    case done
+    /// Iframe still blocked after the bypassed reload — escalate to the
+    /// Fetch-proxy fallback so we can strip CSP headers ourselves.
+    case escalateToFetchProxy
+}
+
 final class ElectronOverlayInjector: @unchecked Sendable {
     private let cdpPort: Int
     private let servePort: Int
     private let projectRoot: URL
     private let session: URLSession
     private let logger: Logger
+    private let probeDelayNanoseconds: UInt64
     private let stateQueue = DispatchQueue(label: "slicc.browser.electron-overlay-injector")
-    private var inFlightTargets = Set<String>()
+    private var sessions: [String: OverlayTargetSession] = [:]
+    private var cspBypassedURLs = Set<String>()
     private var pollTask: Task<Void, Never>?
 
     init(
@@ -384,34 +426,103 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         servePort: Int,
         projectRoot: URL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
         session: URLSession = .shared,
-        logger: Logger = Logger(label: "slicc.browser.electron-overlay")
+        logger: Logger = Logger(label: "slicc.browser.electron-overlay"),
+        probeDelayNanoseconds: UInt64 = 1_500_000_000
     ) {
         self.cdpPort = cdpPort
         self.servePort = servePort
         self.projectRoot = projectRoot
         self.session = session
         self.logger = logger
+        self.probeDelayNanoseconds = probeDelayNanoseconds
     }
 
     func start() {
-        guard stateQueue.sync(execute: { pollTask == nil }) else { return }
+        let alreadyRunning = stateQueue.sync { pollTask != nil }
+        guard !alreadyRunning else { return }
         logger.info("Starting overlay injector polling loop", metadata: [
             "cdpPort": .stringConvertible(cdpPort),
             "servePort": .stringConvertible(servePort),
             "projectRoot": .string(projectRoot.path)
         ])
-        pollTask = Task { [weak self] in
+        let task = Task { [weak self] in
             guard let self else { return }
             await self.runPollingLoop()
         }
+        stateQueue.sync { pollTask = task }
     }
 
     func stop() {
-        stateQueue.sync {
+        let toClose: [OverlayTargetSession] = stateQueue.sync {
             pollTask?.cancel()
             pollTask = nil
-            inFlightTargets.removeAll()
+            let snapshot = Array(sessions.values)
+            sessions.removeAll()
+            return snapshot
         }
+        // Best-effort graceful teardown so a slicc-server restart against
+        // the same Electron app starts with a clean DOM (no stale overlay
+        // host element from the prior session). The async detach is fire-
+        // and-forget — `stop()` itself is sync so we don't block on it.
+        for session in toClose {
+            Task { await session.gracefulShutdown() }
+        }
+    }
+
+    /// First-time connect dispatch. Encapsulates the bypassed-state guard so
+    /// subsequent reconnections to a URL that has already triggered a CSP
+    /// bypass skip the probe/reload path entirely.
+    static func openAction(alreadyCSPBypassed: Bool) -> OverlayInjectionAction {
+        alreadyCSPBypassed ? .injectOnly : .injectThenProbe
+    }
+
+    /// Decide whether to reload with CSP bypass after probing the freshly
+    /// injected overlay iframe.
+    static func postProbeAction(loaded: Bool) -> OverlayPostProbeAction {
+        loaded ? .done : .reloadWithBypass
+    }
+
+    /// Decide whether to escalate to the Fetch proxy after the bypassed
+    /// reload. Mirrors node-server: escalation only fires when the original
+    /// `injectThenProbe` path requested it (i.e. the very first reload).
+    static func postReloadAction(loaded: Bool, escalationRequested: Bool) -> OverlayPostReloadAction {
+        guard escalationRequested else { return .noEscalationRequested }
+        return loaded ? .done : .escalateToFetchProxy
+    }
+
+    /// Whether to record the target URL as CSP-bypassed after a post-probe
+    /// decision. The reload-with-bypass path must NOT record yet — if the CDP
+    /// session disconnects mid-reload (observed on AEM Desktop where the
+    /// renderer recreates its execution context during bootstrap), the next
+    /// reconnect would see `alreadyBypassed=true` and skip the reload entirely
+    /// via `openAction`, leaving the iframe permanently blocked. Only record
+    /// once we have confirmed the iframe actually loaded.
+    static func shouldRecordBypassedAfter(probeAction action: OverlayPostProbeAction) -> Bool {
+        action == .done
+    }
+
+    /// Whether to record the target URL as CSP-bypassed after a post-reload
+    /// decision. Same rationale as `probeAction` — only record on confirmed
+    /// `.done` (iframe loaded after the bypassed reload).
+    static func shouldRecordBypassedAfter(postReloadAction action: OverlayPostReloadAction) -> Bool {
+        action == .done
+    }
+
+    /// Whether to skip registering the new-document overlay bootstrap. We
+    /// only need it registered once per `OverlayTargetSession`; re-running
+    /// `Page.addScriptToEvaluateOnNewDocument` would install a duplicate
+    /// hook and waste CDP work.
+    static func shouldSkipNewDocumentRegistration(currentIdentifier: String?) -> Bool {
+        currentIdentifier != nil
+    }
+
+    /// JS expression that removes the overlay host element from the
+    /// document on a graceful session teardown so a reopen starts with a
+    /// clean DOM. Calls the overlay's own `remove()` API first and falls
+    /// back to a direct DOM removal so a stale bundle that doesn't expose
+    /// `remove` is still cleaned up.
+    static func overlayHostRemovalExpression() -> String {
+        "try{window.__SLICC_ELECTRON_OVERLAY__&&window.__SLICC_ELECTRON_OVERLAY__.remove&&window.__SLICC_ELECTRON_OVERLAY__.remove();var e=document.getElementById('slicc-electron-overlay-root');if(e&&e.remove)e.remove();}catch(e){}"
     }
 
     private func runPollingLoop() async {
@@ -443,38 +554,66 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         ])
         let liveTargetIDs = Set(selectedTargets.compactMap(\.webSocketDebuggerURL))
 
-        stateQueue.sync {
-            inFlightTargets = inFlightTargets.intersection(liveTargetIDs)
+        // Drop sessions whose CDP target disappeared (e.g. tab/window closed).
+        let stale: [OverlayTargetSession] = stateQueue.sync {
+            var dropped: [OverlayTargetSession] = []
+            for (targetID, session) in sessions where !liveTargetIDs.contains(targetID) {
+                dropped.append(session)
+                sessions.removeValue(forKey: targetID)
+            }
+            return dropped
+        }
+        for session in stale {
+            session.stop()
         }
 
         for target in selectedTargets {
             guard let targetID = target.webSocketDebuggerURL else { continue }
-            let isInFlight = stateQueue.sync { inFlightTargets.contains(targetID) }
-            guard !isInFlight else { continue }
+            let alreadyConnected = stateQueue.sync { sessions[targetID] != nil }
+            guard !alreadyConnected else { continue }
 
-            stateQueue.sync { inFlightTargets.insert(targetID) }
-
-            Task { [weak self] in
-                guard let self else { return }
-                defer {
-                    _ = self.stateQueue.sync { self.inFlightTargets.remove(targetID) }
-                }
-                do {
-                    // Probe whether the overlay is already present before injecting.
-                    let needsInjection = try await self.probeOverlayMissing(target: target)
-                    guard needsInjection else { return }
-
-                    self.logger.info("Injecting overlay", metadata: ["target": .string(target.url)])
-                    try await self.injectOverlay(into: target, script: bootstrapScript)
-                    self.logger.info("Overlay injection succeeded", metadata: ["target": .string(target.url)])
-                } catch {
-                    self.logger.error("Electron overlay injection failed", metadata: [
-                        "target": .string(target.url),
-                        "error": .string(error.localizedDescription)
-                    ])
-                }
-            }
+            let session = makeTargetSession(target: target, bootstrapScript: bootstrapScript)
+            stateQueue.sync { sessions[targetID] = session }
+            session.start()
         }
+    }
+
+    private func makeTargetSession(target: ElectronInspectableTarget, bootstrapScript: String) -> OverlayTargetSession {
+        let isAlreadyBypassed: @Sendable (String) -> Bool = { [weak self] url in
+            guard let self else { return false }
+            return self.stateQueue.sync { self.cspBypassedURLs.contains(url) }
+        }
+        let recordBypassed: @Sendable (String) -> Void = { [weak self] url in
+            guard let self else { return }
+            self.stateQueue.sync { _ = self.cspBypassedURLs.insert(url) }
+        }
+        let onClose: @Sendable (String) -> Void = { [weak self] targetID in
+            guard let self else { return }
+            self.stateQueue.sync { _ = self.sessions.removeValue(forKey: targetID) }
+        }
+        return OverlayTargetSession(
+            target: target,
+            bootstrapScript: bootstrapScript,
+            servePort: servePort,
+            session: session,
+            logger: logger,
+            probeDelayNanoseconds: probeDelayNanoseconds,
+            isAlreadyBypassed: isAlreadyBypassed,
+            recordBypassed: recordBypassed,
+            onClose: onClose
+        )
+    }
+
+    /// Snapshot of URLs whose CSP has been bypassed in this injector's
+    /// lifetime. Exposed for tests; not used at runtime.
+    func _testing_bypassedURLs() -> Set<String> {
+        stateQueue.sync { cspBypassedURLs }
+    }
+
+    /// Seed bypassed-URL state for tests so we can exercise the
+    /// `alreadyBypassed` branch without driving a real CDP session.
+    func _testing_seedBypassedURL(_ url: String) {
+        stateQueue.sync { _ = cspBypassedURLs.insert(url) }
     }
 
     private func loadBootstrapScript() throws -> String {
@@ -535,109 +674,647 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         """
     }
 
-    private func probeOverlayMissing(target: ElectronInspectableTarget) async throws -> Bool {
-        guard let debuggerURL = target.webSocketDebuggerURL,
-              let url = URL(string: debuggerURL) else { return false }
+}
 
-        let socket = session.webSocketTask(with: url)
-        socket.resume()
-        defer { socket.cancel(with: .goingAway, reason: nil) }
+// MARK: - OverlayTargetSession
 
-        try await send(message: [
-            "id": 1,
-            "method": "Runtime.evaluate",
-            "params": [
-                "expression": "!!document.getElementById('slicc-electron-overlay-root')",
-                "returnByValue": true
-            ]
-        ], over: socket)
+/// Persistent CDP session for one Electron renderer target. Owns the
+/// `Page.enable` / `Runtime.enable` / `Page.setBypassCSP` dance, the post-
+/// inject iframe probe, and the reload-with-bypass + Fetch-proxy escalation
+/// fallback. Mirrors `ElectronOverlayInjector` in
+/// `packages/node-server/src/electron-controller.ts` so swift-server reaches
+/// parity inside CSP-bearing Electron apps (e.g. AEM Desktop).
+final class OverlayTargetSession: @unchecked Sendable {
+    private let target: ElectronInspectableTarget
+    private let bootstrapScript: String
+    private let servePort: Int
+    private let urlSession: URLSession
+    private let logger: Logger
+    private let probeDelayNanoseconds: UInt64
+    private let commandTimeoutNanoseconds: UInt64
+    private let isAlreadyBypassed: @Sendable (String) -> Bool
+    private let recordBypassed: @Sendable (String) -> Void
+    private let onClose: @Sendable (String) -> Void
 
-        let response = try await waitForResponseValue(id: 1, over: socket)
-        // If the overlay root element exists in the DOM, no injection needed
-        if let value = response as? Bool, value {
-            return false
-        }
-        return true
+    private let stateQueue = DispatchQueue(label: "slicc.browser.electron-overlay-session")
+    private var socket: URLSessionWebSocketTask?
+    private var recvTask: Task<Void, Never>?
+    private var connectTask: Task<Void, Never>?
+    private var messageIdCounter = 0
+    private var pendingReload = false
+    private var pendingCspEscalation = false
+    private var fetchProxyActive = false
+    private var addedScriptIdentifier: String?
+    private var responseWaiters: [Int: CheckedContinuation<[String: Any]?, Never>] = [:]
+    private var closed = false
+
+    init(
+        target: ElectronInspectableTarget,
+        bootstrapScript: String,
+        servePort: Int,
+        session: URLSession,
+        logger: Logger,
+        probeDelayNanoseconds: UInt64,
+        commandTimeoutNanoseconds: UInt64 = 10_000_000_000,
+        isAlreadyBypassed: @escaping @Sendable (String) -> Bool,
+        recordBypassed: @escaping @Sendable (String) -> Void,
+        onClose: @escaping @Sendable (String) -> Void
+    ) {
+        self.target = target
+        self.bootstrapScript = bootstrapScript
+        self.servePort = servePort
+        self.urlSession = session
+        self.logger = logger
+        self.probeDelayNanoseconds = probeDelayNanoseconds
+        self.commandTimeoutNanoseconds = commandTimeoutNanoseconds
+        self.isAlreadyBypassed = isAlreadyBypassed
+        self.recordBypassed = recordBypassed
+        self.onClose = onClose
     }
 
-    private func injectOverlay(into target: ElectronInspectableTarget, script: String) async throws {
-        guard let debuggerURL = target.webSocketDebuggerURL,
-              let url = URL(string: debuggerURL) else {
+    func start() {
+        guard let urlString = target.webSocketDebuggerURL,
+              let url = URL(string: urlString) else { return }
+        let task = urlSession.webSocketTask(with: url)
+        stateQueue.sync { socket = task }
+        task.resume()
+
+        let recv = Task<Void, Never> { [weak self] in
+            guard let self else { return }
+            await self.runReceiveLoop()
+        }
+        let connect = Task<Void, Never> { [weak self] in
+            guard let self else { return }
+            await self.runConnectFlow()
+        }
+        stateQueue.sync {
+            recvTask = recv
+            connectTask = connect
+        }
+    }
+
+    private struct StopSnapshot {
+        let wasAlreadyClosed: Bool
+        let socket: URLSessionWebSocketTask?
+        let recvTask: Task<Void, Never>?
+        let connectTask: Task<Void, Never>?
+        let waiters: [Int: CheckedContinuation<[String: Any]?, Never>]
+    }
+
+    func stop() {
+        let snapshot: StopSnapshot = stateQueue.sync {
+            let was = closed
+            closed = true
+            let captured = StopSnapshot(
+                wasAlreadyClosed: was,
+                socket: socket,
+                recvTask: recvTask,
+                connectTask: connectTask,
+                waiters: responseWaiters
+            )
+            socket = nil
+            recvTask = nil
+            connectTask = nil
+            responseWaiters.removeAll()
+            return captured
+        }
+        if snapshot.wasAlreadyClosed { return }
+        for (_, waiter) in snapshot.waiters {
+            waiter.resume(returning: nil)
+        }
+        snapshot.socket?.cancel(with: .goingAway, reason: nil)
+        snapshot.recvTask?.cancel()
+        snapshot.connectTask?.cancel()
+    }
+
+    /// Graceful teardown variant: best-effort sends a Runtime.evaluate that
+    /// removes the overlay host element from the document, then calls
+    /// `stop()`. Use this on a clean shutdown path so a slicc-server restart
+    /// against the same Electron app starts with a fresh DOM. The eval is
+    /// fire-and-forget; if the socket is already dead this is a no-op.
+    func gracefulShutdown() async {
+        let alreadyClosed = stateQueue.sync { closed }
+        if alreadyClosed { return }
+        _ = await sendCommand(method: "Runtime.evaluate", params: [
+            "expression": ElectronOverlayInjector.overlayHostRemovalExpression(),
+            "awaitPromise": false
+        ])
+        stop()
+    }
+
+    // MARK: Connection flow
+
+    private func runConnectFlow() async {
+        let alreadyBypassed = isAlreadyBypassed(target.url)
+        logger.info("Overlay target connection opening", metadata: [
+            "target": .string(target.url),
+            "alreadyBypassed": .stringConvertible(alreadyBypassed)
+        ])
+
+        _ = await sendCommand(method: "Runtime.enable", awaitResponse: true)
+        _ = await sendCommand(method: "Page.enable", awaitResponse: true)
+        _ = await sendCommand(method: "Page.setBypassCSP", params: ["enabled": true], awaitResponse: true)
+        // Install the bootstrap as a permanent new-document hook so it
+        // re-runs automatically after the reload below (and after any
+        // additional navigation the host app's own bootstrap may trigger
+        // — observed in AEM Desktop where Runtime.evaluate after
+        // Page.loadEventFired raced a fresh document and did not stick).
+        await registerNewDocumentScript()
+
+        let action = ElectronOverlayInjector.openAction(alreadyCSPBypassed: alreadyBypassed)
+        switch action {
+        case .injectOnly:
+            logger.info("Injecting overlay (CSP already bypassed)", metadata: ["target": .string(target.url)])
+            await sendBootstrap()
+            _ = await verifyOverlayPresent(context: "inject-only")
+        case .injectThenProbe:
+            logger.info("Injecting overlay (first attempt)", metadata: ["target": .string(target.url)])
+            await sendBootstrap()
+            _ = await verifyOverlayPresent(context: "first-inject")
+            try? await Task.sleep(nanoseconds: probeDelayNanoseconds)
+            if Task.isCancelled || isClosed() { return }
+            let loaded = await probeOverlayLoaded()
+            await handlePostProbe(loaded: loaded)
+        }
+    }
+
+    private func handlePostProbe(loaded: Bool) async {
+        let decision = ElectronOverlayInjector.postProbeAction(loaded: loaded)
+        if ElectronOverlayInjector.shouldRecordBypassedAfter(probeAction: decision) {
+            recordBypassed(target.url)
+        }
+        switch decision {
+        case .done:
+            logger.info("Overlay iframe loaded successfully — no CSP reload needed", metadata: ["target": .string(target.url)])
+        case .reloadWithBypass:
+            // Deliberately do NOT recordBypassed yet — if the CDP session
+            // disconnects mid-reload (AEM Desktop's bootstrap recreates the
+            // execution context, which closes our WS), the next reconnect
+            // needs to re-run the reload path. Only record once
+            // `handleLoadEventFired` confirms the iframe loaded.
+            logger.info("Overlay iframe blocked by CSP, reloading with bypass", metadata: ["target": .string(target.url)])
+            stateQueue.sync {
+                pendingReload = true
+                pendingCspEscalation = true
+            }
+            _ = await sendCommand(method: "Page.reload", params: ["ignoreCache": true])
+        }
+    }
+
+    // MARK: Event handling
+
+    private func runReceiveLoop() async {
+        while !Task.isCancelled {
+            guard let activeSocket = stateQueue.sync(execute: { socket }) else { return }
+            do {
+                let message = try await activeSocket.receive()
+                guard case .string(let text) = message,
+                      let data = text.data(using: .utf8),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    continue
+                }
+                if let id = json["id"] as? Int {
+                    let waiter: CheckedContinuation<[String: Any]?, Never>? = stateQueue.sync {
+                        responseWaiters.removeValue(forKey: id)
+                    }
+                    waiter?.resume(returning: json["result"] as? [String: Any])
+                } else if let method = json["method"] as? String {
+                    await handleEvent(method: method, params: json["params"] as? [String: Any])
+                }
+            } catch {
+                if !isClosed() {
+                    let pendingCount = stateQueue.sync { responseWaiters.count }
+                    logger.warning("Overlay session disconnected, failing in-flight CDP requests", metadata: [
+                        "target": .string(target.url),
+                        "error": .string(error.localizedDescription),
+                        "pendingWaiters": .stringConvertible(pendingCount)
+                    ])
+                }
+                let targetID = target.webSocketDebuggerURL ?? target.url
+                // Fail all pending continuations and cancel the socket so the
+                // `runConnectFlow` (or `handleLoadEventFired`) awaiting a
+                // response unblocks instead of hanging forever. The injector's
+                // polling loop will then reconnect with a fresh session.
+                stop()
+                onClose(targetID)
+                return
+            }
+        }
+    }
+
+    private func handleEvent(method: String, params: [String: Any]?) async {
+        switch method {
+        case "Page.loadEventFired":
+            await handleLoadEventFired()
+        case "Fetch.requestPaused":
+            await handleFetchRequestPaused(params: params ?? [:])
+        default:
+            break
+        }
+    }
+
+    private func handleLoadEventFired() async {
+        let snapshot: (reload: Bool, escalation: Bool) = stateQueue.sync {
+            let r = pendingReload
+            let e = pendingCspEscalation
+            pendingReload = false
+            pendingCspEscalation = false
+            return (r, e)
+        }
+        guard snapshot.reload else { return }
+
+        logger.info("Page loaded after CSP-bypass reload, re-injecting overlay", metadata: ["target": .string(target.url)])
+        // The CDP session keeps `Page.setBypassCSP` enabled across reloads,
+        // but re-arm it defensively to match node-server.
+        _ = await sendCommand(method: "Page.setBypassCSP", params: ["enabled": true], awaitResponse: true)
+        await sendBootstrap()
+        // Read back the global so a "didn't stick" reinject shows up in logs
+        // immediately instead of silently failing the second-probe later.
+        _ = await verifyOverlayPresent(context: "post-reload-inject")
+
+        let escalationRequested = snapshot.escalation
+        guard escalationRequested else { return }
+
+        try? await Task.sleep(nanoseconds: probeDelayNanoseconds)
+        if Task.isCancelled || isClosed() { return }
+        let loaded = await probeOverlayLoaded()
+        let decision = ElectronOverlayInjector.postReloadAction(loaded: loaded, escalationRequested: true)
+        if ElectronOverlayInjector.shouldRecordBypassedAfter(postReloadAction: decision) {
+            recordBypassed(target.url)
+        }
+        switch decision {
+        case .done, .noEscalationRequested:
+            logger.info("Overlay iframe loaded successfully after CSP reload — no proxy needed", metadata: [
+                "target": .string(target.url),
+                "decision": .string(String(describing: decision))
+            ])
+        case .escalateToFetchProxy:
+            logger.warning("Overlay iframe still blocked after bypass reload — escalating to Fetch proxy", metadata: [
+                "target": .string(target.url)
+            ])
+            await activateFetchProxy()
+        }
+    }
+
+    private func activateFetchProxy() async {
+        // For file:// (or other no-http-origin) targets, fall back to the
+        // overlay iframe's own http origin — Fetch.enable patterns must be
+        // http(s) and the iframe is what we ultimately need unblocked.
+        let origin = OverlayTargetSession.fetchProxyOrigin(targetURL: target.url, servePort: servePort)
+        logger.warning("CSP reload insufficient, escalating to Fetch proxy", metadata: [
+            "target": .string(target.url),
+            "origin": .string(origin)
+        ])
+        stateQueue.sync {
+            fetchProxyActive = true
+            pendingReload = true
+        }
+        _ = await sendCommand(method: "Fetch.enable", params: [
+            "patterns": [["urlPattern": "\(origin)/*", "requestStage": "Request"]]
+        ], awaitResponse: true)
+        _ = await sendCommand(method: "Page.reload", params: ["ignoreCache": true])
+    }
+
+    // MARK: Fetch-proxy escalation
+
+    private func handleFetchRequestPaused(params: [String: Any]) async {
+        let isActive = stateQueue.sync { fetchProxyActive }
+        guard isActive else { return }
+        guard let requestId = params["requestId"] as? String else {
+            logger.warning("Fetch.requestPaused without requestId, skipping")
+            return
+        }
+        let request = params["request"] as? [String: Any] ?? [:]
+        let urlString = request["url"] as? String ?? ""
+        let method = request["method"] as? String ?? "GET"
+        let headers = request["headers"] as? [String: String] ?? [:]
+        let postData = request["postData"] as? String
+        let accept = headers["Accept"] ?? headers["accept"] ?? ""
+
+        // Only proxy HTML document requests; everything else goes through unchanged.
+        guard accept.contains("text/html") else {
+            _ = await sendCommand(method: "Fetch.continueRequest", params: ["requestId": requestId])
             return
         }
 
-        let socket = session.webSocketTask(with: url)
-        socket.resume()
-        defer { socket.cancel(with: .goingAway, reason: nil) }
-
-        try await send(message: [
-            "id": 1,
-            "method": "Runtime.evaluate",
-            "params": [
-                "expression": script,
-                "awaitPromise": false
-            ]
-        ], over: socket)
-
-        // Wait for Chrome to process the evaluate before closing the socket.
-        try await waitForResponse(id: 1, over: socket)
+        logger.info("Proxying request to strip CSP", metadata: ["url": .string(String(urlString.prefix(80)))])
+        do {
+            let proxied = try await fetchAndStripCSP(urlString: urlString, method: method, headers: headers, postData: postData)
+            // Fire-and-forget to match node-server (electron-controller.ts
+            // `send('Fetch.fulfillRequest', ...)` with no await). Awaiting
+            // here is what previously tripped the 10s command timeout on
+            // every cycle, producing the "CDP command timed out" /
+            // "Client disconnected" loop in AEM Desktop.
+            _ = await sendCommand(method: "Fetch.fulfillRequest", params: [
+                "requestId": requestId,
+                "responseCode": proxied.statusCode,
+                "responseHeaders": proxied.headers,
+                "body": proxied.bodyBase64
+            ])
+            if proxied.strippedCSP {
+                logger.info("Stripped CSP", metadata: ["url": .string(String(urlString.prefix(80)))])
+            }
+        } catch {
+            logger.error("Fetch-proxy request failed", metadata: [
+                "url": .string(String(urlString.prefix(80))),
+                "error": .string(error.localizedDescription)
+            ])
+            _ = await sendCommand(method: "Fetch.failRequest", params: [
+                "requestId": requestId,
+                "errorReason": "Failed"
+            ])
+        }
     }
 
-    private func waitForResponseValue(id: Int, over socket: URLSessionWebSocketTask, timeout: UInt64 = 5_000_000_000) async throws -> Any? {
-        try await withThrowingTaskGroup(of: Any?.self) { group in
-            group.addTask {
-                while true {
-                    let message = try await socket.receive()
-                    if case .string(let text) = message,
-                       let data = text.data(using: .utf8),
-                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                       let responseId = json["id"] as? Int,
-                       responseId == id {
-                        if let result = json["result"] as? [String: Any],
-                           let innerResult = result["result"] as? [String: Any] {
-                            return innerResult["value"]
+    private struct ProxiedResponse {
+        let statusCode: Int
+        let headers: [[String: String]]
+        let bodyBase64: String
+        let strippedCSP: Bool
+    }
+
+    private func fetchAndStripCSP(
+        urlString: String,
+        method: String,
+        headers: [String: String],
+        postData: String?
+    ) async throws -> ProxiedResponse {
+        guard let url = URL(string: urlString) else { throw URLError(.badURL) }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        // Skip headers URLSession owns / hop-by-hop on the request side.
+        let stripRequestHeaders: Set<String> = ["content-length", "host", "connection", "keep-alive", "transfer-encoding"]
+        for (name, value) in headers where !stripRequestHeaders.contains(name.lowercased()) {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
+        if let postData {
+            request.httpBody = Data(base64Encoded: postData) ?? postData.data(using: .utf8)
+        }
+
+        let (data, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+
+        let hopByHop: Set<String> = [
+            "content-security-policy",
+            "content-security-policy-report-only",
+            "transfer-encoding",
+            "connection",
+            "keep-alive"
+        ]
+        var responseHeaders: [[String: String]] = []
+        var strippedCSP = false
+        let rawHeaders = http.allHeaderFields as? [String: String] ?? [:]
+        for (name, value) in rawHeaders {
+            let lower = name.lowercased()
+            if lower.contains("content-security-policy") {
+                strippedCSP = true
+                continue
+            }
+            if hopByHop.contains(lower) { continue }
+            if lower == "content-length" {
+                responseHeaders.append(["name": name, "value": String(data.count)])
+                continue
+            }
+            responseHeaders.append(["name": name, "value": value])
+        }
+        return ProxiedResponse(
+            statusCode: http.statusCode,
+            headers: responseHeaders,
+            bodyBase64: data.base64EncodedString(),
+            strippedCSP: strippedCSP
+        )
+    }
+
+    // MARK: Helpers
+
+    private func sendBootstrap() async {
+        _ = await sendCommand(method: "Runtime.evaluate", params: [
+            "expression": bootstrapScript,
+            "awaitPromise": false
+        ])
+    }
+
+    /// Install the bootstrap as a `Page.addScriptToEvaluateOnNewDocument`
+    /// hook so it re-runs automatically on every new document — including
+    /// ones the host app's own bootstrap may create after our reload (the
+    /// AEM Desktop case where the re-evaluate after `Page.loadEventFired`
+    /// would otherwise race a fresh document and not stick).
+    private func registerNewDocumentScript() async {
+        let currentIdentifier = stateQueue.sync { addedScriptIdentifier }
+        if ElectronOverlayInjector.shouldSkipNewDocumentRegistration(currentIdentifier: currentIdentifier) {
+            logger.debug("Overlay bootstrap already registered, skipping", metadata: [
+                "target": .string(target.url),
+                "identifier": .string(currentIdentifier ?? "")
+            ])
+            return
+        }
+        let result = await sendCommand(method: "Page.addScriptToEvaluateOnNewDocument", params: [
+            "source": bootstrapScript
+        ], awaitResponse: true)
+        if let identifier = result?["identifier"] as? String {
+            stateQueue.sync { addedScriptIdentifier = identifier }
+            logger.debug("Registered new-document overlay bootstrap", metadata: [
+                "target": .string(target.url),
+                "identifier": .string(identifier)
+            ])
+        } else {
+            logger.warning("Page.addScriptToEvaluateOnNewDocument returned no identifier", metadata: [
+                "target": .string(target.url)
+            ])
+        }
+    }
+
+    /// Read back `window.__SLICC_ELECTRON_OVERLAY__` (and the overlay host)
+    /// right after injection so a silently-lost inject (e.g. a stale
+    /// execution context the bootstrap script ran in) shows up in the logs
+    /// instead of only being detected later by the iframe probe.
+    @discardableResult
+    private func verifyOverlayPresent(context: String) async -> Bool {
+        let expression = """
+        (function() {
+          try {
+            var hasGlobal = typeof window.__SLICC_ELECTRON_OVERLAY__ !== 'undefined';
+            var hasRoot = !!document.getElementById('slicc-electron-overlay-root');
+            return (hasGlobal ? 'g' : '-') + (hasRoot ? 'r' : '-');
+          } catch (e) { return 'err:' + String(e); }
+        })()
+        """
+        let result = await sendCommand(method: "Runtime.evaluate", params: [
+            "expression": expression,
+            "awaitPromise": false,
+            "returnByValue": true
+        ], awaitResponse: true)
+        let value = (result?["result"] as? [String: Any])?["value"] as? String ?? ""
+        let stuck = value.hasPrefix("g")
+        if stuck {
+            logger.info("Overlay inject verified present", metadata: [
+                "target": .string(target.url),
+                "context": .string(context),
+                "marker": .string(value)
+            ])
+        } else {
+            logger.warning("Overlay inject did NOT take effect — likely stale execution context", metadata: [
+                "target": .string(target.url),
+                "context": .string(context),
+                "marker": .string(value)
+            ])
+        }
+        return stuck
+    }
+
+    private func probeOverlayLoaded() async -> Bool {
+        // Mirrors node-server's `probeOverlayIframeLoaded`: walks host →
+        // shadowRoot → sidebar → iframe and only reports success when the
+        // iframe actually has a `src`.
+        let expression = """
+        (function() {
+          var host = document.getElementById('slicc-electron-overlay-root');
+          if (!host || !host.shadowRoot) return 'no-host';
+          var sidebar = host.shadowRoot.querySelector('slicc-electron-sidebar');
+          if (!sidebar || !sidebar.shadowRoot) return 'no-sidebar';
+          var iframe = sidebar.shadowRoot.querySelector('iframe');
+          if (!iframe) return 'no-iframe';
+          if (!iframe.src) return 'no-src';
+          return 'ok';
+        })()
+        """
+        let result = await sendCommand(method: "Runtime.evaluate", params: [
+            "expression": expression,
+            "awaitPromise": false,
+            "returnByValue": true
+        ], awaitResponse: true)
+        if let inner = result?["result"] as? [String: Any],
+           let value = inner["value"] as? String {
+            return value == "ok"
+        }
+        return false
+    }
+
+    @discardableResult
+    private func sendCommand(method: String, params: [String: Any]? = nil, awaitResponse: Bool = false) async -> [String: Any]? {
+        let id: Int = stateQueue.sync {
+            messageIdCounter += 1
+            return messageIdCounter
+        }
+        var msg: [String: Any] = ["id": id, "method": method]
+        if let params { msg["params"] = params }
+
+        if awaitResponse {
+            return await withCheckedContinuation { (cont: CheckedContinuation<[String: Any]?, Never>) in
+                let activeSocket: URLSessionWebSocketTask? = stateQueue.sync {
+                    if closed { return nil }
+                    responseWaiters[id] = cont
+                    return socket
+                }
+                guard let activeSocket else {
+                    cont.resume(returning: nil)
+                    return
+                }
+                // Belt-and-suspenders timeout so a wedged CDP call (e.g. the
+                // socket silently buffering against a dead peer) cannot stall
+                // the connect/post-reload pipeline. The receive-loop's
+                // disconnect handler also fails pending waiters via `stop()`,
+                // so the timeout is the fallback when no error surfaces.
+                let timeoutNs = self.commandTimeoutNanoseconds
+                let methodName = method
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: timeoutNs)
+                    guard let self else { return }
+                    let waiter: CheckedContinuation<[String: Any]?, Never>? = self.stateQueue.sync {
+                        self.responseWaiters.removeValue(forKey: id)
+                    }
+                    if let waiter {
+                        self.logger.warning("CDP command timed out, failing waiter", metadata: [
+                            "target": .string(self.target.url),
+                            "method": .string(methodName),
+                            "id": .stringConvertible(id)
+                        ])
+                        waiter.resume(returning: nil)
+                    }
+                }
+                Task { [weak self] in
+                    do {
+                        let data = try JSONSerialization.data(withJSONObject: msg)
+                        guard let text = String(data: data, encoding: .utf8) else {
+                            throw CocoaError(.coderInvalidValue)
                         }
-                        return nil
+                        try await activeSocket.send(.string(text))
+                    } catch {
+                        guard let self else { return }
+                        let waiter: CheckedContinuation<[String: Any]?, Never>? = self.stateQueue.sync {
+                            self.responseWaiters.removeValue(forKey: id)
+                        }
+                        waiter?.resume(returning: nil)
                     }
                 }
             }
-            group.addTask {
-                try await Task.sleep(nanoseconds: timeout)
-                return nil
-            }
-            let result = try await group.next() ?? nil
-            group.cancelAll()
-            return result
-        }
-    }
-
-    private func waitForResponse(id: Int, over socket: URLSessionWebSocketTask, timeout: UInt64 = 5_000_000_000) async throws {
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask {
-                while true {
-                    let message = try await socket.receive()
-                    if case .string(let text) = message,
-                       let data = text.data(using: .utf8),
-                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                       let responseId = json["id"] as? Int,
-                       responseId == id {
-                        return
-                    }
+        } else {
+            guard let activeSocket = stateQueue.sync(execute: { socket }) else { return nil }
+            do {
+                let data = try JSONSerialization.data(withJSONObject: msg)
+                if let text = String(data: data, encoding: .utf8) {
+                    try await activeSocket.send(.string(text))
                 }
+            } catch {
+                logger.debug("Failed to send CDP command", metadata: [
+                    "method": .string(method),
+                    "error": .string(error.localizedDescription)
+                ])
             }
-            group.addTask {
-                try await Task.sleep(nanoseconds: timeout)
-            }
-            _ = try await group.next()
-            group.cancelAll()
+            return nil
         }
     }
 
-    private func send(message: [String: Any], over socket: URLSessionWebSocketTask) async throws {
-        let data = try JSONSerialization.data(withJSONObject: message)
-        guard let text = String(data: data, encoding: .utf8) else {
-            throw CocoaError(.coderInvalidValue)
+    private func isClosed() -> Bool {
+        stateQueue.sync { closed }
+    }
+
+    /// Test-only: register a synthetic pending waiter (no socket I/O) so a
+    /// unit test can drive `stop()` and assert the continuation resolves
+    /// with `nil`. Verifies the receive-loop disconnect path that previously
+    /// hung the connect/post-reload pipeline.
+    func _testing_awaitSyntheticWaiter() async -> [String: Any]? {
+        await withCheckedContinuation { (cont: CheckedContinuation<[String: Any]?, Never>) in
+            stateQueue.sync {
+                messageIdCounter += 1
+                responseWaiters[messageIdCounter] = cont
+            }
         }
-        try await socket.send(.string(text))
+    }
+
+    /// Test-only: current count of registered response waiters.
+    func _testing_pendingWaiterCount() -> Int {
+        stateQueue.sync { responseWaiters.count }
+    }
+
+    static func overlayOrigin(for urlString: String) -> String? {
+        // Gate on http/https only. `URL` happily parses `app://something/foo`
+        // with scheme="app" and host="something", which would key
+        // `Fetch.enable` patterns on a non-http origin that CDP cannot
+        // intercept. Match node-server (`resolveFetchProxyOrigin`) by falling
+        // back to the overlay iframe's `http://localhost:<servePort>` origin
+        // for any non-http parent — file://, app://, etc.
+        guard let url = URL(string: urlString),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = url.host else {
+            return nil
+        }
+        if let port = url.port { return "\(scheme)://\(host):\(port)" }
+        return "\(scheme)://\(host)"
+    }
+
+    /// Resolve the Fetch.enable origin pattern: prefer the parent page's
+    /// http origin (matches node-server byte-for-byte), but for file:// (or
+    /// other no-http-origin) targets fall back to the overlay iframe's own
+    /// `http://localhost:<servePort>` origin so the iframe load is at least
+    /// covered by Fetch interception.
+    static func fetchProxyOrigin(targetURL: String, servePort: Int) -> String {
+        if let origin = overlayOrigin(for: targetURL) {
+            return origin
+        }
+        return "http://localhost:\(servePort)"
     }
 }

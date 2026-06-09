@@ -8,6 +8,11 @@ private let log = Logger(subsystem: "com.slicc.sliccstart", category: "SliccProc
 enum AppStartBlocker: Equatable {
     case needsPermission
     case needsDebugBuild
+    /// Electron apps require an already-running leader browser so the
+    /// follower has a tray join URL to attach to. While no leader is
+    /// available we surface this blocker so the UI can disable the row
+    /// with a "Start a browser first" hint instead of failing the launch.
+    case needsLeader
 }
 
 enum AppRuntimeState: Equatable {
@@ -30,6 +35,7 @@ enum AppRuntimeState: Equatable {
         targetType: AppTargetType,
         debugSupport: ElectronDebugSupport = .supported,
         hasAppManagementPermission: Bool = true,
+        leaderAvailable: Bool = true,
         debugPort: UInt16? = nil,
         launchFailure: String? = nil,
         appIsRunning: Bool = false
@@ -45,6 +51,13 @@ enum AppRuntimeState: Equatable {
 
         if debugPort != nil {
             return .runningWithDebug(cdpPort: debugPort)
+        }
+        // Gate Electron rows on the presence of a leader join URL. Once
+        // attached (debugPort set above) we no longer care — the follower
+        // is already wired into the leader and surviving the leader going
+        // away is a separate problem.
+        if targetType == .electronApp && !leaderAvailable {
+            return .cannotStart(.needsLeader)
         }
         if targetType == .electronApp && appIsRunning {
             return .runningWithoutDebug
@@ -75,6 +88,11 @@ final class SliccProcess {
         let startedAt: Date
         var observedAppPID: pid_t?
         var staticRoot: String?
+        /// Leader join URL captured at launch time (Electron followers
+        /// only — nil for chromiumBrowser). Copied into
+        /// `PersistedLaunchRecord` so reattach can re-thread `--join`
+        /// across a smooth update.
+        var joinUrl: String?
     }
 
     /// SLICC helper/server processes keyed by AppTarget.id.
@@ -92,6 +110,21 @@ final class SliccProcess {
     /// of the legacy stopAll() path.
     var isPreparingForUpdate = false
 
+    /// Tray join URL discovered from the running leader browser via
+    /// `/api/tray-status`. `nil` until the probe completes (or while
+    /// no leader is running); follower Electron apps are launched with
+    /// `--join=<this URL>` so they auto-attach as followers. Cleared
+    /// when no chromiumBrowser record remains so the Desktop App rows
+    /// re-gate after the user closes the leader.
+    var leaderJoinUrl: String?
+
+    /// Active re-probe loop. Cancelled and replaced on every
+    /// `startLeaderProbe` invocation so launch + reattach (or repeated
+    /// launches) don't stack concurrent loops. The loop exits on its
+    /// own when the chromiumBrowser record goes away or `leaderJoinUrl`
+    /// is set, so callers rarely need to cancel explicitly.
+    private var leaderProbeTask: Task<Void, Never>?
+
     /// One-shot latch tracking whether `detachAll()` already ran. The
     /// full-app update path calls it from `onBeginUpdate` and the
     /// delegate calls it again from `applicationWillTerminate`; without
@@ -102,13 +135,16 @@ final class SliccProcess {
 
     let recordStore: LaunchRecordStore
     let cdpLiveProbe: CDPLiveProbe
+    let trayStatusProbe: TrayStatusProbe
 
     init(
         recordStore: LaunchRecordStore = LaunchRecordStore(),
-        cdpLiveProbe: CDPLiveProbe = .default
+        cdpLiveProbe: CDPLiveProbe = .default,
+        trayStatusProbe: TrayStatusProbe = .default
     ) {
         self.recordStore = recordStore
         self.cdpLiveProbe = cdpLiveProbe
+        self.trayStatusProbe = trayStatusProbe
     }
 
     var resolvedSliccDir: String { sliccDir }
@@ -156,14 +192,28 @@ final class SliccProcess {
     ) -> AppRuntimeState {
         let debugPort = activeDebugPort(for: target)
         let appIsRunning = target.type == .electronApp && isElectronAppRunning(target)
+        // Browser rows never gate on leader availability; for Electron
+        // followers the row stays disabled until we have both a running
+        // browser leader and a discovered join URL.
+        let leaderAvailable = target.type != .electronApp || isLeaderReady()
         return AppRuntimeState.resolve(
             targetType: target.type,
             debugSupport: target.debugSupport,
             hasAppManagementPermission: hasAppManagementPermission,
+            leaderAvailable: leaderAvailable,
             debugPort: debugPort,
             launchFailure: startFailures[target.id],
             appIsRunning: appIsRunning
         )
+    }
+
+    /// `true` when a chromiumBrowser launch record is alive AND the
+    /// tray-status probe has successfully read a join URL from it.
+    /// Both halves matter: a browser without a tray can't host followers,
+    /// and a stale join URL (no live browser) would route to a dead leader.
+    func isLeaderReady() -> Bool {
+        guard let url = leaderJoinUrl, !url.isEmpty else { return false }
+        return launchRecords.values.contains { $0.targetType == .chromiumBrowser }
     }
 
     func refreshRuntimeStates(for targets: [AppTarget]) {
@@ -182,15 +232,19 @@ final class SliccProcess {
         }
         startFailures.removeValue(forKey: browser.id)
         guard !Self.isPortInUse(Self.browserPort) else { throw LaunchError.portInUse(Self.browserPort) }
-        log.info("launchStandalone: \(browser.name, privacy: .public) on port \(Self.browserPort)")
+        log.info("launchStandalone: \(browser.name, privacy: .public) on port \(Self.browserPort) (lead)")
         do {
             try spawn(
                 target: browser,
-                extraArgs: Self.applyOverlay(["--cdp-port=\(Self.browserCdpPort)"], overlay: uiOverlayRoot),
-                env: [
-                    "CHROME_PATH": browser.executablePath,
-                    "PORT": "\(Self.browserPort)",
-                ],
+                extraArgs: Self.standaloneBrowserArgs(
+                    cdpPort: Self.browserCdpPort,
+                    overlay: uiOverlayRoot
+                ),
+                env: Self.standaloneBrowserEnv(
+                    executablePath: browser.executablePath,
+                    servePort: Self.browserPort,
+                    inheritedEnv: ProcessInfo.processInfo.environment
+                ),
                 cdpPort: Self.browserCdpPort,
                 servePort: Self.browserPort,
                 electronAppPath: nil
@@ -199,6 +253,12 @@ final class SliccProcess {
             recordStartFailure(for: browser, message: error.localizedDescription)
             throw error
         }
+        // Probe the just-spawned leader for its tray join URL. Runs on a
+        // detached Task so the launch call stays non-blocking; failures
+        // are logged and leave `leaderJoinUrl` nil so the UI keeps the
+        // Desktop App rows disabled rather than wiring followers to a
+        // dead URL.
+        startLeaderProbe(servePort: Self.browserPort)
     }
 
     // MARK: - Electron mode (each app gets its own port)
@@ -221,18 +281,17 @@ final class SliccProcess {
         do {
             try spawn(
                 target: app,
-                extraArgs: Self.applyOverlay(
-                    [
-                        "--electron-app=\(app.path)",
-                        "--kill",
-                        "--cdp-port=\(cdpPort)",
-                    ],
+                extraArgs: Self.electronAppArgs(
+                    electronAppPath: app.path,
+                    cdpPort: cdpPort,
+                    joinUrl: leaderJoinUrl,
                     overlay: uiOverlayRoot
                 ),
                 env: ["PORT": "\(port)"],
                 cdpPort: cdpPort,
                 servePort: port,
-                electronAppPath: app.path
+                electronAppPath: app.path,
+                joinUrl: leaderJoinUrl
             )
         } catch {
             recordStartFailure(for: app, message: error.localizedDescription)
@@ -243,6 +302,133 @@ final class SliccProcess {
     private static func applyOverlay(_ args: [String], overlay: String?) -> [String] {
         guard let overlay, !overlay.isEmpty else { return args }
         return args + ["--static-root=\(overlay)"]
+    }
+
+    /// Default worker base URL handed to swift-server when the user has
+    /// not overridden `WORKER_BASE_URL`. Mirrors swift-server's non-dev
+    /// default in `APIRoutes.swift` so the same fallback applies whether
+    /// the launch flag is read at CLI parse time or at runtime-config
+    /// time.
+    static let defaultWorkerBaseUrl = "https://www.sliccy.ai"
+
+    /// Browser-launch extra args. Always `--lead` so swift-server mints
+    /// a tray; the worker base URL is sourced from the environment in
+    /// `standaloneBrowserEnv` so we don't have to duplicate the
+    /// scheme/host shape on the CLI.
+    static func standaloneBrowserArgs(cdpPort: UInt16, overlay: String?) -> [String] {
+        applyOverlay(["--cdp-port=\(cdpPort)", "--lead"], overlay: overlay)
+    }
+
+    /// Environment for the browser launch. Preserves user-supplied
+    /// `WORKER_BASE_URL` and otherwise defaults to `defaultWorkerBaseUrl`
+    /// so `swift-server --lead` always has a tray endpoint to point the
+    /// webapp at.
+    static func standaloneBrowserEnv(
+        executablePath: String,
+        servePort: UInt16,
+        inheritedEnv: [String: String]
+    ) -> [String: String] {
+        let workerBaseUrl = inheritedEnv["WORKER_BASE_URL"]
+            .flatMap { $0.isEmpty ? nil : $0 }
+            ?? defaultWorkerBaseUrl
+        return [
+            "CHROME_PATH": executablePath,
+            "PORT": "\(servePort)",
+            "WORKER_BASE_URL": workerBaseUrl,
+        ]
+    }
+
+    /// Electron-launch extra args. When `joinUrl` is non-nil the spawned
+    /// slicc-server hands `--join=<url>` to the webapp so it attaches to
+    /// the running leader as a follower instead of minting its own tray.
+    static func electronAppArgs(
+        electronAppPath: String,
+        cdpPort: UInt16,
+        joinUrl: String?,
+        overlay: String?
+    ) -> [String] {
+        var args: [String] = [
+            "--electron-app=\(electronAppPath)",
+            "--kill",
+            "--cdp-port=\(cdpPort)",
+        ]
+        if let joinUrl, !joinUrl.isEmpty {
+            args.append("--join=\(joinUrl)")
+        }
+        return applyOverlay(args, overlay: overlay)
+    }
+
+    /// Fire-and-forget tray-status probe that keeps trying until the
+    /// leader is actually ready. The bounded `discoverJoinUrl` retry
+    /// only covers a ~10s window, so when Chrome auto-launches at
+    /// startup the tray often isn't minted in time and a one-shot probe
+    /// would leave `leaderJoinUrl` permanently nil. This outer loop
+    /// re-schedules `discoverJoinUrl` until (a) it returns a URL while
+    /// the chromiumBrowser record is still alive, (b) the browser
+    /// record goes away, or (c) `leaderJoinUrl` is set by another path
+    /// (e.g. a parallel call). Cancels any prior loop so launch +
+    /// reattach don't stack.
+    ///
+    /// `innerMaxAttempts`/`innerRetryDelay`/`outerBackoff` exist only so
+    /// unit tests can drive the loop quickly; production callers omit
+    /// them and inherit the defaults.
+    func startLeaderProbe(
+        servePort: UInt16,
+        innerMaxAttempts: Int = 8,
+        innerRetryDelay: TimeInterval = 1.5,
+        outerBackoff: TimeInterval = 2.0
+    ) {
+        let probe = trayStatusProbe
+        let serveOrigin = "http://127.0.0.1:\(servePort)"
+
+        leaderProbeTask?.cancel()
+        // Capture `self` weakly into the detached Task, then hop to the
+        // main actor and re-derive a strong reference there. Doing the
+        // re-derive inside `MainActor.run` (rather than the outer Task
+        // closure) avoids the Swift 6 sendable-capture warning about
+        // mutating a captured `var self` from a concurrent context.
+        leaderProbeTask = Task { [weak self] in
+            while !Task.isCancelled {
+                // Stop conditions checked on the main actor before each
+                // round: a join URL set by another path or a missing
+                // chromiumBrowser record both mean the loop has nothing
+                // left to do (matches `clearLeaderIfNoBrowserRunning`
+                // and `stopAll` semantics).
+                let shouldProbe: Bool = await MainActor.run { [weak self] in
+                    guard let self else { return false }
+                    if self.leaderJoinUrl != nil { return false }
+                    return self.launchRecords.values.contains { $0.targetType == .chromiumBrowser }
+                }
+                guard shouldProbe else {
+                    log.info("startLeaderProbe: stop condition reached, exiting loop")
+                    return
+                }
+
+                let joinUrl = await probe.discoverJoinUrl(
+                    serveOrigin: serveOrigin,
+                    maxAttempts: innerMaxAttempts,
+                    retryDelay: innerRetryDelay
+                )
+                if let joinUrl {
+                    await MainActor.run { [weak self] in
+                        guard let self else { return }
+                        let hasBrowser = self.launchRecords.values.contains { $0.targetType == .chromiumBrowser }
+                        guard hasBrowser else {
+                            log.info("startLeaderProbe: discarding join URL — browser already gone")
+                            return
+                        }
+                        guard self.leaderJoinUrl == nil else { return }
+                        self.leaderJoinUrl = joinUrl
+                        log.info("startLeaderProbe: leader join URL ready")
+                    }
+                    return
+                }
+
+                // discoverJoinUrl gave up — wait a short outer backoff
+                // then re-check the stop conditions and probe again.
+                try? await Task.sleep(nanoseconds: UInt64(outerBackoff * 1_000_000_000))
+            }
+        }
     }
 
     /// Find the next available port pair for an Electron app.
@@ -289,6 +475,17 @@ final class SliccProcess {
             stopLaunchRecord(id: id, terminateApps: true)
         }
         startFailures.removeAll()
+        leaderJoinUrl = nil
+    }
+
+    /// Drop `leaderJoinUrl` once the last browser record has gone away,
+    /// keeping the Desktop App rows accurately gated when the user closes
+    /// the leader. Safe to call after any path that removes a record.
+    private func clearLeaderIfNoBrowserRunning() {
+        let hasBrowser = launchRecords.values.contains { $0.targetType == .chromiumBrowser }
+        if !hasBrowser {
+            leaderJoinUrl = nil
+        }
     }
 
     /// Live respawn every running slicc-server with the current
@@ -305,7 +502,8 @@ final class SliccProcess {
                 electronAppPath: record.electronAppPath,
                 servePort: record.servePort,
                 cdpPort: record.cdpPort,
-                staticRoot: uiOverlayRoot
+                staticRoot: uiOverlayRoot,
+                joinUrl: record.joinUrl
             )
             return (id, nil as AppTarget?, persisted)
         }
@@ -359,7 +557,8 @@ final class SliccProcess {
         servePort: UInt16,
         electronAppPath: String? = nil,
         targetName: String,
-        staticRoot: String? = nil
+        staticRoot: String? = nil,
+        joinUrl: String? = nil
     ) {
         launchRecords[id] = LaunchRecord(
             process: process,
@@ -371,7 +570,8 @@ final class SliccProcess {
             targetName: targetName,
             startedAt: Date(),
             observedAppPID: nil,
-            staticRoot: staticRoot
+            staticRoot: staticRoot,
+            joinUrl: joinUrl
         )
     }
 
@@ -395,7 +595,8 @@ final class SliccProcess {
                 electronAppPath: record.electronAppPath,
                 servePort: record.servePort,
                 cdpPort: record.cdpPort,
-                staticRoot: record.staticRoot
+                staticRoot: record.staticRoot,
+                joinUrl: record.joinUrl
             )
         }
         do {
@@ -444,6 +645,39 @@ final class SliccProcess {
         return reattached
     }
 
+    /// Args handed to slicc-server when reattaching to a surviving runtime
+    /// across a smooth update. Mirrors `electronAppArgs` /
+    /// `standaloneBrowserArgs` — extracted into a pure builder so unit tests
+    /// can pin the flag set (including `--join=`) without spawning a real
+    /// process. The `--join=<url>` flag is gated identically to
+    /// `electronAppArgs`: appended only for Electron followers with a
+    /// non-nil, non-empty `joinUrl`.
+    static func reattachArgs(
+        targetType: AppTargetType,
+        electronAppPath: String?,
+        cdpPort: UInt16,
+        joinUrl: String?,
+        overlay: String?
+    ) -> [String] {
+        var args: [String] = [
+            "--serve-only",
+            "--cdp-port=\(cdpPort)",
+        ]
+        if targetType == .electronApp {
+            if let electronAppPath {
+                args.append("--electron-app=\(electronAppPath)")
+            }
+            args.append("--electron")
+            if let joinUrl, !joinUrl.isEmpty {
+                args.append("--join=\(joinUrl)")
+            }
+        }
+        if let overlay, !overlay.isEmpty {
+            args.append("--static-root=\(overlay)")
+        }
+        return args
+    }
+
     private func reattach(target: AppTarget, record: PersistedLaunchRecord) throws {
         // Re-spawn slicc-server in --serve-only mode so it reuses the
         // existing browser/Electron without re-launching it. Same ports
@@ -451,20 +685,24 @@ final class SliccProcess {
         guard !Self.isPortInUse(record.servePort) else {
             throw LaunchError.portInUse(record.servePort)
         }
-        var extraArgs: [String] = [
-            "--serve-only",
-            "--cdp-port=\(record.cdpPort)",
-        ]
-        if target.type == .electronApp {
-            extraArgs.append("--electron-app=\(target.path)")
-            extraArgs.append("--electron")
-        }
-        if let staticRoot = record.staticRoot ?? uiOverlayRoot, !staticRoot.isEmpty {
-            extraArgs.append("--static-root=\(staticRoot)")
-        }
+        let extraArgs = Self.reattachArgs(
+            targetType: target.type,
+            electronAppPath: target.type == .electronApp ? target.path : nil,
+            cdpPort: record.cdpPort,
+            joinUrl: record.joinUrl,
+            overlay: record.staticRoot ?? uiOverlayRoot
+        )
         var env: [String: String] = ["PORT": "\(record.servePort)"]
         if target.type == .chromiumBrowser {
             env["CHROME_PATH"] = target.executablePath
+        }
+        // Re-probe the leader after reattach so the Desktop App rows
+        // come back enabled across smooth-update relaunches. The
+        // already-running browser still has its tray; the new
+        // slicc-server just needs to refresh the join URL into the
+        // launcher.
+        if target.type == .chromiumBrowser {
+            startLeaderProbe(servePort: record.servePort)
         }
         try spawn(
             target: target,
@@ -472,7 +710,8 @@ final class SliccProcess {
             env: env,
             cdpPort: record.cdpPort,
             servePort: record.servePort,
-            electronAppPath: record.electronAppPath
+            electronAppPath: record.electronAppPath,
+            joinUrl: record.joinUrl
         )
     }
 
@@ -504,7 +743,8 @@ final class SliccProcess {
         env: [String: String],
         cdpPort: UInt16,
         servePort: UInt16,
-        electronAppPath: String?
+        electronAppPath: String?,
+        joinUrl: String? = nil
     ) throws {
         let launchConfig = try Self.resolveLaunchConfiguration(sliccDir: sliccDir, extraArgs: extraArgs)
         log.info("spawn: \(launchConfig.executablePath, privacy: .public) \(launchConfig.arguments.joined(separator: " "), privacy: .public)")
@@ -548,6 +788,9 @@ final class SliccProcess {
                 let isCurrentRecord = self.launchRecords[target.id]?.process === p
                 if isCurrentRecord {
                     self.launchRecords.removeValue(forKey: target.id)
+                    if target.type == .chromiumBrowser {
+                        self.clearLeaderIfNoBrowserRunning()
+                    }
                 }
                 if !wasIntentional && p.terminationStatus != 0 && isCurrentRecord {
                     self.recordStartFailure(
@@ -569,7 +812,8 @@ final class SliccProcess {
             targetName: target.name,
             startedAt: Date(),
             observedAppPID: nil,
-            staticRoot: uiOverlayRoot
+            staticRoot: uiOverlayRoot,
+            joinUrl: joinUrl
         )
     }
 
@@ -638,6 +882,9 @@ final class SliccProcess {
             record.process.terminate()
         } else {
             intentionallyStoppingTargets.remove(id)
+        }
+        if record.targetType == .chromiumBrowser {
+            clearLeaderIfNoBrowserRunning()
         }
     }
 

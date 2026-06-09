@@ -316,6 +316,12 @@ struct SliccstartApp: App {
             showDebugBuildDialog = true
         case .cannotStart(.needsPermission):
             appManagementPermission.openSystemSettings()
+        case .cannotStart(.needsLeader):
+            // Row is disabled at the AppListView layer; the user can't
+            // reach this path under normal interaction. No-op defensively
+            // so a stray programmatic call doesn't try to start a follower
+            // without a leader.
+            log.info("handleElectronLaunch: \(target.name, privacy: .public) needs leader; ignoring")
         case .notRunning, .startFailed:
             launchElectron(target)
         }

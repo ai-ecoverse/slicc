@@ -74,6 +74,69 @@ final class AppRuntimeStateTests: XCTestCase {
         )
     }
 
+    func testElectronAppGatesOnMissingLeader() {
+        XCTAssertEqual(
+            AppRuntimeState.resolve(
+                targetType: .electronApp,
+                leaderAvailable: false
+            ),
+            .cannotStart(.needsLeader)
+        )
+    }
+
+    func testElectronAppRunningWithoutDebugStillGatesOnMissingLeader() {
+        // Without a leader, restarting the Electron app under SLICC won't
+        // produce a working follower; the row must stay gated so the user
+        // brings up a browser first.
+        XCTAssertEqual(
+            AppRuntimeState.resolve(
+                targetType: .electronApp,
+                leaderAvailable: false,
+                appIsRunning: true
+            ),
+            .cannotStart(.needsLeader)
+        )
+    }
+
+    func testAlreadyAttachedFollowerIsNotRegatedWhenLeaderFlagDrops() {
+        // Once we're attached (debugPort set) the follower has already
+        // joined the tray; transient leaderAvailable flips during the
+        // probe should not knock the green dot off.
+        XCTAssertEqual(
+            AppRuntimeState.resolve(
+                targetType: .electronApp,
+                leaderAvailable: false,
+                debugPort: 9227,
+                appIsRunning: true
+            ),
+            .runningWithDebug(cdpPort: 9227)
+        )
+    }
+
+    func testPermissionBlockerWinsOverLeaderBlocker() {
+        // Permission gates earlier in the chain: the user can't even see
+        // the Electron app exists without App Management, so surfacing
+        // "needs leader" here would be misleading.
+        XCTAssertEqual(
+            AppRuntimeState.resolve(
+                targetType: .electronApp,
+                hasAppManagementPermission: false,
+                leaderAvailable: false
+            ),
+            .cannotStart(.needsPermission)
+        )
+    }
+
+    func testBrowserRowsIgnoreLeaderAvailability() {
+        XCTAssertEqual(
+            AppRuntimeState.resolve(
+                targetType: .chromiumBrowser,
+                leaderAvailable: false
+            ),
+            .notRunning
+        )
+    }
+
     func testDebugBuildLaunchRecordOnlyTerminatesDebugCopy() {
         let target = makeElectronTarget(
             path: "/Users/test/Applications/Slack Debug.app",

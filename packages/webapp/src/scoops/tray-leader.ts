@@ -70,6 +70,44 @@ export function getLeaderTrayRuntimeStatus(): LeaderTrayRuntimeStatus {
   };
 }
 
+/**
+ * Key for the page→worker `localStorage` shim mirroring the leader tray
+ * status. `main.ts` writes this on every `subscribeToLeaderTrayRuntimeStatus`
+ * tick; `installPageStorageSync` forwards page-side writes into the kernel
+ * worker's Map-backed `localStorage` shim so worker readers see the same
+ * value.
+ */
+export const LEADER_STATUS_STORAGE_KEY = 'slicc.leaderTrayStatus';
+
+/**
+ * Leader tray status with a `localStorage` fallback for the standalone
+ * kernel-worker thread: when the worker's own module global is `inactive`
+ * (because the page is the only side that actually runs `LeaderTrayManager`),
+ * read the shim value that `main.ts` keeps current via
+ * `subscribeToLeaderTrayRuntimeStatus`. Extension mode keeps the module
+ * global as the source of truth because the offscreen runs the manager.
+ *
+ * Shared by `host-command.ts` and the `/licks-ws` `tray_status` reply so
+ * `host`, `host reset/leave`, and the node-server's `/api/tray-status`
+ * agree on what the leader status is.
+ */
+export function getLeaderStatusWithFallback(): LeaderTrayRuntimeStatus {
+  const moduleStatus = getLeaderTrayRuntimeStatus();
+  if (moduleStatus.state !== 'inactive') return moduleStatus;
+  try {
+    const stored = (globalThis as { localStorage?: Storage }).localStorage?.getItem(
+      LEADER_STATUS_STORAGE_KEY
+    );
+    if (stored) {
+      const parsed = JSON.parse(stored) as LeaderTrayRuntimeStatus;
+      if (parsed?.state && parsed.state !== 'inactive') return parsed;
+    }
+  } catch {
+    // ignore parse errors
+  }
+  return moduleStatus;
+}
+
 type LeaderTrayRuntimeStatusListener = (status: LeaderTrayRuntimeStatus) => void;
 const leaderTrayRuntimeStatusListeners = new Set<LeaderTrayRuntimeStatusListener>();
 
