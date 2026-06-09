@@ -2613,3 +2613,213 @@ describe('upskill tabs', () => {
     expect(result.stdout).toContain('upskill https://github.com/acme/skills');
   });
 });
+
+describe('upskill command — marketplace manifest flows', () => {
+  let fs: VirtualFS;
+  let createdFileSystems: VirtualFS[];
+  let dbCounter = 700;
+
+  beforeEach(async () => {
+    createdFileSystems = [];
+    const originalCreate = VirtualFS.create.bind(VirtualFS);
+    vi.spyOn(VirtualFS, 'create').mockImplementation(async (options) => {
+      const instance = await originalCreate(options);
+      createdFileSystems.push(instance);
+      return instance;
+    });
+    fs = await VirtualFS.create({ dbName: `upskill-marketplace-${dbCounter++}`, wipe: true });
+    await VirtualFS.create({ dbName: 'slicc-fs-global', wipe: true });
+  });
+
+  afterEach(async () => {
+    _resetGlobalFsCache();
+    await Promise.allSettled(createdFileSystems.map((instance) => instance.dispose()));
+    vi.restoreAllMocks();
+  });
+
+  function makeMarketplaceZip(opts: {
+    marketplaceName?: string;
+    version?: string;
+    plugins: Array<{
+      name: string;
+      source: string | Record<string, unknown>;
+      skills?: string[];
+    }>;
+  }): Uint8Array {
+    const encoder = new TextEncoder();
+    const manifest = {
+      name: opts.marketplaceName ?? 'test-marketplace',
+      metadata: { version: opts.version ?? '1.0.0' },
+      plugins: opts.plugins.map((p) => ({
+        name: p.name,
+        description: `${p.name} plugin`,
+        source: p.source,
+        strict: false,
+      })),
+    };
+    const entries: Record<string, Uint8Array> = {
+      'repo-main/.claude-plugin/marketplace.json': encoder.encode(JSON.stringify(manifest)),
+    };
+    for (const plugin of opts.plugins) {
+      if (typeof plugin.source !== 'string') continue;
+      const pluginPath = plugin.source.replace(/^\.\//, '');
+      for (const skillName of plugin.skills ?? []) {
+        entries[`repo-main/${pluginPath}/skills/${skillName}/SKILL.md`] = encoder.encode(
+          `---\nname: ${skillName}\n---\n# ${skillName}\n`
+        );
+      }
+    }
+    return zipSync(entries);
+  }
+
+  it('shows grouped marketplace listing when manifest is present', async () => {
+    const zipBytes = makeMarketplaceZip({
+      marketplaceName: 'my-marketplace',
+      version: '2.0.0',
+      plugins: [
+        {
+          name: 'tool-set-a',
+          source: './plugins/tool-set-a',
+          skills: ['skill-alpha', 'skill-beta'],
+        },
+        { name: 'tool-set-b', source: './plugins/tool-set-b', skills: ['skill-gamma'] },
+      ],
+    });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('codeload.github.com')) return response(200, zipBytes);
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['owner/repo'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('my-marketplace');
+    expect(result.stdout).toContain('2.0.0');
+    expect(result.stdout).toContain('tool-set-a');
+    expect(result.stdout).toContain('skill-alpha');
+    expect(result.stdout).toContain('skill-beta');
+    expect(result.stdout).toContain('tool-set-b');
+    expect(result.stdout).toContain('skill-gamma');
+    expect(result.stdout).toContain('--plugin');
+    expect(result.stdout).toContain('--skill');
+    expect(result.stdout).toContain('--all');
+  });
+
+  it('--plugin installs all skills in a named collection', async () => {
+    const zipBytes = makeMarketplaceZip({
+      plugins: [
+        {
+          name: 'tool-set-a',
+          source: './plugins/tool-set-a',
+          skills: ['skill-alpha', 'skill-beta'],
+        },
+        { name: 'tool-set-b', source: './plugins/tool-set-b', skills: ['skill-gamma'] },
+      ],
+    });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('codeload.github.com')) return response(200, zipBytes);
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(
+      ['owner/repo', '--plugin', 'tool-set-a'],
+      createMockCtx() as any
+    );
+
+    expect(result.exitCode).toBe(0);
+    await expect(fs.stat('/workspace/skills/skill-alpha')).resolves.toBeDefined();
+    await expect(fs.stat('/workspace/skills/skill-beta')).resolves.toBeDefined();
+    await expect(fs.stat('/workspace/skills/skill-gamma')).rejects.toThrow();
+  });
+
+  it('--all installs skills from all local-source plugins and warns about git-subdir', async () => {
+    const zipBytes = makeMarketplaceZip({
+      plugins: [
+        { name: 'tool-set-a', source: './plugins/tool-set-a', skills: ['skill-alpha'] },
+        { name: 'tool-set-b', source: './plugins/tool-set-b', skills: ['skill-beta'] },
+        {
+          name: 'external',
+          source: {
+            source: 'git-subdir',
+            url: 'https://github.com/org/repo',
+            path: '.',
+            sha: 'abc',
+          },
+        },
+      ],
+    });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('codeload.github.com')) return response(200, zipBytes);
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['owner/repo', '--all'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(1); // non-zero because git-subdir produces stderr
+    await expect(fs.stat('/workspace/skills/skill-alpha')).resolves.toBeDefined();
+    await expect(fs.stat('/workspace/skills/skill-beta')).resolves.toBeDefined();
+    expect(result.stderr).toContain('external');
+    expect(result.stderr).toContain('git-subdir');
+  });
+
+  it('--plugin and --skill together return a mutual exclusion error', async () => {
+    const zipBytes = makeMarketplaceZip({
+      plugins: [{ name: 'tool-set-a', source: './plugins/tool-set-a', skills: ['skill-alpha'] }],
+    });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('codeload.github.com')) return response(200, zipBytes);
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(
+      ['owner/repo', '--plugin', 'tool-set-a', '--skill', 'skill-alpha'],
+      createMockCtx() as any
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('mutually exclusive');
+  });
+
+  it('unknown --plugin name returns a clear error', async () => {
+    const zipBytes = makeMarketplaceZip({
+      plugins: [{ name: 'tool-set-a', source: './plugins/tool-set-a', skills: ['skill-alpha'] }],
+    });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('codeload.github.com')) return response(200, zipBytes);
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(
+      ['owner/repo', '--plugin', 'does-not-exist'],
+      createMockCtx() as any
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('"does-not-exist"');
+    expect(result.stderr).toContain('not found');
+  });
+
+  it('repos without a manifest fall back to existing flat listing', async () => {
+    const encoder = new TextEncoder();
+    const zipBytes = zipSync({
+      'repo-main/plain-skill/SKILL.md': encoder.encode('---\nname: plain-skill\n---\n# Plain\n'),
+    });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('codeload.github.com')) return response(200, zipBytes);
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['owner/repo'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('plain-skill');
+    expect(result.stdout).not.toContain('marketplace');
+    expect(result.stdout).toContain('upskill owner/repo --skill');
+  });
+});
