@@ -84,7 +84,9 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   slicc-pill.scoop.ephemeral::part(pill){border-style:dashed;}
   slicc-pill.scoop.lit::part(pill){box-shadow:0 0 0 3px color-mix(in srgb,var(--h) 45%,transparent);}
   /* slicc-add-menu replaces the legacy "+" iconbtn — fills the toolbar so its
-     searchbox can slide in next to the +/× and results grow the composer upward in-flow */
+     searchbox can slide in next to the +/×. Wave 11e: the results panel is absolutely
+     positioned inside the shadow so it pops UP out of the footer band and overlays the
+     chat thread — the composer/inputcard/toolbar heights stay constant on open/close. */
   .toolbar slicc-add-menu{flex:1;min-width:0;}
   /* in dark mode the composer uses backdrop-blur over the textured shader/sprinkles,
      so the closed +'s bare SVG stroke reads as low-contrast against the varying glass.
@@ -591,9 +593,10 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
   <script>addEventListener('mousemove',e=>{document.querySelectorAll('.eye').forEach(eye=>{const r=eye.getBoundingClientRect();const ex=r.left+r.width/2,ey=r.top+r.height/2;const a=Math.atan2(e.clientY-ey,e.clientX-ex);const d=Math.min(3,Math.hypot(e.clientX-ex,e.clientY-ey)/45);eye.style.setProperty('--px',(Math.cos(a)*d).toFixed(2)+'px');eye.style.setProperty('--py',(Math.sin(a)*d).toFixed(2)+'px');});});</script>
   <!-- ===== inlined web components: <slicc-pill>, <slicc-add-menu> ===== -->
   <!-- Copied verbatim from proto/slicc-pill.html and proto/slicc-add-menu.html
-       (component-definition portions only — demo/tuning UI omitted). The add-menu's
-       native in-flow behavior is preserved: opening it grows the composer upward
-       (results stack above the row, searchbox slides in next to the +/× icon). -->
+       (component-definition portions only — demo/tuning UI omitted). Wave 11e: the
+       native +→× morph + searchbox-in-toolbar is preserved, but the results panel is
+       absolutely positioned (see ADD_STYLE below) so it pops UP out of the footer band
+       and overlays the chat thread instead of growing the composer/footer height. -->
   <script>
   (() => {
     // ---------- <slicc-pill> ----------
@@ -739,9 +742,10 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
       ],
     };
     const SECTIONS=[{kind:'file',label:'Files',icon:'file'},{kind:'skill',label:'Skills',icon:'sparkles'},{kind:'conversation',label:'Conversations',icon:'message'}];
-    // STYLE copied from proto/slicc-add-menu.html — the .results panel sits in
-    // normal flow ABOVE the row, so opening grows the composer upward in-flow
-    // (no absolute-positioned popover, no pinned composer height).
+    // STYLE adapted from proto/slicc-add-menu.html — Wave 11e: the .results panel
+    // is absolutely positioned and pops UPWARD out of the footer band, overlaying the
+    // chat thread above. The composer/inputcard/footer band height stays constant on
+    // open/close; the search-in-toolbar morph and chat layout are preserved.
     const ADD_STYLE = `
       :host{display:block;width:100%;
         --bg:#2c2c2c;--bg-sunken:#141414;--fg:#e8e8e8;--fg-2:#a1a1a1;--fg-3:#8a8a8a;
@@ -752,7 +756,10 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
       @media (prefers-color-scheme: light){:host(:not([theme="dark"])){--bg:#fff;--bg-sunken:#f3f3f3;--fg:#131313;--fg-2:#505050;--fg-3:#717171;--border:#e1e1e1;--accent:#3b63fb;--accent-subtle:color-mix(in oklab,var(--accent) 12%,#fff);--hover:rgba(0,0,0,0.05);}}
       :host([theme="light"]){--bg:#fff;--bg-sunken:#f3f3f3;--fg:#131313;--fg-2:#505050;--fg-3:#717171;--border:#e1e1e1;--accent:#3b63fb;--accent-subtle:color-mix(in oklab,var(--accent) 12%,#fff);--hover:rgba(0,0,0,0.05);}
       *{box-sizing:border-box;}
-      .wrap{display:flex;flex-direction:column;}
+      /* Wave 11e: .wrap is the positioning anchor; .row stays in flow (toolbar height
+         unchanged), .results pops OUT absolutely so the footer band's height never
+         grows when the menu opens. */
+      .wrap{display:flex;flex-direction:column;position:relative;}
       .row{display:flex;align-items:center;gap:8px;}
       .trigger{flex:0 0 auto;width:32px;height:32px;border:none;border-radius:8px;background:transparent;color:var(--fg);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .13s ease,color .13s ease,transform .16s ease;}
       .trigger:hover{background:var(--hover);}
@@ -763,9 +770,17 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
       .searchbox .si{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--fg-3);display:flex;pointer-events:none;}
       .searchbox input{width:100%;border:1px solid var(--border);background:var(--bg-sunken);color:var(--fg);border-radius:9px;padding:7px 10px 7px 32px;font:inherit;outline:none;}
       .searchbox input:focus{border-color:var(--accent);}
-      /* results grow the composer in-flow (no floating popover) and stack above the row */
-      .results{position:relative;max-height:0;overflow:hidden;opacity:0;transition:max-height .18s ease,opacity .14s ease;}
-      :host([data-open]) .results{max-height:300px;overflow-y:auto;opacity:1;margin-bottom:8px;}
+      /* Wave 11e: results panel pops upward OUT of the footer band, overlaying the
+         chat thread above. Absolute positioning keeps the toolbar/inputcard/composer
+         heights constant so the chat layout never reflows when the menu opens.
+         Styled as a card matching the inputcard surface so the morph still reads as
+         a continuous extension of the composer rather than a detached dropdown. */
+      .results{position:absolute;left:-4px;right:-4px;bottom:calc(100% + 6px);
+        max-height:0;overflow:hidden;opacity:0;pointer-events:none;
+        background:var(--bg);border:1px solid var(--border);border-radius:12px;
+        box-shadow:0 -10px 28px -10px rgba(10,10,10,.20),0 -2px 6px -2px rgba(10,10,10,.08);
+        transition:max-height .18s ease,opacity .14s ease;z-index:5;}
+      :host([data-open]) .results{max-height:300px;overflow-y:auto;opacity:1;pointer-events:auto;padding:6px;}
       .sec{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--fg-3);font-weight:650;margin:8px 6px 4px;}
       .item{display:flex;align-items:center;gap:10px;width:100%;padding:8px;border-radius:9px;cursor:pointer;text-align:left;color:var(--fg);}
       .item .ic{flex:0 0 auto;color:var(--fg-2);display:flex;} .item.quick .ic{color:var(--accent);}
