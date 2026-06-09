@@ -139,19 +139,7 @@ export function createWorkflowRunManager(deps: WorkflowRunManagerDeps): Workflow
     // immediately. `--wait` is NOT handled here — the command bypasses the manager entirely
     // for `--wait` (Task 7 Step 4) and runs the SP1 inline path, so `start` never awaits.
     const wrappedCtx = wrapRunCtx(opts.ctx, runId);
-    const offSpawn = deps.processManager.on('spawn', (proc) => {
-      // Match by the unique runId in argv[2], NOT by kind or filename. Filename
-      // is NOT unique (two concurrent runs of the same file — and ALL `--script`
-      // runs, which share `<workflow>` — would alias to whichever pid spawned
-      // first). The realm argv is `['workflow', filename, runId]`; `runInRealm`
-      // registers the process with that full argv (kind is irrelevant — it's
-      // 'jsh' for every realm-JS process), so argv[2] === runId is the only
-      // reliable per-run discriminator.
-      if (state.pid === null && proc.argv[0] === 'workflow' && proc.argv[2] === runId) {
-        state.pid = proc.pid;
-        notify(runId);
-      }
-    });
+    const offSpawn = capturePid(deps.processManager, state, runId, () => notify(runId));
     void deps
       .runRealm(opts.code, ['workflow', opts.filename, runId], wrappedCtx)
       .then((result) => finish(runId, sentinel, result))
@@ -194,6 +182,7 @@ export function createWorkflowRunManager(deps: WorkflowRunManagerDeps): Workflow
   ): Promise<void> {
     const state = runs.get(runId);
     if (!state) return;
+    if (state.status !== 'running' && state.status !== 'paused') return; // already terminal — don't double-write/double-deliver
     const resultPath = `${RUNS_DIR}/${runId}.json`;
     // One timestamp per completion so the run file and the in-memory state agree.
     const finishedAt = new Date().toISOString();
@@ -283,6 +272,32 @@ export function publishWorkflowRunManager(deps: WorkflowRunManagerDeps): Workflo
 function previewOf(value: unknown): string {
   const s = typeof value === 'string' ? value : JSON.stringify(value);
   return (s ?? 'null').slice(0, 200);
+}
+
+// Subscribe to the kernel ProcessManager and capture THIS run's realm pid.
+// Match by the unique runId ANYWHERE in argv, NOT by kind or filename. Filename is NOT
+// unique (two concurrent runs of the same file — and ALL `--script` runs, which share
+// `<workflow>` — would alias to whichever pid spawned first). The manager passes
+// `['workflow', filename, runId]`; the runId is a unique random slice, so
+// `proc.argv.includes(runId)` is the reliable per-run discriminator and is robust to any
+// future argv-shape change (e.g. a leading `'node'`). pid capture is one-shot, so
+// self-unsubscribe to avoid holding the listener (and its closure over the run state) for
+// the whole run lifetime. Returns the unsubscribe handle so the launch chain can call it
+// idempotently in `.finally()` if the spawn never fired.
+function capturePid(
+  processManager: WorkflowRunManagerDeps['processManager'],
+  state: WorkflowRunState,
+  runId: string,
+  notify: () => void
+): () => void {
+  const offSpawn = processManager.on('spawn', (proc) => {
+    if (state.pid === null && proc.argv.includes(runId)) {
+      state.pid = proc.pid;
+      notify();
+      offSpawn();
+    }
+  });
+  return offSpawn;
 }
 
 // Tap the run's `ctx.exec` (the lowering point `realm-host.dispatchExec` calls — NOT

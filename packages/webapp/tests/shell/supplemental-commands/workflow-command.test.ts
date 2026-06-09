@@ -205,6 +205,61 @@ describe('workflow — delegation, subcommands, and origin', () => {
     expect(killed).toContainEqual(['kill', '-KILL', '1234']);
   });
 
+  it('stop on a terminal run does NOT kill (pid may be recycled) and reports the status', async () => {
+    const killed: string[][] = [];
+    installFakeManager({
+      // status=done but pid is non-null (the kernel ProcessManager may have recycled it).
+      getRun: () => ({
+        id: 'r1',
+        name: 'demo',
+        status: 'done',
+        agentsDone: 2,
+        agentsStarted: 2,
+        currentPhase: null,
+        resultPath: '/shared/workflow-runs/r1.json',
+        preview: 'ok',
+        error: null,
+        pid: 1234,
+      }),
+    });
+    const fs = await VirtualFS.create({ dbName: `wf-${Math.random()}`, wipe: true });
+    const ctx = await ctxWith(fs, async (a) => {
+      killed.push(a);
+      return { stdout: '', stderr: '', exitCode: 0 };
+    });
+    const res = await createWorkflowCommand().execute(['stop', 'r1'], ctx);
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toMatch(/already done/);
+    expect(killed).toHaveLength(0); // no kill issued for a terminal run
+  });
+
+  it('stop propagates a non-zero kill exit code on the stderr', async () => {
+    installFakeManager({
+      getRun: () => ({
+        id: 'r1',
+        name: 'demo',
+        status: 'running',
+        agentsDone: 0,
+        agentsStarted: 1,
+        currentPhase: null,
+        resultPath: null,
+        preview: null,
+        error: null,
+        pid: 1234,
+      }),
+    });
+    const fs = await VirtualFS.create({ dbName: `wf-${Math.random()}`, wipe: true });
+    // kill fails (e.g. the pid is gone) → command must surface the failure, not a fake "stopped".
+    const ctx = await ctxWith(fs, async () => ({
+      stdout: '',
+      stderr: 'kill: no such process\n',
+      exitCode: 1,
+    }));
+    const res = await createWorkflowCommand().execute(['stop', 'r1'], ctx);
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toMatch(/no such process/);
+  });
+
   it('list / status / stop error when the run is unknown / manager absent', async () => {
     const fs = await VirtualFS.create({ dbName: `wf-${Math.random()}`, wipe: true });
     const ctx = await ctxWith(fs, async () => ({ stdout: '', stderr: '', exitCode: 0 }));

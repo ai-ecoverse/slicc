@@ -267,7 +267,19 @@ async function runSubcommand(args: string[], ctx: CommandContext): Promise<ExecR
       exitCode: 0,
     };
   }
-  await ctx.exec?.('kill', { cwd: ctx.cwd, args: ['-KILL', String(st.pid)] });
+  // Terminal runs may have a stale pid the kernel ProcessManager has already recycled —
+  // killing it would target an unrelated process. Skip the kill and report current status.
+  if (st.status !== 'running' && st.status !== 'paused') {
+    return { stdout: `workflow: run ${st.id} already ${st.status}\n`, stderr: '', exitCode: 0 };
+  }
+  const r = await ctx.exec?.('kill', { cwd: ctx.cwd, args: ['-KILL', String(st.pid)] });
+  if (r && r.exitCode !== 0) {
+    return {
+      stdout: '',
+      stderr: r.stderr || `workflow: kill failed (exit ${r.exitCode})\n`,
+      exitCode: r.exitCode,
+    };
+  }
   return { stdout: `stopped run ${st.id} (pid ${st.pid})\n`, stderr: '', exitCode: 0 };
 }
 

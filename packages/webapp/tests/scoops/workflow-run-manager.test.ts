@@ -186,20 +186,56 @@ describe('WorkflowRunManager', () => {
       ctx: { exec: vi.fn() } as any,
     });
     // Real realm-JS processes are kind:'jsh' (runInRealm default). The production filter
-    // matches on argv ([0]==='workflow' && [2]===runId), NOT kind, so kind here is just
-    // realistic fixture data — must match reality so the test isn't misleading. argv[2]
-    // is the unique runId the manager threads in (makeRunId returns 'run1' here).
+    // matches the unique runId ANYWHERE in argv (`argv.includes(runId)`), NOT kind, so kind
+    // here is just realistic fixture data — must match reality so the test isn't misleading.
+    // makeRunId returns 'run1' here, and argv carries it.
+    // A spawn whose argv does NOT include the runId must be ignored (no false pid capture).
+    spawnHandler?.({ pid: 9999, kind: 'jsh', argv: ['workflow', 'f', 'someOtherRun'] });
+    expect(mgr.getRun(runId)!.pid).toBeNull();
     spawnHandler?.({ pid: 4242, kind: 'jsh', argv: ['workflow', 'f', 'run1'] });
     expect(mgr.getRun(runId)!.pid).toBe(4242);
     realmDone.resolve({ stdout: `WF_RESULT_x${JSON.stringify({})}`, stderr: '', exitCode: 0 });
     await vi.waitFor(() => expect(mgr.getRun(runId)!.status).toBe('done'));
   });
 
-  it('concurrent same-file runs capture DISTINCT pids (no aliasing) — matched by runId in argv[2]', async () => {
+  it('pid capture is one-shot: self-unsubscribes after the first matching spawn', async () => {
+    const offSpawn = vi.fn();
+    let spawnHandler: ((p: any) => void) | undefined;
+    const pm = {
+      on: vi.fn((_e: string, fn: any) => {
+        spawnHandler = fn;
+        return offSpawn;
+      }),
+    };
+    const realmDone = deferred<any>();
+    const deps = makeDeps({ processManager: pm as any, runRealm: vi.fn(() => realmDone.promise) });
+    const mgr = createWorkflowRunManager(deps as any);
+    const { runId } = await mgr.start({
+      code: 'C',
+      source: 'S',
+      name: 'n',
+      filename: 'f',
+      parentJid: undefined,
+      sentinel: 'WF_RESULT_x',
+      ctx: { exec: vi.fn() } as any,
+    });
+    // First matching spawn captures the pid AND unsubscribes the listener.
+    spawnHandler?.({ pid: 4242, kind: 'jsh', argv: ['workflow', 'f', 'run1'] });
+    expect(mgr.getRun(runId)!.pid).toBe(4242);
+    expect(offSpawn).toHaveBeenCalledTimes(1);
+    // A later spawn re-using the same runId must NOT overwrite the captured pid
+    // (state.pid !== null also guards, but the listener is already detached).
+    spawnHandler?.({ pid: 5555, kind: 'jsh', argv: ['workflow', 'f', 'run1'] });
+    expect(mgr.getRun(runId)!.pid).toBe(4242);
+    realmDone.resolve({ stdout: `WF_RESULT_x${JSON.stringify({})}`, stderr: '', exitCode: 0 });
+    await vi.waitFor(() => expect(mgr.getRun(runId)!.status).toBe('done'));
+  });
+
+  it('concurrent same-file runs capture DISTINCT pids (no aliasing) — matched by runId anywhere in argv', async () => {
     // Every `start()` registers its own spawn listener. Capture them all so we can
     // replay each run's spawn event to every listener — exactly what the real PM does
     // (it broadcasts each spawn to all subscribers). Each listener must only claim the
-    // pid whose argv[2] matches ITS runId.
+    // pid whose argv includes ITS runId, then self-unsubscribe.
     const handlers: ((p: any) => void)[] = [];
     const pm = {
       on: vi.fn((_e: string, fn: any) => {
@@ -244,7 +280,7 @@ describe('WorkflowRunManager', () => {
     expect(a.runId).toBe('run1');
     expect(b.runId).toBe('run2');
 
-    // Broadcast each run's spawn (identical argv[0..1], unique argv[2]=runId) to ALL listeners.
+    // Broadcast each run's spawn (identical argv[0..1], unique runId in argv) to ALL listeners.
     const broadcast = (p: any) => {
       for (const h of handlers) h(p);
     };
@@ -288,6 +324,53 @@ describe('WorkflowRunManager', () => {
     expect(mgr.listRuns()[0].status).toBe('killed');
     expect(sharedFs.writeFile).toHaveBeenCalledTimes(1);
     expect(fireLick).toHaveBeenCalledTimes(1);
+  });
+
+  it('complete() is idempotent: a second settlement after a terminal status is a no-op (no double write/lick)', async () => {
+    // `complete()` isn't on the public surface, so we exercise its re-entrancy guard through
+    // the launch lifecycle. The internal chain is `runRealm(...).then(finish)…`; a buggy/racy
+    // double-settle (e.g. an explicit stop racing the realm's own exit) would drive `finish`
+    // → `complete` twice. We reproduce that with a thenable whose `then(onFulfilled)` invokes
+    // its fulfillment handler TWICE — the first reaches `complete('done')`, the second must be
+    // short-circuited by the guard so writeFile + fireLick stay at exactly 1.
+    type ExecResultLikeShim = { stdout: string; stderr: string; exitCode: number };
+    const fireLick = vi.fn();
+    const sharedFs = { mkdir: vi.fn(async () => {}), writeFile: vi.fn(async () => {}) };
+    const out: ExecResultLikeShim = {
+      stdout: `WF_RESULT_x${JSON.stringify({ ok: true })}`,
+      stderr: '',
+      exitCode: 0,
+    };
+    const doubleSettleRealm = {
+      // `finish`/`complete` are async; await the FIRST completion fully (so status is
+      // already 'done') before driving the racy SECOND one — that is precisely the
+      // "already terminal" window the guard short-circuits.
+      async then(onFulfilled: (v: ExecResultLikeShim) => unknown) {
+        await onFulfilled(out); // first settlement → finish → complete('done') (awaited)
+        await onFulfilled(out); // racy SECOND settlement → complete() now sees terminal → no-op
+      },
+    };
+    const mgr = createWorkflowRunManager(
+      makeDeps({
+        fireLick,
+        sharedFs: sharedFs as any,
+        runRealm: vi.fn(() => doubleSettleRealm as unknown as Promise<ExecResultLikeShim>),
+      }) as any
+    );
+    const { runId } = await mgr.start({
+      code: 'C',
+      source: 'S',
+      name: 'n',
+      filename: 'f',
+      parentJid: 'cone_1',
+      sentinel: 'WF_RESULT_x',
+      ctx: {} as any,
+    });
+    await vi.waitFor(() => expect(mgr.getRun(runId)!.status).toBe('done'));
+    // Both completion attempts have run; the guard kept the side effects single-shot.
+    expect(mgr.getRun(runId)!.status).toBe('done');
+    expect(sharedFs.writeFile).toHaveBeenCalledTimes(1); // no double write
+    expect(fireLick).toHaveBeenCalledTimes(1); // no double lick
   });
 
   it('publishWorkflowRunManager sets globalThis.__slicc_workflows', () => {
