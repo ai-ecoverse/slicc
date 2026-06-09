@@ -480,6 +480,31 @@ describe('OPFS_SYNC_FS — setattr truncate via SAH provider', () => {
     const backing = sah.backings.get('a.txt');
     expect(backing?.data.length ?? 0).toBe(2);
   });
+
+  it('skips the queued truncate when a stream write has grown the file past the target', async () => {
+    const { plugin, root, mount, sah } = await setup({ 'a.txt': 'AAAA' });
+    const a = plugin.node_ops.lookup(root, 'a.txt');
+    a.opfs.size = 4;
+
+    // Emscripten's open('w') calls setattr(size=0) THEN opens the stream.
+    plugin.node_ops.setattr(a, { size: 0 });
+    expect(a.opfs.size).toBe(0);
+
+    // Stream open + write simulates Python writing new content.
+    const stream = openStream(plugin, a);
+    const data = new TextEncoder().encode('hello from python');
+    plugin.stream_ops.write(stream, data, 0, data.length, 0);
+    expect(a.opfs.size).toBe(17);
+    plugin.stream_ops.close(stream);
+
+    // Flush drains the queued truncate — but it must be skipped because
+    // node.opfs.size (17) > sizeAtEnqueue (0).
+    await flushPendingOpfsOps(mount);
+
+    const backing = sah.backings.get('a.txt');
+    expect(backing?.data.length).toBe(17);
+    expect(new TextDecoder().decode(backing?.data)).toBe('hello from python');
+  });
 });
 
 describe('ERRNO mapping', () => {
