@@ -30,6 +30,9 @@ workflow is overhead you don't need.
 
 - `agent(prompt, opts?)` → the sub-agent's text (or parsed JSON when `opts.schema` is set),
   or `null` on failure. `opts`: `{ model?, thinking?, schema?, phase?, label? }`.
+  - `model`: a **bare model id** (run `models` to see the ids you can use) to run this
+    sub-agent on a specific model; omit to inherit the workflow's model. Always pass the
+    bare id (e.g. `claude-opus-4-8`), never a `provider:model` form.
   - `thinking`: `off | minimal | low | medium | high | xhigh` (per-agent reasoning effort).
   - `schema`: a JSON Schema; the result is constrained to it and JSON-parsed for you.
   - `phase` / `label`: display-only grouping (no execution effect yet).
