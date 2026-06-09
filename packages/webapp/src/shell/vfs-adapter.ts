@@ -381,77 +381,87 @@ export class VfsAdapter implements IFileSystem {
       // the CacheFS internal isn't available.
       const fastEntries = this.vfs.readDirSync(normalized);
       if (fastEntries !== null) {
-        const result: DirentEntry[] = [];
-        for (const e of fastEntries) {
-          if (e.type === 'symlink') {
-            const childPath = normalized === '/' ? `/${e.name}` : `${normalized}/${e.name}`;
-            // Try synchronous stat first (follows symlinks via CacheFS)
-            const targetStat = this.vfs.statSync(childPath);
-            if (targetStat) {
-              result.push({
-                name: e.name,
-                isFile: targetStat.type === 'file',
-                isDirectory: targetStat.type === 'directory',
-                isSymbolicLink: true,
-              });
-            } else {
-              // Symlink target is in a mount or unresolvable — fall back to async
-              let isFile = false;
-              let isDir = false;
-              try {
-                const asyncStat = await this.vfs.stat(childPath);
-                isFile = asyncStat.type === 'file';
-                isDir = asyncStat.type === 'directory';
-              } catch {
-                // Dangling symlink
-              }
-              result.push({ name: e.name, isFile, isDirectory: isDir, isSymbolicLink: true });
-            }
-          } else {
-            result.push({
-              name: e.name,
-              isFile: e.type === 'file',
-              isDirectory: e.type === 'directory',
-              isSymbolicLink: false,
-            });
-          }
-        }
-        return result;
+        return this.mapFastEntriesToDirents(fastEntries, normalized);
       }
 
       // Slow path: async VirtualFS readDir for mounted paths.
       const entries = await this.vfs.readDir(normalized);
-      const result: DirentEntry[] = [];
-      for (const e of entries) {
-        if (e.type === 'symlink') {
-          // Try to determine if symlink target is file or directory
-          let isFile = false;
-          let isDir = false;
-          try {
-            const childPath = normalized === '/' ? `/${e.name}` : `${normalized}/${e.name}`;
-            const targetStat = await this.vfs.stat(childPath);
-            isFile = targetStat.type === 'file';
-            isDir = targetStat.type === 'directory';
-          } catch {
-            // Dangling symlink — report as symlink only
-          }
-          result.push({
-            name: e.name,
-            isFile,
-            isDirectory: isDir,
-            isSymbolicLink: true,
-          });
-        } else {
-          result.push({
-            name: e.name,
-            isFile: e.type === 'file',
-            isDirectory: e.type === 'directory',
-            isSymbolicLink: false,
-          });
-        }
-      }
-      return result;
+      return this.mapAsyncEntriesToDirents(entries, normalized);
     });
+  }
+
+  /** Map synchronous CacheFS entries to DirentEntry[], resolving symlinks. */
+  private async mapFastEntriesToDirents(
+    fastEntries: { name: string; type: string }[],
+    normalized: string
+  ): Promise<DirentEntry[]> {
+    const result: DirentEntry[] = [];
+    for (const e of fastEntries) {
+      if (e.type !== 'symlink') {
+        result.push({
+          name: e.name,
+          isFile: e.type === 'file',
+          isDirectory: e.type === 'directory',
+          isSymbolicLink: false,
+        });
+        continue;
+      }
+      const childPath = normalized === '/' ? `/${e.name}` : `${normalized}/${e.name}`;
+      result.push(await this.resolveSymlinkDirent(e.name, childPath));
+    }
+    return result;
+  }
+
+  /** Map async VirtualFS entries to DirentEntry[], resolving symlinks. */
+  private async mapAsyncEntriesToDirents(
+    entries: { name: string; type: string }[],
+    normalized: string
+  ): Promise<DirentEntry[]> {
+    const result: DirentEntry[] = [];
+    for (const e of entries) {
+      if (e.type !== 'symlink') {
+        result.push({
+          name: e.name,
+          isFile: e.type === 'file',
+          isDirectory: e.type === 'directory',
+          isSymbolicLink: false,
+        });
+        continue;
+      }
+      const childPath = normalized === '/' ? `/${e.name}` : `${normalized}/${e.name}`;
+      result.push(await this.resolveSymlinkDirentAsync(e.name, childPath));
+    }
+    return result;
+  }
+
+  /** Resolve a symlink entry, trying sync stat first then falling back to async. */
+  private async resolveSymlinkDirent(name: string, childPath: string): Promise<DirentEntry> {
+    // Try synchronous stat first (follows symlinks via CacheFS)
+    const targetStat = this.vfs.statSync(childPath);
+    if (targetStat) {
+      return {
+        name,
+        isFile: targetStat.type === 'file',
+        isDirectory: targetStat.type === 'directory',
+        isSymbolicLink: true,
+      };
+    }
+    // Symlink target is in a mount or unresolvable — fall back to async
+    return this.resolveSymlinkDirentAsync(name, childPath);
+  }
+
+  /** Resolve a symlink entry using async stat. */
+  private async resolveSymlinkDirentAsync(name: string, childPath: string): Promise<DirentEntry> {
+    let isFile = false;
+    let isDir = false;
+    try {
+      const stat = await this.vfs.stat(childPath);
+      isFile = stat.type === 'file';
+      isDir = stat.type === 'directory';
+    } catch {
+      // Dangling symlink
+    }
+    return { name, isFile, isDirectory: isDir, isSymbolicLink: true };
   }
 
   async rm(path: string, options?: RmOptions): Promise<void> {
