@@ -75,9 +75,9 @@
       <h2>Eye tuning</h2>
       <div class="tune" id="tune"></div>
       <div class="knob" id="pupil-knob" style="max-width:420px;margin-top:4px">
-        <span class="knob-label">Pupil</span>
-        <input type="range" id="pupil-input" min="0.4" max="2.2" step="0.05" value="1">
-        <span class="knob-val" id="pupil-val">1.00×</span>
+        <span class="knob-label">Context fill</span>
+        <input type="range" id="pupil-input" min="0" max="100" step="1" value="0">
+        <span class="knob-val" id="pupil-val">0% → 1.00×</span>
       </div>
       <div class="tune-foot">
         <pre id="tune-out"></pre>
@@ -127,14 +127,14 @@
     <div class="panel">
       <h2>Pupil size · context fill</h2>
       <div class="row">
-        <slicc-pill theme="dark" type="cone" pupil="0.6">sliccy · 12%</slicc-pill>
-        <slicc-pill theme="dark" type="cone" pupil="1.0">sliccy · 48%</slicc-pill>
-        <slicc-pill theme="dark" type="cone" pupil="1.6">sliccy · 82%</slicc-pill>
-        <slicc-pill theme="dark" type="scoop" color="#22d3ee" pupil="0.6">researcher · 15%</slicc-pill>
-        <slicc-pill theme="dark" type="scoop" color="#f59e0b" pupil="1.5">triage · 90%</slicc-pill>
-        <slicc-pill theme="dark" type="scoop" color="#e11d48" pupil="2.1">packed · 99%</slicc-pill>
+        <slicc-pill theme="dark" type="cone" fill="12">sliccy · 12%</slicc-pill>
+        <slicc-pill theme="dark" type="cone" fill="48">sliccy · 48%</slicc-pill>
+        <slicc-pill theme="dark" type="cone" fill="82">sliccy · 82%</slicc-pill>
+        <slicc-pill theme="dark" type="scoop" color="#22d3ee" fill="15">researcher · 15%</slicc-pill>
+        <slicc-pill theme="dark" type="scoop" color="#f59e0b" fill="90">triage · 90%</slicc-pill>
+        <slicc-pill theme="dark" type="scoop" color="#e11d48" fill="99">packed · 99%</slicc-pill>
       </div>
-      <div class="hint">Bigger pupils = fuller context window. Drag the <strong>Pupil</strong> slider in the tuning panel to preview every pill live.</div>
+      <div class="hint">Pupils track the context window via <code>fill</code> (0–100%): flat at 1× up to 50%, then ramping to 2.2× by 85%. Drag the <strong>Context fill</strong> slider in the tuning panel to preview every pill live.</div>
     </div>
 
     <script>
@@ -142,6 +142,14 @@
         // --- Eye geometry (mirrors packages/webapp/src/ui/scoops-panel.ts) ---
         const PUPIL_R = 18;
         const MAX_OFFSET = 16;
+        // Context-fill → pupil-scale curve: flat at 1× until 50% full, then
+        // ramps linearly to 2.2× by 85%, holding there beyond.
+        const FILL_FLAT = 50, FILL_FULL = 85, PUPIL_MAX = 2.2;
+        function fillToPupil(fill) {
+          if (fill <= FILL_FLAT) return 1;
+          if (fill >= FILL_FULL) return PUPIL_MAX;
+          return 1 + ((fill - FILL_FLAT) / (FILL_FULL - FILL_FLAT)) * (PUPIL_MAX - 1);
+        }
         const LEFT_EYE = { cx: 55, cy: 50, r: 38 };
         const RIGHT_EYE = { cx: 145, cy: 50, r: 38 };
 
@@ -311,7 +319,7 @@
 
         const INSTANCES = new Set();
         class SliccPill extends HTMLElement {
-          static get observedAttributes() { return ['type', 'color', 'eyes', 'active', 'label', 'pupil']; }
+          static get observedAttributes() { return ['type', 'color', 'eyes', 'active', 'label', 'pupil', 'fill']; }
           connectedCallback() { INSTANCES.add(this); this.render(); this._bindTracking(); }
           disconnectedCallback() {
             INSTANCES.delete(this);
@@ -324,11 +332,14 @@
             const e = this.getAttribute('eyes');
             return e === 'none' || e === 'dead' ? e : 'open';
           }
-          // Pupil size multiplier (1 = base PUPIL_R). Use it to signal state such
-          // as a filling context window — bigger pupils = fuller context.
+          // Pupil size multiplier (1 = base PUPIL_R). An explicit `pupil` attr
+          // wins; otherwise it's derived from `fill` (context-window %) via the
+          // fillToPupil curve so pupils dilate as the context fills up.
           get pupilScale() {
-            const v = parseFloat(this.getAttribute('pupil'));
-            return isFinite(v) ? Math.max(0.3, Math.min(2.4, v)) : 1;
+            const p = parseFloat(this.getAttribute('pupil'));
+            if (isFinite(p)) return Math.max(0.3, Math.min(2.4, p));
+            const f = parseFloat(this.getAttribute('fill'));
+            return isFinite(f) ? fillToPupil(Math.max(0, Math.min(100, f))) : 1;
           }
 
           render() {
@@ -466,14 +477,17 @@
           setTimeout(() => { ev.target.textContent = 'copy config'; }, 1200);
         });
 
-        // Global pupil-size slider: sets the `pupil` attribute on every pill so
-        // the "context fill" effect can be previewed live across the page.
+        // Global context-fill slider: sets the `fill` attribute on every pill so
+        // the pupil-dilation curve can be previewed live across the page.
         const pupilInput = document.getElementById('pupil-input');
         const pupilVal = document.getElementById('pupil-val');
         pupilInput.addEventListener('input', () => {
           const v = parseFloat(pupilInput.value);
-          pupilVal.textContent = v.toFixed(2) + '×';
-          document.querySelectorAll('slicc-pill').forEach((p) => p.setAttribute('pupil', v));
+          pupilVal.textContent = v + '% → ' + fillToPupil(v).toFixed(2) + '×';
+          document.querySelectorAll('slicc-pill').forEach((p) => {
+            p.removeAttribute('pupil');
+            p.setAttribute('fill', v);
+          });
         });
       })();
     </script>
