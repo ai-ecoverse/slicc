@@ -59,6 +59,12 @@
       "statements": 93,
       "functions": 92,
       "branches": 84
+    },
+    "webcomponents": {
+      "lines": 50,
+      "statements": 50,
+      "functions": 50,
+      "branches": 40
     }
   },
   "swift": {
