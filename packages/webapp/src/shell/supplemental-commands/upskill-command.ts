@@ -448,6 +448,8 @@ function formatSkillSource(source: DiscoveredSkill['source']): string {
       return '.agents';
     case 'claude':
       return '.claude';
+    case 'marketplace':
+      return 'marketplace';
   }
 }
 

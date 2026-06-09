@@ -1,7 +1,7 @@
 import type { VirtualFS } from '../fs/index.js';
 import { SKILL_FILE, WORKSPACE_SKILLS_PATH } from './constants.js';
 
-export type SkillDiscoverySource = 'native' | 'agents' | 'claude';
+export type SkillDiscoverySource = 'native' | 'agents' | 'claude' | 'marketplace';
 
 export interface DiscoveredSkillCandidate {
   /** Discovery source bucket used for precedence. */
@@ -20,7 +20,7 @@ export interface SkillNameCollision<T> {
   shadowed: T[];
 }
 
-const DISCOVERY_ORDER: SkillDiscoverySource[] = ['native', 'agents', 'claude'];
+const DISCOVERY_ORDER: SkillDiscoverySource[] = ['native', 'agents', 'claude', 'marketplace'];
 const COMPATIBILITY_DIRECTORY_SOURCES = new Map<string, Exclude<SkillDiscoverySource, 'native'>>([
   ['.agents', 'agents'],
   ['.claude', 'claude'],
@@ -126,6 +126,56 @@ async function discoverNativeSkillCandidates(
   return discovered;
 }
 
+/**
+ * Parse a .claude-plugin/marketplace.json and return the list of plugin
+ * source paths (relative to the manifest's parent directory). Entries whose
+ * source is a git-subdir object are silently skipped — they reference
+ * external repos not present in the local tree.
+ */
+async function resolveMarketplacePluginPaths(
+  fs: VirtualFS,
+  manifestPath: string
+): Promise<string[]> {
+  let raw: string;
+  try {
+    raw = await fs.readTextFile(manifestPath);
+  } catch {
+    return [];
+  }
+
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+
+  if (
+    typeof manifest !== 'object' ||
+    manifest === null ||
+    !Array.isArray((manifest as Record<string, unknown>).plugins)
+  ) {
+    return [];
+  }
+
+  const parentDir = manifestPath.replace(/\/[^/]+$/, '').replace(/\/.claude-plugin$/, '');
+  const paths: string[] = [];
+
+  for (const plugin of (manifest as { plugins: unknown[] }).plugins) {
+    if (typeof plugin !== 'object' || plugin === null) continue;
+    const source = (plugin as Record<string, unknown>).source;
+    // Skip git-subdir objects — they require a separate git clone
+    if (typeof source !== 'string') continue;
+    // Reject absolute paths and traversal attempts
+    if (source.startsWith('/') || source.split('/').includes('..')) continue;
+    // Resolve relative path (e.g. "./plugins/my-tools" -> "/mnt/repo/plugins/my-tools")
+    const normalized = source.replace(/^\.\//, '');
+    paths.push(`${parentDir}/${normalized}`);
+  }
+
+  return paths;
+}
+
 async function discoverCompatibilitySkillCandidates(
   fs: VirtualFS
 ): Promise<DiscoveredSkillCandidate[]> {
@@ -162,6 +212,33 @@ async function discoverCompatibilitySkillCandidates(
             skillFilePath,
           });
         }
+      }
+
+      if (entry.name === '.claude-plugin') {
+        const manifestPath = `${childPath}/marketplace.json`;
+        const pluginDirs = await resolveMarketplacePluginPaths(fs, manifestPath);
+
+        for (const pluginDir of pluginDirs) {
+          const skillRoot = `${pluginDir}/skills`;
+          const skillEntries = await readSortedDir(fs, skillRoot);
+
+          for (const skillEntry of skillEntries) {
+            if (skillEntry.type !== 'directory') continue;
+
+            const skillPath = `${skillRoot}/${skillEntry.name}`;
+            const skillFilePath = `${skillPath}/${SKILL_FILE}`;
+            if (!(await pathExists(fs, skillFilePath)) || seenPaths.has(skillPath)) continue;
+
+            seenPaths.add(skillPath);
+            discovered.push({
+              source: 'marketplace',
+              sourceRoot: skillRoot,
+              path: skillPath,
+              skillFilePath,
+            });
+          }
+        }
+        continue;
       }
 
       if (PRUNED_COMPATIBILITY_DIRECTORY_NAMES.has(entry.name)) continue;
