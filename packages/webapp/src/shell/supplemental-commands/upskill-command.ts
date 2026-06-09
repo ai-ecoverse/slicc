@@ -490,17 +490,19 @@ function formatSkillSource(source: DiscoveredSkill['source']): string {
 function formatDiscoveredSkills(discovered: DiscoveredSkill[], heading: string): string {
   const nameWidth = Math.max(4, ...discovered.map((s) => s.name.length));
   const sourceWidth = 11; // 'marketplace'.length
+  // 2 indent + nameWidth + 2 sep + sourceWidth + 1 sep = fixed overhead
+  const descWidth = Math.max(20, 120 - 2 - nameWidth - 2 - sourceWidth - 1);
 
   const header = 'NAME'.padEnd(nameWidth);
-  const divider = '─'.repeat(nameWidth + sourceWidth + 2 + 60);
+  const divider = '─'.repeat(2 + nameWidth + 2 + sourceWidth + 1 + descWidth);
 
   let output = `${heading}:\n\n`;
   output += `  ${header}  SOURCE      DESCRIPTION\n`;
-  output += `  ${divider}\n`;
+  output += `${divider}\n`;
 
   for (const skill of discovered) {
     const raw = skill.description || '';
-    const description = raw.length > 60 ? raw.slice(0, 59) + '…' : raw;
+    const description = raw.length > descWidth ? raw.slice(0, descWidth - 1) + '…' : raw;
     output += `  ${skill.name.padEnd(nameWidth)}  ${formatSkillSource(skill.source).padEnd(sourceWidth)} ${description}\n`;
   }
 
