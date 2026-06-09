@@ -1,0 +1,221 @@
+import { define } from '../internal/define.js';
+import { escapeHtml } from '../internal/html.js';
+
+/**
+ * Per-instance stylesheet, lifted verbatim from the prototype's
+ * `.msg.deleg` / `.msg.deleg.src` rules. The host *is* the `.msg.deleg`
+ * line: layout, typography, and the hue-tinted `src` highlight all hang off
+ * `:host`. The hue comes from the inherited `--c` custom property (set via the
+ * `hue` attribute), falling back to `--violet` exactly like the prototype.
+ *
+ * All colors/spacing/fonts reference the inherited prototype tokens
+ * (`--ui`, `--mono`, `--txt-2`, `--txt-3`, `--ghost`, `--line`, `--canvas`,
+ * `--violet`); none are re-declared here.
+ */
+const STYLE = `
+:host {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-family: var(--ui);
+  font-size: 12px;
+  color: var(--txt-2);
+  margin: -4px 0 18px;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  transition: background .25s, border-color .25s;
+}
+:host([source]) {
+  /* Mix the source tint over the inherited --canvas (which flips #fff -> dark
+     with the theme), so the highlight tracks light/dark automatically without a
+     fragile, Chromium-only :host-context() override. */
+  background: color-mix(in srgb, var(--c, var(--violet)) 8%, var(--canvas));
+  border-color: color-mix(in srgb, var(--c, var(--violet)) 28%, var(--line));
+}
+/* Slots disappear from layout so their content are direct flex children of the
+   host — preserving the prototype's per-chip 8px gap + wrap. */
+slot { display: contents; }
+.darrow { color: var(--txt-3); flex: 0 0 auto; }
+.label { display: contents; }
+b { font-weight: 600; }
+.scoop { font-weight: 600; }
+code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  background: var(--ghost);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+`;
+
+/** Leading glyph per delegation/event kind, lifted from the prototype. */
+const GLYPH: Record<'feed' | 'sprinkle', string> = {
+  feed: '→', // → feed_scoop
+  sprinkle: '✦', // ✦ sprinkle-opened
+};
+
+/** Split a comma/whitespace-free args attribute into discrete `<code>` chips. */
+function parseArgs(raw: string): string[] {
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+/**
+ * `<slicc-delegation-line>` — the thin labeled "dust source" line from the
+ * prototype chat stream (`.msg.deleg`). It marks a scoop delegation
+ * (`→ feed_scoop`) or a sprinkle being opened (`✦ … opened`), hue-tinted via
+ * the inherited `--c` custom property.
+ *
+ * Structure: a leading `.darrow` glyph, a label (bold colored scoop name +
+ * surrounding prose), and inline `<code>` arg chips. The whole line lights up
+ * with a hue-tinted background/border when `source` (the prototype's `.src`
+ * active-source highlight) is set; dark mode re-bases the tint over `--canvas`.
+ *
+ * The default content (glyph · verb · `<b>` scoop · prose · args) is built from
+ * attributes, but the three regions are named `<slot>`s (`arrow`, `label`,
+ * `args`), each `display:contents`, so a host can override any region with
+ * richer markup while keeping the per-chip flex layout + line styling.
+ *
+ * @attr kind - `feed` (→ feed_scoop, default) | `sprinkle` (✦ sprinkle opened)
+ * @attr hue - accent hex/CSS color; sets the inherited `--c` (label + tint)
+ * @attr verb - the verb/connector text (default `feed_scoop` for feed)
+ * @attr scoop - the bold, hue-colored scoop/sprinkle name
+ * @attr label - trailing prose after the scoop name (e.g. `opened …`)
+ * @attr args - comma-separated values rendered as `<code>` chips
+ * @attr source - boolean; the active-source highlight (tinted bg/border in `--c`)
+ * @csspart arrow - the leading glyph
+ * @csspart label - the label/prose region (verb + scoop + trailing prose)
+ * @csspart scoop - the bold colored scoop name
+ * @csspart code - each inline arg chip
+ * @slot arrow - overrides the leading glyph
+ * @slot label - overrides the whole prose region (verb + scoop + prose)
+ * @slot args - overrides the inline `<code>` arg chips
+ */
+export class SliccDelegationLine extends HTMLElement {
+  static readonly observedAttributes = ['kind', 'hue', 'verb', 'scoop', 'label', 'args', 'source'];
+
+  readonly #root: ShadowRoot;
+
+  constructor() {
+    super();
+    this.#root = this.attachShadow({ mode: 'open' });
+  }
+
+  connectedCallback(): void {
+    this.#render();
+  }
+
+  attributeChangedCallback(): void {
+    if (this.isConnected) this.#render();
+  }
+
+  /** Delegation kind — `feed` (→ feed_scoop) or `sprinkle` (✦ opened). */
+  get kind(): 'feed' | 'sprinkle' {
+    return this.getAttribute('kind') === 'sprinkle' ? 'sprinkle' : 'feed';
+  }
+
+  set kind(value: 'feed' | 'sprinkle') {
+    this.setAttribute('kind', value === 'sprinkle' ? 'sprinkle' : 'feed');
+  }
+
+  /** Accent hue (sets the inherited `--c`); `null` falls back to `--violet`. */
+  get hue(): string | null {
+    return this.getAttribute('hue');
+  }
+
+  set hue(value: string | null) {
+    if (value == null) this.removeAttribute('hue');
+    else this.setAttribute('hue', value);
+  }
+
+  /** Verb/connector text (default `feed_scoop` for the feed kind). */
+  get verb(): string | null {
+    return this.getAttribute('verb');
+  }
+
+  set verb(value: string | null) {
+    if (value == null) this.removeAttribute('verb');
+    else this.setAttribute('verb', value);
+  }
+
+  /** The bold, hue-colored scoop / sprinkle name. */
+  get scoop(): string | null {
+    return this.getAttribute('scoop');
+  }
+
+  set scoop(value: string | null) {
+    if (value == null) this.removeAttribute('scoop');
+    else this.setAttribute('scoop', value);
+  }
+
+  /** Trailing prose after the scoop name. */
+  get label(): string | null {
+    return this.getAttribute('label');
+  }
+
+  set label(value: string | null) {
+    if (value == null) this.removeAttribute('label');
+    else this.setAttribute('label', value);
+  }
+
+  /** Comma-separated arg values rendered as inline `<code>` chips. */
+  get args(): string | null {
+    return this.getAttribute('args');
+  }
+
+  set args(value: string | null) {
+    if (value == null) this.removeAttribute('args');
+    else this.setAttribute('args', value);
+  }
+
+  /** The active-source highlight (prototype `.src`): tinted bg/border in `--c`. */
+  get source(): boolean {
+    return this.hasAttribute('source');
+  }
+
+  set source(value: boolean) {
+    this.toggleAttribute('source', value);
+  }
+
+  #render(): void {
+    const kind = this.kind;
+    const hue = this.hue;
+    const verb = this.verb ?? (kind === 'feed' ? 'feed_scoop' : '');
+    const scoop = this.scoop;
+    const label = this.label;
+    const args = this.args ? parseArgs(this.args) : [];
+
+    // Inline `--c` so the hue inherits into the host (and out to children).
+    if (hue) this.style.setProperty('--c', hue);
+    else this.style.removeProperty('--c');
+
+    const glyph = GLYPH[kind];
+    const scoopColor = hue ? ` style="color:${escapeHtml(hue)}"` : '';
+
+    const verbHtml = verb ? `<span class="verb">${escapeHtml(verb)}</span>` : '';
+    const scoopHtml = scoop
+      ? `<b class="scoop" part="scoop"${scoopColor}>${escapeHtml(scoop)}</b>`
+      : '';
+    const labelHtml = label ? `<span class="prose">${escapeHtml(label)}</span>` : '';
+
+    const codeChips = args.map((a) => `<code part="code">${escapeHtml(a)}</code>`).join('');
+
+    this.#root.innerHTML =
+      `<style>${STYLE}</style>` +
+      `<span class="darrow" part="arrow"><slot name="arrow">${glyph}</slot></span>` +
+      `<span class="label" part="label"><slot name="label">${verbHtml}${scoopHtml}${labelHtml}</slot></span>` +
+      `<slot name="args">${codeChips}</slot>`;
+  }
+}
+
+define('slicc-delegation-line', SliccDelegationLine);
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'slicc-delegation-line': SliccDelegationLine;
+  }
+}

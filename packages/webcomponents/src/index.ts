@@ -1,6 +1,15 @@
 // @slicc/webcomponents — public barrel (generated; see register.ts).
 
 export { SliccAddMenu } from './add-menu/slicc-add-menu.js';
+export { SliccActionCard } from './chat/slicc-action-card.js';
+export { SliccActionRow } from './chat/slicc-action-row.js';
+export { SliccAgentMessage } from './chat/slicc-agent-message.js';
+export { SliccChatTable } from './chat/slicc-chat-table.js';
+export { SliccChatThread } from './chat/slicc-chat-thread.js';
+export { SliccDelegationLine } from './chat/slicc-delegation-line.js';
+export { SliccHandoffCard } from './chat/slicc-handoff-card.js';
+export { SliccLickCard } from './chat/slicc-lick-card.js';
+export { SliccUserMessage } from './chat/slicc-user-message.js';
 export { define } from './internal/define.js';
 export { escapeHtml } from './internal/html.js';
 export { SliccPill } from './pill/slicc-pill.js';
@@ -10,9 +19,11 @@ export { SliccDaySeparator } from './primitives/slicc-day-separator.js';
 export { SliccFloatbar } from './primitives/slicc-floatbar.js';
 export { SliccGooglyEyes } from './primitives/slicc-googly-eyes.js';
 export { SliccIconButton } from './primitives/slicc-icon-button.js';
+export { SliccImagePreview } from './primitives/slicc-image-preview.js';
 export { SliccLogo } from './primitives/slicc-logo.js';
 export { SliccPane } from './primitives/slicc-pane.js';
 export { SliccPaneTag } from './primitives/slicc-pane-tag.js';
+export { SliccPressButton } from './primitives/slicc-press-button.js';
 export { SliccSendButton } from './primitives/slicc-send-button.js';
 export { SliccSnowflake } from './primitives/slicc-snowflake.js';
 export { SliccSwatch } from './primitives/slicc-swatch.js';
