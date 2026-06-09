@@ -82,9 +82,24 @@ async function pipeline(items, ...stages) {
   }));
 }
 
+function __wfProgress(kind, text) {
+  if (__execSpawn) {
+    try {
+      __execSpawn(['__wf_progress', kind, String(text)]);
+    } catch (e) {}
+  }
+}
 let __phase = null;
-function phase(title) { __phase = String(title); console.log('WFPHASE' + __phase); }
-function log(message) { console.log('WFLOG' + String(message)); }
+function phase(title) {
+  __phase = String(title);
+  console.log('WFPHASE' + __phase);
+  __wfProgress('phase', __phase);
+}
+function log(message) {
+  const m = String(message);
+  console.log('WFLOG' + m);
+  __wfProgress('log', m);
+}
 const budget = { total: (__WF.budget == null ? null : __WF.budget), spent() { return 0; }, remaining() { return this.total == null ? Infinity : Math.max(0, this.total - this.spent()); } };
 function workflow() { throw new WorkflowNestingUnsupportedError('nested workflow() unsupported in SP1'); }
 `;

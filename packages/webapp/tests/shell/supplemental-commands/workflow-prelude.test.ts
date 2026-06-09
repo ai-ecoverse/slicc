@@ -198,4 +198,25 @@ describe('workflow-prelude', () => {
     expect(order[0]).toBe('s2-0'); // item 0 finished stage 2 while item 1 was still blocked in stage 1
     expect((globalThis as any).__np).toEqual(['s1-0', 's1-1']);
   });
+  it('phase/log emit the console marker AND fire __wf_progress', async () => {
+    const calls: string[][] = [];
+    const out: string[] = [];
+    await run(
+      'phase("Scan"); log("hi");',
+      {
+        spawn: async (a: string[]) => {
+          calls.push(a);
+          return { stdout: '', stderr: '', exitCode: 0 };
+        },
+      },
+      WF,
+      out
+    );
+    // console.log markers still present (SP1 behavior):
+    expect(out.some((l) => l === 'WFPHASEScan')).toBe(true);
+    expect(out.some((l) => l === 'WFLOGhi')).toBe(true);
+    // and the parallel progress emit:
+    expect(calls).toContainEqual(['__wf_progress', 'phase', 'Scan']);
+    expect(calls).toContainEqual(['__wf_progress', 'log', 'hi']);
+  });
 });
