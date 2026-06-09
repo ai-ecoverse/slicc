@@ -368,3 +368,63 @@ describe('workflow concurrency cap (scoop-appropriate: 4/core, clamp [8,16])', (
     expect(resolveMaxCap()).toBe(16); // 8*4=32 → 16
   });
 });
+
+describe('workflow save', () => {
+  it('persists the run source and triggers a sync', async () => {
+    const mgr = installFakeManager();
+    mgr.getRun = (id: string) =>
+      id === 'r1' ? ({ id, source: "export const meta={name:'audit'}\nreturn 1" } as any) : null;
+    const fs = await VirtualFS.create({ dbName: `wf-save-${Math.random()}`, wipe: true });
+    await fs.mkdir('/workspace', { recursive: true });
+    let synced = 0;
+    const cmd = createWorkflowCommand({ syncScriptCommands: async () => void synced++ });
+    const res = await cmd.execute(
+      ['save', 'r1', 'audit'],
+      await ctxWith(fs, async () => ({ stdout: '', stderr: '', exitCode: 0 }))
+    );
+    expect(res.exitCode).toBe(0);
+    expect(await fs.readFile('/workspace/.workflows/audit.workflow.js')).toContain("name:'audit'");
+    expect(synced).toBe(1);
+  });
+
+  it('rejects a name already taken by an existing command', async () => {
+    const mgr = installFakeManager();
+    mgr.getRun = (id: string) => ({ id, source: "export const meta={name:'x'}\nreturn 1" }) as any;
+    const fs = await VirtualFS.create({ dbName: `wf-save2-${Math.random()}`, wipe: true });
+    const ctx = await ctxWith(fs, async () => ({ stdout: '', stderr: '', exitCode: 0 }));
+    (ctx as any).getRegisteredCommands = () => ['ls', 'git'];
+    const res = await createWorkflowCommand().execute(['save', 'r1', 'ls'], ctx);
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toMatch(/already a command|taken/i);
+  });
+
+  it('errors for a --wait (unmanaged) run id', async () => {
+    installFakeManager(); // getRun returns null for unknown ids
+    const fs = await VirtualFS.create({ dbName: `wf-save3-${Math.random()}`, wipe: true });
+    const res = await createWorkflowCommand().execute(
+      ['save', 'nope', 'audit'],
+      await ctxWith(fs, async () => ({ stdout: '', stderr: '', exitCode: 0 }))
+    );
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toMatch(/no run|no such run/i);
+  });
+
+  it('refuses to overwrite without --force, allows with --force', async () => {
+    const mgr = installFakeManager();
+    mgr.getRun = (id: string) =>
+      ({ id, source: "export const meta={name:'audit'}\nreturn 2" }) as any;
+    const fs = await VirtualFS.create({ dbName: `wf-save4-${Math.random()}`, wipe: true });
+    await fs.mkdir('/workspace/.workflows', { recursive: true });
+    await fs.writeFile('/workspace/.workflows/audit.workflow.js', 'old');
+    const ctx = await ctxWith(fs, async () => ({ stdout: '', stderr: '', exitCode: 0 }));
+    // After Task 4, a saved workflow's name is a registered command. --force must still
+    // overwrite OUR OWN saved workflow (the collision check only applies to NEW names).
+    (ctx as any).getRegisteredCommands = () => ['audit'];
+    const r1 = await createWorkflowCommand().execute(['save', 'r1', 'audit'], ctx);
+    expect(r1.exitCode).toBe(1); // exists, no --force
+    expect(r1.stderr).toMatch(/already exists/i); // NOT "already a command"
+    const r2 = await createWorkflowCommand().execute(['save', 'r1', 'audit', '--force'], ctx);
+    expect(r2.exitCode).toBe(0);
+    expect(await fs.readFile('/workspace/.workflows/audit.workflow.js')).toContain('return 2');
+  });
+});

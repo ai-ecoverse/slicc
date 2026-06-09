@@ -72,6 +72,10 @@ export type {
 export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
   /** Function that returns discovered .jsh command names (for `commands` listing). */
   getJshCommands?: () => Promise<string[]>;
+  /** Discovered workflow command names (for `commands`/`which`). */
+  getWorkflowCommands?: () => Promise<string[]>;
+  /** Re-run script-command registration (jsh + workflows) after a `workflow save`. */
+  syncScriptCommands?: () => void | Promise<void>;
   /** VirtualFS instance for .jsh discovery, `which`, and playwright-cli session files. */
   fs?: VirtualFS;
   /** Shared script discovery service for `.jsh`/`.bsh` lookup. */
@@ -174,7 +178,10 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createDfCommand({ fs: options.fs }),
     createDiskutilCommand({ fs: options.fs }),
     createSudoCommand(options.sudoCommand),
-    createWorkflowCommand({ getParentJid: options.getParentJid }),
+    createWorkflowCommand({
+      getParentJid: options.getParentJid,
+      syncScriptCommands: options.syncScriptCommands,
+    }),
     createWfProgressCommand(),
   ];
 

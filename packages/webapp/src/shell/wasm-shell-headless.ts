@@ -295,6 +295,8 @@ export class WasmShellHeadless implements HeadlessShellLike {
     const supplementalCommands = createSupplementalCommands({
       onMediaPreview: async (items) => this.renderMediaPreview(items),
       getJshCommands: () => this.getJshCommandNames(),
+      getWorkflowCommands: () => this.getWorkflowCommandNames(),
+      syncScriptCommands: () => this.syncJshCommands(),
       fs: options.fs,
       scriptCatalog: this.scriptCatalog,
       browserAPI: options.browserAPI,

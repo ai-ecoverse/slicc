@@ -20,6 +20,7 @@ const HELP = `usage: workflow run <file.js> [--args <json>] [--budget <n>] [--co
        workflow list
        workflow status <runId>
        workflow stop <runId>
+       workflow save <runId> <name> [--force]
 Runs a Claude-Code-format dynamic workflow. Default is non-blocking (returns a run id);
 pass --wait to block and print the full result.`;
 
@@ -120,11 +121,15 @@ function parse(a: string[]): Parsed {
 }
 
 export function createWorkflowCommand(
-  options: { getParentJid?: () => string | undefined } = {}
+  options: {
+    getParentJid?: () => string | undefined;
+    syncScriptCommands?: () => void | Promise<void>;
+  } = {}
 ): Command {
   return defineCommand('workflow', async (args, ctx) => {
     if (args[0] === 'list' || args[0] === 'status' || args[0] === 'stop')
       return runSubcommand(args, ctx);
+    if (args[0] === 'save') return runSave(args, ctx, options);
 
     const p = parse(args);
     if (p.help) return { stdout: HELP + '\n', stderr: '', exitCode: 0 };
@@ -235,6 +240,72 @@ async function startRun(opts: {
     stderr: '',
     exitCode: 0,
   };
+}
+
+const SAVE_NAME = /^[a-z0-9][a-z0-9-]*$/;
+const SAVED_WORKFLOWS_DIR = '/workspace/.workflows';
+
+// `workflow save <runId> <name> [--force]` — persist a backgrounded run's source as a
+// reusable bare command. Reject-at-save on name collision (built-in / existing command).
+// --wait runs bypass the manager (no runId) → "no run". See spec §Save.
+async function runSave(
+  args: string[],
+  ctx: CommandContext,
+  options: { syncScriptCommands?: () => void | Promise<void> }
+): Promise<ExecResult> {
+  const rest = args.slice(1).filter((a) => a !== '--force');
+  const force = args.includes('--force');
+  const [runId, name] = rest;
+  if (!runId || !name)
+    return { stdout: '', stderr: 'usage: workflow save <runId> <name> [--force]\n', exitCode: 1 };
+  if (!SAVE_NAME.test(name))
+    return {
+      stdout: '',
+      stderr: `workflow: invalid name '${name}' (use [a-z0-9][a-z0-9-]*)\n`,
+      exitCode: 1,
+    };
+
+  const mgr = getRunManager();
+  const run = mgr?.getRun(runId);
+  if (!run)
+    return {
+      stdout: '',
+      stderr: `workflow: no run '${runId}' (only backgrounded runs are saveable; --wait runs are not)\n`,
+      exitCode: 1,
+    };
+  if (!run.source)
+    return { stdout: '', stderr: `workflow: run '${runId}' has no source to save\n`, exitCode: 1 };
+
+  const path = `${SAVED_WORKFLOWS_DIR}/${name}.workflow.js`;
+  const targetExists = await ctx.fs.exists(path);
+  if (targetExists) {
+    // Overwriting an EXISTING saved workflow of the same name. `name` is in the registered-
+    // command set, but only because THIS workflow registered it — so skip the collision check
+    // and gate purely on --force. (Without this, re-saving over your own workflow would always
+    // be rejected once Task 4 registers it.)
+    if (!force)
+      return {
+        stdout: '',
+        stderr: `workflow: ${path} already exists (pass --force to overwrite)\n`,
+        exitCode: 1,
+      };
+  } else {
+    // New name — reject-at-save if it collides with a built-in or any existing command, so
+    // dispatch-time precedence can't later let a built-in/.jsh silently shadow this workflow.
+    const existing = new Set(ctx.getRegisteredCommands?.() ?? []);
+    if (existing.has(name))
+      return {
+        stdout: '',
+        stderr: `workflow: '${name}' is already a command — choose another name\n`,
+        exitCode: 1,
+      };
+  }
+
+  await ctx.fs.mkdir(SAVED_WORKFLOWS_DIR, { recursive: true });
+  await ctx.fs.writeFile(path, run.source);
+  await options.syncScriptCommands?.();
+
+  return { stdout: `saved workflow '${name}' → ${path} (run: ${name})\n`, stderr: '', exitCode: 0 };
 }
 
 // Read/stop subcommands. Resolves the manager from globalThis at call time (the cone and
