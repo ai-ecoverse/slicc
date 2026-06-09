@@ -12,6 +12,16 @@ import './chat/slicc-user-message.js';
 import './composer/slicc-composer-meta.js';
 import './composer/slicc-composer.js';
 import './composer/slicc-input-card.js';
+import './dock/slicc-dock-item.js';
+import './dock/slicc-dock.js';
+import './freezer/slicc-freezer-card.js';
+import './freezer/slicc-freezer-new.js';
+import './freezer/slicc-freezer.js';
+import './memory/slicc-memrow.js';
+import './memory/slicc-memtag.js';
+import './memory/slicc-palette-cell.js';
+import './memory/slicc-palette-grid.js';
+import './nav/slicc-nav.js';
 import './pill/slicc-pill.js';
 import './primitives/slicc-avatar.js';
 import './primitives/slicc-collapse-btn.js';
@@ -32,6 +42,13 @@ import './switcher/slicc-scoop-overflow.js';
 import './switcher/slicc-scoop-switcher.js';
 import './theme/slicc-theme-toggle.js';
 import './theme/slicc-theme.js';
+import './workbench/slicc-file-tree.js';
+import './workbench/slicc-surface.js';
+import './workbench/slicc-tab-bar.js';
+import './workbench/slicc-tab.js';
+import './workbench/slicc-workbench-body.js';
+import './workbench/slicc-workbench-header.js';
+import './workbench/slicc-workbench-pane.js';
 
 /** Import every component module for side-effect registration. */
 export function registerAllSliccComponents(): void {}
