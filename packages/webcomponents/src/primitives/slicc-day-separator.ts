@@ -14,13 +14,21 @@ const STYLE = `
   letter-spacing: .08em;
 }
 :host([hidden]) { display: none; }
-.label { white-space: nowrap; }
+/* The label sits centred between the hairlines and never absorbs their space. */
+.label { white-space: nowrap; flex: 0 0 auto; min-width: 0; }
+/*
+ * The flanking 1px hairlines. Each pseudo-element MUST carry content + a
+ * non-zero height + a visible background, and the host MUST be flex, or the
+ * line collapses to nothing. The --line fallback keeps the hairline visible
+ * even if the design token failed to inherit.
+ */
 :host::before,
 :host::after {
   content: "";
-  flex: 1;
+  flex: 1 1 0;
   height: 1px;
-  background: var(--line);
+  min-width: 0;
+  background: var(--line, #e5e5e5);
 }
 `;
 

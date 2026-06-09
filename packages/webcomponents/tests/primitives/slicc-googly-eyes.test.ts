@@ -59,6 +59,16 @@ describe('slicc-googly-eyes', () => {
       expect(el.tracking).toBe(true);
     });
 
+    it('reflects blink', () => {
+      const el = mount();
+      expect(el.blink).toBe(false);
+      el.blink = true;
+      expect(el.hasAttribute('blink')).toBe(true);
+      expect(el.blink).toBe(true);
+      el.blink = false;
+      expect(el.hasAttribute('blink')).toBe(false);
+    });
+
     it('reflects eyes', () => {
       const el = mount();
       expect(el.eyes).toBe('open');
@@ -144,6 +154,80 @@ describe('slicc-googly-eyes', () => {
       // container is itself a flex item of :host. Either spelling is fine.
       expect(cs.display).toMatch(/^(inline-)?flex$/);
       expect(cs.columnGap).toBe('3px');
+    });
+  });
+
+  describe('blinking', () => {
+    // Whether this browser is currently asking for reduced motion; the blink
+    // animation is intentionally suppressed in that case, so the positive
+    // assertions are skipped to stay deterministic (we never rely on timing).
+    const reduced =
+      typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    it('is off by default — no eye animation', () => {
+      const el = mount();
+      const [eye] = eyes(el);
+      expect(getComputedStyle(eye).animationName).toBe('none');
+    });
+
+    it('blink attribute activates the eyelid @keyframes animation', () => {
+      if (reduced) return;
+      const el = mount((e) => {
+        e.blink = true;
+      });
+      for (const eye of eyes(el)) {
+        const cs = getComputedStyle(eye);
+        // Style hook: the named keyframes are wired up (not asserting timing).
+        expect(cs.animationName).toBe('slicc-eye-blink');
+        expect(cs.animationIterationCount).toBe('infinite');
+      }
+    });
+
+    it('the two eyes blink on different cycle lengths (not metronomic)', () => {
+      if (reduced) return;
+      const el = mount((e) => {
+        e.blink = true;
+      });
+      const [left, right] = eyes(el);
+      const dl = getComputedStyle(left).animationDuration;
+      const dr = getComputedStyle(right).animationDuration;
+      expect(dl).not.toBe(dr);
+    });
+
+    it('removing blink removes the animation', () => {
+      const el = mount((e) => {
+        e.blink = true;
+      });
+      el.blink = false;
+      const [eye] = eyes(el);
+      expect(getComputedStyle(eye).animationName).toBe('none');
+    });
+
+    it('dead eyes never blink even with the attribute set', () => {
+      const el = mount((e) => {
+        e.eyes = 'dead';
+        e.blink = true;
+      });
+      const [eye] = eyes(el);
+      // :host([blink]:not([eyes="dead"])) — dead state opts out entirely.
+      expect(getComputedStyle(eye).animationName).toBe('none');
+    });
+
+    it('composes with cursor-tracking: pupil still follows while blinking', () => {
+      const el = mount((e) => {
+        e.blink = true;
+      });
+      const [eye] = eyes(el);
+      const r = eye.getBoundingClientRect();
+      document.dispatchEvent(
+        new MouseEvent('mousemove', {
+          clientX: r.left + r.width / 2 + 500,
+          clientY: r.top + r.height / 2 + 500,
+        })
+      );
+      // The lid blink lives on .eye (scaleY); the pupil translate is independent.
+      expect(Number.parseFloat(eye.style.getPropertyValue('--px'))).toBeGreaterThan(0);
+      expect(Number.parseFloat(eye.style.getPropertyValue('--py'))).toBeGreaterThan(0);
     });
   });
 

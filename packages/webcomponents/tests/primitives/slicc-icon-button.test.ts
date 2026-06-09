@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { iconSvg } from '../../src/internal/icons.js';
 import { SliccIconButton } from '../../src/primitives/slicc-icon-button.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
 
-function mount(glyph = '+'): SliccIconButton {
+function mount(icon?: string): SliccIconButton {
   const el = document.createElement('slicc-icon-button');
-  el.textContent = glyph;
+  if (icon) el.setAttribute('icon', icon);
   document.body.appendChild(el);
   return el;
 }
@@ -12,6 +13,27 @@ function mount(glyph = '+'): SliccIconButton {
 function innerButton(el: SliccIconButton): HTMLButtonElement {
   return el.shadowRoot?.querySelector('.iconbtn') as HTMLButtonElement;
 }
+
+/** The lucide `<svg>` rendered inside the default slot (null if overridden). */
+function renderedSvg(el: SliccIconButton): SVGSVGElement | null {
+  return el.shadowRoot?.querySelector('.icon svg') as SVGSVGElement | null;
+}
+
+/** lucide registry path/shape children for `name`, serialized for comparison. */
+function lucideShapeKey(name: string): string {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = iconSvg(name, { size: 16 });
+  const svg = tmp.querySelector('svg') as SVGSVGElement;
+  return [...svg.children].map((c) => c.outerHTML).join('');
+}
+
+/**
+ * Matches emoji / pictographic / arrow / dingbat / unicode-symbol glyphs
+ * (e.g. 📎 ✦ ❄ 🔔 🌙 ☀ ↑ ⤡ ＋) — none of which may appear in the rendered
+ * button: it must use lucide `<svg>` glyphs only.
+ */
+const EMOJI_RE =
+  /[\u{1F000}-\u{1FAFF}]|[\u{2600}-\u{27BF}]|[\u{2190}-\u{21FF}]|[\u{2900}-\u{297F}]|[\u{2B00}-\u{2BFF}]|[\u{FF00}-\u{FFEF}]/u;
 
 describe('slicc-icon-button', () => {
   beforeEach(() => {
@@ -23,7 +45,7 @@ describe('slicc-icon-button', () => {
     expect(customElements.get('slicc-icon-button')).toBe(SliccIconButton);
   });
 
-  it('renders an inner button with the icon slot in its shadow root', () => {
+  it('renders an inner button with the default slot in its shadow root', () => {
     const el = mount();
     const btn = innerButton(el);
     expect(btn).toBeInstanceOf(HTMLButtonElement);
@@ -31,12 +53,63 @@ describe('slicc-icon-button', () => {
     expect(btn.querySelector('slot')).not.toBeNull();
   });
 
-  it('projects the slotted glyph into the button', () => {
-    const el = mount('★');
-    const slot = innerButton(el).querySelector('slot') as HTMLSlotElement;
-    const assigned = slot.assignedNodes();
-    expect(assigned.map((n) => n.textContent).join('')).toBe('★');
+  // --- Lucide icon rendering ------------------------------------------------
+
+  it('renders a lucide <svg> (default `plus`) — no emoji/text glyph', () => {
+    const el = mount();
+    const svg = renderedSvg(el);
+    expect(svg).toBeInstanceOf(SVGSVGElement);
+    // default icon is `plus`
+    expect(el.icon).toBe('plus');
+    expect(svg?.innerHTML).toBe(lucideShapeKey('plus'));
+    // the button carries no emoji / unicode-symbol text content
+    expect(EMOJI_RE.test(innerButton(el).textContent ?? '')).toBe(false);
+    expect((innerButton(el).textContent ?? '').trim()).toBe('');
   });
+
+  it('setting `icon` renders the matching lucide <svg> and swaps shapes', () => {
+    const el = mount();
+    const plusKey = lucideShapeKey('plus');
+    for (const name of ['paperclip', 'settings', 'search', 'mic']) {
+      el.icon = name;
+      const svg = renderedSvg(el);
+      expect(svg, name).toBeInstanceOf(SVGSVGElement);
+      expect(svg?.innerHTML, name).toBe(lucideShapeKey(name));
+      // a real swap: the new shape differs from the default `plus` glyph
+      expect(svg?.innerHTML, name).not.toBe(plusKey);
+      // never an emoji glyph
+      expect(EMOJI_RE.test(svg?.outerHTML ?? ''), name).toBe(false);
+    }
+  });
+
+  it('reflects the icon attribute to the property and re-renders', () => {
+    const el = mount();
+    el.setAttribute('icon', 'search');
+    expect(el.icon).toBe('search');
+    expect(renderedSvg(el)?.innerHTML).toBe(lucideShapeKey('search'));
+    el.icon = null;
+    expect(el.hasAttribute('icon')).toBe(false);
+    expect(el.icon).toBe('plus');
+    expect(renderedSvg(el)?.innerHTML).toBe(lucideShapeKey('plus'));
+  });
+
+  it('exposes the lucide svg via the `icon` ::part', () => {
+    expect(renderedSvg(mount('settings'))?.getAttribute('part')).toBe('icon');
+  });
+
+  it('a slotted custom <svg> overrides the lucide icon', () => {
+    const el = document.createElement('slicc-icon-button');
+    el.setAttribute('icon', 'plus');
+    el.innerHTML =
+      '<svg class="custom" width="16" height="16" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg>';
+    document.body.appendChild(el);
+    const slot = innerButton(el).querySelector('slot') as HTMLSlotElement;
+    const assigned = slot.assignedElements();
+    expect(assigned).toHaveLength(1);
+    expect((assigned[0] as Element).classList.contains('custom')).toBe(true);
+  });
+
+  // --- disabled / label / click ---------------------------------------------
 
   it('reflects the disabled property to the attribute and inner button', () => {
     const el = mount();
@@ -120,6 +193,13 @@ describe('slicc-icon-button', () => {
     expect(cs.backgroundColor).toBe('rgb(255, 255, 255)');
     expect(cs.color).toBe('rgb(115, 115, 115)');
     expect(cs.borderTopColor).toBe('rgb(229, 229, 229)');
+  });
+
+  it('tints the lucide glyph with the button currentColor (idle)', () => {
+    // lucide strokes use `currentColor`, so the rendered svg picks up --txt-2.
+    const svg = renderedSvg(mount());
+    expect(svg?.getAttribute('stroke')).toBe('currentColor');
+    expect(getComputedStyle(svg as Element).color).toBe('rgb(115, 115, 115)');
   });
 
   it('flips the idle palette in dark mode via inherited tokens', () => {

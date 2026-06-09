@@ -122,6 +122,99 @@ describe('slicc-floatbar', () => {
     });
   });
 
+  describe('the cost segment (spent state)', () => {
+    it('is absent by default', () => {
+      const el = document.createElement('slicc-floatbar');
+      document.body.appendChild(el);
+      expect(el.shadowRoot?.querySelector('.spent')).toBeNull();
+      expect(el.shadowRoot?.querySelector('.sep')).toBeNull();
+    });
+
+    it('reflects the spent attribute to the property and back', () => {
+      const el = document.createElement('slicc-floatbar');
+      el.spent = '2.41';
+      document.body.appendChild(el);
+      expect(el.getAttribute('spent')).toBe('2.41');
+      expect(el.spent).toBe('2.41');
+
+      el.spent = null;
+      expect(el.hasAttribute('spent')).toBe(false);
+      expect(el.spent).toBeNull();
+    });
+
+    it('accepts a numeric value via the property setter', () => {
+      const el = document.createElement('slicc-floatbar');
+      el.spent = 2.41;
+      document.body.appendChild(el);
+      expect(el.getAttribute('spent')).toBe('2.41');
+    });
+
+    it('renders a divider, an svg icon, and the formatted amount', () => {
+      const el = document.createElement('slicc-floatbar');
+      el.spent = '2.41';
+      document.body.appendChild(el);
+
+      const sep = el.shadowRoot?.querySelector('.sep');
+      expect(sep?.getAttribute('part')).toBe('sep');
+
+      const spent = el.shadowRoot?.querySelector('.spent') as HTMLElement;
+      expect(spent).not.toBeNull();
+      expect(spent.getAttribute('part')).toBe('spent');
+      // a real lucide <svg> is rendered (not an emoji / unicode glyph)
+      expect(spent.querySelector('svg')).not.toBeNull();
+      // the formatted amount, with the leading $
+      expect(spent.querySelector('.amount')?.textContent).toBe('$2.41');
+      // no bespoke currency glyph leaks through — only the $-prefixed amount
+      expect(spent.textContent).toBe('$2.41');
+      expect(spent.textContent).not.toMatch(/[💲💵🪙€£¢]/u);
+    });
+
+    it('formats a bare integer string to two decimals', () => {
+      const el = document.createElement('slicc-floatbar');
+      el.spent = '3';
+      document.body.appendChild(el);
+      expect(el.shadowRoot?.querySelector('.amount')?.textContent).toBe('$3.00');
+    });
+
+    it('tolerates a value that already carries a leading $', () => {
+      const el = document.createElement('slicc-floatbar');
+      el.setAttribute('spent', '$12.5');
+      document.body.appendChild(el);
+      expect(el.shadowRoot?.querySelector('.amount')?.textContent).toBe('$12.50');
+    });
+
+    it('renders nothing for blank or non-numeric values', () => {
+      const el = document.createElement('slicc-floatbar');
+      el.setAttribute('spent', '   ');
+      document.body.appendChild(el);
+      expect(el.shadowRoot?.querySelector('.spent')).toBeNull();
+
+      el.setAttribute('spent', 'free');
+      expect(el.shadowRoot?.querySelector('.spent')).toBeNull();
+    });
+
+    it('toggles back off when spent is cleared', () => {
+      const el = document.createElement('slicc-floatbar');
+      el.spent = '2.41';
+      document.body.appendChild(el);
+      expect(el.shadowRoot?.querySelector('.spent')).not.toBeNull();
+      el.spent = null;
+      expect(el.shadowRoot?.querySelector('.spent')).toBeNull();
+      expect(el.shadowRoot?.querySelector('.sep')).toBeNull();
+    });
+
+    it('coexists with the online status dot and the label', () => {
+      const el = document.createElement('slicc-floatbar');
+      el.online = true;
+      el.spent = '12.07';
+      document.body.appendChild(el);
+      expect(el.shadowRoot?.querySelector('.fdot')).not.toBeNull();
+      expect(el.shadowRoot?.querySelector('.label')?.textContent).toContain('CLI float');
+      expect(el.shadowRoot?.querySelector('.amount')?.textContent).toBe('$12.07');
+      expect(el.shadowRoot?.querySelector('.spent svg')).not.toBeNull();
+    });
+  });
+
   describe('dark mode', () => {
     it('flips the canvas/line/text tokens but keeps the dot green', () => {
       const wrap = document.createElement('div');

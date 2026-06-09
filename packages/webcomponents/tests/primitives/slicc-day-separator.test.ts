@@ -2,6 +2,17 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { SliccDaySeparator } from '../../src/primitives/slicc-day-separator.js';
 import { ensureGlobalTokens, setTheme } from '../../src/theme/tokens.js';
 
+/**
+ * Extract the alpha channel from a computed `background-color` string.
+ * `rgb(...)` (no alpha) is fully opaque → 1; `rgba(r, g, b, a)` → a.
+ */
+function alphaOf(color: string): number {
+  const m = color.match(/^rgba?\(([^)]+)\)$/);
+  if (!m) return 1;
+  const parts = m[1].split(',').map((p) => p.trim());
+  return parts.length === 4 ? Number.parseFloat(parts[3]) : 1;
+}
+
 describe('slicc-day-separator', () => {
   beforeEach(() => {
     ensureGlobalTokens();
@@ -100,6 +111,29 @@ describe('slicc-day-separator', () => {
       expect(parseFloat(after.width)).toBeGreaterThan(50);
       // light-mode --line is #e5e5e5.
       expect(before.backgroundColor).toBe('rgb(229, 229, 229)');
+    });
+
+    it('renders BOTH hairlines with non-zero width and a non-transparent fill', () => {
+      const el = document.createElement('slicc-day-separator');
+      el.setAttribute('label', 'Today');
+      document.body.appendChild(el);
+      el.style.width = '400px';
+
+      // The host itself must be flex for the pseudo-elements to lay out as lines.
+      expect(getComputedStyle(el).display).toBe('flex');
+
+      for (const pseudo of ['::before', '::after'] as const) {
+        const line = getComputedStyle(el, pseudo);
+        // The line is visibly present: it has content, height and width.
+        expect(line.content).toBe('""');
+        expect(parseFloat(line.height)).toBe(1);
+        expect(parseFloat(line.width)).toBeGreaterThan(0);
+        // ...and it is actually painted — the background is opaque, not transparent.
+        expect(line.backgroundColor).not.toBe('transparent');
+        expect(line.backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
+        const alpha = alphaOf(line.backgroundColor);
+        expect(alpha).toBeGreaterThan(0);
+      }
     });
 
     it('flips hairline + text colors in dark mode via inherited tokens', () => {

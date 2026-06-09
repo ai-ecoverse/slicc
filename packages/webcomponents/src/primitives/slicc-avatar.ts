@@ -28,7 +28,15 @@ const STYLE = `
   width: 100%;
   height: 100%;
   border-radius: inherit;
+  /* The rainbow gradient stays the ground behind the (optional) gravatar image. */
+  background: var(--rainbow);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
 }
+/* When a gravatar image has resolved, layer it over the rainbow ground and
+   hide the initials (the image is the foreground; rainbow remains underneath). */
+.me.has-img { color: transparent; }
 .img {
   width: 100%;
   height: 100%;
@@ -41,8 +49,16 @@ const STYLE = `
 /**
  * `<slicc-avatar>` — the circular user avatar from the prototype nav (`.me`).
  * A `--ctl-h` square with a `--rainbow` gradient fill and white initials,
- * grid-centered. Renders explicit `initials`, falls back to up-to-2 uppercase
- * initials derived from `name`, or shows a cover image when `src` is set.
+ * grid-centered.
+ *
+ * Source precedence: an explicit `src` image wins; otherwise an `email` resolves
+ * to a Gravatar (SHA-256 of the trimmed+lowercased address, `d=404` so a missing
+ * gravatar falls back to initials); otherwise the explicit `initials`, then up to
+ * 2 uppercase initials derived from `name`. For the `email` path the initials
+ * render immediately and the gravatar is swapped in asynchronously as a CSS
+ * `background-image` once its hash resolves and the image is confirmed to load —
+ * the rainbow gradient remains the ground behind it.
+ *
  * Acts as a button for an account menu: clicking (or Enter/Space) emits a
  * composed, bubbling `slicc-avatar-click` event in addition to the native click.
  *
@@ -52,19 +68,21 @@ const STYLE = `
  *
  * @attr initials - explicit initials to display (e.g. "PM"); wins over `name`
  * @attr name - full name; up to 2 uppercase initials are derived when `initials` is absent
- * @attr src - optional image URL; renders an image-backed avatar instead of initials
+ * @attr email - optional email; resolves to a Gravatar (SHA-256, `d=404`) shown behind initials
+ * @attr src - optional image URL; renders an image-backed avatar instead of initials (wins over `email`)
  * @attr size - optional CSS length overriding the default `--ctl-h` square
  * @attr label - optional accessible label (defaults to `name`, then the initials)
  * @fires slicc-avatar-click - composed + bubbling; user activated the avatar (account menu)
  * @csspart avatar - the inner circular container
  * @csspart initials - the initials text node
  * @csspart image - the cover image node (when `src` is set)
- * @slot - optional custom content replacing the default initials/image
  */
 export class SliccAvatar extends HTMLElement {
-  static readonly observedAttributes = ['initials', 'name', 'src', 'size', 'label'];
+  static readonly observedAttributes = ['initials', 'name', 'src', 'email', 'size', 'label'];
 
   readonly #root: ShadowRoot;
+  /** Monotonic token guarding async gravatar swaps against stale resolutions. */
+  #gravatarToken = 0;
 
   constructor() {
     super();
@@ -77,6 +95,11 @@ export class SliccAvatar extends HTMLElement {
     if (!this.hasAttribute('role')) this.setAttribute('role', 'button');
     if (!this.hasAttribute('tabindex')) this.setAttribute('tabindex', '0');
     this.#render();
+  }
+
+  disconnectedCallback(): void {
+    // Invalidate any in-flight gravatar swap so a late resolution is ignored.
+    this.#gravatarToken++;
   }
 
   attributeChangedCallback(name: string, _old: string | null, value: string | null): void {
@@ -113,6 +136,15 @@ export class SliccAvatar extends HTMLElement {
     else this.setAttribute('src', value);
   }
 
+  get email(): string | null {
+    return this.getAttribute('email');
+  }
+
+  set email(value: string | null) {
+    if (value == null) this.removeAttribute('email');
+    else this.setAttribute('email', value);
+  }
+
   get size(): string | null {
     return this.getAttribute('size');
   }
@@ -139,6 +171,27 @@ export class SliccAvatar extends HTMLElement {
     return deriveInitials(this.name);
   }
 
+  /**
+   * Compute the Gravatar URL for the current `email` (or an explicit address):
+   * `https://www.gravatar.com/avatar/<sha256-hex>?s=<2x px>&d=404`. Returns
+   * `null` when there is no email. Gravatar supports SHA-256 hashes; `d=404`
+   * makes a missing gravatar fail to load so the initials remain.
+   */
+  async gravatarUrl(email: string | null = this.email): Promise<string | null> {
+    const normalized = email?.trim().toLowerCase();
+    if (!normalized) return null;
+    const hex = await sha256Hex(normalized);
+    const s = this.#gravatarPx();
+    return `https://www.gravatar.com/avatar/${hex}?s=${s}&d=404`;
+  }
+
+  /** Rendered avatar size in CSS pixels at 2× (for the gravatar `s=` param). */
+  #gravatarPx(): number {
+    const measured = this.getBoundingClientRect().width;
+    const base = measured > 0 ? measured : 30;
+    return Math.max(1, Math.round(base * 2));
+  }
+
   #applySize(value: string | null): void {
     if (value == null || value.trim() === '') this.style.removeProperty('--avatar-size');
     else this.style.setProperty('--avatar-size', value);
@@ -156,17 +209,62 @@ export class SliccAvatar extends HTMLElement {
   };
 
   #render(): void {
+    // Any pending gravatar swap from a previous render is now stale.
+    const token = ++this.#gravatarToken;
+
     const src = this.src;
+    const email = this.email;
     const initials = this.resolvedInitials;
     const a11yLabel = this.label ?? this.name ?? initials;
     this.setAttribute('aria-label', a11yLabel);
 
+    // Precedence: explicit `src` > `email` (gravatar) > initials/name.
     const inner = src
       ? `<img class="img" part="image" src="${escapeHtml(src)}" alt="${escapeHtml(a11yLabel)}">`
       : `<span class="ini" part="initials">${escapeHtml(initials)}</span>`;
 
     this.#root.innerHTML = `<style>${STYLE}</style><div class="me" part="avatar"><slot>${inner}</slot></div>`;
+
+    // Gravatar only applies when there is no explicit image; render initials now
+    // and async-swap to the gravatar background once the hash resolves and the
+    // image is confirmed to load (a 404 keeps the initials in place).
+    if (!src && email) this.#applyGravatar(email, token);
   }
+
+  /**
+   * Resolve `email` → gravatar URL, preload it, and (if it loads, the request is
+   * still current, and the element is connected) set it as the `.me`
+   * background-image over the rainbow ground. A 404 (`d=404`) errors the preload
+   * and leaves the initials untouched.
+   */
+  #applyGravatar(email: string, token: number): void {
+    void this.gravatarUrl(email)
+      .then((url) => {
+        if (!url || token !== this.#gravatarToken) return;
+        const probe = new Image();
+        probe.onload = () => {
+          if (token !== this.#gravatarToken || !this.isConnected) return;
+          const me = this.#root.querySelector<HTMLElement>('.me');
+          if (!me) return;
+          me.style.backgroundImage = `url("${url}")`;
+          me.classList.add('has-img');
+        };
+        // onerror (incl. d=404) intentionally leaves the initials in place.
+        probe.src = url;
+      })
+      .catch(() => {
+        /* digest unavailable / rejected — keep initials. */
+      });
+  }
+}
+
+/** Hex-encode a SHA-256 digest of `input` using the Web Crypto SubtleCrypto API. */
+async function sha256Hex(input: string): Promise<string> {
+  const bytes = new TextEncoder().encode(input);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 /** Take up to 2 uppercase initials from a full name (first letters of first/last word). */

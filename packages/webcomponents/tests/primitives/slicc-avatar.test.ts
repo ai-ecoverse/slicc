@@ -37,19 +37,32 @@ describe('slicc-avatar', () => {
     expect(el.initials).toBe('XY');
   });
 
-  it('reflects name, src, size, and label attributes to properties', () => {
+  it('reflects name, src, email, size, and label attributes to properties', () => {
     const el = mount((e) => {
       e.name = 'Pat Mercury';
       e.src = 'https://example.test/a.png';
+      e.email = 'pat@example.test';
       e.size = '48px';
       e.label = 'Account';
     });
     expect(el.getAttribute('name')).toBe('Pat Mercury');
     expect(el.getAttribute('src')).toBe('https://example.test/a.png');
+    expect(el.getAttribute('email')).toBe('pat@example.test');
     expect(el.getAttribute('size')).toBe('48px');
     expect(el.getAttribute('label')).toBe('Account');
     el.name = null;
     expect(el.hasAttribute('name')).toBe(false);
+    el.email = null;
+    expect(el.hasAttribute('email')).toBe(false);
+  });
+
+  it('reflects the email attribute to/from the property', () => {
+    const el = mount((e) => {
+      e.email = 'beau@dodds.net';
+    });
+    expect(el.getAttribute('email')).toBe('beau@dodds.net');
+    el.setAttribute('email', 'other@example.test');
+    expect(el.email).toBe('other@example.test');
   });
 
   it('VARIANT initials: shows explicit initials uppercased and capped at 2 chars', () => {
@@ -93,6 +106,82 @@ describe('slicc-avatar', () => {
     expect(img).not.toBeNull();
     expect(img?.getAttribute('src')).toBe('https://example.test/a.png');
     expect(el.shadowRoot?.querySelector('[part="initials"]')).toBeNull();
+  });
+
+  it('VARIANT gravatar: renders initials immediately when only an email is set', () => {
+    const el = mount((e) => {
+      e.name = 'Beau Dodds';
+      e.email = 'beau@dodds.net';
+    });
+    // No explicit src → the synchronous render shows initials (the gravatar swaps
+    // in asynchronously over the rainbow ground once its hash resolves).
+    expect(el.shadowRoot?.querySelector('[part="image"]')).toBeNull();
+    expect(el.shadowRoot?.querySelector('[part="initials"]')?.textContent).toBe('BD');
+  });
+
+  it('VARIANT gravatar: builds a SHA-256 URL with s= and d=404', async () => {
+    const el = mount((e) => {
+      e.email = 'beau@dodds.net';
+      e.size = '32px';
+    });
+    const url = await el.gravatarUrl();
+    expect(url).not.toBeNull();
+    const parsed = new URL(url as string);
+    expect(parsed.origin).toBe('https://www.gravatar.com');
+    // Known SHA-256 hex of the trimmed/lowercased address (64 lowercase hex chars).
+    expect(parsed.pathname).toBe(
+      '/avatar/291b457a7742bcdc1d00258eb2a4eb15f1df2496397bda17f823430471b8415b'
+    );
+    expect(/^[0-9a-f]{64}$/.test(parsed.pathname.split('/').pop() as string)).toBe(true);
+    // d=404 makes a missing gravatar fail to load so initials remain.
+    expect(parsed.searchParams.get('d')).toBe('404');
+    // s= is the rendered size at 2× (32px → 64), a positive integer.
+    const s = Number(parsed.searchParams.get('s'));
+    expect(Number.isInteger(s)).toBe(true);
+    expect(s).toBeGreaterThan(0);
+    expect(s).toBe(64);
+  });
+
+  it('VARIANT gravatar: trims and lowercases the email before hashing', async () => {
+    const el = mount((e) => {
+      e.email = '  Beau@Dodds.NET  ';
+    });
+    const url = await el.gravatarUrl();
+    expect(url).toContain(
+      '/avatar/291b457a7742bcdc1d00258eb2a4eb15f1df2496397bda17f823430471b8415b'
+    );
+  });
+
+  it('VARIANT gravatar: gravatarUrl is null without an email', async () => {
+    const el = mount((e) => {
+      e.initials = 'PM';
+    });
+    expect(await el.gravatarUrl()).toBeNull();
+  });
+
+  it('PRECEDENCE: explicit src wins over email (no gravatar swap attempted)', () => {
+    const el = mount((e) => {
+      e.email = 'beau@dodds.net';
+      e.src = 'https://example.test/a.png';
+    });
+    const img = el.shadowRoot?.querySelector('[part="image"]') as HTMLImageElement | null;
+    expect(img).not.toBeNull();
+    expect(img?.getAttribute('src')).toBe('https://example.test/a.png');
+    // The src image is the foreground; no initials node is rendered.
+    expect(el.shadowRoot?.querySelector('[part="initials"]')).toBeNull();
+  });
+
+  it('PRECEDENCE: keeps initials and rainbow ground until the gravatar image loads', async () => {
+    const el = mount((e) => {
+      e.name = 'Beau Dodds';
+      e.email = 'beau@dodds.net';
+    });
+    const me = el.shadowRoot?.querySelector<HTMLElement>('.me');
+    // Before any async image load resolves, no background-image is set and the
+    // initials (over the rainbow gradient) are visible.
+    expect(me?.classList.contains('has-img')).toBe(false);
+    expect(me?.style.backgroundImage ?? '').not.toContain('gravatar.com');
+    expect(el.shadowRoot?.querySelector('[part="initials"]')?.textContent).toBe('BD');
   });
 
   it('escapes interpolated text (src + label)', () => {

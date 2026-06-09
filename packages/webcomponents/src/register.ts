@@ -50,6 +50,7 @@ import './workbench/slicc-file-tree.js';
 import './workbench/slicc-surface.js';
 import './workbench/slicc-tab-bar.js';
 import './workbench/slicc-tab.js';
+import './workbench/slicc-terminal.js';
 import './workbench/slicc-workbench-body.js';
 import './workbench/slicc-workbench-header.js';
 import './workbench/slicc-workbench-pane.js';
