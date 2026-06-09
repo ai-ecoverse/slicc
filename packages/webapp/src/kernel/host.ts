@@ -494,10 +494,14 @@ async function runLegacyOpfsMigration(
 
 /**
  * Step 7b: publish the workflow run manager on `globalThis.__slicc_workflows`.
- * Sentinel ownership: the manager NEVER invents a sentinel — the command
- * builds it and threads it through `WorkflowStartOptions.sentinel`; production
- * deps only supply `makeRunId` (a short id derived from `makeSentinel()`) and
- * `splitResult` (`splitSentinel`).
+ * Sentinel ownership: the manager NEVER invents a sentinel — the command builds
+ * it and threads it through `WorkflowStartOptions.sentinel`. For sentinel
+ * handling, the deps supply only `makeRunId` (a short id derived from
+ * `makeSentinel()`, the fallback when the command doesn't pass its own runId)
+ * and `splitResult` (`splitSentinel`) — the sentinel itself is built by the
+ * command and threaded via `WorkflowStartOptions.sentinel`. (The deps also wire
+ * the float-specific `runRealm`/`sharedFs`/`processManager`/`fireLick`/
+ * `getConeJid`.)
  */
 function publishWorkflowRunManagerForHost(deps: {
   orchestrator: OrchestratorType;

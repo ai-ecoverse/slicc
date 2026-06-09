@@ -10,7 +10,13 @@ export interface WorkflowRunState {
   name: string | null;
   source: string;
   origin: 'cone' | 'scoop' | 'terminal';
-  status: 'running' | 'paused' | 'done' | 'error' | 'killed';
+  status:
+    | 'running'
+    /** reserved for SP5 pause/resume — not written in SP2; the terminal-status guards already tolerate it */
+    | 'paused'
+    | 'done'
+    | 'error'
+    | 'killed';
   currentPhase: string | null;
   agentsStarted: number;
   agentsDone: number;
@@ -36,6 +42,14 @@ export interface WorkflowStartOptions {
    * matches exactly what the realm emits. The manager does not invent its own.
    */
   sentinel: string;
+  /**
+   * Optional caller-supplied run id. When present the manager uses it verbatim
+   * instead of minting one via `deps.makeRunId()`. The command threads the SAME
+   * id it baked into the per-run scratch cwd (`/shared/workflow-runs/<id>/scratch/`)
+   * so the scratch tree, the result file (`/shared/workflow-runs/<id>.json`),
+   * `workflow status <id>`, and the realm argv all key off one id.
+   */
+  runId?: string;
 }
 
 // Minimal shell ctx shape the manager needs (subset of just-bash CommandContext).
@@ -84,8 +98,10 @@ export interface WorkflowRunManagerDeps {
 
 export interface WorkflowRunManager {
   start(opts: WorkflowStartOptions): Promise<{ runId: string }>;
-  getRun(runId: string): WorkflowRunState | null;
-  listRuns(): WorkflowRunState[];
+  // Returns are `Readonly` — consumers (the `workflow` command) only ever read
+  // run state; the manager is the sole mutator.
+  getRun(runId: string): Readonly<WorkflowRunState> | null;
+  listRuns(): readonly Readonly<WorkflowRunState>[];
   observeRun(runId: string, handler: (s: WorkflowRunState) => void): () => void;
 }
 
@@ -114,7 +130,7 @@ export function createWorkflowRunManager(deps: WorkflowRunManagerDeps): Workflow
     wrapCtx(ctx, runId, runs, () => notify(runId));
 
   async function start(opts: WorkflowStartOptions): Promise<{ runId: string }> {
-    const runId = deps.makeRunId();
+    const runId = opts.runId ?? deps.makeRunId();
     const sentinel = opts.sentinel; // built by the command; never invented here
     const state: WorkflowRunState = {
       id: runId,
@@ -206,7 +222,17 @@ export function createWorkflowRunManager(deps: WorkflowRunManagerDeps): Workflow
       );
       state.resultPath = resultPath;
     } catch (e) {
-      log.warn('failed to write run result file', e); // best-effort; state still updates
+      // The durable result file is the cone's ONLY handle on a non-preview-sized
+      // result; a silent log.warn would be dropped at prod's ERROR level AND would
+      // still tell the cone `done` with `(no result file)`, unrecoverable. So
+      // log.error (visible in prod) and reflect the failure in the delivered state:
+      // record the write error and downgrade a `done` run to `error` so the cone is
+      // not misled. The in-memory preview is kept so the lick still shows what little
+      // is known.
+      const msg = e instanceof Error ? e.message : String(e);
+      log.error('failed to write run result file', { runId, resultPath, error: msg });
+      error = `result file write failed: ${msg}`;
+      if (status === 'done') status = 'error';
     }
     state.status = status;
     state.error = error;
@@ -325,41 +351,58 @@ function wrapCtx(
     cmd: string,
     opts?: { cwd?: string; args?: string[] }
   ): Promise<ExecResultLike> => {
-    const args = opts?.args ?? [];
-    if (cmd === '__wf_progress') {
-      const kind = args[0];
-      const text = args[1] ?? '';
-      const s = runs.get(runId);
-      if (s) {
-        if (kind === 'phase') {
-          s.currentPhase = text;
-          s.logs.push(text);
-        } else if (kind === 'log') {
-          s.logs.push(text);
-        }
-        notify();
-      }
-      return { stdout: '', stderr: '', exitCode: 0 };
-    }
-    if (cmd === 'agent') {
-      const s = runs.get(runId);
-      if (s) {
-        s.agentsStarted++;
-        notify();
-      }
-      try {
-        return await realExec(cmd, opts);
-      } finally {
-        const s2 = runs.get(runId);
-        if (s2) {
-          s2.agentsDone++;
-          notify();
-        }
-      }
-    }
+    if (cmd === '__wf_progress') return tapProgress(runs, runId, opts?.args ?? [], notify);
+    if (cmd === 'agent') return tapAgent(runs, runId, () => realExec(cmd, opts), notify);
     return realExec(cmd, opts);
   }) as CommandContextLike['exec'];
   // Preserve the .spawn surface realm-host doesn't use, but keep parity.
   (tappedExec as { spawn?: unknown }).spawn = (ctx.exec as { spawn?: unknown }).spawn;
   return { ...ctx, exec: tappedExec };
+}
+
+// Intercept a `__wf_progress` emit: fold phase/log into the run's state. The emit is
+// NEVER passed through to a real command. Liveness-gated so a late-resolving emit can't
+// mutate a run that has already gone terminal (done/error/killed/paused).
+function tapProgress(
+  runs: Map<string, WorkflowRunState>,
+  runId: string,
+  args: string[],
+  notify: () => void
+): ExecResultLike {
+  const s = runs.get(runId);
+  if (s && s.status === 'running') {
+    const [kind, text = ''] = args;
+    if (kind === 'phase') {
+      s.currentPhase = text;
+      s.logs.push(text);
+    } else if (kind === 'log') {
+      s.logs.push(text);
+    }
+    notify();
+  }
+  return { stdout: '', stderr: '', exitCode: 0 };
+}
+
+// Bump agentsStarted/Done around a pass-through `agent` exec. Liveness-gated (see
+// `tapProgress`): only count while the run is live.
+async function tapAgent(
+  runs: Map<string, WorkflowRunState>,
+  runId: string,
+  passThrough: () => Promise<ExecResultLike>,
+  notify: () => void
+): Promise<ExecResultLike> {
+  const s = runs.get(runId);
+  if (s && s.status === 'running') {
+    s.agentsStarted++;
+    notify();
+  }
+  try {
+    return await passThrough();
+  } finally {
+    const s2 = runs.get(runId);
+    if (s2 && s2.status === 'running') {
+      s2.agentsDone++;
+      notify();
+    }
+  }
 }

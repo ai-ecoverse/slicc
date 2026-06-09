@@ -373,6 +373,124 @@ describe('WorkflowRunManager', () => {
     expect(fireLick).toHaveBeenCalledTimes(1); // no double lick
   });
 
+  it('result-file write failure → run ends error, error mentions the failure, resultPath stays null, cone lick fires once', async () => {
+    const fireLick = vi.fn();
+    const sharedFs = {
+      mkdir: vi.fn(async () => {}),
+      writeFile: vi.fn(async () => {
+        throw new Error('EIO');
+      }),
+    };
+    const mgr = createWorkflowRunManager(makeDeps({ fireLick, sharedFs: sharedFs as any }) as any);
+    const { runId } = await mgr.start({
+      code: 'C',
+      source: 'S',
+      name: 'n',
+      filename: 'f',
+      parentJid: 'cone_1',
+      sentinel: 'WF_RESULT_x',
+      ctx: {} as any,
+    });
+    await vi.waitFor(() => expect(mgr.getRun(runId)!.status).toBe('error'));
+    const s = mgr.getRun(runId)!;
+    // A `done` realm result was downgraded to `error` because the durable result
+    // file (the cone's only handle on a non-preview result) could not be written.
+    expect(s.status).toBe('error');
+    expect(s.error).toContain('result file write failed');
+    expect(s.error).toContain('EIO');
+    expect(s.resultPath).toBeNull(); // resultPath assignment is skipped on write failure
+    // The cone is still notified exactly once (so it isn't left hanging on a run
+    // that never reports), now with the honest error status.
+    expect(fireLick).toHaveBeenCalledTimes(1);
+  });
+
+  it('runRealm rejection → fail(): status error, error mentions the crash, file written, cone lick once', async () => {
+    const fireLick = vi.fn();
+    const sharedFs = { mkdir: vi.fn(async () => {}), writeFile: vi.fn(async () => {}) };
+    const mgr = createWorkflowRunManager(
+      makeDeps({
+        fireLick,
+        sharedFs: sharedFs as any,
+        runRealm: vi.fn(async () => {
+          throw new Error('realm crashed');
+        }),
+      }) as any
+    );
+    const { runId } = await mgr.start({
+      code: 'C',
+      source: 'S',
+      name: 'n',
+      filename: 'f',
+      parentJid: 'cone_1',
+      sentinel: 'WF_RESULT_x',
+      ctx: {} as any,
+    });
+    await vi.waitFor(() => expect(mgr.getRun(runId)!.status).toBe('error'));
+    expect(mgr.getRun(runId)!.error).toContain('realm crashed');
+    // spec §8: the run file is written for failures too (so the cone can recover the error).
+    expect(sharedFs.writeFile).toHaveBeenCalledTimes(1);
+    expect(fireLick).toHaveBeenCalledTimes(1);
+  });
+
+  it('exit 0 but no result → status error with "script produced no result"', async () => {
+    const mgr = createWorkflowRunManager(
+      makeDeps({
+        runRealm: vi.fn(async () => ({ stdout: 'logs only', stderr: '', exitCode: 0 })),
+        splitResult: () => ({ result: null, log: '', hadResult: false }),
+      }) as any
+    );
+    const { runId } = await mgr.start({
+      code: 'C',
+      source: 'S',
+      name: 'n',
+      filename: 'f',
+      parentJid: undefined,
+      sentinel: 'WF_RESULT_x',
+      ctx: {} as any,
+    });
+    await vi.waitFor(() => expect(mgr.getRun(runId)!.status).toBe('error'));
+    expect(mgr.getRun(runId)!.error).toBe('script produced no result');
+  });
+
+  it("'scoop' origin (parentJid is not the cone jid) does NOT fire a lick", async () => {
+    const fireLick = vi.fn();
+    const mgr = createWorkflowRunManager(makeDeps({ fireLick, getConeJid: () => 'cone_1' }) as any);
+    const { runId } = await mgr.start({
+      code: 'C',
+      source: 'S',
+      name: 'n',
+      filename: 'f',
+      parentJid: 'sub_scoop_2', // a non-cone parent → origin 'scoop'
+      sentinel: 'WF_RESULT_x',
+      ctx: {} as any,
+    });
+    await vi.waitFor(() => expect(mgr.getRun(runId)!.status).toBe('done'));
+    expect(mgr.getRun(runId)!.origin).toBe('scoop');
+    expect(fireLick).not.toHaveBeenCalled(); // scoop-origin surfaces via `workflow status`, not a lick
+  });
+
+  it('uses opts.runId verbatim when provided (instead of deps.makeRunId)', async () => {
+    const makeRunId = vi.fn(() => 'minted-id');
+    const mgr = createWorkflowRunManager(makeDeps({ makeRunId }) as any);
+    const { runId } = await mgr.start({
+      code: 'C',
+      source: 'S',
+      name: 'n',
+      filename: 'f',
+      parentJid: undefined,
+      sentinel: 'WF_RESULT_x',
+      ctx: {} as any,
+      runId: 'command-supplied-id',
+    });
+    expect(runId).toBe('command-supplied-id');
+    expect(makeRunId).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(mgr.getRun('command-supplied-id')!.status).toBe('done'));
+    // The result file keys off the SAME id the command minted for the scratch dir.
+    expect(mgr.getRun('command-supplied-id')!.resultPath).toBe(
+      '/shared/workflow-runs/command-supplied-id.json'
+    );
+  });
+
   it('publishWorkflowRunManager sets globalThis.__slicc_workflows', () => {
     delete (globalThis as Record<string, unknown>)[WORKFLOW_MANAGER_GLOBAL_KEY];
     const mgr = publishWorkflowRunManager(makeDeps() as any);

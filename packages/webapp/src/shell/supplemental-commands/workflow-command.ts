@@ -149,8 +149,12 @@ export function createWorkflowCommand(
         stderr: 'workflow: script must define a meta block with a name (description optional)\n',
         exitCode: 1,
       };
-    // runId is just the per-run scratch-dir key; a slice of a fresh random
-    // sentinel is a convenient unguessable source (always non-empty).
+    // ONE id per run: a slice of a fresh random sentinel is a convenient
+    // unguessable source (always non-empty). It keys the per-run scratch cwd here
+    // AND is passed to `mgr.start({ runId })` (non-blocking path) so the scratch
+    // tree, the result file (`/shared/workflow-runs/<id>.json`), `workflow status
+    // <id>`, and the realm argv all share one id the user sees. (`--wait` bypasses
+    // the manager, so the id is only the scratch-dir key there.)
     const runId = makeSentinel().slice('WF_RESULT_'.length, 'WF_RESULT_'.length + 12);
     const agentCwd = `/shared/workflow-runs/${runId}/scratch/`;
     await ctx.fs.mkdir(agentCwd, { recursive: true }); // agent rejects a missing cwd → would null every call
@@ -169,7 +173,7 @@ export function createWorkflowCommand(
     });
 
     if (p.wait) return runWait(code, filename, sentinel, banner, ctx);
-    return startRun({ code, source, name: banner.name, filename, sentinel, ctx, options });
+    return startRun({ code, source, name: banner.name, filename, sentinel, runId, ctx, options });
   });
 }
 
@@ -205,6 +209,9 @@ async function startRun(opts: {
   name: string;
   filename: string;
   sentinel: string;
+  // The id the command minted for the scratch cwd; threaded so the manager keys the
+  // registry / result file / `workflow status` off the SAME id (no orphaned scratch).
+  runId: string;
   ctx: CommandContext;
   options: { getParentJid?: () => string | undefined };
 }): Promise<ExecResult> {
@@ -221,6 +228,7 @@ async function startRun(opts: {
     // the manager never reads stdin (now typed as unknown), so cast is minimal.
     ctx: opts.ctx as CommandContextLike,
     sentinel: opts.sentinel,
+    runId: opts.runId,
   });
   return {
     stdout: `▶ workflow '${opts.name}' started (run ${runId}). Watch: workflow status ${runId}\n`,
