@@ -1,4 +1,5 @@
 import { define } from '../internal/define.js';
+import { sheet } from '../internal/dom.js';
 
 /**
  * Shared transition duration (ms) used for the dismiss-cleanup fallback timer.
@@ -8,11 +9,13 @@ import { define } from '../internal/define.js';
 const DISMISS_TIMEOUT_MS = 400;
 
 /**
- * Per-instance stylesheet — the verbatim `.image-preview-*` rules lifted from
- * `packages/webapp/src/ui/styles/image-preview.css`, re-rooted onto the shadow
- * structure (`:host`, `.overlay`, `.backdrop`, `.image`). These colors are the
- * intentional lightbox chrome (a dark scrim + drop shadow), not theme tokens,
- * so they are NOT token-driven — the lightbox reads the same in light and dark.
+ * Shared constructable stylesheet — the verbatim `.image-preview-*` rules lifted
+ * from `packages/webapp/src/ui/styles/image-preview.css`, re-rooted onto the shadow
+ * structure (`:host`, `.overlay`, `.backdrop`, `.image`). Built once at module
+ * scope and adopted into every instance's shadow root (no parsed `<style>` node).
+ * These colors are the intentional lightbox chrome (a dark scrim + drop shadow),
+ * not theme tokens, so they are NOT token-driven — the lightbox reads the same in
+ * light and dark.
  */
 const STYLE = `
 :host{position:fixed;inset:0;z-index:1000;display:none;}
@@ -23,6 +26,7 @@ const STYLE = `
 .overlay.closing .backdrop{opacity:0;}
 .image{position:absolute;border-radius:6px;box-shadow:0 20px 60px rgba(0,0,0,.4),0 8px 20px rgba(0,0,0,.3);max-width:90vw;max-height:90vh;object-fit:contain;transform-origin:center center;will-change:transform;transition:transform .35s cubic-bezier(.2,0,.13,1),border-radius .35s cubic-bezier(.2,0,.13,1);}
 `;
+const SHEET = sheet(STYLE);
 
 /** The single currently-open preview, mirroring the webapp module singleton. */
 let activePreview: SliccImagePreview | null = null;
@@ -60,7 +64,7 @@ export class SliccImagePreview extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
-    this.#root.innerHTML = `<style>${STYLE}</style>`;
+    this.#root.adoptedStyleSheets = [SHEET];
   }
 
   disconnectedCallback(): void {

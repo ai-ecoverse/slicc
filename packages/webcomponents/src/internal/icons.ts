@@ -64,3 +64,40 @@ export function iconSvg(name: string, opts: IconOptions = {}): string {
     `stroke-linecap="round" stroke-linejoin="round"${cls}${part} aria-hidden="true">${children}</svg>`
   );
 }
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/**
+ * Render a lucide icon as a live `<svg>` element, built entirely via the SVG
+ * namespace (no innerHTML / string parsing). This is the innerHTML-free form —
+ * components append the returned node directly. Unknown names yield an empty,
+ * correctly-sized `<svg>` (and warn).
+ */
+export function iconEl(name: string, opts: IconOptions = {}): SVGSVGElement {
+  const size = opts.size ?? 16;
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  const set = (k: string, v: string | number) => svg.setAttribute(k, String(v));
+  set('xmlns', SVG_NS);
+  set('width', size);
+  set('height', size);
+  set('viewBox', '0 0 24 24');
+  set('fill', 'none');
+  set('stroke', 'currentColor');
+  set('stroke-width', opts.strokeWidth ?? 2);
+  set('stroke-linecap', 'round');
+  set('stroke-linejoin', 'round');
+  set('aria-hidden', 'true');
+  if (opts.class) set('class', opts.class);
+  if (opts.part) set('part', opts.part);
+  const node = REGISTRY[toPascal(name)];
+  if (!node) {
+    console.warn(`[slicc-webcomponents] unknown lucide icon: ${name}`);
+    return svg;
+  }
+  for (const [tag, attrs] of node) {
+    const child = document.createElementNS(SVG_NS, tag);
+    for (const [k, v] of Object.entries(attrs)) child.setAttribute(k, String(v));
+    svg.appendChild(child);
+  }
+  return svg;
+}

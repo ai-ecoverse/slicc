@@ -1,18 +1,9 @@
 import { define } from '../internal/define.js';
-import { iconSvg } from '../internal/icons.js';
+import { h, sheet } from '../internal/dom.js';
+import { iconEl } from '../internal/icons.js';
 
 /** Rendered lucide glyph size (px) inside the 28×28 badge. */
 const ICON_SIZE = 14;
-
-/**
- * Lucide `snowflake` glyph at the prototype's 14px badge size. Stroke inherits
- * `currentColor`, so the badge's `color` token drives the glyph — matching the
- * prototype's `.snow { color: var(--txt-2) }` /
- * `.fzcard.thawed .snow { color: #b91c4d }` contract. Never the Unicode
- * snowflake emoji (it rasterizes softly at 14px); always the crisp lucide
- * vector.
- */
-const SNOWFLAKE_SVG = iconSvg('snowflake', { size: ICON_SIZE, part: 'glyph', class: 'ic' });
 
 const STYLE = `
 :host {
@@ -51,6 +42,7 @@ const STYLE = `
 ::slotted(*), .ic { line-height: 1; }
 .ic { display: block; }
 `;
+const SHEET = sheet(STYLE);
 
 /**
  * `<slicc-snowflake>` — the freezer "Snowflake Badge" from the prototype
@@ -60,7 +52,7 @@ const STYLE = `
  * border + rose-tinted fill + `#b91c4d` glyph) the prototype shows for ~1400ms
  * when a frozen session is reopened.
  *
- * The glyph is rendered via the shared `iconSvg` helper (lucide `snowflake`),
+ * The glyph is rendered via the shared `iconEl` helper (lucide `snowflake`),
  * never emoji — it inherits the badge's `currentColor`, so it tracks the
  * frozen / thawed palette automatically.
  *
@@ -82,7 +74,10 @@ export class SliccSnowflake extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
-    this.#root.innerHTML = `<style>${STYLE}</style><span class="snow" part="badge"><slot>${SNOWFLAKE_SVG}</slot></span>`;
+    this.#root.adoptedStyleSheets = [SHEET];
+    const glyph = iconEl('snowflake', { size: ICON_SIZE, part: 'glyph', class: 'ic' });
+    const badge = h('span', { class: 'snow', part: 'badge' }, h('slot', null, glyph));
+    this.#root.replaceChildren(badge);
   }
 
   /** Whether the badge is in the rose "thawing" flash state. */

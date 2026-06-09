@@ -1,5 +1,5 @@
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
+import { h, sheet } from '../internal/dom.js';
 
 const STYLE = `
 :host { display: inline-flex; }
@@ -32,6 +32,7 @@ const STYLE = `
   outline-offset: 2px;
 }
 `;
+const SHEET = sheet(STYLE);
 
 /**
  * `<slicc-swatch>` — the 28×28 color swatch button from the prototype hero-studio
@@ -59,6 +60,7 @@ export class SliccSwatch extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+    this.#root.adoptedStyleSheets = [SHEET];
   }
 
   connectedCallback(): void {
@@ -112,14 +114,22 @@ export class SliccSwatch extends HTMLElement {
     const classes = ['sw'];
     if (this.hue) classes.push('hue');
     if (this.selected) classes.push('on');
-    const styleAttr = color ? ` style="--swatch-color:${escapeHtml(color)}"` : '';
-    const aria = escapeHtml(this.label ?? color ?? 'color swatch');
-    this.#root.innerHTML = `<style>${STYLE}</style><button type="button" part="button" class="${classes.join(
-      ' '
-    )}" aria-pressed="${this.selected ? 'true' : 'false'}" aria-label="${aria}"${styleAttr}><slot></slot></button>`;
 
-    const button = this.#root.querySelector('button');
-    button?.addEventListener('click', this.#onClick);
+    const button = h(
+      'button',
+      {
+        type: 'button',
+        part: 'button',
+        class: classes.join(' '),
+        'aria-pressed': this.selected ? 'true' : 'false',
+        'aria-label': this.label ?? color ?? 'color swatch',
+      },
+      h('slot')
+    );
+    if (color) button.style.setProperty('--swatch-color', color);
+
+    button.addEventListener('click', this.#onClick);
+    this.#root.replaceChildren(button);
   }
 
   #onClick = (): void => {

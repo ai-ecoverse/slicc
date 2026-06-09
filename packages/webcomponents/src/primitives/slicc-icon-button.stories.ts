@@ -65,6 +65,32 @@ export const Gallery: Story = {
     ]),
 };
 
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/** Build a hand-authored "check-circle" `<svg>` element via DOM construction. */
+function customGlyph(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  const set = (el: Element, attrs: Record<string, string>): void => {
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  };
+  set(svg, {
+    width: '16',
+    height: '16',
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    'stroke-width': '2',
+    'stroke-linecap': 'round',
+    'stroke-linejoin': 'round',
+  });
+  const circle = document.createElementNS(SVG_NS, 'circle');
+  set(circle, { cx: '12', cy: '12', r: '9' });
+  const path = document.createElementNS(SVG_NS, 'path');
+  set(path, { d: 'M9 12l2 2 4-4' });
+  svg.append(circle, path);
+  return svg;
+}
+
 /** A slotted custom `<svg>` overrides the lucide `icon` entirely. */
 export const CustomSvgOverride: Story = {
   render: ({ label }) => {
@@ -72,8 +98,7 @@ export const CustomSvgOverride: Story = {
     if (label) el.setAttribute('label', label);
     // `icon` is ignored because the default slot is populated.
     el.setAttribute('icon', 'plus');
-    el.innerHTML =
-      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9 12l2 2 4-4"/></svg>';
+    el.append(customGlyph());
     return el;
   },
   args: { label: 'Confirm' },

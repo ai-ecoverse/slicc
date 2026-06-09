@@ -62,10 +62,27 @@ export const SlottedContent: Story = {
   render: ({ label }) => {
     const el = document.createElement('slicc-collapse-btn');
     if (label) el.setAttribute('label', label);
-    el.innerHTML =
-      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
-      'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-      '<path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
+    const SVG_NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    for (const [k, v] of Object.entries({
+      width: '16',
+      height: '16',
+      viewBox: '0 0 24 24',
+      fill: 'none',
+      stroke: 'currentColor',
+      'stroke-width': '2',
+      'stroke-linecap': 'round',
+      'stroke-linejoin': 'round',
+      'aria-hidden': 'true',
+    })) {
+      svg.setAttribute(k, v);
+    }
+    for (const d of ['M18 6 6 18', 'm6 6 12 12']) {
+      const path = document.createElementNS(SVG_NS, 'path');
+      path.setAttribute('d', d);
+      svg.appendChild(path);
+    }
+    el.appendChild(svg);
     el.addEventListener('collapse', () => {
       // eslint-disable-next-line no-console
       console.log('collapse');

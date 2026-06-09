@@ -1,5 +1,5 @@
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
+import { h, sheet } from '../internal/dom.js';
 
 const STYLE = `
 :host { display: inline-flex; align-items: center; height: var(--ctl-h, 30px); font-family: var(--ui); line-height: 1; }
@@ -9,6 +9,7 @@ const STYLE = `
   background: var(--rainbow); -webkit-background-clip: text; background-clip: text; color: transparent;
 }
 `;
+const SHEET = sheet(STYLE);
 
 /**
  * `<slicc-logo>` — the "sliccy" wordmark from the prototype nav (`.logo`), with
@@ -27,6 +28,7 @@ export class SliccLogo extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+    this.#root.adoptedStyleSheets = [SHEET];
   }
 
   connectedCallback(): void {
@@ -47,9 +49,9 @@ export class SliccLogo extends HTMLElement {
   }
 
   #render(): void {
-    const badge = this.badge;
-    const badgeHtml = badge ? `<span class="b" part="badge">${escapeHtml(badge)}</span>` : '';
-    this.#root.innerHTML = `<style>${STYLE}</style><span class="logo" part="logo">sliccy${badgeHtml}</span>`;
+    const logo = h('span', { class: 'logo', part: 'logo' }, 'sliccy');
+    if (this.badge) logo.append(h('span', { class: 'b', part: 'badge' }, this.badge));
+    this.#root.replaceChildren(logo);
   }
 }
 

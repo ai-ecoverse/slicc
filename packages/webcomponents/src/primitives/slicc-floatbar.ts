@@ -1,6 +1,6 @@
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
-import { iconSvg } from '../internal/icons.js';
+import { h, sheet } from '../internal/dom.js';
+import { iconEl } from '../internal/icons.js';
 
 const DEFAULT_LABEL = 'CLI float';
 
@@ -77,6 +77,7 @@ const STYLE = `
   height: 12px;
 }
 `;
+const SHEET = sheet(STYLE);
 
 /**
  * `<slicc-floatbar>` — the Runtime Float Pill from the prototype nav
@@ -105,6 +106,7 @@ export class SliccFloatbar extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+    this.#root.adoptedStyleSheets = [SHEET];
   }
 
   connectedCallback(): void {
@@ -154,15 +156,26 @@ export class SliccFloatbar extends HTMLElement {
   }
 
   #render(): void {
-    const dotHtml = this.online ? '<span class="fdot" part="dot"></span>' : '';
-    const label = escapeHtml(this.label);
+    const nodes: Node[] = [];
+
+    if (this.online) nodes.push(h('span', { class: 'fdot', part: 'dot' }));
+
+    nodes.push(h('span', { class: 'label', part: 'label' }, h('slot', null, this.label)));
+
     const amount = formatSpent(this.spent);
-    const spentHtml =
-      amount != null
-        ? `<span class="sep" part="sep"></span>` +
-          `<span class="spent" part="spent">${iconSvg('circle-dollar-sign', { size: 12 })}<span class="amount">${escapeHtml(amount)}</span></span>`
-        : '';
-    this.#root.innerHTML = `<style>${STYLE}</style>${dotHtml}<span class="label" part="label"><slot>${label}</slot></span>${spentHtml}`;
+    if (amount != null) {
+      nodes.push(h('span', { class: 'sep', part: 'sep' }));
+      nodes.push(
+        h(
+          'span',
+          { class: 'spent', part: 'spent' },
+          iconEl('circle-dollar-sign', { size: 12 }),
+          h('span', { class: 'amount' }, amount)
+        )
+      );
+    }
+
+    this.#root.replaceChildren(...nodes);
   }
 }
 

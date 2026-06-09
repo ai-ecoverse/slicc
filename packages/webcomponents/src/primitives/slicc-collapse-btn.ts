@@ -1,6 +1,6 @@
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
-import { iconSvg } from '../internal/icons.js';
+import { h, sheet } from '../internal/dom.js';
+import { iconEl } from '../internal/icons.js';
 
 const STYLE = `
 :host { display: inline-flex; flex: 0 0 auto; }
@@ -24,6 +24,7 @@ const STYLE = `
 .icon { display: inline-flex; place-items: center; pointer-events: none; }
 .icon svg { display: block; }
 `;
+const SHEET = sheet(STYLE);
 
 /**
  * Default lucide icon — `panel-right-close` reads as "collapse the workbench"
@@ -40,7 +41,7 @@ const ICON_SIZE = 16;
  * `<slicc-collapse-btn>` — the icon button at the right of the workbench header
  * (`.wbhead .col`) in the prototype. A 28px-tall canvas-backed button whose
  * glyph is a **lucide** `panel-right-close` icon (rendered via the shared
- * `iconSvg` helper — never emoji or bespoke unicode symbols) that hovers to
+ * `iconEl` helper — never emoji or bespoke unicode symbols) that hovers to
  * `--ghost` / `--ink`. Self-contained shadow DOM; themes via inherited tokens
  * (--canvas, --line, --txt-2, --ghost, --ink, --ui) so it flips with
  * light/dark automatically.
@@ -63,6 +64,7 @@ export class SliccCollapseBtn extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+    this.#root.adoptedStyleSheets = [SHEET];
   }
 
   connectedCallback(): void {
@@ -95,12 +97,15 @@ export class SliccCollapseBtn extends HTMLElement {
 
   #render(): void {
     const label = this.label;
-    const glyph = iconSvg(this.icon, { size: ICON_SIZE, part: 'icon' });
-    this.#root.innerHTML = `<style>${STYLE}</style><button class="col" part="button" type="button" aria-label="${escapeHtml(
-      label
-    )}" title="${escapeHtml(label)}"><slot><span class="icon">${glyph}</span></slot></button>`;
-    this.#button = this.#root.querySelector('button');
-    this.#button?.addEventListener('click', this.#onClick);
+    const glyph = iconEl(this.icon, { size: ICON_SIZE, part: 'icon' });
+    const button = h(
+      'button',
+      { class: 'col', part: 'button', type: 'button', 'aria-label': label, title: label },
+      h('slot', null, h('span', { class: 'icon' }, glyph))
+    ) as HTMLButtonElement;
+    button.addEventListener('click', this.#onClick);
+    this.#button = button;
+    this.#root.replaceChildren(button);
   }
 
   readonly #onClick = (): void => {

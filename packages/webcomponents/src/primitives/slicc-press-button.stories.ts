@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
-import { iconSvg } from '../internal/icons.js';
+import { append, h } from '../internal/dom.js';
+import { iconEl } from '../internal/icons.js';
 import './slicc-press-button.js';
 
 interface PressButtonArgs {
@@ -30,7 +31,7 @@ function buildButton(args: PressButtonArgs): HTMLElement {
   if (args.disabled) btn.setAttribute('disabled', '');
   if (args.disableDoubleClick) btn.setAttribute('disable-double-click', '');
   if (args.longPressMs != null) btn.setAttribute('long-press-ms', String(args.longPressMs));
-  btn.innerHTML = iconSvg(args.icon ?? 'settings', { size: 18 });
+  btn.append(iconEl(args.icon ?? 'settings', { size: 18 }));
 
   const status = document.createElement('code');
   status.style.cssText =
@@ -59,18 +60,28 @@ function buildAnimationDemo(): HTMLElement {
 
   const intro = document.createElement('p');
   intro.style.cssText = 'margin:0;font-size:13px;line-height:1.5;color:var(--txt-2);';
-  intro.innerHTML =
-    '<strong style="color:var(--ink)">Try it:</strong> a single <em>click</em> gives a quick tactile ' +
-    '<strong>squish</strong>; a <em>double-click</em> triggers a distinct playful <strong>wobble</strong>. ' +
-    'Hold for the secondary (long-press) action — that one stays calm. ' +
-    'Animations are disabled automatically under <code>prefers-reduced-motion</code>.';
+  append(intro, [
+    h('strong', { style: 'color:var(--ink)' }, 'Try it:'),
+    ' a single ',
+    h('em', null, 'click'),
+    ' gives a quick tactile ',
+    h('strong', null, 'squish'),
+    '; a ',
+    h('em', null, 'double-click'),
+    ' triggers a distinct playful ',
+    h('strong', null, 'wobble'),
+    '. Hold for the secondary (long-press) action — that one stays calm. ',
+    'Animations are disabled automatically under ',
+    h('code', null, 'prefers-reduced-motion'),
+    '.',
+  ]);
 
   const btn = document.createElement('slicc-press-button');
   btn.style.cssText =
     'width:64px;height:64px;border:1px solid var(--line);border-radius:16px;color:var(--ctx);cursor:pointer;';
   btn.setAttribute('label', 'Delight');
   btn.setAttribute('tooltip', 'Click, double-click, or hold');
-  btn.innerHTML = iconSvg('sparkles', { size: 28 });
+  btn.append(iconEl('sparkles', { size: 28 }));
 
   const status = document.createElement('code');
   status.style.cssText =

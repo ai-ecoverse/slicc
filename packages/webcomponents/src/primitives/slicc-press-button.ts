@@ -1,4 +1,5 @@
 import { define } from '../internal/define.js';
+import { h } from '../internal/dom.js';
 import {
   attachLongPressGesture,
   LONG_PRESS_MS,
@@ -269,6 +270,11 @@ export class SliccPressButton extends HTMLElement {
   /**
    * Replace the icon HTML inside the inner button while preserving the
    * press layer. Used when a sprinkle's icon resolves asynchronously.
+   *
+   * The icon arrives as an HTML string (a genuinely non-DOM string context
+   * dictated by this public signature), so it is parsed with {@link DOMParser}
+   * rather than an HTML-string sink, and the resulting nodes are relocated
+   * into the inner button in order, above the press layer.
    */
   setIcon(html: string): void {
     if (!this.initialized) this.initialize();
@@ -277,9 +283,8 @@ export class SliccPressButton extends HTMLElement {
     for (const child of Array.from(btn.childNodes)) {
       if (child !== layer) child.remove();
     }
-    const tmp = this.ownerDocument.createElement('div');
-    tmp.innerHTML = html;
-    while (tmp.firstChild) btn.appendChild(tmp.firstChild);
+    const parsed = new DOMParser().parseFromString(html, 'text/html').body;
+    while (parsed.firstChild) btn.appendChild(parsed.firstChild);
   }
 
   /** Focus the internal button (so callers don't need to dig in). */
@@ -291,15 +296,15 @@ export class SliccPressButton extends HTMLElement {
   private initialize(): void {
     this.initialized = true;
 
-    const btn = this.ownerDocument.createElement('button');
-    btn.type = 'button';
-    btn.className = `${BASE}__btn`;
-    btn.setAttribute('part', 'button');
-
-    const layer = this.ownerDocument.createElement('span');
-    layer.className = `${BASE}__press-layer`;
-    layer.setAttribute('part', 'press-layer');
-    btn.appendChild(layer);
+    const layer = h('span', {
+      class: `${BASE}__press-layer`,
+      part: 'press-layer',
+    }) as HTMLSpanElement;
+    const btn = h(
+      'button',
+      { type: 'button', class: `${BASE}__btn`, part: 'button' },
+      layer
+    ) as HTMLButtonElement;
 
     // Move pre-existing host children (the caller's icon) into the
     // inner button so they render on top of the press layer.
