@@ -48,7 +48,7 @@ describe('thinkingLevelToEffort', () => {
     ['medium', 'medium'],
     ['high', 'high'],
     ['xhigh', 'xhigh'],
-  ])('maps level %s → effort %s', (level, effort) => {
+  ])('maps level %s → effort %s (no model: legacy passthrough)', (level, effort) => {
     expect(thinkingLevelToEffort(level as never)).toBe(effort);
   });
 
@@ -56,8 +56,53 @@ describe('thinkingLevelToEffort', () => {
     expect(thinkingLevelToEffort(undefined)).toBe('high');
   });
 
-  it('honors a model thinkingLevelMap override', () => {
-    expect(thinkingLevelToEffort('high', { high: 'xhigh' })).toBe('xhigh');
+  it('honors a model thinkingLevelMap override (no model id: not clamped)', () => {
+    expect(thinkingLevelToEffort('high', { thinkingLevelMap: { high: 'xhigh' } })).toBe('xhigh');
+  });
+
+  // xhigh clamping mirrors bedrock-camp's mapThinkingLevelToEffort — model ids
+  // mirror those in claude-model-version.test.ts.
+  it('keeps xhigh for Opus ≥ 4.7 (native xhigh)', () => {
+    expect(thinkingLevelToEffort('xhigh', { id: 'claude-opus-4-7' })).toBe('xhigh');
+    expect(thinkingLevelToEffort('xhigh', { id: 'claude-opus-4-8' })).toBe('xhigh');
+    expect(thinkingLevelToEffort('xhigh', { id: 'us.anthropic.claude-opus-4-8' })).toBe('xhigh');
+  });
+
+  it('clamps xhigh to max for Opus 4.6', () => {
+    expect(thinkingLevelToEffort('xhigh', { id: 'claude-opus-4-6' })).toBe('max');
+  });
+
+  it('clamps xhigh to high for Sonnet 4.6 (no native xhigh, no max)', () => {
+    expect(thinkingLevelToEffort('xhigh', { id: 'claude-sonnet-4-6' })).toBe('high');
+    expect(thinkingLevelToEffort('xhigh', { id: 'us.anthropic.claude-sonnet-4-6' })).toBe('high');
+  });
+
+  it('matches model name when the id is opaque (Opus 4.6 → max)', () => {
+    expect(thinkingLevelToEffort('xhigh', { id: 'opaque', name: 'Claude Opus 4.6' })).toBe('max');
+  });
+
+  it('clamps a thinkingLevelMap override that resolves to xhigh', () => {
+    // Override maps 'high' → 'xhigh', then clamp downshifts for Sonnet 4.6.
+    expect(
+      thinkingLevelToEffort('high', {
+        id: 'claude-sonnet-4-6',
+        thinkingLevelMap: { high: 'xhigh' },
+      })
+    ).toBe('high');
+    // Same override but on Opus 4.6 clamps to 'max'.
+    expect(
+      thinkingLevelToEffort('high', {
+        id: 'claude-opus-4-6',
+        thinkingLevelMap: { high: 'xhigh' },
+      })
+    ).toBe('max');
+  });
+
+  it('leaves non-xhigh values untouched even with a clamping-eligible model', () => {
+    expect(thinkingLevelToEffort('high', { id: 'claude-opus-4-6' })).toBe('high');
+    expect(thinkingLevelToEffort('medium', { id: 'claude-sonnet-4-6' })).toBe('medium');
+    expect(thinkingLevelToEffort('low', { id: 'claude-opus-4-7' })).toBe('low');
+    expect(thinkingLevelToEffort(undefined, { id: 'claude-opus-4-6' })).toBe('high');
   });
 });
 
@@ -143,5 +188,49 @@ describe('withAdaptiveThinkingShim', () => {
     const out = await opts.onPayload!(adaptiveIn, {} as never);
     expect(out.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
     expect(out).not.toHaveProperty('output_config');
+  });
+
+  it('clamps an unsupported reasoning: xhigh per model (Opus 4.6 → max, Sonnet 4.6 → high)', async () => {
+    const opus46 = withAdaptiveThinkingShim(
+      { id: 'claude-opus-4-6' },
+      { reasoning: 'xhigh', apiKey: 'tok' }
+    );
+    const opus46Out = await opus46.onPayload!(
+      { thinking: { type: 'enabled', budget_tokens: 1024 } },
+      {} as never
+    );
+    expect(opus46Out.output_config).toEqual({ effort: 'max' });
+
+    const sonnet46 = withAdaptiveThinkingShim(
+      { id: 'claude-sonnet-4-6' },
+      { reasoning: 'xhigh', apiKey: 'tok' }
+    );
+    const sonnet46Out = await sonnet46.onPayload!(
+      { thinking: { type: 'enabled', budget_tokens: 1024 } },
+      {} as never
+    );
+    expect(sonnet46Out.output_config).toEqual({ effort: 'high' });
+
+    const opus48 = withAdaptiveThinkingShim(
+      { id: 'claude-opus-4-8' },
+      { reasoning: 'xhigh', apiKey: 'tok' }
+    );
+    const opus48Out = await opus48.onPayload!(
+      { thinking: { type: 'enabled', budget_tokens: 1024 } },
+      {} as never
+    );
+    expect(opus48Out.output_config).toEqual({ effort: 'xhigh' });
+  });
+
+  it('clamps a caller-supplied explicit effort: "xhigh" the same way', async () => {
+    const opts = withAdaptiveThinkingShim(
+      { id: 'claude-sonnet-4-6' },
+      { effort: 'xhigh', apiKey: 'tok' }
+    );
+    const out = await opts.onPayload!(
+      { thinking: { type: 'enabled', budget_tokens: 1024 } },
+      {} as never
+    );
+    expect(out.output_config).toEqual({ effort: 'high' });
   });
 });

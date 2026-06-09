@@ -26,7 +26,11 @@
 
 import type { ThinkingLevel, ThinkingLevelMap } from '@earendil-works/pi-ai';
 
-import { claudeSupportsAdaptiveThinking } from './claude-model-version.js';
+import {
+  claudeSupportsAdaptiveThinking,
+  claudeSupportsMaxEffort,
+  claudeSupportsNativeXhighEffort,
+} from './claude-model-version.js';
 
 /**
  * True when the model needs the adaptive-thinking payload rewrite. Returns true
@@ -40,28 +44,60 @@ export function modelNeedsAdaptiveThinkingShim(modelId: string, modelName?: stri
 }
 
 /**
+ * Clamp an unsupported `xhigh` effort for the adaptive models that don't accept
+ * it natively, mirroring `bedrock-camp`'s `mapThinkingLevelToEffort`:
+ * - Opus ≥ 4.7 (`claudeSupportsNativeXhighEffort`) → `xhigh` stays `xhigh`
+ * - Opus 4.6 (`claudeSupportsMaxEffort`) → `xhigh` → `max`
+ * - Anything else (Sonnet, …) → `xhigh` → `high`
+ *
+ * Non-`xhigh` efforts pass through unchanged. When the model id is missing the
+ * value is returned as-is so unaware callers retain the legacy mapping.
+ */
+function clampXhighEffort(effort: string, modelId?: string, modelName?: string): string {
+  if (effort !== 'xhigh' || !modelId) return effort;
+  if (claudeSupportsNativeXhighEffort(modelId, modelName)) return 'xhigh';
+  if (claudeSupportsMaxEffort(modelId, modelName)) return 'max';
+  return 'high';
+}
+
+interface ThinkingLevelModel {
+  id?: string;
+  name?: string;
+  thinkingLevelMap?: ThinkingLevelMap;
+}
+
+/**
  * Map a pi-ai `ThinkingLevel` to a Bedrock adaptive-thinking effort. Mirrors
  * pi-ai's (non-exported) `mapThinkingLevelToEffort`: an explicit
  * `model.thinkingLevelMap` override wins, else minimal/low→low, medium→medium,
  * high→high, xhigh→xhigh, and an absent level defaults to `high`.
+ *
+ * The final value is then run through {@link clampXhighEffort} (using the
+ * shared `claudeSupportsNativeXhighEffort` / `claudeSupportsMaxEffort`
+ * predicates) so an unsupported `xhigh` — including one produced by a
+ * `thinkingLevelMap` override — is downshifted to `max` (Opus 4.6) or `high`
+ * (Sonnet 4.6, etc.).
  */
 export function thinkingLevelToEffort(
   level: ThinkingLevel | undefined,
-  thinkingLevelMap?: ThinkingLevelMap
+  model?: ThinkingLevelModel
 ): string {
-  const mapped = level ? thinkingLevelMap?.[level] : undefined;
-  if (typeof mapped === 'string') return mapped;
-  switch (level) {
-    case 'minimal':
-    case 'low':
-      return 'low';
-    case 'medium':
-      return 'medium';
-    case 'xhigh':
-      return 'xhigh';
-    default:
-      return 'high';
-  }
+  const mapped = level ? model?.thinkingLevelMap?.[level] : undefined;
+  const base = (() => {
+    if (typeof mapped === 'string') return mapped;
+    switch (level) {
+      case 'minimal':
+      case 'low':
+        return 'low';
+      case 'medium':
+        return 'medium';
+      case 'xhigh':
+        return 'xhigh';
+      default:
+        return 'high';
+    }
+  })();
+  return clampXhighEffort(base, model?.id, model?.name);
 }
 
 type Params = Record<string, unknown>;
@@ -112,6 +148,10 @@ export function withAdaptiveThinkingShim<T extends object>(
     effort?: string;
     onPayload?: PayloadHook;
   };
-  const effort = o.effort ?? thinkingLevelToEffort(o.reasoning, model.thinkingLevelMap);
+  const effort = clampXhighEffort(
+    o.effort ?? thinkingLevelToEffort(o.reasoning, model),
+    model.id,
+    model.name
+  );
   return { ...options, onPayload: adaptiveThinkingPayloadHook(effort, o.onPayload) };
 }
