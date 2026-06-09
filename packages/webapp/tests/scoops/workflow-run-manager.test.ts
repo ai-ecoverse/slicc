@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createWorkflowRunManager } from '../../src/scoops/workflow-run-manager.js';
+import {
+  createWorkflowRunManager,
+  type WorkflowRunState,
+} from '../../src/scoops/workflow-run-manager.js';
 
 function deferred<T>() {
   let resolve!: (v: T) => void;
@@ -45,7 +48,7 @@ describe('WorkflowRunManager', () => {
       ctx: { cwd: '/', env: new Map(), stdin: '', exec: vi.fn() } as any,
     });
     expect(runId).toBe('run1');
-    mgr.observeRun(runId, (s) => states.push(s.status));
+    mgr.observeRun(runId, (s: WorkflowRunState) => states.push(s.status));
     expect(mgr.getRun(runId)!.status).toBe('running'); // launched, not awaited
 
     realmDone.resolve({
@@ -108,6 +111,35 @@ describe('WorkflowRunManager', () => {
     });
     await vi.waitFor(() => expect(mgr.listRuns()[0].status).toBe('error'));
     expect(mgr.listRuns()[0].error).toContain('boom');
+    expect(fireLick).toHaveBeenCalledTimes(1);
+  });
+
+  it('exit 137 (SIGKILL) → status killed (not error)', async () => {
+    const fireLick = vi.fn();
+    const sharedFs = { mkdir: vi.fn(async () => {}), writeFile: vi.fn(async () => {}) };
+    const mgr = createWorkflowRunManager(
+      makeDeps({
+        fireLick,
+        sharedFs: sharedFs as any,
+        runRealm: vi.fn(async () => ({
+          stdout: '',
+          stderr: 'killed (SIGKILL)',
+          exitCode: 137,
+        })),
+      }) as any
+    );
+    await mgr.start({
+      code: 'C',
+      source: 'S',
+      name: 'n',
+      filename: 'f',
+      parentJid: 'cone_1',
+      sentinel: 'WF_RESULT_x',
+      ctx: {} as any,
+    });
+    await vi.waitFor(() => expect(mgr.listRuns()[0].status).toBe('killed'));
+    expect(mgr.listRuns()[0].status).toBe('killed');
+    expect(sharedFs.writeFile).toHaveBeenCalledTimes(1);
     expect(fireLick).toHaveBeenCalledTimes(1);
   });
 });

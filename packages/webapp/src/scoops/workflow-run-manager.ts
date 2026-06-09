@@ -225,6 +225,16 @@ export function createWorkflowRunManager(deps: WorkflowRunManagerDeps): Workflow
         observers.set(id, set);
       }
       set.add(handler);
+      // Emit current state on subscribe so a late subscriber never misses a
+      // terminal state (the run may already be done by the time it attaches).
+      const current = runs.get(id);
+      if (current) {
+        try {
+          handler(current);
+        } catch (e) {
+          log.warn('observeRun handler threw on initial state', e);
+        }
+      }
       return () => set!.delete(handler);
     },
   };
