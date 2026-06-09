@@ -471,7 +471,7 @@ function formatGitHubFailure(
 }
 
 function formatDiscoveryScope(): string {
-  return 'Discovery roots: /workspace/skills plus accessible **/.agents/skills/* and **/.claude/skills/* anywhere in the VFS.\n';
+  return 'Discovery roots: /workspace/skills plus accessible **/.agents/skills/*, **/.claude/skills/*, and **/.claude-plugin/marketplace.json skill collections anywhere in the VFS.\n';
 }
 
 function formatSkillSource(source: DiscoveredSkill['source']): string {
