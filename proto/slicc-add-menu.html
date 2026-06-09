@@ -5,9 +5,34 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>&lt;slicc-add-menu&gt; — standalone web component</title>
     <style>
-      :root { color-scheme: light dark; }
+      /* Adobe Clean — the same typeface the rest of the SLICC UI uses */
+      @font-face {
+        font-family: "Adobe Clean";
+        src: url("../packages/assets/fonts/AdobeClean-Regular.otf") format("opentype");
+        font-weight: 400; font-style: normal; font-display: swap;
+      }
+      @font-face {
+        font-family: "Adobe Clean";
+        src: url("../packages/assets/fonts/AdobeClean-Medium.otf") format("opentype");
+        font-weight: 500; font-style: normal; font-display: swap;
+      }
+      @font-face {
+        font-family: "Adobe Clean";
+        src: url("../packages/assets/fonts/AdobeClean-Bold.otf") format("opentype");
+        font-weight: 700; font-style: normal; font-display: swap;
+      }
+      @font-face {
+        font-family: "Adobe Clean";
+        src: url("../packages/assets/fonts/AdobeClean-ExtraBold.otf") format("opentype");
+        font-weight: 800; font-style: normal; font-display: swap;
+      }
+      :root {
+        color-scheme: light dark;
+        --slicc-font: "Adobe Clean", "Source Sans Pro", -apple-system, BlinkMacSystemFont,
+          "Segoe UI", Roboto, sans-serif;
+      }
       body {
-        font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+        font-family: var(--slicc-font);
         margin: 0;
         padding: 32px;
         background: #0f1115;
@@ -51,7 +76,7 @@
       .composer .chips:empty { display: none; }
       .chip {
         display: inline-flex; align-items: center; gap: 6px;
-        font: 500 12px ui-sans-serif, system-ui, sans-serif;
+        font: 500 12px var(--slicc-font);
         background: color-mix(in oklab, #3562ff 22%, transparent);
         color: #cdd7ff; border: 1px solid color-mix(in oklab, #3562ff 40%, transparent);
         border-radius: 9999px; padding: 3px 6px 3px 9px;
@@ -62,7 +87,7 @@
       .composer textarea {
         flex: 1; resize: none; min-height: 38px; border: none; outline: none;
         background: transparent; color: #e8e8e8;
-        font: 400 14px/18px ui-sans-serif, system-ui, sans-serif;
+        font: 400 14px/18px var(--slicc-font);
       }
       .composer textarea::placeholder { color: #8a8a8a; }
       .composer .bar { display: flex; align-items: flex-end; gap: 8px; margin-top: 10px; }
@@ -77,6 +102,18 @@
       .composer.light textarea { color: #131313; }
       .composer.light textarea::placeholder { color: #717171; }
       .composer.light .send { background: #3b63fb; }
+      /* stronger contrast for the added pill on a light composer */
+      .composer.light .chip {
+        background: color-mix(in oklab, #3b63fb 14%, #fff);
+        color: #1f3aa6;
+        border-color: color-mix(in oklab, #3b63fb 45%, #fff);
+      }
+      .composer.light .chip .x { opacity: 0.55; }
+      .composer.light .chip .x:hover { opacity: 1; }
+
+      /* Composer lives at the BOTTOM of the UI — growth must push up, not down.
+         The stage pins the composer to its lower edge so expanding grows upward. */
+      .stage { display: flex; flex-direction: column; justify-content: flex-end; min-height: 470px; }
 
       /* event log */
       .log { font: 12px/1.6 ui-monospace, "SF Mono", Menlo, monospace; color: #8a93a3; }
@@ -99,29 +136,33 @@
 
     <div class="panel">
       <h2>Dark theme</h2>
-      <div class="composer" id="composer-dark">
-        <div class="chips" data-chips></div>
-        <textarea rows="1" placeholder="Ask sliccy anything…"></textarea>
-        <div class="bar">
-          <slicc-add-menu theme="dark"></slicc-add-menu>
-          <button class="send" title="Send">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m16 12-4-4-4 4"/><path d="M12 16V8"/></svg>
-          </button>
+      <div class="stage">
+        <div class="composer" id="composer-dark">
+          <div class="chips" data-chips></div>
+          <textarea rows="1" placeholder="Ask sliccy anything…"></textarea>
+          <div class="bar">
+            <slicc-add-menu theme="dark"></slicc-add-menu>
+            <button class="send" title="Send">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m16 12-4-4-4 4"/><path d="M12 16V8"/></svg>
+            </button>
+          </div>
         </div>
       </div>
-      <div class="hint">Click <code>+</code> — the box grows, the search field appears next to the <code>×</code>, and results stack above it. Type to filter, ↑/↓ to navigate, Enter to add, Esc to close. Drag a file onto it to upload.</div>
+      <div class="hint">The composer is pinned to the bottom of the stage (as it will be in the app). Click <code>+</code> — the box grows <b>upward</b>, the search field appears next to the <code>×</code>, and results stack above it. Type to filter, ↑/↓ to navigate, Enter to add, Esc to close. Drag a file onto it to upload.</div>
     </div>
 
     <div class="panel light">
       <h2>Light theme</h2>
-      <div class="composer light" id="composer-light">
-        <div class="chips" data-chips></div>
-        <textarea rows="1" placeholder="Ask sliccy anything…"></textarea>
-        <div class="bar">
-          <slicc-add-menu theme="light"></slicc-add-menu>
-          <button class="send" title="Send">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m16 12-4-4-4 4"/><path d="M12 16V8"/></svg>
-          </button>
+      <div class="stage">
+        <div class="composer light" id="composer-light">
+          <div class="chips" data-chips></div>
+          <textarea rows="1" placeholder="Ask sliccy anything…"></textarea>
+          <div class="bar">
+            <slicc-add-menu theme="light"></slicc-add-menu>
+            <button class="send" title="Send">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m16 12-4-4-4 4"/><path d="M12 16V8"/></svg>
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -191,7 +232,7 @@
             --border: #3a3a3a; --accent: #3562ff;
             --accent-subtle: color-mix(in oklab, var(--accent) 22%, transparent);
             --hover: rgba(255,255,255,0.06);
-            font: 400 13px ui-sans-serif, system-ui, -apple-system, sans-serif;
+            font: 400 13px "Adobe Clean", "Source Sans Pro", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
           }
           @media (prefers-color-scheme: light) { :host(:not([theme="dark"])) {
             --bg:#fff; --bg-sunken:#f3f3f3; --fg:#131313; --fg-2:#505050; --fg-3:#717171;
