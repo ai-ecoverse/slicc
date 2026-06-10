@@ -191,6 +191,17 @@ describe('showcase full-app preview states', () => {
     expect(coneChip(frame).hasAttribute('active')).toBe(false);
   });
 
+  it('renders the edit action-row icon as the pencil glyph, not the literal name', () => {
+    frame = renderShowcase();
+    const chip = frame.querySelector('slicc-action-row [part="icon"]') as HTMLElement;
+    expect(chip).toBeTruthy();
+    // Regression: the showcase once passed the lucide name 'pencil' to the
+    // action-row's glyph-character `icon` attribute, leaking the raw string into
+    // the chip. It must render the pencil glyph instead.
+    expect(chip.textContent).toBe('✎');
+    expect(chip.textContent).not.toBe('pencil');
+  });
+
   it('renders the ScoopPreview story already in scoop-preview', () => {
     frame = renderStory(ScoopPreview);
     expect(frame.getAttribute('data-preview')).toBe('scoop');
