@@ -350,7 +350,7 @@ function buildGitHubHeaders(
     'User-Agent': 'slicc-upskill',
   };
   if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
+    headers.Authorization = `Bearer ${token}`;
   }
   return headers;
 }
@@ -437,7 +437,7 @@ function formatGitHubFailure(
 }
 
 function formatDiscoveryScope(): string {
-  return 'Discovery roots: /workspace/skills plus accessible **/.agents/skills/* and **/.claude/skills/* anywhere in the VFS.\n';
+  return 'Discovery roots: /workspace/skills plus accessible **/.agents/skills/*, **/.claude/skills/*, and **/.claude-plugin/marketplace.json skill collections anywhere in the VFS.\n';
 }
 
 function formatSkillSource(source: DiscoveredSkill['source']): string {
@@ -448,17 +448,28 @@ function formatSkillSource(source: DiscoveredSkill['source']): string {
       return '.agents';
     case 'claude':
       return '.claude';
+    case 'marketplace':
+      return 'marketplace';
   }
 }
 
 function formatDiscoveredSkills(discovered: DiscoveredSkill[], heading: string): string {
+  const nameWidth = Math.max(4, ...discovered.map((s) => s.name.length));
+  const sourceWidth = 11; // 'marketplace'.length
+  // 2 indent + nameWidth + 2 sep + sourceWidth + 1 sep = fixed overhead
+  const descWidth = Math.max(20, 99 - 2 - nameWidth - 2 - sourceWidth - 1);
+
+  const header = 'NAME'.padEnd(nameWidth);
+  const divider = '─'.repeat(2 + nameWidth + 2 + sourceWidth + 1 + descWidth);
+
   let output = `${heading}:\n\n`;
-  output += '  NAME                 SOURCE    DESCRIPTION\n';
-  output += '  ─────────────────────────────────────────────────────────────\n';
+  output += `  ${header}  SOURCE      DESCRIPTION\n`;
+  output += `${divider}\n`;
 
   for (const skill of discovered) {
-    const description = skill.description || '';
-    output += `  ${skill.name.padEnd(20)} ${formatSkillSource(skill.source).padEnd(9)} ${description}\n`;
+    const raw = skill.description || '';
+    const description = raw.length > descWidth ? `${raw.slice(0, descWidth - 1)}…` : raw;
+    output += `  ${skill.name.padEnd(nameWidth)}  ${formatSkillSource(skill.source).padEnd(sourceWidth)} ${description}\n`;
   }
 
   output += `\n${formatDiscoveryScope()}`;
