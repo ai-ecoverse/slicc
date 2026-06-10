@@ -27,6 +27,7 @@ import './memory/slicc-palette-grid.js';
 import './nav/slicc-avatar-menu.js';
 import './nav/slicc-nav.js';
 import './overlay/slicc-dialog.js';
+import './overlay/slicc-tooltip.js';
 import './pill/slicc-pill.js';
 import './primitives/slicc-avatar.js';
 import './primitives/slicc-collapse-btn.js';

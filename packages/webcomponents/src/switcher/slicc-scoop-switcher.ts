@@ -120,6 +120,14 @@ const STYLE = `
 [data-theme="dark"] .slicc-scoop-switcher slicc-pill.scoop.lit::part(icon) {
   background: color-mix(in srgb, var(--h) 24%, var(--canvas));
 }
+/* Narrow / extension-sidebar: chips collapse to icon-only (the pill hides its
+   own label <=560px) — reserve just the icon width so the reflow fits several
+   scoops as eyes-only chips instead of overflowing all but one. The hover title
+   comes from slicc-pill's compact .tip. */
+@media (max-width: 560px) {
+  .slicc-scoop-switcher .scoop { width: 34px; }
+  .slicc-scoop-switcher slicc-pill.scoop { --pill-w: 34px; }
+}
 `;
 
 const STYLE_ID = 'slicc-scoop-switcher-style';

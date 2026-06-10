@@ -307,7 +307,7 @@ function place(g: Element, cx: number, cy: number, mx: number, my: number, maxOf
  * attribute (these are internal to the pill, NOT the inherited design tokens).
  */
 const PILL_STYLE = `
-  :host{display:inline-block;--pill-w:190px;--label:#eef1f6;--icon-tint:color-mix(in oklab,var(--accent) 22%,transparent);}
+  :host{position:relative;display:inline-block;--pill-w:190px;--label:#eef1f6;--icon-tint:color-mix(in oklab,var(--accent) 22%,transparent);}
   @media (prefers-color-scheme: light){:host(:not([theme="dark"])){--label:#1b2030;--icon-tint:color-mix(in oklab,var(--accent) 30%,#fff);}}
   /* The library's class-based dark scope (body.dark / .dark / [data-theme=dark])
      reaches the host via :host-context, so the label stays readable in dark mode
@@ -326,6 +326,23 @@ const PILL_STYLE = `
   .glyph{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:var(--g);height:var(--g);display:block;overflow:visible;}
   .eyes{position:absolute;pointer-events:none;} .eyes-svg{display:block;overflow:visible;}
   .label{position:relative;z-index:1;flex:1 1 auto;min-width:0;color:var(--label);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  /* Compact chip: just the eyes/glyph (no label), with the title on hover. The
+     [compact] attribute forces it; a narrow / extension-sidebar viewport (≤560px)
+     applies it automatically so the header switcher fits. */
+  :host([compact]) .pill{width:auto;padding:0;}
+  :host([compact]) .label{display:none;}
+  @media (max-width:560px){ .pill{width:auto;padding:0;} .label{display:none;} }
+  /* The hover title lives on the host (the .pill clips its overflow), shown only
+     in compact mode on hover/focus. Dark pill, like the prototype dock .tip. */
+  .tip{position:absolute;top:calc(100% + 7px);left:50%;transform:translateX(-50%) translateY(-3px);
+    background:var(--ink);color:var(--canvas,#fff);font:500 11px ui-sans-serif,system-ui,sans-serif;
+    white-space:nowrap;padding:3px 8px;border-radius:6px;opacity:0;pointer-events:none;
+    transition:opacity .12s ease,transform .12s ease;z-index:30;display:none;}
+  :host([compact]) .tip{display:block;}
+  @media (max-width:560px){ .tip{display:block;} }
+  :host([compact]:hover) .tip,:host([compact]:focus-within) .tip{opacity:1;transform:translateX(-50%);}
+  @media (max-width:560px){ :host(:hover) .tip,:host(:focus-within) .tip{opacity:1;transform:translateX(-50%);} }
+  @media (prefers-reduced-motion: reduce){ .tip{transition:none;} }
 `;
 const SHEET = sheet(PILL_STYLE);
 
@@ -430,6 +447,19 @@ export class SliccPill extends HTMLElement {
     this.toggleAttribute('active', value);
   }
 
+  /**
+   * Compact (icon-only) chip: the label is hidden, leaving just the eyes/glyph,
+   * and the label appears as a hover/focus title. A narrow viewport (≤560px)
+   * applies this automatically via CSS even without the attribute.
+   */
+  get compact(): boolean {
+    return this.hasAttribute('compact');
+  }
+
+  set compact(value: boolean) {
+    this.toggleAttribute('compact', value);
+  }
+
   /** Chip label text. */
   get label(): string | null {
     return this.getAttribute('label');
@@ -525,12 +555,23 @@ export class SliccPill extends HTMLElement {
 
     const button = h(
       'button',
-      { class: `pill ${active ? 'active' : ''}`, part: 'pill', style: `--accent:${color}` },
+      {
+        class: `pill ${active ? 'active' : ''}`,
+        part: 'pill',
+        style: `--accent:${color}`,
+        // Compact chips hide the visible label, so name the button for a11y.
+        'aria-label': label || false,
+      },
       icon,
       labelEl
     );
 
-    this.#root.replaceChildren(button);
+    // The hover title (shown only in compact mode) — a host-level sibling so the
+    // .pill's `overflow: hidden` can't clip it.
+    const tip = label
+      ? h('span', { class: 'tip', part: 'tip', 'aria-hidden': 'true' }, label)
+      : null;
+    this.#root.replaceChildren(button, ...(tip ? [tip] : []));
 
     this.#pupilL = this.#root.querySelector('.pupil-l');
     this.#pupilR = this.#root.querySelector('.pupil-r');

@@ -292,4 +292,50 @@ describe('slicc-pill', () => {
       expect(el.shadowRoot?.querySelector('.pupil-l')).toBeNull();
     });
   });
+
+  describe('compact (icon-only + hover title)', () => {
+    it('reflects the compact property to the attribute and back', () => {
+      const el = mount((e) => {
+        e.label = 'researcher';
+      });
+      expect(el.compact).toBe(false);
+      el.compact = true;
+      expect(el.hasAttribute('compact')).toBe(true);
+      el.compact = false;
+      expect(el.hasAttribute('compact')).toBe(false);
+    });
+
+    it('hides the label and shows a hover .tip carrying it when compact', () => {
+      const el = mount((e) => {
+        e.label = 'researcher';
+        e.setAttribute('compact', '');
+      });
+      const label = el.shadowRoot?.querySelector('.label') as HTMLElement;
+      expect(getComputedStyle(label).display).toBe('none');
+      const tip = el.shadowRoot?.querySelector('.tip') as HTMLElement;
+      expect(tip).not.toBeNull();
+      expect(tip.textContent).toBe('researcher');
+      // The tip is present (display:block) in compact mode, faded out until hover.
+      expect(getComputedStyle(tip).display).toBe('block');
+      expect(getComputedStyle(tip).opacity).toBe('0');
+    });
+
+    it('keeps the full label (and no visible tip) when not compact', () => {
+      const el = mount((e) => {
+        e.label = 'researcher';
+      });
+      const label = el.shadowRoot?.querySelector('.label') as HTMLElement;
+      expect(getComputedStyle(label).display).not.toBe('none');
+      const tip = el.shadowRoot?.querySelector('.tip') as HTMLElement;
+      expect(getComputedStyle(tip).display).toBe('none');
+    });
+
+    it('names the button for a11y even when the label is hidden', () => {
+      const el = mount((e) => {
+        e.label = 'researcher';
+        e.setAttribute('compact', '');
+      });
+      expect(el.shadowRoot?.querySelector('.pill')?.getAttribute('aria-label')).toBe('researcher');
+    });
+  });
 });
