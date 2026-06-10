@@ -30,6 +30,7 @@ import '../primitives/slicc-snowflake.js';
  */
 const STYLE = `
 slicc-freezer-card {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -41,6 +42,20 @@ slicc-freezer-card {
   font-family: var(--ui);
   transition: background-color 0.15s;
 }
+/* Collapsed (icon-only) rail rows get a hover title — the session name appears
+   as a dark pill to the right of the badge, mirroring the dock rail's tip. */
+slicc-freezer-card .slicc-fzcard__tip {
+  position: absolute; left: calc(100% + 8px); top: 50%; transform: translateY(-50%) translateX(-3px);
+  z-index: 30; background: var(--ink); color: var(--canvas, #fff);
+  font: 500 11px var(--ui); white-space: nowrap; padding: 3px 8px; border-radius: 6px;
+  box-shadow: 0 4px 12px -4px rgba(10,10,10,.3);
+  opacity: 0; pointer-events: none; transition: opacity .12s ease, transform .12s ease; display: none;
+}
+slicc-freezer-card:not([expanded]) .slicc-fzcard__tip { display: block; }
+slicc-freezer-card:not([expanded]):hover .slicc-fzcard__tip,
+slicc-freezer-card:not([expanded]):focus-within .slicc-fzcard__tip { opacity: 1; transform: translateY(-50%); }
+slicc-freezer-card .slicc-fzcard__tip:empty { display: none; }
+@media (prefers-reduced-motion: reduce) { slicc-freezer-card .slicc-fzcard__tip { transition: none; } }
 slicc-freezer-card[hidden] {
   display: none;
 }
@@ -149,6 +164,7 @@ export class SliccFreezerCard extends HTMLElement {
   #text!: HTMLElement;
   #title!: HTMLElement;
   #meta!: HTMLElement;
+  #tip: HTMLElement | null = null;
   #built = false;
   #thawTimer: ReturnType<typeof setTimeout> | null = null;
   #onClick = (): void => this.#select();
@@ -284,6 +300,7 @@ export class SliccFreezerCard extends HTMLElement {
       this.#title = existing.querySelector('.slicc-fzcard__title') as HTMLElement;
       this.#meta = existing.querySelector('.slicc-fzcard__meta') as HTMLElement;
       this.#badge = this.querySelector(':scope > slicc-snowflake') as HTMLElement;
+      this.#tip = this.querySelector(':scope > .slicc-fzcard__tip');
       this.addEventListener('click', this.#onClick);
       return;
     }
@@ -302,7 +319,10 @@ export class SliccFreezerCard extends HTMLElement {
     // attribute is absent).
     for (const node of incoming) this.#title.appendChild(node);
 
-    this.replaceChildren(this.#badge, this.#text);
+    // Collapsed-rail hover title (only visible when not expanded).
+    this.#tip = h('span', { class: 'slicc-fzcard__tip', part: 'tip', 'aria-hidden': 'true' });
+
+    this.replaceChildren(this.#badge, this.#text, this.#tip);
     this.addEventListener('click', this.#onClick);
   }
 
@@ -316,6 +336,8 @@ export class SliccFreezerCard extends HTMLElement {
     if (title != null) this.#title.textContent = title;
 
     this.#meta.textContent = this.meta;
+    // The collapsed-rail hover title mirrors the session heading.
+    if (this.#tip) this.#tip.textContent = title ?? (this.#title.textContent || '');
     this.#badge.toggleAttribute('thawed', this.thawed);
   }
 }

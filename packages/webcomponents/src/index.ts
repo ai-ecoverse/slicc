@@ -31,6 +31,7 @@ export { SliccPaletteGrid } from './memory/slicc-palette-grid.js';
 export { SliccAvatarMenu } from './nav/slicc-avatar-menu.js';
 export { SliccNav } from './nav/slicc-nav.js';
 export { SliccDialog } from './overlay/slicc-dialog.js';
+export { SliccTooltip } from './overlay/slicc-tooltip.js';
 export { SliccPill } from './pill/slicc-pill.js';
 export { SliccAvatar } from './primitives/slicc-avatar.js';
 export { SliccCollapseBtn } from './primitives/slicc-collapse-btn.js';

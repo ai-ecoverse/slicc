@@ -332,4 +332,28 @@ describe('slicc-freezer-card', () => {
   afterEach(() => {
     document.body.replaceChildren();
   });
+
+  describe('collapsed hover title', () => {
+    it('renders a .tip carrying the session title, shown only when collapsed', () => {
+      const el = mount((e) => {
+        e.setAttribute('title', 'warm hero redesign');
+        e.setAttribute('meta', '2h ago');
+      });
+      const tip = el.querySelector('.slicc-fzcard__tip') as HTMLElement;
+      expect(tip).not.toBeNull();
+      expect(tip.textContent).toBe('warm hero redesign');
+      // Collapsed (no expanded): the tip is available (display:block), faded out.
+      expect(getComputedStyle(tip).display).toBe('block');
+      expect(getComputedStyle(tip).opacity).toBe('0');
+    });
+
+    it('hides the tip when the row is expanded (the title is already visible)', () => {
+      const el = mount((e) => {
+        e.setAttribute('title', 'warm hero redesign');
+        e.setAttribute('expanded', '');
+      });
+      const tip = el.querySelector('.slicc-fzcard__tip') as HTMLElement;
+      expect(getComputedStyle(tip).display).toBe('none');
+    });
+  });
 });
