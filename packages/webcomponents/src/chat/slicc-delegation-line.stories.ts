@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from '@storybook/web-components-vite';
 import './slicc-delegation-line.js';
 
 interface DelegArgs {
-  kind?: 'feed' | 'sprinkle';
+  kind?: 'feed' | 'scoop' | 'drop' | 'sprinkle';
   hue?: string;
   verb?: string;
   scoop?: string;
@@ -18,11 +18,14 @@ const meta: Meta<DelegArgs> = {
   argTypes: {
     kind: {
       control: 'inline-radio',
-      options: ['feed', 'sprinkle'],
-      description: 'Delegation kind: → feed_scoop or ✦ sprinkle opened',
+      options: ['feed', 'scoop', 'drop', 'sprinkle'],
+      description: 'Delegation kind: feed (delegate) / scoop (spin up) / drop (wrap up) / sprinkle',
     },
     hue: { control: 'color', description: 'Accent hue (sets --c): scoop name + source tint' },
-    verb: { control: 'text', description: 'Verb/connector (default feed_scoop for feed)' },
+    verb: {
+      control: 'text',
+      description: 'Verb/connector; raw action names (feed_scoop…) are humanized',
+    },
     scoop: { control: 'text', description: 'Bold, hue-colored scoop / sprinkle name' },
     label: { control: 'text', description: 'Trailing prose after the scoop name' },
     args: { control: 'text', description: 'Comma-separated values → inline <code> chips' },
@@ -44,7 +47,7 @@ const meta: Meta<DelegArgs> = {
 export default meta;
 type Story = StoryObj<DelegArgs>;
 
-/** `→ feed_scoop researcher · audit hero.tsx, tokens.css` — the canonical feed line, idle. */
+/** `→ Delegated to researcher · audit hero.tsx, tokens.css` — the canonical feed line, idle. */
 export const FeedScoopIdle: Story = {
   args: {
     kind: 'feed',
