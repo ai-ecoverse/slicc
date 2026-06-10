@@ -138,9 +138,10 @@ describe('runFirstRunDetection', () => {
     expect(handleFirstRun).toHaveBeenCalledTimes(1);
   });
 
-  it('clears a stale ledger entry before re-adding it on a fresh boot', async () => {
+  it('suppresses re-fire when first-run is already in the dedup ledger', async () => {
     const handleFirstRun = vi.fn();
     const persist = vi.fn();
+    // Simulate a restart: localStorage already has 'first-run' from the previous boot.
     const set = new Set<string>(['first-run']);
 
     runFirstRunDetection({
@@ -153,9 +154,10 @@ describe('runFirstRunDetection', () => {
     });
 
     await new Promise((r) => setTimeout(r, 30));
-    // Persist called twice: once on the stale-clear, once on the re-add.
-    expect(persist).toHaveBeenCalledTimes(2);
-    expect(handleFirstRun).toHaveBeenCalledTimes(1);
+    // The ledger entry was already present — no re-fire, no persist mutation.
+    expect(handleFirstRun).not.toHaveBeenCalled();
+    expect(persist).not.toHaveBeenCalled();
+    expect(set.has('first-run')).toBe(true); // entry untouched
   });
 
   it('no-ops the orchestrator + ledger when the welcomed marker exists', async () => {
