@@ -235,6 +235,21 @@ describe('slicc-action-card', () => {
       expect(meta.contains(custom)).toBe(true);
       expect(meta.textContent).not.toContain('ignored → main');
     });
+
+    it('renders the header in the --ui font instead of a browser fallback', () => {
+      const el = mount((e) => {
+        e.variant = 'pr';
+        e.title = 'feat(hero): warm redesign';
+      });
+      const title = el.querySelector('[part="title"]') as HTMLElement;
+      const pill = el.querySelector('[part="status"]') as HTMLElement;
+      const meta = el.querySelector('[part="meta"]') as HTMLElement;
+      // --ui's distinctive first family proves we resolved the token, not a fallback.
+      expect(getComputedStyle(title).fontFamily).toContain('adobe-clean');
+      expect(getComputedStyle(pill).fontFamily).toContain('adobe-clean');
+      // The header now matches the meta row, which already opts into var(--ui).
+      expect(getComputedStyle(title).fontFamily).toBe(getComputedStyle(meta).fontFamily);
+    });
   });
 
   describe('appearance fidelity', () => {
