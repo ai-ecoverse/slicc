@@ -235,21 +235,53 @@ describe('slicc-floatbar', () => {
   });
 
   describe('narrow / extension-sidebar', () => {
-    it('collapses to just the status light below 560px (label, divider + cost all hidden)', () => {
-      const el = document.createElement('slicc-floatbar');
-      document.body.appendChild(el);
+    const narrowMedia = (el: SliccFloatbar): CSSMediaRule => {
       const sheet = (el.shadowRoot as ShadowRoot).adoptedStyleSheets[0];
       const media = Array.from(sheet.cssRules).find(
         (r): r is CSSMediaRule => r instanceof CSSMediaRule && r.conditionText.includes('560px')
       );
       expect(media).toBeDefined();
-      const hideRule = Array.from((media as CSSMediaRule).cssRules).find(
+      return media as CSSMediaRule;
+    };
+
+    it('collapses to just the status light below 560px (label, divider + cost all hidden)', () => {
+      const el = document.createElement('slicc-floatbar');
+      document.body.appendChild(el);
+      const hideRule = Array.from(narrowMedia(el).cssRules).find(
         (r): r is CSSStyleRule => r instanceof CSSStyleRule && r.selectorText.includes('.spent')
       );
       // One rule hides .label, .sep AND .spent — leaving only the .fdot dot.
       expect(hideRule?.style.display).toBe('none');
       expect(hideRule?.selectorText).toContain('.label');
       expect(hideRule?.selectorText).toContain('.spent');
+    });
+
+    it('shrinks the host to a square badge below 560px (width == height, not a tall pill)', () => {
+      const el = document.createElement('slicc-floatbar');
+      document.body.appendChild(el);
+      const sheet = (el.shadowRoot as ShadowRoot).adoptedStyleSheets[0];
+
+      // The wide-view :host carries the control height but no explicit width, so
+      // it grows to fit its content (an elongated pill in the dot-only state).
+      const baseHost = Array.from(sheet.cssRules).find(
+        (r): r is CSSStyleRule => r instanceof CSSStyleRule && r.selectorText === ':host'
+      );
+      const baseHeight = baseHost?.style.getPropertyValue('height').trim();
+      expect(baseHeight).toBe('var(--ctl-h, 30px)');
+      expect(baseHost?.style.getPropertyValue('width').trim()).toBe('');
+
+      // The narrow :host pins width to that same height token (and reinforces it
+      // with aspect-ratio), so the rendered box is square — a round badge.
+      const narrowHost = Array.from(narrowMedia(el).cssRules).find(
+        (r): r is CSSStyleRule => r instanceof CSSStyleRule && r.selectorText === ':host'
+      );
+      const narrowWidth = narrowHost?.style.getPropertyValue('width').trim();
+      expect(narrowWidth).toBe('var(--ctl-h, 30px)');
+      // width longhand matches the base height longhand → square (1:1) box.
+      expect(narrowWidth).toBe(baseHeight);
+      expect(narrowHost?.style.getPropertyValue('aspect-ratio').trim()).toBe('1 / 1');
+      // padding collapses so the badge does not stretch wider than it is tall.
+      expect(narrowHost?.style.getPropertyValue('padding').trim()).toBe('0px');
     });
   });
 });
