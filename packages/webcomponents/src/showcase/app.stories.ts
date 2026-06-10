@@ -528,6 +528,27 @@ export const Open: Story = { render: () => app({ workbench: true, freezer: true 
 export const FreezerOpen: Story = { render: () => app({ workbench: false, freezer: true }) };
 
 /**
+ * Scoop-preview: clicking a scoop chip enters a read-only preview of that scoop's
+ * isolated history — the UI is washed in the scoop's color, the swirl ("scoop")
+ * shader is tinted to match, the scoop thread replaces the cone thread, and the
+ * composer is hidden (the conversation is driven by the cone).
+ */
+export const ScoopPreview: Story = {
+  render: () =>
+    app({ workbench: false, freezer: false, preview: { kind: 'scoop', key: 'researcher' } }),
+};
+
+/**
+ * Freezer-preview: clicking a frozen session card thaws it into a read-only
+ * preview — the UI is washed ice-blue, the frost ("freezer") shader runs, the
+ * frozen conversation loads, and the composer is hidden (the session is frozen).
+ */
+export const FreezerPreview: Story = {
+  render: () =>
+    app({ workbench: false, freezer: true, preview: { kind: 'freezer', slug: 'hero' } }),
+};
+
+/**
  * Workbench open with the freezer collapsed — at desktop a side-by-side split,
  * but at narrow / extension-sidebar widths the workbench overlays the chat
  * full-bleed (dock rail stays exposed to toggle it closed). The clean mobile
