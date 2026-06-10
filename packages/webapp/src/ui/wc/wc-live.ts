@@ -28,8 +28,21 @@ export function scoopColor(scoop: Pick<RegisteredScoop, 'isCone' | 'name'>): str
   return SCOOP_PALETTE[hash % SCOOP_PALETTE.length];
 }
 
+/** Scoop runtime status, as broadcast by `onStatusChange`. */
+export type ScoopStatus = 'initializing' | 'ready' | 'processing' | 'error';
+
+/** Chip eye state for a scoop status: errored scoops get the dead look. */
+function eyesFor(status: ScoopStatus | undefined): SwitcherScoop['eyes'] {
+  if (status === 'error') return 'dead';
+  if (status === 'initializing') return 'none';
+  return 'open';
+}
+
 /** Map registered scoops onto switcher chip descriptors (cone first). */
-export function toSwitcherScoops(scoops: readonly RegisteredScoop[]): SwitcherScoop[] {
+export function toSwitcherScoops(
+  scoops: readonly RegisteredScoop[],
+  statuses?: ReadonlyMap<string, ScoopStatus>
+): SwitcherScoop[] {
   return [...scoops]
     .sort((a, b) => Number(b.isCone) - Number(a.isCone))
     .map((scoop) => ({
@@ -37,12 +50,14 @@ export function toSwitcherScoops(scoops: readonly RegisteredScoop[]): SwitcherSc
       type: scoop.isCone ? 'cone' : 'scoop',
       color: scoopColor(scoop),
       label: scoop.isCone ? 'sliccy' : scoop.name,
-      eyes: 'open' as const,
+      eyes: eyesFor(statuses?.get(scoop.jid)),
     }));
 }
 
 export interface WcLiveWiring {
   refs: WcShellRefs;
+  /** Live per-scoop status, written by the callbacks on every broadcast. */
+  statuses: Map<string, ScoopStatus>;
   getController(): WcChatController | null;
   getClient(): OffscreenClient | null;
   getSelected(): RegisteredScoop | null;
@@ -56,10 +71,17 @@ export interface WcLiveWiring {
 export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCallbacks {
   const refreshScoops = (): void => {
     const client = wiring.getClient();
-    if (client) wiring.refs.switcher.scoops = toSwitcherScoops(client.getScoops());
+    if (client) {
+      wiring.refs.switcher.scoops = toSwitcherScoops(client.getScoops(), wiring.statuses);
+    }
   };
   return {
     onStatusChange: (jid, status) => {
+      const previous = wiring.statuses.get(jid);
+      wiring.statuses.set(jid, status as ScoopStatus);
+      // Re-chip only on eye-state transitions; processing flickers are
+      // frequent and don't change the chip rendering.
+      if (eyesFor(previous) !== eyesFor(status as ScoopStatus)) refreshScoops();
       if (wiring.getSelected()?.jid !== jid) return;
       wiring.getController()?.setProcessing(status === 'processing');
     },
@@ -94,11 +116,19 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
   };
 }
 
-/** Point the thread chrome at a scoop (context label + accent hue). */
-function applyThreadContext(refs: WcShellRefs, scoop: RegisteredScoop): void {
+/** Point the thread chrome at a scoop (context label + accent hue + model). */
+async function applyThreadContext(refs: WcShellRefs, scoop: RegisteredScoop): Promise<void> {
   refs.thread.setAttribute('context', scoop.isCone ? 'cone' : `scoop:${scoop.name}`);
   refs.thread.setAttribute('accent', scoopColor(scoop));
   refs.switcher.setAttribute('active', scoop.jid);
+  try {
+    const { resolveCurrentModel, resolveModelById } = await import('../provider-settings.js');
+    const modelId = scoop.config?.modelId;
+    const model = modelId ? resolveModelById(modelId) : resolveCurrentModel();
+    refs.composerMeta.setAttribute('model', model.name ?? model.id);
+  } catch {
+    // Model display is informational; never block scoop selection on it.
+  }
 }
 
 /** Boot the live WC shell: prelude → kernel spawn → controller wiring. */
@@ -125,13 +155,14 @@ export async function mountWcUiLive(app: HTMLElement, log: BootStageLogger): Pro
     selected = scoop;
     if (!client) return;
     client.setSelectedScoopJid(scoop.jid);
-    applyThreadContext(refs, scoop);
+    void applyThreadContext(refs, scoop);
     client.requestScoopMessages(scoop.jid);
     controller?.setProcessing(client.isProcessing(scoop.jid));
   };
 
   const wiring: WcLiveWiring = {
     refs,
+    statuses: new Map(),
     getController: () => controller,
     getClient: () => client,
     getSelected: () => selected,

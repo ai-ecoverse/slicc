@@ -75,6 +75,7 @@ function makeWiring(options: {
   return {
     refs,
     controller,
+    statuses: new Map(),
     getController: () => controller as never,
     getClient: () =>
       ({
@@ -95,6 +96,17 @@ describe('createWcLiveCallbacks', () => {
     callbacks.onStatusChange(cone.jid, 'ready' as never);
     callbacks.onStatusChange('other-jid', 'processing' as never);
     expect(wiring.controller.setProcessing.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it('records statuses and re-chips the switcher on eye-state transitions', () => {
+    const erroring = scoop({ jid: 'scoop-err', name: 'tester' });
+    const wiring = makeWiring({ selected: cone, scoops: [cone, erroring] });
+    const callbacks = createWcLiveCallbacks(wiring);
+    callbacks.onStatusChange(erroring.jid, 'error' as never);
+    expect(wiring.statuses.get(erroring.jid)).toBe('error');
+    const chips = wiring.refs.switcher.scoops;
+    expect(chips.find((c) => c.key === 'scoop-err')?.eyes).toBe('dead');
+    expect(chips.find((c) => c.key === 'cone-1')?.eyes).toBe('open');
   });
 
   it('selects the first created scoop when nothing is selected', () => {
