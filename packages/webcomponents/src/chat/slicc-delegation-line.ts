@@ -53,11 +53,55 @@ code {
 
 const SHEET = sheet(STYLE);
 
-/** Leading lucide icon name per delegation/event kind, lifted from the prototype. */
-const GLYPH: Record<'feed' | 'sprinkle', string> = {
-  feed: 'arrow-right', // feed_scoop
+/** The delegation/event kinds this line can render. */
+const KINDS = ['feed', 'scoop', 'drop', 'sprinkle'] as const;
+
+/** A delegation/event kind — a scoop action (`feed`/`scoop`/`drop`) or a sprinkle. */
+export type DelegationKind = (typeof KINDS)[number];
+
+/** Leading lucide icon name per delegation/event kind. */
+const GLYPH: Record<DelegationKind, string> = {
+  feed: 'arrow-right', // feed_scoop — delegate work
+  scoop: 'circle-plus', // scoop_scoop — spin up a sub-agent
+  drop: 'circle-check', // drop_scoop — wrap up a sub-agent
   sprinkle: 'sparkles', // sprinkle-opened
 };
+
+/**
+ * Human-readable default verb per kind — the developer-coded tool names
+ * (`feed_scoop` / `scoop_scoop` / `drop_scoop`) are never shown to users; the
+ * line reads as a friendly phrase instead. Sprinkle has no default verb (its
+ * prose lives in the `label`).
+ */
+const KIND_VERB: Record<DelegationKind, string> = {
+  feed: 'Delegated to',
+  scoop: 'Spun up',
+  drop: 'Wrapped up',
+  sprinkle: '',
+};
+
+/**
+ * Maps the internal tool/action names to the same human-readable labels, so a
+ * caller that passes the raw action name through the `verb` attribute (e.g.
+ * `feed_scoop`) still renders the friendly phrase. Unknown verbs pass through
+ * verbatim, so free-text verbs keep working.
+ */
+const ACTION_LABELS: Record<string, string> = {
+  feed_scoop: 'Delegated to',
+  scoop_scoop: 'Spun up',
+  drop_scoop: 'Wrapped up',
+  'sprinkle-opened': 'Opened',
+};
+
+/** Resolve a verb to its human-readable label (raw action names → friendly phrase). */
+function humanizeVerb(verb: string): string {
+  return ACTION_LABELS[verb] ?? verb;
+}
+
+/** Normalize an arbitrary kind string to a known {@link DelegationKind} (default `feed`). */
+function normalizeKind(value: string | null): DelegationKind {
+  return (KINDS as readonly string[]).includes(value ?? '') ? (value as DelegationKind) : 'feed';
+}
 
 /** Split a comma/whitespace-free args attribute into discrete `<code>` chips. */
 function parseArgs(raw: string): string[] {
@@ -83,9 +127,10 @@ function parseArgs(raw: string): string[] {
  * `args`), each `display:contents`, so a host can override any region with
  * richer markup while keeping the per-chip flex layout + line styling.
  *
- * @attr kind - `feed` (→ feed_scoop, default) | `sprinkle` (✦ sprinkle opened)
+ * @attr kind - `feed` (delegate, default) | `scoop` (spin up) | `drop` (wrap up) | `sprinkle`
  * @attr hue - accent hex/CSS color; sets the inherited `--c` (label + tint)
- * @attr verb - the verb/connector text (default `feed_scoop` for feed)
+ * @attr verb - the verb/connector text; raw action names (`feed_scoop`,
+ *   `scoop_scoop`, `drop_scoop`) are humanized, free text passes through
  * @attr scoop - the bold, hue-colored scoop/sprinkle name
  * @attr label - trailing prose after the scoop name (e.g. `opened …`)
  * @attr args - comma-separated values rendered as `<code>` chips
@@ -117,13 +162,13 @@ export class SliccDelegationLine extends HTMLElement {
     if (this.isConnected) this.#render();
   }
 
-  /** Delegation kind — `feed` (→ feed_scoop) or `sprinkle` (✦ opened). */
-  get kind(): 'feed' | 'sprinkle' {
-    return this.getAttribute('kind') === 'sprinkle' ? 'sprinkle' : 'feed';
+  /** Delegation kind — `feed` / `scoop` / `drop` (scoop actions) or `sprinkle`. */
+  get kind(): DelegationKind {
+    return normalizeKind(this.getAttribute('kind'));
   }
 
-  set kind(value: 'feed' | 'sprinkle') {
-    this.setAttribute('kind', value === 'sprinkle' ? 'sprinkle' : 'feed');
+  set kind(value: DelegationKind) {
+    this.setAttribute('kind', normalizeKind(value));
   }
 
   /** Accent hue (sets the inherited `--c`); `null` falls back to `--violet`. */
@@ -188,7 +233,8 @@ export class SliccDelegationLine extends HTMLElement {
   #render(): void {
     const kind = this.kind;
     const hue = this.hue;
-    const verb = this.verb ?? (kind === 'feed' ? 'feed_scoop' : '');
+    const rawVerb = this.verb;
+    const verb = rawVerb != null ? humanizeVerb(rawVerb) : KIND_VERB[kind];
     const scoop = this.scoop;
     const label = this.label;
     const args = this.args ? parseArgs(this.args) : [];
