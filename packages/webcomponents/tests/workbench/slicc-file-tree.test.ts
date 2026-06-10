@@ -222,13 +222,23 @@ describe('slicc-file-tree', () => {
         label: 'components',
         open: true,
         children: [
-          { kind: 'file', id: 'hero.tsx', label: 'hero.tsx', path: 'workspace/components/hero.tsx' },
+          {
+            kind: 'file',
+            id: 'hero.tsx',
+            label: 'hero.tsx',
+            path: 'workspace/components/hero.tsx',
+          },
           {
             kind: 'dir',
             id: 'ui',
             label: 'ui',
             children: [
-              { kind: 'file', id: 'button.tsx', label: 'button.tsx', path: 'workspace/components/ui/button.tsx' },
+              {
+                kind: 'file',
+                id: 'button.tsx',
+                label: 'button.tsx',
+                path: 'workspace/components/ui/button.tsx',
+              },
             ],
           },
         ],

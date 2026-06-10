@@ -386,7 +386,11 @@ describe('slicc-freezer-new', () => {
     const spinRule = (Array.from(media!.cssRules) as CSSStyleRule[]).find((r) =>
       r.selectorText?.includes('.fznew-spinner svg')
     );
-    expect(spinRule?.style.animation).toBe('none');
+    // Assert the stable `animation-name` longhand: current Chromium serializes the
+    // `animation` shorthand as its full longhand expansion (because the
+    // `animation-duration` initial is now `auto`), so a `=== 'none'` check on the
+    // shorthand is brittle. `animation-name: none` is the precise "no spin" signal.
+    expect(spinRule?.style.animationName).toBe('none');
   });
 
   // --- base appearance / metrics (real Chromium) ---------------------------

@@ -53,7 +53,12 @@ const PROTOTYPE_ITEMS: FileTreeItem[] = [
     id: 'mcp',
     label: '.mcp',
     children: [
-      { kind: 'file', id: 'servers.json', label: 'servers.json', path: 'workspace/.mcp/servers.json' },
+      {
+        kind: 'file',
+        id: 'servers.json',
+        label: 'servers.json',
+        path: 'workspace/.mcp/servers.json',
+      },
     ],
   },
 ];

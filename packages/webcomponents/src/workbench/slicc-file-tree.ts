@@ -134,10 +134,7 @@ function ensureFileTreeStyle(doc: Document): void {
  * `hidden` unless the dir id is in `openDirs`, so collapsing keeps the children
  * in the DOM (selection survives) but visually hidden.
  */
-function buildNodes(
-  items: readonly FileTreeItem[],
-  openDirs: ReadonlySet<string>
-): HTMLElement[] {
+function buildNodes(items: readonly FileTreeItem[], openDirs: ReadonlySet<string>): HTMLElement[] {
   const rows: HTMLElement[] = [];
   for (const item of items) {
     if (item.kind === 'group') {

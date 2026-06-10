@@ -146,5 +146,33 @@ describe('slicc-day-separator', () => {
       expect(getComputedStyle(el).color).toBe('rgb(108, 108, 114)');
       expect(getComputedStyle(el, '::before').backgroundColor).toBe('rgb(42, 42, 46)');
     });
+
+    it('keeps the hairline visible against the themed --bg ground in dark mode', () => {
+      // The story sits the separator on the inherited `--bg` ground (like the
+      // chat thread it lives in) so it has contrast in dark mode. Mirror that
+      // here and assert the hairline stands clear of the ground.
+      setTheme('dark');
+      const wrap = document.createElement('div');
+      wrap.style.background = 'var(--bg)';
+      document.body.appendChild(wrap);
+      const el = document.createElement('slicc-day-separator');
+      el.setAttribute('label', 'Today');
+      wrap.appendChild(el);
+      el.style.width = '400px';
+
+      const lineBg = getComputedStyle(el, '::before').backgroundColor;
+      const groundBg = getComputedStyle(wrap).backgroundColor;
+      // The hairline must not melt into the dark ground.
+      expect(lineBg).not.toBe(groundBg);
+
+      const channels = (c: string) =>
+        (c.match(/\d+/g) ?? []).slice(0, 3).map(Number) as [number, number, number];
+      const [lr, lg, lb] = channels(lineBg); // dark --line #2a2a2e → 42,42,46
+      const [gr, gg, gb] = channels(groundBg); // dark --bg #0e0e10 → 14,14,16
+      // The line (lighter) reads against the darker ground on every channel.
+      expect(lr).toBeGreaterThan(gr);
+      expect(lg).toBeGreaterThan(gg);
+      expect(lb).toBeGreaterThan(gb);
+    });
   });
 });
