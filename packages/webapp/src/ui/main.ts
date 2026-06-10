@@ -108,7 +108,9 @@ function wireAddMenu(
           mimeType: 'image/png',
           quality: 1.0,
         });
-        return new File([result.bytes], `screenshot-${Date.now()}.png`, { type: 'image/png' });
+        return new File([result.bytes.buffer as ArrayBuffer], `screenshot-${Date.now()}.png`, {
+          type: 'image/png',
+        });
       } catch {
         return null;
       }
