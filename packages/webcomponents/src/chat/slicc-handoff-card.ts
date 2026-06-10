@@ -61,8 +61,9 @@ const DEFAULT_PRE = 'Handoff request from';
  *
  * - `variant="handoff"` (default) renders `.handoff`: a bordered approval card
  *   with a `.top` header row — a round violet `.av` avatar holding the googly
- *   eyes (`<slicc-googly-eyes>`, composed by tag) beside a `.lbl2` label
- *   (muted `.pre` prefix + violet bold `name`) — over a body paragraph.
+ *   eyes (`<slicc-googly-eyes>`, composed by tag) beside a `.lbl2` label (a
+ *   leading violet lucide `hand` glyph + muted `.pre` prefix + violet bold
+ *   `name`) — over a body paragraph.
  * - `variant="opened"` renders `.opened`: a compact ghost-bg pill-card with a
  *   rainbow `.sg` glyph chip and bold target text — the "X opened Y" receipt.
  *
