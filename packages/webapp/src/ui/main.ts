@@ -55,7 +55,7 @@ import { applyProviderDefaults, getApiKey } from './provider-settings.js';
 import { resolveUiRuntimeMode, type UiRuntimeMode } from './runtime-mode.js';
 import { initTheme } from './theme.js';
 import { initTooltips } from './tooltip.js';
-import { isWcUiEnabled } from './wc/wc-flag.js';
+import { resolveWcUiMode } from './wc/wc-flag.js';
 
 const log = createLogger('main');
 
@@ -356,10 +356,12 @@ async function main(): Promise<void> {
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
   // Next-generation web-components UI (`?ui=wc`) — the @slicc/webcomponents
-  // migration shell. Phase 0 renders the new shell over the design-time chat
-  // fixture instead of booting the legacy layout. Standalone float only while
-  // the migration is in progress; the legacy UI stays the default.
-  if (!isExtension && isWcUiEnabled(window.location.href)) {
+  // migration shell. Fixture mode (`?ui=wc&ui-fixture`) renders the shell
+  // over the design-time chat fixture with no kernel and exits early; live
+  // mode boots below, after providers + OAuth are ready. Standalone float
+  // only while the migration is in progress; the legacy UI stays the default.
+  const wcUiMode = isExtension ? 'off' : resolveWcUiMode(window.location.href);
+  if (wcUiMode === 'fixture') {
     const { mountWcUiPreview } = await import('./wc/wc-shell.js');
     mountWcUiPreview(app);
     return;
@@ -396,6 +398,13 @@ async function main(): Promise<void> {
   // Provider configuration is owned by the deterministic onboarding flow.
   const apiKey = getApiKey();
   const _allowProviderlessTrayJoin = !apiKey && hasStoredTrayJoinUrl(window.localStorage);
+
+  // WC live mode: kernel worker + WC shell, no legacy layout. Runs after
+  // provider registration and the OAuth bootstrap so the cone can stream.
+  if (wcUiMode === 'live') {
+    const { mountWcUiLive } = await import('./wc/wc-live.js');
+    return mountWcUiLive(app, log);
+  }
 
   const runtimeMode = resolveUiRuntimeMode(window.location.href, isExtension);
 

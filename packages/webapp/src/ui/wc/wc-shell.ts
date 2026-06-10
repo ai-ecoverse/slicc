@@ -5,11 +5,10 @@
  * shader background, the fixed freezer rail, and an app column stacking the
  * full-width nav above the chat | workbench split with the dock rail.
  *
- * Phase 0 of the migration: `mountWcUiPreview` renders the shell over the
- * design-time chat fixture (`?ui=wc`), standalone float only. Live
- * orchestrator wiring lands in the next phases; the composer currently
- * echoes submitted text into the thread locally so the input loop is
- * inspectable end to end.
+ * `mountWcShell` builds the frame and hands back element refs; the two boot
+ * modes wire them differently — `mountWcUiPreview` (here) renders the
+ * design-time chat fixture with a local composer echo, `wc-live.ts` binds
+ * the kernel worker for real conversations.
  */
 
 import { ensureGlobalTokens } from '@slicc/webcomponents/src/theme/tokens.js';
@@ -44,7 +43,7 @@ import '@slicc/webcomponents/src/workbench/slicc-workbench-header.js';
 import '@slicc/webcomponents/src/workbench/slicc-workbench-pane.js';
 
 /** Scoop chip descriptors consumed by `<slicc-scoop-switcher>`. */
-interface SwitcherScoop {
+export interface SwitcherScoop {
   key: string;
   type: 'cone' | 'scoop';
   color: string;
@@ -53,13 +52,29 @@ interface SwitcherScoop {
   ephemeral?: boolean;
 }
 
-interface WcShellOptions {
+export interface WcShellOptions {
   /** Chat history rendered into the cone thread. */
   messages: readonly ChatMessage[];
   /** Scoop chips for the nav switcher (cone first). */
   scoops: readonly SwitcherScoop[];
   /** Floatbar status label (e.g. `standalone · preview`). */
   floatLabel: string;
+  /** Composer input placeholder. */
+  placeholder: string;
+}
+
+/** Element handles the boot modes wire their behavior onto. */
+export interface WcShellRefs {
+  frame: HTMLElement;
+  thread: HTMLElement;
+  inputCard: HTMLElement;
+  composerMeta: HTMLElement;
+  switcher: HTMLElement & { scoops: SwitcherScoop[] };
+  floatbar: HTMLElement;
+  shell: HTMLElement;
+  workbenchBody: HTMLElement;
+  dock: HTMLElement;
+  freezer: HTMLElement;
 }
 
 const STYLE_ID = 'slicc-wcui-style';
@@ -87,61 +102,38 @@ function el(tag: string, attrs: Record<string, string> = {}): HTMLElement {
   return node;
 }
 
-function buildNav(options: WcShellOptions): HTMLElement {
+function buildNav(options: WcShellOptions): {
+  nav: HTMLElement;
+  switcher: WcShellRefs['switcher'];
+  floatbar: HTMLElement;
+} {
   const nav = el('slicc-nav', { accent: 'var(--waffle)' });
-  const switcher = el('slicc-scoop-switcher') as HTMLElement & {
-    scoops?: readonly SwitcherScoop[];
-  };
-  switcher.scoops = options.scoops;
-  const avatar = el('slicc-avatar', { name: 'SLICC Preview' });
+  const switcher = el('slicc-scoop-switcher') as WcShellRefs['switcher'];
+  switcher.scoops = [...options.scoops];
+  const floatbar = el('slicc-floatbar', { label: options.floatLabel, spent: '0.00' });
   nav.append(
     el('slicc-logo', { badge: 'preview' }),
     switcher,
-    el('slicc-floatbar', { label: options.floatLabel, spent: '0.00' }),
+    floatbar,
     el('slicc-theme-toggle'),
-    avatar
+    el('slicc-avatar', { name: 'SLICC Preview' })
   );
-  return nav;
+  return { nav, switcher, floatbar };
 }
 
-function buildComposer(): HTMLElement {
+function buildComposer(options: WcShellOptions): {
+  composer: HTMLElement;
+  inputCard: HTMLElement;
+  composerMeta: HTMLElement;
+} {
   const composer = el('slicc-composer');
-  const card = el('slicc-input-card', {
-    placeholder: 'Preview harness — submissions echo into the thread…',
-  });
-  const meta = el('slicc-composer-meta', { model: 'Preview', thinking: 'off' });
-  composer.append(card, meta);
-  return composer;
+  const inputCard = el('slicc-input-card', { placeholder: options.placeholder });
+  const composerMeta = el('slicc-composer-meta', { model: 'Preview', thinking: 'off' });
+  composer.append(inputCard, composerMeta);
+  return { composer, inputCard, composerMeta };
 }
 
-/** Append a locally-echoed user message when the input card submits. */
-function wireComposerEcho(pane: HTMLElement, thread: HTMLElement): void {
-  pane.addEventListener('submit', (event) => {
-    // `<slicc-input-card>` dispatches a CustomEvent named `submit` (not the
-    // native form SubmitEvent), so widen rather than convert.
-    const detail = (event as Event & { detail?: { value?: string } }).detail;
-    const text = detail?.value?.trim();
-    if (!text) return;
-    const echo: ChatMessage = {
-      id: `wc-echo-${thread.childElementCount}`,
-      role: 'user',
-      content: text,
-      timestamp: Date.now(),
-    };
-    thread.append(...messageEls(echo));
-  });
-}
-
-function buildChatpane(options: WcShellOptions): HTMLElement {
-  const pane = el('slicc-chatpane');
-  const thread = el('slicc-chat-thread', { context: 'cone', accent: 'var(--waffle)' });
-  thread.append(...buildThreadChildren(options.messages));
-  pane.append(thread, buildComposer());
-  wireComposerEcho(pane, thread);
-  return pane;
-}
-
-function buildWorkbench(): HTMLElement {
+function buildWorkbench(): { workbench: HTMLElement; body: HTMLElement; header: HTMLElement } {
   const workbench = el('slicc-workbench-pane');
   const header = el('slicc-workbench-header');
   const tabs = el('slicc-tab-bar', { active: 'files' }) as HTMLElement & { tabs?: unknown };
@@ -160,7 +152,7 @@ function buildWorkbench(): HTMLElement {
   filesSurface.append(tree);
   body.append(filesSurface);
   workbench.append(header, body);
-  return workbench;
+  return { workbench, body, header };
 }
 
 /** Dock clicks open/close the workbench and select the matching surface. */
@@ -188,8 +180,9 @@ function wireTabsToBody(header: HTMLElement, body: HTMLElement): void {
   });
 }
 
-/** Build the full WC app frame; `mountWcUiPreview` is the boot entry. */
-function buildWcShell(options: WcShellOptions): HTMLElement {
+/** Build the full WC app frame into `root` and return the wiring refs. */
+export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShellRefs {
+  ensureGlobalTokens(document);
   ensureShellStyles(document);
 
   const frame = el('div', { class: 'wcui-frame' });
@@ -200,27 +193,47 @@ function buildWcShell(options: WcShellOptions): HTMLElement {
 
   const appCol = el('div', { class: 'wcui-appcol' });
   const shell = el('slicc-shell');
-  const chatpane = buildChatpane(options);
-  const workbench = buildWorkbench();
+  const pane = el('slicc-chatpane');
+  const thread = el('slicc-chat-thread', { context: 'cone', accent: 'var(--waffle)' });
+  thread.append(...buildThreadChildren(options.messages));
+  const { composer, inputCard, composerMeta } = buildComposer(options);
+  pane.append(thread, composer);
+
+  const { workbench, body, header } = buildWorkbench();
   const dock = el('slicc-dock', { 'system-tools': '' });
-  shell.append(chatpane, workbench, dock);
+  shell.append(pane, workbench, dock);
+  wireDockToWorkbench(dock, shell, body);
+  wireTabsToBody(header, body);
 
-  const body = workbench.querySelector<HTMLElement>('slicc-workbench-body');
-  const header = workbench.querySelector<HTMLElement>('slicc-workbench-header');
-  if (body && header) {
-    wireDockToWorkbench(dock, shell, body);
-    wireTabsToBody(header, body);
-  }
-
-  appCol.append(buildNav(options), shell);
+  const { nav, switcher, floatbar } = buildNav(options);
+  appCol.append(nav, shell);
   frame.append(shader, freezer, appCol);
-  return frame;
+  root.replaceChildren(frame);
+
+  return {
+    frame,
+    thread,
+    inputCard,
+    composerMeta,
+    switcher,
+    floatbar,
+    shell,
+    workbenchBody: body,
+    dock,
+    freezer,
+  };
 }
 
-/** Mount the Phase-0 preview: the WC shell over the design-time chat fixture. */
+/** Submitted composer text, from the input card's `submit` CustomEvent. */
+export function submittedText(event: Event): string | undefined {
+  // `<slicc-input-card>` dispatches a CustomEvent named `submit` (not the
+  // native form SubmitEvent), so widen rather than convert.
+  return (event as Event & { detail?: { value?: string } }).detail?.value;
+}
+
+/** Mount the design-time preview: the WC shell over the chat fixture. */
 export function mountWcUiPreview(root: HTMLElement): void {
-  ensureGlobalTokens(document);
-  const frame = buildWcShell({
+  const refs = mountWcShell(root, {
     messages: createChatFixture(),
     scoops: [
       { key: 'cone', type: 'cone', color: '#b07823', label: 'sliccy', eyes: 'open' },
@@ -233,6 +246,18 @@ export function mountWcUiPreview(root: HTMLElement): void {
       },
     ],
     floatLabel: 'standalone · preview',
+    placeholder: 'Preview harness — submissions echo into the thread…',
   });
-  root.replaceChildren(frame);
+
+  refs.inputCard.addEventListener('submit', (event) => {
+    const text = submittedText(event)?.trim();
+    if (!text) return;
+    const echo: ChatMessage = {
+      id: `wc-echo-${refs.thread.childElementCount}`,
+      role: 'user',
+      content: text,
+      timestamp: Date.now(),
+    };
+    refs.thread.append(...messageEls(echo));
+  });
 }
