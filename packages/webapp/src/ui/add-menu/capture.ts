@@ -11,7 +11,7 @@ function stopStream(stream: MediaStream): void {
 export async function grabFrameToFile(
   stream: MediaStream,
   video: HTMLVideoElement,
-  prefix: 'photo' | 'screenshot'
+  prefix: 'screenshot'
 ): Promise<File | null> {
   try {
     const w = video.videoWidth || 1280;
@@ -31,29 +31,13 @@ export async function grabFrameToFile(
   }
 }
 
-async function streamToFile(
-  stream: MediaStream,
-  prefix: 'photo' | 'screenshot'
-): Promise<File | null> {
+async function streamToFile(stream: MediaStream): Promise<File | null> {
   const video = document.createElement('video');
   video.srcObject = stream;
   video.muted = true;
   await video.play().catch(() => {});
   await new Promise((r) => requestAnimationFrame(() => r(null)));
-  return grabFrameToFile(stream, video, prefix);
-}
-
-/** Capture a still from the webcam. Returns null on denial/cancel. MUST be
- *  called synchronously from a user gesture. */
-export async function capturePhoto(): Promise<File | null> {
-  let stream: MediaStream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: true });
-  } catch (err) {
-    log.info('Photo capture cancelled/denied', { error: String(err) });
-    return null;
-  }
-  return streamToFile(stream, 'photo');
+  return grabFrameToFile(stream, video, 'screenshot');
 }
 
 /** Capture a still of the user's screen via the native picker. Returns null
@@ -70,5 +54,5 @@ export async function captureScreenshot(): Promise<File | null> {
     log.info('Screenshot capture cancelled/denied', { error: String(err) });
     return null;
   }
-  return streamToFile(stream, 'screenshot');
+  return streamToFile(stream);
 }

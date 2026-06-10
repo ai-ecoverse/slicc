@@ -11,7 +11,6 @@ function setup(items: AddItem[] = []) {
   const onAttachFiles = vi.fn();
   const onAddReference = vi.fn();
   const onClose = vi.fn();
-  const capturePhoto = vi.fn(async () => null);
   const captureScreenshot = vi.fn(async () => null);
   const aggregator = { search: vi.fn(async () => items) };
   const menu = new AddMenu({
@@ -20,7 +19,6 @@ function setup(items: AddItem[] = []) {
     aggregator,
     onAttachFiles,
     onAddReference,
-    capturePhoto,
     captureScreenshot,
     onClose,
   });
@@ -31,7 +29,6 @@ function setup(items: AddItem[] = []) {
     onAttachFiles,
     onAddReference,
     onClose,
-    capturePhoto,
     captureScreenshot,
     aggregator,
   };
@@ -54,7 +51,7 @@ describe('AddMenu shell', () => {
     expect(menu.isOpen()).toBe(true);
     expect(composer.classList.contains('composer--add-open')).toBe(true);
     const actions = document.querySelectorAll('.add-menu__action');
-    expect(actions.length).toBe(3);
+    expect(actions.length).toBe(2);
     expect(document.querySelector('.add-menu__search')).not.toBeNull();
   });
 
@@ -74,15 +71,15 @@ describe('AddMenu shell', () => {
     expect(menu.isOpen()).toBe(false);
   });
 
-  it('clicking the photo action invokes capturePhoto', async () => {
-    const { menu, capturePhoto } = setup();
+  it('clicking the screenshot action invokes captureScreenshot', async () => {
+    const { menu, captureScreenshot } = setup();
     menu.open();
     await Promise.resolve();
-    const photo = Array.from(document.querySelectorAll<HTMLElement>('.add-menu__action')).find(
-      (el) => /photo/i.test(el.textContent ?? '')
+    const screenshot = Array.from(document.querySelectorAll<HTMLElement>('.add-menu__action')).find(
+      (el) => /screenshot/i.test(el.textContent ?? '')
     );
-    photo?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-    expect(capturePhoto).toHaveBeenCalled();
+    screenshot?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(captureScreenshot).toHaveBeenCalled();
   });
 
   it('fires onClose when closed via close() and Escape', () => {
@@ -167,6 +164,19 @@ describe('AddMenu results', () => {
     menu.handleKey(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
     menu.handleKey(new KeyboardEvent('keydown', { key: 'Enter' }));
     expect(onAddReference).toHaveBeenCalledWith(items[1]);
+  });
+
+  it('routes ArrowDown + Enter from the focused search input to result selection', async () => {
+    const { menu, onAddReference } = setup(items);
+    menu.open();
+    const input = document.querySelector<HTMLInputElement>('.add-menu__search')!;
+    input.value = 's';
+    input.dispatchEvent(new Event('input'));
+    await new Promise((r) => setTimeout(r, 150));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(onAddReference).toHaveBeenCalledWith(items[1]);
+    expect(menu.isOpen()).toBe(false);
   });
 
   it('shows a no-matches note for an empty result set', async () => {

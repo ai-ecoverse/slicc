@@ -1,5 +1,7 @@
+import { Monitor, Upload } from 'lucide';
 import { createLogger } from '../../core/logger.js';
-import type { AddItem } from './add-item.js';
+import { createLucideIcon, type IconNode } from '../create-lucide-icon.js';
+import { type AddItem, referenceKindLabel } from './add-item.js';
 import type { AddSearchAggregator } from './search-providers.js';
 
 const log = createLogger('add-menu');
@@ -12,7 +14,6 @@ export interface AddMenuOptions {
   aggregator: AddSearchAggregator;
   onAttachFiles(files: File[] | FileList): void;
   onAddReference(item: AddItem): void;
-  capturePhoto(): Promise<File | null>;
   captureScreenshot(): Promise<File | null>;
   onClose?(): void;
 }
@@ -34,6 +35,10 @@ export class AddMenu {
       this.opts.onAttachFiles(e.dataTransfer.files);
       this.close();
     }
+  };
+
+  private readonly onSearchKeydown = (e: KeyboardEvent): void => {
+    if (this.handleKey(e)) e.preventDefault();
   };
 
   private readonly onDocumentMousedown = (e: MouseEvent): void => {
@@ -65,6 +70,11 @@ export class AddMenu {
     this.opts.composer.appendChild(this.panel);
 
     this.search.addEventListener('input', () => this.scheduleSearch());
+    // `open()` focuses the search input, so Arrow/Enter/Escape land here —
+    // not on the composer textarea whose keydown handler also calls
+    // `handleKey`. Without this listener, result navigation and selection
+    // would be dead while the menu is open.
+    this.search.addEventListener('keydown', this.onSearchKeydown);
     this.opts.composer.addEventListener('dragover', this.onComposerDragOver);
     this.opts.composer.addEventListener('drop', this.onComposerDrop);
     document.addEventListener('mousedown', this.onDocumentMousedown);
@@ -116,6 +126,7 @@ export class AddMenu {
 
   dispose(): void {
     if (this.debounceTimer) clearTimeout(this.debounceTimer);
+    this.search.removeEventListener('keydown', this.onSearchKeydown);
     this.opts.composer.removeEventListener('dragover', this.onComposerDragOver);
     this.opts.composer.removeEventListener('drop', this.onComposerDrop);
     document.removeEventListener('mousedown', this.onDocumentMousedown);
@@ -171,23 +182,39 @@ export class AddMenu {
   private renderActionsAndDefault(): void {
     this.results = [];
     this.list.innerHTML = '';
-    const actions: { label: string; sub: string; run: () => void }[] = [
+    const actions: { icon: IconNode; label: string; sub?: string; run: () => void }[] = [
       {
+        icon: Upload as unknown as IconNode,
         label: 'Upload from this computer',
         sub: 'Drag & drop or click to browse',
         run: () => this.requestUpload(),
       },
-      { label: 'Take a photo', sub: '', run: () => void this.runCapture(this.opts.capturePhoto) },
       {
+        icon: Monitor as unknown as IconNode,
         label: 'Take a screenshot',
-        sub: '',
         run: () => void this.runCapture(this.opts.captureScreenshot),
       },
     ];
     for (const a of actions) {
       const el = document.createElement('div');
       el.className = 'add-menu__action';
-      el.textContent = a.sub ? `${a.label} — ${a.sub}` : a.label;
+
+      el.appendChild(createLucideIcon(a.icon, 18));
+
+      const text = document.createElement('span');
+      text.className = 'add-menu__action-text';
+      const label = document.createElement('span');
+      label.className = 'add-menu__action-label';
+      label.textContent = a.label;
+      text.appendChild(label);
+      if (a.sub) {
+        const sub = document.createElement('span');
+        sub.className = 'add-menu__action-sub';
+        sub.textContent = a.sub;
+        text.appendChild(sub);
+      }
+      el.appendChild(text);
+
       el.addEventListener('mousedown', (e) => {
         e.preventDefault();
         a.run();
@@ -232,7 +259,7 @@ export class AddMenu {
 
     const kind = document.createElement('span');
     kind.className = 'add-menu__item-kind';
-    kind.textContent = item.kind;
+    kind.textContent = referenceKindLabel(item.kind);
     el.appendChild(kind);
 
     if (item.sublabel) {

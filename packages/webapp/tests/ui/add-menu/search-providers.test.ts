@@ -51,6 +51,20 @@ describe('createFileFolderProvider', () => {
     expect(srcRes.some((r) => r.kind === 'folder' && r.locator === '/workspace/src')).toBe(true);
   });
 
+  it('skips excluded subtrees so skills are not double-surfaced as files/folders', async () => {
+    const vfs = fakeVfs({
+      '/workspace/memory.md': 'file',
+      '/workspace/skills/aem': 'directory',
+      '/workspace/skills/aem/SKILL.md': 'file',
+      '/workspace/skills/aem/scripts/aem.jsh': 'file',
+    });
+    const p = createFileFolderProvider(vfs, ['/workspace'], ['/workspace/skills']);
+    const all = await p.search('', 50);
+    const locators = all.map((r) => r.locator);
+    expect(locators).toContain('/workspace/memory.md');
+    expect(locators.some((l) => l.startsWith('/workspace/skills'))).toBe(false);
+  });
+
   it('returns a default list for an empty query', async () => {
     const vfs = fakeVfs({ '/workspace/a.md': 'file', '/workspace/b.md': 'file' });
     const p = createFileFolderProvider(vfs, ['/workspace']);

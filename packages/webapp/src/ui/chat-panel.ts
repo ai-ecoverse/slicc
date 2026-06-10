@@ -17,10 +17,11 @@ import { createLogger } from '../core/logger.js';
 import { getMimeType } from '../core/mime-types.js';
 import { isThinkingLevel, THINKING_LEVEL_CYCLE, type ThinkingLevel } from '../scoops/types.js';
 import { toPreviewUrl } from '../shell/supplemental-commands/shared.js';
-import type { AddItem } from './add-menu/add-item.js';
+import { type AddItem, referenceKindLabel } from './add-menu/add-item.js';
 import { AddMenu } from './add-menu/add-menu.js';
 import { compileContextPreamble } from './add-menu/preamble.js';
 import type { AddSearchAggregator } from './add-menu/search-providers.js';
+import { createLucideIcon, type IconNode } from './create-lucide-icon.js';
 import {
   type DipInstance,
   type DraftDipInstance,
@@ -61,8 +62,6 @@ import './press-button.js';
 import type { SliccPressButton } from './press-button.js';
 
 const log = createLogger('chat-panel');
-
-type IconNode = [tag: string, attrs: Record<string, string | number>][];
 
 /**
  * Writes a dropped/picked file somewhere the agent can reach (typically
@@ -107,27 +106,6 @@ function readToolCallStatus(el: Element): 'running' | 'success' | 'error' {
   if (el.classList.contains('tool-call--success')) return 'success';
   if (el.classList.contains('tool-call--error')) return 'error';
   return 'running';
-}
-
-function createLucideIcon(node: IconNode, size = 18): SVGElement {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-  svg.setAttribute('width', String(size));
-  svg.setAttribute('height', String(size));
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('fill', 'none');
-  svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '2');
-  svg.setAttribute('stroke-linecap', 'round');
-  svg.setAttribute('stroke-linejoin', 'round');
-  for (const [tag, attrs] of node) {
-    const child = document.createElementNS('http://www.w3.org/2000/svg', tag);
-    for (const [key, value] of Object.entries(attrs)) {
-      child.setAttribute(key, String(value));
-    }
-    svg.appendChild(child);
-  }
-  return svg;
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -362,7 +340,6 @@ export class ChatPanel {
   /** Construct (or replace) the add-menu, wired to the composer's input wrapper. */
   setAddMenu(opts: {
     aggregator: AddSearchAggregator;
-    capturePhoto(): Promise<File | null>;
     captureScreenshot(): Promise<File | null>;
   }): void {
     this.addMenu?.dispose();
@@ -372,7 +349,6 @@ export class ChatPanel {
       aggregator: opts.aggregator,
       onAttachFiles: (files) => void this.addAttachmentsFromFiles(files),
       onAddReference: (item) => this.addReference(item),
-      capturePhoto: opts.capturePhoto,
       captureScreenshot: opts.captureScreenshot,
       onClose: () => this.updateAddToggleIcon(),
     });
@@ -2341,6 +2317,10 @@ export class ChatPanel {
     for (const ref of this.pendingReferences) {
       const chip = document.createElement('span');
       chip.className = 'chat__ref-chip';
+      const kindSpan = document.createElement('span');
+      kindSpan.className = 'chat__ref-chip-kind';
+      kindSpan.textContent = `${referenceKindLabel(ref.kind)}:`;
+      chip.appendChild(kindSpan);
       const labelSpan = document.createElement('span');
       labelSpan.textContent = ref.label;
       chip.appendChild(labelSpan);
@@ -2741,17 +2721,6 @@ export class ChatPanel {
         contentEl.appendChild(cursor);
       } else {
         this.hydrateDipsInEl(contentEl, msg.id);
-      }
-      if (msg.references?.length) {
-        const refsRow = document.createElement('div');
-        refsRow.className = 'chat__msg-refs';
-        for (const ref of msg.references) {
-          const chip = document.createElement('span');
-          chip.className = 'chat__ref-chip';
-          chip.textContent = ref.label;
-          refsRow.appendChild(chip);
-        }
-        contentEl.prepend(refsRow);
       }
       el.appendChild(contentEl);
     }

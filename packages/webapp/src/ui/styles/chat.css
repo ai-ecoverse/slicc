@@ -470,6 +470,7 @@
     box-shadow var(--s2-transition-default);
   padding: 16px;
   min-height: 112px;
+  gap: 12px;
 }
 .chat__input-wrapper:focus-within {
   border-color: var(--s2-accent);
@@ -939,36 +940,38 @@
   display: none;
 }
 
-/* Reference chips — pending row and read-only message bubbles */
-.chat__msg-refs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-bottom: 6px;
-}
+/* Reference chips — pending composer row (not shown in sent message bubbles) */
 .chat__ref-chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 8px;
+  padding: 3px 10px;
   border-radius: 999px;
-  background: var(--s2-bg-elevated);
-  color: var(--s2-content-secondary);
+  border: 1px solid color-mix(in srgb, var(--slicc-scoop-purple) 45%, transparent);
+  background: color-mix(in srgb, var(--slicc-scoop-purple) 14%, transparent);
+  color: var(--slicc-scoop-purple);
   font-size: 0.8rem;
+  font-weight: 600;
   line-height: 1.4;
   white-space: nowrap;
+}
+.chat__ref-chip-kind {
+  font-weight: 500;
+  opacity: 0.7;
+  text-transform: lowercase;
 }
 .chat__ref-chip button {
   border: none;
   background: none;
   padding: 0;
   cursor: pointer;
-  color: var(--s2-content-secondary);
+  color: var(--slicc-scoop-purple);
   font-size: 0.9rem;
   line-height: 1;
+  opacity: 0.8;
 }
 .chat__ref-chip button:hover {
-  color: var(--s2-content-default);
+  opacity: 1;
 }
 .chat__mic-btn--active {
   color: var(--slicc-cone);

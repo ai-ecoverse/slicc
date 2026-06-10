@@ -40,9 +40,33 @@
   cursor: pointer;
   user-select: none;
 }
+.add-menu__action {
+  align-items: center;
+}
+
+.add-menu__action:last-child {
+  margin-bottom: 12px;
+}
+
 .add-menu__action:hover,
 .add-menu__item:hover {
-  background: var(--surface-hover, rgba(0, 0, 0, 0.05));
+  background: var(--s2-bg-elevated);
+}
+.add-menu__action svg {
+  flex-shrink: 0;
+  color: var(--accent, #3c64dc);
+}
+.add-menu__action-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.add-menu__action-label {
+  font-weight: 600;
+}
+.add-menu__action-sub {
+  font-size: 12px;
+  color: var(--text-muted, #888);
 }
 .add-menu__item--active {
   background: var(--accent-soft, rgba(60, 100, 220, 0.12));

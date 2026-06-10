@@ -21,9 +21,8 @@ import {
   Webhook,
   Workflow,
 } from 'lucide';
+import { createLucideIcon, type IconNode } from './create-lucide-icon.js';
 import type { ChatMessage } from './types.js';
-
-type IconNode = [tag: string, attrs: Record<string, string | number>][];
 
 /** Per-channel metadata driving the compact row + expanded body. */
 export interface LickDescriptor {
@@ -180,26 +179,5 @@ export function parseLickContent(content: string): ParsedLick {
 /** Build the lucide SVG element for a channel. */
 export function createLickIcon(msg: ChatMessage): SVGElement {
   const desc = getLickDescriptor(msg);
-  return iconNodeToSvg(desc.icon);
-}
-
-function iconNodeToSvg(node: IconNode): SVGElement {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-  svg.setAttribute('width', '14');
-  svg.setAttribute('height', '14');
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('fill', 'none');
-  svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '2');
-  svg.setAttribute('stroke-linecap', 'round');
-  svg.setAttribute('stroke-linejoin', 'round');
-  for (const [tag, attrs] of node) {
-    const child = document.createElementNS('http://www.w3.org/2000/svg', tag);
-    for (const [k, v] of Object.entries(attrs)) {
-      child.setAttribute(k, String(v));
-    }
-    svg.appendChild(child);
-  }
-  return svg;
+  return createLucideIcon(desc.icon, 14);
 }

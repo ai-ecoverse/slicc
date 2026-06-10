@@ -12,3 +12,18 @@ export interface AddItem {
    *  file,folder → VFS path; skill → name; session → /sessions/<file>; scoop → jid. */
   locator: string;
 }
+
+/** User-facing category label for a reference kind. "session" reads as
+ *  "conversation" to match the add-menu search placeholder; everything else
+ *  uses its own name. */
+const REFERENCE_KIND_LABELS: Record<AddItemKind, string> = {
+  file: 'file',
+  folder: 'folder',
+  skill: 'skill',
+  session: 'conversation',
+  scoop: 'scoop',
+};
+
+export function referenceKindLabel(kind: AddItemKind): string {
+  return REFERENCE_KIND_LABELS[kind];
+}

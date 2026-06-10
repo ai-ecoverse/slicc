@@ -69,7 +69,7 @@ describe('ChatPanel add-menu integration', () => {
     });
   });
 
-  it('compiles references into the preamble on send, keeps content plain, stores references, renders a chip', async () => {
+  it('compiles references into the preamble on send, keeps content plain, stores references, hides chips from the bubble', async () => {
     const panel = new ChatPanel(container);
     await panel.initSession(`test-add-integration-${testCounter}`);
     const { sent, handle } = makeAgent();
@@ -91,10 +91,9 @@ describe('ChatPanel add-menu integration', () => {
     expect(stored?.references?.[0].locator).toBe('/workspace/CLAUDE.md');
     expect(container.textContent).not.toContain('[context]');
 
-    // Bubble chip is still present in the message; composer pending chips are cleared.
-    const bubbleChips = container.querySelectorAll('.chat__msg-refs .chat__ref-chip');
-    expect(bubbleChips.length).toBe(1);
-    expect(bubbleChips[0].textContent).toContain('CLAUDE.md');
+    // References drive the hidden preamble but are not rendered in the bubble.
+    const bubbleChips = container.querySelectorAll('.chat__msg-refs');
+    expect(bubbleChips.length).toBe(0);
 
     const composerChips = container.querySelectorAll('.chat__attachments .chat__ref-chip');
     expect(composerChips.length).toBe(0);
@@ -108,6 +107,24 @@ describe('ChatPanel add-menu integration', () => {
     expect(panel.getMessagesForTest().length).toBe(0);
     const chips = container.querySelectorAll('.chat__ref-chip');
     expect(chips.length).toBe(1);
+  });
+
+  it('prefixes pending reference chips with their category, mapping session to conversation', () => {
+    const panel = new ChatPanel(container);
+    panel.addReferenceForTest({
+      kind: 'file',
+      label: 'CLAUDE.md',
+      locator: '/workspace/CLAUDE.md',
+    });
+    panel.addReferenceForTest({
+      kind: 'session',
+      label: 'Debugging the search bug',
+      locator: '/sessions/2026-06-09-debug.md',
+    });
+    const kinds = Array.from(
+      container.querySelectorAll('.chat__ref-chip .chat__ref-chip-kind')
+    ).map((el) => el.textContent);
+    expect(kinds).toEqual(['file:', 'conversation:']);
   });
 
   it('sends plain text when there are no references', async () => {

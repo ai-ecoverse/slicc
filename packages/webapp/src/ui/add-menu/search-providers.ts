@@ -12,11 +12,18 @@ export interface AddSearchAggregator {
   search(query: string, perKindLimit: number): Promise<AddItem[]>;
 }
 
-/** Minimal VFS surface the file/folder + skill providers need. */
+/**
+ * Minimal VFS surface the file/folder + skill providers need. Only
+ * `readDir` is required so the providers work against both the page-side
+ * `VirtualFS` (non-OPFS) and the worker-backed `RemoteVfsClient` (OPFS,
+ * the browser default) — the latter does not expose a `walk` generator.
+ */
 interface VfsLike {
   readDir(path: string): Promise<{ name: string; type: string }[]>;
-  walk(path: string): AsyncGenerator<string>;
 }
+
+const WALK_LIMIT = 500;
+const WALK_CACHE_TTL_MS = 3000;
 
 function rank(query: string, hay: string): number {
   const q = query.toLowerCase();
@@ -28,57 +35,54 @@ function rank(query: string, hay: string): number {
   return -1;
 }
 
-function basename(path: string): string {
-  const parts = path.split('/').filter(Boolean);
-  return parts[parts.length - 1] ?? path;
+function joinPath(dir: string, name: string): string {
+  return dir === '/' ? `/${name}` : `${dir}/${name}`;
 }
 
-function parentDir(path: string): string {
-  const idx = path.lastIndexOf('/');
-  return idx <= 0 ? '/' : path.slice(0, idx);
+function isExcluded(path: string, exclude: string[]): boolean {
+  return exclude.some((ex) => path === ex || path.startsWith(`${ex}/`));
 }
 
 /*
- * Walks upward from a file's immediate parent directory collecting distinct
- * ancestor paths that fall strictly under the given root (i.e. longer than
- * the root path). Stops as soon as a directory has already been seen.
+ * Breadth-first traversal of `roots` using only `readDir`, emitting a flat
+ * list of file and folder `AddItem`s (bounded by `WALK_LIMIT`). Each entry's
+ * parent directory is used as its `sublabel`. A failed `readDir` on any
+ * single directory is logged and skipped so one unreadable subtree does not
+ * abort the whole walk. Subtrees under any `exclude` prefix are skipped
+ * entirely (e.g. `/workspace/skills`, which the skill provider owns).
  */
-function collectAncestorDirs(filePath: string, root: string, seen: Set<string>): void {
-  let dir = parentDir(filePath);
-  while (dir.length > root.length) {
-    if (seen.has(dir)) break;
-    seen.add(dir);
-    dir = parentDir(dir);
-  }
-}
-
-async function walkFilesAndDirs(
+async function walkViaReadDir(
   vfs: VfsLike,
-  roots: string[]
-): Promise<{ fileItems: AddItem[]; seenDirs: Set<string> }> {
-  const fileItems: AddItem[] = [];
-  const seenFiles = new Set<string>();
-  const seenDirs = new Set<string>();
-  for (const root of roots) {
+  roots: string[],
+  exclude: string[]
+): Promise<AddItem[]> {
+  const items: AddItem[] = [];
+  const seen = new Set<string>();
+  const queue: string[] = roots.filter((r) => !isExcluded(r, exclude));
+  while (queue.length) {
+    if (items.length >= WALK_LIMIT) break;
+    const dir = queue.shift() as string;
+    let entries: { name: string; type: string }[];
     try {
-      for await (const filePath of vfs.walk(root)) {
-        if (seenFiles.has(filePath)) continue;
-        seenFiles.add(filePath);
-        fileItems.push({
-          kind: 'file',
-          label: basename(filePath),
-          sublabel: parentDir(filePath),
-          locator: filePath,
-        });
-        collectAncestorDirs(filePath, root, seenDirs);
-        if (fileItems.length >= 500) break;
-      }
+      entries = await vfs.readDir(dir);
     } catch (err) {
-      log.warn('file/folder walk failed', { root, error: String(err) });
+      log.warn('readDir failed during walk', { dir, error: String(err) });
+      continue;
     }
-    if (fileItems.length >= 500) break;
+    for (const entry of entries) {
+      const path = joinPath(dir, entry.name);
+      if (seen.has(path) || isExcluded(path, exclude)) continue;
+      seen.add(path);
+      if (entry.type === 'directory') {
+        items.push({ kind: 'folder', label: entry.name, sublabel: dir, locator: path });
+        queue.push(path);
+      } else if (entry.type === 'file') {
+        items.push({ kind: 'file', label: entry.name, sublabel: dir, locator: path });
+      }
+      if (items.length >= WALK_LIMIT) break;
+    }
   }
-  return { fileItems, seenDirs };
+  return items;
 }
 
 function applyQueryRanking(items: AddItem[], query: string, limit: number): AddItem[] {
@@ -92,18 +96,38 @@ function applyQueryRanking(items: AddItem[], query: string, limit: number): AddI
   return scored.slice(0, limit);
 }
 
-export function createFileFolderProvider(vfs: VfsLike, roots: string[]): AddSearchProvider {
+export function createFileFolderProvider(
+  vfs: VfsLike,
+  roots: string[],
+  exclude: string[] = []
+): AddSearchProvider {
+  /*
+   * The full tree is walked once and reused across keystrokes within a
+   * short TTL. Over the OPFS RPC path a fresh walk per keystroke would be
+   * dozens of round-trips; the cache keeps typeahead responsive while still
+   * picking up filesystem changes within `WALK_CACHE_TTL_MS`.
+   */
+  let cache: { at: number; items: AddItem[] } | null = null;
+  let inflight: Promise<AddItem[]> | null = null;
+
+  function loadItems(): Promise<AddItem[]> {
+    if (cache && Date.now() - cache.at < WALK_CACHE_TTL_MS) return Promise.resolve(cache.items);
+    if (inflight) return inflight;
+    inflight = walkViaReadDir(vfs, roots, exclude)
+      .then((items) => {
+        cache = { at: Date.now(), items };
+        return items;
+      })
+      .finally(() => {
+        inflight = null;
+      });
+    return inflight;
+  }
+
   return {
     kind: 'file',
     async search(query, limit) {
-      const { fileItems, seenDirs } = await walkFilesAndDirs(vfs, roots);
-      const folderItems: AddItem[] = [...seenDirs].map((dir) => ({
-        kind: 'folder' as const,
-        label: basename(dir),
-        sublabel: parentDir(dir),
-        locator: dir,
-      }));
-      return applyQueryRanking([...folderItems, ...fileItems], query, limit);
+      return applyQueryRanking(await loadItems(), query, limit);
     },
   };
 }

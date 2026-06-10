@@ -30,11 +30,10 @@ import {
   Wrench,
 } from 'lucide';
 import { ansiToHtml } from './ansi.js';
+import { createLucideIcon, type IconNode } from './create-lucide-icon.js';
 import { escapeHtml } from './message-renderer.js';
 import { maskSecrets } from './preview-masking.js';
 import type { ToolCall } from './types.js';
-
-type IconNode = [tag: string, attrs: Record<string, string | number>][];
 
 /** Per-tool metadata driving the compact row + expanded body. */
 interface ToolDescriptor {
@@ -192,12 +191,12 @@ export function toolStatus(tc: ToolCall): ToolStatus {
 /** Build the icon element for the collapsed row. */
 export function createToolIcon(name: string): SVGElement {
   const desc = getToolDescriptor(name);
-  return iconNodeToSvg(desc.icon);
+  return createLucideIcon(desc.icon, 14);
 }
 
 /** Cluster icon used in the collapsed "working" header. */
 export function createClusterIcon(): SVGElement {
-  return iconNodeToSvg(Cog as unknown as IconNode);
+  return createLucideIcon(Cog as unknown as IconNode, 14);
 }
 
 /** Threshold above which consecutive tool calls collapse into a cluster.
@@ -292,27 +291,6 @@ function formatScoopNames(input: unknown): string {
   if (!Array.isArray(names)) return '';
   const joined = names.filter((n) => typeof n === 'string').join(', ');
   return truncate(joined, 100);
-}
-
-function iconNodeToSvg(node: IconNode): SVGElement {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-  svg.setAttribute('width', '14');
-  svg.setAttribute('height', '14');
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('fill', 'none');
-  svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '2');
-  svg.setAttribute('stroke-linecap', 'round');
-  svg.setAttribute('stroke-linejoin', 'round');
-  for (const [tag, attrs] of node) {
-    const child = document.createElementNS('http://www.w3.org/2000/svg', tag);
-    for (const [k, v] of Object.entries(attrs)) {
-      child.setAttribute(k, String(v));
-    }
-    svg.appendChild(child);
-  }
-  return svg;
 }
 
 // ── body renderers ──────────────────────────────────────────────────

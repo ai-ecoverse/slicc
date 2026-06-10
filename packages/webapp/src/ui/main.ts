@@ -22,7 +22,7 @@ import './styles/add-menu.css';
  */
 
 import { createLogger } from '../core/index.js';
-import type { VirtualFS } from '../fs/index.js';
+import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 // Auto-discover and register all providers (built-in + external).
 // IMPORTANT: This import must also appear in packages/chrome-extension/src/offscreen.ts
 // — the extension agent engine runs in the offscreen document, not in this file.
@@ -33,7 +33,7 @@ import {
   captureViaPopup,
   isExtensionFloat,
 } from '../shell/supplemental-commands/extension-media-capture.js';
-import { capturePhoto, captureScreenshot } from './add-menu/capture.js';
+import { captureScreenshot } from './add-menu/capture.js';
 import {
   createAggregator,
   createFileFolderProvider,
@@ -76,47 +76,31 @@ const log = createLogger('main');
 
 function wireAddMenu(
   layout: Layout,
-  vfs: VirtualFS,
+  vfs: LocalVfsClient,
   client: OffscreenClient,
   isExtension: boolean
 ): void {
   const aggregator = createAggregator([
-    createFileFolderProvider(vfs, ['/workspace', '/shared']),
+    // Exclude the skills tree from file/folder results — skills surface as
+    // first-class, activatable SKILL entries via createSkillProvider, so
+    // listing their directories/files here would only duplicate them.
+    createFileFolderProvider(vfs, ['/workspace', '/shared'], ['/workspace/skills']),
     createSkillProvider(vfs),
     createSessionProvider(() => readSessionsIndex(vfs)),
     createScoopProvider(() => client.getScoops()),
   ]);
 
-  let photo: () => Promise<File | null>;
   let screenshot: () => Promise<File | null>;
 
   if (isExtension && isExtensionFloat()) {
     /**
-     * In the extension side-panel page, getUserMedia / getDisplayMedia can't
-     * prompt (no visible surface). Route both captures through the popup
-     * helper which opens a real Chrome window for the permission / picker UI.
+     * In the extension side-panel page, getDisplayMedia can't prompt (no
+     * visible surface). Route the screenshot capture through the popup helper
+     * which opens a real Chrome window for the permission / picker UI.
      * captureViaPopup returns PopupCaptureResult { bytes, mimeType, width, height };
      * convert to File so the add-menu contract (File | null) is satisfied.
      * On cancel / timeout the popup rejects — map to null.
      */
-    photo = async (): Promise<File | null> => {
-      try {
-        const result = await captureViaPopup({
-          kind: 'camera',
-          mode: 'photo',
-          mimeType: 'image/png',
-          quality: 1.0,
-        });
-        const ab =
-          result.bytes.buffer instanceof ArrayBuffer
-            ? result.bytes.buffer
-            : new Uint8Array(result.bytes).buffer;
-        return new File([ab], `photo-${Date.now()}.png`, { type: 'image/png' });
-      } catch {
-        return null;
-      }
-    };
-
     screenshot = async (): Promise<File | null> => {
       try {
         const result = await captureViaPopup({
@@ -134,11 +118,10 @@ function wireAddMenu(
       }
     };
   } else {
-    photo = capturePhoto;
     screenshot = captureScreenshot;
   }
 
-  layout.panels.chat.setAddMenu({ aggregator, capturePhoto: photo, captureScreenshot: screenshot });
+  layout.panels.chat.setAddMenu({ aggregator, captureScreenshot: screenshot });
 }
 
 /**
@@ -224,7 +207,11 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
     getSelectedScoop: () => selectedScoop,
     log,
   }).syncThinkingButtonForScoop;
-  wireAddMenu(layout, localFs, client, true);
+  // Read through the file-browser's reader: under `slicc_opfs_vfs=opfs`
+  // (the browser default) `localFs` is an empty in-memory shadow and the
+  // canonical tree lives in the worker, reachable via the remote VFS client
+  // resolved into `previewVfsReaderBox.current` above.
+  wireAddMenu(layout, previewVfsReaderBox.current, client, true);
 
   // Persistent dedup ledger of welcome-flow licks — shared between the
   // orchestrator's final-lick and the welcome lick interceptor.
@@ -382,8 +369,11 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
     syncThinkingButtonForScoop,
     log,
   });
-  const { localFs, writableFs } = vfsHandle;
-  wireAddMenu(layout, localFs, client, false);
+  const { writableFs } = vfsHandle;
+  // `panelReadVfs` is what the file browser reads from — `localFs` when the
+  // OPFS flag is off, the worker-backed remote VFS client when it's on (the
+  // browser default). `localFs` alone would be an empty shadow under OPFS.
+  wireAddMenu(layout, vfsHandle.panelReadVfs, client, false);
 
   // Post-panels runtime composite: host-ready join → onboarding →
   // dip-lick callback → sprinkle manager → leader-runtime + panel-RPC +
