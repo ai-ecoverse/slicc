@@ -1184,9 +1184,17 @@ function detectMarketplaceManifest(files: Record<string, Uint8Array>): ResolvedM
       continue;
     }
 
-    const normalizedSource = plugin.source.replace(/^\.\//, '');
-    const pluginDir = `${manifestDir}${normalizedSource}`;
-    const skillsPrefix = `${pluginDir}/skills/`;
+    // Strip leading "./" and trailing "/" so source "." and "./" both resolve
+    // to the manifest root rather than producing a leading "/" or "./" prefix
+    // that won't match ZIP entry paths.
+    const normalizedSource = plugin.source
+      .replace(/^\.\//, '')
+      .replace(/\/$/, '')
+      .replace(/^\.$/, '');
+    const pluginDir = normalizedSource
+      ? `${manifestDir}${normalizedSource}`
+      : manifestDir.replace(/\/$/, '');
+    const skillsPrefix = pluginDir ? `${pluginDir}/skills/` : 'skills/';
 
     const skills: Array<{ name: string; path: string }> = [];
     for (const filePath of Object.keys(files)) {
@@ -1195,7 +1203,7 @@ function detectMarketplaceManifest(files: Record<string, Uint8Array>): ResolvedM
       const parts = rest.split('/');
       if (parts.length >= 2 && parts[1] === 'SKILL.md') {
         const skillName = parts[0];
-        const skillPath = `${pluginDir}/skills/${skillName}`;
+        const skillPath = pluginDir ? `${pluginDir}/skills/${skillName}` : `skills/${skillName}`;
         if (!skills.find((s) => s.name === skillName)) {
           skills.push({ name: skillName, path: skillPath });
         }

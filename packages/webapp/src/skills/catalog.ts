@@ -168,9 +168,9 @@ async function resolveMarketplacePluginPaths(
     if (typeof source !== 'string') continue;
     // Reject absolute paths and traversal attempts
     if (source.startsWith('/') || source.split('/').includes('..')) continue;
-    // Resolve relative path (e.g. "./plugins/my-tools" -> "/mnt/repo/plugins/my-tools")
-    const normalized = source.replace(/^\.\//, '');
-    paths.push(`${parentDir}/${normalized}`);
+    // Resolve relative path. "." and "./" both mean the repo root (parentDir itself).
+    const normalized = source.replace(/^\.\//, '').replace(/\/$/, '').replace(/^\.$/, '');
+    paths.push(normalized ? `${parentDir}/${normalized}` : parentDir);
   }
 
   return paths;
