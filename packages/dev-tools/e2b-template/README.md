@@ -19,6 +19,16 @@ The script tags the published template with the SLICC version from the root
 
 Creates one sandbox, polls `/tmp/slicc-join.json`, kills the sandbox.
 
+## Skipping the build (temporary)
+
+Set `SLICC_SKIP_E2B_TEMPLATE=1` to make both `build-template.sh` and
+`verify-template.sh` no-op (print a notice and `exit 0`). This is a temporary
+escape hatch for the release pipeline while the e2b team account is out of build
+credits: it lets a release deploy the worker against the already-published
+template instead of failing on `Template.build`. Remove the
+`SLICC_SKIP_E2B_TEMPLATE` env from `.github/workflows/release.yml` (and this
+note) once credits are restored.
+
 ## Notes
 
 - Not an npm workspace. Invoke the scripts directly.
