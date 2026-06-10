@@ -57,6 +57,20 @@ slicc-chat-thread[open] > .slicc-thread__inner {
     linear-gradient(to right, transparent 0, #000 32px, #000 calc(100% - 32px), transparent 100%),
     linear-gradient(to bottom, transparent 0, #000 24px, #000 calc(100% - 24px), transparent 100%);
 }
+/* Narrow / extension-sidebar: the reading column fills the full width — no
+   centered 776px cap and no horizontal edge feather, so the frosted surface
+   reaches both edges instead of leaving bare shader showing on the sides. */
+@media (max-width: 560px) {
+  slicc-chat-thread > .slicc-thread__inner,
+  slicc-chat-thread[open] > .slicc-thread__inner {
+    max-width: none;
+    margin: 0;
+    padding: 16px 14px;
+    border-radius: 0;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+}
 `;
 
 const STYLE_ID = 'slicc-chat-thread-style';

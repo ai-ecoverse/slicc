@@ -314,7 +314,17 @@ function app(opts: AppOpts): HTMLElement {
   const shell = el('slicc-shell', opts.workbench ? { open: '' } : {});
   const pane = chatpane(opts.workbench);
   pane.style.background = 'transparent';
-  shell.append(pane, workbench(opts.workbench), el('slicc-dock'));
+  // Dock rail: sprinkles at the top, the Browser/Files/Terminal/Memory system
+  // tools pinned at the BOTTOM (system-tools) — the prototype/legacy placement.
+  const dock = el('slicc-dock', {
+    'system-tools': '',
+    active: opts.workbench ? 'term' : '',
+  }) as HTMLElement & { items?: unknown };
+  (dock as { items?: unknown }).items = [
+    { id: 'hero', icon: 'sparkles', label: 'Hero studio', kind: 'sprinkle', hue: 'var(--violet)' },
+    { id: 'palette', icon: 'palette', label: 'palette', kind: 'sprinkle', hue: 'var(--cyan)' },
+  ];
+  shell.append(pane, workbench(opts.workbench), dock);
 
   appCol.append(topnav(), shell);
   frame.append(appCol);

@@ -121,6 +121,9 @@ const STYLE = `
   .hint .kbd{font-family:var(--ui);border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:var(--txt-2);}
   .hint .sep{width:3px;height:3px;border-radius:50%;background:var(--line);}
   :host([narrow]) .hint{display:none;}
+  /* Narrow / extension-sidebar: the ⏎ / ⇧⏎ keyboard hints don't fit (and touch
+     users have no keyboard) — drop them regardless of the narrow-chat attribute. */
+  @media (max-width: 560px){ .hint{display:none;} }
 `;
 const SHEET = sheet(STYLE);
 

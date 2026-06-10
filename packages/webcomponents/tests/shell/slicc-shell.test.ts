@@ -46,6 +46,18 @@ describe('slicc-shell', () => {
     expect(wb?.style.position).toBe('absolute');
   });
 
+  it('pins the dock to a full 48px basis so the rail is flush to the edge (no bare strip)', () => {
+    mountShell();
+    // Regression: the shell rule outranks the dock's own `flex: 0 0 48px`, so an
+    // `auto` basis here collapsed the rail to its ~35px icon width and left a
+    // bare-shader strip down the right edge.
+    const sheet = (document.getElementById('slicc-shell-style') as HTMLStyleElement).sheet;
+    const dockRule = Array.from(sheet?.cssRules ?? []).find(
+      (r): r is CSSStyleRule => r instanceof CSSStyleRule && r.selectorText.includes('slicc-dock')
+    );
+    expect(dockRule?.style.flexBasis).toBe('48px');
+  });
+
   it('exposes its three regions by getter', () => {
     const shell = mountShell();
     expect(shell.chatpane?.tagName.toLowerCase()).toBe('slicc-chatpane');

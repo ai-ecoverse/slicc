@@ -41,8 +41,11 @@ const STYLE = `
   margin: 12px;
   opacity: 1;
 }
+/* Pin the dock to its full 48px basis. This selector outranks the dock's own
+   "flex: 0 0 48px" rule, so an "auto" basis here would collapse the rail to its
+   ~35px icon-content width and leave a bare-shader strip down the right edge. */
 .slicc-shell > slicc-dock,
-.slicc-shell > .dock { flex: 0 0 auto; }
+.slicc-shell > .dock { flex: 0 0 48px; }
 
 /* Narrow / extension-sidebar layout: a viewport this thin can't host a
    chat | workbench side-by-side split, so when the workbench opens it becomes a
