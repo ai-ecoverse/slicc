@@ -135,3 +135,86 @@ export const Narrow: Story = {
   args: { open: true },
   render: composer,
 };
+
+/**
+ * Build a tall, scrollable faux chat thread so the composer's frosted-glass band
+ * has real content to scroll *under* it. Each turn is a plain paragraph; the
+ * container scrolls, and a generous bottom padding lets the last lines slide
+ * beneath the pinned composer rather than ending above it.
+ */
+function tallThread(): HTMLElement {
+  const thread = document.createElement('div');
+  // The scroll surface fills the shell; bottom padding clears the overlaid band
+  // so the final lines can scroll fully underneath the frosted pane.
+  thread.style.cssText =
+    'position:absolute;inset:0;overflow-y:auto;padding:28px 24px 220px;' +
+    'color:var(--txt-2);font-size:14px;line-height:1.5;';
+
+  const turns = [
+    ['user', 'Make the landing hero feel warmer.'],
+    ['agent', 'On it — auditing the cold hero, then redesigning in a live sprinkle.'],
+    ['user', 'Keep the headline, just shift the palette and the imagery mood.'],
+    [
+      'agent',
+      'Pulling the current tokens; the hero leans on a flat slate background with no accent warmth.',
+    ],
+    ['user', 'Right. Warmer, but still calm — not a sunset gradient.'],
+    [
+      'agent',
+      'Drafting a muted amber wash over the existing canvas, then verifying contrast for the CTA.',
+    ],
+    ['user', 'Scroll down — does the rest of the page still read against it?'],
+    [
+      'agent',
+      'Checking the fold below: cards keep their surface, the warm wash only tints the hero band.',
+    ],
+    ['user', 'Good. Notice how these lines slide under the composer as they scroll.'],
+    [
+      'agent',
+      'Exactly — the frosted band stays pinned; the thread blurs faintly beneath it (backdrop-filter).',
+    ],
+    ['user', 'Ship it once the before/after looks right.'],
+    ['agent', 'Opening the PR with the before/after screenshots attached.'],
+  ];
+
+  for (const [role, text] of turns) {
+    const p = document.createElement('p');
+    p.textContent = text;
+    p.style.cssText = role === 'user' ? 'margin:0 0 14px;color:var(--ink);' : 'margin:0 0 14px;';
+    thread.appendChild(p);
+  }
+  return thread;
+}
+
+/**
+ * Build a composer overlaid at the bottom of a scrollable thread, so the frosted
+ * band actually sits *over* the scrolling chat content. As the thread scrolls,
+ * its lines pass beneath the semi-transparent composer and read through the
+ * `backdrop-filter` blur — the layered "scroll-under" look from the prototype.
+ */
+function scrollUnder({ open }: ComposerArgs): HTMLElement {
+  const shell = document.createElement('div');
+  shell.style.cssText =
+    'position:relative;height:460px;width:100%;background:var(--bg);overflow:hidden;font-family:var(--ui);';
+
+  const el = document.createElement('slicc-composer') as SliccComposer;
+  // Pin the band to the bottom edge so the thread scrolls underneath it.
+  el.style.cssText = 'position:absolute;left:0;right:0;bottom:0;';
+  if (open) el.setAttribute('open', '');
+  el.append(inputCard(), metaRow(Boolean(open)));
+
+  shell.append(tallThread(), el);
+  return shell;
+}
+
+/**
+ * Scroll-under — the frosted-glass layering. The chat thread is a real scroll
+ * surface; the composer is pinned over its bottom edge. Scroll the thread and
+ * its lines pass *beneath* the semi-transparent band, blurred + tinted by the
+ * composer's `backdrop-filter`. Flip the theme toolbar to confirm the frosted
+ * tint recomputes from `--ctx`/`--bg` in both light and dark.
+ */
+export const ScrollUnder: Story = {
+  args: {},
+  render: scrollUnder,
+};

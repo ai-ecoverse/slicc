@@ -259,12 +259,13 @@ const SHEET = sheet(STYLE);
  * Choosing a row sets `model` and emits a composed `model-change`
  * (`{ model, provider, id }`). Clicking the thinking pill cycles forward through
  * the wetness effort levels (`off → low → medium → high → xhigh → max → …`,
- * labelled `Secco → Goccia → Bagnato → Affogato → Inzuppato → Sprofondato`), swaps
- * the label, and ramps the WHOLE pill — text, border, caret and a background wash —
- * to track the intensity (a muted grey `--txt-3` at `Secco` up to full `--violet`
- * at `Sprofondato`), emitting a composed `thinking-change`. The accented (`max`)
- * level adds a heavier border/wash. Set `narrow` to hide the hint for a tight chat
- * column (the prototype's `.shell.open .meta .hint{display:none}`).
+ * labelled `Secco → Goccia → Bagnato → Affogato → Inzuppato → Sprofondato`),
+ * swaps the label, and ramps the WHOLE pill — text, border, caret and a
+ * background wash — to track the intensity (a muted grey `--txt-3` at `Secco` up
+ * to full `--violet` at `Sprofondato`), emitting a composed `thinking-change`.
+ * The accented (`max`) level adds a heavier border/wash. Set `narrow` to hide the
+ * hint for a tight chat column
+ * (the prototype's `.shell.open .meta .hint{display:none}`).
  *
  * Self-contained shadow DOM; themes via inherited tokens (no token is
  * re-declared here).

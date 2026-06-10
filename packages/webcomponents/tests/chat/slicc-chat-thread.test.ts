@@ -144,6 +144,11 @@ describe('slicc-chat-thread', () => {
       expect(getComputedStyle(el).overflowY).toBe('auto');
     });
 
+    it('reserves a stable scrollbar gutter so context swaps do not shift the column', () => {
+      const el = mount();
+      expect(getComputedStyle(el).scrollbarGutter).toBe('stable');
+    });
+
     it('applies a two-axis edge feather mask to the inner column', () => {
       const el = mount();
       const cs = getComputedStyle(inner(el));
@@ -200,6 +205,28 @@ describe('slicc-chat-thread', () => {
       el.switchContext('cone');
       expect(el.context).toBe('cone');
       expect(inner(el).textContent).toContain('cone message');
+    });
+
+    it('keeps the reading-column width stable across a swap that changes content length', () => {
+      const el = mount((e) => {
+        e.context = 'cone';
+      });
+      el.style.height = '160px';
+      el.style.width = '420px';
+      // A long, overflowing context — would show a scrollbar without a stable gutter.
+      for (let i = 0; i < 40; i += 1) {
+        const m = document.createElement('div');
+        m.textContent = `cone line ${i}`;
+        m.style.height = '24px';
+        el.append(m);
+      }
+      const wideWidth = inner(el).clientWidth;
+
+      // Swap to a fresh (empty) context — no scrollbar. The gutter stays reserved,
+      // so the centered column keeps the same width and does not shift.
+      el.switchContext('researcher');
+      expect(inner(el).children).toHaveLength(0);
+      expect(inner(el).clientWidth).toBe(wideWidth);
     });
 
     it('no-ops when switching to the current context', () => {
