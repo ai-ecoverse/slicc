@@ -75,20 +75,18 @@ describe('slicc-tab-bar', () => {
 
   // ---- variants / states ----
 
-  it('empty: renders no tabs and no dividers', () => {
+  it('empty: renders no tabs', () => {
     const el = mount([]);
     expect(tabEls(el).length).toBe(0);
-    expect(el.querySelectorAll('.slicc-tab-bar__div').length).toBe(0);
   });
 
-  it('with tool tabs: one <slicc-tab> per descriptor, in order, kind="tool", id on tab-id', () => {
+  it('never renders tool tabs (filtered out) but keeps them in the data model', () => {
     const el = mount(TOOL_TABS);
-    const tabs = tabEls(el);
-    expect(tabs.length).toBe(3);
-    expect(tabs.map((t) => t.getAttribute('tab-id'))).toEqual(['files', 'term', 'memory']);
-    expect(tabs.every((t) => t.getAttribute('kind') === 'tool')).toBe(true);
-    expect(tabs[0].getAttribute('label')).toBe('Files');
-    expect(tabs[0].getAttribute('glyph')).toBe('◇');
+    // No <slicc-tab> children paint for tool-kind descriptors.
+    expect(tabEls(el).length).toBe(0);
+    // …yet the data model preserves the full set (consumers can still pass them).
+    expect(el.tabs.map((t) => t.id)).toEqual(['files', 'term', 'memory']);
+    expect(el.tabs.every((t) => t.kind === 'tool')).toBe(true);
   });
 
   it('with sprinkle tabs: renders kind="sprinkle" closable chips', () => {
@@ -99,21 +97,19 @@ describe('slicc-tab-bar', () => {
     expect(tabs.every((t) => t.hasAttribute('closable'))).toBe(true);
   });
 
-  it('inserts a .tdiv hairline divider between groups of differing kind', () => {
+  it('renders no dividers and paints only the sprinkle tabs from a mixed set', () => {
     const el = mount([...TOOL_TABS, ...SPRINKLE_TABS]);
-    const dividers = el.querySelectorAll('.slicc-tab-bar__div');
-    // Exactly one tool↔sprinkle boundary → exactly one divider.
-    expect(dividers.length).toBe(1);
-    expect(dividers[0].getAttribute('part')).toBe('divider');
-    // No divider within a same-kind run.
-    expect(mount(TOOL_TABS).querySelectorAll('.slicc-tab-bar__div').length).toBe(0);
+    // Tools filtered out → only the two sprinkle chips paint, in order.
+    expect(tabEls(el).map((t) => t.getAttribute('tab-id'))).toEqual(['hero', 'palette']);
+    // No hairline dividers are ever emitted.
+    expect(el.querySelectorAll('.slicc-tab-bar__div').length).toBe(0);
   });
 
   it('overflowing: scrolls horizontally (scrollWidth exceeds clientWidth, overflow-x auto)', () => {
     const many: TabDescriptor[] = Array.from({ length: 24 }, (_, i) => ({
       id: `t${i}`,
       label: `A fairly long tab label ${i}`,
-      kind: 'tool',
+      kind: 'sprinkle',
     }));
     const el = mount(many);
     el.style.width = '200px';
@@ -133,17 +129,6 @@ describe('slicc-tab-bar', () => {
     expect(cs.minWidth).toBe('0px');
   });
 
-  it('divider is a 1px×18px hairline tinted by --line', () => {
-    const el = mount([...TOOL_TABS, ...SPRINKLE_TABS]);
-    const div = el.querySelector('.slicc-tab-bar__div') as HTMLElement;
-    const cs = getComputedStyle(div);
-    const rect = div.getBoundingClientRect();
-    expect(Math.round(rect.width)).toBe(1);
-    expect(Math.round(rect.height)).toBe(18);
-    // --line (light: #e5e5e5) resolves to a concrete, non-transparent color.
-    expect(cs.backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
-  });
-
   // ---- behavior / events ----
 
   it('addTab appends a tab and selects it, firing tab-select', () => {
@@ -157,25 +142,25 @@ describe('slicc-tab-bar', () => {
   });
 
   it('addTab with an existing id updates in place (no duplicate) and selects it', () => {
-    const el = mount(TOOL_TABS);
-    el.addTab({ id: 'files', label: 'Files (renamed)', kind: 'tool' });
-    expect(el.tabs.length).toBe(3);
-    expect(tabById(el, 'files').getAttribute('label')).toBe('Files (renamed)');
-    expect(el.active).toBe('files');
+    const el = mount(SPRINKLE_TABS);
+    el.addTab({ id: 'hero', label: 'Hero (renamed)', kind: 'sprinkle', closable: true });
+    expect(el.tabs.length).toBe(2);
+    expect(tabById(el, 'hero').getAttribute('label')).toBe('Hero (renamed)');
+    expect(el.active).toBe('hero');
   });
 
   it('selectTab sets the active state, mirrors it onto the child, fires tab-select once', () => {
-    const el = mount(TOOL_TABS);
+    const el = mount(SPRINKLE_TABS);
     const seen: string[] = [];
     el.addEventListener('tab-select', (e) => seen.push((e as CustomEvent).detail.id));
-    el.selectTab('memory');
-    expect(el.active).toBe('memory');
+    el.selectTab('palette');
+    expect(el.active).toBe('palette');
     // active state mirrored onto the matching child (drives its `.on` state).
-    expect(tabById(el, 'memory').hasAttribute('active')).toBe(true);
-    expect(tabById(el, 'files').hasAttribute('active')).toBe(false);
+    expect(tabById(el, 'palette').hasAttribute('active')).toBe(true);
+    expect(tabById(el, 'hero').hasAttribute('active')).toBe(false);
     // Re-selecting the active tab is a no-op (no second event).
-    el.selectTab('memory');
-    expect(seen).toEqual(['memory']);
+    el.selectTab('palette');
+    expect(seen).toEqual(['palette']);
   });
 
   it('selectTab ignores an unknown id', () => {

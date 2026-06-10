@@ -213,6 +213,146 @@ describe('slicc-file-tree', () => {
     });
   });
 
+  describe('nested directories (fold/expand)', () => {
+    const NESTED: FileTreeItem[] = [
+      { kind: 'group', label: 'workspace/' },
+      {
+        kind: 'dir',
+        id: 'components',
+        label: 'components',
+        open: true,
+        children: [
+          { kind: 'file', id: 'hero.tsx', label: 'hero.tsx', path: 'workspace/components/hero.tsx' },
+          {
+            kind: 'dir',
+            id: 'ui',
+            label: 'ui',
+            children: [
+              { kind: 'file', id: 'button.tsx', label: 'button.tsx', path: 'workspace/components/ui/button.tsx' },
+            ],
+          },
+        ],
+      },
+      { kind: 'file', id: 'tokens.css', label: 'tokens.css' },
+    ];
+
+    function makeNested(): SliccFileTree {
+      const el = document.createElement('slicc-file-tree') as SliccFileTree;
+      el.items = NESTED;
+      document.body.appendChild(el);
+      return el;
+    }
+
+    /** The `.children` wrapper that immediately follows the named `.dir` row. */
+    function childrenOf(el: SliccFileTree, dirId: string): HTMLElement | null {
+      const dir = el.querySelector<HTMLElement>(`.dir[data-dir-id="${dirId}"]`);
+      const next = dir?.nextElementSibling;
+      return next instanceof HTMLElement && next.classList.contains('children') ? next : null;
+    }
+
+    it('renders a `.dir` toggle row with a chevron <svg> for each directory', () => {
+      const el = makeNested();
+      const dir = el.querySelector<HTMLElement>('.dir[data-dir-id="components"]');
+      expect(dir).not.toBeNull();
+      expect(dir?.querySelector('svg.chev')).not.toBeNull();
+      expect(dir?.textContent).toContain('components');
+    });
+
+    it('seeds the open state from the item `open` flag (open shows, default hides)', () => {
+      const el = makeNested();
+      expect(el.isDirOpen('components')).toBe(true);
+      expect(el.isDirOpen('ui')).toBe(false);
+      // open dir → children wrapper visible; closed dir → hidden.
+      expect(childrenOf(el, 'components')?.hasAttribute('hidden')).toBe(false);
+      expect(childrenOf(el, 'ui')?.hasAttribute('hidden')).toBe(true);
+    });
+
+    it('toggling a directory shows/hides its children and flips aria-expanded', () => {
+      const el = makeNested();
+      el.toggleDir('components');
+      expect(el.isDirOpen('components')).toBe(false);
+      expect(childrenOf(el, 'components')?.hasAttribute('hidden')).toBe(true);
+      expect(
+        el.querySelector('.dir[data-dir-id="components"]')?.getAttribute('aria-expanded')
+      ).toBe('false');
+      el.toggleDir('components');
+      expect(el.isDirOpen('components')).toBe(true);
+      expect(childrenOf(el, 'components')?.hasAttribute('hidden')).toBe(false);
+      expect(
+        el.querySelector('.dir[data-dir-id="components"]')?.getAttribute('aria-expanded')
+      ).toBe('true');
+    });
+
+    it('toggles on a directory row click and emits dir-toggle { id, open }', () => {
+      const el = makeNested();
+      const onToggle = vi.fn();
+      el.addEventListener('dir-toggle', onToggle);
+      el.querySelector<HTMLElement>('.dir[data-dir-id="ui"]')?.dispatchEvent(
+        new MouseEvent('click', { bubbles: true })
+      );
+      expect(el.isDirOpen('ui')).toBe(true);
+      expect(childrenOf(el, 'ui')?.hasAttribute('hidden')).toBe(false);
+      expect(onToggle).toHaveBeenCalledTimes(1);
+      expect(onToggle.mock.calls[0][0].detail).toEqual({ id: 'ui', open: true });
+    });
+
+    it('emits dir-toggle composed + bubbling and is a no-op for an unknown id', () => {
+      const el = makeNested();
+      const onBody = vi.fn();
+      document.body.addEventListener('dir-toggle', onBody);
+      el.toggleDir('components');
+      expect(onBody).toHaveBeenCalledTimes(1);
+      const ev = onBody.mock.calls[0][0] as CustomEvent;
+      expect(ev.bubbles).toBe(true);
+      expect(ev.composed).toBe(true);
+      document.body.removeEventListener('dir-toggle', onBody);
+
+      const onToggle = vi.fn();
+      el.addEventListener('dir-toggle', onToggle);
+      el.toggleDir('does-not-exist');
+      expect(onToggle).not.toHaveBeenCalled();
+    });
+
+    it('indents nested children (the `.children` wrapper carries left padding)', () => {
+      const el = makeNested();
+      const wrap = childrenOf(el, 'components') as HTMLElement;
+      expect(Number.parseFloat(getComputedStyle(wrap).paddingLeft)).toBeGreaterThan(0);
+      // A doubly-nested file sits further right than a singly-nested one.
+      el.toggleDir('ui');
+      const shallow = fileRow(el, 'hero.tsx') as HTMLElement;
+      const deep = fileRow(el, 'button.tsx') as HTMLElement;
+      expect(deep.getBoundingClientRect().left).toBeGreaterThan(
+        shallow.getBoundingClientRect().left
+      );
+    });
+
+    it('selects a nested file (selection still works) with its full path', () => {
+      const el = makeNested();
+      const onSelect = vi.fn();
+      el.addEventListener('file-select', onSelect);
+      el.selectFile('hero.tsx');
+      expect(fileRow(el, 'hero.tsx')?.classList.contains('on')).toBe(true);
+      expect(el.querySelectorAll('.f.on')).toHaveLength(1);
+      expect(onSelect.mock.calls[0][0].detail).toEqual({
+        id: 'hero.tsx',
+        path: 'workspace/components/hero.tsx',
+      });
+    });
+
+    it('selects a nested file on a row click without toggling its ancestor dirs', () => {
+      const el = makeNested();
+      el.toggleDir('ui'); // open it so the row is visible
+      const onSelect = vi.fn();
+      el.addEventListener('file-select', onSelect);
+      fileRow(el, 'button.tsx')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      expect(onSelect).toHaveBeenCalledTimes(1);
+      expect(fileRow(el, 'button.tsx')?.classList.contains('on')).toBe(true);
+      // The surrounding directories stay as they were.
+      expect(el.isDirOpen('ui')).toBe(true);
+      expect(el.isDirOpen('components')).toBe(true);
+    });
+  });
+
   describe('appearance (getComputedStyle, real Chromium)', () => {
     it('is a fixed 190px, non-shrinking column with a right divider', () => {
       const el = makeTree();

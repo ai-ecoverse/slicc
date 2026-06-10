@@ -252,11 +252,37 @@ describe('slicc-freezer-new', () => {
     expect(getComputedStyle(optionsOf(el)).display).toBe('none');
   });
 
-  it('shows the options legend when expanded', () => {
+  it('keeps the options legend hidden at rest even when expanded', () => {
     const el = mount((node) => {
       node.expanded = true;
     });
+    // No hover / focus → the legend stays hidden (revealed only on hover/focus).
+    expect(getComputedStyle(optionsOf(el)).display).toBe('none');
+  });
+
+  it('reveals the options legend on keyboard focus (focus-within) when expanded', () => {
+    const el = mount((node) => {
+      node.expanded = true;
+    });
+    buttonOf(el).focus();
     expect(getComputedStyle(optionsOf(el)).display).toBe('flex');
+    buttonOf(el).blur();
+    expect(getComputedStyle(optionsOf(el)).display).toBe('none');
+  });
+
+  it('has an expanded-hover rule that reveals the options legend', () => {
+    const el = mount((node) => {
+      node.expanded = true;
+    });
+    const sheet = (el.shadowRoot as ShadowRoot).adoptedStyleSheets[0];
+    const rules = Array.from(sheet.cssRules) as CSSStyleRule[];
+    const hoverRule = rules.find(
+      (r) =>
+        r.selectorText?.includes(':host([expanded]:hover)') &&
+        r.selectorText.includes('.fznew-options')
+    );
+    expect(hoverRule).toBeDefined();
+    expect(hoverRule?.style.display).toBe('flex');
   });
 
   it('clicking an option button fires its event immediately', () => {
@@ -278,6 +304,89 @@ describe('slicc-freezer-new', () => {
       node.expanded = true;
     });
     expect(getComputedStyle(labelOf(el)).fontWeight).toBe('500');
+  });
+
+  // --- busy / pending progress ---------------------------------------------
+
+  it('reflects the busy property to the attribute and back', () => {
+    const el = mount();
+    expect(el.busy).toBe(false);
+    el.busy = true;
+    expect(el.hasAttribute('busy')).toBe(true);
+    el.busy = false;
+    expect(el.hasAttribute('busy')).toBe(false);
+    el.setAttribute('busy', '');
+    expect(el.busy).toBe(true);
+  });
+
+  it('idle: no spinner glyph and no aria-busy on the button', () => {
+    const el = mount();
+    expect(el.shadowRoot?.querySelector('.fznew-spinner')).toBeNull();
+    expect(buttonOf(el).hasAttribute('aria-busy')).toBe(false);
+    // the default new-chat icon slot is present when idle
+    expect(badgeOf(el).querySelector('slot[name="icon"]')).toBeTruthy();
+  });
+
+  it('busy: swaps the badge glyph for a lucide spinner and sets aria-busy', () => {
+    const el = mount((node) => {
+      node.busy = true;
+    });
+    const spinner = el.shadowRoot?.querySelector('.fznew-spinner') as HTMLElement;
+    expect(spinner).toBeTruthy();
+    expect(spinner.getAttribute('part')).toBe('spinner');
+    const svg = spinner.querySelector('svg');
+    expect(svg).toBeTruthy();
+    expect(svg?.getAttribute('viewBox')).toBe('0 0 24 24');
+    expect(svg?.getAttribute('stroke')).toBe('currentColor');
+    expect(svg?.getAttribute('part')).toBe('icon');
+    // the idle square-pen icon slot is replaced while busy
+    expect(badgeOf(el).querySelector('slot[name="icon"]')).toBeNull();
+    expect(buttonOf(el).getAttribute('aria-busy')).toBe('true');
+  });
+
+  it('a single (save) click enters the busy state optimistically', () => {
+    vi.useFakeTimers();
+    try {
+      const el = mount();
+      buttonOf(el).click();
+      // Deferred during the double-click window — not busy yet.
+      expect(el.busy).toBe(false);
+      vi.advanceTimersByTime(350);
+      expect(el.busy).toBe(true);
+      expect(el.shadowRoot?.querySelector('.fznew-spinner')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('skip / erase do not enter the busy state', () => {
+    vi.useFakeTimers();
+    try {
+      const el = mount();
+      const btn = buttonOf(el);
+      btn.click();
+      btn.click(); // double click → skip
+      vi.advanceTimersByTime(500);
+      expect(el.busy).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('holds the spinner static under prefers-reduced-motion', () => {
+    const el = mount((node) => {
+      node.busy = true;
+    });
+    const sheet = (el.shadowRoot as ShadowRoot).adoptedStyleSheets[0];
+    const media = (Array.from(sheet.cssRules) as CSSRule[]).find(
+      (r): r is CSSMediaRule =>
+        r instanceof CSSMediaRule && r.conditionText.includes('prefers-reduced-motion')
+    );
+    expect(media).toBeDefined();
+    const spinRule = (Array.from(media!.cssRules) as CSSStyleRule[]).find((r) =>
+      r.selectorText?.includes('.fznew-spinner svg')
+    );
+    expect(spinRule?.style.animation).toBe('none');
   });
 
   // --- base appearance / metrics (real Chromium) ---------------------------

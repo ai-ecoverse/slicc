@@ -62,6 +62,17 @@ export const Collapsed: Story = {
   args: { ...SAMPLE },
 };
 
+/**
+ * Collapsed + hover — the icon-only strip on hover: instead of a rectangular
+ * ghost fill clashing around the lone badge, the hover affordance is a soft
+ * circular ring hugging the snowflake. Surfaced via the global Pseudo States
+ * toolbar.
+ */
+export const CollapsedHover: Story = {
+  args: { ...SAMPLE },
+  parameters: { pseudo: { hover: true } },
+};
+
 /** Thawing — the rose reopen flash: rose row + rose snowflake badge. */
 export const Thawing: Story = {
   args: { ...SAMPLE, expanded: true, thawed: true },

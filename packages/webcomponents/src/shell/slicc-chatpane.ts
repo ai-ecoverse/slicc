@@ -26,9 +26,13 @@ import { define } from '../internal/define.js';
  * composer's keyboard hint) — that forwarding happens in script, not CSS, since
  * those children own their own scoped rules.
  *
- * Everything is var-driven (`--bg` here; children theme themselves via `--ctx` /
- * `--shaderbg` / `--line` / `--ui`) so dark mode flips automatically via the
- * inherited theme scope — `--bg` darkens with no explicit dark override here.
+ * Everything is var-driven (`--bg` / `--ink` here; children theme themselves via
+ * `--ctx` / `--shaderbg` / `--line` / `--ui`) so dark mode flips automatically
+ * via the inherited theme scope — `--bg` darkens with no explicit dark override
+ * here. The column also establishes `color: var(--ink)` (the prototype's
+ * `body { color: var(--ink) }` cascade): the slotted thread/agent prose inherit
+ * it rather than setting their own, so in dark mode the agent text resolves to
+ * the bright `--ink` for strong contrast against the dark `--bg`.
  */
 const STYLE = `
 .slicc-chatpane {
@@ -39,6 +43,7 @@ const STYLE = `
   flex-direction: column;
   min-height: 0;
   font-family: var(--ui);
+  color: var(--ink);
   background: var(--bg);
   transition: width .38s cubic-bezier(.4, 0, .2, 1);
 }
