@@ -1,0 +1,8 @@
+{
+  "storyId": "chat-delegationline--feed-scoop-idle",
+  "storyTitle": "Chat/DelegationLine",
+  "subsystem": "chat",
+  "importPath": "./src/chat/slicc-delegation-line.stories.ts",
+  "comment": "This needs human readable labels. feed_scoop is too developer coded.",
+  "createdAt": "2026-06-10T13:57:00.698Z"
+}

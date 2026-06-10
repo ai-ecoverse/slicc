@@ -1,0 +1,8 @@
+{
+  "storyId": "chat-lickcard--collapsible-open",
+  "storyTitle": "Chat/LickCard",
+  "subsystem": "chat",
+  "importPath": "./src/chat/slicc-lick-card.stories.ts",
+  "comment": "licks should be right-aligned. this is important when collapsing/expanding them",
+  "createdAt": "2026-06-10T13:59:35.447Z"
+}

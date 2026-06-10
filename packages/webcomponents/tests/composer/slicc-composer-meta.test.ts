@@ -120,22 +120,23 @@ describe('slicc-composer-meta', () => {
       expect(el.model).toBe('Opus 4.8');
     });
 
-    it('defaults thinking to "bombastica"', () => {
+    it('defaults thinking to "max" (labelled "Sprofondato")', () => {
       const el = mount();
-      expect(el.thinking).toBe('bombastica');
-      expect(el.shadowRoot?.querySelector('.tlabel')?.textContent).toBe('bombastica');
+      expect(el.thinking).toBe('max');
+      expect(el.shadowRoot?.querySelector('.tlabel')?.textContent).toBe('Sprofondato');
     });
 
     it('reflects thinking and normalizes unknown values to the default', () => {
       const el = mount((e) => {
-        e.thinking = 'grande';
+        e.thinking = 'medium';
       });
-      expect(el.getAttribute('thinking')).toBe('grande');
-      expect(el.thinking).toBe('grande');
-      expect(el.shadowRoot?.querySelector('.tlabel')?.textContent).toBe('grande');
+      expect(el.getAttribute('thinking')).toBe('medium');
+      expect(el.thinking).toBe('medium');
+      // The visible label is the wetness term, not the level id.
+      expect(el.shadowRoot?.querySelector('.tlabel')?.textContent).toBe('Bagnato');
 
       el.setAttribute('thinking', 'bogus');
-      expect(el.thinking).toBe('bombastica');
+      expect(el.thinking).toBe('max');
     });
 
     it('reflects narrow', () => {
@@ -149,9 +150,9 @@ describe('slicc-composer-meta', () => {
   });
 
   describe('thinking pill variants/states', () => {
-    it('paints the violet border for the accented (bombastica) effort', () => {
+    it('paints the violet border for the accented (max) effort', () => {
       const el = mount((e) => {
-        e.thinking = 'bombastica';
+        e.thinking = 'max';
       });
       expect(el.accented).toBe(true);
       const tsel = thinkingPill(el);
@@ -159,7 +160,7 @@ describe('slicc-composer-meta', () => {
       // The .ctl.tsel.x rule mixes 35% violet into --line; a default pill keeps --line.
       const accentedBorder = getComputedStyle(tsel).borderTopColor;
 
-      el.thinking = 'grande';
+      el.thinking = 'medium';
       const plainTsel = thinkingPill(el);
       expect(plainTsel.classList.contains('x')).toBe(false);
       expect(el.accented).toBe(false);
@@ -168,15 +169,44 @@ describe('slicc-composer-meta', () => {
       expect(accentedBorder).not.toBe(plainBorder);
     });
 
-    it('renders a lucide brain <svg> tinted violet (not a hand-rolled glyph)', () => {
+    it('renders a lucide brain <svg> tinted full violet at max (not a hand-rolled glyph)', () => {
       const el = mount();
       const brain = el.shadowRoot?.querySelector('.brain') as unknown as SVGSVGElement;
-      // The thinking glyph is a real lucide <svg>, rendered via iconSvg('brain').
+      // The thinking glyph is a real lucide <svg>, rendered via iconEl('brain').
       expect(brain).toBeTruthy();
       expect(brain.tagName.toLowerCase()).toBe('svg');
       expect(brain.querySelector('path')).toBeTruthy();
-      // --violet: #8b5cf6 → rgb(139, 92, 246).
+      // Default level is max → tint is full --violet: #8b5cf6 → rgb(139, 92, 246).
       expect(getComputedStyle(brain as unknown as Element).color).toBe('rgb(139, 92, 246)');
+    });
+
+    it('tints the brain glyph to track thinking intensity (dry → violet)', () => {
+      const el = mount((e) => {
+        e.thinking = 'off';
+      });
+      const brainColor = () =>
+        getComputedStyle(el.shadowRoot?.querySelector('.brain') as unknown as Element).color;
+
+      // Bone dry (off / Secco): muted --txt-3, NOT the full violet of max.
+      const dry = brainColor();
+      expect(dry).not.toBe('rgb(139, 92, 246)');
+
+      // A mid level blends partway toward violet — distinct from both ends.
+      el.thinking = 'medium';
+      const mid = brainColor();
+      expect(mid).not.toBe(dry);
+
+      // Deepest (max / Sprofondato): full violet.
+      el.thinking = 'max';
+      expect(brainColor()).toBe('rgb(139, 92, 246)');
+      expect(mid).not.toBe('rgb(139, 92, 246)');
+    });
+
+    it('shows the level gloss as the thinking pill tooltip', () => {
+      const el = mount((e) => {
+        e.thinking = 'high';
+      });
+      expect(thinkingPill(el).getAttribute('title')).toBe('drowned — the menu item itself');
     });
 
     it('exposes the model-icon, brain, and caret ::part hooks on lucide <svg>s', () => {
@@ -333,48 +363,50 @@ describe('slicc-composer-meta', () => {
 
     it('cycles the thinking level forward (wrapping) on each click', () => {
       const el = mount((e) => {
-        e.thinking = 'bambino';
+        e.thinking = 'off';
       });
       const seen: string[] = [];
       el.addEventListener('thinking-change', (e) => {
         seen.push((e as CustomEvent).detail.thinking);
       });
 
-      // bambino → piccolo → grande → bombastica → bambino (wrap).
+      // off → low → medium → high → xhigh → max → off (wrap).
       for (let i = 0; i < THINKING_LEVELS.length; i++) thinkingPill(el).click();
 
-      expect(seen).toEqual(['piccolo', 'grande', 'bombastica', 'bambino']);
-      expect(el.thinking).toBe('bambino');
+      expect(seen).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'off']);
+      expect(el.thinking).toBe('off');
     });
 
     it('swaps the label and toggles the violet border as it cycles', () => {
       const el = mount((e) => {
-        e.thinking = 'grande';
+        e.thinking = 'xhigh';
       });
       expect(thinkingPill(el).classList.contains('x')).toBe(false);
+      expect(el.shadowRoot?.querySelector('.tlabel')?.textContent).toBe('Inzuppato');
 
-      // grande → bombastica turns the border on.
+      // xhigh → max turns the border on.
       thinkingPill(el).click();
-      expect(el.thinking).toBe('bombastica');
-      expect(el.shadowRoot?.querySelector('.tlabel')?.textContent).toBe('bombastica');
+      expect(el.thinking).toBe('max');
+      expect(el.shadowRoot?.querySelector('.tlabel')?.textContent).toBe('Sprofondato');
       expect(thinkingPill(el).classList.contains('x')).toBe(true);
 
-      // bombastica → bambino turns it back off.
+      // max → off turns it back off.
       thinkingPill(el).click();
-      expect(el.thinking).toBe('bambino');
+      expect(el.thinking).toBe('off');
+      expect(el.shadowRoot?.querySelector('.tlabel')?.textContent).toBe('Secco');
       expect(thinkingPill(el).classList.contains('x')).toBe(false);
     });
 
-    it('reports accented=true only for bombastica in the thinking-change detail', () => {
+    it('reports accented=true (with the label) only for max in the thinking-change detail', () => {
       const el = mount((e) => {
-        e.thinking = 'grande';
+        e.thinking = 'xhigh';
       });
-      let detail: { thinking: string; accented: boolean } | null = null;
+      let detail: { thinking: string; label: string; accented: boolean } | null = null;
       el.addEventListener('thinking-change', (e) => {
         detail = (e as CustomEvent).detail;
       });
-      thinkingPill(el).click(); // → bombastica
-      expect(detail).toEqual({ thinking: 'bombastica', accented: true });
+      thinkingPill(el).click(); // → max
+      expect(detail).toEqual({ thinking: 'max', label: 'Sprofondato', accented: true });
     });
 
     it('does not emit thinking-change when the model pill is clicked', () => {
@@ -395,7 +427,7 @@ describe('slicc-composer-meta', () => {
       el.remove();
       tsel.click();
       // Detached: cycling must not advance the (removed) element's state.
-      expect(el.thinking).toBe('bombastica');
+      expect(el.thinking).toBe('max');
     });
   });
 });

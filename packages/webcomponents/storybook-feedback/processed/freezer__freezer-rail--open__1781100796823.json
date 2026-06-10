@@ -1,0 +1,8 @@
+{
+  "storyId": "freezer-rail--open",
+  "storyTitle": "Freezer/Rail",
+  "subsystem": "freezer",
+  "importPath": "./src/freezer/slicc-freezer.stories.ts",
+  "comment": "the rail story does not have the collapsed to expanded wired up, so that when you open from the collapsed state, no chat titles will be shown. When you collapse from open state, no icons will be shown.",
+  "createdAt": "2026-06-10T14:13:16.823Z"
+}

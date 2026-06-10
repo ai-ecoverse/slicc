@@ -30,7 +30,7 @@ function makeComposer(): SliccComposer {
     </div>
     <div class="meta">
       <button class="ctl msel">Opus 4.8</button>
-      <button class="ctl tsel">bombastica</button>
+      <button class="ctl tsel">Sprofondato</button>
       <div class="mspacer"></div>
       <span class="hint slicc-composer__hint" data-composer-hint>⏎ send · ⇧⏎ newline</span>
     </div>`;

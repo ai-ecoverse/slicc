@@ -1,0 +1,8 @@
+{
+  "storyId": "nav-nav--default",
+  "storyTitle": "Nav/Nav",
+  "subsystem": "nav",
+  "importPath": "./src/nav/slicc-nav.stories.ts",
+  "comment": "for the sliccy pill in the nav bar, we need a couple of color explorations. the default color does not offer enough contrast with the cone SVG icon and the color looks unappealing.",
+  "createdAt": "2026-06-10T14:19:40.685Z"
+}
