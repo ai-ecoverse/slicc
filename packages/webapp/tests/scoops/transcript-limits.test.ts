@@ -83,6 +83,46 @@ describe('capTranscriptToolInput', () => {
     const input = { command: 'ls -la' };
     expect(capTranscriptToolInput(input)).toBe(input);
   });
+
+  it('caps NESTED oversized strings (MCP-style inputs) while preserving shape', () => {
+    const huge = 'n'.repeat(MAX_TRANSCRIPT_TOOL_TEXT_CHARS + 5000);
+    const input = {
+      tool: 'mcp-thing',
+      params: { content: huge, mode: 'replace' },
+    };
+    const capped = capTranscriptToolInput(input) as typeof input;
+
+    expect(capped).not.toBe(input);
+    expect(capped.params).not.toBe(input.params);
+    expect(capped.params.content.length).toBeLessThan(huge.length);
+    expect(capped.params.content).toContain('truncated');
+    expect(capped.params.mode).toBe('replace');
+    expect(capped.tool).toBe('mcp-thing');
+    // Original spine untouched.
+    expect(input.params.content).toBe(huge);
+  });
+
+  it('caps oversized strings inside arrays', () => {
+    const huge = 'a'.repeat(MAX_TRANSCRIPT_TOOL_TEXT_CHARS + 5000);
+    const input = { files: ['small.txt', huge] };
+    const capped = capTranscriptToolInput(input) as typeof input;
+
+    expect(capped.files[0]).toBe('small.txt');
+    expect(capped.files[1].length).toBeLessThan(huge.length);
+  });
+
+  it('stops descending at the depth bound (documented constraint)', () => {
+    const huge = 'd'.repeat(MAX_TRANSCRIPT_TOOL_TEXT_CHARS + 5000);
+    // 5 levels deep — one past MAX_INPUT_CAP_DEPTH (4).
+    const input = { a: { b: { c: { d: { e: huge } } } } };
+    expect(capTranscriptToolInput(input)).toBe(input);
+  });
+
+  it('is safe on cyclic inputs (depth bound terminates the walk)', () => {
+    const input: Record<string, unknown> = { command: 'ls' };
+    input.self = input;
+    expect(() => capTranscriptToolInput(input)).not.toThrow();
+  });
 });
 
 describe('capTranscriptToolResultForBuffer', () => {
@@ -133,5 +173,25 @@ describe('capTranscriptToolResultForEvent', () => {
     const huge = 'p'.repeat(MAX_TRANSCRIPT_TOOL_TEXT_CHARS + 10_000);
     const emitted = capTranscriptToolResultForEvent(huge);
     expect(emitted.length).toBeLessThan(huge.length);
+  });
+
+  it('is stateless across interleaved buffer/event calls (no shared regex lastIndex)', () => {
+    // Regression guard for the stateful-`/g`-regex review finding: a
+    // shared module-level regex would carry `lastIndex` between calls
+    // and make repeated/interleaved invocations disagree.
+    const withImage = `done\n${IMG_MARKER}`;
+    const first = capTranscriptToolResultForBuffer(withImage);
+    const interleaved = capTranscriptToolResultForEvent(
+      `${'x'.repeat(MAX_TRANSCRIPT_TOOL_TEXT_CHARS + 10)}${IMG_MARKER}`
+    );
+    const second = capTranscriptToolResultForBuffer(withImage);
+
+    expect(second).toBe(first);
+    expect(interleaved).toContain(IMG_MARKER);
+    // Ten consecutive identical calls — all identical outputs.
+    const outputs = new Set(
+      Array.from({ length: 10 }, () => capTranscriptToolResultForBuffer(withImage))
+    );
+    expect(outputs.size).toBe(1);
   });
 });

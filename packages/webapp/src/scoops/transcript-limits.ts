@@ -33,24 +33,50 @@ export function capTranscriptText(text: string, max = MAX_TRANSCRIPT_TOOL_TEXT_C
 }
 
 /**
- * Shallow-cap a tool input for the transcript: oversized string values
- * (e.g. `write_file`'s `content`) are capped while the object shape —
- * which the panel's per-tool input renderers rely on — is preserved.
- * Returns the SAME reference when nothing needed capping, and a
- * shallow copy otherwise (the original input object is owned by the
- * agent loop and must not be mutated).
+ * Maximum nesting depth {@link capTranscriptToolInput} descends into a
+ * tool-input object. MCP-style tools regularly nest payloads a couple
+ * of levels down (`{ params: { content: … } }`); four levels covers
+ * every tool shape we ship while bounding the walk on pathological /
+ * cyclic inputs. Strings nested deeper than this pass through
+ * UNCAPPED — keep oversized fields within this depth.
+ */
+const MAX_INPUT_CAP_DEPTH = 4;
+
+/**
+ * Cap a tool input for the transcript: oversized string values (e.g.
+ * `write_file`'s `content`, or an MCP tool's nested
+ * `params.content`) are capped while the object/array shape — which
+ * the panel's per-tool input renderers rely on — is preserved.
+ * Recurses to {@link MAX_INPUT_CAP_DEPTH} levels (a depth bound also
+ * makes cyclic inputs safe). Returns the SAME reference when nothing
+ * needed capping, and a copy of only the mutated spine otherwise (the
+ * original input object is owned by the agent loop and must not be
+ * mutated).
  */
 export function capTranscriptToolInput(
   input: unknown,
-  max = MAX_TRANSCRIPT_TOOL_TEXT_CHARS
+  max = MAX_TRANSCRIPT_TOOL_TEXT_CHARS,
+  depth = MAX_INPUT_CAP_DEPTH
 ): unknown {
   if (typeof input === 'string') return capTranscriptText(input, max);
-  if (input === null || typeof input !== 'object' || Array.isArray(input)) return input;
+  if (input === null || typeof input !== 'object' || depth <= 0) return input;
+  if (Array.isArray(input)) {
+    let copy: unknown[] | null = null;
+    for (let i = 0; i < input.length; i++) {
+      const capped = capTranscriptToolInput(input[i], max, depth - 1);
+      if (capped !== input[i]) {
+        copy ??= [...input];
+        copy[i] = capped;
+      }
+    }
+    return copy ?? input;
+  }
   let copy: Record<string, unknown> | null = null;
   for (const [key, value] of Object.entries(input)) {
-    if (typeof value === 'string' && value.length > max) {
+    const capped = capTranscriptToolInput(value, max, depth - 1);
+    if (capped !== value) {
       copy ??= { ...(input as Record<string, unknown>) };
-      copy[key] = capTranscriptText(value, max);
+      copy[key] = capped;
     }
   }
   return copy ?? input;
@@ -61,8 +87,15 @@ export function capTranscriptToolInput(
  * (`<img:data:image/png;base64,...>`). The live panel extracts it into
  * a transient `_screenshotDataUrl` and strips it from the stored
  * result; it is never useful — and very expensive — to persist.
+ *
+ * Exposed as a factory, NOT a shared module-level regex: `/g` regexes
+ * are stateful (`.test()` advances `lastIndex`), and a shared instance
+ * used across the test/replace/matchAll call sites below is one
+ * refactor away from returning wrong answers when two transcript ops
+ * land in the same tick. A fresh instance per call is stateless by
+ * construction and costs nothing at per-tool-call frequency.
  */
-const IMG_MARKER_RE = /<img:data:image\/[^>]+>/g;
+const imgMarkerRe = (): RegExp => /<img:data:image\/[^>]+>/g;
 
 /**
  * Cap a tool result for the BUFFERED transcript (kernel-bridge
@@ -79,10 +112,8 @@ export function capTranscriptToolResultForBuffer(
   max = MAX_TRANSCRIPT_TOOL_TEXT_CHARS
 ): string {
   if (!result) return result;
-  const hadImage = IMG_MARKER_RE.test(result);
-  IMG_MARKER_RE.lastIndex = 0;
-  if (!hadImage) return capTranscriptText(result, max);
-  const stripped = result.replace(IMG_MARKER_RE, '').trim();
+  if (!imgMarkerRe().test(result)) return capTranscriptText(result, max);
+  const stripped = result.replace(imgMarkerRe(), '').trim();
   const capped = capTranscriptText(stripped, max);
   return capped.length > 0 ? `${capped}\n[screenshot omitted from transcript]` : '[screenshot]';
 }
@@ -99,15 +130,11 @@ export function capTranscriptToolResultForEvent(
 ): string {
   if (result.length <= max) return result;
   // Fast path: no images — plain text cap.
-  if (!IMG_MARKER_RE.test(result)) {
-    IMG_MARKER_RE.lastIndex = 0;
-    return capTranscriptText(result, max);
-  }
-  IMG_MARKER_RE.lastIndex = 0;
+  if (!imgMarkerRe().test(result)) return capTranscriptText(result, max);
   // Keep markers intact; cap each text segment between them.
   const parts: string[] = [];
   let last = 0;
-  for (const m of result.matchAll(IMG_MARKER_RE)) {
+  for (const m of result.matchAll(imgMarkerRe())) {
     parts.push(capTranscriptText(result.slice(last, m.index), max));
     parts.push(m[0]);
     last = (m.index ?? 0) + m[0].length;
