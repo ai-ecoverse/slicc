@@ -207,7 +207,50 @@ describe('slicc-composer-meta', () => {
   });
 
   describe('behavior / events', () => {
-    it('emits a composed, bubbling model-change when the model pill is clicked', () => {
+    it('opens the model dropdown (upward) on pill click — not an immediate model-change', () => {
+      const el = mount((e) => {
+        e.model = 'Opus 4.8';
+      });
+      let fired = false;
+      el.addEventListener('model-change', () => {
+        fired = true;
+      });
+      expect(el.menuOpen).toBe(false);
+      modelPill(el).click();
+      // The pill toggles the menu open; nothing is committed yet.
+      expect(el.menuOpen).toBe(true);
+      expect(modelPill(el).getAttribute('aria-expanded')).toBe('true');
+      expect(el.shadowRoot?.querySelector('.mwrap.open')).not.toBeNull();
+      expect(fired).toBe(false);
+      // The menu opens UPWARD (its bottom is anchored above the pill).
+      const menu = el.shadowRoot?.querySelector('.menu') as HTMLElement;
+      expect(getComputedStyle(menu).bottom).not.toBe('auto');
+    });
+
+    it('lists the model options with the current one ticked, defaulting to Opus/Sonnet/Haiku', () => {
+      const el = mount((e) => {
+        e.model = 'Sonnet 4.6';
+      });
+      modelPill(el).click();
+      const items = [...(el.shadowRoot?.querySelectorAll('.mitem') ?? [])];
+      expect(items.map((i) => i.getAttribute('data-model'))).toEqual([
+        'Opus 4.8',
+        'Sonnet 4.6',
+        'Haiku 4.5',
+      ]);
+      const selected = el.shadowRoot?.querySelector('.mitem[aria-selected="true"]');
+      expect(selected?.getAttribute('data-model')).toBe('Sonnet 4.6');
+    });
+
+    it('honours a custom models list', () => {
+      const el = mount();
+      el.models = ['gpt-5', 'o4'];
+      modelPill(el).click();
+      const items = [...(el.shadowRoot?.querySelectorAll('.mitem') ?? [])];
+      expect(items.map((i) => i.textContent?.trim())).toEqual(['gpt-5', 'o4']);
+    });
+
+    it('selecting a row sets model, closes the menu, and emits model-change', () => {
       const el = mount((e) => {
         e.model = 'Opus 4.8';
       });
@@ -216,7 +259,28 @@ describe('slicc-composer-meta', () => {
         detail = (e as CustomEvent).detail;
       });
       modelPill(el).click();
-      expect(detail).toEqual({ model: 'Opus 4.8' });
+      const haiku = el.shadowRoot?.querySelector(
+        '.mitem[data-model="Haiku 4.5"]'
+      ) as HTMLButtonElement;
+      haiku.click();
+      expect(el.model).toBe('Haiku 4.5');
+      expect(el.menuOpen).toBe(false);
+      expect(detail).toEqual({ model: 'Haiku 4.5' });
+    });
+
+    it('closes the model dropdown on an outside mousedown', () => {
+      const el = mount();
+      modelPill(el).click();
+      expect(el.menuOpen).toBe(true);
+      document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, composed: true }));
+      expect(el.menuOpen).toBe(false);
+    });
+
+    it('closes the model dropdown on Escape', () => {
+      const el = mount();
+      modelPill(el).click();
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      expect(el.menuOpen).toBe(false);
     });
 
     it('cycles the thinking level forward (wrapping) on each click', () => {
