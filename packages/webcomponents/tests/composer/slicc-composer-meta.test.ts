@@ -233,39 +233,87 @@ describe('slicc-composer-meta', () => {
       });
       modelPill(el).click();
       const items = [...(el.shadowRoot?.querySelectorAll('.mitem') ?? [])];
-      expect(items.map((i) => i.getAttribute('data-model'))).toEqual([
+      expect(items.map((i) => i.querySelector('.mname')?.textContent)).toEqual([
         'Opus 4.8',
         'Sonnet 4.6',
         'Haiku 4.5',
       ]);
       const selected = el.shadowRoot?.querySelector('.mitem[aria-selected="true"]');
-      expect(selected?.getAttribute('data-model')).toBe('Sonnet 4.6');
+      expect(selected?.querySelector('.mname')?.textContent).toBe('Sonnet 4.6');
     });
 
-    it('honours a custom models list', () => {
+    it('shows each row as model name + provider (the webapp two-part label)', () => {
       const el = mount();
-      el.models = ['gpt-5', 'o4'];
+      modelPill(el).click();
+      const first = el.shadowRoot?.querySelector('.mitem');
+      expect(first?.querySelector('.mname')?.textContent).toBe('Opus 4.8');
+      expect(first?.querySelector('.mprov')?.textContent).toBe('Anthropic');
+    });
+
+    it('honours a custom models list (bare strings or {name,provider,id})', () => {
+      const el = mount();
+      el.models = ['gpt-5', { name: 'o4', provider: 'OpenAI', id: 'o4-mini' }];
       modelPill(el).click();
       const items = [...(el.shadowRoot?.querySelectorAll('.mitem') ?? [])];
-      expect(items.map((i) => i.textContent?.trim())).toEqual(['gpt-5', 'o4']);
+      expect(items.map((i) => i.querySelector('.mname')?.textContent)).toEqual(['gpt-5', 'o4']);
+      expect(items[1].querySelector('.mprov')?.textContent).toBe('OpenAI');
     });
 
-    it('selecting a row sets model, closes the menu, and emits model-change', () => {
+    it('selecting a row sets model, closes the menu, and emits model-change with provider + id', () => {
       const el = mount((e) => {
         e.model = 'Opus 4.8';
       });
-      let detail: { model: string } | null = null;
+      let detail: { model: string; provider?: string; id?: string } | null = null;
       el.addEventListener('model-change', (e) => {
         detail = (e as CustomEvent).detail;
       });
       modelPill(el).click();
       const haiku = el.shadowRoot?.querySelector(
-        '.mitem[data-model="Haiku 4.5"]'
+        '.mitem[data-id="claude-haiku-4-5"]'
       ) as HTMLButtonElement;
       haiku.click();
       expect(el.model).toBe('Haiku 4.5');
       expect(el.menuOpen).toBe(false);
-      expect(detail).toEqual({ model: 'Haiku 4.5' });
+      expect(detail).toEqual({ model: 'Haiku 4.5', provider: 'Anthropic', id: 'claude-haiku-4-5' });
+    });
+
+    it('grows a type-ahead search for a long list and filters by name + provider', () => {
+      const el = mount();
+      el.models = [
+        { name: 'Opus 4.8', provider: 'Anthropic' },
+        { name: 'Sonnet 4.6', provider: 'Anthropic' },
+        { name: 'Haiku 4.5', provider: 'Anthropic' },
+        { name: 'GPT-5', provider: 'OpenAI' },
+        { name: 'GPT-5 mini', provider: 'OpenAI' },
+        { name: 'o4', provider: 'OpenAI' },
+        { name: 'Gemini 2.5 Pro', provider: 'Google' },
+        { name: 'Gemini 2.5 Flash', provider: 'Google' },
+        { name: 'Llama 4', provider: 'Meta' },
+      ];
+      modelPill(el).click();
+      const search = el.shadowRoot?.querySelector('.msearch') as HTMLInputElement;
+      expect(search).not.toBeNull();
+      // Filter by provider name.
+      search.value = 'openai';
+      search.dispatchEvent(new Event('input'));
+      let names = [...(el.shadowRoot?.querySelectorAll('.mname') ?? [])].map((n) => n.textContent);
+      expect(names).toEqual(['GPT-5', 'GPT-5 mini', 'o4']);
+      // Filter by model name.
+      search.value = 'gemini';
+      search.dispatchEvent(new Event('input'));
+      names = [...(el.shadowRoot?.querySelectorAll('.mname') ?? [])].map((n) => n.textContent);
+      expect(names).toEqual(['Gemini 2.5 Pro', 'Gemini 2.5 Flash']);
+      // No match → empty state.
+      search.value = 'zzz';
+      search.dispatchEvent(new Event('input'));
+      expect(el.shadowRoot?.querySelectorAll('.mitem').length).toBe(0);
+      expect(el.shadowRoot?.querySelector('.mempty')).not.toBeNull();
+    });
+
+    it('does not show the search box for a short list', () => {
+      const el = mount();
+      modelPill(el).click();
+      expect(el.shadowRoot?.querySelector('.msearch')).toBeNull();
     });
 
     it('closes the model dropdown on an outside mousedown', () => {

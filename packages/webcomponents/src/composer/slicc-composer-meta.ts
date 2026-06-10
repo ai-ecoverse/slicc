@@ -21,8 +21,37 @@ const ACCENTED_LEVEL: ThinkingLevel = 'bombastica';
 /** The default model label shown in the model pill when no `model` is set. */
 const DEFAULT_MODEL = 'Opus 4.8';
 
+/**
+ * A model option in the dropdown. A bare string is shorthand for `{ name }`;
+ * the object form adds the provider label (shown as the row's secondary line,
+ * mirroring the webapp's `chat__model-btn-provider`) and a stable `id`.
+ */
+export interface ModelOption {
+  /** Model display name — the pill label + the row's primary text. */
+  name: string;
+  /** Provider label, e.g. "Anthropic" / "OpenAI" — the row's secondary line. */
+  provider?: string;
+  /** Stable model id, forwarded on `model-change` (defaults to `name`). */
+  id?: string;
+}
+
 /** Default model options offered in the dropdown when `models` is not supplied. */
-const DEFAULT_MODELS: readonly string[] = ['Opus 4.8', 'Sonnet 4.6', 'Haiku 4.5'];
+const DEFAULT_MODELS: readonly ModelOption[] = [
+  { name: 'Opus 4.8', provider: 'Anthropic', id: 'claude-opus-4-8' },
+  { name: 'Sonnet 4.6', provider: 'Anthropic', id: 'claude-sonnet-4-6' },
+  { name: 'Haiku 4.5', provider: 'Anthropic', id: 'claude-haiku-4-5' },
+];
+
+/** Show the type-ahead search box once the option list grows past this many rows. */
+const SEARCH_THRESHOLD = 8;
+
+/** Normalize a string|ModelOption into a full ModelOption (id falls back to name). */
+function normalizeModel(
+  m: string | ModelOption
+): Required<Pick<ModelOption, 'name' | 'id'>> & ModelOption {
+  const o = typeof m === 'string' ? { name: m } : m;
+  return { ...o, name: o.name, id: o.id ?? o.name };
+}
 
 /** The default thinking level (prototype starts at index 3 = `bombastica`). */
 const DEFAULT_THINKING: ThinkingLevel = 'bombastica';
@@ -130,12 +159,20 @@ const STYLE = `
     padding:5px;opacity:0;transform:translateY(4px);pointer-events:none;
     transition:opacity .12s ease,transform .12s ease;z-index:20;}
   .mwrap.open .menu{opacity:1;transform:none;pointer-events:auto;}
-  .mitem{display:flex;align-items:center;gap:8px;width:100%;padding:7px 10px;border:none;
+  /* type-ahead search (shown when the list is long) */
+  .msearch{width:100%;box-sizing:border-box;margin:0 0 5px;padding:6px 9px;border:1px solid var(--line);
+    border-radius:7px;background:var(--ghost);color:var(--ink);font:inherit;font-size:12.5px;outline:none;}
+  .msearch:focus{border-color:var(--accent,#3b63fb);}
+  .mlist{display:flex;flex-direction:column;max-height:240px;overflow-y:auto;}
+  .mitem{display:flex;align-items:center;gap:10px;width:100%;padding:7px 10px;border:none;
     background:transparent;color:var(--ink);font:inherit;font-size:12.5px;border-radius:7px;
     cursor:pointer;text-align:left;white-space:nowrap;}
   .mitem:hover,.mitem:focus-visible{background:var(--ghost);outline:none;}
+  .mitem .mname{min-width:0;overflow:hidden;text-overflow:ellipsis;}
+  .mitem .mprov{margin-left:6px;color:var(--txt-3);font-size:11px;}
   .mitem .tick{margin-left:auto;display:inline-flex;color:var(--violet);visibility:hidden;}
   .mitem[aria-selected="true"] .tick{visibility:visible;}
+  .mempty{padding:10px;color:var(--txt-3);font-size:12px;text-align:center;}
   @media (prefers-reduced-motion: reduce){.menu,.ctl .cx svg{transition:none;}}
   .mspacer{flex:1;}
   .hint{font-size:11px;color:var(--txt-3);display:inline-flex;align-items:center;gap:7px;}
@@ -159,12 +196,16 @@ const SHEET = sheet(STYLE);
  * `<svg>` rendered through the shared `iconEl` helper — never an emoji or a
  * bespoke unicode-symbol glyph.
  *
- * Clicking the model pill emits a composed `model-change`; clicking the
- * thinking pill cycles forward through the gelateria effort levels
- * (`bambino → piccolo → grande → bombastica → …`), swaps the label, toggles the
- * violet border for the accented (`bombastica`) level, and emits a composed
- * `thinking-change`. Set `narrow` to hide the hint for a tight chat column
- * (the prototype's `.shell.open .meta .hint{display:none}`).
+ * Clicking the model pill opens a dropdown (popping UP, since the row sits at the
+ * composer's bottom edge) of `models` — each row a model name + provider label
+ * (mirroring the webapp), with the current one ticked; a list longer than eight
+ * grows a type-ahead search (filter by name + provider, like the add-menu).
+ * Choosing a row sets `model` and emits a composed `model-change`
+ * (`{ model, provider, id }`). Clicking the thinking pill cycles forward through
+ * the gelateria effort levels (`bambino → piccolo → grande → bombastica → …`),
+ * swaps the label, toggles the violet border for the accented (`bombastica`)
+ * level, and emits a composed `thinking-change`. Set `narrow` to hide the hint
+ * for a tight chat column (the prototype's `.shell.open .meta .hint{display:none}`).
  *
  * Self-contained shadow DOM; themes via inherited tokens (no token is
  * re-declared here).
@@ -172,7 +213,10 @@ const SHEET = sheet(STYLE);
  * @attr model - model label shown in the model pill (default "Opus 4.8")
  * @attr thinking - thinking effort level; one of `bambino|piccolo|grande|bombastica` (default `bombastica`)
  * @attr narrow - boolean; hides the keyboard hint for a narrow chat column
- * @fires model-change - `{detail:{model}}` when the model pill is clicked
+ * @prop {Array<string|ModelOption>} models - the dropdown options (name + provider + id)
+ * @fires model-change - `{detail:{model,provider,id}}` when a model row is chosen
+ * @csspart model-menu - the model dropdown panel
+ * @csspart model-search - the type-ahead search input (shown for long lists)
  * @fires thinking-change - `{detail:{thinking,accented}}` when the thinking pill cycles
  * @csspart meta - the row container
  * @csspart model - the model-select pill button
@@ -192,8 +236,10 @@ export class SliccComposerMeta extends HTMLElement {
   #modelEl: HTMLButtonElement | null = null;
   #thinkingEl: HTMLButtonElement | null = null;
   #mwrapEl: HTMLElement | null = null;
-  #models: string[] | null = null;
+  #listEl: HTMLElement | null = null;
+  #models: (string | ModelOption)[] | null = null;
   #menuOpen = false;
+  #query = '';
 
   #onDocDown = (e: MouseEvent): void => {
     if (this.#menuOpen && !e.composedPath().includes(this)) this.#closeMenu();
@@ -237,17 +283,23 @@ export class SliccComposerMeta extends HTMLElement {
   }
 
   /**
-   * The model options offered in the dropdown. Defaults to a built-in list
-   * (Opus / Sonnet / Haiku) when not set. Assigning replaces the list and, if the
-   * menu is open, re-renders it.
+   * The model options offered in the dropdown — bare names or `{ name, provider,
+   * id }` objects. Defaults to a built-in Anthropic list when not set. Assigning
+   * replaces the list and re-renders. A list longer than {@link SEARCH_THRESHOLD}
+   * grows a type-ahead search box (filtering by model name + provider).
    */
-  get models(): string[] {
-    return (this.#models ?? [...DEFAULT_MODELS]).slice();
+  get models(): (string | ModelOption)[] {
+    return (this.#models ?? [...DEFAULT_MODELS]).map((m) => (typeof m === 'string' ? m : { ...m }));
   }
 
-  set models(value: string[]) {
+  set models(value: (string | ModelOption)[]) {
     this.#models = Array.isArray(value) ? value.slice() : null;
     if (this.isConnected) this.#render();
+  }
+
+  /** The normalized, fully-resolved model options (id always present). */
+  get #normModels(): ReturnType<typeof normalizeModel>[] {
+    return (this.#models ?? DEFAULT_MODELS).map(normalizeModel);
   }
 
   /**
@@ -302,22 +354,27 @@ export class SliccComposerMeta extends HTMLElement {
       h('span', { class: 'cx' }, caretIcon())
     );
     const menu = h('div', { class: 'menu', part: 'model-menu', role: 'menu' });
-    for (const m of this.models) {
-      const selected = m === model;
-      const item = h(
-        'button',
-        {
-          type: 'button',
-          class: 'mitem',
-          role: 'menuitemradio',
-          'data-model': m,
-          'aria-selected': selected ? 'true' : 'false',
-        },
-        m,
-        h('span', { class: 'tick' }, iconEl('check', { size: 14 }))
-      );
-      menu.append(item);
+    // A long option list grows a type-ahead search box (mirrors the composer
+    // add-menu's filter), filtering rows by model name + provider as you type.
+    if (this.#normModels.length > SEARCH_THRESHOLD) {
+      const search = h('input', {
+        class: 'msearch',
+        part: 'model-search',
+        type: 'text',
+        placeholder: 'Search models…',
+        'aria-label': 'Search models',
+      }) as HTMLInputElement;
+      search.value = this.#query;
+      search.addEventListener('input', () => {
+        this.#query = search.value;
+        this.#renderModelList();
+      });
+      // Don't let a click inside the field bubble to the pill's toggle handler.
+      search.addEventListener('click', (e) => e.stopPropagation());
+      menu.append(search);
     }
+    this.#listEl = h('div', { class: 'mlist', role: 'none' });
+    menu.append(this.#listEl);
     const mwrap = h('div', { class: 'mwrap' }, modelBtn, menu);
 
     const thinkingBtn = h(
@@ -356,9 +413,44 @@ export class SliccComposerMeta extends HTMLElement {
     this.#mwrapEl = mwrap;
     this.#modelEl = this.#root.querySelector('.msel');
     this.#thinkingEl = this.#root.querySelector('.tsel');
+    this.#renderModelList();
     // A re-render (e.g. an attribute change) preserves the open menu state.
     this.#reflectMenu();
     this.#bind();
+  }
+
+  /** (Re)build the filtered option rows into `.mlist` (keeps the search field's
+   *  focus intact — only the list is rebuilt, not the input). */
+  #renderModelList(): void {
+    const list = this.#listEl;
+    if (!list) return;
+    const q = this.#query.trim().toLowerCase();
+    const match = (m: ModelOption) =>
+      !q || `${m.name} ${m.provider ?? ''}`.toLowerCase().includes(q);
+    const rows = this.#normModels.filter(match);
+    const current = this.model;
+    const nodes: HTMLElement[] = [];
+    for (const m of rows) {
+      const selected = m.name === current;
+      const row = h(
+        'button',
+        {
+          type: 'button',
+          class: 'mitem',
+          role: 'menuitemradio',
+          'data-id': m.id,
+          'aria-selected': selected ? 'true' : 'false',
+        },
+        h('span', { class: 'mname' }, m.name),
+        m.provider ? h('span', { class: 'mprov' }, m.provider) : false,
+        h('span', { class: 'tick' }, iconEl('check', { size: 14 }))
+      );
+      row.addEventListener('click', () => this.#selectModel(m.id));
+      nodes.push(row);
+    }
+    list.replaceChildren(
+      ...(nodes.length ? nodes : [h('div', { class: 'mempty' }, 'No models match.')])
+    );
   }
 
   #bind(): void {
@@ -369,9 +461,6 @@ export class SliccComposerMeta extends HTMLElement {
         this.#toggleMenu();
       };
       this.#modelEl.addEventListener('click', this.#onModelClick);
-    }
-    for (const item of this.#root.querySelectorAll<HTMLButtonElement>('.mitem')) {
-      item.addEventListener('click', () => this.#selectModel(item.dataset.model ?? this.model));
     }
     if (this.#thinkingEl) {
       this.#onThinkingClick = () => this.#cycleThinking();
@@ -391,6 +480,7 @@ export class SliccComposerMeta extends HTMLElement {
     this.#modelEl = null;
     this.#thinkingEl = null;
     this.#mwrapEl = null;
+    this.#listEl = null;
   }
 
   /** Whether the model dropdown is open. */
@@ -405,7 +495,15 @@ export class SliccComposerMeta extends HTMLElement {
   #openMenu(): void {
     if (this.#menuOpen) return;
     this.#menuOpen = true;
+    // Start each open with a cleared filter, then focus the search box (if shown).
+    this.#query = '';
+    this.#renderModelList();
     this.#reflectMenu();
+    const search = this.#root.querySelector<HTMLInputElement>('.msearch');
+    if (search) {
+      search.value = '';
+      requestAnimationFrame(() => search.focus());
+    }
     document.addEventListener('mousedown', this.#onDocDown);
     document.addEventListener('keydown', this.#onKey, true);
   }
@@ -424,13 +522,19 @@ export class SliccComposerMeta extends HTMLElement {
     this.#modelEl?.setAttribute('aria-expanded', this.#menuOpen ? 'true' : 'false');
   }
 
-  /** Commit a model choice: set `model`, close the menu, and emit `model-change`. */
-  #selectModel(model: string): void {
+  /** Commit a model choice (by id): set `model` to its name, close the menu, and
+   *  emit `model-change` with `{ model, provider, id }`. */
+  #selectModel(id: string): void {
+    const picked = this.#normModels.find((m) => m.id === id) ?? {
+      name: id,
+      id,
+      provider: undefined,
+    };
     this.#closeMenu();
-    if (model !== this.model) this.model = model; // re-renders via attributeChangedCallback
+    if (picked.name !== this.model) this.model = picked.name; // re-renders via attributeChangedCallback
     this.dispatchEvent(
       new CustomEvent('model-change', {
-        detail: { model },
+        detail: { model: picked.name, provider: picked.provider, id: picked.id },
         bubbles: true,
         composed: true,
       })

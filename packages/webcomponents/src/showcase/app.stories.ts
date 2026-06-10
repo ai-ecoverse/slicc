@@ -206,7 +206,20 @@ function chatpane(narrow: boolean): HTMLElement {
     model: 'Opus 4.8',
     thinking: 'bombastica',
     ...(narrow ? { narrow: '' } : {}),
-  });
+  }) as HTMLElement & { models?: unknown };
+  // A multi-provider list — rows show model + provider, and the long list grows
+  // a type-ahead search (like the composer add-menu).
+  (meta as { models?: unknown }).models = [
+    { name: 'Opus 4.8', provider: 'Anthropic', id: 'claude-opus-4-8' },
+    { name: 'Sonnet 4.6', provider: 'Anthropic', id: 'claude-sonnet-4-6' },
+    { name: 'Haiku 4.5', provider: 'Anthropic', id: 'claude-haiku-4-5' },
+    { name: 'GPT-5', provider: 'OpenAI', id: 'gpt-5' },
+    { name: 'GPT-5 mini', provider: 'OpenAI', id: 'gpt-5-mini' },
+    { name: 'o4', provider: 'OpenAI', id: 'o4' },
+    { name: 'Gemini 2.5 Pro', provider: 'Google', id: 'gemini-2.5-pro' },
+    { name: 'Gemini 2.5 Flash', provider: 'Google', id: 'gemini-2.5-flash' },
+    { name: 'Firefly Image 4', provider: 'Adobe', id: 'firefly-image-4' },
+  ];
   composer.append(card, meta);
 
   pane.append(thread(), composer);
