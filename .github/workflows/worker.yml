@@ -39,11 +39,18 @@ jobs:
       - name: Build and push e2b template
         env:
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+          # TEMPORARY: the Adobe e2b team account is out of build credits, so
+          # `Template.build` fails (403 team is blocked) and aborts this job.
+          # This flag makes build-template.sh no-op (exit 0). Remove once e2b
+          # credits are restored (see release.yml for the matching note).
+          SLICC_SKIP_E2B_TEMPLATE: '1'
         run: bash packages/dev-tools/e2b-template/scripts/build-template.sh
 
       - name: Verify template boots
         env:
           SLICC_TEST_E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+          # TEMPORARY: see above — skip e2b verification boot while out of credits.
+          SLICC_SKIP_E2B_TEMPLATE: '1'
         run: bash packages/dev-tools/e2b-template/scripts/verify-template.sh
 
       - name: Deploy production worker (attempt 1)
