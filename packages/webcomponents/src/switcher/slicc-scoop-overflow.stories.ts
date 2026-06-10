@@ -100,3 +100,14 @@ export const Dark: Story = {
   args: { open: true },
   globals: { theme: 'dark' },
 };
+
+/**
+ * Narrow / mobile viewport — pick the mobile viewport from the toolbar. A
+ * `<slicc-pill>` compacts to icon-only at ≤560px by default, but the overflow
+ * dropdown stacks the chips column-wise with ample horizontal room, so it keeps
+ * them in their WIDE, labeled form here (the redundant hover tip is suppressed).
+ */
+export const Narrow: Story = {
+  args: { open: true },
+  parameters: { viewport: { defaultViewport: 'mobile1' } },
+};
