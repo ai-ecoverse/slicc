@@ -222,6 +222,50 @@ describe('skill/upskill command compatibility discovery', () => {
     expect(result.stdout).toContain('local-agent-skill');
     expect(result.stdout).toContain('.agents');
   });
+
+  it('skill list shows marketplace as source for marketplace skills', async () => {
+    // Set up a marketplace plugin: a .claude-plugin/marketplace.json that points
+    // to a local plugin directory containing a skills sub-tree.
+    await fs.mkdir('/repo/.claude-plugin', { recursive: true });
+    await fs.writeFile(
+      '/repo/.claude-plugin/marketplace.json',
+      JSON.stringify({ plugins: [{ source: './plugins/market-tools' }] })
+    );
+    await fs.mkdir('/repo/plugins/market-tools/skills/my-market-skill', { recursive: true });
+    await fs.writeFile(
+      '/repo/plugins/market-tools/skills/my-market-skill/SKILL.md',
+      '---\nname: my-market-skill\ndescription: A marketplace skill\n---\n# My Market Skill\n'
+    );
+
+    const result = await createSkillCommand(fs).execute(['list'], createMockCtx() as never);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('my-market-skill');
+    expect(result.stdout).toContain('marketplace');
+  });
+
+  it('skill info shows Source: marketplace for marketplace skill', async () => {
+    // Same marketplace layout: .claude-plugin/marketplace.json points to a local plugin dir.
+    await fs.mkdir('/repo/.claude-plugin', { recursive: true });
+    await fs.writeFile(
+      '/repo/.claude-plugin/marketplace.json',
+      JSON.stringify({ plugins: [{ source: './plugins/market-tools' }] })
+    );
+    await fs.mkdir('/repo/plugins/market-tools/skills/my-market-skill', { recursive: true });
+    await fs.writeFile(
+      '/repo/plugins/market-tools/skills/my-market-skill/SKILL.md',
+      '---\nname: my-market-skill\ndescription: A marketplace skill\n---\n# My Market Skill\n'
+    );
+
+    const result = await createSkillCommand(fs).execute(
+      ['info', 'my-market-skill'],
+      createMockCtx() as never
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Skill: my-market-skill');
+    expect(result.stdout).toContain('Source: marketplace');
+  });
 });
 
 describe('upskill command GitHub flows', () => {
