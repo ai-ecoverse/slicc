@@ -91,6 +91,40 @@ export const TesterSource: Story = {
   },
 };
 
+/** `＋ Spun up researcher` — the scoop_scoop action, humanized to "Spun up". */
+export const ScoopScoop: Story = {
+  args: {
+    kind: 'scoop',
+    hue: '#06b6d4',
+    scoop: 'researcher',
+    label: '· to audit the hero',
+  },
+};
+
+/** `✓ Wrapped up tester` — the drop_scoop action, humanized to "Wrapped up". */
+export const DropScoop: Story = {
+  args: {
+    kind: 'drop',
+    hue: '#f59e0b',
+    scoop: 'tester',
+    label: '· all checks green',
+  },
+};
+
+/**
+ * Passing the raw internal tool name through `verb` still renders the friendly
+ * phrase — `feed_scoop` is mapped to `Delegated to`, never shown developer-coded.
+ */
+export const RawActionNameHumanized: Story = {
+  args: {
+    kind: 'feed',
+    hue: '#8b5cf6',
+    verb: 'feed_scoop',
+    scoop: 'designer',
+    label: '· warm the hero',
+  },
+};
+
 /** `✦ designer opened Hero studio · interactive sprinkle` — a sprinkle-opened event line. */
 export const SprinkleOpened: Story = {
   args: {
