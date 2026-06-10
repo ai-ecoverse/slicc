@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
+import { h } from '../internal/dom.js';
 // Full-app showcase — compose the whole SLICC surface from its web components.
 // Import every element used so it is registered when the story renders.
 import '../chat/slicc-action-card.js';
@@ -78,6 +79,13 @@ const FROZEN = [
   { title: 'palette token audit', meta: '3d ago · 12 turns', slug: 'palette' },
 ];
 
+/**
+ * Ice-blue freezer-context accent — the prototype's `_ctxAccent` for `freezer:`
+ * contexts (`proto/StellarRubySwift.html` `switchContext`). Drives the freezer
+ * preview's `--ctx` wash, the `slicc-freezer[ctx]` chrome, and the frost shader.
+ */
+const FREEZER_TINT = '#3b6cb2';
+
 function el<T extends HTMLElement>(
   tag: string,
   attrs: Record<string, string> = {},
@@ -122,6 +130,49 @@ function thread(): HTMLElement {
   );
   const dip = el('slicc-dip', { name: 'palette.shtml', hue: '#8b5cf6' });
   t.append(el('slicc-day-separator', { label: 'Today' }), u1, a1, d1, row, card, lick, u2, a2, dip);
+  return t;
+}
+
+/**
+ * A scoop's isolated history thread — its own sandboxed conversation, accented
+ * with the scoop's hue (prototype `buildScoopStub`). Built innerHTML-free via
+ * `h()` so the preview swap carries no injection surface. `data-scoop` tags it
+ * for the showcase tests.
+ */
+function scoopThread(key: string, color: string, label: string): HTMLElement {
+  const t = el('slicc-chat-thread', { context: `scoop:${key}`, accent: color, 'data-scoop': key });
+  const a = el('slicc-agent-message');
+  a.append(
+    h(
+      'p',
+      null,
+      `Isolated ${label} scoop — its own sandboxed VFS and conversation. Switch back to sliccy · cone to see the orchestration.`
+    )
+  );
+  t.append(el('slicc-day-separator', { label: `${label} scoop` }), a);
+  return t;
+}
+
+/**
+ * A frozen past session's thawed history thread, accented ice-blue (prototype
+ * `buildFrozenStub`). Built innerHTML-free via `h()`; `data-frozen` tags it for
+ * the showcase tests.
+ */
+function frozenThread(slug: string, title: string, metaLine: string): HTMLElement {
+  const t = el('slicc-chat-thread', {
+    context: `freezer:${slug}`,
+    accent: FREEZER_TINT,
+    'data-frozen': slug,
+  });
+  const a = el('slicc-agent-message');
+  a.append(
+    h(
+      'p',
+      null,
+      `Thawed: ${title}. This past session is parked in the freezer — its chat history would resume here.`
+    )
+  );
+  t.append(el('slicc-day-separator', { label: metaLine }), a);
   return t;
 }
 
@@ -274,12 +325,17 @@ function workbench(open: boolean): HTMLElement {
   return wb;
 }
 
+/** An initial preview state to enter on render (scoop chip or frozen session). */
+type AppPreview = { kind: 'scoop'; key: string } | { kind: 'freezer'; slug: string };
+
 /** Layout knobs for {@link app}: whether the workbench and the freezer rail are open. */
 interface AppOpts {
   /** Workbench expanded (chat narrows to 34%); mirrors the prototype `.shell.open`. */
   workbench: boolean;
   /** Freezer rail expanded to 260px; mirrors the prototype `body.freezer-open`. */
   freezer: boolean;
+  /** Optional preview state to enter immediately (scoop-preview / freezer-preview). */
+  preview?: AppPreview;
 }
 
 /**
@@ -348,6 +404,93 @@ function app(opts: AppOpts): HTMLElement {
   appCol.append(topnav(), shell);
   frame.append(appCol);
 
+  // ---- preview controller: freezer-preview / scoop-preview ------------------
+  // Clicking a frozen session card or a scoop chip swaps the surface into a
+  // read-only "preview" of that context (the prototype's `switchContext`): the
+  // background shader program + tint change, a full-surface `--ctx` wash tints
+  // the UI, the frozen / scoop history thread replaces the live cone thread, and
+  // the composer is hidden (the conversation is frozen / driven by the cone).
+  // Clicking the cone chip returns to the live state.
+  const tintWash = el('div');
+  tintWash.className = 'sc-tint';
+  tintWash.setAttribute('aria-hidden', 'true');
+  tintWash.style.cssText =
+    'position:absolute;inset:0;z-index:2;pointer-events:none;opacity:0;' +
+    'transition:opacity .4s cubic-bezier(.4,0,.2,1);';
+  frame.append(tintWash);
+
+  // The live cone thread instance — retained so returning to live restores it.
+  const coneThread = pane.querySelector(':scope > slicc-chat-thread') as HTMLElement;
+
+  function setThread(next: HTMLElement): void {
+    const current = pane.querySelector(':scope > slicc-chat-thread');
+    if (current && current !== next) current.replaceWith(next);
+  }
+
+  function setActiveChip(key: string | null): void {
+    const sw = frame.querySelector('slicc-scoop-switcher');
+    if (key == null) sw?.removeAttribute('active');
+    else sw?.setAttribute('active', key);
+  }
+
+  function setComposerHidden(hidden: boolean): void {
+    const composer = pane.querySelector(':scope > slicc-composer');
+    composer?.toggleAttribute('hidden', hidden);
+  }
+
+  function toLive(): void {
+    frame.removeAttribute('data-preview');
+    tintWash.style.opacity = '0';
+    frame.style.removeProperty('--ctx');
+    shader.setAttribute('mode', 'cone');
+    shader.setAttribute('tint', 'var(--waffle)');
+    freezer.removeAttribute('ctx');
+    setComposerHidden(false);
+    setThread(coneThread);
+    setActiveChip(null);
+  }
+
+  function toScoop(key: string): void {
+    const s = SCOOPS.find((x) => x.key === key);
+    if (!s) return;
+    frame.setAttribute('data-preview', 'scoop');
+    frame.style.setProperty('--ctx', s.color);
+    tintWash.style.backgroundColor = s.color;
+    tintWash.style.opacity = '0.16';
+    // The swirl ("scoop") shader, tinted to the scoop's primary color.
+    shader.setAttribute('mode', 'scoop');
+    shader.setAttribute('tint', s.color);
+    freezer.removeAttribute('ctx');
+    setComposerHidden(true);
+    setThread(scoopThread(s.key, s.color, s.label));
+    setActiveChip(s.key);
+  }
+
+  function toFreezer(slug: string): void {
+    const f = FROZEN.find((x) => x.slug === slug);
+    frame.setAttribute('data-preview', 'freezer');
+    frame.style.setProperty('--ctx', FREEZER_TINT);
+    tintWash.style.backgroundColor = FREEZER_TINT;
+    tintWash.style.opacity = '0.16';
+    shader.setAttribute('mode', 'freezer');
+    shader.setAttribute('tint', FREEZER_TINT);
+    freezer.setAttribute('ctx', '');
+    setComposerHidden(true);
+    setThread(frozenThread(slug, f?.title ?? slug, f?.meta ?? 'frozen session'));
+    setActiveChip(null);
+  }
+
+  frame.addEventListener('slicc-scoop-select', (e) => {
+    const key = (e as CustomEvent<{ key?: string }>).detail?.key;
+    if (!key) return;
+    if (key === 'cone') toLive();
+    else toScoop(key);
+  });
+  frame.addEventListener('freezer-card-select', (e) => {
+    const slug = (e as CustomEvent<{ slug?: string }>).detail?.slug;
+    if (slug) toFreezer(slug);
+  });
+
   // The account-settings sub-dialog — opened from the avatar menu's settings item.
   const dialog = settingsDialog();
   frame.append(dialog);
@@ -356,6 +499,11 @@ function app(opts: AppOpts): HTMLElement {
       (dialog as HTMLElement & { show?: () => void }).show?.();
     }
   });
+
+  // Enter an initial preview state (the freezer-preview / scoop-preview stories).
+  if (opts.preview?.kind === 'scoop') toScoop(opts.preview.key);
+  else if (opts.preview?.kind === 'freezer') toFreezer(opts.preview.slug);
+
   return frame;
 }
 
