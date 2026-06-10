@@ -59,6 +59,8 @@ slicc-agent-message .check li .ck.cy { background: var(--cyan); }
 slicc-agent-message .check li .ck.vi { background: var(--violet); }
 slicc-agent-message .check li .ck.am { background: var(--amber); }
 slicc-agent-message .thinkrow { margin-bottom: 14px; }
+slicc-agent-message .thinkrow-row { display: inline-flex; align-items: center; gap: 10px; }
+slicc-agent-message .progress { font-family: var(--ui); font-size: 13px; color: var(--txt-2); }
 slicc-agent-message .dots { display: inline-flex; gap: 7px; align-items: flex-end; padding: 6px 2px; }
 slicc-agent-message .dots i { width: 9px; height: 9px; border-radius: 50%; background: var(--d); animation: slicc-am-bdot 1.05s infinite ease-in-out; }
 slicc-agent-message .dots i:nth-child(2) { animation-delay: .16s; }
@@ -142,8 +144,10 @@ function checkEl(items: readonly CheckItem[]): HTMLElement {
  *
  * @attr thinking - boolean; show the bouncing-dot thinking row instead of the body
  * @attr streaming - boolean; append a blinking typewriter caret to the body
+ * @attr progress - status label shown beside the thinking dots (e.g. "Running tools…")
  * @csspart body - the prose region that hosts slotted markdown HTML
  * @csspart dots - the three bouncing thinking dots
+ * @csspart progress - the status label beside the thinking dots
  * @csspart caret - the typewriter streaming caret
  * @csspart plan - the colored-dot plan list (when populated via `setPlan`)
  * @csspart check - the check-badge list (when populated via `setCheck`)
@@ -152,10 +156,11 @@ function checkEl(items: readonly CheckItem[]): HTMLElement {
  * @fires slicc-agent-message-streaming - composed + bubbling; `detail.streaming` on state change
  */
 export class SliccAgentMessage extends HTMLElement {
-  static readonly observedAttributes = ['thinking', 'streaming'];
+  static readonly observedAttributes = ['thinking', 'streaming', 'progress'];
 
   #body!: HTMLElement;
-  #dots: HTMLElement | null = null;
+  #think: HTMLElement | null = null;
+  #progressEl: HTMLElement | null = null;
   #caret: HTMLElement | null = null;
   #built = false;
 
@@ -177,6 +182,8 @@ export class SliccAgentMessage extends HTMLElement {
           detail: { thinking: newValue !== null },
         })
       );
+    } else if (name === 'progress') {
+      this.#syncProgress();
     } else if (name === 'streaming') {
       this.#syncStreaming();
       this.dispatchEvent(
@@ -207,6 +214,20 @@ export class SliccAgentMessage extends HTMLElement {
   set streaming(value: boolean) {
     if (value) this.setAttribute('streaming', '');
     else this.removeAttribute('streaming');
+  }
+
+  /**
+   * Status label shown beside the thinking dots — the "progress message" for the
+   * busy/thinking row (e.g. `Thinking…`, `Running tools…`, `Waiting for your
+   * reply…`). Only visible while `thinking`; clear it by setting `null`.
+   */
+  get progress(): string | null {
+    return this.getAttribute('progress');
+  }
+
+  set progress(value: string | null) {
+    if (value == null) this.removeAttribute('progress');
+    else this.setAttribute('progress', value);
   }
 
   /** The prose body element (`.body`); hosts slotted/rendered markdown HTML. */
@@ -279,22 +300,45 @@ export class SliccAgentMessage extends HTMLElement {
     this.appendChild(this.#body);
   }
 
-  /** Show the thinking dots (and `.thinkrow` host class) or the body. */
+  /** Show the thinking row (bouncing dots + optional progress label) or the body. */
   #syncThinking(): void {
     const thinking = this.thinking;
     this.classList.toggle('thinkrow', thinking);
     if (thinking) {
       this.#body.style.display = 'none';
-      if (!this.#dots) {
-        this.#dots = thinkRowEl();
-        this.insertBefore(this.#dots, this.#body);
+      if (!this.#think) {
+        this.#think = this.ownerDocument.createElement('div');
+        this.#think.className = 'thinkrow-row';
+        this.#think.appendChild(thinkRowEl());
+        this.insertBefore(this.#think, this.#body);
       }
+      this.#syncProgress();
     } else {
       this.#body.style.removeProperty('display');
-      if (this.#dots) {
-        this.#dots.remove();
-        this.#dots = null;
+      if (this.#think) {
+        this.#think.remove();
+        this.#think = null;
+        this.#progressEl = null;
       }
+    }
+  }
+
+  /** Add/update/remove the progress label beside the thinking dots. */
+  #syncProgress(): void {
+    if (!this.#think) return;
+    const text = this.progress;
+    if (text) {
+      if (!this.#progressEl) {
+        this.#progressEl = this.ownerDocument.createElement('span');
+        this.#progressEl.className = 'progress';
+        this.#progressEl.setAttribute('part', 'progress');
+        this.#progressEl.setAttribute('aria-live', 'polite');
+        this.#think.appendChild(this.#progressEl);
+      }
+      this.#progressEl.textContent = text;
+    } else if (this.#progressEl) {
+      this.#progressEl.remove();
+      this.#progressEl = null;
     }
   }
 

@@ -198,6 +198,65 @@ describe('slicc-agent-message', () => {
     });
   });
 
+  describe('progress message', () => {
+    it('reflects the progress attribute ↔ property', () => {
+      const el = mount();
+      expect(el.progress).toBeNull();
+      el.progress = 'Running tools…';
+      expect(el.getAttribute('progress')).toBe('Running tools…');
+      el.progress = null;
+      expect(el.hasAttribute('progress')).toBe(false);
+    });
+
+    it('shows the progress label beside the dots while thinking', () => {
+      const el = mount((e) => {
+        e.thinking = true;
+        e.progress = 'Running tools — edit_file';
+      });
+      const label = el.querySelector('.progress') as HTMLElement;
+      expect(label).not.toBeNull();
+      expect(label.getAttribute('part')).toBe('progress');
+      expect(label.textContent).toBe('Running tools — edit_file');
+      // The dots and the label live in the same inline row.
+      expect(el.querySelector('.thinkrow-row .dots')).not.toBeNull();
+      expect(el.querySelector('.thinkrow-row .progress')).toBe(label);
+    });
+
+    it('updates the progress label text in place', () => {
+      const el = mount((e) => {
+        e.thinking = true;
+        e.progress = 'Thinking…';
+      });
+      el.progress = 'Waiting for your reply…';
+      expect(el.querySelectorAll('.progress')).toHaveLength(1);
+      expect((el.querySelector('.progress') as HTMLElement).textContent).toBe(
+        'Waiting for your reply…'
+      );
+    });
+
+    it('removes the progress label when cleared or thinking stops', () => {
+      const el = mount((e) => {
+        e.thinking = true;
+        e.progress = 'Thinking…';
+      });
+      el.progress = null;
+      expect(el.querySelector('.progress')).toBeNull();
+      el.progress = 'back';
+      el.thinking = false;
+      expect(el.querySelector('.progress')).toBeNull();
+      expect(el.querySelector('.thinkrow-row')).toBeNull();
+    });
+
+    it('renders the progress label in the inherited --ui font stack', () => {
+      const el = mount((e) => {
+        e.thinking = true;
+        e.progress = 'Thinking…';
+      });
+      const ff = getComputedStyle(el.querySelector('.progress') as HTMLElement).fontFamily;
+      expect(ff).toContain('adobe-clean');
+    });
+  });
+
   describe('streaming state', () => {
     it('appends a typewriter caret to the body while streaming', () => {
       const el = mount((e) => {

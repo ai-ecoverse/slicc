@@ -25,6 +25,11 @@ slicc-chat-thread {
   display: block;
   overflow-y: auto;
   min-height: 0;
+  /* Always reserve the scrollbar gutter so the reading column's width — and
+     therefore its aspect ratio — stays fixed when a context swap changes the
+     content length (a long, overflowing context shows a scrollbar; a short one
+     does not, which would otherwise shift the centered column on every swap). */
+  scrollbar-gutter: stable;
 }
 slicc-chat-thread[hidden] {
   display: none;

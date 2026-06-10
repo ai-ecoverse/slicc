@@ -6,13 +6,15 @@ import './slicc-agent-message.js';
 interface MessageArgs {
   thinking?: boolean;
   streaming?: boolean;
+  progress?: string;
 }
 
 /** Construct an agent message, applying the boolean state attributes. */
-function buildMessage({ thinking, streaming }: MessageArgs): SliccAgentMessage {
+function buildMessage({ thinking, streaming, progress }: MessageArgs): SliccAgentMessage {
   const el = document.createElement('slicc-agent-message') as SliccAgentMessage;
   if (thinking) el.setAttribute('thinking', '');
   if (streaming) el.setAttribute('streaming', '');
+  if (progress) el.setAttribute('progress', progress);
   el.style.maxWidth = '520px';
   return el;
 }
@@ -37,6 +39,7 @@ const meta: Meta<MessageArgs> = {
   argTypes: {
     thinking: { control: 'boolean', description: 'Show the bouncing-dot thinking row' },
     streaming: { control: 'boolean', description: 'Append the typewriter caret' },
+    progress: { control: 'text', description: 'Status label beside the thinking dots' },
   },
   render: (args) => buildMessage(args),
 };
@@ -233,10 +236,19 @@ export const CheckVariants: Story = {
 /** Thinking state — the three bouncing rose/cyan/violet dots, body hidden. */
 export const Thinking: Story = {
   render: () => {
-    const el = buildMessage({ thinking: true });
+    const el = buildMessage({ thinking: true, progress: 'Thinking…' });
     el.setBodyHtml('<p>The typed plan will land here once the cone finishes thinking.</p>');
     return el;
   },
+};
+
+/**
+ * Progress message — the busy/thinking row carries a status label beside the
+ * bouncing dots, set via the `progress` attribute. Used to surface what the
+ * agent is doing while the body is still empty.
+ */
+export const Progress: Story = {
+  render: () => buildMessage({ thinking: true, progress: 'Running tools — edit_file · bash' }),
 };
 
 /** Streaming — prose with the blinking typewriter caret trailing the body. */
@@ -245,5 +257,33 @@ export const Streaming: Story = {
     const el = buildMessage({ streaming: true });
     el.setBodyHtml('<p>Warming the hero palette and replacing the cold blue gradient');
     return el;
+  },
+};
+
+/**
+ * The full chat-state matrix in one view — the busy row's `progress` label
+ * distinguishes the otherwise-identical bouncing dots across **thinking**,
+ * **running tools**, and **waiting for user input**, plus the **streaming**
+ * typewriter caret. Mirrors how the production chat surfaces agent state.
+ */
+export const States: Story = {
+  render: () => {
+    const wrap = document.createElement('div');
+    wrap.style.display = 'flex';
+    wrap.style.flexDirection = 'column';
+    wrap.style.gap = '22px';
+    wrap.style.maxWidth = '520px';
+
+    wrap.append(
+      buildMessage({ thinking: true, progress: 'Thinking…' }),
+      buildMessage({ thinking: true, progress: 'Running tools — edit_file · bash' }),
+      buildMessage({ thinking: true, progress: 'Waiting for your reply…' })
+    );
+
+    const streaming = buildMessage({ streaming: true });
+    streaming.setBodyHtml('<p>Warming the hero palette and replacing the cold blue gradient');
+    wrap.append(streaming);
+
+    return wrap;
   },
 };
