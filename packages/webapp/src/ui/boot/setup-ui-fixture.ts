@@ -33,10 +33,10 @@ export async function loadUIFixtureIntoChat(chatPanel: {
   switchToContext: (id: string, readOnly: boolean, scoopName?: string) => Promise<void>;
   loadMessages: (msgs: ChatMessage[]) => void;
   setCompactionState?: (state: 'summarizing' | 'extracting-memory' | 'idle') => void;
+  openAddMenuForFixture?(): void;
 }): Promise<void> {
-  const [{ createChatFixture, FIXTURE_SESSION_ID, FIXTURE_SCOOP_NAME }] = await Promise.all([
-    import('../chat-fixture.js'),
-  ]);
+  const [{ createChatFixture, FIXTURE_SESSION_ID, FIXTURE_SCOOP_NAME, applyAddMenuFixtureSeed }] =
+    await Promise.all([import('../chat-fixture.js')]);
   await chatPanel.switchToContext(FIXTURE_SESSION_ID, true, FIXTURE_SCOOP_NAME);
   chatPanel.loadMessages(createChatFixture());
   // Optional preview of the compaction ghost bubble for designers:
@@ -47,5 +47,11 @@ export async function loadUIFixtureIntoChat(chatPanel: {
   if (compacting === 'summarizing' || compacting === 'extracting-memory') {
     chatPanel.setCompactionState?.(compacting);
   }
+  // Open the add-menu so its search/results/actions UI is visible for CSS
+  // iteration. `wireAddMenu` (main.ts) runs before this finalize step in
+  // both the extension and standalone-worker boot paths, so `addMenu` is
+  // already wired when this fires. The `?.` guard makes it safe to call
+  // even from tests that pass a minimal stub.
+  applyAddMenuFixtureSeed(chatPanel);
   log.info('Loaded UI fixture session for design iteration');
 }

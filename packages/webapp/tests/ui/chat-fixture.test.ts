@@ -8,6 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  applyAddMenuFixtureSeed,
   createChatFixture,
   FIXTURE_SCOOP_NAME,
   FIXTURE_SESSION_ID,
@@ -113,5 +114,20 @@ describe('createChatFixture', () => {
   it('exports stable identifiers used by main.ts', () => {
     expect(FIXTURE_SESSION_ID).toBe('session-ui-fixture');
     expect(FIXTURE_SCOOP_NAME).toBe('ui-fixture');
+  });
+});
+
+describe('applyAddMenuFixtureSeed', () => {
+  it('exposes the add-menu fixture seed that opens the menu when present', () => {
+    expect(typeof applyAddMenuFixtureSeed).toBe('function');
+    let opened = false;
+    applyAddMenuFixtureSeed({
+      openAddMenuForFixture: () => {
+        opened = true;
+      },
+    });
+    expect(opened).toBe(true);
+    // no-op safe when the method is absent
+    expect(() => applyAddMenuFixtureSeed({})).not.toThrow();
   });
 });

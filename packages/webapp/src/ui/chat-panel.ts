@@ -392,6 +392,11 @@ export class ChatPanel {
     this.attachBtn.classList.toggle('chat__attach-btn--open', !!this.addMenu?.isOpen());
   }
 
+  /** Design-time only: open the add-menu so its UI renders for the ?ui-fixture harness. */
+  openAddMenuForFixture(): void {
+    this.addMenu?.open();
+  }
+
   /** @internal test hook */
   addReferenceForTest(item: AddItem): void {
     this.addReference(item);

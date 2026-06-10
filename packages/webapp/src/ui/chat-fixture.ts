@@ -55,6 +55,17 @@ export const FIXTURE_SESSION_ID = 'session-ui-fixture';
  *  render as `@ui-fixture` instead of `sliccy`. */
 export const FIXTURE_SCOOP_NAME = 'ui-fixture';
 
+/**
+ * Open the add-menu on the given panel so its search/results/actions UI
+ * renders during `?ui-fixture=1` design iteration.
+ *
+ * The panel parameter is typed structurally so this module does not need
+ * to import ChatPanel and avoids a potential import cycle.
+ */
+export function applyAddMenuFixtureSeed(panel: { openAddMenuForFixture?(): void }): void {
+  panel.openAddMenuForFixture?.();
+}
+
 /** Build the synthetic chat history. Pure function — no side effects.
  *  Each message has a stable id so the fixture is idempotent under
  *  re-renders and matches exact-id lookups in tests. */
