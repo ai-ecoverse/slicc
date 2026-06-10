@@ -1,16 +1,21 @@
 import { define } from '../internal/define.js';
-import { h } from '../internal/dom.js';
+import { append, h } from '../internal/dom.js';
+import { iconEl } from '../internal/icons.js';
 
 /**
- * A row in the file tree: either a group header or a selectable file.
+ * A row in the file tree: a group header, a foldable directory, or a file.
  *
  * `group` rows render the prototype's `.grp` header (a dimmed directory label);
- * `file` rows render a `.f` row with a bullet, are clickable, and carry the id
- * reported by the `file-select` event. The optional `path` is the logical VFS
- * path surfaced in the event detail (defaults to the file's `label`).
+ * `dir` rows render a `.dir` row with a leading chevron and fold/expand their
+ * `children` when clicked (toggling open/closed); `file` rows render a `.f` row
+ * with a bullet, are clickable, and carry the id reported by the `file-select`
+ * event. The optional `path` is the logical VFS path surfaced in the event
+ * detail (defaults to the file's `label`). A `dir`'s `open` seeds its initial
+ * expanded state (default collapsed).
  */
 export type FileTreeItem =
   | { kind: 'group'; label: string }
+  | { kind: 'dir'; id: string; label: string; open?: boolean; children: FileTreeItem[] }
   | { kind: 'file'; id: string; label: string; path?: string };
 
 /**
@@ -77,6 +82,33 @@ slicc-file-tree .f::before {
 slicc-file-tree .f.on::before {
   background: var(--violet);
 }
+slicc-file-tree .dir {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 7px;
+  color: var(--ink);
+  cursor: pointer;
+  user-select: none;
+}
+slicc-file-tree .dir:hover {
+  background: var(--ghost);
+}
+slicc-file-tree .dir .chev {
+  flex: 0 0 auto;
+  color: var(--txt-3);
+  transition: transform 0.12s ease;
+}
+slicc-file-tree .dir.open .chev {
+  transform: rotate(90deg);
+}
+slicc-file-tree .children {
+  padding-left: 12px;
+}
+slicc-file-tree .children[hidden] {
+  display: none;
+}
 
 .dark slicc-file-tree .f.on,
 [data-theme="dark"] slicc-file-tree .f.on {
@@ -95,12 +127,38 @@ function ensureFileTreeStyle(doc: Document): void {
   (doc.head ?? doc.documentElement).appendChild(style);
 }
 
-/** Build the row elements for the given items (no innerHTML). */
-function buildRows(items: readonly FileTreeItem[]): HTMLElement[] {
+/**
+ * Build the row elements for the given items (no innerHTML), recursing into
+ * `dir` children. A `dir` renders a `.dir` toggle row (chevron + label) followed
+ * by a `.children` wrapper holding its (possibly nested) rows; the wrapper is
+ * `hidden` unless the dir id is in `openDirs`, so collapsing keeps the children
+ * in the DOM (selection survives) but visually hidden.
+ */
+function buildNodes(
+  items: readonly FileTreeItem[],
+  openDirs: ReadonlySet<string>
+): HTMLElement[] {
   const rows: HTMLElement[] = [];
   for (const item of items) {
     if (item.kind === 'group') {
       rows.push(h('div', { class: 'grp' }, item.label));
+    } else if (item.kind === 'dir') {
+      const open = openDirs.has(item.id);
+      rows.push(
+        h(
+          'div',
+          {
+            class: open ? 'dir open' : 'dir',
+            'data-dir-id': item.id,
+            'aria-expanded': open ? 'true' : 'false',
+          },
+          iconEl('chevron-right', { size: 14, class: 'chev' }),
+          item.label
+        )
+      );
+      const wrap = h('div', { class: 'children', hidden: open ? undefined : true });
+      append(wrap, buildNodes(item.children ?? [], openDirs));
+      rows.push(wrap);
     } else {
       rows.push(h('div', { class: 'f', 'data-id': item.id }, item.label));
     }
@@ -110,10 +168,13 @@ function buildRows(items: readonly FileTreeItem[]): HTMLElement[] {
 
 /**
  * `<slicc-file-tree>` — the VFS sidebar from the prototype (`.tree`). A fixed
- * 190px, non-shrinking column of directory group headers (`.grp`) and clickable
- * file rows (`.f`), each with a small bullet. Single-selection: the active file
- * (`.f.on`) is tinted violet, and clicking a row (or calling
- * {@link SliccFileTree.selectFile}) selects it and emits `file-select`.
+ * 190px, non-shrinking column of directory group headers (`.grp`), foldable
+ * directories (`.dir`, a chevron toggle), and clickable file rows (`.f`), each
+ * with a small bullet. Single-selection: the active file (`.f.on`) is tinted
+ * violet, and clicking a file row (or calling {@link SliccFileTree.selectFile})
+ * selects it and emits `file-select`. Clicking a `.dir` row (or calling
+ * {@link SliccFileTree.toggleDir}) folds/expands its nested children and emits
+ * `dir-toggle`.
  *
  * Light DOM (no shadow root): the host renders its rows directly into itself so
  * the host app can style/slot it. The scoped stylesheet is injected once into
@@ -125,7 +186,8 @@ function buildRows(items: readonly FileTreeItem[]): HTMLElement[] {
  *
  *     <slicc-file-tree>
  *       <div class="grp">workspace/</div>
- *       <div class="f" data-id="hero.tsx">hero.tsx</div>
+ *       <div class="dir open" data-dir-id="components" aria-expanded="true">…</div>
+ *       <div class="children"><div class="f" data-id="hero.tsx">hero.tsx</div></div>
  *       <div class="f on" data-id="hero.css">hero.css</div>
  *       …
  *     </slicc-file-tree>
@@ -135,6 +197,8 @@ function buildRows(items: readonly FileTreeItem[]): HTMLElement[] {
  *   plain text/`<div>` child becomes a `.f` row, `data-group` children become
  *   `.grp` headers, and the child's `id`/`data-id` becomes its file id
  * @fires file-select - a file was selected; `detail` carries `{ id, path }`
+ * @fires dir-toggle - a directory was folded/expanded; `detail` carries
+ *   `{ id, open }`
  */
 export class SliccFileTree extends HTMLElement {
   static get observedAttributes(): string[] {
@@ -143,6 +207,7 @@ export class SliccFileTree extends HTMLElement {
 
   #items: FileTreeItem[] | null = null;
   #paths = new Map<string, string>();
+  #openDirs = new Set<string>();
   #initialized = false;
   #onClick: ((e: MouseEvent) => void) | null = null;
 
@@ -151,7 +216,10 @@ export class SliccFileTree extends HTMLElement {
     if (!this.#initialized) {
       // First connect: if no `items` were assigned programmatically, adopt any
       // light-DOM markup the caller slotted in as the initial item set.
-      if (this.#items == null) this.#items = this.#harvestSlotted();
+      if (this.#items == null) {
+        this.#items = this.#harvestSlotted();
+        this.#seedOpenDirs();
+      }
       this.#initialized = true;
     }
     this.#render();
@@ -171,7 +239,7 @@ export class SliccFileTree extends HTMLElement {
     }
   }
 
-  /** The tree's rows (groups + files). Setting it re-renders the tree. */
+  /** The tree's rows (groups, dirs, files). Setting it re-renders the tree. */
   get items(): FileTreeItem[] {
     return this.#items ? this.#items.slice() : [];
   }
@@ -179,10 +247,36 @@ export class SliccFileTree extends HTMLElement {
   set items(value: FileTreeItem[]) {
     this.#items = Array.isArray(value) ? value.slice() : [];
     this.#initialized = true;
+    this.#seedOpenDirs();
     if (this.isConnected) {
       this.#render();
       this.#bindClick();
     }
+  }
+
+  /**
+   * Toggle the open/closed state of the directory with the given id (showing or
+   * hiding its children), re-render, and emit `dir-toggle` with `{ id, open }`.
+   * A no-op (no event) if no `.dir` row carries that id.
+   */
+  toggleDir(id: string): void {
+    if (!this.#hasDir(id, this.#items ?? [])) return;
+    const open = !this.#openDirs.has(id);
+    if (open) this.#openDirs.add(id);
+    else this.#openDirs.delete(id);
+    this.#render();
+    this.dispatchEvent(
+      new CustomEvent('dir-toggle', {
+        bubbles: true,
+        composed: true,
+        detail: { id, open },
+      })
+    );
+  }
+
+  /** Whether the directory with the given id is currently expanded. */
+  isDirOpen(id: string): boolean {
+    return this.#openDirs.has(id);
   }
 
   /** Id of the currently-selected file (reflected to the `selected` attribute). */
@@ -247,17 +341,53 @@ export class SliccFileTree extends HTMLElement {
   #render(): void {
     const items = this.#items ?? [];
     this.#paths.clear();
+    this.#collectPaths(items);
+    this.replaceChildren(...buildNodes(items, this.#openDirs));
+    this.#applySelection();
+  }
+
+  /** Map every file id (at any depth) to its logical path for `file-select`. */
+  #collectPaths(items: readonly FileTreeItem[]): void {
     for (const item of items) {
       if (item.kind === 'file') this.#paths.set(item.id, item.path ?? item.label);
+      else if (item.kind === 'dir') this.#collectPaths(item.children ?? []);
     }
-    this.replaceChildren(...buildRows(items));
-    this.#applySelection();
+  }
+
+  /** Re-seed the open-dir set from the items' `open` flags (collapsed default). */
+  #seedOpenDirs(): void {
+    this.#openDirs.clear();
+    const walk = (items: readonly FileTreeItem[]): void => {
+      for (const item of items) {
+        if (item.kind !== 'dir') continue;
+        if (item.open) this.#openDirs.add(item.id);
+        walk(item.children ?? []);
+      }
+    };
+    walk(this.#items ?? []);
+  }
+
+  /** Whether a `dir` with the given id exists anywhere in the item tree. */
+  #hasDir(id: string, items: readonly FileTreeItem[]): boolean {
+    for (const item of items) {
+      if (item.kind !== 'dir') continue;
+      if (item.id === id) return true;
+      if (this.#hasDir(id, item.children ?? [])) return true;
+    }
+    return false;
   }
 
   #bindClick(): void {
     if (this.#onClick) return;
     this.#onClick = (e: MouseEvent) => {
-      const row = (e.target as HTMLElement | null)?.closest<HTMLElement>('.f');
+      const target = e.target as HTMLElement | null;
+      const dirRow = target?.closest<HTMLElement>('.dir');
+      if (dirRow && this.contains(dirRow)) {
+        const dirId = dirRow.dataset.dirId;
+        if (dirId != null) this.toggleDir(dirId);
+        return;
+      }
+      const row = target?.closest<HTMLElement>('.f');
       if (!row || !this.contains(row)) return;
       const id = row.dataset.id;
       if (id != null) this.selectFile(id);

@@ -6,16 +6,56 @@ interface FileTreeArgs {
   selected?: string;
 }
 
-/** The prototype VFS sidebar contents (`workspace/` + `skills/` groups). */
+/**
+ * The prototype VFS sidebar contents (`workspace/` + `skills/` groups), now with
+ * nested foldable directories (`dir`) demonstrating fold/expand. `components/` is
+ * seeded open and itself nests a collapsed `ui/`; the `skills/` group keeps the
+ * selectable directory-style file rows from the prototype alongside a foldable
+ * `.mcp` directory.
+ */
 const PROTOTYPE_ITEMS: FileTreeItem[] = [
   { kind: 'group', label: 'workspace/' },
-  { kind: 'file', id: 'hero.tsx', label: 'hero.tsx', path: 'workspace/hero.tsx' },
-  { kind: 'file', id: 'hero.css', label: 'hero.css', path: 'workspace/hero.css' },
+  {
+    kind: 'dir',
+    id: 'components',
+    label: 'components',
+    open: true,
+    children: [
+      { kind: 'file', id: 'hero.tsx', label: 'hero.tsx', path: 'workspace/components/hero.tsx' },
+      { kind: 'file', id: 'hero.css', label: 'hero.css', path: 'workspace/components/hero.css' },
+      {
+        kind: 'dir',
+        id: 'ui',
+        label: 'ui',
+        children: [
+          {
+            kind: 'file',
+            id: 'button.tsx',
+            label: 'button.tsx',
+            path: 'workspace/components/ui/button.tsx',
+          },
+          {
+            kind: 'file',
+            id: 'icon-button.tsx',
+            label: 'icon-button.tsx',
+            path: 'workspace/components/ui/icon-button.tsx',
+          },
+        ],
+      },
+    ],
+  },
   { kind: 'file', id: 'tokens.css', label: 'tokens.css', path: 'workspace/tokens.css' },
   { kind: 'file', id: 'nav.tsx', label: 'nav.tsx', path: 'workspace/nav.tsx' },
   { kind: 'group', label: 'skills/' },
   { kind: 'file', id: 'sprinkles/', label: 'sprinkles/', path: 'workspace/skills/sprinkles/' },
-  { kind: 'file', id: '.mcp/', label: '.mcp/', path: 'workspace/.mcp/' },
+  {
+    kind: 'dir',
+    id: 'mcp',
+    label: '.mcp',
+    children: [
+      { kind: 'file', id: 'servers.json', label: 'servers.json', path: 'workspace/.mcp/servers.json' },
+    ],
+  },
 ];
 
 /**
@@ -64,5 +104,10 @@ export const Default: Story = { args: {} };
 /** The prototype state: `hero.css` selected (violet `.f.on` tint). */
 export const ActiveFile: Story = { args: { selected: 'hero.css' } };
 
-/** A nested-directory selection (folder-style file rows). */
+/**
+ * Nested directories that fold/expand: `components/` is open (chevron rotated,
+ * children indented), with a collapsed `ui/` inside it and a collapsed `.mcp`
+ * below. Click a directory row to toggle it. The directory-style `sprinkles/`
+ * file row stays selected, preserving the existing selection behavior.
+ */
 export const DirectorySelected: Story = { args: { selected: 'sprinkles/' } };

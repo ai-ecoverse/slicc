@@ -232,6 +232,62 @@ describe('slicc-scoop-overflow', () => {
       expect(getComputedStyle(chip).display).toBe('block');
       expect(getComputedStyle(chip).getPropertyValue('--pill-w').trim()).toBe('100%');
     });
+
+    it('reveals the opened popup frameless — no border, background, or shadow', () => {
+      const el = mount((e) => {
+        e.items = ITEMS;
+      });
+      el.show();
+      const cs = getComputedStyle(pop(el));
+      // The scoops appear directly underneath; the dropdown carries no chrome.
+      expect(cs.borderStyle).toBe('none');
+      expect(cs.borderTopWidth).toBe('0px');
+      expect(cs.boxShadow).toBe('none');
+      expect(['rgba(0, 0, 0, 0)', 'transparent']).toContain(cs.backgroundColor);
+    });
+
+    it('staggers cloned pills via an incremental --i (and animation-delay)', () => {
+      const el = mount((e) => {
+        e.items = ITEMS;
+      });
+      el.show();
+      const chips = pills(el);
+      // Each chip carries its index in --i, which drives the stagger.
+      chips.forEach((chip, i) => {
+        expect(chip.style.getPropertyValue('--i')).toBe(String(i));
+      });
+      // The entrance + per-item delay only exists when motion is allowed.
+      const reduced =
+        typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (!reduced) {
+        const first = getComputedStyle(chips[0]);
+        const last = getComputedStyle(chips[2]);
+        expect(first.animationName).toBe('scoopReveal');
+        expect(Number.parseFloat(last.animationDelay)).toBeGreaterThan(
+          Number.parseFloat(first.animationDelay)
+        );
+      }
+    });
+
+    it('guards the staggered entrance behind prefers-reduced-motion (animation: none)', () => {
+      // The @media guard is evaluated by the browser, not a JS matchMedia mock,
+      // so assert the adopted stylesheet carries the reduced-motion override.
+      const el = mount((e) => {
+        e.items = ITEMS;
+      });
+      const adopted = el.shadowRoot?.adoptedStyleSheets[0] as CSSStyleSheet;
+      let guarded = false;
+      for (const rule of Array.from(adopted.cssRules)) {
+        if (rule instanceof CSSMediaRule && rule.conditionText.includes('prefers-reduced-motion')) {
+          for (const inner of Array.from(rule.cssRules)) {
+            if (inner instanceof CSSStyleRule && inner.style.animationName === 'none') {
+              guarded = true;
+            }
+          }
+        }
+      }
+      expect(guarded).toBe(true);
+    });
   });
 
   describe('behavior + events', () => {

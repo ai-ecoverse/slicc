@@ -133,7 +133,7 @@ describe('slicc-pill', () => {
   });
 
   describe('eye modes', () => {
-    it('open renders cursor-tracking pupils', () => {
+    it('open renders live pupils (cursor-tracking on the cone)', () => {
       const el = mount();
       expect(el.shadowRoot?.querySelector('.pupil-l')).toBeTruthy();
       expect(el.shadowRoot?.querySelector('.pupil-r')).toBeTruthy();
@@ -229,8 +229,10 @@ describe('slicc-pill', () => {
   });
 
   describe('cursor-tracking listener lifecycle', () => {
-    it('moves both pupils toward the cursor on mousemove', () => {
+    // Only the cone tracks the cursor; scoop chips render open eyes statically.
+    it('moves both pupils toward the cursor on mousemove (cone only)', () => {
       const el = mount((e) => {
+        e.type = 'cone';
         e.label = 'x';
       });
       const svg = el.shadowRoot?.querySelector('.eyes-svg') as SVGElement;
@@ -247,8 +249,23 @@ describe('slicc-pill', () => {
       expect(right.getAttribute('transform')).toMatch(/^translate\(/);
     });
 
+    it('does not track the cursor for a scoop chip (only the cone tracks)', () => {
+      const el = mount((e) => {
+        e.type = 'scoop';
+        e.label = 'researcher';
+      });
+      // Sanity: an open scoop chip still renders live pupils, just static ones.
+      const left = el.shadowRoot?.querySelector('.pupil-l') as SVGGElement;
+      expect(left).toBeTruthy();
+      document.dispatchEvent(new MouseEvent('mousemove', { clientX: 800, clientY: 800 }));
+      // No listener was attached, so the pupil transform is never written.
+      expect(left.getAttribute('transform')).toBeNull();
+    });
+
     it('removes the document listener on disconnect', () => {
-      const el = mount();
+      const el = mount((e) => {
+        e.type = 'cone';
+      });
       const left = el.shadowRoot?.querySelector('.pupil-l') as SVGGElement;
       el.remove();
       document.dispatchEvent(new MouseEvent('mousemove', { clientX: 999, clientY: 999 }));
@@ -257,7 +274,9 @@ describe('slicc-pill', () => {
     });
 
     it('drops the listener when eyes switch away from open', () => {
-      const el = mount();
+      const el = mount((e) => {
+        e.type = 'cone';
+      });
       const left = el.shadowRoot?.querySelector('.pupil-l') as SVGGElement;
       // Sanity: tracking works while open.
       document.dispatchEvent(new MouseEvent('mousemove', { clientX: 800, clientY: 800 }));
@@ -273,6 +292,7 @@ describe('slicc-pill', () => {
 
     it('re-attaches the listener when eyes switch back to open', () => {
       const el = mount((e) => {
+        e.type = 'cone';
         e.eyeState = 'none';
       });
       el.eyeState = 'open';

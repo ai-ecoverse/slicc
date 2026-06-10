@@ -5,6 +5,7 @@ import './slicc-freezer-new.js';
 interface FreezerNewArgs {
   expanded?: boolean;
   label?: string;
+  busy?: boolean;
 }
 
 /**
@@ -28,11 +29,13 @@ const meta: Meta<FreezerNewArgs> = {
   argTypes: {
     expanded: { control: 'boolean', description: 'Reveal the fading "New chat" label' },
     label: { control: 'text', description: 'Label text / accessible name (default "New chat")' },
+    busy: { control: 'boolean', description: 'Spinning loader glyph (work-in-progress state)' },
   },
-  render: ({ expanded, label }) => {
+  render: ({ expanded, label, busy }) => {
     const el = document.createElement('slicc-freezer-new');
     if (expanded) el.setAttribute('expanded', '');
     if (label) el.setAttribute('label', label);
+    if (busy) el.setAttribute('busy', '');
     // The three-state gesture (single / double / long-press) + the expanded
     // legend buttons all surface as distinct events — log each for review.
     for (const type of ['new-chat-save', 'new-chat-skip', 'new-chat-erase']) {
@@ -52,17 +55,29 @@ type Story = StoryObj<FreezerNewArgs>;
 export const Collapsed: Story = { args: { expanded: false } };
 
 /**
- * Expanded — the "New chat" label fades in beside the context-tinted badge, and
- * the three-state gesture actions (save / skip memory / erase) are surfaced as a
- * directly-clickable legend below the button.
+ * Expanded — the "New chat" label fades in beside the context-tinted badge. The
+ * three-state gesture actions (save / skip memory / erase) are NOT shown at rest;
+ * they are revealed only on hover or keyboard focus (see the Hover story).
  */
 export const Expanded: Story = { args: { expanded: true } };
 
-/** Hover — ghost background, surfaced via the global Pseudo States toolbar. */
+/**
+ * Hover — ghost background plus the revealed options legend (save / skip / erase),
+ * surfaced via the global Pseudo States toolbar. The legend only appears on
+ * hover / focus-within, never persistently.
+ */
 export const Hover: Story = {
   args: { expanded: true },
   parameters: { pseudo: { hover: true } },
 };
+
+/**
+ * Busy — the work-in-progress state entered on a save click (or driven by the
+ * host via the `busy` attribute): the badge glyph swaps to a spinning lucide
+ * loader for immediate feedback before the save + reload completes. The spin is
+ * held static under `prefers-reduced-motion: reduce`.
+ */
+export const Busy: Story = { args: { expanded: true, busy: true } };
 
 /** Custom label text (also overridable via the default slot). */
 export const CustomLabel: Story = { args: { expanded: true, label: 'Start fresh' } };

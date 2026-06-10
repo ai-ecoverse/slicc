@@ -68,7 +68,11 @@ type Story = StoryObj<OverflowArgs>;
 /** Has overflow, closed — only the pill-shaped "⋯" trigger is visible. */
 export const HasOverflowClosed: Story = { args: {} };
 
-/** Open — the dropdown stacks the overflowed scoops column-wise, full width. */
+/**
+ * Open — the overflowed scoops stack column-wise, full width, directly beneath
+ * the trigger with no frame/background chrome. They reveal with a per-item
+ * stagger (organic entrance), suppressed under `prefers-reduced-motion`.
+ */
 export const Open: Story = { args: { open: true } };
 
 /** No overflow — `items` is empty so the trigger is hidden entirely. */

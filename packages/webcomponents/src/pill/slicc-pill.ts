@@ -354,8 +354,10 @@ const SHEET = sheet(PILL_STYLE);
  * shadow DOM; the icon tint / label color come from the pill's own internal
  * token set, honoring `prefers-color-scheme` and the `theme` attribute override.
  *
- * The cursor-tracking `mousemove` listener is added to the document only while
- * `eyes="open"`, and is removed on disconnect or when the eye state changes.
+ * The cursor-tracking `mousemove` listener is added to the document only for the
+ * cone (`type="cone"`) while `eyes="open"`, and is removed on disconnect or when
+ * the eye state / type changes. Scoop chips render their open eyes statically (the
+ * cone is the only avatar whose eyes follow the cursor); `dead`/`none` are inert.
  *
  * @attr type - `cone` | `scoop` (default `scoop`); selects the glyph
  * @attr color - accent hex; the glyph fill, outline, waffle and border derive from it
@@ -578,9 +580,13 @@ export class SliccPill extends HTMLElement {
     this.#eyesSvg = this.#root.querySelector('.eyes-svg');
   }
 
-  /** Add/remove the document mousemove listener to match the eye state. */
+  /**
+   * Add/remove the document mousemove listener to match the eye state. Only the
+   * cone tracks the cursor — scoop chips keep their open eyes static — so the
+   * listener is bound exclusively for `type="cone"` with `eyes="open"`.
+   */
   #bindTracking(): void {
-    const need = this.eyeState === 'open';
+    const need = this.eyeState === 'open' && this.type === 'cone';
     if (need && !this.#onMove) {
       this.#onMove = (ev: MouseEvent) => this.#track(ev);
       document.addEventListener('mousemove', this.#onMove);

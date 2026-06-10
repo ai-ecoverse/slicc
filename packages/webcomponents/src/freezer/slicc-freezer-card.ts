@@ -20,7 +20,9 @@ import '../primitives/slicc-snowflake.js';
  * the parent `.freezer:not(.open)`. Here each card owns its own `expanded`
  * attribute so it is independently demonstrable: collapsed (no `expanded`) zeroes
  * the gap, centers the badge, and collapses the text to zero width (badge only);
- * `expanded` fades the title+meta back in. Hover paints the ghost background, and
+ * `expanded` fades the title+meta back in. Hovering an expanded row paints the
+ * ghost background; hovering a collapsed (icon-only) row instead paints a soft
+ * circular ring around the badge (a ring, not a rectangle), and
  * `thawed` flips the row into the rose flash (and is mirrored onto the badge) for
  * the ~1400ms reopen animation. `hidden` is the prototype's `.match-hidden`
  * search-hide.
@@ -56,7 +58,10 @@ slicc-freezer-card:not([expanded]) .slicc-fzcard__tip { display: block; }
 slicc-freezer-card:not([expanded]):hover .slicc-fzcard__tip,
 slicc-freezer-card:not([expanded]):focus-within .slicc-fzcard__tip { opacity: 1; transform: translateY(-50%); }
 slicc-freezer-card .slicc-fzcard__tip:empty { display: none; }
-@media (prefers-reduced-motion: reduce) { slicc-freezer-card .slicc-fzcard__tip { transition: none; } }
+@media (prefers-reduced-motion: reduce) {
+  slicc-freezer-card .slicc-fzcard__tip,
+  slicc-freezer-card slicc-snowflake::part(badge) { transition: none; }
+}
 slicc-freezer-card[hidden] {
   display: none;
 }
@@ -65,8 +70,19 @@ slicc-freezer-card:not([expanded]) {
   justify-content: center;
   padding: 4px 0;
 }
-slicc-freezer-card:hover {
+slicc-freezer-card[expanded]:hover {
   background: var(--ghost);
+}
+/* Collapsed (icon-only) hover: a full-row ghost fill reads as a clashing
+   rectangle around the lone centered badge, so swap it for a soft circular ring
+   hugging the snowflake (painted on its `::part(badge)` circle, which carries the
+   50% radius) — the affordance reads as a ring, not a rectangle. Token-based. */
+slicc-freezer-card slicc-snowflake::part(badge) {
+  transition: box-shadow 0.15s;
+}
+slicc-freezer-card:not([expanded]):hover slicc-snowflake::part(badge),
+slicc-freezer-card:not([expanded]):focus-within slicc-snowflake::part(badge) {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ctx) 35%, var(--line));
 }
 slicc-freezer-card .slicc-fzcard__text {
   flex: 1;
@@ -145,7 +161,8 @@ const ICON_SIZE = 14;
  * - collapsed (no `expanded`): gap 0, badge centered, `.ftext` width 0 — badge
  *   only (mirrors the prototype's `.freezer:not(.open)` icon strip).
  * - expanded (`expanded`): the title + meta fade back in.
- * - hover: the ghost background.
+ * - hover: expanded rows get the ghost background; collapsed rows get a soft
+ *   circular ring around the badge instead of a rectangular fill.
  * - thawed (`thawed`): the rose row + rose badge shown for ~1400ms on reopen.
  * - search-hidden (`hidden`): `display: none` (the prototype's `.match-hidden`).
  *

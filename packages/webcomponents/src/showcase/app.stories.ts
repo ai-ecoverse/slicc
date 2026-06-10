@@ -35,6 +35,9 @@ import '../workbench/slicc-workbench-body.js';
 import '../workbench/slicc-workbench-header.js';
 import '../workbench/slicc-workbench-pane.js';
 
+// Eye-state matrix demonstrating the nav rule: ONLY the cone's eyes track the
+// cursor. The scoops below render `open` (idle — static open eyes, not tracking),
+// `dead` (the failed look), or `none` — none of them follow the pointer.
 const SCOOPS = [
   { key: 'cone', type: 'cone' as const, color: '#b07823', label: 'Sliccy', eyes: 'open' as const },
   {

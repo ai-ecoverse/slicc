@@ -1,8 +1,0 @@
-{
-  "storyId": "overlay-dialog--account-settings",
-  "storyTitle": "Overlay/Dialog",
-  "subsystem": "overlay",
-  "importPath": "./src/overlay/slicc-dialog.stories.ts",
-  "comment": "The dialog needs support for drop-downs for the provider. Check the prod implementation for the full expressiveness of this dialog",
-  "createdAt": "2026-06-10T14:21:12.500Z"
-}

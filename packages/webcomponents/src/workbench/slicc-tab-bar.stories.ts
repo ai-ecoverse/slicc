@@ -14,37 +14,43 @@ interface TabBarArgs {
   width?: number;
 }
 
-/** The prototype's default tool tabs, pinned in the dock rail. */
+/**
+ * The prototype's tool tabs. Per the project decision the bar NEVER shows tools,
+ * so these are accepted by the data model but filtered out of rendering — kept
+ * here to demonstrate that filtering in the `ToolTabs` story.
+ */
 const TOOL_TABS: TabDescriptor[] = [
   { id: 'files', label: 'Files', kind: 'tool', glyph: '◇' },
   { id: 'term', label: 'Terminal', kind: 'tool', glyph: '◇' },
   { id: 'memory', label: 'Memory', kind: 'tool', glyph: '◇' },
 ];
 
-/** The prototype's sprinkle tabs (`.tab.sp` defined chips, closable). */
+/** The sprinkle / content tabs (`.tab.sp` defined chips, closable). */
 const SPRINKLE_TABS: TabDescriptor[] = [
   { id: 'hero', label: 'Hero studio', kind: 'sprinkle', closable: true },
   { id: 'palette', label: 'palette', kind: 'sprinkle', closable: true },
 ];
 
-/** Tool tabs followed by sprinkle tabs — the full workbench strip with a divider. */
+/**
+ * Tool tabs mixed with sprinkle tabs — the bar filters the tools out and renders
+ * only the sprinkle (content) chips.
+ */
 const MIXED_TABS: TabDescriptor[] = [...TOOL_TABS, ...SPRINKLE_TABS];
 
-/** An overflowing set — more tabs than the narrow header can show without scroll. */
+/** An overflowing content-tab set — more sprinkle tabs than the narrow header can show. */
 const MANY_TABS: TabDescriptor[] = [
-  ...TOOL_TABS,
-  { id: 'browser', label: 'Browser', kind: 'tool', glyph: '◇' },
   { id: 'hero', label: 'Hero studio', kind: 'sprinkle', closable: true },
   { id: 'palette', label: 'Palette', kind: 'sprinkle', closable: true },
   { id: 'shader', label: 'Shader playground', kind: 'sprinkle', closable: true },
   { id: 'gallery', label: 'Reference gallery', kind: 'sprinkle', closable: true },
+  { id: 'tokens', label: 'Token explorer', kind: 'sprinkle', closable: true },
+  { id: 'preview', label: 'Live preview', kind: 'sprinkle', closable: true },
 ];
 
 /**
  * Mount the tab bar inside a faux `.wbhead` band (the workbench header), so the
- * strip reads against its real prototype context: the `.tdiv` divider hairline
- * between tool and sprinkle groups, the spacer, the `tool`/`sprinkle` pin tag
- * (which tracks the active tab's kind), and the collapse control. The
+ * strip reads against its real prototype context: the spacer, a `sprinkle` pin
+ * tag (the bar only ever shows content tabs), and the collapse control. The
  * `<slicc-tab>` children paint their own chrome from the inherited tokens.
  */
 function buildBar({ tabs = MIXED_TABS, active, width }: TabBarArgs): HTMLElement {
@@ -108,15 +114,18 @@ type Story = StoryObj<TabBarArgs>;
 /** Empty strip — no tabs yet (the workbench before anything is opened). */
 export const Empty: Story = { args: { tabs: [], active: undefined } };
 
-/** Tool tabs only — the pinned Files / Terminal / Memory surfaces. */
+/**
+ * Tool tabs only — the bar NEVER renders tools, so the strip paints empty even
+ * though three `tool` descriptors were passed (they remain in the data model).
+ */
 export const ToolTabs: Story = { args: { tabs: TOOL_TABS, active: 'files' } };
 
 /** Sprinkle tabs only — defined `.tab.sp` chips with the ✦ badge, closable. */
 export const SprinkleTabs: Story = { args: { tabs: SPRINKLE_TABS, active: 'hero' } };
 
 /**
- * The full workbench strip: tool tabs, a `.tdiv` hairline divider, then the
- * sprinkle chips. A sprinkle chip is active (violet-tinted).
+ * Tool + sprinkle descriptors passed together: the tools are filtered out and
+ * only the sprinkle chips paint. A sprinkle chip is active (violet-tinted).
  */
 export const Mixed: Story = { args: { tabs: MIXED_TABS, active: 'hero' } };
 
@@ -124,4 +133,4 @@ export const Mixed: Story = { args: { tabs: MIXED_TABS, active: 'hero' } };
  * Overflowing — more tabs than the narrow header can show: the strip scrolls
  * horizontally (`overflow-x:auto`, `min-width:0`) rather than widening the header.
  */
-export const Overflowing: Story = { args: { tabs: MANY_TABS, active: 'files', width: 380 } };
+export const Overflowing: Story = { args: { tabs: MANY_TABS, active: 'hero', width: 380 } };

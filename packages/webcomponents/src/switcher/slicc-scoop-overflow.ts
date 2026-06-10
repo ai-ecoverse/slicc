@@ -15,10 +15,14 @@ import '../pill/slicc-pill.js';
 // hidden chips in via `items` and listens for `slicc-scoop-select`.
 //
 // Surfaces map onto the inherited library tokens exactly as the prototype did:
-// the trigger uses --txt-2 / --line / --ghost / --ink / --ctl-h, and the popup
-// uses --canvas / --line / --shadow-pane. Dark therefore flips automatically via
-// the library's .dark / [data-theme="dark"] / body.dark scopes. Cloned pills
-// carry their own theme tokens (each <slicc-pill> manages its own palette).
+// the trigger uses --txt-2 / --line / --ghost / --ink / --ctl-h. The opened
+// dropdown is intentionally *frameless* — no background / border / shadow /
+// padding — so the overflowed scoops simply appear stacked underneath the
+// trigger (their own pill surfaces are affordance enough). Dark therefore flips
+// automatically via the library's .dark / [data-theme="dark"] / body.dark
+// scopes. Cloned pills carry their own theme tokens (each <slicc-pill> manages
+// its own palette) and reveal with a per-item staggered entrance (suppressed
+// under prefers-reduced-motion).
 // ---------------------------------------------------------------------------
 
 const STYLE = `
@@ -27,9 +31,11 @@ const STYLE = `
 .morebtn{display:none;font:inherit;font-size:13px;font-weight:600;color:var(--txt-2);background:transparent;border:1px solid var(--line);border-radius:9999px;height:var(--ctl-h,30px);padding:0 11px;cursor:pointer;line-height:1;align-items:center;}
 .morebtn:hover{background:var(--ghost);color:var(--ink);}
 :host([count]:not([count="0"])) .morebtn,.switcher-more.has-overflow .morebtn{display:inline-flex;}
-.pop{display:none;position:absolute;top:calc(100% + 6px);left:0;min-width:180px;background:var(--canvas);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow-pane);padding:6px;z-index:20;flex-direction:column;gap:4px;}
+.pop{display:none;position:absolute;top:calc(100% + 6px);left:0;min-width:180px;z-index:20;flex-direction:column;gap:4px;}
 .switcher-more.open .pop{display:flex;}
-.pop slicc-pill{display:block;width:100%;--pill-w:100%;}
+.pop slicc-pill{display:block;width:100%;--pill-w:100%;animation:scoopReveal .24s ease both;animation-delay:calc(var(--i,0) * 45ms);}
+@keyframes scoopReveal{from{opacity:0;transform:translateY(-4px);}to{opacity:1;transform:none;}}
+@media (prefers-reduced-motion: reduce){.pop slicc-pill{animation:none;}}
 `;
 const SHEET = sheet(STYLE);
 
@@ -63,16 +69,18 @@ export interface SliccScoopSelectDetail {
 /**
  * `<slicc-scoop-overflow>` — the prototype's switcher overflow popup
  * (`.switcher-more`). A pill-shaped "⋯" trigger (`.morebtn`) that stays hidden
- * until there is overflow, plus an absolutely-positioned dropdown (`.pop`) that
- * stacks the overflowed scoop chips column-wise as full-width `<slicc-pill>`
- * clones. Clicking the trigger toggles the popup (and `aria-expanded`); a click
- * anywhere outside closes it; clicking a chip emits `slicc-scoop-select` and
- * closes.
+ * until there is overflow, plus an absolutely-positioned, *frameless* dropdown
+ * (`.pop`) that stacks the overflowed scoop chips column-wise as full-width
+ * `<slicc-pill>` clones — the chips simply appear underneath the trigger with no
+ * surrounding background / border / shadow / padding, revealing with a per-item
+ * staggered entrance (suppressed under `prefers-reduced-motion`). Clicking the
+ * trigger toggles the popup (and `aria-expanded`); a click anywhere outside
+ * closes it; clicking a chip emits `slicc-scoop-select` and closes.
  *
- * Self-contained shadow DOM. The trigger and popup map onto inherited library
- * tokens (`--txt-2`, `--line`, `--ghost`, `--ink`, `--ctl-h`, `--canvas`,
- * `--shadow-pane`) so dark flips automatically via `.dark` /
- * `[data-theme="dark"]` / `body.dark`. The cloned `<slicc-pill>` chips manage
+ * Self-contained shadow DOM. The trigger maps onto inherited library tokens
+ * (`--txt-2`, `--line`, `--ghost`, `--ink`, `--ctl-h`) so dark flips
+ * automatically via `.dark` / `[data-theme="dark"]` / `body.dark`. The frameless
+ * popup carries no surface of its own; the cloned `<slicc-pill>` chips manage
  * their own theme.
  *
  * Overflow detection (which chips don't fit) stays the host's responsibility —
@@ -231,11 +239,12 @@ export class SliccScoopOverflow extends HTMLElement {
     }
 
     const pills: HTMLElement[] = [];
-    for (const item of this.#items) {
+    this.#items.forEach((item, i) => {
       const id = item.id;
       const label = item.label ?? item.id;
       const type = item.type === 'cone' ? 'cone' : 'scoop';
       const eyes = item.eyes === 'open' || item.eyes === 'dead' ? item.eyes : 'none';
+      // `--i` drives the per-item stagger (animation-delay) on reveal.
       const pill = h('slicc-pill', {
         class: 'scoop',
         part: 'pill',
@@ -244,6 +253,7 @@ export class SliccScoopOverflow extends HTMLElement {
         eyes,
         color: item.color ?? false,
         label,
+        style: `--i:${i}`,
       });
       pill.addEventListener('click', () => {
         const k = pill.dataset.k ?? '';
@@ -251,7 +261,7 @@ export class SliccScoopOverflow extends HTMLElement {
         this.#select(k, found?.label ?? k);
       });
       pills.push(pill);
-    }
+    });
     this.#pop.replaceChildren(...pills);
   }
 

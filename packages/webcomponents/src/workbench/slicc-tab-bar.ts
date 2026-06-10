@@ -10,14 +10,14 @@ import { h } from '../internal/dom.js';
  *
  * Lifted faithfully from the prototype (`proto/StellarRubySwift.html` `.tabstrip`):
  * the horizontal scrollable strip in the workbench header (`.wbhead`) that holds
- * the ordered tool / sprinkle `.tab` buttons, with `.tdiv` hairline dividers
- * between groups. `min-width: 0` lets it shrink under the header spacer instead of
- * forcing the header wider, and `overflow-x: auto` scrolls the tabs horizontally
- * once they exceed the available width.
+ * the ordered content (sprinkle) `.tab` buttons. `min-width: 0` lets it shrink
+ * under the header spacer instead of forcing the header wider, and
+ * `overflow-x: auto` scrolls the tabs horizontally once they exceed the
+ * available width.
  *
  * The strip itself carries no bar-level dark rule — active-tab tinting lives on
- * the `<slicc-tab>` children. Everything is var-driven (`--line`) so the divider
- * hairline tracks the inherited theme automatically.
+ * the `<slicc-tab>` children. Everything is var-driven so it tracks the inherited
+ * theme automatically.
  */
 const STYLE = `
 slicc-tab-bar {
@@ -30,13 +30,6 @@ slicc-tab-bar {
 }
 slicc-tab-bar[hidden] {
   display: none;
-}
-slicc-tab-bar > .slicc-tab-bar__div {
-  width: 1px;
-  height: 18px;
-  background: var(--line);
-  margin: 0 4px;
-  flex: 0 0 auto;
 }
 `;
 
@@ -51,7 +44,12 @@ function ensureTabBarStyle(doc: Document): void {
   (doc.head ?? doc.documentElement).appendChild(style);
 }
 
-/** Kinds of tab the bar renders: a plain tool tab or a defined sprinkle chip. */
+/**
+ * Kinds a tab descriptor can carry: a plain `tool` tab or a defined `sprinkle`
+ * chip. Per the project decision the bar NEVER renders `tool` tabs — the data
+ * model still accepts them (so consumers can keep passing them), but only
+ * `sprinkle` (content) tabs are displayed. See {@link SliccTabBar}.
+ */
 export type TabKind = 'tool' | 'sprinkle';
 
 /**
@@ -86,10 +84,14 @@ function normalizeKind(kind: string | null | undefined): TabKind {
 /**
  * `<slicc-tab-bar>` — the workbench tab strip from the prototype (`.tabstrip`).
  * A horizontal, scrollable flex row that hosts an ordered set of `<slicc-tab>`
- * children (composed BY TAG) and `.tdiv` hairline dividers between groups,
- * mirroring the dock rail. The tab set is dynamic: `addTab` / `removeTab` /
+ * children (composed BY TAG). The tab set is dynamic: `addTab` / `removeTab` /
  * `selectTab` mutate it and keep exactly one active tab in sync, and the `tabs`
  * array property declaratively replaces the whole set.
+ *
+ * Per the project decision the bar NEVER shows tools in the tab bar: `tool`-kind
+ * descriptors are accepted by the data model (`tabs` / `addTab` keep them, so the
+ * active selection and consumers are unaffected) but are filtered out of
+ * rendering — only `sprinkle` (content) tabs are displayed.
  *
  * Light DOM (no shadow root): the strip renders its `<slicc-tab>` children into
  * its own light subtree so the host app can style them and so the children are
@@ -107,7 +109,6 @@ function normalizeKind(kind: string | null | undefined): TabKind {
  *
  * @attr active - the id of the currently selected tab (reflected; mirrors `.tab.on`)
  * @csspart tab - each rendered `<slicc-tab>` child
- * @csspart divider - each `.tdiv` hairline divider between tab groups
  * @fires tab-select - `{ detail: { id } }` when a tab becomes active (composed, bubbling)
  * @fires tab-close - `{ detail: { id } }` when a tab is closed (composed, bubbling)
  */
@@ -316,25 +317,21 @@ export class SliccTabBar extends HTMLElement {
     this.selectTab(id);
   }
 
-  /** Build the `<slicc-tab>` children (with `.tdiv` dividers between groups). */
+  /**
+   * Build the `<slicc-tab>` children. `tool`-kind descriptors are never rendered
+   * (the project decision: no tools in the tab bar) — only `sprinkle` (content)
+   * tabs paint, while the data model keeps the full set.
+   */
   #render(): void {
     if (this.#built) return;
     this.#built = true;
 
     const active = this.active;
-    let prevKind: TabKind | null = null;
     const nodes: Node[] = [];
 
     for (const t of this.#tabs) {
       const kind = normalizeKind(t.kind);
-      // A `.tdiv` hairline sits between groups of differing kind (tool↔sprinkle).
-      if (prevKind != null && prevKind !== kind) {
-        nodes.push(
-          h('span', { class: 'slicc-tab-bar__div', part: 'divider', 'aria-hidden': 'true' })
-        );
-      }
-      prevKind = kind;
-
+      if (kind === 'tool') continue;
       nodes.push(
         h('slicc-tab', {
           'tab-id': t.id,

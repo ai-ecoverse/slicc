@@ -10,6 +10,12 @@ import { attachLongPressGesture, type LongPressHandle } from '../internal/long-p
  * badge's `--ctx` context accent drives the glyph color.
  */
 const NEW_CHAT_ICON = 'square-pen';
+/**
+ * Busy/pending glyph — a **lucide** `loader-circle` swapped into the badge while
+ * the new-chat work is in flight, spun via CSS (held static under
+ * `prefers-reduced-motion`).
+ */
+const SPINNER_ICON = 'loader-circle';
 /** Rendered lucide glyph size (px) inside the 28×28 `.nico` badge. */
 const ICON_SIZE = 16;
 
@@ -122,10 +128,14 @@ const STYLE = `
 }
 
 /* .fznew-options — the three gesture actions, surfaced as a small legend of
-   directly-clickable rows when the rail is expanded (icon-only when collapsed,
-   where the press gesture on the badge is the only affordance). */
+   directly-clickable rows. Hidden at rest; in expanded mode they are revealed
+   only on hover or keyboard focus (focus-within), so the rail stays calm by
+   default and the legend is a discoverable hover affordance rather than
+   persistent chrome. Collapsed, the press gesture on the badge is the only
+   affordance. */
 .fznew-options { display: none; }
-:host([expanded]) .fznew-options {
+:host([expanded]:hover) .fznew-options,
+:host([expanded]:focus-within) .fznew-options {
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -155,9 +165,19 @@ const STYLE = `
 .fznew-opt:focus-visible { outline: 2px solid var(--ctx); outline-offset: 1px; }
 .fznew-opt svg { display: block; flex: 0 0 auto; }
 
-/* Respect prefers-reduced-motion: no fade, just hold the static end state. */
+/* .fznew-spinner — busy/pending progress: the badge glyph swaps to a spinning
+   lucide loader the moment the new-chat work is kicked off (optimistically on a
+   save click, or whenever the host sets `busy`), so there is immediate feedback
+   before any save/reload completes. */
+.fznew-spinner { display: grid; place-items: center; color: var(--ctx); }
+.fznew-spinner svg { display: block; animation: slicc-fznew-spin 0.8s linear infinite; }
+@keyframes slicc-fznew-spin { to { transform: rotate(360deg); } }
+
+/* Respect prefers-reduced-motion: no fade, no spin — just hold the static end
+   state (the loader glyph still shows, it simply does not rotate). */
 @media (prefers-reduced-motion: reduce) {
   .fznew, .nlbl { transition: none; }
+  .fznew-spinner svg { animation: none; }
 }
 `;
 const SHEET = sheet(STYLE);
@@ -189,16 +209,25 @@ const SHEET = sheet(STYLE);
  * erases the current chat from history (`new-chat-erase`). A modifier-click that
  * lands inside the double-click window is treated as the second click. In
  * expanded mode the three actions are also surfaced as a small directly-clickable
- * legend below the button so the hidden gestures are discoverable; collapsed, the
- * press gesture on the badge is the only affordance.
+ * legend below the button so the hidden gestures are discoverable — the legend is
+ * revealed only on hover / keyboard focus (focus-within), not persistently;
+ * collapsed, the press gesture on the badge is the only affordance.
+ *
+ * On a save activation (and whenever the host sets the `busy` attribute) the
+ * badge glyph swaps to a spinning lucide loader, giving immediate "work is
+ * happening" feedback before the save + reload completes; the spin is held static
+ * under `prefers-reduced-motion: reduce`.
  *
  * @attr expanded - boolean; reveals the fading "New chat" label + the options legend
  * @attr label - the label text / accessible name (default "New chat")
+ * @attr busy - boolean; swaps the badge glyph for a spinning loader (entered
+ *   optimistically on a save click; also host-drivable)
  * @csspart button - the inner `<button>` element (the `.fznew` node)
  * @csspart badge - the circular `.nico` icon badge
  * @csspart icon - the lucide `<svg>` glyph inside the badge
+ * @csspart spinner - the busy-state spinner wrapper around the loader glyph
  * @csspart label - the `.nlbl` text span
- * @csspart options - the `.fznew-options` legend (expanded only)
+ * @csspart options - the `.fznew-options` legend (expanded, hover/focus only)
  * @csspart option-save / option-skip / option-erase - the three legend buttons
  * @slot icon - overrides the default lucide glyph inside the badge
  * @slot - default slot overrides the label text
@@ -207,7 +236,7 @@ const SHEET = sheet(STYLE);
  * @fires new-chat-erase - long press / modifier-click: new chat erasing this one
  */
 export class SliccFreezerNew extends HTMLElement {
-  static readonly observedAttributes = ['expanded', 'label'];
+  static readonly observedAttributes = ['expanded', 'label', 'busy'];
 
   readonly #root: ShadowRoot;
   #button: HTMLButtonElement | null = null;
@@ -255,20 +284,44 @@ export class SliccFreezerNew extends HTMLElement {
     else this.setAttribute('label', value);
   }
 
+  /**
+   * Busy/pending state. When set, the badge glyph swaps to a spinning loader so
+   * there is immediate "work is happening" feedback. Hosts can drive it directly
+   * (`el.busy = true` before the async save), and a save click also enters it
+   * optimistically. Reflected to the `busy` attribute.
+   */
+  get busy(): boolean {
+    return this.hasAttribute('busy');
+  }
+
+  set busy(value: boolean) {
+    this.toggleAttribute('busy', value);
+  }
+
   #render(): void {
     const label = this.label;
+    const busy = this.busy;
 
-    const iconSlot = h(
-      'slot',
-      { name: 'icon' },
-      iconEl(NEW_CHAT_ICON, { size: ICON_SIZE, part: 'icon' })
-    );
-    const badge = h('span', { class: 'nico', part: 'badge' }, iconSlot);
+    const glyph = busy
+      ? h(
+          'span',
+          { class: 'fznew-spinner', part: 'spinner' },
+          iconEl(SPINNER_ICON, { size: ICON_SIZE, part: 'icon' })
+        )
+      : h('slot', { name: 'icon' }, iconEl(NEW_CHAT_ICON, { size: ICON_SIZE, part: 'icon' }));
+    const badge = h('span', { class: 'nico', part: 'badge' }, glyph);
     const labelNode = h('span', { class: 'nlbl', part: 'label' }, h('slot', null, label));
 
     const button = h(
       'button',
-      { class: 'fznew', part: 'button', type: 'button', 'aria-label': label, title: label },
+      {
+        class: 'fznew',
+        part: 'button',
+        type: 'button',
+        'aria-label': label,
+        title: label,
+        'aria-busy': busy ? 'true' : undefined,
+      },
       badge,
       labelNode
     ) as HTMLButtonElement;
@@ -341,6 +394,10 @@ export class SliccFreezerNew extends HTMLElement {
 
   /** Dispatch the composed, bubbling `new-chat-<action>` event. */
   #emit(action: NewChatAction): void {
+    // Optimistic progress: a save kicks off a save + memory-extract + reload, so
+    // surface the spinner immediately on activation (before the host does any
+    // async work / reload). The host may also drive `busy` directly.
+    if (action === 'save') this.busy = true;
     this.dispatchEvent(new CustomEvent(`new-chat-${action}`, { bubbles: true, composed: true }));
   }
 }

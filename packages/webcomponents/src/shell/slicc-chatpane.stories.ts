@@ -49,3 +49,13 @@ type Story = StoryObj<ChatpaneArgs>;
 
 export const Wide: Story = { args: { narrow: false } };
 export const Narrow: Story = { args: { narrow: true } };
+
+/**
+ * Wide layout in dark mode — the column establishes `color: var(--ink)` (the
+ * prototype's body-text cascade), so the agent prose resolves to the bright
+ * dark-mode `--ink` for strong contrast against the dark `--bg`.
+ */
+export const Dark: Story = {
+  args: { narrow: false },
+  globals: { theme: 'dark' },
+};
