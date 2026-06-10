@@ -7,8 +7,8 @@ import type { ITheme, Terminal as TerminalType } from '@xterm/xterm';
 // in `src/css.d.ts`.
 import XTERM_CSS from '@xterm/xterm/css/xterm.css?raw';
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
-import { iconSvg } from '../internal/icons.js';
+import { h, sheet } from '../internal/dom.js';
+import { iconEl } from '../internal/icons.js';
 
 /**
  * Dark xterm theme matching the prototype's one dark terminal surface
@@ -87,6 +87,20 @@ const STYLE = `
 .host .xterm { height: 100%; }
 .host .xterm-viewport { overflow-y: auto; }
 `;
+
+/**
+ * The xterm chrome (third-party CSS) + component CSS as shared constructable
+ * stylesheets, built LAZILY on first connect. Constructing them at module scope
+ * would call `new CSSStyleSheet()` at import time and break this module's
+ * non-DOM importability (the package barrel / kernel-worker typecheck); building
+ * them on the first `#renderChrome` keeps the import side-effect-free while still
+ * sharing one pair of sheets across every instance.
+ */
+let SHEETS: CSSStyleSheet[] | null = null;
+function chromeSheets(): CSSStyleSheet[] {
+  if (!SHEETS) SHEETS = [sheet(XTERM_CSS), sheet(STYLE)];
+  return SHEETS;
+}
 
 /**
  * `<slicc-terminal>` — a self-contained xterm.js terminal panel, the reusable
@@ -208,15 +222,17 @@ export class SliccTerminal extends HTMLElement {
   /** Render the shadow-root chrome (style + header + mount host). */
   #renderChrome(): void {
     if (this.#hostEl) return;
-    this.#root.innerHTML =
-      `<style>${XTERM_CSS}</style><style>${STYLE}</style>` +
-      '<div class="hd" part="header">' +
-      iconSvg('terminal', { size: 14 }) +
-      `<span class="title">${escapeHtml(this.label)}</span>` +
-      '<span class="spacer"></span>' +
-      '</div>' +
-      '<div class="host" part="host"></div>';
-    this.#hostEl = this.#root.querySelector('.host');
+    this.#root.adoptedStyleSheets = chromeSheets();
+    const header = h(
+      'div',
+      { class: 'hd', part: 'header' },
+      iconEl('terminal', { size: 14 }),
+      h('span', { class: 'title' }, this.label),
+      h('span', { class: 'spacer' })
+    );
+    const host = h('div', { class: 'host', part: 'host' });
+    this.#root.replaceChildren(header, host);
+    this.#hostEl = host;
   }
 
   /** Load xterm + addon-fit, construct the terminal, and open it. */

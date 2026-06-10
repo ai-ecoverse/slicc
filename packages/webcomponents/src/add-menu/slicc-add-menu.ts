@@ -1,6 +1,6 @@
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
-import { iconSvg } from '../internal/icons.js';
+import { h, sheet } from '../internal/dom.js';
+import { iconEl } from '../internal/icons.js';
 
 // ---------------------------------------------------------------------------
 // Lifted from proto/StellarRubySwift.html (ADD_STYLE ~L756, class SliccAddMenu
@@ -10,7 +10,7 @@ import { iconSvg } from '../internal/icons.js';
 // `data-open` / `data-dropping` host states, and the bubbling+composed
 // `slicc-add` CustomEvent emitted on selection / upload / drop.
 //
-// Icons: every glyph is a lucide `<svg>` rendered via the shared `iconSvg`
+// Icons: every glyph is a lucide `<svg>` rendered via the shared `iconEl`
 // helper (`../internal/icons.js`) — NOT emoji or hand-rolled path data. The
 // trigger swaps between the lucide `plus` (closed) and `x` (open) glyphs, and
 // the same 45° rotate/transition from the prototype rides on top of the swap.
@@ -90,6 +90,7 @@ const STYLE = `
 .drop{position:absolute;inset:0;border-radius:10px;display:none;align-items:center;justify-content:center;text-align:center;background:var(--am-accent-subtle);border:2px dashed var(--am-accent);color:var(--am-accent);font-size:13px;font-weight:600;pointer-events:none;}
 :host([data-dropping]) .drop{display:flex;}
 `;
+const SHEET = sheet(STYLE);
 
 /** A single selectable entry within a results section. */
 export interface SliccAddEntry {
@@ -210,7 +211,7 @@ const QUICK_ACTIONS: QuickAction[] = [
  * `image` / `monitor` glyphs) sit above Files / Skills / Conversations sections,
  * all keyboard navigable. Files can also be added by drag-and-drop onto the wrap.
  *
- * All glyphs are lucide `<svg>`s via the shared `iconSvg` helper — never emoji
+ * All glyphs are lucide `<svg>`s via the shared `iconEl` helper — never emoji
  * or bespoke unicode symbols. The trigger spin holds a static end state under
  * `prefers-reduced-motion: reduce`.
  *
@@ -269,6 +270,7 @@ export class SliccAddMenu extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+    this.#root.adoptedStyleSheets = [SHEET];
   }
 
   connectedCallback(): void {
@@ -322,24 +324,63 @@ export class SliccAddMenu extends HTMLElement {
   // ----- Render -------------------------------------------------------------
 
   #render(): void {
-    this.#root.innerHTML =
-      `<style>${STYLE}</style>` +
-      `<input type="file" multiple hidden />` +
-      `<div class="wrap" part="wrap">` +
-      `<div class="results" part="results" role="listbox"><div class="body"></div>` +
-      `<div class="drop">Drop files to add</div></div>` +
-      `<div class="row">` +
-      `<button class="trigger" part="trigger" aria-haspopup="true" aria-expanded="false" title="Add to prompt"><span class="ti">${iconSvg('plus', { size: TRIGGER_ICON_SIZE })}</span></button>` +
-      `<div class="searchbox"><span class="si">${iconSvg('search', { size: SEARCH_ICON_SIZE })}</span>` +
-      `<input type="text" placeholder="Search files, skills, conversations…" /></div>` +
-      `</div></div>`;
+    const fileInput = h('input', {
+      type: 'file',
+      multiple: true,
+      hidden: true,
+    }) as HTMLInputElement;
 
-    this.#trigger = this.#root.querySelector('.trigger') as HTMLButtonElement;
-    this.#triggerIcon = this.#root.querySelector('.trigger .ti') as HTMLSpanElement;
-    this.#wrap = this.#root.querySelector('.wrap') as HTMLDivElement;
-    this.#search = this.#root.querySelector('.searchbox input') as HTMLInputElement;
-    this.#bodyEl = this.#root.querySelector('.results .body') as HTMLDivElement;
-    this.#file = this.#root.querySelector('input[type=file]') as HTMLInputElement;
+    const bodyEl = h('div', { class: 'body' }) as HTMLDivElement;
+    const results = h(
+      'div',
+      { class: 'results', part: 'results', role: 'listbox' },
+      bodyEl,
+      h('div', { class: 'drop' }, 'Drop files to add')
+    );
+
+    const triggerIcon = h(
+      'span',
+      { class: 'ti' },
+      iconEl('plus', { size: TRIGGER_ICON_SIZE })
+    ) as HTMLSpanElement;
+    const trigger = h(
+      'button',
+      {
+        class: 'trigger',
+        part: 'trigger',
+        'aria-haspopup': 'true',
+        'aria-expanded': 'false',
+        title: 'Add to prompt',
+      },
+      triggerIcon
+    ) as HTMLButtonElement;
+
+    const search = h('input', {
+      type: 'text',
+      placeholder: 'Search files, skills, conversations…',
+    }) as HTMLInputElement;
+    const searchbox = h(
+      'div',
+      { class: 'searchbox' },
+      h('span', { class: 'si' }, iconEl('search', { size: SEARCH_ICON_SIZE })),
+      search
+    );
+
+    const wrap = h(
+      'div',
+      { class: 'wrap', part: 'wrap' },
+      results,
+      h('div', { class: 'row' }, trigger, searchbox)
+    ) as HTMLDivElement;
+
+    this.#root.replaceChildren(fileInput, wrap);
+
+    this.#trigger = trigger;
+    this.#triggerIcon = triggerIcon;
+    this.#wrap = wrap;
+    this.#search = search;
+    this.#bodyEl = bodyEl;
+    this.#file = fileInput;
     this.#bind();
     void this.#renderBody();
   }
@@ -393,7 +434,7 @@ export class SliccAddMenu extends HTMLElement {
 
   /** Swap the trigger glyph to the lucide `plus` (closed) or `x` (open). */
   #setTriggerGlyph(open: boolean): void {
-    this.#triggerIcon.innerHTML = iconSvg(open ? 'x' : 'plus', { size: TRIGGER_ICON_SIZE });
+    this.#triggerIcon.replaceChildren(iconEl(open ? 'x' : 'plus', { size: TRIGGER_ICON_SIZE }));
   }
 
   open(): void {
@@ -464,13 +505,13 @@ export class SliccAddMenu extends HTMLElement {
 
     const list = this.#collect(sections);
     this.#items = [];
-    let html = '';
+    const nodes: HTMLElement[] = [];
     let prevQuick = false;
 
     for (const it of list) {
       if (it.type === 'sec') {
-        if (prevQuick) html += `<div class="sep"></div>`;
-        html += `<div class="sec">${escapeHtml(it.label)}</div>`;
+        if (prevQuick) nodes.push(h('div', { class: 'sep' }));
+        nodes.push(h('div', { class: 'sec' }, it.label));
         prevQuick = false;
       } else if (it.type === 'quick') {
         const i = this.#items.length;
@@ -479,23 +520,44 @@ export class SliccAddMenu extends HTMLElement {
             ? { kind: 'upload', name: '', size: 0 }
             : { kind: 'capture', mode: it.data.mode ?? 'photo', label: it.data.label }
         );
-        const subHtml = it.data.sub ? `<div class="sb">${escapeHtml(it.data.sub)}</div>` : '';
-        html +=
-          `<div class="item quick" data-i="${i}"><span class="ic">${iconSvg(it.data.icon, { size: ROW_ICON_SIZE })}</span>` +
-          `<span class="tx"><div class="lb">${escapeHtml(it.data.label)}</div>${subHtml}</span></div>`;
+        const tx = h('span', { class: 'tx' }, h('div', { class: 'lb' }, it.data.label));
+        if (it.data.sub) tx.append(h('div', { class: 'sb' }, it.data.sub));
+        nodes.push(
+          h(
+            'div',
+            { class: 'item quick', 'data-i': i },
+            h('span', { class: 'ic' }, iconEl(it.data.icon, { size: ROW_ICON_SIZE })),
+            tx
+          )
+        );
         prevQuick = true;
       } else {
         const i = this.#items.length;
         this.#items.push({ kind: it.section.kind, id: it.data.id, label: it.data.label });
-        html +=
-          `<div class="item" data-i="${i}"><span class="ic">${iconSvg(it.section.icon, { size: ROW_ICON_SIZE })}</span>` +
-          `<span class="tx"><div class="lb">${escapeHtml(it.data.label)}</div>` +
-          `<div class="sb">${escapeHtml(it.data.sub ?? '')}</div></span></div>`;
+        nodes.push(
+          h(
+            'div',
+            { class: 'item', 'data-i': i },
+            h('span', { class: 'ic' }, iconEl(it.section.icon, { size: ROW_ICON_SIZE })),
+            h(
+              'span',
+              { class: 'tx' },
+              h('div', { class: 'lb' }, it.data.label),
+              h('div', { class: 'sb' }, it.data.sub ?? '')
+            )
+          )
+        );
       }
     }
 
-    this.#bodyEl.innerHTML =
-      html || `<div class="empty">No matches for &ldquo;${escapeHtml(this.#query)}&rdquo;.</div>`;
+    if (nodes.length) {
+      this.#bodyEl.replaceChildren(...nodes);
+    } else {
+      // Empty state — the prototype framed the query in typographic quotes (“ ”).
+      this.#bodyEl.replaceChildren(
+        h('div', { class: 'empty' }, `No matches for “${this.#query}”.`)
+      );
+    }
 
     for (const el of Array.from(this.#bodyEl.querySelectorAll<HTMLElement>('.item'))) {
       const i = Number(el.dataset.i);

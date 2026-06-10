@@ -1,5 +1,5 @@
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
+import { h } from '../internal/dom.js';
 
 /**
  * A row in the file tree: either a group header or a selectable file.
@@ -95,17 +95,17 @@ function ensureFileTreeStyle(doc: Document): void {
   (doc.head ?? doc.documentElement).appendChild(style);
 }
 
-/** Build the inner markup for the given items. */
-function rowsHtml(items: readonly FileTreeItem[]): string {
-  let html = '';
+/** Build the row elements for the given items (no innerHTML). */
+function buildRows(items: readonly FileTreeItem[]): HTMLElement[] {
+  const rows: HTMLElement[] = [];
   for (const item of items) {
     if (item.kind === 'group') {
-      html += `<div class="grp">${escapeHtml(item.label)}</div>`;
+      rows.push(h('div', { class: 'grp' }, item.label));
     } else {
-      html += `<div class="f" data-id="${escapeHtml(item.id)}">${escapeHtml(item.label)}</div>`;
+      rows.push(h('div', { class: 'f', 'data-id': item.id }, item.label));
     }
   }
-  return html;
+  return rows;
 }
 
 /**
@@ -250,7 +250,7 @@ export class SliccFileTree extends HTMLElement {
     for (const item of items) {
       if (item.kind === 'file') this.#paths.set(item.id, item.path ?? item.label);
     }
-    this.innerHTML = rowsHtml(items);
+    this.replaceChildren(...buildRows(items));
     this.#applySelection();
   }
 

@@ -1,7 +1,7 @@
 import { define } from '../internal/define.js';
 // Renders these child custom elements internally — owns their registration.
 import './slicc-tab.js';
-import { escapeHtml } from '../internal/html.js';
+import { h } from '../internal/dom.js';
 
 /**
  * Scoped, document-level stylesheet for `<slicc-tab-bar>`. Light-DOM hosts cannot
@@ -323,29 +323,32 @@ export class SliccTabBar extends HTMLElement {
 
     const active = this.active;
     let prevKind: TabKind | null = null;
-    const parts: string[] = [];
+    const nodes: Node[] = [];
 
     for (const t of this.#tabs) {
       const kind = normalizeKind(t.kind);
       // A `.tdiv` hairline sits between groups of differing kind (tool↔sprinkle).
       if (prevKind != null && prevKind !== kind) {
-        parts.push('<span class="slicc-tab-bar__div" part="divider" aria-hidden="true"></span>');
+        nodes.push(
+          h('span', { class: 'slicc-tab-bar__div', part: 'divider', 'aria-hidden': 'true' })
+        );
       }
       prevKind = kind;
 
-      const attrs = [
-        `tab-id="${escapeHtml(t.id)}"`,
-        `kind="${kind}"`,
-        `label="${escapeHtml(t.label)}"`,
-        'part="tab"',
-      ];
-      if (t.closable) attrs.push('closable');
-      if (t.glyph) attrs.push(`glyph="${escapeHtml(t.glyph)}"`);
-      if (active != null && active === t.id) attrs.push('active');
-      parts.push(`<slicc-tab ${attrs.join(' ')}></slicc-tab>`);
+      nodes.push(
+        h('slicc-tab', {
+          'tab-id': t.id,
+          kind,
+          label: t.label,
+          part: 'tab',
+          closable: t.closable ? true : undefined,
+          glyph: t.glyph || undefined,
+          active: active != null && active === t.id ? true : undefined,
+        })
+      );
     }
 
-    this.innerHTML = parts.join('');
+    this.replaceChildren(...nodes);
   }
 }
 

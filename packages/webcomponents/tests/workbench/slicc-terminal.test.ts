@@ -66,8 +66,9 @@ describe('slicc-terminal', () => {
 
   it('injects the xterm stylesheet into the shadow root (so rows render in shadow DOM)', async () => {
     const el = await mount();
-    const styleText = Array.from(el.shadowRoot?.querySelectorAll('style') ?? [])
-      .map((s) => s.textContent ?? '')
+    // CSS now lives in constructable sheets (adoptedStyleSheets), not <style> nodes.
+    const styleText = (el.shadowRoot?.adoptedStyleSheets ?? [])
+      .flatMap((s) => Array.from(s.cssRules).map((r) => r.cssText))
       .join('\n');
     // A marker selector only the xterm stylesheet provides.
     expect(styleText).toContain('.xterm');
