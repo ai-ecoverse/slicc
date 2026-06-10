@@ -10,7 +10,7 @@ review.
 
 ```
 src/
-  internal/      define() (guarded registration), escapeHtml(), shared helpers
+  internal/      define() (guarded registration), dom.ts (h()/sheet()/frag()), icons.ts (iconEl()), shared helpers
   theme/         tokens.css (prototype token vocabulary), tokens.ts, slicc-theme*
   primitives/    token-only leaves (logo, tag, icon-button, send-button, eyes, …)
   pill/          slicc-pill (shadow DOM, lifted from prototype)
@@ -24,8 +24,20 @@ tests/**/<name>.test.ts    co-located browser tests, mirroring src/ subsystem
 ## Conventions (every component MUST follow)
 
 - **Vanilla web components**, no framework. One element per file, `slicc-*` tag,
-  `Slicc*` PascalCase class. Build markup with template strings + `innerHTML`
-  (prototype style); escape interpolated text with `escapeHtml`.
+  `Slicc*` PascalCase class.
+- **No `innerHTML` — build the DOM.** Construct markup with the `internal/dom.ts`
+  builder (`h(tag, props, ...children)`, `frag()`, `append()`) and commit it via
+  `replaceChildren()`; text passed as `h()` children / `textContent` is escaped by
+  the DOM, so there is no injection surface and `escapeHtml` is unnecessary. Render
+  lucide glyphs with `iconEl(name, opts)` (a live `<svg>`), never an icon string.
+  Shadow components share one constructable stylesheet: `const SHEET = sheet(STYLE)`
+  at module scope, `this.#root.adoptedStyleSheets = [SHEET]` in the constructor (no
+  `<style>` node). Light-DOM hosts keep their one-time document `<style>` injection
+  (`style.textContent = CSS` is fine) but build their subtree with `h()`. See
+  `src/primitives/slicc-logo.ts` for the reference shape. This is **enforced**: the
+  `lint:no-innerhtml` gate (in `npm run lint` / `lint:ci`) fails on any
+  `.innerHTML =` / `.outerHTML =` / `insertAdjacentHTML` in `src/**/*.ts`
+  (`*.stories.ts` / `*.test.ts` exempt).
 - **Register via `define(tag, ctor)`** from `internal/define.js` at module bottom
   (self-guards double-registration). Add a `HTMLElementTagNameMap` augmentation.
 - **NodeNext imports:** relative imports MUST carry the `.js` extension
