@@ -150,7 +150,7 @@ export interface OrchestratorDeps {
   rand?: RandomFn;
 }
 
-type Stage = 'idle' | 'awaiting-connect' | 'connecting' | 'complete';
+type Stage = 'idle' | 'collect-profile' | 'awaiting-connect' | 'connecting' | 'complete';
 
 export class OnboardingOrchestrator {
   private deps: OrchestratorDeps;
@@ -179,6 +179,7 @@ export class OnboardingOrchestrator {
    */
   handleFirstRun(): void {
     if (this.stage !== 'idle') return;
+    this.stage = 'collect-profile';
     this.deps.postDipReference("Welcome to SLICC — let's get you set up.");
     this.deps.postDipReference('![Welcome](/shared/sprinkles/welcome/welcome.shtml)');
   }

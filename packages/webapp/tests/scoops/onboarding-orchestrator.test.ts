@@ -165,6 +165,17 @@ describe('OnboardingOrchestrator', () => {
     });
   });
 
+  describe('handleFirstRun', () => {
+    it('posts the welcome message and dip reference exactly once even when called twice', () => {
+      const h = makeHarness();
+      h.orchestrator.handleFirstRun();
+      h.orchestrator.handleFirstRun(); // second call must be a no-op
+      expect(h.dipRefs).toHaveLength(2); // "Welcome…" text + dip image markdown
+      expect(h.dipRefs[0]).toContain("let's get you set up");
+      expect(h.dipRefs[1]).toContain('welcome.shtml');
+    });
+  });
+
   describe('handleConnectReady', () => {
     it('responds to ready by broadcasting the provider catalogue to the dip', async () => {
       const h = makeHarness();
