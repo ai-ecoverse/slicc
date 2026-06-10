@@ -261,6 +261,50 @@ describe('slicc-agent-message', () => {
   });
 
   describe('appearance', () => {
+    it('renders the prose body in the inherited --ui font stack, not a browser default', () => {
+      const el = mount();
+      el.setBodyHtml('<p>warm hero</p>');
+      // --ui is "adobe-clean", "Inter", system-ui, sans-serif — regression guard
+      // for the body falling back to the browser default font.
+      const ff = getComputedStyle(bodyOf(el)).fontFamily;
+      expect(ff).toContain('adobe-clean');
+      expect(ff).toContain('Inter');
+    });
+
+    it('renders markdown headings in the --ui font stack', () => {
+      const el = mount();
+      el.setBodyHtml('<h2>Findings</h2>');
+      const h2 = el.querySelector('h2') as HTMLElement;
+      expect(getComputedStyle(h2).fontFamily).toContain('adobe-clean');
+    });
+
+    it('styles a rendered markdown blockquote with the violet accent border', () => {
+      const el = mount();
+      el.setBodyHtml('<blockquote><p>quote</p></blockquote>');
+      const bq = el.querySelector('blockquote') as HTMLElement;
+      // --violet #8b5cf6 → rgb(139, 92, 246).
+      expect(getComputedStyle(bq).borderLeftColor).toBe('rgb(139, 92, 246)');
+    });
+
+    it('renders a fenced code block in the mono font with the inline-code chrome stripped', () => {
+      const el = mount();
+      el.setBodyHtml('<pre><code>const x = 1;</code></pre>');
+      const pre = el.querySelector('pre') as HTMLElement;
+      expect(getComputedStyle(pre).fontFamily).toContain('Mono');
+      const code = pre.querySelector('code') as HTMLElement;
+      // pre > code drops the inline --ghost pill background (rgba(0,0,0,0) = transparent).
+      expect(getComputedStyle(code).backgroundColor).toBe('rgba(0, 0, 0, 0)');
+    });
+
+    it('does not apply the generic list padding to the bespoke .plan list', () => {
+      const el = mount();
+      el.setPlan(['a', 'b']);
+      const plan = el.querySelector('ul.plan') as HTMLElement;
+      // The generic `.body ul` rule excludes `.plan` / `.check` via :not(), so the
+      // prototype list keeps its flush padding.
+      expect(getComputedStyle(plan).paddingLeft).toBe('0px');
+    });
+
     it('renders inline code with the ghost background and mono font', () => {
       const el = mount();
       el.setBodyHtml('<p>run <code>npm test</code></p>');
