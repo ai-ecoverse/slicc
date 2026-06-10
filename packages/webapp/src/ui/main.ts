@@ -108,11 +108,7 @@ function wireAddMenu(
           mimeType: 'image/png',
           quality: 1.0,
         });
-        const ab =
-          result.bytes.buffer instanceof ArrayBuffer
-            ? result.bytes.buffer
-            : new Uint8Array(result.bytes).buffer;
-        return new File([ab], `screenshot-${Date.now()}.png`, { type: 'image/png' });
+        return new File([result.bytes], `screenshot-${Date.now()}.png`, { type: 'image/png' });
       } catch {
         return null;
       }

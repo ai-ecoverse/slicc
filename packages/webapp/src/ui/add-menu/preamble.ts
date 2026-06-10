@@ -25,18 +25,15 @@ export function compileContextPreamble(references: AddItem[]): string {
 
 /**
  * Inverse of compileContextPreamble, for DISPLAY ONLY: strip a leading
- * `[context]` block (header + `- ` lines, up to the blank-line separator)
- * from text reconstructed out of the agent's stored history, so the hidden
- * preamble never leaks into a rebuilt transcript. No-op when there's no
- * leading block.
+ * `[context]` block (header + `- ` lines + blank separator) from text
+ * reconstructed out of the agent's stored history, so the hidden preamble
+ * never leaks into a rebuilt transcript. No-op when there's no leading block.
  *
- * Display edge case: a user message that literally starts with `[context]\n`
- * (without having gone through compileContextPreamble) will also have that
- * prefix stripped from the displayed transcript. The full text is still
- * forwarded to the agent correctly via `agentText` in chat-panel.ts.
+ * The regex anchors to the exact structure compileContextPreamble emits, so
+ * user messages that happen to start with "[context]" are left untouched
+ * unless they also have the `- kind: locator` + blank-line shape.
  */
 export function stripContextPreamble(text: string): string {
-  if (!text.startsWith('[context]\n')) return text;
-  const sep = text.indexOf('\n\n');
-  return sep === -1 ? '' : text.slice(sep + 2);
+  const match = /^\[context\]\n(?:- [^\n]*\n)*\n/.exec(text);
+  return match ? text.slice(match[0].length) : text;
 }

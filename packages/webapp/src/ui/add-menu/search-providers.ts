@@ -27,6 +27,12 @@ interface VfsLike {
 const WALK_LIMIT = 500;
 const WALK_CACHE_TTL_MS = 3000;
 
+const NOISY_DIR_NAMES = new Set(['node_modules', 'dist', 'build', 'coverage', '__pycache__']);
+
+function isNoisyDir(name: string): boolean {
+  return name.startsWith('.') || NOISY_DIR_NAMES.has(name);
+}
+
 function rank(query: string, hay: string): number {
   const q = query.toLowerCase();
   const h = hay.toLowerCase();
@@ -76,6 +82,7 @@ async function walkViaReadDir(
       if (seen.has(path) || isExcluded(path, exclude)) continue;
       seen.add(path);
       if (entry.type === 'directory') {
+        if (isNoisyDir(entry.name)) continue;
         items.push({ kind: 'folder', label: entry.name, sublabel: dir, locator: path });
         queue.push(path);
       } else if (entry.type === 'file') {

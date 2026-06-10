@@ -54,7 +54,7 @@ describe('stripContextPreamble', () => {
     expect(stripContextPreamble('just a question')).toBe('just a question');
   });
   it('returns empty string when the text is only a preamble', () => {
-    expect(stripContextPreamble('[context]\n- skill: sprinkles')).toBe('');
+    expect(stripContextPreamble('[context]\n- skill: sprinkles\n\n')).toBe('');
   });
   it('only strips a [context] block at the very start', () => {
     const raw = 'hello [context]\n- skill: x\n\nworld';
