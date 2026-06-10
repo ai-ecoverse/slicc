@@ -384,7 +384,7 @@ function buildGitHubHeaders(
     'User-Agent': 'slicc-upskill',
   };
   if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
+    headers.Authorization = `Bearer ${token}`;
   }
   return headers;
 }
@@ -502,7 +502,7 @@ function formatDiscoveredSkills(discovered: DiscoveredSkill[], heading: string):
 
   for (const skill of discovered) {
     const raw = skill.description || '';
-    const description = raw.length > descWidth ? raw.slice(0, descWidth - 1) + '…' : raw;
+    const description = raw.length > descWidth ? `${raw.slice(0, descWidth - 1)}…` : raw;
     output += `  ${skill.name.padEnd(nameWidth)}  ${formatSkillSource(skill.source).padEnd(sourceWidth)} ${description}\n`;
   }
 
@@ -2428,6 +2428,115 @@ async function handleRecommendations(
  *   omitted (e.g. headless tests or pre-CDP boot), `upskill tabs` exits
  *   non-zero with a clear "browser APIs unavailable" message.
  */
+/**
+ * Try to handle a GitHub repo install in marketplace mode.
+ * Returns a result if the repo has a marketplace manifest, null otherwise.
+ */
+async function handleMarketplaceGitHubInstall(
+  owner: string,
+  repo: string,
+  sourceRef: string,
+  fetchFn: SecureFetch,
+  fs: VirtualFS,
+  branch: string | undefined,
+  selectedSkills: string[],
+  selectedPlugins: string[],
+  installAll: boolean,
+  listOnly: boolean,
+  force: boolean
+): Promise<{ stdout: string; stderr: string; exitCode: number } | null> {
+  const zipResult = await fetchRepoZip(owner, repo, fetchFn, branch);
+  if (zipResult.status !== 'ok') return null;
+
+  const files = stripZipPrefix(zipResult.files);
+  const marketplace = detectMarketplaceManifest(files);
+  if (!marketplace) return null;
+
+  if (listOnly || (selectedSkills.length === 0 && selectedPlugins.length === 0 && !installAll)) {
+    return { stdout: formatMarketplaceListing(marketplace, sourceRef), stderr: '', exitCode: 0 };
+  }
+
+  if (selectedPlugins.length > 0 && selectedSkills.length > 0) {
+    return {
+      stdout: '',
+      stderr: 'upskill: --plugin and --skill are mutually exclusive\n',
+      exitCode: 1,
+    };
+  }
+
+  let skillsToInstall: Array<{ name: string; path: string }> = [];
+
+  if (selectedPlugins.length > 0) {
+    for (const pluginName of selectedPlugins) {
+      const plugin = marketplace.plugins.find((p) => p.name === pluginName);
+      if (!plugin) {
+        return {
+          stdout: '',
+          stderr: `upskill: plugin collection "${pluginName}" not found in ${owner}/${repo}\n`,
+          exitCode: 1,
+        };
+      }
+      skillsToInstall.push(...plugin.skills);
+    }
+  } else if (selectedSkills.length > 0) {
+    for (const skillName of selectedSkills) {
+      const found = marketplace.plugins.flatMap((p) => p.skills).find((s) => s.name === skillName);
+      if (!found) {
+        return {
+          stdout: '',
+          stderr: `upskill: skill "${skillName}" not found in ${owner}/${repo}\n`,
+          exitCode: 1,
+        };
+      }
+      skillsToInstall.push(found);
+    }
+  } else {
+    skillsToInstall = marketplace.plugins.flatMap((p) => p.skills);
+  }
+
+  if (skillsToInstall.length === 0) {
+    return { stdout: 'No skills to install.\n', stderr: '', exitCode: 0 };
+  }
+
+  let output = '';
+  let errors = '';
+  let successCount = 0;
+  const totalSkills = skillsToInstall.length;
+  const startTime = Date.now();
+
+  for (let si = 0; si < skillsToInstall.length; si++) {
+    const skill = skillsToInstall[si];
+    const result = await installSkillFromZip(skill.path, skill.name, files, fs, force);
+    const idx = si + 1;
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    const avgTime = (Date.now() - startTime) / idx;
+    const remaining = Math.round(((totalSkills - idx) * avgTime) / 1000);
+    const eta = idx < totalSkills ? ` (~${remaining}s remaining)` : '';
+
+    if (result.ok) {
+      output += `[${idx}/${totalSkills}] Installed "${skill.name}" from ${owner}/${repo} (${elapsed}s)${eta}\n`;
+      successCount++;
+    } else {
+      output += `[${idx}/${totalSkills}] Failed "${skill.name}": ${result.error}${eta}\n`;
+      errors += `upskill: ${result.error}\n`;
+    }
+  }
+
+  if (installAll) {
+    for (const skipped of marketplace.skippedGitSubdir) {
+      errors += `upskill: skipped plugin "${skipped.name}" (external git-subdir${skipped.url ? `: ${skipped.url}` : ''})\n`;
+    }
+  }
+
+  const totalElapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+  if (successCount > 0) {
+    output += `\nInstalled ${successCount} skill(s)${totalSkills > 1 ? ` in ${totalElapsed}s` : ''}\n`;
+    await runPostInstallHooks();
+  }
+
+  return { stdout: output, stderr: errors, exitCode: errors ? 1 : 0 };
+}
+
 export function createUpskillCommand(
   fs: VirtualFS,
   fetchFn: SecureFetch,
@@ -2625,124 +2734,20 @@ export function createUpskillCommand(
       const effectiveSubPath = subPath ?? githubRef.path;
       const github = await createGitHubRequestContext(fetchFn);
 
-      // ── Marketplace detection (early return if manifest found) ──
-      // Try downloading the ZIP to detect a marketplace manifest. If the ZIP
-      // succeeds and contains .claude-plugin/marketplace.json, handle in
-      // marketplace mode and return. On ZIP failure or no manifest, fall
-      // through to the existing flat-discovery path below unchanged.
-      {
-        const marketplaceZip = await fetchRepoZip(owner, repo, fetchFn, effectiveBranch);
-        if (marketplaceZip.status === 'ok') {
-          const marketplaceFiles = stripZipPrefix(marketplaceZip.files);
-          const marketplace = detectMarketplaceManifest(marketplaceFiles);
-
-          if (marketplace) {
-            // Show grouped listing when no action flags given
-            if (
-              listOnly ||
-              (selectedSkills.length === 0 && selectedPlugins.length === 0 && !installAll)
-            ) {
-              return {
-                stdout: formatMarketplaceListing(marketplace, sourceRef),
-                stderr: '',
-                exitCode: 0,
-              };
-            }
-
-            // --plugin and --skill are mutually exclusive
-            if (selectedPlugins.length > 0 && selectedSkills.length > 0) {
-              return {
-                stdout: '',
-                stderr: 'upskill: --plugin and --skill are mutually exclusive\n',
-                exitCode: 1,
-              };
-            }
-
-            // Resolve which skills to install
-            let skillsToInstall: Array<{ name: string; path: string }> = [];
-
-            if (selectedPlugins.length > 0) {
-              for (const pluginName of selectedPlugins) {
-                const plugin = marketplace.plugins.find((p) => p.name === pluginName);
-                if (!plugin) {
-                  return {
-                    stdout: '',
-                    stderr: `upskill: plugin collection "${pluginName}" not found in ${owner}/${repo}\n`,
-                    exitCode: 1,
-                  };
-                }
-                skillsToInstall.push(...plugin.skills);
-              }
-            } else if (selectedSkills.length > 0) {
-              for (const skillName of selectedSkills) {
-                const found = marketplace.plugins
-                  .flatMap((p) => p.skills)
-                  .find((s) => s.name === skillName);
-                if (!found) {
-                  return {
-                    stdout: '',
-                    stderr: `upskill: skill "${skillName}" not found in ${owner}/${repo}\n`,
-                    exitCode: 1,
-                  };
-                }
-                skillsToInstall.push(found);
-              }
-            } else {
-              // --all: every skill from every local-source plugin
-              skillsToInstall = marketplace.plugins.flatMap((p) => p.skills);
-            }
-
-            if (skillsToInstall.length === 0) {
-              return { stdout: 'No skills to install.\n', stderr: '', exitCode: 0 };
-            }
-
-            let output = '';
-            let errors = '';
-            let successCount = 0;
-            const totalSkills = skillsToInstall.length;
-            const startTime = Date.now();
-
-            for (let si = 0; si < skillsToInstall.length; si++) {
-              const skill = skillsToInstall[si];
-              const installResult = await installSkillFromZip(
-                skill.path,
-                skill.name,
-                marketplaceFiles,
-                fs,
-                force
-              );
-              const idx = si + 1;
-              const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-              const avgTime = (Date.now() - startTime) / idx;
-              const remaining = Math.round(((totalSkills - idx) * avgTime) / 1000);
-              const eta = idx < totalSkills ? ` (~${remaining}s remaining)` : '';
-
-              if (installResult.ok) {
-                output += `[${idx}/${totalSkills}] Installed "${skill.name}" from ${owner}/${repo} (${elapsed}s)${eta}\n`;
-                successCount++;
-              } else {
-                output += `[${idx}/${totalSkills}] Failed "${skill.name}": ${installResult.error}${eta}\n`;
-                errors += `upskill: ${installResult.error}\n`;
-              }
-            }
-
-            if (installAll) {
-              for (const skipped of marketplace.skippedGitSubdir) {
-                errors += `upskill: skipped plugin "${skipped.name}" (external git-subdir${skipped.url ? `: ${skipped.url}` : ''})\n`;
-              }
-            }
-
-            const totalElapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-            if (successCount > 0) {
-              output += `\nInstalled ${successCount} skill(s)${totalSkills > 1 ? ` in ${totalElapsed}s` : ''}\n`;
-              await runPostInstallHooks();
-            }
-
-            return { stdout: output, stderr: errors, exitCode: errors ? 1 : 0 };
-          }
-        }
-      }
-      // ── end marketplace detection ──
+      const marketplaceResult = await handleMarketplaceGitHubInstall(
+        owner,
+        repo,
+        sourceRef,
+        fetchFn,
+        fs,
+        effectiveBranch,
+        selectedSkills,
+        selectedPlugins,
+        installAll,
+        listOnly,
+        force
+      );
+      if (marketplaceResult) return marketplaceResult;
 
       // List skills in the repository
       const result = await listGitHubSkills(

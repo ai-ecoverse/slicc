@@ -176,6 +176,39 @@ async function resolveMarketplacePluginPaths(
   return paths;
 }
 
+async function discoverMarketplaceSkillCandidates(
+  fs: VirtualFS,
+  claudePluginPath: string,
+  seenPaths: Set<string>
+): Promise<DiscoveredSkillCandidate[]> {
+  const manifestPath = `${claudePluginPath}/marketplace.json`;
+  const pluginDirs = await resolveMarketplacePluginPaths(fs, manifestPath);
+  const discovered: DiscoveredSkillCandidate[] = [];
+
+  for (const pluginDir of pluginDirs) {
+    const skillRoot = `${pluginDir}/skills`;
+    const skillEntries = await readSortedDir(fs, skillRoot);
+
+    for (const skillEntry of skillEntries) {
+      if (skillEntry.type !== 'directory') continue;
+
+      const skillPath = `${skillRoot}/${skillEntry.name}`;
+      const skillFilePath = `${skillPath}/${SKILL_FILE}`;
+      if (!(await pathExists(fs, skillFilePath)) || seenPaths.has(skillPath)) continue;
+
+      seenPaths.add(skillPath);
+      discovered.push({
+        source: 'marketplace',
+        sourceRoot: skillRoot,
+        path: skillPath,
+        skillFilePath,
+      });
+    }
+  }
+
+  return discovered;
+}
+
 async function discoverCompatibilitySkillCandidates(
   fs: VirtualFS
 ): Promise<DiscoveredSkillCandidate[]> {
@@ -215,29 +248,12 @@ async function discoverCompatibilitySkillCandidates(
       }
 
       if (entry.name === '.claude-plugin') {
-        const manifestPath = `${childPath}/marketplace.json`;
-        const pluginDirs = await resolveMarketplacePluginPaths(fs, manifestPath);
-
-        for (const pluginDir of pluginDirs) {
-          const skillRoot = `${pluginDir}/skills`;
-          const skillEntries = await readSortedDir(fs, skillRoot);
-
-          for (const skillEntry of skillEntries) {
-            if (skillEntry.type !== 'directory') continue;
-
-            const skillPath = `${skillRoot}/${skillEntry.name}`;
-            const skillFilePath = `${skillPath}/${SKILL_FILE}`;
-            if (!(await pathExists(fs, skillFilePath)) || seenPaths.has(skillPath)) continue;
-
-            seenPaths.add(skillPath);
-            discovered.push({
-              source: 'marketplace',
-              sourceRoot: skillRoot,
-              path: skillPath,
-              skillFilePath,
-            });
-          }
-        }
+        const marketplaceCandidates = await discoverMarketplaceSkillCandidates(
+          fs,
+          childPath,
+          seenPaths
+        );
+        discovered.push(...marketplaceCandidates);
         continue;
       }
 
