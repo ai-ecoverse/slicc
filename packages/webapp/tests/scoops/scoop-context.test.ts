@@ -1798,6 +1798,22 @@ describe('ScoopContext dispose', () => {
     expect((ctx as any).agent).toBeNull();
   });
 
+  it('releases the agent-subscription closure on dispose', () => {
+    injectMockAgent(ctx, async () => {});
+    // The unsubscribe closure returned by agent.subscribe() captures the
+    // Agent (and through it the full message history). dispose() must
+    // not only CALL it but also DROP the reference — a disposed
+    // ScoopContext retained anywhere otherwise pins the entire
+    // conversation (incl. tool results) in memory.
+    const unsub = vi.fn();
+    (ctx as any).unsubscribe = unsub;
+
+    ctx.dispose();
+
+    expect(unsub).toHaveBeenCalled();
+    expect((ctx as any).unsubscribe).toBeNull();
+  });
+
   it('suppresses status callbacks after dispose', async () => {
     let resolvePrompt!: () => void;
     const promptStarted = new Promise<void>((r) => {

@@ -277,7 +277,6 @@
     {
       "includes": [
         "packages/chrome-extension/src/extension-leader-tray.ts",
-        "packages/chrome-extension/src/offscreen-bridge.ts",
         "packages/chrome-extension/src/offscreen.ts",
         "packages/chrome-extension/src/service-worker.ts",
         "packages/chrome-extension/vite.config.ts",
@@ -286,7 +285,6 @@
         "packages/webapp/cloud/app.js",
         "packages/webapp/src/core/context-compaction.ts",
         "packages/webapp/src/kernel/realm/js-realm-shared.ts",
-        "packages/webapp/src/scoops/orchestrator.ts",
         "packages/webapp/src/scoops/scoop-management-tools.ts",
         "packages/webapp/src/scoops/tray-leader-sync.ts",
         "packages/webapp/src/shell/supplemental-commands/convert-command.ts",
@@ -323,7 +321,6 @@
       "includes": [
         "packages/cherry/src/cdp-host-handlers.ts",
         "packages/chrome-extension/src/fetch-proxy-shared.ts",
-        "packages/chrome-extension/src/offscreen-bridge.ts",
         "packages/chrome-extension/src/secrets-entry.ts",
         "packages/chrome-extension/src/service-worker.ts",
         "packages/chrome-extension/vite.config.ts",
@@ -361,10 +358,8 @@
         "packages/webapp/src/net/handoff-link.ts",
         "packages/webapp/src/net/link-header.ts",
         "packages/webapp/src/providers/built-in/azure-openai.ts",
-        "packages/webapp/src/scoops/agent-message-to-chat.ts",
         "packages/webapp/src/scoops/db.ts",
         "packages/webapp/src/scoops/onboarding-orchestrator.ts",
-        "packages/webapp/src/scoops/orchestrator.ts",
         "packages/webapp/src/scoops/scoop-management-tools.ts",
         "packages/webapp/src/scoops/tray-leader-sync.ts",
         "packages/webapp/src/scoops/tray-webrtc.ts",

@@ -19,6 +19,11 @@ import type {
   Orchestrator,
   OrchestratorCallbacks,
 } from '../../../packages/webapp/src/scoops/orchestrator.js';
+import {
+  capTranscriptToolInput,
+  capTranscriptToolResultForBuffer,
+  capTranscriptToolResultForEvent,
+} from '../../../packages/webapp/src/scoops/transcript-limits.js';
 import { getFollowerTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-follower-status.js';
 import type { FollowerSyncManager } from '../../../packages/webapp/src/scoops/tray-follower-sync.js';
 import { getLeaderTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-leader.js';
@@ -278,48 +283,12 @@ export class OffscreenBridge implements KernelFacade {
 
       onToolStart: (scoopJid, toolName, toolInput) => {
         if (HIDDEN_TOOL_NAMES.has(toolName)) return;
-
-        const msg = bridge.getOrCreateAssistantMsg(scoopJid);
-        if (!msg.toolCalls) msg.toolCalls = [];
-        msg.toolCalls.push({ id: uid(), name: toolName, input: toolInput });
-
-        bridge.emit({
-          type: 'agent-event',
-          scoopJid,
-          eventType: 'tool_start',
-          toolName,
-          toolInput,
-        });
+        bridge.bufferToolStart(scoopJid, toolName, toolInput);
       },
 
       onToolEnd: (scoopJid, toolName, result, isError) => {
         if (HIDDEN_TOOL_NAMES.has(toolName)) return;
-
-        const msgId = bridge.currentMessageId.get(scoopJid);
-        if (msgId) {
-          const buf = bridge.getBuffer(scoopJid);
-          const msg = buf.find((m) => m.id === msgId);
-          if (msg?.toolCalls) {
-            const tc = [...msg.toolCalls]
-              .reverse()
-              .find((t) => t.name === toolName && t.result === undefined);
-            if (tc) {
-              tc.result = result;
-              tc.isError = isError;
-            }
-          }
-        }
-
-        bridge.persistScoop(scoopJid);
-
-        bridge.emit({
-          type: 'agent-event',
-          scoopJid,
-          eventType: 'tool_end',
-          toolName,
-          toolResult: result,
-          isError,
-        });
+        bridge.bufferToolEnd(scoopJid, toolName, result, isError);
       },
 
       onToolUI: (scoopJid, toolName, requestId, html) => {
@@ -342,24 +311,126 @@ export class OffscreenBridge implements KernelFacade {
         });
       },
 
-      onIncomingMessage: (scoopJid, message) => {
-        const chatMsg: BufferedChatMessage = {
-          id: message.id,
-          role: 'user',
-          content:
-            message.channel === 'delegation'
-              ? `**[Instructions from sliccy]**\n\n${message.content}`
-              : message.content,
-          attachments: message.attachments,
-          timestamp: new Date(message.timestamp).getTime(),
-          source: message.channel === 'delegation' ? 'delegation' : undefined,
-          channel: message.channel,
-        };
-        bridge.getBuffer(scoopJid).push(chatMsg);
-        bridge.persistScoop(scoopJid);
-        bridge.notifyPanelIncomingMessage(scoopJid, message);
-      },
+      onIncomingMessage: (scoopJid, message) => bridge.bufferIncomingMessage(scoopJid, message),
+
+      onScoopUnregistered: (scoop) => bridge.evictScoopState(scoop),
     };
+  }
+
+  /**
+   * Buffer + emit a tool start. Transcript boundary: shallow-cap
+   * oversized string fields (e.g. write_file's `content`) once, so
+   * BOTH the buffered transcript and the emitted event carry the
+   * capped shape. The agent loop keeps the full input; only the
+   * human-facing transcript is capped — uncapped it grows ~1:1 with
+   * tool traffic and OOMs long sessions (see transcript-limits.ts).
+   */
+  private bufferToolStart(scoopJid: string, toolName: string, toolInput: unknown): void {
+    const cappedInput = capTranscriptToolInput(toolInput);
+
+    const msg = this.getOrCreateAssistantMsg(scoopJid);
+    if (!msg.toolCalls) msg.toolCalls = [];
+    msg.toolCalls.push({ id: uid(), name: toolName, input: cappedInput });
+
+    this.emit({
+      type: 'agent-event',
+      scoopJid,
+      eventType: 'tool_start',
+      toolName,
+      toolInput: cappedInput,
+    });
+  }
+
+  /**
+   * Buffer + emit a tool result. Transcript boundary — same rationale
+   * as {@link bufferToolStart}. Two variants: the BUFFER strips inline
+   * screenshot markers entirely (the panel never persists them either;
+   * they are the largest payload class), while the EMITTED event keeps
+   * the markers whole so the live panel can extract the screenshot —
+   * only the surrounding text is capped.
+   */
+  private bufferToolEnd(
+    scoopJid: string,
+    toolName: string,
+    result: string,
+    isError: boolean
+  ): void {
+    const msgId = this.currentMessageId.get(scoopJid);
+    if (msgId) {
+      const buf = this.getBuffer(scoopJid);
+      const msg = buf.find((m) => m.id === msgId);
+      if (msg?.toolCalls) {
+        const tc = [...msg.toolCalls]
+          .reverse()
+          .find((t) => t.name === toolName && t.result === undefined);
+        if (tc) {
+          tc.result = capTranscriptToolResultForBuffer(result);
+          tc.isError = isError;
+        }
+      }
+    }
+
+    this.persistScoop(scoopJid);
+
+    this.emit({
+      type: 'agent-event',
+      scoopJid,
+      eventType: 'tool_end',
+      toolName,
+      toolResult: capTranscriptToolResultForEvent(result),
+      isError,
+    });
+  }
+
+  /** Buffer + persist + echo an incoming channel message to the panel. */
+  private bufferIncomingMessage(scoopJid: string, message: ChannelMessage): void {
+    const chatMsg: BufferedChatMessage = {
+      id: message.id,
+      role: 'user',
+      content:
+        message.channel === 'delegation'
+          ? `**[Instructions from sliccy]**\n\n${message.content}`
+          : message.content,
+      attachments: message.attachments,
+      timestamp: new Date(message.timestamp).getTime(),
+      source: message.channel === 'delegation' ? 'delegation' : undefined,
+      channel: message.channel,
+    };
+    this.getBuffer(scoopJid).push(chatMsg);
+    this.persistScoop(scoopJid);
+    this.notifyPanelIncomingMessage(scoopJid, message);
+  }
+
+  /**
+   * Evict every per-scoop state slice the bridge keeps. The chat
+   * buffer holds the scoop's full transcript INCLUDING complete tool
+   * results — before the `onScoopUnregistered` hook, programmatic
+   * teardown (ephemeral `agent` spawns, the cone's `drop_scoop`,
+   * workflow subagents) left it in the Map forever: ~1:1 retained
+   * bytes per byte of tool output, straight to the V8 4GB OOM on
+   * skill-heavy sessions. Only the panel's `scoop-drop` message path
+   * cleaned up. Idempotent with that path.
+   */
+  private evictScoopState(scoop: RegisteredScoop): void {
+    this.messageBuffers.delete(scoop.jid);
+    this.currentMessageId.delete(scoop.jid);
+    this.fanOutMessageId.delete(scoop.jid);
+    this.scoopStatuses.delete(scoop.jid);
+    // Drop the persisted UI session too — `persistScoop` writes
+    // `session-<folder>` for every scoop with buffered messages, so
+    // dead ephemeral scoops otherwise pile up in the
+    // `browser-coding-agent` store. The cone never unregisters, but
+    // guard anyway: its session must survive.
+    if (!scoop.isCone && this.sessionStore) {
+      this.sessionStore.delete(`session-${scoop.folder}`).catch((err) => {
+        console.warn(
+          '[offscreen-bridge] Failed to delete session for unregistered scoop:',
+          scoop.folder,
+          err
+        );
+      });
+    }
+    this.emitScoopList();
   }
 
   /**
@@ -1196,42 +1267,7 @@ export class OffscreenBridge implements KernelFacade {
 
     switch (msg.type) {
       case 'user-message': {
-        // In follower mode, route the message to the leader over WebRTC
-        // and let the leader's echo populate our buffer; the local
-        // orchestrator must stay out of the way.
-        if (this.followerSync) {
-          this.getBuffer(msg.scoopJid).push({
-            id: msg.messageId,
-            role: 'user',
-            content: msg.text,
-            attachments: msg.attachments,
-            timestamp: Date.now(),
-          });
-          this.persistScoop(msg.scoopJid);
-          this.followerSync.sendMessage(msg.text, msg.messageId, msg.attachments);
-          break;
-        }
-        const channelMsg: ChannelMessage = {
-          id: msg.messageId,
-          chatJid: msg.scoopJid,
-          senderId: 'user',
-          senderName: 'User',
-          content: msg.text,
-          attachments: msg.attachments,
-          timestamp: new Date().toISOString(),
-          fromAssistant: false,
-          channel: 'web',
-        };
-        this.getBuffer(msg.scoopJid).push({
-          id: msg.messageId,
-          role: 'user',
-          content: msg.text,
-          attachments: msg.attachments,
-          timestamp: Date.now(),
-        });
-        this.persistScoop(msg.scoopJid);
-        await this.orchestrator.handleMessage(channelMsg);
-        this.orchestrator.createScoopTab(msg.scoopJid);
+        await this.handleUserMessage(msg);
         break;
       }
 
@@ -1265,23 +1301,7 @@ export class OffscreenBridge implements KernelFacade {
       }
 
       case 'scoop-drop': {
-        const droppedScoop = this.orchestrator.getScoops().find((s) => s.jid === msg.scoopJid);
-        await this.orchestrator.unregisterScoop(msg.scoopJid);
-        this.messageBuffers.delete(msg.scoopJid);
-        this.currentMessageId.delete(msg.scoopJid);
-        this.fanOutMessageId.delete(msg.scoopJid);
-        this.scoopStatuses.delete(msg.scoopJid);
-        if (droppedScoop && this.sessionStore) {
-          const sessionId = droppedScoop.isCone ? 'session-cone' : `session-${droppedScoop.folder}`;
-          this.sessionStore.delete(sessionId).catch((err) => {
-            console.warn(
-              '[offscreen-bridge] Failed to delete session on scoop drop:',
-              sessionId,
-              err
-            );
-          });
-        }
-        this.emitScoopList();
+        await this.handleScoopDrop(msg.scoopJid);
         break;
       }
 
@@ -1316,25 +1336,7 @@ export class OffscreenBridge implements KernelFacade {
       }
 
       case 'clear-chat': {
-        // Cone-only clear (the "New session" path). Scoops keep their
-        // conversations and continue to run; the fresh cone inherits
-        // the existing roster.
-        const coneJid = this.orchestrator.getScoops().find((s) => s.isCone)?.jid;
-        if (coneJid) {
-          await this.orchestrator.clearScoopMessages(coneJid);
-        }
-        if (this.sessionStore) {
-          await this.sessionStore.delete('session-cone');
-        }
-        if (coneJid) {
-          this.messageBuffers.delete(coneJid);
-          this.currentMessageId.delete(coneJid);
-          this.fanOutMessageId.delete(coneJid);
-        }
-        // Acknowledge so the panel knows the clear completed before it
-        // calls `location.reload()` — important in extension mode where
-        // the offscreen document survives a panel reload.
-        this.emit({ type: 'clear-chat-ack', requestId: msg.requestId });
+        await this.handleClearChat(msg.requestId);
         break;
       }
 
@@ -1370,42 +1372,7 @@ export class OffscreenBridge implements KernelFacade {
       }
 
       case 'sprinkle-lick': {
-        // Sprinkle lick event from the side panel — route through the
-        // shared `routeSprinkleLick` so `startExtensionLeaderTray`'s
-        // `onSprinkleLick` callback can share the same routing.
-        const lickMsg = msg as any;
-        // Follower mode: the dip lives in the leader's mirrored chat, so
-        // its lick belongs to the leader's cone (sending it locally would
-        // record a click against a conversation that doesn't contain the
-        // dip; on a typical follower the local cone also has no provider
-        // login). Mirrors how follower-panel sprinkles forward via
-        // follower-sprinkle-bridge.
-        // Predicate is `followerActive` (sticky across reconnects) not
-        // `followerSync` (transiently null during WebRTC reconnects) so a
-        // flicker doesn't reroute us back to the local model-less cone.
-        // `originLabel` is intentionally not forwarded — the leader is the
-        // origin authority and re-stamps it from the connection on receive
-        // (see `tray-leader-sync.ts case 'sprinkle.lick'`).
-        if (this.followerActive) {
-          if (this.followerSync) {
-            this.followerSync.sendSprinkleLick(
-              lickMsg.sprinkleName,
-              lickMsg.body,
-              lickMsg.targetScoop
-            );
-          } else {
-            console.warn('[offscreen-bridge] sprinkle-lick dropped: follower sync mid-reconnect', {
-              sprinkleName: lickMsg.sprinkleName,
-            });
-          }
-          break;
-        }
-        await this.routeSprinkleLick(
-          lickMsg.sprinkleName,
-          lickMsg.body,
-          lickMsg.targetScoop,
-          lickMsg.originLabel
-        );
+        await this.handleSprinkleLickMsg(msg as any);
         break;
       }
 
@@ -1419,43 +1386,12 @@ export class OffscreenBridge implements KernelFacade {
       }
 
       case 'set-follower-forwarding': {
-        // Standalone follower: install/clear a forwarder on the worker's
-        // LickManager that relays forwardable licks to the page (which hands
-        // them to the FollowerSyncManager). Extension never sends this — it
-        // installs the forwarder directly in offscreen.ts.
-        const lm = (globalThis as Record<string, unknown>).__slicc_lickManager as
-          | { setForwarder(fn: ((e: ForwardedLickEvent) => void) | null): void }
-          | undefined;
-        if (!lm) {
-          console.warn(
-            '[offscreen-bridge] set-follower-forwarding ignored: worker LickManager unavailable'
-          );
-          break;
-        }
-        if (msg.enabled) {
-          lm.setForwarder((event) => this.emit({ type: 'forward-lick', event }));
-        } else {
-          lm.setForwarder(null);
-        }
+        this.handleSetFollowerForwarding(msg.enabled);
         break;
       }
 
       case 'inject-forwarded-lick': {
-        // Standalone leader: route a follower-forwarded lick into the
-        // worker's LickManager (→ defaultLickEventHandler → cone).
-        // Re-emitting through emitEvent is TERMINAL here only because a
-        // leader never has a forwarder installed (see set-follower-forwarding).
-        const lm = (globalThis as Record<string, unknown>).__slicc_lickManager as
-          | { emitEvent(e: ForwardedLickEvent): void }
-          | undefined;
-        if (!lm) {
-          console.warn(
-            '[offscreen-bridge] inject-forwarded-lick dropped: worker LickManager unavailable',
-            { type: msg.event.type }
-          );
-          break;
-        }
-        lm.emitEvent(msg.event);
+        this.handleInjectForwardedLick(msg.event);
         break;
       }
 
@@ -1476,42 +1412,12 @@ export class OffscreenBridge implements KernelFacade {
       }
 
       case 'panel-cdp-command': {
-        const { id, method, params, sessionId } = msg;
-        if (!this.browserAPI) {
-          console.warn('[offscreen-bridge] Panel CDP command received but BrowserAPI is null');
-          this.emit({
-            type: 'panel-cdp-response',
-            id,
-            error: 'BrowserAPI not available',
-          } satisfies PanelCdpResponseMsg);
-          break;
-        }
-        try {
-          const result = await this.browserAPI.getTransport().send(method, params, sessionId);
-          this.emit({ type: 'panel-cdp-response', id, result } satisfies PanelCdpResponseMsg);
-        } catch (err) {
-          this.emit({
-            type: 'panel-cdp-response',
-            id,
-            error: err instanceof Error ? err.message : String(err),
-          } satisfies PanelCdpResponseMsg);
-        }
+        await this.handlePanelCdpCommand(msg);
         break;
       }
 
       case 'tool-ui-action': {
-        const { requestId, action, data } = msg as import('./messages.js').ToolUIActionMsg;
-        try {
-          await toolUIRegistry.handleAction(requestId, { action, data });
-        } catch (err) {
-          const errMsg = err instanceof Error ? err.message : String(err);
-          console.error('[offscreen-bridge] Tool UI action failed', {
-            requestId,
-            action,
-            error: errMsg,
-          });
-          toolUIRegistry.cancel(requestId, `Action failed: ${errMsg}`);
-        }
+        await this.handleToolUIAction(msg as import('./messages.js').ToolUIActionMsg);
         break;
       }
 
@@ -1525,31 +1431,240 @@ export class OffscreenBridge implements KernelFacade {
       // origin's localStorage, so the panel never sends these
       // messages; the case branches stay no-ops on that path.
       case 'local-storage-set': {
-        try {
-          (globalThis as { localStorage?: Storage }).localStorage?.setItem(msg.key, msg.value);
-        } catch (err) {
-          console.warn('[offscreen-bridge] local-storage-set failed:', err);
-        }
+        this.applyLocalStorageOp(msg.type, (s) => s.setItem(msg.key, msg.value));
         break;
       }
 
       case 'local-storage-remove': {
-        try {
-          (globalThis as { localStorage?: Storage }).localStorage?.removeItem(msg.key);
-        } catch (err) {
-          console.warn('[offscreen-bridge] local-storage-remove failed:', err);
-        }
+        this.applyLocalStorageOp(msg.type, (s) => s.removeItem(msg.key));
         break;
       }
 
       case 'local-storage-clear': {
-        try {
-          (globalThis as { localStorage?: Storage }).localStorage?.clear();
-        } catch (err) {
-          console.warn('[offscreen-bridge] local-storage-clear failed:', err);
-        }
+        this.applyLocalStorageOp(msg.type, (s) => s.clear());
         break;
       }
+    }
+  }
+
+  /**
+   * Forward a panel user message into the agent. In follower mode,
+   * route the message to the leader over WebRTC and let the leader's
+   * echo populate our buffer; the local orchestrator must stay out of
+   * the way.
+   */
+  private async handleUserMessage(
+    msg: Extract<PanelToOffscreenMessage, { type: 'user-message' }>
+  ): Promise<void> {
+    this.getBuffer(msg.scoopJid).push({
+      id: msg.messageId,
+      role: 'user',
+      content: msg.text,
+      attachments: msg.attachments,
+      timestamp: Date.now(),
+    });
+    this.persistScoop(msg.scoopJid);
+    if (this.followerSync) {
+      this.followerSync.sendMessage(msg.text, msg.messageId, msg.attachments);
+      return;
+    }
+    const channelMsg: ChannelMessage = {
+      id: msg.messageId,
+      chatJid: msg.scoopJid,
+      senderId: 'user',
+      senderName: 'User',
+      content: msg.text,
+      attachments: msg.attachments,
+      timestamp: new Date().toISOString(),
+      fromAssistant: false,
+      channel: 'web',
+    };
+    await this.orchestrator?.handleMessage(channelMsg);
+    this.orchestrator?.createScoopTab(msg.scoopJid);
+  }
+
+  /**
+   * Panel-initiated scoop drop. Buffer/session eviction also rides the
+   * `onScoopUnregistered` callback fired by `unregisterScoop`; the
+   * explicit deletes here are kept as idempotent defense (and cover
+   * the unknown-jid case where the callback never fires).
+   */
+  private async handleScoopDrop(scoopJid: string): Promise<void> {
+    if (!this.orchestrator) return;
+    const droppedScoop = this.orchestrator.getScoops().find((s) => s.jid === scoopJid);
+    await this.orchestrator.unregisterScoop(scoopJid);
+    this.messageBuffers.delete(scoopJid);
+    this.currentMessageId.delete(scoopJid);
+    this.fanOutMessageId.delete(scoopJid);
+    this.scoopStatuses.delete(scoopJid);
+    if (droppedScoop && this.sessionStore) {
+      const sessionId = droppedScoop.isCone ? 'session-cone' : `session-${droppedScoop.folder}`;
+      this.sessionStore.delete(sessionId).catch((err) => {
+        console.warn('[offscreen-bridge] Failed to delete session on scoop drop:', sessionId, err);
+      });
+    }
+    this.emitScoopList();
+  }
+
+  /**
+   * Cone-only clear (the "New session" path). Scoops keep their
+   * conversations and continue to run; the fresh cone inherits the
+   * existing roster. Acknowledges so the panel knows the clear
+   * completed before it calls `location.reload()` — important in
+   * extension mode where the offscreen document survives a panel
+   * reload.
+   */
+  private async handleClearChat(requestId: string): Promise<void> {
+    const coneJid = this.orchestrator?.getScoops().find((s) => s.isCone)?.jid;
+    if (coneJid) {
+      await this.orchestrator?.clearScoopMessages(coneJid);
+    }
+    if (this.sessionStore) {
+      await this.sessionStore.delete('session-cone');
+    }
+    if (coneJid) {
+      this.messageBuffers.delete(coneJid);
+      this.currentMessageId.delete(coneJid);
+      this.fanOutMessageId.delete(coneJid);
+    }
+    this.emit({ type: 'clear-chat-ack', requestId });
+  }
+
+  /**
+   * Sprinkle lick event from the side panel — route through the shared
+   * `routeSprinkleLick` so `startExtensionLeaderTray`'s `onSprinkleLick`
+   * callback can share the same routing.
+   *
+   * Follower mode: the dip lives in the leader's mirrored chat, so its
+   * lick belongs to the leader's cone (sending it locally would record
+   * a click against a conversation that doesn't contain the dip; on a
+   * typical follower the local cone also has no provider login).
+   * Mirrors how follower-panel sprinkles forward via
+   * follower-sprinkle-bridge. Predicate is `followerActive` (sticky
+   * across reconnects) not `followerSync` (transiently null during
+   * WebRTC reconnects) so a flicker doesn't reroute us back to the
+   * local model-less cone. `originLabel` is intentionally not
+   * forwarded — the leader is the origin authority and re-stamps it
+   * from the connection on receive (see `tray-leader-sync.ts case
+   * 'sprinkle.lick'`).
+   */
+  private async handleSprinkleLickMsg(lickMsg: {
+    sprinkleName: string;
+    body: unknown;
+    targetScoop?: string;
+    originLabel?: string;
+  }): Promise<void> {
+    if (this.followerActive) {
+      if (this.followerSync) {
+        this.followerSync.sendSprinkleLick(lickMsg.sprinkleName, lickMsg.body, lickMsg.targetScoop);
+      } else {
+        console.warn('[offscreen-bridge] sprinkle-lick dropped: follower sync mid-reconnect', {
+          sprinkleName: lickMsg.sprinkleName,
+        });
+      }
+      return;
+    }
+    await this.routeSprinkleLick(
+      lickMsg.sprinkleName,
+      lickMsg.body,
+      lickMsg.targetScoop,
+      lickMsg.originLabel
+    );
+  }
+
+  /**
+   * Standalone follower: install/clear a forwarder on the worker's
+   * LickManager that relays forwardable licks to the page (which hands
+   * them to the FollowerSyncManager). Extension never sends this — it
+   * installs the forwarder directly in offscreen.ts.
+   */
+  private handleSetFollowerForwarding(enabled: boolean): void {
+    const lm = (globalThis as Record<string, unknown>).__slicc_lickManager as
+      | { setForwarder(fn: ((e: ForwardedLickEvent) => void) | null): void }
+      | undefined;
+    if (!lm) {
+      console.warn(
+        '[offscreen-bridge] set-follower-forwarding ignored: worker LickManager unavailable'
+      );
+      return;
+    }
+    if (enabled) {
+      lm.setForwarder((event) => this.emit({ type: 'forward-lick', event }));
+    } else {
+      lm.setForwarder(null);
+    }
+  }
+
+  /**
+   * Standalone leader: route a follower-forwarded lick into the
+   * worker's LickManager (→ defaultLickEventHandler → cone).
+   * Re-emitting through emitEvent is TERMINAL here only because a
+   * leader never has a forwarder installed (see
+   * `handleSetFollowerForwarding`).
+   */
+  private handleInjectForwardedLick(event: ForwardedLickEvent): void {
+    const lm = (globalThis as Record<string, unknown>).__slicc_lickManager as
+      | { emitEvent(e: ForwardedLickEvent): void }
+      | undefined;
+    if (!lm) {
+      console.warn(
+        '[offscreen-bridge] inject-forwarded-lick dropped: worker LickManager unavailable',
+        { type: event.type }
+      );
+      return;
+    }
+    lm.emitEvent(event);
+  }
+
+  /** Proxy a panel terminal CDP command through the offscreen BrowserAPI. */
+  private async handlePanelCdpCommand(
+    msg: Extract<PanelToOffscreenMessage, { type: 'panel-cdp-command' }>
+  ): Promise<void> {
+    const { id, method, params, sessionId } = msg;
+    if (!this.browserAPI) {
+      console.warn('[offscreen-bridge] Panel CDP command received but BrowserAPI is null');
+      this.emit({
+        type: 'panel-cdp-response',
+        id,
+        error: 'BrowserAPI not available',
+      } satisfies PanelCdpResponseMsg);
+      return;
+    }
+    try {
+      const result = await this.browserAPI.getTransport().send(method, params, sessionId);
+      this.emit({ type: 'panel-cdp-response', id, result } satisfies PanelCdpResponseMsg);
+    } catch (err) {
+      this.emit({
+        type: 'panel-cdp-response',
+        id,
+        error: err instanceof Error ? err.message : String(err),
+      } satisfies PanelCdpResponseMsg);
+    }
+  }
+
+  /** Run a tool-UI action; cancel the request on failure so the tool doesn't hang. */
+  private async handleToolUIAction(msg: import('./messages.js').ToolUIActionMsg): Promise<void> {
+    const { requestId, action, data } = msg;
+    try {
+      await toolUIRegistry.handleAction(requestId, { action, data });
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error('[offscreen-bridge] Tool UI action failed', {
+        requestId,
+        action,
+        error: errMsg,
+      });
+      toolUIRegistry.cancel(requestId, `Action failed: ${errMsg}`);
+    }
+  }
+
+  /** Best-effort localStorage shim mutation (see the case comments above). */
+  private applyLocalStorageOp(label: string, op: (storage: Storage) => void): void {
+    try {
+      const storage = (globalThis as { localStorage?: Storage }).localStorage;
+      if (storage) op(storage);
+    } catch (err) {
+      console.warn(`[offscreen-bridge] ${label} failed:`, err);
     }
   }
 

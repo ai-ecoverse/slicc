@@ -39,6 +39,7 @@ import type {
 import { isLickChannel, LICK_CHANNELS, type LickChannel } from '../ui/lick-channels.js';
 import type { ChatMessage, ToolCall as UiToolCall } from '../ui/types.js';
 import { HIDDEN_TOOL_NAMES } from './hidden-tools.js';
+import { capTranscriptText, capTranscriptToolInput } from './transcript-limits.js';
 
 /**
  * Pure translator. `idSeed` lets callers inject a deterministic id
@@ -71,89 +72,119 @@ export function agentMessagesToChatMessages(
 
   for (const m of agentMessages) {
     if (isUserMessage(m)) {
-      const rawText = textOf(m.content);
-      if (rawText.length === 0) continue;
-      // The orchestrator wraps every queued channel message in a
-      // `[<time>] <senderName>: <body>` envelope before handing it to
-      // the agent (see `orchestrator.processScoopQueue`). Two extra
-      // wrinkles:
-      //
-      //   1) `processScoopQueue` batches multiple `ChannelMessage`s
-      //      into a single prompt by joining the formatted lines with
-      //      `\n`, so one persisted user `AgentMessage` can carry
-      //      several envelopes — each one its own ChatMessage in the
-      //      live UI. We split them back apart on rebuild so a quick
-      //      burst of licks renders as N widgets, not one big bubble.
-      //
-      //   2) The senderName for licks is `<channel>:<eventName>` and
-      //      both halves are free-form (webhook/cron/sprinkle/upgrade
-      //      names), so the naive "first `: `" split corrupts senders
-      //      that contain `: ` themselves. The parser anchors on the
-      //      closed set of known senders (`User` or a `LICK_CHANNELS`
-      //      prefix) and only falls through to a generic split for
-      //      unknown senders we don't ship today.
-      const envelopes = splitEnvelopes(rawText);
-      for (const env of envelopes) {
-        if (env.body.length === 0 && env.sender == null) continue;
-        const lickChannel = env.sender ? lickChannelFromSenderName(env.sender) : null;
-        const msg: ChatMessage = {
-          id: idSeed(),
-          role: 'user',
-          content: env.body,
-          timestamp: m.timestamp,
-        };
-        if (lickChannel) {
-          msg.source = 'lick';
-          msg.channel = lickChannel;
-        }
-        out.push(msg);
-      }
+      out.push(...translateUserMessage(m, idSeed));
       lastAssistant = null;
-      continue;
-    }
-
-    if (isAssistantMessage(m)) {
-      const text = textOf(m.content);
-      const allToolCalls = collectToolCalls(m);
-      const visibleToolCalls: UiToolCall[] = [];
-      for (const tc of allToolCalls) {
-        if (hiddenToolNames.has(tc.name)) {
-          droppedToolCallIds.add(tc.id);
-        } else {
-          visibleToolCalls.push(tc);
-        }
-      }
-      const msg: ChatMessage = {
-        id: idSeed(),
-        role: 'assistant',
-        content: text,
-        timestamp: m.timestamp,
+    } else if (isAssistantMessage(m)) {
+      lastAssistant = translateAssistantMessage(
+        m,
         source,
-      };
-      if (visibleToolCalls.length > 0) msg.toolCalls = visibleToolCalls;
-      out.push(msg);
-      lastAssistant = msg;
-      continue;
-    }
-
-    if (isToolResultMessage(m)) {
-      // Skip results for tool calls we filtered out above. Their
-      // assistant counterpart was hidden, so we'd otherwise have no
-      // target to attach to (and a future same-id collision could
-      // cross-attach to an unrelated call).
-      if (droppedToolCallIds.has(m.toolCallId)) continue;
-      // Tool results land on the most recent assistant message's
-      // matching tool call. If we've drifted past that boundary
-      // (e.g. malformed history) we silently skip the result rather
-      // than fabricate an orphan.
-      const target = lastAssistant?.toolCalls?.find((tc) => tc.id === m.toolCallId);
-      if (!target) continue;
-      target.result = textOf(m.content);
-      target.isError = m.isError;
+        idSeed,
+        hiddenToolNames,
+        droppedToolCallIds
+      );
+      out.push(lastAssistant);
+    } else if (isToolResultMessage(m)) {
+      patchToolResult(m, lastAssistant, droppedToolCallIds);
     }
   }
 
   return out;
+}
+
+/**
+ * Translate a user `AgentMessage` into zero or more chat messages. The
+ * orchestrator wraps every queued channel message in a
+ * `[<time>] <senderName>: <body>` envelope before handing it to the
+ * agent (see `orchestrator.processScoopQueue`). Two extra wrinkles:
+ *
+ *   1) `processScoopQueue` batches multiple `ChannelMessage`s into a
+ *      single prompt by joining the formatted lines with `\n`, so one
+ *      persisted user `AgentMessage` can carry several envelopes —
+ *      each one its own ChatMessage in the live UI. We split them back
+ *      apart on rebuild so a quick burst of licks renders as N
+ *      widgets, not one big bubble.
+ *
+ *   2) The senderName for licks is `<channel>:<eventName>` and both
+ *      halves are free-form (webhook/cron/sprinkle/upgrade names), so
+ *      the naive "first `: `" split corrupts senders that contain `: `
+ *      themselves. The parser anchors on the closed set of known
+ *      senders (`User` or a `LICK_CHANNELS` prefix) and only falls
+ *      through to a generic split for unknown senders we don't ship
+ *      today.
+ */
+function translateUserMessage(m: UserMessage, idSeed: () => string): ChatMessage[] {
+  const rawText = textOf(m.content);
+  if (rawText.length === 0) return [];
+  const out: ChatMessage[] = [];
+  for (const env of splitEnvelopes(rawText)) {
+    if (env.body.length === 0 && env.sender == null) continue;
+    const lickChannel = env.sender ? lickChannelFromSenderName(env.sender) : null;
+    const msg: ChatMessage = {
+      id: idSeed(),
+      role: 'user',
+      content: env.body,
+      timestamp: m.timestamp,
+    };
+    if (lickChannel) {
+      msg.source = 'lick';
+      msg.channel = lickChannel;
+    }
+    out.push(msg);
+  }
+  return out;
+}
+
+/**
+ * Translate an assistant `AgentMessage`, filtering hidden tool calls
+ * and recording their ids in `droppedToolCallIds` so the matching
+ * `toolResult` messages are skipped by {@link patchToolResult}.
+ */
+function translateAssistantMessage(
+  m: AssistantMessage,
+  source: string,
+  idSeed: () => string,
+  hiddenToolNames: ReadonlySet<string>,
+  droppedToolCallIds: Set<string>
+): ChatMessage {
+  const visibleToolCalls: UiToolCall[] = [];
+  for (const tc of collectToolCalls(m)) {
+    if (hiddenToolNames.has(tc.name)) {
+      droppedToolCallIds.add(tc.id);
+    } else {
+      visibleToolCalls.push(tc);
+    }
+  }
+  const msg: ChatMessage = {
+    id: idSeed(),
+    role: 'assistant',
+    content: textOf(m.content),
+    timestamp: m.timestamp,
+    source,
+  };
+  if (visibleToolCalls.length > 0) msg.toolCalls = visibleToolCalls;
+  return msg;
+}
+
+/**
+ * Attach a `toolResult` message onto the most recent assistant
+ * message's matching tool call. Results for hidden (dropped) tool
+ * calls are skipped; if we've drifted past the assistant boundary
+ * (e.g. malformed history) the result is silently skipped rather than
+ * fabricating an orphan.
+ */
+function patchToolResult(
+  m: ToolResultMessage,
+  lastAssistant: ChatMessage | null,
+  droppedToolCallIds: ReadonlySet<string>
+): void {
+  if (droppedToolCallIds.has(m.toolCallId)) return;
+  const target = lastAssistant?.toolCalls?.find((tc) => tc.id === m.toolCallId);
+  if (!target) return;
+  // Transcript boundary: cap rebuilt tool results so seeding a large
+  // restored history doesn't materialize unbounded text in memory
+  // (the canonical history this reads from stays untouched).
+  target.result = capTranscriptText(textOf(m.content));
+  target.isError = m.isError;
 }
 
 // ── Discriminators (AgentMessage is a custom-extensible union) ───────
@@ -200,7 +231,10 @@ function collectToolCalls(m: AssistantMessage): UiToolCall[] {
     out.push({
       id: block.id,
       name: block.name,
-      input: block.arguments,
+      // Transcript boundary: shallow-cap oversized string fields (e.g.
+      // write_file's `content`) — shape preserved for the panel's
+      // per-tool input renderers.
+      input: capTranscriptToolInput(block.arguments),
     });
   }
   return out;
