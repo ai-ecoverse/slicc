@@ -372,9 +372,12 @@ export class SliccShader extends HTMLElement {
     if (!gl || !cv || !prog || !this.#buffer) return;
     this.#resize();
     const t = performance.now() / 1000 - this.#start;
-    // Floating focal point — a slow lissajous drift (the prototype's idle breathing).
-    const cx = 0.36 + 0.1 * Math.sin(t * 0.27);
-    const cy = 0.52 + 0.08 * Math.cos(t * 0.21);
+    // Floating focal point — the prototype's slow ambient orbit (`centerFor`):
+    // a very low-frequency drift (periods ~52s / ~65s), not a fast lissajous.
+    const s = 0.5 + 0.5 * Math.sin(t * 0.12);
+    const s2 = 0.5 + 0.5 * Math.sin(t * 0.097 + 1.0);
+    const cx = 0.2 * (1 - s) + 0.46 * s;
+    const cy = 0.74 * (1 - s2) + 0.3 * s2;
     const dark = this.#darkUniform();
     const tint = colorToVec3(this.getAttribute('tint') ?? '', [0.545, 0.361, 0.965]);
     const evt = colorToVec3(this.getAttribute('tint') ?? '', [0.957, 0.247, 0.369]);
@@ -391,11 +394,13 @@ export class SliccShader extends HTMLElement {
     gl.uniform3f(u.u_evt ?? null, evt[0], evt[1], evt[2]);
     gl.uniform1f(u.u_freeze ?? null, clampNum(this.coverage * this.intensity, 0, 1, 0.66) * 2.2);
     gl.uniform1f(u.u_dark ?? null, dark);
-    gl.uniform1f(u.u_density ?? null, 0.5);
-    gl.uniform1f(u.u_falloff ?? null, 1.2);
-    gl.uniform1f(u.u_life ?? null, 0.18);
-    gl.uniform1f(u.u_blink ?? null, 1.0);
-    gl.uniform1f(u.u_thick ?? null, 0.06);
+    // Cone-mode knobs — pulled verbatim from the prototype's frame loop. u_blink
+    // in particular is 0.05 (NOT 1.0): the Game-of-Life cells breathe slowly.
+    gl.uniform1f(u.u_density ?? null, 0.29);
+    gl.uniform1f(u.u_falloff ?? null, 0.3);
+    gl.uniform1f(u.u_life ?? null, 0.35);
+    gl.uniform1f(u.u_blink ?? null, 0.05);
+    gl.uniform1f(u.u_thick ?? null, 0.02);
     gl.uniform3f(u.u_tint ?? null, tint[0], tint[1], tint[2]);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     // Energy decays toward rest.
