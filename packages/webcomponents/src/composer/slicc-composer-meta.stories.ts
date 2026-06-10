@@ -88,3 +88,30 @@ export const InComposer: Story = {
     return wrap;
   },
 };
+
+/**
+ * The model dropdown across many providers — rows show model + provider, and the
+ * long list grows a type-ahead search (filter by model name or provider). Click
+ * "Opus 4.8" to open it; it pops UP from the bottom-anchored row.
+ */
+export const ModelDropdown: Story = {
+  render: () => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'min-height:420px;display:flex;align-items:flex-end;padding:16px;';
+    const row = document.createElement('slicc-composer-meta') as HTMLElement & { models?: unknown };
+    row.setAttribute('model', 'Opus 4.8');
+    (row as { models?: unknown }).models = [
+      { name: 'Opus 4.8', provider: 'Anthropic', id: 'claude-opus-4-8' },
+      { name: 'Sonnet 4.6', provider: 'Anthropic', id: 'claude-sonnet-4-6' },
+      { name: 'Haiku 4.5', provider: 'Anthropic', id: 'claude-haiku-4-5' },
+      { name: 'GPT-5', provider: 'OpenAI', id: 'gpt-5' },
+      { name: 'GPT-5 mini', provider: 'OpenAI', id: 'gpt-5-mini' },
+      { name: 'o4', provider: 'OpenAI', id: 'o4' },
+      { name: 'Gemini 2.5 Pro', provider: 'Google', id: 'gemini-2.5-pro' },
+      { name: 'Gemini 2.5 Flash', provider: 'Google', id: 'gemini-2.5-flash' },
+      { name: 'Firefly Image 4', provider: 'Adobe', id: 'firefly-image-4' },
+    ];
+    wrap.append(row);
+    return wrap;
+  },
+};
