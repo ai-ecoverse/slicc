@@ -282,4 +282,99 @@ describe('slicc-floatbar', () => {
       expect(narrowHost?.style.getPropertyValue('aspect-ratio').trim()).toBe('1 / 1');
     });
   });
+
+  describe('the narrow-view tooltip', () => {
+    const narrowMedia = (el: SliccFloatbar): CSSMediaRule => {
+      const sheet = (el.shadowRoot as ShadowRoot).adoptedStyleSheets[0];
+      const media = Array.from(sheet.cssRules).find(
+        (r): r is CSSMediaRule => r instanceof CSSMediaRule && r.conditionText.includes('560px')
+      );
+      expect(media).toBeDefined();
+      return media as CSSMediaRule;
+    };
+
+    const fakeMatchMedia =
+      (matches: boolean) =>
+      (query: string): MediaQueryList =>
+        ({
+          matches,
+          media: query,
+          onchange: null,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+          addListener: () => undefined,
+          removeListener: () => undefined,
+          dispatchEvent: () => false,
+        }) as unknown as MediaQueryList;
+
+    it('renders a decorative tip part derived from the label, spend, and state', () => {
+      const el = document.createElement('slicc-floatbar');
+      el.label = 'CLI · tray · 1 follower';
+      el.online = true;
+      el.spent = '2.41';
+      document.body.appendChild(el);
+
+      const tip = el.shadowRoot?.querySelector('.tip') as HTMLElement;
+      expect(tip).not.toBeNull();
+      expect(tip.getAttribute('part')).toBe('tip');
+      // decorative — the accessible name rides the host title, not the tip node
+      expect(tip.getAttribute('aria-hidden')).toBe('true');
+      expect(tip.textContent).toBe('CLI · tray · 1 follower · $2.41 · online');
+    });
+
+    it('reflects the offline state and omits the spend segment when unset', () => {
+      const el = document.createElement('slicc-floatbar');
+      document.body.appendChild(el);
+      expect(el.shadowRoot?.querySelector('.tip')?.textContent).toBe('CLI float · offline');
+    });
+
+    it('hides the tip in the wide pill and reveals it only below 560px', () => {
+      const el = document.createElement('slicc-floatbar');
+      document.body.appendChild(el);
+      const sheet = (el.shadowRoot as ShadowRoot).adoptedStyleSheets[0];
+
+      // Wide view: the base .tip rule keeps it out of the layout (display longhand).
+      const baseTip = Array.from(sheet.cssRules).find(
+        (r): r is CSSStyleRule => r instanceof CSSStyleRule && r.selectorText === '.tip'
+      );
+      expect(baseTip?.style.getPropertyValue('display').trim()).toBe('none');
+
+      // Narrow view: a .tip rule flips display to block while the square form holds.
+      const narrowRules = Array.from(narrowMedia(el).cssRules).filter(
+        (r): r is CSSStyleRule => r instanceof CSSStyleRule
+      );
+      const tipShow = narrowRules.find((r) => r.selectorText === '.tip');
+      expect(tipShow?.style.getPropertyValue('display').trim()).toBe('block');
+      const narrowHost = narrowRules.find((r) => r.selectorText === ':host');
+      expect(narrowHost?.style.getPropertyValue('width').trim()).toBe('var(--ctl-h, 30px)');
+      expect(narrowHost?.style.getPropertyValue('aspect-ratio').trim()).toBe('1 / 1');
+    });
+
+    it('exposes the tip text as an accessible host title only when collapsed', () => {
+      const original = window.matchMedia;
+      try {
+        window.matchMedia = fakeMatchMedia(true) as typeof window.matchMedia;
+        const el = document.createElement('slicc-floatbar');
+        el.online = true;
+        el.spent = '2.41';
+        document.body.appendChild(el);
+        expect(el.getAttribute('title')).toBe('CLI float · $2.41 · online');
+      } finally {
+        window.matchMedia = original;
+      }
+    });
+
+    it('omits the host title in the wide pill (no redundant tooltip)', () => {
+      const original = window.matchMedia;
+      try {
+        window.matchMedia = fakeMatchMedia(false) as typeof window.matchMedia;
+        const el = document.createElement('slicc-floatbar');
+        el.online = true;
+        document.body.appendChild(el);
+        expect(el.hasAttribute('title')).toBe(false);
+      } finally {
+        window.matchMedia = original;
+      }
+    });
+  });
 });
