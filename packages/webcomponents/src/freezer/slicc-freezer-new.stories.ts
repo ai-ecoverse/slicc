@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
-import { iconSvg } from '../internal/icons.js';
+import { iconEl } from '../internal/icons.js';
 import './slicc-freezer-new.js';
 
 interface FreezerNewArgs {
@@ -71,7 +71,7 @@ export const CustomIcon: Story = {
     el.setAttribute('label', 'New chat');
     const icon = document.createElement('span');
     icon.slot = 'icon';
-    icon.innerHTML = iconSvg('plus', { size: 16 });
+    icon.appendChild(iconEl('plus', { size: 16 }));
     el.appendChild(icon);
     return railFrame(el, true);
   },

@@ -1,5 +1,5 @@
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
+import { h, sheet } from '../internal/dom.js';
 
 /** Memory-tag kinds, in the prototype's vocabulary (`.mtag.us/.fb/.pj`). */
 export type MemtagType = 'user' | 'feedback' | 'project';
@@ -54,6 +54,7 @@ const STYLE = `
   border: 1px solid color-mix(in srgb, var(--mtag-hue, var(--rose)) var(--mtag-border), var(--line));
 }
 `;
+const SHEET = sheet(STYLE);
 
 const STYLE_ID = 'slicc-memtag-dark';
 
@@ -110,6 +111,7 @@ export class SliccMemtag extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+    this.#root.adoptedStyleSheets = [SHEET];
   }
 
   connectedCallback(): void {
@@ -143,11 +145,11 @@ export class SliccMemtag extends HTMLElement {
   #render(): void {
     const { hue, label: defaultLabel } = TYPE_HUE[this.type];
     const label = this.label;
-    // The default slot wins when populated; otherwise the label attr, then the
-    // per-type default text.
-    const labelHtml =
-      label != null ? escapeHtml(label) : `<slot>${escapeHtml(defaultLabel)}</slot>`;
-    this.#root.innerHTML = `<style>${STYLE}</style><span class="mtag" part="tag" style="--mtag-hue:var(${hue})">${labelHtml}</span>`;
+    // The label attr wins when set (an escaped text node); otherwise a default
+    // <slot> carries the per-type fallback text (overridable by slotted content).
+    const inner = label != null ? label : h('slot', null, defaultLabel);
+    const tag = h('span', { class: 'mtag', part: 'tag', style: `--mtag-hue:var(${hue})` }, inner);
+    this.#root.replaceChildren(tag);
   }
 }
 

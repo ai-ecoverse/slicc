@@ -1,10 +1,10 @@
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
-import { iconSvg } from '../internal/icons.js';
+import { h, sheet } from '../internal/dom.js';
+import { iconEl } from '../internal/icons.js';
 
 /**
  * New-chat glyph — a **lucide** `square-pen` icon rendered via the shared
- * `iconSvg` helper (never emoji or bespoke unicode). Sized ~16px to sit inside
+ * `iconEl` helper (never emoji or bespoke unicode). Sized ~16px to sit inside
  * the 28px circular `.nico` badge; the stroke inherits `currentColor`, so the
  * badge's `--ctx` context accent drives the glyph color.
  */
@@ -101,6 +101,7 @@ const STYLE = `
   .fznew, .nlbl { transition: none; }
 }
 `;
+const SHEET = sheet(STYLE);
 
 /**
  * `<slicc-freezer-new>` — the **New Chat Affordance** at the top of the
@@ -142,6 +143,7 @@ export class SliccFreezerNew extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+    this.#root.adoptedStyleSheets = [SHEET];
   }
 
   connectedCallback(): void {
@@ -173,19 +175,25 @@ export class SliccFreezerNew extends HTMLElement {
 
   #render(): void {
     const label = this.label;
-    this.#root.innerHTML =
-      `<style>${STYLE}</style>` +
-      `<button class="fznew" part="button" type="button" aria-label="${escapeHtml(
-        label
-      )}" title="${escapeHtml(label)}">` +
-      `<span class="nico" part="badge"><slot name="icon">${iconSvg(NEW_CHAT_ICON, {
-        size: ICON_SIZE,
-        part: 'icon',
-      })}</slot></span>` +
-      `<span class="nlbl" part="label"><slot>${escapeHtml(label)}</slot></span>` +
-      `</button>`;
-    this.#button = this.#root.querySelector('button');
-    this.#button?.addEventListener('click', this.#onClick);
+
+    const iconSlot = h(
+      'slot',
+      { name: 'icon' },
+      iconEl(NEW_CHAT_ICON, { size: ICON_SIZE, part: 'icon' })
+    );
+    const badge = h('span', { class: 'nico', part: 'badge' }, iconSlot);
+    const labelNode = h('span', { class: 'nlbl', part: 'label' }, h('slot', null, label));
+
+    const button = h(
+      'button',
+      { class: 'fznew', part: 'button', type: 'button', 'aria-label': label, title: label },
+      badge,
+      labelNode
+    ) as HTMLButtonElement;
+
+    button.addEventListener('click', this.#onClick);
+    this.#button = button;
+    this.#root.replaceChildren(button);
   }
 
   readonly #onClick = (): void => {

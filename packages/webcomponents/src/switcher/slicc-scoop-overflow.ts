@@ -1,5 +1,5 @@
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
+import { h, sheet } from '../internal/dom.js';
 // The popup renders <slicc-pill> clones, so it owns the registration.
 import '../pill/slicc-pill.js';
 
@@ -31,6 +31,7 @@ const STYLE = `
 .switcher-more.open .pop{display:flex;}
 .pop slicc-pill{display:block;width:100%;--pill-w:100%;}
 `;
+const SHEET = sheet(STYLE);
 
 /**
  * A descriptor for one overflowed scoop chip rendered as a `<slicc-pill>` clone
@@ -110,6 +111,7 @@ export class SliccScoopOverflow extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+    this.#root.adoptedStyleSheets = [SHEET];
   }
 
   connectedCallback(): void {
@@ -180,22 +182,33 @@ export class SliccScoopOverflow extends HTMLElement {
   // ----- Render --------------------------------------------------------------
 
   #render(): void {
-    this.#root.innerHTML =
-      `<style>${STYLE}</style>` +
-      `<div class="switcher-more" part="wrap">` +
-      `<button class="morebtn" part="more" type="button" title="More scoops" aria-haspopup="true" aria-expanded="false">` +
-      `<slot name="more">⋯</slot></button>` +
-      `<div class="pop" part="pop"></div>` +
-      `</div>`;
-
-    this.#wrap = this.#root.querySelector('.switcher-more') as HTMLDivElement;
-    this.#moreBtn = this.#root.querySelector('.morebtn') as HTMLButtonElement;
-    this.#pop = this.#root.querySelector('.pop') as HTMLDivElement;
+    const moreSlot = h('slot', { name: 'more' }, '⋯');
+    this.#moreBtn = h(
+      'button',
+      {
+        class: 'morebtn',
+        part: 'more',
+        type: 'button',
+        title: 'More scoops',
+        'aria-haspopup': 'true',
+        'aria-expanded': 'false',
+      },
+      moreSlot
+    ) as HTMLButtonElement;
+    this.#pop = h('div', { class: 'pop', part: 'pop' }) as HTMLDivElement;
+    this.#wrap = h(
+      'div',
+      { class: 'switcher-more', part: 'wrap' },
+      this.#moreBtn,
+      this.#pop
+    ) as HTMLDivElement;
 
     this.#moreBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       this.toggle();
     });
+
+    this.#root.replaceChildren(this.#wrap);
 
     this.#renderPop();
     this.#syncOpen();
@@ -212,31 +225,34 @@ export class SliccScoopOverflow extends HTMLElement {
 
     if (n === 0) {
       // No chips left — surface an optional `empty` slot and force the popup shut.
-      this.#pop.innerHTML = '<slot name="empty"></slot>';
+      this.#pop.replaceChildren(h('slot', { name: 'empty' }));
       if (this.open) this.close();
       return;
     }
 
-    let html = '';
+    const pills: HTMLElement[] = [];
     for (const item of this.#items) {
-      const id = escapeHtml(item.id);
-      const label = escapeHtml(item.label ?? item.id);
+      const id = item.id;
+      const label = item.label ?? item.id;
       const type = item.type === 'cone' ? 'cone' : 'scoop';
       const eyes = item.eyes === 'open' || item.eyes === 'dead' ? item.eyes : 'none';
-      const color = item.color ? ` color="${escapeHtml(item.color)}"` : '';
-      html +=
-        `<slicc-pill class="scoop" part="pill" data-k="${id}"` +
-        ` type="${type}" eyes="${eyes}"${color} label="${label}"></slicc-pill>`;
-    }
-    this.#pop.innerHTML = html;
-
-    for (const pill of Array.from(this.#pop.querySelectorAll<HTMLElement>('slicc-pill'))) {
-      pill.addEventListener('click', () => {
-        const id = pill.dataset.k ?? '';
-        const found = this.#items.find((it) => it.id === id);
-        this.#select(id, found?.label ?? id);
+      const pill = h('slicc-pill', {
+        class: 'scoop',
+        part: 'pill',
+        'data-k': id,
+        type,
+        eyes,
+        color: item.color ?? false,
+        label,
       });
+      pill.addEventListener('click', () => {
+        const k = pill.dataset.k ?? '';
+        const found = this.#items.find((it) => it.id === k);
+        this.#select(k, found?.label ?? k);
+      });
+      pills.push(pill);
     }
+    this.#pop.replaceChildren(...pills);
   }
 
   /** Reflect the `open` attribute onto the wrap class + `aria-expanded`. */

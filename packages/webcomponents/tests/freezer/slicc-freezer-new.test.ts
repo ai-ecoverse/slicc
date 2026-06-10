@@ -225,7 +225,7 @@ describe('slicc-freezer-new', () => {
 
   it('hover state: ghost background (rule resolves the inherited token)', () => {
     const el = mount();
-    const sheet = (el.shadowRoot as ShadowRoot).styleSheets[0];
+    const sheet = (el.shadowRoot as ShadowRoot).adoptedStyleSheets[0];
     const rules = Array.from(sheet.cssRules) as CSSStyleRule[];
     const hoverRule = rules.find((r) => r.selectorText === '.fznew:hover');
     expect(hoverRule).toBeDefined();

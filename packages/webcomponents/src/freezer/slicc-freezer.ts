@@ -138,17 +138,53 @@ function ensureFreezerStyle(doc: Document): void {
   (doc.head ?? doc.documentElement).appendChild(style);
 }
 
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
 /**
  * The collapse/expand toggle glyph — the prototype's distinct panel-toggle SVG
  * (a bordered rect with a rail divider + a chevron), NOT the snowflake the cards
  * use. It mirrors (`scaleX(-1)`) when expanded via the `[aria-expanded]` rule.
+ * Built as a live element via the SVG namespace (no string parsing).
  */
-const TOGGLE_SVG =
-  '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor"' +
-  ' stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-  '<rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/>' +
-  '<line x1="6" y1="3.5" x2="6" y2="12.5"/>' +
-  '<polyline points="9,6.5 10.5,8 9,9.5"/></svg>';
+function buildToggleSvg(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  for (const [k, v] of [
+    ['width', '14'],
+    ['height', '14'],
+    ['viewBox', '0 0 16 16'],
+    ['fill', 'none'],
+    ['stroke', 'currentColor'],
+    ['stroke-width', '1.6'],
+    ['stroke-linecap', 'round'],
+    ['stroke-linejoin', 'round'],
+    ['aria-hidden', 'true'],
+  ]) {
+    svg.setAttribute(k, v);
+  }
+  const rect = document.createElementNS(SVG_NS, 'rect');
+  for (const [k, v] of [
+    ['x', '2.5'],
+    ['y', '3.5'],
+    ['width', '11'],
+    ['height', '9'],
+    ['rx', '1.5'],
+  ]) {
+    rect.setAttribute(k, v);
+  }
+  const line = document.createElementNS(SVG_NS, 'line');
+  for (const [k, v] of [
+    ['x1', '6'],
+    ['y1', '3.5'],
+    ['x2', '6'],
+    ['y2', '12.5'],
+  ]) {
+    line.setAttribute(k, v);
+  }
+  const polyline = document.createElementNS(SVG_NS, 'polyline');
+  polyline.setAttribute('points', '9,6.5 10.5,8 9,9.5');
+  svg.append(rect, line, polyline);
+  return svg;
+}
 
 /** The `freezer-toggle` event detail — the freezer's new open state. */
 export interface FreezerToggleDetail {
@@ -344,7 +380,7 @@ export class SliccFreezer extends HTMLElement {
     toggle.type = 'button';
     toggle.setAttribute('part', 'toggle');
     toggle.setAttribute('aria-label', 'Toggle freezer');
-    toggle.innerHTML = TOGGLE_SVG;
+    toggle.append(buildToggleSvg());
 
     const search = doc.createElement('input');
     search.className = 'fzsearch';

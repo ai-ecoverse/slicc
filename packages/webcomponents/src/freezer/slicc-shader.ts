@@ -1,4 +1,5 @@
 import { define } from '../internal/define.js';
+import { h, sheet } from '../internal/dom.js';
 
 /**
  * The SLICC background field — a single WebGL element with THREE program modes,
@@ -138,6 +139,7 @@ const STYLE = `
 .fallback { display: none; }
 :host([no-webgl]) .canvas { display: none; }
 :host([no-webgl]) .fallback { display: block; }`;
+const SHEET = sheet(STYLE);
 
 const MAX_DPR = 2;
 const UNIFORMS = [
@@ -195,8 +197,11 @@ export class SliccShader extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
-    this.#root.innerHTML = `<style>${STYLE}</style><canvas class="canvas" part="canvas"></canvas><div class="fallback" part="fallback" aria-hidden="true"></div>`;
-    this.#canvas = this.#root.querySelector('.canvas');
+    this.#root.adoptedStyleSheets = [SHEET];
+    const canvas = h('canvas', { class: 'canvas', part: 'canvas' }) as HTMLCanvasElement;
+    const fallback = h('div', { class: 'fallback', part: 'fallback', 'aria-hidden': 'true' });
+    this.#root.replaceChildren(canvas, fallback);
+    this.#canvas = canvas;
   }
 
   connectedCallback(): void {

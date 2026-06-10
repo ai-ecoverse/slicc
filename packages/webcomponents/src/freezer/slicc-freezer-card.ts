@@ -1,7 +1,7 @@
 import { define } from '../internal/define.js';
+import { h } from '../internal/dom.js';
 // Renders these child custom elements internally — owns their registration.
 import '../primitives/slicc-snowflake.js';
-import { escapeHtml } from '../internal/html.js';
 
 /**
  * Scoped, document-level stylesheet for `<slicc-freezer-card>`. Light-DOM hosts
@@ -294,15 +294,9 @@ export class SliccFreezerCard extends HTMLElement {
     this.#badge = this.ownerDocument.createElement('slicc-snowflake');
     this.#badge.setAttribute('part', 'badge');
 
-    this.#text = this.ownerDocument.createElement('div');
-    this.#text.className = 'slicc-fzcard__text';
-    this.#text.setAttribute('part', 'text');
-    this.#text.innerHTML =
-      '<div class="slicc-fzcard__title" part="title"></div>' +
-      '<div class="slicc-fzcard__meta" part="meta"></div>';
-
-    this.#title = this.#text.querySelector('.slicc-fzcard__title') as HTMLElement;
-    this.#meta = this.#text.querySelector('.slicc-fzcard__meta') as HTMLElement;
+    this.#title = h('div', { class: 'slicc-fzcard__title', part: 'title' });
+    this.#meta = h('div', { class: 'slicc-fzcard__meta', part: 'meta' });
+    this.#text = h('div', { class: 'slicc-fzcard__text', part: 'text' }, this.#title, this.#meta);
 
     // Slot pre-existing children into the title region (used when the `title`
     // attribute is absent).
@@ -321,7 +315,7 @@ export class SliccFreezerCard extends HTMLElement {
     const title = this.getAttribute('title');
     if (title != null) this.#title.textContent = title;
 
-    this.#meta.innerHTML = escapeHtml(this.meta);
+    this.#meta.textContent = this.meta;
     this.#badge.toggleAttribute('thawed', this.thawed);
   }
 }
