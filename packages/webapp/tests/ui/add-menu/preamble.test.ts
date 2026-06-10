@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AddItem } from '../../../src/ui/add-menu/add-item.js';
-import { compileContextPreamble } from '../../../src/ui/add-menu/preamble.js';
+import { compileContextPreamble, stripContextPreamble } from '../../../src/ui/add-menu/preamble.js';
 
 describe('compileContextPreamble', () => {
   it('returns empty string for no references', () => {
@@ -32,5 +32,22 @@ describe('compileContextPreamble', () => {
     expect(compileContextPreamble(refs)).toBe(
       '[context]\n- session: /sessions/2026-06-01-foo.md (Fix the build)'
     );
+  });
+});
+
+describe('stripContextPreamble', () => {
+  it('removes a leading [context] block from agent-sourced user text', () => {
+    const raw = '[context]\n- file: /workspace/CLAUDE.md (CLAUDE.md)\n\nexplain this';
+    expect(stripContextPreamble(raw)).toBe('explain this');
+  });
+  it('leaves normal text untouched', () => {
+    expect(stripContextPreamble('just a question')).toBe('just a question');
+  });
+  it('returns empty string when the text is only a preamble', () => {
+    expect(stripContextPreamble('[context]\n- skill: sprinkles')).toBe('');
+  });
+  it('only strips a [context] block at the very start', () => {
+    const raw = 'hello [context]\n- skill: x\n\nworld';
+    expect(stripContextPreamble(raw)).toBe(raw);
   });
 });

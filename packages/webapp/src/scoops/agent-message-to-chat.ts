@@ -36,6 +36,7 @@ import type {
   ToolResultMessage,
   UserMessage,
 } from '@earendil-works/pi-ai';
+import { stripContextPreamble } from '../ui/add-menu/preamble.js';
 import { isLickChannel, LICK_CHANNELS, type LickChannel } from '../ui/lick-channels.js';
 import type { ChatMessage, ToolCall as UiToolCall } from '../ui/types.js';
 import { HIDDEN_TOOL_NAMES } from './hidden-tools.js';
@@ -99,7 +100,7 @@ export function agentMessagesToChatMessages(
         const msg: ChatMessage = {
           id: idSeed(),
           role: 'user',
-          content: env.body,
+          content: lickChannel ? env.body : stripContextPreamble(env.body),
           timestamp: m.timestamp,
         };
         if (lickChannel) {
