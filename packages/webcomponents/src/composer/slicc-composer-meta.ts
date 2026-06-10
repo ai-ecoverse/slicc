@@ -21,6 +21,9 @@ const ACCENTED_LEVEL: ThinkingLevel = 'bombastica';
 /** The default model label shown in the model pill when no `model` is set. */
 const DEFAULT_MODEL = 'Opus 4.8';
 
+/** Default model options offered in the dropdown when `models` is not supplied. */
+const DEFAULT_MODELS: readonly string[] = ['Opus 4.8', 'Sonnet 4.6', 'Haiku 4.5'];
+
 /** The default thinking level (prototype starts at index 3 = `bombastica`). */
 const DEFAULT_THINKING: ThinkingLevel = 'bombastica';
 
@@ -116,6 +119,24 @@ const STYLE = `
   .ctl .cx svg{display:block;}
   .ctl.tsel.x{border-color:color-mix(in srgb,var(--violet) 35%,var(--line));}
   .brain{color:var(--violet);display:block;vertical-align:-2px;flex:0 0 auto;}
+  /* Model dropdown — anchored to the model pill and opening UPWARD (the meta row
+     sits at the very bottom of the composer, so a downward menu would clip). */
+  .mwrap{position:relative;flex:0 0 auto;display:inline-flex;}
+  .ctl .cx svg{transition:transform .15s ease;}
+  .mwrap.open .ctl .cx svg{transform:rotate(180deg);}
+  .menu{position:absolute;bottom:calc(100% + 6px);left:0;min-width:170px;
+    background:var(--canvas);border:1px solid var(--line);border-radius:10px;
+    box-shadow:0 -10px 28px -10px rgba(10,10,10,.22),0 -2px 8px -4px rgba(10,10,10,.12);
+    padding:5px;opacity:0;transform:translateY(4px);pointer-events:none;
+    transition:opacity .12s ease,transform .12s ease;z-index:20;}
+  .mwrap.open .menu{opacity:1;transform:none;pointer-events:auto;}
+  .mitem{display:flex;align-items:center;gap:8px;width:100%;padding:7px 10px;border:none;
+    background:transparent;color:var(--ink);font:inherit;font-size:12.5px;border-radius:7px;
+    cursor:pointer;text-align:left;white-space:nowrap;}
+  .mitem:hover,.mitem:focus-visible{background:var(--ghost);outline:none;}
+  .mitem .tick{margin-left:auto;display:inline-flex;color:var(--violet);visibility:hidden;}
+  .mitem[aria-selected="true"] .tick{visibility:visible;}
+  @media (prefers-reduced-motion: reduce){.menu,.ctl .cx svg{transition:none;}}
   .mspacer{flex:1;}
   .hint{font-size:11px;color:var(--txt-3);display:inline-flex;align-items:center;gap:7px;}
   .hint .kbd{font-family:var(--ui);border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:var(--txt-2);}
@@ -166,10 +187,24 @@ export class SliccComposerMeta extends HTMLElement {
   static readonly observedAttributes = ['model', 'thinking', 'narrow'];
 
   readonly #root: ShadowRoot;
-  #onModelClick: (() => void) | null = null;
+  #onModelClick: ((e: Event) => void) | null = null;
   #onThinkingClick: (() => void) | null = null;
   #modelEl: HTMLButtonElement | null = null;
   #thinkingEl: HTMLButtonElement | null = null;
+  #mwrapEl: HTMLElement | null = null;
+  #models: string[] | null = null;
+  #menuOpen = false;
+
+  #onDocDown = (e: MouseEvent): void => {
+    if (this.#menuOpen && !e.composedPath().includes(this)) this.#closeMenu();
+  };
+  #onKey = (e: KeyboardEvent): void => {
+    if (e.key === 'Escape' && this.#menuOpen) {
+      e.stopPropagation();
+      this.#closeMenu();
+      this.#modelEl?.focus();
+    }
+  };
 
   constructor() {
     super();
@@ -183,6 +218,8 @@ export class SliccComposerMeta extends HTMLElement {
 
   disconnectedCallback(): void {
     this.#unbind();
+    document.removeEventListener('mousedown', this.#onDocDown);
+    document.removeEventListener('keydown', this.#onKey, true);
   }
 
   attributeChangedCallback(): void {
@@ -197,6 +234,20 @@ export class SliccComposerMeta extends HTMLElement {
   set model(value: string | null) {
     if (value == null) this.removeAttribute('model');
     else this.setAttribute('model', value);
+  }
+
+  /**
+   * The model options offered in the dropdown. Defaults to a built-in list
+   * (Opus / Sonnet / Haiku) when not set. Assigning replaces the list and, if the
+   * menu is open, re-renders it.
+   */
+  get models(): string[] {
+    return (this.#models ?? [...DEFAULT_MODELS]).slice();
+  }
+
+  set models(value: string[]) {
+    this.#models = Array.isArray(value) ? value.slice() : null;
+    if (this.isConnected) this.#render();
   }
 
   /**
@@ -237,13 +288,37 @@ export class SliccComposerMeta extends HTMLElement {
 
     const modelBtn = h(
       'button',
-      { type: 'button', class: 'ctl msel', part: 'model' },
+      {
+        type: 'button',
+        class: 'ctl msel',
+        part: 'model',
+        'aria-haspopup': 'menu',
+        'aria-expanded': 'false',
+      },
       sparklesIcon(),
       ' ',
       model,
       ' ',
       h('span', { class: 'cx' }, caretIcon())
     );
+    const menu = h('div', { class: 'menu', part: 'model-menu', role: 'menu' });
+    for (const m of this.models) {
+      const selected = m === model;
+      const item = h(
+        'button',
+        {
+          type: 'button',
+          class: 'mitem',
+          role: 'menuitemradio',
+          'data-model': m,
+          'aria-selected': selected ? 'true' : 'false',
+        },
+        m,
+        h('span', { class: 'tick' }, iconEl('check', { size: 14 }))
+      );
+      menu.append(item);
+    }
+    const mwrap = h('div', { class: 'mwrap' }, modelBtn, menu);
 
     const thinkingBtn = h(
       'button',
@@ -270,7 +345,7 @@ export class SliccComposerMeta extends HTMLElement {
     const meta = h(
       'div',
       { class: 'meta', part: 'meta' },
-      modelBtn,
+      mwrap,
       thinkingBtn,
       h('div', { class: 'mspacer' }),
       h('span', { class: 'hint', part: 'hint' }, hintSlot)
@@ -278,15 +353,25 @@ export class SliccComposerMeta extends HTMLElement {
 
     this.#root.replaceChildren(rainbowDefs(), meta);
 
+    this.#mwrapEl = mwrap;
     this.#modelEl = this.#root.querySelector('.msel');
     this.#thinkingEl = this.#root.querySelector('.tsel');
+    // A re-render (e.g. an attribute change) preserves the open menu state.
+    this.#reflectMenu();
     this.#bind();
   }
 
   #bind(): void {
     if (this.#modelEl) {
-      this.#onModelClick = () => this.#emitModel();
+      // The model pill opens (toggles) the dropdown; selecting a row commits.
+      this.#onModelClick = (e: Event) => {
+        e.stopPropagation();
+        this.#toggleMenu();
+      };
       this.#modelEl.addEventListener('click', this.#onModelClick);
+    }
+    for (const item of this.#root.querySelectorAll<HTMLButtonElement>('.mitem')) {
+      item.addEventListener('click', () => this.#selectModel(item.dataset.model ?? this.model));
     }
     if (this.#thinkingEl) {
       this.#onThinkingClick = () => this.#cycleThinking();
@@ -305,13 +390,47 @@ export class SliccComposerMeta extends HTMLElement {
     this.#onThinkingClick = null;
     this.#modelEl = null;
     this.#thinkingEl = null;
+    this.#mwrapEl = null;
   }
 
-  /** Emit `model-change` (the model picker is owned by the host application). */
-  #emitModel(): void {
+  /** Whether the model dropdown is open. */
+  get menuOpen(): boolean {
+    return this.#menuOpen;
+  }
+
+  #toggleMenu(): void {
+    this.#menuOpen ? this.#closeMenu() : this.#openMenu();
+  }
+
+  #openMenu(): void {
+    if (this.#menuOpen) return;
+    this.#menuOpen = true;
+    this.#reflectMenu();
+    document.addEventListener('mousedown', this.#onDocDown);
+    document.addEventListener('keydown', this.#onKey, true);
+  }
+
+  #closeMenu(): void {
+    if (!this.#menuOpen) return;
+    this.#menuOpen = false;
+    this.#reflectMenu();
+    document.removeEventListener('mousedown', this.#onDocDown);
+    document.removeEventListener('keydown', this.#onKey, true);
+  }
+
+  /** Mirror `#menuOpen` onto the DOM (the open class + the pill's aria-expanded). */
+  #reflectMenu(): void {
+    this.#mwrapEl?.classList.toggle('open', this.#menuOpen);
+    this.#modelEl?.setAttribute('aria-expanded', this.#menuOpen ? 'true' : 'false');
+  }
+
+  /** Commit a model choice: set `model`, close the menu, and emit `model-change`. */
+  #selectModel(model: string): void {
+    this.#closeMenu();
+    if (model !== this.model) this.model = model; // re-renders via attributeChangedCallback
     this.dispatchEvent(
       new CustomEvent('model-change', {
-        detail: { model: this.model },
+        detail: { model },
         bubbles: true,
         composed: true,
       })
