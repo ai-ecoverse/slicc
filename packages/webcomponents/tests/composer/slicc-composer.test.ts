@@ -208,4 +208,119 @@ describe('slicc-composer', () => {
     expect(dark).not.toBe(light);
     expect(dark).not.toBe('rgba(0, 0, 0, 0)');
   });
+
+  // --- push-to-talk "walkie-talkie" dictation gesture ---
+
+  /** The textarea the host renders / relocates into its light DOM. */
+  function taOf(el: SliccComposer): HTMLTextAreaElement {
+    return el.querySelector('textarea') as HTMLTextAreaElement;
+  }
+
+  /** Press-and-hold the textarea (primary button), arming the gesture. */
+  function press(el: SliccComposer): HTMLTextAreaElement {
+    const ta = taOf(el);
+    ta.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+    return ta;
+  }
+
+  /** The active push-to-talk overlay, if any. */
+  function pttOf(el: SliccComposer): HTMLElement | null {
+    return el.querySelector('.slicc-composer__ptt');
+  }
+
+  it('mousedown turns the band into a walkie-talkie button: mic + prompt + progress bar', () => {
+    const el = makeComposer();
+    document.body.appendChild(el);
+    press(el);
+
+    const ptt = pttOf(el);
+    expect(ptt).not.toBeNull();
+    // A live mic <svg> (lucide), never an emoji.
+    expect(ptt!.querySelector('.slicc-composer__ptt-mic svg')).not.toBeNull();
+    // The dictation prompt.
+    const label = ptt!.querySelector('.slicc-composer__ptt-label') as HTMLElement;
+    expect(label.textContent).toBe('Keep mouse pressed to dictate');
+    // The simulated model-load row: text + progress bar fill.
+    expect(ptt!.querySelector('.slicc-composer__ptt-load-text')?.textContent).toBe(
+      'Loading speech recognition model'
+    );
+    expect(ptt!.querySelector('.slicc-composer__ptt-bar-fill')).not.toBeNull();
+  });
+
+  it('drives the progress bar with the stable slicc-ptt-load animation longhands', () => {
+    const el = makeComposer();
+    document.body.appendChild(el);
+    press(el);
+
+    const fill = pttOf(el)!.querySelector('.slicc-composer__ptt-bar-fill') as HTMLElement;
+    const cs = getComputedStyle(fill);
+    // Real Chromium honors the emulated media query; assert the precise longhands
+    // (the `animation` shorthand serializes differently across versions). Under
+    // reduced-motion the CSS neutralizes the sweep to animation-name: none.
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      expect(cs.animationName).toBe('none');
+    } else {
+      expect(cs.animationName).toBe('slicc-ptt-load');
+      expect(cs.animationDuration).toBe('1.2s');
+    }
+  });
+
+  it('mouseup hides the overlay AND populates the textarea with a transcript', () => {
+    const el = makeComposer();
+    document.body.appendChild(el);
+    const ta = press(el);
+    expect(ta.value).toBe('');
+
+    // A real release anywhere ends the gesture.
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+
+    expect(pttOf(el)).toBeNull();
+    expect(ta.value.trim().length).toBeGreaterThan(0);
+    expect(ta.value).toContain('warmer');
+  });
+
+  it('pointer leaving mid-press cancels: overlay torn down, textarea left untouched', () => {
+    const el = makeComposer();
+    document.body.appendChild(el);
+    const ta = press(el);
+    expect(pttOf(el)).not.toBeNull();
+
+    // Leaving the host is the stuck-state guard — overlay drops, no transcript.
+    el.dispatchEvent(new MouseEvent('mouseleave', { bubbles: false }));
+    expect(pttOf(el)).toBeNull();
+    expect(ta.value).toBe('');
+
+    // A subsequent release no longer reaches us (listeners removed).
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    expect(ta.value).toBe('');
+  });
+
+  it('guards the progress sweep + mic pulse behind prefers-reduced-motion (animation-name: none)', () => {
+    // CSS @media (prefers-reduced-motion) is evaluated by the browser, not a JS
+    // mock, so assert the document stylesheet carries the guard that neutralizes
+    // the bar sweep. Mount a composer first so the scoped <style> is injected.
+    const el = makeComposer();
+    document.body.appendChild(el);
+
+    const sheet = Array.from(document.styleSheets).find(
+      (s) => (s.ownerNode as Element | null)?.id === 'slicc-composer-style'
+    );
+    expect(sheet).toBeDefined();
+
+    let guarded = false;
+    for (const rule of Array.from(sheet!.cssRules)) {
+      if (rule instanceof CSSMediaRule && rule.conditionText.includes('prefers-reduced-motion')) {
+        for (const inner of Array.from(rule.cssRules)) {
+          if (
+            inner instanceof CSSStyleRule &&
+            inner.selectorText.includes('slicc-composer__ptt-bar-fill') &&
+            inner.style.animationName === 'none'
+          ) {
+            guarded = true;
+          }
+        }
+      }
+    }
+    expect(guarded).toBe(true);
+  });
 });
