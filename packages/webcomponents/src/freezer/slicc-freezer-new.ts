@@ -167,8 +167,8 @@ const STYLE = `
 
 /* .fznew-spinner — busy/pending progress: the badge glyph swaps to a spinning
    lucide loader the moment the new-chat work is kicked off (optimistically on a
-   save click, or whenever the host sets `busy`), so there is immediate feedback
-   before any save/reload completes. */
+   save click, or whenever the host sets the busy attribute), so there is
+   immediate feedback before any save/reload completes. */
 .fznew-spinner { display: grid; place-items: center; color: var(--ctx); }
 .fznew-spinner svg { display: block; animation: slicc-fznew-spin 0.8s linear infinite; }
 @keyframes slicc-fznew-spin { to { transform: rotate(360deg); } }
