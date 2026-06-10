@@ -280,7 +280,7 @@ describe('slicc-send-button', () => {
     }
   });
 
-  // --- busy slow fill (6 directions, 10s each, 60s loop) ---
+  // --- busy fill/clear (12 alternating phases, 10s each, 120s loop) ---
 
   it('busy: stacks a solid fill copy (.stop-fill) over the stop square', () => {
     const el = mount();
@@ -291,29 +291,38 @@ describe('slicc-send-button', () => {
     expect(fill?.querySelector('svg')).not.toBeNull();
   });
 
-  it('busy: drives the fill with a 60s slicc-send-fill animation', () => {
+  it('busy: drives the fill with a 120s slicc-send-fill animation', () => {
     const el = mount();
     el.busy = true;
     const fill = el.shadowRoot?.querySelector('.stop-fill') as HTMLElement;
+    // Assert the stable CSS longhands (the `animation` shorthand serializes
+    // differently across Chromium versions).
     const cs = getComputedStyle(fill);
     expect(cs.animationName).toBe('slicc-send-fill');
-    expect(cs.animationDuration).toBe('60s');
+    expect(cs.animationDuration).toBe('120s');
     expect(cs.animationIterationCount).toBe('infinite');
   });
 
-  it('busy: the fill keyframes sweep six full-fill phases (12 keyframes)', () => {
+  it('busy: the fill keyframes alternate six fills + six clears (12 phases)', () => {
     const el = mount();
     el.busy = true;
-    let fillFrames = -1;
+    let frames: CSSKeyframeRule[] = [];
     for (const s of el.shadowRoot?.adoptedStyleSheets ?? []) {
       for (const rule of s.cssRules) {
         if (rule instanceof CSSKeyframesRule && rule.name === 'slicc-send-fill') {
-          fillFrames = rule.cssRules.length;
+          frames = Array.from(rule.cssRules) as CSSKeyframeRule[];
         }
       }
     }
-    // Six directions × (start + full) = 12 keyframes.
-    expect(fillFrames).toBe(12);
+    // 18 keyframes: each of the six fills peaks at the full square, and the
+    // alternating clears bottom out empty, with invisible empty-state hand-offs
+    // (zero-width/height or centred insets) bridging consecutive phases.
+    expect(frames.length).toBe(18);
+    // The full square (every directional fill's peak) carries no percentage in
+    // its inset; empty states always do (50% centre, or a 100% edge). So exactly
+    // six keyframes — the six fill peaks — are percentage-free.
+    const fullPeaks = frames.filter((f) => !f.style.clipPath.includes('%'));
+    expect(fullPeaks.length).toBe(6);
   });
 
   it('busy fill is statically filled and neutralized under prefers-reduced-motion', () => {
