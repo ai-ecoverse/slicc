@@ -309,6 +309,11 @@ function place(g: Element, cx: number, cy: number, mx: number, my: number, maxOf
 const PILL_STYLE = `
   :host{display:inline-block;--pill-w:190px;--label:#eef1f6;--icon-tint:color-mix(in oklab,var(--accent) 22%,transparent);}
   @media (prefers-color-scheme: light){:host(:not([theme="dark"])){--label:#1b2030;--icon-tint:color-mix(in oklab,var(--accent) 30%,#fff);}}
+  /* The library's class-based dark scope (body.dark / .dark / [data-theme=dark])
+     reaches the host via :host-context, so the label stays readable in dark mode
+     even when the OS prefers-color-scheme is light. Ordered BEFORE the explicit
+     theme rules so a per-element theme="light"/"dark" attribute still overrides. */
+  :host-context(.dark),:host-context([data-theme="dark"]){--label:#eef1f6;--icon-tint:color-mix(in oklab,var(--accent) 22%,transparent);}
   :host([theme="light"]){--label:#1b2030;--icon-tint:color-mix(in oklab,var(--accent) 30%,#fff);}
   :host([theme="dark"]){--label:#eef1f6;--icon-tint:color-mix(in oklab,var(--accent) 22%,transparent);}
   *{box-sizing:border-box;}
