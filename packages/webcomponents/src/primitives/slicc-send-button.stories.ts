@@ -66,10 +66,12 @@ export const WithAvatarSrc: Story = {
 
 /**
  * Busy (stop): streaming state — a white lucide `square` (stop) glyph that
- * breathes with a soft pulse while a solid fill slowly sweeps the square through
- * six directions (inside-out → left-to-right → top-to-bottom → right-to-left →
- * bottom-to-top → outside-in), each phase taking 10s for a 60s loop. Clicking
- * emits `stop`. Under `prefers-reduced-motion` the square is statically filled.
+ * breathes with a soft pulse while a solid fill runs twelve alternating phases:
+ * six directional fills (inside-out, left-to-right, top-to-bottom, right-to-left,
+ * bottom-to-top, top-left corner), each immediately followed by a clear that
+ * drains the square back to empty along the inverse direction — 6 fills + 6
+ * clears, 10s each, a 120s loop. Clicking emits `stop`. Under
+ * `prefers-reduced-motion` the square is statically filled.
  */
 export const Busy: Story = { args: { busy: true } };
 
