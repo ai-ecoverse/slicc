@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  createAggregator,
   createFileFolderProvider,
   createScoopProvider,
   createSessionProvider,
@@ -45,6 +46,9 @@ describe('createFileFolderProvider', () => {
     const res = await p.search('read', 10);
     expect(res.map((r) => r.locator)).toContain('/workspace/README.md');
     expect(res.every((r) => r.kind === 'file' || r.kind === 'folder')).toBe(true);
+
+    const srcRes = await p.search('src', 10);
+    expect(srcRes.some((r) => r.kind === 'folder' && r.locator === '/workspace/src')).toBe(true);
   });
 
   it('returns a default list for an empty query', async () => {
@@ -96,5 +100,44 @@ describe('createScoopProvider', () => {
     expect(res).toEqual([
       { kind: 'scoop', label: 'andy-scoop', sublabel: undefined, locator: 'jid-1' },
     ]);
+  });
+});
+
+describe('createAggregator', () => {
+  it('queries all providers and flattens results into one array', async () => {
+    const itemA = {
+      kind: 'file' as const,
+      label: 'a.ts',
+      sublabel: '/workspace',
+      locator: '/workspace/a.ts',
+    };
+    const itemB = { kind: 'skill' as const, label: 'sprinkles', locator: 'sprinkles' };
+    const providerA = { kind: 'file' as const, search: async () => [itemA] };
+    const providerB = { kind: 'skill' as const, search: async () => [itemB] };
+    const aggregator = createAggregator([providerA, providerB]);
+    const results = await aggregator.search('', 10);
+    expect(results).toContainEqual(itemA);
+    expect(results).toContainEqual(itemB);
+    expect(results).toHaveLength(2);
+  });
+
+  it('isolates provider errors — a throwing provider contributes [] and does not break others', async () => {
+    const goodItem = {
+      kind: 'file' as const,
+      label: 'good.ts',
+      sublabel: '/workspace',
+      locator: '/workspace/good.ts',
+    };
+    const throwingProvider = {
+      kind: 'skill' as const,
+      search: async (): Promise<never> => {
+        throw new Error('provider exploded');
+      },
+    };
+    const goodProvider = { kind: 'file' as const, search: async () => [goodItem] };
+    const aggregator = createAggregator([throwingProvider, goodProvider]);
+    const results = await aggregator.search('', 10);
+    expect(results).toContainEqual(goodItem);
+    expect(results).toHaveLength(1);
   });
 });

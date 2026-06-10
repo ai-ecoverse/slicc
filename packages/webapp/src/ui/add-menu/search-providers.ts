@@ -35,38 +35,72 @@ function parentDir(path: string): string {
   return idx <= 0 ? '/' : path.slice(0, idx);
 }
 
+/*
+ * Walks upward from a file's immediate parent directory collecting distinct
+ * ancestor paths that fall strictly under the given root (i.e. longer than
+ * the root path). Stops as soon as a directory has already been seen.
+ */
+function collectAncestorDirs(filePath: string, root: string, seen: Set<string>): void {
+  let dir = parentDir(filePath);
+  while (dir.length > root.length) {
+    if (seen.has(dir)) break;
+    seen.add(dir);
+    dir = parentDir(dir);
+  }
+}
+
+async function walkFilesAndDirs(
+  vfs: VfsLike,
+  roots: string[]
+): Promise<{ fileItems: AddItem[]; seenDirs: Set<string> }> {
+  const fileItems: AddItem[] = [];
+  const seenFiles = new Set<string>();
+  const seenDirs = new Set<string>();
+  for (const root of roots) {
+    try {
+      for await (const filePath of vfs.walk(root)) {
+        if (seenFiles.has(filePath)) continue;
+        seenFiles.add(filePath);
+        fileItems.push({
+          kind: 'file',
+          label: basename(filePath),
+          sublabel: parentDir(filePath),
+          locator: filePath,
+        });
+        collectAncestorDirs(filePath, root, seenDirs);
+        if (fileItems.length >= 500) break;
+      }
+    } catch {
+      // skip an unreadable root
+    }
+    if (fileItems.length >= 500) break;
+  }
+  return { fileItems, seenDirs };
+}
+
+function applyQueryRanking(items: AddItem[], query: string, limit: number): AddItem[] {
+  const scored = query
+    ? items
+        .map((it) => ({ it, s: rank(query, it.locator) }))
+        .filter((x) => x.s >= 0)
+        .sort((a, b) => b.s - a.s || a.it.locator.localeCompare(b.it.locator))
+        .map((x) => x.it)
+    : items.sort((a, b) => a.locator.localeCompare(b.locator));
+  return scored.slice(0, limit);
+}
+
 export function createFileFolderProvider(vfs: VfsLike, roots: string[]): AddSearchProvider {
   return {
     kind: 'file',
     async search(query, limit) {
-      const items: AddItem[] = [];
-      const seen = new Set<string>();
-      for (const root of roots) {
-        try {
-          for await (const filePath of vfs.walk(root)) {
-            if (seen.has(filePath)) continue;
-            seen.add(filePath);
-            items.push({
-              kind: 'file',
-              label: basename(filePath),
-              sublabel: parentDir(filePath),
-              locator: filePath,
-            });
-            if (items.length >= 500) break;
-          }
-        } catch {
-          // skip an unreadable root
-        }
-        if (items.length >= 500) break;
-      }
-      const scored = query
-        ? items
-            .map((it) => ({ it, s: rank(query, it.locator) }))
-            .filter((x) => x.s >= 0)
-            .sort((a, b) => b.s - a.s || a.it.locator.localeCompare(b.it.locator))
-            .map((x) => x.it)
-        : items.sort((a, b) => a.locator.localeCompare(b.locator));
-      return scored.slice(0, limit);
+      const { fileItems, seenDirs } = await walkFilesAndDirs(vfs, roots);
+      const folderItems: AddItem[] = [...seenDirs].map((dir) => ({
+        kind: 'folder' as const,
+        label: basename(dir),
+        sublabel: parentDir(dir),
+        locator: dir,
+      }));
+      return applyQueryRanking([...folderItems, ...fileItems], query, limit);
     },
   };
 }
