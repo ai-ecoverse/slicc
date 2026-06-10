@@ -233,4 +233,20 @@ describe('slicc-floatbar', () => {
       expect(getComputedStyle(dot).backgroundColor).toBe('rgb(34, 197, 94)');
     });
   });
+
+  describe('narrow / extension-sidebar', () => {
+    it('hides the runtime label + divider below 560px (compact dot + cost pill)', () => {
+      const el = document.createElement('slicc-floatbar');
+      document.body.appendChild(el);
+      const sheet = (el.shadowRoot as ShadowRoot).adoptedStyleSheets[0];
+      const media = Array.from(sheet.cssRules).find(
+        (r): r is CSSMediaRule => r instanceof CSSMediaRule && r.conditionText.includes('560px')
+      );
+      expect(media).toBeDefined();
+      const labelRule = Array.from((media as CSSMediaRule).cssRules).find(
+        (r): r is CSSStyleRule => r instanceof CSSStyleRule && r.selectorText.includes('.label')
+      );
+      expect(labelRule?.style.display).toBe('none');
+    });
+  });
 });

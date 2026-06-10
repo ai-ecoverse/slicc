@@ -298,10 +298,18 @@ function app(opts: AppOpts): HTMLElement {
   // The `.app` column: full-width nav above the split shell, reserving the rail
   // via padding-left so both slide when the freezer opens. Layers over the shader.
   const appCol = el('div');
+  appCol.className = 'sc-appcol';
   appCol.style.cssText =
     `position:relative;z-index:1;height:100%;display:flex;flex-direction:column;` +
-    `box-sizing:border-box;padding-left:${railW}px;` +
-    `transition:padding-left .4s cubic-bezier(.4,0,.2,1);`;
+    `box-sizing:border-box;--rail-w:${railW}px;`;
+  // The rail reservation is a CSS var so a media query can clamp it: at narrow /
+  // extension-sidebar widths the open freezer overlays as a drawer (padding stays
+  // 44px) instead of shoving the whole app off-screen.
+  const responsive = el('style');
+  responsive.textContent =
+    '.sc-appcol{padding-left:var(--rail-w,44px);transition:padding-left .4s cubic-bezier(.4,0,.2,1);}' +
+    '@media (max-width:560px){.sc-appcol{padding-left:44px;}}';
+  frame.append(responsive);
 
   const shell = el('slicc-shell', opts.workbench ? { open: '' } : {});
   const pane = chatpane(opts.workbench);
@@ -341,6 +349,14 @@ export const Open: Story = { render: () => app({ workbench: true, freezer: true 
 
 /** Just the freezer rail expanded to 260px — chat full-width, workbench closed. */
 export const FreezerOpen: Story = { render: () => app({ workbench: false, freezer: true }) };
+
+/**
+ * Workbench open with the freezer collapsed — at desktop a side-by-side split,
+ * but at narrow / extension-sidebar widths the workbench overlays the chat
+ * full-bleed (dock rail stays exposed to toggle it closed). The clean mobile
+ * "open a tool" state.
+ */
+export const Workbench: Story = { render: () => app({ workbench: true, freezer: false }) };
 
 /**
  * Narrow / mobile viewport — rails collapse to their icon widths, the switcher

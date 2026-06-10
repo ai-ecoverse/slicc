@@ -8,6 +8,8 @@ const STYLE = `
   font-weight: 500; font-size: 12px; margin-left: 7px;
   background: var(--rainbow); -webkit-background-clip: text; background-clip: text; color: transparent;
 }
+/* Narrow / extension-sidebar: drop the gradient suffix badge to save width. */
+@media (max-width: 560px) { .b { display: none; } }
 `;
 const SHEET = sheet(STYLE);
 

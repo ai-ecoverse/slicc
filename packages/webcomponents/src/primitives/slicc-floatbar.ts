@@ -76,6 +76,13 @@ const STYLE = `
   width: 12px;
   height: 12px;
 }
+
+/* Narrow / extension-sidebar: drop the runtime label (and its divider) to a
+   compact dot + cost pill so the bar never crowds the avatar / theme toggle. */
+@media (max-width: 560px) {
+  :host { padding: 0 9px; }
+  .label, .sep { display: none; }
+}
 `;
 const SHEET = sheet(STYLE);
 

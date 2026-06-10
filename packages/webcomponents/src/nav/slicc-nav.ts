@@ -46,6 +46,11 @@ const STYLE = `
    right edge (prototype .nav .spacer{flex:1}). */
 .slicc-nav > .slicc-nav__spacer,
 .slicc-nav > .spacer { flex: 1; }
+/* Narrow / extension-sidebar: tighten the bar's padding + gap so the logo,
+   the (overflowing) switcher, and the right-side controls all still fit. */
+@media (max-width: 560px) {
+  .slicc-nav { gap: 8px; padding: 0 10px; }
+}
 `;
 
 const STYLE_ID = 'slicc-nav-style';

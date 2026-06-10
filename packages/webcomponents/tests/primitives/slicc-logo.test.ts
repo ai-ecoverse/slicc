@@ -44,4 +44,19 @@ describe('slicc-logo', () => {
     expect(badge?.querySelector('script')).toBeNull();
     expect(badge?.textContent).toBe('<script>x</script>');
   });
+
+  it('drops the gradient badge below 560px to save width in an extension sidebar', () => {
+    const el = document.createElement('slicc-logo');
+    el.badge = 'studio';
+    document.body.appendChild(el);
+    const sheet = (el.shadowRoot as ShadowRoot).adoptedStyleSheets[0];
+    const media = Array.from(sheet.cssRules).find(
+      (r): r is CSSMediaRule => r instanceof CSSMediaRule && r.conditionText.includes('560px')
+    );
+    expect(media).toBeDefined();
+    const badgeRule = Array.from((media as CSSMediaRule).cssRules).find(
+      (r): r is CSSStyleRule => r instanceof CSSStyleRule && r.selectorText.includes('.b')
+    );
+    expect(badgeRule?.style.display).toBe('none');
+  });
 });

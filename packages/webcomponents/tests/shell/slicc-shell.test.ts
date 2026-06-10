@@ -29,6 +29,23 @@ describe('slicc-shell', () => {
     expect(mountShell().shadowRoot).toBeNull();
   });
 
+  it('overlays the workbench full-bleed (not a side-by-side split) at narrow / sidebar widths', () => {
+    mountShell(true);
+    // The scoped stylesheet carries an @media (max-width: 560px) block whose
+    // workbench rule switches the pane to an absolute overlay — a viewport this
+    // thin (an extension side panel) cannot host a chat | workbench split.
+    const sheet = (document.getElementById('slicc-shell-style') as HTMLStyleElement).sheet;
+    const media = Array.from(sheet?.cssRules ?? []).find(
+      (r): r is CSSMediaRule => r instanceof CSSMediaRule && r.conditionText.includes('560px')
+    );
+    expect(media).toBeDefined();
+    const wb = Array.from((media as CSSMediaRule).cssRules).find(
+      (r): r is CSSStyleRule =>
+        r instanceof CSSStyleRule && r.selectorText.includes('slicc-workbench-pane')
+    );
+    expect(wb?.style.position).toBe('absolute');
+  });
+
   it('exposes its three regions by getter', () => {
     const shell = mountShell();
     expect(shell.chatpane?.tagName.toLowerCase()).toBe('slicc-chatpane');
