@@ -270,29 +270,13 @@ export class OnboardingOrchestrator {
     // accounts. Without this, picking azure-openai from the welcome
     // dip used to write an account missing deployment + api-version
     // and break at the first chat request.
-    const providerEntry = (() => {
-      try {
-        return this.deps.getProviderCatalogue().providers.find((p) => p.id === provider);
-      } catch {
-        return undefined;
-      }
-    })();
-    if (providerEntry?.requiresDeployment && !deployment?.trim()) {
+    const requiredFieldError = this.validateProviderRequiredFields(provider, baseUrl, deployment);
+    if (requiredFieldError) {
       this.deps.broadcastToDip({
         type: 'slicc-connect-result',
         ok: false,
         kind: 'failed',
-        message: `${providerEntry.name} requires a deployment name.`,
-      });
-      this.stage = 'awaiting-connect';
-      return;
-    }
-    if (providerEntry?.requiresBaseUrl && !baseUrl?.trim()) {
-      this.deps.broadcastToDip({
-        type: 'slicc-connect-result',
-        ok: false,
-        kind: 'failed',
-        message: `${providerEntry.name} requires a base URL.`,
+        message: requiredFieldError,
       });
       this.stage = 'awaiting-connect';
       return;
@@ -478,6 +462,33 @@ export class OnboardingOrchestrator {
         validation: 'oauth',
       },
     });
+  }
+
+  /**
+   * Internal — validate provider required fields (deployment, base URL) against
+   * the live catalogue. Returns an error message string when a required field is
+   * missing, or `null` when all required fields are present. Mirrors the
+   * Settings → Add Account dialog's required-field gate so the welcome dip
+   * can't silently save a half-configured Azure-style account.
+   */
+  private validateProviderRequiredFields(
+    provider: string,
+    baseUrl: string | null | undefined,
+    deployment: string | null | undefined
+  ): string | null {
+    let providerEntry: ProviderEntry | undefined;
+    try {
+      providerEntry = this.deps.getProviderCatalogue().providers.find((p) => p.id === provider);
+    } catch {
+      return null;
+    }
+    if (providerEntry?.requiresDeployment && !deployment?.trim()) {
+      return `${providerEntry.name} requires a deployment name.`;
+    }
+    if (providerEntry?.requiresBaseUrl && !baseUrl?.trim()) {
+      return `${providerEntry.name} requires a base URL.`;
+    }
+    return null;
   }
 
   /** Internal — write the user's profile to /home/<name>/.welcome.json. */
