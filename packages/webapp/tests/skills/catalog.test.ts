@@ -249,6 +249,32 @@ describe('discoverSkillCandidates', () => {
     const candidates = await discoverSkillCandidates(fs);
     expect(candidates.filter((c) => c.source === 'marketplace')).toHaveLength(0);
   });
+
+  it('discovers skills when plugin source is repo root ("." or "./")', async () => {
+    // Regression: source "." and "./" must resolve to the manifest parent dir,
+    // not produce a leading "." or "/" that fails to match VFS paths.
+    for (const source of ['.', './']) {
+      globalThis.indexedDB = new IDBFactory();
+      fs = await VirtualFS.create({ wipe: true });
+
+      const manifest = JSON.stringify({
+        name: 'root-source-marketplace',
+        metadata: { version: '1.0.0' },
+        plugins: [{ name: 'my-plugin', source, strict: false }],
+      });
+
+      await fs.mkdir('/mnt/repo/.claude-plugin', { recursive: true });
+      await fs.writeFile('/mnt/repo/.claude-plugin/marketplace.json', manifest);
+      await fs.mkdir('/mnt/repo/skills/root-skill', { recursive: true });
+      await fs.writeFile('/mnt/repo/skills/root-skill/SKILL.md', '---\nname: root-skill\n---\n');
+
+      const candidates = await discoverSkillCandidates(fs);
+      const marketplace = candidates.filter((c) => c.source === 'marketplace');
+
+      expect(marketplace).toHaveLength(1);
+      expect(marketplace[0].path).toBe('/mnt/repo/skills/root-skill');
+    }
+  });
 });
 
 describe('discoverSkillCandidates over a sudo-fs Proxy (OOM regression)', () => {
