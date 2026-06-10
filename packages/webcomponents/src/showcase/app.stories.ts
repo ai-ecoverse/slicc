@@ -17,7 +17,9 @@ import '../freezer/slicc-freezer-card.js';
 import '../freezer/slicc-freezer-new.js';
 import '../freezer/slicc-freezer.js';
 import '../freezer/slicc-shader.js';
+import '../nav/slicc-avatar-menu.js';
 import '../nav/slicc-nav.js';
+import '../overlay/slicc-dialog.js';
 import '../primitives/slicc-avatar.js';
 import '../primitives/slicc-day-separator.js';
 import '../primitives/slicc-floatbar.js';
@@ -140,8 +142,57 @@ function topnav(): HTMLElement {
   });
   const toggle = el('slicc-theme-toggle');
   const avatar = el('slicc-avatar', { email: 'beau@dodds.net', name: 'Lars Trieloff' });
-  nav.append(logo, switcher, floatbar, toggle, avatar);
+  // The avatar is the trigger of the account dropdown (real-app feature).
+  const menu = el('slicc-avatar-menu') as HTMLElement & { user?: unknown; items?: unknown };
+  menu.append(avatar);
+  (menu as { user?: unknown }).user = { name: 'Lars Trieloff', provider: 'Anthropic' };
+  (menu as { items?: unknown }).items = [
+    { id: 'sync', label: 'Enable multi-browser sync', icon: 'radio' },
+    { kind: 'separator' },
+    { id: 'new-session', label: 'New session', icon: 'plus' },
+    { id: 'settings', label: 'Account settings…', icon: 'settings' },
+    { kind: 'separator' },
+    { id: 'signout', label: 'Sign out', icon: 'log-out', danger: true },
+  ];
+  nav.append(logo, switcher, floatbar, toggle, menu);
   return nav;
+}
+
+/** A labelled text field for the settings dialog body. */
+function dialogField(label: string, value: string, mono = false): HTMLElement {
+  const wrap = el('label');
+  wrap.style.cssText = 'display:block;margin-bottom:14px;';
+  const lb = el('div');
+  lb.textContent = label;
+  lb.style.cssText = 'font-size:12px;color:var(--txt-2);margin-bottom:6px;';
+  const input = el('input') as HTMLInputElement;
+  input.value = value;
+  input.style.cssText =
+    'width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--line);' +
+    `border-radius:9px;background:var(--ghost);color:var(--ink);font:inherit;${
+      mono ? 'font-family:ui-monospace,monospace;' : ''
+    }outline:none;`;
+  wrap.append(lb, input);
+  return wrap;
+}
+
+/** The account-settings sub-dialog opened from the avatar menu (real-app feature). */
+function settingsDialog(): HTMLElement {
+  const dialog = el('slicc-dialog', {
+    heading: 'Account settings',
+    description: 'Connect an LLM provider with an API key or OAuth login.',
+  });
+  const save = el('button');
+  save.textContent = 'Save';
+  save.setAttribute('slot', 'footer');
+  save.style.cssText =
+    'padding:9px 16px;border:none;border-radius:9999px;background:var(--accent,#3b63fb);color:#fff;font:inherit;font-weight:600;cursor:pointer;';
+  dialog.append(
+    dialogField('Provider', 'Anthropic'),
+    dialogField('API key', 'sk-ant-••••••••••••••••', true),
+    save
+  );
+  return dialog;
 }
 
 /** The left chat column: scrollable thread + a pinned composer (no nav). */
@@ -259,6 +310,15 @@ function app(opts: AppOpts): HTMLElement {
 
   appCol.append(topnav(), shell);
   frame.append(appCol);
+
+  // The account-settings sub-dialog — opened from the avatar menu's settings item.
+  const dialog = settingsDialog();
+  frame.append(dialog);
+  frame.addEventListener('slicc-avatar-action', (e) => {
+    if ((e as CustomEvent<{ id: string }>).detail.id === 'settings') {
+      (dialog as HTMLElement & { show?: () => void }).show?.();
+    }
+  });
   return frame;
 }
 
