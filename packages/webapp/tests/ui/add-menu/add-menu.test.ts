@@ -10,6 +10,7 @@ function setup(items: AddItem[] = []) {
   document.body.append(composer, toggle);
   const onAttachFiles = vi.fn();
   const onAddReference = vi.fn();
+  const onClose = vi.fn();
   const capturePhoto = vi.fn(async () => null);
   const captureScreenshot = vi.fn(async () => null);
   const aggregator = { search: vi.fn(async () => items) };
@@ -21,6 +22,7 @@ function setup(items: AddItem[] = []) {
     onAddReference,
     capturePhoto,
     captureScreenshot,
+    onClose,
   });
   return {
     menu,
@@ -28,6 +30,7 @@ function setup(items: AddItem[] = []) {
     toggle,
     onAttachFiles,
     onAddReference,
+    onClose,
     capturePhoto,
     captureScreenshot,
     aggregator,
@@ -80,6 +83,16 @@ describe('AddMenu shell', () => {
     );
     photo?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     expect(capturePhoto).toHaveBeenCalled();
+  });
+
+  it('fires onClose when closed via close() and Escape', () => {
+    const { menu, onClose } = setup();
+    menu.open();
+    menu.close();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    menu.open();
+    menu.handleKey(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(onClose).toHaveBeenCalledTimes(2);
   });
 
   it('dispose() removes composer drag-drop listeners', () => {

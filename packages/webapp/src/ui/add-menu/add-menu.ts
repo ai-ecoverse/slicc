@@ -14,6 +14,7 @@ export interface AddMenuOptions {
   onAddReference(item: AddItem): void;
   capturePhoto(): Promise<File | null>;
   captureScreenshot(): Promise<File | null>;
+  onClose?(): void;
 }
 
 export class AddMenu {
@@ -80,6 +81,7 @@ export class AddMenu {
     this.opts.composer.classList.remove('composer--add-open');
     this.list.innerHTML = '';
     this.results = [];
+    this.opts.onClose?.();
   }
 
   handleKey(event: KeyboardEvent): boolean {

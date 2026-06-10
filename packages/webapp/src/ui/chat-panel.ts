@@ -374,6 +374,7 @@ export class ChatPanel {
       onAddReference: (item) => this.addReference(item),
       capturePhoto: opts.capturePhoto,
       captureScreenshot: opts.captureScreenshot,
+      onClose: () => this.updateAddToggleIcon(),
     });
     this.addMenu.requestUpload = () => this.fileInput.click();
   }
@@ -2331,7 +2332,9 @@ export class ChatPanel {
     for (const ref of this.pendingReferences) {
       const chip = document.createElement('span');
       chip.className = 'chat__ref-chip';
-      chip.textContent = `${ref.label} `;
+      const labelSpan = document.createElement('span');
+      labelSpan.textContent = ref.label;
+      chip.appendChild(labelSpan);
       const removeBtn = document.createElement('button');
       removeBtn.type = 'button';
       removeBtn.textContent = '×';
@@ -3308,6 +3311,8 @@ export class ChatPanel {
       document.removeEventListener('keydown', this.keydownListener);
       this.keydownListener = null;
     }
+    this.addMenu?.dispose();
+    this.addMenu = null;
     this.container.innerHTML = '';
   }
 }

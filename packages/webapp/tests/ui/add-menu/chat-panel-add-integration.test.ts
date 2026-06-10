@@ -90,7 +90,14 @@ describe('ChatPanel add-menu integration', () => {
     expect(stored?.content).toBe('explain this');
     expect(stored?.references?.[0].locator).toBe('/workspace/CLAUDE.md');
     expect(container.textContent).not.toContain('[context]');
-    expect(container.querySelector('.chat__ref-chip')?.textContent).toContain('CLAUDE.md');
+
+    // Bubble chip is still present in the message; composer pending chips are cleared.
+    const bubbleChips = container.querySelectorAll('.chat__msg-refs .chat__ref-chip');
+    expect(bubbleChips.length).toBe(1);
+    expect(bubbleChips[0].textContent).toContain('CLAUDE.md');
+
+    const composerChips = container.querySelectorAll('.chat__attachments .chat__ref-chip');
+    expect(composerChips.length).toBe(0);
   });
 
   it('dedupes references by kind+locator', () => {
