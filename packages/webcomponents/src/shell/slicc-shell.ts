@@ -43,6 +43,27 @@ const STYLE = `
 }
 .slicc-shell > slicc-dock,
 .slicc-shell > .dock { flex: 0 0 auto; }
+
+/* Narrow / extension-sidebar layout: a viewport this thin can't host a
+   chat | workbench side-by-side split, so when the workbench opens it becomes a
+   full-bleed overlay ON TOP of the (full-width) chat, leaving only the 48px dock
+   rail exposed so its icons stay tappable to toggle the workbench closed again. */
+@media (max-width: 560px) {
+  .slicc-shell { position: relative; }
+  .slicc-shell > slicc-chatpane,
+  .slicc-shell > .chatpane,
+  .slicc-shell[open] > slicc-chatpane,
+  .slicc-shell[open] > .chatpane { width: calc(100% - 48px); }
+  .slicc-shell[open] > slicc-workbench-pane,
+  .slicc-shell[open] > .workbench {
+    position: absolute; top: 0; right: 48px; bottom: 0; left: 0;
+    width: auto; margin: 0; border-radius: 0; opacity: 1;
+    z-index: 5;
+    /* Opaque so the full-height overlay reads as its own view, not a panel
+       floating over a visible chat thread. */
+    background: var(--bg);
+  }
+}
 `;
 
 const STYLE_ID = 'slicc-shell-style';

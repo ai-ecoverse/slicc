@@ -252,4 +252,19 @@ describe('slicc-nav', () => {
     // And it is pushed well past the left cluster (the spacer absorbed the gap).
     expect(avatarRect.left - navRect.left).toBeGreaterThan(300);
   });
+
+  it('tightens its padding + gap below 560px so the bar fits an extension sidebar', () => {
+    const el = document.createElement('slicc-nav');
+    document.body.appendChild(el);
+    const sheet = (document.getElementById('slicc-nav-style') as HTMLStyleElement).sheet;
+    const media = Array.from(sheet?.cssRules ?? []).find(
+      (r): r is CSSMediaRule => r instanceof CSSMediaRule && r.conditionText.includes('560px')
+    );
+    expect(media).toBeDefined();
+    const navRule = Array.from((media as CSSMediaRule).cssRules).find(
+      (r): r is CSSStyleRule => r instanceof CSSStyleRule && r.selectorText.includes('.slicc-nav')
+    );
+    expect(navRule?.style.paddingLeft).toBe('10px');
+    expect(navRule?.style.gap).toBe('8px');
+  });
 });

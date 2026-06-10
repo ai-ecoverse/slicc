@@ -27,7 +27,12 @@ export default defineConfig({
       provider: playwright(),
       headless: true,
       screenshotFailures: false,
-      instances: [{ browser: 'chromium' }],
+      // Desktop viewport: this is a desktop-first prototype lift, so computed-style
+      // tests assert the wide-layout design values. Components carry their own
+      // narrow / extension-sidebar media queries (≤560px); those are exercised by
+      // tests that opt in explicitly (a matchMedia gate + the showcase Mobile story),
+      // not by an incidentally-small default window.
+      instances: [{ browser: 'chromium', viewport: { width: 1280, height: 900 } }],
     },
     coverage: {
       provider: 'v8',
