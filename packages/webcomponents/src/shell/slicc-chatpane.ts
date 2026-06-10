@@ -54,6 +54,23 @@ const STYLE = `
 .slicc-chatpane[narrow] {
   width: 34%;
 }
+/* In the narrow column the frosted reading card is pointless — there is no wide
+   gutter for it to feather into. The inner fills the full width AND height of the
+   thread and drops its background/blur/feather/radius so no thread background
+   shows behind it. Out-specifies the thread's own [open] inner rule
+   (0,3,0 vs 0,2,1). Wide view keeps the centered, frosted card untouched. */
+.slicc-chatpane[narrow] .slicc-thread__inner {
+  width: 100%;
+  max-width: none;
+  min-height: 100%;
+  margin: 0;
+  background: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-radius: 0;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
 `;
 
 const STYLE_ID = 'slicc-chatpane-style';
@@ -93,7 +110,8 @@ const OPEN_FORWARD_TAGS = ['slicc-chat-thread', 'slicc-composer'] as const;
  * thread/composer added later still inherits the current state.
  *
  * @attr narrow - boolean; narrow-chat variant (34% width + forwards `open` to
- *   the thread/composer), mirrors `.shell.open .chatpane`
+ *   the thread/composer + the thread inner fills full width/height with its
+ *   frosted background dropped), mirrors `.shell.open .chatpane`
  * @csspart pane - the column (the host element itself carries `part="pane"`)
  * @slot - default; the column's children in DOM order: an optional `<slicc-nav>`,
  *   then `<slicc-chat-thread>`, then `<slicc-composer>`, composed by tag
