@@ -1,5 +1,6 @@
 import { define } from '../internal/define.js';
 import { h } from '../internal/dom.js';
+import { iconEl } from '../internal/icons.js';
 // Renders these child custom elements internally — owns their registration.
 import '../primitives/slicc-snowflake.js';
 
@@ -119,12 +120,21 @@ function ensureFreezerCardStyle(doc: Document): void {
 /** Prototype thaw-flash duration (`setTimeout(…, 1400)` on the freezer card). */
 const THAW_MS = 1400;
 
+/** Rendered lucide glyph size (px) for a custom `icon`, matching the snowflake badge. */
+const ICON_SIZE = 14;
+
 /**
  * `<slicc-freezer-card>` — one frozen-session row from the prototype's left
  * "freezer" rail (`.freezer .fzcard`). A clickable row with a leading 28px
  * circular snowflake badge — composed by tag as `<slicc-snowflake>` (an earlier
  * wave element), so the rose "thawing" flash propagates to the badge — and a
  * `.ftext` block carrying a single-line `.fzt` title and `.fzm` meta line.
+ *
+ * The badge shows the lucide `snowflake` glyph by default; setting the `icon`
+ * attribute to any lucide name (e.g. `flame`, `git-branch`) renders that glyph
+ * inside the same circular badge instead, so a card can carry a per-session icon
+ * while keeping the snowflake as the default. The custom glyph still inherits the
+ * badge's `currentColor`, so it tracks the frozen / thawed palette too.
  *
  * Light DOM (no shadow root): the host renders its own scaffold and relocates any
  * pre-existing light children into the title region, so the host app can style
@@ -147,6 +157,7 @@ const THAW_MS = 1400;
  * @attr title - the session heading (escaped); falls back to slotted content
  * @attr meta - the meta line, e.g. "2h ago · 18 turns · PR #128" (escaped)
  * @attr slug - the session id, surfaced in the `freezer-card-select` detail
+ * @attr icon - optional lucide icon name; overrides the default snowflake glyph
  * @attr expanded - boolean; fades the title+meta in (collapsed = badge only)
  * @attr thawed - boolean; the rose reopen flash (mirrored onto the badge)
  * @attr hidden - boolean; search-hide (the prototype's `.match-hidden`)
@@ -158,13 +169,15 @@ const THAW_MS = 1400;
  * @fires freezer-card-select - composed + bubbling; `detail.slug` on click
  */
 export class SliccFreezerCard extends HTMLElement {
-  static readonly observedAttributes = ['title', 'meta', 'slug', 'thawed'];
+  static readonly observedAttributes = ['title', 'meta', 'slug', 'icon', 'thawed'];
 
   #badge!: HTMLElement;
   #text!: HTMLElement;
   #title!: HTMLElement;
   #meta!: HTMLElement;
   #tip: HTMLElement | null = null;
+  /** The custom lucide glyph slotted into the badge when `icon` is set. */
+  #iconNode: SVGSVGElement | null = null;
   #built = false;
   #thawTimer: ReturnType<typeof setTimeout> | null = null;
   #onClick = (): void => this.#select();
@@ -188,6 +201,8 @@ export class SliccFreezerCard extends HTMLElement {
     if (name === 'thawed') {
       // Mirror the row's rose flash onto the badge (prototype `.fzcard.thawed .snow`).
       this.#badge.toggleAttribute('thawed', newValue !== null);
+    } else if (name === 'icon') {
+      this.#syncIcon();
     } else {
       this.#sync();
     }
@@ -221,6 +236,16 @@ export class SliccFreezerCard extends HTMLElement {
   set slug(value: string | null) {
     if (value == null) this.removeAttribute('slug');
     else this.setAttribute('slug', value);
+  }
+
+  /** Optional lucide icon name; overrides the default snowflake glyph when set. */
+  get icon(): string | null {
+    return this.getAttribute('icon');
+  }
+
+  set icon(value: string | null) {
+    if (value == null) this.removeAttribute('icon');
+    else this.setAttribute('icon', value);
   }
 
   /** Whether the title+meta are faded in (collapsed = badge only). */
@@ -339,6 +364,27 @@ export class SliccFreezerCard extends HTMLElement {
     // The collapsed-rail hover title mirrors the session heading.
     if (this.#tip) this.#tip.textContent = title ?? (this.#title.textContent || '');
     this.#badge.toggleAttribute('thawed', this.thawed);
+    this.#syncIcon();
+  }
+
+  /**
+   * Reflect the `icon` attribute onto the badge: a custom lucide glyph is slotted
+   * into the `<slicc-snowflake>` (overriding its default snowflake fallback), or
+   * removed to fall back to the snowflake. The glyph inherits the badge's
+   * `currentColor`, so it tracks the frozen / thawed palette.
+   */
+  #syncIcon(): void {
+    if (!this.#built) return;
+    const name = this.getAttribute('icon');
+    if (name) {
+      const next = iconEl(name, { size: ICON_SIZE, class: 'ic', part: 'icon' });
+      if (this.#iconNode) this.#iconNode.replaceWith(next);
+      else this.#badge.appendChild(next);
+      this.#iconNode = next;
+    } else if (this.#iconNode) {
+      this.#iconNode.remove();
+      this.#iconNode = null;
+    }
   }
 }
 

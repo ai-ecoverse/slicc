@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+// Composed children — importing registers their tags so they upgrade in the rail.
+import '../../src/freezer/slicc-freezer-card.js';
+import '../../src/freezer/slicc-freezer-new.js';
 import { type FreezerToggleDetail, SliccFreezer } from '../../src/freezer/slicc-freezer.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
 
@@ -211,6 +214,69 @@ describe('slicc-freezer', () => {
       el.toggle();
       expect(seen).toHaveBeenCalledTimes(1);
       document.body.removeEventListener('freezer-toggle', seen);
+    });
+  });
+
+  describe('collapse ↔ expand wiring (child propagation)', () => {
+    /** Mount a freezer with composed `<slicc-freezer-new>` + card children. */
+    function mountComposed(open: boolean): SliccFreezer {
+      const el = document.createElement('slicc-freezer') as SliccFreezer;
+      if (open) el.setAttribute('open', '');
+      const neu = document.createElement('slicc-freezer-new');
+      const card1 = document.createElement('slicc-freezer-card');
+      card1.setAttribute('title', 'warm hero redesign');
+      card1.setAttribute('slug', 'warm-hero');
+      const card2 = document.createElement('slicc-freezer-card');
+      card2.setAttribute('title', 'checkout funnel audit');
+      card2.setAttribute('slug', 'checkout');
+      el.append(neu, card1, card2);
+      document.body.appendChild(el);
+      return el;
+    }
+
+    const composedItems = (el: SliccFreezer) => [
+      ...el.querySelectorAll<HTMLElement>('slicc-freezer-card, slicc-freezer-new'),
+    ];
+
+    it('open at mount → every composed child is expanded', () => {
+      const el = mountComposed(true);
+      const items = composedItems(el);
+      expect(items.length).toBe(3);
+      for (const item of items) expect(item.hasAttribute('expanded')).toBe(true);
+    });
+
+    it('collapsed at mount → no composed child is expanded', () => {
+      const el = mountComposed(false);
+      const items = composedItems(el);
+      expect(items.length).toBe(3);
+      for (const item of items) expect(item.hasAttribute('expanded')).toBe(false);
+    });
+
+    it('toggling the rail flips child expanded live (titles ↔ icons only)', () => {
+      const el = mountComposed(false);
+      toggle(el)!.click(); // expand
+      for (const item of composedItems(el)) expect(item.hasAttribute('expanded')).toBe(true);
+      toggle(el)!.click(); // collapse
+      for (const item of composedItems(el)) expect(item.hasAttribute('expanded')).toBe(false);
+    });
+
+    it('setting open via the property propagates to children', () => {
+      const el = mountComposed(false);
+      el.open = true;
+      for (const item of composedItems(el)) expect(item.hasAttribute('expanded')).toBe(true);
+    });
+
+    it('a row appended while open inherits the expanded state', () => {
+      const el = mountComposed(true);
+      const extra = document.createElement('slicc-freezer-card');
+      extra.setAttribute('title', 'late arrival');
+      el.append(extra);
+      expect(extra.hasAttribute('expanded')).toBe(true);
+    });
+
+    it('leaves raw prototype .fzcard rows untouched (no expanded attribute)', () => {
+      const el = mount({ open: true });
+      for (const c of cards(el)) expect(c.hasAttribute('expanded')).toBe(false);
     });
   });
 

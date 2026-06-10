@@ -19,9 +19,10 @@ import './slicc-frost-shader.js';
  *
  * The freezer is `position: fixed` to the left edge at `z-index: 6`; the two named
  * exports surface both rail states — `Collapsed` (44px icon strip) and `Open`
- * (260px, the `open` attribute set, children `expanded` so titles fade in). The
- * cards own their own `expanded` flag (the prototype gates this on `.freezer.open`),
- * so the rail state and the child state are set together. Light/dark + viewport are
+ * (260px, the `open` attribute set). The rail is interactive: clicking the header
+ * toggle flips `open` and the freezer propagates `expanded` onto its children
+ * live, so titles fade in on expand and drop to icons only on collapse — the
+ * children carry no `expanded` flag of their own here. Light/dark + viewport are
  * global toolbars — no per-story theme wrappers.
  */
 interface FreezerArgs {
@@ -50,35 +51,33 @@ const SESSIONS: CardSpec[] = [
   { title: 'analytics dashboard', meta: '2 months ago · 21 turns · PR #88', slug: 'analytics' },
 ];
 
-/** The New-chat affordance, composed by tag; `expanded` mirrors the rail state. */
-function makeNew(expanded: boolean): HTMLElement {
-  const el = document.createElement('slicc-freezer-new');
-  if (expanded) el.setAttribute('expanded', '');
-  return el;
+/** The New-chat affordance, composed by tag. */
+function makeNew(): HTMLElement {
+  return document.createElement('slicc-freezer-new');
 }
 
-/** One session row, composed by tag; `expanded` mirrors the rail state. */
-function makeCard(spec: CardSpec, expanded: boolean): HTMLElement {
+/** One session row, composed by tag. */
+function makeCard(spec: CardSpec): HTMLElement {
   const el = document.createElement('slicc-freezer-card');
   el.setAttribute('title', spec.title);
   el.setAttribute('meta', spec.meta);
   el.setAttribute('slug', spec.slug);
-  if (expanded) el.setAttribute('expanded', '');
   return el;
 }
 
 /**
  * Build the populated freezer: the rail with a `<slicc-freezer-new>` at the top
  * and the `SESSIONS` stack of `<slicc-freezer-card>`s, composed by tag. The
- * children's `expanded` flag tracks the rail's `open` state (the prototype gates
- * the fade-in on `.freezer.open`).
+ * children deliberately carry NO `expanded` flag — the freezer owns it and
+ * propagates its `open` state onto them, so clicking the header toggle expands /
+ * collapses the titles live (the prototype gated the fade-in on `.freezer.open`).
  */
 function buildFreezer({ open, ctx }: FreezerArgs): HTMLElement {
   const el = document.createElement('slicc-freezer');
   if (open) el.setAttribute('open', '');
   if (ctx) el.setAttribute('ctx', '');
-  el.append(makeNew(Boolean(open)));
-  for (const spec of SESSIONS) el.append(makeCard(spec, Boolean(open)));
+  el.append(makeNew());
+  for (const spec of SESSIONS) el.append(makeCard(spec));
   return el;
 }
 

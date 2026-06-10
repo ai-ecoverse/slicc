@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SliccFreezerNew } from '../../src/freezer/slicc-freezer-new.js';
+import { LONG_PRESS_MS } from '../../src/internal/long-press.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
 
 function mount(setup?: (el: SliccFreezerNew) => void): SliccFreezerNew {
@@ -13,6 +14,10 @@ const buttonOf = (el: SliccFreezerNew) =>
   el.shadowRoot?.querySelector('button.fznew') as HTMLButtonElement;
 const badgeOf = (el: SliccFreezerNew) => el.shadowRoot?.querySelector('.nico') as HTMLElement;
 const labelOf = (el: SliccFreezerNew) => el.shadowRoot?.querySelector('.nlbl') as HTMLElement;
+const optionsOf = (el: SliccFreezerNew) =>
+  el.shadowRoot?.querySelector('.fznew-options') as HTMLElement;
+const optionOf = (el: SliccFreezerNew, action: 'save' | 'skip' | 'erase') =>
+  el.shadowRoot?.querySelector(`.fznew-opt--${action}`) as HTMLButtonElement;
 
 /** Resolve a token expression (e.g. `var(--ghost)`) to its computed rgb(). */
 function rgb(value: string): string {
@@ -136,23 +141,143 @@ describe('slicc-freezer-new', () => {
     expect(labelOf(el).textContent).toContain('<img src=x onerror=alert(1)>');
   });
 
-  // --- behavior / events ---------------------------------------------------
+  // --- three-state gesture / events ----------------------------------------
 
-  it('emits a composed, bubbling new-session event on click', () => {
+  it('single click commits new-chat-save after the double-click window', () => {
+    vi.useFakeTimers();
+    try {
+      const el = mount();
+      const evts: string[] = [];
+      for (const t of ['new-chat-save', 'new-chat-skip', 'new-chat-erase']) {
+        el.addEventListener(t, () => evts.push(t));
+      }
+      buttonOf(el).click();
+      // Deferred — nothing fires until the double-click window elapses.
+      expect(evts).toEqual([]);
+      vi.advanceTimersByTime(350);
+      expect(evts).toEqual(['new-chat-save']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('double click commits new-chat-skip and suppresses new-chat-save', () => {
+    vi.useFakeTimers();
+    try {
+      const el = mount();
+      const evts: string[] = [];
+      for (const t of ['new-chat-save', 'new-chat-skip', 'new-chat-erase']) {
+        el.addEventListener(t, () => evts.push(t));
+      }
+      const btn = buttonOf(el);
+      btn.click();
+      btn.click();
+      vi.advanceTimersByTime(500);
+      expect(evts).toEqual(['new-chat-skip']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('long press commits new-chat-erase', () => {
+    vi.useFakeTimers();
+    try {
+      const el = mount();
+      const evts: string[] = [];
+      for (const t of ['new-chat-save', 'new-chat-skip', 'new-chat-erase']) {
+        el.addEventListener(t, () => evts.push(t));
+      }
+      buttonOf(el).dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }));
+      vi.advanceTimersByTime(LONG_PRESS_MS);
+      expect(evts).toEqual(['new-chat-erase']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('modifier-click commits new-chat-erase immediately', () => {
     const el = mount();
-    const handler = vi.fn();
-    document.body.addEventListener('new-session', handler);
-    const evts: CustomEvent[] = [];
-    el.addEventListener('new-session', (e) => evts.push(e as CustomEvent));
+    const evts: string[] = [];
+    for (const t of ['new-chat-save', 'new-chat-skip', 'new-chat-erase']) {
+      el.addEventListener(t, () => evts.push(t));
+    }
+    buttonOf(el).dispatchEvent(
+      new MouseEvent('click', { button: 0, metaKey: true, bubbles: true })
+    );
+    expect(evts).toEqual(['new-chat-erase']);
+  });
 
-    buttonOf(el).click();
+  it('the new-chat events bubble across the shadow boundary and are composed', () => {
+    vi.useFakeTimers();
+    try {
+      const el = mount();
+      const seen: CustomEvent[] = [];
+      const handler = (e: Event) => seen.push(e as CustomEvent);
+      document.body.addEventListener('new-chat-save', handler);
+      buttonOf(el).click();
+      vi.advanceTimersByTime(350);
+      expect(seen).toHaveLength(1);
+      expect(seen[0].bubbles).toBe(true);
+      expect(seen[0].composed).toBe(true);
+      document.body.removeEventListener('new-chat-save', handler);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
-    expect(evts).toHaveLength(1);
-    expect(evts[0].bubbles).toBe(true);
-    expect(evts[0].composed).toBe(true);
-    // bubbles across the shadow boundary up to the document body
-    expect(handler).toHaveBeenCalledTimes(1);
-    document.body.removeEventListener('new-session', handler);
+  it('drops the pending single-click timer on disconnect (no late event)', () => {
+    vi.useFakeTimers();
+    try {
+      const el = mount();
+      const evts: string[] = [];
+      el.addEventListener('new-chat-save', () => evts.push('save'));
+      buttonOf(el).click();
+      el.remove();
+      vi.advanceTimersByTime(1000);
+      expect(evts).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // --- expanded options legend ---------------------------------------------
+
+  it('renders the three option buttons; collapsed hides the legend', () => {
+    const el = mount();
+    expect(optionOf(el, 'save')).toBeTruthy();
+    expect(optionOf(el, 'skip')).toBeTruthy();
+    expect(optionOf(el, 'erase')).toBeTruthy();
+    expect(optionsOf(el).getAttribute('part')).toBe('options');
+    // collapsed by default → legend not displayed
+    expect(getComputedStyle(optionsOf(el)).display).toBe('none');
+  });
+
+  it('shows the options legend when expanded', () => {
+    const el = mount((node) => {
+      node.expanded = true;
+    });
+    expect(getComputedStyle(optionsOf(el)).display).toBe('flex');
+  });
+
+  it('clicking an option button fires its event immediately', () => {
+    const el = mount((node) => {
+      node.expanded = true;
+    });
+    const evts: string[] = [];
+    for (const t of ['new-chat-save', 'new-chat-skip', 'new-chat-erase']) {
+      el.addEventListener(t, () => evts.push(t));
+    }
+    optionOf(el, 'skip').click();
+    optionOf(el, 'erase').click();
+    optionOf(el, 'save').click();
+    expect(evts).toEqual(['new-chat-skip', 'new-chat-erase', 'new-chat-save']);
+  });
+
+  it('uses a lighter label font weight than the prototype 600', () => {
+    const el = mount((node) => {
+      node.expanded = true;
+    });
+    expect(getComputedStyle(labelOf(el)).fontWeight).toBe('500');
   });
 
   // --- base appearance / metrics (real Chromium) ---------------------------

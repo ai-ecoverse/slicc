@@ -155,6 +155,54 @@ describe('slicc-freezer-card', () => {
     expect(metaOf(el).textContent).toBe('last week · 24 turns');
   });
 
+  // --- custom icon ---------------------------------------------------------
+
+  it('defaults to the snowflake badge with no slotted glyph (icon absent)', () => {
+    const el = makeCard({ title: 'warm hero', meta: '2h ago' });
+    document.body.appendChild(el);
+    // No light-DOM svg is slotted into the badge — the default snowflake glyph
+    // lives in the snowflake's own shadow root.
+    expect(badgeOf(el).querySelector(':scope > svg')).toBeNull();
+    expect(el.icon).toBeNull();
+  });
+
+  it('icon: renders a custom lucide glyph slotted into the badge', () => {
+    const el = makeCard({ title: 'hotfix', meta: '5 turns' });
+    el.setAttribute('icon', 'flame');
+    document.body.appendChild(el);
+    const glyph = badgeOf(el).querySelector(':scope > svg');
+    expect(glyph).not.toBeNull();
+    expect(glyph?.getAttribute('viewBox')).toBe('0 0 24 24');
+    expect(glyph?.getAttribute('stroke')).toBe('currentColor');
+    expect(glyph?.getAttribute('part')).toBe('icon');
+    expect(el.icon).toBe('flame');
+  });
+
+  it('reflects the icon property to the attribute and back', () => {
+    const el = mount();
+    expect(el.icon).toBeNull();
+    el.icon = 'git-branch';
+    expect(el.getAttribute('icon')).toBe('git-branch');
+    expect(badgeOf(el).querySelector(':scope > svg')).not.toBeNull();
+    el.icon = null;
+    expect(el.hasAttribute('icon')).toBe(false);
+  });
+
+  it('swaps the custom glyph when icon changes and reverts to snowflake when cleared', () => {
+    const el = mount();
+    el.icon = 'flame';
+    const first = badgeOf(el).querySelector(':scope > svg');
+    expect(first).not.toBeNull();
+    el.icon = 'bug';
+    const second = badgeOf(el).querySelector(':scope > svg');
+    expect(second).not.toBeNull();
+    // Exactly one custom glyph is slotted (the old one is replaced, not stacked).
+    expect(badgeOf(el).querySelectorAll(':scope > svg').length).toBe(1);
+    expect(second).not.toBe(first);
+    el.icon = null;
+    expect(badgeOf(el).querySelector(':scope > svg')).toBeNull();
+  });
+
   // --- collapsed vs expanded (real Chromium) -------------------------------
 
   it('expanded: the row keeps its gap and the text column is visible (opacity 1)', () => {
