@@ -104,8 +104,8 @@ describe('slicc-delegation-line', () => {
     });
   });
 
-  describe('kind glyph', () => {
-    it('feed renders an arrow icon and the feed_scoop verb', () => {
+  describe('kind glyph + human-readable verb', () => {
+    it('feed renders an arrow icon and the human-readable "Delegated to" verb', () => {
       const el = mount((e) => {
         e.kind = 'feed';
         e.scoop = 'researcher';
@@ -113,7 +113,49 @@ describe('slicc-delegation-line', () => {
       // The leading darrow is now a lucide <svg> (arrow-right), never a glyph char.
       expect(arrow(el).querySelector('svg')).not.toBeNull();
       expect(arrow(el).textContent?.trim()).toBe('');
-      expect(el.shadowRoot?.querySelector('.verb')?.textContent).toBe('feed_scoop');
+      // The developer-coded "feed_scoop" is never shown — a friendly phrase is.
+      expect(el.shadowRoot?.querySelector('.verb')?.textContent).toBe('Delegated to');
+    });
+
+    it('scoop renders the "Spun up" verb', () => {
+      const el = mount((e) => {
+        e.kind = 'scoop';
+        e.scoop = 'researcher';
+      });
+      expect(el.shadowRoot?.querySelector('.verb')?.textContent).toBe('Spun up');
+      expect(arrow(el).querySelector('svg')).not.toBeNull();
+    });
+
+    it('drop renders the "Wrapped up" verb', () => {
+      const el = mount((e) => {
+        e.kind = 'drop';
+        e.scoop = 'tester';
+      });
+      expect(el.shadowRoot?.querySelector('.verb')?.textContent).toBe('Wrapped up');
+      expect(arrow(el).querySelector('svg')).not.toBeNull();
+    });
+
+    it('maps a raw internal action name passed via verb to its friendly label', () => {
+      const el = mount((e) => {
+        e.verb = 'feed_scoop';
+        e.scoop = 'designer';
+      });
+      // The attribute keeps the raw value, but the rendered text is humanized.
+      expect(el.getAttribute('verb')).toBe('feed_scoop');
+      expect(el.shadowRoot?.querySelector('.verb')?.textContent).toBe('Delegated to');
+    });
+
+    it('maps scoop_scoop / drop_scoop verbs to friendly labels', () => {
+      const scoop = mount((e) => {
+        e.verb = 'scoop_scoop';
+        e.scoop = 'x';
+      });
+      expect(scoop.shadowRoot?.querySelector('.verb')?.textContent).toBe('Spun up');
+      const drop = mount((e) => {
+        e.verb = 'drop_scoop';
+        e.scoop = 'x';
+      });
+      expect(drop.shadowRoot?.querySelector('.verb')?.textContent).toBe('Wrapped up');
     });
 
     it('sprinkle renders a sparkles icon and no default verb', () => {
@@ -127,7 +169,7 @@ describe('slicc-delegation-line', () => {
       expect(el.shadowRoot?.querySelector('.verb')).toBeNull();
     });
 
-    it('lets an explicit verb override the kind default', () => {
+    it('lets an explicit free-text verb pass through unchanged', () => {
       const el = mount((e) => {
         e.kind = 'sprinkle';
         e.verb = 'spawned';

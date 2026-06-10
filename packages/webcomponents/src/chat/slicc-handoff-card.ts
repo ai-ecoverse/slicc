@@ -35,6 +35,8 @@ const STYLE = `
 .handoff .av{width:26px;height:26px;border-radius:9999px;border:1px solid color-mix(in srgb,var(--violet) 40%,var(--line));display:grid;place-items:center;background:color-mix(in srgb,var(--violet) 14%,#fff);}
 .handoff .av .eyes{display:inline-flex;gap:3px;}
 .handoff .lbl2{font-family:var(--ui);font-size:11px;color:var(--txt-2);}
+.handoff .lbl2 .hand{display:inline-flex;vertical-align:-2px;margin-right:5px;color:var(--violet);}
+.handoff .lbl2 .hand svg{display:block;}
 .handoff .lbl2 .pre{color:var(--txt-3);}
 .handoff .lbl2 b{color:var(--violet);font-weight:600;}
 .handoff p{margin:0;font-size:14px;color:var(--ink);}
@@ -77,6 +79,7 @@ const DEFAULT_PRE = 'Handoff request from';
  * @csspart card - the outer card (`.handoff` or `.opened`)
  * @csspart top - the handoff header row (`.handoff .top`)
  * @csspart avatar - the round violet avatar well (`.handoff .av`)
+ * @csspart hand - the leading violet hand glyph in the label (`.handoff .lbl2 .hand`)
  * @csspart label - the micro-label (`.handoff .lbl2`)
  * @csspart name - the violet bold name (`handoff`) / bold target (`opened`)
  * @csspart text - the body paragraph (`handoff`) / receipt text (`opened`)
@@ -170,10 +173,18 @@ export class SliccHandoffCard extends HTMLElement {
     if (this.eyes === 'dead') eyes.setAttribute('eyes', 'dead');
     const avatar = h('span', { class: 'av', part: 'avatar' }, eyes);
 
-    // The micro-label: muted prefix + (optional) violet bold name.
+    // The micro-label: a leading violet hand glyph (the handoff mark), the muted
+    // prefix, and the (optional) violet bold name. The glyph is a live lucide
+    // `<svg>`, never an emoji or unicode symbol.
+    const hand = h(
+      'span',
+      { class: 'hand', part: 'hand', 'aria-hidden': 'true' },
+      iconEl('hand', { size: 13 })
+    );
     const label = h(
       'span',
       { class: 'lbl2', part: 'label' },
+      hand,
       h('span', { class: 'pre' }, pre),
       ' ',
       name != null ? h('b', { part: 'name' }, name) : null
