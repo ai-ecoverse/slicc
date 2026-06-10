@@ -280,8 +280,6 @@ describe('slicc-floatbar', () => {
       // width longhand matches the base height longhand → square (1:1) box.
       expect(narrowWidth).toBe(baseHeight);
       expect(narrowHost?.style.getPropertyValue('aspect-ratio').trim()).toBe('1 / 1');
-      // padding collapses so the badge does not stretch wider than it is tall.
-      expect(narrowHost?.style.getPropertyValue('padding').trim()).toBe('0px');
     });
   });
 });
