@@ -218,3 +218,48 @@ export const ScrollUnder: Story = {
   args: {},
   render: scrollUnder,
 };
+
+/**
+ * Build a composer and arm its push-to-talk gesture after mount so the story
+ * shows the held "walkie-talkie" state: the band turns into a big active push
+ * button with a centered mic, the "Keep mouse pressed to dictate" prompt, and
+ * the simulated model-load progress bar sweeping to its listening affordance.
+ * The press is synthesized (a real mousedown) since Storybook renders a static
+ * frame; clicking anywhere releases it, tearing the overlay down and populating
+ * the textarea with a representative transcript. `prefers-reduced-motion` shows
+ * the static ready state instead of the sweep.
+ */
+function pushToTalk({ open }: ComposerArgs): HTMLElement {
+  const shell = document.createElement('div');
+  shell.style.cssText =
+    'display:flex;flex-direction:column;height:300px;width:100%;background:var(--bg);overflow:hidden;font-family:var(--ui);';
+
+  const thread = document.createElement('div');
+  thread.style.cssText = 'flex:1 1 auto;padding:24px;color:var(--txt-2);font-size:14px;';
+  thread.textContent = 'Press and hold the input below to dictate; release to drop the transcript.';
+
+  const el = document.createElement('slicc-composer') as SliccComposer;
+  if (open) el.setAttribute('open', '');
+  el.append(inputCard(), metaRow(Boolean(open)));
+
+  shell.append(thread, el);
+
+  // Arm the gesture once the input card has upgraded and built its textarea.
+  requestAnimationFrame(() => {
+    const ta = el.querySelector('textarea');
+    ta?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+  });
+  return shell;
+}
+
+/**
+ * Push-to-talk — the walkie-talkie dictation gesture. The story arms the press
+ * on mount so the big active push button (mic + prompt + simulated model-load
+ * progress bar) is visible. Click anywhere to release and watch the transcript
+ * populate the textarea. Flip the theme + reduced-motion toolbars to confirm
+ * the frosted tint and the no-sweep static-ready path.
+ */
+export const PushToTalk: Story = {
+  args: {},
+  render: pushToTalk,
+};
