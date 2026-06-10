@@ -16,6 +16,7 @@ import type { OffscreenClient, OffscreenClientCallbacks } from '../offscreen-cli
 import type { ChatMessage } from '../types.js';
 import { WcChatController } from './wc-chat-controller.js';
 import { mountWcShell, type SwitcherScoop, submittedText, type WcShellRefs } from './wc-shell.js';
+import { createWorkbenchActivator } from './wc-workbench.js';
 
 const CONE_COLOR = '#b07823';
 const SCOOP_PALETTE = ['#06b6d4', '#8b5cf6', '#f59e0b', '#10b981', '#3b82f6', '#ef4444'];
@@ -140,11 +141,13 @@ export async function mountWcUiLive(app: HTMLElement, log: BootStageLogger): Pro
     log,
   });
 
+  let activateSurface: ((surfaceId: string) => void) | null = null;
   const refs = mountWcShell(app, {
     messages: [],
     scoops: [],
     floatLabel: 'standalone · live',
     placeholder: 'Ask sliccy, or describe a change…',
+    onSurfaceActivate: (surfaceId) => activateSurface?.(surfaceId),
   });
 
   let controller: WcChatController | null = null;
@@ -195,6 +198,38 @@ export async function mountWcUiLive(app: HTMLElement, log: BootStageLogger): Pro
     if (scoop && scoop.jid !== selected?.jid) selectScoop(scoop);
   });
 
+  // Workbench: VFS file tree + worker-shell terminal, both lazy on first
+  // surface activation from the dock or tab bar.
+  let fsPromise: ReturnType<typeof openPageFs> | null = null;
+  const liveClient = client;
+  activateSurface = createWorkbenchActivator({
+    fileTree: refs.fileTree,
+    termSurface: refs.termSurface,
+    openFs: () => {
+      fsPromise ??= openPageFs();
+      return fsPromise;
+    },
+    mountTerminal: async (container) => {
+      const { RemoteTerminalView } = await import('../../kernel/remote-terminal-view.js');
+      const { fetchSecretEnvVars } = await import('../../core/secret-env.js');
+      const env = await fetchSecretEnvVars();
+      const view = new RemoteTerminalView({
+        client: liveClient,
+        cwd: '/',
+        env: Object.keys(env).length > 0 ? env : undefined,
+      });
+      await view.mount(container);
+      window.addEventListener('beforeunload', () => view.dispose(), { once: true });
+    },
+    log,
+  });
+
   await host.ready;
   log.info('WC live shell ready', { scoops: client.getScoops().length });
+}
+
+/** Page-side VFS over the shared LightningFS IndexedDB (`slicc-fs`). */
+async function openPageFs(): Promise<import('../../fs/virtual-fs.js').VirtualFS> {
+  const { VirtualFS } = await import('../../fs/virtual-fs.js');
+  return VirtualFS.create({ dbName: 'slicc-fs' });
 }

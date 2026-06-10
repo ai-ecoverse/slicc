@@ -12,6 +12,7 @@
  */
 
 import { ensureGlobalTokens } from '@slicc/webcomponents/src/theme/tokens.js';
+import type { SliccFileTree } from '@slicc/webcomponents/src/workbench/slicc-file-tree.js';
 import { createChatFixture, FIXTURE_SCOOP_NAME } from '../chat-fixture.js';
 import type { ChatMessage } from '../types.js';
 import { buildThreadChildren, messageEls } from './wc-message-view.js';
@@ -61,6 +62,8 @@ export interface WcShellOptions {
   floatLabel: string;
   /** Composer input placeholder. */
   placeholder: string;
+  /** Invoked when dock/tab selection activates a workbench surface. */
+  onSurfaceActivate?: (surfaceId: string) => void;
 }
 
 /** Element handles the boot modes wire their behavior onto. */
@@ -75,6 +78,8 @@ export interface WcShellRefs {
   workbenchBody: HTMLElement;
   dock: HTMLElement;
   freezer: HTMLElement;
+  fileTree: SliccFileTree;
+  termSurface: HTMLElement;
 }
 
 const STYLE_ID = 'slicc-wcui-style';
@@ -86,6 +91,7 @@ const CSS = [
   'box-sizing:border-box;padding-left:var(--rail-w,44px);',
   'transition:padding-left .4s cubic-bezier(.4,0,.2,1);}',
   '@media (max-width:560px){.wcui-appcol{padding-left:44px;}}',
+  '.wcui-term{flex:1;min-height:0;display:flex;flex-direction:column;}',
 ].join('');
 
 function ensureShellStyles(doc: Document): void {
@@ -133,30 +139,43 @@ function buildComposer(options: WcShellOptions): {
   return { composer, inputCard, composerMeta };
 }
 
-function buildWorkbench(): { workbench: HTMLElement; body: HTMLElement; header: HTMLElement } {
+function buildWorkbench(): {
+  workbench: HTMLElement;
+  body: HTMLElement;
+  header: HTMLElement;
+  tree: WcShellRefs['fileTree'];
+  termSurface: HTMLElement;
+} {
   const workbench = el('slicc-workbench-pane');
   const header = el('slicc-workbench-header');
   const tabs = el('slicc-tab-bar', { active: 'files' }) as HTMLElement & { tabs?: unknown };
-  tabs.tabs = [{ id: 'files', label: 'files', kind: 'tool' }];
+  tabs.tabs = [
+    { id: 'files', label: 'files', kind: 'tool' },
+    { id: 'term', label: 'terminal', kind: 'tool' },
+  ];
   header.append(tabs);
 
   const body = el('slicc-workbench-body', { active: 'files' });
   const filesSurface = el('slicc-surface', { 'surface-id': 'files', layout: 'flex', active: '' });
-  const tree = el('slicc-file-tree') as HTMLElement & { items?: unknown };
-  tree.items = [
-    { kind: 'group', id: 'workspace', label: 'workspace/' },
-    { kind: 'file', id: 'claude-md', label: 'CLAUDE.md' },
-    { kind: 'group', id: 'shared', label: 'shared/' },
-    { kind: 'file', id: 'shared-claude-md', label: 'CLAUDE.md' },
-  ];
+  const tree = el('slicc-file-tree') as WcShellRefs['fileTree'];
   filesSurface.append(tree);
-  body.append(filesSurface);
+
+  const termSurfaceHost = el('slicc-surface', { 'surface-id': 'term', layout: 'flex' });
+  const termSurface = el('div', { class: 'wcui-term' });
+  termSurfaceHost.append(termSurface);
+
+  body.append(filesSurface, termSurfaceHost);
   workbench.append(header, body);
-  return { workbench, body, header };
+  return { workbench, body, header, tree, termSurface };
 }
 
 /** Dock clicks open/close the workbench and select the matching surface. */
-function wireDockToWorkbench(dock: HTMLElement, shell: HTMLElement, body: HTMLElement): void {
+function wireDockToWorkbench(
+  dock: HTMLElement,
+  shell: HTMLElement,
+  body: HTMLElement,
+  onSurfaceActivate?: (surfaceId: string) => void
+): void {
   dock.addEventListener('slicc-dock-select', (event) => {
     const id = (event as CustomEvent<{ id: string }>).detail?.id;
     if (!id) return;
@@ -169,14 +188,21 @@ function wireDockToWorkbench(dock: HTMLElement, shell: HTMLElement, body: HTMLEl
     shell.setAttribute('open', '');
     body.setAttribute('active', id);
     dock.setAttribute('active', id);
+    onSurfaceActivate?.(id);
   });
 }
 
 /** Tab selection switches the active workbench surface. */
-function wireTabsToBody(header: HTMLElement, body: HTMLElement): void {
+function wireTabsToBody(
+  header: HTMLElement,
+  body: HTMLElement,
+  onSurfaceActivate?: (surfaceId: string) => void
+): void {
   header.addEventListener('tab-select', (event) => {
     const tabId = (event as CustomEvent<{ tabId: string }>).detail?.tabId;
-    if (tabId) body.setAttribute('active', tabId);
+    if (!tabId) return;
+    body.setAttribute('active', tabId);
+    onSurfaceActivate?.(tabId);
   });
 }
 
@@ -199,11 +225,11 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
   const { composer, inputCard, composerMeta } = buildComposer(options);
   pane.append(thread, composer);
 
-  const { workbench, body, header } = buildWorkbench();
+  const { workbench, body, header, tree, termSurface } = buildWorkbench();
   const dock = el('slicc-dock', { 'system-tools': '' });
   shell.append(pane, workbench, dock);
-  wireDockToWorkbench(dock, shell, body);
-  wireTabsToBody(header, body);
+  wireDockToWorkbench(dock, shell, body, options.onSurfaceActivate);
+  wireTabsToBody(header, body, options.onSurfaceActivate);
 
   const { nav, switcher, floatbar } = buildNav(options);
   appCol.append(nav, shell);
@@ -221,6 +247,8 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
     workbenchBody: body,
     dock,
     freezer,
+    fileTree: tree,
+    termSurface,
   };
 }
 
@@ -248,6 +276,13 @@ export function mountWcUiPreview(root: HTMLElement): void {
     floatLabel: 'standalone · preview',
     placeholder: 'Preview harness — submissions echo into the thread…',
   });
+
+  refs.fileTree.items = [
+    { kind: 'group', label: 'workspace/' },
+    { kind: 'file', id: '/workspace/CLAUDE.md', label: 'CLAUDE.md' },
+    { kind: 'group', label: 'shared/' },
+    { kind: 'file', id: '/shared/CLAUDE.md', label: 'CLAUDE.md' },
+  ];
 
   refs.inputCard.addEventListener('submit', (event) => {
     const text = submittedText(event)?.trim();
