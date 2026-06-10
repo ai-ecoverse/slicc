@@ -241,34 +241,18 @@ const SHEET = sheet(STYLE);
  * `<svg>` rendered through the shared `iconEl` helper — never an emoji or a
  * bespoke unicode-symbol glyph.
  *
-<<<<<<< HEAD
  * Clicking the model pill opens a dropdown (popping UP, since the row sits at the
  * composer's bottom edge) of `models` — each row a model name + provider label
  * (mirroring the webapp), with the current one ticked; a list longer than eight
  * grows a type-ahead search (filter by name + provider, like the add-menu).
  * Choosing a row sets `model` and emits a composed `model-change`
  * (`{ model, provider, id }`). Clicking the thinking pill cycles forward through
- * the gelateria effort levels (`bambino → piccolo → grande → bombastica → …`),
- * swaps the label, toggles the violet border for the accented (`bombastica`)
- * level, and emits a composed `thinking-change`. Set `narrow` to hide the hint
- * for a tight chat column (the prototype's `.shell.open .meta .hint{display:none}`).
-||||||| parent of a6fdae4b (feat(webcomponents): six-level thinking intensity scale with Italian wet)
- * Clicking the model pill emits a composed `model-change`; clicking the
- * thinking pill cycles forward through the gelateria effort levels
- * (`bambino → piccolo → grande → bombastica → …`), swaps the label, toggles the
- * violet border for the accented (`bombastica`) level, and emits a composed
- * `thinking-change`. Set `narrow` to hide the hint for a tight chat column
- * (the prototype's `.shell.open .meta .hint{display:none}`).
-=======
- * Clicking the model pill emits a composed `model-change`; clicking the
- * thinking pill cycles forward through the wetness effort levels
- * (`off → low → medium → high → xhigh → max → …`, labelled `Secco → Goccia →
- * Bagnato → Affogato → Inzuppato → Sprofondato`), swaps the label, retints the
- * brain glyph to track the intensity (dry `--txt-3` → full `--violet`), toggles
- * the violet border for the accented (`max`) level, and emits a composed
- * `thinking-change`. Set `narrow` to hide the hint for a tight chat column
- * (the prototype's `.shell.open .meta .hint{display:none}`).
->>>>>>> a6fdae4b (feat(webcomponents): six-level thinking intensity scale with Italian wet)
+ * the wetness effort levels (`off → low → medium → high → xhigh → max → …`,
+ * labelled `Secco → Goccia → Bagnato → Affogato → Inzuppato → Sprofondato`), swaps
+ * the label, retints the brain glyph to track the intensity (dry `--txt-3` → full
+ * `--violet`), toggles the violet border for the accented (`max`) level, and emits
+ * a composed `thinking-change`. Set `narrow` to hide the hint for a tight chat
+ * column (the prototype's `.shell.open .meta .hint{display:none}`).
  *
  * Self-contained shadow DOM; themes via inherited tokens (no token is
  * re-declared here).
@@ -276,19 +260,11 @@ const SHEET = sheet(STYLE);
  * @attr model - model label shown in the model pill (default "Opus 4.8")
  * @attr thinking - thinking effort level; one of `off|low|medium|high|xhigh|max` (default `max`)
  * @attr narrow - boolean; hides the keyboard hint for a narrow chat column
-<<<<<<< HEAD
  * @prop {Array<string|ModelOption>} models - the dropdown options (name + provider + id)
  * @fires model-change - `{detail:{model,provider,id}}` when a model row is chosen
  * @csspart model-menu - the model dropdown panel
  * @csspart model-search - the type-ahead search input (shown for long lists)
- * @fires thinking-change - `{detail:{thinking,accented}}` when the thinking pill cycles
-||||||| parent of a6fdae4b (feat(webcomponents): six-level thinking intensity scale with Italian wet)
- * @fires model-change - `{detail:{model}}` when the model pill is clicked
- * @fires thinking-change - `{detail:{thinking,accented}}` when the thinking pill cycles
-=======
- * @fires model-change - `{detail:{model}}` when the model pill is clicked
  * @fires thinking-change - `{detail:{thinking,label,accented}}` when the thinking pill cycles
->>>>>>> a6fdae4b (feat(webcomponents): six-level thinking intensity scale with Italian wet)
  * @csspart meta - the row container
  * @csspart model - the model-select pill button
  * @csspart thinking - the thinking-effort pill button
