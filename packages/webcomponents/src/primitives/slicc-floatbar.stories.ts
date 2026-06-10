@@ -58,3 +58,14 @@ export const WithSpent: Story = {
 export const OnlineSpent: Story = {
   args: { label: 'CLI · tray · 1 follower', online: true, spent: '12.07' },
 };
+
+/**
+ * Narrow / mobile viewport — the label, divider, and cost segment drop and the
+ * host collapses to a square (width == height) round badge carrying just the
+ * status light, rather than an elongated upright pill. Select the mobile
+ * viewport from the toolbar to see the square form.
+ */
+export const NarrowMobile: Story = {
+  args: { label: 'CLI · tray · 1 follower', online: true, spent: '2.41' },
+  parameters: { viewport: { defaultViewport: 'mobile1' } },
+};

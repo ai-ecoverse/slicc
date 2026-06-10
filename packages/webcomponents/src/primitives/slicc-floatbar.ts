@@ -78,10 +78,18 @@ const STYLE = `
 }
 
 /* Narrow / extension-sidebar: collapse to just the connection status light —
-   the runtime label, its divider, and the cost segment all drop so the pill
-   shrinks to a dot and never crowds the switcher / avatar / theme toggle. */
+   the runtime label, its divider, and the cost segment all drop, and the host
+   shrinks to a square (width == height == --ctl-h) so it reads as a compact
+   round badge instead of an elongated upright pill, never crowding the
+   switcher / avatar / theme toggle. */
 @media (max-width: 560px) {
-  :host { padding: 0 8px; gap: 0; }
+  :host {
+    width: var(--ctl-h, 30px);
+    aspect-ratio: 1 / 1;
+    padding: 0;
+    gap: 0;
+    justify-content: center;
+  }
   .label, .sep, .spent { display: none; }
 }
 `;
