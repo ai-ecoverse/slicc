@@ -1,10 +1,11 @@
 # CLAUDE.md — `@slicc/webcomponents`
 
 Standalone library that extracts the UI prototype `proto/StellarRubySwift.html`
-into reusable, individually testable web components. **It is not wired into the
-webapp yet** — that is a separate, later migration. This pass ends at: components
-built → functional (`@vitest/browser`) + visual (Storybook) green → human visual
-review.
+into reusable, individually testable web components. **Webapp wiring is underway**:
+`?ui=wc` mounts the Phase-0 preview shell from `packages/webapp/src/ui/wc/`
+(per-component subpath imports — the barrel stays un-importable there until the
+legacy `slicc-press-button` tag collision is resolved). Components remain
+individually testable here: functional (`@vitest/browser`) + visual (Storybook).
 
 ## Layout
 

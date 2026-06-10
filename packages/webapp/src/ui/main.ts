@@ -55,6 +55,7 @@ import { applyProviderDefaults, getApiKey } from './provider-settings.js';
 import { resolveUiRuntimeMode, type UiRuntimeMode } from './runtime-mode.js';
 import { initTheme } from './theme.js';
 import { initTooltips } from './tooltip.js';
+import { isWcUiEnabled } from './wc/wc-flag.js';
 
 const log = createLogger('main');
 
@@ -349,12 +350,24 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
+  const app = document.getElementById('app');
+  if (!app) throw new Error('#app element not found');
+
+  const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+
+  // Next-generation web-components UI (`?ui=wc`) — the @slicc/webcomponents
+  // migration shell. Phase 0 renders the new shell over the design-time chat
+  // fixture instead of booting the legacy layout. Standalone float only while
+  // the migration is in progress; the legacy UI stays the default.
+  if (!isExtension && isWcUiEnabled(window.location.href)) {
+    const { mountWcUiPreview } = await import('./wc/wc-shell.js');
+    mountWcUiPreview(app);
+    return;
+  }
+
   startFreezeWatchdog();
   initTheme();
   initTooltips();
-
-  const app = document.getElementById('app');
-  if (!app) throw new Error('#app element not found');
 
   // Service-worker registration (preview SW + connect-mode SW detach). The
   // helper returns `'reload-pending'` when it has triggered a one-shot
@@ -384,7 +397,6 @@ async function main(): Promise<void> {
   const apiKey = getApiKey();
   const _allowProviderlessTrayJoin = !apiKey && hasStoredTrayJoinUrl(window.localStorage);
 
-  const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
   const runtimeMode = resolveUiRuntimeMode(window.location.href, isExtension);
 
   if (runtimeMode === 'connect') {
