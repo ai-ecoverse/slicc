@@ -8,9 +8,8 @@
  *   - No-op when a tray-join URL is stored (follower instance).
  *   - On first-run, the dedup ledger is mutated AND persisted AND
  *     the orchestrator's `handleFirstRun()` is invoked.
- *   - A stale `first-run` entry on a genuine fresh boot is cleared
- *     (trust install-state over ledger), then re-added before
- *     `handleFirstRun()` is invoked.
+ *   - A `'first-run'` entry already in the dedup ledger suppresses re-fire
+ *     (trust the ledger over install-state — prevents restart re-welcomes).
  *   - A non-first-run detection result is a no-op against the
  *     orchestrator and the ledger.
  */

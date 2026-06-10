@@ -24,8 +24,7 @@ import type { OnboardingSetupDeps } from './types.js';
  * orchestrator owns the welcome dip + intro lines until the user
  * configures a provider — handing it to the cone would fatal with
  * "No API key configured for provider …" before the wizard even
- * appears. The persistent dedup ledger guards against reload
- * double-fires (see `DEDUPED_WELCOME_ACTIONS` in `main.ts`).
+ * appears.
  *
  * No-op when a tray-join URL is stored: a follower instance is
  * driven by its leader's chat history and should never re-render
