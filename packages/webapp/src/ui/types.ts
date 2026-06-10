@@ -6,6 +6,7 @@
  */
 
 import type { MessageAttachment } from '../core/attachments.js';
+import type { AddItem } from './add-menu/add-item.js';
 
 // ---------------------------------------------------------------------------
 // Agent interface — the UI's view of the agent core
@@ -49,6 +50,9 @@ export interface ChatMessage {
   content: string;
   timestamp: number;
   attachments?: MessageAttachment[];
+  /** Reference chips compiled into the hidden [context] preamble on send.
+   *  Persisted so the bubble re-renders chips on reload without the raw preamble. */
+  references?: AddItem[];
   toolCalls?: ToolCall[];
   isStreaming?: boolean;
   /** Source of the message: 'cone' for main agent, scoop name for sub-agents, 'lick' for async events */
