@@ -21,6 +21,19 @@ export class AddMenu {
   private readonly search: HTMLInputElement;
   private readonly list: HTMLElement;
   private open_ = false;
+
+  private readonly onComposerDragOver = (e: DragEvent): void => {
+    if (this.open_) e.preventDefault();
+  };
+
+  private readonly onComposerDrop = (e: DragEvent): void => {
+    if (!this.open_) return;
+    e.preventDefault();
+    if (e.dataTransfer?.files?.length) {
+      this.opts.onAttachFiles(e.dataTransfer.files);
+      this.close();
+    }
+  };
   private results: AddItem[] = [];
   private highlight = 0;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -43,17 +56,8 @@ export class AddMenu {
     this.opts.composer.appendChild(this.panel);
 
     this.search.addEventListener('input', () => this.scheduleSearch());
-    this.opts.composer.addEventListener('dragover', (e) => {
-      if (this.open_) e.preventDefault();
-    });
-    this.opts.composer.addEventListener('drop', (e) => {
-      if (!this.open_) return;
-      e.preventDefault();
-      if (e.dataTransfer?.files?.length) {
-        this.opts.onAttachFiles(e.dataTransfer.files);
-        this.close();
-      }
-    });
+    this.opts.composer.addEventListener('dragover', this.onComposerDragOver);
+    this.opts.composer.addEventListener('drop', this.onComposerDrop);
   }
 
   isOpen(): boolean {
@@ -101,6 +105,8 @@ export class AddMenu {
 
   dispose(): void {
     if (this.debounceTimer) clearTimeout(this.debounceTimer);
+    this.opts.composer.removeEventListener('dragover', this.onComposerDragOver);
+    this.opts.composer.removeEventListener('drop', this.onComposerDrop);
     this.panel.remove();
   }
 

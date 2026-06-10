@@ -81,4 +81,17 @@ describe('AddMenu shell', () => {
     photo?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     expect(capturePhoto).toHaveBeenCalled();
   });
+
+  it('dispose() removes composer drag-drop listeners', () => {
+    const { menu, composer, onAttachFiles } = setup();
+    menu.open();
+    menu.dispose();
+    const evt = new Event('drop', { bubbles: true, cancelable: true }) as unknown as DragEvent;
+    Object.defineProperty(evt, 'dataTransfer', {
+      value: { files: [new File(['x'], 'x.txt')] },
+      configurable: true,
+    });
+    composer.dispatchEvent(evt);
+    expect(onAttachFiles).not.toHaveBeenCalled();
+  });
 });
