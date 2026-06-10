@@ -67,14 +67,21 @@ const STYLE = `
   background: color-mix(in srgb, var(--ctx) 14%, color-mix(in srgb, var(--shaderbg) 45%, transparent));
 }
 /* In the narrow column the frosted reading card is pointless — there is no wide
-   gutter for it to feather into. The inner fills the full width AND height of the
-   thread and drops its background/blur/feather/radius so no thread background
-   shows behind it. Out-specifies the thread's own [open] inner rule
-   (0,3,0 vs 0,2,1). Wide view keeps the centered, frosted card untouched. */
+   gutter for it to feather into. The inner fills the full width AND viewport
+   height of the thread and drops its background/blur/feather/radius so no thread
+   background shows behind it. The min-height is the FULL viewport (not the
+   parent's 100%) so a freezer / scoop with little history still fills to the
+   bottom of the screen instead of ending abruptly partway down — messages stay
+   top-aligned and the filler space sits below; long histories still scroll.
+   The 100vh declaration is the fallback for engines without dynamic-viewport
+   units; the 100dvh override tracks mobile browser chrome (URL bar) collapse.
+   Out-specifies the thread's own [open] inner rule (0,3,0 vs 0,2,1). Wide view
+   keeps the centered, frosted card untouched. */
 .slicc-chatpane[narrow] .slicc-thread__inner {
   width: 100%;
   max-width: none;
-  min-height: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
   margin: 0;
   background: none;
   backdrop-filter: none;

@@ -36,6 +36,17 @@ const STYLE = `
 .pop slicc-pill{display:block;width:100%;--pill-w:100%;animation:scoopReveal .24s ease both;animation-delay:calc(var(--i,0) * 45ms);}
 @keyframes scoopReveal{from{opacity:0;transform:translateY(-4px);}to{opacity:1;transform:none;}}
 @media (prefers-reduced-motion: reduce){.pop slicc-pill{animation:none;}}
+/* Narrow / mobile viewport: a <slicc-pill> compacts to icon-only by default
+   (its own viewport media query). The dropdown stacks column-wise with ample
+   horizontal room, so its overflow chips keep their WIDE, labeled form instead.
+   Outer-tree ::part rules win the cascade over the pill's internal rules, so we
+   restore the full-width button geometry + re-show the label here; the now
+   redundant hover tip is suppressed. Non-overflow pills elsewhere are untouched. */
+@media (max-width:560px){
+  .pop slicc-pill::part(pill){width:100%;padding:0 14px 0 0;}
+  .pop slicc-pill::part(label){display:block;}
+  .pop slicc-pill::part(tip){display:none;}
+}
 `;
 const SHEET = sheet(STYLE);
 
@@ -82,6 +93,13 @@ export interface SliccScoopSelectDetail {
  * automatically via `.dark` / `[data-theme="dark"]` / `body.dark`. The frameless
  * popup carries no surface of its own; the cloned `<slicc-pill>` chips manage
  * their own theme.
+ *
+ * In a narrow / mobile viewport (≤560px) a `<slicc-pill>` would normally compact
+ * to icon-only (its own viewport media query). The dropdown stacks the chips
+ * column-wise with ample horizontal room, so it overrides the cloned pills'
+ * `::part(pill)` / `::part(label)` to keep them in their wide, labeled form there
+ * (suppressing the now-redundant hover `::part(tip)`); non-overflow pills are
+ * untouched.
  *
  * Overflow detection (which chips don't fit) stays the host's responsibility —
  * the header switcher owns layout. The host feeds the overflowed chips in via

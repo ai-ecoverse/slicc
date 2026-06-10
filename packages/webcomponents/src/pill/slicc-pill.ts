@@ -369,6 +369,7 @@ const SHEET = sheet(PILL_STYLE);
  * @attr theme - `light` | `dark`; overrides `prefers-color-scheme` for the chip tokens
  * @csspart pill - the outer button
  * @csspart icon - the square glyph well (tinted background)
+ * @csspart label - the right-aligned chip text (hidden when compact / narrow)
  * @slot - label content, used when the `label` attribute is absent
  */
 export class SliccPill extends HTMLElement {
@@ -553,7 +554,7 @@ export class SliccPill extends HTMLElement {
 
     const icon = h('span', { class: 'icon', part: 'icon' }, iconInner);
 
-    const labelEl = h('span', { class: 'label' }, label != null ? label : h('slot'));
+    const labelEl = h('span', { class: 'label', part: 'label' }, label != null ? label : h('slot'));
 
     const button = h(
       'button',
