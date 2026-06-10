@@ -8,10 +8,10 @@
       "branches": 69
     },
     "node-server": {
-      "lines": 74,
-      "statements": 72,
-      "functions": 76,
-      "branches": 64
+      "lines": 79,
+      "statements": 76,
+      "functions": 80,
+      "branches": 66
     },
     "chrome-extension": {
       "lines": 73,
@@ -63,14 +63,14 @@
   },
   "swift": {
     "swift-server": {
-      "lines": 55,
-      "functions": 55,
-      "regions": 51
+      "lines": 57,
+      "functions": 57,
+      "regions": 53
     },
     "swift-launcher": {
-      "lines": 21,
-      "functions": 25,
-      "regions": 29
+      "lines": 27,
+      "functions": 31,
+      "regions": 34
     }
   }
 }
