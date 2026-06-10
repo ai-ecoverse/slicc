@@ -35,6 +35,10 @@ slicc-chat-thread > .slicc-thread__inner {
   margin: 0 auto;
   padding: 56px 72px;
   font-family: var(--ui);
+  /* Primary text color for the reading column. Without this the message prose
+     inherits the UA default (black), which is invisible on the dark frosted
+     surface in dark mode. --ink flips light/dark with the theme. */
+  color: var(--ink);
   background: color-mix(in srgb, var(--ctx) 14%, color-mix(in srgb, var(--shaderbg) 80%, transparent));
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
