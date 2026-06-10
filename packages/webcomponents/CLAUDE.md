@@ -16,7 +16,8 @@ src/
   pill/          slicc-pill (shadow DOM, lifted from prototype)
   add-menu/      slicc-add-menu (shadow DOM, lifted from prototype)
   chat/          message/card/dip composites + verbatim pure modules
-  composer/ switcher/ workbench/ dock/ freezer/ nav/ shell/ memory/
+  overlay/       slicc-dialog (modal shell) and other viewport overlays
+  composer/ switcher/ workbench/ dock/ freezer/ nav/ shell/ memory/ showcase/
 src/**/<name>.stories.ts   co-located Storybook stories (excluded from dist)
 tests/**/<name>.test.ts    co-located browser tests, mirroring src/ subsystem
 ```
