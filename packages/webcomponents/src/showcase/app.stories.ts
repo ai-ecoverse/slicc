@@ -56,6 +56,14 @@ const SCOOPS = [
     label: 'tester',
     eyes: 'dead' as const,
   },
+  {
+    key: 'triage',
+    type: 'scoop' as const,
+    color: '#10b981',
+    label: 'triage',
+    eyes: 'none' as const,
+    ephemeral: true,
+  },
 ];
 
 const FROZEN = [
@@ -112,13 +120,18 @@ function thread(): HTMLElement {
   return t;
 }
 
-/** The left chat column: nav header + thread + composer. */
-function chatpane(narrow: boolean): HTMLElement {
-  const pane = el('slicc-chatpane', narrow ? { narrow: '' } : {});
-
+/**
+ * The full-width top bar (the prototype's `.nav`): logo + scoop switcher (pills)
+ * + a flexible spacer + floatbar + theme toggle + avatar. A SIBLING above the
+ * shell — NOT inside the chat column — so the switcher gets the whole row width
+ * and its pills never collapse into the chat pane when the workbench opens.
+ */
+function topnav(): HTMLElement {
   const nav = el('slicc-nav', { accent: 'var(--waffle)' });
   const logo = el('slicc-logo', { badge: 'studio' });
-  const switcher = el('slicc-scoop-switcher') as HTMLElement & { scoops?: unknown };
+  const switcher = el('slicc-scoop-switcher', { active: 'cone' }) as HTMLElement & {
+    scoops?: unknown;
+  };
   (switcher as { scoops?: unknown }).scoops = SCOOPS;
   const floatbar = el('slicc-floatbar', {
     label: 'CLI · tray · 1 follower',
@@ -128,6 +141,12 @@ function chatpane(narrow: boolean): HTMLElement {
   const toggle = el('slicc-theme-toggle');
   const avatar = el('slicc-avatar', { email: 'beau@dodds.net', name: 'Lars Trieloff' });
   nav.append(logo, switcher, floatbar, toggle, avatar);
+  return nav;
+}
+
+/** The left chat column: scrollable thread + a pinned composer (no nav). */
+function chatpane(narrow: boolean): HTMLElement {
+  const pane = el('slicc-chatpane', narrow ? { narrow: '' } : {});
 
   const composer = el('slicc-composer', narrow ? { open: '' } : {});
   const card = el('slicc-input-card');
@@ -139,7 +158,7 @@ function chatpane(narrow: boolean): HTMLElement {
   });
   composer.append(card, meta);
 
-  pane.append(nav, thread(), composer);
+  pane.append(thread(), composer);
   return pane;
 }
 
@@ -185,40 +204,61 @@ function workbench(open: boolean): HTMLElement {
   return wb;
 }
 
-/** The full app: cone shader behind a contained freezer rail + the split shell. */
-function app(open: boolean): HTMLElement {
+/** Layout knobs for {@link app}: whether the workbench and the freezer rail are open. */
+interface AppOpts {
+  /** Workbench expanded (chat narrows to 34%); mirrors the prototype `.shell.open`. */
+  workbench: boolean;
+  /** Freezer rail expanded to 260px; mirrors the prototype `body.freezer-open`. */
+  freezer: boolean;
+}
+
+/**
+ * The full app, assembled exactly like the prototype `<body>`: a full-bleed,
+ * viewport-filling frame holding the cone shader, the fixed freezer rail, and a
+ * flex-column `.app` that stacks the FULL-WIDTH nav above the split shell. The
+ * `.app` reserves the rail with `padding-left` (44px collapsed → 260px open),
+ * so the nav + shell slide as the freezer expands — never overlapping it.
+ */
+function app(opts: AppOpts): HTMLElement {
+  const railW = opts.freezer ? 260 : 44;
+
   const frame = el('div');
-  // `transform` makes the frame the containing block for the freezer's
-  // position:fixed, so the rail anchors to the frame (not the viewport).
+  // Fill the viewport (fullscreen story). `transform: translateZ(0)` makes the
+  // frame the containing block for the freezer's `position: fixed`, so the rail
+  // anchors to the frame (not the page) and the showcase stays self-contained.
   frame.style.cssText =
-    'position:relative;transform:translateZ(0);height:680px;width:1180px;background:var(--bg);' +
-    'border:1px solid var(--line);border-radius:14px;overflow:hidden;font-family:var(--ui);';
+    'position:relative;transform:translateZ(0);width:100%;height:100vh;overflow:hidden;' +
+    'background:var(--bg);font-family:var(--ui);';
 
   // The cone background field (the chat context's animated waffle lattice).
   const shader = el('slicc-shader', { mode: 'cone', tint: 'var(--waffle)' });
   shader.style.cssText = 'position:absolute;inset:0;z-index:0;';
   frame.append(shader);
 
-  // Freezer rail (260px, open so the frozen-session text reads). Fixed → now
-  // contained to the frame; sits above the shader on the left.
-  const freezer = el('slicc-freezer', { open: '' });
+  // The fixed left freezer rail — 44px collapsed (icon rail) / 260px open.
+  const freezer = el('slicc-freezer', opts.freezer ? { open: '' } : {});
   freezer.style.zIndex = '6';
-  freezer.append(el('slicc-freezer-new', { expanded: '' }));
+  freezer.append(el('slicc-freezer-new', opts.freezer ? { expanded: '' } : {}));
   for (const f of FROZEN) {
     freezer.append(el('slicc-freezer-card', { title: f.title, meta: f.meta, slug: f.slug }));
   }
   frame.append(freezer);
 
-  // App body reserves the 260px rail and layers over the shader. The chat pane
-  // is made transparent so the cone field shows through its frosted surfaces.
-  const body = el('div');
-  body.style.cssText = 'position:relative;z-index:1;height:100%;margin-left:260px;';
-  const shell = el('slicc-shell', open ? { open: '' } : {});
-  const pane = chatpane(open);
+  // The `.app` column: full-width nav above the split shell, reserving the rail
+  // via padding-left so both slide when the freezer opens. Layers over the shader.
+  const appCol = el('div');
+  appCol.style.cssText =
+    `position:relative;z-index:1;height:100%;display:flex;flex-direction:column;` +
+    `box-sizing:border-box;padding-left:${railW}px;` +
+    `transition:padding-left .4s cubic-bezier(.4,0,.2,1);`;
+
+  const shell = el('slicc-shell', opts.workbench ? { open: '' } : {});
+  const pane = chatpane(opts.workbench);
   pane.style.background = 'transparent';
-  shell.append(pane, workbench(open), el('slicc-dock'));
-  body.append(shell);
-  frame.append(body);
+  shell.append(pane, workbench(opts.workbench), el('slicc-dock'));
+
+  appCol.append(topnav(), shell);
+  frame.append(appCol);
   return frame;
 }
 
@@ -230,8 +270,23 @@ const meta: Meta = {
 export default meta;
 type Story = StoryObj;
 
-/** The collapsed app: chat full-width, workbench closed, freezer rail open. */
-export const Collapsed: Story = { render: () => app(false) };
+/**
+ * The default app: chat full-width with a pinned composer, the workbench closed,
+ * and the freezer collapsed to its 44px icon rail — the prototype's resting view.
+ */
+export const Collapsed: Story = { render: () => app({ workbench: false, freezer: false }) };
 
-/** The open app: workbench expanded (file tree + live terminal), chat narrowed. */
-export const Open: Story = { render: () => app(true) };
+/** The open app: workbench expanded (file tree + live terminal) and freezer rail open. */
+export const Open: Story = { render: () => app({ workbench: true, freezer: true }) };
+
+/** Just the freezer rail expanded to 260px — chat full-width, workbench closed. */
+export const FreezerOpen: Story = { render: () => app({ workbench: false, freezer: true }) };
+
+/**
+ * Narrow / mobile viewport — rails collapse to their icon widths, the switcher
+ * overflows gracefully, and the single chat column + composer fill the screen.
+ */
+export const Mobile: Story = {
+  render: () => app({ workbench: false, freezer: false }),
+  parameters: { viewport: { defaultViewport: 'mobile1' } },
+};
