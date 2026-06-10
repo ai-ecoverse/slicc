@@ -95,3 +95,50 @@ describe('AddMenu shell', () => {
     expect(onAttachFiles).not.toHaveBeenCalled();
   });
 });
+
+describe('AddMenu results', () => {
+  beforeEach(() => {
+    (HTMLElement.prototype as unknown as { scrollIntoView: unknown }).scrollIntoView = () => {};
+  });
+
+  const items: AddItem[] = [
+    { kind: 'file', label: 'README.md', locator: '/workspace/README.md' },
+    { kind: 'skill', label: 'sprinkles', locator: 'sprinkles' },
+  ];
+
+  it('typing shows results from the aggregator; picking calls onAddReference and closes', async () => {
+    const { menu, onAddReference } = setup(items);
+    menu.open();
+    const input = document.querySelector<HTMLInputElement>('.add-menu__search')!;
+    input.value = 'r';
+    input.dispatchEvent(new Event('input'));
+    await new Promise((r) => setTimeout(r, 150));
+    const rows = document.querySelectorAll('.add-menu__item');
+    expect(rows.length).toBe(2);
+    (rows[0] as HTMLElement).dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(onAddReference).toHaveBeenCalledWith(items[0]);
+    expect(menu.isOpen()).toBe(false);
+  });
+
+  it('ArrowDown + Enter picks the highlighted result', async () => {
+    const { menu, onAddReference } = setup(items);
+    menu.open();
+    const input = document.querySelector<HTMLInputElement>('.add-menu__search')!;
+    input.value = 's';
+    input.dispatchEvent(new Event('input'));
+    await new Promise((r) => setTimeout(r, 150));
+    menu.handleKey(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
+    menu.handleKey(new KeyboardEvent('keydown', { key: 'Enter' }));
+    expect(onAddReference).toHaveBeenCalledWith(items[1]);
+  });
+
+  it('shows a no-matches note for an empty result set', async () => {
+    const { menu } = setup([]);
+    menu.open();
+    const input = document.querySelector<HTMLInputElement>('.add-menu__search')!;
+    input.value = 'zzz';
+    input.dispatchEvent(new Event('input'));
+    await new Promise((r) => setTimeout(r, 150));
+    expect(document.querySelector('.add-menu__empty')?.textContent).toContain('No matches');
+  });
+});
