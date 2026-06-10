@@ -17,8 +17,11 @@ function formatSpent(raw: string | null): string | null {
   return `$${n.toFixed(2)}`;
 }
 
+const NARROW_QUERY = '(max-width: 560px)';
+
 const STYLE = `
 :host {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -77,6 +80,31 @@ const STYLE = `
   height: 12px;
 }
 
+/* Hover/focus tip surfacing the collapsed label + spend + connection state.
+   Hidden in the wide pill (the full label already shows everything); only the
+   narrow square badge reveals it, mirroring slicc-pill's dark .tip convention.
+   Decorative (aria-hidden); the accessible name rides the host title attribute. */
+.tip {
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 50%;
+  transform: translateX(-50%) translateY(-3px);
+  background: var(--ink);
+  color: var(--canvas, #fff);
+  font-family: var(--ui);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  padding: 3px 8px;
+  border-radius: 6px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+  z-index: 30;
+  display: none;
+}
+
 /* Narrow / extension-sidebar: collapse to just the connection status light —
    the runtime label, its divider, and the cost segment all drop, and the host
    shrinks to a square (width == height == --ctl-h) so it reads as a compact
@@ -91,6 +119,16 @@ const STYLE = `
     justify-content: center;
   }
   .label, .sep, .spent { display: none; }
+  .tip { display: block; }
+  :host(:hover) .tip,
+  :host(:focus-within) .tip {
+    opacity: 1;
+    transform: translateX(-50%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tip { transition: none; }
 }
 `;
 const SHEET = sheet(STYLE);
@@ -112,21 +150,35 @@ const SHEET = sheet(STYLE);
  * @csspart label - the runtime label span
  * @csspart sep - the thin divider before the cost segment (present only when `spent`)
  * @csspart spent - the cost segment wrapper (present only when `spent`)
+ * @csspart tip - the narrow-view hover/focus tooltip surfacing the collapsed label
  * @slot - default slot overrides the label text
  */
 export class SliccFloatbar extends HTMLElement {
   static readonly observedAttributes = ['label', 'linked', 'online', 'spent'];
 
   readonly #root: ShadowRoot;
+  readonly #narrow: MediaQueryList | null;
+  readonly #onNarrowChange = (): void => {
+    if (this.isConnected) this.#syncTitle();
+  };
 
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
     this.#root.adoptedStyleSheets = [SHEET];
+    this.#narrow =
+      typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+        ? window.matchMedia(NARROW_QUERY)
+        : null;
   }
 
   connectedCallback(): void {
+    this.#narrow?.addEventListener('change', this.#onNarrowChange);
     this.#render();
+  }
+
+  disconnectedCallback(): void {
+    this.#narrow?.removeEventListener('change', this.#onNarrowChange);
   }
 
   attributeChangedCallback(): void {
@@ -171,6 +223,29 @@ export class SliccFloatbar extends HTMLElement {
     else this.setAttribute('spent', String(value));
   }
 
+  /**
+   * The tooltip text for the narrow square badge — the label, the formatted
+   * spend (when present), and the connection state, joined with the same ` · `
+   * separator the verbose label uses, so the collapsed badge stays legible.
+   */
+  #tipText(): string {
+    const parts: string[] = [this.label];
+    const amount = formatSpent(this.spent);
+    if (amount != null) parts.push(amount);
+    parts.push(this.online ? 'online' : 'offline');
+    return parts.join(' · ');
+  }
+
+  /**
+   * Mirror the tip text onto the host `title` only while collapsed, giving the
+   * narrow badge an accessible (keyboard / AT) tooltip without duplicating the
+   * already-visible text in the wide pill.
+   */
+  #syncTitle(): void {
+    if (this.#narrow?.matches) this.setAttribute('title', this.#tipText());
+    else this.removeAttribute('title');
+  }
+
   #render(): void {
     const nodes: Node[] = [];
 
@@ -191,7 +266,10 @@ export class SliccFloatbar extends HTMLElement {
       );
     }
 
+    nodes.push(h('span', { class: 'tip', part: 'tip', 'aria-hidden': 'true' }, this.#tipText()));
+
     this.#root.replaceChildren(...nodes);
+    this.#syncTitle();
   }
 }
 

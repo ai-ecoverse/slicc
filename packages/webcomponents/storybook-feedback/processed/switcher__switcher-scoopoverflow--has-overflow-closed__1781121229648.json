@@ -1,0 +1,8 @@
+{
+  "storyId": "switcher-scoopoverflow--has-overflow-closed",
+  "storyTitle": "Switcher/ScoopOverflow",
+  "subsystem": "switcher",
+  "importPath": "./src/switcher/slicc-scoop-overflow.stories.ts",
+  "comment": "in narrow mobile view, the overflow pills can still be wide, as they don't take that much horizontal space",
+  "createdAt": "2026-06-10T19:53:49.647Z"
+}
