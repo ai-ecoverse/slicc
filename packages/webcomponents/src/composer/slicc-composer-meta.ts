@@ -191,7 +191,18 @@ const STYLE = `
   .ctl .ic{display:block;vertical-align:-2px;flex:0 0 auto;stroke:url(#meta-rainbow);}
   .ctl .cx{color:var(--txt-3);font-size:10px;display:inline-flex;align-items:center;}
   .ctl .cx svg{display:block;}
-  .ctl.tsel.x{border-color:color-mix(in srgb,var(--violet) 35%,var(--line));}
+  /* The thinking pill ramps as a whole with the effort intensity: its text,
+     border, caret and a background wash are all derived from the per-level
+     accent (--tw, set inline) — from a muted grey (Secco) up to full violet
+     (Sprofondato). */
+  .ctl.tsel{color:var(--tw,var(--ink));
+    border-color:color-mix(in srgb,var(--tw,var(--line)) 40%,var(--line));
+    background:color-mix(in srgb,var(--tw,transparent) 8%,var(--canvas));}
+  .ctl.tsel:hover{background:color-mix(in srgb,var(--tw,transparent) 16%,var(--canvas));}
+  .ctl.tsel .cx{color:inherit;opacity:.7;}
+  .ctl.tsel.x{border-color:color-mix(in srgb,var(--tw) 55%,var(--line));
+    background:color-mix(in srgb,var(--tw) 14%,var(--canvas));}
+  .ctl.tsel.x:hover{background:color-mix(in srgb,var(--tw) 20%,var(--canvas));}
   .brain{color:var(--violet);display:block;vertical-align:-2px;flex:0 0 auto;}
   /* Model dropdown — anchored to the model pill and opening UPWARD (the meta row
      sits at the very bottom of the composer, so a downward menu would clip). */
@@ -249,9 +260,10 @@ const SHEET = sheet(STYLE);
  * (`{ model, provider, id }`). Clicking the thinking pill cycles forward through
  * the wetness effort levels (`off → low → medium → high → xhigh → max → …`,
  * labelled `Secco → Goccia → Bagnato → Affogato → Inzuppato → Sprofondato`), swaps
- * the label, retints the brain glyph to track the intensity (dry `--txt-3` → full
- * `--violet`), toggles the violet border for the accented (`max`) level, and emits
- * a composed `thinking-change`. Set `narrow` to hide the hint for a tight chat
+ * the label, and ramps the WHOLE pill — text, border, caret and a background wash —
+ * to track the intensity (a muted grey `--txt-3` at `Secco` up to full `--violet`
+ * at `Sprofondato`), emitting a composed `thinking-change`. The accented (`max`)
+ * level adds a heavier border/wash. Set `narrow` to hide the hint for a tight chat
  * column (the prototype's `.shell.open .meta .hint{display:none}`).
  *
  * Self-contained shadow DOM; themes via inherited tokens (no token is
@@ -443,6 +455,9 @@ export class SliccComposerMeta extends HTMLElement {
       ' ',
       h('span', { class: 'cx' }, caretIcon())
     );
+    // The whole pill ramps with intensity: feed the per-level accent to the
+    // `--tw`-driven text/border/background-wash rules above.
+    thinkingBtn.style.setProperty('--tw', levelMeta.tint);
 
     const hintSlot = h('slot', { name: 'hint' });
     append(hintSlot, [

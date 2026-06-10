@@ -202,6 +202,25 @@ describe('slicc-composer-meta', () => {
       expect(mid).not.toBe('rgb(139, 92, 246)');
     });
 
+    it('ramps the whole pill (text + background) from grey at off to violet at max', () => {
+      const el = mount((e) => {
+        e.thinking = 'off';
+      });
+      const pill = () => thinkingPill(el);
+      const dryText = getComputedStyle(pill()).color;
+      const dryBg = getComputedStyle(pill()).backgroundColor;
+
+      el.thinking = 'max';
+      const wetText = getComputedStyle(pill()).color;
+      const wetBg = getComputedStyle(pill()).backgroundColor;
+
+      // Both the text colour and the background wash shift with intensity.
+      expect(wetText).not.toBe(dryText);
+      expect(wetBg).not.toBe(dryBg);
+      // At max the pill text is full violet (#8b5cf6 → rgb(139, 92, 246)).
+      expect(wetText).toBe('rgb(139, 92, 246)');
+    });
+
     it('shows the level gloss as the thinking pill tooltip', () => {
       const el = mount((e) => {
         e.thinking = 'high';
