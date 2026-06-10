@@ -62,8 +62,11 @@ export const OnlineSpent: Story = {
 /**
  * Narrow / mobile viewport — the label, divider, and cost segment drop and the
  * host collapses to a square (width == height) round badge carrying just the
- * status light, rather than an elongated upright pill. Select the mobile
- * viewport from the toolbar to see the square form.
+ * status light, rather than an elongated upright pill. Because the verbose
+ * label is hidden, hovering or focusing the badge reveals a dark `::part(tip)`
+ * tooltip (and a matching native `title`) re-surfacing the label, spend, and
+ * connection state. Select the mobile viewport from the toolbar to see the
+ * square form, then hover the badge for the tooltip.
  */
 export const NarrowMobile: Story = {
   args: { label: 'CLI · tray · 1 follower', online: true, spent: '2.41' },
