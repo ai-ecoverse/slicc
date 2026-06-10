@@ -8,7 +8,9 @@ import type { StorybookConfig } from '@storybook/web-components-vite';
  */
 const config: StorybookConfig = {
   stories: ['../src/**/*.stories.ts'],
-  addons: [],
+  // Local, dev-only feedback addon (manager panel). Resolved to an absolute
+  // path so Storybook 10 loads it as a preset that registers the manager entry.
+  addons: [import.meta.resolve('./feedback-addon/preset.ts')],
   framework: {
     name: '@storybook/web-components-vite',
     options: {},
