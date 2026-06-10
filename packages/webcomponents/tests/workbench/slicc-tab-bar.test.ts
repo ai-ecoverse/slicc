@@ -175,27 +175,29 @@ describe('slicc-tab-bar', () => {
   });
 
   it("a child <slicc-tab>'s `select` event selects that tab (re-emitted as tab-select)", () => {
-    const el = mount(TOOL_TABS);
+    // Tool tabs are never rendered, so exercise the re-emit on a rendered sprinkle tab.
+    const el = mount(SPRINKLE_TABS);
     const seen: string[] = [];
     el.addEventListener('tab-select', (e) => seen.push((e as CustomEvent).detail.id));
     // The real slicc-tab dispatches a bubbling+composed `select` on body click.
-    tabById(el, 'term').dispatchEvent(
-      new CustomEvent('select', { detail: { tabId: 'term' }, bubbles: true, composed: true })
+    tabById(el, 'palette').dispatchEvent(
+      new CustomEvent('select', { detail: { tabId: 'palette' }, bubbles: true, composed: true })
     );
-    expect(el.active).toBe('term');
-    expect(seen).toEqual(['term']);
+    expect(el.active).toBe('palette');
+    expect(seen).toEqual(['palette']);
   });
 
   it('clicking a real slicc-tab body selects it (through its shadow `select`)', () => {
-    const el = mount(TOOL_TABS);
+    // Tool tabs are never rendered, so click a rendered sprinkle tab's body.
+    const el = mount(SPRINKLE_TABS);
     const seen: string[] = [];
     el.addEventListener('tab-select', (e) => seen.push((e as CustomEvent).detail.id));
     // Click the real tab's inner button inside its shadow root.
-    const term = tabById(el, 'term');
-    const btn = term.shadowRoot?.querySelector('button') as HTMLElement;
+    const palette = tabById(el, 'palette');
+    const btn = palette.shadowRoot?.querySelector('button') as HTMLElement;
     btn.click();
-    expect(el.active).toBe('term');
-    expect(seen).toEqual(['term']);
+    expect(el.active).toBe('palette');
+    expect(seen).toEqual(['palette']);
   });
 
   it("a child <slicc-tab>'s `close` event removes that tab (re-emitted as tab-close)", () => {
@@ -307,23 +309,31 @@ describe('slicc-tab-bar', () => {
   });
 
   it('keeps the active child in sync when the active attribute changes directly', () => {
-    const el = mount(TOOL_TABS);
-    el.setAttribute('active', 'memory');
-    expect(tabById(el, 'memory').hasAttribute('active')).toBe(true);
-    expect(tabById(el, 'files').hasAttribute('active')).toBe(false);
+    // Tool tabs are never rendered, so assert child sync on rendered sprinkle tabs.
+    const el = mount(SPRINKLE_TABS);
+    el.setAttribute('active', 'palette');
+    expect(tabById(el, 'palette').hasAttribute('active')).toBe(true);
+    expect(tabById(el, 'hero').hasAttribute('active')).toBe(false);
   });
 
   it('survives detach + re-attach without losing its tab set or duplicating tabs', () => {
-    const el = mount(TOOL_TABS);
-    el.selectTab('term');
+    // Three rendered (sprinkle) tabs — tool tabs never paint, so survival can only
+    // be measured on rendered tabs. Re-attach must rebuild from the data model.
+    const tabs: TabDescriptor[] = [
+      { id: 'hero', label: 'Hero studio', kind: 'sprinkle', closable: true },
+      { id: 'palette', label: 'palette', kind: 'sprinkle', closable: true },
+      { id: 'notes', label: 'Notes', kind: 'sprinkle', closable: true },
+    ];
+    const el = mount(tabs);
+    el.selectTab('palette');
     el.remove();
     document.body.appendChild(el);
     expect(tabEls(el).length).toBe(3);
-    expect(el.active).toBe('term');
+    expect(el.active).toBe('palette');
     // Selection still works after re-attach (child `select` listener survived).
-    tabById(el, 'memory').dispatchEvent(
-      new CustomEvent('select', { detail: { tabId: 'memory' }, bubbles: true, composed: true })
+    tabById(el, 'notes').dispatchEvent(
+      new CustomEvent('select', { detail: { tabId: 'notes' }, bubbles: true, composed: true })
     );
-    expect(el.active).toBe('memory');
+    expect(el.active).toBe('notes');
   });
 });

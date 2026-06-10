@@ -22,12 +22,18 @@ const meta: Meta<DaySeparatorArgs> = {
       },
     },
   },
-  // Give the divider room to stretch so the flanking hairlines are visible.
+  // Give the divider room to stretch so the flanking hairlines are visible, and
+  // sit it on the themed `--bg` ground so the hairline + caption keep contrast in
+  // dark mode (the inherited token flips with the theme toolbar, like the chat
+  // thread the separator actually lives in).
   decorators: [
     (story) => {
       const wrap = document.createElement('div');
       wrap.style.width = '420px';
       wrap.style.maxWidth = '100%';
+      wrap.style.padding = '8px 16px';
+      wrap.style.background = 'var(--bg)';
+      wrap.style.borderRadius = '8px';
       wrap.appendChild(story() as HTMLElement);
       return wrap;
     },

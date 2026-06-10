@@ -280,6 +280,158 @@ describe('slicc-send-button', () => {
     }
   });
 
+  // --- busy slow fill (6 directions, 10s each, 60s loop) ---
+
+  it('busy: stacks a solid fill copy (.stop-fill) over the stop square', () => {
+    const el = mount();
+    el.busy = true;
+    const fill = el.shadowRoot?.querySelector('.stop .stop-fill');
+    expect(fill).not.toBeNull();
+    // The fill is a second square SVG (so it can read as a solid filled square).
+    expect(fill?.querySelector('svg')).not.toBeNull();
+  });
+
+  it('busy: drives the fill with a 60s slicc-send-fill animation', () => {
+    const el = mount();
+    el.busy = true;
+    const fill = el.shadowRoot?.querySelector('.stop-fill') as HTMLElement;
+    const cs = getComputedStyle(fill);
+    expect(cs.animationName).toBe('slicc-send-fill');
+    expect(cs.animationDuration).toBe('60s');
+    expect(cs.animationIterationCount).toBe('infinite');
+  });
+
+  it('busy: the fill keyframes sweep six full-fill phases (12 keyframes)', () => {
+    const el = mount();
+    el.busy = true;
+    let fillFrames = -1;
+    for (const s of el.shadowRoot?.adoptedStyleSheets ?? []) {
+      for (const rule of s.cssRules) {
+        if (rule instanceof CSSKeyframesRule && rule.name === 'slicc-send-fill') {
+          fillFrames = rule.cssRules.length;
+        }
+      }
+    }
+    // Six directions × (start + full) = 12 keyframes.
+    expect(fillFrames).toBe(12);
+  });
+
+  it('busy fill is statically filled and neutralized under prefers-reduced-motion', () => {
+    const el = mount();
+    el.busy = true;
+    let baseFilled = false;
+    let reducedGuarded = false;
+    for (const s of el.shadowRoot?.adoptedStyleSheets ?? []) {
+      for (const rule of s.cssRules) {
+        // Base .stop-fill rule clips to a full square (solid) when not animating.
+        if (
+          rule instanceof CSSStyleRule &&
+          rule.selectorText === '.stop-fill' &&
+          rule.style.clipPath.replace(/\s+/g, ' ').includes('inset(0')
+        ) {
+          baseFilled = true;
+        }
+        if (rule instanceof CSSMediaRule && rule.conditionText.includes('prefers-reduced-motion')) {
+          for (const inner of rule.cssRules) {
+            if (
+              inner instanceof CSSStyleRule &&
+              inner.selectorText.includes('.stop-fill') &&
+              inner.style.animationName === 'none'
+            ) {
+              reducedGuarded = true;
+            }
+          }
+        }
+      }
+    }
+    expect(baseFilled).toBe(true);
+    expect(reducedGuarded).toBe(true);
+  });
+
+  // --- idle micro-interactions (hover wiggle, press dip, release fly-out) ---
+
+  it('idle hover: adds is-hover to the arrow glyph and runs the wiggle', () => {
+    const el = mount();
+    const button = el.shadowRoot?.querySelector('button') as HTMLButtonElement;
+    const glyph = el.shadowRoot?.querySelector('.glyph') as HTMLElement;
+    button.dispatchEvent(new Event('pointerenter'));
+    expect(glyph.classList.contains('is-hover')).toBe(true);
+    expect(getComputedStyle(glyph).animationName).toBe('slicc-send-wiggle');
+  });
+
+  it('idle press: dips the glyph down ~2px and clears hover', () => {
+    const el = mount();
+    const button = el.shadowRoot?.querySelector('button') as HTMLButtonElement;
+    const glyph = el.shadowRoot?.querySelector('.glyph') as HTMLElement;
+    button.dispatchEvent(new Event('pointerenter'));
+    button.dispatchEvent(new Event('pointerdown'));
+    expect(glyph.classList.contains('is-press')).toBe(true);
+    expect(glyph.classList.contains('is-hover')).toBe(false);
+    // translateY(2px) → matrix(1, 0, 0, 1, 0, 2).
+    expect(getComputedStyle(glyph).transform).toBe('matrix(1, 0, 0, 1, 0, 2)');
+  });
+
+  it('idle release: clears the press dip (the click whoosh takes over)', () => {
+    const el = mount();
+    const button = el.shadowRoot?.querySelector('button') as HTMLButtonElement;
+    const glyph = el.shadowRoot?.querySelector('.glyph') as HTMLElement;
+    button.dispatchEvent(new Event('pointerdown'));
+    button.dispatchEvent(new Event('pointerup'));
+    expect(glyph.classList.contains('is-press')).toBe(false);
+  });
+
+  it('idle pointerleave: clears both hover and press', () => {
+    const el = mount();
+    const button = el.shadowRoot?.querySelector('button') as HTMLButtonElement;
+    const glyph = el.shadowRoot?.querySelector('.glyph') as HTMLElement;
+    button.dispatchEvent(new Event('pointerenter'));
+    button.dispatchEvent(new Event('pointerleave'));
+    expect(glyph.classList.contains('is-hover')).toBe(false);
+    expect(glyph.classList.contains('is-press')).toBe(false);
+  });
+
+  it('does not wiggle/dip while busy or disabled', () => {
+    const busyEl = mount();
+    busyEl.busy = true;
+    const busyButton = busyEl.shadowRoot?.querySelector('button') as HTMLButtonElement;
+    // No arrow glyph while busy — handlers are no-ops and must not throw.
+    expect(() => busyButton.dispatchEvent(new Event('pointerenter'))).not.toThrow();
+    expect(busyEl.shadowRoot?.querySelector('.glyph')).toBeNull();
+
+    const disabledEl = mount();
+    disabledEl.disabled = true;
+    const disabledButton = disabledEl.shadowRoot?.querySelector('button') as HTMLButtonElement;
+    const disabledGlyph = disabledEl.shadowRoot?.querySelector('.glyph') as HTMLElement;
+    disabledButton.dispatchEvent(new Event('pointerenter'));
+    expect(disabledGlyph.classList.contains('is-hover')).toBe(false);
+  });
+
+  it('guards the idle wiggle/press motion behind prefers-reduced-motion', () => {
+    const el = mount();
+    let hoverGuarded = false;
+    let pressGuarded = false;
+    for (const s of el.shadowRoot?.adoptedStyleSheets ?? []) {
+      for (const rule of s.cssRules) {
+        if (rule instanceof CSSMediaRule && rule.conditionText.includes('prefers-reduced-motion')) {
+          for (const inner of rule.cssRules) {
+            if (inner instanceof CSSStyleRule && inner.style.animationName === 'none') {
+              if (inner.selectorText.includes('.glyph.is-hover')) hoverGuarded = true;
+            }
+            if (
+              inner instanceof CSSStyleRule &&
+              inner.selectorText.includes('.glyph.is-press') &&
+              inner.style.transform === 'none'
+            ) {
+              pressGuarded = true;
+            }
+          }
+        }
+      }
+    }
+    expect(hoverGuarded).toBe(true);
+    expect(pressGuarded).toBe(true);
+  });
+
   it('guards the whoosh/pulse motion behind prefers-reduced-motion (animation: none)', () => {
     // CSS @media (prefers-reduced-motion) is evaluated by the browser, not by a
     // JS matchMedia mock, so assert the adopted stylesheet carries the guard that

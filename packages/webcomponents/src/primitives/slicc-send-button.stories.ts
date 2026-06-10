@@ -42,7 +42,10 @@ type Story = StoryObj<SendButtonArgs>;
 
 /**
  * Idle: the rainbow-gradient ground with a white lucide `arrow-up` overlaid.
- * Clicking whooshes the arrow up (translate + fade, then reset) and emits `send`.
+ * Micro-interactions reward the pointer — hover makes the arrow wiggle in
+ * anticipation, pressing dips it down a couple px (preparing to leap), and
+ * releasing whooshes it up (translate + fade, then reset) while emitting `send`.
+ * All motion is suppressed under `prefers-reduced-motion`.
  */
 export const Idle: Story = { args: {} };
 
@@ -62,8 +65,11 @@ export const WithAvatarSrc: Story = {
 };
 
 /**
- * Busy (stop): streaming state — a white lucide `square` (stop) glyph with a
- * soft pulse; clicking emits `stop`.
+ * Busy (stop): streaming state — a white lucide `square` (stop) glyph that
+ * breathes with a soft pulse while a solid fill slowly sweeps the square through
+ * six directions (inside-out → left-to-right → top-to-bottom → right-to-left →
+ * bottom-to-top → outside-in), each phase taking 10s for a 60s loop. Clicking
+ * emits `stop`. Under `prefers-reduced-motion` the square is statically filled.
  */
 export const Busy: Story = { args: { busy: true } };
 

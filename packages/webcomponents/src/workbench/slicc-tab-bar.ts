@@ -129,6 +129,11 @@ export class SliccTabBar extends HTMLElement {
 
   disconnectedCallback(): void {
     this.#unbind();
+    // Mark the rendered strip stale so a re-attach rebuilds the tabs from the
+    // data model. Light-DOM children can be dropped while detached (reflow /
+    // navigation rebuilds), and the tab set must survive detach + re-attach
+    // without loss or duplication — replaceChildren on re-render guarantees both.
+    this.#built = false;
   }
 
   attributeChangedCallback(name: string): void {
