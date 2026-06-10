@@ -134,7 +134,10 @@ function thread(): HTMLElement {
 function topnav(): HTMLElement {
   const nav = el('slicc-nav', { accent: 'var(--waffle)' });
   const logo = el('slicc-logo', { badge: 'studio' });
-  const switcher = el('slicc-scoop-switcher', { active: 'cone' }) as HTMLElement & {
+  // No active chip: the cone renders in its "open idle" configuration (white
+  // background, dark text) rather than the accent color-fill — the resting
+  // leader look (matches the Pill/Pill ConeOpenIdle story).
+  const switcher = el('slicc-scoop-switcher') as HTMLElement & {
     scoops?: unknown;
   };
   (switcher as { scoops?: unknown }).scoops = SCOOPS;

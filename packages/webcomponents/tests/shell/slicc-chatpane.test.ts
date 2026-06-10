@@ -70,6 +70,43 @@ describe('slicc-chatpane', () => {
     expect(narrowW).not.toBe(wideW);
   });
 
+  it('narrow: the thread inner fills full width/height and drops its frosted background', () => {
+    // Give the column a definite box so the inner's 100% width/height resolve.
+    const el = mount(true);
+    el.style.height = '400px';
+    el.style.width = '300px';
+    const thread = el.thread as HTMLElement;
+    const inner = thread.querySelector('.slicc-thread__inner') as HTMLElement;
+    expect(inner).not.toBeNull();
+
+    const cs = getComputedStyle(inner);
+    // Background / blur / feather / radius are all dropped — no card chrome shows.
+    expect(cs.backgroundColor).toBe('rgba(0, 0, 0, 0)');
+    expect(cs.maskImage).toBe('none');
+    expect(cs.borderTopLeftRadius).toBe('0px');
+    expect(cs.maxWidth).toBe('none');
+    expect(cs.marginLeft).toBe('0px');
+    expect(cs.marginRight).toBe('0px');
+
+    // It fills the thread's content area (full width + at least full height).
+    // Compare against client* (the content box, excluding the reserved scrollbar
+    // gutter) so the width match holds regardless of scrollbar style.
+    const innerBox = inner.getBoundingClientRect();
+    expect(innerBox.width).toBeCloseTo(thread.clientWidth, 0);
+    expect(innerBox.height).toBeGreaterThanOrEqual(thread.clientHeight - 0.5);
+  });
+
+  it('wide: the thread inner keeps its centered, frosted background card', () => {
+    const el = mount(false);
+    const thread = el.thread as HTMLElement;
+    const inner = thread.querySelector('.slicc-thread__inner') as HTMLElement;
+    const cs = getComputedStyle(inner);
+    // The frosted reading card stays: a real (non-transparent) tinted background
+    // and the 776px reading cap are preserved in the wide layout.
+    expect(cs.backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
+    expect(cs.maxWidth).toBe('776px');
+  });
+
   it('forwards the current narrow state to a thread added later (MutationObserver)', async () => {
     const el = mount(true);
     const late = document.createElement('slicc-chat-thread');
