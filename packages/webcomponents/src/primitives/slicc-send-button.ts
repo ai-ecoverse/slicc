@@ -110,10 +110,15 @@ const STYLE = `
 
 /*
  * Busy slow fill: a solid (currentColor) copy of the stop square, stacked over
- * the outline copy, is revealed by an animated clip-path that sweeps through six
- * directions — inside-out, left-to-right, top-to-bottom, right-to-left,
- * bottom-to-top, outside-in — each taking 10s for a 60s loop. The fill's static
- * (no-animation) state is fully filled, so reduced motion shows a solid square.
+ * the outline copy, is revealed by an animated clip-path that runs twelve
+ * alternating phases — six fills, each sweeping the square solid from a
+ * different direction (inside-out, left-to-right, top-to-bottom, right-to-left,
+ * bottom-to-top, top-left corner), each immediately followed by a clear that
+ * drains the square back to empty along the inverse of that direction. Each
+ * phase takes 10s for a 120s loop. Every fill peaks at the full square and
+ * every clear bottoms out empty, so the invisible hand-offs between phases (and
+ * across the loop) carry no visible snap. The fill's static (no-animation) state
+ * is fully filled, so reduced motion shows a solid square.
  */
 .stop { position: relative; }
 .stop-fill {
@@ -124,26 +129,38 @@ const STYLE = `
   clip-path: inset(0 0 0 0);
 }
 .stop-fill svg rect { fill: currentColor; }
-.send.is-busy .stop-fill { animation: slicc-send-fill 60s linear infinite; }
+.send.is-busy .stop-fill { animation: slicc-send-fill 120s linear infinite; }
 @keyframes slicc-send-fill {
-  /* 1 · inside-out (0–10s): grows from the centre to full */
+  /* 1 · FILL inside-out (0–10s): grows from the centre to full */
   0%      { clip-path: inset(50% 50% 50% 50%); }
-  16.66%  { clip-path: inset(0 0 0 0); }
-  /* 2 · left-to-right (10–20s) */
+  8.33%   { clip-path: inset(0 0 0 0); }
+  /* 2 · CLEAR outside-in (10–20s): collapses from full back to the centre */
+  16.66%  { clip-path: inset(50% 50% 50% 50%); }
+  /* 3 · FILL left-to-right (20–30s) */
   16.67%  { clip-path: inset(0 100% 0 0); }
-  33.33%  { clip-path: inset(0 0 0 0); }
-  /* 3 · top-to-bottom (20–30s) */
+  25%     { clip-path: inset(0 0 0 0); }
+  /* 4 · CLEAR right-to-left drain (30–40s): empties back toward the left */
+  33.33%  { clip-path: inset(0 100% 0 0); }
+  /* 5 · FILL top-to-bottom (40–50s) */
   33.34%  { clip-path: inset(0 0 100% 0); }
-  50%     { clip-path: inset(0 0 0 0); }
-  /* 4 · right-to-left (30–40s) */
+  41.66%  { clip-path: inset(0 0 0 0); }
+  /* 6 · CLEAR bottom-to-top drain (50–60s): empties back toward the top */
+  50%     { clip-path: inset(0 0 100% 0); }
+  /* 7 · FILL right-to-left (60–70s) */
   50.01%  { clip-path: inset(0 0 0 100%); }
-  66.66%  { clip-path: inset(0 0 0 0); }
-  /* 5 · bottom-to-top (40–50s) */
+  58.33%  { clip-path: inset(0 0 0 0); }
+  /* 8 · CLEAR left-to-right drain (70–80s): empties back toward the right */
+  66.66%  { clip-path: inset(0 0 0 100%); }
+  /* 9 · FILL bottom-to-top (80–90s) */
   66.67%  { clip-path: inset(100% 0 0 0); }
-  83.33%  { clip-path: inset(0 0 0 0); }
-  /* 6 · outside-in (50–60s): collapses from full back toward the centre */
-  83.34%  { clip-path: inset(0 0 0 0); }
-  100%    { clip-path: inset(50% 50% 50% 50%); }
+  75%     { clip-path: inset(0 0 0 0); }
+  /* 10 · CLEAR top-to-bottom drain (90–100s): empties back toward the bottom */
+  83.33%  { clip-path: inset(100% 0 0 0); }
+  /* 11 · FILL diagonal from the top-left corner (100–110s) */
+  83.34%  { clip-path: inset(0 100% 100% 0); }
+  91.66%  { clip-path: inset(0 0 0 0); }
+  /* 12 · CLEAR back to the top-left corner (110–120s) */
+  100%    { clip-path: inset(0 100% 100% 0); }
 }
 
 /*
@@ -184,9 +201,11 @@ const GRAVATAR_PX = 72;
  *   `send`.
  * - `disabled` — non-interactive (e.g. empty composer input); emits nothing.
  * - `busy` — streaming; shows a white lucide `square` (stop) glyph that breathes
- *   with a soft pulse while a solid fill slowly sweeps through six directions
- *   (inside-out → left-to-right → top-to-bottom → right-to-left → bottom-to-top
- *   → outside-in, 10s each, a 60s loop). Emits `stop` on click.
+ *   with a soft pulse while a solid fill runs twelve alternating phases — six
+ *   directional fills (inside-out, left-to-right, top-to-bottom, right-to-left,
+ *   bottom-to-top, top-left corner), each followed by a clear that drains the
+ *   square back to empty along the inverse direction (10s each, a 120s loop).
+ *   Emits `stop` on click.
  *
  * `prefers-reduced-motion: reduce` suppresses all motion — the state simply
  * swaps with no animation (the busy fill holds a static, fully-filled square).
@@ -379,7 +398,7 @@ export class SliccSendButton extends HTMLElement {
             'span',
             { class: 'stop', part: 'stop' },
             iconEl('square', { size: GLYPH_SIZE }),
-            // A solid copy of the square, revealed by the slow 6-direction fill.
+            // A solid copy of the square, revealed/drained by the 12-phase fill/clear.
             h('span', { class: 'stop-fill' }, iconEl('square', { size: GLYPH_SIZE }))
           )
         )
