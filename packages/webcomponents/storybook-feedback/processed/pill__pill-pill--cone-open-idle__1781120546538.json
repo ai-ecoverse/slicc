@@ -1,0 +1,8 @@
+{
+  "storyId": "pill-pill--cone-open-idle",
+  "storyTitle": "Pill/Pill",
+  "subsystem": "pill",
+  "importPath": "./src/pill/slicc-pill.stories.ts",
+  "comment": "the cone open idle configuration should be used in the full app showcase for the cone: white background, dark text. this works better than the color fill",
+  "createdAt": "2026-06-10T19:42:26.538Z"
+}
