@@ -652,6 +652,78 @@ describe('OffscreenBridge persistScoop', () => {
   });
 });
 
+describe('OffscreenBridge onScoopUnregistered eviction', () => {
+  let bridge: InstanceType<typeof OffscreenBridge>;
+  let mockStore: any;
+  let callbacks: any;
+
+  const unregisteredScoop = {
+    jid: 'agent_probe_1',
+    name: 'probe',
+    folder: 'agent-probe',
+    isCone: false,
+    type: 'scoop',
+    requiresTrigger: false,
+    assistantLabel: 'agent-probe',
+    addedAt: new Date().toISOString(),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sentMessages.length = 0;
+    bridge = new OffscreenBridge();
+    mockStore = new SessionStore();
+    (bridge as any).orchestrator = { getScoops: vi.fn(() => []) };
+    (bridge as any).sessionStore = mockStore;
+    callbacks = OffscreenBridge.createCallbacks(bridge);
+  });
+
+  it('evicts the chat buffer and per-scoop maps when a scoop is unregistered', () => {
+    // Simulate agent activity that fills the buffer (the leak driver:
+    // tool results buffered at full size, never evicted on programmatic
+    // unregister — only the panel's scoop-drop path cleaned up).
+    callbacks.onResponse('agent_probe_1', 'streamed text', true);
+    callbacks.onToolStart?.('agent_probe_1', 'bash', { command: 'cat big.txt' });
+    callbacks.onToolEnd?.('agent_probe_1', 'bash', 'z'.repeat(4096), false);
+    callbacks.onStatusChange('agent_probe_1', 'processing');
+
+    expect((bridge as any).messageBuffers.has('agent_probe_1')).toBe(true);
+    expect((bridge as any).currentMessageId.has('agent_probe_1')).toBe(true);
+    expect((bridge as any).scoopStatuses.has('agent_probe_1')).toBe(true);
+
+    callbacks.onScoopUnregistered?.(unregisteredScoop);
+
+    expect((bridge as any).messageBuffers.has('agent_probe_1')).toBe(false);
+    expect((bridge as any).currentMessageId.has('agent_probe_1')).toBe(false);
+    expect((bridge as any).fanOutMessageId.has('agent_probe_1')).toBe(false);
+    expect((bridge as any).scoopStatuses.has('agent_probe_1')).toBe(false);
+  });
+
+  it('deletes the persisted UI session for the unregistered scoop', () => {
+    callbacks.onResponse('agent_probe_1', 'text', true);
+
+    callbacks.onScoopUnregistered?.(unregisteredScoop);
+
+    expect(mockStore.delete).toHaveBeenCalledWith('session-agent-probe');
+  });
+
+  it('refreshes the panel scoop list after eviction', () => {
+    const emitSpy = vi.spyOn(bridge as any, 'emitScoopList');
+
+    callbacks.onScoopUnregistered?.(unregisteredScoop);
+
+    expect(emitSpy).toHaveBeenCalled();
+  });
+
+  it('survives a missing sessionStore', () => {
+    (bridge as any).sessionStore = null;
+    callbacks.onResponse('agent_probe_1', 'text', true);
+
+    expect(() => callbacks.onScoopUnregistered?.(unregisteredScoop)).not.toThrow();
+    expect((bridge as any).messageBuffers.has('agent_probe_1')).toBe(false);
+  });
+});
+
 describe('OffscreenBridge handlePanelMessage', () => {
   let bridge: InstanceType<typeof OffscreenBridge>;
   let mockOrchestrator: any;

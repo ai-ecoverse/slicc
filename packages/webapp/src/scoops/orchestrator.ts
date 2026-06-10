@@ -90,6 +90,17 @@ export interface OrchestratorCallbacks {
   onToolUIDone?: (scoopJid: string, requestId: string) => void;
   /** Called when a message is routed to a scoop (delegation, lick, etc.) */
   onIncomingMessage?: (scoopJid: string, message: ChannelMessage) => void;
+  /**
+   * Called after a scoop has been fully unregistered, with a snapshot of
+   * the scoop taken BEFORE removal (the registry entry is already gone
+   * when this fires). Fires for EVERY unregistration path — the panel's
+   * scoop-drop, the cone's `drop_scoop` tool, ephemeral `agent` spawns,
+   * and workflow subagents — so consumers that keep per-scoop state
+   * (e.g. the kernel bridge's chat buffers, which hold full transcripts
+   * including tool results) can evict it. Before this hook existed,
+   * programmatic teardown leaked every destroyed scoop's conversation.
+   */
+  onScoopUnregistered?: (scoop: RegisteredScoop) => void;
 }
 
 export interface AssistantConfig {
@@ -1425,6 +1436,19 @@ export class Orchestrator {
     this.mutedScoops.delete(jid);
     this.pendingCompletions.delete(jid);
     log.info('Scoop unregistered', { jid });
+    // Notify last, with the pre-removal snapshot, so consumers see a
+    // fully torn-down orchestrator. Guarded: a throwing consumer must
+    // not break scoop teardown.
+    if (scoop) {
+      try {
+        this.callbacks.onScoopUnregistered?.(scoop);
+      } catch (err) {
+        log.warn('onScoopUnregistered callback threw', {
+          jid,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
   }
 
   /** Get all registered scoops */

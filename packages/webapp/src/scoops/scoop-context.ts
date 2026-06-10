@@ -995,6 +995,12 @@ export class ScoopContext {
     this.agent?.clearAllQueues?.();
     this.agent?.abort?.();
     this.unsubscribe?.();
+    // Drop the closure reference, not just call it: the unsubscribe
+    // closure returned by `agent.subscribe()` captures the Agent (and
+    // through it the full message history, tool results included).
+    // Nulling `this.agent` alone leaves that history reachable through
+    // this field for as long as anything retains the disposed context.
+    this.unsubscribe = null;
     this.shell?.dispose();
     this.agent = null;
     this.shell = null;

@@ -163,6 +163,7 @@ Camera / microphone / screen capture (`ffmpeg -f avfoundation`, `screencapture`)
 - **Extension detection**: `typeof chrome !== 'undefined' && !!chrome?.runtime?.id`
 - **`window.open()`**: in extension flows it often returns `null`; treat it as fire-and-forget, not a failure signal.
 - **Persistence**: offscreen code is the source of truth for chat/session state that must survive panel close/reopen.
+- **Per-scoop buffer eviction**: `OffscreenBridge.messageBuffers` holds full chat transcripts (tool results included) per scoop jid. Eviction rides the orchestrator's `onScoopUnregistered` callback, so programmatic scoop teardown (ephemeral `agent` spawns, the cone's `drop_scoop`, workflow subagents) frees the buffer and deletes the dead `session-<folder>` UI session — not only the panel's `scoop-drop` message path. Skipping this eviction is a memory leak that scales 1:1 with tool output.
 - **CDP access**: offscreen documents cannot call `chrome.debugger` directly; always proxy via the service worker.
 
 ## Mount Secrets Options Page

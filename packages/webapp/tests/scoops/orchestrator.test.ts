@@ -1200,6 +1200,42 @@ describe('Orchestrator observer cleanup on scoop teardown', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it('notifies onScoopUnregistered with the scoop snapshot on programmatic unregister', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_unreg_cb_1',
+      name: 'unreg-cb',
+      folder: 'unreg-cb-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'unreg-cb-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    const onScoopUnregistered = vi.fn();
+    orch = new Orchestrator(container, { ...noopCallbacks(), onScoopUnregistered });
+    await orch.init();
+
+    // Programmatic teardown — the path ephemeral `agent` spawns,
+    // `drop_scoop` tool calls, and workflow subagents go through.
+    // Consumers (e.g. the kernel bridge) must learn about it so they
+    // can evict per-scoop chat buffers; before this hook existed,
+    // buffers leaked the scoop's full transcript (incl. tool results).
+    await orch.unregisterScoop(scoop.jid);
+
+    expect(onScoopUnregistered).toHaveBeenCalledTimes(1);
+    expect(onScoopUnregistered.mock.calls[0][0]).toMatchObject({
+      jid: scoop.jid,
+      folder: scoop.folder,
+    });
+  });
+
   it('drops observers when destroyScoopTab runs standalone (shutdown / reset paths)', async () => {
     const scoop: RegisteredScoop = {
       jid: 'scoop_observer_leak_2',

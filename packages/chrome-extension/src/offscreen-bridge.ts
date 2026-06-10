@@ -359,6 +359,36 @@ export class OffscreenBridge implements KernelFacade {
         bridge.persistScoop(scoopJid);
         bridge.notifyPanelIncomingMessage(scoopJid, message);
       },
+
+      onScoopUnregistered: (scoop) => {
+        // Evict every per-scoop state slice the bridge keeps. The chat
+        // buffer holds the scoop's full transcript INCLUDING complete
+        // tool results — before this hook, programmatic teardown
+        // (ephemeral `agent` spawns, the cone's `drop_scoop`, workflow
+        // subagents) left it in the Map forever: ~1:1 retained bytes
+        // per byte of tool output, straight to the V8 4GB OOM on
+        // skill-heavy sessions. Only the panel's `scoop-drop` message
+        // path cleaned up. Idempotent with that path.
+        bridge.messageBuffers.delete(scoop.jid);
+        bridge.currentMessageId.delete(scoop.jid);
+        bridge.fanOutMessageId.delete(scoop.jid);
+        bridge.scoopStatuses.delete(scoop.jid);
+        // Drop the persisted UI session too — `persistScoop` writes
+        // `session-<folder>` for every scoop with buffered messages,
+        // so dead ephemeral scoops otherwise pile up in the
+        // `browser-coding-agent` store. The cone never unregisters,
+        // but guard anyway: its session must survive.
+        if (!scoop.isCone && bridge.sessionStore) {
+          bridge.sessionStore.delete(`session-${scoop.folder}`).catch((err) => {
+            console.warn(
+              '[offscreen-bridge] Failed to delete session for unregistered scoop:',
+              scoop.folder,
+              err
+            );
+          });
+        }
+        bridge.emitScoopList();
+      },
     };
   }
 
