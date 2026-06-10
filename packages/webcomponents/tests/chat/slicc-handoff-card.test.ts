@@ -108,6 +108,27 @@ describe('slicc-handoff-card', () => {
       expect(open.hasAttribute('eyes')).toBe(false);
     });
 
+    it('renders a lucide hand glyph in the label — never an emoji', () => {
+      const el = mount({ name: 'acme.com' });
+      const hand = el.shadowRoot?.querySelector('.lbl2 .hand') as HTMLElement;
+      expect(hand).not.toBeNull();
+      expect(hand.getAttribute('part')).toBe('hand');
+      const svg = hand.querySelector('svg');
+      expect(svg).toBeInstanceOf(SVGSVGElement);
+      // It is the lucide `hand` icon at the 13px size.
+      expect(svg?.innerHTML).toBe(lucideShapeKey('hand'));
+      expect(svg?.getAttribute('width')).toBe('13');
+      // No emoji / unicode-symbol text leaked into the card.
+      expect(EMOJI_RE.test(el.shadowRoot?.textContent ?? '')).toBe(false);
+    });
+
+    it('tints the hand glyph violet', () => {
+      const el = mount({ name: 'acme.com' });
+      const hand = el.shadowRoot?.querySelector('.lbl2 .hand') as HTMLElement;
+      // --violet #8b5cf6 → rgb(139, 92, 246).
+      expect(getComputedStyle(hand).color).toBe('rgb(139, 92, 246)');
+    });
+
     it('renders the muted prefix and a violet bold name', () => {
       const el = mount({ name: 'acme.com', pre: 'Handoff request from' });
       const pre = el.shadowRoot?.querySelector('.lbl2 .pre');
