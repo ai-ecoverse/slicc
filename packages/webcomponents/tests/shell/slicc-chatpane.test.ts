@@ -113,6 +113,24 @@ describe('slicc-chatpane', () => {
     expect(innerBox.height).toBeGreaterThanOrEqual(thread.clientHeight - 0.5);
   });
 
+  it('narrow: the thread inner is at least the full viewport tall so a short history fills to the bottom', () => {
+    // A freezer / scoop with little history: no explicit column height, so the
+    // inner would otherwise grow only to fit its (tiny) content and end abruptly
+    // partway down the screen. The viewport-based min-height fills the rest.
+    const el = mount(true);
+    const thread = el.thread as HTMLElement;
+    const inner = thread.querySelector('.slicc-thread__inner') as HTMLElement;
+    expect(inner).not.toBeNull();
+
+    const cs = getComputedStyle(inner);
+    // min-height is the longhand the rule sets; Chromium resolves the dvh/vh
+    // viewport unit to a pixel value matching the current viewport height.
+    const minH = Number.parseFloat(cs.minHeight);
+    expect(minH).toBeCloseTo(window.innerHeight, 0);
+    // The painted box is therefore at least the viewport tall — no abrupt end.
+    expect(inner.getBoundingClientRect().height).toBeGreaterThanOrEqual(window.innerHeight - 0.5);
+  });
+
   it('wide: the thread inner keeps its centered frosted card but stays translucent so the shader shimmers through', () => {
     const el = mount(false);
     const thread = el.thread as HTMLElement;

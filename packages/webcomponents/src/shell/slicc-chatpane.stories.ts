@@ -52,6 +52,34 @@ export const Wide: Story = { args: { narrow: false } };
 export const Narrow: Story = { args: { narrow: true } };
 
 /**
+ * Narrow view with a freezer / scoop that has LITTLE history. The thread inner
+ * carries a viewport-based min-height (100dvh), so even with a single message it
+ * fills to the bottom of the screen — no abrupt end leaving empty space below.
+ * Rendered full-bleed (no fixed frame) so the viewport fill is visible.
+ */
+function shortHistory(): HTMLElement {
+  const pane = document.createElement('slicc-chatpane');
+  pane.setAttribute('narrow', '');
+  pane.style.cssText = 'width:340px;border-right:1px solid var(--line);';
+
+  const thread = document.createElement('slicc-chat-thread');
+  const a = document.createElement('slicc-agent-message');
+  a.innerHTML = '<p>Freshly thawed — nothing in this scoop yet.</p>';
+  thread.append(a);
+
+  const composer = document.createElement('slicc-composer');
+  composer.innerHTML = '<slicc-input-card></slicc-input-card>';
+
+  pane.append(thread, composer);
+  return pane;
+}
+
+export const NarrowShortHistory: Story = {
+  args: { narrow: true },
+  render: () => shortHistory(),
+};
+
+/**
  * Wide layout in dark mode — the column establishes `color: var(--ink)` (the
  * prototype's body-text cascade), so the agent prose resolves to the bright
  * dark-mode `--ink` for strong contrast against the dark `--bg`.
