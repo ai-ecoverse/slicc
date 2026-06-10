@@ -17,6 +17,10 @@ import { createLogger } from '../core/logger.js';
 import { getMimeType } from '../core/mime-types.js';
 import { isThinkingLevel, THINKING_LEVEL_CYCLE, type ThinkingLevel } from '../scoops/types.js';
 import { toPreviewUrl } from '../shell/supplemental-commands/shared.js';
+import type { AddItem } from './add-menu/add-item.js';
+import { AddMenu } from './add-menu/add-menu.js';
+import { compileContextPreamble } from './add-menu/preamble.js';
+import type { AddSearchAggregator } from './add-menu/search-providers.js';
 import {
   type DipInstance,
   type DraftDipInstance,
@@ -217,7 +221,10 @@ export class ChatPanel {
   private attachBtn!: HTMLButtonElement;
   private fileInput!: HTMLInputElement;
   private attachmentsEl!: HTMLElement;
+  private inputWrapper!: HTMLElement;
   private pendingAttachments: MessageAttachment[] = [];
+  private pendingReferences: AddItem[] = [];
+  private addMenu: AddMenu | null = null;
   private attachmentReadInProgress = false;
   private attachmentWriter: AttachmentWriter | null = null;
   private voiceInput: VoiceInput | null = null;
@@ -350,6 +357,48 @@ export class ChatPanel {
     this.unsubscribe?.();
     this.agent = agent;
     this.unsubscribe = agent.onEvent((ev) => this.handleAgentEvent(ev));
+  }
+
+  /** Construct (or replace) the add-menu, wired to the composer's input wrapper. */
+  setAddMenu(opts: {
+    aggregator: AddSearchAggregator;
+    capturePhoto(): Promise<File | null>;
+    captureScreenshot(): Promise<File | null>;
+  }): void {
+    this.addMenu?.dispose();
+    this.addMenu = new AddMenu({
+      composer: this.inputWrapper,
+      toggleButton: this.attachBtn,
+      aggregator: opts.aggregator,
+      onAttachFiles: (files) => void this.addAttachmentsFromFiles(files),
+      onAddReference: (item) => this.addReference(item),
+      capturePhoto: opts.capturePhoto,
+      captureScreenshot: opts.captureScreenshot,
+    });
+    this.addMenu.requestUpload = () => this.fileInput.click();
+  }
+
+  private addReference(item: AddItem): void {
+    if (this.pendingReferences.some((r) => r.kind === item.kind && r.locator === item.locator)) {
+      return;
+    }
+    this.pendingReferences.push(item);
+    this.renderPendingAttachments();
+    this.updateAddToggleIcon();
+  }
+
+  private updateAddToggleIcon(): void {
+    this.attachBtn.classList.toggle('chat__attach-btn--open', !!this.addMenu?.isOpen());
+  }
+
+  /** @internal test hook */
+  addReferenceForTest(item: AddItem): void {
+    this.addReference(item);
+  }
+
+  /** @internal test hook */
+  getMessagesForTest(): ChatMessage[] {
+    return this.messages;
   }
 
   /**
@@ -1074,8 +1123,9 @@ export class ChatPanel {
     this.micBtn.dataset.tooltip = 'Voice (Ctrl+Shift+V)';
 
     // Input wrapper — two-row layout per Figma PromptBar
-    const inputWrapper = document.createElement('div');
-    inputWrapper.className = 'chat__input-wrapper';
+    this.inputWrapper = document.createElement('div');
+    this.inputWrapper.className = 'chat__input-wrapper';
+    const inputWrapper = this.inputWrapper;
 
     this.attachmentsEl = document.createElement('div');
     this.attachmentsEl.className = 'chat__attachments';
@@ -1137,6 +1187,10 @@ export class ChatPanel {
 
     // Event listeners
     this.textarea.addEventListener('keydown', (e) => {
+      if (this.addMenu?.handleKey(e)) {
+        e.preventDefault();
+        return;
+      }
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         this.sendMessage();
@@ -1187,7 +1241,14 @@ export class ChatPanel {
     });
 
     this.sendBtn.addEventListener('click', () => this.sendMessage());
-    this.attachBtn.addEventListener('click', () => this.fileInput.click());
+    this.attachBtn.addEventListener('click', () => {
+      if (this.addMenu) {
+        this.addMenu.isOpen() ? this.addMenu.close() : this.addMenu.open();
+        this.updateAddToggleIcon();
+      } else {
+        this.fileInput.click();
+      }
+    });
     this.fileInput.addEventListener('change', () => {
       const files = this.fileInput.files;
       if (files?.length) {
@@ -1317,12 +1378,17 @@ export class ChatPanel {
     this.autoScrollAttached = true;
     this.hideJumpPill();
 
+    const pendingRefs = this.pendingReferences.slice();
+    const preamble = compileContextPreamble(pendingRefs);
+    const agentText = preamble ? `${preamble}\n\n${text}` : text;
+
     const isQueued = this.isStreaming;
     const msg: ChatMessage = {
       id: uid(),
       role: 'user',
       content: text,
       attachments: attachments.length > 0 ? attachments : undefined,
+      references: pendingRefs.length > 0 ? pendingRefs : undefined,
       timestamp: Date.now(),
       queued: isQueued || undefined,
     };
@@ -1333,6 +1399,7 @@ export class ChatPanel {
     // Clear input and shrink back to a single row
     this.textarea.value = '';
     this.pendingAttachments = [];
+    this.pendingReferences = [];
     this.renderPendingAttachments();
     this.resetTextareaHeight();
     this.updateSendButtonState();
@@ -1343,7 +1410,7 @@ export class ChatPanel {
     }
 
     // Send to agent (orchestrator persists & queues if the cone is busy)
-    this.agent?.sendMessage(text, msg.id, attachments);
+    this.agent?.sendMessage(agentText, msg.id, attachments);
     // Notify the leader-tray broadcast hook so followers receive a
     // matching `user_message_echo` live. Exception isolation: a broken
     // broadcaster must not undo the local agent send.
@@ -2247,10 +2314,8 @@ export class ChatPanel {
   private renderPendingAttachments(): void {
     if (!this.attachmentsEl) return;
     this.attachmentsEl.innerHTML = '';
-    this.attachmentsEl.classList.toggle(
-      'chat__attachments--visible',
-      this.pendingAttachments.length > 0
-    );
+    const hasContent = this.pendingAttachments.length > 0 || this.pendingReferences.length > 0;
+    this.attachmentsEl.classList.toggle('chat__attachments--visible', hasContent);
     for (const attachment of this.pendingAttachments) {
       this.attachmentsEl.appendChild(
         this.createAttachmentChip(attachment, {
@@ -2262,6 +2327,20 @@ export class ChatPanel {
           },
         })
       );
+    }
+    for (const ref of this.pendingReferences) {
+      const chip = document.createElement('span');
+      chip.className = 'chat__ref-chip';
+      chip.textContent = `${ref.label} `;
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.textContent = '×';
+      removeBtn.addEventListener('click', () => {
+        this.pendingReferences = this.pendingReferences.filter((r) => r !== ref);
+        this.renderPendingAttachments();
+      });
+      chip.appendChild(removeBtn);
+      this.attachmentsEl.appendChild(chip);
     }
   }
 
@@ -2650,6 +2729,17 @@ export class ChatPanel {
         contentEl.appendChild(cursor);
       } else {
         this.hydrateDipsInEl(contentEl, msg.id);
+      }
+      if (msg.references?.length) {
+        const refsRow = document.createElement('div');
+        refsRow.className = 'chat__msg-refs';
+        for (const ref of msg.references) {
+          const chip = document.createElement('span');
+          chip.className = 'chat__ref-chip';
+          chip.textContent = ref.label;
+          refsRow.appendChild(chip);
+        }
+        contentEl.prepend(refsRow);
       }
       el.appendChild(contentEl);
     }

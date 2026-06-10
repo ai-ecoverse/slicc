@@ -931,8 +931,44 @@
 .chat__attach-btn--busy {
   color: var(--s2-accent);
 }
+.chat__attach-btn--open {
+  color: var(--s2-accent);
+  background: var(--s2-bg-elevated);
+}
 .chat__file-input {
   display: none;
+}
+
+/* Reference chips — pending row and read-only message bubbles */
+.chat__msg-refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.chat__ref-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--s2-bg-elevated);
+  color: var(--s2-content-secondary);
+  font-size: 0.8rem;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.chat__ref-chip button {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--s2-content-secondary);
+  font-size: 0.9rem;
+  line-height: 1;
+}
+.chat__ref-chip button:hover {
+  color: var(--s2-content-default);
 }
 .chat__mic-btn--active {
   color: var(--slicc-cone);
