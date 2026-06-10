@@ -350,9 +350,9 @@ export class ChatPanel {
       onAttachFiles: (files) => void this.addAttachmentsFromFiles(files),
       onAddReference: (item) => this.addReference(item),
       captureScreenshot: opts.captureScreenshot,
+      requestUpload: () => this.fileInput.click(),
       onClose: () => this.updateAddToggleIcon(),
     });
-    this.addMenu.requestUpload = () => this.fileInput.click();
   }
 
   private addReference(item: AddItem): void {
@@ -1241,6 +1241,9 @@ export class ChatPanel {
         void this.addAttachmentsFromFiles(files);
       }
       this.fileInput.value = '';
+      // Mirror the drag/drop and screenshot paths: the add-menu's Upload
+      // action opens this picker, so dismiss the menu once it returns.
+      if (this.addMenu?.isOpen()) this.addMenu.close();
     });
     this.stopBtn.addEventListener('click', () => {
       this.agent?.stop();
@@ -2327,6 +2330,7 @@ export class ChatPanel {
       const removeBtn = document.createElement('button');
       removeBtn.type = 'button';
       removeBtn.textContent = '×';
+      removeBtn.setAttribute('aria-label', `Remove ${ref.label}`);
       removeBtn.addEventListener('click', () => {
         this.pendingReferences = this.pendingReferences.filter((r) => r !== ref);
         this.renderPendingAttachments();

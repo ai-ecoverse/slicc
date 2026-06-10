@@ -33,6 +33,16 @@ describe('compileContextPreamble', () => {
       '[context]\n- session: /sessions/2026-06-01-foo.md (Fix the build)'
     );
   });
+
+  it('collapses embedded newlines in locators and labels to prevent preamble corruption', () => {
+    const refs: AddItem[] = [
+      { kind: 'file', label: 'name\nwith\nnewline', locator: '/workspace/path\ninjected' },
+    ];
+    const result = compileContextPreamble(refs);
+    const lines = result.split('\n');
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toBe('- file: /workspace/path injected (name with newline)');
+  });
 });
 
 describe('stripContextPreamble', () => {

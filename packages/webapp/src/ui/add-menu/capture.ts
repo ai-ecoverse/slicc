@@ -20,7 +20,8 @@ export async function grabFrameToFile(
     canvas.width = w;
     canvas.height = h;
     const ctx = canvas.getContext('2d');
-    ctx?.drawImage(video, 0, 0, w, h);
+    if (!ctx) return null;
+    ctx.drawImage(video, 0, 0, w, h);
     const blob: Blob | null = await new Promise((resolve) =>
       canvas.toBlob((b) => resolve(b), 'image/png')
     );
@@ -35,7 +36,23 @@ async function streamToFile(stream: MediaStream): Promise<File | null> {
   const video = document.createElement('video');
   video.srcObject = stream;
   video.muted = true;
-  await video.play().catch(() => {});
+  // A failed play() can still yield a blank frame below, so surface it
+  // rather than swallowing silently — but don't abort the capture.
+  await video.play().catch((err) => {
+    log.warn('Screenshot video.play() failed; frame may be blank', { error: String(err) });
+  });
+  // Wait for the first decoded frame before grabbing. `loadeddata` fires once
+  // readyState reaches HAVE_CURRENT_DATA (≥ 2); fall back after 2 s so a
+  // stalled stream cannot hang the capture forever.
+  await new Promise<void>((resolve) => {
+    if (video.readyState >= 2) {
+      resolve();
+      return;
+    }
+    const done = (): void => resolve();
+    video.addEventListener('loadeddata', done, { once: true });
+    setTimeout(done, 2000);
+  });
   await new Promise((r) => requestAnimationFrame(() => r(null)));
   return grabFrameToFile(stream, video, 'screenshot');
 }
@@ -45,11 +62,7 @@ async function streamToFile(stream: MediaStream): Promise<File | null> {
 export async function captureScreenshot(): Promise<File | null> {
   let stream: MediaStream;
   try {
-    stream = await (
-      navigator.mediaDevices as MediaDevices & {
-        getDisplayMedia(c?: DisplayMediaStreamOptions): Promise<MediaStream>;
-      }
-    ).getDisplayMedia({ video: true });
+    stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
   } catch (err) {
     log.info('Screenshot capture cancelled/denied', { error: String(err) });
     return null;

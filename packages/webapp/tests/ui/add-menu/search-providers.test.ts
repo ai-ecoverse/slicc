@@ -101,6 +101,36 @@ describe('createSessionProvider', () => {
       locator: '/sessions/2026-06-01-foo.md',
     });
   });
+
+  it('returns sessions newest-first when the query is empty', async () => {
+    const readIndex = async () => [
+      {
+        filename: 'old.md',
+        title: 'Old session',
+        frozenAt: '2026-01-01T00:00:00Z',
+        messageCount: 2,
+      },
+      {
+        filename: 'new.md',
+        title: 'New session',
+        frozenAt: '2026-06-01T00:00:00Z',
+        messageCount: 5,
+      },
+      {
+        filename: 'mid.md',
+        title: 'Mid session',
+        frozenAt: '2026-03-15T00:00:00Z',
+        messageCount: 3,
+      },
+    ];
+    const p = createSessionProvider(readIndex as never);
+    const res = await p.search('', 10);
+    expect(res.map((r) => r.locator)).toEqual([
+      '/sessions/new.md',
+      '/sessions/mid.md',
+      '/sessions/old.md',
+    ]);
+  });
 });
 
 describe('createScoopProvider', () => {

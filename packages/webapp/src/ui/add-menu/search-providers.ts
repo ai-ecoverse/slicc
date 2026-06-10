@@ -1,10 +1,12 @@
 import { createLogger } from '../../core/logger.js';
-import type { AddItem, AddItemKind } from './add-item.js';
+import type { AddItem } from './add-item.js';
 
 const log = createLogger('add-menu-search');
 
 export interface AddSearchProvider {
-  kind: AddItemKind;
+  /** Identifies the provider in debug logs; not constrained to AddItemKind
+   *  because a single provider can emit multiple kinds (e.g. 'file-folder'). */
+  kind: string;
   search(query: string, limit: number): Promise<AddItem[]>;
 }
 
@@ -125,7 +127,7 @@ export function createFileFolderProvider(
   }
 
   return {
-    kind: 'file',
+    kind: 'file-folder',
     async search(query, limit) {
       return applyQueryRanking(await loadItems(), query, limit);
     },
@@ -170,13 +172,25 @@ export function createSessionProvider(readIndex: ReadSessionsIndex): AddSearchPr
         log.warn('session provider failed', { error: String(err) });
         return [];
       }
+
+      const toItem = (e: (typeof index)[0]): AddItem => ({
+        kind: 'session',
+        label: e.title,
+        sublabel: `${e.messageCount} messages`,
+        locator: `/sessions/${e.filename}`,
+      });
+
+      if (!query) {
+        // No query: return sessions newest-first. frozenAt is ISO 8601, so
+        // lexicographic comparison gives correct chronological ordering.
+        return [...index]
+          .sort((a, b) => b.frozenAt.localeCompare(a.frozenAt))
+          .slice(0, limit)
+          .map(toItem);
+      }
+
       return index
-        .map<AddItem>((e) => ({
-          kind: 'session',
-          label: e.title,
-          sublabel: `${e.messageCount} messages`,
-          locator: `/sessions/${e.filename}`,
-        }))
+        .map(toItem)
         .filter((it) => rank(query, it.label) >= 0 || rank(query, it.locator) >= 0)
         .sort(
           (a, b) => rank(query, b.label) - rank(query, a.label) || a.label.localeCompare(b.label)

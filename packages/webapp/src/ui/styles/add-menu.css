@@ -68,6 +68,7 @@
   font-size: 12px;
   color: var(--text-muted, #888);
 }
+.add-menu__action--active,
 .add-menu__item--active {
   background: var(--accent-soft, rgba(60, 100, 220, 0.12));
 }

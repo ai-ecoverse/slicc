@@ -12,6 +12,7 @@ function setup(items: AddItem[] = []) {
   const onAddReference = vi.fn();
   const onClose = vi.fn();
   const captureScreenshot = vi.fn(async () => null);
+  const requestUpload = vi.fn();
   const aggregator = { search: vi.fn(async () => items) };
   const menu = new AddMenu({
     composer,
@@ -20,6 +21,7 @@ function setup(items: AddItem[] = []) {
     onAttachFiles,
     onAddReference,
     captureScreenshot,
+    requestUpload,
     onClose,
   });
   return {
@@ -30,6 +32,7 @@ function setup(items: AddItem[] = []) {
     onAddReference,
     onClose,
     captureScreenshot,
+    requestUpload,
     aggregator,
   };
 }
@@ -130,6 +133,87 @@ describe('AddMenu shell', () => {
   });
 });
 
+describe('AddMenu action keyboard navigation', () => {
+  beforeEach(() => {
+    (HTMLElement.prototype as unknown as { scrollIntoView: unknown }).scrollIntoView = () => {};
+  });
+
+  it('ArrowDown selects the first action', () => {
+    const { menu } = setup();
+    menu.open();
+    menu.handleKey(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
+    const actions = Array.from(document.querySelectorAll('.add-menu__action'));
+    expect(actions[0].classList.contains('add-menu__action--active')).toBe(true);
+    expect(actions[1].classList.contains('add-menu__action--active')).toBe(false);
+  });
+
+  it('ArrowDown twice selects the second action', () => {
+    const { menu } = setup();
+    menu.open();
+    menu.handleKey(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
+    menu.handleKey(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
+    const actions = Array.from(document.querySelectorAll('.add-menu__action'));
+    expect(actions[0].classList.contains('add-menu__action--active')).toBe(false);
+    expect(actions[1].classList.contains('add-menu__action--active')).toBe(true);
+  });
+
+  it('ArrowUp from nothing selects the last action', () => {
+    const { menu } = setup();
+    menu.open();
+    menu.handleKey(new KeyboardEvent('keydown', { key: 'ArrowUp' }));
+    const actions = Array.from(document.querySelectorAll('.add-menu__action'));
+    expect(actions[actions.length - 1].classList.contains('add-menu__action--active')).toBe(true);
+  });
+
+  it('ArrowDown wraps from last action back to first', () => {
+    const { menu } = setup();
+    menu.open();
+    // Two actions: Down → [0], Down → [1], Down → wraps to [0]
+    menu.handleKey(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
+    menu.handleKey(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
+    menu.handleKey(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
+    const actions = Array.from(document.querySelectorAll('.add-menu__action'));
+    expect(actions[0].classList.contains('add-menu__action--active')).toBe(true);
+  });
+
+  it('Enter triggers the highlighted action and closes the menu', () => {
+    const { menu, captureScreenshot } = setup();
+    menu.open();
+    // ArrowDown → [0] Upload, ArrowDown → [1] Screenshot
+    menu.handleKey(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
+    menu.handleKey(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
+    menu.handleKey(new KeyboardEvent('keydown', { key: 'Enter' }));
+    expect(captureScreenshot).toHaveBeenCalled();
+  });
+
+  it('Enter on the Upload action invokes requestUpload', () => {
+    const { menu, requestUpload } = setup();
+    menu.open();
+    menu.handleKey(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
+    menu.handleKey(new KeyboardEvent('keydown', { key: 'Enter' }));
+    expect(requestUpload).toHaveBeenCalled();
+  });
+
+  it('Enter with no action highlighted does not consume the event', () => {
+    const { menu } = setup();
+    menu.open();
+    // No ArrowDown pressed — nothing highlighted
+    const consumed = menu.handleKey(new KeyboardEvent('keydown', { key: 'Enter' }));
+    expect(consumed).toBe(false);
+  });
+
+  it('action highlight is cleared when the menu closes', () => {
+    const { menu } = setup();
+    menu.open();
+    menu.handleKey(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
+    menu.close();
+    menu.open();
+    // Highlight should be reset: no active class on any action
+    const active = document.querySelectorAll('.add-menu__action--active');
+    expect(active.length).toBe(0);
+  });
+});
+
 describe('AddMenu results', () => {
   beforeEach(() => {
     (HTMLElement.prototype as unknown as { scrollIntoView: unknown }).scrollIntoView = () => {};
@@ -187,5 +271,18 @@ describe('AddMenu results', () => {
     input.dispatchEvent(new Event('input'));
     await new Promise((r) => setTimeout(r, 150));
     expect(document.querySelector('.add-menu__empty')?.textContent).toContain('No matches');
+  });
+
+  it('ArrowDown/Up do not consume the keypress in the empty-results state', async () => {
+    const { menu } = setup([]);
+    menu.open();
+    const input = document.querySelector<HTMLInputElement>('.add-menu__search')!;
+    input.value = 'zzz';
+    input.dispatchEvent(new Event('input'));
+    await new Promise((r) => setTimeout(r, 150));
+    // Both arrays empty — navigateResults should return false so callers know
+    // not to preventDefault on Arrow keys.
+    expect(menu.handleKey(new KeyboardEvent('keydown', { key: 'ArrowDown' }))).toBe(false);
+    expect(menu.handleKey(new KeyboardEvent('keydown', { key: 'ArrowUp' }))).toBe(false);
   });
 });

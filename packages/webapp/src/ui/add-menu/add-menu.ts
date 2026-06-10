@@ -15,6 +15,8 @@ export interface AddMenuOptions {
   onAttachFiles(files: File[] | FileList): void;
   onAddReference(item: AddItem): void;
   captureScreenshot(): Promise<File | null>;
+  /** Called when the user chooses "Upload from this computer". */
+  requestUpload?(): void;
   onClose?(): void;
 }
 
@@ -50,7 +52,10 @@ export class AddMenu {
 
   private results: AddItem[] = [];
   private highlight = 0;
+  private actionElems: { el: HTMLElement; run: () => void }[] = [];
+  private actionHighlight = -1;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly listId = `add-menu-list-${Math.random().toString(36).slice(2, 9)}`;
 
   constructor(private readonly opts: AddMenuOptions) {
     this.panel = document.createElement('div');
@@ -61,8 +66,11 @@ export class AddMenu {
     this.search.className = 'add-menu__search';
     this.search.type = 'text';
     this.search.placeholder = 'Search files, skills, conversations…';
+    this.search.setAttribute('aria-label', 'Search files, skills, conversations');
+    this.search.setAttribute('aria-controls', this.listId);
 
     this.list = document.createElement('div');
+    this.list.id = this.listId;
     this.list.className = 'add-menu__list';
     this.list.setAttribute('role', 'listbox');
 
@@ -100,6 +108,9 @@ export class AddMenu {
     this.opts.composer.classList.remove('composer--add-open');
     this.list.innerHTML = '';
     this.results = [];
+    this.actionElems = [];
+    this.actionHighlight = -1;
+    this.search.removeAttribute('aria-activedescendant');
     this.opts.onClose?.();
   }
 
@@ -118,6 +129,10 @@ export class AddMenu {
           this.pick(this.results[this.highlight]);
           return true;
         }
+        if (this.actionHighlight >= 0 && this.actionHighlight < this.actionElems.length) {
+          this.actionElems[this.actionHighlight].run();
+          return true;
+        }
         return false;
       default:
         return false;
@@ -130,17 +145,44 @@ export class AddMenu {
     this.opts.composer.removeEventListener('dragover', this.onComposerDragOver);
     this.opts.composer.removeEventListener('drop', this.onComposerDrop);
     document.removeEventListener('mousedown', this.onDocumentMousedown);
+    this.actionElems = [];
     this.panel.remove();
   }
 
-  /** Overridden by the host (ChatPanel) to click the hidden file input. */
-  requestUpload: () => void = () => {};
-
   private navigateResults(direction: 1 | -1): boolean {
-    if (!this.results.length) return true;
-    this.highlight = (this.highlight + direction + this.results.length) % this.results.length;
-    this.renderResults();
-    return true;
+    if (this.results.length > 0) {
+      this.highlight = (this.highlight + direction + this.results.length) % this.results.length;
+      this.renderResults();
+      return true;
+    }
+    if (this.actionElems.length > 0) {
+      const len = this.actionElems.length;
+      this.actionHighlight =
+        this.actionHighlight < 0
+          ? direction === 1
+            ? 0
+            : len - 1
+          : (this.actionHighlight + direction + len) % len;
+      this.applyActionHighlight();
+      return true;
+    }
+    return false;
+  }
+
+  private applyActionHighlight(): void {
+    for (let i = 0; i < this.actionElems.length; i++) {
+      this.actionElems[i].el.classList.toggle(
+        'add-menu__action--active',
+        i === this.actionHighlight
+      );
+    }
+    const active = this.actionElems[this.actionHighlight]?.el;
+    if (active?.id) {
+      this.search.setAttribute('aria-activedescendant', active.id);
+      active.scrollIntoView?.({ block: 'nearest' });
+    } else {
+      this.search.removeAttribute('aria-activedescendant');
+    }
   }
 
   private scheduleSearch(): void {
@@ -162,6 +204,8 @@ export class AddMenu {
     }
     log.debug('runSearch', { query, resultCount: items.length });
     if (this.search.value.trim() !== query) return;
+    this.actionElems = [];
+    this.actionHighlight = -1;
     this.results = items;
     this.highlight = 0;
     if (items.length === 0) {
@@ -181,13 +225,16 @@ export class AddMenu {
 
   private renderActionsAndDefault(): void {
     this.results = [];
+    this.actionElems = [];
+    this.actionHighlight = -1;
     this.list.innerHTML = '';
+    this.search.removeAttribute('aria-activedescendant');
     const actions: { icon: IconNode; label: string; sub?: string; run: () => void }[] = [
       {
         icon: Upload as unknown as IconNode,
         label: 'Upload from this computer',
         sub: 'Drag & drop or click to browse',
-        run: () => this.requestUpload(),
+        run: () => this.opts.requestUpload?.(),
       },
       {
         icon: Monitor as unknown as IconNode,
@@ -195,9 +242,11 @@ export class AddMenu {
         run: () => void this.runCapture(this.opts.captureScreenshot),
       },
     ];
-    for (const a of actions) {
+    actions.forEach((a, i) => {
       const el = document.createElement('div');
       el.className = 'add-menu__action';
+      el.id = `${this.listId}-act-${i}`;
+      el.setAttribute('role', 'option');
 
       el.appendChild(createLucideIcon(a.icon, 18));
 
@@ -219,12 +268,19 @@ export class AddMenu {
         e.preventDefault();
         a.run();
       });
+      this.actionElems.push({ el, run: a.run });
       this.list.appendChild(el);
-    }
+    });
   }
 
   private async runCapture(fn: () => Promise<File | null>): Promise<void> {
-    const file = await fn();
+    let file: File | null;
+    try {
+      file = await fn();
+    } catch (err) {
+      log.warn('Screenshot capture threw unexpectedly', { error: String(err) });
+      file = null;
+    }
     if (file) {
       this.opts.onAttachFiles([file]);
       this.close();
@@ -240,10 +296,16 @@ export class AddMenu {
     this.list.innerHTML = '';
     this.results.forEach((item, i) => {
       const el = this.buildResultItem(item, i === this.highlight);
+      el.id = `${this.listId}-opt-${i}`;
       this.list.appendChild(el);
     });
     const active = this.list.querySelector<HTMLElement>('.add-menu__item--active');
     active?.scrollIntoView?.({ block: 'nearest' });
+    if (active?.id) {
+      this.search.setAttribute('aria-activedescendant', active.id);
+    } else {
+      this.search.removeAttribute('aria-activedescendant');
+    }
   }
 
   private buildResultItem(item: AddItem, isActive: boolean): HTMLElement {

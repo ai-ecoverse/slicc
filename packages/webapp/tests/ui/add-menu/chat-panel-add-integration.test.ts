@@ -140,4 +140,22 @@ describe('ChatPanel add-menu integration', () => {
 
     expect(sent[0].text).toBe('hello');
   });
+
+  it('closes the add-menu once the file picker returns from the Upload action', () => {
+    const panel = new ChatPanel(container);
+    panel.setAddMenu({
+      aggregator: { search: async () => [] },
+      captureScreenshot: async () => null,
+    });
+    panel.openAddMenuForFixture();
+    expect(document.querySelector('.add-menu')).not.toBeNull();
+    expect(getComputedStyle(document.querySelector('.add-menu') as HTMLElement).display).not.toBe(
+      'none'
+    );
+
+    const fileInput = container.querySelector<HTMLInputElement>('.chat__file-input')!;
+    fileInput.dispatchEvent(new Event('change'));
+
+    expect((document.querySelector('.add-menu') as HTMLElement).style.display).toBe('none');
+  });
 });
