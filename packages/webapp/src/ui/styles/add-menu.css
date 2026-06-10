@@ -1,18 +1,18 @@
 .add-menu {
   display: flex;
   flex-direction: column-reverse;
-  gap: 6px;
-  padding: 8px;
+  gap: 8px;
+  padding: 10px;
   border: 1px solid var(--s2-border-subtle, rgba(0, 0, 0, 0.12));
   border-radius: 10px;
   background: var(--surface-elevated, #fff);
   margin-bottom: 8px;
-  max-height: 320px;
+  max-height: 360px;
   overflow: hidden;
 }
 .add-menu__list {
   overflow-y: auto;
-  max-height: 260px;
+  max-height: 280px;
   display: flex;
   flex-direction: column;
 }
@@ -20,17 +20,22 @@
   width: 100%;
   border: 1px solid var(--s2-border-subtle, rgba(0, 0, 0, 0.12));
   border-radius: 8px;
-  padding: 8px 10px;
+  padding: 10px 12px;
   background: transparent;
   color: inherit;
   font: inherit;
+  margin-top: 2px;
+}
+.add-menu__search:focus {
+  outline: 2px solid var(--accent, #3c64dc);
+  outline-offset: -1px;
 }
 .add-menu__action,
 .add-menu__item {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  padding: 8px 10px;
+  gap: 10px;
+  padding: 10px 12px;
   border-radius: 6px;
   cursor: pointer;
   user-select: none;
@@ -44,6 +49,10 @@
 }
 .add-menu__item-label {
   font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .add-menu__item-kind {
   font-size: 10px;
@@ -51,14 +60,19 @@
   letter-spacing: 0.04em;
   color: var(--text-muted, #888);
   margin-left: auto;
+  flex-shrink: 0;
 }
 .add-menu__item-sub,
 .add-menu__empty {
   font-size: 12px;
   color: var(--text-muted, #888);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .add-menu__empty {
-  padding: 12px 10px;
+  padding: 14px 12px;
   text-align: center;
 }
 @media (prefers-color-scheme: dark) {

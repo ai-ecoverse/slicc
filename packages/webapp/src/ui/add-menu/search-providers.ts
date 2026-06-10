@@ -1,4 +1,7 @@
+import { createLogger } from '../../core/logger.js';
 import type { AddItem, AddItemKind } from './add-item.js';
+
+const log = createLogger('add-menu-search');
 
 export interface AddSearchProvider {
   kind: AddItemKind;
@@ -70,8 +73,8 @@ async function walkFilesAndDirs(
         collectAncestorDirs(filePath, root, seenDirs);
         if (fileItems.length >= 500) break;
       }
-    } catch {
-      // skip an unreadable root
+    } catch (err) {
+      log.warn('file/folder walk failed', { root, error: String(err) });
     }
     if (fileItems.length >= 500) break;
   }
@@ -112,7 +115,8 @@ export function createSkillProvider(vfs: VfsLike): AddSearchProvider {
       let entries: { name: string; type: string }[] = [];
       try {
         entries = await vfs.readDir('/workspace/skills');
-      } catch {
+      } catch (err) {
+        log.warn('skill provider failed', { error: String(err) });
         return [];
       }
       const skills = entries
@@ -138,7 +142,8 @@ export function createSessionProvider(readIndex: ReadSessionsIndex): AddSearchPr
       let index: Awaited<ReturnType<ReadSessionsIndex>> = [];
       try {
         index = await readIndex();
-      } catch {
+      } catch (err) {
+        log.warn('session provider failed', { error: String(err) });
         return [];
       }
       return index
@@ -184,8 +189,17 @@ export function createAggregator(providers: AddSearchProvider[]): AddSearchAggre
   return {
     async search(query, perKindLimit) {
       const groups = await Promise.all(
-        providers.map((p) => p.search(query, perKindLimit).catch(() => []))
+        providers.map((p) =>
+          p.search(query, perKindLimit).catch((err) => {
+            log.warn('provider threw in aggregator', { error: String(err) });
+            return [] as AddItem[];
+          })
+        )
       );
+      log.debug('aggregator results', {
+        query,
+        perKind: providers.map((p, i) => [p.kind, groups[i].length]),
+      });
       return groups.flat();
     },
   };

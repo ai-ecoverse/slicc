@@ -149,6 +149,7 @@ export class AddMenu {
     } catch (err) {
       log.warn('Add-menu search failed', { error: String(err) });
     }
+    log.debug('runSearch', { query, resultCount: items.length });
     if (this.search.value.trim() !== query) return;
     this.results = items;
     this.highlight = 0;

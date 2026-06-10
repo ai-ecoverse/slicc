@@ -5,7 +5,7 @@
  * Connects to an AgentHandle for sending messages and receiving events.
  */
 
-import { Brain, File as FileIcon, FileText, Image as ImageIcon, Paperclip, X } from 'lucide';
+import { Brain, File as FileIcon, FileText, Image as ImageIcon, Plus, X } from 'lucide';
 import type { MessageAttachment, MessageAttachmentKind } from '../core/attachments.js';
 import { formatAttachmentSize, formatAttachmentSummary } from '../core/attachments.js';
 import {
@@ -389,7 +389,11 @@ export class ChatPanel {
   }
 
   private updateAddToggleIcon(): void {
-    this.attachBtn.classList.toggle('chat__attach-btn--open', !!this.addMenu?.isOpen());
+    const isOpen = !!this.addMenu?.isOpen();
+    this.attachBtn.classList.toggle('chat__attach-btn--open', isOpen);
+    this.attachBtn.replaceChildren(
+      createLucideIcon((isOpen ? X : Plus) as unknown as IconNode, 18)
+    );
   }
 
   /** Design-time only: open the add-menu so its UI renders for the ?ui-fixture harness. */
@@ -1088,8 +1092,8 @@ export class ChatPanel {
     this.attachBtn = document.createElement('button');
     this.attachBtn.className = 'chat__attach-btn';
     this.attachBtn.type = 'button';
-    this.attachBtn.appendChild(createLucideIcon(Paperclip as unknown as IconNode, 18));
-    this.attachBtn.dataset.tooltip = 'Attach files';
+    this.attachBtn.dataset.tooltip = 'Add context';
+    this.updateAddToggleIcon();
 
     this.fileInput = document.createElement('input');
     this.fileInput.className = 'chat__file-input';
