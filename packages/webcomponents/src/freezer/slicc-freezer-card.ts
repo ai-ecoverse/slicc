@@ -75,7 +75,7 @@ slicc-freezer-card[expanded]:hover {
 }
 /* Collapsed (icon-only) hover: a full-row ghost fill reads as a clashing
    rectangle around the lone centered badge, so swap it for a soft circular ring
-   hugging the snowflake (painted on its `::part(badge)` circle, which carries the
+   hugging the snowflake (painted on its ::part(badge) circle, which carries the
    50% radius) — the affordance reads as a ring, not a rectangle. Token-based. */
 slicc-freezer-card slicc-snowflake::part(badge) {
   transition: box-shadow 0.15s;

@@ -404,4 +404,35 @@ describe('slicc-freezer-card', () => {
       expect(getComputedStyle(tip).display).toBe('none');
     });
   });
+
+  describe('hover affordance (ring, not rectangle)', () => {
+    function cardStyleRules(): CSSStyleRule[] {
+      const styleEl = document.getElementById('slicc-freezer-card-style') as HTMLStyleElement;
+      return Array.from((styleEl.sheet as CSSStyleSheet).cssRules) as CSSStyleRule[];
+    }
+
+    it('collapsed hover rings the badge ::part instead of a rectangular fill', () => {
+      mount(); // ensures the scoped stylesheet is injected into the document
+      const rules = cardStyleRules();
+      // Collapsed (icon-only) hover/focus paints a circular ring on the badge part.
+      const ringRule = rules.find(
+        (r) =>
+          r.selectorText?.includes(':not([expanded]):hover') &&
+          r.selectorText.includes('slicc-snowflake::part(badge)')
+      );
+      expect(ringRule).toBeDefined();
+      expect(ringRule?.style.boxShadow).not.toBe('');
+    });
+
+    it('gates the rectangular ghost fill to expanded rows only', () => {
+      mount();
+      const rules = cardStyleRules();
+      const expandedHoverFill = rules.find(
+        (r) => r.selectorText === 'slicc-freezer-card[expanded]:hover'
+      );
+      expect(expandedHoverFill?.style.background).toBe('var(--ghost)');
+      // The bare `slicc-freezer-card:hover { background }` rectangular rule is gone.
+      expect(rules.some((r) => r.selectorText === 'slicc-freezer-card:hover')).toBe(false);
+    });
+  });
 });
