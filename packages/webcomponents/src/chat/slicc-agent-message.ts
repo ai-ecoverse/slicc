@@ -6,19 +6,45 @@ import { h } from '../internal/dom.js';
  * from the prototype (proto/StellarRubySwift.html) bot-message chrome:
  * `.msg.bot .body` prose, the colored-dot `.plan` list, the rounded check-badge
  * `.check` list, the three bouncing `.thinkrow .dots`, and the typewriter
- * `.tw-caret`. Light-DOM components cannot carry an inline `<style>` in a shadow
- * root, so the chrome is injected once into the host document (idempotent) and
- * selected by the `slicc-agent-message` tag. Everything is var-driven
- * (--ink / --ghost / --mono + the fixed accent hues --rose/--cyan/--violet/--amber)
- * so dark mode flips automatically via the inherited theme scope — no explicit
- * dark override is needed.
+ * `.tw-caret`. The `.body` prose is also given a full GFM markdown chrome
+ * (headings, ordered/unordered lists, fenced code blocks, blockquotes, links,
+ * tables, hr, strikethrough) mirroring the webapp's markdown renderer
+ * (packages/webapp/src/ui/styles/markdown.css) so already-rendered marked/GFM
+ * HTML handed to `setBodyHtml` styles correctly; the list rules skip `.plan` /
+ * `.check` so those bespoke lists keep their prototype look. Light-DOM components
+ * cannot carry an inline `<style>` in a shadow root, so the chrome is injected
+ * once into the host document (idempotent) and selected by the
+ * `slicc-agent-message` tag. Everything is var-driven (--ui / --ink / --ghost /
+ * --mono / --bg / --line / --txt-2 / --txt-3 + the fixed accent hues
+ * --rose/--cyan/--violet/--amber) so dark mode flips automatically via the
+ * inherited theme scope — no explicit dark override is needed.
  */
 const STYLE = `
 slicc-agent-message { display: block; margin-bottom: 18px; font-size: 15px; line-height: 1.5; }
-slicc-agent-message .body { font-size: 14px; }
+slicc-agent-message .body { font-family: var(--ui); font-size: 14px; }
 slicc-agent-message .body p { margin: 0 0 8px; }
 slicc-agent-message strong { font-weight: 600; }
 slicc-agent-message code { font-family: var(--mono); font-size: 12.5px; background: var(--ghost); border-radius: 6px; padding: 1px 6px; }
+slicc-agent-message .body h1, slicc-agent-message .body h2, slicc-agent-message .body h3, slicc-agent-message .body h4, slicc-agent-message .body h5, slicc-agent-message .body h6 { font-family: var(--ui); margin: 1.2em 0 0.35em; font-weight: 700; line-height: 1.25; }
+slicc-agent-message .body > :first-child { margin-top: 0; }
+slicc-agent-message .body > :last-child { margin-bottom: 0; }
+slicc-agent-message .body h1 { font-size: 22px; }
+slicc-agent-message .body h2 { font-size: 18px; }
+slicc-agent-message .body h3 { font-size: 16px; }
+slicc-agent-message .body h4 { font-size: 14px; }
+slicc-agent-message .body h5, slicc-agent-message .body h6 { font-size: 13px; color: var(--txt-2); }
+slicc-agent-message .body a { color: var(--violet); text-decoration: none; }
+slicc-agent-message .body a:hover { text-decoration: underline; }
+slicc-agent-message .body ul:not(.plan):not(.check), slicc-agent-message .body ol { margin: 0.45em 0; padding-left: 1.4em; }
+slicc-agent-message .body li { margin: 3px 0; }
+slicc-agent-message .body blockquote { margin: 0.45em 0; border-left: 3px solid var(--violet); padding-left: 12px; color: var(--txt-2); }
+slicc-agent-message .body hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
+slicc-agent-message .body del { color: var(--txt-3); }
+slicc-agent-message .body pre { margin: 8px 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; overflow-x: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; }
+slicc-agent-message .body pre code { background: none; border-radius: 0; padding: 0; font-size: inherit; }
+slicc-agent-message .body table { width: 100%; border-collapse: collapse; margin: 2px 0 12px; font-size: 13px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+slicc-agent-message .body th, slicc-agent-message .body td { border: 1px solid var(--line); padding: 6px 11px; text-align: left; }
+slicc-agent-message .body th { background: var(--ghost); font-weight: 600; }
 slicc-agent-message .plan { list-style: none; margin: 4px 0 0; padding: 0; }
 slicc-agent-message .plan li { position: relative; padding-left: 20px; margin: 5px 0; font-size: 14px; }
 slicc-agent-message .plan li::before { content: ""; position: absolute; left: 4px; top: 8px; width: 6px; height: 6px; border-radius: 50%; }
