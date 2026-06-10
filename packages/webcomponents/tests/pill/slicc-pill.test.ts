@@ -29,6 +29,9 @@ describe('slicc-pill', () => {
     expect(el.shadowRoot).toBeTruthy();
     expect(el.shadowRoot?.querySelector('[part="pill"]')).toBeTruthy();
     expect(el.shadowRoot?.querySelector('[part="icon"]')).toBeTruthy();
+    // The label is exposed as a ::part so containers (e.g. the switcher overflow
+    // dropdown) can keep it visible where they override the narrow compacting.
+    expect(el.shadowRoot?.querySelector('[part="label"]')).toBeTruthy();
   });
 
   describe('attribute ↔ property reflection', () => {

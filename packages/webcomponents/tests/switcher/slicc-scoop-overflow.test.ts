@@ -288,6 +288,44 @@ describe('slicc-scoop-overflow', () => {
       }
       expect(guarded).toBe(true);
     });
+
+    it('keeps dropdown pills wide + labeled in a narrow viewport (≤560px override)', () => {
+      // The default browser-test viewport is wide (1280px), so the ≤560px branch
+      // is asserted against the adopted stylesheet (same approach as the
+      // reduced-motion guard above) rather than an incidentally-small window.
+      // A <slicc-pill> compacts to icon-only at ≤560px; the dropdown overrides
+      // the cloned pills' ::part hooks to keep them in their wide, labeled form.
+      const el = mount((e) => {
+        e.items = ITEMS;
+      });
+      const adopted = el.shadowRoot?.adoptedStyleSheets[0] as CSSStyleSheet;
+      const narrow = Array.from(adopted.cssRules).find(
+        (r): r is CSSMediaRule => r instanceof CSSMediaRule && r.conditionText.includes('560px')
+      );
+      expect(narrow).toBeDefined();
+
+      const byPart = new Map<string, CSSStyleDeclaration>();
+      for (const inner of Array.from((narrow as CSSMediaRule).cssRules)) {
+        if (inner instanceof CSSStyleRule) byPart.set(inner.selectorText, inner.style);
+      }
+      // Find the ::part rules regardless of how the engine serializes whitespace.
+      const find = (part: string): CSSStyleDeclaration | undefined => {
+        for (const [sel, style] of byPart) if (sel.includes(`::part(${part})`)) return style;
+        return undefined;
+      };
+
+      const pillStyle = find('pill');
+      const labelStyle = find('label');
+      const tipStyle = find('tip');
+      expect(pillStyle).toBeDefined();
+      expect(labelStyle).toBeDefined();
+      expect(tipStyle).toBeDefined();
+      // Stable longhands: the button is forced back to full width (not the pill's
+      // narrow `width:auto`), the label is re-shown, and the tip is suppressed.
+      expect(pillStyle?.getPropertyValue('width').trim()).toBe('100%');
+      expect(labelStyle?.getPropertyValue('display').trim()).toBe('block');
+      expect(tipStyle?.getPropertyValue('display').trim()).toBe('none');
+    });
   });
 
   describe('behavior + events', () => {
