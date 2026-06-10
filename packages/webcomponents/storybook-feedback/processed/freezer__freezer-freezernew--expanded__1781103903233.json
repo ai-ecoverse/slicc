@@ -1,0 +1,8 @@
+{
+  "storyId": "freezer-freezernew--expanded",
+  "storyTitle": "Freezer/FreezerNew",
+  "subsystem": "freezer",
+  "importPath": "./src/freezer/slicc-freezer-new.stories.ts",
+  "comment": "Bryan Stopp  [4:58 PM]\nWhen i click the pencil icon to get a new session - should there be some kind of UI indicator it’s doing the work? because I don’t get anything until it actually reloads the screen. (Is that something that can be added?)\nBryan Stopp  [4:58 PM]\nIf the answer to the last question is “Yes” - i can take a look at making that happen :smile:\n\nyes, for the save and start new, we should have a spinner/progress indicator when clicked. \n\nthese options should only appear on hover",
+  "createdAt": "2026-06-10T15:05:03.233Z"
+}
