@@ -35,6 +35,21 @@ describe('slicc-chat-thread', () => {
     expect(el.inner).toBe(col);
   });
 
+  it('sets the reading-column text to --ink so message prose flips with the theme', () => {
+    // Regression: without an explicit color the prose inherits UA-default black,
+    // which is invisible on the dark frosted surface in dark mode.
+    const el = mount();
+    const light = getComputedStyle(inner(el)).color;
+    document.documentElement.classList.add('dark');
+    document.body.classList.add('dark');
+    const dark = getComputedStyle(inner(el)).color;
+    document.documentElement.classList.remove('dark');
+    document.body.classList.remove('dark');
+    // dark --ink (#f5f5f2) is a light color; it must differ from the light-mode ink.
+    expect(dark).toBe('rgb(245, 245, 242)');
+    expect(dark).not.toBe(light);
+  });
+
   it('relocates pre-existing light children into the inner column in DOM order', () => {
     const el = document.createElement('slicc-chat-thread') as SliccChatThread;
     const a = document.createElement('slicc-day-separator');
