@@ -1,7 +1,7 @@
 import { define } from '../internal/define.js';
 // Renders these child custom elements internally — owns their registration.
 import './slicc-dock-item.js';
-import { escapeHtml } from '../internal/html.js';
+import { append, h } from '../internal/dom.js';
 
 /**
  * One dock-rail entry descriptor. The dock renders one `<slicc-dock-item>` per
@@ -283,39 +283,43 @@ export class SliccDock extends HTMLElement {
     return this.#items.find((i) => i.id === id)?.kind ?? 'tool';
   }
 
-  /** Render one `<slicc-dock-item>` from a descriptor (composed BY TAG). The
-   *  active item carries `active` so the child's own click resolves to `collapse`. */
-  #itemHtml(item: DockItemDescriptor, active: string | null): string {
+  /** Build one `<slicc-dock-item>` from a descriptor (composed BY TAG). The
+   *  active item carries `active` so the child's own click resolves to `collapse`.
+   *  Attributes are set via `h()` (the DOM escapes their values — no string
+   *  interpolation), and absent `icon`/`hue`/`active` are omitted by `h()`. */
+  #itemEl(item: DockItemDescriptor, active: string | null): HTMLElement {
     const id = item.id;
     const kind = normalizeKind(item.kind);
     const icon = item.icon ?? '';
     const label = item.label ?? id;
     const isActive = active != null && active === id;
     const hue = item.hue;
-    return (
-      `<slicc-dock-item data-t="${escapeHtml(id)}" item-id="${escapeHtml(id)}" kind="${kind}"` +
-      (icon ? ` icon="${escapeHtml(icon)}"` : '') +
-      ` tip="${escapeHtml(label)}"` +
-      (hue ? ` hue="${escapeHtml(hue)}"` : '') +
-      (isActive ? ' active' : '') +
-      '></slicc-dock-item>'
-    );
+    return h('slicc-dock-item', {
+      'data-t': id,
+      'item-id': id,
+      kind,
+      icon: icon || false,
+      tip: label,
+      hue: hue || false,
+      active: isActive,
+    });
   }
 
   /** Rebuild the rail: sprinkles (top) → `New +` → `.grow` → `.div` → tools. */
   #render(): void {
     const active = this.active;
-    const sprinkles = this.#items
-      .filter((i) => normalizeKind(i.kind) === 'sprinkle')
-      .map((i) => this.#itemHtml(i, active))
-      .join('');
-    const newItem = this.#itemHtml(NEW_ITEM, active);
-    let html = `${sprinkles}${newItem}<div class="grow"></div>`;
-    if (this.systemTools) {
-      const tools = SYSTEM_TOOLS.map((t) => this.#itemHtml(t, active)).join('');
-      html += `<div class="div"></div>${tools}`;
+    const nodes: Node[] = [];
+    for (const item of this.#items) {
+      if (normalizeKind(item.kind) === 'sprinkle') nodes.push(this.#itemEl(item, active));
     }
-    this.innerHTML = html;
+    nodes.push(this.#itemEl(NEW_ITEM, active));
+    nodes.push(h('div', { class: 'grow' }));
+    if (this.systemTools) {
+      nodes.push(h('div', { class: 'div' }));
+      for (const tool of SYSTEM_TOOLS) nodes.push(this.#itemEl(tool, active));
+    }
+    this.replaceChildren();
+    append(this, nodes);
   }
 
   /** Toggle the active attribute on items to match the `active` property without a

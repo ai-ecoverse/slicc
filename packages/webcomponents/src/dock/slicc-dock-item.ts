@@ -1,6 +1,6 @@
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
-import { iconSvg } from '../internal/icons.js';
+import { h, sheet } from '../internal/dom.js';
+import { iconEl } from '../internal/icons.js';
 
 /**
  * Per-instance stylesheet for the dock launcher button, lifted verbatim from the
@@ -99,6 +99,7 @@ const STYLE = `
 .glyph { display: grid; place-items: center; line-height: 1; }
 .glyph svg { display: block; }
 `;
+const SHEET = sheet(STYLE);
 
 /** Item kind: `tool` (no status dot) vs `sprinkle` (`.sp`, colored status dot). */
 export type DockItemKind = 'tool' | 'sprinkle';
@@ -115,7 +116,7 @@ const ICON_SIZE = 18;
  * rail.
  *
  * The glyph is a lucide icon named by the kebab-case `icon` attribute (default
- * `square`), rendered via the shared `iconSvg` helper at 18px — never emoji or
+ * `square`), rendered via the shared `iconEl` helper at 18px — never emoji or
  * bespoke unicode symbols. The prototype's hand-drawn dock glyphs map to lucide:
  * sprinkles → `sparkles`, browser → `globe` (or `layout`), files → `folder`,
  * terminal → `square-terminal`, memory → `brain` (or `database`), new → `plus`.
@@ -160,6 +161,7 @@ export class SliccDockItem extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+    this.#root.adoptedStyleSheets = [SHEET];
   }
 
   connectedCallback(): void {
@@ -243,29 +245,36 @@ export class SliccDockItem extends HTMLElement {
     if (this.active) classes.push('on');
     if (this.lit) classes.push('lit');
 
-    const hue = this.hue;
-    const styleAttr = hue ? ` style="--h:${escapeHtml(hue)}"` : '';
-
     const tip = this.tip;
-    const tipHtml = tip ? `<span class="tip" part="tip">${escapeHtml(tip)}</span>` : '';
 
     // A slotted custom glyph wins; otherwise render the lucide icon. The slot's
     // fallback content is the lucide `<svg>`, so consumers can override it.
-    const glyph = iconSvg(this.icon, { size: ICON_SIZE, part: 'icon' });
+    const glyph = iconEl(this.icon, { size: ICON_SIZE, part: 'icon' });
 
     // The tooltip doubles as the accessible name; fall back to the item id.
-    const aria = escapeHtml(tip ?? this.itemId ?? 'dock item');
-    const pressed = this.active ? 'true' : 'false';
+    const aria = tip ?? this.itemId ?? 'dock item';
 
-    this.#root.innerHTML =
-      `<style>${STYLE}</style>` +
-      `<button type="button" part="button" class="${classes.join(' ')}"${styleAttr} ` +
-      `aria-label="${aria}" aria-pressed="${pressed}">` +
-      `<span class="glyph" part="glyph"><slot>${glyph}</slot></span>` +
-      tipHtml +
-      '</button>';
+    const button = h(
+      'button',
+      {
+        type: 'button',
+        part: 'button',
+        class: classes.join(' '),
+        'aria-label': aria,
+        'aria-pressed': this.active ? 'true' : 'false',
+      },
+      h('span', { class: 'glyph', part: 'glyph' }, h('slot', null, glyph)),
+      tip ? h('span', { class: 'tip', part: 'tip' }, tip) : null
+    );
 
-    this.#root.querySelector('button')?.addEventListener('click', this.#onClick);
+    // The per-kind hue feeds `--h`; setting it via the style API (not markup)
+    // keeps the value out of any HTML-string context.
+    const hue = this.hue;
+    if (hue) button.style.setProperty('--h', hue);
+
+    button.addEventListener('click', this.#onClick);
+
+    this.#root.replaceChildren(button);
   }
 
   /**

@@ -1,5 +1,5 @@
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
+import { h, sheet } from '../internal/dom.js';
 
 /**
  * Eye geometry inside the glyph SVG (viewBox `0 0 200 100`), lifted verbatim
@@ -19,6 +19,20 @@ const PUPIL_MAX = 2.2;
 
 const LEFT_EYE = { cx: 55, cy: 50, r: 38 } as const;
 const RIGHT_EYE = { cx: 145, cy: 50, r: 38 } as const;
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/** Create an SVG-namespaced element with string attributes — no innerHTML. */
+function svgEl<K extends keyof SVGElementTagNameMap>(
+  tag: K,
+  attrs?: Record<string, string | number>,
+  ...children: SVGElement[]
+): SVGElementTagNameMap[K] {
+  const el = document.createElementNS(SVG_NS, tag);
+  if (attrs) for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v));
+  for (const c of children) el.appendChild(c);
+  return el;
+}
 
 /** Per-type glyph framing: SVG viewBox, eye-band placement, and zoom factors. */
 interface TypeConfig {
@@ -93,62 +107,183 @@ function shade(hex: string, amt: number): string {
 }
 
 /** Procedural ice-cream-cone glyph (base fill, dark outline, lighter waffle). */
-function coneInner(base: string, outline: string, waffle: string): string {
-  return (
-    `<path d="M108.22,414.88l189.84,460.03c1.36,3.3,6.09,3.16,7.25-.22l159.34-463.34c.87-2.53-1.03-5.16-3.7-5.13l-349.18,3.32c-2.74.03-4.59,2.82-3.55,5.35Z" fill="${base}" stroke="${outline}" stroke-linejoin="round" stroke-width="20"/>` +
-    `<path d="M261.93,482.48h0c15.03-15.03,4.46-40.72-16.79-40.83h0c-21.37-.11-32.14,25.72-17.03,40.83h0c9.34,9.34,24.48,9.34,33.82,0Z" fill="${waffle}"/>` +
-    `<path d="M384.85,527.49l-51.82,51.82c-2.24,2.24-2.24,5.86,0,8.1l55.71,55.71c2.24,2.24,5.86,2.24,8.1,0h0c.62-.62,1.08-1.36,1.37-2.19l26.52-77.11c.71-2.07.18-4.36-1.37-5.91l-30.41-30.41c-2.24-2.24-5.86-2.24-8.1,0Z" fill="${waffle}"/>` +
-    `<rect x="274.59" y="463.59" width="84.73" height="95.66" rx="42.36" ry="42.36" transform="translate(-268.79 373.91) rotate(-45)" fill="${waffle}"/>` +
-    `<rect x="291.06" y="603.84" width="72.24" height="90.24" rx="36.12" ry="36.12" transform="translate(-363.06 421.43) rotate(-45)" fill="${waffle}"/>` +
-    `<path d="M371.7,684.58l-25.94,25.94c-2.24,2.24-2.24,5.86,0,8.1l12.67,12.67c2.99,2.99,8.09,1.82,9.46-2.19l13.28-38.61c1.97-5.74-5.17-10.2-9.46-5.91Z" fill="${waffle}"/>` +
-    `<path d="M159.42,564.14l2.73,6.83c1.52,3.82,6.46,4.83,9.37,1.93l2.05-2.05c2.24-2.24,2.24-5.86,0-8.1l-4.78-4.78c-4.4-4.4-11.67.39-9.37,6.17Z" fill="${waffle}"/>` +
-    `<path d="M243.92,633.11l-48.65-48.65c-5.24-5.24-13.74-5.24-18.99,0h0c-3.8,3.8-4.97,9.49-2.98,14.47l27.77,69.54c3.58,8.95,15.14,11.33,21.96,4.51l20.89-20.89c5.24-5.24,5.24-13.74,0-18.99Z" fill="${waffle}"/>` +
-    `<path d="M211.32,533.1h0c14.11-14.11,14.11-36.98,0-51.08l-34.94-34.94c-.72-.72-.72-1.89,0-2.62h0c1.16-1.16.34-3.15-1.3-3.16l-11.23-.06c-25.62-.13-43.23,25.72-33.73,49.51l5.37,13.45c1.82,4.55,4.54,8.68,8,12.15l16.74,16.74c14.11,14.11,36.98,14.11,51.08,0Z" fill="${waffle}"/>` +
-    `<path d="M263.74,792.53h0c-5.69,5.69-7.45,14.23-4.46,21.71l22.5,56.36c6.92,17.34,31.68,16.74,37.75-.92l8.66-25.2c2.5-7.28.64-15.35-4.8-20.79l-31.17-31.17c-7.87-7.87-20.62-7.87-28.48,0Z" fill="${waffle}"/>` +
-    `<path d="M392.94,503.07l40.81-40.81c2.24-2.24,5.86-2.24,8.1,0l.06.06c2.24,2.24,2.24,5.86,0,8.1l-40.81,40.81c-2.24,2.24-2.24,5.86,0,8.1l22.48,22.48c2.99,2.99,8.09,1.82,9.46-2.19l30.71-89.32c1.27-3.71-1.47-7.57-5.39-7.59l-120.63-.6c-5.11-.03-7.69,6.16-4.08,9.77l51.18,51.18c2.24,2.24,5.86,2.24,8.1,0Z" fill="${waffle}"/>` +
-    `<rect x="217.18" y="527.25" width="72.24" height="95.66" rx="36.12" ry="36.12" transform="translate(-332.45 347.55) rotate(-45)" fill="${waffle}"/>` +
-    `<path d="M350.28,739.46h0c-9.24-9.24-24.22-9.24-33.46,0l-13.94,13.94c-9.24,9.24-9.24,24.22,0,33.46l6.81,6.81c12.37,12.37,33.42,7.5,39.1-9.04l7.13-20.75c2.94-8.55.75-18.03-5.64-24.42Z" fill="${waffle}"/>` +
-    `<path d="M234.18,749.12l13.2,33.06c1.52,3.82,6.46,4.83,9.37,1.93l9.93-9.93c2.24-2.24,2.24-5.86,0-8.1l-23.13-23.13c-4.4-4.4-11.67.39-9.37,6.17Z" fill="${waffle}"/>` +
-    `<rect x="236.26" y="661.25" width="67.04" height="90.24" rx="33.52" ry="33.52" transform="translate(-420.46 397.65) rotate(-45)" fill="${waffle}"/>` +
-    `<ellipse cx="288.37" cy="404.38" rx="182.34" ry="67.01" fill="${base}" stroke="${outline}" stroke-miterlimit="10" stroke-width="20"/>`
-  );
+function coneInner(base: string, outline: string, waffle: string): SVGElement[] {
+  return [
+    svgEl('path', {
+      d: 'M108.22,414.88l189.84,460.03c1.36,3.3,6.09,3.16,7.25-.22l159.34-463.34c.87-2.53-1.03-5.16-3.7-5.13l-349.18,3.32c-2.74.03-4.59,2.82-3.55,5.35Z',
+      fill: base,
+      stroke: outline,
+      'stroke-linejoin': 'round',
+      'stroke-width': 20,
+    }),
+    svgEl('path', {
+      d: 'M261.93,482.48h0c15.03-15.03,4.46-40.72-16.79-40.83h0c-21.37-.11-32.14,25.72-17.03,40.83h0c9.34,9.34,24.48,9.34,33.82,0Z',
+      fill: waffle,
+    }),
+    svgEl('path', {
+      d: 'M384.85,527.49l-51.82,51.82c-2.24,2.24-2.24,5.86,0,8.1l55.71,55.71c2.24,2.24,5.86,2.24,8.1,0h0c.62-.62,1.08-1.36,1.37-2.19l26.52-77.11c.71-2.07.18-4.36-1.37-5.91l-30.41-30.41c-2.24-2.24-5.86-2.24-8.1,0Z',
+      fill: waffle,
+    }),
+    svgEl('rect', {
+      x: 274.59,
+      y: 463.59,
+      width: 84.73,
+      height: 95.66,
+      rx: 42.36,
+      ry: 42.36,
+      transform: 'translate(-268.79 373.91) rotate(-45)',
+      fill: waffle,
+    }),
+    svgEl('rect', {
+      x: 291.06,
+      y: 603.84,
+      width: 72.24,
+      height: 90.24,
+      rx: 36.12,
+      ry: 36.12,
+      transform: 'translate(-363.06 421.43) rotate(-45)',
+      fill: waffle,
+    }),
+    svgEl('path', {
+      d: 'M371.7,684.58l-25.94,25.94c-2.24,2.24-2.24,5.86,0,8.1l12.67,12.67c2.99,2.99,8.09,1.82,9.46-2.19l13.28-38.61c1.97-5.74-5.17-10.2-9.46-5.91Z',
+      fill: waffle,
+    }),
+    svgEl('path', {
+      d: 'M159.42,564.14l2.73,6.83c1.52,3.82,6.46,4.83,9.37,1.93l2.05-2.05c2.24-2.24,2.24-5.86,0-8.1l-4.78-4.78c-4.4-4.4-11.67.39-9.37,6.17Z',
+      fill: waffle,
+    }),
+    svgEl('path', {
+      d: 'M243.92,633.11l-48.65-48.65c-5.24-5.24-13.74-5.24-18.99,0h0c-3.8,3.8-4.97,9.49-2.98,14.47l27.77,69.54c3.58,8.95,15.14,11.33,21.96,4.51l20.89-20.89c5.24-5.24,5.24-13.74,0-18.99Z',
+      fill: waffle,
+    }),
+    svgEl('path', {
+      d: 'M211.32,533.1h0c14.11-14.11,14.11-36.98,0-51.08l-34.94-34.94c-.72-.72-.72-1.89,0-2.62h0c1.16-1.16.34-3.15-1.3-3.16l-11.23-.06c-25.62-.13-43.23,25.72-33.73,49.51l5.37,13.45c1.82,4.55,4.54,8.68,8,12.15l16.74,16.74c14.11,14.11,36.98,14.11,51.08,0Z',
+      fill: waffle,
+    }),
+    svgEl('path', {
+      d: 'M263.74,792.53h0c-5.69,5.69-7.45,14.23-4.46,21.71l22.5,56.36c6.92,17.34,31.68,16.74,37.75-.92l8.66-25.2c2.5-7.28.64-15.35-4.8-20.79l-31.17-31.17c-7.87-7.87-20.62-7.87-28.48,0Z',
+      fill: waffle,
+    }),
+    svgEl('path', {
+      d: 'M392.94,503.07l40.81-40.81c2.24-2.24,5.86-2.24,8.1,0l.06.06c2.24,2.24,2.24,5.86,0,8.1l-40.81,40.81c-2.24,2.24-2.24,5.86,0,8.1l22.48,22.48c2.99,2.99,8.09,1.82,9.46-2.19l30.71-89.32c1.27-3.71-1.47-7.57-5.39-7.59l-120.63-.6c-5.11-.03-7.69,6.16-4.08,9.77l51.18,51.18c2.24,2.24,5.86,2.24,8.1,0Z',
+      fill: waffle,
+    }),
+    svgEl('rect', {
+      x: 217.18,
+      y: 527.25,
+      width: 72.24,
+      height: 95.66,
+      rx: 36.12,
+      ry: 36.12,
+      transform: 'translate(-332.45 347.55) rotate(-45)',
+      fill: waffle,
+    }),
+    svgEl('path', {
+      d: 'M350.28,739.46h0c-9.24-9.24-24.22-9.24-33.46,0l-13.94,13.94c-9.24,9.24-9.24,24.22,0,33.46l6.81,6.81c12.37,12.37,33.42,7.5,39.1-9.04l7.13-20.75c2.94-8.55.75-18.03-5.64-24.42Z',
+      fill: waffle,
+    }),
+    svgEl('path', {
+      d: 'M234.18,749.12l13.2,33.06c1.52,3.82,6.46,4.83,9.37,1.93l9.93-9.93c2.24-2.24,2.24-5.86,0-8.1l-23.13-23.13c-4.4-4.4-11.67.39-9.37,6.17Z',
+      fill: waffle,
+    }),
+    svgEl('rect', {
+      x: 236.26,
+      y: 661.25,
+      width: 67.04,
+      height: 90.24,
+      rx: 33.52,
+      ry: 33.52,
+      transform: 'translate(-420.46 397.65) rotate(-45)',
+      fill: waffle,
+    }),
+    svgEl('ellipse', {
+      cx: 288.37,
+      cy: 404.38,
+      rx: 182.34,
+      ry: 67.01,
+      fill: base,
+      stroke: outline,
+      'stroke-miterlimit': 10,
+      'stroke-width': 20,
+    }),
+  ];
 }
 
 /** Procedural scoop (cloud-blob) glyph (fill + dark outline). */
-function scoopInner(fill: string, outline: string): string {
-  return `<path d="M566.75,340.67c0-29.85-12.97-56.87-33.96-76.47,4.8-9.98,7.44-20.71,7.44-31.9,0-38.29-30.62-71.33-74.92-86.77.33-3.07.51-6.17.51-9.3,0-69.72-84.29-126.24-188.26-126.24s-188.26,56.52-188.26,126.24c0,4,.29,7.95.83,11.86-34.94,15.4-58.48,44.25-58.48,77.34,0,18.21,7.15,35.15,19.39,49.26-25.1,19.88-41.05,49.47-41.05,82.54,0,59.85,52.15,108.37,116.49,108.37,10.83,0,21.3-1.4,31.26-3.98,31.42,41.91,83.55,69.34,142.55,69.34,64.73,0,121.2-33,151.11-81.94,63.8-.57,115.34-48.85,115.34-108.34Z" fill="${fill}" stroke="${outline}" stroke-width="20"/>`;
+function scoopInner(fill: string, outline: string): SVGElement[] {
+  return [
+    svgEl('path', {
+      d: 'M566.75,340.67c0-29.85-12.97-56.87-33.96-76.47,4.8-9.98,7.44-20.71,7.44-31.9,0-38.29-30.62-71.33-74.92-86.77.33-3.07.51-6.17.51-9.3,0-69.72-84.29-126.24-188.26-126.24s-188.26,56.52-188.26,126.24c0,4,.29,7.95.83,11.86-34.94,15.4-58.48,44.25-58.48,77.34,0,18.21,7.15,35.15,19.39,49.26-25.1,19.88-41.05,49.47-41.05,82.54,0,59.85,52.15,108.37,116.49,108.37,10.83,0,21.3-1.4,31.26-3.98,31.42,41.91,83.55,69.34,142.55,69.34,64.73,0,121.2-33,151.11-81.94,63.8-.57,115.34-48.85,115.34-108.34Z',
+      fill,
+      stroke: outline,
+      'stroke-width': 20,
+    }),
+  ];
 }
 
 /** A live (open) eye: white sclera, black pupil with a catchlight highlight. */
-function eyeOpen(cx: number, cy: number, r: number, side: 'l' | 'r', pr: number): string {
-  return (
-    `<circle cx="${cx}" cy="${cy}" r="${r}" fill="#fff" stroke="#000" stroke-width="4"/>` +
-    `<g class="pupil pupil-${side}">` +
-    `<circle cx="${cx}" cy="${cy}" r="${pr}" fill="#000"/>` +
-    `<circle cx="${cx - pr * 0.3}" cy="${cy - pr * 0.35}" r="${pr * 0.4}" fill="#fff"/>` +
-    '</g>'
-  );
+function eyeOpen(cx: number, cy: number, r: number, side: 'l' | 'r', pr: number): SVGElement[] {
+  return [
+    svgEl('circle', { cx, cy, r, fill: '#fff', stroke: '#000', 'stroke-width': 4 }),
+    svgEl(
+      'g',
+      { class: `pupil pupil-${side}` },
+      svgEl('circle', { cx, cy, r: pr, fill: '#000' }),
+      svgEl('circle', {
+        cx: cx - pr * 0.3,
+        cy: cy - pr * 0.35,
+        r: pr * 0.4,
+        fill: '#fff',
+      })
+    ),
+  ];
 }
 
 /** A dead eye: white sclera crossed by an "X". */
-function eyeDead(cx: number, cy: number, r: number): string {
-  return (
-    `<circle cx="${cx}" cy="${cy}" r="${r}" fill="#fff" stroke="#000" stroke-width="4"/>` +
-    `<line x1="${cx - 15}" y1="${cy - 15}" x2="${cx + 15}" y2="${cy + 15}" stroke="#000" stroke-width="8" stroke-linecap="round"/>` +
-    `<line x1="${cx + 15}" y1="${cy - 15}" x2="${cx - 15}" y2="${cy + 15}" stroke="#000" stroke-width="8" stroke-linecap="round"/>`
-  );
+function eyeDead(cx: number, cy: number, r: number): SVGElement[] {
+  return [
+    svgEl('circle', { cx, cy, r, fill: '#fff', stroke: '#000', 'stroke-width': 4 }),
+    svgEl('line', {
+      x1: cx - 15,
+      y1: cy - 15,
+      x2: cx + 15,
+      y2: cy + 15,
+      stroke: '#000',
+      'stroke-width': 8,
+      'stroke-linecap': 'round',
+    }),
+    svgEl('line', {
+      x1: cx + 15,
+      y1: cy - 15,
+      x2: cx - 15,
+      y2: cy + 15,
+      stroke: '#000',
+      'stroke-width': 8,
+      'stroke-linecap': 'round',
+    }),
+  ];
 }
 
 /** Compose the eye-band SVG for the given state (`none` renders nothing). */
-function eyesSvg(state: 'open' | 'none' | 'dead', pr: number): string {
-  if (state === 'none') return '';
+function eyesSvg(state: 'open' | 'none' | 'dead', pr: number): SVGSVGElement | null {
+  if (state === 'none') return null;
   const L = LEFT_EYE;
   const R = RIGHT_EYE;
   const body =
     state === 'dead'
-      ? eyeDead(L.cx, L.cy, L.r) + eyeDead(R.cx, R.cy, R.r)
-      : eyeOpen(L.cx, L.cy, L.r, 'l', pr) + eyeOpen(R.cx, R.cy, R.r, 'r', pr);
-  return `<svg class="eyes-svg" viewBox="0 0 200 100" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">${body}</svg>`;
+      ? [...eyeDead(L.cx, L.cy, L.r), ...eyeDead(R.cx, R.cy, R.r)]
+      : [...eyeOpen(L.cx, L.cy, L.r, 'l', pr), ...eyeOpen(R.cx, R.cy, R.r, 'r', pr)];
+  return svgEl(
+    'svg',
+    {
+      class: 'eyes-svg',
+      viewBox: '0 0 200 100',
+      width: '100%',
+      height: '100%',
+      preserveAspectRatio: 'xMidYMid meet',
+    },
+    ...body
+  );
 }
 
 /**
@@ -187,6 +322,7 @@ const PILL_STYLE = `
   .eyes{position:absolute;pointer-events:none;} .eyes-svg{display:block;overflow:visible;}
   .label{position:relative;z-index:1;flex:1 1 auto;min-width:0;color:var(--label);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 `;
+const SHEET = sheet(PILL_STYLE);
 
 /**
  * `<slicc-pill>` — the cone/scoop identity chip from the prototype. A rounded
@@ -233,6 +369,7 @@ export class SliccPill extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+    this.#root.adoptedStyleSheets = [SHEET];
   }
 
   connectedCallback(): void {
@@ -326,7 +463,7 @@ export class SliccPill extends HTMLElement {
     const color = this.color ?? DEFAULT_COLOR[t];
     const active = this.active;
     const label = this.label;
-    const glyph =
+    const glyphInner =
       t === 'cone'
         ? coneInner(color, shade(color, -0.38), shade(color, 0.3))
         : scoopInner(color, shade(color, -0.32));
@@ -349,18 +486,46 @@ export class SliccPill extends HTMLElement {
     const pr = PUPIL_R * this.pupilScale;
     this.#maxOffset = Math.max(2, Math.min(MAX_OFFSET, LEFT_EYE.r - pr - 4));
 
-    const labelHtml = label != null ? escapeHtml(label) : '<slot></slot>';
+    const glyph = svgEl(
+      'svg',
+      {
+        class: 'glyph',
+        viewBox: cfg.vb,
+        preserveAspectRatio: 'xMidYMid meet',
+        style: `--g:${cfg.glyph}%`,
+      },
+      ...glyphInner
+    );
 
-    this.#root.innerHTML =
-      `<style>${PILL_STYLE}</style>` +
-      `<button class="pill ${active ? 'active' : ''}" part="pill" style="--accent:${escapeHtml(color)}">` +
-      '<span class="icon" part="icon">' +
-      `<span class="icon-inner" style="--tx:${tx}%;--ty:${ty}%;--zoom:${cfg.zoom};--ox:${ox}%;--oy:${oy}%;--ozoom:${oZoom.toFixed(4)}">` +
-      `<svg class="glyph" viewBox="${cfg.vb}" preserveAspectRatio="xMidYMid meet" style="--g:${cfg.glyph}%">${glyph}</svg>` +
-      `<span class="eyes" style="top:${e.top}%;left:${e.left}%;width:${e.width}%;height:${e.height}%">${eyesSvg(this.eyeState, pr)}</span>` +
-      '</span></span>' +
-      `<span class="label">${labelHtml}</span>` +
-      '</button>';
+    const eyesNode = eyesSvg(this.eyeState, pr);
+    const eyes = h('span', {
+      class: 'eyes',
+      style: `top:${e.top}%;left:${e.left}%;width:${e.width}%;height:${e.height}%`,
+    });
+    if (eyesNode) eyes.append(eyesNode);
+
+    const iconInner = h(
+      'span',
+      {
+        class: 'icon-inner',
+        style: `--tx:${tx}%;--ty:${ty}%;--zoom:${cfg.zoom};--ox:${ox}%;--oy:${oy}%;--ozoom:${oZoom.toFixed(4)}`,
+      },
+      glyph,
+      eyes
+    );
+
+    const icon = h('span', { class: 'icon', part: 'icon' }, iconInner);
+
+    const labelEl = h('span', { class: 'label' }, label != null ? label : h('slot'));
+
+    const button = h(
+      'button',
+      { class: `pill ${active ? 'active' : ''}`, part: 'pill', style: `--accent:${color}` },
+      icon,
+      labelEl
+    );
+
+    this.#root.replaceChildren(button);
 
     this.#pupilL = this.#root.querySelector('.pupil-l');
     this.#pupilR = this.#root.querySelector('.pupil-r');

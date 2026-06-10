@@ -1,6 +1,6 @@
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
-import { iconSvg } from '../internal/icons.js';
+import { append, h, sheet } from '../internal/dom.js';
+import { iconEl } from '../internal/icons.js';
 
 /**
  * Thinking-effort levels, in cycle order, lifted verbatim from the prototype's
@@ -28,52 +28,79 @@ const DEFAULT_THINKING: ThinkingLevel = 'bombastica';
 const PILL_ICON_SIZE = 13;
 
 /**
- * The model-pill glyph — lucide `sparkles`, rendered via the shared `iconSvg`
- * helper (NEVER the ✦ emoji glyph the prototype used). It carries the `.ic`
- * class so the `stroke:url(#meta-rainbow)` rule paints it with the rainbow
- * gradient, and the `model-icon` ::part hook.
+ * The model-pill glyph — lucide `sparkles`, rendered via the shared `iconEl`
+ * helper (NEVER the ✦ emoji glyph the prototype used) as a live `<svg>` element.
+ * It carries the `.ic` class so the `stroke:url(#meta-rainbow)` rule paints it
+ * with the rainbow gradient, and the `model-icon` ::part hook. A factory because
+ * a live element can live in only one place — re-renders need a fresh node.
  */
-const SPARKLES_SVG = iconSvg('sparkles', {
-  size: PILL_ICON_SIZE,
-  class: 'ic',
-  part: 'model-icon',
-});
+function sparklesIcon(): SVGSVGElement {
+  return iconEl('sparkles', { size: PILL_ICON_SIZE, class: 'ic', part: 'model-icon' });
+}
 
 /**
- * The thinking-pill glyph — lucide `brain`, rendered via the shared `iconSvg`
- * helper (NEVER a hand-rolled inline `<svg>`). It carries the `.brain` class so
- * the violet tint applies, and the `brain` ::part hook is preserved.
+ * The thinking-pill glyph — lucide `brain`, rendered via the shared `iconEl`
+ * helper (NEVER a hand-rolled inline `<svg>`) as a live `<svg>` element. It
+ * carries the `.brain` class so the violet tint applies, and the `brain` ::part
+ * hook is preserved.
  */
-const BRAIN_SVG = iconSvg('brain', {
-  size: PILL_ICON_SIZE,
-  class: 'brain',
-  part: 'brain',
-});
+function brainIcon(): SVGSVGElement {
+  return iconEl('brain', { size: PILL_ICON_SIZE, class: 'brain', part: 'brain' });
+}
 
 /**
  * The dropdown caret inside both pills — lucide `chevron-down` (NEVER the ▾
- * unicode glyph the prototype used). Rendered at the `.cx` muted size.
+ * unicode glyph the prototype used). Rendered at the `.cx` muted size. A factory
+ * because a live element can live in only one place — both pills need their own.
  */
-const CARET_SVG = iconSvg('chevron-down', { size: 11, part: 'caret' });
+function caretIcon(): SVGSVGElement {
+  return iconEl('chevron-down', { size: 11, part: 'caret' });
+}
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
 
 /**
  * A hidden `<svg>` carrying the rainbow `<linearGradient>` referenced by the
  * sparkles icon's `stroke:url(#meta-rainbow)`. The stops mirror the prototype's
  * `--rainbow` token (rose → amber → cyan → violet) so the model-pill glyph keeps
  * its signature rainbow stroke now that it is a real lucide `<svg>`, not the
- * gradient-clipped ✦ text the prototype shipped.
+ * gradient-clipped ✦ text the prototype shipped. Built via the SVG namespace
+ * (no innerHTML / string parsing).
  */
-const RAINBOW_DEFS =
-  '<svg width="0" height="0" aria-hidden="true" style="position:absolute">' +
-  '<defs><linearGradient id="meta-rainbow" x1="0" y1="0" x2="1" y2="0">' +
-  '<stop offset="0%" stop-color="#f43f5e"/>' +
-  '<stop offset="28%" stop-color="#f59e0b"/>' +
-  '<stop offset="64%" stop-color="#06b6d4"/>' +
-  '<stop offset="100%" stop-color="#8b5cf6"/>' +
-  '</linearGradient></defs></svg>';
+function rainbowDefs(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('width', '0');
+  svg.setAttribute('height', '0');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('style', 'position:absolute');
+
+  const defs = document.createElementNS(SVG_NS, 'defs');
+  const grad = document.createElementNS(SVG_NS, 'linearGradient');
+  grad.setAttribute('id', 'meta-rainbow');
+  grad.setAttribute('x1', '0');
+  grad.setAttribute('y1', '0');
+  grad.setAttribute('x2', '1');
+  grad.setAttribute('y2', '0');
+
+  const stops: ReadonlyArray<[string, string]> = [
+    ['0%', '#f43f5e'],
+    ['28%', '#f59e0b'],
+    ['64%', '#06b6d4'],
+    ['100%', '#8b5cf6'],
+  ];
+  for (const [offset, color] of stops) {
+    const stop = document.createElementNS(SVG_NS, 'stop');
+    stop.setAttribute('offset', offset);
+    stop.setAttribute('stop-color', color);
+    grad.appendChild(stop);
+  }
+  defs.appendChild(grad);
+  svg.appendChild(defs);
+  return svg;
+}
 
 /**
- * Per-instance stylesheet, lifted faithfully from the prototype `.meta` /
+ * Shared constructable stylesheet, lifted faithfully from the prototype `.meta` /
  * `.ctl` / `.brain` / `.hint` rules. All colors/spacing/fonts reference the
  * inherited design tokens (`--canvas`, `--line`, `--ink`, `--txt-2/3`,
  * `--violet`, `--rainbow`, `--ui`, `--ctl-h`) — none are re-declared here.
@@ -95,6 +122,7 @@ const STYLE = `
   .hint .sep{width:3px;height:3px;border-radius:50%;background:var(--line);}
   :host([narrow]) .hint{display:none;}
 `;
+const SHEET = sheet(STYLE);
 
 /**
  * `<slicc-composer-meta>` — the "Steep-style" meta row that sits below the
@@ -104,7 +132,7 @@ const STYLE = `
  * `brain` glyph + level label + caret), a flex spacer (`.mspacer`), and a
  * keyboard hint (`.hint` — `⏎` send / `⇧⏎` newline / "review before shipping").
  * The row is centered with a 680px max width. Every pill glyph is a real lucide
- * `<svg>` rendered through the shared `iconSvg` helper — never an emoji or a
+ * `<svg>` rendered through the shared `iconEl` helper — never an emoji or a
  * bespoke unicode-symbol glyph.
  *
  * Clicking the model pill emits a composed `model-change`; clicking the
@@ -143,6 +171,7 @@ export class SliccComposerMeta extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+    this.#root.adoptedStyleSheets = [SHEET];
   }
 
   connectedCallback(): void {
@@ -203,18 +232,48 @@ export class SliccComposerMeta extends HTMLElement {
     const thinking = this.thinking;
     const accented = thinking === ACCENTED_LEVEL;
 
-    this.#root.innerHTML =
-      `<style>${STYLE}</style>` +
-      RAINBOW_DEFS +
-      '<div class="meta" part="meta">' +
-      `<button type="button" class="ctl msel" part="model">${SPARKLES_SVG} ${escapeHtml(model)} <span class="cx">${CARET_SVG}</span></button>` +
-      `<button type="button" class="ctl tsel${accented ? ' x' : ''}" part="thinking">${BRAIN_SVG} <span class="tlabel">${escapeHtml(thinking)}</span> <span class="cx">${CARET_SVG}</span></button>` +
-      '<div class="mspacer"></div>' +
-      '<span class="hint" part="hint"><slot name="hint">' +
-      '<span class="kbd">⏎</span> send <span class="sep"></span> ' +
-      '<span class="kbd">⇧⏎</span> newline <span class="sep"></span> review before shipping' +
-      '</slot></span>' +
-      '</div>';
+    const modelBtn = h(
+      'button',
+      { type: 'button', class: 'ctl msel', part: 'model' },
+      sparklesIcon(),
+      ' ',
+      model,
+      ' ',
+      h('span', { class: 'cx' }, caretIcon())
+    );
+
+    const thinkingBtn = h(
+      'button',
+      { type: 'button', class: `ctl tsel${accented ? ' x' : ''}`, part: 'thinking' },
+      brainIcon(),
+      ' ',
+      h('span', { class: 'tlabel' }, thinking),
+      ' ',
+      h('span', { class: 'cx' }, caretIcon())
+    );
+
+    const hintSlot = h('slot', { name: 'hint' });
+    append(hintSlot, [
+      h('span', { class: 'kbd' }, '⏎'),
+      ' send ',
+      h('span', { class: 'sep' }),
+      ' ',
+      h('span', { class: 'kbd' }, '⇧⏎'),
+      ' newline ',
+      h('span', { class: 'sep' }),
+      ' review before shipping',
+    ]);
+
+    const meta = h(
+      'div',
+      { class: 'meta', part: 'meta' },
+      modelBtn,
+      thinkingBtn,
+      h('div', { class: 'mspacer' }),
+      h('span', { class: 'hint', part: 'hint' }, hintSlot)
+    );
+
+    this.#root.replaceChildren(rainbowDefs(), meta);
 
     this.#modelEl = this.#root.querySelector('.msel');
     this.#thinkingEl = this.#root.querySelector('.tsel');

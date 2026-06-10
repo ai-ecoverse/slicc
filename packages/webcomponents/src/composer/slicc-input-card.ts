@@ -1,4 +1,5 @@
 import { define } from '../internal/define.js';
+import { h } from '../internal/dom.js';
 // Renders these child custom elements internally — owns their registration.
 import '../add-menu/slicc-add-menu.js';
 import '../primitives/slicc-send-button.js';
@@ -227,8 +228,7 @@ export class SliccInputCard extends HTMLElement {
       for (const node of toolbarChildren) this.#toolbar.appendChild(node);
     } else {
       // No caller toolbar — compose the prototype default controls by tag.
-      this.#toolbar.innerHTML =
-        '<slicc-add-menu></slicc-add-menu><slicc-send-button></slicc-send-button>';
+      this.#toolbar.append(h('slicc-add-menu'), h('slicc-send-button'));
     }
 
     this.#card.append(this.#textarea, this.#toolbar);

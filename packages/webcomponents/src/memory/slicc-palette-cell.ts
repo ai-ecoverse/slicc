@@ -1,8 +1,8 @@
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
+import { h, sheet } from '../internal/dom.js';
 
 /**
- * Per-instance stylesheet, lifted verbatim from the prototype dip palette
+ * Shared constructable stylesheet, lifted verbatim from the prototype dip palette
  * (`proto/StellarRubySwift.html` — `.dip .pcell`, `.ch`, `.cl`, `.sel`). The
  * cell is a bordered, rounded clickable card over a semi-transparent
  * canvas-mix surface holding a 38px color chip and a 10px `--ui` label.
@@ -37,6 +37,7 @@ const STYLE = `
 :host-context(.dark) .ch,
 :host-context([data-theme="dark"]) .ch { filter: brightness(.55) saturate(.85); }
 `;
+const SHEET = sheet(STYLE);
 
 /**
  * `<slicc-palette-cell>` — the palette-picker swatch cell from the prototype
@@ -73,6 +74,7 @@ export class SliccPaletteCell extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+    this.#root.adoptedStyleSheets = [SHEET];
   }
 
   connectedCallback(): void {
@@ -183,11 +185,9 @@ export class SliccPaletteCell extends HTMLElement {
     this.setAttribute('aria-pressed', this.selected ? 'true' : 'false');
     const color = this.color ?? 'transparent';
     const label = this.label;
-    const labelHtml = label != null ? escapeHtml(label) : '<slot></slot>';
-    this.#root.innerHTML =
-      `<style>${STYLE}</style>` +
-      `<div class="ch" part="chip" style="background:${escapeHtml(color)}"></div>` +
-      `<div class="cl" part="label">${labelHtml}</div>`;
+    const chip = h('div', { class: 'ch', part: 'chip', style: `background:${color}` });
+    const caption = h('div', { class: 'cl', part: 'label' }, label != null ? label : h('slot'));
+    this.#root.replaceChildren(chip, caption);
   }
 }
 

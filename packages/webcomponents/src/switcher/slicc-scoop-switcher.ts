@@ -1,5 +1,5 @@
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
+import { h } from '../internal/dom.js';
 // The switcher instantiates <slicc-pill> chips and the <slicc-scoop-overflow>
 // more-popup, so it owns their registration (side-effect imports) — otherwise
 // the created elements would be inert empty boxes.
@@ -340,26 +340,29 @@ export class SliccScoopSwitcher extends HTMLElement {
   /** Rebuild the chip row from the scoop list (cone-first ordering preserved). */
   #render(): void {
     const active = this.active;
-    const html = this.#scoops
-      .map((s) => {
-        const key = s.key;
-        const type = s.type === 'cone' || key === 'cone' ? 'cone' : 'scoop';
-        const color = s.color ?? '';
-        const label = s.label ?? key;
-        const eyes = s.eyes ?? (type === 'cone' ? 'open' : 'none');
-        const isActive = active != null && active === key;
-        const cls = `scoop${s.ephemeral ? ' ephemeral' : ''}`;
-        const hue = hueForKey(key);
-        return (
-          `<slicc-pill class="${cls}" data-k="${escapeHtml(key)}" type="${type}"` +
-          (color ? ` color="${escapeHtml(color)}"` : '') +
-          ` eyes="${eyes}" label="${escapeHtml(label)}"` +
-          (isActive ? ' active' : '') +
-          ` style="--h:${hue}"></slicc-pill>`
-        );
-      })
-      .join('');
-    this.innerHTML = html;
+    const pills = this.#scoops.map((s) => {
+      const key = s.key;
+      const type = s.type === 'cone' || key === 'cone' ? 'cone' : 'scoop';
+      const label = s.label ?? key;
+      const eyes = s.eyes ?? (type === 'cone' ? 'open' : 'none');
+      const isActive = active != null && active === key;
+      const hue = hueForKey(key);
+      // `h()` setAttribute-escapes every value and omits false/nullish props, so
+      // the chip's attributes (data-k, color, label, the optional `active` flag)
+      // round-trip as text — no markup-injection surface. `style="--h:…"` sets the
+      // chip's accent custom property exactly as the prototype string did.
+      return h('slicc-pill', {
+        class: `scoop${s.ephemeral ? ' ephemeral' : ''}`,
+        'data-k': key,
+        type,
+        color: s.color ? s.color : false,
+        eyes,
+        label,
+        active: isActive,
+        style: `--h:${hue}`,
+      });
+    });
+    this.replaceChildren(...pills);
   }
 
   /** Toggle the `active` class/attribute on chips to match the `active` property
