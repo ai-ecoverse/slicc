@@ -1,5 +1,6 @@
 import { define } from '../internal/define.js';
-import { iconSvg } from '../internal/icons.js';
+import { h, sheet } from '../internal/dom.js';
+import { iconEl } from '../internal/icons.js';
 import { type SliccTheme, setTheme } from './tokens.js';
 
 // Lifted verbatim from the prototype `.themetgl` rule (proto/StellarRubySwift.html):
@@ -23,19 +24,20 @@ const STYLE = `
 .themetgl:hover { background: color-mix(in srgb, var(--ink) 8%, var(--ghost)); }
 .themetgl svg { display: block; }
 `;
+const SHEET = sheet(STYLE);
 
 /** Square pixel size of the lucide glyph, matching the prototype's 14px control band. */
 const ICON_SIZE = 16;
 
 /**
- * Lucide glyph shown for each resolved theme — the icon names the action's
+ * Lucide glyph name shown for each resolved theme — the icon names the action's
  * destination (light shows a `moon` because clicking switches *to* dark; dark
  * shows a `sun` because clicking switches *to* light), matching the prototype.
- * Rendered via the shared `iconSvg` helper — never emoji.
+ * Rendered via the shared `iconEl` helper into a live `<svg>` — never emoji.
  */
 const GLYPH: Record<SliccTheme, string> = {
-  light: iconSvg('moon', { size: ICON_SIZE }),
-  dark: iconSvg('sun', { size: ICON_SIZE }),
+  light: 'moon',
+  dark: 'sun',
 };
 
 /** Button `title` (tooltip) for each resolved theme — describes the action the click performs. */
@@ -74,8 +76,15 @@ export class SliccThemeToggle extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
-    this.#root.innerHTML = `<style>${STYLE}</style><button class="themetgl" part="button" type="button" aria-pressed="false"><slot name="glyph-light">${GLYPH.light}</slot><slot name="glyph-dark" hidden>${GLYPH.dark}</slot></button>`;
-    this.#button = this.#root.querySelector('button');
+    this.#root.adoptedStyleSheets = [SHEET];
+    const button = h(
+      'button',
+      { class: 'themetgl', part: 'button', type: 'button', 'aria-pressed': 'false' },
+      h('slot', { name: 'glyph-light' }, iconEl(GLYPH.light, { size: ICON_SIZE })),
+      h('slot', { name: 'glyph-dark', hidden: true }, iconEl(GLYPH.dark, { size: ICON_SIZE }))
+    ) as HTMLButtonElement;
+    this.#root.replaceChildren(button);
+    this.#button = button;
   }
 
   connectedCallback(): void {

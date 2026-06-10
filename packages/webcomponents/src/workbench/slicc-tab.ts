@@ -1,6 +1,6 @@
 import { define } from '../internal/define.js';
-import { escapeHtml } from '../internal/html.js';
-import { iconSvg } from '../internal/icons.js';
+import { h, sheet } from '../internal/dom.js';
+import { iconEl } from '../internal/icons.js';
 
 /**
  * Workbench tab styles, lifted from the prototype `.tab` / `.tab.sp`
@@ -15,7 +15,7 @@ import { iconSvg } from '../internal/icons.js';
  * prototype's heavier dark percentages (violet 18% bg / 40% border).
  *
  * The sprinkle badge (`.sg`) and close affordance (`.x`) render **lucide**
- * `<svg>` glyphs (`sparkles` / `x`) via the shared `iconSvg` helper — never
+ * `<svg>` glyphs (`sparkles` / `x`) via the shared `iconEl` helper — never
  * emoji or bespoke unicode symbols. The badge svg is white (`#fff`) on the
  * rainbow chip; the close svg inherits `currentColor` so it tracks the idle /
  * hover `--txt-3` → `--ink` palette automatically.
@@ -37,6 +37,7 @@ const STYLE = `
 .x:hover{background:var(--line);color:var(--ink);}
 .sg svg,.x svg{display:block;}
 `;
+const SHEET = sheet(STYLE);
 
 /** Rendered lucide glyph size (px) for the `.sg` badge and `.x` close icons. */
 const ICON_SIZE = 13;
@@ -95,6 +96,7 @@ export class SliccTab extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+    this.#root.adoptedStyleSheets = [SHEET];
   }
 
   connectedCallback(): void {
@@ -180,26 +182,43 @@ export class SliccTab extends HTMLElement {
   #render(): void {
     const isSprinkle = this.kind === 'sprinkle';
     const cls = `tab${isSprinkle ? ' sp' : ''}${this.active ? ' on' : ''}`;
-    const dataT = this.tabId != null ? ` data-t="${escapeHtml(this.tabId)}"` : '';
 
-    let lead = '';
+    const button = h('button', { class: cls, part: 'tab', type: 'button' });
+    if (this.tabId != null) button.setAttribute('data-t', this.tabId);
+
     if (isSprinkle) {
       const badgeIcon = this.badge ?? 'sparkles';
-      lead = `<span class="sg" part="badge" aria-hidden="true">${iconSvg(badgeIcon, { size: ICON_SIZE })}</span>`;
+      button.append(
+        h(
+          'span',
+          { class: 'sg', part: 'badge', 'aria-hidden': 'true' },
+          iconEl(badgeIcon, { size: ICON_SIZE })
+        )
+      );
     } else if (this.glyph != null) {
-      lead = `<span class="gl" part="glyph" aria-hidden="true">${escapeHtml(this.glyph)}</span>`;
+      button.append(h('span', { class: 'gl', part: 'glyph', 'aria-hidden': 'true' }, this.glyph));
     }
 
     const label = this.label;
-    const labelHtml = label != null ? escapeHtml(label) : '<slot></slot>';
+    button.append(label != null ? document.createTextNode(label) : h('slot'));
 
-    const close = this.closable
-      ? `<span class="x" part="close" data-close="" role="button" aria-label="Close tab">${iconSvg('x', { size: ICON_SIZE })}</span>`
-      : '';
+    if (this.closable) {
+      button.append(
+        h(
+          'span',
+          {
+            class: 'x',
+            part: 'close',
+            'data-close': '',
+            role: 'button',
+            'aria-label': 'Close tab',
+          },
+          iconEl('x', { size: ICON_SIZE })
+        )
+      );
+    }
 
-    this.#root.innerHTML =
-      `<style>${STYLE}</style>` +
-      `<button class="${cls}" part="tab" type="button"${dataT}>${lead}${labelHtml}${close}</button>`;
+    this.#root.replaceChildren(button);
   }
 
   #bind(): void {
