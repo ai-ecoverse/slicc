@@ -76,15 +76,15 @@ export const Webhook: Story = {
 };
 
 /**
- * Focuses the header affordance: the prototype's 🔔 emoji is now the lucide
- * `bell` icon (`iconEl('bell', { size: 14 })`), inheriting the amber header
- * color via `stroke: currentColor`. Review the crisp vector glyph here.
+ * Focuses the header affordance: the prototype's 🔔 emoji is now a lucide icon
+ * chosen by lick kind (here `webhook`), inheriting the amber header color via
+ * `stroke: currentColor`. Review the crisp vector glyph here.
  */
-export const BellIcon: Story = {
+export const HeaderIcon: Story = {
   args: {
     kind: 'webhook',
     'no-animate': true,
-    bodyHtml: 'The header bell is a <b>lucide</b> icon, not an emoji — vector, themeable, crisp.',
+    bodyHtml: 'The header glyph is a <b>lucide</b> icon, not an emoji — vector, themeable, crisp.',
   },
 };
 
@@ -97,7 +97,7 @@ export const Dark: Story = {
   },
 };
 
-/** A cron-triggered lick — kind variant via the header text. */
+/** A cron-triggered lick — the header shows the lucide `clock` glyph. */
 export const Cron: Story = {
   args: {
     kind: 'cron',
@@ -105,7 +105,7 @@ export const Cron: Story = {
   },
 };
 
-/** A workflow-completion lick with a custom pill label. */
+/** A workflow-completion lick — the header shows the lucide `workflow` glyph. */
 export const WorkflowDone: Story = {
   args: {
     kind: 'workflow',
@@ -158,5 +158,43 @@ export const CollapsibleClosed: Story = {
     collapsible: true,
     collapsed: true,
     bodyHtml: 'This body is hidden until the header is clicked.',
+  },
+};
+
+/**
+ * The icon-by-kind mapping in one frame: `webhook` → webhook glyph, `cron` →
+ * clock, `workflow` → workflow glyph, and an unknown kind → the default bell.
+ * Every card is right-aligned in the column.
+ */
+export const IconsByKind: Story = {
+  render: () => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;flex-direction:column;gap:4px;max-width:560px;';
+    const rows: [string, string][] = [
+      ['webhook', 'A support <b>webhook</b> pings the session.'],
+      ['cron', 'A nightly <b>cron</b> job fired on schedule.'],
+      ['workflow', 'A <b>workflow</b> run finished, all green.'],
+      ['ping', 'An <b>unknown</b> kind keeps the default bell.'],
+    ];
+    for (const [kind, body] of rows) {
+      const el = build({ kind, 'no-animate': true, bodyHtml: body });
+      wrap.appendChild(el);
+    }
+    return wrap;
+  },
+};
+
+/**
+ * Right-alignment across collapse/expand: the collapsible card hugs the
+ * column's right edge whether the body is shown or hidden — click the header to
+ * toggle and confirm the right edge stays put.
+ */
+export const RightAligned: Story = {
+  args: {
+    kind: 'workflow',
+    'event-label': 'done',
+    collapsible: true,
+    bodyHtml:
+      'A right-aligned <b>workflow</b> lick. Collapsing hides this body, but the card stays pinned to the right.',
   },
 };

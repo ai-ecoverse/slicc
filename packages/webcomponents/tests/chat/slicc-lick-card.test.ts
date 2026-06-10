@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { SliccLickCard } from '../../src/chat/slicc-lick-card.js';
+import { iconEl } from '../../src/internal/icons.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
 
 function mount(setup?: (el: SliccLickCard) => void): SliccLickCard {
@@ -7,6 +8,11 @@ function mount(setup?: (el: SliccLickCard) => void): SliccLickCard {
   setup?.(el);
   document.body.appendChild(el);
   return el;
+}
+
+/** Inner shape markup of a lucide icon at the header's 14px size, for comparison. */
+function iconShape(name: string): string {
+  return iconEl(name, { size: 14 }).innerHTML;
 }
 
 /** The outer `.lick` card inside the shadow root. */
@@ -47,16 +53,16 @@ describe('slicc-lick-card', () => {
     expect(root?.querySelector('.lick .lb')).toBeTruthy();
   });
 
-  it('renders a lucide bell <svg> (not the 🔔 emoji) and the "lick · <kind>" header wording', () => {
+  it('renders a lucide header <svg> (not the 🔔 emoji) and the "lick · <kind>" header wording', () => {
     const el = mount((e) => {
       e.kind = 'webhook';
     });
     const bell = el.shadowRoot?.querySelector('.bell') as HTMLElement;
-    // The bell affordance is now a lucide <svg>, never the 🔔 emoji glyph.
+    // The header affordance is now a lucide <svg>, never the 🔔 emoji glyph.
     const svg = bell.querySelector('svg');
     expect(svg).toBeTruthy();
     expect(svg?.namespaceURI).toBe('http://www.w3.org/2000/svg');
-    // lucide bell renders path geometry (not an empty fallback <svg>).
+    // lucide renders path geometry (not an empty fallback <svg>).
     expect(svg?.querySelector('path')).toBeTruthy();
     // Requested 14px size flows through to the rendered icon.
     expect(svg?.getAttribute('width')).toBe('14');
@@ -65,6 +71,57 @@ describe('slicc-lick-card', () => {
     expect(bell.textContent ?? '').not.toContain('🔔');
     const kindEl = el.shadowRoot?.querySelector('.kind') as HTMLElement;
     expect(kindEl.textContent?.replace(/\s+/g, ' ').trim()).toBe('lick · webhook');
+  });
+
+  describe('header icon by lick kind', () => {
+    function bellSvg(el: SliccLickCard): SVGSVGElement {
+      return el.shadowRoot?.querySelector('.bell svg') as SVGSVGElement;
+    }
+
+    it('uses the webhook glyph for a webhook lick', () => {
+      const el = mount((e) => {
+        e.kind = 'webhook';
+      });
+      expect(bellSvg(el).innerHTML).toBe(iconShape('webhook'));
+    });
+
+    it('uses the clock glyph for a cron lick', () => {
+      const el = mount((e) => {
+        e.kind = 'cron';
+      });
+      expect(bellSvg(el).innerHTML).toBe(iconShape('clock'));
+    });
+
+    it('uses the workflow glyph for a workflow lick', () => {
+      const el = mount((e) => {
+        e.kind = 'workflow';
+      });
+      expect(bellSvg(el).innerHTML).toBe(iconShape('workflow'));
+    });
+
+    it('falls back to the bell glyph for an unknown / unset kind', () => {
+      const unknown = mount((e) => {
+        e.kind = 'mystery';
+      });
+      expect(bellSvg(unknown).innerHTML).toBe(iconShape('bell'));
+      const unset = mount();
+      expect(bellSvg(unset).innerHTML).toBe(iconShape('bell'));
+    });
+
+    it('is case-insensitive on the kind', () => {
+      const el = mount((e) => {
+        e.kind = 'Webhook';
+      });
+      expect(bellSvg(el).innerHTML).toBe(iconShape('webhook'));
+    });
+
+    it('swaps the glyph live when the kind changes', () => {
+      const el = mount((e) => {
+        e.kind = 'webhook';
+      });
+      el.kind = 'cron';
+      expect(bellSvg(el).innerHTML).toBe(iconShape('clock'));
+    });
   });
 
   it('keeps the entire shadow root free of the 🔔 emoji glyph', () => {
@@ -197,12 +254,36 @@ describe('slicc-lick-card', () => {
       expect(cs.color).toBe('rgb(58, 38, 0)');
     });
 
-    it('renders rounded full-width card geometry', () => {
+    it('renders rounded card geometry', () => {
       const el = mount();
       const cs = getComputedStyle(card(el));
       expect(cs.borderTopLeftRadius).toBe('12px');
-      // Block-level host stretches the card to the container width.
       expect(card(el).offsetWidth).toBeGreaterThan(0);
+    });
+
+    it('right-aligns the card in the chat column (host flex, end-justified)', () => {
+      const el = mount();
+      const cs = getComputedStyle(el);
+      expect(cs.display).toBe('flex');
+      expect(cs.justifyContent).toBe('flex-end');
+    });
+
+    it('keeps the card pinned to the right edge across collapse / expand', () => {
+      const wrap = document.createElement('div');
+      wrap.style.width = '500px';
+      document.body.appendChild(wrap);
+      const el = document.createElement('slicc-lick-card') as SliccLickCard;
+      el.kind = 'webhook';
+      el.collapsible = true;
+      el.body =
+        'A long lick body that, when expanded, makes the card wider than its collapsed header.';
+      wrap.appendChild(el);
+
+      const rightWhenExpanded = card(el).getBoundingClientRect().right;
+      el.collapsed = true;
+      const rightWhenCollapsed = card(el).getBoundingClientRect().right;
+      // The right edge stays put even though the card width shrinks when collapsed.
+      expect(Math.abs(rightWhenExpanded - rightWhenCollapsed)).toBeLessThanOrEqual(1);
     });
 
     it('lightens the header to #e5b35a under theme="dark"', () => {

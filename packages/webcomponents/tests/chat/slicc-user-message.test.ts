@@ -123,4 +123,75 @@ describe('slicc-user-message', () => {
     const bubble = el.shadowRoot?.querySelector('.b') as HTMLElement;
     expect(getComputedStyle(bubble).color).toBe('rgb(10, 10, 10)');
   });
+
+  describe('markdown body (setBodyHtml)', () => {
+    it('renders rendered-markdown HTML into the bubble and wins over text/slot', () => {
+      const el = mount({ text: 'plain' });
+      el.setBodyHtml('<p>run <code>npm test</code> then <a href="https://x.dev">open</a></p>');
+      const bubble = el.shadowRoot?.querySelector('.b') as HTMLElement;
+      expect(bubble.querySelector('code')?.textContent).toBe('npm test');
+      expect(bubble.querySelector('a')?.getAttribute('href')).toBe('https://x.dev');
+      // The text attribute no longer wins once body HTML is set.
+      expect(bubble.textContent).not.toBe('plain');
+    });
+
+    it('styles inline code in the mono font with a currentColor-tinted chip', () => {
+      const el = mount();
+      el.setBodyHtml('<p>use <code>--canvas</code></p>');
+      const code = el.shadowRoot?.querySelector('.b code') as HTMLElement;
+      const cs = getComputedStyle(code);
+      expect(cs.fontFamily.toLowerCase()).toContain('mono');
+      // The chip background is derived from currentColor (not transparent/none).
+      expect(cs.backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
+    });
+
+    it('renders a fenced code block and a list', () => {
+      const el = mount();
+      el.setBodyHtml('<ul><li>a</li><li>b</li></ul><pre><code>x = 1</code></pre>');
+      const bubble = el.shadowRoot?.querySelector('.b') as HTMLElement;
+      expect(bubble.querySelectorAll('li')).toHaveLength(2);
+      expect(bubble.querySelector('pre code')?.textContent).toBe('x = 1');
+    });
+  });
+
+  describe('attachments (setAttachments)', () => {
+    it('renders an image attachment as a right-aligned thumbnail above the bubble', () => {
+      const el = mount({ text: 'see this' });
+      el.setAttachments([{ name: 'p.png', kind: 'image', src: 'data:image/png;base64,AAAA' }]);
+      const row = el.shadowRoot?.querySelector('.attachments') as HTMLElement;
+      expect(row).not.toBeNull();
+      expect(getComputedStyle(row).justifyContent).toBe('flex-end');
+      const img = row.querySelector('.attachment-chip--image img') as HTMLImageElement;
+      expect(img.getAttribute('src')).toBe('data:image/png;base64,AAAA');
+      // The attachment row precedes the bubble in the stack.
+      const stack = el.shadowRoot?.querySelector('.stack') as HTMLElement;
+      const kids = Array.from(stack.children).map((n) => n.className);
+      expect(kids[0]).toBe('attachments');
+      expect(kids[1]).toBe('b');
+    });
+
+    it('renders a non-image attachment as a lucide file chip with name + meta', () => {
+      const el = mount({ text: 'doc' });
+      el.setAttachments([{ name: 'tokens.css', kind: 'text', mime: 'text/css', size: 2048 }]);
+      const chip = el.shadowRoot?.querySelector('.attachment-chip--text') as HTMLElement;
+      expect(chip.querySelector('.attachment-chip__visual svg')).toBeInstanceOf(SVGSVGElement);
+      expect(chip.querySelector('.attachment-chip__name')?.textContent).toBe('tokens.css');
+      expect(chip.querySelector('.attachment-chip__meta')?.textContent).toBe('text/css · 2.0 KB');
+    });
+
+    it('omits the bubble for an image-only message (no text / slot)', () => {
+      const el = mount();
+      el.setAttachments([{ name: 's.png', kind: 'image', src: 'data:image/png;base64,AAAA' }]);
+      expect(el.shadowRoot?.querySelector('.attachments')).not.toBeNull();
+      expect(el.shadowRoot?.querySelector('.b')).toBeNull();
+    });
+
+    it('replaces attachments on a subsequent call', () => {
+      const el = mount({ text: 'x' });
+      el.setAttachments([{ name: 'a.png', kind: 'image', src: 'data:image/png;base64,AAAA' }]);
+      el.setAttachments([{ name: 'b.txt', kind: 'text' }]);
+      expect(el.shadowRoot?.querySelectorAll('.attachment-chip')).toHaveLength(1);
+      expect(el.shadowRoot?.querySelector('.attachment-chip__name')?.textContent).toBe('b.txt');
+    });
+  });
 });

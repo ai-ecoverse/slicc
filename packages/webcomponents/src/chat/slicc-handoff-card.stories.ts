@@ -44,7 +44,10 @@ const meta: Meta<HandoffArgs> = {
 export default meta;
 type Story = StoryObj<HandoffArgs>;
 
-/** The handoff approval card: violet avatar + label over a body paragraph. */
+/**
+ * The handoff approval card: violet avatar + a label led by a lucide **hand**
+ * glyph over a body paragraph. The hand glyph is an `<svg>`, never an emoji.
+ */
 export const Handoff: Story = {
   args: {
     variant: 'handoff',

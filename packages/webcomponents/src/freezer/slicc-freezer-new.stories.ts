@@ -33,10 +33,14 @@ const meta: Meta<FreezerNewArgs> = {
     const el = document.createElement('slicc-freezer-new');
     if (expanded) el.setAttribute('expanded', '');
     if (label) el.setAttribute('label', label);
-    el.addEventListener('new-session', () => {
-      // eslint-disable-next-line no-console
-      console.log('new-session');
-    });
+    // The three-state gesture (single / double / long-press) + the expanded
+    // legend buttons all surface as distinct events — log each for review.
+    for (const type of ['new-chat-save', 'new-chat-skip', 'new-chat-erase']) {
+      el.addEventListener(type, () => {
+        // eslint-disable-next-line no-console
+        console.log(type);
+      });
+    }
     return railFrame(el, Boolean(expanded));
   },
 };
@@ -47,7 +51,11 @@ type Story = StoryObj<FreezerNewArgs>;
 /** Collapsed — icon-only, the label collapsed to zero width (rail at rest). */
 export const Collapsed: Story = { args: { expanded: false } };
 
-/** Expanded — the "New chat" label fades in beside the context-tinted badge. */
+/**
+ * Expanded — the "New chat" label fades in beside the context-tinted badge, and
+ * the three-state gesture actions (save / skip memory / erase) are surfaced as a
+ * directly-clickable legend below the button.
+ */
 export const Expanded: Story = { args: { expanded: true } };
 
 /** Hover — ghost background, surfaced via the global Pseudo States toolbar. */

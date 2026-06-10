@@ -12,9 +12,10 @@ import { iconEl } from '../internal/icons.js';
 //     <div class="lb"><html></div>
 //   </div>
 //
-// The prototype's 🔔 emoji in `.bell` is replaced here by the lucide `bell`
-// icon (`iconEl('bell', { size: 14 })`) — the library never ships emoji or
-// bespoke unicode glyphs; every symbol comes from lucide via the shared helper.
+// The prototype's 🔔 emoji in `.bell` is replaced here by a lucide icon chosen
+// by lick kind (`webhook` / `clock` for cron / `workflow`), defaulting to `bell`
+// — the library never ships emoji or bespoke unicode glyphs; every symbol comes
+// from lucide via the shared helper.
 //
 // An amber-tinted rounded card with a bell-iconed "lick · <kind>" header, an
 // amber "event" pill pushed to the right (`.lk`), and a body line (`.lb`) whose
@@ -29,14 +30,38 @@ import { iconEl } from '../internal/icons.js';
 // reproduced verbatim (amber 9% over #fff, amber-45%/line border, #9a6300 header).
 // ---------------------------------------------------------------------------
 
-/** Pixel size of the lucide `bell` icon in the header (replaces the prototype `🔔`). */
-const BELL_ICON_SIZE = 14;
+/** Pixel size of the lucide header icon (replaces the prototype `🔔`). */
+const HEADER_ICON_SIZE = 14;
 /** Default text of the right-aligned `.lk` pill (prototype: "event"). */
 const DEFAULT_EVENT_LABEL = 'event';
 
+/**
+ * Lucide header icon per lick kind — a webhook gets a `webhook` glyph, a cron a
+ * `clock`, a workflow a `workflow` glyph. Unknown / unset kinds keep the
+ * prototype's default `bell`. The icon inherits the amber header color via
+ * `stroke: currentColor`.
+ */
+const KIND_ICON: Record<string, string> = {
+  webhook: 'webhook',
+  cron: 'clock',
+  workflow: 'workflow',
+};
+/** Fallback header glyph (the prototype's `🔔`, now the lucide `bell`). */
+const DEFAULT_KIND_ICON = 'bell';
+
+/** Resolve the header icon name for a lick kind (case-insensitive; default `bell`). */
+function iconForKind(kind: string | null): string {
+  return (kind && KIND_ICON[kind.toLowerCase()]) || DEFAULT_KIND_ICON;
+}
+
 const STYLE = `
 :host{
-  display:block;width:100%;
+  /* Licks are right-aligned in the chat column (mirroring the lickIn slide-in
+     from the right): the host is a full-width flex row that pushes the card to
+     the right edge, and the card shrinks to its content. This keeps the right
+     edge pinned across collapse/expand — the card width changes with content,
+     but it always hugs the column's right side. */
+  display:flex;justify-content:flex-end;width:100%;
   font-family:var(--ui,"adobe-clean","Inter",system-ui,sans-serif);
   /* light defaults, lifted verbatim from the prototype */
   --lick-bg:color-mix(in srgb,var(--amber) 9%,#fff);
@@ -60,6 +85,9 @@ const STYLE = `
 
 .lick{
   margin:2px 0 16px;
+  /* Shrink to content and cap the width so the right-aligned card never spans
+     the full column; the body wraps within this cap. */
+  max-width:85%;
   border:1px solid var(--lick-border);
   background:var(--lick-bg);
   border-radius:12px;
@@ -102,9 +130,11 @@ const MIDDOT = '·';
  * `<slicc-lick-card>` — the **lick notification card** from the prototype chat
  * thread (`.lick`). A lick is an external event (webhook / cron / workflow
  * completion); this is the amber-tinted card that announces one. It has a
- * bell-iconed "lick · <kind>" header (`.lh` + `.bell`), an amber "event" pill
+ * kind-iconed "lick · <kind>" header (`.lh` + `.bell`) — a `webhook` / `clock`
+ * (cron) / `workflow` lucide glyph, defaulting to `bell` — an amber "event" pill
  * shoved to the right (`.lk`), and a body line (`.lb`) that slides in from the
- * right via the `lickIn` keyframe.
+ * right via the `lickIn` keyframe. The card is right-aligned in the chat column
+ * and shrinks to its content, keeping its right edge pinned across collapse.
  *
  * Self-contained shadow DOM. All surfaces theme via inherited tokens
  * (`--amber`, `--line`, `--canvas`, `--ink`, `--ui`); dark mode flips through the
@@ -125,7 +155,7 @@ const MIDDOT = '·';
  * @attr theme - `light` | `dark`; per-element override of the inherited theme
  * @csspart card - the outer `.lick` card
  * @csspart header - the `.lh` header row
- * @csspart bell - the `.bell` span wrapping the lucide `bell` `<svg>`
+ * @csspart bell - the `.bell` span wrapping the lucide kind `<svg>` (webhook/clock/workflow/bell)
  * @csspart kind - the "lick · <kind>" label span
  * @csspart event - the right-aligned amber `.lk` pill
  * @csspart body - the `.lb` body line
@@ -256,9 +286,10 @@ export class SliccLickCard extends HTMLElement {
     // a hair-space around the middot. When no kind is set we still show "lick ·".
     const kindText = kind ? `lick ${MIDDOT} ${kind}` : `lick ${MIDDOT}`;
 
-    // Bell affordance: a live lucide <svg> element inside the `.bell` span.
+    // Header affordance: a live lucide <svg> element inside the `.bell` span,
+    // chosen by lick kind (webhook / cron / workflow), defaulting to `bell`.
     const bell = h('span', { class: 'bell', part: 'bell', 'aria-hidden': true });
-    bell.append(iconEl('bell', { size: BELL_ICON_SIZE }));
+    bell.append(iconEl(iconForKind(kind), { size: HEADER_ICON_SIZE }));
 
     // The header keeps the prototype's trailing-space text nodes after the bell
     // span and after the kind label (`</span> ` / `${kindHtml} `) verbatim.

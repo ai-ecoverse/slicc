@@ -5,6 +5,7 @@ interface FreezerCardArgs {
   title?: string;
   meta?: string;
   slug?: string;
+  icon?: string;
   expanded?: boolean;
   thawed?: boolean;
   hidden?: boolean;
@@ -16,6 +17,7 @@ function makeCard(args: FreezerCardArgs): HTMLElement {
   if (args.title) el.setAttribute('title', args.title);
   if (args.meta) el.setAttribute('meta', args.meta);
   if (args.slug) el.setAttribute('slug', args.slug);
+  if (args.icon) el.setAttribute('icon', args.icon);
   if (args.expanded) el.setAttribute('expanded', '');
   if (args.thawed) el.setAttribute('thawed', '');
   if (args.hidden) el.setAttribute('hidden', '');
@@ -30,6 +32,7 @@ const meta: Meta<FreezerCardArgs> = {
     title: { control: 'text', description: 'Session heading (.fzt)' },
     meta: { control: 'text', description: 'Meta line (.fzm)' },
     slug: { control: 'text', description: 'Session id, surfaced in freezer-card-select' },
+    icon: { control: 'text', description: 'Optional lucide icon name (overrides the snowflake)' },
     expanded: {
       control: 'boolean',
       description: 'Fade in the title+meta (collapsed = badge only)',
@@ -67,6 +70,38 @@ export const Thawing: Story = {
 /** Search-hidden — the prototype's `.match-hidden` (`display: none`). Renders nothing. */
 export const SearchHidden: Story = {
   args: { ...SAMPLE, expanded: true, hidden: true },
+};
+
+/**
+ * Custom icon — the snowflake is the default, but `icon` swaps in any lucide glyph
+ * (here `flame`) inside the same circular badge for a per-session marker.
+ */
+export const CustomIcon: Story = {
+  args: { ...SAMPLE, expanded: true, icon: 'flame' },
+};
+
+/**
+ * A rail mixing the default snowflake with a few custom icons (`flame`,
+ * `git-branch`, `bug`) — shows the badge staying visually consistent while the
+ * glyph varies per session.
+ */
+export const CustomIconRail: Story = {
+  render: () => {
+    const rail = document.createElement('div');
+    rail.style.cssText =
+      'display:flex;flex-direction:column;gap:2px;width:240px;padding:8px;' +
+      'background:var(--canvas);border:1px solid var(--line);border-radius:12px;';
+    const rows: Array<[string, string, string, string | undefined]> = [
+      ['warm hero redesign', '2h ago · 18 turns · PR #128', 'warm-hero', undefined],
+      ['hotfix: payment crash', 'yesterday · 5 turns · PR #131', 'hotfix', 'flame'],
+      ['feature/dark-mode', '3d ago · 7 turns · PR #119', 'dark-mode', 'git-branch'],
+      ['triage: error states', 'last week · 12 turns · LIN-401', 'triage', 'bug'],
+    ];
+    for (const [title, metaLine, slug, icon] of rows) {
+      rail.appendChild(makeCard({ title, meta: metaLine, slug, icon, expanded: true }));
+    }
+    return rail;
+  },
 };
 
 /**

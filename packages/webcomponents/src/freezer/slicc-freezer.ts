@@ -218,7 +218,10 @@ declare global {
  *
  * The `open` boolean attribute drives the width animation purely in CSS
  * (`.slicc-freezer[open]`); the toggle button reflects it and emits
- * `freezer-toggle`. The search input live-filters the session rows by `textContent`
+ * `freezer-toggle`. Toggling also propagates `expanded` onto the composed
+ * children (`<slicc-freezer-card>` / `<slicc-freezer-new>`), so expanding from
+ * collapsed reveals the chat titles + new-chat label live and collapsing drops
+ * back to icons only. The search input live-filters the session rows by `textContent`
  * substring, hiding non-matches with the `match-hidden` class. The `ctx` boolean
  * paints the chrome with an ice-blue accent while a freezer context is active.
  *
@@ -253,6 +256,7 @@ export class SliccFreezer extends HTMLElement {
     }
     this.#build();
     this.#syncToggle();
+    this.#syncChildExpanded();
   }
 
   disconnectedCallback(): void {
@@ -268,8 +272,10 @@ export class SliccFreezer extends HTMLElement {
 
   attributeChangedCallback(name: string, _old: string | null, value: string | null): void {
     if (!this.#built) return;
-    if (name === 'open') this.#syncToggle();
-    else if (name === 'search-placeholder') {
+    if (name === 'open') {
+      this.#syncToggle();
+      this.#syncChildExpanded();
+    } else if (name === 'search-placeholder') {
       this.#search.placeholder = value ?? 'search past sessions';
     }
     // `ctx` is driven entirely by the `[ctx]` CSS rule; nothing to do here.
@@ -329,6 +335,10 @@ export class SliccFreezer extends HTMLElement {
     }
     this.open = next;
     this.#syncToggle();
+    // Setting `open` fires attributeChangedCallback (→ child sync) only when the
+    // value actually changed; resync here too so a no-op toggle still aligns
+    // children with the current open state.
+    this.#syncChildExpanded();
     this.dispatchEvent(
       new CustomEvent<FreezerToggleDetail>('freezer-toggle', {
         detail: { open: next },
@@ -342,6 +352,8 @@ export class SliccFreezer extends HTMLElement {
   append(...nodes: (Node | string)[]): void {
     this.#build();
     this.#rail.append(...nodes);
+    // Newly added rows inherit the rail's current open/collapsed state.
+    this.#syncChildExpanded();
   }
 
   /**
@@ -428,6 +440,22 @@ export class SliccFreezer extends HTMLElement {
     const open = this.open;
     this.#toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
     this.#toggle.title = open ? 'Collapse freezer' : 'Expand freezer';
+  }
+
+  /**
+   * Propagate the rail's open state onto its composed children: each
+   * `<slicc-freezer-card>` and `<slicc-freezer-new>` owns its own `expanded`
+   * attribute (the prototype gated their text fade-in on the parent
+   * `.freezer.open`). Mirroring it here is what makes the toggle live — expanding
+   * from collapsed reveals the chat titles + the new-chat label, and collapsing
+   * from open drops back to icons only. Raw prototype `.fzcard` rows have no such
+   * attribute and are left untouched.
+   */
+  #syncChildExpanded(): void {
+    if (!this.#built) return;
+    const open = this.open;
+    const items = this.#rail.querySelectorAll<HTMLElement>('slicc-freezer-card, slicc-freezer-new');
+    for (const item of items) item.toggleAttribute('expanded', open);
   }
 
   /**
