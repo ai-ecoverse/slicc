@@ -302,6 +302,7 @@ function stripEphemeral(messages: ChatMessage[]): ChatMessage[] {
         ...(tc.isError ? { isError: tc.isError } : {}),
       }));
     }
+    if (m.references?.length) out.references = m.references;
     if (m.source) out.source = m.source;
     if (m.channel) out.channel = m.channel;
     return out;

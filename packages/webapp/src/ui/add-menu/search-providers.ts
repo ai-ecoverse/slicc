@@ -85,7 +85,7 @@ function applyQueryRanking(items: AddItem[], query: string, limit: number): AddI
         .filter((x) => x.s >= 0)
         .sort((a, b) => b.s - a.s || a.it.locator.localeCompare(b.it.locator))
         .map((x) => x.it)
-    : items.sort((a, b) => a.locator.localeCompare(b.locator));
+    : [...items].sort((a, b) => a.locator.localeCompare(b.locator));
   return scored.slice(0, limit);
 }
 

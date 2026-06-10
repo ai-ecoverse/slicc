@@ -95,6 +95,30 @@ describe('AddMenu shell', () => {
     expect(onClose).toHaveBeenCalledTimes(2);
   });
 
+  it('mousedown outside the panel closes the menu and fires onClose', () => {
+    const { menu, onClose } = setup();
+    menu.open();
+    expect(menu.isOpen()).toBe(true);
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(menu.isOpen()).toBe(false);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('mousedown inside the panel does NOT close the menu', () => {
+    const { menu } = setup();
+    menu.open();
+    const panel = document.querySelector('.add-menu') as HTMLElement;
+    panel.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(menu.isOpen()).toBe(true);
+  });
+
+  it('mousedown on the toggle button does NOT close the menu', () => {
+    const { menu, toggle } = setup();
+    menu.open();
+    toggle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(menu.isOpen()).toBe(true);
+  });
+
   it('dispose() removes composer drag-drop listeners', () => {
     const { menu, composer, onAttachFiles } = setup();
     menu.open();

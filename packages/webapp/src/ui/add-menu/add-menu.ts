@@ -35,6 +35,14 @@ export class AddMenu {
       this.close();
     }
   };
+
+  private readonly onDocumentMousedown = (e: MouseEvent): void => {
+    if (!this.open_) return;
+    const target = e.target as Node | null;
+    if (this.panel.contains(target) || this.opts.toggleButton.contains(target)) return;
+    this.close();
+  };
+
   private results: AddItem[] = [];
   private highlight = 0;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -59,6 +67,7 @@ export class AddMenu {
     this.search.addEventListener('input', () => this.scheduleSearch());
     this.opts.composer.addEventListener('dragover', this.onComposerDragOver);
     this.opts.composer.addEventListener('drop', this.onComposerDrop);
+    document.addEventListener('mousedown', this.onDocumentMousedown);
   }
 
   isOpen(): boolean {
@@ -109,6 +118,7 @@ export class AddMenu {
     if (this.debounceTimer) clearTimeout(this.debounceTimer);
     this.opts.composer.removeEventListener('dragover', this.onComposerDragOver);
     this.opts.composer.removeEventListener('drop', this.onComposerDrop);
+    document.removeEventListener('mousedown', this.onDocumentMousedown);
     this.panel.remove();
   }
 
@@ -193,7 +203,7 @@ export class AddMenu {
     } else {
       const note = document.createElement('div');
       note.className = 'add-menu__empty';
-      note.textContent = 'Capture cancelled.';
+      note.textContent = 'Capture cancelled or unavailable.';
       this.list.prepend(note);
     }
   }

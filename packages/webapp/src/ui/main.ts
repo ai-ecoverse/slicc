@@ -29,6 +29,10 @@ import type { VirtualFS } from '../fs/index.js';
 import { registerProviders } from '../providers/index.js';
 import { hasStoredTrayJoinUrl } from '../scoops/tray-runtime-config.js';
 import type { RegisteredScoop } from '../scoops/types.js';
+import {
+  captureViaPopup,
+  isExtensionFloat,
+} from '../shell/supplemental-commands/extension-media-capture.js';
 import { capturePhoto, captureScreenshot } from './add-menu/capture.js';
 import {
   createAggregator,
@@ -70,14 +74,71 @@ import { initTooltips } from './tooltip.js';
 
 const log = createLogger('main');
 
-function wireAddMenu(layout: Layout, vfs: VirtualFS, client: OffscreenClient): void {
+function wireAddMenu(
+  layout: Layout,
+  vfs: VirtualFS,
+  client: OffscreenClient,
+  isExtension: boolean
+): void {
   const aggregator = createAggregator([
     createFileFolderProvider(vfs, ['/workspace', '/shared']),
     createSkillProvider(vfs),
     createSessionProvider(() => readSessionsIndex(vfs)),
     createScoopProvider(() => client.getScoops()),
   ]);
-  layout.panels.chat.setAddMenu({ aggregator, capturePhoto, captureScreenshot });
+
+  let photo: () => Promise<File | null>;
+  let screenshot: () => Promise<File | null>;
+
+  if (isExtension && isExtensionFloat()) {
+    /**
+     * In the extension side-panel page, getUserMedia / getDisplayMedia can't
+     * prompt (no visible surface). Route both captures through the popup
+     * helper which opens a real Chrome window for the permission / picker UI.
+     * captureViaPopup returns PopupCaptureResult { bytes, mimeType, width, height };
+     * convert to File so the add-menu contract (File | null) is satisfied.
+     * On cancel / timeout the popup rejects — map to null.
+     */
+    photo = async (): Promise<File | null> => {
+      try {
+        const result = await captureViaPopup({
+          kind: 'camera',
+          mode: 'photo',
+          mimeType: 'image/png',
+          quality: 1.0,
+        });
+        const ab =
+          result.bytes.buffer instanceof ArrayBuffer
+            ? result.bytes.buffer
+            : new Uint8Array(result.bytes).buffer;
+        return new File([ab], `photo-${Date.now()}.png`, { type: 'image/png' });
+      } catch {
+        return null;
+      }
+    };
+
+    screenshot = async (): Promise<File | null> => {
+      try {
+        const result = await captureViaPopup({
+          kind: 'screen',
+          mimeType: 'image/png',
+          quality: 1.0,
+        });
+        const ab =
+          result.bytes.buffer instanceof ArrayBuffer
+            ? result.bytes.buffer
+            : new Uint8Array(result.bytes).buffer;
+        return new File([ab], `screenshot-${Date.now()}.png`, { type: 'image/png' });
+      } catch {
+        return null;
+      }
+    };
+  } else {
+    photo = capturePhoto;
+    screenshot = captureScreenshot;
+  }
+
+  layout.panels.chat.setAddMenu({ aggregator, capturePhoto: photo, captureScreenshot: screenshot });
 }
 
 /**
@@ -163,7 +224,7 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
     getSelectedScoop: () => selectedScoop,
     log,
   }).syncThinkingButtonForScoop;
-  wireAddMenu(layout, localFs, client);
+  wireAddMenu(layout, localFs, client, true);
 
   // Persistent dedup ledger of welcome-flow licks — shared between the
   // orchestrator's final-lick and the welcome lick interceptor.
@@ -322,7 +383,7 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
     log,
   });
   const { localFs, writableFs } = vfsHandle;
-  wireAddMenu(layout, localFs, client);
+  wireAddMenu(layout, localFs, client, false);
 
   // Post-panels runtime composite: host-ready join → onboarding →
   // dip-lick callback → sprinkle manager → leader-runtime + panel-RPC +
