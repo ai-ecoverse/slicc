@@ -12,6 +12,7 @@ import './styles/dialog.css';
 import './styles/sprinkle-components.css';
 import './styles/feedback.css';
 import './styles/image-preview.css';
+import './styles/add-menu.css';
 /**
  * Main entry point for the Browser Coding Agent UI.
  *
@@ -21,12 +22,21 @@ import './styles/image-preview.css';
  */
 
 import { createLogger } from '../core/index.js';
+import type { VirtualFS } from '../fs/index.js';
 // Auto-discover and register all providers (built-in + external).
 // IMPORTANT: This import must also appear in packages/chrome-extension/src/offscreen.ts
 // — the extension agent engine runs in the offscreen document, not in this file.
 import { registerProviders } from '../providers/index.js';
 import { hasStoredTrayJoinUrl } from '../scoops/tray-runtime-config.js';
 import type { RegisteredScoop } from '../scoops/types.js';
+import { capturePhoto, captureScreenshot } from './add-menu/capture.js';
+import {
+  createAggregator,
+  createFileFolderProvider,
+  createScoopProvider,
+  createSessionProvider,
+  createSkillProvider,
+} from './add-menu/search-providers.js';
 import { setupElectronOverlay } from './boot/setup-electron-overlay.js';
 import { setupExtensionClient } from './boot/setup-extension-client.js';
 import { setupExtensionDetached } from './boot/setup-extension-detached.js';
@@ -51,12 +61,24 @@ import { setupSwRegistration } from './boot/setup-sw-registration.js';
 import { setupVfs } from './boot/setup-vfs.js';
 import { loadFiredWelcomeActions, persistFiredWelcomeActions } from './boot/setup-welcome-flow.js';
 import { Layout } from './layout.js';
+import type { OffscreenClient } from './offscreen-client.js';
 import { applyProviderDefaults, getApiKey } from './provider-settings.js';
 import { resolveUiRuntimeMode, type UiRuntimeMode } from './runtime-mode.js';
+import { readSessionsIndex } from './session-freezer.js';
 import { initTheme } from './theme.js';
 import { initTooltips } from './tooltip.js';
 
 const log = createLogger('main');
+
+function wireAddMenu(layout: Layout, vfs: VirtualFS, client: OffscreenClient): void {
+  const aggregator = createAggregator([
+    createFileFolderProvider(vfs, ['/workspace', '/shared']),
+    createSkillProvider(vfs),
+    createSessionProvider(() => readSessionsIndex(vfs)),
+    createScoopProvider(() => client.getScoops()),
+  ]);
+  layout.panels.chat.setAddMenu({ aggregator, capturePhoto, captureScreenshot });
+}
 
 /**
  * Sprinkle names whose `.shtml` file backs an inline dip rather than a
@@ -141,6 +163,7 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
     getSelectedScoop: () => selectedScoop,
     log,
   }).syncThinkingButtonForScoop;
+  wireAddMenu(layout, localFs, client);
 
   // Persistent dedup ledger of welcome-flow licks — shared between the
   // orchestrator's final-lick and the welcome lick interceptor.
@@ -298,7 +321,8 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
     syncThinkingButtonForScoop,
     log,
   });
-  const { writableFs } = vfsHandle;
+  const { localFs, writableFs } = vfsHandle;
+  wireAddMenu(layout, localFs, client);
 
   // Post-panels runtime composite: host-ready join → onboarding →
   // dip-lick callback → sprinkle manager → leader-runtime + panel-RPC +
