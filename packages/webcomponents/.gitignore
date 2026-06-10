@@ -1,4 +1,4 @@
 storybook-static/
 
 # Local feedback-addon capture folder (File System Access comments)
-.feedback/
+storybook-feedback/
