@@ -6,6 +6,23 @@ import '../../src/nav/slicc-nav.js';
 import { SliccChatpane } from '../../src/shell/slicc-chatpane.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
 
+/**
+ * Extract the alpha channel from a computed color string. Chromium serializes a
+ * translucent computed background as `rgba(r, g, b, a)` (legacy) or as
+ * `color(srgb r g b / a)`; an opaque one drops the alpha entirely. Returns 1
+ * when no alpha component is present (fully opaque).
+ */
+function alphaOf(color: string): number {
+  const rgba = color.match(/rgba?\(([^)]+)\)/);
+  if (rgba) {
+    const parts = rgba[1].split(/[\s,/]+/).filter(Boolean);
+    return parts.length >= 4 ? Number.parseFloat(parts[3]) : 1;
+  }
+  const fn = color.match(/color\([^/]*\/\s*([0-9.]+)\s*\)/);
+  if (fn) return Number.parseFloat(fn[1]);
+  return 1;
+}
+
 function mount(narrow = false): SliccChatpane {
   const el = document.createElement('slicc-chatpane');
   if (narrow) el.setAttribute('narrow', '');
@@ -96,15 +113,23 @@ describe('slicc-chatpane', () => {
     expect(innerBox.height).toBeGreaterThanOrEqual(thread.clientHeight - 0.5);
   });
 
-  it('wide: the thread inner keeps its centered, frosted background card', () => {
+  it('wide: the thread inner keeps its centered frosted card but stays translucent so the shader shimmers through', () => {
     const el = mount(false);
     const thread = el.thread as HTMLElement;
     const inner = thread.querySelector('.slicc-thread__inner') as HTMLElement;
     const cs = getComputedStyle(inner);
-    // The frosted reading card stays: a real (non-transparent) tinted background
-    // and the 776px reading cap are preserved in the wide layout.
-    expect(cs.backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
+    // The 776px reading cap (the centered card) is preserved in the wide layout.
     expect(cs.maxWidth).toBe('776px');
+    // The fill is a real tint — not fully transparent...
+    expect(cs.backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
+    // ...yet translucent (alpha strictly < 1) so the animated shader behind it
+    // shimmers through instead of being fully hidden by an opaque card.
+    const alpha = alphaOf(cs.backgroundColor);
+    expect(alpha).toBeGreaterThan(0);
+    expect(alpha).toBeLessThan(1);
+    // Contrast is preserved: the inner inherits color: var(--ink) (near-black in
+    // light mode), so the agent / user prose stays readable over the frosted card.
+    expect(cs.color).toBe('rgb(10, 10, 10)');
   });
 
   it('forwards the current narrow state to a thread added later (MutationObserver)', async () => {

@@ -54,6 +54,18 @@ const STYLE = `
 .slicc-chatpane[narrow] {
   width: 34%;
 }
+/* Wide view: the centered reading card floats over the animated shader
+   background, so its inner must stay translucent enough for the shader to
+   shimmer through. The thread's own inner fill is a near-opaque frosted tint
+   (~0.83 alpha); here we drop the shaderbg component so the resolved fill lands
+   around half alpha. The inherited backdrop blur plus the remaining --ctx tint
+   keep the agent / user prose readable in both light and dark, and the inner's
+   color: var(--ink) (set by the thread) is untouched. This out-specifies the
+   thread's own wide inner background; the narrow rule below drops the
+   background entirely, so this is the wide, centered-card layout only. */
+.slicc-chatpane .slicc-thread__inner {
+  background: color-mix(in srgb, var(--ctx) 14%, color-mix(in srgb, var(--shaderbg) 45%, transparent));
+}
 /* In the narrow column the frosted reading card is pointless — there is no wide
    gutter for it to feather into. The inner fills the full width AND height of the
    thread and drops its background/blur/feather/radius so no thread background
