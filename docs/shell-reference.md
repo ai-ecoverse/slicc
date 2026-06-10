@@ -352,24 +352,11 @@ Use the skill doc at `packages/vfs-root/workspace/skills/playwright-cli/SKILL.md
 
 Skill package manager. Installs into `/workspace/skills/<name>/` from three registries:
 
-| Install ref                        | Registry                                                                                                                                                                                                             |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `upskill <owner>/<repo>[@branch]`  | GitHub. Supports `--skill <name>` (repeatable), `--all`, `--path <subfolder>`, `--branch/-b`, `--list`, `--force`. If the repo contains `.claude-plugin/marketplace.json`, switches to marketplace mode — see below. |
-| `upskill tessl:<name>`             | Tessl registry (resolves to a GitHub source under the hood).                                                                                                                                                         |
-| `upskill browse:<hostname>/<task>` | [browse.sh](https://browse.sh) site-specific skills. Equivalent URL form: `upskill https://browse.sh/skills/<hostname>/<task>`. Installs into `/workspace/skills/browse-<hostname>-<name>/`.                         |
-
-### Marketplace repos (`.claude-plugin/marketplace.json`)
-
-When a GitHub repo contains `.claude-plugin/marketplace.json` at its root, `upskill` enters marketplace mode. Skills are organised into named plugin collections; the listing is grouped by collection rather than flat.
-
-```
-upskill owner/repo                    # grouped listing by plugin collection
-upskill owner/repo --plugin <name>    # install all skills in a collection
-upskill owner/repo --skill <name>     # install a specific skill (unchanged)
-upskill owner/repo --all              # install everything (skips git-subdir plugins)
-```
-
-`--plugin` and `--skill` are mutually exclusive. Plugin collections whose `source` is a `git-subdir` object (external repos not in the ZIP) are skipped with a `⚠` warning. Repos without a manifest fall back to the existing flat SKILL.md discovery unchanged.
+| Install ref                        | Registry                                                                                                                                                                                     |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `upskill <owner>/<repo>[@branch]`  | GitHub. Supports `--skill <name>` (repeatable), `--all`, `--path <subfolder>`, `--branch/-b`, `--list`, `--force`.                                                                           |
+| `upskill tessl:<name>`             | Tessl registry (resolves to a GitHub source under the hood).                                                                                                                                 |
+| `upskill browse:<hostname>/<task>` | [browse.sh](https://browse.sh) site-specific skills. Equivalent URL form: `upskill https://browse.sh/skills/<hostname>/<task>`. Installs into `/workspace/skills/browse-<hostname>-<name>/`. |
 
 `upskill search "<query>"` round-robin interleaves results from Tessl and the browse.sh catalog (first hit from each source, then second from each, …) so both registries get visibility in the top page. `upskill recommendations` matches your profile; add `--install` to write the matches.
 
