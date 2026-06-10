@@ -91,6 +91,7 @@ slicc-action-card .prcard .ph {
   align-items: center;
   gap: 9px;
   padding: 11px 13px;
+  font-family: var(--ui);
 }
 slicc-action-card .prcard .ph .gi {
   width: 22px;
