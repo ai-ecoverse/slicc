@@ -75,7 +75,7 @@ function inputCard(): HTMLElement {
 function metaRow(narrow: boolean): HTMLElement {
   const row = document.createElement('slicc-composer-meta');
   row.setAttribute('model', 'Opus 4.8');
-  row.setAttribute('thinking', 'bombastica');
+  row.setAttribute('thinking', 'max');
   // Narrow-chat: the composer's own [open] CSS hides any `.slicc-composer__hint`
   // / `[data-composer-hint]`, but the meta row keeps its hint inside a shadow
   // root — so also flag the row `narrow` to drop its hint in the tight column.

@@ -204,7 +204,7 @@ function chatpane(narrow: boolean): HTMLElement {
   card.setAttribute('placeholder', 'Ask sliccy, or describe a change…');
   const meta = el('slicc-composer-meta', {
     model: 'Opus 4.8',
-    thinking: 'bombastica',
+    thinking: 'max',
     ...(narrow ? { narrow: '' } : {}),
   }) as HTMLElement & { models?: unknown };
   // A multi-provider list — rows show model + provider, and the long list grows

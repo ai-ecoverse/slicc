@@ -1,0 +1,8 @@
+{
+  "storyId": "nav-nav--narrow",
+  "storyTitle": "Nav/Nav",
+  "subsystem": "nav",
+  "importPath": "./src/nav/slicc-nav.stories.ts",
+  "comment": "in the narrow nav bar, the cone pill is cut off on the right. it should be pill-shaped on both ends.",
+  "createdAt": "2026-06-10T14:18:41.036Z"
+}

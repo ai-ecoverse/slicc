@@ -3,7 +3,7 @@ import './slicc-composer-meta.js';
 
 interface MetaArgs {
   model?: string;
-  thinking?: 'bambino' | 'piccolo' | 'grande' | 'bombastica';
+  thinking?: 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   narrow?: boolean;
 }
 
@@ -15,8 +15,9 @@ const meta: Meta<MetaArgs> = {
     model: { control: 'text', description: 'Model label shown in the model pill' },
     thinking: {
       control: 'inline-radio',
-      options: ['bambino', 'piccolo', 'grande', 'bombastica'],
-      description: 'Thinking effort level (cycles on click)',
+      options: ['off', 'low', 'medium', 'high', 'xhigh', 'max'],
+      description:
+        'Thinking effort level (cycles on click): Secco · Goccia · Bagnato · Affogato · Inzuppato · Sprofondato',
     },
     narrow: { control: 'boolean', description: 'Hide the keyboard hint (narrow chat column)' },
   },
@@ -34,36 +35,57 @@ type Story = StoryObj<MetaArgs>;
 
 /**
  * Default meta row — Opus 4.8 model pill (lucide `sparkles` glyph with a rainbow
- * stroke), `bombastica` thinking (lucide `brain`, violet border), each pill
- * capped by a lucide `chevron-down` caret, and the full keyboard hint. Click the
- * model pill to fire `model-change`; click the thinking pill to cycle the effort
- * level. No glyph is an emoji or bespoke unicode symbol.
+ * stroke), `max` thinking (`Sprofondato` — lucide `brain` tinted full violet,
+ * violet border), each pill capped by a lucide `chevron-down` caret, and the
+ * full keyboard hint. Click the model pill to fire `model-change`; click the
+ * thinking pill to cycle the effort level. No glyph is an emoji or bespoke
+ * unicode symbol.
  */
-export const Default: Story = { args: { model: 'Opus 4.8', thinking: 'bombastica' } };
+export const Default: Story = { args: { model: 'Opus 4.8', thinking: 'max' } };
 
-/** Non-default effort (`bombastica`) — the thinking pill shows the violet border. */
-export const ThinkingActive: Story = { args: { model: 'Opus 4.8', thinking: 'bombastica' } };
+/** The deepest effort (`max` / `Sprofondato`) — full-violet brain + violet border. */
+export const ThinkingActive: Story = { args: { model: 'Opus 4.8', thinking: 'max' } };
 
-/** A lower effort (`grande`) — the thinking pill uses the plain border. */
-export const ThinkingDefault: Story = { args: { model: 'Opus 4.8', thinking: 'grande' } };
+/** A mid effort (`medium` / `Bagnato`) — the brain is half-tinted, plain border. */
+export const ThinkingDefault: Story = { args: { model: 'Opus 4.8', thinking: 'medium' } };
 
-/** The smallest effort (`bambino`). */
-export const ThinkingBambino: Story = { args: { model: 'Opus 4.8', thinking: 'bambino' } };
+/** Bone dry (`off` / `Secco`) — the brain glyph is muted (`--txt-3`), no tint. */
+export const ThinkingOff: Story = { args: { model: 'Opus 4.8', thinking: 'off' } };
 
-/** A different model label. */
-export const AltModel: Story = { args: { model: 'Sonnet 4.8', thinking: 'piccolo' } };
+/** A different model label at a low effort (`low` / `Goccia`). */
+export const AltModel: Story = { args: { model: 'Sonnet 4.8', thinking: 'low' } };
 
 /** Narrow chat column — the keyboard hint is hidden, leaving only the two pills. */
-export const Narrow: Story = { args: { model: 'Opus 4.8', thinking: 'bombastica', narrow: true } };
+export const Narrow: Story = { args: { model: 'Opus 4.8', thinking: 'max', narrow: true } };
+
+/**
+ * Intensity ramp — six rows, one per wetness level, so the brain-glyph tint
+ * ramp (dry `--txt-3` → full `--violet`) is easy to eyeball top-to-bottom
+ * against light/dark.
+ */
+export const IntensityRamp: Story = {
+  render: () => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;flex-direction:column;gap:4px;padding:16px;';
+    for (const level of ['off', 'low', 'medium', 'high', 'xhigh', 'max'] as const) {
+      const row = document.createElement('slicc-composer-meta');
+      row.setAttribute('model', 'Opus 4.8');
+      row.setAttribute('thinking', level);
+      row.setAttribute('narrow', '');
+      wrap.append(row);
+    }
+    return wrap;
+  },
+};
 
 /**
  * Glyph showcase — the row stripped to its two pills so the lucide `sparkles`
- * (rainbow-stroked) and `brain` (violet) icons, plus the `chevron-down` carets,
+ * (rainbow-stroked) and `brain` (tinted) icons, plus the `chevron-down` carets,
  * are easy to eyeball against light/dark. Cycle the thinking pill to confirm the
  * brain glyph stays a real `<svg>` across every effort level.
  */
 export const IconShowcase: Story = {
-  args: { model: 'Opus 4.8', thinking: 'grande', narrow: true },
+  args: { model: 'Opus 4.8', thinking: 'medium', narrow: true },
 };
 
 /** A realistic composer context: the meta row beneath an input card. */
@@ -82,7 +104,7 @@ export const InComposer: Story = {
 
     const row = document.createElement('slicc-composer-meta');
     row.setAttribute('model', 'Opus 4.8');
-    row.setAttribute('thinking', 'bombastica');
+    row.setAttribute('thinking', 'max');
 
     wrap.append(card, row);
     return wrap;

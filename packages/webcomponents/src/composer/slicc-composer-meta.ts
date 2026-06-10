@@ -3,20 +3,65 @@ import { append, h, sheet } from '../internal/dom.js';
 import { iconEl } from '../internal/icons.js';
 
 /**
- * Thinking-effort levels, in cycle order, lifted verbatim from the prototype's
- * "gelateria sizing" (`levels=['bambino','piccolo','grande','bombastica']`).
+ * Thinking-effort levels, in cycle order. The prototype's gelateria sizing
+ * (`bambino → piccolo → grande → bombastica`) is replaced by a six-stop
+ * "wetness" scale (`Secco → Sprofondato`): bone-dry up to sunk-to-the-bottom.
  * The selector cycles forward through these on each click.
  */
-export const THINKING_LEVELS = ['bambino', 'piccolo', 'grande', 'bombastica'] as const;
+export const THINKING_LEVELS = ['off', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
 /**
- * The non-default effort that paints the thinking pill's violet border (the
- * prototype toggles `.x` on when the label is `bombastica`). Anything else is
- * the plain (default) border.
+ * Per-level metadata: the Italian "wetness" `label`, a `gloss` (shown as the
+ * pill's `title` tooltip), and the brain-glyph `tint`. The tint scales the
+ * violet token from bone-dry (muted `--txt-3` at `off`) toward full `--violet`
+ * (at `max`) so the brain icon's colour tracks the thinking intensity.
  */
-const ACCENTED_LEVEL: ThinkingLevel = 'bombastica';
+export interface ThinkingMeta {
+  readonly label: string;
+  readonly gloss: string;
+  readonly tint: string;
+}
+
+export const THINKING_META: Readonly<Record<ThinkingLevel, ThinkingMeta>> = {
+  off: {
+    label: 'Secco',
+    gloss: 'bone dry — not a drop (ask any prosecco)',
+    tint: 'var(--txt-3)',
+  },
+  low: {
+    label: 'Goccia',
+    gloss: 'one drop — bar-speak: «macchiato, solo una goccia»',
+    tint: 'color-mix(in srgb, var(--violet) 20%, var(--txt-3))',
+  },
+  medium: {
+    label: 'Bagnato',
+    gloss: 'properly wet',
+    tint: 'color-mix(in srgb, var(--violet) 40%, var(--txt-3))',
+  },
+  high: {
+    label: 'Affogato',
+    gloss: 'drowned — the menu item itself',
+    tint: 'color-mix(in srgb, var(--violet) 60%, var(--txt-3))',
+  },
+  xhigh: {
+    label: 'Inzuppato',
+    gloss: 'soaked through, biscotto-style',
+    tint: 'color-mix(in srgb, var(--violet) 80%, var(--txt-3))',
+  },
+  max: {
+    label: 'Sprofondato',
+    gloss: 'sunk to the bottom',
+    tint: 'var(--violet)',
+  },
+};
+
+/**
+ * The effort that paints the thinking pill's violet border. The deepest level
+ * (`max` / `Sprofondato`) gets the accented border; everything else is plain.
+ */
+const ACCENTED_LEVEL: ThinkingLevel = 'max';
 
 /** The default model label shown in the model pill when no `model` is set. */
 const DEFAULT_MODEL = 'Opus 4.8';
@@ -53,8 +98,8 @@ function normalizeModel(
   return { ...o, name: o.name, id: o.id ?? o.name };
 }
 
-/** The default thinking level (prototype starts at index 3 = `bombastica`). */
-const DEFAULT_THINKING: ThinkingLevel = 'bombastica';
+/** The default thinking level (deepest — `max` / `Sprofondato`). */
+const DEFAULT_THINKING: ThinkingLevel = 'max';
 
 /** Rendered glyph size (px) for the model/thinking pill lucide icons. */
 const PILL_ICON_SIZE = 13;
@@ -196,6 +241,7 @@ const SHEET = sheet(STYLE);
  * `<svg>` rendered through the shared `iconEl` helper — never an emoji or a
  * bespoke unicode-symbol glyph.
  *
+<<<<<<< HEAD
  * Clicking the model pill opens a dropdown (popping UP, since the row sits at the
  * composer's bottom edge) of `models` — each row a model name + provider label
  * (mirroring the webapp), with the current one ticked; a list longer than eight
@@ -206,18 +252,43 @@ const SHEET = sheet(STYLE);
  * swaps the label, toggles the violet border for the accented (`bombastica`)
  * level, and emits a composed `thinking-change`. Set `narrow` to hide the hint
  * for a tight chat column (the prototype's `.shell.open .meta .hint{display:none}`).
+||||||| parent of a6fdae4b (feat(webcomponents): six-level thinking intensity scale with Italian wet)
+ * Clicking the model pill emits a composed `model-change`; clicking the
+ * thinking pill cycles forward through the gelateria effort levels
+ * (`bambino → piccolo → grande → bombastica → …`), swaps the label, toggles the
+ * violet border for the accented (`bombastica`) level, and emits a composed
+ * `thinking-change`. Set `narrow` to hide the hint for a tight chat column
+ * (the prototype's `.shell.open .meta .hint{display:none}`).
+=======
+ * Clicking the model pill emits a composed `model-change`; clicking the
+ * thinking pill cycles forward through the wetness effort levels
+ * (`off → low → medium → high → xhigh → max → …`, labelled `Secco → Goccia →
+ * Bagnato → Affogato → Inzuppato → Sprofondato`), swaps the label, retints the
+ * brain glyph to track the intensity (dry `--txt-3` → full `--violet`), toggles
+ * the violet border for the accented (`max`) level, and emits a composed
+ * `thinking-change`. Set `narrow` to hide the hint for a tight chat column
+ * (the prototype's `.shell.open .meta .hint{display:none}`).
+>>>>>>> a6fdae4b (feat(webcomponents): six-level thinking intensity scale with Italian wet)
  *
  * Self-contained shadow DOM; themes via inherited tokens (no token is
  * re-declared here).
  *
  * @attr model - model label shown in the model pill (default "Opus 4.8")
- * @attr thinking - thinking effort level; one of `bambino|piccolo|grande|bombastica` (default `bombastica`)
+ * @attr thinking - thinking effort level; one of `off|low|medium|high|xhigh|max` (default `max`)
  * @attr narrow - boolean; hides the keyboard hint for a narrow chat column
+<<<<<<< HEAD
  * @prop {Array<string|ModelOption>} models - the dropdown options (name + provider + id)
  * @fires model-change - `{detail:{model,provider,id}}` when a model row is chosen
  * @csspart model-menu - the model dropdown panel
  * @csspart model-search - the type-ahead search input (shown for long lists)
  * @fires thinking-change - `{detail:{thinking,accented}}` when the thinking pill cycles
+||||||| parent of a6fdae4b (feat(webcomponents): six-level thinking intensity scale with Italian wet)
+ * @fires model-change - `{detail:{model}}` when the model pill is clicked
+ * @fires thinking-change - `{detail:{thinking,accented}}` when the thinking pill cycles
+=======
+ * @fires model-change - `{detail:{model}}` when the model pill is clicked
+ * @fires thinking-change - `{detail:{thinking,label,accented}}` when the thinking pill cycles
+>>>>>>> a6fdae4b (feat(webcomponents): six-level thinking intensity scale with Italian wet)
  * @csspart meta - the row container
  * @csspart model - the model-select pill button
  * @csspart thinking - the thinking-effort pill button
@@ -303,8 +374,8 @@ export class SliccComposerMeta extends HTMLElement {
   }
 
   /**
-   * Thinking effort level. Only the four gelateria levels are accepted; any
-   * other value normalizes to the default (`bombastica`).
+   * Thinking effort level. Only the six wetness levels are accepted; any
+   * other value normalizes to the default (`max` / `Sprofondato`).
    */
   get thinking(): ThinkingLevel {
     const t = this.getAttribute('thinking');
@@ -336,6 +407,7 @@ export class SliccComposerMeta extends HTMLElement {
 
     const model = this.model;
     const thinking = this.thinking;
+    const levelMeta = THINKING_META[thinking];
     const accented = thinking === ACCENTED_LEVEL;
 
     const modelBtn = h(
@@ -377,12 +449,21 @@ export class SliccComposerMeta extends HTMLElement {
     menu.append(this.#listEl);
     const mwrap = h('div', { class: 'mwrap' }, modelBtn, menu);
 
+    const brain = brainIcon();
+    // The brain tint tracks the thinking intensity (dry → violet), overriding
+    // the `.brain` rule's fallback colour with the per-level token blend.
+    brain.style.color = levelMeta.tint;
     const thinkingBtn = h(
       'button',
-      { type: 'button', class: `ctl tsel${accented ? ' x' : ''}`, part: 'thinking' },
-      brainIcon(),
+      {
+        type: 'button',
+        class: `ctl tsel${accented ? ' x' : ''}`,
+        part: 'thinking',
+        title: levelMeta.gloss,
+      },
+      brain,
       ' ',
-      h('span', { class: 'tlabel' }, thinking),
+      h('span', { class: 'tlabel' }, levelMeta.label),
       ' ',
       h('span', { class: 'cx' }, caretIcon())
     );
@@ -542,8 +623,8 @@ export class SliccComposerMeta extends HTMLElement {
   }
 
   /**
-   * Advance to the next gelateria effort level (wrapping), swap the label,
-   * toggle the violet border, and emit `thinking-change`.
+   * Advance to the next wetness effort level (wrapping), swap the label, retint
+   * the brain glyph, toggle the violet border, and emit `thinking-change`.
    */
   #cycleThinking(): void {
     const idx = THINKING_LEVELS.indexOf(this.thinking);
@@ -551,7 +632,11 @@ export class SliccComposerMeta extends HTMLElement {
     this.thinking = next; // re-renders via attributeChangedCallback
     this.dispatchEvent(
       new CustomEvent('thinking-change', {
-        detail: { thinking: next, accented: next === ACCENTED_LEVEL },
+        detail: {
+          thinking: next,
+          label: THINKING_META[next].label,
+          accented: next === ACCENTED_LEVEL,
+        },
         bubbles: true,
         composed: true,
       })

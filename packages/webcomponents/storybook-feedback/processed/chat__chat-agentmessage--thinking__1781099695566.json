@@ -1,0 +1,8 @@
+{
+  "storyId": "chat-agentmessage--thinking",
+  "storyTitle": "Chat/AgentMessage",
+  "subsystem": "chat",
+  "importPath": "./src/chat/slicc-agent-message.stories.ts",
+  "comment": "it would be cool to have the option to specify a progress message here. and we should build a story that shows the various states of the chat: streaming, waitting for user input, running tools, thinking",
+  "createdAt": "2026-06-10T13:54:55.566Z"
+}
