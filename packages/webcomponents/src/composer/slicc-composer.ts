@@ -187,9 +187,18 @@ function ensureComposerStyle(doc: Document): void {
  * column and relocates any light children into it, so the host app can style the
  * footer and slot arbitrary content — e.g. an `.inputcard` (with the
  * `<slicc-add-menu>` toolbar + `<slicc-send-button>`) and a `.meta` row,
- * composed by tag. The component is a pure container: no events of its own; its
- * job is the frosted band + `z-index: 2` layering that lets the add-menu results
- * panel pop up out of the footer and overlay the thread.
+ * composed by tag. Beyond the frosted band + `z-index: 2` layering (which lets
+ * the add-menu results panel pop up out of the footer and overlay the thread),
+ * the host owns one gesture: a push-to-talk "walkie-talkie" dictation control.
+ *
+ * Push-to-talk: pressing (mousedown) any slotted textarea turns the whole band
+ * into a big active push button — a centered mic, "Keep mouse pressed to
+ * dictate", and a SIMULATED model-load progress bar that sweeps to its
+ * listening affordance. Releasing (mouseup) tears the overlay down and
+ * populates the textarea with a representative transcript (this presentational
+ * library has no real ASR). The pointer leaving mid-press cancels without
+ * inserting, guarding against a stranded overlay. `prefers-reduced-motion`
+ * skips the sweep and is ready instantly while keeping the gesture functional.
  *
  * The `open` host attribute mirrors the prototype's `.shell.open`: in the
  * narrow-chat layout the meta row's keyboard hint is hidden (anything carrying
