@@ -360,9 +360,14 @@ export class SliccShader extends HTMLElement {
   #darkUniform(): number {
     if (typeof getComputedStyle !== 'function') return 0;
     const ink = getComputedStyle(this).getPropertyValue('--ink').trim();
-    const m = ink.match(/[\d.]+/g)?.map(Number);
-    if (!m || m.length < 3) return 0;
-    return 0.2126 * m[0] + 0.7152 * m[1] + 0.0722 * m[2] > 140 ? 1 : 0;
+    if (!ink) return 0;
+    // Resolve --ink (hex / rgb / named — `getPropertyValue` returns it verbatim,
+    // which for this token is HEX) to a 0..1 rgb triple via a probe, then read its
+    // luminance: in dark mode --ink is LIGHT, which drives the dark shader. A naive
+    // `/[\d.]+/` parse silently mis-reads hex (e.g. `#f5f5f2` → [5,5,2]) and would
+    // pin the shader to its light palette in dark mode.
+    const [r, g, b] = colorToVec3(ink, [0, 0, 0]);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5 ? 1 : 0;
   }
 
   #renderFrame(): void {

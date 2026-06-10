@@ -235,7 +235,7 @@ describe('slicc-floatbar', () => {
   });
 
   describe('narrow / extension-sidebar', () => {
-    it('hides the runtime label + divider below 560px (compact dot + cost pill)', () => {
+    it('collapses to just the status light below 560px (label, divider + cost all hidden)', () => {
       const el = document.createElement('slicc-floatbar');
       document.body.appendChild(el);
       const sheet = (el.shadowRoot as ShadowRoot).adoptedStyleSheets[0];
@@ -243,10 +243,13 @@ describe('slicc-floatbar', () => {
         (r): r is CSSMediaRule => r instanceof CSSMediaRule && r.conditionText.includes('560px')
       );
       expect(media).toBeDefined();
-      const labelRule = Array.from((media as CSSMediaRule).cssRules).find(
-        (r): r is CSSStyleRule => r instanceof CSSStyleRule && r.selectorText.includes('.label')
+      const hideRule = Array.from((media as CSSMediaRule).cssRules).find(
+        (r): r is CSSStyleRule => r instanceof CSSStyleRule && r.selectorText.includes('.spent')
       );
-      expect(labelRule?.style.display).toBe('none');
+      // One rule hides .label, .sep AND .spent — leaving only the .fdot dot.
+      expect(hideRule?.style.display).toBe('none');
+      expect(hideRule?.selectorText).toContain('.label');
+      expect(hideRule?.selectorText).toContain('.spent');
     });
   });
 });

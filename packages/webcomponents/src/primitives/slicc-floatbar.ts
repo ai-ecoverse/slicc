@@ -77,11 +77,12 @@ const STYLE = `
   height: 12px;
 }
 
-/* Narrow / extension-sidebar: drop the runtime label (and its divider) to a
-   compact dot + cost pill so the bar never crowds the avatar / theme toggle. */
+/* Narrow / extension-sidebar: collapse to just the connection status light —
+   the runtime label, its divider, and the cost segment all drop so the pill
+   shrinks to a dot and never crowds the switcher / avatar / theme toggle. */
 @media (max-width: 560px) {
-  :host { padding: 0 9px; }
-  .label, .sep { display: none; }
+  :host { padding: 0 8px; gap: 0; }
+  .label, .sep, .spent { display: none; }
 }
 `;
 const SHEET = sheet(STYLE);
