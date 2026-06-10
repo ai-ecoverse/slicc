@@ -39,6 +39,7 @@ import type {
 import { isLickChannel, LICK_CHANNELS, type LickChannel } from '../ui/lick-channels.js';
 import type { ChatMessage, ToolCall as UiToolCall } from '../ui/types.js';
 import { HIDDEN_TOOL_NAMES } from './hidden-tools.js';
+import { capTranscriptText, capTranscriptToolInput } from './transcript-limits.js';
 
 /**
  * Pure translator. `idSeed` lets callers inject a deterministic id
@@ -148,7 +149,10 @@ export function agentMessagesToChatMessages(
       // than fabricate an orphan.
       const target = lastAssistant?.toolCalls?.find((tc) => tc.id === m.toolCallId);
       if (!target) continue;
-      target.result = textOf(m.content);
+      // Transcript boundary: cap rebuilt tool results so seeding a large
+      // restored history doesn't materialize unbounded text in memory
+      // (the canonical history this reads from stays untouched).
+      target.result = capTranscriptText(textOf(m.content));
       target.isError = m.isError;
     }
   }
@@ -200,7 +204,10 @@ function collectToolCalls(m: AssistantMessage): UiToolCall[] {
     out.push({
       id: block.id,
       name: block.name,
-      input: block.arguments,
+      // Transcript boundary: shallow-cap oversized string fields (e.g.
+      // write_file's `content`) — shape preserved for the panel's
+      // per-tool input renderers.
+      input: capTranscriptToolInput(block.arguments),
     });
   }
   return out;

@@ -9,6 +9,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { MAX_TRANSCRIPT_TOOL_TEXT_CHARS } from '../../webapp/src/scoops/transcript-limits.js';
 import type { ChannelMessage } from '../../webapp/src/scoops/types.js';
 
 // Mock chrome.runtime
@@ -721,6 +722,68 @@ describe('OffscreenBridge onScoopUnregistered eviction', () => {
 
     expect(() => callbacks.onScoopUnregistered?.(unregisteredScoop)).not.toThrow();
     expect((bridge as any).messageBuffers.has('agent_probe_1')).toBe(false);
+  });
+});
+
+describe('OffscreenBridge transcript size caps', () => {
+  let bridge: InstanceType<typeof OffscreenBridge>;
+  let callbacks: any;
+  let emitted: any[];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    bridge = new OffscreenBridge();
+    (bridge as any).orchestrator = { getScoops: vi.fn(() => []) };
+    emitted = [];
+    vi.spyOn(bridge as any, 'emit').mockImplementation((payload: any) => {
+      emitted.push(payload);
+    });
+    callbacks = OffscreenBridge.createCallbacks(bridge);
+  });
+
+  it('caps oversized tool results in the buffer AND the emitted agent-event', () => {
+    const huge = 'z'.repeat(MAX_TRANSCRIPT_TOOL_TEXT_CHARS + 100_000);
+    callbacks.onResponse('cone_1', 'turn text', true);
+    callbacks.onToolStart?.('cone_1', 'bash', { command: 'cat big.txt' });
+
+    callbacks.onToolEnd?.('cone_1', 'bash', huge, false);
+
+    const buf = (bridge as any).messageBuffers.get('cone_1');
+    const tc = buf.find((m: any) => m.toolCalls?.length)?.toolCalls[0];
+    expect(tc.result.length).toBeLessThan(huge.length);
+    expect(tc.result).toContain('truncated for the chat transcript');
+
+    const toolEnd = emitted.find((e) => e.eventType === 'tool_end');
+    expect(toolEnd.toolResult.length).toBeLessThan(huge.length);
+  });
+
+  it('caps oversized string fields in tool inputs (write_file content)', () => {
+    const hugeContent = 'w'.repeat(MAX_TRANSCRIPT_TOOL_TEXT_CHARS + 100_000);
+    callbacks.onResponse('cone_1', 'turn text', true);
+
+    callbacks.onToolStart?.('cone_1', 'write_file', {
+      path: '/big.txt',
+      content: hugeContent,
+    });
+
+    const buf = (bridge as any).messageBuffers.get('cone_1');
+    const tc = buf.find((m: any) => m.toolCalls?.length)?.toolCalls[0];
+    expect(tc.input.content.length).toBeLessThan(hugeContent.length);
+    expect(tc.input.path).toBe('/big.txt');
+
+    const toolStart = emitted.find((e) => e.eventType === 'tool_start');
+    expect(toolStart.toolInput.content.length).toBeLessThan(hugeContent.length);
+  });
+
+  it('leaves normal-sized results and inputs untouched', () => {
+    callbacks.onResponse('cone_1', 'turn text', true);
+    callbacks.onToolStart?.('cone_1', 'bash', { command: 'ls' });
+    callbacks.onToolEnd?.('cone_1', 'bash', 'file-a\nfile-b\n', false);
+
+    const buf = (bridge as any).messageBuffers.get('cone_1');
+    const tc = buf.find((m: any) => m.toolCalls?.length)?.toolCalls[0];
+    expect(tc.input).toEqual({ command: 'ls' });
+    expect(tc.result).toBe('file-a\nfile-b\n');
   });
 });
 

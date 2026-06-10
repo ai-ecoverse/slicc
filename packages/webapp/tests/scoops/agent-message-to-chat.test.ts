@@ -1,6 +1,7 @@
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import { describe, expect, it } from 'vitest';
 import { agentMessagesToChatMessages } from '../../src/scoops/agent-message-to-chat.js';
+import { MAX_TRANSCRIPT_TOOL_TEXT_CHARS } from '../../src/scoops/transcript-limits.js';
 
 /**
  * Build an AgentMessage with a content array. Cast to `AgentMessage`
@@ -64,6 +65,33 @@ const seedId = (): string => `id-${++counter}`;
 describe('agentMessagesToChatMessages', () => {
   it('returns an empty array for empty input', () => {
     expect(agentMessagesToChatMessages([])).toEqual([]);
+  });
+
+  it('caps oversized tool results and inputs at the transcript boundary', () => {
+    const hugeResult = 'r'.repeat(MAX_TRANSCRIPT_TOOL_TEXT_CHARS + 50_000);
+    const hugeContent = 'w'.repeat(MAX_TRANSCRIPT_TOOL_TEXT_CHARS + 50_000);
+    const input: AgentMessage[] = [
+      assistantMsg([
+        { type: 'text', text: 'writing + reading' },
+        {
+          type: 'toolCall',
+          id: 'tc-1',
+          name: 'write_file',
+          arguments: { path: '/big.txt', content: hugeContent },
+        },
+      ]),
+      toolResultMsg('tc-1', hugeResult),
+    ];
+
+    const [msg] = agentMessagesToChatMessages(input);
+    const tc = msg.toolCalls?.[0];
+
+    expect(tc?.result?.length).toBeLessThan(hugeResult.length);
+    expect(tc?.result).toContain('truncated for the chat transcript');
+    const content = (tc?.input as { content: string }).content;
+    expect(content.length).toBeLessThan(hugeContent.length);
+    // Small fields survive untouched.
+    expect((tc?.input as { path: string }).path).toBe('/big.txt');
   });
 
   it('translates a plain user/assistant exchange', () => {

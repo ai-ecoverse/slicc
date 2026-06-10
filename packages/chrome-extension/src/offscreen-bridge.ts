@@ -19,6 +19,11 @@ import type {
   Orchestrator,
   OrchestratorCallbacks,
 } from '../../../packages/webapp/src/scoops/orchestrator.js';
+import {
+  capTranscriptToolInput,
+  capTranscriptToolResultForBuffer,
+  capTranscriptToolResultForEvent,
+} from '../../../packages/webapp/src/scoops/transcript-limits.js';
 import { getFollowerTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-follower-status.js';
 import type { FollowerSyncManager } from '../../../packages/webapp/src/scoops/tray-follower-sync.js';
 import { getLeaderTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-leader.js';
@@ -279,22 +284,36 @@ export class OffscreenBridge implements KernelFacade {
       onToolStart: (scoopJid, toolName, toolInput) => {
         if (HIDDEN_TOOL_NAMES.has(toolName)) return;
 
+        // Transcript boundary: shallow-cap oversized string fields (e.g.
+        // write_file's `content`) once, so BOTH the buffered transcript
+        // and the emitted event carry the capped shape. The agent loop
+        // keeps the full input; only the human-facing transcript is
+        // capped — uncapped it grows ~1:1 with tool traffic and OOMs
+        // long sessions (see transcript-limits.ts).
+        const cappedInput = capTranscriptToolInput(toolInput);
+
         const msg = bridge.getOrCreateAssistantMsg(scoopJid);
         if (!msg.toolCalls) msg.toolCalls = [];
-        msg.toolCalls.push({ id: uid(), name: toolName, input: toolInput });
+        msg.toolCalls.push({ id: uid(), name: toolName, input: cappedInput });
 
         bridge.emit({
           type: 'agent-event',
           scoopJid,
           eventType: 'tool_start',
           toolName,
-          toolInput,
+          toolInput: cappedInput,
         });
       },
 
       onToolEnd: (scoopJid, toolName, result, isError) => {
         if (HIDDEN_TOOL_NAMES.has(toolName)) return;
 
+        // Transcript boundary — same rationale as onToolStart. Two
+        // variants: the BUFFER strips inline screenshot markers
+        // entirely (the panel never persists them either; they are the
+        // largest payload class), while the EMITTED event keeps the
+        // markers whole so the live panel can extract the screenshot —
+        // only the surrounding text is capped.
         const msgId = bridge.currentMessageId.get(scoopJid);
         if (msgId) {
           const buf = bridge.getBuffer(scoopJid);
@@ -304,7 +323,7 @@ export class OffscreenBridge implements KernelFacade {
               .reverse()
               .find((t) => t.name === toolName && t.result === undefined);
             if (tc) {
-              tc.result = result;
+              tc.result = capTranscriptToolResultForBuffer(result);
               tc.isError = isError;
             }
           }
@@ -317,7 +336,7 @@ export class OffscreenBridge implements KernelFacade {
           scoopJid,
           eventType: 'tool_end',
           toolName,
-          toolResult: result,
+          toolResult: capTranscriptToolResultForEvent(result),
           isError,
         });
       },
