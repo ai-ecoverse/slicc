@@ -1101,25 +1101,7 @@ export class Orchestrator {
       }
     }
 
-    // Consume already-pending completions. These were stashed while the
-    // scoop was muted (either by an explicit scoop_mute or by this very
-    // wait racing a just-completed scoop) — claim them for the caller
-    // without pinging the cone. The waiter result is a truncated
-    // summary string; the full response text remains in VFS history
-    // via the artifact file the unmute/normal path would have written
-    // (the waiter path skips that write because the cone sees the
-    // content inline via the tool result).
-    for (const jid of uniqueJids) {
-      const pending = this.pendingCompletions.get(jid);
-      if (pending) {
-        this.pendingCompletions.delete(jid);
-        const summary =
-          pending.responseText.length > 20000
-            ? pending.responseText.slice(0, 20000) + '\n... (truncated)'
-            : pending.responseText;
-        results.set(jid, { summary, timedOut: false });
-      }
-    }
+    this.claimPendingSummaries(uniqueJids, results);
 
     const missing = uniqueJids.filter((jid) => !results.has(jid));
     // Filter to scoops we actually have registered; otherwise the waiter
@@ -1153,38 +1135,10 @@ export class Orchestrator {
         })
     );
 
-    let timer: ReturnType<typeof setTimeout> | null = null;
     try {
-      if (promises.length > 0) {
-        // `timeoutMs === 0` is an EXPLICIT immediate timeout (the caller
-        // asked for "no waiting, tell me who's already done"). Only
-        // `undefined`/`null` means "wait indefinitely". Treating 0 as
-        // "no timeout" — which the previous `timeoutMs > 0` guard did —
-        // could stall the cone turn forever when a scoop never
-        // completes, exactly the opposite of what the caller asked for.
-        if (timeoutMs != null && timeoutMs >= 0) {
-          await Promise.race([
-            Promise.all(promises),
-            new Promise<void>((resolve) => {
-              timer = setTimeout(() => resolve(), timeoutMs);
-            }),
-          ]);
-        } else {
-          await Promise.all(promises);
-        }
-      }
+      await this.awaitScoopWaiters(promises, timeoutMs);
     } finally {
-      if (timer) clearTimeout(timer);
-      // Remove any waiters we registered that didn't fire (timeout or
-      // early resolution). Leaving them behind would capture a future
-      // completion and swallow the cone-notify.
-      for (const { jid, waiter } of registered) {
-        const list = this.completionWaiters.get(jid);
-        if (!list) continue;
-        const idx = list.indexOf(waiter);
-        if (idx !== -1) list.splice(idx, 1);
-        if (list.length === 0) this.completionWaiters.delete(jid);
-      }
+      this.removeCompletionWaiters(registered);
       // Unmute only the scoops we muted here — leaves pre-existing
       // scoop_mute state alone.
       for (const jid of muteAdded) this.mutedScoops.delete(jid);
@@ -1201,6 +1155,77 @@ export class Orchestrator {
       const r = results.get(jid) ?? { summary: null, timedOut: true };
       return { jid, summary: r.summary, timedOut: r.timedOut };
     });
+  }
+
+  /**
+   * Consume already-pending completions into `results`. These were
+   * stashed while the scoop was muted (either by an explicit
+   * scoop_mute or by a wait racing a just-completed scoop) — claim
+   * them for the caller without pinging the cone. The waiter result is
+   * a truncated summary string; the full response text remains in VFS
+   * history via the artifact file the unmute/normal path would have
+   * written (the waiter path skips that write because the cone sees
+   * the content inline via the tool result).
+   */
+  private claimPendingSummaries(
+    jids: readonly string[],
+    results: Map<string, { summary: string | null; timedOut: boolean }>
+  ): void {
+    for (const jid of jids) {
+      const pending = this.pendingCompletions.get(jid);
+      if (!pending) continue;
+      this.pendingCompletions.delete(jid);
+      const summary =
+        pending.responseText.length > 20000
+          ? pending.responseText.slice(0, 20000) + '\n... (truncated)'
+          : pending.responseText;
+      results.set(jid, { summary, timedOut: false });
+    }
+  }
+
+  /**
+   * Race the waiter promises against an optional timeout.
+   * `timeoutMs === 0` is an EXPLICIT immediate timeout (the caller
+   * asked for "no waiting, tell me who's already done"). Only
+   * `undefined`/`null` means "wait indefinitely". Treating 0 as
+   * "no timeout" — which an earlier `timeoutMs > 0` guard did — could
+   * stall the cone turn forever when a scoop never completes, exactly
+   * the opposite of what the caller asked for.
+   */
+  private async awaitScoopWaiters(promises: Promise<void>[], timeoutMs?: number): Promise<void> {
+    if (promises.length === 0) return;
+    if (timeoutMs == null || timeoutMs < 0) {
+      await Promise.all(promises);
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    try {
+      await Promise.race([
+        Promise.all(promises),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(() => resolve(), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Remove any waiters we registered that didn't fire (timeout or
+   * early resolution). Leaving them behind would capture a future
+   * completion and swallow the cone-notify.
+   */
+  private removeCompletionWaiters(
+    registered: Array<{ jid: string; waiter: (s: string | null) => void }>
+  ): void {
+    for (const { jid, waiter } of registered) {
+      const list = this.completionWaiters.get(jid);
+      if (!list) continue;
+      const idx = list.indexOf(waiter);
+      if (idx !== -1) list.splice(idx, 1);
+      if (list.length === 0) this.completionWaiters.delete(jid);
+    }
   }
 
   /**
@@ -1715,7 +1740,57 @@ export class Orchestrator {
         );
 
     // Create the scoop context with full callbacks
-    const contextCallbacks: ScoopContextCallbacks = {
+    const contextCallbacks = this.buildScoopContextCallbacks(jid, scoop);
+
+    const coneJid = Array.from(this.scoops.values()).find((s) => s.isCone)?.jid;
+    const context = new ScoopContext(
+      scoop,
+      contextCallbacks,
+      fs,
+      this.sessionStore ?? undefined,
+      this.sharedFs ?? undefined,
+      coneJid,
+      this.processManager ?? undefined,
+      this.sudoManager
+    );
+
+    this.contexts.set(jid, context);
+    this.tabs.set(jid, {
+      jid,
+      contextId,
+      status: 'initializing',
+      lastActivity: new Date().toISOString(),
+    });
+
+    // Initialize the context
+    await context.init();
+
+    // Mark tab as ready so queued messages (lick events, etc.) get processed
+    const initTab = this.tabs.get(jid);
+    if (initTab && initTab.status === 'initializing') {
+      initTab.status = 'ready';
+      this.tabs.set(jid, initTab);
+      this.callbacks.onStatusChange(jid, 'ready');
+      this.dispatchScoopEvent(jid, 'onStatusChange', 'ready');
+    }
+
+    // Start idle timer for non-cone scoops
+    const scoopForTimer = this.scoops.get(jid);
+    if (scoopForTimer && !scoopForTimer.isCone) {
+      this.startIdleTimer(jid);
+    }
+
+    log.info('Scoop context created', { jid, contextId });
+  }
+
+  /**
+   * Build the `ScoopContextCallbacks` wired into a scoop's context by
+   * {@link createScoopTab}. Mostly thin per-scoop adapters over the
+   * orchestrator's top-level callbacks; cone-only capabilities
+   * (scoop management, memory writes) are gated on `scoop.isCone`.
+   */
+  private buildScoopContextCallbacks(jid: string, scoop: RegisteredScoop): ScoopContextCallbacks {
+    return {
       onResponse: (text, isPartial) => {
         if (!this.scoops.has(jid)) return;
 
@@ -1761,84 +1836,7 @@ export class Orchestrator {
         this.dispatchScoopEvent(jid, 'onError', error);
         this.dispatchScoopEvent(jid, 'onStatusChange', 'error');
       },
-      onFatalError: (error) => {
-        // Fatal errors bypass mute and always notify the cone immediately.
-        // This ensures the user is aware when a scoop fails unrecoverably
-        // (e.g., invalid model, auth failure, exhausted retries).
-        if (!this.scoops.has(jid)) return;
-
-        const scoopRecord = this.scoops.get(jid)!;
-        log.error('Fatal scoop error', { jid, folder: scoopRecord.folder, error });
-
-        const tab = this.tabs.get(jid);
-        if (tab) {
-          tab.status = 'error';
-          tab.error = error;
-          this.tabs.set(jid, tab);
-        }
-        this.callbacks.onError(jid, error);
-        this.callbacks.onStatusChange(jid, 'error');
-        this.dispatchScoopEvent(jid, 'onError', error);
-        this.dispatchScoopEvent(jid, 'onStatusChange', 'error');
-
-        // Skip cone notification for the cone itself
-        if (scoopRecord.isCone) return;
-
-        // Force-unmute this scoop so the error notification reaches the cone
-        this.mutedScoops.delete(jid);
-        this.pendingCompletions.delete(jid);
-        // Clear any partial response buffer to avoid stale data if scoop is reused
-        this.scoopResponseBuffer.delete(jid);
-
-        // Fire any pending waiters with null (error) so scoop_wait doesn't hang
-        const waiters = this.completionWaiters.get(jid);
-        if (waiters && waiters.length > 0) {
-          this.completionWaiters.delete(jid);
-          for (const w of waiters) {
-            try {
-              w(null);
-            } catch (err) {
-              log.warn('completion waiter threw on fatal error', {
-                jid,
-                error: err instanceof Error ? err.message : String(err),
-              });
-            }
-          }
-        }
-
-        // Notify the cone about this fatal error
-        const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
-        if (!cone) return;
-
-        const notifyMsg: ChannelMessage = {
-          id: `scoop-error-${jid}-${Date.now()}`,
-          chatJid: cone.jid,
-          senderId: scoopRecord.folder,
-          senderName: scoopRecord.assistantLabel,
-          content: `[@${scoopRecord.assistantLabel} FAILED]: ${error}`,
-          timestamp: new Date().toISOString(),
-          fromAssistant: false,
-          channel: 'scoop-error',
-        };
-
-        // Fire onIncomingMessage so the UI renders the error as a lick widget
-        try {
-          this.callbacks.onIncomingMessage?.(cone.jid, notifyMsg);
-        } catch (err) {
-          log.warn('onIncomingMessage for scoop-error threw', {
-            scoop: scoopRecord.folder,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-
-        // Route to cone's agent queue so it can act on the failure
-        this.handleMessage(notifyMsg).catch((err) => {
-          log.error('Failed to route fatal error to cone', {
-            scoop: scoopRecord.folder,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        });
-      },
+      onFatalError: (error) => this.handleScoopFatalError(jid, error),
       onStatusChange: (status) => {
         if (!this.scoops.has(jid)) return;
 
@@ -1913,46 +1911,87 @@ export class Orchestrator {
         : undefined,
       getBrowserAPI: () => this.callbacks.getBrowserAPI(),
     };
+  }
 
-    const coneJid = Array.from(this.scoops.values()).find((s) => s.isCone)?.jid;
-    const context = new ScoopContext(
-      scoop,
-      contextCallbacks,
-      fs,
-      this.sessionStore ?? undefined,
-      this.sharedFs ?? undefined,
-      coneJid,
-      this.processManager ?? undefined,
-      this.sudoManager
-    );
+  /**
+   * Handle an unrecoverable scoop failure (invalid model, auth failure,
+   * exhausted retries). Fatal errors bypass mute and always notify the
+   * cone immediately so the user is aware the scoop died.
+   */
+  private handleScoopFatalError(jid: string, error: string): void {
+    if (!this.scoops.has(jid)) return;
 
-    this.contexts.set(jid, context);
-    this.tabs.set(jid, {
-      jid,
-      contextId,
-      status: 'initializing',
-      lastActivity: new Date().toISOString(),
+    const scoopRecord = this.scoops.get(jid)!;
+    log.error('Fatal scoop error', { jid, folder: scoopRecord.folder, error });
+
+    const tab = this.tabs.get(jid);
+    if (tab) {
+      tab.status = 'error';
+      tab.error = error;
+      this.tabs.set(jid, tab);
+    }
+    this.callbacks.onError(jid, error);
+    this.callbacks.onStatusChange(jid, 'error');
+    this.dispatchScoopEvent(jid, 'onError', error);
+    this.dispatchScoopEvent(jid, 'onStatusChange', 'error');
+
+    // Skip cone notification for the cone itself
+    if (scoopRecord.isCone) return;
+
+    // Force-unmute this scoop so the error notification reaches the cone
+    this.mutedScoops.delete(jid);
+    this.pendingCompletions.delete(jid);
+    // Clear any partial response buffer to avoid stale data if scoop is reused
+    this.scoopResponseBuffer.delete(jid);
+
+    // Fire any pending waiters with null (error) so scoop_wait doesn't hang
+    const waiters = this.completionWaiters.get(jid);
+    if (waiters && waiters.length > 0) {
+      this.completionWaiters.delete(jid);
+      for (const w of waiters) {
+        try {
+          w(null);
+        } catch (err) {
+          log.warn('completion waiter threw on fatal error', {
+            jid,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+
+    // Notify the cone about this fatal error
+    const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
+    if (!cone) return;
+
+    const notifyMsg: ChannelMessage = {
+      id: `scoop-error-${jid}-${Date.now()}`,
+      chatJid: cone.jid,
+      senderId: scoopRecord.folder,
+      senderName: scoopRecord.assistantLabel,
+      content: `[@${scoopRecord.assistantLabel} FAILED]: ${error}`,
+      timestamp: new Date().toISOString(),
+      fromAssistant: false,
+      channel: 'scoop-error',
+    };
+
+    // Fire onIncomingMessage so the UI renders the error as a lick widget
+    try {
+      this.callbacks.onIncomingMessage?.(cone.jid, notifyMsg);
+    } catch (err) {
+      log.warn('onIncomingMessage for scoop-error threw', {
+        scoop: scoopRecord.folder,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    // Route to cone's agent queue so it can act on the failure
+    this.handleMessage(notifyMsg).catch((err) => {
+      log.error('Failed to route fatal error to cone', {
+        scoop: scoopRecord.folder,
+        error: err instanceof Error ? err.message : String(err),
+      });
     });
-
-    // Initialize the context
-    await context.init();
-
-    // Mark tab as ready so queued messages (lick events, etc.) get processed
-    const initTab = this.tabs.get(jid);
-    if (initTab && initTab.status === 'initializing') {
-      initTab.status = 'ready';
-      this.tabs.set(jid, initTab);
-      this.callbacks.onStatusChange(jid, 'ready');
-      this.dispatchScoopEvent(jid, 'onStatusChange', 'ready');
-    }
-
-    // Start idle timer for non-cone scoops
-    const scoopForTimer = this.scoops.get(jid);
-    if (scoopForTimer && !scoopForTimer.isCone) {
-      this.startIdleTimer(jid);
-    }
-
-    log.info('Scoop context created', { jid, contextId });
   }
 
   /** Destroy a scoop context */
