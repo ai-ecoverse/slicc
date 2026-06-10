@@ -1,6 +1,17 @@
 #!/bin/bash
 set -euo pipefail
 
+# TEMPORARY (e2b out of credits): when SLICC_SKIP_E2B_TEMPLATE=1, skip the
+# template build entirely and exit 0. publish-worker.sh runs this first under
+# `set -e`, so a failed `Template.build` (which is what an out-of-credits
+# account returns) blocks the whole release. Skipping lets the release deploy
+# the worker against the already-published template. Remove the env var (set in
+# .github/workflows/release.yml) once e2b credits are restored.
+if [ "${SLICC_SKIP_E2B_TEMPLATE:-}" = "1" ]; then
+  echo "[build-template] SLICC_SKIP_E2B_TEMPLATE=1 set — skipping e2b template build (account out of credits)."
+  exit 0
+fi
+
 # E2B v2 template build for the SLICC hosted leader.
 #
 # Requires:
