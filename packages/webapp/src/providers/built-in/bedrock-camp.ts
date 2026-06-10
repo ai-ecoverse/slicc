@@ -39,6 +39,11 @@ import {
   clampReasoning,
 } from '@earendil-works/pi-ai/dist/providers/simple-options.js';
 import { transformMessages } from '@earendil-works/pi-ai/dist/providers/transform-messages.js';
+import {
+  claudeSupportsAdaptiveThinking,
+  claudeSupportsMaxEffort,
+  claudeSupportsNativeXhighEffort,
+} from '../claude-model-version.js';
 import { modelSupportsTemperature } from '../temperature-support.js';
 import type { ProviderConfig } from '../types.js';
 
@@ -187,11 +192,6 @@ function getModelMatchCandidates(modelId: string, modelName?: string): string[] 
   });
 }
 
-function matchesAny(modelId: string, modelName: string | undefined, needles: string[]): boolean {
-  const candidates = getModelMatchCandidates(modelId, modelName);
-  return candidates.some((s) => needles.some((n) => s.includes(n)));
-}
-
 // ── Message conversion ──────────────────────────────────────────────
 
 function normalizeToolCallId(id: string): string {
@@ -207,6 +207,107 @@ function sanitize(text: string | undefined | null): string {
   );
 }
 
+function convertUserContentItem(c: any): any {
+  if (c.type === 'text') return { text: sanitize(c.text) };
+  if (c.type === 'image') return { image: createImageBlock(c.mimeType, c.data) };
+  throw new Error(`Unknown user content type: ${c.type}`);
+}
+
+function convertUserMessage(m: any): any {
+  const content =
+    typeof m.content === 'string'
+      ? [{ text: sanitize(m.content) }]
+      : m.content.map(convertUserContentItem);
+  return { role: 'user', content };
+}
+
+function thinkingBlockForModel(c: any, model: Model<Api>): any | null {
+  if (c.thinking.trim().length === 0) return null;
+  if (!supportsThinkingSignature(model)) {
+    return { reasoningContent: { reasoningText: { text: sanitize(c.thinking) } } };
+  }
+  // Signatures arrive after thinking deltas. If a partial or externally
+  // persisted message lacks a signature, Bedrock rejects the replayed
+  // reasoning block. Fall back to plain text — matches pi-ai's
+  // amazon-bedrock behavior.
+  if (!c.thinkingSignature || c.thinkingSignature.trim().length === 0) {
+    return { text: sanitize(c.thinking) };
+  }
+  return {
+    reasoningContent: {
+      reasoningText: {
+        text: sanitize(c.thinking),
+        signature: c.thinkingSignature,
+      },
+    },
+  };
+}
+
+function convertAssistantContentItem(c: any, model: Model<Api>): any | null {
+  switch (c.type) {
+    case 'text':
+      return c.text.trim().length === 0 ? null : { text: sanitize(c.text) };
+    case 'toolCall':
+      return { toolUse: { toolUseId: c.id, name: c.name, input: c.arguments } };
+    case 'thinking':
+      return thinkingBlockForModel(c, model);
+    default:
+      return null;
+  }
+}
+
+function convertAssistantMessage(m: any, model: Model<Api>): any | null {
+  if (m.content.length === 0) return null;
+  const blocks: any[] = [];
+  for (const c of m.content) {
+    const block = convertAssistantContentItem(c, model);
+    if (block !== null) blocks.push(block);
+  }
+  if (blocks.length === 0) return null;
+  return { role: 'assistant', content: blocks };
+}
+
+function convertToolResultContentItem(c: any): any {
+  return c.type === 'image'
+    ? { image: createImageBlock(c.mimeType, c.data) }
+    : { text: sanitize(c.text ?? c.json ?? JSON.stringify(c)) };
+}
+
+function buildToolResultEntry(m: any): any {
+  return {
+    toolResult: {
+      toolUseId: m.toolCallId,
+      content: m.content.map(convertToolResultContentItem),
+      status: m.isError ? 'error' : 'success',
+    },
+  };
+}
+
+function coalesceToolResults(
+  transformed: any[],
+  startIndex: number
+): { message: any; nextIndex: number } {
+  const toolResults: any[] = [buildToolResultEntry(transformed[startIndex])];
+  let j = startIndex + 1;
+  while (j < transformed.length && transformed[j].role === 'toolResult') {
+    toolResults.push(buildToolResultEntry(transformed[j]));
+    j++;
+  }
+  return { message: { role: 'user', content: toolResults }, nextIndex: j - 1 };
+}
+
+function appendCachePointToLastUser(
+  result: any[],
+  model: Model<Api>,
+  cacheRetention: CacheRetention
+): void {
+  if (cacheRetention === 'none' || !supportsPromptCaching(model) || result.length === 0) return;
+  const lastMessage = result[result.length - 1];
+  if (lastMessage.role === 'user' && Array.isArray(lastMessage.content)) {
+    lastMessage.content.push(buildCachePoint(cacheRetention));
+  }
+}
+
 function convertMessages(
   context: Context,
   model: Model<Api>,
@@ -217,109 +318,19 @@ function convertMessages(
 
   for (let i = 0; i < transformed.length; i++) {
     const m = transformed[i];
-    switch (m.role) {
-      case 'user':
-        result.push({
-          role: 'user',
-          content:
-            typeof m.content === 'string'
-              ? [{ text: sanitize(m.content) }]
-              : m.content.map((c: any) => {
-                  if (c.type === 'text') return { text: sanitize(c.text) };
-                  if (c.type === 'image') return { image: createImageBlock(c.mimeType, c.data) };
-                  throw new Error(`Unknown user content type: ${c.type}`);
-                }),
-        });
-        break;
-
-      case 'assistant': {
-        if (m.content.length === 0) continue;
-        const blocks: any[] = [];
-        for (const c of m.content) {
-          switch (c.type) {
-            case 'text':
-              if (c.text.trim().length === 0) continue;
-              blocks.push({ text: sanitize(c.text) });
-              break;
-            case 'toolCall':
-              blocks.push({ toolUse: { toolUseId: c.id, name: c.name, input: c.arguments } });
-              break;
-            case 'thinking':
-              if (c.thinking.trim().length === 0) continue;
-              if (supportsThinkingSignature(model)) {
-                // Signatures arrive after thinking deltas. If a partial or
-                // externally persisted message lacks a signature, Bedrock
-                // rejects the replayed reasoning block. Fall back to plain
-                // text — matches pi-ai's amazon-bedrock behavior.
-                if (!c.thinkingSignature || c.thinkingSignature.trim().length === 0) {
-                  blocks.push({ text: sanitize(c.thinking) });
-                } else {
-                  blocks.push({
-                    reasoningContent: {
-                      reasoningText: {
-                        text: sanitize(c.thinking),
-                        signature: c.thinkingSignature,
-                      },
-                    },
-                  });
-                }
-              } else {
-                blocks.push({
-                  reasoningContent: { reasoningText: { text: sanitize(c.thinking) } },
-                });
-              }
-              break;
-          }
-        }
-        if (blocks.length === 0) continue;
-        result.push({ role: 'assistant', content: blocks });
-        break;
-      }
-
-      case 'toolResult': {
-        const toolResults: any[] = [];
-        toolResults.push({
-          toolResult: {
-            toolUseId: m.toolCallId,
-            content: m.content.map((c: any) =>
-              c.type === 'image'
-                ? { image: createImageBlock(c.mimeType, c.data) }
-                : { text: sanitize(c.text ?? c.json ?? JSON.stringify(c)) }
-            ),
-            status: m.isError ? 'error' : 'success',
-          },
-        });
-        let j = i + 1;
-        while (j < transformed.length && transformed[j].role === 'toolResult') {
-          const next = transformed[j] as any;
-          toolResults.push({
-            toolResult: {
-              toolUseId: next.toolCallId,
-              content: next.content.map((c: any) =>
-                c.type === 'image'
-                  ? { image: createImageBlock(c.mimeType, c.data) }
-                  : { text: sanitize(c.text ?? c.json ?? JSON.stringify(c)) }
-              ),
-              status: next.isError ? 'error' : 'success',
-            },
-          });
-          j++;
-        }
-        i = j - 1;
-        result.push({ role: 'user', content: toolResults });
-        break;
-      }
-    }
-  }
-  // Add cache point to the last user message for supported Claude models
-  // when caching is enabled.
-  if (cacheRetention !== 'none' && supportsPromptCaching(model) && result.length > 0) {
-    const lastMessage = result[result.length - 1];
-    if (lastMessage.role === 'user' && Array.isArray(lastMessage.content)) {
-      lastMessage.content.push(buildCachePoint(cacheRetention));
+    if (m.role === 'user') {
+      result.push(convertUserMessage(m));
+    } else if (m.role === 'assistant') {
+      const converted = convertAssistantMessage(m, model);
+      if (converted !== null) result.push(converted);
+    } else if (m.role === 'toolResult') {
+      const { message, nextIndex } = coalesceToolResults(transformed, i);
+      result.push(message);
+      i = nextIndex;
     }
   }
 
+  appendCachePointToLastUser(result, model, cacheRetention);
   return result;
 }
 
@@ -350,22 +361,24 @@ function supportsThinkingSignature(model: Model<Api>): boolean {
   return isAnthropicClaudeModel(model);
 }
 
-// Adaptive thinking is currently supported by Claude Opus 4.6, Opus 4.7,
-// and Sonnet 4.6 only. Other Claude 4.x models stay on legacy
-// `thinking.type=enabled` with a token budget. This list is kept in lockstep
-// with pi-ai's amazon-bedrock provider.
+// Adaptive thinking is the `thinking:{type:"adaptive"}` + `output_config.effort`
+// shape Claude Opus and Sonnet ship at version ≥ 4.6. Older Claude 4.x models
+// stay on legacy `thinking.type=enabled` with a token budget. Delegates to the
+// shared `claude-model-version` helper so new releases (Opus 4.9, Sonnet 4.7,
+// future 5.x) work automatically.
 function supportsAdaptiveThinking(modelId: string, modelName?: string): boolean {
-  return matchesAny(modelId, modelName, ['opus-4-6', 'opus-4-7', 'sonnet-4-6']);
+  return claudeSupportsAdaptiveThinking(modelId, modelName);
 }
 
-// Opus 4.7 introduced a native `effort: "xhigh"` tier above `high`. Older
-// Opus 4.6 clamps xhigh to `"max"`. Anything else clamps to `"high"`.
+// Opus introduced a native `effort: "xhigh"` tier above `high` at 4.7 (and
+// later releases inherit it). Opus 4.6 clamps xhigh to `"max"`. Anything else
+// clamps to `"high"`.
 function supportsNativeXhighEffort(modelId: string, modelName?: string): boolean {
-  return matchesAny(modelId, modelName, ['opus-4-7']);
+  return claudeSupportsNativeXhighEffort(modelId, modelName);
 }
 
 function supportsMaxEffort(modelId: string, modelName?: string): boolean {
-  return matchesAny(modelId, modelName, ['opus-4-6']);
+  return claudeSupportsMaxEffort(modelId, modelName);
 }
 
 // ── Tool config ─────────────────────────────────────────────────────
@@ -634,6 +647,162 @@ function extractResponseHeaders(response: Response): Record<string, string> {
 
 // ── Stream function ─────────────────────────────────────────────────
 
+function createInitialOutput(model: Model<Api>): AssistantMessage {
+  return {
+    role: 'assistant',
+    content: [],
+    api: 'bedrock-camp-converse' as Api,
+    provider: model.provider,
+    model: model.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: 'stop',
+    timestamp: Date.now(),
+  };
+}
+
+function buildInferenceConfig(
+  model: Model<Api>,
+  options: BedrockCampOptions
+): Record<string, unknown> {
+  const inferenceConfig: Record<string, unknown> = {};
+  if (options.maxTokens !== undefined) inferenceConfig.maxTokens = options.maxTokens;
+  if (options.temperature !== undefined && supportsTemperature(model.id, model.name)) {
+    inferenceConfig.temperature = options.temperature;
+  }
+  return inferenceConfig;
+}
+
+function buildConverseRequestBody(
+  model: Model<Api>,
+  context: Context,
+  options: BedrockCampOptions,
+  cacheRetention: CacheRetention
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    modelId: model.id,
+    messages: convertMessages(context, model, cacheRetention),
+    system: buildSystemPrompt(context.systemPrompt, model, cacheRetention),
+    inferenceConfig: buildInferenceConfig(model, options),
+    toolConfig: convertToolConfig(context.tools, options.toolChoice),
+    additionalModelRequestFields: buildAdditionalModelRequestFields(model, options),
+    ...(options.requestMetadata !== undefined ? { requestMetadata: options.requestMetadata } : {}),
+  };
+
+  // Remove undefined fields
+  if (!body.system) delete body.system;
+  if (!body.toolConfig) delete body.toolConfig;
+  if (!body.additionalModelRequestFields) delete body.additionalModelRequestFields;
+
+  return body;
+}
+
+async function applyOnPayloadHook(
+  body: Record<string, unknown>,
+  model: Model<Api>,
+  options: BedrockCampOptions
+): Promise<Record<string, unknown>> {
+  if (!options.onPayload) return body;
+  const replacement = await options.onPayload(body, model);
+  return replacement !== undefined ? (replacement as Record<string, unknown>) : body;
+}
+
+async function performConverseFetch(
+  targetUrl: string,
+  apiKey: string,
+  body: Record<string, unknown>,
+  model: Model<Api>,
+  options: BedrockCampOptions
+): Promise<Response> {
+  // CORS routing in CLI mode is handled transparently by
+  // `llm-proxy-sw.ts` — cross-origin fetches from the page get
+  // rewritten to /api/fetch-proxy with the X-Target-URL header at
+  // the SW layer. Extension mode bypasses CORS via host_permissions
+  // and never registers the SW, so a direct fetch works there too.
+  // Either way, this provider issues a plain fetch and lets the
+  // platform handle transport.
+  const requestHeaders: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${apiKey}`,
+    ...(options.headers ?? {}),
+  };
+  const response = await fetch(targetUrl, {
+    method: 'POST',
+    headers: requestHeaders,
+    body: JSON.stringify(body),
+    signal: options.signal,
+  });
+
+  if (options.onResponse) {
+    await options.onResponse(
+      { status: response.status, headers: extractResponseHeaders(response) },
+      model
+    );
+  }
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(formatHttpError(response.status, errorText));
+  }
+
+  return response;
+}
+
+function handleStreamError(
+  error: unknown,
+  output: AssistantMessage,
+  options: BedrockCampOptions,
+  stream: AssistantMessageEventStream
+): void {
+  for (const block of output.content) {
+    delete (block as any).index;
+    delete (block as any).partialJson;
+  }
+  output.stopReason = options.signal?.aborted ? 'aborted' : 'error';
+  output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+  stream.push({ type: 'error', reason: output.stopReason, error: output });
+  stream.end();
+}
+
+async function runConverseRequest(
+  model: Model<Api>,
+  context: Context,
+  options: BedrockCampOptions,
+  output: AssistantMessage,
+  stream: AssistantMessageEventStream
+): Promise<void> {
+  const apiKey = options.apiKey;
+  if (!apiKey) throw new Error('API key is required for Bedrock CAMP');
+
+  const baseUrl = model.baseUrl;
+  if (!baseUrl) throw new Error('Base URL is required for Bedrock CAMP');
+
+  const cacheRetention = resolveCacheRetention(options.cacheRetention);
+
+  let body = buildConverseRequestBody(model, context, options, cacheRetention);
+  body = await applyOnPayloadHook(body, model, options);
+
+  // Build URL: POST {baseUrl}/model/{modelId}/converse
+  const targetUrl = `${baseUrl.replace(/\/$/, '')}/model/${model.id}/converse`;
+
+  const response = await performConverseFetch(targetUrl, apiKey, body, model, options);
+
+  const responseBody = await response.json();
+  parseConverseResponse(responseBody, model, output, stream);
+
+  if (output.stopReason === 'error' || output.stopReason === 'aborted') {
+    throw new Error('An unknown error occurred');
+  }
+  stream.push({ type: 'done', reason: output.stopReason, message: output });
+  stream.end();
+}
+
 export const streamBedrockCamp = (
   model: Model<Api>,
   context: Context,
@@ -642,114 +811,11 @@ export const streamBedrockCamp = (
   const stream = createAssistantMessageEventStream();
 
   (async () => {
-    const output: AssistantMessage = {
-      role: 'assistant',
-      content: [],
-      api: 'bedrock-camp-converse' as Api,
-      provider: model.provider,
-      model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: 'stop',
-      timestamp: Date.now(),
-    };
-
+    const output = createInitialOutput(model);
     try {
-      const apiKey = options.apiKey;
-      if (!apiKey) throw new Error('API key is required for Bedrock CAMP');
-
-      const baseUrl = model.baseUrl;
-      if (!baseUrl) throw new Error('Base URL is required for Bedrock CAMP');
-
-      const cacheRetention = resolveCacheRetention(options.cacheRetention);
-
-      // Build request body (Converse API format)
-      const inferenceConfig: Record<string, unknown> = {};
-      if (options.maxTokens !== undefined) inferenceConfig.maxTokens = options.maxTokens;
-      if (options.temperature !== undefined && supportsTemperature(model.id, model.name)) {
-        inferenceConfig.temperature = options.temperature;
-      }
-      let body: Record<string, unknown> = {
-        modelId: model.id,
-        messages: convertMessages(context, model, cacheRetention),
-        system: buildSystemPrompt(context.systemPrompt, model, cacheRetention),
-        inferenceConfig,
-        toolConfig: convertToolConfig(context.tools, options.toolChoice),
-        additionalModelRequestFields: buildAdditionalModelRequestFields(model, options),
-        ...(options.requestMetadata !== undefined
-          ? { requestMetadata: options.requestMetadata }
-          : {}),
-      };
-
-      // Remove undefined fields
-      if (!body.system) delete body.system;
-      if (!body.toolConfig) delete body.toolConfig;
-      if (!body.additionalModelRequestFields) delete body.additionalModelRequestFields;
-
-      if (options.onPayload) {
-        const replacement = await options.onPayload(body, model);
-        if (replacement !== undefined) {
-          body = replacement as Record<string, unknown>;
-        }
-      }
-
-      // Build URL: POST {baseUrl}/model/{modelId}/converse
-      const targetUrl = `${baseUrl.replace(/\/$/, '')}/model/${model.id}/converse`;
-
-      // CORS routing in CLI mode is handled transparently by
-      // `llm-proxy-sw.ts` — cross-origin fetches from the page get
-      // rewritten to /api/fetch-proxy with the X-Target-URL header at
-      // the SW layer. Extension mode bypasses CORS via host_permissions
-      // and never registers the SW, so a direct fetch works there too.
-      // Either way, this provider issues a plain fetch and lets the
-      // platform handle transport.
-      const requestHeaders: Record<string, string> = {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-        ...(options.headers ?? {}),
-      };
-      const response = await fetch(targetUrl, {
-        method: 'POST',
-        headers: requestHeaders,
-        body: JSON.stringify(body),
-        signal: options.signal,
-      });
-
-      if (options.onResponse) {
-        await options.onResponse(
-          { status: response.status, headers: extractResponseHeaders(response) },
-          model
-        );
-      }
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(formatHttpError(response.status, errorText));
-      }
-
-      const responseBody = await response.json();
-      parseConverseResponse(responseBody, model, output, stream);
-
-      if (output.stopReason === 'error' || output.stopReason === 'aborted') {
-        throw new Error('An unknown error occurred');
-      }
-      stream.push({ type: 'done', reason: output.stopReason, message: output });
-      stream.end();
+      await runConverseRequest(model, context, options, output, stream);
     } catch (error) {
-      for (const block of output.content) {
-        delete (block as any).index;
-        delete (block as any).partialJson;
-      }
-      output.stopReason = options.signal?.aborted ? 'aborted' : 'error';
-      output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
-      stream.push({ type: 'error', reason: output.stopReason, error: output });
-      stream.end();
+      handleStreamError(error, output, options, stream);
     }
   })();
 
