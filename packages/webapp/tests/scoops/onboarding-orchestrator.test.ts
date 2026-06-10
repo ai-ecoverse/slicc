@@ -173,6 +173,17 @@ describe('OnboardingOrchestrator', () => {
       expect(h.dipRefs).toHaveLength(2); // "Welcome…" text + dip image markdown
       expect(h.dipRefs[0]).toContain("let's get you set up");
       expect(h.dipRefs[1]).toContain('welcome.shtml');
+      expect(h.orchestrator.getStage()).toBe('collect-profile');
+    });
+
+    it('allows handleOnboardingComplete to proceed after handleFirstRun has run', async () => {
+      const h = makeHarness();
+      h.orchestrator.handleFirstRun();
+      expect(h.orchestrator.getStage()).toBe('collect-profile');
+      const handled = await h.orchestrator.handleOnboardingComplete({ name: 'Test' });
+      expect(handled).toBe(true);
+      expect(h.orchestrator.getStage()).toBe('awaiting-connect');
+      expect(h.systemMessages).toHaveLength(3); // three deterministic intro lines
     });
   });
 

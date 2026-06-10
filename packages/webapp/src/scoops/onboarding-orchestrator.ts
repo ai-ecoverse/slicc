@@ -192,7 +192,7 @@ export class OnboardingOrchestrator {
    * fall back to the legacy path.
    */
   async handleOnboardingComplete(profile: OnboardingProfile): Promise<boolean> {
-    if (this.stage !== 'idle') {
+    if (this.stage !== 'idle' && this.stage !== 'collect-profile') {
       log.debug('Ignoring duplicate onboarding-complete', { stage: this.stage });
       return true;
     }
