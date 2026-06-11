@@ -192,6 +192,9 @@ function topnav(): HTMLElement {
     scoops?: unknown;
   };
   (switcher as { scoops?: unknown }).scoops = SCOOPS;
+  // Eyes are one-pair-at-a-time (hover > attention): the cone wears the
+  // blinking resting pair in the showcase, like a live float at boot.
+  switcher.setAttribute('attention', 'cone');
   const floatbar = el('slicc-floatbar', {
     label: 'CLI · tray · 1 follower',
     spent: '2.41',

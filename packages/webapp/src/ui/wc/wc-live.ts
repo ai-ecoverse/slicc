@@ -198,6 +198,9 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
       ensureSelection();
     },
     onIncomingMessage: (jid, message) => {
+      // Most-recent-activity tracking: the scoop that just received a message
+      // wears the blinking navbar eyes (the switcher's `attention` chip).
+      wiring.refs.switcher.setAttribute('attention', jid);
       if (wiring.getSelected()?.jid !== jid) return;
       if (message.channel !== 'web' && isLickChannel(message.channel)) {
         wiring
@@ -421,6 +424,11 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     void applyThreadContext(refs, scoop);
     client.requestScoopMessages(scoop.jid);
     controller?.setProcessing(client.isProcessing(scoop.jid));
+    // Boot default for the navbar eyes: until any message/input lands, the
+    // first-selected scoop wears them (selection itself is not "activity").
+    if (!refs.switcher.hasAttribute('attention')) {
+      refs.switcher.setAttribute('attention', scoop.jid);
+    }
   };
 
   return {
@@ -606,6 +614,9 @@ function wireWcComposer(deps: {
     if (!text) return;
     boot.getController()?.sendUserMessage(text, attachStage?.take());
     (refs.inputCard as HTMLElement & { clear?: () => void }).clear?.();
+    // User input is most-recent activity: the addressed scoop gets the eyes.
+    const jid = boot.getSelected()?.jid;
+    if (jid) refs.switcher.setAttribute('attention', jid);
   });
 
   // The send button morphs into a stop control while a turn is processing.
@@ -702,6 +713,9 @@ export function attachWcClient(
   const { controller, agentHandle } = createWcController(refs, client, () => {
     triggerPlaceholder();
     refreshStats();
+    // A finished turn = the selected scoop just received an agent message.
+    const jid = boot.getSelected()?.jid;
+    if (jid) refs.switcher.setAttribute('attention', jid);
   });
   boot.setController(controller);
   boot.onClientReady(refreshStats);

@@ -169,6 +169,18 @@ describe('createWcLiveCallbacks', () => {
     expect(wiring.selectScoop).not.toHaveBeenCalled();
   });
 
+  it('stamps the switcher attention with the scoop that received a message', () => {
+    // The navbar eyes follow most-recent activity: any incoming message moves
+    // the blinking pair to its scoop — selected or not.
+    const wiring = makeWiring({ selected: cone, scoops: [cone, scoop({})] });
+    const callbacks = createWcLiveCallbacks(wiring);
+    const msg = { id: 'l1', content: 'done', channel: 'scoop-notify', timestamp: 1 };
+    callbacks.onIncomingMessage('scoop-1', msg as never);
+    expect(wiring.refs.switcher.getAttribute('attention')).toBe('scoop-1');
+    callbacks.onIncomingMessage(cone.jid, msg as never);
+    expect(wiring.refs.switcher.getAttribute('attention')).toBe('cone-1');
+  });
+
   it('renders licks for the selected scoop only, skipping web messages', () => {
     const wiring = makeWiring({ selected: cone });
     const callbacks = createWcLiveCallbacks(wiring);

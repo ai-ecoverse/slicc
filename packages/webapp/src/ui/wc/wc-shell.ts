@@ -424,6 +424,10 @@ export function mountWcUiPreview(root: HTMLElement): void {
     { kind: 'file', id: '/shared/CLAUDE.md', label: 'CLAUDE.md' },
   ];
 
+  // Eyes show one-pair-at-a-time (hover > attention); give the fixture's cone
+  // the blinking pair so the preview demos the resting state.
+  refs.switcher.setAttribute('attention', 'cone');
+
   refs.inputCard.addEventListener('submit', (event) => {
     const text = submittedText(event)?.trim();
     if (!text) return;

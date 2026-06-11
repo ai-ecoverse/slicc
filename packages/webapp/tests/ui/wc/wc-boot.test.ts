@@ -110,6 +110,24 @@ describe('prepareWcShell + attachWcClient', () => {
     expect(fake.raw.requestScoopMessages).toHaveBeenCalledWith('cone-1');
     expect(boot.refs.inputCard.hasAttribute('disabled')).toBe(false);
     expect(boot.getSelected()?.jid).toBe('cone-1');
+    // Boot default: the first selection wears the navbar eyes until real
+    // activity (message/input) moves them.
+    expect(boot.refs.switcher.getAttribute('attention')).toBe('cone-1');
+  });
+
+  it('user input moves the navbar eyes to the addressed scoop', () => {
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const boot = prepareWcShell(root, 'test · wc');
+    const fake = makeFakeClient();
+    attachWcClient(boot, fake.client, log);
+    boot.selectScoop(cone());
+    boot.refs.switcher.setAttribute('attention', 'scoop-elsewhere');
+
+    boot.refs.inputCard.dispatchEvent(
+      new CustomEvent('submit', { bubbles: true, detail: { value: 'hi' } })
+    );
+    expect(boot.refs.switcher.getAttribute('attention')).toBe('cone-1');
   });
 
   it('stops the agent only while a turn is processing', () => {

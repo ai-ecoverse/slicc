@@ -11,6 +11,8 @@ interface SwitcherArgs {
   scoops?: ScoopDescriptor[];
   /** Active chip key. */
   active?: string;
+  /** Chip wearing the (blinking) eyes when nothing is hovered. */
+  attention?: string;
   /** Width of the surrounding nav band (drives the overflow reflow). */
   width?: number;
 }
@@ -18,8 +20,10 @@ interface SwitcherArgs {
 /** The prototype's default scoop roster: cone first, then four colored scoops. */
 const SCOOPS: ScoopDescriptor[] = [
   { key: 'cone', type: 'cone', color: '#b07823', label: 'Sliccy', eyes: 'open' },
-  { key: 'researcher', type: 'scoop', color: '#06b6d4', label: 'researcher', eyes: 'none' },
-  { key: 'designer', type: 'scoop', color: '#8b5cf6', label: 'designer', eyes: 'none' },
+  // Ready scoops carry eyes:'open' (matching the live host's status mapping);
+  // the switcher's one-pair rule decides who actually wears them.
+  { key: 'researcher', type: 'scoop', color: '#06b6d4', label: 'researcher', eyes: 'open' },
+  { key: 'designer', type: 'scoop', color: '#8b5cf6', label: 'designer', eyes: 'open' },
   { key: 'tester', type: 'scoop', color: '#f59e0b', label: 'tester', eyes: 'dead' },
 ];
 
@@ -41,7 +45,12 @@ const SCOOPS_WITH_EPHEMERAL: ScoopDescriptor[] = [
  * fill, and (when the band is narrow) the overflow `⋯` popup read in their real
  * prototype context.
  */
-function buildSwitcher({ scoops = SCOOPS, active = 'cone', width }: SwitcherArgs): HTMLElement {
+function buildSwitcher({
+  scoops = SCOOPS,
+  active = 'cone',
+  attention = 'cone',
+  width,
+}: SwitcherArgs): HTMLElement {
   const nav = document.createElement('div');
   nav.style.cssText =
     'display:flex;align-items:center;gap:14px;padding:0 16px;height:44px;' +
@@ -57,6 +66,7 @@ function buildSwitcher({ scoops = SCOOPS, active = 'cone', width }: SwitcherArgs
   switcher.style.marginLeft = '0';
   switcher.scoops = scoops;
   if (active) switcher.active = active;
+  if (attention) switcher.attention = attention;
   nav.appendChild(switcher);
 
   // The spacer absorbs free width so the switcher row is content-sized (matches
@@ -95,8 +105,17 @@ export const Default: Story = { args: { scoops: SCOOPS, active: 'cone' } };
 /** A scoop chip is active (accent fills the pill, white label). */
 export const ScoopActive: Story = { args: { scoops: SCOOPS, active: 'researcher' } };
 
-/** The tester scoop ran into trouble — dead "X X" eyes. */
-export const DeadScoop: Story = { args: { scoops: SCOOPS, active: 'cone' } };
+/** The tester scoop ran into trouble — dead "X X" eyes (shown on its turn). */
+export const DeadScoop: Story = { args: { scoops: SCOOPS, active: 'cone', attention: 'tester' } };
+
+/**
+ * Eyes are one-pair-at-a-time: the `attention` chip (most recent agent message
+ * or user input, host-fed) wears them blinking; hovering any chip moves the
+ * pair there with a steady gaze.
+ */
+export const AttentionEyes: Story = {
+  args: { scoops: SCOOPS, active: 'cone', attention: 'researcher' },
+};
 
 /** Includes a green ephemeral `triage` chip auto-spawned by a lick. */
 export const WithEphemeral: Story = {

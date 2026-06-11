@@ -223,18 +223,24 @@ function scoopInner(fill: string, outline: string): SVGElement[] {
 
 /** A live (open) eye: white sclera, black pupil with a catchlight highlight. */
 function eyeOpen(cx: number, cy: number, r: number, side: 'l' | 'r', pr: number): SVGElement[] {
+  // The wrapper g.eye-blink is the blink squash target (`:host([blink])`);
+  // dead eyes are built without it, so they can never blink.
   return [
-    svgEl('circle', { cx, cy, r, fill: '#fff', stroke: '#000', 'stroke-width': 4 }),
     svgEl(
       'g',
-      { class: `pupil pupil-${side}` },
-      svgEl('circle', { cx, cy, r: pr, fill: '#000' }),
-      svgEl('circle', {
-        cx: cx - pr * 0.3,
-        cy: cy - pr * 0.35,
-        r: pr * 0.4,
-        fill: '#fff',
-      })
+      { class: `eye-blink eye-${side}` },
+      svgEl('circle', { cx, cy, r, fill: '#fff', stroke: '#000', 'stroke-width': 4 }),
+      svgEl(
+        'g',
+        { class: `pupil pupil-${side}` },
+        svgEl('circle', { cx, cy, r: pr, fill: '#000' }),
+        svgEl('circle', {
+          cx: cx - pr * 0.3,
+          cy: cy - pr * 0.35,
+          r: pr * 0.4,
+          fill: '#fff',
+        })
+      )
     ),
   ];
 }
@@ -325,6 +331,13 @@ const PILL_STYLE = `
   .pill:hover .icon-inner,.pill:focus-visible .icon-inner{transform:translate(var(--ox,0%),var(--oy,0%)) scale(var(--ozoom,1));}
   .glyph{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:var(--g);height:var(--g);display:block;overflow:visible;}
   .eyes{position:absolute;pointer-events:none;} .eyes-svg{display:block;overflow:visible;}
+  /* Periodic eyelid blink (mirrors slicc-googly-eyes): a quick scaleY squash.
+     The two eyes run different cycle lengths so the blink drifts in and out of
+     sync and never feels metronomic. Dead eyes have no .eye-blink wrapper. */
+  @keyframes slicc-pill-blink{0%,92%,100%{transform:scaleY(1);}96%{transform:scaleY(0.08);}}
+  :host([blink]) .eye-blink{transform-box:fill-box;transform-origin:center;animation:slicc-pill-blink 3.4s ease-in-out infinite;}
+  :host([blink]) .eye-blink.eye-r{animation-duration:4.6s;}
+  @media (prefers-reduced-motion: reduce){:host([blink]) .eye-blink{animation:none;}}
   .label{position:relative;z-index:1;flex:1 1 auto;min-width:0;color:var(--label);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   /* Compact chip: just the eyes/glyph (no label), with the title on hover. The
      [compact] attribute forces it; a narrow / extension-sidebar viewport (≤560px)
@@ -362,6 +375,8 @@ const SHEET = sheet(PILL_STYLE);
  * @attr type - `cone` | `scoop` (default `scoop`); selects the glyph
  * @attr color - accent hex; the glyph fill, outline, waffle and border derive from it
  * @attr eyes - `open` (default) | `none` | `dead`
+ * @attr blink - boolean; periodic eyelid blink on open eyes (pure CSS; no-op
+ *   for `dead`/`none`, disabled under prefers-reduced-motion)
  * @attr active - boolean; fills the pill with the accent (white label)
  * @attr label - the chip text (escaped); falls back to slotted content
  * @attr pupil - explicit pupil scale `0.3`–`2.4` (wins over `fill`)

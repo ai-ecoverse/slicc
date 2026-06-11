@@ -174,6 +174,10 @@ function eyesOf(el: Element, fallback: 'open' | 'none' | 'dead'): 'open' | 'none
  * canonical source so the active chip stays in sync.
  *
  * @attr active - the key of the active chip (reflected to/from the `active` property)
+ * @attr attention - the key wearing the eyes when nothing is hovered (the scoop
+ *   that last received an agent message or user input — host-fed app state).
+ *   Eyes rules: ONE pair at a time; the hovered chip wins with a steady gaze;
+ *   otherwise the attention chip blinks; everyone else goes eyeless.
  * @csspart row - the chip row (the host element itself carries `part="row"`)
  * @slot - pre-existing `slicc-pill` children, adopted into `scoops` at connect time
  * @fires slicc-scoop-select - a chip was clicked; `detail` is {@link ScoopSelectDetail}
@@ -181,7 +185,7 @@ function eyesOf(el: Element, fallback: 'open' | 'none' | 'dead'): 'open' | 'none
  */
 export class SliccScoopSwitcher extends HTMLElement {
   static get observedAttributes(): string[] {
-    return ['active'];
+    return ['active', 'attention'];
   }
 
   #scoops: ScoopDescriptor[] = [];
@@ -191,6 +195,21 @@ export class SliccScoopSwitcher extends HTMLElement {
   #reflowing = false;
   #onClick: ((e: Event) => void) | null = null;
   #initialized = false;
+  /** Chip key currently under the pointer — eyes priority over `attention`. */
+  #hoverKey: string | null = null;
+  #onPointerOver = (e: Event): void => {
+    const key = this.#chipKeyFromEvent(e);
+    if (key !== this.#hoverKey) {
+      this.#hoverKey = key;
+      this.#applyEyes();
+    }
+  };
+  #onPointerLeave = (): void => {
+    if (this.#hoverKey !== null) {
+      this.#hoverKey = null;
+      this.#applyEyes();
+    }
+  };
 
   connectedCallback(): void {
     ensureSwitcherStyle(this.ownerDocument);
@@ -204,6 +223,8 @@ export class SliccScoopSwitcher extends HTMLElement {
       this.#onClick = (e: Event) => this.#handleClick(e);
       this.addEventListener('click', this.#onClick);
     }
+    this.addEventListener('pointerover', this.#onPointerOver);
+    this.addEventListener('pointerleave', this.#onPointerLeave);
     this.#render();
     this.#observe();
     // Initial reflow after layout settles (mirrors the prototype's
@@ -218,10 +239,14 @@ export class SliccScoopSwitcher extends HTMLElement {
       this.removeEventListener('click', this.#onClick);
       this.#onClick = null;
     }
+    this.removeEventListener('pointerover', this.#onPointerOver);
+    this.removeEventListener('pointerleave', this.#onPointerLeave);
   }
 
   attributeChangedCallback(name: string): void {
-    if (name === 'active' && this.#initialized) this.#syncActive();
+    if (!this.#initialized) return;
+    if (name === 'active') this.#syncActive();
+    else if (name === 'attention') this.#applyEyes();
   }
 
   /** The scoop list. Cone-first ordering is the caller's responsibility (the
@@ -236,6 +261,20 @@ export class SliccScoopSwitcher extends HTMLElement {
       this.#render();
       this.reflow();
     }
+  }
+
+  /**
+   * The scoop key holding the eyes when nothing is hovered — app state fed by
+   * the host (the scoop that received the most recent agent message or user
+   * input). Reflected to the `attention` attribute.
+   */
+  get attention(): string | null {
+    return this.getAttribute('attention');
+  }
+
+  set attention(value: string | null) {
+    if (value == null) this.removeAttribute('attention');
+    else this.setAttribute('attention', value);
   }
 
   /** The active scoop key (reflected to the `active` attribute). */
@@ -384,6 +423,39 @@ export class SliccScoopSwitcher extends HTMLElement {
       });
     });
     this.replaceChildren(...pills);
+    this.#applyEyes();
+  }
+
+  /** Resolve the chip key for a pointer event inside the row, if any. */
+  #chipKeyFromEvent(e: Event): string | null {
+    const chip = (e.target as HTMLElement | null)?.closest?.<HTMLElement>('slicc-pill.scoop');
+    return chip && this.contains(chip) ? (chip.dataset.k ?? null) : null;
+  }
+
+  /** A chip's natural eye state (from its descriptor; cone defaults open). */
+  #naturalEyes(key: string): string {
+    const s = this.#scoops.find((x) => x.key === key);
+    const type = s?.type === 'cone' || key === 'cone' ? 'cone' : 'scoop';
+    return s?.eyes ?? (type === 'cone' ? 'open' : 'none');
+  }
+
+  /**
+   * One pair of eyes at a time: the hovered chip wins (steady gaze, no blink);
+   * with nothing hovered, the `attention` chip — the scoop that last received
+   * an agent message or user input — wears them, blinking. Everyone else goes
+   * eyeless. A chip's natural `dead` look survives the gating (an errored
+   * scoop still shows X-eyes on its turn; the blink no-ops for it).
+   */
+  #applyEyes(): void {
+    const attention = this.attention;
+    for (const chip of this.querySelectorAll<HTMLElement>('slicc-pill.scoop')) {
+      const key = chip.dataset.k ?? '';
+      const shown =
+        this.#hoverKey !== null ? this.#hoverKey === key : attention !== null && attention === key;
+      const natural = this.#naturalEyes(key);
+      chip.setAttribute('eyes', shown ? natural : 'none');
+      chip.toggleAttribute('blink', shown && this.#hoverKey === null && natural === 'open');
+    }
   }
 
   /** Toggle the `active` class/attribute on chips to match the `active` property

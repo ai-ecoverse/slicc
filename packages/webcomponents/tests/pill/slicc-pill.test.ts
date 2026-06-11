@@ -159,6 +159,27 @@ describe('slicc-pill', () => {
       expect(el.shadowRoot?.querySelector('.eyes-svg')).toBeNull();
       expect(el.shadowRoot?.querySelector('.pupil-l')).toBeNull();
     });
+
+    it('blink animates open eyes (per-eye desynced) and never dead ones', () => {
+      const el = mount((e) => {
+        e.setAttribute('blink', '');
+      });
+      const left = el.shadowRoot?.querySelector('.eye-blink.eye-l') as SVGGElement;
+      const right = el.shadowRoot?.querySelector('.eye-blink.eye-r') as SVGGElement;
+      expect(getComputedStyle(left).animationName).toBe('slicc-pill-blink');
+      // The two eyes run different cycle lengths so the blink never feels
+      // metronomic (mirrors slicc-googly-eyes).
+      expect(getComputedStyle(left).animationDuration).not.toBe(
+        getComputedStyle(right).animationDuration
+      );
+      // Without the attribute the eyes hold still.
+      el.removeAttribute('blink');
+      expect(getComputedStyle(left).animationName).toBe('none');
+      // Dead eyes are built without the blink wrapper — they cannot blink.
+      el.eyeState = 'dead';
+      el.setAttribute('blink', '');
+      expect(el.shadowRoot?.querySelector('.eye-blink')).toBeNull();
+    });
   });
 
   describe('pupil dilation', () => {

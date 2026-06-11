@@ -154,8 +154,11 @@ describe('slicc-scoop-switcher', () => {
       expect(designer?.hasAttribute('active')).toBe(true);
     });
 
-    it('keeps a dead-eyed scoop chip (the failed look)', () => {
+    it('keeps a dead-eyed scoop chip (the failed look) when it wears the eyes', () => {
+      // Eyes show one-pair-at-a-time now: the dead look survives the gating
+      // but only renders on the chip's turn (attention / hover).
       const el = mount();
+      el.setAttribute('attention', 'tester');
       const tester = chips(el).find((c) => c.dataset.k === 'tester');
       expect(tester?.getAttribute('eyes')).toBe('dead');
     });
@@ -298,6 +301,53 @@ describe('slicc-scoop-switcher', () => {
       );
       expect(detail).toHaveBeenCalledWith(hidden.id);
       expect(el.active).toBe(hidden.id);
+    });
+  });
+
+  describe('eyes: one pair at a time (hover > attention)', () => {
+    const EYED: ScoopDescriptor[] = [
+      { key: 'cone', type: 'cone', color: '#b07823', label: 'Sliccy', eyes: 'open' },
+      { key: 'researcher', type: 'scoop', color: '#06b6d4', label: 'researcher', eyes: 'open' },
+      { key: 'tester', type: 'scoop', color: '#f59e0b', label: 'tester', eyes: 'dead' },
+    ];
+    const byKey = (el: SliccScoopSwitcher, k: string): HTMLElement =>
+      chips(el).find((c) => c.dataset.k === k) as HTMLElement;
+
+    it('only the attention chip wears eyes — blinking; everyone else goes eyeless', () => {
+      const el = mount(EYED);
+      el.setAttribute('attention', 'researcher');
+      expect(byKey(el, 'researcher').getAttribute('eyes')).toBe('open');
+      expect(byKey(el, 'researcher').hasAttribute('blink')).toBe(true);
+      expect(byKey(el, 'cone').getAttribute('eyes')).toBe('none');
+      expect(byKey(el, 'tester').getAttribute('eyes')).toBe('none');
+    });
+
+    it('the hovered chip wins with a steady gaze; pointerleave restores the blink', () => {
+      const el = mount(EYED);
+      el.setAttribute('attention', 'researcher');
+      byKey(el, 'cone').dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
+      expect(byKey(el, 'cone').getAttribute('eyes')).toBe('open');
+      expect(byKey(el, 'cone').hasAttribute('blink')).toBe(false);
+      expect(byKey(el, 'researcher').getAttribute('eyes')).toBe('none');
+
+      el.dispatchEvent(new PointerEvent('pointerleave'));
+      expect(byKey(el, 'cone').getAttribute('eyes')).toBe('none');
+      expect(byKey(el, 'researcher').getAttribute('eyes')).toBe('open');
+      expect(byKey(el, 'researcher').hasAttribute('blink')).toBe(true);
+    });
+
+    it('a dead chip keeps its X-eyes on its turn and never blinks', () => {
+      const el = mount(EYED);
+      el.setAttribute('attention', 'tester');
+      expect(byKey(el, 'tester').getAttribute('eyes')).toBe('dead');
+      expect(byKey(el, 'tester').hasAttribute('blink')).toBe(false);
+    });
+
+    it('with no attention and no hover, nobody wears eyes', () => {
+      const el = mount(EYED);
+      for (const k of ['cone', 'researcher', 'tester']) {
+        expect(byKey(el, k).getAttribute('eyes')).toBe('none');
+      }
     });
   });
 
