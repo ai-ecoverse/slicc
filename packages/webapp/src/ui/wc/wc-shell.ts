@@ -38,6 +38,8 @@ export interface WcShellOptions {
   floatLabel: string;
   /** Composer input placeholder. */
   placeholder: string;
+  /** Logo badge text (fixture mode tags itself; live floats go bare). */
+  badge?: string;
   /** Invoked when dock/tab selection activates a workbench surface. */
   onSurfaceActivate?: (surfaceId: string) => void;
 }
@@ -102,7 +104,7 @@ function buildNav(options: WcShellOptions): {
   const avatarMenu = document.createElement('slicc-avatar-menu');
   avatarMenu.append(el('slicc-avatar', { name: 'SLICC' }));
   nav.append(
-    el('slicc-logo', { badge: 'preview' }),
+    el('slicc-logo', options.badge ? { badge: options.badge } : {}),
     switcher,
     floatbar,
     el('slicc-theme-toggle'),
@@ -276,6 +278,7 @@ export function mountWcUiPreview(root: HTMLElement): void {
     ],
     floatLabel: 'standalone · preview',
     placeholder: 'Preview harness — submissions echo into the thread…',
+    badge: 'fixture',
   });
 
   refs.fileTree.items = [
