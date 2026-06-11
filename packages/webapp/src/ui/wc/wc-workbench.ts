@@ -8,7 +8,7 @@
 
 import type { SliccFileTree } from '@slicc/webcomponents';
 
-import type { VirtualFS } from '../../fs/virtual-fs.js';
+import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
 import { buildMemoryRows } from './wc-memory.js';
 
 type FileTreeItem = NonNullable<SliccFileTree['items']>[number];
@@ -18,8 +18,8 @@ const TREE_ROOTS = ['/workspace', '/shared'] as const;
 const MAX_DEPTH = 3;
 const MAX_ENTRIES_PER_DIR = 200;
 
-async function dirChildren(fs: VirtualFS, dir: string, depth: number): Promise<FileTreeItem[]> {
-  let entries: Awaited<ReturnType<VirtualFS['readDir']>>;
+async function dirChildren(fs: LocalVfsClient, dir: string, depth: number): Promise<FileTreeItem[]> {
+  let entries: Awaited<ReturnType<LocalVfsClient['readDir']>>;
   try {
     entries = await fs.readDir(dir);
   } catch {
@@ -52,7 +52,7 @@ async function dirChildren(fs: VirtualFS, dir: string, depth: number): Promise<F
  * Build `<slicc-file-tree>` items for the VFS workbench roots: one group per
  * root with its (depth-capped) directory tree underneath.
  */
-export async function buildVfsTreeItems(fs: VirtualFS): Promise<FileTreeItem[]> {
+export async function buildVfsTreeItems(fs: LocalVfsClient): Promise<FileTreeItem[]> {
   const items: FileTreeItem[] = [];
   for (const root of TREE_ROOTS) {
     items.push({ kind: 'group', label: `${root.slice(1)}/` });
@@ -66,8 +66,8 @@ export interface WcWorkbenchDeps {
   termSurface: HTMLElement;
   /** Container the memory rows render into. */
   memoryHost: HTMLElement;
-  /** Lazily resolved page-side VFS (shared LightningFS IndexedDB). */
-  openFs(): Promise<VirtualFS>;
+  /** Lazily resolved page-side VFS reader (routed through the worker's VfsRpcHost). */
+  openFs(): Promise<LocalVfsClient>;
   /** Mounts the worker-shell terminal into the surface; resolves on attach. */
   mountTerminal(container: HTMLElement): Promise<void>;
   log: { error(message: string, ...data: unknown[]): void };

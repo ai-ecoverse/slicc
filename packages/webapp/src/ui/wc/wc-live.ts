@@ -174,7 +174,7 @@ async function applyThreadContext(refs: WcShellRefs, scoop: RegisteredScoop): Pr
 
 interface FreezerRailDeps {
   refs: WcShellRefs;
-  openFs(): Promise<import('../../fs/virtual-fs.js').VirtualFS>;
+  openVfs(): Promise<WcPageVfs>;
   client: OffscreenClient;
   getController(): WcChatController | null;
   selectScoop(scoop: RegisteredScoop): void;
@@ -189,13 +189,13 @@ interface FreezerRailDeps {
  * card-refresh function for the post-boot initial fill.
  */
 function wireFreezerRail(deps: FreezerRailDeps): () => void {
-  const { refs, openFs, client, getController, selectScoop, clearSelection, log } = deps;
+  const { refs, openVfs, client, getController, selectScoop, clearSelection, log } = deps;
   let frozenEntries: FrozenSessionIndexEntry[] = [];
 
   const refreshFreezer = (): void => {
-    void openFs()
-      .then(async (fs) => {
-        frozenEntries = await refreshFreezerCards(refs.freezer, fs);
+    void openVfs()
+      .then(async ({ reader }) => {
+        frozenEntries = await refreshFreezerCards(refs.freezer, reader);
       })
       .catch((err) => log.error('WC freezer refresh failed', err));
   };
@@ -203,10 +203,10 @@ function wireFreezerRail(deps: FreezerRailDeps): () => void {
   const runNewSession = (action: 'save' | 'skip' | 'erase'): void => {
     void (async () => {
       try {
-        const fs = await openFs();
+        const { writer } = await openVfs();
         const { runNewSessionFreeze, runNewSessionFreezeQuick } = await import('../new-session.js');
-        if (action === 'save') await runNewSessionFreeze({ vfs: fs });
-        else if (action === 'skip') await runNewSessionFreezeQuick({ vfs: fs });
+        if (action === 'save') await runNewSessionFreeze({ vfs: writer });
+        else if (action === 'skip') await runNewSessionFreezeQuick({ vfs: writer });
         await client.clearAllMessages();
         refreshFreezer();
         const cone = client.getScoops().find((s) => s.isCone);
@@ -224,9 +224,9 @@ function wireFreezerRail(deps: FreezerRailDeps): () => void {
     const slug = (event as CustomEvent<{ slug?: string }>).detail?.slug;
     const entry = frozenEntries.find((e) => e.filename === slug);
     if (!entry) return;
-    void openFs()
-      .then(async (fs) => {
-        const { messages } = await thawFrozenSession(fs, entry);
+    void openVfs()
+      .then(async ({ reader }) => {
+        const { messages } = await thawFrozenSession(reader, entry);
         getController()?.loadMessages(messages);
         refs.thread.setAttribute('context', `freezer:${entry.filename}`);
         refs.thread.setAttribute('accent', FREEZER_TINT);
@@ -240,13 +240,18 @@ function wireFreezerRail(deps: FreezerRailDeps): () => void {
   return refreshFreezer;
 }
 
+/** Page-side VFS handles routed through the worker's `VfsRpcHost`. */
+export interface WcPageVfs {
+  reader: import('../../kernel/local-vfs-client.js').LocalVfsClient;
+  writer: import('../../kernel/writable-vfs-client.js').WritableVfsClient;
+}
+
 /** Mutable boot state shared between the callbacks and the attach phase. */
 export interface WcShellBoot {
   refs: WcShellRefs;
   wiring: WcLiveWiring;
   setClient(client: OffscreenClient): void;
   selectScoop(scoop: RegisteredScoop): void;
-  openFs(): ReturnType<typeof openPageFs>;
   getSelected(): RegisteredScoop | null;
   clearSelection(): void;
   getController(): WcChatController | null;
@@ -273,7 +278,6 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
   let controller: WcChatController | null = null;
   let client: OffscreenClient | null = null;
   let selected: RegisteredScoop | null = null;
-  let fsPromise: ReturnType<typeof openPageFs> | null = null;
 
   const selectScoop = (scoop: RegisteredScoop): void => {
     selected = scoop;
@@ -299,10 +303,6 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
       client = next;
     },
     selectScoop,
-    openFs: () => {
-      fsPromise ??= openPageFs();
-      return fsPromise;
-    },
     getSelected: () => selected,
     clearSelection: () => {
       selected = null;
@@ -383,14 +383,51 @@ export function attachWcClient(
   log: BootStageLogger,
   options: AttachWcClientOptions = {}
 ): void {
-  const { refs, openFs } = boot;
+  const { refs } = boot;
   boot.setClient(client);
   const { controller, agentHandle } = createWcController(refs, client);
   boot.setController(controller);
 
+  // Page-side VFS: the worker owns the (OPFS) filesystem — page reads and
+  // writes route through its VfsRpcHost. Opening OPFS from the page would
+  // fight the worker's exclusive sync-access handles.
+  let vfsPromise: Promise<WcPageVfs> | null = null;
+  const openVfs = (): Promise<WcPageVfs> => {
+    vfsPromise ??= (async () => {
+      const [{ createRemoteVfsClient }, { createRemoteWritableVfsClient }] = await Promise.all([
+        import('../../kernel/remote-vfs-client.js'),
+        import('../../kernel/writable-vfs-client.js'),
+      ]);
+      return {
+        reader: createRemoteVfsClient({ transport: client.getTransport() }),
+        writer: createRemoteWritableVfsClient({ transport: client.getTransport() }),
+      };
+    })();
+    return vfsPromise;
+  };
+  const openReader = async (): Promise<WcPageVfs['reader']> => (await openVfs()).reader;
+
+  // Hydrate the persisted cone conversation immediately — the worker's
+  // canonical replay (request-scoop-messages on selection) replaces it.
+  void (async () => {
+    try {
+      const { SessionStore } = await import('../session-store.js');
+      const store = new SessionStore();
+      await store.init();
+      const session = await store.load('session-cone');
+      if (session && session.messages.length > 0 && !boot.getSelected()) {
+        boot.getController()?.loadMessages(session.messages);
+      }
+    } catch (err) {
+      log.warn('WC session hydration failed', err);
+    }
+  })();
+
   refs.inputCard.addEventListener('submit', (event) => {
     const text = submittedText(event);
-    if (text) boot.getController()?.sendUserMessage(text);
+    if (!text) return;
+    boot.getController()?.sendUserMessage(text);
+    (refs.inputCard as HTMLElement & { clear?: () => void }).clear?.();
   });
 
   // The send button morphs into a stop control while a turn is processing.
@@ -419,7 +456,7 @@ export function attachWcClient(
       fileTree: refs.fileTree,
       termSurface: refs.termSurface,
       memoryHost: refs.memoryHost,
-      openFs,
+      openFs: openReader,
       mountTerminal: async (container) => {
         const { RemoteTerminalView } = await import('../../kernel/remote-terminal-view.js');
         const { fetchSecretEnvVars } = await import('../../core/secret-env.js');
@@ -440,7 +477,7 @@ export function attachWcClient(
   // selecting any scoop chip returns to the live conversation.
   const refreshFreezer = wireFreezerRail({
     refs,
-    openFs,
+    openVfs,
     client,
     getController: () => boot.getController(),
     selectScoop: boot.selectScoop,
@@ -449,18 +486,15 @@ export function attachWcClient(
   });
   refreshFreezer();
 
-  // Page-side VFS support: mount-table recovery + the preview-vfs fallback
-  // responder (the worker's responder is canonical; this covers pre-boot).
-  void openFs()
-    .then(async (fs) => {
-      const { getAllMountEntries } = await import('../../fs/mount-table-store.js');
-      const { recoverMounts } = await import('../../fs/mount-recovery.js');
-      const entries = await getAllMountEntries();
-      if (entries.length > 0) await recoverMounts(entries, fs, log);
+  // Page-side preview-vfs fallback responder (the worker's responder is
+  // canonical; this covers pre-boot requests). Mount recovery is the
+  // worker's job — its kernel host replays the mount table itself.
+  void openVfs()
+    .then(async ({ reader }) => {
       const { installPreviewVfsResponder } = await import('../preview-vfs-responder.js');
       installPreviewVfsResponder({
         channel: new BroadcastChannel('preview-vfs'),
-        getReader: () => fs,
+        getReader: () => reader,
         logger: log,
       });
     })
@@ -468,13 +502,14 @@ export function attachWcClient(
 
   // Sprinkles (the legacy SprinkleManager over the WC workbench chrome),
   // then tray sync on top — the leader broadcasts sprinkle state.
-  void openFs()
-    .then(async (fs) => {
+  void openVfs()
+    .then(async ({ reader, writer }) => {
+      const { createRemoteSprinkleVfs } = await import('../../kernel/remote-sprinkle-vfs.js');
       const { wireWcSprinkles } = await import('./wc-sprinkles.js');
       const sprinkles = await wireWcSprinkles({
         refs,
         client,
-        fs,
+        fs: createRemoteSprinkleVfs({ reader, writer }),
         instanceId: options.instanceId,
         log,
       });
@@ -494,7 +529,7 @@ export function attachWcClient(
           getController: () => boot.getController(),
           getSelectedJid: () => boot.getSelected()?.jid ?? 'cone',
           agentHandle,
-          openFs,
+          openFs: openReader,
           cherryJoinUrl: options.standalone.cherryJoinUrl,
           cherryTransport: options.standalone.cherryTransport,
           window,
@@ -565,10 +600,4 @@ export async function mountWcUiLive(
   await host.ready;
   disarmSplash();
   log.info('WC live shell ready', { scoops: host.client.getScoops().length });
-}
-
-/** Page-side VFS over the shared LightningFS IndexedDB (`slicc-fs`). */
-async function openPageFs(): Promise<import('../../fs/virtual-fs.js').VirtualFS> {
-  const { VirtualFS } = await import('../../fs/virtual-fs.js');
-  return VirtualFS.create({ dbName: 'slicc-fs' });
 }

@@ -26,6 +26,27 @@ export interface MetaModel {
   id: string;
 }
 
+/** The user identity to surface in the nav avatar + menu header. */
+export interface NavIdentity {
+  name: string;
+  avatarUrl?: string;
+  provider?: string;
+}
+
+/** Pick the richest identity from the connected accounts (name/avatar). */
+export function accountIdentity(
+  accounts: readonly { providerId: string; userName?: string; userAvatar?: string }[]
+): NavIdentity | null {
+  const withAvatar = accounts.find((a) => a.userAvatar && a.userName);
+  const withName = withAvatar ?? accounts.find((a) => a.userName);
+  if (!withName?.userName) return null;
+  return {
+    name: withName.userName,
+    avatarUrl: withName.userAvatar,
+    provider: withName.providerId,
+  };
+}
+
 /** Flatten provider-grouped models into the composer-meta picker shape. */
 export function modelListForMeta(groups: readonly GroupedModels[]): MetaModel[] {
   return groups.flatMap((group) =>
@@ -64,10 +85,22 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   });
 
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
-  refs.avatarMenu.user = {
-    name: 'SLICC',
-    provider: isExtension ? 'extension · wc' : 'standalone · wc',
+  const { getAccounts } = await import('../provider-settings.js');
+  const applyIdentity = (): void => {
+    const identity = accountIdentity(getAccounts());
+    const avatar = refs.avatarMenu.querySelector('slicc-avatar');
+    if (identity) {
+      avatar?.setAttribute('name', identity.name);
+      if (identity.avatarUrl) avatar?.setAttribute('src', identity.avatarUrl);
+      refs.avatarMenu.user = { name: identity.name, provider: identity.provider };
+    } else {
+      refs.avatarMenu.user = {
+        name: 'SLICC',
+        provider: isExtension ? 'extension' : 'standalone',
+      };
+    }
   };
+  applyIdentity();
   const trayMenuItems = (): NonNullable<typeof refs.avatarMenu.items> => {
     // Tray runs page-side only in standalone; the extension leader lives in
     // the offscreen document and keeps its own controls.
@@ -169,6 +202,7 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
         .then(() => showProviderSettings())
         .then(() => {
           refreshModels();
+          applyIdentity();
           client.updateModel();
         })
         .catch((err) => log.error('WC settings dialog failed', err));

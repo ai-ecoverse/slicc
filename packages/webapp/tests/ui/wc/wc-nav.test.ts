@@ -11,7 +11,7 @@ installWcDomStubs();
 
 import type { OffscreenClient } from '../../../src/ui/offscreen-client.js';
 import type { GroupedModels } from '../../../src/ui/provider-settings.js';
-import { modelListForMeta, wireWcNav } from '../../../src/ui/wc/wc-nav.js';
+import { accountIdentity, modelListForMeta, wireWcNav } from '../../../src/ui/wc/wc-nav.js';
 import type { WcShellRefs } from '../../../src/ui/wc/wc-shell.js';
 
 describe('modelListForMeta', () => {
@@ -29,6 +29,27 @@ describe('modelListForMeta', () => {
       { name: 'claude-haiku-4-5', provider: 'Anthropic', id: 'claude-haiku-4-5' },
       { name: 'GPT-5', provider: 'OpenAI', id: 'gpt-5' },
     ]);
+  });
+});
+
+describe('accountIdentity', () => {
+  it('prefers an account with both avatar and name', () => {
+    expect(
+      accountIdentity([
+        { providerId: 'adobe', userName: 'Lars' },
+        { providerId: 'github', userName: 'Lars Trieloff', userAvatar: 'https://a/b.png' },
+      ])
+    ).toEqual({ name: 'Lars Trieloff', avatarUrl: 'https://a/b.png', provider: 'github' });
+  });
+
+  it('falls back to a name-only account, and null when anonymous', () => {
+    expect(accountIdentity([{ providerId: 'adobe', userName: 'Lars' }])).toEqual({
+      name: 'Lars',
+      avatarUrl: undefined,
+      provider: 'adobe',
+    });
+    expect(accountIdentity([{ providerId: 'x' }])).toBeNull();
+    expect(accountIdentity([])).toBeNull();
   });
 });
 

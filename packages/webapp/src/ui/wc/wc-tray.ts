@@ -60,7 +60,7 @@ export interface WcTrayDeps {
   getController(): WcChatController | null;
   getSelectedJid(): string;
   agentHandle: AgentHandle;
-  openFs(): Promise<import('../../fs/virtual-fs.js').VirtualFS>;
+  openFs(): Promise<import('../../kernel/local-vfs-client.js').LocalVfsClient>;
   /** Cherry embed handshake results (runtimeMode `cherry` only). */
   cherryJoinUrl?: string;
   cherryTransport?: CherryHostTransport;

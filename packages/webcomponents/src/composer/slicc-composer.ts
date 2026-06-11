@@ -206,6 +206,10 @@ function ensureComposerStyle(doc: Document): void {
  * keeping just the model + thinking controls.
  *
  * @attr open - boolean; narrow-chat variant (hides the meta keyboard hint), mirrors `.shell.open`
+ * @attr ptt - boolean; OPT-IN: enables the prototype's simulated push-to-talk
+ *   gesture above. Demo-only — leave unset in production hosts, where pressing
+ *   the textarea must place the caret natively instead of inserting a canned
+ *   transcript.
  * @csspart inner - the centered, `680px`-max `.composer-inner` band
  * @slot - default; the input card + meta row, rendered in DOM order
  */
@@ -301,6 +305,9 @@ export class SliccComposer extends HTMLElement {
    * it; the press is held until release or the pointer leaves.
    */
   #onMouseDown = (e: MouseEvent): void => {
+    // The walkie-talkie dictation is a prototype simulation — strictly opt-in
+    // via the `ptt` attribute; production textareas keep native caret presses.
+    if (!this.hasAttribute('ptt')) return;
     if (this.#pressed || e.button !== 0) return;
     const target = e.target as Element | null;
     const ta = target?.closest?.('textarea');

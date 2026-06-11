@@ -18,6 +18,9 @@ function innerOf(el: SliccComposer): HTMLElement {
  */
 function makeComposer(): SliccComposer {
   const el = document.createElement('slicc-composer');
+  // The walkie-talkie dictation gesture is opt-in (demo-only); these tests
+  // exercise it explicitly.
+  el.setAttribute('ptt', '');
   // Give the band real width so the 680px-max + centering geometry resolves.
   el.style.cssText = 'width:1000px;display:block;';
   el.innerHTML = `
@@ -322,5 +325,23 @@ describe('slicc-composer', () => {
       }
     }
     expect(guarded).toBe(true);
+  });
+});
+
+describe('slicc-composer / ptt opt-in', () => {
+  it('without the ptt attribute, pressing the textarea stays native (no overlay, no transcript)', () => {
+    const el = document.createElement('slicc-composer');
+    el.style.cssText = 'width:1000px;display:block;';
+    const ta = document.createElement('textarea');
+    ta.className = 'ta';
+    el.append(ta);
+    document.body.appendChild(el);
+
+    ta.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, cancelable: true }));
+    expect(el.querySelector('.slicc-composer__ptt')).toBeNull();
+
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    expect(ta.value).toBe('');
+    el.remove();
   });
 });

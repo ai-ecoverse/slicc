@@ -236,6 +236,9 @@ export class SliccInputCard extends HTMLElement {
 
     this.#textarea.addEventListener('input', this.#onInput);
     this.#textarea.addEventListener('keydown', this.#onKeydown);
+    // The send button (default toolbar or a slotted one) emits `send`;
+    // surface it as the same `submit` contract Enter uses.
+    this.#toolbar.addEventListener('send', this.#onSend);
   }
 
   /** Push host attributes onto the inner textarea. */
@@ -268,13 +271,23 @@ export class SliccInputCard extends HTMLElement {
   #onKeydown = (e: KeyboardEvent): void => {
     if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
     e.preventDefault();
+    this.#emitSubmit();
+  };
+
+  #onSend = (e: Event): void => {
+    // Consume the toolbar-internal event; hosts listen for `submit`.
+    e.stopPropagation();
+    this.#emitSubmit();
+  };
+
+  #emitSubmit(): void {
     if (this.disabled) return;
     const value = this.#textarea.value;
     if (value.trim() === '') return;
     this.dispatchEvent(
       new CustomEvent('submit', { bubbles: true, composed: true, detail: { value } })
     );
-  };
+  }
 
   /**
    * Autosize the textarea: collapse to scrollHeight (bounded by the CSS 28px

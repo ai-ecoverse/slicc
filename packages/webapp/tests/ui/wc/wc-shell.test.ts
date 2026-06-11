@@ -69,7 +69,7 @@ describe('mountWcUiPreview', () => {
     expect(thread?.querySelectorAll('slicc-lick-card').length).toBeGreaterThan(5);
   });
 
-  it('opens the workbench surface on dock select and closes on re-select', () => {
+  it('opens the workbench on dock select and closes on dock collapse', () => {
     const root = mount();
     const dock = root.querySelector('slicc-dock') as HTMLElement;
     const shell = root.querySelector('slicc-shell') as HTMLElement;
@@ -80,13 +80,23 @@ describe('mountWcUiPreview', () => {
     );
     expect(shell.hasAttribute('open')).toBe(true);
     expect(body.getAttribute('active')).toBe('files');
-    expect(dock.getAttribute('active')).toBe('files');
 
-    dock.dispatchEvent(
-      new CustomEvent('slicc-dock-select', { bubbles: true, detail: { id: 'files' } })
-    );
+    // Clicking the active dock item emits `slicc-dock-collapse` (the dock
+    // owns toggle semantics) — the workbench must close on it.
+    dock.dispatchEvent(new CustomEvent('slicc-dock-collapse', { bubbles: true }));
     expect(shell.hasAttribute('open')).toBe(false);
-    expect(dock.hasAttribute('active')).toBe(false);
+  });
+
+  it('kills the UA body margin so the frame sits flush', () => {
+    mount();
+    const css = document.getElementById('slicc-wcui-style')?.textContent ?? '';
+    expect(css).toContain('html,body{margin:0');
+  });
+
+  it('renders a placeholder for the unwired browser surface', () => {
+    const root = mount();
+    const surface = root.querySelector('[surface-id="browser"]');
+    expect(surface?.textContent).toContain('not wired');
   });
 
   it('switches the active surface on tab select', () => {

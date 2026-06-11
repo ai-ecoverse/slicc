@@ -282,3 +282,38 @@ describe('slicc-input-card', () => {
     expect(el.querySelector('textarea.ta')).toBe(document.activeElement);
   });
 });
+
+describe('slicc-input-card / send button', () => {
+  it('clicking the default send button emits submit with the current value', () => {
+    const el = document.createElement('slicc-input-card');
+    document.body.appendChild(el);
+    el.value = 'ship it';
+    const submits: string[] = [];
+    el.addEventListener('submit', (e) => {
+      submits.push((e as CustomEvent<{ value: string }>).detail.value);
+    });
+
+    const send = el.querySelector('slicc-send-button');
+    expect(send).not.toBeNull();
+    send!.dispatchEvent(new CustomEvent('send', { bubbles: true, composed: true }));
+    expect(submits).toEqual(['ship it']);
+    el.remove();
+  });
+
+  it('send is suppressed when empty or disabled', () => {
+    const el = document.createElement('slicc-input-card');
+    document.body.appendChild(el);
+    const submits: unknown[] = [];
+    el.addEventListener('submit', (e) => submits.push(e));
+    const send = el.querySelector('slicc-send-button')!;
+
+    send.dispatchEvent(new CustomEvent('send', { bubbles: true, composed: true }));
+    el.value = '   ';
+    send.dispatchEvent(new CustomEvent('send', { bubbles: true, composed: true }));
+    el.value = 'ready';
+    el.disabled = true;
+    send.dispatchEvent(new CustomEvent('send', { bubbles: true, composed: true }));
+    expect(submits).toEqual([]);
+    el.remove();
+  });
+});

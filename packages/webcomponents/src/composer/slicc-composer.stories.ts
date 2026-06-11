@@ -239,6 +239,8 @@ function pushToTalk({ open }: ComposerArgs): HTMLElement {
   thread.textContent = 'Press and hold the input below to dictate; release to drop the transcript.';
 
   const el = document.createElement('slicc-composer') as SliccComposer;
+  // The dictation simulation is opt-in (production hosts leave it unset).
+  el.setAttribute('ptt', '');
   if (open) el.setAttribute('open', '');
   el.append(inputCard(), metaRow(Boolean(open)));
 

@@ -65,9 +65,15 @@ export interface WcShellRefs {
 
 const STYLE_ID = 'slicc-wcui-style';
 const CSS = [
+  // The shell owns the page: kill the UA body margin (the legacy reset died
+  // with base.css) so the frame sits flush against the window edges.
+  'html,body{margin:0;padding:0;height:100%;}',
   '.wcui-frame{position:relative;transform:translateZ(0);width:100%;height:100vh;',
   'overflow:hidden;background:var(--bg);font-family:var(--ui);}',
   '.wcui-shader{position:absolute;inset:0;z-index:0;}',
+  // The chat column must stay transparent so the cone shader shows through
+  // (the component paints an opaque background by default).
+  '.wcui-frame slicc-chatpane{background:transparent;}',
   '.wcui-appcol{position:relative;z-index:1;height:100%;display:flex;flex-direction:column;',
   'box-sizing:border-box;padding-left:var(--rail-w,44px);',
   'transition:padding-left .4s cubic-bezier(.4,0,.2,1);}',
@@ -75,6 +81,8 @@ const CSS = [
   '.wcui-term{flex:1;min-height:0;display:flex;flex-direction:column;}',
   '.wcui-memory{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;',
   'gap:8px;padding:10px;}',
+  '.wcui-placeholder{flex:1;display:flex;align-items:center;justify-content:center;',
+  'padding:24px;color:var(--txt-2);font-size:13px;text-align:center;}',
 ].join('');
 
 function ensureShellStyles(doc: Document): void {
@@ -157,12 +165,24 @@ function buildWorkbench(): {
   const memoryHost = el('div', { class: 'wcui-memory' });
   memorySurfaceHost.append(memoryHost);
 
-  body.append(filesSurface, termSurfaceHost, memorySurfaceHost);
+  // The dock's system tools include a Browser entry; its CDP pane is not
+  // built for the WC shell yet — a placeholder beats an empty void.
+  const browserSurface = el('slicc-surface', { 'surface-id': 'browser', layout: 'flex' });
+  const browserNote = el('div', { class: 'wcui-placeholder' });
+  browserNote.textContent =
+    'The browser pane is not wired into the WC shell yet — drive pages from the terminal (open, playwright-cli, tab-new).';
+  browserSurface.append(browserNote);
+
+  body.append(filesSurface, termSurfaceHost, memorySurfaceHost, browserSurface);
   workbench.append(header, body);
   return { workbench, body, header, tree, termSurface, memoryHost, tabBar: tabs };
 }
 
-/** Dock clicks open/close the workbench and select the matching surface. */
+/**
+ * Dock clicks open the workbench on the matching surface. The dock owns the
+ * toggle semantics: clicking the active item emits `slicc-dock-collapse`
+ * (NOT a second select) — that collapses the workbench.
+ */
 function wireDockToWorkbench(
   dock: HTMLElement,
   shell: HTMLElement,
@@ -172,16 +192,12 @@ function wireDockToWorkbench(
   dock.addEventListener('slicc-dock-select', (event) => {
     const id = (event as CustomEvent<{ id: string }>).detail?.id;
     if (!id) return;
-    const alreadyActive = shell.hasAttribute('open') && body.getAttribute('active') === id;
-    if (alreadyActive) {
-      shell.removeAttribute('open');
-      dock.removeAttribute('active');
-      return;
-    }
     shell.setAttribute('open', '');
     body.setAttribute('active', id);
-    dock.setAttribute('active', id);
     onSurfaceActivate?.(id);
+  });
+  dock.addEventListener('slicc-dock-collapse', () => {
+    shell.removeAttribute('open');
   });
 }
 

@@ -50,6 +50,14 @@ function makeFakeClient() {
     stopScoop: vi.fn(),
     updateModel: vi.fn(),
     clearAllMessages: vi.fn(async () => undefined),
+    // Remote-VFS clients are built over this; a throwing send fails their
+    // requests fast so the async wiring takes its catch paths in tests.
+    getTransport: () => ({
+      onMessage: () => () => undefined,
+      send: () => {
+        throw new Error('no transport in tests');
+      },
+    }),
   };
   return {
     client: client as unknown as OffscreenClient,
@@ -72,10 +80,13 @@ describe('prepareWcShell + attachWcClient', () => {
     attachWcClient(boot, fake.client, log);
 
     expect(root.querySelector('slicc-shell')).toBeTruthy();
+    boot.refs.inputCard.setAttribute('value', 'hello cone');
     boot.refs.inputCard.dispatchEvent(
       new CustomEvent('submit', { bubbles: true, detail: { value: 'hello cone' } })
     );
     expect(fake.handle.sendMessage).toHaveBeenCalledWith('hello cone', expect.any(String));
+    // The submit handler clears the input card for the next prompt.
+    expect(boot.refs.inputCard.getAttribute('value') ?? '').toBe('');
   });
 
   it('selectScoop routes selection, history request, and re-enables input', () => {
