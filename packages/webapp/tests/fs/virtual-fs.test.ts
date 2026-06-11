@@ -412,3 +412,22 @@ describe('VirtualFS', () => {
     });
   });
 });
+
+describe('writeFile truncation (shrinking rewrites)', () => {
+  it('a shorter rewrite must not leave the previous tail behind', async () => {
+    // ZenFS' OPFS backend writes at offset 0 without truncating; the
+    // VirtualFS layer pins the exact byte length after every write so a
+    // shrinking rewrite can't corrupt the file (live repro: a rebuilt
+    // /sessions/index.json read back as valid JSON + stale tail garbage).
+    const fs = await VirtualFS.create({ dbName: `trunc-${Date.now()}`, wipe: true });
+    await fs.writeFile('/tmp/trunc.txt', 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+    await fs.writeFile('/tmp/trunc.txt', 'short');
+    expect(await fs.readFile('/tmp/trunc.txt', { encoding: 'utf-8' })).toBe('short');
+
+    // Binary writes shrink correctly too.
+    await fs.writeFile('/tmp/trunc.bin', new Uint8Array(64).fill(7));
+    await fs.writeFile('/tmp/trunc.bin', new Uint8Array([1, 2, 3]));
+    const back = (await fs.readFile('/tmp/trunc.bin', { encoding: 'binary' })) as Uint8Array;
+    expect(Array.from(back)).toEqual([1, 2, 3]);
+  });
+});
