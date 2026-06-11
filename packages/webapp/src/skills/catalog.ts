@@ -237,6 +237,28 @@ async function discoverMarketplaceSkillCandidates(
   return discovered;
 }
 
+async function discoverSkillsInCompatibilityRoot(
+  fs: VirtualFS,
+  rootPath: string,
+  source: Exclude<SkillDiscoverySource, 'native'>,
+  seenPaths: Set<string>
+): Promise<DiscoveredSkillCandidate[]> {
+  const skillRoot = `${rootPath}/skills`;
+  const skillEntries = await readSortedDir(fs, skillRoot);
+  const discovered: DiscoveredSkillCandidate[] = [];
+
+  for (const skillEntry of skillEntries) {
+    if (skillEntry.type !== 'directory') continue;
+    const skillPath = `${skillRoot}/${skillEntry.name}`;
+    const skillFilePath = `${skillPath}/${SKILL_FILE}`;
+    if (!(await pathExists(fs, skillFilePath)) || seenPaths.has(skillPath)) continue;
+    seenPaths.add(skillPath);
+    discovered.push({ source, sourceRoot: skillRoot, path: skillPath, skillFilePath });
+  }
+
+  return discovered;
+}
+
 async function discoverCompatibilitySkillCandidates(
   fs: VirtualFS
 ): Promise<DiscoveredSkillCandidate[]> {
@@ -246,15 +268,21 @@ async function discoverCompatibilitySkillCandidates(
 
   for (let index = 0; index < queue.length; index += 1) {
     const currentPath = queue[index];
+    const entries = await readSortedDir(fs, currentPath);
 
-    for (const entry of await readSortedDir(fs, currentPath)) {
+    for (const entry of entries) {
       if (entry.type !== 'directory') continue;
-
       const childPath = currentPath === '/' ? `/${entry.name}` : `${currentPath}/${entry.name}`;
 
       const source = COMPATIBILITY_DIRECTORY_SOURCES.get(entry.name);
       if (source) {
-        await collectCompatibilitySkills(fs, source, `${childPath}/skills`, seenPaths, discovered);
+        const candidates = await discoverSkillsInCompatibilityRoot(
+          fs,
+          childPath,
+          source,
+          seenPaths
+        );
+        discovered.push(...candidates);
       }
 
       if (entry.name === '.claude-plugin') {
