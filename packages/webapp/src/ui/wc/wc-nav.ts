@@ -73,7 +73,11 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   refs.avatarMenu.addEventListener('slicc-avatar-action', (event) => {
     const id = (event as CustomEvent<{ id?: string }>).detail?.id;
     if (id === 'settings') {
-      showProviderSettings()
+      // The legacy dialog needs its (scoped) chrome; loaded on demand so the
+      // WC shell stays free of the colliding legacy sheets.
+      import('../legacy-styles.js')
+        .then(({ loadLegacyDialogStyles }) => loadLegacyDialogStyles())
+        .then(() => showProviderSettings())
         .then(() => {
           refreshModels();
           client.updateModel();

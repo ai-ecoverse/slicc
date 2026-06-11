@@ -1,17 +1,6 @@
-// ── CSS imports (order matters for specificity) ──────────────────────
-import './styles/tokens.css';
-import './styles/base.css';
-import './styles/layout.css';
-import './styles/header.css';
-import './styles/chat.css';
-import './styles/tools.css';
-import './styles/markdown.css';
-import './styles/panels.css';
-import './styles/tabs.css';
-import './styles/dialog.css';
-import './styles/sprinkle-components.css';
-import './styles/feedback.css';
-import './styles/image-preview.css';
+// Legacy stylesheets load lazily via `loadLegacyStyles()` in the legacy boot
+// paths — the WC shell (`?ui=wc`) must not load them (class-name collisions
+// with the component library; see `legacy-styles.ts`).
 /**
  * Main entry point for the Browser Coding Agent UI.
  *
@@ -73,6 +62,8 @@ const INLINE_DIP_SPRINKLES: ReadonlySet<string> = new Set(['welcome']);
 // ---------------------------------------------------------------------------
 
 async function mainExtension(app: HTMLElement, options?: { detached?: boolean }): Promise<void> {
+  const { loadLegacyStyles } = await import('./legacy-styles.js');
+  await loadLegacyStyles();
   const isDetachedSelf = options?.detached === true;
   const layout = new Layout(app, !isDetachedSelf);
   await layout.panels.chat.initSession('session-cone');
@@ -234,6 +225,8 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
 // ---------------------------------------------------------------------------
 
 async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode): Promise<void> {
+  const { loadLegacyStyles } = await import('./legacy-styles.js');
+  await loadLegacyStyles();
   // Sudo hook + tray runtime config + page-side BrowserAPI (or cherry
   // follower transport) + eager CDP connect + per-instance id. See
   // `boot/setup-standalone-prelude.ts`.
@@ -416,6 +409,8 @@ async function main(): Promise<void> {
 
   if (runtimeMode === 'connect') {
     (globalThis as Record<string, unknown>).__slicc_connect_mode = true;
+    const { loadLegacyStyles } = await import('./legacy-styles.js');
+    await loadLegacyStyles();
     const { mountConnectSurface } = await import('./connect-surface.js');
     await mountConnectSurface(app);
     return;
