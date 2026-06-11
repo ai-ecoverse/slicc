@@ -1184,6 +1184,49 @@ async function listGitHubSkills(
   }
 }
 
+async function downloadGitHubDir(
+  items: GitHubContent[],
+  destBase: string,
+  owner: string,
+  repo: string,
+  branch: string | undefined,
+  fs: VirtualFS,
+  github: GitHubRequestContext
+): Promise<void> {
+  for (const item of items) {
+    if (item.type === 'file' && item.download_url) {
+      const fileResponse = await github.request(item.download_url, '*/*');
+      if (fileResponse.status !== 200) {
+        throw new Error(
+          formatGitHubFailure(fileResponse, `${owner}/${repo}/${item.path}`, github.hasToken)
+        );
+      }
+      const cached = consumeCachedBinaryByUrl(item.download_url);
+      await fs.writeFile(`${destBase}/${item.name}`, cached ?? fileResponse.body);
+    } else if (item.type === 'dir') {
+      const subBase = `https://api.github.com/repos/${owner}/${repo}/contents/${item.path}`;
+      const subUrl = branch ? `${subBase}?ref=${encodeURIComponent(branch)}` : subBase;
+      const subResponse = await github.request(subUrl);
+      if (subResponse.status !== 200) {
+        throw new Error(
+          formatGitHubFailure(subResponse, `${owner}/${repo}/${item.path}`, github.hasToken)
+        );
+      }
+      const subContents = parseFetchJson<GitHubContent[]>(subResponse.body);
+      await fs.mkdir(`${destBase}/${item.name}`, { recursive: true });
+      await downloadGitHubDir(
+        subContents,
+        `${destBase}/${item.name}`,
+        owner,
+        repo,
+        branch,
+        fs,
+        github
+      );
+    }
+  }
+}
+
 /**
  * Install a skill from GitHub repository.
  * Tries ZIP-based install first (not rate-limited), falls back to the Contents API.
@@ -1271,35 +1314,8 @@ async function installFromGitHub(
 
     await fs.mkdir(destDir, { recursive: true });
 
-    async function downloadDir(items: GitHubContent[], destBase: string): Promise<void> {
-      for (const item of items) {
-        if (item.type === 'file' && item.download_url) {
-          const fileResponse = await github.request(item.download_url, '*/*');
-          if (fileResponse.status !== 200) {
-            throw new Error(
-              formatGitHubFailure(fileResponse, `${owner}/${repo}/${item.path}`, github.hasToken)
-            );
-          }
-          const cached = consumeCachedBinaryByUrl(item.download_url);
-          await fs.writeFile(`${destBase}/${item.name}`, cached ?? fileResponse.body);
-        } else if (item.type === 'dir') {
-          const subBase = `https://api.github.com/repos/${owner}/${repo}/contents/${item.path}`;
-          const subUrl = branch ? `${subBase}?ref=${encodeURIComponent(branch)}` : subBase;
-          const subResponse = await github.request(subUrl);
-          if (subResponse.status !== 200) {
-            throw new Error(
-              formatGitHubFailure(subResponse, `${owner}/${repo}/${item.path}`, github.hasToken)
-            );
-          }
-          const subContents = parseFetchJson<GitHubContent[]>(subResponse.body);
-          await fs.mkdir(`${destBase}/${item.name}`, { recursive: true });
-          await downloadDir(subContents, `${destBase}/${item.name}`);
-        }
-      }
-    }
-
     try {
-      await downloadDir(contents, destDir);
+      await downloadGitHubDir(contents, destDir, owner, repo, branch, fs, github);
     } catch (downloadErr) {
       try {
         await fs.rm(destDir, { recursive: true });
