@@ -160,25 +160,6 @@ export interface KernelHostConfig {
    * Logger. Defaults to `console`.
    */
   logger?: KernelHostLogger;
-
-  /**
-   * Migration progress callbacks. Invoked from the blocking OPFS
-   * migration step (5c) immediately before, during, and after the
-   * runner. Used by the kernel-worker entry to surface progress
-   * signals to the page over the existing kernel port so the page
-   * can show a blocking modal with a determinate progress bar. Only
-   * fire when `sharedFs.backend === 'opfs'` (the same gate that
-   * triggers the migration runner), so the flag-off path stays
-   * byte-identical and never invokes these.
-   *
-   * `onMigrationStart` + `onMigrationFinish` must always be called as
-   * a pair: `onMigrationFinish` runs in a `finally` block so an
-   * exception in the runner still triggers the dismiss signal and
-   * the page can hide the modal.
-   */
-  onMigrationStart?: () => void;
-  onMigrationProgress?: (progress: { copied: number; total: number }) => void;
-  onMigrationFinish?: () => void;
 }
 
 export interface LickRoutingContext {
@@ -436,59 +417,6 @@ async function bootstrapCone(orchestrator: OrchestratorType): Promise<void> {
       assistantLabel: 'sliccy',
       addedAt: new Date().toISOString(),
     });
-  }
-}
-
-/**
- * Step 5c: blocking legacy IDB → OPFS migration. Gated by the caller on
- * `sharedFs.backend === 'opfs'`. Signals start before the dynamic import
- * so the page-side modal timer arms; `onMigrationFinish` runs in a
- * `finally` so a thrown error still dismisses the modal. All callbacks
- * and the runner are wrapped so a failure never blocks boot.
- */
-async function runLegacyOpfsMigration(
-  sharedFs: VirtualFS,
-  config: KernelHostConfig,
-  log: KernelHostLogger
-): Promise<void> {
-  try {
-    config.onMigrationStart?.();
-  } catch (err) {
-    log.warn('onMigrationStart callback threw (non-fatal)', err);
-  }
-  try {
-    const { runLegacyMigrationFromVfs } = await import('../fs/migration/migration-run.js');
-    const result = await runLegacyMigrationFromVfs(sharedFs, {
-      logger: log,
-      onProgress: (progress) => {
-        try {
-          config.onMigrationProgress?.(progress);
-        } catch (err) {
-          log.warn('onMigrationProgress callback threw (non-fatal)', err);
-        }
-      },
-    });
-    // Deferred IDB deletion. When the sentinel is present
-    // (already-migrated OR just-copied) AND the legacy `slicc-fs`
-    // IDB is still present, emit a one-shot per-boot log telling
-    // the user it's safe to clear via the `slicc-fs-cleanup` shell
-    // command. Counts only — no paths or contents.
-    if (result.kind === 'sentinel-present' || result.kind === 'copied') {
-      const { probeLegacyIdbExistsDefault } = await import('../fs/migration/migration-cleanup.js');
-      if (await probeLegacyIdbExistsDefault()) {
-        log.info(
-          '[migration] legacy slicc-fs IDB still present after migration — safe to clear with `slicc-fs-cleanup`'
-        );
-      }
-    }
-  } catch (err) {
-    log.warn('legacy migration run failed (non-fatal)', err);
-  } finally {
-    try {
-      config.onMigrationFinish?.();
-    } catch (err) {
-      log.warn('onMigrationFinish callback threw (non-fatal)', err);
-    }
   }
 }
 
@@ -791,28 +719,11 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
     }
   }
 
-  // 5c. Legacy IDB → OPFS migration RUN — BLOCKING.
-  //
-  // Guarded on `backend === 'opfs'` so the LFS-default path is
-  // byte-identical and never imports the migration module. The runner
-  // re-uses C1 detection (sentinel-present → fast no-op; legacy-absent
-  // → no-op) and on `needs-migration` performs the copy, parity-checks
-  // file-count + total-bytes against the manifest, and atomically
-  // writes the sentinel as the FINAL operation.
-  //
-  // We `await` the runner so any post-migration boot writes (lick
-  // manager state, /licks-ws bridge, cone bootstrap, upgrade detection)
-  // happen strictly AFTER the sentinel has either landed or been
-  // refused. Without this, the previous fire-and-forget IIFE let those
-  // writes race the parity walk and silently break the sentinel write.
-  //
-  // Boot resilience: any runner error is caught and the splash is
-  // dismissed via `onMigrationFinish` in `finally`, so a failed
-  // migration still lets the app come up (read-only fallback over
-  // OPFS, legacy `slicc-fs` IDB untouched — read-only throughout).
-  if (sharedFs && sharedFs.backend === 'opfs') {
-    await runLegacyOpfsMigration(sharedFs, config, log);
-  }
+  // (Step 5c, the legacy LightningFS-IDB → OPFS migration, was removed:
+  // every active profile has long since migrated, and the boot-time copy
+  // could resurrect stale legacy content — e.g. sprinkles deleted from
+  // OPFS reappearing from the old IDB. The legacy database is never read
+  // anymore; `slicc-fs-cleanup` deletes it on explicit request.)
 
   // 6. Register session-costs provider for the `cost` shell command;
   //    7. init the LickManager + wire lick→cone routing.

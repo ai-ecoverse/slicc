@@ -48,7 +48,6 @@ describe('df command', () => {
     stubStorage({ usage: 0, quota: 0 }, false);
     const cmd = createDfCommand({
       fs: fakeFs('opfs'),
-      sentinelExists: async () => false,
       legacyIdbExists: async () => false,
     });
     const result = await cmd.execute(['--help'], createMockCtx());
@@ -61,7 +60,6 @@ describe('df command', () => {
     stubStorage({ usage: 0, quota: 0 }, false);
     const cmd = createDfCommand({
       fs: fakeFs('opfs'),
-      sentinelExists: async () => false,
       legacyIdbExists: async () => false,
     });
     const result = await cmd.execute(['--bogus'], createMockCtx());
@@ -69,11 +67,10 @@ describe('df command', () => {
     expect(result.stderr).toContain('unsupported argument');
   });
 
-  it('reports opfs backend, usage/quota in bytes, persisted, and migration state', async () => {
+  it('reports opfs backend, usage/quota in bytes, persisted, and legacy IDB state', async () => {
     stubStorage({ usage: 1_500_000_000, quota: 10_000_000_000 }, true);
     const cmd = createDfCommand({
       fs: fakeFs('opfs'),
-      sentinelExists: async () => true,
       legacyIdbExists: async () => true,
     });
     const result = await cmd.execute([], createMockCtx());
@@ -83,15 +80,15 @@ describe('df command', () => {
     expect(result.stdout).toContain('Quota:       10000000000');
     expect(result.stdout).toContain('Used:        15%');
     expect(result.stdout).toContain('Persisted:   true');
-    expect(result.stdout).toContain('Migrated:    yes (/.slicc-migrated present)');
     expect(result.stdout).toContain('Legacy IDB:  present (slicc-fs)');
+    // The migration is gone — the report carries no sentinel row anymore.
+    expect(result.stdout).not.toContain('Migrated:');
   });
 
   it('formats sizes human-readably with -h', async () => {
     stubStorage({ usage: 1_500_000_000, quota: 10_000_000_000 }, true);
     const cmd = createDfCommand({
       fs: fakeFs('opfs'),
-      sentinelExists: async () => true,
       legacyIdbExists: async () => false,
     });
     const result = await cmd.execute(['-h'], createMockCtx());
@@ -101,27 +98,22 @@ describe('df command', () => {
     expect(result.stdout).toContain('Legacy IDB:  absent');
   });
 
-  it('reports migration as n/a on the memory backend', async () => {
+  it('reports the memory backend without any migration rows', async () => {
     stubStorage({ usage: 1024, quota: 4096 }, false);
-    const sentinelExists = vi.fn(async () => true);
     const cmd = createDfCommand({
       fs: fakeFs('memory'),
-      sentinelExists,
       legacyIdbExists: async () => false,
     });
     const result = await cmd.execute([], createMockCtx());
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Backend:     memory');
-    expect(result.stdout).toContain('Migrated:    n/a (backend is not opfs)');
-    // Sentinel probe must not fire when backend is not opfs.
-    expect(sentinelExists).not.toHaveBeenCalled();
+    expect(result.stdout).not.toContain('Migrated:');
   });
 
   it('reports "unavailable" when navigator.storage is missing', async () => {
     vi.stubGlobal('navigator', {});
     const cmd = createDfCommand({
       fs: fakeFs('opfs'),
-      sentinelExists: async () => false,
       legacyIdbExists: async () => false,
     });
     const result = await cmd.execute([], createMockCtx());
@@ -140,7 +132,6 @@ describe('df command', () => {
     const result = await cmd.execute([], createMockCtx());
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Backend:     unknown');
-    expect(result.stdout).toContain('Migrated:    n/a (backend is not opfs)');
   });
 });
 
@@ -157,7 +148,6 @@ describe('diskutil command', () => {
     stubStorage({ usage: 1_500_000_000, quota: 10_000_000_000 }, true);
     const sharedOpts = {
       fs: fakeFs('opfs'),
-      sentinelExists: async () => true,
       legacyIdbExists: async () => false,
     };
     const dfOut = await createDfCommand(sharedOpts).execute(['-h'], createMockCtx());

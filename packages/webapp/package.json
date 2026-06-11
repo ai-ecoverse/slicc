@@ -25,7 +25,6 @@
     "@earendil-works/pi-coding-agent": "^0.78.0",
     "@ffmpeg/ffmpeg": "0.12.15",
     "@imagemagick/magick-wasm": "^0.0.40",
-    "@isomorphic-git/lightning-fs": "4.6.2",
     "@lezer/highlight": "^1.2.3",
     "@pierre/diffs": "^1.1.15",
     "@slicc/cloud-core": "*",

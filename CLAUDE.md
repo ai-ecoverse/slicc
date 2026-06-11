@@ -92,9 +92,9 @@ Use the ice cream terms in code review comments and docs when they match the dom
 
 - Keep commits focused and package-local when possible.
 - Do not hand-edit generated output in `dist/`.
-- Webapp git behavior is implemented with `isomorphic-git` over LightningFS.
+- Webapp git behavior is implemented with `isomorphic-git` over the OPFS-backed VirtualFS.
 - Auth uses `git config github.token <PAT>`.
-- Both modes now route agent-initiated HTTP through `createProxiedFetch()`. CLI uses `/api/fetch-proxy` over Express; extension uses `chrome.runtime.connect({ name: 'fetch-proxy.fetch' })` over a SW Port with response streaming. Webapp git uses `isomorphic-git` over LightningFS; auth uses `git config github.token <PAT>` or GitHub OAuth login (auto-writes masked token to `/workspace/.git/github-token`).
+- Both modes now route agent-initiated HTTP through `createProxiedFetch()`. CLI uses `/api/fetch-proxy` over Express; extension uses `chrome.runtime.connect({ name: 'fetch-proxy.fetch' })` over a SW Port with response streaming. Webapp git uses `isomorphic-git` over the OPFS-backed VirtualFS; auth uses `git config github.token <PAT>` or GitHub OAuth login (auto-writes masked token to `/workspace/.git/github-token`).
 
 **Requires Node >= 22** (LTS). Ports: 5710 (UI), 9222 (Chrome CDP), 9223 (Electron CDP). Vite HMR shares the UI server via `/__vite_hmr`.
 
@@ -166,7 +166,7 @@ Virtual Filesystem (packages/webapp/src/fs/) → RestrictedFS → Shell (package
 
 **Orchestrator** (`packages/webapp/src/scoops/orchestrator.ts`): Creates/destroys scoops, routes messages, manages VFS. Cone delegates via `feed_scoop` — scoops get complete self-contained prompts (no access to cone's conversation). Exposes `observeScoop(jid, handler)` for per-scoop event taps (observers are dropped defensively on both `unregisterScoop` and `destroyScoopTab`). `agent-bridge.ts` publishes `globalThis.__slicc_agent` — the shell-facing surface used by the `agent` supplemental command to spawn ephemeral one-shot sub-scoops with `notifyOnComplete: false` (no cone turn on completion). Extension float proxies the bridge from the side panel to the offscreen agent engine via `chrome.runtime` messages.
 
-**VirtualFS** (`packages/webapp/src/fs/`): POSIX-like async FS backed by LightningFS (IndexedDB). `RestrictedFS` wraps it with path ACLs for scoops. `FsError` carries POSIX error codes.
+**VirtualFS** (`packages/webapp/src/fs/`): POSIX-like async FS backed by OPFS (`backend: 'opfs'`; in-memory in Node tests). `RestrictedFS` wraps it with path ACLs for scoops. `FsError` carries POSIX error codes. The legacy LightningFS-IDB era is fully removed — nothing reads `slicc-fs` anymore (`slicc-fs-cleanup` deletes the leftover database).
 
 **Mount backends** (`packages/webapp/src/fs/mount/`): `LocalMountBackend` (FS Access), `S3MountBackend`, `DaMountBackend` are **signing-naive** in the browser bundle — they construct logical requests and call an injected `SignedFetch*` transport. The transport routes to `/api/s3-sign-and-forward` / `/api/da-sign-and-forward` (CLI; node-server resolves credentials, signs SigV4, forwards) or to `chrome.runtime.sendMessage` (extension; service worker reads `s3.<profile>.*` from `chrome.storage.local`, signs, forwards via `host_permissions: <all_urls>`). The agent never holds S3 credentials in either deployment. The IMS bearer token for DA flows transiently in the envelope; v2 will move that OAuth flow server-side too.
 

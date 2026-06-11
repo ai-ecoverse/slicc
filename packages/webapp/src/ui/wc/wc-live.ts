@@ -885,26 +885,9 @@ export async function mountWcUiLive(
     });
 
   const boot = prepareWcShell(app, 'standalone · live');
-  const { createMigrationSplash } = await import('../migration-splash.js');
-  let migrationSplash: ReturnType<typeof createMigrationSplash> | null = null;
-  const ensureSplash = (): void => {
-    if (!migrationSplash) {
-      migrationSplash = createMigrationSplash({ root: document.body, logger: log });
-      migrationSplash.arm();
-    }
-  };
-  const disarmSplash = (): void => {
-    migrationSplash?.disarm();
-  };
   const host = spawnKernelWorker({
     realCdpTransport,
     instanceId,
-    onMigrationStart: ensureSplash,
-    onMigrationProgress: (progress) => {
-      ensureSplash();
-      migrationSplash?.updateProgress(progress);
-    },
-    onMigrationFinish: disarmSplash,
     callbacks: createWcLiveCallbacks(boot.wiring),
   });
   attachWcClient(boot, host.client, log, {
@@ -916,7 +899,6 @@ export async function mountWcUiLive(
   await setupSudoStandalone({ log });
 
   await host.ready;
-  disarmSplash();
   // `host.ready` resolves on `kernel-worker-ready`, which the worker posts
   // AFTER its VfsRpcHost attaches — unlike the first scoop-list (the
   // callbacks' onReady), which fires mid-boot while VFS RPCs still fan out

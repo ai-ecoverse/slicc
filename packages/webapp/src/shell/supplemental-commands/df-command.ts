@@ -3,8 +3,8 @@
  *
  * Reports the active backend (`opfs` vs `memory`), the live
  * `navigator.storage.estimate()` usage + quota, the persistence flag
- * from `navigator.storage.persisted()`, and the OPFS migration state
- * (sentinel + legacy `slicc-fs` IDB presence). Worker-float safe.
+ * from `navigator.storage.persisted()`, and whether the dead legacy
+ * `slicc-fs` IDB still occupies space. Worker-float safe.
  *
  * `diskutil info` is registered as a separate alias command that
  * produces the same report so the macOS muscle-memory works.
@@ -15,16 +15,11 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
-import {
-  probeLegacyIdbExistsDefault,
-  sentinelExistsOnVfs,
-} from '../../fs/migration/migration-cleanup.js';
+import { probeLegacyIdbExists } from './slicc-fs-cleanup-command.js';
 
 export interface DfCommandOptions {
-  /** Shared VFS used for backend + sentinel probing. */
+  /** Shared VFS used for backend probing. */
   fs?: VirtualFS;
-  /** Override for the OPFS sentinel probe (tests). */
-  sentinelExists?: (fs: VirtualFS) => Promise<boolean>;
   /** Override for the legacy `slicc-fs` IDB probe (tests). */
   legacyIdbExists?: () => Promise<boolean>;
 }
@@ -34,12 +29,11 @@ interface DfReport {
   usage: number | null;
   quota: number | null;
   persisted: boolean | null;
-  sentinelPresent: boolean | null;
   legacyIdbPresent: boolean | null;
 }
 
 function helpText(name: string): string {
-  return `${name} — report VFS backend, storage usage/quota, and migration state
+  return `${name} — report VFS backend and storage usage/quota
 
 Usage:
   ${name}                 Show diagnostics (raw bytes).
@@ -105,24 +99,15 @@ async function buildReport(options: DfCommandOptions): Promise<DfReport> {
     }
   }
 
-  let sentinelPresent: boolean | null = null;
   let legacyIdbPresent: boolean | null = null;
-  if (fs && fs.backend === 'opfs') {
-    const sentinelProbe = options.sentinelExists ?? sentinelExistsOnVfs;
-    try {
-      sentinelPresent = await sentinelProbe(fs);
-    } catch {
-      sentinelPresent = null;
-    }
-  }
-  const idbProbe = options.legacyIdbExists ?? probeLegacyIdbExistsDefault;
+  const idbProbe = options.legacyIdbExists ?? probeLegacyIdbExists;
   try {
     legacyIdbPresent = await idbProbe();
   } catch {
     legacyIdbPresent = null;
   }
 
-  return { backend, usage, quota, persisted, sentinelPresent, legacyIdbPresent };
+  return { backend, usage, quota, persisted, legacyIdbPresent };
 }
 
 function renderReport(report: DfReport, human: boolean): string {
@@ -132,16 +117,6 @@ function renderReport(report: DfReport, human: boolean): string {
       : 'unavailable';
   const persistedLabel =
     report.persisted === null ? 'unavailable' : report.persisted ? 'true' : 'false';
-  let migrated: string;
-  if (report.backend !== 'opfs') {
-    migrated = 'n/a (backend is not opfs)';
-  } else if (report.sentinelPresent === null) {
-    migrated = 'unavailable';
-  } else {
-    migrated = report.sentinelPresent
-      ? 'yes (/.slicc-migrated present)'
-      : 'no (/.slicc-migrated absent)';
-  }
   const legacy =
     report.legacyIdbPresent === null
       ? 'unavailable'
@@ -154,7 +129,6 @@ function renderReport(report: DfReport, human: boolean): string {
     `Quota:       ${formatBytes(report.quota, human)}`,
     `Used:        ${used}`,
     `Persisted:   ${persistedLabel}`,
-    `Migrated:    ${migrated}`,
     `Legacy IDB:  ${legacy}`,
   ];
   return `${lines.join('\n')}\n`;

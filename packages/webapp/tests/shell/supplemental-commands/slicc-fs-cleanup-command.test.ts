@@ -1,8 +1,10 @@
 import type { IFileSystem } from 'just-bash';
 import { describe, expect, it, vi } from 'vitest';
-import type { VirtualFS } from '../../../src/fs/index.js';
-import type { LegacyIdbCleanupResult } from '../../../src/fs/migration/migration-cleanup.js';
-import { createSliccFsCleanupCommand } from '../../../src/shell/supplemental-commands/slicc-fs-cleanup-command.js';
+import {
+  cleanupLegacyIdb,
+  createSliccFsCleanupCommand,
+  type LegacyIdbCleanupResult,
+} from '../../../src/shell/supplemental-commands/slicc-fs-cleanup-command.js';
 
 function createMockCtx() {
   return {
@@ -15,10 +17,6 @@ function createMockCtx() {
   };
 }
 
-function fakeFs(backend: 'memory' | 'opfs'): VirtualFS {
-  return { backend } as unknown as VirtualFS;
-}
-
 describe('slicc-fs-cleanup command', () => {
   it('shows help with --help', async () => {
     const cmd = createSliccFsCleanupCommand();
@@ -28,40 +26,16 @@ describe('slicc-fs-cleanup command', () => {
     expect(result.stdout).toContain('Usage:');
   });
 
-  it('is inert on the non-OPFS backend (flag-off path)', async () => {
-    const runCleanup = vi.fn(
-      async () => ({ kind: 'deleted', message: '' }) as LegacyIdbCleanupResult
-    );
-    const cmd = createSliccFsCleanupCommand({ fs: fakeFs('memory'), runCleanup });
-    const result = await cmd.execute([], createMockCtx());
-    expect(result.exitCode).toBe(0);
-    expect(result.stderr).toContain('OPFS migration not active');
-    // The destructive driver must NEVER fire on the flag-off backend.
-    expect(runCleanup).not.toHaveBeenCalled();
-  });
-
-  it('is inert when no VFS is supplied to the shell (no automatic deletion)', async () => {
-    const runCleanup = vi.fn(
-      async () => ({ kind: 'deleted', message: '' }) as LegacyIdbCleanupResult
-    );
-    const cmd = createSliccFsCleanupCommand({ runCleanup });
-    const result = await cmd.execute([], createMockCtx());
-    expect(result.exitCode).toBe(0);
-    expect(runCleanup).not.toHaveBeenCalled();
-  });
-
-  it('runs the cleanup ONLY when explicitly invoked on the OPFS backend', async () => {
+  it('runs the cleanup ONLY when explicitly invoked', async () => {
     const runCleanup = vi.fn(
       async () =>
         ({ kind: 'deleted', message: 'legacy slicc-fs IDB deleted' }) as LegacyIdbCleanupResult
     );
-    const fs = fakeFs('opfs');
-    const cmd = createSliccFsCleanupCommand({ fs, runCleanup });
+    const cmd = createSliccFsCleanupCommand({ runCleanup });
     // Constructing the command alone must not trigger any deletion.
     expect(runCleanup).not.toHaveBeenCalled();
     const result = await cmd.execute([], createMockCtx());
     expect(runCleanup).toHaveBeenCalledTimes(1);
-    expect(runCleanup).toHaveBeenCalledWith(fs);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('deleted');
   });
@@ -74,31 +48,17 @@ describe('slicc-fs-cleanup command', () => {
           message: 'legacy slicc-fs IDB not present — nothing to clean',
         }) as LegacyIdbCleanupResult
     );
-    const cmd = createSliccFsCleanupCommand({ fs: fakeFs('opfs'), runCleanup });
+    const cmd = createSliccFsCleanupCommand({ runCleanup });
     const result = await cmd.execute([], createMockCtx());
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('nothing to clean');
-  });
-
-  it('exits non-zero with stderr when the sentinel is missing (refusal)', async () => {
-    const runCleanup = vi.fn(
-      async () =>
-        ({
-          kind: 'sentinel-missing',
-          message: 'migration sentinel not present',
-        }) as LegacyIdbCleanupResult
-    );
-    const cmd = createSliccFsCleanupCommand({ fs: fakeFs('opfs'), runCleanup });
-    const result = await cmd.execute([], createMockCtx());
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('sentinel');
   });
 
   it('rejects unknown arguments without running the destructive driver', async () => {
     const runCleanup = vi.fn(
       async () => ({ kind: 'deleted', message: '' }) as LegacyIdbCleanupResult
     );
-    const cmd = createSliccFsCleanupCommand({ fs: fakeFs('opfs'), runCleanup });
+    const cmd = createSliccFsCleanupCommand({ runCleanup });
     const result = await cmd.execute(['--dry-run'], createMockCtx());
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('unsupported argument');
@@ -111,10 +71,68 @@ describe('slicc-fs-cleanup command', () => {
       const runCleanup = vi.fn(
         async () => ({ kind, message: `outcome:${kind}` }) as LegacyIdbCleanupResult
       );
-      const cmd = createSliccFsCleanupCommand({ fs: fakeFs('opfs'), runCleanup });
+      const cmd = createSliccFsCleanupCommand({ runCleanup });
       const result = await cmd.execute([], createMockCtx());
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain(kind);
+    }
+  });
+});
+
+describe('cleanupLegacyIdb (deletion-only driver)', () => {
+  it('reports absent without attempting a delete when the IDB is gone', async () => {
+    const deleteDatabase = vi.fn();
+    vi.stubGlobal('indexedDB', {
+      databases: async () => [{ name: 'something-else' }],
+      deleteDatabase,
+    });
+    try {
+      const result = await cleanupLegacyIdb();
+      expect(result.kind).toBe('absent');
+      expect(deleteDatabase).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('deletes the legacy slicc-fs IDB when present — and NEVER opens/reads it', async () => {
+    const open = vi.fn();
+    const deleteDatabase = vi.fn(() => {
+      const req: Partial<IDBOpenDBRequest> = {};
+      queueMicrotask(() => (req as { onsuccess?: () => void }).onsuccess?.());
+      return req as IDBOpenDBRequest;
+    });
+    vi.stubGlobal('indexedDB', {
+      databases: async () => [{ name: 'slicc-fs' }],
+      deleteDatabase,
+      open,
+    });
+    try {
+      const result = await cleanupLegacyIdb();
+      expect(result.kind).toBe('deleted');
+      expect(deleteDatabase).toHaveBeenCalledWith('slicc-fs');
+      // The whole point of removing the migration: no read path remains.
+      expect(open).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('surfaces blocked deletions as a retryable outcome', async () => {
+    vi.stubGlobal('indexedDB', {
+      databases: async () => [{ name: 'slicc-fs' }],
+      deleteDatabase: () => {
+        const req: Partial<IDBOpenDBRequest> = {};
+        queueMicrotask(() => (req as { onblocked?: () => void }).onblocked?.());
+        return req as IDBOpenDBRequest;
+      },
+    });
+    try {
+      const result = await cleanupLegacyIdb();
+      expect(result.kind).toBe('blocked');
+      expect(result.message).toContain('close other tabs');
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 });

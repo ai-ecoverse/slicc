@@ -52,7 +52,7 @@ Deep reference: `docs/kernel/process-model.md`.
 ### VirtualFS
 
 - Path: `packages/webapp/src/fs/`
-- `virtual-fs.ts` provides the POSIX-like filesystem backed by LightningFS/IndexedDB.
+- `virtual-fs.ts` provides the POSIX-like filesystem backed by OPFS (in-memory in Node tests). The legacy LightningFS/IndexedDB backend and its boot-time migration are fully removed; `slicc-fs-cleanup` deletes the leftover `slicc-fs` database on request.
 - `restricted-fs.ts` adds path ACLs for scoop sandboxes.
 - `mount-commands.ts` is the dispatcher (parses `--source` / `--profile` / `--no-probe` etc.); `path-utils.ts` defines path normalization.
 - `mount/` holds the backend abstraction: `MountBackend` interface (`backend.ts`), three implementations (`backend-local.ts` wrapping FS Access, `backend-s3.ts` for S3 + S3-compatible like R2, `backend-da.ts` for da.live), the shared `RemoteMountCache` (TTL + ETag, IDB-backed), `signed-fetch.ts` (browser-side transport seam), `fetch-with-budget.ts` (timeout + retry + abort threading), and `profile.ts` (cred resolution from `s3.<profile>.*` secrets, IMS for DA). The SigV4 v4 signer (`sigv4.ts`, pure Web Crypto, no AWS SDK) and the sign-and-forward orchestration (`sign-and-forward.ts`) live in `@slicc/shared-ts` and are consumed by the webapp mount barrel, the node-server handlers, and the extension service worker. Persistence + recovery: `mount-table-store.ts` keys by `targetPath` with a `BackendDescriptor` discriminated union; `mount-recovery.ts` reconstructs backends per-kind on session restore.
