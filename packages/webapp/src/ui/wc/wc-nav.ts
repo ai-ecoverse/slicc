@@ -9,6 +9,7 @@
 import type { BootStageLogger } from '../boot/types.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import type { GroupedModels } from '../provider-settings.js';
+import { isWcUiPinned, setWcUiPinned } from './wc-flag.js';
 import type { WcShellRefs } from './wc-shell.js';
 
 export interface MetaModel {
@@ -64,14 +65,37 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
     client.updateModel();
   });
 
-  refs.avatarMenu.user = { name: 'SLICC', provider: 'standalone · wc' };
-  refs.avatarMenu.items = [
-    { id: 'settings', label: 'Account settings…', icon: 'settings' },
-    { kind: 'separator' },
-    { id: 'legacy-ui', label: 'Open legacy UI', icon: 'panel-left' },
-  ];
+  const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+  refs.avatarMenu.user = {
+    name: 'SLICC',
+    provider: isExtension ? 'extension · wc' : 'standalone · wc',
+  };
+  const syncMenuItems = (): void => {
+    refs.avatarMenu.items = [
+      { id: 'settings', label: 'Account settings…', icon: 'settings' },
+      ...(isExtension
+        ? [
+            {
+              id: 'pin-sidepanel',
+              label: isWcUiPinned(localStorage)
+                ? 'Unpin WC UI from side panel'
+                : 'Pin WC UI in side panel',
+              icon: 'pin',
+            },
+          ]
+        : []),
+      { kind: 'separator' as const },
+      { id: 'legacy-ui', label: 'Open legacy UI', icon: 'panel-left' },
+    ];
+  };
+  syncMenuItems();
   refs.avatarMenu.addEventListener('slicc-avatar-action', (event) => {
     const id = (event as CustomEvent<{ id?: string }>).detail?.id;
+    if (id === 'pin-sidepanel') {
+      setWcUiPinned(localStorage, !isWcUiPinned(localStorage));
+      syncMenuItems();
+      return;
+    }
     if (id === 'settings') {
       // The legacy dialog needs its (scoped) chrome; loaded on demand so the
       // WC shell stays free of the colliding legacy sheets.
@@ -85,6 +109,11 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
         .catch((err) => log.error('WC settings dialog failed', err));
       return;
     }
-    if (id === 'legacy-ui') navigate(legacyUiUrl(window.location.href));
+    if (id === 'legacy-ui') {
+      // In the pinned side panel the URL carries no flag — unpin so the
+      // reload (and every future panel open) boots the legacy UI.
+      if (isExtension) setWcUiPinned(localStorage, false);
+      navigate(legacyUiUrl(window.location.href));
+    }
   });
 }

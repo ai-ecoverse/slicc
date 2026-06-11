@@ -168,6 +168,7 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<void> 
   const { createSprinkleExecHandler } = await import('../boot/setup-sprinkle-exec.js');
   const { setDipExecHandler } = await import('../dip.js');
 
+  const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
   const execHandler = createSprinkleExecHandler(client);
   const manager = new SprinkleManager(
     fs,
@@ -182,6 +183,9 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<void> 
       if (cone) client.stopScoop(cone.jid);
     },
     {
+      // Extension etiquette: auto-open sprinkles pulse for attention instead
+      // of overlaying the chat mid-flow.
+      ...(isExtension ? { autoOpenBehavior: 'attention' as const } : {}),
       // `welcome` backs the inline onboarding dip; it must never appear as a
       // panel sprinkle (mirrors INLINE_DIP_SPRINKLES in main.ts).
       inlineSprinkles: new Set(['welcome']),
@@ -194,8 +198,22 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<void> 
   (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = manager;
   setDipExecHandler(execHandler);
   if (instanceId !== undefined) {
+    // Standalone: worker→panel sprinkle ops over the BroadcastChannel.
     const stop = installSprinkleManagerHandlerOverChannel(manager, { instanceId });
     window.addEventListener('beforeunload', () => stop(), { once: true });
+  } else if (isExtension) {
+    // Extension: the offscreen orchestrator relays sprinkle ops over the
+    // panel's OffscreenClient transport — same handler the legacy panel uses.
+    const { handleSprinkleOp } = await import('../boot/setup-extension-sprinkle.js');
+    client.setSprinkleOpHandler((payload: unknown) => {
+      const { id, op, name, data } = payload as {
+        id: unknown;
+        op: string;
+        name: string;
+        data: unknown;
+      };
+      void handleSprinkleOp(manager, id, op, name, data);
+    });
   }
 
   // Closing a sprinkle tab closes the sprinkle; clicking a dock launcher for

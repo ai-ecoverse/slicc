@@ -186,7 +186,12 @@ async function runWelcomeMountPicker(
   }
 }
 
-async function handleSprinkleOp(
+/**
+ * Execute a worker-relayed sprinkle op against a panel-side manager and
+ * post the response back over `chrome.runtime`. Shared with the WC shell's
+ * extension float (`ui/wc/wc-sprinkles.ts`).
+ */
+export async function handleSprinkleOp(
   sprinkleManager: SprinkleManager,
   id: unknown,
   op: string,

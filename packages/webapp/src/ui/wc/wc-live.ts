@@ -449,6 +449,13 @@ export function attachWcClient(
   void import('./wc-nav.js')
     .then(({ wireWcNav }) => wireWcNav({ refs, client, log }))
     .catch((err) => log.error('WC nav wiring failed', err));
+
+  // Voice: mic toggle in the composer-meta row (Web Speech API, Chromium).
+  void import('./wc-voice.js')
+    .then(({ wireWcVoice }) =>
+      wireWcVoice({ refs, send: (text) => boot.getController()?.sendUserMessage(text), log })
+    )
+    .catch((err) => log.error('WC voice wiring failed', err));
 }
 
 /** Boot the standalone live WC shell: prelude → kernel spawn → attach. */

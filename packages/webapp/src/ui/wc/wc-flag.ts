@@ -21,3 +21,26 @@ export function resolveWcUiMode(href: string): WcUiMode {
   if (url.searchParams.get('ui') !== 'wc') return 'off';
   return url.searchParams.has('ui-fixture') ? 'fixture' : 'live';
 }
+
+/**
+ * The pinned extension side panel has no URL control, so opting it into the
+ * WC shell is an explicit localStorage pin, toggled from the WC avatar menu
+ * (reachable via the detached popout `?detached=1&ui=wc`).
+ */
+export const WC_UI_PIN_KEY = 'slicc_ui_wc';
+
+export function isWcUiPinned(storage: Pick<Storage, 'getItem'>): boolean {
+  try {
+    return storage.getItem(WC_UI_PIN_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function setWcUiPinned(
+  storage: Pick<Storage, 'setItem' | 'removeItem'>,
+  pinned: boolean
+): void {
+  if (pinned) storage.setItem(WC_UI_PIN_KEY, '1');
+  else storage.removeItem(WC_UI_PIN_KEY);
+}

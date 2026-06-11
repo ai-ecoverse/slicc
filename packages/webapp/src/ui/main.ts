@@ -44,7 +44,7 @@ import { applyProviderDefaults, getApiKey } from './provider-settings.js';
 import { resolveUiRuntimeMode, type UiRuntimeMode } from './runtime-mode.js';
 import { initTheme } from './theme.js';
 import { initTooltips } from './tooltip.js';
-import { resolveWcUiMode } from './wc/wc-flag.js';
+import { isWcUiPinned, resolveWcUiMode } from './wc/wc-flag.js';
 
 const log = createLogger('main');
 
@@ -356,7 +356,10 @@ async function main(): Promise<void> {
   // and the extension detached popout (`?detached=1&ui=wc`) — the pinned
   // side panel keeps the legacy UI for now; legacy stays the default.
   const wcUiAllowed = !isExtension || runtimeMode === 'extension-detached';
-  const wcUiMode = wcUiAllowed ? resolveWcUiMode(window.location.href) : 'off';
+  let wcUiMode = wcUiAllowed ? resolveWcUiMode(window.location.href) : 'off';
+  // The pinned side panel has no URL control — an explicit localStorage pin
+  // (toggled from the WC avatar menu) opts it into the WC shell.
+  if (runtimeMode === 'extension' && isWcUiPinned(window.localStorage)) wcUiMode = 'live';
   if (wcUiMode === 'fixture') {
     const { mountWcUiPreview } = await import('./wc/wc-shell.js');
     mountWcUiPreview(app);
@@ -399,7 +402,7 @@ async function main(): Promise<void> {
   // kernel worker; the detached popout connects to the offscreen engine.
   // Runs after provider registration + OAuth bootstrap so the cone streams.
   if (wcUiMode === 'live') {
-    if (runtimeMode === 'extension-detached') {
+    if (isExtension) {
       const { mountWcUiExtension } = await import('./wc/wc-extension.js');
       return mountWcUiExtension(app, log);
     }

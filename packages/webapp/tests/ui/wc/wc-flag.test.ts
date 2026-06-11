@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveWcUiMode } from '../../../src/ui/wc/wc-flag.js';
+import { isWcUiPinned, resolveWcUiMode, setWcUiPinned } from '../../../src/ui/wc/wc-flag.js';
 
 describe('resolveWcUiMode', () => {
   it('is off for a plain app URL', () => {
@@ -28,5 +28,34 @@ describe('resolveWcUiMode', () => {
   it('is off for unparseable hrefs', () => {
     expect(resolveWcUiMode('not a url')).toBe('off');
     expect(resolveWcUiMode('')).toBe('off');
+  });
+});
+
+describe('side-panel pin', () => {
+  function makeStorage(): Storage {
+    const store = new Map<string, string>();
+    return {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => store.set(k, v),
+      removeItem: (k: string) => store.delete(k),
+    } as unknown as Storage;
+  }
+
+  it('round-trips the pin through storage', () => {
+    const storage = makeStorage();
+    expect(isWcUiPinned(storage)).toBe(false);
+    setWcUiPinned(storage, true);
+    expect(isWcUiPinned(storage)).toBe(true);
+    setWcUiPinned(storage, false);
+    expect(isWcUiPinned(storage)).toBe(false);
+  });
+
+  it('tolerates throwing storage', () => {
+    const storage = {
+      getItem: () => {
+        throw new Error('blocked');
+      },
+    } as unknown as Storage;
+    expect(isWcUiPinned(storage)).toBe(false);
   });
 });
