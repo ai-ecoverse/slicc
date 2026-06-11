@@ -18,7 +18,11 @@ const TREE_ROOTS = ['/workspace', '/shared'] as const;
 const MAX_DEPTH = 3;
 const MAX_ENTRIES_PER_DIR = 200;
 
-async function dirChildren(fs: LocalVfsClient, dir: string, depth: number): Promise<FileTreeItem[]> {
+async function dirChildren(
+  fs: LocalVfsClient,
+  dir: string,
+  depth: number
+): Promise<FileTreeItem[]> {
   let entries: Awaited<ReturnType<LocalVfsClient['readDir']>>;
   try {
     entries = await fs.readDir(dir);

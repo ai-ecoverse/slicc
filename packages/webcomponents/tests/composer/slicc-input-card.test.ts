@@ -290,7 +290,7 @@ describe('slicc-input-card / send button', () => {
     el.value = 'ship it';
     const submits: string[] = [];
     el.addEventListener('submit', (e) => {
-      submits.push((e as CustomEvent<{ value: string }>).detail.value);
+      submits.push((e as Event as CustomEvent<{ value: string }>).detail.value);
     });
 
     const send = el.querySelector('slicc-send-button');

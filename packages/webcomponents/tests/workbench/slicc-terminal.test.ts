@@ -44,6 +44,19 @@ function renderedText(el: SliccTerminal): string {
   return rows?.textContent ?? '';
 }
 
+/**
+ * Poll until a condition holds (xterm writes and renders asynchronously — a
+ * fixed frame wait flakes under full-suite load). Returns on timeout and lets
+ * the following assertion report the mismatch.
+ */
+async function waitFor(condition: () => boolean, timeoutMs = 4000): Promise<void> {
+  const start = performance.now();
+  while (!condition()) {
+    if (performance.now() - start > timeoutMs) return;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
 describe('slicc-terminal', () => {
   beforeEach(() => {
     ensureGlobalTokens();
@@ -107,8 +120,7 @@ describe('slicc-terminal', () => {
     it('write()/writeln() land in the xterm buffer and render in the rows', async () => {
       const el = await mount();
       el.writeln('hello slicc terminal');
-      // Give xterm a frame to render the written line.
-      await new Promise((r) => setTimeout(r, 60));
+      await waitFor(() => renderedText(el).includes('hello slicc terminal'));
       expect(bufferText(el)).toContain('hello slicc terminal');
       expect(renderedText(el)).toContain('hello slicc terminal');
     });
@@ -122,17 +134,17 @@ describe('slicc-terminal', () => {
       el.writeln('queued-before-load');
       expect(el.terminal).toBeNull(); // not yet loaded → buffered
       await waitForTerminal(el);
-      await new Promise((r) => setTimeout(r, 60));
+      await waitFor(() => bufferText(el).includes('queued-before-load'));
       expect(bufferText(el)).toContain('queued-before-load');
     });
 
     it('clear() empties the rendered viewport text', async () => {
       const el = await mount();
       el.writeln('line-to-clear');
-      await new Promise((r) => setTimeout(r, 60));
+      await waitFor(() => bufferText(el).includes('line-to-clear'));
       expect(bufferText(el)).toContain('line-to-clear');
       el.clear();
-      await new Promise((r) => setTimeout(r, 60));
+      await waitFor(() => !bufferText(el).includes('line-to-clear'));
       expect(bufferText(el)).not.toContain('line-to-clear');
     });
   });

@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // surface geometry under real Chromium.
 import '../../src/primitives/slicc-pane.js';
 import { ensureGlobalTokens, setTheme } from '../../src/theme/tokens.js';
+import '../../src/workbench/slicc-surface.js';
+import '../../src/workbench/slicc-workbench-body.js';
 import { SliccWorkbenchPane } from '../../src/workbench/slicc-workbench-pane.js';
 
 /** The composed `<slicc-pane>` chrome the host renders into its light DOM. */
@@ -209,5 +211,38 @@ describe('slicc-workbench-pane', () => {
     expect(dark).not.toBe(light);
     // --canvas darkens to #161618 in dark mode.
     expect(dark).toBe('rgb(22, 22, 24)');
+  });
+});
+
+describe('slicc-workbench-pane / body height', () => {
+  it('passes the remaining pane height to a flex-sized workbench body', async () => {
+    // The regression: the pane's body region was a plain block, so a
+    // `slicc-workbench-body { flex: 1 }` child (whose surfaces are
+    // absolutely positioned and add no auto height) collapsed to 0px —
+    // panes rendered as a 10px sliver of rounded corners.
+    const host = document.createElement('div');
+    host.style.cssText = 'display:flex;width:1200px;height:600px;';
+    const el = document.createElement('slicc-workbench-pane') as SliccWorkbenchPane;
+    el.setAttribute('open', '');
+
+    const header = document.createElement('slicc-workbench-header');
+    header.setAttribute('slot', 'header');
+    header.textContent = 'tabs';
+
+    const body = document.createElement('slicc-workbench-body');
+    const surface = document.createElement('slicc-surface');
+    surface.setAttribute('surface-id', 'mem');
+    surface.setAttribute('active', '');
+    surface.textContent = 'content';
+    body.append(surface);
+
+    el.append(header, body);
+    host.append(el);
+    document.body.appendChild(host);
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+
+    const bodyRect = body.getBoundingClientRect();
+    expect(bodyRect.height).toBeGreaterThan(400);
+    host.remove();
   });
 });

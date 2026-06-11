@@ -60,6 +60,15 @@ slicc-workbench-pane > slicc-pane {
   flex: 1 1 auto;
   min-height: 0;
 }
+/* The pane's body region is a plain block by default; inside the workbench it
+   must be a flex column so a flex-sized child (\`slicc-workbench-body\`'s
+   \`flex: 1\`) actually receives the remaining height — its surfaces are
+   absolutely positioned and contribute no auto height of their own. */
+slicc-workbench-pane slicc-pane .slicc-pane__body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
 `;
 
 const STYLE_ID = 'slicc-workbench-pane-style';

@@ -78,7 +78,8 @@ const CSS = [
   'box-sizing:border-box;padding-left:var(--rail-w,44px);',
   'transition:padding-left .4s cubic-bezier(.4,0,.2,1);}',
   '@media (max-width:560px){.wcui-appcol{padding-left:44px;}}',
-  '.wcui-term{flex:1;min-height:0;display:flex;flex-direction:column;}',
+  '.wcui-term{flex:1;min-height:0;display:flex;flex-direction:column;padding:8px 4px 8px 10px;',
+  'box-sizing:border-box;}',
   '.wcui-memory{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;',
   'gap:8px;padding:10px;}',
   '.wcui-placeholder{flex:1;display:flex;align-items:center;justify-content:center;',
@@ -143,7 +144,9 @@ function buildWorkbench(): {
   tabBar: WcShellRefs['tabBar'];
 } {
   const workbench = el('slicc-workbench-pane');
-  const header = el('slicc-workbench-header');
+  // The documented composition contract: the header is pinned via
+  // `slot="header"` so the pane keeps it above the scrollable body region.
+  const header = el('slicc-workbench-header', { slot: 'header' });
   const tabs = el('slicc-tab-bar', { active: 'files' }) as HTMLElement & { tabs?: unknown };
   tabs.tabs = [
     { id: 'files', label: 'files', kind: 'tool' },
