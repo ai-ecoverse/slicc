@@ -444,3 +444,24 @@ describe('slicc-lick-card', () => {
     });
   });
 });
+
+describe('scoop-accent hue', () => {
+  it('tints the event pill with the hue and clears back to amber', () => {
+    const el = document.createElement('slicc-lick-card');
+    el.setAttribute('kind', 'scoop-idle');
+    el.setAttribute('event-label', 'blame-roulette');
+    el.setAttribute('hue', '#06b6d4');
+    document.body.appendChild(el);
+    const pill = el.shadowRoot?.querySelector('.lk') as HTMLElement;
+    const cs = getComputedStyle(pill);
+    // Cyan pill with white ink (scoop identity), not the amber default.
+    expect(cs.backgroundColor).toBe('rgb(6, 182, 212)');
+    expect(cs.color).toBe('rgb(255, 255, 255)');
+
+    el.removeAttribute('hue');
+    // Attribute changes re-render the shadow content — re-query the pill.
+    const fresh = el.shadowRoot?.querySelector('.lk') as HTMLElement;
+    expect(getComputedStyle(fresh).color).toBe('rgb(58, 38, 0)');
+    el.remove();
+  });
+});

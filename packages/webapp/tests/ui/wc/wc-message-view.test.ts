@@ -151,7 +151,7 @@ describe('buildThreadChildren', () => {
   });
 
   it('flags queued messages', () => {
-    expect(children.some((c) => c.hasAttribute('data-queued'))).toBe(true);
+    expect(children.some((c) => c.hasAttribute('queued'))).toBe(true);
   });
 });
 
@@ -344,5 +344,72 @@ describe('summarizeToolInput', () => {
     const long = 'x'.repeat(120);
     expect(summarizeToolInput(long)).toHaveLength(80);
     expect(summarizeToolInput(long).endsWith('…')).toBe(true);
+  });
+});
+
+describe('render-time lick classification + scoop-identity tags', () => {
+  const IDLE_BODY =
+    '[@blame-roulette-scoop idle]: Scoop "blame-roulette" has been ready for 2 minutes without receiving any work.';
+
+  it('classifies an unstamped idle notification as a lick card tagged with the scoop', () => {
+    // Histories persisted before channel stamping replay as bare user
+    // messages — exactly the live regression: idle nags as user bubbles.
+    const els = messageEls({ id: 'x', role: 'user', content: IDLE_BODY, timestamp: 1 });
+    expect(els[0].tagName.toLowerCase()).toBe('slicc-lick-card');
+    expect(els[0].getAttribute('kind')).toBe('scoop-idle');
+    // The yellow tag is the SCOOP's name in the scoop's accent — not a
+    // repetition of the lick name.
+    expect(els[0].getAttribute('event-label')).toBe('blame-roulette');
+    expect(els[0].getAttribute('hue')).toMatch(/^#/);
+  });
+
+  it('classifies completed/scoop_wait/header-marked bodies', () => {
+    const completed = messageEls({
+      id: 'a',
+      role: 'user',
+      content: '[@tool-demo-scoop completed]VFS path: /shared/x.md',
+      timestamp: 1,
+    });
+    expect(completed[0].getAttribute('kind')).toBe('scoop-notify');
+    expect(completed[0].getAttribute('event-label')).toBe('tool-demo');
+
+    const wait = messageEls({
+      id: 'b',
+      role: 'user',
+      content: '[scoop_wait completed]1 completed, 0 timed out',
+      timestamp: 1,
+    });
+    expect(wait[0].getAttribute('kind')).toBe('scoop-wait');
+
+    const sprinkle = messageEls({
+      id: 'c',
+      role: 'user',
+      content: '[Sprinkle Event: blame-roulette]\n{"action":"x"}',
+      timestamp: 1,
+    });
+    expect(sprinkle[0].tagName.toLowerCase()).toBe('slicc-lick-card');
+    expect(sprinkle[0].getAttribute('kind')).toBe('sprinkle');
+    expect(sprinkle[0].getAttribute('event-label')).toBe('blame-roulette');
+  });
+
+  it('leaves genuine user text with brackets alone', () => {
+    const els = messageEls({
+      id: 'd',
+      role: 'user',
+      content: '[link]: see https://example.com for details',
+      timestamp: 1,
+    });
+    expect(els[0].tagName.toLowerCase()).toBe('slicc-user-message');
+  });
+
+  it('collates a run of historic unstamped idle notifications into one ×N card', () => {
+    const run = collateLickMessages([
+      { id: '1', role: 'user', content: IDLE_BODY, timestamp: 1 },
+      { id: '2', role: 'user', content: IDLE_BODY, timestamp: 2 },
+      { id: '3', role: 'user', content: IDLE_BODY, timestamp: 3 },
+    ]);
+    expect(run).toHaveLength(1);
+    expect(run[0].lickCount).toBe(3);
+    expect(run[0].channel).toBe('scoop-idle');
   });
 });

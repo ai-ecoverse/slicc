@@ -119,8 +119,8 @@ const STYLE = `
 /* The clickable affordance only exists while collapsible. */
 :host([collapsible]) .lh{cursor:pointer;user-select:none;}
 .lk{
-  margin-left:auto;border-radius:26px;background:var(--amber);
-  color:#3a2600;font-size:9px;font-weight:700;padding:1px 7px;
+  margin-left:auto;border-radius:26px;background:var(--lick-pill,var(--amber));
+  color:var(--lick-pill-ink,#3a2600);font-size:9px;font-weight:700;padding:1px 7px;
 }
 
 .lb{font-size:12.5px;color:var(--ink);line-height:1.4;}
@@ -157,6 +157,8 @@ const MIDDOT = '·';
  *
  * @attr kind - the lick kind shown after "lick · " in the header (e.g. "webhook")
  * @attr event-label - text of the right-aligned amber pill (default "event")
+ * @attr hue - optional CSS color for the pill (scoop-originating licks carry
+ *   the scoop's accent; default stays the amber event pill)
  * @attr count - collation count; at 2+ the pill reads "<event-label> ×<count>"
  * @attr body - body text (escaped); ignored when default-slot content is present
  * @attr no-animate - disable the `lickIn` slide-in entrance (static card)
@@ -182,6 +184,7 @@ export class SliccLickCard extends HTMLElement {
     'collapsible',
     'collapsed',
     'theme',
+    'hue',
   ];
 
   readonly #root: ShadowRoot;
@@ -304,6 +307,16 @@ export class SliccLickCard extends HTMLElement {
   #render(): void {
     const kind = this.kind ?? '';
     const count = this.count;
+    // Scoop-originating licks tint the event pill with the scoop's accent;
+    // white ink reads on every palette hue. Cleared back to the amber default.
+    const hue = this.getAttribute('hue');
+    if (hue) {
+      this.style.setProperty('--lick-pill', hue);
+      this.style.setProperty('--lick-pill-ink', '#fff');
+    } else {
+      this.style.removeProperty('--lick-pill');
+      this.style.removeProperty('--lick-pill-ink');
+    }
     const baseLabel = this.eventLabel ?? DEFAULT_EVENT_LABEL;
     // Collated cards announce their multiplicity in the pill: "session-reload ×2".
     const eventLabel = count > 1 ? `${baseLabel} ×${count}` : baseLabel;

@@ -188,3 +188,15 @@ export const Conversation: Story = {
     return wrap;
   },
 };
+
+/** Queued behind the current turn: dimmed bubble + a small clock tag. */
+export const Queued: Story = {
+  render: () => {
+    const el = document.createElement('slicc-user-message') as SliccUserMessage;
+    el.style.display = 'block';
+    el.style.maxWidth = '520px';
+    el.setAttribute('text', 'Also bump the dependency once the tests pass.');
+    el.setAttribute('queued', '');
+    return el;
+  },
+};

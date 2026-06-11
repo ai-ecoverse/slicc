@@ -6,6 +6,7 @@ interface LickCardArgs {
   'event-label'?: string;
   body?: string;
   bodyHtml?: string;
+  hue?: string;
   'no-animate'?: boolean;
   collapsible?: boolean;
   collapsed?: boolean;
@@ -41,6 +42,7 @@ function build(args: LickCardArgs): HTMLElement {
   if (args.collapsible) el.setAttribute('collapsible', '');
   if (args.collapsed) el.setAttribute('collapsed', '');
   if (args.theme) el.setAttribute('theme', args.theme);
+  if (args.hue) el.setAttribute('hue', args.hue);
   // Rich slotted markup wins over the plain `body` attribute when supplied.
   if (args.bodyHtml != null) appendRichBody(el, args.bodyHtml);
   else if (args.body != null) el.setAttribute('body', args.body);
@@ -196,5 +198,21 @@ export const RightAligned: Story = {
     collapsible: true,
     bodyHtml:
       'A right-aligned <b>workflow</b> lick. Collapsing hides this body, but the card stays pinned to the right.',
+  },
+};
+
+/**
+ * A scoop-originating lick wears the SCOOP's identity: the pill is the scoop
+ * name in the scoop's accent color (white ink), not a repeat of the channel.
+ */
+export const ScoopIdentityTag: Story = {
+  args: {
+    kind: 'scoop-idle',
+    'event-label': 'blame-roulette',
+    hue: '#06b6d4',
+    collapsible: true,
+    collapsed: true,
+    bodyHtml:
+      'Scoop <b>blame-roulette</b> has been ready for 2 minutes without receiving any work.',
   },
 };

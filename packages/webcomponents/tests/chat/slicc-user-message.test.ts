@@ -195,3 +195,18 @@ describe('slicc-user-message', () => {
     });
   });
 });
+
+describe('queued state', () => {
+  it('dims the bubble and shows the clock tag while queued', () => {
+    const el = mount({ text: 'do this next', queued: '' });
+    const tag = el.shadowRoot?.querySelector('.queued-tag') as HTMLElement;
+    expect(tag?.textContent).toContain('queued');
+    expect(tag?.querySelector('svg')).toBeTruthy();
+    expect(getComputedStyle(el.shadowRoot?.querySelector('.b') as Element).opacity).toBe('0.62');
+
+    // Dequeued (the turn finished and the message was sent): back to normal.
+    el.queued = false;
+    expect(el.shadowRoot?.querySelector('.queued-tag')).toBeNull();
+    expect(getComputedStyle(el.shadowRoot?.querySelector('.b') as Element).opacity).toBe('1');
+  });
+});

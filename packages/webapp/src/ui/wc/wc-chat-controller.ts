@@ -7,6 +7,7 @@
  */
 
 import type { AgentEvent, AgentHandle, ChatMessage } from '../types.js';
+import { createCopyRow } from './wc-copy-row.js';
 import { collateLickMessages, daySeparatorEl, messageEls } from './wc-message-view.js';
 
 export interface WcChatControllerOptions {
@@ -46,6 +47,8 @@ export class WcChatController {
   #pendingDelta = '';
   #flushScheduled = false;
   #processing = false;
+  /** Lazily-built copy affordance, re-appended after the last reply. */
+  #copyRow: HTMLElement | null = null;
 
   constructor(options: WcChatControllerOptions) {
     this.#thread = options.thread;
@@ -133,6 +136,7 @@ export class WcChatController {
         this.#onMessageRendered?.(message, this.#els.get(message.id) ?? []);
       }
     }
+    this.#syncCopyRow();
     this.#scrollToBottom();
   }
 
@@ -185,7 +189,29 @@ export class WcChatController {
   setProcessing(processing: boolean): void {
     if (this.#processing === processing) return;
     this.#processing = processing;
+    if (!processing) this.#syncCopyRow();
     this.#onProcessingChange?.(processing);
+  }
+
+  /**
+   * Copy affordance (legacy feedback-row parity): shown after the last
+   * COMPLETED assistant message — short click copies the latest response,
+   * long press copies the whole chat. Appending an existing element moves
+   * it, so re-syncing after each load/turn keeps it pinned to the tail.
+   */
+  #syncCopyRow(): void {
+    const last = this.#messages[this.#messages.length - 1];
+    const show = last?.role === 'assistant' && !last.isStreaming;
+    if (!show) {
+      this.#copyRow?.remove();
+      return;
+    }
+    this.#copyRow ??= createCopyRow({ getMessages: () => this.getMessages() });
+    // Straight into the reading column: the component's overridden `append`
+    // treats new nodes as live content (scrolls + invalidates the URL scroll
+    // restore) — the copy row is chrome, not content.
+    const inner = (this.#thread as { inner?: HTMLElement }).inner;
+    (inner ?? this.#thread).append(this.#copyRow);
   }
 
   // -- agent events ---------------------------------------------------------

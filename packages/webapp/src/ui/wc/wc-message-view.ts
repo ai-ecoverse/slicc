@@ -13,6 +13,9 @@ import type { ChatMessage, ToolCall } from '../types.js';
 
 // Side-effect import registers every element this module instantiates.
 import '@slicc/webcomponents';
+import { lickChannelFromBody } from '../../scoops/agent-message-to-chat.js';
+import { isLickChannel } from '../lick-channels.js';
+import { scoopColor } from './wc-scoop-color.js';
 
 /** Attachment chip shape accepted by `<slicc-user-message>` (not re-exported
  *  by the barrel, so derive it from the class's method signature). */
@@ -27,6 +30,36 @@ const LICK_PLAIN_HEADER_RE = /^\[([^\]]+)\]\s*/;
 function lickPartBody(part: string): string {
   const header = LICK_HEADER_RE.exec(part) ?? LICK_PLAIN_HEADER_RE.exec(part);
   return header ? part.slice(header[0].length) : part;
+}
+
+/**
+ * Render-time lick classification for user-role messages that carry a lick
+ * body but no `channel` — histories persisted before channel stamping (or
+ * rebuilt through paths that lost it) would otherwise render as plain user
+ * bubbles. Recognizes the scoop lifecycle / scoop_wait / session-reload body
+ * markers and the `[<Channel> Event: <name>]` header for known channels.
+ */
+export function lickChannelFromContent(content: string): string | null {
+  const fromBody = lickChannelFromBody(content);
+  if (fromBody) return fromBody;
+  const header = LICK_HEADER_RE.exec(content);
+  if (header) {
+    const channel = header[1]
+      .trim()
+      .toLowerCase()
+      .replace(/\s+event$/, '')
+      .replace(/\s+/g, '-');
+    if (isLickChannel(channel)) return channel;
+  }
+  return null;
+}
+
+/** `[@<scoop> completed|idle]` marker — the originating scoop's name. */
+const SCOOP_MARKER_RE = /^\[@([^\]\s]+) (?:completed|idle)\]/;
+
+/** Strip the conventional `-scoop` suffix so the tag matches the chip label. */
+function scoopTagName(marker: string): string {
+  return marker.replace(/-scoop$/, '');
 }
 
 function el(tag: string, attrs: Record<string, string> = {}): HTMLElement {
@@ -337,7 +370,7 @@ function toolCallRow(call: ToolCall): HTMLElement {
 function userMessageEl(message: ChatMessage): HTMLElement {
   const bubble = document.createElement('slicc-user-message');
   bubble.setBodyHtml(renderMessageContent(message.content));
-  if (message.queued) bubble.setAttribute('data-queued', '');
+  if (message.queued) bubble.setAttribute('queued', '');
   if (message.attachments?.length) {
     bubble.setAttachments(message.attachments.map(toUserAttachment));
   }
@@ -447,14 +480,19 @@ function assistantMessageEls(message: ChatMessage): HTMLElement[] {
 function lickCardEl(message: ChatMessage): HTMLElement {
   const header = LICK_HEADER_RE.exec(message.content);
   const count = message.lickCount ?? 1;
+  // Scoop-originating licks wear the SCOOP's identity: the tag is the scoop
+  // name in the scoop's accent color, not a repetition of the channel name.
+  const scoopMarker = SCOOP_MARKER_RE.exec(message.content);
+  const scoopName = scoopMarker ? scoopTagName(scoopMarker[1]) : null;
   const card = el('slicc-lick-card', {
     kind: message.channel ?? 'webhook',
-    'event-label': header?.[2] ?? message.channel ?? 'event',
+    'event-label': scoopName ?? header?.[2] ?? message.channel ?? 'event',
     // Licks are ambient noise until the user opts in: collapsed by default,
     // the header click expands.
     collapsible: '',
     collapsed: '',
   });
+  if (scoopName) card.setAttribute('hue', scoopColor({ isCone: false, name: scoopName }));
   if (count > 1) card.setAttribute('count', String(count));
   // Rich slotted body (the `body` attribute is plain text only): markdown
   // through the shared renderer, one section per collated lick.
@@ -485,6 +523,13 @@ export function messageEls(message: ChatMessage): HTMLElement[] {
     return delegationEls(message);
   }
   if (message.role === 'assistant') return assistantMessageEls(message);
+  // Unstamped lick bodies (histories persisted before channel stamping)
+  // classify at render so old idle/completed notifications never regress
+  // into plain user bubbles.
+  const channel = lickChannelFromContent(message.content);
+  if (channel) {
+    return [lickCardEl({ ...message, source: 'lick', channel: channel as ChatMessage['channel'] })];
+  }
   return [userMessageEl(message)];
 }
 
@@ -496,7 +541,16 @@ export function messageEls(message: ChatMessage): HTMLElement[] {
  */
 export function collateLickMessages(messages: readonly ChatMessage[]): ChatMessage[] {
   const out: ChatMessage[] = [];
-  for (const message of messages) {
+  for (const raw of messages) {
+    // Normalize unstamped lick bodies BEFORE collation so a run of historic
+    // idle notifications folds into one "×N" card like live ones do.
+    let message = raw;
+    if (!raw.source && raw.role === 'user') {
+      const channel = lickChannelFromContent(raw.content);
+      if (channel) {
+        message = { ...raw, source: 'lick', channel: channel as ChatMessage['channel'] };
+      }
+    }
     const prev = out[out.length - 1];
     if (message.source === 'lick' && prev?.source === 'lick' && prev.channel === message.channel) {
       prev.lickParts = [...(prev.lickParts ?? [prev.content]), message.content];

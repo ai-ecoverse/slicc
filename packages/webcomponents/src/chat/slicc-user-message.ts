@@ -61,6 +61,11 @@ const STYLE = `
 .attachment-chip__body{display:flex;flex-direction:column;min-width:0;}
 .attachment-chip__name{font-size:12px;color:var(--ink);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .attachment-chip__meta{font-size:10.5px;color:var(--txt-3);}
+/* Queued (not yet sent — the agent is mid-turn): the bubble dims and a small
+   clock tag sits under it, so pending input reads distinctly from sent input. */
+:host([queued]) .b{opacity:.62;}
+.queued-tag{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;color:var(--txt-3);}
+.queued-tag svg{display:block;}
 `;
 const SHEET = sheet(STYLE);
 
@@ -114,6 +119,8 @@ function formatSize(bytes: number): string {
  * `#0a0a0a`; the markdown chrome is `currentColor`-relative so it follows suit.
  *
  * @attr text - the bubble message text (escaped); falls back to slotted content
+ * @attr queued - boolean; the message is queued behind the current turn —
+ *   dims the bubble and shows a small "queued" clock tag under it
  * @csspart message - the flex row wrapper (`.msg.user`)
  * @csspart stack - the right-aligned column (attachments + bubble)
  * @csspart attachments - the attachment chip row
@@ -121,7 +128,7 @@ function formatSize(bytes: number): string {
  * @slot - bubble content, used when neither `text` nor `setBodyHtml` is set
  */
 export class SliccUserMessage extends HTMLElement {
-  static readonly observedAttributes = ['text'];
+  static readonly observedAttributes = ['text', 'queued'];
 
   readonly #root: ShadowRoot;
   /** Rendered-markdown HTML for the bubble; wins over `text` / slot when set. */
@@ -151,6 +158,15 @@ export class SliccUserMessage extends HTMLElement {
   set text(value: string | null) {
     if (value == null) this.removeAttribute('text');
     else this.setAttribute('text', value);
+  }
+
+  /** Whether the message is queued behind the current turn (reflected). */
+  get queued(): boolean {
+    return this.hasAttribute('queued');
+  }
+
+  set queued(value: boolean) {
+    this.toggleAttribute('queued', value);
   }
 
   /**
@@ -216,6 +232,11 @@ export class SliccUserMessage extends HTMLElement {
     }
     if (showBubble) {
       stack.append(h('div', { class: 'b', part: 'bubble' }, this.#bubbleBody()));
+    }
+    if (this.queued) {
+      stack.append(
+        h('span', { class: 'queued-tag', part: 'queued' }, iconEl('clock', { size: 11 }), 'queued')
+      );
     }
 
     const row = h('div', { class: 'msg user', part: 'message' }, stack);

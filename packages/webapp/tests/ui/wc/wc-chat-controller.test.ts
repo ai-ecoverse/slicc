@@ -204,7 +204,7 @@ describe('WcChatController', () => {
     agent.emit({ type: 'message_start', messageId: 'm1' });
     controller.sendUserMessage('queued one');
     const bubble = [...thread.querySelectorAll('slicc-user-message')].at(-1);
-    expect(bubble?.hasAttribute('data-queued')).toBe(true);
+    expect(bubble?.hasAttribute('queued')).toBe(true);
   });
 
   it('stops listening after dispose', () => {
