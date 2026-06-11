@@ -79,6 +79,8 @@ function makeWiring(options: {
     refs,
     controller,
     statuses: new Map(),
+    fills: new Map(),
+    pendingUrlContext: null,
     getController: () => controller as never,
     getClient: () =>
       ({
@@ -197,5 +199,40 @@ describe('createWcLiveCallbacks', () => {
     const wiring = makeWiring({ selected: null, scoops: [scoop({}), cone] });
     createWcLiveCallbacks(wiring).onReady?.();
     expect(wiring.selectScoop).toHaveBeenCalledWith(cone);
+  });
+});
+
+describe('URL boot-context routing (pendingUrlContext)', () => {
+  it('selects the URL scoop instead of the cone, then clears the pending context', () => {
+    const target = scoop({ jid: 'scoop-r', name: 'researcher' });
+    const wiring = makeWiring({ selected: null, scoops: [cone, target] });
+    wiring.pendingUrlContext = 'scoop:researcher';
+    createWcLiveCallbacks(wiring).onScoopListUpdate([] as never);
+    expect(wiring.selectScoop).toHaveBeenCalledWith(target);
+    expect(wiring.pendingUrlContext).toBeNull();
+  });
+
+  it('falls back to the cone when the URL scoop is gone (dropped since)', () => {
+    const wiring = makeWiring({ selected: null, scoops: [cone] });
+    wiring.pendingUrlContext = 'scoop:long-gone';
+    createWcLiveCallbacks(wiring).onScoopListUpdate([] as never);
+    expect(wiring.selectScoop).toHaveBeenCalledWith(cone);
+    expect(wiring.pendingUrlContext).toBeNull();
+  });
+
+  it('keeps the selection empty for a URL frozen session (the host thaws it)', () => {
+    const wiring = makeWiring({ selected: null, scoops: [cone] });
+    wiring.pendingUrlContext = 'freezer:2026-06-11-some-session.md';
+    createWcLiveCallbacks(wiring).onScoopListUpdate([] as never);
+    expect(wiring.selectScoop).not.toHaveBeenCalled();
+    expect(wiring.pendingUrlContext).toBe('freezer:2026-06-11-some-session.md');
+  });
+
+  it('does not let scoop-created steal a pending URL context', () => {
+    const other = scoop({ jid: 'scoop-x', name: 'other' });
+    const wiring = makeWiring({ selected: null, scoops: [cone, other] });
+    wiring.pendingUrlContext = 'freezer:abc.md';
+    createWcLiveCallbacks(wiring).onScoopCreated(other);
+    expect(wiring.selectScoop).not.toHaveBeenCalled();
   });
 });

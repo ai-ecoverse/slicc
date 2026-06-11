@@ -48,6 +48,12 @@ export interface WcShellOptions {
   badge?: string;
   /** Invoked when dock/tab selection activates a workbench surface. */
   onSurfaceActivate?: (surfaceId: string) => void;
+  /**
+   * Live floats opt the components into URL state sync: the thread owns
+   * `ctx`/`at`, the shell owns `ws`. Each component manages its own params —
+   * the host only routes `slicc-url-context` back through scoop selection.
+   */
+  urlState?: boolean;
 }
 
 /** Element handles the boot modes wire their behavior onto. */
@@ -265,9 +271,14 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
   freezer.append(el('slicc-freezer-new'));
 
   const appCol = el('div', { class: 'wcui-appcol' });
-  const shell = el('slicc-shell');
+  const urlState: Record<string, string> = options.urlState ? { 'url-state': '' } : {};
+  const shell = el('slicc-shell', urlState);
   const pane = el('slicc-chatpane');
-  const thread = el('slicc-chat-thread', { context: 'cone', accent: 'var(--waffle)' });
+  const thread = el('slicc-chat-thread', {
+    context: 'cone',
+    accent: 'var(--waffle)',
+    ...urlState,
+  });
   thread.append(...buildThreadChildren(options.messages));
   const { composer, inputCard, composerMeta } = buildComposer(options);
   pane.append(thread, composer);
@@ -284,6 +295,21 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
     const open = (event as CustomEvent<{ open?: boolean }>).detail?.open === true;
     appCol.style.setProperty('--rail-w', open ? '260px' : '44px');
   });
+
+  // The shader field pans with the conversation: thread scroll feeds the
+  // shader's `scroll` attribute (rAF-throttled — scroll events fire fast).
+  let scrollRaf = 0;
+  thread.addEventListener(
+    'scroll',
+    () => {
+      if (scrollRaf) return;
+      scrollRaf = requestAnimationFrame(() => {
+        scrollRaf = 0;
+        shader.setAttribute('scroll', String(Math.round(thread.scrollTop)));
+      });
+    },
+    { passive: true }
+  );
 
   const { nav, switcher, floatbar, avatarMenu } = buildNav(options);
   appCol.append(nav, shell);

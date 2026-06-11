@@ -12,7 +12,7 @@ individually testable here: functional (`@vitest/browser`) + visual (Storybook).
 
 ```
 src/
-  internal/      define() (guarded registration), dom.ts (h()/sheet()/frag()), icons.ts (iconEl()), shared helpers
+  internal/      define() (guarded registration), dom.ts (h()/sheet()/frag()), icons.ts (iconEl()), url-state.ts (per-component URL param sync), shared helpers
   theme/         tokens.css (prototype token vocabulary), tokens.ts, slicc-theme*
   primitives/    token-only leaves (logo, tag, icon-button, send-button, eyes, …)
   pill/          slicc-pill (shadow DOM, lifted from prototype)

@@ -1,4 +1,5 @@
 import { define } from '../internal/define.js';
+import { readUrlState, writeUrlState } from '../internal/url-state.js';
 
 /**
  * Scoped, document-level stylesheet for `<slicc-shell>`. Lifted from the
@@ -99,17 +100,37 @@ export interface ShellSelectDetail {
  * as `narrow` to the chat pane and `open` to the workbench pane.
  *
  * @attr open - boolean; expands the workbench (chat narrows to 34%)
+ * @attr url-state - boolean; the shell persists the workspace state in the
+ *   `ws` URL param (the active surface id while open, cleared on collapse)
+ *   and restores it on connect / popstate by driving the dock's selection
  * @csspart shell - the host row (also styleable via the element itself)
  * @slot - default; `<slicc-chatpane>`, `<slicc-workbench-pane>`, `<slicc-dock>` by tag
  * @fires slicc-shell-select - `{ id }`, composed + bubbling, on select()
  * @fires slicc-shell-collapse - composed + bubbling, on collapse()
  */
 export class SliccShell extends HTMLElement {
-  static readonly observedAttributes = ['open'];
+  static readonly observedAttributes = ['open', 'url-state'];
 
   #onDockSelect: ((e: Event) => void) | null = null;
   #onDockCollapse: (() => void) | null = null;
   #built = false;
+  /** Persist the workspace state on the canonical dock events (they bubble
+   *  through the shell regardless of which layer drives the layout). */
+  #onCanonicalSelect = (e: Event): void => {
+    if (!this.urlState) return;
+    const id = (e as CustomEvent<{ id?: string }>).detail?.id;
+    if (typeof id === 'string') writeUrlState('ws', id);
+  };
+  #onCanonicalCollapse = (): void => {
+    if (this.urlState) writeUrlState('ws', null);
+  };
+  #onPopState = (): void => {
+    if (!this.urlState) return;
+    const ws = readUrlState('ws');
+    if (ws) this.#restoreWorkspace(ws);
+    // collapse() (not a bare attribute removal) so the dock unlights too.
+    else if (this.open) this.collapse();
+  };
 
   connectedCallback(): void {
     ensureShellStyle(this.ownerDocument);
@@ -124,6 +145,14 @@ export class SliccShell extends HTMLElement {
     this.#onDockCollapse = () => this.collapse();
     this.addEventListener('dock-select', this.#onDockSelect);
     this.addEventListener('dock-collapse', this.#onDockCollapse);
+    this.addEventListener('slicc-dock-select', this.#onCanonicalSelect);
+    this.addEventListener('slicc-dock-collapse', this.#onCanonicalCollapse);
+    if (this.urlState) {
+      window.addEventListener('popstate', this.#onPopState);
+      const ws = readUrlState('ws');
+      // Defer one microtask so sibling children (the dock) finish upgrading.
+      if (ws) queueMicrotask(() => this.#restoreWorkspace(ws));
+    }
   }
 
   disconnectedCallback(): void {
@@ -131,6 +160,28 @@ export class SliccShell extends HTMLElement {
     if (this.#onDockCollapse) this.removeEventListener('dock-collapse', this.#onDockCollapse);
     this.#onDockSelect = null;
     this.#onDockCollapse = null;
+    this.removeEventListener('slicc-dock-select', this.#onCanonicalSelect);
+    this.removeEventListener('slicc-dock-collapse', this.#onCanonicalCollapse);
+    window.removeEventListener('popstate', this.#onPopState);
+  }
+
+  /** Whether this shell persists the workspace state in the `ws` URL param. */
+  get urlState(): boolean {
+    return this.hasAttribute('url-state');
+  }
+
+  set urlState(value: boolean) {
+    this.toggleAttribute('url-state', value);
+  }
+
+  /**
+   * Re-open a URL-restored workspace surface by driving the DOCK's selection
+   * — its canonical `slicc-dock-select` is what every host wires, so the
+   * surface activation (lazy mounts included) runs exactly like a click.
+   */
+  #restoreWorkspace(id: string): void {
+    const dock = this.dock as (HTMLElement & { selectItem?: (id: string) => void }) | null;
+    dock?.selectItem?.(id);
   }
 
   attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {

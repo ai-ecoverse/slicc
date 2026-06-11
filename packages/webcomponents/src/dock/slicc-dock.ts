@@ -246,6 +246,15 @@ export class SliccDock extends HTMLElement {
   }
 
   /**
+   * Clear the active item WITHOUT emitting `slicc-dock-collapse` — the
+   * event-less variant the shell uses when it already owns the collapse
+   * (e.g. `slicc-shell.collapse()`, URL popstate restores).
+   */
+  clearActive(): void {
+    this.active = null;
+  }
+
+  /**
    * Collapse the active item (clear `active`) and emit `slicc-dock-collapse`.
    * Mirrors the prototype `collapse()`. No-op (event-wise) when nothing is active.
    */

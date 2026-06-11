@@ -18,6 +18,7 @@ import { h, sheet } from '../internal/dom.js';
  * @attr mode - `cone` (default) | `scoop` | `freezer`
  * @attr tint - CSS color washed into the scoop field / event glow (the active accent)
  * @attr coverage - 0..1 freezer frost growth (feeds `u_freeze`)
+ * @attr scroll - chat scroll offset in CSS px; pans the field with the content
  * @attr intensity - multiplier for coverage (freezer)
  * @attr no-webgl - reflected when WebGL is unavailable (CSS fallback)
  * @csspart canvas - the WebGL canvas
@@ -32,7 +33,7 @@ const HEAD = `precision highp float;
 uniform vec2 u_res; uniform float u_time; uniform float u_energy;
 uniform vec2 u_center; uniform vec3 u_evt; uniform float u_freeze; uniform float u_dark;
 uniform float u_density; uniform float u_falloff; uniform float u_life;
-uniform float u_blink; uniform float u_thick; uniform vec3 u_tint;
+uniform float u_blink; uniform float u_thick; uniform vec3 u_tint; uniform float u_scroll;
 vec3 themeBg(){ return mix(vec3(0.97,0.95,0.89), vec3(0.09,0.08,0.06), u_dark); }`;
 
 const NOISE = `
@@ -50,6 +51,8 @@ void main(){
   vec2 uv=gl_FragCoord.xy/u_res; float aspect=u_res.x/u_res.y;
   vec2 p=uv-0.5; p.x*=aspect; vec2 c=u_center-0.5; c.x*=aspect;
   vec3 bg=themeBg(); float dist=length(p-c);
+  /* Chat scroll pans the (periodic) lattice with the content. */
+  p.y-=u_scroll;
   float ca=cos(0.7853981634), sa=sin(0.7853981634);
   vec2 pr=mat2(ca,-sa,sa,ca)*p; float cells=12.0; vec2 g=pr*cells; g.x+=g.y*0.5;
   vec2 id=floor(g); vec2 f=fract(g)-0.5;
@@ -86,7 +89,7 @@ vec3 pal(float t){ vec3 strawberry=vec3(1.0,0.45,0.62); vec3 vanilla=vec3(1.0,0.
   vec3 col=mix(strawberry,vanilla,smoothstep(0.0,0.5,t)); col=mix(col,pistachio,smoothstep(0.5,1.0,t)); return col; }
 void main(){
   vec2 uv=gl_FragCoord.xy/u_res; float aspect=u_res.x/u_res.y;
-  vec2 p=uv-0.5; p.x*=aspect; vec2 c=u_center-0.5; c.x*=aspect;
+  vec2 p=uv-0.5; p.x*=aspect; p.y-=u_scroll; vec2 c=u_center-0.5; c.x*=aspect;
   vec3 bg=mix(themeBg(),u_tint,0.14); vec2 sp=p-c; float r=length(sp); float a=atan(sp.y,sp.x);
   float breathe=1.0+0.06*sin(u_time*0.4);
   float swirl=a+r*(2.2+0.8*sin(u_time*0.15))-u_time*0.18-u_energy*2.0*exp(-r*2.0);
@@ -103,7 +106,7 @@ void main(){
 
 const FRAG_FREEZER = `${HEAD}${NOISE}
 void main(){
-  vec2 uv=gl_FragCoord.xy/u_res; float aspect=u_res.x/u_res.y; vec2 p=(uv-0.5); p.x*=aspect;
+  vec2 uv=gl_FragCoord.xy/u_res; uv.y-=u_scroll; float aspect=u_res.x/u_res.y; vec2 p=(uv-0.5); p.x*=aspect;
   vec3 iceCol=mix(vec3(0.62,0.76,0.92),vec3(0.78,0.88,1.0),u_dark);
   vec3 deepIce=mix(vec3(0.40,0.56,0.78),vec3(0.50,0.66,0.88),u_dark);
   vec3 bg=mix(themeBg(),iceCol,0.12); float dc=distance(uv,vec2(0.0,0.0));
@@ -147,6 +150,7 @@ const SHEET = sheet(STYLE);
 const MAX_DPR = 2;
 const UNIFORMS = [
   'u_res',
+  'u_scroll',
   'u_time',
   'u_energy',
   'u_center',
@@ -181,7 +185,7 @@ function colorToVec3(css: string, fallback: [number, number, number]): [number, 
 }
 
 export class SliccShader extends HTMLElement {
-  static readonly observedAttributes = ['mode', 'tint', 'coverage', 'intensity'];
+  static readonly observedAttributes = ['mode', 'tint', 'coverage', 'intensity', 'scroll'];
 
   readonly #root: ShadowRoot;
   #canvas: HTMLCanvasElement | null = null;
@@ -263,6 +267,19 @@ export class SliccShader extends HTMLElement {
   }
   set intensity(value: number) {
     this.setAttribute('intensity', String(value));
+  }
+
+  /**
+   * Chat scroll offset in CSS px — the field pans with the content. Reflects
+   * the `scroll` attribute; named `scrollOffset` because `HTMLElement` already
+   * defines a `scroll()` method.
+   */
+  get scrollOffset(): number {
+    const n = Number.parseFloat(this.getAttribute('scroll') ?? '');
+    return Number.isFinite(n) ? n : 0;
+  }
+  set scrollOffset(value: number) {
+    this.setAttribute('scroll', String(value));
   }
 
   get noWebgl(): boolean {
@@ -402,6 +419,8 @@ export class SliccShader extends HTMLElement {
     gl.uniform3f(u.u_evt ?? null, evt[0], evt[1], evt[2]);
     gl.uniform1f(u.u_freeze ?? null, clampNum(this.coverage * this.intensity, 0, 1, 0.66) * 2.2);
     gl.uniform1f(u.u_dark ?? null, dark);
+    // Scroll arrives in CSS px; the pattern space is viewport-height units.
+    gl.uniform1f(u.u_scroll ?? null, this.scrollOffset / Math.max(1, cv.clientHeight || cv.height));
     // Cone-mode knobs — pulled verbatim from the prototype's frame loop. u_blink
     // in particular is 0.05 (NOT 1.0): the Game-of-Life cells breathe slowly.
     gl.uniform1f(u.u_density ?? null, 0.29);

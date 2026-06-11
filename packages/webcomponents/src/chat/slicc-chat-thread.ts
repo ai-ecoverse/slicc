@@ -1,4 +1,5 @@
 import { define } from '../internal/define.js';
+import { readUrlState, writeUrlState } from '../internal/url-state.js';
 
 /**
  * Scoped, document-level stylesheet for `<slicc-chat-thread>`. Light-DOM hosts
@@ -93,15 +94,56 @@ function ensureThreadStyle(doc: Document): void {
  * @attr accent - optional CSS color forced onto the local `--ctx` shader tint (wins over the inherited token)
  * @csspart inner - the centered, frosted reading column
  * @slot - default; message / day-label / card children, rendered in DOM order
+ * @attr url-state - boolean; the thread persists its own URL params — `ctx`
+ *   (context, pushed as a history entry) and `at` (scroll position, replaced,
+ *   debounced). On `popstate` it re-applies `at` itself and asks the host to
+ *   route `ctx` via `slicc-url-context` (selection is app state).
+ * @fires slicc-url-context - composed + bubbling; `detail.context` when a
+ *   popstate carries a different context than the current one
  * @fires slicc-context-change - composed + bubbling; `detail.context` / `detail.previous` on `switchContext`
  * @fires slicc-thread-action - composed + bubbling; delegated child click, `detail.target` is the clicked element
  */
 export class SliccChatThread extends HTMLElement {
-  static readonly observedAttributes = ['open', 'context', 'accent'];
+  static readonly observedAttributes = ['open', 'context', 'accent', 'url-state'];
 
   #inner!: HTMLElement;
   #built = false;
   #onClick: ((e: MouseEvent) => void) | null = null;
+  /**
+   * URL `at` value captured at connect. Boot replays load content more than
+   * once (optimistic hydration, then the canonical replay), so the restore
+   * re-applies on every {@link replaceContent} until it goes stale: a context
+   * switch away from the boot context, or live content arriving via append.
+   */
+  #pendingScrollRestore: string | null = null;
+  /** URL `ctx` value captured at connect — the context the restore belongs to. */
+  #bootCtx: string | null = null;
+  #scrollWriteTimer: ReturnType<typeof setTimeout> | null = null;
+  #onScrollPersist = (): void => {
+    if (!this.urlState) return;
+    if (this.#scrollWriteTimer != null) clearTimeout(this.#scrollWriteTimer);
+    this.#scrollWriteTimer = setTimeout(() => {
+      this.#scrollWriteTimer = null;
+      writeUrlState('at', String(Math.round(this.scrollTop)));
+    }, 300);
+  };
+  #onPopState = (): void => {
+    if (!this.urlState) return;
+    const ctx = readUrlState('ctx');
+    if (ctx && ctx !== this.context) {
+      // Selection is app state — the host routes it (scoop lookup, thaw).
+      this.dispatchEvent(
+        new CustomEvent('slicc-url-context', {
+          bubbles: true,
+          composed: true,
+          detail: { context: ctx },
+        })
+      );
+    } else {
+      const at = readUrlState('at');
+      if (at != null) this.scrollTop = Number.parseInt(at, 10) || 0;
+    }
+  };
 
   /**
    * Per-context snapshots of the inner column content, keyed by context id.
@@ -117,6 +159,12 @@ export class SliccChatThread extends HTMLElement {
     this.#build();
     this.#applyAccent();
     this.scrollToBottom();
+    if (this.urlState) {
+      this.#pendingScrollRestore = readUrlState('at');
+      this.#bootCtx = readUrlState('ctx');
+      this.addEventListener('scroll', this.#onScrollPersist, { passive: true });
+      window.addEventListener('popstate', this.#onPopState);
+    }
   }
 
   disconnectedCallback(): void {
@@ -124,11 +172,46 @@ export class SliccChatThread extends HTMLElement {
       this.#inner?.removeEventListener('click', this.#onClick);
       this.#onClick = null;
     }
+    this.removeEventListener('scroll', this.#onScrollPersist);
+    window.removeEventListener('popstate', this.#onPopState);
+    if (this.#scrollWriteTimer != null) {
+      clearTimeout(this.#scrollWriteTimer);
+      this.#scrollWriteTimer = null;
+    }
   }
 
   attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
     if (oldValue === newValue) return;
     if (name === 'accent' && this.#built) this.#applyAccent();
+    // The thread owns the `ctx` URL param: context switches are user-level
+    // navigations, so they PUSH (back button walks contexts). The helper
+    // skips no-op writes, so applying a URL-restored context never re-pushes.
+    // Pre-connect sets are mount setup, not navigation — a default context
+    // must not clobber a deep-linked URL before boot routing reads it.
+    if (name === 'context' && this.urlState && newValue != null && this.isConnected) {
+      // Switching away from the boot context makes the restored scroll
+      // position stale — the boot route TO that context keeps it pending.
+      if (newValue !== this.#bootCtx) this.#pendingScrollRestore = null;
+      writeUrlState('ctx', newValue, { push: true });
+    }
+  }
+
+  /** Whether this thread persists `ctx`/`at` in the page URL. */
+  get urlState(): boolean {
+    return this.hasAttribute('url-state');
+  }
+
+  set urlState(value: boolean) {
+    this.toggleAttribute('url-state', value);
+  }
+
+  /**
+   * The URL-restored context (the `ctx` param), when url-state is enabled.
+   * Hosts route it at boot (scoop lookup / freezer thaw) — the param itself
+   * stays component-managed.
+   */
+  get urlContext(): string | null {
+    return this.urlState ? readUrlState('ctx') : null;
   }
 
   /** Whether the narrow-chat variant (tighter padding + feather) is active. */
@@ -196,6 +279,8 @@ export class SliccChatThread extends HTMLElement {
   /** Append a child node into the reading column and scroll it into view. */
   append(...nodes: (Node | string)[]): void {
     this.#build();
+    // Live content arriving makes a URL-restored scroll position stale.
+    if (nodes.length > 0) this.#pendingScrollRestore = null;
     this.#inner.append(...nodes);
     this.scrollToBottom();
   }
@@ -210,6 +295,18 @@ export class SliccChatThread extends HTMLElement {
     this.#build();
     this.#inner.replaceChildren(...nodes);
     this.scrollToBottom();
+    // Content (re)loads while the boot context is live: a URL-restored scroll
+    // position WINS over the scroll-to-bottom default (re-applied on a frame
+    // so late layout doesn't clobber it). Boot loads twice — optimistic
+    // hydration, then the canonical replay — so the restore stays pending
+    // until a context switch or live appended content marks it stale.
+    const restore = this.#pendingScrollRestore;
+    if (restore != null && nodes.length > 0) {
+      requestAnimationFrame(() => {
+        if (this.#pendingScrollRestore !== restore) return;
+        this.scrollTop = Number.parseInt(restore, 10) || 0;
+      });
+    }
   }
 
   /** Scroll the thread wrapper to the bottom (latest message). */

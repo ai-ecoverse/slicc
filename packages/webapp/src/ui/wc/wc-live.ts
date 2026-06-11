@@ -113,6 +113,13 @@ export interface WcLiveWiring {
   statuses: Map<string, ScoopStatus>;
   /** Per-scoop context-window fill (0..1), refreshed by the stats poller. */
   fills: Map<string, number>;
+  /**
+   * URL-restored boot context (the thread's `ctx` param) still awaiting
+   * routing. While set, the boot auto-select targets it instead of the cone
+   * (`scoop:<name>` selects that scoop; `freezer:<file>` suppresses selection
+   * until the host thaws it). Cleared once routed.
+   */
+  pendingUrlContext: string | null;
   getController(): WcChatController | null;
   getClient(): OffscreenClient | null;
   getSelected(): RegisteredScoop | null;
@@ -140,19 +147,34 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
   const viewingFrozen = (): boolean =>
     (wiring.refs.thread.getAttribute('context') ?? '').startsWith('freezer:');
   /**
-   * Select the cone when nothing is selected. The first state snapshot can
-   * land BEFORE the cone finishes restoring (e.g. right after a clear +
+   * Select the boot target when nothing is selected. The first state snapshot
+   * can land BEFORE the cone finishes restoring (e.g. right after a clear +
    * reload) — onReady then has no cone to select, and a restored cone only
    * ever appears via later scoop-list updates (no scoop-created event). The
-   * frozen view is exempt: its empty selection is deliberate.
+   * frozen view is exempt: its empty selection is deliberate. A URL-restored
+   * context redirects the default: `scoop:<name>` selects that scoop,
+   * `freezer:<file>` keeps the selection empty for the host's thaw routing.
    */
   const ensureSelection = (): void => {
     if (wiring.getSelected() || viewingFrozen()) return;
-    const cone = wiring
-      .getClient()
-      ?.getScoops()
-      .find((s) => s.isCone);
-    if (cone) wiring.selectScoop(cone);
+    const scoops = wiring.getClient()?.getScoops() ?? [];
+    const pending = wiring.pendingUrlContext;
+    if (pending?.startsWith('freezer:')) return;
+    if (pending?.startsWith('scoop:')) {
+      const name = pending.slice('scoop:'.length);
+      const scoop = scoops.find((s) => !s.isCone && s.name === name);
+      if (scoop) {
+        wiring.pendingUrlContext = null;
+        wiring.selectScoop(scoop);
+        return;
+      }
+    }
+    const cone = scoops.find((s) => s.isCone);
+    if (cone) {
+      // The URL scoop is gone (dropped since) — the cone is the live truth.
+      wiring.pendingUrlContext = null;
+      wiring.selectScoop(cone);
+    }
   };
   return {
     onStatusChange: (jid, status) => {
@@ -166,7 +188,10 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
     },
     onScoopCreated: (scoop) => {
       refreshScoops();
-      if (!wiring.getSelected() && !viewingFrozen()) wiring.selectScoop(scoop);
+      // A pending URL context owns the boot selection — don't steal it.
+      if (!wiring.getSelected() && !viewingFrozen() && !wiring.pendingUrlContext) {
+        wiring.selectScoop(scoop);
+      }
     },
     onScoopListUpdate: () => {
       refreshScoops();
@@ -229,13 +254,22 @@ interface FreezerRailDeps {
   log: BootStageLogger;
 }
 
+/** Handles returned by {@link wireFreezerRail} for boot + URL routing. */
+interface FreezerRailHandles {
+  /** Re-read the frozen-session index and re-render the rail cards. */
+  refreshFreezer(): void;
+  /** Thaw a frozen session by archive filename (URL `ctx=freezer:<file>`). */
+  openFrozen(slug: string): Promise<void>;
+}
+
 /**
  * Freezer rail behavior: frozen sessions thaw read-only into the thread,
  * and the "New +" gestures freeze/clear the cone (click = LLM-enriched
  * freeze, double-click = quick-freeze, long-press = erase). Returns the
- * card-refresh function for the post-boot initial fill.
+ * card-refresh function for the post-boot initial fill plus the by-slug
+ * thaw used by URL routing.
  */
-function wireFreezerRail(deps: FreezerRailDeps): () => void {
+function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
   const { refs, openVfs, client, getController, selectScoop, clearSelection, log } = deps;
   let frozenEntries: FrozenSessionIndexEntry[] = [];
 
@@ -297,26 +331,36 @@ function wireFreezerRail(deps: FreezerRailDeps): () => void {
     refs.freezer.addEventListener(`new-chat-${action}`, () => runNewSession(action));
   }
 
+  // By-slug thaw: re-reads the index when the rail hasn't populated yet (URL
+  // routing at boot lands before the first card refresh resolves).
+  const openFrozen = async (slug: string): Promise<void> => {
+    try {
+      const { reader } = await openVfs();
+      let entry = frozenEntries.find((e) => e.filename === slug);
+      if (!entry) {
+        entry = ((await readFreezerEntries(reader)) ?? []).find((e) => e.filename === slug);
+      }
+      if (!entry) return;
+      const { messages } = await thawFrozenSession(reader, entry);
+      getController()?.loadMessages(messages);
+      refs.thread.setAttribute('context', `freezer:${entry.filename}`);
+      refs.thread.setAttribute('accent', FREEZER_TINT);
+      // Frost mood: crystallizing shader + ice-blue accent across the frame.
+      applyShellContext(refs, { kind: 'freezer' });
+      refs.inputCard.setAttribute('disabled', '');
+      refs.switcher.removeAttribute('active');
+      clearSelection();
+    } catch (err) {
+      log.error('WC thaw failed', err);
+    }
+  };
+
   refs.freezer.addEventListener('freezer-card-select', (event) => {
     const slug = (event as CustomEvent<{ slug?: string }>).detail?.slug;
-    const entry = frozenEntries.find((e) => e.filename === slug);
-    if (!entry) return;
-    void openVfs()
-      .then(async ({ reader }) => {
-        const { messages } = await thawFrozenSession(reader, entry);
-        getController()?.loadMessages(messages);
-        refs.thread.setAttribute('context', `freezer:${entry.filename}`);
-        refs.thread.setAttribute('accent', FREEZER_TINT);
-        // Frost mood: crystallizing shader + ice-blue accent across the frame.
-        applyShellContext(refs, { kind: 'freezer' });
-        refs.inputCard.setAttribute('disabled', '');
-        refs.switcher.removeAttribute('active');
-        clearSelection();
-      })
-      .catch((err) => log.error('WC thaw failed', err));
+    if (slug) void openFrozen(slug);
   });
 
-  return refreshFreezer;
+  return { refreshFreezer, openFrozen };
 }
 
 /** Page-side VFS handles routed through the worker's `VfsRpcHost`. */
@@ -358,6 +402,9 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     floatLabel,
     placeholder: 'Ask sliccy, or describe a change…',
     onSurfaceActivate: (surfaceId) => activateSurface?.(surfaceId),
+    // Live floats sync UI state with the URL: the thread owns `ctx`/`at`,
+    // the shell owns `ws` — each component manages its own params.
+    urlState: true,
   });
 
   let controller: WcChatController | null = null;
@@ -382,6 +429,9 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
       refs,
       statuses: new Map(),
       fills: new Map(),
+      // The thread component owns the `ctx` param — the host only routes it.
+      pendingUrlContext:
+        (refs.thread as HTMLElement & { urlContext?: string | null }).urlContext ?? null,
       getController: () => controller,
       getClient: () => client,
       getSelected: () => selected,
@@ -405,6 +455,10 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     },
     setActivateSurface: (fn) => {
       activateSurface = fn;
+      // The shell's connect-time URL restore (`ws` param) ran before the
+      // activator existed — re-fire it so the restored surface lazily mounts.
+      const active = refs.workbenchBody.getAttribute('active');
+      if (active && refs.shell.hasAttribute('open')) fn(active);
     },
     onClientReady: (fn) => {
       readyListeners.add(fn);
@@ -504,8 +558,12 @@ function wireWcComposer(deps: {
 
   // Hydrate the persisted cone conversation immediately — the worker's
   // canonical replay (request-scoop-messages on selection) replaces it.
+  // Skipped when the URL deep-links a non-cone context: flashing the cone
+  // history there would be wrong content.
   void (async () => {
     try {
+      const pending = boot.wiring.pendingUrlContext;
+      if (pending != null && pending !== 'cone') return;
       const { SessionStore } = await import('../session-store.js');
       const store = new SessionStore();
       await store.init();
@@ -585,6 +643,45 @@ function wireWcStats(wiring: WcLiveWiring, client: OffscreenClient): () => void 
   };
   setInterval(refresh, 15_000);
   return refresh;
+}
+
+/**
+ * URL context routing. The thread owns the `ctx` param; the host resolves a
+ * context id to app state: cone / scoop selection, or a freezer thaw. Covers
+ * back/forward (the thread's `slicc-url-context` on popstate — it re-applies
+ * its own scroll param) and the boot deep link to a frozen session.
+ */
+function wireWcUrlContext(
+  boot: WcShellBoot,
+  client: OffscreenClient,
+  openFrozen: (slug: string) => Promise<void>
+): void {
+  const routeUrlContext = (ctx: string): void => {
+    if (ctx.startsWith('freezer:')) {
+      void openFrozen(ctx.slice('freezer:'.length));
+      return;
+    }
+    const scoops = client.getScoops();
+    const scoop = ctx.startsWith('scoop:')
+      ? scoops.find((s) => !s.isCone && s.name === ctx.slice('scoop:'.length))
+      : scoops.find((s) => s.isCone);
+    if (scoop && scoop.jid !== boot.getSelected()?.jid) boot.selectScoop(scoop);
+  };
+  boot.refs.thread.addEventListener('slicc-url-context', (event) => {
+    const ctx = (event as CustomEvent<{ context?: string }>).detail?.context;
+    if (ctx) routeUrlContext(ctx);
+  });
+  // Boot deep-link to a frozen session: scoop targets route through the
+  // callbacks' ensureSelection, but a thaw needs the worker's VFS — wait
+  // for kernel-ready. (`onClientReady` fires repeatedly; route only once.)
+  const pendingFrozen = boot.wiring.pendingUrlContext;
+  if (pendingFrozen?.startsWith('freezer:')) {
+    boot.onClientReady(() => {
+      if (boot.wiring.pendingUrlContext !== pendingFrozen) return;
+      boot.wiring.pendingUrlContext = null;
+      routeUrlContext(pendingFrozen);
+    });
+  }
 }
 
 export function attachWcClient(
@@ -673,7 +770,7 @@ export function attachWcClient(
 
   // Freezer rail: frozen cone sessions thaw read-only into the thread;
   // selecting any scoop chip returns to the live conversation.
-  const refreshFreezer = wireFreezerRail({
+  const { refreshFreezer, openFrozen } = wireFreezerRail({
     refs,
     openVfs,
     client,
@@ -686,6 +783,8 @@ export function attachWcClient(
   // request hangs silently) — re-run once the kernel reports ready.
   refreshFreezer();
   boot.onClientReady(refreshFreezer);
+
+  wireWcUrlContext(boot, client, openFrozen);
 
   // Page-side preview-vfs fallback responder (the worker's responder is
   // canonical; this covers pre-boot requests). Mount recovery is the

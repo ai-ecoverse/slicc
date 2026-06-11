@@ -101,6 +101,31 @@ describe('mountWcUiPreview', () => {
     expect(refs.switcher).toBeTruthy();
   });
 
+  it('urlState option opts the thread and shell into URL state sync (off by default)', async () => {
+    const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const live = mountWcShell(host, {
+      messages: [],
+      scoops: [],
+      floatLabel: 'live',
+      placeholder: 'p',
+      urlState: true,
+    });
+    expect(live.thread.hasAttribute('url-state')).toBe(true);
+    expect(live.shell.hasAttribute('url-state')).toBe(true);
+
+    // The fixture/preview mount stays URL-clean.
+    const fixture = mountWcShell(host, {
+      messages: [],
+      scoops: [],
+      floatLabel: 'fixture',
+      placeholder: 'p',
+    });
+    expect(fixture.thread.hasAttribute('url-state')).toBe(false);
+    expect(fixture.shell.hasAttribute('url-state')).toBe(false);
+  });
+
   it('kills the UA body margin so the frame sits flush', () => {
     mount();
     const css = document.getElementById('slicc-wcui-style')?.textContent ?? '';
@@ -204,6 +229,16 @@ describe('mountWcUiPreview', () => {
     expect(refs.shader.getAttribute('tint')).toBe('var(--waffle)');
     expect(refs.frame.style.getPropertyValue('--ctx')).toBe('');
     expect(refs.freezer.hasAttribute('ctx')).toBe(false);
+  });
+
+  it('feeds thread scroll into the shader scroll attribute (rAF-throttled)', async () => {
+    const root = mount();
+    const thread = root.querySelector('slicc-chat-thread') as HTMLElement;
+    const shader = root.querySelector('slicc-shader') as HTMLElement;
+    Object.defineProperty(thread, 'scrollTop', { value: 240, configurable: true });
+    thread.dispatchEvent(new Event('scroll'));
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+    expect(shader.getAttribute('scroll')).toBe('240');
   });
 
   it('echoes composer submissions into the thread', () => {

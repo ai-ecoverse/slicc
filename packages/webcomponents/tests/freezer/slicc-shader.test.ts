@@ -75,3 +75,30 @@ describe('slicc-shader', () => {
     expect(() => el.remove()).not.toThrow();
   });
 });
+
+describe('slicc-shader scroll (field pans with the chat)', () => {
+  it('reflects the scroll attribute to the scrollOffset property (px, default 0)', () => {
+    const el = document.createElement('slicc-shader');
+    document.body.appendChild(el);
+    expect(el.scrollOffset).toBe(0);
+    el.scrollOffset = 420;
+    expect(el.getAttribute('scroll')).toBe('420');
+    el.setAttribute('scroll', 'bogus');
+    expect(el.scrollOffset).toBe(0);
+    el.remove();
+  });
+
+  it('keeps rendering with a live scroll offset (no GL errors)', async () => {
+    const el = document.createElement('slicc-shader');
+    el.style.cssText = 'position:fixed;inset:0;';
+    document.body.appendChild(el);
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+    el.setAttribute('scroll', '300');
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+    // Still alive: either the GL canvas or the no-webgl CSS fallback.
+    expect(el.shadowRoot?.querySelector('canvas') !== null || el.hasAttribute('no-webgl')).toBe(
+      true
+    );
+    el.remove();
+  });
+});

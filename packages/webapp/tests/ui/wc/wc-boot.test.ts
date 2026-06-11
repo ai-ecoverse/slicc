@@ -221,3 +221,98 @@ describe('prepareWcShell + attachWcClient', () => {
     expect(boot.refs.thread.querySelector('slicc-agent-message')).toBeNull();
   });
 });
+
+/** Reset the jsdom URL between url-state tests (params persist per file). */
+function clearUrlParams(): void {
+  const url = new URL(window.location.href);
+  url.search = '';
+  history.replaceState(null, '', url);
+}
+
+describe('URL state sync (live boot)', () => {
+  it('opts the thread and shell into url-state and captures the boot ctx', () => {
+    clearUrlParams();
+    const url = new URL(window.location.href);
+    url.searchParams.set('ctx', 'scoop:researcher');
+    history.replaceState(null, '', url);
+
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const boot = prepareWcShell(root, 'test · wc');
+    expect(boot.refs.thread.hasAttribute('url-state')).toBe(true);
+    expect(boot.refs.shell.hasAttribute('url-state')).toBe(true);
+    // The thread component owns the param; the host only routes its value.
+    expect(boot.wiring.pendingUrlContext).toBe('scoop:researcher');
+    clearUrlParams();
+  });
+
+  it('re-fires the surface activator for a pre-attach URL workspace restore', () => {
+    clearUrlParams();
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const boot = prepareWcShell(root, 'test · wc');
+
+    // The shell's connect-time `ws` restore opened the workbench before any
+    // activator existed (it is only assigned during attach).
+    boot.refs.shell.setAttribute('open', '');
+    boot.refs.workbenchBody.setAttribute('active', 'files');
+    const activate = vi.fn();
+    boot.setActivateSurface(activate);
+    expect(activate).toHaveBeenCalledWith('files');
+
+    // Without a restored surface the assignment stays passive.
+    boot.refs.shell.removeAttribute('open');
+    const idle = vi.fn();
+    boot.setActivateSurface(idle);
+    expect(idle).not.toHaveBeenCalled();
+  });
+
+  it('routes a popstate context change to scoop selection', async () => {
+    clearUrlParams();
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const boot = prepareWcShell(root, 'test · wc');
+    const fake = makeFakeClient();
+    const researcher = {
+      ...cone(),
+      jid: 'scoop-r',
+      name: 'researcher',
+      isCone: false,
+      type: 'scoop',
+    } as RegisteredScoop;
+    fake.raw.getScoops.mockReturnValue([cone(), researcher]);
+    attachWcClient(boot, fake.client, log);
+    boot.selectScoop(cone());
+
+    // Back/forward: the URL now names the scoop context; the thread asks the
+    // host to route it via `slicc-url-context`.
+    const url = new URL(window.location.href);
+    url.searchParams.set('ctx', 'scoop:researcher');
+    history.replaceState(null, '', url);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(fake.raw.setSelectedScoopJid).toHaveBeenLastCalledWith('scoop-r');
+    expect(boot.getSelected()?.jid).toBe('scoop-r');
+    clearUrlParams();
+  });
+
+  it('routes a URL frozen-session deep link once the kernel is ready', () => {
+    clearUrlParams();
+    const url = new URL(window.location.href);
+    url.searchParams.set('ctx', 'freezer:2026-06-11-old.md');
+    history.replaceState(null, '', url);
+
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const boot = prepareWcShell(root, 'test · wc');
+    const fake = makeFakeClient();
+    attachWcClient(boot, fake.client, log);
+    expect(boot.wiring.pendingUrlContext).toBe('freezer:2026-06-11-old.md');
+
+    // Kernel ready → the thaw routing consumes the pending context (the VFS
+    // read itself fails fast on the test transport — routing must still
+    // resolve so later ready signals don't re-run it).
+    boot.wiring.notifyReady?.();
+    expect(boot.wiring.pendingUrlContext).toBeNull();
+    clearUrlParams();
+  });
+});
