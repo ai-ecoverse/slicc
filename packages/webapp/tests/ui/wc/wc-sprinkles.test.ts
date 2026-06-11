@@ -4,7 +4,7 @@
  * over workbench tabs / surfaces / dock items, driven without a manager.
  */
 
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
@@ -14,6 +14,10 @@ installWcDomStubs();
 import '@slicc/webcomponents';
 import type { WcShellRefs } from '../../../src/ui/wc/wc-shell.js';
 import {
+  enrichSprinkleIcons,
+  isLucideIconSpec,
+  readSprinkleIconLedger,
+  recordSprinkleIcon,
   sprinkleNameFromId,
   sprinkleSurfaceId,
   WcSprinkleZone,
@@ -39,6 +43,12 @@ function tabIds(refs: WcShellRefs): string[] {
 function dockIds(refs: WcShellRefs): string[] {
   const items = (refs.dock as HTMLElement & { items?: Array<{ id: string }> }).items ?? [];
   return items.map((i) => i.id);
+}
+
+function dockItem(refs: WcShellRefs, id: string): { id: string; icon: string } | undefined {
+  const items =
+    (refs.dock as HTMLElement & { items?: Array<{ id: string; icon: string }> }).items ?? [];
+  return items.find((i) => i.id === id);
 }
 
 describe('sprinkle ids', () => {
@@ -210,5 +220,72 @@ describe('WcSprinkleZone', () => {
     const refs = makeRefs();
     new WcSprinkleZone(refs).callbacks().addSprinkle('hero', 'Hero', document.createElement('div'));
     expect(tabIds(refs).slice(0, 3)).toEqual(['files', 'term', 'memory']);
+  });
+});
+
+describe('rail icons (declared > ledger > sparkles)', () => {
+  beforeEach(() => {
+    localStorage.removeItem('slicc-sprinkle-icons');
+  });
+
+  it('honors a declared lucide icon spec from registerSprinkle and addSprinkle', () => {
+    const refs = makeRefs();
+    const zone = new WcSprinkleZone(refs);
+    zone.callbacks().registerSprinkle?.('pomodoro', 'Pomodoro', { icon: 'timer' });
+    expect(dockItem(refs, 'sprinkle:pomodoro')?.icon).toBe('timer');
+
+    zone.callbacks().addSprinkle('music', 'Music', document.createElement('div'), undefined, {
+      icon: 'music',
+    } as never);
+    expect(dockItem(refs, 'sprinkle:music')?.icon).toBe('music');
+  });
+
+  it('falls back for non-lucide specs (VFS paths, inline SVG) the rail cannot render', () => {
+    const refs = makeRefs();
+    const zone = new WcSprinkleZone(refs);
+    zone.callbacks().registerSprinkle?.('hero', 'Hero', { icon: '/workspace/icon.svg' });
+    expect(dockItem(refs, 'sprinkle:hero')?.icon).toBe('sparkles');
+    expect(isLucideIconSpec('/workspace/icon.svg')).toBe(false);
+    expect(isLucideIconSpec('calendar-clock')).toBe(true);
+  });
+
+  it('seeds launchers with previously picked ledger icons', () => {
+    recordSprinkleIcon('pomodoro', 'timer');
+    const refs = makeRefs();
+    const zone = new WcSprinkleZone(refs);
+    zone.seedDockItems(['pomodoro', 'unknown']);
+    expect(dockItem(refs, 'sprinkle:pomodoro')?.icon).toBe('timer');
+    expect(dockItem(refs, 'sprinkle:unknown')?.icon).toBe('sparkles');
+  });
+
+  it('enrichSprinkleIcons LLM-picks only for sparkles-default entries and records the ledger', async () => {
+    const refs = makeRefs();
+    const zone = new WcSprinkleZone(refs);
+    zone.callbacks().registerSprinkle?.('declared', 'Declared', { icon: 'music' });
+    zone.callbacks().registerSprinkle?.('pomodoro', 'Pomodoro', {});
+    const pickIcon = vi.fn(async () => 'timer');
+
+    await enrichSprinkleIcons(
+      zone,
+      [
+        { name: 'declared', title: 'Declared', icon: 'music' },
+        { name: 'pomodoro', title: 'Pomodoro' },
+      ],
+      pickIcon
+    );
+    // Only the icon-less sprinkle was labeled; the pick landed on the dock
+    // and in the ledger (so the next boot seeds it without another call).
+    expect(pickIcon).toHaveBeenCalledTimes(1);
+    expect(pickIcon.mock.calls[0][0]).toContain('Pomodoro');
+    expect(dockItem(refs, 'sprinkle:pomodoro')?.icon).toBe('timer');
+    expect(readSprinkleIconLedger()).toEqual({ pomodoro: 'timer' });
+
+    // A remembered pick is reapplied with NO further LLM call.
+    const refs2 = makeRefs();
+    const zone2 = new WcSprinkleZone(refs2);
+    zone2.callbacks().registerSprinkle?.('pomodoro', 'Pomodoro', {});
+    expect(dockItem(refs2, 'sprinkle:pomodoro')?.icon).toBe('timer');
+    await enrichSprinkleIcons(zone2, [{ name: 'pomodoro', title: 'Pomodoro' }], pickIcon);
+    expect(pickIcon).toHaveBeenCalledTimes(1);
   });
 });

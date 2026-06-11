@@ -17,6 +17,7 @@ import {
   thinkingLevelForAgent,
   toSwitcherScoops,
   type WcLiveWiring,
+  wireWcChipTips,
 } from '../../../src/ui/wc/wc-live.js';
 import type { WcShellRefs } from '../../../src/ui/wc/wc-shell.js';
 
@@ -80,6 +81,7 @@ function makeWiring(options: {
     controller,
     statuses: new Map(),
     fills: new Map(),
+    lastActivity: new Map(),
     pendingUrlContext: null,
     getController: () => controller as never,
     getClient: () =>
@@ -246,5 +248,66 @@ describe('URL boot-context routing (pendingUrlContext)', () => {
     wiring.pendingUrlContext = 'freezer:abc.md';
     createWcLiveCallbacks(wiring).onScoopCreated(other);
     expect(wiring.selectScoop).not.toHaveBeenCalled();
+  });
+});
+
+describe('wireWcChipTips (richer hover tooltips)', () => {
+  function makeSwitcherWithChip(jid: string): { switcher: HTMLElement; chip: HTMLElement } {
+    const switcher = document.createElement('slicc-scoop-switcher');
+    const seed = document.createElement('slicc-pill');
+    seed.className = 'scoop';
+    seed.dataset.k = jid;
+    switcher.appendChild(seed);
+    document.body.appendChild(switcher);
+    // The real switcher ADOPTS slotted pills and rebuilds them canonically —
+    // re-query for the live chip instead of holding the detached seed.
+    const chip = switcher.querySelector('slicc-pill.scoop') as HTMLElement;
+    return { switcher, chip };
+  }
+
+  it('summarizes the scoop activity on hover and caches per snapshot', async () => {
+    const { switcher, chip } = makeSwitcherWithChip('scoop-1');
+    const lastActivity = new Map([['scoop-1', 'comparing tray-hub pricing pages']]);
+    const labelFn = vi.fn(async () => 'Comparing tray-hub pricing pages for the report');
+    wireWcChipTips({
+      switcher,
+      getScoops: () => [scoop({ jid: 'scoop-1', name: 'researcher' })],
+      lastActivity,
+      labelFn,
+    });
+
+    chip.dispatchEvent(new Event('pointerover', { bubbles: true }));
+    // Instant fallback while the call runs…
+    expect(chip.title).toBe('researcher');
+    await vi.waitFor(() => {
+      expect(chip.title).toBe('Comparing tray-hub pricing pages for the report');
+    });
+    expect(labelFn).toHaveBeenCalledTimes(1);
+    expect(labelFn.mock.calls[0][0].prompt).toContain('comparing tray-hub pricing pages');
+
+    // Same activity snapshot → cached, no second call.
+    chip.dispatchEvent(new Event('pointerover', { bubbles: true }));
+    expect(labelFn).toHaveBeenCalledTimes(1);
+
+    // New activity → fresh summary.
+    lastActivity.set('scoop-1', 'now writing the summary');
+    chip.dispatchEvent(new Event('pointerover', { bubbles: true }));
+    await vi.waitFor(() => {
+      expect(labelFn).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('makes no LLM call for a scoop with no recorded activity', () => {
+    const { switcher, chip } = makeSwitcherWithChip('cone-1');
+    const labelFn = vi.fn(async () => 'never');
+    wireWcChipTips({
+      switcher,
+      getScoops: () => [cone],
+      lastActivity: new Map(),
+      labelFn,
+    });
+    chip.dispatchEvent(new Event('pointerover', { bubbles: true }));
+    expect(chip.title).toBe('sliccy');
+    expect(labelFn).not.toHaveBeenCalled();
   });
 });

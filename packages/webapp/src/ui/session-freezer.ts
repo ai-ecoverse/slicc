@@ -60,6 +60,12 @@ export interface FrozenSessionIndexEntry {
   /** Count of messages in the frozen session. */
   messageCount: number;
   /**
+   * Lucide icon name for the freezer rail card (LLM-picked from the title,
+   * best-effort). Absent on quick-frozen / legacy entries — the rail's lazy
+   * enrichment backfills it; the card falls back to its snowflake.
+   */
+  icon?: string;
+  /**
    * Quick-freeze marker. When true, the archive was written with a
    * heuristic title under a synthetic `pending-<short-id>.md` filename
    * and still needs the two LLM calls (memory extraction + title) to
@@ -117,6 +123,12 @@ export interface FreezeConeSessionOptions {
    * after the next reload.
    */
   mode?: 'full' | 'quick';
+  /**
+   * Injectable lucide icon picker (tests). Defaults to the page-side
+   * `pickLucideIcon` from `quick-llm.js`. Only consulted when the LLM
+   * calls are enabled (`mode: 'full'` with model + apiKey).
+   */
+  pickIcon?: (opts: { subject: string }) => Promise<string | null>;
 }
 
 /**
@@ -146,7 +158,28 @@ export async function freezeConeSession(
   const title =
     (await generateTitleBestEffort(opts, agentMessages, llmEnabled)) ||
     heuristicTitle(session.messages);
-  return await writeFrozenArchive(opts, session, title, mode);
+  const icon = llmEnabled ? await pickIconBestEffort(opts, title) : undefined;
+  return await writeFrozenArchive(opts, session, title, mode, icon);
+}
+
+/**
+ * Freeze step 2b — pick a lucide rail icon for the thread from its title
+ * (best-effort; `undefined` on failure — the card keeps its snowflake and
+ * the rail's lazy enrichment can retry later).
+ */
+async function pickIconBestEffort(
+  opts: FreezeConeSessionOptions,
+  title: string
+): Promise<string | undefined> {
+  try {
+    const pick = opts.pickIcon ?? (await import('./quick-llm.js')).pickLucideIcon;
+    return (await pick({ subject: `"${title}" — an archived chat session` })) ?? undefined;
+  } catch (err) {
+    log.warn('Icon pick failed (freeze still proceeds)', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return undefined;
+  }
 }
 
 /** Freeze step 1 — memory extraction (best-effort; failures never block). */
@@ -228,7 +261,8 @@ async function writeFrozenArchive(
   opts: FreezeConeSessionOptions,
   session: Session,
   title: string,
-  mode: 'full' | 'quick'
+  mode: 'full' | 'quick',
+  icon?: string
 ): Promise<FrozenSession | null> {
   const frozenAt = new Date().toISOString();
   const filename =
@@ -250,6 +284,7 @@ async function writeFrozenArchive(
     title,
     frozenAt,
     messageCount: session.messages.length,
+    ...(icon ? { icon } : {}),
     ...(mode === 'quick' ? { pendingEnrichment: true } : {}),
   };
   try {

@@ -15,6 +15,53 @@ import type { WcShellRefs } from './wc-shell.js';
 
 const SPRINKLE_PREFIX = 'sprinkle:';
 
+/**
+ * Persistent ledger of LLM-picked rail icons, keyed by sprinkle name. A
+ * sprinkle that declares its own icon (`data-sprinkle-icon`) never lands
+ * here; the ledger only backfills the ones that would otherwise show the
+ * generic sparkles glyph, so each sprinkle is labeled at most once.
+ */
+const SPRINKLE_ICON_LEDGER_KEY = 'slicc-sprinkle-icons';
+
+/** Read the picked-icon ledger (name → lucide kebab name). */
+export function readSprinkleIconLedger(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(SPRINKLE_ICON_LEDGER_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null) return {};
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof v === 'string') out[k] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** Persist one picked icon into the ledger (merge, best-effort). */
+export function recordSprinkleIcon(name: string, icon: string): void {
+  try {
+    localStorage.setItem(
+      SPRINKLE_ICON_LEDGER_KEY,
+      JSON.stringify({ ...readSprinkleIconLedger(), [name]: icon })
+    );
+  } catch {
+    /* localStorage full/unavailable — the pick just isn't remembered */
+  }
+}
+
+/**
+ * Whether a declared icon spec is a lucide kebab name the dock-item can
+ * render. Sprinkles may also declare VFS paths / inline SVG / data URLs —
+ * those render in other surfaces but not in the rail, so they fall through
+ * to the ledger / default.
+ */
+export function isLucideIconSpec(spec: string | undefined | null): spec is string {
+  return typeof spec === 'string' && /^[a-z0-9]+(-[a-z0-9]+)*$/.test(spec);
+}
+
 /** Workbench surface / tab / dock id for a sprinkle name. */
 export function sprinkleSurfaceId(name: string): string {
   return `${SPRINKLE_PREFIX}${name}`;
@@ -66,13 +113,14 @@ export class WcSprinkleZone {
    * removes seeds discovery didn't confirm (uninstalled sprinkles).
    */
   seedDockItems(names: readonly string[]): void {
+    const pickedIcons = readSprinkleIconLedger();
     let changed = false;
     for (const name of names) {
       if (this.#dockItems.has(name)) continue;
       this.#seeded.add(name);
       this.#dockItems.set(name, {
         id: sprinkleSurfaceId(name),
-        icon: 'sparkles',
+        icon: pickedIcons[name] ?? 'sparkles',
         label: name,
         kind: 'sprinkle',
       });
@@ -100,10 +148,25 @@ export class WcSprinkleZone {
         this.#add(name, title, element, options),
       removeSprinkle: (name) => this.#remove(name, { keepDockItem: false }),
       minimizeSprinkle: (name) => this.#minimize(name),
-      registerSprinkle: (name, title) => this.#ensureDockItem(name, title),
+      registerSprinkle: (name, title, options) => this.#ensureDockItem(name, title, options?.icon),
       unregisterSprinkle: (name) => this.#unregister(name),
       closeSprinkleContent: (name) => this.#remove(name, { keepDockItem: true }),
     };
+  }
+
+  /** Update a launcher's icon in place (LLM enrichment landing late). */
+  updateDockIcon(name: string, icon: string): void {
+    const item = this.#dockItems.get(name);
+    if (!item || item.icon === icon) return;
+    this.#dockItems.set(name, { ...item, icon });
+    this.#sync();
+  }
+
+  /** Names that currently show the generic sparkles glyph (enrichment targets). */
+  defaultIconNames(): string[] {
+    return [...this.#dockItems.entries()]
+      .filter(([, item]) => item.icon === 'sparkles')
+      .map(([name]) => name);
   }
 
   /** Whether the sprinkle currently has an open surface. */
@@ -123,7 +186,7 @@ export class WcSprinkleZone {
     }
     surface.replaceChildren(element);
     this.#tabs.set(name, { id, label: title, kind: 'sprinkle', closable: true });
-    this.#ensureDockItem(name, title);
+    this.#ensureDockItem(name, title, options?.icon);
     this.#sync();
     // Background adds (session restore) keep the current focus: what's on
     // screen after a reload is the `ws` URL param's call, not the open set.
@@ -147,12 +210,21 @@ export class WcSprinkleZone {
     }
   }
 
-  #ensureDockItem(name: string, title: string): void {
+  /**
+   * Icon priority: a declared lucide spec (`data-sprinkle-icon`) wins, then a
+   * previously LLM-picked ledger entry, then the generic sparkles glyph.
+   * Non-lucide declared specs (VFS paths, inline SVG) can't render in the
+   * rail's dock-item and fall through.
+   */
+  #ensureDockItem(name: string, title: string, iconSpec?: string): void {
     // Discovery (or an open) confirmed this name — it's no longer a seed.
     this.#seeded.delete(name);
+    const icon = isLucideIconSpec(iconSpec)
+      ? iconSpec
+      : (readSprinkleIconLedger()[name] ?? 'sparkles');
     this.#dockItems.set(name, {
       id: sprinkleSurfaceId(name),
-      icon: 'sparkles',
+      icon,
       label: title,
       kind: 'sprinkle',
     });
@@ -289,6 +361,7 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
     }
   });
 
+  let enriching = false;
   const resync = async (): Promise<void> => {
     await manager.refresh();
     // Only prune seeded launchers against a discovery that actually FOUND
@@ -298,9 +371,51 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
     await manager.restoreOpenSprinkles().catch((err) => {
       log.warn('WC shell: failed to restore open sprinkles', err);
     });
+    // Backfill rail icons for sprinkles that declare none: a one-shot LLM
+    // pick from the lucide registry, remembered in the icon ledger.
+    // Fire-and-forget and single-flight — resync re-fires on kernel-ready.
+    if (!enriching) {
+      enriching = true;
+      void import('../quick-llm.js')
+        .then(({ pickLucideIcon }) =>
+          enrichSprinkleIcons(zone, manager.available(), (subject) => pickLucideIcon({ subject }))
+        )
+        .catch(() => undefined)
+        .finally(() => {
+          enriching = false;
+        });
+    }
   };
   await resync();
   return { manager, zone, resync };
+}
+
+/**
+ * Pick rail icons for sprinkles still showing the generic sparkles glyph.
+ * Declared lucide specs were honored at registration and never reach the
+ * picker; ledger hits are reapplied without an LLM call; fresh picks are
+ * recorded so each sprinkle is labeled at most once per profile.
+ */
+export async function enrichSprinkleIcons(
+  zone: WcSprinkleZone,
+  sprinkles: ReadonlyArray<{ name: string; title: string; icon?: string }>,
+  pickIcon: (subject: string) => Promise<string | null>
+): Promise<void> {
+  const needy = new Set(zone.defaultIconNames());
+  const ledger = readSprinkleIconLedger();
+  for (const sprinkle of sprinkles) {
+    if (!needy.has(sprinkle.name)) continue;
+    if (isLucideIconSpec(sprinkle.icon)) continue;
+    const remembered = ledger[sprinkle.name];
+    if (remembered) {
+      zone.updateDockIcon(sprinkle.name, remembered);
+      continue;
+    }
+    const icon = await pickIcon(`"${sprinkle.title}" — a SLICC sprinkle panel (${sprinkle.name})`);
+    if (!icon) continue;
+    recordSprinkleIcon(sprinkle.name, icon);
+    zone.updateDockIcon(sprinkle.name, icon);
+  }
 }
 
 /**

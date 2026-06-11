@@ -18,11 +18,19 @@ import type { OffscreenClient, OffscreenClientCallbacks } from '../offscreen-cli
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import type { ChatMessage } from '../types.js';
 import { WcChatController } from './wc-chat-controller.js';
+import { scoopColor } from './wc-scoop-color.js';
+
+export { scoopColor } from './wc-scoop-color.js';
+
 import {
+  enrichFreezerIcons,
   FREEZER_TINT,
   type FrozenSessionIndexEntry,
   readFreezerEntries,
+  readFreezerIndexState,
+  rebuildFreezerIndexFromArchives,
   renderFreezerCards,
+  SESSIONS_INDEX_PATH,
   thawFrozenSession,
 } from './wc-freezer.js';
 import {
@@ -33,9 +41,6 @@ import {
   type WcShellRefs,
 } from './wc-shell.js';
 import { createWorkbenchActivator } from './wc-workbench.js';
-
-const CONE_COLOR = '#b07823';
-const SCOOP_PALETTE = ['#06b6d4', '#8b5cf6', '#f59e0b', '#10b981', '#3b82f6', '#ef4444'];
 
 /**
  * Bridge the composer-meta thinking scale (`off…xhigh|max`) onto pi's
@@ -65,14 +70,6 @@ export function thinkingLevelForAgent(metaLevel: string | undefined): ThinkingLe
 
 export function metaThinkingForScoop(level: ThinkingLevel | undefined): string {
   return (level && META_FROM_PI[level]) ?? 'off';
-}
-
-/** Stable palette pick for a scoop chip, keyed by name. */
-export function scoopColor(scoop: Pick<RegisteredScoop, 'isCone' | 'name'>): string {
-  if (scoop.isCone) return CONE_COLOR;
-  let hash = 0;
-  for (const ch of scoop.name) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
-  return SCOOP_PALETTE[hash % SCOOP_PALETTE.length];
 }
 
 /** Scoop runtime status, as broadcast by `onStatusChange`. */
@@ -120,6 +117,12 @@ export interface WcLiveWiring {
    * until the host thaws it). Cleared once routed.
    */
   pendingUrlContext: string | null;
+  /**
+   * Most recent activity snippet per scoop jid (latest incoming message,
+   * user input, or finished reply) — the raw material for the hover-tooltip
+   * summaries and the `attention` (blinking eyes) bookkeeping.
+   */
+  lastActivity: Map<string, string>;
   getController(): WcChatController | null;
   getClient(): OffscreenClient | null;
   getSelected(): RegisteredScoop | null;
@@ -199,8 +202,10 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
     },
     onIncomingMessage: (jid, message) => {
       // Most-recent-activity tracking: the scoop that just received a message
-      // wears the blinking navbar eyes (the switcher's `attention` chip).
+      // wears the blinking navbar eyes (the switcher's `attention` chip) and
+      // the snippet feeds the hover-tooltip summary.
       wiring.refs.switcher.setAttribute('attention', jid);
+      wiring.lastActivity.set(jid, String(message.content ?? '').slice(0, 600));
       if (wiring.getSelected()?.jid !== jid) return;
       if (message.channel !== 'web' && isLickChannel(message.channel)) {
         wiring
@@ -280,14 +285,46 @@ function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
   // scoop-list ready, kernel-worker-ready) and a lost early RPC fails LATE —
   // only the newest call may touch the rail, and faults never wipe it.
   let refreshSeq = 0;
+  let iconEnriching = false;
   const refreshFreezer = (): void => {
     const seq = ++refreshSeq;
     void openVfs()
-      .then(async ({ reader }) => {
-        const entries = await readFreezerEntries(reader);
-        if (entries === null || seq !== refreshSeq) return;
+      .then(async ({ reader, writer }) => {
+        let entries = await readFreezerEntries(reader);
+        if (entries === null) {
+          // Faults keep the rail; a CORRUPT index (e.g. truncated by a
+          // reload that killed the worker mid-write) self-heals from the
+          // archives — they are the ground truth.
+          const state = await readFreezerIndexState(reader);
+          if (state.kind !== 'corrupt') return;
+          log.warn('WC freezer index corrupt — rebuilding from archives');
+          entries = await rebuildFreezerIndexFromArchives(reader);
+          if (entries.length === 0) return;
+          await writer.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(entries, null, 2));
+        }
+        if (seq !== refreshSeq) return;
         frozenEntries = entries;
         renderFreezerCards(refs.freezer, entries);
+        // Backfill LLM-picked rail icons for icon-less entries (legacy /
+        // quick-frozen). Fire-and-forget and single-flight — refreshes
+        // re-fire on kernel-ready.
+        if (!iconEnriching && entries.some((e) => !e.icon && !e.pendingEnrichment)) {
+          iconEnriching = true;
+          void import('../quick-llm.js')
+            .then(({ pickLucideIcon }) =>
+              enrichFreezerIcons({
+                reader,
+                writer,
+                freezer: refs.freezer,
+                entries,
+                pickIcon: (subject) => pickLucideIcon({ subject }),
+              })
+            )
+            .catch((err) => log.warn('WC freezer icon enrichment failed', err))
+            .finally(() => {
+              iconEnriching = false;
+            });
+        }
       })
       .catch((err) => log.error('WC freezer refresh failed', err));
   };
@@ -437,6 +474,7 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
       refs,
       statuses: new Map(),
       fills: new Map(),
+      lastActivity: new Map(),
       // The thread component owns the `ctx` param — the host only routes it.
       pendingUrlContext:
         (refs.thread as HTMLElement & { urlContext?: string | null }).urlContext ?? null,
@@ -614,9 +652,13 @@ function wireWcComposer(deps: {
     if (!text) return;
     boot.getController()?.sendUserMessage(text, attachStage?.take());
     (refs.inputCard as HTMLElement & { clear?: () => void }).clear?.();
-    // User input is most-recent activity: the addressed scoop gets the eyes.
+    // User input is most-recent activity: the addressed scoop gets the eyes
+    // and the text feeds its hover-tooltip summary.
     const jid = boot.getSelected()?.jid;
-    if (jid) refs.switcher.setAttribute('attention', jid);
+    if (jid) {
+      refs.switcher.setAttribute('attention', jid);
+      boot.wiring.lastActivity.set(jid, text.slice(0, 600));
+    }
   });
 
   // The send button morphs into a stop control while a turn is processing.
@@ -654,6 +696,107 @@ function wireWcStats(wiring: WcLiveWiring, client: OffscreenClient): () => void 
   };
   setInterval(refresh, 15_000);
   return refresh;
+}
+
+/** Switcher wiring: chip clicks select scoops; hovered chips get LLM tooltips. */
+function wireWcSwitcher(boot: WcShellBoot, client: OffscreenClient): void {
+  const { refs } = boot;
+  refs.switcher.addEventListener('slicc-scoop-select', (event) => {
+    const key = (event as CustomEvent<{ key?: string }>).detail?.key;
+    const scoop = client.getScoops().find((s) => s.jid === key);
+    if (scoop && scoop.jid !== boot.getSelected()?.jid) boot.selectScoop(scoop);
+  });
+  wireWcChipTips({
+    switcher: refs.switcher,
+    getScoops: () => client.getScoops(),
+    lastActivity: boot.wiring.lastActivity,
+  });
+}
+
+/**
+ * Turn-finished hook: refresh the suggested placeholder + session stats,
+ * then record the reply as the selected scoop's most-recent activity (the
+ * navbar eyes and the hover-tooltip summary both key off it).
+ */
+function makeTurnFinishedHook(deps: {
+  boot: WcShellBoot;
+  triggerPlaceholder(): void;
+  refreshStats(): void;
+}): () => void {
+  return () => {
+    deps.triggerPlaceholder();
+    deps.refreshStats();
+    const jid = deps.boot.getSelected()?.jid;
+    if (!jid) return;
+    deps.boot.refs.switcher.setAttribute('attention', jid);
+    const last = deps.boot
+      .getController()
+      ?.getMessages()
+      .filter((m) => m.role === 'assistant')
+      .at(-1);
+    if (last) {
+      deps.boot.wiring.lastActivity.set(jid, String(last.content ?? '').slice(0, 600));
+    }
+  };
+}
+
+/**
+ * Richer scoop/cone hover tooltips: pointing at a chip sets a one-line LLM
+ * summary of that agent's most recent activity as the chip's native title.
+ * Summaries generate lazily on hover (no calls for idle scoops), are cached
+ * per activity snapshot, and the bare scoop label stands in while (or if)
+ * the call doesn't land.
+ */
+export function wireWcChipTips(deps: {
+  switcher: HTMLElement;
+  getScoops(): RegisteredScoop[];
+  lastActivity: ReadonlyMap<string, string>;
+  /** Injectable label runner (tests). Defaults to `quickLabel`. */
+  labelFn?: (opts: {
+    prompt: string;
+    system?: string;
+    maxTokens?: number;
+  }) => Promise<string | null>;
+}): void {
+  const tips = new Map<string, { activity: string; tip: string }>();
+  const inFlight = new Set<string>();
+  deps.switcher.addEventListener('pointerover', (event) => {
+    const chip = (event.target as HTMLElement | null)?.closest?.<HTMLElement>('slicc-pill.scoop');
+    if (!chip || !deps.switcher.contains(chip)) return;
+    const jid = chip.dataset.k ?? '';
+    const scoop = deps.getScoops().find((s) => s.jid === jid);
+    if (!scoop) return;
+    const activity = deps.lastActivity.get(jid) ?? '';
+    const cached = tips.get(jid);
+    if (cached && cached.activity === activity) {
+      chip.title = cached.tip;
+      return;
+    }
+    if (!chip.title) chip.title = scoop.isCone ? 'sliccy' : scoop.name;
+    if (!activity || inFlight.has(jid)) return;
+    inFlight.add(jid);
+    void (async () => {
+      try {
+        const labelFn = deps.labelFn ?? (await import('../quick-llm.js')).quickLabel;
+        const tip = await labelFn({
+          system:
+            'One line for a hover tooltip: at most 14 words, present tense, ' +
+            'no quotes, no trailing period.',
+          prompt:
+            `Summarize what this agent has been doing.\n` +
+            `Agent: ${scoop.isCone ? 'sliccy (the main agent)' : scoop.name}\n` +
+            `Most recent activity:\n${activity}`,
+          maxTokens: 40,
+        });
+        if (tip) {
+          tips.set(jid, { activity, tip });
+          chip.title = tip;
+        }
+      } finally {
+        inFlight.delete(jid);
+      }
+    })();
+  });
 }
 
 /**
@@ -710,13 +853,11 @@ export function attachWcClient(
   const triggerPlaceholder = (): void => {
     refreshPlaceholder?.();
   };
-  const { controller, agentHandle } = createWcController(refs, client, () => {
-    triggerPlaceholder();
-    refreshStats();
-    // A finished turn = the selected scoop just received an agent message.
-    const jid = boot.getSelected()?.jid;
-    if (jid) refs.switcher.setAttribute('attention', jid);
-  });
+  const { controller, agentHandle } = createWcController(
+    refs,
+    client,
+    makeTurnFinishedHook({ boot, triggerPlaceholder, refreshStats })
+  );
   boot.setController(controller);
   boot.onClientReady(refreshStats);
 
@@ -752,11 +893,7 @@ export function attachWcClient(
     log,
   });
 
-  refs.switcher.addEventListener('slicc-scoop-select', (event) => {
-    const key = (event as CustomEvent<{ key?: string }>).detail?.key;
-    const scoop = client.getScoops().find((s) => s.jid === key);
-    if (scoop && scoop.jid !== boot.getSelected()?.jid) boot.selectScoop(scoop);
-  });
+  wireWcSwitcher(boot, client);
 
   // Workbench: VFS file tree + worker-shell terminal, both lazy on first
   // surface activation from the dock or tab bar.

@@ -5,7 +5,7 @@
  */
 
 import 'fake-indexeddb/auto';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
@@ -13,9 +13,12 @@ installWcDomStubs();
 import { FsError } from '../../../src/fs/types.js';
 import { VirtualFS } from '../../../src/fs/virtual-fs.js';
 import {
+  enrichFreezerIcons,
   type FrozenSessionIndexEntry,
   frozenCard,
   readFreezerEntries,
+  readFreezerIndexState,
+  rebuildFreezerIndexFromArchives,
   renderFreezerCards,
   thawFrozenSession,
 } from '../../../src/ui/wc/wc-freezer.js';
@@ -104,5 +107,115 @@ describe('thawFrozenSession', () => {
     expect(title).toBe('Fix the build');
     expect(messages).toHaveLength(2);
     expect(messages[1]).toMatchObject({ role: 'assistant', content: 'done — green again' });
+  });
+});
+
+describe('freezer thread icons', () => {
+  it('frozenCard forwards a stored entry icon (default stays the snowflake)', () => {
+    expect(frozenCard(ENTRY).hasAttribute('icon')).toBe(false);
+    const card = frozenCard({ ...ENTRY, icon: 'wrench' });
+    expect(card.getAttribute('icon')).toBe('wrench');
+  });
+
+  it('enrichFreezerIcons backfills icon-less entries: index rewritten, live card stamped', async () => {
+    const fs = await seededFs();
+    const freezer = document.createElement('slicc-freezer');
+    const entries = (await readFreezerEntries(fs)) ?? [];
+    renderFreezerCards(freezer, entries);
+
+    const pickIcon = vi.fn(async (subject: string) =>
+      subject.includes('Fix the build') ? 'wrench' : null
+    );
+    await enrichFreezerIcons({ reader: fs, writer: fs, freezer, entries, pickIcon });
+
+    // The pick is persisted into the index (thread metadata)…
+    const after = (await readFreezerEntries(fs)) ?? [];
+    expect(after[0]?.icon).toBe('wrench');
+    // …and stamped onto the already-rendered card.
+    expect(freezer.querySelector('slicc-freezer-card')?.getAttribute('icon')).toBe('wrench');
+
+    // A second pass has nothing left to label.
+    pickIcon.mockClear();
+    await enrichFreezerIcons({ reader: fs, writer: fs, freezer, entries: after, pickIcon });
+    expect(pickIcon).not.toHaveBeenCalled();
+  });
+
+  it('enrichFreezerIcons skips pending-enrichment entries and survives failed picks', async () => {
+    const fs = await seededFs();
+    const pending: FrozenSessionIndexEntry = {
+      ...ENTRY,
+      filename: 'pending-abc.md',
+      pendingEnrichment: true,
+    };
+    await fs.writeFile('/sessions/index.json', JSON.stringify([pending, ENTRY]));
+    const entries = (await readFreezerEntries(fs)) ?? [];
+    const freezer = document.createElement('slicc-freezer');
+    renderFreezerCards(freezer, entries);
+
+    const pickIcon = vi.fn(async () => null);
+    await enrichFreezerIcons({ reader: fs, writer: fs, freezer, entries, pickIcon });
+    // Only the settled entry was attempted; a null pick leaves the index alone.
+    expect(pickIcon).toHaveBeenCalledTimes(1);
+    const after = (await readFreezerEntries(fs)) ?? [];
+    expect(after.every((e) => !e.icon)).toBe(true);
+  });
+});
+
+describe('corrupt-index recovery', () => {
+  it('treats a truncated index as a FAULT, never as empty (the rail-wipe trap)', async () => {
+    const fs = await seededFs();
+    // Simulate a write cut off mid-file by a reload killing the worker.
+    const full = JSON.stringify([ENTRY], null, 2);
+    await fs.writeFile('/sessions/index.json', full.slice(0, Math.floor(full.length / 2)));
+    expect(await readFreezerEntries(fs)).toBeNull();
+    expect((await readFreezerIndexState(fs)).kind).toBe('corrupt');
+  });
+
+  it('rebuilds the index from the archives (titles, timestamps, pending markers)', async () => {
+    const fs = await seededFs();
+    await fs.writeFile(
+      '/sessions/pending-xyz.md',
+      [
+        '---',
+        'title: "quick one"',
+        'frozenAt: "2026-06-02T09:00:00Z"',
+        'messageCount: 3',
+        '---',
+        '',
+      ].join('\n')
+    );
+    await fs.writeFile('/sessions/index.json', '[{"filename": "trunca');
+
+    const rebuilt = await rebuildFreezerIndexFromArchives(fs);
+    expect(rebuilt).toHaveLength(2);
+    // Newest first.
+    expect(rebuilt[0]).toMatchObject({
+      filename: 'pending-xyz.md',
+      title: 'quick one',
+      messageCount: 3,
+      pendingEnrichment: true,
+    });
+    expect(rebuilt[1]).toMatchObject({ filename: ENTRY.filename, title: 'Fix the build' });
+  });
+
+  it('enrichFreezerIcons refuses to write over a corrupt or empty re-read', async () => {
+    const fs = await seededFs();
+    const entries = (await readFreezerEntries(fs)) ?? [];
+    // Corrupt the index AFTER the entries were read (mid-enrichment race).
+    await fs.writeFile('/sessions/index.json', '[{"filename": "trunca');
+    const writes: string[] = [];
+    const writer = {
+      writeFile: async (_p: string, content: string) => {
+        writes.push(content);
+      },
+    };
+    await enrichFreezerIcons({
+      reader: fs,
+      writer,
+      freezer: document.createElement('slicc-freezer'),
+      entries,
+      pickIcon: async () => 'wrench',
+    });
+    expect(writes).toEqual([]);
   });
 });

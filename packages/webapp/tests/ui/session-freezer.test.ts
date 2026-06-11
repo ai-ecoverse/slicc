@@ -190,6 +190,61 @@ describe('freezeConeSession', () => {
     expect(vfs.files.get('/shared/CLAUDE.md')).toBeUndefined();
   });
 
+  it('records the LLM-picked lucide icon in the index entry (full mode only)', async () => {
+    mockRunOneOffCompactionCall
+      .mockResolvedValueOnce('NONE')
+      .mockResolvedValueOnce('Fix the auth bug');
+    const store = makeFakeStore({
+      id: 'session-cone',
+      messages: [
+        userMessage('q1'),
+        assistantMessage('a1'),
+        userMessage('q2'),
+        assistantMessage('a2'),
+      ],
+      createdAt: 100,
+      updatedAt: 200,
+    });
+    const vfs = makeFakeVfs();
+    const pickIcon = vi.fn(async () => 'wrench');
+
+    const result = await freezeConeSession({
+      sessionStore: store,
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      model: fakeModel,
+      apiKey: 'k',
+      pickIcon,
+    });
+    expect(pickIcon).toHaveBeenCalledTimes(1);
+    expect(pickIcon.mock.calls[0][0].subject).toContain('Fix the auth bug');
+    expect(result!.icon).toBe('wrench');
+    const index = await readSessionsIndex(
+      vfs as unknown as Parameters<typeof readSessionsIndex>[0]
+    );
+    expect(index[0].icon).toBe('wrench');
+
+    // Without LLM access (no api key) the picker must not fire at all.
+    pickIcon.mockClear();
+    const store2 = makeFakeStore({
+      id: 'session-cone',
+      messages: [
+        userMessage('q1'),
+        assistantMessage('a1'),
+        userMessage('q2'),
+        assistantMessage('a2'),
+      ],
+      createdAt: 100,
+      updatedAt: 200,
+    });
+    const r2 = await freezeConeSession({
+      sessionStore: store2,
+      vfs: makeFakeVfs() as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      pickIcon,
+    });
+    expect(pickIcon).not.toHaveBeenCalled();
+    expect(r2!.icon).toBeUndefined();
+  });
+
   it('skips memory append when LLM returns NONE', async () => {
     mockRunOneOffCompactionCall.mockResolvedValueOnce('NONE').mockResolvedValueOnce('Quick chat');
 

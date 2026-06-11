@@ -14,6 +14,8 @@
 
 import type { Api, Model, UserMessage } from '@earendil-works/pi-ai';
 import { completeSimple } from '@earendil-works/pi-ai';
+// The registry is already in the page bundle — the web components render from it.
+import { icons as lucideIcons } from 'lucide';
 import { createLogger } from '../core/logger.js';
 import { getDailyAdobeUuid } from '../scoops/llm-session-id.js';
 import {
@@ -106,6 +108,66 @@ export async function quickLabel(opts: QuickLabelOptions): Promise<string | null
     });
     return null;
   }
+}
+
+// --- Lucide icon picking ---
+
+let cachedIconNames: string[] | null = null;
+
+/** `ArrowUp` / `Axis3d` / `AArrowDown` → `arrow-up` / `axis-3d` / `a-arrow-down`. */
+function pascalToKebab(name: string): string {
+  return name
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1-$2')
+    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .replace(/([A-Za-z])(\d)/g, '$1-$2')
+    .toLowerCase();
+}
+
+/**
+ * Every valid lucide icon name in kebab-case (the form `iconEl` and the
+ * library components accept), computed once from the bundled registry —
+ * the same `lucide` package the web components render from.
+ */
+export function lucideIconNames(): string[] {
+  if (!cachedIconNames) {
+    cachedIconNames = Object.keys(lucideIcons).map(pascalToKebab).sort();
+  }
+  return cachedIconNames;
+}
+
+export interface PickLucideIconOptions {
+  /** What the icon should depict — a title, name, or short description. */
+  subject: string;
+  signal?: AbortSignal;
+  /** Injectable label runner (tests). Defaults to {@link quickLabel}. */
+  labelFn?: (opts: QuickLabelOptions) => Promise<string | null>;
+}
+
+/**
+ * One-shot LLM pick of a lucide icon for `subject`. The prompt carries the
+ * FULL list of valid icon names so the model can only choose something
+ * renderable; the response is validated against the registry. Returns the
+ * kebab-case icon name, or `null` when the call fails or the pick is not a
+ * real icon — callers keep their static default.
+ */
+export async function pickLucideIcon(opts: PickLucideIconOptions): Promise<string | null> {
+  const names = lucideIconNames();
+  const labelFn = opts.labelFn ?? quickLabel;
+  const raw = await labelFn({
+    system:
+      'You pick ONE icon for a UI element. Respond with exactly one icon name ' +
+      'from the provided list — lowercase, no quotes, no punctuation, nothing else.',
+    prompt: `Pick the single most fitting icon for: ${opts.subject}\n\nValid icon names:\n${names.join(' ')}`,
+    maxTokens: 16,
+    temperature: 0.2,
+    signal: opts.signal,
+  });
+  if (!raw) return null;
+  const candidate = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '');
+  return names.includes(candidate) ? candidate : null;
 }
 
 // --- Model picking ---
