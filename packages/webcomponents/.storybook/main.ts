@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import type { StorybookConfig } from '@storybook/web-components-vite';
 
 /**
@@ -9,8 +10,10 @@ import type { StorybookConfig } from '@storybook/web-components-vite';
 const config: StorybookConfig = {
   stories: ['../src/**/*.stories.ts'],
   // Local, dev-only feedback addon (manager panel). Resolved to an absolute
-  // path so Storybook 10 loads it as a preset that registers the manager entry.
-  addons: [import.meta.resolve('./feedback-addon/preset.ts')],
+  // FILESYSTEM path so Storybook 10 loads it as a preset that registers the
+  // manager entry. (Computed via URL, not import.meta.resolve — knip treats
+  // the latter as an import specifier it cannot resolve.)
+  addons: [fileURLToPath(new URL('./feedback-addon/preset.ts', import.meta.url))],
   framework: {
     name: '@storybook/web-components-vite',
     options: {},

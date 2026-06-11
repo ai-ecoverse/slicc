@@ -16,10 +16,21 @@ class StubObserver {
 
 export function installWcDomStubs(): void {
   const win = globalThis as unknown as Record<string, unknown>;
-  // Node's flag-gated experimental localStorage shadows jsdom's as undefined.
-  if (win['localStorage'] === undefined) {
+  // Node's flag-gated experimental localStorage shadows jsdom's: undefined on
+  // Node 24/26, and on Node 25 a BROKEN object whose methods are not functions
+  // ("--localstorage-file was provided without a valid path"). Probe rather
+  // than null-check, and overwrite anything non-functional.
+  const existing = (() => {
+    try {
+      const candidate = win['localStorage'] as Storage | undefined;
+      return candidate && typeof candidate.setItem === 'function' ? candidate : undefined;
+    } catch {
+      return undefined;
+    }
+  })();
+  if (!existing) {
     const store = new Map<string, string>();
-    win['localStorage'] = {
+    const polyfill = {
       getItem: (key: string) => store.get(key) ?? null,
       setItem: (key: string, value: string) => store.set(key, String(value)),
       removeItem: (key: string) => store.delete(key),
@@ -29,6 +40,16 @@ export function installWcDomStubs(): void {
         return store.size;
       },
     };
+    try {
+      win['localStorage'] = polyfill;
+    } catch {
+      // The global may be an accessor — force it via defineProperty.
+      Object.defineProperty(globalThis, 'localStorage', {
+        value: polyfill,
+        configurable: true,
+        writable: true,
+      });
+    }
   }
   if (typeof win['matchMedia'] !== 'function') {
     win['matchMedia'] = (media: string) => ({

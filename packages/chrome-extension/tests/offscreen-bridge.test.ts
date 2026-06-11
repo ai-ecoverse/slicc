@@ -831,6 +831,51 @@ describe('OffscreenBridge handlePanelMessage', () => {
     }
   }
 
+  it('answers request-session-stats with the total cost and per-scoop fills', async () => {
+    mockOrchestrator.getSessionCosts = vi.fn(() => [
+      { usage: { cost: { total: 0.2 } } },
+      { usage: { cost: { total: 0.03 } } },
+    ]);
+    mockOrchestrator.getContextFills = vi.fn(() => [{ jid: 'cone_1', fill: 0.4 }]);
+
+    simulatePanelMessage({ type: 'request-session-stats', requestId: 'st-1' });
+    await new Promise((r) => setTimeout(r, 10));
+
+    const reply = sentMessages.find(
+      (m: any) => m?.payload?.type === 'session-stats' && m.payload.requestId === 'st-1'
+    ) as any;
+    expect(reply).toBeTruthy();
+    expect(reply.payload.totalCost).toBeCloseTo(0.23);
+    expect(reply.payload.fills).toEqual([{ jid: 'cone_1', fill: 0.4 }]);
+  });
+
+  it('answers request-session-stats with zeros when the cost provider throws', async () => {
+    mockOrchestrator.getSessionCosts = vi.fn(() => {
+      throw new Error('not ready');
+    });
+
+    simulatePanelMessage({ type: 'request-session-stats', requestId: 'st-2' });
+    await new Promise((r) => setTimeout(r, 10));
+
+    const reply = sentMessages.find(
+      (m: any) => m?.payload?.type === 'session-stats' && m.payload.requestId === 'st-2'
+    ) as any;
+    expect(reply).toBeTruthy();
+    expect(reply.payload.totalCost).toBe(0);
+    expect(reply.payload.fills).toEqual([]);
+  });
+
+  it('dispatches cone-create through the extracted handler', async () => {
+    simulatePanelMessage({ type: 'cone-create', name: 'sliccy' });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(mockOrchestrator.registerScoop).toHaveBeenCalledWith(
+      expect.objectContaining({ isCone: true, name: 'sliccy', folder: 'cone' })
+    );
+    const created = sentMessages.find((m: any) => m?.payload?.type === 'scoop-created') as any;
+    expect(created?.payload?.scoop?.name).toBe('sliccy');
+  });
+
   it('dispatches lick-cherry-host-event to orchestrator.handleCherryHostEvent', async () => {
     simulatePanelMessage({
       type: 'lick-cherry-host-event',

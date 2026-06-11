@@ -88,6 +88,21 @@
       "entry": ["src/index.ts", "tests/**/*.test.ts"],
       "project": ["src/**/*.ts", "tests/**/*.ts"],
       "ignoreDependencies": ["jsdom", "@types/jsdom"]
+    },
+    "packages/webcomponents": {
+      "entry": [
+        "src/index.ts",
+        "src/register.ts",
+        "vitest.config.ts",
+        ".storybook/main.ts",
+        ".storybook/preview.ts",
+        ".storybook/feedback-addon/preset.ts",
+        ".storybook/feedback-addon/manager.tsx",
+        "src/**/*.stories.ts",
+        "tests/**/*.test.ts"
+      ],
+      "project": ["src/**/*.{ts,tsx}", "tests/**/*.ts", ".storybook/**/*.{ts,tsx}"],
+      "ignoreDependencies": ["lit", "react"]
     }
   }
 }
