@@ -15,6 +15,12 @@ import { isLickChannel } from '../lick-channels.js';
 import type { OffscreenClient, OffscreenClientCallbacks } from '../offscreen-client.js';
 import type { ChatMessage } from '../types.js';
 import { WcChatController } from './wc-chat-controller.js';
+import {
+  FREEZER_TINT,
+  type FrozenSessionIndexEntry,
+  refreshFreezerCards,
+  thawFrozenSession,
+} from './wc-freezer.js';
 import { mountWcShell, type SwitcherScoop, submittedText, type WcShellRefs } from './wc-shell.js';
 import { createWorkbenchActivator } from './wc-workbench.js';
 
@@ -158,6 +164,7 @@ export async function mountWcUiLive(app: HTMLElement, log: BootStageLogger): Pro
     selected = scoop;
     if (!client) return;
     client.setSelectedScoopJid(scoop.jid);
+    refs.inputCard.removeAttribute('disabled');
     void applyThreadContext(refs, scoop);
     client.requestScoopMessages(scoop.jid);
     controller?.setProcessing(client.isProcessing(scoop.jid));
@@ -201,14 +208,16 @@ export async function mountWcUiLive(app: HTMLElement, log: BootStageLogger): Pro
   // Workbench: VFS file tree + worker-shell terminal, both lazy on first
   // surface activation from the dock or tab bar.
   let fsPromise: ReturnType<typeof openPageFs> | null = null;
+  const openFs = (): ReturnType<typeof openPageFs> => {
+    fsPromise ??= openPageFs();
+    return fsPromise;
+  };
   const liveClient = client;
   activateSurface = createWorkbenchActivator({
     fileTree: refs.fileTree,
     termSurface: refs.termSurface,
-    openFs: () => {
-      fsPromise ??= openPageFs();
-      return fsPromise;
-    },
+    memoryHost: refs.memoryHost,
+    openFs,
     mountTerminal: async (container) => {
       const { RemoteTerminalView } = await import('../../kernel/remote-terminal-view.js');
       const { fetchSecretEnvVars } = await import('../../core/secret-env.js');
@@ -224,7 +233,35 @@ export async function mountWcUiLive(app: HTMLElement, log: BootStageLogger): Pro
     log,
   });
 
+  // Freezer rail: frozen cone sessions thaw read-only into the thread;
+  // selecting any scoop chip returns to the live conversation.
+  let frozenEntries: FrozenSessionIndexEntry[] = [];
+  const refreshFreezer = (): void => {
+    void openFs()
+      .then(async (fs) => {
+        frozenEntries = await refreshFreezerCards(refs.freezer, fs);
+      })
+      .catch((err) => log.error('WC freezer refresh failed', err));
+  };
+  refs.freezer.addEventListener('freezer-card-select', (event) => {
+    const slug = (event as CustomEvent<{ slug?: string }>).detail?.slug;
+    const entry = frozenEntries.find((e) => e.filename === slug);
+    if (!entry) return;
+    void openFs()
+      .then(async (fs) => {
+        const { messages } = await thawFrozenSession(fs, entry);
+        controller?.loadMessages(messages);
+        refs.thread.setAttribute('context', `freezer:${entry.filename}`);
+        refs.thread.setAttribute('accent', FREEZER_TINT);
+        refs.inputCard.setAttribute('disabled', '');
+        refs.switcher.removeAttribute('active');
+        selected = null;
+      })
+      .catch((err) => log.error('WC thaw failed', err));
+  });
+
   await host.ready;
+  refreshFreezer();
   log.info('WC live shell ready', { scoops: client.getScoops().length });
 }
 

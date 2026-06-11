@@ -56,6 +56,7 @@ export interface WcShellRefs {
   freezer: HTMLElement;
   fileTree: SliccFileTree;
   termSurface: HTMLElement;
+  memoryHost: HTMLElement;
 }
 
 const STYLE_ID = 'slicc-wcui-style';
@@ -68,6 +69,8 @@ const CSS = [
   'transition:padding-left .4s cubic-bezier(.4,0,.2,1);}',
   '@media (max-width:560px){.wcui-appcol{padding-left:44px;}}',
   '.wcui-term{flex:1;min-height:0;display:flex;flex-direction:column;}',
+  '.wcui-memory{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;',
+  'gap:8px;padding:10px;}',
 ].join('');
 
 function ensureShellStyles(doc: Document): void {
@@ -121,6 +124,7 @@ function buildWorkbench(): {
   header: HTMLElement;
   tree: WcShellRefs['fileTree'];
   termSurface: HTMLElement;
+  memoryHost: HTMLElement;
 } {
   const workbench = el('slicc-workbench-pane');
   const header = el('slicc-workbench-header');
@@ -128,6 +132,7 @@ function buildWorkbench(): {
   tabs.tabs = [
     { id: 'files', label: 'files', kind: 'tool' },
     { id: 'term', label: 'terminal', kind: 'tool' },
+    { id: 'memory', label: 'memory', kind: 'tool' },
   ];
   header.append(tabs);
 
@@ -140,9 +145,13 @@ function buildWorkbench(): {
   const termSurface = el('div', { class: 'wcui-term' });
   termSurfaceHost.append(termSurface);
 
-  body.append(filesSurface, termSurfaceHost);
+  const memorySurfaceHost = el('slicc-surface', { 'surface-id': 'memory', layout: 'flex' });
+  const memoryHost = el('div', { class: 'wcui-memory' });
+  memorySurfaceHost.append(memoryHost);
+
+  body.append(filesSurface, termSurfaceHost, memorySurfaceHost);
   workbench.append(header, body);
-  return { workbench, body, header, tree, termSurface };
+  return { workbench, body, header, tree, termSurface, memoryHost };
 }
 
 /** Dock clicks open/close the workbench and select the matching surface. */
@@ -201,11 +210,18 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
   const { composer, inputCard, composerMeta } = buildComposer(options);
   pane.append(thread, composer);
 
-  const { workbench, body, header, tree, termSurface } = buildWorkbench();
+  const { workbench, body, header, tree, termSurface, memoryHost } = buildWorkbench();
   const dock = el('slicc-dock', { 'system-tools': '' });
   shell.append(pane, workbench, dock);
   wireDockToWorkbench(dock, shell, body, options.onSurfaceActivate);
   wireTabsToBody(header, body, options.onSurfaceActivate);
+
+  // The freezer rail reserves its width via `--rail-w` on the app column so
+  // the nav + shell slide (not overlap) when the rail expands.
+  freezer.addEventListener('freezer-toggle', (event) => {
+    const open = (event as CustomEvent<{ open?: boolean }>).detail?.open === true;
+    appCol.style.setProperty('--rail-w', open ? '260px' : '44px');
+  });
 
   const { nav, switcher, floatbar } = buildNav(options);
   appCol.append(nav, shell);
@@ -225,6 +241,7 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
     freezer,
     fileTree: tree,
     termSurface,
+    memoryHost,
   };
 }
 

@@ -9,6 +9,7 @@
 import type { SliccFileTree } from '@slicc/webcomponents';
 
 import type { VirtualFS } from '../../fs/virtual-fs.js';
+import { buildMemoryRows } from './wc-memory.js';
 
 type FileTreeItem = NonNullable<SliccFileTree['items']>[number];
 
@@ -63,6 +64,8 @@ export async function buildVfsTreeItems(fs: VirtualFS): Promise<FileTreeItem[]> 
 export interface WcWorkbenchDeps {
   fileTree: SliccFileTree;
   termSurface: HTMLElement;
+  /** Container the memory rows render into. */
+  memoryHost: HTMLElement;
   /** Lazily resolved page-side VFS (shared LightningFS IndexedDB). */
   openFs(): Promise<VirtualFS>;
   /** Mounts the worker-shell terminal into the surface; resolves on attach. */
@@ -71,10 +74,10 @@ export interface WcWorkbenchDeps {
 }
 
 /**
- * Lazy workbench activation: the file tree populates on first `files`
- * surface activation (and refreshes on every re-activation); the terminal
- * mounts once on first `term` activation. Returns the activation handler so
- * callers wire it to dock/tab selection.
+ * Lazy workbench activation: the file tree and memory rows populate on
+ * (re-)activation of their surfaces; the terminal mounts once on first
+ * `term` activation. Returns the activation handler so callers wire it to
+ * dock/tab selection.
  */
 export function createWorkbenchActivator(deps: WcWorkbenchDeps): (surfaceId: string) => void {
   let terminalMounted = false;
@@ -86,6 +89,15 @@ export function createWorkbenchActivator(deps: WcWorkbenchDeps): (surfaceId: str
           deps.fileTree.items = await buildVfsTreeItems(fs);
         })
         .catch((err) => deps.log.error('WC file tree refresh failed', err));
+      return;
+    }
+    if (surfaceId === 'memory') {
+      void deps
+        .openFs()
+        .then(async (fs) => {
+          deps.memoryHost.replaceChildren(...(await buildMemoryRows(fs)));
+        })
+        .catch((err) => deps.log.error('WC memory refresh failed', err));
       return;
     }
     if (surfaceId === 'term' && !terminalMounted) {
