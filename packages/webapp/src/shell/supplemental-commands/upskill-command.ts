@@ -2024,6 +2024,64 @@ async function discoverTabUpskill(
   return { links, failures };
 }
 
+function buildCatalogMatchesForTab(
+  normalized: string,
+  catalog: BrowseShSkillSummary[],
+  installed: Set<string>
+): TabCatalogMatch[] {
+  if (!normalized || catalog.length === 0) return [];
+  const matches: TabCatalogMatch[] = [];
+  for (const s of catalog) {
+    if (!s.hostname) continue;
+    if (normalizeHostname(s.hostname) !== normalized) continue;
+    // Mirror `installFromBrowseSh`'s dirname rule: prefer the catalog's
+    // `name` (parsed from upstream frontmatter at publish time) and
+    // only strip the trailing `-xxxxxx` disambiguation hash when we
+    // have to fall back to `task`.
+    const skillName = s.name || s.task.replace(/-[A-Za-z0-9]{4,8}$/, '') || s.task;
+    const dirName = `browse-${s.hostname}-${skillName}`;
+    matches.push({
+      slug: s.slug,
+      hostname: s.hostname,
+      task: s.task,
+      title: s.title || s.name || s.task,
+      description: s.description,
+      installed: installed.has(dirName),
+      installHint: `upskill browse:${s.hostname}/${s.task}`,
+    });
+  }
+  return matches;
+}
+
+function formatTabText(tab: TabUpskillResult): string {
+  const activeMark = tab.active ? ' [active]' : '';
+  let out = `${tab.title || '(untitled)'}${activeMark}\n`;
+  out += `  ${tab.url}\n`;
+  if (tab.origin.length > 0) {
+    out += `  Origin-advertised:\n`;
+    for (const link of tab.origin) {
+      out += `    ${link.installHint}`;
+      if (link.instruction) out += `   # ${link.instruction}`;
+      out += '\n';
+    }
+  }
+  if (tab.catalog.length > 0) {
+    out += `  Browse.sh catalog:\n`;
+    for (const match of tab.catalog) {
+      const marker = match.installed ? '✓' : ' ';
+      out += `    ${marker} ${match.title.padEnd(40)} ${match.installHint}\n`;
+    }
+  }
+  if (tab.origin.length === 0 && tab.catalog.length === 0 && !tab.failures.length) {
+    out += `  No skill suggestions for this tab.\n`;
+  }
+  for (const f of tab.failures) {
+    out += `  (discovery failed: ${f.error})\n`;
+  }
+  out += '\n';
+  return out;
+}
+
 /**
  * Handle the `upskill tabs` subcommand.
  */
@@ -2097,28 +2155,7 @@ async function handleTabs(
       failures = discovered.failures;
     }
 
-    const catalogMatches: TabCatalogMatch[] = [];
-    if (normalized && catalog.length > 0) {
-      for (const s of catalog) {
-        if (!s.hostname) continue;
-        if (normalizeHostname(s.hostname) !== normalized) continue;
-        // Mirror `installFromBrowseSh`'s dirname rule: prefer the catalog's
-        // `name` (parsed from upstream frontmatter at publish time) and
-        // only strip the trailing `-xxxxxx` disambiguation hash when we
-        // have to fall back to `task`.
-        const skillName = s.name || s.task.replace(/-[A-Za-z0-9]{4,8}$/, '') || s.task;
-        const dirName = `browse-${s.hostname}-${skillName}`;
-        catalogMatches.push({
-          slug: s.slug,
-          hostname: s.hostname,
-          task: s.task,
-          title: s.title || s.name || s.task,
-          description: s.description,
-          installed: installed.has(dirName),
-          installHint: `upskill browse:${s.hostname}/${s.task}`,
-        });
-      }
-    }
+    const catalogMatches = buildCatalogMatchesForTab(normalized, catalog, installed);
 
     results.push({
       targetId: page.targetId,
@@ -2142,37 +2179,7 @@ async function handleTabs(
 
   let output = '';
   for (const tab of results) {
-    const activeMark = tab.active ? ' [active]' : '';
-    output += `${tab.title || '(untitled)'}${activeMark}\n`;
-    output += `  ${tab.url}\n`;
-
-    if (tab.origin.length > 0) {
-      output += `  Origin-advertised:\n`;
-      for (const link of tab.origin) {
-        output += `    ${link.installHint}`;
-        if (link.instruction) output += `   # ${link.instruction}`;
-        output += '\n';
-      }
-    }
-
-    if (tab.catalog.length > 0) {
-      output += `  Browse.sh catalog:\n`;
-      for (const match of tab.catalog) {
-        const marker = match.installed ? '✓' : ' ';
-        output += `    ${marker} ${match.title.padEnd(40)} ${match.installHint}\n`;
-      }
-    }
-
-    if (tab.origin.length === 0 && tab.catalog.length === 0 && !tab.failures.length) {
-      output += `  No skill suggestions for this tab.\n`;
-    }
-
-    if (tab.failures.length > 0) {
-      for (const f of tab.failures) {
-        output += `  (discovery failed: ${f.error})\n`;
-      }
-    }
-    output += '\n';
+    output += formatTabText(tab);
   }
 
   return { stdout: output, stderr: catalogWarning, exitCode: 0 };
