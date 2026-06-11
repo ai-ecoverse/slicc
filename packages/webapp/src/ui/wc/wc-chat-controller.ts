@@ -7,7 +7,7 @@
  */
 
 import type { AgentEvent, AgentHandle, ChatMessage } from '../types.js';
-import { buildThreadChildren, messageEls } from './wc-message-view.js';
+import { daySeparatorEl, messageEls } from './wc-message-view.js';
 
 export interface WcChatControllerOptions {
   /** The `<slicc-chat-thread>` element messages render into. */
@@ -16,6 +16,14 @@ export interface WcChatControllerOptions {
   agent: AgentHandle;
   /** Notified when the agent starts/stops processing a turn. */
   onProcessingChange?: (processing: boolean) => void;
+  /**
+   * Invoked when a message reaches a stable (non-streaming) render — the
+   * dip-hydration hook. Streaming re-renders don't fire it; a message that
+   * streams fires once, on its final render.
+   */
+  onMessageRendered?: (message: ChatMessage, els: readonly HTMLElement[]) => void;
+  /** Invoked before a message's rendered elements are replaced or removed. */
+  onMessageDisposed?: (messageId: string) => void;
 }
 
 function uid(): string {
@@ -26,6 +34,8 @@ export class WcChatController {
   readonly #thread: HTMLElement;
   readonly #agent: AgentHandle;
   readonly #onProcessingChange?: (processing: boolean) => void;
+  readonly #onMessageRendered?: (message: ChatMessage, els: readonly HTMLElement[]) => void;
+  readonly #onMessageDisposed?: (messageId: string) => void;
   readonly #unsubscribe: () => void;
 
   #messages: ChatMessage[] = [];
@@ -40,6 +50,8 @@ export class WcChatController {
     this.#thread = options.thread;
     this.#agent = options.agent;
     this.#onProcessingChange = options.onProcessingChange;
+    this.#onMessageRendered = options.onMessageRendered;
+    this.#onMessageDisposed = options.onMessageDisposed;
     this.#unsubscribe = options.agent.onEvent((event) => this.#handleAgentEvent(event));
   }
 
@@ -53,11 +65,26 @@ export class WcChatController {
 
   /** Replace the whole thread with a scoop's canonical history. */
   loadMessages(messages: readonly ChatMessage[]): void {
+    for (const id of this.#els.keys()) this.#onMessageDisposed?.(id);
     this.#messages = messages.map((m) => ({ ...m }));
     this.#currentStreamId = null;
     this.#pendingDelta = '';
+    this.#flushScheduled = false;
     this.#els.clear();
-    const children = buildThreadChildren(this.#messages);
+
+    const children: HTMLElement[] = [];
+    let lastDay = '';
+    for (const message of this.#messages) {
+      const day = new Date(message.timestamp).toDateString();
+      if (day !== lastDay) {
+        children.push(daySeparatorEl(message.timestamp));
+        lastDay = day;
+      }
+      const els = messageEls(message);
+      this.#els.set(message.id, els);
+      children.push(...els);
+    }
+
     const thread = this.#thread as HTMLElement & {
       replaceContent?: (...nodes: Node[]) => void;
     };
@@ -66,6 +93,12 @@ export class WcChatController {
     // wrapper (plain `replaceChildren` would). Fall back for bare hosts.
     if (typeof thread.replaceContent === 'function') thread.replaceContent(...children);
     else thread.replaceChildren(...children);
+
+    for (const message of this.#messages) {
+      if (!message.isStreaming) {
+        this.#onMessageRendered?.(message, this.#els.get(message.id) ?? []);
+      }
+    }
     this.#scrollToBottom();
   }
 
@@ -226,10 +259,12 @@ export class WcChatController {
     const els = messageEls(message);
     this.#els.set(message.id, els);
     this.#thread.append(...els);
+    if (!message.isStreaming) this.#onMessageRendered?.(message, els);
     this.#scrollToBottom();
   }
 
   #rerenderMessage(message: ChatMessage): void {
+    this.#onMessageDisposed?.(message.id);
     const old = this.#els.get(message.id) ?? [];
     const next = messageEls(message);
     // Anchor on the old elements' real parent: `<slicc-chat-thread>`
@@ -244,6 +279,7 @@ export class WcChatController {
       this.#thread.append(...next);
     }
     this.#els.set(message.id, next);
+    if (!message.isStreaming) this.#onMessageRendered?.(message, next);
     this.#scrollToBottom();
   }
 

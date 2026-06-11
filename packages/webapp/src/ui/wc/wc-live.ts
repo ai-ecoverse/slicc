@@ -8,9 +8,10 @@
  */
 
 import { spawnKernelWorker } from '../../kernel/spawn.js';
-import type { RegisteredScoop } from '../../scoops/types.js';
+import type { RegisteredScoop, ThinkingLevel } from '../../scoops/types.js';
 import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
 import type { BootStageLogger } from '../boot/types.js';
+import { type DipInstance, disposeDips, hydrateDips } from '../dip.js';
 import { isLickChannel } from '../lick-channels.js';
 import type { OffscreenClient, OffscreenClientCallbacks } from '../offscreen-client.js';
 import type { ChatMessage } from '../types.js';
@@ -26,6 +27,36 @@ import { createWorkbenchActivator } from './wc-workbench.js';
 
 const CONE_COLOR = '#b07823';
 const SCOOP_PALETTE = ['#06b6d4', '#8b5cf6', '#f59e0b', '#10b981', '#3b82f6', '#ef4444'];
+
+/**
+ * Bridge the composer-meta thinking scale (`off…xhigh|max`) onto pi's
+ * `ThinkingLevel` (`off|minimal|low|medium|high|xhigh`) and back. The
+ * library's `max` caps at pi's `xhigh`; pi's `minimal` displays as `low`.
+ */
+const PI_FROM_META: Readonly<Record<string, ThinkingLevel>> = {
+  off: 'off',
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+  xhigh: 'xhigh',
+  max: 'xhigh',
+};
+const META_FROM_PI: Readonly<Record<string, string>> = {
+  off: 'off',
+  minimal: 'low',
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+  xhigh: 'xhigh',
+};
+
+export function thinkingLevelForAgent(metaLevel: string | undefined): ThinkingLevel | undefined {
+  return metaLevel ? PI_FROM_META[metaLevel] : undefined;
+}
+
+export function metaThinkingForScoop(level: ThinkingLevel | undefined): string {
+  return (level && META_FROM_PI[level]) ?? 'off';
+}
 
 /** Stable palette pick for a scoop chip, keyed by name. */
 export function scoopColor(scoop: Pick<RegisteredScoop, 'isCone' | 'name'>): string {
@@ -128,6 +159,7 @@ async function applyThreadContext(refs: WcShellRefs, scoop: RegisteredScoop): Pr
   refs.thread.setAttribute('context', scoop.isCone ? 'cone' : `scoop:${scoop.name}`);
   refs.thread.setAttribute('accent', scoopColor(scoop));
   refs.switcher.setAttribute('active', scoop.jid);
+  refs.composerMeta.setAttribute('thinking', metaThinkingForScoop(scoop.config?.thinkingLevel));
   try {
     const { resolveCurrentModel, resolveModelById } = await import('../provider-settings.js');
     const modelId = scoop.config?.modelId;
@@ -186,17 +218,56 @@ export async function mountWcUiLive(app: HTMLElement, log: BootStageLogger): Pro
   });
   client = host.client;
 
+  // Inline dips: assistant ```shtml blocks hydrate into sandboxed iframes on
+  // each stable message render; dip licks dispatch to the cone as the
+  // `inline` sprinkle (the legacy onDipLick local path — welcome-flow
+  // interception and follower forwarding are not wired in WC mode yet).
+  const liveClientForDips = client;
+  const dipInstances = new Map<string, DipInstance[]>();
+  const agentHandle = client.createAgentHandle();
   controller = new WcChatController({
     thread: refs.thread,
-    agent: client.createAgentHandle(),
+    agent: agentHandle,
     onProcessingChange: (processing) => {
       refs.frame.toggleAttribute('data-processing', processing);
+      refs.inputCard.querySelector('slicc-send-button')?.toggleAttribute('busy', processing);
+    },
+    onMessageDisposed: (messageId) => {
+      const instances = dipInstances.get(messageId);
+      if (instances) {
+        disposeDips(instances);
+        dipInstances.delete(messageId);
+      }
+    },
+    onMessageRendered: (message, els) => {
+      const host = els[0];
+      if (!host) return;
+      // Register unconditionally — img-dip placeholders can be pushed
+      // asynchronously into the array after the call returns.
+      dipInstances.set(
+        message.id,
+        hydrateDips(host, (action, data) => {
+          liveClientForDips.sendSprinkleLick('inline', { action, data });
+        })
+      );
     },
   });
 
   refs.inputCard.addEventListener('submit', (event) => {
     const text = submittedText(event);
     if (text) controller?.sendUserMessage(text);
+  });
+
+  // The send button morphs into a stop control while a turn is processing.
+  refs.inputCard.addEventListener('stop', () => {
+    if (controller?.processing) agentHandle.stop();
+  });
+
+  // Brain pill: cycle the scoop's thinking level (persisted by the worker).
+  refs.composerMeta.addEventListener('thinking-change', (event) => {
+    const metaLevel = (event as CustomEvent<{ thinking?: string }>).detail?.thinking;
+    const level = thinkingLevelForAgent(metaLevel);
+    if (selected && client && level) client.setScoopThinkingLevel(selected.jid, level);
   });
 
   refs.switcher.addEventListener('slicc-scoop-select', (event) => {

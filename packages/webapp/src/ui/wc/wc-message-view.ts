@@ -136,6 +136,11 @@ function dayLabel(timestamp: number): string {
   });
 }
 
+/** A `slicc-day-separator` labelled for the given timestamp's local date. */
+export function daySeparatorEl(timestamp: number): HTMLElement {
+  return el('slicc-day-separator', { label: dayLabel(timestamp) });
+}
+
 /**
  * Full thread children for a message list: a `slicc-day-separator` at each
  * local-date boundary, then the per-message elements in order.
@@ -146,7 +151,7 @@ export function buildThreadChildren(messages: readonly ChatMessage[]): HTMLEleme
   for (const message of messages) {
     const day = new Date(message.timestamp).toDateString();
     if (day !== lastDay) {
-      children.push(el('slicc-day-separator', { label: dayLabel(message.timestamp) }));
+      children.push(daySeparatorEl(message.timestamp));
       lastDay = day;
     }
     children.push(...messageEls(message));

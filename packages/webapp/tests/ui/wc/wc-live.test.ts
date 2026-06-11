@@ -12,7 +12,9 @@ installWcDomStubs();
 import type { RegisteredScoop } from '../../../src/scoops/types.js';
 import {
   createWcLiveCallbacks,
+  metaThinkingForScoop,
   scoopColor,
+  thinkingLevelForAgent,
   toSwitcherScoops,
   type WcLiveWiring,
 } from '../../../src/ui/wc/wc-live.js';
@@ -87,6 +89,22 @@ function makeWiring(options: {
     }),
   };
 }
+
+describe('thinking level bridges', () => {
+  it('maps the composer-meta scale onto pi levels, capping max at xhigh', () => {
+    expect(thinkingLevelForAgent('off')).toBe('off');
+    expect(thinkingLevelForAgent('medium')).toBe('medium');
+    expect(thinkingLevelForAgent('max')).toBe('xhigh');
+    expect(thinkingLevelForAgent('bogus')).toBeUndefined();
+    expect(thinkingLevelForAgent(undefined)).toBeUndefined();
+  });
+
+  it('maps pi levels back for display, folding minimal into low', () => {
+    expect(metaThinkingForScoop('minimal')).toBe('low');
+    expect(metaThinkingForScoop('xhigh')).toBe('xhigh');
+    expect(metaThinkingForScoop(undefined)).toBe('off');
+  });
+});
 
 describe('createWcLiveCallbacks', () => {
   it('routes status changes for the selected scoop into processing state', () => {

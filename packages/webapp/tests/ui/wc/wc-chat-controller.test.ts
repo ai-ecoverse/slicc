@@ -191,6 +191,75 @@ describe('WcChatController', () => {
   });
 });
 
+describe('WcChatController render/dispose lifecycle hooks', () => {
+  function makeTracked() {
+    const thread = document.createElement('slicc-chat-thread');
+    document.body.appendChild(thread);
+    const agent = new FakeAgent();
+    const rendered: string[] = [];
+    const disposed: string[] = [];
+    const controller = new WcChatController({
+      thread,
+      agent,
+      onMessageRendered: (message) => rendered.push(message.id),
+      onMessageDisposed: (messageId) => disposed.push(messageId),
+    });
+    return { thread, agent, controller, rendered, disposed };
+  }
+
+  it('fires rendered immediately for non-streaming appends', () => {
+    const { controller, rendered } = makeTracked();
+    controller.sendUserMessage('hello');
+    controller.addLickMessage('l1', '[Webhook Event: x]', 'webhook', Date.now());
+    expect(rendered).toHaveLength(2);
+  });
+
+  it('defers rendered until a streaming message finalizes', () => {
+    const { agent, rendered, disposed } = makeTracked();
+    agent.emit({ type: 'message_start', messageId: 'm1' });
+    expect(rendered).toEqual([]);
+    agent.emit({ type: 'content_delta', messageId: 'm1', text: 'x' });
+    expect(rendered).toEqual([]);
+    agent.emit({ type: 'content_done', messageId: 'm1' });
+    expect(rendered).toEqual(['m1']);
+    // The final render replaced the streaming elements — disposal first.
+    expect(disposed).toEqual(['m1']);
+  });
+
+  it('re-fires rendered (after disposed) for post-stream tool results', () => {
+    const { agent, rendered, disposed } = makeTracked();
+    agent.emit({ type: 'message_start', messageId: 'm1' });
+    agent.emit({ type: 'content_done', messageId: 'm1' });
+    agent.emit({ type: 'tool_use_start', messageId: 'm1', toolName: 'bash', toolInput: 'ls' });
+    agent.emit({ type: 'tool_result', messageId: 'm1', toolName: 'bash', result: 'ok' });
+    expect(rendered).toEqual(['m1', 'm1', 'm1']);
+    expect(disposed).toEqual(['m1', 'm1', 'm1']);
+  });
+
+  it('disposes everything on loadMessages and renders the new history', () => {
+    const { controller, rendered, disposed } = makeTracked();
+    controller.sendUserMessage('old');
+    rendered.length = 0;
+    controller.loadMessages([
+      { id: 'h1', role: 'user', content: 'a', timestamp: 1 },
+      { id: 'h2', role: 'assistant', content: 'b', timestamp: 2 },
+    ]);
+    expect(disposed.length).toBeGreaterThan(0);
+    expect(rendered).toEqual(['h1', 'h2']);
+  });
+
+  it('tracks loaded messages so post-load streaming updates replace in place', () => {
+    const { thread, agent, controller } = makeTracked();
+    controller.loadMessages([
+      { id: 'h1', role: 'user', content: 'a', timestamp: 1 },
+      { id: 'm1', role: 'assistant', content: 'partial', timestamp: 2, isStreaming: true },
+    ]);
+    agent.emit({ type: 'content_done', messageId: 'm1' });
+    expect(thread.querySelectorAll('slicc-agent-message')).toHaveLength(1);
+    expect(thread.querySelector('slicc-agent-message')?.hasAttribute('streaming')).toBe(false);
+  });
+});
+
 describe('WcChatController scroll pinning', () => {
   it('scrolls the thread to the bottom on append', () => {
     installWcDomStubs();
