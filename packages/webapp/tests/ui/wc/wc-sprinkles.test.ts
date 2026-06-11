@@ -9,11 +9,15 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
 
+// Registers the library elements so makeRefs gets a REAL slicc-tab-bar —
+// the tab-close regression test drives its actual event contract.
+import '@slicc/webcomponents';
 import type { WcShellRefs } from '../../../src/ui/wc/wc-shell.js';
 import {
   sprinkleNameFromId,
   sprinkleSurfaceId,
   WcSprinkleZone,
+  wireSprinkleTabClose,
 } from '../../../src/ui/wc/wc-sprinkles.js';
 
 function makeRefs(): WcShellRefs {
@@ -86,6 +90,50 @@ describe('WcSprinkleZone', () => {
     });
     expect(refs.shell.hasAttribute('open')).toBe(false);
     expect(refs.workbenchBody.getAttribute('active')).toBe('files');
+  });
+
+  it('background adds (session restore) keep the current focus', () => {
+    const refs = makeRefs();
+    const zone = new WcSprinkleZone(refs);
+    zone.callbacks().addSprinkle('pomodoro', 'Pomodoro', document.createElement('div'), undefined, {
+      background: true,
+    });
+    // The panel is open (tab + dock + surface) but nothing was focused —
+    // after a reload the `ws` URL param decides what's on screen.
+    expect(zone.isOpen('pomodoro')).toBe(true);
+    expect(tabIds(refs)).toContain('sprinkle:pomodoro');
+    expect(refs.shell.hasAttribute('open')).toBe(false);
+    expect(refs.workbenchBody.getAttribute('active')).toBe('files');
+  });
+
+  it('seeds rail launchers from the ledger and prunes unconfirmed seeds', () => {
+    const refs = makeRefs();
+    const zone = new WcSprinkleZone(refs);
+    zone.seedDockItems(['pomodoro', 'stale-uninstalled']);
+    expect(dockIds(refs)).toEqual(
+      expect.arrayContaining(['sprinkle:pomodoro', 'sprinkle:stale-uninstalled'])
+    );
+
+    // Discovery confirms pomodoro (registerSprinkle trues the title up)…
+    zone.callbacks().registerSprinkle?.('pomodoro', 'Pomodoro');
+    zone.dropUnconfirmedSeeds();
+    // …and the never-confirmed seed is pruned.
+    expect(dockIds(refs)).toContain('sprinkle:pomodoro');
+    expect(dockIds(refs)).not.toContain('sprinkle:stale-uninstalled');
+  });
+
+  it('routes the tab bar tab-close (canonical id detail) to a sprinkle close', () => {
+    // Drive the REAL component: removeTab emits `tab-close` with `{ id }`.
+    // The old handler read `detail.tabId` and silently never closed —
+    // the sprinkle lingered in the URL and reopened on the next reload.
+    const refs = makeRefs();
+    const closed: string[] = [];
+    wireSprinkleTabClose(refs.tabBar, (name) => closed.push(name));
+    (refs.tabBar as HTMLElement & { tabs: unknown }).tabs = [
+      { id: 'sprinkle:pomodoro', label: 'Pomodoro', kind: 'sprinkle', closable: true },
+    ];
+    (refs.tabBar as HTMLElement & { removeTab(id: string): void }).removeTab('sprinkle:pomodoro');
+    expect(closed).toEqual(['pomodoro']);
   });
 
   it('re-adding replaces the surface content in place', () => {

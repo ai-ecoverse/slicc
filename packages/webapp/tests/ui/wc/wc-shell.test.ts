@@ -186,14 +186,23 @@ describe('mountWcUiPreview', () => {
     expect(requestFullscreen).toHaveBeenCalledTimes(1);
   });
 
-  it('switches the active surface on tab select', () => {
+  it('switches the active surface on tab select (canonical detail field is id)', () => {
     const root = mount();
     const header = root.querySelector('slicc-workbench-header') as HTMLElement;
     const body = root.querySelector('slicc-workbench-body') as HTMLElement;
-    header.dispatchEvent(
-      new CustomEvent('tab-select', { bubbles: true, detail: { tabId: 'files' } })
-    );
-    expect(body.getAttribute('active')).toBe('files');
+    // Drive the REAL tab bar so the event carries the library's canonical
+    // `{ id }` detail — a synthetic `{ tabId }` event would mask the
+    // field-name regression that broke tab clicks in the live shell.
+    const tabBar = root.querySelector('slicc-tab-bar') as HTMLElement & {
+      tabs: unknown;
+      selectTab(id: string): void;
+    };
+    tabBar.tabs = [
+      { id: 'sprinkle:hero', label: 'hero', kind: 'sprinkle' },
+      { id: 'sprinkle:dash', label: 'dash', kind: 'sprinkle' },
+    ];
+    tabBar.selectTab('sprinkle:dash');
+    expect(body.getAttribute('active')).toBe('sprinkle:dash');
   });
 
   it('applyShellContext swaps the shader program and the --ctx accent per mood', async () => {

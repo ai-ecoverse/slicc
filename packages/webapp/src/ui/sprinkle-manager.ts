@@ -27,6 +27,14 @@ export interface AddSprinkleOptions {
    * chat. The user clicks the pulsing icon when ready.
    */
   attention?: boolean;
+  /**
+   * Open the panel without activating it in the layout. Used by session
+   * restore: the page's own view state (e.g. the `ws` URL param) decides
+   * what is focused after a reload — restoring panels must not steal it.
+   * Unlike `attention`, the sprinkle still counts as user-opened for
+   * persistence (it stays in the `sprinkles` URL param).
+   */
+  background?: boolean;
 }
 
 export interface SprinkleAddOptions extends AddSprinkleOptions {
@@ -151,6 +159,23 @@ export function writeOpenSprinklesToUrl(names: readonly string[]): void {
  * in attention mode so the rail icon shows up.
  */
 const KNOWN_SPRINKLES_KEY = 'slicc-known-sprinkles';
+
+/**
+ * Names of every sprinkle this profile has ever discovered (the persistent
+ * known-sprinkles ledger). Layouts seed their rail launchers from this at
+ * boot so the rail isn't empty while the (async, VFS-backed) discovery
+ * runs — discovery then trues titles up and prunes uninstalled entries.
+ */
+export function readKnownSprinkleNames(): string[] {
+  try {
+    const raw = localStorage.getItem(KNOWN_SPRINKLES_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
 /**
  * One-shot consumption ledger for `data-sprinkle-autoopen` sprinkles.
  * Once a sprinkle has been auto-opened (via the first-run
@@ -431,7 +456,10 @@ export class SprinkleManager {
       if (urlNames !== null) {
         for (const name of urlNames) {
           try {
-            await this.open(name);
+            // Background: restoring reopens the panel but must not focus
+            // it — what's on screen after a reload is the page's own
+            // view state (the `ws` URL param), not the open set.
+            await this.open(name, undefined, { background: true });
           } catch {
             log.warn('Failed to restore sprinkle', { name });
           }
@@ -452,7 +480,7 @@ export class SprinkleManager {
             const names: string[] = JSON.parse(raw);
             for (const name of names) {
               try {
-                await this.open(name);
+                await this.open(name, undefined, { background: true });
               } catch {
                 log.warn('Failed to restore sprinkle', { name });
               }
@@ -524,14 +552,7 @@ export class SprinkleManager {
   }
 
   private loadKnownSprinkles(): Set<string> {
-    try {
-      const raw = localStorage.getItem(KNOWN_SPRINKLES_KEY);
-      if (!raw) return new Set();
-      const arr = JSON.parse(raw);
-      return Array.isArray(arr) ? new Set(arr.filter((x) => typeof x === 'string')) : new Set();
-    } catch {
-      return new Set();
-    }
+    return new Set(readKnownSprinkleNames());
   }
 
   /**

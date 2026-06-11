@@ -52,9 +52,46 @@ export class WcSprinkleZone {
   readonly #tabs = new Map<string, TabDescriptor>();
   readonly #dockItems = new Map<string, DockItemDescriptor>();
   readonly #surfaces = new Map<string, HTMLElement>();
+  /** Names seeded from the known-sprinkles ledger, not yet confirmed by discovery. */
+  readonly #seeded = new Set<string>();
 
   constructor(refs: WcShellRefs) {
     this.#refs = refs;
+  }
+
+  /**
+   * Pre-populate rail launchers (label = name) from the known-sprinkles
+   * ledger so the rail isn't empty while VFS discovery runs. Discovery
+   * trues up titles via `registerSprinkle`; {@link dropUnconfirmedSeeds}
+   * removes seeds discovery didn't confirm (uninstalled sprinkles).
+   */
+  seedDockItems(names: readonly string[]): void {
+    let changed = false;
+    for (const name of names) {
+      if (this.#dockItems.has(name)) continue;
+      this.#seeded.add(name);
+      this.#dockItems.set(name, {
+        id: sprinkleSurfaceId(name),
+        icon: 'sparkles',
+        label: name,
+        kind: 'sprinkle',
+      });
+      changed = true;
+    }
+    if (changed) this.#sync();
+  }
+
+  /** Remove seeded launchers the completed discovery did not confirm. */
+  dropUnconfirmedSeeds(): void {
+    let changed = false;
+    for (const name of this.#seeded) {
+      if (!this.#surfaces.has(name)) {
+        this.#dockItems.delete(name);
+        changed = true;
+      }
+    }
+    this.#seeded.clear();
+    if (changed) this.#sync();
   }
 
   callbacks(): SprinkleManagerCallbacks {
@@ -88,7 +125,9 @@ export class WcSprinkleZone {
     this.#tabs.set(name, { id, label: title, kind: 'sprinkle', closable: true });
     this.#ensureDockItem(name, title);
     this.#sync();
-    if (!options?.attention) this.#activate(id);
+    // Background adds (session restore) keep the current focus: what's on
+    // screen after a reload is the `ws` URL param's call, not the open set.
+    if (!options?.attention && !options?.background) this.#activate(id);
   }
 
   #remove(name: string, opts: { keepDockItem: boolean }): void {
@@ -109,6 +148,8 @@ export class WcSprinkleZone {
   }
 
   #ensureDockItem(name: string, title: string): void {
+    // Discovery (or an open) confirmed this name — it's no longer a seed.
+    this.#seeded.delete(name);
     this.#dockItems.set(name, {
       id: sprinkleSurfaceId(name),
       icon: 'sparkles',
@@ -172,7 +213,10 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
   const { loadSprinkleStyles } = await import('../legacy-styles.js');
   await loadSprinkleStyles();
 
-  const { SprinkleManager } = await import('../sprinkle-manager.js');
+  const { SprinkleManager, readKnownSprinkleNames } = await import('../sprinkle-manager.js');
+  // Instant rail: launchers for every sprinkle this profile has ever seen,
+  // before the (VFS-backed, kernel-gated) discovery resolves.
+  zone.seedDockItems(readKnownSprinkleNames());
   const { installSprinkleManagerHandlerOverChannel } = await import(
     '../../scoops/sprinkle-bridge-channel.js'
   );
@@ -227,22 +271,35 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
     });
   }
 
-  // Closing a sprinkle tab closes the sprinkle; clicking a dock launcher for
-  // a registered-but-closed sprinkle opens it.
-  refs.tabBar.addEventListener('tab-close', (event) => {
-    const name = sprinkleNameFromId((event as CustomEvent<{ tabId?: string }>).detail?.tabId);
-    if (name) manager.close(name);
-  });
+  // Closing a sprinkle tab closes the sprinkle; clicking a dock launcher
+  // routes through `activate` so an attention-surfaced sprinkle is promoted
+  // to user-opened (and persists) and a closed one reopens.
+  wireSprinkleTabClose(refs.tabBar, (name) => manager.close(name));
   refs.dock.addEventListener('slicc-dock-select', (event) => {
     const name = sprinkleNameFromId((event as CustomEvent<{ id?: string }>).detail?.id);
-    if (name && !zone.isOpen(name)) {
-      manager.open(name).catch((err) => log.error('WC sprinkle open failed', err));
+    if (name) {
+      manager.activate(name).catch((err) => log.error('WC sprinkle activate failed', err));
     }
   });
 
   await manager.refresh();
+  zone.dropUnconfirmedSeeds();
   await manager.restoreOpenSprinkles().catch((err) => {
     log.warn('WC shell: failed to restore open sprinkles', err);
   });
   return { manager, zone };
+}
+
+/**
+ * Route the tab bar's canonical `tab-close` (detail field `id` — the child
+ * tab's own raw event uses `tabId`, the bar re-emits with `id`) to a sprinkle
+ * close. Without the manager-side close, the tab disappears from the strip
+ * but the sprinkle stays open — it lingers in the `sprinkles` URL param and
+ * reopens on the next reload.
+ */
+export function wireSprinkleTabClose(tabBar: HTMLElement, close: (name: string) => void): void {
+  tabBar.addEventListener('tab-close', (event) => {
+    const name = sprinkleNameFromId((event as CustomEvent<{ id?: string }>).detail?.id);
+    if (name) close(name);
+  });
 }

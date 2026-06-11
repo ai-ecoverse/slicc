@@ -6,6 +6,7 @@ import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { createRemoteSprinkleVfs } from '../../src/kernel/remote-sprinkle-vfs.js';
 import type { LickEvent } from '../../src/scoops/lick-manager.js';
 import {
+  readKnownSprinkleNames,
   readOpenSprinklesFromUrl,
   SprinkleManager,
   writeOpenSprinklesToUrl,
@@ -720,6 +721,33 @@ describe('SprinkleManager', () => {
       const params = new URLSearchParams(window.location.search);
       expect(params.has('sprinkles')).toBe(false);
       expect(params.get('detached')).toBe('1');
+    });
+
+    it('restoreOpenSprinkles reopens URL panels in BACKGROUND (no focus steal) yet persisted', async () => {
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>D</title><div>hi</div>');
+      window.history.replaceState(null, '', '/?sprinkles=dash');
+      await mgr.refresh();
+      await mgr.restoreOpenSprinkles();
+
+      // The layout receives background:true — restoring must not activate
+      // the panel (what's focused after a reload is the ws param's call).
+      const call = addSprinkle.mock.calls.find((c) => c[0] === 'dash');
+      expect(call?.[4]).toMatchObject({ background: true });
+      // Unlike attention, a background restore still counts as user-opened:
+      // the name stays in the URL for the NEXT reload.
+      await Promise.resolve();
+      expect(urlSprinklesParam()).toBe('dash');
+    });
+
+    it('readKnownSprinkleNames exposes the discovery ledger for rail seeding', async () => {
+      expect(readKnownSprinkleNames()).toEqual([]);
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>D</title><div>hi</div>');
+      window.history.replaceState(null, '', '/');
+      await mgr.refresh();
+      // The plain-URL restore runs surfaceUnseenSprinkles, which persists
+      // the known-sprinkles ledger the rail seeds from.
+      await mgr.restoreOpenSprinkles();
+      expect(readKnownSprinkleNames()).toContain('dash');
     });
 
     it('open() writes the sprinkle name to the URL (coalesced microtask flush)', async () => {

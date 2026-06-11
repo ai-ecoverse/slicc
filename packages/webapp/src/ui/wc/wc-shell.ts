@@ -252,7 +252,9 @@ function wireTabsToBody(
   onSurfaceActivate?: (surfaceId: string) => void
 ): void {
   header.addEventListener('tab-select', (event) => {
-    const tabId = (event as CustomEvent<{ tabId: string }>).detail?.tabId;
+    // The library's canonical `tab-select` detail field is `id`
+    // (TabEventDetail) — NOT `tabId`, which is the child tab's raw event.
+    const tabId = (event as CustomEvent<{ id?: string }>).detail?.id;
     if (!tabId) return;
     body.setAttribute('active', tabId);
     onSurfaceActivate?.(tabId);
