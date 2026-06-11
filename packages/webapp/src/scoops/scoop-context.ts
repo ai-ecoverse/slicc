@@ -880,6 +880,36 @@ export class ScoopContext {
     return this.agent?.state?.messages ? structuredClone(this.agent.state.messages) : [];
   }
 
+  /**
+   * 0..1 estimate of how full the model's context window is, from the LAST
+   * assistant turn's reported usage — `input + cacheRead` is the prompt the
+   * model actually saw (output is what it added). 0 before the first turn.
+   */
+  getContextFill(): number {
+    const messages = this.agent?.state?.messages ?? [];
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i] as {
+        role?: string;
+        usage?: { input: number; output: number; cacheRead: number };
+      };
+      if (msg.role !== 'assistant' || !msg.usage) continue;
+      const used = msg.usage.input + msg.usage.cacheRead + msg.usage.output;
+      let window = 200_000;
+      try {
+        const model = this.scoop.config?.modelId
+          ? resolveModelById(this.scoop.config.modelId)
+          : resolveCurrentModel();
+        if (typeof model.contextWindow === 'number' && model.contextWindow > 0) {
+          window = model.contextWindow;
+        }
+      } catch {
+        // Model resolution is best-effort here; the default window stands.
+      }
+      return Math.min(1, used / window);
+    }
+    return 0;
+  }
+
   /** Get the session ID used for agent-sessions DB persistence. */
   getSessionId(): string {
     return this.sessionId;

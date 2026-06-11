@@ -1,5 +1,6 @@
 import { define } from '../internal/define.js';
 import { append, h } from '../internal/dom.js';
+import { hasIcon, iconEl } from '../internal/icons.js';
 
 /**
  * Scoped, document-level stylesheet for `<slicc-action-row>`. Light-DOM
@@ -144,7 +145,9 @@ const TONES = new Set(['ink', 'vi', 'am', 'cy', 'gh']);
  * Clicking the header toggles `[open]` and fires `slicc-action-row-toggle`.
  *
  * @attr open - boolean; expands the body and rotates the chevron (prototype `.act.open`)
- * @attr icon - glyph character for the square chip (e.g. `✎`, `◳`, `✓`, `⎇`)
+ * @attr icon - chip glyph: a lucide icon name (e.g. `git-branch`, `terminal`)
+ *   renders as a live `<svg>`; any other value renders as a text character
+ *   (the prototype's `✎`, `◳`, `✓`, `⎇` chips)
  * @attr tone - chip tone: `ink` (default) | `vi` | `am` | `cy` | `gh`
  * @attr label - header label text (escaped); falls back to slotted/default content
  * @attr result - right-aligned result badge text (escaped); hidden when empty
@@ -302,7 +305,14 @@ export class SliccActionRow extends HTMLElement {
 
     const tone = this.tone;
     this.#icon.className = `slicc-act__ic${tone === 'ink' ? '' : ` ${tone}`}`;
-    this.#icon.textContent = this.icon ?? '';
+    // A lucide name renders as a live <svg>; anything else stays a text
+    // glyph (the prototype's `$` / `✎` / `⚙` chips keep working).
+    const icon = this.icon ?? '';
+    if (icon && hasIcon(icon)) {
+      this.#icon.replaceChildren(iconEl(icon, { size: 12 }));
+    } else {
+      this.#icon.textContent = icon;
+    }
 
     // Only overwrite the label region when an explicit attribute is present,
     // so slotted (default-slot) content survives re-syncs.

@@ -121,11 +121,20 @@ describe('buildThreadChildren', () => {
     expect(agents.some((a) => a.hasAttribute('streaming'))).toBe(true);
   });
 
-  it('renders tool calls as action rows labelled by tool name', () => {
+  it('renders every tool call as an action row (3+ runs collapse into clusters)', () => {
     const toolCallCount = fixture.reduce((n, m) => n + (m.toolCalls?.length ?? 0), 0);
-    const rows = children.filter((c) => c.tagName.toLowerCase() === 'slicc-action-row');
+    const host = document.createElement('div');
+    host.append(...buildThreadChildren(fixture));
+    // Rows inside clusters count too — querySelectorAll pierces the wrapper.
+    const rows = host.querySelectorAll('slicc-action-row');
     expect(rows.length).toBe(toolCallCount);
-    expect(rows.some((r) => r.getAttribute('label')?.startsWith('bash'))).toBe(true);
+    // Titles are human phrases, never function-call names.
+    const labels = [...rows].map((r) => r.getAttribute('label') ?? '');
+    expect(labels.some((l) => l === "Use Sliccy's computer")).toBe(true);
+    expect(labels.every((l) => !/^(bash|read_file|write_file|edit_file)\b/.test(l))).toBe(true);
+    // Any message with 3+ calls renders them behind a slicc-tool-cluster.
+    const clustered = fixture.filter((m) => (m.toolCalls?.length ?? 0) >= 3);
+    expect(host.querySelectorAll('slicc-tool-cluster').length).toBe(clustered.length);
   });
 
   it('renders the delegation as a delegation line followed by the instructions', () => {
@@ -192,6 +201,106 @@ describe('collateLickMessages', () => {
     collateLickMessages([first, lick('b', 'cron', 'two')]);
     expect(first.lickCount).toBeUndefined();
     expect(first.content).toBe('one');
+  });
+});
+
+describe('tool presentation', () => {
+  function call(name: string, input: unknown, result?: string): ChatMessage {
+    return {
+      id: `m-${name}`,
+      role: 'assistant',
+      content: 'done',
+      timestamp: 1,
+      toolCalls: [{ id: 't1', name, input, result }],
+    };
+  }
+
+  it('titles tools as human phrases with fitting lucide icons', () => {
+    const cases: Array<[string, unknown, string, string]> = [
+      ['bash', { command: 'git push origin main' }, "Use Sliccy's computer", 'git-branch'],
+      ['bash', { command: 'FOO=1 sudo npm install' }, "Use Sliccy's computer", 'package'],
+      ['bash', { command: 'frobnicate --wat' }, "Use Sliccy's computer", 'terminal'],
+      ['read_file', { path: '/workspace/CLAUDE.md' }, 'Read CLAUDE.md', 'file-text'],
+      ['write_file', { path: '/tmp/a.ts', content: 'x' }, 'Write a.ts', 'file-plus'],
+      ['edit_file', { path: '/tmp/a.ts' }, 'Edit a.ts', 'file-pen'],
+      ['send_message', { message: 'hi' }, 'Send a message to Sliccy', 'message-circle'],
+      ['feed_scoop', { name: 'pomodoro' }, 'Feed the pomodoro scoop', 'utensils'],
+      ['web_search', { query: 'x' }, 'Web search', 'wrench'],
+    ];
+    for (const [name, input, title, icon] of cases) {
+      const [, row] = messageEls(call(name, input, 'ok'));
+      expect(row.getAttribute('label'), name).toBe(title);
+      expect(row.getAttribute('icon'), name).toBe(icon);
+    }
+  });
+
+  it('bash bodies render terminal-style: command + output, dark classes', () => {
+    const [, row] = messageEls(call('bash', { command: 'ls -la' }, 'total 42'));
+    const body = row.querySelector('.wcmsg-bash') as HTMLElement;
+    expect(body).toBeTruthy();
+    expect(body.querySelector('.wcmsg-cmd')?.textContent).toBe('$ ls -la');
+    expect(body.querySelector('.wcmsg-out')?.textContent).toBe('total 42');
+  });
+
+  it('a registered slicc-bash-renderer-<cmd> takes over the bash body', () => {
+    class GitRenderer extends HTMLElement {}
+    if (!customElements.get('slicc-bash-renderer-git')) {
+      customElements.define('slicc-bash-renderer-git', GitRenderer);
+    }
+    const [, row] = messageEls(call('bash', { command: 'git status' }, 'On branch main'));
+    const custom = row.querySelector('slicc-bash-renderer-git') as HTMLElement & {
+      command?: string;
+      output?: string;
+    };
+    expect(custom).toBeTruthy();
+    expect(custom.getAttribute('command')).toBe('git status');
+    expect(custom.output).toBe('On branch main');
+  });
+
+  it('edit bodies show old/new with the diff classes; writes show added content', () => {
+    const [, editRow] = messageEls(
+      call('edit_file', { path: '/a.ts', old_string: 'before', new_string: 'after' }, 'ok')
+    );
+    expect(editRow.querySelector('.del')?.textContent).toBe('before');
+    expect(editRow.querySelector('.add')?.textContent).toBe('after');
+
+    const [, writeRow] = messageEls(call('write_file', { path: '/a.ts', content: 'body' }, 'ok'));
+    expect(writeRow.querySelector('.add')?.textContent).toBe('body');
+    expect(writeRow.textContent).toContain('/a.ts');
+  });
+
+  it('clusters 3+ tool calls (open while streaming, collapsed when settled)', () => {
+    const calls = [1, 2, 3].map((i) => ({
+      id: `t${i}`,
+      name: 'bash',
+      input: { command: `step ${i}` },
+      result: 'ok',
+    }));
+    const settled: ChatMessage = {
+      id: 'm-c',
+      role: 'assistant',
+      content: 'done',
+      timestamp: 1,
+      toolCalls: calls,
+    };
+    const [, cluster] = messageEls(settled);
+    expect(cluster.tagName.toLowerCase()).toBe('slicc-tool-cluster');
+    expect(cluster.getAttribute('count')).toBe('3');
+    expect(cluster.hasAttribute('open')).toBe(false);
+    expect(cluster.querySelectorAll('slicc-action-row')).toHaveLength(3);
+
+    const streaming = { ...settled, id: 'm-s', isStreaming: true };
+    const [, live] = messageEls(streaming);
+    expect(live.hasAttribute('open')).toBe(true);
+
+    // Two calls stay flat — no cluster wrapper.
+    const flat: ChatMessage = { ...settled, id: 'm-f', toolCalls: calls.slice(0, 2) };
+    const els = messageEls(flat);
+    expect(els.map((e) => e.tagName.toLowerCase())).toEqual([
+      'slicc-agent-message',
+      'slicc-action-row',
+      'slicc-action-row',
+    ]);
   });
 });
 

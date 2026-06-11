@@ -29,6 +29,9 @@ export interface ScoopDescriptor {
   label?: string;
   /** Eye state forwarded to the pill (`open` | `none` | `dead`). */
   eyes?: 'open' | 'none' | 'dead';
+  /** 0–100 context-window fullness forwarded to the pill (`fill` — the
+   *  pupils dilate as the scoop's context fills up). */
+  fill?: number;
   /** Marks an ephemeral (auto-spawned, transient) scoop chip. */
   ephemeral?: boolean;
 }
@@ -365,6 +368,10 @@ export class SliccScoopSwitcher extends HTMLElement {
         type,
         color: s.color ? s.color : false,
         eyes,
+        fill:
+          typeof s.fill === 'number' && Number.isFinite(s.fill)
+            ? String(Math.round(Math.min(100, Math.max(0, s.fill))))
+            : false,
         label,
         active: isActive,
         style: `--h:${hue}`,

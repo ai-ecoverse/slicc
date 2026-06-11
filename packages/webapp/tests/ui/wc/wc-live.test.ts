@@ -91,6 +91,15 @@ function makeWiring(options: {
   };
 }
 
+describe('toSwitcherScoops context fill', () => {
+  it('maps 0..1 fills onto the pill 0-100 scale, omitting unknown scoops', () => {
+    const fills = new Map([[cone.jid, 0.42]]);
+    const chips = toSwitcherScoops([cone, scoop({})], undefined, fills);
+    expect(chips.find((c) => c.key === cone.jid)?.fill).toBe(42);
+    expect(chips.find((c) => c.key === 'scoop-1')?.fill).toBeUndefined();
+  });
+});
+
 describe('thinking level bridges', () => {
   it('maps the composer-meta scale onto pi levels, capping max at xhigh', () => {
     expect(thinkingLevelForAgent('off')).toBe('off');

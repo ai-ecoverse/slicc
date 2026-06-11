@@ -21,6 +21,7 @@ import type {
   ScoopMessagesReplacedMsg,
   ScoopStatusMsg,
   ScoopTranscriptMsg,
+  SessionStatsMsg,
   StateSnapshotMsg,
   TrayFollowerStatusSnapshot,
   TrayLeaderStatusSnapshot,
@@ -51,6 +52,14 @@ const _assertLickWireCarrier: (
   e: LickEvent
 ) => Pick<ForwardedLickEvent, 'type' | 'timestamp' | 'body'> = (e) => e;
 void _assertLickWireCarrier;
+
+/** Stats bundle the worker computes on demand: cost + per-scoop context fill. */
+export interface SessionStats {
+  /** Total session cost (USD) across all scoops, dropped ones included. */
+  totalCost: number;
+  /** Per-scoop context-window fill, 0..1 (last assistant turn's usage). */
+  fills: Array<{ jid: string; fill: number }>;
+}
 
 export interface OffscreenClientCallbacks {
   onStatusChange: (scoopJid: string, status: ScoopTabState['status']) => void;
@@ -101,6 +110,7 @@ export class OffscreenClient implements KernelClientFacade {
    * (or `''` on timeout) when a `scoop-transcript` envelope arrives.
    */
   private pendingTranscriptRequests = new Map<string, (transcript: string) => void>();
+  private pendingStatsRequests = new Map<string, (stats: SessionStats) => void>();
   /**
    * KernelTransport — defaults to the chrome.runtime adapter.
    * A `MessageChannel`-backed transport can be passed via the
@@ -406,6 +416,24 @@ export class OffscreenClient implements KernelClientFacade {
     return result;
   }
 
+  /**
+   * Session-stats pull: total session cost + per-scoop context-window
+   * fill. Resolves `null` on timeout (the UI keeps its last values).
+   */
+  async getSessionStats(): Promise<SessionStats | null> {
+    const requestId = `st-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const reply = new Promise<SessionStats>((resolve) => {
+      this.pendingStatsRequests.set(requestId, resolve);
+    });
+    this.send({ type: 'request-session-stats', requestId } as PanelToOffscreenMessage);
+    const result = await Promise.race([
+      reply,
+      new Promise<SessionStats | null>((resolve) => setTimeout(() => resolve(null), 5000)),
+    ]);
+    this.pendingStatsRequests.delete(requestId);
+    return result;
+  }
+
   /** Request full state from offscreen. Retries until state arrives. */
   requestState(): void {
     this.send({ type: 'request-state' });
@@ -598,6 +626,16 @@ export class OffscreenClient implements KernelClientFacade {
         if (resolve) {
           this.pendingTranscriptRequests.delete(m.requestId);
           resolve(m.transcript);
+        }
+        break;
+      }
+
+      case 'session-stats': {
+        const m = msg as SessionStatsMsg;
+        const resolve = this.pendingStatsRequests.get(m.requestId);
+        if (resolve) {
+          this.pendingStatsRequests.delete(m.requestId);
+          resolve({ totalCost: m.totalCost, fills: m.fills });
         }
         break;
       }

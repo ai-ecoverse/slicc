@@ -77,6 +77,18 @@ describe('slicc-scoop-switcher', () => {
       expect(researcher.getAttribute('eyes')).toBe('none');
     });
 
+    it('forwards the context fill onto the pill (clamped 0-100), omitting it otherwise', () => {
+      const el = mount([
+        { key: 'cone', type: 'cone', label: 'sliccy', fill: 42 },
+        { key: 'hot', type: 'scoop', label: 'hot', fill: 250 },
+        { key: 'fresh', type: 'scoop', label: 'fresh' },
+      ]);
+      const byKey = (k: string) => chips(el).find((c) => c.dataset.k === k);
+      expect(byKey('cone')?.getAttribute('fill')).toBe('42');
+      expect(byKey('hot')?.getAttribute('fill')).toBe('100');
+      expect(byKey('fresh')?.hasAttribute('fill')).toBe(false);
+    });
+
     it('marks an ephemeral scoop chip with the ephemeral class', () => {
       const el = mount([
         ROSTER[0],

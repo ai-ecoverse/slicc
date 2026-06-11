@@ -88,23 +88,31 @@ function eyesFor(status: ScoopStatus | undefined): SwitcherScoop['eyes'] {
 /** Map registered scoops onto switcher chip descriptors (cone first). */
 export function toSwitcherScoops(
   scoops: readonly RegisteredScoop[],
-  statuses?: ReadonlyMap<string, ScoopStatus>
+  statuses?: ReadonlyMap<string, ScoopStatus>,
+  fills?: ReadonlyMap<string, number>
 ): SwitcherScoop[] {
   return [...scoops]
     .sort((a, b) => Number(b.isCone) - Number(a.isCone))
-    .map((scoop) => ({
-      key: scoop.jid,
-      type: scoop.isCone ? 'cone' : 'scoop',
-      color: scoopColor(scoop),
-      label: scoop.isCone ? 'sliccy' : scoop.name,
-      eyes: eyesFor(statuses?.get(scoop.jid)),
-    }));
+    .map((scoop) => {
+      const fill = fills?.get(scoop.jid);
+      return {
+        key: scoop.jid,
+        type: scoop.isCone ? 'cone' : 'scoop',
+        color: scoopColor(scoop),
+        label: scoop.isCone ? 'sliccy' : scoop.name,
+        eyes: eyesFor(statuses?.get(scoop.jid)),
+        // The chip pupils dilate with context fullness (pill `fill` 0-100).
+        fill: typeof fill === 'number' ? Math.round(fill * 100) : undefined,
+      };
+    });
 }
 
 export interface WcLiveWiring {
   refs: WcShellRefs;
   /** Live per-scoop status, written by the callbacks on every broadcast. */
   statuses: Map<string, ScoopStatus>;
+  /** Per-scoop context-window fill (0..1), refreshed by the stats poller. */
+  fills: Map<string, number>;
   getController(): WcChatController | null;
   getClient(): OffscreenClient | null;
   getSelected(): RegisteredScoop | null;
@@ -121,7 +129,11 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
   const refreshScoops = (): void => {
     const client = wiring.getClient();
     if (client) {
-      wiring.refs.switcher.scoops = toSwitcherScoops(client.getScoops(), wiring.statuses);
+      wiring.refs.switcher.scoops = toSwitcherScoops(
+        client.getScoops(),
+        wiring.statuses,
+        wiring.fills
+      );
     }
   };
   /** Read-only frozen-session view — selection is intentionally empty there. */
@@ -369,6 +381,7 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     wiring: {
       refs,
       statuses: new Map(),
+      fills: new Map(),
       getController: () => controller,
       getClient: () => client,
       getSelected: () => selected,
@@ -551,6 +564,29 @@ function wireWcComposer(deps: {
   });
 }
 
+/**
+ * Session-stats poller: the floatbar cost counter and the chip pupils'
+ * context-fill, pulled from the worker every poll tick and after each
+ * finished turn. Stats are decorative — a timeout keeps the last values.
+ */
+function wireWcStats(wiring: WcLiveWiring, client: OffscreenClient): () => void {
+  const refresh = (): void => {
+    void client.getSessionStats?.().then((stats) => {
+      if (!stats) return;
+      wiring.refs.floatbar.setAttribute('spent', stats.totalCost.toFixed(2));
+      wiring.fills.clear();
+      for (const f of stats.fills) wiring.fills.set(f.jid, f.fill);
+      wiring.refs.switcher.scoops = toSwitcherScoops(
+        client.getScoops(),
+        wiring.statuses,
+        wiring.fills
+      );
+    });
+  };
+  setInterval(refresh, 15_000);
+  return refresh;
+}
+
 export function attachWcClient(
   boot: WcShellBoot,
   client: OffscreenClient,
@@ -559,14 +595,19 @@ export function attachWcClient(
 ): void {
   const { refs } = boot;
   boot.setClient(client);
-  // Turn-finished hook: regenerate the suggested composer placeholder from
-  // the fresh conversation (assigned by wireWcComposer once its module loads).
+  // Turn-finished hooks: the suggested composer placeholder (assigned by
+  // wireWcComposer once its module loads) + a stats refresh.
   let refreshPlaceholder: (() => void) | null = null;
+  const refreshStats = wireWcStats(boot.wiring, client);
   const triggerPlaceholder = (): void => {
     refreshPlaceholder?.();
   };
-  const { controller, agentHandle } = createWcController(refs, client, triggerPlaceholder);
+  const { controller, agentHandle } = createWcController(refs, client, () => {
+    triggerPlaceholder();
+    refreshStats();
+  });
   boot.setController(controller);
+  boot.onClientReady(refreshStats);
 
   // Page-side VFS: the worker owns the (OPFS) filesystem — page reads and
   // writes route through its VfsRpcHost. Opening OPFS from the page would

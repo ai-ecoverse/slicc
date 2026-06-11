@@ -58,6 +58,10 @@ function makeFakeClient() {
         throw new Error('no transport in tests');
       },
     }),
+    getSessionStats: vi.fn(async () => ({
+      totalCost: 1.234,
+      fills: [{ jid: 'cone-1', fill: 0.5 }],
+    })),
   };
   return {
     client: client as unknown as OffscreenClient,
@@ -150,6 +154,22 @@ describe('prepareWcShell + attachWcClient', () => {
     expect(boot.refs.thread.querySelector('slicc-agent-message')?.textContent).toContain(
       'streaming works'
     );
+  });
+
+  it('refreshes the cost counter and chip pupils from session stats on ready', async () => {
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const boot = prepareWcShell(root, 'test · wc');
+    const fake = makeFakeClient();
+    attachWcClient(boot, fake.client, log);
+
+    boot.wiring.notifyReady?.();
+    await vi.waitFor(() => {
+      expect(boot.refs.floatbar.getAttribute('spent')).toBe('1.23');
+    });
+    // The cone chip's pupils dilate with its context fill (0.5 → fill 50).
+    expect(boot.wiring.fills.get('cone-1')).toBe(0.5);
+    expect(boot.refs.switcher.scoops.find((s) => s.key === 'cone-1')?.fill).toBe(50);
   });
 
   it('onClientReady fires listeners on notifyReady, and immediately when already ready', () => {

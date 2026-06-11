@@ -105,7 +105,9 @@ describe('WcChatController', () => {
     agent.emit({ type: 'message_start', messageId: 'm1' });
     agent.emit({ type: 'tool_use_start', messageId: 'm1', toolName: 'bash', toolInput: 'ls -la' });
     let row = thread.querySelector('slicc-action-row');
-    expect(row?.getAttribute('label')).toBe('bash ls -la');
+    // Tool titles are human phrases, never raw function names.
+    expect(row?.getAttribute('label')).toBe("Use Sliccy's computer");
+    expect(row?.getAttribute('icon')).toBe('folder-open');
     expect(row?.getAttribute('result')).toBe('…');
 
     agent.emit({ type: 'tool_result', messageId: 'm1', toolName: 'bash', result: 'total 42' });

@@ -10,6 +10,7 @@ export { SliccDelegationLine } from './chat/slicc-delegation-line.js';
 export { SliccDip } from './chat/slicc-dip.js';
 export { SliccHandoffCard } from './chat/slicc-handoff-card.js';
 export { SliccLickCard } from './chat/slicc-lick-card.js';
+export { SliccToolCluster } from './chat/slicc-tool-cluster.js';
 export { SliccUserMessage } from './chat/slicc-user-message.js';
 export { SliccComposer } from './composer/slicc-composer.js';
 export { SliccComposerMeta } from './composer/slicc-composer-meta.js';

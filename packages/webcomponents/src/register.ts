@@ -9,6 +9,7 @@ import './chat/slicc-delegation-line.js';
 import './chat/slicc-dip.js';
 import './chat/slicc-handoff-card.js';
 import './chat/slicc-lick-card.js';
+import './chat/slicc-tool-cluster.js';
 import './chat/slicc-user-message.js';
 import './composer/slicc-composer-meta.js';
 import './composer/slicc-composer.js';
