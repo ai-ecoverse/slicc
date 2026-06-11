@@ -87,6 +87,20 @@ describe('mountWcUiPreview', () => {
     expect(shell.hasAttribute('open')).toBe(false);
   });
 
+  it('live floats carry no logo — the cone chip is the brand mark', async () => {
+    const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const refs = mountWcShell(host, {
+      messages: [],
+      scoops: [],
+      floatLabel: 'live',
+      placeholder: 'p',
+    });
+    expect(host.querySelector('slicc-logo')).toBeNull();
+    expect(refs.switcher).toBeTruthy();
+  });
+
   it('kills the UA body margin so the frame sits flush', () => {
     mount();
     const css = document.getElementById('slicc-wcui-style')?.textContent ?? '';

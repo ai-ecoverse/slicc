@@ -10,11 +10,13 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
 
+import { FsError } from '../../../src/fs/types.js';
 import { VirtualFS } from '../../../src/fs/virtual-fs.js';
 import {
   type FrozenSessionIndexEntry,
   frozenCard,
-  refreshFreezerCards,
+  readFreezerEntries,
+  renderFreezerCards,
   thawFrozenSession,
 } from '../../../src/ui/wc/wc-freezer.js';
 
@@ -58,27 +60,40 @@ describe('frozenCard', () => {
   });
 });
 
-describe('refreshFreezerCards', () => {
-  it('replaces cards from the index, keeping other rail children', async () => {
+describe('readFreezerEntries + renderFreezerCards', () => {
+  it('reads the index and replaces cards, keeping other rail children', async () => {
     const fs = await seededFs();
     const freezer = document.createElement('slicc-freezer');
     const launcher = document.createElement('slicc-freezer-new');
     freezer.append(launcher);
 
-    const entries = await refreshFreezerCards(freezer, fs);
+    const entries = await readFreezerEntries(fs);
     expect(entries).toHaveLength(1);
+    renderFreezerCards(freezer, entries ?? []);
     expect(freezer.querySelectorAll('slicc-freezer-card')).toHaveLength(1);
     expect(freezer.contains(launcher)).toBe(true);
 
-    // Re-running replaces rather than duplicates.
-    await refreshFreezerCards(freezer, fs);
+    // Re-rendering replaces rather than duplicates.
+    renderFreezerCards(freezer, entries ?? []);
     expect(freezer.querySelectorAll('slicc-freezer-card')).toHaveLength(1);
   });
 
-  it('returns empty on a missing index', async () => {
+  it('treats a MISSING index as genuinely empty', async () => {
     const fs = await VirtualFS.create({ dbName: `wc-noindex-${Math.random()}`, wipe: true });
-    const freezer = document.createElement('slicc-freezer');
-    expect(await refreshFreezerCards(freezer, fs)).toEqual([]);
+    expect(await readFreezerEntries(fs)).toEqual([]);
+  });
+
+  it('reports transport faults as null so the caller preserves the rail', async () => {
+    // The regression: a boot-time RPC lost before the worker's VFS host
+    // attached fails ~30s later with EIO — readSessionsIndex swallowed it
+    // into [], and the late failure WIPED the cards a successful refresh had
+    // already painted.
+    const faulty = {
+      readFile: async () => {
+        throw new FsError('EIO', 'request timed out');
+      },
+    } as never;
+    expect(await readFreezerEntries(faulty)).toBeNull();
   });
 });
 

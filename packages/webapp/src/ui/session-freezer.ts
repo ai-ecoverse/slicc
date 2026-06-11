@@ -48,7 +48,7 @@ const TITLE_MAX_TOKENS = 40;
 
 /** Where session archives and the index live. */
 const SESSIONS_DIR = '/sessions';
-const SESSIONS_INDEX_PATH = '/sessions/index.json';
+export const SESSIONS_INDEX_PATH = '/sessions/index.json';
 
 export interface FrozenSessionIndexEntry {
   /** Filename within /sessions/, e.g. "2026-05-13T19-30-00Z-fix-build.json". */

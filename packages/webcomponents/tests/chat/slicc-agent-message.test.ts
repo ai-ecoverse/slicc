@@ -364,26 +364,35 @@ describe('slicc-agent-message', () => {
       expect(getComputedStyle(plan).paddingLeft).toBe('0px');
     });
 
-    it('renders inline code with the ghost background and mono font', () => {
+    it('renders inline code context-tinted (--ctx over --canvas) with mono font', () => {
       const el = mount();
       el.setBodyHtml('<p>run <code>npm test</code></p>');
       const code = el.querySelector('code') as HTMLElement;
       const cs = getComputedStyle(code);
-      // --ghost #ececef → rgb(236, 236, 239).
-      expect(cs.backgroundColor).toBe('rgb(236, 236, 239)');
-      expect(cs.fontFamily).toContain('Mono');
+      // 12% --ctx over --canvas: a soft accent wash, not the old flat grey.
+      expect(cs.backgroundColor).toMatch(/^(rgb|color)\(/);
+      expect(cs.backgroundColor).not.toBe('rgb(236, 236, 239)');
+      expect(cs.fontFamily).toContain('Source Code Pro');
     });
 
-    it('flips inline code to the dark ghost background under a dark scope', () => {
-      const wrap = document.createElement('div');
-      wrap.className = 'dark';
-      const el = document.createElement('slicc-agent-message') as SliccAgentMessage;
-      wrap.appendChild(el);
-      document.body.appendChild(wrap);
+    it('the inline-code tint follows the context accent (--ctx)', () => {
+      const el = mount();
       el.setBodyHtml('<p><code>x</code></p>');
       const code = el.querySelector('code') as HTMLElement;
-      // dark --ghost #1f1f22 → rgb(31, 31, 34).
-      expect(getComputedStyle(code).backgroundColor).toBe('rgb(31, 31, 34)');
+      const amber = getComputedStyle(code).backgroundColor;
+      el.style.setProperty('--ctx', '#3b6cb2');
+      const ice = getComputedStyle(code).backgroundColor;
+      expect(ice).not.toBe(amber);
+    });
+
+    it('fenced blocks carry the context-accent edge', () => {
+      const el = mount();
+      el.setBodyHtml('<pre><code>ls -la</code></pre>');
+      const pre = el.querySelector('pre') as HTMLElement;
+      const cs = getComputedStyle(pre);
+      // The accent edge is the 3px left border.
+      expect(cs.borderLeftWidth).toBe('3px');
+      expect(cs.backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
     });
   });
 });

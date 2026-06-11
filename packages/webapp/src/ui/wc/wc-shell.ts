@@ -12,6 +12,9 @@
  */
 
 import { ensureGlobalTokens, type SliccAvatarMenu, type SliccFileTree } from '@slicc/webcomponents';
+// Adobe Clean @font-face — the library tokens reference the family but the
+// declarations lived only in the (never-loaded) legacy stylesheet.
+import '../styles/fonts.css';
 import { createChatFixture, FIXTURE_SCOOP_NAME } from '../chat-fixture.js';
 import type { ChatMessage } from '../types.js';
 import { buildThreadChildren, messageEls } from './wc-message-view.js';
@@ -126,8 +129,10 @@ function buildNav(options: WcShellOptions): {
   const floatbar = el('slicc-floatbar', { label: options.floatLabel, spent: '0.00' });
   const avatarMenu = document.createElement('slicc-avatar-menu');
   avatarMenu.append(el('slicc-avatar', { name: 'SLICC' }));
+  // No logo: the cone chip in the switcher IS the brand mark. Fixture mode
+  // keeps its tag badge so screenshots stay distinguishable.
   nav.append(
-    el('slicc-logo', options.badge ? { badge: options.badge } : {}),
+    ...(options.badge ? [el('slicc-logo', { badge: options.badge })] : []),
     switcher,
     floatbar,
     el('slicc-theme-toggle'),

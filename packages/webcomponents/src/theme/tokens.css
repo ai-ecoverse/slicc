@@ -33,7 +33,7 @@
   --shaderbg: #f7f2e3;
   --rainbow: linear-gradient(90deg, #f43f5e 0%, #f59e0b 28%, #06b6d4 64%, #8b5cf6 100%);
   --ui: "adobe-clean", "Inter", system-ui, sans-serif;
-  --mono: "IBM Plex Mono", ui-monospace, monospace;
+  --mono: "Source Code Pro", "JetBrains Mono", ui-monospace, monospace;
   --shadow-pane: rgba(10, 10, 10, 0.06) 0 8px 26px -10px;
   --barh: 44px;
   --ctl-h: 30px;

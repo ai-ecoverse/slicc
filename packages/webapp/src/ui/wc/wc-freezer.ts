@@ -10,7 +10,7 @@ import {
   type FrozenSessionIndexEntry,
   frozenSessionPath,
   parseFrozenArchive,
-  readSessionsIndex,
+  SESSIONS_INDEX_PATH,
 } from '../session-freezer.js';
 import type { ChatMessage } from '../types.js';
 
@@ -37,23 +37,41 @@ export function frozenCard(entry: FrozenSessionIndexEntry): HTMLElement {
 }
 
 /**
- * Repopulate the freezer rail from the sessions index. Existing cards are
- * replaced; the `<slicc-freezer-new>` launcher and other children stay.
- * Returns the entries so the caller can resolve `freezer-card-select` slugs.
+ * Read the frozen-session entries, distinguishing "no sessions yet" from a
+ * TRANSPORT fault. Returns `null` on faults (e.g. a boot-time RPC that was
+ * lost before the worker's VFS host attached, timing out 30s later) so the
+ * caller preserves whatever the rail currently shows — a late-failing early
+ * read used to wipe the cards a later successful refresh had painted.
  */
-export async function refreshFreezerCards(
-  freezer: HTMLElement,
+export async function readFreezerEntries(
   fs: LocalVfsClient
-): Promise<FrozenSessionIndexEntry[]> {
-  let entries: FrozenSessionIndexEntry[] = [];
+): Promise<FrozenSessionIndexEntry[] | null> {
+  let text: string;
   try {
-    entries = await readSessionsIndex(fs);
-  } catch {
-    entries = [];
+    const raw = await fs.readFile(SESSIONS_INDEX_PATH, { encoding: 'utf-8' });
+    text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+  } catch (err) {
+    // Missing index = genuinely no frozen sessions. Anything else is a fault.
+    return (err as { code?: string } | null)?.code === 'ENOENT' ? [] : null;
   }
+  try {
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed) ? (parsed as FrozenSessionIndexEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Repopulate the freezer rail's cards. Existing cards are replaced; the
+ * `<slicc-freezer-new>` launcher and other children stay.
+ */
+export function renderFreezerCards(
+  freezer: HTMLElement,
+  entries: readonly FrozenSessionIndexEntry[]
+): void {
   for (const card of Array.from(freezer.querySelectorAll('slicc-freezer-card'))) card.remove();
   freezer.append(...entries.map(frozenCard));
-  return entries;
 }
 
 /** Read and parse a frozen archive into its title + messages. */

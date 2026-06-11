@@ -21,7 +21,8 @@ import { WcChatController } from './wc-chat-controller.js';
 import {
   FREEZER_TINT,
   type FrozenSessionIndexEntry,
-  refreshFreezerCards,
+  readFreezerEntries,
+  renderFreezerCards,
   thawFrozenSession,
 } from './wc-freezer.js';
 import {
@@ -226,10 +227,18 @@ function wireFreezerRail(deps: FreezerRailDeps): () => void {
   const { refs, openVfs, client, getController, selectScoop, clearSelection, log } = deps;
   let frozenEntries: FrozenSessionIndexEntry[] = [];
 
+  // Monotonic guard: boot fires several overlapping refreshes (attach-time,
+  // scoop-list ready, kernel-worker-ready) and a lost early RPC fails LATE —
+  // only the newest call may touch the rail, and faults never wipe it.
+  let refreshSeq = 0;
   const refreshFreezer = (): void => {
+    const seq = ++refreshSeq;
     void openVfs()
       .then(async ({ reader }) => {
-        frozenEntries = await refreshFreezerCards(refs.freezer, reader);
+        const entries = await readFreezerEntries(reader);
+        if (entries === null || seq !== refreshSeq) return;
+        frozenEntries = entries;
+        renderFreezerCards(refs.freezer, entries);
       })
       .catch((err) => log.error('WC freezer refresh failed', err));
   };
@@ -464,6 +473,7 @@ function wireWcComposer(deps: {
   setRefreshPlaceholder(fn: () => void): void;
   triggerPlaceholder(): void;
   openReader(): Promise<WcPageVfs['reader']>;
+  openWriter(): Promise<WcPageVfs['writer']>;
   log: BootStageLogger;
 }): void {
   const { boot, client, agentHandle, openReader, log } = deps;
@@ -505,6 +515,7 @@ function wireWcComposer(deps: {
         inputCard: refs.inputCard as HTMLElement & { value?: string },
         freezer: refs.freezer,
         openReader,
+        openWriter: deps.openWriter,
         listConversations: async () => {
           const { readSessionsIndex } = await import('../session-freezer.js');
           const entries = await readSessionsIndex(await openReader());
@@ -585,6 +596,7 @@ export function attachWcClient(
     },
     triggerPlaceholder,
     openReader,
+    openWriter: async () => (await openVfs()).writer,
     log,
   });
 

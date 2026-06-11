@@ -8,6 +8,7 @@
 
 import type { MessageAttachment } from '../../core/attachments.js';
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
+import type { WritableVfsClient } from '../../kernel/writable-vfs-client.js';
 
 /** Mirrors the library's `SliccAddSection` (not exported through the barrel). */
 interface AddSection {
@@ -18,9 +19,13 @@ interface AddSection {
 }
 
 const MAX_ROWS_PER_SECTION = 8;
-const MAX_WALK_ENTRIES = 400;
-const WALK_ROOTS = ['/workspace', '/shared'] as const;
-const WALK_DEPTH = 3;
+// The walk must cover what a user would search FOR: deep and wide, skipping
+// only the junk trees. A shallow walk made typed queries look like the menu
+// "wasn't going back to the filesystem".
+const MAX_WALK_ENTRIES = 2000;
+const WALK_ROOTS = ['/workspace', '/shared', '/tmp'] as const;
+const WALK_DEPTH = 8;
+const SKIP_DIRS = new Set(['node_modules', '.git']);
 const FILE_CACHE_MS = 10_000;
 
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg|avif)$/i;
@@ -97,6 +102,69 @@ export function attachmentFromDataUrl(name: string, dataUrl: string): MessageAtt
   };
 }
 
+/** Directory in the VFS where captures + oversized uploads are persisted. */
+export const UPLOAD_DIR = '/tmp/upload';
+/** Long-edge cap for the inline (vision) copy of a capture. */
+const INLINE_MAX_EDGE = 1568;
+
+function bytesFromBase64(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+/** Persist bytes under {@link UPLOAD_DIR}; returns the written VFS path. */
+export async function persistUpload(
+  writer: WritableVfsClient,
+  name: string,
+  bytes: Uint8Array
+): Promise<string> {
+  await writer.mkdir(UPLOAD_DIR, { recursive: true }).catch(() => undefined);
+  const path = `${UPLOAD_DIR}/${Date.now()}-${name.replace(/[^A-Za-z0-9._-]+/g, '_')}`;
+  await writer.writeFile(path, bytes);
+  return path;
+}
+
+/** Downscale an image data URL to the vision-friendly long-edge cap (JPEG).
+ *  Falls back to the original on any decode failure (fail-open). */
+async function downscaleDataUrl(dataUrl: string, maxEdge = INLINE_MAX_EDGE): Promise<string> {
+  const img = new Image();
+  img.src = dataUrl;
+  try {
+    await img.decode();
+  } catch {
+    return dataUrl;
+  }
+  const scale = Math.min(1, maxEdge / Math.max(img.naturalWidth, img.naturalHeight, 1));
+  if (scale >= 1) return dataUrl;
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(img.naturalWidth * scale);
+  canvas.height = Math.round(img.naturalHeight * scale);
+  canvas.getContext('2d')?.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', 0.85);
+}
+
+/**
+ * A capture → attachment: the full-resolution original lands in
+ * {@link UPLOAD_DIR} (linked in the prompt), the inline copy is downscaled
+ * so big retina captures don't blow the model's image budget.
+ */
+export async function attachmentFromCapture(
+  name: string,
+  dataUrl: string,
+  writer: WritableVfsClient | null
+): Promise<MessageAttachment | null> {
+  const full = attachmentFromDataUrl(name, dataUrl);
+  if (!full) return null;
+  let path: string | undefined;
+  if (writer && full.data) {
+    path = await persistUpload(writer, name, bytesFromBase64(full.data)).catch(() => undefined);
+  }
+  const inline = attachmentFromDataUrl(name, await downscaleDataUrl(dataUrl).catch(() => dataUrl));
+  return { ...(inline ?? full), name, path };
+}
+
 // ---------------------------------------------------------------------------
 // Search provider (Files / Skills / Conversations)
 // ---------------------------------------------------------------------------
@@ -118,7 +186,9 @@ async function walkFiles(fs: LocalVfsClient): Promise<string[]> {
     for (const entry of entries) {
       const path = `${dir}/${entry.name}`;
       if (entry.type === 'directory') {
-        if (depth < WALK_DEPTH) queue.push({ dir: path, depth: depth + 1 });
+        if (depth < WALK_DEPTH && !SKIP_DIRS.has(entry.name)) {
+          queue.push({ dir: path, depth: depth + 1 });
+        }
       } else {
         out.push(path);
         if (out.length >= MAX_WALK_ENTRIES) break;
@@ -299,11 +369,10 @@ async function grabFrame(stream: MediaStream): Promise<string | null> {
   }
 }
 
-/** One-frame screen capture via the user's display-picker. */
-async function captureScreenshot(): Promise<MessageAttachment | null> {
+/** One-frame screen capture via the user's display-picker (raw data URL). */
+async function captureScreenshot(): Promise<string | null> {
   const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-  const dataUrl = await grabFrame(stream);
-  return dataUrl ? attachmentFromDataUrl(`screenshot-${Date.now()}.png`, dataUrl) : null;
+  return grabFrame(stream);
 }
 
 /** Remembered camera pick (the component reports changes via its event). */
@@ -311,9 +380,10 @@ const CAMERA_PREF_KEY = 'slicc_camera_device';
 
 /**
  * Camera photo through the library's `<slicc-camera-dialog>` — live preview,
- * camera picker, mirrored selfie view. Resolves null on cancel / no camera.
+ * camera picker, mirrored selfie view. Resolves the raw data URL, or null on
+ * cancel / no camera.
  */
-async function capturePhoto(): Promise<MessageAttachment | null> {
+async function capturePhoto(): Promise<string | null> {
   const dialog = document.createElement('slicc-camera-dialog');
   const preferred = localStorage.getItem(CAMERA_PREF_KEY);
   if (preferred) dialog.setAttribute('preferred-device', preferred);
@@ -323,8 +393,7 @@ async function capturePhoto(): Promise<MessageAttachment | null> {
   });
   document.body.append(dialog);
   try {
-    const dataUrl = await dialog.open();
-    return dataUrl ? attachmentFromDataUrl(`photo-${Date.now()}.png`, dataUrl) : null;
+    return await dialog.open();
   } finally {
     dialog.remove();
   }
@@ -339,14 +408,41 @@ export interface WireWcAttachDeps {
   /** The freezer rail — conversation picks thaw through its select event. */
   freezer: HTMLElement;
   openReader(): Promise<LocalVfsClient>;
+  /** Writable VFS for persisting captures + oversized uploads to /tmp/upload. */
+  openWriter?(): Promise<WritableVfsClient>;
   listConversations(): Promise<{ id: string; label: string; sub?: string }[]>;
   log: { error(message: string, ...data: unknown[]): void };
 }
 
-/** Stage a captured frame (camera vs screen) when the user completes it. */
-async function stageCapture(detail: Record<string, unknown>, stage: WcAttachmentStage) {
-  const attachment = detail.mode === 'photo' ? await capturePhoto() : await captureScreenshot();
+/** Stage a captured frame (camera vs screen): full-res original persisted to
+ *  the VFS, downscaled inline copy for vision. */
+async function stageCapture(
+  detail: Record<string, unknown>,
+  deps: WireWcAttachDeps,
+  stage: WcAttachmentStage
+) {
+  const isPhoto = detail.mode === 'photo';
+  const dataUrl = isPhoto ? await capturePhoto() : await captureScreenshot();
+  if (!dataUrl) return;
+  const name = `${isPhoto ? 'photo' : 'screenshot'}-${Date.now()}.png`;
+  const writer = (await deps.openWriter?.().catch(() => null)) ?? null;
+  const attachment = await attachmentFromCapture(name, dataUrl, writer);
   if (attachment) stage.add(attachment);
+}
+
+/** Oversized payloads fall back to a VFS copy under /tmp/upload instead of a
+ *  "not included" note — the agent reads the path on demand. */
+async function withOversizeFallback(
+  attachment: MessageAttachment,
+  bytes: Uint8Array,
+  deps: WireWcAttachDeps
+): Promise<MessageAttachment> {
+  if (!attachment.error) return attachment;
+  const writer = (await deps.openWriter?.().catch(() => null)) ?? null;
+  if (!writer) return attachment;
+  const path = await persistUpload(writer, attachment.name, bytes).catch(() => undefined);
+  if (!path) return attachment;
+  return { ...attachment, error: undefined, path };
 }
 
 /** Stage a VFS file pick, read through the worker-routed reader. */
@@ -354,7 +450,9 @@ async function stageVfsFile(id: string, deps: WireWcAttachDeps, stage: WcAttachm
   const reader = await deps.openReader();
   const raw = await reader.readFile(id);
   const bytes = typeof raw === 'string' ? new TextEncoder().encode(raw) : raw;
-  stage.add(attachmentFromBytes(id.split('/').pop() ?? id, bytes));
+  const attachment = attachmentFromBytes(id.split('/').pop() ?? id, bytes);
+  // A VFS pick already HAS a canonical path — reference it instead of erroring.
+  stage.add(attachment.error ? { ...attachment, error: undefined, path: id } : attachment);
 }
 
 /** Append a skill mention to the composer's draft. */
@@ -370,9 +468,10 @@ async function handleAdd(
   stage: WcAttachmentStage
 ): Promise<void> {
   if (detail.kind === 'upload' && detail.file instanceof File) {
-    stage.add(await attachmentFromFile(detail.file));
+    const bytes = new Uint8Array(await detail.file.arrayBuffer());
+    stage.add(await withOversizeFallback(await attachmentFromFile(detail.file), bytes, deps));
   } else if (detail.kind === 'capture') {
-    await stageCapture(detail, stage);
+    await stageCapture(detail, deps, stage);
   } else if (detail.kind === 'file' && typeof detail.id === 'string') {
     await stageVfsFile(detail.id, deps, stage);
   } else if (detail.kind === 'skill' && typeof detail.label === 'string') {
