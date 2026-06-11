@@ -32,11 +32,12 @@ function uid(): string {
 
 export class WcChatController {
   readonly #thread: HTMLElement;
-  readonly #agent: AgentHandle;
+  #agent: AgentHandle;
   readonly #onProcessingChange?: (processing: boolean) => void;
   readonly #onMessageRendered?: (message: ChatMessage, els: readonly HTMLElement[]) => void;
   readonly #onMessageDisposed?: (messageId: string) => void;
-  readonly #unsubscribe: () => void;
+  #unsubscribe: () => void;
+  #onLocalUserMessage?: (text: string, messageId: string, attachments?: undefined) => void;
 
   #messages: ChatMessage[] = [];
   /** Rendered thread elements per message id (a message can span several). */
@@ -61,6 +62,38 @@ export class WcChatController {
 
   get processing(): boolean {
     return this.#processing;
+  }
+
+  /** Snapshot of the rendered conversation (tray leader snapshots etc.). */
+  getMessages(): ChatMessage[] {
+    return this.#messages.map((m) => ({ ...m }));
+  }
+
+  /**
+   * Swap the agent surface (tray role switches: follower mode replaces the
+   * local orchestrator with the leader's `FollowerSyncManager`).
+   */
+  setAgent(agent: AgentHandle): void {
+    this.#unsubscribe();
+    this.#agent = agent;
+    this.#unsubscribe = agent.onEvent((event) => this.#handleAgentEvent(event));
+  }
+
+  /** Leader-tray broadcast hook, invoked after every local user send. */
+  setOnLocalUserMessage(
+    hook: ((text: string, messageId: string, attachments?: undefined) => void) | undefined
+  ): void {
+    this.#onLocalUserMessage = hook;
+  }
+
+  /** Append a user bubble without sending (follower echoes, leader relays). */
+  addUserMessage(text: string, _attachments?: unknown): void {
+    this.#appendMessage({
+      id: uid(),
+      role: 'user',
+      content: text,
+      timestamp: Date.now(),
+    });
   }
 
   /** Replace the whole thread with a scoop's canonical history. */
@@ -115,6 +148,13 @@ export class WcChatController {
     };
     this.#appendMessage(message);
     this.#agent.sendMessage(trimmed, message.id);
+    try {
+      this.#onLocalUserMessage?.(trimmed, message.id);
+    } catch (err) {
+      // The broadcast hook is the followers' visibility path; never let a
+      // broken broadcaster undo the local send.
+      console.error('onLocalUserMessage hook threw', err);
+    }
   }
 
   /** Render an inbound lick (webhook/cron/…) into the thread. */

@@ -7,6 +7,7 @@
  * in the legacy UI.
  */
 
+import type { BrowserAPI, CDPTransport } from '../../cdp/index.js';
 import { spawnKernelWorker } from '../../kernel/spawn.js';
 import type { RegisteredScoop, ThinkingLevel } from '../../scoops/types.js';
 import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
@@ -14,6 +15,7 @@ import type { BootStageLogger } from '../boot/types.js';
 import { type DipInstance, disposeDips, hydrateDips } from '../dip.js';
 import { isLickChannel } from '../lick-channels.js';
 import type { OffscreenClient, OffscreenClientCallbacks } from '../offscreen-client.js';
+import type { UiRuntimeMode } from '../runtime-mode.js';
 import type { ChatMessage } from '../types.js';
 import { WcChatController } from './wc-chat-controller.js';
 import {
@@ -324,6 +326,9 @@ function createWcController(
   // onDipLick local path — welcome-flow interception and follower
   // forwarding are not wired in WC mode yet).
   const dipInstances = new Map<string, DipInstance[]>();
+  void import('../legacy-styles.js')
+    .then(({ loadDipStyles }) => loadDipStyles())
+    .catch(() => undefined);
   const agentHandle = client.createAgentHandle();
   const controller = new WcChatController({
     thread: refs.thread,
@@ -358,6 +363,14 @@ function createWcController(
 export interface AttachWcClientOptions {
   /** Standalone kernel-worker id; enables the sprinkle ops channel. */
   instanceId?: string;
+  /** Standalone-only runtime bits enabling tray sync + panel RPC. */
+  standalone?: {
+    browser: BrowserAPI;
+    realCdpTransport: CDPTransport;
+    runtimeMode: UiRuntimeMode;
+    cherryJoinUrl?: string;
+    cherryTransport?: import('../../cdp/cherry-host-transport.js').CherryHostTransport;
+  };
 }
 
 /**
@@ -436,14 +449,60 @@ export function attachWcClient(
   });
   refreshFreezer();
 
-  // Sprinkles: the legacy SprinkleManager (renderer + bridge + exec) over
-  // the WC workbench chrome. Exec sessions open lazily on first use.
+  // Page-side VFS support: mount-table recovery + the preview-vfs fallback
+  // responder (the worker's responder is canonical; this covers pre-boot).
+  void openFs()
+    .then(async (fs) => {
+      const { getAllMountEntries } = await import('../../fs/mount-table-store.js');
+      const { recoverMounts } = await import('../../fs/mount-recovery.js');
+      const entries = await getAllMountEntries();
+      if (entries.length > 0) await recoverMounts(entries, fs, log);
+      const { installPreviewVfsResponder } = await import('../preview-vfs-responder.js');
+      installPreviewVfsResponder({
+        channel: new BroadcastChannel('preview-vfs'),
+        getReader: () => fs,
+        logger: log,
+      });
+    })
+    .catch((err) => log.warn('WC page-VFS support wiring failed', err));
+
+  // Sprinkles (the legacy SprinkleManager over the WC workbench chrome),
+  // then tray sync on top — the leader broadcasts sprinkle state.
   void openFs()
     .then(async (fs) => {
       const { wireWcSprinkles } = await import('./wc-sprinkles.js');
-      await wireWcSprinkles({ refs, client, fs, instanceId: options.instanceId, log });
+      const sprinkles = await wireWcSprinkles({
+        refs,
+        client,
+        fs,
+        instanceId: options.instanceId,
+        log,
+      });
+      if (options.standalone && options.instanceId) {
+        const { wireWcTray } = await import('./wc-tray.js');
+        const zoneCallbacks = sprinkles.zone.callbacks();
+        await wireWcTray({
+          refs,
+          client,
+          browser: options.standalone.browser,
+          realCdpTransport: options.standalone.realCdpTransport,
+          instanceId: options.instanceId,
+          runtimeMode: options.standalone.runtimeMode,
+          sprinkleManager: sprinkles.manager,
+          addSprinkle: (name, title, element) => zoneCallbacks.addSprinkle(name, title, element),
+          removeSprinkle: (name) => zoneCallbacks.removeSprinkle(name),
+          getController: () => boot.getController(),
+          getSelectedJid: () => boot.getSelected()?.jid ?? 'cone',
+          agentHandle,
+          openFs,
+          cherryJoinUrl: options.standalone.cherryJoinUrl,
+          cherryTransport: options.standalone.cherryTransport,
+          window,
+          log,
+        });
+      }
     })
-    .catch((err) => log.error('WC sprinkle wiring failed', err));
+    .catch((err) => log.error('WC sprinkle/tray wiring failed', err));
 
   // Nav: model picker + avatar menu (settings dialog, legacy-UI escape hatch).
   void import('./wc-nav.js')
@@ -459,23 +518,52 @@ export function attachWcClient(
 }
 
 /** Boot the standalone live WC shell: prelude → kernel spawn → attach. */
-export async function mountWcUiLive(app: HTMLElement, log: BootStageLogger): Promise<void> {
-  const { realCdpTransport, instanceId } = await setupStandalonePrelude({
-    runtimeMode: 'standalone',
-    envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
-    window,
-    log,
-  });
+export async function mountWcUiLive(
+  app: HTMLElement,
+  log: BootStageLogger,
+  runtimeMode: UiRuntimeMode = 'standalone'
+): Promise<void> {
+  const { browser, realCdpTransport, instanceId, cherryJoinUrl, cherryTransport } =
+    await setupStandalonePrelude({
+      runtimeMode,
+      envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
+      window,
+      log,
+    });
 
   const boot = prepareWcShell(app, 'standalone · live');
+  const { createMigrationSplash } = await import('../migration-splash.js');
+  let migrationSplash: ReturnType<typeof createMigrationSplash> | null = null;
+  const ensureSplash = (): void => {
+    if (!migrationSplash) {
+      migrationSplash = createMigrationSplash({ root: document.body, logger: log });
+      migrationSplash.arm();
+    }
+  };
+  const disarmSplash = (): void => {
+    migrationSplash?.disarm();
+  };
   const host = spawnKernelWorker({
     realCdpTransport,
     instanceId,
+    onMigrationStart: ensureSplash,
+    onMigrationProgress: (progress) => {
+      ensureSplash();
+      migrationSplash?.updateProgress(progress);
+    },
+    onMigrationFinish: disarmSplash,
     callbacks: createWcLiveCallbacks(boot.wiring),
   });
-  attachWcClient(boot, host.client, log, { instanceId });
+  attachWcClient(boot, host.client, log, {
+    instanceId,
+    standalone: { browser, realCdpTransport, runtimeMode, cherryJoinUrl, cherryTransport },
+  });
+
+  const { setupSudoStandalone } = await import('../boot/setup-sudo.js');
+  await setupSudoStandalone({ log });
 
   await host.ready;
+  disarmSplash();
   log.info('WC live shell ready', { scoops: host.client.getScoops().length });
 }
 

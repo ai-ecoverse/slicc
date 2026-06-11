@@ -31,7 +31,7 @@ import { createLogger } from '../core/logger.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
 import { applyConeMemoryBudget } from '../scoops/cone-memory-budget.js';
-import { formatChatForClipboard } from './chat-panel.js';
+import { formatChatForClipboard } from './chat-clipboard.js';
 import type { SessionStore } from './session-store.js';
 import type { ChatMessage, Session } from './types.js';
 
@@ -142,70 +142,94 @@ export async function freezeConeSession(
   // but additionally marks the index entry as needing later enrichment.
   const llmEnabled = mode === 'full' && Boolean(opts.apiKey && opts.model);
 
-  // 1. Memory extraction (best-effort).
-  if (llmEnabled) {
-    try {
-      const bullets = await runOneOffCompactionCall({
-        messages: agentMessages,
-        instruction: COMPACTION_MEMORY_INSTRUCTION,
-        model: opts.model!,
-        apiKey: opts.apiKey!,
-        maxTokens: MEMORY_MAX_TOKENS,
-        headers: opts.headers,
-      });
-      if (bullets.trim() && bullets.trim() !== 'NONE') {
-        try {
-          await appendConeMemoryViaVfs(opts.vfs, bullets.trim(), 'new-session', {
-            model: opts.model,
-            apiKey: opts.apiKey,
-            headers: opts.headers,
-          });
-          log.info('Memory extracted and appended on new-session');
-        } catch (err) {
-          log.warn('Memory append failed', {
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      } else {
-        log.info('Memory extraction returned no durable memories');
-      }
-    } catch (err) {
-      log.warn('Memory extraction call failed (freeze still proceeds)', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  } else {
+  await extractMemoriesBestEffort(opts, agentMessages, llmEnabled);
+  const title =
+    (await generateTitleBestEffort(opts, agentMessages, llmEnabled)) ||
+    heuristicTitle(session.messages);
+  return await writeFrozenArchive(opts, session, title, mode);
+}
+
+/** Freeze step 1 — memory extraction (best-effort; failures never block). */
+async function extractMemoriesBestEffort(
+  opts: FreezeConeSessionOptions,
+  agentMessages: AgentMessage[],
+  llmEnabled: boolean
+): Promise<void> {
+  if (!llmEnabled) {
     log.info('LLM unavailable — skipping memory extraction; freezing anyway');
+    return;
   }
-
-  // 2. Title generation (best-effort).
-  let title = '';
-  if (llmEnabled) {
-    try {
-      const raw = await runOneOffCompactionCall({
-        messages: agentMessages,
-        instruction: COMPACTION_TITLE_INSTRUCTION,
-        model: opts.model!,
-        apiKey: opts.apiKey!,
-        maxTokens: TITLE_MAX_TOKENS,
-        headers: opts.headers,
-      });
-      title = cleanTitle(raw);
-    } catch (err) {
-      log.warn('Title generation call failed (using heuristic)', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+  let bullets = '';
+  try {
+    bullets = await runOneOffCompactionCall({
+      messages: agentMessages,
+      instruction: COMPACTION_MEMORY_INSTRUCTION,
+      model: opts.model!,
+      apiKey: opts.apiKey!,
+      maxTokens: MEMORY_MAX_TOKENS,
+      headers: opts.headers,
+    });
+  } catch (err) {
+    log.warn('Memory extraction call failed (freeze still proceeds)', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return;
   }
-  if (!title) title = heuristicTitle(session.messages);
+  if (!bullets.trim() || bullets.trim() === 'NONE') {
+    log.info('Memory extraction returned no durable memories');
+    return;
+  }
+  try {
+    await appendConeMemoryViaVfs(opts.vfs, bullets.trim(), 'new-session', {
+      model: opts.model,
+      apiKey: opts.apiKey,
+      headers: opts.headers,
+    });
+    log.info('Memory extracted and appended on new-session');
+  } catch (err) {
+    log.warn('Memory append failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
 
-  // 3. Write the archive and update the index. Archive is markdown — same
-  //    format the chat-panel uses for the "copy chat history" long-press,
-  //    plus a small YAML-style header for the freezer's own metadata.
-  //
-  //    Quick mode uses a synthetic `pending-<short-id>.md` filename so a
-  //    later enrichment pass can rename to the canonical
-  //    `<timestamp>-<slug>.md` form once the LLM-derived title is known.
+/** Freeze step 2 — LLM title (best-effort; empty string on failure). */
+async function generateTitleBestEffort(
+  opts: FreezeConeSessionOptions,
+  agentMessages: AgentMessage[],
+  llmEnabled: boolean
+): Promise<string> {
+  if (!llmEnabled) return '';
+  try {
+    const raw = await runOneOffCompactionCall({
+      messages: agentMessages,
+      instruction: COMPACTION_TITLE_INSTRUCTION,
+      model: opts.model!,
+      apiKey: opts.apiKey!,
+      maxTokens: TITLE_MAX_TOKENS,
+      headers: opts.headers,
+    });
+    return cleanTitle(raw);
+  } catch (err) {
+    log.warn('Title generation call failed (using heuristic)', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return '';
+  }
+}
+
+/**
+ * Freeze step 3 — write the archive markdown and update the index. Quick
+ * mode uses a synthetic `pending-<short-id>.md` filename so a later
+ * enrichment pass can rename to the canonical `<timestamp>-<slug>.md` form
+ * once the LLM-derived title is known.
+ */
+async function writeFrozenArchive(
+  opts: FreezeConeSessionOptions,
+  session: Session,
+  title: string,
+  mode: 'full' | 'quick'
+): Promise<FrozenSession | null> {
   const frozenAt = new Date().toISOString();
   const filename =
     mode === 'quick'
@@ -520,16 +544,29 @@ export async function enrichPendingSession(
   if (!entry.pendingEnrichment) {
     return null;
   }
+  const archiveContent = await readPendingArchive(vfs, entry);
+  if (archiveContent === null) return null;
+  const agentMessages = recoverPendingMessages(entry, archiveContent);
+  if (agentMessages === null) return null;
+  const calls = await runEnrichmentCalls(entry, agentMessages, opts);
+  if (calls === null) return null;
+  await appendEnrichmentMemory(vfs, entry, calls.bullets, opts);
+  return await commitEnrichedArchive(vfs, entry, archiveContent, calls.newTitle);
+}
 
-  // 2. Load the archive. Missing file → already renamed (or wiped) → no-op.
-  //    Any other read failure (permission, IO, etc.) is a real error: log it
-  //    as a warn so it shows up in the console, but still return null and
-  //    leave the entry pending so the next boot retries.
-  const oldPath = frozenSessionPath(entry);
-  let archiveContent = '';
+/**
+ * Enrichment step 2 — load the archive. Missing file → already renamed (or
+ * wiped) → no-op. Any other read failure (permission, IO, etc.) is a real
+ * error: log it as a warn so it shows up in the console, but still return
+ * null and leave the entry pending so the next boot retries.
+ */
+async function readPendingArchive(
+  vfs: WritableVfsClient,
+  entry: FrozenSessionIndexEntry
+): Promise<string | null> {
   try {
-    const raw = await vfs.readFile(oldPath, { encoding: 'utf-8' });
-    archiveContent = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+    const raw = await vfs.readFile(frozenSessionPath(entry), { encoding: 'utf-8' });
+    return typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
   } catch (err) {
     const code = (err as { code?: unknown } | null)?.code;
     if (code === 'ENOENT') {
@@ -544,12 +581,16 @@ export async function enrichPendingSession(
     }
     return null;
   }
+}
 
-  // 3. Recover the messages so we can re-run the LLM calls.
+/** Enrichment step 3 — recover the messages so the LLM calls can re-run. */
+function recoverPendingMessages(
+  entry: FrozenSessionIndexEntry,
+  archiveContent: string
+): AgentMessage[] | null {
   let messages: ChatMessage[];
   try {
-    const parsed = parseFrozenArchive(archiveContent);
-    messages = parsed.messages;
+    messages = parseFrozenArchive(archiveContent).messages;
   } catch (err) {
     log.warn('Failed to parse pending archive — leaving entry intact', {
       filename: entry.filename,
@@ -563,12 +604,20 @@ export async function enrichPendingSession(
     });
     return null;
   }
-  const agentMessages = toAgentMessages(messages);
+  return toAgentMessages(messages);
+}
 
-  // 4. Run BOTH LLM calls before mutating anything. If either fails the
-  //    pending entry stays put for the next retry; if memory succeeded
-  //    but title failed we'd otherwise duplicate memory bullets on every
-  //    boot, which is worse than waiting one more retry.
+/**
+ * Enrichment step 4 — run BOTH LLM calls before mutating anything. If
+ * either fails the pending entry stays put for the next retry; if memory
+ * succeeded but title failed we'd otherwise duplicate memory bullets on
+ * every boot, which is worse than waiting one more retry.
+ */
+async function runEnrichmentCalls(
+  entry: FrozenSessionIndexEntry,
+  agentMessages: AgentMessage[],
+  opts: EnrichPendingSessionOptions
+): Promise<{ bullets: string; newTitle: string } | null> {
   let bullets = '';
   try {
     bullets = await runOneOffCompactionCall({
@@ -610,36 +659,49 @@ export async function enrichPendingSession(
     });
     return null;
   }
+  return { bullets, newTitle };
+}
 
-  // 5. Append memory bullets (best-effort — failure doesn't abort the rename).
+/** Enrichment step 5 — append memory bullets (best-effort). */
+async function appendEnrichmentMemory(
+  vfs: WritableVfsClient,
+  entry: FrozenSessionIndexEntry,
+  bullets: string,
+  opts: EnrichPendingSessionOptions
+): Promise<void> {
   const trimmedBullets = bullets.trim();
-  if (trimmedBullets && trimmedBullets !== 'NONE') {
-    try {
-      await appendConeMemoryViaVfs(vfs, trimmedBullets, 'pending-enrichment', {
-        model: opts.model,
-        apiKey: opts.apiKey,
-        headers: opts.headers,
-      });
-    } catch (err) {
-      log.warn('Enrichment memory append failed (continuing with title rewrite)', {
-        filename: entry.filename,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+  if (!trimmedBullets || trimmedBullets === 'NONE') return;
+  try {
+    await appendConeMemoryViaVfs(vfs, trimmedBullets, 'pending-enrichment', {
+      model: opts.model,
+      apiKey: opts.apiKey,
+      headers: opts.headers,
+    });
+  } catch (err) {
+    log.warn('Enrichment memory append failed (continuing with title rewrite)', {
+      filename: entry.filename,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
+}
 
-  // 6. Rewrite the title in the archive's YAML frontmatter and the `# title`
-  //    body heading. Everything else — including the slicc:session-data
-  //    block — stays byte-identical, so the chat-panel re-render path is
-  //    unaffected.
+/**
+ * Enrichment steps 6–8 — rewrite the archive title, write under the new
+ * canonical name, update the index, then drop the old pending file last.
+ * This ordering keeps the index consistent with what's on disk even if
+ * the final unlink fails — at worst we leak a stale pending-… file,
+ * no data loss.
+ */
+async function commitEnrichedArchive(
+  vfs: WritableVfsClient,
+  entry: FrozenSessionIndexEntry,
+  archiveContent: string,
+  newTitle: string
+): Promise<FrozenSessionIndexEntry | null> {
+  const oldPath = frozenSessionPath(entry);
   const newContent = rewriteArchiveTitle(archiveContent, newTitle);
   const newFilename = `${entry.frozenAt.replace(/[:.]/g, '-')}-${slugify(newTitle)}.md`;
   const newPath = `${SESSIONS_DIR}/${newFilename}`;
-
-  // 7. Write under new name, update the index, then drop the old file last.
-  //    This ordering keeps the index consistent with what's on disk even if
-  //    the final unlink fails — at worst we leak a stale pending-… file,
-  //    no data loss.
   try {
     await ensureDir(vfs, SESSIONS_DIR);
     await vfs.writeFile(newPath, newContent);
@@ -667,8 +729,6 @@ export async function enrichPendingSession(
     return null;
   }
 
-  // 8. Best-effort cleanup of the old pending file. Don't surface the
-  //    failure — the index already points at the new name.
   if (newPath !== oldPath) {
     try {
       await vfs.rm(oldPath);
@@ -679,13 +739,11 @@ export async function enrichPendingSession(
       });
     }
   }
-
   try {
     await vfs.flush();
   } catch {
     // flush is best-effort — IDB will persist on its own debounce.
   }
-
   log.info('Pending session enriched', {
     oldFilename: entry.filename,
     newFilename,
@@ -844,9 +902,15 @@ export function parseFrozenArchive(markdown: string): {
   // 3. Drop the leading `# title` heading if present.
   body = body.replace(/^#\s+[^\n]*\n+/, '');
 
-  // 4. Heading-based fallback. Splits on `## User` / `## Assistant`
-  //    boundaries; nested `### Tool:` blocks land in the prior message's
-  //    content verbatim.
+  return { title, messages: parseHeadingFallback(body) };
+}
+
+/**
+ * Heading-based fallback parser. Splits on `## User` / `## Assistant`
+ * boundaries; nested `### Tool:` blocks land in the prior message's
+ * content verbatim.
+ */
+function parseHeadingFallback(body: string): ChatMessage[] {
   const messages: ChatMessage[] = [];
   const headingRe = /^## (User|Assistant)\s*\n/gm;
   const heads: { role: 'user' | 'assistant'; start: number; bodyStart: number }[] = [];
@@ -868,5 +932,5 @@ export function parseFrozenArchive(markdown: string): {
       timestamp: 0,
     });
   }
-  return { title, messages };
+  return messages;
 }

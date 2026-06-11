@@ -14,6 +14,9 @@ export async function mountWcUiExtension(app: HTMLElement, log: BootStageLogger)
   const boot = prepareWcShell(app, 'extension · wc');
   const client = new OffscreenClient(createWcLiveCallbacks(boot.wiring));
   attachWcClient(boot, client, log);
+  // Sudo approvals: the side-panel realm answers the offscreen broker.
+  const { setupSudoExtension } = await import('../boot/setup-sudo.js');
+  await setupSudoExtension({ log });
   client.requestState();
   log.info('WC extension shell connected to offscreen engine');
 }

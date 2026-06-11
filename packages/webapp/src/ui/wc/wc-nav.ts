@@ -1,15 +1,23 @@
 /**
  * Nav-level wiring for the live WC shell: the composer's model picker (fed
- * from the provider registry, persisted via the legacy `selected-model` key)
- * and the avatar menu (account settings via the legacy provider-settings
- * dialog — reused until a WC-native settings panel exists — plus an escape
- * hatch back to the legacy UI).
+ * from the provider registry, persisted via the `selected-model` key), the
+ * avatar menu (account settings via the provider-settings dialog — reused
+ * until a WC-native settings panel exists), and the multi-browser tray
+ * section (enable / copy join URL / stop / disconnect).
  */
 
+import { getFollowerTrayRuntimeStatus } from '../../scoops/tray-follower-status.js';
+import { getLeaderTrayRuntimeStatus } from '../../scoops/tray-leader.js';
+import {
+  DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
+  DEFAULT_STAGING_TRAY_WORKER_BASE_URL,
+  resolveTrayWorkerBaseUrl,
+} from '../../scoops/tray-runtime-config.js';
 import type { BootStageLogger } from '../boot/types.js';
+import { copyTextToClipboard } from '../clipboard.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import type { GroupedModels } from '../provider-settings.js';
-import { isWcUiPinned, setWcUiPinned } from './wc-flag.js';
+import { computeTrayMenuModel } from '../tray-join-url.js';
 import type { WcShellRefs } from './wc-shell.js';
 
 export interface MetaModel {
@@ -33,20 +41,10 @@ export interface WcNavDeps {
   refs: WcShellRefs;
   client: OffscreenClient;
   log: BootStageLogger;
-  /** Navigation hook (tests inject a fake; defaults to a location change). */
-  navigate?: (url: string) => void;
-}
-
-/** Strip the WC flag from the current URL — the legacy-UI escape hatch. */
-export function legacyUiUrl(href: string): string {
-  const url = new URL(href);
-  url.searchParams.delete('ui');
-  return url.toString();
 }
 
 export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   const { refs, client, log } = deps;
-  const navigate = deps.navigate ?? ((url: string) => window.location.assign(url));
   const { getAllAvailableModels, showProviderSettings } = await import('../provider-settings.js');
 
   const refreshModels = (): void => {
@@ -70,35 +68,102 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
     name: 'SLICC',
     provider: isExtension ? 'extension · wc' : 'standalone · wc',
   };
+  const trayMenuItems = (): NonNullable<typeof refs.avatarMenu.items> => {
+    // Tray runs page-side only in standalone; the extension leader lives in
+    // the offscreen document and keeps its own controls.
+    if (isExtension) return [];
+    const model = computeTrayMenuModel(
+      getLeaderTrayRuntimeStatus(),
+      getFollowerTrayRuntimeStatus()
+    );
+    const items: NonNullable<typeof refs.avatarMenu.items> = [{ kind: 'separator' }];
+    if (model.kind === 'leader-offer') {
+      items.push({ id: 'tray-enable', label: model.label, icon: 'radio' });
+    } else if (model.kind === 'leader-copy') {
+      items.push({ id: 'tray-copy', label: 'Copy tray join URL', icon: 'link' });
+      items.push({
+        id: 'tray-stop',
+        label: 'Stop multi-browser sync',
+        icon: 'square',
+        danger: true,
+      });
+    } else if (model.kind === 'leader-pending') {
+      items.push({ kind: 'caption', label: model.caption });
+      items.push({
+        id: 'tray-stop',
+        label: 'Stop multi-browser sync',
+        icon: 'square',
+        danger: true,
+      });
+    } else {
+      items.push({ kind: 'caption', label: model.caption });
+      items.push({
+        id: 'tray-stop',
+        label: 'Disconnect from leader',
+        icon: 'unplug',
+        danger: true,
+      });
+    }
+    return items;
+  };
   const syncMenuItems = (): void => {
     refs.avatarMenu.items = [
       { id: 'settings', label: 'Account settings…', icon: 'settings' },
-      ...(isExtension
-        ? [
-            {
-              id: 'pin-sidepanel',
-              label: isWcUiPinned(localStorage)
-                ? 'Unpin WC UI from side panel'
-                : 'Pin WC UI in side panel',
-              icon: 'pin',
-            },
-          ]
-        : []),
-      { kind: 'separator' as const },
-      { id: 'legacy-ui', label: 'Open legacy UI', icon: 'panel-left' },
+      ...trayMenuItems(),
     ];
   };
   syncMenuItems();
+  // Tray state changes while the page lives — recompute on every open.
+  refs.avatarMenu.addEventListener('slicc-avatar-menu-toggle', (event) => {
+    if ((event as CustomEvent<{ open?: boolean }>).detail?.open) syncMenuItems();
+  });
+  const handleTrayAction = (id: string): boolean => {
+    if (id === 'tray-enable') {
+      void resolveTrayWorkerBaseUrl({
+        locationHref: window.location.href,
+        storage: window.localStorage,
+        envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
+        defaultWorkerBaseUrl: __DEV__
+          ? DEFAULT_STAGING_TRAY_WORKER_BASE_URL
+          : DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
+      }).then((workerBaseUrl) => {
+        if (!workerBaseUrl) return log.error('tray enable: no worker base URL resolvable');
+        window.dispatchEvent(new CustomEvent('slicc:tray-leave', { detail: { workerBaseUrl } }));
+      });
+      return true;
+    }
+    if (id === 'tray-copy') {
+      const joinUrl = getLeaderTrayRuntimeStatus().session?.joinUrl;
+      if (joinUrl) {
+        void copyTextToClipboard(joinUrl).catch(() => undefined);
+        void import('../legacy-styles.js')
+          .then(({ loadLegacyDialogStyles }) => loadLegacyDialogStyles())
+          .then(async () => {
+            const { showSyncEnabledDialog } = await import('../sync-dialog.js');
+            showSyncEnabledDialog({ joinUrl, copied: true });
+          })
+          .catch((err) => log.error('sync dialog failed', err));
+      }
+      return true;
+    }
+    if (id === 'tray-stop') {
+      window.dispatchEvent(
+        new CustomEvent('slicc:tray-leave', { detail: { workerBaseUrl: null } })
+      );
+      return true;
+    }
+    return false;
+  };
+
   refs.avatarMenu.addEventListener('slicc-avatar-action', (event) => {
     const id = (event as CustomEvent<{ id?: string }>).detail?.id;
-    if (id === 'pin-sidepanel') {
-      setWcUiPinned(localStorage, !isWcUiPinned(localStorage));
+    if (id && handleTrayAction(id)) {
       syncMenuItems();
       return;
     }
     if (id === 'settings') {
-      // The legacy dialog needs its (scoped) chrome; loaded on demand so the
-      // WC shell stays free of the colliding legacy sheets.
+      // The settings dialog needs its (scoped) chrome; loaded on demand so
+      // the WC shell stays free of the broader legacy sheets.
       import('../legacy-styles.js')
         .then(({ loadLegacyDialogStyles }) => loadLegacyDialogStyles())
         .then(() => showProviderSettings())
@@ -107,13 +172,6 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
           client.updateModel();
         })
         .catch((err) => log.error('WC settings dialog failed', err));
-      return;
-    }
-    if (id === 'legacy-ui') {
-      // In the pinned side panel the URL carries no flag — unpin so the
-      // reload (and every future panel open) boots the legacy UI.
-      if (isExtension) setWcUiPinned(localStorage, false);
-      navigate(legacyUiUrl(window.location.href));
     }
   });
 }

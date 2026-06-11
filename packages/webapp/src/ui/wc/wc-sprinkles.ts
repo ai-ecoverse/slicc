@@ -151,15 +151,23 @@ export interface WireWcSprinklesDeps {
   log: BootStageLogger;
 }
 
+export interface WcSprinklesHandle {
+  manager: import('../sprinkle-manager.js').SprinkleManager;
+  zone: WcSprinkleZone;
+}
+
 /**
  * Construct the real `SprinkleManager` over the WC zone: VFS discovery, the
  * iframe renderer + bridge, exec via a worker terminal session, and licks
- * dispatched to the cone. The welcome-flow interceptor and tray follower
- * forwarding are not wired in WC mode yet.
+ * dispatched to the cone. The welcome-flow interceptor is not wired in WC
+ * mode yet. Returns the manager + zone so the tray wiring can broadcast
+ * sprinkle state to followers.
  */
-export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<void> {
+export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSprinklesHandle> {
   const { refs, client, fs, instanceId, log } = deps;
   const zone = new WcSprinkleZone(refs);
+  const { loadSprinkleStyles } = await import('../legacy-styles.js');
+  await loadSprinkleStyles();
 
   const { SprinkleManager } = await import('../sprinkle-manager.js');
   const { installSprinkleManagerHandlerOverChannel } = await import(
@@ -204,7 +212,7 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<void> 
   } else if (isExtension) {
     // Extension: the offscreen orchestrator relays sprinkle ops over the
     // panel's OffscreenClient transport — same handler the legacy panel uses.
-    const { handleSprinkleOp } = await import('../boot/setup-extension-sprinkle.js');
+    const { handleSprinkleOp } = await import('../sprinkle-op-handler.js');
     client.setSprinkleOpHandler((payload: unknown) => {
       const { id, op, name, data } = payload as {
         id: unknown;
@@ -233,4 +241,5 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<void> 
   await manager.restoreOpenSprinkles().catch((err) => {
     log.warn('WC shell: failed to restore open sprinkles', err);
   });
+  return { manager, zone };
 }
