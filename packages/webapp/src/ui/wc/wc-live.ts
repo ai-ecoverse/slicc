@@ -813,6 +813,10 @@ export function attachWcClient(
         instanceId: options.instanceId,
         log,
       });
+      // The wire-up-time discovery/restore races the worker's VfsRpcHost
+      // installation (a lost RPC fails 30s late) — re-run on kernel-ready,
+      // same recovery the freezer rail uses. resync() is idempotent.
+      boot.onClientReady(() => void sprinkles.resync());
       if (options.standalone && options.instanceId) {
         const { wireWcTray } = await import('./wc-tray.js');
         const zoneCallbacks = sprinkles.zone.callbacks();

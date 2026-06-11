@@ -98,6 +98,22 @@ describe('slicc-workbench-body', () => {
       expect(on && sid(on)).toBe('memory');
       expect(el.activeSurface && sid(el.activeSurface)).toBe('memory');
     });
+
+    it('stamps a surface that mounts AFTER its id is already active', async () => {
+      // Lazy panels (background session restores, a rail launcher clicked
+      // before its content loads) append their surface after activation —
+      // without the child observer they'd stay display:none forever.
+      const el = mount(['files']);
+      el.setAttribute('active', 'sprinkle:pomodoro');
+      expect(el.activeSurface).toBeNull();
+
+      el.appendChild(surface('sprinkle:pomodoro'));
+      // MutationObserver callbacks flush as microtasks.
+      await Promise.resolve();
+      const on = activeChild(el);
+      expect(on && sid(on)).toBe('sprinkle:pomodoro');
+      expect(getComputedStyle(on as Element).display).toBe('flex');
+    });
   });
 
   describe('variants / states — default (one child surface active)', () => {

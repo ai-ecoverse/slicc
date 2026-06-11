@@ -739,6 +739,26 @@ describe('SprinkleManager', () => {
       expect(urlSprinklesParam()).toBe('dash');
     });
 
+    it('restoreOpenSprinkles is safely re-runnable (kernel-ready resync contract)', async () => {
+      window.history.replaceState(null, '', '/?sprinkles=dash');
+      // First pass: nothing discovered yet (boot RPC lost) — restore fails
+      // per-name but resolves.
+      await mgr.restoreOpenSprinkles();
+      expect(mgr.opened()).toEqual([]);
+
+      // Resync after kernel-ready: discovery succeeds, restore reopens.
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>D</title><div>hi</div>');
+      await mgr.refresh();
+      await mgr.restoreOpenSprinkles();
+      expect(mgr.opened()).toEqual(['dash']);
+
+      // A third run must not duplicate the open panel.
+      const addCalls = addSprinkle.mock.calls.length;
+      await mgr.restoreOpenSprinkles();
+      expect(mgr.opened()).toEqual(['dash']);
+      expect(addSprinkle.mock.calls.length).toBe(addCalls);
+    });
+
     it('readKnownSprinkleNames exposes the discovery ledger for rail seeding', async () => {
       expect(readKnownSprinkleNames()).toEqual([]);
       await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>D</title><div>hi</div>');

@@ -93,15 +93,25 @@ export class SliccWorkbenchBody extends HTMLElement {
   static readonly observedAttributes = ['active'];
 
   #connected = false;
+  /**
+   * Surfaces can mount AFTER their id is already active — a lazy panel
+   * (background session restore, a rail launcher clicked before its content
+   * loads) would otherwise stay stuck at `display: none` even though it IS
+   * the active id, because stamping only ran on `active` changes. Re-stamp
+   * on every child-list change instead; `#sync` is idempotent.
+   */
+  readonly #childObserver = new MutationObserver(() => this.#sync());
 
   connectedCallback(): void {
     ensureWorkbenchBodyStyle(this.ownerDocument);
     this.#connected = true;
     this.#sync();
+    this.#childObserver.observe(this, { childList: true });
   }
 
   disconnectedCallback(): void {
     this.#connected = false;
+    this.#childObserver.disconnect();
   }
 
   attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {

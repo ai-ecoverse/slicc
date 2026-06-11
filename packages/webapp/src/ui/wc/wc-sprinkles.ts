@@ -198,6 +198,13 @@ export interface WireWcSprinklesDeps {
 export interface WcSprinklesHandle {
   manager: import('../sprinkle-manager.js').SprinkleManager;
   zone: WcSprinkleZone;
+  /**
+   * Re-run discovery + session restore. A VFS RPC sent before the worker's
+   * VfsRpcHost attaches is LOST (30s EIO), so the wire-up-time pass can come
+   * back empty — hosts re-run this on kernel-ready (idempotent: `open()`
+   * skips already-open names, the surfacing ledgers gate re-surfacing).
+   */
+  resync(): Promise<void>;
 }
 
 /**
@@ -282,12 +289,18 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
     }
   });
 
-  await manager.refresh();
-  zone.dropUnconfirmedSeeds();
-  await manager.restoreOpenSprinkles().catch((err) => {
-    log.warn('WC shell: failed to restore open sprinkles', err);
-  });
-  return { manager, zone };
+  const resync = async (): Promise<void> => {
+    await manager.refresh();
+    // Only prune seeded launchers against a discovery that actually FOUND
+    // something — an empty result may be a lost boot RPC, and wiping the
+    // seeded rail on it is exactly the disappearing-rail bug class.
+    if (manager.available().length > 0) zone.dropUnconfirmedSeeds();
+    await manager.restoreOpenSprinkles().catch((err) => {
+      log.warn('WC shell: failed to restore open sprinkles', err);
+    });
+  };
+  await resync();
+  return { manager, zone, resync };
 }
 
 /**

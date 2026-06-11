@@ -454,68 +454,74 @@ export class SprinkleManager {
     try {
       const urlNames = readOpenSprinklesFromUrl();
       if (urlNames !== null) {
-        for (const name of urlNames) {
-          try {
-            // Background: restoring reopens the panel but must not focus
-            // it — what's on screen after a reload is the page's own
-            // view state (the `ws` URL param), not the open set.
-            await this.open(name, undefined, { background: true });
-          } catch {
-            log.warn('Failed to restore sprinkle', { name });
-          }
-        }
+        await this.reopenInBackground(urlNames);
         // URL is the explicit source of truth — a shared link should
         // reopen exactly the panels it names. Skip the unseen-surfacing
         // pass so a fresh profile loading `?sprinkles=dash` doesn't
         // also attention-surface every other discoverable sprinkle.
         return;
-      } else {
-        const raw = localStorage.getItem(OPEN_SPRINKLES_KEY);
-        if (raw) {
-          // One-time migration: legacy localStorage → URL. The
-          // subsequent `open()` calls each re-persist (URL +
-          // localStorage), and after the burst we clear the legacy
-          // key so future reloads take the URL branch above.
-          try {
-            const names: string[] = JSON.parse(raw);
-            for (const name of names) {
-              try {
-                await this.open(name, undefined, { background: true });
-              } catch {
-                log.warn('Failed to restore sprinkle', { name });
-              }
-            }
-          } finally {
-            try {
-              localStorage.removeItem(OPEN_SPRINKLES_KEY);
-            } catch {
-              /* localStorage unavailable, ignore */
-            }
-          }
-        } else {
-          // No previously-opened sprinkles — open autoopen ones
-          // (legacy behavior). The non-autoopen ones get a rail
-          // icon via `surfaceUnseenSprinkles()` below.
-          const attention = this.autoOpenBehavior === 'attention';
-          const autoOpenedOnce = this.loadAutoOpenedOnce();
-          const consumed = new Set<string>();
-          for (const sprinkle of this.availableSprinkles.values()) {
-            if (!sprinkle.autoOpen) continue;
-            if (autoOpenedOnce.has(sprinkle.name)) continue;
-            try {
-              await this.open(sprinkle.name, undefined, { attention });
-              consumed.add(sprinkle.name);
-            } catch {
-              log.warn('Failed to auto-open sprinkle', { name: sprinkle.name });
-            }
-          }
-          if (consumed.size > 0) this.persistAutoOpenedOnce(consumed);
-        }
       }
+      const raw = localStorage.getItem(OPEN_SPRINKLES_KEY);
+      if (raw) await this.restoreFromLegacyStorage(raw);
+      else await this.autoOpenFirstRun();
     } catch {
       /* corrupt localStorage, ignore */
     }
     await this.surfaceUnseenSprinkles();
+  }
+
+  /**
+   * Reopen restored panels in BACKGROUND mode: the panel comes back but must
+   * not steal focus — what's on screen after a reload is the page's own view
+   * state (the `ws` URL param), not the open set. Per-name failures warn and
+   * continue.
+   */
+  private async reopenInBackground(names: readonly string[]): Promise<void> {
+    for (const name of names) {
+      try {
+        await this.open(name, undefined, { background: true });
+      } catch {
+        log.warn('Failed to restore sprinkle', { name });
+      }
+    }
+  }
+
+  /**
+   * One-time migration: legacy localStorage → URL. The `open()` calls each
+   * re-persist (URL + localStorage), and after the burst the legacy key is
+   * cleared so future reloads take the URL branch.
+   */
+  private async restoreFromLegacyStorage(raw: string): Promise<void> {
+    try {
+      await this.reopenInBackground(JSON.parse(raw) as string[]);
+    } finally {
+      try {
+        localStorage.removeItem(OPEN_SPRINKLES_KEY);
+      } catch {
+        /* localStorage unavailable, ignore */
+      }
+    }
+  }
+
+  /**
+   * First run (no URL param, no legacy storage): open `data-sprinkle-autoopen`
+   * sprinkles not yet consumed by the one-shot ledger. Non-autoopen sprinkles
+   * get their rail icon via `surfaceUnseenSprinkles()` instead.
+   */
+  private async autoOpenFirstRun(): Promise<void> {
+    const attention = this.autoOpenBehavior === 'attention';
+    const autoOpenedOnce = this.loadAutoOpenedOnce();
+    const consumed = new Set<string>();
+    for (const sprinkle of this.availableSprinkles.values()) {
+      if (!sprinkle.autoOpen || autoOpenedOnce.has(sprinkle.name)) continue;
+      try {
+        await this.open(sprinkle.name, undefined, { attention });
+        consumed.add(sprinkle.name);
+      } catch {
+        log.warn('Failed to auto-open sprinkle', { name: sprinkle.name });
+      }
+    }
+    if (consumed.size > 0) this.persistAutoOpenedOnce(consumed);
   }
 
   /**

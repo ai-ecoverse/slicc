@@ -407,7 +407,6 @@
         "packages/webapp/src/ui/opfs-leader-election.ts",
         "packages/webapp/src/ui/provider-settings.ts",
         "packages/webapp/src/ui/sprinkle-icon.ts",
-        "packages/webapp/src/ui/sprinkle-manager.ts",
         "packages/webapp/src/ui/sprinkle-renderer.ts"
       ],
       "linter": {
