@@ -45,3 +45,21 @@ export function getTheme(scope: HTMLElement = document.body): SliccTheme {
   }
   return 'light';
 }
+
+/**
+ * Make a scope follow the OS color scheme: applies the current
+ * `prefers-color-scheme` via {@link setTheme} and re-applies whenever the
+ * system preference changes (e.g. a scheduled day/night switch — no reload
+ * needed). Returns an unsubscribe. No-op (returns a no-op unsubscribe) where
+ * `matchMedia` is unavailable (workers, bare jsdom).
+ */
+export function followSystemTheme(scope: HTMLElement = document.body): () => void {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return () => {};
+  }
+  const query = window.matchMedia('(prefers-color-scheme: dark)');
+  const apply = (): void => setTheme(query.matches ? 'dark' : 'light', scope);
+  apply();
+  query.addEventListener('change', apply);
+  return () => query.removeEventListener('change', apply);
+}

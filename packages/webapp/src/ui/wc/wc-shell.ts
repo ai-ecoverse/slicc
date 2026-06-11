@@ -11,7 +11,12 @@
  * the kernel worker for real conversations.
  */
 
-import { ensureGlobalTokens, type SliccAvatarMenu, type SliccFileTree } from '@slicc/webcomponents';
+import {
+  ensureGlobalTokens,
+  followSystemTheme,
+  type SliccAvatarMenu,
+  type SliccFileTree,
+} from '@slicc/webcomponents';
 // Adobe Clean @font-face — the library tokens reference the family but the
 // declarations lived only in the (never-loaded) legacy stylesheet.
 import '../styles/fonts.css';
@@ -117,6 +122,18 @@ function ensureShellStyles(doc: Document): void {
   doc.head.appendChild(style);
 }
 
+/**
+ * The shell has no theme toggle — light/dark always follows the OS color
+ * scheme, live (a system day/night switch retints without a reload). A
+ * remount replaces the previous subscription so media-query listeners never
+ * stack.
+ */
+let systemThemeUnsubscribe: (() => void) | null = null;
+function ensureSystemTheme(): void {
+  systemThemeUnsubscribe?.();
+  systemThemeUnsubscribe = followSystemTheme();
+}
+
 function el(tag: string, attrs: Record<string, string> = {}): HTMLElement {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
@@ -136,12 +153,12 @@ function buildNav(options: WcShellOptions): {
   const avatarMenu = document.createElement('slicc-avatar-menu');
   avatarMenu.append(el('slicc-avatar', { name: 'SLICC' }));
   // No logo: the cone chip in the switcher IS the brand mark. Fixture mode
-  // keeps its tag badge so screenshots stay distinguishable.
+  // keeps its tag badge so screenshots stay distinguishable. No theme toggle
+  // either — the shell follows the OS color scheme (followSystemTheme).
   nav.append(
     ...(options.badge ? [el('slicc-logo', { badge: options.badge })] : []),
     switcher,
     floatbar,
-    el('slicc-theme-toggle'),
     avatarMenu
   );
   return { nav, switcher, floatbar, avatarMenu };
@@ -265,6 +282,7 @@ function wireTabsToBody(
 export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShellRefs {
   ensureGlobalTokens(document);
   ensureShellStyles(document);
+  ensureSystemTheme();
 
   const frame = el('div', { class: 'wcui-frame' });
   const shader = el('slicc-shader', { mode: 'cone', tint: 'var(--waffle)', class: 'wcui-shader' });

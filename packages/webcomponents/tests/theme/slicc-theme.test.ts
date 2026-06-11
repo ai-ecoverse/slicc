@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { SliccTheme } from '../../src/theme/slicc-theme.js';
-import { ensureGlobalTokens } from '../../src/theme/tokens.js';
+import { ensureGlobalTokens, followSystemTheme, getTheme } from '../../src/theme/tokens.js';
 
 describe('slicc-theme', () => {
   beforeEach(() => {
@@ -164,5 +164,49 @@ describe('slicc-theme', () => {
     el.addEventListener('slicc-theme-change', () => count++);
     el.setAttribute('theme', 'dark');
     expect(count).toBe(0);
+  });
+});
+
+describe('followSystemTheme', () => {
+  it('applies the OS scheme to a scope and tracks live changes until unsubscribed', () => {
+    const scope = document.createElement('div');
+    document.body.appendChild(scope);
+    let changeListener: (() => void) | null = null;
+    const query = {
+      matches: true,
+      addEventListener: (_type: string, fn: () => void) => {
+        changeListener = fn;
+      },
+      removeEventListener: () => {
+        changeListener = null;
+      },
+    };
+    const original = window.matchMedia;
+    Object.defineProperty(window, 'matchMedia', { value: () => query, configurable: true });
+    try {
+      const unsubscribe = followSystemTheme(scope);
+      expect(getTheme(scope)).toBe('dark');
+
+      // System day/night switch retints live — no reload.
+      query.matches = false;
+      (changeListener as unknown as () => void)?.();
+      expect(getTheme(scope)).toBe('light');
+
+      unsubscribe();
+      expect(changeListener).toBeNull();
+    } finally {
+      Object.defineProperty(window, 'matchMedia', { value: original, configurable: true });
+      scope.remove();
+    }
+  });
+
+  it('is a safe no-op where matchMedia is unavailable', () => {
+    const original = window.matchMedia;
+    Object.defineProperty(window, 'matchMedia', { value: undefined, configurable: true });
+    try {
+      expect(() => followSystemTheme()()).not.toThrow();
+    } finally {
+      Object.defineProperty(window, 'matchMedia', { value: original, configurable: true });
+    }
   });
 });

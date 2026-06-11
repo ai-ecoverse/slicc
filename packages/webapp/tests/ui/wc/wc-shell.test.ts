@@ -45,15 +45,11 @@ describe('mountWcUiPreview', () => {
     const root = mount();
     const nav = root.querySelector('slicc-nav');
     expect(nav).toBeTruthy();
-    for (const tag of [
-      'slicc-logo',
-      'slicc-scoop-switcher',
-      'slicc-floatbar',
-      'slicc-theme-toggle',
-      'slicc-avatar',
-    ]) {
+    for (const tag of ['slicc-logo', 'slicc-scoop-switcher', 'slicc-floatbar', 'slicc-avatar']) {
       expect(nav?.querySelector(tag), tag).toBeTruthy();
     }
+    // No theme toggle: the shell follows the OS color scheme instead.
+    expect(nav?.querySelector('slicc-theme-toggle')).toBeNull();
     expect(root.querySelector('slicc-shader')).toBeTruthy();
     expect(root.querySelector('slicc-freezer slicc-freezer-new')).toBeTruthy();
     expect(root.querySelector('slicc-shell slicc-chatpane')).toBeTruthy();
@@ -99,6 +95,44 @@ describe('mountWcUiPreview', () => {
     });
     expect(host.querySelector('slicc-logo')).toBeNull();
     expect(refs.switcher).toBeTruthy();
+  });
+
+  it('follows the OS color scheme, live (no toggle — matchMedia drives the theme)', () => {
+    let changeListener: (() => void) | null = null;
+    const query = {
+      matches: true,
+      addEventListener: (_type: string, fn: () => void) => {
+        changeListener = fn;
+      },
+      removeEventListener: () => {
+        changeListener = null;
+      },
+    };
+    // Only the color-scheme query gets the instrumented object — components
+    // probe other media (reduced-motion, widths) and must not clobber it.
+    const inert = (media: string) => ({
+      matches: false,
+      media,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    });
+    const original = window.matchMedia;
+    Object.defineProperty(window, 'matchMedia', {
+      value: (media: string) => (media.includes('prefers-color-scheme') ? query : inert(media)),
+      configurable: true,
+    });
+    try {
+      mount();
+      expect(document.body.getAttribute('data-theme')).toBe('dark');
+      // A system day/night switch retints without a reload.
+      query.matches = false;
+      (changeListener as unknown as () => void)?.();
+      expect(document.body.getAttribute('data-theme')).toBe('light');
+    } finally {
+      Object.defineProperty(window, 'matchMedia', { value: original, configurable: true });
+      document.body.classList.remove('dark');
+      document.body.removeAttribute('data-theme');
+    }
   });
 
   it('urlState option opts the thread and shell into URL state sync (off by default)', async () => {
