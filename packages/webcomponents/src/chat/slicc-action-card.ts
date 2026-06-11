@@ -43,7 +43,8 @@ slicc-action-card .tcard .th .ic {
   display: grid;
   place-items: center;
   font-size: 10px;
-  color: #fff;
+  /* --canvas, not #fff: --ink flips near-white in dark mode. */
+  color: var(--canvas, #fff);
   background: var(--ink);
   flex: 0 0 auto;
 }

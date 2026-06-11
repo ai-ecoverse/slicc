@@ -155,6 +155,22 @@ describe('slicc-dock-item', () => {
       expect(el.icon).toBe('square');
     });
 
+    it('keeps the tooltip readable in dark mode (canvas text on the ink pill)', () => {
+      // --ink flips near-white in dark mode; hardcoded #fff tip text would be
+      // white-on-white (the reported light-on-light right-rail tooltips).
+      const wrap = document.createElement('div');
+      wrap.className = 'dark';
+      document.body.appendChild(wrap);
+      const el = document.createElement('slicc-dock-item') as SliccDockItem;
+      el.setAttribute('tip', 'Terminal');
+      wrap.appendChild(el);
+      const cs = getComputedStyle(el.shadowRoot?.querySelector('.tip') as HTMLElement);
+      // Dark tokens: --ink #f5f5f2 (pill bg) and --canvas #161618 (text).
+      expect(cs.backgroundColor).toBe('rgb(245, 245, 242)');
+      expect(cs.color).toBe('rgb(22, 22, 24)');
+      wrap.remove();
+    });
+
     it('reflects tip into the tooltip (escaped) and the aria-label', () => {
       const el = mount({ tip: 'Terminal' });
       expect((el.shadowRoot?.querySelector('.tip') as HTMLElement).textContent).toBe('Terminal');

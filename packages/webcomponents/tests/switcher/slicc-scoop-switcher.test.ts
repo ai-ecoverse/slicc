@@ -253,6 +253,30 @@ describe('slicc-scoop-switcher', () => {
       expect(overflow(el)?.items.length).toBe(0);
     });
 
+    it('un-hides chips when the flex CONTAINER grows (no manual reflow)', async () => {
+      // The host's width is content-driven (flex: 0 1 auto): hiding chips
+      // SHRINKS the host, so its own ResizeObserver goes quiet right when
+      // surrounding space frees up (e.g. the freezer rail collapsing after
+      // boot). The parent observation must retrigger the fit decision —
+      // before it, a transient squeeze left "⋯" stuck despite a wide navbar.
+      const container = document.createElement('div');
+      container.style.cssText = 'display:flex;width:120px;overflow:hidden;';
+      const el = document.createElement('slicc-scoop-switcher') as SliccScoopSwitcher;
+      el.scoops = ROSTER;
+      el.style.cssText = 'display:flex;flex:0 1 auto;overflow:hidden;min-width:0;';
+      container.appendChild(el);
+      document.body.appendChild(container);
+      await vi.waitFor(() => {
+        expect(chips(el).some((c) => c.classList.contains('hide'))).toBe(true);
+      });
+
+      container.style.width = '2000px';
+      await vi.waitFor(() => {
+        expect(chips(el).some((c) => c.classList.contains('hide'))).toBe(false);
+        expect(overflow(el)?.items.length ?? 0).toBe(0);
+      });
+    });
+
     it('re-emits the overflow popup selection as the switcher select event', () => {
       const el = mount();
       el.style.cssText = 'display:flex;width:120px;overflow:hidden;';

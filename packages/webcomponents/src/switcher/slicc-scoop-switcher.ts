@@ -289,8 +289,13 @@ export class SliccScoopSwitcher extends HTMLElement {
       });
       return;
     }
-    const widths = visible.map((c) => c.offsetWidth + CHIP_GAP);
-    const total = widths.reduce((a, b) => a + b, 0);
+    // Gaps sit BETWEEN chips: N chips need N-1 gaps, not N. The off-by-one
+    // matters because a content-sized host (flex: 0 1 auto in the navbar)
+    // measures `avail` as exactly the chips' natural width — a phantom
+    // trailing gap pushed `total` past it every time, so the more-button
+    // showed even with a wide-open navbar.
+    const widths = visible.map((c) => c.offsetWidth);
+    const total = widths.reduce((a, b) => a + b, 0) + CHIP_GAP * Math.max(0, visible.length - 1);
     if (total <= avail + 1) {
       this.#feedOverflow([]);
       return;
@@ -304,7 +309,8 @@ export class SliccScoopSwitcher extends HTMLElement {
         used += widths[i];
         return;
       }
-      if (used + widths[i] <= budget) used += widths[i];
+      const needed = CHIP_GAP + widths[i];
+      if (hidden.length === 0 && used + needed <= budget) used += needed;
       else {
         c.classList.add('hide');
         hidden.push(c);
@@ -440,11 +446,16 @@ export class SliccScoopSwitcher extends HTMLElement {
   }
 
   /** Start the reflow ResizeObserver (idempotent). Observes the host so the chip
-   *  budget tracks the actual row width. */
+   *  budget tracks the actual row width — AND the flex container, because the
+   *  host's own width is content-driven (`flex: 0 1 auto`): hiding chips SHRINKS
+   *  the host, so its resizes go quiet exactly when surrounding space frees up
+   *  (e.g. the freezer rail collapsing after boot). Without the parent
+   *  observation a transient squeeze leaves chips stuck in the overflow forever. */
   #observe(): void {
     if (this.#ro || typeof ResizeObserver === 'undefined') return;
     this.#ro = new ResizeObserver(() => this.reflow());
     this.#ro.observe(this);
+    if (this.parentElement) this.#ro.observe(this.parentElement);
   }
 }
 

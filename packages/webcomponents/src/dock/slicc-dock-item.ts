@@ -84,7 +84,9 @@ const STYLE = `
   top: 50%;
   transform: translateY(-50%);
   background: var(--ink);
-  color: #fff;
+  /* --canvas, not #fff: --ink flips near-white in dark mode and hardcoded
+     white text would vanish on it (the freezer-card tip got this right). */
+  color: var(--canvas, #fff);
   font-size: 11px;
   font-family: var(--ui);
   white-space: nowrap;
