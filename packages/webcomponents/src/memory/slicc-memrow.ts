@@ -112,9 +112,6 @@ function ensureMemrowStyle(doc: Document): void {
 /** Memory-tag kinds, in the prototype's vocabulary. */
 export type MemTag = 'user' | 'feedback' | 'project';
 
-/** Map a tag kind to the prototype's two-letter `.mtag` modifier class. */
-const TAG_CLASS: Record<MemTag, string> = { user: 'us', feedback: 'fb', project: 'pj' };
-
 /** Coerce an arbitrary string to a known {@link MemTag}, defaulting to `user`. */
 function normalizeTag(value: string | null): MemTag {
   return value === 'feedback' || value === 'project' ? value : 'user';
@@ -252,13 +249,14 @@ export class SliccMemrow extends HTMLElement {
     titleEl.textContent = this.title;
 
     const tag = this.tag;
-    const cls = TAG_CLASS[tag];
-    // Compose the sibling memtag by tag (kind), and keep the prototype `.mtag`
-    // class + label so the row stays faithful before <slicc-memtag> registers.
-    tagEl.className = `mtag ${cls}`;
-    tagEl.setAttribute('kind', tag);
-    tagEl.setAttribute('tag', tag);
-    tagEl.textContent = tag;
+    // Drive the composed <slicc-memtag> through its real API (`type` picks the
+    // hue + default label). It renders its own pill in shadow DOM — painting
+    // the prototype `.mtag.*` fallback classes on the HOST as well used to
+    // draw a second pill around it (doubled borders). The `.mtag` rules in
+    // the scoped stylesheet remain for raw prototype spans only.
+    tagEl.className = '';
+    tagEl.setAttribute('type', tag);
+    tagEl.textContent = '';
 
     // Replace only the leading summary text node, preserving any relocated
     // slotted children that follow it.

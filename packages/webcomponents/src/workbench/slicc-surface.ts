@@ -52,6 +52,13 @@ slicc-surface[active][layout="column"] {
   flex-direction: column;
   background: #fafafa;
 }
+/* Browser-fullscreen (Fullscreen API): the surface normally inherits the pane's
+   backdrop; standalone over the UA's black fullscreen backdrop it needs its own
+   opaque canvas, and the absolute inset anchors to the viewport. */
+slicc-surface:fullscreen {
+  background: var(--canvas, #fff);
+  position: fixed;
+}
 `;
 
 const STYLE_ID = 'slicc-surface-style';

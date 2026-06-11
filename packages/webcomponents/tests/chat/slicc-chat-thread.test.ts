@@ -149,22 +149,15 @@ describe('slicc-chat-thread', () => {
       expect(getComputedStyle(el).scrollbarGutter).toBe('stable');
     });
 
-    it('applies a two-axis edge feather mask to the inner column', () => {
+    it('the inner column has NO background, blur, or feather mask (sits on the shader)', () => {
+      // The frosted reading card was deliberately dropped: text contrast comes
+      // from the shader rendering low-contrast, not from a card muting it.
       const el = mount();
       const cs = getComputedStyle(inner(el));
+      expect(cs.backgroundColor).toBe('rgba(0, 0, 0, 0)');
+      expect(cs.backdropFilter === 'none' || cs.backdropFilter === '').toBe(true);
       const mask = cs.maskImage || (cs as unknown as { webkitMaskImage: string }).webkitMaskImage;
-      // Two stacked linear-gradients (horizontal + vertical feather).
-      expect(mask).toContain('linear-gradient');
-      expect(mask.match(/linear-gradient/g)?.length).toBe(2);
-    });
-
-    it('paints the per-context frosted shader (color-mix of --ctx over --shaderbg)', () => {
-      const el = mount();
-      const bg = getComputedStyle(inner(el)).backgroundColor;
-      // color-mix resolves to a concrete color value, not transparent. Modern
-      // Chromium serializes it as color(srgb …) rather than rgb(…).
-      expect(bg).not.toBe('rgba(0, 0, 0, 0)');
-      expect(bg).toMatch(/^(rgba?|color)\(/);
+      expect(mask === 'none' || mask === '').toBe(true);
     });
 
     it('forces the local --ctx shader tint from the accent attribute', () => {
@@ -174,16 +167,6 @@ describe('slicc-chat-thread', () => {
       expect(el.style.getPropertyValue('--ctx')).toBe('#8b5cf6');
       el.accent = null;
       expect(el.style.getPropertyValue('--ctx')).toBe('');
-    });
-
-    it('changing accent recomputes the frosted tint', () => {
-      const el = mount((e) => {
-        e.accent = '#f59e0b';
-      });
-      const amber = getComputedStyle(inner(el)).backgroundColor;
-      el.accent = '#06b6d4';
-      const cyan = getComputedStyle(inner(el)).backgroundColor;
-      expect(cyan).not.toBe(amber);
     });
   });
 

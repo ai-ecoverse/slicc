@@ -5,7 +5,7 @@
  * the composer's local echo loop.
  */
 
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
@@ -117,6 +117,34 @@ describe('mountWcUiPreview', () => {
     expect(css).toContain('.terminal-panel__terminal-host{flex:1 1 auto;min-height:0;}');
     // The files surface is just the tree — no dead preview column.
     expect(css).toContain('slicc-file-tree{width:100%;border-right:none;}');
+  });
+
+  it('long-pressing a sprinkle dock item opens its surface in browser fullscreen', () => {
+    const root = mount();
+    const dock = root.querySelector('slicc-dock') as HTMLElement;
+    const shell = root.querySelector('slicc-shell') as HTMLElement;
+    const body = root.querySelector('slicc-workbench-body') as HTMLElement;
+
+    // A sprinkle surface, as the sprinkle zone would have mounted it.
+    const surface = document.createElement('slicc-surface');
+    surface.setAttribute('surface-id', 'sprinkle:hero');
+    const requestFullscreen = vi.fn(() => Promise.resolve());
+    (surface as HTMLElement & { requestFullscreen: () => Promise<void> }).requestFullscreen =
+      requestFullscreen;
+    body.append(surface);
+
+    dock.dispatchEvent(
+      new CustomEvent('slicc-dock-longpress', { bubbles: true, detail: { id: 'sprinkle:hero' } })
+    );
+    expect(shell.hasAttribute('open')).toBe(true);
+    expect(body.getAttribute('active')).toBe('sprinkle:hero');
+    expect(requestFullscreen).toHaveBeenCalledTimes(1);
+
+    // Non-sprinkle ids (tools) are not fullscreen targets.
+    dock.dispatchEvent(
+      new CustomEvent('slicc-dock-longpress', { bubbles: true, detail: { id: 'term' } })
+    );
+    expect(requestFullscreen).toHaveBeenCalledTimes(1);
   });
 
   it('switches the active surface on tab select', () => {

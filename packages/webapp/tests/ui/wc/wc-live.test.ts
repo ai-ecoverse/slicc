@@ -72,7 +72,8 @@ function makeWiring(options: {
     loadMessages: vi.fn(),
   };
   const switcher = document.createElement('slicc-scoop-switcher') as WcShellRefs['switcher'];
-  const refs = { switcher } as unknown as WcShellRefs;
+  const thread = document.createElement('slicc-chat-thread');
+  const refs = { switcher, thread } as unknown as WcShellRefs;
   let selected = options.selected ?? null;
   return {
     refs,
@@ -139,6 +140,22 @@ describe('createWcLiveCallbacks', () => {
     const wiring = makeWiring({ selected: cone, scoops: [cone, scoop({})] });
     createWcLiveCallbacks(wiring).onScoopListUpdate([] as never);
     expect(wiring.refs.switcher.scoops.map((c) => c.key)).toEqual(['cone-1', 'scoop-1']);
+  });
+
+  it('selects the cone on a scoop-list update when nothing is selected yet', () => {
+    // The first state snapshot can land BEFORE the cone restores; a restored
+    // cone arrives only via list updates (no scoop-created) — without this,
+    // sending failed with "no scoop selected" until a manual chip click.
+    const wiring = makeWiring({ selected: null, scoops: [cone] });
+    createWcLiveCallbacks(wiring).onScoopListUpdate([] as never);
+    expect(wiring.selectScoop).toHaveBeenCalledWith(cone);
+  });
+
+  it('leaves the frozen-session view alone on scoop-list updates', () => {
+    const wiring = makeWiring({ selected: null, scoops: [cone] });
+    wiring.refs.thread.setAttribute('context', 'freezer:2026-06-11-some-session.md');
+    createWcLiveCallbacks(wiring).onScoopListUpdate([] as never);
+    expect(wiring.selectScoop).not.toHaveBeenCalled();
   });
 
   it('renders licks for the selected scoop only, skipping web messages', () => {

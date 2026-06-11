@@ -123,6 +123,24 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
       wiring.refs.switcher.scoops = toSwitcherScoops(client.getScoops(), wiring.statuses);
     }
   };
+  /** Read-only frozen-session view — selection is intentionally empty there. */
+  const viewingFrozen = (): boolean =>
+    (wiring.refs.thread.getAttribute('context') ?? '').startsWith('freezer:');
+  /**
+   * Select the cone when nothing is selected. The first state snapshot can
+   * land BEFORE the cone finishes restoring (e.g. right after a clear +
+   * reload) — onReady then has no cone to select, and a restored cone only
+   * ever appears via later scoop-list updates (no scoop-created event). The
+   * frozen view is exempt: its empty selection is deliberate.
+   */
+  const ensureSelection = (): void => {
+    if (wiring.getSelected() || viewingFrozen()) return;
+    const cone = wiring
+      .getClient()
+      ?.getScoops()
+      .find((s) => s.isCone);
+    if (cone) wiring.selectScoop(cone);
+  };
   return {
     onStatusChange: (jid, status) => {
       const previous = wiring.statuses.get(jid);
@@ -135,9 +153,12 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
     },
     onScoopCreated: (scoop) => {
       refreshScoops();
-      if (!wiring.getSelected()) wiring.selectScoop(scoop);
+      if (!wiring.getSelected() && !viewingFrozen()) wiring.selectScoop(scoop);
     },
-    onScoopListUpdate: () => refreshScoops(),
+    onScoopListUpdate: () => {
+      refreshScoops();
+      ensureSelection();
+    },
     onIncomingMessage: (jid, message) => {
       if (wiring.getSelected()?.jid !== jid) return;
       if (message.channel !== 'web' && isLickChannel(message.channel)) {
@@ -156,10 +177,8 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
       wiring.getController()?.loadMessages(messages as unknown as ChatMessage[]);
     },
     onReady: () => {
-      const client = wiring.getClient();
       refreshScoops();
-      const cone = client?.getScoops().find((s) => s.isCone);
-      if (cone && !wiring.getSelected()) wiring.selectScoop(cone);
+      ensureSelection();
       wiring.notifyReady?.();
     },
   };
@@ -238,6 +257,10 @@ function wireFreezerRail(deps: FreezerRailDeps): () => void {
           else await runNewSessionFreezeQuick({ vfs: writer });
         }
         await client.clearAllMessages();
+        // Clear the thread directly — re-selection only *requests* a replay,
+        // and the worker no-ops the reply for a (now) empty history, which
+        // left the old conversation on screen until the next reload.
+        getController()?.loadMessages([]);
         refreshFreezer();
         const cone = client.getScoops().find((s) => s.isCone);
         if (cone) selectScoop(cone);
@@ -371,7 +394,8 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
 /** Controller + dip lifecycle over the live agent handle. */
 function createWcController(
   refs: WcShellRefs,
-  client: OffscreenClient
+  client: OffscreenClient,
+  onIdle?: () => void
 ): { controller: WcChatController; agentHandle: ReturnType<OffscreenClient['createAgentHandle']> } {
   // Dip licks dispatch to the cone as the `inline` sprinkle (the legacy
   // onDipLick local path — welcome-flow interception and follower
@@ -387,6 +411,7 @@ function createWcController(
     onProcessingChange: (processing) => {
       refs.frame.toggleAttribute('data-processing', processing);
       refs.inputCard.querySelector('slicc-send-button')?.toggleAttribute('busy', processing);
+      if (!processing) onIdle?.();
     },
     onMessageDisposed: (messageId) => {
       const instances = dipInstances.get(messageId);
@@ -428,6 +453,93 @@ export interface AttachWcClientOptions {
  * Phase B: wire a connected client into the prepared shell — controller,
  * composer, switcher, workbench, freezer, sprinkles, and nav.
  */
+/**
+ * Composer wiring: suggested placeholder (turn-finished hook), the add-menu's
+ * real search + staged attachments, submit/stop, and the thinking pill.
+ */
+function wireWcComposer(deps: {
+  boot: WcShellBoot;
+  client: OffscreenClient;
+  agentHandle: ReturnType<OffscreenClient['createAgentHandle']>;
+  setRefreshPlaceholder(fn: () => void): void;
+  triggerPlaceholder(): void;
+  openReader(): Promise<WcPageVfs['reader']>;
+  log: BootStageLogger;
+}): void {
+  const { boot, client, agentHandle, openReader, log } = deps;
+  const { refs } = boot;
+  void import('./wc-placeholder.js').then(({ createPlaceholderRefresher }) => {
+    deps.setRefreshPlaceholder(
+      createPlaceholderRefresher({
+        inputCard: refs.inputCard as HTMLElement & { value?: string },
+        getMessages: () => boot.getController()?.getMessages() ?? [],
+        defaultPlaceholder:
+          refs.inputCard.getAttribute('placeholder') ?? 'Ask sliccy, or describe a change…',
+      })
+    );
+  });
+
+  // Hydrate the persisted cone conversation immediately — the worker's
+  // canonical replay (request-scoop-messages on selection) replaces it.
+  void (async () => {
+    try {
+      const { SessionStore } = await import('../session-store.js');
+      const store = new SessionStore();
+      await store.init();
+      const session = await store.load('session-cone');
+      if (session && session.messages.length > 0 && !boot.getSelected()) {
+        boot.getController()?.loadMessages(session.messages);
+        deps.triggerPlaceholder();
+      }
+    } catch (err) {
+      log.warn('WC session hydration failed', err);
+    }
+  })();
+
+  // Add-menu (+): real Files/Skills/Conversations search + staged attachments
+  // (uploads, VFS picks, camera photos, screen captures).
+  let attachStage: import('./wc-attach.js').WcAttachmentStage | null = null;
+  void import('./wc-attach.js')
+    .then(({ wireWcAttach }) => {
+      attachStage = wireWcAttach({
+        inputCard: refs.inputCard as HTMLElement & { value?: string },
+        freezer: refs.freezer,
+        openReader,
+        listConversations: async () => {
+          const { readSessionsIndex } = await import('../session-freezer.js');
+          const entries = await readSessionsIndex(await openReader());
+          return entries.map((e) => ({
+            id: e.filename,
+            label: e.title,
+            sub: `${e.messageCount} turns`,
+          }));
+        },
+        log,
+      });
+    })
+    .catch((err) => log.error('WC add-menu wiring failed', err));
+
+  refs.inputCard.addEventListener('submit', (event) => {
+    const text = submittedText(event);
+    if (!text) return;
+    boot.getController()?.sendUserMessage(text, attachStage?.take());
+    (refs.inputCard as HTMLElement & { clear?: () => void }).clear?.();
+  });
+
+  // The send button morphs into a stop control while a turn is processing.
+  refs.inputCard.addEventListener('stop', () => {
+    if (boot.getController()?.processing) agentHandle.stop();
+  });
+
+  // Brain pill: cycle the scoop's thinking level (persisted by the worker).
+  refs.composerMeta.addEventListener('thinking-change', (event) => {
+    const metaLevel = (event as CustomEvent<{ thinking?: string }>).detail?.thinking;
+    const level = thinkingLevelForAgent(metaLevel);
+    const selected = boot.getSelected();
+    if (selected && level) client.setScoopThinkingLevel(selected.jid, level);
+  });
+}
+
 export function attachWcClient(
   boot: WcShellBoot,
   client: OffscreenClient,
@@ -436,7 +548,13 @@ export function attachWcClient(
 ): void {
   const { refs } = boot;
   boot.setClient(client);
-  const { controller, agentHandle } = createWcController(refs, client);
+  // Turn-finished hook: regenerate the suggested composer placeholder from
+  // the fresh conversation (assigned by wireWcComposer once its module loads).
+  let refreshPlaceholder: (() => void) | null = null;
+  const triggerPlaceholder = (): void => {
+    refreshPlaceholder?.();
+  };
+  const { controller, agentHandle } = createWcController(refs, client, triggerPlaceholder);
   boot.setController(controller);
 
   // Page-side VFS: the worker owns the (OPFS) filesystem — page reads and
@@ -458,40 +576,16 @@ export function attachWcClient(
   };
   const openReader = async (): Promise<WcPageVfs['reader']> => (await openVfs()).reader;
 
-  // Hydrate the persisted cone conversation immediately — the worker's
-  // canonical replay (request-scoop-messages on selection) replaces it.
-  void (async () => {
-    try {
-      const { SessionStore } = await import('../session-store.js');
-      const store = new SessionStore();
-      await store.init();
-      const session = await store.load('session-cone');
-      if (session && session.messages.length > 0 && !boot.getSelected()) {
-        boot.getController()?.loadMessages(session.messages);
-      }
-    } catch (err) {
-      log.warn('WC session hydration failed', err);
-    }
-  })();
-
-  refs.inputCard.addEventListener('submit', (event) => {
-    const text = submittedText(event);
-    if (!text) return;
-    boot.getController()?.sendUserMessage(text);
-    (refs.inputCard as HTMLElement & { clear?: () => void }).clear?.();
-  });
-
-  // The send button morphs into a stop control while a turn is processing.
-  refs.inputCard.addEventListener('stop', () => {
-    if (boot.getController()?.processing) agentHandle.stop();
-  });
-
-  // Brain pill: cycle the scoop's thinking level (persisted by the worker).
-  refs.composerMeta.addEventListener('thinking-change', (event) => {
-    const metaLevel = (event as CustomEvent<{ thinking?: string }>).detail?.thinking;
-    const level = thinkingLevelForAgent(metaLevel);
-    const selected = boot.getSelected();
-    if (selected && level) client.setScoopThinkingLevel(selected.jid, level);
+  wireWcComposer({
+    boot,
+    client,
+    agentHandle,
+    setRefreshPlaceholder: (fn) => {
+      refreshPlaceholder = fn;
+    },
+    triggerPlaceholder,
+    openReader,
+    log,
   });
 
   refs.switcher.addEventListener('slicc-scoop-select', (event) => {

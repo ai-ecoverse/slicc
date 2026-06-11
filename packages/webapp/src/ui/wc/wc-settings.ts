@@ -17,7 +17,10 @@ interface SettingsLogger {
 
 const STYLE_ID = 'slicc-wc-settings-style';
 const CSS = `
-.wcset{display:flex;flex-direction:column;gap:14px;font-family:var(--ui);color:var(--ink);min-width:min(420px,80vw);}
+/* Width is owned by the dialog card (via ::part) — a min-width on the body
+   used to overflow the card's content box and clip the row borders. */
+slicc-dialog.wcset-dialog::part(dialog){width:min(520px,92vw);}
+.wcset{display:flex;flex-direction:column;gap:14px;font-family:var(--ui);color:var(--ink);}
 .wcset__list{display:flex;flex-direction:column;gap:8px;}
 .wcset__empty{color:var(--txt-3);font-size:12.5px;}
 .wcset__row{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--canvas);}
@@ -268,6 +271,7 @@ export async function showWcSettings(log: SettingsLogger): Promise<boolean> {
 
   return new Promise((resolve) => {
     const dialog = document.createElement('slicc-dialog');
+    dialog.classList.add('wcset-dialog');
     dialog.setAttribute('heading', 'Accounts');
 
     const body = div('wcset');

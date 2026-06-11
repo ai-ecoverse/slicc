@@ -83,6 +83,21 @@ describe('showWcSettings', () => {
     expect(document.querySelector('slicc-dialog')).toBeNull();
   });
 
+  it('sizes through the dialog card, not a body min-width (border-clip regression)', async () => {
+    const result = showWcSettings(log);
+    const dialog = await openDialog();
+    // The card width is driven via ::part(dialog) on the tagged dialog…
+    expect(dialog.classList.contains('wcset-dialog')).toBe(true);
+    const css = document.getElementById('slicc-wc-settings-style')?.textContent ?? '';
+    expect(css).toContain('slicc-dialog.wcset-dialog::part(dialog){width:min(520px,92vw);}');
+    // …and the body rule must NOT force a min-width that overflows the
+    // card's content box (which clipped the account rows' right border).
+    const bodyRule = css.match(/\.wcset\{[^}]*\}/)?.[0] ?? '';
+    expect(bodyRule).not.toContain('min-width');
+    clickDone(dialog);
+    await result;
+  });
+
   it('shows the empty state without accounts', async () => {
     const result = showWcSettings(log);
     const dialog = await openDialog();

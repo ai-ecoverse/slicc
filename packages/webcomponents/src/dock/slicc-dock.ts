@@ -137,6 +137,9 @@ function normalizeKind(value: string | null | undefined): 'sprinkle' | 'tool' {
  * @fires slicc-dock-select - an item was selected; `detail` is {@link DockSelectDetail}
  * @fires slicc-dock-collapse - the active item was toggled shut; `detail` is
  *   {@link DockCollapseDetail}
+ * @fires slicc-dock-longpress - an item was click-held (or modifier-clicked);
+ *   `detail` is {@link DockSelectDetail}. The host's secondary action — e.g.
+ *   opening the surface in browser fullscreen.
  */
 export class SliccDock extends HTMLElement {
   static get observedAttributes(): string[] {
@@ -146,6 +149,7 @@ export class SliccDock extends HTMLElement {
   #items: DockItemDescriptor[] = [];
   #onSelect: ((e: Event) => void) | null = null;
   #onCollapse: ((e: Event) => void) | null = null;
+  #onLongpress: ((e: Event) => void) | null = null;
   #initialized = false;
 
   connectedCallback(): void {
@@ -159,12 +163,15 @@ export class SliccDock extends HTMLElement {
       this.#initialized = true;
     }
     if (!this.#onSelect) {
-      // The child dock-items emit their own `select` / `collapse` on click; the
-      // dock listens (capturing the bubbling child events) and re-emits canonically.
+      // The child dock-items emit their own `select` / `collapse` / `longpress`;
+      // the dock listens (capturing the bubbling child events) and re-emits
+      // canonically.
       this.#onSelect = (e: Event) => this.#handleChildSelect(e);
       this.#onCollapse = (e: Event) => this.#handleChildCollapse(e);
+      this.#onLongpress = (e: Event) => this.#handleChildLongpress(e);
       this.addEventListener('select', this.#onSelect);
       this.addEventListener('collapse', this.#onCollapse);
+      this.addEventListener('longpress', this.#onLongpress);
     }
     this.#render();
   }
@@ -177,6 +184,10 @@ export class SliccDock extends HTMLElement {
     if (this.#onCollapse) {
       this.removeEventListener('collapse', this.#onCollapse);
       this.#onCollapse = null;
+    }
+    if (this.#onLongpress) {
+      this.removeEventListener('longpress', this.#onLongpress);
+      this.#onLongpress = null;
     }
   }
 
@@ -351,6 +362,23 @@ export class SliccDock extends HTMLElement {
     this.collapse();
   }
 
+  /** A child dock-item was click-held: select it (so its surface opens) and
+   *  re-emit the canonical `slicc-dock-longpress` for the host's secondary
+   *  action (e.g. browser fullscreen). */
+  #handleChildLongpress(e: Event): void {
+    const id = this.#idFromChildEvent(e);
+    if (id == null) return;
+    e.stopPropagation();
+    if (this.active !== id) this.selectItem(id);
+    this.dispatchEvent(
+      new CustomEvent<DockSelectDetail>('slicc-dock-longpress', {
+        detail: { id, kind: this.#kindFor(id) },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
   /** Resolve the originating dock-item id from a child select/collapse event,
    *  preferring the event detail and falling back to the element's `data-t`. */
   #idFromChildEvent(e: Event): string | null {
@@ -371,5 +399,6 @@ declare global {
   interface HTMLElementEventMap {
     'slicc-dock-select': CustomEvent<DockSelectDetail>;
     'slicc-dock-collapse': CustomEvent<DockCollapseDetail>;
+    'slicc-dock-longpress': CustomEvent<DockSelectDetail>;
   }
 }

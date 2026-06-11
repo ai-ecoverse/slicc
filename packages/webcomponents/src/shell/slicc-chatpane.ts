@@ -54,29 +54,16 @@ const STYLE = `
 .slicc-chatpane[narrow] {
   width: 34%;
 }
-/* Wide view: the centered reading card floats over the animated shader
-   background, so its inner must stay translucent enough for the shader to
-   shimmer through. The thread's own inner fill is a near-opaque frosted tint
-   (~0.83 alpha); here we drop the shaderbg component so the resolved fill lands
-   around half alpha. The inherited backdrop blur plus the remaining --ctx tint
-   keep the agent / user prose readable in both light and dark, and the inner's
-   color: var(--ink) (set by the thread) is untouched. This out-specifies the
-   thread's own wide inner background; the narrow rule below drops the
-   background entirely, so this is the wide, centered-card layout only. */
-.slicc-chatpane .slicc-thread__inner {
-  background: color-mix(in srgb, var(--ctx) 14%, color-mix(in srgb, var(--shaderbg) 45%, transparent));
-}
-/* In the narrow column the frosted reading card is pointless — there is no wide
-   gutter for it to feather into. The inner fills the full width AND viewport
-   height of the thread and drops its background/blur/feather/radius so no thread
-   background shows behind it. The min-height is the FULL viewport (not the
-   parent's 100%) so a freezer / scoop with little history still fills to the
-   bottom of the screen instead of ending abruptly partway down — messages stay
-   top-aligned and the filler space sits below; long histories still scroll.
-   The 100vh declaration is the fallback for engines without dynamic-viewport
-   units; the 100dvh override tracks mobile browser chrome (URL bar) collapse.
-   Out-specifies the thread's own [open] inner rule (0,3,0 vs 0,2,1). Wide view
-   keeps the centered, frosted card untouched. */
+/* The reading column is background-free in every layout (the frosted card was
+   dropped — the shader renders low-contrast instead). In the narrow column the
+   inner additionally fills the full width AND viewport height of the thread.
+   The min-height is the FULL viewport (not the parent's 100%) so a freezer /
+   scoop with little history still fills to the bottom of the screen instead of
+   ending abruptly partway down — messages stay top-aligned and the filler
+   space sits below; long histories still scroll. The 100vh declaration is the
+   fallback for engines without dynamic-viewport units; the 100dvh override
+   tracks mobile browser chrome (URL bar) collapse. Out-specifies the thread's
+   own [open] inner rule (0,3,0 vs 0,2,1). */
 .slicc-chatpane[narrow] .slicc-thread__inner {
   width: 100%;
   max-width: none;

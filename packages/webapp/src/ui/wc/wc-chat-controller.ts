@@ -137,18 +137,19 @@ export class WcChatController {
   }
 
   /** Append a user prompt locally and forward it to the agent. */
-  sendUserMessage(text: string): void {
+  sendUserMessage(text: string, attachments?: ChatMessage['attachments']): void {
     const trimmed = text.trim();
-    if (!trimmed) return;
+    if (!trimmed && !attachments?.length) return;
     const message: ChatMessage = {
       id: uid(),
       role: 'user',
       content: trimmed,
       timestamp: Date.now(),
+      attachments: attachments?.length ? attachments : undefined,
       queued: this.#processing ? true : undefined,
     };
     this.#appendMessage(message);
-    this.#agent.sendMessage(trimmed, message.id);
+    this.#agent.sendMessage(trimmed, message.id, message.attachments);
     try {
       this.#onLocalUserMessage?.(trimmed, message.id);
     } catch (err) {

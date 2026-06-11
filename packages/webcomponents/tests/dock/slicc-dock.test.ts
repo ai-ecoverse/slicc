@@ -8,6 +8,7 @@ import {
   type DockSelectDetail,
   SliccDock,
 } from '../../src/dock/slicc-dock.js';
+import { LONG_PRESS_MS } from '../../src/internal/long-press.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
 
 const SPRINKLES: DockItemDescriptor[] = [
@@ -344,6 +345,48 @@ describe('slicc-dock', () => {
       const cs = getComputedStyle(div);
       expect(cs.width).toBe('22px');
       expect(cs.height).toBe('1px');
+    });
+  });
+
+  describe('long-press (secondary action)', () => {
+    it('click-holding an item selects it and re-emits slicc-dock-longpress', () => {
+      vi.useFakeTimers();
+      try {
+        const el = mount();
+        const longpresses: DockSelectDetail[] = [];
+        const selects: DockSelectDetail[] = [];
+        el.addEventListener('slicc-dock-longpress', (e) =>
+          longpresses.push((e as CustomEvent<DockSelectDetail>).detail)
+        );
+        el.addEventListener('slicc-dock-select', (e) =>
+          selects.push((e as CustomEvent<DockSelectDetail>).detail)
+        );
+
+        const button = itemById(el, 'hero')?.shadowRoot?.querySelector('button') as HTMLElement;
+        button.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }));
+        vi.advanceTimersByTime(LONG_PRESS_MS);
+
+        expect(longpresses).toEqual([{ id: 'hero', kind: 'sprinkle' }]);
+        // The hold also selects (the surface opens before going fullscreen).
+        expect(el.active).toBe('hero');
+        expect(selects.map((s) => s.id)).toEqual(['hero']);
+
+        // The trailing click after a fired long-press is swallowed — no
+        // collapse of the now-active item.
+        button.dispatchEvent(new MouseEvent('click', { button: 0, bubbles: true }));
+        expect(el.active).toBe('hero');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('a plain short click still selects without a longpress', () => {
+      const el = mount();
+      const longpresses: unknown[] = [];
+      el.addEventListener('slicc-dock-longpress', (e) => longpresses.push(e));
+      clickItem(el, 'hero');
+      expect(el.active).toBe('hero');
+      expect(longpresses).toHaveLength(0);
     });
   });
 });

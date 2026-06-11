@@ -125,7 +125,9 @@ export type SliccAddProvider = (
 
 /** The `detail` payload of the `slicc-add` event. */
 export type SliccAddDetail =
-  | { kind: 'upload'; name: string; size: number }
+  // `file` carries the real picked/dropped File so hosts can read its
+  // content; it is absent only for the synthetic quick-action row itself.
+  | { kind: 'upload'; name: string; size: number; file?: File }
   | { kind: 'capture'; mode: 'photo' | 'screenshot'; label: string }
   | { kind: string; id: string; label: string };
 
@@ -395,7 +397,7 @@ export class SliccAddMenu extends HTMLElement {
     this.#search.addEventListener('keydown', (e) => this.#onKey(e));
     this.#file.addEventListener('change', () => {
       for (const f of Array.from(this.#file.files ?? [])) {
-        this.#emit({ kind: 'upload', name: f.name, size: f.size });
+        this.#emit({ kind: 'upload', name: f.name, size: f.size, file: f });
       }
       this.#file.value = '';
       this.close();
@@ -419,7 +421,7 @@ export class SliccAddMenu extends HTMLElement {
       const files = (e as DragEvent).dataTransfer?.files;
       if (files?.length) {
         for (const f of Array.from(files))
-          this.#emit({ kind: 'upload', name: f.name, size: f.size });
+          this.#emit({ kind: 'upload', name: f.name, size: f.size, file: f });
         this.close();
       }
     });

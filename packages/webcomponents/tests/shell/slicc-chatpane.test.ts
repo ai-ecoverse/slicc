@@ -131,22 +131,17 @@ describe('slicc-chatpane', () => {
     expect(inner.getBoundingClientRect().height).toBeGreaterThanOrEqual(window.innerHeight - 0.5);
   });
 
-  it('wide: the thread inner keeps its centered frosted card but stays translucent so the shader shimmers through', () => {
+  it('wide: the thread inner is background-free — prose sits directly on the shader field', () => {
     const el = mount(false);
     const thread = el.thread as HTMLElement;
     const inner = thread.querySelector('.slicc-thread__inner') as HTMLElement;
     const cs = getComputedStyle(inner);
-    // The 776px reading cap (the centered card) is preserved in the wide layout.
+    // The 776px reading cap (the centered column) is preserved in the wide layout.
     expect(cs.maxWidth).toBe('776px');
-    // The fill is a real tint — not fully transparent...
-    expect(cs.backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
-    // ...yet translucent (alpha strictly < 1) so the animated shader behind it
-    // shimmers through instead of being fully hidden by an opaque card.
-    const alpha = alphaOf(cs.backgroundColor);
-    expect(alpha).toBeGreaterThan(0);
-    expect(alpha).toBeLessThan(1);
-    // Contrast is preserved: the inner inherits color: var(--ink) (near-black in
-    // light mode), so the agent / user prose stays readable over the frosted card.
+    // The frosted reading card is gone: alpha 0 — text contrast comes from the
+    // shader itself rendering low-contrast.
+    expect(alphaOf(cs.backgroundColor)).toBe(0);
+    // Contrast is preserved through color: var(--ink) (near-black in light mode).
     expect(cs.color).toBe('rgb(10, 10, 10)');
   });
 

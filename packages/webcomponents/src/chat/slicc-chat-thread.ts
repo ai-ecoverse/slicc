@@ -5,19 +5,14 @@ import { define } from '../internal/define.js';
  * cannot carry an inline `<style>` in a shadow root, so the chrome is injected
  * once into the host document (idempotent) and selected by the host tag.
  *
- * Lifted faithfully from the prototype (`proto/StellarRubySwift.html` `.thread`
- * / `.inner`): a scrollable `.thread` wrapper holding a centered, max-width
- * reading column (`.inner`) that carries the per-context frosted shader. The
- * column is tinted with `--ctx` over a translucent `--shaderbg`, blurred, and
- * feathered on both axes so the fade lives entirely in the padding gutter and
- * never eats into the readable text. The `open` host attribute mirrors the
- * prototype's `.shell.open .inner`: the column shrinks and the feather tightens
- * (24px / 32px) to match the narrower chat pane.
- *
- * Everything is var-driven (`--ctx` / `--shaderbg` / `--line` / `--ui`) so dark
- * mode flips automatically via the inherited theme scope — `--shaderbg` darkens
- * in `body.dark` and `--ctx` is recomputed per context, so the frosted tint
- * recomputes with no explicit dark override.
+ * Lifted from the prototype (`proto/StellarRubySwift.html` `.thread` /
+ * `.inner`): a scrollable `.thread` wrapper holding a centered, max-width
+ * reading column (`.inner`). The prototype's frosted reading card (tinted,
+ * blurred, edge-feathered background) was deliberately dropped — the column
+ * sits directly on the shader field, and text contrast comes from the shader
+ * rendering low-contrast instead. The `open` host attribute mirrors the
+ * prototype's `.shell.open .inner`: the column padding tightens (24px / 32px)
+ * to match the narrower chat pane.
  */
 const STYLE = `
 slicc-chat-thread {
@@ -41,43 +36,24 @@ slicc-chat-thread > .slicc-thread__inner {
   padding: 56px 72px;
   font-family: var(--ui);
   /* Primary text color for the reading column. Without this the message prose
-     inherits the UA default (black), which is invisible on the dark frosted
-     surface in dark mode. --ink flips light/dark with the theme. */
+     inherits the UA default (black). --ink flips light/dark with the theme. */
   color: var(--ink);
-  background: color-mix(in srgb, var(--ctx) 14%, color-mix(in srgb, var(--shaderbg) 80%, transparent));
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  border-radius: 14px;
-  -webkit-mask-image:
-    linear-gradient(to right, transparent 0, #000 72px, #000 calc(100% - 72px), transparent 100%),
-    linear-gradient(to bottom, transparent 0, #000 56px, #000 calc(100% - 56px), transparent 100%);
-  -webkit-mask-composite: source-in;
-  mask-image:
-    linear-gradient(to right, transparent 0, #000 72px, #000 calc(100% - 72px), transparent 100%),
-    linear-gradient(to bottom, transparent 0, #000 56px, #000 calc(100% - 56px), transparent 100%);
-  mask-composite: intersect;
+  /* NO background / blur / feather here: the reading column sits directly on
+     the shader field. Text contrast comes from the shader itself rendering
+     low-contrast (its strokes stay close to the base color) — the old frosted
+     card muted the shader everywhere instead. */
 }
 slicc-chat-thread[open] > .slicc-thread__inner {
   padding: 24px 32px;
-  -webkit-mask-image:
-    linear-gradient(to right, transparent 0, #000 32px, #000 calc(100% - 32px), transparent 100%),
-    linear-gradient(to bottom, transparent 0, #000 24px, #000 calc(100% - 24px), transparent 100%);
-  mask-image:
-    linear-gradient(to right, transparent 0, #000 32px, #000 calc(100% - 32px), transparent 100%),
-    linear-gradient(to bottom, transparent 0, #000 24px, #000 calc(100% - 24px), transparent 100%);
 }
 /* Narrow / extension-sidebar: the reading column fills the full width — no
-   centered 776px cap and no horizontal edge feather, so the frosted surface
-   reaches both edges instead of leaving bare shader showing on the sides. */
+   centered 776px cap. */
 @media (max-width: 560px) {
   slicc-chat-thread > .slicc-thread__inner,
   slicc-chat-thread[open] > .slicc-thread__inner {
     max-width: none;
     margin: 0;
     padding: 16px 14px;
-    border-radius: 0;
-    -webkit-mask-image: none;
-    mask-image: none;
   }
 }
 `;
@@ -95,10 +71,9 @@ function ensureThreadStyle(doc: Document): void {
 
 /**
  * `<slicc-chat-thread>` — the prototype's scrollable chat column (`.thread` +
- * `.inner`). A scroll wrapper hosting a centered, 776px-max reading column that
- * carries the per-context frosted shader (a `--ctx`-tinted, blurred surface with
- * a two-axis edge feather) and composes message / day-label / card children in
- * DOM order.
+ * `.inner`). A scroll wrapper hosting a centered, 776px-max reading column
+ * (background-free — it sits directly on the shader field) that composes
+ * message / day-label / card children in DOM order.
  *
  * Light DOM (no shadow root): the host renders its own `.slicc-thread__inner`
  * column and relocates any light children into it, so the host app can style the

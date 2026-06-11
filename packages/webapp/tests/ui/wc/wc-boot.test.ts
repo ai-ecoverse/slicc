@@ -84,7 +84,11 @@ describe('prepareWcShell + attachWcClient', () => {
     boot.refs.inputCard.dispatchEvent(
       new CustomEvent('submit', { bubbles: true, detail: { value: 'hello cone' } })
     );
-    expect(fake.handle.sendMessage).toHaveBeenCalledWith('hello cone', expect.any(String));
+    expect(fake.handle.sendMessage).toHaveBeenCalledWith(
+      'hello cone',
+      expect.any(String),
+      undefined
+    );
     // The submit handler clears the input card for the next prompt.
     expect(boot.refs.inputCard.getAttribute('value') ?? '').toBe('');
   });
@@ -174,6 +178,13 @@ describe('prepareWcShell + attachWcClient', () => {
     const fake = makeFakeClient();
     attachWcClient(boot, fake.client, log);
 
+    // Seed a visible conversation: the clear must empty it WITHOUT relying
+    // on a history replay (the worker no-ops the reply for empty histories).
+    fake.emit({ type: 'message_start', messageId: 'm1' });
+    fake.emit({ type: 'content_delta', messageId: 'm1', text: 'old conversation' });
+    fake.emit({ type: 'content_done', messageId: 'm1' });
+    expect(boot.refs.thread.querySelector('slicc-agent-message')).toBeTruthy();
+
     const freezerNew = boot.refs.freezer.querySelector('slicc-freezer-new') as HTMLElement;
     // A save click is what the user reported stuck: the library enters the
     // busy state optimistically; the host must exit it when the flow ends.
@@ -187,5 +198,6 @@ describe('prepareWcShell + attachWcClient', () => {
       expect(freezerNew.hasAttribute('busy')).toBe(false);
     });
     expect(fake.raw.clearAllMessages).toHaveBeenCalledTimes(1);
+    expect(boot.refs.thread.querySelector('slicc-agent-message')).toBeNull();
   });
 });

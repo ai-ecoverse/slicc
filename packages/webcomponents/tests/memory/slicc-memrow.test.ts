@@ -66,31 +66,36 @@ describe('slicc-memrow', () => {
     const el = mount();
     expect(el.tag).toBe('user');
     const tag = el.querySelector('slicc-memtag');
-    expect(tag?.classList.contains('us')).toBe(true);
-    expect(tag?.getAttribute('kind')).toBe('user');
+    expect(tag?.getAttribute('type')).toBe('user');
   });
 
-  it('composes <slicc-memtag> by tag for each kind', () => {
-    const cases: Array<['user' | 'feedback' | 'project', string, string]> = [
-      ['user', 'us', 'user'],
-      ['feedback', 'fb', 'feedback'],
-      ['project', 'pj', 'project'],
+  it('composes <slicc-memtag> by tag for each kind — through its type API, no host pill', () => {
+    const cases: Array<['user' | 'feedback' | 'project', string]> = [
+      ['user', 'user'],
+      ['feedback', 'feedback'],
+      ['project', 'project'],
     ];
-    for (const [tag, cls, label] of cases) {
+    for (const [tag, label] of cases) {
       const el = mount({ tag });
       const memtag = el.querySelector('slicc-memtag');
       expect(memtag).not.toBeNull();
-      expect(memtag?.classList.contains('mtag')).toBe(true);
-      expect(memtag?.classList.contains(cls)).toBe(true);
-      expect(memtag?.getAttribute('kind')).toBe(tag);
-      expect(memtag?.textContent).toBe(label);
+      expect(memtag?.getAttribute('type')).toBe(tag);
+      // The component renders its own shadow pill with the per-type default
+      // label; the host must NOT carry the prototype `.mtag.*` fallback
+      // classes — that painted a second pill around the real one.
+      expect(memtag?.classList.contains('mtag')).toBe(false);
+      expect(memtag?.shadowRoot?.textContent).toContain(label);
+      // Exactly one painted border: host border-width 0, shadow pill 1px.
+      expect(getComputedStyle(memtag as Element).borderTopWidth).toBe('0px');
+      const pill = memtag?.shadowRoot?.querySelector('.mtag') as Element;
+      expect(getComputedStyle(pill).borderTopWidth).toBe('1px');
     }
   });
 
   it('coerces an unknown tag to user', () => {
     const el = mount({ tag: 'bogus' });
     expect(el.tag).toBe('user');
-    expect(el.querySelector('slicc-memtag')?.classList.contains('us')).toBe(true);
+    expect(el.querySelector('slicc-memtag')?.getAttribute('type')).toBe('user');
   });
 
   it('escapes interpolated title and summary text', () => {

@@ -214,6 +214,24 @@ function wireDockToWorkbench(
   dock.addEventListener('slicc-dock-collapse', () => {
     shell.removeAttribute('open');
   });
+  // Click-and-hold on a sprinkle launcher: open its surface in BROWSER
+  // fullscreen (the real Fullscreen API — the long-press release is the user
+  // gesture that authorizes it). Esc / the UA chrome exits natively.
+  dock.addEventListener('slicc-dock-longpress', (event) => {
+    const id = (event as CustomEvent<{ id: string }>).detail?.id;
+    if (!id?.startsWith('sprinkle:')) return;
+    shell.setAttribute('open', '');
+    body.setAttribute('active', id);
+    onSurfaceActivate?.(id);
+    // Escape for a double-quoted attribute selector (CSS.escape is for
+    // identifiers, and jsdom lacks it).
+    const quoted = id.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    const surface = body.querySelector<HTMLElement>(`[surface-id="${quoted}"]`);
+    surface?.requestFullscreen?.().catch(() => {
+      // Denied / unsupported (e.g. iframe without allowfullscreen) — the
+      // surface is still open in the workbench, just not fullscreen.
+    });
+  });
 }
 
 /** Tab selection switches the active workbench surface. */

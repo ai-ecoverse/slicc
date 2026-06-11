@@ -72,7 +72,10 @@ void main(){
   vec3 lineCol=mix(vec3(0.78,0.55,0.30),vec3(0.86,0.62,0.36),u_dark);
   vec3 hiCol=mix(vec3(0.90,0.72,0.46),vec3(0.92,0.74,0.48),u_dark);
   vec3 tint=mix(lineCol,hiCol,bevel*0.6); float stroke=outline*onState;
-  vec3 col=mix(bg,tint,clamp(stroke*0.45,0.0,0.45));
+  // Low-contrast lattice: chat prose sits DIRECTLY on this field (the frosted
+  // reading card is gone), so strokes stay close to the base color — toward
+  // the light bg in light mode, toward the dark bg in dark mode.
+  vec3 col=mix(bg,tint,clamp(stroke*0.20,0.0,0.20));
   col+=u_evt*u_energy*stroke*exp(-dist*dist*4.0)*0.18;
   gl_FragColor=vec4(col,1.0);
 }`;

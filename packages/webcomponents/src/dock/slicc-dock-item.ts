@@ -1,6 +1,7 @@
 import { define } from '../internal/define.js';
 import { h, sheet } from '../internal/dom.js';
 import { iconEl } from '../internal/icons.js';
+import { attachLongPressGesture, type LongPressHandle } from '../internal/long-press.js';
 
 /**
  * Per-instance stylesheet for the dock launcher button, lifted verbatim from the
@@ -147,6 +148,8 @@ const ICON_SIZE = 18;
  * @attr lit - boolean; the transient lit state (`.di.lit`) — kind-hue ring + tint
  * @fires select - `CustomEvent<{ id: string | null }>` when an idle item is clicked
  * @fires collapse - `CustomEvent<{ id: string | null }>` when an already-active item is clicked
+ * @fires longpress - `CustomEvent<{ id: string | null }>` when the item is click-held
+ *   past the long-press threshold (or modifier-clicked) — the secondary action
  * @csspart button - the inner `.di` button
  * @csspart glyph - the glyph wrapper
  * @csspart icon - the lucide `<svg>` glyph
@@ -157,11 +160,18 @@ export class SliccDockItem extends HTMLElement {
   static readonly observedAttributes = ['item-id', 'kind', 'hue', 'icon', 'tip', 'active', 'lit'];
 
   readonly #root: ShadowRoot;
+  /** Live click-and-hold gesture on the current button (re-armed per render). */
+  #gesture: LongPressHandle | null = null;
 
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
     this.#root.adoptedStyleSheets = [SHEET];
+  }
+
+  disconnectedCallback(): void {
+    this.#gesture?.destroy();
+    this.#gesture = null;
   }
 
   connectedCallback(): void {
@@ -272,7 +282,14 @@ export class SliccDockItem extends HTMLElement {
     const hue = this.hue;
     if (hue) button.style.setProperty('--h', hue);
 
-    button.addEventListener('click', this.#onClick);
+    // Click-and-hold gesture (shared contract): a short click keeps the
+    // select / collapse semantics, holding past the threshold (or a
+    // modifier-click) fires the secondary `longpress` action instead.
+    this.#gesture?.destroy();
+    this.#gesture = attachLongPressGesture(button, {
+      onShortClick: this.#onClick,
+      onLongPress: () => this.#emit('longpress'),
+    });
 
     this.#root.replaceChildren(button);
   }
@@ -282,7 +299,10 @@ export class SliccDockItem extends HTMLElement {
    * Both events are composed + bubbling and carry the launcher id.
    */
   #onClick = (): void => {
-    const type = this.active ? 'collapse' : 'select';
+    this.#emit(this.active ? 'collapse' : 'select');
+  };
+
+  #emit(type: 'select' | 'collapse' | 'longpress'): void {
     this.dispatchEvent(
       new CustomEvent<{ id: string | null }>(type, {
         detail: { id: this.itemId },
@@ -290,7 +310,7 @@ export class SliccDockItem extends HTMLElement {
         composed: true,
       })
     );
-  };
+  }
 }
 
 define('slicc-dock-item', SliccDockItem);

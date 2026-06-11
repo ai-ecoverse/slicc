@@ -324,6 +324,24 @@ describe('slicc-add-menu', () => {
     expect(el.hasAttribute('data-dropping')).toBe(false);
   });
 
+  it('a dropped file emits slicc-add WITH the File object (hosts read its content)', async () => {
+    const el = mount();
+    const wrap = shadow(el).querySelector('.wrap') as HTMLElement;
+    const details: Array<Record<string, unknown>> = [];
+    el.addEventListener('slicc-add', (e) =>
+      details.push((e as CustomEvent<Record<string, unknown>>).detail)
+    );
+
+    const file = new File(['payload'], 'drop.md', { type: 'text/markdown' });
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    wrap.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer: dt }));
+
+    expect(details).toHaveLength(1);
+    expect(details[0]).toMatchObject({ kind: 'upload', name: 'drop.md', size: 7 });
+    expect(details[0].file).toBe(file);
+  });
+
   it('cleans up the document listener on disconnect', () => {
     const el = mount();
     el.open();
