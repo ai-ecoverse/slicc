@@ -66,7 +66,7 @@ export interface WcNavDeps {
 
 export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   const { refs, client, log } = deps;
-  const { getAllAvailableModels, showProviderSettings } = await import('../provider-settings.js');
+  const { getAllAvailableModels } = await import('../provider-settings.js');
 
   const refreshModels = (): void => {
     (refs.composerMeta as HTMLElement & { models?: unknown }).models = modelListForMeta(
@@ -202,11 +202,11 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
       return;
     }
     if (id === 'settings') {
-      // The settings dialog needs its (scoped) chrome; loaded on demand so
-      // the WC shell stays free of the broader legacy sheets.
-      import('../legacy-styles.js')
-        .then(({ loadLegacyDialogStyles }) => loadLegacyDialogStyles())
-        .then(() => showProviderSettings())
+      // The WC-native settings surface (slicc-dialog chrome). The legacy
+      // provider-settings dialog survives only for the onboarding-only
+      // flows (connect surface, tray join).
+      import('./wc-settings.js')
+        .then(({ showWcSettings }) => showWcSettings(log))
         .then(() => {
           refreshModels();
           applyIdentity();
