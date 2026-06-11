@@ -5,10 +5,15 @@
  * legacy panel renders has a web-component mapping asserted here.
  */
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
+
+// Deterministic cluster labels: the real quick-llm needs a provider key.
+vi.mock('../../../src/ui/quick-llm.js', () => ({
+  quickLabel: vi.fn(async () => 'Push the release to main'),
+}));
 
 import { createChatFixture } from '../../../src/ui/chat-fixture.js';
 import type { ChatMessage } from '../../../src/ui/types.js';
@@ -267,6 +272,28 @@ describe('tool presentation', () => {
     const [, writeRow] = messageEls(call('write_file', { path: '/a.ts', content: 'body' }, 'ok'));
     expect(writeRow.querySelector('.add')?.textContent).toBe('body');
     expect(writeRow.textContent).toContain('/a.ts');
+  });
+
+  it('labels clusters via quickLabel from inputs alone — results not required', async () => {
+    // Calls WITHOUT results (replays with dropped tool results, running
+    // chains) must still get their purpose phrase, not the generic fallback.
+    const calls = [1, 2, 3].map((i) => ({
+      id: `t${i}`,
+      name: 'bash',
+      input: { command: `step ${i}` },
+    }));
+    const [, cluster] = messageEls({
+      id: `m-label-${Date.now()}`,
+      role: 'assistant',
+      content: 'working',
+      timestamp: 1,
+      toolCalls: calls,
+    });
+    document.body.append(cluster);
+    await vi.waitFor(() => {
+      expect(cluster.getAttribute('label')).toBe('Push the release to main');
+    });
+    cluster.remove();
   });
 
   it('clusters 3+ tool calls (open while streaming, collapsed when settled)', () => {

@@ -56,6 +56,11 @@ slicc-input-card .ta {
 }
 slicc-input-card .ta::placeholder {
   color: var(--txt-3);
+  /* Long (LLM-suggested) placeholders ellipsize instead of clipping when
+     the workbench narrows the chat column. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 slicc-input-card .toolbar {
   display: flex;

@@ -151,8 +151,18 @@ describe('slicc-action-row', () => {
   });
 
   describe('tone chips (getComputedStyle)', () => {
+    it('the default chip ground is the derived context accent, not flat ink', () => {
+      const el = mount((e) => {
+        e.icon = '●';
+      });
+      const ground = getComputedStyle(icon(el)).backgroundColor;
+      expect(ground).not.toBe('rgb(10, 10, 10)');
+      // Flipping --ctx flips the chip — the accent is context-derived.
+      el.style.setProperty('--ctx', '#3b6cb2');
+      expect(getComputedStyle(icon(el)).backgroundColor).not.toBe(ground);
+    });
+
     const cases: Array<[SliccActionRow['tone'], string]> = [
-      ['ink', 'rgb(10, 10, 10)'], // --ink
       ['vi', 'rgb(139, 92, 246)'], // --violet
       ['am', 'rgb(245, 158, 11)'], // --amber
       ['cy', 'rgb(6, 182, 212)'], // --cyan

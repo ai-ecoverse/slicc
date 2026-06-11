@@ -14,6 +14,8 @@ slicc-tool-cluster {
   display: block;
   margin: -2px 0 16px;
   font-family: var(--ui);
+  /* Re-derive the accent so it tracks the locally inherited --ctx. */
+  --accent: color-mix(in srgb, var(--ctx) 55%, var(--ink));
 }
 slicc-tool-cluster .slicc-cluster__head {
   display: flex;
@@ -44,8 +46,8 @@ slicc-tool-cluster .slicc-cluster__ic {
   border-radius: 5px;
   display: grid;
   place-items: center;
-  color: #fff;
-  background: color-mix(in srgb, var(--ctx) 75%, var(--ink));
+  color: var(--canvas);
+  background: var(--accent);
   flex: 0 0 auto;
 }
 slicc-tool-cluster .slicc-cluster__label {

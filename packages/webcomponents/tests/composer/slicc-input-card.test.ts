@@ -266,6 +266,20 @@ describe('slicc-input-card', () => {
     });
   });
 
+  it('ellipsizes long placeholders instead of clipping them', () => {
+    const el = mount((e) => {
+      e.setAttribute('placeholder', 'A very long LLM-suggested follow-up that will not fit');
+    });
+    const sheetText = (document.getElementById('slicc-input-card-style') as HTMLStyleElement)
+      ?.textContent;
+    // ::placeholder computed styles are not exposed via getComputedStyle —
+    // assert the injected rule carries the ellipsis trio.
+    const rule = sheetText?.match(/\.ta::placeholder \{[^}]*\}/)?.[0] ?? '';
+    expect(rule).toContain('white-space: nowrap');
+    expect(rule).toContain('text-overflow: ellipsis');
+    expect(rule).toContain('overflow: hidden');
+  });
+
   it('clear() empties the textarea and drops the value attribute', () => {
     const el = mount((e) => {
       e.value = 'something';

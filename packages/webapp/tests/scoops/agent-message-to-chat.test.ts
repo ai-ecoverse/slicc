@@ -62,6 +62,42 @@ function toolResultMsg(
 let counter = 0;
 const seedId = (): string => `id-${++counter}`;
 
+describe('lickChannelFromBody', () => {
+  it('classifies scoop lifecycle bodies that carry no sender channel prefix', async () => {
+    const { lickChannelFromBody } = await import('../../src/scoops/agent-message-to-chat.js');
+    expect(lickChannelFromBody('[@tool-demo-scoop completed]VFS path: /shared/x')).toBe(
+      'scoop-notify'
+    );
+    expect(lickChannelFromBody('[@pomodoro-scoop idle]: Scoop "pomodoro" has been ready')).toBe(
+      'scoop-idle'
+    );
+    expect(lickChannelFromBody('[scoop_wait completed]1 completed, 0 timed out')).toBe(
+      'scoop-wait'
+    );
+    expect(lickChannelFromBody('[scoop_wait timeout]0 completed, 1 timed out')).toBe('scoop-wait');
+    expect(lickChannelFromBody('[Session Reload] Mount recovery required.')).toBe('session-reload');
+    expect(lickChannelFromBody('plain user text')).toBeNull();
+    expect(lickChannelFromBody('[just a bracket] but not a marker')).toBeNull();
+  });
+
+  it('replayed scoop notifications come back as licks, not plain bubbles', () => {
+    // The envelope sender is the scoop assistantLabel (no channel prefix) —
+    // the live UI saw channel "scoop-notify" on the broadcast, but replay
+    // used to render these as user bubbles.
+    const out = agentMessagesToChatMessages(
+      [
+        userMsg(
+          '[6/11/2026, 1:00:00 PM] tool-demo-scoop: [@tool-demo-scoop completed]VFS path: /shared/n.md'
+        ),
+      ],
+      { idSeed: seedId }
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0].source).toBe('lick');
+    expect(out[0].channel).toBe('scoop-notify');
+  });
+});
+
 describe('agentMessagesToChatMessages', () => {
   it('returns an empty array for empty input', () => {
     expect(agentMessagesToChatMessages([])).toEqual([]);

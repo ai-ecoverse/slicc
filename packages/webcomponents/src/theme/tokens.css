@@ -30,6 +30,15 @@
   --amber: #f59e0b;
   --waffle: #b07823;
   --ctx: #f59e0b;
+  /* The derived emphasis accent: bold text, links, blockquote edges, icon
+     chips. NOTE the CSS custom-property gotcha: var() inside a custom
+     property substitutes at the DECLARING element, so this :root value bakes
+     in :root's --ctx. Components that must track a locally-overridden --ctx
+     re-declare the same formula on their own host selector (agent-message,
+     action-row, tool-cluster, …). Because --ink flips with the theme, the
+     accent lands dark-leaning on light canvases and light-leaning on dark
+     ones — contrast for free. */
+  --accent: color-mix(in srgb, var(--ctx) 55%, var(--ink));
   --shaderbg: #f7f2e3;
   --rainbow: linear-gradient(90deg, #f43f5e 0%, #f59e0b 28%, #06b6d4 64%, #8b5cf6 100%);
   --ui: "adobe-clean", "Inter", system-ui, sans-serif;

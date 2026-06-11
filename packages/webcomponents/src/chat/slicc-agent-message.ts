@@ -20,14 +20,14 @@ import { h } from '../internal/dom.js';
  * inherited theme scope — no explicit dark override is needed.
  */
 const STYLE = `
-slicc-agent-message { display: block; margin-bottom: 18px; font-size: 15px; line-height: 1.5; }
+slicc-agent-message { display: block; margin-bottom: 18px; font-size: 15px; line-height: 1.5; --accent: color-mix(in srgb, var(--ctx) 55%, var(--ink)); }
 slicc-agent-message .body { font-family: var(--ui); font-size: 14px; }
 slicc-agent-message .body p { margin: 0 0 8px; }
-slicc-agent-message strong { font-weight: 600; }
+slicc-agent-message strong { font-weight: 600; color: var(--accent); }
 /* Inline code carries the active context accent (--ctx flips per
    cone/scoop/freezer). The mixes lean heavily on --canvas / --ink so the
    wash stays subtle and contrast holds in light AND dark. */
-slicc-agent-message code { font-family: var(--mono); font-size: 12.5px; background: color-mix(in srgb, var(--ctx) 12%, var(--canvas)); border: 1px solid color-mix(in srgb, var(--ctx) 20%, transparent); color: color-mix(in srgb, var(--ctx) 35%, var(--ink)); border-radius: 6px; padding: 1px 6px; }
+slicc-agent-message code { font-family: var(--mono); font-size: 12.5px; background: color-mix(in srgb, var(--ctx) 12%, var(--canvas)); border: 1px solid color-mix(in srgb, var(--ctx) 20%, transparent); color: var(--accent); border-radius: 6px; padding: 1px 6px; }
 slicc-agent-message .body h1, slicc-agent-message .body h2, slicc-agent-message .body h3, slicc-agent-message .body h4, slicc-agent-message .body h5, slicc-agent-message .body h6 { font-family: var(--ui); margin: 1.2em 0 0.35em; font-weight: 700; line-height: 1.25; }
 slicc-agent-message .body > :first-child { margin-top: 0; }
 slicc-agent-message .body > :last-child { margin-bottom: 0; }
@@ -36,18 +36,21 @@ slicc-agent-message .body h2 { font-size: 18px; }
 slicc-agent-message .body h3 { font-size: 16px; }
 slicc-agent-message .body h4 { font-size: 14px; }
 slicc-agent-message .body h5, slicc-agent-message .body h6 { font-size: 13px; color: var(--txt-2); }
-slicc-agent-message .body a { color: var(--violet); text-decoration: none; }
+slicc-agent-message .body a { color: var(--accent); text-decoration: none; }
 slicc-agent-message .body a:hover { text-decoration: underline; }
 slicc-agent-message .body ul:not(.plan):not(.check), slicc-agent-message .body ol { margin: 0.45em 0; padding-left: 1.4em; }
 slicc-agent-message .body li { margin: 3px 0; }
-slicc-agent-message .body blockquote { margin: 0.45em 0; border-left: 3px solid var(--violet); padding-left: 12px; color: var(--txt-2); }
+slicc-agent-message .body blockquote { margin: 0.45em 0; border-left: 3px solid var(--accent); padding-left: 12px; color: var(--txt-2); }
 slicc-agent-message .body hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
 slicc-agent-message .body del { color: var(--txt-3); }
 /* Fenced blocks get a soft context-accent wash + accent edge instead of the
    flat grey card — same --ctx-derived mixes as inline code. */
 slicc-agent-message .body pre { margin: 8px 0; background: color-mix(in srgb, var(--ctx) 7%, var(--canvas)); border: 1px solid color-mix(in srgb, var(--ctx) 22%, var(--line)); border-left: 3px solid color-mix(in srgb, var(--ctx) 55%, var(--line)); border-radius: 8px; padding: 10px 12px; overflow-x: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; }
 slicc-agent-message .body pre code { background: none; border: none; color: var(--ink); border-radius: 0; padding: 0; font-size: inherit; }
-slicc-agent-message .body table { width: 100%; border-collapse: collapse; margin: 2px 0 12px; font-size: 13px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+/* Wide tables scroll INSIDE themselves — display:block turns the table into
+   its own scroll container, so a narrow chat column never drags the whole
+   history sideways. */
+slicc-agent-message .body table { display: block; max-width: 100%; width: fit-content; overflow-x: auto; border-collapse: collapse; margin: 2px 0 12px; font-size: 13px; border: 1px solid var(--line); border-radius: 8px; }
 slicc-agent-message .body th, slicc-agent-message .body td { border: 1px solid var(--line); padding: 6px 11px; text-align: left; }
 slicc-agent-message .body th { background: var(--ghost); font-weight: 600; }
 slicc-agent-message .plan { list-style: none; margin: 4px 0 0; padding: 0; }

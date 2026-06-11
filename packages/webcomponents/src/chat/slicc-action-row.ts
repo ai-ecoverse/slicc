@@ -23,6 +23,9 @@ slicc-action-row {
   display: block;
   margin: -2px 0 16px;
   font-family: var(--ui);
+  /* Re-derive the accent here so it tracks the locally inherited --ctx
+     (a :root-declared derivation bakes in :root's --ctx — see tokens.css). */
+  --accent: color-mix(in srgb, var(--ctx) 55%, var(--ink));
 }
 slicc-action-row .slicc-act__head {
   display: flex;
@@ -54,8 +57,11 @@ slicc-action-row .slicc-act__ic {
   display: grid;
   place-items: center;
   font-size: 10px;
-  color: #fff;
-  background: var(--ink);
+  /* The chip ground is the derived context accent; --canvas ink on top keeps
+     the glyph readable in BOTH themes (accent leans dark on light canvases,
+     light on dark ones). */
+  color: var(--canvas);
+  background: var(--accent);
   flex: 0 0 auto;
 }
 slicc-action-row .slicc-act__ic.vi { background: var(--violet); }

@@ -337,12 +337,23 @@ describe('slicc-agent-message', () => {
       expect(getComputedStyle(h2).fontFamily).toContain('adobe-clean');
     });
 
-    it('styles a rendered markdown blockquote with the violet accent border', () => {
+    it('styles blockquote edge, links, and bold with the derived context accent', () => {
       const el = mount();
-      el.setBodyHtml('<blockquote><p>quote</p></blockquote>');
+      el.setBodyHtml(
+        '<blockquote><p>quote</p></blockquote><p><a href="#x">link</a> <strong>bold</strong></p>'
+      );
       const bq = el.querySelector('blockquote') as HTMLElement;
-      // --violet #8b5cf6 → rgb(139, 92, 246).
-      expect(getComputedStyle(bq).borderLeftColor).toBe('rgb(139, 92, 246)');
+      const a = el.querySelector('a') as HTMLElement;
+      const strong = el.querySelector('strong') as HTMLElement;
+      // One consistent accent (--ctx mixed with --ink) across all three.
+      const accent = getComputedStyle(a).color;
+      expect(accent).not.toBe('rgb(139, 92, 246)'); // no longer the fixed violet
+      expect(getComputedStyle(bq).borderLeftColor).toBe(accent);
+      expect(getComputedStyle(strong).color).toBe(accent);
+      // The accent follows the context: flipping --ctx flips all of them.
+      el.style.setProperty('--ctx', '#3b6cb2');
+      expect(getComputedStyle(a).color).not.toBe(accent);
+      expect(getComputedStyle(bq).borderLeftColor).toBe(getComputedStyle(a).color);
     });
 
     it('renders a fenced code block in the mono font with the inline-code chrome stripped', () => {
@@ -383,6 +394,24 @@ describe('slicc-agent-message', () => {
       el.style.setProperty('--ctx', '#3b6cb2');
       const ice = getComputedStyle(code).backgroundColor;
       expect(ice).not.toBe(amber);
+    });
+
+    it('wide tables scroll inside themselves, not the whole column', () => {
+      const host = document.createElement('div');
+      host.style.cssText = 'width:300px;';
+      const el = document.createElement('slicc-agent-message') as SliccAgentMessage;
+      host.append(el);
+      document.body.append(host);
+      el.setBodyHtml(`<table><tr>${'<td>very-wide-cell-content</td>'.repeat(12)}</tr></table>`);
+      const table = el.querySelector('table') as HTMLElement;
+      const cs = getComputedStyle(table);
+      expect(cs.display).toBe('block');
+      expect(cs.overflowX).toBe('auto');
+      // The table itself is clamped to the column; its CONTENT overflows
+      // into the table's own scroll area.
+      expect(table.clientWidth).toBeLessThanOrEqual(300);
+      expect(table.scrollWidth).toBeGreaterThan(table.clientWidth);
+      host.remove();
     });
 
     it('fenced blocks carry the context-accent edge', () => {

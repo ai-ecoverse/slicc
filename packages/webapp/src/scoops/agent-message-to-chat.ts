@@ -118,7 +118,8 @@ function translateUserMessage(m: UserMessage, idSeed: () => string): ChatMessage
   const out: ChatMessage[] = [];
   for (const env of splitEnvelopes(rawText)) {
     if (env.body.length === 0 && env.sender == null) continue;
-    const lickChannel = env.sender ? lickChannelFromSenderName(env.sender) : null;
+    const lickChannel =
+      (env.sender ? lickChannelFromSenderName(env.sender) : null) ?? lickChannelFromBody(env.body);
     const msg: ChatMessage = {
       id: idSeed(),
       role: 'user',
@@ -412,4 +413,25 @@ export function lickChannelFromSenderName(sender: string): LickChannel | null {
   if (colon <= 0) return null;
   const channel = sender.slice(0, colon);
   return isLickChannel(channel) ? channel : null;
+}
+
+/**
+ * Classify a lick by its BODY header when the sender carries no channel
+ * prefix. Scoop lifecycle messages are sent with `senderName:
+ * assistantLabel` (no `<channel>:` prefix), so the sender anchor can't see
+ * them — but their bodies open with distinctive markers:
+ *
+ *   - `[@<scoop> completed]…` — scoop-notify (a scoop finished its work)
+ *   - `[@<scoop> idle]…`      — scoop-idle (the idle nag)
+ *   - `[scoop_wait completed]…` / `[scoop_wait timeout]…` — scoop-wait
+ *
+ * Without this, the live UI rendered them as lick cards (the broadcast
+ * carries `channel`) but a history replay turned them into plain bubbles.
+ */
+export function lickChannelFromBody(body: string): LickChannel | null {
+  const scoopMarker = /^\[@[^\]\s]+ (completed|idle)\]/.exec(body);
+  if (scoopMarker) return scoopMarker[1] === 'idle' ? 'scoop-idle' : 'scoop-notify';
+  if (/^\[scoop_wait [^\]]+\]/.test(body)) return 'scoop-wait';
+  if (body.startsWith('[Session Reload]')) return 'session-reload';
+  return null;
 }

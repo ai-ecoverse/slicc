@@ -158,6 +158,9 @@ export function toolIcon(call: Pick<ToolCall, 'name' | 'input'>): string {
     scoop_scoop: 'ice-cream-cone',
     feed_scoop: 'utensils',
     drop_scoop: 'trash-2',
+    scoop_mute: 'bell-off',
+    scoop_unmute: 'bell-ring',
+    scoop_wait: 'hourglass',
     update_global_memory: 'brain',
   };
   return fixed[call.name] ?? 'wrench';
@@ -195,6 +198,16 @@ export function toolTitle(call: Pick<ToolCall, 'name' | 'input'>): string {
       const name = inputField(call.input, 'name') || inputField(call.input, 'scoop');
       return name ? `Drop the ${name} scoop` : 'Drop a scoop';
     }
+    case 'scoop_mute': {
+      const name = inputField(call.input, 'name') || inputField(call.input, 'scoop');
+      return name ? `Mute the ${name} scoop` : 'Mute a scoop';
+    }
+    case 'scoop_unmute': {
+      const name = inputField(call.input, 'name') || inputField(call.input, 'scoop');
+      return name ? `Unmute the ${name} scoop` : 'Unmute a scoop';
+    }
+    case 'scoop_wait':
+      return 'Wait for the scoops';
     case 'update_global_memory':
       return 'Update the shared memory';
     default: {
@@ -371,12 +384,17 @@ function isUsefulClusterLabel(text: string): boolean {
   return text.length >= 6 && /[a-zA-Z]/.test(text) && /\s/.test(text.trim());
 }
 
-/** Fire-and-forget LLM purpose label for a settled cluster (cached). */
+/**
+ * Fire-and-forget LLM purpose label for a cluster (cached per signature).
+ * Labels from the call INPUTS alone — main's approach — so a cluster whose
+ * results never settled (replays with dropped tool results, long-running
+ * chains) still gets its phrase instead of the generic fallback.
+ */
 function scheduleClusterLabel(message: ChatMessage, cluster: HTMLElement): void {
   const signature = clusterSignature(message);
   if (clusterLabels.has(signature) || clusterLabelInFlight.has(signature)) return;
   const calls = message.toolCalls ?? [];
-  if (message.isStreaming || calls.some((c) => c.result === undefined)) return;
+  if (calls.length === 0) return;
   clusterLabelInFlight.add(signature);
   const formatted = calls
     .map((tc, i) => {
