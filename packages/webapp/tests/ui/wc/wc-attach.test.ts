@@ -86,6 +86,23 @@ describe('createAddProvider', () => {
 });
 
 describe('WcAttachmentStage', () => {
+  it('renders image attachments with a data-URI thumbnail', () => {
+    const card = document.createElement('slicc-input-card');
+    document.body.appendChild(card);
+    const stage = new WcAttachmentStage(card);
+
+    stage.add(attachmentFromBytes('snap.png', new Uint8Array([1, 2, 3])));
+    stage.add(attachmentFromBytes('notes.md', new TextEncoder().encode('text')));
+
+    const thumbs = card.querySelectorAll<HTMLImageElement>('.wcatt__thumb');
+    expect(thumbs).toHaveLength(1);
+    expect(thumbs[0].src).toBe(`data:image/png;base64,${btoa(String.fromCharCode(1, 2, 3))}`);
+    expect(thumbs[0].alt).toBe('snap.png');
+    // Text chips carry no thumbnail.
+    const chips = card.querySelectorAll('.wcatt__chip');
+    expect(chips[1].querySelector('.wcatt__thumb')).toBeNull();
+  });
+
   it('renders chips, removes on ×, and take() clears the stage', () => {
     const card = document.createElement('slicc-input-card');
     document.body.appendChild(card);

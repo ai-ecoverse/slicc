@@ -194,6 +194,8 @@ const STAGE_CSS = `
 .wcatt:empty{display:none;}
 .wcatt__chip{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--ink);
   background:var(--ghost);border:1px solid var(--line);border-radius:14px;padding:3px 8px;max-width:220px;}
+.wcatt__thumb{width:28px;height:28px;object-fit:cover;border-radius:8px;cursor:zoom-in;
+  border:1px solid var(--line);flex:0 0 auto;}
 .wcatt__name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .wcatt__x{appearance:none;background:none;border:none;cursor:pointer;color:var(--txt-3);
   font:inherit;padding:0;line-height:1;}
@@ -235,26 +237,40 @@ export class WcAttachmentStage {
   }
 
   #render(): void {
-    this.#strip.replaceChildren(
-      ...this.#items.map((attachment) => {
-        const chip = document.createElement('span');
-        chip.className = 'wcatt__chip';
-        const name = document.createElement('span');
-        name.className = 'wcatt__name';
-        name.textContent = attachment.name;
-        const remove = document.createElement('button');
-        remove.type = 'button';
-        remove.className = 'wcatt__x';
-        remove.setAttribute('aria-label', `Remove ${attachment.name}`);
-        remove.textContent = '×';
-        remove.addEventListener('click', () => {
-          this.#items = this.#items.filter((a) => a.id !== attachment.id);
-          this.#render();
-        });
-        chip.append(name, remove);
-        return chip;
-      })
-    );
+    this.#strip.replaceChildren(...this.#items.map((attachment) => this.#chip(attachment)));
+  }
+
+  #chip(attachment: MessageAttachment): HTMLElement {
+    const chip = document.createElement('span');
+    chip.className = 'wcatt__chip';
+    // Image attachments get a real thumbnail; clicking zooms it in the
+    // library's FLIP lightbox.
+    if (attachment.kind === 'image' && attachment.data) {
+      const img = document.createElement('img');
+      img.className = 'wcatt__thumb';
+      img.src = `data:${attachment.mimeType};base64,${attachment.data}`;
+      img.alt = attachment.name;
+      img.addEventListener('click', () => {
+        void import('@slicc/webcomponents').then(({ SliccImagePreview }) =>
+          SliccImagePreview.show(img.src, img)
+        );
+      });
+      chip.append(img);
+    }
+    const name = document.createElement('span');
+    name.className = 'wcatt__name';
+    name.textContent = attachment.name;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'wcatt__x';
+    remove.setAttribute('aria-label', `Remove ${attachment.name}`);
+    remove.textContent = '×';
+    remove.addEventListener('click', () => {
+      this.#items = this.#items.filter((a) => a.id !== attachment.id);
+      this.#render();
+    });
+    chip.append(name, remove);
+    return chip;
   }
 }
 
@@ -290,42 +306,28 @@ async function captureScreenshot(): Promise<MessageAttachment | null> {
   return dataUrl ? attachmentFromDataUrl(`screenshot-${Date.now()}.png`, dataUrl) : null;
 }
 
-/** Camera photo: a minimal slicc-dialog with a live preview + Snap. */
+/** Remembered camera pick (the component reports changes via its event). */
+const CAMERA_PREF_KEY = 'slicc_camera_device';
+
+/**
+ * Camera photo through the library's `<slicc-camera-dialog>` — live preview,
+ * camera picker, mirrored selfie view. Resolves null on cancel / no camera.
+ */
 async function capturePhoto(): Promise<MessageAttachment | null> {
-  const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-  return new Promise((resolve) => {
-    const dialog = document.createElement('slicc-dialog');
-    dialog.setAttribute('heading', 'Take a photo');
-    const video = document.createElement('video');
-    video.autoplay = true;
-    video.muted = true;
-    video.srcObject = stream;
-    video.style.cssText = 'width:100%;border-radius:10px;background:#000;';
-    dialog.append(video);
-
-    const finish = (attachment: MessageAttachment | null): void => {
-      for (const track of stream.getTracks()) track.stop();
-      (dialog as HTMLElement & { hide?: () => void }).hide?.();
-      dialog.remove();
-      resolve(attachment);
-    };
-
-    const snap = document.createElement('button');
-    snap.type = 'button';
-    snap.textContent = 'Snap';
-    snap.setAttribute('slot', 'footer');
-    snap.addEventListener('click', () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      canvas.getContext('2d')?.drawImage(video, 0, 0);
-      finish(attachmentFromDataUrl(`photo-${Date.now()}.png`, canvas.toDataURL('image/png')));
-    });
-    dialog.append(snap);
-    dialog.addEventListener('slicc-dialog-close', () => finish(null));
-    document.body.append(dialog);
-    (dialog as HTMLElement & { show?: () => void }).show?.();
+  const dialog = document.createElement('slicc-camera-dialog');
+  const preferred = localStorage.getItem(CAMERA_PREF_KEY);
+  if (preferred) dialog.setAttribute('preferred-device', preferred);
+  dialog.addEventListener('slicc-camera-device-change', (event) => {
+    const id = (event as CustomEvent<{ deviceId?: string }>).detail?.deviceId;
+    if (id) localStorage.setItem(CAMERA_PREF_KEY, id);
   });
+  document.body.append(dialog);
+  try {
+    const dataUrl = await dialog.open();
+    return dataUrl ? attachmentFromDataUrl(`photo-${Date.now()}.png`, dataUrl) : null;
+  } finally {
+    dialog.remove();
+  }
 }
 
 // ---------------------------------------------------------------------------

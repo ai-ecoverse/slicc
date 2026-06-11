@@ -30,6 +30,7 @@ export { SliccPaletteCell } from './memory/slicc-palette-cell.js';
 export { SliccPaletteGrid } from './memory/slicc-palette-grid.js';
 export { SliccAvatarMenu } from './nav/slicc-avatar-menu.js';
 export { SliccNav } from './nav/slicc-nav.js';
+export { SliccCameraDialog } from './overlay/slicc-camera-dialog.js';
 export { SliccDialog } from './overlay/slicc-dialog.js';
 export { SliccTooltip } from './overlay/slicc-tooltip.js';
 export { SliccPill } from './pill/slicc-pill.js';

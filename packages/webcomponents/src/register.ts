@@ -26,6 +26,7 @@ import './memory/slicc-palette-cell.js';
 import './memory/slicc-palette-grid.js';
 import './nav/slicc-avatar-menu.js';
 import './nav/slicc-nav.js';
+import './overlay/slicc-camera-dialog.js';
 import './overlay/slicc-dialog.js';
 import './overlay/slicc-tooltip.js';
 import './pill/slicc-pill.js';
