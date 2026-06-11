@@ -170,6 +170,74 @@ async function applyThreadContext(refs: WcShellRefs, scoop: RegisteredScoop): Pr
   }
 }
 
+interface FreezerRailDeps {
+  refs: WcShellRefs;
+  openFs(): Promise<import('../../fs/virtual-fs.js').VirtualFS>;
+  client: OffscreenClient;
+  getController(): WcChatController | null;
+  selectScoop(scoop: RegisteredScoop): void;
+  clearSelection(): void;
+  log: BootStageLogger;
+}
+
+/**
+ * Freezer rail behavior: frozen sessions thaw read-only into the thread,
+ * and the "New +" gestures freeze/clear the cone (click = LLM-enriched
+ * freeze, double-click = quick-freeze, long-press = erase). Returns the
+ * card-refresh function for the post-boot initial fill.
+ */
+function wireFreezerRail(deps: FreezerRailDeps): () => void {
+  const { refs, openFs, client, getController, selectScoop, clearSelection, log } = deps;
+  let frozenEntries: FrozenSessionIndexEntry[] = [];
+
+  const refreshFreezer = (): void => {
+    void openFs()
+      .then(async (fs) => {
+        frozenEntries = await refreshFreezerCards(refs.freezer, fs);
+      })
+      .catch((err) => log.error('WC freezer refresh failed', err));
+  };
+
+  const runNewSession = (action: 'save' | 'skip' | 'erase'): void => {
+    void (async () => {
+      try {
+        const fs = await openFs();
+        const { runNewSessionFreeze, runNewSessionFreezeQuick } = await import('../new-session.js');
+        if (action === 'save') await runNewSessionFreeze({ vfs: fs });
+        else if (action === 'skip') await runNewSessionFreezeQuick({ vfs: fs });
+        await client.clearAllMessages();
+        refreshFreezer();
+        const cone = client.getScoops().find((s) => s.isCone);
+        if (cone) selectScoop(cone);
+      } catch (err) {
+        log.error('WC new session failed', err);
+      }
+    })();
+  };
+  for (const action of ['save', 'skip', 'erase'] as const) {
+    refs.freezer.addEventListener(`new-chat-${action}`, () => runNewSession(action));
+  }
+
+  refs.freezer.addEventListener('freezer-card-select', (event) => {
+    const slug = (event as CustomEvent<{ slug?: string }>).detail?.slug;
+    const entry = frozenEntries.find((e) => e.filename === slug);
+    if (!entry) return;
+    void openFs()
+      .then(async (fs) => {
+        const { messages } = await thawFrozenSession(fs, entry);
+        getController()?.loadMessages(messages);
+        refs.thread.setAttribute('context', `freezer:${entry.filename}`);
+        refs.thread.setAttribute('accent', FREEZER_TINT);
+        refs.inputCard.setAttribute('disabled', '');
+        refs.switcher.removeAttribute('active');
+        clearSelection();
+      })
+      .catch((err) => log.error('WC thaw failed', err));
+  });
+
+  return refreshFreezer;
+}
+
 /** Boot the live WC shell: prelude → kernel spawn → controller wiring. */
 export async function mountWcUiLive(app: HTMLElement, log: BootStageLogger): Promise<void> {
   const { realCdpTransport, instanceId } = await setupStandalonePrelude({
@@ -306,29 +374,16 @@ export async function mountWcUiLive(app: HTMLElement, log: BootStageLogger): Pro
 
   // Freezer rail: frozen cone sessions thaw read-only into the thread;
   // selecting any scoop chip returns to the live conversation.
-  let frozenEntries: FrozenSessionIndexEntry[] = [];
-  const refreshFreezer = (): void => {
-    void openFs()
-      .then(async (fs) => {
-        frozenEntries = await refreshFreezerCards(refs.freezer, fs);
-      })
-      .catch((err) => log.error('WC freezer refresh failed', err));
-  };
-  refs.freezer.addEventListener('freezer-card-select', (event) => {
-    const slug = (event as CustomEvent<{ slug?: string }>).detail?.slug;
-    const entry = frozenEntries.find((e) => e.filename === slug);
-    if (!entry) return;
-    void openFs()
-      .then(async (fs) => {
-        const { messages } = await thawFrozenSession(fs, entry);
-        controller?.loadMessages(messages);
-        refs.thread.setAttribute('context', `freezer:${entry.filename}`);
-        refs.thread.setAttribute('accent', FREEZER_TINT);
-        refs.inputCard.setAttribute('disabled', '');
-        refs.switcher.removeAttribute('active');
-        selected = null;
-      })
-      .catch((err) => log.error('WC thaw failed', err));
+  const refreshFreezer = wireFreezerRail({
+    refs,
+    openFs,
+    client: liveClient,
+    getController: () => controller,
+    selectScoop,
+    clearSelection: () => {
+      selected = null;
+    },
+    log,
   });
 
   await host.ready;
