@@ -142,7 +142,12 @@ export interface WireWcSprinklesDeps {
   refs: WcShellRefs;
   client: OffscreenClient;
   fs: import('../../fs/virtual-fs.js').VirtualFS;
-  instanceId: string;
+  /**
+   * Standalone kernel-worker id; enables the worker→panel sprinkle-ops
+   * BroadcastChannel. Absent in the extension float, where those ops arrive
+   * over the chrome.runtime relay instead (not wired in WC mode yet).
+   */
+  instanceId?: string;
   log: BootStageLogger;
 }
 
@@ -188,8 +193,10 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<void> 
   );
   (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = manager;
   setDipExecHandler(execHandler);
-  const stop = installSprinkleManagerHandlerOverChannel(manager, { instanceId });
-  window.addEventListener('beforeunload', () => stop(), { once: true });
+  if (instanceId !== undefined) {
+    const stop = installSprinkleManagerHandlerOverChannel(manager, { instanceId });
+    window.addEventListener('beforeunload', () => stop(), { once: true });
+  }
 
   // Closing a sprinkle tab closes the sprinkle; clicking a dock launcher for
   // a registered-but-closed sprinkle opens it.

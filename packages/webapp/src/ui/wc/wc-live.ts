@@ -238,20 +238,32 @@ function wireFreezerRail(deps: FreezerRailDeps): () => void {
   return refreshFreezer;
 }
 
-/** Boot the live WC shell: prelude → kernel spawn → controller wiring. */
-export async function mountWcUiLive(app: HTMLElement, log: BootStageLogger): Promise<void> {
-  const { realCdpTransport, instanceId } = await setupStandalonePrelude({
-    runtimeMode: 'standalone',
-    envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
-    window,
-    log,
-  });
+/** Mutable boot state shared between the callbacks and the attach phase. */
+export interface WcShellBoot {
+  refs: WcShellRefs;
+  wiring: WcLiveWiring;
+  setClient(client: OffscreenClient): void;
+  selectScoop(scoop: RegisteredScoop): void;
+  openFs(): ReturnType<typeof openPageFs>;
+  getSelected(): RegisteredScoop | null;
+  clearSelection(): void;
+  getController(): WcChatController | null;
+  setController(controller: WcChatController): void;
+  setActivateSurface(fn: (surfaceId: string) => void): void;
+}
 
+/**
+ * Phase A of the live boot, float-agnostic: mount the shell and build the
+ * mutable wiring the kernel callbacks close over. The client arrives in
+ * {@link attachWcClient} (phase B) — standalone spawns a kernel worker,
+ * the extension popout connects to the offscreen engine.
+ */
+export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoot {
   let activateSurface: ((surfaceId: string) => void) | null = null;
   const refs = mountWcShell(app, {
     messages: [],
     scoops: [],
-    floatLabel: 'standalone · live',
+    floatLabel,
     placeholder: 'Ask sliccy, or describe a change…',
     onSurfaceActivate: (surfaceId) => activateSurface?.(surfaceId),
   });
@@ -259,6 +271,7 @@ export async function mountWcUiLive(app: HTMLElement, log: BootStageLogger): Pro
   let controller: WcChatController | null = null;
   let client: OffscreenClient | null = null;
   let selected: RegisteredScoop | null = null;
+  let fsPromise: ReturnType<typeof openPageFs> | null = null;
 
   const selectScoop = (scoop: RegisteredScoop): void => {
     selected = scoop;
@@ -270,30 +283,49 @@ export async function mountWcUiLive(app: HTMLElement, log: BootStageLogger): Pro
     controller?.setProcessing(client.isProcessing(scoop.jid));
   };
 
-  const wiring: WcLiveWiring = {
+  return {
     refs,
-    statuses: new Map(),
-    getController: () => controller,
-    getClient: () => client,
-    getSelected: () => selected,
+    wiring: {
+      refs,
+      statuses: new Map(),
+      getController: () => controller,
+      getClient: () => client,
+      getSelected: () => selected,
+      selectScoop,
+    },
+    setClient: (next) => {
+      client = next;
+    },
     selectScoop,
+    openFs: () => {
+      fsPromise ??= openPageFs();
+      return fsPromise;
+    },
+    getSelected: () => selected,
+    clearSelection: () => {
+      selected = null;
+    },
+    getController: () => controller,
+    setController: (next) => {
+      controller = next;
+    },
+    setActivateSurface: (fn) => {
+      activateSurface = fn;
+    },
   };
+}
 
-  const host = spawnKernelWorker({
-    realCdpTransport,
-    instanceId,
-    callbacks: createWcLiveCallbacks(wiring),
-  });
-  client = host.client;
-
-  // Inline dips: assistant ```shtml blocks hydrate into sandboxed iframes on
-  // each stable message render; dip licks dispatch to the cone as the
-  // `inline` sprinkle (the legacy onDipLick local path — welcome-flow
-  // interception and follower forwarding are not wired in WC mode yet).
-  const liveClientForDips = client;
+/** Controller + dip lifecycle over the live agent handle. */
+function createWcController(
+  refs: WcShellRefs,
+  client: OffscreenClient
+): { controller: WcChatController; agentHandle: ReturnType<OffscreenClient['createAgentHandle']> } {
+  // Dip licks dispatch to the cone as the `inline` sprinkle (the legacy
+  // onDipLick local path — welcome-flow interception and follower
+  // forwarding are not wired in WC mode yet).
   const dipInstances = new Map<string, DipInstance[]>();
   const agentHandle = client.createAgentHandle();
-  controller = new WcChatController({
+  const controller = new WcChatController({
     thread: refs.thread,
     agent: agentHandle,
     onProcessingChange: (processing) => {
@@ -315,95 +347,129 @@ export async function mountWcUiLive(app: HTMLElement, log: BootStageLogger): Pro
       dipInstances.set(
         message.id,
         hydrateDips(host, (action, data) => {
-          liveClientForDips.sendSprinkleLick('inline', { action, data });
+          client.sendSprinkleLick('inline', { action, data });
         })
       );
     },
   });
+  return { controller, agentHandle };
+}
+
+export interface AttachWcClientOptions {
+  /** Standalone kernel-worker id; enables the sprinkle ops channel. */
+  instanceId?: string;
+}
+
+/**
+ * Phase B: wire a connected client into the prepared shell — controller,
+ * composer, switcher, workbench, freezer, sprinkles, and nav.
+ */
+export function attachWcClient(
+  boot: WcShellBoot,
+  client: OffscreenClient,
+  log: BootStageLogger,
+  options: AttachWcClientOptions = {}
+): void {
+  const { refs, openFs } = boot;
+  boot.setClient(client);
+  const { controller, agentHandle } = createWcController(refs, client);
+  boot.setController(controller);
 
   refs.inputCard.addEventListener('submit', (event) => {
     const text = submittedText(event);
-    if (text) controller?.sendUserMessage(text);
+    if (text) boot.getController()?.sendUserMessage(text);
   });
 
   // The send button morphs into a stop control while a turn is processing.
   refs.inputCard.addEventListener('stop', () => {
-    if (controller?.processing) agentHandle.stop();
+    if (boot.getController()?.processing) agentHandle.stop();
   });
 
   // Brain pill: cycle the scoop's thinking level (persisted by the worker).
   refs.composerMeta.addEventListener('thinking-change', (event) => {
     const metaLevel = (event as CustomEvent<{ thinking?: string }>).detail?.thinking;
     const level = thinkingLevelForAgent(metaLevel);
-    if (selected && client && level) client.setScoopThinkingLevel(selected.jid, level);
+    const selected = boot.getSelected();
+    if (selected && level) client.setScoopThinkingLevel(selected.jid, level);
   });
 
   refs.switcher.addEventListener('slicc-scoop-select', (event) => {
     const key = (event as CustomEvent<{ key?: string }>).detail?.key;
-    const scoop = client?.getScoops().find((s) => s.jid === key);
-    if (scoop && scoop.jid !== selected?.jid) selectScoop(scoop);
+    const scoop = client.getScoops().find((s) => s.jid === key);
+    if (scoop && scoop.jid !== boot.getSelected()?.jid) boot.selectScoop(scoop);
   });
 
   // Workbench: VFS file tree + worker-shell terminal, both lazy on first
   // surface activation from the dock or tab bar.
-  let fsPromise: ReturnType<typeof openPageFs> | null = null;
-  const openFs = (): ReturnType<typeof openPageFs> => {
-    fsPromise ??= openPageFs();
-    return fsPromise;
-  };
-  const liveClient = client;
-  activateSurface = createWorkbenchActivator({
-    fileTree: refs.fileTree,
-    termSurface: refs.termSurface,
-    memoryHost: refs.memoryHost,
-    openFs,
-    mountTerminal: async (container) => {
-      const { RemoteTerminalView } = await import('../../kernel/remote-terminal-view.js');
-      const { fetchSecretEnvVars } = await import('../../core/secret-env.js');
-      const env = await fetchSecretEnvVars();
-      const view = new RemoteTerminalView({
-        client: liveClient,
-        cwd: '/',
-        env: Object.keys(env).length > 0 ? env : undefined,
-      });
-      await view.mount(container);
-      window.addEventListener('beforeunload', () => view.dispose(), { once: true });
-    },
-    log,
-  });
+  boot.setActivateSurface(
+    createWorkbenchActivator({
+      fileTree: refs.fileTree,
+      termSurface: refs.termSurface,
+      memoryHost: refs.memoryHost,
+      openFs,
+      mountTerminal: async (container) => {
+        const { RemoteTerminalView } = await import('../../kernel/remote-terminal-view.js');
+        const { fetchSecretEnvVars } = await import('../../core/secret-env.js');
+        const env = await fetchSecretEnvVars();
+        const view = new RemoteTerminalView({
+          client,
+          cwd: '/',
+          env: Object.keys(env).length > 0 ? env : undefined,
+        });
+        await view.mount(container);
+        window.addEventListener('beforeunload', () => view.dispose(), { once: true });
+      },
+      log,
+    })
+  );
 
   // Freezer rail: frozen cone sessions thaw read-only into the thread;
   // selecting any scoop chip returns to the live conversation.
   const refreshFreezer = wireFreezerRail({
     refs,
     openFs,
-    client: liveClient,
-    getController: () => controller,
-    selectScoop,
-    clearSelection: () => {
-      selected = null;
-    },
+    client,
+    getController: () => boot.getController(),
+    selectScoop: boot.selectScoop,
+    clearSelection: boot.clearSelection,
     log,
   });
-
-  await host.ready;
   refreshFreezer();
 
-  // Sprinkles: the legacy SprinkleManager (renderer + bridge + exec) over the
-  // WC workbench chrome. Needs the kernel up for exec sessions and licks.
+  // Sprinkles: the legacy SprinkleManager (renderer + bridge + exec) over
+  // the WC workbench chrome. Exec sessions open lazily on first use.
   void openFs()
     .then(async (fs) => {
       const { wireWcSprinkles } = await import('./wc-sprinkles.js');
-      await wireWcSprinkles({ refs, client: liveClient, fs, instanceId, log });
+      await wireWcSprinkles({ refs, client, fs, instanceId: options.instanceId, log });
     })
     .catch((err) => log.error('WC sprinkle wiring failed', err));
 
   // Nav: model picker + avatar menu (settings dialog, legacy-UI escape hatch).
   void import('./wc-nav.js')
-    .then(({ wireWcNav }) => wireWcNav({ refs, client: liveClient, log }))
+    .then(({ wireWcNav }) => wireWcNav({ refs, client, log }))
     .catch((err) => log.error('WC nav wiring failed', err));
+}
 
-  log.info('WC live shell ready', { scoops: client.getScoops().length });
+/** Boot the standalone live WC shell: prelude → kernel spawn → attach. */
+export async function mountWcUiLive(app: HTMLElement, log: BootStageLogger): Promise<void> {
+  const { realCdpTransport, instanceId } = await setupStandalonePrelude({
+    runtimeMode: 'standalone',
+    envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
+    window,
+    log,
+  });
+
+  const boot = prepareWcShell(app, 'standalone · live');
+  const host = spawnKernelWorker({
+    realCdpTransport,
+    instanceId,
+    callbacks: createWcLiveCallbacks(boot.wiring),
+  });
+  attachWcClient(boot, host.client, log, { instanceId });
+
+  await host.ready;
+  log.info('WC live shell ready', { scoops: host.client.getScoops().length });
 }
 
 /** Page-side VFS over the shared LightningFS IndexedDB (`slicc-fs`). */

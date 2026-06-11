@@ -354,13 +354,16 @@ async function main(): Promise<void> {
   if (!app) throw new Error('#app element not found');
 
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+  const runtimeMode = resolveUiRuntimeMode(window.location.href, isExtension);
 
   // Next-generation web-components UI (`?ui=wc`) — the @slicc/webcomponents
   // migration shell. Fixture mode (`?ui=wc&ui-fixture`) renders the shell
   // over the design-time chat fixture with no kernel and exits early; live
-  // mode boots below, after providers + OAuth are ready. Standalone float
-  // only while the migration is in progress; the legacy UI stays the default.
-  const wcUiMode = isExtension ? 'off' : resolveWcUiMode(window.location.href);
+  // mode boots below, after providers + OAuth are ready. Floats: standalone
+  // and the extension detached popout (`?detached=1&ui=wc`) — the pinned
+  // side panel keeps the legacy UI for now; legacy stays the default.
+  const wcUiAllowed = !isExtension || runtimeMode === 'extension-detached';
+  const wcUiMode = wcUiAllowed ? resolveWcUiMode(window.location.href) : 'off';
   if (wcUiMode === 'fixture') {
     const { mountWcUiPreview } = await import('./wc/wc-shell.js');
     mountWcUiPreview(app);
@@ -399,14 +402,17 @@ async function main(): Promise<void> {
   const apiKey = getApiKey();
   const _allowProviderlessTrayJoin = !apiKey && hasStoredTrayJoinUrl(window.localStorage);
 
-  // WC live mode: kernel worker + WC shell, no legacy layout. Runs after
-  // provider registration and the OAuth bootstrap so the cone can stream.
+  // WC live mode: the WC shell with no legacy layout — standalone spawns the
+  // kernel worker; the detached popout connects to the offscreen engine.
+  // Runs after provider registration + OAuth bootstrap so the cone streams.
   if (wcUiMode === 'live') {
+    if (runtimeMode === 'extension-detached') {
+      const { mountWcUiExtension } = await import('./wc/wc-extension.js');
+      return mountWcUiExtension(app, log);
+    }
     const { mountWcUiLive } = await import('./wc/wc-live.js');
     return mountWcUiLive(app, log);
   }
-
-  const runtimeMode = resolveUiRuntimeMode(window.location.href, isExtension);
 
   if (runtimeMode === 'connect') {
     (globalThis as Record<string, unknown>).__slicc_connect_mode = true;
