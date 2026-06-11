@@ -16,6 +16,20 @@ class StubObserver {
 
 export function installWcDomStubs(): void {
   const win = globalThis as unknown as Record<string, unknown>;
+  // Node's flag-gated experimental localStorage shadows jsdom's as undefined.
+  if (win['localStorage'] === undefined) {
+    const store = new Map<string, string>();
+    win['localStorage'] = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => store.set(key, String(value)),
+      removeItem: (key: string) => store.delete(key),
+      clear: () => store.clear(),
+      key: (index: number) => [...store.keys()][index] ?? null,
+      get length() {
+        return store.size;
+      },
+    };
+  }
   if (typeof win['matchMedia'] !== 'function') {
     win['matchMedia'] = (media: string) => ({
       matches: false,

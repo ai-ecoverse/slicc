@@ -11,7 +11,7 @@
  * the kernel worker for real conversations.
  */
 
-import { ensureGlobalTokens, type SliccFileTree } from '@slicc/webcomponents';
+import { ensureGlobalTokens, type SliccAvatarMenu, type SliccFileTree } from '@slicc/webcomponents';
 import { createChatFixture, FIXTURE_SCOOP_NAME } from '../chat-fixture.js';
 import type { ChatMessage } from '../types.js';
 import { buildThreadChildren, messageEls } from './wc-message-view.js';
@@ -58,6 +58,7 @@ export interface WcShellRefs {
   termSurface: HTMLElement;
   memoryHost: HTMLElement;
   tabBar: HTMLElement & { tabs?: unknown };
+  avatarMenu: SliccAvatarMenu;
 }
 
 const STYLE_ID = 'slicc-wcui-style';
@@ -92,19 +93,22 @@ function buildNav(options: WcShellOptions): {
   nav: HTMLElement;
   switcher: WcShellRefs['switcher'];
   floatbar: HTMLElement;
+  avatarMenu: SliccAvatarMenu;
 } {
   const nav = el('slicc-nav', { accent: 'var(--waffle)' });
   const switcher = el('slicc-scoop-switcher') as WcShellRefs['switcher'];
   switcher.scoops = [...options.scoops];
   const floatbar = el('slicc-floatbar', { label: options.floatLabel, spent: '0.00' });
+  const avatarMenu = document.createElement('slicc-avatar-menu');
+  avatarMenu.append(el('slicc-avatar', { name: 'SLICC' }));
   nav.append(
     el('slicc-logo', { badge: 'preview' }),
     switcher,
     floatbar,
     el('slicc-theme-toggle'),
-    el('slicc-avatar', { name: 'SLICC Preview' })
+    avatarMenu
   );
-  return { nav, switcher, floatbar };
+  return { nav, switcher, floatbar, avatarMenu };
 }
 
 function buildComposer(options: WcShellOptions): {
@@ -225,7 +229,7 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
     appCol.style.setProperty('--rail-w', open ? '260px' : '44px');
   });
 
-  const { nav, switcher, floatbar } = buildNav(options);
+  const { nav, switcher, floatbar, avatarMenu } = buildNav(options);
   appCol.append(nav, shell);
   frame.append(shader, freezer, appCol);
   root.replaceChildren(frame);
@@ -245,6 +249,7 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
     termSurface,
     memoryHost,
     tabBar,
+    avatarMenu,
   };
 }
 

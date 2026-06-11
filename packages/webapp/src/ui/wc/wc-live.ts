@@ -398,6 +398,11 @@ export async function mountWcUiLive(app: HTMLElement, log: BootStageLogger): Pro
     })
     .catch((err) => log.error('WC sprinkle wiring failed', err));
 
+  // Nav: model picker + avatar menu (settings dialog, legacy-UI escape hatch).
+  void import('./wc-nav.js')
+    .then(({ wireWcNav }) => wireWcNav({ refs, client: liveClient, log }))
+    .catch((err) => log.error('WC nav wiring failed', err));
+
   log.info('WC live shell ready', { scoops: client.getScoops().length });
 }
 
