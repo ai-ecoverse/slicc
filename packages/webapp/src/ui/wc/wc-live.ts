@@ -388,6 +388,16 @@ export async function mountWcUiLive(app: HTMLElement, log: BootStageLogger): Pro
 
   await host.ready;
   refreshFreezer();
+
+  // Sprinkles: the legacy SprinkleManager (renderer + bridge + exec) over the
+  // WC workbench chrome. Needs the kernel up for exec sessions and licks.
+  void openFs()
+    .then(async (fs) => {
+      const { wireWcSprinkles } = await import('./wc-sprinkles.js');
+      await wireWcSprinkles({ refs, client: liveClient, fs, instanceId, log });
+    })
+    .catch((err) => log.error('WC sprinkle wiring failed', err));
+
   log.info('WC live shell ready', { scoops: client.getScoops().length });
 }
 

@@ -57,6 +57,7 @@ export interface WcShellRefs {
   fileTree: SliccFileTree;
   termSurface: HTMLElement;
   memoryHost: HTMLElement;
+  tabBar: HTMLElement & { tabs?: unknown };
 }
 
 const STYLE_ID = 'slicc-wcui-style';
@@ -125,6 +126,7 @@ function buildWorkbench(): {
   tree: WcShellRefs['fileTree'];
   termSurface: HTMLElement;
   memoryHost: HTMLElement;
+  tabBar: WcShellRefs['tabBar'];
 } {
   const workbench = el('slicc-workbench-pane');
   const header = el('slicc-workbench-header');
@@ -151,7 +153,7 @@ function buildWorkbench(): {
 
   body.append(filesSurface, termSurfaceHost, memorySurfaceHost);
   workbench.append(header, body);
-  return { workbench, body, header, tree, termSurface, memoryHost };
+  return { workbench, body, header, tree, termSurface, memoryHost, tabBar: tabs };
 }
 
 /** Dock clicks open/close the workbench and select the matching surface. */
@@ -210,7 +212,7 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
   const { composer, inputCard, composerMeta } = buildComposer(options);
   pane.append(thread, composer);
 
-  const { workbench, body, header, tree, termSurface, memoryHost } = buildWorkbench();
+  const { workbench, body, header, tree, termSurface, memoryHost, tabBar } = buildWorkbench();
   const dock = el('slicc-dock', { 'system-tools': '' });
   shell.append(pane, workbench, dock);
   wireDockToWorkbench(dock, shell, body, options.onSurfaceActivate);
@@ -242,6 +244,7 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
     fileTree: tree,
     termSurface,
     memoryHost,
+    tabBar,
   };
 }
 
