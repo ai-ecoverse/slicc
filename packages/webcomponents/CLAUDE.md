@@ -2,9 +2,10 @@
 
 Standalone library that extracts the UI prototype `proto/StellarRubySwift.html`
 into reusable, individually testable web components. **Webapp wiring is underway**:
-`?ui=wc` mounts the Phase-0 preview shell from `packages/webapp/src/ui/wc/`
-(per-component subpath imports — the barrel stays un-importable there until the
-legacy `slicc-press-button` tag collision is resolved). Components remain
+`?ui=wc` mounts the migration shell from `packages/webapp/src/ui/wc/` (live mode
+boots the kernel worker; `&ui-fixture` renders the design-time fixture). The
+webapp imports the package barrel; its legacy `ui/press-button.ts` is now a
+re-export shim over this library's `slicc-press-button`. Components remain
 individually testable here: functional (`@vitest/browser`) + visual (Storybook).
 
 ## Layout

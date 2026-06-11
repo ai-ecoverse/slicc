@@ -6,21 +6,13 @@
  * pipeline so both UIs render byte-identical HTML for the same content.
  */
 
-import type { SliccUserMessage } from '@slicc/webcomponents/src/chat/slicc-user-message.js';
+import type { SliccUserMessage } from '@slicc/webcomponents';
 import type { MessageAttachment } from '../../core/attachments.js';
 import { renderAssistantMessageContent, renderMessageContent } from '../message-renderer.js';
 import type { ChatMessage, ToolCall } from '../types.js';
 
-// Side-effect imports register the elements this module instantiates. Each
-// module is imported individually rather than via the package barrel: the
-// barrel registers `slicc-press-button`, whose tag still collides with the
-// legacy webapp element of the same name (replaced in a later phase).
-import '@slicc/webcomponents/src/chat/slicc-action-row.js';
-import '@slicc/webcomponents/src/chat/slicc-agent-message.js';
-import '@slicc/webcomponents/src/chat/slicc-delegation-line.js';
-import '@slicc/webcomponents/src/chat/slicc-lick-card.js';
-import '@slicc/webcomponents/src/chat/slicc-user-message.js';
-import '@slicc/webcomponents/src/primitives/slicc-day-separator.js';
+// Side-effect import registers every element this module instantiates.
+import '@slicc/webcomponents';
 
 /** Attachment chip shape accepted by `<slicc-user-message>` (not re-exported
  *  by the barrel, so derive it from the class's method signature). */

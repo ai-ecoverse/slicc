@@ -225,6 +225,18 @@ export class SliccChatThread extends HTMLElement {
     this.scrollToBottom();
   }
 
+  /**
+   * Replace the reading column's content wholesale (e.g. a history reload
+   * when switching scoops). Unlike the inherited `replaceChildren` — which
+   * would destroy the component's inner column wrapper — this swaps only the
+   * column's children and keeps the thread chrome intact.
+   */
+  replaceContent(...nodes: (Node | string)[]): void {
+    this.#build();
+    this.#inner.replaceChildren(...nodes);
+    this.scrollToBottom();
+  }
+
   /** Scroll the thread wrapper to the bottom (latest message). */
   scrollToBottom(): void {
     this.scrollTop = this.scrollHeight;

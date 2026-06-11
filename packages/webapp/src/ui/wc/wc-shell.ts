@@ -11,37 +11,13 @@
  * the kernel worker for real conversations.
  */
 
-import { ensureGlobalTokens } from '@slicc/webcomponents/src/theme/tokens.js';
-import type { SliccFileTree } from '@slicc/webcomponents/src/workbench/slicc-file-tree.js';
+import { ensureGlobalTokens, type SliccFileTree } from '@slicc/webcomponents';
 import { createChatFixture, FIXTURE_SCOOP_NAME } from '../chat-fixture.js';
 import type { ChatMessage } from '../types.js';
 import { buildThreadChildren, messageEls } from './wc-message-view.js';
 
-// Side-effect imports register every element composed below. Per-component
-// subpaths instead of the barrel — see wc-message-view.ts for the rationale
-// (legacy `slicc-press-button` tag collision).
-import '@slicc/webcomponents/src/chat/slicc-chat-thread.js';
-import '@slicc/webcomponents/src/composer/slicc-composer.js';
-import '@slicc/webcomponents/src/composer/slicc-composer-meta.js';
-import '@slicc/webcomponents/src/composer/slicc-input-card.js';
-import '@slicc/webcomponents/src/dock/slicc-dock.js';
-import '@slicc/webcomponents/src/freezer/slicc-freezer.js';
-import '@slicc/webcomponents/src/freezer/slicc-freezer-new.js';
-import '@slicc/webcomponents/src/freezer/slicc-shader.js';
-import '@slicc/webcomponents/src/nav/slicc-nav.js';
-import '@slicc/webcomponents/src/primitives/slicc-avatar.js';
-import '@slicc/webcomponents/src/primitives/slicc-floatbar.js';
-import '@slicc/webcomponents/src/primitives/slicc-logo.js';
-import '@slicc/webcomponents/src/shell/slicc-chatpane.js';
-import '@slicc/webcomponents/src/shell/slicc-shell.js';
-import '@slicc/webcomponents/src/switcher/slicc-scoop-switcher.js';
-import '@slicc/webcomponents/src/theme/slicc-theme-toggle.js';
-import '@slicc/webcomponents/src/workbench/slicc-file-tree.js';
-import '@slicc/webcomponents/src/workbench/slicc-surface.js';
-import '@slicc/webcomponents/src/workbench/slicc-tab-bar.js';
-import '@slicc/webcomponents/src/workbench/slicc-workbench-body.js';
-import '@slicc/webcomponents/src/workbench/slicc-workbench-header.js';
-import '@slicc/webcomponents/src/workbench/slicc-workbench-pane.js';
+// Side-effect import registers every element composed below.
+import '@slicc/webcomponents';
 
 /** Scoop chip descriptors consumed by `<slicc-scoop-switcher>`. */
 export interface SwitcherScoop {

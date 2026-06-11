@@ -69,7 +69,7 @@ describe('WcChatController', () => {
   it('ignores empty prompts', () => {
     controller.sendUserMessage('   ');
     expect(agent.sent).toEqual([]);
-    expect(thread.children.length).toBe(0);
+    expect(thread.querySelectorAll('slicc-user-message').length).toBe(0);
   });
 
   it('streams an assistant message through start → delta → done', async () => {
@@ -180,7 +180,7 @@ describe('WcChatController', () => {
     agent.emit({ type: 'content_delta', messageId: 'nope', text: 'x' });
     agent.emit({ type: 'content_done', messageId: 'nope' });
     agent.emit({ type: 'tool_use_start', messageId: 'nope', toolName: 'bash', toolInput: '' });
-    expect(thread.children.length).toBe(0);
+    expect(thread.querySelectorAll('slicc-agent-message, slicc-action-row').length).toBe(0);
   });
 
   it('exposes external processing overrides without duplicate notifications', () => {

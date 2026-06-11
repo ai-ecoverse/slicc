@@ -269,6 +269,23 @@ describe('slicc-chat-thread', () => {
       expect(inner(el).contains(sep)).toBe(true);
     });
 
+    it('replaceContent() swaps the inner column children, keeping the wrapper', () => {
+      const el = mount();
+      const first = document.createElement('slicc-day-separator');
+      el.append(first);
+      const wrapper = inner(el);
+
+      const next = document.createElement('slicc-user-message');
+      el.replaceContent(next);
+      expect(inner(el)).toBe(wrapper);
+      expect(wrapper.contains(first)).toBe(false);
+      expect(wrapper.contains(next)).toBe(true);
+
+      el.replaceContent();
+      expect(inner(el)).toBe(wrapper);
+      expect(wrapper.childNodes.length).toBe(0);
+    });
+
     it('re-emits child clicks as a delegated slicc-thread-action', async () => {
       const el = mount();
       const btn = document.createElement('button');

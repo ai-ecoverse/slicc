@@ -377,57 +377,12 @@
   position: relative;
   z-index: 1;
 }
-/* `<slicc-press-button>` — reusable click + long-press button. The
-   host carries the parent's sizing/state classes (e.g. `.rail__item`,
-   `.thread-header__panel-toggle`, `.msg__feedback-btn`); the inner
-   `<button>` provided by the custom element fills the host so the
-   ripple's bounding rect matches what the user sees. */
+/* `<slicc-press-button>` now ships its own chrome from @slicc/webcomponents
+   (injected into the document at first construction). Only legacy theming
+   stays here: the library's ripple defaults to the prototype's `--ctx`
+   token, which this UI does not define, so retint with the Spectrum accent. */
 slicc-press-button {
-  display: inline-flex;
-}
-.slicc-press-btn__btn {
-  appearance: none;
-  background: transparent;
-  border: none;
-  padding: 0;
-  margin: 0;
-  font: inherit;
-  color: inherit;
-  cursor: inherit;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  border-radius: inherit;
-  position: relative;
-}
-/* Long-press ripple — fills the button as the user holds. The layer
-   is clipped to the button radius so the growing circle never
-   escapes the button shape. */
-.slicc-press-btn__press-layer {
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  overflow: hidden;
-  pointer-events: none;
-  z-index: 0;
-}
-/* Slotted icon content sits above the ripple in the stacking order. */
-.slicc-press-btn__btn > :not(.slicc-press-btn__press-layer) {
-  position: relative;
-  z-index: 1;
-}
-.slicc-press-btn__press {
-  position: absolute;
-  border-radius: 50%;
-  background: var(--s2-accent);
-  opacity: 0.85;
-  transform: translate(-50%, -50%);
-  pointer-events: none;
-  transition-property: width, height;
-  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
-  will-change: width, height;
+  --press-ripple: var(--s2-accent);
 }
 .rail__item--active .slicc-press-btn__press {
   background: var(--s2-accent);

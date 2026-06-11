@@ -10,7 +10,7 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
 
-import type { SliccFileTree } from '@slicc/webcomponents/src/workbench/slicc-file-tree.js';
+import type { SliccFileTree } from '@slicc/webcomponents';
 import { VirtualFS } from '../../../src/fs/virtual-fs.js';
 import { buildVfsTreeItems, createWorkbenchActivator } from '../../../src/ui/wc/wc-workbench.js';
 

@@ -57,10 +57,15 @@ export class WcChatController {
     this.#currentStreamId = null;
     this.#pendingDelta = '';
     this.#els.clear();
-    this.#thread.replaceChildren(...buildThreadChildren(this.#messages));
-    // Whole-history paints don't track per-message elements; subsequent
-    // streaming events re-render individual messages, which requires the
-    // map — so rebuild it for the streaming tail only when one appears.
+    const children = buildThreadChildren(this.#messages);
+    const thread = this.#thread as HTMLElement & {
+      replaceContent?: (...nodes: Node[]) => void;
+    };
+    // `<slicc-chat-thread>` wraps its content in an inner column; its
+    // `replaceContent` swaps that column's children without destroying the
+    // wrapper (plain `replaceChildren` would). Fall back for bare hosts.
+    if (typeof thread.replaceContent === 'function') thread.replaceContent(...children);
+    else thread.replaceChildren(...children);
     this.#scrollToBottom();
   }
 
@@ -227,9 +232,13 @@ export class WcChatController {
   #rerenderMessage(message: ChatMessage): void {
     const old = this.#els.get(message.id) ?? [];
     const next = messageEls(message);
+    // Anchor on the old elements' real parent: `<slicc-chat-thread>`
+    // delegates `append()` into its inner column, so appended elements are
+    // not direct children of the host element.
     const anchor = old[0] ?? null;
-    if (anchor?.parentNode === this.#thread) {
-      for (const el of next) this.#thread.insertBefore(el, anchor);
+    const parent = anchor?.parentNode;
+    if (parent) {
+      for (const el of next) parent.insertBefore(el, anchor);
       for (const el of old) el.remove();
     } else {
       this.#thread.append(...next);

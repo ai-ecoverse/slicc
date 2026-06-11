@@ -6,7 +6,7 @@
  * learns session attachment.
  */
 
-import type { SliccFileTree } from '@slicc/webcomponents/src/workbench/slicc-file-tree.js';
+import type { SliccFileTree } from '@slicc/webcomponents';
 
 import type { VirtualFS } from '../../fs/virtual-fs.js';
 
