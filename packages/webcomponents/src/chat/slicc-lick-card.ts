@@ -36,15 +36,24 @@ const HEADER_ICON_SIZE = 14;
 const DEFAULT_EVENT_LABEL = 'event';
 
 /**
- * Lucide header icon per lick kind — a webhook gets a `webhook` glyph, a cron a
- * `clock`, a workflow a `workflow` glyph. Unknown / unset kinds keep the
- * prototype's default `bell`. The icon inherits the amber header color via
- * `stroke: currentColor`.
+ * Lucide header icon per lick kind — every channel the webapp's lick UI
+ * renders gets a fitting glyph (a webhook a `webhook`, a cron a `clock`, a
+ * session reload a counter-clockwise rotate, …). Unknown / unset kinds keep
+ * the prototype's default `bell`. The icon inherits the amber header color
+ * via `stroke: currentColor`.
  */
 const KIND_ICON: Record<string, string> = {
   webhook: 'webhook',
   cron: 'clock',
   workflow: 'workflow',
+  'session-reload': 'rotate-ccw',
+  navigate: 'compass',
+  upgrade: 'circle-arrow-up',
+  sprinkle: 'sparkles',
+  fswatch: 'eye',
+  'scoop-notify': 'bell-ring',
+  'scoop-idle': 'moon',
+  'scoop-wait': 'hourglass',
 };
 /** Fallback header glyph (the prototype's `🔔`, now the lucide `bell`). */
 const DEFAULT_KIND_ICON = 'bell';
@@ -148,6 +157,7 @@ const MIDDOT = '·';
  *
  * @attr kind - the lick kind shown after "lick · " in the header (e.g. "webhook")
  * @attr event-label - text of the right-aligned amber pill (default "event")
+ * @attr count - collation count; at 2+ the pill reads "<event-label> ×<count>"
  * @attr body - body text (escaped); ignored when default-slot content is present
  * @attr no-animate - disable the `lickIn` slide-in entrance (static card)
  * @attr collapsible - make the header toggle body visibility on click/Enter/Space
@@ -167,6 +177,7 @@ export class SliccLickCard extends HTMLElement {
     'kind',
     'event-label',
     'body',
+    'count',
     'no-animate',
     'collapsible',
     'collapsed',
@@ -225,6 +236,20 @@ export class SliccLickCard extends HTMLElement {
     else this.setAttribute('body', value);
   }
 
+  /**
+   * Collation count: how many consecutive same-kind licks this card stands
+   * for. At 2+ the event pill reads `<event-label> ×<count>`. Defaults to 1.
+   */
+  get count(): number {
+    const n = Number.parseInt(this.getAttribute('count') ?? '', 10);
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  }
+
+  set count(value: number) {
+    if (value > 1) this.setAttribute('count', String(value));
+    else this.removeAttribute('count');
+  }
+
   /** Whether the slide-in entrance animation is suppressed. */
   get noAnimate(): boolean {
     return this.hasAttribute('no-animate');
@@ -278,7 +303,10 @@ export class SliccLickCard extends HTMLElement {
 
   #render(): void {
     const kind = this.kind ?? '';
-    const eventLabel = this.eventLabel ?? DEFAULT_EVENT_LABEL;
+    const count = this.count;
+    const baseLabel = this.eventLabel ?? DEFAULT_EVENT_LABEL;
+    // Collated cards announce their multiplicity in the pill: "session-reload ×2".
+    const eventLabel = count > 1 ? `${baseLabel} ×${count}` : baseLabel;
     const body = this.body;
     const collapsible = this.collapsible;
 

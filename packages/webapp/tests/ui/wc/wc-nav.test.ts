@@ -57,8 +57,11 @@ describe('wireWcNav', () => {
   function makeRefs(): WcShellRefs {
     const composerMeta = document.createElement('slicc-composer-meta');
     const avatarMenu = document.createElement('slicc-avatar-menu');
-    document.body.append(composerMeta, avatarMenu);
-    return { composerMeta, avatarMenu } as unknown as WcShellRefs;
+    avatarMenu.append(document.createElement('slicc-avatar'));
+    const inputCard = document.createElement('slicc-input-card');
+    inputCard.append(document.createElement('slicc-send-button'));
+    document.body.append(composerMeta, avatarMenu, inputCard);
+    return { composerMeta, avatarMenu, inputCard } as unknown as WcShellRefs;
   }
 
   it('feeds the model picker, persists selection, and wires the menu', async () => {
@@ -79,6 +82,33 @@ describe('wireWcNav', () => {
     );
     expect(localStorage.getItem('selected-model')).toBe('claude-opus-4-8');
     expect(client.updateModel).toHaveBeenCalledTimes(1);
+  });
+
+  it('paints the account avatar onto the nav avatar AND the composer send button', async () => {
+    localStorage.setItem(
+      'slicc_accounts',
+      JSON.stringify([
+        {
+          providerId: 'github',
+          apiKey: 'x',
+          userName: 'Lars Trieloff',
+          userAvatar: 'https://avatars.example/lars.png',
+        },
+      ])
+    );
+    try {
+      const refs = makeRefs();
+      const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+      await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+
+      const send = refs.inputCard.querySelector('slicc-send-button');
+      expect(send?.getAttribute('src')).toBe('https://avatars.example/lars.png');
+      expect(refs.avatarMenu.querySelector('slicc-avatar')?.getAttribute('src')).toBe(
+        'https://avatars.example/lars.png'
+      );
+    } finally {
+      localStorage.removeItem('slicc_accounts');
+    }
   });
 
   it('dispatches tray-leave with a worker URL on tray-stop', async () => {

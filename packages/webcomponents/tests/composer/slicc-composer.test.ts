@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 // Siblings from earlier waves — already registered; safe to import so the
 // populated composer mirrors the prototype's footer (input card + meta row).
 import '../../src/add-menu/slicc-add-menu.js';
+import '../../src/composer/slicc-composer-meta.js';
 import { SliccComposer } from '../../src/composer/slicc-composer.js';
 import '../../src/primitives/slicc-send-button.js';
 import { ensureGlobalTokens, setTheme } from '../../src/theme/tokens.js';
@@ -182,6 +183,27 @@ describe('slicc-composer', () => {
 
     // Toggling back off restores the hint.
     el.open = false;
+    expect(getComputedStyle(hint).display).not.toBe('none');
+  });
+
+  it('open state pierces the composed slicc-composer-meta shadow hint via ::part', () => {
+    // The regression: the real meta row keeps its "⏎ send · ⇧⏎ newline ·
+    // review before shipping" hint in SHADOW DOM, where the light-DOM class
+    // hooks can't reach — with the workbench open the hint overflowed the
+    // narrowed chat column into the workbench pane.
+    const el = document.createElement('slicc-composer') as SliccComposer;
+    const meta = document.createElement('slicc-composer-meta');
+    el.appendChild(meta);
+    document.body.appendChild(el);
+
+    const hint = meta.shadowRoot?.querySelector('.hint') as HTMLElement;
+    expect(hint).toBeTruthy();
+    expect(getComputedStyle(hint).display).not.toBe('none');
+
+    el.setAttribute('open', '');
+    expect(getComputedStyle(hint).display).toBe('none');
+
+    el.removeAttribute('open');
     expect(getComputedStyle(hint).display).not.toBe('none');
   });
 

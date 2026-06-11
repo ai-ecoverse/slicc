@@ -20,6 +20,14 @@ type UserAttachment = Parameters<SliccUserMessage['setAttachments']>[0][number];
 
 /** Leading `[<Channel> Event: <name>]` marker on lick message content. */
 const LICK_HEADER_RE = /^\[([^:\]]+):\s*([^\]]+)\]\s*\n?/;
+/** Colon-less header variant, e.g. `[Session Reload] …` — label, no event name. */
+const LICK_PLAIN_HEADER_RE = /^\[([^\]]+)\]\s*/;
+
+/** A lick body with its leading `[…]` header marker (either shape) stripped. */
+function lickPartBody(part: string): string {
+  const header = LICK_HEADER_RE.exec(part) ?? LICK_PLAIN_HEADER_RE.exec(part);
+  return header ? part.slice(header[0].length) : part;
+}
 
 /** Text glyph for an action row, keyed by tool name (default gear). */
 const TOOL_ICONS: Readonly<Record<string, string>> = {
@@ -99,11 +107,25 @@ function assistantMessageEls(message: ChatMessage): HTMLElement[] {
 
 function lickCardEl(message: ChatMessage): HTMLElement {
   const header = LICK_HEADER_RE.exec(message.content);
-  return el('slicc-lick-card', {
+  const count = message.lickCount ?? 1;
+  const card = el('slicc-lick-card', {
     kind: message.channel ?? 'webhook',
     'event-label': header?.[2] ?? message.channel ?? 'event',
-    body: header ? message.content.slice(header[0].length) : message.content,
+    // Licks are ambient noise until the user opts in: collapsed by default,
+    // the header click expands.
+    collapsible: '',
+    collapsed: '',
   });
+  if (count > 1) card.setAttribute('count', String(count));
+  // Rich slotted body (the `body` attribute is plain text only): markdown
+  // through the shared renderer, one section per collated lick.
+  const parts = message.lickParts ?? [message.content];
+  for (const part of parts) {
+    const section = document.createElement('div');
+    section.innerHTML = renderMessageContent(lickPartBody(part));
+    card.append(section);
+  }
+  return card;
 }
 
 function delegationEls(message: ChatMessage): HTMLElement[] {
@@ -125,6 +147,27 @@ export function messageEls(message: ChatMessage): HTMLElement[] {
   }
   if (message.role === 'assistant') return assistantMessageEls(message);
   return [userMessageEl(message)];
+}
+
+/**
+ * Merge runs of consecutive same-channel licks into one collated message —
+ * "session-reload ×2" instead of two identical cards. Pure: returns copies;
+ * the first lick of a run keeps its id and timestamp, later bodies fold into
+ * `lickParts` (one rendered section each).
+ */
+export function collateLickMessages(messages: readonly ChatMessage[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (const message of messages) {
+    const prev = out[out.length - 1];
+    if (message.source === 'lick' && prev?.source === 'lick' && prev.channel === message.channel) {
+      prev.lickParts = [...(prev.lickParts ?? [prev.content]), message.content];
+      prev.lickCount = prev.lickParts.length;
+      prev.content += `\n\n${message.content}`;
+      continue;
+    }
+    out.push({ ...message });
+  }
+  return out;
 }
 
 /** Locale-formatted day label for a separator (e.g. `Mon, Jan 1`). */

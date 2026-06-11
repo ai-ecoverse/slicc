@@ -147,4 +147,45 @@ describe('prepareWcShell + attachWcClient', () => {
       'streaming works'
     );
   });
+
+  it('onClientReady fires listeners on notifyReady, and immediately when already ready', () => {
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const boot = prepareWcShell(root, 'test · wc');
+
+    const before = vi.fn();
+    boot.onClientReady(before);
+    expect(before).not.toHaveBeenCalled();
+    boot.wiring.notifyReady?.();
+    expect(before).toHaveBeenCalledTimes(1);
+
+    // Late registration (worker was ready before this wiring ran) fires now —
+    // the boot-time freezer refresh depends on this to recover from the
+    // lost-RPC race on fresh loads.
+    const after = vi.fn();
+    boot.onClientReady(after);
+    expect(after).toHaveBeenCalledTimes(1);
+  });
+
+  it('new-session runs once per gesture and always clears the busy spinner', async () => {
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const boot = prepareWcShell(root, 'test · wc');
+    const fake = makeFakeClient();
+    attachWcClient(boot, fake.client, log);
+
+    const freezerNew = boot.refs.freezer.querySelector('slicc-freezer-new') as HTMLElement;
+    // A save click is what the user reported stuck: the library enters the
+    // busy state optimistically; the host must exit it when the flow ends.
+    freezerNew.setAttribute('busy', '');
+    boot.refs.freezer.dispatchEvent(new CustomEvent('new-chat-save', { bubbles: true }));
+    // A second click while the first save is in flight must NOT run again
+    // (this used to write duplicate archives seconds apart).
+    boot.refs.freezer.dispatchEvent(new CustomEvent('new-chat-save', { bubbles: true }));
+
+    await vi.waitFor(() => {
+      expect(freezerNew.hasAttribute('busy')).toBe(false);
+    });
+    expect(fake.raw.clearAllMessages).toHaveBeenCalledTimes(1);
+  });
 });

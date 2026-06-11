@@ -7,7 +7,7 @@
  */
 
 import type { AgentEvent, AgentHandle, ChatMessage } from '../types.js';
-import { daySeparatorEl, messageEls } from './wc-message-view.js';
+import { collateLickMessages, daySeparatorEl, messageEls } from './wc-message-view.js';
 
 export interface WcChatControllerOptions {
   /** The `<slicc-chat-thread>` element messages render into. */
@@ -99,7 +99,8 @@ export class WcChatController {
   /** Replace the whole thread with a scoop's canonical history. */
   loadMessages(messages: readonly ChatMessage[]): void {
     for (const id of this.#els.keys()) this.#onMessageDisposed?.(id);
-    this.#messages = messages.map((m) => ({ ...m }));
+    // Runs of same-channel licks render as ONE collated card ("×2" pill).
+    this.#messages = collateLickMessages(messages);
     this.#currentStreamId = null;
     this.#pendingDelta = '';
     this.#flushScheduled = false;
@@ -159,6 +160,16 @@ export class WcChatController {
 
   /** Render an inbound lick (webhook/cron/…) into the thread. */
   addLickMessage(id: string, content: string, channel: string, timestamp: number): void {
+    // Collate into the trailing card when the previous message is a lick of
+    // the same channel — the pill counts up instead of stacking cards.
+    const last = this.#messages[this.#messages.length - 1];
+    if (last && last.source === 'lick' && last.channel === channel) {
+      last.lickParts = [...(last.lickParts ?? [last.content]), content];
+      last.lickCount = last.lickParts.length;
+      last.content += `\n\n${content}`;
+      this.#rerenderMessage(last);
+      return;
+    }
     this.#appendMessage({
       id,
       role: 'user',

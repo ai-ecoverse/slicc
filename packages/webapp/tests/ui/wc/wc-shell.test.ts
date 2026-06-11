@@ -99,6 +99,26 @@ describe('mountWcUiPreview', () => {
     expect(surface?.textContent).toContain('not wired');
   });
 
+  it('hides the workbench header until sprinkle tabs exist (tool tabs never render)', () => {
+    const root = mount();
+    const header = root.querySelector('slicc-workbench-header') as HTMLElement;
+    // The tab bar refuses `tool`-kind tabs by design, so without sprinkles the
+    // strip is an empty 46px title bar — it must start hidden.
+    expect(header.hasAttribute('hidden')).toBe(true);
+  });
+
+  it('styles the terminal surface black and lets the file tree fill its pane', () => {
+    mount();
+    const css = document.getElementById('slicc-wcui-style')?.textContent ?? '';
+    // One uniform black: the pane matches xterm's dark background…
+    expect(css).toContain('.wcui-term{');
+    expect(css).toContain('background:#141414');
+    // …and the (legacy-stylesheet-less) xterm host flexes to full height.
+    expect(css).toContain('.terminal-panel__terminal-host{flex:1 1 auto;min-height:0;}');
+    // The files surface is just the tree — no dead preview column.
+    expect(css).toContain('slicc-file-tree{width:100%;border-right:none;}');
+  });
+
   it('switches the active surface on tab select', () => {
     const root = mount();
     const header = root.querySelector('slicc-workbench-header') as HTMLElement;
@@ -107,6 +127,41 @@ describe('mountWcUiPreview', () => {
       new CustomEvent('tab-select', { bubbles: true, detail: { tabId: 'files' } })
     );
     expect(body.getAttribute('active')).toBe('files');
+  });
+
+  it('applyShellContext swaps the shader program and the --ctx accent per mood', async () => {
+    const { applyShellContext, FREEZER_TINT, mountWcShell } = await import(
+      '../../../src/ui/wc/wc-shell.js'
+    );
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const refs = mountWcShell(host, {
+      messages: [],
+      scoops: [],
+      floatLabel: 't',
+      placeholder: 'p',
+    });
+
+    // Cone (boot default): waffle lattice, warm amber, no --ctx override.
+    expect(refs.shader.getAttribute('mode')).toBe('cone');
+
+    applyShellContext(refs, { kind: 'scoop', accent: '#06b6d4' });
+    expect(refs.shader.getAttribute('mode')).toBe('scoop');
+    expect(refs.shader.getAttribute('tint')).toBe('#06b6d4');
+    expect(refs.frame.style.getPropertyValue('--ctx')).toBe('#06b6d4');
+    expect(refs.freezer.hasAttribute('ctx')).toBe(false);
+
+    applyShellContext(refs, { kind: 'freezer' });
+    expect(refs.shader.getAttribute('mode')).toBe('freezer');
+    expect(refs.shader.getAttribute('tint')).toBe(FREEZER_TINT);
+    expect(refs.frame.style.getPropertyValue('--ctx')).toBe(FREEZER_TINT);
+    expect(refs.freezer.hasAttribute('ctx')).toBe(true);
+
+    applyShellContext(refs, { kind: 'cone' });
+    expect(refs.shader.getAttribute('mode')).toBe('cone');
+    expect(refs.shader.getAttribute('tint')).toBe('var(--waffle)');
+    expect(refs.frame.style.getPropertyValue('--ctx')).toBe('');
+    expect(refs.freezer.hasAttribute('ctx')).toBe(false);
   });
 
   it('echoes composer submissions into the thread', () => {

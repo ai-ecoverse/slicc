@@ -89,11 +89,18 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   const applyIdentity = (): void => {
     const identity = accountIdentity(getAccounts());
     const avatar = refs.avatarMenu.querySelector('slicc-avatar');
+    // The send button paints the user's face as its circular ground — same
+    // identity source as the nav avatar.
+    const send = refs.inputCard.querySelector('slicc-send-button');
     if (identity) {
       avatar?.setAttribute('name', identity.name);
-      if (identity.avatarUrl) avatar?.setAttribute('src', identity.avatarUrl);
+      if (identity.avatarUrl) {
+        avatar?.setAttribute('src', identity.avatarUrl);
+        send?.setAttribute('src', identity.avatarUrl);
+      }
       refs.avatarMenu.user = { name: identity.name, provider: identity.provider };
     } else {
+      send?.removeAttribute('src');
       refs.avatarMenu.user = {
         name: 'SLICC',
         provider: isExtension ? 'extension' : 'standalone',

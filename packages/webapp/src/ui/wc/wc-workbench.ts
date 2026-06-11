@@ -42,7 +42,8 @@ async function dirChildren(
       items.push({
         kind: 'dir',
         id: path,
-        label: `${entry.name}/`,
+        // The chevron already says "folder" — a trailing slash is noise.
+        label: entry.name,
         children: depth < MAX_DEPTH ? await dirChildren(fs, path, depth + 1) : [],
       });
     } else {

@@ -24,7 +24,13 @@ import {
   refreshFreezerCards,
   thawFrozenSession,
 } from './wc-freezer.js';
-import { mountWcShell, type SwitcherScoop, submittedText, type WcShellRefs } from './wc-shell.js';
+import {
+  applyShellContext,
+  mountWcShell,
+  type SwitcherScoop,
+  submittedText,
+  type WcShellRefs,
+} from './wc-shell.js';
 import { createWorkbenchActivator } from './wc-workbench.js';
 
 const CONE_COLOR = '#b07823';
@@ -102,6 +108,8 @@ export interface WcLiveWiring {
   getClient(): OffscreenClient | null;
   getSelected(): RegisteredScoop | null;
   selectScoop(scoop: RegisteredScoop): void;
+  /** Fired once the kernel reports ready (late wiring re-runs boot reads). */
+  notifyReady?(): void;
 }
 
 /**
@@ -152,6 +160,7 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
       refreshScoops();
       const cone = client?.getScoops().find((s) => s.isCone);
       if (cone && !wiring.getSelected()) wiring.selectScoop(cone);
+      wiring.notifyReady?.();
     },
   };
 }
@@ -160,6 +169,12 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
 async function applyThreadContext(refs: WcShellRefs, scoop: RegisteredScoop): Promise<void> {
   refs.thread.setAttribute('context', scoop.isCone ? 'cone' : `scoop:${scoop.name}`);
   refs.thread.setAttribute('accent', scoopColor(scoop));
+  // The whole frame changes mood with the selection: waffle lattice + warm
+  // amber for the cone, swirling pastels + the scoop's accent for scoops.
+  applyShellContext(
+    refs,
+    scoop.isCone ? { kind: 'cone' } : { kind: 'scoop', accent: scoopColor(scoop) }
+  );
   refs.switcher.setAttribute('active', scoop.jid);
   refs.composerMeta.setAttribute('thinking', metaThinkingForScoop(scoop.config?.thinkingLevel));
   try {
@@ -200,19 +215,37 @@ function wireFreezerRail(deps: FreezerRailDeps): () => void {
       .catch((err) => log.error('WC freezer refresh failed', err));
   };
 
+  // One new-session at a time: a re-click while the freeze is in flight used
+  // to run a SECOND freeze (the stuck spinner invited it), leaving duplicate
+  // archives seconds apart. The spinner is set here and always cleared —
+  // the library only enters the busy state, it never exits it on its own.
+  let newSessionInFlight = false;
+  const freezerNew = (): HTMLElement | null => refs.freezer.querySelector('slicc-freezer-new');
   const runNewSession = (action: 'save' | 'skip' | 'erase'): void => {
+    if (newSessionInFlight) return;
+    newSessionInFlight = true;
+    freezerNew()?.setAttribute('busy', '');
     void (async () => {
       try {
-        const { writer } = await openVfs();
-        const { runNewSessionFreeze, runNewSessionFreezeQuick } = await import('../new-session.js');
-        if (action === 'save') await runNewSessionFreeze({ vfs: writer });
-        else if (action === 'skip') await runNewSessionFreezeQuick({ vfs: writer });
+        // The freezer itself skips empty/short sessions (MIN_MESSAGES_TO_FREEZE),
+        // so save/skip can always run it; erase intentionally never archives.
+        if (action !== 'erase') {
+          const { writer } = await openVfs();
+          const { runNewSessionFreeze, runNewSessionFreezeQuick } = await import(
+            '../new-session.js'
+          );
+          if (action === 'save') await runNewSessionFreeze({ vfs: writer });
+          else await runNewSessionFreezeQuick({ vfs: writer });
+        }
         await client.clearAllMessages();
         refreshFreezer();
         const cone = client.getScoops().find((s) => s.isCone);
         if (cone) selectScoop(cone);
       } catch (err) {
         log.error('WC new session failed', err);
+      } finally {
+        newSessionInFlight = false;
+        freezerNew()?.removeAttribute('busy');
       }
     })();
   };
@@ -230,6 +263,8 @@ function wireFreezerRail(deps: FreezerRailDeps): () => void {
         getController()?.loadMessages(messages);
         refs.thread.setAttribute('context', `freezer:${entry.filename}`);
         refs.thread.setAttribute('accent', FREEZER_TINT);
+        // Frost mood: crystallizing shader + ice-blue accent across the frame.
+        applyShellContext(refs, { kind: 'freezer' });
         refs.inputCard.setAttribute('disabled', '');
         refs.switcher.removeAttribute('active');
         clearSelection();
@@ -257,6 +292,12 @@ export interface WcShellBoot {
   getController(): WcChatController | null;
   setController(controller: WcChatController): void;
   setActivateSurface(fn: (surfaceId: string) => void): void;
+  /**
+   * Run `fn` once the kernel reports ready (immediately when it already has).
+   * Wiring that reads worker state at attach time re-runs through this — an
+   * RPC sent before the worker's hosts are installed is lost, not queued.
+   */
+  onClientReady(fn: () => void): void;
 }
 
 /**
@@ -278,6 +319,8 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
   let controller: WcChatController | null = null;
   let client: OffscreenClient | null = null;
   let selected: RegisteredScoop | null = null;
+  let clientReady = false;
+  const readyListeners = new Set<() => void>();
 
   const selectScoop = (scoop: RegisteredScoop): void => {
     selected = scoop;
@@ -298,6 +341,10 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
       getClient: () => client,
       getSelected: () => selected,
       selectScoop,
+      notifyReady: () => {
+        clientReady = true;
+        for (const fn of readyListeners) fn();
+      },
     },
     setClient: (next) => {
       client = next;
@@ -313,6 +360,10 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     },
     setActivateSurface: (fn) => {
       activateSurface = fn;
+    },
+    onClientReady: (fn) => {
+      readyListeners.add(fn);
+      if (clientReady) fn();
     },
   };
 }
@@ -484,7 +535,10 @@ export function attachWcClient(
     clearSelection: boot.clearSelection,
     log,
   });
+  // The boot-time refresh races the worker's VfsRpcHost installation (a lost
+  // request hangs silently) — re-run once the kernel reports ready.
   refreshFreezer();
+  boot.onClientReady(refreshFreezer);
 
   // Page-side preview-vfs fallback responder (the worker's responder is
   // canonical; this covers pre-boot requests). Mount recovery is the
@@ -599,5 +653,10 @@ export async function mountWcUiLive(
 
   await host.ready;
   disarmSplash();
+  // `host.ready` resolves on `kernel-worker-ready`, which the worker posts
+  // AFTER its VfsRpcHost attaches — unlike the first scoop-list (the
+  // callbacks' onReady), which fires mid-boot while VFS RPCs still fan out
+  // into nobody. Re-notify so boot reads (freezer rail) finally land.
+  boot.wiring.notifyReady?.();
   log.info('WC live shell ready', { scoops: host.client.getScoops().length });
 }

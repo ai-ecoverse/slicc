@@ -115,6 +115,25 @@ describe('slicc-lick-card', () => {
       expect(bellSvg(el).innerHTML).toBe(iconShape('webhook'));
     });
 
+    it('gives every webapp lick channel a fitting glyph (no bell fallbacks)', () => {
+      const expectations: ReadonlyArray<[string, string]> = [
+        ['session-reload', 'rotate-ccw'],
+        ['navigate', 'compass'],
+        ['upgrade', 'circle-arrow-up'],
+        ['sprinkle', 'sparkles'],
+        ['fswatch', 'eye'],
+        ['scoop-notify', 'bell-ring'],
+        ['scoop-idle', 'moon'],
+        ['scoop-wait', 'hourglass'],
+      ];
+      for (const [kind, icon] of expectations) {
+        const el = mount((e) => {
+          e.kind = kind;
+        });
+        expect(bellSvg(el).innerHTML, `kind=${kind}`).toBe(iconShape(icon));
+      }
+    });
+
     it('swaps the glyph live when the kind changes', () => {
       const el = mount((e) => {
         e.kind = 'webhook';
@@ -134,6 +153,39 @@ describe('slicc-lick-card', () => {
   it('defaults the event pill to "event"', () => {
     const el = mount();
     expect((el.shadowRoot?.querySelector('.lk') as HTMLElement).textContent).toBe('event');
+  });
+
+  describe('collation count', () => {
+    function pill(el: SliccLickCard): HTMLElement {
+      return el.shadowRoot?.querySelector('.lk') as HTMLElement;
+    }
+
+    it('annotates the event pill with ×N at count 2+', () => {
+      const el = mount((e) => {
+        e.setAttribute('event-label', 'session-reload');
+        e.setAttribute('count', '2');
+      });
+      expect(pill(el).textContent).toBe('session-reload ×2');
+    });
+
+    it('keeps the plain label at count 1 / invalid counts, and reflects the property', () => {
+      const el = mount((e) => {
+        e.setAttribute('event-label', 'deploy');
+      });
+      expect(pill(el).textContent).toBe('deploy');
+      expect(el.count).toBe(1);
+
+      el.setAttribute('count', 'bogus');
+      expect(el.count).toBe(1);
+      expect(pill(el).textContent).toBe('deploy');
+
+      el.count = 3;
+      expect(el.getAttribute('count')).toBe('3');
+      expect(pill(el).textContent).toBe('deploy ×3');
+
+      el.count = 1;
+      expect(el.hasAttribute('count')).toBe(false);
+    });
   });
 
   describe('attribute ↔ property reflection', () => {

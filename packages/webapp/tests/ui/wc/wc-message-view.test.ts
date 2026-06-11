@@ -11,8 +11,10 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 installWcDomStubs();
 
 import { createChatFixture } from '../../../src/ui/chat-fixture.js';
+import type { ChatMessage } from '../../../src/ui/types.js';
 import {
   buildThreadChildren,
+  collateLickMessages,
   messageEls,
   summarizeToolInput,
 } from '../../../src/ui/wc/wc-message-view.js';
@@ -54,7 +56,42 @@ describe('buildThreadChildren', () => {
       (c) => c.tagName.toLowerCase() === 'slicc-lick-card' && c.getAttribute('kind') === 'webhook'
     );
     expect(webhook?.getAttribute('event-label')).toBe('github-push');
-    expect(webhook?.getAttribute('body')).toContain('example/repo');
+    // The body is slotted rich content (markdown-rendered), not the attribute.
+    expect(webhook?.textContent).toContain('example/repo');
+  });
+
+  it('renders lick cards collapsed by default with markdown bodies, headers stripped', () => {
+    const [card] = messageEls({
+      id: 'l1',
+      role: 'user',
+      content: '[Session Reload] Mount recovery required for `/workspace/kb` — **act now**.',
+      timestamp: Date.now(),
+      source: 'lick',
+      channel: 'session-reload',
+    });
+    expect(card.tagName.toLowerCase()).toBe('slicc-lick-card');
+    expect(card.hasAttribute('collapsible')).toBe(true);
+    expect(card.hasAttribute('collapsed')).toBe(true);
+    // Markdown applied: the **act now** emphasis becomes a real element.
+    expect(card.querySelector('strong, b')?.textContent).toBe('act now');
+    // The colon-less `[Session Reload]` header marker is stripped from the body.
+    expect(card.textContent).not.toContain('[Session Reload]');
+    expect(card.textContent).toContain('Mount recovery required');
+  });
+
+  it('carries the collation count onto the card, one section per part', () => {
+    const [card] = messageEls({
+      id: 'l1',
+      role: 'user',
+      content: '[Session Reload] a\n\n[Session Reload] b',
+      timestamp: Date.now(),
+      source: 'lick',
+      channel: 'session-reload',
+      lickCount: 2,
+      lickParts: ['[Session Reload] a', '[Session Reload] b'],
+    });
+    expect(card.getAttribute('count')).toBe('2');
+    expect(card.children).toHaveLength(2);
   });
 
   it('renders plain user messages as user bubbles', () => {
@@ -114,6 +151,47 @@ describe('messageEls', () => {
     expect(bubble.shadowRoot?.querySelectorAll('.attachment-chip').length).toBe(
       message?.attachments?.length ?? -1
     );
+  });
+});
+
+describe('collateLickMessages', () => {
+  function lick(id: string, channel: string, content: string): ChatMessage {
+    return { id, role: 'user', content, timestamp: 1, source: 'lick', channel };
+  }
+
+  it('merges runs of consecutive same-channel licks into one counted message', () => {
+    const out = collateLickMessages([
+      lick('a', 'session-reload', '[Session Reload] one'),
+      lick('b', 'session-reload', '[Session Reload] two'),
+      lick('c', 'session-reload', '[Session Reload] three'),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0].id).toBe('a');
+    expect(out[0].lickCount).toBe(3);
+    expect(out[0].lickParts).toEqual([
+      '[Session Reload] one',
+      '[Session Reload] two',
+      '[Session Reload] three',
+    ]);
+  });
+
+  it('keeps different channels and interleaved messages apart', () => {
+    const user: ChatMessage = { id: 'u', role: 'user', content: 'hi', timestamp: 1 };
+    const out = collateLickMessages([
+      lick('a', 'webhook', 'w1'),
+      lick('b', 'cron', 'c1'),
+      user,
+      lick('c', 'cron', 'c2'),
+    ]);
+    expect(out.map((m) => m.id)).toEqual(['a', 'b', 'u', 'c']);
+    expect(out.every((m) => (m.lickCount ?? 1) === 1)).toBe(true);
+  });
+
+  it('does not mutate its input', () => {
+    const first = lick('a', 'cron', 'one');
+    collateLickMessages([first, lick('b', 'cron', 'two')]);
+    expect(first.lickCount).toBeUndefined();
+    expect(first.content).toBe('one');
   });
 });
 

@@ -35,6 +35,9 @@ describe('buildVfsTreeItems', () => {
 
     const skillsDir = items.find((i) => i.kind === 'dir' && i.id === '/workspace/skills');
     expect(skillsDir).toBeTruthy();
+    // Directory rows show the bare name — the chevron already marks them as
+    // folders, so no trailing slash (only the root group headers keep it).
+    expect(skillsDir?.kind === 'dir' && skillsDir.label).toBe('skills');
     expect(
       skillsDir?.kind === 'dir' &&
         skillsDir.children.some((c) => c.kind === 'file' && c.id === '/workspace/skills/SKILL.md')

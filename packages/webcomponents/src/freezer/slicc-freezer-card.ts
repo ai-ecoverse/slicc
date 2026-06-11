@@ -46,9 +46,13 @@ slicc-freezer-card {
   transition: background-color 0.15s;
 }
 /* Collapsed (icon-only) rail rows get a hover title — the session name appears
-   as a dark pill to the right of the badge, mirroring the dock rail's tip. */
+   as a dark pill to the right of the badge, mirroring the dock rail's tip.
+   The pill is VIEWPORT-FIXED (coords stamped on hover from the row's rect):
+   the freezer host clips its overflow for the width animation, so an
+   absolutely-positioned tip hanging outside the 44px rail would be cut off. */
 slicc-freezer-card .slicc-fzcard__tip {
-  position: absolute; left: calc(100% + 8px); top: 50%; transform: translateY(-50%) translateX(-3px);
+  position: fixed; left: var(--tip-x, 0); top: var(--tip-y, 0);
+  transform: translateY(-50%) translateX(-3px);
   z-index: 30; background: var(--ink); color: var(--canvas, #fff);
   font: 500 11px var(--ui); white-space: nowrap; padding: 3px 8px; border-radius: 6px;
   box-shadow: 0 4px 12px -4px rgba(10,10,10,.3);
@@ -198,6 +202,13 @@ export class SliccFreezerCard extends HTMLElement {
   #built = false;
   #thawTimer: ReturnType<typeof setTimeout> | null = null;
   #onClick = (): void => this.#select();
+  /** Stamp viewport coords for the fixed-position hover tip (see STYLE). */
+  #onTipAnchor = (): void => {
+    if (!this.#tip) return;
+    const rect = this.getBoundingClientRect();
+    this.#tip.style.setProperty('--tip-x', `${rect.right + 8}px`);
+    this.#tip.style.setProperty('--tip-y', `${rect.top + rect.height / 2}px`);
+  };
 
   connectedCallback(): void {
     ensureFreezerCardStyle(this.ownerDocument);
@@ -207,6 +218,8 @@ export class SliccFreezerCard extends HTMLElement {
 
   disconnectedCallback(): void {
     this.removeEventListener('click', this.#onClick);
+    this.removeEventListener('pointerenter', this.#onTipAnchor);
+    this.removeEventListener('focusin', this.#onTipAnchor);
     if (this.#thawTimer != null) {
       clearTimeout(this.#thawTimer);
       this.#thawTimer = null;
@@ -344,6 +357,8 @@ export class SliccFreezerCard extends HTMLElement {
       this.#badge = this.querySelector(':scope > slicc-snowflake') as HTMLElement;
       this.#tip = this.querySelector(':scope > .slicc-fzcard__tip');
       this.addEventListener('click', this.#onClick);
+      this.addEventListener('pointerenter', this.#onTipAnchor);
+      this.addEventListener('focusin', this.#onTipAnchor);
       return;
     }
 
@@ -366,6 +381,8 @@ export class SliccFreezerCard extends HTMLElement {
 
     this.replaceChildren(this.#badge, this.#text, this.#tip);
     this.addEventListener('click', this.#onClick);
+    this.addEventListener('pointerenter', this.#onTipAnchor);
+    this.addEventListener('focusin', this.#onTipAnchor);
   }
 
   /** Reflect title / meta / slug / thawed attributes into the scaffold. */

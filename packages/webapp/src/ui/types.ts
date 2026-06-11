@@ -55,6 +55,10 @@ export interface ChatMessage {
   source?: 'cone' | 'lick' | string;
   /** For licks: the channel type (webhook, cron, etc.) */
   channel?: string;
+  /** Render-time collation: how many consecutive same-channel licks this row stands for. */
+  lickCount?: number;
+  /** Render-time collation: the individual lick bodies folded into this row. */
+  lickParts?: string[];
   /** True when the message is queued (submitted while the agent is still processing). */
   queued?: boolean;
 }

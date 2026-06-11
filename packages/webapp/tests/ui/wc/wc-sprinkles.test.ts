@@ -20,10 +20,12 @@ function makeRefs(): WcShellRefs {
   const shell = document.createElement('slicc-shell');
   const workbenchBody = document.createElement('slicc-workbench-body');
   workbenchBody.setAttribute('active', 'files');
+  const workbenchHeader = document.createElement('slicc-workbench-header');
+  workbenchHeader.setAttribute('hidden', '');
   const dock = document.createElement('slicc-dock') as WcShellRefs['dock'];
   const tabBar = document.createElement('slicc-tab-bar') as WcShellRefs['tabBar'];
-  document.body.append(shell, workbenchBody, dock, tabBar);
-  return { shell, workbenchBody, dock, tabBar } as unknown as WcShellRefs;
+  document.body.append(shell, workbenchBody, workbenchHeader, dock, tabBar);
+  return { shell, workbenchBody, workbenchHeader, dock, tabBar } as unknown as WcShellRefs;
 }
 
 function tabIds(refs: WcShellRefs): string[] {
@@ -60,6 +62,20 @@ describe('WcSprinkleZone', () => {
     expect(refs.shell.hasAttribute('open')).toBe(true);
     expect(refs.workbenchBody.getAttribute('active')).toBe('sprinkle:hero');
     expect(zone.isOpen('hero')).toBe(true);
+  });
+
+  it('reveals the workbench header only while sprinkle tabs exist', () => {
+    const refs = makeRefs();
+    const zone = new WcSprinkleZone(refs);
+    const callbacks = zone.callbacks();
+    // Tool tabs never render, so the header strip starts hidden (empty chrome).
+    expect(refs.workbenchHeader.hasAttribute('hidden')).toBe(true);
+
+    callbacks.addSprinkle('hero', 'Hero', document.createElement('div'));
+    expect(refs.workbenchHeader.hasAttribute('hidden')).toBe(false);
+
+    callbacks.removeSprinkle('hero');
+    expect(refs.workbenchHeader.hasAttribute('hidden')).toBe(true);
   });
 
   it('attention adds without activating', () => {

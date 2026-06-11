@@ -19,6 +19,9 @@ import { buildThreadChildren, messageEls } from './wc-message-view.js';
 // Side-effect import registers every element composed below.
 import '@slicc/webcomponents';
 
+/** The prototype's ice-blue `_ctxAccent` for `freezer:` contexts. */
+export const FREEZER_TINT = '#3b6cb2';
+
 /** Scoop chip descriptors consumed by `<slicc-scoop-switcher>`. */
 export interface SwitcherScoop {
   key: string;
@@ -47,6 +50,8 @@ export interface WcShellOptions {
 /** Element handles the boot modes wire their behavior onto. */
 export interface WcShellRefs {
   frame: HTMLElement;
+  /** The WebGL background field (`<slicc-shader>`, one of three programs). */
+  shader: HTMLElement;
   thread: HTMLElement;
   inputCard: HTMLElement;
   composerMeta: HTMLElement;
@@ -54,6 +59,8 @@ export interface WcShellRefs {
   floatbar: HTMLElement;
   shell: HTMLElement;
   workbenchBody: HTMLElement;
+  /** Hidden while the tab bar has nothing to render (tool tabs never show). */
+  workbenchHeader: HTMLElement;
   dock: HTMLElement;
   freezer: HTMLElement;
   fileTree: SliccFileTree;
@@ -78,8 +85,15 @@ const CSS = [
   'box-sizing:border-box;padding-left:var(--rail-w,44px);',
   'transition:padding-left .4s cubic-bezier(.4,0,.2,1);}',
   '@media (max-width:560px){.wcui-appcol{padding-left:44px;}}',
+  // Terminal surface: one uniform black — the pane matches xterm's dark
+  // theme background, and the host div (whose legacy stylesheet died with
+  // the old UI) flexes to fill the surface so xterm's fit gets real height.
   '.wcui-term{flex:1;min-height:0;display:flex;flex-direction:column;padding:8px 4px 8px 10px;',
-  'box-sizing:border-box;}',
+  'box-sizing:border-box;background:#141414;}',
+  '.wcui-term .terminal-panel__terminal-host{flex:1 1 auto;min-height:0;}',
+  '.wcui-term .terminal-panel__preview{flex:0 0 auto;}',
+  // The files surface is the tree: no dead second column, no divider.
+  '.wcui-frame slicc-file-tree{width:100%;border-right:none;}',
   '.wcui-memory{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;',
   'gap:8px;padding:10px;}',
   '.wcui-placeholder{flex:1;display:flex;align-items:center;justify-content:center;',
@@ -146,13 +160,11 @@ function buildWorkbench(): {
   const workbench = el('slicc-workbench-pane');
   // The documented composition contract: the header is pinned via
   // `slot="header"` so the pane keeps it above the scrollable body region.
-  const header = el('slicc-workbench-header', { slot: 'header' });
+  // The tab bar never renders `tool` tabs (the dock owns tools), so the
+  // header starts hidden — the sprinkle zone reveals it when sprinkle tabs
+  // exist; an always-empty title strip is dead chrome.
+  const header = el('slicc-workbench-header', { slot: 'header', hidden: '' });
   const tabs = el('slicc-tab-bar', { active: 'files' }) as HTMLElement & { tabs?: unknown };
-  tabs.tabs = [
-    { id: 'files', label: 'files', kind: 'tool' },
-    { id: 'term', label: 'terminal', kind: 'tool' },
-    { id: 'memory', label: 'memory', kind: 'tool' },
-  ];
   header.append(tabs);
 
   const body = el('slicc-workbench-body', { active: 'files' });
@@ -257,6 +269,7 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
 
   return {
     frame,
+    shader,
     thread,
     inputCard,
     composerMeta,
@@ -264,6 +277,7 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
     floatbar,
     shell,
     workbenchBody: body,
+    workbenchHeader: header,
     dock,
     freezer,
     fileTree: tree,
@@ -272,6 +286,40 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
     tabBar,
     avatarMenu,
   };
+}
+
+/** The three UI contexts, each with its own shader program + accent. */
+export type ShellContext =
+  | { kind: 'cone' }
+  | { kind: 'scoop'; accent: string }
+  | { kind: 'freezer' };
+
+/**
+ * Flip the whole frame between its three moods: cone (waffle lattice, warm
+ * amber), scoop (swirling ice-cream pastels, the scoop's accent), freezer
+ * (frost crystallizing, ice blue). Swaps the WebGL program via the shader's
+ * `mode`, washes its `tint`, and drives the inherited `--ctx` context accent
+ * so every token-driven surface (freezer chrome, composer band, badges)
+ * tints along. The freezer rail's `ctx` attribute mirrors the freezer mood.
+ */
+export function applyShellContext(refs: WcShellRefs, context: ShellContext): void {
+  const { shader, frame, freezer } = refs;
+  if (context.kind === 'cone') {
+    shader.setAttribute('mode', 'cone');
+    shader.setAttribute('tint', 'var(--waffle)');
+    frame.style.removeProperty('--ctx');
+    freezer.removeAttribute('ctx');
+  } else if (context.kind === 'scoop') {
+    shader.setAttribute('mode', 'scoop');
+    shader.setAttribute('tint', context.accent);
+    frame.style.setProperty('--ctx', context.accent);
+    freezer.removeAttribute('ctx');
+  } else {
+    shader.setAttribute('mode', 'freezer');
+    shader.setAttribute('tint', FREEZER_TINT);
+    frame.style.setProperty('--ctx', FREEZER_TINT);
+    freezer.setAttribute('ctx', '');
+  }
 }
 
 /** Submitted composer text, from the input card's `submit` CustomEvent. */

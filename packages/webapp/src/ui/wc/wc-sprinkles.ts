@@ -128,6 +128,9 @@ export class WcSprinkleZone {
   #sync(): void {
     this.#refs.tabBar.tabs = [...BASE_TABS, ...this.#tabs.values()];
     (this.#refs.dock as HTMLElement & { items?: unknown }).items = [...this.#dockItems.values()];
+    // The tab bar renders ONLY sprinkle tabs (tools live in the dock) — keep
+    // the header strip hidden while it would be empty chrome.
+    this.#refs.workbenchHeader.toggleAttribute('hidden', this.#tabs.size === 0);
   }
 
   #activate(id: string): void {

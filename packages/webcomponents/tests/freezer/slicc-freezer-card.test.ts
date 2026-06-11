@@ -403,6 +403,33 @@ describe('slicc-freezer-card', () => {
       const tip = el.querySelector('.slicc-fzcard__tip') as HTMLElement;
       expect(getComputedStyle(tip).display).toBe('none');
     });
+
+    it('escapes an overflow-clipping rail: the tip is viewport-fixed at the row edge', () => {
+      // The regression: the freezer host clips overflow (width animation), so
+      // an absolutely-positioned tip hanging right of the 44px rail was cut
+      // off and unreadable. The tip is now position:fixed with coords stamped
+      // on hover from the row's rect — clipping ancestors can't touch it.
+      const rail = document.createElement('div');
+      rail.style.cssText = 'position:fixed;left:0;top:0;width:44px;height:300px;overflow:hidden;';
+      const el = document.createElement('slicc-freezer-card') as SliccFreezerCard;
+      el.setAttribute('title', 'clipped session');
+      rail.appendChild(el);
+      document.body.appendChild(rail);
+
+      el.dispatchEvent(new PointerEvent('pointerenter'));
+      const tip = el.querySelector('.slicc-fzcard__tip') as HTMLElement;
+      expect(getComputedStyle(tip).position).toBe('fixed');
+
+      const row = el.getBoundingClientRect();
+      const tipRect = tip.getBoundingClientRect();
+      // Anchored just right of the row — i.e. OUTSIDE the 44px clipping rail.
+      expect(tipRect.left).toBeGreaterThan(row.right);
+      expect(tipRect.left).toBeGreaterThan(44);
+      // Vertically centered on the row.
+      expect(Math.abs(tipRect.top + tipRect.height / 2 - (row.top + row.height / 2))).toBeLessThan(
+        2
+      );
+    });
   });
 
   describe('hover affordance (ring, not rectangle)', () => {

@@ -15,9 +15,8 @@ import {
 import type { ChatMessage } from '../types.js';
 
 export type { FrozenSessionIndexEntry } from '../session-freezer.js';
-
-/** The prototype's ice-blue `_ctxAccent` for `freezer:` contexts. */
-export const FREEZER_TINT = '#3b6cb2';
+// The ice-blue freezer accent lives with the shell's context switcher.
+export { FREEZER_TINT } from './wc-shell.js';
 
 /** Meta line for a card, e.g. `Jan 1 · 12 turns`. */
 function metaLine(entry: FrozenSessionIndexEntry): string {

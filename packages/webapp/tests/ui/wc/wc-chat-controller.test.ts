@@ -163,6 +163,41 @@ describe('WcChatController', () => {
     expect(card?.getAttribute('event-label')).toBe('deploy');
   });
 
+  it('collates consecutive same-channel licks into one counted card', () => {
+    controller.addLickMessage('l1', '[Session Reload] one', 'session-reload', Date.now());
+    controller.addLickMessage('l2', '[Session Reload] two', 'session-reload', Date.now());
+    const cards = thread.querySelectorAll('slicc-lick-card');
+    expect(cards).toHaveLength(1);
+    expect(cards[0].getAttribute('count')).toBe('2');
+    // A different channel breaks the run and starts a fresh card.
+    controller.addLickMessage('l3', '[Cron Event: tick]', 'cron', Date.now());
+    expect(thread.querySelectorAll('slicc-lick-card')).toHaveLength(2);
+  });
+
+  it('collates lick runs arriving through loadMessages too', () => {
+    controller.loadMessages([
+      {
+        id: 'a',
+        role: 'user',
+        content: 'r1',
+        timestamp: 1,
+        source: 'lick',
+        channel: 'session-reload',
+      },
+      {
+        id: 'b',
+        role: 'user',
+        content: 'r2',
+        timestamp: 2,
+        source: 'lick',
+        channel: 'session-reload',
+      },
+    ]);
+    const cards = thread.querySelectorAll('slicc-lick-card');
+    expect(cards).toHaveLength(1);
+    expect(cards[0].getAttribute('count')).toBe('2');
+  });
+
   it('flags prompts sent while processing as queued', () => {
     agent.emit({ type: 'message_start', messageId: 'm1' });
     controller.sendUserMessage('queued one');
