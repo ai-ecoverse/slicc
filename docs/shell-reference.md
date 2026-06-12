@@ -6,7 +6,7 @@ Complete reference for SLICC's shell capabilities, including supplemental comman
 
 ## Overview
 
-SLICC uses `just-bash` (WASM Bash interpreter v2.14.3) as its core shell runtime. This provides the standard Unix builtins (cd, ls, cat, grep, find, sed, awk, head, tail, etc.) plus ~50 custom supplemental commands registered by `packages/webapp/src/shell/supplemental-commands/index.ts` and `packages/webapp/src/shell/wasm-shell-headless.ts`, and any auto-discovered `.jsh` script commands on the VFS.
+SLICC uses `just-bash` (WASM Bash interpreter; see `packages/webapp/package.json` for the pinned version) as its core shell runtime. This provides the standard Unix builtins (cd, ls, cat, grep, find, sed, awk, head, tail, etc.) plus ~50 custom supplemental commands registered by `packages/webapp/src/shell/supplemental-commands/index.ts` and `packages/webapp/src/shell/wasm-shell-headless.ts`, and any auto-discovered `.jsh` script commands on the VFS.
 
 **Entry point**: Via the `bash` agent tool. All shell features available to agents.
 
