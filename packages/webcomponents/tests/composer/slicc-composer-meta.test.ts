@@ -73,14 +73,15 @@ describe('slicc-composer-meta', () => {
       expect(el.shadowRoot?.querySelector('.meta')?.textContent ?? '').not.toContain('▾');
     });
 
-    it('renders the default keyboard hint (two kbd chips + dot separators)', () => {
+    it('renders the default keyboard hint (two kbd chips + a dot separator)', () => {
       const el = mount();
       const hint = el.shadowRoot?.querySelector('.hint') as HTMLElement;
       expect(hint.querySelectorAll('.kbd')).toHaveLength(2);
-      expect(hint.querySelectorAll('.sep')).toHaveLength(2);
+      expect(hint.querySelectorAll('.sep')).toHaveLength(1);
       expect(hint.textContent).toContain('send');
       expect(hint.textContent).toContain('newline');
-      expect(hint.textContent).toContain('review before shipping');
+      // "Review before shipping" is gone — it's shipping time.
+      expect(hint.textContent).not.toContain('review before shipping');
     });
 
     it('exposes a named hint slot for overriding the hint content', () => {

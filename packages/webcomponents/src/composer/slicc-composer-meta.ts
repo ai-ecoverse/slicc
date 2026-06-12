@@ -247,7 +247,7 @@ const SHEET = sheet(STYLE);
  * pill (`.ctl.msel` — a lucide `sparkles` icon with a rainbow stroke + label +
  * a lucide `chevron-down` caret), a thinking-effort pill (`.ctl.tsel` — a lucide
  * `brain` glyph + level label + caret), a flex spacer (`.mspacer`), and a
- * keyboard hint (`.hint` — `⏎` send / `⇧⏎` newline / "review before shipping").
+ * keyboard hint (`.hint` — `⏎` send / `⇧⏎` newline).
  * The row is centered with a 680px max width. Every pill glyph is a real lucide
  * `<svg>` rendered through the shared `iconEl` helper — never an emoji or a
  * bespoke unicode-symbol glyph.
@@ -512,9 +512,7 @@ export class SliccComposerMeta extends HTMLElement {
       h('span', { class: 'sep' }),
       ' ',
       h('span', { class: 'kbd' }, '⇧⏎'),
-      ' newline ',
-      h('span', { class: 'sep' }),
-      ' review before shipping',
+      ' newline',
     ]);
 
     const meta = h(

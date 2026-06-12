@@ -116,7 +116,7 @@ function composer({ open }: ComposerArgs): HTMLElement {
  * Default — full-width chat. The frosted footer band composes a real
  * `<slicc-input-card>` (its `<slicc-add-menu>` toolbar + a gravatar
  * `<slicc-send-button>`) over a `<slicc-composer-meta>` row whose keyboard hint
- * (Enter to send, Shift+Enter for a newline, "review before shipping") stays
+ * (Enter to send, Shift+Enter for a newline) stays
  * visible. Every glyph is a real lucide `<svg>` from the composed components —
  * never an emoji. Flip the global theme toolbar for dark mode; widen via the
  * viewport toolbar.

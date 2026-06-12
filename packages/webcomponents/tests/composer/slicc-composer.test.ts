@@ -187,10 +187,10 @@ describe('slicc-composer', () => {
   });
 
   it('open state pierces the composed slicc-composer-meta shadow hint via ::part', () => {
-    // The regression: the real meta row keeps its "⏎ send · ⇧⏎ newline ·
-    // review before shipping" hint in SHADOW DOM, where the light-DOM class
-    // hooks can't reach — with the workbench open the hint overflowed the
-    // narrowed chat column into the workbench pane.
+    // The regression: the real meta row keeps its "⏎ send · ⇧⏎ newline"
+    // hint in SHADOW DOM, where the light-DOM class hooks can't reach —
+    // with the workbench open the hint overflowed the narrowed chat column
+    // into the workbench pane.
     const el = document.createElement('slicc-composer') as SliccComposer;
     const meta = document.createElement('slicc-composer-meta');
     el.appendChild(meta);

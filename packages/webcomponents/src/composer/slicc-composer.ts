@@ -51,8 +51,8 @@ slicc-composer > .slicc-composer__inner {
 /* narrow-chat (.shell.open): keep just model + thinking — drop the keyboard hint.
    The composed <slicc-composer-meta> keeps its hint in shadow DOM, so the
    light-DOM class hooks can't reach it — pierce via its exported part too,
-   or the "⏎ send · ⇧⏎ newline · review before shipping" line overflows the
-   narrowed chat column straight into the workbench pane. */
+   or the "⏎ send · ⇧⏎ newline" line overflows the narrowed chat column
+   straight into the workbench pane. */
 slicc-composer[open] .slicc-composer__hint,
 slicc-composer[open] [data-composer-hint],
 slicc-composer[open] slicc-composer-meta::part(hint) {
