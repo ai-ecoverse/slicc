@@ -166,10 +166,11 @@ describe('mountWcUiPreview', () => {
     expect(css).toContain('html,body{margin:0');
   });
 
-  it('renders a placeholder for the unwired browser surface', () => {
+  it('describes the tab switcher on the browser surface', () => {
     const root = mount();
     const surface = root.querySelector('[surface-id="browser"]');
-    expect(surface?.textContent).toContain('not wired');
+    expect(surface?.textContent).toContain('tab switcher');
+    expect(surface?.textContent).toContain('followers');
   });
 
   it('hides the workbench header until sprinkle tabs exist (tool tabs never render)', () => {

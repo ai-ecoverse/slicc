@@ -698,6 +698,25 @@ function wireWcStats(wiring: WcLiveWiring, client: OffscreenClient): () => void 
   return refresh;
 }
 
+/**
+ * Browser · CDP dock item (standalone only): the full-screen tab switcher
+ * with screenshot thumbnails — local tabs plus tray followers, whose
+ * captures stream over the WebRTC-backed federated CDP channel.
+ */
+function wireWcBrowserOverlay(
+  boot: WcShellBoot,
+  options: AttachWcClientOptions,
+  log: BootStageLogger
+): void {
+  const standalone = options.standalone;
+  if (!standalone) return;
+  void import('./wc-browser.js')
+    .then(({ wireWcBrowser }) =>
+      wireWcBrowser({ refs: boot.refs, browser: standalone.browser, log })
+    )
+    .catch((err) => log.error('WC browser overlay wiring failed', err));
+}
+
 /** Switcher wiring: chip clicks select scoops; hovered chips get LLM tooltips. */
 function wireWcSwitcher(boot: WcShellBoot, client: OffscreenClient): void {
   const { refs } = boot;
@@ -894,6 +913,7 @@ export function attachWcClient(
   });
 
   wireWcSwitcher(boot, client);
+  wireWcBrowserOverlay(boot, options, log);
 
   // Workbench: VFS file tree + worker-shell terminal, both lazy on first
   // surface activation from the dock or tab bar.

@@ -16,6 +16,7 @@ import './composer/slicc-composer.js';
 import './composer/slicc-input-card.js';
 import './dock/slicc-dock-item.js';
 import './dock/slicc-dock.js';
+import './dock/slicc-tab-overlay.js';
 import './freezer/slicc-freezer-card.js';
 import './freezer/slicc-freezer-new.js';
 import './freezer/slicc-freezer.js';

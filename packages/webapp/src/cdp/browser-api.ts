@@ -425,6 +425,16 @@ export class BrowserAPI {
    * Take a screenshot of the attached page.
    * Returns a base64-encoded PNG string.
    */
+  /**
+   * Foreground the attached page (a local tab raise, or the follower's tab
+   * via the remote transport). Requires a prior `attachToPage`.
+   */
+  async bringToFront(): Promise<void> {
+    await this.ensureConnected();
+    this.ensureAttached();
+    await this.client.send('Page.bringToFront', {}, this.sessionId ?? undefined);
+  }
+
   async screenshot(options?: {
     format?: 'png' | 'jpeg' | 'webp';
     quality?: number;

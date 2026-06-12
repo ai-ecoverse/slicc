@@ -213,7 +213,7 @@ function buildWorkbench(): {
   const browserSurface = el('slicc-surface', { 'surface-id': 'browser', layout: 'flex' });
   const browserNote = el('div', { class: 'wcui-placeholder' });
   browserNote.textContent =
-    'The browser pane is not wired into the WC shell yet — drive pages from the terminal (open, playwright-cli, tab-new).';
+    'The Browser dock item opens the full-screen tab switcher: every open tab — local and tray followers — with live screenshot thumbnails. Click a card to focus it, ✕ to close it.';
   browserSurface.append(browserNote);
 
   body.append(filesSurface, termSurfaceHost, memorySurfaceHost, browserSurface);
