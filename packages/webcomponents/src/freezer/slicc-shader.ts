@@ -105,24 +105,32 @@ void main(){
 }`;
 
 const FRAG_FREEZER = `${HEAD}${NOISE}
+/* Inside-of-a-freezer ground: icy WHITE in light mode (never the warm theme
+   canvas — blue-on-beige read as sand, not frost), cold blue-black in dark. */
+vec3 freezerBg(){ return mix(vec3(0.965,0.98,1.0), vec3(0.05,0.08,0.13), u_dark); }
 void main(){
   vec2 uv=gl_FragCoord.xy/u_res; uv.y-=u_scroll; float aspect=u_res.x/u_res.y; vec2 p=(uv-0.5); p.x*=aspect;
-  /* Contrast: vivid, BRIGHT ice in light mode; deep, DARK ice in dark mode —
-     the old values sat too close to both theme grounds and read washed-out. */
+  /* Glacial clock: frost creeps, it never flows. */
+  float t=u_time*0.08;
   vec3 iceCol=mix(vec3(0.55,0.80,1.0),vec3(0.36,0.52,0.78),u_dark);
   vec3 deepIce=mix(vec3(0.20,0.44,0.84),vec3(0.12,0.24,0.46),u_dark);
-  vec3 bg=mix(themeBg(),iceCol,0.16); float dc=distance(uv,vec2(0.0,0.0));
+  vec3 bg=mix(freezerBg(),iceCol,0.10); float dc=distance(uv,vec2(0.0,0.0));
   float ragged=0.10*fbm(uv*6.0+3.0)+0.05*fbm(uv*14.0); float front=u_freeze*0.66+ragged-0.05;
   float edge=front-dc; float frozen=smoothstep(-0.04,0.06,edge); float wetBand=smoothstep(0.12,0.0,abs(edge));
-  float ripple=0.015*sin(dc*40.0-u_time*0.4)*frozen; vec2 q=uv*aspect+vec2(ripple,ripple*0.5);
+  float ripple=0.015*sin(dc*40.0-t*0.4)*frozen; vec2 q=uv*aspect+vec2(ripple,ripple*0.5);
   float crystals=fbm(q*9.0); crystals+=0.5*fbm(q*20.0+4.0); crystals/=1.5;
   float facet=smoothstep(0.45,0.55,crystals); float veins=smoothstep(0.03,0.0,abs(fract(crystals*6.0)-0.5)-0.02);
-  vec3 col=bg; vec3 wet=mix(bg,iceCol,0.5); float wetSpec=pow(clamp(fbm(uv*10.0-u_time*0.2),0.0,1.0),2.0);
+  vec3 col=bg; vec3 wet=mix(bg,iceCol,0.5); float wetSpec=pow(clamp(fbm(uv*10.0-t*0.2),0.0,1.0),2.0);
   wet+=wetSpec*vec3(1.0)*0.25; col=mix(col,wet,wetBand*0.45);
   vec3 frost=mix(deepIce,iceCol,facet); frost+=veins*vec3(1.0)*0.30;
-  float spark=smoothstep(0.92,1.0,fbm(uv*30.0))*(0.5+0.5*sin(u_time*0.6+crystals*20.0));
+  float spark=smoothstep(0.92,1.0,fbm(uv*30.0))*(0.5+0.5*sin(t*0.6+crystals*20.0));
   frost+=spark*vec3(1.0)*0.4*frozen; col=mix(col,frost,frozen*0.85);
-  float rim=smoothstep(0.05,0.0,abs(edge))*0.6; col+=rim*iceCol; gl_FragColor=vec4(col,1.0);
+  float rim=smoothstep(0.05,0.0,abs(edge))*0.6; col+=rim*iceCol;
+  /* The field is a BACKGROUND: chat prose sits directly on it, so the final
+     wash pins the whole pattern close to the icy ground — the same ~20%
+     deviation budget the cone lattice uses (strokes at 0.20 toward tint). */
+  col=mix(freezerBg(),col,0.22);
+  gl_FragColor=vec4(col,1.0);
 }`;
 
 export type ShaderMode = 'cone' | 'scoop' | 'freezer';
@@ -131,6 +139,8 @@ const PROGRAMS: Record<ShaderMode, string> = {
   scoop: FRAG_SCOOP,
   freezer: FRAG_FREEZER,
 };
+/** Fragment sources, exposed so tests can compile and pixel-probe the fields. */
+export const SHADER_FRAGMENTS: Readonly<Record<ShaderMode, string>> = PROGRAMS;
 const MODES = new Set<ShaderMode>(['cone', 'scoop', 'freezer']);
 
 const FALLBACK: Record<ShaderMode, string> = {
