@@ -56,6 +56,8 @@ export class WcChatController {
   /** Rendered thread elements per message id (a message can span several). */
   readonly #els = new Map<string, HTMLElement[]>();
   #currentStreamId: string | null = null;
+  /** The assistant message the ACTIVE turn streamed (reset on each rise). */
+  #turnAssistantId: string | null = null;
   #pendingDelta = '';
   #flushScheduled = false;
   #processing = false;
@@ -220,6 +222,9 @@ export class WcChatController {
   setProcessing(processing: boolean): void {
     if (this.#processing === processing) return;
     this.#processing = processing;
+    // A RISING edge starts a fresh turn — forget the previous turn's reply
+    // so a turn that streams nothing can never surface a stale one.
+    if (processing) this.#turnAssistantId = null;
     if (!processing) this.#syncCopyRow();
     this.#onProcessingChange?.(processing);
     // End-of-turn = the processing flag FALLING. This is deliberately not
@@ -230,12 +235,17 @@ export class WcChatController {
     if (!processing) this.#fireTurnComplete();
   }
 
-  /** Surface the turn's final settled assistant reply to the host. */
+  /**
+   * Surface THIS turn's assistant reply to the host (null when the turn
+   * produced none — e.g. the error path — so the host can settle its own
+   * one-shot state without ever speaking a historical message).
+   */
   #fireTurnComplete(): void {
+    const id = this.#turnAssistantId;
+    this.#turnAssistantId = null;
     if (!this.#onTurnComplete) return;
-    const last =
-      [...this.#messages].reverse().find((m) => m.role === 'assistant' && !m.isStreaming) ?? null;
-    this.#onTurnComplete(last ? { ...last } : null);
+    const message = id ? this.#findMessage(id) : null;
+    this.#onTurnComplete(message ? { ...message } : null);
   }
 
   /**
@@ -292,6 +302,9 @@ export class WcChatController {
   #handleMessageStart(messageId: string): void {
     this.setProcessing(true);
     this.#currentStreamId = messageId;
+    // Record AFTER the rise (which resets it): a multi-message turn keeps
+    // overwriting, so the turn-complete hook gets the turn's LAST message.
+    this.#turnAssistantId = messageId;
     this.#appendMessage({
       id: messageId,
       role: 'assistant',

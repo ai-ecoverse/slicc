@@ -134,6 +134,24 @@ describe('speechTextFromMarkdown', () => {
   it('returns empty for content with nothing speakable', () => {
     expect(speechTextFromMarkdown('```js\nonly code\n```')).toBe('');
   });
+
+  it('drops shtml dips — fenced, tilde-fenced, and truncated mid-stream', () => {
+    const dip = '<div class="sprinkle-action-card"><button onclick="post()">Go</button></div>';
+    expect(speechTextFromMarkdown(`Here is a dip:\n\n\`\`\`shtml\n${dip}\n\`\`\`\n\nEnjoy!`)).toBe(
+      'Here is a dip: Enjoy!'
+    );
+    expect(speechTextFromMarkdown(`Look:\n~~~shtml\n${dip}\n~~~\ndone`)).toBe('Look: done');
+    // A reply cut off inside the fence must not leak the dip body into speech.
+    expect(speechTextFromMarkdown(`Building it now:\n\`\`\`shtml\n${dip}\n<more`)).toBe(
+      'Building it now:'
+    );
+  });
+
+  it('keeps short inline code but drops long inline spans as code', () => {
+    expect(speechTextFromMarkdown('tweak the `hero` token')).toBe('tweak the hero token');
+    const long = '`const x = document.querySelectorAll(".hero").forEach((n) => n.remove())`';
+    expect(speechTextFromMarkdown(`run ${long} now`)).toBe('run now');
+  });
 });
 
 describe('speak', () => {

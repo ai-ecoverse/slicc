@@ -610,12 +610,14 @@ function createWcController(
     agent: agentHandle,
     // Spoken-reply loop: a turn that began as push-to-talk dictation (the
     // submit listener marks it) gets its reply read aloud — kokoro once the
-    // chained model download is warm, Web Speech until then.
+    // chained model download is warm, Web Speech until then. The one-shot
+    // flag is consumed on EVERY turn completion (even reply-less ones, e.g.
+    // the error path) so it can never linger and voice a later typed turn.
     onTurnComplete: (message) => {
-      if (!message?.content) return;
       void import('../../speech/voice-reply.js')
         .then(({ consumeVoiceSubmission, speakReplyMarkdown }) => {
-          if (consumeVoiceSubmission()) return speakReplyMarkdown(message.content);
+          if (!consumeVoiceSubmission()) return;
+          if (message?.content) return speakReplyMarkdown(message.content);
         })
         .catch(() => undefined);
     },

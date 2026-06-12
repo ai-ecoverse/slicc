@@ -53,18 +53,30 @@ export function pickSpeakEngine(
   return kokoro.ready ? 'kokoro' : 'webspeech';
 }
 
+/** Inline code spans longer than this are code, not vocabulary — dropped. */
+const MAX_SPOKEN_INLINE_CODE_CHARS = 48;
+
 /**
  * Reduce assistant markdown to speakable prose (pure — unit-tested): drop
- * fenced code blocks, unwrap inline code / emphasis / links / images, strip
- * heading/quote/list markers and HTML tags, collapse whitespace, and cap the
- * length so a long reply doesn't monologue.
+ * fenced code blocks (including ```shtml dips and ~~~ fences, plus any
+ * DANGLING fence from a truncated stream — never read raw code aloud),
+ * unwrap short inline code / emphasis / links / images (long inline spans
+ * are dropped as code), strip heading/quote/list markers and HTML tags,
+ * collapse whitespace, and cap the length so a long reply doesn't monologue.
  */
 export function speechTextFromMarkdown(markdown: string): string {
   let text = markdown;
-  text = text.replace(/```[\s\S]*?```/g, ' '); // fenced code: not speakable
-  text = text.replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1'); // images → alt
+  text = text.replace(/```[\s\S]*?```/g, ' '); // fenced code (incl. shtml dips)
+  text = text.replace(/~~~[\s\S]*?~~~/g, ' '); // tilde fences
+  // An unterminated fence (truncated/capped reply) would otherwise leak its
+  // whole body into speech — drop everything from the dangling opener on.
+  text = text.replace(/(?:```|~~~)[\s\S]*$/, ' ');
+  text = text.replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1'); // images/dip refs → alt label
   text = text.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1'); // links → label
-  text = text.replace(/`([^`]*)`/g, '$1'); // inline code → content
+  text = text.replace(
+    /`([^`]*)`/g,
+    (_match, code: string) => (code.length > MAX_SPOKEN_INLINE_CODE_CHARS ? ' ' : code) // inline code → content (short) / dropped (long)
+  );
   text = text.replace(/<[^>\n]+>/g, ' '); // html tags
   text = text.replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, ''); // headings
   text = text.replace(/^[ \t]*>[ \t]?/gm, ''); // blockquotes
