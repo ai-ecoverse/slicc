@@ -271,7 +271,9 @@ jobs:
           npx vite optimize --force
           # Scan optimized deps for Node-only APIs that crash in the browser
           FORBIDDEN='fileURLToPath|require\("(fs|path|crypto|child_process|os|net|tls|http2|dgram|cluster|readline|repl|vm|v8|perf_hooks|worker_threads|inspector)"\)'
-          MATCHES=$(grep -rlE "$FORBIDDEN" ../../node_modules/.vite/deps/*.js 2>/dev/null | grep -v pyodide || true)
+          # transformers.web: environment-gated Node compat branches, dead in
+          # the browser (same justification as the bundle scans above).
+          MATCHES=$(grep -rlE "$FORBIDDEN" ../../node_modules/.vite/deps/*.js 2>/dev/null | grep -vE 'pyodide|transformers\.web' || true)
           if [ -n "$MATCHES" ]; then
             echo "::error::Node-only APIs found in Vite dev-optimized deps:"
             for f in $MATCHES; do
@@ -359,7 +361,7 @@ jobs:
           # Exclude pyodide files which legitimately contain Node references.
           FORBIDDEN='fileURLToPath|require\("(fs|path|crypto|child_process|os|net|tls|http2|dgram|cluster|readline|repl|vm|v8|perf_hooks|worker_threads|inspector)"\)'
           # Same exclusions as the webapp scan (see comment there).
-          MATCHES=$(grep -rlE "$FORBIDDEN" dist/extension/assets/*.js 2>/dev/null | grep -vE 'pyodide|kernel-worker|py-realm-worker' || true)
+          MATCHES=$(grep -rlE "$FORBIDDEN" dist/extension/assets/*.js 2>/dev/null | grep -vE 'pyodide|kernel-worker|py-realm-worker|transformers\.web' || true)
           if [ -n "$MATCHES" ]; then
             echo "::error::Node-only APIs found in extension bundle:"
             for f in $MATCHES; do
@@ -376,7 +378,9 @@ jobs:
           npx vite optimize --force
           # Scan optimized deps for Node-only APIs that crash in the browser
           FORBIDDEN='fileURLToPath|require\("(fs|path|crypto|child_process|os|net|tls|http2|dgram|cluster|readline|repl|vm|v8|perf_hooks|worker_threads|inspector)"\)'
-          MATCHES=$(grep -rlE "$FORBIDDEN" ../../node_modules/.vite/deps/*.js 2>/dev/null | grep -v pyodide || true)
+          # transformers.web: environment-gated Node compat branches, dead in
+          # the browser (same justification as the bundle scans above).
+          MATCHES=$(grep -rlE "$FORBIDDEN" ../../node_modules/.vite/deps/*.js 2>/dev/null | grep -vE 'pyodide|transformers\.web' || true)
           if [ -n "$MATCHES" ]; then
             echo "::error::Node-only APIs found in Vite dev-optimized deps (extension):"
             for f in $MATCHES; do
