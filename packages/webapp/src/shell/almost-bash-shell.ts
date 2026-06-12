@@ -547,6 +547,15 @@ export class AlmostBashShell extends AlmostBashShellHeadless {
     }
   }
 
+  /** Insert text at the cursor, advancing the cursor and echoing to the terminal. */
+  private insertAtCursor(text: string): void {
+    if (!text) return;
+    this.currentLine =
+      this.currentLine.slice(0, this.cursorPos) + text + this.currentLine.slice(this.cursorPos);
+    this.cursorPos += text.length;
+    this.terminal?.write(text);
+  }
+
   private async handleTab(): Promise<void> {
     if (!this.terminal) return;
 
@@ -564,53 +573,10 @@ export class AlmostBashShell extends AlmostBashShellHeadless {
       const result = await this.bash.exec(compgenCmd, { env: this.lastEnv, cwd: this.cwd });
       const matches = result.stdout.split('\n').filter(Boolean);
       if (matches.length === 0) return;
-
       if (matches.length === 1) {
-        const completion = matches[0];
-        const suffix = completion.slice(currentWord.length);
-        if (suffix) {
-          this.currentLine =
-            this.currentLine.slice(0, this.cursorPos) +
-            suffix +
-            this.currentLine.slice(this.cursorPos);
-          this.cursorPos += suffix.length;
-          this.terminal.write(suffix);
-        }
-        let trail = ' ';
-        if (!isFirstWord) {
-          const dirCheck = await this.bash.exec(`compgen -d -- ${escaped.slice(0, -1)}${suffix}'`, {
-            env: this.lastEnv,
-            cwd: this.cwd,
-          });
-          if (dirCheck.stdout.trim() === completion) trail = '/';
-        }
-        this.currentLine =
-          this.currentLine.slice(0, this.cursorPos) +
-          trail +
-          this.currentLine.slice(this.cursorPos);
-        this.cursorPos += 1;
-        this.terminal.write(trail);
+        await this.applySingleCompletion(currentWord, matches[0], isFirstWord, escaped);
       } else {
-        let prefix = matches[0];
-        for (const m of matches) {
-          while (!m.startsWith(prefix)) prefix = prefix.slice(0, -1);
-        }
-        const suffix = prefix.slice(currentWord.length);
-        if (suffix) {
-          this.currentLine =
-            this.currentLine.slice(0, this.cursorPos) +
-            suffix +
-            this.currentLine.slice(this.cursorPos);
-          this.cursorPos += suffix.length;
-          this.terminal.write(suffix);
-        } else {
-          this.terminal.writeln('');
-          this.terminal.writeln(matches.map((m) => m.split('/').pop() ?? m).join('  '));
-          this.showPrompt();
-          this.terminal.write(this.currentLine);
-          const back = this.currentLine.length - this.cursorPos;
-          if (back > 0) this.terminal.write(`\x1b[${back}D`);
-        }
+        this.applyMultiCompletion(currentWord, matches);
       }
     } catch (err) {
       console.warn(
@@ -618,6 +584,45 @@ export class AlmostBashShell extends AlmostBashShellHeadless {
         err instanceof Error ? err.message : String(err)
       );
     }
+  }
+
+  /** Complete a single unambiguous match, appending `/` for dirs or ` ` otherwise. */
+  private async applySingleCompletion(
+    currentWord: string,
+    completion: string,
+    isFirstWord: boolean,
+    escaped: string
+  ): Promise<void> {
+    const suffix = completion.slice(currentWord.length);
+    this.insertAtCursor(suffix);
+    let trail = ' ';
+    if (!isFirstWord) {
+      const dirCheck = await this.bash.exec(`compgen -d -- ${escaped.slice(0, -1)}${suffix}'`, {
+        env: this.lastEnv,
+        cwd: this.cwd,
+      });
+      if (dirCheck.stdout.trim() === completion) trail = '/';
+    }
+    this.insertAtCursor(trail);
+  }
+
+  /** Complete to the common prefix of multiple matches, or list them if none. */
+  private applyMultiCompletion(currentWord: string, matches: string[]): void {
+    let prefix = matches[0];
+    for (const m of matches) {
+      while (!m.startsWith(prefix)) prefix = prefix.slice(0, -1);
+    }
+    const suffix = prefix.slice(currentWord.length);
+    if (suffix) {
+      this.insertAtCursor(suffix);
+      return;
+    }
+    this.terminal?.writeln('');
+    this.terminal?.writeln(matches.map((m) => m.split('/').pop() ?? m).join('  '));
+    this.showPrompt();
+    this.terminal?.write(this.currentLine);
+    const back = this.currentLine.length - this.cursorPos;
+    if (back > 0) this.terminal?.write(`\x1b[${back}D`);
   }
 
   private replaceCurrentLine(text: string): void {
