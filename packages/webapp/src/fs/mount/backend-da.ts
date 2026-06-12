@@ -443,42 +443,7 @@ export class DaMountBackend implements MountBackend {
     while (stack.length > 0) {
       const dir = stack.pop()!;
       try {
-        const res = await this.transport({ method: 'GET', path: this.toListPath(dir) });
-        if (res.status >= 400) {
-          report.errors.push({ path: dir, message: `list failed: ${res.status}` });
-          continue;
-        }
-        const json = (await res.json()) as Array<{
-          name: string;
-          ext?: string;
-          etag?: string;
-          lastModified?: number;
-        }>;
-        const entries: MountDirEntry[] = [];
-        for (const item of json) {
-          if (item.ext) {
-            const filePath = dir ? `${dir}/${item.name}.${item.ext}` : `${item.name}.${item.ext}`;
-            entries.push({
-              name: `${item.name}.${item.ext}`,
-              kind: 'file',
-              etag: item.etag,
-              lastModified: item.lastModified,
-            });
-            const cached = await this.cache.getBody(filePath);
-            if (!cached) report.added.push(filePath);
-            else if (item.etag && cached.etag !== item.etag) {
-              await this.cache.invalidateBody(filePath);
-              report.changed.push(filePath);
-            } else {
-              report.unchanged++;
-            }
-          } else {
-            entries.push({ name: item.name, kind: 'directory' });
-            const subDir = dir ? `${dir}/${item.name}` : item.name;
-            stack.push(subDir);
-          }
-        }
-        await this.cache.putListing(dir, entries);
+        await this.refreshDir(dir, report, stack);
       } catch (err) {
         report.errors.push({
           path: dir,
@@ -486,20 +451,68 @@ export class DaMountBackend implements MountBackend {
         });
       }
     }
+    if (opts?.bodies) await this.refreshBodies(report);
+    return report;
+  }
 
-    if (opts?.bodies) {
-      for (const path of report.changed) {
-        try {
-          await this.readFile(path);
-        } catch (err) {
-          report.errors.push({
-            path,
-            message: err instanceof Error ? err.message : String(err),
-          });
-        }
+  private async classifyFile(
+    filePath: string,
+    remoteEtag: string | undefined,
+    report: RefreshReport
+  ): Promise<void> {
+    const cached = await this.cache.getBody(filePath);
+    if (!cached) {
+      report.added.push(filePath);
+    } else if (remoteEtag && cached.etag !== remoteEtag) {
+      await this.cache.invalidateBody(filePath);
+      report.changed.push(filePath);
+    } else {
+      report.unchanged++;
+    }
+  }
+
+  private async refreshDir(dir: string, report: RefreshReport, stack: string[]): Promise<void> {
+    const res = await this.transport({ method: 'GET', path: this.toListPath(dir) });
+    if (res.status >= 400) {
+      report.errors.push({ path: dir, message: `list failed: ${res.status}` });
+      return;
+    }
+    const json = (await res.json()) as Array<{
+      name: string;
+      ext?: string;
+      etag?: string;
+      lastModified?: number;
+    }>;
+    const entries: MountDirEntry[] = [];
+    for (const item of json) {
+      if (item.ext) {
+        const filePath = dir ? `${dir}/${item.name}.${item.ext}` : `${item.name}.${item.ext}`;
+        entries.push({
+          name: `${item.name}.${item.ext}`,
+          kind: 'file',
+          etag: item.etag,
+          lastModified: item.lastModified,
+        });
+        await this.classifyFile(filePath, item.etag, report);
+      } else {
+        entries.push({ name: item.name, kind: 'directory' });
+        stack.push(dir ? `${dir}/${item.name}` : item.name);
       }
     }
-    return report;
+    await this.cache.putListing(dir, entries);
+  }
+
+  private async refreshBodies(report: RefreshReport): Promise<void> {
+    for (const path of report.changed) {
+      try {
+        await this.readFile(path);
+      } catch (err) {
+        report.errors.push({
+          path,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
   }
 
   describe(): MountDescription {
