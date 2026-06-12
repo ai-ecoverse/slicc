@@ -339,7 +339,6 @@
         "packages/webapp/src/core/image-processor.ts",
         "packages/webapp/src/core/tool-adapter.ts",
         "packages/webapp/src/fs/mount-recovery.ts",
-        "packages/webapp/src/fs/mount/backend-da.ts",
         "packages/webapp/src/fs/mount/backend-local.ts",
         "packages/webapp/src/git/diff.ts",
         "packages/webapp/src/git/git-config.ts",

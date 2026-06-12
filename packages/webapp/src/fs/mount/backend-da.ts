@@ -202,7 +202,13 @@ export class DaMountBackend implements MountBackend {
     if (body.byteLength > this.maxBodyBytes) {
       throw new FsError('EFBIG', `body exceeds maxBodyBytes`, path);
     }
-    const etag = res.headers.get('etag') ?? '';
+    // Strip weak-ETag prefix (W/) before caching. Cloudflare compresses JSON
+    // responses and downgrades strong ETags to weak ones. If-Match requires a
+    // strong ETag, so caching the weak form causes a guaranteed 412 on every
+    // write. The underlying S3 ETag (content MD5) is the part after W/, which
+    // is what S3 actually validates against.
+    const rawEtag = res.headers.get('etag') ?? '';
+    const etag = rawEtag.startsWith('W/') ? rawEtag.slice(2) : rawEtag;
     await this.cache.putBody(rel, body, etag);
     return body;
   }
@@ -232,7 +238,10 @@ export class DaMountBackend implements MountBackend {
     // with empty etag, which is malformed. Treat empty etag as "we don't
     // know the version" and omit the conditional.
     if (cached?.etag) {
-      headers['if-match'] = cached.etag;
+      // Strip weak-ETag prefix defensively — cached entries written before the
+      // readFile fix may still carry W/"..." from Cloudflare compression.
+      const strongEtag = cached.etag.startsWith('W/') ? cached.etag.slice(2) : cached.etag;
+      headers['if-match'] = strongEtag;
     } else if (!cached) {
       headers['if-none-match'] = '*';
     }
@@ -434,42 +443,7 @@ export class DaMountBackend implements MountBackend {
     while (stack.length > 0) {
       const dir = stack.pop()!;
       try {
-        const res = await this.transport({ method: 'GET', path: this.toListPath(dir) });
-        if (res.status >= 400) {
-          report.errors.push({ path: dir, message: `list failed: ${res.status}` });
-          continue;
-        }
-        const json = (await res.json()) as Array<{
-          name: string;
-          ext?: string;
-          etag?: string;
-          lastModified?: number;
-        }>;
-        const entries: MountDirEntry[] = [];
-        for (const item of json) {
-          if (item.ext) {
-            const filePath = dir ? `${dir}/${item.name}.${item.ext}` : `${item.name}.${item.ext}`;
-            entries.push({
-              name: `${item.name}.${item.ext}`,
-              kind: 'file',
-              etag: item.etag,
-              lastModified: item.lastModified,
-            });
-            const cached = await this.cache.getBody(filePath);
-            if (!cached) report.added.push(filePath);
-            else if (item.etag && cached.etag !== item.etag) {
-              await this.cache.invalidateBody(filePath);
-              report.changed.push(filePath);
-            } else {
-              report.unchanged++;
-            }
-          } else {
-            entries.push({ name: item.name, kind: 'directory' });
-            const subDir = dir ? `${dir}/${item.name}` : item.name;
-            stack.push(subDir);
-          }
-        }
-        await this.cache.putListing(dir, entries);
+        await this.refreshDir(dir, report, stack);
       } catch (err) {
         report.errors.push({
           path: dir,
@@ -477,20 +451,68 @@ export class DaMountBackend implements MountBackend {
         });
       }
     }
+    if (opts?.bodies) await this.refreshBodies(report);
+    return report;
+  }
 
-    if (opts?.bodies) {
-      for (const path of report.changed) {
-        try {
-          await this.readFile(path);
-        } catch (err) {
-          report.errors.push({
-            path,
-            message: err instanceof Error ? err.message : String(err),
-          });
-        }
+  private async classifyFile(
+    filePath: string,
+    remoteEtag: string | undefined,
+    report: RefreshReport
+  ): Promise<void> {
+    const cached = await this.cache.getBody(filePath);
+    if (!cached) {
+      report.added.push(filePath);
+    } else if (remoteEtag && cached.etag !== remoteEtag) {
+      await this.cache.invalidateBody(filePath);
+      report.changed.push(filePath);
+    } else {
+      report.unchanged++;
+    }
+  }
+
+  private async refreshDir(dir: string, report: RefreshReport, stack: string[]): Promise<void> {
+    const res = await this.transport({ method: 'GET', path: this.toListPath(dir) });
+    if (res.status >= 400) {
+      report.errors.push({ path: dir, message: `list failed: ${res.status}` });
+      return;
+    }
+    const json = (await res.json()) as Array<{
+      name: string;
+      ext?: string;
+      etag?: string;
+      lastModified?: number;
+    }>;
+    const entries: MountDirEntry[] = [];
+    for (const item of json) {
+      if (item.ext) {
+        const filePath = dir ? `${dir}/${item.name}.${item.ext}` : `${item.name}.${item.ext}`;
+        entries.push({
+          name: `${item.name}.${item.ext}`,
+          kind: 'file',
+          etag: item.etag,
+          lastModified: item.lastModified,
+        });
+        await this.classifyFile(filePath, item.etag, report);
+      } else {
+        entries.push({ name: item.name, kind: 'directory' });
+        stack.push(dir ? `${dir}/${item.name}` : item.name);
       }
     }
-    return report;
+    await this.cache.putListing(dir, entries);
+  }
+
+  private async refreshBodies(report: RefreshReport): Promise<void> {
+    for (const path of report.changed) {
+      try {
+        await this.readFile(path);
+      } catch (err) {
+        report.errors.push({
+          path,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
   }
 
   describe(): MountDescription {
