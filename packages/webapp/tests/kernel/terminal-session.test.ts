@@ -14,8 +14,8 @@ import {
   createBridgeMessageChannelTransport,
   createPanelMessageChannelTransport,
 } from '../../src/kernel/transport-message-channel.js';
+import type { HeadlessShellLike } from '../../src/shell/almost-bash-shell-headless.js';
 import type { TerminalEventMsg } from '../../src/shell/terminal-protocol.js';
-import type { HeadlessShellLike } from '../../src/shell/wasm-shell-headless.js';
 import { OffscreenClient } from '../../src/ui/offscreen-client.js';
 
 function tick(ms = 5): Promise<void> {

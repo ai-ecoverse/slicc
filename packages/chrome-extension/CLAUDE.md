@@ -137,7 +137,7 @@ The cone (agent) path for `usb request` / `serial request` / `hid request` mirro
 
 ## Dual-Context Shell Model
 
-The extension has **two WasmShell instances**:
+The extension has **two AlmostBashShell instances**:
 
 - the side panel shell powers the Terminal tab
 - the offscreen shell executes agent `bash` tool calls

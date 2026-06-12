@@ -2,13 +2,13 @@
  * Bash tool — Execute shell commands via just-bash.
  *
  * Provides a single "bash" tool that runs commands and returns
- * stdout/stderr output. Uses WasmShell's executeCommand() API,
+ * stdout/stderr output. Uses AlmostBashShell's executeCommand() API,
  * which delegates to just-bash's Bash interpreter.
  */
 
 import { createLogger } from '../core/logger.js';
 import type { ToolDefinition, ToolResult } from '../core/types.js';
-import type { WasmShell } from '../shell/index.js';
+import type { AlmostBashShell } from '../shell/index.js';
 
 const log = createLogger('tool:bash');
 
@@ -91,8 +91,8 @@ function isExpectedNoMatchSearch(command: string, exitCode: number, stderr: stri
   return SEARCH_COMMAND_PREFIX.test(getLastCommandSegment(command));
 }
 
-/** Create the bash tool bound to a WasmShell instance. */
-export function createBashTool(shell: WasmShell): ToolDefinition {
+/** Create the bash tool bound to a AlmostBashShell instance. */
+export function createBashTool(shell: AlmostBashShell): ToolDefinition {
   return {
     name: 'bash',
     description:

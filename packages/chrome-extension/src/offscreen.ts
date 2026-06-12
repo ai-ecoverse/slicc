@@ -94,7 +94,7 @@ async function init(): Promise<void> {
     logger: log,
   });
 
-  // Initialize RUM telemetry so beacons fire from the offscreen WasmShell
+  // Initialize RUM telemetry so beacons fire from the offscreen AlmostBashShell
   // — `trackShellCommand` and friends silently no-op until `sampleRUM` is
   // bound here. Without this, agent-initiated `bash` invocations from the
   // extension (including `agent ...` scoop delegations from the cone)
@@ -159,7 +159,7 @@ async function init(): Promise<void> {
   // agent's bash tool. Shared `createPanelTerminalHost` factory pins
   // parity with the standalone DedicatedWorker path (`kernel-worker.ts`):
   // both pass `processManager: host.processManager` into
-  // `TerminalSessionHost` AND the per-session `WasmShellHeadless`, so
+  // `TerminalSessionHost` AND the per-session `AlmostBashShellHeadless`, so
   // `ps` / `kill` / `cat /proc/<pid>/...` work uniformly.
   let stopTerminalHost: (() => void) | null = null;
   let stopVfsRpcHost: (() => void) | null = null;

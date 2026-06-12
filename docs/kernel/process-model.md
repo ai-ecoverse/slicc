@@ -112,7 +112,7 @@ createKernelHost
   │           └── adaptTools({ processManager, owner, getParentPid })
   └── createPanelTerminalHost({ processManager, fs, browser, transport })
         └── TerminalSessionHost({ processManager, … })
-              └── WasmShellHeadless({ processManager, processOwner, getCurrentShellPid? })
+              └── AlmostBashShellHeadless({ processManager, processOwner, getCurrentShellPid? })
                     └── jsh-executor (executeJshFile / executeJsCode)
 ```
 

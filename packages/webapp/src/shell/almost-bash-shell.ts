@@ -1,42 +1,42 @@
 /**
- * `WasmShell` — xterm.js terminal integration on top of
- * `WasmShellHeadless`.
+ * `AlmostBashShell` — xterm.js terminal integration on top of
+ * `AlmostBashShellHeadless`.
  *
  * The headless concerns (just-bash, jsh sync, custom
  * commands, executeCommand/executeScriptFile primitives) live in
- * `wasm-shell-headless.ts`. This file adds the **view layer** —
+ * `almost-bash-shell-headless.ts`. This file adds the **view layer** —
  * xterm mount, theme sync, refit / resize, line editor, command
  * history, tab completion, Ctrl+C, multi-line continuation, and
  * inline media-preview rendering for `imgcat`.
  *
  * Worker context: the agent's `bash` tool calls `executeCommand` /
- * `executeScriptFile` on a `WasmShell` instance, but never calls
+ * `executeScriptFile` on a `AlmostBashShell` instance, but never calls
  * `mount()`. The view fields stay `null`, and the view methods
  * are dead code — xterm itself is dynamically imported inside
  * `mount()` so it never enters the worker bundle. A follow-up may
  * formally split the public types so the worker constructs
- * `WasmShellHeadless` directly; today the inheritance is enough.
+ * `AlmostBashShellHeadless` directly; today the inheritance is enough.
  */
 
 import type { FitAddon } from '@xterm/addon-fit';
 import type { Terminal } from '@xterm/xterm';
 import type { BashExecResult } from 'just-bash';
 import {
+  AlmostBashShellHeadless,
+  type HeadlessShellLike,
+  type HeadlessShellOptions,
+} from './almost-bash-shell-headless.js';
+import {
   decodeForbiddenResponseHeaders,
   encodeForbiddenRequestHeaders,
   isTextContentType,
 } from './proxied-fetch.js';
 import type { MediaPreviewItem } from './supplemental-commands.js';
-import {
-  type HeadlessShellLike,
-  type HeadlessShellOptions,
-  WasmShellHeadless,
-} from './wasm-shell-headless.js';
 
-export { WasmShellHeadless } from './wasm-shell-headless.js';
+export { AlmostBashShellHeadless } from './almost-bash-shell-headless.js';
 export type { HeadlessShellLike };
 // Re-exports for backwards compatibility — existing tests import
-// these from `wasm-shell.ts`. New callers should import from the
+// these from `almost-bash-shell.ts`. New callers should import from the
 // origin modules directly.
 export { decodeForbiddenResponseHeaders, encodeForbiddenRequestHeaders, isTextContentType };
 
@@ -46,17 +46,17 @@ function basename(path: string): string {
   return slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
 }
 
-export interface WasmShellOptions extends HeadlessShellOptions {
+export interface AlmostBashShellOptions extends HeadlessShellOptions {
   /** Container element for the terminal. */
   container?: HTMLElement;
 }
 
 /**
- * `WasmShell` — view-extending shell. Inherits everything headless
- * from `WasmShellHeadless`; adds xterm mount + line editor + media
+ * `AlmostBashShell` — view-extending shell. Inherits everything headless
+ * from `AlmostBashShellHeadless`; adds xterm mount + line editor + media
  * preview.
  */
-export class WasmShell extends WasmShellHeadless {
+export class AlmostBashShell extends AlmostBashShellHeadless {
   private terminal: Terminal | null = null;
   private fitAddon: FitAddon | null = null;
   private terminalHost: HTMLElement | null = null;
@@ -74,7 +74,7 @@ export class WasmShell extends WasmShellHeadless {
   private execAbort: AbortController | null = null;
   private continuationBuffer = '';
 
-  constructor(options: WasmShellOptions) {
+  constructor(options: AlmostBashShellOptions) {
     super(options);
   }
 
@@ -98,7 +98,7 @@ export class WasmShell extends WasmShellHeadless {
 
   /** Mount the terminal in a DOM container. */
   async mount(container?: HTMLElement): Promise<void> {
-    const target = container ?? (this.options as WasmShellOptions).container;
+    const target = container ?? (this.options as AlmostBashShellOptions).container;
     if (!target) throw new Error('No container element provided');
 
     // Dynamic imports so this module can be loaded in Node.js (tests)

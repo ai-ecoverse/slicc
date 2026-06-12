@@ -49,8 +49,8 @@ This is the section reviewers ask for most often. Be explicit about what
 changes for code paths NOT directly named by this PR.
 
 - **Floats exercised**: CLI / Chrome extension / Electron / Sliccstart / worker
-- **Shell contexts** (extension only): side panel `WasmShell`, offscreen
-  `WasmShell`, sandbox iframe — name each one this PR touches or leaves alone.
+- **Shell contexts** (extension only): side panel `AlmostBashShell`, offscreen
+  `AlmostBashShell`, sandbox iframe — name each one this PR touches or leaves alone.
 - **Other callers of the changed function/contract**: if you broadened a
   try/catch, changed an error shape, or rewrote a helper, list the *unrelated*
   callers you checked. ("This `catch` also catches `validateApiKey`'s 404; that

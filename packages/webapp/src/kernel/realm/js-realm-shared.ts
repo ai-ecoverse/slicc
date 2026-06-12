@@ -139,7 +139,7 @@ export async function runJsRealm(
   };
 
   // `init.stdin` arrives as a buffered string from the kernel — pipelines
-  // upstream of the realm (the WasmShell exec pipeline, the registered
+  // upstream of the realm (the AlmostBashShell exec pipeline, the registered
   // `.jsh` command path, `node`/`node -e` via supplemental-commands) all
   // populate it before posting `realm-init`. Stdin in the realm is
   // therefore fully read-ahead; we don't model a streaming Readable.

@@ -1,9 +1,9 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { VirtualFS } from '../../../src/fs/index.js';
-import { WasmShell } from '../../../src/shell/index.js';
+import type { ShellSudoConfig } from '../../../src/shell/almost-bash-shell-headless.js';
+import { AlmostBashShell } from '../../../src/shell/index.js';
 import { parseSudoers } from '../../../src/shell/sudo/sudoers.js';
-import type { ShellSudoConfig } from '../../../src/shell/wasm-shell-headless.js';
 import type { SudoBroker, SudoDecision } from '../../../src/sudo/types.js';
 
 const POLICY = parseSudoers('Cmnd  touch /workspace/gated*');
@@ -14,7 +14,7 @@ function brokerReturning(decision: SudoDecision): SudoBroker {
   return { requestApproval: vi.fn(async () => decision) };
 }
 
-describe('WasmShell command-level sudo enforcement', () => {
+describe('AlmostBashShell command-level sudo enforcement', () => {
   let fs: VirtualFS;
   let dbCounter = 0;
 
@@ -22,8 +22,8 @@ describe('WasmShell command-level sudo enforcement', () => {
     fs = await VirtualFS.create({ dbName: `test-cmd-sudo-${dbCounter++}`, wipe: true });
   });
 
-  function makeShell(sudo: ShellSudoConfig): WasmShell {
-    return new WasmShell({ fs, sudo });
+  function makeShell(sudo: ShellSudoConfig): AlmostBashShell {
+    return new AlmostBashShell({ fs, sudo });
   }
 
   it('blocks a denied command without executing it', async () => {
@@ -255,7 +255,7 @@ describe('WasmShell command-level sudo enforcement', () => {
   });
 });
 
-describe('WasmShell sudo with transparentGating: false (human terminal)', () => {
+describe('AlmostBashShell sudo with transparentGating: false (human terminal)', () => {
   let fs: VirtualFS;
   let dbCounter = 0;
 
@@ -263,8 +263,8 @@ describe('WasmShell sudo with transparentGating: false (human terminal)', () => 
     fs = await VirtualFS.create({ dbName: `test-cmd-sudo-tg-${dbCounter++}`, wipe: true });
   });
 
-  function makeShell(sudo: ShellSudoConfig): WasmShell {
-    return new WasmShell({ fs, sudo });
+  function makeShell(sudo: ShellSudoConfig): AlmostBashShell {
+    return new AlmostBashShell({ fs, sudo });
   }
 
   it('does not prompt for a policy-gated plain command (transparent gate disabled)', async () => {

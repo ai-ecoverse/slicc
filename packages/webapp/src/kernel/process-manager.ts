@@ -10,7 +10,7 @@
  *
  * Design notes:
  *   - **No globals.** The manager is constructed by `createKernelHost`
- *     and threaded through `WasmShellOptions` / `HeadlessShellOptions`,
+ *     and threaded through `AlmostBashShellOptions` / `HeadlessShellOptions`,
  *     `ScoopContext` constructor, `TerminalSessionHost`, etc. Tests
  *     instantiate it directly. The `globalThis.__slicc_*` hooks remain
  *     as fallback for shell scripts and `.jsh` callers that can't
