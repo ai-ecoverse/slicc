@@ -25,7 +25,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
 import { RestrictedFS } from '../../src/fs/restricted-fs.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
-import { WasmShell } from '../../src/shell/wasm-shell.js';
+import { AlmostBashShell } from '../../src/shell/almost-bash-shell.js';
 
 describe('RestrictedFS synchronous methods (VfsAdapter contract)', () => {
   let vfs: VirtualFS;
@@ -256,10 +256,10 @@ describe('RestrictedFS synchronous methods (VfsAdapter contract)', () => {
   });
 });
 
-describe('RestrictedFS integration with WasmShell (VAL-FS-021 + VAL-FS-022)', () => {
+describe('RestrictedFS integration with AlmostBashShell (VAL-FS-021 + VAL-FS-022)', () => {
   let vfs: VirtualFS;
   let restricted: RestrictedFS;
-  let shell: WasmShell;
+  let shell: AlmostBashShell;
   const scoopFolder = '/scoops/agent-y/';
   const cwd = '/home/wiki/';
 
@@ -277,7 +277,7 @@ describe('RestrictedFS integration with WasmShell (VAL-FS-021 + VAL-FS-022)', ()
     restricted = new RestrictedFS(vfs, [scoopFolder, '/shared/', cwd], ['/workspace/']);
     // `as unknown as VirtualFS` mirrors the cast used by ScoopContext in production —
     // RestrictedFS is the actual fs a bridge scoop's shell sees.
-    shell = new WasmShell({
+    shell = new AlmostBashShell({
       fs: restricted as unknown as VirtualFS,
       cwd,
     });
@@ -477,7 +477,7 @@ describe('RestrictedFS sync methods reject symlink-escape (VAL-FS-019 parity)', 
 describe('RestrictedFS symlink-escape shell integration (VAL-FS-019 parity)', () => {
   let vfs: VirtualFS;
   let restricted: RestrictedFS;
-  let shell: WasmShell;
+  let shell: AlmostBashShell;
   const scoopFolder = '/scoops/agent-w/';
   const cwd = '/home/wiki/';
 
@@ -499,7 +499,7 @@ describe('RestrictedFS symlink-escape shell integration (VAL-FS-019 parity)', ()
     await vfs.symlink('/shared/real-file', '/shared/legit-link');
 
     restricted = new RestrictedFS(vfs, [scoopFolder, '/shared/', cwd], ['/workspace/']);
-    shell = new WasmShell({
+    shell = new AlmostBashShell({
       fs: restricted as unknown as VirtualFS,
       cwd,
     });

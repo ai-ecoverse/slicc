@@ -26,7 +26,7 @@ const mocks = vi.hoisted(() => {
     createBashTool: vi.fn(() => ({ name: 'bash' })),
     createSearchTools: vi.fn(() => [{ name: 'grep' }, { name: 'find' }]),
     createScoopManagementTools: vi.fn(() => [{ name: 'send_message' }]),
-    WasmShell: vi.fn(function () {
+    AlmostBashShell: vi.fn(function () {
       return {};
     }),
     getApiKey: vi.fn(() => 'test-api-key'),
@@ -52,7 +52,7 @@ vi.mock('../../src/tools/index.js', () => ({
 }));
 
 vi.mock('../../src/shell/index.js', () => ({
-  WasmShell: mocks.WasmShell,
+  AlmostBashShell: mocks.AlmostBashShell,
 }));
 
 vi.mock('../../src/ui/provider-settings.js', () => ({

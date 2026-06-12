@@ -387,7 +387,7 @@
         "packages/webapp/src/shell/supplemental-commands/usb-command.ts",
         "packages/webapp/src/shell/supplemental-commands/webhook-command.ts",
         "packages/webapp/src/shell/supplemental-commands/websocat-command.ts",
-        "packages/webapp/src/shell/wasm-shell.ts",
+        "packages/webapp/src/shell/almost-bash-shell.ts",
         "packages/webapp/src/skills/install-from-drop.ts",
         "packages/webapp/src/tools/search-tools.ts",
         "packages/webapp/src/ui/ansi.ts",

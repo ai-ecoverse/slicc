@@ -8,7 +8,7 @@
  * handles `terminal-*` envelopes (see `terminal-protocol.ts`).
  *
  * Per-session lifecycle:
- *   `terminal-open`  → construct a `WasmShellHeadless`,
+ *   `terminal-open`  → construct a `AlmostBashShellHeadless`,
  *                      reply with `terminal-status: opened`.
  *   `terminal-exec`  → run the command via the headless shell,
  *                      emit `terminal-output` (stdout + stderr) and
@@ -20,7 +20,7 @@
  *   `terminal-close` → dispose the shell, reply
  *                      `terminal-status: closed`.
  *
- * Output stream caveats: `WasmShellHeadless.executeCommand` returns
+ * Output stream caveats: `AlmostBashShellHeadless.executeCommand` returns
  * the full result in one shot — it doesn't stream. The host emits
  * one `terminal-output` per stdout/stderr block, then the `exit`
  * event. A future streaming runtime can switch to chunked emission
@@ -40,6 +40,10 @@ import type {
   PanelToOffscreenMessage,
 } from '../../../chrome-extension/src/messages.js';
 import type {
+  HeadlessShellLike,
+  HeadlessShellOptions,
+} from '../shell/almost-bash-shell-headless.js';
+import type {
   TerminalCloseMsg,
   TerminalControlMsg,
   TerminalEventMsg,
@@ -51,7 +55,6 @@ import type {
   TerminalSignalMsg,
   TerminalStatusMsg,
 } from '../shell/terminal-protocol.js';
-import type { HeadlessShellLike, HeadlessShellOptions } from '../shell/wasm-shell-headless.js';
 import type { Process, ProcessManager, ProcessOwner, Signal } from './process-manager.js';
 import type { KernelTransport } from './types.js';
 
@@ -65,7 +68,7 @@ import type { KernelTransport } from './types.js';
  * `terminal-close`.
  *
  * Production wiring (in `kernel-worker.ts`'s `boot()`) returns a
- * `WasmShellHeadless` over the worker's shared FS / browser API.
+ * `AlmostBashShellHeadless` over the worker's shared FS / browser API.
  * Tests pass a stub.
  */
 export type TerminalShellFactory = (
@@ -447,14 +450,14 @@ function isTerminalControlMsg(payload: unknown): payload is TerminalControlMsg {
 // ---------------------------------------------------------------------------
 
 /**
- * Build a `TerminalShellFactory` over a `WasmShellHeadless` factory.
+ * Build a `TerminalShellFactory` over a `AlmostBashShellHeadless` factory.
  * The kernel-worker boot path uses this with options pre-bound to
  * the worker's shared FS / browser API.
  *
  * Exported so tests can compose the same shape with a stubbed
  * shell ctor.
  */
-export function createWasmShellTerminalFactory(
+export function createAlmostBashShellTerminalFactory(
   buildShell: (
     cwd?: string,
     env?: Record<string, string>

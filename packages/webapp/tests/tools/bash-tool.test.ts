@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { ToolDefinition } from '../../src/core/types.js';
 import { VirtualFS } from '../../src/fs/index.js';
-import { WasmShell } from '../../src/shell/index.js';
+import { AlmostBashShell } from '../../src/shell/index.js';
 import { createBashTool, splitCommandSegments } from '../../src/tools/bash-tool.js';
 
 describe('splitCommandSegments', () => {
@@ -39,7 +39,7 @@ describe('splitCommandSegments', () => {
 
 describe('Bash Tool', () => {
   let fs: VirtualFS;
-  let shell: WasmShell;
+  let shell: AlmostBashShell;
   let bash: ToolDefinition;
   let dbCounter = 0;
 
@@ -48,7 +48,7 @@ describe('Bash Tool', () => {
       dbName: `test-bash-tool-${dbCounter++}`,
       wipe: true,
     });
-    shell = new WasmShell({ fs });
+    shell = new AlmostBashShell({ fs });
     bash = createBashTool(shell);
   });
 
@@ -201,7 +201,7 @@ describe('Bash Tool', () => {
   });
 
   it('exposes playwright aliases like normal shell commands when browser support is available', async () => {
-    const browserShell = new WasmShell({ fs, browserAPI: {} as any });
+    const browserShell = new AlmostBashShell({ fs, browserAPI: {} as any });
     const browserBash = createBashTool(browserShell);
 
     const help = await browserBash.execute({ command: 'playwright --help' });

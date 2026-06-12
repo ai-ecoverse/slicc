@@ -413,7 +413,7 @@ describe('RestrictedFS', () => {
 
   describe('isPathUnderMount', () => {
     // Regression for issue #507 — git fs adapter calls
-    // `vfs.isPathUnderMount(path)` on whatever fs the WasmShell was
+    // `vfs.isPathUnderMount(path)` on whatever fs the AlmostBashShell was
     // constructed with. When that's a `RestrictedFS` (every scoop), the
     // missing method threw "e.isPathUnderMount is not a function" and
     // broke ALL git operations inside scoops. The method must exist and

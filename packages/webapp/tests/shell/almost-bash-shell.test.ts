@@ -1,5 +1,5 @@
 /**
- * Tests for WasmShell utility functions.
+ * Tests for AlmostBashShell utility functions.
  */
 
 import 'fake-indexeddb/auto';
@@ -8,11 +8,11 @@ import type { BrowserAPI } from '../../src/cdp/index.js';
 import { FsWatcher, VirtualFS } from '../../src/fs/index.js';
 import { WORKFLOW_MANAGER_GLOBAL_KEY } from '../../src/scoops/workflow-run-manager.js';
 import {
+  AlmostBashShell,
   decodeForbiddenResponseHeaders,
   encodeForbiddenRequestHeaders,
   isTextContentType,
-  WasmShell,
-} from '../../src/shell/wasm-shell.js';
+} from '../../src/shell/almost-bash-shell.js';
 
 describe('isTextContentType', () => {
   it('identifies text/* as text', () => {
@@ -211,19 +211,19 @@ describe('decodeForbiddenResponseHeaders', () => {
   });
 });
 
-describe('WasmShell playwright command discoverability', () => {
+describe('AlmostBashShell playwright command discoverability', () => {
   let fs: VirtualFS;
   let dbCounter = 0;
 
   beforeEach(async () => {
     fs = await VirtualFS.create({
-      dbName: `test-wasm-shell-${dbCounter++}`,
+      dbName: `test-almost-bash-shell-${dbCounter++}`,
       wipe: true,
     });
   });
 
   it('exposes playwright aliases and host through which, commands, and /usr/bin when browserAPI is provided', async () => {
-    const shell = new WasmShell({
+    const shell = new AlmostBashShell({
       fs,
       browserAPI: {} as BrowserAPI,
     });
@@ -253,7 +253,7 @@ describe('WasmShell playwright command discoverability', () => {
   });
 
   it('keeps playwright aliases and host discoverable even without browserAPI', async () => {
-    const shell = new WasmShell({ fs });
+    const shell = new AlmostBashShell({ fs });
 
     const whichResult = await shell.executeCommand('which playwright-cli host');
     expect(whichResult.exitCode).toBe(0);
@@ -279,7 +279,7 @@ describe('WasmShell playwright command discoverability', () => {
     expect(openResult.stderr).toContain('browser APIs are unavailable');
   });
   it('accepts an external AbortSignal when executing commands programmatically', async () => {
-    const shell = new WasmShell({ fs });
+    const shell = new AlmostBashShell({ fs });
     const controller = new AbortController();
     const execSpy = vi.spyOn((shell as any).bash, 'exec');
 
@@ -299,7 +299,7 @@ describe('WasmShell playwright command discoverability', () => {
     fs.setWatcher(new FsWatcher());
     await fs.writeFile('/workspace/login.example.com.bsh', 'console.log("login");');
 
-    const shell = new WasmShell({ fs });
+    const shell = new AlmostBashShell({ fs });
 
     expect((await shell.getScriptCatalog().getBshEntries()).map((entry) => entry.path)).toEqual([
       '/workspace/login.example.com.bsh',
@@ -309,7 +309,7 @@ describe('WasmShell playwright command discoverability', () => {
 
 let jshRegistrationDbCounter = 0;
 
-describe('WasmShell .jsh command registration', () => {
+describe('AlmostBashShell .jsh command registration', () => {
   let fs: VirtualFS;
 
   beforeEach(async () => {
@@ -331,7 +331,7 @@ describe('WasmShell .jsh command registration', () => {
       'console.log("hello from jsh");'
     );
 
-    const shell = new WasmShell({ fs });
+    const shell = new AlmostBashShell({ fs });
     // Wait for async syncJshCommands to complete
     await shell.syncJshCommands();
 
@@ -351,7 +351,7 @@ describe('WasmShell .jsh command registration', () => {
   it('makes .jsh commands visible via which and /usr/bin', async () => {
     await fs.writeFile('/workspace/skills/test-cmd/scripts/mycmd.jsh', 'console.log("ok");');
 
-    const shell = new WasmShell({ fs });
+    const shell = new AlmostBashShell({ fs });
     await shell.syncJshCommands();
 
     const whichResult = await shell.executeCommand('which mycmd');
@@ -368,7 +368,7 @@ describe('WasmShell .jsh command registration', () => {
       'console.log("hello " + process.argv.slice(2).join(" "));'
     );
 
-    const shell = new WasmShell({ fs });
+    const shell = new AlmostBashShell({ fs });
     await shell.syncJshCommands();
 
     const result = await shell.executeCommand('greet world');
@@ -385,7 +385,7 @@ describe('WasmShell .jsh command registration', () => {
       'process.stdout.write(process.stdin.read().toUpperCase());'
     );
 
-    const shell = new WasmShell({ fs });
+    const shell = new AlmostBashShell({ fs });
     await shell.syncJshCommands();
 
     const piped = await shell.executeCommand('echo -n hello | upper');
@@ -399,7 +399,7 @@ describe('WasmShell .jsh command registration', () => {
       'console.log(process.stdin.read().length);'
     );
 
-    const shell = new WasmShell({ fs });
+    const shell = new AlmostBashShell({ fs });
     await shell.syncJshCommands();
 
     const piped = await shell.executeCommand('echo -n abcdef | wc-bytes');
@@ -411,7 +411,7 @@ describe('WasmShell .jsh command registration', () => {
     // Create a .jsh file named "echo" — should NOT override the built-in
     await fs.writeFile('/workspace/skills/test-cmd/scripts/echo.jsh', 'console.log("fake echo");');
 
-    const shell = new WasmShell({ fs });
+    const shell = new AlmostBashShell({ fs });
     await shell.syncJshCommands();
 
     const result = await shell.executeCommand('echo real');
@@ -422,7 +422,7 @@ describe('WasmShell .jsh command registration', () => {
 
 let allowlistDbCounter = 0;
 
-describe('WasmShell command allow-list', () => {
+describe('AlmostBashShell command allow-list', () => {
   let fs: VirtualFS;
 
   beforeEach(async () => {
@@ -437,7 +437,7 @@ describe('WasmShell command allow-list', () => {
   });
 
   it('registers all commands when allowedCommands is omitted (default)', async () => {
-    const shell = new WasmShell({ fs });
+    const shell = new AlmostBashShell({ fs });
 
     expect((await shell.executeCommand('echo hi')).exitCode).toBe(0);
     expect((await shell.executeCommand('pwd')).exitCode).toBe(0);
@@ -445,14 +445,14 @@ describe('WasmShell command allow-list', () => {
   });
 
   it('registers all commands when allowedCommands is the wildcard ["*"]', async () => {
-    const shell = new WasmShell({ fs, allowedCommands: ['*'] });
+    const shell = new AlmostBashShell({ fs, allowedCommands: ['*'] });
 
     expect((await shell.executeCommand('echo hi')).exitCode).toBe(0);
     expect((await shell.executeCommand('ls /')).exitCode).toBe(0);
   });
 
   it('blocks every command when allowedCommands is empty', async () => {
-    const shell = new WasmShell({ fs, allowedCommands: [] });
+    const shell = new AlmostBashShell({ fs, allowedCommands: [] });
 
     const result = await shell.executeCommand('echo hi');
     expect(result.exitCode).not.toBe(0);
@@ -460,7 +460,7 @@ describe('WasmShell command allow-list', () => {
   });
 
   it('allows listed commands and rejects unlisted ones with exit 127', async () => {
-    const shell = new WasmShell({ fs, allowedCommands: ['echo'] });
+    const shell = new AlmostBashShell({ fs, allowedCommands: ['echo'] });
 
     const ok = await shell.executeCommand('echo hello');
     expect(ok.exitCode).toBe(0);
@@ -473,7 +473,7 @@ describe('WasmShell command allow-list', () => {
   });
 
   it('blocks disallowed commands inside a pipeline', async () => {
-    const shell = new WasmShell({ fs, allowedCommands: ['echo'] });
+    const shell = new AlmostBashShell({ fs, allowedCommands: ['echo'] });
 
     // `echo` is allowed but `cat` is not — the pipeline should fail at `cat`.
     const piped = await shell.executeCommand('echo hi | cat');
@@ -483,7 +483,7 @@ describe('WasmShell command allow-list', () => {
   });
 
   it('blocks disallowed commands inside command substitution', async () => {
-    const shell = new WasmShell({ fs, allowedCommands: ['echo'] });
+    const shell = new AlmostBashShell({ fs, allowedCommands: ['echo'] });
 
     // The substitution `$(ls /)` invokes `ls`, which must be blocked. Bash
     // continues and runs `echo` with an empty substitution, but stderr
@@ -497,7 +497,7 @@ describe('WasmShell command allow-list', () => {
   it('filters custom (supplemental) commands the same way as built-ins', async () => {
     // Use a custom command — `mount` is created by MountCommands. Omitting it
     // from the allow-list should block it; including it should keep it working.
-    const blockedShell = new WasmShell({ fs, allowedCommands: ['echo'] });
+    const blockedShell = new AlmostBashShell({ fs, allowedCommands: ['echo'] });
     const blocked = await blockedShell.executeCommand('mount');
     expect(blocked.exitCode).toBe(127);
     expect(blocked.stderr).toMatch(/mount/);
@@ -506,7 +506,7 @@ describe('WasmShell command allow-list', () => {
     // When `mount` is allow-listed the custom command is dispatched — even if
     // it returns non-zero for missing args, the stderr must not say
     // "command not found" (that would mean the allow-list blocked it).
-    const allowedShell = new WasmShell({ fs, allowedCommands: ['mount'] });
+    const allowedShell = new AlmostBashShell({ fs, allowedCommands: ['mount'] });
     const allowed = await allowedShell.executeCommand('mount');
     expect(allowed.stderr).not.toMatch(/not found/i);
   });
@@ -519,14 +519,14 @@ describe('WasmShell command allow-list', () => {
     );
 
     // With `greet` blocked, the shell should not dispatch to the .jsh file.
-    const blocked = new WasmShell({ fs, allowedCommands: ['echo'] });
+    const blocked = new AlmostBashShell({ fs, allowedCommands: ['echo'] });
     await blocked.syncJshCommands();
     const blockedResult = await blocked.executeCommand('greet');
     expect(blockedResult.exitCode).toBe(127);
     expect(blockedResult.stderr).toMatch(/not found/i);
 
     // With `greet` listed, the .jsh file is registered and runs normally.
-    const allowed = new WasmShell({ fs, allowedCommands: ['greet'] });
+    const allowed = new AlmostBashShell({ fs, allowedCommands: ['greet'] });
     await allowed.syncJshCommands();
     const allowedResult = await allowed.executeCommand('greet');
     expect(allowedResult.exitCode).toBe(0);
@@ -534,7 +534,7 @@ describe('WasmShell command allow-list', () => {
   });
 
   it('omits blocked commands from the /usr/bin virtual directory', async () => {
-    const shell = new WasmShell({ fs, allowedCommands: ['echo', 'ls'] });
+    const shell = new AlmostBashShell({ fs, allowedCommands: ['echo', 'ls'] });
 
     const listing = await shell.executeCommand('ls /usr/bin');
     expect(listing.exitCode).toBe(0);
@@ -547,11 +547,11 @@ describe('WasmShell command allow-list', () => {
   it('blocks network commands (curl, wget) that just-bash auto-registers when fetch is set', async () => {
     // just-bash's constructor unconditionally registers every network command
     // when `fetch` or `network` is provided, regardless of `BashOptions.commands`.
-    // `WasmShell` always provides `fetch`, so without post-construction cleanup
+    // `AlmostBashShell` always provides `fetch`, so without post-construction cleanup
     // a scoop with `allowedCommands: ['echo']` could still run `curl`. This
-    // test guards the cleanup in `WasmShell`'s constructor. See Codex review
+    // test guards the cleanup in `AlmostBashShell`'s constructor. See Codex review
     // of #433.
-    const shell = new WasmShell({ fs, allowedCommands: ['echo'] });
+    const shell = new AlmostBashShell({ fs, allowedCommands: ['echo'] });
 
     const curl = await shell.executeCommand('curl http://example.com');
     expect(curl.exitCode).toBe(127);
@@ -568,7 +568,7 @@ describe('WasmShell command allow-list', () => {
     // Inverse of the above — when a network command IS allowed, the cleanup
     // must not remove it. We don't try to actually fetch (would need a real
     // network); it's enough that the command name is recognized at dispatch.
-    const shell = new WasmShell({ fs, allowedCommands: ['curl'] });
+    const shell = new AlmostBashShell({ fs, allowedCommands: ['curl'] });
 
     const result = await shell.executeCommand('curl');
     // curl with no args exits with usage error (2) — NOT 127. If cleanup
@@ -587,7 +587,7 @@ function installFakeWfManager(): void {
   };
 }
 
-describe('WasmShell workflow command registration', () => {
+describe('AlmostBashShell workflow command registration', () => {
   let fs: VirtualFS;
   beforeEach(async () => {
     fs = await VirtualFS.create({ dbName: `test-wf-reg-${Math.random()}`, wipe: true });
@@ -604,7 +604,7 @@ describe('WasmShell workflow command registration', () => {
       '/workspace/.workflows/audit.workflow.js',
       "export const meta = { name: 'audit' };\nreturn 1"
     );
-    const shell = new WasmShell({ fs });
+    const shell = new AlmostBashShell({ fs });
     await shell.syncJshCommands();
     const res = await shell.executeCommand('audit');
     expect(res.exitCode).toBe(0);
@@ -618,7 +618,7 @@ describe('WasmShell workflow command registration', () => {
       '/workspace/skills/triage/.workflows/sweep.workflow.js',
       "export const meta = { name: 'sweep' };\nreturn 1"
     );
-    const shell = new WasmShell({ fs });
+    const shell = new AlmostBashShell({ fs });
     await shell.syncJshCommands();
     const res = await shell.executeCommand('triage:sweep');
     expect(res.exitCode).toBe(0);
@@ -633,7 +633,7 @@ describe('WasmShell workflow command registration', () => {
       "export const meta={name:'foo'};\nreturn 1"
     );
     await fs.writeFile('/workspace/foo.jsh', "console.log('JSH-WON');");
-    const shell = new WasmShell({ fs });
+    const shell = new AlmostBashShell({ fs });
     await shell.syncJshCommands();
     const res = await shell.executeCommand('foo');
     expect(res.stdout).toContain('JSH-WON');
@@ -647,7 +647,7 @@ describe('WasmShell workflow command registration', () => {
       "export const meta={name:'foo'};\nreturn 1"
     );
     await fs.writeFile('/workspace/foo.jsh', "console.log('JSH-WON');");
-    const shell = new WasmShell({ fs });
+    const shell = new AlmostBashShell({ fs });
     await shell.syncJshCommands();
     await fs.rm('/workspace/foo.jsh');
     const res = await shell.executeCommand('foo');
@@ -661,7 +661,7 @@ describe('WasmShell workflow command registration', () => {
       '/workspace/.workflows/foo.workflow.js',
       "export const meta={name:'foo'};\nreturn 1"
     );
-    const shell = new WasmShell({ fs });
+    const shell = new AlmostBashShell({ fs });
     await shell.syncJshCommands();
     const before = await shell.executeCommand('foo');
     expect(before.stdout).toMatch(/started/i); // workflow-only → runs the workflow

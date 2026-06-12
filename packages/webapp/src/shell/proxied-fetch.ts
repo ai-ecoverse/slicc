@@ -1,10 +1,10 @@
 /**
  * proxied-fetch — shared `SecureFetch` factory.
  *
- * Originally lived inline in `wasm-shell.ts`. Extracted so non-shell callers
+ * Originally lived inline in `almost-bash-shell.ts`. Extracted so non-shell callers
  * (e.g. the onboarding orchestrator's direct `installRecommendedSkills`
  * helper) can reuse the same CORS-bypassing fetch without spinning up a
- * full `WasmShell`.
+ * full `AlmostBashShell`.
  *
  * Use these helpers instead of bare `fetch()` whenever the caller needs to
  * route through the same code path as `curl`/`upskill` so that:

@@ -63,7 +63,7 @@ vi.mock('../../src/tools/index.js', () => ({
 }));
 
 vi.mock('../../src/shell/index.js', () => ({
-  WasmShell: vi.fn(function () {
+  AlmostBashShell: vi.fn(function () {
     return {};
   }),
 }));

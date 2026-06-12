@@ -42,7 +42,7 @@ body:
       options:
         - Cone (main agent / orchestrator)
         - Scoop (sub-agent / sandbox)
-        - Shell / WasmShell / supplemental commands
+        - Shell / AlmostBashShell / supplemental commands
         - CDP / playwright-cli / browser automation
         - VFS / mount / File System Access
         - Git (isomorphic-git)

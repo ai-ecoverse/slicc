@@ -3,9 +3,9 @@
  * worker-resident shell through a `TerminalSessionClient`.
  *
  * The standalone-worker path
- * (`?kernel-worker=1`) runs the agent's `WasmShell` inside a
+ * (`?kernel-worker=1`) runs the agent's `AlmostBashShell` inside a
  * DedicatedWorker. The panel terminal can't keep using the inline
- * `WasmShell` view-class — that ships a local `Bash` instance the
+ * `AlmostBashShell` view-class — that ships a local `Bash` instance the
  * worker never sees. This view is the panel-side counterpart to
  * the worker-side `TerminalSessionHost`: xterm renders here,
  * keystrokes assemble into committed lines locally, and Enter
@@ -496,7 +496,7 @@ export class RemoteTerminalView {
    * Bash-style tab completion via a silent `compgen` round-trip
    * through the worker shell.
    *
-   * Mirrors the local `WasmShell.handleTab` shape (commands at the
+   * Mirrors the local `AlmostBashShell.handleTab` shape (commands at the
    * start of a line use `compgen -A command`; subsequent words use
    * file completion) so panel-shell behaviour matches the in-page
    * shell that this view replaced. Output from the compgen exec is
@@ -1158,7 +1158,7 @@ export function buildCompgenDirCheck(completion: string): string {
  *
  * Exported so the multi-match insertion logic can be unit-tested
  * without a DOM. Matches the behavior of the local-bash
- * `WasmShell.handleTab` so the two shells feel identical.
+ * `AlmostBashShell.handleTab` so the two shells feel identical.
  */
 export function longestCommonPrefix(matches: readonly string[]): string {
   if (matches.length === 0) return '';

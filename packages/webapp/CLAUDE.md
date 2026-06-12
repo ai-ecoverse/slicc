@@ -21,7 +21,7 @@ Virtual Filesystem (fs/) → RestrictedFS → Shell (shell/) + Git (git/)
 
 ```text
 User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core → LLM API
-  → tool calls → RestrictedFS / WasmShell / BrowserAPI
+  → tool calls → RestrictedFS / AlmostBashShell / BrowserAPI
   → results → agent loop → UI updates / scoop routing
 ```
 
@@ -60,7 +60,7 @@ Deep reference: `docs/kernel/process-model.md`.
 ### Shell
 
 - Path: `packages/webapp/src/shell/`
-- `wasm-shell.ts` hosts the just-bash runtime.
+- `almost-bash-shell.ts` hosts the just-bash runtime.
 - `script-catalog.ts` is the shared `.jsh`/`.bsh` discovery service; it caches behind `FsWatcher` invalidation and bypasses cache for mounted trees where external changes are invisible to the watcher.
 - `supplemental-commands/` contains built-in commands, including `supplemental-commands/agent-command.ts` which forwards `ctx.cwd` as `invokingCwd` and validates `<cwd>` writability via `ctx.fs.canWrite` to prevent nested-scoop sandbox escape.
 - `supplemental-commands/tsc-command.ts` is the `tsc` single-file TypeScript transpiler. It uses the lazy `getTypeScript()` singleton in `supplemental-commands/shared.ts` (the bundled `typescript` npm dependency, same shape as `getSqlJs`) so the heavy module only loads on first call and is shared with the `test` command. Supports `tsc [files...]`, `--noEmit`, `--outDir`, stdin → stdout, and walks up from `ctx.cwd` to merge `tsconfig.json`'s `compilerOptions` over the `ES2022`/`ESNext` defaults; cross-file program-level type checking is not wired up.
@@ -213,7 +213,7 @@ Deep reference: `docs/kernel/process-model.md`.
 
 - `.jsh` files are JavaScript shell scripts discovered anywhere on the VFS.
 - Command name is the basename without `.jsh`.
-- `packages/webapp/src/shell/script-catalog.ts` shares discovery across `WasmShell`, `which`, and other lookup paths. Raw scanning still comes from `jsh-discovery.ts`, which scans `/workspace/skills` first, then the wider VFS.
+- `packages/webapp/src/shell/script-catalog.ts` shares discovery across `AlmostBashShell`, `which`, and other lookup paths. Raw scanning still comes from `jsh-discovery.ts`, which scans `/workspace/skills` first, then the wider VFS.
 - Scripts run in an async wrapper: prefer top-level `await` and always `await fs.*` operations.
 - Stdin from upstream pipelines is fully buffered (no streaming) and exposed via `process.stdin`. `read()` drains the buffer with Node-like EOF semantics (returns the buffered string the first time, `null` thereafter) and shares that consumed state with `for await (const chunk of process.stdin)`. `String(process.stdin)` is a non-consuming view. `process.stdin.isTTY` is always `false`. `node`'s read-from-stdin branch (when stdin is the script source) hands the inner script an empty stdin so it can't read its own source. Stdin is intentionally NOT exposed as a top-level identifier so user scripts can keep declaring `const stdin = …` without colliding.
 

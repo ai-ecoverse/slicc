@@ -3,7 +3,7 @@
  *
  * Each scoop gets:
  * - A restricted filesystem (shared VFS with path ACL)
- * - Its own WasmShell
+ * - Its own AlmostBashShell
  * - Its own Agent instance
  * - Its own session history
  * - Skills loaded from VFS
@@ -32,7 +32,7 @@ import type { VirtualFS } from '../fs/index.js';
 import type { RestrictedFS } from '../fs/restricted-fs.js';
 import { createSudoFs } from '../fs/sudo-fs.js';
 import type { Process, ProcessManager } from '../kernel/process-manager.js';
-import { WasmShell } from '../shell/index.js';
+import { AlmostBashShell } from '../shell/index.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
 import { createBashTool, createFileTools } from '../tools/index.js';
 import {
@@ -256,7 +256,7 @@ export class ScoopContext {
   private scoop: RegisteredScoop;
   private callbacks: ScoopContextCallbacks;
   private fs: VirtualFS | RestrictedFS | null = null;
-  private shell: WasmShell | null = null;
+  private shell: AlmostBashShell | null = null;
   private agent: Agent | null = null;
   private status: 'initializing' | 'ready' | 'processing' | 'error' = 'initializing';
   private isProcessing = false;
@@ -344,7 +344,7 @@ export class ScoopContext {
         : this.fs!
     ) as VirtualFS;
 
-    this.shell = new WasmShell({
+    this.shell = new AlmostBashShell({
       fs: gatedFs,
       cwd,
       env: Object.keys(secretEnv).length > 0 ? secretEnv : undefined,
@@ -356,7 +356,7 @@ export class ScoopContext {
       sudo: this.sudoManager?.getShellConfig(),
     });
 
-    log.info('WasmShell initialized', { folder: this.scoop.folder });
+    log.info('AlmostBashShell initialized', { folder: this.scoop.folder });
     const skills = await loadSkills(effectiveSkillsFs, this.skillsDir);
     return { gatedFs, skills };
   }
@@ -921,7 +921,7 @@ export class ScoopContext {
   }
 
   /** Get the scoop's shell */
-  getShell(): WasmShell | null {
+  getShell(): AlmostBashShell | null {
     return this.shell;
   }
 

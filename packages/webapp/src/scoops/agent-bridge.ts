@@ -24,7 +24,7 @@
  *
  * The bridge owns no `ScoopContext`, no `RestrictedFS`, no bash-allowlist
  * wrapping, no callback-forwarding helper, and no model-validation ladder
- * — those all live in the orchestrator / `ScoopConfig` / `WasmShell`
+ * — those all live in the orchestrator / `ScoopConfig` / `AlmostBashShell`
  * layers now. Compare against the original #430 implementation (~770 LOC
  * of bridge alone) to see the effect of that consolidation.
  */

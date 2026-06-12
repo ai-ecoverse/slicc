@@ -2328,7 +2328,7 @@ describe('GitCommands', () => {
 });
 
 // Regression for issue #507: git ops in a scoop sandbox failed because
-// `RestrictedFS` (which scoops pass to `WasmShell`/`GitCommands`) was
+// `RestrictedFS` (which scoops pass to `AlmostBashShell`/`GitCommands`) was
 // missing `isPathUnderMount`. Exercising every basic git op through a
 // `RestrictedFS` confirms the adapter no longer crashes on the missing
 // method.
@@ -2344,7 +2344,7 @@ describe('GitCommands with RestrictedFS (scoop sandbox, issue #507)', () => {
     const vfs = await VirtualFS.create({ dbName: `git-restricted-fs-507-${testId}`, wipe: true });
     await vfs.mkdir('/scoops/regression-507', { recursive: true });
     const restricted = new RestrictedFS(vfs, ['/scoops/regression-507/', '/shared/']);
-    // The cone's WasmShell does the same cast — we mirror it here so
+    // The cone's AlmostBashShell does the same cast — we mirror it here so
     // the test reproduces the exact runtime configuration that crashed.
     const git = new GitCommands({
       fs: restricted as unknown as VirtualFS,

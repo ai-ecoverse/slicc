@@ -38,7 +38,7 @@ export interface AgentCommandOptions {
    * inherits the parent's `config.modelId` (or falls back to the global UI
    * selection when the parent has none). Returns `undefined` when the shell
    * is not attached to a scoop context — e.g., the terminal panel's own
-   * standalone `WasmShell`.
+   * standalone `AlmostBashShell`.
    */
   getParentJid?: () => string | undefined;
 }

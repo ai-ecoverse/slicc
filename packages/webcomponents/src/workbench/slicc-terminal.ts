@@ -105,7 +105,7 @@ function chromeSheets(): CSSStyleSheet[] {
 /**
  * `<slicc-terminal>` — a self-contained xterm.js terminal panel, the reusable
  * extraction of the prototype's one dark shell surface (`proto/.term`) and the
- * webapp's `TerminalPanel` / `WasmShell.mount` setup. It owns the
+ * webapp's `TerminalPanel` / `AlmostBashShell.mount` setup. It owns the
  * `@xterm/xterm` + `@xterm/addon-fit` lifecycle: the xterm stylesheet is
  * injected into the shadow root (xterm renders inside shadow DOM only if its
  * CSS lives there), the terminal is constructed with the dark prototype theme,

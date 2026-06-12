@@ -6,10 +6,10 @@
  *
  * The factory exists to pin parity: both floats MUST wire
  * `processManager` into both the host and the per-session
- * `WasmShellHeadless`, so `ps` / `kill` / `/proc` work from the
+ * `AlmostBashShellHeadless`, so `ps` / `kill` / `/proc` work from the
  * panel terminal regardless of float.
  *
- * These tests use the real `WasmShellHeadless` (over a fake
+ * These tests use the real `AlmostBashShellHeadless` (over a fake
  * VirtualFS) so we exercise the shell + PM contract end-to-end.
  */
 
@@ -345,7 +345,7 @@ describe('createPanelTerminalHost — parity wiring', () => {
   it('the same ProcessManager instance is shared between TerminalSessionHost and the shell', async () => {
     // This is the core parity guarantee: the manager passed to the
     // factory ends up in BOTH the session-host (so `terminal-exec`
-    // registers `kind:"shell"`) AND the WasmShellHeadless (so
+    // registers `kind:"shell"`) AND the AlmostBashShellHeadless (so
     // tools/jsh inside the shell register their own kinds against
     // the same table). We exercise this by running a command and
     // then checking the process record's owner.
@@ -355,7 +355,7 @@ describe('createPanelTerminalHost — parity wiring', () => {
     const procs = w.pm.list();
     expect(procs.length).toBeGreaterThan(0);
     // Every panel-typed exec must be system-owned (the factory's
-    // default processOwner) — proves the WasmShellHeadless picked
+    // default processOwner) — proves the AlmostBashShellHeadless picked
     // up the same PM, not a different one.
     expect(procs[0].owner.kind).toBe('system');
     w.stop();
