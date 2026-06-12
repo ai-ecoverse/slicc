@@ -357,9 +357,6 @@ export function createStandalonePanelRpcHandlers(
       // with the `local-storage-set` forward.
       localStorage.setItem('slicc_accounts', accountsJson);
       const storedJson = localStorage.getItem('slicc_accounts') ?? accountsJson;
-      // Same-document surfaces (the WC nav model picker) re-sync on this —
-      // the `storage` event never fires for same-document writes.
-      window.dispatchEvent(new CustomEvent('slicc:accounts-changed'));
       return { storedJson };
     },
 
