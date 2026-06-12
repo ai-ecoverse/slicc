@@ -6,7 +6,9 @@ Complete reference for SLICC's shell capabilities, including supplemental comman
 
 ## Overview
 
-SLICC uses `just-bash` (WASM Bash interpreter; see `packages/webapp/package.json` for the pinned version) as its core shell runtime. This provides the standard Unix builtins (cd, ls, cat, grep, find, sed, awk, head, tail, etc.) plus ~50 custom supplemental commands registered by `packages/webapp/src/shell/supplemental-commands/index.ts` and `packages/webapp/src/shell/wasm-shell-headless.ts`, and any auto-discovered `.jsh` script commands on the VFS.
+SLICC uses `just-bash` (a pure-TypeScript Bash interpreter; see `packages/webapp/package.json` for the pinned version) as its core shell runtime. The interpreter itself is plain JavaScript — not WASM. This provides the standard Unix builtins (cd, ls, cat, grep, find, sed, awk, head, tail, etc.) plus ~50 custom supplemental commands registered by `packages/webapp/src/shell/supplemental-commands/index.ts` and `packages/webapp/src/shell/wasm-shell-headless.ts`, and any auto-discovered `.jsh` script commands on the VFS.
+
+WASM enters only for specific runtime-heavy commands, which fetch and cache their binaries on demand: `python3` (Pyodide), `sqlite3` (sql.js), the `node -e` / `javascript` sandbox (QuickJS), `convert` (ImageMagick), `ffmpeg`, `biome`, and `esbuild`. The `WasmShell` / `WasmShellHeadless` class names are historical and cover the whole shell, not just the WASM-backed commands.
 
 **Entry point**: Via the `bash` agent tool. All shell features available to agents.
 
@@ -1275,7 +1277,7 @@ echo "Today is $DATE"
 
 ## Performance
 
-- **Command startup**: <100ms (just-bash WASM initialization)
+- **Command startup**: <100ms (just-bash initialization)
 - **Script execution**: O(script complexity), typically <500ms
 - **File I/O**: IndexedDB operations, <100ms per file
 - **Binary operations**: LightningFS encoding/decoding, <50ms for typical images
