@@ -31,6 +31,22 @@ import { FsError } from './types.js';
 
 const log = createLogger('sudo:fs');
 
+/**
+ * Marker the sudo-fs `Proxy` advertises through its `get` trap so callers that
+ * monkeypatch fs methods *in place* (e.g. the skill-discovery cache-invalidation
+ * hooks in `skills/catalog.ts`) can detect this handle and refuse to touch it.
+ *
+ * The Proxy is get/set-asymmetric: `get` returns a gating override for a gated
+ * method, while `set` writes straight through to the wrapped target. Reassigning
+ * `fs.writeFile` on it therefore (a) clobbers the target's real method and
+ * (b) leaves the override delegating to the freshly-installed wrapper, whose
+ * captured `original` (read via `get`) is that same override — an infinite
+ * `override → wrapper → override …` recursion that OOMs the kernel worker on the
+ * next gated write. A well-known (registry) symbol lets the catalog skip it with
+ * no import cycle. See `skills/catalog.ts`.
+ */
+export const MONKEYPATCH_UNSAFE_FS: unique symbol = Symbol.for('slicc.fs.monkeypatchUnsafe');
+
 /** Drop-in file for persisted "Always" grants. */
 export const GRANTED_FILE = `${SUDOERS_D_DIR}/granted`;
 
@@ -183,6 +199,10 @@ export function createSudoFs<T extends object>(target: T, deps: SudoFsDeps): T {
 
   return new Proxy(target, {
     get(obj, prop, receiver) {
+      // Advertise the monkeypatch-unsafe marker so in-place fs-method patchers
+      // (skill-discovery cache hooks) skip this get/set-asymmetric Proxy instead
+      // of installing an infinite override↔wrapper recursion. See the symbol's doc.
+      if (prop === MONKEYPATCH_UNSAFE_FS) return true;
       if (typeof prop === 'string' && prop in overrides) return overrides[prop];
       const value = Reflect.get(obj, prop, receiver);
       return typeof value === 'function' ? value.bind(obj) : value;

@@ -1,4 +1,5 @@
 import type { VirtualFS } from '../fs/index.js';
+import { MONKEYPATCH_UNSAFE_FS } from '../fs/sudo-fs.js';
 import { SKILL_FILE, WORKSPACE_SKILLS_PATH } from './constants.js';
 
 export type SkillDiscoverySource = 'native' | 'agents' | 'claude';
@@ -57,6 +58,18 @@ export async function discoverSkillCandidates(
 }
 
 async function getCompatibilitySkillCandidates(fs: VirtualFS): Promise<DiscoveredSkillCandidate[]> {
+  // A get/set-asymmetric Proxy (the sudo-fs handle that backs the agent shell)
+  // cannot be monkeypatched for cache invalidation without creating an infinite
+  // override↔hook recursion (see installCompatibilityCacheInvalidationHooks), so
+  // we neither hook nor cache it — we always re-discover. This keeps the agent's
+  // skill view correct after an in-shell `upskill`/`skill list` install while
+  // eliminating the OOM cycle. The expense (a full-VFS walk per call) is bounded
+  // and off the hot path.
+  if (isMonkeypatchUnsafeFs(fs)) {
+    const fresh = await discoverCompatibilitySkillCandidates(fs);
+    return fresh.map((candidate) => ({ ...candidate }));
+  }
+
   installCompatibilityCacheInvalidationHooks(fs);
 
   const cacheKey = fs as object;
@@ -68,6 +81,21 @@ async function getCompatibilitySkillCandidates(fs: VirtualFS): Promise<Discovere
   const discovered = await discoverCompatibilitySkillCandidates(fs);
   compatibilityCandidatesCache.set(cacheKey, discovered);
   return discovered.map((candidate) => ({ ...candidate }));
+}
+
+/**
+ * True when `fs` is the sudo-fs Proxy (or any handle advertising
+ * {@link MONKEYPATCH_UNSAFE_FS}). Reassigning a gated method on such a Proxy
+ * clobbers the wrapped target and creates an infinite override↔wrapper
+ * recursion that OOMs the kernel worker, so the cache-invalidation hooks must
+ * never touch it.
+ */
+function isMonkeypatchUnsafeFs(fs: VirtualFS): boolean {
+  try {
+    return (fs as unknown as Record<symbol, unknown>)[MONKEYPATCH_UNSAFE_FS] === true;
+  } catch {
+    return false;
+  }
 }
 
 export function resolveSkillNameCollisions<T>(
@@ -174,6 +202,11 @@ async function discoverCompatibilitySkillCandidates(
 }
 
 function installCompatibilityCacheInvalidationHooks(fs: VirtualFS): void {
+  // Defense in depth: never monkeypatch a get/set-asymmetric Proxy (the sudo-fs
+  // handle) — see isMonkeypatchUnsafeFs. The sole caller already short-circuits
+  // such handles, but a future caller must be safe too.
+  if (isMonkeypatchUnsafeFs(fs)) return;
+
   const cacheKey = fs as object;
   if (compatibilityCacheHooksInstalled.has(cacheKey)) return;
   compatibilityCacheHooksInstalled.add(cacheKey);

@@ -381,87 +381,48 @@ export class VfsAdapter implements IFileSystem {
       // the CacheFS internal isn't available.
       const fastEntries = this.vfs.readDirSync(normalized);
       if (fastEntries !== null) {
-        return this.mapFastEntriesToDirents(fastEntries, normalized);
+        return this.mapFastEntriesToDirents(fastEntries);
       }
 
       // Slow path: async VirtualFS readDir for mounted paths.
       const entries = await this.vfs.readDir(normalized);
-      return this.mapAsyncEntriesToDirents(entries, normalized);
+      return this.mapAsyncEntriesToDirents(entries);
     });
   }
 
-  /** Map synchronous CacheFS entries to DirentEntry[], resolving symlinks. */
-  private async mapFastEntriesToDirents(
-    fastEntries: { name: string; type: string }[],
-    normalized: string
-  ): Promise<DirentEntry[]> {
-    const result: DirentEntry[] = [];
-    for (const e of fastEntries) {
-      if (e.type !== 'symlink') {
-        result.push({
-          name: e.name,
-          isFile: e.type === 'file',
-          isDirectory: e.type === 'directory',
-          isSymbolicLink: false,
-        });
-        continue;
-      }
-      const childPath = normalized === '/' ? `/${e.name}` : `${normalized}/${e.name}`;
-      result.push(await this.resolveSymlinkDirent(e.name, childPath));
-    }
-    return result;
+  /** Map synchronous CacheFS entries to DirentEntry[]. */
+  private mapFastEntriesToDirents(fastEntries: { name: string; type: string }[]): DirentEntry[] {
+    return fastEntries.map((e) => this.entryToDirent(e));
   }
 
-  /** Map async VirtualFS entries to DirentEntry[], resolving symlinks. */
-  private async mapAsyncEntriesToDirents(
-    entries: { name: string; type: string }[],
-    normalized: string
-  ): Promise<DirentEntry[]> {
-    const result: DirentEntry[] = [];
-    for (const e of entries) {
-      if (e.type !== 'symlink') {
-        result.push({
-          name: e.name,
-          isFile: e.type === 'file',
-          isDirectory: e.type === 'directory',
-          isSymbolicLink: false,
-        });
-        continue;
-      }
-      const childPath = normalized === '/' ? `/${e.name}` : `${normalized}/${e.name}`;
-      result.push(await this.resolveSymlinkDirentAsync(e.name, childPath));
-    }
-    return result;
+  /** Map async VirtualFS entries to DirentEntry[]. */
+  private mapAsyncEntriesToDirents(entries: { name: string; type: string }[]): DirentEntry[] {
+    return entries.map((e) => this.entryToDirent(e));
   }
 
-  /** Resolve a symlink entry, trying sync stat first then falling back to async. */
-  private async resolveSymlinkDirent(name: string, childPath: string): Promise<DirentEntry> {
-    // Try synchronous stat first (follows symlinks via CacheFS)
-    const targetStat = this.vfs.statSync(childPath);
-    if (targetStat) {
-      return {
-        name,
-        isFile: targetStat.type === 'file',
-        isDirectory: targetStat.type === 'directory',
-        isSymbolicLink: true,
-      };
+  /**
+   * Convert a readdir entry to a `DirentEntry`. A `Dirent` reflects `lstat`
+   * (the link itself), NOT `stat` (the resolved target) — so a symlink is
+   * reported with `isSymbolicLink: true` and `isFile`/`isDirectory` BOTH false,
+   * exactly like Node's `fs.Dirent`. This is load-bearing: the shell's
+   * recursive walkers (`find`, `grep -r`, `ls -R`) decide whether to descend
+   * from `isDirectory`. Resolving the target here (the previous behavior) made
+   * a symlink-to-directory look like a plain directory, so the walkers followed
+   * it — and a symlink CYCLE recursed forever, allocating millions of path
+   * objects in the kernel worker until V8 OOM'd (~4GB). POSIX `find`/`grep -r`
+   * do not follow symlinks by default; not resolving the target here restores
+   * that contract and is also far cheaper (no per-entry stat).
+   */
+  private entryToDirent(e: { name: string; type: string }): DirentEntry {
+    if (e.type === 'symlink') {
+      return { name: e.name, isFile: false, isDirectory: false, isSymbolicLink: true };
     }
-    // Symlink target is in a mount or unresolvable — fall back to async
-    return this.resolveSymlinkDirentAsync(name, childPath);
-  }
-
-  /** Resolve a symlink entry using async stat. */
-  private async resolveSymlinkDirentAsync(name: string, childPath: string): Promise<DirentEntry> {
-    let isFile = false;
-    let isDir = false;
-    try {
-      const stat = await this.vfs.stat(childPath);
-      isFile = stat.type === 'file';
-      isDir = stat.type === 'directory';
-    } catch {
-      // Dangling symlink
-    }
-    return { name, isFile, isDirectory: isDir, isSymbolicLink: true };
+    return {
+      name: e.name,
+      isFile: e.type === 'file',
+      isDirectory: e.type === 'directory',
+      isSymbolicLink: false,
+    };
   }
 
   async rm(path: string, options?: RmOptions): Promise<void> {

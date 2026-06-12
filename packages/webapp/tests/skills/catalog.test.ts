@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 import { VirtualFS } from '../../src/fs/index.js';
+import { createSudoFs, MONKEYPATCH_UNSAFE_FS } from '../../src/fs/sudo-fs.js';
+import { emptyPolicy } from '../../src/shell/sudo/sudoers.js';
 import { discoverSkillCandidates, resolveSkillNameCollisions } from '../../src/skills/catalog.js';
 
 describe('discoverSkillCandidates', () => {
@@ -114,6 +116,77 @@ describe('discoverSkillCandidates', () => {
     expect(candidates.map((candidate) => candidate.path)).toEqual([
       '/repo/.claude/skills/visible-skill',
     ]);
+  });
+});
+
+describe('discoverSkillCandidates over a sudo-fs Proxy (OOM regression)', () => {
+  let raw: VirtualFS;
+  let gated: VirtualFS;
+
+  const noopBroker = {
+    async requestApproval() {
+      return { decision: 'allow' as const };
+    },
+  };
+
+  beforeEach(async () => {
+    globalThis.indexedDB = new IDBFactory();
+    raw = await VirtualFS.create({ wipe: true });
+    // Empty policy => nothing is gated, so reads/writes pass straight through —
+    // isolating the discovery/monkeypatch interaction from approval prompts.
+    gated = createSudoFs(raw, { broker: noopBroker, getPolicy: () => emptyPolicy() });
+  });
+
+  it('advertises the monkeypatch-unsafe marker', () => {
+    expect((gated as unknown as Record<symbol, unknown>)[MONKEYPATCH_UNSAFE_FS]).toBe(true);
+    expect((raw as unknown as Record<symbol, unknown>)[MONKEYPATCH_UNSAFE_FS]).toBeUndefined();
+  });
+
+  it('does NOT monkeypatch the wrapped target (the override↔hook recursion that OOMed the worker)', async () => {
+    await raw.mkdir('/workspace/.claude/skills/foo', { recursive: true });
+    await raw.writeFile('/workspace/.claude/skills/foo/SKILL.md', '# foo');
+
+    // Capturing the wrapped target's gated methods BEFORE discovery: the bug
+    // reassigned `raw.writeFile`/`raw.mkdir`/etc. on the Proxy's target (the
+    // `set` writes through), leaving the sudo override delegating to the hook
+    // and the hook calling back into the override — an unbounded async cycle.
+    const before = {
+      writeFile: raw.writeFile,
+      mkdir: raw.mkdir,
+      rm: raw.rm,
+    };
+
+    const candidates = await discoverSkillCandidates(gated);
+
+    // Discovery still works through the gated handle...
+    expect(candidates.map((c) => c.path)).toContain('/workspace/.claude/skills/foo');
+    // ...without having clobbered the wrapped target's real methods.
+    expect(raw.writeFile).toBe(before.writeFile);
+    expect(raw.mkdir).toBe(before.mkdir);
+    expect(raw.rm).toBe(before.rm);
+
+    // A gated write reaches the real fs exactly once (no recursion) and persists.
+    let realWriteCalls = 0;
+    const realWrite = raw.writeFile.bind(raw);
+    raw.writeFile = (async (path: string, content: string | Uint8Array) => {
+      realWriteCalls += 1;
+      return realWrite(path, content);
+    }) as typeof raw.writeFile;
+    await gated.writeFile('/tmp/probe.txt', 'ok');
+    expect(realWriteCalls).toBe(1);
+    expect(await raw.readTextFile('/tmp/probe.txt')).toBe('ok');
+  });
+
+  it('returns the same candidates whether discovery runs over the raw fs or the gated Proxy', async () => {
+    await raw.mkdir('/repo/.agents/skills/agent-skill', { recursive: true });
+    await raw.writeFile('/repo/.agents/skills/agent-skill/SKILL.md', '# agent');
+    await raw.mkdir('/workspace/skills/native-skill', { recursive: true });
+    await raw.writeFile('/workspace/skills/native-skill/SKILL.md', '# native');
+
+    const overRaw = (await discoverSkillCandidates(raw)).map((c) => c.path);
+    const overGated = (await discoverSkillCandidates(gated)).map((c) => c.path);
+
+    expect(overGated).toEqual(overRaw);
   });
 });
 
