@@ -6,6 +6,11 @@
  */
 
 class StubObserver {
+  // Accept (and ignore) the observer callback: the real ResizeObserver /
+  // IntersectionObserver constructors take one, and a zero-arg signature
+  // here makes static analysis flag every `new ResizeObserver(cb)` in the
+  // library source as passing a superfluous argument.
+  constructor(_callback?: unknown) {}
   observe(): void {}
   unobserve(): void {}
   disconnect(): void {}

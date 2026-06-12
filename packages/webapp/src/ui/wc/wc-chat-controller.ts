@@ -38,7 +38,11 @@ export class WcChatController {
   readonly #onMessageRendered?: (message: ChatMessage, els: readonly HTMLElement[]) => void;
   readonly #onMessageDisposed?: (messageId: string) => void;
   #unsubscribe: () => void;
-  #onLocalUserMessage?: (text: string, messageId: string, attachments?: undefined) => void;
+  #onLocalUserMessage?: (
+    text: string,
+    messageId: string,
+    attachments?: ChatMessage['attachments']
+  ) => void;
 
   #messages: ChatMessage[] = [];
   /** Rendered thread elements per message id (a message can span several). */
@@ -84,7 +88,9 @@ export class WcChatController {
 
   /** Leader-tray broadcast hook, invoked after every local user send. */
   setOnLocalUserMessage(
-    hook: ((text: string, messageId: string, attachments?: undefined) => void) | undefined
+    hook:
+      | ((text: string, messageId: string, attachments?: ChatMessage['attachments']) => void)
+      | undefined
   ): void {
     this.#onLocalUserMessage = hook;
   }
@@ -155,7 +161,9 @@ export class WcChatController {
     this.#appendMessage(message);
     this.#agent.sendMessage(trimmed, message.id, message.attachments);
     try {
-      this.#onLocalUserMessage?.(trimmed, message.id);
+      // Attachments ride along so tray followers see the full prompt, not a
+      // text-only echo.
+      this.#onLocalUserMessage?.(trimmed, message.id, message.attachments);
     } catch (err) {
       // The broadcast hook is the followers' visibility path; never let a
       // broken broadcaster undo the local send.

@@ -152,6 +152,7 @@ describe('slicc-theme', () => {
       themes.push((e as CustomEvent<{ theme: string }>).detail.theme);
     });
     el.theme = 'dark';
+    expect(themes).toEqual(['dark']);
     el.theme = 'light';
     expect(themes).toEqual(['dark', 'light']);
   });

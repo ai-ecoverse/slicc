@@ -75,6 +75,7 @@ describe('slicc-chatpane', () => {
       seen.push((e as CustomEvent).detail.narrow)
     );
     el.narrow = true;
+    expect(seen).toEqual([true]);
     el.narrow = false;
     expect(seen).toEqual([true, false]);
   });

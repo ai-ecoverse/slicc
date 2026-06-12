@@ -151,8 +151,8 @@ describe('slicc-nav', () => {
     });
 
     el.accent = '#f43f5e';
+    expect(seen).toEqual(['#f43f5e']);
     el.accent = null;
-
     expect(seen).toEqual(['#f43f5e', null]);
     expect(composed).toBe(true);
   });
