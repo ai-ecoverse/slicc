@@ -166,6 +166,16 @@ describe('mountWcUiPreview', () => {
     expect(css).toContain('html,body{margin:0');
   });
 
+  it('the browser dock item never opens a workspace pane (the overlay is the surface)', () => {
+    const root = mount();
+    const dock = root.querySelector('slicc-dock') as HTMLElement;
+    const shell = root.querySelector('slicc-shell') as HTMLElement;
+    dock.dispatchEvent(
+      new CustomEvent('slicc-dock-select', { bubbles: true, detail: { id: 'browser' } })
+    );
+    expect(shell.hasAttribute('open')).toBe(false);
+  });
+
   it('describes the tab switcher on the browser surface', () => {
     const root = mount();
     const surface = root.querySelector('[surface-id="browser"]');

@@ -92,7 +92,11 @@ export function wireWcBrowser(deps: WireWcBrowserDeps): WcBrowserHandle {
   };
 
   refs.dock.addEventListener('slicc-dock-select', (event) => {
-    if ((event as CustomEvent<{ id?: string }>).detail?.id === 'browser') void refresh();
+    if ((event as CustomEvent<{ id?: string }>).detail?.id !== 'browser') return;
+    void refresh();
+    // One-shot launcher: the overlay IS the surface. Un-latch the dock (and
+    // let the canonical collapse close any open pane + clear the ws param).
+    (refs.dock as HTMLElement & { collapse?: () => void }).collapse?.();
   });
 
   overlay.addEventListener('tab-activate', (event) => {

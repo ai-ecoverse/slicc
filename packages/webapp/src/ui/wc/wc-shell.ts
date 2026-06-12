@@ -235,6 +235,9 @@ function wireDockToWorkbench(
   dock.addEventListener('slicc-dock-select', (event) => {
     const id = (event as CustomEvent<{ id: string }>).detail?.id;
     if (!id) return;
+    // The Browser globe opens the FULL-SCREEN tab overlay (wc-browser.ts) —
+    // a workspace pane underneath it would just be dead chrome.
+    if (id === 'browser') return;
     shell.setAttribute('open', '');
     body.setAttribute('active', id);
     onSurfaceActivate?.(id);

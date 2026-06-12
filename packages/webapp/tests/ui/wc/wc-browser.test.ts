@@ -53,6 +53,8 @@ describe('wireWcBrowser', () => {
       expect((overlay as OverlayEl).tabs).toHaveLength(2);
     });
     expect(overlay.hasAttribute('open')).toBe(true);
+    // One-shot launcher: the dock never latches browser as the active item.
+    expect(refs.dock.getAttribute('active')).toBeNull();
     // Thumbnails attach per target — including the follower composite id,
     // whose capture beams over the WebRTC-backed remote transport.
     await vi.waitFor(() => {
