@@ -1,7 +1,7 @@
 import type { IFileSystem } from 'just-bash';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../../src/ui/provider-settings.js', () => ({
+vi.mock('../../../src/providers/account-store.js', () => ({
   getApiKeyForProvider: vi.fn(),
   getRawApiKeyForProvider: vi.fn(),
   getBaseUrlForProvider: vi.fn(),
@@ -15,14 +15,14 @@ vi.mock('../../../src/providers/built-in/local-llm.js', () => ({
   config: { id: 'local-llm' },
 }));
 
-import { verifyConnection } from '../../../src/providers/built-in/local-llm.js';
-import { createLocalLlmCommand } from '../../../src/shell/supplemental-commands/local-llm-command.js';
 import {
   addAccount,
   getApiKeyForProvider,
   getBaseUrlForProvider,
   getRawApiKeyForProvider,
-} from '../../../src/ui/provider-settings.js';
+} from '../../../src/providers/account-store.js';
+import { verifyConnection } from '../../../src/providers/built-in/local-llm.js';
+import { createLocalLlmCommand } from '../../../src/shell/supplemental-commands/local-llm-command.js';
 
 const mockGetApiKey = vi.mocked(getApiKeyForProvider);
 const mockGetRawApiKey = vi.mocked(getRawApiKeyForProvider);

@@ -55,7 +55,7 @@ vi.mock('../../src/shell/index.js', () => ({
   WasmShell: mocks.WasmShell,
 }));
 
-vi.mock('../../src/ui/provider-settings.js', () => ({
+vi.mock('../../src/providers/account-store.js', () => ({
   getApiKey: mocks.getApiKey,
   getSelectedProvider: mocks.getSelectedProvider,
   resolveCurrentModel: mocks.resolveCurrentModel,

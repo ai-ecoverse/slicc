@@ -51,7 +51,7 @@ import {
   streamSimpleOpenAICompletions,
 } from '@earendil-works/pi-ai/openai-completions';
 import { createLogger } from '../../core/logger.js';
-import { getDeploymentForProvider } from '../../ui/provider-settings.js';
+import { getDeploymentForProvider } from '../account-store.js';
 import type { ProviderConfig } from '../types.js';
 
 const log = createLogger('local-llm');

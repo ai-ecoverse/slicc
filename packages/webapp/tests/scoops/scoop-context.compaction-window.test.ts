@@ -68,7 +68,7 @@ vi.mock('../../src/shell/index.js', () => ({
   }),
 }));
 
-vi.mock('../../src/ui/provider-settings.js', () => ({
+vi.mock('../../src/providers/account-store.js', () => ({
   getApiKey: () => 'test-api-key',
   getSelectedProvider: () => 'adobe',
   resolveCurrentModel: mocks.resolveCurrentModel,

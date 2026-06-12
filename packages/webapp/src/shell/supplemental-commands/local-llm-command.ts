@@ -56,7 +56,7 @@ export function createLocalLlmCommand(): Command {
     // Lazy imports — same pattern as other supplemental commands that
     // reach into the browser settings layer.
     const { getApiKeyForProvider, getRawApiKeyForProvider, getBaseUrlForProvider, addAccount } =
-      await import('../../ui/provider-settings.js');
+      await import('../../providers/account-store.js');
     const { verifyConnection } = await import('../../providers/built-in/local-llm.js');
 
     const sub = args[0] ?? 'status';

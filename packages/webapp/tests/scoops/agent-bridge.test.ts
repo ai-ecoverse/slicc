@@ -22,8 +22,8 @@ import {
 // adobe list here includes claude-haiku-4-5 (which the real picker hides via
 // PICKER_HIDDEN_MODEL_PATTERNS) — the regression: a picker-hidden model must still
 // validate for an explicit sub-agent target.
-vi.mock('../../src/ui/provider-settings.js', async (importActual) => {
-  const actual = await importActual<typeof import('../../src/ui/provider-settings.js')>();
+vi.mock('../../src/providers/account-store.js', async (importActual) => {
+  const actual = await importActual<typeof import('../../src/providers/account-store.js')>();
   return {
     ...actual,
     getAccounts: () => [{ providerId: 'adobe', accessToken: 'x' }],

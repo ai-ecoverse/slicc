@@ -11,12 +11,16 @@
 
 import { createLogger } from '../../core/logger.js';
 import {
+  getAccounts,
+  getOAuthAccountInfo,
+  saveOAuthAccount,
+} from '../../providers/account-store.js';
+import {
   getRegisteredProviderConfig,
   registerProviderConfig,
   unregisterProviderConfig,
 } from '../../providers/index.js';
 import type { OAuthLauncher, ProviderConfig } from '../../providers/types.js';
-import { getAccounts, getOAuthAccountInfo, saveOAuthAccount } from '../../ui/provider-settings.js';
 import {
   type DiscoveredAuth,
   discoverAuth,

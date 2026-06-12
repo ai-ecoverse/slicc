@@ -33,7 +33,7 @@ import { createLogger } from '../core/logger.js';
 import type { SessionStore } from '../core/session.js';
 import type { VirtualFS } from '../fs/index.js';
 import { normalizePath } from '../fs/path-utils.js';
-import { getAccounts, getProviderModels } from '../ui/provider-settings.js';
+import { getAccounts, getProviderModels } from '../providers/account-store.js';
 import type { Orchestrator } from './orchestrator.js';
 import {
   CURRENT_SCOOP_CONFIG_VERSION,

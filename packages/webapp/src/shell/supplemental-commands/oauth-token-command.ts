@@ -60,7 +60,7 @@ export function createOAuthTokenCommand(): Command {
     // Lazy imports — same pattern as other supplemental commands that
     // import from browser modules.
     const { getOAuthAccountInfo, getSelectedProvider, getAccounts } = await import(
-      '../../ui/provider-settings.js'
+      '../../providers/account-store.js'
     );
     const { getRegisteredProviderConfig, getRegisteredProviderIds } = await import(
       '../../providers/index.js'
@@ -251,7 +251,7 @@ async function runSilentRenew(
   args: string[]
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const { getSelectedProvider, getOAuthAccountInfo } = await import(
-    '../../ui/provider-settings.js'
+    '../../providers/account-store.js'
   );
   const { getRegisteredProviderConfig, getRegisteredProviderIds } = await import(
     '../../providers/index.js'
