@@ -124,7 +124,7 @@ export async function getDefaultSecretStore(): Promise<SecretStore> {
  */
 export async function getDefaultImsClient(): Promise<AdobeImsClient> {
   // Dynamic import to avoid circular dependencies and to keep IMS access confined to this module.
-  const { getAccounts } = await import('../../ui/provider-settings.js');
+  const { getAccounts } = await import('../../providers/account-store.js');
   const accounts = getAccounts();
   const adobeAccount = accounts.find(
     (a: { providerId?: string; accessToken?: string }) => a.providerId === 'adobe'

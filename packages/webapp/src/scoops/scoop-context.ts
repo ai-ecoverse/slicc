@@ -32,15 +32,15 @@ import type { VirtualFS } from '../fs/index.js';
 import type { RestrictedFS } from '../fs/restricted-fs.js';
 import { createSudoFs } from '../fs/sudo-fs.js';
 import type { Process, ProcessManager } from '../kernel/process-manager.js';
-import { WasmShell } from '../shell/index.js';
-import type { SudoManager } from '../sudo/sudo-manager.js';
-import { createBashTool, createFileTools } from '../tools/index.js';
 import {
   getApiKey,
   getSelectedProvider,
   resolveCurrentModel,
   resolveModelById,
-} from '../ui/provider-settings.js';
+} from '../providers/account-store.js';
+import { WasmShell } from '../shell/index.js';
+import type { SudoManager } from '../sudo/sudo-manager.js';
+import { createBashTool, createFileTools } from '../tools/index.js';
 import { getAdobeSessionId } from './llm-session-id.js';
 import {
   createScoopManagementTools,

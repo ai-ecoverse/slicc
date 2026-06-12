@@ -298,7 +298,6 @@
         "packages/webapp/src/ui/api-key-dialog.ts",
         "packages/webapp/src/ui/chat-fixture.ts",
         "packages/webapp/src/ui/page-leader-tray.ts",
-        "packages/webapp/src/ui/provider-settings.ts",
         "packages/webapp/src/ui/sprinkle-bridge.ts",
         "packages/webapp/src/ui/sprinkle-renderer.ts"
       ],
@@ -394,7 +393,6 @@
         "packages/webapp/src/ui/dip.ts",
         "packages/webapp/src/ui/oauth-bootstrap.ts",
         "packages/webapp/src/ui/opfs-leader-election.ts",
-        "packages/webapp/src/ui/provider-settings.ts",
         "packages/webapp/src/ui/sprinkle-icon.ts",
         "packages/webapp/src/ui/sprinkle-renderer.ts"
       ],
