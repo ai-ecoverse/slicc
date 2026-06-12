@@ -64,6 +64,8 @@ export interface WcTrayDeps {
   /** Cherry embed handshake results (runtimeMode `cherry` only). */
   cherryJoinUrl?: string;
   cherryTransport?: CherryHostTransport;
+  /** Floatbar label to restore when the last follower leaves. */
+  baseFloatLabel?: string;
   window: Window;
   log: BootStageLogger;
 }
@@ -153,7 +155,9 @@ function createLeaderOptionsFactory(
     onFollowerCountChanged: (count) => {
       refs.floatbar.setAttribute(
         'label',
-        count > 0 ? `tray · ${count} follower${count === 1 ? '' : 's'}` : 'standalone · live'
+        count > 0
+          ? `tray · ${count} follower${count === 1 ? '' : 's'}`
+          : (deps.baseFloatLabel ?? 'standalone · live')
       );
     },
     onRemoteTransportsCleaned: (runtimeId) => remoteCdpBridge.cleanupRuntime(runtimeId),

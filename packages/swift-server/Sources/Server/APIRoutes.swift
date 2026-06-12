@@ -83,6 +83,21 @@ func registerAPIRoutes(
         )
     }
 
+    // Public health document — mirrors the Node server's `/api/status`. The
+    // `service` field doubles as the float fingerprint: the UI labels the
+    // floatbar "sliccstart" when this (Sliccstart-launched) server serves it
+    // and "npx" when the Node CLI does.
+    router.get("/api/status") { _, _ in
+        try jsonResponse(
+            .object([
+                "status": .string("ok"),
+                "service": .string("slicc-server"),
+                "timestamp": .string(ISO8601DateFormatter().string(from: Date())),
+            ]),
+            headers: [cacheControlHeader: "no-store"]
+        )
+    }
+
     router.get("/api/tray-status") { _, _ in
         do {
             return try jsonResponse(await lickSystem.sendRequest(type: "tray_status", data: [:], timeout: 5))

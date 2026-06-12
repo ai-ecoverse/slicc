@@ -9,6 +9,36 @@ import XCTest
 @testable import slicc_server
 
 final class APIRoutesTests: XCTestCase {
+    func testStatusNamesTheNativeServer() async throws {
+        try await self.withHTTPClient { httpClient in
+            let router = Router()
+            registerAPIRoutes(
+                router: router,
+                lickSystem: LickSystem(),
+                config: self.makeConfig(),
+                httpClient: httpClient
+            )
+
+            let app = Application(responder: router.buildResponder())
+            try await app.test(.router) { client in
+                try await client.execute(uri: "/api/status", method: .get) { response in
+                    XCTAssertEqual(response.status, .ok)
+                    XCTAssertEqual(response.headers[HTTPField.Name("Cache-Control")!], "no-store")
+                    let body = try self.decodeJSONObject(from: response.body)
+                    XCTAssertEqual(body["status"], .string("ok"))
+                    // The UI fingerprints the serving runtime from this field
+                    // ("sliccstart" floatbar label) — keep it stable.
+                    XCTAssertEqual(body["service"], .string("slicc-server"))
+                    if case .string(let timestamp)? = body["timestamp"] {
+                        XCTAssertFalse(timestamp.isEmpty)
+                    } else {
+                        XCTFail("timestamp missing from /api/status body")
+                    }
+                }
+            }
+        }
+    }
+
     func testRuntimeConfigReturnsConfiguredValues() async throws {
         try await self.withHTTPClient { httpClient in
             let router = Router()

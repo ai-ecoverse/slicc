@@ -9,6 +9,7 @@
 
 import type { BrowserAPI, CDPTransport } from '../../cdp/index.js';
 import { spawnKernelWorker } from '../../kernel/spawn.js';
+import type { LickEvent } from '../../scoops/lick-manager.js';
 import type { RegisteredScoop, ThinkingLevel } from '../../scoops/types.js';
 import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
 import type { BootStageLogger } from '../boot/types.js';
@@ -527,15 +528,68 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
   };
 }
 
+/** Mutable slot for the lazily-wired welcome-flow lick interceptor. */
+export interface WelcomeInterceptHolder {
+  intercept: ((event: LickEvent) => boolean) | null;
+}
+
+/**
+ * Page-side VFS factory: the worker owns the (OPFS) filesystem — page reads
+ * and writes route through its VfsRpcHost. Opening OPFS from the page would
+ * fight the worker's exclusive sync-access handles. Lazy + memoized.
+ */
+function makeOpenVfs(client: OffscreenClient): () => Promise<WcPageVfs> {
+  let vfsPromise: Promise<WcPageVfs> | null = null;
+  return () => {
+    vfsPromise ??= (async () => {
+      const [{ createRemoteVfsClient }, { createRemoteWritableVfsClient }] = await Promise.all([
+        import('../../kernel/remote-vfs-client.js'),
+        import('../../kernel/writable-vfs-client.js'),
+      ]);
+      return {
+        reader: createRemoteVfsClient({ transport: client.getTransport() }),
+        writer: createRemoteWritableVfsClient({ transport: client.getTransport() }),
+      };
+    })();
+    return vfsPromise;
+  };
+}
+
+/**
+ * Welcome flow: first-run detection posts the onboarding dip; the holder
+ * gives the controller's dip-lick path its interceptor once wired. The
+ * kernel must be ready first — the VFS probe is a worker RPC.
+ */
+function wireWcWelcome(
+  boot: WcShellBoot,
+  client: OffscreenClient,
+  openVfs: () => Promise<WcPageVfs>,
+  holder: WelcomeInterceptHolder,
+  log: BootStageLogger
+): void {
+  boot.onClientReady(() => {
+    if (holder.intercept) return;
+    void import('./wc-onboarding.js')
+      .then(({ wireWcOnboarding }) =>
+        wireWcOnboarding({ client, getController: () => boot.getController(), openVfs, log })
+      )
+      .then((handle) => {
+        holder.intercept = handle.interceptWelcomeLick;
+      })
+      .catch((err) => log.error('WC onboarding wiring failed', err));
+  });
+}
+
 /** Controller + dip lifecycle over the live agent handle. */
 function createWcController(
   refs: WcShellRefs,
   client: OffscreenClient,
-  onIdle?: () => void
+  onIdle?: () => void,
+  welcome?: WelcomeInterceptHolder
 ): { controller: WcChatController; agentHandle: ReturnType<OffscreenClient['createAgentHandle']> } {
   // Dip licks dispatch to the cone as the `inline` sprinkle (the legacy
-  // onDipLick local path — welcome-flow interception and follower
-  // forwarding are not wired in WC mode yet).
+  // onDipLick local path), AFTER the welcome-flow interceptor gets first
+  // refusal — onboarding licks must never reach the keyless cone.
   const dipInstances = new Map<string, DipInstance[]>();
   void import('../legacy-styles.js')
     .then(({ loadDipStyles }) => loadDipStyles())
@@ -564,6 +618,13 @@ function createWcController(
       dipInstances.set(
         message.id,
         hydrateDips(host, (action, data) => {
+          const event: LickEvent = {
+            type: 'sprinkle',
+            sprinkleName: 'inline',
+            timestamp: new Date().toISOString(),
+            body: { action, data },
+          };
+          if (welcome?.intercept?.(event)) return;
           client.sendSprinkleLick('inline', { action, data });
         })
       );
@@ -582,6 +643,8 @@ export interface AttachWcClientOptions {
     runtimeMode: UiRuntimeMode;
     cherryJoinUrl?: string;
     cherryTransport?: import('../../cdp/cherry-host-transport.js').CherryHostTransport;
+    /** Resolved floatbar base label (`sliccstart · live` / `npx · live`). */
+    baseFloatLabel?: string;
   };
 }
 
@@ -893,32 +956,20 @@ export function attachWcClient(
   const triggerPlaceholder = (): void => {
     refreshPlaceholder?.();
   };
+  const welcomeHolder: WelcomeInterceptHolder = { intercept: null };
   const { controller, agentHandle } = createWcController(
     refs,
     client,
-    makeTurnFinishedHook({ boot, triggerPlaceholder, refreshStats })
+    makeTurnFinishedHook({ boot, triggerPlaceholder, refreshStats }),
+    welcomeHolder
   );
   boot.setController(controller);
   boot.onClientReady(refreshStats);
 
-  // Page-side VFS: the worker owns the (OPFS) filesystem — page reads and
-  // writes route through its VfsRpcHost. Opening OPFS from the page would
-  // fight the worker's exclusive sync-access handles.
-  let vfsPromise: Promise<WcPageVfs> | null = null;
-  const openVfs = (): Promise<WcPageVfs> => {
-    vfsPromise ??= (async () => {
-      const [{ createRemoteVfsClient }, { createRemoteWritableVfsClient }] = await Promise.all([
-        import('../../kernel/remote-vfs-client.js'),
-        import('../../kernel/writable-vfs-client.js'),
-      ]);
-      return {
-        reader: createRemoteVfsClient({ transport: client.getTransport() }),
-        writer: createRemoteWritableVfsClient({ transport: client.getTransport() }),
-      };
-    })();
-    return vfsPromise;
-  };
+  const openVfs = makeOpenVfs(client);
   const openReader = async (): Promise<WcPageVfs['reader']> => (await openVfs()).reader;
+
+  wireWcWelcome(boot, client, openVfs, welcomeHolder, log);
 
   wireWcComposer({
     boot,
@@ -1029,6 +1080,7 @@ export function attachWcClient(
           openFs: openReader,
           cherryJoinUrl: options.standalone.cherryJoinUrl,
           cherryTransport: options.standalone.cherryTransport,
+          baseFloatLabel: options.standalone.baseFloatLabel,
           window,
           log,
         });
@@ -1063,7 +1115,17 @@ export async function mountWcUiLive(
       log,
     });
 
-  const boot = prepareWcShell(app, 'standalone · live');
+  // The floatbar names the serving runtime, not just "standalone": the
+  // native Sliccstart server vs the Node CLI, fingerprinted via /api/status.
+  const { resolveStandaloneFloatLabel, DEFAULT_STANDALONE_LABEL } = await import(
+    './wc-float-label.js'
+  );
+  const floatLabel =
+    runtimeMode === 'standalone' || runtimeMode === 'electron-overlay'
+      ? await resolveStandaloneFloatLabel()
+      : DEFAULT_STANDALONE_LABEL;
+
+  const boot = prepareWcShell(app, floatLabel);
   const host = spawnKernelWorker({
     realCdpTransport,
     instanceId,
@@ -1071,7 +1133,14 @@ export async function mountWcUiLive(
   });
   attachWcClient(boot, host.client, log, {
     instanceId,
-    standalone: { browser, realCdpTransport, runtimeMode, cherryJoinUrl, cherryTransport },
+    standalone: {
+      browser,
+      realCdpTransport,
+      runtimeMode,
+      cherryJoinUrl,
+      cherryTransport,
+      baseFloatLabel: floatLabel,
+    },
   });
 
   const { setupSudoStandalone } = await import('../boot/setup-sudo.js');
