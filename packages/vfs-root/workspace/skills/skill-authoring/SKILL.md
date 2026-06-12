@@ -16,15 +16,18 @@ A skill is a folder with a `SKILL.md` (and optional companion files) that loads 
 
 ## Discovery
 
-SLICC discovers three kinds of skill roots:
+SLICC discovers four kinds of skill roots:
 
-| Root                                        | Source                               | Mutability                          |
-| ------------------------------------------- | ------------------------------------ | ----------------------------------- |
-| `/workspace/skills/<name>/SKILL.md`         | Bundled or installed via `upskill`   | Install-managed; you can edit them  |
-| `.agents/skills/<name>/SKILL.md` (anywhere) | Compatibility (Cursor / SuperClaude) | Read-only (discovered, not managed) |
-| `.claude/skills/<name>/SKILL.md` (anywhere) | Compatibility (Claude Code)          | Read-only (discovered, not managed) |
+| Root                                                         | Source                                  | Mutability                          |
+| ------------------------------------------------------------ | --------------------------------------- | ----------------------------------- |
+| `/workspace/skills/<name>/SKILL.md`                          | Bundled or installed via `upskill`      | Install-managed; you can edit them  |
+| `.agents/skills/<name>/SKILL.md` (anywhere)                  | Compatibility (Cursor / SuperClaude)    | Read-only (discovered, not managed) |
+| `.claude/skills/<name>/SKILL.md` (anywhere)                  | Compatibility (Claude Code)             | Read-only (discovered, not managed) |
+| `<mount>/.claude-plugin/marketplace.json` → plugin `skills/` | Claude Code marketplace (mounted repos) | Read-only (discovered, not managed) |
 
-When you create a new skill **for SLICC**, put it in `/workspace/skills/<name>/`. The `.agents/` and `.claude/` paths exist so SLICC can pick up skills authored for other agents without modification — don't create new skills there.
+The marketplace root is auto-discovered: when a mounted directory contains `.claude-plugin/marketplace.json`, SLICC reads the manifest, resolves each plugin's `source` path, and discovers skills at `<plugin-source>/skills/<name>/SKILL.md`. No install step needed — mount the repo and the skills are live immediately. Precedence: native > agents > claude > marketplace.
+
+When you create a new skill **for SLICC**, put it in `/workspace/skills/<name>/`. The `.agents/`, `.claude/`, and marketplace paths exist so SLICC can pick up skills authored for other agents without modification — don't create new skills there.
 
 ## SKILL.md structure
 
