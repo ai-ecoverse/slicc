@@ -183,7 +183,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createSerialCommand(),
     createEsptoolCommand(),
     createCherryEmitCommand({ registry: options.cherryRuntimeRegistry }),
-    createSliccFsCleanupCommand({ fs: options.fs }),
+    createSliccFsCleanupCommand(),
     createDfCommand({ fs: options.fs }),
     createDiskutilCommand({ fs: options.fs }),
     createSudoCommand(options.sudoCommand),

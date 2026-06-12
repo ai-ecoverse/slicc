@@ -1,0 +1,8 @@
+{
+  "storyId": "chat-agentmessage--prose",
+  "storyTitle": "Chat/AgentMessage",
+  "subsystem": "chat",
+  "importPath": "./src/chat/slicc-agent-message.stories.ts",
+  "comment": "wrong font. and we need more examples with richer markdown rendering. use the prod code as refenenece",
+  "createdAt": "2026-06-10T13:52:08.500Z"
+}

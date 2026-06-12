@@ -1,0 +1,64 @@
+/**
+ * SLICC design tokens — lifted verbatim from the prototype
+ * (proto/StellarRubySwift.html :root + body.dark). Light is the default; dark is
+ * opt-in. Per project decision the prototype's token vocabulary and light-default
+ * polarity are the library contract (reconciliation with the webapp's --s2-* /
+ * dark-default system happens later, during wire-in).
+ *
+ * Custom properties are inherited, so these values pierce shadow boundaries —
+ * shadow-DOM components reference var(--canvas) etc. and resolve against whatever
+ * theme scope wraps them. Apply dark via ANY of: `body.dark`, `.dark` on a wrapper
+ * (e.g. <slicc-theme theme="dark">), or `[data-theme="dark"]` on the document root.
+ */
+:root {
+  --canvas: #fff;
+  --bg: #f4f4f6;
+  --ghost: #ececef;
+  --desk: #ececef;
+  --ink: #0a0a0a;
+  --deep: #000;
+  --txt-2: #737373;
+  --txt-3: #a1a1a1;
+  --line: #e5e5e5;
+  --red: #c22b10;
+  --green: #168a35;
+  --green-bg: #ecf8ef;
+  --green-line: #cbe9d3;
+  --rose: #f43f5e;
+  --cyan: #06b6d4;
+  --violet: #8b5cf6;
+  --amber: #f59e0b;
+  --waffle: #b07823;
+  --ctx: #f59e0b;
+  /* The derived emphasis accent: bold text, links, blockquote edges, icon
+     chips. NOTE the CSS custom-property gotcha: var() inside a custom
+     property substitutes at the DECLARING element, so this :root value bakes
+     in :root's --ctx. Components that must track a locally-overridden --ctx
+     re-declare the same formula on their own host selector (agent-message,
+     action-row, tool-cluster, …). Because --ink flips with the theme, the
+     accent lands dark-leaning on light canvases and light-leaning on dark
+     ones — contrast for free. */
+  --accent: color-mix(in srgb, var(--ctx) 55%, var(--ink));
+  --shaderbg: #f7f2e3;
+  --rainbow: linear-gradient(90deg, #f43f5e 0%, #f59e0b 28%, #06b6d4 64%, #8b5cf6 100%);
+  --ui: "adobe-clean", "Inter", system-ui, sans-serif;
+  --mono: "Source Code Pro", "JetBrains Mono", ui-monospace, monospace;
+  --shadow-pane: rgba(10, 10, 10, 0.06) 0 8px 26px -10px;
+  --barh: 44px;
+  --ctl-h: 30px;
+}
+
+.dark,
+[data-theme="dark"] {
+  --canvas: #161618;
+  --bg: #0e0e10;
+  --ghost: #1f1f22;
+  --desk: #1f1f22;
+  --ink: #f5f5f2;
+  --deep: #f5f5f2;
+  --txt-2: #9b9ba1;
+  --txt-3: #6c6c72;
+  --line: #2a2a2e;
+  --shaderbg: #171410;
+  --shadow-pane: rgba(0, 0, 0, 0.35) 0 8px 26px -10px;
+}

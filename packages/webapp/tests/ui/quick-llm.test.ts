@@ -225,3 +225,33 @@ describe('familyOf', () => {
     expect(__test__.familyOf('llama-3.1-70b')).toBe('unknown');
   });
 });
+
+describe('lucideIconNames / pickLucideIcon', () => {
+  it('exposes the registry in kebab-case, including multi-word and digit names', async () => {
+    const { lucideIconNames } = await import('../../src/ui/quick-llm.js');
+    const names = lucideIconNames();
+    expect(names.length).toBeGreaterThan(1000);
+    expect(names).toContain('timer');
+    expect(names).toContain('arrow-up');
+    expect(names).toContain('a-arrow-down');
+    expect(names).toContain('axis-3d');
+  });
+
+  it('returns the validated pick and strips formatting noise', async () => {
+    const { pickLucideIcon } = await import('../../src/ui/quick-llm.js');
+    const labelFn = vi.fn(async () => '"Timer."');
+    const icon = await pickLucideIcon({ subject: 'a pomodoro timer', labelFn });
+    expect(icon).toBe('timer');
+    // The prompt carries the FULL valid-name list so the model can only
+    // pick something renderable.
+    expect(labelFn.mock.calls[0][0].prompt).toContain('a-arrow-down');
+  });
+
+  it('rejects picks that are not real lucide icons', async () => {
+    const { pickLucideIcon } = await import('../../src/ui/quick-llm.js');
+    expect(await pickLucideIcon({ subject: 'x', labelFn: async () => 'tomato-explosion' })).toBe(
+      null
+    );
+    expect(await pickLucideIcon({ subject: 'x', labelFn: async () => null })).toBe(null);
+  });
+});

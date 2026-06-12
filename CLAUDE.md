@@ -6,21 +6,22 @@ This root file is the repo navigation hub. Keep package-specific architecture an
 
 ### Packages
 
-| Path                          | Purpose                                                                                                            |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `packages/webapp/`            | Browser app core: UI, VFS, shell, CDP, tools, providers, skills, scoops                                            |
-| `packages/cherry/`            | Host-side embed SDK (`mountSlicc`) lending a third-party page to a leader as a target                              |
-| `packages/chrome-extension/`  | Manifest V3 extension entry points, HTML shells, and message bridges                                               |
-| `packages/cloudflare-worker/` | Tray hub worker for session coordination, signaling, TURN credentials, and the `sliccy.ai/cloud` cone dashboard    |
-| `packages/node-server/`       | Node.js CLI/Electron server: Chrome launch, CDP proxy, dev serving, hosted-leader mode                             |
-| `packages/cloud-core/`        | `@slicc/cloud-core` — shared sandbox-lifecycle library consumed by both `node-server --cloud …` and the worker     |
-| `packages/shared-ts/`         | `@slicc/shared-ts` — platform-agnostic primitives (secret masking, secrets pipeline) shared across all TS packages |
-| `packages/vfs-root/`          | Default VFS content copied into the app on init/reset                                                              |
-| `packages/swift-launcher/`    | Native macOS SwiftUI launcher app (`Sliccstart`)                                                                   |
-| `packages/swift-server/`      | Native macOS Hummingbird server (`slicc-server`)                                                                   |
-| `packages/ios-app/`           | Native iOS SwiftUI follower app (`SliccFollower`) — joins a leader over WebRTC (SPM project, not an npm workspace) |
-| `packages/dev-tools/`         | Repo-level tooling: build helpers, QA setup, providers build filter, e2b template for hosted cones                 |
-| `packages/assets/`            | Shared static files (logos, fonts, favicon) used by multiple packages (folder, not an npm workspace)               |
+| Path                          | Purpose                                                                                                                                              |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/webapp/`            | Browser app core: UI, VFS, shell, CDP, tools, providers, skills, scoops                                                                              |
+| `packages/cherry/`            | Host-side embed SDK (`mountSlicc`) lending a third-party page to a leader as a target                                                                |
+| `packages/chrome-extension/`  | Manifest V3 extension entry points, HTML shells, and message bridges                                                                                 |
+| `packages/cloudflare-worker/` | Tray hub worker for session coordination, signaling, TURN credentials, and the `sliccy.ai/cloud` cone dashboard                                      |
+| `packages/node-server/`       | Node.js CLI/Electron server: Chrome launch, CDP proxy, dev serving, hosted-leader mode                                                               |
+| `packages/cloud-core/`        | `@slicc/cloud-core` — shared sandbox-lifecycle library consumed by both `node-server --cloud …` and the worker                                       |
+| `packages/shared-ts/`         | `@slicc/shared-ts` — platform-agnostic primitives (secret masking, secrets pipeline) shared across all TS packages                                   |
+| `packages/webcomponents/`     | `@slicc/webcomponents` — standalone web-component library extracted from the UI prototype (Storybook + `@vitest/browser`), not yet wired into webapp |
+| `packages/vfs-root/`          | Default VFS content copied into the app on init/reset                                                                                                |
+| `packages/swift-launcher/`    | Native macOS SwiftUI launcher app (`Sliccstart`)                                                                                                     |
+| `packages/swift-server/`      | Native macOS Hummingbird server (`slicc-server`)                                                                                                     |
+| `packages/ios-app/`           | Native iOS SwiftUI follower app (`SliccFollower`) — joins a leader over WebRTC (SPM project, not an npm workspace)                                   |
+| `packages/dev-tools/`         | Repo-level tooling: build helpers, QA setup, providers build filter, e2b template for hosted cones                                                   |
+| `packages/assets/`            | Shared static files (logos, fonts, favicon) used by multiple packages (folder, not an npm workspace)                                                 |
 
 ### Other Top-Level Directories
 
@@ -51,6 +52,7 @@ For runtime-specific commands, use the nearest guide:
 - [`packages/node-server/CLAUDE.md`](packages/node-server/CLAUDE.md)
 - [`packages/cloud-core/CLAUDE.md`](packages/cloud-core/CLAUDE.md)
 - [`packages/shared-ts/CLAUDE.md`](packages/shared-ts/CLAUDE.md)
+- [`packages/webcomponents/CLAUDE.md`](packages/webcomponents/CLAUDE.md)
 - [`packages/vfs-root/CLAUDE.md`](packages/vfs-root/CLAUDE.md)
 - [`packages/swift-launcher/CLAUDE.md`](packages/swift-launcher/CLAUDE.md)
 - [`packages/swift-server/CLAUDE.md`](packages/swift-server/CLAUDE.md)
@@ -90,9 +92,9 @@ Use the ice cream terms in code review comments and docs when they match the dom
 
 - Keep commits focused and package-local when possible.
 - Do not hand-edit generated output in `dist/`.
-- Webapp git behavior is implemented with `isomorphic-git` over LightningFS.
+- Webapp git behavior is implemented with `isomorphic-git` over the OPFS-backed VirtualFS.
 - Auth uses `git config github.token <PAT>`.
-- Both modes now route agent-initiated HTTP through `createProxiedFetch()`. CLI uses `/api/fetch-proxy` over Express; extension uses `chrome.runtime.connect({ name: 'fetch-proxy.fetch' })` over a SW Port with response streaming. Webapp git uses `isomorphic-git` over LightningFS; auth uses `git config github.token <PAT>` or GitHub OAuth login (auto-writes masked token to `/workspace/.git/github-token`).
+- Both modes now route agent-initiated HTTP through `createProxiedFetch()`. CLI uses `/api/fetch-proxy` over Express; extension uses `chrome.runtime.connect({ name: 'fetch-proxy.fetch' })` over a SW Port with response streaming. Webapp git uses `isomorphic-git` over the OPFS-backed VirtualFS; auth uses `git config github.token <PAT>` or GitHub OAuth login (auto-writes masked token to `/workspace/.git/github-token`).
 
 **Requires Node >= 22** (LTS). Ports: 5710 (UI), 9222 (Chrome CDP), 9223 (Electron CDP). Vite HMR shares the UI server via `/__vite_hmr`.
 
@@ -164,7 +166,7 @@ Virtual Filesystem (packages/webapp/src/fs/) → RestrictedFS → Shell (package
 
 **Orchestrator** (`packages/webapp/src/scoops/orchestrator.ts`): Creates/destroys scoops, routes messages, manages VFS. Cone delegates via `feed_scoop` — scoops get complete self-contained prompts (no access to cone's conversation). Exposes `observeScoop(jid, handler)` for per-scoop event taps (observers are dropped defensively on both `unregisterScoop` and `destroyScoopTab`). `agent-bridge.ts` publishes `globalThis.__slicc_agent` — the shell-facing surface used by the `agent` supplemental command to spawn ephemeral one-shot sub-scoops with `notifyOnComplete: false` (no cone turn on completion). Extension float proxies the bridge from the side panel to the offscreen agent engine via `chrome.runtime` messages.
 
-**VirtualFS** (`packages/webapp/src/fs/`): POSIX-like async FS backed by LightningFS (IndexedDB). `RestrictedFS` wraps it with path ACLs for scoops. `FsError` carries POSIX error codes.
+**VirtualFS** (`packages/webapp/src/fs/`): POSIX-like async FS backed by OPFS (`backend: 'opfs'`; in-memory in Node tests). `RestrictedFS` wraps it with path ACLs for scoops. `FsError` carries POSIX error codes. The legacy LightningFS-IDB era is fully removed — nothing reads `slicc-fs` anymore (`slicc-fs-cleanup` deletes the leftover database).
 
 **Mount backends** (`packages/webapp/src/fs/mount/`): `LocalMountBackend` (FS Access), `S3MountBackend`, `DaMountBackend` are **signing-naive** in the browser bundle — they construct logical requests and call an injected `SignedFetch*` transport. The transport routes to `/api/s3-sign-and-forward` / `/api/da-sign-and-forward` (CLI; node-server resolves credentials, signs SigV4, forwards) or to `chrome.runtime.sendMessage` (extension; service worker reads `s3.<profile>.*` from `chrome.storage.local`, signs, forwards via `host_permissions: <all_urls>`). The agent never holds S3 credentials in either deployment. The IMS bearer token for DA flows transiently in the envelope; v2 will move that OAuth flow server-side too.
 

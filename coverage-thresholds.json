@@ -40,7 +40,19 @@
       "lines": 71,
       "statements": 69,
       "functions": 71,
-      "branches": 60
+      "branches": 60,
+      "coverageExclude": [
+        "**/node_modules/**",
+        "**/dist/**",
+        "**/tests/**",
+        "**/*.d.ts",
+        "**/*.config.{ts,js,mjs}",
+        "**/types.ts",
+        "**/index.html",
+        "**/shims/**",
+        "packages/*/src/**/*.test.ts",
+        "packages/webcomponents/**"
+      ]
     },
     "cherry": {
       "lines": 72,
@@ -59,6 +71,12 @@
       "statements": 93,
       "functions": 92,
       "branches": 84
+    },
+    "webcomponents": {
+      "lines": 95,
+      "statements": 91,
+      "functions": 95,
+      "branches": 80
     }
   },
   "swift": {

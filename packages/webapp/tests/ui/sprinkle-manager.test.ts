@@ -6,6 +6,8 @@ import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { createRemoteSprinkleVfs } from '../../src/kernel/remote-sprinkle-vfs.js';
 import type { LickEvent } from '../../src/scoops/lick-manager.js';
 import {
+  pruneKnownSprinkleNames,
+  readKnownSprinkleNames,
   readOpenSprinklesFromUrl,
   SprinkleManager,
   writeOpenSprinklesToUrl,
@@ -720,6 +722,74 @@ describe('SprinkleManager', () => {
       const params = new URLSearchParams(window.location.search);
       expect(params.has('sprinkles')).toBe(false);
       expect(params.get('detached')).toBe('1');
+    });
+
+    it('restoreOpenSprinkles reopens URL panels in BACKGROUND (no focus steal) yet persisted', async () => {
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>D</title><div>hi</div>');
+      window.history.replaceState(null, '', '/?sprinkles=dash');
+      await mgr.refresh();
+      await mgr.restoreOpenSprinkles();
+
+      // The layout receives background:true — restoring must not activate
+      // the panel (what's focused after a reload is the ws param's call).
+      const call = addSprinkle.mock.calls.find((c) => c[0] === 'dash');
+      expect(call?.[4]).toMatchObject({ background: true });
+      // Unlike attention, a background restore still counts as user-opened:
+      // the name stays in the URL for the NEXT reload.
+      await Promise.resolve();
+      expect(urlSprinklesParam()).toBe('dash');
+    });
+
+    it('restoreOpenSprinkles is safely re-runnable (kernel-ready resync contract)', async () => {
+      window.history.replaceState(null, '', '/?sprinkles=dash');
+      // First pass: nothing discovered yet (boot RPC lost) — restore fails
+      // per-name but resolves.
+      await mgr.restoreOpenSprinkles();
+      expect(mgr.opened()).toEqual([]);
+
+      // Resync after kernel-ready: discovery succeeds, restore reopens.
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>D</title><div>hi</div>');
+      await mgr.refresh();
+      await mgr.restoreOpenSprinkles();
+      expect(mgr.opened()).toEqual(['dash']);
+
+      // A third run must not duplicate the open panel.
+      const addCalls = addSprinkle.mock.calls.length;
+      await mgr.restoreOpenSprinkles();
+      expect(mgr.opened()).toEqual(['dash']);
+      expect(addSprinkle.mock.calls.length).toBe(addCalls);
+    });
+
+    it('readKnownSprinkleNames exposes the discovery ledger for rail seeding', async () => {
+      expect(readKnownSprinkleNames()).toEqual([]);
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>D</title><div>hi</div>');
+      window.history.replaceState(null, '', '/');
+      await mgr.refresh();
+      // The plain-URL restore runs surfaceUnseenSprinkles, which persists
+      // the known-sprinkles ledger the rail seeds from.
+      await mgr.restoreOpenSprinkles();
+      expect(readKnownSprinkleNames()).toContain('dash');
+    });
+
+    it('pruneKnownSprinkleNames drops ledger entries discovery did not confirm', () => {
+      localStorage.setItem(
+        'slicc-known-sprinkles',
+        JSON.stringify(['dash', 'deleted-long-ago', 'wiki'])
+      );
+      pruneKnownSprinkleNames(['dash', 'wiki']);
+      expect(readKnownSprinkleNames()).toEqual(['dash', 'wiki']);
+    });
+
+    it('pruneKnownSprinkleNames empties the ledger when nothing was confirmed', () => {
+      localStorage.setItem('slicc-known-sprinkles', JSON.stringify(['ghost']));
+      pruneKnownSprinkleNames([]);
+      expect(readKnownSprinkleNames()).toEqual([]);
+    });
+
+    it('pruneKnownSprinkleNames survives a corrupt ledger', () => {
+      localStorage.setItem('slicc-known-sprinkles', '{not json');
+      pruneKnownSprinkleNames(['dash']);
+      expect(readKnownSprinkleNames()).toEqual([]);
     });
 
     it('open() writes the sprinkle name to the URL (coalesced microtask flush)', async () => {

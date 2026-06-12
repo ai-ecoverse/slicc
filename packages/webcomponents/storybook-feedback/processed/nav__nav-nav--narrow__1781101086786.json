@@ -1,0 +1,8 @@
+{
+  "storyId": "nav-nav--narrow",
+  "storyTitle": "Nav/Nav",
+  "subsystem": "nav",
+  "importPath": "./src/nav/slicc-nav.stories.ts",
+  "comment": "in the narrow nav bar, take out the sliccy logo, we don't need it.",
+  "createdAt": "2026-06-10T14:18:06.785Z"
+}

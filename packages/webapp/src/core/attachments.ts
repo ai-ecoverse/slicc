@@ -43,7 +43,11 @@ export function formatAttachmentSummary(attachment: MessageAttachment): string {
 export function formatAttachmentForPrompt(attachment: MessageAttachment): string {
   const summary = formatAttachmentSummary(attachment);
   if (attachment.kind === 'image' && attachment.data) {
-    return `[Attached image: ${summary}]`;
+    // Captures carry BOTH: a downscaled inline copy for vision and the
+    // full-resolution original persisted to the VFS.
+    return attachment.path
+      ? `[Attached image: ${summary} — full-resolution copy saved to ${attachment.path}]`
+      : `[Attached image: ${summary}]`;
   }
 
   if (attachment.kind === 'text' && attachment.text !== undefined) {

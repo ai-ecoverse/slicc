@@ -170,6 +170,25 @@ export interface ScoopTranscriptMsg {
   transcript: string;
 }
 
+/**
+ * Panel → engine: session-stats pull (floatbar cost counter + the chip
+ * pupils' context-fill). The `requestId` correlates the reply.
+ */
+export interface RequestSessionStatsMsg {
+  type: 'request-session-stats';
+  requestId: string;
+}
+
+/** Reply to {@link RequestSessionStatsMsg}. */
+export interface SessionStatsMsg {
+  type: 'session-stats';
+  requestId: string;
+  /** Total session cost (USD) across all scoops, dropped ones included. */
+  totalCost: number;
+  /** Per-scoop context-window fill, 0..1 (last assistant turn's usage). */
+  fills: Array<{ jid: string; fill: number }>;
+}
+
 export interface ClearChatMsg {
   type: 'clear-chat';
   /** Correlation id so the panel can await the bridge's ack and avoid
@@ -746,6 +765,7 @@ export type PanelToOffscreenMessage =
   | RequestStateMsg
   | RequestScoopMessagesMsg
   | RequestScoopTranscriptMsg
+  | RequestSessionStatsMsg
   | ClearChatMsg
   | ClearFilesystemMsg
   | RefreshModelMsg
@@ -1090,6 +1110,7 @@ export type OffscreenToPanelMessage =
   | IncomingMessageMsg
   | ScoopMessagesReplacedMsg
   | ScoopTranscriptMsg
+  | SessionStatsMsg
   | PanelCdpResponseMsg
   | OAuthResultMsg
   | TrayRuntimeStatusMsg

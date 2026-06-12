@@ -107,6 +107,7 @@ interface FsPromisesLike {
   symlink(target: string, path: string): Promise<void>;
   readlink(path: string): Promise<string>;
   realpath?(path: string): Promise<string>;
+  truncate?(path: string, len: number): Promise<void>;
 }
 
 interface FsStatsLike {
@@ -525,6 +526,11 @@ export class VirtualFS {
       readlink: async (p) => {
         if (!this._readyResolved) await this._ready;
         return upf(await raw().readlink(pf(p)));
+      },
+      truncate: async (p, len) => {
+        if (!this._readyResolved) await this._ready;
+        const r = raw();
+        if (typeof r.truncate === 'function') await r.truncate(pf(p), len);
       },
       realpath: async (p) => {
         if (!this._readyResolved) await this._ready;
@@ -1322,6 +1328,20 @@ export class VirtualFS {
     }
     try {
       await this.lfs.writeFile(resolved, content);
+      // ZenFS' WebAccess (OPFS) backend writes at offset 0 WITHOUT
+      // truncating: rewriting a file with shorter content leaves the old
+      // tail in place ("short" over "AAAA…" reads back "shortAAA…"),
+      // silently corrupting every shrinking rewrite (JSON indexes,
+      // configs, user files). Pin the exact length after every write —
+      // a same-length truncate is a no-op, so this is safe on backends
+      // that already truncate correctly (InMemory).
+      const byteLength =
+        typeof content === 'string'
+          ? new TextEncoder().encode(content).byteLength
+          : content instanceof Uint8Array
+            ? content.byteLength
+            : (content as ArrayBuffer).byteLength;
+      await this.lfs.truncate?.(resolved, byteLength);
     } catch (err) {
       throw this.convertError(err, normalized);
     }

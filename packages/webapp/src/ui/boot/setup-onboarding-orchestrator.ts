@@ -62,9 +62,9 @@ export interface ProviderConfigSnapshot {
   apiVersionDefault?: string | null;
   apiVersionDescription?: string | null;
   isOAuth?: boolean;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // biome-ignore lint/suspicious/noExplicitAny: structural mirror of provider-settings' loose OAuth hook signature
   onOAuthLogin?: (launcher: any, onSuccess: () => void, options?: any) => Promise<void>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // biome-ignore lint/suspicious/noExplicitAny: structural mirror of provider-settings' loose OAuth hook signature
   onOAuthLoginIntercepted?: (launcher: any, onSuccess: () => void, options?: any) => Promise<void>;
 }
 

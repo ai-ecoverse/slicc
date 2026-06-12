@@ -1,0 +1,8 @@
+{
+  "storyId": "primitives-sendbutton--idle",
+  "storyTitle": "Primitives/SendButton",
+  "subsystem": "primitives",
+  "importPath": "./src/primitives/slicc-send-button.stories.ts",
+  "comment": "let the arrow wiggle a bit in anticipation when the user hovers over it. on mousedown, it should move a couple of pixels down, as if preparing to take a leap. then on mouse-up let it fly out.",
+  "createdAt": "2026-06-10T14:28:13.245Z"
+}

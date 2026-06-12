@@ -1,0 +1,8 @@
+{
+  "storyId": "workbench-filetree--directory-selected",
+  "storyTitle": "Workbench/FileTree",
+  "subsystem": "workbench",
+  "importPath": "./src/workbench/slicc-file-tree.stories.ts",
+  "comment": "we need to show subdirectories, folding and expanding here",
+  "createdAt": "2026-06-10T14:37:04.806Z"
+}

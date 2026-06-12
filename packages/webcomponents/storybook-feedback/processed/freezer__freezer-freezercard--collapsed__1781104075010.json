@@ -1,0 +1,8 @@
+{
+  "storyId": "freezer-freezercard--collapsed",
+  "storyTitle": "Freezer/FreezerCard",
+  "subsystem": "freezer",
+  "importPath": "./src/freezer/slicc-freezer-card.stories.ts",
+  "comment": "the hover state has a rectangular highlight. that clashes. maybe a round ring would be better",
+  "createdAt": "2026-06-10T15:07:55.010Z"
+}

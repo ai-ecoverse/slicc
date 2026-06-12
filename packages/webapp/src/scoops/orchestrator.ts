@@ -2380,6 +2380,17 @@ export class Orchestrator {
     return results;
   }
 
+  /**
+   * Per-scoop context-window fill (0..1), from each scoop's last assistant
+   * turn. Drives the chip pupils — they dilate as the context fills up.
+   */
+  getContextFills(): Array<{ jid: string; fill: number }> {
+    return [...this.contexts.entries()].map(([jid, context]) => ({
+      jid,
+      fill: context.getContextFill(),
+    }));
+  }
+
   /** Start an idle timer for a scoop. If the scoop doesn't start processing within
    *  SCOOP_IDLE_TIMEOUT_MS, send a notification to the cone. */
   private startIdleTimer(jid: string): void {

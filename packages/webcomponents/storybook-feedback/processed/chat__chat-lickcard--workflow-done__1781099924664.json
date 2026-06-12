@@ -1,0 +1,8 @@
+{
+  "storyId": "chat-lickcard--workflow-done",
+  "storyTitle": "Chat/LickCard",
+  "subsystem": "chat",
+  "importPath": "./src/chat/slicc-lick-card.stories.ts",
+  "comment": "workflow done needs a fitting icon",
+  "createdAt": "2026-06-10T13:58:44.664Z"
+}

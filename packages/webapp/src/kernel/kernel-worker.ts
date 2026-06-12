@@ -85,30 +85,6 @@ export interface KernelWorkerReadyMsg {
   type: 'kernel-worker-ready';
 }
 
-/**
- * Migration progress signals.
- *
- * The kernel host invokes `onMigrationStart` immediately before the
- * OPFS migration runs, `onMigrationProgress` per file copied, and
- * `onMigrationFinish` from a `finally` so a thrown runner still
- * dismisses the modal. We post these raw on the kernel port —
- * identical channel to `kernel-worker-ready` — so the page can wire
- * a blocking modal without a new heavyweight transport. Flag-off
- * floats never construct an OPFS-backed VFS, so these are never
- * posted and the byte-identical legacy boot is preserved.
- */
-export interface KernelMigrationStartedMsg {
-  type: 'kernel-migration-started';
-}
-export interface KernelMigrationProgressMsg {
-  type: 'kernel-migration-progress';
-  copied: number;
-  total: number;
-}
-export interface KernelMigrationFinishedMsg {
-  type: 'kernel-migration-finished';
-}
-
 // ---------------------------------------------------------------------------
 // Fetch bypass header
 // ---------------------------------------------------------------------------
@@ -242,23 +218,6 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
     bridge,
     callbacks,
     logger: console,
-    onMigrationStart: () => {
-      init.kernelPort.postMessage({
-        type: 'kernel-migration-started',
-      } satisfies KernelMigrationStartedMsg);
-    },
-    onMigrationProgress: (progress) => {
-      init.kernelPort.postMessage({
-        type: 'kernel-migration-progress',
-        copied: progress.copied,
-        total: progress.total,
-      } satisfies KernelMigrationProgressMsg);
-    },
-    onMigrationFinish: () => {
-      init.kernelPort.postMessage({
-        type: 'kernel-migration-finished',
-      } satisfies KernelMigrationFinishedMsg);
-    },
   });
 
   // Publish a sprinkle-manager proxy on the worker's globalThis so the

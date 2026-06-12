@@ -1,0 +1,8 @@
+{
+  "storyId": "primitives-panetag--tool",
+  "storyTitle": "Primitives/PaneTag",
+  "subsystem": "primitives",
+  "importPath": "./src/primitives/slicc-pane-tag.stories.ts",
+  "comment": "is this a duplicate or derivative of memtag?",
+  "createdAt": "2026-06-10T14:26:35.496Z"
+}

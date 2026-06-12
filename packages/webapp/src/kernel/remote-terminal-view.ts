@@ -73,7 +73,8 @@ export interface RemoteTerminalViewOptions {
 
 const DARK_THEME = {
   background: '#141414',
-  foreground: '#cfcfcf',
+  // Near-white body text — #cfcfcf read muddy on the black pane.
+  foreground: '#f2f2f2',
   cursor: '#3562ff',
   cursorAccent: '#141414',
   selectionBackground: '#3562ff40',
@@ -85,7 +86,7 @@ const DARK_THEME = {
   blue: '#3562ff',
   magenta: '#a962e8',
   cyan: '#2db9be',
-  white: '#cfcfcf',
+  white: '#f2f2f2',
   brightBlack: '#5a5a5a',
   brightRed: '#e34850',
   brightGreen: '#2d9d78',

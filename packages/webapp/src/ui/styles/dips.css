@@ -1,0 +1,69 @@
+/* Dip chrome — the iframe containers `dip.ts` hydrates into the chat
+ * thread, plus the streaming placeholder. Extracted from the legacy
+ * chat.css when the WC shell replaced the legacy UI; loaded lazily by
+ * the dip wiring (`ui/wc/wc-live.ts`) alongside the token sheet. */
+
+/* Dip container — shtml code blocks and image references hydrated into iframes */
+.msg__dip {
+  margin: 0.6em 0;
+  border-radius: var(--s2-radius-default, 8px);
+  overflow: hidden;
+  min-height: 32px;
+}
+.msg__dip iframe {
+  display: block;
+  width: 100%;
+  border: none;
+  overflow: hidden;
+  background: transparent;
+}
+
+/* Streaming-segment containers built by `renderStreamingSegmented`. */
+.msg__seg--shtml {
+  margin: 0.6em 0;
+  cursor: progress;
+  opacity: 0.92;
+}
+
+/* Streaming placeholder — replaces a fenced ```shtml block while the
+   assistant is still emitting it. */
+.msg__dip-pending {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0.6em 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--s2-bg-layer-1, rgba(0, 0, 0, 0.05));
+  color: var(--s2-content-secondary, inherit);
+  font-size: var(--s2-font-size-75, 12px);
+  line-height: 1.4;
+}
+.msg__dip-pending-label {
+  font-family: var(--s2-font-family, inherit);
+  font-weight: 500;
+  color: var(--s2-content-secondary, inherit);
+}
+.msg__dip-pending-status {
+  margin-left: auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #e6a23c;
+  flex-shrink: 0;
+  animation: dip-status-pulse 1.2s ease-in-out infinite;
+}
+@keyframes dip-status-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .msg__dip-pending-status {
+    animation: none;
+  }
+}

@@ -191,90 +191,89 @@ export function createWelcomeLickInterceptor(
 interface WelcomeBranchDeps
   extends Omit<WelcomeLickInterceptorDeps, 'firedWelcomeActions' | 'contextLabel'> {}
 
+type WelcomeBranchBody = Record<string, unknown> | null;
+
+/** Optional string field, normalized to `null` when absent/empty. */
+function optString(data: Record<string, unknown>, key: string): string | null {
+  const value = data[key];
+  return typeof value === 'string' && value ? value : null;
+}
+
+function handleOnboardingCompleteBranch(body: WelcomeBranchBody, deps: WelcomeBranchDeps): boolean {
+  const orch = deps.getOnboardingOrchestrator();
+  const profile = (body?.data as Record<string, unknown> | undefined) ?? {};
+  if (profile.mountWorkspace && deps.applyPendingMount) {
+    deps
+      .applyPendingMount()
+      .catch((err) => deps.log.warn('Failed to mount workspace from onboarding', err));
+  }
+  void orch
+    .handleOnboardingComplete(profile)
+    .catch((err) => deps.log.warn('OnboardingOrchestrator failed', err));
+  return true;
+}
+
+function handleConnectAttemptBranch(body: WelcomeBranchBody, deps: WelcomeBranchDeps): boolean {
+  const data = body?.data as Record<string, unknown> | undefined;
+  if (data) {
+    void deps
+      .getOnboardingOrchestrator()
+      .handleConnectAttempt({
+        provider: String(data.provider ?? ''),
+        apiKey: String(data.apiKey ?? ''),
+        baseUrl: optString(data, 'baseUrl'),
+        deployment: optString(data, 'deployment'),
+        apiVersion: optString(data, 'apiVersion'),
+        model: data.model == null ? null : String(data.model),
+      })
+      .catch((err) => deps.log.warn('handleConnectAttempt failed', err));
+  }
+  return true;
+}
+
+function handleOAuthAttemptBranch(body: WelcomeBranchBody, deps: WelcomeBranchDeps): boolean {
+  const data = body?.data as Record<string, unknown> | undefined;
+  if (data) {
+    void deps
+      .getOnboardingOrchestrator()
+      .handleOAuthAttempt({
+        provider: String(data.provider ?? ''),
+        baseUrl: optString(data, 'baseUrl'),
+      })
+      .catch((err) => deps.log.warn('handleOAuthAttempt failed', err));
+  }
+  return true;
+}
+
+const WELCOME_BRANCHES: Record<
+  string,
+  (body: WelcomeBranchBody, deps: WelcomeBranchDeps) => boolean
+> = {
+  'device-code-decision': (body, deps) => {
+    const decision = (body?.data as { decision?: unknown } | undefined)?.decision;
+    deps.resolveDeviceCodeDecision(decision === 'cancel' ? 'cancel' : 'continue');
+    return true;
+  },
+  'first-run': (_body, deps) => {
+    deps.getOnboardingOrchestrator().handleFirstRun();
+    return true;
+  },
+  'onboarding-complete': handleOnboardingCompleteBranch,
+  'connect-ready': (_body, deps) => handleConnectReadyBranch(deps),
+  'connect-attempt': handleConnectAttemptBranch,
+  'oauth-attempt': handleOAuthAttemptBranch,
+  'shortcut-migrate': (_body, deps) => {
+    deps.onShortcutMigrate();
+    return true;
+  },
+};
+
 function dispatchWelcomeBranch(
   action: string,
-  body: Record<string, unknown> | null,
+  body: WelcomeBranchBody,
   deps: WelcomeBranchDeps
 ): boolean {
-  const {
-    getAccounts,
-    getProviderConfig,
-    resolveDeviceCodeDecision,
-    getOnboardingOrchestrator,
-    applyPendingMount,
-    fastForward,
-    onShortcutMigrate,
-    vfs,
-    log,
-  } = deps;
-
-  if (action === 'device-code-decision') {
-    const decision = (body?.data as { decision?: unknown } | undefined)?.decision;
-    resolveDeviceCodeDecision(decision === 'cancel' ? 'cancel' : 'continue');
-    return true;
-  }
-  if (action === 'first-run') {
-    getOnboardingOrchestrator().handleFirstRun();
-    return true;
-  }
-  if (action === 'onboarding-complete') {
-    const orch = getOnboardingOrchestrator();
-    const profile = (body?.data as Record<string, unknown> | undefined) ?? {};
-    if ((profile as Record<string, unknown>).mountWorkspace && applyPendingMount) {
-      applyPendingMount().catch((err) =>
-        log.warn('Failed to mount workspace from onboarding', err)
-      );
-    }
-    void orch
-      .handleOnboardingComplete(profile as Record<string, unknown>)
-      .catch((err) => log.warn('OnboardingOrchestrator failed', err));
-    return true;
-  }
-  if (action === 'connect-ready') {
-    return handleConnectReadyBranch({
-      getAccounts,
-      getProviderConfig,
-      getOnboardingOrchestrator,
-      fastForward,
-      vfs,
-      log,
-    });
-  }
-  if (action === 'connect-attempt') {
-    const data = body?.data as Record<string, unknown> | undefined;
-    if (data) {
-      void getOnboardingOrchestrator()
-        .handleConnectAttempt({
-          provider: String(data.provider ?? ''),
-          apiKey: String(data.apiKey ?? ''),
-          baseUrl: typeof data.baseUrl === 'string' && data.baseUrl ? String(data.baseUrl) : null,
-          deployment:
-            typeof data.deployment === 'string' && data.deployment ? String(data.deployment) : null,
-          apiVersion:
-            typeof data.apiVersion === 'string' && data.apiVersion ? String(data.apiVersion) : null,
-          model: data.model == null ? null : String(data.model),
-        })
-        .catch((err) => log.warn('handleConnectAttempt failed', err));
-    }
-    return true;
-  }
-  if (action === 'oauth-attempt') {
-    const data = body?.data as Record<string, unknown> | undefined;
-    if (data) {
-      void getOnboardingOrchestrator()
-        .handleOAuthAttempt({
-          provider: String(data.provider ?? ''),
-          baseUrl: typeof data.baseUrl === 'string' && data.baseUrl ? String(data.baseUrl) : null,
-        })
-        .catch((err) => log.warn('handleOAuthAttempt failed', err));
-    }
-    return true;
-  }
-  if (action === 'shortcut-migrate') {
-    onShortcutMigrate();
-    return true;
-  }
-  return false;
+  return WELCOME_BRANCHES[action]?.(body, deps) ?? false;
 }
 
 function handleConnectReadyBranch(deps: {

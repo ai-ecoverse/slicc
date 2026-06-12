@@ -1099,6 +1099,51 @@ export class OffscreenBridge implements KernelFacade {
    *   2. Live `ScoopContext.getAgentMessages()` translated to the
    *      chat shape so tool-use blocks become readable text.
    */
+  /**
+   * Bootstrap the cone. This path is cone-only — non-cone scoops are created
+   * inside the offscreen orchestrator by the agent's `scoop_scoop` tool,
+   * which is where their path-config defaults (visiblePaths / writablePaths)
+   * get injected. Building a non-cone scoop here would bypass that layer and
+   * yield a sandbox with no writable paths; see #436.
+   */
+  private async handleConeCreate(name: string): Promise<void> {
+    if (!this.orchestrator) return;
+    const scoop: RegisteredScoop = {
+      jid: `cone_${Date.now()}`,
+      name,
+      folder: 'cone',
+      isCone: true,
+      type: 'cone',
+      requiresTrigger: false,
+      assistantLabel: 'sliccy',
+      addedAt: new Date().toISOString(),
+    };
+    await this.orchestrator.registerScoop(scoop);
+    this.emit({
+      type: 'scoop-created',
+      scoop: this.toScoopSnapshot(scoop),
+    } satisfies ScoopCreatedMsg);
+  }
+
+  /**
+   * Session-stats pull: total cost (floatbar counter) + per-scoop
+   * context-window fill (the chip pupils dilate as the context fills).
+   */
+  private handleRequestSessionStats(requestId: string): void {
+    let totalCost = 0;
+    let fills: Array<{ jid: string; fill: number }> = [];
+    try {
+      totalCost = (this.orchestrator?.getSessionCosts() ?? []).reduce(
+        (sum, scoop) => sum + scoop.usage.cost.total,
+        0
+      );
+      fills = this.orchestrator?.getContextFills() ?? [];
+    } catch {
+      // Stats are decorative — never fail the request loop over them.
+    }
+    this.emit({ type: 'session-stats', requestId, totalCost, fills });
+  }
+
   private async handleRequestScoopTranscript(requestId: string, scoopJid: string): Promise<void> {
     const empty = (): void => {
       this.emit({ type: 'scoop-transcript', requestId, scoopJid, transcript: '' });
@@ -1271,29 +1316,9 @@ export class OffscreenBridge implements KernelFacade {
         break;
       }
 
-      case 'cone-create': {
-        // This path is cone-only. Non-cone scoops are created inside the
-        // offscreen orchestrator by the agent's `scoop_scoop` tool, which is
-        // where their path-config defaults (visiblePaths / writablePaths) get
-        // injected. Building a non-cone scoop here would bypass that layer
-        // and yield a sandbox with no writable paths; see #436.
-        const scoop: RegisteredScoop = {
-          jid: `cone_${Date.now()}`,
-          name: msg.name,
-          folder: 'cone',
-          isCone: true,
-          type: 'cone',
-          requiresTrigger: false,
-          assistantLabel: 'sliccy',
-          addedAt: new Date().toISOString(),
-        };
-        await this.orchestrator.registerScoop(scoop);
-        this.emit({
-          type: 'scoop-created',
-          scoop: this.toScoopSnapshot(scoop),
-        } satisfies ScoopCreatedMsg);
+      case 'cone-create':
+        await this.handleConeCreate(msg.name);
         break;
-      }
 
       case 'scoop-feed': {
         await this.orchestrator.delegateToScoop(msg.scoopJid, msg.prompt, 'sliccy');
@@ -1335,19 +1360,20 @@ export class OffscreenBridge implements KernelFacade {
         break;
       }
 
+      case 'request-session-stats':
+        this.handleRequestSessionStats(msg.requestId);
+        break;
+
       case 'clear-chat': {
         await this.handleClearChat(msg.requestId);
         break;
       }
 
-      case 'clear-filesystem': {
-        try {
-          await this.orchestrator.resetFilesystem();
-        } catch (err) {
-          console.error('[offscreen-bridge] clear-filesystem failed:', err);
-        }
+      case 'clear-filesystem':
+        await this.orchestrator
+          .resetFilesystem()
+          .catch((err) => console.error('[offscreen-bridge] clear-filesystem failed:', err));
         break;
-      }
 
       case 'refresh-model': {
         // Side panel already wrote to localStorage (shared origin).

@@ -1,0 +1,65 @@
+/* ================================================================== */
+/* Adobe Clean @font-face for the WC shell.                           */
+/*                                                                    */
+/* The library's tokens reference the prototype's family name         */
+/* ("adobe-clean"); the legacy stylesheet declared "Adobe Clean" and  */
+/* never loads alongside the WC shell — so without this sheet, --ui   */
+/* silently fell through to Inter/system. Declared under BOTH names   */
+/* so borrowed legacy surfaces (settings dialog) resolve too.         */
+/* ================================================================== */
+@font-face {
+  font-family: "adobe-clean";
+  src: url("/fonts/AdobeClean-Regular.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "adobe-clean";
+  src: url("/fonts/AdobeClean-Medium.otf") format("opentype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "adobe-clean";
+  src: url("/fonts/AdobeClean-Bold.otf") format("opentype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "adobe-clean";
+  src: url("/fonts/AdobeClean-ExtraBold.otf") format("opentype");
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Adobe Clean";
+  src: url("/fonts/AdobeClean-Regular.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Adobe Clean";
+  src: url("/fonts/AdobeClean-Medium.otf") format("opentype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Adobe Clean";
+  src: url("/fonts/AdobeClean-Bold.otf") format("opentype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Adobe Clean";
+  src: url("/fonts/AdobeClean-ExtraBold.otf") format("opentype");
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}
