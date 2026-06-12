@@ -294,6 +294,29 @@ export class WcChatController {
       case 'error':
         this.#handleError(event.error);
         break;
+      case 'tool_ui': {
+        const msg = this.#findMessage(event.messageId);
+        if (!msg) break;
+        const call = (msg.toolCalls ?? []).find(
+          (c) => c.name === event.toolName && !c._toolUIRequestId
+        );
+        if (!call) break;
+        call._toolUIRequestId = event.requestId;
+        call._toolUIHtml = event.html;
+        this.#rerenderMessage(msg);
+        break;
+      }
+      case 'tool_ui_done': {
+        for (const msg of this.#messages) {
+          const call = (msg.toolCalls ?? []).find((c) => c._toolUIRequestId === event.requestId);
+          if (!call) continue;
+          call._toolUIRequestId = undefined;
+          call._toolUIHtml = undefined;
+          this.#rerenderMessage(msg);
+          break;
+        }
+        break;
+      }
       default:
         break;
     }

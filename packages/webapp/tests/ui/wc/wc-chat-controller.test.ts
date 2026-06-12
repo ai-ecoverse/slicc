@@ -347,6 +347,55 @@ describe('WcChatController scroll pinning', () => {
   });
 });
 
+describe('tool_ui events', () => {
+  let agent: FakeAgent;
+  let thread: HTMLElement;
+  let controller: WcChatController;
+
+  beforeEach(() => {
+    thread = document.createElement('div');
+    agent = new FakeAgent();
+    controller = new WcChatController({ thread, agent });
+  });
+
+  it('tool_ui sets _toolUIRequestId and _toolUIHtml on the matching tool call', () => {
+    const messageId = 'msg-1';
+    agent.emit({ type: 'message_start', messageId });
+    agent.emit({ type: 'tool_use_start', messageId, toolName: 'bash', toolInput: {} });
+    agent.emit({
+      type: 'tool_ui',
+      messageId,
+      toolName: 'bash',
+      requestId: 'req-42',
+      html: '<div class="sprinkle-action-card">approve</div>',
+    });
+
+    const messages = controller.getMessages();
+    expect(messages).toHaveLength(1);
+    const call = messages[0].toolCalls?.[0];
+    expect(call?._toolUIRequestId).toBe('req-42');
+    expect(call?._toolUIHtml).toBe('<div class="sprinkle-action-card">approve</div>');
+  });
+
+  it('tool_ui_done clears _toolUIRequestId and _toolUIHtml', () => {
+    const messageId = 'msg-2';
+    agent.emit({ type: 'message_start', messageId });
+    agent.emit({ type: 'tool_use_start', messageId, toolName: 'bash', toolInput: {} });
+    agent.emit({
+      type: 'tool_ui',
+      messageId,
+      toolName: 'bash',
+      requestId: 'req-7',
+      html: '<div/>',
+    });
+    agent.emit({ type: 'tool_ui_done', messageId, requestId: 'req-7' });
+
+    const call = controller.getMessages()[0].toolCalls?.[0];
+    expect(call?._toolUIRequestId).toBeUndefined();
+    expect(call?._toolUIHtml).toBeUndefined();
+  });
+});
+
 describe('WcChatController render-failure degradation', () => {
   it('degrades a message whose renderer throws to a plain bubble', () => {
     installWcDomStubs();
