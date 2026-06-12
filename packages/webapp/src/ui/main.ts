@@ -86,7 +86,7 @@ async function main(): Promise<void> {
 
   if (isExtension) {
     const { mountWcUiExtension } = await import('./wc/wc-extension.js');
-    return mountWcUiExtension(app, log);
+    return mountWcUiExtension(app, log, runtimeMode === 'extension-detached');
   }
 
   const { mountWcUiLive } = await import('./wc/wc-live.js');

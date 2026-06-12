@@ -8,12 +8,20 @@
 
 import type { BootStageLogger } from '../boot/types.js';
 import { OffscreenClient } from '../offscreen-client.js';
+import { wireWcDetached } from './wc-detached.js';
 import { attachWcClient, createWcLiveCallbacks, prepareWcShell } from './wc-live.js';
 
-export async function mountWcUiExtension(app: HTMLElement, log: BootStageLogger): Promise<void> {
+export async function mountWcUiExtension(
+  app: HTMLElement,
+  log: BootStageLogger,
+  isDetached = false
+): Promise<void> {
   const boot = prepareWcShell(app, 'extension · wc');
   const client = new OffscreenClient(createWcLiveCallbacks(boot.wiring));
   attachWcClient(boot, client, log);
+  // Detached-popout mutual exclusion: a detached tab claims the SW lock,
+  // every other surface yields on the `detached-active` broadcast.
+  wireWcDetached({ client, isDetachedSelf: isDetached });
   // Sudo approvals: the side-panel realm answers the offscreen broker.
   const { setupSudoExtension } = await import('../boot/setup-sudo.js');
   await setupSudoExtension({ log });

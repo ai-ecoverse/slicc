@@ -146,9 +146,17 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
     }
     return items;
   };
+  // Pop out (extension side panel only): the detached tab IS the popout, so
+  // it never offers one.
+  const isDetachedSelf = new URLSearchParams(window.location.search).has('detached');
+  const popoutItems = (): NonNullable<typeof refs.avatarMenu.items> =>
+    isExtension && !isDetachedSelf
+      ? [{ id: 'popout', label: 'Pop out into a tab', icon: 'external-link' }]
+      : [];
   const syncMenuItems = (): void => {
     refs.avatarMenu.items = [
       { id: 'settings', label: 'Account settings…', icon: 'settings' },
+      ...popoutItems(),
       ...trayMenuItems(),
     ];
   };
@@ -199,6 +207,12 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
     const id = (event as CustomEvent<{ id?: string }>).detail?.id;
     if (id && handleTrayAction(id)) {
       syncMenuItems();
+      return;
+    }
+    if (id === 'popout') {
+      import('./wc-detached.js')
+        .then(({ requestDetachedPopout }) => requestDetachedPopout())
+        .catch((err) => log.error('detached popout request failed', err));
       return;
     }
     if (id === 'settings') {
