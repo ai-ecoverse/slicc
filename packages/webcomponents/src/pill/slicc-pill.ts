@@ -326,7 +326,10 @@ const PILL_STYLE = `
   .pill{position:relative;display:inline-flex;align-items:center;gap:8px;width:var(--pill-w);font:500 13px ui-sans-serif,system-ui,-apple-system,sans-serif;color:var(--accent);background:transparent;border:1.5px solid var(--accent);border-radius:9999px;padding:0 14px 0 0;cursor:pointer;line-height:1;overflow:hidden;transition:background .2s ease,color .2s ease;}
   .pill.active{background:var(--accent);} .pill.active .label{color:#fff;}
   .pill:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
-  .icon{position:relative;z-index:0;width:30px;height:30px;flex:0 0 auto;background:var(--icon-tint);}
+  /* The face wash fades radially into the pill ground instead of ending in a
+     hard rectangle — most visible on the ACTIVE pill, where the flat tint box
+     used to cut against the accent fill right of the eyes. */
+  .icon{position:relative;z-index:0;width:30px;height:30px;flex:0 0 auto;background:radial-gradient(135% 145% at 20% 78%,var(--icon-tint) 42%,transparent 75%);}
   .icon-inner{position:absolute;inset:0;transform-origin:0 0;transform:translate(var(--tx),var(--ty)) scale(var(--zoom));transition:transform .4s cubic-bezier(.34,1.4,.5,1);}
   .pill:hover .icon-inner,.pill:focus-visible .icon-inner{transform:translate(var(--ox,0%),var(--oy,0%)) scale(var(--ozoom,1));}
   .glyph{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:var(--g);height:var(--g);display:block;overflow:visible;}

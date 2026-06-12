@@ -107,9 +107,11 @@ void main(){
 const FRAG_FREEZER = `${HEAD}${NOISE}
 void main(){
   vec2 uv=gl_FragCoord.xy/u_res; uv.y-=u_scroll; float aspect=u_res.x/u_res.y; vec2 p=(uv-0.5); p.x*=aspect;
-  vec3 iceCol=mix(vec3(0.62,0.76,0.92),vec3(0.78,0.88,1.0),u_dark);
-  vec3 deepIce=mix(vec3(0.40,0.56,0.78),vec3(0.50,0.66,0.88),u_dark);
-  vec3 bg=mix(themeBg(),iceCol,0.12); float dc=distance(uv,vec2(0.0,0.0));
+  /* Contrast: vivid, BRIGHT ice in light mode; deep, DARK ice in dark mode —
+     the old values sat too close to both theme grounds and read washed-out. */
+  vec3 iceCol=mix(vec3(0.55,0.80,1.0),vec3(0.36,0.52,0.78),u_dark);
+  vec3 deepIce=mix(vec3(0.20,0.44,0.84),vec3(0.12,0.24,0.46),u_dark);
+  vec3 bg=mix(themeBg(),iceCol,0.16); float dc=distance(uv,vec2(0.0,0.0));
   float ragged=0.10*fbm(uv*6.0+3.0)+0.05*fbm(uv*14.0); float front=u_freeze*0.66+ragged-0.05;
   float edge=front-dc; float frozen=smoothstep(-0.04,0.06,edge); float wetBand=smoothstep(0.12,0.0,abs(edge));
   float ripple=0.015*sin(dc*40.0-u_time*0.4)*frozen; vec2 q=uv*aspect+vec2(ripple,ripple*0.5);
@@ -117,9 +119,9 @@ void main(){
   float facet=smoothstep(0.45,0.55,crystals); float veins=smoothstep(0.03,0.0,abs(fract(crystals*6.0)-0.5)-0.02);
   vec3 col=bg; vec3 wet=mix(bg,iceCol,0.5); float wetSpec=pow(clamp(fbm(uv*10.0-u_time*0.2),0.0,1.0),2.0);
   wet+=wetSpec*vec3(1.0)*0.25; col=mix(col,wet,wetBand*0.45);
-  vec3 frost=mix(deepIce,iceCol,facet); frost+=veins*vec3(1.0)*0.25;
+  vec3 frost=mix(deepIce,iceCol,facet); frost+=veins*vec3(1.0)*0.30;
   float spark=smoothstep(0.92,1.0,fbm(uv*30.0))*(0.5+0.5*sin(u_time*0.6+crystals*20.0));
-  frost+=spark*vec3(1.0)*0.4*frozen; col=mix(col,frost,frozen*0.75);
+  frost+=spark*vec3(1.0)*0.4*frozen; col=mix(col,frost,frozen*0.85);
   float rim=smoothstep(0.05,0.0,abs(edge))*0.6; col+=rim*iceCol; gl_FragColor=vec4(col,1.0);
 }`;
 
@@ -148,6 +150,9 @@ const STYLE = `
 const SHEET = sheet(STYLE);
 
 const MAX_DPR = 2;
+
+/** Fraction of the chat scroll the field pans by (1 = attached, 0 = static). */
+const SCROLL_PARALLAX = 0.35;
 const UNIFORMS = [
   'u_res',
   'u_scroll',
@@ -420,7 +425,12 @@ export class SliccShader extends HTMLElement {
     gl.uniform1f(u.u_freeze ?? null, clampNum(this.coverage * this.intensity, 0, 1, 0.66) * 2.2);
     gl.uniform1f(u.u_dark ?? null, dark);
     // Scroll arrives in CSS px; the pattern space is viewport-height units.
-    gl.uniform1f(u.u_scroll ?? null, this.scrollOffset / Math.max(1, cv.clientHeight || cv.height));
+    // Parallax: the field pans at a fraction of the content scroll — a 1:1
+    // rate reads as "attached" (zero depth); the lag is what sells distance.
+    gl.uniform1f(
+      u.u_scroll ?? null,
+      (this.scrollOffset * SCROLL_PARALLAX) / Math.max(1, cv.clientHeight || cv.height)
+    );
     // Cone-mode knobs — pulled verbatim from the prototype's frame loop. u_blink
     // in particular is 0.05 (NOT 1.0): the Game-of-Life cells breathe slowly.
     gl.uniform1f(u.u_density ?? null, 0.29);
