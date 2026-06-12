@@ -3,6 +3,7 @@ import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { defineConfig } from 'vite';
 import { stripBiomeWasmAssetPlugin } from './vite-plugins/strip-biome-wasm-asset';
+import { stripOrtWasmAssetPlugin } from './vite-plugins/strip-ort-wasm-asset';
 
 const Dirname = dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = resolve(Dirname, '../..');
@@ -58,318 +59,222 @@ function stubPiNodeInternalsPlugin() {
   };
 }
 
+/** esbuild plugin: strip ?raw suffix and load .svg files as text (matches Vite's ?raw). */
+function rawSvgEsbuildPlugin(): import('esbuild').Plugin {
+  return {
+    name: 'raw-svg',
+    setup(build) {
+      build.onResolve({ filter: /\.svg\?raw$/ }, (args) => ({
+        path: resolve(args.resolveDir, args.path.replace('?raw', '')),
+        namespace: 'raw-svg',
+      }));
+      build.onLoad({ filter: /.*/, namespace: 'raw-svg' }, async (args) => {
+        const { readFile } = await import('fs/promises');
+        return { contents: await readFile(args.path, 'utf8'), loader: 'text' };
+      });
+    },
+  };
+}
+
+interface IifeMiddlewareOptions {
+  /** Log label, e.g. 'preview-sw'. */
+  label: string;
+  /** Entry file the IIFE bundles. */
+  entry: string;
+  /**
+   * Skip rebuilds while the ENTRY file's mtime is unchanged. Only safe for
+   * entries whose transitive deps rarely change — an mtime-on-entry-only
+   * cache silently serves stale code when a dep changes, so bundles with
+   * live-edited imports rebuild every request (esbuild is ~5ms).
+   */
+  cacheByMtime?: boolean;
+  /** Extra response headers (e.g. Service-Worker-Allowed). */
+  headers?: Record<string, string>;
+  /** Extra esbuild plugins for this entry. */
+  esbuildPlugins?: import('esbuild').Plugin[];
+}
+
+/** Dev middleware: serve `entry` as a freshly-esbuilt IIFE bundle. */
+function iifeBundleMiddleware(options: IifeMiddlewareOptions) {
+  let cachedCode: string | null = null;
+  let cachedMtime = 0;
+  return async (_req: unknown, res: import('node:http').ServerResponse): Promise<void> => {
+    try {
+      let mtime = 0;
+      if (options.cacheByMtime) {
+        const { statSync } = await import('fs');
+        mtime = statSync(options.entry).mtimeMs;
+      }
+      if (!cachedCode || !options.cacheByMtime || mtime > cachedMtime) {
+        const esbuild = await import('esbuild');
+        const result = await esbuild.build({
+          entryPoints: [options.entry],
+          bundle: true,
+          write: false,
+          format: 'iife',
+          target: 'esnext',
+          define: { __DEV__: 'true', global: 'globalThis' },
+          ...(options.esbuildPlugins ? { plugins: options.esbuildPlugins } : {}),
+        });
+        cachedCode = result.outputFiles![0].text;
+        cachedMtime = mtime;
+      }
+      res.setHeader('Content-Type', 'application/javascript');
+      for (const [name, value] of Object.entries(options.headers ?? {})) {
+        res.setHeader(name, value);
+      }
+      res.end(cachedCode);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error(`[${options.label}] Failed to build:`, errMsg);
+      res.statusCode = 500;
+      res.setHeader('Content-Type', 'application/javascript');
+      res.end(`console.error('[${options.label}] Build failed:', ${JSON.stringify(errMsg)});`);
+    }
+  };
+}
+
+/** The production esbuild defaults every runtime-asset IIFE shares. */
+const PROD_IIFE_DEFAULTS = {
+  bundle: true,
+  format: 'iife',
+  target: 'esnext',
+  minify: true,
+  define: { __DEV__: 'false', global: 'globalThis' },
+} as const;
+
+/** closeBundle: emit the standalone runtime-asset bundles into dist/ui. */
+async function buildProductionRuntimeAssets(): Promise<void> {
+  // Keep this config focused on production build artifacts; node-server owns dev serving.
+  // Rollup would code-split LightningFS into a shared chunk, which SWs can't import.
+  const esbuild = await import('esbuild');
+  const { copyFileSync } = await import('fs');
+  await esbuild.build({
+    ...PROD_IIFE_DEFAULTS,
+    entryPoints: [previewSwEntry],
+    outfile: resolve(uiOutDir, 'preview-sw.js'),
+  });
+
+  // LLM-proxy SW — root-scope, intercepts cross-origin LLM fetches
+  // and reroutes them through /api/fetch-proxy in CLI mode.
+  await esbuild.build({
+    ...PROD_IIFE_DEFAULTS,
+    entryPoints: [llmProxySwEntry],
+    outfile: resolve(uiOutDir, 'llm-proxy-sw.js'),
+  });
+
+  // Electron reinjection still needs a standalone production bundle.
+  await esbuild.build({
+    ...PROD_IIFE_DEFAULTS,
+    entryPoints: [electronOverlayEntry],
+    outfile: resolve(uiOutDir, 'electron-overlay-entry.js'),
+    plugins: [rawSvgEsbuildPlugin()],
+  });
+
+  // <slicc-editor> custom element bundle for sprinkle iframes.
+  await esbuild.build({
+    ...PROD_IIFE_DEFAULTS,
+    entryPoints: [sliccEditorEntry],
+    outfile: resolve(uiOutDir, 'slicc-editor.js'),
+  });
+
+  // <slicc-diff> custom element bundle for sprinkle iframes.
+  await esbuild.build({
+    ...PROD_IIFE_DEFAULTS,
+    entryPoints: [sliccDiffEntry],
+    outfile: resolve(uiOutDir, 'slicc-diff.js'),
+    plugins: [pierreDiffsPlugin()],
+  });
+
+  // Lucide icons bundle for sprinkle iframes.
+  await esbuild.build({
+    ...PROD_IIFE_DEFAULTS,
+    entryPoints: [lucideIconsEntry],
+    outfile: resolve(uiOutDir, 'lucide-icons.js'),
+  });
+
+  // Note: `kernel-worker.ts` rides the Rollup pipeline via
+  // Vite's native `new Worker(new URL(...), { type: 'module' })`
+  // detection in `kernel/spawn.ts`. `resolve.alias` carries over
+  // to the worker bundle, but `plugins` does NOT — see the
+  // `worker.plugins` block below where we re-pass the stub plugin.
+  // No standalone esbuild call needed.
+  copyFileSync(resolve(Dirname, '../assets/logos/favicon.png'), resolve(uiOutDir, 'favicon.png'));
+  // Vite preserves the nested HTML path when the repo root is the Vite root.
+  // In some Vite versions the HTML lands directly at outDir root — only copy if nested.
+  const { existsSync } = await import('fs');
+  const nestedHtml = resolve(uiOutDir, 'packages/webapp/index.html');
+  if (existsSync(nestedHtml)) {
+    copyFileSync(nestedHtml, resolve(uiOutDir, 'index.html'));
+  }
+}
+
+/** Dev middlewares + production bundles for the standalone runtime assets. */
+function buildWebappRuntimeAssetsPlugin() {
+  return {
+    name: 'build-webapp-runtime-assets',
+    configureServer(server: {
+      middlewares: {
+        use: (path: string, handler: ReturnType<typeof iifeBundleMiddleware>) => void;
+      };
+    }) {
+      // preview-sw / electron-overlay cache by entry mtime; the others (and
+      // the llm-proxy SW, whose deps are live-edited) rebuild every request.
+      server.middlewares.use(
+        '/preview-sw.js',
+        iifeBundleMiddleware({ label: 'preview-sw', entry: previewSwEntry, cacheByMtime: true })
+      );
+      // SW must be served at the root scope; instruct the browser not to
+      // cache it so dev-mode rebuilds always reach the page.
+      server.middlewares.use(
+        '/llm-proxy-sw.js',
+        iifeBundleMiddleware({
+          label: 'llm-proxy-sw',
+          entry: llmProxySwEntry,
+          headers: { 'Service-Worker-Allowed': '/', 'Cache-Control': 'no-store' },
+        })
+      );
+      server.middlewares.use(
+        '/electron-overlay-entry.js',
+        iifeBundleMiddleware({
+          label: 'electron-overlay-entry',
+          entry: electronOverlayEntry,
+          cacheByMtime: true,
+          esbuildPlugins: [rawSvgEsbuildPlugin()],
+        })
+      );
+      server.middlewares.use(
+        '/slicc-editor.js',
+        iifeBundleMiddleware({ label: 'slicc-editor', entry: sliccEditorEntry })
+      );
+      server.middlewares.use(
+        '/slicc-diff.js',
+        iifeBundleMiddleware({
+          label: 'slicc-diff',
+          entry: sliccDiffEntry,
+          esbuildPlugins: [pierreDiffsPlugin() as import('esbuild').Plugin],
+        })
+      );
+      // Note: `src/kernel/kernel-worker.ts` is loaded via Vite's native
+      // `new Worker(new URL('./kernel-worker.ts', import.meta.url))` pattern
+      // in `kernel/spawn.ts` — no dev middleware or closeBundle entry needed.
+      server.middlewares.use(
+        '/lucide-icons.js',
+        iifeBundleMiddleware({ label: 'lucide-icons', entry: lucideIconsEntry })
+      );
+    },
+    closeBundle: buildProductionRuntimeAssets,
+  };
+}
+
 export default defineConfig(({ mode }) => ({
   root: workspaceRoot,
   publicDir: resolve(workspaceRoot, 'packages/assets'),
   plugins: [
     stripBiomeWasmAssetPlugin(),
+    stripOrtWasmAssetPlugin(),
     stubPiNodeInternalsPlugin(),
-    {
-      name: 'build-webapp-runtime-assets',
-      configureServer(server) {
-        let cachedSwCode: string | null = null;
-        let cachedSwMtime = 0;
-        let cachedLlmSwCode: string | null = null;
-        let cachedOverlayCode: string | null = null;
-        let cachedOverlayMtime = 0;
-        // Editor/diff/lucide IIFE bundles are always rebuilt in dev (no mtime cache)
-        // because transitive imports wouldn't invalidate the entry file's mtime.
-
-        server.middlewares.use('/preview-sw.js', async (_req, res) => {
-          try {
-            const { statSync } = await import('fs');
-            const mtime = statSync(previewSwEntry).mtimeMs;
-
-            if (!cachedSwCode || mtime > cachedSwMtime) {
-              const esbuild = await import('esbuild');
-              const result = await esbuild.build({
-                entryPoints: [previewSwEntry],
-                bundle: true,
-                write: false,
-                format: 'iife',
-                target: 'esnext',
-                define: { __DEV__: 'true', global: 'globalThis' },
-              });
-              cachedSwCode = result.outputFiles![0].text;
-              cachedSwMtime = mtime;
-            }
-
-            res.setHeader('Content-Type', 'application/javascript');
-            res.end(cachedSwCode);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            console.error('[preview-sw-builder] Failed to build:', msg);
-            res.statusCode = 500;
-            res.setHeader('Content-Type', 'application/javascript');
-            res.end(`console.error('[preview-sw] Build failed: ${msg.replace(/'/g, "\\'")}');`);
-          }
-        });
-
-        server.middlewares.use('/llm-proxy-sw.js', async (_req, res) => {
-          try {
-            // Rebuild on every request and key the cache off the
-            // esbuild metafile's input list, not just the entry's
-            // mtime. The SW imports `../shell/proxy-headers.ts` (and
-            // could grow more deps), so an mtime-on-entry-only cache
-            // would silently serve stale code whenever a transitive
-            // dep changed. esbuild's incremental rebuilds are cheap
-            // (~5ms) so we just always rebuild and let esbuild's own
-            // file-content cache handle the heavy lifting.
-            const esbuild = await import('esbuild');
-            const result = await esbuild.build({
-              entryPoints: [llmProxySwEntry],
-              bundle: true,
-              write: false,
-              format: 'iife',
-              target: 'esnext',
-              define: { __DEV__: 'true', global: 'globalThis' },
-            });
-            cachedLlmSwCode = result.outputFiles![0].text;
-
-            res.setHeader('Content-Type', 'application/javascript');
-            // SW must be served at the root scope; instruct the browser
-            // not to cache it so dev-mode rebuilds always reach the page.
-            res.setHeader('Service-Worker-Allowed', '/');
-            res.setHeader('Cache-Control', 'no-store');
-            res.end(cachedLlmSwCode);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            console.error('[llm-proxy-sw-builder] Failed to build:', msg);
-            res.statusCode = 500;
-            res.setHeader('Content-Type', 'application/javascript');
-            res.end(`console.error('[llm-proxy-sw] Build failed: ${msg.replace(/'/g, "\\'")}');`);
-          }
-        });
-
-        server.middlewares.use('/electron-overlay-entry.js', async (_req, res) => {
-          try {
-            const { statSync } = await import('fs');
-            const mtime = statSync(electronOverlayEntry).mtimeMs;
-
-            if (!cachedOverlayCode || mtime > cachedOverlayMtime) {
-              const esbuild = await import('esbuild');
-              const result = await esbuild.build({
-                entryPoints: [electronOverlayEntry],
-                bundle: true,
-                write: false,
-                format: 'iife',
-                target: 'esnext',
-                define: { __DEV__: 'true', global: 'globalThis' },
-                plugins: [
-                  {
-                    name: 'raw-svg',
-                    setup(build) {
-                      build.onResolve({ filter: /\.svg\?raw$/ }, (args) => ({
-                        path: resolve(args.resolveDir, args.path.replace('?raw', '')),
-                        namespace: 'raw-svg',
-                      }));
-                      build.onLoad({ filter: /.*/, namespace: 'raw-svg' }, async (args) => {
-                        const { readFile } = await import('fs/promises');
-                        return { contents: await readFile(args.path, 'utf8'), loader: 'text' };
-                      });
-                    },
-                  },
-                ],
-              });
-              cachedOverlayCode = result.outputFiles![0].text;
-              cachedOverlayMtime = mtime;
-            }
-
-            res.setHeader('Content-Type', 'application/javascript');
-            res.end(cachedOverlayCode);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            console.error('[electron-overlay-entry] Failed to build:', msg);
-            res.statusCode = 500;
-            res.setHeader('Content-Type', 'application/javascript');
-            res.end(
-              `console.error('[electron-overlay-entry] Build failed: ${msg.replace(/'/g, "\\'")}');`
-            );
-          }
-        });
-
-        server.middlewares.use('/slicc-editor.js', async (_req, res) => {
-          try {
-            const esbuild = await import('esbuild');
-            const result = await esbuild.build({
-              entryPoints: [sliccEditorEntry],
-              bundle: true,
-              write: false,
-              format: 'iife',
-              target: 'esnext',
-              define: { __DEV__: 'true', global: 'globalThis' },
-            });
-            res.setHeader('Content-Type', 'application/javascript');
-            res.end(result.outputFiles![0].text);
-          } catch (err) {
-            const errMsg = err instanceof Error ? err.message : String(err);
-            console.error('[slicc-editor] Failed to build:', errMsg);
-            res.statusCode = 500;
-            res.setHeader('Content-Type', 'application/javascript');
-            res.end(`console.error('[slicc-editor] Build failed:', ${JSON.stringify(errMsg)});`);
-          }
-        });
-
-        server.middlewares.use('/slicc-diff.js', async (_req, res) => {
-          try {
-            const esbuild = await import('esbuild');
-            const result = await esbuild.build({
-              entryPoints: [sliccDiffEntry],
-              bundle: true,
-              write: false,
-              format: 'iife',
-              target: 'esnext',
-              define: { __DEV__: 'true', global: 'globalThis' },
-              plugins: [pierreDiffsPlugin()],
-            });
-            res.setHeader('Content-Type', 'application/javascript');
-            res.end(result.outputFiles![0].text);
-          } catch (err) {
-            const errMsg = err instanceof Error ? err.message : String(err);
-            console.error('[slicc-diff] Failed to build:', errMsg);
-            res.statusCode = 500;
-            res.setHeader('Content-Type', 'application/javascript');
-            res.end(`console.error('[slicc-diff] Build failed:', ${JSON.stringify(errMsg)});`);
-          }
-        });
-
-        // Note: `src/kernel/kernel-worker.ts` is loaded via Vite's
-        // native `new Worker(new URL('./kernel-worker.ts',
-        // import.meta.url), { type: 'module' })` pattern in
-        // `kernel/spawn.ts`. Vite handles dev serving and production
-        // bundling through the same Rollup pipeline that resolves
-        // `resolve.alias` and the `stub-pi-node-internals` resolveId
-        // plugin — no dev middleware or closeBundle entry needed.
-
-        server.middlewares.use('/lucide-icons.js', async (_req, res) => {
-          try {
-            const esbuild = await import('esbuild');
-            const result = await esbuild.build({
-              entryPoints: [lucideIconsEntry],
-              bundle: true,
-              write: false,
-              format: 'iife',
-              target: 'esnext',
-              define: { __DEV__: 'true', global: 'globalThis' },
-            });
-            res.setHeader('Content-Type', 'application/javascript');
-            res.end(result.outputFiles![0].text);
-          } catch (err) {
-            const errMsg = err instanceof Error ? err.message : String(err);
-            console.error('[lucide-icons] Failed to build:', errMsg);
-            res.statusCode = 500;
-            res.setHeader('Content-Type', 'application/javascript');
-            res.end(`console.error('[lucide-icons] Build failed:', ${JSON.stringify(errMsg)});`);
-          }
-        });
-      },
-      async closeBundle() {
-        // Keep this config focused on production build artifacts; node-server owns dev serving.
-        // Rollup would code-split LightningFS into a shared chunk, which SWs can't import.
-        const esbuild = await import('esbuild');
-        const { copyFileSync } = await import('fs');
-        await esbuild.build({
-          entryPoints: [previewSwEntry],
-          bundle: true,
-          outfile: resolve(uiOutDir, 'preview-sw.js'),
-          format: 'iife',
-          target: 'esnext',
-          minify: true,
-          define: { __DEV__: 'false', global: 'globalThis' },
-        });
-
-        // LLM-proxy SW — root-scope, intercepts cross-origin LLM fetches
-        // and reroutes them through /api/fetch-proxy in CLI mode.
-        await esbuild.build({
-          entryPoints: [llmProxySwEntry],
-          bundle: true,
-          outfile: resolve(uiOutDir, 'llm-proxy-sw.js'),
-          format: 'iife',
-          target: 'esnext',
-          minify: true,
-          define: { __DEV__: 'false', global: 'globalThis' },
-        });
-
-        // Electron reinjection still needs a standalone production bundle.
-        await esbuild.build({
-          entryPoints: [electronOverlayEntry],
-          bundle: true,
-          outfile: resolve(uiOutDir, 'electron-overlay-entry.js'),
-          format: 'iife',
-          target: 'esnext',
-          minify: true,
-          define: { __DEV__: 'false', global: 'globalThis' },
-          plugins: [
-            {
-              name: 'raw-svg',
-              setup(build) {
-                // Strip ?raw suffix and load .svg files as text (matches Vite's ?raw behavior).
-                build.onResolve({ filter: /\.svg\?raw$/ }, (args) => ({
-                  path: resolve(args.resolveDir, args.path.replace('?raw', '')),
-                  namespace: 'raw-svg',
-                }));
-                build.onLoad({ filter: /.*/, namespace: 'raw-svg' }, async (args) => {
-                  const { readFile } = await import('fs/promises');
-                  return { contents: await readFile(args.path, 'utf8'), loader: 'text' };
-                });
-              },
-            },
-          ],
-        });
-
-        // <slicc-editor> custom element bundle for sprinkle iframes.
-        await esbuild.build({
-          entryPoints: [sliccEditorEntry],
-          bundle: true,
-          outfile: resolve(uiOutDir, 'slicc-editor.js'),
-          format: 'iife',
-          target: 'esnext',
-          minify: true,
-          define: { __DEV__: 'false', global: 'globalThis' },
-        });
-
-        // <slicc-diff> custom element bundle for sprinkle iframes.
-        await esbuild.build({
-          entryPoints: [sliccDiffEntry],
-          bundle: true,
-          outfile: resolve(uiOutDir, 'slicc-diff.js'),
-          format: 'iife',
-          target: 'esnext',
-          minify: true,
-          define: { __DEV__: 'false', global: 'globalThis' },
-          plugins: [pierreDiffsPlugin()],
-        });
-
-        // Lucide icons bundle for sprinkle iframes.
-        await esbuild.build({
-          entryPoints: [lucideIconsEntry],
-          bundle: true,
-          outfile: resolve(uiOutDir, 'lucide-icons.js'),
-          format: 'iife',
-          target: 'esnext',
-          minify: true,
-          define: { __DEV__: 'false', global: 'globalThis' },
-        });
-
-        // Note: `kernel-worker.ts` rides the Rollup pipeline via
-        // Vite's native `new Worker(new URL(...), { type: 'module' })`
-        // detection in `kernel/spawn.ts`. `resolve.alias` carries over
-        // to the worker bundle, but `plugins` does NOT — see the
-        // `worker.plugins` block below where we re-pass the stub plugin.
-        // No standalone esbuild call needed.
-        copyFileSync(
-          resolve(Dirname, '../assets/logos/favicon.png'),
-          resolve(uiOutDir, 'favicon.png')
-        );
-        // Vite preserves the nested HTML path when the repo root is the Vite root.
-        // In some Vite versions the HTML lands directly at outDir root — only copy if nested.
-        const { existsSync } = await import('fs');
-        const nestedHtml = resolve(uiOutDir, 'packages/webapp/index.html');
-        if (existsSync(nestedHtml)) {
-          copyFileSync(nestedHtml, resolve(uiOutDir, 'index.html'));
-        }
-      },
-    },
+    buildWebappRuntimeAssetsPlugin(),
   ],
   define: {
     __DEV__: JSON.stringify(mode !== 'production'),
@@ -420,7 +325,11 @@ export default defineConfig(({ mode }) => ({
         'node_modules/@earendil-works/pi-ai/dist/providers/simple-options.js'
       ),
     },
-    dedupe: ['@earendil-works/pi-ai'],
+    // kokoro-js pins @huggingface/transformers ^3.x, which npm nests as a
+    // second copy (npm overrides don't reach workspace deps). Deduping forces
+    // kokoro's bare import onto the hoisted 4.x the speech stack uses — one
+    // transformers bundle, one onnxruntime-web version, one wasmPaths config.
+    dedupe: ['@earendil-works/pi-ai', '@huggingface/transformers'],
   },
   esbuild: {
     target: 'esnext',

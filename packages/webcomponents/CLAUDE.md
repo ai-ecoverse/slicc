@@ -60,6 +60,16 @@ tests/**/<name>.test.ts    co-located browser tests, mirroring src/ subsystem
 - **Public API:** export the class; expose attributes (reflected to properties),
   `::part` hooks, named slots, and `CustomEvent`s (composed + bubbling) — never
   reach into another component's internals.
+- **Composer push-to-talk:** `<slicc-composer ptt>` owns the hold-to-dictate
+  GESTURE (5s hold-to-enable permission stage, recording overlay with caption
+  line + mic picker + engine-status line, append+submit on release) but not the
+  audio stack — hosts inject a `ComposerSpeech` controller via the `speech`
+  property. The contract + built-in Web Speech fallback live in
+  `composer/speech.ts`, also exported as the DOM-free subpath
+  `@slicc/webcomponents/composer/speech` (safe for node/worker realms; the
+  barrel is not). The webapp injects its whisper-upgradable controller there.
+  Dictated submits carry `detail.source === 'dictation'` (via the input card's
+  `submit(source?)`) so hosts can speak the reply back to spoken input.
 
 ## Tests (`@vitest/browser`, real Chromium)
 

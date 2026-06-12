@@ -608,6 +608,19 @@ function createWcController(
   const controller = new WcChatController({
     thread: refs.thread,
     agent: agentHandle,
+    // Spoken-reply loop: a turn that began as push-to-talk dictation (the
+    // submit listener marks it) gets its reply read aloud — kokoro once the
+    // chained model download is warm, Web Speech until then. The one-shot
+    // flag is consumed on EVERY turn completion (even reply-less ones, e.g.
+    // the error path) so it can never linger and voice a later typed turn.
+    onTurnComplete: (message) => {
+      void import('../../speech/voice-reply.js')
+        .then(({ consumeVoiceSubmission, speakReplyMarkdown }) => {
+          if (!consumeVoiceSubmission()) return;
+          if (message?.content) return speakReplyMarkdown(message.content);
+        })
+        .catch(() => undefined);
+    },
     onProcessingChange: (processing) => {
       refs.frame.toggleAttribute('data-processing', processing);
       refs.inputCard.querySelector('slicc-send-button')?.toggleAttribute('busy', processing);
@@ -737,6 +750,13 @@ function wireWcComposer(deps: {
   refs.inputCard.addEventListener('submit', (event) => {
     const text = submittedText(event);
     if (!text) return;
+    // Dictated turns (push-to-talk) get their reply spoken back — mark
+    // BEFORE sending so the turn-complete hook sees the flag.
+    if ((event as Event as CustomEvent<{ source?: string }>).detail?.source === 'dictation') {
+      void import('../../speech/voice-reply.js')
+        .then(({ markVoiceSubmission }) => markVoiceSubmission())
+        .catch(() => undefined);
+    }
     boot.getController()?.sendUserMessage(text, attachStage?.take());
     (refs.inputCard as HTMLElement & { clear?: () => void }).clear?.();
     // User input is most-recent activity: the addressed scoop gets the eyes
@@ -1109,6 +1129,18 @@ export function attachWcClient(
       wireWcVoice({ refs, send: (text) => boot.getController()?.sendUserMessage(text), log })
     )
     .catch((err) => log.error('WC voice wiring failed', err));
+
+  // Push-to-talk: arm the composer's hold-to-dictate gesture and inject the
+  // webapp speech controller (builtin Web Speech now, whisper-tiny once its
+  // lazy download completes). The controller module stays out of the boot
+  // bundle — it only loads here, and the model only downloads on first use.
+  void import('../../speech/composer-speech.js')
+    .then(({ getComposerSpeech }) => {
+      const composer = refs.composer as HTMLElement & { speech?: unknown };
+      composer.speech = getComposerSpeech();
+      composer.setAttribute('ptt', '');
+    })
+    .catch((err) => log.error('WC push-to-talk wiring failed', err));
 }
 
 /** Boot the standalone live WC shell: prelude → kernel spawn → attach. */

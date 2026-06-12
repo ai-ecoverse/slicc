@@ -25,6 +25,13 @@ export interface WcChatControllerOptions {
   onMessageRendered?: (message: ChatMessage, els: readonly HTMLElement[]) => void;
   /** Invoked before a message's rendered elements are replaced or removed. */
   onMessageDisposed?: (messageId: string) => void;
+  /**
+   * Invoked when a turn completes (the processing flag falls — via the
+   * `turn_end` agent event OR a scoop status broadcast; live floats only
+   * have the latter), with the turn's last settled assistant message (null
+   * when none exists). The spoken-reply loop hangs off this.
+   */
+  onTurnComplete?: (message: ChatMessage | null) => void;
 }
 
 function uid(): string {
@@ -37,6 +44,7 @@ export class WcChatController {
   readonly #onProcessingChange?: (processing: boolean) => void;
   readonly #onMessageRendered?: (message: ChatMessage, els: readonly HTMLElement[]) => void;
   readonly #onMessageDisposed?: (messageId: string) => void;
+  readonly #onTurnComplete?: (message: ChatMessage | null) => void;
   #unsubscribe: () => void;
   #onLocalUserMessage?: (
     text: string,
@@ -48,6 +56,8 @@ export class WcChatController {
   /** Rendered thread elements per message id (a message can span several). */
   readonly #els = new Map<string, HTMLElement[]>();
   #currentStreamId: string | null = null;
+  /** The assistant message the ACTIVE turn streamed (reset on each rise). */
+  #turnAssistantId: string | null = null;
   #pendingDelta = '';
   #flushScheduled = false;
   #processing = false;
@@ -60,6 +70,7 @@ export class WcChatController {
     this.#onProcessingChange = options.onProcessingChange;
     this.#onMessageRendered = options.onMessageRendered;
     this.#onMessageDisposed = options.onMessageDisposed;
+    this.#onTurnComplete = options.onTurnComplete;
     this.#unsubscribe = options.agent.onEvent((event) => this.#handleAgentEvent(event));
   }
 
@@ -211,8 +222,30 @@ export class WcChatController {
   setProcessing(processing: boolean): void {
     if (this.#processing === processing) return;
     this.#processing = processing;
+    // A RISING edge starts a fresh turn — forget the previous turn's reply
+    // so a turn that streams nothing can never surface a stale one.
+    if (processing) this.#turnAssistantId = null;
     if (!processing) this.#syncCopyRow();
     this.#onProcessingChange?.(processing);
+    // End-of-turn = the processing flag FALLING. This is deliberately not
+    // hung off the `turn_end` agent event: the live floats' chat wire only
+    // carries `response_done` (offscreen-bridge.ts defers `turn_end`
+    // synthesis), so processing falls via scoop STATUS broadcasts there —
+    // the transition is the one signal every float shares.
+    if (!processing) this.#fireTurnComplete();
+  }
+
+  /**
+   * Surface THIS turn's assistant reply to the host (null when the turn
+   * produced none — e.g. the error path — so the host can settle its own
+   * one-shot state without ever speaking a historical message).
+   */
+  #fireTurnComplete(): void {
+    const id = this.#turnAssistantId;
+    this.#turnAssistantId = null;
+    if (!this.#onTurnComplete) return;
+    const message = id ? this.#findMessage(id) : null;
+    this.#onTurnComplete(message ? { ...message } : null);
   }
 
   /**
@@ -269,6 +302,9 @@ export class WcChatController {
   #handleMessageStart(messageId: string): void {
     this.setProcessing(true);
     this.#currentStreamId = messageId;
+    // Record AFTER the rise (which resets it): a multi-message turn keeps
+    // overwriting, so the turn-complete hook gets the turn's LAST message.
+    this.#turnAssistantId = messageId;
     this.#appendMessage({
       id: messageId,
       role: 'assistant',
@@ -335,6 +371,9 @@ export class WcChatController {
       this.#rerenderMessage(message);
     }
     this.#currentStreamId = null;
+    // The processing FALL inside setProcessing fires onTurnComplete — one
+    // chokepoint shared with the status-broadcast path (live floats never
+    // receive a `turn_end` event at all).
     this.setProcessing(false);
   }
 

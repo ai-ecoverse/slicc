@@ -10,6 +10,7 @@ import './slicc-composer-meta.js';
 import './slicc-composer.js';
 import './slicc-input-card.js';
 import type { SliccComposer } from './slicc-composer.js';
+import type { ComposerSpeech, MicrophoneInfo, SpeechEngineStatus } from './speech.js';
 
 interface ComposerArgs {
   open?: boolean;
@@ -220,48 +221,163 @@ export const ScrollUnder: Story = {
 };
 
 /**
- * Build a composer and arm its push-to-talk gesture after mount so the story
- * shows the held "walkie-talkie" state: the band turns into a big active push
- * button with a centered mic, the "Keep mouse pressed to dictate" prompt, and
- * the simulated model-load progress bar sweeping to its listening affordance.
- * The press is synthesized (a real mousedown) since Storybook renders a static
- * frame; clicking anywhere releases it, tearing the overlay down and populating
- * the textarea with a representative transcript. `prefers-reduced-motion` shows
- * the static ready state instead of the sweep.
+ * A scripted {@link ComposerSpeech} for deterministic push-to-talk stories: a
+ * fixed permission state, a canned device list, looping caption partials while
+ * a session is live, and (optionally) a ticking model-download ETA. No real
+ * microphone or recognizer is touched — Storybook frames stay reproducible.
  */
-function pushToTalk({ open }: ComposerArgs): HTMLElement {
+function scriptedSpeech(config: {
+  permission: PermissionState;
+  mics?: MicrophoneInfo[];
+  downloading?: boolean;
+}): ComposerSpeech {
+  let permission = config.permission;
+  const statusSubs = new Set<(s: SpeechEngineStatus) => void>();
+  let status: SpeechEngineStatus = config.downloading
+    ? {
+        engine: 'builtin',
+        state: 'downloading',
+        download: { loaded: 38_000_000, total: 150_000_000, etaSeconds: 52 },
+      }
+    : { engine: 'enhanced', state: 'ready' };
+
+  // The downloading variant ticks its ETA down like a live fetch would.
+  if (config.downloading) {
+    setInterval(() => {
+      const download = status.download;
+      if (status.state !== 'downloading' || !download?.etaSeconds) return;
+      const etaSeconds = Math.max(1, download.etaSeconds - 1);
+      const loaded = Math.min(download.total, download.loaded + 2_200_000);
+      status = { ...status, download: { ...download, etaSeconds, loaded } };
+      for (const cb of statusSubs) cb(status);
+    }, 1000);
+  }
+
+  const SCRIPT =
+    'make the landing hero feel warmer and add a clear call to action above the fold'.split(' ');
+
+  return {
+    permission: async () => permission,
+    requestPermission: async () => {
+      permission = 'granted';
+      return true;
+    },
+    microphones: async () => config.mics ?? [{ deviceId: 'default', label: 'Built-in Microphone' }],
+    start: async (opts) => {
+      let i = 0;
+      const timer = setInterval(() => {
+        i = Math.min(i + 1, SCRIPT.length);
+        opts.onPartial?.(SCRIPT.slice(0, i).join(' '));
+      }, 350);
+      return {
+        stop: async () => {
+          clearInterval(timer);
+          return SCRIPT.slice(0, Math.max(i, 4)).join(' ');
+        },
+        cancel: () => clearInterval(timer),
+      };
+    },
+    status: () => status,
+    onStatus: (cb) => {
+      statusSubs.add(cb);
+      cb(status);
+      return () => statusSubs.delete(cb);
+    },
+    warmup: () => {},
+  };
+}
+
+/** Push-to-talk story scaffold: a short thread + an armed PTT composer. */
+function pttShell(hint: string, el: SliccComposer): HTMLElement {
   const shell = document.createElement('div');
   shell.style.cssText =
     'display:flex;flex-direction:column;height:300px;width:100%;background:var(--bg);overflow:hidden;font-family:var(--ui);';
-
   const thread = document.createElement('div');
   thread.style.cssText = 'flex:1 1 auto;padding:24px;color:var(--txt-2);font-size:14px;';
-  thread.textContent = 'Press and hold the input below to dictate; release to drop the transcript.';
+  thread.textContent = hint;
+  shell.append(thread, el);
+  return shell;
+}
 
+function pttComposer(speech: ComposerSpeech, open?: boolean): SliccComposer {
   const el = document.createElement('slicc-composer') as SliccComposer;
-  // The dictation simulation is opt-in (production hosts leave it unset).
   el.setAttribute('ptt', '');
   if (open) el.setAttribute('open', '');
+  el.speech = speech;
   el.append(inputCard(), metaRow(Boolean(open)));
+  return el;
+}
 
-  shell.append(thread, el);
-
-  // Arm the gesture once the input card has upgraded and built its textarea.
+/** Arm the gesture once the input card has upgraded and built its textarea. */
+function armPress(el: SliccComposer): void {
   requestAnimationFrame(() => {
     const ta = el.querySelector('textarea');
     ta?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
   });
-  return shell;
 }
 
 /**
- * Push-to-talk — the walkie-talkie dictation gesture. The story arms the press
- * on mount so the big active push button (mic + prompt + simulated model-load
- * progress bar) is visible. Click anywhere to release and watch the transcript
- * populate the textarea. Flip the theme + reduced-motion toolbars to confirm
- * the frosted tint and the no-sweep static-ready path.
+ * Push-to-talk, stage 1 — no microphone permission yet. Holding the textarea
+ * shows the "Hold to enable push to talk" bar filling over five seconds; a
+ * press held to completion requests mic permission (scripted to grant here,
+ * upgrading the held press straight into the recording stage). Release early
+ * to cancel without prompting.
  */
-export const PushToTalk: Story = {
+export const PushToTalkEnable: Story = {
   args: {},
-  render: pushToTalk,
+  render: ({ open }) => {
+    const el = pttComposer(scriptedSpeech({ permission: 'prompt' }), open);
+    armPress(el);
+    return pttShell(
+      'Hold the input below: the 5s bar fills, then permission is requested (scripted to grant).',
+      el
+    );
+  },
+};
+
+/**
+ * Push-to-talk, stage 2 — permission granted, dictating. The held band shows
+ * the pulsing mic, the closed-caption line streaming the last detected words,
+ * the microphone picker (two scripted devices — release OVER it to switch
+ * mics instead of sending), and the "better speech recognition downloading ·
+ * ready in ~ETA" line ticking down like a live model fetch. Release anywhere
+ * else to append the transcript and submit.
+ */
+export const PushToTalkRecording: Story = {
+  args: {},
+  render: ({ open }) => {
+    const el = pttComposer(
+      scriptedSpeech({
+        permission: 'granted',
+        downloading: true,
+        mics: [
+          { deviceId: 'built-in', label: 'Built-in Microphone' },
+          { deviceId: 'usb', label: 'Studio USB Mic' },
+        ],
+      }),
+      open
+    );
+    armPress(el);
+    return pttShell(
+      'Recording: captions stream under the mic; release over the picker to switch devices.',
+      el
+    );
+  },
+};
+
+/**
+ * Push-to-talk, live — no scripted controller: the component falls back to the
+ * built-in Web Speech engine, so holding the textarea drives the REAL
+ * permission prompt and recognizer (Chromium only; needs a microphone). Useful
+ * for manually exercising the full gesture in Storybook.
+ */
+export const PushToTalkLive: Story = {
+  args: {},
+  render: ({ open }) => {
+    const el = document.createElement('slicc-composer') as SliccComposer;
+    el.setAttribute('ptt', '');
+    if (open) el.setAttribute('open', '');
+    el.append(inputCard(), metaRow(Boolean(open)));
+    return pttShell('Live: hold the input and speak (real mic permission + recognition).', el);
+  },
 };

@@ -1,9 +1,16 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // Siblings from earlier waves — already registered; safe to import so the
 // populated composer mirrors the prototype's footer (input card + meta row).
 import '../../src/add-menu/slicc-add-menu.js';
 import '../../src/composer/slicc-composer-meta.js';
-import { SliccComposer } from '../../src/composer/slicc-composer.js';
+import { HOLD_TO_ENABLE_MS, SliccComposer } from '../../src/composer/slicc-composer.js';
+import '../../src/composer/slicc-input-card.js';
+import type {
+  ComposerSpeech,
+  MicrophoneInfo,
+  SpeechEngineStatus,
+  SpeechSessionOptions,
+} from '../../src/composer/speech.js';
 import '../../src/primitives/slicc-send-button.js';
 import { ensureGlobalTokens, setTheme } from '../../src/theme/tokens.js';
 
@@ -19,8 +26,7 @@ function innerOf(el: SliccComposer): HTMLElement {
  */
 function makeComposer(): SliccComposer {
   const el = document.createElement('slicc-composer');
-  // The walkie-talkie dictation gesture is opt-in (demo-only); these tests
-  // exercise it explicitly.
+  // Push-to-talk is opt-in; these tests exercise it explicitly.
   el.setAttribute('ptt', '');
   // Give the band real width so the 680px-max + centering geometry resolves.
   el.style.cssText = 'width:1000px;display:block;';
@@ -233,8 +239,104 @@ describe('slicc-composer', () => {
     expect(dark).not.toBe(light);
     expect(dark).not.toBe('rgba(0, 0, 0, 0)');
   });
+});
 
-  // --- push-to-talk "walkie-talkie" dictation gesture ---
+// --- push-to-talk dictation gesture (two-stage, speech-controller-driven) ---
+
+/** Call log + remote controls for a scripted ComposerSpeech test double. */
+interface FakeSpeech {
+  controller: ComposerSpeech;
+  calls: {
+    requestPermission: number;
+    warmup: number;
+    start: SpeechSessionOptions[];
+    cancel: number;
+    stop: number;
+  };
+  /** Push a streaming partial into the live session's caption callback. */
+  emitPartial(text: string): void;
+  /** Push an engine status update to subscribers. */
+  emitStatus(status: SpeechEngineStatus): void;
+}
+
+function makeFakeSpeech(config: {
+  permission?: PermissionState;
+  grantOnRequest?: boolean;
+  mics?: MicrophoneInfo[];
+  transcript?: string;
+  status?: SpeechEngineStatus;
+}): FakeSpeech {
+  let permission: PermissionState = config.permission ?? 'granted';
+  let partial: ((text: string) => void) | null = null;
+  const statusSubs = new Set<(s: SpeechEngineStatus) => void>();
+  let status: SpeechEngineStatus = config.status ?? { engine: 'builtin', state: 'idle' };
+  const calls: FakeSpeech['calls'] = {
+    requestPermission: 0,
+    warmup: 0,
+    start: [],
+    cancel: 0,
+    stop: 0,
+  };
+
+  const controller: ComposerSpeech = {
+    permission: async () => permission,
+    requestPermission: async () => {
+      calls.requestPermission++;
+      const granted = config.grantOnRequest ?? true;
+      permission = granted ? 'granted' : 'denied';
+      return granted;
+    },
+    microphones: async () => config.mics ?? [{ deviceId: 'default', label: 'Built-in Microphone' }],
+    start: async (opts) => {
+      calls.start.push(opts);
+      partial = opts.onPartial ?? null;
+      return {
+        stop: async () => {
+          calls.stop++;
+          return config.transcript ?? '';
+        },
+        cancel: () => {
+          calls.cancel++;
+        },
+      };
+    },
+    status: () => status,
+    onStatus: (cb) => {
+      statusSubs.add(cb);
+      cb(status);
+      return () => statusSubs.delete(cb);
+    },
+    warmup: () => {
+      calls.warmup++;
+    },
+  };
+
+  return {
+    controller,
+    calls,
+    emitPartial: (text) => partial?.(text),
+    emitStatus: (next) => {
+      status = next;
+      for (const cb of statusSubs) cb(next);
+    },
+  };
+}
+
+describe('slicc-composer / push-to-talk', () => {
+  beforeEach(() => {
+    ensureGlobalTokens();
+    setTheme('light');
+    document.body.replaceChildren();
+    localStorage.removeItem('slicc-composer:mic-device');
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Flush microtasks + 0ms timers so async stage transitions settle. */
+  const flush = () => vi.advanceTimersByTimeAsync(0);
 
   /** The textarea the host renders / relocates into its light DOM. */
   function taOf(el: SliccComposer): HTMLTextAreaElement {
@@ -248,105 +350,602 @@ describe('slicc-composer', () => {
     return ta;
   }
 
+  function release(): void {
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+  }
+
   /** The active push-to-talk overlay, if any. */
   function pttOf(el: SliccComposer): HTMLElement | null {
     return el.querySelector('.slicc-composer__ptt');
   }
 
-  it('mousedown turns the band into a walkie-talkie button: mic + prompt + progress bar', () => {
+  function mount(fake: FakeSpeech): SliccComposer {
     const el = makeComposer();
+    el.speech = fake.controller;
     document.body.appendChild(el);
+    return el;
+  }
+
+  // ── Stage 1: no permission yet ────────────────────────────────────
+
+  it('without permission, holding shows the 5s "hold to enable" bar (no recording)', async () => {
+    const fake = makeFakeSpeech({ permission: 'prompt' });
+    const el = mount(fake);
     press(el);
+    await flush();
 
     const ptt = pttOf(el);
     expect(ptt).not.toBeNull();
-    // A live mic <svg> (lucide), never an emoji.
-    expect(ptt!.querySelector('.slicc-composer__ptt-mic svg')).not.toBeNull();
-    // The dictation prompt.
-    const label = ptt!.querySelector('.slicc-composer__ptt-label') as HTMLElement;
-    expect(label.textContent).toBe('Keep mouse pressed to dictate');
-    // The simulated model-load row: text + progress bar fill.
-    expect(ptt!.querySelector('.slicc-composer__ptt-load-text')?.textContent).toBe(
-      'Loading speech recognition model'
+    expect(ptt!.classList.contains('is-enable')).toBe(true);
+    expect(ptt!.querySelector('.slicc-composer__ptt-label')?.textContent).toBe(
+      'Hold to enable push to talk'
     );
     expect(ptt!.querySelector('.slicc-composer__ptt-bar-fill')).not.toBeNull();
-  });
-
-  it('drives the progress bar with the stable slicc-ptt-load animation longhands', () => {
-    const el = makeComposer();
-    document.body.appendChild(el);
-    press(el);
-
-    const fill = pttOf(el)!.querySelector('.slicc-composer__ptt-bar-fill') as HTMLElement;
-    const cs = getComputedStyle(fill);
-    // Real Chromium honors the emulated media query; assert the precise longhands
-    // (the `animation` shorthand serializes differently across versions). Under
-    // reduced-motion the CSS neutralizes the sweep to animation-name: none.
-    if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      expect(cs.animationName).toBe('none');
-    } else {
-      expect(cs.animationName).toBe('slicc-ptt-load');
-      expect(cs.animationDuration).toBe('1.2s');
+    // The 5s sweep is wired via the .is-enable stage class.
+    const fill = ptt!.querySelector('.slicc-composer__ptt-bar-fill') as HTMLElement;
+    if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      expect(getComputedStyle(fill).animationDuration).toBe('5s');
     }
+    expect(fake.calls.requestPermission).toBe(0);
+    expect(fake.calls.start.length).toBe(0);
   });
 
-  it('mouseup hides the overlay AND populates the textarea with a transcript', () => {
-    const el = makeComposer();
-    document.body.appendChild(el);
-    const ta = press(el);
-    expect(ta.value).toBe('');
+  it('holding through the 5s gate requests permission, then records while still held', async () => {
+    const fake = makeFakeSpeech({ permission: 'prompt', grantOnRequest: true, transcript: 'hi' });
+    const el = mount(fake);
+    press(el);
+    await flush();
 
-    // A real release anywhere ends the gesture.
-    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(HOLD_TO_ENABLE_MS);
+    expect(fake.calls.requestPermission).toBe(1);
+    await flush();
+
+    // Still pressed after the grant — the press upgrades to recording in place.
+    const ptt = pttOf(el);
+    expect(ptt?.classList.contains('is-recording')).toBe(true);
+    expect(fake.calls.start.length).toBe(1);
+    // The first granted hold kicks the enhanced-model warmup.
+    expect(fake.calls.warmup).toBeGreaterThan(0);
+  });
+
+  it('releasing before the 5s gate never requests permission', async () => {
+    const fake = makeFakeSpeech({ permission: 'prompt' });
+    const el = mount(fake);
+    press(el);
+    await flush();
+
+    await vi.advanceTimersByTimeAsync(1000);
+    release();
+    expect(pttOf(el)).toBeNull();
+
+    // The cleared timer must not fire later.
+    await vi.advanceTimersByTimeAsync(HOLD_TO_ENABLE_MS);
+    expect(fake.calls.requestPermission).toBe(0);
+  });
+
+  it('a blocked permission shows instructions instead of the enable bar', async () => {
+    const fake = makeFakeSpeech({ permission: 'denied' });
+    const el = mount(fake);
+    press(el);
+    await flush();
+
+    const ptt = pttOf(el);
+    expect(ptt?.classList.contains('is-denied')).toBe(true);
+    expect(ptt?.querySelector('.slicc-composer__ptt-label')?.textContent).toBe(
+      'Microphone access is blocked'
+    );
+    expect(ptt?.querySelector('.slicc-composer__ptt-bar-fill')).toBeNull();
+
+    release();
+    expect(pttOf(el)).toBeNull();
+  });
+
+  // ── Stage 2: permission granted ───────────────────────────────────
+
+  it('with permission granted, holding records and releasing appends + submits as dictation', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted', transcript: 'make the hero warmer' });
+    const el = mount(fake);
+    const submits: Array<{ value: string; source?: string }> = [];
+    el.addEventListener('submit', (e) => {
+      submits.push((e as Event as CustomEvent<{ value: string; source?: string }>).detail);
+    });
+
+    const ta = press(el);
+    await flush();
+
+    const ptt = pttOf(el);
+    expect(ptt?.classList.contains('is-recording')).toBe(true);
+    expect(fake.calls.start.length).toBe(1);
+
+    release();
+    await flush();
 
     expect(pttOf(el)).toBeNull();
-    expect(ta.value.trim().length).toBeGreaterThan(0);
-    expect(ta.value).toContain('warmer');
+    expect(ta.value).toBe('make the hero warmer');
+    // detail.source marks the turn voice-initiated — hosts speak the reply.
+    expect(submits).toEqual([{ value: 'make the hero warmer', source: 'dictation' }]);
   });
 
-  it('pointer leaving mid-press cancels: overlay torn down, textarea left untouched', () => {
-    const el = makeComposer();
-    document.body.appendChild(el);
+  it('appends the transcript to existing input with a single joining space', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted', transcript: 'and add a CTA' });
+    const el = mount(fake);
+    const ta = taOf(el);
+    ta.value = 'Warm up the hero';
+
+    press(el);
+    await flush();
+    release();
+    await flush();
+
+    expect(ta.value).toBe('Warm up the hero and add a CTA');
+  });
+
+  it('an empty transcript stays a plain caret press: no append, no submit', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted', transcript: '' });
+    const el = mount(fake);
+    const submits: Event[] = [];
+    el.addEventListener('submit', (e) => submits.push(e));
+
     const ta = press(el);
+    await flush();
+    release();
+    await flush();
+
+    expect(pttOf(el)).toBeNull();
+    expect(ta.value).toBe('');
+    expect(submits.length).toBe(0);
+  });
+
+  it('streams partials into the closed-caption line (trailing words only)', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    const el = mount(fake);
+    press(el);
+    await flush();
+
+    fake.emitPartial('make the landing');
+    const caption = pttOf(el)!.querySelector('.slicc-composer__ptt-caption') as HTMLElement;
+    expect(caption.hidden).toBe(false);
+    expect(caption.textContent).toBe('make the landing');
+
+    // Long partials keep only the trailing words, like movie captions.
+    fake.emitPartial('one two three four five six seven eight nine ten');
+    expect(caption.textContent).toBe('three four five six seven eight nine ten');
+  });
+
+  it('pointer leaving mid-recording cancels: no transcript, session cancelled', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted', transcript: 'never inserted' });
+    const el = mount(fake);
+    const ta = press(el);
+    await flush();
     expect(pttOf(el)).not.toBeNull();
 
-    // Leaving the host is the stuck-state guard — overlay drops, no transcript.
     el.dispatchEvent(new MouseEvent('mouseleave', { bubbles: false }));
     expect(pttOf(el)).toBeNull();
     expect(ta.value).toBe('');
+    expect(fake.calls.cancel).toBe(1);
+    expect(fake.calls.stop).toBe(0);
 
     // A subsequent release no longer reaches us (listeners removed).
-    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    release();
+    await flush();
     expect(ta.value).toBe('');
   });
 
-  it('guards the progress sweep + mic pulse behind prefers-reduced-motion (animation-name: none)', () => {
-    // CSS @media (prefers-reduced-motion) is evaluated by the browser, not a JS
-    // mock, so assert the document stylesheet carries the guard that neutralizes
-    // the bar sweep. Mount a composer first so the scoped <style> is injected.
+  // ── Microphone picker ─────────────────────────────────────────────
+
+  it('renders the mic picker (a subtle triangle, no label) only with >1 input device', async () => {
+    const two = makeFakeSpeech({
+      permission: 'granted',
+      mics: [
+        { deviceId: 'a', label: 'Built-in Microphone' },
+        { deviceId: 'b', label: 'Studio USB' },
+      ],
+    });
+    const el = mount(two);
+    press(el);
+    await flush();
+
+    const wrap = pttOf(el)!.querySelector('.slicc-composer__ptt-device') as HTMLElement;
+    expect(wrap.hidden).toBe(false);
+    // Just the chevron-down glyph button — device labels stay out of the
+    // recording overlay until the menu opens.
+    expect(wrap.querySelector('.slicc-composer__ptt-device-btn svg')).not.toBeNull();
+    expect(wrap.textContent).not.toContain('Studio USB');
+    expect(wrap.querySelector('.slicc-composer__ptt-device-menu')).toBeNull();
+    el.dispatchEvent(new MouseEvent('mouseleave', { bubbles: false }));
+
+    const one = makeFakeSpeech({ permission: 'granted' });
+    const el2 = mount(one);
+    press(el2);
+    await flush();
+    const wrap2 = pttOf(el2)!.querySelector('.slicc-composer__ptt-device') as HTMLElement;
+    expect(wrap2.hidden).toBe(true);
+  });
+
+  it('releasing over the picker opens the device menu instead of submitting; choosing persists', async () => {
+    const fake = makeFakeSpeech({
+      permission: 'granted',
+      transcript: 'should not submit',
+      mics: [
+        { deviceId: 'a', label: 'Built-in Microphone' },
+        { deviceId: 'b', label: 'Studio USB' },
+      ],
+    });
+    const el = mount(fake);
+    const submits: Event[] = [];
+    el.addEventListener('submit', (e) => submits.push(e));
+    const ta = press(el);
+    await flush();
+
+    const toggle = pttOf(el)!.querySelector('.slicc-composer__ptt-device-btn') as HTMLElement;
+    // Release OVER the picker: the gesture flips into its interactive
+    // device-choice state — no transcript, no submit, menu open.
+    toggle.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    expect(pttOf(el)).not.toBeNull();
+    expect(pttOf(el)!.classList.contains('is-picking')).toBe(true);
+    expect(fake.calls.cancel).toBe(1);
+    expect(submits.length).toBe(0);
+    expect(ta.value).toBe('');
+
+    const rows = pttOf(el)!.querySelectorAll('.slicc-composer__ptt-device-item');
+    expect(rows.length).toBe(2);
+    expect(rows[1].textContent).toContain('Studio USB');
+
+    // Choosing a device persists it and closes the overlay.
+    (rows[1] as HTMLElement).click();
+    expect(pttOf(el)).toBeNull();
+    expect(el.device).toBe('b');
+    expect(localStorage.getItem('slicc-composer:mic-device')).toBe('b');
+
+    // The next session starts on the chosen device, now shown as checked.
+    press(el);
+    await flush();
+    expect(fake.calls.start.at(-1)?.deviceId).toBe('b');
+    pttOf(el)!
+      .querySelector('.slicc-composer__ptt-device-btn')!
+      .dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    const checked = pttOf(el)!.querySelector(
+      '.slicc-composer__ptt-device-item[aria-checked="true"]'
+    );
+    expect(checked?.getAttribute('data-device-id')).toBe('b');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+  });
+
+  // ── Engine status line ────────────────────────────────────────────
+
+  it('shows the enhanced-model download status with its ETA while recording', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    const el = mount(fake);
+    press(el);
+    await flush();
+
+    const status = pttOf(el)!.querySelector('.slicc-composer__ptt-status') as HTMLElement;
+    expect(status.hidden).toBe(true);
+
+    fake.emitStatus({
+      engine: 'builtin',
+      state: 'downloading',
+      download: { loaded: 50_000_000, total: 150_000_000, etaSeconds: 45 },
+    });
+    expect(status.hidden).toBe(false);
+    expect(status.textContent).toBe('Better speech recognition downloading · ready in ~45s');
+
+    fake.emitStatus({ engine: 'enhanced', state: 'ready' });
+    expect(status.textContent).toBe('Enhanced speech recognition');
+  });
+});
+
+describe('slicc-composer / push-to-talk edge paths', () => {
+  beforeEach(() => {
+    ensureGlobalTokens();
+    setTheme('light');
+    document.body.replaceChildren();
+    localStorage.removeItem('slicc-composer:mic-device');
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const flush = () => vi.advanceTimersByTimeAsync(0);
+
+  function press(el: SliccComposer): HTMLTextAreaElement {
+    const ta = el.querySelector('textarea') as HTMLTextAreaElement;
+    ta.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+    return ta;
+  }
+
+  function release(): void {
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+  }
+
+  function pttOf(el: SliccComposer): HTMLElement | null {
+    return el.querySelector('.slicc-composer__ptt');
+  }
+
+  function mount(fake: FakeSpeech): SliccComposer {
     const el = makeComposer();
+    el.speech = fake.controller;
+    document.body.appendChild(el);
+    return el;
+  }
+
+  it('a slow permission query runs the enable stage, then upgrades in place on granted', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    let resolvePermission!: (state: PermissionState) => void;
+    const deferred = new Promise<PermissionState>((res) => {
+      resolvePermission = res;
+    });
+    fake.controller.permission = () => deferred;
+    const el = mount(fake);
+    press(el);
+
+    // The 60ms race window elapses with the query still pending → enable stage.
+    await vi.advanceTimersByTimeAsync(100);
+    expect(pttOf(el)?.classList.contains('is-enable')).toBe(true);
+
+    // The query lands 'granted' mid-hold: the press upgrades straight to
+    // recording without waiting out the 5s gate.
+    resolvePermission('granted');
+    await flush();
+    expect(pttOf(el)?.classList.contains('is-recording')).toBe(true);
+    expect(fake.calls.requestPermission).toBe(0);
+    el.dispatchEvent(new MouseEvent('mouseleave', { bubbles: false }));
+  });
+
+  it('a slow permission query that lands denied swaps in the blocked instructions', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    let resolvePermission!: (state: PermissionState) => void;
+    fake.controller.permission = () =>
+      new Promise<PermissionState>((res) => {
+        resolvePermission = res;
+      });
+    const el = mount(fake);
+    press(el);
+    await vi.advanceTimersByTimeAsync(100);
+
+    resolvePermission('denied');
+    await flush();
+    expect(pttOf(el)?.classList.contains('is-denied')).toBe(true);
+    release();
+    expect(pttOf(el)).toBeNull();
+  });
+
+  it('releasing while the permission prompt is up keeps the overlay; a grant arms silently', async () => {
+    const fake = makeFakeSpeech({ permission: 'prompt' });
+    let resolveRequest!: (granted: boolean) => void;
+    fake.controller.requestPermission = () =>
+      new Promise<boolean>((res) => {
+        resolveRequest = res;
+      });
+    const el = mount(fake);
+    press(el);
+    await flush();
+    await vi.advanceTimersByTimeAsync(HOLD_TO_ENABLE_MS);
+    expect(pttOf(el)?.classList.contains('is-prompting')).toBe(true);
+
+    // The native prompt steals the pointer — the release must NOT kill the
+    // in-flight permission request.
+    release();
+    expect(pttOf(el)).not.toBeNull();
+
+    resolveRequest(true);
+    await flush();
+    // Granted after release: armed for the next hold, no recording started.
+    expect(pttOf(el)).toBeNull();
+    expect(fake.calls.start.length).toBe(0);
+  });
+
+  it('a denied prompt while still holding shows the blocked instructions', async () => {
+    const fake = makeFakeSpeech({ permission: 'prompt', grantOnRequest: false });
+    const el = mount(fake);
+    press(el);
+    await flush();
+    await vi.advanceTimersByTimeAsync(HOLD_TO_ENABLE_MS);
+    await flush();
+
+    expect(pttOf(el)?.classList.contains('is-denied')).toBe(true);
+    expect(fake.calls.start.length).toBe(0);
+    release();
+    expect(pttOf(el)).toBeNull();
+  });
+
+  it('Escape and outside clicks exit the device-picking state', async () => {
+    const mics = [
+      { deviceId: 'a', label: 'Built-in' },
+      { deviceId: 'b', label: 'USB' },
+    ];
+    const fake = makeFakeSpeech({ permission: 'granted', mics });
+    const el = mount(fake);
+    press(el);
+    await flush();
+    const toggle = () => pttOf(el)!.querySelector('.slicc-composer__ptt-device-btn') as HTMLElement;
+    toggle().dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    expect(pttOf(el)!.classList.contains('is-picking')).toBe(true);
+    expect(pttOf(el)!.querySelector('.slicc-composer__ptt-device-menu')).not.toBeNull();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(pttOf(el)).toBeNull();
+
+    // Again, exiting via a click outside the picker this time.
+    press(el);
+    await flush();
+    toggle().dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    expect(pttOf(el)!.classList.contains('is-picking')).toBe(true);
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(pttOf(el)).toBeNull();
+  });
+
+  it('detaching mid-recording cancels the session and strands nothing', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted', transcript: 'lost' });
+    const el = mount(fake);
+    const ta = press(el);
+    await flush();
+    expect(pttOf(el)).not.toBeNull();
+
+    el.remove();
+    expect(el.querySelector('.slicc-composer__ptt')).toBeNull();
+    expect(fake.calls.cancel).toBe(1);
+
+    // A release after the detach must not insert anything.
+    release();
+    await flush();
+    expect(ta.value).toBe('');
+  });
+
+  it('formats minute-scale ETAs and the no-ETA download line', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    const el = mount(fake);
+    press(el);
+    await flush();
+    const status = pttOf(el)!.querySelector('.slicc-composer__ptt-status') as HTMLElement;
+
+    fake.emitStatus({
+      engine: 'builtin',
+      state: 'downloading',
+      download: { loaded: 0, total: 150, etaSeconds: 130 },
+    });
+    expect(status.textContent).toBe('Better speech recognition downloading · ready in ~2m 10s');
+
+    fake.emitStatus({
+      engine: 'builtin',
+      state: 'downloading',
+      download: { loaded: 0, total: 0, etaSeconds: null },
+    });
+    expect(status.textContent).toBe('Better speech recognition downloading…');
+    el.dispatchEvent(new MouseEvent('mouseleave', { bubbles: false }));
+  });
+
+  it('hides the caption again when a partial collapses to nothing', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    const el = mount(fake);
+    press(el);
+    await flush();
+    const caption = pttOf(el)!.querySelector('.slicc-composer__ptt-caption') as HTMLElement;
+
+    fake.emitPartial('hello');
+    expect(caption.hidden).toBe(false);
+    fake.emitPartial('   ');
+    expect(caption.hidden).toBe(true);
+    el.dispatchEvent(new MouseEvent('mouseleave', { bubbles: false }));
+  });
+
+  it('does not double-space when the existing input already ends with whitespace', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted', transcript: 'world' });
+    const el = mount(fake);
+    const ta = press(el);
+    ta.value = 'hello ';
+    await flush();
+    release();
+    await flush();
+    expect(ta.value).toBe('hello world');
+  });
+
+  it('submits through a slotted slicc-input-card via its public submit()', async () => {
+    const el = document.createElement('slicc-composer') as SliccComposer;
+    el.setAttribute('ptt', '');
+    el.style.cssText = 'width:1000px;display:block;';
+    const card = document.createElement('slicc-input-card');
+    el.append(card);
+    const fake = makeFakeSpeech({ permission: 'granted', transcript: 'via the card' });
+    el.speech = fake.controller;
     document.body.appendChild(el);
 
-    const sheet = Array.from(document.styleSheets).find(
-      (s) => (s.ownerNode as Element | null)?.id === 'slicc-composer-style'
-    );
-    expect(sheet).toBeDefined();
+    const submits: string[] = [];
+    el.addEventListener('submit', (e) => {
+      submits.push((e as Event as CustomEvent<{ value: string }>).detail.value);
+    });
 
-    let guarded = false;
-    for (const rule of Array.from(sheet!.cssRules)) {
-      if (rule instanceof CSSMediaRule && rule.conditionText.includes('prefers-reduced-motion')) {
-        for (const inner of Array.from(rule.cssRules)) {
-          if (
-            inner instanceof CSSStyleRule &&
-            inner.selectorText.includes('slicc-composer__ptt-bar-fill') &&
-            inner.style.animationName === 'none'
-          ) {
-            guarded = true;
-          }
-        }
-      }
-    }
-    expect(guarded).toBe(true);
+    press(el);
+    await flush();
+    release();
+    await flush();
+    expect(submits).toEqual(['via the card']);
+    expect((card as HTMLElement & { value: string }).value).toBe('via the card');
+  });
+
+  it('the input-card submit path also marks the turn as dictation', async () => {
+    const el = document.createElement('slicc-composer') as SliccComposer;
+    el.setAttribute('ptt', '');
+    el.style.cssText = 'width:1000px;display:block;';
+    el.append(document.createElement('slicc-input-card'));
+    el.speech = makeFakeSpeech({ permission: 'granted', transcript: 'spoken' }).controller;
+    document.body.appendChild(el);
+
+    const sources: Array<string | undefined> = [];
+    el.addEventListener('submit', (e) => {
+      sources.push((e as Event as CustomEvent<{ source?: string }>).detail.source);
+    });
+    press(el);
+    await flush();
+    release();
+    await flush();
+    expect(sources).toEqual(['dictation']);
+  });
+
+  it('shows engine errors in the caption (error styling) when start() rejects', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    fake.controller.start = async () => {
+      throw new Error('engine exploded');
+    };
+    const el = mount(fake);
+    press(el);
+    await flush();
+
+    const caption = pttOf(el)!.querySelector('.slicc-composer__ptt-caption') as HTMLElement;
+    expect(caption.hidden).toBe(false);
+    expect(caption.classList.contains('is-error')).toBe(true);
+    expect(caption.textContent).toContain('exploded');
+
+    // Releasing tears down without inserting anything.
+    const ta = el.querySelector('textarea') as HTMLTextAreaElement;
+    release();
+    await flush();
+    expect(pttOf(el)).toBeNull();
+    expect(ta.value).toBe('');
+  });
+
+  it('tears down without inserting when the final stop() rejects', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    const start = fake.controller.start.bind(fake.controller);
+    fake.controller.start = async (opts) => {
+      await start(opts);
+      return {
+        stop: async () => {
+          throw new Error('transcription lost');
+        },
+        cancel: () => {},
+      };
+    };
+    const el = mount(fake);
+    const ta = press(el);
+    await flush();
+    release();
+    await flush();
+    expect(pttOf(el)).toBeNull();
+    expect(ta.value).toBe('');
+  });
+
+  it('exposes device and speech as properties (device persists, speech resets perm)', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    const el = mount(fake);
+    expect(el.device).toBeNull();
+    el.device = 'usb-1';
+    expect(localStorage.getItem('slicc-composer:mic-device')).toBe('usb-1');
+    el.device = null;
+    expect(localStorage.getItem('slicc-composer:mic-device')).toBeNull();
+
+    // Swapping the controller invalidates the cached permission snapshot:
+    // the next press queries the NEW controller.
+    const fresh = makeFakeSpeech({ permission: 'granted', transcript: 'fresh' });
+    el.speech = fresh.controller;
+    expect(el.speech).toBe(fresh.controller);
+    const ta = press(el);
+    await flush();
+    release();
+    await flush();
+    expect(ta.value).toBe('fresh');
   });
 });
 

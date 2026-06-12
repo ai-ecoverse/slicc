@@ -98,6 +98,21 @@ export function createStandalonePanelRpcHandlers(
   const hidSubscriptions = new Map<string, () => void>();
 
   return {
+    ...buildPageAudioHandlers(),
+    ...buildClipboardCaptureHandlers(),
+    ...buildHearHandlers(),
+    ...buildTrayOauthHandlers(options),
+    ...buildUsbHandlers(),
+    ...buildHidHandlers(options, hidSubscriptions),
+    ...buildSerialHandlers(),
+    ...buildEsptoolHandlers(options),
+    ...buildRemoteCdpHandlers(options),
+  };
+}
+
+/** Page identity, screen/speech/audio output. */
+function buildPageAudioHandlers() {
+  return {
     'page-info': () => ({
       origin: window.location.origin,
       href: window.location.href,
@@ -119,33 +134,31 @@ export function createStandalonePanelRpcHandlers(
       };
     },
 
+    // Routed through the kokoro-aware speak helper: the on-device voice runs
+    // once its chained download is ready (or when `voice` names a kokoro
+    // voice id), Web Speech otherwise — so the worker's `say` picks the
+    // upgrade up with no protocol change.
     'speak-text': async ({ text, lang, voice, rate, pitch, volume }) => {
-      if (typeof speechSynthesis === 'undefined') {
-        throw new Error('speechSynthesis is unavailable in this page');
-      }
-      await new Promise<void>((resolve, reject) => {
-        const u = new SpeechSynthesisUtterance(text);
-        if (lang !== undefined) u.lang = lang;
-        if (rate !== undefined) u.rate = rate;
-        if (pitch !== undefined) u.pitch = pitch;
-        if (volume !== undefined) u.volume = volume;
-        if (voice) {
-          const match = speechSynthesis.getVoices().find((v) => v.name === voice);
-          if (match) u.voice = match;
-        }
-        u.onend = () => resolve();
-        u.onerror = (ev) => reject(new Error(`speak: ${ev.error || 'utterance failed'}`));
-        speechSynthesis.speak(u);
-      });
+      const { speak } = await import('../speech/speak.js');
+      await speak({ text, lang, voice, rate, pitch, volume });
       return { done: true };
     },
 
     'list-voices': async () => {
+      // Kokoro voices (when the engine is warm) lead the list, exposed by
+      // their stable ids so `say -v af_heart` round-trips.
+      const { kokoroVoicesIfReady } = await import('../speech/speak.js');
+      const kokoro = kokoroVoicesIfReady().map((v) => ({
+        name: v.id,
+        lang: v.lang,
+        default: false,
+      }));
       if (typeof speechSynthesis === 'undefined') {
+        if (kokoro.length > 0) return { voices: kokoro };
         throw new Error('speechSynthesis is unavailable in this page');
       }
       const ready = speechSynthesis.getVoices();
-      if (ready.length > 0) return { voices: ready.map(toVoiceInfo) };
+      if (ready.length > 0) return { voices: [...kokoro, ...ready.map(toVoiceInfo)] };
       // Voices load asynchronously on first read in many browsers —
       // wait once for `voiceschanged` so the worker side doesn't get
       // an empty list on a cold session.
@@ -163,7 +176,7 @@ export function createStandalonePanelRpcHandlers(
           resolve(speechSynthesis.getVoices());
         }, 1000);
       });
-      return { voices: voices.map(toVoiceInfo) };
+      return { voices: [...kokoro, ...voices.map(toVoiceInfo)] };
     },
 
     'play-audio': async ({ bytes, volume }) => {
@@ -235,7 +248,12 @@ export function createStandalonePanelRpcHandlers(
       }
       return { done: true };
     },
+  } satisfies Partial<PanelRpcHandlers>;
+}
 
+/** Clipboard, window/popup, camera + media-device enumeration. */
+function buildClipboardCaptureHandlers() {
+  return {
     'clipboard-read-text': async () => {
       if (!navigator.clipboard?.readText) {
         throw new Error('clipboard API unavailable');
@@ -311,6 +329,41 @@ export function createStandalonePanelRpcHandlers(
       };
     },
 
+    // `hear` speech bridge: the worker has no mic/recognizer/AudioContext.
+    // The speech stack is dynamically imported so the page boot bundle stays
+    // lean — these modules (and the whisper engine they lazy-load) only ever
+    // load once a speech op actually runs.
+  } satisfies Partial<PanelRpcHandlers>;
+}
+
+/** `hear` speech bridge (capture / transcribe / status / warmup). */
+function buildHearHandlers() {
+  return {
+    'hear-capture': async (payload) => {
+      const { hearCapture } = await import('../speech/hear.js');
+      return await hearCapture(payload ?? {});
+    },
+
+    'hear-transcribe': async ({ bytes, lang }) => {
+      const { hearTranscribe } = await import('../speech/hear.js');
+      return await hearTranscribe(bytes, lang);
+    },
+
+    'hear-status': async () => {
+      const { hearStatus } = await import('../speech/hear.js');
+      return hearStatus();
+    },
+
+    'hear-warmup': async () => {
+      const { hearWarmup } = await import('../speech/hear.js');
+      return hearWarmup();
+    },
+  } satisfies Partial<PanelRpcHandlers>;
+}
+
+/** Tray lifecycle, cherry emit, and OAuth storage writes. */
+function buildTrayOauthHandlers(options: StandalonePanelRpcHandlerOptions) {
+  return {
     'tray-reset': async () => {
       if (!options.resetTray) {
         throw new Error('host reset: no active tray session to reset');
@@ -366,6 +419,12 @@ export function createStandalonePanelRpcHandlers(
     // `usb-request` calls `requestDevice` and therefore only succeeds
     // when invoked during a user gesture; outside one the browser
     // rejects it and the error surfaces to the worker command.
+  } satisfies Partial<PanelRpcHandlers>;
+}
+
+/** WebUSB ops over the shared page-side handle registry. */
+function buildUsbHandlers() {
+  return {
     'usb-list': async () => ({ devices: await usbOps.usbList(usbRegistry(), requireUsb()) }),
 
     'usb-request': async ({ filters }) => ({
@@ -424,6 +483,15 @@ export function createStandalonePanelRpcHandlers(
     // `requestDevice` and therefore only succeeds during a user gesture.
     // `hid-subscribe-input-reports` attaches an `inputreport` listener
     // that fans reports back over the event channel via `emitEvent`.
+  } satisfies Partial<PanelRpcHandlers>;
+}
+
+/** WebHID ops, including the input-report watch subscriptions. */
+function buildHidHandlers(
+  options: StandalonePanelRpcHandlerOptions,
+  hidSubscriptions: Map<string, () => void>
+) {
+  return {
     'hid-list': async () => ({ devices: await hidOps.hidList(hidRegistry(), requireHid()) }),
 
     'hid-request': async ({ filters }) => ({
@@ -483,6 +551,12 @@ export function createStandalonePanelRpcHandlers(
     // Mirrors the WebUSB handlers above, keyed by opaque handles backed
     // by the page-side `SerialPortRegistry`. `serial-request` calls
     // `requestPort` and therefore only succeeds during a user gesture.
+  } satisfies Partial<PanelRpcHandlers>;
+}
+
+/** Web Serial ops over the shared page-side handle registry. */
+function buildSerialHandlers() {
+  return {
     'serial-list': async () => ({
       devices: await serialOps.serialList(serialRegistry(), requireSerial()),
     }),
@@ -537,6 +611,12 @@ export function createStandalonePanelRpcHandlers(
     // wrapper is dynamically imported on first use to keep it out of the
     // eager page bundle. Each esptool terminal line is fanned back to the
     // worker on the `esptool-progress` channel so flash progress streams.
+  } satisfies Partial<PanelRpcHandlers>;
+}
+
+/** esptool flashing ops (progress streamed via emitEvent). */
+function buildEsptoolHandlers(options: StandalonePanelRpcHandlerOptions) {
+  return {
     'esptool-chip-info': async ({ handle, baudRate }) => {
       const esptool = await import('../kernel/esptool-operations.js');
       return esptool.esptoolChipInfo(serialRegistry(), handle, baudRate, (line) =>
@@ -618,7 +698,12 @@ export function createStandalonePanelRpcHandlers(
       );
       return { done: true };
     },
+  } satisfies Partial<PanelRpcHandlers>;
+}
 
+/** Federated remote-CDP relay (tray/cherry targets). */
+function buildRemoteCdpHandlers(options: StandalonePanelRpcHandlerOptions) {
+  return {
     'list-remote-targets': async () => {
       if (!options.listRemoteTargets) return { targets: [] };
       const all = await options.listRemoteTargets();
@@ -660,7 +745,7 @@ export function createStandalonePanelRpcHandlers(
       if (!options.remoteCdp) throw new Error('remote-cdp bridge not available');
       return options.remoteCdp.openTab({ runtimeId, url });
     },
-  };
+  } satisfies Partial<PanelRpcHandlers>;
 }
 
 /** Shared page-side WebUSB registry (lazy singleton). */

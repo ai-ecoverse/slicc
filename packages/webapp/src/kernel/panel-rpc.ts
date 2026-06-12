@@ -135,6 +135,23 @@ export type PanelRpcRequest =
       };
     }
   | { op: 'enumerate-media-devices'; payload?: undefined }
+  // Speech capture / transcription for the `hear` command. The kernel
+  // worker has no microphone, recognizer, or AudioContext — these bridge
+  // to the page-side speech stack (`src/speech/hear.ts`). Callers pass
+  // generous per-call timeouts: capture waits for the speaker to finish,
+  // and transcribe may first stream the whisper model download.
+  | {
+      op: 'hear-capture';
+      payload: {
+        lang?: string;
+        timeoutMs?: number;
+        deviceId?: string;
+        engine?: 'auto' | 'builtin' | 'enhanced';
+      };
+    }
+  | { op: 'hear-transcribe'; payload: { bytes: ArrayBuffer; lang?: string } }
+  | { op: 'hear-status'; payload?: undefined }
+  | { op: 'hear-warmup'; payload?: undefined }
   | {
       // Reset the page-side multi-browser-sync leader tray. The
       // tray subsystem lives on the page (DOM, RTCPeerConnections,
@@ -374,6 +391,10 @@ export interface PanelRpcResults {
     videoinputs: Array<{ deviceId: string; label: string; groupId?: string }>;
     audioinputs: Array<{ deviceId: string; label: string; groupId?: string }>;
   };
+  'hear-capture': { transcript: string; engine: 'builtin' | 'enhanced' };
+  'hear-transcribe': { transcript: string; engine: 'builtin' | 'enhanced' };
+  'hear-status': HearRpcStatus;
+  'hear-warmup': HearRpcStatus;
   'tray-reset': LeaderTrayRuntimeStatus;
   'tray-leave': TrayLeaveResult;
   'oauth-extras-set': { storeAfter: OAuthExtraDomainsStore };
@@ -428,6 +449,19 @@ export interface PanelRpcResults {
   'remote-cdp-unsubscribe': { ok: true };
   'remote-cdp-detach': { ok: true };
   'remote-open-tab': { targetId: string };
+}
+
+/**
+ * Serializable enhanced-speech-engine lifecycle snapshot returned by
+ * `hear-status` / `hear-warmup`. Structural mirror of `HearStatus` in
+ * `src/speech/hear.ts` (the page-side implementation) — kept import-free so
+ * the worker-side type graph never references the page-only speech modules.
+ */
+export interface HearRpcStatus {
+  state: 'idle' | 'loading' | 'ready' | 'failed';
+  loaded?: number;
+  total?: number;
+  etaSeconds?: number | null;
 }
 
 /**
@@ -614,38 +648,41 @@ export function createPanelRpcClient(options: { instanceId?: string } = {}): Pan
 
   const eventSubscribers = new Map<string, Set<(payload: unknown) => void>>();
 
-  channel.addEventListener('message', (event: MessageEvent) => {
-    const msg = event.data as PanelRpcResponseMsg | PanelRpcEventMsg | PanelRpcPushMsg | undefined;
-    if (msg?.type === 'panel-rpc-event') {
-      const subs = eventSubscribers.get(msg.channel);
-      if (subs) {
-        for (const handler of subs) {
-          try {
-            handler(msg.payload);
-          } catch (err) {
-            console.warn(
-              `panel-rpc: event handler for '${msg.channel}' threw:`,
-              err instanceof Error ? err.message : String(err)
-            );
-          }
-        }
+  const handleEventMsg = (msg: PanelRpcEventMsg): void => {
+    const subs = eventSubscribers.get(msg.channel);
+    if (!subs) return;
+    for (const handler of subs) {
+      try {
+        handler(msg.payload);
+      } catch (err) {
+        console.warn(
+          `panel-rpc: event handler for '${msg.channel}' threw:`,
+          err instanceof Error ? err.message : String(err)
+        );
       }
-      return;
     }
-    if (msg?.type === 'panel-rpc-push') {
-      if (msg.op === 'remote-cdp-event') {
-        const p = msg.payload;
-        pushTargets.get(`${p.runtimeId}:${p.localTargetId}`)?.(p);
-      }
-      return;
-    }
-    if (msg?.type !== 'panel-rpc-response') return;
+  };
+
+  const handlePushMsg = (msg: PanelRpcPushMsg): void => {
+    if (msg.op !== 'remote-cdp-event') return;
+    const p = msg.payload;
+    pushTargets.get(`${p.runtimeId}:${p.localTargetId}`)?.(p);
+  };
+
+  const handleResponseMsg = (msg: PanelRpcResponseMsg): void => {
     const slot = pending.get(msg.id);
     if (!slot) return;
     pending.delete(msg.id);
     clearTimeout(slot.timer);
     if (typeof msg.error === 'string') slot.reject(new Error(msg.error));
     else slot.resolve(msg.result);
+  };
+
+  channel.addEventListener('message', (event: MessageEvent) => {
+    const msg = event.data as PanelRpcResponseMsg | PanelRpcEventMsg | PanelRpcPushMsg | undefined;
+    if (msg?.type === 'panel-rpc-event') handleEventMsg(msg);
+    else if (msg?.type === 'panel-rpc-push') handlePushMsg(msg);
+    else if (msg?.type === 'panel-rpc-response') handleResponseMsg(msg);
   });
 
   function onEvent(eventChannel: string, handler: (payload: unknown) => void): () => void {

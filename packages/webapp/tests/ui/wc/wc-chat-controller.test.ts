@@ -367,4 +367,93 @@ describe('WcChatController render-failure degradation', () => {
     expect(thread.querySelectorAll('slicc-agent-message')).toHaveLength(2);
     errSpy.mockRestore();
   });
+
+  it('fires onTurnComplete with the final assistant message (the spoken-reply hook)', async () => {
+    installWcDomStubs();
+    const thread = document.createElement('slicc-chat-thread');
+    document.body.appendChild(thread);
+    const agent = new FakeAgent();
+    const completed: Array<{ content: string; isStreaming?: boolean } | null> = [];
+    const controller = new WcChatController({
+      thread,
+      agent,
+      onTurnComplete: (message) => completed.push(message),
+    });
+
+    agent.emit({ type: 'message_start', messageId: 'm9' });
+    agent.emit({ type: 'content_delta', messageId: 'm9', text: 'spoken reply' });
+    agent.emit({ type: 'content_done', messageId: 'm9' });
+    await nextFrame();
+    agent.emit({ type: 'turn_end', messageId: 'm9' });
+
+    expect(completed).toHaveLength(1);
+    expect(completed[0]?.content).toBe('spoken reply');
+    expect(completed[0]?.isStreaming).toBe(false);
+
+    // THE LIVE-FLOAT SHAPE (regression): the chat wire never carries a
+    // `turn_end` event — content events stream, then processing falls via a
+    // scoop STATUS broadcast (`setProcessing`). The completion hook must
+    // fire on that transition too, or the spoken-reply loop is dead outside
+    // tests.
+    agent.emit({ type: 'message_start', messageId: 'm10' });
+    agent.emit({ type: 'content_delta', messageId: 'm10', text: 'live reply' });
+    agent.emit({ type: 'content_done', messageId: 'm10' });
+    await nextFrame();
+    controller.setProcessing(false);
+    expect(completed[1]?.content).toBe('live reply');
+
+    // No transition (already idle) → no duplicate fire.
+    controller.setProcessing(false);
+    expect(completed).toHaveLength(2);
+  });
+
+  it('onTurnComplete is scoped to the turn — no stale reply, no historical fallback', async () => {
+    installWcDomStubs();
+    const thread = document.createElement('slicc-chat-thread');
+    document.body.appendChild(thread);
+    const agent = new FakeAgent();
+    const completed: Array<{ content: string } | null> = [];
+    const controller = new WcChatController({
+      thread,
+      agent,
+      onTurnComplete: (message) => completed.push(message as { content: string } | null),
+    });
+
+    // Turn 1 streams a reply.
+    agent.emit({ type: 'message_start', messageId: 't1' });
+    agent.emit({ type: 'content_delta', messageId: 't1', text: 'earlier answer' });
+    agent.emit({ type: 'content_done', messageId: 't1' });
+    await nextFrame();
+    agent.emit({ type: 'turn_end', messageId: 't1' });
+    expect(completed[0]?.content).toBe('earlier answer');
+
+    // A later turn that streams NOTHING (status-only cycle) must report null
+    // — never re-surface turn 1's reply (the stale-speak review finding).
+    controller.setProcessing(true);
+    controller.setProcessing(false);
+    expect(completed[1]).toBeNull();
+
+    // The error path: processing falls before the error bubble is appended.
+    // The hook gets THIS turn's (empty) stream — not 'earlier answer'.
+    agent.emit({ type: 'message_start', messageId: 't3' });
+    agent.emit({ type: 'error', error: 'rate limited' });
+    expect(completed[2]?.content).toBe('');
+  });
+
+  it('onTurnComplete reports null when no assistant message exists at all', async () => {
+    installWcDomStubs();
+    const thread = document.createElement('slicc-chat-thread');
+    document.body.appendChild(thread);
+    const agent = new FakeAgent();
+    const completed: Array<unknown | null> = [];
+    const controller = new WcChatController({
+      thread,
+      agent,
+      onTurnComplete: (message) => completed.push(message),
+    });
+
+    controller.setProcessing(true);
+    controller.setProcessing(false);
+    expect(completed).toEqual([null]);
+  });
 });

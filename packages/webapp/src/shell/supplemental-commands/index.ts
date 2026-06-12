@@ -23,6 +23,7 @@ import { createEsbuildCommand } from './esbuild-command.js';
 import { createEsptoolCommand } from './esptool-command.js';
 import { createFfmpegCommand } from './ffmpeg-command.js';
 import { createFsWatchCommand } from './fswatch-command.js';
+import { createHearCommand } from './hear-command.js';
 import { createCommandsCommand } from './help-command.js';
 import { createHidCommand } from './hid-command.js';
 import { createHostCommand } from './host-command.js';
@@ -169,6 +170,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createClipboardAutoCommand('xclip'),
     createClipboardAutoCommand('xsel'),
     createSayCommand(),
+    createHearCommand(),
     createAfplayCommand(),
     createChimeCommand(),
     createModelsCommand(options.fs),
