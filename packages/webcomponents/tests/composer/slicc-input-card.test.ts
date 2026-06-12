@@ -165,6 +165,34 @@ describe('slicc-input-card', () => {
       expect(document.activeElement).toBe(ta);
       expect(ta.selectionStart).toBe('Now add dark mode?'.length);
       expect(ta.selectionEnd).toBe('Now add dark mode?'.length);
+      // Acceptance consumes the suggestion — clearing the draft must not
+      // re-offer it, or a second Tab+Enter could enqueue a duplicate prompt.
+      expect(el.hasAttribute('suggestion')).toBe(false);
+      el.clear();
+      expect(ta.placeholder).toBe('Ask sliccy, or describe a change…');
+      expect(tab(el).defaultPrevented).toBe(false);
+    });
+
+    it('any submit drops a pending suggestion (stale context)', () => {
+      const el = mount((e) => {
+        e.suggestion = 'suggested follow-up';
+        e.value = 'manually typed instead';
+      });
+      enter(el);
+      expect(el.hasAttribute('suggestion')).toBe(false);
+      expect(textarea(el).placeholder).toBe('Ask sliccy, or describe a change…');
+    });
+
+    it('a suppressed submit (empty or disabled) keeps the suggestion', () => {
+      const el = mount((e) => {
+        e.suggestion = 'still pending';
+      });
+      enter(el); // empty — suppressed
+      expect(el.getAttribute('suggestion')).toBe('still pending');
+      el.value = 'ready';
+      el.disabled = true;
+      enter(el); // disabled — suppressed
+      expect(el.getAttribute('suggestion')).toBe('still pending');
     });
 
     it('submits the accepted suggestion on the next Enter', () => {

@@ -122,12 +122,15 @@ const DEFAULT_PLACEHOLDER = 'Ask sliccy, or describe a change…';
  * composer and Tab accepts it into the textarea — instead of tabbing focus
  * away to the toolbar — so the very next Enter can submit it. Tab keeps its
  * native focus-navigation whenever text is present, no suggestion is set, or
- * Shift/a modifier is held.
+ * Shift/a modifier is held. The suggestion is single-use: accepting it (Tab)
+ * or submitting anything drops the attribute, so a stale prompt is never
+ * re-offered on the cleared composer mid-turn (hosts refresh it on turn end).
  *
  * @attr value - the textarea contents (reflected to/from the property)
  * @attr placeholder - textarea placeholder (defaults to the prototype copy)
  * @attr suggestion - a suggested follow-up prompt; shown as the placeholder
- *   when the composer is empty, accepted into the textarea on Tab
+ *   when the composer is empty, accepted into the textarea on Tab; consumed
+ *   by acceptance and by any submit
  * @attr disabled - boolean; disables the textarea
  * @csspart card - the rounded white card surface (carries the focus ring)
  * @csspart textarea - the borderless autosizing `<textarea>`
@@ -316,6 +319,10 @@ export class SliccInputCard extends HTMLElement {
       const suggestion = this.suggestion;
       if (suggestion && this.#textarea.value === '') {
         e.preventDefault();
+        // Consume the suggestion: once accepted it must not stay Tab-fillable,
+        // or the post-submit clear() would re-offer it and a second Tab+Enter
+        // could enqueue a duplicate prompt mid-turn.
+        this.removeAttribute('suggestion');
         const ta = this.#textarea;
         ta.value = suggestion;
         ta.setSelectionRange(suggestion.length, suggestion.length);
@@ -361,6 +368,10 @@ export class SliccInputCard extends HTMLElement {
     if (this.disabled) return;
     const value = this.#textarea.value;
     if (value.trim() === '') return;
+    // Any submission invalidates the conversational context the suggestion
+    // was generated from — drop it so the post-submit empty composer doesn't
+    // re-offer a stale Tab-fillable prompt (the host refreshes it on turn end).
+    this.removeAttribute('suggestion');
     this.dispatchEvent(
       new CustomEvent('submit', { bubbles: true, composed: true, detail: { value } })
     );
