@@ -123,6 +123,116 @@ describe('slicc-input-card', () => {
       expect(el.hasAttribute('disabled')).toBe(true);
       expect(textarea(el).disabled).toBe(true);
     });
+
+    it('reflects suggestion and shows it as the textarea placeholder', () => {
+      const el = mount((e) => {
+        e.suggestion = 'Now add dark mode?';
+      });
+      expect(el.getAttribute('suggestion')).toBe('Now add dark mode?');
+      expect(textarea(el).placeholder).toBe('Now add dark mode?');
+      el.suggestion = null;
+      expect(el.hasAttribute('suggestion')).toBe(false);
+      expect(textarea(el).placeholder).toBe('Ask sliccy, or describe a change…');
+    });
+  });
+
+  describe('suggestion Tab-to-accept', () => {
+    function tab(el: SliccInputCard, init: KeyboardEventInit = {}): KeyboardEvent {
+      const ev = new KeyboardEvent('keydown', {
+        key: 'Tab',
+        bubbles: true,
+        cancelable: true,
+        ...init,
+      });
+      textarea(el).dispatchEvent(ev);
+      return ev;
+    }
+
+    it('Tab on an empty composer accepts the suggestion instead of moving focus', () => {
+      const el = mount((e) => {
+        e.suggestion = 'Now add dark mode?';
+      });
+      const seen: string[] = [];
+      el.addEventListener('input', (e) => seen.push((e as Event as CustomEvent).detail.value));
+      textarea(el).focus();
+      const ev = tab(el);
+      expect(ev.defaultPrevented).toBe(true);
+      expect(el.value).toBe('Now add dark mode?');
+      expect(el.getAttribute('value')).toBe('Now add dark mode?');
+      expect(seen).toEqual(['Now add dark mode?']);
+      // Focus stays in the textarea with the caret at the end, ready to edit.
+      const ta = textarea(el);
+      expect(document.activeElement).toBe(ta);
+      expect(ta.selectionStart).toBe('Now add dark mode?'.length);
+      expect(ta.selectionEnd).toBe('Now add dark mode?'.length);
+      // Acceptance consumes the suggestion — clearing the draft must not
+      // re-offer it, or a second Tab+Enter could enqueue a duplicate prompt.
+      expect(el.hasAttribute('suggestion')).toBe(false);
+      el.clear();
+      expect(ta.placeholder).toBe('Ask sliccy, or describe a change…');
+      expect(tab(el).defaultPrevented).toBe(false);
+    });
+
+    it('any submit drops a pending suggestion (stale context)', () => {
+      const el = mount((e) => {
+        e.suggestion = 'suggested follow-up';
+        e.value = 'manually typed instead';
+      });
+      enter(el);
+      expect(el.hasAttribute('suggestion')).toBe(false);
+      expect(textarea(el).placeholder).toBe('Ask sliccy, or describe a change…');
+    });
+
+    it('a suppressed submit (empty or disabled) keeps the suggestion', () => {
+      const el = mount((e) => {
+        e.suggestion = 'still pending';
+      });
+      enter(el); // empty — suppressed
+      expect(el.getAttribute('suggestion')).toBe('still pending');
+      el.value = 'ready';
+      el.disabled = true;
+      enter(el); // disabled — suppressed
+      expect(el.getAttribute('suggestion')).toBe('still pending');
+    });
+
+    it('submits the accepted suggestion on the next Enter', () => {
+      const el = mount((e) => {
+        e.suggestion = 'Now add dark mode?';
+      });
+      const submit = vi.fn();
+      el.addEventListener('submit', (e) => submit((e as Event as CustomEvent).detail.value));
+      tab(el);
+      enter(el);
+      expect(submit).toHaveBeenCalledWith('Now add dark mode?');
+    });
+
+    it('keeps native Tab focus-nav when text is present', () => {
+      const el = mount((e) => {
+        e.suggestion = 'suggested';
+        e.value = 'typed draft';
+      });
+      const ev = tab(el);
+      expect(ev.defaultPrevented).toBe(false);
+      expect(el.value).toBe('typed draft');
+    });
+
+    it('keeps native Tab focus-nav when no suggestion is set (default placeholder)', () => {
+      const el = mount();
+      const ev = tab(el);
+      expect(ev.defaultPrevented).toBe(false);
+      expect(el.value).toBe('');
+    });
+
+    it('keeps native Shift+Tab and modified-Tab focus-nav even with a suggestion', () => {
+      const el = mount((e) => {
+        e.suggestion = 'suggested';
+      });
+      expect(tab(el, { shiftKey: true }).defaultPrevented).toBe(false);
+      expect(tab(el, { ctrlKey: true }).defaultPrevented).toBe(false);
+      expect(tab(el, { altKey: true }).defaultPrevented).toBe(false);
+      expect(tab(el, { metaKey: true }).defaultPrevented).toBe(false);
+      expect(el.value).toBe('');
+    });
   });
 
   describe('idle vs focus-within state', () => {
