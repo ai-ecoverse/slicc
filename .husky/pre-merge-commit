@@ -1,0 +1,28 @@
+set -e
+
+# Fail fast when a merge would create a merge commit on a feature branch.
+# The merge queue requires a linear history (CI job: linear-history), so
+# feature branches must rebase onto the base instead of merging it in.
+#
+# This hook only fires for merges that create a commit — fast-forward and
+# squash merges keep history linear and pass through untouched.
+# Escape hatch: `git merge --no-verify`.
+
+branch="$(git symbolic-ref --short -q HEAD || echo)"
+if [ "$branch" = "main" ] || [ -z "$branch" ]; then
+  exit 0
+fi
+
+echo "✗ Refusing to create a merge commit on '$branch'." >&2
+echo "" >&2
+echo "The merge queue requires a linear history (CI job: linear-history)." >&2
+echo "Rebase onto the base branch instead of merging it in:" >&2
+echo "" >&2
+echo "  git merge --abort        # undo this in-progress merge" >&2
+echo "  git fetch origin" >&2
+echo "  git rebase origin/main" >&2
+echo "  git push --force-with-lease" >&2
+echo "" >&2
+echo "Tip: 'git config pull.rebase true' makes 'git pull' rebase by default." >&2
+echo "If you really need this merge commit, re-run with --no-verify." >&2
+exit 1

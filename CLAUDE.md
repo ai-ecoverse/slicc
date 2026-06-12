@@ -91,6 +91,7 @@ Use the ice cream terms in code review comments and docs when they match the dom
 ## Git Conventions
 
 - Keep commits focused and package-local when possible.
+- **Linear history**: the merge queue and CI `linear-history` job reject branches with merge commits. Rebase onto the base (`git rebase origin/main`) instead of merging it in (`git config pull.rebase true` helps). Husky enforces this locally via `.husky/pre-merge-commit` and `.husky/pre-push` (reusing `packages/dev-tools/tools/check-linear-history.sh`).
 - Do not hand-edit generated output in `dist/`.
 - Webapp git behavior is implemented with `isomorphic-git` over the OPFS-backed VirtualFS.
 - Auth uses `git config github.token <PAT>`.
