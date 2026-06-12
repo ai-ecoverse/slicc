@@ -138,50 +138,8 @@ export async function runJsRealm(
     error: (...parts: unknown[]) => writeStderr(`${parts.map(formatConsoleArg).join(' ')}\n`),
   };
 
-  // `init.stdin` arrives as a buffered string from the kernel — pipelines
-  // upstream of the realm (the AlmostBashShell exec pipeline, the registered
-  // `.jsh` command path, `node`/`node -e` via supplemental-commands) all
-  // populate it before posting `realm-init`. Stdin in the realm is
-  // therefore fully read-ahead; we don't model a streaming Readable.
-  //
-  // Exposed exclusively via `process.stdin` to avoid burning a top-level
-  // identifier. Earlier drafts also injected `stdin` as an AsyncFunction
-  // parameter for ergonomics, but `stdin` is a common user variable name
-  // (more so than `fs` / `exec` / `fetch`); reserving it would have
-  // turned any pre-existing `let stdin = …` into a strict-mode
-  // SyntaxError. Scripts that want the short form can alias it
-  // themselves: `const { stdin } = process; const data = stdin.read();`.
-  //
-  // EOF semantics match Node's `Readable.read()`: the first `read()`
-  // returns the full buffer, subsequent calls return `null`. A single
-  // `consumed` flag is shared with the async iterator, so
-  // `for await (const c of process.stdin)` after a `read()` (or a
-  // second iteration) yields nothing — same as Node where `'end'`
-  // fires once. `toString()` always returns the original buffer
-  // because it's a view (`String(process.stdin)`), not a consumer.
-  // `process.stdin.isTTY` is always `false`; there's no terminal.
-  const stdinBuffer = init.stdin ?? '';
-  let stdinConsumed = false;
-  const stdinShim = {
-    isTTY: false,
-    read(): string | null {
-      if (stdinConsumed) return null;
-      stdinConsumed = true;
-      return stdinBuffer;
-    },
-    toString(): string {
-      return stdinBuffer;
-    },
-    [Symbol.asyncIterator](): AsyncIterator<string> {
-      return {
-        async next(): Promise<IteratorResult<string>> {
-          if (stdinConsumed) return { value: undefined, done: true };
-          stdinConsumed = true;
-          return { value: stdinBuffer, done: false };
-        },
-      };
-    },
-  };
+  // `process.stdin` is the only stdin surface (see `createStdinShim`).
+  const stdinShim = createStdinShim(init.stdin ?? '');
 
   // `process.argv` carries a non-enumerable `parseFlags()` method so the
   // per-skill argv-loop reinvention (~25 LoC × every skill) collapses to a
@@ -218,28 +176,7 @@ export async function runJsRealm(
 
   const rpc = new RealmRpcClient(port);
 
-  const fsBridge = {
-    readFile: (path: string): Promise<string> => rpc.call('vfs', 'readFile', [path]),
-    readFileBinary: (path: string): Promise<Uint8Array> =>
-      rpc.call('vfs', 'readFileBinary', [path]),
-    writeFile: (path: string, content: string): Promise<true> =>
-      rpc.call('vfs', 'writeFile', [path, content]),
-    writeFileBinary: (path: string, bytes: Uint8Array): Promise<true> =>
-      rpc.call('vfs', 'writeFileBinary', [path, bytes]),
-    readDir: (path: string): Promise<string[]> => rpc.call('vfs', 'readDir', [path]),
-    exists: (path: string): Promise<boolean> => rpc.call('vfs', 'exists', [path]),
-    stat: (path: string): Promise<{ isDirectory: boolean; isFile: boolean; size: number }> =>
-      rpc.call('vfs', 'stat', [path]),
-    mkdir: (path: string): Promise<true> => rpc.call('vfs', 'mkdir', [path]),
-    rm: (path: string): Promise<true> => rpc.call('vfs', 'rm', [path]),
-    fetchToFile: async (url: string, path: string): Promise<number> => {
-      const response = await realmFetch(url);
-      if (!response.ok) throw new Error(`fetch ${response.status} ${response.statusText}`);
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      await rpc.call('vfs', 'writeFileBinary', [path, bytes]);
-      return bytes.byteLength;
-    },
-  };
+  const fsBridge = createFsBridge(rpc, realmFetch);
 
   // `exec(string)` parses the command through the shell — convenient
   // for one-liners but punishing for anyone constructing commands
@@ -258,37 +195,7 @@ export async function runJsRealm(
   // store; see `skill-global.ts` for the surface and rationale.
   const skillGlobal = createSkillGlobal({ argv: init.argv, fs: fsBridge, exec: execBridge });
 
-  // `browser` is the kernel-side CDP bridge — wraps the same
-  // BrowserAPI playwright-cli uses, so standalone and extension
-  // floats share one realm surface. Accepts a `TabHandle` (from
-  // `findTab` / `ensureTab`) or a bare `targetId` string for ops
-  // that don't need a fresh listPages round-trip. `eval` / `evalAsync`
-  // serialize functions to a string call expression so realm code
-  // can pass a closure as ergonomically as a string.
-  const browserBridge = {
-    findTab: (query: { domain?: string; urlMatch?: string | RegExp }): Promise<TabHandle | null> =>
-      rpc.call('browser', 'findTab', [normalizeUrlMatchQuery(query)]),
-    ensureTab: (url: string, options: { matchUrl?: string | RegExp } = {}): Promise<TabHandle> =>
-      rpc.call('browser', 'ensureTab', [url, normalizeMatchUrl(options)]),
-    eval: (tab: TabHandle | string, fnOrCode: ((..._args: unknown[]) => unknown) | string) =>
-      rpc.call('browser', 'eval', [resolveTargetId(tab), serializeEvalSource(fnOrCode, false)]),
-    evalAsync: (tab: TabHandle | string, fnOrCode: ((..._args: unknown[]) => unknown) | string) =>
-      rpc.call('browser', 'evalAsync', [resolveTargetId(tab), serializeEvalSource(fnOrCode, true)]),
-    cookie: (tab: TabHandle | string, name: string): Promise<string | null> =>
-      rpc.call('browser', 'cookie', [resolveTargetId(tab), name]),
-    localStorage: (tab: TabHandle | string, key: string): Promise<string | null> =>
-      rpc.call('browser', 'localStorage', [resolveTargetId(tab), key]),
-    fetch: (
-      tab: TabHandle | string,
-      url: string,
-      opts: BrowserFetchOptions = {}
-    ): Promise<BrowserFetchResult> =>
-      rpc.call('browser', 'evalAsync', [
-        resolveTargetId(tab),
-        buildBrowserFetchScript(url, opts),
-      ]) as Promise<BrowserFetchResult>,
-    websocket: createWsObserverApi(rpc),
-  };
+  const browserBridge = createBrowserBridge(rpc);
 
   // `usb` / `serial` / `hid` mirror the underlying WebUSB / Web Serial /
   // WebHID APIs. `request` / `list` resolve device objects whose methods
@@ -333,20 +240,125 @@ export async function runJsRealm(
     return response;
   }
 
-  // Pre-fetch require specifiers — fire one esm.sh request per
-  // unique id and stash the resolved exports in `requireCache`.
-  // Failures are surfaced via stderr but don't abort the run; the
-  // require shim throws a descriptive error if user code tries to
-  // consume a missing specifier.
-  //
-  // Two guard rails before the actual `loadModule` call:
-  //  - Hard-fail Node-native packages (sharp, sqlite3, …): their
-  //    CDN entries chain into `.node` loader fetches that hang
-  //    instead of erroring, so a bare `require('sharp')` could
-  //    park the realm for the full 15s timeout per specifier.
-  //  - Wrap every load in `withTimeout` so a stuck transitive
-  //    import can't park the realm indefinitely.
-  const specifiers = extractRequireSpecifiers(init.code);
+  const requireCache = await preloadRequires(init.code, init.env, loadModule, writeStderr);
+  const requireShim = createRequireShim(requireCache, fsBridge, processShim);
+
+  const moduleShim = { exports: {} as Record<string, unknown>, filename: init.filename };
+
+  const exitCode = await runUserCode(
+    init.code,
+    {
+      fs: fsBridge,
+      process: processShim,
+      console: nodeConsole,
+      require: requireShim,
+      module: moduleShim,
+      exports: moduleShim.exports,
+      exec: execBridge,
+      fetch: realmFetch,
+      skill: skillGlobal,
+      http: httpGlobal,
+      browser: browserBridge,
+      usb: usbBridge,
+      serial: serialBridge,
+      hid: hidBridge,
+      cli: cliApi,
+      c: colorApi,
+      time,
+      fmt,
+      pool,
+    },
+    writeStderr
+  );
+
+  rpc.dispose();
+  const done: RealmDoneMsg = {
+    type: 'realm-done',
+    stdout: stdoutChunks.join(''),
+    stderr: stderrChunks.join(''),
+    exitCode,
+  };
+  port.postMessage(done);
+}
+
+/**
+ * `process.stdin` shim. `init.stdin` arrives as a buffered, read-ahead
+ * string from the kernel (the AlmostBashShell exec pipeline, `.jsh`
+ * commands, `node`/`node -e`), so there's no streaming Readable.
+ *
+ * EOF semantics match Node's `Readable.read()`: the first `read()` returns
+ * the full buffer, subsequent calls return `null`. A single `consumed` flag
+ * is shared with the async iterator so `for await (const c of process.stdin)`
+ * after a `read()` (or a second iteration) yields nothing. `toString()`
+ * always returns the original buffer; `isTTY` is always `false`.
+ */
+function createStdinShim(stdinBuffer: string) {
+  let consumed = false;
+  return {
+    isTTY: false,
+    read(): string | null {
+      if (consumed) return null;
+      consumed = true;
+      return stdinBuffer;
+    },
+    toString(): string {
+      return stdinBuffer;
+    },
+    [Symbol.asyncIterator](): AsyncIterator<string> {
+      return {
+        async next(): Promise<IteratorResult<string>> {
+          if (consumed) return { value: undefined, done: true };
+          consumed = true;
+          return { value: stdinBuffer, done: false };
+        },
+      };
+    },
+  };
+}
+
+/** RPC-backed `fs` bridge (the realm's `require('fs')` / `fs` global). */
+function createFsBridge(
+  rpc: RealmRpcClient,
+  realmFetch: (input: string | URL | Request, opts?: RequestInit) => Promise<Response>
+) {
+  return {
+    readFile: (path: string): Promise<string> => rpc.call('vfs', 'readFile', [path]),
+    readFileBinary: (path: string): Promise<Uint8Array> =>
+      rpc.call('vfs', 'readFileBinary', [path]),
+    writeFile: (path: string, content: string): Promise<true> =>
+      rpc.call('vfs', 'writeFile', [path, content]),
+    writeFileBinary: (path: string, bytes: Uint8Array): Promise<true> =>
+      rpc.call('vfs', 'writeFileBinary', [path, bytes]),
+    readDir: (path: string): Promise<string[]> => rpc.call('vfs', 'readDir', [path]),
+    exists: (path: string): Promise<boolean> => rpc.call('vfs', 'exists', [path]),
+    stat: (path: string): Promise<{ isDirectory: boolean; isFile: boolean; size: number }> =>
+      rpc.call('vfs', 'stat', [path]),
+    mkdir: (path: string): Promise<true> => rpc.call('vfs', 'mkdir', [path]),
+    rm: (path: string): Promise<true> => rpc.call('vfs', 'rm', [path]),
+    fetchToFile: async (url: string, path: string): Promise<number> => {
+      const response = await realmFetch(url);
+      if (!response.ok) throw new Error(`fetch ${response.status} ${response.statusText}`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      await rpc.call('vfs', 'writeFileBinary', [path, bytes]);
+      return bytes.byteLength;
+    },
+  };
+}
+
+/**
+ * Pre-fetch require specifiers — one esm.sh request per unique id, resolved
+ * exports stashed in the returned cache. Failures go to stderr but don't
+ * abort the run. Node-native packages (sharp, sqlite3, …) are hard-failed up
+ * front (their CDN entries chain into hanging `.node` loader fetches), and
+ * every load is wrapped in `withTimeout` so a stuck import can't park the realm.
+ */
+async function preloadRequires(
+  code: string,
+  env: RealmInitMsg['env'],
+  loadModule: (id: string) => Promise<Record<string, unknown>>,
+  writeStderr: (value: unknown) => void
+): Promise<Record<string, unknown>> {
+  const specifiers = extractRequireSpecifiers(code);
   const filteredSpecifiers = specifiers
     .map((s) => (s.startsWith('node:') ? s.slice(5) : s))
     .filter((s) => !BUILTINS_LOCAL.has(s) && !NODE_BUILTINS_UNAVAILABLE.has(s));
@@ -356,25 +368,32 @@ export async function runJsRealm(
     writeStderr(`Warning: ${nativePackageError(id, id).message}\n`);
   }
   const requireCache: Record<string, unknown> = Object.create(null);
-  const loadModuleTimeoutMs = resolveLoadModuleTimeoutMs(init.env);
-  if (loadableSpecifiers.length > 0) {
-    const results = await Promise.allSettled(
-      loadableSpecifiers.map(async (id) => {
-        const mod = await withTimeout(loadModule(id), loadModuleTimeoutMs, `require('${id}')`);
-        const val = mod && 'default' in mod ? mod.default : mod;
-        requireCache[id] = val;
-      })
-    );
-    for (let i = 0; i < results.length; i++) {
-      const r = results[i];
-      if (r.status === 'rejected') {
-        const reason = r.reason instanceof Error ? r.reason.message : String(r.reason);
-        writeStderr(`Warning: failed to pre-load require('${loadableSpecifiers[i]}'): ${reason}\n`);
-      }
+  const loadModuleTimeoutMs = resolveLoadModuleTimeoutMs(env);
+  if (loadableSpecifiers.length === 0) return requireCache;
+  const results = await Promise.allSettled(
+    loadableSpecifiers.map(async (id) => {
+      const mod = await withTimeout(loadModule(id), loadModuleTimeoutMs, `require('${id}')`);
+      const val = mod && 'default' in mod ? mod.default : mod;
+      requireCache[id] = val;
+    })
+  );
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    if (r.status === 'rejected') {
+      const reason = r.reason instanceof Error ? r.reason.message : String(r.reason);
+      writeStderr(`Warning: failed to pre-load require('${loadableSpecifiers[i]}'): ${reason}\n`);
     }
   }
+  return requireCache;
+}
 
-  const requireShim = (id: string): unknown => {
+/** Synchronous `require(id)` resolving from the pre-loaded cache + built-ins. */
+function createRequireShim(
+  requireCache: Record<string, unknown>,
+  fsBridge: unknown,
+  processShim: unknown
+): (id: string) => unknown {
+  return (id: string): unknown => {
     const bareId = id.startsWith('node:') ? id.slice(5) : id;
     if (bareId === 'fs') return fsBridge;
     if (bareId === 'process') return processShim;
@@ -406,97 +425,36 @@ export async function runJsRealm(
       `require('${id}'): module not pre-loaded. Use a string literal so it can be pre-fetched, or use \`await import('${esmShUrl(id).toString()}')\` directly.`
     );
   };
+}
 
-  const moduleShim = { exports: {} as Record<string, unknown>, filename: init.filename };
-
-  let exitCode = 0;
+/**
+ * Compile `code` into an `AsyncFunction` whose parameter names are the keys of
+ * `bridges` (`fs`, `process`, `console`, …) and invoke it with their values.
+ * Returns the process exit code: `NodeExitError.code` on `process.exit`, `1`
+ * on any other throw (stack written to stderr), `0` otherwise.
+ */
+async function runUserCode(
+  code: string,
+  bridges: Record<string, unknown>,
+  writeStderr: (value: unknown) => void
+): Promise<number> {
+  const names = Object.keys(bridges);
+  const values = names.map((n) => bridges[n]);
+  const AsyncFn = Object.getPrototypeOf(async function () {
+    /* noop */
+  }).constructor as new (
+    ...args: string[]
+  ) => (...args: unknown[]) => Promise<unknown>;
+  const fn = new AsyncFn(...names, `"use strict";\n${code}`);
   try {
-    const AsyncFn = Object.getPrototypeOf(async function () {
-      /* noop */
-    }).constructor as new (
-      ...args: string[]
-    ) => (
-      fs: typeof fsBridge,
-      process: typeof processShim,
-      console: typeof nodeConsole,
-      require: typeof requireShim,
-      module: typeof moduleShim,
-      exports: Record<string, unknown>,
-      exec: typeof execBridge,
-      fetch: typeof realmFetch,
-      skill: typeof skillGlobal,
-      http: typeof httpGlobal,
-      browser: typeof browserBridge,
-      usb: typeof usbBridge,
-      serial: typeof serialBridge,
-      hid: typeof hidBridge,
-      cli: typeof cliApi,
-      c: typeof colorApi,
-      timeApi: typeof time,
-      fmtApi: typeof fmt,
-      poolApi: typeof pool
-    ) => Promise<unknown>;
-    const fn = new AsyncFn(
-      'fs',
-      'process',
-      'console',
-      'require',
-      'module',
-      'exports',
-      'exec',
-      'fetch',
-      'skill',
-      'http',
-      'browser',
-      'usb',
-      'serial',
-      'hid',
-      'cli',
-      'c',
-      'time',
-      'fmt',
-      'pool',
-      `"use strict";\n${init.code}`
-    );
-    await fn(
-      fsBridge,
-      processShim,
-      nodeConsole,
-      requireShim,
-      moduleShim,
-      moduleShim.exports,
-      execBridge,
-      realmFetch,
-      skillGlobal,
-      httpGlobal,
-      browserBridge,
-      usbBridge,
-      serialBridge,
-      hidBridge,
-      cliApi,
-      colorApi,
-      time,
-      fmt,
-      pool
-    );
+    await fn(...values);
+    return 0;
   } catch (err: unknown) {
-    if (err instanceof NodeExitError) {
-      exitCode = err.code;
-    } else {
-      const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
-      writeStderr(`${message}\n`);
-      exitCode = 1;
-    }
+    if (err instanceof NodeExitError) return err.code;
+    const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    writeStderr(`${message}\n`);
+    return 1;
   }
-
-  rpc.dispose();
-  const done: RealmDoneMsg = {
-    type: 'realm-done',
-    stdout: stdoutChunks.join(''),
-    stderr: stderrChunks.join(''),
-    exitCode,
-  };
-  port.postMessage(done);
 }
 
 function serializeRequestInit(
@@ -538,6 +496,40 @@ async function defaultLoadModule(id: string): Promise<Record<string, unknown>> {
 // ---------------------------------------------------------------------------
 
 /** Accept either a `TabHandle` (from `findTab`/`ensureTab`) or a bare targetId. */
+/**
+ * Kernel-side CDP `browser` bridge — wraps the same BrowserAPI `playwright-cli`
+ * uses so standalone and extension floats share one realm surface. Accepts a
+ * `TabHandle` (from `findTab` / `ensureTab`) or a bare `targetId` string;
+ * `eval` / `evalAsync` serialize functions to a string call expression so realm
+ * code can pass a closure as ergonomically as a string.
+ */
+function createBrowserBridge(rpc: RealmRpcClient) {
+  return {
+    findTab: (query: { domain?: string; urlMatch?: string | RegExp }): Promise<TabHandle | null> =>
+      rpc.call('browser', 'findTab', [normalizeUrlMatchQuery(query)]),
+    ensureTab: (url: string, options: { matchUrl?: string | RegExp } = {}): Promise<TabHandle> =>
+      rpc.call('browser', 'ensureTab', [url, normalizeMatchUrl(options)]),
+    eval: (tab: TabHandle | string, fnOrCode: ((..._args: unknown[]) => unknown) | string) =>
+      rpc.call('browser', 'eval', [resolveTargetId(tab), serializeEvalSource(fnOrCode, false)]),
+    evalAsync: (tab: TabHandle | string, fnOrCode: ((..._args: unknown[]) => unknown) | string) =>
+      rpc.call('browser', 'evalAsync', [resolveTargetId(tab), serializeEvalSource(fnOrCode, true)]),
+    cookie: (tab: TabHandle | string, name: string): Promise<string | null> =>
+      rpc.call('browser', 'cookie', [resolveTargetId(tab), name]),
+    localStorage: (tab: TabHandle | string, key: string): Promise<string | null> =>
+      rpc.call('browser', 'localStorage', [resolveTargetId(tab), key]),
+    fetch: (
+      tab: TabHandle | string,
+      url: string,
+      opts: BrowserFetchOptions = {}
+    ): Promise<BrowserFetchResult> =>
+      rpc.call('browser', 'evalAsync', [
+        resolveTargetId(tab),
+        buildBrowserFetchScript(url, opts),
+      ]) as Promise<BrowserFetchResult>,
+    websocket: createWsObserverApi(rpc),
+  };
+}
+
 function resolveTargetId(tab: TabHandle | string): string {
   if (typeof tab === 'string') return tab;
   if (tab && typeof tab === 'object' && typeof tab.targetId === 'string') return tab.targetId;
