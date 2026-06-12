@@ -202,7 +202,13 @@ export class DaMountBackend implements MountBackend {
     if (body.byteLength > this.maxBodyBytes) {
       throw new FsError('EFBIG', `body exceeds maxBodyBytes`, path);
     }
-    const etag = res.headers.get('etag') ?? '';
+    // Strip weak-ETag prefix (W/) before caching. Cloudflare compresses JSON
+    // responses and downgrades strong ETags to weak ones. If-Match requires a
+    // strong ETag, so caching the weak form causes a guaranteed 412 on every
+    // write. The underlying S3 ETag (content MD5) is the part after W/, which
+    // is what S3 actually validates against.
+    const rawEtag = res.headers.get('etag') ?? '';
+    const etag = rawEtag.startsWith('W/') ? rawEtag.slice(2) : rawEtag;
     await this.cache.putBody(rel, body, etag);
     return body;
   }
@@ -232,7 +238,10 @@ export class DaMountBackend implements MountBackend {
     // with empty etag, which is malformed. Treat empty etag as "we don't
     // know the version" and omit the conditional.
     if (cached?.etag) {
-      headers['if-match'] = cached.etag;
+      // Strip weak-ETag prefix defensively — cached entries written before the
+      // readFile fix may still carry W/"..." from Cloudflare compression.
+      const strongEtag = cached.etag.startsWith('W/') ? cached.etag.slice(2) : cached.etag;
+      headers['if-match'] = strongEtag;
     } else if (!cached) {
       headers['if-none-match'] = '*';
     }

@@ -159,6 +159,48 @@ describe('DaMountBackend writeFile', () => {
     expect(bodyStr).toContain('filename="config.json"');
   });
 
+  it('strips W/ weak-ETag prefix from GET response before caching so If-Match uses the strong form', async () => {
+    // Repro for the Cloudflare compression bug: DA's CDN returns weak ETags
+    // (W/"...") for gzip-compressed JSON responses. If cached as-is and sent
+    // as If-Match, S3 always returns 412 because If-Match requires a strong
+    // ETag. The fix strips W/ in readFile before storing in the body cache.
+    mock.enqueue(
+      new Response('{"data":[]}', {
+        status: 200,
+        headers: { etag: 'W/"ed1fe6b5"', 'content-length': '11' },
+      })
+    );
+    const backend = new DaMountBackend({
+      source: 'da://my-org/my-repo',
+      profile: 'default',
+      signedFetch: createSignedFetchDaStub(TEST_DA_PROFILE),
+      cache: makeCache(),
+    });
+    await backend.readFile('data/staffing.json');
+    mock.enqueue(new Response('', { status: 200, headers: { etag: '"ed1fe6b5"' } }));
+    await backend.writeFile('data/staffing.json', new TextEncoder().encode('{"data":[]}'));
+    // Must send the strong form — no W/ prefix.
+    expect(mock.calls[1].headers['if-match']).toBe('"ed1fe6b5"');
+  });
+
+  it('strips W/ weak-ETag prefix from stale cache entries at write time', async () => {
+    // Defense-in-depth for cache entries written before the readFile fix:
+    // if the body cache holds W/"..." (the old weak form), writeFile should
+    // strip the prefix before sending If-Match rather than propagating it.
+    const cache = makeCache();
+    // Manually seed the cache with a weak ETag to simulate a stale entry.
+    await cache.putBody('data/staffing.json', new TextEncoder().encode('{"data":[]}'), 'W/"stale"');
+    const backend = new DaMountBackend({
+      source: 'da://my-org/my-repo',
+      profile: 'default',
+      signedFetch: createSignedFetchDaStub(TEST_DA_PROFILE),
+      cache,
+    });
+    mock.enqueue(new Response('', { status: 200, headers: { etag: '"stale"' } }));
+    await backend.writeFile('data/staffing.json', new TextEncoder().encode('{"data":[1]}'));
+    expect(mock.calls[0].headers['if-match']).toBe('"stale"');
+  });
+
   it('omits if-match (instead of sending empty value) when cached etag is empty', async () => {
     // Repro for a real production bug: if a prior write or a 200 GET landed
     // a body in cache with etag='' (DA omits ETag for some responses),
