@@ -1,4 +1,5 @@
 import type { VirtualFS } from '../fs/index.js';
+import { MONKEYPATCH_UNSAFE_FS } from '../fs/sudo-fs.js';
 import { SKILL_FILE, WORKSPACE_SKILLS_PATH } from './constants.js';
 
 export type SkillDiscoverySource = 'native' | 'agents' | 'claude';
@@ -57,6 +58,18 @@ export async function discoverSkillCandidates(
 }
 
 async function getCompatibilitySkillCandidates(fs: VirtualFS): Promise<DiscoveredSkillCandidate[]> {
+  // A get/set-asymmetric Proxy (the sudo-fs handle that backs the agent shell)
+  // cannot be monkeypatched for cache invalidation without creating an infinite
+  // override↔hook recursion (see installCompatibilityCacheInvalidationHooks), so
+  // we neither hook nor cache it — we always re-discover. This keeps the agent's
+  // skill view correct after an in-shell `upskill`/`skill list` install while
+  // eliminating the OOM cycle. The expense (a full-VFS walk per call) is bounded
+  // and off the hot path.
+  if (isMonkeypatchUnsafeFs(fs)) {
+    const fresh = await discoverCompatibilitySkillCandidates(fs);
+    return fresh.map((candidate) => ({ ...candidate }));
+  }
+
   installCompatibilityCacheInvalidationHooks(fs);
 
   const cacheKey = fs as object;
@@ -68,6 +81,21 @@ async function getCompatibilitySkillCandidates(fs: VirtualFS): Promise<Discovere
   const discovered = await discoverCompatibilitySkillCandidates(fs);
   compatibilityCandidatesCache.set(cacheKey, discovered);
   return discovered.map((candidate) => ({ ...candidate }));
+}
+
+/**
+ * True when `fs` is the sudo-fs Proxy (or any handle advertising
+ * {@link MONKEYPATCH_UNSAFE_FS}). Reassigning a gated method on such a Proxy
+ * clobbers the wrapped target and creates an infinite override↔wrapper
+ * recursion that OOMs the kernel worker, so the cache-invalidation hooks must
+ * never touch it.
+ */
+function isMonkeypatchUnsafeFs(fs: VirtualFS): boolean {
+  try {
+    return (fs as unknown as Record<symbol, unknown>)[MONKEYPATCH_UNSAFE_FS] === true;
+  } catch {
+    return false;
+  }
 }
 
 export function resolveSkillNameCollisions<T>(
@@ -136,44 +164,55 @@ async function discoverCompatibilitySkillCandidates(
   for (let index = 0; index < queue.length; index += 1) {
     const currentPath = queue[index];
 
-    const entries = await readSortedDir(fs, currentPath);
-    for (const entry of entries) {
+    for (const entry of await readSortedDir(fs, currentPath)) {
       if (entry.type !== 'directory') continue;
 
       const childPath = currentPath === '/' ? `/${entry.name}` : `${currentPath}/${entry.name}`;
 
       const source = COMPATIBILITY_DIRECTORY_SOURCES.get(entry.name);
       if (source) {
-        const skillRoot = `${childPath}/skills`;
-        const skillEntries = await readSortedDir(fs, skillRoot);
-
-        for (const skillEntry of skillEntries) {
-          if (skillEntry.type !== 'directory') continue;
-
-          const skillPath = `${skillRoot}/${skillEntry.name}`;
-          const skillFilePath = `${skillPath}/${SKILL_FILE}`;
-          if (!(await pathExists(fs, skillFilePath)) || seenPaths.has(skillPath)) continue;
-
-          seenPaths.add(skillPath);
-          discovered.push({
-            source,
-            sourceRoot: skillRoot,
-            path: skillPath,
-            skillFilePath,
-          });
-        }
+        await collectCompatibilitySkills(fs, source, `${childPath}/skills`, seenPaths, discovered);
       }
 
-      if (PRUNED_COMPATIBILITY_DIRECTORY_NAMES.has(entry.name)) continue;
-
-      queue.push(childPath);
+      if (!PRUNED_COMPATIBILITY_DIRECTORY_NAMES.has(entry.name)) {
+        queue.push(childPath);
+      }
     }
   }
 
   return discovered;
 }
 
+/**
+ * Collect every `SKILL.md`-bearing subdirectory of a single `.agents`/`.claude`
+ * skills root into `discovered`, de-duped via `seenPaths`. Extracted from the
+ * BFS so the walker itself stays under the cognitive-complexity cap.
+ */
+async function collectCompatibilitySkills(
+  fs: VirtualFS,
+  source: Exclude<SkillDiscoverySource, 'native'>,
+  skillRoot: string,
+  seenPaths: Set<string>,
+  discovered: DiscoveredSkillCandidate[]
+): Promise<void> {
+  for (const skillEntry of await readSortedDir(fs, skillRoot)) {
+    if (skillEntry.type !== 'directory') continue;
+
+    const skillPath = `${skillRoot}/${skillEntry.name}`;
+    const skillFilePath = `${skillPath}/${SKILL_FILE}`;
+    if (seenPaths.has(skillPath) || !(await pathExists(fs, skillFilePath))) continue;
+
+    seenPaths.add(skillPath);
+    discovered.push({ source, sourceRoot: skillRoot, path: skillPath, skillFilePath });
+  }
+}
+
 function installCompatibilityCacheInvalidationHooks(fs: VirtualFS): void {
+  // Defense in depth: never monkeypatch a get/set-asymmetric Proxy (the sudo-fs
+  // handle) — see isMonkeypatchUnsafeFs. The sole caller already short-circuits
+  // such handles, but a future caller must be safe too.
+  if (isMonkeypatchUnsafeFs(fs)) return;
+
   const cacheKey = fs as object;
   if (compatibilityCacheHooksInstalled.has(cacheKey)) return;
   compatibilityCacheHooksInstalled.add(cacheKey);

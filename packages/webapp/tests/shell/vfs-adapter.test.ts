@@ -203,4 +203,68 @@ describe('VfsAdapter', () => {
       expect(await freshAdapter.exists('/usr/bin')).toBe(true);
     });
   });
+
+  describe('readdirWithFileTypes — symlink Dirent semantics (no-follow)', () => {
+    // A `Dirent` reflects `lstat` (the link itself), NOT `stat` (the target).
+    // Reporting a symlink-to-directory as `isDirectory: true` makes the shell's
+    // recursive walkers (`find`, `grep -r`, `ls -R`) descend into it, and a
+    // symlink CYCLE then recurses forever → millions of path objects → V8 OOM.
+    // POSIX `find`/`grep -r` do NOT follow symlinks by default; the Dirent must
+    // report `isDirectory: false, isSymbolicLink: true` so the walkers stop.
+
+    it('reports a symlink-to-directory as a symlink, not a directory', async () => {
+      await vfs.mkdir('/dir/sub', { recursive: true });
+      await vfs.symlink('/dir', '/dir/sub/loop'); // /dir/sub/loop -> /dir (a cycle)
+
+      const entries = await adapter.readdirWithFileTypes('/dir/sub');
+      const loop = entries.find((e) => e.name === 'loop');
+
+      expect(loop).toEqual({
+        name: 'loop',
+        isFile: false,
+        isDirectory: false,
+        isSymbolicLink: true,
+      });
+    });
+
+    it('reports a symlink-to-file as a symlink, not a file', async () => {
+      await vfs.mkdir('/d', { recursive: true });
+      await vfs.writeFile('/d/real.txt', 'hi');
+      await vfs.symlink('/d/real.txt', '/d/link.txt');
+
+      const entries = await adapter.readdirWithFileTypes('/d');
+      const link = entries.find((e) => e.name === 'link.txt');
+
+      expect(link).toEqual({
+        name: 'link.txt',
+        isFile: false,
+        isDirectory: false,
+        isSymbolicLink: true,
+      });
+    });
+
+    it('a recursive readdir walk over a symlink cycle terminates (no infinite descent)', async () => {
+      await vfs.mkdir('/root/a', { recursive: true });
+      await vfs.writeFile('/root/a/f.txt', 'x');
+      await vfs.symlink('/root', '/root/a/loop'); // cycle: /root/a/loop -> /root
+
+      // Mirror how just-bash's `find`/`grep -r` recurse: descend only into
+      // entries the Dirent marks as a real directory. With the no-follow fix
+      // the symlink is not a directory, so the walk is finite.
+      const visited: string[] = [];
+      const walk = async (path: string): Promise<void> => {
+        if (visited.length > 10_000) throw new Error('walk did not terminate — symlink followed');
+        for (const e of await adapter.readdirWithFileTypes(path)) {
+          const child = path === '/' ? `/${e.name}` : `${path}/${e.name}`;
+          visited.push(child);
+          if (e.isDirectory) await walk(child);
+        }
+      };
+
+      await expect(walk('/root')).resolves.toBeUndefined();
+      // /root/a, /root/a/f.txt, /root/a/loop — and crucially NOT /root/a/loop/a/...
+      expect(visited).toContain('/root/a/loop');
+      expect(visited.some((p) => p.includes('/loop/a'))).toBe(false);
+    });
+  });
 });
