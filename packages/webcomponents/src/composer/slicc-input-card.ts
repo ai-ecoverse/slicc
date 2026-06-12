@@ -117,10 +117,17 @@ const DEFAULT_PLACEHOLDER = 'Ask sliccy, or describe a change…';
  *
  * Behavior: the textarea autosizes from a 28px min-height up to a 140px max
  * (then scrolls). Enter sends (emits `submit`); Shift+Enter inserts a newline.
- * Every keystroke emits `input`.
+ * Every keystroke emits `input`. When a `suggestion` is set (e.g. the host's
+ * LLM-proposed follow-up prompt), it is shown as the placeholder of an empty
+ * composer and Tab accepts it into the textarea — instead of tabbing focus
+ * away to the toolbar — so the very next Enter can submit it. Tab keeps its
+ * native focus-navigation whenever text is present, no suggestion is set, or
+ * Shift/a modifier is held.
  *
  * @attr value - the textarea contents (reflected to/from the property)
  * @attr placeholder - textarea placeholder (defaults to the prototype copy)
+ * @attr suggestion - a suggested follow-up prompt; shown as the placeholder
+ *   when the composer is empty, accepted into the textarea on Tab
  * @attr disabled - boolean; disables the textarea
  * @csspart card - the rounded white card surface (carries the focus ring)
  * @csspart textarea - the borderless autosizing `<textarea>`
@@ -136,7 +143,7 @@ const DEFAULT_PLACEHOLDER = 'Ask sliccy, or describe a change…';
  *   carries the submitted text (suppressed when the textarea is empty/disabled)
  */
 export class SliccInputCard extends HTMLElement {
-  static readonly observedAttributes = ['value', 'placeholder', 'disabled'];
+  static readonly observedAttributes = ['value', 'placeholder', 'suggestion', 'disabled'];
 
   #card!: HTMLDivElement;
   #textarea!: HTMLTextAreaElement;
@@ -180,6 +187,20 @@ export class SliccInputCard extends HTMLElement {
   set placeholder(value: string | null) {
     if (value == null) this.removeAttribute('placeholder');
     else this.setAttribute('placeholder', value);
+  }
+
+  /**
+   * A suggested follow-up prompt (e.g. the host's LLM-proposed next message).
+   * Shown as the placeholder while the composer is empty; Tab accepts it into
+   * the textarea so it can be submitted with Enter.
+   */
+  get suggestion(): string | null {
+    return this.getAttribute('suggestion');
+  }
+
+  set suggestion(value: string | null) {
+    if (value == null || value === '') this.removeAttribute('suggestion');
+    else this.setAttribute('suggestion', value);
   }
 
   /** Whether the textarea is disabled. */
@@ -254,7 +275,9 @@ export class SliccInputCard extends HTMLElement {
   #syncAttributes(): void {
     if (!this.#built) return;
     const ta = this.#textarea;
-    ta.placeholder = this.placeholder;
+    // A pending suggestion takes the placeholder slot — it only shows while
+    // the textarea is empty, which is exactly when Tab can accept it.
+    ta.placeholder = this.suggestion ?? this.placeholder;
     ta.disabled = this.disabled;
     const value = this.getAttribute('value') ?? '';
     if (ta.value !== value) ta.value = value;
@@ -282,6 +305,25 @@ export class SliccInputCard extends HTMLElement {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       this.#emitSubmit();
+      return;
+    }
+    // Tab-to-accept: an empty composer showing a suggested follow-up fills the
+    // textarea with the suggestion instead of moving focus to the toolbar's
+    // + menu, so the very next Enter can submit it. Any other Tab (text
+    // present, no suggestion, Shift or a modifier held) keeps native focus
+    // navigation for keyboard accessibility.
+    if (e.key === 'Tab' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      const suggestion = this.suggestion;
+      if (suggestion && this.#textarea.value === '') {
+        e.preventDefault();
+        const ta = this.#textarea;
+        ta.value = suggestion;
+        ta.setSelectionRange(suggestion.length, suggestion.length);
+        // Route through the input pipeline so the reflected attribute, the
+        // autosize pass, and the host-facing CustomEvent('input') all fire
+        // exactly as if the text had been typed.
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+      }
       return;
     }
     // History walking: ArrowUp with the caret ALREADY at the very start

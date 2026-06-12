@@ -6,6 +6,7 @@ import './slicc-input-card.js';
 interface InputCardArgs {
   value?: string;
   placeholder?: string;
+  suggestion?: string;
   disabled?: boolean;
 }
 
@@ -25,10 +26,11 @@ function inComposer(card: HTMLElement): HTMLElement {
   return band;
 }
 
-function buildCard({ value, placeholder, disabled }: InputCardArgs): HTMLElement {
+function buildCard({ value, placeholder, suggestion, disabled }: InputCardArgs): HTMLElement {
   const el = document.createElement('slicc-input-card');
   if (value != null) el.setAttribute('value', value);
   if (placeholder != null) el.setAttribute('placeholder', placeholder);
+  if (suggestion != null) el.setAttribute('suggestion', suggestion);
   if (disabled) el.setAttribute('disabled', '');
   return el;
 }
@@ -40,6 +42,10 @@ const meta: Meta<InputCardArgs> = {
   argTypes: {
     value: { control: 'text', description: 'Textarea contents' },
     placeholder: { control: 'text', description: 'Textarea placeholder' },
+    suggestion: {
+      control: 'text',
+      description: 'Suggested follow-up shown as the placeholder; Tab accepts it',
+    },
     disabled: { control: 'boolean', description: 'Disable the textarea' },
   },
   render: (args) => inComposer(buildCard(args)),
@@ -87,6 +93,16 @@ export const MultiLine: Story = {
 /** Custom placeholder copy. */
 export const CustomPlaceholder: Story = {
   args: { placeholder: 'Describe the change you want…' },
+};
+
+/**
+ * Suggested follow-up — an LLM-proposed next prompt on the `suggestion`
+ * attribute: shown as the placeholder of the empty composer, and Tab accepts
+ * it into the textarea (instead of tabbing focus to the + menu) so Enter can
+ * submit it. Focus the textarea and press Tab to try it.
+ */
+export const SuggestedFollowUp: Story = {
+  args: { suggestion: 'Now add dark mode to the hero?' },
 };
 
 /** Disabled — textarea is non-interactive (e.g. while a turn is streaming). */

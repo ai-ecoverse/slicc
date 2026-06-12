@@ -2,9 +2,11 @@
  * Suggested composer placeholder — the legacy ChatPanel's
  * `refreshSuggestedPlaceholder` ported to the WC shell. After each finished
  * turn, a cheap one-shot LLM call (`quickLabel`) proposes the user's likely
- * next prompt from the recent conversation; it lands as the textarea
- * placeholder. Fails soft to the static default on every edge (no provider,
- * no conversation yet, user already typing, call failure).
+ * next prompt from the recent conversation; it lands on the input card's
+ * `suggestion` attribute, which `<slicc-input-card>` shows as the textarea
+ * placeholder and lets Tab accept into the textarea for submission. Fails
+ * soft to the static default placeholder on every edge (no provider, no
+ * conversation yet, user already typing, call failure).
  */
 
 import type { ChatMessage } from '../types.js';
@@ -78,6 +80,26 @@ export interface WirePlaceholderDeps {
 }
 
 /**
+ * Land a refreshed placeholder on the input card. A real suggestion goes to
+ * the `suggestion` attribute — `<slicc-input-card>` shows it as the
+ * placeholder and lets Tab accept it into the textarea — while the static
+ * default clears any stale suggestion and restores the plain placeholder
+ * (which Tab must NOT fill; it keeps native focus navigation).
+ */
+export function applySuggestedPlaceholder(
+  inputCard: HTMLElement,
+  text: string,
+  defaultPlaceholder: string
+): void {
+  if (text === defaultPlaceholder) {
+    inputCard.removeAttribute('suggestion');
+    inputCard.setAttribute('placeholder', text);
+  } else {
+    inputCard.setAttribute('suggestion', text);
+  }
+}
+
+/**
  * Returns the trigger the boot wires to "turn finished" moments: aborts any
  * in-flight suggestion, then regenerates from the current conversation.
  */
@@ -91,7 +113,8 @@ export function createPlaceholderRefresher(deps: WirePlaceholderDeps): () => voi
     void refreshSuggestedPlaceholder({
       messages: deps.getMessages(),
       currentValue: deps.inputCard.value ?? '',
-      setPlaceholder: (text) => deps.inputCard.setAttribute('placeholder', text),
+      setPlaceholder: (text) =>
+        applySuggestedPlaceholder(deps.inputCard, text, deps.defaultPlaceholder),
       defaultPlaceholder: deps.defaultPlaceholder,
       signal: abort.signal,
     }).catch(() => undefined);

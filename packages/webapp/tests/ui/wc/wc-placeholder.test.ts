@@ -11,6 +11,7 @@ installWcDomStubs();
 
 import type { ChatMessage } from '../../../src/ui/types.js';
 import {
+  applySuggestedPlaceholder,
   createPlaceholderRefresher,
   placeholderTranscript,
   refreshSuggestedPlaceholder,
@@ -108,8 +109,27 @@ describe('refreshSuggestedPlaceholder', () => {
   });
 });
 
+describe('applySuggestedPlaceholder', () => {
+  it('lands a real suggestion on the suggestion attribute (Tab-to-accept)', () => {
+    const inputCard = document.createElement('slicc-input-card');
+    inputCard.setAttribute('placeholder', 'default');
+    applySuggestedPlaceholder(inputCard, 'Now add dark mode?', 'default');
+    expect(inputCard.getAttribute('suggestion')).toBe('Now add dark mode?');
+    // The static placeholder stays in place beneath the suggestion.
+    expect(inputCard.getAttribute('placeholder')).toBe('default');
+  });
+
+  it('restores the plain placeholder and clears a stale suggestion on the default', () => {
+    const inputCard = document.createElement('slicc-input-card');
+    inputCard.setAttribute('suggestion', 'stale suggestion');
+    applySuggestedPlaceholder(inputCard, 'default', 'default');
+    expect(inputCard.hasAttribute('suggestion')).toBe(false);
+    expect(inputCard.getAttribute('placeholder')).toBe('default');
+  });
+});
+
 describe('createPlaceholderRefresher', () => {
-  it('writes the suggestion onto the input card placeholder, skipping disabled (frozen) views', async () => {
+  it('writes the refreshed placeholder onto the input card, skipping disabled (frozen) views', async () => {
     const inputCard = document.createElement('slicc-input-card') as HTMLElement & {
       value?: string;
     };
@@ -127,9 +147,11 @@ describe('createPlaceholderRefresher', () => {
     inputCard.removeAttribute('disabled');
     refresh();
     // The real quick-llm path resolves null in tests (no provider/key) —
-    // fail-soft means the default lands.
+    // fail-soft means the default lands as the plain placeholder, with no
+    // Tab-acceptable suggestion left behind.
     await vi.waitFor(() => {
       expect(inputCard.getAttribute('placeholder')).toBe('default');
     });
+    expect(inputCard.hasAttribute('suggestion')).toBe(false);
   });
 });
