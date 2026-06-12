@@ -30,6 +30,40 @@ slicc-chat-thread {
 slicc-chat-thread[hidden] {
   display: none;
 }
+/* New-content chip: shown when content arrives while the viewer is scrolled
+   away (requestFollow). Sticky at the scrollport bottom, zero layout height.
+   --accent re-declared per the custom-property gotcha (tracks local --ctx). */
+slicc-chat-thread {
+  --accent: color-mix(in srgb, var(--ctx) 55%, var(--ink));
+}
+slicc-chat-thread > .slicc-thread__follow {
+  position: sticky;
+  bottom: 18px;
+  height: 0;
+  display: none;
+  justify-content: center;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 3;
+}
+slicc-chat-thread[has-new] > .slicc-thread__follow {
+  display: flex;
+}
+slicc-chat-thread > .slicc-thread__follow button {
+  pointer-events: auto;
+  transform: translateY(-100%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 600 12px var(--ui);
+  color: var(--canvas);
+  background: var(--accent);
+  border: none;
+  border-radius: 999px;
+  padding: 6px 12px;
+  cursor: pointer;
+  box-shadow: var(--shadow-pane);
+}
 slicc-chat-thread > .slicc-thread__inner {
   box-sizing: border-box;
   max-width: 776px;
@@ -144,6 +178,9 @@ export class SliccChatThread extends HTMLElement {
       if (at != null) this.scrollTop = Number.parseInt(at, 10) || 0;
     }
   };
+
+  /** Sticky "new messages" chip wrapper (built once, after the column). */
+  #follow: HTMLElement | null = null;
 
   /**
    * Per-context snapshots of the inner column content, keyed by context id.
@@ -266,6 +303,7 @@ export class SliccChatThread extends HTMLElement {
     this.#inner.replaceChildren(...(saved ? Array.from(saved.cloneNode(true).childNodes) : []));
 
     this.context = id;
+    this.removeAttribute('has-new');
     this.dispatchEvent(
       new CustomEvent('slicc-context-change', {
         bubbles: true,
@@ -276,14 +314,45 @@ export class SliccChatThread extends HTMLElement {
     this.scrollToBottom();
   }
 
-  /** Append a child node into the reading column and scroll it into view. */
+  /**
+   * Append a child node into the reading column. Follows to the bottom only
+   * when the viewer is already there; otherwise the new-content chip shows
+   * (scrolling someone away from what they're reading is worse than a chip).
+   */
   append(...nodes: (Node | string)[]): void {
     this.#build();
     // Live content arriving makes a URL-restored scroll position stale.
     if (nodes.length > 0) this.#pendingScrollRestore = null;
     this.#inner.append(...nodes);
-    this.scrollToBottom();
+    this.requestFollow();
   }
+
+  /** Pixels from the bottom within which the view still counts as following. */
+  static readonly FOLLOW_SLACK = 80;
+
+  #nearBottom(): boolean {
+    return this.scrollHeight - this.scrollTop - this.clientHeight <= SliccChatThread.FOLLOW_SLACK;
+  }
+
+  /**
+   * Follow new content politely: scroll to the bottom when the viewer is
+   * already (near) there, otherwise surface the sticky "new messages" chip —
+   * clicking it (or scrolling down manually) jumps/clears.
+   */
+  requestFollow(): void {
+    this.#build();
+    if (this.#nearBottom()) {
+      this.scrollToBottom();
+      this.removeAttribute('has-new');
+    } else {
+      this.setAttribute('has-new', '');
+    }
+  }
+
+  /** Hide the chip once the viewer is back at the bottom. */
+  #onFollowScroll = (): void => {
+    if (this.hasAttribute('has-new') && this.#nearBottom()) this.removeAttribute('has-new');
+  };
 
   /**
    * Replace the reading column's content wholesale (e.g. a history reload
@@ -294,6 +363,7 @@ export class SliccChatThread extends HTMLElement {
   replaceContent(...nodes: (Node | string)[]): void {
     this.#build();
     this.#inner.replaceChildren(...nodes);
+    this.removeAttribute('has-new');
     this.scrollToBottom();
     // Content (re)loads while the boot context is live: a URL-restored scroll
     // position WINS over the scroll-to-bottom default (re-applied on a frame
@@ -356,6 +426,19 @@ export class SliccChatThread extends HTMLElement {
       for (const node of incoming) this.#inner.appendChild(node);
       this.appendChild(this.#inner);
     }
+
+    this.#follow = this.ownerDocument.createElement('div');
+    this.#follow.className = 'slicc-thread__follow';
+    const followBtn = this.ownerDocument.createElement('button');
+    followBtn.type = 'button';
+    followBtn.append('New messages ↓');
+    followBtn.addEventListener('click', () => {
+      this.scrollToBottom();
+      this.removeAttribute('has-new');
+    });
+    this.#follow.append(followBtn);
+    this.appendChild(this.#follow);
+    this.addEventListener('scroll', this.#onFollowScroll, { passive: true });
 
     this.#onClick = (ev: MouseEvent) => {
       const target = ev.target;

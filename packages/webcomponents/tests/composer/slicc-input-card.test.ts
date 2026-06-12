@@ -266,6 +266,96 @@ describe('slicc-input-card', () => {
     });
   });
 
+  describe('history walking (ArrowUp / ArrowDown)', () => {
+    function arrow(el: SliccInputCard, key: 'ArrowUp' | 'ArrowDown'): KeyboardEvent {
+      const ev = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+      textarea(el).dispatchEvent(ev);
+      return ev;
+    }
+
+    it('emits history-up when ArrowUp is pressed with the caret at the start', () => {
+      const el = mount((e) => {
+        e.value = 'typed text';
+      });
+      const ta = textarea(el);
+      ta.setSelectionRange(0, 0);
+      const up = vi.fn();
+      el.addEventListener('history-up', up);
+      const ev = arrow(el, 'ArrowUp');
+      expect(up).toHaveBeenCalledTimes(1);
+      expect(ev.defaultPrevented).toBe(true);
+    });
+
+    it('does NOT emit history-up when the caret is mid-text (default jump-to-start wins)', () => {
+      const el = mount((e) => {
+        e.value = 'typed text';
+      });
+      textarea(el).setSelectionRange(5, 5);
+      const up = vi.fn();
+      el.addEventListener('history-up', up);
+      const ev = arrow(el, 'ArrowUp');
+      expect(up).not.toHaveBeenCalled();
+      expect(ev.defaultPrevented).toBe(false);
+    });
+
+    it('does NOT emit history-up over an active selection', () => {
+      const el = mount((e) => {
+        e.value = 'typed text';
+      });
+      textarea(el).setSelectionRange(0, 5);
+      const up = vi.fn();
+      el.addEventListener('history-up', up);
+      arrow(el, 'ArrowUp');
+      expect(up).not.toHaveBeenCalled();
+    });
+
+    it('emits history-down when ArrowDown is pressed with the caret at the end', () => {
+      const el = mount((e) => {
+        e.value = 'typed';
+      });
+      const ta = textarea(el);
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+      const down = vi.fn();
+      el.addEventListener('history-down', down);
+      arrow(el, 'ArrowDown');
+      expect(down).toHaveBeenCalledTimes(1);
+    });
+
+    it('does NOT emit history-down when the caret is mid-text', () => {
+      const el = mount((e) => {
+        e.value = 'typed';
+      });
+      textarea(el).setSelectionRange(2, 2);
+      const down = vi.fn();
+      el.addEventListener('history-down', down);
+      arrow(el, 'ArrowDown');
+      expect(down).not.toHaveBeenCalled();
+    });
+
+    it('emits history-up/down on an empty composer (caret is at both bounds)', () => {
+      const el = mount();
+      const up = vi.fn();
+      const down = vi.fn();
+      el.addEventListener('history-up', up);
+      el.addEventListener('history-down', down);
+      arrow(el, 'ArrowUp');
+      arrow(el, 'ArrowDown');
+      expect(up).toHaveBeenCalledTimes(1);
+      expect(down).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('focusEnd() focuses the textarea with the caret at the end', () => {
+    const el = mount((e) => {
+      e.value = 'hello world';
+    });
+    el.focusEnd();
+    const ta = textarea(el);
+    expect(ta).toBe(document.activeElement);
+    expect(ta.selectionStart).toBe('hello world'.length);
+    expect(ta.selectionEnd).toBe('hello world'.length);
+  });
+
   it('ellipsizes long placeholders instead of clipping them', () => {
     const el = mount((e) => {
       e.setAttribute('placeholder', 'A very long LLM-suggested follow-up that will not fit');

@@ -64,8 +64,10 @@ describe('slicc-chat-thread', () => {
     expect(col.children).toHaveLength(2);
     expect(col.children[0]).toBe(a);
     expect(col.children[1]).toBe(b);
-    // No relocated child is left dangling as a direct host child beside the column.
-    expect(el.querySelectorAll(':scope > *')).toHaveLength(1);
+    // No relocated child is left dangling as a direct host child beside the
+    // column and the sticky follow chip.
+    expect(el.querySelectorAll(':scope > *')).toHaveLength(2);
+    expect(el.querySelector(':scope > .slicc-thread__follow')).toBeTruthy();
   });
 
   it('does not double-wrap when reconnected', () => {
@@ -317,6 +319,91 @@ describe('slicc-chat-thread', () => {
       // Allow for sub-pixel rounding at the scroll extent.
       expect(el.scrollTop).toBeGreaterThan(0);
       expect(el.scrollHeight - el.scrollTop - el.clientHeight).toBeLessThanOrEqual(1);
+    });
+  });
+
+  describe('new-messages follow chip', () => {
+    /** A scrollable thread filled with enough content to overflow. */
+    function mountScrollable(): SliccChatThread {
+      const el = mount();
+      el.style.height = '120px';
+      el.style.display = 'block';
+      el.style.overflowY = 'auto';
+      for (let i = 0; i < 40; i += 1) {
+        const m = document.createElement('div');
+        m.textContent = `line ${i}`;
+        m.style.height = '24px';
+        el.append(m);
+      }
+      return el;
+    }
+
+    function chip(el: SliccChatThread): HTMLButtonElement {
+      return el.querySelector('.slicc-thread__follow button') as HTMLButtonElement;
+    }
+
+    it('builds the sticky chip, hidden until has-new is set', () => {
+      const el = mountScrollable();
+      const follow = el.querySelector('.slicc-thread__follow') as HTMLElement;
+      expect(follow).toBeTruthy();
+      expect(getComputedStyle(follow).display).toBe('none');
+      el.setAttribute('has-new', '');
+      expect(getComputedStyle(follow).display).toBe('flex');
+    });
+
+    it('requestFollow scrolls when the viewer is near the bottom', () => {
+      const el = mountScrollable();
+      el.scrollToBottom();
+      // Within FOLLOW_SLACK of the bottom counts as following.
+      el.scrollTop -= SliccChatThread.FOLLOW_SLACK / 2;
+      el.requestFollow();
+      expect(el.scrollHeight - el.scrollTop - el.clientHeight).toBeLessThanOrEqual(1);
+      expect(el.hasAttribute('has-new')).toBe(false);
+    });
+
+    it('requestFollow raises the chip instead of yanking a scrolled-away viewer', () => {
+      const el = mountScrollable();
+      el.scrollTop = 0;
+      el.requestFollow();
+      expect(el.scrollTop).toBe(0);
+      expect(el.hasAttribute('has-new')).toBe(true);
+    });
+
+    it('append() routes through requestFollow (chip when scrolled away)', () => {
+      const el = mountScrollable();
+      el.scrollTop = 0;
+      const m = document.createElement('div');
+      m.textContent = 'new arrival';
+      el.append(m);
+      expect(el.scrollTop).toBe(0);
+      expect(el.hasAttribute('has-new')).toBe(true);
+    });
+
+    it('clicking the chip scrolls to the bottom and clears has-new', () => {
+      const el = mountScrollable();
+      el.scrollTop = 0;
+      el.requestFollow();
+      chip(el).click();
+      expect(el.scrollHeight - el.scrollTop - el.clientHeight).toBeLessThanOrEqual(1);
+      expect(el.hasAttribute('has-new')).toBe(false);
+    });
+
+    it('scrolling back near the bottom clears has-new without a click', () => {
+      const el = mountScrollable();
+      el.scrollTop = 0;
+      el.requestFollow();
+      el.scrollTop = el.scrollHeight; // user scrolls down themselves
+      el.dispatchEvent(new Event('scroll'));
+      expect(el.hasAttribute('has-new')).toBe(false);
+    });
+
+    it('replaceContent clears a stale chip', () => {
+      const el = mountScrollable();
+      el.scrollTop = 0;
+      el.requestFollow();
+      expect(el.hasAttribute('has-new')).toBe(true);
+      el.replaceContent(document.createElement('div'));
+      expect(el.hasAttribute('has-new')).toBe(false);
     });
   });
 });

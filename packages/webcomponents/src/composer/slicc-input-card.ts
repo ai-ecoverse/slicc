@@ -128,6 +128,10 @@ const DEFAULT_PLACEHOLDER = 'Ask sliccy, or describe a change…';
  * @slot toolbar - controls relocated into the toolbar row (light DOM has no
  *   native slot); when empty, a default add-menu + send-button are composed
  * @fires input - composed + bubbling; `detail.value` carries the current text
+ * @fires history-up - composed + bubbling; ArrowUp pressed with the caret at
+ *   the very start — the host scrolls to the previous user message
+ * @fires history-down - composed + bubbling; ArrowDown pressed with the caret
+ *   at the very end — the host scrolls to the next user message (or refocuses)
  * @fires submit - composed + bubbling; on Enter without Shift; `detail.value`
  *   carries the submitted text (suppressed when the textarea is empty/disabled)
  */
@@ -274,9 +278,26 @@ export class SliccInputCard extends HTMLElement {
   };
 
   #onKeydown = (e: KeyboardEvent): void => {
-    if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
-    e.preventDefault();
-    this.#emitSubmit();
+    if (e.isComposing) return;
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      this.#emitSubmit();
+      return;
+    }
+    // History walking: ArrowUp with the caret ALREADY at the very start
+    // (the first press gets the default jump-to-start) steps up through the
+    // thread's user messages; ArrowDown with the caret at the very end steps
+    // back down. The host owns the scrolling — these are just intents.
+    const ta = this.#textarea;
+    const collapsed = ta.selectionStart === ta.selectionEnd;
+    if (e.key === 'ArrowUp' && collapsed && ta.selectionStart === 0) {
+      e.preventDefault();
+      this.dispatchEvent(new CustomEvent('history-up', { bubbles: true, composed: true }));
+    } else if (e.key === 'ArrowDown' && collapsed && ta.selectionStart === ta.value.length) {
+      // No preventDefault: with the caret at the end the default is a no-op,
+      // and mid-text presses keep their native move-to-end behavior.
+      this.dispatchEvent(new CustomEvent('history-down', { bubbles: true, composed: true }));
+    }
   };
 
   #onSend = (e: Event): void => {
@@ -284,6 +305,15 @@ export class SliccInputCard extends HTMLElement {
     e.stopPropagation();
     this.#emitSubmit();
   };
+
+  /** Focus the textarea and place the caret at the end of the input. */
+  focusEnd(): void {
+    if (!this.#built) return;
+    const ta = this.#textarea;
+    ta.focus();
+    const len = ta.value.length;
+    ta.setSelectionRange(len, len);
+  }
 
   #emitSubmit(): void {
     if (this.disabled) return;
