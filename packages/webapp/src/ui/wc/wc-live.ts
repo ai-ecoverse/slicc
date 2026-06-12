@@ -257,6 +257,7 @@ interface FreezerRailDeps {
   openVfs(): Promise<WcPageVfs>;
   client: OffscreenClient;
   getController(): WcChatController | null;
+  getSelected(): RegisteredScoop | null;
   selectScoop(scoop: RegisteredScoop): void;
   clearSelection(): void;
   log: BootStageLogger;
@@ -278,7 +279,8 @@ interface FreezerRailHandles {
  * thaw used by URL routing.
  */
 function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
-  const { refs, openVfs, client, getController, selectScoop, clearSelection, log } = deps;
+  const { refs, openVfs, client, getController, getSelected, selectScoop, clearSelection, log } =
+    deps;
   let frozenEntries: FrozenSessionIndexEntry[] = [];
 
   // Monotonic guard: boot fires several overlapping refreshes (attach-time,
@@ -380,10 +382,15 @@ function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
       if (!entry) {
         entry = ((await readFreezerEntries(reader)) ?? []).find((e) => e.filename === slug);
       }
-      if (!entry) return;
-      const { messages } = await thawFrozenSession(reader, entry);
+      // The ARCHIVE is the ground truth: at boot a corrupt index (this deep
+      // link races the rail's self-heal rebuild) used to dead-end here with
+      // a blank shell — thaw straight from the named archive instead.
+      const { messages } = await thawFrozenSession(
+        reader,
+        entry ?? { filename: slug, title: slug, frozenAt: '', messageCount: 0 }
+      );
       getController()?.loadMessages(messages);
-      refs.thread.setAttribute('context', `freezer:${entry.filename}`);
+      refs.thread.setAttribute('context', `freezer:${entry?.filename ?? slug}`);
       refs.thread.setAttribute('accent', FREEZER_TINT);
       // Frost mood: crystallizing shader + ice-blue accent across the frame.
       applyShellContext(refs, { kind: 'freezer' });
@@ -392,6 +399,13 @@ function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
       clearSelection();
     } catch (err) {
       log.error('WC thaw failed', err);
+      // A failed boot deep link must still land somewhere usable: with the
+      // pending URL context already consumed, nothing else selects a scoop —
+      // fall back to the cone rather than a dead empty shell.
+      if (!getSelected()) {
+        const cone = client.getScoops().find((s) => s.isCone);
+        if (cone) selectScoop(cone);
+      }
     }
   };
 
@@ -665,6 +679,13 @@ function wireWcComposer(deps: {
   refs.inputCard.addEventListener('stop', () => {
     if (boot.getController()?.processing) agentHandle.stop();
   });
+
+  // ArrowUp/ArrowDown in the composer walk the thread's user messages.
+  void import('./wc-history-nav.js')
+    .then(({ wireWcHistoryNav }) =>
+      wireWcHistoryNav({ thread: refs.thread, inputCard: refs.inputCard })
+    )
+    .catch((err) => log.error('WC history nav wiring failed', err));
 
   // Brain pill: cycle the scoop's thinking level (persisted by the worker).
   refs.composerMeta.addEventListener('thinking-change', (event) => {
@@ -946,6 +967,7 @@ export function attachWcClient(
     openVfs,
     client,
     getController: () => boot.getController(),
+    getSelected: () => boot.getSelected(),
     selectScoop: boot.selectScoop,
     clearSelection: boot.clearSelection,
     log,
