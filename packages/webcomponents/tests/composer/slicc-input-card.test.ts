@@ -385,6 +385,28 @@ describe('slicc-input-card', () => {
     el.focus();
     expect(el.querySelector('textarea.ta')).toBe(document.activeElement);
   });
+
+  it('submit() emits the same submit contract Enter uses, with its guards', () => {
+    const el = mount((e) => {
+      e.value = 'dictated text';
+    });
+    const submits: string[] = [];
+    el.addEventListener('submit', (e) => {
+      submits.push((e as Event as CustomEvent<{ value: string }>).detail.value);
+    });
+
+    el.submit();
+    expect(submits).toEqual(['dictated text']);
+
+    // Empty and disabled inputs stay suppressed, exactly like Enter.
+    el.clear();
+    el.submit();
+    expect(submits.length).toBe(1);
+    el.value = 'blocked';
+    el.disabled = true;
+    el.submit();
+    expect(submits.length).toBe(1);
+  });
 });
 
 describe('slicc-input-card / send button', () => {

@@ -73,6 +73,15 @@ Deep reference: `docs/kernel/process-model.md`.
 - `jsh-discovery.ts` and `bsh-discovery.ts` provide the raw scans used by the shared catalog.
 - `vfs-adapter.ts` bridges shell calls into the virtual filesystem and forwards `canWrite` (duck-typed so both `VirtualFS` and `RestrictedFS` back it without branching).
 
+### Speech (push-to-talk + `hear`)
+
+- Path: `packages/webapp/src/speech/`; command in `supplemental-commands/hear-command.ts`. Page/offscreen realm only (mic, recognizer, `AudioContext`); the kernel worker bridges over the `hear-*` panel-RPC ops (`hear-capture` / `hear-transcribe` / `hear-status` / `hear-warmup`) with generous per-call timeouts.
+- `composer-speech.ts` — `getComposerSpeech()` realm singleton implementing the `ComposerSpeech` contract from `@slicc/webcomponents/composer/speech` (deep subpath import, NEVER the barrel — the barrel registers custom elements at import time and breaks DOM-less realms). Injected into `<slicc-composer>` by `wc-live.ts`'s `attachWcClient` (both live and extension mounts), which also sets the `ptt` attribute. Two engines behind the one interface: the library's built-in Web Speech implementation immediately, hot-swapped to on-device whisper once ready; per-session capture failures degrade back to builtin.
+- `whisper-engine.ts` — lazy `onnx-community/whisper-tiny` loader mirroring `ffmpeg-wasm.ts`: dynamic `import('@huggingface/transformers')`, model files streamed from the HF CDN on first use and cached via transformers.js' Cache Storage; WebGPU (fp32) with automatic WASM (q8) retry; ort-web runtime assets pinned to the version-matched jsdelivr URL (`ORT_WEB_VERSION` must track the transformers dependency). `warmup` fires on the first granted push-to-talk hold — never at boot.
+- `download-progress.ts` — pure multi-file progress + ETA aggregation (unit-tested math behind the "better speech recognition downloading · ready in ~ETA" status line).
+- `whisper-session.ts` — MediaRecorder capture → 16 kHz mono resample (`audio.ts`) → rolling re-transcription partials (whisper has no incremental decode) → final transcript on release.
+- `hear.ts` — one-shot capture for the command: builtin recognizer owns endpointing (whisper has no VAD); when the enhanced engine is ready the mic is recorded in parallel and whisper supplies the final text, builtin text as fallback.
+
 ### MCP Servers
 
 - Path: `packages/webapp/src/shell/mcp/`; command in `supplemental-commands/mcp-command.ts`.

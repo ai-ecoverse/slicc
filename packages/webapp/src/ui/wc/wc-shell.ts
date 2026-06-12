@@ -67,6 +67,8 @@ export interface WcShellRefs {
   /** The WebGL background field (`<slicc-shader>`, one of three programs). */
   shader: HTMLElement;
   thread: HTMLElement;
+  /** The composer footer band (PTT host — live floats arm + inject speech). */
+  composer: HTMLElement;
   inputCard: HTMLElement;
   composerMeta: HTMLElement;
   switcher: HTMLElement & { scoops: SwitcherScoop[] };
@@ -343,6 +345,7 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
     frame,
     shader,
     thread,
+    composer,
     inputCard,
     composerMeta,
     switcher,

@@ -12,9 +12,18 @@ export { SliccHandoffCard } from './chat/slicc-handoff-card.js';
 export { SliccLickCard } from './chat/slicc-lick-card.js';
 export { SliccToolCluster } from './chat/slicc-tool-cluster.js';
 export { SliccUserMessage } from './chat/slicc-user-message.js';
-export { SliccComposer } from './composer/slicc-composer.js';
+export { HOLD_TO_ENABLE_MS, SliccComposer } from './composer/slicc-composer.js';
 export { SliccComposerMeta } from './composer/slicc-composer-meta.js';
 export { SliccInputCard } from './composer/slicc-input-card.js';
+export {
+  type ComposerSpeech,
+  createBuiltinComposerSpeech,
+  type MicrophoneInfo,
+  type SpeechDownloadProgress,
+  type SpeechEngineStatus,
+  type SpeechSession,
+  type SpeechSessionOptions,
+} from './composer/speech.js';
 export { SliccDock } from './dock/slicc-dock.js';
 export { SliccDockItem } from './dock/slicc-dock-item.js';
 export { SliccTabOverlay } from './dock/slicc-tab-overlay.js';

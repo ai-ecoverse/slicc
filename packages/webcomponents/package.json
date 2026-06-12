@@ -10,6 +10,10 @@
       "types": "./src/index.ts",
       "default": "./src/index.ts"
     },
+    "./composer/speech": {
+      "types": "./src/composer/speech.ts",
+      "default": "./src/composer/speech.ts"
+    },
     "./src/*": "./src/*"
   },
   "files": [

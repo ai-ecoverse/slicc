@@ -3,6 +3,7 @@ import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { defineConfig } from 'vite';
 import { stripBiomeWasmAssetPlugin } from './vite-plugins/strip-biome-wasm-asset';
+import { stripOrtWasmAssetPlugin } from './vite-plugins/strip-ort-wasm-asset';
 
 const Dirname = dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = resolve(Dirname, '../..');
@@ -63,6 +64,7 @@ export default defineConfig(({ mode }) => ({
   publicDir: resolve(workspaceRoot, 'packages/assets'),
   plugins: [
     stripBiomeWasmAssetPlugin(),
+    stripOrtWasmAssetPlugin(),
     stubPiNodeInternalsPlugin(),
     {
       name: 'build-webapp-runtime-assets',

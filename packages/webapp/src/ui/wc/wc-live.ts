@@ -1109,6 +1109,18 @@ export function attachWcClient(
       wireWcVoice({ refs, send: (text) => boot.getController()?.sendUserMessage(text), log })
     )
     .catch((err) => log.error('WC voice wiring failed', err));
+
+  // Push-to-talk: arm the composer's hold-to-dictate gesture and inject the
+  // webapp speech controller (builtin Web Speech now, whisper-tiny once its
+  // lazy download completes). The controller module stays out of the boot
+  // bundle — it only loads here, and the model only downloads on first use.
+  void import('../../speech/composer-speech.js')
+    .then(({ getComposerSpeech }) => {
+      const composer = refs.composer as HTMLElement & { speech?: unknown };
+      composer.speech = getComposerSpeech();
+      composer.setAttribute('ptt', '');
+    })
+    .catch((err) => log.error('WC push-to-talk wiring failed', err));
 }
 
 /** Boot the standalone live WC shell: prelude → kernel spawn → attach. */

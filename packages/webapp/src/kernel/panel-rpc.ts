@@ -135,6 +135,23 @@ export type PanelRpcRequest =
       };
     }
   | { op: 'enumerate-media-devices'; payload?: undefined }
+  // Speech capture / transcription for the `hear` command. The kernel
+  // worker has no microphone, recognizer, or AudioContext — these bridge
+  // to the page-side speech stack (`src/speech/hear.ts`). Callers pass
+  // generous per-call timeouts: capture waits for the speaker to finish,
+  // and transcribe may first stream the whisper model download.
+  | {
+      op: 'hear-capture';
+      payload: {
+        lang?: string;
+        timeoutMs?: number;
+        deviceId?: string;
+        engine?: 'auto' | 'builtin' | 'enhanced';
+      };
+    }
+  | { op: 'hear-transcribe'; payload: { bytes: ArrayBuffer; lang?: string } }
+  | { op: 'hear-status'; payload?: undefined }
+  | { op: 'hear-warmup'; payload?: undefined }
   | {
       // Reset the page-side multi-browser-sync leader tray. The
       // tray subsystem lives on the page (DOM, RTCPeerConnections,
@@ -374,6 +391,10 @@ export interface PanelRpcResults {
     videoinputs: Array<{ deviceId: string; label: string; groupId?: string }>;
     audioinputs: Array<{ deviceId: string; label: string; groupId?: string }>;
   };
+  'hear-capture': { transcript: string; engine: 'builtin' | 'enhanced' };
+  'hear-transcribe': { transcript: string; engine: 'builtin' | 'enhanced' };
+  'hear-status': HearRpcStatus;
+  'hear-warmup': HearRpcStatus;
   'tray-reset': LeaderTrayRuntimeStatus;
   'tray-leave': TrayLeaveResult;
   'oauth-extras-set': { storeAfter: OAuthExtraDomainsStore };
@@ -428,6 +449,19 @@ export interface PanelRpcResults {
   'remote-cdp-unsubscribe': { ok: true };
   'remote-cdp-detach': { ok: true };
   'remote-open-tab': { targetId: string };
+}
+
+/**
+ * Serializable enhanced-speech-engine lifecycle snapshot returned by
+ * `hear-status` / `hear-warmup`. Structural mirror of `HearStatus` in
+ * `src/speech/hear.ts` (the page-side implementation) — kept import-free so
+ * the worker-side type graph never references the page-only speech modules.
+ */
+export interface HearRpcStatus {
+  state: 'idle' | 'loading' | 'ready' | 'failed';
+  loaded?: number;
+  total?: number;
+  etaSeconds?: number | null;
 }
 
 /**

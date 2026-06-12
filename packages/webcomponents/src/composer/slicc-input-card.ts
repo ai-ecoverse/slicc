@@ -306,6 +306,16 @@ export class SliccInputCard extends HTMLElement {
     this.#emitSubmit();
   };
 
+  /**
+   * Programmatically submit the current value — the same contract Enter and
+   * the send button use (including the empty/disabled guards). Used by the
+   * composer's push-to-talk gesture after appending a dictated transcript.
+   */
+  submit(): void {
+    this.#build();
+    this.#emitSubmit();
+  }
+
   /** Focus the textarea and place the caret at the end of the input. */
   focusEnd(): void {
     if (!this.#built) return;

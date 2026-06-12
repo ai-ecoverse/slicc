@@ -311,6 +311,30 @@ export function createStandalonePanelRpcHandlers(
       };
     },
 
+    // `hear` speech bridge: the worker has no mic/recognizer/AudioContext.
+    // The speech stack is dynamically imported so the page boot bundle stays
+    // lean — these modules (and the whisper engine they lazy-load) only ever
+    // load once a speech op actually runs.
+    'hear-capture': async (payload) => {
+      const { hearCapture } = await import('../speech/hear.js');
+      return await hearCapture(payload ?? {});
+    },
+
+    'hear-transcribe': async ({ bytes, lang }) => {
+      const { hearTranscribe } = await import('../speech/hear.js');
+      return await hearTranscribe(bytes, lang);
+    },
+
+    'hear-status': async () => {
+      const { hearStatus } = await import('../speech/hear.js');
+      return hearStatus();
+    },
+
+    'hear-warmup': async () => {
+      const { hearWarmup } = await import('../speech/hear.js');
+      return hearWarmup();
+    },
+
     'tray-reset': async () => {
       if (!options.resetTray) {
         throw new Error('host reset: no active tray session to reset');

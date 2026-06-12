@@ -24,6 +24,7 @@
     "@earendil-works/pi-ai": "^0.78.0",
     "@earendil-works/pi-coding-agent": "^0.78.0",
     "@ffmpeg/ffmpeg": "0.12.15",
+    "@huggingface/transformers": "4.2.0",
     "@imagemagick/magick-wasm": "^0.0.40",
     "@lezer/highlight": "^1.2.3",
     "@pierre/diffs": "^1.1.15",
