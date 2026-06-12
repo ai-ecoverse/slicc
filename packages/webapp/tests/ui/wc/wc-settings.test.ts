@@ -159,4 +159,37 @@ describe('showWcSettings', () => {
     clickDone(dialog);
     await expect(result).resolves.toBe(true);
   });
+
+  it('announces slicc:accounts-changed live when an account is added, once per change', async () => {
+    const changes: Event[] = [];
+    const onChange = (e: Event): void => {
+      changes.push(e);
+    };
+    window.addEventListener('slicc:accounts-changed', onChange);
+    try {
+      const result = showWcSettings(log);
+      const dialog = await openDialog();
+      // Opening with no edits must not announce (no needless catalog refetch).
+      expect(changes).toHaveLength(0);
+
+      const select = dialog.querySelector('select') as HTMLSelectElement;
+      const option = document.createElement('option');
+      option.value = 'test-provider';
+      option.textContent = 'Test Provider';
+      select.append(option);
+      select.value = 'test-provider';
+      select.dispatchEvent(new Event('change'));
+      const keyInput = dialog.querySelector('[data-testid="wcset-api-key"]') as HTMLInputElement;
+      keyInput.value = 'sk-new-key-123456';
+      [...dialog.querySelectorAll('button')].find((b) => b.textContent === 'Save')?.click();
+
+      await vi.waitFor(() => expect(changes).toHaveLength(1));
+      clickDone(dialog);
+      await result;
+      // The dialog close re-renders nothing new, so no extra announcement.
+      expect(changes).toHaveLength(1);
+    } finally {
+      window.removeEventListener('slicc:accounts-changed', onChange);
+    }
+  });
 });

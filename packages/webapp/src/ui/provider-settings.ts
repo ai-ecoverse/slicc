@@ -700,23 +700,6 @@ export function getAllExtraOAuthDomains(): OAuthExtraDomainsStore {
 
 function saveAccounts(accounts: Account[]): void {
   localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
-  announceAccountsChanged();
-}
-
-/**
- * Same-document account-change signal (`slicc:accounts-changed` on window).
- * The `storage` event only fires in OTHER documents, so in-page surfaces
- * (the WC nav's model picker) need an explicit announcement to re-sync the
- * moment an account is added or removed. No-op in the kernel worker.
- */
-function announceAccountsChanged(): void {
-  try {
-    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
-      window.dispatchEvent(new CustomEvent('slicc:accounts-changed'));
-    }
-  } catch {
-    // Worker shim realm — nobody to notify.
-  }
 }
 
 /**

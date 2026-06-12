@@ -282,11 +282,27 @@ export async function showWcSettings(log: SettingsLogger): Promise<boolean> {
       status.toggleAttribute('data-error', isError);
     };
 
+    // Announce account changes to same-document surfaces (the WC nav model
+    // picker) the moment they happen — e.g. an OAuth callback landing while
+    // the dialog is still open. The `storage` event never fires for
+    // same-document writes, and waiting for the dialog to close would leave
+    // the picker stale until then. Guarded so re-renders with no change
+    // (initial open, list redraw) don't needlessly kick provider catalog
+    // fetches downstream.
+    let lastAnnounced = before;
+    const announceIfChanged = (): void => {
+      const now = JSON.stringify(ps.getAccounts());
+      if (now === lastAnnounced) return;
+      lastAnnounced = now;
+      window.dispatchEvent(new CustomEvent('slicc:accounts-changed'));
+    };
+
     const deps: ViewDeps = {
       ps,
       log,
       setStatus,
       renderList: () => {
+        announceIfChanged();
         list.replaceChildren();
         const accounts = ps.getAccounts();
         if (accounts.length === 0) {
