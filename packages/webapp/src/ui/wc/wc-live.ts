@@ -17,6 +17,7 @@ import { type DipInstance, disposeDips, hydrateDips } from '../dip.js';
 import { isLickChannel } from '../lick-channels.js';
 import type { OffscreenClient, OffscreenClientCallbacks } from '../offscreen-client.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
+import { disposeToolUIs, hydrateToolUI, type ToolUIInstance } from '../tool-ui-host.js';
 import type { ChatMessage } from '../types.js';
 import { WcChatController } from './wc-chat-controller.js';
 import { scoopColor } from './wc-scoop-color.js';
@@ -596,6 +597,7 @@ function createWcController(
   // onDipLick local path), AFTER the welcome-flow interceptor gets first
   // refusal — onboarding licks must never reach the keyless cone.
   const dipInstances = new Map<string, DipInstance[]>();
+  const toolUIInstances = new Map<string, ToolUIInstance[]>();
   void import('../legacy-styles.js')
     .then(({ loadDipStyles }) => loadDipStyles())
     .catch(() => undefined);
@@ -627,10 +629,15 @@ function createWcController(
       if (!processing) onIdle?.();
     },
     onMessageDisposed: (messageId) => {
-      const instances = dipInstances.get(messageId);
-      if (instances) {
-        disposeDips(instances);
+      const dipInst = dipInstances.get(messageId);
+      if (dipInst) {
+        disposeDips(dipInst);
         dipInstances.delete(messageId);
+      }
+      const tuiInst = toolUIInstances.get(messageId);
+      if (tuiInst) {
+        disposeToolUIs(tuiInst);
+        toolUIInstances.delete(messageId);
       }
     },
     onMessageRendered: (message, els) => {
@@ -649,6 +656,14 @@ function createWcController(
           };
           if (welcome?.intercept?.(event)) return;
           client.sendSprinkleLick('inline', { action, data });
+        })
+      );
+      toolUIInstances.set(
+        message.id,
+        hydrateToolUI(host, {
+          onAction: (requestId, action, data) => {
+            client.sendToolUIAction(requestId, action, data);
+          },
         })
       );
     },

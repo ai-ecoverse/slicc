@@ -456,6 +456,25 @@ describe('OffscreenClient', () => {
     simulateMessage('offscreen', { type: 'forward-lick', event });
     expect(handler).toHaveBeenCalledWith(event);
   });
+
+  it('sendToolUIAction sends a tool-ui-action message through the transport', () => {
+    const sent: unknown[] = [];
+    const c2 = new OffscreenClient({}, {
+      send: (payload: unknown) => sent.push(payload),
+      onMessage: vi.fn(),
+      dispose: vi.fn(),
+    } as any);
+
+    c2.sendToolUIAction('req-5', 'approve', { handleInIdb: true, idbKey: 'k1' });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      type: 'tool-ui-action',
+      requestId: 'req-5',
+      action: 'approve',
+      data: { handleInIdb: true, idbKey: 'k1' },
+    });
+  });
 });
 
 describe('OffscreenClient.setSelectedScoopJid + onScoopSelected', () => {

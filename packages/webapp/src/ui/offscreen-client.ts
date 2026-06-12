@@ -237,6 +237,10 @@ export class OffscreenClient implements KernelClientFacade {
     };
   }
 
+  sendToolUIAction(requestId: string, action: string, data?: unknown): void {
+    this.send({ type: 'tool-ui-action', requestId, action, data } as PanelToOffscreenMessage);
+  }
+
   // -------------------------------------------------------------------------
   // Orchestrator-compatible facade
   // All methods that ScoopsPanel, ScoopSwitcher, and MemoryPanel call.
