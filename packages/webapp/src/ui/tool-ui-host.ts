@@ -11,6 +11,8 @@
  */
 
 import { handleDipPickerAction } from './dip.js';
+import { collectThemeCSS } from './sprinkle-renderer.js';
+import { isThemeLight } from './theme.js';
 import { TOOL_UI_SANDBOX_SRCDOC } from './tool-ui-sandbox-srcdoc.js';
 import { toolUIHtmlStore } from './wc/wc-message-view.js';
 
@@ -29,7 +31,11 @@ export interface ToolUIHostOptions {
 
 export function hydrateToolUI(host: HTMLElement, opts: ToolUIHostOptions): ToolUIInstance[] {
   const ext = opts.isExtension ?? isExtensionEnv;
-  const containers = host.querySelectorAll<HTMLElement>('[data-tool-ui-id]');
+  // Check the host itself (when the container IS the top-level element in els)
+  // and all descendants (legacy/fallback path).
+  const containers: HTMLElement[] = [];
+  if (host.hasAttribute('data-tool-ui-id')) containers.push(host);
+  containers.push(...host.querySelectorAll<HTMLElement>('[data-tool-ui-id]'));
   const instances: ToolUIInstance[] = [];
 
   for (const container of containers) {
@@ -142,6 +148,8 @@ function mountToolUI(
         id: requestId,
         nonce: Math.random().toString(36).slice(2),
         html,
+        themeCSS: collectThemeCSS(),
+        isLight: isThemeLight(),
       },
       '*'
     );

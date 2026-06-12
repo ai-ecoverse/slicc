@@ -7,15 +7,66 @@ export const TOOL_UI_SANDBOX_SRCDOC = `<!DOCTYPE html>
 <head>
 <style>
   html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: auto; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
-  .sprinkle-action-card { padding: 12px; border-radius: 8px; }
-  .sprinkle-action-card__header { margin-bottom: 8px; font-weight: 500; }
-  .sprinkle-action-card__actions { display: flex; gap: 8px; }
-  .sprinkle-btn { padding: 8px 16px; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; }
-  .sprinkle-btn--primary { background: var(--accent, #3b82f6); color: white; }
-  .sprinkle-btn--secondary { background: #2a2a2a; color: #e0e0e0; }
-  .sprinkle-badge { font-size: 11px; padding: 2px 6px; border-radius: 4px; }
-  .sprinkle-badge--notice { background: #f59e0b22; color: #f59e0b; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: transparent;
+    color: var(--s2-gray-900, #e8e8e8);
+  }
+  .sprinkle-action-card {
+    display: flex; flex-direction: column;
+    background: var(--s2-gray-25, #1e1e1e);
+    border: 1px solid var(--s2-gray-200, #383838);
+    border-radius: var(--s2-radius-xl, 16px);
+    overflow: hidden;
+    box-shadow: var(--s2-shadow-container, 0 2px 8px rgba(0,0,0,.35));
+  }
+  .sprinkle-action-card__header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 16px 20px 12px;
+    font-weight: 700; font-size: 14px; line-height: 1.3;
+    color: var(--s2-gray-900, #e8e8e8);
+  }
+  .sprinkle-action-card__path {
+    padding: 0 20px 12px;
+    font-size: 13px;
+    color: var(--s2-gray-600, #aaa);
+  }
+  .sprinkle-action-card__path code {
+    font-family: var(--s2-font-family-mono, ui-monospace, monospace);
+    font-size: 12px;
+    color: var(--s2-gray-900, #e8e8e8);
+    background: var(--s2-gray-100, #383838);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+  .sprinkle-action-card__actions { display: flex; gap: 8px; padding: 0 20px 16px; justify-content: flex-end; }
+  .sprinkle-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    height: 32px; padding: 0 16px;
+    border: 1px solid var(--s2-gray-200, #484848);
+    border-radius: 16px;
+    background: var(--s2-gray-50, #2c2c2c);
+    color: var(--s2-gray-900, #e8e8e8);
+    font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer;
+    transition: background .15s;
+  }
+  .sprinkle-btn:hover { background: var(--s2-gray-100, #383838); }
+  .sprinkle-btn--primary {
+    background: var(--s2-accent, #3b82f6); color: #fff;
+    border-color: transparent; border-radius: 999px;
+  }
+  .sprinkle-btn--primary:hover { background: var(--s2-accent-hover, #2563eb); }
+  .sprinkle-btn--secondary {
+    background: var(--s2-gray-50, #2c2c2c);
+    border-color: var(--s2-gray-200, #484848);
+    color: var(--s2-gray-900, #e8e8e8);
+  }
+  .sprinkle-badge {
+    display: inline-flex; align-items: center;
+    font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 8px;
+    margin-left: auto;
+  }
+  .sprinkle-badge--notice { background: rgba(245,158,11,.15); color: #f59e0b; }
 </style>
 <script>
 window.__toolui_id = '';

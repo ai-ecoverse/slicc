@@ -173,6 +173,7 @@ export class MountCommands {
         isScoop,
         toolContext: ctx ?? undefined,
         isExtension: typeof chrome !== 'undefined' && !!chrome?.runtime?.id,
+        targetPath,
       });
       await this.options.fs.mount(targetPath, backend);
       const desc = backend.describe();

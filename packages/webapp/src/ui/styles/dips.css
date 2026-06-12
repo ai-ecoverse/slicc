@@ -3,6 +3,21 @@
  * chat.css when the WC shell replaced the legacy UI; loaded lazily by
  * the dip wiring (`ui/wc/wc-live.ts`) alongside the token sheet. */
 
+/* Tool-UI approval card container — sibling of slicc-action-row, appended by
+   wc-message-view when a tool call has pending _toolUIRequestId. */
+.msg__tool-ui {
+  margin: 4px 0 8px 28px; /* indent matches slicc-action-row body region */
+  border-radius: 16px;
+  overflow: hidden;
+}
+.msg__tool-ui iframe {
+  display: block;
+  width: 100%;
+  border: none;
+  overflow: hidden;
+  background: transparent;
+}
+
 /* Dip container — shtml code blocks and image references hydrated into iframes */
 .msg__dip {
   margin: 0.6em 0;

@@ -53,6 +53,25 @@ describe('buildApprovalCardHtml', () => {
     expect(html).toContain('Select HID device');
   });
 
+  it('shows "Will be mounted at <path>" when targetPath is supplied', () => {
+    const html = buildApprovalCardHtml('directory', [], '/mnt/ace');
+    expect(html).toContain('Will be mounted at');
+    expect(html).toContain('/mnt/ace');
+    expect(html).toContain('sprinkle-action-card__path');
+  });
+
+  it('omits the path line when targetPath is not supplied', () => {
+    const html = buildApprovalCardHtml('directory');
+    expect(html).not.toContain('sprinkle-action-card__path');
+    expect(html).not.toContain('Will be mounted at');
+  });
+
+  it('HTML-escapes targetPath to prevent injection', () => {
+    const html = buildApprovalCardHtml('directory', [], '/mnt/<evil>');
+    expect(html).toContain('&lt;evil&gt;');
+    expect(html).not.toContain('<evil>');
+  });
+
   it('omits data-action-data when no filters are supplied', () => {
     const html = buildApprovalCardHtml('usb-device');
     expect(html).not.toContain('data-action-data');

@@ -92,6 +92,7 @@ export class LocalMountBackend implements MountBackend {
     isScoop: () => boolean;
     toolContext: ToolExecutionContext | undefined;
     isExtension: boolean;
+    targetPath?: string;
   }): Promise<LocalMountBackend> {
     if (opts.isScoop()) {
       throw new Error('mount: cannot mount local directories from a scoop (no UI). Ask the cone.');
@@ -118,7 +119,7 @@ export class LocalMountBackend implements MountBackend {
       const rawUiPromise = showToolUI(
         {
           id: uiRequestId,
-          html: buildApprovalCardHtml('directory'),
+          html: buildApprovalCardHtml('directory', [], opts.targetPath),
           onAction: async (action, data) => {
             if (action === 'approve') {
               const d = data as Record<string, unknown> | undefined;
