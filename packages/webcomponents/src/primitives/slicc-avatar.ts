@@ -55,8 +55,9 @@ const SHEET = sheet(STYLE);
  * Source precedence: an explicit `src` image wins; otherwise an `email` resolves
  * to a Gravatar (SHA-256 of the trimmed+lowercased address, `d=404` so a missing
  * gravatar falls back to initials); otherwise the explicit `initials`, then up to
- * 2 uppercase initials derived from `name`. For the `email` path the initials
- * render immediately and the gravatar is swapped in asynchronously as a CSS
+ * 2 uppercase initials derived from `name`. With none of those — a signed-out
+ * user — it shows a `?` placeholder. For the `email` path the initials render
+ * immediately and the gravatar is swapped in asynchronously as a CSS
  * `background-image` once its hash resolves and the image is confirmed to load —
  * the rainbow gradient remains the ground behind it.
  *
@@ -165,12 +166,15 @@ export class SliccAvatar extends HTMLElement {
     else this.setAttribute('label', value);
   }
 
-  /** Resolve the displayed initials: explicit `initials`, else derived from `name`. */
+  /**
+   * Resolve the displayed glyph: explicit `initials`, else initials derived
+   * from `name`, else a `?` placeholder for a signed-out user with no identity.
+   */
   get resolvedInitials(): string {
     const explicit = this.initials;
     if (explicit != null && explicit.trim() !== '')
       return explicit.trim().slice(0, 2).toUpperCase();
-    return deriveInitials(this.name);
+    return deriveInitials(this.name) || '?';
   }
 
   /**
@@ -217,7 +221,8 @@ export class SliccAvatar extends HTMLElement {
     const src = this.src;
     const email = this.email;
     const initials = this.resolvedInitials;
-    const a11yLabel = this.label ?? this.name ?? initials;
+    // Never announce the bare `?` placeholder — fall back to "Account".
+    const a11yLabel = this.label ?? this.name ?? (initials === '?' ? 'Account' : initials);
     this.setAttribute('aria-label', a11yLabel);
 
     // Precedence: explicit `src` > `email` (gravatar) > initials/name.

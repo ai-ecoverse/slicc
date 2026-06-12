@@ -237,6 +237,33 @@ describe('slicc-composer-meta', () => {
       expect(brain?.tagName.toLowerCase()).toBe('svg');
       expect(root?.querySelectorAll('[part="caret"]')).toHaveLength(2);
     });
+
+    it('hides the thinking pill when no-thinking is set (non-reasoning model)', () => {
+      const el = mount();
+      expect(thinkingPill(el)).toBeTruthy();
+      el.noThinking = true;
+      expect(thinkingPill(el)).toBeNull();
+      // Only the model pill's caret remains.
+      expect(el.shadowRoot?.querySelectorAll('[part="caret"]')).toHaveLength(1);
+      // Toggling back restores the pill.
+      el.noThinking = false;
+      expect(thinkingPill(el)).toBeTruthy();
+    });
+
+    it('reflects the no-thinking attribute to/from the property', () => {
+      const el = mount((e) => {
+        e.setAttribute('no-thinking', '');
+      });
+      expect(el.noThinking).toBe(true);
+      expect(thinkingPill(el)).toBeNull();
+    });
+
+    it('hides the thinking pill in the Add AI (no accounts) state', () => {
+      const el = mount((e) => {
+        e.models = [];
+      });
+      expect(thinkingPill(el)).toBeNull();
+    });
   });
 
   describe('narrow state', () => {

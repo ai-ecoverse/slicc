@@ -97,6 +97,21 @@ describe('slicc-avatar', () => {
     expect(el.resolvedInitials).toBe('ZZ');
   });
 
+  it('VARIANT signed out: shows a ? placeholder with no name/initials', () => {
+    const el = mount();
+    expect(el.resolvedInitials).toBe('?');
+    expect(el.shadowRoot?.querySelector('[part="initials"]')?.textContent).toBe('?');
+    // The bare glyph is never announced — a friendlier a11y label stands in.
+    expect(el.getAttribute('aria-label')).toBe('Account');
+  });
+
+  it('a blank name still yields the ? placeholder', () => {
+    const el = mount((e) => {
+      e.name = '   ';
+    });
+    expect(el.resolvedInitials).toBe('?');
+  });
+
   it('VARIANT image-backed: renders a cover image instead of initials', () => {
     const el = mount((e) => {
       e.name = 'Pat Mercury';

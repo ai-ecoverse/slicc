@@ -273,6 +273,9 @@ const SHEET = sheet(STYLE);
  * @attr model - model label shown in the model pill (default "Opus 4.8")
  * @attr thinking - thinking effort level; one of `off|low|medium|high|xhigh|max` (default `max`)
  * @attr narrow - boolean; hides the keyboard hint for a narrow chat column
+ * @attr no-thinking - boolean; hides the thinking-effort pill (set by the host
+ *   for models with no reasoning/effort capability; the pill is also hidden in
+ *   the no-accounts "Add AI" state)
  * @prop {Array<string|ModelOption>} models - the dropdown options (name + provider + id)
  * @fires model-change - `{detail:{model,provider,id}}` when a model row is chosen
  * @fires add-ai - composed + bubbling; the pill was clicked while `models` is an
@@ -291,7 +294,7 @@ const SHEET = sheet(STYLE);
  * @slot hint - overrides the default keyboard-hint content
  */
 export class SliccComposerMeta extends HTMLElement {
-  static readonly observedAttributes = ['model', 'thinking', 'narrow'];
+  static readonly observedAttributes = ['model', 'thinking', 'narrow', 'no-thinking'];
 
   readonly #root: ShadowRoot;
   #onModelClick: ((e: Event) => void) | null = null;
@@ -397,6 +400,19 @@ export class SliccComposerMeta extends HTMLElement {
     this.toggleAttribute('narrow', value);
   }
 
+  /**
+   * Hide the thinking-effort pill — the host sets this when the active model
+   * has no reasoning/effort capability (a plain completion model). The pill
+   * is also hidden in the no-accounts "Add AI" state (no model selected).
+   */
+  get noThinking(): boolean {
+    return this.hasAttribute('no-thinking');
+  }
+
+  set noThinking(value: boolean) {
+    this.toggleAttribute('no-thinking', value);
+  }
+
   /** Whether the current effort paints the violet (non-default) border. */
   get accented(): boolean {
     return this.thinking === ACCENTED_LEVEL;
@@ -460,27 +476,34 @@ export class SliccComposerMeta extends HTMLElement {
     menu.append(this.#listEl);
     const mwrap = h('div', { class: 'mwrap' }, modelBtn, menu);
 
-    const brain = brainIcon();
-    // The brain tint tracks the thinking intensity (dry → violet), overriding
-    // the `.brain` rule's fallback colour with the per-level token blend.
-    brain.style.color = levelMeta.tint;
-    const thinkingBtn = h(
-      'button',
-      {
-        type: 'button',
-        class: `ctl tsel${accented ? ' x' : ''}`,
-        part: 'thinking',
-        title: levelMeta.gloss,
-      },
-      brain,
-      ' ',
-      h('span', { class: 'tlabel' }, levelMeta.label),
-      ' ',
-      h('span', { class: 'cx' }, caretIcon())
-    );
-    // The whole pill ramps with intensity: feed the per-level accent to the
-    // `--tw`-driven text/border/background-wash rules above.
-    thinkingBtn.style.setProperty('--tw', levelMeta.tint);
+    // The thinking pill only appears for a reasoning-capable model: the host
+    // sets `no-thinking` for plain completion models, and the no-accounts
+    // "Add AI" state has no model at all.
+    const showThinking = !this.noThinking && !noModels;
+    let thinkingBtn: HTMLElement | null = null;
+    if (showThinking) {
+      const brain = brainIcon();
+      // The brain tint tracks the thinking intensity (dry → violet), overriding
+      // the `.brain` rule's fallback colour with the per-level token blend.
+      brain.style.color = levelMeta.tint;
+      thinkingBtn = h(
+        'button',
+        {
+          type: 'button',
+          class: `ctl tsel${accented ? ' x' : ''}`,
+          part: 'thinking',
+          title: levelMeta.gloss,
+        },
+        brain,
+        ' ',
+        h('span', { class: 'tlabel' }, levelMeta.label),
+        ' ',
+        h('span', { class: 'cx' }, caretIcon())
+      );
+      // The whole pill ramps with intensity: feed the per-level accent to the
+      // `--tw`-driven text/border/background-wash rules above.
+      thinkingBtn.style.setProperty('--tw', levelMeta.tint);
+    }
 
     const hintSlot = h('slot', { name: 'hint' });
     append(hintSlot, [
@@ -498,7 +521,7 @@ export class SliccComposerMeta extends HTMLElement {
       'div',
       { class: 'meta', part: 'meta' },
       mwrap,
-      thinkingBtn,
+      thinkingBtn ?? false,
       h('div', { class: 'mspacer' }),
       h('span', { class: 'hint', part: 'hint' }, hintSlot)
     );
