@@ -374,7 +374,7 @@ describe('WcChatController render-failure degradation', () => {
     document.body.appendChild(thread);
     const agent = new FakeAgent();
     const completed: Array<{ content: string; isStreaming?: boolean } | null> = [];
-    new WcChatController({
+    const controller = new WcChatController({
       thread,
       agent,
       onTurnComplete: (message) => completed.push(message),
@@ -390,8 +390,33 @@ describe('WcChatController render-failure degradation', () => {
     expect(completed[0]?.content).toBe('spoken reply');
     expect(completed[0]?.isStreaming).toBe(false);
 
-    // A turn whose message id no longer resolves reports null, not a throw.
-    agent.emit({ type: 'turn_end', messageId: 'gone' });
-    expect(completed[1]).toBeNull();
+    // THE LIVE-FLOAT SHAPE (regression): the chat wire never carries a
+    // `turn_end` event — processing falls via a scoop STATUS broadcast
+    // (`setProcessing`). The completion hook must fire on that transition
+    // too, or the spoken-reply loop is dead outside tests.
+    controller.setProcessing(true);
+    controller.setProcessing(false);
+    expect(completed[1]?.content).toBe('spoken reply');
+
+    // No transition (already idle) → no duplicate fire.
+    controller.setProcessing(false);
+    expect(completed).toHaveLength(2);
+  });
+
+  it('onTurnComplete reports null when no assistant message exists at all', async () => {
+    installWcDomStubs();
+    const thread = document.createElement('slicc-chat-thread');
+    document.body.appendChild(thread);
+    const agent = new FakeAgent();
+    const completed: Array<unknown | null> = [];
+    const controller = new WcChatController({
+      thread,
+      agent,
+      onTurnComplete: (message) => completed.push(message),
+    });
+
+    controller.setProcessing(true);
+    controller.setProcessing(false);
+    expect(completed).toEqual([null]);
   });
 });

@@ -648,38 +648,41 @@ export function createPanelRpcClient(options: { instanceId?: string } = {}): Pan
 
   const eventSubscribers = new Map<string, Set<(payload: unknown) => void>>();
 
-  channel.addEventListener('message', (event: MessageEvent) => {
-    const msg = event.data as PanelRpcResponseMsg | PanelRpcEventMsg | PanelRpcPushMsg | undefined;
-    if (msg?.type === 'panel-rpc-event') {
-      const subs = eventSubscribers.get(msg.channel);
-      if (subs) {
-        for (const handler of subs) {
-          try {
-            handler(msg.payload);
-          } catch (err) {
-            console.warn(
-              `panel-rpc: event handler for '${msg.channel}' threw:`,
-              err instanceof Error ? err.message : String(err)
-            );
-          }
-        }
+  const handleEventMsg = (msg: PanelRpcEventMsg): void => {
+    const subs = eventSubscribers.get(msg.channel);
+    if (!subs) return;
+    for (const handler of subs) {
+      try {
+        handler(msg.payload);
+      } catch (err) {
+        console.warn(
+          `panel-rpc: event handler for '${msg.channel}' threw:`,
+          err instanceof Error ? err.message : String(err)
+        );
       }
-      return;
     }
-    if (msg?.type === 'panel-rpc-push') {
-      if (msg.op === 'remote-cdp-event') {
-        const p = msg.payload;
-        pushTargets.get(`${p.runtimeId}:${p.localTargetId}`)?.(p);
-      }
-      return;
-    }
-    if (msg?.type !== 'panel-rpc-response') return;
+  };
+
+  const handlePushMsg = (msg: PanelRpcPushMsg): void => {
+    if (msg.op !== 'remote-cdp-event') return;
+    const p = msg.payload;
+    pushTargets.get(`${p.runtimeId}:${p.localTargetId}`)?.(p);
+  };
+
+  const handleResponseMsg = (msg: PanelRpcResponseMsg): void => {
     const slot = pending.get(msg.id);
     if (!slot) return;
     pending.delete(msg.id);
     clearTimeout(slot.timer);
     if (typeof msg.error === 'string') slot.reject(new Error(msg.error));
     else slot.resolve(msg.result);
+  };
+
+  channel.addEventListener('message', (event: MessageEvent) => {
+    const msg = event.data as PanelRpcResponseMsg | PanelRpcEventMsg | PanelRpcPushMsg | undefined;
+    if (msg?.type === 'panel-rpc-event') handleEventMsg(msg);
+    else if (msg?.type === 'panel-rpc-push') handlePushMsg(msg);
+    else if (msg?.type === 'panel-rpc-response') handleResponseMsg(msg);
   });
 
   function onEvent(eventChannel: string, handler: (payload: unknown) => void): () => void {

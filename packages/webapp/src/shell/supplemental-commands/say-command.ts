@@ -2,7 +2,15 @@ import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
 
-function sayHelp(): { stdout: string; stderr: string; exitCode: number } {
+type CommandResult = { stdout: string; stderr: string; exitCode: number };
+
+/** How the command reaches the speech stack: in-realm or over panel-RPC. */
+interface SayBridge {
+  local: boolean;
+  panelRpc: ReturnType<typeof getPanelRpcClient>;
+}
+
+function sayHelp(): CommandResult {
   return {
     stdout:
       'usage: say [-v voice] [-r rate] [-l lang] [--list] <text>\n\n' +
@@ -17,6 +25,14 @@ function sayHelp(): { stdout: string; stderr: string; exitCode: number } {
     stderr: '',
     exitCode: 0,
   };
+}
+
+function fail(message: string): CommandResult {
+  return { stdout: '', stderr: `say: ${message}\n`, exitCode: 1 };
+}
+
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 let voicesLoaded = false;
@@ -51,6 +67,147 @@ function getVoices(): Promise<SpeechSynthesisVoice[]> {
   return voicesPromise;
 }
 
+interface SayArgs {
+  voiceName: string | null;
+  rate: number;
+  lang: string | null;
+  text: string;
+}
+
+/** Value-taking flags → the "requires …" wording for a missing value. */
+const VALUE_FLAG_HINTS: Record<string, string> = {
+  '-v': 'a voice name',
+  '-r': 'a rate value',
+  '-l': 'a language tag',
+};
+
+/** Apply one value flag onto the parse state; returns an error message or null. */
+function applySayValueFlag(parsed: SayArgs, flag: string, value: string): string | null {
+  switch (flag) {
+    case '-v':
+      parsed.voiceName = value;
+      return null;
+    case '-l':
+      parsed.lang = value;
+      return null;
+    case '-r': {
+      const rate = parseFloat(value);
+      if (Number.isNaN(rate) || rate < 0.1 || rate > 10) {
+        return 'rate must be between 0.1 and 10';
+      }
+      parsed.rate = rate;
+      return null;
+    }
+    default:
+      return `unknown option: ${flag}`;
+  }
+}
+
+function parseSayArgs(args: string[]): SayArgs | CommandResult {
+  const parsed: SayArgs = { voiceName: null, rate: 1, lang: null, text: '' };
+  const textParts: string[] = [];
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg in VALUE_FLAG_HINTS) {
+      const value = i + 1 < args.length && !args[i + 1].startsWith('-') ? args[++i] : null;
+      if (value == null) return fail(`${arg} requires ${VALUE_FLAG_HINTS[arg]}`);
+      const error = applySayValueFlag(parsed, arg, value);
+      if (error) return fail(error);
+    } else if (arg.startsWith('-') && arg !== '--list') {
+      return fail(`unknown option: ${arg}`);
+    } else if (!arg.startsWith('-')) {
+      textParts.push(arg);
+    }
+  }
+
+  parsed.text = textParts.join(' ');
+  return parsed;
+}
+
+/** `--list`: kokoro voices lead when the on-device engine is warm — listed
+ *  by their stable ids so `-v af_heart` round-trips. */
+async function runList(bridge: SayBridge): Promise<CommandResult> {
+  if (bridge.local) {
+    const { kokoroVoicesIfReady } = await import('../../speech/speak.js');
+    const kokoro = kokoroVoicesIfReady().map((v) => `${v.id} (${v.lang}) [kokoro]`);
+    const voices = await getVoices();
+    const lines = [
+      ...kokoro,
+      ...voices.map((v) => `${v.name} (${v.lang})${v.default ? ' [default]' : ''}`),
+    ];
+    return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
+  }
+  try {
+    const r = await bridge.panelRpc!.call('list-voices', undefined);
+    const lines = r.voices.map((v) => `${v.name} (${v.lang})${v.default ? ' [default]' : ''}`);
+    return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
+  } catch (err) {
+    return fail(errText(err));
+  }
+}
+
+/** The voices a `-v` partial can match: kokoro ids + web voices (local), or
+ *  the page handler's merged `list-voices` (worker). */
+async function listMatchableVoices(bridge: SayBridge): Promise<Array<{ name: string }>> {
+  if (!bridge.local) {
+    return (await bridge.panelRpc!.call('list-voices', undefined)).voices;
+  }
+  const { kokoroVoicesIfReady } = await import('../../speech/speak.js');
+  const kokoro = kokoroVoicesIfReady().map((v) => ({ name: v.id }));
+  const web = (await getVoices()).map((v) => ({ name: v.name }));
+  return [...kokoro, ...web];
+}
+
+/**
+ * Pre-resolve a `-v` partial to an exact voice name (the page-side handler
+ * and the speak helper both match exact names). Kokoro voice ids participate
+ * on both paths.
+ */
+async function resolveVoiceName(
+  bridge: SayBridge,
+  voiceName: string
+): Promise<{ resolved?: string; error?: CommandResult }> {
+  const voices = await listMatchableVoices(bridge);
+  const match = voices.find((v) => v.name.toLowerCase().includes(voiceName.toLowerCase()));
+  if (!match) {
+    return { error: fail(`voice "${voiceName}" not found. Use --list to see available voices.`) };
+  }
+  return { resolved: match.name };
+}
+
+/** Speak in-realm: the speak helper picks the engine — kokoro when its model
+ *  is warm (or the resolved voice is a kokoro id), Web Speech otherwise. */
+async function speakLocal(req: {
+  text: string;
+  lang: string;
+  voice?: string;
+  rate: number;
+}): Promise<CommandResult> {
+  try {
+    const { speak } = await import('../../speech/speak.js');
+    await speak(req);
+    return { stdout: '', stderr: '', exitCode: 0 };
+  } catch (err) {
+    return fail(`speech synthesis error: ${errText(err)}`);
+  }
+}
+
+/** Worker context: bridge via panel-RPC. `lang` is required for the command
+ *  contract and must reach the page so the utterance uses the correct locale
+ *  (regression flagged on PR #626 review). */
+async function speakViaRpc(
+  bridge: SayBridge,
+  req: { text: string; lang: string; voice?: string; rate: number }
+): Promise<CommandResult> {
+  try {
+    await bridge.panelRpc!.call('speak-text', req);
+    return { stdout: '', stderr: '', exitCode: 0 };
+  } catch (err) {
+    return fail(errText(err));
+  }
+}
+
 export function createSayCommand(): Command {
   return defineCommand('say', async (args) => {
     if (args.includes('--help') || args.includes('-h')) {
@@ -62,152 +219,29 @@ export function createSayCommand(): Command {
     // `window` + `speechSynthesis` only) working under jsdom-free
     // environments while still bridging to the page in the kernel
     // worker where neither global exists.
-    const local = typeof window !== 'undefined' && typeof speechSynthesis !== 'undefined';
-    const panelRpc = getPanelRpcClient();
-    if (!local && !panelRpc) {
-      return {
-        stdout: '',
-        stderr: 'say: Web Speech API unavailable in this environment\n',
-        exitCode: 1,
-      };
+    const bridge: SayBridge = {
+      local: typeof window !== 'undefined' && typeof speechSynthesis !== 'undefined',
+      panelRpc: getPanelRpcClient(),
+    };
+    if (!bridge.local && !bridge.panelRpc) {
+      return fail('Web Speech API unavailable in this environment');
     }
 
-    // Handle --list early (needs voices)
-    if (args.includes('--list')) {
-      if (local) {
-        // Kokoro voices lead when the on-device engine is warm — listed by
-        // their stable ids so `-v af_heart` round-trips.
-        const { kokoroVoicesIfReady } = await import('../../speech/speak.js');
-        const kokoro = kokoroVoicesIfReady().map((v) => `${v.id} (${v.lang}) [kokoro]`);
-        const voices = await getVoices();
-        const lines = [
-          ...kokoro,
-          ...voices.map((v) => `${v.name} (${v.lang})${v.default ? ' [default]' : ''}`),
-        ];
-        return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
-      }
-      try {
-        const r = await panelRpc!.call('list-voices', undefined);
-        const lines = r.voices.map((v) => `${v.name} (${v.lang})${v.default ? ' [default]' : ''}`);
-        return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
-      } catch (err) {
-        return {
-          stdout: '',
-          stderr: `say: ${err instanceof Error ? err.message : String(err)}\n`,
-          exitCode: 1,
-        };
-      }
-    }
+    if (args.includes('--list')) return runList(bridge);
 
-    // Parse args (no voice loading needed)
-    let voiceName: string | null = null;
-    let rate = 1;
-    let lang: string | null = null;
-    const textParts: string[] = [];
+    const parsed = parseSayArgs(args);
+    if ('exitCode' in parsed) return parsed;
+    if (!parsed.text) return sayHelp();
+    if (!parsed.lang) return fail('-l language tag is required');
 
-    for (let i = 0; i < args.length; i++) {
-      const arg = args[i];
-      if (arg === '-v') {
-        if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
-          return { stdout: '', stderr: 'say: -v requires a voice name\n', exitCode: 1 };
-        }
-        voiceName = args[++i];
-      } else if (arg === '-r') {
-        if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
-          return { stdout: '', stderr: 'say: -r requires a rate value\n', exitCode: 1 };
-        }
-        rate = parseFloat(args[++i]);
-        if (isNaN(rate) || rate < 0.1 || rate > 10) {
-          return { stdout: '', stderr: 'say: rate must be between 0.1 and 10\n', exitCode: 1 };
-        }
-      } else if (arg === '-l') {
-        if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
-          return { stdout: '', stderr: 'say: -l requires a language tag\n', exitCode: 1 };
-        }
-        lang = args[++i];
-      } else if (arg.startsWith('-') && arg !== '--list') {
-        return { stdout: '', stderr: `say: unknown option: ${arg}\n`, exitCode: 1 };
-      } else if (!arg.startsWith('-')) {
-        textParts.push(arg);
-      }
-    }
-
-    // Validate
-    const text = textParts.join(' ');
-    if (!text) {
-      return sayHelp();
-    }
-
-    if (!lang) {
-      return { stdout: '', stderr: 'say: -l language tag is required\n', exitCode: 1 };
-    }
-
-    // Voice matching for worker context: the page-side handler does the
-    // exact-name match on `voice`, so we pre-resolve the partial here.
-    // Kokoro voice ids participate in the match on both paths — locally via
-    // the merged list, over RPC via the page handler's merged `list-voices`.
     let resolvedVoice: string | undefined;
-    if (voiceName) {
-      const voices = local
-        ? await (async () => {
-            const { kokoroVoicesIfReady } = await import('../../speech/speak.js');
-            const kokoro = kokoroVoicesIfReady().map((v) => ({
-              name: v.id,
-              lang: v.lang,
-              default: false,
-            }));
-            const web = (await getVoices()).map((v) => ({
-              name: v.name,
-              lang: v.lang,
-              default: v.default,
-            }));
-            return [...kokoro, ...web];
-          })()
-        : (await panelRpc!.call('list-voices', undefined)).voices;
-      const match = voices.find((v) => v.name.toLowerCase().includes(voiceName!.toLowerCase()));
-      if (!match) {
-        return {
-          stdout: '',
-          stderr: `say: voice "${voiceName}" not found. Use --list to see available voices.\n`,
-          exitCode: 1,
-        };
-      }
-      resolvedVoice = match.name;
+    if (parsed.voiceName) {
+      const { resolved, error } = await resolveVoiceName(bridge, parsed.voiceName);
+      if (error) return error;
+      resolvedVoice = resolved;
     }
 
-    if (local) {
-      // The speak helper picks the engine: kokoro when its model is warm
-      // (or the resolved voice is a kokoro id), Web Speech otherwise.
-      try {
-        const { speak } = await import('../../speech/speak.js');
-        await speak({ text, lang, voice: resolvedVoice, rate });
-        return { stdout: '', stderr: '', exitCode: 0 };
-      } catch (err) {
-        return {
-          stdout: '',
-          stderr: `say: speech synthesis error: ${err instanceof Error ? err.message : String(err)}\n`,
-          exitCode: 1,
-        };
-      }
-    }
-
-    // Worker context: bridge via panel-RPC. `lang` is required for the
-    // command contract and must reach the page so the utterance uses
-    // the correct locale (regression flagged on PR #626 review).
-    try {
-      await panelRpc!.call('speak-text', {
-        text,
-        lang,
-        voice: resolvedVoice,
-        rate,
-      });
-      return { stdout: '', stderr: '', exitCode: 0 };
-    } catch (err) {
-      return {
-        stdout: '',
-        stderr: `say: ${err instanceof Error ? err.message : String(err)}\n`,
-        exitCode: 1,
-      };
-    }
+    const req = { text: parsed.text, lang: parsed.lang, voice: resolvedVoice, rate: parsed.rate };
+    return bridge.local ? speakLocal(req) : speakViaRpc(bridge, req);
   });
 }

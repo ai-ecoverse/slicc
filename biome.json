@@ -279,7 +279,6 @@
         "packages/chrome-extension/src/extension-leader-tray.ts",
         "packages/chrome-extension/src/offscreen.ts",
         "packages/chrome-extension/src/service-worker.ts",
-        "packages/chrome-extension/vite.config.ts",
         "packages/cloudflare-worker/src/index.ts",
         "packages/node-server/src/index.ts",
         "packages/webapp/cloud/app.js",
@@ -299,11 +298,9 @@
         "packages/webapp/src/ui/api-key-dialog.ts",
         "packages/webapp/src/ui/chat-fixture.ts",
         "packages/webapp/src/ui/page-leader-tray.ts",
-        "packages/webapp/src/ui/panel-rpc-handlers.ts",
         "packages/webapp/src/ui/provider-settings.ts",
         "packages/webapp/src/ui/sprinkle-bridge.ts",
-        "packages/webapp/src/ui/sprinkle-renderer.ts",
-        "packages/webapp/vite.config.ts"
+        "packages/webapp/src/ui/sprinkle-renderer.ts"
       ],
       "linter": {
         "rules": {
@@ -319,7 +316,6 @@
         "packages/chrome-extension/src/fetch-proxy-shared.ts",
         "packages/chrome-extension/src/secrets-entry.ts",
         "packages/chrome-extension/src/service-worker.ts",
-        "packages/chrome-extension/vite.config.ts",
         "packages/cloud-core/src/cone-config/index.ts",
         "packages/cloud-core/src/operations/list.ts",
         "packages/cloud-core/src/operations/start.ts",
@@ -343,7 +339,6 @@
         "packages/webapp/src/fs/mount/backend-local.ts",
         "packages/webapp/src/git/diff.ts",
         "packages/webapp/src/git/git-config.ts",
-        "packages/webapp/src/kernel/panel-rpc.ts",
         "packages/webapp/src/kernel/realm/http-global.ts",
         "packages/webapp/src/kernel/realm/ws-router-page.ts",
         "packages/webapp/src/kernel/remote-sprinkle-vfs.ts",
@@ -380,7 +375,6 @@
         "packages/webapp/src/shell/supplemental-commands/playwright-command.ts",
         "packages/webapp/src/shell/supplemental-commands/ps-command.ts",
         "packages/webapp/src/shell/supplemental-commands/python-command.ts",
-        "packages/webapp/src/shell/supplemental-commands/say-command.ts",
         "packages/webapp/src/shell/supplemental-commands/screencapture-command.ts",
         "packages/webapp/src/shell/supplemental-commands/secret-command.ts",
         "packages/webapp/src/shell/supplemental-commands/serial-command.ts",

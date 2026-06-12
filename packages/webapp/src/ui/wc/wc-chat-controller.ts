@@ -26,8 +26,10 @@ export interface WcChatControllerOptions {
   /** Invoked before a message's rendered elements are replaced or removed. */
   onMessageDisposed?: (messageId: string) => void;
   /**
-   * Invoked when a turn ends, with the turn's final assistant message (null
-   * when the id no longer resolves). The spoken-reply loop hangs off this.
+   * Invoked when a turn completes (the processing flag falls — via the
+   * `turn_end` agent event OR a scoop status broadcast; live floats only
+   * have the latter), with the turn's last settled assistant message (null
+   * when none exists). The spoken-reply loop hangs off this.
    */
   onTurnComplete?: (message: ChatMessage | null) => void;
 }
@@ -220,6 +222,20 @@ export class WcChatController {
     this.#processing = processing;
     if (!processing) this.#syncCopyRow();
     this.#onProcessingChange?.(processing);
+    // End-of-turn = the processing flag FALLING. This is deliberately not
+    // hung off the `turn_end` agent event: the live floats' chat wire only
+    // carries `response_done` (offscreen-bridge.ts defers `turn_end`
+    // synthesis), so processing falls via scoop STATUS broadcasts there —
+    // the transition is the one signal every float shares.
+    if (!processing) this.#fireTurnComplete();
+  }
+
+  /** Surface the turn's final settled assistant reply to the host. */
+  #fireTurnComplete(): void {
+    if (!this.#onTurnComplete) return;
+    const last =
+      [...this.#messages].reverse().find((m) => m.role === 'assistant' && !m.isStreaming) ?? null;
+    this.#onTurnComplete(last ? { ...last } : null);
   }
 
   /**
@@ -342,8 +358,10 @@ export class WcChatController {
       this.#rerenderMessage(message);
     }
     this.#currentStreamId = null;
+    // The processing FALL inside setProcessing fires onTurnComplete — one
+    // chokepoint shared with the status-broadcast path (live floats never
+    // receive a `turn_end` event at all).
     this.setProcessing(false);
-    this.#onTurnComplete?.(message ? { ...message } : null);
   }
 
   #handleError(error: string): void {
