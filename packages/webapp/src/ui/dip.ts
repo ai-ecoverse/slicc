@@ -1396,7 +1396,7 @@ export function disposeDips(instances: DipInstance[]): void {
  * `{ error: <msg> }` so the agent's existing onAction handler renders
  * them through its own error path.
  */
-async function handleDipPickerAction(
+export async function handleDipPickerAction(
   msg: { type: string; action: string; data?: unknown; picker?: string },
   onLick: (action: string, data: unknown) => void
 ): Promise<void> {
