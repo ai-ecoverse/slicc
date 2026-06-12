@@ -66,7 +66,7 @@ export interface WcNavDeps {
 
 export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   const { refs, client, log } = deps;
-  const { getAllAvailableModels } = await import('../provider-settings.js');
+  const { getAllAvailableModels, getAccounts } = await import('../provider-settings.js');
 
   const refreshModels = (): void => {
     (refs.composerMeta as HTMLElement & { models?: unknown }).models = modelListForMeta(
@@ -85,7 +85,6 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   });
 
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
-  const { getAccounts } = await import('../provider-settings.js');
   const applyIdentity = (): void => {
     const identity = accountIdentity(getAccounts());
     const avatar = refs.avatarMenu.querySelector('slicc-avatar');
@@ -203,6 +202,20 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
     return false;
   };
 
+  // The WC-native settings surface (slicc-dialog chrome). The legacy
+  // provider-settings dialog survives only for the onboarding-only
+  // flows (connect surface, tray join).
+  const openSettings = (): void => {
+    import('./wc-settings.js')
+      .then(({ showWcSettings }) => showWcSettings(log))
+      .then(() => {
+        refreshModels();
+        applyIdentity();
+        client.updateModel();
+      })
+      .catch((err) => log.error('WC settings dialog failed', err));
+  };
+
   refs.avatarMenu.addEventListener('slicc-avatar-action', (event) => {
     const id = (event as CustomEvent<{ id?: string }>).detail?.id;
     if (id && handleTrayAction(id)) {
@@ -215,18 +228,43 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
         .catch((err) => log.error('detached popout request failed', err));
       return;
     }
-    if (id === 'settings') {
-      // The WC-native settings surface (slicc-dialog chrome). The legacy
-      // provider-settings dialog survives only for the onboarding-only
-      // flows (connect surface, tray join).
-      import('./wc-settings.js')
-        .then(({ showWcSettings }) => showWcSettings(log))
+    if (id === 'settings') openSettings();
+  });
+
+  // No connected accounts → the model pill reads "Add AI" and clicking it
+  // routes straight into account settings.
+  refs.composerMeta.addEventListener('add-ai', openSettings);
+
+  wireAccountsChangedResync({ refreshModels, applyIdentity, client });
+}
+
+/**
+ * Re-sync the moment accounts change — an OAuth callback landing while the
+ * settings dialog is still open, a shell `oauth-token` add, a removal. A
+ * provider with a dynamic catalog (getModelIds) fetches it asynchronously:
+ * kick its refreshModels and sync again when the catalog lands, so the
+ * picker fills without a hard reload.
+ */
+async function wireAccountsChangedResync(opts: {
+  refreshModels(): void;
+  applyIdentity(): void;
+  client: OffscreenClient;
+}): Promise<void> {
+  const { refreshModels, applyIdentity, client } = opts;
+  const { getAccounts, getProviderConfig } = await import('../provider-settings.js');
+  window.addEventListener('slicc:accounts-changed', () => {
+    refreshModels();
+    applyIdentity();
+    client.updateModel();
+    for (const account of getAccounts()) {
+      const fetchCatalog = getProviderConfig(account.providerId)?.refreshModels;
+      if (!fetchCatalog) continue;
+      void fetchCatalog()
         .then(() => {
           refreshModels();
-          applyIdentity();
           client.updateModel();
         })
-        .catch((err) => log.error('WC settings dialog failed', err));
+        .catch(() => undefined);
     }
   });
 }

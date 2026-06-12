@@ -275,6 +275,9 @@ const SHEET = sheet(STYLE);
  * @attr narrow - boolean; hides the keyboard hint for a narrow chat column
  * @prop {Array<string|ModelOption>} models - the dropdown options (name + provider + id)
  * @fires model-change - `{detail:{model,provider,id}}` when a model row is chosen
+ * @fires add-ai - composed + bubbling; the pill was clicked while `models` is an
+ *   EXPLICIT empty list (no accounts) — the host opens its account settings.
+ *   The pill reads "Add AI" in that state instead of offering phantom models.
  * @csspart model-menu - the model dropdown panel
  * @csspart model-search - the type-ahead search input (shown for long lists)
  * @fires thinking-change - `{detail:{thinking,label,accented}}` when the thinking pill cycles
@@ -363,6 +366,14 @@ export class SliccComposerMeta extends HTMLElement {
   }
 
   /**
+   * An EXPLICITLY empty model list means "no accounts connected" — the host
+   * assigned `[]`. (`null` — never assigned — keeps the showcase defaults.)
+   */
+  get #noModels(): boolean {
+    return this.#models !== null && this.#models.length === 0;
+  }
+
+  /**
    * Thinking effort level. Only the six wetness levels are accepted; any
    * other value normalizes to the default (`max` / `Sprofondato`).
    */
@@ -399,21 +410,32 @@ export class SliccComposerMeta extends HTMLElement {
     const levelMeta = THINKING_META[thinking];
     const accented = thinking === ACCENTED_LEVEL;
 
-    const modelBtn = h(
-      'button',
-      {
-        type: 'button',
-        class: 'ctl msel',
-        part: 'model',
-        'aria-haspopup': 'menu',
-        'aria-expanded': 'false',
-      },
-      sparklesIcon(),
-      ' ',
-      model,
-      ' ',
-      h('span', { class: 'cx' }, caretIcon())
-    );
+    // With no connected accounts the pill is an "Add AI" call-to-action, not
+    // a picker — no caret, no menu, click emits `add-ai`.
+    const noModels = this.#noModels;
+    const modelBtn = noModels
+      ? h(
+          'button',
+          { type: 'button', class: 'ctl msel', part: 'model' },
+          sparklesIcon(),
+          ' ',
+          'Add AI'
+        )
+      : h(
+          'button',
+          {
+            type: 'button',
+            class: 'ctl msel',
+            part: 'model',
+            'aria-haspopup': 'menu',
+            'aria-expanded': 'false',
+          },
+          sparklesIcon(),
+          ' ',
+          model,
+          ' ',
+          h('span', { class: 'cx' }, caretIcon())
+        );
     const menu = h('div', { class: 'menu', part: 'model-menu', role: 'menu' });
     // A long option list grows a type-ahead search box (mirrors the composer
     // add-menu's filter), filtering rows by model name + provider as you type.
@@ -529,8 +551,14 @@ export class SliccComposerMeta extends HTMLElement {
   #bind(): void {
     if (this.#modelEl) {
       // The model pill opens (toggles) the dropdown; selecting a row commits.
+      // With no models there is nothing to pick — the click asks the host to
+      // open its account settings instead.
       this.#onModelClick = (e: Event) => {
         e.stopPropagation();
+        if (this.#noModels) {
+          this.dispatchEvent(new CustomEvent('add-ai', { bubbles: true, composed: true }));
+          return;
+        }
         this.#toggleMenu();
       };
       this.#modelEl.addEventListener('click', this.#onModelClick);

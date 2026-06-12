@@ -439,6 +439,54 @@ describe('slicc-composer-meta', () => {
     });
   });
 
+  describe('no-models "Add AI" state', () => {
+    it('an EXPLICIT empty model list turns the pill into an Add AI call-to-action', () => {
+      const el = mount((e) => {
+        e.models = [];
+        e.setAttribute('model', 'Claude Haiku 3.5'); // worker-resolved phantom
+      });
+      const pill = modelPill(el);
+      // The pill ignores the model attr (no account can run that model) and
+      // offers the account-settings entry point instead.
+      expect(pill.textContent).toContain('Add AI');
+      expect(pill.textContent).not.toContain('Claude Haiku 3.5');
+      // No dropdown affordances in this state.
+      expect(pill.getAttribute('aria-haspopup')).toBeNull();
+    });
+
+    it('clicking the Add AI pill emits add-ai instead of opening the menu', () => {
+      const el = mount((e) => {
+        e.models = [];
+      });
+      let addAi = 0;
+      el.addEventListener('add-ai', () => addAi++);
+      modelPill(el).click();
+      expect(addAi).toBe(1);
+      expect(el.menuOpen).toBe(false);
+    });
+
+    it('an unset models list keeps the showcase defaults (null ≠ empty)', () => {
+      const el = mount();
+      expect(modelPill(el).textContent).toContain('Opus 4.8');
+      modelPill(el).click();
+      expect(el.menuOpen).toBe(true);
+    });
+
+    it('assigning a real list later restores the picker', () => {
+      const el = mount((e) => {
+        e.models = [];
+      });
+      expect(modelPill(el).textContent).toContain('Add AI');
+      el.models = [{ name: 'Sonnet 4.6', provider: 'Anthropic', id: 'claude-sonnet-4-6' }];
+      // The pill returns to showing the host-set model attribute…
+      expect(modelPill(el).textContent).not.toContain('Add AI');
+      // …and clicking opens the dropdown with the supplied option.
+      modelPill(el).click();
+      expect(el.menuOpen).toBe(true);
+      expect(el.shadowRoot?.querySelector('.mitem .mname')?.textContent).toBe('Sonnet 4.6');
+    });
+  });
+
   describe('lifecycle cleanup', () => {
     it('detaches click listeners on disconnect', () => {
       const el = mount();
