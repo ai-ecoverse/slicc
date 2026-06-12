@@ -24,24 +24,15 @@ import type { OnboardingSetupDeps } from './types.js';
  * orchestrator owns the welcome dip + intro lines until the user
  * configures a provider — handing it to the cone would fatal with
  * "No API key configured for provider …" before the wizard even
- * appears. The persistent dedup ledger guards against reload
- * double-fires (see `DEDUPED_WELCOME_ACTIONS` in `main.ts`).
+ * appears.
  *
  * No-op when a tray-join URL is stored: a follower instance is
  * driven by its leader's chat history and should never re-render
  * the welcome flow.
  *
- * Mirrors the standalone and extension caller bodies exactly: when
- * detection insists this is genuinely a fresh boot (no
- * `/shared/.welcomed` marker AND no welcome lick in chat history)
- * but the in-memory ledger has a stale `first-run` entry from a
- * previous install whose state was wiped (clear-site-data, IndexedDB
- * nuke, manual VFS reset), suppressing here would leave the user
- * with no welcome and no deterministic onboarding path. Trust the
- * install state over the ledger and clear the stale entry. The
- * ledger still protects against intra-session double-fires (the
- * detection promise can resolve twice during a noisy boot), because
- * we re-add it before handing off.
+ * The persistent dedup ledger guards against both intra-session double-fires
+ * and cross-restart re-welcomes: if `'first-run'` is already in the ledger,
+ * detection exits early without calling `handleFirstRun()`.
  */
 export function runFirstRunDetection(deps: OnboardingSetupDeps): void {
   const { vfs, storage, firedWelcomeActions, persistFiredWelcomeActions, getOrchestrator, log } =
@@ -53,9 +44,8 @@ export function runFirstRunDetection(deps: OnboardingSetupDeps): void {
     .then((result) => {
       if (!result.isFirstRun) return;
       if (firedWelcomeActions.has('first-run')) {
-        log.info('Clearing stale welcome dedup entry — install state is fresh');
-        firedWelcomeActions.delete('first-run');
-        persistFiredWelcomeActions(firedWelcomeActions);
+        log.debug('Suppressing welcome re-fire: first-run already in dedup ledger');
+        return;
       }
       firedWelcomeActions.add('first-run');
       persistFiredWelcomeActions(firedWelcomeActions);

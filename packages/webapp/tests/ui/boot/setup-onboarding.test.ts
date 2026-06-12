@@ -8,9 +8,8 @@
  *   - No-op when a tray-join URL is stored (follower instance).
  *   - On first-run, the dedup ledger is mutated AND persisted AND
  *     the orchestrator's `handleFirstRun()` is invoked.
- *   - A stale `first-run` entry on a genuine fresh boot is cleared
- *     (trust install-state over ledger), then re-added before
- *     `handleFirstRun()` is invoked.
+ *   - A `'first-run'` entry already in the dedup ledger suppresses re-fire
+ *     (trust the ledger over install-state — prevents restart re-welcomes).
  *   - A non-first-run detection result is a no-op against the
  *     orchestrator and the ledger.
  */
@@ -138,9 +137,10 @@ describe('runFirstRunDetection', () => {
     expect(handleFirstRun).toHaveBeenCalledTimes(1);
   });
 
-  it('clears a stale ledger entry before re-adding it on a fresh boot', async () => {
+  it('suppresses re-fire when first-run is already in the dedup ledger', async () => {
     const handleFirstRun = vi.fn();
     const persist = vi.fn();
+    // Simulate a restart: localStorage already has 'first-run' from the previous boot.
     const set = new Set<string>(['first-run']);
 
     runFirstRunDetection({
@@ -153,9 +153,10 @@ describe('runFirstRunDetection', () => {
     });
 
     await new Promise((r) => setTimeout(r, 30));
-    // Persist called twice: once on the stale-clear, once on the re-add.
-    expect(persist).toHaveBeenCalledTimes(2);
-    expect(handleFirstRun).toHaveBeenCalledTimes(1);
+    // The ledger entry was already present — no re-fire, no persist mutation.
+    expect(handleFirstRun).not.toHaveBeenCalled();
+    expect(persist).not.toHaveBeenCalled();
+    expect(set.has('first-run')).toBe(true); // entry untouched
   });
 
   it('no-ops the orchestrator + ledger when the welcomed marker exists', async () => {
