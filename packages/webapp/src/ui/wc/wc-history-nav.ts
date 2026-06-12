@@ -29,12 +29,19 @@ export function wireWcHistoryNav(opts: {
   const userMessages = (): HTMLElement[] =>
     Array.from(thread.querySelectorAll<HTMLElement>('slicc-user-message'));
 
+  // Comfortably past slicc-chat-thread's FOLLOW_SLACK (80px).
+  const FOLLOW_ESCAPE = 200;
+
   const scrollToIndex = (messages: HTMLElement[], i: number): void => {
-    // Instant, not smooth: a smooth scroll is still "near the bottom" when a
-    // live append's requestFollow() samples the position mid-flight, and the
-    // resulting scrollToBottom cancels the walk. An instant jump puts the
-    // viewer firmly away from the bottom so appends raise the chip instead.
-    messages[i]?.scrollIntoView({ block: 'center' });
+    const target = messages[i];
+    if (!target) return;
+    // Hop out of the follow zone instantly before the smooth glide: a glide
+    // starting at the bottom is still "near the bottom" when a live append's
+    // requestFollow() samples the position mid-flight, and the resulting
+    // scrollToBottom cancels the walk. The hop is a few px and imperceptible.
+    const fromBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight;
+    if (fromBottom < FOLLOW_ESCAPE) thread.scrollTop -= FOLLOW_ESCAPE - fromBottom;
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
   };
 
   const reset = (): void => {

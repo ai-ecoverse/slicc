@@ -52,7 +52,10 @@ describe('wireWcHistoryNav', () => {
   it('ArrowUp walks backwards from the most recent user message', () => {
     const h = harness(3);
     h.up();
-    expect(h.scrolled).toHaveBeenLastCalledWith(2, expect.objectContaining({ block: 'center' }));
+    expect(h.scrolled).toHaveBeenLastCalledWith(
+      2,
+      expect.objectContaining({ block: 'center', behavior: 'smooth' })
+    );
     h.up();
     expect(h.scrolled).toHaveBeenLastCalledWith(1, expect.anything());
     h.up();
@@ -137,5 +140,21 @@ describe('wireWcHistoryNav', () => {
     h.down();
     expect(h.scrolled).not.toHaveBeenCalled();
     expect(h.inputCard.focusEnd).not.toHaveBeenCalled();
+  });
+
+  it('hops out of the follow slack zone before a glide that starts at the bottom', () => {
+    const h = harness(3);
+    Object.defineProperty(h.thread, 'scrollHeight', { value: 1000, configurable: true });
+    Object.defineProperty(h.thread, 'clientHeight', { value: 400, configurable: true });
+    h.thread.scrollTop = 600; // pinned to the bottom: fromBottom = 0
+    h.up();
+    // The instant pre-hop leaves requestFollow's near-bottom zone so a live
+    // append mid-glide raises the chip instead of yanking back down.
+    expect(h.thread.scrollTop).toBe(400);
+
+    // Already far from the bottom: no hop, the glide runs untouched.
+    h.thread.scrollTop = 100;
+    h.up();
+    expect(h.thread.scrollTop).toBe(100);
   });
 });
