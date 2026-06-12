@@ -16,7 +16,7 @@ vi.mock('../../../src/ui/quick-llm.js', () => ({
 }));
 
 import { createChatFixture } from '../../../src/ui/chat-fixture.js';
-import type { ChatMessage } from '../../../src/ui/types.js';
+import type { ChatMessage, ToolCall } from '../../../src/ui/types.js';
 import {
   buildThreadChildren,
   collateLickMessages,
@@ -344,6 +344,43 @@ describe('summarizeToolInput', () => {
     const long = 'x'.repeat(120);
     expect(summarizeToolInput(long)).toHaveLength(80);
     expect(summarizeToolInput(long).endsWith('…')).toBe(true);
+  });
+});
+
+describe('toolCallRow pending-UI container', () => {
+  it('renders [data-tool-ui-id] when _toolUIRequestId and _toolUIHtml are set', () => {
+    const call: ToolCall = {
+      id: 'c1',
+      name: 'bash',
+      input: {},
+      _toolUIRequestId: 'req-99',
+      _toolUIHtml: '<div>pick</div>',
+    };
+    const msg: ChatMessage = {
+      id: 'msg-1',
+      role: 'assistant',
+      content: '',
+      timestamp: 0,
+      toolCalls: [call],
+    };
+    const els = messageEls(msg);
+    const allEls = els.flatMap((el) => [el, ...Array.from(el.querySelectorAll('*'))]);
+    const container = allEls.find((el) => el.getAttribute('data-tool-ui-id') === 'req-99');
+    expect(container).toBeTruthy();
+  });
+
+  it('does not render [data-tool-ui-id] when _toolUIRequestId is absent', () => {
+    const call: ToolCall = { id: 'c1', name: 'bash', input: {} };
+    const msg: ChatMessage = {
+      id: 'msg-2',
+      role: 'assistant',
+      content: '',
+      timestamp: 0,
+      toolCalls: [call],
+    };
+    const els = messageEls(msg);
+    const allEls = els.flatMap((el) => [el, ...Array.from(el.querySelectorAll('*'))]);
+    expect(allEls.find((el) => el.hasAttribute('data-tool-ui-id'))).toBeFalsy();
   });
 });
 

@@ -70,6 +70,9 @@ function el(tag: string, attrs: Record<string, string> = {}): HTMLElement {
   return node;
 }
 
+/** Maps requestId → approval card HTML. Written by toolCallRow, read by hydrateToolUI. */
+export const toolUIHtmlStore = new Map<string, string>();
+
 /** Compact single-line summary of a tool call's input for the row label. */
 export function summarizeToolInput(input: unknown): string {
   if (input == null) return '';
@@ -366,6 +369,13 @@ function toolCallRow(call: ToolCall): HTMLElement {
   });
   const body = toolBody(call);
   if (body) row.append(body);
+  if (call._toolUIRequestId && call._toolUIHtml) {
+    toolUIHtmlStore.set(call._toolUIRequestId, call._toolUIHtml);
+    const container = document.createElement('div');
+    container.className = 'msg__tool-ui';
+    container.setAttribute('data-tool-ui-id', call._toolUIRequestId);
+    row.append(container);
+  }
   return row;
 }
 
