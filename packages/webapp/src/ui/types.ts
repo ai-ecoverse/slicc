@@ -75,6 +75,8 @@ export interface ToolCall {
    *  approval/result roundtrip back to the offscreen agent. Not
    *  persisted. */
   _toolUIRequestId?: string;
+  /** Transient approval-card HTML for a pending tool-UI round trip. Not persisted. */
+  _toolUIHtml?: string;
 }
 
 // ---------------------------------------------------------------------------

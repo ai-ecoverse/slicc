@@ -10,7 +10,7 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
 
-import type { AgentEvent, AgentHandle } from '../../../src/ui/types.js';
+import type { AgentEvent, AgentHandle, ToolCall } from '../../../src/ui/types.js';
 import { WcChatController } from '../../../src/ui/wc/wc-chat-controller.js';
 
 class FakeAgent implements AgentHandle {
@@ -225,6 +225,17 @@ describe('WcChatController', () => {
     controller.setProcessing(true);
     controller.setProcessing(false);
     expect(processingStates).toEqual([true, false]);
+  });
+
+  it('ToolCall accepts _toolUIHtml field', () => {
+    const call: ToolCall = {
+      id: 'c1',
+      name: 'bash',
+      input: {},
+      _toolUIRequestId: 'req-1',
+      _toolUIHtml: '<div>pick</div>',
+    };
+    expect(call._toolUIHtml).toBe('<div>pick</div>');
   });
 });
 
