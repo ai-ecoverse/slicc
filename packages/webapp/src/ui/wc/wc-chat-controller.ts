@@ -105,6 +105,20 @@ export class WcChatController {
     });
   }
 
+  /**
+   * Append a synthetic assistant message that never touched the agent —
+   * deterministic onboarding lines and dip references (`![…](…shtml)`,
+   * hydrated by the regular onMessageRendered dip pipeline).
+   */
+  addAssistantMessage(text: string): void {
+    this.#appendMessage({
+      id: uid(),
+      role: 'assistant',
+      content: text,
+      timestamp: Date.now(),
+    });
+  }
+
   /** Replace the whole thread with a scoop's canonical history. */
   loadMessages(messages: readonly ChatMessage[]): void {
     for (const id of this.#els.keys()) this.#onMessageDisposed?.(id);

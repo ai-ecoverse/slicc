@@ -22,3 +22,34 @@ export interface SudoSetupDeps {
   /** Logger for status messages from the install path. */
   log: BootStageLogger;
 }
+
+/** The single orchestrator capability `runFirstRunDetection` needs. */
+export interface OnboardingFirstRunHandler {
+  handleFirstRun(): void;
+}
+
+/**
+ * Dependencies for `runFirstRunDetection()` — the welcome detection
+ * chain shared by the WC live and extension boots.
+ */
+export interface OnboardingSetupDeps {
+  /** Page-side VirtualFS used for the `/shared/.welcomed` probe. */
+  vfs: import('../../fs/index.js').VirtualFS;
+  /** Page-side `localStorage` — checked for an active tray-join URL. */
+  storage: Storage;
+  /** The in-memory dedup ledger, mutated when a fresh first-run fires. */
+  firedWelcomeActions: Set<string>;
+  /**
+   * Persist the dedup ledger to `localStorage` after mutation. Injected
+   * so the boot stage stays free of the page-only persistence helper.
+   */
+  persistFiredWelcomeActions(set: Set<string>): void;
+  /**
+   * Resolver for the onboarding orchestrator — kept lazy so floats can
+   * supply their own singletons. Invoked only after
+   * `detectWelcomeFirstRun` confirms a genuine first-run boot.
+   */
+  getOrchestrator(): OnboardingFirstRunHandler;
+  /** Logger for the warn/info trace from the detection chain. */
+  log: BootStageLogger;
+}
