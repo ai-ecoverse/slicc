@@ -74,15 +74,7 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
     );
   };
   refreshModels();
-
-  // Picking a model persists the global default (the legacy `selected-model`
-  // key) and tells the worker to re-resolve — same flow as the legacy header.
-  refs.composerMeta.addEventListener('model-change', (event) => {
-    const id = (event as CustomEvent<{ id?: string }>).detail?.id;
-    if (!id) return;
-    localStorage.setItem('selected-model', id);
-    client.updateModel();
-  });
+  await wireModelPicker(refs, client);
 
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
   const applyIdentity = (): void => {
@@ -92,6 +84,7 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
     // identity source as the nav avatar.
     const send = refs.inputCard.querySelector('slicc-send-button');
     if (identity) {
+      avatar?.removeAttribute('initials');
       avatar?.setAttribute('name', identity.name);
       if (identity.avatarUrl) {
         avatar?.setAttribute('src', identity.avatarUrl);
@@ -99,6 +92,11 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
       }
       refs.avatarMenu.user = { name: identity.name, provider: identity.provider };
     } else {
+      // Signed out: clear the avatar's identity so it shows the `?` placeholder
+      // instead of an initial derived from a placeholder name.
+      avatar?.removeAttribute('name');
+      avatar?.removeAttribute('src');
+      avatar?.removeAttribute('initials');
       send?.removeAttribute('src');
       refs.avatarMenu.user = {
         name: 'SLICC',
@@ -236,6 +234,35 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   refs.composerMeta.addEventListener('add-ai', openSettings);
 
   wireAccountsChangedResync({ refreshModels, applyIdentity, client });
+}
+
+/**
+ * Model pick + capability reflection: picking a model persists the global
+ * default (legacy `selected-model` key) and tells the worker to re-resolve,
+ * and the active model's reasoning capability toggles `no-thinking` on the
+ * composer so the thinking-effort pill only shows for a model that supports it.
+ */
+async function wireModelPicker(refs: WcShellRefs, client: OffscreenClient): Promise<void> {
+  const { resolveModelById, resolveCurrentModel } = await import('../provider-settings.js');
+  const applyThinkingCapability = (modelId?: string): void => {
+    try {
+      const model = modelId ? resolveModelById(modelId) : resolveCurrentModel();
+      refs.composerMeta.toggleAttribute(
+        'no-thinking',
+        (model as { reasoning?: boolean }).reasoning !== true
+      );
+    } catch {
+      // Capability is decorative; never block on resolution.
+    }
+  };
+  applyThinkingCapability();
+  refs.composerMeta.addEventListener('model-change', (event) => {
+    const id = (event as CustomEvent<{ id?: string }>).detail?.id;
+    if (!id) return;
+    localStorage.setItem('selected-model', id);
+    applyThinkingCapability(id);
+    client.updateModel();
+  });
 }
 
 /**

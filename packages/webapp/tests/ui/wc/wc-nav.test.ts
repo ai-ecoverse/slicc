@@ -84,6 +84,22 @@ describe('wireWcNav', () => {
     expect(client.updateModel).toHaveBeenCalledTimes(1);
   });
 
+  it('clears the avatar identity when signed out (so the component shows ?)', async () => {
+    const refs = makeRefs();
+    // Seed a stale name as if a previous render had set one.
+    const avatar = refs.avatarMenu.querySelector('slicc-avatar') as HTMLElement;
+    avatar.setAttribute('name', 'SLICC');
+    avatar.setAttribute('src', 'https://stale.example/old.png');
+    const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+    await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+
+    // The host strips identity so the avatar component falls back to its `?`
+    // placeholder (the glyph itself is asserted in slicc-avatar.test.ts).
+    expect(avatar.hasAttribute('name')).toBe(false);
+    expect(avatar.hasAttribute('src')).toBe(false);
+    expect(avatar.hasAttribute('initials')).toBe(false);
+  });
+
   it('paints the account avatar onto the nav avatar AND the composer send button', async () => {
     localStorage.setItem(
       'slicc_accounts',

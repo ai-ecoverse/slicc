@@ -248,6 +248,11 @@ async function applyThreadContext(refs: WcShellRefs, scoop: RegisteredScoop): Pr
     const modelId = scoop.config?.modelId;
     const model = modelId ? resolveModelById(modelId) : resolveCurrentModel();
     refs.composerMeta.setAttribute('model', model.name ?? model.id);
+    // The thinking-effort pill only shows for a reasoning-capable model.
+    refs.composerMeta.toggleAttribute(
+      'no-thinking',
+      (model as { reasoning?: boolean }).reasoning !== true
+    );
   } catch {
     // Model display is informational; never block scoop selection on it.
   }
