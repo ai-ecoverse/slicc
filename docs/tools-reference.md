@@ -94,7 +94,7 @@ export function adaptTools(tools: ToolDefinition[]): AgentTool[] {
 
 **File**: `packages/webapp/src/tools/bash-tool.ts`
 
-Execute shell commands in a full Unix-like environment (just-bash 2.14.3).
+Execute shell commands in a full Unix-like environment (`just-bash`; see `packages/webapp/package.json` for the pinned version).
 
 | Property   | Value                                 |
 | ---------- | ------------------------------------- |

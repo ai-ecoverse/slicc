@@ -410,7 +410,7 @@ Acceptable to skip tests:
 ```
 packages/webapp/src/
   fs/              Virtual filesystem + RestrictedFS
-  shell/           WASM Bash + xterm.js terminal
+  shell/           just-bash (TypeScript bash interpreter) + xterm.js terminal
   cdp/             Chrome DevTools Protocol client
   tools/           Agent tools (bash, file, browser, js)
   core/            Agent loop, logging, types

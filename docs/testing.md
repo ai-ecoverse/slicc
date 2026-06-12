@@ -236,7 +236,7 @@ Key patterns:
 
 - **Mock context**: Create minimal mock with only needed properties
 - **Mock VFS**: Return specific files from `walk()` for file discovery tests
-- **Test arg parsing separately**: Test command-line parsing logic without WASM runtime
+- **Test arg parsing separately**: Test command-line parsing logic without booting the just-bash runtime
 - **Check exit codes and output**: Verify both success and error paths
 
 ## Mocking Patterns
@@ -320,7 +320,7 @@ Key pattern: Helper functions reduce boilerplate and make tests more readable.
 ## What CAN Skip Tests
 
 - **DOM rendering**: UI panels (ChatPanel, TerminalPanel, FilePanel)
-- **WASM runtime**: just-bash shell (covered by tool tests)
+- **just-bash runtime**: the shell interpreter itself (covered by tool tests)
 - **Chrome API**: DebuggerClient, service workers — EXCEPT
   state-machine and lifecycle-reconciliation logic (e.g., the
   detached-popout SW state machine), which MUST be unit-tested

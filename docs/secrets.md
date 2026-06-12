@@ -250,7 +250,7 @@ The OAuth login popup flow is the user-approval gate. Once a token is cached, su
 
 In Chrome extension mode, agent-initiated HTTP requests now route through the `fetch-proxy.fetch` SW Port handler, providing full secret-injection coverage equivalent to CLI mode.
 
-For **mount backends specifically** (`mount --source s3://...` and `mount --source da://...`), the extension is self-contained. Secrets live in `chrome.storage.local`, the service worker holds them, signs requests with SigV4 (S3) or attaches the IMS Bearer (DA), and forwards via `fetch()` (extension `host_permissions: <all_urls>` covers any S3/da.live host). The agent's tools (`bash` WASM, `node -e` and `javascript` in CSP-locked sandbox iframes) have no `chrome.*` API access, so they cannot read `chrome.storage` directly — the same isolation property that keeps `~/.slicc/secrets.env` out of the agent in CLI mode.
+For **mount backends specifically** (`mount --source s3://...` and `mount --source da://...`), the extension is self-contained. Secrets live in `chrome.storage.local`, the service worker holds them, signs requests with SigV4 (S3) or attaches the IMS Bearer (DA), and forwards via `fetch()` (extension `host_permissions: <all_urls>` covers any S3/da.live host). The agent's tools (`bash` via just-bash, `node -e` and `javascript` in the CSP-locked QuickJS sandbox / sandbox iframes) have no `chrome.*` API access, so they cannot read `chrome.storage` directly — the same isolation property that keeps `~/.slicc/secrets.env` out of the agent in CLI mode.
 
 ### Extension Options page (recommended)
 
