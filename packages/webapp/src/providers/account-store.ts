@@ -1249,6 +1249,18 @@ function buildProviderRoutedModel(
 }
 
 /**
+ * The pi-ai registry a provider's models should be resolved against. OAuth
+ * and Azure providers proxy Anthropic's catalog; bedrock-camp proxies
+ * amazon-bedrock; everything else resolves against its own id.
+ */
+function resolveEffectiveProvider(providerId: string, providerConfig: ProviderConfig): string {
+  if (providerConfig.isOAuth) return 'anthropic';
+  if (providerId === 'azure-ai-foundry') return 'anthropic';
+  if (providerId === 'bedrock-camp') return 'amazon-bedrock';
+  return providerId;
+}
+
+/**
  * Resolve a specific model by ID, using the current provider's
  * baseUrl and API routing. Falls back to resolveCurrentModel() if
  * modelId is not provided.
@@ -1261,13 +1273,7 @@ export function resolveModelById(modelId?: string): Model<Api> {
   const providerConfig = getProviderConfig(providerId);
 
   try {
-    const effectiveProvider = providerConfig.isOAuth
-      ? 'anthropic'
-      : providerId === 'azure-ai-foundry'
-        ? 'anthropic'
-        : providerId === 'bedrock-camp'
-          ? 'amazon-bedrock'
-          : providerId;
+    const effectiveProvider = resolveEffectiveProvider(providerId, providerConfig);
     const model = getModelDynamic(effectiveProvider, modelId);
     if (!model?.id) throw new Error(`Model ${modelId} not found`);
     let resolved: Model<Api> = model;
@@ -1331,14 +1337,7 @@ export function resolveCurrentModel(): Model<Api> {
   const effectiveModelId = modelId || preferredId || models[0]?.id || 'claude-sonnet-4-6';
 
   try {
-    const providerConfig = getProviderConfig(providerId);
-    const effectiveProvider = providerConfig.isOAuth
-      ? 'anthropic'
-      : providerId === 'azure-ai-foundry'
-        ? 'anthropic'
-        : providerId === 'bedrock-camp'
-          ? 'amazon-bedrock'
-          : providerId;
+    const effectiveProvider = resolveEffectiveProvider(providerId, providerConfig);
     const model = getModelDynamic(effectiveProvider, effectiveModelId);
     if (!model?.id)
       throw new Error(`Model ${effectiveModelId} not found in ${effectiveProvider} registry`);

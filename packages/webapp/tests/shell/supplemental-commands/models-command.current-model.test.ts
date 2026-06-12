@@ -8,7 +8,7 @@
 import type { IFileSystem } from 'just-bash';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../../src/providers/account-store.js', () => ({
+vi.mock('../../../src/ui/provider-settings.js', () => ({
   getAccounts: vi.fn(),
   getAvailableProviders: vi.fn(),
   getProviderConfig: vi.fn(),
@@ -18,6 +18,7 @@ vi.mock('../../../src/providers/account-store.js', () => ({
   resolveCurrentModel: vi.fn(),
 }));
 
+import { createModelsCommand } from '../../../src/shell/supplemental-commands/models-command.js';
 import {
   getAccounts,
   getAvailableProviders,
@@ -26,8 +27,7 @@ import {
   getSelectedModelId,
   getSelectedProvider,
   resolveCurrentModel,
-} from '../../../src/providers/account-store.js';
-import { createModelsCommand } from '../../../src/shell/supplemental-commands/models-command.js';
+} from '../../../src/ui/provider-settings.js';
 
 const mk = (id: string, costIn: number, costOut: number, ctx = 1_000_000, provider = 'adobe') => ({
   id,

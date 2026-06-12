@@ -9,18 +9,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // disappeared. Locking the command-level call shape to the async
 // setter prevents a future refactor from dropping the `await` and
 // re-introducing the same bug silently.
-vi.mock('../../../src/providers/account-store.js', () => ({
+vi.mock('../../../src/ui/provider-settings.js', () => ({
   getExtraOAuthDomains: vi.fn(),
   setExtraOAuthDomainsAsync: vi.fn(),
   getAllExtraOAuthDomains: vi.fn(),
 }));
 
+import { createOAuthDomainCommand } from '../../../src/shell/supplemental-commands/oauth-domain-command.js';
 import {
   getAllExtraOAuthDomains,
   getExtraOAuthDomains,
   setExtraOAuthDomainsAsync,
-} from '../../../src/providers/account-store.js';
-import { createOAuthDomainCommand } from '../../../src/shell/supplemental-commands/oauth-domain-command.js';
+} from '../../../src/ui/provider-settings.js';
 
 const mockGetExtraOAuthDomains = vi.mocked(getExtraOAuthDomains);
 const mockSetExtraOAuthDomainsAsync = vi.mocked(setExtraOAuthDomainsAsync);

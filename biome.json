@@ -298,8 +298,6 @@
         "packages/webapp/src/ui/api-key-dialog.ts",
         "packages/webapp/src/ui/chat-fixture.ts",
         "packages/webapp/src/ui/page-leader-tray.ts",
-        "packages/webapp/src/providers/account-store.ts",
-        "packages/webapp/src/ui/provider-settings.ts",
         "packages/webapp/src/ui/sprinkle-bridge.ts",
         "packages/webapp/src/ui/sprinkle-renderer.ts"
       ],
@@ -346,7 +344,6 @@
         "packages/webapp/src/kernel/terminal-session-host.ts",
         "packages/webapp/src/net/handoff-link.ts",
         "packages/webapp/src/net/link-header.ts",
-        "packages/webapp/src/providers/account-store.ts",
         "packages/webapp/src/providers/built-in/azure-openai.ts",
         "packages/webapp/src/scoops/db.ts",
         "packages/webapp/src/scoops/scoop-management-tools.ts",
@@ -396,7 +393,6 @@
         "packages/webapp/src/ui/dip.ts",
         "packages/webapp/src/ui/oauth-bootstrap.ts",
         "packages/webapp/src/ui/opfs-leader-election.ts",
-        "packages/webapp/src/ui/provider-settings.ts",
         "packages/webapp/src/ui/sprinkle-icon.ts",
         "packages/webapp/src/ui/sprinkle-renderer.ts"
       ],

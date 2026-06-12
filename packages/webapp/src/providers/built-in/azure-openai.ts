@@ -30,7 +30,7 @@ import type {
   ChatCompletionMessageParam,
   ChatCompletionTool,
 } from 'openai/resources/chat/completions';
-import { getApiVersionForProvider, getDeploymentForProvider } from '../account-store.js';
+import { getApiVersionForProvider, getDeploymentForProvider } from '../../ui/provider-settings.js';
 import type { ProviderConfig } from '../types.js';
 
 // ── Config ─────────────────────────────────────────────────────────

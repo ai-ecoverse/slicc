@@ -2,7 +2,7 @@ import type { IFileSystem } from 'just-bash';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock modules before importing the command
-vi.mock('../../../src/providers/account-store.js', () => ({
+vi.mock('../../../src/ui/provider-settings.js', () => ({
   getOAuthAccountInfo: vi.fn(),
   getSelectedProvider: vi.fn(),
   getAccounts: vi.fn(() => []),
@@ -19,11 +19,6 @@ vi.mock('../../../src/providers/oauth-service.js', () => ({
 }));
 
 import {
-  getAccounts,
-  getOAuthAccountInfo,
-  getSelectedProvider,
-} from '../../../src/providers/account-store.js';
-import {
   getRegisteredProviderConfig,
   getRegisteredProviderIds,
 } from '../../../src/providers/index.js';
@@ -32,6 +27,11 @@ import {
   createOAuthLauncher,
 } from '../../../src/providers/oauth-service.js';
 import { createOAuthTokenCommand } from '../../../src/shell/supplemental-commands/oauth-token-command.js';
+import {
+  getAccounts,
+  getOAuthAccountInfo,
+  getSelectedProvider,
+} from '../../../src/ui/provider-settings.js';
 
 const mockGetOAuthAccountInfo = vi.mocked(getOAuthAccountInfo);
 const mockGetSelectedProvider = vi.mocked(getSelectedProvider);

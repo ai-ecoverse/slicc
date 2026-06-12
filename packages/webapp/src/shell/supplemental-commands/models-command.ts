@@ -298,7 +298,7 @@ export function createModelsCommand(vfs?: VirtualFS): Command {
       getSelectedProvider,
       getSelectedModelId,
       resolveCurrentModel,
-    } = await import('../../providers/account-store.js');
+    } = await import('../../ui/provider-settings.js');
 
     if (args.includes('--help') || args.includes('-h')) {
       return { stdout: helpText(), stderr: '', exitCode: 0 };

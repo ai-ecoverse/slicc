@@ -234,7 +234,7 @@ async function runOAuthForAdd(
   deps: McpCommandDeps
 ): Promise<NonNullable<McpServerEntry['auth']>> {
   const { discoverAuth, dynamicRegister, runAuthFlow } = await import('../mcp/oauth.js');
-  const { saveOAuthAccount } = await import('../../providers/account-store.js');
+  const { saveOAuthAccount } = await import('../../ui/provider-settings.js');
   const fetchImpl = await resolveOAuthFetchImpl(deps.oauthFetchImpl);
   const launcher = deps.oauthLauncher ?? (await defaultLauncher());
 
@@ -412,7 +412,7 @@ async function cmdDelete(args: string[], deps: McpCommandDeps): Promise<ExecResu
   const providerId = `mcp:${name}`;
   let oauthRemoved = false;
   try {
-    const { removeAccount, getAccounts } = await import('../../providers/account-store.js');
+    const { removeAccount, getAccounts } = await import('../../ui/provider-settings.js');
     if (getAccounts().some((a) => a.providerId === providerId)) {
       await removeAccount(providerId);
       oauthRemoved = true;
@@ -964,7 +964,7 @@ async function runInteractiveAuth(
 
 async function getMcpBearerHeader(name: string): Promise<string | null> {
   const providerId = `mcp:${name}`;
-  const { getOAuthAccountInfo } = await import('../../providers/account-store.js');
+  const { getOAuthAccountInfo } = await import('../../ui/provider-settings.js');
   const info = getOAuthAccountInfo(providerId);
   if (!info) return null;
   if (info.expired) {

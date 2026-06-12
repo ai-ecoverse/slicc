@@ -37,7 +37,7 @@ export function createOAuthDomainCommand(): Command {
     }
 
     const { getExtraOAuthDomains, setExtraOAuthDomainsAsync, getAllExtraOAuthDomains } =
-      await import('../../providers/account-store.js');
+      await import('../../ui/provider-settings.js');
 
     const [subcommand, providerId, domain] = args;
 
