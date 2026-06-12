@@ -1,5 +1,5 @@
 /**
- * `WasmShellHeadless` — the worker-safe shell base class.
+ * `AlmostBashShellHeadless` — the worker-safe shell base class.
  *
  * The agent's `bash` tool calls run here. Owns just-bash,
  * the VFS adapter, custom commands (git, mount, supplemental), the
@@ -14,16 +14,16 @@
  * because its remaining (type-only) `cdp/` imports transitively reach
  * the DOM-bound CDP transports.
  *
- * The view layer — `WasmShell` in `wasm-shell.ts` — extends this
+ * The view layer — `AlmostBashShell` in `almost-bash-shell.ts` — extends this
  * class and adds xterm mounting, the line editor, history, and
  * media-preview rendering. Worker-resident shells construct
- * `WasmShellHeadless` directly (or — equivalently for now —
- * `WasmShell`, which inherits the headless behavior and only
+ * `AlmostBashShellHeadless` directly (or — equivalently for now —
+ * `AlmostBashShell`, which inherits the headless behavior and only
  * activates view code on `mount()`).
  *
  * `renderMediaPreview` is a `protected` extension point: the
  * headless implementation throws "preview unavailable in headless
- * mode" because there's no DOM to draw into; `WasmShell` overrides
+ * mode" because there's no DOM to draw into; `AlmostBashShell` overrides
  * with the existing image/video preview logic. The terminal
  * RPC will replace the throw with a `terminal-media-preview`
  * envelope emit.
@@ -61,7 +61,7 @@ import { buildWorkflowRunArgv, type WorkflowCommandEntry } from './workflow-disc
 // Options
 // ---------------------------------------------------------------------------
 
-/** Worker-safe slice of `WasmShellOptions` (no DOM `container`). */
+/** Worker-safe slice of `AlmostBashShellOptions` (no DOM `container`). */
 export interface HeadlessShellOptions {
   fs: VirtualFS;
   /** Initial working directory. Default: / */
@@ -146,8 +146,8 @@ export interface ShellSudoConfig {
 
 /**
  * The shell methods the kernel worker (and any future
- * terminal-view-driven RPC client) needs. `WasmShell` and
- * `WasmShellHeadless` both satisfy this.
+ * terminal-view-driven RPC client) needs. `AlmostBashShell` and
+ * `AlmostBashShellHeadless` both satisfy this.
  */
 export interface HeadlessShellLike {
   getBash(): Bash;
@@ -197,7 +197,7 @@ type BashExecOptionsWithSignal = NonNullable<Parameters<Bash['exec']>[1]> & {
 // Class
 // ---------------------------------------------------------------------------
 
-export class WasmShellHeadless implements HeadlessShellLike {
+export class AlmostBashShellHeadless implements HeadlessShellLike {
   protected bash: Bash;
   protected vfsAdapter: VfsAdapter;
   protected gitCommands: GitCommands;
@@ -506,7 +506,7 @@ export class WasmShellHeadless implements HeadlessShellLike {
   /**
    * Render an inline media preview (e.g. for `imgcat`). Headless
    * default throws because there's no DOM to draw into. The
-   * `WasmShell` view subclass overrides with the existing
+   * `AlmostBashShell` view subclass overrides with the existing
    * image/video preview rendering. The terminal RPC will add
    * a third implementation that emits a `terminal-media-preview`
    * envelope over the kernel transport.

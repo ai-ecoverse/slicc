@@ -608,7 +608,7 @@ See `packages/chrome-extension/src/fetch-proxy-shared.ts:handleFetchProxyConnect
 
 MV3 offscreen documents inherit only a subset of the manifest's `permissions`. Notably, **`chrome.storage` is NOT exposed in offscreen documents** — even when the manifest grants `"storage"` and the SW has it. Code paths that work in the SW (where `chrome.storage.local.get(null)` returns instantly) throw `Cannot read properties of undefined (reading 'local')` when they end up running in offscreen.
 
-This was hit by the `secret list` shell command: the panel-terminal `WasmShellHeadless` is hosted in the offscreen document (via `createPanelTerminalHost`), and `chrome.storage.local.get(...)` from inside the supplemental command callback throws.
+This was hit by the `secret list` shell command: the panel-terminal `AlmostBashShellHeadless` is hosted in the offscreen document (via `createPanelTerminalHost`), and `chrome.storage.local.get(...)` from inside the supplemental command callback throws.
 
 **The Solution**
 
@@ -850,7 +850,7 @@ The service worker must only import **types** (erased at compile time) from othe
 
 **The Problem**
 
-In extension mode, there are **two separate WasmShell instances** running in different execution contexts:
+In extension mode, there are **two separate AlmostBashShell instances** running in different execution contexts:
 
 | Context                | Location                                         | Shell purpose                    | Window globals                  |
 | ---------------------- | ------------------------------------------------ | -------------------------------- | ------------------------------- |

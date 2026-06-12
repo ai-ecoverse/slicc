@@ -1,3 +1,3 @@
+export type { AlmostBashShellOptions } from './almost-bash-shell.js';
+export { AlmostBashShell } from './almost-bash-shell.js';
 export { VfsAdapter } from './vfs-adapter.js';
-export type { WasmShellOptions } from './wasm-shell.js';
-export { WasmShell } from './wasm-shell.js';

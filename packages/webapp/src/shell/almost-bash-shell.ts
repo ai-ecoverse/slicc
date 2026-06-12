@@ -1,42 +1,42 @@
 /**
- * `WasmShell` — xterm.js terminal integration on top of
- * `WasmShellHeadless`.
+ * `AlmostBashShell` — xterm.js terminal integration on top of
+ * `AlmostBashShellHeadless`.
  *
  * The headless concerns (just-bash, jsh sync, custom
  * commands, executeCommand/executeScriptFile primitives) live in
- * `wasm-shell-headless.ts`. This file adds the **view layer** —
+ * `almost-bash-shell-headless.ts`. This file adds the **view layer** —
  * xterm mount, theme sync, refit / resize, line editor, command
  * history, tab completion, Ctrl+C, multi-line continuation, and
  * inline media-preview rendering for `imgcat`.
  *
  * Worker context: the agent's `bash` tool calls `executeCommand` /
- * `executeScriptFile` on a `WasmShell` instance, but never calls
+ * `executeScriptFile` on a `AlmostBashShell` instance, but never calls
  * `mount()`. The view fields stay `null`, and the view methods
  * are dead code — xterm itself is dynamically imported inside
  * `mount()` so it never enters the worker bundle. A follow-up may
  * formally split the public types so the worker constructs
- * `WasmShellHeadless` directly; today the inheritance is enough.
+ * `AlmostBashShellHeadless` directly; today the inheritance is enough.
  */
 
 import type { FitAddon } from '@xterm/addon-fit';
 import type { Terminal } from '@xterm/xterm';
 import type { BashExecResult } from 'just-bash';
 import {
+  AlmostBashShellHeadless,
+  type HeadlessShellLike,
+  type HeadlessShellOptions,
+} from './almost-bash-shell-headless.js';
+import {
   decodeForbiddenResponseHeaders,
   encodeForbiddenRequestHeaders,
   isTextContentType,
 } from './proxied-fetch.js';
 import type { MediaPreviewItem } from './supplemental-commands.js';
-import {
-  type HeadlessShellLike,
-  type HeadlessShellOptions,
-  WasmShellHeadless,
-} from './wasm-shell-headless.js';
 
-export { WasmShellHeadless } from './wasm-shell-headless.js';
+export { AlmostBashShellHeadless } from './almost-bash-shell-headless.js';
 export type { HeadlessShellLike };
 // Re-exports for backwards compatibility — existing tests import
-// these from `wasm-shell.ts`. New callers should import from the
+// these from `almost-bash-shell.ts`. New callers should import from the
 // origin modules directly.
 export { decodeForbiddenResponseHeaders, encodeForbiddenRequestHeaders, isTextContentType };
 
@@ -46,17 +46,17 @@ function basename(path: string): string {
   return slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
 }
 
-export interface WasmShellOptions extends HeadlessShellOptions {
+export interface AlmostBashShellOptions extends HeadlessShellOptions {
   /** Container element for the terminal. */
   container?: HTMLElement;
 }
 
 /**
- * `WasmShell` — view-extending shell. Inherits everything headless
- * from `WasmShellHeadless`; adds xterm mount + line editor + media
+ * `AlmostBashShell` — view-extending shell. Inherits everything headless
+ * from `AlmostBashShellHeadless`; adds xterm mount + line editor + media
  * preview.
  */
-export class WasmShell extends WasmShellHeadless {
+export class AlmostBashShell extends AlmostBashShellHeadless {
   private terminal: Terminal | null = null;
   private fitAddon: FitAddon | null = null;
   private terminalHost: HTMLElement | null = null;
@@ -74,7 +74,7 @@ export class WasmShell extends WasmShellHeadless {
   private execAbort: AbortController | null = null;
   private continuationBuffer = '';
 
-  constructor(options: WasmShellOptions) {
+  constructor(options: AlmostBashShellOptions) {
     super(options);
   }
 
@@ -98,7 +98,7 @@ export class WasmShell extends WasmShellHeadless {
 
   /** Mount the terminal in a DOM container. */
   async mount(container?: HTMLElement): Promise<void> {
-    const target = container ?? (this.options as WasmShellOptions).container;
+    const target = container ?? (this.options as AlmostBashShellOptions).container;
     if (!target) throw new Error('No container element provided');
 
     // Dynamic imports so this module can be loaded in Node.js (tests)
@@ -547,6 +547,15 @@ export class WasmShell extends WasmShellHeadless {
     }
   }
 
+  /** Insert text at the cursor, advancing the cursor and echoing to the terminal. */
+  private insertAtCursor(text: string): void {
+    if (!text) return;
+    this.currentLine =
+      this.currentLine.slice(0, this.cursorPos) + text + this.currentLine.slice(this.cursorPos);
+    this.cursorPos += text.length;
+    this.terminal?.write(text);
+  }
+
   private async handleTab(): Promise<void> {
     if (!this.terminal) return;
 
@@ -564,53 +573,10 @@ export class WasmShell extends WasmShellHeadless {
       const result = await this.bash.exec(compgenCmd, { env: this.lastEnv, cwd: this.cwd });
       const matches = result.stdout.split('\n').filter(Boolean);
       if (matches.length === 0) return;
-
       if (matches.length === 1) {
-        const completion = matches[0];
-        const suffix = completion.slice(currentWord.length);
-        if (suffix) {
-          this.currentLine =
-            this.currentLine.slice(0, this.cursorPos) +
-            suffix +
-            this.currentLine.slice(this.cursorPos);
-          this.cursorPos += suffix.length;
-          this.terminal.write(suffix);
-        }
-        let trail = ' ';
-        if (!isFirstWord) {
-          const dirCheck = await this.bash.exec(`compgen -d -- ${escaped.slice(0, -1)}${suffix}'`, {
-            env: this.lastEnv,
-            cwd: this.cwd,
-          });
-          if (dirCheck.stdout.trim() === completion) trail = '/';
-        }
-        this.currentLine =
-          this.currentLine.slice(0, this.cursorPos) +
-          trail +
-          this.currentLine.slice(this.cursorPos);
-        this.cursorPos += 1;
-        this.terminal.write(trail);
+        await this.applySingleCompletion(currentWord, matches[0], isFirstWord, escaped);
       } else {
-        let prefix = matches[0];
-        for (const m of matches) {
-          while (!m.startsWith(prefix)) prefix = prefix.slice(0, -1);
-        }
-        const suffix = prefix.slice(currentWord.length);
-        if (suffix) {
-          this.currentLine =
-            this.currentLine.slice(0, this.cursorPos) +
-            suffix +
-            this.currentLine.slice(this.cursorPos);
-          this.cursorPos += suffix.length;
-          this.terminal.write(suffix);
-        } else {
-          this.terminal.writeln('');
-          this.terminal.writeln(matches.map((m) => m.split('/').pop() ?? m).join('  '));
-          this.showPrompt();
-          this.terminal.write(this.currentLine);
-          const back = this.currentLine.length - this.cursorPos;
-          if (back > 0) this.terminal.write(`\x1b[${back}D`);
-        }
+        this.applyMultiCompletion(currentWord, matches);
       }
     } catch (err) {
       console.warn(
@@ -618,6 +584,45 @@ export class WasmShell extends WasmShellHeadless {
         err instanceof Error ? err.message : String(err)
       );
     }
+  }
+
+  /** Complete a single unambiguous match, appending `/` for dirs or ` ` otherwise. */
+  private async applySingleCompletion(
+    currentWord: string,
+    completion: string,
+    isFirstWord: boolean,
+    escaped: string
+  ): Promise<void> {
+    const suffix = completion.slice(currentWord.length);
+    this.insertAtCursor(suffix);
+    let trail = ' ';
+    if (!isFirstWord) {
+      const dirCheck = await this.bash.exec(`compgen -d -- ${escaped.slice(0, -1)}${suffix}'`, {
+        env: this.lastEnv,
+        cwd: this.cwd,
+      });
+      if (dirCheck.stdout.trim() === completion) trail = '/';
+    }
+    this.insertAtCursor(trail);
+  }
+
+  /** Complete to the common prefix of multiple matches, or list them if none. */
+  private applyMultiCompletion(currentWord: string, matches: string[]): void {
+    let prefix = matches[0];
+    for (const m of matches) {
+      while (!m.startsWith(prefix)) prefix = prefix.slice(0, -1);
+    }
+    const suffix = prefix.slice(currentWord.length);
+    if (suffix) {
+      this.insertAtCursor(suffix);
+      return;
+    }
+    this.terminal?.writeln('');
+    this.terminal?.writeln(matches.map((m) => m.split('/').pop() ?? m).join('  '));
+    this.showPrompt();
+    this.terminal?.write(this.currentLine);
+    const back = this.currentLine.length - this.cursorPos;
+    if (back > 0) this.terminal?.write(`\x1b[${back}D`);
   }
 
   private replaceCurrentLine(text: string): void {

@@ -241,7 +241,7 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
   // and route their DOM calls to the page handler installed by
   // `mainStandaloneWorker`. See `kernel/panel-rpc.ts` for the op
   // surface. `imgcat` is intentionally NOT bridged — it's terminal-only
-  // and the panel WasmShell renders the preview locally.
+  // and the panel AlmostBashShell renders the preview locally.
   const { createPanelRpcClient } = await import('./panel-rpc.js');
   panelRpcClient = createPanelRpcClient({ instanceId: init.instanceId });
   (globalThis as Record<string, unknown>).__slicc_panelRpc = panelRpcClient;
@@ -265,7 +265,7 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
   // Stand up the terminal-RPC host on the same kernel transport. The
   // shared `createPanelTerminalHost` factory pins parity with the
   // extension offscreen path — both pass `processManager` into
-  // `TerminalSessionHost` AND the per-session `WasmShellHeadless` so
+  // `TerminalSessionHost` AND the per-session `AlmostBashShellHeadless` so
   // `ps` / `kill` / `/proc` see the same table.
   //
   // Falls back to a no-op if the orchestrator failed to publish a

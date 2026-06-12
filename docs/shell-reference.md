@@ -6,9 +6,9 @@ Complete reference for SLICC's shell capabilities, including supplemental comman
 
 ## Overview
 
-SLICC uses `just-bash` (a pure-TypeScript Bash interpreter; see `packages/webapp/package.json` for the pinned version) as its core shell runtime. The interpreter itself is plain JavaScript — not WASM. This provides the standard Unix builtins (cd, ls, cat, grep, find, sed, awk, head, tail, etc.) plus ~50 custom supplemental commands registered by `packages/webapp/src/shell/supplemental-commands/index.ts` and `packages/webapp/src/shell/wasm-shell-headless.ts`, and any auto-discovered `.jsh` script commands on the VFS.
+SLICC uses `just-bash` (a pure-TypeScript Bash interpreter; see `packages/webapp/package.json` for the pinned version) as its core shell runtime. The interpreter itself is plain JavaScript — not WASM. This provides the standard Unix builtins (cd, ls, cat, grep, find, sed, awk, head, tail, etc.) plus ~50 custom supplemental commands registered by `packages/webapp/src/shell/supplemental-commands/index.ts` and `packages/webapp/src/shell/almost-bash-shell-headless.ts`, and any auto-discovered `.jsh` script commands on the VFS.
 
-WASM enters only for specific runtime-heavy commands, which fetch and cache their binaries on demand: `python3` (Pyodide), `sqlite3` (sql.js), the `node -e` / `javascript` sandbox (QuickJS), `convert` (ImageMagick), `ffmpeg`, `biome`, and `esbuild`. The `WasmShell` / `WasmShellHeadless` class names are historical and cover the whole shell, not just the WASM-backed commands.
+WASM enters only for specific runtime-heavy commands, which fetch and cache their binaries on demand: `python3` (Pyodide), `sqlite3` (sql.js), the `node -e` / `javascript` sandbox (QuickJS), `convert` (ImageMagick), `ffmpeg`, `biome`, and `esbuild`. The `AlmostBashShell` / `AlmostBashShellHeadless` classes cover the whole shell, not just the WASM-backed commands.
 
 **Entry point**: Via the `bash` agent tool. All shell features available to agents.
 
@@ -387,7 +387,7 @@ Suggests skills for each open browser tab. For every tab `upskill tabs` lists:
 
 Bridges local directories and remote object storage into the VirtualFS so that file tools (`read_file`, `write_file`, `edit_file`, `bash`) operate on remote content the same way they do on browser-local files. Three peer backends share a `MountBackend` interface: a local FS Access backend (uses the `showDirectoryPicker()` flow), an S3 / S3-compatible backend (AWS, Cloudflare R2, MinIO via custom endpoints), and a DA backend (Adobe da.live, authenticated via the existing Adobe IMS provider).
 
-Implementation lives outside `supplemental-commands/`: `packages/webapp/src/fs/mount-commands.ts` is the dispatcher, registered via the `MountCommands` class consumed by `wasm-shell.ts`. Backends are under `packages/webapp/src/fs/mount/`.
+Implementation lives outside `supplemental-commands/`: `packages/webapp/src/fs/mount-commands.ts` is the dispatcher, registered via the `MountCommands` class consumed by `almost-bash-shell.ts`. Backends are under `packages/webapp/src/fs/mount/`.
 
 ### Subcommands
 
@@ -721,7 +721,7 @@ Then: / (full filesystem scan)
 Rule: First basename wins (no conflicts)
 ```
 
-`script-catalog.ts` is the shared lookup layer used by `WasmShell`, `which`, and browser-script matching. When an `FsWatcher` is present it caches discovery results and clears them on filesystem changes; mounted directories bypass the cache because external edits inside File System Access mounts are not observable through the watcher.
+`script-catalog.ts` is the shared lookup layer used by `AlmostBashShell`, `which`, and browser-script matching. When an `FsWatcher` is present it caches discovery results and clears them on filesystem changes; mounted directories bypass the cache because external edits inside File System Access mounts are not observable through the watcher.
 
 **Execution**: Via `jsh-executor.ts` (dual-mode):
 

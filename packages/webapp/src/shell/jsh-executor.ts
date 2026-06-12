@@ -93,7 +93,7 @@ export async function executeJsCode(
 ): Promise<JshResult> {
   const realmFactory = options.realmFactory ?? pickDefaultRealmFactory();
   // PM resolution:
-  //   1. Caller-supplied (WasmShellHeadless threads it for .jsh scripts).
+  //   1. Caller-supplied (AlmostBashShellHeadless threads it for .jsh scripts).
   //   2. globalThis.__slicc_pm (kernel host publishes this so `node -e`,
   //      panel `kill -KILL`, and `ps` all see the same table).
   //   3. Fresh ephemeral PM (vitest / standalone tools that haven't
@@ -129,8 +129,8 @@ export async function executeJsCode(
 
 /**
  * Pick a realm factory based on what's available in the current
- * runtime. Production paths (WasmShellHeadless) thread the explicit
- * factory in via `WasmShellOptions`; this fallback is for ad-hoc
+ * runtime. Production paths (AlmostBashShellHeadless) thread the explicit
+ * factory in via `AlmostBashShellOptions`; this fallback is for ad-hoc
  * callers that didn't.
  */
 function pickDefaultRealmFactory(): RealmFactory {

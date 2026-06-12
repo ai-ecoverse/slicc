@@ -90,7 +90,7 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
    * when that shell lives inside a scoop context. Used by the `agent`
    * command to forward the parent's jid to the AgentBridge for model
    * inheritance. Returns `undefined` when the shell has no scoop owner
-   * (the terminal panel's standalone WasmShell).
+   * (the terminal panel's standalone AlmostBashShell).
    */
   getParentJid?: () => string | undefined;
   /**

@@ -1,10 +1,10 @@
 /**
  * proxied-fetch — shared `SecureFetch` factory.
  *
- * Originally lived inline in `wasm-shell.ts`. Extracted so non-shell callers
+ * Originally lived inline in `almost-bash-shell.ts`. Extracted so non-shell callers
  * (e.g. the onboarding orchestrator's direct `installRecommendedSkills`
  * helper) can reuse the same CORS-bypassing fetch without spinning up a
- * full `WasmShell`.
+ * full `AlmostBashShell`.
  *
  * Use these helpers instead of bare `fetch()` whenever the caller needs to
  * route through the same code path as `curl`/`upskill` so that:
@@ -109,6 +109,55 @@ export const encodeForbiddenRequestHeaders = _encodeForbiddenRequestHeaders;
  */
 export const decodeForbiddenResponseHeaders = _decodeForbiddenResponseHeaders;
 
+/** Decode a base64 `response-chunk` payload into raw bytes. */
+function decodeBase64Chunk(dataBase64: string): Uint8Array<ArrayBuffer> {
+  const bin = atob(dataBase64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+/** Concatenate accumulated response chunks into a single byte buffer. */
+function concatChunks(chunks: Uint8Array<ArrayBuffer>[]): Uint8Array<ArrayBuffer> {
+  const totalLen = chunks.reduce((n, c) => n + c.length, 0);
+  const merged = new Uint8Array(totalLen);
+  let off = 0;
+  for (const c of chunks) {
+    merged.set(c, off);
+    off += c.length;
+  }
+  return merged;
+}
+
+type ProxyHead = { status: number; statusText: string; headers: Record<string, string> };
+
+/**
+ * Build the `SecureFetch` result from a completed streamed response: wrap the
+ * merged bytes in a synthetic `Response` (so `readResponseBody` applies the
+ * text/binary split + binary-cache path) and decode forbidden response headers.
+ */
+async function finalizeProxyResponse(
+  headInfo: ProxyHead,
+  merged: Uint8Array<ArrayBuffer>,
+  url: string
+): Promise<Awaited<ReturnType<SecureFetch>>> {
+  const respHeaders = new Headers();
+  for (const [k, v] of Object.entries(headInfo.headers)) respHeaders.set(k, String(v));
+  const synth = new Response(merged, {
+    status: headInfo.status,
+    statusText: headInfo.statusText,
+    headers: respHeaders,
+  });
+  const body = await readResponseBody(synth, url);
+  return {
+    status: headInfo.status,
+    statusText: headInfo.statusText,
+    headers: decodeForbiddenResponseHeaders(headInfo.headers),
+    body,
+    url,
+  };
+}
+
 async function extensionPortFetch(
   url: string,
   options?: Parameters<SecureFetch>[1]
@@ -140,58 +189,26 @@ async function extensionPortFetch(
   }
 
   return new Promise((resolve, reject) => {
-    let headInfo: { status: number; statusText: string; headers: Record<string, string> } | null =
-      null;
+    let headInfo: ProxyHead | null = null;
     let ended = false;
-    const chunks: Uint8Array[] = [];
+    const chunks: Uint8Array<ArrayBuffer>[] = [];
 
     port.onMessage.addListener((raw: unknown) => {
       const msg = raw as ResponseMsg;
       if (msg.type === 'response-head') {
         headInfo = msg;
       } else if (msg.type === 'response-chunk') {
-        const bin = atob(msg.dataBase64);
-        const out = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-        chunks.push(out);
+        chunks.push(decodeBase64Chunk(msg.dataBase64));
       } else if (msg.type === 'response-end') {
+        ended = true;
         if (!headInfo) {
-          ended = true;
           reject(new Error('fetch-proxy: response-end before response-head'));
           return;
         }
-        const totalLen = chunks.reduce((n, c) => n + c.length, 0);
-        const merged = new Uint8Array(totalLen);
-        let off = 0;
-        for (const c of chunks) {
-          merged.set(c, off);
-          off += c.length;
-        }
-        // Build a synthetic Response so readResponseBody decides text vs binary
-        // (binary goes to binary-cache; preserves git-http's binary packfile path).
-        const respHeaders = new Headers();
-        for (const [k, v] of Object.entries(headInfo.headers)) respHeaders.set(k, String(v));
-        const synth = new Response(merged, {
-          status: headInfo.status,
-          statusText: headInfo.statusText,
-          headers: respHeaders,
-        });
-        readResponseBody(synth, url)
-          .then((body) => {
-            // Decode `X-Proxy-Set-Cookie` → `set-cookie` JSON-array string so
-            // callers can recover Set-Cookie values the browser would otherwise
-            // strip — matches CLI client decoding.
-            const decodedHeaders = decodeForbiddenResponseHeaders(headInfo!.headers);
-            resolve({
-              status: headInfo!.status,
-              statusText: headInfo!.statusText,
-              headers: decodedHeaders,
-              body,
-              url,
-            });
-          })
-          .catch(reject);
-        ended = true;
+        // readResponseBody decides text vs binary (binary goes to binary-cache;
+        // preserves git-http's binary packfile path); forbidden response headers
+        // are decoded back to their browser-stripped names — matches CLI client.
+        finalizeProxyResponse(headInfo, concatChunks(chunks), url).then(resolve).catch(reject);
         port.disconnect();
       } else if (msg.type === 'response-error') {
         ended = true;
