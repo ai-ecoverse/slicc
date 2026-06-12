@@ -161,6 +161,22 @@ export function writeOpenSprinklesToUrl(names: readonly string[]): void {
 const KNOWN_SPRINKLES_KEY = 'slicc-known-sprinkles';
 
 /**
+ * Prune the known-sprinkles ledger to names a COMPLETED discovery confirmed.
+ * The ledger is otherwise monotonic (absent names are kept so they don't
+ * re-surface as "new"), but names whose files are genuinely gone would ghost
+ * the seeded rail forever — hosts prune after a discovery that found results.
+ */
+export function pruneKnownSprinkleNames(valid: readonly string[]): void {
+  try {
+    const keep = new Set(valid);
+    const pruned = readKnownSprinkleNames().filter((n) => keep.has(n));
+    localStorage.setItem(KNOWN_SPRINKLES_KEY, JSON.stringify(pruned));
+  } catch {
+    /* localStorage unavailable — ledger stays as-is */
+  }
+}
+
+/**
  * Names of every sprinkle this profile has ever discovered (the persistent
  * known-sprinkles ledger). Layouts seed their rail launchers from this at
  * boot so the rail isn't empty while the (async, VFS-backed) discovery

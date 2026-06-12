@@ -40,6 +40,19 @@ export function readSprinkleIconLedger(): Record<string, string> {
   }
 }
 
+/** Drop icon-ledger entries for sprinkles a completed discovery didn't confirm. */
+export function pruneSprinkleIconLedger(valid: readonly string[]): void {
+  try {
+    const keep = new Set(valid);
+    const pruned = Object.fromEntries(
+      Object.entries(readSprinkleIconLedger()).filter(([name]) => keep.has(name))
+    );
+    localStorage.setItem(SPRINKLE_ICON_LEDGER_KEY, JSON.stringify(pruned));
+  } catch {
+    /* localStorage unavailable — ledger stays as-is */
+  }
+}
+
 /** Persist one picked icon into the ledger (merge, best-effort). */
 export function recordSprinkleIcon(name: string, icon: string): void {
   try {
@@ -364,10 +377,18 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
   let enriching = false;
   const resync = async (): Promise<void> => {
     await manager.refresh();
-    // Only prune seeded launchers against a discovery that actually FOUND
-    // something — an empty result may be a lost boot RPC, and wiping the
-    // seeded rail on it is exactly the disappearing-rail bug class.
-    if (manager.available().length > 0) zone.dropUnconfirmedSeeds();
+    // Only prune against a discovery that actually FOUND something — an
+    // empty result may be a lost boot RPC, and wiping the seeded rail on it
+    // is exactly the disappearing-rail bug class. A confirmed discovery also
+    // scrubs the persistent ledgers, so uninstalled sprinkles stop ghosting
+    // the seeded rail on later boots.
+    if (manager.available().length > 0) {
+      zone.dropUnconfirmedSeeds();
+      const names = manager.available().map((s) => s.name);
+      const { pruneKnownSprinkleNames } = await import('../sprinkle-manager.js');
+      pruneKnownSprinkleNames(names);
+      pruneSprinkleIconLedger(names);
+    }
     await manager.restoreOpenSprinkles().catch((err) => {
       log.warn('WC shell: failed to restore open sprinkles', err);
     });

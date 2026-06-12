@@ -6,6 +6,7 @@ import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { createRemoteSprinkleVfs } from '../../src/kernel/remote-sprinkle-vfs.js';
 import type { LickEvent } from '../../src/scoops/lick-manager.js';
 import {
+  pruneKnownSprinkleNames,
   readKnownSprinkleNames,
   readOpenSprinklesFromUrl,
   SprinkleManager,
@@ -768,6 +769,27 @@ describe('SprinkleManager', () => {
       // the known-sprinkles ledger the rail seeds from.
       await mgr.restoreOpenSprinkles();
       expect(readKnownSprinkleNames()).toContain('dash');
+    });
+
+    it('pruneKnownSprinkleNames drops ledger entries discovery did not confirm', () => {
+      localStorage.setItem(
+        'slicc-known-sprinkles',
+        JSON.stringify(['dash', 'deleted-long-ago', 'wiki'])
+      );
+      pruneKnownSprinkleNames(['dash', 'wiki']);
+      expect(readKnownSprinkleNames()).toEqual(['dash', 'wiki']);
+    });
+
+    it('pruneKnownSprinkleNames empties the ledger when nothing was confirmed', () => {
+      localStorage.setItem('slicc-known-sprinkles', JSON.stringify(['ghost']));
+      pruneKnownSprinkleNames([]);
+      expect(readKnownSprinkleNames()).toEqual([]);
+    });
+
+    it('pruneKnownSprinkleNames survives a corrupt ledger', () => {
+      localStorage.setItem('slicc-known-sprinkles', '{not json');
+      pruneKnownSprinkleNames(['dash']);
+      expect(readKnownSprinkleNames()).toEqual([]);
     });
 
     it('open() writes the sprinkle name to the URL (coalesced microtask flush)', async () => {

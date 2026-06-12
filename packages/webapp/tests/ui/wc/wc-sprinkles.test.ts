@@ -16,6 +16,7 @@ import type { WcShellRefs } from '../../../src/ui/wc/wc-shell.js';
 import {
   enrichSprinkleIcons,
   isLucideIconSpec,
+  pruneSprinkleIconLedger,
   readSprinkleIconLedger,
   recordSprinkleIcon,
   sprinkleNameFromId,
@@ -287,5 +288,18 @@ describe('rail icons (declared > ledger > sparkles)', () => {
     expect(dockItem(refs2, 'sprinkle:pomodoro')?.icon).toBe('timer');
     await enrichSprinkleIcons(zone2, [{ name: 'pomodoro', title: 'Pomodoro' }], pickIcon);
     expect(pickIcon).toHaveBeenCalledTimes(1);
+  });
+
+  it('pruneSprinkleIconLedger drops picks for sprinkles discovery did not confirm', () => {
+    recordSprinkleIcon('pomodoro', 'timer');
+    recordSprinkleIcon('deleted-long-ago', 'ghost');
+    pruneSprinkleIconLedger(['pomodoro']);
+    expect(readSprinkleIconLedger()).toEqual({ pomodoro: 'timer' });
+  });
+
+  it('pruneSprinkleIconLedger empties the ledger when nothing was confirmed', () => {
+    recordSprinkleIcon('ghost', 'skull');
+    pruneSprinkleIconLedger([]);
+    expect(readSprinkleIconLedger()).toEqual({});
   });
 });
