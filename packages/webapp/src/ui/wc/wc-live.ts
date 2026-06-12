@@ -658,14 +658,19 @@ function createWcController(
           client.sendSprinkleLick('inline', { action, data });
         })
       );
-      toolUIInstances.set(
-        message.id,
-        hydrateToolUI(host, {
-          onAction: (requestId, action, data) => {
-            client.sendToolUIAction(requestId, action, data);
-          },
-        })
-      );
+      // Tool-UI containers live inside slicc-action-row elements, which are
+      // siblings of the bubble (els[1..n]), not children. Search all elements.
+      const tuiInstances: ToolUIInstance[] = [];
+      for (const el of els) {
+        tuiInstances.push(
+          ...hydrateToolUI(el, {
+            onAction: (requestId, action, data) => {
+              client.sendToolUIAction(requestId, action, data);
+            },
+          })
+        );
+      }
+      toolUIInstances.set(message.id, tuiInstances);
     },
   });
   return { controller, agentHandle };

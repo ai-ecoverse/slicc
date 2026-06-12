@@ -462,7 +462,7 @@ export class WcChatController {
       this.#thread.append(...next);
     }
     this.#els.set(message.id, next);
-    if (!message.isStreaming) this.#onMessageRendered?.(message, next);
+    this.#onMessageRendered?.(message, next);
     this.#followThread();
   }
 

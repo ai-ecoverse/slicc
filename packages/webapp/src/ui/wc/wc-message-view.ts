@@ -370,11 +370,10 @@ function toolCallRow(call: ToolCall): HTMLElement {
   const body = toolBody(call);
   if (body) row.append(body);
   if (call._toolUIRequestId && call._toolUIHtml) {
+    // Write to store here; the container itself is a sibling in assistantMessageEls —
+    // slicc-action-row's #sync() wipes #label.textContent which would destroy any
+    // child appended inside the row.
     toolUIHtmlStore.set(call._toolUIRequestId, call._toolUIHtml);
-    const container = document.createElement('div');
-    container.className = 'msg__tool-ui';
-    container.setAttribute('data-tool-ui-id', call._toolUIRequestId);
-    row.append(container);
   }
   return row;
 }
@@ -476,7 +475,19 @@ function assistantMessageEls(message: ChatMessage): HTMLElement[] {
   if (message.isStreaming) bubble.setAttribute('streaming', '');
   bubble.setBodyHtml(renderAssistantMessageContent(message.content, message.isStreaming === true));
   const rows = (message.toolCalls ?? []).map(toolCallRow);
-  if (rows.length < CLUSTER_MIN) return [bubble, ...rows];
+
+  // Pending tool-UI containers are siblings of their action rows, not children.
+  // slicc-action-row's #sync() sets #label.textContent which wipes any child
+  // appended inside the label region — so the container must live outside the row.
+  const toolUiContainers: HTMLElement[] = (message.toolCalls ?? []).flatMap((call) => {
+    if (!call._toolUIRequestId || !call._toolUIHtml) return [];
+    const container = document.createElement('div');
+    container.className = 'msg__tool-ui';
+    container.setAttribute('data-tool-ui-id', call._toolUIRequestId);
+    return [container];
+  });
+
+  if (rows.length < CLUSTER_MIN) return [bubble, ...rows, ...toolUiContainers];
 
   // A run of 3+ tool calls collapses behind one summary row. While the turn
   // is still streaming the cluster stays open so live progress is visible.
@@ -486,7 +497,7 @@ function assistantMessageEls(message: ChatMessage): HTMLElement[] {
   if (known) cluster.setAttribute('label', known);
   else scheduleClusterLabel(message, cluster);
   cluster.append(...rows);
-  return [bubble, cluster];
+  return [bubble, cluster, ...toolUiContainers];
 }
 
 function lickCardEl(message: ChatMessage): HTMLElement {
