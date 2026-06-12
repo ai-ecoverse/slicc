@@ -422,7 +422,11 @@ export default defineConfig(({ mode }) => ({
         'node_modules/@earendil-works/pi-ai/dist/providers/simple-options.js'
       ),
     },
-    dedupe: ['@earendil-works/pi-ai'],
+    // kokoro-js pins @huggingface/transformers ^3.x, which npm nests as a
+    // second copy (npm overrides don't reach workspace deps). Deduping forces
+    // kokoro's bare import onto the hoisted 4.x the speech stack uses — one
+    // transformers bundle, one onnxruntime-web version, one wasmPaths config.
+    dedupe: ['@earendil-works/pi-ai', '@huggingface/transformers'],
   },
   esbuild: {
     target: 'esnext',

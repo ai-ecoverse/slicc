@@ -119,33 +119,31 @@ export function createStandalonePanelRpcHandlers(
       };
     },
 
+    // Routed through the kokoro-aware speak helper: the on-device voice runs
+    // once its chained download is ready (or when `voice` names a kokoro
+    // voice id), Web Speech otherwise — so the worker's `say` picks the
+    // upgrade up with no protocol change.
     'speak-text': async ({ text, lang, voice, rate, pitch, volume }) => {
-      if (typeof speechSynthesis === 'undefined') {
-        throw new Error('speechSynthesis is unavailable in this page');
-      }
-      await new Promise<void>((resolve, reject) => {
-        const u = new SpeechSynthesisUtterance(text);
-        if (lang !== undefined) u.lang = lang;
-        if (rate !== undefined) u.rate = rate;
-        if (pitch !== undefined) u.pitch = pitch;
-        if (volume !== undefined) u.volume = volume;
-        if (voice) {
-          const match = speechSynthesis.getVoices().find((v) => v.name === voice);
-          if (match) u.voice = match;
-        }
-        u.onend = () => resolve();
-        u.onerror = (ev) => reject(new Error(`speak: ${ev.error || 'utterance failed'}`));
-        speechSynthesis.speak(u);
-      });
+      const { speak } = await import('../speech/speak.js');
+      await speak({ text, lang, voice, rate, pitch, volume });
       return { done: true };
     },
 
     'list-voices': async () => {
+      // Kokoro voices (when the engine is warm) lead the list, exposed by
+      // their stable ids so `say -v af_heart` round-trips.
+      const { kokoroVoicesIfReady } = await import('../speech/speak.js');
+      const kokoro = kokoroVoicesIfReady().map((v) => ({
+        name: v.id,
+        lang: v.lang,
+        default: false,
+      }));
       if (typeof speechSynthesis === 'undefined') {
+        if (kokoro.length > 0) return { voices: kokoro };
         throw new Error('speechSynthesis is unavailable in this page');
       }
       const ready = speechSynthesis.getVoices();
-      if (ready.length > 0) return { voices: ready.map(toVoiceInfo) };
+      if (ready.length > 0) return { voices: [...kokoro, ...ready.map(toVoiceInfo)] };
       // Voices load asynchronously on first read in many browsers —
       // wait once for `voiceschanged` so the worker side doesn't get
       // an empty list on a cold session.
@@ -163,7 +161,7 @@ export function createStandalonePanelRpcHandlers(
           resolve(speechSynthesis.getVoices());
         }, 1000);
       });
-      return { voices: voices.map(toVoiceInfo) };
+      return { voices: [...kokoro, ...voices.map(toVoiceInfo)] };
     },
 
     'play-audio': async ({ bytes, volume }) => {

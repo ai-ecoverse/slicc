@@ -81,6 +81,9 @@ Deep reference: `docs/kernel/process-model.md`.
 - `download-progress.ts` — pure multi-file progress + ETA aggregation (unit-tested math behind the "better speech recognition downloading · ready in ~ETA" status line).
 - `whisper-session.ts` — MediaRecorder capture → 16 kHz mono resample (`audio.ts`) → rolling re-transcription partials (whisper has no incremental decode) → final transcript on release.
 - `hear.ts` — one-shot capture for the command: builtin recognizer owns endpointing (whisper has no VAD); when the enhanced engine is ready the mic is recorded in parallel and whisper supplies the final text, builtin text as fallback.
+- `kokoro-engine.ts` — lazy Kokoro-82M TTS (`onnx-community/Kokoro-82M-v1.0-ONNX` via `kokoro-js`); its download CHAINS automatically off the whisper load (`whisper-engine.ts`). kokoro-js pins transformers ^3.x — the Vite configs `dedupe` it onto the workspace 4.x (npm overrides don't reach workspace deps) so one transformers + one ort version ships.
+- `speak.ts` — shared synthesis surface: `speak()` picks kokoro (ready + English, or an explicit kokoro voice id) with Web Speech fallback; `speechTextFromMarkdown` reduces replies to speakable prose. Consumed by the `say` command's local path AND the `speak-text` / `list-voices` panel-RPC handlers, so the worker float picks the kokoro upgrade up with no protocol change.
+- `voice-reply.ts` — the spoken-reply loop: a turn submitted by push-to-talk (`detail.source === 'dictation'` on the input card's submit event) marks a one-shot flag; the chat controller's `onTurnComplete` consumes it and reads the assistant reply aloud. Typed turns stay silent.
 
 ### MCP Servers
 

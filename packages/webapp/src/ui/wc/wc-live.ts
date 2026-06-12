@@ -608,6 +608,17 @@ function createWcController(
   const controller = new WcChatController({
     thread: refs.thread,
     agent: agentHandle,
+    // Spoken-reply loop: a turn that began as push-to-talk dictation (the
+    // submit listener marks it) gets its reply read aloud — kokoro once the
+    // chained model download is warm, Web Speech until then.
+    onTurnComplete: (message) => {
+      if (!message?.content) return;
+      void import('../../speech/voice-reply.js')
+        .then(({ consumeVoiceSubmission, speakReplyMarkdown }) => {
+          if (consumeVoiceSubmission()) return speakReplyMarkdown(message.content);
+        })
+        .catch(() => undefined);
+    },
     onProcessingChange: (processing) => {
       refs.frame.toggleAttribute('data-processing', processing);
       refs.inputCard.querySelector('slicc-send-button')?.toggleAttribute('busy', processing);
@@ -737,6 +748,13 @@ function wireWcComposer(deps: {
   refs.inputCard.addEventListener('submit', (event) => {
     const text = submittedText(event);
     if (!text) return;
+    // Dictated turns (push-to-talk) get their reply spoken back — mark
+    // BEFORE sending so the turn-complete hook sees the flag.
+    if ((event as Event as CustomEvent<{ source?: string }>).detail?.source === 'dictation') {
+      void import('../../speech/voice-reply.js')
+        .then(({ markVoiceSubmission }) => markVoiceSubmission())
+        .catch(() => undefined);
+    }
     boot.getController()?.sendUserMessage(text, attachStage?.take());
     (refs.inputCard as HTMLElement & { clear?: () => void }).clear?.();
     // User input is most-recent activity: the addressed scoop gets the eyes

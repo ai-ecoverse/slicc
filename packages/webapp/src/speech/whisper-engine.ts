@@ -21,9 +21,8 @@
  */
 
 import { createLogger } from '../core/logger.js';
-import { jsdelivrNpmUrl } from '../shell/supplemental-commands/cdn-url-builder.js';
 import { createDownloadTracker, type DownloadSnapshot } from './download-progress.js';
-import { ORT_WEB_VERSION } from './ort-version.js';
+import { configureTransformersEnv } from './transformers-env.js';
 
 const log = createLogger('speech:whisper');
 
@@ -66,6 +65,7 @@ export function getWhisper(onProgress?: WhisperProgress): Promise<WhisperAsr> {
     whisperPromise = loadWhisper().then(
       (asr) => {
         loadState = 'ready';
+        chainKokoroWarmup();
         return asr;
       },
       (err) => {
@@ -79,6 +79,18 @@ export function getWhisper(onProgress?: WhisperProgress): Promise<WhisperAsr> {
   return whisperPromise;
 }
 
+/**
+ * Stage 2 of the model chain: once speech RECOGNITION is on device, fetch the
+ * kokoro speech-SYNTHESIS model in the background so spoken input can get
+ * spoken replies (and `say` upgrades). Fire-and-forget — a kokoro failure
+ * never affects whisper's readiness.
+ */
+function chainKokoroWarmup(): void {
+  void import('./kokoro-engine.js')
+    .then(({ getKokoro }) => getKokoro())
+    .catch((err) => log.warn('kokoro warmup (chained after whisper) failed', err));
+}
+
 type AsrPipeline = (
   audio: Float32Array,
   opts: Record<string, unknown>
@@ -86,19 +98,7 @@ type AsrPipeline = (
 
 async function loadWhisper(): Promise<WhisperAsr> {
   const { pipeline, env } = await import('@huggingface/transformers');
-
-  // The ort-web wasm/JSEP runtime is resolved at run time, not bundle time —
-  // point it at the version-matched CDN directory instead of letting the
-  // bundler-mangled `import.meta.url` resolution guess (and instead of Vite
-  // emitting a ~21 MB asset into dist, the biome-wasm lesson).
-  const onnxWasm = (
-    env as unknown as {
-      backends?: { onnx?: { wasm?: { wasmPaths?: string } } };
-    }
-  ).backends?.onnx?.wasm;
-  if (onnxWasm) {
-    onnxWasm.wasmPaths = jsdelivrNpmUrl('onnxruntime-web', ORT_WEB_VERSION, 'dist/').toString();
-  }
+  configureTransformersEnv(env as never);
 
   const tracker = createDownloadTracker();
   const progressCallback = (p: {

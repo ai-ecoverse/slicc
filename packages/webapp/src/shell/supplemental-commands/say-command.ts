@@ -6,11 +6,14 @@ function sayHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
     stdout:
       'usage: say [-v voice] [-r rate] [-l lang] [--list] <text>\n\n' +
-      '  Speaks the given text using the Web Speech API.\n' +
-      '  -v voice   Voice name (partial match supported)\n' +
+      '  Speaks the given text. Uses the on-device Kokoro voice when its\n' +
+      '  model has downloaded (see hear --warmup; kokoro chains after the\n' +
+      '  whisper download) and English text; the Web Speech API otherwise.\n' +
+      '  -v voice   Voice name (partial match; kokoro ids like af_heart work\n' +
+      '             once the model is ready)\n' +
       '  -r rate    Speech rate (0.1 to 10, default 1)\n' +
       '  -l lang    Language tag (required, BCP 47, e.g. en-US, de-DE, fr-FR)\n' +
-      '  --list     List available voices\n',
+      '  --list     List available voices (kokoro voices first when ready)\n',
     stderr: '',
     exitCode: 0,
   };
@@ -72,8 +75,15 @@ export function createSayCommand(): Command {
     // Handle --list early (needs voices)
     if (args.includes('--list')) {
       if (local) {
+        // Kokoro voices lead when the on-device engine is warm — listed by
+        // their stable ids so `-v af_heart` round-trips.
+        const { kokoroVoicesIfReady } = await import('../../speech/speak.js');
+        const kokoro = kokoroVoicesIfReady().map((v) => `${v.id} (${v.lang}) [kokoro]`);
         const voices = await getVoices();
-        const lines = voices.map((v) => `${v.name} (${v.lang})${v.default ? ' [default]' : ''}`);
+        const lines = [
+          ...kokoro,
+          ...voices.map((v) => `${v.name} (${v.lang})${v.default ? ' [default]' : ''}`),
+        ];
         return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
       }
       try {
@@ -134,12 +144,25 @@ export function createSayCommand(): Command {
 
     // Voice matching for worker context: the page-side handler does the
     // exact-name match on `voice`, so we pre-resolve the partial here.
+    // Kokoro voice ids participate in the match on both paths — locally via
+    // the merged list, over RPC via the page handler's merged `list-voices`.
     let resolvedVoice: string | undefined;
     if (voiceName) {
       const voices = local
-        ? await getVoices().then((vs) =>
-            vs.map((v) => ({ name: v.name, lang: v.lang, default: v.default }))
-          )
+        ? await (async () => {
+            const { kokoroVoicesIfReady } = await import('../../speech/speak.js');
+            const kokoro = kokoroVoicesIfReady().map((v) => ({
+              name: v.id,
+              lang: v.lang,
+              default: false,
+            }));
+            const web = (await getVoices()).map((v) => ({
+              name: v.name,
+              lang: v.lang,
+              default: v.default,
+            }));
+            return [...kokoro, ...web];
+          })()
         : (await panelRpc!.call('list-voices', undefined)).voices;
       const match = voices.find((v) => v.name.toLowerCase().includes(voiceName!.toLowerCase()));
       if (!match) {
@@ -153,24 +176,19 @@ export function createSayCommand(): Command {
     }
 
     if (local) {
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = rate;
-      utterance.lang = lang;
-      if (resolvedVoice) {
-        const all = await getVoices();
-        const match = all.find((v) => v.name === resolvedVoice);
-        if (match) utterance.voice = match;
+      // The speak helper picks the engine: kokoro when its model is warm
+      // (or the resolved voice is a kokoro id), Web Speech otherwise.
+      try {
+        const { speak } = await import('../../speech/speak.js');
+        await speak({ text, lang, voice: resolvedVoice, rate });
+        return { stdout: '', stderr: '', exitCode: 0 };
+      } catch (err) {
+        return {
+          stdout: '',
+          stderr: `say: speech synthesis error: ${err instanceof Error ? err.message : String(err)}\n`,
+          exitCode: 1,
+        };
       }
-      return new Promise((resolve) => {
-        utterance.onend = () => resolve({ stdout: '', stderr: '', exitCode: 0 });
-        utterance.onerror = (event) =>
-          resolve({
-            stdout: '',
-            stderr: `say: speech synthesis error: ${event.error}\n`,
-            exitCode: 1,
-          });
-        speechSynthesis.speak(utterance);
-      });
     }
 
     // Worker context: bridge via panel-RPC. `lang` is required for the

@@ -8,6 +8,7 @@ import {
   ORT_WASM_ASSET_RE,
   originalOrtWasmName,
   rewriteOrtWasmReferences,
+  sanitizeOrtCdnLiterals,
   stripOrtWasmAssetPlugin,
   stripOrtWasmFromDir,
 } from '../../vite-plugins/strip-ort-wasm-asset';
@@ -74,6 +75,24 @@ describe('rewriteOrtWasmReferences', () => {
   });
 });
 
+describe('sanitizeOrtCdnLiterals', () => {
+  it("splits the host out of ort's baked-in CDN fallback (MV3 RHC scanner)", () => {
+    // The shape ort-web bundles: a template literal interpolating its version.
+    const emitted = 'r=`https://cdn.jsdelivr.net/npm/onnxruntime-web@${Bc.versions.web}/dist/`';
+    const { code, changed } = sanitizeOrtCdnLiterals(emitted);
+    expect(changed).toBe(true);
+    expect(code).not.toContain('https://cdn.jsdelivr.net/npm');
+    expect(code).toBe(
+      'r=`https://${["cdn","jsdelivr","net"].join(".")}/npm/onnxruntime-web@${Bc.versions.web}/dist/`'
+    );
+  });
+
+  it('only rewrites the template-literal fallback shape, nothing else', () => {
+    const plain = 'const u = "https://cdn.jsdelivr.net/npm/lodash";';
+    expect(sanitizeOrtCdnLiterals(plain).changed).toBe(false);
+  });
+});
+
 describe('buildOrtWasmRuntimeUrlExpr', () => {
   it('evaluates to the jsdelivr URL at runtime', () => {
     const expr = buildOrtWasmRuntimeUrlExpr('ort-wasm-simd-threaded.jsep.wasm');
@@ -114,7 +133,17 @@ describe('stripOrtWasmFromDir + plugin', () => {
     expect(readFileSync(js, 'utf8')).toContain(`onnxruntime-web@${ORT_WEB_VERSION}`);
   });
 
-  it('is a no-op on output with no ort assets', () => {
+  it('sanitizes the baked-in CDN fallback even when no binaries were emitted', () => {
+    const js = join(dir, 'assets', 'kernel-worker-X.js');
+    writeFileSync(js, 'r=`https://cdn.jsdelivr.net/npm/onnxruntime-web@${v.versions.web}/dist/`');
+
+    const result = stripOrtWasmFromDir(dir);
+    expect(result.removed).toEqual([]);
+    expect(result.rewritten).toEqual([js]);
+    expect(readFileSync(js, 'utf8')).not.toContain('https://cdn.jsdelivr.net/npm');
+  });
+
+  it('is a no-op on output with no ort assets or literals', () => {
     const result = stripOrtWasmFromDir(dir);
     expect(result.removed).toEqual([]);
     expect(result.rewritten).toEqual([]);

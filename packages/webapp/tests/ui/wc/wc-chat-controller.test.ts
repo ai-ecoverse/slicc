@@ -367,4 +367,31 @@ describe('WcChatController render-failure degradation', () => {
     expect(thread.querySelectorAll('slicc-agent-message')).toHaveLength(2);
     errSpy.mockRestore();
   });
+
+  it('fires onTurnComplete with the final assistant message (the spoken-reply hook)', async () => {
+    installWcDomStubs();
+    const thread = document.createElement('slicc-chat-thread');
+    document.body.appendChild(thread);
+    const agent = new FakeAgent();
+    const completed: Array<{ content: string; isStreaming?: boolean } | null> = [];
+    new WcChatController({
+      thread,
+      agent,
+      onTurnComplete: (message) => completed.push(message),
+    });
+
+    agent.emit({ type: 'message_start', messageId: 'm9' });
+    agent.emit({ type: 'content_delta', messageId: 'm9', text: 'spoken reply' });
+    agent.emit({ type: 'content_done', messageId: 'm9' });
+    await nextFrame();
+    agent.emit({ type: 'turn_end', messageId: 'm9' });
+
+    expect(completed).toHaveLength(1);
+    expect(completed[0]?.content).toBe('spoken reply');
+    expect(completed[0]?.isStreaming).toBe(false);
+
+    // A turn whose message id no longer resolves reports null, not a throw.
+    agent.emit({ type: 'turn_end', messageId: 'gone' });
+    expect(completed[1]).toBeNull();
+  });
 });

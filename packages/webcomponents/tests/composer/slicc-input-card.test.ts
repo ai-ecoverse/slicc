@@ -407,6 +407,23 @@ describe('slicc-input-card', () => {
     el.submit();
     expect(submits.length).toBe(1);
   });
+
+  it('submit(source) forwards the source on detail; Enter submits carry none', () => {
+    const el = mount((e) => {
+      e.value = 'spoken words';
+    });
+    const details: Array<{ value: string; source?: string }> = [];
+    el.addEventListener('submit', (e) => {
+      details.push((e as Event as CustomEvent<{ value: string; source?: string }>).detail);
+    });
+
+    el.submit('dictation');
+    expect(details[0]).toEqual({ value: 'spoken words', source: 'dictation' });
+
+    textarea(el).dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(details[1]).toEqual({ value: 'spoken words' });
+    expect('source' in details[1]).toBe(false);
+  });
 });
 
 describe('slicc-input-card / send button', () => {

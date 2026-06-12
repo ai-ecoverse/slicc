@@ -36,7 +36,15 @@ export default defineConfig(({ mode }) => ({
     // hoisted ones. Without deduping, Rolldown pulls two full pi trees into the
     // extension graph, which overflows the native "rendering chunks" pass and
     // fails the build with no diagnostic. Force a single copy of each.
-    dedupe: ['@earendil-works/pi-ai', '@earendil-works/pi-agent-core', '@earendil-works/pi-tui'],
+    // kokoro-js additionally nests its own @huggingface/transformers ^3.x
+    // (npm overrides don't reach workspace deps) — dedupe onto the hoisted
+    // 4.x so one transformers + one onnxruntime-web version ships.
+    dedupe: [
+      '@earendil-works/pi-ai',
+      '@earendil-works/pi-agent-core',
+      '@earendil-works/pi-tui',
+      '@huggingface/transformers',
+    ],
     alias: {
       // Workspace `@slicc/shared-ts` points at source so esbuild/Rolldown for the
       // SW IIFE and the extension's worker entries resolve without requiring

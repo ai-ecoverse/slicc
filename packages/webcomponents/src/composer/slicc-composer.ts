@@ -809,12 +809,20 @@ export class SliccComposer extends HTMLElement {
     // Submit through the slotted input card's public contract when present
     // (keeps the empty/disabled guards single-sourced); otherwise emit the
     // same composed `submit` shape from the textarea for generic hosts.
-    const card = ta.closest('slicc-input-card') as (HTMLElement & { submit?: () => void }) | null;
+    // Either way `detail.source = 'dictation'` marks the turn as
+    // voice-initiated so hosts can speak the reply back.
+    const card = ta.closest('slicc-input-card') as
+      | (HTMLElement & { submit?: (source?: string) => void })
+      | null;
     if (card && typeof card.submit === 'function') {
-      card.submit();
+      card.submit('dictation');
     } else {
       ta.dispatchEvent(
-        new CustomEvent('submit', { bubbles: true, composed: true, detail: { value: ta.value } })
+        new CustomEvent('submit', {
+          bubbles: true,
+          composed: true,
+          detail: { value: ta.value, source: 'dictation' },
+        })
       );
     }
   }

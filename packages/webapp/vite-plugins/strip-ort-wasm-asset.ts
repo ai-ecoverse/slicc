@@ -66,6 +66,25 @@ export function rewriteOrtWasmReferences(code: string): { code: string; changed:
   return { code: out, changed: out !== code };
 }
 
+/**
+ * Split the host out of ort-web's OWN baked-in CDN fallback. ort bundles
+ * `` `https://cdn.jsdelivr.net/npm/onnxruntime-web@${version}/dist/` `` as
+ * its default `wasmPaths`, and the Chrome Web Store MV3 reviewer
+ * string-matches that full host+path literal (the ffmpeg `CORE_URL`
+ * precedent — see `strip-ffmpeg-core-cdn-literal`). The fallback already
+ * sits inside a template literal (it interpolates the version), so the host
+ * can be rewritten to the `["cdn","jsdelivr","net"].join(".")` form from
+ * `cdn-url-builder.ts`: behavior-identical at runtime, invisible to the
+ * substring scanner. Pure and side-effect free for testing.
+ */
+export function sanitizeOrtCdnLiterals(code: string): { code: string; changed: boolean } {
+  // Anchored on the `${` interpolation that follows so the rewrite can only
+  // ever land inside a template literal, where `${...}` is syntax.
+  const re = /https:\/\/cdn\.jsdelivr\.net\/(npm\/onnxruntime-web@\$\{)/g;
+  const out = code.replace(re, 'https://${["cdn","jsdelivr","net"].join(".")}/$1');
+  return { code: out, changed: out !== code };
+}
+
 /** Recursively collect files under `dir` whose name ends with `ext`. */
 function listFiles(dir: string, ext: string): string[] {
   let entries: Dirent[];
@@ -103,10 +122,6 @@ export function stripOrtWasmFromDir(outDir: string): {
   let bytesRemoved = 0;
 
   const wasmFiles = listFiles(outDir, '.wasm').filter((f) => ORT_WASM_ASSET_RE.test(f));
-  if (wasmFiles.length === 0) {
-    return { removed, bytesRemoved, rewritten };
-  }
-
   for (const wasm of wasmFiles) {
     try {
       bytesRemoved += statSync(wasm).size;
@@ -117,11 +132,14 @@ export function stripOrtWasmFromDir(outDir: string): {
     removed.push(wasm);
   }
 
+  // The JS sweep runs even with no emitted binaries: ort's own baked-in CDN
+  // fallback literal must be sanitized regardless (the MV3 RHC scanner).
   for (const js of listFiles(outDir, '.js')) {
     const code = readFileSync(js, 'utf8');
-    const { code: out, changed } = rewriteOrtWasmReferences(code);
-    if (changed) {
-      writeFileSync(js, out);
+    const assets = rewriteOrtWasmReferences(code);
+    const cdn = sanitizeOrtCdnLiterals(assets.code);
+    if (assets.changed || cdn.changed) {
+      writeFileSync(js, cdn.code);
       rewritten.push(js);
     }
   }

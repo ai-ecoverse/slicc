@@ -442,12 +442,12 @@ describe('slicc-composer / push-to-talk', () => {
 
   // ── Stage 2: permission granted ───────────────────────────────────
 
-  it('with permission granted, holding records and releasing appends + submits', async () => {
+  it('with permission granted, holding records and releasing appends + submits as dictation', async () => {
     const fake = makeFakeSpeech({ permission: 'granted', transcript: 'make the hero warmer' });
     const el = mount(fake);
-    const submits: string[] = [];
+    const submits: Array<{ value: string; source?: string }> = [];
     el.addEventListener('submit', (e) => {
-      submits.push((e as Event as CustomEvent<{ value: string }>).detail.value);
+      submits.push((e as Event as CustomEvent<{ value: string; source?: string }>).detail);
     });
 
     const ta = press(el);
@@ -462,7 +462,8 @@ describe('slicc-composer / push-to-talk', () => {
 
     expect(pttOf(el)).toBeNull();
     expect(ta.value).toBe('make the hero warmer');
-    expect(submits).toEqual(['make the hero warmer']);
+    // detail.source marks the turn voice-initiated — hosts speak the reply.
+    expect(submits).toEqual([{ value: 'make the hero warmer', source: 'dictation' }]);
   });
 
   it('appends the transcript to existing input with a single joining space', async () => {
@@ -862,6 +863,25 @@ describe('slicc-composer / push-to-talk edge paths', () => {
     await flush();
     expect(submits).toEqual(['via the card']);
     expect((card as HTMLElement & { value: string }).value).toBe('via the card');
+  });
+
+  it('the input-card submit path also marks the turn as dictation', async () => {
+    const el = document.createElement('slicc-composer') as SliccComposer;
+    el.setAttribute('ptt', '');
+    el.style.cssText = 'width:1000px;display:block;';
+    el.append(document.createElement('slicc-input-card'));
+    el.speech = makeFakeSpeech({ permission: 'granted', transcript: 'spoken' }).controller;
+    document.body.appendChild(el);
+
+    const sources: Array<string | undefined> = [];
+    el.addEventListener('submit', (e) => {
+      sources.push((e as Event as CustomEvent<{ source?: string }>).detail.source);
+    });
+    press(el);
+    await flush();
+    release();
+    await flush();
+    expect(sources).toEqual(['dictation']);
   });
 
   it('shows engine errors in the caption (error styling) when start() rejects', async () => {

@@ -133,7 +133,9 @@ const DEFAULT_PLACEHOLDER = 'Ask sliccy, or describe a change…';
  * @fires history-down - composed + bubbling; ArrowDown pressed with the caret
  *   at the very end — the host scrolls to the next user message (or refocuses)
  * @fires submit - composed + bubbling; on Enter without Shift; `detail.value`
- *   carries the submitted text (suppressed when the textarea is empty/disabled)
+ *   carries the submitted text (suppressed when the textarea is empty/disabled).
+ *   Programmatic `submit(source)` calls additionally carry `detail.source`
+ *   (e.g. `'dictation'` from the composer's push-to-talk)
  */
 export class SliccInputCard extends HTMLElement {
   static readonly observedAttributes = ['value', 'placeholder', 'disabled'];
@@ -310,10 +312,12 @@ export class SliccInputCard extends HTMLElement {
    * Programmatically submit the current value — the same contract Enter and
    * the send button use (including the empty/disabled guards). Used by the
    * composer's push-to-talk gesture after appending a dictated transcript.
+   * An optional `source` (e.g. `'dictation'`) is forwarded on the event's
+   * `detail` so hosts can tell voice-initiated turns from typed ones.
    */
-  submit(): void {
+  submit(source?: string): void {
     this.#build();
-    this.#emitSubmit();
+    this.#emitSubmit(source);
   }
 
   /** Focus the textarea and place the caret at the end of the input. */
@@ -325,12 +329,16 @@ export class SliccInputCard extends HTMLElement {
     ta.setSelectionRange(len, len);
   }
 
-  #emitSubmit(): void {
+  #emitSubmit(source?: string): void {
     if (this.disabled) return;
     const value = this.#textarea.value;
     if (value.trim() === '') return;
     this.dispatchEvent(
-      new CustomEvent('submit', { bubbles: true, composed: true, detail: { value } })
+      new CustomEvent('submit', {
+        bubbles: true,
+        composed: true,
+        detail: { value, ...(source ? { source } : {}) },
+      })
     );
   }
 

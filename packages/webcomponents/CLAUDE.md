@@ -68,6 +68,8 @@ tests/**/<name>.test.ts    co-located browser tests, mirroring src/ subsystem
   `composer/speech.ts`, also exported as the DOM-free subpath
   `@slicc/webcomponents/composer/speech` (safe for node/worker realms; the
   barrel is not). The webapp injects its whisper-upgradable controller there.
+  Dictated submits carry `detail.source === 'dictation'` (via the input card's
+  `submit(source?)`) so hosts can speak the reply back to spoken input.
 
 ## Tests (`@vitest/browser`, real Chromium)
 

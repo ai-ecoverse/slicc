@@ -25,6 +25,11 @@ export interface WcChatControllerOptions {
   onMessageRendered?: (message: ChatMessage, els: readonly HTMLElement[]) => void;
   /** Invoked before a message's rendered elements are replaced or removed. */
   onMessageDisposed?: (messageId: string) => void;
+  /**
+   * Invoked when a turn ends, with the turn's final assistant message (null
+   * when the id no longer resolves). The spoken-reply loop hangs off this.
+   */
+  onTurnComplete?: (message: ChatMessage | null) => void;
 }
 
 function uid(): string {
@@ -37,6 +42,7 @@ export class WcChatController {
   readonly #onProcessingChange?: (processing: boolean) => void;
   readonly #onMessageRendered?: (message: ChatMessage, els: readonly HTMLElement[]) => void;
   readonly #onMessageDisposed?: (messageId: string) => void;
+  readonly #onTurnComplete?: (message: ChatMessage | null) => void;
   #unsubscribe: () => void;
   #onLocalUserMessage?: (
     text: string,
@@ -60,6 +66,7 @@ export class WcChatController {
     this.#onProcessingChange = options.onProcessingChange;
     this.#onMessageRendered = options.onMessageRendered;
     this.#onMessageDisposed = options.onMessageDisposed;
+    this.#onTurnComplete = options.onTurnComplete;
     this.#unsubscribe = options.agent.onEvent((event) => this.#handleAgentEvent(event));
   }
 
@@ -336,6 +343,7 @@ export class WcChatController {
     }
     this.#currentStreamId = null;
     this.setProcessing(false);
+    this.#onTurnComplete?.(message ? { ...message } : null);
   }
 
   #handleError(error: string): void {
