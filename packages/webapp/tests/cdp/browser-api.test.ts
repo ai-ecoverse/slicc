@@ -524,6 +524,22 @@ describe('BrowserAPI', () => {
       expect(mockClient.send).toHaveBeenCalledWith('Page.bringToFront', {}, 'sess-1');
     });
 
+    it('foregroundFallback:false fails fast instead of stealing window focus', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+        new Error('Unable to capture screenshot') // suspended renderer
+      );
+
+      await expect(api.screenshot({ foregroundFallback: false })).rejects.toThrow(
+        'Unable to capture screenshot'
+      );
+      // The focus-stealing wake-up retry must NOT run.
+      expect(mockClient.send).not.toHaveBeenCalledWith(
+        'Page.bringToFront',
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
     it('full page screenshot at DPR 1 uses CSS dimensions with scale 1', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({}) // Runtime.enable

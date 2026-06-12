@@ -79,6 +79,9 @@ export function wireWcBrowser(deps: WireWcBrowserDeps): WcBrowserHandle {
           format: 'jpeg',
           quality: 55,
           maxWidth: deps.thumbWidth ?? 480,
+          // Never wake suspended tabs via bringToFront here — that steals
+          // window focus from SLICC; they keep the globe placeholder.
+          foregroundFallback: false,
         });
         if (seq !== refreshSeq) return;
         overlay.tabs = overlay.tabs.map((t) =>

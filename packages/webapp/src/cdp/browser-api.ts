@@ -441,6 +441,12 @@ export class BrowserAPI {
     fullPage?: boolean;
     clip?: { x: number; y: number; width: number; height: number; scale?: number };
     maxWidth?: number;
+    /**
+     * Whether a failed capture may retry after `Page.bringToFront` (wakes a
+     * suspended renderer but STEALS WINDOW FOCUS). Default true — background
+     * thumbnailing passes false so capturing never yanks focus from SLICC.
+     */
+    foregroundFallback?: boolean;
   }): Promise<string> {
     await this.ensureConnected();
     this.ensureAttached();
@@ -492,8 +498,11 @@ export class BrowserAPI {
       let result: Record<string, unknown>;
       try {
         result = await this.client.send('Page.captureScreenshot', params, this.sessionId!);
-      } catch (_err: unknown) {
-        // Background/throttled tabs have a suspended renderer — wake it and retry once
+      } catch (err: unknown) {
+        // Background/throttled tabs have a suspended renderer — wake it and
+        // retry once. Foregrounding steals window focus, so callers that
+        // capture in the background opt out and accept the failure instead.
+        if (options?.foregroundFallback === false) throw err;
         await this.client.send('Page.bringToFront', {}, this.sessionId!);
         result = await this.client.send('Page.captureScreenshot', params, this.sessionId!);
       }
