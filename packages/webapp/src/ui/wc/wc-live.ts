@@ -594,6 +594,11 @@ function createWcController(
   void import('../legacy-styles.js')
     .then(({ loadDipStyles }) => loadDipStyles())
     .catch(() => undefined);
+  // Keep open dips in step with the WC shell's live theme (the legacy
+  // initTheme path that did this is never called in WC mode).
+  void import('../theme.js')
+    .then(({ watchSprinkleThemeBroadcast }) => watchSprinkleThemeBroadcast())
+    .catch(() => undefined);
   const agentHandle = client.createAgentHandle();
   const controller = new WcChatController({
     thread: refs.thread,
