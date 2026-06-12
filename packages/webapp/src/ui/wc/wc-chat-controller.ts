@@ -117,7 +117,7 @@ export class WcChatController {
         children.push(daySeparatorEl(message.timestamp));
         lastDay = day;
       }
-      const els = messageEls(message);
+      const els = this.#safeMessageEls(message);
       this.#els.set(message.id, els);
       children.push(...els);
     }
@@ -332,19 +332,40 @@ export class WcChatController {
     return this.#messages.find((m) => m.id === id);
   }
 
+  /**
+   * Render one message, degrading to a plain bubble on ANY renderer throw —
+   * a single malformed message must never abort a load loop (which would
+   * leave the whole thread unrendered).
+   */
+  #safeMessageEls(message: ChatMessage): HTMLElement[] {
+    try {
+      return messageEls(message);
+    } catch (err) {
+      console.error('[wc-chat] message render failed — degrading to plain bubble', err);
+      const fallback = document.createElement(
+        message.role === 'assistant' ? 'slicc-agent-message' : 'slicc-user-message'
+      );
+      fallback.setAttribute('text', String(message.content ?? ''));
+      return [fallback];
+    }
+  }
+
   #appendMessage(message: ChatMessage): void {
     this.#messages.push(message);
-    const els = messageEls(message);
+    const els = this.#safeMessageEls(message);
     this.#els.set(message.id, els);
     this.#thread.append(...els);
     if (!message.isStreaming) this.#onMessageRendered?.(message, els);
-    this.#scrollToBottom();
+    // The user's own submission always lands in view; agent-driven appends
+    // defer to the thread's polite follow (new-messages chip when scrolled).
+    if (message.role === 'user') this.#scrollToBottom();
+    else this.#followThread();
   }
 
   #rerenderMessage(message: ChatMessage): void {
     this.#onMessageDisposed?.(message.id);
     const old = this.#els.get(message.id) ?? [];
-    const next = messageEls(message);
+    const next = this.#safeMessageEls(message);
     // Anchor on the old elements' real parent: `<slicc-chat-thread>`
     // delegates `append()` into its inner column, so appended elements are
     // not direct children of the host element.
@@ -358,10 +379,21 @@ export class WcChatController {
     }
     this.#els.set(message.id, next);
     if (!message.isStreaming) this.#onMessageRendered?.(message, next);
-    this.#scrollToBottom();
+    this.#followThread();
   }
 
   #scrollToBottom(): void {
     this.#thread.scrollTop = this.#thread.scrollHeight;
+  }
+
+  /**
+   * Streaming/agent updates follow politely: `<slicc-chat-thread>` only
+   * auto-scrolls when the user is near the bottom, otherwise it raises its
+   * new-messages chip. Bare hosts (tests) fall back to a hard scroll.
+   */
+  #followThread(): void {
+    const thread = this.#thread as HTMLElement & { requestFollow?: () => void };
+    if (typeof thread.requestFollow === 'function') thread.requestFollow();
+    else this.#scrollToBottom();
   }
 }

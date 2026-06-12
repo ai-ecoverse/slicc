@@ -309,4 +309,62 @@ describe('WcChatController scroll pinning', () => {
     controller.sendUserMessage('scroll me');
     expect(setter).toHaveBeenCalledWith(1234);
   });
+
+  it('agent-driven appends use the thread polite follow, user sends hard-scroll', async () => {
+    installWcDomStubs();
+    const thread = document.createElement('slicc-chat-thread') as HTMLElement & {
+      requestFollow: ReturnType<typeof vi.fn>;
+    };
+    thread.requestFollow = vi.fn();
+    document.body.appendChild(thread);
+    const scrollSetter = vi.fn();
+    Object.defineProperty(thread, 'scrollHeight', { value: 1234 });
+    Object.defineProperty(thread, 'scrollTop', { set: scrollSetter, get: () => 0 });
+    const agent = new FakeAgent();
+    new WcChatController({ thread, agent });
+
+    agent.emit({ type: 'message_start', messageId: 'm1' });
+    expect(thread.requestFollow).toHaveBeenCalled();
+    expect(scrollSetter).not.toHaveBeenCalled();
+
+    // Streaming re-renders follow politely too (this is where the chip shows).
+    const callsAfterStart = thread.requestFollow.mock.calls.length;
+    agent.emit({ type: 'content_delta', messageId: 'm1', text: 'hi' });
+    agent.emit({ type: 'content_done', messageId: 'm1' });
+    expect(thread.requestFollow.mock.calls.length).toBeGreaterThan(callsAfterStart);
+    expect(scrollSetter).not.toHaveBeenCalled();
+  });
+});
+
+describe('WcChatController render-failure degradation', () => {
+  it('degrades a message whose renderer throws to a plain bubble', () => {
+    installWcDomStubs();
+    const thread = document.createElement('slicc-chat-thread');
+    document.body.appendChild(thread);
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const controller = new WcChatController({ thread, agent: new FakeAgent() });
+    // A lick whose content is a non-string used to throw deep inside
+    // messageEls and wipe the whole thread render. Force the worst case with
+    // a hostile payload: content as an object (seen after OPFS corruption).
+    controller.loadMessages([
+      { id: 'h1', role: 'user', content: 'fine', timestamp: 1 },
+      {
+        id: 'h2',
+        role: 'assistant',
+        content: { broken: true } as unknown as string,
+        timestamp: 2,
+        toolCalls: { not: 'an array' } as never,
+      },
+      { id: 'h3', role: 'assistant', content: 'also fine', timestamp: 3 },
+    ]);
+    // The renderer threw (logged), the broken message degraded to a plain
+    // bubble, and the healthy neighbours rendered untouched.
+    expect(errSpy).toHaveBeenCalledWith(
+      expect.stringContaining('message render failed'),
+      expect.anything()
+    );
+    expect(thread.querySelector('slicc-user-message')).toBeTruthy();
+    expect(thread.querySelectorAll('slicc-agent-message')).toHaveLength(2);
+    errSpy.mockRestore();
+  });
 });

@@ -40,6 +40,8 @@ function lickPartBody(part: string): string {
  * markers and the `[<Channel> Event: <name>]` header for known channels.
  */
 export function lickChannelFromContent(content: string): string | null {
+  // Defensive: persisted/streamed messages can carry non-string content.
+  if (typeof content !== 'string' || content.length === 0) return null;
   const fromBody = lickChannelFromBody(content);
   if (fromBody) return fromBody;
   const header = LICK_HEADER_RE.exec(content);
