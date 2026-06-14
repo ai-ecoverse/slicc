@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { promises as fsPromises } from 'node:fs';
 import { createSubstrate } from '@slicc/cloud-core';
-import { previewSecret } from '@slicc/shared-ts';
 import { type ChildProcess, spawn } from 'child_process';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { existsSync, readFileSync } from 'fs';
@@ -51,12 +50,12 @@ import { registerHandoffRoute } from './routes/handoff.js';
 import { registerLickApiRoutes } from './routes/lick-api.js';
 import { createLickBridge } from './routes/lick-bridge.js';
 import { registerOAuthCallbackRoutes } from './routes/oauth-callback.js';
+import { registerSecretRoutes } from './routes/secrets.js';
 import { parseCliRuntimeFlags } from './runtime-flags.js';
 import { EnvSecretStore } from './secrets/env-secret-store.js';
 import { OauthSecretStore } from './secrets/oauth-secret-store.js';
 import { SecretProxyManager } from './secrets/proxy-manager.js';
 import { readOrCreateSessionId } from './secrets/session-id-file.js';
-import { handleDaSignAndForward, handleS3SignAndForward } from './secrets/sign-and-forward.js';
 import { registerSecretsReloadEndpoint } from './secrets-reload-endpoint.js';
 import { registerSudoApproveEndpoint } from './sudo/endpoint.js';
 
@@ -674,7 +673,7 @@ async function main() {
   const oauthStore = new OauthSecretStore();
   // Env-file secrets (~/.slicc/secrets.env) feed the fetch-proxy mask
   // pipeline alongside OAuth tokens. The same instance is reused below
-  // for /api/secrets and handleS3SignAndForward.
+  // for the /api/secrets routes and the S3 sign-and-forward handler.
   const secretStore = new EnvSecretStore(RUNTIME_FLAGS.envFile ?? undefined);
   const secretProxy = new SecretProxyManager(secretStore, sessionId, oauthStore);
   try {
@@ -757,232 +756,9 @@ async function main() {
   // handoff reaches the cone regardless of which browser profile is active.
   registerHandoffRoute(app, { broadcastLickEvent });
 
-  // Secret management API — direct .env file access (no browser needed).
-  // `secretStore` was created above and wired into `secretProxy` so the
-  // fetch-proxy and the management API share one source of truth.
-
-  app.get('/api/secrets', (_req, res) => {
-    try {
-      const entries = secretStore.list();
-      res.json(entries);
-    } catch (err) {
-      res
-        .status(500)
-        .json({ error: err instanceof Error ? err.message : 'Failed to list secrets' });
-    }
-  });
-
-  // Persisted-set — write a secret to ~/.slicc/secrets.env. Gated by the agent's
-  // intrinsic sudo prompt before the request is ever sent.
-  app.post('/api/secrets', express.json(), async (req, res) => {
-    const { name, value, domains } = req.body ?? {};
-    if (
-      typeof name !== 'string' ||
-      typeof value !== 'string' ||
-      !Array.isArray(domains) ||
-      domains.some((d) => typeof d !== 'string')
-    ) {
-      return res.status(400).json({ error: 'bad-request' });
-    }
-    try {
-      secretStore.set(name, value, domains);
-      await secretProxy.reload();
-      res.json({ ok: true });
-    } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to set secret' });
-    }
-  });
-
-  // Scope edit — update the allowed domains of an existing secret (persisted or
-  // session), preserving the value. Gated by the agent before sending.
-  app.post('/api/secrets/scope', express.json(), async (req, res) => {
-    const { name, domains } = req.body ?? {};
-    if (
-      typeof name !== 'string' ||
-      !Array.isArray(domains) ||
-      domains.some((d) => typeof d !== 'string')
-    ) {
-      return res.status(400).json({ error: 'bad-request' });
-    }
-    try {
-      if (secretProxy.sessionStore.has(name)) {
-        secretProxy.sessionStore.setDomains(name, domains);
-      } else {
-        const existing = secretStore.get(name);
-        if (!existing) return res.status(404).json({ error: `no secret named "${name}"` });
-        secretStore.set(name, existing.value, domains);
-      }
-      await secretProxy.reload();
-      res.json({ ok: true });
-    } catch (err) {
-      res
-        .status(500)
-        .json({ error: err instanceof Error ? err.message : 'Failed to update scope' });
-    }
-  });
-
-  // Session secrets — in-memory only, never written to disk. Free for the agent
-  // to create; the masking pipeline picks them up on the reload below.
-  app.get('/api/secrets/session', (_req, res) => {
-    res.json(secretProxy.sessionStore.list());
-  });
-
-  app.post('/api/secrets/session', express.json(), async (req, res) => {
-    const { name, value, domains } = req.body ?? {};
-    if (
-      typeof name !== 'string' ||
-      typeof value !== 'string' ||
-      (domains !== undefined &&
-        (!Array.isArray(domains) || domains.some((d) => typeof d !== 'string')))
-    ) {
-      return res.status(400).json({ error: 'bad-request' });
-    }
-    secretProxy.sessionStore.set(name, value, Array.isArray(domains) ? domains : []);
-    await secretProxy.reload();
-    res.json({ ok: true });
-  });
-
-  // Peek — elided preview of the unmasked value (session or persisted). The
-  // full value never leaves the server.
-  app.get('/api/secrets/peek', (req, res) => {
-    const name = typeof req.query.name === 'string' ? req.query.name : '';
-    if (!name) return res.status(400).json({ error: 'bad-request' });
-    const session = secretProxy.sessionStore.getRecord(name);
-    if (session) {
-      return res.json({ name, preview: previewSecret(session.value), domains: session.domains });
-    }
-    const persisted = secretStore.get(name);
-    if (persisted) {
-      return res.json({
-        name,
-        preview: previewSecret(persisted.value),
-        domains: persisted.domains,
-      });
-    }
-    return res.status(404).json({ error: `no secret named "${name}"` });
-  });
-
-  // S3 sign-and-forward — browser-side mount backend posts envelopes here;
-  // server resolves the s3.<profile>.* secrets, signs SigV4 v4, forwards to
-  // the upstream, returns the response as a JSON envelope. The browser
-  // never sees access_key_id / secret_access_key. See sign-and-forward.ts
-  // for the envelope contract.
-  app.post('/api/s3-sign-and-forward', async (req, res) => {
-    try {
-      await handleS3SignAndForward(req, res, secretStore);
-    } catch (err) {
-      // Generic log line + trace id only. Avoid logging the err.message
-      // because TypeError stack frames or signing errors can include
-      // profile names, bucket names, or partial URLs — operational secrets
-      // we don't want in shared log aggregators (Sentry, Datadog, etc.).
-      // The trace id lets users correlate a server-side log with the
-      // 500 the client got; the detailed message goes only to the local
-      // file logger above DEBUG, where it's bounded to the operator.
-      const traceId = (
-        globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2, 10)
-      ).slice(0, 8);
-      console.error(`S3 sign-and-forward error [trace=${traceId}]`);
-      if (DEV_MODE) {
-        console.error(err);
-      }
-      if (!res.headersSent) {
-        res.status(500).json({
-          ok: false,
-          error: `internal sign-and-forward error [trace=${traceId}]`,
-          errorCode: 'internal',
-        });
-      }
-    }
-  });
-
-  // DA sign-and-forward — same pattern as S3, but for Adobe da.live. The
-  // IMS bearer token is passed transiently in the envelope (browser holds
-  // it via the existing Adobe LLM provider). v2 will move OAuth server-side
-  // to remove the browser exposure entirely.
-  app.post('/api/da-sign-and-forward', async (req, res) => {
-    try {
-      await handleDaSignAndForward(req, res);
-    } catch (err) {
-      const traceId = (
-        globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2, 10)
-      ).slice(0, 8);
-      console.error(`DA sign-and-forward error [trace=${traceId}]`);
-      if (DEV_MODE) {
-        console.error(err);
-      }
-      if (!res.headersSent) {
-        res.status(500).json({
-          ok: false,
-          error: `internal sign-and-forward error [trace=${traceId}]`,
-          errorCode: 'internal',
-        });
-      }
-    }
-  });
-
-  // Tool-output real→masked scrub. The browser-side agent realm
-  // never holds real secret values, so the defense-in-depth scrub of
-  // bash / read_file / other tool results runs here against the
-  // node-server-owned `SecretProxyManager`. Direction is real→masked
-  // ONLY (`scrubResponse`), so it is always safe and is idempotent
-  // for already-masked tokens and secret-free output. The caller
-  // (`packages/webapp/src/core/secret-scrub.ts`) treats any non-2xx
-  // or malformed response as "return input unchanged" — the scrub is
-  // defense-in-depth, not the primary defense.
-  app.post('/api/secrets/scrub', express.json({ limit: '32mb' }), (req, res) => {
-    const text = req.body?.text;
-    if (typeof text !== 'string') {
-      return res.status(400).json({ error: 'bad-request' });
-    }
-    try {
-      res.json({ text: secretProxy.scrubResponse(text) });
-    } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : 'scrub failed', text });
-    }
-  });
-
-  // Masked secrets endpoint — returns name + maskedValue pairs for shell env population.
-  // The browser fetches this at shell init to populate env vars with masked values.
-  // Real values are never exposed; only deterministic session-scoped masks.
-  app.get('/api/secrets/masked', (_req, res) => {
-    try {
-      const entries = secretProxy.getMaskedEntries();
-      res.json(entries);
-    } catch (err) {
-      res
-        .status(500)
-        .json({ error: err instanceof Error ? err.message : 'Failed to get masked secrets' });
-    }
-  });
-
-  // OAuth secret update — stores access token from OAuth login flow
-  app.post('/api/secrets/oauth-update', express.json(), async (req, res) => {
-    const { providerId, accessToken, domains } = req.body ?? {};
-    if (
-      typeof providerId !== 'string' ||
-      typeof accessToken !== 'string' ||
-      !Array.isArray(domains) ||
-      domains.length === 0
-    ) {
-      return res.status(400).json({ error: 'bad-request' });
-    }
-    const name = `oauth.${providerId}.token`;
-    oauthStore.set(name, accessToken, domains);
-    await secretProxy.reload();
-    const masked = secretProxy.getMaskedEntries().find((e) => e.name === name)?.maskedValue;
-    res.json({ providerId, name, maskedValue: masked, domains });
-  });
-
-  // OAuth secret deletion — removes access token on logout
-  app.delete('/api/secrets/oauth/:providerId', async (req, res) => {
-    const name = `oauth.${req.params.providerId}.token`;
-    if (!oauthStore.list().some((e) => e.name === name)) {
-      return res.status(404).json({ error: 'not-found' });
-    }
-    oauthStore.delete(name);
-    await secretProxy.reload();
-    res.status(204).end();
-  });
+  // Secret management API — direct .env file access (no browser needed),
+  // plus the S3 / DA sign-and-forward and masked-secret endpoints.
+  registerSecretRoutes(app, { secretStore, secretProxy, oauthStore, devMode: DEV_MODE });
 
   // Cloud status endpoint (hosted-only) — writes join info to /tmp/slicc-join.json
   // Register BEFORE Chromium launches. The webapp's first action after
