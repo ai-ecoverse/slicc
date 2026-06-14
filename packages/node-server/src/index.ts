@@ -47,8 +47,10 @@ import { registerHostedBootstrapEndpoint } from './hosted-bootstrap.js';
 import { resolveCliBrowserLaunchUrl } from './launch-url.js';
 import { createHttpCdp, registerLeaderRestartEndpoint } from './leader-restart.js';
 import { buildLocalApiDescriptor, sliccLinksMiddleware } from './links-middleware.js';
+import { registerHandoffRoute } from './routes/handoff.js';
 import { registerLickApiRoutes } from './routes/lick-api.js';
 import { createLickBridge } from './routes/lick-bridge.js';
+import { registerOAuthCallbackRoutes } from './routes/oauth-callback.js';
 import { parseCliRuntimeFlags } from './runtime-flags.js';
 import { EnvSecretStore } from './secrets/env-secret-store.js';
 import { OauthSecretStore } from './secrets/oauth-secret-store.js';
@@ -697,64 +699,8 @@ async function main() {
   const lickBridge = createLickBridge();
   const { lickWss, broadcastLickEvent } = lickBridge;
 
-  // ---------------------------------------------------------------------------
   // OAuth callback — generic redirect target for OAuth providers (implicit + PKCE)
-  // ---------------------------------------------------------------------------
-  // Pending OAuth result for server-side relay (Electron overlay can't use window.opener)
-  let pendingOAuthResult: { redirectUrl: string; error?: string } | null = null;
-
-  app.get('/auth/callback', (_req: Request, res: Response) => {
-    // The callback page tries window.opener.postMessage first (works in CLI popup mode).
-    // If window.opener is null (Electron overlay — opens system browser), it falls back
-    // to POSTing the result to /api/oauth-result for the UI to poll.
-    res.send(`<!DOCTYPE html><html><body><script>
-      var q = new URLSearchParams(location.search);
-      var h = new URLSearchParams(location.hash.replace(/^#/, ''));
-      var payload = {
-        type: 'oauth-callback',
-        redirectUrl: location.href,
-        code: q.get('code'),
-        state: q.get('state') || h.get('state'),
-        error: q.get('error') || h.get('error'),
-        access_token: h.get('access_token'),
-        expires_in: h.get('expires_in'),
-        token_type: h.get('token_type')
-      };
-      if (window.opener) {
-        window.opener.postMessage(payload, '*');
-      } else {
-        fetch('/api/oauth-result', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        }).catch(function(err) { console.error('[oauth-callback] Failed to relay result to server:', err); });
-      }
-      window.close();
-    </script><p>Completing login... you can close this window.</p></body></html>`);
-  });
-
-  app.post('/api/oauth-result', express.json(), (req: Request, res: Response) => {
-    const body = req.body as Record<string, unknown>;
-    const redirectUrl = typeof body.redirectUrl === 'string' ? body.redirectUrl : '';
-    if (!redirectUrl) {
-      console.warn('[oauth-result] Received callback with empty redirectUrl');
-    }
-    pendingOAuthResult = {
-      redirectUrl,
-      error: typeof body.error === 'string' ? body.error : undefined,
-    };
-    res.json({ ok: true });
-  });
-
-  app.get('/api/oauth-result', (_req: Request, res: Response) => {
-    if (pendingOAuthResult) {
-      const result = pendingOAuthResult;
-      pendingOAuthResult = null;
-      res.json(result);
-    } else {
-      res.status(204).end();
-    }
-  });
+  registerOAuthCallbackRoutes(app);
 
   // Global JSON body parser. Skipped when the request carries
   // `X-Slicc-Raw-Body: 1`, so SigV4-signed bodies survive into the
@@ -807,82 +753,9 @@ async function main() {
   // forward to the browser over the lick bridge.
   registerLickApiRoutes(app, lickBridge);
 
-  // Profile-independent handoff injection.
-  //
-  // The CDP navigation-watcher only sees tabs inside the Chrome instance
-  // SLICC launched (isolated profile keyed by port); similarly the
-  // extension's webRequest observer only fires inside the profile where it
-  // is installed. External tools (e.g. the slicc-handoff helper) post here
-  // so a handoff reaches the cone regardless of which browser profile the
-  // user is currently driving.
-  //
-  // The payload mirrors the parsed RFC 8288 `Link` form used by the
-  // observers: `verb` ∈ {handoff, upskill}, `target` is the resolved URL,
-  // `instruction` is optional free-form prose (handoff verb).
-  app.post('/api/handoff', (req, res) => {
-    const payload = req.body as {
-      verb?: unknown;
-      target?: unknown;
-      instruction?: unknown;
-      url?: unknown;
-      title?: unknown;
-      branch?: unknown;
-      path?: unknown;
-      // Detect legacy x-slicc-style payloads for a clear error message.
-      sliccHeader?: unknown;
-    };
-    if (typeof payload?.sliccHeader === 'string') {
-      res.status(400).json({
-        error:
-          'The legacy `sliccHeader` payload was removed; post `{ verb, target, instruction? }` instead. See docs/slicc-handoff.md.',
-      });
-      return;
-    }
-    if (payload?.verb !== 'handoff' && payload?.verb !== 'upskill') {
-      res.status(400).json({ error: 'verb must be "handoff" or "upskill"' });
-      return;
-    }
-    if (typeof payload.target !== 'string' || payload.target.length === 0) {
-      res.status(400).json({ error: 'target is required (non-empty string)' });
-      return;
-    }
-    if (payload.instruction != null && typeof payload.instruction !== 'string') {
-      res.status(400).json({ error: 'instruction must be a string when provided' });
-      return;
-    }
-    // `branch` / `path` mirror the upskill rel's Link params and are
-    // ignored on the handoff verb (its target is the page itself, not a
-    // repo). Reject the wrong-shape combo loudly so emitters notice
-    // rather than silently dropping the scope.
-    if (payload.branch != null && typeof payload.branch !== 'string') {
-      res.status(400).json({ error: 'branch must be a string when provided' });
-      return;
-    }
-    if (payload.path != null && typeof payload.path !== 'string') {
-      res.status(400).json({ error: 'path must be a string when provided' });
-      return;
-    }
-    if (payload.verb === 'handoff' && (payload.branch != null || payload.path != null)) {
-      res.status(400).json({ error: 'branch and path are only valid with verb="upskill"' });
-      return;
-    }
-    broadcastLickEvent({
-      type: 'navigate_event',
-      verb: payload.verb,
-      target: payload.target,
-      instruction: typeof payload.instruction === 'string' ? payload.instruction : undefined,
-      url:
-        typeof payload.url === 'string' && payload.url.length > 0 ? payload.url : 'about:handoff',
-      title: typeof payload.title === 'string' ? payload.title : undefined,
-      branch:
-        typeof payload.branch === 'string' && payload.branch.length > 0
-          ? payload.branch
-          : undefined,
-      path: typeof payload.path === 'string' && payload.path.length > 0 ? payload.path : undefined,
-      timestamp: new Date().toISOString(),
-    });
-    res.json({ ok: true });
-  });
+  // Profile-independent handoff injection — external tools post here so a
+  // handoff reaches the cone regardless of which browser profile is active.
+  registerHandoffRoute(app, { broadcastLickEvent });
 
   // Secret management API — direct .env file access (no browser needed).
   // `secretStore` was created above and wired into `secretProxy` so the
