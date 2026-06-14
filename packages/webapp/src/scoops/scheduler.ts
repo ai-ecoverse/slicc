@@ -8,6 +8,7 @@
  */
 
 import { createLogger } from '../core/logger.js';
+import { getNextCronTime } from './cron.js';
 import * as db from './db.js';
 import type { RegisteredScoop, ScheduledTask } from './types.js';
 
@@ -204,7 +205,7 @@ export class TaskScheduler {
 
     switch (scheduleType) {
       case 'cron': {
-        const next = this.getNextCronTime(scheduleValue, now);
+        const next = getNextCronTime(scheduleValue, now);
         return next?.toISOString() ?? null;
       }
 
@@ -222,71 +223,5 @@ export class TaskScheduler {
       default:
         return null;
     }
-  }
-
-  /** Parse a cron expression and get the next run time */
-  private getNextCronTime(cron: string, from: Date): Date | null {
-    const parts = cron.trim().split(/\s+/);
-    if (parts.length !== 5) return null;
-
-    const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
-
-    const next = new Date(from);
-    next.setSeconds(0);
-    next.setMilliseconds(0);
-    next.setMinutes(next.getMinutes() + 1);
-
-    for (let i = 0; i < 527040; i++) {
-      if (this.cronMatches(next, minute, hour, dayOfMonth, month, dayOfWeek)) {
-        return next;
-      }
-      next.setMinutes(next.getMinutes() + 1);
-    }
-
-    return null;
-  }
-
-  /** Check if a date matches cron fields */
-  private cronMatches(
-    date: Date,
-    minute: string,
-    hour: string,
-    dayOfMonth: string,
-    month: string,
-    dayOfWeek: string
-  ): boolean {
-    return (
-      this.cronFieldMatches(date.getMinutes(), minute) &&
-      this.cronFieldMatches(date.getHours(), hour) &&
-      this.cronFieldMatches(date.getDate(), dayOfMonth) &&
-      this.cronFieldMatches(date.getMonth() + 1, month) &&
-      this.cronFieldMatches(date.getDay(), dayOfWeek)
-    );
-  }
-
-  /** Check if a value matches a cron field */
-  private cronFieldMatches(value: number, field: string): boolean {
-    if (field === '*') return true;
-
-    if (field.includes(',')) {
-      return field.split(',').some((f) => this.cronFieldMatches(value, f.trim()));
-    }
-
-    if (field.includes('-')) {
-      const [start, end] = field.split('-').map((n) => parseInt(n, 10));
-      return value >= start && value <= end;
-    }
-
-    if (field.includes('/')) {
-      const [base, step] = field.split('/');
-      const stepNum = parseInt(step, 10);
-      if (base === '*') {
-        return value % stepNum === 0;
-      }
-      const baseNum = parseInt(base, 10);
-      return value >= baseNum && (value - baseNum) % stepNum === 0;
-    }
-
-    return parseInt(field, 10) === value;
   }
 }
