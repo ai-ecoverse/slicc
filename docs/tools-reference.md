@@ -352,7 +352,7 @@ These tools are MCP-style tools for messaging and scoop management.
 
 ### send_message
 
-Universal (available to all scoops).
+Scoop-only (not registered for the cone — it has no parent to message; its assistant output already reaches the UI directly).
 
 | Property   | Value                               |
 | ---------- | ----------------------------------- |
@@ -444,7 +444,7 @@ Cone-only. Update the shared global memory file (`/shared/CLAUDE.md`).
 | read_file                | ✓    | ✓ (restricted) | Active in `ScoopContext`                                              |
 | write_file               | ✓    | ✓ (restricted) | Active in `ScoopContext`                                              |
 | edit_file                | ✓    | ✓ (restricted) | Active in `ScoopContext`                                              |
-| **send_message**         | ✓    | ✓              | Scoop-management tool                                                 |
+| **send_message**         | ✗    | ✓              | Scoop-only management tool (scoop→cone progress/result channel)       |
 | **list_scoops**          | ✓    | ✗              | Cone-only scoop-management tool                                       |
 | **scoop_scoop**          | ✓    | ✗              | Cone-only scoop-management tool                                       |
 | **feed_scoop**           | ✓    | ✗              | Cone-only scoop-management tool                                       |

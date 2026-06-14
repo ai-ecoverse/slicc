@@ -1425,8 +1425,7 @@ You have access to:
 - A bash shell for running commands (via the bash tool)
 - File reading, writing, and editing tools
 - Use shell commands like \`rg\`, \`grep\`, and \`find\` through the bash tool for search
-- **send_message**: Send messages immediately while working (for progress updates)
-- **schedule_task**: Schedule recurring or one-time tasks
+${this.scoop.isCone ? '' : '- **send_message**: Send messages immediately while working (for progress updates)\n'}- **schedule_task**: Schedule recurring or one-time tasks
 - **list_tasks**, **pause_task**, **resume_task**, **cancel_task**: Manage scheduled tasks
 
 ${
@@ -1469,13 +1468,17 @@ When you learn something important:
 - Use your memory for context-specific notes (edit with write_file or edit_file)
 ${this.scoop.isCone ? '- Use update_global_memory tool for information that should be shared across all scoops' : ''}
 
-## Communication
+${
+  this.scoop.isCone
+    ? ''
+    : `## Communication
 
 When using send_message:
 - Use it for progress updates on long tasks
 - Use it when you want to send multiple messages
 - Your final output is also sent, so don't repeat yourself
-${
+`
+}${
   this.scoop.config?.structuredOutputSchema
     ? '\n\nIMPORTANT: your final action MUST be a single call to the StructuredOutput tool; its arguments are your return value and must satisfy the schema. Do not answer in prose.'
     : ''

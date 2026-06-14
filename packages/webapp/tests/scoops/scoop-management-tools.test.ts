@@ -40,6 +40,54 @@ function findScoopScoopTool() {
   return { tool, onScoopScoop };
 }
 
+describe('send_message tool — registration gating', () => {
+  // `send_message` is the scoop→cone progress/result channel. The cone has
+  // no parent to message and its assistant output already reaches the UI
+  // directly, so it MUST NOT be offered as a tool on the cone's toolset.
+  const nonConeScoop: RegisteredScoop = {
+    jid: 'scoop_alpha_1',
+    name: 'alpha',
+    folder: 'alpha-scoop',
+    isCone: false,
+    type: 'scoop',
+    requiresTrigger: true,
+    assistantLabel: 'alpha-scoop',
+    addedAt: new Date().toISOString(),
+  };
+
+  it('is absent on the cone toolset', () => {
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone],
+    });
+    expect(tools.find((t) => t.name === 'send_message')).toBeUndefined();
+  });
+
+  it('is present on a non-cone scoop toolset', () => {
+    const tools = createScoopManagementTools({
+      scoop: nonConeScoop,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonConeScoop],
+    });
+    expect(tools.find((t) => t.name === 'send_message')).toBeDefined();
+  });
+
+  it('forwards the text and optional sender on a non-cone scoop', async () => {
+    const onSendMessage = vi.fn();
+    const tools = createScoopManagementTools({
+      scoop: nonConeScoop,
+      onSendMessage,
+      getScoops: () => [cone, nonConeScoop],
+    });
+    const tool = tools.find((t) => t.name === 'send_message');
+    if (!tool) throw new Error('send_message tool missing from non-cone toolset');
+    const result = await tool.execute({ text: 'progress', sender: 'alpha' });
+    expect(onSendMessage).toHaveBeenCalledWith('progress', 'alpha');
+    expect(result.content).toBe('Message sent.');
+  });
+});
+
 describe('scoop_scoop tool — config defaults', () => {
   it('injects visiblePaths: ["/workspace/"] when no model is specified', async () => {
     const { tool, onScoopScoop } = findScoopScoopTool();

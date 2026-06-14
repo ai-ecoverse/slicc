@@ -90,32 +90,36 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
 
   const tools: ToolDefinition[] = [];
 
-  // send_message tool
-  tools.push({
-    name: 'send_message',
-    description: `Send a progress message while still working. Your final output is also sent.`,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        text: {
-          type: 'string',
-          description: 'The message text to send',
+  // send_message tool — scoop-only. It's the scoop→cone progress/result
+  // channel; the cone has no parent to message and its assistant output
+  // already reaches the UI directly.
+  if (!scoop.isCone) {
+    tools.push({
+      name: 'send_message',
+      description: `Send a progress message while still working. Your final output is also sent.`,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          text: {
+            type: 'string',
+            description: 'The message text to send',
+          },
+          sender: {
+            type: 'string',
+            description:
+              'Optional sender name/role (e.g., "Researcher"). Defaults to assistant name.',
+          },
         },
-        sender: {
-          type: 'string',
-          description:
-            'Optional sender name/role (e.g., "Researcher"). Defaults to assistant name.',
-        },
+        required: ['text'],
       },
-      required: ['text'],
-    },
-    execute: async (input) => {
-      const { text, sender } = input as { text: string; sender?: string };
-      onSendMessage(text, sender);
-      log.info('Message sent', { scoopFolder: scoop.folder, textLength: text.length });
-      return { content: 'Message sent.' };
-    },
-  });
+      execute: async (input) => {
+        const { text, sender } = input as { text: string; sender?: string };
+        onSendMessage(text, sender);
+        log.info('Message sent', { scoopFolder: scoop.folder, textLength: text.length });
+        return { content: 'Message sent.' };
+      },
+    });
+  }
 
   // Cone only: feed_scoop (formerly delegate_to_scoop)
   if (scoop.isCone && onFeedScoop) {
