@@ -16,9 +16,20 @@ name: Claude PR Review
 # the gate counts Claude's own prior inline comments — once Claude has reviewed,
 # later triggers skip automatically.
 #
-# Security: the gate decides whether the privileged review runs, so it must NOT
+# Review mode: the action runs in tag mode (`track_progress: true`) so it does a
+# real review — a tracking comment plus INLINE comments via the
+# `mcp__github_inline_comment__create_inline_comment` tool. With a bare `prompt`
+# it would run in agent mode, which only posts a top-level summary and skips
+# inline comments. The reviewer is also given unrestricted `Bash` so it can run
+# the changed code (npm ci / targeted tests / build) to verify findings.
+#
+# Security: the GATE decides whether the privileged review runs, so it must NOT
 # execute PR-authored code. The gate runs from a TRUSTED checkout of the PR base
 # revision; the PR head is only checked out (conditionally) for the review step.
+# The REVIEW step then intentionally runs PR-authored code (Bash) to verify
+# behaviour — bounded by the job `if`: same-repo head only (fork PRs excluded, so
+# no secret exposure to forks) and non-bot authors, and the job holds
+# contents: read (a review can never push) with pull-requests: write for comments.
 #
 # Required repository secret (already present — shared with rum-error-triage):
 #   AWS_BEARER_TOKEN_BEDROCK  Amazon Bedrock API key (Adobe CAMP `ABSK...`
@@ -102,11 +113,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         with:
           use_bedrock: 'true'
+          # Force the review-oriented tag mode (with a tracking comment) instead
+          # of free-form agent mode. With a bare `prompt` the action runs in
+          # agent mode, where the model posts only a top-level summary and never
+          # calls the inline-comment tool (run logs show "No buffered inline
+          # comments"). track_progress is supported on the opened /
+          # ready_for_review events this workflow triggers on.
+          track_progress: true
           # Needed by the action for the inline-comment MCP tool.
           github_token: ${{ github.token }}
+          # allowedTools: the inline-comment MCP tool PLUS unrestricted Bash, so
+          # the reviewer can use `gh pr comment` / `gh api` for PR context AND
+          # actually run the code (npm ci, targeted tests, build) to verify
+          # behaviour-dependent findings. (The job has contents: read only, so a
+          # review can never push.)
           claude_args: |
             --model ${{ vars.PR_REVIEW_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Read,Grep,Glob"
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash,Read,Grep,Glob"
             --max-turns 200
           prompt: |
             You are performing an automated code review for the SLICC codebase.
@@ -133,6 +156,14 @@ jobs:
             Apply the severity rubric from that file (Critical/Major/Minor) when
             labelling findings, and reason contextually — only flag a category
             when the surrounding code does not already handle it.
+
+            You have a full shell. When a finding depends on runtime behaviour,
+            actually run the code to confirm it before reporting — e.g. `npm ci`
+            then a targeted `npx vitest run <file>`, `npm run typecheck`, or a
+            scoped build — rather than guessing. Use `gh api` / `gh pr view` /
+            `gh pr diff` for any extra PR context. Keep it targeted: don't run
+            the whole suite for a trivial diff, and prefer not commenting over a
+            speculative comment you could have verified.
 
             Post specific, actionable feedback as INLINE comments on the exact
             changed lines using the
