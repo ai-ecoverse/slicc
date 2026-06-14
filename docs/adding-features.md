@@ -333,7 +333,8 @@ describe('my_tool', () => {
 
 **Files to modify**:
 
-- Modify: `packages/webapp/src/shell/supplemental-commands/playwright-command.ts`
+- Add a handler under `packages/webapp/src/shell/supplemental-commands/playwright/handlers/` (one module per subcommand family) and register it in `playwright/handlers/index.ts`.
+- Shared helpers live in `playwright/` (`state.ts`, `snapshot.ts`, `session-log.ts`, `teleport.ts`, `teleport-storage.ts`, `discover.ts`, `help.ts`); `playwright-command.ts` is just the thin dispatcher + public re-exports.
 - Modify: `packages/webapp/src/shell/supplemental-commands/serve-command.ts`
 - Modify: `packages/webapp/src/shell/supplemental-commands/shared.ts` (shared preview/path helpers)
 - Update guidance if needed: `packages/vfs-root/workspace/skills/playwright-cli/SKILL.md`
@@ -341,9 +342,10 @@ describe('my_tool', () => {
 **Implementation**:
 
 - Keep browser automation shell-first through `playwright-cli` / `playwright` / `puppeteer`.
+- A handler is a `PlaywrightHandler` — `(ctx: { browser, fs, state, positional, flags }) => Promise<CmdResult>`; add the subcommand name (and any alias) to the `playwrightHandlers` map.
 - Reuse shared preview helpers for VFS URLs instead of manually constructing `/preview/...` paths.
 - Use `serve <dir>` for app directories (default `index.html`, optional `--entry`) and `open` for single files, URLs, downloads, or inline image viewing.
-- Preserve the current tab + snapshot model in `playwright-command.ts` when adding stateful browser actions.
+- Preserve the current tab + snapshot model (the shared `PlaywrightState` in `playwright/state.ts`) when adding stateful browser actions.
 
 **Test pattern**:
 
@@ -351,7 +353,7 @@ describe('my_tool', () => {
 - Put pure helper coverage in `shared.test.ts`.
 - Prefer focused command-level assertions over large integration fixtures.
 
-**Reference files**: `packages/webapp/src/shell/supplemental-commands/playwright-command.ts`, `packages/webapp/src/shell/supplemental-commands/serve-command.ts`, `packages/webapp/src/shell/supplemental-commands/sprinkle-command.ts`
+**Reference files**: `packages/webapp/src/shell/supplemental-commands/playwright-command.ts` (dispatcher) and `packages/webapp/src/shell/supplemental-commands/playwright/` (handlers + helpers), `packages/webapp/src/shell/supplemental-commands/serve-command.ts`, `packages/webapp/src/shell/supplemental-commands/sprinkle-command.ts`
 
 ---
 

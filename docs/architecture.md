@@ -488,7 +488,7 @@ CDP methods fall into three buckets. **Synthesized in-transport** are answered l
 | `Network.*`                                                                 | Rejected (`-32601`)          | **Never available on a cherry target.** No network domain exists; the advertised `network` capability is always `false`      |
 | Any other method                                                            | Rejected (`-32601`)          | `CherryUnsupportedError` — Cherry implements no escape hatch                                                                 |
 
-Because a cherry target has no `Network.*` domain, it can never serve a cookie/storage **teleport**. Both teleport selection paths exclude it: auto-selection via `getBestFollowerForTeleport` (`canRuntimeServeTeleport`) and the explicit `teleport --runtime <id>` path, which is gated at arm time in `playwright-command.ts` — a runtime advertising `CHERRY_RUNTIME_TAG` is rejected before any watcher is created.
+Because a cherry target has no `Network.*` domain, it can never serve a cookie/storage **teleport**. Both teleport selection paths exclude it: auto-selection via `getBestFollowerForTeleport` (`canRuntimeServeTeleport`) and the explicit `teleport --runtime <id>` path, which is gated at arm time in `playwright/handlers/teleport.ts` — a runtime advertising `CHERRY_RUNTIME_TAG` is rejected before any watcher is created.
 
 The iOS follower cannot host a cherry page; it mirrors the cherry target's `kind`/`capabilities` on `RemoteTargetInfo` and treats the `cherry.slicc_event` leader message as a documented no-op (logs and ignores). See `packages/ios-app/CLAUDE.md`.
 
