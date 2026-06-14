@@ -312,7 +312,6 @@
     {
       "includes": [
         "packages/cherry/src/cdp-host-handlers.ts",
-        "packages/chrome-extension/src/fetch-proxy-shared.ts",
         "packages/chrome-extension/src/secrets-entry.ts",
         "packages/chrome-extension/src/service-worker.ts",
         "packages/cloud-core/src/cone-config/index.ts",
