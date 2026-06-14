@@ -139,3 +139,37 @@ describe('UTF-8 across separate exec() calls with carried env (issue #957)', () 
     expect(r.stdout).toBe('price: 5 × 3 — done 🌍');
   });
 });
+
+/**
+ * Known limitation of the PR #265 heuristic (documented, not a bug to fix here).
+ *
+ * The decode can't tell text-shaped Latin-1 from byte-shaped UTF-8 by code units
+ * alone, and just-bash exposes no reliable byte-vs-text signal (byte commands
+ * like `cat`/`grep`/`head` don't set `stdoutKind`). So a string whose Latin-1
+ * code units happen to form a *valid multi-byte UTF-8 sequence* — i.e.
+ * mojibake-looking data such as `Ã¶` (`c3 b6`) — is decoded even when it came
+ * from a text-shaped command. This is the accepted tradeoff for fixing real
+ * UTF-8 byte output (the #957 impact); the only complete fix is upstream (byte
+ * commands emitting an explicit `bytes` shape). See Codex review on PR #997.
+ *
+ * The boundary the heuristic *does* respect: a lone Latin-1 byte that is invalid
+ * standalone UTF-8 (e.g. `ö` = `0xF6`) is preserved, because the `{fatal:true}`
+ * decode throws and falls back to the raw bytes.
+ */
+describe('known limitation: mojibake-looking Latin-1 via $(...) (PR #265 tradeoff)', () => {
+  it('decodes captured text whose Latin-1 bytes form valid UTF-8 (Ã¶ → ö)', async () => {
+    // `KÃ¶penicker` = K + U+00C3 + U+00B6 (c3 b6 = valid UTF-8 for ö).
+    const r = await new Bash({}).exec(
+      '[ "$(echo KÃ¶penicker)" = KÃ¶penicker ] && echo SAME || echo DIFF'
+    );
+    expect(r.stdout).toBe('DIFF\n'); // captured value was decoded to "Köpenicker"
+  });
+
+  it('preserves legitimate single Latin-1 chars that are invalid standalone UTF-8 (ö = 0xF6)', async () => {
+    // `Köpenicker` with a real U+00F6; 0xF6 alone is not valid UTF-8.
+    const r = await new Bash({}).exec(
+      '[ "$(echo Köpenicker)" = Köpenicker ] && echo SAME || echo DIFF'
+    );
+    expect(r.stdout).toBe('SAME\n');
+  });
+});
