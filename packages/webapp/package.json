@@ -5,6 +5,7 @@
   "scripts": {
     "build": "vite build --config vite.config.ts",
     "test": "vitest run --root ../.. --config vitest.config.ts --project webapp",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "typecheck": "tsc --noEmit -p ../../tsconfig.json"
   },
   "dependencies": {

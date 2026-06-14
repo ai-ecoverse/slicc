@@ -291,6 +291,14 @@ jobs:
         run: |
           npx playwright install chromium
           npm run test:e2e
+      - name: Shell integration tests (real browser)
+        # Runs the shipped just-bash engine in headless Chromium — the only
+        # place the agent's multi-statement scripts (and their UTF-8 byte paths)
+        # can be exercised, since Node's defense-in-depth box aborts them. See
+        # issue #957 and packages/webapp/tests/integration/.
+        run: |
+          npx playwright install chromium
+          npm run test:integration -w @slicc/webapp
 
   node-server:
     needs: changes

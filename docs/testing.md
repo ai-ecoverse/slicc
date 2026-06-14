@@ -437,3 +437,37 @@ describe('Bash tool integration', () => {
 ```
 
 But avoid testing implementation details across many layers. Keep most tests focused and fast.
+
+## Real-browser integration tests (`tests/integration/`)
+
+The default `vitest run` projects execute in **Node**. For the shell that is a
+material fidelity gap: just-bash's defense-in-depth box dynamic-imports
+`node:module`, which Node blocks, so it **aborts any multi-statement script**
+(`X=1; echo $X`, `$(...)` capture, an assignment combined with a pipeline). The
+agent emits exactly those scripts constantly, so whole classes of shell bugs —
+issue #957's UTF-8 mojibake in `$(...)` / text-byte statement interleave among
+them — cannot be reproduced (or regression-guarded) in the Node harness at all.
+
+`packages/webapp/tests/integration/` holds tests that run the **shipped**
+just-bash engine in **headless Chromium** via the `@vitest/browser` Playwright
+provider (`packages/webapp/vitest.integration.config.ts`), where there is no
+`node:module` and those scripts execute exactly as they do for a user. Drive the
+engine the way SLICC's `AlmostBashShellHeadless.runCommand` does — thread each
+`exec()`'s `result.env` into the next `exec()`'s `env` — to cover state carried
+across commands (the original #957 report captured `$(cat file)` into a var in
+one command and re-emitted it in the next).
+
+```bash
+npm run test:integration -w @slicc/webapp   # real-browser shell suite
+```
+
+The suite is deliberately kept **out** of `npm run test` (the root projects stay
+browser-free); CI runs it as a dedicated step in the `webapp` job alongside the
+Playwright E2E tests. The matching `tests/integration/**` path is already
+excluded from the root config's `webapp` project. A fast Node-runnable subset of
+the same assertions also lives in `tests/shell/just-bash-utf8.test.ts` so the
+default suite still flags a missing patch; keep the two in sync.
+
+> The UTF-8 fix itself lives in `patches/just-bash+3.0.1.patch` (mirrors
+> just-bash PR #265 — decode each statement's stdout before concatenating).
+> Drop the patch once a just-bash release ships that fix and bump the dep.
