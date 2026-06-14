@@ -412,7 +412,7 @@ describe('host command', () => {
   });
 
   describe('host reset — panel-RPC bridge fallback (standalone-worker path)', () => {
-    // The kernel worker's WasmShell executes `host reset`. The worker's
+    // The kernel worker's AlmostBashShell executes `host reset`. The worker's
     // module-level trayResetter is null (the page is the only side that
     // calls setTrayResetter). `getPanelRpcClient()` returns the bridge
     // client published as `globalThis.__slicc_panelRpc` by kernel-worker.ts;

@@ -22,6 +22,7 @@ import { createLogger } from '../core/logger.js';
 import type { FsWatcher } from '../fs/fs-watcher.js';
 import type { VirtualFS } from '../fs/index.js';
 import { GRANTED_FILE } from '../fs/sudo-fs.js';
+import type { ShellSudoConfig } from '../shell/almost-bash-shell-headless.js';
 import {
   emptyPolicy,
   mergePolicies,
@@ -31,7 +32,6 @@ import {
   type SudoersPolicy,
   sanitizeGrantPattern,
 } from '../shell/sudo/sudoers.js';
-import type { ShellSudoConfig } from '../shell/wasm-shell-headless.js';
 import { createSudoBroker } from './index.js';
 import type { SudoBroker } from './types.js';
 
@@ -84,7 +84,7 @@ export class SudoManager {
   }
 
   /**
-   * Command-guard config for a {@link WasmShell}: gated via this manager.
+   * Command-guard config for a {@link AlmostBashShell}: gated via this manager.
    *
    * `transparentGating` controls whether every dispatched command is wrapped
    * with the `Cmnd` policy gate. Defaults to `true` (agent-shell behavior).

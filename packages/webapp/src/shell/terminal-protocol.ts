@@ -19,7 +19,7 @@
  * Because the existing terminal renders things xterm doesn't speak
  * natively — the `imgcat` command shows inline images and PDFs via
  * a separate "preview host" `<div>` that lives next to the xterm
- * instance. The current `wasm-shell.ts` calls into a
+ * instance. The current `almost-bash-shell.ts` calls into a
  * `previewHost.appendChild(...)` from within the same class as the
  * Bash exec — the worker can't do that. So `imgcat` (and any
  * future media-emitting command) must produce a `media-preview`

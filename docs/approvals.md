@@ -119,7 +119,7 @@ Orchestrator.init()
 ScoopContext.init()
   ├─ gatedFs = createSudoFs(fs, { broker, getPolicy })  // FS-level enforcement
   ├─ createFileTools(gatedFs)        // file tools gated
-  └─ new WasmShell({ fs: gatedFs, sudo: getShellConfig() })  // command-level
+  └─ new AlmostBashShell({ fs: gatedFs, sudo: getShellConfig() })  // command-level
 ```
 
 Brokers (`packages/webapp/src/sudo/`):

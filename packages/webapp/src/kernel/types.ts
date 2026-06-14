@@ -1,7 +1,7 @@
 /**
  * Kernel facade types.
  *
- * The kernel is the agent engine: Orchestrator + scoops + WasmShell pool +
+ * The kernel is the agent engine: Orchestrator + scoops + AlmostBashShell pool +
  * VirtualFS + BrowserAPI + ProcessManager. It lives in a DedicatedWorker
  * in standalone and inside the offscreen document in the extension; the
  * UI is a thin client over a typed RPC.

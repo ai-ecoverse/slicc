@@ -1,5 +1,5 @@
 /**
- * `curl -X <DAV-VERB>` round-trip through `WasmShell` → just-bash curl shim →
+ * `curl -X <DAV-VERB>` round-trip through `AlmostBashShell` → just-bash curl shim →
  * `SecureFetch` (our `createProxiedFetch()` CLI branch) → mocked
  * `globalThis.fetch('/api/fetch-proxy', init)`.
  *
@@ -13,13 +13,13 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VirtualFS } from '../../src/fs/index.js';
-import { WasmShell } from '../../src/shell/wasm-shell.js';
+import { AlmostBashShell } from '../../src/shell/almost-bash-shell.js';
 
 const DAV_VERBS = ['PROPFIND', 'REPORT', 'MKCALENDAR', 'LOCK'] as const;
 
 let dbCounter = 0;
 
-describe('WasmShell curl shim — DAV verb pass-through', () => {
+describe('AlmostBashShell curl shim — DAV verb pass-through', () => {
   let fs: VirtualFS;
   let originalChrome: unknown;
   let originalFetch: typeof globalThis.fetch | undefined;
@@ -53,7 +53,7 @@ describe('WasmShell curl shim — DAV verb pass-through', () => {
 
   for (const verb of DAV_VERBS) {
     it(`propagates curl -X ${verb} -d '<xml/>' through SecureFetch as method=${verb}`, async () => {
-      const shell = new WasmShell({ fs });
+      const shell = new AlmostBashShell({ fs });
       const body = `<request verb="${verb}"/>`;
 
       const result = await shell.executeCommand(
@@ -84,7 +84,7 @@ describe('WasmShell curl shim — DAV verb pass-through', () => {
   }
 
   it('still allows GET as a baseline (sanity check the harness)', async () => {
-    const shell = new WasmShell({ fs });
+    const shell = new AlmostBashShell({ fs });
     await shell.executeCommand('curl -s -X GET https://caldav.example.com/cal/');
     expect(mockFetch).toHaveBeenCalled();
     const init = mockFetch.mock.calls[0][1] as RequestInit;

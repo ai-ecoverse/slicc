@@ -9,7 +9,7 @@
  * `String(error)` — yielding `curl: (1) [object Object]` whenever the
  * upstream JSON body shaped its `error` field as an object.
  *
- * Use these helpers so all three SecureFetch callsites (`wasm-shell.ts`,
+ * Use these helpers so all three SecureFetch callsites (`almost-bash-shell.ts`,
  * `git-http.ts`, `tray-leader.ts`) behave the same way.
  */
 

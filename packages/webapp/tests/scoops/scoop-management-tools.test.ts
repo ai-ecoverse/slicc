@@ -139,7 +139,7 @@ describe('scoop_scoop tool — config defaults', () => {
     await tool.execute({ name: 'default' });
 
     const created = onScoopScoop.mock.calls[0][0];
-    // `undefined` tells the orchestrator+WasmShell "no restriction".
+    // `undefined` tells the orchestrator+AlmostBashShell "no restriction".
     // We deliberately don't stamp `['*']` here — omission is the canonical
     // "unrestricted" form across the stack.
     expect(created.config?.allowedCommands).toBeUndefined();

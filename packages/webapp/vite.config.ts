@@ -352,7 +352,7 @@ export default defineConfig(({ mode }) => ({
   },
   // Vite defaults worker.format to 'iife', which collapses dynamic imports
   // (and any CSS modules they reach) into the worker's top-level IIFE.
-  // The kernel-worker reaches `WasmShell` via the shell barrel; its
+  // The kernel-worker reaches `AlmostBashShell` via the shell barrel; its
   // `await import('@xterm/xterm/css/xterm.css')` inside `mount()` then
   // runs at worker boot under iife — `document.createElement` throws and
   // the worker never posts `kernel-worker-ready`. `es` keeps dynamic
