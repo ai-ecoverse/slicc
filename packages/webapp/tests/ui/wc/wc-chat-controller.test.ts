@@ -318,6 +318,24 @@ describe('WcChatController render/dispose lifecycle hooks', () => {
     expect(el?.hasAttribute('streaming')).toBe(false);
     expect(thread.querySelectorAll('slicc-agent-message')).toHaveLength(1);
   });
+
+  // A prompt/lick queued mid-turn is buffered after the streaming assistant,
+  // so loadMessages must scan backward (not assume the tail) to keep resuming
+  // the right bubble.
+  it('resumes a streaming message even when a queued user message follows it', async () => {
+    const { thread, agent, controller } = makeTracked();
+    controller.loadMessages([
+      { id: 'm1', role: 'assistant', content: 'before', timestamp: 2, isStreaming: true },
+      { id: 'q1', role: 'user', content: 'queued', timestamp: 3 },
+    ]);
+    agent.emit({ type: 'content_delta', messageId: 'm1', text: ' more' });
+    agent.emit({ type: 'content_done', messageId: 'm1' });
+    await nextFrame();
+    const streamed = thread.querySelector('slicc-agent-message');
+    expect(streamed?.textContent).toContain('before more');
+    expect(streamed?.hasAttribute('streaming')).toBe(false);
+    expect(thread.querySelectorAll('slicc-agent-message')).toHaveLength(1);
+  });
 });
 
 describe('WcChatController scroll pinning', () => {

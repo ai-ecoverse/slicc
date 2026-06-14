@@ -659,6 +659,42 @@ describe('OffscreenClient stream-pointer resync on scoop-messages-replaced', () 
     expect(events[0].messageId).not.toBe(syntheticId);
   });
 
+  it('finds the streaming assistant even when a queued user message is buffered after it', () => {
+    client.setSelectedScoopJid('cone_123');
+    const handle = client.createAgentHandle();
+    const events: any[] = [];
+    handle.onEvent((e) => events.push(e));
+
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'cone_123',
+      eventType: 'text_delta',
+      text: 'before',
+    });
+
+    // A prompt/lick queued mid-turn lands AFTER the streaming assistant in
+    // the replay buffer — the streaming entry is no longer the tail.
+    simulateMessage('offscreen', {
+      type: 'scoop-messages-replaced',
+      scoopJid: 'cone_123',
+      messages: [
+        { id: 'buf-stream', role: 'assistant', content: 'before', timestamp: 2, isStreaming: true },
+        { id: 'queued-1', role: 'user', content: 'do this next', timestamp: 3 },
+      ],
+    });
+
+    events.length = 0;
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'cone_123',
+      eventType: 'text_delta',
+      text: ' after',
+    });
+    // Still extends the streaming assistant, not a new bubble.
+    expect(events.map((e) => e.type)).toEqual(['content_delta']);
+    expect(events[0].messageId).toBe('buf-stream');
+  });
+
   it('drops the pointer when the replay tail is settled so the next delta opens a fresh bubble', () => {
     client.setSelectedScoopJid('cone_123');
     const handle = client.createAgentHandle();
