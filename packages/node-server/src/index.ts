@@ -7,7 +7,7 @@ import { existsSync, readFileSync } from 'fs';
 import { createServer } from 'http';
 import { createServer as createNetServer } from 'net';
 import { homedir } from 'os';
-import { basename, dirname, join, resolve, sep } from 'path';
+import { basename, dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocket, WebSocketServer } from 'ws';
 import { applyCdpUnmask } from './cdp-proxy/cdp-unmask.js';
@@ -56,6 +56,7 @@ import { SecretProxyManager } from './secrets/proxy-manager.js';
 import { readOrCreateSessionId } from './secrets/session-id-file.js';
 import { registerSecretsReloadEndpoint } from './secrets-reload-endpoint.js';
 import { registerSudoApproveEndpoint } from './sudo/endpoint.js';
+import { attachUiServing } from './ui-serving.js';
 
 const Dirname = fileURLToPath(new URL('.', import.meta.url));
 const PROJECT_ROOT = resolve(Dirname, '..', '..');
@@ -780,112 +781,12 @@ async function main() {
   // Create the HTTP server BEFORE Vite so we can register our upgrade handler first
   const server = createServer(app);
 
-  if (DEV_MODE && !RUNTIME_FLAGS.hosted) {
-    // Dev mode: use Vite's dev server as middleware for HMR
-    const { createServer: createViteServer } = await import('vite');
-    const webappIndexHtml = resolve(process.cwd(), 'packages/webapp/index.html');
-    const vite = await createViteServer({
-      configFile: resolve(process.cwd(), 'packages/webapp/vite.config.ts'),
-      server: {
-        middlewareMode: true,
-        hmr: {
-          server, // Share the HTTP server — our upgrade handler routes /cdp and /licks-ws separately
-          path: '/__vite_hmr', // Dedicated path avoids conflicts with /cdp upgrade handler
-        },
-      },
-      appType: 'custom', // We handle index.html serving ourselves via the handler below
-      root: process.cwd(),
-    });
-    app.use(vite.middlewares);
-    app.use(async (req, res, next) => {
-      if (
-        req.method !== 'GET' ||
-        !req.headers.accept?.includes('text/html') ||
-        req.path.includes('.')
-      ) {
-        next();
-        return;
-      }
-
-      try {
-        const template = readFileSync(webappIndexHtml, 'utf-8');
-        const html = await vite.transformIndexHtml(req.originalUrl, template);
-        res.status(200).setHeader('Content-Type', 'text/html');
-        res.end(html);
-      } catch (err: unknown) {
-        if (err instanceof Error) {
-          vite.ssrFixStacktrace(err);
-        }
-        next(err);
-      }
-    });
-    console.log(`Vite dev server middleware attached (HMR on ${SERVE_ORIGIN}/__vite_hmr)`);
-  } else {
-    // Production mode: serve built static files
-    const uiDir = resolve(Dirname, '..', 'ui');
-    app.use(
-      express.static(uiDir, {
-        setHeaders: (res, path) => {
-          // Default Cache-Control for anything not classified below:
-          // HTML, manifest, sprinkle-sandbox.html, publicDir fonts/logos,
-          // favicon, etc. None of these are content-hashed and they
-          // reference hashed asset URLs that change on rebuild. If the
-          // browser serves a stale `index.html` out of its heuristic
-          // cache, the referenced `/assets/*` chunks 404 after an update
-          // — the user sees
-          //   "Failed to fetch dynamically imported module: …/assets/<old-hash>.js"
-          // on every cone bootstrap until they hard-refresh.
-          // `no-cache` forces a conditional revalidation on every load
-          // (cheap — `serve-static`'s default ETag yields a 304 when
-          // unchanged) so the tab picks up a freshly-built `index.html`
-          // after `npm run build`.
-          //
-          // The single `setHeader` at the end is intentional: each
-          // branch overrides the default by assigning to `cacheControl`.
-          // To add a fourth bucket, add an `else if` ABOVE the final
-          // assignment — never a separate `setHeader` after, or the
-          // catch-all silently wins.
-          let cacheControl = 'no-cache';
-          if (path.endsWith('llm-proxy-sw.js') || path.endsWith('preview-sw.js')) {
-            // Service workers need `Service-Worker-Allowed: /` for the
-            // root-scoped registration `llm-proxy-sw.js` does (the
-            // `preview-sw.js` SW registers at scope `/preview/`, which
-            // is narrower than `/` so the broader allowance is harmless).
-            //
-            // `no-store`, not `no-cache`: the browser only re-checks
-            // the SW script on navigation/registration, so the safest
-            // signal is "always pull the latest bytes." A stale SW
-            // pinned in cache would intercept fetch / dispatch
-            // `preview/*` with outdated logic (e.g. an outdated
-            // forbidden-header encoding scheme that no longer matches
-            // the server-side restoration in `index.ts`, or a stale
-            // `preview-sw` VFS handler) — that's a worse failure mode
-            // than the `no-cache` revalidation cost.
-            res.setHeader('Service-Worker-Allowed', '/');
-            cacheControl = 'no-store';
-          } else if (path.includes(`${sep}assets${sep}`)) {
-            // Vite emits content-hashed filenames into `/assets/` —
-            // the hash changes when content changes, so the file at a
-            // given URL is byte-for-byte immutable. Cache forever to
-            // avoid revalidation round-trips. The `path` parameter is
-            // a filesystem path (uses `sep` on Windows, `/` elsewhere),
-            // hence the platform-aware match.
-            cacheControl = 'public, max-age=31536000, immutable';
-          }
-          res.setHeader('Cache-Control', cacheControl);
-        },
-      })
-    );
-
-    // SPA fallback — serve index.html for all non-file routes. Same
-    // `no-cache` reasoning as above: the served `index.html` carries
-    // references to the current asset hashes, and stale-cached HTML
-    // is the canonical post-update breakage.
-    app.get('/{*path}', (_req, res) => {
-      res.setHeader('Cache-Control', 'no-cache');
-      res.sendFile(join(uiDir, 'index.html'));
-    });
-  }
+  await attachUiServing(app, server, {
+    devMode: DEV_MODE,
+    hosted: RUNTIME_FLAGS.hosted,
+    serveOrigin: SERVE_ORIGIN,
+    uiDir: resolve(Dirname, '..', 'ui'),
+  });
 
   // 4. CDP WebSocket proxy at /cdp
   //    Use noServer mode so Vite's dev middleware doesn't intercept the
