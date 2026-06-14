@@ -26,16 +26,70 @@ export function parsePatchFilename(filename) {
 }
 
 /**
- * Top-level installed version of `pkg` from a parsed npm lockfile (v3), or
- * `null` if the package is not a direct/hoisted entry.
+ * Installed version of `pkg` from a parsed npm lockfile (v3), or `null` if
+ * absent. Prefers the top-level/hoisted `node_modules/<pkg>` entry, then falls
+ * back to any nested copy (`.../node_modules/<parent>/node_modules/<pkg>`) so a
+ * transitive or non-hoisted patched dependency isn't a false "not in lockfile".
  */
 export function lockedVersion(lock, pkg) {
-  return lock?.packages?.[`node_modules/${pkg}`]?.version ?? null;
+  const packages = lock?.packages ?? {};
+  const top = `node_modules/${pkg}`;
+  if (packages[top]?.version != null) return packages[top].version;
+  for (const [key, val] of Object.entries(packages)) {
+    if ((key === top || key.endsWith(`/${top}`)) && val?.version != null) return val.version;
+  }
+  return null;
 }
 
 /** Manifest entries are real packages; skip the leading `//` comment key. */
 function manifestPackages(manifest) {
   return Object.keys(manifest ?? {}).filter((k) => k !== '//');
+}
+
+/** The npm package names listed in the Renovate "patched dependencies" rule. */
+export const PATCHED_GROUP_NAME = 'patched dependencies';
+
+/**
+ * Assert the Renovate "patched dependencies" rule's `matchPackageNames` matches
+ * the manifest exactly. Without this the list is a silent manual contract: forget
+ * to add a newly-patched package and Renovate won't group/label its bump, so the
+ * auto-reconcile workflow (gated on the `patched-dependency` label) never fires
+ * AND the bump can automerge under the broader non-major rule. Returns problems.
+ */
+export function checkRenovateSync({ manifest, renovate }) {
+  const problems = [];
+  const pkgs = manifestPackages(manifest);
+  const rule = (renovate?.packageRules ?? []).find((r) => r.groupName === PATCHED_GROUP_NAME);
+
+  if (pkgs.length === 0) {
+    if (rule && (rule.matchPackageNames?.length ?? 0) > 0) {
+      problems.push(
+        `renovate.json "${PATCHED_GROUP_NAME}" rule lists ${rule.matchPackageNames.join(', ')} but patches/patches.json documents no packages — remove the rule or the entries.`
+      );
+    }
+    return problems;
+  }
+  if (!rule) {
+    problems.push(
+      `renovate.json has no packageRule with groupName "${PATCHED_GROUP_NAME}", but patches/patches.json documents: ${pkgs.join(', ')}. Add the rule so bumps are grouped, labeled, and reconciled (see patches/README.md).`
+    );
+    return problems;
+  }
+  const ruleSet = new Set(rule.matchPackageNames ?? []);
+  const manSet = new Set(pkgs);
+  const missing = pkgs.filter((p) => !ruleSet.has(p));
+  const extra = [...ruleSet].filter((p) => !manSet.has(p));
+  if (missing.length) {
+    problems.push(
+      `renovate.json "${PATCHED_GROUP_NAME}" rule is missing ${missing.join(', ')} (documented in patches/patches.json). Add them or their bumps skip the reconcile workflow and may automerge.`
+    );
+  }
+  if (extra.length) {
+    problems.push(
+      `renovate.json "${PATCHED_GROUP_NAME}" rule lists ${extra.join(', ')} with no patches/patches.json entry. Remove them or document the patch.`
+    );
+  }
+  return problems;
 }
 
 /**

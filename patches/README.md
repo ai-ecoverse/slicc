@@ -28,16 +28,19 @@ the npm package name:
 
 [`packages/dev-tools/patch-reconcile/check-patches.mjs`](../packages/dev-tools/patch-reconcile/check-patches.mjs)
 runs as part of `npm run lint` / `lint:ci` (so it gates every PR). It fails when
-a patch is undocumented, out of sync with `patches.json`, or **orphaned** — the
-patch version no longer matches `package-lock.json`. It reads only the lockfile
-and `patches/`, so it needs no install. This is the deterministic backstop: an
-orphaned patch cannot merge silently.
+a patch is undocumented, out of sync with `patches.json`, **orphaned** (the patch
+version no longer matches `package-lock.json`), or when the Renovate
+`patched dependencies` rule's `matchPackageNames` doesn't match the manifest
+exactly. It reads only the lockfile, `patches/`, and `renovate.json`, so it needs
+no install. This is the deterministic backstop: an orphaned or mis-routed patch
+cannot merge silently.
 
 ## Renovate + auto-reconcile
 
 - `renovate.json` routes patched packages into the **`patched dependencies`**
   group, labels them **`patched-dependency`**, and **disables automerge** for
-  them. Keep that rule's `matchPackageNames` in sync with this directory.
+  them. That rule's `matchPackageNames` must match the `patches.json` keys
+  exactly — the guard enforces it, so a new patch can't slip past the routing.
 - [`.github/workflows/renovate-patch-reconcile.yml`](../.github/workflows/renovate-patch-reconcile.yml)
   runs on those PRs: it detects the orphaned patch and hands it to
   `claude-code-action`, which either **removes** the patch (upstream fix landed)

@@ -12,12 +12,13 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkPatches } from './lib.mjs';
+import { checkPatches, checkRenovateSync } from './lib.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const patchesDir = resolve(repoRoot, 'patches');
 const manifestPath = resolve(patchesDir, 'patches.json');
 const lockPath = resolve(repoRoot, 'package-lock.json');
+const renovatePath = resolve(repoRoot, 'renovate.json');
 
 if (!existsSync(patchesDir)) {
   console.log('check-patches: no patches/ directory — nothing to check.');
@@ -39,8 +40,12 @@ if (!existsSync(manifestPath)) {
 
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
 const lock = JSON.parse(readFileSync(lockPath, 'utf-8'));
+const renovate = existsSync(renovatePath) ? JSON.parse(readFileSync(renovatePath, 'utf-8')) : null;
 
 const { problems, notes, checked } = checkPatches({ patchFiles, manifest, lock });
+// Keep the Renovate "patched dependencies" rule in lockstep with the manifest
+// so a new patch can't silently bypass the group/label/no-automerge routing.
+problems.push(...checkRenovateSync({ manifest, renovate }));
 
 for (const note of notes) console.log(`note: ${note}`);
 for (const ok of checked) console.log(`ok: ${ok} patch matches installed version`);

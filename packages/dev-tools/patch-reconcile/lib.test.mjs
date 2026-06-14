@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { checkPatches, orphanedPatches, parsePatchFilename } from './lib.mjs';
+import {
+  checkPatches,
+  checkRenovateSync,
+  lockedVersion,
+  orphanedPatches,
+  parsePatchFilename,
+} from './lib.mjs';
 
 describe('parsePatchFilename', () => {
   it('parses an unscoped package', () => {
@@ -121,5 +127,79 @@ describe('orphanedPatches', () => {
       upstream: 'https://x/pr/265',
       verify: 'npm run v',
     });
+  });
+});
+
+describe('lockedVersion', () => {
+  it('reads the top-level/hoisted entry', () => {
+    expect(lockedVersion(lock, 'just-bash')).toBe('3.0.1');
+    expect(lockedVersion(lock, '@zenfs/core')).toBe('2.5.6');
+  });
+
+  it('falls back to a nested copy of a transitive / non-hoisted package', () => {
+    const nested = {
+      packages: { 'node_modules/parent/node_modules/dep': { version: '4.5.6' } },
+    };
+    expect(lockedVersion(nested, 'dep')).toBe('4.5.6');
+  });
+
+  it('does not match a different package with the same suffix tail', () => {
+    const lk = { packages: { 'node_modules/@zenfs/core-extra': { version: '9.9.9' } } };
+    expect(lockedVersion(lk, '@zenfs/core')).toBeNull();
+  });
+
+  it('returns null when absent', () => {
+    expect(lockedVersion({ packages: {} }, 'missing')).toBeNull();
+  });
+});
+
+describe('checkRenovateSync', () => {
+  const renovate = {
+    packageRules: [
+      { matchUpdateTypes: ['minor'], groupName: 'non-major dependencies' },
+      {
+        groupName: 'patched dependencies',
+        matchPackageNames: ['just-bash', '@zenfs/core'],
+        automerge: false,
+      },
+    ],
+  };
+
+  it('passes when the rule matches the manifest exactly', () => {
+    expect(checkRenovateSync({ manifest, renovate })).toEqual([]);
+  });
+
+  it('flags a manifest package missing from the rule', () => {
+    const r = {
+      packageRules: [{ groupName: 'patched dependencies', matchPackageNames: ['just-bash'] }],
+    };
+    const problems = checkRenovateSync({ manifest, renovate: r });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('missing @zenfs/core');
+  });
+
+  it('flags a rule package with no manifest entry', () => {
+    const r = {
+      packageRules: [
+        {
+          groupName: 'patched dependencies',
+          matchPackageNames: ['just-bash', '@zenfs/core', 'extra-pkg'],
+        },
+      ],
+    };
+    const problems = checkRenovateSync({ manifest, renovate: r });
+    expect(problems.some((p) => p.includes('extra-pkg'))).toBe(true);
+  });
+
+  it('flags a missing rule when the manifest documents packages', () => {
+    const problems = checkRenovateSync({ manifest, renovate: { packageRules: [] } });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('no packageRule with groupName');
+  });
+
+  it('is quiet when there are no patches and no rule', () => {
+    expect(checkRenovateSync({ manifest: { '//': 'c' }, renovate: { packageRules: [] } })).toEqual(
+      []
+    );
   });
 });
