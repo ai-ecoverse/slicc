@@ -616,6 +616,7 @@ export class OffscreenClient implements KernelClientFacade {
 
       case 'scoop-messages-replaced': {
         const m = msg as ScoopMessagesReplacedMsg;
+        this.resyncStreamPointer(m.scoopJid, m.messages);
         this.callbacks.onScoopMessagesReplaced?.(m.scoopJid, m.messages);
         break;
       }
@@ -687,6 +688,43 @@ export class OffscreenClient implements KernelClientFacade {
   onTerminalEvent(handler: (event: TerminalEventMsg) => void): () => void {
     this.terminalEventListeners.add(handler);
     return () => this.terminalEventListeners.delete(handler);
+  }
+
+  /**
+   * Re-sync the panel's streaming pointer with a canonical replay.
+   *
+   * A mid-turn rehydrate (thawing a frozen session, switching scoops, or
+   * an HMR/reload remount) replaces the thread via `scoop-messages-replaced`.
+   * The synthetic message id we had been streaming into is no longer in the
+   * rebuilt thread, so the next live `text_delta` would target a vanished
+   * bubble and `WcChatController` drops it silently — leaving a perpetual
+   * "working" spinner that never renders the reply (issue #959).
+   *
+   * Mirror the bridge's own rebuild logic: adopt the replay's streaming
+   * assistant message id so subsequent (incremental) deltas keep extending
+   * that exact bubble, otherwise forget the pointer so the next delta opens
+   * a fresh `message_start`. The streaming assistant is usually the tail, but
+   * a prompt or lick queued mid-turn is buffered AFTER it, so scan backward
+   * for the last streaming assistant rather than assuming it is the final
+   * entry.
+   */
+  private resyncStreamPointer(
+    scoopJid: string,
+    messages: ScoopMessagesReplacedMsg['messages']
+  ): void {
+    let streamingId: string | undefined;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === 'assistant' && m.isStreaming) {
+        streamingId = m.id;
+        break;
+      }
+    }
+    if (streamingId !== undefined) {
+      this.currentMessageId.set(scoopJid, streamingId);
+    } else {
+      this.currentMessageId.delete(scoopJid);
+    }
   }
 
   private handleAgentEvent(msg: AgentEventMsg): void {

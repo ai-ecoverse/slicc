@@ -135,7 +135,15 @@ export class WcChatController {
     for (const id of this.#els.keys()) this.#onMessageDisposed?.(id);
     // Runs of same-channel licks render as ONE collated card ("×2" pill).
     this.#messages = collateLickMessages(messages);
-    this.#currentStreamId = null;
+    // A canonical replay can land mid-turn (rehydrate after a scoop switch /
+    // frozen-session thaw / remount). When a message is still streaming, keep
+    // the stream machine pointed at that bubble so the resumed deltas extend
+    // it and `content_done` flushes the final chunk (issue #959). The
+    // streaming message is usually the tail, but a prompt/lick queued mid-turn
+    // is buffered AFTER it, so scan backward rather than assuming the tail.
+    const streamingTail = [...this.#messages].reverse().find((m) => m.isStreaming);
+    this.#currentStreamId = streamingTail?.id ?? null;
+    if (streamingTail) this.#turnAssistantId = streamingTail.id;
     this.#pendingDelta = '';
     this.#flushScheduled = false;
     this.#els.clear();
