@@ -7,6 +7,7 @@
 
 import { createLogger } from '../core/logger.js';
 import { handoffFingerprint } from '../net/handoff-link.js';
+import { getNextCronTime } from './cron.js';
 import * as db from './db.js';
 
 const log = createLogger('lick-manager');
@@ -312,7 +313,7 @@ export class LickManager {
     filter?: string
   ): Promise<CronTaskEntry> {
     // Validate cron expression
-    const nextRun = this.getNextCronTime(cron, new Date());
+    const nextRun = getNextCronTime(cron, new Date());
     if (!nextRun) {
       throw new Error('Invalid cron expression');
     }
@@ -398,7 +399,7 @@ export class LickManager {
           if (result === false) {
             log.debug('Cron task skipped by filter', { id: task.id, name: task.name });
             // Update next run time even if skipped
-            const next = this.getNextCronTime(task.cron, now);
+            const next = getNextCronTime(task.cron, now);
             task.nextRun = next?.toISOString() ?? null;
             task.lastRun = now.toISOString();
             await db.saveCronTask(task);
@@ -429,7 +430,7 @@ export class LickManager {
       this.dispatch(event);
 
       // Update times
-      const next = this.getNextCronTime(task.cron, now);
+      const next = getNextCronTime(task.cron, now);
       task.nextRun = next?.toISOString() ?? null;
       task.lastRun = now.toISOString();
       await db.saveCronTask(task);
@@ -471,52 +472,6 @@ export class LickManager {
         `Invalid filter function: ${err instanceof Error ? err.message : String(err)}`
       );
     }
-  }
-
-  /** Calculate next cron run time */
-  private getNextCronTime(cron: string, from: Date): Date | null {
-    const parts = cron.trim().split(/\s+/);
-    if (parts.length !== 5) return null;
-
-    const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
-    const next = new Date(from);
-    next.setSeconds(0);
-    next.setMilliseconds(0);
-    next.setMinutes(next.getMinutes() + 1);
-
-    const cronFieldMatches = (value: number, field: string): boolean => {
-      if (field === '*') return true;
-      if (field.includes(',')) {
-        return field.split(',').some((f) => cronFieldMatches(value, f.trim()));
-      }
-      if (field.includes('-')) {
-        const [start, end] = field.split('-').map((n) => parseInt(n, 10));
-        return value >= start && value <= end;
-      }
-      if (field.includes('/')) {
-        const [base, step] = field.split('/');
-        const stepNum = parseInt(step, 10);
-        if (base === '*') return value % stepNum === 0;
-        const baseNum = parseInt(base, 10);
-        return value >= baseNum && (value - baseNum) % stepNum === 0;
-      }
-      return parseInt(field, 10) === value;
-    };
-
-    // Search up to 1 year
-    for (let i = 0; i < 527040; i++) {
-      if (
-        cronFieldMatches(next.getMinutes(), minute) &&
-        cronFieldMatches(next.getHours(), hour) &&
-        cronFieldMatches(next.getDate(), dayOfMonth) &&
-        cronFieldMatches(next.getMonth() + 1, month) &&
-        cronFieldMatches(next.getDay(), dayOfWeek)
-      ) {
-        return next;
-      }
-      next.setMinutes(next.getMinutes() + 1);
-    }
-    return null;
   }
 }
 
