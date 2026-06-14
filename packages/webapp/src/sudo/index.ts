@@ -16,6 +16,14 @@ import { createExtensionSudoBroker } from './extension-broker.js';
 import { createHttpSudoBroker } from './http-broker.js';
 import type { SudoBroker, SudoRequest } from './types.js';
 
+export {
+  CONE_SUDO_TIMEOUT_MS,
+  type ConeApprovalRouter,
+  ConeRequestRegistry,
+  type ConeRequestRegistryOptions,
+  createConeApprovalBroker,
+  type PendingSudoRequest,
+} from './cone-broker.js';
 export { createExtensionSudoBroker } from './extension-broker.js';
 export { createHttpSudoBroker } from './http-broker.js';
 export {
