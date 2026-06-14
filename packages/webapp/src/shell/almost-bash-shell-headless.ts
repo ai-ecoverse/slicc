@@ -138,6 +138,16 @@ export interface ShellSudoConfig {
    * typing into the panel IS the approver for everything they type.
    */
   transparentGating?: boolean;
+  /**
+   * Default disposition for an unmatched (`no-match`) command. The cone uses
+   * `'allow'` (only explicit `Cmnd` rules gate); non-cone scoops use
+   * `'require-approval'` so any disallowed command escalates to the cone for
+   * approval instead of being silently filtered out of the registry. When the
+   * default is `'require-approval'`, registration of allow-listed commands is
+   * not pre-filtered — every command registers and the dispatch-time gate
+   * decides per call.
+   */
+  defaultDisposition?: import('./sudo/sudoers.js').DefaultDisposition;
 }
 
 // ---------------------------------------------------------------------------
@@ -247,12 +257,29 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
    */
   private pendingEnvWrites = new Map<string, string>();
 
+  /**
+   * When sudo is wired with `defaultDisposition: 'require-approval'` the
+   * policy is the single command-enforcement surface (the per-scoop sudoers
+   * already encodes `allowedCommands` as `NOPASSWD Cmnd` grants, and any
+   * unmatched command escalates to the cone). Pre-filtering registration
+   * here would turn a sudo-escalation into a hard "command not found", so
+   * skip the filter and let the dispatch-time gate decide per call.
+   */
+  private static buildAllowedCommandSet(options: HeadlessShellOptions): ReadonlySet<string> | null {
+    const sudoEscalatesCommands = options.sudo?.defaultDisposition === 'require-approval';
+    if (
+      sudoEscalatesCommands ||
+      !options.allowedCommands ||
+      options.allowedCommands.includes('*')
+    ) {
+      return null;
+    }
+    return new Set(options.allowedCommands);
+  }
+
   constructor(protected options: HeadlessShellOptions) {
     this.vfsAdapter = new VfsAdapter(options.fs);
-    this.allowedCommands =
-      options.allowedCommands && !options.allowedCommands.includes('*')
-        ? new Set(options.allowedCommands)
-        : null;
+    this.allowedCommands = AlmostBashShellHeadless.buildAllowedCommandSet(options);
     const initialCwd = options.cwd ?? '/';
     const initialEnv: Record<string, string> = {
       HOME: '/',
@@ -631,6 +658,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       persistGrant: async (pattern) => {
         this.pendingCommandGrants.push(pattern);
       },
+      defaultDisposition: sudo.defaultDisposition,
     });
     if (result.allowed) return null;
 
