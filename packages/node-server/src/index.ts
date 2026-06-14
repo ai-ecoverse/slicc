@@ -47,6 +47,8 @@ import { registerHostedBootstrapEndpoint } from './hosted-bootstrap.js';
 import { resolveCliBrowserLaunchUrl } from './launch-url.js';
 import { createHttpCdp, registerLeaderRestartEndpoint } from './leader-restart.js';
 import { buildLocalApiDescriptor, sliccLinksMiddleware } from './links-middleware.js';
+import { registerLickApiRoutes } from './routes/lick-api.js';
+import { createLickBridge } from './routes/lick-bridge.js';
 import { parseCliRuntimeFlags } from './runtime-flags.js';
 import { EnvSecretStore } from './secrets/env-secret-store.js';
 import { OauthSecretStore } from './secrets/oauth-secret-store.js';
@@ -692,94 +694,8 @@ async function main() {
   // ---------------------------------------------------------------------------
   // Lick system — WebSocket bridge for webhooks/crontasks (all logic in browser)
   // ---------------------------------------------------------------------------
-
-  // WebSocket for bidirectional communication with browser
-  const lickWss = new WebSocketServer({ noServer: true });
-  const lickClients = new Set<WebSocket>();
-  const pendingRequests = new Map<
-    string,
-    { resolve: (data: unknown) => void; reject: (err: Error) => void }
-  >();
-  let requestIdCounter = 0;
-
-  lickWss.on('connection', (ws) => {
-    lickClients.add(ws);
-    console.log('[licks] Browser client connected');
-
-    ws.on('message', (data) => {
-      try {
-        const msg = JSON.parse(data.toString()) as {
-          type: string;
-          requestId?: string;
-          [key: string]: unknown;
-        };
-
-        // Handle responses to pending requests
-        if (msg.type === 'response' && msg.requestId) {
-          const pending = pendingRequests.get(msg.requestId);
-          if (pending) {
-            pendingRequests.delete(msg.requestId);
-            if (msg.error) {
-              pending.reject(new Error(msg.error as string));
-            } else {
-              pending.resolve(msg.data);
-            }
-          }
-        }
-      } catch {
-        // Ignore invalid messages
-      }
-    });
-
-    ws.on('close', () => {
-      lickClients.delete(ws);
-      console.log('[licks] Browser client disconnected');
-    });
-  });
-
-  /** Send a request to the browser and wait for response */
-  function sendLickRequest(type: string, data: unknown, timeout = 5000): Promise<unknown> {
-    return new Promise((resolve, reject) => {
-      const requestId = `req_${++requestIdCounter}`;
-      const msg = JSON.stringify({ type, requestId, ...(data as object) });
-
-      // Find a connected client
-      const client = Array.from(lickClients).find((c) => c.readyState === WebSocket.OPEN);
-      if (!client) {
-        reject(new Error('No browser connected'));
-        return;
-      }
-
-      // Set up timeout
-      const timer = setTimeout(() => {
-        pendingRequests.delete(requestId);
-        reject(new Error('Request timeout'));
-      }, timeout);
-
-      pendingRequests.set(requestId, {
-        resolve: (data) => {
-          clearTimeout(timer);
-          resolve(data);
-        },
-        reject: (err) => {
-          clearTimeout(timer);
-          reject(err);
-        },
-      });
-
-      client.send(msg);
-    });
-  }
-
-  /** Broadcast an event to all connected browsers (no response expected) */
-  function broadcastLickEvent(event: unknown): void {
-    const msg = JSON.stringify(event);
-    for (const client of lickClients) {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(msg);
-      }
-    }
-  }
+  const lickBridge = createLickBridge();
+  const { lickWss, broadcastLickEvent } = lickBridge;
 
   // ---------------------------------------------------------------------------
   // OAuth callback — generic redirect target for OAuth providers (implicit + PKCE)
@@ -887,131 +803,9 @@ async function main() {
     });
   });
 
-  // Tray status API — forwards to browser to get leader tray join info
-  app.get('/api/tray-status', async (_req, res) => {
-    try {
-      const data = await sendLickRequest('tray_status', {});
-      res.json(data);
-    } catch (err) {
-      res.status(503).json({ error: err instanceof Error ? err.message : 'Browser not connected' });
-    }
-  });
-
-  // Webhook management API — forwards to browser
-  app.get('/api/webhooks', async (_req, res) => {
-    try {
-      const data = await sendLickRequest('list_webhooks', {});
-      res.json(data);
-    } catch (err) {
-      res.status(503).json({ error: err instanceof Error ? err.message : 'Browser not connected' });
-    }
-  });
-
-  app.post('/api/webhooks', async (req, res) => {
-    try {
-      const data = await sendLickRequest('create_webhook', req.body);
-      res.json(data);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      res.status(msg.includes('Invalid') ? 400 : 503).json({ error: msg });
-    }
-  });
-
-  app.delete('/api/webhooks/:id', async (req, res) => {
-    try {
-      const data = (await sendLickRequest('delete_webhook', { id: req.params.id })) as {
-        ok?: boolean;
-        error?: string;
-      };
-      if (data.error) {
-        res.status(404).json({ error: data.error });
-      } else {
-        res.json(data);
-      }
-    } catch (err) {
-      res.status(503).json({ error: err instanceof Error ? err.message : 'Browser not connected' });
-    }
-  });
-
-  // Webhook receiver — handle CORS preflight
-  app.options('/webhooks/:id', (_req, res) => {
-    res.set({
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
-    });
-    res.sendStatus(204);
-  });
-
-  // Webhook receiver — forwards POST to browser for processing
-  app.post('/webhooks/:id', async (req, res) => {
-    res.set({ 'Access-Control-Allow-Origin': '*' });
-    const { id } = req.params;
-
-    // Collect body
-    let body = req.body;
-    if (!body || Object.keys(body).length === 0) {
-      const chunks: Buffer[] = [];
-      for await (const chunk of req) {
-        chunks.push(Buffer.from(chunk));
-      }
-      const raw = Buffer.concat(chunks).toString('utf-8');
-      try {
-        body = JSON.parse(raw);
-      } catch {
-        body = { raw };
-      }
-    }
-
-    // Forward to browser for processing
-    broadcastLickEvent({
-      type: 'webhook_event',
-      webhookId: id,
-      timestamp: new Date().toISOString(),
-      headers: req.headers,
-      body,
-    });
-
-    res.json({ ok: true, received: true });
-  });
-
-  // Cron task management API — forwards to browser
-  app.get('/api/crontasks', async (_req, res) => {
-    try {
-      const data = await sendLickRequest('list_crontasks', {});
-      res.json(data);
-    } catch (err) {
-      res.status(503).json({ error: err instanceof Error ? err.message : 'Browser not connected' });
-    }
-  });
-
-  app.post('/api/crontasks', async (req, res) => {
-    try {
-      const data = await sendLickRequest('create_crontask', req.body);
-      res.json(data);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      res
-        .status(msg.includes('Invalid') || msg.includes('required') ? 400 : 503)
-        .json({ error: msg });
-    }
-  });
-
-  app.delete('/api/crontasks/:id', async (req, res) => {
-    try {
-      const data = (await sendLickRequest('delete_crontask', { id: req.params.id })) as {
-        ok?: boolean;
-        error?: string;
-      };
-      if (data.error) {
-        res.status(404).json({ error: data.error });
-      } else {
-        res.json(data);
-      }
-    } catch (err) {
-      res.status(503).json({ error: err instanceof Error ? err.message : 'Browser not connected' });
-    }
-  });
+  // Tray status, webhook management + receiver, and cron task routes — all
+  // forward to the browser over the lick bridge.
+  registerLickApiRoutes(app, lickBridge);
 
   // Profile-independent handoff injection.
   //
