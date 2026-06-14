@@ -95,9 +95,22 @@ jobs:
             node packages/dev-tools/patch-reconcile/reconcile-context.mjs >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Install dependencies
+      # Install WITHOUT running scripts. The root postinstall runs patch-package,
+      # which (with --error-on-fail, the CI default) exits non-zero when the
+      # orphaned patch no longer applies — i.e. exactly the case this workflow
+      # repairs — and would fail `npm ci` before Claude could fix it. So skip
+      # scripts, rebuild the workspace prereqs the postinstall would have built,
+      # and let Claude (re)apply patches as part of reconciliation.
+      - name: Install dependencies (no scripts)
         if: steps.detect.outputs.orphans == 'true'
-        run: npm ci
+        run: npm ci --ignore-scripts
+
+      - name: Build workspace prerequisites
+        if: steps.detect.outputs.orphans == 'true'
+        run: |
+          npm run build -w @slicc/shared-ts
+          npm run build -w @slicc/cloud-core
+          npm run build -w @slicc/webcomponents
 
       - name: Configure git identity
         if: steps.detect.outputs.orphans == 'true'
@@ -128,6 +141,15 @@ jobs:
             A patch in patches/ is version-pinned (patches/<pkg>+<version>.patch).
             This PR bumped a dependency past its patched version, so the patch is
             ORPHANED and the fix it carried no longer applies.
+
+            ENVIRONMENT — IMPORTANT: dependencies were installed with
+            `npm ci --ignore-scripts`, so the root postinstall did NOT run and
+            NO patches are currently applied to node_modules (this avoids the
+            orphaned patch breaking install). The workspace packages
+            (@slicc/shared-ts, @slicc/cloud-core, @slicc/webcomponents) are
+            already built. You own (re)applying patches: after the patches/ tree
+            is valid again, run `npx patch-package` to apply them all before you
+            verify.
 
             STEP 1 — See exactly what needs reconciling:
               Run `node packages/dev-tools/patch-reconcile/reconcile-context.mjs`.
@@ -162,11 +184,13 @@ jobs:
               - Set patches/patches.json["<pkg>"].patchedVersion to NEW.
 
             STEP 4 — Verify:
+              - Apply the now-valid patches to node_modules: `npx patch-package`
+                (it must succeed cleanly — no orphaned/failed patches).
               - Run the package's verify command (from reconcile-context). If it
                 needs a browser (e.g. `test:integration`), run
                 `npx playwright install chromium` first.
               - Run `npm run lint:patches` — it MUST pass.
-              - Fix and re-run until both are green.
+              - Fix and re-run until all are green.
 
             STEP 5 — Commit, push, comment:
               - Stage only what you changed (patches/, patches.json, docs).
