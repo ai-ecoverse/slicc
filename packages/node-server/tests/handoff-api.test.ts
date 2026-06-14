@@ -1,90 +1,25 @@
 /**
  * Validation contract for `POST /api/handoff` after the x-slicc → Link cutover.
  *
- * The handler is wired inline inside index.ts so we exercise it via a small
- * standalone Express app that mirrors its shape. Keeps the test focused on
- * the validation contract — the broadcast side is exercised via an injected
- * collector that records each event the handler would push to the lick
+ * Exercises the real route registrar from src/routes/handoff.ts via a small
+ * standalone Express app. The broadcast side is captured through an injected
+ * collector that records each navigate event the handler pushes to the lick
  * WebSocket.
  */
 
-import type { Request, Response } from 'express';
 import express from 'express';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { type NavigateEvent, registerHandoffRoute } from '../src/routes/handoff.js';
 
-interface RecordedEvent {
-  type: 'navigate_event';
-  verb: 'handoff' | 'upskill';
-  target: string;
-  instruction?: string;
-  url: string;
-  title?: string;
-  branch?: string;
-  path?: string;
-  timestamp: string;
-}
+type RecordedEvent = NavigateEvent;
 
 function makeApp(events: RecordedEvent[]) {
   const app = express();
   app.use(express.json());
-  app.post('/api/handoff', (req: Request, res: Response) => {
-    const payload = req.body as {
-      verb?: unknown;
-      target?: unknown;
-      instruction?: unknown;
-      url?: unknown;
-      title?: unknown;
-      branch?: unknown;
-      path?: unknown;
-      sliccHeader?: unknown;
-    };
-    if (typeof payload?.sliccHeader === 'string') {
-      res.status(400).json({
-        error:
-          'The legacy `sliccHeader` payload was removed; post `{ verb, target, instruction? }` instead. See docs/slicc-handoff.md.',
-      });
-      return;
-    }
-    if (payload?.verb !== 'handoff' && payload?.verb !== 'upskill') {
-      res.status(400).json({ error: 'verb must be "handoff" or "upskill"' });
-      return;
-    }
-    if (typeof payload.target !== 'string' || payload.target.length === 0) {
-      res.status(400).json({ error: 'target is required (non-empty string)' });
-      return;
-    }
-    if (payload.instruction != null && typeof payload.instruction !== 'string') {
-      res.status(400).json({ error: 'instruction must be a string when provided' });
-      return;
-    }
-    if (payload.branch != null && typeof payload.branch !== 'string') {
-      res.status(400).json({ error: 'branch must be a string when provided' });
-      return;
-    }
-    if (payload.path != null && typeof payload.path !== 'string') {
-      res.status(400).json({ error: 'path must be a string when provided' });
-      return;
-    }
-    if (payload.verb === 'handoff' && (payload.branch != null || payload.path != null)) {
-      res.status(400).json({ error: 'branch and path are only valid with verb="upskill"' });
-      return;
-    }
-    events.push({
-      type: 'navigate_event',
-      verb: payload.verb,
-      target: payload.target,
-      instruction: typeof payload.instruction === 'string' ? payload.instruction : undefined,
-      url:
-        typeof payload.url === 'string' && payload.url.length > 0 ? payload.url : 'about:handoff',
-      title: typeof payload.title === 'string' ? payload.title : undefined,
-      branch:
-        typeof payload.branch === 'string' && payload.branch.length > 0
-          ? payload.branch
-          : undefined,
-      path: typeof payload.path === 'string' && payload.path.length > 0 ? payload.path : undefined,
-      timestamp: new Date().toISOString(),
-    });
-    res.json({ ok: true });
+  registerHandoffRoute(app, {
+    broadcastLickEvent: (event) => {
+      events.push(event as RecordedEvent);
+    },
   });
   return app;
 }

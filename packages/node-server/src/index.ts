@@ -1,16 +1,13 @@
 #!/usr/bin/env node
 import { promises as fsPromises } from 'node:fs';
 import { createSubstrate } from '@slicc/cloud-core';
-import { previewSecret } from '@slicc/shared-ts';
 import { type ChildProcess, spawn } from 'child_process';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { existsSync, readFileSync } from 'fs';
-import { createServer } from 'http';
+import { createServer, type Server as HttpServer } from 'http';
 import { createServer as createNetServer } from 'net';
 import { homedir } from 'os';
-import { basename, dirname, join, resolve, sep } from 'path';
-import { Readable, Transform } from 'stream';
-import { StringDecoder } from 'string_decoder';
+import { basename, dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocket, WebSocketServer } from 'ws';
 import { applyCdpUnmask } from './cdp-proxy/cdp-unmask.js';
@@ -41,20 +38,25 @@ import {
   launchElectronApp,
 } from './electron-controller.js';
 import { getElectronAppPorts } from './electron-runtime.js';
-import { FETCH_PROXY_SKIP_HEADERS } from './fetch-proxy-headers.js';
 import { FileLogger } from './file-logger.js';
 import { registerHostedBootstrapEndpoint } from './hosted-bootstrap.js';
 import { resolveCliBrowserLaunchUrl } from './launch-url.js';
 import { createHttpCdp, registerLeaderRestartEndpoint } from './leader-restart.js';
 import { buildLocalApiDescriptor, sliccLinksMiddleware } from './links-middleware.js';
+import { registerFetchProxyRoute } from './routes/fetch-proxy.js';
+import { registerHandoffRoute } from './routes/handoff.js';
+import { registerLickApiRoutes } from './routes/lick-api.js';
+import { createLickBridge } from './routes/lick-bridge.js';
+import { registerOAuthCallbackRoutes } from './routes/oauth-callback.js';
+import { registerSecretRoutes } from './routes/secrets.js';
 import { parseCliRuntimeFlags } from './runtime-flags.js';
 import { EnvSecretStore } from './secrets/env-secret-store.js';
 import { OauthSecretStore } from './secrets/oauth-secret-store.js';
 import { SecretProxyManager } from './secrets/proxy-manager.js';
 import { readOrCreateSessionId } from './secrets/session-id-file.js';
-import { handleDaSignAndForward, handleS3SignAndForward } from './secrets/sign-and-forward.js';
 import { registerSecretsReloadEndpoint } from './secrets-reload-endpoint.js';
 import { registerSudoApproveEndpoint } from './sudo/endpoint.js';
+import { attachUiServing } from './ui-serving.js';
 
 const Dirname = fileURLToPath(new URL('.', import.meta.url));
 const PROJECT_ROOT = resolve(Dirname, '..', '..');
@@ -372,305 +374,745 @@ async function attachConsoleForwarder(cdpPort: number, pageUrl: string): Promise
 const PREFERRED_SERVE_PORT = parseInt(process.env['PORT'] ?? '5710', 10);
 const PREFERRED_CDP_PORT = RUNTIME_FLAGS.cdpPort;
 
-async function main() {
-  // Resolve available ports before anything else — serve port must be known
-  // before Chrome launches (the launch URL contains it).
-  let SERVE_PORT: number;
-  let CDP_PORT: number;
-  let REQUESTED_CDP_PORT: number;
-  let usingDynamicElectronPorts = false;
+/** Shared, mutable lifecycle state threaded through the boot + shutdown flow. */
+interface ServerState {
+  servePort: number;
+  cdpPort: number;
+  /** CDP port requested at launch (0 = let Chrome pick); distinct from the resolved cdpPort. */
+  requestedCdpPort: number;
+  serveOrigin: string;
+  launchedBrowserProcess: ChildProcess | null;
+  launchedBrowserLabel: string;
+  overlayInjector: ElectronOverlayInjector | null;
+  shuttingDown: boolean;
+  discoveredTrayJoinUrl: string | null;
+  // CDP WebSocket proxy state (one Chrome connection, swapped client).
+  cdpUrl: string | null;
+  chromeWs: WebSocket | null;
+  activeClientWs: WebSocket | null;
+  messageBuffer: unknown[] | null;
+}
 
+function createServerState(): ServerState {
+  return {
+    servePort: 0,
+    cdpPort: 0,
+    requestedCdpPort: 0,
+    serveOrigin: '',
+    launchedBrowserProcess: null,
+    launchedBrowserLabel: 'Browser',
+    overlayInjector: null,
+    shuttingDown: false,
+    discoveredTrayJoinUrl: RUNTIME_FLAGS.joinUrl ?? null,
+    cdpUrl: null,
+    chromeWs: null,
+    activeClientWs: null,
+    messageBuffer: null,
+  };
+}
+
+/**
+ * Resolve the serve + CDP ports before anything else — the serve port must be
+ * known before Chrome launches (the launch URL embeds it). Electron apps may
+ * use a hash-derived dynamic port pair; otherwise we probe the preferred serve
+ * port and let Chrome pick its own CDP port (requestedCdpPort=0).
+ */
+async function resolvePorts(state: ServerState): Promise<void> {
+  let usingDynamicElectronPorts = false;
   if (ELECTRON_MODE && ELECTRON_APP && !RUNTIME_FLAGS.explicitCdpPort) {
-    // Dynamic port allocation for Electron apps (hash-based with fallback)
     const ports = await getElectronAppPorts(ELECTRON_APP);
-    CDP_PORT = ports.cdpPort;
-    SERVE_PORT = ports.servePort;
-    REQUESTED_CDP_PORT = CDP_PORT;
+    state.cdpPort = ports.cdpPort;
+    state.servePort = ports.servePort;
+    state.requestedCdpPort = ports.cdpPort;
     usingDynamicElectronPorts = true;
   } else {
-    SERVE_PORT = await findAvailablePort(PREFERRED_SERVE_PORT);
-    // For Chrome CDP, we pass port 0 to let Chrome pick any available port,
-    // then parse the actual port from its stderr. This avoids race conditions
-    // where Node's port probe succeeds but Chrome still can't bind the port.
-    // Electron mode keeps the preferred port (external CDP, not launched by us).
-    REQUESTED_CDP_PORT = ELECTRON_MODE ? PREFERRED_CDP_PORT : 0;
-    CDP_PORT = ELECTRON_MODE ? PREFERRED_CDP_PORT : 0;
+    state.servePort = await findAvailablePort(PREFERRED_SERVE_PORT);
+    // Pass 0 for Chrome CDP so Chrome picks an available port (parsed from its
+    // stderr) — avoids a race where Node's probe succeeds but Chrome can't bind.
+    // Electron keeps the preferred port (external CDP, not launched by us).
+    state.requestedCdpPort = ELECTRON_MODE ? PREFERRED_CDP_PORT : 0;
+    state.cdpPort = ELECTRON_MODE ? PREFERRED_CDP_PORT : 0;
   }
-
-  const SERVE_ORIGIN = `http://localhost:${SERVE_PORT}`;
+  state.serveOrigin = `http://localhost:${state.servePort}`;
 
   if (usingDynamicElectronPorts) {
-    console.log(`Dynamic port allocation for Electron app: CDP=${CDP_PORT}, serve=${SERVE_PORT}`);
-  } else if (SERVE_PORT !== PREFERRED_SERVE_PORT) {
-    console.log(`Port ${PREFERRED_SERVE_PORT} in use, serving on port ${SERVE_PORT}`);
+    console.log(
+      `Dynamic port allocation for Electron app: CDP=${state.cdpPort}, serve=${state.servePort}`
+    );
+  } else if (state.servePort !== PREFERRED_SERVE_PORT) {
+    console.log(`Port ${PREFERRED_SERVE_PORT} in use, serving on port ${state.servePort}`);
   }
-
-  if (DEV_MODE) {
-    console.log('Starting in dev mode (Vite HMR enabled)');
-  }
+  if (DEV_MODE) console.log('Starting in dev mode (Vite HMR enabled)');
   if (SERVE_ONLY) {
-    console.log(`Starting in serve-only mode (reusing external CDP on port ${CDP_PORT})`);
+    console.log(`Starting in serve-only mode (reusing external CDP on port ${state.cdpPort})`);
   }
-  if (ELECTRON_MODE) {
-    console.log('Starting in Electron mode');
-  }
+  if (ELECTRON_MODE) console.log('Starting in Electron mode');
+}
 
-  let launchedBrowserProcess: ChildProcess | null = null;
-  let launchedBrowserLabel = 'Browser';
-  let overlayInjector: ElectronOverlayInjector | null = null;
-  let shuttingDown = false;
-  // Tray join URL discovered from an existing leader on the preferred port.
-  // Populated in Electron mode when auto-discovering the leader's tray.
-  let discoveredTrayJoinUrl: string | null = RUNTIME_FLAGS.joinUrl ?? null;
-
-  // 1. Launch Chrome unless an external CDP provider is already running.
+/** Launch Chrome / Electron unless an external CDP provider is already running. */
+async function launchBrowser(state: ServerState): Promise<void> {
   if (ELECTRON_MODE && !SERVE_ONLY) {
-    if (!ELECTRON_APP) {
-      console.error(
-        'Electron mode requires an app path. Pass --electron <path> or --electron-app=<path>.'
-      );
-      process.exit(1);
-    }
-
-    try {
-      const { child, displayName } = await launchElectronApp({
-        appPath: ELECTRON_APP,
-        cdpPort: CDP_PORT,
-        kill: KILL_EXISTING_ELECTRON_APP,
-      });
-
-      launchedBrowserProcess = child;
-      launchedBrowserLabel = displayName;
-      pipeChildOutput(child, 'electron-app');
-
-      // Track when app exits - quick exits before CDP connects indicate a problem
-      let cdpConnected = false;
-      let exitCode: number | null = null;
-      let exitResolve: (() => void) | null = null;
-      const exitPromise = new Promise<void>((resolve) => {
-        exitResolve = resolve;
-      });
-
-      child.on('exit', (code) => {
-        exitCode = code;
-        exitResolve?.();
-        if (shuttingDown) return;
-        if (cdpConnected) {
-          // Normal exit after we connected
-          console.log(`${displayName} exited with code ${code}`);
-          process.exit(0);
-        }
-        // If CDP not yet connected, don't exit - let waitForCDP handle it
-      });
-
-      console.log(`Waiting for ${displayName} CDP on port ${CDP_PORT}...`);
-      try {
-        // Race between CDP connection and app exit
-        await Promise.race([
-          waitForCDP(CDP_PORT, 40, 500).then(() => {
-            cdpConnected = true;
-          }),
-          exitPromise.then(() => {
-            if (!cdpConnected) {
-              throw new Error('app-exited');
-            }
-          }),
-        ]);
-      } catch (_err) {
-        // Check if app exited quickly (likely due to disabled remote debugging fuse)
-        if (exitCode !== null) {
-          console.error(
-            `\n${displayName} exited with code ${exitCode} before remote debugging was available.`
-          );
-          console.error(
-            'This usually means the app has disabled remote debugging (EnableNodeCliInspectArguments fuse).'
-          );
-          console.error(
-            'Some Electron apps disable this for security. Check if there is a developer/debug build available.\n'
-          );
-          process.exit(1);
-        }
-        throw new Error(`Could not connect to ${displayName} CDP on port ${CDP_PORT}`);
-      }
-      console.log(`Connected to ${displayName} on CDP port ${CDP_PORT}`);
-
-      // Auto-discover leader's tray join URL when another instance runs on the preferred port.
-      // The leader may still be creating its tray session, so retry a few times.
-      if (!discoveredTrayJoinUrl && SERVE_PORT !== PREFERRED_SERVE_PORT) {
-        const leaderOrigin = `http://localhost:${PREFERRED_SERVE_PORT}`;
-        for (let attempt = 0; attempt < 5 && !discoveredTrayJoinUrl; attempt++) {
-          try {
-            const resp = await fetch(`${leaderOrigin}/api/tray-status`, {
-              signal: AbortSignal.timeout(3000),
-            });
-            if (resp.ok) {
-              const status = (await resp.json()) as { state?: string; joinUrl?: string | null };
-              if (status.joinUrl) {
-                discoveredTrayJoinUrl = status.joinUrl;
-                console.log(`Discovered leader tray join URL: ${status.joinUrl}`);
-              } else if (status.state === 'connecting') {
-                // Leader is still setting up — wait and retry
-                await new Promise((r) => setTimeout(r, 2000));
-              } else {
-                console.log(
-                  `Leader on port ${PREFERRED_SERVE_PORT} has no active tray (state: ${status.state ?? 'unknown'})`
-                );
-                break;
-              }
-            } else {
-              break;
-            }
-          } catch {
-            // Leader not reachable or no tray status endpoint — continue without tray
-            break;
-          }
-        }
-      }
-    } catch (error: unknown) {
-      if (error instanceof ElectronAppAlreadyRunningError) {
-        console.error(error.message);
-        process.exit(1);
-      }
-      throw error;
-    }
+    await launchElectronTarget(state);
   } else if (!SERVE_ONLY) {
-    let browserLaunchUrl = resolveCliBrowserLaunchUrl({
-      serveOrigin: SERVE_ORIGIN,
-      lead: RUNTIME_FLAGS.lead,
-      leadWorkerBaseUrl: RUNTIME_FLAGS.leadWorkerBaseUrl,
-      envWorkerBaseUrl: process.env['WORKER_BASE_URL'] ?? null,
-      join: RUNTIME_FLAGS.join,
-      joinUrl: RUNTIME_FLAGS.joinUrl,
-    });
-    // Append runtime parameter for hosted mode
-    if (RUNTIME_FLAGS.hosted) {
-      const sep = browserLaunchUrl.includes('?') ? '&' : '?';
-      browserLaunchUrl += `${sep}runtime=hosted-leader`;
-    }
-    // Append optional prompt parameter
-    if (RUNTIME_FLAGS.prompt) {
-      const sep = browserLaunchUrl.includes('?') ? '&' : '?';
-      browserLaunchUrl += `${sep}prompt=${encodeURIComponent(RUNTIME_FLAGS.prompt)}`;
-    }
-    if (RUNTIME_FLAGS.join) {
-      console.log(`Join launch URL: ${browserLaunchUrl}`);
-    } else if (RUNTIME_FLAGS.lead) {
-      console.log(`Lead launch URL: ${browserLaunchUrl}`);
-    }
+    await launchChromeTarget(state);
+  }
+}
 
-    const chromeProfile = (() => {
-      try {
-        const resolved = resolveChromeLaunchProfile({
-          projectRoot: PROJECT_ROOT,
-          profile: RUNTIME_FLAGS.profile,
-          servePort: SERVE_PORT,
-        });
-        // Override user data dir in hosted mode to use persistent profile
-        if (RUNTIME_FLAGS.hosted) {
-          resolved.userDataDir = process.env['CHROME_USER_DATA_DIR'] ?? '/data/profile';
-        }
-        return resolved;
-      } catch (error: unknown) {
-        console.error(error instanceof Error ? error.message : String(error));
-        process.exit(1);
+/**
+ * Poll an existing leader on the preferred port for its tray join URL. The
+ * leader may still be minting its tray session, so retry a few times.
+ */
+async function discoverLeaderTrayJoinUrl(): Promise<string | null> {
+  const leaderOrigin = `http://localhost:${PREFERRED_SERVE_PORT}`;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const resp = await fetch(`${leaderOrigin}/api/tray-status`, {
+        signal: AbortSignal.timeout(3000),
+      });
+      if (!resp.ok) break;
+      const status = (await resp.json()) as { state?: string; joinUrl?: string | null };
+      if (status.joinUrl) {
+        console.log(`Discovered leader tray join URL: ${status.joinUrl}`);
+        return status.joinUrl;
       }
-    })();
-
-    const chromePath = findChromeExecutable({
-      executablePreference: !DEV_MODE && !chromeProfile.id ? 'installed' : 'chrome-for-testing',
-    });
-    if (!chromePath) {
-      console.error('Could not find Chrome/Chromium. Please install Chrome or set CHROME_PATH.');
-      process.exit(1);
-    }
-    console.log(`Found Chrome: ${chromePath}`);
-
-    if (chromeProfile.id) {
-      await ensureQaProfileScaffold(PROJECT_ROOT);
-    } else if (!RUNTIME_FLAGS.hosted) {
-      const profileDirName = basename(chromeProfile.userDataDir);
-      await migrateLegacyDefaultChromeProfile(
-        chromeProfile.userDataDir,
-        legacyChromeCandidates(profileDirName)
-      );
-    }
-
-    if (chromeProfile.extensionPath && !existsSync(chromeProfile.extensionPath)) {
-      console.error(
-        `Extension profile requires ${chromeProfile.extensionPath}. Run \`npm run build -w @slicc/chrome-extension\` first.`
-      );
-      process.exit(1);
-    }
-
-    if (chromeProfile.id) {
-      console.log(`Using QA Chrome profile: ${chromeProfile.id}`);
-      console.log(`Profile directory: ${chromeProfile.userDataDir}`);
-      if (chromeProfile.extensionPath) {
-        console.log(`Auto-loading unpacked extension from ${chromeProfile.extensionPath}`);
+      if (status.state === 'connecting') {
+        // Leader is still setting up — wait and retry.
+        await new Promise((r) => setTimeout(r, 2000));
+      } else {
+        console.log(
+          `Leader on port ${PREFERRED_SERVE_PORT} has no active tray (state: ${status.state ?? 'unknown'})`
+        );
+        break;
       }
+    } catch {
+      // Leader not reachable or no tray status endpoint — continue without tray.
+      break;
     }
+  }
+  return null;
+}
 
-    const chromeArgs = buildChromeLaunchArgs({
-      cdpPort: REQUESTED_CDP_PORT,
-      launchUrl: browserLaunchUrl,
-      profile: chromeProfile,
-      hosted: RUNTIME_FLAGS.hosted,
-    });
+/**
+ * Race the Electron app's CDP becoming available against the app exiting. A
+ * quick exit before CDP connects usually means remote debugging is fused off.
+ */
+async function waitForElectronCdp(state: ServerState, displayName: string): Promise<void> {
+  const child = state.launchedBrowserProcess!;
+  let cdpConnected = false;
+  let exitCode: number | null = null;
+  let exitResolve: (() => void) | null = null;
+  const exitPromise = new Promise<void>((resolve) => {
+    exitResolve = resolve;
+  });
 
-    // Profile directories are reused across runs (both the dev
-    // `/tmp/browser-coding-agent-chrome` profile and the persistent
-    // `.qa/chrome/<profile>` QA profiles). Chrome never proactively
-    // clears `DevToolsActivePort` on shutdown, so a stale file from a
-    // previous crash/SIGKILL would let our active-port-file poller win
-    // the race instantly with the wrong port. Clear it before spawn.
-    await clearStaleDevToolsActivePort(chromeProfile.userDataDir);
-
-    // On macOS, route through `/usr/bin/open` so LaunchServices owns the
-    // new Chrome process. Without this hop the terminal that started
-    // `node` stays in Chrome's TCC responsibility chain, which silently
-    // breaks `getUserMedia()` (camera/mic in Google Meet, Zoom, etc.)
-    // whenever the terminal hasn't already been granted camera/microphone
-    // access. With LaunchServices in the loop, Chrome becomes its own
-    // TCC responsible process and the user's
-    // `/Applications/Google Chrome.app` privacy grant applies as expected.
-    const spawnPlan = planChromeSpawn({ executablePath: chromePath, chromeArgs });
-
-    launchedBrowserProcess = spawn(spawnPlan.command, spawnPlan.args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: false,
-      env: { ...process.env, GOOGLE_CRASHPAD_DISABLE: '1' },
-    });
-    launchedBrowserLabel = chromeProfile.displayName;
-
-    // Use the stderr-vs-DevToolsActivePort race so we work in both
-    // direct-exec mode (Linux/Windows, or bare-binary fallbacks where
-    // stderr carries Chrome's banner) and LaunchServices mode (macOS,
-    // where stderr belongs to `open` and only the active-port file
-    // surfaces the real CDP port).
-    const actualCdpPort = await waitForCdpPort(launchedBrowserProcess, {
-      userDataDir: chromeProfile.userDataDir,
-    });
-    CDP_PORT = actualCdpPort;
-    console.log(`Chrome CDP listening on port ${CDP_PORT}`);
-
-    pipeChildOutput(launchedBrowserProcess, 'chrome');
-
-    launchedBrowserProcess.on('exit', (code) => {
-      if (shuttingDown) return;
-      console.log(`Chrome exited with code ${code}`);
+  child.on('exit', (code) => {
+    exitCode = code;
+    exitResolve?.();
+    if (state.shuttingDown) return;
+    if (cdpConnected) {
+      console.log(`${displayName} exited with code ${code}`);
       process.exit(0);
-    });
+    }
+    // CDP not yet connected — let waitForCDP handle it.
+  });
+
+  console.log(`Waiting for ${displayName} CDP on port ${state.cdpPort}...`);
+  try {
+    await Promise.race([
+      waitForCDP(state.cdpPort, 40, 500).then(() => {
+        cdpConnected = true;
+      }),
+      exitPromise.then(() => {
+        if (!cdpConnected) throw new Error('app-exited');
+      }),
+    ]);
+  } catch (_err) {
+    if (exitCode !== null) {
+      console.error(
+        `\n${displayName} exited with code ${exitCode} before remote debugging was available.`
+      );
+      console.error(
+        'This usually means the app has disabled remote debugging (EnableNodeCliInspectArguments fuse).'
+      );
+      console.error(
+        'Some Electron apps disable this for security. Check if there is a developer/debug build available.\n'
+      );
+      process.exit(1);
+    }
+    throw new Error(`Could not connect to ${displayName} CDP on port ${state.cdpPort}`);
+  }
+}
+
+async function launchElectronTarget(state: ServerState): Promise<void> {
+  if (!ELECTRON_APP) {
+    console.error(
+      'Electron mode requires an app path. Pass --electron <path> or --electron-app=<path>.'
+    );
+    process.exit(1);
   }
 
-  // 3. Set up express app with request logging
+  try {
+    const { child, displayName } = await launchElectronApp({
+      appPath: ELECTRON_APP,
+      cdpPort: state.cdpPort,
+      kill: KILL_EXISTING_ELECTRON_APP,
+    });
+
+    state.launchedBrowserProcess = child;
+    state.launchedBrowserLabel = displayName;
+    pipeChildOutput(child, 'electron-app');
+
+    await waitForElectronCdp(state, displayName);
+    console.log(`Connected to ${displayName} on CDP port ${state.cdpPort}`);
+
+    // Auto-discover the leader's tray join URL when another instance is on the preferred port.
+    if (!state.discoveredTrayJoinUrl && state.servePort !== PREFERRED_SERVE_PORT) {
+      state.discoveredTrayJoinUrl = await discoverLeaderTrayJoinUrl();
+    }
+  } catch (error: unknown) {
+    if (error instanceof ElectronAppAlreadyRunningError) {
+      console.error(error.message);
+      process.exit(1);
+    }
+    throw error;
+  }
+}
+
+/** Build the Chrome launch URL, appending hosted-runtime + prompt query params. */
+function buildBrowserLaunchUrl(state: ServerState): string {
+  let url = resolveCliBrowserLaunchUrl({
+    serveOrigin: state.serveOrigin,
+    lead: RUNTIME_FLAGS.lead,
+    leadWorkerBaseUrl: RUNTIME_FLAGS.leadWorkerBaseUrl,
+    envWorkerBaseUrl: process.env['WORKER_BASE_URL'] ?? null,
+    join: RUNTIME_FLAGS.join,
+    joinUrl: RUNTIME_FLAGS.joinUrl,
+  });
+  if (RUNTIME_FLAGS.hosted) {
+    url += `${url.includes('?') ? '&' : '?'}runtime=hosted-leader`;
+  }
+  if (RUNTIME_FLAGS.prompt) {
+    url += `${url.includes('?') ? '&' : '?'}prompt=${encodeURIComponent(RUNTIME_FLAGS.prompt)}`;
+  }
+  if (RUNTIME_FLAGS.join) {
+    console.log(`Join launch URL: ${url}`);
+  } else if (RUNTIME_FLAGS.lead) {
+    console.log(`Lead launch URL: ${url}`);
+  }
+  return url;
+}
+
+function resolveChromeProfileOrExit(
+  state: ServerState
+): ReturnType<typeof resolveChromeLaunchProfile> {
+  try {
+    const resolved = resolveChromeLaunchProfile({
+      projectRoot: PROJECT_ROOT,
+      profile: RUNTIME_FLAGS.profile,
+      servePort: state.servePort,
+    });
+    // Override the user data dir in hosted mode to use a persistent profile.
+    if (RUNTIME_FLAGS.hosted) {
+      resolved.userDataDir = process.env['CHROME_USER_DATA_DIR'] ?? '/data/profile';
+    }
+    return resolved;
+  } catch (error: unknown) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+}
+
+async function launchChromeTarget(state: ServerState): Promise<void> {
+  const browserLaunchUrl = buildBrowserLaunchUrl(state);
+  const chromeProfile = resolveChromeProfileOrExit(state);
+
+  const chromePath = findChromeExecutable({
+    executablePreference: !DEV_MODE && !chromeProfile.id ? 'installed' : 'chrome-for-testing',
+  });
+  if (!chromePath) {
+    console.error('Could not find Chrome/Chromium. Please install Chrome or set CHROME_PATH.');
+    process.exit(1);
+  }
+  console.log(`Found Chrome: ${chromePath}`);
+
+  if (chromeProfile.id) {
+    await ensureQaProfileScaffold(PROJECT_ROOT);
+  } else if (!RUNTIME_FLAGS.hosted) {
+    const profileDirName = basename(chromeProfile.userDataDir);
+    await migrateLegacyDefaultChromeProfile(
+      chromeProfile.userDataDir,
+      legacyChromeCandidates(profileDirName)
+    );
+  }
+
+  if (chromeProfile.extensionPath && !existsSync(chromeProfile.extensionPath)) {
+    console.error(
+      `Extension profile requires ${chromeProfile.extensionPath}. Run \`npm run build -w @slicc/chrome-extension\` first.`
+    );
+    process.exit(1);
+  }
+
+  if (chromeProfile.id) {
+    console.log(`Using QA Chrome profile: ${chromeProfile.id}`);
+    console.log(`Profile directory: ${chromeProfile.userDataDir}`);
+    if (chromeProfile.extensionPath) {
+      console.log(`Auto-loading unpacked extension from ${chromeProfile.extensionPath}`);
+    }
+  }
+
+  const chromeArgs = buildChromeLaunchArgs({
+    cdpPort: state.requestedCdpPort,
+    launchUrl: browserLaunchUrl,
+    profile: chromeProfile,
+    hosted: RUNTIME_FLAGS.hosted,
+  });
+
+  // Chrome never clears DevToolsActivePort on shutdown, so a stale file from a
+  // prior crash/SIGKILL would let our active-port poller win the race with the
+  // wrong port. Clear it before spawn.
+  await clearStaleDevToolsActivePort(chromeProfile.userDataDir);
+
+  // On macOS, route through `/usr/bin/open` so LaunchServices owns the new Chrome
+  // process — otherwise the launching terminal stays in Chrome's TCC responsibility
+  // chain and silently breaks getUserMedia() camera/mic grants.
+  const spawnPlan = planChromeSpawn({ executablePath: chromePath, chromeArgs });
+
+  state.launchedBrowserProcess = spawn(spawnPlan.command, spawnPlan.args, {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: false,
+    env: { ...process.env, GOOGLE_CRASHPAD_DISABLE: '1' },
+  });
+  state.launchedBrowserLabel = chromeProfile.displayName;
+
+  // Use the stderr-vs-DevToolsActivePort race so this works in both direct-exec
+  // mode (Linux/Windows stderr banner) and LaunchServices mode (macOS active-port file).
+  state.cdpPort = await waitForCdpPort(state.launchedBrowserProcess, {
+    userDataDir: chromeProfile.userDataDir,
+  });
+  console.log(`Chrome CDP listening on port ${state.cdpPort}`);
+
+  pipeChildOutput(state.launchedBrowserProcess, 'chrome');
+
+  state.launchedBrowserProcess.on('exit', (code) => {
+    if (state.shuttingDown) return;
+    console.log(`Chrome exited with code ${code}`);
+    process.exit(0);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// CDP WebSocket proxy — Chrome's browser-level debugger URL accepts only ONE
+// concurrent WebSocket connection, so we keep a single chromeWs and swap the
+// active client when a new one connects. All proxy state lives on ServerState.
+// ---------------------------------------------------------------------------
+
+interface CdpProxyContext {
+  wss: WebSocketServer;
+  secretProxy: SecretProxyManager;
+  cdpDedup: CliLogDedup;
+  cdpSessionUrls: ReturnType<typeof createCdpSessionUrlTracker>;
+}
+
+const CDP_PROXY_INSPECT_BYTES = 256 * 1024;
+const CDP_PROXY_HARD_FRAME_CAP = 64 * 1024 * 1024;
+const CDP_LOOP_EVENT_PREFIXES = [
+  '{"method":"Network.webSocketFrameReceived"',
+  '{"method":"Network.webSocketFrameSent"',
+];
+
+/**
+ * Normalise the `ws` library's polymorphic message payload into a single Buffer
+ * we can peek at and forward. Without this, a later `String(data)` would coerce
+ * an `ArrayBuffer` to `"[object ArrayBuffer]"` and a `Buffer[]` to comma-joined
+ * fragments, corrupting the CDP frame.
+ */
+function cdpFrameToBuffer(data: unknown): Buffer {
+  if (Buffer.isBuffer(data)) return data;
+  if (data instanceof ArrayBuffer) return Buffer.from(data);
+  if (Array.isArray(data)) return Buffer.concat(data as Buffer[]);
+  // Rare fallback — string frames in text mode. Keep bytes faithful.
+  return Buffer.from(String(data));
+}
+
+function closeWebSocketQuietly(ws: WebSocket | null): void {
+  if (!ws) return;
+  try {
+    ws.close();
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Route `/cdp` and `/licks-ws` upgrades to their servers; leave others for Vite HMR. */
+function attachCdpUpgradeRouting(
+  server: HttpServer,
+  wss: WebSocketServer,
+  lickWss: WebSocketServer
+): void {
+  server.on('upgrade', (request, socket, head) => {
+    const { pathname } = new URL(request.url!, `http://${request.headers.host}`);
+    if (pathname === '/cdp') {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit('connection', ws, request);
+      });
+    } else if (pathname === '/licks-ws') {
+      lickWss.handleUpgrade(request, socket, head, (ws) => {
+        lickWss.emit('connection', ws, request);
+      });
+    }
+  });
+}
+
+/**
+ * Apply the Client→Chrome unmask gate to a buffered frame on flush. Shared by
+ * both buffer-drain sites (ensureChromeConnection already-open path + the
+ * chromeWs 'open' handler); falls back to the original bytes on any error.
+ */
+function flushClientFrame(target: WebSocket, raw: unknown, ctx: CdpProxyContext): void {
+  const original = String(raw);
+  const { output } = applyCdpUnmask(original, {
+    tracker: ctx.cdpSessionUrls,
+    pipeline: ctx.secretProxy.rawPipeline,
+  });
+  target.send(output);
+}
+
+function flushBufferedClientFrames(
+  state: ServerState,
+  target: WebSocket,
+  ctx: CdpProxyContext
+): void {
+  if (!state.messageBuffer) return;
+  for (const msg of state.messageBuffer) {
+    flushClientFrame(target, msg, ctx);
+  }
+  state.messageBuffer = null;
+}
+
+/**
+ * Forward one Chrome→Client frame, dropping the self-amplifying
+ * `Network.webSocketFrame*` feedback-loop events (the slicc UI runs inside the
+ * Chrome it debugs, so those embed prior frames and blow past V8's string cap)
+ * and any frame over the hard cap.
+ */
+function forwardChromeFrame(state: ServerState, buf: Buffer, ctx: CdpProxyContext): void {
+  const byteLen = buf.length;
+  // Peek at the first 256 KiB only — enough to identify the event type cheaply.
+  const head = buf.subarray(0, CDP_PROXY_INSPECT_BYTES).toString();
+
+  if (CDP_LOOP_EVENT_PREFIXES.some((p) => head.startsWith(p))) {
+    const msg = `[cdp-proxy] Dropping Chrome feedback-loop event (${byteLen} bytes, ${head.slice(1, 60)}…)`;
+    if (ctx.cdpDedup.shouldLog(msg)) console.debug(msg);
+    return;
+  }
+  if (byteLen > CDP_PROXY_HARD_FRAME_CAP) {
+    const msg = `[cdp-proxy] Dropping oversized Chrome→Client frame (${byteLen} bytes)`;
+    if (ctx.cdpDedup.shouldLog(msg)) console.debug(msg);
+    return;
+  }
+
+  const str = buf.toString();
+  const msg = `[cdp-proxy] Chrome→Client: ${str.slice(0, 200)}`;
+  if (ctx.cdpDedup.shouldLog(msg)) console.debug(msg);
+  // Sniff Target.attachedToTarget / targetInfoChanged / Page.frameNavigated so
+  // the Client→Chrome unmask gate can resolve per-session hostnames.
+  ctx.cdpSessionUrls.observeChromeToClient(str);
+  if (state.activeClientWs && state.activeClientWs.readyState === WebSocket.OPEN) {
+    state.activeClientWs.send(str);
+  }
+}
+
+function ensureChromeConnection(
+  state: ServerState,
+  url: string,
+  ctx: CdpProxyContext
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (state.chromeWs && state.chromeWs.readyState === WebSocket.OPEN) {
+      // Already connected — flush any buffered messages and go direct.
+      flushBufferedClientFrames(state, state.chromeWs, ctx);
+      resolve();
+      return;
+    }
+    closeWebSocketQuietly(state.chromeWs);
+
+    state.messageBuffer = [];
+    // Disable the ws library's per-message size cap (default 100 MiB). The slicc
+    // UI runs INSIDE the Chrome it debugs, so Chrome's Network domain reports
+    // every CDP frame back as `Network.webSocketFrame*` events embedding prior
+    // payloads — an exponential loop that would trip the cap and close the
+    // socket (code 1006). forwardChromeFrame drops those events by method.
+    const chromeWs = new WebSocket(url, { maxPayload: 0 });
+    state.chromeWs = chromeWs;
+
+    chromeWs.on('open', () => {
+      console.log('[cdp-proxy] chromeWs open');
+      flushBufferedClientFrames(state, chromeWs, ctx);
+      resolve();
+    });
+    chromeWs.on('message', (data) => {
+      forwardChromeFrame(state, cdpFrameToBuffer(data), ctx);
+    });
+    chromeWs.on('close', (code, reason) => {
+      console.log(`[cdp-proxy] Chrome WS closed. code=${code}, reason=${String(reason)}`);
+      state.chromeWs = null;
+    });
+    chromeWs.on('error', (err) => {
+      console.log(`[cdp-proxy] Chrome WS error: ${err}`);
+      state.chromeWs = null;
+      reject(err);
+    });
+  });
+}
+
+/** Forward one Client→Chrome frame, buffering it when Chrome isn't ready yet. */
+function forwardClientFrame(state: ServerState, data: unknown, ctx: CdpProxyContext): void {
+  const original = String(data);
+  const preview = original.slice(0, 200);
+  if (
+    state.chromeWs &&
+    state.chromeWs.readyState === WebSocket.OPEN &&
+    state.messageBuffer === null
+  ) {
+    const msg = `[cdp-proxy] Client→Chrome: ${preview}`;
+    if (ctx.cdpDedup.shouldLog(msg)) console.debug(msg);
+    const { output } = applyCdpUnmask(original, {
+      tracker: ctx.cdpSessionUrls,
+      pipeline: ctx.secretProxy.rawPipeline,
+    });
+    state.chromeWs.send(output);
+  } else if (state.messageBuffer !== null) {
+    // Buffer the ORIGINAL bytes; unmask runs on flush so the hostname tracker
+    // reflects the state at send time.
+    state.messageBuffer.push(data);
+    const msg = `[cdp-proxy] Client→Chrome (buffered): ${preview}`;
+    if (ctx.cdpDedup.shouldLog(msg)) console.debug(msg);
+  } else {
+    console.log(`[cdp-proxy] Client→Chrome (DROPPED — no connection): ${preview}`);
+  }
+}
+
+async function handleCdpClient(
+  state: ServerState,
+  clientWs: WebSocket,
+  ctx: CdpProxyContext,
+  cdpPort: number
+): Promise<void> {
+  try {
+    // Only one client active at a time — close the previous one.
+    if (state.activeClientWs && state.activeClientWs.readyState === WebSocket.OPEN) {
+      console.log('[cdp-proxy] Closing previous client connection');
+      state.activeClientWs.close();
+    }
+    state.activeClientWs = clientWs;
+    console.log('[cdp-proxy] New client connected');
+
+    // Initialise the buffer BEFORE any await so messages arriving during
+    // waitForCDP / ensureChromeConnection are captured, not dropped.
+    if (state.messageBuffer === null) state.messageBuffer = [];
+
+    // Register ALL handlers BEFORE any async work so no messages are lost.
+    clientWs.on('message', (data) => {
+      forwardClientFrame(state, data, ctx);
+    });
+    clientWs.on('close', () => {
+      console.log('[cdp-proxy] Client disconnected');
+      if (state.activeClientWs === clientWs) state.activeClientWs = null;
+      // Don't close chromeWs — keep it alive for the next client.
+    });
+    clientWs.on('error', (err) => {
+      console.log(`[cdp-proxy] Client WS error: ${err}`);
+      if (state.activeClientWs === clientWs) state.activeClientWs = null;
+    });
+
+    // NOW do async work — messages arriving during these awaits are buffered.
+    if (!state.cdpUrl) {
+      state.cdpUrl = await waitForCDP(cdpPort);
+      console.log(`[cdp-proxy] CDP available at: ${state.cdpUrl}`);
+    }
+    await ensureChromeConnection(state, state.cdpUrl, ctx);
+  } catch (err) {
+    console.error('[cdp-proxy] Connection error:', err);
+    clientWs.close();
+  }
+}
+
+/** Best-effort graceful close of the launched browser, escalating to SIGKILL. */
+async function closeLaunchedBrowserGracefully(state: ServerState, cdpPort: number): Promise<void> {
+  const browser = state.launchedBrowserProcess;
+  if (!browser) return;
+
+  let browserExited = false;
+  browser.on('exit', () => {
+    browserExited = true;
+  });
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${cdpPort}/json/version`);
+    const json = (await res.json()) as { webSocketDebuggerUrl: string };
+    const browserWs = new WebSocket(json.webSocketDebuggerUrl);
+    await new Promise<void>((resolve, reject) => {
+      browserWs.on('open', () => {
+        browserWs.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
+        resolve();
+      });
+      browserWs.on('error', reject);
+    });
+  } catch {
+    // CDP not available — the launched browser may still be starting up; fall through to kill.
+  }
+
+  const deadline = Date.now() + 3000;
+  while (!browserExited && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  if (!browserExited) {
+    try {
+      browser.kill('SIGKILL');
+    } catch {
+      /* ignore */
+    }
+  }
+  console.log(`${state.launchedBrowserLabel} closed`);
+}
+
+interface ShutdownDeps {
+  fileLogger: FileLogger;
+  wss: WebSocketServer;
+  server: HttpServer;
+  cdpPort: number;
+}
+
+/** Build the idempotent graceful-shutdown handler wired to the process signals. */
+function createGracefulShutdown(state: ServerState, deps: ShutdownDeps): () => Promise<void> {
+  return async () => {
+    if (state.shuttingDown) return;
+    state.shuttingDown = true;
+    console.log('\nShutting down...');
+    deps.fileLogger.close();
+
+    state.overlayInjector?.stop();
+    state.overlayInjector = null;
+
+    closeWebSocketQuietly(state.chromeWs);
+    state.chromeWs = null;
+    closeWebSocketQuietly(state.activeClientWs);
+    state.activeClientWs = null;
+    for (const client of deps.wss.clients) {
+      client.close();
+    }
+    deps.wss.close();
+
+    // Stop accepting new HTTP connections.
+    deps.server.close();
+
+    await closeLaunchedBrowserGracefully(state, deps.cdpPort);
+    process.exit(0);
+  };
+}
+
+/** Pre-connect to Chrome so the proxy is warm before the first client; hosted mode registers leader-restart once CDP is ready. */
+async function preconnectCdp(
+  state: ServerState,
+  ctx: CdpProxyContext,
+  app: express.Express,
+  servePort: number,
+  cdpPort: number
+): Promise<void> {
+  try {
+    state.cdpUrl = await waitForCDP(cdpPort);
+    console.log(`[cdp-proxy] Pre-connected: CDP available at ${state.cdpUrl}`);
+    await ensureChromeConnection(state, state.cdpUrl, ctx);
+    console.log('[cdp-proxy] Chrome WebSocket ready (pre-warmed)');
+
+    if (RUNTIME_FLAGS.hosted) {
+      registerLeaderRestartEndpoint(app, {
+        cdp: createHttpCdp(cdpPort),
+        localUrlPrefix: `http://localhost:${servePort}/`,
+      });
+      console.log('[hosted] /api/leader-restart endpoint registered');
+    }
+  } catch (err) {
+    console.log('[cdp-proxy] Pre-connect failed (will retry on first client):', err);
+  }
+}
+
+async function startOverlayInjector(
+  state: ServerState,
+  cdpPort: number,
+  servePort: number
+): Promise<void> {
+  try {
+    state.overlayInjector = await ElectronOverlayInjector.create({
+      cdpPort,
+      servePort,
+      dev: DEV_MODE,
+      projectRoot: PROJECT_ROOT,
+    });
+    await state.overlayInjector.start();
+    console.log('[electron-float] Overlay injector is watching Electron page targets');
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('[electron-float] Failed to start overlay injector:', message);
+  }
+}
+
+interface CdpServerDeps {
+  app: express.Express;
+  server: HttpServer;
+  ctx: CdpProxyContext;
+  fileLogger: FileLogger;
+  servePort: number;
+  serveOrigin: string;
+  cdpPort: number;
+}
+
+/** Start listening and warm up the CDP proxy, overlay injector, and console forwarder. */
+function startCdpServer(state: ServerState, deps: CdpServerDeps): void {
+  const { app, server, ctx, fileLogger, servePort, serveOrigin, cdpPort } = deps;
+  server.listen(servePort, '127.0.0.1', () => {
+    console.log(`Serving UI at ${serveOrigin}`);
+    console.log(`CDP proxy at ws://localhost:${servePort}/cdp`);
+    fileLogger.log('info', 'CLI server started', {
+      port: servePort,
+      cdpPort,
+      devMode: DEV_MODE,
+      electronMode: ELECTRON_MODE,
+    });
+
+    void preconnectCdp(state, ctx, app, servePort, cdpPort);
+
+    if (ELECTRON_MODE) {
+      void startOverlayInjector(state, cdpPort, servePort);
+    } else {
+      setTimeout(() => {
+        attachConsoleForwarder(cdpPort, String(servePort)).catch((err) => {
+          console.error('[page] Console forwarder error:', err);
+        });
+      }, 2500);
+    }
+  });
+}
+
+interface SecretBootstrap {
+  secretStore: EnvSecretStore;
+  secretProxy: SecretProxyManager;
+  oauthStore: OauthSecretStore;
+}
+
+/**
+ * Build the secret stores + masking pipeline shared by the fetch-proxy, the
+ * /api/secrets routes, and the S3 sign-and-forward handler. Secret-load
+ * failures are logged, not fatal.
+ */
+async function bootstrapSecrets(): Promise<SecretBootstrap> {
   const sessionDir = RUNTIME_FLAGS.envFile
     ? dirname(RUNTIME_FLAGS.envFile)
     : join(homedir(), '.slicc');
   const sessionId = readOrCreateSessionId(sessionDir);
   const oauthStore = new OauthSecretStore();
-  // Env-file secrets (~/.slicc/secrets.env) feed the fetch-proxy mask
-  // pipeline alongside OAuth tokens. The same instance is reused below
-  // for /api/secrets and handleS3SignAndForward.
+  // Env-file secrets (~/.slicc/secrets.env) feed the fetch-proxy mask pipeline
+  // alongside OAuth tokens.
   const secretStore = new EnvSecretStore(RUNTIME_FLAGS.envFile ?? undefined);
   const secretProxy = new SecretProxyManager(secretStore, sessionId, oauthStore);
   try {
@@ -683,6 +1125,20 @@ async function main() {
   } catch (err) {
     console.warn('Failed to load secrets:', err instanceof Error ? err.message : err);
   }
+  return { secretStore, secretProxy, oauthStore };
+}
+
+async function main() {
+  // Resolve ports, launch the browser, then snapshot the now-final values that
+  // the rest of boot reads. Mutable lifecycle fields stay on `state`.
+  const state = createServerState();
+  await resolvePorts(state);
+  await launchBrowser(state);
+  const { servePort: SERVE_PORT, cdpPort: CDP_PORT, serveOrigin: SERVE_ORIGIN } = state;
+  const discoveredTrayJoinUrl = state.discoveredTrayJoinUrl;
+
+  // 3. Set up express app with request logging
+  const { secretStore, secretProxy, oauthStore } = await bootstrapSecrets();
 
   const app = express();
   app.use(requestLogger);
@@ -692,153 +1148,11 @@ async function main() {
   // ---------------------------------------------------------------------------
   // Lick system — WebSocket bridge for webhooks/crontasks (all logic in browser)
   // ---------------------------------------------------------------------------
+  const lickBridge = createLickBridge();
+  const { lickWss, broadcastLickEvent } = lickBridge;
 
-  // WebSocket for bidirectional communication with browser
-  const lickWss = new WebSocketServer({ noServer: true });
-  const lickClients = new Set<WebSocket>();
-  const pendingRequests = new Map<
-    string,
-    { resolve: (data: unknown) => void; reject: (err: Error) => void }
-  >();
-  let requestIdCounter = 0;
-
-  lickWss.on('connection', (ws) => {
-    lickClients.add(ws);
-    console.log('[licks] Browser client connected');
-
-    ws.on('message', (data) => {
-      try {
-        const msg = JSON.parse(data.toString()) as {
-          type: string;
-          requestId?: string;
-          [key: string]: unknown;
-        };
-
-        // Handle responses to pending requests
-        if (msg.type === 'response' && msg.requestId) {
-          const pending = pendingRequests.get(msg.requestId);
-          if (pending) {
-            pendingRequests.delete(msg.requestId);
-            if (msg.error) {
-              pending.reject(new Error(msg.error as string));
-            } else {
-              pending.resolve(msg.data);
-            }
-          }
-        }
-      } catch {
-        // Ignore invalid messages
-      }
-    });
-
-    ws.on('close', () => {
-      lickClients.delete(ws);
-      console.log('[licks] Browser client disconnected');
-    });
-  });
-
-  /** Send a request to the browser and wait for response */
-  function sendLickRequest(type: string, data: unknown, timeout = 5000): Promise<unknown> {
-    return new Promise((resolve, reject) => {
-      const requestId = `req_${++requestIdCounter}`;
-      const msg = JSON.stringify({ type, requestId, ...(data as object) });
-
-      // Find a connected client
-      const client = Array.from(lickClients).find((c) => c.readyState === WebSocket.OPEN);
-      if (!client) {
-        reject(new Error('No browser connected'));
-        return;
-      }
-
-      // Set up timeout
-      const timer = setTimeout(() => {
-        pendingRequests.delete(requestId);
-        reject(new Error('Request timeout'));
-      }, timeout);
-
-      pendingRequests.set(requestId, {
-        resolve: (data) => {
-          clearTimeout(timer);
-          resolve(data);
-        },
-        reject: (err) => {
-          clearTimeout(timer);
-          reject(err);
-        },
-      });
-
-      client.send(msg);
-    });
-  }
-
-  /** Broadcast an event to all connected browsers (no response expected) */
-  function broadcastLickEvent(event: unknown): void {
-    const msg = JSON.stringify(event);
-    for (const client of lickClients) {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(msg);
-      }
-    }
-  }
-
-  // ---------------------------------------------------------------------------
   // OAuth callback — generic redirect target for OAuth providers (implicit + PKCE)
-  // ---------------------------------------------------------------------------
-  // Pending OAuth result for server-side relay (Electron overlay can't use window.opener)
-  let pendingOAuthResult: { redirectUrl: string; error?: string } | null = null;
-
-  app.get('/auth/callback', (_req: Request, res: Response) => {
-    // The callback page tries window.opener.postMessage first (works in CLI popup mode).
-    // If window.opener is null (Electron overlay — opens system browser), it falls back
-    // to POSTing the result to /api/oauth-result for the UI to poll.
-    res.send(`<!DOCTYPE html><html><body><script>
-      var q = new URLSearchParams(location.search);
-      var h = new URLSearchParams(location.hash.replace(/^#/, ''));
-      var payload = {
-        type: 'oauth-callback',
-        redirectUrl: location.href,
-        code: q.get('code'),
-        state: q.get('state') || h.get('state'),
-        error: q.get('error') || h.get('error'),
-        access_token: h.get('access_token'),
-        expires_in: h.get('expires_in'),
-        token_type: h.get('token_type')
-      };
-      if (window.opener) {
-        window.opener.postMessage(payload, '*');
-      } else {
-        fetch('/api/oauth-result', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        }).catch(function(err) { console.error('[oauth-callback] Failed to relay result to server:', err); });
-      }
-      window.close();
-    </script><p>Completing login... you can close this window.</p></body></html>`);
-  });
-
-  app.post('/api/oauth-result', express.json(), (req: Request, res: Response) => {
-    const body = req.body as Record<string, unknown>;
-    const redirectUrl = typeof body.redirectUrl === 'string' ? body.redirectUrl : '';
-    if (!redirectUrl) {
-      console.warn('[oauth-result] Received callback with empty redirectUrl');
-    }
-    pendingOAuthResult = {
-      redirectUrl,
-      error: typeof body.error === 'string' ? body.error : undefined,
-    };
-    res.json({ ok: true });
-  });
-
-  app.get('/api/oauth-result', (_req: Request, res: Response) => {
-    if (pendingOAuthResult) {
-      const result = pendingOAuthResult;
-      pendingOAuthResult = null;
-      res.json(result);
-    } else {
-      res.status(204).end();
-    }
-  });
+  registerOAuthCallbackRoutes(app);
 
   // Global JSON body parser. Skipped when the request carries
   // `X-Slicc-Raw-Body: 1`, so SigV4-signed bodies survive into the
@@ -887,435 +1201,17 @@ async function main() {
     });
   });
 
-  // Tray status API — forwards to browser to get leader tray join info
-  app.get('/api/tray-status', async (_req, res) => {
-    try {
-      const data = await sendLickRequest('tray_status', {});
-      res.json(data);
-    } catch (err) {
-      res.status(503).json({ error: err instanceof Error ? err.message : 'Browser not connected' });
-    }
-  });
+  // Tray status, webhook management + receiver, and cron task routes — all
+  // forward to the browser over the lick bridge.
+  registerLickApiRoutes(app, lickBridge);
 
-  // Webhook management API — forwards to browser
-  app.get('/api/webhooks', async (_req, res) => {
-    try {
-      const data = await sendLickRequest('list_webhooks', {});
-      res.json(data);
-    } catch (err) {
-      res.status(503).json({ error: err instanceof Error ? err.message : 'Browser not connected' });
-    }
-  });
+  // Profile-independent handoff injection — external tools post here so a
+  // handoff reaches the cone regardless of which browser profile is active.
+  registerHandoffRoute(app, { broadcastLickEvent });
 
-  app.post('/api/webhooks', async (req, res) => {
-    try {
-      const data = await sendLickRequest('create_webhook', req.body);
-      res.json(data);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      res.status(msg.includes('Invalid') ? 400 : 503).json({ error: msg });
-    }
-  });
-
-  app.delete('/api/webhooks/:id', async (req, res) => {
-    try {
-      const data = (await sendLickRequest('delete_webhook', { id: req.params.id })) as {
-        ok?: boolean;
-        error?: string;
-      };
-      if (data.error) {
-        res.status(404).json({ error: data.error });
-      } else {
-        res.json(data);
-      }
-    } catch (err) {
-      res.status(503).json({ error: err instanceof Error ? err.message : 'Browser not connected' });
-    }
-  });
-
-  // Webhook receiver — handle CORS preflight
-  app.options('/webhooks/:id', (_req, res) => {
-    res.set({
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
-    });
-    res.sendStatus(204);
-  });
-
-  // Webhook receiver — forwards POST to browser for processing
-  app.post('/webhooks/:id', async (req, res) => {
-    res.set({ 'Access-Control-Allow-Origin': '*' });
-    const { id } = req.params;
-
-    // Collect body
-    let body = req.body;
-    if (!body || Object.keys(body).length === 0) {
-      const chunks: Buffer[] = [];
-      for await (const chunk of req) {
-        chunks.push(Buffer.from(chunk));
-      }
-      const raw = Buffer.concat(chunks).toString('utf-8');
-      try {
-        body = JSON.parse(raw);
-      } catch {
-        body = { raw };
-      }
-    }
-
-    // Forward to browser for processing
-    broadcastLickEvent({
-      type: 'webhook_event',
-      webhookId: id,
-      timestamp: new Date().toISOString(),
-      headers: req.headers,
-      body,
-    });
-
-    res.json({ ok: true, received: true });
-  });
-
-  // Cron task management API — forwards to browser
-  app.get('/api/crontasks', async (_req, res) => {
-    try {
-      const data = await sendLickRequest('list_crontasks', {});
-      res.json(data);
-    } catch (err) {
-      res.status(503).json({ error: err instanceof Error ? err.message : 'Browser not connected' });
-    }
-  });
-
-  app.post('/api/crontasks', async (req, res) => {
-    try {
-      const data = await sendLickRequest('create_crontask', req.body);
-      res.json(data);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      res
-        .status(msg.includes('Invalid') || msg.includes('required') ? 400 : 503)
-        .json({ error: msg });
-    }
-  });
-
-  app.delete('/api/crontasks/:id', async (req, res) => {
-    try {
-      const data = (await sendLickRequest('delete_crontask', { id: req.params.id })) as {
-        ok?: boolean;
-        error?: string;
-      };
-      if (data.error) {
-        res.status(404).json({ error: data.error });
-      } else {
-        res.json(data);
-      }
-    } catch (err) {
-      res.status(503).json({ error: err instanceof Error ? err.message : 'Browser not connected' });
-    }
-  });
-
-  // Profile-independent handoff injection.
-  //
-  // The CDP navigation-watcher only sees tabs inside the Chrome instance
-  // SLICC launched (isolated profile keyed by port); similarly the
-  // extension's webRequest observer only fires inside the profile where it
-  // is installed. External tools (e.g. the slicc-handoff helper) post here
-  // so a handoff reaches the cone regardless of which browser profile the
-  // user is currently driving.
-  //
-  // The payload mirrors the parsed RFC 8288 `Link` form used by the
-  // observers: `verb` ∈ {handoff, upskill}, `target` is the resolved URL,
-  // `instruction` is optional free-form prose (handoff verb).
-  app.post('/api/handoff', (req, res) => {
-    const payload = req.body as {
-      verb?: unknown;
-      target?: unknown;
-      instruction?: unknown;
-      url?: unknown;
-      title?: unknown;
-      branch?: unknown;
-      path?: unknown;
-      // Detect legacy x-slicc-style payloads for a clear error message.
-      sliccHeader?: unknown;
-    };
-    if (typeof payload?.sliccHeader === 'string') {
-      res.status(400).json({
-        error:
-          'The legacy `sliccHeader` payload was removed; post `{ verb, target, instruction? }` instead. See docs/slicc-handoff.md.',
-      });
-      return;
-    }
-    if (payload?.verb !== 'handoff' && payload?.verb !== 'upskill') {
-      res.status(400).json({ error: 'verb must be "handoff" or "upskill"' });
-      return;
-    }
-    if (typeof payload.target !== 'string' || payload.target.length === 0) {
-      res.status(400).json({ error: 'target is required (non-empty string)' });
-      return;
-    }
-    if (payload.instruction != null && typeof payload.instruction !== 'string') {
-      res.status(400).json({ error: 'instruction must be a string when provided' });
-      return;
-    }
-    // `branch` / `path` mirror the upskill rel's Link params and are
-    // ignored on the handoff verb (its target is the page itself, not a
-    // repo). Reject the wrong-shape combo loudly so emitters notice
-    // rather than silently dropping the scope.
-    if (payload.branch != null && typeof payload.branch !== 'string') {
-      res.status(400).json({ error: 'branch must be a string when provided' });
-      return;
-    }
-    if (payload.path != null && typeof payload.path !== 'string') {
-      res.status(400).json({ error: 'path must be a string when provided' });
-      return;
-    }
-    if (payload.verb === 'handoff' && (payload.branch != null || payload.path != null)) {
-      res.status(400).json({ error: 'branch and path are only valid with verb="upskill"' });
-      return;
-    }
-    broadcastLickEvent({
-      type: 'navigate_event',
-      verb: payload.verb,
-      target: payload.target,
-      instruction: typeof payload.instruction === 'string' ? payload.instruction : undefined,
-      url:
-        typeof payload.url === 'string' && payload.url.length > 0 ? payload.url : 'about:handoff',
-      title: typeof payload.title === 'string' ? payload.title : undefined,
-      branch:
-        typeof payload.branch === 'string' && payload.branch.length > 0
-          ? payload.branch
-          : undefined,
-      path: typeof payload.path === 'string' && payload.path.length > 0 ? payload.path : undefined,
-      timestamp: new Date().toISOString(),
-    });
-    res.json({ ok: true });
-  });
-
-  // Secret management API — direct .env file access (no browser needed).
-  // `secretStore` was created above and wired into `secretProxy` so the
-  // fetch-proxy and the management API share one source of truth.
-
-  app.get('/api/secrets', (_req, res) => {
-    try {
-      const entries = secretStore.list();
-      res.json(entries);
-    } catch (err) {
-      res
-        .status(500)
-        .json({ error: err instanceof Error ? err.message : 'Failed to list secrets' });
-    }
-  });
-
-  // Persisted-set — write a secret to ~/.slicc/secrets.env. Gated by the agent's
-  // intrinsic sudo prompt before the request is ever sent.
-  app.post('/api/secrets', express.json(), async (req, res) => {
-    const { name, value, domains } = req.body ?? {};
-    if (
-      typeof name !== 'string' ||
-      typeof value !== 'string' ||
-      !Array.isArray(domains) ||
-      domains.some((d) => typeof d !== 'string')
-    ) {
-      return res.status(400).json({ error: 'bad-request' });
-    }
-    try {
-      secretStore.set(name, value, domains);
-      await secretProxy.reload();
-      res.json({ ok: true });
-    } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to set secret' });
-    }
-  });
-
-  // Scope edit — update the allowed domains of an existing secret (persisted or
-  // session), preserving the value. Gated by the agent before sending.
-  app.post('/api/secrets/scope', express.json(), async (req, res) => {
-    const { name, domains } = req.body ?? {};
-    if (
-      typeof name !== 'string' ||
-      !Array.isArray(domains) ||
-      domains.some((d) => typeof d !== 'string')
-    ) {
-      return res.status(400).json({ error: 'bad-request' });
-    }
-    try {
-      if (secretProxy.sessionStore.has(name)) {
-        secretProxy.sessionStore.setDomains(name, domains);
-      } else {
-        const existing = secretStore.get(name);
-        if (!existing) return res.status(404).json({ error: `no secret named "${name}"` });
-        secretStore.set(name, existing.value, domains);
-      }
-      await secretProxy.reload();
-      res.json({ ok: true });
-    } catch (err) {
-      res
-        .status(500)
-        .json({ error: err instanceof Error ? err.message : 'Failed to update scope' });
-    }
-  });
-
-  // Session secrets — in-memory only, never written to disk. Free for the agent
-  // to create; the masking pipeline picks them up on the reload below.
-  app.get('/api/secrets/session', (_req, res) => {
-    res.json(secretProxy.sessionStore.list());
-  });
-
-  app.post('/api/secrets/session', express.json(), async (req, res) => {
-    const { name, value, domains } = req.body ?? {};
-    if (
-      typeof name !== 'string' ||
-      typeof value !== 'string' ||
-      (domains !== undefined &&
-        (!Array.isArray(domains) || domains.some((d) => typeof d !== 'string')))
-    ) {
-      return res.status(400).json({ error: 'bad-request' });
-    }
-    secretProxy.sessionStore.set(name, value, Array.isArray(domains) ? domains : []);
-    await secretProxy.reload();
-    res.json({ ok: true });
-  });
-
-  // Peek — elided preview of the unmasked value (session or persisted). The
-  // full value never leaves the server.
-  app.get('/api/secrets/peek', (req, res) => {
-    const name = typeof req.query.name === 'string' ? req.query.name : '';
-    if (!name) return res.status(400).json({ error: 'bad-request' });
-    const session = secretProxy.sessionStore.getRecord(name);
-    if (session) {
-      return res.json({ name, preview: previewSecret(session.value), domains: session.domains });
-    }
-    const persisted = secretStore.get(name);
-    if (persisted) {
-      return res.json({
-        name,
-        preview: previewSecret(persisted.value),
-        domains: persisted.domains,
-      });
-    }
-    return res.status(404).json({ error: `no secret named "${name}"` });
-  });
-
-  // S3 sign-and-forward — browser-side mount backend posts envelopes here;
-  // server resolves the s3.<profile>.* secrets, signs SigV4 v4, forwards to
-  // the upstream, returns the response as a JSON envelope. The browser
-  // never sees access_key_id / secret_access_key. See sign-and-forward.ts
-  // for the envelope contract.
-  app.post('/api/s3-sign-and-forward', async (req, res) => {
-    try {
-      await handleS3SignAndForward(req, res, secretStore);
-    } catch (err) {
-      // Generic log line + trace id only. Avoid logging the err.message
-      // because TypeError stack frames or signing errors can include
-      // profile names, bucket names, or partial URLs — operational secrets
-      // we don't want in shared log aggregators (Sentry, Datadog, etc.).
-      // The trace id lets users correlate a server-side log with the
-      // 500 the client got; the detailed message goes only to the local
-      // file logger above DEBUG, where it's bounded to the operator.
-      const traceId = (
-        globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2, 10)
-      ).slice(0, 8);
-      console.error(`S3 sign-and-forward error [trace=${traceId}]`);
-      if (DEV_MODE) {
-        console.error(err);
-      }
-      if (!res.headersSent) {
-        res.status(500).json({
-          ok: false,
-          error: `internal sign-and-forward error [trace=${traceId}]`,
-          errorCode: 'internal',
-        });
-      }
-    }
-  });
-
-  // DA sign-and-forward — same pattern as S3, but for Adobe da.live. The
-  // IMS bearer token is passed transiently in the envelope (browser holds
-  // it via the existing Adobe LLM provider). v2 will move OAuth server-side
-  // to remove the browser exposure entirely.
-  app.post('/api/da-sign-and-forward', async (req, res) => {
-    try {
-      await handleDaSignAndForward(req, res);
-    } catch (err) {
-      const traceId = (
-        globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2, 10)
-      ).slice(0, 8);
-      console.error(`DA sign-and-forward error [trace=${traceId}]`);
-      if (DEV_MODE) {
-        console.error(err);
-      }
-      if (!res.headersSent) {
-        res.status(500).json({
-          ok: false,
-          error: `internal sign-and-forward error [trace=${traceId}]`,
-          errorCode: 'internal',
-        });
-      }
-    }
-  });
-
-  // Tool-output real→masked scrub. The browser-side agent realm
-  // never holds real secret values, so the defense-in-depth scrub of
-  // bash / read_file / other tool results runs here against the
-  // node-server-owned `SecretProxyManager`. Direction is real→masked
-  // ONLY (`scrubResponse`), so it is always safe and is idempotent
-  // for already-masked tokens and secret-free output. The caller
-  // (`packages/webapp/src/core/secret-scrub.ts`) treats any non-2xx
-  // or malformed response as "return input unchanged" — the scrub is
-  // defense-in-depth, not the primary defense.
-  app.post('/api/secrets/scrub', express.json({ limit: '32mb' }), (req, res) => {
-    const text = req.body?.text;
-    if (typeof text !== 'string') {
-      return res.status(400).json({ error: 'bad-request' });
-    }
-    try {
-      res.json({ text: secretProxy.scrubResponse(text) });
-    } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : 'scrub failed', text });
-    }
-  });
-
-  // Masked secrets endpoint — returns name + maskedValue pairs for shell env population.
-  // The browser fetches this at shell init to populate env vars with masked values.
-  // Real values are never exposed; only deterministic session-scoped masks.
-  app.get('/api/secrets/masked', (_req, res) => {
-    try {
-      const entries = secretProxy.getMaskedEntries();
-      res.json(entries);
-    } catch (err) {
-      res
-        .status(500)
-        .json({ error: err instanceof Error ? err.message : 'Failed to get masked secrets' });
-    }
-  });
-
-  // OAuth secret update — stores access token from OAuth login flow
-  app.post('/api/secrets/oauth-update', express.json(), async (req, res) => {
-    const { providerId, accessToken, domains } = req.body ?? {};
-    if (
-      typeof providerId !== 'string' ||
-      typeof accessToken !== 'string' ||
-      !Array.isArray(domains) ||
-      domains.length === 0
-    ) {
-      return res.status(400).json({ error: 'bad-request' });
-    }
-    const name = `oauth.${providerId}.token`;
-    oauthStore.set(name, accessToken, domains);
-    await secretProxy.reload();
-    const masked = secretProxy.getMaskedEntries().find((e) => e.name === name)?.maskedValue;
-    res.json({ providerId, name, maskedValue: masked, domains });
-  });
-
-  // OAuth secret deletion — removes access token on logout
-  app.delete('/api/secrets/oauth/:providerId', async (req, res) => {
-    const name = `oauth.${req.params.providerId}.token`;
-    if (!oauthStore.list().some((e) => e.name === name)) {
-      return res.status(404).json({ error: 'not-found' });
-    }
-    oauthStore.delete(name);
-    await secretProxy.reload();
-    res.status(204).end();
-  });
+  // Secret management API — direct .env file access (no browser needed),
+  // plus the S3 / DA sign-and-forward and masked-secret endpoints.
+  registerSecretRoutes(app, { secretStore, secretProxy, oauthStore, devMode: DEV_MODE });
 
   // Cloud status endpoint (hosted-only) — writes join info to /tmp/slicc-join.json
   // Register BEFORE Chromium launches. The webapp's first action after
@@ -1332,561 +1228,38 @@ async function main() {
   // an approval. Loopback-only; selects a backend by environment at call time.
   registerSudoApproveEndpoint(app);
 
-  // Fetch proxy — forwards cross-origin requests from the browser to bypass CORS.
-  // Used by just-bash's curl which calls the browser's fetch() API.
-  // Note: express.json() may have already parsed the body, so we check req.body first.
-  app.all('/api/fetch-proxy', async (req, res) => {
-    // Get the body - either from express.json() parsed body or collect raw chunks
-    let rawBody: Buffer;
-    if (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
-      // Body was already parsed by express.json() - re-serialize it
-      rawBody = Buffer.from(JSON.stringify(req.body), 'utf-8');
-    } else {
-      // Collect raw body manually (for non-JSON content types)
-      const chunks: Buffer[] = [];
-      for await (const chunk of req) {
-        chunks.push(Buffer.from(chunk));
-      }
-      rawBody = Buffer.concat(chunks);
-    }
-    const targetUrl = req.headers['x-target-url'] as string;
-    if (!targetUrl) {
-      res.setHeader('X-Proxy-Error', '1');
-      res.status(400).json({ error: 'Missing X-Target-URL header' });
-      return;
-    }
-    // Hoisted so the catch handler below can detach it on early
-    // failures (e.g. fetch threw before the success-path detach
-    // could run).
-    let onClientClose: (() => void) | null = null;
-    try {
-      const fetchInit: RequestInit = {
-        method: req.method,
-        redirect: 'follow', // Follow redirects for git protocol compatibility
-      };
-      // Forward relevant headers (excluding hop-by-hop and proxy headers).
-      // Set lives at module scope as FETCH_PROXY_SKIP_HEADERS so tests can
-      // verify the contract without copying it.
-      const headers: Record<string, string> = {};
-      for (const [key, value] of Object.entries(req.headers)) {
-        if (!FETCH_PROXY_SKIP_HEADERS.has(key) && typeof value === 'string') {
-          headers[key] = value;
-        }
-      }
-      // Forbidden-header transport: browser cannot send Cookie via fetch(),
-      // so the client encodes it as X-Proxy-Cookie. Restore it here.
-      const proxyCookie = req.headers['x-proxy-cookie'];
-      if (proxyCookie) {
-        headers['cookie'] = Array.isArray(proxyCookie) ? proxyCookie[0] : proxyCookie;
-      }
-
-      // Helper: check if an origin/referer value is a localhost URL
-      function isLocalhostOrigin(origin: string | undefined): boolean {
-        if (!origin) return false;
-        try {
-          const url = new URL(origin);
-          return (
-            url.hostname === 'localhost' ||
-            url.hostname === '127.0.0.1' ||
-            url.hostname === '::1' ||
-            url.hostname === '[::1]'
-          );
-        } catch {
-          return false;
-        }
-      }
-
-      // Forbidden-header transport: restore X-Proxy-Origin → Origin
-      const proxyOrigin = req.headers['x-proxy-origin'];
-      if (proxyOrigin) {
-        headers['origin'] = Array.isArray(proxyOrigin) ? proxyOrigin[0] : proxyOrigin;
-      } else if (isLocalhostOrigin(headers['origin'] as string)) {
-        // Only strip browser's auto-added localhost origin, preserve legitimate origins
-        delete headers['origin'];
-      }
-      // Default-Origin fallback: when no explicit caller Origin survives, synthesize
-      // one from the target URL so upstream CORS-protected APIs see a real Origin
-      // instead of nothing. Caller-supplied X-Proxy-Origin (handled above) still wins.
-      if (!headers['origin']) {
-        try {
-          headers['origin'] = new URL(targetUrl).origin;
-        } catch {
-          // Malformed targetUrl — leave origin unset; the upstream fetch will fail anyway.
-        }
-      }
-
-      // Forbidden-header transport: restore X-Proxy-Referer → Referer
-      const proxyReferer = req.headers['x-proxy-referer'];
-      if (proxyReferer) {
-        headers['referer'] = Array.isArray(proxyReferer) ? proxyReferer[0] : proxyReferer;
-      } else if (isLocalhostOrigin(headers['referer'] as string)) {
-        // Only strip browser's auto-added localhost referer, preserve legitimate referers
-        delete headers['referer'];
-      }
-
-      // Restore any X-Proxy-Proxy-* transport headers as Proxy-* headers
-      for (const [key, value] of Object.entries(req.headers)) {
-        if (key.startsWith('x-proxy-proxy-') && typeof value === 'string') {
-          const restored = key.replace(/^x-proxy-/, '');
-          headers[restored] = value;
-          delete headers[key];
-        }
-      }
-      // Always request uncompressed responses from upstream — the proxy doesn't
-      // decompress, and the browser→proxy link is localhost (no benefit to compression).
-      // Without this, Cloudflare may Brotli-compress the response, the proxy strips
-      // Content-Encoding (line below), and the browser receives compressed garbage.
-      headers['accept-encoding'] = 'identity';
-
-      // --- Secret injection: unmask headers ---
-      let targetHostname: string;
-      try {
-        targetHostname = new URL(targetUrl).hostname;
-      } catch {
-        targetHostname = '';
-      }
-
-      if (secretProxy.hasSecrets()) {
-        // Unmask request headers (replace masked values with real, validate domain)
-        const headerResult = secretProxy.unmaskHeaders(headers, targetHostname);
-        if (headerResult.forbidden) {
-          res.setHeader('X-Proxy-Error', '1');
-          res.status(403).json({
-            error: `Secret "${headerResult.forbidden.secretName}" is not allowed for domain "${headerResult.forbidden.hostname}"`,
-          });
-          return;
-        }
-      }
-
-      // --- Secret injection: unmask URL-embedded credentials ---
-      let cleanedUrl = targetUrl;
-      if (secretProxy.hasSecrets()) {
-        const credsResult = secretProxy.extractAndUnmaskUrlCredentials(targetUrl);
-        if (credsResult.forbidden) {
-          res.setHeader('X-Proxy-Error', '1');
-          res.status(403).json({
-            error: `Secret "${credsResult.forbidden.secretName}" is not allowed for domain "${credsResult.forbidden.hostname}"`,
-          });
-          return;
-        }
-        cleanedUrl = credsResult.url;
-        // Attach synthetic Authorization if the URL had credentials and the header isn't already set
-        if (credsResult.syntheticAuthorization && !('authorization' in headers)) {
-          headers.authorization = credsResult.syntheticAuthorization;
-        }
-      }
-
-      if (Object.keys(headers).length > 0) fetchInit.headers = headers;
-      if (rawBody.length > 0 && !['GET', 'HEAD'].includes(req.method)) {
-        // --- Secret injection: unmask request body ---
-        // Body uses unmaskBody: domain mismatches leave the masked value as-is
-        // (safe/meaningless) rather than rejecting. This avoids false 403s when
-        // LLM conversation context contains masked secrets sent to non-matching
-        // domains like Bedrock.
-        //
-        // Skip the unmask for non-text content (git packfiles, octet-stream,
-        // ZIPs, images, …) — `Buffer.toString('utf-8')` on arbitrary bytes
-        // replaces invalid sequences with U+FFFD, silently corrupting the
-        // payload. Masked values are hex strings with known prefixes; they
-        // do not appear in deflated git packfiles or other compressed binary,
-        // so skipping is safe.
-        const reqCt = (headers['content-type'] ?? headers['Content-Type'] ?? '').toLowerCase();
-        const reqIsText =
-          !reqCt ||
-          reqCt.startsWith('text/') ||
-          reqCt.includes('json') ||
-          reqCt.includes('xml') ||
-          reqCt.includes('javascript') ||
-          reqCt.includes('ecmascript') ||
-          reqCt.includes('html') ||
-          reqCt.includes('css') ||
-          reqCt.includes('svg');
-        if (reqIsText && secretProxy.hasSecrets()) {
-          const bodyStr = rawBody.toString('utf-8');
-          const bodyResult = secretProxy.unmaskBody(bodyStr, targetHostname);
-          rawBody = Buffer.from(bodyResult.text, 'utf-8');
-        }
-        // Buffer extends Uint8Array which is a valid fetch body at runtime.
-        fetchInit.body = rawBody as unknown as RequestInit['body'];
-      }
-
-      // Propagate client disconnect to the upstream request so that
-      // long-lived streams (LLM SSE completions) are torn down promptly
-      // when the SW or the page aborts. Listen on `res.on('close')` —
-      // not `req.on('close')` — because Node fires `req` close as soon
-      // as the readable side of the request is consumed (right after
-      // express.json() parses the body), which would abort the upstream
-      // fetch before it could even start. `res` close only fires when
-      // the response is sent OR the connection is killed mid-stream;
-      // in the first case the abort is harmless (the fetch already
-      // settled), in the second it's exactly what we want. Guard with
-      // `res.writableEnded` to be safe.
-      const abortController = new AbortController();
-      onClientClose = () => {
-        if (!res.writableEnded) abortController.abort();
-      };
-      res.on('close', onClientClose);
-      fetchInit.signal = abortController.signal;
-
-      const upstream = await fetch(cleanedUrl, fetchInit);
-
-      // Forward status, prevent browser caching of proxy responses
-      res.status(upstream.status);
-      res.setHeader('Cache-Control', 'no-store, no-cache');
-
-      // Forward response headers (strip www-authenticate to prevent
-      // the browser from showing a native Basic Auth dialog — isomorphic-git
-      // handles 401s through its own onAuth callback). Drop Content-Length
-      // so the response can be chunk-encoded transparently.
-      const setCookieValues = upstream.headers.getSetCookie();
-      upstream.headers.forEach((v, k) => {
-        const lower = k.toLowerCase();
-        if (
-          lower !== 'transfer-encoding' &&
-          lower !== 'content-encoding' &&
-          lower !== 'content-length' &&
-          lower !== 'www-authenticate' &&
-          lower !== 'set-cookie' &&
-          !lower.startsWith('x-proxy-')
-        ) {
-          // Scrub real secret values from response headers (one-shot,
-          // headers are always small so per-chunk semantics don't apply).
-          res.setHeader(k, secretProxy.scrubResponse(v));
-        }
-      });
-      if (setCookieValues.length > 0) {
-        res.setHeader(
-          'X-Proxy-Set-Cookie',
-          secretProxy.scrubResponse(JSON.stringify(setCookieValues))
-        );
-      }
-
-      // Stream the upstream body straight through to the client so that
-      // LLM SSE completions reach the browser token-by-token instead of
-      // arriving in one giant burst at the end. Per-chunk secret-scrub
-      // runs on text responses; secrets that span a chunk boundary slip
-      // through unscrubbed (documented limitation — the scrub primitive
-      // is best-effort on streamed bodies).
-      if (!upstream.body) {
-        res.end();
-        if (onClientClose) res.off('close', onClientClose);
-        return;
-      }
-      const ct = (upstream.headers.get('content-type') ?? '').toLowerCase();
-      const isText =
-        ct.startsWith('text/') ||
-        ct.startsWith('application/json') ||
-        ct.includes('charset=') ||
-        ct.includes('event-stream');
-      const upstreamStream = Readable.fromWeb(
-        upstream.body as unknown as import('stream/web').ReadableStream<Uint8Array>
-      );
-      // Buffer-aware UTF-8 scrubber. Naive `Buffer.from(chunk).toString('utf-8')`
-      // corrupts multi-byte codepoints whenever a sequence straddles a chunk
-      // boundary — Node replaces the partial bytes with U+FFFD, which is fatal
-      // for any non-ASCII model output (CJK, emoji, even some accented Latin).
-      // `StringDecoder` keeps the trailing partial bytes in a private buffer
-      // and prepends them to the next chunk, guaranteeing valid UTF-8 every
-      // call. The flush() in `flush(cb)` releases any tail bytes (replacing
-      // truly invalid trailing bytes with U+FFFD, same as before but only at
-      // EOF where it can't span a real codepoint).
-      const utf8Decoder = new StringDecoder('utf8');
-      const scrubChunk = new Transform({
-        transform(chunk, _enc, cb) {
-          if (!isText || !secretProxy.hasSecrets()) {
-            cb(null, chunk);
-            return;
-          }
-          try {
-            const decoded = utf8Decoder.write(chunk);
-            if (decoded.length === 0) {
-              // All bytes were buffered as a partial codepoint — no output yet.
-              cb(null, Buffer.alloc(0));
-              return;
-            }
-            const scrubbed = secretProxy.scrubResponse(decoded);
-            cb(null, Buffer.from(scrubbed, 'utf-8'));
-          } catch (err) {
-            cb(err as Error);
-          }
-        },
-        flush(cb) {
-          if (!isText || !secretProxy.hasSecrets()) {
-            cb();
-            return;
-          }
-          try {
-            const tail = utf8Decoder.end();
-            if (tail.length === 0) {
-              cb();
-              return;
-            }
-            const scrubbed = secretProxy.scrubResponse(tail);
-            cb(null, Buffer.from(scrubbed, 'utf-8'));
-          } catch (err) {
-            cb(err as Error);
-          }
-        },
-      });
-      const cleanup = () => {
-        if (onClientClose) {
-          res.off('close', onClientClose);
-          onClientClose = null;
-        }
-      };
-      upstreamStream.on('error', (err) => {
-        cleanup();
-        if (!res.headersSent) {
-          res.setHeader('X-Proxy-Error', '1');
-          res
-            .status(502)
-            .json({ error: `Proxy stream failed: ${err instanceof Error ? err.message : err}` });
-        } else {
-          res.destroy(err);
-        }
-      });
-      // Belt-and-braces cleanup: 'finish' fires once the response is fully
-      // flushed; 'close' fires regardless of how the response ended (success,
-      // abort, or pipe error). Either way we want the abort listener gone.
-      res.on('finish', cleanup);
-      res.on('close', cleanup);
-      upstreamStream.pipe(scrubChunk).pipe(res);
-    } catch (err: unknown) {
-      // Best-effort cleanup so an early failure (e.g. fetch threw) doesn't
-      // leave the close listener attached to the response object.
-      if (onClientClose) {
-        res.off('close', onClientClose);
-        onClientClose = null;
-      }
-      const message = err instanceof Error ? err.message : String(err);
-      res.setHeader('X-Proxy-Error', '1');
-      res.status(502).json({ error: `Proxy fetch failed: ${message}` });
-    }
-  });
+  // Fetch proxy — forwards cross-origin requests from the browser to bypass CORS,
+  // injecting/unmasking secrets and streaming the response with a UTF-8-safe scrub.
+  registerFetchProxyRoute(app, { secretProxy });
 
   // Create the HTTP server BEFORE Vite so we can register our upgrade handler first
   const server = createServer(app);
 
-  if (DEV_MODE && !RUNTIME_FLAGS.hosted) {
-    // Dev mode: use Vite's dev server as middleware for HMR
-    const { createServer: createViteServer } = await import('vite');
-    const webappIndexHtml = resolve(process.cwd(), 'packages/webapp/index.html');
-    const vite = await createViteServer({
-      configFile: resolve(process.cwd(), 'packages/webapp/vite.config.ts'),
-      server: {
-        middlewareMode: true,
-        hmr: {
-          server, // Share the HTTP server — our upgrade handler routes /cdp and /licks-ws separately
-          path: '/__vite_hmr', // Dedicated path avoids conflicts with /cdp upgrade handler
-        },
-      },
-      appType: 'custom', // We handle index.html serving ourselves via the handler below
-      root: process.cwd(),
-    });
-    app.use(vite.middlewares);
-    app.use(async (req, res, next) => {
-      if (
-        req.method !== 'GET' ||
-        !req.headers.accept?.includes('text/html') ||
-        req.path.includes('.')
-      ) {
-        next();
-        return;
-      }
-
-      try {
-        const template = readFileSync(webappIndexHtml, 'utf-8');
-        const html = await vite.transformIndexHtml(req.originalUrl, template);
-        res.status(200).setHeader('Content-Type', 'text/html');
-        res.end(html);
-      } catch (err: unknown) {
-        if (err instanceof Error) {
-          vite.ssrFixStacktrace(err);
-        }
-        next(err);
-      }
-    });
-    console.log(`Vite dev server middleware attached (HMR on ${SERVE_ORIGIN}/__vite_hmr)`);
-  } else {
-    // Production mode: serve built static files
-    const uiDir = resolve(Dirname, '..', 'ui');
-    app.use(
-      express.static(uiDir, {
-        setHeaders: (res, path) => {
-          // Default Cache-Control for anything not classified below:
-          // HTML, manifest, sprinkle-sandbox.html, publicDir fonts/logos,
-          // favicon, etc. None of these are content-hashed and they
-          // reference hashed asset URLs that change on rebuild. If the
-          // browser serves a stale `index.html` out of its heuristic
-          // cache, the referenced `/assets/*` chunks 404 after an update
-          // — the user sees
-          //   "Failed to fetch dynamically imported module: …/assets/<old-hash>.js"
-          // on every cone bootstrap until they hard-refresh.
-          // `no-cache` forces a conditional revalidation on every load
-          // (cheap — `serve-static`'s default ETag yields a 304 when
-          // unchanged) so the tab picks up a freshly-built `index.html`
-          // after `npm run build`.
-          //
-          // The single `setHeader` at the end is intentional: each
-          // branch overrides the default by assigning to `cacheControl`.
-          // To add a fourth bucket, add an `else if` ABOVE the final
-          // assignment — never a separate `setHeader` after, or the
-          // catch-all silently wins.
-          let cacheControl = 'no-cache';
-          if (path.endsWith('llm-proxy-sw.js') || path.endsWith('preview-sw.js')) {
-            // Service workers need `Service-Worker-Allowed: /` for the
-            // root-scoped registration `llm-proxy-sw.js` does (the
-            // `preview-sw.js` SW registers at scope `/preview/`, which
-            // is narrower than `/` so the broader allowance is harmless).
-            //
-            // `no-store`, not `no-cache`: the browser only re-checks
-            // the SW script on navigation/registration, so the safest
-            // signal is "always pull the latest bytes." A stale SW
-            // pinned in cache would intercept fetch / dispatch
-            // `preview/*` with outdated logic (e.g. an outdated
-            // forbidden-header encoding scheme that no longer matches
-            // the server-side restoration in `index.ts`, or a stale
-            // `preview-sw` VFS handler) — that's a worse failure mode
-            // than the `no-cache` revalidation cost.
-            res.setHeader('Service-Worker-Allowed', '/');
-            cacheControl = 'no-store';
-          } else if (path.includes(`${sep}assets${sep}`)) {
-            // Vite emits content-hashed filenames into `/assets/` —
-            // the hash changes when content changes, so the file at a
-            // given URL is byte-for-byte immutable. Cache forever to
-            // avoid revalidation round-trips. The `path` parameter is
-            // a filesystem path (uses `sep` on Windows, `/` elsewhere),
-            // hence the platform-aware match.
-            cacheControl = 'public, max-age=31536000, immutable';
-          }
-          res.setHeader('Cache-Control', cacheControl);
-        },
-      })
-    );
-
-    // SPA fallback — serve index.html for all non-file routes. Same
-    // `no-cache` reasoning as above: the served `index.html` carries
-    // references to the current asset hashes, and stale-cached HTML
-    // is the canonical post-update breakage.
-    app.get('/{*path}', (_req, res) => {
-      res.setHeader('Cache-Control', 'no-cache');
-      res.sendFile(join(uiDir, 'index.html'));
-    });
-  }
-
-  // 4. CDP WebSocket proxy at /cdp
-  //    Use noServer mode so Vite's dev middleware doesn't intercept the
-  //    upgrade. Keep the default per-message payload cap on this socket —
-  //    the oversized-message feedback loop we have to defend against
-  //    (see the chromeWs constructor below for the full writeup) is
-  //    purely Chrome-to-proxy, never client-to-proxy, so raising the
-  //    cap here would only widen the DoS surface for anything on
-  //    localhost that can reach ws://127.0.0.1:PORT/cdp.
-  const wss = new WebSocketServer({ noServer: true });
-
-  server.on('upgrade', (request, socket, head) => {
-    const { pathname } = new URL(request.url!, `http://${request.headers.host}`);
-    if (pathname === '/cdp') {
-      wss.handleUpgrade(request, socket, head, (ws) => {
-        wss.emit('connection', ws, request);
-      });
-    } else if (pathname === '/licks-ws') {
-      lickWss.handleUpgrade(request, socket, head, (ws) => {
-        lickWss.emit('connection', ws, request);
-      });
-    }
-    // For other paths, do nothing — let Vite handle HMR upgrades
+  await attachUiServing(app, server, {
+    devMode: DEV_MODE,
+    hosted: RUNTIME_FLAGS.hosted,
+    serveOrigin: SERVE_ORIGIN,
+    uiDir: resolve(Dirname, '..', 'ui'),
   });
 
-  // ---------------------------------------------------------------------------
-  // Shared CDP proxy state — Chrome's browser-level debugger URL only accepts
-  // ONE concurrent WebSocket connection. We keep a single chromeWs and swap
-  // out the active client when a new one connects.
-  // ---------------------------------------------------------------------------
-  let cdpUrl: string | null = null;
-  let chromeWs: WebSocket | null = null;
-  let activeClientWs: WebSocket | null = null;
-  let messageBuffer: unknown[] | null = null;
-  const cdpDedup = new CliLogDedup();
-  // Tracks per-session current URL by sniffing Chrome→Client events; feeds
-  // the Client→Chrome unmask gate so per-frame unmasking is scoped to
-  // the target tab's actual hostname (fail-closed when unknown).
-  const cdpSessionUrls = createCdpSessionUrlTracker();
-
-  // Ensure everything is cleaned up when CLI exits
-  const gracefulShutdown = async () => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    console.log('\nShutting down...');
-    fileLogger.close();
-
-    overlayInjector?.stop();
-    overlayInjector = null;
-
-    // Close the shared Chrome WebSocket and all client connections
-    if (chromeWs) {
-      try {
-        chromeWs.close();
-      } catch {
-        /* ignore */
-      }
-      chromeWs = null;
-    }
-    if (activeClientWs) {
-      try {
-        activeClientWs.close();
-      } catch {
-        /* ignore */
-      }
-      activeClientWs = null;
-    }
-    for (const client of wss.clients) {
-      client.close();
-    }
-    wss.close();
-
-    // Stop accepting new HTTP connections
-    server.close();
-
-    if (launchedBrowserProcess) {
-      let browserExited = false;
-      launchedBrowserProcess.on('exit', () => {
-        browserExited = true;
-      });
-
-      try {
-        const res = await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`);
-        const json = (await res.json()) as { webSocketDebuggerUrl: string };
-        const browserWs = new WebSocket(json.webSocketDebuggerUrl);
-        await new Promise<void>((resolve, reject) => {
-          browserWs.on('open', () => {
-            browserWs.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
-            resolve();
-          });
-          browserWs.on('error', reject);
-        });
-      } catch {
-        // CDP not available — the launched browser may still be starting up; fall through to kill.
-      }
-
-      const deadline = Date.now() + 3000;
-      while (!browserExited && Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 100));
-      }
-
-      if (!browserExited) {
-        try {
-          launchedBrowserProcess.kill('SIGKILL');
-        } catch {
-          /* ignore */
-        }
-      }
-
-      console.log(`${launchedBrowserLabel} closed`);
-    }
-    process.exit(0);
+  // 4. CDP WebSocket proxy at /cdp — noServer mode so Vite's dev middleware
+  //    doesn't intercept the upgrade; the per-message cap stays default (the
+  //    feedback-loop defense is Chrome→proxy only, never client→proxy).
+  const wss = new WebSocketServer({ noServer: true });
+  attachCdpUpgradeRouting(server, wss, lickWss);
+  const cdpCtx: CdpProxyContext = {
+    wss,
+    secretProxy,
+    cdpDedup: new CliLogDedup(),
+    cdpSessionUrls: createCdpSessionUrlTracker(),
   };
 
+  const gracefulShutdown = createGracefulShutdown(state, {
+    fileLogger,
+    wss,
+    server,
+    cdpPort: CDP_PORT,
+  });
   process.on('SIGINT', () => {
     gracefulShutdown();
   });
@@ -1894,290 +1267,29 @@ async function main() {
     gracefulShutdown();
   });
   process.on('exit', () => {
-    // Synchronous last-resort cleanup — kill the launched browser if it is still running.
-    if (!shuttingDown && launchedBrowserProcess) {
+    // Synchronous last-resort cleanup — kill the launched browser if still running.
+    const browser = state.launchedBrowserProcess;
+    if (!state.shuttingDown && browser) {
       try {
-        launchedBrowserProcess.kill();
+        browser.kill();
       } catch {
         /* ignore */
       }
     }
   });
 
-  // Apply the Client→Chrome unmask gate to a buffered frame on flush.
-  // Defined here so both buffer-drain sites (ensureChromeConnection
-  // already-open path + chromeWs 'open' handler) share one
-  // implementation; falls back to the original bytes on any error.
-  const flushClientFrame = (target: WebSocket, raw: unknown): void => {
-    const original = String(raw);
-    const { output } = applyCdpUnmask(original, {
-      tracker: cdpSessionUrls,
-      pipeline: secretProxy.rawPipeline,
-    });
-    target.send(output);
-  };
-
-  function ensureChromeConnection(url: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (chromeWs && chromeWs.readyState === WebSocket.OPEN) {
-        // Already connected — flush any buffered messages and go direct
-        if (messageBuffer) {
-          for (const msg of messageBuffer) {
-            flushClientFrame(chromeWs, msg);
-          }
-          messageBuffer = null;
-        }
-        resolve();
-        return;
-      }
-      // Clean up old connection
-      if (chromeWs) {
-        try {
-          chromeWs.close();
-        } catch {
-          /* ignore */
-        }
-      }
-
-      messageBuffer = [];
-      // Disable the ws library's per-message size cap (default 100 MiB).
-      // The slicc UI runs INSIDE the Chrome instance it's debugging, so
-      // Chrome's Network domain reports every CDP frame — including the
-      // event frames themselves — back to us as `Network.webSocketFrame*`
-      // messages that each embed the prior frame's payload. That produces
-      // an exponential feedback loop which, left unchecked, trips the
-      // default 100 MiB cap and closes the Chrome WebSocket (code 1006).
-      // Without the cap the loop is still bounded by Chrome's own frame
-      // limits, but the proxy no longer dies and later CDP calls like
-      // `Target.getTargets` keep working instead of being DROPPED.
-      chromeWs = new WebSocket(url, { maxPayload: 0 });
-
-      chromeWs.on('open', () => {
-        console.log('[cdp-proxy] chromeWs open');
-        // Flush buffered messages
-        if (messageBuffer) {
-          for (const msg of messageBuffer) {
-            flushClientFrame(chromeWs!, msg);
-          }
-          messageBuffer = null;
-        }
-        resolve();
-      });
-
-      // The slicc UI runs inside the Chrome instance it's debugging, so
-      // Chrome's Network domain reports every CDP frame back through the
-      // same socket as `Network.webSocketFrameReceived` /
-      // `Network.webSocketFrameSent` events whose `payloadData` embeds
-      // the prior frame's bytes — a self-amplifying feedback loop that,
-      // left alone, drives per-frame sizes past V8's ~512 MiB string
-      // limit and crashes node-server with `ERR_STRING_TOO_LONG`. It
-      // also starves the browser's own debugger UI (the classic
-      // "debugger paused in another window" freeze) because the CDP
-      // event stream fills up with self-referential noise instead of
-      // the events DevTools actually needs.
-      //
-      // Peek at the raw bytes and skip the runaway event types once
-      // they exceed a small sniffing threshold. Legitimate CDP payloads
-      // we care about (screenshots, DOM snapshots, large tool results)
-      // are never `Network.webSocketFrame*` messages, so filtering by
-      // method is far safer than a blanket size cap that would also
-      // drop genuine large events.
-      const CDP_PROXY_INSPECT_BYTES = 256 * 1024;
-      const CDP_PROXY_HARD_FRAME_CAP = 64 * 1024 * 1024;
-      const loopEventPrefixes = [
-        '{"method":"Network.webSocketFrameReceived"',
-        '{"method":"Network.webSocketFrameSent"',
-      ];
-
-      /**
-       * Normalise the `ws` library's polymorphic message payload into a
-       * single Buffer we can safely peek at and forward. Without this,
-       * a later `String(data)` would coerce an `ArrayBuffer` to
-       * `"[object ArrayBuffer]"` and a `Buffer[]` to comma-joined
-       * stringified fragments, corrupting the CDP frame.
-       */
-      const toBuffer = (data: unknown): Buffer => {
-        if (Buffer.isBuffer(data)) return data;
-        if (data instanceof ArrayBuffer) return Buffer.from(data);
-        if (Array.isArray(data)) return Buffer.concat(data as Buffer[]);
-        // Rare fallback — string frames in text mode. Keep bytes faithful.
-        return Buffer.from(String(data));
-      };
-
-      chromeWs.on('message', (data) => {
-        const buf = toBuffer(data);
-        const byteLen = buf.length;
-
-        // Peek at the first 256 KiB only — enough to identify the event
-        // type cheaply without stringifying the whole runaway buffer.
-        const head = buf.subarray(0, CDP_PROXY_INSPECT_BYTES).toString();
-
-        if (loopEventPrefixes.some((p) => head.startsWith(p))) {
-          const msg = `[cdp-proxy] Dropping Chrome feedback-loop event (${byteLen} bytes, ${head.slice(1, 60)}…)`;
-          if (cdpDedup.shouldLog(msg)) console.debug(msg);
-          return;
-        }
-
-        // Hard safety net — still refuse anything that would blow past
-        // V8's string length limit (buf.toString throws ERR_STRING_TOO_LONG
-        // for any frame larger than ~512 MiB).
-        if (byteLen > CDP_PROXY_HARD_FRAME_CAP) {
-          const msg = `[cdp-proxy] Dropping oversized Chrome→Client frame (${byteLen} bytes)`;
-          if (cdpDedup.shouldLog(msg)) console.debug(msg);
-          return;
-        }
-
-        const str = buf.toString();
-        const preview = str.slice(0, 200);
-        const msg = `[cdp-proxy] Chrome→Client: ${preview}`;
-        if (cdpDedup.shouldLog(msg)) console.debug(msg);
-        // Sniff Target.attachedToTarget / targetInfoChanged / Page.frameNavigated
-        // so the Client→Chrome unmask gate can resolve per-session hostnames.
-        cdpSessionUrls.observeChromeToClient(str);
-        if (activeClientWs && activeClientWs.readyState === WebSocket.OPEN) {
-          activeClientWs.send(str);
-        }
-      });
-
-      chromeWs.on('close', (code, reason) => {
-        console.log(`[cdp-proxy] Chrome WS closed. code=${code}, reason=${String(reason)}`);
-        chromeWs = null;
-      });
-
-      chromeWs.on('error', (err) => {
-        console.log(`[cdp-proxy] Chrome WS error: ${err}`);
-        chromeWs = null;
-        reject(err);
-      });
-    });
-  }
-
-  wss.on('connection', async (clientWs) => {
-    try {
-      // Close previous client connection — only one client active at a time
-      if (activeClientWs && activeClientWs.readyState === WebSocket.OPEN) {
-        console.log('[cdp-proxy] Closing previous client connection');
-        activeClientWs.close();
-      }
-      activeClientWs = clientWs;
-
-      console.log('[cdp-proxy] New client connected');
-
-      // Initialize buffer BEFORE any await so messages arriving during
-      // waitForCDP or ensureChromeConnection are captured, not dropped.
-      if (messageBuffer === null) {
-        messageBuffer = [];
-      }
-
-      // Register ALL handlers BEFORE any async work so no messages are lost
-      clientWs.on('message', (data) => {
-        const original = String(data);
-        const preview = original.slice(0, 200);
-        if (chromeWs && chromeWs.readyState === WebSocket.OPEN && messageBuffer === null) {
-          const msg = `[cdp-proxy] Client→Chrome: ${preview}`;
-          if (cdpDedup.shouldLog(msg)) console.debug(msg);
-          const { output } = applyCdpUnmask(original, {
-            tracker: cdpSessionUrls,
-            pipeline: secretProxy.rawPipeline,
-          });
-          chromeWs.send(output);
-        } else if (messageBuffer !== null) {
-          // Buffer the ORIGINAL bytes; unmask runs on flush so the
-          // hostname tracker reflects the state at send time.
-          messageBuffer.push(data);
-          const msg = `[cdp-proxy] Client→Chrome (buffered): ${preview}`;
-          if (cdpDedup.shouldLog(msg)) console.debug(msg);
-        } else {
-          // Chrome not connected and no buffer — this shouldn't happen but log it
-          console.log(`[cdp-proxy] Client→Chrome (DROPPED — no connection): ${preview}`);
-        }
-      });
-
-      clientWs.on('close', () => {
-        console.log('[cdp-proxy] Client disconnected');
-        if (activeClientWs === clientWs) {
-          activeClientWs = null;
-        }
-        // Don't close chromeWs — keep it alive for the next client
-      });
-
-      clientWs.on('error', (err) => {
-        console.log(`[cdp-proxy] Client WS error: ${err}`);
-        if (activeClientWs === clientWs) {
-          activeClientWs = null;
-        }
-      });
-
-      // NOW do async work — messages arriving during these awaits are buffered
-      if (!cdpUrl) {
-        cdpUrl = await waitForCDP(CDP_PORT);
-        console.log(`[cdp-proxy] CDP available at: ${cdpUrl}`);
-      }
-
-      await ensureChromeConnection(cdpUrl);
-    } catch (err) {
-      console.error('[cdp-proxy] Connection error:', err);
-      clientWs.close();
-    }
+  wss.on('connection', (clientWs) => {
+    void handleCdpClient(state, clientWs, cdpCtx, CDP_PORT);
   });
 
-  server.listen(SERVE_PORT, '127.0.0.1', () => {
-    console.log(`Serving UI at ${SERVE_ORIGIN}`);
-    console.log(`CDP proxy at ws://localhost:${SERVE_PORT}/cdp`);
-    fileLogger.log('info', 'CLI server started', {
-      port: SERVE_PORT,
-      cdpPort: CDP_PORT,
-      devMode: DEV_MODE,
-      electronMode: ELECTRON_MODE,
-    });
-
-    // Pre-connect to Chrome's CDP so the proxy is warm when the first client connects.
-    // Without this, the first browser automation command has to wait for CDP discovery + WS handshake.
-    (async () => {
-      try {
-        cdpUrl = await waitForCDP(CDP_PORT);
-        console.log(`[cdp-proxy] Pre-connected: CDP available at ${cdpUrl}`);
-        await ensureChromeConnection(cdpUrl);
-        console.log('[cdp-proxy] Chrome WebSocket ready (pre-warmed)');
-
-        // Register leader-restart endpoint now that CDP is ready (hosted mode only)
-        if (RUNTIME_FLAGS.hosted) {
-          registerLeaderRestartEndpoint(app, {
-            cdp: createHttpCdp(CDP_PORT),
-            localUrlPrefix: `http://localhost:${SERVE_PORT}/`,
-          });
-          console.log('[hosted] /api/leader-restart endpoint registered');
-        }
-      } catch (err) {
-        console.log('[cdp-proxy] Pre-connect failed (will retry on first client):', err);
-      }
-    })();
-
-    if (ELECTRON_MODE) {
-      void (async () => {
-        try {
-          overlayInjector = await ElectronOverlayInjector.create({
-            cdpPort: CDP_PORT,
-            servePort: SERVE_PORT,
-            dev: DEV_MODE,
-            projectRoot: PROJECT_ROOT,
-          });
-          await overlayInjector.start();
-          console.log('[electron-float] Overlay injector is watching Electron page targets');
-        } catch (error: unknown) {
-          const message = error instanceof Error ? error.message : String(error);
-          console.error('[electron-float] Failed to start overlay injector:', message);
-        }
-      })();
-    }
-
-    if (!ELECTRON_MODE) {
-      setTimeout(() => {
-        attachConsoleForwarder(CDP_PORT, String(SERVE_PORT)).catch((err) => {
-          console.error('[page] Console forwarder error:', err);
-        });
-      }, 2500);
-    }
+  startCdpServer(state, {
+    app,
+    server,
+    ctx: cdpCtx,
+    fileLogger,
+    servePort: SERVE_PORT,
+    serveOrigin: SERVE_ORIGIN,
+    cdpPort: CDP_PORT,
   });
 }
 
