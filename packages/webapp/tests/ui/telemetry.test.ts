@@ -137,14 +137,80 @@ describe('telemetry', () => {
     expect(mockSampleRUM).toHaveBeenCalledWith('signup', { source: 'button' });
   });
 
-  it('trackError forwards source/target as-is (sanitization happens at the listener)', async () => {
+  it('trackError sanitizes target (truncates to 200 chars)', async () => {
     const { initTelemetry, trackError } = await import('../../src/ui/telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
 
     const long = 'x'.repeat(250);
     trackError('js', long);
-    expect(mockSampleRUM).toHaveBeenCalledWith('error', { source: 'js', target: long });
+    const target = mockSampleRUM.mock.calls[0][1].target as string;
+    expect(target.length).toBeLessThanOrEqual(200);
+    expect(target.length).toBe(200);
+  });
+
+  it('trackError drops errors that are entirely Vite dev-server noise', async () => {
+    const { initTelemetry, trackError } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    trackError(
+      'js',
+      'Failed to fetch dynamically imported module: http://localhost:5710/@vite/client'
+    );
+    const errorCalls = mockSampleRUM.mock.calls.filter(([cp]) => cp === 'error');
+    expect(errorCalls).toHaveLength(0);
+  });
+
+  it('trackError drops [vite] HMR overlay noise entirely', async () => {
+    const { initTelemetry, trackError } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    trackError('js', '[vite] hot updated: /src/foo.ts');
+    const errorCalls = mockSampleRUM.mock.calls.filter(([cp]) => cp === 'error');
+    expect(errorCalls).toHaveLength(0);
+  });
+
+  it('trackError strips Vite frames from real app errors but keeps the rest', async () => {
+    const { initTelemetry, trackError } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    const mixed = [
+      'TypeError: cannot read property x of undefined',
+      '  at handler (/workspace/skills/foo.ts:10:5)',
+      '  at http://localhost:5710/@vite/client.js:42:1',
+    ].join('\n');
+    trackError('js', mixed);
+
+    const target = mockSampleRUM.mock.calls[0][1].target as string;
+    expect(target).toContain('TypeError');
+    expect(target).not.toContain('@vite/client');
+    expect(target).not.toContain('localhost:5710');
+  });
+
+  it('trackError preserves real errors unchanged (no Vite content)', async () => {
+    const { initTelemetry, trackError } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    trackError('llm', 'rate_limit');
+    expect(mockSampleRUM).toHaveBeenCalledWith('error', { source: 'llm', target: 'rate_limit' });
+  });
+
+  it('CLI sampleRUM wrapper passes through non-error checkpoints unchanged', async () => {
+    const { initTelemetry, trackChatSend } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    // The wrapper sits between trackChatSend and helix's mocked sampleRUM.
+    // Non-error checkpoints must pass through with data intact.
+    trackChatSend('cone', 'claude-sonnet');
+    expect(mockSampleRUM).toHaveBeenCalledWith('formsubmit', {
+      source: 'cone',
+      target: 'claude-sonnet',
+    });
   });
 
   it('track functions are no-op before init', async () => {
