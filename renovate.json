@@ -41,6 +41,14 @@
       "description": "Apply a longer 14-day cooldown for major version bumps, which carry higher risk of breaking changes and are more attractive targets for malicious actors.",
       "matchUpdateTypes": ["major"],
       "minimumReleaseAge": "14 days"
+    },
+    {
+      "description": "Packages we carry a patch-package patch for (see patches/ and patches/patches.json). A bump orphans the version-pinned patch, so route these into one group, label them, and never automerge — the renovate-patch-reconcile workflow regenerates or removes the patch first, and the lint:patches guard blocks the merge until the patch matches the installed version. Keep this list in sync with patches/.",
+      "matchPackageNames": ["just-bash", "@zenfs/core"],
+      "groupName": "patched dependencies",
+      "groupSlug": "patched-deps",
+      "addLabels": ["patched-dependency"],
+      "automerge": false
     }
   ],
   "customManagers": [

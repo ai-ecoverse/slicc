@@ -1,0 +1,218 @@
+name: Renovate Patch Reconcile
+
+# When Renovate bumps a dependency we carry a patch-package patch for, the
+# version-pinned patch (patches/<pkg>+<version>.patch) is orphaned: the bump
+# moves past it and the fix silently stops applying. This workflow hands such
+# PRs to claude-code-action, which decides whether the upstream fix has landed
+# (remove the patch + its patches.json entry) or is still needed (regenerate it
+# for the new version), runs the manifest's verify command, then pushes the
+# reconciliation to the PR branch and comments.
+#
+# The deterministic backstop is `npm run lint:patches`
+# (packages/dev-tools/patch-reconcile/check-patches.mjs): it fails CI on any
+# orphaned patch, so even if this workflow is skipped or wrong, an unreconciled
+# bump cannot merge silently. Renovate also never automerges these
+# (renovate.json routes patched packages into a non-automerge group + label).
+#
+# Trigger gating: Renovate-authored PRs in THIS repo (not forks) carrying the
+# `patched-dependency` label. claude-code-action normally rejects bot-initiated
+# runs; `allowed_bots: renovate[bot]` opts this one bot in (a fixed prompt — the
+# PR's dependency diff is data, not instructions — and a private repo, so the
+# external-App caveat in the action docs does not apply).
+#
+# Security: the reconcile step runs `npm ci` (executing the bumped dependency's
+# lifecycle scripts) and pushes to the PR branch with contents:write. That is
+# the same install surface the existing CI test job already runs on Renovate
+# PRs; renovate.json's minimumReleaseAge bounds the malicious-version window.
+# Third-party actions are pinned to immutable commit SHAs (the exact SHAs used
+# by .github/workflows/claude-pr-review.yml).
+#
+# Required repository secrets (both already present):
+#   AWS_BEARER_TOKEN_BEDROCK  Amazon Bedrock API key (Adobe CAMP `ABSK...`
+#                             bearer token) for claude-code-action (shared with
+#                             claude-pr-review.yml).
+#   BOT_PAT                   Fine-grained PAT scoped to this repo (contents +
+#                             pull-requests write). The reconcile commit is
+#                             pushed with BOT_PAT — NOT GITHUB_TOKEN — so the
+#                             PR's `synchronize` event fires and the full check
+#                             suite re-runs on the new commit. GitHub's
+#                             anti-recursion guard suppresses workflow runs for
+#                             GITHUB_TOKEN-authored pushes; this is the same
+#                             identity requirement documented in
+#                             coverage-ratchet.yml / planning-artifact-cleanup.yml.
+#                             (The "Verify reconciliation" step below is an extra
+#                             fast-fail inside this job.)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+concurrency:
+  group: renovate-patch-reconcile-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write # push the reconciliation commit to the PR branch
+  pull-requests: write # comment the decision on the PR
+  id-token: write # OIDC, mirrors claude-pr-review.yml
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    # Only Renovate's own branch PRs (head in this repo → secrets + push work)
+    # that carry the patched-dependency label.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor == 'renovate[bot]' &&
+      contains(github.event.pull_request.labels.*.name, 'patched-dependency')
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          # BOT_PAT (persisted as the push credential) so Claude's `git push`
+          # of the reconcile commit fires the PR's `synchronize` event and CI
+          # re-runs on it — a GITHUB_TOKEN push would be suppressed by GitHub's
+          # anti-recursion guard. See the header note.
+          token: ${{ secrets.BOT_PAT }}
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: npm
+
+      # Detect orphaned patches from the lockfile alone — no install needed, so
+      # the common "nothing to reconcile" run stays cheap and skips Claude.
+      - name: Detect orphaned patches
+        id: detect
+        run: |
+          ORPHANS=$(node packages/dev-tools/patch-reconcile/reconcile-context.mjs --json)
+          if [ "$ORPHANS" = "[]" ]; then
+            echo "orphans=false" >> "$GITHUB_OUTPUT"
+            echo "No orphaned patches — nothing to reconcile."
+          else
+            echo "orphans=true" >> "$GITHUB_OUTPUT"
+            node packages/dev-tools/patch-reconcile/reconcile-context.mjs >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Install WITHOUT running scripts. The root postinstall runs patch-package,
+      # which (with --error-on-fail, the CI default) exits non-zero when the
+      # orphaned patch no longer applies — i.e. exactly the case this workflow
+      # repairs — and would fail `npm ci` before Claude could fix it. So skip
+      # scripts, rebuild the workspace prereqs the postinstall would have built,
+      # and let Claude (re)apply patches as part of reconciliation.
+      - name: Install dependencies (no scripts)
+        if: steps.detect.outputs.orphans == 'true'
+        run: npm ci --ignore-scripts
+
+      - name: Build workspace prerequisites
+        if: steps.detect.outputs.orphans == 'true'
+        run: |
+          npm run build -w @slicc/shared-ts
+          npm run build -w @slicc/cloud-core
+          npm run build -w @slicc/webcomponents
+
+      - name: Configure git identity
+        if: steps.detect.outputs.orphans == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Reconcile patches with Claude
+        if: steps.detect.outputs.orphans == 'true'
+        uses: anthropics/claude-code-action@d5726de019ec4498aa667642bc3a80fca83aa102 # v1
+        env:
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
+          GH_TOKEN: ${{ github.token }}
+        with:
+          use_bedrock: 'true'
+          github_token: ${{ github.token }}
+          # Renovate authors these PRs; opt that one bot in (see header).
+          allowed_bots: 'renovate[bot]'
+          claude_args: |
+            --model ${{ vars.PATCH_RECONCILE_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
+            --allowedTools "Bash,Read,Edit,Write,Grep,Glob,WebFetch"
+            --max-turns 120
+          prompt: |
+            You are reconciling patch-package patches after a Renovate dependency
+            bump in the SLICC repo (PR #${{ github.event.pull_request.number }}).
+
+            A patch in patches/ is version-pinned (patches/<pkg>+<version>.patch).
+            This PR bumped a dependency past its patched version, so the patch is
+            ORPHANED and the fix it carried no longer applies.
+
+            ENVIRONMENT — IMPORTANT: dependencies were installed with
+            `npm ci --ignore-scripts`, so the root postinstall did NOT run and
+            NO patches are currently applied to node_modules (this avoids the
+            orphaned patch breaking install). The workspace packages
+            (@slicc/shared-ts, @slicc/cloud-core, @slicc/webcomponents) are
+            already built. You own (re)applying patches: after the patches/ tree
+            is valid again, run `npx patch-package` to apply them all before you
+            verify.
+
+            STEP 1 — See exactly what needs reconciling:
+              Run `node packages/dev-tools/patch-reconcile/reconcile-context.mjs`.
+              For each orphaned patch it prints: package, old→new version, the
+              upstream PR/issue, what the patch does, the "remove when" condition,
+              and the verify command. Also read patches/patches.json.
+
+            For EACH orphaned patch <pkg> (OLD → NEW):
+
+            STEP 2 — Decide whether the upstream fix landed in NEW:
+              - Read the old patch (patches/<pkg>+OLD.patch) to see exactly what it
+                changes, then inspect the installed code in node_modules/<pkg> at
+                NEW to see whether that change is already present.
+              - Consult the manifest's upstream link (WebFetch, or `gh` for a
+                GitHub PR) to confirm whether the fix was merged AND released in
+                NEW.
+
+            STEP 3a — If the fix IS present in NEW (patch no longer needed):
+              - `git rm patches/<pkg>+OLD.patch`
+              - Remove the "<pkg>" entry from patches/patches.json.
+              - Update docs that reference the patch (grep the patch filename and
+                package across CLAUDE.md, docs/, packages/*/CLAUDE.md, tests);
+                drop the "remove the patch when…" notes.
+
+            STEP 3b — If the fix is still needed (absent in NEW):
+              - Re-apply the SAME change to NEW's source in node_modules/<pkg>
+                (the old patch shows the intent; NEW's code may have moved, so
+                adapt it — match the new structure, do not blindly paste).
+              - Regenerate: `npx patch-package <pkg>` (writes
+                patches/<pkg>+NEW.patch). Remove the stale +OLD.patch if it
+                remains.
+              - Set patches/patches.json["<pkg>"].patchedVersion to NEW.
+
+            STEP 4 — Verify:
+              - Apply the now-valid patches to node_modules: `npx patch-package`
+                (it must succeed cleanly — no orphaned/failed patches).
+              - Run the package's verify command (from reconcile-context). If it
+                needs a browser (e.g. `test:integration`), run
+                `npx playwright install chromium` first.
+              - Run `npm run lint:patches` — it MUST pass.
+              - Fix and re-run until all are green.
+
+            STEP 5 — Commit, push, comment:
+              - Stage only what you changed (patches/, patches.json, docs).
+              - `git commit -m "chore(patches): reconcile <pkg> for <NEW> (<removed|regenerated>)"`
+              - `git push`
+              - Post ONE concise summary with `gh pr comment` (per package: the
+                decision and how you verified it).
+
+            CONSTRAINTS:
+              - ONLY touch patches/, patches/patches.json, and docs/CLAUDE.md
+                references. Never change application source, tests, package.json,
+                or package-lock.json (Renovate owns the version bump).
+              - If you cannot confidently confirm the fix landed, DEFAULT to
+                regenerating the patch (keep the protection) and say so — never
+                leave the dependency unprotected.
+              - node_modules edits are transient; do not commit them.
+
+      # Fast-fail: re-run the deterministic guard against Claude's result on this
+      # same checkout so the reconcile job goes red immediately if the patch is
+      # still adrift. The BOT_PAT push above also re-triggers the PR's full check
+      # suite (lint:patches included) on the reconcile commit; this is the
+      # in-job early signal.
+      - name: Verify reconciliation
+        if: steps.detect.outputs.orphans == 'true'
+        run: npm run lint:patches
