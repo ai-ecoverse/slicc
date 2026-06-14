@@ -353,6 +353,48 @@ export class ScoopContext {
     return { captured: this.structuredOutputCaptured, value: this.structuredOutputValue };
   }
 
+  /**
+   * Assemble the sudo enforcement surface for this scoop: the `SudoFS` broker
+   * + policy getter + default disposition, plus a matching `ShellSudoConfig`.
+   * Cones keep the user broker, the global policy, and `'allow'` default
+   * (unchanged behavior — only explicit `/etc/sudoers` rules gate). Non-cone
+   * scoops use the cone-mediated broker wired via {@link ScoopContextCallbacks.onSudoRequest},
+   * the per-scoop policy from {@link SudoManager.getPolicyForScoop}, and
+   * `'require-approval'` default so unmatched writes / commands escalate.
+   * Returns `null` only when no `SudoManager` is available (tests, ad-hoc
+   * sub-shells) — the agent is fully ungated in that path, same as before.
+   */
+  private buildSudoWiring(): {
+    broker: import('../sudo/types.js').SudoBroker;
+    getPolicy: () => import('../shell/sudo/sudoers.js').SudoersPolicy;
+    defaultDisposition: import('../shell/sudo/sudoers.js').DefaultDisposition;
+    shellConfig: import('../shell/almost-bash-shell-headless.js').ShellSudoConfig;
+  } | null {
+    if (!this.sudoManager) return null;
+    const manager = this.sudoManager;
+    const isCone = this.scoop.isCone;
+    const folder = this.scoop.folder;
+    const coneBrokerFn = this.callbacks.onSudoRequest;
+
+    const broker: import('../sudo/types.js').SudoBroker =
+      isCone || !coneBrokerFn
+        ? manager.getBroker()
+        : { requestApproval: (request) => coneBrokerFn(request) };
+    const getPolicy = isCone ? () => manager.getPolicy() : () => manager.getPolicyForScoop(folder);
+    const defaultDisposition: import('../shell/sudo/sudoers.js').DefaultDisposition = isCone
+      ? 'allow'
+      : 'require-approval';
+
+    const baseShell = manager.getShellConfig();
+    const shellConfig: import('../shell/almost-bash-shell-headless.js').ShellSudoConfig = {
+      ...baseShell,
+      broker,
+      getPolicy,
+      defaultDisposition,
+    };
+    return { broker, getPolicy, defaultDisposition, shellConfig };
+  }
+
   /** Create shell and load skills. */
   private async initShellAndSkills() {
     const cwd = this.scoop.isCone ? '/' : `/scoops/${this.scoop.folder}/workspace`;
@@ -366,11 +408,20 @@ export class ScoopContext {
     const effectiveSkillsFs = (this.skillsFs ?? this.fs) as VirtualFS;
     const secretEnv = await fetchSecretEnvVars();
 
+    // Wire the sudo enforcement surface. For non-cone scoops the broker
+    // routes to the cone (via the `onSudoRequest` callback the orchestrator
+    // already hooked up — same wire as `createConeApprovalBroker`), the
+    // policy is the per-scoop merge (global ∪ `/scoops/<folder>/etc/sudoers`),
+    // and the default disposition is `'require-approval'` so any unmatched
+    // write OR command escalates to the cone instead of dying with a hard
+    // wall. The cone keeps the user broker + `'allow'` default — unchanged.
+    const sudoWiring = this.buildSudoWiring();
     const gatedFs = (
-      this.sudoManager
+      sudoWiring
         ? createSudoFs(this.fs!, {
-            broker: this.sudoManager.getBroker(),
-            getPolicy: () => this.sudoManager!.getPolicy(),
+            broker: sudoWiring.broker,
+            getPolicy: sudoWiring.getPolicy,
+            defaultDisposition: sudoWiring.defaultDisposition,
           })
         : this.fs!
     ) as VirtualFS;
@@ -384,7 +435,7 @@ export class ScoopContext {
       allowedCommands: this.scoop.config?.allowedCommands,
       getParentJid: () => this.scoop.jid,
       isScoop: () => !this.scoop.isCone,
-      sudo: this.sudoManager?.getShellConfig(),
+      sudo: sudoWiring?.shellConfig,
     });
 
     log.info('AlmostBashShell initialized', { folder: this.scoop.folder });
