@@ -7,6 +7,7 @@
 
 import { createLogger } from '../core/logger.js';
 import type { ToolDefinition } from '../core/types.js';
+import type { SudoDecision, SudoKind, SudoRequest } from '../sudo/types.js';
 import {
   CURRENT_SCOOP_CONFIG_VERSION,
   isThinkingLevel,
@@ -48,6 +49,28 @@ export interface ScoopManagementToolsConfig {
     jids: readonly string[],
     timeoutMs?: number
   ) => { scheduled: string[]; unknown: string[] };
+  /** Scoop-only: ask the cone for an explicit sudo escalation. */
+  onSudoRequest?: (request: SudoRequest) => Promise<SudoDecision>;
+  /** Cone-only: resolve a pending sudo request by id. On `'always'` the
+   *  orchestrator persists a NOPASSWD rule into the requesting scoop's
+   *  `/scoops/<folder>/etc/sudoers` via the trusted manager sink. */
+  onSudoResolve?: (
+    id: string,
+    decision: SudoDecision
+  ) => Promise<{
+    settled: boolean;
+    persisted: boolean;
+    persistedPattern?: string;
+    persistError?: string;
+    scoopFolder?: string;
+    kind?: SudoKind;
+  }>;
+  /** Cone-only: snapshot all pending cone-mediated sudo requests. */
+  onListSudoRequests?: () => Array<{
+    id: string;
+    scoopJid: string;
+    request: SudoRequest;
+  }>;
 }
 
 /** Resolve a list of user-supplied scoop names (folder or display name) to
@@ -86,7 +109,12 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
     onMuteScoops,
     onUnmuteScoops,
     onScheduleScoopWait,
+    onSudoRequest,
+    onSudoResolve,
+    onListSudoRequests,
   } = config;
+
+  const SUDO_KINDS: readonly SudoKind[] = ['command', 'read', 'write', 'secret'];
 
   const tools: ToolDefinition[] = [];
 
@@ -117,6 +145,87 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
         onSendMessage(text, sender);
         log.info('Message sent', { scoopFolder: scoop.folder, textLength: text.length });
         return { content: 'Message sent.' };
+      },
+    });
+  }
+
+  // sudo_request tool — scoop-only. Explicit escalation request to the cone.
+  // The cone is responsible for resolving the request via sudo_allow / sudo_deny;
+  // this call blocks until a decision is made (or the registry times out
+  // fail-closed). Absent on the cone — the cone IS the approver and uses the
+  // user broker directly via its FS / shell gates.
+  if (!scoop.isCone && onSudoRequest) {
+    tools.push({
+      name: 'sudo_request',
+      description:
+        "Ask the cone for an explicit sudo escalation before running a sensitive action. Use this when you know up-front that a command, read, or write will be gated and you want a clean approval round-trip instead of letting the gate fire mid-action. Resolves with the cone's decision (allow / always / deny). 'always' durably widens your sandbox by appending a NOPASSWD rule to /scoops/<folder>/etc/sudoers. 'deny' (or a timeout / dropped cone) resolves fail-closed.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          kind: {
+            type: 'string',
+            enum: [...SUDO_KINDS],
+            description:
+              'The kind of sensitive action being requested. command = a shell command; read/write = a VFS path; secret = a credential read. Only command/read/write can be persisted with "always" (no sudoers Secret directive).',
+          },
+          detail: {
+            type: 'string',
+            description:
+              'The concrete subject of the request (e.g., the command line "git push origin main" or the VFS path "/workspace/.git/config"). The cone sees this verbatim.',
+          },
+          suggested_pattern: {
+            type: 'string',
+            description:
+              'Optional pre-filled glob pattern for an "always" grant (e.g., "git push*" for a command or "/workspace/.git/**" for a path). The cone may override this.',
+          },
+        },
+        required: ['kind', 'detail'],
+      },
+      execute: async (input) => {
+        const {
+          kind,
+          detail,
+          suggested_pattern: suggestedPattern,
+        } = input as {
+          kind: string;
+          detail: string;
+          suggested_pattern?: string;
+        };
+        if (!SUDO_KINDS.includes(kind as SudoKind)) {
+          return {
+            content: `Invalid sudo kind "${kind}". Must be one of: ${SUDO_KINDS.join(', ')}.`,
+            isError: true,
+          };
+        }
+        if (typeof detail !== 'string' || detail.trim().length === 0) {
+          return { content: 'detail must be a non-empty string.', isError: true };
+        }
+        const request: SudoRequest = {
+          kind: kind as SudoKind,
+          detail,
+          ...(suggestedPattern ? { suggestedPattern } : {}),
+        };
+        try {
+          const decision = await onSudoRequest(request);
+          log.info('Sudo request resolved', {
+            scoopFolder: scoop.folder,
+            kind: request.kind,
+            decision: decision.decision,
+          });
+          const lines = [`Cone decision: ${decision.decision}.`];
+          if (decision.decision === 'always' && decision.pattern) {
+            lines.push(`Persisted pattern: ${decision.pattern}`);
+          }
+          if (decision.decision === 'deny') {
+            lines.push(
+              'The sensitive action was not approved. Do not retry without addressing the reason for refusal.'
+            );
+          }
+          return { content: lines.join('\n') };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { content: `sudo_request failed: ${msg}`, isError: true };
+        }
       },
     });
   }
@@ -612,6 +721,154 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
               `scoop_wait scheduled for: ${scheduledFolders}${tail}.${warnUnknown}${warnDropped} ` +
               `Continue with other work — a 'scoop-wait' lick will be delivered when all listed scoops complete or the timeout fires.`,
           };
+        },
+      });
+    }
+
+    // Cone only: sudo_allow / sudo_deny / list_sudo_requests — settle the
+    // sudo-request escalations a non-cone scoop raised via sudo_request. The
+    // pending-request registry lives on the orchestrator; these tools are the
+    // cone-side surface for resolving an id with allow-once, always-and-persist,
+    // or deny. The matching scoop-side counterpart (sudo_request) is registered
+    // above on non-cone toolsets only.
+    if (onSudoResolve) {
+      tools.push({
+        name: 'sudo_allow',
+        description:
+          "Approve a pending sudo escalation raised by a scoop via sudo_request. With always=true, the orchestrator additionally appends a NOPASSWD <directive> <pattern> rule to the requesting scoop's /scoops/<folder>/etc/sudoers so the same action won't prompt again. always=false (the default) is allow-once.",
+        inputSchema: {
+          type: 'object',
+          properties: {
+            request_id: {
+              type: 'string',
+              description:
+                'The id of the pending request (as delivered in the [sudo-request] notification, e.g. "sudo-abc-…"). Use list_sudo_requests to see outstanding ids.',
+            },
+            always: {
+              type: 'boolean',
+              description:
+                "If true, persist a NOPASSWD rule into the requesting scoop's per-scoop sudoers so the action won't prompt again. Defaults to false (allow-once).",
+            },
+            pattern: {
+              type: 'string',
+              description:
+                'Optional glob pattern to persist when always=true (e.g., "git push*" or "/workspace/.git/**"). Defaults to the request\'s suggestedPattern, then to the exact detail. Ignored when always=false.',
+            },
+          },
+          required: ['request_id'],
+        },
+        execute: async (input) => {
+          const { request_id, always, pattern } = input as {
+            request_id: string;
+            always?: boolean;
+            pattern?: string;
+          };
+          if (typeof request_id !== 'string' || request_id.length === 0) {
+            return { content: 'request_id must be a non-empty string.', isError: true };
+          }
+          const decision: SudoDecision = always
+            ? { decision: 'always', ...(pattern ? { pattern } : {}) }
+            : { decision: 'allow' };
+          try {
+            const outcome = await onSudoResolve(request_id, decision);
+            if (!outcome.settled) {
+              return {
+                content: `Sudo request "${request_id}" is unknown, already resolved, or timed out.`,
+                isError: true,
+              };
+            }
+            const lines: string[] = [];
+            if (always) {
+              if (outcome.persisted) {
+                lines.push(
+                  `Approved (always) — persisted NOPASSWD rule for ${outcome.kind ?? 'unknown'} pattern "${outcome.persistedPattern}" in /scoops/${outcome.scoopFolder ?? '<unknown>'}/etc/sudoers.`
+                );
+              } else if (outcome.persistError) {
+                lines.push(
+                  `Approved (always) but could NOT persist a rule (${outcome.persistError}). The current action is allowed; future occurrences will prompt again.`
+                );
+              } else {
+                lines.push('Approved (always) — no persistable rule applied for this request.');
+              }
+            } else {
+              lines.push(
+                'Approved (once) — the current action proceeds; future ones will prompt again.'
+              );
+            }
+            log.info('Sudo request approved', {
+              id: request_id,
+              always: !!always,
+              persisted: outcome.persisted,
+            });
+            return { content: lines.join('\n') };
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return { content: `sudo_allow failed: ${msg}`, isError: true };
+          }
+        },
+      });
+
+      tools.push({
+        name: 'sudo_deny',
+        description:
+          'Refuse a pending sudo escalation raised by a scoop via sudo_request. The scoop receives a deny decision and the sensitive action does NOT run.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            request_id: {
+              type: 'string',
+              description:
+                'The id of the pending request (as delivered in the [sudo-request] notification). Use list_sudo_requests to see outstanding ids.',
+            },
+          },
+          required: ['request_id'],
+        },
+        execute: async (input) => {
+          const { request_id } = input as { request_id: string };
+          if (typeof request_id !== 'string' || request_id.length === 0) {
+            return { content: 'request_id must be a non-empty string.', isError: true };
+          }
+          try {
+            const outcome = await onSudoResolve(request_id, { decision: 'deny' });
+            if (!outcome.settled) {
+              return {
+                content: `Sudo request "${request_id}" is unknown, already resolved, or timed out.`,
+                isError: true,
+              };
+            }
+            log.info('Sudo request denied', { id: request_id });
+            return { content: 'Denied — the scoop will not run this action.' };
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return { content: `sudo_deny failed: ${msg}`, isError: true };
+          }
+        },
+      });
+    }
+
+    if (onListSudoRequests) {
+      tools.push({
+        name: 'list_sudo_requests',
+        description:
+          'List all pending cone-mediated sudo requests (id, requesting scoop, kind, detail). Use to find an id for sudo_allow / sudo_deny.',
+        inputSchema: { type: 'object', properties: {} },
+        execute: async () => {
+          const pending = onListSudoRequests();
+          if (pending.length === 0) {
+            return { content: 'No pending sudo requests.' };
+          }
+          const scoopFolder = (jid: string) => {
+            const s = getScoops().find((x) => x.jid === jid);
+            return s?.folder ?? jid;
+          };
+          const lines = pending.map((p) => {
+            const folder = scoopFolder(p.scoopJid);
+            const suggested = p.request.suggestedPattern
+              ? ` (suggested: ${p.request.suggestedPattern})`
+              : '';
+            return `- ${p.id} — ${folder} — ${p.request.kind}: ${p.request.detail}${suggested}`;
+          });
+          return { content: `Pending sudo requests:\n${lines.join('\n')}` };
         },
       });
     }

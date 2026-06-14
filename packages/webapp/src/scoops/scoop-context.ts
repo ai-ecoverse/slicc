@@ -248,6 +248,37 @@ export interface ScoopContextCallbacks {
    * `state === 'idle'` clears the affordance.
    */
   onCompactionStateChange?: (state: 'summarizing' | 'extracting-memory' | 'idle') => void;
+  /**
+   * Scoop-only: request a cone-mediated sudo escalation. Routes through the
+   * orchestrator's pending-request registry and resolves with the cone's
+   * decision (allow / always / deny), or `deny` on transport/timeout. The
+   * cone keeps the user broker — only non-cone scoops wire this.
+   */
+  onSudoRequest?: (
+    request: import('../sudo/types.js').SudoRequest
+  ) => Promise<import('../sudo/types.js').SudoDecision>;
+  /**
+   * Cone-only: resolve a pending sudo request by id. On `'always'` the
+   * orchestrator additionally persists a NOPASSWD rule into the requesting
+   * scoop's `/scoops/<folder>/etc/sudoers` via the trusted manager sink.
+   */
+  onSudoResolve?: (
+    id: string,
+    decision: import('../sudo/types.js').SudoDecision
+  ) => Promise<{
+    settled: boolean;
+    persisted: boolean;
+    persistedPattern?: string;
+    persistError?: string;
+    scoopFolder?: string;
+    kind?: import('../sudo/types.js').SudoRequest['kind'];
+  }>;
+  /** Cone-only: snapshot all pending cone-mediated sudo requests. */
+  onListSudoRequests?: () => Array<{
+    id: string;
+    scoopJid: string;
+    request: import('../sudo/types.js').SudoRequest;
+  }>;
   /** BrowserAPI provider for browser automation commands */
   getBrowserAPI: () => BrowserAPI;
 }
@@ -376,6 +407,9 @@ export class ScoopContext {
       onScheduleScoopWait: this.callbacks.onScheduleScoopWait,
       onSetGlobalMemory: this.callbacks.setGlobalMemory,
       getGlobalMemory: this.callbacks.getGlobalMemory,
+      onSudoRequest: this.callbacks.onSudoRequest,
+      onSudoResolve: this.callbacks.onSudoResolve,
+      onListSudoRequests: this.callbacks.onListSudoRequests,
     };
     const scoopManagementTools = createScoopManagementTools(scoopManagementToolsConfig);
 

@@ -184,6 +184,54 @@ export class SudoManager {
   }
 
   /**
+   * Append a single `NOPASSWD <directive> <pattern>` rule to a scoop's
+   * `/scoops/<folder>/etc/sudoers`, then reload the cached policy. Used by
+   * the cone-mediated `sudo_allow` flow with `always: true` to durably
+   * widen the requesting scoop's sandbox.
+   *
+   * `kind` maps to the sudoers directive: `command → Cmnd`, `read → Read`,
+   * `write → Write`. `pattern` is sanitized via {@link sanitizeGrantPattern}
+   * so an embedded newline cannot inject an extra rule. Returns the safe
+   * pattern that was persisted, or `null` if the pattern collapsed to
+   * empty (no write performed).
+   *
+   * The write goes through the raw VFS handle (this manager owns the
+   * untrusted-realm gate), so it bypasses the self-protection invariant on
+   * `/scoops/<folder>/etc/sudoers` writes the same way {@link seedScoopSudoers}
+   * does.
+   */
+  async appendScoopRule(
+    folder: string,
+    kind: 'command' | 'read' | 'write',
+    pattern: string
+  ): Promise<string | null> {
+    const safe = sanitizeGrantPattern(pattern);
+    if (!safe) return null;
+    const directive = kind === 'command' ? 'Cmnd' : kind === 'read' ? 'Read' : 'Write';
+    const path = scoopSudoersPath(folder);
+
+    let existing = '';
+    try {
+      if (await this.fs.exists(path)) {
+        const raw = await this.fs.readFile(path, { encoding: 'utf-8' });
+        existing = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+      }
+    } catch {
+      existing = '';
+    }
+    try {
+      await this.fs.mkdir(`/scoops/${folder}/etc`, { recursive: true });
+    } catch {
+      /* already exists */
+    }
+    const prefix = existing && !existing.endsWith('\n') ? `${existing}\n` : existing;
+    await this.fs.writeFile(path, `${prefix}NOPASSWD ${directive} ${safe}\n`);
+    await this.reloadScoopPolicy(folder);
+    log.info('Appended per-scoop sudoers rule', { folder, kind, pattern: safe });
+    return safe;
+  }
+
+  /**
    * Command-guard config for a {@link AlmostBashShell}: gated via this manager.
    *
    * `transparentGating` controls whether every dispatched command is wrapped

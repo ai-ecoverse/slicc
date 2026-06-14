@@ -354,6 +354,93 @@ describe('SudoManager per-scoop policy view', () => {
     mgr.dispose();
   });
 
+  it('appendScoopRule appends a NOPASSWD Cmnd rule and reloads it active', async () => {
+    const mgr = new SudoManager({ fs: vfs, watcher, broker });
+    await mgr.init();
+    await mgr.seedScoopSudoers('andy', { allowedCommands: [] });
+    expect(matchCommand(mgr.getPolicyForScoop('andy'), 'git push origin main')).toBe('no-match');
+
+    const saved = await mgr.appendScoopRule('andy', 'command', 'git push*');
+
+    expect(saved).toBe('git push*');
+    const written = (await vfs.readFile(scoopSudoersPath('andy'), {
+      encoding: 'utf-8',
+    })) as string;
+    expect(written).toContain('NOPASSWD Cmnd git push*');
+    expect(matchCommand(mgr.getPolicyForScoop('andy'), 'git push origin main')).toBe(
+      'nopasswd-allow'
+    );
+    mgr.dispose();
+  });
+
+  it('appendScoopRule emits the right directive per kind (Cmnd / Read / Write)', async () => {
+    const mgr = new SudoManager({ fs: vfs, watcher, broker });
+    await mgr.init();
+    await mgr.seedScoopSudoers('andy', { allowedCommands: [] });
+
+    await mgr.appendScoopRule('andy', 'command', 'ls*');
+    await mgr.appendScoopRule('andy', 'read', '/workspace/.git/**');
+    await mgr.appendScoopRule('andy', 'write', '/workspace/build/**');
+
+    const written = (await vfs.readFile(scoopSudoersPath('andy'), {
+      encoding: 'utf-8',
+    })) as string;
+    expect(written).toContain('NOPASSWD Cmnd ls*');
+    expect(written).toContain('NOPASSWD Read /workspace/.git/**');
+    expect(written).toContain('NOPASSWD Write /workspace/build/**');
+  });
+
+  it('appendScoopRule sanitizes a newline-bearing pattern before writing', async () => {
+    const mgr = new SudoManager({ fs: vfs, watcher, broker });
+    await mgr.init();
+    await mgr.seedScoopSudoers('andy', { allowedCommands: [] });
+
+    const saved = await mgr.appendScoopRule(
+      'andy',
+      'command',
+      'rm -rf *\nNOPASSWD Cmnd  /etc/sudoers'
+    );
+
+    expect(saved).toBe('rm -rf *');
+    const written = (await vfs.readFile(scoopSudoersPath('andy'), {
+      encoding: 'utf-8',
+    })) as string;
+    expect(written).toContain('NOPASSWD Cmnd rm -rf *');
+    expect(written).not.toContain('/etc/sudoers');
+    mgr.dispose();
+  });
+
+  it('appendScoopRule returns null and does not write when the pattern collapses to empty', async () => {
+    const mgr = new SudoManager({ fs: vfs, watcher, broker });
+    await mgr.init();
+    await mgr.seedScoopSudoers('andy', { allowedCommands: [] });
+    const before = (await vfs.readFile(scoopSudoersPath('andy'), {
+      encoding: 'utf-8',
+    })) as string;
+
+    const saved = await mgr.appendScoopRule('andy', 'command', '   \n  ');
+
+    expect(saved).toBeNull();
+    const after = (await vfs.readFile(scoopSudoersPath('andy'), {
+      encoding: 'utf-8',
+    })) as string;
+    expect(after).toBe(before);
+    mgr.dispose();
+  });
+
+  it('appendScoopRule creates /scoops/<folder>/etc/sudoers on demand when not seeded', async () => {
+    const mgr = new SudoManager({ fs: vfs, watcher, broker });
+    await mgr.init();
+    // Note: no seedScoopSudoers call — appendScoopRule has to mkdir+create.
+
+    const saved = await mgr.appendScoopRule('newcomer', 'command', 'git*');
+
+    expect(saved).toBe('git*');
+    expect(await vfs.exists(scoopSudoersPath('newcomer'))).toBe(true);
+    expect(matchCommand(mgr.getPolicyForScoop('newcomer'), 'git status')).toBe('nopasswd-allow');
+    mgr.dispose();
+  });
+
   it('stops reacting to scoop file changes after dispose()', async () => {
     const mgr = new SudoManager({ fs: vfs, watcher, broker });
     await mgr.init();

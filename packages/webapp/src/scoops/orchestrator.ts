@@ -1420,11 +1420,15 @@ export class Orchestrator implements ConeApprovalRouter {
   }
 
   /**
-   * Settle a pending cone-mediated sudo request. Called by the cone's
-   * (future) `sudo_allow` tool — the next task wires that in. Returns
-   * `true` when an entry was actually resolved, `false` for unknown /
-   * already-settled / timed-out ids so the caller can surface that as
-   * "this request expired" to the cone.
+   * Settle a pending cone-mediated sudo request. Used by the cone's
+   * `sudo_allow` / `sudo_deny` tools (and tests). Returns `true` when an
+   * entry was actually resolved, `false` for unknown / already-settled /
+   * timed-out ids so the caller can surface that as "this request expired"
+   * to the cone.
+   *
+   * Note: this does NOT persist an "Always" grant on its own — use
+   * {@link resolveSudoRequestAndPersist} for the cone-tool path that
+   * needs to write a NOPASSWD rule into the requesting scoop's sudoers.
    */
   resolveSudoRequest(id: string, decision: SudoDecision): boolean {
     const settled = this.sudoRegistry.resolve(id, decision);
@@ -1437,6 +1441,76 @@ export class Orchestrator implements ConeApprovalRouter {
       });
     }
     return settled;
+  }
+
+  /**
+   * Cone-tool surface: settle a pending sudo request and, when the
+   * decision is `'always'`, durably widen the requesting scoop's sandbox
+   * by appending a `NOPASSWD <directive> <pattern>` line to its
+   * `/scoops/<folder>/etc/sudoers` via the trusted manager sink (which
+   * bypasses the self-protection invariant). `kind: 'secret'` never
+   * persists — there is no `Secret` directive in the sudoers parser,
+   * so the request resolves as an allow-once.
+   *
+   * Resolution order for the pattern: caller-supplied → request's
+   * `suggestedPattern` → request `detail` (sanitized).
+   *
+   * Returns a structured outcome the tool surfaces verbatim.
+   */
+  async resolveSudoRequestAndPersist(
+    id: string,
+    decision: SudoDecision
+  ): Promise<{
+    settled: boolean;
+    persisted: boolean;
+    persistedPattern?: string;
+    persistError?: string;
+    scoopFolder?: string;
+    kind?: SudoRequest['kind'];
+  }> {
+    const pending = this.sudoRegistry.get(id);
+    if (!pending) {
+      return { settled: false, persisted: false };
+    }
+
+    const scoop = this.scoops.get(pending.scoopJid);
+    const kind = pending.request.kind;
+    const scoopFolder = scoop?.folder;
+
+    let persisted = false;
+    let persistedPattern: string | undefined;
+    let persistError: string | undefined;
+
+    if (decision.decision === 'always' && this.sudoManager && scoop && !scoop.isCone) {
+      if (kind === 'command' || kind === 'read' || kind === 'write') {
+        const raw =
+          decision.pattern?.trim() ||
+          pending.request.suggestedPattern?.trim() ||
+          pending.request.detail.trim();
+        try {
+          const saved = await this.sudoManager.appendScoopRule(scoop.folder, kind, raw);
+          if (saved) {
+            persisted = true;
+            persistedPattern = saved;
+          } else {
+            persistError = 'pattern collapsed to empty after sanitization';
+          }
+        } catch (err) {
+          persistError = err instanceof Error ? err.message : String(err);
+          log.warn('Failed to persist always grant', {
+            id,
+            folder: scoop.folder,
+            kind,
+            error: persistError,
+          });
+        }
+      } else {
+        persistError = `cannot persist always grant for kind "${kind}" (no matching sudoers directive)`;
+      }
+    }
+
+    const settled = this.resolveSudoRequest(id, decision);
+    return { settled, persisted, persistedPattern, persistError, scoopFolder, kind };
   }
 
   /**
@@ -2095,6 +2169,15 @@ export class Orchestrator implements ConeApprovalRouter {
       appendConeMemory: scoop.isCone
         ? (bullets, meta) => this.appendConeMemory(bullets, meta)
         : undefined,
+      // Sudo escalation wiring — symmetrical to the brokers but exposed as
+      // tools. Scoops get `onSudoRequest` (routes through the pending-request
+      // registry); the cone gets `onSudoResolve` + `onListSudoRequests` to
+      // drain it. The cone keeps the user broker for its own FS / shell gate.
+      onSudoRequest: scoop.isCone ? undefined : (request) => this.enqueueSudoRequest(jid, request),
+      onSudoResolve: scoop.isCone
+        ? (id, decision) => this.resolveSudoRequestAndPersist(id, decision)
+        : undefined,
+      onListSudoRequests: scoop.isCone ? () => this.listPendingSudoRequests() : undefined,
       getBrowserAPI: () => this.callbacks.getBrowserAPI(),
     };
   }
