@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applyDefaultDisposition,
   commandGlobToRegExp,
   emptyPolicy,
   matchCommand,
@@ -11,6 +12,7 @@ import {
   SUDOERS_FILE,
   type SudoersPolicy,
   sanitizeGrantPattern,
+  scoopSudoersPath,
 } from '../../../src/shell/sudo/sudoers.js';
 
 const SAMPLE = `# SLICC sudoers
@@ -168,5 +170,70 @@ describe('self-protection invariant', () => {
   it('allows reads of sudoers files (visudo-style)', () => {
     expect(matchPath(allowAll, 'read', SUDOERS_FILE)).toBe('no-match');
     expect(matchPath(emptyPolicy(), 'read', `${SUDOERS_D_DIR}/granted`)).toBe('no-match');
+  });
+});
+
+describe('per-scoop sudoers self-protection invariant', () => {
+  const scoopPath = scoopSudoersPath('andy-scoop');
+  // A broad NOPASSWD grant covering the scoop's writable home, including the
+  // generated sudoers file. The invariant must defeat it for writes.
+  const grant: SudoersPolicy = parseSudoers(
+    `NOPASSWD Write /scoops/andy-scoop/**\nNOPASSWD Write ${scoopPath}`
+  );
+
+  it('scoopSudoersPath returns the canonical /scoops/<folder>/etc/sudoers shape', () => {
+    expect(scoopPath).toBe('/scoops/andy-scoop/etc/sudoers');
+    expect(scoopSudoersPath('foo')).toBe('/scoops/foo/etc/sudoers');
+  });
+
+  it('always requires approval for writes to /scoops/<folder>/etc/sudoers, even with NOPASSWD', () => {
+    expect(matchPath(grant, 'write', scoopPath)).toBe('require-approval');
+    expect(matchPath(grant, 'write', '/scoops/other/etc/sudoers')).toBe('require-approval');
+  });
+
+  it('protects the scoop sudoers file even under an empty policy', () => {
+    expect(matchPath(emptyPolicy(), 'write', scoopPath)).toBe('require-approval');
+  });
+
+  it('allows reads of the scoop sudoers file (visudo-style)', () => {
+    expect(matchPath(grant, 'read', scoopPath)).toBe('no-match');
+    expect(matchPath(emptyPolicy(), 'read', scoopPath)).toBe('no-match');
+  });
+
+  it('does NOT protect peer paths inside the scoop tree', () => {
+    expect(matchPath(grant, 'write', '/scoops/andy-scoop/workspace/file.txt')).toBe(
+      'nopasswd-allow'
+    );
+    expect(matchPath(grant, 'write', '/scoops/andy-scoop/etc/other')).toBe('nopasswd-allow');
+    expect(matchPath(grant, 'write', '/scoops/andy-scoop/etc/sudoers.bak')).toBe('nopasswd-allow');
+  });
+
+  it('normalizes paths before checking the invariant', () => {
+    expect(matchPath(grant, 'write', '/scoops/andy-scoop/./etc/sudoers')).toBe('require-approval');
+    expect(matchPath(grant, 'write', '/scoops/andy-scoop/etc/../etc/sudoers')).toBe(
+      'require-approval'
+    );
+  });
+});
+
+describe('applyDefaultDisposition', () => {
+  it('upgrades no-match to require-approval when default is require-approval', () => {
+    expect(applyDefaultDisposition('no-match', 'require-approval')).toBe('require-approval');
+  });
+
+  it('leaves no-match unchanged when default is allow', () => {
+    expect(applyDefaultDisposition('no-match', 'allow')).toBe('no-match');
+  });
+
+  it('never overrides an explicit require-approval result', () => {
+    expect(applyDefaultDisposition('require-approval', 'allow')).toBe('require-approval');
+    expect(applyDefaultDisposition('require-approval', 'require-approval')).toBe(
+      'require-approval'
+    );
+  });
+
+  it('never overrides an explicit nopasswd-allow grant', () => {
+    expect(applyDefaultDisposition('nopasswd-allow', 'allow')).toBe('nopasswd-allow');
+    expect(applyDefaultDisposition('nopasswd-allow', 'require-approval')).toBe('nopasswd-allow');
   });
 });
