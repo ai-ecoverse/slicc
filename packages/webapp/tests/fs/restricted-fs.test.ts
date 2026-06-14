@@ -443,4 +443,51 @@ describe('RestrictedFS', () => {
       expect(calls).toEqual(['/mnt/foo', '/scoops/andy-scoop/file.txt']);
     });
   });
+
+  // ── sudo-delegated write enforcement ──────────────────────────────────
+
+  describe('writeEnforcement: "sudo-delegated"', () => {
+    let delegatedVfs: VirtualFS;
+    let delegated: RestrictedFS;
+
+    beforeAll(async () => {
+      delegatedVfs = await VirtualFS.create({
+        dbName: 'test-restricted-fs-delegated',
+        wipe: true,
+      });
+      await delegatedVfs.mkdir('/scoops/sd', { recursive: true });
+      await delegatedVfs.mkdir('/workspace', { recursive: true });
+      await delegatedVfs.writeFile('/scoops/sd/in.txt', 'ok');
+      // Sudo-delegated: writes outside the sandbox MUST pass through so the
+      // outer SudoFS can escalate them. Reads still get filtered.
+      delegated = new RestrictedFS(delegatedVfs, ['/scoops/sd/'], [], 'sudo-delegated');
+    });
+
+    it('passes through out-of-sandbox writeFile (no EACCES)', async () => {
+      await delegated.writeFile('/workspace/escalated.txt', 'reached');
+      expect(await delegatedVfs.readTextFile('/workspace/escalated.txt')).toBe('reached');
+    });
+
+    it('passes through out-of-sandbox mkdir', async () => {
+      await delegated.mkdir('/workspace/newdir');
+      const stat = await delegatedVfs.stat('/workspace/newdir');
+      expect(stat.type).toBe('directory');
+    });
+
+    it('still ENOENT-filters reads outside the sandbox', async () => {
+      await delegatedVfs.writeFile('/workspace/hidden.txt', 'oob');
+      await expect(delegated.readFile('/workspace/hidden.txt')).rejects.toThrow('ENOENT');
+    });
+
+    it('still blocks a symlink escape from an in-sandbox link to /etc/sudoers', async () => {
+      await delegatedVfs.mkdir('/etc/sudoers.d', { recursive: true });
+      await delegatedVfs.writeFile('/etc/sudoers', '# locked');
+      await delegatedVfs.symlink('/etc/sudoers', '/scoops/sd/escape-link');
+      // Writing through the in-sandbox symlink must still EACCES — the outer
+      // SudoFS gated the literal path (which is in-sandbox, so a NOPASSWD
+      // Write rule applies); the symlink-resolved-path escape is a security
+      // invariant that lives in RestrictedFS.
+      await expect(delegated.writeFile('/scoops/sd/escape-link', 'x')).rejects.toThrow('EACCES');
+    });
+  });
 });

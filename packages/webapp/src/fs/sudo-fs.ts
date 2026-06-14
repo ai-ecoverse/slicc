@@ -18,6 +18,8 @@
 
 import { createLogger } from '../core/logger.js';
 import {
+  applyDefaultDisposition,
+  type DefaultDisposition,
   matchPath,
   type PathOp,
   pathGlobToRegExp,
@@ -67,6 +69,16 @@ export interface SudoFsDeps {
    * the rule to {@link GRANTED_FILE} via the wrapped fs (bypassing the gate).
    */
   onGrant?: (op: PathOp, pattern: string) => void | Promise<void>;
+  /**
+   * Default disposition for `no-match` outcomes. The cone passes `'allow'` (no
+   * implicit gating); non-cone scoops pass `'require-approval'` so any WRITE
+   * outside the per-scoop sandbox grants escalates to the cone instead of
+   * silently passing through. The default is only applied to WRITES — READS
+   * remain ungated by default so silently-filtered out-of-sandbox reads
+   * (the `RestrictedFS` ENOENT surface) do not flood the cone with PATH-probe
+   * approvals.
+   */
+  defaultDisposition?: DefaultDisposition;
 }
 
 /** Minimal surface SudoFS needs for default grant persistence. */
@@ -115,6 +127,7 @@ async function defaultApplyGrant(
  */
 export function createSudoFs<T extends object>(target: T, deps: SudoFsDeps): T {
   const { broker, getPolicy } = deps;
+  const defaultDisposition: DefaultDisposition = deps.defaultDisposition ?? 'allow';
   const applyGrant = deps.onGrant
     ? deps.onGrant
     : (op: PathOp, pattern: string) =>
@@ -122,7 +135,12 @@ export function createSudoFs<T extends object>(target: T, deps: SudoFsDeps): T {
 
   async function gate(op: PathOp, path: string): Promise<void> {
     const normalized = normalizePath(path);
-    if (matchPath(getPolicy(), op, normalized) !== 'require-approval') return;
+    const raw = matchPath(getPolicy(), op, normalized);
+    // Apply the default-disposition upgrade to WRITES only. Reads stay at
+    // the raw match result so out-of-sandbox reads don't fire approvals —
+    // the surrounding `RestrictedFS` already filters them to ENOENT/[].
+    const result = op === 'write' ? applyDefaultDisposition(raw, defaultDisposition) : raw;
+    if (result !== 'require-approval') return;
     const kind: SudoKind = op;
     const decision = await broker.requestApproval({ kind, detail: normalized });
     if (decision.decision === 'deny') {
@@ -135,6 +153,9 @@ export function createSudoFs<T extends object>(target: T, deps: SudoFsDeps): T {
 
   /** Sync fast-path gate: `false` forces async fallback for approval paths. */
   function syncAllowed(path: string): boolean {
+    // Sync paths cover reads only (statSync / readDirSync). Reads never
+    // apply the default-disposition upgrade — only an explicit policy
+    // require-approval forces the async fallback.
     return matchPath(getPolicy(), 'read', normalizePath(path)) !== 'require-approval';
   }
 

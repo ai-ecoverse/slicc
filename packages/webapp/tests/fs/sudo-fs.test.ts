@@ -162,4 +162,51 @@ describe('SudoFS', () => {
     expect(sfs.canWrite('/workspace/anything')).toBe(true);
     expect(await sfs.exists('/workspace/note.txt')).toBe(true);
   });
+
+  describe('defaultDisposition: "require-approval"', () => {
+    it('escalates writes to unmatched paths and proceeds on allow', async () => {
+      policy = parseSudoers(''); // no rules — everything is no-match by default
+      const { calls, broker } = makeBroker({ decision: 'allow' });
+      const sfs = createSudoFs(vfs, { broker, getPolicy, defaultDisposition: 'require-approval' });
+
+      await sfs.writeFile('/workspace/escalated.txt', 'ok');
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({ kind: 'write', detail: '/workspace/escalated.txt' });
+      expect(await vfs.readTextFile('/workspace/escalated.txt')).toBe('ok');
+    });
+
+    it('does NOT escalate unmatched reads (filtered downstream by RestrictedFS)', async () => {
+      policy = parseSudoers('');
+      const { calls, broker } = makeBroker({ decision: 'deny' });
+      const sfs = createSudoFs(vfs, { broker, getPolicy, defaultDisposition: 'require-approval' });
+
+      // Unmatched read: the SudoFS does not escalate even though the
+      // default is `'require-approval'` — reads pass through without
+      // approval to avoid PATH-probe approval floods.
+      expect(await sfs.readTextFile('/workspace/note.txt')).toBe('hi');
+      expect(calls).toHaveLength(0);
+    });
+
+    it('still throws EACCES on a denied escalated write', async () => {
+      policy = parseSudoers('');
+      const { broker } = makeBroker({ decision: 'deny' });
+      const sfs = createSudoFs(vfs, { broker, getPolicy, defaultDisposition: 'require-approval' });
+
+      await expect(sfs.writeFile('/workspace/escalated.txt', 'no')).rejects.toMatchObject({
+        code: 'EACCES',
+      });
+      expect(await vfs.exists('/workspace/escalated.txt')).toBe(false);
+    });
+
+    it('NOPASSWD grant skips the escalation entirely', async () => {
+      policy = parseSudoers('NOPASSWD Write /workspace/sandbox/**');
+      await vfs.mkdir('/workspace/sandbox', { recursive: true });
+      const { calls, broker } = makeBroker({ decision: 'deny' });
+      const sfs = createSudoFs(vfs, { broker, getPolicy, defaultDisposition: 'require-approval' });
+
+      await sfs.writeFile('/workspace/sandbox/ok.txt', 'allowed');
+      expect(calls).toHaveLength(0);
+      expect(await vfs.readTextFile('/workspace/sandbox/ok.txt')).toBe('allowed');
+    });
+  });
 });

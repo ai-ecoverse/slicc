@@ -254,6 +254,19 @@ export class SudoManager {
     return this.reloadChain;
   }
 
+  /**
+   * Force a re-read of `/scoops/<folder>/etc/sudoers` into the per-scoop
+   * policy cache. Idempotent and serialized through the per-scoop reload
+   * chain. Called from `Orchestrator.createScoopTab` when the file already
+   * exists on disk so any "Always" grants from a previous session are
+   * available before the agent's first turn — without it, the cache would
+   * stay empty until the FS watcher saw a change (and the first turn would
+   * run under the default `'require-approval'` for every in-sandbox path).
+   */
+  reloadScoopPolicyByFolder(folder: string): Promise<void> {
+    return this.reloadScoopPolicy(folder);
+  }
+
   /** Stop watching for changes. Idempotent. */
   dispose(): void {
     this.unwatch?.();

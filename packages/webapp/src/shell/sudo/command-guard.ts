@@ -24,7 +24,12 @@
  */
 
 import type { SudoBroker } from '../../sudo/types.js';
-import { matchCommand, type SudoersPolicy } from './sudoers.js';
+import {
+  applyDefaultDisposition,
+  type DefaultDisposition,
+  matchCommand,
+  type SudoersPolicy,
+} from './sudoers.js';
 
 /** stderr message emitted (and shown to the agent) when approval is denied. */
 export const COMMAND_DENIED_MESSAGE = 'sudo: approval denied';
@@ -40,6 +45,13 @@ export interface CommandSudoDeps {
    * when the human chose "Always". Errors propagate to the caller.
    */
   persistGrant: (pattern: string) => Promise<void>;
+  /**
+   * Default disposition for `no-match`. The cone defaults to `'allow'` (only
+   * explicit `Cmnd` rules gate); non-cone scoops pass `'require-approval'` so
+   * any disallowed command escalates to the cone instead of dispatching as a
+   * hard block ("command not found").
+   */
+  defaultDisposition?: DefaultDisposition;
 }
 
 /** Outcome of an enforcement pass. */
@@ -65,7 +77,12 @@ export async function enforceCommandSudo(
   const trimmed = subject.trim();
   if (!trimmed) return { allowed: true };
 
-  if (matchCommand(deps.policy, trimmed) !== 'require-approval') {
+  if (
+    applyDefaultDisposition(
+      matchCommand(deps.policy, trimmed),
+      deps.defaultDisposition ?? 'allow'
+    ) !== 'require-approval'
+  ) {
     return { allowed: true };
   }
 

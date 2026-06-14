@@ -112,14 +112,30 @@ Command-level "Always" grants are persisted through the manager's raw-VFS sink
 ```text
 Orchestrator.init()
   └─ new SudoManager({ fs: sharedFs, watcher })  // seed + load + watch
-       ├─ getBroker()   → createSudoBroker()      // float-specific
-       ├─ getPolicy()   → live merged SudoersPolicy
-       └─ getShellConfig() → { getPolicy, broker, persistCommandGrant }
+       ├─ getBroker()         → createSudoBroker()         // user broker (cone)
+       ├─ getPolicy()         → live merged global SudoersPolicy
+       ├─ getPolicyForScoop() → global ∪ /scoops/<folder>/etc/sudoers
+       └─ getShellConfig()    → { getPolicy, broker, persistCommandGrant }
 
-ScoopContext.init()
-  ├─ gatedFs = createSudoFs(fs, { broker, getPolicy })  // FS-level enforcement
-  ├─ createFileTools(gatedFs)        // file tools gated
-  └─ new AlmostBashShell({ fs: gatedFs, sudo: getShellConfig() })  // command-level
+Orchestrator.createScoopTab(jid)
+  ├─ if non-cone: RestrictedFS(..., 'sudo-delegated')   // writes pass through to SudoFS
+  ├─ if non-cone: seedScoopSudoers(folder, config) ...  // first boot only
+  ├─                              ... or reloadScoopPolicyByFolder()  // existing file
+  └─ new ScoopContext(scoop, callbacks, fs, ..., sudoManager)
+
+ScoopContext.init() — non-cone scoop
+  ├─ broker     = { requestApproval: req => callbacks.onSudoRequest(req) }  // cone-mediated
+  ├─ getPolicy  = () => sudoManager.getPolicyForScoop(folder)
+  ├─ default    = 'require-approval'
+  ├─ gatedFs    = createSudoFs(fs, { broker, getPolicy, defaultDisposition })
+  └─ new AlmostBashShell({ fs: gatedFs, sudo: { ..., defaultDisposition } })
+
+ScoopContext.init() — cone (unchanged)
+  ├─ broker     = sudoManager.getBroker()                  // user broker
+  ├─ getPolicy  = () => sudoManager.getPolicy()            // global only
+  ├─ default    = 'allow'
+  ├─ gatedFs    = createSudoFs(fs, { broker, getPolicy, defaultDisposition: 'allow' })
+  └─ new AlmostBashShell({ fs: gatedFs, sudo: getShellConfig() })
 ```
 
 Brokers (`packages/webapp/src/sudo/`):
@@ -167,6 +183,44 @@ sink that powers `seedScoopSudoers`, so it bypasses the per-scoop self-protectio
 on `/scoops/<folder>/etc/sudoers`). `kind: 'secret'` cannot be persisted because
 there is no matching sudoers directive — the cone tool surfaces this as
 "approved but not persisted" so the agent retries the request next time.
+
+#### Unified enforcement (sudo is the single surface)
+
+The per-scoop sudo policy is the **single enforcement surface** for non-cone
+scoops. The other historical gates — the `RestrictedFS` write-EACCES and the
+shell `allowedCommands` registration filter — defer to sudo so out-of-sandbox
+actions escalate to the cone instead of dying with a hard wall:
+
+- **Filesystem writes.** `RestrictedFS` is constructed with
+  `writeEnforcement: 'sudo-delegated'` for non-cone scoops. A write to a path
+  outside the scoop's `writablePaths` no longer throws `EACCES` here; it
+  passes through to the outer `SudoFS`, whose `defaultDisposition:
+'require-approval'` upgrades the unmatched `no-match` to an escalation. The
+  per-scoop sudoers file (seeded from `ScoopConfig.writablePaths` as
+  `NOPASSWD Write <p>/**` rules) keeps in-sandbox writes prompt-free.
+  - **Reads stay silently filtered.** `SudoFS` only applies the
+    `'require-approval'` default to **writes** — `RestrictedFS` keeps
+    returning `ENOENT`/`[]` for out-of-sandbox reads. This is intentional:
+    a scoop's PATH resolution and skill discovery probe many paths that
+    don't exist, and escalating each would flood the cone with approval
+    requests for innocent lookups.
+  - **Symlink escape stays hardcoded.** A `/scoops/<f>/escape-link →
+/etc/sudoers` style escape is still rejected with `EACCES` inside
+    `RestrictedFS` regardless of mode — sudo gates the literal path the
+    agent passed (which is in-sandbox), not the resolved target, so the
+    symlink-realpath check is a security invariant, not a policy choice.
+- **Shell commands.** When `ShellSudoConfig.defaultDisposition` is
+  `'require-approval'`, `AlmostBashShell` skips the `allowedCommands`
+  registration filter entirely and registers every built-in. The
+  per-scoop sudoers file (`NOPASSWD Cmnd <c>*` per `allowedCommands` entry)
+  decides at dispatch which commands run unprompted; unmatched commands
+  escalate to the cone. Without this, an unmatched command would surface
+  as "command not found" — a hard block the agent cannot recover from.
+
+The cone is unchanged: its `defaultDisposition` is `'allow'`, so only
+explicit `/etc/sudoers` rules gate cone actions. The cone's shell still
+sees its user broker, and the cone's `RestrictedFS` is not used at all
+(the cone runs against the raw `sharedFs`).
 
 `sudo_request` and `list_sudo_requests` are listed in
 `packages/webapp/src/scoops/hidden-tools.ts` so the plumbing tool-call rows do

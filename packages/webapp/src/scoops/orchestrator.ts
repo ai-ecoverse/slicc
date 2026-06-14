@@ -1963,6 +1963,39 @@ export class Orchestrator implements ConeApprovalRouter {
     }
   }
 
+  /**
+   * Seed (or reload) the per-scoop sudoers file from `ScoopConfig` so the
+   * scoop's `writablePaths` / `visiblePaths` / `allowedCommands` materialize
+   * as `NOPASSWD` grants. Without this the scoop's effective policy is the
+   * global one + nothing, and every in-sandbox action would escalate
+   * (the SudoFS default disposition is `'require-approval'` for scoops).
+   *
+   * - Missing file: seed from config. Fresh-boot fast path.
+   * - Existing file: only reload into the in-memory cache — overwriting on
+   *   every boot would wipe any "Always" grants added mid-session via
+   *   {@link SudoManager.appendScoopRule}. Re-seeding when `ScoopConfig`
+   *   changes is a separate flow (handled by the scoop-edit path).
+   *
+   * Best-effort: a failed seed is logged and the scoop boots with whatever
+   * policy is already on disk.
+   */
+  private async ensureScoopSudoersLoaded(scoop: RegisteredScoop): Promise<void> {
+    if (!this.sudoManager || !this.sharedFs) return;
+    try {
+      const path = `/scoops/${scoop.folder}/etc/sudoers`;
+      if (await this.sharedFs.exists(path)) {
+        await this.sudoManager.reloadScoopPolicyByFolder(scoop.folder);
+      } else {
+        await this.sudoManager.seedScoopSudoers(scoop.folder, scoop.config);
+      }
+    } catch (err) {
+      log.warn('Failed to seed per-scoop sudoers; continuing with existing policy', {
+        folder: scoop.folder,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   /** Create and initialize a scoop context */
   async createScoopTab(jid: string): Promise<void> {
     const scoop = this.scoops.get(jid);
@@ -1991,13 +2024,24 @@ export class Orchestrator implements ConeApprovalRouter {
     // read-only and read-write prefixes come straight from config (pure
     // replace — defaults live in `scoop_scoop` and in the restore backfill,
     // not here).
+    //
+    // `writeEnforcement: 'sudo-delegated'` lets the outer SudoFS escalate
+    // out-of-sandbox writes to the cone instead of dying here with EACCES.
+    // Reads stay silently filtered (ENOENT/[]). The symlink-escape EACCES
+    // in RestrictedFS stays active in both modes — a `/scoops/<f>/escape`
+    // symlink to `/etc/sudoers` is a security invariant, not a policy choice.
     const fs = scoop.isCone
       ? this.sharedFs
       : new RestrictedFS(
           this.sharedFs,
           scoop.config?.writablePaths ? [...scoop.config.writablePaths] : [],
-          scoop.config?.visiblePaths ? [...scoop.config.visiblePaths] : []
+          scoop.config?.visiblePaths ? [...scoop.config.visiblePaths] : [],
+          'sudo-delegated'
         );
+
+    if (!scoop.isCone) {
+      await this.ensureScoopSudoersLoaded(scoop);
+    }
 
     // Create the scoop context with full callbacks
     const contextCallbacks = this.buildScoopContextCallbacks(jid, scoop);
