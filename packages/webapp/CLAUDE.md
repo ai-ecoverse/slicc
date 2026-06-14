@@ -172,7 +172,7 @@ Deep reference: `docs/kernel/process-model.md`.
 
 - Path: `packages/webapp/src/skills/`
 - Discovers install-managed native skills from `/workspace/skills/`.
-- Also discovers compatible read-only skill roots under `.agents/skills/*/SKILL.md` and `.claude/skills/*/SKILL.md`.
+- Also discovers compatible read-only skill roots under `.agents/skills/*/SKILL.md` and `.claude/skills/*/SKILL.md`, and marketplace skills from any `.claude-plugin/marketplace.json` manifest found in the VFS (skills at `<plugin-source>/skills/<name>/SKILL.md`). Precedence: native → agents → claude → marketplace.
 - **Never monkeypatch an fs method in place on a get/set-asymmetric Proxy.** `catalog.ts`'s compatibility-skill cache is invalidated by wrapping `writeFile`/`mkdir`/`rm`/… in place. The agent shell hands discovery the **sudo-fs `Proxy`** (`fs/sudo-fs.ts`), whose `get` returns a gating override while `set` writes through to the wrapped target — so reassigning a gated method clobbers the target's real method and leaves the override delegating to the new wrapper, whose captured `original` is that same override: an unbounded `override↔wrapper` async recursion that OOMs the kernel worker on the next gated write (stardust `upskill` → `playwright-cli` writing `/.playwright/session.md`). The sudo Proxy therefore advertises `MONKEYPATCH_UNSAFE_FS` (a `Symbol.for` registry marker) and `getCompatibilitySkillCandidates` skips both the hooks **and** the cache for it (always re-discovers). Boot-time `loadSkills` uses the unwrapped fs, so it is unaffected — which is why the crash only reproduced on first-time, in-shell skill installs.
 
 ### Sprinkle Rendering

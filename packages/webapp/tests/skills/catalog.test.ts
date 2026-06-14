@@ -117,6 +117,164 @@ describe('discoverSkillCandidates', () => {
       '/repo/.claude/skills/visible-skill',
     ]);
   });
+
+  it('discovers marketplace skills from a .claude-plugin/marketplace.json', async () => {
+    const manifest = JSON.stringify({
+      name: 'test-marketplace',
+      metadata: { version: '1.0.0' },
+      plugins: [
+        { name: 'my-tools', description: 'My tools', source: './plugins/my-tools', strict: false },
+      ],
+    });
+
+    await fs.mkdir('/mnt/repo/.claude-plugin', { recursive: true });
+    await fs.writeFile('/mnt/repo/.claude-plugin/marketplace.json', manifest);
+    await fs.mkdir('/mnt/repo/plugins/my-tools/skills/my-skill', { recursive: true });
+    await fs.writeFile(
+      '/mnt/repo/plugins/my-tools/skills/my-skill/SKILL.md',
+      '---\nname: my-skill\n---\n'
+    );
+
+    const candidates = await discoverSkillCandidates(fs);
+
+    expect(candidates).toContainEqual(
+      expect.objectContaining({
+        source: 'marketplace',
+        path: '/mnt/repo/plugins/my-tools/skills/my-skill',
+      })
+    );
+  });
+
+  it('skips marketplace plugins whose source is a git-subdir object', async () => {
+    const manifest = JSON.stringify({
+      name: 'test-marketplace',
+      metadata: { version: '1.0.0' },
+      plugins: [
+        { name: 'local-plugin', source: './plugins/local', strict: false },
+        {
+          name: 'external-plugin',
+          source: {
+            source: 'git-subdir',
+            url: 'https://github.com/org/repo',
+            path: '.',
+            sha: 'abc',
+          },
+          strict: false,
+        },
+      ],
+    });
+
+    await fs.mkdir('/mnt/repo/.claude-plugin', { recursive: true });
+    await fs.writeFile('/mnt/repo/.claude-plugin/marketplace.json', manifest);
+    await fs.mkdir('/mnt/repo/plugins/local/skills/local-skill', { recursive: true });
+    await fs.writeFile(
+      '/mnt/repo/plugins/local/skills/local-skill/SKILL.md',
+      '---\nname: local-skill\n---\n'
+    );
+
+    const candidates = await discoverSkillCandidates(fs);
+    const names = candidates.map((c) => c.path.split('/').pop());
+
+    expect(names).toContain('local-skill');
+    expect(candidates.filter((c) => c.source === 'marketplace')).toHaveLength(1);
+  });
+
+  it('discovers skills across multiple plugins in one manifest', async () => {
+    const manifest = JSON.stringify({
+      name: 'multi-marketplace',
+      metadata: { version: '1.0.0' },
+      plugins: [
+        { name: 'plugin-a', source: './plugins/a', strict: false },
+        { name: 'plugin-b', source: './plugins/b', strict: false },
+      ],
+    });
+
+    await fs.mkdir('/mnt/repo/.claude-plugin', { recursive: true });
+    await fs.writeFile('/mnt/repo/.claude-plugin/marketplace.json', manifest);
+    await fs.mkdir('/mnt/repo/plugins/a/skills/skill-one', { recursive: true });
+    await fs.writeFile(
+      '/mnt/repo/plugins/a/skills/skill-one/SKILL.md',
+      '---\nname: skill-one\n---\n'
+    );
+    await fs.mkdir('/mnt/repo/plugins/b/skills/skill-two', { recursive: true });
+    await fs.writeFile(
+      '/mnt/repo/plugins/b/skills/skill-two/SKILL.md',
+      '---\nname: skill-two\n---\n'
+    );
+
+    const candidates = await discoverSkillCandidates(fs);
+    const marketplaceCandidates = candidates.filter((c) => c.source === 'marketplace');
+
+    expect(marketplaceCandidates.map((c) => c.path.split('/').pop()).sort()).toEqual([
+      'skill-one',
+      'skill-two',
+    ]);
+  });
+
+  it('native skill shadows marketplace skill with the same name', async () => {
+    const manifest = JSON.stringify({
+      name: 'test-marketplace',
+      metadata: { version: '1.0.0' },
+      plugins: [{ name: 'my-tools', source: './plugins/my-tools', strict: false }],
+    });
+
+    await fs.mkdir('/workspace/skills/shared-name', { recursive: true });
+    await fs.writeFile(
+      '/workspace/skills/shared-name/SKILL.md',
+      '---\nname: shared-name\n---\n# native'
+    );
+
+    await fs.mkdir('/mnt/repo/.claude-plugin', { recursive: true });
+    await fs.writeFile('/mnt/repo/.claude-plugin/marketplace.json', manifest);
+    await fs.mkdir('/mnt/repo/plugins/my-tools/skills/shared-name', { recursive: true });
+    await fs.writeFile(
+      '/mnt/repo/plugins/my-tools/skills/shared-name/SKILL.md',
+      '---\nname: shared-name\n---\n# marketplace'
+    );
+
+    const candidates = await discoverSkillCandidates(fs);
+    const { winners } = resolveSkillNameCollisions(
+      candidates,
+      (c) => c.path.split('/').pop() ?? ''
+    );
+    const winner = winners.find((w) => w.path.split('/').pop() === 'shared-name');
+
+    expect(winner?.source).toBe('native');
+  });
+
+  it('ignores malformed marketplace.json without throwing', async () => {
+    await fs.mkdir('/mnt/repo/.claude-plugin', { recursive: true });
+    await fs.writeFile('/mnt/repo/.claude-plugin/marketplace.json', 'not valid json {{{');
+
+    const candidates = await discoverSkillCandidates(fs);
+    expect(candidates.filter((c) => c.source === 'marketplace')).toHaveLength(0);
+  });
+
+  it('discovers skills when plugin source is repo root ("." or "./")', async () => {
+    // Regression: source "." and "./" must resolve to the manifest parent dir,
+    // not produce a leading "." or "/" that fails to match VFS paths.
+    for (const source of ['.', './']) {
+      globalThis.indexedDB = new IDBFactory();
+      fs = await VirtualFS.create({ wipe: true });
+
+      const manifest = JSON.stringify({
+        name: 'root-source-marketplace',
+        metadata: { version: '1.0.0' },
+        plugins: [{ name: 'my-plugin', source, strict: false }],
+      });
+
+      await fs.mkdir('/mnt/repo/.claude-plugin', { recursive: true });
+      await fs.writeFile('/mnt/repo/.claude-plugin/marketplace.json', manifest);
+      await fs.mkdir('/mnt/repo/skills/root-skill', { recursive: true });
+      await fs.writeFile('/mnt/repo/skills/root-skill/SKILL.md', '---\nname: root-skill\n---\n');
+
+      const candidates = await discoverSkillCandidates(fs);
+      const marketplace = candidates.filter((c) => c.source === 'marketplace');
+
+      expect(marketplace).toHaveLength(1);
+      expect(marketplace[0].path).toBe('/mnt/repo/skills/root-skill');
+    }
+  });
 });
 
 describe('discoverSkillCandidates over a sudo-fs Proxy (OOM regression)', () => {
