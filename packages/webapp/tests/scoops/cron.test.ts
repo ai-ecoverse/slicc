@@ -64,6 +64,15 @@ describe('getNextCronTime', () => {
     expect(getNextCronTime('not a cron', new Date())).toBeNull();
   });
 
+  it('uses AND semantics when both day-of-month and day-of-week are constrained', () => {
+    // "0 9 1 * 1" fires only when the 1st of the month is also a Monday.
+    const next = getNextCronTime('0 9 1 * 1', new Date('2026-06-14T10:00:00'));
+    expect(next).not.toBeNull();
+    expect(next!.getDate()).toBe(1);
+    expect(next!.getDay()).toBe(1);
+    expect(next!.getHours()).toBe(9);
+  });
+
   it('supports @daily shortcut', () => {
     const next = getNextCronTime('@daily', new Date('2026-06-14T10:00:00'));
     expect(next!.getHours()).toBe(0);
