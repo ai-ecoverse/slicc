@@ -597,3 +597,99 @@ describe('OffscreenClient.getScoopTranscript', () => {
     await expect(pending).resolves.toBe('real');
   });
 });
+
+describe('OffscreenClient stream-pointer resync on scoop-messages-replaced', () => {
+  let client: InstanceType<typeof OffscreenClient>;
+  const callbacks = {
+    onStatusChange: vi.fn(),
+    onScoopCreated: vi.fn(),
+    onScoopListUpdate: vi.fn(),
+    onIncomingMessage: vi.fn(),
+    onScoopMessagesReplaced: vi.fn(),
+  };
+
+  beforeEach(() => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+    client = new OffscreenClient(callbacks);
+  });
+
+  // Regression for #959: a mid-turn canonical replay (frozen-session thaw /
+  // scoop switch / remount) used to leave the panel streaming into a vanished
+  // synthetic id, so live deltas were dropped and the spinner hung forever.
+  it('adopts the replay streaming-tail id so resumed deltas extend that bubble', () => {
+    client.setSelectedScoopJid('cone_123');
+    const handle = client.createAgentHandle();
+    const events: any[] = [];
+    handle.onEvent((e) => events.push(e));
+
+    // First turn starts streaming under a synthetic id.
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'cone_123',
+      eventType: 'text_delta',
+      text: 'before',
+    });
+    expect(events[0].type).toBe('message_start');
+    const syntheticId = events[0].messageId;
+
+    // Canonical replay lands mid-turn with a still-streaming tail.
+    simulateMessage('offscreen', {
+      type: 'scoop-messages-replaced',
+      scoopJid: 'cone_123',
+      messages: [
+        { id: 'u1', role: 'user', content: 'hi', timestamp: 1 },
+        { id: 'buf-stream', role: 'assistant', content: 'before', timestamp: 2, isStreaming: true },
+      ],
+    });
+    expect(callbacks.onScoopMessagesReplaced).toHaveBeenCalledWith('cone_123', expect.any(Array));
+
+    events.length = 0;
+    // The next delta must continue into the replay's bubble (no new
+    // message_start) and carry the replay's id, not the stale synthetic one.
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'cone_123',
+      eventType: 'text_delta',
+      text: ' after',
+    });
+    expect(events.map((e) => e.type)).toEqual(['content_delta']);
+    expect(events[0].messageId).toBe('buf-stream');
+    expect(events[0].messageId).not.toBe(syntheticId);
+  });
+
+  it('drops the pointer when the replay tail is settled so the next delta opens a fresh bubble', () => {
+    client.setSelectedScoopJid('cone_123');
+    const handle = client.createAgentHandle();
+    const events: any[] = [];
+    handle.onEvent((e) => events.push(e));
+
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'cone_123',
+      eventType: 'text_delta',
+      text: 'turn one',
+    });
+
+    // Replay with no streaming tail (turn already settled).
+    simulateMessage('offscreen', {
+      type: 'scoop-messages-replaced',
+      scoopJid: 'cone_123',
+      messages: [
+        { id: 'a1', role: 'assistant', content: 'turn one', timestamp: 2, isStreaming: false },
+      ],
+    });
+
+    events.length = 0;
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'cone_123',
+      eventType: 'text_delta',
+      text: 'turn two',
+    });
+    // A fresh turn: must re-open with message_start under a new id.
+    expect(events.map((e) => e.type)).toEqual(['message_start', 'content_delta']);
+    expect(events[0].messageId).not.toBe('a1');
+  });
+});

@@ -295,6 +295,29 @@ describe('WcChatController render/dispose lifecycle hooks', () => {
     expect(thread.querySelectorAll('slicc-agent-message')).toHaveLength(1);
     expect(thread.querySelector('slicc-agent-message')?.hasAttribute('streaming')).toBe(false);
   });
+
+  // Regression for #959: a canonical replay that lands mid-turn must leave the
+  // stream machine pointed at the streaming tail so resumed deltas extend it
+  // (and content_done folds the last un-flushed chunk) instead of the reply
+  // hanging unrendered behind a stuck spinner.
+  it('resumes a streaming tail after loadMessages: deltas extend it, content_done flushes', async () => {
+    const { thread, agent, controller } = makeTracked();
+    controller.loadMessages([
+      { id: 'm1', role: 'assistant', content: 'before', timestamp: 2, isStreaming: true },
+    ]);
+    agent.emit({ type: 'content_delta', messageId: 'm1', text: ' mid' });
+    await nextFrame();
+    expect(thread.querySelector('slicc-agent-message')?.textContent).toContain('before mid');
+
+    // A delta with no rAF tick before content_done must still be folded in
+    // (works because loadMessages restored #currentStreamId for the tail).
+    agent.emit({ type: 'content_delta', messageId: 'm1', text: ' end' });
+    agent.emit({ type: 'content_done', messageId: 'm1' });
+    const el = thread.querySelector('slicc-agent-message');
+    expect(el?.textContent).toContain('before mid end');
+    expect(el?.hasAttribute('streaming')).toBe(false);
+    expect(thread.querySelectorAll('slicc-agent-message')).toHaveLength(1);
+  });
 });
 
 describe('WcChatController scroll pinning', () => {
