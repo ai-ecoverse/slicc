@@ -4,7 +4,7 @@ import { createSubstrate } from '@slicc/cloud-core';
 import { type ChildProcess, spawn } from 'child_process';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { existsSync, readFileSync } from 'fs';
-import { createServer } from 'http';
+import { createServer, type Server as HttpServer } from 'http';
 import { createServer as createNetServer } from 'net';
 import { homedir } from 'os';
 import { basename, dirname, join, resolve } from 'path';
@@ -700,24 +700,419 @@ async function launchChromeTarget(state: ServerState): Promise<void> {
   });
 }
 
-async function main() {
-  // Resolve ports, launch the browser, then snapshot the now-final values that
-  // the rest of boot reads. Mutable lifecycle fields stay on `state`.
-  const state = createServerState();
-  await resolvePorts(state);
-  await launchBrowser(state);
-  const { servePort: SERVE_PORT, cdpPort: CDP_PORT, serveOrigin: SERVE_ORIGIN } = state;
-  const discoveredTrayJoinUrl = state.discoveredTrayJoinUrl;
+// ---------------------------------------------------------------------------
+// CDP WebSocket proxy — Chrome's browser-level debugger URL accepts only ONE
+// concurrent WebSocket connection, so we keep a single chromeWs and swap the
+// active client when a new one connects. All proxy state lives on ServerState.
+// ---------------------------------------------------------------------------
 
-  // 3. Set up express app with request logging
+interface CdpProxyContext {
+  wss: WebSocketServer;
+  secretProxy: SecretProxyManager;
+  cdpDedup: CliLogDedup;
+  cdpSessionUrls: ReturnType<typeof createCdpSessionUrlTracker>;
+}
+
+const CDP_PROXY_INSPECT_BYTES = 256 * 1024;
+const CDP_PROXY_HARD_FRAME_CAP = 64 * 1024 * 1024;
+const CDP_LOOP_EVENT_PREFIXES = [
+  '{"method":"Network.webSocketFrameReceived"',
+  '{"method":"Network.webSocketFrameSent"',
+];
+
+/**
+ * Normalise the `ws` library's polymorphic message payload into a single Buffer
+ * we can peek at and forward. Without this, a later `String(data)` would coerce
+ * an `ArrayBuffer` to `"[object ArrayBuffer]"` and a `Buffer[]` to comma-joined
+ * fragments, corrupting the CDP frame.
+ */
+function cdpFrameToBuffer(data: unknown): Buffer {
+  if (Buffer.isBuffer(data)) return data;
+  if (data instanceof ArrayBuffer) return Buffer.from(data);
+  if (Array.isArray(data)) return Buffer.concat(data as Buffer[]);
+  // Rare fallback — string frames in text mode. Keep bytes faithful.
+  return Buffer.from(String(data));
+}
+
+function closeWebSocketQuietly(ws: WebSocket | null): void {
+  if (!ws) return;
+  try {
+    ws.close();
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Route `/cdp` and `/licks-ws` upgrades to their servers; leave others for Vite HMR. */
+function attachCdpUpgradeRouting(
+  server: HttpServer,
+  wss: WebSocketServer,
+  lickWss: WebSocketServer
+): void {
+  server.on('upgrade', (request, socket, head) => {
+    const { pathname } = new URL(request.url!, `http://${request.headers.host}`);
+    if (pathname === '/cdp') {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit('connection', ws, request);
+      });
+    } else if (pathname === '/licks-ws') {
+      lickWss.handleUpgrade(request, socket, head, (ws) => {
+        lickWss.emit('connection', ws, request);
+      });
+    }
+  });
+}
+
+/**
+ * Apply the Client→Chrome unmask gate to a buffered frame on flush. Shared by
+ * both buffer-drain sites (ensureChromeConnection already-open path + the
+ * chromeWs 'open' handler); falls back to the original bytes on any error.
+ */
+function flushClientFrame(target: WebSocket, raw: unknown, ctx: CdpProxyContext): void {
+  const original = String(raw);
+  const { output } = applyCdpUnmask(original, {
+    tracker: ctx.cdpSessionUrls,
+    pipeline: ctx.secretProxy.rawPipeline,
+  });
+  target.send(output);
+}
+
+function flushBufferedClientFrames(
+  state: ServerState,
+  target: WebSocket,
+  ctx: CdpProxyContext
+): void {
+  if (!state.messageBuffer) return;
+  for (const msg of state.messageBuffer) {
+    flushClientFrame(target, msg, ctx);
+  }
+  state.messageBuffer = null;
+}
+
+/**
+ * Forward one Chrome→Client frame, dropping the self-amplifying
+ * `Network.webSocketFrame*` feedback-loop events (the slicc UI runs inside the
+ * Chrome it debugs, so those embed prior frames and blow past V8's string cap)
+ * and any frame over the hard cap.
+ */
+function forwardChromeFrame(state: ServerState, buf: Buffer, ctx: CdpProxyContext): void {
+  const byteLen = buf.length;
+  // Peek at the first 256 KiB only — enough to identify the event type cheaply.
+  const head = buf.subarray(0, CDP_PROXY_INSPECT_BYTES).toString();
+
+  if (CDP_LOOP_EVENT_PREFIXES.some((p) => head.startsWith(p))) {
+    const msg = `[cdp-proxy] Dropping Chrome feedback-loop event (${byteLen} bytes, ${head.slice(1, 60)}…)`;
+    if (ctx.cdpDedup.shouldLog(msg)) console.debug(msg);
+    return;
+  }
+  if (byteLen > CDP_PROXY_HARD_FRAME_CAP) {
+    const msg = `[cdp-proxy] Dropping oversized Chrome→Client frame (${byteLen} bytes)`;
+    if (ctx.cdpDedup.shouldLog(msg)) console.debug(msg);
+    return;
+  }
+
+  const str = buf.toString();
+  const msg = `[cdp-proxy] Chrome→Client: ${str.slice(0, 200)}`;
+  if (ctx.cdpDedup.shouldLog(msg)) console.debug(msg);
+  // Sniff Target.attachedToTarget / targetInfoChanged / Page.frameNavigated so
+  // the Client→Chrome unmask gate can resolve per-session hostnames.
+  ctx.cdpSessionUrls.observeChromeToClient(str);
+  if (state.activeClientWs && state.activeClientWs.readyState === WebSocket.OPEN) {
+    state.activeClientWs.send(str);
+  }
+}
+
+function ensureChromeConnection(
+  state: ServerState,
+  url: string,
+  ctx: CdpProxyContext
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (state.chromeWs && state.chromeWs.readyState === WebSocket.OPEN) {
+      // Already connected — flush any buffered messages and go direct.
+      flushBufferedClientFrames(state, state.chromeWs, ctx);
+      resolve();
+      return;
+    }
+    closeWebSocketQuietly(state.chromeWs);
+
+    state.messageBuffer = [];
+    // Disable the ws library's per-message size cap (default 100 MiB). The slicc
+    // UI runs INSIDE the Chrome it debugs, so Chrome's Network domain reports
+    // every CDP frame back as `Network.webSocketFrame*` events embedding prior
+    // payloads — an exponential loop that would trip the cap and close the
+    // socket (code 1006). forwardChromeFrame drops those events by method.
+    const chromeWs = new WebSocket(url, { maxPayload: 0 });
+    state.chromeWs = chromeWs;
+
+    chromeWs.on('open', () => {
+      console.log('[cdp-proxy] chromeWs open');
+      flushBufferedClientFrames(state, chromeWs, ctx);
+      resolve();
+    });
+    chromeWs.on('message', (data) => {
+      forwardChromeFrame(state, cdpFrameToBuffer(data), ctx);
+    });
+    chromeWs.on('close', (code, reason) => {
+      console.log(`[cdp-proxy] Chrome WS closed. code=${code}, reason=${String(reason)}`);
+      state.chromeWs = null;
+    });
+    chromeWs.on('error', (err) => {
+      console.log(`[cdp-proxy] Chrome WS error: ${err}`);
+      state.chromeWs = null;
+      reject(err);
+    });
+  });
+}
+
+/** Forward one Client→Chrome frame, buffering it when Chrome isn't ready yet. */
+function forwardClientFrame(state: ServerState, data: unknown, ctx: CdpProxyContext): void {
+  const original = String(data);
+  const preview = original.slice(0, 200);
+  if (
+    state.chromeWs &&
+    state.chromeWs.readyState === WebSocket.OPEN &&
+    state.messageBuffer === null
+  ) {
+    const msg = `[cdp-proxy] Client→Chrome: ${preview}`;
+    if (ctx.cdpDedup.shouldLog(msg)) console.debug(msg);
+    const { output } = applyCdpUnmask(original, {
+      tracker: ctx.cdpSessionUrls,
+      pipeline: ctx.secretProxy.rawPipeline,
+    });
+    state.chromeWs.send(output);
+  } else if (state.messageBuffer !== null) {
+    // Buffer the ORIGINAL bytes; unmask runs on flush so the hostname tracker
+    // reflects the state at send time.
+    state.messageBuffer.push(data);
+    const msg = `[cdp-proxy] Client→Chrome (buffered): ${preview}`;
+    if (ctx.cdpDedup.shouldLog(msg)) console.debug(msg);
+  } else {
+    console.log(`[cdp-proxy] Client→Chrome (DROPPED — no connection): ${preview}`);
+  }
+}
+
+async function handleCdpClient(
+  state: ServerState,
+  clientWs: WebSocket,
+  ctx: CdpProxyContext,
+  cdpPort: number
+): Promise<void> {
+  try {
+    // Only one client active at a time — close the previous one.
+    if (state.activeClientWs && state.activeClientWs.readyState === WebSocket.OPEN) {
+      console.log('[cdp-proxy] Closing previous client connection');
+      state.activeClientWs.close();
+    }
+    state.activeClientWs = clientWs;
+    console.log('[cdp-proxy] New client connected');
+
+    // Initialise the buffer BEFORE any await so messages arriving during
+    // waitForCDP / ensureChromeConnection are captured, not dropped.
+    if (state.messageBuffer === null) state.messageBuffer = [];
+
+    // Register ALL handlers BEFORE any async work so no messages are lost.
+    clientWs.on('message', (data) => {
+      forwardClientFrame(state, data, ctx);
+    });
+    clientWs.on('close', () => {
+      console.log('[cdp-proxy] Client disconnected');
+      if (state.activeClientWs === clientWs) state.activeClientWs = null;
+      // Don't close chromeWs — keep it alive for the next client.
+    });
+    clientWs.on('error', (err) => {
+      console.log(`[cdp-proxy] Client WS error: ${err}`);
+      if (state.activeClientWs === clientWs) state.activeClientWs = null;
+    });
+
+    // NOW do async work — messages arriving during these awaits are buffered.
+    if (!state.cdpUrl) {
+      state.cdpUrl = await waitForCDP(cdpPort);
+      console.log(`[cdp-proxy] CDP available at: ${state.cdpUrl}`);
+    }
+    await ensureChromeConnection(state, state.cdpUrl, ctx);
+  } catch (err) {
+    console.error('[cdp-proxy] Connection error:', err);
+    clientWs.close();
+  }
+}
+
+/** Best-effort graceful close of the launched browser, escalating to SIGKILL. */
+async function closeLaunchedBrowserGracefully(state: ServerState, cdpPort: number): Promise<void> {
+  const browser = state.launchedBrowserProcess;
+  if (!browser) return;
+
+  let browserExited = false;
+  browser.on('exit', () => {
+    browserExited = true;
+  });
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${cdpPort}/json/version`);
+    const json = (await res.json()) as { webSocketDebuggerUrl: string };
+    const browserWs = new WebSocket(json.webSocketDebuggerUrl);
+    await new Promise<void>((resolve, reject) => {
+      browserWs.on('open', () => {
+        browserWs.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
+        resolve();
+      });
+      browserWs.on('error', reject);
+    });
+  } catch {
+    // CDP not available — the launched browser may still be starting up; fall through to kill.
+  }
+
+  const deadline = Date.now() + 3000;
+  while (!browserExited && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  if (!browserExited) {
+    try {
+      browser.kill('SIGKILL');
+    } catch {
+      /* ignore */
+    }
+  }
+  console.log(`${state.launchedBrowserLabel} closed`);
+}
+
+interface ShutdownDeps {
+  fileLogger: FileLogger;
+  wss: WebSocketServer;
+  server: HttpServer;
+  cdpPort: number;
+}
+
+/** Build the idempotent graceful-shutdown handler wired to the process signals. */
+function createGracefulShutdown(state: ServerState, deps: ShutdownDeps): () => Promise<void> {
+  return async () => {
+    if (state.shuttingDown) return;
+    state.shuttingDown = true;
+    console.log('\nShutting down...');
+    deps.fileLogger.close();
+
+    state.overlayInjector?.stop();
+    state.overlayInjector = null;
+
+    closeWebSocketQuietly(state.chromeWs);
+    state.chromeWs = null;
+    closeWebSocketQuietly(state.activeClientWs);
+    state.activeClientWs = null;
+    for (const client of deps.wss.clients) {
+      client.close();
+    }
+    deps.wss.close();
+
+    // Stop accepting new HTTP connections.
+    deps.server.close();
+
+    await closeLaunchedBrowserGracefully(state, deps.cdpPort);
+    process.exit(0);
+  };
+}
+
+/** Pre-connect to Chrome so the proxy is warm before the first client; hosted mode registers leader-restart once CDP is ready. */
+async function preconnectCdp(
+  state: ServerState,
+  ctx: CdpProxyContext,
+  app: express.Express,
+  servePort: number,
+  cdpPort: number
+): Promise<void> {
+  try {
+    state.cdpUrl = await waitForCDP(cdpPort);
+    console.log(`[cdp-proxy] Pre-connected: CDP available at ${state.cdpUrl}`);
+    await ensureChromeConnection(state, state.cdpUrl, ctx);
+    console.log('[cdp-proxy] Chrome WebSocket ready (pre-warmed)');
+
+    if (RUNTIME_FLAGS.hosted) {
+      registerLeaderRestartEndpoint(app, {
+        cdp: createHttpCdp(cdpPort),
+        localUrlPrefix: `http://localhost:${servePort}/`,
+      });
+      console.log('[hosted] /api/leader-restart endpoint registered');
+    }
+  } catch (err) {
+    console.log('[cdp-proxy] Pre-connect failed (will retry on first client):', err);
+  }
+}
+
+async function startOverlayInjector(
+  state: ServerState,
+  cdpPort: number,
+  servePort: number
+): Promise<void> {
+  try {
+    state.overlayInjector = await ElectronOverlayInjector.create({
+      cdpPort,
+      servePort,
+      dev: DEV_MODE,
+      projectRoot: PROJECT_ROOT,
+    });
+    await state.overlayInjector.start();
+    console.log('[electron-float] Overlay injector is watching Electron page targets');
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('[electron-float] Failed to start overlay injector:', message);
+  }
+}
+
+interface CdpServerDeps {
+  app: express.Express;
+  server: HttpServer;
+  ctx: CdpProxyContext;
+  fileLogger: FileLogger;
+  servePort: number;
+  serveOrigin: string;
+  cdpPort: number;
+}
+
+/** Start listening and warm up the CDP proxy, overlay injector, and console forwarder. */
+function startCdpServer(state: ServerState, deps: CdpServerDeps): void {
+  const { app, server, ctx, fileLogger, servePort, serveOrigin, cdpPort } = deps;
+  server.listen(servePort, '127.0.0.1', () => {
+    console.log(`Serving UI at ${serveOrigin}`);
+    console.log(`CDP proxy at ws://localhost:${servePort}/cdp`);
+    fileLogger.log('info', 'CLI server started', {
+      port: servePort,
+      cdpPort,
+      devMode: DEV_MODE,
+      electronMode: ELECTRON_MODE,
+    });
+
+    void preconnectCdp(state, ctx, app, servePort, cdpPort);
+
+    if (ELECTRON_MODE) {
+      void startOverlayInjector(state, cdpPort, servePort);
+    } else {
+      setTimeout(() => {
+        attachConsoleForwarder(cdpPort, String(servePort)).catch((err) => {
+          console.error('[page] Console forwarder error:', err);
+        });
+      }, 2500);
+    }
+  });
+}
+
+interface SecretBootstrap {
+  secretStore: EnvSecretStore;
+  secretProxy: SecretProxyManager;
+  oauthStore: OauthSecretStore;
+}
+
+/**
+ * Build the secret stores + masking pipeline shared by the fetch-proxy, the
+ * /api/secrets routes, and the S3 sign-and-forward handler. Secret-load
+ * failures are logged, not fatal.
+ */
+async function bootstrapSecrets(): Promise<SecretBootstrap> {
   const sessionDir = RUNTIME_FLAGS.envFile
     ? dirname(RUNTIME_FLAGS.envFile)
     : join(homedir(), '.slicc');
   const sessionId = readOrCreateSessionId(sessionDir);
   const oauthStore = new OauthSecretStore();
-  // Env-file secrets (~/.slicc/secrets.env) feed the fetch-proxy mask
-  // pipeline alongside OAuth tokens. The same instance is reused below
-  // for the /api/secrets routes and the S3 sign-and-forward handler.
+  // Env-file secrets (~/.slicc/secrets.env) feed the fetch-proxy mask pipeline
+  // alongside OAuth tokens.
   const secretStore = new EnvSecretStore(RUNTIME_FLAGS.envFile ?? undefined);
   const secretProxy = new SecretProxyManager(secretStore, sessionId, oauthStore);
   try {
@@ -730,6 +1125,20 @@ async function main() {
   } catch (err) {
     console.warn('Failed to load secrets:', err instanceof Error ? err.message : err);
   }
+  return { secretStore, secretProxy, oauthStore };
+}
+
+async function main() {
+  // Resolve ports, launch the browser, then snapshot the now-final values that
+  // the rest of boot reads. Mutable lifecycle fields stay on `state`.
+  const state = createServerState();
+  await resolvePorts(state);
+  await launchBrowser(state);
+  const { servePort: SERVE_PORT, cdpPort: CDP_PORT, serveOrigin: SERVE_ORIGIN } = state;
+  const discoveredTrayJoinUrl = state.discoveredTrayJoinUrl;
+
+  // 3. Set up express app with request logging
+  const { secretStore, secretProxy, oauthStore } = await bootstrapSecrets();
 
   const app = express();
   app.use(requestLogger);
@@ -833,120 +1242,24 @@ async function main() {
     uiDir: resolve(Dirname, '..', 'ui'),
   });
 
-  // 4. CDP WebSocket proxy at /cdp
-  //    Use noServer mode so Vite's dev middleware doesn't intercept the
-  //    upgrade. Keep the default per-message payload cap on this socket —
-  //    the oversized-message feedback loop we have to defend against
-  //    (see the chromeWs constructor below for the full writeup) is
-  //    purely Chrome-to-proxy, never client-to-proxy, so raising the
-  //    cap here would only widen the DoS surface for anything on
-  //    localhost that can reach ws://127.0.0.1:PORT/cdp.
+  // 4. CDP WebSocket proxy at /cdp — noServer mode so Vite's dev middleware
+  //    doesn't intercept the upgrade; the per-message cap stays default (the
+  //    feedback-loop defense is Chrome→proxy only, never client→proxy).
   const wss = new WebSocketServer({ noServer: true });
-
-  server.on('upgrade', (request, socket, head) => {
-    const { pathname } = new URL(request.url!, `http://${request.headers.host}`);
-    if (pathname === '/cdp') {
-      wss.handleUpgrade(request, socket, head, (ws) => {
-        wss.emit('connection', ws, request);
-      });
-    } else if (pathname === '/licks-ws') {
-      lickWss.handleUpgrade(request, socket, head, (ws) => {
-        lickWss.emit('connection', ws, request);
-      });
-    }
-    // For other paths, do nothing — let Vite handle HMR upgrades
-  });
-
-  // ---------------------------------------------------------------------------
-  // Shared CDP proxy state — Chrome's browser-level debugger URL only accepts
-  // ONE concurrent WebSocket connection. We keep a single chromeWs and swap
-  // out the active client when a new one connects.
-  // ---------------------------------------------------------------------------
-  let cdpUrl: string | null = null;
-  let chromeWs: WebSocket | null = null;
-  let activeClientWs: WebSocket | null = null;
-  let messageBuffer: unknown[] | null = null;
-  const cdpDedup = new CliLogDedup();
-  // Tracks per-session current URL by sniffing Chrome→Client events; feeds
-  // the Client→Chrome unmask gate so per-frame unmasking is scoped to
-  // the target tab's actual hostname (fail-closed when unknown).
-  const cdpSessionUrls = createCdpSessionUrlTracker();
-
-  // Ensure everything is cleaned up when CLI exits
-  const gracefulShutdown = async () => {
-    if (state.shuttingDown) return;
-    state.shuttingDown = true;
-    console.log('\nShutting down...');
-    fileLogger.close();
-
-    state.overlayInjector?.stop();
-    state.overlayInjector = null;
-
-    // Close the shared Chrome WebSocket and all client connections
-    if (chromeWs) {
-      try {
-        chromeWs.close();
-      } catch {
-        /* ignore */
-      }
-      chromeWs = null;
-    }
-    if (activeClientWs) {
-      try {
-        activeClientWs.close();
-      } catch {
-        /* ignore */
-      }
-      activeClientWs = null;
-    }
-    for (const client of wss.clients) {
-      client.close();
-    }
-    wss.close();
-
-    // Stop accepting new HTTP connections
-    server.close();
-
-    const browser = state.launchedBrowserProcess;
-    if (browser) {
-      let browserExited = false;
-      browser.on('exit', () => {
-        browserExited = true;
-      });
-
-      try {
-        const res = await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`);
-        const json = (await res.json()) as { webSocketDebuggerUrl: string };
-        const browserWs = new WebSocket(json.webSocketDebuggerUrl);
-        await new Promise<void>((resolve, reject) => {
-          browserWs.on('open', () => {
-            browserWs.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
-            resolve();
-          });
-          browserWs.on('error', reject);
-        });
-      } catch {
-        // CDP not available — the launched browser may still be starting up; fall through to kill.
-      }
-
-      const deadline = Date.now() + 3000;
-      while (!browserExited && Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 100));
-      }
-
-      if (!browserExited) {
-        try {
-          browser.kill('SIGKILL');
-        } catch {
-          /* ignore */
-        }
-      }
-
-      console.log(`${state.launchedBrowserLabel} closed`);
-    }
-    process.exit(0);
+  attachCdpUpgradeRouting(server, wss, lickWss);
+  const cdpCtx: CdpProxyContext = {
+    wss,
+    secretProxy,
+    cdpDedup: new CliLogDedup(),
+    cdpSessionUrls: createCdpSessionUrlTracker(),
   };
 
+  const gracefulShutdown = createGracefulShutdown(state, {
+    fileLogger,
+    wss,
+    server,
+    cdpPort: CDP_PORT,
+  });
   process.on('SIGINT', () => {
     gracefulShutdown();
   });
@@ -954,7 +1267,7 @@ async function main() {
     gracefulShutdown();
   });
   process.on('exit', () => {
-    // Synchronous last-resort cleanup — kill the launched browser if it is still running.
+    // Synchronous last-resort cleanup — kill the launched browser if still running.
     const browser = state.launchedBrowserProcess;
     if (!state.shuttingDown && browser) {
       try {
@@ -965,280 +1278,18 @@ async function main() {
     }
   });
 
-  // Apply the Client→Chrome unmask gate to a buffered frame on flush.
-  // Defined here so both buffer-drain sites (ensureChromeConnection
-  // already-open path + chromeWs 'open' handler) share one
-  // implementation; falls back to the original bytes on any error.
-  const flushClientFrame = (target: WebSocket, raw: unknown): void => {
-    const original = String(raw);
-    const { output } = applyCdpUnmask(original, {
-      tracker: cdpSessionUrls,
-      pipeline: secretProxy.rawPipeline,
-    });
-    target.send(output);
-  };
-
-  function ensureChromeConnection(url: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (chromeWs && chromeWs.readyState === WebSocket.OPEN) {
-        // Already connected — flush any buffered messages and go direct
-        if (messageBuffer) {
-          for (const msg of messageBuffer) {
-            flushClientFrame(chromeWs, msg);
-          }
-          messageBuffer = null;
-        }
-        resolve();
-        return;
-      }
-      // Clean up old connection
-      if (chromeWs) {
-        try {
-          chromeWs.close();
-        } catch {
-          /* ignore */
-        }
-      }
-
-      messageBuffer = [];
-      // Disable the ws library's per-message size cap (default 100 MiB).
-      // The slicc UI runs INSIDE the Chrome instance it's debugging, so
-      // Chrome's Network domain reports every CDP frame — including the
-      // event frames themselves — back to us as `Network.webSocketFrame*`
-      // messages that each embed the prior frame's payload. That produces
-      // an exponential feedback loop which, left unchecked, trips the
-      // default 100 MiB cap and closes the Chrome WebSocket (code 1006).
-      // Without the cap the loop is still bounded by Chrome's own frame
-      // limits, but the proxy no longer dies and later CDP calls like
-      // `Target.getTargets` keep working instead of being DROPPED.
-      chromeWs = new WebSocket(url, { maxPayload: 0 });
-
-      chromeWs.on('open', () => {
-        console.log('[cdp-proxy] chromeWs open');
-        // Flush buffered messages
-        if (messageBuffer) {
-          for (const msg of messageBuffer) {
-            flushClientFrame(chromeWs!, msg);
-          }
-          messageBuffer = null;
-        }
-        resolve();
-      });
-
-      // The slicc UI runs inside the Chrome instance it's debugging, so
-      // Chrome's Network domain reports every CDP frame back through the
-      // same socket as `Network.webSocketFrameReceived` /
-      // `Network.webSocketFrameSent` events whose `payloadData` embeds
-      // the prior frame's bytes — a self-amplifying feedback loop that,
-      // left alone, drives per-frame sizes past V8's ~512 MiB string
-      // limit and crashes node-server with `ERR_STRING_TOO_LONG`. It
-      // also starves the browser's own debugger UI (the classic
-      // "debugger paused in another window" freeze) because the CDP
-      // event stream fills up with self-referential noise instead of
-      // the events DevTools actually needs.
-      //
-      // Peek at the raw bytes and skip the runaway event types once
-      // they exceed a small sniffing threshold. Legitimate CDP payloads
-      // we care about (screenshots, DOM snapshots, large tool results)
-      // are never `Network.webSocketFrame*` messages, so filtering by
-      // method is far safer than a blanket size cap that would also
-      // drop genuine large events.
-      const CDP_PROXY_INSPECT_BYTES = 256 * 1024;
-      const CDP_PROXY_HARD_FRAME_CAP = 64 * 1024 * 1024;
-      const loopEventPrefixes = [
-        '{"method":"Network.webSocketFrameReceived"',
-        '{"method":"Network.webSocketFrameSent"',
-      ];
-
-      /**
-       * Normalise the `ws` library's polymorphic message payload into a
-       * single Buffer we can safely peek at and forward. Without this,
-       * a later `String(data)` would coerce an `ArrayBuffer` to
-       * `"[object ArrayBuffer]"` and a `Buffer[]` to comma-joined
-       * stringified fragments, corrupting the CDP frame.
-       */
-      const toBuffer = (data: unknown): Buffer => {
-        if (Buffer.isBuffer(data)) return data;
-        if (data instanceof ArrayBuffer) return Buffer.from(data);
-        if (Array.isArray(data)) return Buffer.concat(data as Buffer[]);
-        // Rare fallback — string frames in text mode. Keep bytes faithful.
-        return Buffer.from(String(data));
-      };
-
-      chromeWs.on('message', (data) => {
-        const buf = toBuffer(data);
-        const byteLen = buf.length;
-
-        // Peek at the first 256 KiB only — enough to identify the event
-        // type cheaply without stringifying the whole runaway buffer.
-        const head = buf.subarray(0, CDP_PROXY_INSPECT_BYTES).toString();
-
-        if (loopEventPrefixes.some((p) => head.startsWith(p))) {
-          const msg = `[cdp-proxy] Dropping Chrome feedback-loop event (${byteLen} bytes, ${head.slice(1, 60)}…)`;
-          if (cdpDedup.shouldLog(msg)) console.debug(msg);
-          return;
-        }
-
-        // Hard safety net — still refuse anything that would blow past
-        // V8's string length limit (buf.toString throws ERR_STRING_TOO_LONG
-        // for any frame larger than ~512 MiB).
-        if (byteLen > CDP_PROXY_HARD_FRAME_CAP) {
-          const msg = `[cdp-proxy] Dropping oversized Chrome→Client frame (${byteLen} bytes)`;
-          if (cdpDedup.shouldLog(msg)) console.debug(msg);
-          return;
-        }
-
-        const str = buf.toString();
-        const preview = str.slice(0, 200);
-        const msg = `[cdp-proxy] Chrome→Client: ${preview}`;
-        if (cdpDedup.shouldLog(msg)) console.debug(msg);
-        // Sniff Target.attachedToTarget / targetInfoChanged / Page.frameNavigated
-        // so the Client→Chrome unmask gate can resolve per-session hostnames.
-        cdpSessionUrls.observeChromeToClient(str);
-        if (activeClientWs && activeClientWs.readyState === WebSocket.OPEN) {
-          activeClientWs.send(str);
-        }
-      });
-
-      chromeWs.on('close', (code, reason) => {
-        console.log(`[cdp-proxy] Chrome WS closed. code=${code}, reason=${String(reason)}`);
-        chromeWs = null;
-      });
-
-      chromeWs.on('error', (err) => {
-        console.log(`[cdp-proxy] Chrome WS error: ${err}`);
-        chromeWs = null;
-        reject(err);
-      });
-    });
-  }
-
-  wss.on('connection', async (clientWs) => {
-    try {
-      // Close previous client connection — only one client active at a time
-      if (activeClientWs && activeClientWs.readyState === WebSocket.OPEN) {
-        console.log('[cdp-proxy] Closing previous client connection');
-        activeClientWs.close();
-      }
-      activeClientWs = clientWs;
-
-      console.log('[cdp-proxy] New client connected');
-
-      // Initialize buffer BEFORE any await so messages arriving during
-      // waitForCDP or ensureChromeConnection are captured, not dropped.
-      if (messageBuffer === null) {
-        messageBuffer = [];
-      }
-
-      // Register ALL handlers BEFORE any async work so no messages are lost
-      clientWs.on('message', (data) => {
-        const original = String(data);
-        const preview = original.slice(0, 200);
-        if (chromeWs && chromeWs.readyState === WebSocket.OPEN && messageBuffer === null) {
-          const msg = `[cdp-proxy] Client→Chrome: ${preview}`;
-          if (cdpDedup.shouldLog(msg)) console.debug(msg);
-          const { output } = applyCdpUnmask(original, {
-            tracker: cdpSessionUrls,
-            pipeline: secretProxy.rawPipeline,
-          });
-          chromeWs.send(output);
-        } else if (messageBuffer !== null) {
-          // Buffer the ORIGINAL bytes; unmask runs on flush so the
-          // hostname tracker reflects the state at send time.
-          messageBuffer.push(data);
-          const msg = `[cdp-proxy] Client→Chrome (buffered): ${preview}`;
-          if (cdpDedup.shouldLog(msg)) console.debug(msg);
-        } else {
-          // Chrome not connected and no buffer — this shouldn't happen but log it
-          console.log(`[cdp-proxy] Client→Chrome (DROPPED — no connection): ${preview}`);
-        }
-      });
-
-      clientWs.on('close', () => {
-        console.log('[cdp-proxy] Client disconnected');
-        if (activeClientWs === clientWs) {
-          activeClientWs = null;
-        }
-        // Don't close chromeWs — keep it alive for the next client
-      });
-
-      clientWs.on('error', (err) => {
-        console.log(`[cdp-proxy] Client WS error: ${err}`);
-        if (activeClientWs === clientWs) {
-          activeClientWs = null;
-        }
-      });
-
-      // NOW do async work — messages arriving during these awaits are buffered
-      if (!cdpUrl) {
-        cdpUrl = await waitForCDP(CDP_PORT);
-        console.log(`[cdp-proxy] CDP available at: ${cdpUrl}`);
-      }
-
-      await ensureChromeConnection(cdpUrl);
-    } catch (err) {
-      console.error('[cdp-proxy] Connection error:', err);
-      clientWs.close();
-    }
+  wss.on('connection', (clientWs) => {
+    void handleCdpClient(state, clientWs, cdpCtx, CDP_PORT);
   });
 
-  server.listen(SERVE_PORT, '127.0.0.1', () => {
-    console.log(`Serving UI at ${SERVE_ORIGIN}`);
-    console.log(`CDP proxy at ws://localhost:${SERVE_PORT}/cdp`);
-    fileLogger.log('info', 'CLI server started', {
-      port: SERVE_PORT,
-      cdpPort: CDP_PORT,
-      devMode: DEV_MODE,
-      electronMode: ELECTRON_MODE,
-    });
-
-    // Pre-connect to Chrome's CDP so the proxy is warm when the first client connects.
-    // Without this, the first browser automation command has to wait for CDP discovery + WS handshake.
-    (async () => {
-      try {
-        cdpUrl = await waitForCDP(CDP_PORT);
-        console.log(`[cdp-proxy] Pre-connected: CDP available at ${cdpUrl}`);
-        await ensureChromeConnection(cdpUrl);
-        console.log('[cdp-proxy] Chrome WebSocket ready (pre-warmed)');
-
-        // Register leader-restart endpoint now that CDP is ready (hosted mode only)
-        if (RUNTIME_FLAGS.hosted) {
-          registerLeaderRestartEndpoint(app, {
-            cdp: createHttpCdp(CDP_PORT),
-            localUrlPrefix: `http://localhost:${SERVE_PORT}/`,
-          });
-          console.log('[hosted] /api/leader-restart endpoint registered');
-        }
-      } catch (err) {
-        console.log('[cdp-proxy] Pre-connect failed (will retry on first client):', err);
-      }
-    })();
-
-    if (ELECTRON_MODE) {
-      void (async () => {
-        try {
-          state.overlayInjector = await ElectronOverlayInjector.create({
-            cdpPort: CDP_PORT,
-            servePort: SERVE_PORT,
-            dev: DEV_MODE,
-            projectRoot: PROJECT_ROOT,
-          });
-          await state.overlayInjector.start();
-          console.log('[electron-float] Overlay injector is watching Electron page targets');
-        } catch (error: unknown) {
-          const message = error instanceof Error ? error.message : String(error);
-          console.error('[electron-float] Failed to start overlay injector:', message);
-        }
-      })();
-    }
-
-    if (!ELECTRON_MODE) {
-      setTimeout(() => {
-        attachConsoleForwarder(CDP_PORT, String(SERVE_PORT)).catch((err) => {
-          console.error('[page] Console forwarder error:', err);
-        });
-      }, 2500);
-    }
+  startCdpServer(state, {
+    app,
+    server,
+    ctx: cdpCtx,
+    fileLogger,
+    servePort: SERVE_PORT,
+    serveOrigin: SERVE_ORIGIN,
+    cdpPort: CDP_PORT,
   });
 }
 
