@@ -27,19 +27,21 @@ name: Renovate Patch Reconcile
 # Third-party actions are pinned to immutable commit SHAs (the exact SHAs used
 # by .github/workflows/claude-pr-review.yml).
 #
-# Required repository secret (already present — shared with claude-pr-review):
+# Required repository secrets (both already present):
 #   AWS_BEARER_TOKEN_BEDROCK  Amazon Bedrock API key (Adobe CAMP `ABSK...`
-#                             bearer token) for claude-code-action.
-#
-# CI re-trigger caveat: the push uses GITHUB_TOKEN, and GitHub deliberately does
-# NOT re-run workflows for commits pushed with GITHUB_TOKEN (recursion guard).
-# So the reconcile commit won't automatically re-run the PR's other checks. This
-# job is therefore self-validating — the "Verify reconciliation" step below
-# re-runs the orphaned-patch guard against Claude's result and fails the job if
-# the patch is still adrift. To refresh the PR's full check suite on the new
-# commit, comment `@renovate rebase` (Renovate force-pushes as renovate[bot],
-# which does re-trigger CI). Wiring a GitHub App token here would remove that
-# manual step; intentionally left out to avoid provisioning a new secret.
+#                             bearer token) for claude-code-action (shared with
+#                             claude-pr-review.yml).
+#   BOT_PAT                   Fine-grained PAT scoped to this repo (contents +
+#                             pull-requests write). The reconcile commit is
+#                             pushed with BOT_PAT — NOT GITHUB_TOKEN — so the
+#                             PR's `synchronize` event fires and the full check
+#                             suite re-runs on the new commit. GitHub's
+#                             anti-recursion guard suppresses workflow runs for
+#                             GITHUB_TOKEN-authored pushes; this is the same
+#                             identity requirement documented in
+#                             coverage-ratchet.yml / planning-artifact-cleanup.yml.
+#                             (The "Verify reconciliation" step below is an extra
+#                             fast-fail inside this job.)
 
 on:
   pull_request:
@@ -68,8 +70,11 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
-          # Token with contents:write so Claude's `git push` reaches the branch.
-          token: ${{ github.token }}
+          # BOT_PAT (persisted as the push credential) so Claude's `git push`
+          # of the reconcile commit fires the PR's `synchronize` event and CI
+          # re-runs on it — a GITHUB_TOKEN push would be suppressed by GitHub's
+          # anti-recursion guard. See the header note.
+          token: ${{ secrets.BOT_PAT }}
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
@@ -179,10 +184,11 @@ jobs:
                 leave the dependency unprotected.
               - node_modules edits are transient; do not commit them.
 
-      # Self-validating gate: re-run the deterministic guard against Claude's
-      # result on this same checkout. Since the reconcile commit won't re-trigger
-      # the PR's other checks (GITHUB_TOKEN recursion guard), this step is the
-      # authoritative signal that the patch is no longer orphaned.
+      # Fast-fail: re-run the deterministic guard against Claude's result on this
+      # same checkout so the reconcile job goes red immediately if the patch is
+      # still adrift. The BOT_PAT push above also re-triggers the PR's full check
+      # suite (lint:patches included) on the reconcile commit; this is the
+      # in-job early signal.
       - name: Verify reconciliation
         if: steps.detect.outputs.orphans == 'true'
         run: npm run lint:patches
