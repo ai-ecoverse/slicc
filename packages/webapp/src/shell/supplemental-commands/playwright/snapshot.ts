@@ -24,6 +24,34 @@ export function escapeCssAttr(str: string): string {
   return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
+const SKIP_REF_ROLES = ['none', 'presentation', 'generic', 'rootwebarea'];
+const REF_ROLES = ['textbox', 'button', 'link', 'checkbox', 'radio'];
+
+function nodeNeedsRef(role: string, name: string): boolean {
+  if (SKIP_REF_ROLES.includes(role)) return false;
+  return !!name || REF_ROLES.includes(role);
+}
+
+/** Build the CSS selector recorded for a ref, given its role and accessible name. */
+function buildRefSelector(role: string, name: string): string {
+  const escapedName = escapeCssAttr(name);
+  if (role === 'button' && name) {
+    return `button[aria-label="${escapedName}"], button[title="${escapedName}"]`;
+  }
+  if (role === 'link' && name) {
+    return `a[aria-label="${escapedName}"], a[title="${escapedName}"]`;
+  }
+  if (role === 'textbox') {
+    return name
+      ? `input[aria-label="${escapedName}"], textarea[aria-label="${escapedName}"], [contenteditable][aria-label="${escapedName}"], input[placeholder="${escapedName}"], textarea[placeholder="${escapedName}"], [contenteditable][placeholder="${escapedName}"], input[title="${escapedName}"], textarea[title="${escapedName}"], [contenteditable][title="${escapedName}"]`
+      : `input, textarea, [contenteditable]`;
+  }
+  if (role === 'checkbox') return `input[type="checkbox"]`;
+  if (role === 'radio') return `input[type="radio"]`;
+  if (name) return `[aria-label="${escapedName}"], [title="${escapedName}"]`;
+  return `[role="${role}"]`;
+}
+
 export function renderNode(
   node: AccessibilityNode,
   refToSelector: Map<string, string>,
@@ -37,47 +65,14 @@ export function renderNode(
   const name = normalizeAccessibilityText(node.name);
   const value = normalizeAccessibilityText(node.value);
 
-  const skipRoles = ['none', 'presentation', 'generic', 'rootwebarea'];
-  const needsRef =
-    !skipRoles.includes(role) &&
-    (name ||
-      role === 'textbox' ||
-      role === 'button' ||
-      role === 'link' ||
-      role === 'checkbox' ||
-      role === 'radio');
-
   let ref = '';
-  if (needsRef) {
+  if (nodeNeedsRef(role, name)) {
     ref = framePrefix + `e${++counter.value}`;
-
     // Store backendNodeId for reliable ref-based clicking
     if (node.backendNodeId) {
       refToBackendNodeId.set(ref, node.backendNodeId);
     }
-
-    const escapedName = escapeCssAttr(name);
-    let selector = '';
-    if (role === 'button' && name) {
-      selector = `button[aria-label="${escapedName}"], button[title="${escapedName}"]`;
-    } else if (role === 'link' && name) {
-      selector = `a[aria-label="${escapedName}"], a[title="${escapedName}"]`;
-    } else if (role === 'textbox') {
-      if (name) {
-        selector = `input[aria-label="${escapedName}"], textarea[aria-label="${escapedName}"], [contenteditable][aria-label="${escapedName}"], input[placeholder="${escapedName}"], textarea[placeholder="${escapedName}"], [contenteditable][placeholder="${escapedName}"], input[title="${escapedName}"], textarea[title="${escapedName}"], [contenteditable][title="${escapedName}"]`;
-      } else {
-        selector = `input, textarea, [contenteditable]`;
-      }
-    } else if (role === 'checkbox') {
-      selector = `input[type="checkbox"]`;
-    } else if (role === 'radio') {
-      selector = `input[type="radio"]`;
-    } else if (name) {
-      selector = `[aria-label="${escapedName}"], [title="${escapedName}"]`;
-    } else {
-      selector = `[role="${role}"]`;
-    }
-    refToSelector.set(ref, selector);
+    refToSelector.set(ref, buildRefSelector(role, name));
   }
 
   let line = `${indent}- ${role}`;
@@ -205,6 +200,134 @@ export async function getActionablePages(
   return pages.filter((page) => isActionablePage(state, page));
 }
 
+interface FrameInfo {
+  frameId: string;
+  parentFrameId?: string;
+  url: string;
+}
+
+/** Normalize a URL for frame-matching: ignore trailing slashes/fragments, keep query. */
+function normalizeUrlForMatch(rawUrl: string, base?: string): string | null {
+  try {
+    const u = new URL(rawUrl, base);
+    return u.origin + u.pathname.replace(/\/$/, '') + u.search;
+  } catch {
+    return null;
+  }
+}
+
+/** Find the (not-yet-matched) child frame whose URL matches an iframe placeholder src. */
+function findMatchingChildFrame(
+  childFrames: FrameInfo[],
+  iframeSrc: string,
+  baseUrl: string,
+  matchedFrameIds: Set<string>
+): FrameInfo | undefined {
+  const normalizedSrc = normalizeUrlForMatch(iframeSrc, baseUrl);
+  return childFrames.find((f) => {
+    if (matchedFrameIds.has(f.frameId)) return false;
+    const normalizedFrame = normalizeUrlForMatch(f.url);
+    if (normalizedFrame !== null && normalizedSrc !== null) {
+      return normalizedFrame === normalizedSrc;
+    }
+    return f.url === iframeSrc;
+  });
+}
+
+/** Render a child frame's accessibility tree and merge its refs into the parent maps. */
+async function renderChildFrame(
+  browser: BrowserAPI,
+  frameId: string,
+  indent: string,
+  framePrefix: string,
+  refToSelector: Map<string, string>,
+  refToBackendNodeId: Map<string, number>,
+  refToFrameId: Map<string, string>
+): Promise<string[]> {
+  try {
+    const frameTree = await browser.getAccessibilityTreeForFrame(frameId);
+    const frameRefToSelector = new Map<string, string>();
+    const frameRefToBackendNodeId = new Map<string, number>();
+    const frameLines = renderNode(
+      frameTree,
+      frameRefToSelector,
+      frameRefToBackendNodeId,
+      { value: 0 },
+      indent,
+      framePrefix
+    );
+    for (const [ref, selector] of frameRefToSelector) {
+      refToSelector.set(ref, selector);
+      refToFrameId.set(ref, frameId);
+    }
+    for (const [ref, nodeId] of frameRefToBackendNodeId) {
+      refToBackendNodeId.set(ref, nodeId);
+      refToFrameId.set(ref, frameId);
+    }
+    return frameLines;
+  } catch {
+    // Cross-origin frames or other failures — keep the placeholder
+    return [];
+  }
+}
+
+/** Stitch child-iframe accessibility content under each iframe placeholder line. */
+async function stitchIframeContent(
+  browser: BrowserAPI,
+  content: string,
+  baseUrl: string,
+  refToSelector: Map<string, string>,
+  refToBackendNodeId: Map<string, number>,
+  refToFrameId: Map<string, string>
+): Promise<string> {
+  if (typeof browser.getFrameTree !== 'function') return content;
+  try {
+    const frames = await browser.getFrameTree();
+    const childFrames = frames.filter((f) => f.parentFrameId);
+    if (childFrames.length === 0) return content;
+
+    let frameIndex = 0;
+    const stitchedLines: string[] = [];
+    const matchedFrameIds = new Set<string>();
+
+    for (const line of content.split('\n')) {
+      stitchedLines.push(line);
+
+      // Match iframe placeholder lines like: - iframe "Title": "https://example.com/frame"
+      const iframeMatch = line.match(/^(\s*)- iframe\s/);
+      if (!iframeMatch) continue;
+      const valueMatch = line.match(/:\s*"([^"]+)"\s*$/);
+      if (!valueMatch) continue;
+
+      const matchedFrame = findMatchingChildFrame(
+        childFrames,
+        valueMatch[1],
+        baseUrl,
+        matchedFrameIds
+      );
+      if (!matchedFrame) continue;
+      matchedFrameIds.add(matchedFrame.frameId);
+
+      frameIndex++;
+      stitchedLines.push(
+        ...(await renderChildFrame(
+          browser,
+          matchedFrame.frameId,
+          iframeMatch[1] + '  ',
+          `f${frameIndex}`,
+          refToSelector,
+          refToBackendNodeId,
+          refToFrameId
+        ))
+      );
+    }
+    return stitchedLines.join('\n');
+  } catch {
+    // getFrameTree failed — keep the snapshot without iframe content
+    return content;
+  }
+}
+
 export async function takeSnapshot(
   browser: BrowserAPI,
   state: PlaywrightState,
@@ -224,89 +347,15 @@ export async function takeSnapshot(
   const snapshotLines = renderNode(tree, refToSelector, refToBackendNodeId, counter);
   let content = snapshotLines.join('\n');
 
-  // Stitch iframe content into the snapshot
-  if (!options?.noIframes && typeof browser.getFrameTree === 'function') {
-    try {
-      const frames = await browser.getFrameTree();
-      const childFrames = frames.filter((f) => f.parentFrameId);
-
-      if (childFrames.length > 0) {
-        let frameIndex = 0;
-        const outputLines = content.split('\n');
-        const stitchedLines: string[] = [];
-        const matchedFrameIds = new Set<string>();
-
-        for (const line of outputLines) {
-          stitchedLines.push(line);
-
-          // Match iframe placeholder lines like: - iframe "Title": "https://example.com/frame"
-          const iframeMatch = line.match(/^(\s*)- iframe\s/);
-          if (!iframeMatch) continue;
-
-          // Extract the src URL from the iframe placeholder value
-          const valueMatch = line.match(/:\s*"([^"]+)"\s*$/);
-          if (!valueMatch) continue;
-          const iframeSrc = valueMatch[1];
-
-          // Find matching child frame by URL
-          const matchedFrame = childFrames.find((f) => {
-            if (matchedFrameIds.has(f.frameId)) return false;
-            try {
-              // Compare normalized URLs (ignoring trailing slashes, fragments, but including query strings)
-              const frameUrl = new URL(f.url);
-              const srcUrl = new URL(iframeSrc, url);
-              const normalizedSrc =
-                srcUrl.origin + srcUrl.pathname.replace(/\/$/, '') + srcUrl.search;
-              const normalizedFrame =
-                frameUrl.origin + frameUrl.pathname.replace(/\/$/, '') + frameUrl.search;
-              return normalizedFrame === normalizedSrc;
-            } catch {
-              return f.url === iframeSrc;
-            }
-          });
-
-          if (!matchedFrame) continue;
-          matchedFrameIds.add(matchedFrame.frameId);
-
-          frameIndex++;
-          const framePrefix = `f${frameIndex}`;
-          const indent = iframeMatch[1] + '  ';
-
-          try {
-            const frameTree = await browser.getAccessibilityTreeForFrame(matchedFrame.frameId);
-            const frameRefToSelector = new Map<string, string>();
-            const frameRefToBackendNodeId = new Map<string, number>();
-            const frameCounter = { value: 0 };
-            const frameLines = renderNode(
-              frameTree,
-              frameRefToSelector,
-              frameRefToBackendNodeId,
-              frameCounter,
-              indent,
-              framePrefix
-            );
-
-            // Merge frame refs into main maps
-            for (const [ref, selector] of frameRefToSelector) {
-              refToSelector.set(ref, selector);
-              refToFrameId.set(ref, matchedFrame.frameId);
-            }
-            for (const [ref, nodeId] of frameRefToBackendNodeId) {
-              refToBackendNodeId.set(ref, nodeId);
-              refToFrameId.set(ref, matchedFrame.frameId);
-            }
-
-            stitchedLines.push(...frameLines);
-          } catch {
-            // Cross-origin frames or other failures — keep the placeholder
-          }
-        }
-
-        content = stitchedLines.join('\n');
-      }
-    } catch {
-      // getFrameTree failed — keep the snapshot without iframe content
-    }
+  if (!options?.noIframes) {
+    content = await stitchIframeContent(
+      browser,
+      content,
+      url,
+      refToSelector,
+      refToBackendNodeId,
+      refToFrameId
+    );
   }
 
   const snapshot: TabSnapshot = {

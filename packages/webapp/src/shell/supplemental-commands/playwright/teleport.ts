@@ -25,8 +25,15 @@ import type {
   GetBestFollowerFn,
   GetConnectedFollowersFn,
   PlaywrightState,
+  TeleportStorageSnapshot,
   TeleportWatcher,
 } from './types.js';
+
+interface FollowerAuthState {
+  cookies: Array<Record<string, unknown>>;
+  followerStorage: TeleportStorageSnapshot;
+  finalUrl?: string;
+}
 
 const log = createLogger('playwright-teleport');
 
@@ -375,11 +382,240 @@ async function triggerTeleport(
 }
 
 /**
+ * Capture the follower's post-auth state: final URL, cookies, and page storage.
+ * Also runs diagnostics, removes the follower replay script, and closes the tab.
+ */
+async function captureFollowerAuthState(
+  browser: BrowserAPI,
+  watcher: TeleportWatcher
+): Promise<FollowerAuthState> {
+  // 1. Wait for redirect chain to settle
+  log.info('Waiting for redirect chain to settle (2s)');
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+
+  // 2. Attach to follower and capture final URL + cookies
+  await browser.attachToPage(watcher.followerTargetId!);
+  let finalUrl: string | undefined;
+  try {
+    const raw = await browser.evaluate('window.location.href');
+    finalUrl = typeof raw === 'string' ? raw : String(raw);
+    log.debug('Captured final URL from follower', { finalUrl });
+  } catch (err) {
+    log.warn('Could not read follower URL (may be mid-navigation)', { error: String(err) });
+  }
+
+  // Log follower page content for debugging auth flow errors
+  try {
+    const bodyText = await browser.evaluate(
+      'document.body?.innerText?.substring(0, 500) || "(empty)"'
+    );
+    log.debug('Follower page content at capture time', { bodyText });
+  } catch (err) {
+    log.warn('Could not read follower page content', { error: String(err) });
+  }
+
+  const cookieResult = await browser.sendCDP('Network.getCookies');
+  const cookies = (cookieResult['cookies'] as Array<Record<string, unknown>>) ?? [];
+  const domainSummary =
+    cookies.length > 0 ? formatCookieDomainSummary(cookies as Array<{ domain?: string }>) : 'none';
+  log.info('Captured cookies from follower', { count: cookies.length });
+  log.debug('Captured cookies from follower details', {
+    count: cookies.length,
+    domains: domainSummary,
+  });
+
+  let followerStorage = EMPTY_TELEPORT_STORAGE;
+  try {
+    followerStorage = await captureTeleportStorageSnapshot(browser, 'follower');
+    log.info('Captured follower storage for leader', {
+      totalEntries: countTeleportStorageEntries(followerStorage),
+      localStorageCount: Object.keys(followerStorage.localStorage).length,
+      sessionStorageCount: Object.keys(followerStorage.sessionStorage).length,
+    });
+    log.debug('Captured follower storage for leader details', {
+      origin: followerStorage.origin || '(unknown)',
+      localStorageCount: Object.keys(followerStorage.localStorage).length,
+      sessionStorageCount: Object.keys(followerStorage.sessionStorage).length,
+    });
+  } catch (err) {
+    log.warn('Could not capture follower storage', { error: String(err) });
+  }
+
+  await logFollowerTeleportDiagnosticsOnce(browser, watcher, 'capture');
+  await removeFollowerTeleportStorageScript(watcher, 'capture');
+
+  // 3. Close follower tab
+  try {
+    await browser.closePage(watcher.followerTargetId!);
+    log.info('Closed follower tab after teleport');
+    log.debug('Closed follower tab after teleport details', {
+      followerTargetId: watcher.followerTargetId,
+    });
+  } catch (err) {
+    log.warn('Failed to close follower tab', { error: String(err) });
+  }
+
+  return { cookies, followerStorage, finalUrl };
+}
+
+/**
+ * Cross-origin path: navigate the leader to a captured-origin URL, apply storage
+ * directly, then land. Falls back to an init-script replay if direct apply fails.
+ */
+async function hydrateLeaderOriginThenLand(
+  browser: BrowserAPI,
+  leaderTargetId: string,
+  followerStorage: TeleportStorageSnapshot,
+  hydrationUrl: string,
+  landingUrl: string | undefined
+): Promise<void> {
+  try {
+    await browser.navigate(hydrationUrl);
+    await applyTeleportStorageSnapshot(browser, followerStorage, 'leader');
+    if (landingUrl && landingUrl !== hydrationUrl) {
+      await browser.navigate(landingUrl);
+    }
+  } catch (err) {
+    log.warn('Direct leader origin hydration failed, falling back to init-script replay', {
+      error: String(err),
+    });
+    log.debug('Direct leader origin hydration fallback details', {
+      hydrationUrl,
+      landingUrl,
+      error: String(err),
+    });
+    const removeLeaderStorageScript = await installTeleportStorageInitScript(
+      browser,
+      followerStorage,
+      leaderTargetId,
+      'leader'
+    );
+    try {
+      if (landingUrl) {
+        await browser.navigate(landingUrl);
+      }
+    } finally {
+      await removeLeaderStorageScript?.();
+    }
+  }
+}
+
+/**
+ * Same-origin path: install the storage replay init-script, then navigate the
+ * leader to the landing URL with the script installed through the load.
+ */
+async function replayLeaderStorageThenLand(
+  browser: BrowserAPI,
+  watcher: TeleportWatcher,
+  followerStorage: TeleportStorageSnapshot,
+  landingUrl: string | undefined,
+  finalUrl: string | undefined
+): Promise<void> {
+  const leaderTargetId = watcher.leaderTargetId!;
+  const removeLeaderStorageScript = await installTeleportStorageInitScript(
+    browser,
+    followerStorage,
+    leaderTargetId,
+    'leader'
+  );
+  // Keep the replay script installed through the actual navigation/load so auth-state
+  // restoration is not a best-effort race against navigation returning.
+  try {
+    if (landingUrl) {
+      log.info('Navigating leader after auth-state injection', {
+        hasLandingUrl: true,
+        storageEntries: countTeleportStorageEntries(followerStorage),
+      });
+      log.debug('Navigating leader after auth-state injection details', {
+        landingUrl,
+        originalLeaderUrl: watcher.originalLeaderUrl,
+        finalUrl,
+        leaderTargetId,
+        storageOrigin: followerStorage.origin || '(unknown)',
+        storageEntries: countTeleportStorageEntries(followerStorage),
+      });
+      await browser.navigate(landingUrl);
+    }
+  } finally {
+    await removeLeaderStorageScript?.();
+  }
+}
+
+/**
+ * Switch back to the leader tab and inject the captured cookies + app state.
+ * For cross-origin SSO handoffs, hydrate the captured app origin first so SPA
+ * auth caches are materialized on the right origin before landing. Returns the
+ * landing URL the leader was navigated to (if any).
+ */
+async function injectAuthStateIntoLeader(
+  browser: BrowserAPI,
+  watcher: TeleportWatcher,
+  cookies: Array<Record<string, unknown>>,
+  followerStorage: TeleportStorageSnapshot,
+  finalUrl: string | undefined
+): Promise<string | undefined> {
+  const leaderTargetId = watcher.leaderTargetId;
+  const leaderStorageOrigin = followerStorage.origin || '';
+  const landingUrl = chooseTeleportLeaderLandingUrl(
+    leaderStorageOrigin,
+    watcher.originalLeaderUrl,
+    finalUrl
+  );
+  const originalLeaderOrigin = tryGetTeleportUrlOrigin(watcher.originalLeaderUrl);
+  const shouldHydrateLeaderOrigin =
+    !!leaderStorageOrigin && originalLeaderOrigin !== leaderStorageOrigin;
+  const hydrationUrl = shouldHydrateLeaderOrigin
+    ? buildTeleportStorageHydrationUrl(leaderStorageOrigin)
+    : null;
+
+  if (!leaderTargetId) {
+    log.warn('No leader tab available for auth-state injection');
+    return landingUrl;
+  }
+
+  await browser.attachToPage(leaderTargetId);
+  if (cookies.length > 0) {
+    await browser.sendCDP('Network.setCookies', { cookies });
+    log.info('Injected cookies into leader tab', { count: cookies.length });
+    log.debug('Injected cookies into leader tab details', {
+      count: cookies.length,
+      leaderTargetId,
+    });
+  }
+
+  if (shouldHydrateLeaderOrigin && hydrationUrl) {
+    log.info('Hydrating leader storage origin before landing', {
+      storageEntries: countTeleportStorageEntries(followerStorage),
+    });
+    log.debug('Hydrating leader storage origin before landing details', {
+      hydrationUrl,
+      landingUrl,
+      originalLeaderUrl: watcher.originalLeaderUrl,
+      finalUrl,
+      leaderTargetId,
+      storageOrigin: leaderStorageOrigin,
+      storageEntries: countTeleportStorageEntries(followerStorage),
+    });
+    await hydrateLeaderOriginThenLand(
+      browser,
+      leaderTargetId,
+      followerStorage,
+      hydrationUrl,
+      landingUrl
+    );
+  } else {
+    await replayLeaderStorageThenLand(browser, watcher, followerStorage, landingUrl, finalUrl);
+  }
+
+  return landingUrl;
+}
+
+/**
  * Capture cookies + app state from the follower, inject into the leader, navigate leader to the final URL.
  */
 async function captureCookiesAndComplete(
   browser: BrowserAPI,
-  state: PlaywrightState,
+  _state: PlaywrightState,
   watcher: TeleportWatcher,
   runtimeId: string
 ): Promise<void> {
@@ -402,177 +638,17 @@ async function captureCookiesAndComplete(
   }
 
   try {
-    // 1. Wait for redirect chain to settle
-    log.info('Waiting for redirect chain to settle (2s)');
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-
-    // 2. Attach to follower and capture final URL + cookies
-    await browser.attachToPage(watcher.followerTargetId!);
-    let finalUrl: string | undefined;
-    try {
-      const raw = await browser.evaluate('window.location.href');
-      finalUrl = typeof raw === 'string' ? raw : String(raw);
-      log.debug('Captured final URL from follower', { finalUrl });
-    } catch (err) {
-      log.warn('Could not read follower URL (may be mid-navigation)', { error: String(err) });
-    }
-
-    // Log follower page content for debugging auth flow errors
-    try {
-      const bodyText = await browser.evaluate(
-        'document.body?.innerText?.substring(0, 500) || "(empty)"'
-      );
-      log.debug('Follower page content at capture time', { bodyText });
-    } catch (err) {
-      log.warn('Could not read follower page content', { error: String(err) });
-    }
-
-    const cookieResult = await browser.sendCDP('Network.getCookies');
-    const cookies = (cookieResult['cookies'] as Array<Record<string, unknown>>) ?? [];
-    const domainSummary =
-      cookies.length > 0
-        ? formatCookieDomainSummary(cookies as Array<{ domain?: string }>)
-        : 'none';
-    log.info('Captured cookies from follower', { count: cookies.length });
-    log.debug('Captured cookies from follower details', {
-      count: cookies.length,
-      domains: domainSummary,
-    });
-
-    let followerStorage = EMPTY_TELEPORT_STORAGE;
-    try {
-      followerStorage = await captureTeleportStorageSnapshot(browser, 'follower');
-      log.info('Captured follower storage for leader', {
-        totalEntries: countTeleportStorageEntries(followerStorage),
-        localStorageCount: Object.keys(followerStorage.localStorage).length,
-        sessionStorageCount: Object.keys(followerStorage.sessionStorage).length,
-      });
-      log.debug('Captured follower storage for leader details', {
-        origin: followerStorage.origin || '(unknown)',
-        localStorageCount: Object.keys(followerStorage.localStorage).length,
-        sessionStorageCount: Object.keys(followerStorage.sessionStorage).length,
-      });
-    } catch (err) {
-      log.warn('Could not capture follower storage', { error: String(err) });
-    }
+    const { cookies, followerStorage, finalUrl } = await captureFollowerAuthState(browser, watcher);
     const followerStorageEntries = countTeleportStorageEntries(followerStorage);
-
-    await logFollowerTeleportDiagnosticsOnce(browser, watcher, 'capture');
-    await removeFollowerTeleportStorageScript(watcher, 'capture');
-
-    // 3. Close follower tab
-    try {
-      await browser.closePage(watcher.followerTargetId!);
-      log.info('Closed follower tab after teleport');
-      log.debug('Closed follower tab after teleport details', {
-        followerTargetId: watcher.followerTargetId,
-      });
-    } catch (err) {
-      log.warn('Failed to close follower tab', { error: String(err) });
-    }
-
-    // 4. Switch back to the leader tab and inject cookies + app state.
-    // For cross-origin SSO handoffs, hydrate the captured app origin first so
-    // SPA auth caches are materialized on the right origin before landing.
-    const leaderTargetId = watcher.leaderTargetId;
-    const leaderStorageOrigin = followerStorage.origin || '';
-    const landingUrl = chooseTeleportLeaderLandingUrl(
-      leaderStorageOrigin,
-      watcher.originalLeaderUrl,
+    const landingUrl = await injectAuthStateIntoLeader(
+      browser,
+      watcher,
+      cookies,
+      followerStorage,
       finalUrl
     );
-    const originalLeaderOrigin = tryGetTeleportUrlOrigin(watcher.originalLeaderUrl);
-    const shouldHydrateLeaderOrigin =
-      !!leaderStorageOrigin && originalLeaderOrigin !== leaderStorageOrigin;
-    const hydrationUrl = shouldHydrateLeaderOrigin
-      ? buildTeleportStorageHydrationUrl(leaderStorageOrigin)
-      : null;
-    if (leaderTargetId) {
-      await browser.attachToPage(leaderTargetId);
-      if (cookies.length > 0) {
-        await browser.sendCDP('Network.setCookies', { cookies });
-        log.info('Injected cookies into leader tab', { count: cookies.length });
-        log.debug('Injected cookies into leader tab details', {
-          count: cookies.length,
-          leaderTargetId,
-        });
-      }
-      if (shouldHydrateLeaderOrigin && hydrationUrl) {
-        log.info('Hydrating leader storage origin before landing', {
-          storageEntries: followerStorageEntries,
-        });
-        log.debug('Hydrating leader storage origin before landing details', {
-          hydrationUrl,
-          landingUrl,
-          originalLeaderUrl: watcher.originalLeaderUrl,
-          finalUrl,
-          leaderTargetId,
-          storageOrigin: leaderStorageOrigin,
-          storageEntries: followerStorageEntries,
-        });
-        try {
-          await browser.navigate(hydrationUrl);
-          await applyTeleportStorageSnapshot(browser, followerStorage, 'leader');
-          if (landingUrl && landingUrl !== hydrationUrl) {
-            await browser.navigate(landingUrl);
-          }
-        } catch (err) {
-          log.warn('Direct leader origin hydration failed, falling back to init-script replay', {
-            error: String(err),
-          });
-          log.debug('Direct leader origin hydration fallback details', {
-            hydrationUrl,
-            landingUrl,
-            error: String(err),
-          });
-          const removeLeaderStorageScript = await installTeleportStorageInitScript(
-            browser,
-            followerStorage,
-            leaderTargetId,
-            'leader'
-          );
-          try {
-            if (landingUrl) {
-              await browser.navigate(landingUrl);
-            }
-          } finally {
-            await removeLeaderStorageScript?.();
-          }
-        }
-      } else {
-        const removeLeaderStorageScript = await installTeleportStorageInitScript(
-          browser,
-          followerStorage,
-          leaderTargetId,
-          'leader'
-        );
-        // Keep the replay script installed through the actual navigation/load so auth-state
-        // restoration is not a best-effort race against navigation returning.
-        try {
-          if (landingUrl) {
-            log.info('Navigating leader after auth-state injection', {
-              hasLandingUrl: true,
-              storageEntries: followerStorageEntries,
-            });
-            log.debug('Navigating leader after auth-state injection details', {
-              landingUrl,
-              originalLeaderUrl: watcher.originalLeaderUrl,
-              finalUrl,
-              leaderTargetId,
-              storageOrigin: followerStorage.origin || '(unknown)',
-              storageEntries: followerStorageEntries,
-            });
-            await browser.navigate(landingUrl);
-          }
-        } finally {
-          await removeLeaderStorageScript?.();
-        }
-      }
-    } else {
-      log.warn('No leader tab available for auth-state injection');
-    }
 
-    // 5. Complete
+    // Complete
     watcher.phase = 'done';
     cleanupTeleportWatcher(watcher);
     const domainNote =
