@@ -374,295 +374,340 @@ async function attachConsoleForwarder(cdpPort: number, pageUrl: string): Promise
 const PREFERRED_SERVE_PORT = parseInt(process.env['PORT'] ?? '5710', 10);
 const PREFERRED_CDP_PORT = RUNTIME_FLAGS.cdpPort;
 
-async function main() {
-  // Resolve available ports before anything else — serve port must be known
-  // before Chrome launches (the launch URL contains it).
-  let SERVE_PORT: number;
-  let CDP_PORT: number;
-  let REQUESTED_CDP_PORT: number;
-  let usingDynamicElectronPorts = false;
+/** Shared, mutable lifecycle state threaded through the boot + shutdown flow. */
+interface ServerState {
+  servePort: number;
+  cdpPort: number;
+  /** CDP port requested at launch (0 = let Chrome pick); distinct from the resolved cdpPort. */
+  requestedCdpPort: number;
+  serveOrigin: string;
+  launchedBrowserProcess: ChildProcess | null;
+  launchedBrowserLabel: string;
+  overlayInjector: ElectronOverlayInjector | null;
+  shuttingDown: boolean;
+  discoveredTrayJoinUrl: string | null;
+  // CDP WebSocket proxy state (one Chrome connection, swapped client).
+  cdpUrl: string | null;
+  chromeWs: WebSocket | null;
+  activeClientWs: WebSocket | null;
+  messageBuffer: unknown[] | null;
+}
 
+function createServerState(): ServerState {
+  return {
+    servePort: 0,
+    cdpPort: 0,
+    requestedCdpPort: 0,
+    serveOrigin: '',
+    launchedBrowserProcess: null,
+    launchedBrowserLabel: 'Browser',
+    overlayInjector: null,
+    shuttingDown: false,
+    discoveredTrayJoinUrl: RUNTIME_FLAGS.joinUrl ?? null,
+    cdpUrl: null,
+    chromeWs: null,
+    activeClientWs: null,
+    messageBuffer: null,
+  };
+}
+
+/**
+ * Resolve the serve + CDP ports before anything else — the serve port must be
+ * known before Chrome launches (the launch URL embeds it). Electron apps may
+ * use a hash-derived dynamic port pair; otherwise we probe the preferred serve
+ * port and let Chrome pick its own CDP port (requestedCdpPort=0).
+ */
+async function resolvePorts(state: ServerState): Promise<void> {
+  let usingDynamicElectronPorts = false;
   if (ELECTRON_MODE && ELECTRON_APP && !RUNTIME_FLAGS.explicitCdpPort) {
-    // Dynamic port allocation for Electron apps (hash-based with fallback)
     const ports = await getElectronAppPorts(ELECTRON_APP);
-    CDP_PORT = ports.cdpPort;
-    SERVE_PORT = ports.servePort;
-    REQUESTED_CDP_PORT = CDP_PORT;
+    state.cdpPort = ports.cdpPort;
+    state.servePort = ports.servePort;
+    state.requestedCdpPort = ports.cdpPort;
     usingDynamicElectronPorts = true;
   } else {
-    SERVE_PORT = await findAvailablePort(PREFERRED_SERVE_PORT);
-    // For Chrome CDP, we pass port 0 to let Chrome pick any available port,
-    // then parse the actual port from its stderr. This avoids race conditions
-    // where Node's port probe succeeds but Chrome still can't bind the port.
-    // Electron mode keeps the preferred port (external CDP, not launched by us).
-    REQUESTED_CDP_PORT = ELECTRON_MODE ? PREFERRED_CDP_PORT : 0;
-    CDP_PORT = ELECTRON_MODE ? PREFERRED_CDP_PORT : 0;
+    state.servePort = await findAvailablePort(PREFERRED_SERVE_PORT);
+    // Pass 0 for Chrome CDP so Chrome picks an available port (parsed from its
+    // stderr) — avoids a race where Node's probe succeeds but Chrome can't bind.
+    // Electron keeps the preferred port (external CDP, not launched by us).
+    state.requestedCdpPort = ELECTRON_MODE ? PREFERRED_CDP_PORT : 0;
+    state.cdpPort = ELECTRON_MODE ? PREFERRED_CDP_PORT : 0;
   }
-
-  const SERVE_ORIGIN = `http://localhost:${SERVE_PORT}`;
+  state.serveOrigin = `http://localhost:${state.servePort}`;
 
   if (usingDynamicElectronPorts) {
-    console.log(`Dynamic port allocation for Electron app: CDP=${CDP_PORT}, serve=${SERVE_PORT}`);
-  } else if (SERVE_PORT !== PREFERRED_SERVE_PORT) {
-    console.log(`Port ${PREFERRED_SERVE_PORT} in use, serving on port ${SERVE_PORT}`);
+    console.log(
+      `Dynamic port allocation for Electron app: CDP=${state.cdpPort}, serve=${state.servePort}`
+    );
+  } else if (state.servePort !== PREFERRED_SERVE_PORT) {
+    console.log(`Port ${PREFERRED_SERVE_PORT} in use, serving on port ${state.servePort}`);
   }
-
-  if (DEV_MODE) {
-    console.log('Starting in dev mode (Vite HMR enabled)');
-  }
+  if (DEV_MODE) console.log('Starting in dev mode (Vite HMR enabled)');
   if (SERVE_ONLY) {
-    console.log(`Starting in serve-only mode (reusing external CDP on port ${CDP_PORT})`);
+    console.log(`Starting in serve-only mode (reusing external CDP on port ${state.cdpPort})`);
   }
-  if (ELECTRON_MODE) {
-    console.log('Starting in Electron mode');
-  }
+  if (ELECTRON_MODE) console.log('Starting in Electron mode');
+}
 
-  let launchedBrowserProcess: ChildProcess | null = null;
-  let launchedBrowserLabel = 'Browser';
-  let overlayInjector: ElectronOverlayInjector | null = null;
-  let shuttingDown = false;
-  // Tray join URL discovered from an existing leader on the preferred port.
-  // Populated in Electron mode when auto-discovering the leader's tray.
-  let discoveredTrayJoinUrl: string | null = RUNTIME_FLAGS.joinUrl ?? null;
-
-  // 1. Launch Chrome unless an external CDP provider is already running.
+/** Launch Chrome / Electron unless an external CDP provider is already running. */
+async function launchBrowser(state: ServerState): Promise<void> {
   if (ELECTRON_MODE && !SERVE_ONLY) {
-    if (!ELECTRON_APP) {
-      console.error(
-        'Electron mode requires an app path. Pass --electron <path> or --electron-app=<path>.'
-      );
-      process.exit(1);
-    }
-
-    try {
-      const { child, displayName } = await launchElectronApp({
-        appPath: ELECTRON_APP,
-        cdpPort: CDP_PORT,
-        kill: KILL_EXISTING_ELECTRON_APP,
-      });
-
-      launchedBrowserProcess = child;
-      launchedBrowserLabel = displayName;
-      pipeChildOutput(child, 'electron-app');
-
-      // Track when app exits - quick exits before CDP connects indicate a problem
-      let cdpConnected = false;
-      let exitCode: number | null = null;
-      let exitResolve: (() => void) | null = null;
-      const exitPromise = new Promise<void>((resolve) => {
-        exitResolve = resolve;
-      });
-
-      child.on('exit', (code) => {
-        exitCode = code;
-        exitResolve?.();
-        if (shuttingDown) return;
-        if (cdpConnected) {
-          // Normal exit after we connected
-          console.log(`${displayName} exited with code ${code}`);
-          process.exit(0);
-        }
-        // If CDP not yet connected, don't exit - let waitForCDP handle it
-      });
-
-      console.log(`Waiting for ${displayName} CDP on port ${CDP_PORT}...`);
-      try {
-        // Race between CDP connection and app exit
-        await Promise.race([
-          waitForCDP(CDP_PORT, 40, 500).then(() => {
-            cdpConnected = true;
-          }),
-          exitPromise.then(() => {
-            if (!cdpConnected) {
-              throw new Error('app-exited');
-            }
-          }),
-        ]);
-      } catch (_err) {
-        // Check if app exited quickly (likely due to disabled remote debugging fuse)
-        if (exitCode !== null) {
-          console.error(
-            `\n${displayName} exited with code ${exitCode} before remote debugging was available.`
-          );
-          console.error(
-            'This usually means the app has disabled remote debugging (EnableNodeCliInspectArguments fuse).'
-          );
-          console.error(
-            'Some Electron apps disable this for security. Check if there is a developer/debug build available.\n'
-          );
-          process.exit(1);
-        }
-        throw new Error(`Could not connect to ${displayName} CDP on port ${CDP_PORT}`);
-      }
-      console.log(`Connected to ${displayName} on CDP port ${CDP_PORT}`);
-
-      // Auto-discover leader's tray join URL when another instance runs on the preferred port.
-      // The leader may still be creating its tray session, so retry a few times.
-      if (!discoveredTrayJoinUrl && SERVE_PORT !== PREFERRED_SERVE_PORT) {
-        const leaderOrigin = `http://localhost:${PREFERRED_SERVE_PORT}`;
-        for (let attempt = 0; attempt < 5 && !discoveredTrayJoinUrl; attempt++) {
-          try {
-            const resp = await fetch(`${leaderOrigin}/api/tray-status`, {
-              signal: AbortSignal.timeout(3000),
-            });
-            if (resp.ok) {
-              const status = (await resp.json()) as { state?: string; joinUrl?: string | null };
-              if (status.joinUrl) {
-                discoveredTrayJoinUrl = status.joinUrl;
-                console.log(`Discovered leader tray join URL: ${status.joinUrl}`);
-              } else if (status.state === 'connecting') {
-                // Leader is still setting up — wait and retry
-                await new Promise((r) => setTimeout(r, 2000));
-              } else {
-                console.log(
-                  `Leader on port ${PREFERRED_SERVE_PORT} has no active tray (state: ${status.state ?? 'unknown'})`
-                );
-                break;
-              }
-            } else {
-              break;
-            }
-          } catch {
-            // Leader not reachable or no tray status endpoint — continue without tray
-            break;
-          }
-        }
-      }
-    } catch (error: unknown) {
-      if (error instanceof ElectronAppAlreadyRunningError) {
-        console.error(error.message);
-        process.exit(1);
-      }
-      throw error;
-    }
+    await launchElectronTarget(state);
   } else if (!SERVE_ONLY) {
-    let browserLaunchUrl = resolveCliBrowserLaunchUrl({
-      serveOrigin: SERVE_ORIGIN,
-      lead: RUNTIME_FLAGS.lead,
-      leadWorkerBaseUrl: RUNTIME_FLAGS.leadWorkerBaseUrl,
-      envWorkerBaseUrl: process.env['WORKER_BASE_URL'] ?? null,
-      join: RUNTIME_FLAGS.join,
-      joinUrl: RUNTIME_FLAGS.joinUrl,
-    });
-    // Append runtime parameter for hosted mode
-    if (RUNTIME_FLAGS.hosted) {
-      const sep = browserLaunchUrl.includes('?') ? '&' : '?';
-      browserLaunchUrl += `${sep}runtime=hosted-leader`;
-    }
-    // Append optional prompt parameter
-    if (RUNTIME_FLAGS.prompt) {
-      const sep = browserLaunchUrl.includes('?') ? '&' : '?';
-      browserLaunchUrl += `${sep}prompt=${encodeURIComponent(RUNTIME_FLAGS.prompt)}`;
-    }
-    if (RUNTIME_FLAGS.join) {
-      console.log(`Join launch URL: ${browserLaunchUrl}`);
-    } else if (RUNTIME_FLAGS.lead) {
-      console.log(`Lead launch URL: ${browserLaunchUrl}`);
-    }
-
-    const chromeProfile = (() => {
-      try {
-        const resolved = resolveChromeLaunchProfile({
-          projectRoot: PROJECT_ROOT,
-          profile: RUNTIME_FLAGS.profile,
-          servePort: SERVE_PORT,
-        });
-        // Override user data dir in hosted mode to use persistent profile
-        if (RUNTIME_FLAGS.hosted) {
-          resolved.userDataDir = process.env['CHROME_USER_DATA_DIR'] ?? '/data/profile';
-        }
-        return resolved;
-      } catch (error: unknown) {
-        console.error(error instanceof Error ? error.message : String(error));
-        process.exit(1);
-      }
-    })();
-
-    const chromePath = findChromeExecutable({
-      executablePreference: !DEV_MODE && !chromeProfile.id ? 'installed' : 'chrome-for-testing',
-    });
-    if (!chromePath) {
-      console.error('Could not find Chrome/Chromium. Please install Chrome or set CHROME_PATH.');
-      process.exit(1);
-    }
-    console.log(`Found Chrome: ${chromePath}`);
-
-    if (chromeProfile.id) {
-      await ensureQaProfileScaffold(PROJECT_ROOT);
-    } else if (!RUNTIME_FLAGS.hosted) {
-      const profileDirName = basename(chromeProfile.userDataDir);
-      await migrateLegacyDefaultChromeProfile(
-        chromeProfile.userDataDir,
-        legacyChromeCandidates(profileDirName)
-      );
-    }
-
-    if (chromeProfile.extensionPath && !existsSync(chromeProfile.extensionPath)) {
-      console.error(
-        `Extension profile requires ${chromeProfile.extensionPath}. Run \`npm run build -w @slicc/chrome-extension\` first.`
-      );
-      process.exit(1);
-    }
-
-    if (chromeProfile.id) {
-      console.log(`Using QA Chrome profile: ${chromeProfile.id}`);
-      console.log(`Profile directory: ${chromeProfile.userDataDir}`);
-      if (chromeProfile.extensionPath) {
-        console.log(`Auto-loading unpacked extension from ${chromeProfile.extensionPath}`);
-      }
-    }
-
-    const chromeArgs = buildChromeLaunchArgs({
-      cdpPort: REQUESTED_CDP_PORT,
-      launchUrl: browserLaunchUrl,
-      profile: chromeProfile,
-      hosted: RUNTIME_FLAGS.hosted,
-    });
-
-    // Profile directories are reused across runs (both the dev
-    // `/tmp/browser-coding-agent-chrome` profile and the persistent
-    // `.qa/chrome/<profile>` QA profiles). Chrome never proactively
-    // clears `DevToolsActivePort` on shutdown, so a stale file from a
-    // previous crash/SIGKILL would let our active-port-file poller win
-    // the race instantly with the wrong port. Clear it before spawn.
-    await clearStaleDevToolsActivePort(chromeProfile.userDataDir);
-
-    // On macOS, route through `/usr/bin/open` so LaunchServices owns the
-    // new Chrome process. Without this hop the terminal that started
-    // `node` stays in Chrome's TCC responsibility chain, which silently
-    // breaks `getUserMedia()` (camera/mic in Google Meet, Zoom, etc.)
-    // whenever the terminal hasn't already been granted camera/microphone
-    // access. With LaunchServices in the loop, Chrome becomes its own
-    // TCC responsible process and the user's
-    // `/Applications/Google Chrome.app` privacy grant applies as expected.
-    const spawnPlan = planChromeSpawn({ executablePath: chromePath, chromeArgs });
-
-    launchedBrowserProcess = spawn(spawnPlan.command, spawnPlan.args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: false,
-      env: { ...process.env, GOOGLE_CRASHPAD_DISABLE: '1' },
-    });
-    launchedBrowserLabel = chromeProfile.displayName;
-
-    // Use the stderr-vs-DevToolsActivePort race so we work in both
-    // direct-exec mode (Linux/Windows, or bare-binary fallbacks where
-    // stderr carries Chrome's banner) and LaunchServices mode (macOS,
-    // where stderr belongs to `open` and only the active-port file
-    // surfaces the real CDP port).
-    const actualCdpPort = await waitForCdpPort(launchedBrowserProcess, {
-      userDataDir: chromeProfile.userDataDir,
-    });
-    CDP_PORT = actualCdpPort;
-    console.log(`Chrome CDP listening on port ${CDP_PORT}`);
-
-    pipeChildOutput(launchedBrowserProcess, 'chrome');
-
-    launchedBrowserProcess.on('exit', (code) => {
-      if (shuttingDown) return;
-      console.log(`Chrome exited with code ${code}`);
-      process.exit(0);
-    });
+    await launchChromeTarget(state);
   }
+}
+
+/**
+ * Poll an existing leader on the preferred port for its tray join URL. The
+ * leader may still be minting its tray session, so retry a few times.
+ */
+async function discoverLeaderTrayJoinUrl(): Promise<string | null> {
+  const leaderOrigin = `http://localhost:${PREFERRED_SERVE_PORT}`;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const resp = await fetch(`${leaderOrigin}/api/tray-status`, {
+        signal: AbortSignal.timeout(3000),
+      });
+      if (!resp.ok) break;
+      const status = (await resp.json()) as { state?: string; joinUrl?: string | null };
+      if (status.joinUrl) {
+        console.log(`Discovered leader tray join URL: ${status.joinUrl}`);
+        return status.joinUrl;
+      }
+      if (status.state === 'connecting') {
+        // Leader is still setting up — wait and retry.
+        await new Promise((r) => setTimeout(r, 2000));
+      } else {
+        console.log(
+          `Leader on port ${PREFERRED_SERVE_PORT} has no active tray (state: ${status.state ?? 'unknown'})`
+        );
+        break;
+      }
+    } catch {
+      // Leader not reachable or no tray status endpoint — continue without tray.
+      break;
+    }
+  }
+  return null;
+}
+
+/**
+ * Race the Electron app's CDP becoming available against the app exiting. A
+ * quick exit before CDP connects usually means remote debugging is fused off.
+ */
+async function waitForElectronCdp(state: ServerState, displayName: string): Promise<void> {
+  const child = state.launchedBrowserProcess!;
+  let cdpConnected = false;
+  let exitCode: number | null = null;
+  let exitResolve: (() => void) | null = null;
+  const exitPromise = new Promise<void>((resolve) => {
+    exitResolve = resolve;
+  });
+
+  child.on('exit', (code) => {
+    exitCode = code;
+    exitResolve?.();
+    if (state.shuttingDown) return;
+    if (cdpConnected) {
+      console.log(`${displayName} exited with code ${code}`);
+      process.exit(0);
+    }
+    // CDP not yet connected — let waitForCDP handle it.
+  });
+
+  console.log(`Waiting for ${displayName} CDP on port ${state.cdpPort}...`);
+  try {
+    await Promise.race([
+      waitForCDP(state.cdpPort, 40, 500).then(() => {
+        cdpConnected = true;
+      }),
+      exitPromise.then(() => {
+        if (!cdpConnected) throw new Error('app-exited');
+      }),
+    ]);
+  } catch (_err) {
+    if (exitCode !== null) {
+      console.error(
+        `\n${displayName} exited with code ${exitCode} before remote debugging was available.`
+      );
+      console.error(
+        'This usually means the app has disabled remote debugging (EnableNodeCliInspectArguments fuse).'
+      );
+      console.error(
+        'Some Electron apps disable this for security. Check if there is a developer/debug build available.\n'
+      );
+      process.exit(1);
+    }
+    throw new Error(`Could not connect to ${displayName} CDP on port ${state.cdpPort}`);
+  }
+}
+
+async function launchElectronTarget(state: ServerState): Promise<void> {
+  if (!ELECTRON_APP) {
+    console.error(
+      'Electron mode requires an app path. Pass --electron <path> or --electron-app=<path>.'
+    );
+    process.exit(1);
+  }
+
+  try {
+    const { child, displayName } = await launchElectronApp({
+      appPath: ELECTRON_APP,
+      cdpPort: state.cdpPort,
+      kill: KILL_EXISTING_ELECTRON_APP,
+    });
+
+    state.launchedBrowserProcess = child;
+    state.launchedBrowserLabel = displayName;
+    pipeChildOutput(child, 'electron-app');
+
+    await waitForElectronCdp(state, displayName);
+    console.log(`Connected to ${displayName} on CDP port ${state.cdpPort}`);
+
+    // Auto-discover the leader's tray join URL when another instance is on the preferred port.
+    if (!state.discoveredTrayJoinUrl && state.servePort !== PREFERRED_SERVE_PORT) {
+      state.discoveredTrayJoinUrl = await discoverLeaderTrayJoinUrl();
+    }
+  } catch (error: unknown) {
+    if (error instanceof ElectronAppAlreadyRunningError) {
+      console.error(error.message);
+      process.exit(1);
+    }
+    throw error;
+  }
+}
+
+/** Build the Chrome launch URL, appending hosted-runtime + prompt query params. */
+function buildBrowserLaunchUrl(state: ServerState): string {
+  let url = resolveCliBrowserLaunchUrl({
+    serveOrigin: state.serveOrigin,
+    lead: RUNTIME_FLAGS.lead,
+    leadWorkerBaseUrl: RUNTIME_FLAGS.leadWorkerBaseUrl,
+    envWorkerBaseUrl: process.env['WORKER_BASE_URL'] ?? null,
+    join: RUNTIME_FLAGS.join,
+    joinUrl: RUNTIME_FLAGS.joinUrl,
+  });
+  if (RUNTIME_FLAGS.hosted) {
+    url += `${url.includes('?') ? '&' : '?'}runtime=hosted-leader`;
+  }
+  if (RUNTIME_FLAGS.prompt) {
+    url += `${url.includes('?') ? '&' : '?'}prompt=${encodeURIComponent(RUNTIME_FLAGS.prompt)}`;
+  }
+  if (RUNTIME_FLAGS.join) {
+    console.log(`Join launch URL: ${url}`);
+  } else if (RUNTIME_FLAGS.lead) {
+    console.log(`Lead launch URL: ${url}`);
+  }
+  return url;
+}
+
+function resolveChromeProfileOrExit(
+  state: ServerState
+): ReturnType<typeof resolveChromeLaunchProfile> {
+  try {
+    const resolved = resolveChromeLaunchProfile({
+      projectRoot: PROJECT_ROOT,
+      profile: RUNTIME_FLAGS.profile,
+      servePort: state.servePort,
+    });
+    // Override the user data dir in hosted mode to use a persistent profile.
+    if (RUNTIME_FLAGS.hosted) {
+      resolved.userDataDir = process.env['CHROME_USER_DATA_DIR'] ?? '/data/profile';
+    }
+    return resolved;
+  } catch (error: unknown) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+}
+
+async function launchChromeTarget(state: ServerState): Promise<void> {
+  const browserLaunchUrl = buildBrowserLaunchUrl(state);
+  const chromeProfile = resolveChromeProfileOrExit(state);
+
+  const chromePath = findChromeExecutable({
+    executablePreference: !DEV_MODE && !chromeProfile.id ? 'installed' : 'chrome-for-testing',
+  });
+  if (!chromePath) {
+    console.error('Could not find Chrome/Chromium. Please install Chrome or set CHROME_PATH.');
+    process.exit(1);
+  }
+  console.log(`Found Chrome: ${chromePath}`);
+
+  if (chromeProfile.id) {
+    await ensureQaProfileScaffold(PROJECT_ROOT);
+  } else if (!RUNTIME_FLAGS.hosted) {
+    const profileDirName = basename(chromeProfile.userDataDir);
+    await migrateLegacyDefaultChromeProfile(
+      chromeProfile.userDataDir,
+      legacyChromeCandidates(profileDirName)
+    );
+  }
+
+  if (chromeProfile.extensionPath && !existsSync(chromeProfile.extensionPath)) {
+    console.error(
+      `Extension profile requires ${chromeProfile.extensionPath}. Run \`npm run build -w @slicc/chrome-extension\` first.`
+    );
+    process.exit(1);
+  }
+
+  if (chromeProfile.id) {
+    console.log(`Using QA Chrome profile: ${chromeProfile.id}`);
+    console.log(`Profile directory: ${chromeProfile.userDataDir}`);
+    if (chromeProfile.extensionPath) {
+      console.log(`Auto-loading unpacked extension from ${chromeProfile.extensionPath}`);
+    }
+  }
+
+  const chromeArgs = buildChromeLaunchArgs({
+    cdpPort: state.requestedCdpPort,
+    launchUrl: browserLaunchUrl,
+    profile: chromeProfile,
+    hosted: RUNTIME_FLAGS.hosted,
+  });
+
+  // Chrome never clears DevToolsActivePort on shutdown, so a stale file from a
+  // prior crash/SIGKILL would let our active-port poller win the race with the
+  // wrong port. Clear it before spawn.
+  await clearStaleDevToolsActivePort(chromeProfile.userDataDir);
+
+  // On macOS, route through `/usr/bin/open` so LaunchServices owns the new Chrome
+  // process — otherwise the launching terminal stays in Chrome's TCC responsibility
+  // chain and silently breaks getUserMedia() camera/mic grants.
+  const spawnPlan = planChromeSpawn({ executablePath: chromePath, chromeArgs });
+
+  state.launchedBrowserProcess = spawn(spawnPlan.command, spawnPlan.args, {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: false,
+    env: { ...process.env, GOOGLE_CRASHPAD_DISABLE: '1' },
+  });
+  state.launchedBrowserLabel = chromeProfile.displayName;
+
+  // Use the stderr-vs-DevToolsActivePort race so this works in both direct-exec
+  // mode (Linux/Windows stderr banner) and LaunchServices mode (macOS active-port file).
+  state.cdpPort = await waitForCdpPort(state.launchedBrowserProcess, {
+    userDataDir: chromeProfile.userDataDir,
+  });
+  console.log(`Chrome CDP listening on port ${state.cdpPort}`);
+
+  pipeChildOutput(state.launchedBrowserProcess, 'chrome');
+
+  state.launchedBrowserProcess.on('exit', (code) => {
+    if (state.shuttingDown) return;
+    console.log(`Chrome exited with code ${code}`);
+    process.exit(0);
+  });
+}
+
+async function main() {
+  // Resolve ports, launch the browser, then snapshot the now-final values that
+  // the rest of boot reads. Mutable lifecycle fields stay on `state`.
+  const state = createServerState();
+  await resolvePorts(state);
+  await launchBrowser(state);
+  const { servePort: SERVE_PORT, cdpPort: CDP_PORT, serveOrigin: SERVE_ORIGIN } = state;
+  const discoveredTrayJoinUrl = state.discoveredTrayJoinUrl;
 
   // 3. Set up express app with request logging
   const sessionDir = RUNTIME_FLAGS.envFile
@@ -829,13 +874,13 @@ async function main() {
 
   // Ensure everything is cleaned up when CLI exits
   const gracefulShutdown = async () => {
-    if (shuttingDown) return;
-    shuttingDown = true;
+    if (state.shuttingDown) return;
+    state.shuttingDown = true;
     console.log('\nShutting down...');
     fileLogger.close();
 
-    overlayInjector?.stop();
-    overlayInjector = null;
+    state.overlayInjector?.stop();
+    state.overlayInjector = null;
 
     // Close the shared Chrome WebSocket and all client connections
     if (chromeWs) {
@@ -862,9 +907,10 @@ async function main() {
     // Stop accepting new HTTP connections
     server.close();
 
-    if (launchedBrowserProcess) {
+    const browser = state.launchedBrowserProcess;
+    if (browser) {
       let browserExited = false;
-      launchedBrowserProcess.on('exit', () => {
+      browser.on('exit', () => {
         browserExited = true;
       });
 
@@ -890,13 +936,13 @@ async function main() {
 
       if (!browserExited) {
         try {
-          launchedBrowserProcess.kill('SIGKILL');
+          browser.kill('SIGKILL');
         } catch {
           /* ignore */
         }
       }
 
-      console.log(`${launchedBrowserLabel} closed`);
+      console.log(`${state.launchedBrowserLabel} closed`);
     }
     process.exit(0);
   };
@@ -909,9 +955,10 @@ async function main() {
   });
   process.on('exit', () => {
     // Synchronous last-resort cleanup — kill the launched browser if it is still running.
-    if (!shuttingDown && launchedBrowserProcess) {
+    const browser = state.launchedBrowserProcess;
+    if (!state.shuttingDown && browser) {
       try {
-        launchedBrowserProcess.kill();
+        browser.kill();
       } catch {
         /* ignore */
       }
@@ -1170,13 +1217,13 @@ async function main() {
     if (ELECTRON_MODE) {
       void (async () => {
         try {
-          overlayInjector = await ElectronOverlayInjector.create({
+          state.overlayInjector = await ElectronOverlayInjector.create({
             cdpPort: CDP_PORT,
             servePort: SERVE_PORT,
             dev: DEV_MODE,
             projectRoot: PROJECT_ROOT,
           });
-          await overlayInjector.start();
+          await state.overlayInjector.start();
           console.log('[electron-float] Overlay injector is watching Electron page targets');
         } catch (error: unknown) {
           const message = error instanceof Error ? error.message : String(error);
