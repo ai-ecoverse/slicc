@@ -6,7 +6,7 @@
  */
 
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   abortableSleep,
   isImageProcessingError,
@@ -2250,5 +2250,118 @@ describe('ScoopContext buildSudoWiring (per-scoop command grant isolation)', () 
 
     mgr.dispose();
     vfs.dispose?.();
+  });
+});
+
+describe('ScoopContext typed-source error telemetry', () => {
+  // Each test installs a fresh sink so we can observe emit calls without
+  // touching the global ui/telemetry RUM pipeline. The hook lives one layer
+  // below ui/, so we drive it directly via setAgentErrorTelemetrySink.
+  let sink: ReturnType<typeof vi.fn>;
+  let restoreSink: () => void;
+
+  beforeEach(async () => {
+    const { setAgentErrorTelemetrySink } = await import('../../src/core/telemetry-hook.js');
+    sink = vi.fn();
+    setAgentErrorTelemetrySink(sink);
+    restoreSink = () => setAgentErrorTelemetrySink(null);
+  });
+
+  afterEach(() => {
+    restoreSink?.();
+  });
+
+  it("emits source='llm' for non-retryable agent errors", async () => {
+    const callbacks = createMockCallbacks();
+    const ctx = new ScoopContext(testScoop, callbacks, {} as any);
+    injectMockAgent(ctx, async () => {
+      throw new Error('400 Bad Request: invalid api key');
+    });
+
+    await ctx.prompt('test');
+
+    expect(sink).toHaveBeenCalledWith('llm', expect.stringContaining('invalid api key'));
+  });
+
+  it("emits source='llm' once retries are exhausted on retryable errors", async () => {
+    const callbacks = createMockCallbacks();
+    const ctx = new ScoopContext(testScoop, callbacks, {} as any);
+    // 429 is retryable per isRetryableError. Inject a perma-failing prompt
+    // so the loop hits MAX_RETRIES (3) and calls handleExhaustedRetries.
+    injectMockAgent(ctx, async () => {
+      throw new Error('429 Too Many Requests: rate limit exceeded');
+    });
+
+    await ctx.prompt('test');
+
+    // We don't care how many retry attempts there were here — we just need to
+    // see that the exhausted-retries path produced an `llm` emit. Real call
+    // sites may also emit from `handleAgentEndEvent` (errorMessage path), so
+    // assert ≥1 instead of ===1.
+    const llmCalls = sink.mock.calls.filter((c) => c[0] === 'llm');
+    expect(llmCalls.length).toBeGreaterThanOrEqual(1);
+    expect(llmCalls.at(-1)![1]).toContain('rate limit');
+  }, 30_000);
+
+  it("emits source='llm' from handleAgentEndEvent when an assistant errorMessage surfaces post-stream", () => {
+    const callbacks = createMockCallbacks();
+    const ctx = new ScoopContext(testScoop, callbacks, {} as any);
+    injectMockAgent(ctx, async () => {});
+
+    // Simulate the path where deltas already streamed so the error escapes
+    // the retry-capture branch and flows through onError + telemetry.
+    (ctx as any).didStreamDeltas = true;
+    (ctx as any).isProcessing = false;
+    (ctx as any).isRecovering = false;
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    handler({
+      type: 'agent_end',
+      messages: [
+        {
+          role: 'assistant',
+          content: [],
+          errorMessage: 'stream aborted: upstream EOF',
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    expect(sink).toHaveBeenCalledWith('llm', 'stream aborted: upstream EOF');
+  });
+
+  it("emits source='tool' with toolName+excerpt on tool_execution_end with isError=true", () => {
+    const callbacks = createMockCallbacks();
+    const ctx = new ScoopContext(testScoop, callbacks, {} as any);
+    injectMockAgent(ctx, async () => {});
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    handler({
+      type: 'tool_execution_end',
+      toolName: 'bash',
+      isError: true,
+      result: { content: [{ type: 'text', text: 'command not found: foo' }] },
+    });
+
+    expect(sink).toHaveBeenCalledWith(
+      'tool',
+      expect.stringMatching(/^bash:.*command not found: foo/)
+    );
+  });
+
+  it('does NOT emit telemetry on a successful tool_execution_end (isError=false)', () => {
+    const callbacks = createMockCallbacks();
+    const ctx = new ScoopContext(testScoop, callbacks, {} as any);
+    injectMockAgent(ctx, async () => {});
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    handler({
+      type: 'tool_execution_end',
+      toolName: 'read_file',
+      isError: false,
+      result: { content: [{ type: 'text', text: 'file contents' }] },
+    });
+
+    expect(sink).not.toHaveBeenCalled();
   });
 });

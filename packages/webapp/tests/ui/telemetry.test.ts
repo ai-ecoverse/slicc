@@ -101,6 +101,83 @@ describe('telemetry', () => {
     expect(mockSampleRUM).toHaveBeenCalledWith('fill', { source: 'node' });
   });
 
+  it('trackScoopLifecycle emits enter/convert/leave for spawn/feed/complete', async () => {
+    const { initTelemetry, trackScoopLifecycle } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    trackScoopLifecycle('spawn', 'researcher');
+    trackScoopLifecycle('feed', 'researcher');
+    trackScoopLifecycle('complete', 'researcher');
+
+    expect(mockSampleRUM).toHaveBeenNthCalledWith(1, 'enter', {
+      source: 'researcher',
+      target: 'scoop-spawn',
+    });
+    expect(mockSampleRUM).toHaveBeenNthCalledWith(2, 'convert', {
+      source: 'researcher',
+      target: 'scoop-feed',
+    });
+    expect(mockSampleRUM).toHaveBeenNthCalledWith(3, 'leave', {
+      source: 'researcher',
+      target: 'scoop-complete',
+    });
+  });
+
+  it('trackScoopLifecycle error namespaces source and sanitizes target', async () => {
+    const { initTelemetry, trackScoopLifecycle } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    trackScoopLifecycle('error', 'planner', 'rate_limit');
+    expect(mockSampleRUM).toHaveBeenCalledWith('error', {
+      source: 'scoop:planner',
+      target: 'rate_limit',
+    });
+  });
+
+  it('trackScoopLifecycle drops error entirely on pure Vite-noise details', async () => {
+    const { initTelemetry, trackScoopLifecycle } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    trackScoopLifecycle('error', 'planner', '[vite] hot updated: /src/foo.ts');
+    const errorCalls = mockSampleRUM.mock.calls.filter(([cp]) => cp === 'error');
+    expect(errorCalls).toHaveLength(0);
+  });
+
+  it('initTelemetry registers the scoop telemetry sink so emitScoopLifecycle reaches RUM', async () => {
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { emitScoopLifecycle } = await import('../../src/scoops/scoop-telemetry-hook.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    emitScoopLifecycle('spawn', 'researcher');
+    expect(mockSampleRUM).toHaveBeenCalledWith('enter', {
+      source: 'researcher',
+      target: 'scoop-spawn',
+    });
+  });
+
+  it('initTelemetry registers the agent-error sink so emitAgentError reaches RUM with typed source', async () => {
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { emitAgentError } = await import('../../src/core/telemetry-hook.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    emitAgentError('llm', 'rate_limit');
+    emitAgentError('tool', 'bash: command failed');
+
+    expect(mockSampleRUM).toHaveBeenNthCalledWith(1, 'error', {
+      source: 'llm',
+      target: 'rate_limit',
+    });
+    expect(mockSampleRUM).toHaveBeenNthCalledWith(2, 'error', {
+      source: 'tool',
+      target: 'bash: command failed',
+    });
+  });
+
   it('trackSprinkleView emits viewblock', async () => {
     const { initTelemetry, trackSprinkleView } = await import('../../src/ui/telemetry.js');
     await initTelemetry();

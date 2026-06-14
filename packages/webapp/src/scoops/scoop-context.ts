@@ -28,6 +28,7 @@ import { Agent, adaptTools, createLogger } from '../core/index.js';
 import { fetchSecretEnvVars } from '../core/secret-env.js';
 import { getToolResultScrubber } from '../core/secret-scrub.js';
 import type { SessionStore } from '../core/session.js';
+import { emitAgentError } from '../core/telemetry-hook.js';
 import type { VirtualFS } from '../fs/index.js';
 import type { RestrictedFS } from '../fs/restricted-fs.js';
 import { createSudoFs } from '../fs/sudo-fs.js';
@@ -739,6 +740,7 @@ export class ScoopContext {
       folder: this.scoop.folder,
       error: message,
     });
+    emitAgentError('llm', message);
     this.setStatus('error');
     if (this.callbacks.onFatalError) {
       this.callbacks.onFatalError(
@@ -780,6 +782,7 @@ export class ScoopContext {
       error: message,
       maxRetries,
     });
+    emitAgentError('llm', message);
     this.setStatus('error');
     if (this.callbacks.onFatalError) {
       this.callbacks.onFatalError(
@@ -1162,7 +1165,13 @@ export class ScoopContext {
       if (c.type === 'image' && c.data && c.mimeType)
         parts.push(`<img:data:${c.mimeType};base64,${c.data}>`);
     }
-    this.callbacks.onToolEnd?.(event.toolName, parts.join('\n'), event.isError);
+    const joined = parts.join('\n');
+    if (event.isError) {
+      // Telemetry is best-effort — `target` is sanitized+truncated by
+      // `trackError` downstream so passing the raw text excerpt is safe.
+      emitAgentError('tool', `${event.toolName}: ${joined}`);
+    }
+    this.callbacks.onToolEnd?.(event.toolName, joined, event.isError);
   }
 
   /** Handle agent_end error recovery and persistence. */
@@ -1184,6 +1193,7 @@ export class ScoopContext {
           return;
         }
         this.isRecovering = false;
+        emitAgentError('llm', errorMsg);
         this.callbacks.onError(errorMsg);
       } else {
         this.isRecovering = false;
