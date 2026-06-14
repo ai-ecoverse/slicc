@@ -451,6 +451,126 @@ describe('telemetry — extension branch', () => {
 });
 
 // ---------------------------------------------------------------------------
+// CLI sendBeacon wrapper — covers the Vite-noise filter applied to beacons
+// emitted by helix-rum-js's internal window.error / unhandledrejection
+// listeners. Those listeners resolve `sampleRUM` via lexical closure to the
+// helix module's internal function declaration, so a wrapper on the exported
+// binding can't intercept them. navigator.sendBeacon is the only chokepoint
+// we can wrap from the outside (issue #795 regression guard).
+// ---------------------------------------------------------------------------
+
+describe('telemetry — CLI sendBeacon wrapper', () => {
+  let savedSendBeacon: typeof navigator.sendBeacon | undefined;
+
+  beforeEach(() => {
+    mockLocalStorage.clear();
+    mockSampleRUM.mockClear();
+    vi.resetModules();
+    stubLocalStorage();
+    savedSendBeacon = (navigator as Navigator).sendBeacon;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+    if (savedSendBeacon) {
+      Object.defineProperty(navigator, 'sendBeacon', {
+        value: savedSendBeacon,
+        writable: true,
+        configurable: true,
+      });
+    } else {
+      delete (navigator as unknown as { sendBeacon?: unknown }).sendBeacon;
+    }
+  });
+
+  function installUnderlyingBeacon(): ReturnType<typeof vi.fn> {
+    const underlying = vi.fn(() => true);
+    Object.defineProperty(navigator, 'sendBeacon', {
+      value: underlying,
+      writable: true,
+      configurable: true,
+    });
+    return underlying;
+  }
+
+  it('drops error beacons whose target is entirely Vite noise', async () => {
+    const underlying = installUnderlyingBeacon();
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    expect(navigator.sendBeacon).not.toBe(underlying);
+
+    const body = JSON.stringify({
+      checkpoint: 'error',
+      source: 'undefined error',
+      target: 'http://localhost:5710/@vite/client',
+    });
+    const result = navigator.sendBeacon('https://rum.hlx.page/.rum/100', body);
+    expect(result).toBe(true);
+    expect(underlying).not.toHaveBeenCalled();
+  });
+
+  it('rewrites error beacons with mixed Vite + real-app content', async () => {
+    const underlying = installUnderlyingBeacon();
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+
+    const body = JSON.stringify({
+      checkpoint: 'error',
+      source: 'undefined error',
+      target: 'TypeError: oops\n  at http://localhost:5710/@vite/client.js:1:1',
+    });
+    navigator.sendBeacon('https://rum.hlx.page/.rum/100', body);
+    expect(underlying).toHaveBeenCalledOnce();
+    const sent = JSON.parse(underlying.mock.calls[0][1] as string);
+    expect(sent.target).toContain('TypeError');
+    expect(sent.target).not.toContain('@vite/client');
+    expect(sent.checkpoint).toBe('error');
+  });
+
+  it('passes through non-error beacons unchanged', async () => {
+    const underlying = installUnderlyingBeacon();
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    const body = JSON.stringify({ checkpoint: 'navigate', target: 'cli' });
+    navigator.sendBeacon('https://rum.hlx.page/.rum/100', body);
+    expect(underlying).toHaveBeenCalledOnce();
+    expect(underlying.mock.calls[0][1]).toBe(body);
+  });
+
+  it('falls through opaque (Blob) bodies without throwing', async () => {
+    const underlying = installUnderlyingBeacon();
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    const blob = new Blob(['{"checkpoint":"error","target":"x"}'], {
+      type: 'application/json',
+    });
+    navigator.sendBeacon('https://rum.hlx.page/.rum/100', blob);
+    expect(underlying).toHaveBeenCalledOnce();
+    expect(underlying.mock.calls[0][1]).toBe(blob);
+  });
+
+  it('does not re-wrap an already-wrapped sendBeacon on re-init', async () => {
+    const underlying = installUnderlyingBeacon();
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    const wrappedOnce = navigator.sendBeacon;
+
+    vi.resetModules();
+    const reloaded = await import('../../src/ui/telemetry.js');
+    await reloaded.initTelemetry();
+    expect(navigator.sendBeacon).toBe(wrappedOnce);
+
+    const viteBody = JSON.stringify({
+      checkpoint: 'error',
+      target: 'http://localhost:5710/@vite/client',
+    });
+    navigator.sendBeacon('https://rum.hlx.page/.rum/100', viteBody);
+    expect(underlying).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Electron branch — covers the third arm of the dispatcher (overlay attribute).
 // CLI/Electron share the helix-rum-js code path; the only branch difference
 // from CLI is the mode label that drives RUM_GENERATION.
