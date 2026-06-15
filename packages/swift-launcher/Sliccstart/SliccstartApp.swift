@@ -69,7 +69,6 @@ struct SliccstartApp: App {
     init() {
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate(ignoringOtherApps: true)
-        Optel.configure(appID: optelAppID)
     }
 
     private var sliccProcess: SliccProcess { appDelegate.sliccProcess }
