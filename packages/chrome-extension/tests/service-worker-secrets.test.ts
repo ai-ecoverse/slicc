@@ -279,7 +279,7 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
     const response = await dispatch({ type: 'secrets.delete', name: 'GITHUB_TOKEN' });
     expect(response).toEqual({ ok: true, removed: true, fromSession: true });
     // Persisted entry must remain after the session-only deletion.
-    expect(storageMap.GITHUB_TOKEN).toBe('ghp_real');
+    expect(storageMap.GITHUB_TOKEN).toBe('ghp_realtoken');
     expect(storageMap.GITHUB_TOKEN_DOMAINS).toBe('api.github.com');
     // The session list is now empty for that name.
     const list = await dispatch({ type: 'secrets.session.list' });
