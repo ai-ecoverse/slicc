@@ -44,7 +44,8 @@ export interface LickEvent {
     | 'navigate'
     | 'upgrade'
     | 'cherry'
-    | 'workflow';
+    | 'workflow'
+    | 'sudo-request';
   webhookId?: string;
   webhookName?: string;
   cronId?: string;
@@ -63,6 +64,20 @@ export interface LickEvent {
   cherryName?: string;
   cherryRuntimeId?: string;
   cherryOrigin?: string;
+  /**
+   * For `sudo-request` events: a scoop escalation surfaced as a UI chip in the
+   * cone chat. Fields mirror `SudoRequest` so the cone (or the user reading the
+   * chip) can identify the pending request and call `sudo_allow` with the
+   * matching `request_id`. The actionable agent-facing message is still
+   * delivered by `Orchestrator.deliverSudoRequestToCone` — this lick is a
+   * UI-chip notification only (see `defaultLickEventHandler` for the
+   * non-routing branch).
+   */
+  sudoRequestId?: string;
+  sudoKind?: string;
+  sudoDetail?: string;
+  sudoScoopName?: string;
+  sudoSuggestedPattern?: string;
   targetScoop?: string;
   /**
    * Set ONLY by the leader when it re-emits a lick forwarded from a

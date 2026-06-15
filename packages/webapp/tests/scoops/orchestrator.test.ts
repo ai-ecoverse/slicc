@@ -2715,3 +2715,143 @@ describe('Orchestrator.resolveSudoRequestAndPersist', () => {
     expect(result.persistError).toBeUndefined();
   });
 });
+
+describe('Orchestrator.enqueueSudoRequest lick emission', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+    await saveScoop(cone);
+    await saveScoop(testScoop);
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await settleAndDisposeSharedFs(sharedFs);
+  });
+
+  /**
+   * Path (b) contract: `enqueueSudoRequest` must
+   *   - emit exactly one `'sudo-request'` lick (UI chip),
+   *   - deliver exactly one actionable message to the cone (via
+   *     `onIncomingMessage`'s `EXTERNAL_LICK_CHANNELS` auto-fire) so the
+   *     agent isn't told twice.
+   * Together: one lick emission + one onIncomingMessage chip fire — never two.
+   */
+  it('emits one sudo-request lick and one cone delivery (no double-fire)', async () => {
+    const onIncoming = vi.fn();
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      onIncomingMessage: onIncoming,
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    });
+    await orch.init();
+
+    const emitEvent = vi.fn();
+    orch.setLickManager({ emitEvent } as any);
+
+    // The `requestApproval` flow awaits `pending`; we want to assert the
+    // emit-and-deliver side effects, not the cone's eventual decision, so
+    // we kick the call off and resolve via `resolveSudoRequest` at the end.
+    const pendingDecision = orch.enqueueSudoRequest(testScoop.jid, {
+      kind: 'write',
+      detail: '/workspace/build/output.txt',
+      suggestedPattern: '/workspace/build/**',
+    });
+
+    // Allow microtasks to flush so `deliverSudoRequestToCone` (and its
+    // `handleMessage` → `onIncomingMessage` auto-fire) completes.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    // ── Lick emission: exactly one, of type 'sudo-request', with the fields
+    //    the formatter needs to label the chip. NOT in FORWARDABLE_TO_LEADER.
+    expect(emitEvent).toHaveBeenCalledTimes(1);
+    const lick = emitEvent.mock.calls[0][0];
+    expect(lick.type).toBe('sudo-request');
+    expect(typeof lick.sudoRequestId).toBe('string');
+    expect(lick.sudoRequestId.length).toBeGreaterThan(0);
+    expect(lick.sudoKind).toBe('write');
+    expect(lick.sudoDetail).toBe('/workspace/build/output.txt');
+    expect(lick.sudoSuggestedPattern).toBe('/workspace/build/**');
+    expect(typeof lick.sudoScoopName).toBe('string');
+
+    // ── Cone delivery: exactly one onIncomingMessage fire for the cone's
+    //    chatJid, channel 'sudo-request'. handleMessage's
+    //    EXTERNAL_LICK_CHANNELS branch is the ONLY source — the explicit
+    //    pre-fire was removed.
+    const coneFires = onIncoming.mock.calls.filter(
+      ([jid, msg]) => jid === cone.jid && msg?.channel === 'sudo-request'
+    );
+    expect(coneFires).toHaveLength(1);
+    expect(coneFires[0][1].content).toContain('Request ID:');
+    expect(coneFires[0][1].content).toContain('sudo_allow');
+
+    // Settle the dangling promise so the test framework doesn't warn.
+    orch.resolveSudoRequest(lick.sudoRequestId, { decision: 'deny' });
+    await pendingDecision;
+  });
+
+  it('does not throw when no lick manager is registered', async () => {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    });
+    await orch.init();
+    // No setLickManager call — `lickManager` stays null.
+
+    const pendingDecision = orch.enqueueSudoRequest(testScoop.jid, {
+      kind: 'command',
+      detail: 'rm -rf /tmp/x',
+    });
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    // The fail-closed behavior of the underlying sudo flow must be
+    // untouched: we still get a decision, it doesn't throw.
+    orch.resolveSudoRequest((orch as any).sudoRegistry.list()[0]?.id ?? '', {
+      decision: 'deny',
+    });
+    await expect(pendingDecision).resolves.toBeDefined();
+  });
+});

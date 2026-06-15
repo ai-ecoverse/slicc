@@ -423,6 +423,22 @@ export function createChatFixture(): ChatMessage[] {
     channel: 'upgrade',
   });
 
+  messages.push({
+    id: 'fx-lick-sudo-request',
+    role: 'user',
+    content:
+      '[Scoop Access Request: tight-sandbox-scoop]\n' +
+      'Request ID: sudo-req-42\n' +
+      'Kind: write\n' +
+      'Detail: /workspace/build/output.txt\n' +
+      'Suggested pattern: /workspace/build/**\n\n' +
+      'Use the sudo_allow tool with request_id="sudo-req-42" to approve, deny, or ' +
+      'always-approve this request.',
+    timestamp: tsAt(17.5),
+    source: 'lick',
+    channel: 'sudo-request',
+  });
+
   // ── 6. Queued messages (before the streaming tail) ────────────────
   messages.push({
     id: 'fx-queued-1',

@@ -36,6 +36,7 @@ export const EXTERNAL_LICK_CHANNELS: ReadonlySet<LickEvent['type']> = new Set<Li
   'upgrade',
   'cherry',
   'workflow',
+  'sudo-request',
 ]);
 
 export function isExternalLickChannel(
@@ -58,6 +59,7 @@ const LICK_LABELS: Record<LickEvent['type'], string> = {
   cherry: 'Cherry Event',
   workflow: 'Workflow Event',
   cron: 'Cron Event',
+  'sudo-request': 'Scoop Access Request',
 };
 
 /**
@@ -85,6 +87,8 @@ function resolveLickEventName(event: LickEvent): string | undefined {
       return (event as { cherryName?: string }).cherryName;
     case 'workflow':
       return (event as { workflowName?: string }).workflowName;
+    case 'sudo-request':
+      return (event as { sudoScoopName?: string }).sudoScoopName;
     default:
       return (event as { cronName?: string }).cronName;
   }
@@ -153,6 +157,35 @@ function formatWorkflowLick(event: LickEvent, label: string): FormattedLick {
 }
 
 /**
+ * Sudo-request body mirrors `formatSudoRequestNotification` in orchestrator.ts
+ * so the cone-readable text restates the request id + kind + detail + suggested
+ * pattern and points at the `sudo_allow` tool. Used by the UI chip path; the
+ * actionable agent message is delivered separately via
+ * `deliverSudoRequestToCone` (Path b in the lick-as-UI-chip design — see
+ * `Orchestrator.enqueueSudoRequest` and `defaultLickEventHandler`).
+ */
+function formatSudoRequestLick(event: LickEvent, label: string): FormattedLick {
+  const scoop = event.sudoScoopName ?? 'a scoop';
+  const requestId = event.sudoRequestId ?? '(unknown)';
+  const kind = event.sudoKind ?? 'unknown';
+  const detail = event.sudoDetail ?? '';
+  const lines = [
+    `[${label}: ${scoop}]`,
+    `Request ID: ${requestId}`,
+    `Kind: ${kind}`,
+    `Detail: ${detail}`,
+  ];
+  if (event.sudoSuggestedPattern) {
+    lines.push(`Suggested pattern: ${event.sudoSuggestedPattern}`);
+  }
+  lines.push(
+    '',
+    `Use the sudo_allow tool with request_id="${requestId}" to approve, deny, or always-approve this request.`
+  );
+  return { label, content: lines.join('\n') };
+}
+
+/**
  * Generic fallback chip: webhook / sprinkle / fswatch / navigate / cron
  * (and any channel that fell through its dedicated branch).
  */
@@ -181,6 +214,7 @@ export function formatLickEventForCone(event: LickEvent): FormattedLick | null {
   if (event.type === 'upgrade') return formatUpgradeLick(event, label);
   if (event.type === 'cherry') return formatCherryLick(event, label);
   if (event.type === 'workflow') return formatWorkflowLick(event, label);
+  if (event.type === 'sudo-request') return formatSudoRequestLick(event, label);
 
   return formatGenericLick(event, label);
 }

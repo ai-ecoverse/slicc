@@ -1403,6 +1403,32 @@ export class Orchestrator implements ConeApprovalRouter {
       detailPreview: request.detail.slice(0, 80),
     });
 
+    // Path (b): we emit a `'sudo-request'` lick AS the UI chip and keep the
+    // existing `deliverSudoRequestToCone` queued actionable message for the
+    // agent. `defaultLickEventHandler` skips its `formatLickEventForCone` →
+    // `handleMessage` routing for this type so the cone agent isn't told
+    // twice — the actionable message below is the single agent delivery.
+    // The lick is intentionally NOT in `FORWARDABLE_TO_LEADER`: sudo
+    // decisions stay local to the float that owns the requesting scoop.
+    const scoopForLick = this.scoops.get(scoopJid);
+    this.lickManager?.emitEvent({
+      type: 'sudo-request',
+      sudoRequestId: id,
+      sudoKind: request.kind,
+      sudoDetail: request.detail,
+      sudoScoopName: scoopForLick?.assistantLabel ?? scoopForLick?.name ?? scoopJid,
+      sudoSuggestedPattern: request.suggestedPattern,
+      targetScoop: cone.name,
+      timestamp: new Date().toISOString(),
+      body: {
+        requestId: id,
+        kind: request.kind,
+        detail: request.detail,
+        suggestedPattern: request.suggestedPattern,
+        scoopJid,
+      },
+    });
+
     try {
       await this.deliverSudoRequestToCone(cone, scoopJid, id, request);
     } catch (err) {
@@ -1539,11 +1565,12 @@ export class Orchestrator implements ConeApprovalRouter {
   }
 
   /**
-   * Build the cone-facing `sudo-request` `ChannelMessage` and fire it
-   * through the same `onIncomingMessage` + `handleMessage` wiring used
-   * by `scoop-notify` / `scoop-wait`. The content is structured so the
-   * cone can reproduce the request id verbatim in its `sudo_allow` tool
-   * call.
+   * Build the cone-facing `sudo-request` `ChannelMessage` and hand it to
+   * `handleMessage`. The content is structured so the cone can reproduce
+   * the request id verbatim in its `sudo_allow` tool call. `sudo-request`
+   * is a member of `EXTERNAL_LICK_CHANNELS`, so `handleMessage` fires the
+   * UI chip (`onIncomingMessage`) automatically — no explicit pre-fire
+   * needed here (which would double-fire the chip).
    */
   private async deliverSudoRequestToCone(
     cone: RegisteredScoop,
@@ -1566,16 +1593,6 @@ export class Orchestrator implements ConeApprovalRouter {
       fromAssistant: false,
       channel: 'sudo-request',
     };
-
-    try {
-      this.callbacks.onIncomingMessage?.(cone.jid, msg);
-    } catch (err) {
-      log.warn('onIncomingMessage for sudo-request threw', {
-        scoopJid,
-        id,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
 
     await this.handleMessage(msg);
   }
@@ -1855,13 +1872,14 @@ export class Orchestrator implements ConeApprovalRouter {
     });
 
     // Surface external lick events (webhook / cron / sprinkle / fswatch /
-    // session-reload / navigate / upgrade) to the UI as a chat chip the
-    // moment they arrive. Without this fire the lick persists to IDB and
-    // queues for the agent, but the chat panel only learns about it on
-    // session reload. Scoop-lifecycle channels (scoop-notify, scoop-idle,
-    // scoop-wait, scoop-error, delegation) are intentionally excluded —
-    // their builders fire `onIncomingMessage` explicitly next to the
-    // point they create the message, so they would double-fire here.
+    // session-reload / navigate / upgrade / cherry / workflow / sudo-request)
+    // to the UI as a chat chip the moment they arrive. Without this fire the
+    // lick persists to IDB and queues for the agent, but the chat panel only
+    // learns about it on session reload. Scoop-lifecycle channels
+    // (scoop-notify, scoop-idle, scoop-wait, scoop-error, delegation) are
+    // intentionally excluded — their builders fire `onIncomingMessage`
+    // explicitly next to the point they create the message, so they would
+    // double-fire here.
     if (isExternalLickChannel(message.channel)) {
       try {
         this.callbacks.onIncomingMessage?.(message.chatJid, message);

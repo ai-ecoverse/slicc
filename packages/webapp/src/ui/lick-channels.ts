@@ -32,7 +32,8 @@ export type LickChannel =
   | 'workflow'
   | 'scoop-notify'
   | 'scoop-idle'
-  | 'scoop-wait';
+  | 'scoop-wait'
+  | 'sudo-request';
 
 export const LICK_CHANNELS: ReadonlySet<LickChannel> = new Set<LickChannel>([
   'webhook',
@@ -46,6 +47,7 @@ export const LICK_CHANNELS: ReadonlySet<LickChannel> = new Set<LickChannel>([
   'scoop-notify',
   'scoop-idle',
   'scoop-wait',
+  'sudo-request',
 ]);
 
 export function isLickChannel(channel: string | null | undefined): channel is LickChannel {

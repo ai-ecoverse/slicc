@@ -19,6 +19,16 @@ describe('isLickChannel', () => {
     }
   });
 
+  it('recognizes the scoop sudo escalation channel as a lick', () => {
+    // The orchestrator's `deliverSudoRequestToCone` builds a
+    // `channel: 'sudo-request'` ChannelMessage so a pending escalation
+    // renders as a "Scoop Access Request" lick chip (key-round icon) instead
+    // of a plain chat bubble. Live UI rendering goes through
+    // `isLickChannel(message.channel)` in `wc-live.ts`'s `onIncomingMessage`.
+    expect(isLickChannel('sudo-request')).toBe(true);
+    expect(LICK_CHANNELS.has('sudo-request')).toBe(true);
+  });
+
   it('rejects non-lick channels and nullish input', () => {
     expect(isLickChannel('web')).toBe(false);
     expect(isLickChannel('not-a-channel')).toBe(false);
