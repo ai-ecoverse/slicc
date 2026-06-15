@@ -1107,8 +1107,14 @@ export function getSelectedProvider(): string {
   const raw = getRawSelectedModel();
   const idx = raw.indexOf(':');
   if (idx > 0) return raw.slice(0, idx);
-  // No provider encoded (or empty prefix like ":gpt-5") — fall back
+  // No provider encoded (or empty prefix like ":gpt-5") — fall back to the
+  // first account that actually offers LLM models. An auth-only account
+  // (e.g. `github` for git push/pull) would otherwise win the fallback and
+  // drag the cone into an unregistered `github-anthropic` api route. Only
+  // collapse to `accounts[0]`/`'anthropic'` when nothing qualifies.
   const accounts = getAccounts();
+  const llmAccount = accounts.find((a) => providerOffersLlmModels(a.providerId));
+  if (llmAccount) return llmAccount.providerId;
   if (accounts.length > 0) return accounts[0].providerId;
   return 'anthropic';
 }

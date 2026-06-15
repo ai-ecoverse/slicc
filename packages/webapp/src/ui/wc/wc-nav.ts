@@ -23,6 +23,12 @@ import type { WcShellRefs } from './wc-shell.js';
 export interface MetaModel {
   name: string;
   provider?: string;
+  /**
+   * Provider-qualified model id (`providerId:modelId`). The picker echoes it
+   * back on `model-change` so the handler persists the correct provider —
+   * disambiguates models offered by multiple providers (e.g. `claude-opus-4-8`
+   * under both adobe and github-copilot).
+   */
   id: string;
 }
 
@@ -53,7 +59,7 @@ export function modelListForMeta(groups: readonly GroupedModels[]): MetaModel[] 
     group.models.map((model) => ({
       name: model.name ?? model.id,
       provider: group.providerName,
-      id: model.id,
+      id: `${group.providerId}:${model.id}`,
     }))
   );
 }
@@ -243,10 +249,21 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
  * composer so the thinking-effort pill only shows for a model that supports it.
  */
 async function wireModelPicker(refs: WcShellRefs, client: OffscreenClient): Promise<void> {
-  const { resolveModelById, resolveCurrentModel } = await import('../provider-settings.js');
+  const { resolveModelById, resolveCurrentModel, setSelectedModelId } = await import(
+    '../provider-settings.js'
+  );
+  /**
+   * Strip the `providerId:` prefix before consulting `resolveModelById`,
+   * which expects the bare model id (the provider is sourced from
+   * `getSelectedProvider()` internally).
+   */
+  const bareModelId = (id: string): string => {
+    const idx = id.indexOf(':');
+    return idx > 0 ? id.slice(idx + 1) : id;
+  };
   const applyThinkingCapability = (modelId?: string): void => {
     try {
-      const model = modelId ? resolveModelById(modelId) : resolveCurrentModel();
+      const model = modelId ? resolveModelById(bareModelId(modelId)) : resolveCurrentModel();
       refs.composerMeta.toggleAttribute(
         'no-thinking',
         (model as { reasoning?: boolean }).reasoning !== true
@@ -259,7 +276,9 @@ async function wireModelPicker(refs: WcShellRefs, client: OffscreenClient): Prom
   refs.composerMeta.addEventListener('model-change', (event) => {
     const id = (event as CustomEvent<{ id?: string }>).detail?.id;
     if (!id) return;
-    localStorage.setItem('selected-model', id);
+    // Route through `setSelectedModelId` so the `providerId:` prefix is
+    // guaranteed even if the picker ever hands us a bare id.
+    setSelectedModelId(id);
     applyThinkingCapability(id);
     client.updateModel();
   });

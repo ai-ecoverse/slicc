@@ -15,7 +15,7 @@ import { accountIdentity, modelListForMeta, wireWcNav } from '../../../src/ui/wc
 import type { WcShellRefs } from '../../../src/ui/wc/wc-shell.js';
 
 describe('modelListForMeta', () => {
-  it('flattens provider groups into picker rows', () => {
+  it('flattens provider groups into picker rows with provider-qualified ids', () => {
     const groups = [
       {
         providerId: 'anthropic',
@@ -25,9 +25,9 @@ describe('modelListForMeta', () => {
       { providerId: 'openai', providerName: 'OpenAI', models: [{ id: 'gpt-5', name: 'GPT-5' }] },
     ] as unknown as GroupedModels[];
     expect(modelListForMeta(groups)).toEqual([
-      { name: 'Opus 4.8', provider: 'Anthropic', id: 'claude-opus-4-8' },
-      { name: 'claude-haiku-4-5', provider: 'Anthropic', id: 'claude-haiku-4-5' },
-      { name: 'GPT-5', provider: 'OpenAI', id: 'gpt-5' },
+      { name: 'Opus 4.8', provider: 'Anthropic', id: 'anthropic:claude-opus-4-8' },
+      { name: 'claude-haiku-4-5', provider: 'Anthropic', id: 'anthropic:claude-haiku-4-5' },
+      { name: 'GPT-5', provider: 'OpenAI', id: 'openai:gpt-5' },
     ]);
   });
 });
@@ -78,9 +78,14 @@ describe('wireWcNav', () => {
     expect(refs.avatarMenu.items.some((i) => i.id === 'tray-enable')).toBe(true);
 
     refs.composerMeta.dispatchEvent(
-      new CustomEvent('model-change', { bubbles: true, detail: { id: 'claude-opus-4-8' } })
+      new CustomEvent('model-change', {
+        bubbles: true,
+        detail: { id: 'adobe:claude-opus-4-8' },
+      })
     );
-    expect(localStorage.getItem('selected-model')).toBe('claude-opus-4-8');
+    // The picker emits a provider-qualified id; the handler must persist it
+    // unchanged so `getSelectedProvider()` recovers the correct provider.
+    expect(localStorage.getItem('selected-model')).toBe('adobe:claude-opus-4-8');
     expect(client.updateModel).toHaveBeenCalledTimes(1);
   });
 
