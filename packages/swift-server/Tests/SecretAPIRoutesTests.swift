@@ -139,7 +139,7 @@ final class SecretAPIRoutesTests: XCTestCase {
             )
             let app = Application(responder: router.buildResponder())
             try await app.test(.router) { client in
-                let body = #"{"providerId":"github","accessToken":"ghp_real","domains":["github.com"]}"#
+                let body = #"{"providerId":"github","accessToken":"ghp_realtoken","domains":["github.com"]}"#
                 try await client.execute(
                     uri: "/api/secrets/oauth-update",
                     method: .post,
@@ -153,7 +153,7 @@ final class SecretAPIRoutesTests: XCTestCase {
                     // maskedValue should be the format-preserving mask of the real token.
                     if case .string(let masked) = obj["maskedValue"] ?? .null {
                         XCTAssertTrue(masked.hasPrefix("ghp_"))
-                        XCTAssertEqual(masked.count, "ghp_real".count)
+                        XCTAssertEqual(masked.count, "ghp_realtoken".count)
                     } else {
                         XCTFail("Expected maskedValue string")
                     }

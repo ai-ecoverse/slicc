@@ -449,5 +449,43 @@ final class SecretInjectorTests: XCTestCase {
         XCTAssertEqual(text, "oauth-real")
         XCTAssertNotEqual(text, "env-file-real")
     }
+
+    // MARK: - Minimum-length guard (mirrors TS MIN_MASKABLE_SECRET_LENGTH)
+
+    func testEnvFileShortValueIsNotRegisteredAsMask() async throws {
+        let name = uniqueName("SHORT_ENV")
+        // 8 chars — below the 9-char floor — must be skipped, not registered.
+        let envSecret = Secret(name: name, value: "shortie8", domains: ["api.example.com"])
+
+        let injector = SecretInjector(
+            sessionId: "test-session-short-env",
+            envFileSecrets: [envSecret],
+            oauthStore: nil
+        )
+        await injector.reload()
+
+        XCTAssertNil(injector.maskedValue(for: name),
+                     "Env-file value shorter than \(minMaskableSecretLength) chars must not register as mask")
+    }
+
+    func testOAuthShortValueIsNotRegisteredAndDropsCollidingEnvEntry() async throws {
+        let name = uniqueName("SHORT_OAUTH")
+        // Env-file holds a maskable value; OAuth pushes a too-short value with
+        // the same name. Per override semantics, the OAuth entry must drop the
+        // env-file replica without registering itself.
+        let envSecret = Secret(name: name, value: "env-file-realLong", domains: ["api.example.com"])
+        let oauth = OAuthSecretStore()
+        try await oauth.set(name: name, value: "tiny8chr", domains: ["api.example.com"])
+
+        let injector = SecretInjector(
+            sessionId: "test-session-short-oauth",
+            envFileSecrets: [envSecret],
+            oauthStore: oauth
+        )
+        await injector.reload()
+
+        XCTAssertNil(injector.maskedValue(for: name),
+                     "Too-short OAuth value must not register AND must drop the env-file collision")
+    }
 }
 
