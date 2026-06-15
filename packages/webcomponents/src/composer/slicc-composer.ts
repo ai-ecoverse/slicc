@@ -310,6 +310,11 @@ export const HOLD_TO_ENABLE_MS = 5000;
  *  'granted' goes straight to recording with no enable-stage flash. */
 const PERMISSION_RACE_MS = 60;
 
+/** Delay between mousedown and arming the push-to-talk lifecycle. A pure
+ *  click whose release lands within this window never flashes the overlay
+ *  or touches the speech controller, so plain caret presses stay silent. */
+export const PTT_ENGAGE_MS = 100;
+
 /** The caption line keeps only the trailing words, like movie closed captions. */
 const CAPTION_MAX_WORDS = 8;
 
@@ -426,6 +431,9 @@ export class SliccComposer extends HTMLElement {
   #device: string | null = readStoredDevice();
   /** Hold-to-enable gate timer. */
   #enableTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Engage-delay timer: defers the press lifecycle until the pointer has
+   *  been held past {@link PTT_ENGAGE_MS} so a pure click never flashes. */
+  #engageTimer: ReturnType<typeof setTimeout> | null = null;
   /** Engine status subscription teardown (active while the overlay is up). */
   #statusUnsub: (() => void) | null = null;
   /** Latest engine status snapshot for the status line. */
@@ -457,6 +465,7 @@ export class SliccComposer extends HTMLElement {
     this.#pressed = false;
     this.#target = null;
     this.#token++;
+    this.#clearEngageTimer();
     if (this.#enableTimer) clearTimeout(this.#enableTimer);
     this.#enableTimer = null;
     this.#removePressListeners();
@@ -570,7 +579,13 @@ export class SliccComposer extends HTMLElement {
     doc.addEventListener('mouseup', this.#onDocMouseUp);
     this.addEventListener('mouseleave', this.#onMouseLeave);
 
-    void this.#beginPress(this.speech, this.#token);
+    // Defer the press lifecycle so a pure click (released within the engage
+    // window) never flashes the overlay nor touches the speech controller.
+    const engageToken = this.#token;
+    this.#engageTimer = setTimeout(() => {
+      this.#engageTimer = null;
+      void this.#beginPress(this.speech, engageToken);
+    }, PTT_ENGAGE_MS);
   };
 
   /**
@@ -730,6 +745,9 @@ export class SliccComposer extends HTMLElement {
   #endPress(finalize: boolean): void {
     if (!this.#pressed) return;
     this.#pressed = false;
+    // A release within the engage window cancels the deferred lifecycle so
+    // #beginPress never runs for this press (stage stays 'idle' below).
+    this.#clearEngageTimer();
     this.#removePressListeners();
 
     switch (this.#stage) {
@@ -830,6 +848,11 @@ export class SliccComposer extends HTMLElement {
   #clearEnableTimer(): void {
     if (this.#enableTimer) clearTimeout(this.#enableTimer);
     this.#enableTimer = null;
+  }
+
+  #clearEngageTimer(): void {
+    if (this.#engageTimer) clearTimeout(this.#engageTimer);
+    this.#engageTimer = null;
   }
 
   #removePressListeners(): void {

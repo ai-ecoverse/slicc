@@ -3,7 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // populated composer mirrors the prototype's footer (input card + meta row).
 import '../../src/add-menu/slicc-add-menu.js';
 import '../../src/composer/slicc-composer-meta.js';
-import { HOLD_TO_ENABLE_MS, SliccComposer } from '../../src/composer/slicc-composer.js';
+import {
+  HOLD_TO_ENABLE_MS,
+  PTT_ENGAGE_MS,
+  SliccComposer,
+} from '../../src/composer/slicc-composer.js';
 import '../../src/composer/slicc-input-card.js';
 import type {
   ComposerSpeech,
@@ -335,8 +339,12 @@ describe('slicc-composer / push-to-talk', () => {
     vi.useRealTimers();
   });
 
-  /** Flush microtasks + 0ms timers so async stage transitions settle. */
-  const flush = () => vi.advanceTimersByTimeAsync(0);
+  /** Engage the deferred press lifecycle + drain async stage transitions:
+   *  press waits PTT_ENGAGE_MS before #beginPress runs, so advancing exactly
+   *  the engage window after press(el) is what every "and then overlay X
+   *  appears" assertion needs. Tests that intentionally release inside the
+   *  engage window advance less and don't call flush() at all. */
+  const flush = () => vi.advanceTimersByTimeAsync(PTT_ENGAGE_MS);
 
   /** The textarea the host renders / relocates into its light DOM. */
   function taOf(el: SliccComposer): HTMLTextAreaElement {
@@ -421,6 +429,29 @@ describe('slicc-composer / push-to-talk', () => {
     // The cleared timer must not fire later.
     await vi.advanceTimersByTimeAsync(HOLD_TO_ENABLE_MS);
     expect(fake.calls.requestPermission).toBe(0);
+  });
+
+  it('a click released inside the engage window shows no overlay and never queries the speech controller', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    // permission() is the first thing #beginPress touches — spy on it to
+    // catch a stray engage-timer fire even if no overlay is mounted.
+    const permissionSpy = vi.spyOn(fake.controller, 'permission');
+    const el = mount(fake);
+    press(el);
+
+    // Release strictly inside the engage window: the deferred lifecycle
+    // is cancelled before it ever arms.
+    await vi.advanceTimersByTimeAsync(PTT_ENGAGE_MS - 1);
+    expect(pttOf(el)).toBeNull();
+    release();
+    expect(pttOf(el)).toBeNull();
+
+    // Past the engage window: the cancelled timer must not fire.
+    await vi.advanceTimersByTimeAsync(HOLD_TO_ENABLE_MS);
+    expect(pttOf(el)).toBeNull();
+    expect(permissionSpy).not.toHaveBeenCalled();
+    expect(fake.calls.requestPermission).toBe(0);
+    expect(fake.calls.start.length).toBe(0);
   });
 
   it('a blocked permission shows instructions instead of the enable bar', async () => {
@@ -648,7 +679,7 @@ describe('slicc-composer / push-to-talk edge paths', () => {
     vi.useRealTimers();
   });
 
-  const flush = () => vi.advanceTimersByTimeAsync(0);
+  const flush = () => vi.advanceTimersByTimeAsync(PTT_ENGAGE_MS);
 
   function press(el: SliccComposer): HTMLTextAreaElement {
     const ta = el.querySelector('textarea') as HTMLTextAreaElement;
@@ -681,8 +712,9 @@ describe('slicc-composer / push-to-talk edge paths', () => {
     const el = mount(fake);
     press(el);
 
-    // The 60ms race window elapses with the query still pending → enable stage.
-    await vi.advanceTimersByTimeAsync(100);
+    // Engage delay + the 60ms race window elapse with the query still
+    // pending → enable stage.
+    await vi.advanceTimersByTimeAsync(PTT_ENGAGE_MS + 100);
     expect(pttOf(el)?.classList.contains('is-enable')).toBe(true);
 
     // The query lands 'granted' mid-hold: the press upgrades straight to
@@ -703,7 +735,7 @@ describe('slicc-composer / push-to-talk edge paths', () => {
       });
     const el = mount(fake);
     press(el);
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(PTT_ENGAGE_MS + 100);
 
     resolvePermission('denied');
     await flush();
