@@ -197,6 +197,10 @@ export function toolIcon(call: Pick<ToolCall, 'name' | 'input'>): string {
     scoop_unmute: 'bell-ring',
     scoop_wait: 'hourglass',
     update_global_memory: 'brain',
+    sudo_allow: 'shield-check',
+    sudo_deny: 'shield-x',
+    sudo_request: 'shield-question',
+    list_sudo_requests: 'list-checks',
   };
   return fixed[call.name] ?? 'wrench';
 }
@@ -245,6 +249,16 @@ export function toolTitle(call: Pick<ToolCall, 'name' | 'input'>): string {
       return 'Wait for the scoops';
     case 'update_global_memory':
       return 'Update the shared memory';
+    case 'sudo_allow':
+      return 'Grant the scoop access';
+    case 'sudo_deny':
+      return 'Hold the scoop back';
+    case 'sudo_request': {
+      const kind = inputField(call.input, 'kind');
+      return kind ? `Ask for ${kind} access` : 'Ask for more access';
+    }
+    case 'list_sudo_requests':
+      return 'Check access requests';
     default: {
       const words = call.name.replace(/[_-]+/g, ' ').trim();
       return words.charAt(0).toUpperCase() + words.slice(1);

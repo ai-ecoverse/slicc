@@ -230,6 +230,16 @@ describe('tool presentation', () => {
       ['edit_file', { path: '/tmp/a.ts' }, 'Edit a.ts', 'file-pen'],
       ['send_message', { message: 'hi' }, 'Send a message to Sliccy', 'message-circle'],
       ['feed_scoop', { name: 'pomodoro' }, 'Feed the pomodoro scoop', 'utensils'],
+      ['sudo_allow', { request_id: 'sudo-1' }, 'Grant the scoop access', 'shield-check'],
+      ['sudo_deny', { request_id: 'sudo-1' }, 'Hold the scoop back', 'shield-x'],
+      [
+        'sudo_request',
+        { kind: 'command', detail: 'git push' },
+        'Ask for command access',
+        'shield-question',
+      ],
+      ['sudo_request', {}, 'Ask for more access', 'shield-question'],
+      ['list_sudo_requests', {}, 'Check access requests', 'list-checks'],
       ['web_search', { query: 'x' }, 'Web search', 'wrench'],
     ];
     for (const [name, input, title, icon] of cases) {
