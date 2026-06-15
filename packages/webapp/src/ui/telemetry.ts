@@ -30,6 +30,24 @@ declare global {
 }
 
 /**
+ * Capability-based detection for the standalone-worker realm. Trusts
+ * functional shape rather than `typeof` checks because newer Node versions
+ * (25+) expose partial DOM globals (e.g. `localStorage` as an empty object,
+ * `window` / `document` shells) that would otherwise misroute the
+ * worker-realm boot through the page branch and crash on
+ * `localStorage.getItem(...)`. A real DedicatedWorker has none of these;
+ * a real browser page has all of them in functional form.
+ */
+function isWorkerLikeRealm(): boolean {
+  return (
+    typeof window === 'undefined' ||
+    typeof document === 'undefined' ||
+    typeof (document as Document | undefined)?.documentElement === 'undefined' ||
+    typeof (localStorage as Storage | undefined)?.getItem !== 'function'
+  );
+}
+
+/**
  * Get the deployment mode label for telemetry. `standalone-worker` covers
  * the standalone kernel-worker DedicatedWorker (no `window`), distinguishing
  * it from the page-side standalone shell.
@@ -37,7 +55,7 @@ declare global {
 function getModeLabel(): 'cli' | 'extension' | 'electron' | 'standalone-worker' {
   // Workers have no `window`. `chrome` / `document` / `localStorage` are
   // also unavailable, so this check has to come first.
-  if (typeof window === 'undefined') return 'standalone-worker';
+  if (isWorkerLikeRealm()) return 'standalone-worker';
   if (typeof chrome !== 'undefined' && chrome?.runtime?.id) return 'extension';
   if (typeof document !== 'undefined' && document.documentElement?.dataset?.electronOverlay)
     return 'electron';
@@ -59,7 +77,11 @@ function getModeLabel(): 'cli' | 'extension' | 'electron' | 'standalone-worker' 
  */
 export async function initTelemetry(): Promise<void> {
   if (initialized) return;
-  if (typeof localStorage !== 'undefined' && localStorage.getItem('telemetry-disabled') === 'true')
+  if (
+    typeof localStorage !== 'undefined' &&
+    typeof localStorage?.getItem === 'function' &&
+    localStorage.getItem('telemetry-disabled') === 'true'
+  )
     return;
 
   // Register the shell telemetry sink so the worker-resident shell can emit
@@ -82,7 +104,7 @@ export async function initTelemetry(): Promise<void> {
   try {
     const mode = getModeLabel();
 
-    if (typeof window !== 'undefined') {
+    if (mode !== 'standalone-worker' && typeof window !== 'undefined') {
       window.RUM_GENERATION = `slicc-${mode}`;
     } else {
       // Worker realm: no Window, but rum-worker.js reads `globalThis.RUM_GENERATION`.

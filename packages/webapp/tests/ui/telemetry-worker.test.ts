@@ -40,6 +40,14 @@ describe('telemetry — standalone-worker branch', () => {
     delete (globalThis as Record<string, unknown>).hlx;
     workerSelf = new EventTarget();
     vi.stubGlobal('self', workerSelf);
+    // Force a DedicatedWorker-shaped realm regardless of host Node version.
+    // Node 25+ exposes partial DOM-like globals (e.g. `localStorage` as an
+    // empty object) which would otherwise misroute the worker branch through
+    // the page branch. Stubbing here also exercises the production guard
+    // against the worst-case partial-globals environment.
+    vi.stubGlobal('window', undefined);
+    vi.stubGlobal('document', undefined);
+    vi.stubGlobal('localStorage', undefined);
   });
 
   afterEach(() => {
