@@ -1,7 +1,6 @@
 /**
- * Reusable click-and-hold gesture, lifted verbatim from the webapp
- * (`packages/webapp/src/ui/long-press.ts`): a short primary-button click
- * fires `onShortClick`, holding past `LONG_PRESS_MS` (or clicking with any
+ * Reusable click-and-hold gesture: a short primary-button click fires
+ * `onShortClick`, holding past `LONG_PRESS_MS` (or clicking with any
  * modifier key) fires `onLongPress` instead and suppresses the trailing
  * click event.
  *

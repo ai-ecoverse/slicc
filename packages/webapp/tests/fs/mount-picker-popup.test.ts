@@ -12,7 +12,7 @@ function mockHandle(name: string): FileSystemDirectoryHandle {
   return { kind: 'directory', name } as unknown as FileSystemDirectoryHandle;
 }
 
-/** Write a handle directly to the popup's IDB store (simulating mount-popup.js). */
+/** Write a handle directly to the popup's IDB store (simulating picker-popup.js). */
 async function seedHandle(idbKey: string, handle: FileSystemDirectoryHandle): Promise<void> {
   const db = await new Promise<IDBDatabase>((resolve, reject) => {
     const req = indexedDB.open('slicc-pending-mount', 1);
