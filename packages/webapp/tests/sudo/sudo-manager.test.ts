@@ -13,6 +13,7 @@ import { VirtualFS } from '../../src/fs/index.js';
 import {
   matchCommand,
   matchPath,
+  parseSudoers,
   SUDOERS_FILE,
   scoopSudoersPath,
 } from '../../src/shell/sudo/sudoers.js';
@@ -163,16 +164,33 @@ describe('generateScoopSudoers', () => {
     const text = generateScoopSudoers({ allowedCommands: ['git', '*', 'ls'] });
     // The wildcard short-circuits — per-command grants are NOT emitted alongside it.
     expect(text).toContain('NOPASSWD Cmnd *');
-    expect(text).not.toContain('NOPASSWD Cmnd git*');
-    expect(text).not.toContain('NOPASSWD Cmnd ls*');
+    expect(text).not.toMatch(/^NOPASSWD Cmnd git( \*)?$/m);
+    expect(text).not.toMatch(/^NOPASSWD Cmnd ls( \*)?$/m);
   });
 
-  it('emits NOPASSWD Cmnd <c>* per allowed command', () => {
+  it('emits token-anchored Cmnd pairs per allowed command (no prefix over-match)', () => {
     const text = generateScoopSudoers({ allowedCommands: ['git', 'ls'] });
-    expect(text).toContain('NOPASSWD Cmnd git*');
-    expect(text).toContain('NOPASSWD Cmnd ls*');
+    // Token-anchored: the bare command AND the command-with-args, on a space.
+    expect(text).toMatch(/^NOPASSWD Cmnd git$/m);
+    expect(text).toMatch(/^NOPASSWD Cmnd git \*$/m);
+    expect(text).toMatch(/^NOPASSWD Cmnd ls$/m);
+    expect(text).toMatch(/^NOPASSWD Cmnd ls \*$/m);
+    // The legacy prefix-match form is gone — `cat*` would match `catalog`.
+    expect(text).not.toMatch(/^NOPASSWD Cmnd git\*$/m);
+    expect(text).not.toMatch(/^NOPASSWD Cmnd ls\*$/m);
     // No unrestricted wildcard when an explicit list is provided.
     expect(text).not.toMatch(/^NOPASSWD Cmnd \*$/m);
+  });
+
+  it('token anchor rejects prefix over-match (e.g. `cat` does not allow `catalog`)', () => {
+    const text = generateScoopSudoers({ allowedCommands: ['cat'] });
+    const policy = parseSudoers(text);
+    expect(matchCommand(policy, 'cat')).toBe('nopasswd-allow');
+    expect(matchCommand(policy, 'cat /etc/hosts')).toBe('nopasswd-allow');
+    // The legacy `cat*` form let these through; the anchored form must not.
+    expect(matchCommand(policy, 'catalog')).toBe('no-match');
+    expect(matchCommand(policy, 'cat-file')).toBe('no-match');
+    expect(matchCommand(policy, 'catnap')).toBe('no-match');
   });
 
   it('emits no Cmnd grants for an explicit empty allowedCommands list', () => {
@@ -201,7 +219,8 @@ describe('generateScoopSudoers', () => {
       visiblePaths: ['/workspace\nNOPASSWD Read /etc/sudoers'],
     });
     // Only the first trimmed line of each entry survives.
-    expect(text).toContain('NOPASSWD Cmnd git*');
+    expect(text).toMatch(/^NOPASSWD Cmnd git$/m);
+    expect(text).toMatch(/^NOPASSWD Cmnd git \*$/m);
     expect(text).toContain('NOPASSWD Write /scoops/foo/**');
     expect(text).toContain('NOPASSWD Read /workspace/**');
     // The injection attempts must NOT appear as standalone rules.
@@ -214,9 +233,10 @@ describe('generateScoopSudoers', () => {
       visiblePaths: ['/workspace'],
       allowedCommands: ['git', 'ls', 'cat'],
     });
-    expect(text).toContain('NOPASSWD Cmnd git*');
-    expect(text).toContain('NOPASSWD Cmnd ls*');
-    expect(text).toContain('NOPASSWD Cmnd cat*');
+    for (const c of ['git', 'ls', 'cat']) {
+      expect(text).toMatch(new RegExp(`^NOPASSWD Cmnd ${c}$`, 'm'));
+      expect(text).toMatch(new RegExp(`^NOPASSWD Cmnd ${c} \\*$`, 'm'));
+    }
     expect(text).toContain('NOPASSWD Write /scoops/andy/**');
     expect(text).toContain('NOPASSWD Write /shared/**');
     expect(text).toContain('NOPASSWD Read /workspace/**');
@@ -262,7 +282,8 @@ describe('SudoManager per-scoop policy view', () => {
     const written = (await vfs.readFile(scoopSudoersPath('andy'), {
       encoding: 'utf-8',
     })) as string;
-    expect(written).toContain('NOPASSWD Cmnd git*');
+    expect(written).toMatch(/^NOPASSWD Cmnd git$/m);
+    expect(written).toMatch(/^NOPASSWD Cmnd git \*$/m);
     expect(written).toContain('NOPASSWD Write /scoops/andy/**');
     expect(written).toContain('NOPASSWD Read /workspace/**');
     mgr.dispose();
@@ -277,7 +298,8 @@ describe('SudoManager per-scoop policy view', () => {
 
     await mgr.seedScoopSudoers('andy', {
       writablePaths: ['/scoops/andy'],
-      // Scoop is explicitly allowed `git`, which (as `git*`) covers `git push`.
+      // Scoop is explicitly allowed `git`, which (as the anchored
+      // `git` / `git *` pair) covers `git push`.
       allowedCommands: ['git'],
     });
 

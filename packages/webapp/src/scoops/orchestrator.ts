@@ -1482,7 +1482,16 @@ export class Orchestrator implements ConeApprovalRouter {
     let persistError: string | undefined;
 
     if (decision.decision === 'always' && this.sudoManager && scoop && !scoop.isCone) {
-      if (kind === 'command' || kind === 'read' || kind === 'write') {
+      if (kind === 'read') {
+        // A persisted `NOPASSWD Read <pattern>` would silently no-op: the
+        // scoop's `RestrictedFS.visiblePaths` is fixed at construction, so
+        // subsequent reads of paths outside the original sandbox keep
+        // throwing ENOENT. Reporting `persisted: true` would be a lie. Reject
+        // explicitly; one-off `decision: 'allow'` still works through the
+        // SudoFS broker because the `RestrictedFS` ACL is bypassed under
+        // sudo-delegation for that single approved op.
+        persistError = 'read grants need ACL widening, not yet supported';
+      } else if (kind === 'command' || kind === 'write') {
         const raw =
           decision.pattern?.trim() ||
           pending.request.suggestedPattern?.trim() ||

@@ -163,6 +163,46 @@ describe('SudoFS', () => {
     expect(await sfs.exists('/workspace/note.txt')).toBe(true);
   });
 
+  it('gates symlink on the linkPath (second arg), not the target', async () => {
+    const { calls, broker } = makeBroker({ decision: 'allow' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+
+    // linkPath is in a protected (Write /workspace/.git/**) range; the
+    // `target` argument is in a non-protected path. The gate MUST fire on
+    // the linkPath — gating the first arg would let a scoop drop a link
+    // at an out-of-sandbox path by passing an in-sandbox target.
+    await sfs.symlink('/workspace/note.txt', '/workspace/.git/hooks-link');
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ kind: 'write', detail: '/workspace/.git/hooks-link' });
+    // The link was actually created on the wrapped fs.
+    expect(await vfs.lstat('/workspace/.git/hooks-link')).toMatchObject({ type: 'symlink' });
+  });
+
+  it('blocks symlink when the linkPath approval is denied', async () => {
+    const { calls, broker } = makeBroker({ decision: 'deny' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+
+    await expect(
+      sfs.symlink('/workspace/note.txt', '/workspace/.git/hooks-link')
+    ).rejects.toMatchObject({ code: 'EACCES' });
+    expect(calls[0]).toMatchObject({ kind: 'write', detail: '/workspace/.git/hooks-link' });
+    // Denial leaves no link behind on the wrapped fs.
+    expect(await vfs.exists('/workspace/.git/hooks-link')).toBe(false);
+  });
+
+  it('always-protects symlinks targeting sudoers files regardless of policy', async () => {
+    policy = parseSudoers(''); // empty policy — only self-protection active
+    const { calls, broker } = makeBroker({ decision: 'deny' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+
+    await expect(sfs.symlink('/workspace/note.txt', '/etc/sudoers.d/inject')).rejects.toMatchObject(
+      { code: 'EACCES' }
+    );
+    // The self-protection invariant fires through the symlink gate as well.
+    expect(calls[0]).toMatchObject({ kind: 'write', detail: '/etc/sudoers.d/inject' });
+  });
+
   describe('defaultDisposition: "require-approval"', () => {
     it('escalates writes to unmatched paths and proceeds on allow', async () => {
       policy = parseSudoers(''); // no rules — everything is no-match by default

@@ -2578,3 +2578,140 @@ describe('Orchestrator.handleCherryHostEvent', () => {
     expect(() => orch.handleCherryHostEvent('rt', 'evt')).not.toThrow();
   });
 });
+
+describe('Orchestrator.resolveSudoRequestAndPersist', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    // TaskScheduler.start() calls window.setInterval; vitest runs in node.
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+    await saveScoop(cone);
+    await saveScoop(testScoop);
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await settleAndDisposeSharedFs(sharedFs);
+  });
+
+  function noopCallbacks() {
+    return {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    };
+  }
+
+  /**
+   * Access the private `sudoRegistry` so we can register a fake pending
+   * request without driving an actual `SudoFS` gate through to the cone
+   * (which would require a real `ScoopContext` and an agent loop).
+   */
+  interface OrchestratorPrivateSudo {
+    sudoRegistry: { register: (scoopJid: string, request: any) => { id: string; pending: any } };
+  }
+
+  it('rejects read+always persistence with the ACL-widening error', async () => {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivateSudo;
+    const { id } = priv.sudoRegistry.register(testScoop.jid, {
+      kind: 'read',
+      detail: '/shared/secrets/api.key',
+    });
+
+    const result = await orch.resolveSudoRequestAndPersist(id, {
+      decision: 'always',
+      pattern: '/shared/secrets/**',
+    });
+
+    expect(result.settled).toBe(true);
+    expect(result.persisted).toBe(false);
+    expect(result.persistedPattern).toBeUndefined();
+    expect(result.persistError).toBe('read grants need ACL widening, not yet supported');
+    expect(result.kind).toBe('read');
+    expect(result.scoopFolder).toBe(testScoop.folder);
+  });
+
+  it('still persists write+always (positive control — read rejection is read-only)', async () => {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivateSudo;
+    const { id } = priv.sudoRegistry.register(testScoop.jid, {
+      kind: 'write',
+      detail: '/workspace/build/output.txt',
+    });
+
+    const result = await orch.resolveSudoRequestAndPersist(id, {
+      decision: 'always',
+      pattern: '/workspace/build/**',
+    });
+
+    expect(result.settled).toBe(true);
+    expect(result.persisted).toBe(true);
+    expect(result.persistedPattern).toBe('/workspace/build/**');
+    expect(result.persistError).toBeUndefined();
+    expect(result.kind).toBe('write');
+  });
+
+  it('does not persist read+allow (one-off allow is not a grant)', async () => {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivateSudo;
+    const { id } = priv.sudoRegistry.register(testScoop.jid, {
+      kind: 'read',
+      detail: '/shared/secrets/api.key',
+    });
+
+    // `decision: 'allow'` never persists, regardless of kind.
+    const result = await orch.resolveSudoRequestAndPersist(id, { decision: 'allow' });
+
+    expect(result.settled).toBe(true);
+    expect(result.persisted).toBe(false);
+    expect(result.persistError).toBeUndefined();
+  });
+});

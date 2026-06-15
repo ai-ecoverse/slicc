@@ -54,7 +54,13 @@ export const GRANTED_FILE = `${SUDOERS_D_DIR}/granted`;
 
 /** Async + sync read methods routed through a `read` match. */
 const READ_ASYNC = ['readFile', 'readTextFile', 'readDir', 'exists', 'stat'] as const;
-/** Async write methods routed through a `write` match. */
+/**
+ * Async write methods routed through a `write` match on the FIRST argument
+ * (the path being written to). `symlink(target, linkPath)` is intentionally
+ * NOT in this set — its write target is the second argument; it's gated by a
+ * dedicated override below so a non-cone scoop cannot create a link at an
+ * out-of-sandbox `linkPath` without approval.
+ */
 const WRITE_ASYNC = ['writeFile', 'mkdir', 'rm'] as const;
 
 /** Dependencies for {@link createSudoFs}. */
@@ -185,6 +191,17 @@ export function createSudoFs<T extends object>(target: T, deps: SudoFsDeps): T {
         path,
         ...rest
       );
+    };
+  }
+  if (has('symlink')) {
+    overrides.symlink = async (linkTarget: unknown, linkPath: unknown) => {
+      // The write goes to the SECOND argument (`linkPath`): that is the path
+      // being created. Gating the first argument would let a non-cone scoop
+      // pass an in-sandbox `linkTarget` and still create the link at an
+      // out-of-sandbox `linkPath`. The link's payload (the `linkTarget`
+      // string) is not a read of that target, so it is not gated.
+      await gate('write', linkPath as string);
+      return (target as Record<string, (...a: unknown[]) => unknown>).symlink(linkTarget, linkPath);
     };
   }
   if (has('rename')) {

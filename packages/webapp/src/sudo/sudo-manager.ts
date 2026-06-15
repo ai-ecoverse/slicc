@@ -78,8 +78,11 @@ function trimTrailingSlash(s: string): string {
  * `require-approval` default disposition non-cone contexts apply for
  * unmatched actions:
  *
- *   - `allowedCommands` → `NOPASSWD Cmnd <c>*` per entry, or
- *     `NOPASSWD Cmnd *` when omitted / contains `'*'` (unrestricted).
+ *   - `allowedCommands` → two token-anchored rules per entry: `NOPASSWD Cmnd <c>`
+ *     (the bare command) and `NOPASSWD Cmnd <c> *` (the command with any
+ *     args, separated by a space). Anchoring the token on a space prevents
+ *     `cat` from matching `catalog` / `cat-file` / `catnap`. Omitted /
+ *     containing `'*'` → unrestricted `NOPASSWD Cmnd *`.
  *   - `writablePaths`   → `NOPASSWD Write <p>/**` per entry.
  *   - `visiblePaths`    → `NOPASSWD Read  <p>/**` per entry.
  *
@@ -100,7 +103,16 @@ export function generateScoopSudoers(config?: ScoopConfig | null): string {
   } else {
     for (const raw of allowed) {
       const safe = sanitizeGrantPattern(raw);
-      if (safe) lines.push(`NOPASSWD Cmnd ${safe}*`);
+      if (safe) {
+        // Token-anchored: `<c>` matches the bare command, `<c> *` matches the
+        // command with arguments. Without the space anchor, `cat*` matches
+        // `catalog` / `cat-file`. A trailing `*` in the entry (e.g. `git push`)
+        // would create `git push *` which still anchors correctly on the
+        // existing space, so callers that want prefix-style matching get
+        // exactly that without the over-match.
+        lines.push(`NOPASSWD Cmnd ${safe}`);
+        lines.push(`NOPASSWD Cmnd ${safe} *`);
+      }
     }
   }
 

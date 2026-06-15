@@ -386,11 +386,20 @@ export class ScoopContext {
       : 'require-approval';
 
     const baseShell = manager.getShellConfig();
+    // Cones inherit the global `persistCommandGrant` sink (writes to
+    // `/etc/sudoers.d/granted` — visible to every scoop). Non-cone scoops
+    // MUST NOT use that sink: a scoop-A "Always" approval would land as a
+    // NOPASSWD rule for every scoop. The cone-mediated `always` decision
+    // already persists scoped via `Orchestrator.resolveSudoRequestAndPersist`
+    // → `SudoManager.appendScoopRule`, so the shell-side sink is a no-op
+    // for non-cone scoops here.
+    const persistCommandGrant = isCone ? baseShell.persistCommandGrant : async () => {};
     const shellConfig: import('../shell/almost-bash-shell-headless.js').ShellSudoConfig = {
       ...baseShell,
       broker,
       getPolicy,
       defaultDisposition,
+      persistCommandGrant,
     };
     return { broker, getPolicy, defaultDisposition, shellConfig };
   }
