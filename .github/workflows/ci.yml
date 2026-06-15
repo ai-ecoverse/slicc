@@ -752,6 +752,7 @@ jobs:
       needs.changes.outputs.is-queue-leader == 'true' &&
       (needs.changes.outputs.swift-launcher == 'true' ||
       needs.changes.outputs.swift-server == 'true' ||
+      needs.changes.outputs.swift-optel == 'true' ||
       needs.changes.outputs.swift-config == 'true' ||
       needs.changes.outputs.webapp == 'true' ||
       needs.changes.outputs.vfs-root == 'true' ||

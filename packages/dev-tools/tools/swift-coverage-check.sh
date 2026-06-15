@@ -36,6 +36,13 @@ fi
 
 cd "$PACKAGE_DIR"
 
+# Absolute path to the measured package; used as a positional SOURCES filter
+# below so sibling packages pulled in as local path dependencies (whose sources
+# get linked into this test bundle) are not counted against this package's
+# coverage floor. Sibling packages with their own coverage jobs enforce their
+# own floors independently.
+PACKAGE_ROOT="$PWD"
+
 echo "==> swift test --enable-code-coverage ($PACKAGE_DIR)"
 swift test --enable-code-coverage
 
@@ -72,7 +79,8 @@ echo "==> ${COV_TOOL[*]} report $BINARY"
 COVERAGE_OUTPUT=$(
   "${COV_TOOL[@]}" report "$BINARY" \
     -instr-profile="$PROFDATA" \
-    --ignore-filename-regex='\.build/|Tests/'
+    --ignore-filename-regex='\.build/|Tests/' \
+    "$PACKAGE_ROOT"
 )
 echo "$COVERAGE_OUTPUT"
 
@@ -125,6 +133,7 @@ mkdir -p .build/coverage
 "${COV_TOOL[@]}" export "$BINARY" \
   -instr-profile="$PROFDATA" \
   --ignore-filename-regex='\.build/|Tests/' \
-  -format=lcov >.build/coverage/lcov.info 2>/dev/null || true
+  -format=lcov \
+  "$PACKAGE_ROOT" >.build/coverage/lcov.info 2>/dev/null || true
 
 exit $FAIL
