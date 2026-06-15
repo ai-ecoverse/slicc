@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(os)
+import os
+#endif
 
 /// Fire-and-forget beacon transport. Implementations send a single
 /// ``RUMEvent`` to the collector identified by `collectBaseURL` and must
@@ -18,27 +21,49 @@ public protocol OptelTransport: Sendable {
 /// - The returned `URLSessionDataTask` is resumed and discarded; any
 ///   transport / decode error from the completion handler is silently
 ///   dropped.
+///
+/// When `debugLogging` is enabled (via ``OptelEnvConfig`` honoring
+/// `OPTEL_DEBUG`, or the explicit init parameter) every beacon is logged to
+/// `os.Logger` with the request URL, payload byte count, and (on response)
+/// HTTP status code. Default off — no logging, no behavior change.
 public final class URLSessionOptelTransport: OptelTransport {
     /// Default per-request timeout. Beacons are best-effort, so a short
     /// window is preferable to letting requests pile up.
     public static let defaultTimeout: TimeInterval = 10
 
+    /// Subsystem used for `os.Logger` wire logging when `debugLogging` is on.
+    public static let loggerSubsystem = "com.slicc.swift-optel"
+
+    /// Category used for `os.Logger` wire logging when `debugLogging` is on.
+    public static let loggerCategory = "transport"
+
     private let session: URLSession
     private let timeout: TimeInterval
     private let encoder: JSONEncoder
+    #if canImport(os)
+    private let logger: Logger?
+    #endif
 
     /// Construct a transport.
     ///
     /// - Parameters:
     ///   - session: Override for testing; defaults to an ephemeral session.
     ///   - timeout: Per-request timeout in seconds.
+    ///   - debugLogging: When `true`, emit `os.Logger` entries for every
+    ///     beacon (URL, payload size, response status). Default `false`.
     public init(
         session: URLSession = URLSessionOptelTransport.makeDefaultSession(),
-        timeout: TimeInterval = URLSessionOptelTransport.defaultTimeout
+        timeout: TimeInterval = URLSessionOptelTransport.defaultTimeout,
+        debugLogging: Bool = false
     ) {
         self.session = session
         self.timeout = timeout
         self.encoder = JSONEncoder()
+        #if canImport(os)
+        self.logger = debugLogging
+            ? Logger(subsystem: Self.loggerSubsystem, category: Self.loggerCategory)
+            : nil
+        #endif
     }
 
     public func send(_ event: RUMEvent, collectBaseURL: URL) {
@@ -50,11 +75,28 @@ public final class URLSessionOptelTransport: OptelTransport {
         ) else {
             return
         }
+        #if canImport(os)
+        let logger = self.logger
+        let urlString = request.url?.absoluteString ?? "<unknown>"
+        let bodySize = request.httpBody?.count ?? 0
+        logger?.debug("optel beacon → \(urlString, privacy: .public) (\(bodySize) bytes)")
+        let task = session.dataTask(with: request) { _, response, _ in
+            // Fire-and-forget: beacon failures are non-actionable; never
+            // propagate them back to the caller. This is the Swift analogue
+            // of the JS `.catch(() => {})` swallow.
+            if let http = response as? HTTPURLResponse {
+                logger?.debug(
+                    "optel beacon ← \(urlString, privacy: .public) status=\(http.statusCode)"
+                )
+            }
+        }
+        #else
         let task = session.dataTask(with: request) { _, _, _ in
             // Fire-and-forget: beacon failures are non-actionable; never
             // propagate them back to the caller. This is the Swift analogue
             // of the JS `.catch(() => {})` swallow.
         }
+        #endif
         task.resume()
     }
 

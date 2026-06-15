@@ -130,6 +130,41 @@ final class OptelTransportTests: XCTestCase {
         transport.send(sampleEvent(), collectBaseURL: baseURL)
         XCTAssertLessThan(Date().timeIntervalSince(start), 0.5)
     }
+
+    func testDebugLoggingEnabledTransportStillFireAndForget() {
+        // With debugLogging=true the transport additionally emits os.Logger
+        // entries; behavior on the wire (and the swallow-on-error contract)
+        // must be unchanged. We can't observe the os.Logger sink directly,
+        // so the assertion is "no blocking, no crash".
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [FailingURLProtocol.self]
+        let session = URLSession(configuration: config)
+        let transport = URLSessionOptelTransport(
+            session: session,
+            timeout: 1,
+            debugLogging: true
+        )
+        let start = Date()
+        transport.send(sampleEvent(), collectBaseURL: baseURL)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.5)
+    }
+
+    func testDebugLoggingDefaultsToOff() {
+        // The default initializer must keep the no-logging behavior so
+        // existing callers see no change.
+        let transport = URLSessionOptelTransport()
+        // No public way to introspect the flag; success is "constructs and
+        // sends" with the same fire-and-forget contract.
+        transport.send(sampleEvent(), collectBaseURL: baseURL)
+    }
+
+    func testLoggerSubsystemAndCategoryAreStable() {
+        // These constants are part of the documented public surface so users
+        // can filter log streams (e.g. `log show --predicate
+        // 'subsystem == "com.slicc.swift-optel"'`).
+        XCTAssertEqual(URLSessionOptelTransport.loggerSubsystem, "com.slicc.swift-optel")
+        XCTAssertEqual(URLSessionOptelTransport.loggerCategory, "transport")
+    }
 }
 
 /// `URLProtocol` that fails every request synchronously. Used to confirm the

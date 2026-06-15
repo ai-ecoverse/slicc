@@ -32,6 +32,13 @@ public final class Optel: @unchecked Sendable {
 
     /// Configure (or reconfigure) the client.
     ///
+    /// Honors two environment-variable overrides via ``OptelEnvConfig``:
+    /// `OPTEL_RATE` (overrides the `rate:` argument when set and non-empty —
+    /// the native analogue of helix-rum-js `?rum=on`) and `OPTEL_DEBUG`
+    /// (enables wire-level `os.Logger` logging in the default transport when
+    /// truthy). When `transport` is supplied explicitly the debug flag is
+    /// ignored — callers injecting their own transport own its logging.
+    ///
     /// - Parameters:
     ///   - appID: Identifier used as the `referer` hostname (e.g. bundle id).
     ///   - rate: Sampling rate string. Only the `on`/`off`/`high`/`low`
@@ -49,11 +56,34 @@ public final class Optel: @unchecked Sendable {
         transport: OptelTransport? = nil,
         randomSource: RandomSource? = nil
     ) {
-        let config = SamplingConfig(rate: rate)
+        configure(
+            appID: appID,
+            rate: rate,
+            collectBaseURL: collectBaseURL,
+            transport: transport,
+            randomSource: randomSource,
+            environment: ProcessInfo.processInfo.environment
+        )
+    }
+
+    /// Internal seam used by both the public ``configure`` overload and the
+    /// test suite to verify environment-variable resolution end-to-end
+    /// without mutating `ProcessInfo`.
+    internal func configure(
+        appID: String,
+        rate: String?,
+        collectBaseURL: URL,
+        transport: OptelTransport?,
+        randomSource: RandomSource?,
+        environment: [String: String]
+    ) {
+        let resolvedRate = OptelEnvConfig.resolveRate(explicit: rate, environment: environment)
+        let debugLogging = OptelEnvConfig.resolveDebugLogging(environment: environment)
+        let config = SamplingConfig(rate: resolvedRate)
         let id = RUMSessionID.generate()
         let resolvedRandom = randomSource ?? SystemRandomSource()
         let newSession = SamplingSession(id: id, config: config, random: resolvedRandom)
-        let resolvedTransport = transport ?? URLSessionOptelTransport()
+        let resolvedTransport = transport ?? URLSessionOptelTransport(debugLogging: debugLogging)
         let newCollector = OptelCollector(
             transport: resolvedTransport,
             collectBaseURL: collectBaseURL

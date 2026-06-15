@@ -147,6 +147,58 @@ final class OptelTests: XCTestCase {
         XCTAssertEqual(mock.sent.count, 201)
     }
 
+    func testConfigureHonorsOptelRateEnvOverExplicit() {
+        // OPTEL_RATE=on must force weight=1 (100% selection) even when the
+        // explicit `rate:` argument would otherwise produce a default-100
+        // weight that the FixedRandomSource cannot satisfy.
+        let mock = RecordingTransport()
+        let optel = Optel()
+        optel.configure(
+            appID: "com.example.app",
+            rate: nil,
+            collectBaseURL: baseURL,
+            transport: mock,
+            randomSource: FixedRandomSource(value: 0.5),
+            environment: ["OPTEL_RATE": "on"]
+        )
+        optel.sample(.click)
+        // weight 1 + random 0.5 → 0.5 < 1 → selected → top + click beacons
+        XCTAssertEqual(mock.sent.map { $0.event.weight }, [1, 1])
+        XCTAssertEqual(mock.sent.map { $0.event.checkpoint.rawValue }, ["top", "click"])
+    }
+
+    func testConfigureUsesExplicitRateWhenEnvAbsent() {
+        let mock = RecordingTransport()
+        let optel = Optel()
+        optel.configure(
+            appID: "com.example.app",
+            rate: "on",
+            collectBaseURL: baseURL,
+            transport: mock,
+            randomSource: FixedRandomSource(value: 0),
+            environment: [:]
+        )
+        optel.sample(.click)
+        XCTAssertEqual(mock.sent.first?.event.weight, 1)
+    }
+
+    func testConfigureEmptyEnvRateFallsBackToExplicit() {
+        // OPTEL_RATE="" must behave as unset so a cleared shell variable
+        // doesn't accidentally override an explicit rate.
+        let mock = RecordingTransport()
+        let optel = Optel()
+        optel.configure(
+            appID: "com.example.app",
+            rate: "on",
+            collectBaseURL: baseURL,
+            transport: mock,
+            randomSource: FixedRandomSource(value: 0),
+            environment: ["OPTEL_RATE": ""]
+        )
+        optel.sample(.click)
+        XCTAssertEqual(mock.sent.first?.event.weight, 1)
+    }
+
     func testTopBeaconIsFirstOnTheWireUnderConcurrentFirstCallers() {
         // Race many threads through `sample` immediately after `configure`,
         // synchronized on a `DispatchSemaphore` so they all unblock together.
