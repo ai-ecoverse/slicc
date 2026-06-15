@@ -36,6 +36,7 @@ const only = onlyArg ? onlyArg.slice('--only='.length) : null;
 
 const SWIFT_BUNDLES = {
   'swift-server': 'SliccServerPackageTests',
+  'swift-optel': 'SwiftOptelPackageTests',
   'swift-launcher': 'SliccstartPackageTests',
 };
 

@@ -5,6 +5,7 @@
     "build": "swift build -c release",
     "test": "swift test",
     "lint": "swiftlint lint",
-    "lint:fix": "swiftlint --fix"
+    "lint:fix": "swiftlint --fix",
+    "deadcode": "periphery scan"
   }
 }

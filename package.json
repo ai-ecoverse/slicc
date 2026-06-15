@@ -71,7 +71,7 @@
     "deadcode:full": "knip",
     "deadcode:files": "knip --include files",
     "deadcode:production": "knip --production --strict",
-    "deadcode:swift": "npm run deadcode -w @slicc/swift-server && npm run deadcode -w @slicc/swift-launcher",
+    "deadcode:swift": "npm run deadcode -w @slicc/swift-server && npm run deadcode -w @slicc/swift-optel && npm run deadcode -w @slicc/swift-launcher",
     "package:release": "node dist/node-server/release-package.js",
     "publish:chrome": "node dist/node-server/publish-chrome-web-store.js",
     "publish:worker": "bash packages/cloudflare-worker/scripts/publish-worker.sh",
