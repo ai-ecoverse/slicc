@@ -100,13 +100,18 @@ slicc-composer .slicc-composer__ptt {
   backdrop-filter: blur(10px) saturate(1.4);
   -webkit-backdrop-filter: blur(10px) saturate(1.4);
 }
-/* While a press is armed (set on pointerdown, cleared on release/cancel), the
-   active textarea also opts out of touch-scroll panning + the iOS long-press
-   selection callout so a hold engages cleanly. Scoped to the armed window so
-   the resting textarea keeps native scrolling and selection. */
-slicc-composer[data-ptt-pressed] textarea {
+/* Touch-action is locked by the browser at the START of a pointer sequence,
+   so suppressing scroll-pan / iOS long-press callout mid-gesture (on
+   pointerdown) is ignored for the in-flight touch — a finger that drifts can
+   still start a pan and fire pointercancel. Apply those at the [ptt]-enabled
+   state so they're in effect BEFORE any touch begins. Selection suppression
+   stays scoped to the active hold so the resting textarea keeps normal
+   selection. */
+slicc-composer[ptt] textarea {
   touch-action: none;
   -webkit-touch-callout: none;
+}
+slicc-composer[data-ptt-pressed] textarea {
   user-select: none;
   -webkit-user-select: none;
 }
@@ -753,12 +758,23 @@ export class SliccComposer extends HTMLElement {
     // Filter unrelated pointers (a non-primary touch finger releasing while
     // the captured primary press is still active).
     if (this.#pointerId != null && e.pointerId !== this.#pointerId) return;
-    if (
-      this.#stage === 'recording' &&
-      this.#deviceWrap &&
-      !this.#deviceWrap.hidden &&
-      e.composedPath().includes(this.#deviceWrap)
-    ) {
+    // Under pointer capture (the real-finger case) the release `pointerup` is
+    // retargeted to the capture host, so `composedPath` no longer contains the
+    // picker even when the finger lifted over it. Fall back to geometry via
+    // `elementFromPoint` so the captured path still detects the hit. The
+    // composedPath check stays first as the cheap synthetic-test +
+    // non-captured-mouse path.
+    const wrap = this.#deviceWrap;
+    let overPicker = false;
+    if (this.#stage === 'recording' && wrap && !wrap.hidden) {
+      if (e.composedPath().includes(wrap)) {
+        overPicker = true;
+      } else {
+        const hit = this.ownerDocument.elementFromPoint(e.clientX, e.clientY);
+        overPicker = hit != null && wrap.contains(hit);
+      }
+    }
+    if (overPicker) {
       // Release over the picker: the user wants a different mic, not a send.
       this.#pressed = false;
       this.#releasePointerCapture();

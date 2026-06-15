@@ -692,6 +692,56 @@ describe('slicc-composer / push-to-talk', () => {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
   });
 
+  it('release over the picker still opens the menu when pointer capture retargets pointerup to the host (no submit)', async () => {
+    // Under real pointer capture the release `pointerup` is retargeted to
+    // the capture host (slicc-composer), so `composedPath` no longer contains
+    // the picker. The geometry hit-test (elementFromPoint) must keep the
+    // release-over-the-picker path working.
+    const fake = makeFakeSpeech({
+      permission: 'granted',
+      transcript: 'should not submit',
+      mics: [
+        { deviceId: 'a', label: 'Built-in Microphone' },
+        { deviceId: 'b', label: 'Studio USB' },
+      ],
+    });
+    const el = mount(fake);
+    const submits: Event[] = [];
+    el.addEventListener('submit', (e) => submits.push(e));
+    // Touch path — pointer capture is what creates the retarget in the wild.
+    const ta = press(el, 'touch');
+    await flush();
+
+    const wrap = pttOf(el)!.querySelector('.slicc-composer__ptt-device') as HTMLElement;
+    expect(wrap.hidden).toBe(false);
+    const rect = wrap.getBoundingClientRect();
+    const clientX = rect.left + rect.width / 2;
+    const clientY = rect.top + rect.height / 2;
+    // Verify the geometry actually lands on (or inside) the picker so the
+    // fallback hit-test has something to find.
+    const hit = document.elementFromPoint(clientX, clientY);
+    expect(hit != null && wrap.contains(hit)).toBe(true);
+
+    // Dispatch the release ON THE HOST (capture-retarget) with coordinates
+    // over the picker. The composedPath will not include #deviceWrap.
+    el.dispatchEvent(
+      new PointerEvent('pointerup', {
+        bubbles: true,
+        isPrimary: true,
+        pointerType: 'touch',
+        pointerId: 100,
+        clientX,
+        clientY,
+      })
+    );
+
+    expect(pttOf(el)).not.toBeNull();
+    expect(pttOf(el)!.classList.contains('is-picking')).toBe(true);
+    expect(fake.calls.cancel).toBe(1);
+    expect(submits.length).toBe(0);
+    expect(ta.value).toBe('');
+  });
+
   // ── Engine status line ────────────────────────────────────────────
 
   it('shows the enhanced-model download status with its ETA while recording', async () => {
@@ -1254,6 +1304,12 @@ describe('slicc-composer / push-to-talk touch path', () => {
 });
 
 describe('slicc-composer / ptt opt-in', () => {
+  beforeEach(() => {
+    ensureGlobalTokens();
+    setTheme('light');
+    document.body.replaceChildren();
+  });
+
   it('without the ptt attribute, pressing the textarea stays native (no overlay, no transcript)', () => {
     const el = document.createElement('slicc-composer');
     el.style.cssText = 'width:1000px;display:block;';
@@ -1283,6 +1339,31 @@ describe('slicc-composer / ptt opt-in', () => {
       })
     );
     expect(ta.value).toBe('');
+    el.remove();
+  });
+
+  it('with ptt enabled the textarea has touch-action:none AT REST (before any pointerdown)', () => {
+    // touch-action is locked at the start of a pointer sequence, so applying
+    // it mid-gesture via [data-ptt-pressed] is ignored for the in-flight
+    // touch. The [ptt] host attribute must set touch-action upfront so a
+    // hold cannot be pre-empted by a pan starting the sequence.
+    const el = makeComposer();
+    document.body.appendChild(el);
+    const ta = el.querySelector('textarea') as HTMLTextAreaElement;
+    expect(el.hasAttribute('data-ptt-pressed')).toBe(false);
+    expect(getComputedStyle(ta).touchAction).toBe('none');
+    el.remove();
+  });
+
+  it('without the ptt attribute the textarea keeps its native touch-action', () => {
+    const el = document.createElement('slicc-composer');
+    el.style.cssText = 'width:1000px;display:block;';
+    const ta = document.createElement('textarea');
+    ta.className = 'ta';
+    el.append(ta);
+    document.body.appendChild(el);
+    // The [ptt]-scoped rule must NOT bleed into composers without push-to-talk.
+    expect(getComputedStyle(ta).touchAction).not.toBe('none');
     el.remove();
   });
 });
