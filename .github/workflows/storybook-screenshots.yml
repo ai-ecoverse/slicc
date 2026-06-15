@@ -170,6 +170,36 @@ jobs:
             }
 
             const shots = manifest && Array.isArray(manifest.shots) ? manifest.shots : [];
+
+            // Zero affected stories: avoid the usual comment.
+            //   - If a prior sticky comment exists, shrink it to a one-line note
+            //     so stale screenshots from an earlier push don't linger.
+            //   - Otherwise, skip without creating a comment at all.
+            // Applies in both modes (R2 + fork-PR artifact fallback).
+            if (shots.length === 0) {
+              const { data: existing } = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                per_page: 100,
+              });
+              const prior = existing.find((c) => c.body && c.body.includes(MARKER));
+              if (!prior) {
+                core.info(
+                  'No affected stories and no prior sticky comment — skipping comment creation.'
+                );
+                return;
+              }
+              const body = `${MARKER}\n_No affected stories in the latest commit (\`${shortSha}\`)._\n`;
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: prior.id,
+                body,
+              });
+              return;
+            }
+
             // Group flat shots[] by storyId so each story gets one section with
             // light+dark side-by-side. Order = first-seen storyId in manifest.
             const storiesById = new Map();
@@ -204,41 +234,38 @@ jobs:
               lines.push('');
             }
 
-            if (shots.length === 0) {
-              lines.push('_No affected stories detected for the changed files._');
-            } else {
-              for (const story of stories) {
-                const title = `${story.title || story.area || ''} — ${story.name || story.storyId}`.replace(
-                  /^ — /,
-                  ''
-                );
-                lines.push(`### ${title.trim()}`);
-                lines.push('');
-                lines.push(`<sub>\`${story.storyId}\`</sub>`);
-                lines.push('');
-                if (story.triggeredBy.length > 0) {
-                  const changed = story.triggeredBy.map((f) => `\`${f}\``).join(', ');
-                  lines.push(`<sub>changed: ${changed}</sub>`);
-                  lines.push('');
-                }
-                if (mode === 'r2') {
-                  lines.push('| Light | Dark |');
-                  lines.push('| --- | --- |');
-                  const cell = (theme) => {
-                    const file = story.byTheme[theme];
-                    if (!file) return '_(missing)_';
-                    const url = `${baseUrl}/pr-${prNumber}/${sha}/${file}`;
-                    return `<img src="${url}" alt="${story.storyId} (${theme})" width="360">`;
-                  };
-                  lines.push(`| ${cell('light')} | ${cell('dark')} |`);
-                } else {
-                  const files = Object.entries(story.byTheme)
-                    .map(([theme, file]) => `\`${file}\` (${theme})`)
-                    .join(', ');
-                  lines.push(`Screenshots in artifact: ${files || '_(none)_'}`);
-                }
+            // shots.length === 0 returned early above; only the >0 path remains.
+            for (const story of stories) {
+              const title = `${story.title || story.area || ''} — ${story.name || story.storyId}`.replace(
+                /^ — /,
+                ''
+              );
+              lines.push(`### ${title.trim()}`);
+              lines.push('');
+              lines.push(`<sub>\`${story.storyId}\`</sub>`);
+              lines.push('');
+              if (story.triggeredBy.length > 0) {
+                const changed = story.triggeredBy.map((f) => `\`${f}\``).join(', ');
+                lines.push(`<sub>changed: ${changed}</sub>`);
                 lines.push('');
               }
+              if (mode === 'r2') {
+                lines.push('| Light | Dark |');
+                lines.push('| --- | --- |');
+                const cell = (theme) => {
+                  const file = story.byTheme[theme];
+                  if (!file) return '_(missing)_';
+                  const url = `${baseUrl}/pr-${prNumber}/${sha}/${file}`;
+                  return `<img src="${url}" alt="${story.storyId} (${theme})" width="360">`;
+                };
+                lines.push(`| ${cell('light')} | ${cell('dark')} |`);
+              } else {
+                const files = Object.entries(story.byTheme)
+                  .map(([theme, file]) => `\`${file}\` (${theme})`)
+                  .join(', ');
+                lines.push(`Screenshots in artifact: ${files || '_(none)_'}`);
+              }
+              lines.push('');
             }
 
             lines.push('---');
