@@ -1,6 +1,8 @@
 # swift-optel
 
-Swift OpenTelemetry / RUM library for the SLICC iOS and macOS apps. Emits the same checkpoints and JSON wire format as Adobe's [`helix-rum-js`](https://github.com/adobe/helix-rum-js), using the configured app ID as the `referer` hostname.
+Swift Operational Telemetry / RUM library for the SLICC iOS and macOS apps. Emits the same checkpoints and JSON wire format as Adobe's [`helix-rum-js`](https://github.com/adobe/helix-rum-js), using the configured app ID as the `referer` hostname.
+
+> OpTel = Operational Telemetry — Adobe's RUM-style operational telemetry; not to be confused with OpenTelemetry (OTel).
 
 ## SwiftUI auto-instrumentation
 
