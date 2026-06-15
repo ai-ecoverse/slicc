@@ -21,24 +21,24 @@
     },
     "packages/webapp": {
       "entry": [
-        "vite.config.ts",
-        "src/ui/main.ts",
-        "src/ui/preview-sw.ts",
-        "src/ui/llm-proxy-sw.ts",
-        "src/ui/electron-overlay-entry.ts",
-        "src/ui/slicc-editor-entry.ts",
-        "src/ui/slicc-diff-entry.ts",
-        "src/ui/lucide-icons.ts",
-        "src/ui/rum.js",
-        "src/shims/empty.ts",
-        "src/shims/stream.ts",
-        "src/shims/http.ts",
-        "src/shims/https.ts",
-        "src/shims/http2.ts",
-        "providers/*.ts",
+        "vite.config.ts!",
+        "src/ui/main.ts!",
+        "src/ui/preview-sw.ts!",
+        "src/ui/llm-proxy-sw.ts!",
+        "src/ui/electron-overlay-entry.ts!",
+        "src/ui/slicc-editor-entry.ts!",
+        "src/ui/slicc-diff-entry.ts!",
+        "src/ui/lucide-icons.ts!",
+        "src/ui/rum.js!",
+        "src/shims/empty.ts!",
+        "src/shims/stream.ts!",
+        "src/shims/http.ts!",
+        "src/shims/https.ts!",
+        "src/shims/http2.ts!",
+        "providers/*.ts!",
         "tests/**/*.test.ts"
       ],
-      "project": ["src/**/*.{ts,tsx,js}", "providers/**/*.ts", "tests/**/*.ts"],
+      "project": ["src/**/*.{ts,tsx,js}!", "providers/**/*.ts!", "tests/**/*.ts"],
       "ignore": [
         "src/types/**",
         "src/globals.d.ts",
@@ -50,15 +50,15 @@
     },
     "packages/chrome-extension": {
       "entry": [
-        "vite.config.ts",
-        "src/service-worker.ts",
-        "src/offscreen.ts",
-        "src/secrets-entry.ts",
-        "voice-popup.js",
-        "mount-popup.js",
+        "vite.config.ts!",
+        "src/service-worker.ts!",
+        "src/offscreen.ts!",
+        "src/secrets-entry.ts!",
+        "voice-popup.js!",
+        "mount-popup.js!",
         "tests/**/*.test.ts"
       ],
-      "project": ["src/**/*.{ts,js}", "tests/**/*.ts"],
+      "project": ["src/**/*.{ts,js}!", "tests/**/*.ts"],
       "ignore": ["src/chrome.d.ts"],
       "ignoreDependencies": [
         "@imagemagick/magick-wasm",
@@ -69,34 +69,40 @@
     },
     "packages/node-server": {
       "entry": [
-        "src/index.ts",
-        "src/electron-main.ts",
-        "src/release-package.ts",
-        "src/publish-chrome-web-store.ts",
-        "src/qa-setup.ts",
-        "src/secrets/index.ts",
+        "src/index.ts!",
+        "src/electron-main.ts!",
+        "src/release-package.ts!",
+        "src/publish-chrome-web-store.ts!",
+        "src/qa-setup.ts!",
+        "src/secrets/index.ts!",
         "tests/**/*.test.ts"
       ],
-      "project": ["src/**/*.ts", "tests/**/*.ts"],
+      "project": ["src/**/*.ts!", "tests/**/*.ts"],
       "ignore": ["tests/integration/**"],
       "ignoreDependencies": ["e2b"]
     },
     "packages/cloudflare-worker": {
-      "entry": ["src/index.ts", "tests/**/*.test.ts"],
-      "project": ["src/**/*.ts", "tests/**/*.ts"]
+      "entry": ["src/index.ts!", "tests/**/*.test.ts"],
+      "project": ["src/**/*.ts!", "tests/**/*.ts"]
     },
     "packages/cherry": {
-      "entry": ["src/index.ts", "tests/**/*.test.ts"],
-      "project": ["src/**/*.ts", "tests/**/*.ts"],
+      "entry": ["src/index.ts!", "tests/**/*.test.ts"],
+      "project": ["src/**/*.ts!", "tests/**/*.ts"],
       "ignoreDependencies": ["jsdom", "@types/jsdom"]
     },
     "packages/cloud-core": {
-      "ignore": ["tests/fixtures/index.ts", "tests/fixtures/mem-registry.ts"]
+      "entry": ["src/index.ts!", "src/cone-config/index.ts!", "tests/**/*.test.ts"],
+      "project": [
+        "src/**/*.ts!",
+        "tests/**/*.ts",
+        "!tests/fixtures/index.ts!",
+        "!tests/fixtures/mem-registry.ts!"
+      ]
     },
     "packages/webcomponents": {
       "entry": [
-        "src/index.ts",
-        "src/register.ts",
+        "src/index.ts!",
+        "src/register.ts!",
         "vitest.config.ts",
         ".storybook/main.ts",
         ".storybook/preview.ts",
@@ -105,7 +111,7 @@
         "src/**/*.stories.ts",
         "tests/**/*.test.ts"
       ],
-      "project": ["src/**/*.{ts,tsx}", "tests/**/*.ts", ".storybook/**/*.{ts,tsx}"],
+      "project": ["src/**/*.{ts,tsx}!", "tests/**/*.ts", ".storybook/**/*.{ts,tsx}"],
       "ignoreDependencies": ["lit", "react"]
     }
   }

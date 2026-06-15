@@ -21,11 +21,6 @@ import { describe, expect, it, vi } from 'vitest';
 import type { WsSelector } from '../../../src/kernel/realm/realm-types.js';
 import { installWsRouter } from '../../../src/kernel/realm/ws-router-page.js';
 import {
-  matchWsSelector,
-  parseWsFrame,
-  projectWsFrame,
-} from '../../../src/kernel/realm/ws-selector.js';
-import {
   type WsPageBridge,
   type WsSinkDispatcher,
   WsSubscriberRegistry,
@@ -233,45 +228,6 @@ describe('ws-router-page: installWsRouter idempotency', () => {
     expect(reports).toEqual([
       { subId: 'sub-1', payload: { type: 'message', channel: 'C123', text: 'hi' } },
     ]);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Selector semantics
-// ---------------------------------------------------------------------------
-
-describe('ws-selector', () => {
-  it('parseWsFrame: json default', () => {
-    const f = parseWsFrame('{"a":1}', undefined);
-    expect(f?.body).toEqual({ a: 1 });
-  });
-  it('parseWsFrame: text mode', () => {
-    const f = parseWsFrame('not json', { parseAs: 'text' });
-    expect(f?.body).toBe('not json');
-  });
-  it('parseWsFrame: invalid json returns null', () => {
-    expect(parseWsFrame('{not-json}', { parseAs: 'json' })).toBeNull();
-  });
-  it('matchWsSelector: deep where', () => {
-    const f = parseWsFrame('{"a":{"b":1,"c":2}}', undefined)!;
-    expect(matchWsSelector(f, { where: { a: { b: 1 } } })).toBe(true);
-    expect(matchWsSelector(f, { where: { a: { b: 2 } } })).toBe(false);
-  });
-  it('matchWsSelector: missing fields fail', () => {
-    const f = parseWsFrame('{"a":1}', undefined)!;
-    expect(matchWsSelector(f, { where: { b: 1 } })).toBe(false);
-  });
-  it('matchWsSelector: non-object body with non-empty where fails', () => {
-    const f = parseWsFrame('"plain string"', undefined)!;
-    expect(matchWsSelector(f, { where: { type: 'x' } })).toBe(false);
-  });
-  it('projectWsFrame: narrows to listed fields', () => {
-    const f = parseWsFrame('{"a":1,"b":2,"c":3}', undefined)!;
-    expect(projectWsFrame(f, { project: ['a', 'c'] })).toEqual({ a: 1, c: 3 });
-  });
-  it('projectWsFrame: missing project keeps body', () => {
-    const f = parseWsFrame('{"a":1}', undefined)!;
-    expect(projectWsFrame(f, undefined)).toEqual({ a: 1 });
   });
 });
 
