@@ -47,13 +47,13 @@ func signIn() {
 }
 ```
 
-| Modifier / API                       | Checkpoint   | Source                                                          |
-| ------------------------------------ | ------------ | --------------------------------------------------------------- |
-| `.optelAutoInstrument(appID:rate:)`  | `enter`      | — (also on `background → active`)                               |
-| `.optelView(_:)`                     | `navigate`   | view name                                                       |
-| `.optelTap(source:)`                 | `click`      | caller-supplied                                                 |
-| `OptelButton(...)`                   | `click`      | derived `<context> <element>#<identifier>` via accessibility id |
-| `Optel.reportError(_:)`              | `error`      | bridged `NSError.domain` + `localizedDescription`               |
+| Modifier / API                      | Checkpoint | Source                                                          |
+| ----------------------------------- | ---------- | --------------------------------------------------------------- |
+| `.optelAutoInstrument(appID:rate:)` | `enter`    | — (also on `background → active`)                               |
+| `.optelView(_:)`                    | `navigate` | view name                                                       |
+| `.optelTap(source:)`                | `click`    | caller-supplied                                                 |
+| `OptelButton(...)`                  | `click`    | derived `<context> <element>#<identifier>` via accessibility id |
+| `Optel.reportError(_:)`             | `error`    | bridged `NSError.domain` + `localizedDescription`               |
 
 ### Known interception limits
 
