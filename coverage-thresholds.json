@@ -9,8 +9,8 @@
     },
     "node-server": {
       "lines": 79,
-      "statements": 76,
-      "functions": 80,
+      "statements": 77,
+      "functions": 82,
       "branches": 66
     },
     "chrome-extension": {
@@ -40,7 +40,7 @@
       "lines": 74,
       "statements": 72,
       "functions": 73,
-      "branches": 62,
+      "branches": 63,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -86,14 +86,14 @@
       "regions": 53
     },
     "swift-launcher": {
-      "lines": 27,
-      "functions": 31,
-      "regions": 34
+      "lines": 28,
+      "functions": 32,
+      "regions": 36
     },
     "swift-optel": {
-      "lines": 65,
-      "functions": 55,
-      "regions": 70
+      "lines": 70,
+      "functions": 63,
+      "regions": 77
     }
   }
 }
