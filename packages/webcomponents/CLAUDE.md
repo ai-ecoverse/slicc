@@ -61,7 +61,7 @@ tests/**/<name>.test.ts    co-located browser tests, mirroring src/ subsystem
   `::part` hooks, named slots, and `CustomEvent`s (composed + bubbling) — never
   reach into another component's internals.
 - **Composer push-to-talk:** `<slicc-composer ptt>` owns the hold-to-dictate
-  GESTURE (5s hold-to-enable permission stage, recording overlay with caption
+  GESTURE (3s hold-to-enable permission stage, recording overlay with caption
   line + mic picker + engine-status line, append+submit on release) but not the
   audio stack — hosts inject a `ComposerSpeech` controller via the `speech`
   property. The contract + built-in Web Speech fallback live in
