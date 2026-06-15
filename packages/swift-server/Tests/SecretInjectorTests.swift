@@ -117,11 +117,11 @@ final class SecretInjectorTests: XCTestCase {
 
     func testScrubMultipleSecrets() {
         let injector = makeInjector(secrets: [
-            makeSecret(name: "A", realValue: "secret_a", maskedValue: "masked_a", domains: ["a.com"]),
-            makeSecret(name: "B", realValue: "secret_b", maskedValue: "masked_b", domains: ["b.com"]),
+            makeSecret(name: "A", realValue: "secret_aa1", maskedValue: "masked_aa1", domains: ["a.com"]),
+            makeSecret(name: "B", realValue: "secret_bb1", maskedValue: "masked_bb1", domains: ["b.com"]),
         ])
-        let result = injector.scrub(text: "A=secret_a B=secret_b")
-        XCTAssertEqual(result, "A=masked_a B=masked_b")
+        let result = injector.scrub(text: "A=secret_aa1 B=secret_bb1")
+        XCTAssertEqual(result, "A=masked_aa1 B=masked_bb1")
     }
 
     func testScrubLeavesTextUnchangedWhenNoRealValues() {
@@ -449,5 +449,68 @@ final class SecretInjectorTests: XCTestCase {
         XCTAssertEqual(text, "oauth-real")
         XCTAssertNotEqual(text, "env-file-real")
     }
-}
 
+    // MARK: - Minimum-length guard (mirrors TS MIN_MASKABLE_SECRET_LENGTH)
+
+    func testEnvFileShortValueIsConsumableButNotMasked() async throws {
+        let name = uniqueName("SHORT_ENV")
+        // 8 chars — below the 9-char floor — must NOT enter the masking
+        // pattern set, but must remain consumable for env injection and
+        // `/api/secrets/masked` (identity masking).
+        let envSecret = Secret(name: name, value: "shortie8", domains: ["api.example.com"])
+
+        let injector = SecretInjector(
+            sessionId: "test-session-short-env",
+            envFileSecrets: [envSecret],
+            oauthStore: nil
+        )
+        await injector.reload()
+
+        // Consumable: `secret get` / env-injection feed sees identity mask.
+        XCTAssertEqual(injector.maskedValue(for: name), "shortie8",
+                       "Short env-file value must remain consumable with identity masking")
+        XCTAssertEqual(injector.maskedEnvironment[name], "shortie8")
+        let masked = injector.maskedEntries.first(where: { $0.name == name })
+        XCTAssertNotNil(masked, "Short value must appear in maskedEntries")
+        XCTAssertEqual(masked?.maskedValue, "shortie8")
+
+        // NOT masked: inject must not spuriously domain-block on the literal
+        // short string, and the scrubber must leave matching bytes alone.
+        let injectResult = injector.inject(
+            text: "header carrying shortie8 verbatim",
+            hostname: "evil.example.com"
+        )
+        guard case .success(let text) = injectResult else {
+            return XCTFail("Short consumable must not produce a domainBlocked result")
+        }
+        XCTAssertEqual(text, "header carrying shortie8 verbatim")
+        XCTAssertEqual(injector.scrub(text: "response with shortie8 in body"),
+                       "response with shortie8 in body")
+    }
+
+    func testOAuthShortValueIsConsumableAndOverridesEnvEntry() async throws {
+        let name = uniqueName("SHORT_OAUTH")
+        // Env-file holds a maskable value; OAuth pushes a too-short value with
+        // the same name. Per override semantics, the OAuth entry replaces the
+        // env-file replica with a consumable-only short entry.
+        let envSecret = Secret(name: name, value: "env-file-realLong", domains: ["api.example.com"])
+        let oauth = OAuthSecretStore()
+        try await oauth.set(name: name, value: "tiny8chr", domains: ["api.example.com"])
+
+        let injector = SecretInjector(
+            sessionId: "test-session-short-oauth",
+            envFileSecrets: [envSecret],
+            oauthStore: oauth
+        )
+        await injector.reload()
+
+        // The short OAuth value wins over the env-file long value: identity-
+        // masked, but NOT a scrubber pattern (the env-file real value must
+        // no longer be redacted from responses).
+        XCTAssertEqual(injector.maskedValue(for: name), "tiny8chr",
+                       "Too-short OAuth value overrides env-file entry as consumable-only")
+        XCTAssertEqual(injector.scrub(text: "saw env-file-realLong here"),
+                       "saw env-file-realLong here",
+                       "Overridden env-file real value must not be scrubbed")
+    }
+}

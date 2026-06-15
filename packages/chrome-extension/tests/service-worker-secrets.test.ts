@@ -14,7 +14,7 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
     messageListeners = [];
     storageMap = {
       '_session.id': 'test-session-uuid',
-      GITHUB_TOKEN: 'ghp_real',
+      GITHUB_TOKEN: 'ghp_realtoken',
       GITHUB_TOKEN_DOMAINS: 'api.github.com',
       'oauth.github.token': 'gh_oauth_real',
       'oauth.github.token_DOMAINS': 'github.com,api.github.com',
@@ -221,7 +221,7 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
     expect(Array.isArray(response.entries)).toBe(true);
     const persisted = response.entries.find((e: any) => e.name === 'GITHUB_TOKEN');
     expect(persisted).toBeDefined();
-    expect(persisted.value).toBe('ghp_real');
+    expect(persisted.value).toBe('ghp_realtoken');
     expect(persisted.domains).toEqual(['api.github.com']);
     const session = response.entries.find((e: any) => e.name === 'SESS_KEY');
     expect(session).toBeDefined();
@@ -279,7 +279,7 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
     const response = await dispatch({ type: 'secrets.delete', name: 'GITHUB_TOKEN' });
     expect(response).toEqual({ ok: true, removed: true, fromSession: true });
     // Persisted entry must remain after the session-only deletion.
-    expect(storageMap.GITHUB_TOKEN).toBe('ghp_real');
+    expect(storageMap.GITHUB_TOKEN).toBe('ghp_realtoken');
     expect(storageMap.GITHUB_TOKEN_DOMAINS).toBe('api.github.com');
     // The session list is now empty for that name.
     const list = await dispatch({ type: 'secrets.session.list' });
@@ -363,7 +363,7 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
       domains: ['api.github.com', '*.github.com'],
     });
     expect(resp).toEqual({ ok: true });
-    expect(storageMap.GITHUB_TOKEN).toBe('ghp_real');
+    expect(storageMap.GITHUB_TOKEN).toBe('ghp_realtoken');
     expect(storageMap.GITHUB_TOKEN_DOMAINS).toBe('api.github.com,*.github.com');
   });
 
@@ -400,7 +400,7 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
         {
           type: 'secrets.mask-oauth-token',
           providerId: 'testprov',
-          accessToken: 'tok_real',
+          accessToken: 'tok_realtoken',
           domains: 'example.com,api.example.com',
         },
         {},
@@ -411,7 +411,7 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
       if (result === true) break;
     }
     await new Promise((r) => setTimeout(r, 30));
-    expect(storageMap['oauth.testprov.token']).toBe('tok_real');
+    expect(storageMap['oauth.testprov.token']).toBe('tok_realtoken');
     expect(storageMap['oauth.testprov.token_DOMAINS']).toBe('example.com,api.example.com');
     expect(typeof response.maskedValue).toBe('string');
     expect(response.maskedValue.length).toBeGreaterThan(0);

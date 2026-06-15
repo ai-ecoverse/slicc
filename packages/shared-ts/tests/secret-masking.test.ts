@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { buildScrubber, domainMatches, isAllowedDomain, mask } from '../src/secret-masking.js';
+import {
+  buildScrubber,
+  domainMatches,
+  isAllowedDomain,
+  MIN_MASKABLE_SECRET_LENGTH,
+  mask,
+} from '../src/secret-masking.js';
 
 describe('mask()', () => {
   it('produces deterministic output for same inputs', async () => {
@@ -84,24 +90,24 @@ describe('buildScrubber()', () => {
   });
 
   it('replaces multiple occurrences', () => {
-    const scrub = buildScrubber([{ realValue: 'abc', maskedValue: 'xyz' }]);
-    expect(scrub('abc and abc')).toBe('xyz and xyz');
+    const scrub = buildScrubber([{ realValue: 'abcdefghi', maskedValue: 'xyz123456' }]);
+    expect(scrub('abcdefghi and abcdefghi')).toBe('xyz123456 and xyz123456');
   });
 
   it('handles multiple secrets', () => {
     const scrub = buildScrubber([
-      { realValue: 'secret1', maskedValue: 'mask_1' },
-      { realValue: 'secret2', maskedValue: 'mask_2' },
+      { realValue: 'secret001', maskedValue: 'mask_0001' },
+      { realValue: 'secret002', maskedValue: 'mask_0002' },
     ]);
-    expect(scrub('secret1 and secret2')).toBe('mask_1 and mask_2');
+    expect(scrub('secret001 and secret002')).toBe('mask_0001 and mask_0002');
   });
 
   it('replaces longest match first', () => {
     const scrub = buildScrubber([
-      { realValue: 'sec', maskedValue: 'XX' },
-      { realValue: 'secret', maskedValue: 'YYYYYY' },
+      { realValue: 'secret-aa', maskedValue: 'XXXXXXXXX' },
+      { realValue: 'secret-aaaa', maskedValue: 'YYYYYYYYYYY' },
     ]);
-    expect(scrub('my secret key')).toBe('my YYYYYY key');
+    expect(scrub('my secret-aaaa key')).toBe('my YYYYYYYYYYY key');
   });
 
   it('returns identity for empty secrets', () => {
@@ -110,8 +116,35 @@ describe('buildScrubber()', () => {
   });
 
   it('handles text with no matches', () => {
-    const scrub = buildScrubber([{ realValue: 'nothere', maskedValue: 'masked' }]);
+    const scrub = buildScrubber([{ realValue: 'nothereXX', maskedValue: 'maskedXXX' }]);
     expect(scrub('nothing to replace')).toBe('nothing to replace');
+  });
+
+  // ---- Minimum-length guard ----
+
+  it('exports MIN_MASKABLE_SECRET_LENGTH = 9', () => {
+    expect(MIN_MASKABLE_SECRET_LENGTH).toBe(9);
+  });
+
+  it('skips a value shorter than the minimum length (8 chars stays unmasked)', () => {
+    const eight = 'abcdefgh'; // 8 chars
+    const scrub = buildScrubber([{ realValue: eight, maskedValue: 'MASKED88' }]);
+    // Scrubber must NOT replace the too-short value
+    expect(scrub(`hello ${eight} world`)).toBe(`hello ${eight} world`);
+  });
+
+  it('keeps a value at the minimum length (9 chars masks normally)', () => {
+    const nine = 'abcdefghi'; // 9 chars
+    const scrub = buildScrubber([{ realValue: nine, maskedValue: 'MASKED999' }]);
+    expect(scrub(`hello ${nine} world`)).toBe('hello MASKED999 world');
+  });
+
+  it('boundary: short values are excluded while long values still register in the same scrubber', () => {
+    const scrub = buildScrubber([
+      { realValue: 'short78', maskedValue: 'mask7777' }, // 7 chars — must be skipped
+      { realValue: 'longSecret123', maskedValue: 'longMasked123' }, // 13 chars — kept
+    ]);
+    expect(scrub('short78 and longSecret123')).toBe('short78 and longMasked123');
   });
 });
 

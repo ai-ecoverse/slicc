@@ -210,7 +210,7 @@ describe('SecretProxyManager', () => {
 describe('SecretProxyManager — OauthSecretStore chaining', () => {
   it('unmasks a token sourced from OauthSecretStore', async () => {
     const oauthStore = new OauthSecretStore();
-    oauthStore.set('oauth.github.token', 'ghp_real', ['api.github.com']);
+    oauthStore.set('oauth.github.token', 'ghp_realtoken', ['api.github.com']);
     const proxy = new SecretProxyManager(undefined, 'fixed-session', oauthStore);
     await proxy.reload();
     const entry = proxy.getMaskedEntries().find((e) => e.name === 'oauth.github.token')!;
@@ -218,13 +218,13 @@ describe('SecretProxyManager — OauthSecretStore chaining', () => {
     const headers: Record<string, string> = { authorization: `Bearer ${entry.maskedValue}` };
     const r = proxy.unmaskHeaders(headers, 'api.github.com');
     expect(r.forbidden).toBeUndefined();
-    expect(headers.authorization).toBe('Bearer ghp_real');
+    expect(headers.authorization).toBe('Bearer ghp_realtoken');
   });
 
   it('setOauthStore allows late binding', async () => {
     const proxy = new SecretProxyManager(undefined, 'fixed-session');
     const store = new OauthSecretStore();
-    store.set('oauth.x.token', 'real_x', ['api.x.com']);
+    store.set('oauth.x.token', 'real_x_token', ['api.x.com']);
     proxy.setOauthStore(store);
     await proxy.reload();
     expect(proxy.getMaskedEntries().some((e) => e.name === 'oauth.x.token')).toBe(true);

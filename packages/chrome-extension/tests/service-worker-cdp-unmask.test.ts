@@ -19,7 +19,7 @@ describe('service-worker CDP outgoing unmask', () => {
     runtimeSentMessages = [];
     storageMap = {
       '_session.id': SESSION_ID,
-      GITHUB_TOKEN: 'ghp_real',
+      GITHUB_TOKEN: 'ghp_realtoken',
       GITHUB_TOKEN_DOMAINS: 'api.github.com',
     };
     tabsMap = { [TAB_ID]: { id: TAB_ID, url: 'https://api.github.com/user' } };
@@ -121,7 +121,7 @@ describe('service-worker CDP outgoing unmask', () => {
     await import('../src/service-worker.js');
     await attach();
 
-    const masked = await mask(SESSION_ID, 'GITHUB_TOKEN', 'ghp_real');
+    const masked = await mask(SESSION_ID, 'GITHUB_TOKEN', 'ghp_realtoken');
     await dispatchOffscreen({
       type: 'cdp-command',
       id: 2,
@@ -134,7 +134,7 @@ describe('service-worker CDP outgoing unmask', () => {
     const evalCalls = debuggerSendCommand.mock.calls.filter((c) => c[1] === 'Runtime.evaluate');
     expect(evalCalls).toHaveLength(1);
     const sentParams = evalCalls[0][2] as { expression: string };
-    expect(sentParams.expression).toContain('ghp_real');
+    expect(sentParams.expression).toContain('ghp_realtoken');
     expect(sentParams.expression).not.toContain(masked);
   });
 
@@ -143,7 +143,7 @@ describe('service-worker CDP outgoing unmask', () => {
     await import('../src/service-worker.js');
     await attach();
 
-    const masked = await mask(SESSION_ID, 'GITHUB_TOKEN', 'ghp_real');
+    const masked = await mask(SESSION_ID, 'GITHUB_TOKEN', 'ghp_realtoken');
     await dispatchOffscreen({
       type: 'cdp-command',
       id: 2,
@@ -156,7 +156,7 @@ describe('service-worker CDP outgoing unmask', () => {
     expect(evalCalls).toHaveLength(1);
     const sentParams = evalCalls[0][2] as { expression: string };
     expect(sentParams.expression).toContain(masked);
-    expect(sentParams.expression).not.toContain('ghp_real');
+    expect(sentParams.expression).not.toContain('ghp_realtoken');
   });
 
   it('fails closed when the target tab cannot be resolved', async () => {
@@ -166,7 +166,7 @@ describe('service-worker CDP outgoing unmask', () => {
     await import('../src/service-worker.js');
     await attach();
 
-    const masked = await mask(SESSION_ID, 'GITHUB_TOKEN', 'ghp_real');
+    const masked = await mask(SESSION_ID, 'GITHUB_TOKEN', 'ghp_realtoken');
     await dispatchOffscreen({
       type: 'cdp-command',
       id: 2,

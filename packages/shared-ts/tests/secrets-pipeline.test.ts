@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MIN_MASKABLE_SECRET_LENGTH } from '../src/secret-masking.js';
 import {
   type FetchProxySecretSource,
   type ForbiddenInfo,
@@ -249,5 +250,124 @@ describe('scrubResponseBytes', () => {
     const before = new Uint8Array([0xff, 0xfe, 0x00, 0x01, 0xc3, 0x28, 0xa0, 0x80]);
     const out = pipeline.scrubResponseBytes(before);
     expect(Array.from(out)).toEqual(Array.from(before));
+  });
+});
+
+describe('SecretsPipeline minimum-length guard', () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  it('MIN_MASKABLE_SECRET_LENGTH is pinned to 9', () => {
+    expect(MIN_MASKABLE_SECRET_LENGTH).toBe(9);
+  });
+
+  it('keeps an 8-char value CONSUMABLE (identity-masked entry) while emitting a warning naming the secret (not the value)', async () => {
+    const pipeline = new SecretsPipeline({
+      sessionId: 'session-fixed',
+      source: source([
+        { name: 'SHORT_TOKEN', value: 'eightCHR', domains: ['api.github.com'] }, // 8 chars
+      ]),
+    });
+    await pipeline.reload();
+
+    // hasSecrets() reports the MASKABLE set only — short secrets are not
+    // part of scrub/unmask work, so this stays false.
+    expect(pipeline.hasSecrets()).toBe(false);
+
+    // …but the entry IS surfaced for env injection / `secret get`, with the
+    // literal real value as its "masked" value (identity masking).
+    const entries = pipeline.getMaskedEntries();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toEqual({
+      name: 'SHORT_TOKEN',
+      maskedValue: 'eightCHR',
+      domains: ['api.github.com'],
+    });
+
+    // Warning fired exactly once and names the secret without leaking the value
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const msg = String(warnSpy.mock.calls[0][0]);
+    expect(msg).toContain('SHORT_TOKEN');
+    expect(msg).not.toContain('eightCHR');
+  });
+
+  it('an 8-char value cannot produce a forbidden/403 on any domain (not registered, so domain check never runs)', async () => {
+    const pipeline = new SecretsPipeline({
+      sessionId: 'session-fixed',
+      source: source([{ name: 'SHORT_TOKEN', value: 'eightCHR', domains: ['api.github.com'] }]),
+    });
+    await pipeline.reload();
+
+    // The raw 8-char value passes through unmask() untouched — no forbidden.
+    const headers: Record<string, string> = { authorization: 'Bearer eightCHR' };
+    const result = pipeline.unmaskHeaders(headers, 'totally.unrelated.example.com');
+    expect(result.forbidden).toBeUndefined();
+    expect(headers.authorization).toBe('Bearer eightCHR');
+
+    // Scrubber leaves the raw bytes alone as well.
+    expect(pipeline.scrubResponse('value=eightCHR end')).toBe('value=eightCHR end');
+  });
+
+  it('a 9-char value still masks, unmasks, and domain-checks normally (no warning)', async () => {
+    const pipeline = new SecretsPipeline({
+      sessionId: 'session-fixed',
+      source: source([
+        { name: 'NINE_TOKEN', value: 'nineChars', domains: ['api.github.com'] }, // 9 chars
+      ]),
+    });
+    await pipeline.reload();
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(pipeline.hasSecrets()).toBe(true);
+    expect(pipeline.getMaskedEntries()).toHaveLength(1);
+
+    const masked = await pipeline.maskOne('NINE_TOKEN', 'nineChars');
+    const allowed: Record<string, string> = { authorization: `Bearer ${masked}` };
+    expect(pipeline.unmaskHeaders(allowed, 'api.github.com').forbidden).toBeUndefined();
+    expect(allowed.authorization).toBe('Bearer nineChars');
+
+    const blocked: Record<string, string> = { authorization: `Bearer ${masked}` };
+    expect(pipeline.unmaskHeaders(blocked, 'evil.example.com').forbidden).toEqual({
+      secretName: 'NINE_TOKEN',
+      hostname: 'evil.example.com',
+    });
+  });
+
+  it('mixed batch: 8-char is consumable-only (with warning), 9-char is fully masked', async () => {
+    const pipeline = new SecretsPipeline({
+      sessionId: 'session-fixed',
+      source: source([
+        { name: 'SHORT_TOKEN', value: '12345678', domains: ['api.github.com'] }, // 8 chars
+        { name: 'LONG_TOKEN', value: 'ghp_real9', domains: ['api.github.com'] }, // 9 chars
+      ]),
+    });
+    await pipeline.reload();
+
+    const entries = pipeline.getMaskedEntries();
+    expect(entries).toHaveLength(2);
+    const byName = Object.fromEntries(entries.map((e) => [e.name, e]));
+    // Long secret carries an HMAC-derived masked value (not the raw secret).
+    expect(byName.LONG_TOKEN.maskedValue).toMatch(/^ghp_[a-f0-9]+$/);
+    expect(byName.LONG_TOKEN.maskedValue).not.toBe('ghp_real9');
+    // Short secret is identity-masked (env injection delivers the literal).
+    expect(byName.SHORT_TOKEN.maskedValue).toBe('12345678');
+
+    // Scrubber still scrubs the long secret's real value, but leaves the
+    // short secret's raw bytes alone (it's not a masking pattern).
+    expect(pipeline.scrubResponse('a=ghp_real9 b=12345678 end')).toBe(
+      `a=${byName.LONG_TOKEN.maskedValue} b=12345678 end`
+    );
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const msg = String(warnSpy.mock.calls[0][0]);
+    expect(msg).toContain('SHORT_TOKEN');
+    expect(msg).not.toContain('12345678');
   });
 });

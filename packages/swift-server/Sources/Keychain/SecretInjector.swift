@@ -17,11 +17,29 @@ import Foundation
 public final class SecretInjector: @unchecked Sendable {
 
     /// A loaded secret with its masked counterpart.
+    ///
+    /// `isMaskable == false` flags a too-short value (length <
+    /// `minMaskableSecretLength`): it stays CONSUMABLE — env injection /
+    /// `/api/secrets/masked` still surface it — but the scrubber `pairs`,
+    /// the inject/injectBody/scrub paths, and every Basic-auth / URL-creds
+    /// / byte-safe unmask loop deliberately skip it so degenerate-length
+    /// values cannot collide with arbitrary outbound bytes. For short
+    /// entries `maskedValue == realValue` (identity masking) so an
+    /// env-injected `$NAME` delivers the literal secret.
     struct LoadedSecret: Sendable {
         let name: String
         let realValue: String
         let maskedValue: String
         let domains: [String]
+        let isMaskable: Bool
+
+        init(name: String, realValue: String, maskedValue: String, domains: [String], isMaskable: Bool = true) {
+            self.name = name
+            self.realValue = realValue
+            self.maskedValue = maskedValue
+            self.domains = domains
+            self.isMaskable = isMaskable
+        }
     }
 
     /// Result of attempting to inject secrets into a request.
@@ -143,6 +161,29 @@ public final class SecretInjector: @unchecked Sendable {
         // SecretProxyManager.buildSource).
         if let store = oauthStore {
             for entry in await store.list() {
+                // Mirror the TS minimum-length guard: a too-short OAuth
+                // replica must not register as a masking pattern, but it
+                // remains CONSUMABLE (identity-masked) and OAuth's override
+                // semantics still replace any Keychain / env-file entry of
+                // the same name.
+                if entry.value.utf16.count < minMaskableSecretLength {
+                    FileHandle.standardError.write(Data(
+                        "[slicc:secrets] secret \"\(entry.name)\" not masked: value shorter than \(minMaskableSecretLength) chars\n".utf8
+                    ))
+                    let shortEntry = LoadedSecret(
+                        name: entry.name,
+                        realValue: entry.value,
+                        maskedValue: entry.value,
+                        domains: entry.domains,
+                        isMaskable: false
+                    )
+                    if let idx = loaded.firstIndex(where: { $0.name == entry.name }) {
+                        loaded[idx] = shortEntry
+                    } else {
+                        loaded.append(shortEntry)
+                    }
+                    continue
+                }
                 let masked = mask(sessionId: sessionId, secretName: entry.name, realValue: entry.value)
                 let loadedEntry = LoadedSecret(
                     name: entry.name,
@@ -158,7 +199,12 @@ public final class SecretInjector: @unchecked Sendable {
             }
         }
 
-        let pairs = loaded.map { SecretPair(realValue: $0.realValue, maskedValue: $0.maskedValue) }
+        // Scrubber `pairs` are built from MASKABLE entries only — short
+        // consumables have identity masking, so adding them would scrub
+        // their literal real value out of arbitrary responses.
+        let pairs = loaded
+            .filter { $0.isMaskable }
+            .map { SecretPair(realValue: $0.realValue, maskedValue: $0.maskedValue) }
         setSecretsAndScrubber(secrets: loaded, scrubber: buildScrubber(secrets: pairs))
     }
 
@@ -167,7 +213,11 @@ public final class SecretInjector: @unchecked Sendable {
     /// step before folding in OAuth entries.
     private func loadSecretsKeychainAndEnv() {
         let loaded = loadSecretsKeychainAndEnvSnapshot()
-        let pairs = loaded.map { SecretPair(realValue: $0.realValue, maskedValue: $0.maskedValue) }
+        // Scrubber `pairs` mirror the maskable subset only — see `reload()`
+        // for the rationale.
+        let pairs = loaded
+            .filter { $0.isMaskable }
+            .map { SecretPair(realValue: $0.realValue, maskedValue: $0.maskedValue) }
         setSecretsAndScrubber(secrets: loaded, scrubber: buildScrubber(secrets: pairs))
     }
 
@@ -178,6 +228,27 @@ public final class SecretInjector: @unchecked Sendable {
         // re-parsed the same blob N+1 times.
         var loaded: [LoadedSecret] = []
         for secret in SecretStore.all() {
+            // Mirror the TS minimum-length guard: too-short values must not
+            // be registered as masking patterns (they would collide with
+            // arbitrary outbound bytes and spuriously trigger the cross-
+            // domain forbidden path). They stay CONSUMABLE via the
+            // `isMaskable: false` flag so env injection / `/api/secrets/
+            // masked` still surface them with the literal real value as
+            // their "masked" value (identity masking). Warn by NAME only —
+            // never the value.
+            if secret.value.utf16.count < minMaskableSecretLength {
+                FileHandle.standardError.write(Data(
+                    "[slicc:secrets] secret \"\(secret.name)\" not masked: value shorter than \(minMaskableSecretLength) chars\n".utf8
+                ))
+                loaded.append(LoadedSecret(
+                    name: secret.name,
+                    realValue: secret.value,
+                    maskedValue: secret.value,
+                    domains: secret.domains,
+                    isMaskable: false
+                ))
+                continue
+            }
             let masked = mask(sessionId: sessionId, secretName: secret.name, realValue: secret.value)
             loaded.append(LoadedSecret(
                 name: secret.name,
@@ -189,6 +260,28 @@ public final class SecretInjector: @unchecked Sendable {
 
         // Merge env-file secrets: override existing by name, append new ones
         for secret in _envFileSecrets {
+            if secret.value.utf16.count < minMaskableSecretLength {
+                FileHandle.standardError.write(Data(
+                    "[slicc:secrets] secret \"\(secret.name)\" not masked: value shorter than \(minMaskableSecretLength) chars\n".utf8
+                ))
+                // Env-file override semantics: a too-short env-file entry
+                // replaces any Keychain entry with the same name with a
+                // consumable-only short entry (the user explicitly opted
+                // into the short value).
+                let shortEntry = LoadedSecret(
+                    name: secret.name,
+                    realValue: secret.value,
+                    maskedValue: secret.value,
+                    domains: secret.domains,
+                    isMaskable: false
+                )
+                if let idx = loaded.firstIndex(where: { $0.name == secret.name }) {
+                    loaded[idx] = shortEntry
+                } else {
+                    loaded.append(shortEntry)
+                }
+                continue
+            }
             let masked = mask(sessionId: sessionId, secretName: secret.name, realValue: secret.value)
             let entry = LoadedSecret(
                 name: secret.name,
@@ -253,11 +346,16 @@ public final class SecretInjector: @unchecked Sendable {
         return fresh
     }
 
-    /// Returns true if there are no secrets loaded.
-    var isEmpty: Bool { secrets.isEmpty }
+    /// Returns true when no MASKABLE secrets are loaded. Mirrors the TS
+    /// `hasSecrets()` predicate — controls fetch-proxy scrub/unmask
+    /// short-circuits, which are irrelevant for consumable-only short
+    /// secrets (they never participate in scrub or domain matching).
+    var isEmpty: Bool { secrets.allSatisfy { !$0.isMaskable } }
 
     /// Returns masked environment variables for the agent's shell.
-    /// Each secret becomes `name → maskedValue`.
+    /// Each secret becomes `name → maskedValue`. Short consumables carry
+    /// their literal real value (identity masking) so env injection still
+    /// delivers them.
     var maskedEnvironment: [String: String] {
         var env: [String: String] = [:]
         for s in secrets {
@@ -266,7 +364,10 @@ public final class SecretInjector: @unchecked Sendable {
         return env
     }
 
-    /// Returns masked entries with name, maskedValue, and domains for the /api/secrets/masked endpoint.
+    /// Returns masked entries with name, maskedValue, and domains for the
+    /// `/api/secrets/masked` endpoint. Includes short consumables (identity
+    /// masking) alongside maskable entries so `secret get` and shell env
+    /// injection see both.
     var maskedEntries: [(name: String, maskedValue: String, domains: [String])] {
         secrets.map { (name: $0.name, maskedValue: $0.maskedValue, domains: $0.domains) }
     }
@@ -280,6 +381,11 @@ public final class SecretInjector: @unchecked Sendable {
     func inject(text: String, hostname: String) -> InjectionResult {
         var result = text
         for secret in secrets {
+            // Short consumables are intentionally skipped: their "masked"
+            // value is the literal real value, so a domain check here would
+            // spuriously block outbound traffic that merely happened to
+            // contain the literal short string.
+            guard secret.isMaskable else { continue }
             guard result.contains(secret.maskedValue) else { continue }
             guard isAllowedDomain(patterns: secret.domains, hostname: hostname) else {
                 return .domainBlocked(secretName: secret.name, hostname: hostname)
@@ -298,6 +404,7 @@ public final class SecretInjector: @unchecked Sendable {
     func injectBody(text: String, hostname: String) -> String {
         var result = text
         for secret in secrets {
+            guard secret.isMaskable else { continue }
             guard result.contains(secret.maskedValue) else { continue }
             guard isAllowedDomain(patterns: secret.domains, hostname: hostname) else {
                 // Leave the masked value as-is — do not reject, do not unmask
@@ -356,6 +463,7 @@ public final class SecretInjector: @unchecked Sendable {
         var pass = String(decoded[decoded.index(after: colonIdx)...])
         var touched = false
         for secret in secrets {
+            guard secret.isMaskable else { continue }
             let inUser = user.contains(secret.maskedValue)
             let inPass = pass.contains(secret.maskedValue)
             guard inUser || inPass else { continue }
@@ -406,6 +514,7 @@ public final class SecretInjector: @unchecked Sendable {
         let host = components.host ?? ""
         var touched = false
         for secret in secrets {
+            guard secret.isMaskable else { continue }
             let inUser = user.contains(secret.maskedValue)
             let inPass = pass.contains(secret.maskedValue)
             guard inUser || inPass else { continue }
@@ -451,6 +560,7 @@ public final class SecretInjector: @unchecked Sendable {
     func unmaskBodyBytes(bytes: Data, targetHostname: String) -> Data {
         var out = bytes
         for secret in secrets {
+            guard secret.isMaskable else { continue }
             guard isAllowedDomain(patterns: secret.domains, hostname: targetHostname) else { continue }
             let needle = Data(secret.maskedValue.utf8)
             let replacement = Data(secret.realValue.utf8)
@@ -467,6 +577,12 @@ public final class SecretInjector: @unchecked Sendable {
     func scrubResponseBytes(bytes: Data) -> Data {
         var out = bytes
         for secret in secrets {
+            // Short consumables share real and "masked" values — scrubbing
+            // them here would be both a no-op (they would map to themselves)
+            // and a category error (they were never registered as masking
+            // patterns). Skip them so the byte-safe scrub stays consistent
+            // with `scrub(text:)` (whose scrubber pairs are already filtered).
+            guard secret.isMaskable else { continue }
             let needle = Data(secret.realValue.utf8)
             let replacement = Data(secret.maskedValue.utf8)
             out = replaceAllBytes(in: out, needle: needle, replacement: replacement)
@@ -515,4 +631,3 @@ private func replaceAllBytes(in haystack: Data, needle: Data, replacement: Data)
     }
     return out
 }
-

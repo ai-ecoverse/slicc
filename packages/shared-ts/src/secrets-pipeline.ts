@@ -1,6 +1,7 @@
 import {
   buildScrubber,
   mask as cryptoMask,
+  MIN_MASKABLE_SECRET_LENGTH,
   matchesDomains,
   type SecretPair,
 } from './secret-masking.js';
@@ -115,6 +116,14 @@ export class SecretsPipeline {
   private readonly source: FetchProxySecretSource;
   private readonly sessionStore?: SessionSecretStore;
   private maskedToSecret = new Map<string, MaskedSecret>();
+  // Short secrets (length < MIN_MASKABLE_SECRET_LENGTH) are kept CONSUMABLE
+  // here — env injection and `secret get` still see them — but they are
+  // deliberately absent from `maskedToSecret`, so the scrubber and every
+  // unmask/domain-match loop ignores them. Their "masked" value is the
+  // literal real value (identity masking) so an env-injected $NAME delivers
+  // the actual secret, while the scrubber's masking-pattern set stays
+  // collision-free for short inputs. Keyed by name (one entry per secret).
+  private consumableShortSecrets = new Map<string, MaskedSecret>();
   private scrubber: (text: string) => string = (t) => t;
 
   constructor(opts: SecretsPipelineOpts) {
@@ -131,7 +140,28 @@ export class SecretsPipeline {
     const session = (this.sessionStore?.listAll() ?? []).filter((s) => !persistedNames.has(s.name));
     const merged = [...all, ...session];
     const next = new Map<string, MaskedSecret>();
+    const nextShort = new Map<string, MaskedSecret>();
     for (const s of merged) {
+      // Too-short values must NEVER enter the masked↔real map or the
+      // scrubber `pairs`: a degenerate-length value (e.g. 1 byte) would
+      // collide with arbitrary outbound bytes and produce spurious
+      // cross-domain 403s. They remain CONSUMABLE via the separate
+      // short-secret map so env injection (`secret get`, masked-entries
+      // feed) still delivers the literal value. The warning names the
+      // secret (never its value) so the operator knows it will not be
+      // masked / scrubbed.
+      if (s.value.length < MIN_MASKABLE_SECRET_LENGTH) {
+        console.warn(
+          `[slicc:secrets] secret "${s.name}" not masked: value shorter than ${MIN_MASKABLE_SECRET_LENGTH} chars`
+        );
+        nextShort.set(s.name, {
+          name: s.name,
+          realValue: s.value,
+          maskedValue: s.value,
+          domains: s.domains,
+        });
+        continue;
+      }
       const maskedValue = await cryptoMask(this.sessionId, s.name, s.value);
       next.set(maskedValue, {
         name: s.name,
@@ -141,6 +171,7 @@ export class SecretsPipeline {
       });
     }
     this.maskedToSecret = next;
+    this.consumableShortSecrets = nextShort;
     const pairs: SecretPair[] = Array.from(next.values()).map((ms) => ({
       realValue: ms.realValue,
       maskedValue: ms.maskedValue,
@@ -153,15 +184,25 @@ export class SecretsPipeline {
   }
 
   hasSecrets(): boolean {
+    // Reports the maskable set only — controls fetch-proxy scrub/unmask
+    // short-circuits, which are irrelevant for consumable-only short
+    // secrets (they never participate in scrub or domain matching).
     return this.maskedToSecret.size > 0;
   }
 
   getMaskedEntries(): Array<{ name: string; maskedValue: string; domains: string[] }> {
-    return Array.from(this.maskedToSecret.values()).map((ms) => ({
-      name: ms.name,
-      maskedValue: ms.maskedValue,
-      domains: ms.domains,
-    }));
+    const entries: Array<{ name: string; maskedValue: string; domains: string[] }> = [];
+    for (const ms of this.maskedToSecret.values()) {
+      entries.push({ name: ms.name, maskedValue: ms.maskedValue, domains: ms.domains });
+    }
+    // Short secrets carry their real value as the "masked" value (identity
+    // masking) so env injection delivers the literal secret. They must not
+    // collide with maskable names — `reload()` enforces single-source-of-
+    // truth ordering by writing them in the same pass.
+    for (const ms of this.consumableShortSecrets.values()) {
+      entries.push({ name: ms.name, maskedValue: ms.maskedValue, domains: ms.domains });
+    }
+    return entries;
   }
 
   /**

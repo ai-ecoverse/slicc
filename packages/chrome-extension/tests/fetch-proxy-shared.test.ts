@@ -38,12 +38,12 @@ describe('handleFetchProxyConnection', () => {
       source: {
         get: async () => undefined,
         listAll: async () => [
-          { name: 'GITHUB_TOKEN', value: 'ghp_real', domains: ['api.github.com'] },
+          { name: 'GITHUB_TOKEN', value: 'ghp_realtoken', domains: ['api.github.com'] },
         ],
       },
     });
     await pipeline.reload();
-    masked = await pipeline.maskOne('GITHUB_TOKEN', 'ghp_real');
+    masked = await pipeline.maskOne('GITHUB_TOKEN', 'ghp_realtoken');
   });
 
   it('streams a multi-chunk response back and ends with response-end', async () => {
@@ -151,7 +151,7 @@ describe('handleFetchProxyConnection', () => {
       headers: { authorization: `Bearer ${masked}` },
     });
     await new Promise((r) => setTimeout(r, 10));
-    expect(JSON.stringify(posts)).not.toContain('ghp_real');
+    expect(JSON.stringify(posts)).not.toContain('ghp_realtoken');
   });
 
   it('URL with masked cred for allowed domain → synthetic Authorization header', async () => {
@@ -181,7 +181,7 @@ describe('handleFetchProxyConnection', () => {
     const basicMatch = /^Basic (.+)$/.exec(fetchHeaders?.authorization || '');
     expect(basicMatch).toBeDefined();
     const decoded = atob(basicMatch![1]);
-    expect(decoded).toBe('x-access-token:ghp_real');
+    expect(decoded).toBe('x-access-token:ghp_realtoken');
 
     expect(posts[0]).toMatchObject({ type: 'response-head', status: 200 });
   });

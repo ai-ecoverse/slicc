@@ -85,29 +85,57 @@ final class SecretMaskingTests: XCTestCase {
     }
 
     func testScrubberMultipleOccurrences() {
-        let scrub = buildScrubber(secrets: [SecretPair(realValue: "abc", maskedValue: "xyz")])
-        XCTAssertEqual(scrub("abc and abc"), "xyz and xyz")
+        let scrub = buildScrubber(secrets: [SecretPair(realValue: "abcdefghi", maskedValue: "xyz123456")])
+        XCTAssertEqual(scrub("abcdefghi and abcdefghi"), "xyz123456 and xyz123456")
     }
 
     func testScrubberMultipleSecrets() {
         let scrub = buildScrubber(secrets: [
-            SecretPair(realValue: "secret1", maskedValue: "mask_1"),
-            SecretPair(realValue: "secret2", maskedValue: "mask_2"),
+            SecretPair(realValue: "secret001", maskedValue: "mask_0001"),
+            SecretPair(realValue: "secret002", maskedValue: "mask_0002"),
         ])
-        XCTAssertEqual(scrub("secret1 and secret2"), "mask_1 and mask_2")
+        XCTAssertEqual(scrub("secret001 and secret002"), "mask_0001 and mask_0002")
     }
 
     func testScrubberLongestMatchFirst() {
         let scrub = buildScrubber(secrets: [
-            SecretPair(realValue: "sec", maskedValue: "XX"),
-            SecretPair(realValue: "secret", maskedValue: "YYYYYY"),
+            SecretPair(realValue: "secret-aa", maskedValue: "XXXXXXXXX"),
+            SecretPair(realValue: "secret-aaaa", maskedValue: "YYYYYYYYYYY"),
         ])
-        XCTAssertEqual(scrub("my secret key"), "my YYYYYY key")
+        XCTAssertEqual(scrub("my secret-aaaa key"), "my YYYYYYYYYYY key")
     }
 
     func testScrubberEmptySecrets() {
         let scrub = buildScrubber(secrets: [])
         XCTAssertEqual(scrub("hello"), "hello")
+    }
+
+    // MARK: - minMaskableSecretLength guard (parity with @slicc/shared-ts)
+
+    func testMinMaskableSecretLengthIsNine() {
+        XCTAssertEqual(minMaskableSecretLength, 9)
+    }
+
+    func testScrubberSkipsValueShorterThanMinimum() {
+        // 8-char value must NOT be replaced
+        let eight = "abcdefgh"
+        let scrub = buildScrubber(secrets: [SecretPair(realValue: eight, maskedValue: "MASKED88")])
+        XCTAssertEqual(scrub("hello \(eight) world"), "hello \(eight) world")
+    }
+
+    func testScrubberKeepsValueAtMinimumLength() {
+        // 9-char value masks normally
+        let nine = "abcdefghi"
+        let scrub = buildScrubber(secrets: [SecretPair(realValue: nine, maskedValue: "MASKED999")])
+        XCTAssertEqual(scrub("hello \(nine) world"), "hello MASKED999 world")
+    }
+
+    func testScrubberBoundaryMixedShortAndLong() {
+        let scrub = buildScrubber(secrets: [
+            SecretPair(realValue: "short78", maskedValue: "mask7777"), // 7 chars — skipped
+            SecretPair(realValue: "longSecret123", maskedValue: "longMasked123"), // 13 — kept
+        ])
+        XCTAssertEqual(scrub("short78 and longSecret123"), "short78 and longMasked123")
     }
 
     // MARK: - domainMatches()

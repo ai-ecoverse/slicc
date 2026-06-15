@@ -73,7 +73,7 @@ final class SessionPersistenceTests: XCTestCase {
 
         let envSecret = Secret(
             name: "TRIPWIRE_SESSION_\(UUID().uuidString.prefix(8))",
-            value: "ghp_real",
+            value: "ghp_realtoken",
             domains: ["api.github.com"]
         )
         let a = SecretInjector(sessionId: sid1, envFileSecrets: [envSecret])
