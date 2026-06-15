@@ -8,6 +8,7 @@
  */
 
 import type { BrowserAPI, CDPTransport } from '../../cdp/index.js';
+import { installPageStorageSync } from '../../kernel/page-storage-sync.js';
 import { spawnKernelWorker } from '../../kernel/spawn.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
 import type { RegisteredScoop, ThinkingLevel } from '../../scoops/types.js';
@@ -1173,6 +1174,7 @@ export async function mountWcUiLive(
     instanceId,
     callbacks: createWcLiveCallbacks(boot.wiring),
   });
+  installPageStorageSync({ send: (m) => host.client.sendRaw(m) });
   attachWcClient(boot, host.client, log, {
     instanceId,
     standalone: {
