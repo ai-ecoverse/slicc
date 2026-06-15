@@ -31,9 +31,10 @@ const SIDEBAR_TAG = 'slicc-electron-sidebar';
 const STORAGE_KEY = 'slicc-electron-overlay-launcher-corner';
 
 // Map-backed localStorage stub. The webapp vitest project does not provide
-// a writable jsdom localStorage out of the box (see api-key-dialog.test.ts
-// for the same pattern); install one before every test so the persisted-
-// corner branches in `electron-overlay.ts` get exercised.
+// a writable jsdom localStorage out of the box, so install a simple
+// Map-backed shim before every test (getItem/setItem/removeItem/clear/length/
+// key) and assign it to `globalThis.localStorage` so the persisted-corner
+// branches in `electron-overlay.ts` get exercised.
 const storage = new Map<string, string>();
 const mockStorage = {
   getItem: (key: string) => storage.get(key) ?? null,
