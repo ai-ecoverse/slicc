@@ -90,10 +90,25 @@ slicc-composer .slicc-composer__ptt {
   cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
+  /* Touch ergonomics: the overlay covers the whole footer once a hold has
+     engaged, so swallow the gesture here — no scroll-pan stealing the hold,
+     no iOS long-press callout / selection menu on top of the recording UI. */
+  touch-action: none;
+  -webkit-touch-callout: none;
   color: var(--ink);
   background: color-mix(in srgb, var(--ctx) 22%, color-mix(in srgb, var(--bg) 82%, transparent));
   backdrop-filter: blur(10px) saturate(1.4);
   -webkit-backdrop-filter: blur(10px) saturate(1.4);
+}
+/* While a press is armed (set on pointerdown, cleared on release/cancel), the
+   active textarea also opts out of touch-scroll panning + the iOS long-press
+   selection callout so a hold engages cleanly. Scoped to the armed window so
+   the resting textarea keeps native scrolling and selection. */
+slicc-composer[data-ptt-pressed] textarea {
+  touch-action: none;
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 slicc-composer .slicc-composer__ptt-microw {
   display: flex;
@@ -421,6 +436,8 @@ export class SliccComposer extends HTMLElement {
   #token = 0;
   /** The textarea the active gesture started on (the dictation target). */
   #target: HTMLTextAreaElement | null = null;
+  /** The pointerId of the active press (for capture + multi-pointer filtering). */
+  #pointerId: number | null = null;
   /** The live dictation session while recording. */
   #session: SpeechSession | null = null;
   /** Injected (or lazily-created builtin) speech controller. */
@@ -453,11 +470,14 @@ export class SliccComposer extends HTMLElement {
     this.#build();
     // Delegate the walkie-talkie gesture from the host so it works for whatever
     // textarea the slotted input card renders (light DOM is reachable here).
-    this.addEventListener('mousedown', this.#onMouseDown);
+    // Pointer Events unify mouse + touch + pen and fire once (no synthetic
+    // 300ms mouse double-fire on mobile), so a single listener covers all
+    // input modalities.
+    this.addEventListener('pointerdown', this.#onPointerDown);
   }
 
   disconnectedCallback(): void {
-    this.removeEventListener('mousedown', this.#onMouseDown);
+    this.removeEventListener('pointerdown', this.#onPointerDown);
     // Tear down a gesture in flight so a detach never strands the overlay or
     // its document-level listeners.
     this.#session?.cancel();
@@ -465,6 +485,7 @@ export class SliccComposer extends HTMLElement {
     this.#pressed = false;
     this.#target = null;
     this.#token++;
+    this.#releasePointerCapture();
     this.#clearEngageTimer();
     if (this.#enableTimer) clearTimeout(this.#enableTimer);
     this.#enableTimer = null;
@@ -561,10 +582,15 @@ export class SliccComposer extends HTMLElement {
    * Begin the push-to-talk gesture: pressing a slotted textarea arms the
    * permission-staged hold. No `preventDefault` — a quick press-release keeps
    * its native caret placement (and an empty transcript never submits), so
-   * clicking to type is unaffected.
+   * tapping to type is unaffected on every input modality (mouse, touch, pen).
+   *
+   * Gated to the PRIMARY pointer (`isPrimary`) so a second touch finger doesn't
+   * try to stack a press. The primary-button guard (`button === 0`) is safe for
+   * touch/pen too — both report button 0 on a primary press.
    */
-  #onMouseDown = (e: MouseEvent): void => {
+  #onPointerDown = (e: PointerEvent): void => {
     if (!this.hasAttribute('ptt')) return;
+    if (!e.isPrimary) return;
     if (this.#pressed || e.button !== 0) return;
     // A finalize/picking overlay is still settling — don't stack a new press.
     if (this.#stage === 'finalizing' || this.#stage === 'picking') return;
@@ -575,11 +601,27 @@ export class SliccComposer extends HTMLElement {
     this.#pressed = true;
     this.#token++;
     this.#target = ta;
-    const doc = this.ownerDocument;
-    doc.addEventListener('mouseup', this.#onDocMouseUp);
-    this.addEventListener('mouseleave', this.#onMouseLeave);
+    this.#pointerId = e.pointerId;
+    // Capture the pointer on the host so the release `pointerup` is delivered
+    // here even if the finger drifts off the textarea (or off the host). This
+    // is the primary stuck-state guard for touch — pointer capture is the
+    // mechanism, `pointercancel` covers the system-interrupt cases. In
+    // synthetic test envs the underlying pointer doesn't exist and the call
+    // throws; the doc-level `pointerup` listener still ends the gesture.
+    try {
+      this.setPointerCapture(e.pointerId);
+    } catch {
+      /* no real pointer (synthetic event / unsupported) — capture is best-effort */
+    }
+    // Marker attribute scoping the touch-action / iOS callout suppression to
+    // the active hold (see the STYLE block). Cleared when the press releases.
+    this.setAttribute('data-ptt-pressed', '');
 
-    // Defer the press lifecycle so a pure click (released within the engage
+    const doc = this.ownerDocument;
+    doc.addEventListener('pointerup', this.#onDocPointerUp);
+    this.addEventListener('pointercancel', this.#onPointerCancel);
+
+    // Defer the press lifecycle so a pure tap (released within the engage
     // window) never flashes the overlay nor touches the speech controller.
     const engageToken = this.#token;
     this.#engageTimer = setTimeout(() => {
@@ -706,8 +748,11 @@ export class SliccComposer extends HTMLElement {
   }
 
   /** A release anywhere ends the gesture; over the mic picker it opens it. */
-  #onDocMouseUp = (e: MouseEvent): void => {
+  #onDocPointerUp = (e: PointerEvent): void => {
     if (!this.#pressed) return;
+    // Filter unrelated pointers (a non-primary touch finger releasing while
+    // the captured primary press is still active).
+    if (this.#pointerId != null && e.pointerId !== this.#pointerId) return;
     if (
       this.#stage === 'recording' &&
       this.#deviceWrap &&
@@ -716,6 +761,7 @@ export class SliccComposer extends HTMLElement {
     ) {
       // Release over the picker: the user wants a different mic, not a send.
       this.#pressed = false;
+      this.#releasePointerCapture();
       this.#removePressListeners();
       this.#session?.cancel();
       this.#session = null;
@@ -727,11 +773,15 @@ export class SliccComposer extends HTMLElement {
   };
 
   /**
-   * The pointer left the host mid-press: tear down WITHOUT inserting. This is
-   * the stuck-state guard — a release outside the host no longer reaches us
-   * once the press is cancelled here.
+   * The active pointer was cancelled by the system mid-press (touch interrupted
+   * by a scroll/system gesture, captured pointer lost). Tear down WITHOUT
+   * inserting — equivalent to the previous `mouseleave` cancel path. The
+   * "pointer left the host" stuck-state guard is now handled by pointer capture
+   * (the host keeps receiving pointer events even when the finger drifts off),
+   * so a dedicated `pointerleave` listener is intentionally not bound.
    */
-  #onMouseLeave = (): void => {
+  #onPointerCancel = (e: PointerEvent): void => {
+    if (this.#pointerId != null && e.pointerId !== this.#pointerId) return;
     this.#endPress(false);
   };
 
@@ -748,6 +798,7 @@ export class SliccComposer extends HTMLElement {
     // A release within the engage window cancels the deferred lifecycle so
     // #beginPress never runs for this press (stage stays 'idle' below).
     this.#clearEngageTimer();
+    this.#releasePointerCapture();
     this.#removePressListeners();
 
     switch (this.#stage) {
@@ -856,8 +907,21 @@ export class SliccComposer extends HTMLElement {
   }
 
   #removePressListeners(): void {
-    this.ownerDocument.removeEventListener('mouseup', this.#onDocMouseUp);
-    this.removeEventListener('mouseleave', this.#onMouseLeave);
+    this.ownerDocument.removeEventListener('pointerup', this.#onDocPointerUp);
+    this.removeEventListener('pointercancel', this.#onPointerCancel);
+  }
+
+  /** Release the captured primary pointer and clear the armed marker. */
+  #releasePointerCapture(): void {
+    const id = this.#pointerId;
+    this.#pointerId = null;
+    this.removeAttribute('data-ptt-pressed');
+    if (id == null) return;
+    try {
+      this.releasePointerCapture(id);
+    } catch {
+      /* not captured (release races teardown, or capture never took) */
+    }
   }
 
   // ── Device picking ────────────────────────────────────────────────
@@ -870,7 +934,7 @@ export class SliccComposer extends HTMLElement {
     if (this.#captionEl) this.#captionEl.hidden = true;
     this.#openDeviceMenu();
     const doc = this.ownerDocument;
-    doc.addEventListener('mousedown', this.#onPickingDocDown, true);
+    doc.addEventListener('pointerdown', this.#onPickingDocDown, true);
     doc.addEventListener('keydown', this.#onPickingKey, true);
   }
 
@@ -906,7 +970,7 @@ export class SliccComposer extends HTMLElement {
     focusRow?.focus();
   }
 
-  #onPickingDocDown = (e: MouseEvent): void => {
+  #onPickingDocDown = (e: PointerEvent): void => {
     if (this.#deviceWrap && e.composedPath().includes(this.#deviceWrap)) return;
     this.#exitPicking();
   };
@@ -920,7 +984,7 @@ export class SliccComposer extends HTMLElement {
 
   #removePickingListeners(): void {
     const doc = this.ownerDocument;
-    doc.removeEventListener('mousedown', this.#onPickingDocDown, true);
+    doc.removeEventListener('pointerdown', this.#onPickingDocDown, true);
     doc.removeEventListener('keydown', this.#onPickingKey, true);
   }
 
@@ -1092,8 +1156,8 @@ export class SliccComposer extends HTMLElement {
       },
       iconEl('chevron-down', { size: 12 })
     );
-    // Keep picker clicks from reading as overlay interactions.
-    toggle.addEventListener('mousedown', (e) => e.stopPropagation());
+    // Keep picker presses from reading as overlay interactions.
+    toggle.addEventListener('pointerdown', (e) => e.stopPropagation());
     wrap.replaceChildren(toggle);
     wrap.hidden = false;
   }
