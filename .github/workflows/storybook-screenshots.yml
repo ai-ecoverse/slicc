@@ -85,10 +85,9 @@ jobs:
         run: |
           set -euo pipefail
           node packages/dev-tools/tools/storybook-affected-screenshots.mjs \
-            --changed-files .storybook-screenshots/changed-files.txt \
-            --storybook-static packages/webcomponents/storybook-static \
-            --output .storybook-screenshots/out \
-            --manifest .storybook-screenshots/out/manifest.json
+            --changed-files=.storybook-screenshots/changed-files.txt \
+            --storybook-static=packages/webcomponents/storybook-static \
+            --out=.storybook-screenshots/out
 
       - name: Check upload mode
         id: mode
@@ -114,10 +113,10 @@ jobs:
             exit 0
           fi
           PREFIX="pr-${PR_NUMBER}/${HEAD_SHA}"
-          # Extract { file } values from every story.screenshots[] entry.
+          # Extract { file } values from every manifest.shots[] entry.
           FILES=$(node -e '
             const m = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-            for (const s of m.stories || []) for (const shot of s.screenshots || []) console.log(shot.file);
+            for (const shot of m.shots || []) console.log(shot.file);
           ' "$MANIFEST")
           if [ -z "$FILES" ]; then
             echo "No screenshots to upload (zero affected stories)."
@@ -169,42 +168,66 @@ jobs:
               core.warning(`Could not read manifest at ${manifestPath}: ${err.message}`);
             }
 
-            const stories = (manifest && Array.isArray(manifest.stories)) ? manifest.stories : [];
+            const shots = manifest && Array.isArray(manifest.shots) ? manifest.shots : [];
+            // Group flat shots[] by storyId so each story gets one section with
+            // light+dark side-by-side. Order = first-seen storyId in manifest.
+            const storiesById = new Map();
+            for (const shot of shots) {
+              if (!storiesById.has(shot.storyId)) {
+                storiesById.set(shot.storyId, {
+                  storyId: shot.storyId,
+                  title: shot.title,
+                  name: shot.name,
+                  area: shot.area,
+                  byTheme: {},
+                });
+              }
+              storiesById.get(shot.storyId).byTheme[shot.theme] = shot.file;
+            }
+            const stories = Array.from(storiesById.values());
             const lines = [];
             lines.push(MARKER);
             lines.push('## 📸 Storybook screenshots');
             lines.push('');
-            lines.push(`Commit \`${shortSha}\` · ${stories.length} affected ${stories.length === 1 ? 'story' : 'stories'}`);
+            lines.push(
+              `Commit \`${shortSha}\` · ${stories.length} affected ${stories.length === 1 ? 'story' : 'stories'}`
+            );
             lines.push('');
 
             if (mode !== 'r2') {
-              lines.push(`> ℹ️ R2 upload skipped (no \`CLOUDFLARE_API_TOKEN\` available — typical for fork PRs).`);
+              lines.push(
+                `> ℹ️ R2 upload skipped (no \`CLOUDFLARE_API_TOKEN\` available — typical for fork PRs).`
+              );
               lines.push(`> Download the PNGs from the [workflow run artifacts](${runUrl}).`);
               lines.push('');
             }
 
-            if (stories.length === 0) {
+            if (shots.length === 0) {
               lines.push('_No affected stories detected for the changed files._');
             } else {
               for (const story of stories) {
-                const title = `${story.title || story.area || ''} — ${story.name || story.id}`.replace(/^ — /, '');
+                const title = `${story.title || story.area || ''} — ${story.name || story.storyId}`.replace(
+                  /^ — /,
+                  ''
+                );
                 lines.push(`### ${title.trim()}`);
                 lines.push('');
-                lines.push(`<sub>\`${story.id}\`</sub>`);
+                lines.push(`<sub>\`${story.storyId}\`</sub>`);
                 lines.push('');
                 if (mode === 'r2') {
                   lines.push('| Light | Dark |');
                   lines.push('| --- | --- |');
-                  const byTheme = Object.fromEntries((story.screenshots || []).map((s) => [s.theme, s.file]));
                   const cell = (theme) => {
-                    const file = byTheme[theme];
+                    const file = story.byTheme[theme];
                     if (!file) return '_(missing)_';
                     const url = `${baseUrl}/pr-${prNumber}/${sha}/${file}`;
-                    return `<img src="${url}" alt="${story.id} (${theme})" width="360">`;
+                    return `<img src="${url}" alt="${story.storyId} (${theme})" width="360">`;
                   };
                   lines.push(`| ${cell('light')} | ${cell('dark')} |`);
                 } else {
-                  const files = (story.screenshots || []).map((s) => `\`${s.file}\` (${s.theme})`).join(', ');
+                  const files = Object.entries(story.byTheme)
+                    .map(([theme, file]) => `\`${file}\` (${theme})`)
+                    .join(', ');
                   lines.push(`Screenshots in artifact: ${files || '_(none)_'}`);
                 }
                 lines.push('');
