@@ -240,8 +240,9 @@ Every change must satisfy **tests**, **docs**, and **verification**.
     nightly coverage ratchet
     (`packages/dev-tools/tools/coverage-ratchet.mjs` →
     `.github/workflows/coverage-ratchet.yml`), which only ever raises floors
-    toward measured coverage (whole-point steps, <1% headroom) and opens a
-    PR when anything changed. Never hand-lower these values.
+    toward measured coverage (whole-point steps, ~0.5-1.5pp headroom via a
+    half-point safety margin) and opens a PR when anything changed. Never
+    hand-lower these values.
   - **TypeScript packages**: `vitest --coverage` (v8 provider) via
     `npm run test:coverage:<package>`, which runs `coverage-gate.mjs` to read
     the package's floors from `coverage-thresholds.json`. CI runs the same

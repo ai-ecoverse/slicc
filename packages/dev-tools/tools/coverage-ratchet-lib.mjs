@@ -14,12 +14,18 @@ export const thresholdsPath = resolve(repoRoot, 'coverage-thresholds.json');
 export const TS_METRICS = ['lines', 'statements', 'functions', 'branches'];
 export const SWIFT_METRICS = ['lines', 'functions', 'regions'];
 
+// Half-point safety margin subtracted before flooring, so a measurement
+// like 63.06% won't ratchet a floor to 63 (which a 0.1pp jitter on the
+// next run could miss). With MARGIN = 0.5 the effective headroom below
+// measured coverage is ~0.5-1.5pp. See PR #1015's webapp branches miss
+// (62 -> 63 set with only 0.06pp headroom, failed CI next run).
+export const MARGIN = 0.5;
+
 // A floor only ever moves up, and it tracks the integer part of the
-// measured percentage. Flooring to an integer keeps headroom strictly
-// below one percentage point while making each ratchet step a clean,
-// reviewable >=1pp bump (sub-1pp drift can never raise an integer floor).
+// measured percentage minus MARGIN. Each ratchet step is still a clean,
+// reviewable whole-point bump.
 export function nextFloor(currentFloor, actualPct) {
-  const candidate = Math.floor(actualPct);
+  const candidate = Math.floor(actualPct - MARGIN);
   const current = typeof currentFloor === 'number' ? currentFloor : 0;
   return Math.max(current, candidate);
 }
