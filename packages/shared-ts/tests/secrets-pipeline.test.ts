@@ -268,7 +268,7 @@ describe('SecretsPipeline minimum-length guard', () => {
     expect(MIN_MASKABLE_SECRET_LENGTH).toBe(9);
   });
 
-  it('does NOT register an 8-char value as a masked entry and emits a warning naming the secret (not the value)', async () => {
+  it('keeps an 8-char value CONSUMABLE (identity-masked entry) while emitting a warning naming the secret (not the value)', async () => {
     const pipeline = new SecretsPipeline({
       sessionId: 'session-fixed',
       source: source([
@@ -277,8 +277,19 @@ describe('SecretsPipeline minimum-length guard', () => {
     });
     await pipeline.reload();
 
+    // hasSecrets() reports the MASKABLE set only — short secrets are not
+    // part of scrub/unmask work, so this stays false.
     expect(pipeline.hasSecrets()).toBe(false);
-    expect(pipeline.getMaskedEntries()).toHaveLength(0);
+
+    // …but the entry IS surfaced for env injection / `secret get`, with the
+    // literal real value as its "masked" value (identity masking).
+    const entries = pipeline.getMaskedEntries();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toEqual({
+      name: 'SHORT_TOKEN',
+      maskedValue: 'eightCHR',
+      domains: ['api.github.com'],
+    });
 
     // Warning fired exactly once and names the secret without leaking the value
     expect(warnSpy).toHaveBeenCalledTimes(1);
@@ -329,7 +340,7 @@ describe('SecretsPipeline minimum-length guard', () => {
     });
   });
 
-  it('mixed batch: 8-char is skipped (with warning), 9-char is kept', async () => {
+  it('mixed batch: 8-char is consumable-only (with warning), 9-char is fully masked', async () => {
     const pipeline = new SecretsPipeline({
       sessionId: 'session-fixed',
       source: source([
@@ -340,8 +351,19 @@ describe('SecretsPipeline minimum-length guard', () => {
     await pipeline.reload();
 
     const entries = pipeline.getMaskedEntries();
-    expect(entries).toHaveLength(1);
-    expect(entries[0].name).toBe('LONG_TOKEN');
+    expect(entries).toHaveLength(2);
+    const byName = Object.fromEntries(entries.map((e) => [e.name, e]));
+    // Long secret carries an HMAC-derived masked value (not the raw secret).
+    expect(byName.LONG_TOKEN.maskedValue).toMatch(/^ghp_[a-f0-9]+$/);
+    expect(byName.LONG_TOKEN.maskedValue).not.toBe('ghp_real9');
+    // Short secret is identity-masked (env injection delivers the literal).
+    expect(byName.SHORT_TOKEN.maskedValue).toBe('12345678');
+
+    // Scrubber still scrubs the long secret's real value, but leaves the
+    // short secret's raw bytes alone (it's not a masking pattern).
+    expect(pipeline.scrubResponse('a=ghp_real9 b=12345678 end')).toBe(
+      `a=${byName.LONG_TOKEN.maskedValue} b=12345678 end`
+    );
 
     expect(warnSpy).toHaveBeenCalledTimes(1);
     const msg = String(warnSpy.mock.calls[0][0]);
