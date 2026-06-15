@@ -29,6 +29,14 @@ export interface PeekRecord {
   domains: string[];
 }
 
+/** Result of {@link SecretBackend.delete}. */
+export interface DeleteResult {
+  /** Whether the secret existed before the call. */
+  removed: boolean;
+  /** When set, the secret was in the session store; otherwise the persisted store. */
+  fromSession?: boolean;
+}
+
 /** The trusted-realm operations the `secret` command depends on. */
 export interface SecretBackend {
   list(): Promise<SecretRecord[]>;
@@ -38,6 +46,12 @@ export interface SecretBackend {
   setSession(name: string, value: string, domains: string[]): Promise<void>;
   setPersisted(name: string, value: string, domains: string[]): Promise<void>;
   setScope(name: string, domains: string[]): Promise<void>;
+  /**
+   * Remove a secret from the active backend, including its `_DOMAINS` companion.
+   * Triggers a masking-pipeline reload so the change takes effect without a
+   * restart. Returns `{ removed: false }` when no secret with that name existed.
+   */
+  delete(name: string): Promise<DeleteResult>;
 }
 
 function swSendMessage<T>(msg: Record<string, unknown>): Promise<T> {
@@ -109,6 +123,16 @@ export function createCliSecretBackend(): SecretBackend {
       const { ok, data } = await apiCall('POST', '/scope', { name, domains });
       if (!ok) throw new Error(errOf(data) ?? 'failed to update scope');
     },
+    async delete(name) {
+      const { ok, status, data } = await apiCall('DELETE', `/${encodeURIComponent(name)}`);
+      if (status === 404) return { removed: false };
+      if (!ok) throw new Error(errOf(data) ?? 'failed to delete secret');
+      const fromSession =
+        data && typeof data === 'object' && 'fromSession' in data
+          ? Boolean((data as { fromSession?: unknown }).fromSession)
+          : undefined;
+      return { removed: true, fromSession };
+    },
   };
 }
 
@@ -171,6 +195,20 @@ export function createExtensionSecretBackend(): SecretBackend {
         domains,
       });
       if (!resp?.ok) throw new Error(resp?.error ?? 'secrets.set-domains failed');
+    },
+    async delete(name) {
+      const resp = await swSendMessage<{
+        ok?: boolean;
+        removed?: boolean;
+        fromSession?: boolean;
+        error?: string;
+      }>({ type: 'secrets.delete', name });
+      if (!resp?.ok) throw new Error(resp?.error ?? 'secrets.delete failed');
+      // Older SWs return `{ ok: true }` with no `removed` field. Treat that as
+      // best-effort "removed" so the shell still reports success — same end
+      // state as the request requested.
+      const removed = resp.removed ?? true;
+      return { removed, fromSession: resp.fromSession };
     },
   };
 }

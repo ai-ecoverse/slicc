@@ -260,22 +260,36 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
 
   it('secrets.delete removes both name and name_DOMAINS', async () => {
     await import('../src/service-worker.js');
-    let response: any;
-    let kept = false;
-    for (const l of messageListeners) {
-      const result = l({ type: 'secrets.delete', name: 'GITHUB_TOKEN' }, {}, (r: any) => {
-        response = r;
-      });
-      if (result === true) {
-        kept = true;
-        break;
-      }
-    }
-    expect(kept).toBe(true);
-    await new Promise((r) => setTimeout(r, 10));
-    expect(response).toEqual({ ok: true });
+    const response = await dispatch({ type: 'secrets.delete', name: 'GITHUB_TOKEN' });
+    expect(response).toEqual({ ok: true, removed: true, fromSession: false });
     expect(storageMap.GITHUB_TOKEN).toBeUndefined();
     expect(storageMap.GITHUB_TOKEN_DOMAINS).toBeUndefined();
+  });
+
+  it('secrets.delete prefers the session store when both stores hold the name', async () => {
+    await import('../src/service-worker.js');
+    // Seed a session secret that shadows a persisted name; delete must remove
+    // the session entry first (mirrors the node-server endpoint precedence).
+    await dispatch({
+      type: 'secrets.session.set',
+      name: 'GITHUB_TOKEN',
+      value: 'session-val',
+      domains: ['api.github.com'],
+    });
+    const response = await dispatch({ type: 'secrets.delete', name: 'GITHUB_TOKEN' });
+    expect(response).toEqual({ ok: true, removed: true, fromSession: true });
+    // Persisted entry must remain after the session-only deletion.
+    expect(storageMap.GITHUB_TOKEN).toBe('ghp_real');
+    expect(storageMap.GITHUB_TOKEN_DOMAINS).toBe('api.github.com');
+    // The session list is now empty for that name.
+    const list = await dispatch({ type: 'secrets.session.list' });
+    expect(list.entries).toEqual([]);
+  });
+
+  it('secrets.delete reports removed:false for an unknown name', async () => {
+    await import('../src/service-worker.js');
+    const response = await dispatch({ type: 'secrets.delete', name: 'NO_SUCH_KEY' });
+    expect(response).toEqual({ ok: true, removed: false });
   });
 
   async function dispatch(msg: any): Promise<any> {

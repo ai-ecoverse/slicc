@@ -72,7 +72,7 @@ final class SecretAPIRoutesTests: XCTestCase {
         }
     }
 
-    func testDeleteSecretRouteIsRemoved() async throws {
+    func testDeleteSecretRemovesEntryFromKeychainBlob() async throws {
         let name = secretName("DEL_TOK")
         try SecretStore.set(name: name, value: "val", domains: ["x.com"])
 
@@ -83,8 +83,39 @@ final class SecretAPIRoutesTests: XCTestCase {
             let app = Application(responder: router.buildResponder())
             try await app.test(.router) { client in
                 try await client.execute(uri: "/api/secrets/\(name)", method: .delete) { response in
-                    // Route no longer exists — expect 404
+                    XCTAssertEqual(response.status, .ok)
+                    let obj = try self.decodeJSONObject(from: response.body)
+                    if case .bool(let ok) = obj["ok"] ?? .null {
+                        XCTAssertTrue(ok)
+                    } else {
+                        XCTFail("Expected ok: true")
+                    }
+                    XCTAssertEqual(obj["name"]?.stringValue, name)
+                    if case .bool(let fromSession) = obj["fromSession"] ?? .null {
+                        XCTAssertFalse(fromSession)
+                    } else {
+                        XCTFail("Expected fromSession: false")
+                    }
+                }
+                // Entry must be gone after the delete.
+                XCTAssertNil(SecretStore.get(name: name))
+            }
+        }
+    }
+
+    func testDeleteSecretReturnsNotFoundForUnknownName() async throws {
+        let name = secretName("DEL_MISS")
+
+        try await withHTTPClient { httpClient in
+            let router = Router()
+            registerAPIRoutes(router: router, lickSystem: LickSystem(), config: self.makeConfig(), httpClient: httpClient)
+
+            let app = Application(responder: router.buildResponder())
+            try await app.test(.router) { client in
+                try await client.execute(uri: "/api/secrets/\(name)", method: .delete) { response in
                     XCTAssertEqual(response.status, .notFound)
+                    let obj = try self.decodeJSONObject(from: response.body)
+                    XCTAssertNotNil(obj["error"]?.stringValue)
                 }
             }
         }

@@ -238,6 +238,31 @@ func registerAPIRoutes(
         return try jsonResponse(.array(items))
     }
 
+    // Persisted delete — remove a named secret (and its _DOMAINS companion)
+    // from the Keychain blob and reload the masking pipeline so the change
+    // takes effect without a restart. 404 when no secret with that name
+    // exists. Mirrors `DELETE /api/secrets/:name` in node-server.
+    router.delete("/api/secrets/:name") { _, context in
+        let name = context.parameters.get("name") ?? ""
+        guard !name.isEmpty else {
+            return try jsonErrorResponse(status: .badRequest, message: "Missing required field: name")
+        }
+        guard SecretStore.get(name: name) != nil else {
+            return try jsonErrorResponse(status: .notFound, message: "no secret named \"\(name)\"")
+        }
+        do {
+            try SecretStore.delete(name: name)
+        } catch {
+            return try jsonErrorResponse(status: .internalServerError, message: errorMessage(error))
+        }
+        await secretInjector.reload()
+        return try jsonResponse(.object([
+            "ok": .bool(true),
+            "name": .string(name),
+            "fromSession": .bool(false),
+        ]))
+    }
+
     // Masked secrets endpoint — returns name + maskedValue + domains for shell env population.
     // The browser fetches this at shell init to populate env vars with masked values.
     // Real values are never exposed; only deterministic session-scoped masks.

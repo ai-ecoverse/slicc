@@ -1,10 +1,10 @@
 import { isAllowedDomain } from '@slicc/shared-ts';
-import type { Command } from 'just-bash';
+import type { Command, CommandContext, ExecResult } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { isValidShellEnvName } from '../../core/secret-env.js';
 import { createSudoBroker } from '../../sudo/index.js';
 import type { SudoBroker } from '../../sudo/types.js';
-import { stdinAsText } from '../just-bash-compat.js';
+import { type ByteString, stdinAsText } from '../just-bash-compat.js';
 import { commandGlobToRegExp } from '../sudo/sudoers.js';
 import { createDefaultSecretBackend, type SecretBackend } from './secret-backends.js';
 
@@ -29,7 +29,10 @@ Requires approval (native prompt; deny blocks the change):
   secret scope <name> --domain <pat>           Edit allowed host/domain scope.
 
 Other:
-  secret delete <name>                         Remove a secret (or show how).
+  secret delete <name>                         Remove a secret (session or
+  secret rm <name>                             persisted) and its _DOMAINS
+                                               entry; reloads the masking
+                                               pipeline.
   secret edit                                  Open the Mount Secrets options page
                                                (extension) or print the env path.
 
@@ -48,27 +51,6 @@ Examples:
 
 function isExtensionContext(): boolean {
   return typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
-}
-
-function swSendMessage<T>(msg: Record<string, unknown>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(msg, (response: unknown) => {
-      const err = chrome.runtime.lastError;
-      if (err) {
-        reject(new Error(err.message ?? 'chrome.runtime.lastError'));
-        return;
-      }
-      resolve(response as T);
-    });
-  });
-}
-
-async function deleteFromStorage(name: string): Promise<void> {
-  const resp = await swSendMessage<{ ok?: boolean; error?: string }>({
-    type: 'secrets.delete',
-    name,
-  });
-  if (!resp?.ok) throw new Error(resp?.error ?? 'secrets.delete failed');
 }
 
 function parseDomainFlag(args: string[]): string[] | null {
@@ -137,7 +119,18 @@ export interface SecretCommandDeps {
   setEnv?: (name: string, value: string) => void;
 }
 
-export function createSecretCommand(deps: SecretCommandDeps = {}): Command {
+interface SecretCmdEnv {
+  backend: SecretBackend;
+  inExtension: boolean;
+  gate: (op: GatedOp, name: string) => Promise<boolean>;
+  injectMaskedEnv: (name: string) => Promise<void>;
+}
+
+function denied(): ExecResult {
+  return { stdout: '', stderr: 'secret: approval denied\n', exitCode: 1 };
+}
+
+function buildEnv(deps: SecretCommandDeps): SecretCmdEnv {
   const inExtension = deps.isExtension ?? isExtensionContext();
   const backend = deps.backend ?? createDefaultSecretBackend(inExtension);
   const grants = deps.grants ?? moduleGrants;
@@ -168,8 +161,6 @@ export function createSecretCommand(deps: SecretCommandDeps = {}): Command {
     return true;
   };
 
-  const denied = () => ({ stdout: '', stderr: 'secret: approval denied\n', exitCode: 1 });
-
   // Best-effort masked-value injection into the owning shell's live env, called
   // after a successful session/persisted set. The agent's $K then reads the same
   // masked token the fetch proxy will unmask — LLM context parity with
@@ -187,270 +178,295 @@ export function createSecretCommand(deps: SecretCommandDeps = {}): Command {
     }
   };
 
+  return { backend, inExtension, gate, injectMaskedEnv };
+}
+
+// Pipeline-friendly: `echo $TOKEN | secret set NAME` keeps the literal
+// value out of the agent's tool-call argv (and thus out of the LLM
+// transcript). Trim exactly one trailing newline so `echo` and
+// `printf '%s\n'` both work; preserve any embedded newlines verbatim
+// since some token formats carry them.
+function readStdinValue(stdin: ByteString): string | undefined {
+  const raw = stdinAsText(stdin);
+  if (raw.length === 0) return undefined;
+  if (raw.endsWith('\r\n')) return raw.slice(0, -2);
+  if (raw.endsWith('\n')) return raw.slice(0, -1);
+  return raw;
+}
+
+async function handleSetPersisted(
+  name: string,
+  value: string,
+  domains: string[],
+  env: SecretCmdEnv
+): Promise<ExecResult> {
+  // Persisted set writes to secrets.env / Keychain / chrome.storage —
+  // a sensitive, durable mutation, so it's gated.
+  if (domains.length === 0) {
+    return {
+      stdout: '',
+      stderr: 'secret: --domain is required to persist a secret\n',
+      exitCode: 1,
+    };
+  }
+  if (!(await env.gate('persist', name))) return denied();
+  await env.backend.setPersisted(name, value, domains);
+  await env.injectMaskedEnv(name);
+  return {
+    stdout: `Persisted "${name}" (domains: ${domains.join(', ')})\n`,
+    stderr: '',
+    exitCode: 0,
+  };
+}
+
+async function handleSetSession(
+  name: string,
+  value: string,
+  domains: string[],
+  env: SecretCmdEnv
+): Promise<ExecResult> {
+  // Session set: free for a new name; changing the value of an existing
+  // secret is gated (an agent must not silently overwrite a real one).
+  const info = await env.backend.getInfo(name);
+  if (info && !(await env.gate('value', name))) return denied();
+  await env.backend.setSession(name, value, domains);
+  await env.injectMaskedEnv(name);
+  const scope = domains.length > 0 ? ` (domains: ${domains.join(', ')})` : '';
+  return {
+    stdout: `Set session secret "${name}"${scope} — in-memory only, not persisted.\n`,
+    stderr: '',
+    exitCode: 0,
+  };
+}
+
+async function handleSet(
+  args: string[],
+  ctx: CommandContext,
+  env: SecretCmdEnv
+): Promise<ExecResult> {
+  const name = args[1];
+  if (!name || name.startsWith('-')) {
+    return { stdout: '', stderr: 'secret: set requires a <name>\n', exitCode: 1 };
+  }
+  const argValue = args[2] && !args[2].startsWith('-') ? args[2] : undefined;
+  const stdinValue = readStdinValue(ctx.stdin);
+
+  if (argValue !== undefined && stdinValue !== undefined) {
+    return {
+      stdout: '',
+      stderr: 'secret: provide <value> as an argument OR via stdin, not both\n',
+      exitCode: 1,
+    };
+  }
+
+  const value = argValue ?? stdinValue;
+  if (value === undefined) {
+    return {
+      stdout: '',
+      stderr:
+        'secret: set requires a <value>: ' +
+        'secret set <name> <value> [--domain <patterns>] [--persist]\n  ' +
+        'or pipe the value on stdin: echo "$TOKEN" | secret set <name> [--domain ...]\n',
+      exitCode: 1,
+    };
+  }
+  const domains = parseDomainFlag(args) ?? [];
+  return args.includes('--persist')
+    ? handleSetPersisted(name, value, domains, env)
+    : handleSetSession(name, value, domains, env);
+}
+
+async function handleGet(args: string[], env: SecretCmdEnv): Promise<ExecResult> {
+  const name = args[1];
+  if (!name) {
+    return { stdout: '', stderr: 'secret: get requires a <name>\n', exitCode: 1 };
+  }
+  const rec = await env.backend.getMasked(name);
+  if (!rec) {
+    return { stdout: '', stderr: `secret: no secret named "${name}"\n`, exitCode: 1 };
+  }
+  return {
+    stdout: `${rec.name}=${rec.maskedValue}\n  domains: ${rec.domains.join(', ') || '(none)'}\n`,
+    stderr: '',
+    exitCode: 0,
+  };
+}
+
+async function handlePeek(args: string[], env: SecretCmdEnv): Promise<ExecResult> {
+  const name = args[1];
+  if (!name) {
+    return { stdout: '', stderr: 'secret: peek requires a <name>\n', exitCode: 1 };
+  }
+  const rec = await env.backend.peek(name);
+  if (!rec) {
+    return { stdout: '', stderr: `secret: no secret named "${name}"\n`, exitCode: 1 };
+  }
+  return {
+    stdout: `${rec.name}: ${rec.preview}\n  domains: ${rec.domains.join(', ') || '(none)'}\n`,
+    stderr: '',
+    exitCode: 0,
+  };
+}
+
+async function handleScope(args: string[], env: SecretCmdEnv): Promise<ExecResult> {
+  const name = args[1];
+  if (!name || name.startsWith('-')) {
+    return { stdout: '', stderr: 'secret: scope requires a <name>\n', exitCode: 1 };
+  }
+  const domains = parseDomainFlag(args) ?? [];
+  if (domains.length === 0) {
+    return {
+      stdout: '',
+      stderr: 'secret: scope requires --domain <patterns>\n',
+      exitCode: 1,
+    };
+  }
+  if (!(await env.gate('scope', name))) return denied();
+  await env.backend.setScope(name, domains);
+  return {
+    stdout: `Updated scope for "${name}" (domains: ${domains.join(', ')})\n`,
+    stderr: '',
+    exitCode: 0,
+  };
+}
+
+async function handleList(env: SecretCmdEnv): Promise<ExecResult> {
+  const entries = await env.backend.list();
+  if (entries.length === 0) {
+    return { stdout: 'No secrets stored\n', stderr: '', exitCode: 0 };
+  }
+  const nameWidth = Math.max(4, ...entries.map((e) => e.name.length));
+  let output = `${'NAME'.padEnd(nameWidth)}  TYPE     DOMAINS\n`;
+  for (const entry of entries) {
+    const type = entry.persisted ? 'SAVED' : 'SESSION';
+    output += `${entry.name.padEnd(nameWidth)}  ${type.padEnd(7)}  ${entry.domains.join(', ')}\n`;
+  }
+  return { stdout: output, stderr: '', exitCode: 0 };
+}
+
+async function handleDelete(
+  args: string[],
+  subcommand: string,
+  env: SecretCmdEnv
+): Promise<ExecResult> {
+  const name = args[1];
+  if (!name) {
+    return {
+      stdout: '',
+      stderr: `secret: ${subcommand} requires a <name>\n`,
+      exitCode: 1,
+    };
+  }
+  const result = await env.backend.delete(name);
+  if (!result.removed) {
+    return { stdout: '', stderr: `secret: no secret named "${name}"\n`, exitCode: 1 };
+  }
+  const scope = result.fromSession === true ? 'session' : 'persisted';
+  return { stdout: `Removed ${scope} secret "${name}"\n`, stderr: '', exitCode: 0 };
+}
+
+async function handleTest(args: string[], env: SecretCmdEnv): Promise<ExecResult> {
+  const name = args[1];
+  const url = args[2];
+  if (!name || !url) {
+    return { stdout: '', stderr: 'secret: test requires <name> <url>\n', exitCode: 1 };
+  }
+
+  let hostname: string;
+  try {
+    hostname = new URL(url).hostname;
+  } catch {
+    return { stdout: '', stderr: `secret: invalid URL "${url}"\n`, exitCode: 1 };
+  }
+
+  const entries = await env.backend.list();
+  const entry = entries.find((e) => e.name === name);
+  if (!entry) {
+    return { stdout: '', stderr: `secret: no secret named "${name}"\n`, exitCode: 1 };
+  }
+
+  // Client-side domain check using the same logic as the fetch proxy
+  if (isAllowedDomain(entry.domains, hostname)) {
+    return { stdout: `✓ ${name} is allowed for ${hostname}\n`, stderr: '', exitCode: 0 };
+  }
+  return {
+    stdout: `✗ ${name} is NOT allowed for ${hostname}\n  Allowed domains: ${entry.domains.join(', ')}\n`,
+    stderr: '',
+    exitCode: 1,
+  };
+}
+
+async function handleEdit(env: SecretCmdEnv): Promise<ExecResult> {
+  if (!env.inExtension) {
+    return {
+      stdout:
+        'secret: in CLI mode, edit ~/.slicc/secrets.env directly with your text editor.\n' +
+        '          (changes are picked up on the next request — no restart needed)\n',
+      stderr: '',
+      exitCode: 0,
+    };
+  }
+  // Open the extension's options page (`secrets.html`) in a new tab.
+  // chrome.runtime.openOptionsPage() is the canonical way; falls back
+  // to a tab if the user disabled the options page.
+  try {
+    await chrome.runtime.openOptionsPage();
+    return {
+      stdout: 'Opened Mount Secrets options page in a new tab.\n',
+      stderr: '',
+      exitCode: 0,
+    };
+  } catch (_err) {
+    // Fallback: open the URL directly via window.open (no permission needed
+    // for extension pages; works from the side panel context).
+    const url = chrome.runtime.getURL('secrets.html');
+    window.open(url, '_blank');
+    return { stdout: `Opened ${url}\n`, stderr: '', exitCode: 0 };
+  }
+}
+
+async function dispatch(
+  args: string[],
+  ctx: CommandContext,
+  env: SecretCmdEnv
+): Promise<ExecResult> {
+  const subcommand = args[0];
+  switch (subcommand) {
+    case 'set':
+      return handleSet(args, ctx, env);
+    case 'get':
+    case 'read':
+      return handleGet(args, env);
+    case 'peek':
+      return handlePeek(args, env);
+    case 'scope':
+      return handleScope(args, env);
+    case 'list':
+      return handleList(env);
+    case 'delete':
+    case 'rm':
+      return handleDelete(args, subcommand, env);
+    case 'test':
+      return handleTest(args, env);
+    case 'edit':
+      return handleEdit(env);
+    default:
+      return {
+        stdout: '',
+        stderr: `secret: unknown command "${subcommand}"\n`,
+        exitCode: 1,
+      };
+  }
+}
+
+export function createSecretCommand(deps: SecretCommandDeps = {}): Command {
+  const env = buildEnv(deps);
   return defineCommand('secret', async (args, ctx) => {
     if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
       return { stdout: helpText(), stderr: '', exitCode: 0 };
     }
-
-    const subcommand = args[0];
-
     try {
-      switch (subcommand) {
-        case 'set': {
-          const name = args[1];
-          if (!name || name.startsWith('-')) {
-            return { stdout: '', stderr: 'secret: set requires a <name>\n', exitCode: 1 };
-          }
-          const argValue = args[2] && !args[2].startsWith('-') ? args[2] : undefined;
-
-          // Pipeline-friendly: `echo $TOKEN | secret set NAME` keeps the literal
-          // value out of the agent's tool-call argv (and thus out of the LLM
-          // transcript). Trim exactly one trailing newline so `echo` and
-          // `printf '%s\n'` both work; preserve any embedded newlines verbatim
-          // since some token formats carry them.
-          const rawStdin = stdinAsText(ctx.stdin);
-          const trimmedStdin = rawStdin.endsWith('\r\n')
-            ? rawStdin.slice(0, -2)
-            : rawStdin.endsWith('\n')
-              ? rawStdin.slice(0, -1)
-              : rawStdin;
-          const stdinValue = rawStdin.length > 0 ? trimmedStdin : undefined;
-
-          if (argValue !== undefined && stdinValue !== undefined) {
-            return {
-              stdout: '',
-              stderr: 'secret: provide <value> as an argument OR via stdin, not both\n',
-              exitCode: 1,
-            };
-          }
-
-          const value = argValue ?? stdinValue;
-          if (value === undefined) {
-            return {
-              stdout: '',
-              stderr:
-                'secret: set requires a <value>: ' +
-                'secret set <name> <value> [--domain <patterns>] [--persist]\n  ' +
-                'or pipe the value on stdin: echo "$TOKEN" | secret set <name> [--domain ...]\n',
-              exitCode: 1,
-            };
-          }
-          const domains = parseDomainFlag(args) ?? [];
-          const persist = args.includes('--persist');
-
-          if (persist) {
-            // Persisted set writes to secrets.env / Keychain / chrome.storage —
-            // a sensitive, durable mutation, so it's gated.
-            if (domains.length === 0) {
-              return {
-                stdout: '',
-                stderr: 'secret: --domain is required to persist a secret\n',
-                exitCode: 1,
-              };
-            }
-            if (!(await gate('persist', name))) return denied();
-            await backend.setPersisted(name, value, domains);
-            await injectMaskedEnv(name);
-            return {
-              stdout: `Persisted "${name}" (domains: ${domains.join(', ')})\n`,
-              stderr: '',
-              exitCode: 0,
-            };
-          }
-
-          // Session set: free for a new name; changing the value of an existing
-          // secret is gated (an agent must not silently overwrite a real one).
-          const info = await backend.getInfo(name);
-          if (info && !(await gate('value', name))) return denied();
-          await backend.setSession(name, value, domains);
-          await injectMaskedEnv(name);
-          const scope = domains.length > 0 ? ` (domains: ${domains.join(', ')})` : '';
-          return {
-            stdout: `Set session secret "${name}"${scope} — in-memory only, not persisted.\n`,
-            stderr: '',
-            exitCode: 0,
-          };
-        }
-
-        case 'get':
-        case 'read': {
-          const name = args[1];
-          if (!name) {
-            return { stdout: '', stderr: 'secret: get requires a <name>\n', exitCode: 1 };
-          }
-          const rec = await backend.getMasked(name);
-          if (!rec) {
-            return { stdout: '', stderr: `secret: no secret named "${name}"\n`, exitCode: 1 };
-          }
-          return {
-            stdout: `${rec.name}=${rec.maskedValue}\n  domains: ${rec.domains.join(', ') || '(none)'}\n`,
-            stderr: '',
-            exitCode: 0,
-          };
-        }
-
-        case 'peek': {
-          const name = args[1];
-          if (!name) {
-            return { stdout: '', stderr: 'secret: peek requires a <name>\n', exitCode: 1 };
-          }
-          const rec = await backend.peek(name);
-          if (!rec) {
-            return { stdout: '', stderr: `secret: no secret named "${name}"\n`, exitCode: 1 };
-          }
-          return {
-            stdout: `${rec.name}: ${rec.preview}\n  domains: ${rec.domains.join(', ') || '(none)'}\n`,
-            stderr: '',
-            exitCode: 0,
-          };
-        }
-
-        case 'scope': {
-          const name = args[1];
-          if (!name || name.startsWith('-')) {
-            return { stdout: '', stderr: 'secret: scope requires a <name>\n', exitCode: 1 };
-          }
-          const domains = parseDomainFlag(args) ?? [];
-          if (domains.length === 0) {
-            return {
-              stdout: '',
-              stderr: 'secret: scope requires --domain <patterns>\n',
-              exitCode: 1,
-            };
-          }
-          if (!(await gate('scope', name))) return denied();
-          await backend.setScope(name, domains);
-          return {
-            stdout: `Updated scope for "${name}" (domains: ${domains.join(', ')})\n`,
-            stderr: '',
-            exitCode: 0,
-          };
-        }
-
-        case 'list': {
-          const entries = await backend.list();
-          if (entries.length === 0) {
-            return { stdout: 'No secrets stored\n', stderr: '', exitCode: 0 };
-          }
-          const nameWidth = Math.max(4, ...entries.map((e) => e.name.length));
-          let output = `${'NAME'.padEnd(nameWidth)}  TYPE     DOMAINS\n`;
-          for (const entry of entries) {
-            const type = entry.persisted ? 'SAVED' : 'SESSION';
-            output += `${entry.name.padEnd(nameWidth)}  ${type.padEnd(7)}  ${entry.domains.join(', ')}\n`;
-          }
-          return { stdout: output, stderr: '', exitCode: 0 };
-        }
-
-        case 'delete': {
-          const name = args[1];
-          if (!name) {
-            return { stdout: '', stderr: 'secret: delete requires a <name>\n', exitCode: 1 };
-          }
-
-          if (inExtension) {
-            try {
-              await deleteFromStorage(name);
-            } catch (err) {
-              return {
-                stdout: '',
-                stderr: `secret: failed to remove from chrome.storage.local: ${err instanceof Error ? err.message : String(err)}\n`,
-                exitCode: 1,
-              };
-            }
-            return {
-              stdout: `Removed "${name}" from chrome.storage.local\n`,
-              stderr: '',
-              exitCode: 0,
-            };
-          }
-
-          let output = `To delete the secret "${name}", use one of the following methods:\n\n`;
-          output += `  macOS Keychain (swift-server):\n`;
-          output += `    security delete-generic-password -s ai.sliccy.slicc -a ${name}\n\n`;
-          output += `  Environment file (node-server):\n`;
-          output += `    Remove the ${name}= and ${name}_DOMAINS= lines from ~/.slicc/secrets.env\n\n`;
-          output += `Then restart the server to pick up changes.\n`;
-          return { stdout: output, stderr: '', exitCode: 0 };
-        }
-
-        case 'test': {
-          const name = args[1];
-          const url = args[2];
-          if (!name || !url) {
-            return { stdout: '', stderr: 'secret: test requires <name> <url>\n', exitCode: 1 };
-          }
-
-          let hostname: string;
-          try {
-            hostname = new URL(url).hostname;
-          } catch {
-            return { stdout: '', stderr: `secret: invalid URL "${url}"\n`, exitCode: 1 };
-          }
-
-          const entries = await backend.list();
-          const entry = entries.find((e) => e.name === name);
-          if (!entry) {
-            return { stdout: '', stderr: `secret: no secret named "${name}"\n`, exitCode: 1 };
-          }
-
-          // Client-side domain check using the same logic as the fetch proxy
-          const allowed = isAllowedDomain(entry.domains, hostname);
-
-          if (allowed) {
-            return {
-              stdout: `✓ ${name} is allowed for ${hostname}\n`,
-              stderr: '',
-              exitCode: 0,
-            };
-          } else {
-            return {
-              stdout: `✗ ${name} is NOT allowed for ${hostname}\n  Allowed domains: ${entry.domains.join(', ')}\n`,
-              stderr: '',
-              exitCode: 1,
-            };
-          }
-        }
-
-        case 'edit': {
-          if (!inExtension) {
-            return {
-              stdout:
-                'secret: in CLI mode, edit ~/.slicc/secrets.env directly with your text editor.\n' +
-                '          (changes are picked up on the next request — no restart needed)\n',
-              stderr: '',
-              exitCode: 0,
-            };
-          }
-          // Open the extension's options page (`secrets.html`) in a new tab.
-          // chrome.runtime.openOptionsPage() is the canonical way; falls back
-          // to a tab if the user disabled the options page.
-          try {
-            await chrome.runtime.openOptionsPage();
-            return {
-              stdout: 'Opened Mount Secrets options page in a new tab.\n',
-              stderr: '',
-              exitCode: 0,
-            };
-          } catch (_err) {
-            // Fallback: open the URL directly via window.open (no permission needed
-            // for extension pages; works from the side panel context).
-            const url = chrome.runtime.getURL('secrets.html');
-            window.open(url, '_blank');
-            return {
-              stdout: `Opened ${url}\n`,
-              stderr: '',
-              exitCode: 0,
-            };
-          }
-        }
-
-        default:
-          return {
-            stdout: '',
-            stderr: `secret: unknown command "${subcommand}"\n`,
-            exitCode: 1,
-          };
-      }
+      return await dispatch(args, ctx, env);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return { stdout: '', stderr: `secret: ${msg}\n`, exitCode: 1 };
