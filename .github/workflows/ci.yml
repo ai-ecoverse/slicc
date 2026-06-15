@@ -150,6 +150,19 @@ jobs:
         # Selector flags live in package.json so the CI gate cannot
         # silently diverge from the documented local command.
         run: npm run deadcode -- --no-progress --reporter compact
+      - name: Dead code detection — production-mode files (knip)
+        # Hard-fail on production-unreachable ("test-only") dead files
+        # that the default gate above misses: knip's default mode treats
+        # test files as entry points, so a module imported only by a
+        # test (and otherwise wired to nothing) looks reachable. Running
+        # knip with --production drops test entries, surfacing dead
+        # files that exist solely to satisfy stale tests (precedent:
+        # api-key-dialog.ts, issue #1018). Files-only by design —
+        # individual unused exports remain intentional API surface and
+        # are not enforced here. Selector flags live in package.json so
+        # the CI gate cannot silently diverge from the documented local
+        # command.
+        run: npm run deadcode:production-files -- --no-progress --reporter compact
 
   # The merge queue lands PRs with a linear history (rebase, no merge
   # commits). A branch that merged `main` in — instead of rebasing onto it —

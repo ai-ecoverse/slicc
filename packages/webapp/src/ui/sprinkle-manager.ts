@@ -41,7 +41,8 @@ export interface SprinkleAddOptions extends AddSprinkleOptions {
   /**
    * Raw icon spec from the .shtml. Forwarded so the layout can
    * render a per-sprinkle rail glyph instead of the generic
-   * Sparkles default. See `sprinkle-icon.ts` for accepted formats.
+   * Sparkles default. Accepted formats are documented on the
+   * `Sprinkle.icon` field in `sprinkle-discovery.ts`.
    */
   icon?: string;
 }

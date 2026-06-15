@@ -28,14 +28,14 @@ export interface Sprinkle {
   /** Whether this sprinkle should auto-open on first run */
   autoOpen: boolean;
   /**
-   * Raw icon spec from the .shtml. Resolved by `sprinkle-icon.ts`.
-   * Can be:
+   * Raw icon spec from the .shtml. Can be:
    * - a Lucide icon name (kebab-case, e.g. `"music"`, `"calendar-clock"`)
    * - a VFS path to an SVG/PNG (e.g. `/workspace/skills/foo/icon.svg`)
    * - an inline `<svg>...</svg>` markup
    * - a `data:image/svg+xml;...` URL
    * Sourced from `<link rel="icon" href="...">` (preferred) or
-   * `data-sprinkle-icon="..."` on any element.
+   * `data-sprinkle-icon="..."` on any element. Consumers are
+   * responsible for resolving the spec into renderable markup.
    */
   icon?: string;
 }
@@ -120,9 +120,8 @@ export function extractAutoOpen(content: string): boolean {
  *   1. `<link rel="icon" href="...">` (the conventional favicon hook).
  *   2. `data-sprinkle-icon="..."` attribute on any element.
  *
- * Returns the raw spec as authored — the resolver in
- * `sprinkle-icon.ts` decides whether it's a Lucide name, a VFS
- * path, an inline SVG, or a data URL.
+ * Returns the raw spec as authored — consumers decide whether
+ * it's a Lucide name, a VFS path, an inline SVG, or a data URL.
  *
  * The parser is intentionally quote-aware: a `data:image/svg+xml;...`
  * href can legitimately contain both `"` and `>` characters from

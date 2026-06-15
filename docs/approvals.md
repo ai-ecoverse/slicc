@@ -305,9 +305,10 @@ Two gesture paths:
   UI approval card in chat (`packages/webapp/src/tools/tool-ui.ts`). The
   user's click is the gesture; the click handler then calls the picker.
 
-In the **extension**, the picker additionally routes through a popup window
-(`packages/chrome-extension/mount-popup.html` + shared helpers
-`openMountPickerPopup` / `loadAndClearPendingHandle` / `reactivateHandle` in
+In the **extension**, the picker additionally routes through the shared
+picker popup window (`packages/chrome-extension/picker-popup.html` —
+`?kind=directory` mode — plus the shared helpers `openMountPickerPopup` /
+`loadAndClearPendingHandle` / `reactivateHandle` in
 `packages/webapp/src/fs/mount-picker-popup.ts`). Chrome's side panel cannot
 host macOS TCC (Transparency, Consent, and Control) permission dialogs and
 crashes when `showDirectoryPicker` is invoked there against a system folder
@@ -349,13 +350,12 @@ for the API and HTML conventions.
 
 ### Files
 
-| Path                                                           | Role                                                   |
-| -------------------------------------------------------------- | ------------------------------------------------------ |
-| `packages/webapp/src/kernel/remote-terminal-view.ts`           | Keystroke gesture pre-intercept (`mount`, `*-request`) |
-| `packages/webapp/src/fs/mount-picker-popup.ts`                 | Extension popup helpers for the FS-Access picker       |
-| `packages/chrome-extension/mount-popup.html`                   | Extension mount picker popup shell                     |
-| `packages/chrome-extension/{usb,serial,hid}-picker-popup.html` | Extension device picker popups                         |
-| `packages/webapp/src/tools/tool-ui.ts`                         | Agent-driven approval-card primitive                   |
+| Path                                                 | Role                                                   |
+| ---------------------------------------------------- | ------------------------------------------------------ |
+| `packages/webapp/src/kernel/remote-terminal-view.ts` | Keystroke gesture pre-intercept (`mount`, `*-request`) |
+| `packages/webapp/src/fs/mount-picker-popup.ts`       | Extension popup helpers for the FS-Access picker       |
+| `packages/chrome-extension/picker-popup.html`        | Extension picker popup shell (mount + USB/serial/HID)  |
+| `packages/webapp/src/tools/tool-ui.ts`               | Agent-driven approval-card primitive                   |
 
 ---
 

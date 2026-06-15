@@ -265,14 +265,11 @@ All skills (native and compatibility) are read-only — the slicc-specific `mani
 | `scoop-switcher.ts`         | Dropdown menu for scoop selection (extension mode)                                                                                                                                                   |
 | `message-renderer.ts`       | Renders user messages, assistant messages, tool calls, tool results as HTML                                                                                                                          |
 | `voice-input.ts`            | Voice mode toggle; auto-sends on 2.5s silence; falls back to popup in extension mode                                                                                                                 |
-| `skill-drop.ts`             | Pure helpers for detecting supported dropped `.skill` files                                                                                                                                          |
 | `preview-sw.ts`             | Service Worker that intercepts `/preview/*` and serves VFS content (enables in-browser app previews)                                                                                                 |
 | `session-store.ts`          | IndexedDB session storage (`browser-coding-agent` DB): conversation history per session                                                                                                              |
 | `provider-settings.ts`      | API provider + model selection; stores settings in localStorage                                                                                                                                      |
 | `theme.ts`                  | Theme toggle (System/Light/Dark)                                                                                                                                                                     |
 | `types.ts`                  | AgentHandle, AgentEvent, ChatMessage, ToolCall, UIMessage interfaces                                                                                                                                 |
-| `panel-registry.ts`         | Registry of all panels (built-in + SHTML sprinkles) with zone placement and lookup/management methods                                                                                                |
-| `panel-types.ts`            | Shared type definitions: ZoneId, PanelDescriptor, PanelRegistryEntry for the panel system                                                                                                            |
 | `runtime-mode.ts`           | Runtime mode detection (standalone/extension/electron-overlay) and Electron overlay messaging utilities                                                                                              |
 | `tab-zone.ts`               | Generic reusable tab bar + content area manager for a single zone                                                                                                                                    |
 | `sprinkle-manager.ts`       | Registry of available and open `.shtml` sprinkle panels with placement and lifecycle management                                                                                                      |
@@ -280,7 +277,6 @@ All skills (native and compatibility) are read-only — the slicc-specific `mani
 | `sprinkle-renderer.ts`      | Loads `.shtml` content from VFS and renders into DOM. CLI: direct DOM injection (fragments) or srcdoc iframe (full docs). Extension: ALL content routes through `sprinkle-sandbox.html` (CSP-exempt) |
 | `dip.ts`                    | Hydrates ` ```shtml ` code blocks in chat into sandboxed iframes. CLI: direct srcdoc. Extension: routes through `sprinkle-sandbox.html`                                                              |
 | `sprinkle-bridge.ts`        | API available to `.shtml` sprinkle scripts for communicating with the agent via lick events and state persistence                                                                                    |
-| `sprinkle-picker.ts`        | Popup menu listing closed panels and unopened sprinkles for opening in a zone                                                                                                                        |
 | `index.ts`                  | Re-exports                                                                                                                                                                                           |
 
 ### packages/webapp/src/shims/ — Node.js Polyfills
@@ -794,7 +790,6 @@ See [docs/secrets.md](secrets.md) for user-facing setup instructions.
 | Change sprinkle rendering or CSP handling | `packages/webapp/src/ui/sprinkle-renderer.ts`, `packages/webapp/src/ui/dip.ts`, `sprinkle-sandbox.html` |
 | Change the sprinkle↔agent bridge API      | `packages/webapp/src/ui/sprinkle-bridge.ts`                                                             |
 | Change sprinkle lifecycle/placement       | `packages/webapp/src/ui/sprinkle-manager.ts`                                                            |
-| Add sprinkle picker UI features           | `packages/webapp/src/ui/sprinkle-picker.ts`                                                             |
 | Change extension sprinkle message proxy   | `packages/chrome-extension/src/sprinkle-proxy.ts`                                                       |
 | Change `sprinkle` shell command           | `packages/webapp/src/shell/supplemental-commands/sprinkle-command.ts`                                   |
 | Add a default sprinkle                    | `packages/vfs-root/shared/sprinkles/`                                                                   |
