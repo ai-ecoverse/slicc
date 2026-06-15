@@ -51,6 +51,8 @@ export class WcChatController {
     messageId: string,
     attachments?: ChatMessage['attachments']
   ) => void;
+  /** Bubbled `slicc-error-retry` listener wired to the thread — see `#handleErrorRetry`. */
+  readonly #onErrorRetry: (event: Event) => void;
 
   #messages: ChatMessage[] = [];
   /** Rendered thread elements per message id (a message can span several). */
@@ -72,10 +74,17 @@ export class WcChatController {
     this.#onMessageDisposed = options.onMessageDisposed;
     this.#onTurnComplete = options.onTurnComplete;
     this.#unsubscribe = options.agent.onEvent((event) => this.#handleAgentEvent(event));
+    // Bubbled retry event from any rendered `slicc-error-card` (composed, so it
+    // pierces shadow roots). One listener at the thread covers every error card.
+    // The event's `detail.messageId` identifies WHICH error card was clicked so
+    // retry binds to that specific failed turn (see `#handleErrorRetry`).
+    this.#onErrorRetry = (event) => this.#handleErrorRetry(event);
+    this.#thread.addEventListener('slicc-error-retry', this.#onErrorRetry);
   }
 
   dispose(): void {
     this.#unsubscribe();
+    this.#thread.removeEventListener('slicc-error-retry', this.#onErrorRetry);
   }
 
   get processing(): boolean {
@@ -387,12 +396,52 @@ export class WcChatController {
 
   #handleError(error: string): void {
     this.setProcessing(false);
+    // The error path renders as `<slicc-error-card>` (a presentational card
+    // with a "Try again" button that emits the bubbled `slicc-error-retry`
+    // event picked up by `#handleErrorRetry`). Mark the message with `error`
+    // so `messageEls` routes it to the card instead of the plain bubble.
     this.#appendMessage({
       id: uid(),
       role: 'assistant',
-      content: `**Error:** ${error}`,
+      content: error,
       timestamp: Date.now(),
+      error: true,
     });
+  }
+
+  /**
+   * Re-run the user turn that produced THIS error card through the existing
+   * agent send path (`#agent.sendMessage`) — no new agent API, no duplicate
+   * user bubble. The card forwards its `message-id` (the failed error
+   * message's id) on the event; we walk backward from that message to find the
+   * user turn that produced it, so a click on an older error card or a retry
+   * after a newer prompt was queued still re-runs the RIGHT turn. A retry
+   * while a turn is in flight is dropped to avoid double-submissions. Lick /
+   * delegation user-rows are skipped: they are not user turns. Falls back to
+   * the legacy "last user message in the whole thread" scan if the event
+   * carries no messageId (older callers / non-card dispatchers).
+   */
+  #handleErrorRetry(event: Event): void {
+    if (this.#processing) return;
+    const messageId =
+      (event as CustomEvent<{ messageId?: string | null }>).detail?.messageId ?? null;
+    let startIndex = this.#messages.length;
+    if (messageId) {
+      const errorIndex = this.#messages.findIndex((m) => m.id === messageId);
+      if (errorIndex >= 0) startIndex = errorIndex;
+      // If the id is unknown (stale card, history reload), fall back to the
+      // legacy whole-thread scan rather than silently dropping the retry.
+    }
+    let target: ChatMessage | undefined;
+    for (let i = startIndex - 1; i >= 0; i--) {
+      const m = this.#messages[i];
+      if (m.role === 'user' && m.source !== 'lick' && m.source !== 'delegation') {
+        target = m;
+        break;
+      }
+    }
+    if (!target) return;
+    this.#agent.sendMessage(target.content, uid(), target.attachments);
   }
 
   // -- rendering ------------------------------------------------------------

@@ -7,6 +7,7 @@ import './chat/slicc-chat-table.js';
 import './chat/slicc-chat-thread.js';
 import './chat/slicc-delegation-line.js';
 import './chat/slicc-dip.js';
+import './chat/slicc-error-card.js';
 import './chat/slicc-handoff-card.js';
 import './chat/slicc-lick-card.js';
 import './chat/slicc-tool-cluster.js';

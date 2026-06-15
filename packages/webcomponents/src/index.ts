@@ -8,6 +8,7 @@ export { SliccChatTable } from './chat/slicc-chat-table.js';
 export { SliccChatThread } from './chat/slicc-chat-thread.js';
 export { SliccDelegationLine } from './chat/slicc-delegation-line.js';
 export { SliccDip } from './chat/slicc-dip.js';
+export { SliccErrorCard } from './chat/slicc-error-card.js';
 export { SliccHandoffCard } from './chat/slicc-handoff-card.js';
 export { SliccLickCard } from './chat/slicc-lick-card.js';
 export { SliccToolCluster } from './chat/slicc-tool-cluster.js';
