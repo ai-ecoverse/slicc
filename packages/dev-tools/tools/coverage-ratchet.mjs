@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // Coverage ratchet. Measures current coverage for every gated package and
 // raises the floors in coverage-thresholds.json toward reality (never
-// lowering, keeping <1% headroom). Intended to run nightly; a workflow then
-// opens a PR when the file changed. Each ratchet step is a clean >=1pp bump,
-// so there is never a sub-1pp change to review.
+// lowering, keeping ~0.5-1.5pp headroom via a half-point safety margin;
+// see nextFloor in coverage-ratchet-lib.mjs). Intended to run nightly; a
+// workflow then opens a PR when the file changed. Each ratchet step is a
+// clean whole-point bump, so there is never a sub-1pp change to review.
 //
 // Usage:
 //   node packages/dev-tools/tools/coverage-ratchet.mjs [options]
