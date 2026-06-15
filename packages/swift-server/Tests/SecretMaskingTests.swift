@@ -110,10 +110,10 @@ final class SecretMaskingTests: XCTestCase {
         XCTAssertEqual(scrub("hello"), "hello")
     }
 
-    // MARK: - MIN_MASKABLE_SECRET_LENGTH guard (parity with @slicc/shared-ts)
+    // MARK: - minMaskableSecretLength guard (parity with @slicc/shared-ts)
 
     func testMinMaskableSecretLengthIsNine() {
-        XCTAssertEqual(MIN_MASKABLE_SECRET_LENGTH, 9)
+        XCTAssertEqual(minMaskableSecretLength, 9)
     }
 
     func testScrubberSkipsValueShorterThanMinimum() {

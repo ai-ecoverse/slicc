@@ -145,9 +145,9 @@ public final class SecretInjector: @unchecked Sendable {
             for entry in await store.list() {
                 // Mirror the TS minimum-length guard: a too-short OAuth replica
                 // value must not register as a masking pattern.
-                if entry.value.utf16.count < MIN_MASKABLE_SECRET_LENGTH {
+                if entry.value.utf16.count < minMaskableSecretLength {
                     FileHandle.standardError.write(Data(
-                        "[slicc:secrets] secret \"\(entry.name)\" not masked: value shorter than \(MIN_MASKABLE_SECRET_LENGTH) chars\n".utf8
+                        "[slicc:secrets] secret \"\(entry.name)\" not masked: value shorter than \(minMaskableSecretLength) chars\n".utf8
                     ))
                     // Also drop any pre-existing (Keychain/env-file) entry with
                     // the same name so OAuth's override semantics remove it.
@@ -193,9 +193,9 @@ public final class SecretInjector: @unchecked Sendable {
             // be registered as a masking pattern (it would collide with
             // arbitrary outbound bytes and spuriously trigger the cross-domain
             // forbidden path). Warn by NAME only — never the value.
-            if secret.value.utf16.count < MIN_MASKABLE_SECRET_LENGTH {
+            if secret.value.utf16.count < minMaskableSecretLength {
                 FileHandle.standardError.write(Data(
-                    "[slicc:secrets] secret \"\(secret.name)\" not masked: value shorter than \(MIN_MASKABLE_SECRET_LENGTH) chars\n".utf8
+                    "[slicc:secrets] secret \"\(secret.name)\" not masked: value shorter than \(minMaskableSecretLength) chars\n".utf8
                 ))
                 continue
             }
@@ -210,9 +210,9 @@ public final class SecretInjector: @unchecked Sendable {
 
         // Merge env-file secrets: override existing by name, append new ones
         for secret in _envFileSecrets {
-            if secret.value.utf16.count < MIN_MASKABLE_SECRET_LENGTH {
+            if secret.value.utf16.count < minMaskableSecretLength {
                 FileHandle.standardError.write(Data(
-                    "[slicc:secrets] secret \"\(secret.name)\" not masked: value shorter than \(MIN_MASKABLE_SECRET_LENGTH) chars\n".utf8
+                    "[slicc:secrets] secret \"\(secret.name)\" not masked: value shorter than \(minMaskableSecretLength) chars\n".utf8
                 ))
                 // Env-file override semantics: a too-short env-file entry
                 // removes any Keychain entry with the same name (the user

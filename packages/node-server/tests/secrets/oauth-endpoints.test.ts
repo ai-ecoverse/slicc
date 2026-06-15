@@ -8,7 +8,7 @@ describe('OAuth endpoint logic', () => {
     const proxy = new SecretProxyManager(undefined, 'fixed-session', oauthStore);
     const payload = {
       providerId: 'github',
-      accessToken: 'ghp_real',
+      accessToken: 'ghp_realtoken',
       domains: ['github.com'],
     };
     // Validation
