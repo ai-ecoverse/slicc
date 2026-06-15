@@ -351,15 +351,51 @@ describe('slicc-composer / push-to-talk', () => {
     return el.querySelector('textarea') as HTMLTextAreaElement;
   }
 
-  /** Press-and-hold the textarea (primary button), arming the gesture. */
-  function press(el: SliccComposer): HTMLTextAreaElement {
+  /** Press-and-hold the textarea (primary pointer), arming the gesture.
+   *  Defaults to mouse semantics; pass `'touch'` / `'pen'` to drive the
+   *  same path from the corresponding modality. */
+  function press(
+    el: SliccComposer,
+    pointerType: 'mouse' | 'touch' | 'pen' = 'mouse'
+  ): HTMLTextAreaElement {
     const ta = taOf(el);
-    ta.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+    ta.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        bubbles: true,
+        button: 0,
+        isPrimary: true,
+        pointerType,
+        pointerId: pointerType === 'mouse' ? 1 : 100,
+      })
+    );
     return ta;
   }
 
-  function release(): void {
-    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+  function release(pointerType: 'mouse' | 'touch' | 'pen' = 'mouse'): void {
+    document.dispatchEvent(
+      new PointerEvent('pointerup', {
+        bubbles: true,
+        isPrimary: true,
+        pointerType,
+        pointerId: pointerType === 'mouse' ? 1 : 100,
+      })
+    );
+  }
+
+  /** System-cancel the active pointer (touch interrupted by scroll/system).
+   *  Defaults to the same `'mouse'` pointer as `press` so cancel-after-mouse-press
+   *  tests don't have to thread the type. */
+  function pointerCancel(
+    el: SliccComposer,
+    pointerType: 'mouse' | 'touch' | 'pen' = 'mouse'
+  ): void {
+    el.dispatchEvent(
+      new PointerEvent('pointercancel', {
+        bubbles: true,
+        pointerType,
+        pointerId: pointerType === 'mouse' ? 1 : 100,
+      })
+    );
   }
 
   /** The active push-to-talk overlay, if any. */
@@ -543,14 +579,14 @@ describe('slicc-composer / push-to-talk', () => {
     expect(caption.textContent).toBe('three four five six seven eight nine ten');
   });
 
-  it('pointer leaving mid-recording cancels: no transcript, session cancelled', async () => {
+  it('pointercancel mid-recording cancels: no transcript, session cancelled', async () => {
     const fake = makeFakeSpeech({ permission: 'granted', transcript: 'never inserted' });
     const el = mount(fake);
     const ta = press(el);
     await flush();
     expect(pttOf(el)).not.toBeNull();
 
-    el.dispatchEvent(new MouseEvent('mouseleave', { bubbles: false }));
+    pointerCancel(el, 'mouse');
     expect(pttOf(el)).toBeNull();
     expect(ta.value).toBe('');
     expect(fake.calls.cancel).toBe(1);
@@ -583,7 +619,7 @@ describe('slicc-composer / push-to-talk', () => {
     expect(wrap.querySelector('.slicc-composer__ptt-device-btn svg')).not.toBeNull();
     expect(wrap.textContent).not.toContain('Studio USB');
     expect(wrap.querySelector('.slicc-composer__ptt-device-menu')).toBeNull();
-    el.dispatchEvent(new MouseEvent('mouseleave', { bubbles: false }));
+    pointerCancel(el);
 
     const one = makeFakeSpeech({ permission: 'granted' });
     const el2 = mount(one);
@@ -611,7 +647,14 @@ describe('slicc-composer / push-to-talk', () => {
     const toggle = pttOf(el)!.querySelector('.slicc-composer__ptt-device-btn') as HTMLElement;
     // Release OVER the picker: the gesture flips into its interactive
     // device-choice state — no transcript, no submit, menu open.
-    toggle.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    toggle.dispatchEvent(
+      new PointerEvent('pointerup', {
+        bubbles: true,
+        isPrimary: true,
+        pointerType: 'mouse',
+        pointerId: 1,
+      })
+    );
     expect(pttOf(el)).not.toBeNull();
     expect(pttOf(el)!.classList.contains('is-picking')).toBe(true);
     expect(fake.calls.cancel).toBe(1);
@@ -634,12 +677,69 @@ describe('slicc-composer / push-to-talk', () => {
     expect(fake.calls.start.at(-1)?.deviceId).toBe('b');
     pttOf(el)!
       .querySelector('.slicc-composer__ptt-device-btn')!
-      .dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+      .dispatchEvent(
+        new PointerEvent('pointerup', {
+          bubbles: true,
+          isPrimary: true,
+          pointerType: 'mouse',
+          pointerId: 1,
+        })
+      );
     const checked = pttOf(el)!.querySelector(
       '.slicc-composer__ptt-device-item[aria-checked="true"]'
     );
     expect(checked?.getAttribute('data-device-id')).toBe('b');
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+  });
+
+  it('release over the picker still opens the menu when pointer capture retargets pointerup to the host (no submit)', async () => {
+    // Under real pointer capture the release `pointerup` is retargeted to
+    // the capture host (slicc-composer), so `composedPath` no longer contains
+    // the picker. The geometry hit-test (elementFromPoint) must keep the
+    // release-over-the-picker path working.
+    const fake = makeFakeSpeech({
+      permission: 'granted',
+      transcript: 'should not submit',
+      mics: [
+        { deviceId: 'a', label: 'Built-in Microphone' },
+        { deviceId: 'b', label: 'Studio USB' },
+      ],
+    });
+    const el = mount(fake);
+    const submits: Event[] = [];
+    el.addEventListener('submit', (e) => submits.push(e));
+    // Touch path — pointer capture is what creates the retarget in the wild.
+    const ta = press(el, 'touch');
+    await flush();
+
+    const wrap = pttOf(el)!.querySelector('.slicc-composer__ptt-device') as HTMLElement;
+    expect(wrap.hidden).toBe(false);
+    const rect = wrap.getBoundingClientRect();
+    const clientX = rect.left + rect.width / 2;
+    const clientY = rect.top + rect.height / 2;
+    // Verify the geometry actually lands on (or inside) the picker so the
+    // fallback hit-test has something to find.
+    const hit = document.elementFromPoint(clientX, clientY);
+    expect(hit != null && wrap.contains(hit)).toBe(true);
+
+    // Dispatch the release ON THE HOST (capture-retarget) with coordinates
+    // over the picker. The composedPath will not include #deviceWrap.
+    el.dispatchEvent(
+      new PointerEvent('pointerup', {
+        bubbles: true,
+        isPrimary: true,
+        pointerType: 'touch',
+        pointerId: 100,
+        clientX,
+        clientY,
+      })
+    );
+
+    expect(pttOf(el)).not.toBeNull();
+    expect(pttOf(el)!.classList.contains('is-picking')).toBe(true);
+    expect(fake.calls.cancel).toBe(1);
+    expect(submits.length).toBe(0);
+    expect(ta.value).toBe('');
   });
 
   // ── Engine status line ────────────────────────────────────────────
@@ -681,14 +781,45 @@ describe('slicc-composer / push-to-talk edge paths', () => {
 
   const flush = () => vi.advanceTimersByTimeAsync(PTT_ENGAGE_MS);
 
-  function press(el: SliccComposer): HTMLTextAreaElement {
+  function press(
+    el: SliccComposer,
+    pointerType: 'mouse' | 'touch' | 'pen' = 'mouse'
+  ): HTMLTextAreaElement {
     const ta = el.querySelector('textarea') as HTMLTextAreaElement;
-    ta.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+    ta.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        bubbles: true,
+        button: 0,
+        isPrimary: true,
+        pointerType,
+        pointerId: pointerType === 'mouse' ? 1 : 100,
+      })
+    );
     return ta;
   }
 
-  function release(): void {
-    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+  function release(pointerType: 'mouse' | 'touch' | 'pen' = 'mouse'): void {
+    document.dispatchEvent(
+      new PointerEvent('pointerup', {
+        bubbles: true,
+        isPrimary: true,
+        pointerType,
+        pointerId: pointerType === 'mouse' ? 1 : 100,
+      })
+    );
+  }
+
+  function pointerCancel(
+    el: SliccComposer,
+    pointerType: 'mouse' | 'touch' | 'pen' = 'mouse'
+  ): void {
+    el.dispatchEvent(
+      new PointerEvent('pointercancel', {
+        bubbles: true,
+        pointerType,
+        pointerId: pointerType === 'mouse' ? 1 : 100,
+      })
+    );
   }
 
   function pttOf(el: SliccComposer): HTMLElement | null {
@@ -723,7 +854,7 @@ describe('slicc-composer / push-to-talk edge paths', () => {
     await flush();
     expect(pttOf(el)?.classList.contains('is-recording')).toBe(true);
     expect(fake.calls.requestPermission).toBe(0);
-    el.dispatchEvent(new MouseEvent('mouseleave', { bubbles: false }));
+    pointerCancel(el);
   });
 
   it('a slow permission query that lands denied swaps in the blocked instructions', async () => {
@@ -793,7 +924,14 @@ describe('slicc-composer / push-to-talk edge paths', () => {
     press(el);
     await flush();
     const toggle = () => pttOf(el)!.querySelector('.slicc-composer__ptt-device-btn') as HTMLElement;
-    toggle().dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    toggle().dispatchEvent(
+      new PointerEvent('pointerup', {
+        bubbles: true,
+        isPrimary: true,
+        pointerType: 'mouse',
+        pointerId: 1,
+      })
+    );
     expect(pttOf(el)!.classList.contains('is-picking')).toBe(true);
     expect(pttOf(el)!.querySelector('.slicc-composer__ptt-device-menu')).not.toBeNull();
 
@@ -803,9 +941,23 @@ describe('slicc-composer / push-to-talk edge paths', () => {
     // Again, exiting via a click outside the picker this time.
     press(el);
     await flush();
-    toggle().dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    toggle().dispatchEvent(
+      new PointerEvent('pointerup', {
+        bubbles: true,
+        isPrimary: true,
+        pointerType: 'mouse',
+        pointerId: 1,
+      })
+    );
     expect(pttOf(el)!.classList.contains('is-picking')).toBe(true);
-    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    document.body.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        bubbles: true,
+        isPrimary: true,
+        pointerType: 'mouse',
+        pointerId: 1,
+      })
+    );
     expect(pttOf(el)).toBeNull();
   });
 
@@ -846,7 +998,7 @@ describe('slicc-composer / push-to-talk edge paths', () => {
       download: { loaded: 0, total: 0, etaSeconds: null },
     });
     expect(status.textContent).toBe('Better speech recognition downloading…');
-    el.dispatchEvent(new MouseEvent('mouseleave', { bubbles: false }));
+    pointerCancel(el);
   });
 
   it('hides the caption again when a partial collapses to nothing', async () => {
@@ -860,7 +1012,7 @@ describe('slicc-composer / push-to-talk edge paths', () => {
     expect(caption.hidden).toBe(false);
     fake.emitPartial('   ');
     expect(caption.hidden).toBe(true);
-    el.dispatchEvent(new MouseEvent('mouseleave', { bubbles: false }));
+    pointerCancel(el);
   });
 
   it('does not double-space when the existing input already ends with whitespace', async () => {
@@ -981,7 +1133,183 @@ describe('slicc-composer / push-to-talk edge paths', () => {
   });
 });
 
+describe('slicc-composer / push-to-talk touch path', () => {
+  beforeEach(() => {
+    ensureGlobalTokens();
+    setTheme('light');
+    document.body.replaceChildren();
+    localStorage.removeItem('slicc-composer:mic-device');
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const flush = () => vi.advanceTimersByTimeAsync(PTT_ENGAGE_MS);
+
+  function taOf(el: SliccComposer): HTMLTextAreaElement {
+    return el.querySelector('textarea') as HTMLTextAreaElement;
+  }
+
+  function touchPress(el: SliccComposer): HTMLTextAreaElement {
+    const ta = taOf(el);
+    ta.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        bubbles: true,
+        button: 0,
+        isPrimary: true,
+        pointerType: 'touch',
+        pointerId: 100,
+      })
+    );
+    return ta;
+  }
+
+  function touchRelease(): void {
+    document.dispatchEvent(
+      new PointerEvent('pointerup', {
+        bubbles: true,
+        isPrimary: true,
+        pointerType: 'touch',
+        pointerId: 100,
+      })
+    );
+  }
+
+  function touchCancel(el: SliccComposer): void {
+    el.dispatchEvent(
+      new PointerEvent('pointercancel', {
+        bubbles: true,
+        pointerType: 'touch',
+        pointerId: 100,
+      })
+    );
+  }
+
+  function pttOf(el: SliccComposer): HTMLElement | null {
+    return el.querySelector('.slicc-composer__ptt');
+  }
+
+  function mount(fake: FakeSpeech): SliccComposer {
+    const el = makeComposer();
+    el.speech = fake.controller;
+    document.body.appendChild(el);
+    return el;
+  }
+
+  it('a touch tap inside the engage window places the caret and shows NO overlay', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    const el = mount(fake);
+    const submits: Event[] = [];
+    el.addEventListener('submit', (e) => submits.push(e));
+
+    const ta = touchPress(el);
+    // Release before the engage timer fires — the press is torn down with no
+    // overlay ever mounted and no speech session touched.
+    await vi.advanceTimersByTimeAsync(PTT_ENGAGE_MS - 10);
+    touchRelease();
+    await flush();
+
+    expect(pttOf(el)).toBeNull();
+    expect(ta.value).toBe('');
+    expect(fake.calls.start.length).toBe(0);
+    expect(submits.length).toBe(0);
+  });
+
+  it('a touch hold past the engage window records and submits with source: dictation', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted', transcript: 'voiced on touch' });
+    const el = mount(fake);
+    const submits: Array<{ value: string; source?: string }> = [];
+    el.addEventListener('submit', (e) => {
+      submits.push((e as Event as CustomEvent<{ value: string; source?: string }>).detail);
+    });
+
+    const ta = touchPress(el);
+    await flush();
+    expect(pttOf(el)?.classList.contains('is-recording')).toBe(true);
+    expect(fake.calls.start.length).toBe(1);
+
+    touchRelease();
+    await flush();
+
+    expect(pttOf(el)).toBeNull();
+    expect(ta.value).toBe('voiced on touch');
+    expect(submits).toEqual([{ value: 'voiced on touch', source: 'dictation' }]);
+  });
+
+  it('a touch hold on an ungranted controller engages the enable bar (same as mouse)', async () => {
+    const fake = makeFakeSpeech({ permission: 'prompt' });
+    const el = mount(fake);
+    touchPress(el);
+    await flush();
+    expect(pttOf(el)?.classList.contains('is-enable')).toBe(true);
+    touchCancel(el);
+    expect(pttOf(el)).toBeNull();
+  });
+
+  it('pointercancel mid-touch-recording tears down without inserting', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted', transcript: 'should never land' });
+    const el = mount(fake);
+    const ta = touchPress(el);
+    await flush();
+    expect(pttOf(el)?.classList.contains('is-recording')).toBe(true);
+
+    touchCancel(el);
+    expect(pttOf(el)).toBeNull();
+    expect(ta.value).toBe('');
+    expect(fake.calls.cancel).toBe(1);
+    expect(fake.calls.stop).toBe(0);
+
+    // A late release after cancel must not insert anything either.
+    touchRelease();
+    await flush();
+    expect(ta.value).toBe('');
+  });
+
+  it('the data-ptt-pressed marker brackets an active touch hold (touch ergonomics)', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    const el = mount(fake);
+    expect(el.hasAttribute('data-ptt-pressed')).toBe(false);
+
+    touchPress(el);
+    // Set synchronously on pointerdown, before the engage timer fires.
+    expect(el.hasAttribute('data-ptt-pressed')).toBe(true);
+    await flush();
+    expect(el.hasAttribute('data-ptt-pressed')).toBe(true);
+
+    touchRelease();
+    await flush();
+    expect(el.hasAttribute('data-ptt-pressed')).toBe(false);
+  });
+
+  it('a non-primary second touch finger does not start a new press', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    const el = mount(fake);
+    const ta = taOf(el);
+
+    ta.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        bubbles: true,
+        button: 0,
+        isPrimary: false,
+        pointerType: 'touch',
+        pointerId: 200,
+      })
+    );
+    await flush();
+    expect(pttOf(el)).toBeNull();
+    expect(fake.calls.start.length).toBe(0);
+  });
+});
+
 describe('slicc-composer / ptt opt-in', () => {
+  beforeEach(() => {
+    ensureGlobalTokens();
+    setTheme('light');
+    document.body.replaceChildren();
+  });
+
   it('without the ptt attribute, pressing the textarea stays native (no overlay, no transcript)', () => {
     const el = document.createElement('slicc-composer');
     el.style.cssText = 'width:1000px;display:block;';
@@ -990,11 +1318,52 @@ describe('slicc-composer / ptt opt-in', () => {
     el.append(ta);
     document.body.appendChild(el);
 
-    ta.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, cancelable: true }));
+    ta.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        bubbles: true,
+        button: 0,
+        isPrimary: true,
+        pointerType: 'mouse',
+        pointerId: 1,
+        cancelable: true,
+      })
+    );
     expect(el.querySelector('.slicc-composer__ptt')).toBeNull();
 
-    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    document.dispatchEvent(
+      new PointerEvent('pointerup', {
+        bubbles: true,
+        isPrimary: true,
+        pointerType: 'mouse',
+        pointerId: 1,
+      })
+    );
     expect(ta.value).toBe('');
+    el.remove();
+  });
+
+  it('with ptt enabled the textarea has touch-action:none AT REST (before any pointerdown)', () => {
+    // touch-action is locked at the start of a pointer sequence, so applying
+    // it mid-gesture via [data-ptt-pressed] is ignored for the in-flight
+    // touch. The [ptt] host attribute must set touch-action upfront so a
+    // hold cannot be pre-empted by a pan starting the sequence.
+    const el = makeComposer();
+    document.body.appendChild(el);
+    const ta = el.querySelector('textarea') as HTMLTextAreaElement;
+    expect(el.hasAttribute('data-ptt-pressed')).toBe(false);
+    expect(getComputedStyle(ta).touchAction).toBe('none');
+    el.remove();
+  });
+
+  it('without the ptt attribute the textarea keeps its native touch-action', () => {
+    const el = document.createElement('slicc-composer');
+    el.style.cssText = 'width:1000px;display:block;';
+    const ta = document.createElement('textarea');
+    ta.className = 'ta';
+    el.append(ta);
+    document.body.appendChild(el);
+    // The [ptt]-scoped rule must NOT bleed into composers without push-to-talk.
+    expect(getComputedStyle(ta).touchAction).not.toBe('none');
     el.remove();
   });
 });
