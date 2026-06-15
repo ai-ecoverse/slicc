@@ -102,6 +102,7 @@ jobs:
           fi
 
       - name: Upload screenshots to Cloudflare R2
+        id: r2_upload
         if: steps.mode.outputs.mode == 'r2'
         continue-on-error: true
         env:
@@ -144,10 +145,14 @@ jobs:
           if-no-files-found: ignore
 
       - name: Post or update sticky PR comment
-        if: always()
+        # Skip on fork PRs: GITHUB_TOKEN is read-only there and `issues.createComment`
+        # would 403. Fork PRs still get the workflow-artifact upload above; same-repo
+        # PRs continue to receive the sticky comment.
+        if: always() && github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           UPLOAD_MODE: ${{ steps.mode.outputs.mode }}
+          R2_UPLOAD_OUTCOME: ${{ steps.r2_upload.outcome }}
         with:
           script: |
             const fs = require('fs');
@@ -156,7 +161,13 @@ jobs:
             const prNumber = Number(process.env.PR_NUMBER);
             const sha = process.env.HEAD_SHA;
             const shortSha = sha.slice(0, 7);
-            const mode = process.env.UPLOAD_MODE || 'artifact';
+            const initialMode = process.env.UPLOAD_MODE || 'artifact';
+            const r2Outcome = process.env.R2_UPLOAD_OUTCOME || '';
+            // If R2 upload was attempted but didn't succeed, fall back to the artifact
+            // layout so we don't emit <img> tags pointing at objects that may be
+            // missing or partial (continue-on-error keeps the job green).
+            const r2Failed = initialMode === 'r2' && r2Outcome !== 'success';
+            const mode = r2Failed ? 'artifact' : initialMode;
             const baseUrl = (process.env.R2_PUBLIC_BASE_URL || '').replace(/\/$/, '');
             const bucket = process.env.R2_BUCKET;
             const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
@@ -227,9 +238,15 @@ jobs:
             lines.push('');
 
             if (mode !== 'r2') {
-              lines.push(
-                `> ℹ️ R2 upload skipped (no \`CLOUDFLARE_API_TOKEN\` available — typical for fork PRs).`
-              );
+              if (r2Failed) {
+                lines.push(
+                  `> ⚠️ R2 upload did not succeed (\`${r2Outcome}\`); using artifact fallback.`
+                );
+              } else {
+                lines.push(
+                  `> ℹ️ R2 upload skipped (no \`CLOUDFLARE_API_TOKEN\` available — typical for fork PRs).`
+                );
+              }
               lines.push(`> Download the PNGs from the [workflow run artifacts](${runUrl}).`);
               lines.push('');
             }
