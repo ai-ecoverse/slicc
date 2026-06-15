@@ -69,7 +69,7 @@ slicc-composer[open] slicc-composer-meta::part(hint) {
    textarea the band turns into one big active push button. The overlay is a
    direct host child (not the 680px inner band) so it covers the whole footer,
    and sits above it via z-index. Stage classes select the variant:
-   .is-enable    — no mic permission yet: 5s hold-to-enable progress bar
+   .is-enable    — no mic permission yet: 3s hold-to-enable progress bar
    .is-prompting — the browser's permission prompt is up
    .is-denied    — permission blocked: instructions, no bar
    .is-recording — live dictation: pulsing mic, captions, picker, engine status
@@ -142,11 +142,11 @@ slicc-composer .slicc-composer__ptt-bar-fill {
   transform-origin: left center;
   background: var(--ctx);
 }
-/* Hold-to-enable: the bar sweeps over the SAME 5s the gesture timer counts
+/* Hold-to-enable: the bar sweeps over the SAME 3s the gesture timer counts
    (HOLD_TO_ENABLE_MS) — the animation is presentation, the timer is truth. */
 slicc-composer .slicc-composer__ptt.is-enable .slicc-composer__ptt-bar-fill {
   animation-name: slicc-ptt-load;
-  animation-duration: 5s;
+  animation-duration: 3s;
   animation-timing-function: linear;
   animation-fill-mode: forwards;
 }
@@ -303,8 +303,8 @@ function ensureComposerStyle(doc: Document): void {
 }
 
 /** How long the textarea must be held before the mic permission is requested.
- *  Mirrored by the `.is-enable` bar's 5s CSS sweep — keep the two in step. */
-export const HOLD_TO_ENABLE_MS = 5000;
+ *  Mirrored by the `.is-enable` bar's 3s CSS sweep — keep the two in step. */
+export const HOLD_TO_ENABLE_MS = 3000;
 
 /** Grace window for the cached-permission check on mousedown: a fast
  *  'granted' goes straight to recording with no enable-stage flash. */
@@ -369,7 +369,7 @@ function formatEta(etaSeconds: number | null): string {
  * stages keyed to the microphone permission:
  *
  * 1. **Not granted** — a "Hold to enable push to talk" progress bar fills over
- *    five seconds ({@link HOLD_TO_ENABLE_MS}); a press held to completion
+ *    three seconds ({@link HOLD_TO_ENABLE_MS}); a press held to completion
  *    requests microphone permission through the injected speech controller
  *    (triggering the browser prompt). A denied/blocked permission renders
  *    instructions instead of a bar.
@@ -612,7 +612,7 @@ export class SliccComposer extends HTMLElement {
       return;
     }
 
-    // 'prompt', or the query is still settling — run the 5s enable gate.
+    // 'prompt', or the query is still settling — run the 3s enable gate.
     this.#showOverlay('enable');
     this.#enableTimer = setTimeout(() => {
       this.#enableTimer = null;
@@ -636,7 +636,7 @@ export class SliccComposer extends HTMLElement {
     }
   }
 
-  /** The 5s hold completed — request microphone permission. */
+  /** The 3s hold completed — request microphone permission. */
   #onHoldComplete(speech: ComposerSpeech, token: number): void {
     if (token !== this.#token || !this.#pressed || this.#stage !== 'enable') return;
     this.#showOverlay('prompting');

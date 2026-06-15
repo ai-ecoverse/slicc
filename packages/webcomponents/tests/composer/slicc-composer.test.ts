@@ -376,7 +376,7 @@ describe('slicc-composer / push-to-talk', () => {
 
   // ── Stage 1: no permission yet ────────────────────────────────────
 
-  it('without permission, holding shows the 5s "hold to enable" bar (no recording)', async () => {
+  it('without permission, holding shows the 3s "hold to enable" bar (no recording)', async () => {
     const fake = makeFakeSpeech({ permission: 'prompt' });
     const el = mount(fake);
     press(el);
@@ -389,16 +389,16 @@ describe('slicc-composer / push-to-talk', () => {
       'Hold to enable push to talk'
     );
     expect(ptt!.querySelector('.slicc-composer__ptt-bar-fill')).not.toBeNull();
-    // The 5s sweep is wired via the .is-enable stage class.
+    // The 3s sweep is wired via the .is-enable stage class.
     const fill = ptt!.querySelector('.slicc-composer__ptt-bar-fill') as HTMLElement;
     if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      expect(getComputedStyle(fill).animationDuration).toBe('5s');
+      expect(getComputedStyle(fill).animationDuration).toBe('3s');
     }
     expect(fake.calls.requestPermission).toBe(0);
     expect(fake.calls.start.length).toBe(0);
   });
 
-  it('holding through the 5s gate requests permission, then records while still held', async () => {
+  it('holding through the 3s gate requests permission, then records while still held', async () => {
     const fake = makeFakeSpeech({ permission: 'prompt', grantOnRequest: true, transcript: 'hi' });
     const el = mount(fake);
     press(el);
@@ -416,7 +416,7 @@ describe('slicc-composer / push-to-talk', () => {
     expect(fake.calls.warmup).toBeGreaterThan(0);
   });
 
-  it('releasing before the 5s gate never requests permission', async () => {
+  it('releasing before the 3s gate never requests permission', async () => {
     const fake = makeFakeSpeech({ permission: 'prompt' });
     const el = mount(fake);
     press(el);
@@ -718,7 +718,7 @@ describe('slicc-composer / push-to-talk edge paths', () => {
     expect(pttOf(el)?.classList.contains('is-enable')).toBe(true);
 
     // The query lands 'granted' mid-hold: the press upgrades straight to
-    // recording without waiting out the 5s gate.
+    // recording without waiting out the 3s gate.
     resolvePermission('granted');
     await flush();
     expect(pttOf(el)?.classList.contains('is-recording')).toBe(true);
