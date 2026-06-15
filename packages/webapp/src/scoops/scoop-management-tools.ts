@@ -7,6 +7,7 @@
 
 import { createLogger } from '../core/logger.js';
 import type { ToolDefinition } from '../core/types.js';
+import type { SudoDecision, SudoKind, SudoRequest } from '../sudo/types.js';
 import {
   CURRENT_SCOOP_CONFIG_VERSION,
   isThinkingLevel,
@@ -48,6 +49,28 @@ export interface ScoopManagementToolsConfig {
     jids: readonly string[],
     timeoutMs?: number
   ) => { scheduled: string[]; unknown: string[] };
+  /** Scoop-only: ask the cone for an explicit sudo escalation. */
+  onSudoRequest?: (request: SudoRequest) => Promise<SudoDecision>;
+  /** Cone-only: resolve a pending sudo request by id. On `'always'` the
+   *  orchestrator persists a NOPASSWD rule into the requesting scoop's
+   *  `/scoops/<folder>/etc/sudoers` via the trusted manager sink. */
+  onSudoResolve?: (
+    id: string,
+    decision: SudoDecision
+  ) => Promise<{
+    settled: boolean;
+    persisted: boolean;
+    persistedPattern?: string;
+    persistError?: string;
+    scoopFolder?: string;
+    kind?: SudoKind;
+  }>;
+  /** Cone-only: snapshot all pending cone-mediated sudo requests. */
+  onListSudoRequests?: () => Array<{
+    id: string;
+    scoopJid: string;
+    request: SudoRequest;
+  }>;
 }
 
 /** Resolve a list of user-supplied scoop names (folder or display name) to
@@ -69,38 +92,542 @@ function resolveScoopNames(
   return { resolved, unknown };
 }
 
-/**
- * Create scoop-management tools for a scoop context
- */
-export function createScoopManagementTools(config: ScoopManagementToolsConfig): ToolDefinition[] {
+const SUDO_KINDS: readonly SudoKind[] = ['command', 'read', 'write', 'secret'];
+
+/** Build a folder slug from a display name. Matches the legacy inline impl. */
+function folderFromDisplayName(name: string): string {
+  return (
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 50) + '-scoop'
+  );
+}
+
+/** Validate a thinking level input or return an error result. */
+function parseThinkingLevel(
+  thinking: string | undefined
+): { ok: true; level?: ThinkingLevel } | { ok: false; content: string; isError: true } {
+  if (thinking === undefined) return { ok: true };
+  if (!isThinkingLevel(thinking)) {
+    return {
+      ok: false,
+      content: `Invalid thinking level "${thinking}". Must be one of: ${THINKING_LEVELS.join(', ')}.`,
+      isError: true,
+    };
+  }
+  return { ok: true, level: thinking };
+}
+
+/** Render a "scoop not found" error including the available list. */
+function notFoundError(name: string, getScoops: () => RegisteredScoop[]) {
+  const available = getScoops()
+    .filter((s) => !s.isCone)
+    .map((s) => s.folder)
+    .join(', ');
+  return { content: `Scoop "${name}" not found. Available: ${available}`, isError: true as const };
+}
+
+/** Format a single line in the list_scoops output. */
+function formatScoopLine(
+  s: RegisteredScoop,
+  getScoopTabState: ScoopManagementToolsConfig['getScoopTabState']
+): string {
+  const tab = getScoopTabState?.(s.jid);
+  const status = tab?.status ?? 'unknown';
+  const activity = tab?.lastActivity
+    ? new Date(tab.lastActivity).toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+      })
+    : '';
+  const statusSuffix = activity ? ` — ${status} (since ${activity})` : ` — ${status}`;
+  if (s.isCone) return `- ${s.assistantLabel} (${s.folder}) [CONE]${statusSuffix}`;
+  return `- ${s.name} (${s.folder})${statusSuffix}`;
+}
+
+type ToolResult = { content: string; isError?: boolean };
+
+// ---------- execute handlers (extracted from inline tool defs) ----------
+
+async function executeSendMessage(
+  input: unknown,
+  config: ScoopManagementToolsConfig
+): Promise<ToolResult> {
+  const { text, sender } = input as { text: string; sender?: string };
+  config.onSendMessage(text, sender);
+  log.info('Message sent', { scoopFolder: config.scoop.folder, textLength: text.length });
+  return { content: 'Message sent.' };
+}
+
+function validateSudoRequestInput(
+  input: unknown
+): { ok: true; request: SudoRequest } | { ok: false; result: ToolResult } {
   const {
-    scoop,
-    onSendMessage,
-    onFeedScoop,
-    getScoops,
-    getScoopTabState,
-    onScoopScoop,
-    onDropScoop,
-    onSetGlobalMemory,
-    getGlobalMemory,
-    onMuteScoops,
-    onUnmuteScoops,
-    onScheduleScoopWait,
-  } = config;
+    kind,
+    detail,
+    suggested_pattern: suggestedPattern,
+  } = input as { kind: string; detail: string; suggested_pattern?: string };
+  if (!SUDO_KINDS.includes(kind as SudoKind)) {
+    return {
+      ok: false,
+      result: {
+        content: `Invalid sudo kind "${kind}". Must be one of: ${SUDO_KINDS.join(', ')}.`,
+        isError: true,
+      },
+    };
+  }
+  if (typeof detail !== 'string' || detail.trim().length === 0) {
+    return { ok: false, result: { content: 'detail must be a non-empty string.', isError: true } };
+  }
+  const request: SudoRequest = {
+    kind: kind as SudoKind,
+    detail,
+    ...(suggestedPattern ? { suggestedPattern } : {}),
+  };
+  return { ok: true, request };
+}
 
-  const tools: ToolDefinition[] = [];
+function formatSudoDecision(decision: SudoDecision): string {
+  const lines = [`Cone decision: ${decision.decision}.`];
+  if (decision.decision === 'always' && decision.pattern) {
+    lines.push(`Persisted pattern: ${decision.pattern}`);
+  }
+  if (decision.decision === 'deny') {
+    lines.push(
+      'The sensitive action was not approved. Do not retry without addressing the reason for refusal.'
+    );
+  }
+  return lines.join('\n');
+}
 
-  // send_message tool
-  tools.push({
+async function executeSudoRequest(
+  input: unknown,
+  config: ScoopManagementToolsConfig
+): Promise<ToolResult> {
+  const validated = validateSudoRequestInput(input);
+  if (!validated.ok) return validated.result;
+  try {
+    const decision = await config.onSudoRequest!(validated.request);
+    log.info('Sudo request resolved', {
+      scoopFolder: config.scoop.folder,
+      kind: validated.request.kind,
+      decision: decision.decision,
+    });
+    return { content: formatSudoDecision(decision) };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { content: `sudo_request failed: ${msg}`, isError: true };
+  }
+}
+
+async function executeFeedScoop(
+  input: unknown,
+  config: ScoopManagementToolsConfig
+): Promise<ToolResult> {
+  const { scoop_name, prompt } = input as { scoop_name: string; prompt: string };
+  const target = config.getScoops().find((s) => s.folder === scoop_name || s.name === scoop_name);
+  if (!target) return notFoundError(scoop_name, config.getScoops);
+  if (target.isCone) return { content: 'Cannot feed the cone (yourself).', isError: true };
+  try {
+    await config.onFeedScoop!(target.jid, prompt);
+    log.info('Fed scoop', { target: target.folder, promptLength: prompt.length });
+    return {
+      content: `Task sent to ${target.folder}. You will be notified when it completes.`,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { content: `Failed to feed scoop: ${msg}`, isError: true };
+  }
+}
+
+async function executeListScoops(config: ScoopManagementToolsConfig): Promise<ToolResult> {
+  const scoops = config.getScoops();
+  if (scoops.length === 0) return { content: 'No scoops registered.' };
+  const formatted = scoops.map((s) => formatScoopLine(s, config.getScoopTabState)).join('\n');
+  return { content: `Registered scoops:\n${formatted}` };
+}
+
+/** Build the partial `RegisteredScoop` record passed to onScoopScoop. */
+function buildScoopRecord(
+  name: string,
+  folder: string,
+  model: string | undefined,
+  visiblePaths: string[] | undefined,
+  writablePaths: string[] | undefined,
+  allowedCommands: string[] | undefined,
+  thinkingLevel: ThinkingLevel | undefined
+): Omit<RegisteredScoop, 'jid'> {
+  return {
+    name,
+    folder,
+    trigger: `@${folder}`,
+    isCone: false,
+    type: 'scoop',
+    requiresTrigger: true,
+    assistantLabel: folder,
+    addedAt: new Date().toISOString(),
+    config: {
+      ...(model ? { modelId: model } : {}),
+      visiblePaths: visiblePaths ?? ['/workspace/'],
+      writablePaths: writablePaths ?? [`/scoops/${folder}/`, '/shared/'],
+      ...(allowedCommands ? { allowedCommands } : {}),
+      ...(thinkingLevel ? { thinkingLevel } : {}),
+    },
+    configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+  };
+}
+
+/** Try the auto-feed step after a scoop has been created. */
+async function autoFeedNewScoop(
+  newScoop: RegisteredScoop,
+  taskPrompt: string,
+  name: string,
+  folder: string,
+  onFeedScoop: NonNullable<ScoopManagementToolsConfig['onFeedScoop']>
+): Promise<ToolResult> {
+  try {
+    await onFeedScoop(newScoop.jid, taskPrompt);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.error('Auto-feed failed', { name, error: msg });
+    return {
+      content:
+        `Scoop "${name}" created as "${folder}" but the initial task could not be sent: ${msg}. ` +
+        `Use feed_scoop to retry.`,
+      isError: true,
+    };
+  }
+  return {
+    content: `Scoop "${name}" created as "${folder}" and task sent. It is now working on it.`,
+  };
+}
+
+async function executeScoopScoop(
+  input: unknown,
+  config: ScoopManagementToolsConfig
+): Promise<ToolResult> {
+  const {
+    name,
+    model,
+    prompt: taskPrompt,
+    visiblePaths,
+    writablePaths,
+    allowedCommands,
+    thinking,
+  } = input as {
+    name: string;
+    model?: string;
+    prompt?: string;
+    visiblePaths?: string[];
+    writablePaths?: string[];
+    allowedCommands?: string[];
+    thinking?: string;
+  };
+
+  const parsed = parseThinkingLevel(thinking);
+  if (!parsed.ok) return { content: parsed.content, isError: parsed.isError };
+
+  const folder = folderFromDisplayName(name);
+  try {
+    const record = buildScoopRecord(
+      name,
+      folder,
+      model,
+      visiblePaths,
+      writablePaths,
+      allowedCommands,
+      parsed.level
+    );
+    const newScoop = await config.onScoopScoop!(record);
+    log.info('Scoop created', { name, folder });
+    if (taskPrompt && config.onFeedScoop) {
+      return autoFeedNewScoop(newScoop, taskPrompt, name, folder, config.onFeedScoop);
+    }
+    return {
+      content: `Scoop "${name}" created as "${folder}". Use feed_scoop to give it a task.`,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { content: `Failed to create scoop: ${msg}`, isError: true };
+  }
+}
+
+async function executeDropScoop(
+  input: unknown,
+  config: ScoopManagementToolsConfig
+): Promise<ToolResult> {
+  const { scoop_name } = input as { scoop_name: string };
+  const target = config.getScoops().find((s) => s.folder === scoop_name || s.name === scoop_name);
+  if (!target) return notFoundError(scoop_name, config.getScoops);
+  if (target.isCone) return { content: 'Cannot drop the cone (yourself).', isError: true };
+  try {
+    await config.onDropScoop!(target.jid);
+    log.info('Scoop dropped', { name: target.name, folder: target.folder });
+    return { content: `Scoop "${target.name}" (${target.folder}) has been dropped.` };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { content: `Failed to drop scoop: ${msg}`, isError: true };
+  }
+}
+
+function emptyNamesError(): ToolResult {
+  return { content: 'scoop_names must be a non-empty array.', isError: true };
+}
+
+function noMatchingScoopsError(unknownNames: readonly string[]): ToolResult {
+  return {
+    content: `No matching scoops found. Unknown: ${unknownNames.join(', ')}`,
+    isError: true,
+  };
+}
+
+async function executeMuteScoops(
+  input: unknown,
+  config: ScoopManagementToolsConfig
+): Promise<ToolResult> {
+  const { scoop_names } = input as { scoop_names: string[] };
+  if (!Array.isArray(scoop_names) || scoop_names.length === 0) return emptyNamesError();
+  const { resolved, unknown } = resolveScoopNames(scoop_names, config.getScoops);
+  if (resolved.length === 0) return noMatchingScoopsError(unknown);
+  config.onMuteScoops!(resolved.map((s) => s.jid));
+  log.info('Scoops muted', { names: resolved.map((s) => s.folder) });
+  const muted = resolved.map((s) => s.folder).join(', ');
+  const warn = unknown.length > 0 ? ` (unknown: ${unknown.join(', ')})` : '';
+  return { content: `Muted: ${muted}${warn}` };
+}
+
+/** Render the stashed-completion section for scoop_unmute output. */
+function formatUnmuteStashSection(
+  consumed: ReadonlyArray<{
+    jid: string;
+    summary: string;
+    timestamp: string;
+    notificationPath: string | null;
+  }>,
+  jidToFolder: ReadonlyMap<string, string>
+): string[] {
+  if (consumed.length === 0) return ['No stashed completions.'];
+  const lines: string[] = ['', 'Stashed completions:'];
+  for (const entry of consumed) {
+    const folder = jidToFolder.get(entry.jid) ?? entry.jid;
+    lines.push(`--- ${folder} ---`);
+    if (entry.notificationPath) {
+      lines.push(`VFS path: ${entry.notificationPath}`);
+    }
+    lines.push(entry.summary);
+  }
+  return lines;
+}
+
+async function executeUnmuteScoops(
+  input: unknown,
+  config: ScoopManagementToolsConfig
+): Promise<ToolResult> {
+  const { scoop_names } = input as { scoop_names: string[] };
+  if (!Array.isArray(scoop_names) || scoop_names.length === 0) return emptyNamesError();
+  const { resolved, unknown } = resolveScoopNames(scoop_names, config.getScoops);
+  if (resolved.length === 0) return noMatchingScoopsError(unknown);
+  const jids = resolved.map((s) => s.jid);
+  const jidToFolder = new Map(resolved.map((s) => [s.jid, s.folder]));
+  const consumed = await config.onUnmuteScoops!(jids);
+  log.info('Scoops unmuted', {
+    names: resolved.map((s) => s.folder),
+    stashedCount: consumed.length,
+  });
+  const unmutedFolders = resolved.map((s) => s.folder).join(', ');
+  const warn = unknown.length > 0 ? ` (unknown: ${unknown.join(', ')})` : '';
+  const lines: string[] = [`Unmuted: ${unmutedFolders}${warn}`];
+  lines.push(...formatUnmuteStashSection(consumed, jidToFolder));
+  return { content: lines.join('\n') };
+}
+
+function validateWaitInput(scoopNames: unknown, timeoutMs: unknown): ToolResult | null {
+  if (!Array.isArray(scoopNames) || scoopNames.length === 0) return emptyNamesError();
+  if (
+    timeoutMs !== undefined &&
+    (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs < 0)
+  ) {
+    return {
+      content: 'timeout_ms must be a non-negative finite number (or omitted).',
+      isError: true,
+    };
+  }
+  return null;
+}
+
+/** Format the success message for scoop_wait. */
+function formatWaitContent(
+  scheduledFolders: string,
+  unknownNames: readonly string[],
+  droppedFolders: string,
+  timeoutMs: number | undefined
+): string {
+  const tail = timeoutMs !== undefined ? ` (timeout: ${timeoutMs}ms)` : ' (no timeout)';
+  const warnUnknown =
+    unknownNames.length > 0 ? ` Unknown (skipped): ${unknownNames.join(', ')}.` : '';
+  const warnDropped = droppedFolders
+    ? ` Dropped before schedule (skipped): ${droppedFolders}.`
+    : '';
+  return (
+    `scoop_wait scheduled for: ${scheduledFolders}${tail}.${warnUnknown}${warnDropped} ` +
+    `Continue with other work — a 'scoop-wait' lick will be delivered when all listed scoops complete or the timeout fires.`
+  );
+}
+
+async function executeScoopWait(
+  input: unknown,
+  config: ScoopManagementToolsConfig
+): Promise<ToolResult> {
+  const { scoop_names, timeout_ms } = input as { scoop_names: string[]; timeout_ms?: number };
+  const inputError = validateWaitInput(scoop_names, timeout_ms);
+  if (inputError) return inputError;
+
+  const { resolved, unknown } = resolveScoopNames(scoop_names, config.getScoops);
+  if (resolved.length === 0) return noMatchingScoopsError(unknown);
+
+  const jids = resolved.map((s) => s.jid);
+  // Use the orchestrator's return value to build the acknowledgement: a
+  // scoop can be dropped between name resolution and the schedule call.
+  const ack = config.onScheduleScoopWait!(jids, timeout_ms);
+  const jidToFolder = new Map(resolved.map((s) => [s.jid, s.folder]));
+  const scheduledFolders = ack.scheduled.map((jid) => jidToFolder.get(jid) ?? jid).join(', ');
+  const droppedFolders = ack.unknown.map((jid) => jidToFolder.get(jid) ?? jid).join(', ');
+  log.info('Wait scheduled', {
+    scheduled: ack.scheduled.map((jid) => jidToFolder.get(jid) ?? jid),
+    droppedAtSchedule: droppedFolders ? droppedFolders.split(', ') : [],
+    unknownNames: unknown,
+    timeout_ms,
+  });
+  if (ack.scheduled.length === 0) {
+    const dropped = droppedFolders || ack.unknown.join(', ');
+    const unknownTail = unknown.length > 0 ? ` Unknown names: ${unknown.join(', ')}.` : '';
+    return {
+      content: `scoop_wait could not be scheduled — every listed scoop was unregistered before the wait could start (dropped: ${dropped}).${unknownTail}`,
+      isError: true,
+    };
+  }
+  return { content: formatWaitContent(scheduledFolders, unknown, droppedFolders, timeout_ms) };
+}
+
+type SudoOutcome = Awaited<ReturnType<NonNullable<ScoopManagementToolsConfig['onSudoResolve']>>>;
+
+/** Format the result of sudo_allow once the orchestrator settles the request. */
+function formatAllowOutcome(outcome: SudoOutcome, always: boolean): string {
+  if (!always) {
+    return 'Approved (once) — the current action proceeds; future ones will prompt again.';
+  }
+  if (outcome.persisted) {
+    return `Approved (always) — persisted NOPASSWD rule for ${outcome.kind ?? 'unknown'} pattern "${outcome.persistedPattern}" in /scoops/${outcome.scoopFolder ?? '<unknown>'}/etc/sudoers.`;
+  }
+  if (outcome.persistError) {
+    return `Approved (always) but could NOT persist a rule (${outcome.persistError}). The current action is allowed; future occurrences will prompt again.`;
+  }
+  return 'Approved (always) — no persistable rule applied for this request.';
+}
+
+async function executeSudoAllow(
+  input: unknown,
+  config: ScoopManagementToolsConfig
+): Promise<ToolResult> {
+  const { request_id, always, pattern } = input as {
+    request_id: string;
+    always?: boolean;
+    pattern?: string;
+  };
+  if (typeof request_id !== 'string' || request_id.length === 0) {
+    return { content: 'request_id must be a non-empty string.', isError: true };
+  }
+  const decision: SudoDecision = always
+    ? { decision: 'always', ...(pattern ? { pattern } : {}) }
+    : { decision: 'allow' };
+  try {
+    const outcome = await config.onSudoResolve!(request_id, decision);
+    if (!outcome.settled) {
+      return {
+        content: `Sudo request "${request_id}" is unknown, already resolved, or timed out.`,
+        isError: true,
+      };
+    }
+    log.info('Sudo request approved', {
+      id: request_id,
+      always: !!always,
+      persisted: outcome.persisted,
+    });
+    return { content: formatAllowOutcome(outcome, !!always) };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { content: `sudo_allow failed: ${msg}`, isError: true };
+  }
+}
+
+async function executeSudoDeny(
+  input: unknown,
+  config: ScoopManagementToolsConfig
+): Promise<ToolResult> {
+  const { request_id } = input as { request_id: string };
+  if (typeof request_id !== 'string' || request_id.length === 0) {
+    return { content: 'request_id must be a non-empty string.', isError: true };
+  }
+  try {
+    const outcome = await config.onSudoResolve!(request_id, { decision: 'deny' });
+    if (!outcome.settled) {
+      return {
+        content: `Sudo request "${request_id}" is unknown, already resolved, or timed out.`,
+        isError: true,
+      };
+    }
+    log.info('Sudo request denied', { id: request_id });
+    return { content: 'Denied — the scoop will not run this action.' };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { content: `sudo_deny failed: ${msg}`, isError: true };
+  }
+}
+
+async function executeListSudoRequests(config: ScoopManagementToolsConfig): Promise<ToolResult> {
+  const pending = config.onListSudoRequests!();
+  if (pending.length === 0) return { content: 'No pending sudo requests.' };
+  const lines = pending.map((p) => {
+    const s = config.getScoops().find((x) => x.jid === p.scoopJid);
+    const folder = s?.folder ?? p.scoopJid;
+    const suggested = p.request.suggestedPattern
+      ? ` (suggested: ${p.request.suggestedPattern})`
+      : '';
+    return `- ${p.id} — ${folder} — ${p.request.kind}: ${p.request.detail}${suggested}`;
+  });
+  return { content: `Pending sudo requests:\n${lines.join('\n')}` };
+}
+
+async function executeUpdateGlobalMemory(
+  input: unknown,
+  config: ScoopManagementToolsConfig
+): Promise<ToolResult> {
+  const { content } = input as { content: string };
+  try {
+    await config.onSetGlobalMemory!(content);
+    log.info('Global memory updated');
+    return { content: 'Global memory updated successfully.' };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { content: `Failed to update global memory: ${msg}`, isError: true };
+  }
+}
+
+// ---------- tool definitions (object literals only) ----------
+
+function sendMessageTool(config: ScoopManagementToolsConfig): ToolDefinition {
+  return {
     name: 'send_message',
     description: `Send a progress message while still working. Your final output is also sent.`,
     inputSchema: {
       type: 'object',
       properties: {
-        text: {
-          type: 'string',
-          description: 'The message text to send',
-        },
+        text: { type: 'string', description: 'The message text to send' },
         sender: {
           type: 'string',
           description:
@@ -109,537 +636,322 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
       },
       required: ['text'],
     },
-    execute: async (input) => {
-      const { text, sender } = input as { text: string; sender?: string };
-      onSendMessage(text, sender);
-      log.info('Message sent', { scoopFolder: scoop.folder, textLength: text.length });
-      return { content: 'Message sent.' };
-    },
-  });
+    execute: (input) => executeSendMessage(input, config),
+  };
+}
 
-  // Cone only: feed_scoop (formerly delegate_to_scoop)
-  if (scoop.isCone && onFeedScoop) {
-    tools.push({
-      name: 'feed_scoop',
-      description: `Give a scoop a task. Provide a complete, self-contained prompt — the scoop has no access to your conversation. You'll be notified when it finishes.`,
-      inputSchema: {
-        type: 'object',
-        properties: {
-          scoop_name: {
-            type: 'string',
-            description:
-              'The scoop folder name (e.g., "test-scoop"). Use list_scoops to see available scoops.',
-          },
-          prompt: {
-            type: 'string',
-            description:
-              'Complete, self-contained instructions for the scoop. Include ALL context — the scoop cannot see your conversation.',
-          },
+function sudoRequestTool(config: ScoopManagementToolsConfig): ToolDefinition {
+  return {
+    name: 'sudo_request',
+    description:
+      "Ask the cone for an explicit sudo escalation before running a sensitive action. Use this when you know up-front that a command, read, or write will be gated and you want a clean approval round-trip instead of letting the gate fire mid-action. Resolves with the cone's decision (allow / always / deny). 'always' durably widens your sandbox by appending a NOPASSWD rule to /scoops/<folder>/etc/sudoers. 'deny' (or a timeout / dropped cone) resolves fail-closed.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kind: {
+          type: 'string',
+          enum: [...SUDO_KINDS],
+          description:
+            'The kind of sensitive action being requested. command = a shell command; read/write = a VFS path; secret = a credential read. Only command/read/write can be persisted with "always" (no sudoers Secret directive).',
         },
-        required: ['scoop_name', 'prompt'],
+        detail: {
+          type: 'string',
+          description:
+            'The concrete subject of the request (e.g., the command line "git push origin main" or the VFS path "/workspace/.git/config"). The cone sees this verbatim.',
+        },
+        suggested_pattern: {
+          type: 'string',
+          description:
+            'Optional pre-filled glob pattern for an "always" grant (e.g., "git push*" for a command or "/workspace/.git/**" for a path). The cone may override this.',
+        },
       },
-      execute: async (input) => {
-        const { scoop_name, prompt } = input as { scoop_name: string; prompt: string };
-        const target = getScoops().find((s) => s.folder === scoop_name || s.name === scoop_name);
-        if (!target) {
-          const available = getScoops()
-            .filter((s) => !s.isCone)
-            .map((s) => s.folder)
-            .join(', ');
-          return {
-            content: `Scoop "${scoop_name}" not found. Available: ${available}`,
-            isError: true,
-          };
-        }
-        if (target.isCone) {
-          return { content: 'Cannot feed the cone (yourself).', isError: true };
-        }
-        try {
-          await onFeedScoop(target.jid, prompt);
-          log.info('Fed scoop', { target: target.folder, promptLength: prompt.length });
-          return {
-            content: `Task sent to ${target.folder}. You will be notified when it completes.`,
-          };
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          return { content: `Failed to feed scoop: ${msg}`, isError: true };
-        }
+      required: ['kind', 'detail'],
+    },
+    execute: (input) => executeSudoRequest(input, config),
+  };
+}
+
+function feedScoopTool(config: ScoopManagementToolsConfig): ToolDefinition {
+  return {
+    name: 'feed_scoop',
+    description: `Give a scoop a task. Provide a complete, self-contained prompt — the scoop has no access to your conversation. You'll be notified when it finishes.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        scoop_name: {
+          type: 'string',
+          description:
+            'The scoop folder name (e.g., "test-scoop"). Use list_scoops to see available scoops.',
+        },
+        prompt: {
+          type: 'string',
+          description:
+            'Complete, self-contained instructions for the scoop. Include ALL context — the scoop cannot see your conversation.',
+        },
       },
-    });
+      required: ['scoop_name', 'prompt'],
+    },
+    execute: (input) => executeFeedScoop(input, config),
+  };
+}
+
+function listScoopsTool(config: ScoopManagementToolsConfig): ToolDefinition {
+  return {
+    name: 'list_scoops',
+    description: 'List all registered scoops.',
+    inputSchema: { type: 'object', properties: {} },
+    execute: () => executeListScoops(config),
+  };
+}
+
+function scoopScoopTool(config: ScoopManagementToolsConfig): ToolDefinition {
+  return {
+    name: 'scoop_scoop',
+    description:
+      'Create a new scoop. Optionally specify a model, a prompt, and per-scoop sandbox shape (visible/writable paths + command allow-list). If prompt is provided, the scoop starts working immediately after creation (no separate feed_scoop needed).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Display name for the scoop (e.g., "hero-block")' },
+        model: {
+          type: 'string',
+          description:
+            'Model ID for this scoop (e.g., "claude-sonnet-4-6"). If omitted, uses the same model as the cone.',
+        },
+        prompt: {
+          type: 'string',
+          description:
+            'Task prompt for the scoop. If provided, the scoop starts working immediately after creation.',
+        },
+        visiblePaths: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'VFS paths the scoop can READ (not write). Pure replace — what you set is what you get. Omit to use the default ["/workspace/"] which exposes the shared skills tree. Pass [] for no extra read-only paths. Note: the scoop\'s writablePaths are always readable too, so a true read-nothing sandbox also requires writablePaths: []. Mounts remain readable regardless. Trailing slash recommended (e.g. "/shared/data/").',
+        },
+        writablePaths: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'VFS paths the scoop can READ AND WRITE. Pure replace. Omit to use the default ["/scoops/<folder>/", "/shared/"] which gives the scoop its own sandbox plus shared space. Pass [] to block all writes. Trailing slash recommended.',
+        },
+        allowedCommands: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Shell command allow-list. Omit for unrestricted access to every built-in, custom, and .jsh command (the default). Pass a list of command names to restrict the scoop\'s shell — e.g. ["echo","cat","grep"] for a read-only text-processing scoop. Pass ["*"] for explicit unrestricted. Applies to pipelines, substitutions, and network commands too.',
+        },
+        thinking: {
+          type: 'string',
+          enum: [...THINKING_LEVELS],
+          description:
+            'Reasoning / thinking-level for this scoop (pi-ai effort). One of: off, minimal, low, medium, high, xhigh. Omit to inherit the global default ("off"). Non-reasoning models always clamp to "off"; "xhigh" clamps to "high" on models that do not support the max tier.',
+        },
+      },
+      required: ['name'],
+    },
+    execute: (input) => executeScoopScoop(input, config),
+  };
+}
+
+function dropScoopTool(config: ScoopManagementToolsConfig): ToolDefinition {
+  return {
+    name: 'drop_scoop',
+    description:
+      'Remove a scoop and stop its work. The scoop will be unregistered and its context destroyed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        scoop_name: {
+          type: 'string',
+          description:
+            'The scoop folder name (e.g., "test-scoop"). Use list_scoops to see available scoops.',
+        },
+      },
+      required: ['scoop_name'],
+    },
+    execute: (input) => executeDropScoop(input, config),
+  };
+}
+
+function scoopMuteTool(config: ScoopManagementToolsConfig): ToolDefinition {
+  return {
+    name: 'scoop_mute',
+    description:
+      "Suspend scoop→cone notifications for the given scoops. While muted, a scoop's completion is stashed and will be delivered to the cone when you call scoop_unmute (or scoop_wait which consumes it). Use this when coordinating parallel work so each scoop's completion does not trigger its own cone turn.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        scoop_names: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Folder or display names of scoops to mute (e.g., ["writer-scoop", "reviewer-scoop"]).',
+        },
+      },
+      required: ['scoop_names'],
+    },
+    execute: (input) => executeMuteScoops(input, config),
+  };
+}
+
+function scoopUnmuteTool(config: ScoopManagementToolsConfig): ToolDefinition {
+  return {
+    name: 'scoop_unmute',
+    description:
+      'Resume scoop→cone notifications for the given scoops. Any completion that landed while a scoop was muted is returned in this tool result (NOT dispatched as a new cone turn), so you can read all stashed summaries in the current turn. Scoops with no stashed completion are simply unmuted.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        scoop_names: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Folder or display names of scoops to unmute (e.g., ["writer-scoop"]).',
+        },
+      },
+      required: ['scoop_names'],
+    },
+    execute: (input) => executeUnmuteScoops(input, config),
+  };
+}
+
+function scoopWaitTool(config: ScoopManagementToolsConfig): ToolDefinition {
+  return {
+    name: 'scoop_wait',
+    description:
+      "Schedule a non-blocking wait for the given scoops. Returns immediately — the cone keeps its turn — and a `scoop-wait` lick is delivered when every listed scoop completes or the optional timeout fires. Use this to coordinate parallel work without freezing the cone: feed several scoops, call scoop_wait, then continue with other work; you'll be woken by the lick with all per-scoop summaries in one shot. Already-completed scoops (including those whose completion arrived while you were processing your previous turn) are folded into the same lick.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        scoop_names: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Folder or display names of scoops to wait for (e.g., ["writer-scoop", "reviewer-scoop"]).',
+        },
+        timeout_ms: {
+          type: 'number',
+          description:
+            'Optional timeout in milliseconds. If any listed scoop has not completed by the deadline, it is reported as timed-out in the eventual `scoop-wait` lick. Omit for no timeout.',
+        },
+      },
+      required: ['scoop_names'],
+    },
+    execute: (input) => executeScoopWait(input, config),
+  };
+}
+
+function sudoAllowTool(config: ScoopManagementToolsConfig): ToolDefinition {
+  return {
+    name: 'sudo_allow',
+    description:
+      "Approve a pending sudo escalation raised by a scoop via sudo_request. With always=true, the orchestrator additionally appends a NOPASSWD <directive> <pattern> rule to the requesting scoop's /scoops/<folder>/etc/sudoers so the same action won't prompt again. always=false (the default) is allow-once.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        request_id: {
+          type: 'string',
+          description:
+            'The id of the pending request (as delivered in the [sudo-request] notification, e.g. "sudo-abc-…"). Use list_sudo_requests to see outstanding ids.',
+        },
+        always: {
+          type: 'boolean',
+          description:
+            "If true, persist a NOPASSWD rule into the requesting scoop's per-scoop sudoers so the action won't prompt again. Defaults to false (allow-once).",
+        },
+        pattern: {
+          type: 'string',
+          description:
+            'Optional glob pattern to persist when always=true (e.g., "git push*" or "/workspace/.git/**"). Defaults to the request\'s suggestedPattern, then to the exact detail. Ignored when always=false.',
+        },
+      },
+      required: ['request_id'],
+    },
+    execute: (input) => executeSudoAllow(input, config),
+  };
+}
+
+function sudoDenyTool(config: ScoopManagementToolsConfig): ToolDefinition {
+  return {
+    name: 'sudo_deny',
+    description:
+      'Refuse a pending sudo escalation raised by a scoop via sudo_request. The scoop receives a deny decision and the sensitive action does NOT run.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        request_id: {
+          type: 'string',
+          description:
+            'The id of the pending request (as delivered in the [sudo-request] notification). Use list_sudo_requests to see outstanding ids.',
+        },
+      },
+      required: ['request_id'],
+    },
+    execute: (input) => executeSudoDeny(input, config),
+  };
+}
+
+function listSudoRequestsTool(config: ScoopManagementToolsConfig): ToolDefinition {
+  return {
+    name: 'list_sudo_requests',
+    description:
+      'List all pending cone-mediated sudo requests (id, requesting scoop, kind, detail). Use to find an id for sudo_allow / sudo_deny.',
+    inputSchema: { type: 'object', properties: {} },
+    execute: () => executeListSudoRequests(config),
+  };
+}
+
+function updateGlobalMemoryTool(config: ScoopManagementToolsConfig): ToolDefinition {
+  return {
+    name: 'update_global_memory',
+    description:
+      'Update the global CLAUDE.md memory file that is shared across all scoops. Use this instead of write_file for /shared/CLAUDE.md.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        content: { type: 'string', description: 'The new content for the global memory file' },
+      },
+      required: ['content'],
+    },
+    execute: (input) => executeUpdateGlobalMemory(input, config),
+  };
+}
+
+/**
+ * Create scoop-management tools for a scoop context.
+ *
+ * The set of tools surfaced depends on whether the context is a cone or a
+ * sub-scoop and on which optional callbacks the caller wired. Each tool is
+ * built by a small named factory above; the heavy `execute` logic lives in
+ * top-level handler functions so this factory stays a flat list of
+ * conditional pushes.
+ */
+export function createScoopManagementTools(config: ScoopManagementToolsConfig): ToolDefinition[] {
+  const tools: ToolDefinition[] = [];
+  const isCone = config.scoop.isCone;
+
+  // Scoop-only surface.
+  if (!isCone) {
+    tools.push(sendMessageTool(config));
+    if (config.onSudoRequest) tools.push(sudoRequestTool(config));
   }
 
-  // Cone only: list_scoops
-  if (scoop.isCone) {
-    tools.push({
-      name: 'list_scoops',
-      description: 'List all registered scoops.',
-      inputSchema: {
-        type: 'object',
-        properties: {},
-      },
-      execute: async () => {
-        const scoops = getScoops();
-
-        if (scoops.length === 0) {
-          return { content: 'No scoops registered.' };
-        }
-
-        const formatted = scoops
-          .map((s) => {
-            const tab = getScoopTabState?.(s.jid);
-            const status = tab?.status ?? 'unknown';
-            const activity = tab?.lastActivity
-              ? new Date(tab.lastActivity).toLocaleString('en-US', {
-                  month: 'short',
-                  day: 'numeric',
-                  hour: 'numeric',
-                  minute: '2-digit',
-                  hour12: true,
-                })
-              : '';
-            const statusSuffix = activity ? ` — ${status} (since ${activity})` : ` — ${status}`;
-            if (s.isCone) return `- ${s.assistantLabel} (${s.folder}) [CONE]${statusSuffix}`;
-            return `- ${s.name} (${s.folder})${statusSuffix}`;
-          })
-          .join('\n');
-
-        return { content: `Registered scoops:\n${formatted}` };
-      },
-    });
-
-    // Cone only: scoop_scoop (formerly register_scoop)
-    if (onScoopScoop) {
-      tools.push({
-        name: 'scoop_scoop',
-        description:
-          'Create a new scoop. Optionally specify a model, a prompt, and per-scoop sandbox shape (visible/writable paths + command allow-list). If prompt is provided, the scoop starts working immediately after creation (no separate feed_scoop needed).',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            name: {
-              type: 'string',
-              description: 'Display name for the scoop (e.g., "hero-block")',
-            },
-            model: {
-              type: 'string',
-              description:
-                'Model ID for this scoop (e.g., "claude-sonnet-4-6"). If omitted, uses the same model as the cone.',
-            },
-            prompt: {
-              type: 'string',
-              description:
-                'Task prompt for the scoop. If provided, the scoop starts working immediately after creation.',
-            },
-            visiblePaths: {
-              type: 'array',
-              items: { type: 'string' },
-              description:
-                'VFS paths the scoop can READ (not write). Pure replace — what you set is what you get. Omit to use the default ["/workspace/"] which exposes the shared skills tree. Pass [] for no extra read-only paths. Note: the scoop\'s writablePaths are always readable too, so a true read-nothing sandbox also requires writablePaths: []. Mounts remain readable regardless. Trailing slash recommended (e.g. "/shared/data/").',
-            },
-            writablePaths: {
-              type: 'array',
-              items: { type: 'string' },
-              description:
-                'VFS paths the scoop can READ AND WRITE. Pure replace. Omit to use the default ["/scoops/<folder>/", "/shared/"] which gives the scoop its own sandbox plus shared space. Pass [] to block all writes. Trailing slash recommended.',
-            },
-            allowedCommands: {
-              type: 'array',
-              items: { type: 'string' },
-              description:
-                'Shell command allow-list. Omit for unrestricted access to every built-in, custom, and .jsh command (the default). Pass a list of command names to restrict the scoop\'s shell — e.g. ["echo","cat","grep"] for a read-only text-processing scoop. Pass ["*"] for explicit unrestricted. Applies to pipelines, substitutions, and network commands too.',
-            },
-            thinking: {
-              type: 'string',
-              enum: [...THINKING_LEVELS],
-              description:
-                'Reasoning / thinking-level for this scoop (pi-ai effort). One of: off, minimal, low, medium, high, xhigh. Omit to inherit the global default ("off"). Non-reasoning models always clamp to "off"; "xhigh" clamps to "high" on models that do not support the max tier.',
-            },
-          },
-          required: ['name'],
-        },
-        execute: async (input) => {
-          const {
-            name,
-            model,
-            prompt: taskPrompt,
-            visiblePaths,
-            writablePaths,
-            allowedCommands,
-            thinking,
-          } = input as {
-            name: string;
-            model?: string;
-            prompt?: string;
-            visiblePaths?: string[];
-            writablePaths?: string[];
-            allowedCommands?: string[];
-            thinking?: string;
-          };
-
-          // Validate thinking level eagerly so the cone gets a tight error
-          // message instead of a silently-dropped value. Mirrors the
-          // validation done by `agent-bridge.ts` and `agent-command.ts`.
-          let thinkingLevel: ThinkingLevel | undefined;
-          if (thinking !== undefined) {
-            if (!isThinkingLevel(thinking)) {
-              return {
-                content: `Invalid thinking level "${thinking}". Must be one of: ${THINKING_LEVELS.join(', ')}.`,
-                isError: true,
-              };
-            }
-            thinkingLevel = thinking;
-          }
-          const folder =
-            name
-              .toLowerCase()
-              .replace(/[^a-z0-9]+/g, '-')
-              .replace(/^-+|-+$/g, '')
-              .slice(0, 50) + '-scoop';
-
-          try {
-            // Scoop sandbox shape — the cone can override any of these three
-            // via tool input. Defaults are applied here (not in the
-            // orchestrator) so the `ScoopConfig` surface stays pure-replace:
-            // what you set is what you get. Stamping `configSchemaVersion`
-            // tells the orchestrator this record has explicit config and
-            // skips the compat migration on restore.
-            const newScoop = await onScoopScoop({
-              name,
-              folder,
-              trigger: `@${folder}`,
-              isCone: false,
-              type: 'scoop',
-              requiresTrigger: true,
-              assistantLabel: folder,
-              addedAt: new Date().toISOString(),
-              config: {
-                ...(model ? { modelId: model } : {}),
-                visiblePaths: visiblePaths ?? ['/workspace/'],
-                writablePaths: writablePaths ?? [`/scoops/${folder}/`, '/shared/'],
-                ...(allowedCommands ? { allowedCommands } : {}),
-                ...(thinkingLevel ? { thinkingLevel } : {}),
-              },
-              configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
-            });
-
-            log.info('Scoop created', { name, folder });
-
-            // If prompt provided, feed immediately and await the delegate
-            // call so setup failures (e.g. db.saveMessage) surface to the
-            // cone instead of being logged after a success response.
-            // onFeedScoop → delegateToScoop awaits only the persistence +
-            // prompt dispatch; the scoop's agent loop still runs
-            // fire-and-forget in the background, so this doesn't block on
-            // the LLM turn. The scoop's context is already initialized by
-            // the time onScoopScoop resolves (orchestrator.registerScoop
-            // awaits createScoopTab), so the prompt won't race init either.
-            if (taskPrompt && onFeedScoop) {
-              try {
-                await onFeedScoop(newScoop.jid, taskPrompt);
-              } catch (err) {
-                const msg = err instanceof Error ? err.message : String(err);
-                log.error('Auto-feed failed', { name, error: msg });
-                return {
-                  content:
-                    `Scoop "${name}" created as "${folder}" but the initial task could not be sent: ${msg}. ` +
-                    `Use feed_scoop to retry.`,
-                  isError: true,
-                };
-              }
-              return {
-                content: `Scoop "${name}" created as "${folder}" and task sent. It is now working on it.`,
-              };
-            }
-
-            return {
-              content: `Scoop "${name}" created as "${folder}". Use feed_scoop to give it a task.`,
-            };
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            return { content: `Failed to create scoop: ${msg}`, isError: true };
-          }
-        },
-      });
+  // Cone-only surface.
+  if (isCone) {
+    if (config.onFeedScoop) tools.push(feedScoopTool(config));
+    tools.push(listScoopsTool(config));
+    if (config.onScoopScoop) tools.push(scoopScoopTool(config));
+    if (config.onDropScoop) tools.push(dropScoopTool(config));
+    if (config.onMuteScoops) tools.push(scoopMuteTool(config));
+    if (config.onUnmuteScoops) tools.push(scoopUnmuteTool(config));
+    if (config.onScheduleScoopWait) tools.push(scoopWaitTool(config));
+    if (config.onSudoResolve) {
+      tools.push(sudoAllowTool(config));
+      tools.push(sudoDenyTool(config));
     }
-
-    // Cone only: drop_scoop
-    if (onDropScoop) {
-      tools.push({
-        name: 'drop_scoop',
-        description:
-          'Remove a scoop and stop its work. The scoop will be unregistered and its context destroyed.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            scoop_name: {
-              type: 'string',
-              description:
-                'The scoop folder name (e.g., "test-scoop"). Use list_scoops to see available scoops.',
-            },
-          },
-          required: ['scoop_name'],
-        },
-        execute: async (input) => {
-          const { scoop_name } = input as { scoop_name: string };
-          const target = getScoops().find((s) => s.folder === scoop_name || s.name === scoop_name);
-          if (!target) {
-            const available = getScoops()
-              .filter((s) => !s.isCone)
-              .map((s) => s.folder)
-              .join(', ');
-            return {
-              content: `Scoop "${scoop_name}" not found. Available: ${available}`,
-              isError: true,
-            };
-          }
-          if (target.isCone) {
-            return { content: 'Cannot drop the cone (yourself).', isError: true };
-          }
-          try {
-            await onDropScoop(target.jid);
-            log.info('Scoop dropped', { name: target.name, folder: target.folder });
-            return { content: `Scoop "${target.name}" (${target.folder}) has been dropped.` };
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            return { content: `Failed to drop scoop: ${msg}`, isError: true };
-          }
-        },
-      });
-    }
-
-    // Cone only: scoop_mute — suspend completion notifications from the
-    // listed scoops so they don't trigger cone turns while parallel work
-    // is in flight. Completions are stashed and flushed on scoop_unmute.
-    if (onMuteScoops) {
-      tools.push({
-        name: 'scoop_mute',
-        description:
-          "Suspend scoop→cone notifications for the given scoops. While muted, a scoop's completion is stashed and will be delivered to the cone when you call scoop_unmute (or scoop_wait which consumes it). Use this when coordinating parallel work so each scoop's completion does not trigger its own cone turn.",
-        inputSchema: {
-          type: 'object',
-          properties: {
-            scoop_names: {
-              type: 'array',
-              items: { type: 'string' },
-              description:
-                'Folder or display names of scoops to mute (e.g., ["writer-scoop", "reviewer-scoop"]).',
-            },
-          },
-          required: ['scoop_names'],
-        },
-        execute: async (input) => {
-          const { scoop_names } = input as { scoop_names: string[] };
-          if (!Array.isArray(scoop_names) || scoop_names.length === 0) {
-            return { content: 'scoop_names must be a non-empty array.', isError: true };
-          }
-          const { resolved, unknown } = resolveScoopNames(scoop_names, getScoops);
-          if (resolved.length === 0) {
-            return {
-              content: `No matching scoops found. Unknown: ${unknown.join(', ')}`,
-              isError: true,
-            };
-          }
-          onMuteScoops(resolved.map((s) => s.jid));
-          log.info('Scoops muted', { names: resolved.map((s) => s.folder) });
-          const muted = resolved.map((s) => s.folder).join(', ');
-          const warn = unknown.length > 0 ? ` (unknown: ${unknown.join(', ')})` : '';
-          return { content: `Muted: ${muted}${warn}` };
-        },
-      });
-    }
-
-    // Cone only: scoop_unmute — resume notifications AND claim any
-    // completion that landed while the scoop was muted. The stashed
-    // summaries are returned in THIS tool's result so the cone can read
-    // them in the current turn; they are NOT re-fired as fresh
-    // scoop-notify events (which would generate a new cone turn and
-    // defeat the whole point of muting in the first place).
-    if (onUnmuteScoops) {
-      tools.push({
-        name: 'scoop_unmute',
-        description:
-          'Resume scoop→cone notifications for the given scoops. Any completion that landed while a scoop was muted is returned in this tool result (NOT dispatched as a new cone turn), so you can read all stashed summaries in the current turn. Scoops with no stashed completion are simply unmuted.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            scoop_names: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Folder or display names of scoops to unmute (e.g., ["writer-scoop"]).',
-            },
-          },
-          required: ['scoop_names'],
-        },
-        execute: async (input) => {
-          const { scoop_names } = input as { scoop_names: string[] };
-          if (!Array.isArray(scoop_names) || scoop_names.length === 0) {
-            return { content: 'scoop_names must be a non-empty array.', isError: true };
-          }
-          const { resolved, unknown } = resolveScoopNames(scoop_names, getScoops);
-          if (resolved.length === 0) {
-            return {
-              content: `No matching scoops found. Unknown: ${unknown.join(', ')}`,
-              isError: true,
-            };
-          }
-          const jids = resolved.map((s) => s.jid);
-          const jidToFolder = new Map(resolved.map((s) => [s.jid, s.folder]));
-          const consumed = await onUnmuteScoops(jids);
-          log.info('Scoops unmuted', {
-            names: resolved.map((s) => s.folder),
-            stashedCount: consumed.length,
-          });
-
-          const unmutedFolders = resolved.map((s) => s.folder).join(', ');
-          const warn = unknown.length > 0 ? ` (unknown: ${unknown.join(', ')})` : '';
-          const lines: string[] = [`Unmuted: ${unmutedFolders}${warn}`];
-          if (consumed.length === 0) {
-            lines.push('No stashed completions.');
-          } else {
-            lines.push('', 'Stashed completions:');
-            for (const entry of consumed) {
-              const folder = jidToFolder.get(entry.jid) ?? entry.jid;
-              lines.push(`--- ${folder} ---`);
-              if (entry.notificationPath) {
-                lines.push(`VFS path: ${entry.notificationPath}`);
-              }
-              lines.push(entry.summary);
-            }
-          }
-          return { content: lines.join('\n') };
-        },
-      });
-    }
-
-    // Cone only: scoop_wait — schedule a NON-BLOCKING wait for a set of
-    // scoops. The tool returns immediately so the cone can keep working;
-    // when all listed scoops complete (or the optional timeout expires)
-    // the orchestrator delivers a `scoop-wait` channel lick to the cone
-    // with each scoop's summary. Target scoops are implicitly muted for
-    // the duration so individual `scoop-notify` events don't fire on top
-    // of the eventual `scoop-wait` lick.
-    if (onScheduleScoopWait) {
-      tools.push({
-        name: 'scoop_wait',
-        description:
-          "Schedule a non-blocking wait for the given scoops. Returns immediately — the cone keeps its turn — and a `scoop-wait` lick is delivered when every listed scoop completes or the optional timeout fires. Use this to coordinate parallel work without freezing the cone: feed several scoops, call scoop_wait, then continue with other work; you'll be woken by the lick with all per-scoop summaries in one shot. Already-completed scoops (including those whose completion arrived while you were processing your previous turn) are folded into the same lick.",
-        inputSchema: {
-          type: 'object',
-          properties: {
-            scoop_names: {
-              type: 'array',
-              items: { type: 'string' },
-              description:
-                'Folder or display names of scoops to wait for (e.g., ["writer-scoop", "reviewer-scoop"]).',
-            },
-            timeout_ms: {
-              type: 'number',
-              description:
-                'Optional timeout in milliseconds. If any listed scoop has not completed by the deadline, it is reported as timed-out in the eventual `scoop-wait` lick. Omit for no timeout.',
-            },
-          },
-          required: ['scoop_names'],
-        },
-        execute: async (input) => {
-          const { scoop_names, timeout_ms } = input as {
-            scoop_names: string[];
-            timeout_ms?: number;
-          };
-          if (!Array.isArray(scoop_names) || scoop_names.length === 0) {
-            return { content: 'scoop_names must be a non-empty array.', isError: true };
-          }
-          if (
-            timeout_ms !== undefined &&
-            (typeof timeout_ms !== 'number' || !Number.isFinite(timeout_ms) || timeout_ms < 0)
-          ) {
-            return {
-              content: 'timeout_ms must be a non-negative finite number (or omitted).',
-              isError: true,
-            };
-          }
-          const { resolved, unknown } = resolveScoopNames(scoop_names, getScoops);
-          if (resolved.length === 0) {
-            return {
-              content: `No matching scoops found. Unknown: ${unknown.join(', ')}`,
-              isError: true,
-            };
-          }
-          const jids = resolved.map((s) => s.jid);
-          // Use the orchestrator's return value to build the
-          // acknowledgement: a scoop can be dropped between name
-          // resolution and the schedule call, in which case the
-          // orchestrator will report it as `unknown` even though
-          // `resolveScoopNames` accepted it. Trusting only the
-          // tool-side resolution would tell the cone "scheduled for X"
-          // when X is no longer registered and will never produce a
-          // result row in the eventual lick.
-          const ack = onScheduleScoopWait(jids, timeout_ms);
-          const jidToFolder = new Map(resolved.map((s) => [s.jid, s.folder]));
-          const scheduledFolders = ack.scheduled
-            .map((jid) => jidToFolder.get(jid) ?? jid)
-            .join(', ');
-          const droppedFolders = ack.unknown.map((jid) => jidToFolder.get(jid) ?? jid).join(', ');
-          log.info('Wait scheduled', {
-            scheduled: ack.scheduled.map((jid) => jidToFolder.get(jid) ?? jid),
-            droppedAtSchedule: droppedFolders ? droppedFolders.split(', ') : [],
-            unknownNames: unknown,
-            timeout_ms,
-          });
-          if (ack.scheduled.length === 0) {
-            // Every resolved jid was dropped between resolution and
-            // scheduling; nothing to wait on. Report this as an error
-            // so the cone retries instead of waiting on a lick that
-            // will never fire.
-            const dropped = droppedFolders || ack.unknown.join(', ');
-            const unknownTail = unknown.length > 0 ? ` Unknown names: ${unknown.join(', ')}.` : '';
-            return {
-              content: `scoop_wait could not be scheduled — every listed scoop was unregistered before the wait could start (dropped: ${dropped}).${unknownTail}`,
-              isError: true,
-            };
-          }
-          const tail = timeout_ms !== undefined ? ` (timeout: ${timeout_ms}ms)` : ' (no timeout)';
-          const warnUnknown =
-            unknown.length > 0 ? ` Unknown (skipped): ${unknown.join(', ')}.` : '';
-          const warnDropped = droppedFolders
-            ? ` Dropped before schedule (skipped): ${droppedFolders}.`
-            : '';
-          return {
-            content:
-              `scoop_wait scheduled for: ${scheduledFolders}${tail}.${warnUnknown}${warnDropped} ` +
-              `Continue with other work — a 'scoop-wait' lick will be delivered when all listed scoops complete or the timeout fires.`,
-          };
-        },
-      });
-    }
-
-    // Cone only: update_global_memory
-    if (onSetGlobalMemory && getGlobalMemory) {
-      tools.push({
-        name: 'update_global_memory',
-        description:
-          'Update the global CLAUDE.md memory file that is shared across all scoops. Use this instead of write_file for /shared/CLAUDE.md.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            content: {
-              type: 'string',
-              description: 'The new content for the global memory file',
-            },
-          },
-          required: ['content'],
-        },
-        execute: async (input) => {
-          const { content } = input as { content: string };
-          try {
-            await onSetGlobalMemory(content);
-            log.info('Global memory updated');
-            return { content: 'Global memory updated successfully.' };
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            return { content: `Failed to update global memory: ${msg}`, isError: true };
-          }
-        },
-      });
+    if (config.onListSudoRequests) tools.push(listSudoRequestsTool(config));
+    if (config.onSetGlobalMemory && config.getGlobalMemory) {
+      tools.push(updateGlobalMemoryTool(config));
     }
   }
 

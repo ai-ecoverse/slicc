@@ -42,7 +42,16 @@ describe('createChatFixture', () => {
       .map((m) => m.channel)
       .sort();
     expect(channels).toEqual(
-      ['cron', 'fswatch', 'navigate', 'session-reload', 'sprinkle', 'upgrade', 'webhook'].sort()
+      [
+        'cron',
+        'fswatch',
+        'navigate',
+        'session-reload',
+        'sprinkle',
+        'sudo-request',
+        'upgrade',
+        'webhook',
+      ].sort()
     );
   });
 

@@ -2140,3 +2140,115 @@ describe('ScoopContext — spinner cleanup on early-return paths (regression fix
     expect((ctx as any).status).toBe('ready');
   });
 });
+
+describe('ScoopContext buildSudoWiring (per-scoop command grant isolation)', () => {
+  it('non-cone scoop: persistCommandGrant is overridden to a no-op (no global leak)', async () => {
+    const { FsWatcher } = await import('../../src/fs/fs-watcher.js');
+    const { VirtualFS } = await import('../../src/fs/index.js');
+    const { SudoManager } = await import('../../src/sudo/sudo-manager.js');
+    const { matchCommand } = await import('../../src/shell/sudo/sudoers.js');
+
+    const vfs = await VirtualFS.create({
+      dbName: `test-scoop-ctx-grant-isolation-${Date.now()}`,
+      wipe: true,
+    });
+    const watcher = new FsWatcher();
+    vfs.setWatcher(watcher);
+    const mgr = new SudoManager({
+      fs: vfs,
+      watcher,
+      broker: { requestApproval: vi.fn(async () => ({ decision: 'deny' as const })) },
+    });
+    await mgr.init();
+
+    const callbacks: ScoopContextCallbacks = {
+      ...createMockCallbacks(),
+      onSudoRequest: vi.fn(async () => ({ decision: 'allow' as const })),
+    };
+    const ctx = new ScoopContext(
+      testScoop,
+      callbacks,
+      vfs,
+      undefined,
+      undefined,
+      'cone_main_1',
+      undefined,
+      mgr
+    );
+
+    // Hit the private `buildSudoWiring` so we don't need a full init() with
+    // shell/skills/agent — the wiring contract is what matters here.
+    const wiring = (ctx as any).buildSudoWiring() as {
+      shellConfig: { persistCommandGrant?: (p: string) => Promise<void> };
+    };
+    expect(wiring).not.toBeNull();
+    expect(wiring.shellConfig.persistCommandGrant).toBeTypeOf('function');
+
+    // Calling the overridden sink for a non-cone scoop must NOT write the
+    // global granted file. Before the fix this routed to
+    // `SudoManager.persistCommandGrant`, which would seed
+    // `/etc/sudoers.d/granted` with a global NOPASSWD rule — leaking a
+    // scoop-A approval into every other scoop.
+    await wiring.shellConfig.persistCommandGrant?.('rm -rf *');
+    expect(await vfs.exists('/etc/sudoers.d/granted')).toBe(false);
+    expect(matchCommand(mgr.getPolicy(), 'rm -rf /tmp')).toBe('no-match');
+
+    mgr.dispose();
+    vfs.dispose?.();
+  });
+
+  it('cone scoop: keeps the global persistCommandGrant sink (unchanged behavior)', async () => {
+    const { FsWatcher } = await import('../../src/fs/fs-watcher.js');
+    const { VirtualFS } = await import('../../src/fs/index.js');
+    const { SudoManager } = await import('../../src/sudo/sudo-manager.js');
+    const { matchCommand } = await import('../../src/shell/sudo/sudoers.js');
+
+    const vfs = await VirtualFS.create({
+      dbName: `test-scoop-ctx-grant-cone-${Date.now()}`,
+      wipe: true,
+    });
+    const watcher = new FsWatcher();
+    vfs.setWatcher(watcher);
+    const mgr = new SudoManager({
+      fs: vfs,
+      watcher,
+      broker: { requestApproval: vi.fn(async () => ({ decision: 'deny' as const })) },
+    });
+    await mgr.init();
+
+    const coneScoop: RegisteredScoop = {
+      jid: 'cone_main_1',
+      name: 'Main',
+      folder: 'main',
+      isCone: true,
+      type: 'cone',
+      requiresTrigger: false,
+      assistantLabel: 'sliccy',
+      addedAt: new Date().toISOString(),
+    };
+    const ctx = new ScoopContext(
+      coneScoop,
+      createMockCallbacks(),
+      vfs,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      mgr
+    );
+
+    const wiring = (ctx as any).buildSudoWiring() as {
+      shellConfig: { persistCommandGrant?: (p: string) => Promise<void> };
+    };
+    expect(wiring).not.toBeNull();
+
+    // The cone keeps the manager's sink, which writes the global granted file
+    // and reloads the policy active.
+    await wiring.shellConfig.persistCommandGrant?.('rm -rf *');
+    expect(await vfs.exists('/etc/sudoers.d/granted')).toBe(true);
+    expect(matchCommand(mgr.getPolicy(), 'rm -rf /tmp')).toBe('nopasswd-allow');
+
+    mgr.dispose();
+    vfs.dispose?.();
+  });
+});

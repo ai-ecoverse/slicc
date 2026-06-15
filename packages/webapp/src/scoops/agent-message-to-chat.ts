@@ -421,8 +421,11 @@ export function lickChannelFromSenderName(sender: string): LickChannel | null {
  * assistantLabel` (no `<channel>:` prefix), so the sender anchor can't see
  * them — but their bodies open with distinctive markers:
  *
- *   - `[@<scoop> completed]…` — scoop-notify (a scoop finished its work)
- *   - `[@<scoop> idle]…`      — scoop-idle (the idle nag)
+ *   - `[@<scoop> completed]…`    — scoop-notify (a scoop finished its work)
+ *   - `[@<scoop> idle]…`         — scoop-idle (the idle nag)
+ *   - `[@<scoop> sudo-request]…` — sudo-request (a scoop is asking the cone
+ *                                  to approve a gated action; emitted by
+ *                                  `Orchestrator.formatSudoRequestNotification`)
  *   - `[scoop_wait completed]…` / `[scoop_wait timeout]…` — scoop-wait
  *
  * Without this, the live UI rendered them as lick cards (the broadcast
@@ -431,6 +434,7 @@ export function lickChannelFromSenderName(sender: string): LickChannel | null {
 export function lickChannelFromBody(body: string): LickChannel | null {
   const scoopMarker = /^\[@[^\]\s]+ (completed|idle)\]/.exec(body);
   if (scoopMarker) return scoopMarker[1] === 'idle' ? 'scoop-idle' : 'scoop-notify';
+  if (/^\[@[^\]\s]+ sudo-request\]/.test(body)) return 'sudo-request';
   if (/^\[scoop_wait [^\]]+\]/.test(body)) return 'scoop-wait';
   if (body.startsWith('[Session Reload]')) return 'session-reload';
   return null;

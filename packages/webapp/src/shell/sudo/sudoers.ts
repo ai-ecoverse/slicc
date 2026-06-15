@@ -44,6 +44,38 @@ export const SUDOERS_FILE = '/etc/sudoers';
 /** Directory of sudoers drop-ins (self-protected for writes). */
 export const SUDOERS_D_DIR = '/etc/sudoers.d';
 
+/** Matches the canonical per-scoop sudoers path `/scoops/<folder>/etc/sudoers`. */
+const SCOOP_SUDOERS_RE = /^\/scoops\/[^/]+\/etc\/sudoers$/;
+
+/** Construct the canonical per-scoop sudoers path for `folder`. */
+export function scoopSudoersPath(folder: string): string {
+  return `/scoops/${folder}/etc/sudoers`;
+}
+
+/**
+ * Default disposition for `no-match` in an enforcement context. The cone uses
+ * `'allow'` (no implicit gating); scoops use `'require-approval'` so any path
+ * or command not explicitly granted by their per-scoop sudoers file is gated.
+ */
+export type DefaultDisposition = 'allow' | 'require-approval';
+
+/**
+ * Interpret a {@link MatchResult} against the calling context's default
+ * disposition for `no-match`. Plain matches (`require-approval`) and explicit
+ * grants (`nopasswd-allow`) always win; only `no-match` is upgraded to
+ * `require-approval` when the context defaults to `'require-approval'`.
+ *
+ * The matcher itself is intentionally kept pure — the default lives at the
+ * call site so the same policy can be evaluated under different contexts.
+ */
+export function applyDefaultDisposition(
+  match: MatchResult,
+  defaultDisposition: DefaultDisposition
+): MatchResult {
+  if (match !== 'no-match') return match;
+  return defaultDisposition === 'require-approval' ? 'require-approval' : 'no-match';
+}
+
 /** An empty, self-protection-only policy (the fail-safe baseline). */
 export function emptyPolicy(): SudoersPolicy {
   return { cmnd: [], read: [], write: [] };
@@ -228,15 +260,18 @@ function isSelfProtectedWrite(normalized: string): boolean {
   return (
     normalized === SUDOERS_FILE ||
     normalized === SUDOERS_D_DIR ||
-    normalized.startsWith(`${SUDOERS_D_DIR}/`)
+    normalized.startsWith(`${SUDOERS_D_DIR}/`) ||
+    SCOOP_SUDOERS_RE.test(normalized)
   );
 }
 
 /**
- * Match a read/write to `path` against the policy. Writes to `/etc/sudoers`
- * or anything under `/etc/sudoers.d/` ALWAYS require approval, regardless of
- * configuration — `NOPASSWD` cannot override the invariant. Reads of those
- * files are allowed (visudo-style) and fall through to normal matching.
+ * Match a read/write to `path` against the policy. Writes to `/etc/sudoers`,
+ * anything under `/etc/sudoers.d/`, or any per-scoop sudoers file
+ * (`/scoops/<folder>/etc/sudoers`) ALWAYS require approval, regardless of
+ * configuration — `NOPASSWD` cannot override the invariant, even though a
+ * scoop's sudoers sits inside its own writable tree. Reads of those files
+ * are allowed (visudo-style) and fall through to normal matching.
  */
 export function matchPath(policy: SudoersPolicy, op: PathOp, path: string): MatchResult {
   const normalized = normalizePath(path);

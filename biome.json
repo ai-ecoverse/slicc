@@ -280,7 +280,6 @@
         "packages/cloudflare-worker/src/index.ts",
         "packages/webapp/cloud/app.js",
         "packages/webapp/src/core/context-compaction.ts",
-        "packages/webapp/src/scoops/scoop-management-tools.ts",
         "packages/webapp/src/scoops/tray-leader-sync.ts",
         "packages/webapp/src/shell/supplemental-commands/convert-command.ts",
         "packages/webapp/src/shell/supplemental-commands/crontask-command.ts",
@@ -288,7 +287,6 @@
         "packages/webapp/src/shell/supplemental-commands/open-command.ts",
         "packages/webapp/src/shell/supplemental-commands/pdftk-command.ts",
         "packages/webapp/src/shell/supplemental-commands/websocat-command.ts",
-        "packages/webapp/src/ui/chat-fixture.ts",
         "packages/webapp/src/ui/page-leader-tray.ts",
         "packages/webapp/src/ui/sprinkle-bridge.ts",
         "packages/webapp/src/ui/sprinkle-renderer.ts"
@@ -334,7 +332,6 @@
         "packages/webapp/src/net/link-header.ts",
         "packages/webapp/src/providers/built-in/azure-openai.ts",
         "packages/webapp/src/scoops/db.ts",
-        "packages/webapp/src/scoops/scoop-management-tools.ts",
         "packages/webapp/src/scoops/tray-leader-sync.ts",
         "packages/webapp/src/scoops/tray-webrtc.ts",
         "packages/webapp/src/shell/mcp/oauth.ts",

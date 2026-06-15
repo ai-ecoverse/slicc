@@ -352,7 +352,7 @@ These tools are MCP-style tools for messaging and scoop management.
 
 ### send_message
 
-Universal (available to all scoops).
+Scoop-only (not registered for the cone — it has no parent to message; its assistant output already reaches the UI directly).
 
 | Property   | Value                               |
 | ---------- | ----------------------------------- |
@@ -436,6 +436,72 @@ Cone-only. Update the shared global memory file (`/shared/CLAUDE.md`).
 
 ---
 
+### sudo_request
+
+Scoop-only. Ask the cone for an explicit sudo escalation before running a sensitive
+action. The call blocks until the cone resolves via `sudo_allow` / `sudo_deny` (or
+the registry times out fail-closed).
+
+| Property   | Value                                                                                        |
+| ---------- | -------------------------------------------------------------------------------------------- |
+| **Name**   | `sudo_request`                                                                               |
+| **Input**  | `{ kind: 'command'\|'read'\|'write'\|'secret', detail: string, suggested_pattern?: string }` |
+| **Output** | `{ content: "Cone decision: allow\|always\|deny..." }`                                       |
+
+See [`docs/approvals.md`](./approvals.md) for the threat model. Hidden from the
+chat UI via `hidden-tools.ts` — the user-visible event is the `[sudo-request]`
+channel message the orchestrator delivers to the cone.
+
+---
+
+### sudo_allow
+
+Cone-only. Approve a pending sudo request raised by a scoop. With `always=true`,
+the orchestrator additionally appends a `NOPASSWD <directive> <pattern>` rule to
+the requesting scoop's `/scoops/<folder>/etc/sudoers` so the same action won't
+prompt again.
+
+| Property   | Value                                                        |
+| ---------- | ------------------------------------------------------------ |
+| **Name**   | `sudo_allow`                                                 |
+| **Input**  | `{ request_id: string, always?: boolean, pattern?: string }` |
+| **Output** | `{ content: "Approved (once\|always)..." }`                  |
+
+`pattern` defaults to the request's `suggestedPattern`, then to the exact
+`detail`. `kind: 'secret'` cannot be persisted — there is no sudoers `Secret`
+directive — so `always=true` for a secret request approves once and reports
+"approved but not persisted".
+
+---
+
+### sudo_deny
+
+Cone-only. Refuse a pending sudo request. The scoop receives a `deny` decision
+and the sensitive action does NOT run.
+
+| Property   | Value                                               |
+| ---------- | --------------------------------------------------- |
+| **Name**   | `sudo_deny`                                         |
+| **Input**  | `{ request_id: string }`                            |
+| **Output** | `{ content: "Denied — the scoop will not run..." }` |
+
+---
+
+### list_sudo_requests
+
+Cone-only. List all pending cone-mediated sudo requests (`id`, requesting scoop,
+kind, detail). Use to find an `id` for `sudo_allow` / `sudo_deny`.
+
+| Property   | Value                                          |
+| ---------- | ---------------------------------------------- |
+| **Name**   | `list_sudo_requests`                           |
+| **Input**  | None                                           |
+| **Output** | `{ content: "Pending sudo requests:\n- ..." }` |
+
+Hidden from the chat UI via `hidden-tools.ts`.
+
+---
+
 ## Tool Availability by Scope
 
 | Tool                     | Cone | Scoop          | Notes                                                                 |
@@ -444,12 +510,16 @@ Cone-only. Update the shared global memory file (`/shared/CLAUDE.md`).
 | read_file                | ✓    | ✓ (restricted) | Active in `ScoopContext`                                              |
 | write_file               | ✓    | ✓ (restricted) | Active in `ScoopContext`                                              |
 | edit_file                | ✓    | ✓ (restricted) | Active in `ScoopContext`                                              |
-| **send_message**         | ✓    | ✓              | Scoop-management tool                                                 |
+| **send_message**         | ✗    | ✓              | Scoop-only management tool (scoop→cone progress/result channel)       |
 | **list_scoops**          | ✓    | ✗              | Cone-only scoop-management tool                                       |
 | **scoop_scoop**          | ✓    | ✗              | Cone-only scoop-management tool                                       |
 | **feed_scoop**           | ✓    | ✗              | Cone-only scoop-management tool                                       |
 | **drop_scoop**           | ✓    | ✗              | Cone-only scoop-management tool                                       |
 | **update_global_memory** | ✓    | ✗              | Cone-only scoop-management tool                                       |
+| **sudo_request**         | ✗    | ✓              | Scoop-only — escalate to the cone for an approval decision            |
+| **sudo_allow**           | ✓    | ✗              | Cone-only — resolve a pending sudo request (allow-once or always)     |
+| **sudo_deny**            | ✓    | ✗              | Cone-only — refuse a pending sudo request                             |
+| **list_sudo_requests**   | ✓    | ✗              | Cone-only — snapshot outstanding sudo requests                        |
 
 ---
 

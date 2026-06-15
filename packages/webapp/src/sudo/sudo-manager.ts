@@ -22,6 +22,7 @@ import { createLogger } from '../core/logger.js';
 import type { FsWatcher } from '../fs/fs-watcher.js';
 import type { VirtualFS } from '../fs/index.js';
 import { GRANTED_FILE } from '../fs/sudo-fs.js';
+import type { ScoopConfig } from '../scoops/types.js';
 import type { ShellSudoConfig } from '../shell/almost-bash-shell-headless.js';
 import {
   emptyPolicy,
@@ -31,6 +32,7 @@ import {
   SUDOERS_FILE,
   type SudoersPolicy,
   sanitizeGrantPattern,
+  scoopSudoersPath,
 } from '../shell/sudo/sudoers.js';
 import { createSudoBroker } from './index.js';
 import type { SudoBroker } from './types.js';
@@ -52,13 +54,93 @@ function isSudoersPath(path: string): boolean {
   return path === SUDOERS_FILE || path === SUDOERS_D_DIR || path.startsWith(`${SUDOERS_D_DIR}/`);
 }
 
+/** Matches a per-scoop sudoers path; group 1 captures the scoop folder. */
+const SCOOP_SUDOERS_PATH_RE = /^\/scoops\/([^/]+)\/etc\/sudoers$/;
+
+/** Whether `path` is a per-scoop sudoers file (triggers per-scoop reload). */
+function isScoopSudoersPath(path: string): boolean {
+  return SCOOP_SUDOERS_PATH_RE.test(path);
+}
+
+/** Extract the scoop folder from a per-scoop sudoers path, or `null`. */
+function scoopFolderFromPath(path: string): string | null {
+  return SCOOP_SUDOERS_PATH_RE.exec(path)?.[1] ?? null;
+}
+
+/** Strip a trailing slash (except for the root) so `/x/` + `/**` → `/x/**`. */
+function trimTrailingSlash(s: string): string {
+  return s.length > 1 && s.endsWith('/') ? s.slice(0, -1) : s;
+}
+
+/**
+ * Generate a sudoers file body from a {@link ScoopConfig}. The scoop sandbox
+ * is expressed as NOPASSWD grants — explicit allow-lists that suppress the
+ * `require-approval` default disposition non-cone contexts apply for
+ * unmatched actions:
+ *
+ *   - `allowedCommands` → two token-anchored rules per entry: `NOPASSWD Cmnd <c>`
+ *     (the bare command) and `NOPASSWD Cmnd <c> *` (the command with any
+ *     args, separated by a space). Anchoring the token on a space prevents
+ *     `cat` from matching `catalog` / `cat-file` / `catnap`. Omitted /
+ *     containing `'*'` → unrestricted `NOPASSWD Cmnd *`.
+ *   - `writablePaths`   → `NOPASSWD Write <p>/**` per entry.
+ *   - `visiblePaths`    → `NOPASSWD Read  <p>/**` per entry.
+ *
+ * Each pattern is run through {@link sanitizeGrantPattern} so a value carrying
+ * an embedded newline can never inject extra rules. Self-protection is NOT
+ * encoded here — it lives in `matchPath` and applies even with these grants.
+ */
+export function generateScoopSudoers(config?: ScoopConfig | null): string {
+  const lines: string[] = [
+    '# Per-scoop sudoers — generated from ScoopConfig (sandbox surface).',
+    '# Writes to this file always require approval (self-protected).',
+    '',
+  ];
+
+  const allowed = config?.allowedCommands;
+  if (allowed === undefined || allowed.includes('*')) {
+    lines.push('NOPASSWD Cmnd *');
+  } else {
+    for (const raw of allowed) {
+      const safe = sanitizeGrantPattern(raw);
+      if (safe) {
+        // Token-anchored: `<c>` matches the bare command, `<c> *` matches the
+        // command with arguments. Without the space anchor, `cat*` matches
+        // `catalog` / `cat-file`. A trailing `*` in the entry (e.g. `git push`)
+        // would create `git push *` which still anchors correctly on the
+        // existing space, so callers that want prefix-style matching get
+        // exactly that without the over-match.
+        lines.push(`NOPASSWD Cmnd ${safe}`);
+        lines.push(`NOPASSWD Cmnd ${safe} *`);
+      }
+    }
+  }
+
+  for (const raw of config?.writablePaths ?? []) {
+    const safe = sanitizeGrantPattern(raw);
+    if (safe) lines.push(`NOPASSWD Write ${trimTrailingSlash(safe)}/**`);
+  }
+
+  for (const raw of config?.visiblePaths ?? []) {
+    const safe = sanitizeGrantPattern(raw);
+    if (safe) lines.push(`NOPASSWD Read ${trimTrailingSlash(safe)}/**`);
+  }
+
+  return `${lines.join('\n')}\n`;
+}
+
 export class SudoManager {
   private readonly fs: VirtualFS;
   private readonly watcher: FsWatcher | null;
   private readonly broker: SudoBroker;
   private policy: SudoersPolicy = emptyPolicy();
   private unwatch: (() => void) | null = null;
+  private scoopUnwatch: (() => void) | null = null;
   private reloadChain: Promise<void> = Promise.resolve();
+  /** Per-scoop drop-in policies keyed by scoop folder. */
+  private scoopPolicies: Map<string, SudoersPolicy> = new Map();
+  /** Per-scoop reload chains keyed by scoop folder (serialized like {@link reload}). */
+  private scoopReloadChains: Map<string, Promise<void>> = new Map();
 
   constructor(deps: SudoManagerDeps) {
     this.fs = deps.fs;
@@ -84,6 +166,84 @@ export class SudoManager {
   }
 
   /**
+   * Effective policy for a scoop: global `/etc/sudoers` (+ `/etc/sudoers.d/*`)
+   * ∪ that scoop's own `/scoops/<folder>/etc/sudoers`. The cone does not own a
+   * scoop folder and should keep calling {@link getPolicy} directly.
+   */
+  getPolicyForScoop(folder: string): SudoersPolicy {
+    const local = this.scoopPolicies.get(folder);
+    return local ? mergePolicies(this.policy, local) : this.policy;
+  }
+
+  /**
+   * Generate + write a scoop's `/scoops/<folder>/etc/sudoers` from its config,
+   * then load the resulting policy into the per-scoop cache. Overwrites any
+   * existing file — the config is authoritative when this is called. The
+   * write goes through the raw VFS handle, so the self-protection invariant
+   * (which lives in the {@link createSudoFs} proxy) is not in play here.
+   */
+  async seedScoopSudoers(folder: string, config?: ScoopConfig | null): Promise<void> {
+    const path = scoopSudoersPath(folder);
+    const body = generateScoopSudoers(config ?? undefined);
+    try {
+      await this.fs.mkdir(`/scoops/${folder}/etc`, { recursive: true });
+    } catch {
+      /* already exists */
+    }
+    await this.fs.writeFile(path, body);
+    await this.reloadScoopPolicy(folder);
+    log.info('Seeded per-scoop sudoers', { folder, path });
+  }
+
+  /**
+   * Append a single `NOPASSWD <directive> <pattern>` rule to a scoop's
+   * `/scoops/<folder>/etc/sudoers`, then reload the cached policy. Used by
+   * the cone-mediated `sudo_allow` flow with `always: true` to durably
+   * widen the requesting scoop's sandbox.
+   *
+   * `kind` maps to the sudoers directive: `command → Cmnd`, `read → Read`,
+   * `write → Write`. `pattern` is sanitized via {@link sanitizeGrantPattern}
+   * so an embedded newline cannot inject an extra rule. Returns the safe
+   * pattern that was persisted, or `null` if the pattern collapsed to
+   * empty (no write performed).
+   *
+   * The write goes through the raw VFS handle (this manager owns the
+   * untrusted-realm gate), so it bypasses the self-protection invariant on
+   * `/scoops/<folder>/etc/sudoers` writes the same way {@link seedScoopSudoers}
+   * does.
+   */
+  async appendScoopRule(
+    folder: string,
+    kind: 'command' | 'read' | 'write',
+    pattern: string
+  ): Promise<string | null> {
+    const safe = sanitizeGrantPattern(pattern);
+    if (!safe) return null;
+    const directive = kind === 'command' ? 'Cmnd' : kind === 'read' ? 'Read' : 'Write';
+    const path = scoopSudoersPath(folder);
+
+    let existing = '';
+    try {
+      if (await this.fs.exists(path)) {
+        const raw = await this.fs.readFile(path, { encoding: 'utf-8' });
+        existing = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+      }
+    } catch {
+      existing = '';
+    }
+    try {
+      await this.fs.mkdir(`/scoops/${folder}/etc`, { recursive: true });
+    } catch {
+      /* already exists */
+    }
+    const prefix = existing && !existing.endsWith('\n') ? `${existing}\n` : existing;
+    await this.fs.writeFile(path, `${prefix}NOPASSWD ${directive} ${safe}\n`);
+    await this.reloadScoopPolicy(folder);
+    log.info('Appended per-scoop sudoers rule', { folder, kind, pattern: safe });
+    return safe;
+  }
+
+  /**
    * Command-guard config for a {@link AlmostBashShell}: gated via this manager.
    *
    * `transparentGating` controls whether every dispatched command is wrapped
@@ -106,10 +266,47 @@ export class SudoManager {
     return this.reloadChain;
   }
 
+  /**
+   * Force a re-read of `/scoops/<folder>/etc/sudoers` into the per-scoop
+   * policy cache. Idempotent and serialized through the per-scoop reload
+   * chain. Called from `Orchestrator.createScoopTab` when the file already
+   * exists on disk so any "Always" grants from a previous session are
+   * available before the agent's first turn — without it, the cache would
+   * stay empty until the FS watcher saw a change (and the first turn would
+   * run under the default `'require-approval'` for every in-sandbox path).
+   */
+  reloadScoopPolicyByFolder(folder: string): Promise<void> {
+    return this.reloadScoopPolicy(folder);
+  }
+
   /** Stop watching for changes. Idempotent. */
   dispose(): void {
     this.unwatch?.();
     this.unwatch = null;
+    this.scoopUnwatch?.();
+    this.scoopUnwatch = null;
+  }
+
+  /** Re-read `/scoops/<folder>/etc/sudoers` into the per-scoop policy cache. */
+  private reloadScoopPolicy(folder: string): Promise<void> {
+    const prev = this.scoopReloadChains.get(folder) ?? Promise.resolve();
+    const next = prev.then(() => this.doReloadScoopPolicy(folder));
+    this.scoopReloadChains.set(folder, next);
+    return next;
+  }
+
+  private async doReloadScoopPolicy(folder: string): Promise<void> {
+    const path = scoopSudoersPath(folder);
+    try {
+      if (!(await this.fs.exists(path))) {
+        this.scoopPolicies.delete(folder);
+        return;
+      }
+    } catch {
+      this.scoopPolicies.delete(folder);
+      return;
+    }
+    this.scoopPolicies.set(folder, await this.readPolicyFile(path));
   }
 
   private async doReload(): Promise<void> {
@@ -185,9 +382,23 @@ export class SudoManager {
   }
 
   private startWatching(): void {
-    if (!this.watcher || this.unwatch) return;
-    this.unwatch = this.watcher.watch('/etc', isSudoersPath, () => {
-      void this.reload();
-    });
+    if (!this.watcher) return;
+    if (!this.unwatch) {
+      this.unwatch = this.watcher.watch('/etc', isSudoersPath, () => {
+        void this.reload();
+      });
+    }
+    if (!this.scoopUnwatch) {
+      this.scoopUnwatch = this.watcher.watch('/scoops', isScoopSudoersPath, (events) => {
+        const folders = new Set<string>();
+        for (const ev of events) {
+          const folder = scoopFolderFromPath(ev.path);
+          if (folder) folders.add(folder);
+        }
+        for (const folder of folders) {
+          void this.reloadScoopPolicy(folder);
+        }
+      });
+    }
   }
 }

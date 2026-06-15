@@ -230,6 +230,16 @@ describe('tool presentation', () => {
       ['edit_file', { path: '/tmp/a.ts' }, 'Edit a.ts', 'file-pen'],
       ['send_message', { message: 'hi' }, 'Send a message to Sliccy', 'message-circle'],
       ['feed_scoop', { name: 'pomodoro' }, 'Feed the pomodoro scoop', 'utensils'],
+      ['sudo_allow', { request_id: 'sudo-1' }, 'Grant the scoop access', 'shield-check'],
+      ['sudo_deny', { request_id: 'sudo-1' }, 'Hold the scoop back', 'shield-x'],
+      [
+        'sudo_request',
+        { kind: 'command', detail: 'git push' },
+        'Ask for command access',
+        'shield-question',
+      ],
+      ['sudo_request', {}, 'Ask for more access', 'shield-question'],
+      ['list_sudo_requests', {}, 'Check access requests', 'list-checks'],
       ['web_search', { query: 'x' }, 'Web search', 'wrench'],
     ];
     for (const [name, input, title, icon] of cases) {
@@ -390,6 +400,22 @@ describe('render-time lick classification + scoop-identity tags', () => {
     expect(sprinkle[0].tagName.toLowerCase()).toBe('slicc-lick-card');
     expect(sprinkle[0].getAttribute('kind')).toBe('sprinkle');
     expect(sprinkle[0].getAttribute('event-label')).toBe('blame-roulette');
+
+    // Sudo-request bodies are emitted by `Orchestrator.formatSudoRequestNotification`
+    // as `[@<scoop> sudo-request]…` — both the body-marker classifier and
+    // the scoop-name extractor must recognize this marker so a replayed
+    // sudo request hydrates into a scoop-tagged lick card instead of a
+    // plain user bubble.
+    const sudo = messageEls({
+      id: 'd',
+      role: 'user',
+      content:
+        '[@pr1003-always-scoop sudo-request]\nRequest ID: sudo-mqf7gh5c-cr56age9\nKind: command\nDetail: date -u',
+      timestamp: 1,
+    });
+    expect(sudo[0].tagName.toLowerCase()).toBe('slicc-lick-card');
+    expect(sudo[0].getAttribute('kind')).toBe('sudo-request');
+    expect(sudo[0].getAttribute('event-label')).toBe('pr1003-always');
   });
 
   it('leaves genuine user text with brackets alone', () => {

@@ -22,6 +22,15 @@ import {
   registerSessionCostsProvider,
   type ScoopCostData,
 } from '../shell/supplemental-commands/cost-command.js';
+import {
+  type ConeApprovalRouter,
+  ConeRequestRegistry,
+  createConeApprovalBroker,
+  type PendingSudoRequest,
+  type SudoBroker,
+  type SudoDecision,
+  type SudoRequest,
+} from '../sudo/index.js';
 import { SudoManager } from '../sudo/sudo-manager.js';
 import { applyConeMemoryBudget, CONE_MEMORY_PATH } from './cone-memory-budget.js';
 import * as db from './db.js';
@@ -129,7 +138,7 @@ export interface ScoopObserver {
   onError?: (error: string) => void;
 }
 
-export class Orchestrator {
+export class Orchestrator implements ConeApprovalRouter {
   private scoops: Map<string, RegisteredScoop> = new Map();
   private tabs: Map<string, ScoopTabState> = new Map();
   private contexts: Map<string, ScoopContext> = new Map();
@@ -207,6 +216,16 @@ export class Orchestrator {
    * never rejects — internal errors are logged and swallowed.
    */
   private memoryWriteChain: Promise<void> = Promise.resolve();
+  /**
+   * Pending-request registry for cone-mediated sudo approvals. Populated
+   * by {@link enqueueSudoRequest} (called from a scoop's
+   * {@link createConeApprovalBroker} broker), drained by
+   * {@link resolveSudoRequest} when the cone issues a decision, and
+   * fail-closed on `unregisterScoop`/`shutdown` so a dropped scoop's
+   * outstanding sudo calls never dangle. The user broker is intentionally
+   * NOT routed through here — only scoop-originated requests do.
+   */
+  private sudoRegistry: ConeRequestRegistry = new ConeRequestRegistry();
 
   constructor(
     container: HTMLElement,
@@ -1342,6 +1361,263 @@ export class Orchestrator {
     }
   }
 
+  /**
+   * {@link ConeApprovalRouter} implementation: a non-cone scoop's
+   * {@link SudoBroker.requestApproval} call routes here. Registers the
+   * request in {@link sudoRegistry}, delivers it to the cone (lick +
+   * queued message — mirror {@link deliverCompletionToCone}), and
+   * returns the pending promise. Resolves only when:
+   *   1. The cone calls {@link resolveSudoRequest}.
+   *   2. The scoop is unregistered (`unregisterScoop` → `failScoop`).
+   *   3. The registry's per-request timeout fires.
+   * Cases 2 + 3 resolve `{ decision: 'deny' }` — fail-closed.
+   *
+   * Fail-closed shortcuts (also resolve `deny` synchronously):
+   *   - No cone is registered (the request has nobody to ask).
+   *   - The requesting scoop is unknown (defensive — broker should not
+   *     outlive its owning scoop).
+   *   - Cone delivery throws (handleMessage failure).
+   */
+  async enqueueSudoRequest(scoopJid: string, request: SudoRequest): Promise<SudoDecision> {
+    const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
+    if (!cone) {
+      log.warn('Sudo request received but no cone is registered — failing closed', {
+        scoopJid,
+        kind: request.kind,
+      });
+      return { decision: 'deny' };
+    }
+    if (!this.scoops.has(scoopJid)) {
+      log.warn('Sudo request from unknown scoop — failing closed', {
+        scoopJid,
+        kind: request.kind,
+      });
+      return { decision: 'deny' };
+    }
+
+    const { id, pending } = this.sudoRegistry.register(scoopJid, request);
+    log.info('Sudo request enqueued for cone', {
+      id,
+      scoopJid,
+      kind: request.kind,
+      detailPreview: request.detail.slice(0, 80),
+    });
+
+    // Path (b): we emit a `'sudo-request'` lick AS the UI chip and keep the
+    // existing `deliverSudoRequestToCone` queued actionable message for the
+    // agent. `defaultLickEventHandler` skips its `formatLickEventForCone` →
+    // `handleMessage` routing for this type so the cone agent isn't told
+    // twice — the actionable message below is the single agent delivery.
+    // The lick is intentionally NOT in `FORWARDABLE_TO_LEADER`: sudo
+    // decisions stay local to the float that owns the requesting scoop.
+    const scoopForLick = this.scoops.get(scoopJid);
+    this.lickManager?.emitEvent({
+      type: 'sudo-request',
+      sudoRequestId: id,
+      sudoKind: request.kind,
+      sudoDetail: request.detail,
+      sudoScoopName: scoopForLick?.assistantLabel ?? scoopForLick?.name ?? scoopJid,
+      sudoSuggestedPattern: request.suggestedPattern,
+      targetScoop: cone.name,
+      timestamp: new Date().toISOString(),
+      body: {
+        requestId: id,
+        kind: request.kind,
+        detail: request.detail,
+        suggestedPattern: request.suggestedPattern,
+        scoopJid,
+      },
+    });
+
+    try {
+      await this.deliverSudoRequestToCone(cone, scoopJid, id, request);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      log.error('Failed to deliver sudo request to cone — failing closed', {
+        id,
+        scoopJid,
+        error: errMsg,
+      });
+      // Drain the pending entry so the scoop's promise resolves immediately.
+      this.sudoRegistry.resolve(id, { decision: 'deny' });
+    }
+
+    return pending;
+  }
+
+  /**
+   * Settle a pending cone-mediated sudo request. Used by the cone's
+   * `sudo_allow` / `sudo_deny` tools (and tests). Returns `true` when an
+   * entry was actually resolved, `false` for unknown / already-settled /
+   * timed-out ids so the caller can surface that as "this request expired"
+   * to the cone.
+   *
+   * Note: this does NOT persist an "Always" grant on its own — use
+   * {@link resolveSudoRequestAndPersist} for the cone-tool path that
+   * needs to write a NOPASSWD rule into the requesting scoop's sudoers.
+   */
+  resolveSudoRequest(id: string, decision: SudoDecision): boolean {
+    const settled = this.sudoRegistry.resolve(id, decision);
+    if (settled) {
+      log.info('Sudo request resolved by cone', { id, decision: decision.decision });
+    } else {
+      log.warn('Sudo request resolve: unknown / already-settled id', {
+        id,
+        decision: decision.decision,
+      });
+    }
+    return settled;
+  }
+
+  /**
+   * Cone-tool surface: settle a pending sudo request and, when the
+   * decision is `'always'`, durably widen the requesting scoop's sandbox
+   * by appending a `NOPASSWD <directive> <pattern>` line to its
+   * `/scoops/<folder>/etc/sudoers` via the trusted manager sink (which
+   * bypasses the self-protection invariant). `kind: 'secret'` never
+   * persists — there is no `Secret` directive in the sudoers parser,
+   * so the request resolves as an allow-once.
+   *
+   * Resolution order for the pattern: caller-supplied → request's
+   * `suggestedPattern` → request `detail` (sanitized).
+   *
+   * Returns a structured outcome the tool surfaces verbatim.
+   */
+  async resolveSudoRequestAndPersist(
+    id: string,
+    decision: SudoDecision
+  ): Promise<{
+    settled: boolean;
+    persisted: boolean;
+    persistedPattern?: string;
+    persistError?: string;
+    scoopFolder?: string;
+    kind?: SudoRequest['kind'];
+  }> {
+    const pending = this.sudoRegistry.get(id);
+    if (!pending) {
+      return { settled: false, persisted: false };
+    }
+
+    const scoop = this.scoops.get(pending.scoopJid);
+    const kind = pending.request.kind;
+    const scoopFolder = scoop?.folder;
+
+    let persisted = false;
+    let persistedPattern: string | undefined;
+    let persistError: string | undefined;
+
+    if (decision.decision === 'always' && this.sudoManager && scoop && !scoop.isCone) {
+      if (kind === 'read') {
+        // A persisted `NOPASSWD Read <pattern>` would silently no-op: the
+        // scoop's `RestrictedFS.visiblePaths` is fixed at construction, so
+        // subsequent reads of paths outside the original sandbox keep
+        // throwing ENOENT. Reporting `persisted: true` would be a lie. Reject
+        // explicitly; one-off `decision: 'allow'` still works through the
+        // SudoFS broker because the `RestrictedFS` ACL is bypassed under
+        // sudo-delegation for that single approved op.
+        persistError = 'read grants need ACL widening, not yet supported';
+      } else if (kind === 'command' || kind === 'write') {
+        const raw =
+          decision.pattern?.trim() ||
+          pending.request.suggestedPattern?.trim() ||
+          pending.request.detail.trim();
+        try {
+          const saved = await this.sudoManager.appendScoopRule(scoop.folder, kind, raw);
+          if (saved) {
+            persisted = true;
+            persistedPattern = saved;
+          } else {
+            persistError = 'pattern collapsed to empty after sanitization';
+          }
+        } catch (err) {
+          persistError = err instanceof Error ? err.message : String(err);
+          log.warn('Failed to persist always grant', {
+            id,
+            folder: scoop.folder,
+            kind,
+            error: persistError,
+          });
+        }
+      } else {
+        persistError = `cannot persist always grant for kind "${kind}" (no matching sudoers directive)`;
+      }
+    }
+
+    const settled = this.resolveSudoRequest(id, decision);
+    return { settled, persisted, persistedPattern, persistError, scoopFolder, kind };
+  }
+
+  /**
+   * Build a {@link SudoBroker} that routes through {@link enqueueSudoRequest}
+   * for the given scoop. The cone keeps using the user broker
+   * (`SudoManager.getBroker()`); non-cone scoops should use this so their
+   * approvals come from the cone agent, not the human user. The actual
+   * wiring into `ScoopContext` lands in a follow-up task.
+   */
+  getConeSudoBroker(scoopJid: string): SudoBroker {
+    return createConeApprovalBroker(scoopJid, this);
+  }
+
+  /** Snapshot all pending cone-mediated sudo requests (cone-side listing). */
+  listPendingSudoRequests(): PendingSudoRequest[] {
+    return this.sudoRegistry.list();
+  }
+
+  /**
+   * Build the cone-facing `sudo-request` `ChannelMessage` and hand it to
+   * `handleMessage`. The content is structured so the cone can reproduce
+   * the request id verbatim in its `sudo_allow` tool call. `sudo-request`
+   * is a member of `EXTERNAL_LICK_CHANNELS`, so `handleMessage` fires the
+   * UI chip (`onIncomingMessage`) automatically — no explicit pre-fire
+   * needed here (which would double-fire the chip).
+   */
+  private async deliverSudoRequestToCone(
+    cone: RegisteredScoop,
+    scoopJid: string,
+    id: string,
+    request: SudoRequest
+  ): Promise<void> {
+    const scoop = this.scoops.get(scoopJid);
+    const senderName = scoop?.assistantLabel ?? scoopJid;
+    const senderId = scoop?.folder ?? scoopJid;
+    const content = this.formatSudoRequestNotification(senderName, id, request);
+
+    const msg: ChannelMessage = {
+      id: `sudo-request-${id}`,
+      chatJid: cone.jid,
+      senderId,
+      senderName,
+      content,
+      timestamp: new Date().toISOString(),
+      fromAssistant: false,
+      channel: 'sudo-request',
+    };
+
+    await this.handleMessage(msg);
+  }
+
+  private formatSudoRequestNotification(
+    senderName: string,
+    id: string,
+    request: SudoRequest
+  ): string {
+    const lines = [
+      `[@${senderName} sudo-request]`,
+      `Request ID: ${id}`,
+      `Kind: ${request.kind}`,
+      `Detail: ${request.detail}`,
+    ];
+    if (request.suggestedPattern) {
+      lines.push(`Suggested pattern: ${request.suggestedPattern}`);
+    }
+    lines.push(
+      '',
+      `Use the sudo_allow tool with request_id="${id}" to approve, deny, or always-approve this request.`
+    );
+    return lines.join('\n');
+  }
+
   private dispatchScoopEvent<K extends keyof ScoopObserver>(
     jid: string,
     event: K,
@@ -1460,6 +1736,16 @@ export class Orchestrator {
     }
     this.mutedScoops.delete(jid);
     this.pendingCompletions.delete(jid);
+    // Fail-closed any cone-mediated sudo requests this scoop had in
+    // flight. Without this, a scoop dropped mid-approval would leave
+    // its `requestApproval` promise dangling forever.
+    const sudoFailed = this.sudoRegistry.failScoop(jid);
+    if (sudoFailed > 0) {
+      log.info('Failed-closed pending sudo requests for unregistered scoop', {
+        jid,
+        count: sudoFailed,
+      });
+    }
     log.info('Scoop unregistered', { jid });
     // Notify last, with the pre-removal snapshot, so consumers see a
     // fully torn-down orchestrator. Guarded: a throwing consumer must
@@ -1586,13 +1872,14 @@ export class Orchestrator {
     });
 
     // Surface external lick events (webhook / cron / sprinkle / fswatch /
-    // session-reload / navigate / upgrade) to the UI as a chat chip the
-    // moment they arrive. Without this fire the lick persists to IDB and
-    // queues for the agent, but the chat panel only learns about it on
-    // session reload. Scoop-lifecycle channels (scoop-notify, scoop-idle,
-    // scoop-wait, scoop-error, delegation) are intentionally excluded —
-    // their builders fire `onIncomingMessage` explicitly next to the
-    // point they create the message, so they would double-fire here.
+    // session-reload / navigate / upgrade / cherry / workflow / sudo-request)
+    // to the UI as a chat chip the moment they arrive. Without this fire the
+    // lick persists to IDB and queues for the agent, but the chat panel only
+    // learns about it on session reload. Scoop-lifecycle channels
+    // (scoop-notify, scoop-idle, scoop-wait, scoop-error, delegation) are
+    // intentionally excluded — their builders fire `onIncomingMessage`
+    // explicitly next to the point they create the message, so they would
+    // double-fire here.
     if (isExternalLickChannel(message.channel)) {
       try {
         this.callbacks.onIncomingMessage?.(message.chatJid, message);
@@ -1703,6 +1990,39 @@ export class Orchestrator {
     }
   }
 
+  /**
+   * Seed (or reload) the per-scoop sudoers file from `ScoopConfig` so the
+   * scoop's `writablePaths` / `visiblePaths` / `allowedCommands` materialize
+   * as `NOPASSWD` grants. Without this the scoop's effective policy is the
+   * global one + nothing, and every in-sandbox action would escalate
+   * (the SudoFS default disposition is `'require-approval'` for scoops).
+   *
+   * - Missing file: seed from config. Fresh-boot fast path.
+   * - Existing file: only reload into the in-memory cache — overwriting on
+   *   every boot would wipe any "Always" grants added mid-session via
+   *   {@link SudoManager.appendScoopRule}. Re-seeding when `ScoopConfig`
+   *   changes is a separate flow (handled by the scoop-edit path).
+   *
+   * Best-effort: a failed seed is logged and the scoop boots with whatever
+   * policy is already on disk.
+   */
+  private async ensureScoopSudoersLoaded(scoop: RegisteredScoop): Promise<void> {
+    if (!this.sudoManager || !this.sharedFs) return;
+    try {
+      const path = `/scoops/${scoop.folder}/etc/sudoers`;
+      if (await this.sharedFs.exists(path)) {
+        await this.sudoManager.reloadScoopPolicyByFolder(scoop.folder);
+      } else {
+        await this.sudoManager.seedScoopSudoers(scoop.folder, scoop.config);
+      }
+    } catch (err) {
+      log.warn('Failed to seed per-scoop sudoers; continuing with existing policy', {
+        folder: scoop.folder,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   /** Create and initialize a scoop context */
   async createScoopTab(jid: string): Promise<void> {
     const scoop = this.scoops.get(jid);
@@ -1731,13 +2051,24 @@ export class Orchestrator {
     // read-only and read-write prefixes come straight from config (pure
     // replace — defaults live in `scoop_scoop` and in the restore backfill,
     // not here).
+    //
+    // `writeEnforcement: 'sudo-delegated'` lets the outer SudoFS escalate
+    // out-of-sandbox writes to the cone instead of dying here with EACCES.
+    // Reads stay silently filtered (ENOENT/[]). The symlink-escape EACCES
+    // in RestrictedFS stays active in both modes — a `/scoops/<f>/escape`
+    // symlink to `/etc/sudoers` is a security invariant, not a policy choice.
     const fs = scoop.isCone
       ? this.sharedFs
       : new RestrictedFS(
           this.sharedFs,
           scoop.config?.writablePaths ? [...scoop.config.writablePaths] : [],
-          scoop.config?.visiblePaths ? [...scoop.config.visiblePaths] : []
+          scoop.config?.visiblePaths ? [...scoop.config.visiblePaths] : [],
+          'sudo-delegated'
         );
+
+    if (!scoop.isCone) {
+      await this.ensureScoopSudoersLoaded(scoop);
+    }
 
     // Create the scoop context with full callbacks
     const contextCallbacks = this.buildScoopContextCallbacks(jid, scoop);
@@ -1909,6 +2240,15 @@ export class Orchestrator {
       appendConeMemory: scoop.isCone
         ? (bullets, meta) => this.appendConeMemory(bullets, meta)
         : undefined,
+      // Sudo escalation wiring — symmetrical to the brokers but exposed as
+      // tools. Scoops get `onSudoRequest` (routes through the pending-request
+      // registry); the cone gets `onSudoResolve` + `onListSudoRequests` to
+      // drain it. The cone keeps the user broker for its own FS / shell gate.
+      onSudoRequest: scoop.isCone ? undefined : (request) => this.enqueueSudoRequest(jid, request),
+      onSudoResolve: scoop.isCone
+        ? (id, decision) => this.resolveSudoRequestAndPersist(id, decision)
+        : undefined,
+      onListSudoRequests: scoop.isCone ? () => this.listPendingSudoRequests() : undefined,
       getBrowserAPI: () => this.callbacks.getBrowserAPI(),
     };
   }
@@ -2482,6 +2822,15 @@ export class Orchestrator {
     this.completionWaiters.clear();
     this.mutedScoops.clear();
     this.pendingCompletions.clear();
+
+    // Fail-closed every pending cone-mediated sudo request — same
+    // rationale as the `completionWaiters` drain above: scoops holding
+    // a `requestApproval` promise must see a deterministic deny instead
+    // of a hang past shutdown.
+    const sudoFailed = this.sudoRegistry.failAll();
+    if (sudoFailed > 0) {
+      log.info('Failed-closed pending sudo requests during shutdown', { count: sudoFailed });
+    }
 
     for (const jid of this.contexts.keys()) {
       await this.destroyScoopTab(jid);

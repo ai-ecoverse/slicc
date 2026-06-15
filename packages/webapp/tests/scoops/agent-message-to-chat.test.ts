@@ -76,6 +76,11 @@ describe('lickChannelFromBody', () => {
     );
     expect(lickChannelFromBody('[scoop_wait timeout]0 completed, 1 timed out')).toBe('scoop-wait');
     expect(lickChannelFromBody('[Session Reload] Mount recovery required.')).toBe('session-reload');
+    expect(
+      lickChannelFromBody(
+        '[@pr1003-always-scoop sudo-request]\nRequest ID: sudo-mqf7gh5c-cr56age9\nKind: command\nDetail: date -u'
+      )
+    ).toBe('sudo-request');
     expect(lickChannelFromBody('plain user text')).toBeNull();
     expect(lickChannelFromBody('[just a bracket] but not a marker')).toBeNull();
   });
@@ -95,6 +100,24 @@ describe('lickChannelFromBody', () => {
     expect(out).toHaveLength(1);
     expect(out[0].source).toBe('lick');
     expect(out[0].channel).toBe('scoop-notify');
+  });
+
+  it('replayed sudo-request notifications come back as licks, not plain bubbles', () => {
+    // Mirrors the scoop-notify replay regression for the sudo-request
+    // channel: `Orchestrator.deliverSudoRequestToCone` emits the body
+    // `[@<scoop> sudo-request]…`, which has no channel prefix in the
+    // envelope sender.
+    const out = agentMessagesToChatMessages(
+      [
+        userMsg(
+          '[6/11/2026, 1:00:00 PM] pr1003-always-scoop: [@pr1003-always-scoop sudo-request]\nRequest ID: sudo-mqf7gh5c-cr56age9\nKind: command\nDetail: date -u'
+        ),
+      ],
+      { idSeed: seedId }
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0].source).toBe('lick');
+    expect(out[0].channel).toBe('sudo-request');
   });
 });
 

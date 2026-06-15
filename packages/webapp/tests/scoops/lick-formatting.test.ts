@@ -190,3 +190,45 @@ it("formats a 'workflow' completion lick", () => {
   expect(formatted!.content).toContain('/shared/workflow-runs/abc123.json');
   expect(formatted!.content).toContain('{"confirmed":3}');
 });
+
+describe("'sudo-request' lick formatting", () => {
+  it('is a member of EXTERNAL_LICK_CHANNELS', () => {
+    expect(EXTERNAL_LICK_CHANNELS.has('sudo-request')).toBe(true);
+  });
+
+  it('formats a sudo-request with id + kind + detail + sudo_allow hint', () => {
+    const formatted = formatLickEventForCone({
+      type: 'sudo-request',
+      sudoRequestId: 'sudo-req-1',
+      sudoKind: 'write',
+      sudoDetail: '/workspace/build/output.txt',
+      sudoScoopName: 'tight-sandbox-scoop',
+      sudoSuggestedPattern: '/workspace/build/**',
+      timestamp: '2026-06-08T00:00:00.000Z',
+      body: { requestId: 'sudo-req-1' },
+    } as never);
+    expect(formatted).not.toBeNull();
+    expect(formatted!.label).toBe('Scoop Access Request');
+    expect(formatted!.content).toContain('[Scoop Access Request: tight-sandbox-scoop]');
+    expect(formatted!.content).toContain('Request ID: sudo-req-1');
+    expect(formatted!.content).toContain('Kind: write');
+    expect(formatted!.content).toContain('Detail: /workspace/build/output.txt');
+    expect(formatted!.content).toContain('Suggested pattern: /workspace/build/**');
+    expect(formatted!.content).toContain('sudo_allow');
+    expect(formatted!.content).toContain('request_id="sudo-req-1"');
+  });
+
+  it('omits the suggested-pattern line when no pattern is provided', () => {
+    const formatted = formatLickEventForCone({
+      type: 'sudo-request',
+      sudoRequestId: 'sudo-req-2',
+      sudoKind: 'command',
+      sudoDetail: 'rm -rf /tmp/x',
+      sudoScoopName: 'scoop',
+      timestamp: '2026-06-08T00:00:00.000Z',
+      body: {},
+    } as never);
+    expect(formatted).not.toBeNull();
+    expect(formatted!.content).not.toContain('Suggested pattern:');
+  });
+});

@@ -248,6 +248,37 @@ export interface ScoopContextCallbacks {
    * `state === 'idle'` clears the affordance.
    */
   onCompactionStateChange?: (state: 'summarizing' | 'extracting-memory' | 'idle') => void;
+  /**
+   * Scoop-only: request a cone-mediated sudo escalation. Routes through the
+   * orchestrator's pending-request registry and resolves with the cone's
+   * decision (allow / always / deny), or `deny` on transport/timeout. The
+   * cone keeps the user broker — only non-cone scoops wire this.
+   */
+  onSudoRequest?: (
+    request: import('../sudo/types.js').SudoRequest
+  ) => Promise<import('../sudo/types.js').SudoDecision>;
+  /**
+   * Cone-only: resolve a pending sudo request by id. On `'always'` the
+   * orchestrator additionally persists a NOPASSWD rule into the requesting
+   * scoop's `/scoops/<folder>/etc/sudoers` via the trusted manager sink.
+   */
+  onSudoResolve?: (
+    id: string,
+    decision: import('../sudo/types.js').SudoDecision
+  ) => Promise<{
+    settled: boolean;
+    persisted: boolean;
+    persistedPattern?: string;
+    persistError?: string;
+    scoopFolder?: string;
+    kind?: import('../sudo/types.js').SudoRequest['kind'];
+  }>;
+  /** Cone-only: snapshot all pending cone-mediated sudo requests. */
+  onListSudoRequests?: () => Array<{
+    id: string;
+    scoopJid: string;
+    request: import('../sudo/types.js').SudoRequest;
+  }>;
   /** BrowserAPI provider for browser automation commands */
   getBrowserAPI: () => BrowserAPI;
 }
@@ -322,6 +353,57 @@ export class ScoopContext {
     return { captured: this.structuredOutputCaptured, value: this.structuredOutputValue };
   }
 
+  /**
+   * Assemble the sudo enforcement surface for this scoop: the `SudoFS` broker
+   * + policy getter + default disposition, plus a matching `ShellSudoConfig`.
+   * Cones keep the user broker, the global policy, and `'allow'` default
+   * (unchanged behavior — only explicit `/etc/sudoers` rules gate). Non-cone
+   * scoops use the cone-mediated broker wired via {@link ScoopContextCallbacks.onSudoRequest},
+   * the per-scoop policy from {@link SudoManager.getPolicyForScoop}, and
+   * `'require-approval'` default so unmatched writes / commands escalate.
+   * Returns `null` only when no `SudoManager` is available (tests, ad-hoc
+   * sub-shells) — the agent is fully ungated in that path, same as before.
+   */
+  private buildSudoWiring(): {
+    broker: import('../sudo/types.js').SudoBroker;
+    getPolicy: () => import('../shell/sudo/sudoers.js').SudoersPolicy;
+    defaultDisposition: import('../shell/sudo/sudoers.js').DefaultDisposition;
+    shellConfig: import('../shell/almost-bash-shell-headless.js').ShellSudoConfig;
+  } | null {
+    if (!this.sudoManager) return null;
+    const manager = this.sudoManager;
+    const isCone = this.scoop.isCone;
+    const folder = this.scoop.folder;
+    const coneBrokerFn = this.callbacks.onSudoRequest;
+
+    const broker: import('../sudo/types.js').SudoBroker =
+      isCone || !coneBrokerFn
+        ? manager.getBroker()
+        : { requestApproval: (request) => coneBrokerFn(request) };
+    const getPolicy = isCone ? () => manager.getPolicy() : () => manager.getPolicyForScoop(folder);
+    const defaultDisposition: import('../shell/sudo/sudoers.js').DefaultDisposition = isCone
+      ? 'allow'
+      : 'require-approval';
+
+    const baseShell = manager.getShellConfig();
+    // Cones inherit the global `persistCommandGrant` sink (writes to
+    // `/etc/sudoers.d/granted` — visible to every scoop). Non-cone scoops
+    // MUST NOT use that sink: a scoop-A "Always" approval would land as a
+    // NOPASSWD rule for every scoop. The cone-mediated `always` decision
+    // already persists scoped via `Orchestrator.resolveSudoRequestAndPersist`
+    // → `SudoManager.appendScoopRule`, so the shell-side sink is a no-op
+    // for non-cone scoops here.
+    const persistCommandGrant = isCone ? baseShell.persistCommandGrant : async () => {};
+    const shellConfig: import('../shell/almost-bash-shell-headless.js').ShellSudoConfig = {
+      ...baseShell,
+      broker,
+      getPolicy,
+      defaultDisposition,
+      persistCommandGrant,
+    };
+    return { broker, getPolicy, defaultDisposition, shellConfig };
+  }
+
   /** Create shell and load skills. */
   private async initShellAndSkills() {
     const cwd = this.scoop.isCone ? '/' : `/scoops/${this.scoop.folder}/workspace`;
@@ -335,11 +417,20 @@ export class ScoopContext {
     const effectiveSkillsFs = (this.skillsFs ?? this.fs) as VirtualFS;
     const secretEnv = await fetchSecretEnvVars();
 
+    // Wire the sudo enforcement surface. For non-cone scoops the broker
+    // routes to the cone (via the `onSudoRequest` callback the orchestrator
+    // already hooked up — same wire as `createConeApprovalBroker`), the
+    // policy is the per-scoop merge (global ∪ `/scoops/<folder>/etc/sudoers`),
+    // and the default disposition is `'require-approval'` so any unmatched
+    // write OR command escalates to the cone instead of dying with a hard
+    // wall. The cone keeps the user broker + `'allow'` default — unchanged.
+    const sudoWiring = this.buildSudoWiring();
     const gatedFs = (
-      this.sudoManager
+      sudoWiring
         ? createSudoFs(this.fs!, {
-            broker: this.sudoManager.getBroker(),
-            getPolicy: () => this.sudoManager!.getPolicy(),
+            broker: sudoWiring.broker,
+            getPolicy: sudoWiring.getPolicy,
+            defaultDisposition: sudoWiring.defaultDisposition,
           })
         : this.fs!
     ) as VirtualFS;
@@ -353,7 +444,7 @@ export class ScoopContext {
       allowedCommands: this.scoop.config?.allowedCommands,
       getParentJid: () => this.scoop.jid,
       isScoop: () => !this.scoop.isCone,
-      sudo: this.sudoManager?.getShellConfig(),
+      sudo: sudoWiring?.shellConfig,
     });
 
     log.info('AlmostBashShell initialized', { folder: this.scoop.folder });
@@ -376,6 +467,9 @@ export class ScoopContext {
       onScheduleScoopWait: this.callbacks.onScheduleScoopWait,
       onSetGlobalMemory: this.callbacks.setGlobalMemory,
       getGlobalMemory: this.callbacks.getGlobalMemory,
+      onSudoRequest: this.callbacks.onSudoRequest,
+      onSudoResolve: this.callbacks.onSudoResolve,
+      onListSudoRequests: this.callbacks.onListSudoRequests,
     };
     const scoopManagementTools = createScoopManagementTools(scoopManagementToolsConfig);
 
@@ -1425,8 +1519,7 @@ You have access to:
 - A bash shell for running commands (via the bash tool)
 - File reading, writing, and editing tools
 - Use shell commands like \`rg\`, \`grep\`, and \`find\` through the bash tool for search
-- **send_message**: Send messages immediately while working (for progress updates)
-- **schedule_task**: Schedule recurring or one-time tasks
+${this.scoop.isCone ? '' : '- **send_message**: Send messages immediately while working (for progress updates)\n'}- **schedule_task**: Schedule recurring or one-time tasks
 - **list_tasks**, **pause_task**, **resume_task**, **cancel_task**: Manage scheduled tasks
 
 ${
@@ -1469,13 +1562,17 @@ When you learn something important:
 - Use your memory for context-specific notes (edit with write_file or edit_file)
 ${this.scoop.isCone ? '- Use update_global_memory tool for information that should be shared across all scoops' : ''}
 
-## Communication
+${
+  this.scoop.isCone
+    ? ''
+    : `## Communication
 
 When using send_message:
 - Use it for progress updates on long tasks
 - Use it when you want to send multiple messages
 - Your final output is also sent, so don't repeat yourself
-${
+`
+}${
   this.scoop.config?.structuredOutputSchema
     ? '\n\nIMPORTANT: your final action MUST be a single call to the StructuredOutput tool; its arguments are your return value and must satisfy the schema. Do not answer in prose.'
     : ''

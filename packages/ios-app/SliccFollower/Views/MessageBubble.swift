@@ -427,6 +427,7 @@ struct LickRow: View {
         "webhook", "cron", "sprinkle", "fswatch",
         "session-reload", "navigate", "upgrade",
         "scoop-notify", "scoop-idle", "scoop-wait",
+        "sudo-request",
     ]
 
     static func isLickChannel(_ channel: String) -> Bool {

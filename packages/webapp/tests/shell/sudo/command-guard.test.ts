@@ -125,4 +125,51 @@ describe('enforceCommandSudo', () => {
     expect(result.allowed).toBe(true);
     expect(broker.requestApproval).not.toHaveBeenCalled();
   });
+
+  it('default "require-approval": unmatched command escalates and runs on allow', async () => {
+    const broker = brokerReturning({ decision: 'allow' });
+
+    // `ls` is NOT in the GATED policy — under `'allow'` default this returns
+    // unprompted. Under `'require-approval'` it escalates instead of running
+    // as a hard "no rule => no gate" pass.
+    const result = await enforceCommandSudo('ls -la', {
+      policy: GATED,
+      broker,
+      persistGrant: vi.fn(async () => {}),
+      defaultDisposition: 'require-approval',
+    });
+
+    expect(result.allowed).toBe(true);
+    expect(broker.requestApproval).toHaveBeenCalledTimes(1);
+    expect(broker.requestApproval).toHaveBeenCalledWith({ kind: 'command', detail: 'ls -la' });
+  });
+
+  it('default "require-approval": NOPASSWD grant still skips the prompt', async () => {
+    const policy = parseSudoers('NOPASSWD Cmnd ls*');
+    const broker = brokerReturning({ decision: 'deny' });
+
+    const result = await enforceCommandSudo('ls -la', {
+      policy,
+      broker,
+      persistGrant: vi.fn(async () => {}),
+      defaultDisposition: 'require-approval',
+    });
+
+    expect(result.allowed).toBe(true);
+    expect(broker.requestApproval).not.toHaveBeenCalled();
+  });
+
+  it('default "require-approval": deny blocks the unmatched command', async () => {
+    const broker = brokerReturning({ decision: 'deny' });
+
+    const result = await enforceCommandSudo('curl http://evil', {
+      policy: GATED,
+      broker,
+      persistGrant: vi.fn(async () => {}),
+      defaultDisposition: 'require-approval',
+    });
+
+    expect(result.allowed).toBe(false);
+    expect(result.message).toBe(COMMAND_DENIED_MESSAGE);
+  });
 });

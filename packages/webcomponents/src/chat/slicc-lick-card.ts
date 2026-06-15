@@ -54,6 +54,7 @@ const KIND_ICON: Record<string, string> = {
   'scoop-notify': 'bell-ring',
   'scoop-idle': 'moon',
   'scoop-wait': 'hourglass',
+  'sudo-request': 'key-round',
 };
 /** Fallback header glyph (the prototype's `🔔`, now the lucide `bell`). */
 const DEFAULT_KIND_ICON = 'bell';

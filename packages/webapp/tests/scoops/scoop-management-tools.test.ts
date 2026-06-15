@@ -40,6 +40,54 @@ function findScoopScoopTool() {
   return { tool, onScoopScoop };
 }
 
+describe('send_message tool — registration gating', () => {
+  // `send_message` is the scoop→cone progress/result channel. The cone has
+  // no parent to message and its assistant output already reaches the UI
+  // directly, so it MUST NOT be offered as a tool on the cone's toolset.
+  const nonConeScoop: RegisteredScoop = {
+    jid: 'scoop_alpha_1',
+    name: 'alpha',
+    folder: 'alpha-scoop',
+    isCone: false,
+    type: 'scoop',
+    requiresTrigger: true,
+    assistantLabel: 'alpha-scoop',
+    addedAt: new Date().toISOString(),
+  };
+
+  it('is absent on the cone toolset', () => {
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone],
+    });
+    expect(tools.find((t) => t.name === 'send_message')).toBeUndefined();
+  });
+
+  it('is present on a non-cone scoop toolset', () => {
+    const tools = createScoopManagementTools({
+      scoop: nonConeScoop,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonConeScoop],
+    });
+    expect(tools.find((t) => t.name === 'send_message')).toBeDefined();
+  });
+
+  it('forwards the text and optional sender on a non-cone scoop', async () => {
+    const onSendMessage = vi.fn();
+    const tools = createScoopManagementTools({
+      scoop: nonConeScoop,
+      onSendMessage,
+      getScoops: () => [cone, nonConeScoop],
+    });
+    const tool = tools.find((t) => t.name === 'send_message');
+    if (!tool) throw new Error('send_message tool missing from non-cone toolset');
+    const result = await tool.execute({ text: 'progress', sender: 'alpha' });
+    expect(onSendMessage).toHaveBeenCalledWith('progress', 'alpha');
+    expect(result.content).toBe('Message sent.');
+  });
+});
+
 describe('scoop_scoop tool — config defaults', () => {
   it('injects visiblePaths: ["/workspace/"] when no model is specified', async () => {
     const { tool, onScoopScoop } = findScoopScoopTool();
@@ -447,5 +495,315 @@ describe('scoop_mute / scoop_unmute / scoop_wait tools', () => {
     expect(tools.find((t) => t.name === 'scoop_mute')).toBeUndefined();
     expect(tools.find((t) => t.name === 'scoop_unmute')).toBeUndefined();
     expect(tools.find((t) => t.name === 'scoop_wait')).toBeUndefined();
+  });
+});
+
+describe('sudo_request / sudo_allow / sudo_deny / list_sudo_requests tools', () => {
+  const nonCone: RegisteredScoop = {
+    jid: 'scoop_alpha_1',
+    name: 'alpha',
+    folder: 'alpha-scoop',
+    isCone: false,
+    type: 'scoop',
+    requiresTrigger: true,
+    assistantLabel: 'alpha-scoop',
+    addedAt: new Date().toISOString(),
+  };
+
+  // ── Registration gating ──────────────────────────────────────────────
+
+  it('sudo_request is present on a non-cone scoop and absent on the cone', () => {
+    const scoopTools = createScoopManagementTools({
+      scoop: nonCone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoRequest: vi.fn(async () => ({ decision: 'allow' as const })),
+    });
+    expect(scoopTools.find((t) => t.name === 'sudo_request')).toBeDefined();
+
+    const coneTools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      // Even if a caller mistakenly wires onSudoRequest on the cone path,
+      // it MUST NOT register the scoop-only tool.
+      onSudoRequest: vi.fn(async () => ({ decision: 'allow' as const })),
+    });
+    expect(coneTools.find((t) => t.name === 'sudo_request')).toBeUndefined();
+  });
+
+  it('sudo_request is absent on a scoop when no onSudoRequest callback is wired', () => {
+    const tools = createScoopManagementTools({
+      scoop: nonCone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+    });
+    expect(tools.find((t) => t.name === 'sudo_request')).toBeUndefined();
+  });
+
+  it('sudo_allow / sudo_deny are present on the cone and absent on a scoop', () => {
+    const onSudoResolve = vi.fn(async () => ({ settled: true, persisted: false }));
+    const coneTools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoResolve,
+    });
+    expect(coneTools.find((t) => t.name === 'sudo_allow')).toBeDefined();
+    expect(coneTools.find((t) => t.name === 'sudo_deny')).toBeDefined();
+
+    const scoopTools = createScoopManagementTools({
+      scoop: nonCone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoResolve,
+    });
+    expect(scoopTools.find((t) => t.name === 'sudo_allow')).toBeUndefined();
+    expect(scoopTools.find((t) => t.name === 'sudo_deny')).toBeUndefined();
+  });
+
+  it('list_sudo_requests is present on the cone and absent on a scoop', () => {
+    const onListSudoRequests = vi.fn(() => []);
+    const coneTools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onListSudoRequests,
+    });
+    expect(coneTools.find((t) => t.name === 'list_sudo_requests')).toBeDefined();
+
+    const scoopTools = createScoopManagementTools({
+      scoop: nonCone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onListSudoRequests,
+    });
+    expect(scoopTools.find((t) => t.name === 'list_sudo_requests')).toBeUndefined();
+  });
+
+  // ── sudo_request behavior ────────────────────────────────────────────
+
+  it('sudo_request forwards kind + detail + suggested_pattern to onSudoRequest', async () => {
+    const onSudoRequest = vi.fn(async () => ({
+      decision: 'always' as const,
+      pattern: 'git push*',
+    }));
+    const tools = createScoopManagementTools({
+      scoop: nonCone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoRequest,
+    });
+    const tool = tools.find((t) => t.name === 'sudo_request')!;
+    const result = await tool.execute({
+      kind: 'command',
+      detail: 'git push origin main',
+      suggested_pattern: 'git push*',
+    });
+    expect(onSudoRequest).toHaveBeenCalledWith({
+      kind: 'command',
+      detail: 'git push origin main',
+      suggestedPattern: 'git push*',
+    });
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('Cone decision: always');
+    expect(result.content).toContain('Persisted pattern: git push*');
+  });
+
+  it('sudo_request surfaces a deny decision with a clear cue', async () => {
+    const onSudoRequest = vi.fn(async () => ({ decision: 'deny' as const }));
+    const tools = createScoopManagementTools({
+      scoop: nonCone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoRequest,
+    });
+    const tool = tools.find((t) => t.name === 'sudo_request')!;
+    const result = await tool.execute({ kind: 'write', detail: '/etc/sudoers' });
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('Cone decision: deny');
+    expect(result.content).toContain('not approved');
+  });
+
+  it('sudo_request rejects an unknown kind without invoking the callback', async () => {
+    const onSudoRequest = vi.fn(async () => ({ decision: 'allow' as const }));
+    const tools = createScoopManagementTools({
+      scoop: nonCone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoRequest,
+    });
+    const tool = tools.find((t) => t.name === 'sudo_request')!;
+    const result = await tool.execute({ kind: 'turbo', detail: 'something' });
+    expect(result.isError).toBe(true);
+    expect(String(result.content)).toMatch(/Invalid sudo kind/);
+    expect(onSudoRequest).not.toHaveBeenCalled();
+  });
+
+  it('sudo_request rejects an empty detail without invoking the callback', async () => {
+    const onSudoRequest = vi.fn(async () => ({ decision: 'allow' as const }));
+    const tools = createScoopManagementTools({
+      scoop: nonCone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoRequest,
+    });
+    const tool = tools.find((t) => t.name === 'sudo_request')!;
+    const result = await tool.execute({ kind: 'command', detail: '   ' });
+    expect(result.isError).toBe(true);
+    expect(onSudoRequest).not.toHaveBeenCalled();
+  });
+
+  // ── sudo_allow / sudo_deny behavior ───────────────────────────────────
+
+  it('sudo_allow with always=true forwards a SudoDecision and reports persistence', async () => {
+    const onSudoResolve = vi.fn(async () => ({
+      settled: true,
+      persisted: true,
+      persistedPattern: 'git push*',
+      scoopFolder: 'alpha-scoop',
+      kind: 'command' as const,
+    }));
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoResolve,
+    });
+    const tool = tools.find((t) => t.name === 'sudo_allow')!;
+    const result = await tool.execute({
+      request_id: 'sudo-abc',
+      always: true,
+      pattern: 'git push*',
+    });
+    expect(onSudoResolve).toHaveBeenCalledWith('sudo-abc', {
+      decision: 'always',
+      pattern: 'git push*',
+    });
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('Approved (always)');
+    expect(result.content).toContain('NOPASSWD');
+    expect(result.content).toContain('alpha-scoop');
+    expect(result.content).toContain('git push*');
+  });
+
+  it('sudo_allow with always=false (default) sends an allow-once decision', async () => {
+    const onSudoResolve = vi.fn(async () => ({ settled: true, persisted: false }));
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoResolve,
+    });
+    const tool = tools.find((t) => t.name === 'sudo_allow')!;
+    const result = await tool.execute({ request_id: 'sudo-abc' });
+    expect(onSudoResolve).toHaveBeenCalledWith('sudo-abc', { decision: 'allow' });
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('Approved (once)');
+  });
+
+  it('sudo_allow surfaces a persistence failure without dropping the allow', async () => {
+    const onSudoResolve = vi.fn(async () => ({
+      settled: true,
+      persisted: false,
+      persistError: 'pattern collapsed to empty after sanitization',
+    }));
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoResolve,
+    });
+    const tool = tools.find((t) => t.name === 'sudo_allow')!;
+    const result = await tool.execute({ request_id: 'sudo-abc', always: true });
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('Approved (always)');
+    expect(result.content).toContain('could NOT persist');
+    expect(result.content).toContain('collapsed to empty');
+  });
+
+  it('sudo_allow reports an error when the request id is unknown / already settled', async () => {
+    const onSudoResolve = vi.fn(async () => ({ settled: false, persisted: false }));
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoResolve,
+    });
+    const tool = tools.find((t) => t.name === 'sudo_allow')!;
+    const result = await tool.execute({ request_id: 'sudo-ghost' });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('unknown');
+  });
+
+  it('sudo_deny forwards a deny decision and reports settlement', async () => {
+    const onSudoResolve = vi.fn(async () => ({ settled: true, persisted: false }));
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoResolve,
+    });
+    const tool = tools.find((t) => t.name === 'sudo_deny')!;
+    const result = await tool.execute({ request_id: 'sudo-abc' });
+    expect(onSudoResolve).toHaveBeenCalledWith('sudo-abc', { decision: 'deny' });
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('Denied');
+  });
+
+  it('sudo_deny reports an error when the request id is unknown', async () => {
+    const onSudoResolve = vi.fn(async () => ({ settled: false, persisted: false }));
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoResolve,
+    });
+    const tool = tools.find((t) => t.name === 'sudo_deny')!;
+    const result = await tool.execute({ request_id: 'sudo-ghost' });
+    expect(result.isError).toBe(true);
+  });
+
+  // ── list_sudo_requests behavior ───────────────────────────────────────
+
+  it('list_sudo_requests formats pending requests by scoop folder', async () => {
+    const onListSudoRequests = vi.fn(() => [
+      {
+        id: 'sudo-1',
+        scoopJid: nonCone.jid,
+        request: {
+          kind: 'command' as const,
+          detail: 'git push origin main',
+          suggestedPattern: 'git push*',
+        },
+      },
+    ]);
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onListSudoRequests,
+    });
+    const tool = tools.find((t) => t.name === 'list_sudo_requests')!;
+    const result = await tool.execute({});
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('sudo-1');
+    expect(result.content).toContain('alpha-scoop');
+    expect(result.content).toContain('command');
+    expect(result.content).toContain('git push origin main');
+    expect(result.content).toContain('suggested: git push*');
+  });
+
+  it('list_sudo_requests reports an empty state when nothing is pending', async () => {
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onListSudoRequests: vi.fn(() => []),
+    });
+    const tool = tools.find((t) => t.name === 'list_sudo_requests')!;
+    const result = await tool.execute({});
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('No pending sudo requests');
   });
 });

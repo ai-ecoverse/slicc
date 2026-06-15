@@ -18,6 +18,8 @@
 
 import { createLogger } from '../core/logger.js';
 import {
+  applyDefaultDisposition,
+  type DefaultDisposition,
   matchPath,
   type PathOp,
   pathGlobToRegExp,
@@ -52,7 +54,13 @@ export const GRANTED_FILE = `${SUDOERS_D_DIR}/granted`;
 
 /** Async + sync read methods routed through a `read` match. */
 const READ_ASYNC = ['readFile', 'readTextFile', 'readDir', 'exists', 'stat'] as const;
-/** Async write methods routed through a `write` match. */
+/**
+ * Async write methods routed through a `write` match on the FIRST argument
+ * (the path being written to). `symlink(target, linkPath)` is intentionally
+ * NOT in this set — its write target is the second argument; it's gated by a
+ * dedicated override below so a non-cone scoop cannot create a link at an
+ * out-of-sandbox `linkPath` without approval.
+ */
 const WRITE_ASYNC = ['writeFile', 'mkdir', 'rm'] as const;
 
 /** Dependencies for {@link createSudoFs}. */
@@ -67,6 +75,16 @@ export interface SudoFsDeps {
    * the rule to {@link GRANTED_FILE} via the wrapped fs (bypassing the gate).
    */
   onGrant?: (op: PathOp, pattern: string) => void | Promise<void>;
+  /**
+   * Default disposition for `no-match` outcomes. The cone passes `'allow'` (no
+   * implicit gating); non-cone scoops pass `'require-approval'` so any WRITE
+   * outside the per-scoop sandbox grants escalates to the cone instead of
+   * silently passing through. The default is only applied to WRITES — READS
+   * remain ungated by default so silently-filtered out-of-sandbox reads
+   * (the `RestrictedFS` ENOENT surface) do not flood the cone with PATH-probe
+   * approvals.
+   */
+  defaultDisposition?: DefaultDisposition;
 }
 
 /** Minimal surface SudoFS needs for default grant persistence. */
@@ -115,6 +133,7 @@ async function defaultApplyGrant(
  */
 export function createSudoFs<T extends object>(target: T, deps: SudoFsDeps): T {
   const { broker, getPolicy } = deps;
+  const defaultDisposition: DefaultDisposition = deps.defaultDisposition ?? 'allow';
   const applyGrant = deps.onGrant
     ? deps.onGrant
     : (op: PathOp, pattern: string) =>
@@ -122,7 +141,12 @@ export function createSudoFs<T extends object>(target: T, deps: SudoFsDeps): T {
 
   async function gate(op: PathOp, path: string): Promise<void> {
     const normalized = normalizePath(path);
-    if (matchPath(getPolicy(), op, normalized) !== 'require-approval') return;
+    const raw = matchPath(getPolicy(), op, normalized);
+    // Apply the default-disposition upgrade to WRITES only. Reads stay at
+    // the raw match result so out-of-sandbox reads don't fire approvals —
+    // the surrounding `RestrictedFS` already filters them to ENOENT/[].
+    const result = op === 'write' ? applyDefaultDisposition(raw, defaultDisposition) : raw;
+    if (result !== 'require-approval') return;
     const kind: SudoKind = op;
     const decision = await broker.requestApproval({ kind, detail: normalized });
     if (decision.decision === 'deny') {
@@ -135,6 +159,9 @@ export function createSudoFs<T extends object>(target: T, deps: SudoFsDeps): T {
 
   /** Sync fast-path gate: `false` forces async fallback for approval paths. */
   function syncAllowed(path: string): boolean {
+    // Sync paths cover reads only (statSync / readDirSync). Reads never
+    // apply the default-disposition upgrade — only an explicit policy
+    // require-approval forces the async fallback.
     return matchPath(getPolicy(), 'read', normalizePath(path)) !== 'require-approval';
   }
 
@@ -164,6 +191,17 @@ export function createSudoFs<T extends object>(target: T, deps: SudoFsDeps): T {
         path,
         ...rest
       );
+    };
+  }
+  if (has('symlink')) {
+    overrides.symlink = async (linkTarget: unknown, linkPath: unknown) => {
+      // The write goes to the SECOND argument (`linkPath`): that is the path
+      // being created. Gating the first argument would let a non-cone scoop
+      // pass an in-sandbox `linkTarget` and still create the link at an
+      // out-of-sandbox `linkPath`. The link's payload (the `linkTarget`
+      // string) is not a read of that target, so it is not gated.
+      await gate('write', linkPath as string);
+      return (target as Record<string, (...a: unknown[]) => unknown>).symlink(linkTarget, linkPath);
     };
   }
   if (has('rename')) {

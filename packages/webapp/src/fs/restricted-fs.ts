@@ -6,8 +6,16 @@
  * return "not found" / empty for paths outside allowed areas. This lets
  * the shell probe freely (PATH resolution, command lookup) without errors.
  *
- * Write operations (writeFile, mkdir, rm, rename, copyFile) throw EACCES
- * for paths outside allowed areas — hard enforcement.
+ * Write operations come in two flavors selected at construction:
+ *   - `writeEnforcement: 'hard'` (default) — throw EACCES for any write
+ *     outside the writable prefixes. Used in standalone tests and any
+ *     code path that does not stack a `SudoFS` on top.
+ *   - `writeEnforcement: 'sudo-delegated'` — pass non-symlink writes
+ *     through to the underlying VFS so an outer `SudoFS` can escalate
+ *     out-of-sandbox writes to a cone-mediated approval instead of a
+ *     hard wall. The symlink-escape EACCES (a security invariant
+ *     against `/scoops/<f>/link -> /etc/sudoers` style escapes) stays
+ *     in place either way.
  */
 
 import type { FsWatchCallback, FsWatchFilter } from './fs-watcher.js';
@@ -23,12 +31,20 @@ import type {
 import { FsError } from './types.js';
 import type { VirtualFS } from './virtual-fs.js';
 
+export type RestrictedFsWriteEnforcement = 'hard' | 'sudo-delegated';
+
 export class RestrictedFS {
   private vfs: VirtualFS;
   private allowedPrefixes: string[];
   private readOnlyPrefixes: string[];
+  private writeEnforcement: RestrictedFsWriteEnforcement;
 
-  constructor(vfs: VirtualFS, allowedPaths: string[], readOnlyPaths: string[] = []) {
+  constructor(
+    vfs: VirtualFS,
+    allowedPaths: string[],
+    readOnlyPaths: string[] = [],
+    writeEnforcement: RestrictedFsWriteEnforcement = 'hard'
+  ) {
     this.vfs = vfs;
     const normalize = (p: string) => {
       const n = normalizePath(p);
@@ -36,6 +52,7 @@ export class RestrictedFS {
     };
     this.allowedPrefixes = allowedPaths.map(normalize);
     this.readOnlyPrefixes = readOnlyPaths.map(normalize);
+    this.writeEnforcement = writeEnforcement;
   }
 
   /** Get all prefixes including dynamic mount paths (as read-only). */
@@ -95,8 +112,16 @@ export class RestrictedFS {
     return this.isWritable(path);
   }
 
-  /** Throw EACCES for write operations outside read-write paths. */
+  /**
+   * Gate a write at the ACL boundary. Under `'hard'` enforcement an
+   * out-of-sandbox write throws `EACCES` synchronously. Under
+   * `'sudo-delegated'` the check is a no-op — the outer `SudoFS` has
+   * already gated the write via the per-scoop policy (with default
+   * disposition `'require-approval'` so unmatched writes escalate to
+   * the cone instead of failing closed here).
+   */
   private checkWrite(path: string): void {
+    if (this.writeEnforcement === 'sudo-delegated') return;
     if (!this.isWritable(path)) {
       throw new FsError('EACCES', 'permission denied', normalizePath(path));
     }
@@ -116,11 +141,17 @@ export class RestrictedFS {
     }
   }
 
-  /** Resolve symlinks and verify the resolved path is still within writable areas. */
+  /**
+   * Resolve symlinks and verify the resolved path is still within writable
+   * areas. Symlink-escape detection stays active in both enforcement modes —
+   * an in-sandbox symlink that resolves to (e.g.) `/etc/sudoers` is a
+   * security escape, not a policy choice, and the outer SudoFS only sees
+   * the un-resolved link path.
+   */
   private async resolveAndCheckWrite(path: string): Promise<string> {
     try {
       const resolved = await this.vfs.realpath(path);
-      if (!this.isWritable(resolved)) {
+      if (!this.isWritable(resolved) && !this.isSymlinkEscapeAllowed(resolved)) {
         throw new FsError('EACCES', 'permission denied', normalizePath(path));
       }
       return resolved;
@@ -128,6 +159,44 @@ export class RestrictedFS {
       if (err instanceof FsError) throw err;
       throw new FsError('EACCES', 'permission denied', normalizePath(path));
     }
+  }
+
+  /**
+   * Under `'sudo-delegated'` enforcement, an in-sandbox path that resolves
+   * to an out-of-sandbox target is still rejected here — sudo gated the
+   * link path, not the resolved one. This helper exists so the future
+   * `RealpathAwareSudoFS` (if added) can opt the symlink-escape check out
+   * by overriding the predicate; today it always returns `false`.
+   */
+  private isSymlinkEscapeAllowed(_resolved: string): boolean {
+    return false;
+  }
+
+  /**
+   * Verify the parent dir's realpath doesn't escape the sandbox. In hard
+   * mode, throws `EACCES` whenever the resolved file path is not writable.
+   * In sudo-delegated mode, the check fires ONLY when symlink resolution
+   * actually changed the path — sudo has already gated the literal path,
+   * so a plain out-of-sandbox write is the outer gate's call to escalate.
+   * A realpath mismatch always means a symlink escape (e.g., the parent is
+   * a symlink to `/etc/sudoers.d`), which is a security invariant.
+   */
+  private async checkParentRealpathEscape(path: string): Promise<void> {
+    const dir = this.vfs.dirname(path);
+    const base = this.vfs.basename(path);
+    let resolvedDir: string;
+    try {
+      resolvedDir = await this.vfs.realpath(dir);
+    } catch (err) {
+      if (err instanceof FsError && err.code === 'EACCES') throw err;
+      // Parent doesn't exist yet — let the underlying write surface the error.
+      return;
+    }
+    const resolvedPath = resolvedDir + '/' + base;
+    if (this.isWritable(resolvedPath)) return;
+    const symlinkChanged = normalizePath(resolvedDir) !== normalizePath(dir);
+    if (this.writeEnforcement === 'sudo-delegated' && !symlinkChanged) return;
+    throw new FsError('EACCES', 'permission denied', normalizePath(path));
   }
 
   /** Get the underlying unrestricted VirtualFS (cone-only escape hatch). */
@@ -382,19 +451,7 @@ export class RestrictedFS {
     options?: { recursive?: boolean }
   ): Promise<void> {
     this.checkWrite(path);
-    // Resolve symlinks in parent path to prevent escape via symlinked directories.
-    // The file itself may not exist yet, so resolve the parent directory.
-    const dir = this.vfs.dirname(path);
-    const base = this.vfs.basename(path);
-    try {
-      const resolvedDir = await this.vfs.realpath(dir);
-      if (!this.isWritable(resolvedDir + '/' + base)) {
-        throw new FsError('EACCES', 'permission denied', normalizePath(path));
-      }
-    } catch (err) {
-      if (err instanceof FsError && err.code === 'EACCES') throw err;
-      // Parent doesn't exist yet — will be created by recursive, original check suffices
-    }
+    await this.checkParentRealpathEscape(path);
     // Also check if destination itself is a symlink pointing outside sandbox
     try {
       const destStat = await this.vfs.lstat(path);
@@ -410,18 +467,7 @@ export class RestrictedFS {
 
   async mkdir(path: string, options?: MkdirOptions): Promise<void> {
     this.checkWrite(path);
-    // Resolve symlinks in parent to prevent escape
-    const dir = this.vfs.dirname(path);
-    const base = this.vfs.basename(path);
-    try {
-      const resolvedDir = await this.vfs.realpath(dir);
-      if (!this.isWritable(resolvedDir + '/' + base)) {
-        throw new FsError('EACCES', 'permission denied', normalizePath(path));
-      }
-    } catch (err) {
-      if (err instanceof FsError && err.code === 'EACCES') throw err;
-      // Parent doesn't exist — recursive mkdir will handle, original check suffices
-    }
+    await this.checkParentRealpathEscape(path);
     return this.vfs.mkdir(path, options);
   }
 
@@ -448,16 +494,7 @@ export class RestrictedFS {
     this.checkWrite(newPath);
     // Resolve symlinks in both paths to prevent escape
     await this.resolveAndCheckWrite(oldPath);
-    const destDir = this.vfs.dirname(newPath);
-    const destBase = this.vfs.basename(newPath);
-    try {
-      const resolvedDir = await this.vfs.realpath(destDir);
-      if (!this.isWritable(resolvedDir + '/' + destBase)) {
-        throw new FsError('EACCES', 'permission denied', normalizePath(newPath));
-      }
-    } catch (err) {
-      if (err instanceof FsError && err.code === 'EACCES') throw err;
-    }
+    await this.checkParentRealpathEscape(newPath);
     return this.vfs.rename(oldPath, newPath);
   }
 
@@ -469,17 +506,7 @@ export class RestrictedFS {
     this.checkWrite(dest);
     // Resolve symlinks in source path
     const resolvedSrc = await this.resolveAndCheckRead(src);
-    // Resolve symlinks in dest parent
-    const destDir = this.vfs.dirname(dest);
-    const destBase = this.vfs.basename(dest);
-    try {
-      const resolvedDir = await this.vfs.realpath(destDir);
-      if (!this.isWritable(resolvedDir + '/' + destBase)) {
-        throw new FsError('EACCES', 'permission denied', normalizePath(dest));
-      }
-    } catch (err) {
-      if (err instanceof FsError && err.code === 'EACCES') throw err;
-    }
+    await this.checkParentRealpathEscape(dest);
     // Also check if destination itself is a symlink pointing outside sandbox
     try {
       const destStat = await this.vfs.lstat(dest);
@@ -497,17 +524,7 @@ export class RestrictedFS {
 
   async symlink(target: string, linkPath: string): Promise<void> {
     this.checkWrite(linkPath);
-    // Resolve symlinks in the link path's parent to prevent escape
-    const linkDir = this.vfs.dirname(linkPath);
-    const linkBase = this.vfs.basename(linkPath);
-    try {
-      const resolvedDir = await this.vfs.realpath(linkDir);
-      if (!this.isWritable(resolvedDir + '/' + linkBase)) {
-        throw new FsError('EACCES', 'permission denied', normalizePath(linkPath));
-      }
-    } catch (err) {
-      if (err instanceof FsError && err.code === 'EACCES') throw err;
-    }
+    await this.checkParentRealpathEscape(linkPath);
     return this.vfs.symlink(target, linkPath);
   }
 

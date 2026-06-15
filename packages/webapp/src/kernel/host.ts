@@ -251,8 +251,25 @@ function resolveLickEventId(event: LickEvent): string | undefined {
  * cone), and hands the resulting `ChannelMessage` to
  * `orchestrator.handleMessage`. Drops events that
  * `formatLickEventForCone` returns `null` for.
+ *
+ * `'sudo-request'` is a special case (Path b in the lick design): the
+ * orchestrator's `enqueueSudoRequest` already delivers the actionable
+ * message to the cone via `deliverSudoRequestToCone`, AND that delivery
+ * (channel `'sudo-request'` ∈ `EXTERNAL_LICK_CHANNELS`) auto-fires the
+ * UI chip through `handleMessage`. Re-routing the lick emit through
+ * `handleMessage` here would double-deliver to the agent. We skip it.
  */
-export function defaultLickEventHandler(
+export function defaultLickEventHandler(event: LickEvent, ctx: LickRoutingContext): void {
+  if (event.type === 'sudo-request') {
+    ctx.log.debug?.('sudo-request lick: UI-chip-only path; orchestrator owns delivery', {
+      sudoRequestId: event.sudoRequestId,
+    });
+    return;
+  }
+  routeFormattedLickToCone(event, ctx);
+}
+
+function routeFormattedLickToCone(
   event: LickEvent,
   { orchestrator, log }: LickRoutingContext
 ): void {
