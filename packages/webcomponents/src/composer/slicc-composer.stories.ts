@@ -318,7 +318,7 @@ function armPress(el: SliccComposer): void {
 
 /**
  * Push-to-talk, stage 1 — no microphone permission yet. Holding the textarea
- * shows the "Hold to enable push to talk" bar filling over five seconds; a
+ * shows the "Hold to enable push to talk" bar filling over three seconds; a
  * press held to completion requests mic permission (scripted to grant here,
  * upgrading the held press straight into the recording stage). Release early
  * to cancel without prompting.
@@ -329,7 +329,7 @@ export const PushToTalkEnable: Story = {
     const el = pttComposer(scriptedSpeech({ permission: 'prompt' }), open);
     armPress(el);
     return pttShell(
-      'Hold the input below: the 5s bar fills, then permission is requested (scripted to grant).',
+      'Hold the input below: the 3s bar fills, then permission is requested (scripted to grant).',
       el
     );
   },

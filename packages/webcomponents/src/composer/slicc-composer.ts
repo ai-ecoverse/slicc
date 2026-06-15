@@ -69,7 +69,7 @@ slicc-composer[open] slicc-composer-meta::part(hint) {
    textarea the band turns into one big active push button. The overlay is a
    direct host child (not the 680px inner band) so it covers the whole footer,
    and sits above it via z-index. Stage classes select the variant:
-   .is-enable    — no mic permission yet: 5s hold-to-enable progress bar
+   .is-enable    — no mic permission yet: 3s hold-to-enable progress bar
    .is-prompting — the browser's permission prompt is up
    .is-denied    — permission blocked: instructions, no bar
    .is-recording — live dictation: pulsing mic, captions, picker, engine status
@@ -142,11 +142,11 @@ slicc-composer .slicc-composer__ptt-bar-fill {
   transform-origin: left center;
   background: var(--ctx);
 }
-/* Hold-to-enable: the bar sweeps over the SAME 5s the gesture timer counts
+/* Hold-to-enable: the bar sweeps over the SAME 3s the gesture timer counts
    (HOLD_TO_ENABLE_MS) — the animation is presentation, the timer is truth. */
 slicc-composer .slicc-composer__ptt.is-enable .slicc-composer__ptt-bar-fill {
   animation-name: slicc-ptt-load;
-  animation-duration: 5s;
+  animation-duration: 3s;
   animation-timing-function: linear;
   animation-fill-mode: forwards;
 }
@@ -303,12 +303,17 @@ function ensureComposerStyle(doc: Document): void {
 }
 
 /** How long the textarea must be held before the mic permission is requested.
- *  Mirrored by the `.is-enable` bar's 5s CSS sweep — keep the two in step. */
-export const HOLD_TO_ENABLE_MS = 5000;
+ *  Mirrored by the `.is-enable` bar's 3s CSS sweep — keep the two in step. */
+export const HOLD_TO_ENABLE_MS = 3000;
 
 /** Grace window for the cached-permission check on mousedown: a fast
  *  'granted' goes straight to recording with no enable-stage flash. */
 const PERMISSION_RACE_MS = 60;
+
+/** Delay between mousedown and arming the push-to-talk lifecycle. A pure
+ *  click whose release lands within this window never flashes the overlay
+ *  or touches the speech controller, so plain caret presses stay silent. */
+export const PTT_ENGAGE_MS = 100;
 
 /** The caption line keeps only the trailing words, like movie closed captions. */
 const CAPTION_MAX_WORDS = 8;
@@ -364,7 +369,7 @@ function formatEta(etaSeconds: number | null): string {
  * stages keyed to the microphone permission:
  *
  * 1. **Not granted** — a "Hold to enable push to talk" progress bar fills over
- *    five seconds ({@link HOLD_TO_ENABLE_MS}); a press held to completion
+ *    three seconds ({@link HOLD_TO_ENABLE_MS}); a press held to completion
  *    requests microphone permission through the injected speech controller
  *    (triggering the browser prompt). A denied/blocked permission renders
  *    instructions instead of a bar.
@@ -426,6 +431,9 @@ export class SliccComposer extends HTMLElement {
   #device: string | null = readStoredDevice();
   /** Hold-to-enable gate timer. */
   #enableTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Engage-delay timer: defers the press lifecycle until the pointer has
+   *  been held past {@link PTT_ENGAGE_MS} so a pure click never flashes. */
+  #engageTimer: ReturnType<typeof setTimeout> | null = null;
   /** Engine status subscription teardown (active while the overlay is up). */
   #statusUnsub: (() => void) | null = null;
   /** Latest engine status snapshot for the status line. */
@@ -457,6 +465,7 @@ export class SliccComposer extends HTMLElement {
     this.#pressed = false;
     this.#target = null;
     this.#token++;
+    this.#clearEngageTimer();
     if (this.#enableTimer) clearTimeout(this.#enableTimer);
     this.#enableTimer = null;
     this.#removePressListeners();
@@ -570,7 +579,13 @@ export class SliccComposer extends HTMLElement {
     doc.addEventListener('mouseup', this.#onDocMouseUp);
     this.addEventListener('mouseleave', this.#onMouseLeave);
 
-    void this.#beginPress(this.speech, this.#token);
+    // Defer the press lifecycle so a pure click (released within the engage
+    // window) never flashes the overlay nor touches the speech controller.
+    const engageToken = this.#token;
+    this.#engageTimer = setTimeout(() => {
+      this.#engageTimer = null;
+      void this.#beginPress(this.speech, engageToken);
+    }, PTT_ENGAGE_MS);
   };
 
   /**
@@ -597,7 +612,7 @@ export class SliccComposer extends HTMLElement {
       return;
     }
 
-    // 'prompt', or the query is still settling — run the 5s enable gate.
+    // 'prompt', or the query is still settling — run the 3s enable gate.
     this.#showOverlay('enable');
     this.#enableTimer = setTimeout(() => {
       this.#enableTimer = null;
@@ -621,7 +636,7 @@ export class SliccComposer extends HTMLElement {
     }
   }
 
-  /** The 5s hold completed — request microphone permission. */
+  /** The 3s hold completed — request microphone permission. */
   #onHoldComplete(speech: ComposerSpeech, token: number): void {
     if (token !== this.#token || !this.#pressed || this.#stage !== 'enable') return;
     this.#showOverlay('prompting');
@@ -730,6 +745,9 @@ export class SliccComposer extends HTMLElement {
   #endPress(finalize: boolean): void {
     if (!this.#pressed) return;
     this.#pressed = false;
+    // A release within the engage window cancels the deferred lifecycle so
+    // #beginPress never runs for this press (stage stays 'idle' below).
+    this.#clearEngageTimer();
     this.#removePressListeners();
 
     switch (this.#stage) {
@@ -830,6 +848,11 @@ export class SliccComposer extends HTMLElement {
   #clearEnableTimer(): void {
     if (this.#enableTimer) clearTimeout(this.#enableTimer);
     this.#enableTimer = null;
+  }
+
+  #clearEngageTimer(): void {
+    if (this.#engageTimer) clearTimeout(this.#engageTimer);
+    this.#engageTimer = null;
   }
 
   #removePressListeners(): void {
