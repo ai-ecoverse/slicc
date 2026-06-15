@@ -103,6 +103,7 @@ jobs:
 
       - name: Upload screenshots to Cloudflare R2
         if: steps.mode.outputs.mode == 'r2'
+        continue-on-error: true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
@@ -179,6 +180,7 @@ jobs:
                   title: shot.title,
                   name: shot.name,
                   area: shot.area,
+                  triggeredBy: Array.isArray(shot.triggeredBy) ? shot.triggeredBy : [],
                   byTheme: {},
                 });
               }
@@ -214,6 +216,11 @@ jobs:
                 lines.push('');
                 lines.push(`<sub>\`${story.storyId}\`</sub>`);
                 lines.push('');
+                if (story.triggeredBy.length > 0) {
+                  const changed = story.triggeredBy.map((f) => `\`${f}\``).join(', ');
+                  lines.push(`<sub>changed: ${changed}</sub>`);
+                  lines.push('');
+                }
                 if (mode === 'r2') {
                   lines.push('| Light | Dark |');
                   lines.push('| --- | --- |');

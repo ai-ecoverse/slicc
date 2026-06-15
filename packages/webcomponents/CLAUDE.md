@@ -89,6 +89,94 @@ tests/**/<name>.test.ts    co-located browser tests, mirroring src/ subsystem
   returns a constructed element or HTML string.
 - Run: `npm run storybook -w @slicc/webcomponents`; build: `npm run build-storybook`.
 
+## Storybook PR screenshots (visual spot-check)
+
+PRs that touch `packages/webcomponents/**` automatically get a sticky comment
+with light + dark Storybook screenshots of the **affected** stories. Driven by
+`.github/workflows/storybook-screenshots.yml`; the capture script and resolver
+live under `packages/dev-tools/tools/` (see that package's `CLAUDE.md`).
+
+**Trigger:** any path under `packages/webcomponents/**` on a `pull_request` to
+`main` (`dorny/paths-filter` `webcomponents` flag). PRs that don't touch the
+package don't run the job.
+
+**Affected-story heuristic** (directory-level, intentionally coarse — easy to
+reason about, no module-graph plumbing):
+
+- A changed `src/<area>/**/*.stories.ts` selects only the stories declared in
+  that file (matched by Storybook's `importPath`).
+- Any other changed file under `src/<area>/` selects **all** stories whose
+  `importPath` lives under that `<area>`.
+- Files outside `packages/webcomponents/src/<area>/` (no area subdir, or
+  outside the package) contribute nothing.
+
+Each affected story is screenshotted at the desktop viewport (1280×900) for
+both the `light` and `dark` theme globals.
+
+**Hosting:** PNGs are uploaded to the Cloudflare R2 bucket
+`slicc-pr-screenshots` under the key `pr-<number>/<head-sha>/<file>.png` and
+embedded inline in the comment via the public r2.dev base URL. The bucket has
+a 30-day object lifecycle rule (`expire-30d`) so screenshots self-clean.
+
+**Fork PRs / missing secret:** when `CLOUDFLARE_API_TOKEN` is unavailable
+(typical for fork PRs) the job degrades to attaching the PNGs as a workflow
+artifact and the comment links to the run instead of embedding images. The
+artifact upload always runs, R2 or not, and the R2 upload step is
+`continue-on-error: true` so a single failed object put still leaves the
+artifact + comment intact.
+
+**Manifest** (`<out>/manifest.json`, schema v1, consumed by the workflow's
+comment builder):
+
+```json
+{
+  "version": 1,
+  "generatedAt": "<ISO8601>",
+  "viewport": { "width": 1280, "height": 900 },
+  "shots": [
+    {
+      "storyId": "pill-pill--cone-open-idle",
+      "title": "Pill/Pill",
+      "name": "Cone Open Idle",
+      "area": "pill",
+      "importPath": "./src/pill/slicc-pill.stories.ts",
+      "theme": "light",
+      "file": "pill-pill--cone-open-idle.light.png",
+      "triggeredBy": ["packages/webcomponents/src/pill/slicc-pill.ts"]
+    }
+  ]
+}
+```
+
+The schema is **flat**: there is one `shots[]` entry per (story × theme).
+Consumers group by `storyId` themselves (no `stories[].screenshots[]`
+nesting). The capture script is the source of truth for the schema and the
+CLI; the workflow YAML follows.
+
+**Running it locally:**
+
+```bash
+npm run build-storybook -w @slicc/webcomponents
+# write the diff to a file, one repo-relative path per line:
+git diff --name-only main... > /tmp/changed.txt
+npx playwright install chromium   # once
+node packages/dev-tools/tools/storybook-affected-screenshots.mjs \
+  --changed-files=/tmp/changed.txt \
+  --storybook-static=packages/webcomponents/storybook-static \
+  --out=/tmp/sb-shots
+```
+
+Flags are `--flag=value` form only (no `--output`, no `--manifest` — the
+manifest is always written to `<out>/manifest.json`). An empty / unrelated
+diff produces an empty `shots[]` and the PR comment renders a "no affected
+stories" message instead of an empty table.
+
+**Ops note:** the repo needs `CLOUDFLARE_API_TOKEN` (R2 read+write on the
+`slicc-pr-screenshots` bucket) as an Actions secret. The account ID, bucket
+name, and public base URL have sensible defaults baked into the workflow but
+can be overridden via the `CLOUDFLARE_ACCOUNT_ID`, `R2_BUCKET`, and
+`R2_PUBLIC_BASE_URL` repo variables.
+
 ## Build / typecheck
 
 - `npm run build` → `tsc -p tsconfig.build.json` (emits `dist/`, excludes stories).
