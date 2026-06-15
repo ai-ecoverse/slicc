@@ -23,6 +23,7 @@ const STYLE = `
 :host([hidden]) { display: none; }
 :host(:focus-visible) { outline: 2px solid var(--violet); outline-offset: 2px; }
 .me {
+  position: relative;
   display: grid;
   place-items: center;
   width: 100%;
@@ -34,10 +35,13 @@ const STYLE = `
   background-position: center;
   background-repeat: no-repeat;
 }
-/* When a gravatar image has resolved, layer it over the rainbow ground and
-   hide the initials (the image is the foreground; rainbow remains underneath). */
+/* When a gravatar or src image has resolved, layer it over the rainbow ground
+   and hide the initials (the image is the foreground; rainbow + initials remain
+   underneath as the fallback if image loading fails). */
 .me.has-img { color: transparent; }
 .img {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   border-radius: inherit;
@@ -56,10 +60,10 @@ const SHEET = sheet(STYLE);
  * to a Gravatar (SHA-256 of the trimmed+lowercased address, `d=404` so a missing
  * gravatar falls back to initials); otherwise the explicit `initials`, then up to
  * 2 uppercase initials derived from `name`. With none of those — a signed-out
- * user — it shows a `?` placeholder. For the `email` path the initials render
- * immediately and the gravatar is swapped in asynchronously as a CSS
- * `background-image` once its hash resolves and the image is confirmed to load —
- * the rainbow gradient remains the ground behind it.
+ * user — it shows a `?` placeholder. For both the `email` and explicit-`src`
+ * paths the initials render immediately as the base content and the image is
+ * layered on top once it loads — an `error` (CSP block, 404, network error)
+ * swaps back to the initials so a failed load never shows a broken-image icon.
  *
  * Acts as a button for an account menu: clicking (or Enter/Space) emits a
  * composed, bubbling `slicc-avatar-click` event in addition to the native click.
@@ -83,7 +87,7 @@ export class SliccAvatar extends HTMLElement {
   static readonly observedAttributes = ['initials', 'name', 'src', 'email', 'size', 'label'];
 
   readonly #root: ShadowRoot;
-  /** Monotonic token guarding async gravatar swaps against stale resolutions. */
+  /** Monotonic token guarding async gravatar + `src` image swaps against stale resolutions. */
   #gravatarToken = 0;
 
   constructor() {
@@ -101,7 +105,7 @@ export class SliccAvatar extends HTMLElement {
   }
 
   disconnectedCallback(): void {
-    // Invalidate any in-flight gravatar swap so a late resolution is ignored.
+    // Invalidate any in-flight gravatar / `src` image swap so a late resolution is ignored.
     this.#gravatarToken++;
   }
 
@@ -215,7 +219,8 @@ export class SliccAvatar extends HTMLElement {
   };
 
   #render(): void {
-    // Any pending gravatar swap from a previous render is now stale.
+    // Any pending image swap from a previous render is now stale (guards both
+    // the async gravatar preload and the layered explicit-`src` load/error).
     const token = ++this.#gravatarToken;
 
     const src = this.src;
@@ -225,12 +230,32 @@ export class SliccAvatar extends HTMLElement {
     const a11yLabel = this.label ?? this.name ?? (initials === '?' ? 'Account' : initials);
     this.setAttribute('aria-label', a11yLabel);
 
-    // Precedence: explicit `src` > `email` (gravatar) > initials/name.
-    const inner = src
-      ? h('img', { class: 'img', part: 'image', src, alt: a11yLabel })
-      : h('span', { class: 'ini', part: 'initials' }, initials);
+    // Initials are always the base content so a failed image load leaves them
+    // visible rather than a broken-image icon. Precedence remains: explicit
+    // `src` > `email` (gravatar) > initials/name — the foreground image just
+    // layers over the same initials underneath.
+    const initialsNode = h('span', { class: 'ini', part: 'initials' }, initials);
+    const slotChildren: HTMLElement[] = [initialsNode];
+    if (src) {
+      const img = h('img', {
+        class: 'img',
+        part: 'image',
+        src,
+        alt: a11yLabel,
+      }) as HTMLImageElement;
+      img.addEventListener('load', () => {
+        if (token !== this.#gravatarToken) return;
+        this.#root.querySelector<HTMLElement>('.me')?.classList.add('has-img');
+      });
+      img.addEventListener('error', () => {
+        if (token !== this.#gravatarToken) return;
+        img.remove();
+        this.#root.querySelector<HTMLElement>('.me')?.classList.remove('has-img');
+      });
+      slotChildren.push(img);
+    }
 
-    const me = h('div', { class: 'me', part: 'avatar' }, h('slot', null, inner));
+    const me = h('div', { class: 'me', part: 'avatar' }, h('slot', null, ...slotChildren));
     this.#root.replaceChildren(me);
 
     // Gravatar only applies when there is no explicit image; render initials now
