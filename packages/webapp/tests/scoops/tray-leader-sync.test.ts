@@ -457,8 +457,8 @@ describe('LeaderSyncManager', () => {
   it('broadcastUserMessage strips leader-local VFS paths before sending', () => {
     // CR-1: without this scrub, the standalone-leader chat hook
     // (`ui/main.ts:mainStandaloneWorker` `setOnLocalUserMessage` →
-    // `broadcastUserMessage`) would ship the real off-loaded
-    // attachment paths (shape:
+    // `broadcastUserMessage`) would ship the real off-loaded paths
+    // produced by `attachment-vfs.ts:makeAttachmentPath` (shape:
     // `/tmp/attachment-<stamp>-<seq>-<rand>-<name>`) over the WebRTC
     // wire to every follower — meaningless on the receiver. Inline
     // content still arrives; path-only attachments demote to
