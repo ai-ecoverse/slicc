@@ -3,9 +3,9 @@ import Foundation
 /// Resolved sampling configuration: the integer weight that drives the
 /// per-session selection coin flip.
 ///
-/// Mirrors helix-rum-js: rate aliases (`on`, `off`, `high`, `low`) map to
-/// specific weights; numeric strings parse as the literal weight; anything
-/// else (including `nil`) falls back to the default weight of `100`.
+/// Mirrors helix-rum-js exactly: only the rate aliases (`on`, `off`, `high`,
+/// `low`) map to specific weights; anything else — including numeric strings
+/// and `nil` — falls back to the default weight of `100`.
 public struct SamplingConfig: Equatable {
     /// Sampling weight. `0` disables sampling; higher values reduce the
     /// probability of selection (`1 / weight`).
@@ -21,14 +21,15 @@ public struct SamplingConfig: Equatable {
         self.weight = weight
     }
 
-    /// Build a config from a rate string (alias or numeric). `nil` / unknown
-    /// values fall back to ``SamplingConfig/defaultWeight``.
+    /// Build a config from a rate string. Only the `on`/`off`/`high`/`low`
+    /// aliases are recognized; `nil` and every other value (including numeric
+    /// strings) fall back to ``SamplingConfig/defaultWeight``.
     public init(rate: String?) {
         self.weight = SamplingConfig.parseWeight(from: rate)
     }
 
     /// Resolve a rate string to its integer weight, matching the helix-rum-js
-    /// `rateValue` table plus numeric-string passthrough.
+    /// `rateValue` table.
     public static func parseWeight(from rate: String?) -> Int {
         guard let rate else { return defaultWeight }
         switch rate {
@@ -36,9 +37,7 @@ public struct SamplingConfig: Equatable {
         case "off": return 0
         case "high": return 10
         case "low": return 1000
-        default:
-            if let parsed = Int(rate) { return parsed }
-            return defaultWeight
+        default: return defaultWeight
         }
     }
 }

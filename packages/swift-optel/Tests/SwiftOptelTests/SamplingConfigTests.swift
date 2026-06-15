@@ -22,11 +22,13 @@ final class SamplingConfigTests: XCTestCase {
         XCTAssertEqual(SamplingConfig(rate: "low").weight, 1000)
     }
 
-    func testNumericStringParsesAsWeight() {
-        XCTAssertEqual(SamplingConfig(rate: "0").weight, 0)
-        XCTAssertEqual(SamplingConfig(rate: "1").weight, 1)
-        XCTAssertEqual(SamplingConfig(rate: "42").weight, 42)
-        XCTAssertEqual(SamplingConfig(rate: "500").weight, 500)
+    func testNumericStringFallsBackToDefault() {
+        // helix-rum-js only recognizes the four aliases; numeric strings are
+        // not a supported rate format and must resolve to the default weight.
+        XCTAssertEqual(SamplingConfig(rate: "0").weight, 100)
+        XCTAssertEqual(SamplingConfig(rate: "1").weight, 100)
+        XCTAssertEqual(SamplingConfig(rate: "42").weight, 100)
+        XCTAssertEqual(SamplingConfig(rate: "500").weight, 100)
     }
 
     func testUnknownStringFallsBackToDefault() {
@@ -47,7 +49,7 @@ final class SamplingConfigTests: XCTestCase {
 
     func testParseWeightStaticAPI() {
         XCTAssertEqual(SamplingConfig.parseWeight(from: "high"), 10)
-        XCTAssertEqual(SamplingConfig.parseWeight(from: "200"), 200)
+        XCTAssertEqual(SamplingConfig.parseWeight(from: "200"), 100)
         XCTAssertEqual(SamplingConfig.parseWeight(from: nil), 100)
     }
 }

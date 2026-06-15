@@ -36,7 +36,11 @@ public struct OptelAutoInstrumentModifier: ViewModifier {
     let appID: String
     let rate: String?
     @State private var configured = false
-    @State private var lastPhase: ScenePhase = .inactive
+    // Sticky "has been backgrounded" flag. SwiftUI scene transitions go
+    // `.background → .inactive → .active`, so we cannot infer "was just
+    // backgrounded" from only the immediately previous phase: `.inactive`
+    // would otherwise overwrite that signal before `.active` arrives.
+    @State private var wasBackgrounded = false
 
     public func body(content: Content) -> some View {
         content
@@ -45,16 +49,34 @@ public struct OptelAutoInstrumentModifier: ViewModifier {
                 Optel.configure(appID: appID, rate: rate)
                 OptelUncaughtExceptionHook.installIfNeeded()
                 Optel.sample(.enter)
-                lastPhase = scenePhase
                 configured = true
             }
             .onChange(of: scenePhase) { newPhase in
-                let wasBackground = lastPhase == .background
-                lastPhase = newPhase
-                if newPhase == .active && wasBackground {
+                let next = OptelAutoInstrumentModifier.nextState(
+                    forNewPhase: newPhase,
+                    wasBackgrounded: wasBackgrounded
+                )
+                wasBackgrounded = next.wasBackgrounded
+                if next.shouldFireEnter {
                     Optel.sample(.enter)
                 }
             }
+    }
+
+    /// Pure state-transition for the scene-phase tracker. Exposed for tests
+    /// so the `.background → .inactive → .active` re-fire can be locked in
+    /// without driving a live SwiftUI scene.
+    static func nextState(
+        forNewPhase newPhase: ScenePhase,
+        wasBackgrounded: Bool
+    ) -> (shouldFireEnter: Bool, wasBackgrounded: Bool) {
+        if newPhase == .background {
+            return (false, true)
+        }
+        if newPhase == .active && wasBackgrounded {
+            return (true, false)
+        }
+        return (false, wasBackgrounded)
     }
 }
 

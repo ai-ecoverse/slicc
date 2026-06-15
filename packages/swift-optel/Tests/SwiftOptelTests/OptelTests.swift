@@ -146,4 +146,42 @@ final class OptelTests: XCTestCase {
         XCTAssertEqual(tops.count, 1)
         XCTAssertEqual(mock.sent.count, 201)
     }
+
+    func testTopBeaconIsFirstOnTheWireUnderConcurrentFirstCallers() {
+        // Race many threads through `sample` immediately after `configure`,
+        // synchronized on a `DispatchSemaphore` so they all unblock together.
+        // The auto-`top` beacon must be the very first entry on the wire even
+        // though the caller that flipped `hasEmittedTop` is not guaranteed to
+        // be scheduled before the others.
+        for trial in 0..<20 {
+            let mock = RecordingTransport()
+            let optel = makeOptel(transport: mock, selected: true)
+            let threadCount = 32
+            let startGate = DispatchSemaphore(value: 0)
+            let group = DispatchGroup()
+            let queue = DispatchQueue(label: "optel.race", attributes: .concurrent)
+            for _ in 0..<threadCount {
+                group.enter()
+                queue.async {
+                    startGate.wait()
+                    optel.sample(.click)
+                    group.leave()
+                }
+            }
+            for _ in 0..<threadCount { startGate.signal() }
+            group.wait()
+            XCTAssertEqual(
+                mock.sent.first?.event.checkpoint.rawValue,
+                "top",
+                "trial \(trial): top must be the first beacon on the wire"
+            )
+            let tops = mock.sent.filter { $0.event.checkpoint.rawValue == "top" }
+            XCTAssertEqual(tops.count, 1, "trial \(trial): expected exactly one top beacon")
+            XCTAssertEqual(
+                mock.sent.count,
+                threadCount + 1,
+                "trial \(trial): expected one top + \(threadCount) clicks"
+            )
+        }
+    }
 }

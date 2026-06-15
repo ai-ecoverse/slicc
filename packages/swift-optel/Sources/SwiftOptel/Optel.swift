@@ -34,8 +34,9 @@ public final class Optel: @unchecked Sendable {
     ///
     /// - Parameters:
     ///   - appID: Identifier used as the `referer` hostname (e.g. bundle id).
-    ///   - rate: Sampling rate string (`on`/`off`/`high`/`low` or a numeric
-    ///     weight). `nil` falls back to the helix-rum-js default of `100`.
+    ///   - rate: Sampling rate string. Only the `on`/`off`/`high`/`low`
+    ///     aliases are recognized; `nil` and every other value (including
+    ///     numeric strings) fall back to the helix-rum-js default of `100`.
     ///   - collectBaseURL: Collector base URL. Defaults to `rum.hlx.page`.
     ///   - transport: Override the default ``URLSessionOptelTransport``
     ///     (tests inject a mock here).
@@ -82,9 +83,13 @@ public final class Optel: @unchecked Sendable {
         target: String? = nil,
         value: Double? = nil
     ) {
+        // Hold the lock across both `enqueue` calls so concurrent first-callers
+        // cannot interleave between flipping `hasEmittedTop` and enqueuing the
+        // auto-`top` beacon. `OptelCollector.enqueue` takes its own independent
+        // lock and never re-enters `Optel`, so this cannot deadlock.
         lock.lock()
+        defer { lock.unlock() }
         guard let session = session, let collector = collector else {
-            lock.unlock()
             return
         }
         let weight = session.weight
@@ -93,7 +98,6 @@ public final class Optel: @unchecked Sendable {
         let timeShift = max(0, Int(Date().timeIntervalSince(sessionStart) * 1000))
         let isFirst = !hasEmittedTop
         if isFirst { hasEmittedTop = true }
-        lock.unlock()
 
         let isTopRequest = checkpoint == .top
         if isFirst && !isTopRequest {
