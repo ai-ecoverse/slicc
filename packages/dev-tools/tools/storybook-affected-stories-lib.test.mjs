@@ -134,19 +134,73 @@ describe('resolveAffectedStories', () => {
     ).toEqual([]);
   });
 
-  it('multiple areas produces the union of affected stories', () => {
+  it('multiple non-global areas produce the union of affected stories', () => {
     const result = resolveAffectedStories(
       [
         'packages/webcomponents/src/pill/slicc-pill.ts',
-        'packages/webcomponents/src/theme/slicc-theme.ts',
+        'packages/webcomponents/src/chat/slicc-agent-message.ts',
       ],
+      indexJson
+    );
+    expect(result.map((s) => s.storyId)).toEqual([
+      'chat-agent-message--default',
+      'chat-user-message--default',
+      'pill-pill--cone-open-idle',
+      'pill-pill--scoop-open-idle',
+    ]);
+  });
+
+  it('global theme change selects every story (with triggeredBy recorded)', () => {
+    const themeFile = 'packages/webcomponents/src/theme/tokens.css';
+    const result = resolveAffectedStories([themeFile], indexJson);
+    // Every renderable story in the index is selected; the docs entry stays excluded.
+    expect(result.map((s) => s.storyId)).toEqual([
+      'chat-agent-message--default',
+      'chat-user-message--default',
+      'pill-pill--cone-open-idle',
+      'pill-pill--scoop-open-idle',
+      'theme-toggle--default',
+    ]);
+    for (const shot of result) {
+      expect(shot.triggeredBy).toEqual([themeFile]);
+    }
+    // Each story keeps its own area, not the changed-file's area.
+    expect(result.find((s) => s.storyId === 'pill-pill--cone-open-idle').area).toBe('pill');
+    expect(result.find((s) => s.storyId === 'theme-toggle--default').area).toBe('theme');
+  });
+
+  it('global internal change selects every story even though internal has no stories', () => {
+    const internalFile = 'packages/webcomponents/src/internal/icons.ts';
+    const result = resolveAffectedStories([internalFile], indexJson);
+    expect(result.map((s) => s.storyId)).toEqual([
+      'chat-agent-message--default',
+      'chat-user-message--default',
+      'pill-pill--cone-open-idle',
+      'pill-pill--scoop-open-idle',
+      'theme-toggle--default',
+    ]);
+    for (const shot of result) {
+      expect(shot.triggeredBy).toEqual([internalFile]);
+    }
+  });
+
+  it('pill (non-global) change still selects only pill stories', () => {
+    const result = resolveAffectedStories(
+      ['packages/webcomponents/src/pill/slicc-pill.ts'],
       indexJson
     );
     expect(result.map((s) => s.storyId)).toEqual([
       'pill-pill--cone-open-idle',
       'pill-pill--scoop-open-idle',
-      'theme-toggle--default',
     ]);
+  });
+
+  it('story file inside a global area still narrows to its own declared stories', () => {
+    const result = resolveAffectedStories(
+      ['packages/webcomponents/src/theme/slicc-theme-toggle.stories.ts'],
+      indexJson
+    );
+    expect(result.map((s) => s.storyId)).toEqual(['theme-toggle--default']);
   });
 
   it('skips docs entries — only renderable stories are returned', () => {
