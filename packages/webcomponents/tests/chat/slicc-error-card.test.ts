@@ -35,16 +35,24 @@ describe('slicc-error-card', () => {
     el.label = 'Boom';
     el.message = 'Something broke';
     el.buttonLabel = 'Retry now';
+    el.messageId = 'msg-42';
     expect(el.getAttribute('label')).toBe('Boom');
     expect(el.getAttribute('message')).toBe('Something broke');
     expect(el.getAttribute('button-label')).toBe('Retry now');
+    expect(el.getAttribute('message-id')).toBe('msg-42');
+    // Attribute → property direction.
+    el.setAttribute('message-id', 'msg-99');
+    expect(el.messageId).toBe('msg-99');
 
     el.label = null;
     el.message = null;
     el.buttonLabel = null;
+    el.messageId = null;
     expect(el.hasAttribute('label')).toBe(false);
     expect(el.hasAttribute('message')).toBe(false);
     expect(el.hasAttribute('button-label')).toBe(false);
+    expect(el.hasAttribute('message-id')).toBe(false);
+    expect(el.messageId).toBeNull();
   });
 
   it('renders the prototype structure with ::part hooks', () => {
@@ -114,23 +122,35 @@ describe('slicc-error-card', () => {
   });
 
   it('dispatches slicc-error-retry (bubbling, composed) on retry click', () => {
-    const el = mount({ message: 'rate limited' });
-    const seen: Event[] = [];
-    document.body.addEventListener('slicc-error-retry', (e) => seen.push(e));
+    const el = mount({ message: 'rate limited', 'message-id': 'err-7' });
+    const seen: CustomEvent[] = [];
+    document.body.addEventListener('slicc-error-retry', (e) => seen.push(e as CustomEvent));
     const btn = el.shadowRoot?.querySelector('[part="button"]') as HTMLButtonElement;
     btn.click();
     expect(seen).toHaveLength(1);
     expect(seen[0].bubbles).toBe(true);
     expect(seen[0].composed).toBe(true);
     expect(seen[0] instanceof CustomEvent).toBe(true);
+    // The card stamps its `message-id` onto the event so the host can bind
+    // retry to the specific failed turn rather than scanning the whole thread.
+    expect(seen[0].detail).toEqual({ messageId: 'err-7' });
   });
 
   it('exposes a programmatic retry() that dispatches the same event', () => {
-    const el = mount({ message: 'oops' });
+    const el = mount({ message: 'oops', 'message-id': 'err-1' });
     const spy = vi.fn();
     el.addEventListener('slicc-error-retry', spy);
     el.retry();
     expect(spy).toHaveBeenCalledTimes(1);
+    expect((spy.mock.calls[0][0] as CustomEvent).detail).toEqual({ messageId: 'err-1' });
+  });
+
+  it('emits a null messageId when no message-id attribute is set', () => {
+    const el = mount({ message: 'oops' });
+    const seen: CustomEvent[] = [];
+    el.addEventListener('slicc-error-retry', (e) => seen.push(e as CustomEvent));
+    el.retry();
+    expect(seen[0].detail).toEqual({ messageId: null });
   });
 
   it('re-renders on attribute change', () => {

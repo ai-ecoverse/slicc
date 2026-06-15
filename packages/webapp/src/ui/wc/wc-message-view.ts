@@ -525,7 +525,7 @@ function delegationEls(message: ChatMessage): HTMLElement[] {
  * agent send path.
  */
 function errorCardEl(message: ChatMessage): HTMLElement {
-  return el('slicc-error-card', { message: message.content });
+  return el('slicc-error-card', { message: message.content, 'message-id': message.id });
 }
 
 /** Elements for a single chat message, in thread order. */

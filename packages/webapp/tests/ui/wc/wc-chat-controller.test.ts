@@ -148,18 +148,50 @@ describe('WcChatController', () => {
     expect(card?.getAttribute('message')).toBe('rate limited');
   });
 
-  it('retries the last user turn through the agent send path on slicc-error-retry', () => {
+  it('retries the failed turn through the agent send path on slicc-error-retry', () => {
     controller.sendUserMessage('hello world');
     agent.sent.length = 0;
     agent.emit({ type: 'message_start', messageId: 'm1' });
     agent.emit({ type: 'error', error: 'rate limited' });
     const card = thread.querySelector('slicc-error-card');
-    card?.dispatchEvent(new CustomEvent('slicc-error-retry', { bubbles: true, composed: true }));
+    const errorId = card?.getAttribute('message-id') ?? null;
+    expect(errorId).not.toBeNull();
+    card?.dispatchEvent(
+      new CustomEvent('slicc-error-retry', {
+        detail: { messageId: errorId },
+        bubbles: true,
+        composed: true,
+      })
+    );
     expect(agent.sent).toHaveLength(1);
     expect(agent.sent[0].text).toBe('hello world');
     // No duplicate user bubble — retry routes through `#agent.sendMessage`
     // directly, not `sendUserMessage`.
     expect(thread.querySelectorAll('slicc-user-message')).toHaveLength(1);
+  });
+
+  it('binds retry to the failed turn even when a newer prompt was queued', () => {
+    // Turn A: user prompt + agent error. The user then queues prompt B while
+    // the (no-longer-)in-flight controller is still settling. Retry must
+    // resubmit A — the prompt that actually failed — not the newest user row.
+    controller.sendUserMessage('prompt A');
+    agent.emit({ type: 'message_start', messageId: 'm1' });
+    agent.emit({ type: 'error', error: 'rate limited' });
+    const card = thread.querySelector('slicc-error-card');
+    const errorId = card?.getAttribute('message-id') ?? null;
+    expect(errorId).not.toBeNull();
+    // Newer user prompt queued AFTER the error card.
+    controller.sendUserMessage('prompt B (newer)');
+    agent.sent.length = 0;
+    card?.dispatchEvent(
+      new CustomEvent('slicc-error-retry', {
+        detail: { messageId: errorId },
+        bubbles: true,
+        composed: true,
+      })
+    );
+    expect(agent.sent).toHaveLength(1);
+    expect(agent.sent[0].text).toBe('prompt A');
   });
 
   it('does nothing on retry while a turn is already in flight', () => {
@@ -178,9 +210,26 @@ describe('WcChatController', () => {
     agent.sent.length = 0;
     agent.emit({ type: 'error', error: 'rate limited' });
     const card = thread.querySelector('slicc-error-card');
-    card?.dispatchEvent(new CustomEvent('slicc-error-retry', { bubbles: true, composed: true }));
+    const errorId = card?.getAttribute('message-id') ?? null;
+    card?.dispatchEvent(
+      new CustomEvent('slicc-error-retry', {
+        detail: { messageId: errorId },
+        bubbles: true,
+        composed: true,
+      })
+    );
     expect(agent.sent).toHaveLength(1);
     expect(agent.sent[0].text).toBe('first');
+  });
+
+  it('falls back to the legacy whole-thread scan when detail.messageId is absent', () => {
+    controller.sendUserMessage('hello world');
+    agent.sent.length = 0;
+    agent.emit({ type: 'error', error: 'rate limited' });
+    // No detail on the event — older callers / non-card dispatchers.
+    thread.dispatchEvent(new CustomEvent('slicc-error-retry', { bubbles: true, composed: true }));
+    expect(agent.sent).toHaveLength(1);
+    expect(agent.sent[0].text).toBe('hello world');
   });
 
   it('no-ops a retry when there is no prior user turn', () => {

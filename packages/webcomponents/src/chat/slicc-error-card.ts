@@ -23,6 +23,8 @@ import { iconEl } from '../internal/icons.js';
  * @attr label - the header label (default "Something went wrong")
  * @attr message - error body text (escaped); ignored when slotted content is present
  * @attr button-label - retry button label (default "Try again")
+ * @attr message-id - id of the failed chat message this card stands for; echoed
+ *   back on `slicc-error-retry` so the host can bind retry to THIS turn
  * @attr theme - `light` | `dark`; per-element override of the inherited theme
  * @csspart card - the outer `.err` card
  * @csspart header - the `.eh` header row
@@ -31,7 +33,8 @@ import { iconEl } from '../internal/icons.js';
  * @csspart body - the `.eb` body line
  * @csspart button - the retry button
  * @slot - rich body content (overrides the `message` attribute)
- * @fires slicc-error-retry - {} dispatched on retry click (bubbles, composed)
+ * @fires slicc-error-retry - { messageId: string | null } dispatched on retry
+ *   click (bubbles, composed); `messageId` mirrors the `message-id` attribute
  */
 
 /** Pixel size of the lucide header icon. */
@@ -104,7 +107,7 @@ const STYLE = `
 const SHEET = sheet(STYLE);
 
 export class SliccErrorCard extends HTMLElement {
-  static readonly observedAttributes = ['label', 'message', 'button-label', 'theme'];
+  static readonly observedAttributes = ['label', 'message', 'button-label', 'message-id', 'theme'];
 
   readonly #root: ShadowRoot;
   #onRetryClick: ((e: MouseEvent) => void) | null = null;
@@ -157,6 +160,20 @@ export class SliccErrorCard extends HTMLElement {
     else this.setAttribute('button-label', value);
   }
 
+  /**
+   * Id of the failed chat message this card stands for. Echoed back on the
+   * `slicc-error-retry` event so the host can bind retry to the SPECIFIC turn
+   * that produced this card rather than the newest user message in the thread.
+   */
+  get messageId(): string | null {
+    return this.getAttribute('message-id');
+  }
+
+  set messageId(value: string | null) {
+    if (value == null) this.removeAttribute('message-id');
+    else this.setAttribute('message-id', value);
+  }
+
   /** Per-element theme override for the card tokens. */
   get theme(): 'light' | 'dark' | null {
     const t = this.getAttribute('theme');
@@ -172,7 +189,7 @@ export class SliccErrorCard extends HTMLElement {
   retry(): void {
     this.dispatchEvent(
       new CustomEvent('slicc-error-retry', {
-        detail: {},
+        detail: { messageId: this.getAttribute('message-id') ?? null },
         bubbles: true,
         composed: true,
       })
