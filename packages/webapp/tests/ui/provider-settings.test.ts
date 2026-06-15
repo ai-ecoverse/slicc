@@ -345,6 +345,53 @@ describe('selected model encodes provider', () => {
     expect(getSelectedProvider()).toBe('anthropic');
   });
 
+  it('getSelectedProvider skips auth-only accounts when falling back without a prefix', () => {
+    // GitHub is auth-only (git push/pull, oauth-token shell command) and
+    // exposes no LLM models — picking it as the fallback would drag the cone
+    // into an unregistered `github-anthropic` api route. The fallback must
+    // prefer the first account that actually offers LLM models.
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([
+        { providerId: 'github', apiKey: '', accessToken: 'gho_xxx', userName: 'lars' },
+        { providerId: 'anthropic', apiKey: 'sk-ant-key' },
+      ])
+    );
+    expect(getSelectedProvider()).toBe('anthropic');
+  });
+
+  it('getSelectedProvider collapses to accounts[0] when no account offers LLM models', () => {
+    // Last-resort: with only auth-only accounts connected, the fallback
+    // still returns a deterministic value (the first account) rather than
+    // a hardcoded `anthropic` that no account is configured to authenticate.
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([
+        { providerId: 'github', apiKey: '', accessToken: 'gho_xxx', userName: 'lars' },
+      ])
+    );
+    expect(getSelectedProvider()).toBe('github');
+  });
+
+  it('getSelectedProvider prefers the LLM account whose catalog offers the bare model', () => {
+    // WC-regressed profile: `selected-model` lost its provider prefix and now
+    // reads as the bare `gpt-5`. The previous fallback picked the first
+    // LLM-capable account (`anthropic`) and `resolveCurrentModel()` then
+    // degraded to the native Anthropic default — silently swapping the
+    // user's OpenAI selection. The repair must now find `openai` because
+    // its catalog actually contains `gpt-5`.
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([
+        { providerId: 'github', apiKey: '', accessToken: 'gho_xxx', userName: 'lars' },
+        { providerId: 'anthropic', apiKey: 'sk-ant-key' },
+        { providerId: 'openai', apiKey: 'oai-key' },
+      ])
+    );
+    storage.set('selected-model', 'gpt-5');
+    expect(getSelectedProvider()).toBe('openai');
+  });
+
   it('setSelectedProvider updates the provider prefix in selected-model', () => {
     storage.set('selected-model', 'anthropic:claude-sonnet-4-0');
     setSelectedProvider('openai');
