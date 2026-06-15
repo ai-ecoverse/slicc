@@ -90,6 +90,9 @@
       "project": ["src/**/*.ts", "tests/**/*.ts"],
       "ignoreDependencies": ["jsdom", "@types/jsdom"]
     },
+    "packages/cloud-core": {
+      "ignore": ["tests/fixtures/index.ts", "tests/fixtures/mem-registry.ts"]
+    },
     "packages/webcomponents": {
       "entry": [
         "src/index.ts",
