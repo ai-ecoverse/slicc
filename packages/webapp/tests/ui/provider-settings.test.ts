@@ -373,6 +373,25 @@ describe('selected model encodes provider', () => {
     expect(getSelectedProvider()).toBe('github');
   });
 
+  it('getSelectedProvider prefers the LLM account whose catalog offers the bare model', () => {
+    // WC-regressed profile: `selected-model` lost its provider prefix and now
+    // reads as the bare `gpt-5`. The previous fallback picked the first
+    // LLM-capable account (`anthropic`) and `resolveCurrentModel()` then
+    // degraded to the native Anthropic default — silently swapping the
+    // user's OpenAI selection. The repair must now find `openai` because
+    // its catalog actually contains `gpt-5`.
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([
+        { providerId: 'github', apiKey: '', accessToken: 'gho_xxx', userName: 'lars' },
+        { providerId: 'anthropic', apiKey: 'sk-ant-key' },
+        { providerId: 'openai', apiKey: 'oai-key' },
+      ])
+    );
+    storage.set('selected-model', 'gpt-5');
+    expect(getSelectedProvider()).toBe('openai');
+  });
+
   it('setSelectedProvider updates the provider prefix in selected-model', () => {
     storage.set('selected-model', 'anthropic:claude-sonnet-4-0');
     setSelectedProvider('openai');

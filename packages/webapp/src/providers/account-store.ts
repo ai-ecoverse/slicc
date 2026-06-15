@@ -230,6 +230,31 @@ export function providerOffersLlmModels(providerId: string): boolean {
   return false;
 }
 
+/**
+ * Per-model variant of `providerOffersLlmModels`: does `providerId` advertise
+ * `modelId` in any of the three catalog sources (provider models → pi-ai
+ * static registry → `modelOverrides`)? Used by `getSelectedProvider()`'s
+ * bare-id repair path so a WC-regressed `selected-model = "gpt-5"` resolves
+ * to the account that actually offers `gpt-5`, not just the first LLM
+ * account in storage.
+ */
+function providerOffersModelId(providerId: string, modelId: string): boolean {
+  try {
+    if (getProviderModels(providerId).some((m) => m.id === modelId)) return true;
+  } catch {
+    /* fall through */
+  }
+  try {
+    const piModels = (getModels as (id: string) => { id: string }[])(providerId);
+    if (piModels.some((m) => m.id === modelId)) return true;
+  } catch {
+    /* provider not registered with pi-ai */
+  }
+  const cfg = getRegisteredProviderConfig(providerId);
+  if (cfg?.modelOverrides && Object.hasOwn(cfg.modelOverrides, modelId)) return true;
+  return false;
+}
+
 // Get provider config with fallback for unknown providers
 export function getProviderConfig(providerId: string): ProviderConfig {
   return (
@@ -1107,12 +1132,28 @@ export function getSelectedProvider(): string {
   const raw = getRawSelectedModel();
   const idx = raw.indexOf(':');
   if (idx > 0) return raw.slice(0, idx);
-  // No provider encoded (or empty prefix like ":gpt-5") — fall back to the
-  // first account that actually offers LLM models. An auth-only account
-  // (e.g. `github` for git push/pull) would otherwise win the fallback and
-  // drag the cone into an unregistered `github-anthropic` api route. Only
-  // collapse to `accounts[0]`/`'anthropic'` when nothing qualifies.
+  // No provider encoded (or empty prefix like ":gpt-5") — repair the bare id.
+  // Priority order:
+  //   1. The first LLM account whose catalog actually offers the bare
+  //      `selected-model`. Without this check, a WC-regressed profile with
+  //      `selected-model = "gpt-5"` and accounts ordered `github, anthropic,
+  //      openai` would route through Anthropic; `resolveCurrentModel()`
+  //      cannot find `gpt-5` there and degrades to the native Anthropic
+  //      default, silently swapping the user's OpenAI selection.
+  //   2. The first account that offers any LLM models. An auth-only account
+  //      (e.g. `github` for git push/pull) would otherwise win the fallback
+  //      and drag the cone into an unregistered `github-anthropic` api route.
+  //   3. Collapse to `accounts[0]` / `'anthropic'` when nothing qualifies.
   const accounts = getAccounts();
+  const selectedModelId = getSelectedModelId();
+  if (selectedModelId) {
+    const offering = accounts.find(
+      (a) =>
+        providerOffersLlmModels(a.providerId) &&
+        providerOffersModelId(a.providerId, selectedModelId)
+    );
+    if (offering) return offering.providerId;
+  }
   const llmAccount = accounts.find((a) => providerOffersLlmModels(a.providerId));
   if (llmAccount) return llmAccount.providerId;
   if (accounts.length > 0) return accounts[0].providerId;
