@@ -169,5 +169,94 @@ final class OptelSwiftUITests: XCTestCase {
         XCTAssertFalse(OptelMacAutoInstrument.isInstalled)
     }
     #endif
+
+    // MARK: - Refined controls coordinate with the global click monitor
+
+    private struct FixedRandomSource: RandomSource {
+        let value: Double
+        func nextUnitDouble() -> Double { value }
+    }
+
+    private func configureRecordingOptel() -> RecordingTransport {
+        let transport = RecordingTransport()
+        Optel.shared.configure(
+            appID: "com.example.app",
+            rate: "on",
+            collectBaseURL: URL(string: "https://rum.hlx.page/")!,
+            transport: transport,
+            randomSource: FixedRandomSource(value: 0)
+        )
+        return transport
+    }
+
+    func testOptelTapPerformTapClaimsAndEmits() {
+        OptelClickCoordinator._testing_reset()
+        let transport = configureRecordingOptel()
+        // Monitor begins an event, refined `.optelTap` handler fires.
+        let epoch = OptelClickCoordinator.beginMonitorEvent()
+        OptelTapModifier.performTap(source: "panel view#detail")
+        XCTAssertTrue(OptelClickCoordinator.wasClaimedByRefined(epoch: epoch))
+        let clicks = transport.sent.filter { $0.event.checkpoint.rawValue == "click" }
+        XCTAssertEqual(clicks.count, 1)
+        XCTAssertEqual(clicks.first?.event.pingData.source, "panel view#detail")
+    }
+
+    func testOptelButtonPerformTapClaimsAndEmitsDerivedSource() {
+        OptelClickCoordinator._testing_reset()
+        let transport = configureRecordingOptel()
+        let epoch = OptelClickCoordinator.beginMonitorEvent()
+        OptelButton<Text>.performTap(
+            identifier: "submit",
+            label: "Submit",
+            context: "checkout"
+        )
+        XCTAssertTrue(OptelClickCoordinator.wasClaimedByRefined(epoch: epoch))
+        let clicks = transport.sent.filter { $0.event.checkpoint.rawValue == "click" }
+        XCTAssertEqual(clicks.count, 1)
+        // Source uses the standard `<context> <element>#<identifier>` shape.
+        XCTAssertEqual(clicks.first?.event.pingData.source, "checkout button#submit")
+    }
+
+    #if os(macOS)
+    func testRefinedTapAndMonitorTogetherProduceExactlyOneBeacon() {
+        // End-to-end dedupe regression: a refined `.optelTap` fires *and* the
+        // global monitor's deferred emit runs for the same event. Only the
+        // refined beacon ships.
+        OptelClickCoordinator._testing_reset()
+        let transport = configureRecordingOptel()
+        let epoch = OptelClickCoordinator.beginMonitorEvent()
+        OptelTapModifier.performTap(source: "refined#go")
+        // The deferred monitor block now fires (as it would after the run
+        // loop has drained the synchronous event dispatch).
+        OptelClickMonitor.deferredEmit(epoch: epoch, source: "ax#go", target: "Go")
+        let clicks = transport.sent.filter { $0.event.checkpoint.rawValue == "click" }
+        XCTAssertEqual(clicks.count, 1)
+        XCTAssertEqual(clicks.first?.event.pingData.source, "refined#go")
+    }
+
+    func testRefinedButtonAndMonitorTogetherProduceExactlyOneBeacon() {
+        OptelClickCoordinator._testing_reset()
+        let transport = configureRecordingOptel()
+        let epoch = OptelClickCoordinator.beginMonitorEvent()
+        OptelButton<Text>.performTap(identifier: "buy", label: "Buy", context: "cart")
+        OptelClickMonitor.deferredEmit(epoch: epoch, source: "ax#buy", target: "Buy")
+        let clicks = transport.sent.filter { $0.event.checkpoint.rawValue == "click" }
+        XCTAssertEqual(clicks.count, 1)
+        XCTAssertEqual(clicks.first?.event.pingData.source, "cart button#buy")
+    }
+
+    func testUnrefinedClickStillEmitsViaMonitor() {
+        // A bare control with no refined wrapper: the monitor's deferred
+        // emission must still ship (one beacon, from the monitor).
+        OptelClickCoordinator._testing_reset()
+        let transport = configureRecordingOptel()
+        let epoch = OptelClickCoordinator.beginMonitorEvent()
+        // No refined claim happens for this event.
+        OptelClickMonitor.deferredEmit(epoch: epoch, source: "ax#bare", target: "Bare")
+        let clicks = transport.sent.filter { $0.event.checkpoint.rawValue == "click" }
+        XCTAssertEqual(clicks.count, 1)
+        XCTAssertEqual(clicks.first?.event.pingData.source, "ax#bare")
+    }
+    #endif
 }
 #endif

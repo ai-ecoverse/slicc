@@ -135,5 +135,73 @@ final class OptelClickMonitorTests: XCTestCase {
         OptelClickMonitor.uninstall()
         XCTAssertFalse(OptelClickMonitor.isInstalled)
     }
+
+    // MARK: - Refined-vs-monitor dedupe (deferredEmit)
+
+    /// Deterministic ``RandomSource`` for pinning sample selection in the
+    /// dedupe regression tests below.
+    private struct FixedRandom: RandomSource {
+        let value: Double
+        func nextUnitDouble() -> Double { value }
+    }
+
+    private func makeRecordingOptel() -> RecordingTransport {
+        let transport = RecordingTransport()
+        Optel.shared.configure(
+            appID: "com.example.app",
+            rate: "on",
+            collectBaseURL: URL(string: "https://rum.hlx.page/")!,
+            transport: transport,
+            randomSource: FixedRandom(value: 0)
+        )
+        return transport
+    }
+
+    func testDeferredEmitFiresWhenNoRefinedClaim() {
+        OptelClickCoordinator._testing_reset()
+        let transport = makeRecordingOptel()
+        let epoch = OptelClickCoordinator.beginMonitorEvent()
+        // No refined claim: the monitor's deferred emission ships.
+        OptelClickMonitor.deferredEmit(epoch: epoch, source: "Main button#go", target: "Go")
+        let clicks = transport.sent.filter { $0.event.checkpoint.rawValue == "click" }
+        XCTAssertEqual(clicks.count, 1)
+        XCTAssertEqual(clicks.first?.event.pingData.source, "Main button#go")
+        XCTAssertEqual(clicks.first?.event.pingData.target, "Go")
+    }
+
+    func testDeferredEmitIsSkippedWhenRefinedClaimsTheEpoch() {
+        // Simulates a real user interaction: the global monitor schedules a
+        // click for an in-flight event, a refined SwiftUI handler runs and
+        // claims that event during synchronous dispatch, then the deferred
+        // monitor block fires. Only the refined beacon must ship.
+        OptelClickCoordinator._testing_reset()
+        let transport = makeRecordingOptel()
+        let epoch = OptelClickCoordinator.beginMonitorEvent()
+        OptelClickCoordinator.claimByRefined()
+        // Refined handler does its own `Optel.sample(.click, …)` separately;
+        // here we emulate that explicit emit so the assertion exercises the
+        // end-to-end "exactly one click on the wire" contract.
+        Optel.sample(.click, source: "panel button#submit")
+        OptelClickMonitor.deferredEmit(epoch: epoch, source: "ax-derived", target: "Submit")
+        let clicks = transport.sent.filter { $0.event.checkpoint.rawValue == "click" }
+        XCTAssertEqual(clicks.count, 1)
+        XCTAssertEqual(clicks.first?.event.pingData.source, "panel button#submit")
+    }
+
+    func testDeferredEmitFiresForUnrelatedSubsequentEvent() {
+        // After a refined claim absorbs one monitor event, the *next* monitor
+        // event must still emit (its epoch is fresh and unclaimed). This is
+        // the regression for "stale claim suppresses everything forever".
+        OptelClickCoordinator._testing_reset()
+        let transport = makeRecordingOptel()
+        let firstEpoch = OptelClickCoordinator.beginMonitorEvent()
+        OptelClickCoordinator.claimByRefined()
+        OptelClickMonitor.deferredEmit(epoch: firstEpoch, source: "a", target: nil)
+        let secondEpoch = OptelClickCoordinator.beginMonitorEvent()
+        OptelClickMonitor.deferredEmit(epoch: secondEpoch, source: "b", target: nil)
+        let clicks = transport.sent.filter { $0.event.checkpoint.rawValue == "click" }
+        XCTAssertEqual(clicks.count, 1)
+        XCTAssertEqual(clicks.first?.event.pingData.source, "b")
+    }
 }
 #endif

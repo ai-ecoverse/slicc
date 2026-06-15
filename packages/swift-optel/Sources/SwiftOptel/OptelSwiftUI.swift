@@ -171,8 +171,16 @@ public struct OptelTapModifier: ViewModifier {
 
     public func body(content: Content) -> some View {
         content.simultaneousGesture(TapGesture().onEnded {
-            Optel.sample(.click, source: source)
+            OptelTapModifier.performTap(source: source)
         })
+    }
+
+    /// Testable seam mirroring the gesture's `onEnded` body. Claims the
+    /// in-flight global-monitor click (so the monitor's deferred emission
+    /// is skipped on macOS) and emits the refined `click` beacon.
+    static func performTap(source: String) {
+        OptelClickCoordinator.claimByRefined()
+        Optel.sample(.click, source: source)
     }
 }
 
@@ -209,15 +217,27 @@ public struct OptelButton<Label: View>: View {
 
     public var body: some View {
         Button(action: {
-            let derived = OptelSourceDeriver.source(
-                element: "button",
+            OptelButton<Label>.performTap(
                 identifier: identifier,
                 label: accessibilityLabel,
                 context: context
             )
-            Optel.sample(.click, source: derived)
             action()
         }, label: labelBuilder)
+    }
+
+    /// Testable seam mirroring the button's action body. Derives the refined
+    /// `source`, claims the in-flight global-monitor click (so the monitor's
+    /// deferred emission is skipped on macOS), and emits the `click` beacon.
+    static func performTap(identifier: String?, label: String?, context: String?) {
+        let derived = OptelSourceDeriver.source(
+            element: "button",
+            identifier: identifier,
+            label: label,
+            context: context
+        )
+        OptelClickCoordinator.claimByRefined()
+        Optel.sample(.click, source: derived)
     }
 }
 

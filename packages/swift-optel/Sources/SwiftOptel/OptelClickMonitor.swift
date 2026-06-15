@@ -122,9 +122,12 @@ public enum OptelClickMonitor {
     }
 
     /// Internal hook used by the `NSEvent` callback. Resolves the hit element
-    /// from the source window's content view, runs the decider, and emits
-    /// `click` when appropriate. Never throws and never returns a value: the
-    /// caller's `return event` keeps the click flowing to the responder chain.
+    /// from the source window's content view, runs the decider, and *defers*
+    /// the actual emit via ``OptelClickCoordinator`` so any refined handler
+    /// (`.optelTap`, ``OptelButton``) that fires during the same event
+    /// dispatch can claim the click and suppress this global emission.
+    /// Never throws and never returns a value: the caller's `return event`
+    /// keeps the click flowing to the responder chain.
     static func handle(event: NSEvent) {
         guard let window = event.window ?? NSApplication.shared.keyWindow,
             let contentView = window.contentView else {
@@ -136,7 +139,27 @@ public enum OptelClickMonitor {
         let hit = contentView.hitTest(event.locationInWindow)
         let decision = OptelClickEmitDecider.decide(for: hit)
         guard decision.shouldEmit else { return }
-        Optel.sample(.click, source: decision.source, target: decision.target)
+        // Allocate an epoch for this monitor event; refined SwiftUI handlers
+        // that run during the synchronous event dispatch can claim it. We
+        // schedule the emit via `DispatchQueue.main.async` so the deferred
+        // block runs after the responder chain (and therefore after any
+        // refined claim) has finished processing the event.
+        let epoch = OptelClickCoordinator.beginMonitorEvent()
+        DispatchQueue.main.async {
+            OptelClickMonitor.deferredEmit(
+                epoch: epoch,
+                source: decision.source,
+                target: decision.target
+            )
+        }
+    }
+
+    /// Testable seam mirroring the body of the monitor's deferred async
+    /// block. Emits `click` only when the supplied epoch was *not* claimed
+    /// by a refined handler since ``handle(event:)`` scheduled it.
+    static func deferredEmit(epoch: UInt64, source: String?, target: String?) {
+        guard !OptelClickCoordinator.wasClaimedByRefined(epoch: epoch) else { return }
+        Optel.sample(.click, source: source, target: target)
     }
 
     /// Test-only reset of the install latch and any registered monitor.

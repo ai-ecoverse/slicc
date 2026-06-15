@@ -23,8 +23,12 @@ public struct OptelWindowIdentity: Equatable, Hashable, Sendable {
     ///   - identifier: `NSWindow.identifier?.rawValue` (or `nil`).
     ///   - title: `NSWindow.title` (may be empty).
     ///   - fallbackKey: Stable per-window fallback (e.g. `ObjectIdentifier`
-    ///     hash) used when both identifier and title are blank. Required so
-    ///     two distinct, equally-blank windows are not collapsed into one.
+    ///     hash). Required because two distinct windows can share the same
+    ///     title (duplicate document/utility windows), so the title alone is
+    ///     not a unique key. Whenever there is no explicit identifier, the
+    ///     fallback is folded into the key so distinct window objects always
+    ///     get distinct keys while re-focusing the same window object still
+    ///     resolves to the same key.
     public static func make(
         identifier: String?,
         title: String?,
@@ -37,7 +41,10 @@ public struct OptelWindowIdentity: Equatable, Hashable, Sendable {
         if !trimmedID.isEmpty {
             key = "id:\(trimmedID)"
         } else if !trimmedTitle.isEmpty {
-            key = "title:\(trimmedTitle)"
+            // Title alone is not unique — two windows can carry the same
+            // title — so fold in the per-window `fallbackKey` to keep distinct
+            // windows distinct while preserving stability across re-focus.
+            key = "title:\(trimmedTitle)#ref:\(fallbackKey)"
         } else {
             key = "ref:\(fallbackKey)"
         }
