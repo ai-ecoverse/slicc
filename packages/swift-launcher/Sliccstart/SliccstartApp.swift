@@ -3,6 +3,7 @@ import AppKit
 import Combine
 import os
 import AppUpdater
+import SwiftOptel
 
 private let log = Logger(subsystem: "com.slicc.sliccstart", category: "App")
 
@@ -63,9 +64,12 @@ struct SliccstartApp: App {
     private let updateHost = UpdateHostConfiguration.resolve()
     private let runtimeRefreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
+    private let optelAppID = Bundle.main.bundleIdentifier ?? "unknown.app"
+
     init() {
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate(ignoringOtherApps: true)
+        Optel.configure(appID: optelAppID)
     }
 
     private var sliccProcess: SliccProcess { appDelegate.sliccProcess }
@@ -143,6 +147,7 @@ struct SliccstartApp: App {
                 }
             }
             .frame(width: 340)
+            .optelAutoInstrument(appID: optelAppID)
             .task { await initialize() }
             .onAppear { appManagementPermission.startWatchingForGrant() }
             .onDisappear { appManagementPermission.stopWatchingForGrant() }
