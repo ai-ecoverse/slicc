@@ -518,12 +518,23 @@ function delegationEls(message: ChatMessage): HTMLElement[] {
   return [line, bubble];
 }
 
+/**
+ * `slicc-error-card` for a cone-error message. The card is purely
+ * presentational; the chat controller listens for the bubbled
+ * `slicc-error-retry` event to re-run the last user turn via its existing
+ * agent send path.
+ */
+function errorCardEl(message: ChatMessage): HTMLElement {
+  return el('slicc-error-card', { message: message.content });
+}
+
 /** Elements for a single chat message, in thread order. */
 export function messageEls(message: ChatMessage): HTMLElement[] {
   if (message.source === 'lick') return [lickCardEl(message)];
   if (message.source === 'delegation' || message.channel === 'delegation') {
     return delegationEls(message);
   }
+  if (message.error) return [errorCardEl(message)];
   if (message.role === 'assistant') return assistantMessageEls(message);
   // Unstamped lick bodies (histories persisted before channel stamping)
   // classify at render so old idle/completed notifications never regress

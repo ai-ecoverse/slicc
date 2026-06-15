@@ -51,6 +51,8 @@ export class WcChatController {
     messageId: string,
     attachments?: ChatMessage['attachments']
   ) => void;
+  /** Bubbled `slicc-error-retry` listener wired to the thread — see `#handleErrorRetry`. */
+  readonly #onErrorRetry: (event: Event) => void;
 
   #messages: ChatMessage[] = [];
   /** Rendered thread elements per message id (a message can span several). */
@@ -72,10 +74,15 @@ export class WcChatController {
     this.#onMessageDisposed = options.onMessageDisposed;
     this.#onTurnComplete = options.onTurnComplete;
     this.#unsubscribe = options.agent.onEvent((event) => this.#handleAgentEvent(event));
+    // Bubbled retry event from any rendered `slicc-error-card` (composed, so it
+    // pierces shadow roots). One listener at the thread covers every error card.
+    this.#onErrorRetry = () => this.#handleErrorRetry();
+    this.#thread.addEventListener('slicc-error-retry', this.#onErrorRetry);
   }
 
   dispose(): void {
     this.#unsubscribe();
+    this.#thread.removeEventListener('slicc-error-retry', this.#onErrorRetry);
   }
 
   get processing(): boolean {
@@ -387,12 +394,37 @@ export class WcChatController {
 
   #handleError(error: string): void {
     this.setProcessing(false);
+    // The error path renders as `<slicc-error-card>` (a presentational card
+    // with a "Try again" button that emits the bubbled `slicc-error-retry`
+    // event picked up by `#handleErrorRetry`). Mark the message with `error`
+    // so `messageEls` routes it to the card instead of the plain bubble.
     this.#appendMessage({
       id: uid(),
       role: 'assistant',
-      content: `**Error:** ${error}`,
+      content: error,
       timestamp: Date.now(),
+      error: true,
     });
+  }
+
+  /**
+   * Re-run the last user turn through the EXISTING agent send path
+   * (`#agent.sendMessage`) — no new agent API, no duplicate user bubble. A
+   * retry while a turn is in flight is dropped to avoid double-submissions.
+   * Lick / delegation user-rows are skipped: they are not user turns.
+   */
+  #handleErrorRetry(): void {
+    if (this.#processing) return;
+    let lastUser: ChatMessage | undefined;
+    for (let i = this.#messages.length - 1; i >= 0; i--) {
+      const m = this.#messages[i];
+      if (m.role === 'user' && m.source !== 'lick' && m.source !== 'delegation') {
+        lastUser = m;
+        break;
+      }
+    }
+    if (!lastUser) return;
+    this.#agent.sendMessage(lastUser.content, uid(), lastUser.attachments);
   }
 
   // -- rendering ------------------------------------------------------------

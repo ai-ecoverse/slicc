@@ -61,6 +61,12 @@ export interface ChatMessage {
   lickParts?: string[];
   /** True when the message is queued (submitted while the agent is still processing). */
   queued?: boolean;
+  /**
+   * Cone-error marker — set by the chat controller's `error` AgentEvent
+   * handler. The view renders this assistant message as a `slicc-error-card`
+   * with a retry affordance instead of a plain assistant bubble.
+   */
+  error?: boolean;
 }
 
 export interface ToolCall {

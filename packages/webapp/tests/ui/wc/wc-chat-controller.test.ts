@@ -139,12 +139,66 @@ describe('WcChatController', () => {
     expect(thread.querySelector('slicc-action-row')?.getAttribute('result')).toBe('error');
   });
 
-  it('renders agent errors as an error bubble and clears processing', () => {
+  it('renders agent errors as a slicc-error-card and clears processing', () => {
     agent.emit({ type: 'message_start', messageId: 'm1' });
     agent.emit({ type: 'error', error: 'rate limited' });
     expect(controller.processing).toBe(false);
-    const bubbles = thread.querySelectorAll('slicc-agent-message');
-    expect(bubbles[bubbles.length - 1].textContent).toContain('rate limited');
+    const card = thread.querySelector('slicc-error-card');
+    expect(card).not.toBeNull();
+    expect(card?.getAttribute('message')).toBe('rate limited');
+  });
+
+  it('retries the last user turn through the agent send path on slicc-error-retry', () => {
+    controller.sendUserMessage('hello world');
+    agent.sent.length = 0;
+    agent.emit({ type: 'message_start', messageId: 'm1' });
+    agent.emit({ type: 'error', error: 'rate limited' });
+    const card = thread.querySelector('slicc-error-card');
+    card?.dispatchEvent(new CustomEvent('slicc-error-retry', { bubbles: true, composed: true }));
+    expect(agent.sent).toHaveLength(1);
+    expect(agent.sent[0].text).toBe('hello world');
+    // No duplicate user bubble — retry routes through `#agent.sendMessage`
+    // directly, not `sendUserMessage`.
+    expect(thread.querySelectorAll('slicc-user-message')).toHaveLength(1);
+  });
+
+  it('does nothing on retry while a turn is already in flight', () => {
+    controller.sendUserMessage('hi');
+    agent.sent.length = 0;
+    agent.emit({ type: 'message_start', messageId: 'm1' });
+    // No content_done / turn_end / error — controller is still processing.
+    expect(controller.processing).toBe(true);
+    thread.dispatchEvent(new CustomEvent('slicc-error-retry', { bubbles: true, composed: true }));
+    expect(agent.sent).toHaveLength(0);
+  });
+
+  it('skips lick rows when finding the last user turn for retry', () => {
+    controller.sendUserMessage('first');
+    controller.addLickMessage('l1', '[Webhook Event: x]', 'webhook', Date.now());
+    agent.sent.length = 0;
+    agent.emit({ type: 'error', error: 'rate limited' });
+    const card = thread.querySelector('slicc-error-card');
+    card?.dispatchEvent(new CustomEvent('slicc-error-retry', { bubbles: true, composed: true }));
+    expect(agent.sent).toHaveLength(1);
+    expect(agent.sent[0].text).toBe('first');
+  });
+
+  it('no-ops a retry when there is no prior user turn', () => {
+    agent.sent.length = 0;
+    agent.emit({ type: 'error', error: 'rate limited' });
+    const card = thread.querySelector('slicc-error-card');
+    card?.dispatchEvent(new CustomEvent('slicc-error-retry', { bubbles: true, composed: true }));
+    expect(agent.sent).toHaveLength(0);
+  });
+
+  it('stops listening for retry after dispose', () => {
+    controller.sendUserMessage('hi');
+    agent.sent.length = 0;
+    agent.emit({ type: 'error', error: 'rate limited' });
+    const card = thread.querySelector('slicc-error-card');
+    controller.dispose();
+    card?.dispatchEvent(new CustomEvent('slicc-error-retry', { bubbles: true, composed: true }));
+    expect(agent.sent).toHaveLength(0);
   });
 
   it('replaces history wholesale on loadMessages', () => {
