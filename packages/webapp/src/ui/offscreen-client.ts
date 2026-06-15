@@ -88,6 +88,15 @@ export interface OffscreenClientCallbacks {
     scoopJid: string,
     state: 'summarizing' | 'extracting-memory' | 'idle'
   ) => void;
+  /**
+   * Fired when any scoop (selected or not) produces meaningful agent
+   * activity — text deltas, tool starts, tool UI, or turn ends. Lets
+   * the host move the navbar `attention` (googly eyes) to whichever
+   * scoop is actively streaming, regardless of selection. Does NOT
+   * affect which scoop's thread renders — the selection gate that
+   * controls thread routing in {@link handleAgentEvent} is unchanged.
+   */
+  onScoopActivity?: (scoopJid: string) => void;
 }
 
 export class OffscreenClient implements KernelClientFacade {
@@ -728,6 +737,19 @@ export class OffscreenClient implements KernelClientFacade {
   }
 
   private handleAgentEvent(msg: AgentEventMsg): void {
+    // Per-scoop activity ping fires BEFORE the selection gate so the
+    // host can move the navbar eyes onto a non-selected scoop that is
+    // actively streaming. The gate below still controls which scoop's
+    // thread renders.
+    switch (msg.eventType) {
+      case 'text_delta':
+      case 'tool_start':
+      case 'tool_ui':
+      case 'turn_end':
+        this.callbacks.onScoopActivity?.(msg.scoopJid);
+        break;
+    }
+
     if (msg.scoopJid !== this.selectedScoopJid) return;
 
     switch (msg.eventType) {

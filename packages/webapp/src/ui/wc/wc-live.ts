@@ -202,6 +202,12 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
       refreshScoops();
       ensureSelection();
     },
+    onScoopActivity: (jid) => {
+      // Agent-event ping for ANY scoop (selected or not): keep the navbar
+      // eyes on whichever scoop is actively streaming. Mirrors the
+      // `attention` write in `onIncomingMessage`; no thread routing.
+      wiring.refs.switcher.setAttribute('attention', jid);
+    },
     onIncomingMessage: (jid, message) => {
       // Most-recent-activity tracking: the scoop that just received a message
       // wears the blinking navbar eyes (the switcher's `attention` chip) and

@@ -183,6 +183,18 @@ describe('createWcLiveCallbacks', () => {
     expect(wiring.refs.switcher.getAttribute('attention')).toBe('cone-1');
   });
 
+  it('moves switcher attention onto a non-selected, actively-streaming scoop', () => {
+    // Cone is selected, but a different scoop is streaming an agent turn —
+    // the eyes must follow the activity even though selection is unchanged.
+    const streamer = scoop({ jid: 'scoop-stream', name: 'researcher' });
+    const wiring = makeWiring({ selected: cone, scoops: [cone, streamer] });
+    const callbacks = createWcLiveCallbacks(wiring);
+    callbacks.onScoopActivity?.(streamer.jid);
+    expect(wiring.refs.switcher.getAttribute('attention')).toBe(streamer.jid);
+    // Selection is intentionally untouched — thread routing is owned elsewhere.
+    expect(wiring.getSelected()).toBe(cone);
+  });
+
   it('renders licks for the selected scoop only, skipping web messages', () => {
     const wiring = makeWiring({ selected: cone });
     const callbacks = createWcLiveCallbacks(wiring);

@@ -44,6 +44,7 @@ describe('OffscreenClient', () => {
     onScoopCreated: vi.fn(),
     onScoopListUpdate: vi.fn(),
     onIncomingMessage: vi.fn(),
+    onScoopActivity: vi.fn(),
   };
 
   beforeEach(() => {
@@ -144,6 +145,53 @@ describe('OffscreenClient', () => {
     });
 
     expect(events.length).toBe(0);
+  });
+
+  it('fires onScoopActivity for non-selected scoop agent events while not rendering them', () => {
+    // The navbar eyes follow the actively-streaming scoop even when it is
+    // not the selected one; the thread itself must NOT render those events.
+    client.setSelectedScoopJid('cone_123');
+    const handle = client.createAgentHandle();
+    const events: unknown[] = [];
+    handle.onEvent((e) => events.push(e));
+
+    for (const eventType of ['text_delta', 'tool_start', 'tool_ui', 'turn_end']) {
+      simulateMessage('offscreen', {
+        type: 'agent-event',
+        scoopJid: 'other_scoop',
+        eventType,
+        text: 'x',
+        toolName: 't',
+        requestId: 'r',
+        html: '<i/>',
+      });
+    }
+
+    expect(callbacks.onScoopActivity).toHaveBeenCalledTimes(4);
+    expect(callbacks.onScoopActivity).toHaveBeenCalledWith('other_scoop');
+    // Selection gate still suppresses thread rendering for non-selected scoops.
+    expect(events.length).toBe(0);
+  });
+
+  it('does not fire onScoopActivity for tool_end / response_done', () => {
+    // Activity ping is restricted to the four "loud" event types so the
+    // attention attribute doesn't flap on every micro-event.
+    client.setSelectedScoopJid('cone_123');
+
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'cone_123',
+      eventType: 'tool_end',
+      toolName: 't',
+      toolResult: 'ok',
+    });
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'cone_123',
+      eventType: 'response_done',
+    });
+
+    expect(callbacks.onScoopActivity).not.toHaveBeenCalled();
   });
 
   it('handles scoop-status changes', () => {
