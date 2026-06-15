@@ -28,6 +28,7 @@ jobs:
       cherry: ${{ steps.filter.outputs.cherry }}
       dev-tools: ${{ steps.filter.outputs.dev-tools }}
       swift-server: ${{ steps.filter.outputs.swift-server }}
+      swift-optel: ${{ steps.filter.outputs.swift-optel }}
       swift-launcher: ${{ steps.filter.outputs.swift-launcher }}
       ios-app: ${{ steps.filter.outputs.ios-app }}
       swift-config: ${{ steps.filter.outputs.swift-config }}
@@ -63,6 +64,8 @@ jobs:
               - 'packages/dev-tools/**'
             swift-server:
               - 'packages/swift-server/**'
+            swift-optel:
+              - 'packages/swift-optel/**'
             swift-launcher:
               - 'packages/swift-launcher/**'
             ios-app:
@@ -701,6 +704,47 @@ jobs:
           # blocking PRs while existing findings get cleaned up incrementally.
           cd packages/swift-server && periphery scan --disable-update-check || true
 
+  swift-optel:
+    needs: [changes, lint]
+    if: >-
+      needs.lint.result == 'success' &&
+      needs.changes.outputs.is-queue-leader == 'true' &&
+      (needs.changes.outputs.swift-optel == 'true' ||
+      needs.changes.outputs.swift-config == 'true')
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      # swift-coverage-check.sh reads its floors from coverage-thresholds.json
+      # via node, so pin Node (matches the other jobs) instead of relying on
+      # the runner's preinstalled version.
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+      - name: Install SwiftLint
+        run: brew install swiftlint
+      - name: Lint (SwiftLint)
+        run: cd packages/swift-optel && swiftlint lint --reporter github-actions-logging
+      - name: Build
+        run: cd packages/swift-optel && swift build -c release
+      - name: Test (with coverage threshold gate)
+        run: |
+          ./packages/dev-tools/tools/swift-coverage-check.sh \
+            packages/swift-optel SwiftOptelPackageTests
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-swift-optel
+          path: packages/swift-optel/.build/coverage/
+          if-no-files-found: ignore
+      - name: Install Periphery
+        run: brew install peripheryapp/periphery/periphery
+      - name: Dead code detection (Periphery)
+        run: |
+          # Informational scan; surfaces unused Swift declarations without
+          # blocking PRs while existing findings get cleaned up incrementally.
+          cd packages/swift-optel && periphery scan --disable-update-check || true
+
   swift-launcher:
     needs: [changes, lint]
     if: >-
@@ -867,6 +911,7 @@ jobs:
         global-install,
         swift-launcher,
         swift-server,
+        swift-optel,
         ios-app,
         release-gate,
       ]

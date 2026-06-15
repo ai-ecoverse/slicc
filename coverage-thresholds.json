@@ -89,6 +89,11 @@
       "lines": 27,
       "functions": 31,
       "regions": 34
+    },
+    "swift-optel": {
+      "lines": 65,
+      "functions": 55,
+      "regions": 70
     }
   }
 }
