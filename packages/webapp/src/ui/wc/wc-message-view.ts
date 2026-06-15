@@ -56,8 +56,8 @@ export function lickChannelFromContent(content: string): string | null {
   return null;
 }
 
-/** `[@<scoop> completed|idle]` marker — the originating scoop's name. */
-const SCOOP_MARKER_RE = /^\[@([^\]\s]+) (?:completed|idle)\]/;
+/** `[@<scoop> completed|idle|sudo-request]` marker — the originating scoop's name. */
+const SCOOP_MARKER_RE = /^\[@([^\]\s]+) (?:completed|idle|sudo-request)\]/;
 
 /** Strip the conventional `-scoop` suffix so the tag matches the chip label. */
 function scoopTagName(marker: string): string {

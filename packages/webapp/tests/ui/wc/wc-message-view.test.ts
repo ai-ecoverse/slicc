@@ -400,6 +400,22 @@ describe('render-time lick classification + scoop-identity tags', () => {
     expect(sprinkle[0].tagName.toLowerCase()).toBe('slicc-lick-card');
     expect(sprinkle[0].getAttribute('kind')).toBe('sprinkle');
     expect(sprinkle[0].getAttribute('event-label')).toBe('blame-roulette');
+
+    // Sudo-request bodies are emitted by `Orchestrator.formatSudoRequestNotification`
+    // as `[@<scoop> sudo-request]…` — both the body-marker classifier and
+    // the scoop-name extractor must recognize this marker so a replayed
+    // sudo request hydrates into a scoop-tagged lick card instead of a
+    // plain user bubble.
+    const sudo = messageEls({
+      id: 'd',
+      role: 'user',
+      content:
+        '[@pr1003-always-scoop sudo-request]\nRequest ID: sudo-mqf7gh5c-cr56age9\nKind: command\nDetail: date -u',
+      timestamp: 1,
+    });
+    expect(sudo[0].tagName.toLowerCase()).toBe('slicc-lick-card');
+    expect(sudo[0].getAttribute('kind')).toBe('sudo-request');
+    expect(sudo[0].getAttribute('event-label')).toBe('pr1003-always');
   });
 
   it('leaves genuine user text with brackets alone', () => {
