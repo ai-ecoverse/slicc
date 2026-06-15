@@ -323,7 +323,7 @@ const PILL_STYLE = `
   :host([theme="light"]){--label:#1b2030;--icon-tint:color-mix(in oklab,var(--accent) 30%,#fff);}
   :host([theme="dark"]){--label:#eef1f6;--icon-tint:color-mix(in oklab,var(--accent) 22%,transparent);}
   *{box-sizing:border-box;}
-  .pill{position:relative;display:inline-flex;align-items:center;gap:8px;width:var(--pill-w);font:500 13px ui-sans-serif,system-ui,-apple-system,sans-serif;color:var(--accent);background:transparent;border:1.5px solid var(--accent);border-radius:9999px;padding:0 14px 0 0;cursor:pointer;line-height:1;overflow:hidden;transition:background .2s ease,color .2s ease;}
+  .pill{position:relative;display:inline-flex;align-items:center;gap:8px;width:var(--pill-w);font:500 13px ui-sans-serif,system-ui,-apple-system,sans-serif;color:var(--accent);background:transparent;border:3px solid var(--accent);border-radius:9999px;padding:0 14px 0 0;cursor:pointer;line-height:1;overflow:hidden;transition:background .2s ease,color .2s ease;}
   .pill.active{background:var(--accent);} .pill.active .label{color:#fff;}
   .pill:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
   /* The face wash fades radially into the pill ground instead of ending in a
