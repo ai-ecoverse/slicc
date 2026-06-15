@@ -1,0 +1,240 @@
+name: Storybook Screenshots
+
+# On PRs touching packages/webcomponents, capture light+dark Storybook screenshots
+# for stories whose source files changed, upload them to the Cloudflare R2 bucket
+# `slicc-pr-screenshots` (or to a workflow artifact on fork PRs where secrets are
+# unavailable), and post/update a single sticky PR comment with the images inline.
+#
+# Required repository secrets (host PRs only — fork PRs gracefully degrade):
+#   CLOUDFLARE_API_TOKEN  R2 token with Object Read+Write on `slicc-pr-screenshots`.
+# Required repository variables (with sensible defaults if unset):
+#   CLOUDFLARE_ACCOUNT_ID  defaults to 155ec15a52a18a14801e04b019da5e5a (AEM Demo).
+#   R2_PUBLIC_BASE_URL     defaults to https://pub-e4170b327f03406f9831a6f393b96e05.r2.dev
+#   R2_BUCKET              defaults to slicc-pr-screenshots
+#
+# wrangler is invoked with `--remote` and `CLOUDFLARE_ACCOUNT_ID` exported so the
+# account is unambiguous in non-interactive runs.
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: storybook-screenshots-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      webcomponents: ${{ steps.filter.outputs.webcomponents }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        id: filter
+        with:
+          filters: |
+            webcomponents:
+              - 'packages/webcomponents/**'
+
+  screenshots:
+    needs: changes
+    if: needs.changes.outputs.webcomponents == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || '155ec15a52a18a14801e04b019da5e5a' }}
+      R2_BUCKET: ${{ vars.R2_BUCKET || 'slicc-pr-screenshots' }}
+      R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL || 'https://pub-e4170b327f03406f9831a6f393b96e05.r2.dev' }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Compute changed files (PR diff)
+        id: diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p .storybook-screenshots
+          gh pr diff "$PR_NUMBER" --name-only > .storybook-screenshots/changed-files.txt
+          echo "Changed files:"
+          cat .storybook-screenshots/changed-files.txt
+
+      - name: Install Chromium (Storybook capture)
+        run: npx playwright install --with-deps chromium
+
+      - name: Build Storybook
+        run: npm run build-storybook -w @slicc/webcomponents
+
+      - name: Capture screenshots of affected stories
+        run: |
+          set -euo pipefail
+          node packages/dev-tools/tools/storybook-affected-screenshots.mjs \
+            --changed-files .storybook-screenshots/changed-files.txt \
+            --storybook-static packages/webcomponents/storybook-static \
+            --output .storybook-screenshots/out \
+            --manifest .storybook-screenshots/out/manifest.json
+
+      - name: Check upload mode
+        id: mode
+        env:
+          R2_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -n "${R2_TOKEN:-}" ]; then
+            echo "mode=r2" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=artifact" >> "$GITHUB_OUTPUT"
+            echo "::notice::CLOUDFLARE_API_TOKEN not available (likely a fork PR); falling back to artifact upload."
+          fi
+
+      - name: Upload screenshots to Cloudflare R2
+        if: steps.mode.outputs.mode == 'r2'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          MANIFEST=.storybook-screenshots/out/manifest.json
+          if [ ! -s "$MANIFEST" ]; then
+            echo "::warning::No manifest produced by capture script; skipping upload."
+            exit 0
+          fi
+          PREFIX="pr-${PR_NUMBER}/${HEAD_SHA}"
+          # Extract { file } values from every story.screenshots[] entry.
+          FILES=$(node -e '
+            const m = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+            for (const s of m.stories || []) for (const shot of s.screenshots || []) console.log(shot.file);
+          ' "$MANIFEST")
+          if [ -z "$FILES" ]; then
+            echo "No screenshots to upload (zero affected stories)."
+            exit 0
+          fi
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            src=".storybook-screenshots/out/${f}"
+            key="${PREFIX}/${f}"
+            echo "Uploading ${src} -> r2://${R2_BUCKET}/${key}"
+            npx wrangler r2 object put \
+              "${R2_BUCKET}/${key}" \
+              --file "${src}" \
+              --content-type image/png \
+              --remote
+          done <<< "$FILES"
+
+      - name: Upload screenshots as workflow artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: storybook-screenshots-${{ env.HEAD_SHA }}
+          path: .storybook-screenshots/out/
+          if-no-files-found: ignore
+
+      - name: Post or update sticky PR comment
+        if: always()
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          UPLOAD_MODE: ${{ steps.mode.outputs.mode }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const MARKER = '<!-- storybook-screenshots-comment -->';
+            const prNumber = Number(process.env.PR_NUMBER);
+            const sha = process.env.HEAD_SHA;
+            const shortSha = sha.slice(0, 7);
+            const mode = process.env.UPLOAD_MODE || 'artifact';
+            const baseUrl = (process.env.R2_PUBLIC_BASE_URL || '').replace(/\/$/, '');
+            const bucket = process.env.R2_BUCKET;
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            const manifestPath = '.storybook-screenshots/out/manifest.json';
+
+            let manifest = null;
+            try {
+              manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            } catch (err) {
+              core.warning(`Could not read manifest at ${manifestPath}: ${err.message}`);
+            }
+
+            const stories = (manifest && Array.isArray(manifest.stories)) ? manifest.stories : [];
+            const lines = [];
+            lines.push(MARKER);
+            lines.push('## 📸 Storybook screenshots');
+            lines.push('');
+            lines.push(`Commit \`${shortSha}\` · ${stories.length} affected ${stories.length === 1 ? 'story' : 'stories'}`);
+            lines.push('');
+
+            if (mode !== 'r2') {
+              lines.push(`> ℹ️ R2 upload skipped (no \`CLOUDFLARE_API_TOKEN\` available — typical for fork PRs).`);
+              lines.push(`> Download the PNGs from the [workflow run artifacts](${runUrl}).`);
+              lines.push('');
+            }
+
+            if (stories.length === 0) {
+              lines.push('_No affected stories detected for the changed files._');
+            } else {
+              for (const story of stories) {
+                const title = `${story.title || story.area || ''} — ${story.name || story.id}`.replace(/^ — /, '');
+                lines.push(`### ${title.trim()}`);
+                lines.push('');
+                lines.push(`<sub>\`${story.id}\`</sub>`);
+                lines.push('');
+                if (mode === 'r2') {
+                  lines.push('| Light | Dark |');
+                  lines.push('| --- | --- |');
+                  const byTheme = Object.fromEntries((story.screenshots || []).map((s) => [s.theme, s.file]));
+                  const cell = (theme) => {
+                    const file = byTheme[theme];
+                    if (!file) return '_(missing)_';
+                    const url = `${baseUrl}/pr-${prNumber}/${sha}/${file}`;
+                    return `<img src="${url}" alt="${story.id} (${theme})" width="360">`;
+                  };
+                  lines.push(`| ${cell('light')} | ${cell('dark')} |`);
+                } else {
+                  const files = (story.screenshots || []).map((s) => `\`${s.file}\` (${s.theme})`).join(', ');
+                  lines.push(`Screenshots in artifact: ${files || '_(none)_'}`);
+                }
+                lines.push('');
+              }
+            }
+
+            lines.push('---');
+            lines.push(`<sub>Generated by [\`storybook-screenshots\`](${runUrl}) · updates in place on every push.</sub>`);
+
+            const body = lines.join('\n');
+
+            const { data: existing } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              per_page: 100,
+            });
+            const prior = existing.find((c) => c.body && c.body.includes(MARKER));
+            if (prior) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: prior.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body,
+              });
+            }
