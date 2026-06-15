@@ -277,7 +277,6 @@
     {
       "includes": [
         "packages/chrome-extension/src/extension-leader-tray.ts",
-        "packages/chrome-extension/src/service-worker.ts",
         "packages/cloudflare-worker/src/index.ts",
         "packages/webapp/cloud/app.js",
         "packages/webapp/src/core/context-compaction.ts",
@@ -288,7 +287,6 @@
         "packages/webapp/src/shell/supplemental-commands/ffmpeg-command.ts",
         "packages/webapp/src/shell/supplemental-commands/open-command.ts",
         "packages/webapp/src/shell/supplemental-commands/pdftk-command.ts",
-        "packages/webapp/src/shell/supplemental-commands/secret-command.ts",
         "packages/webapp/src/shell/supplemental-commands/websocat-command.ts",
         "packages/webapp/src/ui/api-key-dialog.ts",
         "packages/webapp/src/ui/chat-fixture.ts",
@@ -308,7 +306,6 @@
       "includes": [
         "packages/cherry/src/cdp-host-handlers.ts",
         "packages/chrome-extension/src/secrets-entry.ts",
-        "packages/chrome-extension/src/service-worker.ts",
         "packages/cloud-core/src/cone-config/index.ts",
         "packages/cloud-core/src/operations/list.ts",
         "packages/cloud-core/src/operations/start.ts",
@@ -364,7 +361,6 @@
         "packages/webapp/src/shell/supplemental-commands/ps-command.ts",
         "packages/webapp/src/shell/supplemental-commands/python-command.ts",
         "packages/webapp/src/shell/supplemental-commands/screencapture-command.ts",
-        "packages/webapp/src/shell/supplemental-commands/secret-command.ts",
         "packages/webapp/src/shell/supplemental-commands/serial-command.ts",
         "packages/webapp/src/shell/supplemental-commands/serve-command.ts",
         "packages/webapp/src/shell/supplemental-commands/sprinkle-command.ts",
