@@ -86,5 +86,88 @@ final class OptelSwiftUITests: XCTestCase {
         XCTAssertTrue(final.shouldFireEnter)
         XCTAssertFalse(final.wasBackgrounded)
     }
+
+    // MARK: - Unified install seam (performInstall)
+
+    func testPerformInstallWithGlobalHooksInstallsUncaughtExceptionHook() {
+        OptelUncaughtExceptionHook._testing_reset()
+        XCTAssertFalse(OptelUncaughtExceptionHook.isInstalled)
+        OptelAutoInstrumentModifier.performInstall(
+            appID: "com.example.app",
+            rate: "off",
+            globalHooks: true
+        )
+        XCTAssertTrue(OptelUncaughtExceptionHook.isInstalled)
+    }
+
+    func testPerformInstallWithoutGlobalHooksSkipsUncaughtExceptionHook() {
+        OptelUncaughtExceptionHook._testing_reset()
+        XCTAssertFalse(OptelUncaughtExceptionHook.isInstalled)
+        OptelAutoInstrumentModifier.performInstall(
+            appID: "com.example.app",
+            rate: "off",
+            globalHooks: false
+        )
+        XCTAssertFalse(OptelUncaughtExceptionHook.isInstalled)
+    }
+
+    #if os(macOS)
+    func testPerformInstallWithGlobalHooksInstallsMacHooks() {
+        OptelMacAutoInstrument._testing_reset()
+        XCTAssertFalse(OptelMacAutoInstrument.isInstalled)
+        OptelAutoInstrumentModifier.performInstall(
+            appID: "com.example.app",
+            rate: "off",
+            globalHooks: true
+        )
+        XCTAssertTrue(OptelMacAutoInstrument.isInstalled)
+        OptelMacAutoInstrument.uninstall()
+    }
+
+    func testPerformInstallWithoutGlobalHooksSkipsMacHooks() {
+        OptelMacAutoInstrument._testing_reset()
+        XCTAssertFalse(OptelMacAutoInstrument.isInstalled)
+        OptelAutoInstrumentModifier.performInstall(
+            appID: "com.example.app",
+            rate: "off",
+            globalHooks: false
+        )
+        XCTAssertFalse(OptelMacAutoInstrument.isInstalled)
+    }
+
+    func testPerformInstallIsIdempotentForMacHooks() {
+        // Remounting the root view must not double-install. Each underlying
+        // hook's `installIfNeeded()` is itself a no-op on the second call,
+        // and `OptelMacAutoInstrument.isInstalled` stays `true` throughout.
+        OptelMacAutoInstrument._testing_reset()
+        for _ in 0..<3 {
+            OptelAutoInstrumentModifier.performInstall(
+                appID: "com.example.app",
+                rate: "off",
+                globalHooks: true
+            )
+        }
+        XCTAssertTrue(OptelMacAutoInstrument.isInstalled)
+        XCTAssertTrue(OptelClickMonitor.isInstalled)
+        XCTAssertTrue(OptelWindowObserver.isInstalled)
+        OptelMacAutoInstrument.uninstall()
+        XCTAssertFalse(OptelMacAutoInstrument.isInstalled)
+    }
+
+    func testMacAutoInstrumentCoordinatorInstallUninstall() {
+        OptelMacAutoInstrument._testing_reset()
+        XCTAssertFalse(OptelMacAutoInstrument.isInstalled)
+        OptelMacAutoInstrument.installIfNeeded()
+        XCTAssertTrue(OptelMacAutoInstrument.isInstalled)
+        // Second call is a no-op — each underlying hook latches.
+        OptelMacAutoInstrument.installIfNeeded()
+        XCTAssertTrue(OptelMacAutoInstrument.isInstalled)
+        OptelMacAutoInstrument.uninstall()
+        XCTAssertFalse(OptelMacAutoInstrument.isInstalled)
+        // Uninstall when nothing is installed is safe.
+        OptelMacAutoInstrument.uninstall()
+        XCTAssertFalse(OptelMacAutoInstrument.isInstalled)
+    }
+    #endif
 }
 #endif
