@@ -96,14 +96,30 @@ public struct SecretPair {
     }
 }
 
+/// Minimum length a secret value must have to be registered as a masking
+/// pattern. Mirrors the TypeScript twin at
+/// `packages/shared-ts/src/secret-masking.ts` (`MIN_MASKABLE_SECRET_LENGTH`).
+///
+/// A degenerate-length value (e.g. 1 byte) would collide with arbitrary
+/// outbound bytes and produce spurious cross-domain 403s. Anything ≤ 8 chars
+/// is already fully disclosed by `secret peek` (first 4 + last 4), so leaving
+/// it unmasked loses no secrecy. Keep this in sync with the TS constant.
+public let MIN_MASKABLE_SECRET_LENGTH: Int = 9
+
 /// Build a reusable scrubber that replaces every occurrence of any
 /// `realValue` with its `maskedValue`.
 ///
 /// Secrets are sorted longest-first to avoid partial-match clobbering.
+///
+/// Values with `realValue.utf16.count < MIN_MASKABLE_SECRET_LENGTH` are
+/// silently dropped here as a defensive guard. The chokepoint that surfaces
+/// the skip to operators is `SecretInjector` (which knows the secret name
+/// and emits a single warning per skipped entry).
 public func buildScrubber(secrets: [SecretPair]) -> @Sendable (String) -> String {
-    guard !secrets.isEmpty else { return { $0 } }
+    let eligible = secrets.filter { $0.realValue.utf16.count >= MIN_MASKABLE_SECRET_LENGTH }
+    guard !eligible.isEmpty else { return { $0 } }
 
-    let sorted = secrets.sorted { $0.realValue.count > $1.realValue.count }
+    let sorted = eligible.sorted { $0.realValue.count > $1.realValue.count }
 
     return { text in
         var result = text

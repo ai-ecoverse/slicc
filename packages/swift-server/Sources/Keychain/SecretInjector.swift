@@ -143,6 +143,17 @@ public final class SecretInjector: @unchecked Sendable {
         // SecretProxyManager.buildSource).
         if let store = oauthStore {
             for entry in await store.list() {
+                // Mirror the TS minimum-length guard: a too-short OAuth replica
+                // value must not register as a masking pattern.
+                if entry.value.utf16.count < MIN_MASKABLE_SECRET_LENGTH {
+                    FileHandle.standardError.write(Data(
+                        "[slicc:secrets] secret \"\(entry.name)\" not masked: value shorter than \(MIN_MASKABLE_SECRET_LENGTH) chars\n".utf8
+                    ))
+                    // Also drop any pre-existing (Keychain/env-file) entry with
+                    // the same name so OAuth's override semantics remove it.
+                    loaded.removeAll { $0.name == entry.name }
+                    continue
+                }
                 let masked = mask(sessionId: sessionId, secretName: entry.name, realValue: entry.value)
                 let loadedEntry = LoadedSecret(
                     name: entry.name,
@@ -178,6 +189,16 @@ public final class SecretInjector: @unchecked Sendable {
         // re-parsed the same blob N+1 times.
         var loaded: [LoadedSecret] = []
         for secret in SecretStore.all() {
+            // Mirror the TS minimum-length guard: a too-short value must not
+            // be registered as a masking pattern (it would collide with
+            // arbitrary outbound bytes and spuriously trigger the cross-domain
+            // forbidden path). Warn by NAME only — never the value.
+            if secret.value.utf16.count < MIN_MASKABLE_SECRET_LENGTH {
+                FileHandle.standardError.write(Data(
+                    "[slicc:secrets] secret \"\(secret.name)\" not masked: value shorter than \(MIN_MASKABLE_SECRET_LENGTH) chars\n".utf8
+                ))
+                continue
+            }
             let masked = mask(sessionId: sessionId, secretName: secret.name, realValue: secret.value)
             loaded.append(LoadedSecret(
                 name: secret.name,
@@ -189,6 +210,17 @@ public final class SecretInjector: @unchecked Sendable {
 
         // Merge env-file secrets: override existing by name, append new ones
         for secret in _envFileSecrets {
+            if secret.value.utf16.count < MIN_MASKABLE_SECRET_LENGTH {
+                FileHandle.standardError.write(Data(
+                    "[slicc:secrets] secret \"\(secret.name)\" not masked: value shorter than \(MIN_MASKABLE_SECRET_LENGTH) chars\n".utf8
+                ))
+                // Env-file override semantics: a too-short env-file entry
+                // removes any Keychain entry with the same name (the user
+                // explicitly opted into the short value), and does not
+                // register itself.
+                loaded.removeAll { $0.name == secret.name }
+                continue
+            }
             let masked = mask(sessionId: sessionId, secretName: secret.name, realValue: secret.value)
             let entry = LoadedSecret(
                 name: secret.name,

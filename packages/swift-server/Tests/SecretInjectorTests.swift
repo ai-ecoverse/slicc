@@ -117,11 +117,11 @@ final class SecretInjectorTests: XCTestCase {
 
     func testScrubMultipleSecrets() {
         let injector = makeInjector(secrets: [
-            makeSecret(name: "A", realValue: "secret_a", maskedValue: "masked_a", domains: ["a.com"]),
-            makeSecret(name: "B", realValue: "secret_b", maskedValue: "masked_b", domains: ["b.com"]),
+            makeSecret(name: "A", realValue: "secret_aa1", maskedValue: "masked_aa1", domains: ["a.com"]),
+            makeSecret(name: "B", realValue: "secret_bb1", maskedValue: "masked_bb1", domains: ["b.com"]),
         ])
-        let result = injector.scrub(text: "A=secret_a B=secret_b")
-        XCTAssertEqual(result, "A=masked_a B=masked_b")
+        let result = injector.scrub(text: "A=secret_aa1 B=secret_bb1")
+        XCTAssertEqual(result, "A=masked_aa1 B=masked_bb1")
     }
 
     func testScrubLeavesTextUnchangedWhenNoRealValues() {

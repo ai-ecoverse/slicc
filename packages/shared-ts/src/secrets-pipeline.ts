@@ -1,6 +1,7 @@
 import {
   buildScrubber,
   mask as cryptoMask,
+  MIN_MASKABLE_SECRET_LENGTH,
   matchesDomains,
   type SecretPair,
 } from './secret-masking.js';
@@ -132,6 +133,17 @@ export class SecretsPipeline {
     const merged = [...all, ...session];
     const next = new Map<string, MaskedSecret>();
     for (const s of merged) {
+      // Skip too-short values entirely: do NOT mask, do NOT register in the
+      // masked↔real map, do NOT add to the scrubber. A degenerate-length
+      // value (e.g. 1 byte) would collide with arbitrary outbound bytes and
+      // produce spurious cross-domain 403s. The warning names the secret
+      // (never its value) so the operator knows it will not be masked.
+      if (s.value.length < MIN_MASKABLE_SECRET_LENGTH) {
+        console.warn(
+          `[slicc:secrets] secret "${s.name}" not masked: value shorter than ${MIN_MASKABLE_SECRET_LENGTH} chars`
+        );
+        continue;
+      }
       const maskedValue = await cryptoMask(this.sessionId, s.name, s.value);
       next.set(maskedValue, {
         name: s.name,

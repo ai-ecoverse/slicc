@@ -94,17 +94,38 @@ export interface SecretPair {
 }
 
 /**
+ * Minimum length a secret value must have to be registered as a masking
+ * pattern. Values shorter than this are skipped: a 1-byte "value" would
+ * collide with arbitrary bytes on every outbound request and falsely
+ * trigger the cross-domain forbidden path (the `INTTEST_BLOCKED` Adobe
+ * blocker scenario).
+ *
+ * Rationale on the cutoff: `secret peek` already reveals the first 4 +
+ * last 4 characters of a value, so any value of 8 chars or fewer is
+ * already fully disclosed by peek — leaving it unmasked loses no
+ * secrecy. The constant is exported so callers (and the Swift twin)
+ * stay in sync; tune both sides together.
+ */
+export const MIN_MASKABLE_SECRET_LENGTH = 9;
+
+/**
  * Build a reusable scrubber function that replaces every occurrence
  * of any `realValue` with its `maskedValue`.
  *
  * For a small number of secrets a simple sequential replace is fine.
  * Secrets are sorted longest-first to avoid partial-match issues.
+ *
+ * Values shorter than `MIN_MASKABLE_SECRET_LENGTH` are silently dropped
+ * here as a defensive guard. The chokepoint that actually surfaces the
+ * skip to operators is `SecretsPipeline.reload()` (which has the secret
+ * name available and emits a single warning per skipped entry).
  */
 export function buildScrubber(secrets: SecretPair[]): (text: string) => string {
-  if (secrets.length === 0) return (t) => t;
+  const eligible = secrets.filter((s) => s.realValue.length >= MIN_MASKABLE_SECRET_LENGTH);
+  if (eligible.length === 0) return (t) => t;
 
   // Sort longest real values first to avoid sub-string clobbering
-  const sorted = [...secrets].sort((a, b) => b.realValue.length - a.realValue.length);
+  const sorted = [...eligible].sort((a, b) => b.realValue.length - a.realValue.length);
 
   return (text: string): string => {
     let result = text;
