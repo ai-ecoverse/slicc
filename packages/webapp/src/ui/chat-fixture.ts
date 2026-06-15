@@ -55,99 +55,99 @@ export const FIXTURE_SESSION_ID = 'session-ui-fixture';
  *  render as `@ui-fixture` instead of `sliccy`. */
 export const FIXTURE_SCOOP_NAME = 'ui-fixture';
 
-/** Build the synthetic chat history. Pure function — no side effects.
- *  Each message has a stable id so the fixture is idempotent under
- *  re-renders and matches exact-id lookups in tests. */
-export function createChatFixture(): ChatMessage[] {
-  const messages: ChatMessage[] = [];
+/** Section 1: User question + short assistant reply. */
+function buildUserAndAssistantOpening(): ChatMessage[] {
+  return [
+    {
+      id: 'fx-user-1',
+      role: 'user',
+      content: 'Hey sliccy — can you summarize what this fixture covers?',
+      timestamp: tsAt(0),
+    },
+    {
+      id: 'fx-assistant-1',
+      role: 'assistant',
+      content:
+        'Sure! This session walks through every chat UI variant I know about. ' +
+        "You'll see user and assistant bubbles, tool calls in every status, " +
+        'the six lick channels, a delegation, queued messages, and a streaming ' +
+        'tail at the end so you can inspect the live state.',
+      timestamp: tsAt(0.2),
+    },
+  ];
+}
 
-  // ── 1. User + short assistant ──────────────────────────────────────
-  messages.push({
-    id: 'fx-user-1',
-    role: 'user',
-    content: 'Hey sliccy — can you summarize what this fixture covers?',
-    timestamp: tsAt(0),
-  });
+/** Section 2: Markdown rendering, attachments, code blocks, inline formatting. */
+function buildMarkdownAndAttachments(): ChatMessage[] {
+  return [
+    {
+      id: 'fx-user-2',
+      role: 'user',
+      content: 'Show me some **markdown** — headings, lists, code, a blockquote.',
+      timestamp: tsAt(1),
+    },
+    {
+      id: 'fx-user-attachment',
+      role: 'user',
+      content: 'Use these attachments as visual and text context.',
+      timestamp: tsAt(1.1),
+      attachments: [
+        {
+          id: 'fx-att-image',
+          name: 'dot.png',
+          mimeType: 'image/png',
+          size: FIXTURE_PNG_BYTES.byteLength,
+          kind: 'image',
+          data: pngBytesToBase64(FIXTURE_PNG_BYTES),
+        },
+        {
+          id: 'fx-att-text',
+          name: 'notes.txt',
+          mimeType: 'text/plain',
+          size: 21,
+          kind: 'text',
+          text: 'Fixture attachment text',
+        },
+      ],
+    },
+    {
+      id: 'fx-assistant-2',
+      role: 'assistant',
+      content: [
+        '## Rich content sample',
+        '',
+        'Here is a short list:',
+        '',
+        '- `renderAssistantMessageContent` handles GFM markdown',
+        '- Code blocks get syntax highlighting',
+        '- Inline `code` uses the mono token',
+        '',
+        'A fenced code block:',
+        '',
+        '```ts',
+        "import { createChatFixture } from './chat-fixture.js';",
+        '',
+        'const msgs = createChatFixture();',
+        'console.log(msgs.length);',
+        '```',
+        '',
+        '> Blockquotes should feel quieter than regular text.',
+        '',
+        'And a nested ordered list:',
+        '',
+        '1. First step',
+        '2. Second step',
+        '   1. Sub-step A',
+        '   2. Sub-step B',
+        '3. Third step',
+      ].join('\n'),
+      timestamp: tsAt(1.3),
+    },
+  ];
+}
 
-  messages.push({
-    id: 'fx-assistant-1',
-    role: 'assistant',
-    content:
-      'Sure! This session walks through every chat UI variant I know about. ' +
-      "You'll see user and assistant bubbles, tool calls in every status, " +
-      'the six lick channels, a delegation, queued messages, and a streaming ' +
-      'tail at the end so you can inspect the live state.',
-    timestamp: tsAt(0.2),
-  });
-
-  // ── 2. Markdown + code block + inline formatting ──────────────────
-  messages.push({
-    id: 'fx-user-2',
-    role: 'user',
-    content: 'Show me some **markdown** — headings, lists, code, a blockquote.',
-    timestamp: tsAt(1),
-  });
-
-  messages.push({
-    id: 'fx-user-attachment',
-    role: 'user',
-    content: 'Use these attachments as visual and text context.',
-    timestamp: tsAt(1.1),
-    attachments: [
-      {
-        id: 'fx-att-image',
-        name: 'dot.png',
-        mimeType: 'image/png',
-        size: FIXTURE_PNG_BYTES.byteLength,
-        kind: 'image',
-        data: pngBytesToBase64(FIXTURE_PNG_BYTES),
-      },
-      {
-        id: 'fx-att-text',
-        name: 'notes.txt',
-        mimeType: 'text/plain',
-        size: 21,
-        kind: 'text',
-        text: 'Fixture attachment text',
-      },
-    ],
-  });
-
-  messages.push({
-    id: 'fx-assistant-2',
-    role: 'assistant',
-    content: [
-      '## Rich content sample',
-      '',
-      'Here is a short list:',
-      '',
-      '- `renderAssistantMessageContent` handles GFM markdown',
-      '- Code blocks get syntax highlighting',
-      '- Inline `code` uses the mono token',
-      '',
-      'A fenced code block:',
-      '',
-      '```ts',
-      "import { createChatFixture } from './chat-fixture.js';",
-      '',
-      'const msgs = createChatFixture();',
-      'console.log(msgs.length);',
-      '```',
-      '',
-      '> Blockquotes should feel quieter than regular text.',
-      '',
-      'And a nested ordered list:',
-      '',
-      '1. First step',
-      '2. Second step',
-      '   1. Sub-step A',
-      '   2. Sub-step B',
-      '3. Third step',
-    ].join('\n'),
-    timestamp: tsAt(1.3),
-  });
-
-  // ── 3. Assistant with tool calls in every status ───────────────────
+/** Section 3: Assistant message exercising every tool-call status. */
+function buildToolCallStatuses(): ChatMessage[] {
   const toolCallSuccess: ToolCall = {
     id: 'fx-tc-read',
     name: 'read_file',
@@ -185,24 +185,27 @@ export function createChatFixture(): ChatMessage[] {
       'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
   };
 
-  messages.push({
-    id: 'fx-assistant-3',
-    role: 'assistant',
-    content: 'Let me check a few things before I answer.',
-    timestamp: tsAt(2),
-    toolCalls: [
-      toolCallSuccess,
-      toolCallBashSuccess,
-      toolCallError,
-      toolCallRunning,
-      toolCallScreenshot,
-    ],
-  });
-
-  // ── 3b. Cone-only scoop management tools ──────────────────────────
-  // Covers every tool in scoops/scoop-management-tools.ts so styling
-  // changes to the tool-call widget can be judged against realistic
-  // scoop-wrangling flows, not only file/bash operations.
+  return [
+    {
+      id: 'fx-assistant-3',
+      role: 'assistant',
+      content: 'Let me check a few things before I answer.',
+      timestamp: tsAt(2),
+      toolCalls: [
+        toolCallSuccess,
+        toolCallBashSuccess,
+        toolCallError,
+        toolCallRunning,
+        toolCallScreenshot,
+      ],
+    },
+  ];
+}
+/** Section 3b: Cone-only scoop management tools.
+ *  Covers every tool in scoops/scoop-management-tools.ts so styling
+ *  changes to the tool-call widget can be judged against realistic
+ *  scoop-wrangling flows, not only file/bash operations. */
+function buildScoopManagementTools(): ChatMessage[] {
   const toolCallListScoops: ToolCall = {
     id: 'fx-tc-list-scoops',
     name: 'list_scoops',
@@ -270,201 +273,221 @@ export function createChatFixture(): ChatMessage[] {
     result: 'Global memory updated successfully.',
   };
 
-  messages.push({
-    id: 'fx-assistant-scoop-mgmt',
-    role: 'assistant',
-    content: 'Spinning up the scoops I need and handing out the work.',
-    timestamp: tsAt(3),
-    toolCalls: [
-      toolCallListScoops,
-      toolCallScoopScoop,
-      toolCallScoopScoopError,
-      toolCallFeedScoop,
-      toolCallSendMessage,
-      toolCallDropScoop,
-      toolCallUpdateGlobalMemory,
-    ],
-  });
+  return [
+    {
+      id: 'fx-assistant-scoop-mgmt',
+      role: 'assistant',
+      content: 'Spinning up the scoops I need and handing out the work.',
+      timestamp: tsAt(3),
+      toolCalls: [
+        toolCallListScoops,
+        toolCallScoopScoop,
+        toolCallScoopScoopError,
+        toolCallFeedScoop,
+        toolCallSendMessage,
+        toolCallDropScoop,
+        toolCallUpdateGlobalMemory,
+      ],
+    },
+  ];
+}
+/** Section 4: Delegation from cone (instruction + reply). */
+function buildDelegation(): ChatMessage[] {
+  return [
+    {
+      id: 'fx-delegation-1',
+      role: 'user',
+      content:
+        '**[Instructions from sliccy]**\n\nRead `/workspace/README.md` and extract the install steps into `/shared/install.md`.',
+      timestamp: tsAt(4),
+      source: 'delegation',
+      channel: 'delegation',
+    },
+    {
+      id: 'fx-assistant-delegated',
+      role: 'assistant',
+      content:
+        'Extracted the install steps. Wrote them to `/shared/install.md`. ' +
+        'The section covers prerequisites, npm install, and the dev server launch.',
+      timestamp: tsAt(4.4),
+      source: 'cone',
+    },
+  ];
+}
+/** Section 5: One lick message per channel. */
+function buildLicks(): ChatMessage[] {
+  return [
+    {
+      id: 'fx-lick-webhook',
+      role: 'user',
+      content:
+        '[Webhook Event: github-push]\n```json\n' +
+        JSON.stringify(
+          {
+            ref: 'refs/heads/main',
+            repository: { full_name: 'example/repo' },
+            head_commit: { message: 'fix(ui): tighten button contrast in dark mode' },
+          },
+          null,
+          2
+        ) +
+        '\n```',
+      timestamp: tsAt(6),
+      source: 'lick',
+      channel: 'webhook',
+    },
+    {
+      id: 'fx-lick-cron',
+      role: 'user',
+      content:
+        '[Cron Event: daily-digest]\n```json\n' +
+        JSON.stringify({ time: new Date(tsAt(8)).toISOString() }, null, 2) +
+        '\n```',
+      timestamp: tsAt(8),
+      source: 'lick',
+      channel: 'cron',
+    },
+    {
+      id: 'fx-lick-sprinkle',
+      role: 'user',
+      content:
+        '[Sprinkle Event: welcome]\n```json\n' +
+        JSON.stringify({ action: 'onboarding-complete', data: { mountWorkspace: true } }, null, 2) +
+        '\n```',
+      timestamp: tsAt(10),
+      source: 'lick',
+      channel: 'sprinkle',
+    },
+    {
+      id: 'fx-lick-fswatch',
+      role: 'user',
+      content:
+        '[File Watch Event: src-watch]\n```json\n' +
+        JSON.stringify(
+          {
+            changes: [
+              { type: 'modified', path: '/workspace/src/app.ts' },
+              { type: 'created', path: '/workspace/src/utils.ts' },
+            ],
+          },
+          null,
+          2
+        ) +
+        '\n```',
+      timestamp: tsAt(12),
+      source: 'lick',
+      channel: 'fswatch',
+    },
+    {
+      id: 'fx-lick-navigate',
+      role: 'user',
+      content:
+        '[Navigate Event: https://www.sliccy.ai/handoff?handoff=demo]\n```json\n' +
+        JSON.stringify(
+          {
+            url: 'https://www.sliccy.ai/handoff?handoff=demo',
+            verb: 'handoff',
+            target: 'https://www.sliccy.ai/handoff?handoff=demo',
+            instruction: 'demo',
+            title: 'Handoff',
+          },
+          null,
+          2
+        ) +
+        '\n```',
+      timestamp: tsAt(14),
+      source: 'lick',
+      channel: 'navigate',
+    },
+    {
+      id: 'fx-lick-session-reload',
+      role: 'user',
+      content:
+        '[Session Reload: mount-recovery]\n\n' +
+        'A previously-mounted directory needs to be reauthorized:\n\n' +
+        '- `/mnt/workspace` (was `workspace/`)',
+      timestamp: tsAt(16),
+      source: 'lick',
+      channel: 'session-reload',
+    },
+    {
+      id: 'fx-lick-upgrade',
+      role: 'user',
+      content:
+        '[Upgrade Event: 0.4.1\u21920.5.0]\n\n' +
+        'SLICC was upgraded from `0.4.1` to `0.5.0`.\n' +
+        'Released: 2026-04-15T12:00:00Z\n\n' +
+        'Use the **upgrade** skill (`/workspace/skills/upgrade/SKILL.md`) to:\n' +
+        '- Show the user the changelog between these tags from GitHub\n' +
+        '- Offer to merge new bundled vfs-root content into their workspace ' +
+        "(three-way merge: bundled snapshot vs user's VFS, reconciled with the GitHub tag-to-tag diff).",
+      timestamp: tsAt(17),
+      source: 'lick',
+      channel: 'upgrade',
+    },
+    {
+      id: 'fx-lick-sudo-request',
+      role: 'user',
+      content:
+        '[Scoop Access Request: tight-sandbox-scoop]\n' +
+        'Request ID: sudo-req-42\n' +
+        'Kind: write\n' +
+        'Detail: /workspace/build/output.txt\n' +
+        'Suggested pattern: /workspace/build/**\n\n' +
+        'Use the sudo_allow tool with request_id="sudo-req-42" to approve, deny, or ' +
+        'always-approve this request.',
+      timestamp: tsAt(17.5),
+      source: 'lick',
+      channel: 'sudo-request',
+    },
+  ];
+}
+/** Section 6: Queued messages (before the streaming tail). */
+function buildQueuedMessages(): ChatMessage[] {
+  return [
+    {
+      id: 'fx-queued-1',
+      role: 'user',
+      content: 'Also double-check the install.md formatting after you finish.',
+      timestamp: tsAt(18),
+      queued: true,
+    },
+  ];
+}
 
-  // ── 4. Delegation from cone ────────────────────────────────────────
-  messages.push({
-    id: 'fx-delegation-1',
-    role: 'user',
-    content:
-      '**[Instructions from sliccy]**\n\nRead `/workspace/README.md` and extract the install steps into `/shared/install.md`.',
-    timestamp: tsAt(4),
-    source: 'delegation',
-    channel: 'delegation',
-  });
-
-  messages.push({
-    id: 'fx-assistant-delegated',
-    role: 'assistant',
-    content:
-      'Extracted the install steps. Wrote them to `/shared/install.md`. ' +
-      'The section covers prerequisites, npm install, and the dev server launch.',
-    timestamp: tsAt(4.4),
-    source: 'cone',
-  });
-
-  // ── 5. Licks — one per channel ────────────────────────────────────
-  messages.push({
-    id: 'fx-lick-webhook',
-    role: 'user',
-    content:
-      '[Webhook Event: github-push]\n```json\n' +
-      JSON.stringify(
+/** Section 7: Streaming / live-state tail. The cursor keeps blinking via CSS. */
+function buildStreamingTail(): ChatMessage[] {
+  return [
+    {
+      id: 'fx-assistant-streaming',
+      role: 'assistant',
+      content: "Great, running the coverage suite now. I'll report back as soon as it ",
+      timestamp: tsAt(20),
+      isStreaming: true,
+      toolCalls: [
         {
-          ref: 'refs/heads/main',
-          repository: { full_name: 'example/repo' },
-          head_commit: { message: 'fix(ui): tighten button contrast in dark mode' },
+          id: 'fx-tc-streaming',
+          name: 'bash',
+          input: { command: 'npm run test -- --coverage' },
+          // No result — renders the running spinner.
         },
-        null,
-        2
-      ) +
-      '\n```',
-    timestamp: tsAt(6),
-    source: 'lick',
-    channel: 'webhook',
-  });
+      ],
+    },
+  ];
+}
 
-  messages.push({
-    id: 'fx-lick-cron',
-    role: 'user',
-    content:
-      '[Cron Event: daily-digest]\n```json\n' +
-      JSON.stringify({ time: new Date(tsAt(8)).toISOString() }, null, 2) +
-      '\n```',
-    timestamp: tsAt(8),
-    source: 'lick',
-    channel: 'cron',
-  });
-
-  messages.push({
-    id: 'fx-lick-sprinkle',
-    role: 'user',
-    content:
-      '[Sprinkle Event: welcome]\n```json\n' +
-      JSON.stringify({ action: 'onboarding-complete', data: { mountWorkspace: true } }, null, 2) +
-      '\n```',
-    timestamp: tsAt(10),
-    source: 'lick',
-    channel: 'sprinkle',
-  });
-
-  messages.push({
-    id: 'fx-lick-fswatch',
-    role: 'user',
-    content:
-      '[File Watch Event: src-watch]\n```json\n' +
-      JSON.stringify(
-        {
-          changes: [
-            { type: 'modified', path: '/workspace/src/app.ts' },
-            { type: 'created', path: '/workspace/src/utils.ts' },
-          ],
-        },
-        null,
-        2
-      ) +
-      '\n```',
-    timestamp: tsAt(12),
-    source: 'lick',
-    channel: 'fswatch',
-  });
-
-  messages.push({
-    id: 'fx-lick-navigate',
-    role: 'user',
-    content:
-      '[Navigate Event: https://www.sliccy.ai/handoff?handoff=demo]\n```json\n' +
-      JSON.stringify(
-        {
-          url: 'https://www.sliccy.ai/handoff?handoff=demo',
-          verb: 'handoff',
-          target: 'https://www.sliccy.ai/handoff?handoff=demo',
-          instruction: 'demo',
-          title: 'Handoff',
-        },
-        null,
-        2
-      ) +
-      '\n```',
-    timestamp: tsAt(14),
-    source: 'lick',
-    channel: 'navigate',
-  });
-
-  messages.push({
-    id: 'fx-lick-session-reload',
-    role: 'user',
-    content:
-      '[Session Reload: mount-recovery]\n\n' +
-      'A previously-mounted directory needs to be reauthorized:\n\n' +
-      '- `/mnt/workspace` (was `workspace/`)',
-    timestamp: tsAt(16),
-    source: 'lick',
-    channel: 'session-reload',
-  });
-
-  messages.push({
-    id: 'fx-lick-upgrade',
-    role: 'user',
-    content:
-      '[Upgrade Event: 0.4.1\u21920.5.0]\n\n' +
-      'SLICC was upgraded from `0.4.1` to `0.5.0`.\n' +
-      'Released: 2026-04-15T12:00:00Z\n\n' +
-      'Use the **upgrade** skill (`/workspace/skills/upgrade/SKILL.md`) to:\n' +
-      '- Show the user the changelog between these tags from GitHub\n' +
-      '- Offer to merge new bundled vfs-root content into their workspace ' +
-      "(three-way merge: bundled snapshot vs user's VFS, reconciled with the GitHub tag-to-tag diff).",
-    timestamp: tsAt(17),
-    source: 'lick',
-    channel: 'upgrade',
-  });
-
-  messages.push({
-    id: 'fx-lick-sudo-request',
-    role: 'user',
-    content:
-      '[Scoop Access Request: tight-sandbox-scoop]\n' +
-      'Request ID: sudo-req-42\n' +
-      'Kind: write\n' +
-      'Detail: /workspace/build/output.txt\n' +
-      'Suggested pattern: /workspace/build/**\n\n' +
-      'Use the sudo_allow tool with request_id="sudo-req-42" to approve, deny, or ' +
-      'always-approve this request.',
-    timestamp: tsAt(17.5),
-    source: 'lick',
-    channel: 'sudo-request',
-  });
-
-  // ── 6. Queued messages (before the streaming tail) ────────────────
-  messages.push({
-    id: 'fx-queued-1',
-    role: 'user',
-    content: 'Also double-check the install.md formatting after you finish.',
-    timestamp: tsAt(18),
-    queued: true,
-  });
-
-  // ── 7. Streaming / live-state tail ────────────────────────────────
-  // Assistant message mid-stream — the cursor keeps blinking via CSS.
-  messages.push({
-    id: 'fx-assistant-streaming',
-    role: 'assistant',
-    content: "Great, running the coverage suite now. I'll report back as soon as it ",
-    timestamp: tsAt(20),
-    isStreaming: true,
-    toolCalls: [
-      {
-        id: 'fx-tc-streaming',
-        name: 'bash',
-        input: { command: 'npm run test -- --coverage' },
-        // No result — renders the running spinner.
-      },
-    ],
-  });
-
-  return messages;
+/** Build the synthetic chat history. Pure function — no side effects.
+ *  Each message has a stable id so the fixture is idempotent under
+ *  re-renders and matches exact-id lookups in tests. */
+export function createChatFixture(): ChatMessage[] {
+  return [
+    ...buildUserAndAssistantOpening(),
+    ...buildMarkdownAndAttachments(),
+    ...buildToolCallStatuses(),
+    ...buildScoopManagementTools(),
+    ...buildDelegation(),
+    ...buildLicks(),
+    ...buildQueuedMessages(),
+    ...buildStreamingTail(),
+  ];
 }
