@@ -23,6 +23,7 @@ function makeBackend(overrides: Partial<SecretBackend> = {}): SecretBackend {
     setSession: vi.fn(async () => {}),
     setPersisted: vi.fn(async () => {}),
     setScope: vi.fn(async () => {}),
+    delete: vi.fn(async () => ({ removed: false })),
     ...overrides,
   };
 }
@@ -354,5 +355,83 @@ describe('secret command — masked-env injection on set', () => {
     });
     expect(res.exitCode).toBe(0);
     expect(setEnv).not.toHaveBeenCalled();
+  });
+});
+
+describe('secret command — delete / rm', () => {
+  let broker: ReturnType<typeof makeBroker>;
+  beforeEach(() => {
+    broker = makeBroker({ decision: 'deny' });
+  });
+
+  it('delete removes a persisted secret and reports the scope', async () => {
+    const backend = makeBackend({
+      delete: vi.fn(async () => ({ removed: true, fromSession: false })),
+    });
+    const res = await run(['delete', 'GITHUB_TOKEN'], { backend, broker: broker.broker });
+    expect(res.exitCode).toBe(0);
+    expect(backend.delete).toHaveBeenCalledWith('GITHUB_TOKEN');
+    expect(res.stdout).toContain('Removed persisted secret "GITHUB_TOKEN"');
+    expect(res.stderr).toBe('');
+    // No prompt — agent self-cleanup should not require sudo approval.
+    expect(broker.calls()).toBe(0);
+  });
+
+  it('rm is an alias of delete', async () => {
+    const backend = makeBackend({
+      delete: vi.fn(async () => ({ removed: true, fromSession: true })),
+    });
+    const res = await run(['rm', 'SESSION_KEY'], { backend, broker: broker.broker });
+    expect(res.exitCode).toBe(0);
+    expect(backend.delete).toHaveBeenCalledWith('SESSION_KEY');
+    expect(res.stdout).toContain('Removed session secret "SESSION_KEY"');
+  });
+
+  it('reports a clean not-found error when the secret does not exist', async () => {
+    const backend = makeBackend({
+      delete: vi.fn(async () => ({ removed: false })),
+    });
+    const res = await run(['delete', 'GHOST'], { backend, broker: broker.broker });
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain('no secret named "GHOST"');
+    expect(res.stdout).toBe('');
+  });
+
+  it('requires a <name> argument', async () => {
+    const backend = makeBackend();
+    const res = await run(['delete'], { backend, broker: broker.broker });
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain('delete requires a <name>');
+    expect(backend.delete).not.toHaveBeenCalled();
+  });
+
+  it('rm also requires a <name> argument', async () => {
+    const backend = makeBackend();
+    const res = await run(['rm'], { backend, broker: broker.broker });
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain('rm requires a <name>');
+  });
+
+  it('surfaces backend errors via stderr without crashing', async () => {
+    const backend = makeBackend({
+      delete: vi.fn(async () => {
+        throw new Error('network down');
+      }),
+    });
+    const res = await run(['delete', 'KEY'], { backend, broker: broker.broker });
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain('network down');
+  });
+
+  it('never echoes the secret value', async () => {
+    // Defense-in-depth: even if a misbehaving backend leaked a value, the
+    // command must not echo it back. The mock returns only `removed`/
+    // `fromSession`, so the produced output should not contain anything
+    // resembling a token.
+    const backend = makeBackend({
+      delete: vi.fn(async () => ({ removed: true, fromSession: false })),
+    });
+    const res = await run(['delete', 'GITHUB_TOKEN'], { backend, broker: broker.broker });
+    expect(res.stdout).not.toMatch(/ghp_|sk-|=/);
   });
 });

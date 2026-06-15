@@ -1315,8 +1315,20 @@ chrome.runtime.onMessage.addListener(
       const name = msg.name;
       (async () => {
         try {
+          // Session secrets win over persisted on name collision (mirrors the
+          // node-server endpoint), so they are also checked first on delete.
+          if (sessionSecretStore.has(name)) {
+            sessionSecretStore.delete(name);
+            sendResponse({ ok: true, removed: true, fromSession: true });
+            return;
+          }
+          const existing = await listSecrets(chrome.storage.local as any);
+          if (!existing.some((e) => e.name === name)) {
+            sendResponse({ ok: true, removed: false });
+            return;
+          }
           await deleteSecret(chrome.storage.local as any, name);
-          sendResponse({ ok: true });
+          sendResponse({ ok: true, removed: true, fromSession: false });
         } catch (err) {
           console.error('[sw] secrets.delete failed', err);
           sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) });

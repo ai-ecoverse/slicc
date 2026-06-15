@@ -553,10 +553,19 @@ describe('shared server API conformance', () => {
     expect(res.status).toBeGreaterThanOrEqual(400);
   });
 
-  it('rejects DELETE /api/secrets/:name (write route removed)', async () => {
-    const res = await fetchFromServer('/api/secrets/INTTEST_BLOCKED', { method: 'DELETE' });
-    // Express returns 404 for unmatched routes
-    expect(res.status).toBeGreaterThanOrEqual(400);
+  it('returns 404 for DELETE /api/secrets/:name when the secret is unknown', async () => {
+    // Negative coverage for the delete route: a name that almost certainly does
+    // not exist must come back as 404 (not 500, not 200) so the shell can
+    // report "no secret named …" cleanly. Positive deletion is exercised in
+    // unit tests against the EnvSecretStore + service-worker handlers; this
+    // suite cannot mutate the live server's secrets blob safely.
+    const res = await fetchFromServer(
+      `/api/secrets/INTTEST_UNKNOWN_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+      { method: 'DELETE' }
+    );
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(typeof body['error']).toBe('string');
   });
 
   it('returns structured responses from lick-backed REST endpoints based on browser connectivity', async () => {

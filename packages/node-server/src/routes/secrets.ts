@@ -47,6 +47,39 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 /**
+ * Persisted/session delete handler — checks the session store first so a
+ * session shadow does not leak through after deletion, then falls back to the
+ * persisted store. Reloads the masking pipeline either way.
+ */
+async function handleDeleteSecret(
+  name: string | undefined,
+  res: Response,
+  secretStore: EnvSecretStore,
+  secretProxy: SecretProxyManager
+): Promise<Response> {
+  if (typeof name !== 'string' || name.length === 0) {
+    return res.status(400).json({ error: 'bad-request' });
+  }
+  try {
+    if (secretProxy.sessionStore.has(name)) {
+      secretProxy.sessionStore.delete(name);
+      await secretProxy.reload();
+      return res.json({ ok: true, name, fromSession: true });
+    }
+    if (secretStore.get(name)) {
+      secretStore.delete(name);
+      await secretProxy.reload();
+      return res.json({ ok: true, name, fromSession: false });
+    }
+    return res.status(404).json({ error: `no secret named "${name}"` });
+  } catch (err) {
+    return res
+      .status(500)
+      .json({ error: err instanceof Error ? err.message : 'Failed to delete secret' });
+  }
+}
+
+/**
  * Secret management API — direct .env file access (no browser needed). The
  * `secretStore` is wired into `secretProxy` so the fetch-proxy and the
  * management API share one source of truth.
@@ -79,6 +112,14 @@ export function registerSecretRoutes(app: Express, deps: SecretRoutesDeps): void
       res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to set secret' });
     }
   });
+
+  // Persisted/session delete — remove a named secret (and its _DOMAINS
+  // companion) from whichever store currently holds it. Session secrets are
+  // checked first so a session shadow does not leak through after deletion.
+  // Reloads the masking pipeline so the change takes effect without restart.
+  app.delete('/api/secrets/:name', (req, res) =>
+    handleDeleteSecret(req.params.name, res, secretStore, secretProxy)
+  );
 
   // Scope edit — update the allowed domains of an existing secret (persisted or
   // session), preserving the value. Gated by the agent before sending.

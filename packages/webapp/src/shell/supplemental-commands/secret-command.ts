@@ -29,7 +29,10 @@ Requires approval (native prompt; deny blocks the change):
   secret scope <name> --domain <pat>           Edit allowed host/domain scope.
 
 Other:
-  secret delete <name>                         Remove a secret (or show how).
+  secret delete <name>                         Remove a secret (session or
+  secret rm <name>                             persisted) and its _DOMAINS
+                                               entry; reloads the masking
+                                               pipeline.
   secret edit                                  Open the Mount Secrets options page
                                                (extension) or print the env path.
 
@@ -48,27 +51,6 @@ Examples:
 
 function isExtensionContext(): boolean {
   return typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
-}
-
-function swSendMessage<T>(msg: Record<string, unknown>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(msg, (response: unknown) => {
-      const err = chrome.runtime.lastError;
-      if (err) {
-        reject(new Error(err.message ?? 'chrome.runtime.lastError'));
-        return;
-      }
-      resolve(response as T);
-    });
-  });
-}
-
-async function deleteFromStorage(name: string): Promise<void> {
-  const resp = await swSendMessage<{ ok?: boolean; error?: string }>({
-    type: 'secrets.delete',
-    name,
-  });
-  if (!resp?.ok) throw new Error(resp?.error ?? 'secrets.delete failed');
 }
 
 function parseDomainFlag(args: string[]): string[] | null {
@@ -341,36 +323,30 @@ export function createSecretCommand(deps: SecretCommandDeps = {}): Command {
           return { stdout: output, stderr: '', exitCode: 0 };
         }
 
-        case 'delete': {
+        case 'delete':
+        case 'rm': {
           const name = args[1];
           if (!name) {
-            return { stdout: '', stderr: 'secret: delete requires a <name>\n', exitCode: 1 };
-          }
-
-          if (inExtension) {
-            try {
-              await deleteFromStorage(name);
-            } catch (err) {
-              return {
-                stdout: '',
-                stderr: `secret: failed to remove from chrome.storage.local: ${err instanceof Error ? err.message : String(err)}\n`,
-                exitCode: 1,
-              };
-            }
             return {
-              stdout: `Removed "${name}" from chrome.storage.local\n`,
-              stderr: '',
-              exitCode: 0,
+              stdout: '',
+              stderr: `secret: ${subcommand} requires a <name>\n`,
+              exitCode: 1,
             };
           }
-
-          let output = `To delete the secret "${name}", use one of the following methods:\n\n`;
-          output += `  macOS Keychain (swift-server):\n`;
-          output += `    security delete-generic-password -s ai.sliccy.slicc -a ${name}\n\n`;
-          output += `  Environment file (node-server):\n`;
-          output += `    Remove the ${name}= and ${name}_DOMAINS= lines from ~/.slicc/secrets.env\n\n`;
-          output += `Then restart the server to pick up changes.\n`;
-          return { stdout: output, stderr: '', exitCode: 0 };
+          const result = await backend.delete(name);
+          if (!result.removed) {
+            return {
+              stdout: '',
+              stderr: `secret: no secret named "${name}"\n`,
+              exitCode: 1,
+            };
+          }
+          const scope = result.fromSession === true ? 'session' : 'persisted';
+          return {
+            stdout: `Removed ${scope} secret "${name}"\n`,
+            stderr: '',
+            exitCode: 0,
+          };
         }
 
         case 'test': {
