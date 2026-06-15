@@ -83,6 +83,8 @@ struct AppListView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("get-extension")
+            .accessibilityLabel("Get Extension")
 
             Spacer(minLength: 0)
 
@@ -97,6 +99,7 @@ struct AppListView: View {
                 Spacer()
                 Button("Rescan") { onRescan() }
                     .buttonStyle(.borderless).font(.caption)
+                    .accessibilityIdentifier("rescan")
             }
             .padding(.horizontal, 12).padding(.vertical, 6)
         }
@@ -115,6 +118,7 @@ struct AppListView: View {
                 .buttonStyle(.borderless).font(.caption)
                 .foregroundStyle(.green)
                 .help("Webapp-only update — applies live, no restart.")
+                .accessibilityIdentifier("apply-ui-update")
 
             case .applying(let version, let progress):
                 Text("Updating v\(version): \(progress)")
@@ -130,6 +134,7 @@ struct AppListView: View {
         } else {
             Button("Update") { onUpdate() }
                 .buttonStyle(.borderless).font(.caption)
+                .accessibilityIdentifier("update")
         }
     }
 
@@ -143,6 +148,7 @@ struct AppListView: View {
                 }
                 .buttonStyle(.borderless).font(.caption)
                 .foregroundStyle(.green)
+                .accessibilityIdentifier("restart-to-update")
             } else {
                 Button("Restart to Update") {
                     onBeginUpdate()
@@ -150,6 +156,7 @@ struct AppListView: View {
                 }
                 .buttonStyle(.borderless).font(.caption)
                 .foregroundStyle(.green)
+                .accessibilityIdentifier("restart-to-update")
             }
         } else {
             Button("Check for Updates") {
@@ -157,6 +164,7 @@ struct AppListView: View {
                 onCheckSmoothUpdate()
             }
             .buttonStyle(.borderless).font(.caption)
+            .accessibilityIdentifier("check-for-updates")
         }
     }
 }
@@ -232,6 +240,8 @@ struct AppRow: View {
         .buttonStyle(.plain)
         .disabled(isDisabled)
         .help(isDisabled ? AppRowStatusDot.needsLeader.help : "")
+        .accessibilityIdentifier("app-row-\(target.name)")
+        .accessibilityLabel(target.name)
         .onHover { hovering in
             // Avoid the pointing-hand affordance when the row is disabled
             // — the user can't actually start the app without a leader.

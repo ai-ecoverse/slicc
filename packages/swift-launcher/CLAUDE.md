@@ -40,6 +40,14 @@ violations.
 - `Models/SliccBootstrapper.swift` and `Models/SliccProcess.swift` handle runtime launch and lifecycle.
 - `Views/` contains the launcher UI and setup/progress views.
 
+## Operational Telemetry (OpTel)
+
+Sliccstart depends on `@slicc/swift-optel` and wires `.optelAutoInstrument(appID:)` once on the `WindowGroup` root in `SliccstartApp.swift`. On macOS that single call activates the full RUM surface: `enter` (launch + foreground), global `click` (app-level `NSEvent` monitor → `NSAccessibility`-derived `source`), `navigate` (key/main-window changes + new Settings window), and `error` (uncaught `NSException`). No per-control plumbing is needed in the launcher views.
+
+The `appID` is sourced from `Bundle.main.bundleIdentifier` (`com.slicc.sliccstart`); RUM beacons land in `helix-225321.helix_rum.cluster` filtered by that hostname. The opt-in per-view modifiers (`.optelView`, `.optelTap`, `OptelButton`) and `Optel.reportError(_:)` remain available for finer-grained `source` quality or Swift-`Error` boundaries.
+
+Key launcher controls carry stable `.accessibilityIdentifier` values (`get-extension`, `rescan`, `check-for-updates`, `apply-ui-update`, `restart-to-update`, `update`, `app-row-<Name>`) so RUM `click` sources stay readable across releases.
+
 ## App Scanning
 
 - Known Chromium browsers are discovered by bundle ID.
