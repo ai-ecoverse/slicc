@@ -112,7 +112,7 @@ describe('slicc-avatar', () => {
     expect(el.resolvedInitials).toBe('?');
   });
 
-  it('VARIANT image-backed: renders a cover image instead of initials', () => {
+  it('VARIANT image-backed: renders a cover image layered over the initials fallback', () => {
     const el = mount((e) => {
       e.name = 'Pat Mercury';
       e.src = 'https://example.test/a.png';
@@ -120,7 +120,11 @@ describe('slicc-avatar', () => {
     const img = el.shadowRoot?.querySelector('[part="image"]') as HTMLImageElement | null;
     expect(img).not.toBeNull();
     expect(img?.getAttribute('src')).toBe('https://example.test/a.png');
-    expect(el.shadowRoot?.querySelector('[part="initials"]')).toBeNull();
+    // Initials remain underneath as the base content so a failed image load
+    // never leaves the avatar showing a broken-image icon.
+    const initials = el.shadowRoot?.querySelector('[part="initials"]');
+    expect(initials).not.toBeNull();
+    expect(initials?.textContent).toBe('PM');
   });
 
   it('VARIANT gravatar: renders initials immediately when only an email is set', () => {
@@ -182,8 +186,30 @@ describe('slicc-avatar', () => {
     const img = el.shadowRoot?.querySelector('[part="image"]') as HTMLImageElement | null;
     expect(img).not.toBeNull();
     expect(img?.getAttribute('src')).toBe('https://example.test/a.png');
-    // The src image is the foreground; no initials node is rendered.
-    expect(el.shadowRoot?.querySelector('[part="initials"]')).toBeNull();
+    // The src image is the foreground; initials remain underneath as the error
+    // fallback (a `?` here because no name/initials are set).
+    expect(el.shadowRoot?.querySelector('[part="initials"]')?.textContent).toBe('?');
+  });
+
+  it('VARIANT failed src: swaps to initials when the image errors (CSP / 404 / network)', async () => {
+    const el = mount((e) => {
+      e.name = 'Lars Trieloff';
+      // Malformed data URL fires a deterministic `error` in real browsers.
+      e.src = 'data:image/png;base64,not-a-real-png';
+    });
+    // Initials are the base content from the very first render.
+    expect(el.shadowRoot?.querySelector('[part="initials"]')?.textContent).toBe('LT');
+    // Wait for the layered <img> to error and be removed.
+    await vi.waitFor(
+      () => {
+        expect(el.shadowRoot?.querySelector('[part="image"]')).toBeNull();
+      },
+      { timeout: 2000 }
+    );
+    // Initials remain visible and `.me` does not get the has-img class.
+    const me = el.shadowRoot?.querySelector('.me');
+    expect(me?.classList.contains('has-img')).toBe(false);
+    expect(el.shadowRoot?.querySelector('[part="initials"]')?.textContent).toBe('LT');
   });
 
   it('PRECEDENCE: keeps initials and rainbow ground until the gravatar image loads', async () => {
