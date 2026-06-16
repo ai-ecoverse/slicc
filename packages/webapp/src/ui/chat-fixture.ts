@@ -430,15 +430,55 @@ function buildLicks(): ChatMessage[] {
       role: 'user',
       content:
         '[Scoop Access Request: tight-sandbox-scoop]\n' +
-        'Request ID: sudo-req-42\n' +
+        'Lick ID: lick-1700000000000-req42\n' +
         'Kind: write\n' +
         'Detail: /workspace/build/output.txt\n' +
         'Suggested pattern: /workspace/build/**\n\n' +
-        'Use the sudo_allow tool with request_id="sudo-req-42" to approve, deny, or ' +
-        'always-approve this request.',
+        'Use the lick_confirm tool with lick_id="lick-1700000000000-req42" to approve ' +
+        '(or always-approve with a pattern), or lick_dismiss with lick_id="lick-1700000000000-req42" to deny.',
       timestamp: tsAt(17.5),
       source: 'lick',
       channel: 'sudo-request',
+      lickId: 'lick-1700000000000-req42',
+      lickState: 'pending',
+    },
+    // A confirmed actionable lick — the card flips to its green ✓ state once
+    // the cone resolves the request via `lick_confirm`.
+    {
+      id: 'fx-lick-sudo-confirmed',
+      role: 'user',
+      content:
+        '[Scoop Access Request: release-notes-scoop]\n' +
+        'Lick ID: lick-1700000000001-req43\n' +
+        'Kind: command\n' +
+        'Detail: git push origin main\n' +
+        'Suggested pattern: git push*\n\n' +
+        'Use the lick_confirm tool with lick_id="lick-1700000000001-req43" to approve ' +
+        '(or always-approve with a pattern), or lick_dismiss with lick_id="lick-1700000000001-req43" to deny.',
+      timestamp: tsAt(17.7),
+      source: 'lick',
+      channel: 'sudo-request',
+      lickId: 'lick-1700000000001-req43',
+      lickState: 'confirmed',
+    },
+    // A dismissed actionable lick — the card flips to its red ✗ state and
+    // renders muted once the cone resolves the request via `lick_dismiss`.
+    {
+      id: 'fx-lick-sudo-dismissed',
+      role: 'user',
+      content:
+        '[Scoop Access Request: scratch-scoop]\n' +
+        'Lick ID: lick-1700000000002-req44\n' +
+        'Kind: read\n' +
+        'Detail: /shared/secrets/api-key.txt\n' +
+        'Suggested pattern: /shared/secrets/**\n\n' +
+        'Use the lick_confirm tool with lick_id="lick-1700000000002-req44" to approve ' +
+        '(or always-approve with a pattern), or lick_dismiss with lick_id="lick-1700000000002-req44" to deny.',
+      timestamp: tsAt(17.9),
+      source: 'lick',
+      channel: 'sudo-request',
+      lickId: 'lick-1700000000002-req44',
+      lickState: 'dismissed',
     },
   ];
 }

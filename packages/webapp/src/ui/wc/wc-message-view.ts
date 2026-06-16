@@ -197,8 +197,8 @@ export function toolIcon(call: Pick<ToolCall, 'name' | 'input'>): string {
     scoop_unmute: 'bell-ring',
     scoop_wait: 'hourglass',
     update_global_memory: 'brain',
-    sudo_allow: 'shield-check',
-    sudo_deny: 'shield-x',
+    lick_confirm: 'shield-check',
+    lick_dismiss: 'shield-x',
     sudo_request: 'shield-question',
     list_sudo_requests: 'list-checks',
   };
@@ -249,9 +249,9 @@ export function toolTitle(call: Pick<ToolCall, 'name' | 'input'>): string {
       return 'Wait for the scoops';
     case 'update_global_memory':
       return 'Update the shared memory';
-    case 'sudo_allow':
+    case 'lick_confirm':
       return 'Grant the scoop access';
-    case 'sudo_deny':
+    case 'lick_dismiss':
       return 'Hold the scoop back';
     case 'sudo_request': {
       const kind = inputField(call.input, 'kind');
@@ -510,6 +510,11 @@ function lickCardEl(message: ChatMessage): HTMLElement {
   });
   if (scoopName) card.setAttribute('hue', scoopColor({ isCone: false, name: scoopName }));
   if (count > 1) card.setAttribute('count', String(count));
+  // Actionable licks (sudo-request) flip to a result glyph once settled; a
+  // pending/unset state leaves the card in its default amber form.
+  if (message.lickState && message.lickState !== 'pending') {
+    card.setAttribute('state', message.lickState);
+  }
   // Rich slotted body (the `body` attribute is plain text only): markdown
   // through the shared renderer, one section per collated lick.
   const parts = message.lickParts ?? [message.content];
@@ -579,7 +584,16 @@ export function collateLickMessages(messages: readonly ChatMessage[]): ChatMessa
       }
     }
     const prev = out[out.length - 1];
-    if (message.source === 'lick' && prev?.source === 'lick' && prev.channel === message.channel) {
+    // NEVER collate actionable licks: a lick carrying a `lickId` (or merging
+    // into a trailing card that carries one) must keep its own row + persisted
+    // `lickState` so exactly one card flips when its decision settles.
+    const actionable = !!message.lickId || !!prev?.lickId;
+    if (
+      !actionable &&
+      message.source === 'lick' &&
+      prev?.source === 'lick' &&
+      prev.channel === message.channel
+    ) {
       prev.lickParts = [...(prev.lickParts ?? [prev.content]), message.content];
       prev.lickCount = prev.lickParts.length;
       prev.content += `\n\n${message.content}`;

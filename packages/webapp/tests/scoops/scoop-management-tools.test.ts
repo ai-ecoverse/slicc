@@ -498,7 +498,7 @@ describe('scoop_mute / scoop_unmute / scoop_wait tools', () => {
   });
 });
 
-describe('sudo_request / sudo_allow / sudo_deny / list_sudo_requests tools', () => {
+describe('sudo_request / lick_confirm / lick_dismiss / list_sudo_requests tools', () => {
   const nonCone: RegisteredScoop = {
     jid: 'scoop_alpha_1',
     name: 'alpha',
@@ -541,7 +541,7 @@ describe('sudo_request / sudo_allow / sudo_deny / list_sudo_requests tools', () 
     expect(tools.find((t) => t.name === 'sudo_request')).toBeUndefined();
   });
 
-  it('sudo_allow / sudo_deny are present on the cone and absent on a scoop', () => {
+  it('lick_confirm / lick_dismiss are present on the cone and absent on a scoop', () => {
     const onSudoResolve = vi.fn(async () => ({ settled: true, persisted: false }));
     const coneTools = createScoopManagementTools({
       scoop: cone,
@@ -549,8 +549,8 @@ describe('sudo_request / sudo_allow / sudo_deny / list_sudo_requests tools', () 
       getScoops: () => [cone, nonCone],
       onSudoResolve,
     });
-    expect(coneTools.find((t) => t.name === 'sudo_allow')).toBeDefined();
-    expect(coneTools.find((t) => t.name === 'sudo_deny')).toBeDefined();
+    expect(coneTools.find((t) => t.name === 'lick_confirm')).toBeDefined();
+    expect(coneTools.find((t) => t.name === 'lick_dismiss')).toBeDefined();
 
     const scoopTools = createScoopManagementTools({
       scoop: nonCone,
@@ -558,8 +558,8 @@ describe('sudo_request / sudo_allow / sudo_deny / list_sudo_requests tools', () 
       getScoops: () => [cone, nonCone],
       onSudoResolve,
     });
-    expect(scoopTools.find((t) => t.name === 'sudo_allow')).toBeUndefined();
-    expect(scoopTools.find((t) => t.name === 'sudo_deny')).toBeUndefined();
+    expect(scoopTools.find((t) => t.name === 'lick_confirm')).toBeUndefined();
+    expect(scoopTools.find((t) => t.name === 'lick_dismiss')).toBeUndefined();
   });
 
   it('list_sudo_requests is present on the cone and absent on a scoop', () => {
@@ -654,9 +654,9 @@ describe('sudo_request / sudo_allow / sudo_deny / list_sudo_requests tools', () 
     expect(onSudoRequest).not.toHaveBeenCalled();
   });
 
-  // ── sudo_allow / sudo_deny behavior ───────────────────────────────────
+  // ── lick_confirm / lick_dismiss behavior ──────────────────────────────
 
-  it('sudo_allow with always=true forwards a SudoDecision and reports persistence', async () => {
+  it('lick_confirm with always=true forwards a SudoDecision and reports persistence', async () => {
     const onSudoResolve = vi.fn(async () => ({
       settled: true,
       persisted: true,
@@ -670,13 +670,13 @@ describe('sudo_request / sudo_allow / sudo_deny / list_sudo_requests tools', () 
       getScoops: () => [cone, nonCone],
       onSudoResolve,
     });
-    const tool = tools.find((t) => t.name === 'sudo_allow')!;
+    const tool = tools.find((t) => t.name === 'lick_confirm')!;
     const result = await tool.execute({
-      request_id: 'sudo-abc',
+      lick_id: 'lick-abc',
       always: true,
       pattern: 'git push*',
     });
-    expect(onSudoResolve).toHaveBeenCalledWith('sudo-abc', {
+    expect(onSudoResolve).toHaveBeenCalledWith('lick-abc', {
       decision: 'always',
       pattern: 'git push*',
     });
@@ -687,7 +687,7 @@ describe('sudo_request / sudo_allow / sudo_deny / list_sudo_requests tools', () 
     expect(result.content).toContain('git push*');
   });
 
-  it('sudo_allow with always=false (default) sends an allow-once decision', async () => {
+  it('lick_confirm with always=false (default) sends an allow-once decision', async () => {
     const onSudoResolve = vi.fn(async () => ({ settled: true, persisted: false }));
     const tools = createScoopManagementTools({
       scoop: cone,
@@ -695,14 +695,14 @@ describe('sudo_request / sudo_allow / sudo_deny / list_sudo_requests tools', () 
       getScoops: () => [cone, nonCone],
       onSudoResolve,
     });
-    const tool = tools.find((t) => t.name === 'sudo_allow')!;
-    const result = await tool.execute({ request_id: 'sudo-abc' });
-    expect(onSudoResolve).toHaveBeenCalledWith('sudo-abc', { decision: 'allow' });
+    const tool = tools.find((t) => t.name === 'lick_confirm')!;
+    const result = await tool.execute({ lick_id: 'lick-abc' });
+    expect(onSudoResolve).toHaveBeenCalledWith('lick-abc', { decision: 'allow' });
     expect(result.isError).toBeUndefined();
     expect(result.content).toContain('Approved (once)');
   });
 
-  it('sudo_allow surfaces a persistence failure without dropping the allow', async () => {
+  it('lick_confirm surfaces a persistence failure without dropping the allow', async () => {
     const onSudoResolve = vi.fn(async () => ({
       settled: true,
       persisted: false,
@@ -714,15 +714,15 @@ describe('sudo_request / sudo_allow / sudo_deny / list_sudo_requests tools', () 
       getScoops: () => [cone, nonCone],
       onSudoResolve,
     });
-    const tool = tools.find((t) => t.name === 'sudo_allow')!;
-    const result = await tool.execute({ request_id: 'sudo-abc', always: true });
+    const tool = tools.find((t) => t.name === 'lick_confirm')!;
+    const result = await tool.execute({ lick_id: 'lick-abc', always: true });
     expect(result.isError).toBeUndefined();
     expect(result.content).toContain('Approved (always)');
     expect(result.content).toContain('could NOT persist');
     expect(result.content).toContain('collapsed to empty');
   });
 
-  it('sudo_allow reports an error when the request id is unknown / already settled', async () => {
+  it('lick_confirm reports an error when the lick id is unknown / already settled', async () => {
     const onSudoResolve = vi.fn(async () => ({ settled: false, persisted: false }));
     const tools = createScoopManagementTools({
       scoop: cone,
@@ -730,13 +730,13 @@ describe('sudo_request / sudo_allow / sudo_deny / list_sudo_requests tools', () 
       getScoops: () => [cone, nonCone],
       onSudoResolve,
     });
-    const tool = tools.find((t) => t.name === 'sudo_allow')!;
-    const result = await tool.execute({ request_id: 'sudo-ghost' });
+    const tool = tools.find((t) => t.name === 'lick_confirm')!;
+    const result = await tool.execute({ lick_id: 'lick-ghost' });
     expect(result.isError).toBe(true);
     expect(result.content).toContain('unknown');
   });
 
-  it('sudo_deny forwards a deny decision and reports settlement', async () => {
+  it('lick_dismiss forwards a deny decision and reports settlement', async () => {
     const onSudoResolve = vi.fn(async () => ({ settled: true, persisted: false }));
     const tools = createScoopManagementTools({
       scoop: cone,
@@ -744,14 +744,14 @@ describe('sudo_request / sudo_allow / sudo_deny / list_sudo_requests tools', () 
       getScoops: () => [cone, nonCone],
       onSudoResolve,
     });
-    const tool = tools.find((t) => t.name === 'sudo_deny')!;
-    const result = await tool.execute({ request_id: 'sudo-abc' });
-    expect(onSudoResolve).toHaveBeenCalledWith('sudo-abc', { decision: 'deny' });
+    const tool = tools.find((t) => t.name === 'lick_dismiss')!;
+    const result = await tool.execute({ lick_id: 'lick-abc' });
+    expect(onSudoResolve).toHaveBeenCalledWith('lick-abc', { decision: 'deny' });
     expect(result.isError).toBeUndefined();
     expect(result.content).toContain('Denied');
   });
 
-  it('sudo_deny reports an error when the request id is unknown', async () => {
+  it('lick_dismiss reports an error when the lick id is unknown', async () => {
     const onSudoResolve = vi.fn(async () => ({ settled: false, persisted: false }));
     const tools = createScoopManagementTools({
       scoop: cone,
@@ -759,8 +759,8 @@ describe('sudo_request / sudo_allow / sudo_deny / list_sudo_requests tools', () 
       getScoops: () => [cone, nonCone],
       onSudoResolve,
     });
-    const tool = tools.find((t) => t.name === 'sudo_deny')!;
-    const result = await tool.execute({ request_id: 'sudo-ghost' });
+    const tool = tools.find((t) => t.name === 'lick_dismiss')!;
+    const result = await tool.execute({ lick_id: 'lick-ghost' });
     expect(result.isError).toBe(true);
   });
 

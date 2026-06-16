@@ -64,6 +64,13 @@ export interface ScoopManagementToolsConfig {
     persistError?: string;
     scoopFolder?: string;
     kind?: SudoKind;
+    /**
+     * Verbatim result text for a non-sudo actionable lick (e.g. the
+     * navigate·upskill resolver's `upskill` output). When present the
+     * lick_confirm / lick_dismiss tool surfaces it instead of the
+     * sudo-shaped summary.
+     */
+    message?: string;
   }>;
   /** Cone-only: snapshot all pending cone-mediated sudo requests. */
   onListSudoRequests?: () => Array<{
@@ -516,7 +523,7 @@ async function executeScoopWait(
 
 type SudoOutcome = Awaited<ReturnType<NonNullable<ScoopManagementToolsConfig['onSudoResolve']>>>;
 
-/** Format the result of sudo_allow once the orchestrator settles the request. */
+/** Format the result of lick_confirm once the orchestrator settles the request. */
 function formatAllowOutcome(outcome: SudoOutcome, always: boolean): string {
   if (!always) {
     return 'Approved (once) — the current action proceeds; future ones will prompt again.';
@@ -530,62 +537,64 @@ function formatAllowOutcome(outcome: SudoOutcome, always: boolean): string {
   return 'Approved (always) — no persistable rule applied for this request.';
 }
 
-async function executeSudoAllow(
+async function executeLickConfirm(
   input: unknown,
   config: ScoopManagementToolsConfig
 ): Promise<ToolResult> {
-  const { request_id, always, pattern } = input as {
-    request_id: string;
+  const { lick_id, always, pattern } = input as {
+    lick_id: string;
     always?: boolean;
     pattern?: string;
   };
-  if (typeof request_id !== 'string' || request_id.length === 0) {
-    return { content: 'request_id must be a non-empty string.', isError: true };
+  if (typeof lick_id !== 'string' || lick_id.length === 0) {
+    return { content: 'lick_id must be a non-empty string.', isError: true };
   }
   const decision: SudoDecision = always
     ? { decision: 'always', ...(pattern ? { pattern } : {}) }
     : { decision: 'allow' };
   try {
-    const outcome = await config.onSudoResolve!(request_id, decision);
+    const outcome = await config.onSudoResolve!(lick_id, decision);
     if (!outcome.settled) {
       return {
-        content: `Sudo request "${request_id}" is unknown, already resolved, or timed out.`,
+        content: `Lick "${lick_id}" is unknown, already resolved, or timed out.`,
         isError: true,
       };
     }
-    log.info('Sudo request approved', {
-      id: request_id,
+    log.info('Lick confirmed', {
+      id: lick_id,
       always: !!always,
       persisted: outcome.persisted,
     });
+    if (outcome.message) return { content: outcome.message };
     return { content: formatAllowOutcome(outcome, !!always) };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return { content: `sudo_allow failed: ${msg}`, isError: true };
+    return { content: `lick_confirm failed: ${msg}`, isError: true };
   }
 }
 
-async function executeSudoDeny(
+async function executeLickDismiss(
   input: unknown,
   config: ScoopManagementToolsConfig
 ): Promise<ToolResult> {
-  const { request_id } = input as { request_id: string };
-  if (typeof request_id !== 'string' || request_id.length === 0) {
-    return { content: 'request_id must be a non-empty string.', isError: true };
+  const { lick_id } = input as { lick_id: string };
+  if (typeof lick_id !== 'string' || lick_id.length === 0) {
+    return { content: 'lick_id must be a non-empty string.', isError: true };
   }
   try {
-    const outcome = await config.onSudoResolve!(request_id, { decision: 'deny' });
+    const outcome = await config.onSudoResolve!(lick_id, { decision: 'deny' });
     if (!outcome.settled) {
       return {
-        content: `Sudo request "${request_id}" is unknown, already resolved, or timed out.`,
+        content: `Lick "${lick_id}" is unknown, already resolved, or timed out.`,
         isError: true,
       };
     }
-    log.info('Sudo request denied', { id: request_id });
+    log.info('Lick dismissed', { id: lick_id });
+    if (outcome.message) return { content: outcome.message };
     return { content: 'Denied — the scoop will not run this action.' };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return { content: `sudo_deny failed: ${msg}`, isError: true };
+    return { content: `lick_dismiss failed: ${msg}`, isError: true };
   }
 }
 
@@ -841,18 +850,18 @@ function scoopWaitTool(config: ScoopManagementToolsConfig): ToolDefinition {
   };
 }
 
-function sudoAllowTool(config: ScoopManagementToolsConfig): ToolDefinition {
+function lickConfirmTool(config: ScoopManagementToolsConfig): ToolDefinition {
   return {
-    name: 'sudo_allow',
+    name: 'lick_confirm',
     description:
-      "Approve a pending sudo escalation raised by a scoop via sudo_request. With always=true, the orchestrator additionally appends a NOPASSWD <directive> <pattern> rule to the requesting scoop's /scoops/<folder>/etc/sudoers so the same action won't prompt again. always=false (the default) is allow-once.",
+      "Confirm (approve) a pending actionable lick by its lick_id — currently a scoop sudo escalation raised via sudo_request. With always=true, the orchestrator additionally appends a NOPASSWD <directive> <pattern> rule to the requesting scoop's /scoops/<folder>/etc/sudoers so the same action won't prompt again. always=false (the default) is allow-once.",
     inputSchema: {
       type: 'object',
       properties: {
-        request_id: {
+        lick_id: {
           type: 'string',
           description:
-            'The id of the pending request (as delivered in the [sudo-request] notification, e.g. "sudo-abc-…"). Use list_sudo_requests to see outstanding ids.',
+            'The id of the pending actionable lick (as delivered in the [sudo-request] notification, e.g. "lick-…"). Use list_sudo_requests to see outstanding ids.',
         },
         always: {
           type: 'boolean',
@@ -865,29 +874,29 @@ function sudoAllowTool(config: ScoopManagementToolsConfig): ToolDefinition {
             'Optional glob pattern to persist when always=true (e.g., "git push*" or "/workspace/.git/**"). Defaults to the request\'s suggestedPattern, then to the exact detail. Ignored when always=false.',
         },
       },
-      required: ['request_id'],
+      required: ['lick_id'],
     },
-    execute: (input) => executeSudoAllow(input, config),
+    execute: (input) => executeLickConfirm(input, config),
   };
 }
 
-function sudoDenyTool(config: ScoopManagementToolsConfig): ToolDefinition {
+function lickDismissTool(config: ScoopManagementToolsConfig): ToolDefinition {
   return {
-    name: 'sudo_deny',
+    name: 'lick_dismiss',
     description:
-      'Refuse a pending sudo escalation raised by a scoop via sudo_request. The scoop receives a deny decision and the sensitive action does NOT run.',
+      'Dismiss (refuse) a pending actionable lick by its lick_id — currently a scoop sudo escalation raised via sudo_request. The scoop receives a deny decision and the sensitive action does NOT run.',
     inputSchema: {
       type: 'object',
       properties: {
-        request_id: {
+        lick_id: {
           type: 'string',
           description:
-            'The id of the pending request (as delivered in the [sudo-request] notification). Use list_sudo_requests to see outstanding ids.',
+            'The id of the pending actionable lick (as delivered in the [sudo-request] notification). Use list_sudo_requests to see outstanding ids.',
         },
       },
-      required: ['request_id'],
+      required: ['lick_id'],
     },
-    execute: (input) => executeSudoDeny(input, config),
+    execute: (input) => executeLickDismiss(input, config),
   };
 }
 
@@ -895,7 +904,7 @@ function listSudoRequestsTool(config: ScoopManagementToolsConfig): ToolDefinitio
   return {
     name: 'list_sudo_requests',
     description:
-      'List all pending cone-mediated sudo requests (id, requesting scoop, kind, detail). Use to find an id for sudo_allow / sudo_deny.',
+      'List all pending cone-mediated sudo requests (lick id, requesting scoop, kind, detail). Use to find a lick_id for lick_confirm / lick_dismiss.',
     inputSchema: { type: 'object', properties: {} },
     execute: () => executeListSudoRequests(config),
   };
@@ -946,8 +955,8 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
     if (config.onUnmuteScoops) tools.push(scoopUnmuteTool(config));
     if (config.onScheduleScoopWait) tools.push(scoopWaitTool(config));
     if (config.onSudoResolve) {
-      tools.push(sudoAllowTool(config));
-      tools.push(sudoDenyTool(config));
+      tools.push(lickConfirmTool(config));
+      tools.push(lickDismissTool(config));
     }
     if (config.onListSudoRequests) tools.push(listSudoRequestsTool(config));
     if (config.onSetGlobalMemory && config.getGlobalMemory) {

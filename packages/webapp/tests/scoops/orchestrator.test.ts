@@ -2802,8 +2802,8 @@ describe('Orchestrator.enqueueSudoRequest lick emission', () => {
     expect(emitEvent).toHaveBeenCalledTimes(1);
     const lick = emitEvent.mock.calls[0][0];
     expect(lick.type).toBe('sudo-request');
-    expect(typeof lick.sudoRequestId).toBe('string');
-    expect(lick.sudoRequestId.length).toBeGreaterThan(0);
+    expect(typeof lick.lickId).toBe('string');
+    expect(lick.lickId.length).toBeGreaterThan(0);
     expect(lick.sudoKind).toBe('write');
     expect(lick.sudoDetail).toBe('/workspace/build/output.txt');
     expect(lick.sudoSuggestedPattern).toBe('/workspace/build/**');
@@ -2817,11 +2817,73 @@ describe('Orchestrator.enqueueSudoRequest lick emission', () => {
       ([jid, msg]) => jid === cone.jid && msg?.channel === 'sudo-request'
     );
     expect(coneFires).toHaveLength(1);
-    expect(coneFires[0][1].content).toContain('Request ID:');
-    expect(coneFires[0][1].content).toContain('sudo_allow');
+    expect(coneFires[0][1].content).toContain('Lick ID:');
+    expect(coneFires[0][1].content).toContain('lick_confirm');
 
     // Settle the dangling promise so the test framework doesn't warn.
-    orch.resolveSudoRequest(lick.sudoRequestId, { decision: 'deny' });
+    orch.resolveSudoRequest(lick.lickId, { decision: 'deny' });
+    await pendingDecision;
+  });
+
+  it.each([
+    ['allow', 'confirmed'],
+    ['always', 'confirmed'],
+    ['deny', 'dismissed'],
+  ] as const)('resolveSudoRequestAndPersist (%s) flips the stored lick message + fires onMessageUpdate (%s)', async (decision, expectedState) => {
+    const onMessageUpdate = vi.fn();
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      onIncomingMessage: vi.fn(),
+      onMessageUpdate,
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    });
+    await orch.init();
+
+    const emitEvent = vi.fn();
+    orch.setLickManager({ emitEvent } as any);
+
+    const pendingDecision = orch.enqueueSudoRequest(testScoop.jid, {
+      kind: 'command',
+      detail: 'rm -rf /tmp/x',
+      suggestedPattern: 'rm *',
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    const lickId = emitEvent.mock.calls[0][0].lickId as string;
+
+    // The stored sudo-request message starts pending and carries the lickId.
+    const { getMessagesForScoop } = await import('../../src/scoops/db.js');
+    const before = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(before).toBeDefined();
+    expect(before?.lickState).toBe('pending');
+
+    const result = await orch.resolveSudoRequestAndPersist(lickId, { decision });
+    expect(result.settled).toBe(true);
+
+    // onMessageUpdate fires once, locating the card by lickId with the
+    // settled state — the live-flip notification (parity: same callback
+    // backs standalone + extension through the shared bridge/client).
+    expect(onMessageUpdate).toHaveBeenCalledTimes(1);
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `sudo-request-${lickId}`,
+      lickId,
+      lickState: expectedState,
+    });
+
+    // The persisted message is updated in place (no new row appended).
+    const after = await getMessagesForScoop(cone.jid);
+    const flipped = after.filter((m) => m.lickId === lickId);
+    expect(flipped).toHaveLength(1);
+    expect(flipped[0].lickState).toBe(expectedState);
+
     await pendingDecision;
   });
 
@@ -2853,5 +2915,568 @@ describe('Orchestrator.enqueueSudoRequest lick emission', () => {
       decision: 'deny',
     });
     await expect(pendingDecision).resolves.toBeDefined();
+  });
+});
+
+describe('Orchestrator navigate-lick actionable resolution', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+    await saveScoop(cone);
+    await saveScoop(testScoop);
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await settleAndDisposeSharedFs(sharedFs);
+  });
+
+  function makeOrch(onMessageUpdate = vi.fn()) {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    const o = new Orchestrator(container, {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      onIncomingMessage: vi.fn(),
+      onMessageUpdate,
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    });
+    return o;
+  }
+
+  /** Store the cone-facing navigate ChannelMessage the kernel host would build. */
+  async function saveNavigateMessage(lickId: string): Promise<void> {
+    const { saveMessage } = await import('../../src/scoops/db.js');
+    await saveMessage({
+      id: `navigate-https://x-${lickId}`,
+      chatJid: cone.jid,
+      senderId: 'navigate',
+      senderName: 'navigate:https://origin',
+      content: '[Navigate Event: https://origin]',
+      timestamp: new Date().toISOString(),
+      fromAssistant: false,
+      channel: 'navigate',
+      lickId,
+    });
+  }
+
+  it('upskill lick_confirm runs upskill (with branch/path) and flips the card to confirmed', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerNavigateLick({
+      type: 'navigate',
+      timestamp: new Date().toISOString(),
+      body: {
+        url: 'https://origin',
+        verb: 'upskill',
+        target: 'https://github.com/o/r',
+        branch: 'main',
+        path: 'skills/foo',
+      },
+    } as any);
+    await saveNavigateMessage(lickId);
+
+    const executeCommand = vi
+      .fn()
+      .mockResolvedValue({ stdout: 'Installed skill "foo"\n', stderr: '', exitCode: 0 });
+    const coneCtx = (orch as any).contexts.get(cone.jid);
+    expect(coneCtx).toBeDefined();
+    vi.spyOn(coneCtx, 'getShell').mockReturnValue({ executeCommand } as any);
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'allow' });
+
+    expect(executeCommand).toHaveBeenCalledTimes(1);
+    expect(executeCommand.mock.calls[0][0]).toBe(
+      "upskill --branch 'main' --path 'skills/foo' 'https://github.com/o/r'"
+    );
+    expect(result.settled).toBe(true);
+    expect(result.message).toContain('Installed skill');
+
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `navigate-https://x-${lickId}`,
+      lickId,
+      lickState: 'confirmed',
+    });
+    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(after?.lickState).toBe('confirmed');
+  });
+
+  it('upskill lick_dismiss drops the install and mutes the card (dismissed)', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerNavigateLick({
+      type: 'navigate',
+      timestamp: new Date().toISOString(),
+      body: { url: 'https://origin', verb: 'upskill', target: 'https://github.com/o/r' },
+    } as any);
+    await saveNavigateMessage(lickId);
+
+    const executeCommand = vi.fn();
+    const coneCtx = (orch as any).contexts.get(cone.jid);
+    vi.spyOn(coneCtx, 'getShell').mockReturnValue({ executeCommand } as any);
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'deny' });
+
+    expect(executeCommand).not.toHaveBeenCalled();
+    expect(result.settled).toBe(true);
+    expect(result.message).toBeUndefined();
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `navigate-https://x-${lickId}`,
+      lickId,
+      lickState: 'dismissed',
+    });
+  });
+
+  it('handoff licks are NOT agent-resolvable via lick_confirm (human gate preserved)', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerNavigateLick({
+      type: 'navigate',
+      timestamp: new Date().toISOString(),
+      body: {
+        url: 'https://origin',
+        verb: 'handoff',
+        target: 'https://origin',
+        instruction: 'do x',
+      },
+    } as any);
+    await saveNavigateMessage(lickId);
+
+    // The agent path falls through to the sudo registry, which has no such id.
+    const result = await orch.resolveActionableLick(lickId, { decision: 'allow' });
+    expect(result.settled).toBe(false);
+    expect(onMessageUpdate).not.toHaveBeenCalled();
+    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(after?.lickState).toBeUndefined();
+  });
+
+  it.each([
+    [true, 'confirmed'],
+    [false, 'dismissed'],
+  ] as const)('handoff card flips when the human resolves the dip (accepted=%s → %s)', async (accepted, expectedState) => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerNavigateLick({
+      type: 'navigate',
+      timestamp: new Date().toISOString(),
+      body: { url: 'https://origin', verb: 'handoff', target: 'https://origin' },
+    } as any);
+    await saveNavigateMessage(lickId);
+
+    const ok = await orch.resolveNavigateHandoffByHuman(lickId, accepted);
+    expect(ok).toBe(true);
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `navigate-https://x-${lickId}`,
+      lickId,
+      lickState: expectedState,
+    });
+    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(after?.lickState).toBe(expectedState);
+
+    // Idempotent: a second human resolution is a no-op (entry consumed).
+    expect(await orch.resolveNavigateHandoffByHuman(lickId, accepted)).toBe(false);
+  });
+});
+
+describe('Orchestrator session-reload-lick actionable resolution', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+    await saveScoop(cone);
+    await saveScoop(testScoop);
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await settleAndDisposeSharedFs(sharedFs);
+  });
+
+  function makeOrch(onMessageUpdate = vi.fn()) {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    return new Orchestrator(container, {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      onIncomingMessage: vi.fn(),
+      onMessageUpdate,
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    });
+  }
+
+  /** Store the cone-facing session-reload ChannelMessage the kernel host would build. */
+  async function saveSessionReloadMessage(lickId: string): Promise<void> {
+    const { saveMessage } = await import('../../src/scoops/db.js');
+    await saveMessage({
+      id: `session-reload-${lickId}`,
+      chatJid: cone.jid,
+      senderId: 'session-reload',
+      senderName: 'session-reload:reload',
+      content: '[Session Reload]',
+      timestamp: new Date().toISOString(),
+      fromAssistant: false,
+      channel: 'session-reload',
+      lickId,
+    });
+  }
+
+  function spyConeShell(executeCommand = vi.fn()) {
+    const coneCtx = (orch as any).contexts.get(cone.jid);
+    expect(coneCtx).toBeDefined();
+    vi.spyOn(coneCtx, 'getShell').mockReturnValue({ executeCommand } as any);
+    return executeCommand;
+  }
+
+  it('mount-recovery lick_confirm re-runs the mount commands and flips the card to confirmed', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerSessionReloadLick({
+      type: 'session-reload',
+      timestamp: new Date().toISOString(),
+      body: {
+        reason: 'mount-recovery',
+        mounts: [
+          { kind: 'local', path: '/mnt/proj', dirName: 'proj' },
+          { kind: 's3', path: '/mnt/bucket', source: 's3://bucket', profile: 'prod', reason: 'x' },
+          { kind: 'da', path: '/mnt/da', source: 'da://o/r', profile: 'default', reason: 'y' },
+        ],
+      },
+    } as any);
+    await saveSessionReloadMessage(lickId);
+
+    const executeCommand = vi
+      .fn()
+      .mockResolvedValue({ stdout: 'mounted\n', stderr: '', exitCode: 0 });
+    spyConeShell(executeCommand);
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'allow' });
+
+    expect(executeCommand).toHaveBeenCalledTimes(3);
+    expect(executeCommand.mock.calls[0][0]).toBe("mount '/mnt/proj'");
+    expect(executeCommand.mock.calls[1][0]).toBe(
+      "mount --source 's3://bucket' --profile 'prod' '/mnt/bucket'"
+    );
+    expect(executeCommand.mock.calls[2][0]).toBe("mount --source 'da://o/r' '/mnt/da'");
+    expect(result.settled).toBe(true);
+    expect(result.message).toContain('mounted');
+
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `session-reload-${lickId}`,
+      lickId,
+      lickState: 'confirmed',
+    });
+    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(after?.lickState).toBe('confirmed');
+  });
+
+  it('mount-recovery lick_dismiss leaves the mounts unmounted and mutes the card (dismissed)', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerSessionReloadLick({
+      type: 'session-reload',
+      timestamp: new Date().toISOString(),
+      body: {
+        reason: 'mount-recovery',
+        mounts: [{ kind: 'local', path: '/mnt/proj', dirName: 'proj' }],
+      },
+    } as any);
+    await saveSessionReloadMessage(lickId);
+
+    const executeCommand = spyConeShell();
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'deny' });
+
+    expect(executeCommand).not.toHaveBeenCalled();
+    expect(result.settled).toBe(true);
+    expect(result.message).toBeUndefined();
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `session-reload-${lickId}`,
+      lickId,
+      lickState: 'dismissed',
+    });
+    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(after?.lickState).toBe('dismissed');
+  });
+
+  it('plain session-reload lick_dismiss acknowledges and mutes the card (dismissed)', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerSessionReloadLick({
+      type: 'session-reload',
+      timestamp: new Date().toISOString(),
+      body: {},
+    } as any);
+    await saveSessionReloadMessage(lickId);
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'deny' });
+
+    expect(result.settled).toBe(true);
+    expect(result.message).toBe('Session-reload notice acknowledged.');
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `session-reload-${lickId}`,
+      lickId,
+      lickState: 'dismissed',
+    });
+    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(after?.lickState).toBe('dismissed');
+  });
+
+  it('plain session-reload lick_confirm is a no-op that leaves the card pending', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerSessionReloadLick({
+      type: 'session-reload',
+      timestamp: new Date().toISOString(),
+      body: { reason: 'soft-reload' },
+    } as any);
+    await saveSessionReloadMessage(lickId);
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'allow' });
+
+    expect(result.settled).toBe(true);
+    expect(result.message).toContain('Nothing to confirm');
+    expect(onMessageUpdate).not.toHaveBeenCalled();
+    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(after?.lickState).toBeUndefined();
+
+    // Entry stays pending, so a later dismiss still settles + mutes it.
+    const dismiss = await orch.resolveActionableLick(lickId, { decision: 'deny' });
+    expect(dismiss.settled).toBe(true);
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `session-reload-${lickId}`,
+      lickId,
+      lickState: 'dismissed',
+    });
+  });
+
+  it('mount-recovery with an empty mounts payload is not registered (falls through)', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerSessionReloadLick({
+      type: 'session-reload',
+      timestamp: new Date().toISOString(),
+      body: { reason: 'mount-recovery', mounts: [] },
+    } as any);
+    await saveSessionReloadMessage(lickId);
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'allow' });
+    expect(result.settled).toBe(false);
+    expect(onMessageUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('Orchestrator upgrade-lick actionable resolution', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+    await saveScoop(cone);
+    await saveScoop(testScoop);
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await settleAndDisposeSharedFs(sharedFs);
+  });
+
+  function makeOrch(onMessageUpdate = vi.fn()) {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    return new Orchestrator(container, {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      onIncomingMessage: vi.fn(),
+      onMessageUpdate,
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    });
+  }
+
+  /** Store the cone-facing upgrade ChannelMessage the kernel host would build. */
+  async function saveUpgradeMessage(lickId: string): Promise<void> {
+    const { saveMessage } = await import('../../src/scoops/db.js');
+    await saveMessage({
+      id: `upgrade-0.5.0-${lickId}`,
+      chatJid: cone.jid,
+      senderId: 'upgrade',
+      senderName: 'upgrade:0.4.1→0.5.0',
+      content: '[Upgrade Event: 0.4.1→0.5.0]',
+      timestamp: new Date().toISOString(),
+      fromAssistant: false,
+      channel: 'upgrade',
+      lickId,
+    });
+  }
+
+  it('upgrade lick_confirm returns the update-workspace-files merge directive and flips the card to confirmed', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerUpgradeLick({
+      type: 'upgrade',
+      timestamp: new Date().toISOString(),
+      upgradeFromVersion: '0.4.1',
+      upgradeToVersion: '0.5.0',
+      body: { from: '0.4.1', to: '0.5.0', releasedAt: null },
+    } as any);
+    await saveUpgradeMessage(lickId);
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'allow' });
+
+    expect(result.settled).toBe(true);
+    expect(result.message).toContain('Update workspace files');
+    expect(result.message).toContain('v0.4.1');
+    expect(result.message).toContain('v0.5.0');
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `upgrade-0.5.0-${lickId}`,
+      lickId,
+      lickState: 'confirmed',
+    });
+    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(after?.lickState).toBe('confirmed');
+
+    // Entry is consumed — a second resolution falls through (unknown).
+    const again = await orch.resolveActionableLick(lickId, { decision: 'allow' });
+    expect(again.settled).toBe(false);
+  });
+
+  it('upgrade lick_dismiss leaves files unchanged and mutes the card (dismissed)', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerUpgradeLick({
+      type: 'upgrade',
+      timestamp: new Date().toISOString(),
+      upgradeFromVersion: '0.4.1',
+      upgradeToVersion: '0.5.0',
+      body: { from: '0.4.1', to: '0.5.0', releasedAt: null },
+    } as any);
+    await saveUpgradeMessage(lickId);
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'deny' });
+
+    expect(result.settled).toBe(true);
+    expect(result.message).toContain('dismissed');
+    expect(result.message).not.toContain('Update workspace files');
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `upgrade-0.5.0-${lickId}`,
+      lickId,
+      lickState: 'dismissed',
+    });
+    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(after?.lickState).toBe('dismissed');
   });
 });

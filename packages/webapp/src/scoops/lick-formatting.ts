@@ -95,39 +95,74 @@ function resolveLickEventName(event: LickEvent): string | undefined {
 }
 
 /**
- * Session-reload formatting. Returns `null` to DROP the lick when the
- * mount-recovery payload is empty; returns `undefined` to signal "no
- * mount-recovery payload — fall through to the generic JSON block".
+ * Session-reload formatting. Session-reload licks are agent-actionable: the
+ * orchestrator (`registerSessionReloadLick`) mints a `lickId` for every one,
+ * so — following the `formatUpgradeLick` / `formatNavigateLick` pattern — the
+ * actionable `Lick ID` + guidance is appended only when `event.lickId` is set.
+ *
+ * - **mount-recovery branch**: confirm + dismiss. `lick_confirm` re-runs the
+ *   listed `mount …` commands so the user can re-authorize; `lick_dismiss`
+ *   leaves them unmounted. Returns `null` to DROP the lick when the
+ *   mount-recovery payload is empty.
+ * - **plain reload branch**: dismiss-only. There is NO confirm action — the
+ *   card is informational, `lick_dismiss` acknowledges / clears it.
  */
-function formatSessionReloadLick(
-  event: LickEvent,
-  label: string
-): FormattedLick | null | undefined {
+function formatSessionReloadLick(event: LickEvent, label: string): FormattedLick | null {
   const body = event.body as { reason?: string; mounts?: MountRecoveryEntry[] } | null | undefined;
+  const lickId = event.lickId;
   if (body?.reason === 'mount-recovery') {
     const prompt = formatMountRecoveryPrompt(body.mounts ?? []);
     if (prompt === null) return null; // empty list — drop the lick
-    return { label, content: prompt };
+    const guidance = lickId
+      ? `\n\nLick ID: ${lickId}\n` +
+        `This card is actionable: call \`lick_confirm\` with this lick id to re-run the ` +
+        `listed \`mount …\` command(s) so the user can re-authorize, or \`lick_dismiss\` to ` +
+        `leave them unmounted. The card flips to ✓ on confirm / muted ✗ on dismiss.`
+      : '';
+    return { label, content: `${prompt}${guidance}` };
   }
-  // session-reload with no mount-recovery payload — fall through to JSON block
-  return undefined;
+  // session-reload with no mount-recovery payload — generic JSON block, plus a
+  // dismiss-only acknowledgement when the orchestrator registered a lick id.
+  const generic = formatGenericLick(event, label);
+  if (!lickId) return generic;
+  const guidance =
+    `\n\nLick ID: ${lickId}\n` +
+    `This card is informational — there is NO confirm action. Call \`lick_dismiss\` with ` +
+    `this lick id to acknowledge and clear it. The card flips to muted ✗ on dismiss.`;
+  return { label: generic.label, content: `${generic.content}${guidance}` };
 }
 
+/**
+ * Upgrade lick. Upgrade licks are agent-actionable with a binary mapping: the
+ * cone calls `lick_confirm` to **Update workspace files** (runs the upgrade
+ * skill's three-way merge of bundled vfs-root content into the user's VFS) or
+ * `lick_dismiss` to clear; the card flips ✓ / muted ✗. Reviewing the changelog
+ * is NOT a card action — it stays a separate step the agent can run first. The
+ * actionable `Lick ID` + guidance is appended only when the orchestrator
+ * registered one (it does for every upgrade lick).
+ */
 function formatUpgradeLick(event: LickEvent, label: string): FormattedLick {
   const from = (event as { upgradeFromVersion?: string }).upgradeFromVersion ?? 'unknown';
   const to = (event as { upgradeToVersion?: string }).upgradeToVersion ?? 'unknown';
   const releasedAt =
     (event.body as { releasedAt?: string | null } | null | undefined)?.releasedAt ?? null;
   const releaseLine = releasedAt ? `\nReleased: ${releasedAt}` : '';
+  const lickId = event.lickId;
+  const guidance = lickId
+    ? `\n\nLick ID: ${lickId}\n` +
+      `Use the **upgrade** skill (\`/workspace/skills/upgrade/SKILL.md\`). The card is a ` +
+      `binary action: call \`lick_confirm\` with this lick id to **Update workspace files** ` +
+      `(it runs the three-way merge of bundled vfs-root content into the user's VFS), or ` +
+      `\`lick_dismiss\` to clear it. The card flips to ✓ on confirm / muted ✗ on dismiss. ` +
+      `Reviewing the changelog is a separate step you can run first — it is NOT a card action.`
+    : `\n\nUse the **upgrade** skill (\`/workspace/skills/upgrade/SKILL.md\`) to offer the user ` +
+      `a three-way merge of bundled vfs-root content into their workspace (bundled snapshot ` +
+      `vs user's VFS, reconciled with the GitHub tag-to-tag diff).`;
   return {
     label,
     content:
       `[${label}: ${from}→${to}]\n\n` +
-      `SLICC was upgraded from \`${from}\` to \`${to}\`.${releaseLine}\n\n` +
-      `Use the **upgrade** skill (\`/workspace/skills/upgrade/SKILL.md\`) to:\n` +
-      `- Show the user the changelog between these tags from GitHub\n` +
-      `- Offer to merge new bundled vfs-root content into their workspace ` +
-      `(three-way merge: bundled snapshot vs user's VFS, reconciled with the GitHub tag-to-tag diff).`,
+      `SLICC was upgraded from \`${from}\` to \`${to}\`.${releaseLine}${guidance}`,
   };
 }
 
@@ -158,20 +193,20 @@ function formatWorkflowLick(event: LickEvent, label: string): FormattedLick {
 
 /**
  * Sudo-request body mirrors `formatSudoRequestNotification` in orchestrator.ts
- * so the cone-readable text restates the request id + kind + detail + suggested
- * pattern and points at the `sudo_allow` tool. Used by the UI chip path; the
+ * so the cone-readable text restates the lick id + kind + detail + suggested
+ * pattern and points at the `lick_confirm` tool. Used by the UI chip path; the
  * actionable agent message is delivered separately via
  * `deliverSudoRequestToCone` (Path b in the lick-as-UI-chip design — see
  * `Orchestrator.enqueueSudoRequest` and `defaultLickEventHandler`).
  */
 function formatSudoRequestLick(event: LickEvent, label: string): FormattedLick {
   const scoop = event.sudoScoopName ?? 'a scoop';
-  const requestId = event.sudoRequestId ?? '(unknown)';
+  const lickId = event.lickId ?? '(unknown)';
   const kind = event.sudoKind ?? 'unknown';
   const detail = event.sudoDetail ?? '';
   const lines = [
     `[${label}: ${scoop}]`,
-    `Request ID: ${requestId}`,
+    `Lick ID: ${lickId}`,
     `Kind: ${kind}`,
     `Detail: ${detail}`,
   ];
@@ -180,7 +215,7 @@ function formatSudoRequestLick(event: LickEvent, label: string): FormattedLick {
   }
   lines.push(
     '',
-    `Use the sudo_allow tool with request_id="${requestId}" to approve, deny, or always-approve this request.`
+    `Use the lick_confirm tool with lick_id="${lickId}" to approve (or always-approve with a pattern), or lick_dismiss with lick_id="${lickId}" to deny.`
   );
   return { label, content: lines.join('\n') };
 }
@@ -199,6 +234,37 @@ function formatGenericLick(event: LickEvent, label: string): FormattedLick {
 }
 
 /**
+ * Navigate (handoff / upskill) lick. Keeps the generic `[Navigate Event: url]`
+ * + JSON-body block the handoff skill parses, then appends the actionable
+ * `Lick ID` and verb-specific guidance when the orchestrator registered one:
+ *
+ * - **upskill** is agent-actionable — the cone installs via `lick_confirm`
+ *   (runs `upskill`, honoring any `branch` / `path` scope) or skips via
+ *   `lick_dismiss`; the card flips ✓ / muted ✗.
+ * - **handoff** stays human-gated — the cone shows the approval dip and must
+ *   NOT self-approve; carrying the lick id in the dip action flips the card
+ *   when the human accepts / dismisses.
+ */
+function formatNavigateLick(event: LickEvent, label: string): FormattedLick {
+  const generic = formatGenericLick(event, label);
+  const lickId = event.lickId;
+  if (!lickId) return generic;
+  const verb = (event.body as { verb?: string } | null | undefined)?.verb;
+  const guidance =
+    verb === 'upskill'
+      ? `\n\nLick ID: ${lickId}\n` +
+        `Upskill install. To install, call \`lick_confirm\` with this lick id ` +
+        `(it runs \`upskill\` with any branch/path scope from the body); to skip, call ` +
+        `\`lick_dismiss\`. The card flips to ✓ on confirm / muted ✗ on dismiss.`
+      : `\n\nLick ID: ${lickId}\n` +
+        `External handoff — stays human-gated. Show the approval dip and wait for the user; ` +
+        `do NOT use \`lick_confirm\` / \`lick_dismiss\` here. Carry the lick id in the dip ` +
+        `action so the card resolves: ` +
+        `slicc.lick({action:'accept'|'dismiss', data:{lickId:'${lickId}'}}).`;
+  return { label: generic.label, content: `${generic.content}${guidance}` };
+}
+
+/**
  * Build the human-readable label and message body the cone receives for a
  * given lick event. Returns `null` when the event should be silently
  * dropped (empty `mount-recovery` payload).
@@ -206,15 +272,12 @@ function formatGenericLick(event: LickEvent, label: string): FormattedLick {
 export function formatLickEventForCone(event: LickEvent): FormattedLick | null {
   const label = LICK_LABELS[event.type];
 
-  if (event.type === 'session-reload') {
-    const reload = formatSessionReloadLick(event, label);
-    // `null` → drop; a `FormattedLick` → use it; `undefined` → fall through.
-    if (reload !== undefined) return reload;
-  }
+  if (event.type === 'session-reload') return formatSessionReloadLick(event, label);
   if (event.type === 'upgrade') return formatUpgradeLick(event, label);
   if (event.type === 'cherry') return formatCherryLick(event, label);
   if (event.type === 'workflow') return formatWorkflowLick(event, label);
   if (event.type === 'sudo-request') return formatSudoRequestLick(event, label);
+  if (event.type === 'navigate') return formatNavigateLick(event, label);
 
   return formatGenericLick(event, label);
 }

@@ -18,8 +18,9 @@ SLICC accepts a handoff from another agent (or any external system) through an R
    ```
 
 2. SLICC observes the response header (via a CDP `Network.responseReceived` watcher in CLI/Electron floats, or `chrome.webRequest.onHeadersReceived` in the extension float), parses every `Link` value with the shared parser, and emits a `navigate` lick event carrying `{ url, verb, target, instruction?, title? }`.
-3. The cone shows a yes/no approval card quoting the origin URL, verb, target, and instruction.
-4. On accept, the cone dispatches by verb.
+3. The cone resolves the lick by verb:
+   - **handoff** — shows a yes/no approval card quoting the origin URL, verb, target, and instruction. On accept the cone fetches the page body and acts on the instruction; the card flips to ✓ (accept) or muted ✗ (dismiss). The human dip is the authority gate — the agent never self-approves a handoff.
+   - **upskill** — agent-actionable via the `lick_confirm` / `lick_dismiss` tools: `lick_confirm` runs `upskill <target> [--branch ..] [--path ..]` (honoring the body's scope) and flips the card to ✓; `lick_dismiss` drops it (muted ✗). `upskill`'s on-disk "already exists" check still guards duplicate installs.
 
 The verb is the rel; the target is the link href; the prose instruction (handoff verb only) rides in the link's `title` parameter (RFC 8187 `title*=UTF-8''…` for non-ASCII).
 

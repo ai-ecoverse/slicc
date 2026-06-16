@@ -439,7 +439,7 @@ Cone-only. Update the shared global memory file (`/shared/CLAUDE.md`).
 ### sudo_request
 
 Scoop-only. Ask the cone for an explicit sudo escalation before running a sensitive
-action. The call blocks until the cone resolves via `sudo_allow` / `sudo_deny` (or
+action. The call blocks until the cone resolves via `lick_confirm` / `lick_dismiss` (or
 the registry times out fail-closed).
 
 | Property   | Value                                                                                        |
@@ -454,43 +454,70 @@ channel message the orchestrator delivers to the cone.
 
 ---
 
-### sudo_allow
+### lick_confirm
 
-Cone-only. Approve a pending sudo request raised by a scoop. With `always=true`,
-the orchestrator additionally appends a `NOPASSWD <directive> <pattern>` rule to
-the requesting scoop's `/scoops/<folder>/etc/sudoers` so the same action won't
-prompt again.
+Cone-only. Confirm (approve) a pending actionable lick by its `lick_id`. The
+orchestrator dispatches by `lick_id` to the right resolver. Actionable kinds:
 
-| Property   | Value                                                        |
-| ---------- | ------------------------------------------------------------ |
-| **Name**   | `sudo_allow`                                                 |
-| **Input**  | `{ request_id: string, always?: boolean, pattern?: string }` |
-| **Output** | `{ content: "Approved (once\|always)..." }`                  |
+- **sudo** — a scoop escalation raised via `sudo_request`. With `always=true`,
+  the orchestrator additionally appends a `NOPASSWD <directive> <pattern>` rule
+  to the requesting scoop's `/scoops/<folder>/etc/sudoers` so the same action
+  won't prompt again.
+- **navigate·upskill** — confirm runs `upskill <url> [--branch ..] [--path ..]`
+  to install the skill (`upskill`'s on-disk "already exists" check still guards
+  duplicate installs).
+- **session-reload·mount-recovery** — confirm re-runs the `mount` commands
+  reconstructed from the lick's recovery entries.
+- **upgrade** — confirm triggers "Update workspace files" (the upgrade skill's
+  three-way merge of bundled vfs-root content, scoped to the stored `from`→`to`
+  tags). "Review changelog" stays a separate agent step.
 
-`pattern` defaults to the request's `suggestedPattern`, then to the exact
-`detail`. `kind: 'secret'` cannot be persisted — there is no sudoers `Secret`
-directive — so `always=true` for a secret request approves once and reports
-"approved but not persisted".
+| Property   | Value                                                     |
+| ---------- | --------------------------------------------------------- |
+| **Name**   | `lick_confirm`                                            |
+| **Input**  | `{ lick_id: string, always?: boolean, pattern?: string }` |
+| **Output** | `{ content: "Approved (once\|always)..." }`               |
+
+`always` / `pattern` apply only to **sudo** licks. `pattern` defaults to the
+request's `suggestedPattern`, then to the exact `detail`. `kind: 'secret'`
+cannot be persisted — there is no sudoers `Secret` directive — so `always=true`
+for a secret request approves once and reports "approved but not persisted".
+**navigate·handoff** licks are NOT agent-confirmable: they stay human-gated
+(the approval dip is the authority), so a `lick_confirm` on a handoff id reports
+unknown / already-resolved.
 
 ---
 
-### sudo_deny
+### lick_dismiss
 
-Cone-only. Refuse a pending sudo request. The scoop receives a `deny` decision
-and the sensitive action does NOT run.
+Cone-only. Dismiss (refuse) a pending actionable lick by its `lick_id`. Per
+kind: a **sudo** request receives a `deny` decision and the sensitive action
+does NOT run; **navigate·upskill** drops the install; **session-reload·mount-recovery**
+leaves the mounts unmounted; **upgrade** clears the notice (no files touched);
+and **session-reload (plain)** is dismiss-only — it just acknowledges the
+already-completed reload (there is no `lick_confirm` for it). In every case the
+card flips to its muted dismissed state.
 
 | Property   | Value                                               |
 | ---------- | --------------------------------------------------- |
-| **Name**   | `sudo_deny`                                         |
-| **Input**  | `{ request_id: string }`                            |
+| **Name**   | `lick_dismiss`                                      |
+| **Input**  | `{ lick_id: string }`                               |
 | **Output** | `{ content: "Denied — the scoop will not run..." }` |
+
+Like `sudo_request` / `list_sudo_requests`, `lick_confirm` / `lick_dismiss`
+are hidden from the chat UI via `hidden-tools.ts` — no tool-call row appears.
+The user-visible signal of the cone's decision is the originating
+`<slicc-lick-card>` flipping in place to its result state: a green check
+(confirmed) or a red cross (dismissed, rendered muted), persisted on the
+message so it survives reload. That card flip is the only visible signal. See
+[`docs/approvals.md`](./approvals.md) "Card result UX".
 
 ---
 
 ### list_sudo_requests
 
-Cone-only. List all pending cone-mediated sudo requests (`id`, requesting scoop,
-kind, detail). Use to find an `id` for `sudo_allow` / `sudo_deny`.
+Cone-only. List all pending cone-mediated sudo requests (lick `id`, requesting scoop,
+kind, detail). Use to find a `lick_id` for `lick_confirm` / `lick_dismiss`.
 
 | Property   | Value                                          |
 | ---------- | ---------------------------------------------- |
@@ -517,8 +544,8 @@ Hidden from the chat UI via `hidden-tools.ts`.
 | **drop_scoop**           | ✓    | ✗              | Cone-only scoop-management tool                                       |
 | **update_global_memory** | ✓    | ✗              | Cone-only scoop-management tool                                       |
 | **sudo_request**         | ✗    | ✓              | Scoop-only — escalate to the cone for an approval decision            |
-| **sudo_allow**           | ✓    | ✗              | Cone-only — resolve a pending sudo request (allow-once or always)     |
-| **sudo_deny**            | ✓    | ✗              | Cone-only — refuse a pending sudo request                             |
+| **lick_confirm**         | ✓    | ✗              | Cone-only — confirm a pending actionable lick (allow-once or always)  |
+| **lick_dismiss**         | ✓    | ✗              | Cone-only — dismiss a pending actionable lick                         |
 | **list_sudo_requests**   | ✓    | ✗              | Cone-only — snapshot outstanding sudo requests                        |
 
 ---

@@ -161,14 +161,14 @@ gesture resolves to `deny`.
 When a non-cone scoop hits a sudoers gate, the request does NOT go to the human
 directly — it routes through the cone agent. Same goes for the explicit-request
 surface: a scoop calls `sudo_request` to ask up-front, and the cone resolves the
-request with `sudo_allow` (allow-once or always-and-persist) or `sudo_deny`.
+request with `lick_confirm` (allow-once or always-and-persist) or `lick_dismiss`.
 
-| Tool                 | Side  | Purpose                                                                                                                                                  |
-| -------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sudo_request`       | Scoop | Ask the cone for an explicit escalation. Inputs: `kind` (`command`/`read`/`write`/`secret`), `detail`, optional `suggested_pattern`. Blocks on cone.     |
-| `sudo_allow`         | Cone  | Approve a pending request by `request_id`. `always=true` additionally appends a `NOPASSWD <directive> <pattern>` line to the requesting scoop's sudoers. |
-| `sudo_deny`          | Cone  | Refuse a pending request. The scoop's action does NOT run.                                                                                               |
-| `list_sudo_requests` | Cone  | Snapshot outstanding requests (`id`, scoop folder, kind, detail).                                                                                        |
+| Tool                 | Side  | Purpose                                                                                                                                              |
+| -------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sudo_request`       | Scoop | Ask the cone for an explicit escalation. Inputs: `kind` (`command`/`read`/`write`/`secret`), `detail`, optional `suggested_pattern`. Blocks on cone. |
+| `lick_confirm`       | Cone  | Confirm a pending actionable lick by `lick_id`. `always=true` additionally appends a `NOPASSWD <directive> <pattern>` line to the scoop's sudoers.   |
+| `lick_dismiss`       | Cone  | Dismiss a pending actionable lick by `lick_id`. The scoop's action does NOT run.                                                                     |
+| `list_sudo_requests` | Cone  | Snapshot outstanding requests (`lick id`, scoop folder, kind, detail).                                                                               |
 
 The pending-request registry lives on the `Orchestrator` (`enqueueSudoRequest`,
 `resolveSudoRequestAndPersist`, `listPendingSudoRequests`). The scoop's gated
@@ -222,11 +222,46 @@ explicit `/etc/sudoers` rules gate cone actions. The cone's shell still
 sees its user broker, and the cone's `RestrictedFS` is not used at all
 (the cone runs against the raw `sharedFs`).
 
-`sudo_request` and `list_sudo_requests` are listed in
-`packages/webapp/src/scoops/hidden-tools.ts` so the plumbing tool-call rows do
-not spam the chat UI; the user-visible event is the `[sudo-request]` channel
-message the orchestrator delivers to the cone, and the user-visible decision is
-the `sudo_allow` / `sudo_deny` tool call.
+`sudo_request`, `list_sudo_requests`, `lick_confirm`, and `lick_dismiss` are all
+listed in `packages/webapp/src/scoops/hidden-tools.ts` so the plumbing tool-call
+rows do not spam the chat UI; the user-visible event is the `[sudo-request]`
+channel message the orchestrator delivers to the cone, and the user-visible
+signal of the decision is the card ✓/✗ flip — not a tool-call row.
+
+#### Card result UX
+
+The `[sudo-request]` message renders as a `<slicc-lick-card>` (the
+`'sudo-request'` lick channel). The card carries the orchestrator-minted
+`lickId` on its `ChatMessage`. While the request is outstanding the card stays
+in its default amber `pending` state. When the cone resolves the request, the
+orchestrator persists the decision onto the originating message's `lickState`
+and the card flips in place — a green check (`confirmed`) for `lick_confirm` or
+a red cross (`dismissed`, rendered muted) for `lick_dismiss` — so the resolved
+verdict survives reload. The design-time fixture (`?ui-fixture=1`) carries one
+sample per state (`pending` / `confirmed` / `dismissed`) for styling.
+
+#### Other actionable licks (beyond sudo)
+
+The same `lick_confirm` / `lick_dismiss` tools and `lickId` registry generalize
+to other approval-style licks. The orchestrator mints a `lickId` at emit time,
+registers a per-kind resolver, and dispatches by id in `resolveActionableLick`
+(falling through to the sudo resolver). Each card flips and persists exactly like
+the sudo card — a green check on confirm, a muted red cross on dismiss.
+
+| Lick kind                           | `lick_confirm`                                                                                                                                                  | `lick_dismiss`                                |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| **navigate · upskill**              | Runs `upskill <url> [--branch ..] [--path ..]` (the "already exists" check still guards duplicate installs).                                                    | Drops the install.                            |
+| **navigate · handoff**              | Not agent-confirmable — **human-gated**. The approval dip is the authority; the card still flips ✓ on the human's accept.                                       | Card flips ✗ on the human's dismiss.          |
+| **session-reload · mount-recovery** | Re-runs the listed `mount …` commands to re-establish dropped mounts.                                                                                           | Leaves the mounts unmounted.                  |
+| **session-reload (plain)**          | _Dismiss-only_ — the reload already happened, so there is no confirm.                                                                                           | Acknowledges and clears the notice.           |
+| **upgrade**                         | Triggers "Update workspace files" (the upgrade skill's three-way merge, scoped to the stored `from`→`to` tags). "Review changelog" stays a separate agent step. | Clears the notice without touching any files. |
+
+`navigate · handoff` is the deliberate exception: handoffs are untrusted
+external input, so the human's approval dip remains the authority gate and the
+agent does not self-approve via `lick_confirm` (the card only reflects the
+human's choice). `always` / `pattern` are sudo-only inputs and are ignored for
+these kinds. See [`docs/tools-reference.md`](./tools-reference.md) for the full
+tool inputs/outputs.
 
 ### Explicit `sudo <cmd>` shell command
 
@@ -260,18 +295,18 @@ Behavior:
 
 ### Files
 
-| Path                                                              | Role                                                                     |
-| ----------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `packages/webapp/src/shell/sudo/sudoers.ts`                       | Parser + matcher + self-protection                                       |
-| `packages/webapp/src/sudo/sudo-manager.ts`                        | Live policy store + reload + broker                                      |
-| `packages/webapp/src/fs/sudo-fs.ts`                               | FS-level gate (`createSudoFs`)                                           |
-| `packages/webapp/src/shell/sudo/command-guard.ts`                 | Command-level gate                                                       |
-| `packages/webapp/src/shell/supplemental-commands/sudo-command.ts` | `sudo <cmd>` explicit-request surface                                    |
-| `packages/webapp/src/sudo/*-broker.ts`                            | Float-specific approval brokers                                          |
-| `packages/webapp/src/sudo/cone-broker.ts`                         | Cone-mediated broker + pending-request registry                          |
-| `packages/webapp/src/scoops/scoop-management-tools.ts`            | `sudo_request` / `sudo_allow` / `sudo_deny` / `list_sudo_requests` tools |
-| `packages/node-server/src/sudo/`                                  | `/api/sudo-approve` + OS dialogs                                         |
-| `packages/vfs-root/etc/sudoers`                                   | Default commented-out template                                           |
+| Path                                                              | Role                                                                          |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `packages/webapp/src/shell/sudo/sudoers.ts`                       | Parser + matcher + self-protection                                            |
+| `packages/webapp/src/sudo/sudo-manager.ts`                        | Live policy store + reload + broker                                           |
+| `packages/webapp/src/fs/sudo-fs.ts`                               | FS-level gate (`createSudoFs`)                                                |
+| `packages/webapp/src/shell/sudo/command-guard.ts`                 | Command-level gate                                                            |
+| `packages/webapp/src/shell/supplemental-commands/sudo-command.ts` | `sudo <cmd>` explicit-request surface                                         |
+| `packages/webapp/src/sudo/*-broker.ts`                            | Float-specific approval brokers                                               |
+| `packages/webapp/src/sudo/cone-broker.ts`                         | Cone-mediated broker + pending-request registry                               |
+| `packages/webapp/src/scoops/scoop-management-tools.ts`            | `sudo_request` / `lick_confirm` / `lick_dismiss` / `list_sudo_requests` tools |
+| `packages/node-server/src/sudo/`                                  | `/api/sudo-approve` + OS dialogs                                              |
+| `packages/vfs-root/etc/sudoers`                                   | Default commented-out template                                                |
 
 ---
 

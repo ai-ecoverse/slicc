@@ -59,6 +59,7 @@ interface FakeWiring extends WcLiveWiring {
   controller: {
     setProcessing: ReturnType<typeof vi.fn>;
     addLickMessage: ReturnType<typeof vi.fn>;
+    updateLickState: ReturnType<typeof vi.fn>;
     loadMessages: ReturnType<typeof vi.fn>;
   };
 }
@@ -70,6 +71,7 @@ function makeWiring(options: {
   const controller = {
     setProcessing: vi.fn(),
     addLickMessage: vi.fn(),
+    updateLickState: vi.fn(),
     loadMessages: vi.fn(),
   };
   const switcher = document.createElement('slicc-scoop-switcher') as WcShellRefs['switcher'];
@@ -207,8 +209,23 @@ describe('createWcLiveCallbacks', () => {
       'l1',
       '[Webhook Event: x]',
       'webhook',
-      1
+      1,
+      // Non-actionable licks (webhook) carry no lickId.
+      undefined
     );
+  });
+
+  it('flips an actionable lick state for the selected scoop only', () => {
+    const wiring = makeWiring({ selected: cone });
+    const callbacks = createWcLiveCallbacks(wiring);
+    const update = { messageId: 'sudo-request-lick-1', lickId: 'lick-1', lickState: 'confirmed' };
+    callbacks.onMessageUpdate?.(cone.jid, update as never);
+    // A non-selected scoop's update is a no-op (its thread isn't mounted).
+    callbacks.onMessageUpdate?.('other', update as never);
+    // An update lacking lickId/lickState is ignored.
+    callbacks.onMessageUpdate?.(cone.jid, { messageId: 'x' } as never);
+    expect(wiring.controller.updateLickState).toHaveBeenCalledTimes(1);
+    expect(wiring.controller.updateLickState).toHaveBeenCalledWith('lick-1', 'confirmed');
   });
 
   it('replaces history for the selected scoop', () => {

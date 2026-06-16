@@ -14,7 +14,7 @@
  * concerns; delivery of the request to the cone (lick + queued message)
  * is the orchestrator's job — see {@link ConeApprovalRouter}.
  *
- * Out of scope here: the `sudo_request` / `sudo_allow` tools that the cone
+ * Out of scope here: the `sudo_request` / `lick_confirm` tools that the cone
  * will use, and the wiring of this broker into `ScoopContext` for non-cone
  * scoops (the cone keeps the user broker). Those land in follow-up tasks.
  */
@@ -63,7 +63,7 @@ export interface ConeRequestRegistryOptions {
    * (used by tests that drive resolution manually).
    */
   timeoutMs?: number;
-  /** ID generator. Defaults to a `sudo-<rand>` string. Override in tests. */
+  /** ID generator. Defaults to a `lick-<timestamp-ms>-<rand>` string. Override in tests. */
   newId?: () => string;
   /** Timer factory. Defaults to `setTimeout`. Override in tests. */
   setTimer?: (cb: () => void, ms: number) => unknown;
@@ -79,7 +79,7 @@ interface RegistryEntry {
 }
 
 function defaultId(): string {
-  return `sudo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return `lick-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 /**
@@ -88,7 +88,7 @@ function defaultId(): string {
  *   - `register(scoopJid, request)` — called from `enqueueSudoRequest` AFTER
  *     the cone-delivery side-effects (so a delivery failure can call
  *     `resolve(id, deny)` to keep the scoop from hanging).
- *   - `resolve(id, decision)` — called by the cone-side `sudo_allow` tool
+ *   - `resolve(id, decision)` — called by the cone-side `lick_confirm` tool
  *     (or its replacement in tests).
  *   - `failScoop(scoopJid)` — called from `unregisterScoop` to fail-closed
  *     every request a dropped scoop had in flight.

@@ -214,11 +214,21 @@ export class WcChatController {
   }
 
   /** Render an inbound lick (webhook/cron/…) into the thread. */
-  addLickMessage(id: string, content: string, channel: string, timestamp: number): void {
+  addLickMessage(
+    id: string,
+    content: string,
+    channel: string,
+    timestamp: number,
+    lickId?: string
+  ): void {
     // Collate into the trailing card when the previous message is a lick of
-    // the same channel — the pill counts up instead of stacking cards.
+    // the same channel — the pill counts up instead of stacking cards. NEVER
+    // collate actionable licks: if the incoming lick carries a `lickId`, or the
+    // trailing card already does, each must stand alone so exactly one card
+    // flips via `updateLickState`.
     const last = this.#messages[this.#messages.length - 1];
-    if (last && last.source === 'lick' && last.channel === channel) {
+    const actionable = !!lickId || !!last?.lickId;
+    if (!actionable && last && last.source === 'lick' && last.channel === channel) {
       last.lickParts = [...(last.lickParts ?? [last.content]), content];
       last.lickCount = last.lickParts.length;
       last.content += `\n\n${content}`;
@@ -232,7 +242,24 @@ export class WcChatController {
       timestamp,
       source: 'lick',
       channel,
+      // Actionable licks (sudo-request) carry an id so a later resolve can
+      // flip this card's state in place (see `updateLickState`).
+      lickId,
+      lickState: lickId ? 'pending' : undefined,
     });
+  }
+
+  /**
+   * Flip an actionable lick card's result state in place (no new row),
+   * located by its `lickId`. Fired when the cone settles a sudo-request;
+   * a no-op when the card isn't in the current thread (e.g. a different
+   * scoop is selected).
+   */
+  updateLickState(lickId: string, lickState: ChatMessage['lickState']): void {
+    const message = this.#messages.find((m) => m.lickId === lickId);
+    if (!message) return;
+    message.lickState = lickState;
+    this.#rerenderMessage(message);
   }
 
   /** External processing-state override (e.g. scoop status broadcasts). */

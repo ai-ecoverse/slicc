@@ -303,6 +303,71 @@ describe('WcChatController', () => {
     expect(cards[0].getAttribute('count')).toBe('2');
   });
 
+  it('carries an actionable lick id and starts pending, then flips state live', () => {
+    controller.addLickMessage(
+      'sudo-request-lick-1',
+      '[@alpha-scoop sudo-request]\nKind: command\nDetail: git push',
+      'sudo-request',
+      Date.now(),
+      'lick-1'
+    );
+    const card = thread.querySelector('slicc-lick-card');
+    expect(card?.getAttribute('kind')).toBe('sudo-request');
+    // Pending on arrival — no result glyph yet.
+    expect(card?.hasAttribute('state')).toBe(false);
+
+    // The cone confirms: the rendered card flips in place (no new row).
+    controller.updateLickState('lick-1', 'confirmed');
+    expect(thread.querySelectorAll('slicc-lick-card')).toHaveLength(1);
+    expect(thread.querySelector('slicc-lick-card')?.getAttribute('state')).toBe('confirmed');
+  });
+
+  it('never collates actionable licks — each same-channel card stands alone and flips', () => {
+    // Two consecutive same-channel actionable licks must NOT merge into a
+    // counted card — each needs its own row so exactly one flips per resolve.
+    controller.addLickMessage(
+      'sudo-request-lick-a',
+      '[@alpha-scoop sudo-request]\nKind: command\nDetail: git push',
+      'sudo-request',
+      Date.now(),
+      'lick-a'
+    );
+    controller.addLickMessage(
+      'sudo-request-lick-b',
+      '[@alpha-scoop sudo-request]\nKind: command\nDetail: rm -rf /tmp/x',
+      'sudo-request',
+      Date.now(),
+      'lick-b'
+    );
+    const cards = thread.querySelectorAll('slicc-lick-card');
+    expect(cards).toHaveLength(2);
+    expect([...cards].every((c) => !c.hasAttribute('count'))).toBe(true);
+
+    // Each resolves independently — confirming the first leaves the second pending.
+    controller.updateLickState('lick-a', 'confirmed');
+    const after = thread.querySelectorAll('slicc-lick-card');
+    expect(after).toHaveLength(2);
+    expect(after[0].getAttribute('state')).toBe('confirmed');
+    expect(after[1].hasAttribute('state')).toBe(false);
+    controller.updateLickState('lick-b', 'dismissed');
+    expect(thread.querySelectorAll('slicc-lick-card')[1].getAttribute('state')).toBe('dismissed');
+  });
+
+  it('updateLickState dismisses an actionable lick and no-ops unknown ids', () => {
+    controller.addLickMessage(
+      'sudo-request-lick-2',
+      '[@beta-scoop sudo-request]\nKind: write\nDetail: /etc/hosts',
+      'sudo-request',
+      Date.now(),
+      'lick-2'
+    );
+    controller.updateLickState('lick-2', 'dismissed');
+    expect(thread.querySelector('slicc-lick-card')?.getAttribute('state')).toBe('dismissed');
+    // Unknown lick id leaves the rendered card untouched.
+    controller.updateLickState('does-not-exist', 'confirmed');
+    expect(thread.querySelector('slicc-lick-card')?.getAttribute('state')).toBe('dismissed');
+  });
+
   it('flags prompts sent while processing as queued', () => {
     agent.emit({ type: 'message_start', messageId: 'm1' });
     controller.sendUserMessage('queued one');

@@ -16,6 +16,7 @@ import { createLogger } from '../core/logger.js';
 import { SessionStore } from '../core/session.js';
 import type { AssistantMessage, ImageContent } from '../core/types.js';
 import { FsWatcher, VirtualFS } from '../fs/index.js';
+import { type MountRecoveryEntry, shellQuote } from '../fs/mount-recovery.js';
 import { RestrictedFS } from '../fs/restricted-fs.js';
 import type { ProcessManager } from '../kernel/process-manager.js';
 import {
@@ -35,7 +36,7 @@ import { SudoManager } from '../sudo/sudo-manager.js';
 import { applyConeMemoryBudget, CONE_MEMORY_PATH } from './cone-memory-budget.js';
 import * as db from './db.js';
 import { isExternalLickChannel } from './lick-formatting.js';
-import { buildActiveLicksError, type LickManager } from './lick-manager.js';
+import { buildActiveLicksError, type LickEvent, type LickManager } from './lick-manager.js';
 import { TaskScheduler } from './scheduler.js';
 import { ScoopContext, type ScoopContextCallbacks } from './scoop-context.js';
 import { createDefaultSharedFiles, createDefaultSkills } from './skills.js';
@@ -54,6 +55,22 @@ export const SCOOP_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
 const SCOOP_NOTIFICATION_DIR = '/shared/scoop-notifications';
 const SCOOP_NOTIFICATION_MAX_FILES = 200;
 const SCOOP_NOTIFICATION_PREVIEW_CHARS = 1000;
+
+/**
+ * Reconstruct the `mount …` command for a mount-recovery entry, byte-for-byte
+ * matching what `formatMountRecoveryPrompt` rendered to the cone: local mounts
+ * re-open the directory picker via `mount '<path>'`; remote mounts re-attach
+ * via `mount --source '<source>' [--profile '<profile>'] '<path>'` (the
+ * `--profile` flag is omitted for the `default` profile). Every argument is
+ * shell-quoted because paths/sources originate from user-mounted targets.
+ */
+function buildMountRecoveryCommand(entry: MountRecoveryEntry): string {
+  if (entry.kind === 'local') {
+    return `mount ${shellQuote(entry.path)}`;
+  }
+  const profileFlag = entry.profile === 'default' ? '' : ` --profile ${shellQuote(entry.profile)}`;
+  return `mount --source ${shellQuote(entry.source)}${profileFlag} ${shellQuote(entry.path)}`;
+}
 
 function countTextLines(text: string): number {
   const normalized = text.replace(/\r\n?/g, '\n');
@@ -99,6 +116,20 @@ export interface OrchestratorCallbacks {
   onToolUIDone?: (scoopJid: string, requestId: string) => void;
   /** Called when a message is routed to a scoop (delegation, lick, etc.) */
   onIncomingMessage?: (scoopJid: string, message: ChannelMessage) => void;
+  /**
+   * Called when an already-delivered message's render-relevant state changes
+   * in place (no new message). Currently fires when an actionable lick
+   * (sudo-request) settles, so the UI can flip the rendered card's state
+   * without appending a row. The update is located by `lickId`.
+   */
+  onMessageUpdate?: (
+    scoopJid: string,
+    update: {
+      messageId: string;
+      lickId?: string;
+      lickState?: 'pending' | 'confirmed' | 'dismissed';
+    }
+  ) => void;
   /**
    * Called after a scoop has been fully unregistered, with a snapshot of
    * the scoop taken BEFORE removal (the registry entry is already gone
@@ -226,6 +257,54 @@ export class Orchestrator implements ConeApprovalRouter {
    * NOT routed through here — only scoop-originated requests do.
    */
   private sudoRegistry: ConeRequestRegistry = new ConeRequestRegistry();
+
+  /**
+   * Agent-actionable navigate (upskill) licks, keyed by the orchestrator-minted
+   * `lickId`. `lick_confirm` runs `upskill <target> [--branch ..] [--path ..]`;
+   * `lick_dismiss` drops the entry. See {@link registerNavigateLick} /
+   * {@link resolveUpskillLick}.
+   */
+  private navigateUpskillRegistry = new Map<
+    string,
+    { target: string; branch?: string; path?: string }
+  >();
+
+  /**
+   * Human-gated navigate (handoff) lick ids. Handoffs are untrusted external
+   * input, so the agent must NOT self-approve them via `lick_confirm`; the
+   * card flips only when the human resolves the approval dip (see
+   * {@link resolveNavigateHandoffByHuman}). Membership here is what makes a
+   * navigate lick's card flippable from the dip path.
+   */
+  private humanGatedNavigateLicks = new Set<string>();
+
+  /**
+   * Agent-actionable session-reload·mount-recovery licks, keyed by the
+   * orchestrator-minted `lickId`. `lick_confirm` re-runs the listed `mount …`
+   * commands reconstructed from the lick body's `MountRecoveryEntry[]`;
+   * `lick_dismiss` leaves them unmounted. See
+   * {@link registerSessionReloadLick} / {@link resolveMountRecoveryLick}.
+   */
+  private sessionReloadMountRegistry = new Map<string, { mounts: MountRecoveryEntry[] }>();
+
+  /**
+   * Plain session-reload lick ids (no mount-recovery payload). The reload
+   * already happened, so these are dismiss-only acknowledgements: `lick_dismiss`
+   * clears the notice (card → muted ✗) while `lick_confirm` is a no-op. See
+   * {@link registerSessionReloadLick} / {@link resolveSessionReloadPlainLick}.
+   */
+  private sessionReloadPlainLicks = new Set<string>();
+
+  /**
+   * Agent-actionable upgrade licks, keyed by the orchestrator-minted `lickId`.
+   * The card is a binary action: `lick_confirm` triggers "Update workspace
+   * files" (the upgrade skill's three-way merge of bundled vfs-root content
+   * into the user's VFS, scoped to the stored `from`→`to` tags); `lick_dismiss`
+   * clears the notice (card → muted ✗). Reviewing the changelog is NOT a card
+   * action — it stays a separate agent step. See {@link registerUpgradeLick} /
+   * {@link resolveUpgradeLick}.
+   */
+  private upgradeLickRegistry = new Map<string, { from: string; to: string }>();
 
   constructor(
     container: HTMLElement,
@@ -1413,7 +1492,7 @@ export class Orchestrator implements ConeApprovalRouter {
     const scoopForLick = this.scoops.get(scoopJid);
     this.lickManager?.emitEvent({
       type: 'sudo-request',
-      sudoRequestId: id,
+      lickId: id,
       sudoKind: request.kind,
       sudoDetail: request.detail,
       sudoScoopName: scoopForLick?.assistantLabel ?? scoopForLick?.name ?? scoopJid,
@@ -1447,7 +1526,7 @@ export class Orchestrator implements ConeApprovalRouter {
 
   /**
    * Settle a pending cone-mediated sudo request. Used by the cone's
-   * `sudo_allow` / `sudo_deny` tools (and tests). Returns `true` when an
+   * `lick_confirm` / `lick_dismiss` tools (and tests). Returns `true` when an
    * entry was actually resolved, `false` for unknown / already-settled /
    * timed-out ids so the caller can surface that as "this request expired"
    * to the cone.
@@ -1545,7 +1624,325 @@ export class Orchestrator implements ConeApprovalRouter {
     }
 
     const settled = this.resolveSudoRequest(id, decision);
+    if (settled) {
+      await this.persistLickDecision(id, decision.decision);
+    }
     return { settled, persisted, persistedPattern, persistError, scoopFolder, kind };
+  }
+
+  /**
+   * Mint a stable `lickId` for a navigate (handoff / upskill) lick and register
+   * it so a later resolution can flip the rendered card. Upskill licks are
+   * agent-actionable (`lick_confirm` runs `upskill`); handoff licks stay
+   * human-gated (the approval dip is the authority — see
+   * {@link resolveNavigateHandoffByHuman}). Called from the kernel host's lick
+   * router before the cone `ChannelMessage` is built so the id flows onto both
+   * the UI chip and the persisted message. Mirrors the `lick-<ts>-<rand>` id
+   * shape used by {@link ConeRequestRegistry}.
+   */
+  registerNavigateLick(event: LickEvent): string {
+    const id = `lick-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const body = (event.body ?? {}) as Record<string, unknown>;
+    const verb = typeof body.verb === 'string' ? body.verb : undefined;
+    const target = typeof body.target === 'string' ? body.target : undefined;
+    if (verb === 'upskill' && target) {
+      this.navigateUpskillRegistry.set(id, {
+        target,
+        branch: typeof body.branch === 'string' ? body.branch : undefined,
+        path: typeof body.path === 'string' ? body.path : undefined,
+      });
+    } else if (verb === 'handoff') {
+      this.humanGatedNavigateLicks.add(id);
+    }
+    return id;
+  }
+
+  /**
+   * Mint a stable `lickId` for a session-reload lick and register it so a later
+   * resolution can flip the rendered card. Mount-recovery licks (non-empty
+   * `mounts`) are agent-actionable (`lick_confirm` re-runs the listed `mount …`
+   * commands); plain reload notices are dismiss-only (the reload already
+   * happened — nothing to confirm). Called from the kernel host's lick router
+   * before the cone `ChannelMessage` is built so the id flows onto both the UI
+   * chip and the persisted message. Mirrors {@link registerNavigateLick}.
+   */
+  registerSessionReloadLick(event: LickEvent): string {
+    const id = `lick-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const body = (event.body ?? {}) as { reason?: string; mounts?: MountRecoveryEntry[] };
+    const mounts = Array.isArray(body.mounts) ? body.mounts : [];
+    if (body.reason === 'mount-recovery') {
+      // Empty mount-recovery payloads are dropped by the formatter, so only
+      // register when there is something to re-mount — avoids a dangling entry.
+      if (mounts.length > 0) {
+        this.sessionReloadMountRegistry.set(id, { mounts });
+      }
+    } else {
+      this.sessionReloadPlainLicks.add(id);
+    }
+    return id;
+  }
+
+  /**
+   * Mint a stable `lickId` for an upgrade lick and register it so a later
+   * resolution can flip the rendered card. Upgrade licks are agent-actionable
+   * with a binary mapping: `lick_confirm` triggers "Update workspace files"
+   * (the three-way merge between the stored `from`→`to` tags); `lick_dismiss`
+   * clears the notice. Called from the kernel host's lick router before the
+   * cone `ChannelMessage` is built so the id flows onto both the UI chip and
+   * the persisted message. Mirrors {@link registerNavigateLick}.
+   */
+  registerUpgradeLick(event: LickEvent): string {
+    const id = `lick-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const from = (event as { upgradeFromVersion?: string }).upgradeFromVersion ?? 'unknown';
+    const to = (event as { upgradeToVersion?: string }).upgradeToVersion ?? 'unknown';
+    this.upgradeLickRegistry.set(id, { from, to });
+    return id;
+  }
+
+  /**
+   * Resolve an actionable lick for the cone's `lick_confirm` / `lick_dismiss`
+   * tools. Dispatches to the navigate-upskill resolver, the session-reload
+   * mount-recovery resolver, the plain session-reload (dismiss-only) resolver,
+   * or the upgrade resolver by id, otherwise falls through to the sudo-request
+   * resolver.
+   * Handoff lick ids are intentionally NOT resolvable here — they are
+   * human-gated, so they fall through and report unknown / already-resolved to
+   * the agent.
+   */
+  async resolveActionableLick(
+    id: string,
+    decision: SudoDecision
+  ): Promise<{
+    settled: boolean;
+    persisted: boolean;
+    persistedPattern?: string;
+    persistError?: string;
+    scoopFolder?: string;
+    kind?: SudoRequest['kind'];
+    message?: string;
+  }> {
+    if (this.navigateUpskillRegistry.has(id)) {
+      return this.resolveUpskillLick(id, decision);
+    }
+    if (this.sessionReloadMountRegistry.has(id)) {
+      return this.resolveMountRecoveryLick(id, decision);
+    }
+    if (this.sessionReloadPlainLicks.has(id)) {
+      return this.resolveSessionReloadPlainLick(id, decision);
+    }
+    if (this.upgradeLickRegistry.has(id)) {
+      return this.resolveUpgradeLick(id, decision);
+    }
+    return this.resolveSudoRequestAndPersist(id, decision);
+  }
+
+  /**
+   * Settle an agent-actionable navigate·upskill lick. On allow/always it runs
+   * `upskill <target> [--branch ..] [--path ..]` in the cone's shell (upskill's
+   * on-disk "already exists" check still guards duplicate installs); on deny it
+   * just drops. Either way the originating card flips ('confirmed' / muted
+   * 'dismissed') and persists via {@link persistLickDecision}.
+   */
+  private async resolveUpskillLick(
+    id: string,
+    decision: SudoDecision
+  ): Promise<{ settled: boolean; persisted: boolean; message?: string }> {
+    const entry = this.navigateUpskillRegistry.get(id);
+    if (!entry) return { settled: false, persisted: false };
+    this.navigateUpskillRegistry.delete(id);
+    let message: string | undefined;
+    if (decision.decision !== 'deny') {
+      message = await this.runUpskillInstall(entry);
+    }
+    await this.persistLickDecision(id, decision.decision);
+    return { settled: true, persisted: false, message };
+  }
+
+  /**
+   * Run the `upskill` install for a confirmed navigate·upskill lick through the
+   * cone's shell (which carries the cone fs, proxied fetch, and skills-dir
+   * discovery). Each argument is single-quoted because `target` / `branch` /
+   * `path` originate from an attacker-controlled `Link` header — never
+   * interpolate them raw into the command string. Returns the combined
+   * stdout/stderr (or an error line) for the tool to surface verbatim.
+   */
+  private async runUpskillInstall(entry: {
+    target: string;
+    branch?: string;
+    path?: string;
+  }): Promise<string> {
+    const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
+    const shell = cone ? this.contexts.get(cone.jid)?.getShell() : null;
+    if (!shell) return 'upskill could not run: no cone shell available.';
+    const quote = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+    const parts = ['upskill'];
+    if (entry.branch) parts.push('--branch', quote(entry.branch));
+    if (entry.path) parts.push('--path', quote(entry.path));
+    parts.push(quote(entry.target));
+    try {
+      const result = await shell.executeCommand(parts.join(' '));
+      const out = `${result.stdout}${result.stderr}`.trim();
+      return out.length > 0 ? out : `upskill exited ${result.exitCode}.`;
+    } catch (err) {
+      return `upskill failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  /**
+   * Settle an agent-actionable session-reload·mount-recovery lick. On
+   * allow/always it re-runs the listed `mount …` commands (reconstructed from
+   * the lick body's `MountRecoveryEntry[]`) in the cone's shell; on deny it
+   * leaves the mounts unmounted. Either way the originating card flips
+   * ('confirmed' / muted 'dismissed') and persists via {@link persistLickDecision}.
+   */
+  private async resolveMountRecoveryLick(
+    id: string,
+    decision: SudoDecision
+  ): Promise<{ settled: boolean; persisted: boolean; message?: string }> {
+    const entry = this.sessionReloadMountRegistry.get(id);
+    if (!entry) return { settled: false, persisted: false };
+    this.sessionReloadMountRegistry.delete(id);
+    let message: string | undefined;
+    if (decision.decision !== 'deny') {
+      message = await this.runMountRecovery(entry.mounts);
+    }
+    await this.persistLickDecision(id, decision.decision);
+    return { settled: true, persisted: false, message };
+  }
+
+  /**
+   * Re-run the `mount …` commands for a confirmed mount-recovery lick through
+   * the cone's shell (which carries the shared fs and the gesture-aware `mount`
+   * command). Each command is reconstructed from the persisted
+   * `MountRecoveryEntry` exactly as `formatMountRecoveryPrompt` rendered it, so
+   * the agent re-runs what the user saw. Returns the combined per-command
+   * output (or an error line) for the tool to surface verbatim.
+   */
+  private async runMountRecovery(mounts: MountRecoveryEntry[]): Promise<string> {
+    const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
+    const shell = cone ? this.contexts.get(cone.jid)?.getShell() : null;
+    if (!shell) return 'mount recovery could not run: no cone shell available.';
+    const outputs: string[] = [];
+    for (const mount of mounts) {
+      const cmd = buildMountRecoveryCommand(mount);
+      try {
+        const result = await shell.executeCommand(cmd);
+        const out = `${result.stdout}${result.stderr}`.trim();
+        outputs.push(out.length > 0 ? out : `${cmd} exited ${result.exitCode}.`);
+      } catch (err) {
+        outputs.push(`${cmd} failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return outputs.join('\n');
+  }
+
+  /**
+   * Settle a plain session-reload lick (no mount-recovery payload). The reload
+   * already completed, so these are dismiss-only acknowledgements:
+   * `lick_dismiss` (deny) clears the notice and mutes the card; `lick_confirm`
+   * is a no-op that leaves the entry pending and tells the agent there is
+   * nothing to confirm.
+   */
+  private async resolveSessionReloadPlainLick(
+    id: string,
+    decision: SudoDecision
+  ): Promise<{ settled: boolean; persisted: boolean; message?: string }> {
+    if (!this.sessionReloadPlainLicks.has(id)) return { settled: false, persisted: false };
+    if (decision.decision !== 'deny') {
+      return {
+        settled: true,
+        persisted: false,
+        message:
+          'Nothing to confirm — the reload already completed. Use lick_dismiss to acknowledge and clear this notice.',
+      };
+    }
+    this.sessionReloadPlainLicks.delete(id);
+    await this.persistLickDecision(id, 'deny');
+    return { settled: true, persisted: false, message: 'Session-reload notice acknowledged.' };
+  }
+
+  /**
+   * Settle an agent-actionable upgrade lick. The card is a binary action: on
+   * allow/always (`lick_confirm` → "Update workspace files") it returns the
+   * merge directive so the agent runs the upgrade skill's three-way merge of
+   * bundled vfs-root content (scoped to the stored `from`→`to` tags); on deny
+   * (`lick_dismiss`) it clears the notice without touching any files. Reviewing
+   * the changelog is NOT handled here — it stays a separate agent step the
+   * agent can run before deciding. Either way the originating card flips
+   * ('confirmed' / muted 'dismissed') and persists via {@link persistLickDecision}.
+   */
+  private async resolveUpgradeLick(
+    id: string,
+    decision: SudoDecision
+  ): Promise<{ settled: boolean; persisted: boolean; message?: string }> {
+    const entry = this.upgradeLickRegistry.get(id);
+    if (!entry) return { settled: false, persisted: false };
+    this.upgradeLickRegistry.delete(id);
+    let message: string;
+    if (decision.decision === 'deny') {
+      message = 'Upgrade dismissed — workspace files were left unchanged.';
+    } else {
+      message =
+        `Update workspace files: run the upgrade skill's three-way merge of bundled ` +
+        `vfs-root content from v${entry.from} → v${entry.to} ` +
+        `(base = v${entry.from}, theirs = v${entry.to}, ours = the user's VFS). ` +
+        `Apply the per-file outcomes and present the summary; do not delete files or ` +
+        `overwrite local edits without showing the result.`;
+    }
+    await this.persistLickDecision(id, decision.decision);
+    return { settled: true, persisted: false, message };
+  }
+
+  /**
+   * Flip a human-gated navigate·handoff lick card once the user resolves the
+   * approval dip. Returns `true` when `lickId` matched a pending handoff lick.
+   * Called from the dip-lick routing path (the shared
+   * `OffscreenBridge.routeSprinkleLick`), NOT from the agent tools — this is
+   * what preserves the human-approval gate while still letting the card show
+   * ✓ on accept / muted ✗ on dismiss.
+   */
+  async resolveNavigateHandoffByHuman(lickId: string, accepted: boolean): Promise<boolean> {
+    if (!this.humanGatedNavigateLicks.has(lickId)) return false;
+    this.humanGatedNavigateLicks.delete(lickId);
+    await this.persistLickDecision(lickId, accepted ? 'allow' : 'deny');
+    return true;
+  }
+
+  /**
+   * Flip the rendered + persisted state of an actionable lick once its
+   * decision settles: locate the cone's stored `sudo-request` message by
+   * `lickId`, stamp `lickState` ('confirmed' for allow/always, 'dismissed'
+   * for deny), re-save it to the message store (no new row), and notify the
+   * UI to re-render just that card via {@link OrchestratorCallbacks.onMessageUpdate}.
+   * Best-effort — a missing message or store error is logged, not thrown.
+   */
+  private async persistLickDecision(
+    lickId: string,
+    decision: SudoDecision['decision']
+  ): Promise<void> {
+    const lickState = decision === 'deny' ? 'dismissed' : 'confirmed';
+    const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
+    if (!cone) return;
+    try {
+      const messages = await db.getMessagesForScoop(cone.jid);
+      const target = messages.find((m) => m.lickId === lickId || m.id === `sudo-request-${lickId}`);
+      if (!target) {
+        log.warn('Lick decision: no stored message found to flip', { lickId });
+        return;
+      }
+      target.lickState = lickState;
+      await db.saveMessage(target);
+      this.callbacks.onMessageUpdate?.(cone.jid, {
+        messageId: target.id,
+        lickId,
+        lickState,
+      });
+    } catch (err) {
+      log.warn('Failed to persist lick decision', {
+        lickId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**
@@ -1567,7 +1964,7 @@ export class Orchestrator implements ConeApprovalRouter {
   /**
    * Build the cone-facing `sudo-request` `ChannelMessage` and hand it to
    * `handleMessage`. The content is structured so the cone can reproduce
-   * the request id verbatim in its `sudo_allow` tool call. `sudo-request`
+   * the lick id verbatim in its `lick_confirm` tool call. `sudo-request`
    * is a member of `EXTERNAL_LICK_CHANNELS`, so `handleMessage` fires the
    * UI chip (`onIncomingMessage`) automatically — no explicit pre-fire
    * needed here (which would double-fire the chip).
@@ -1592,6 +1989,10 @@ export class Orchestrator implements ConeApprovalRouter {
       timestamp: new Date().toISOString(),
       fromAssistant: false,
       channel: 'sudo-request',
+      // Carry the actionable lick id so the resolve path can locate this
+      // stored message (and its rendered card) when the cone settles it.
+      lickId: id,
+      lickState: 'pending',
     };
 
     await this.handleMessage(msg);
@@ -1604,7 +2005,7 @@ export class Orchestrator implements ConeApprovalRouter {
   ): string {
     const lines = [
       `[@${senderName} sudo-request]`,
-      `Request ID: ${id}`,
+      `Lick ID: ${id}`,
       `Kind: ${request.kind}`,
       `Detail: ${request.detail}`,
     ];
@@ -1613,7 +2014,7 @@ export class Orchestrator implements ConeApprovalRouter {
     }
     lines.push(
       '',
-      `Use the sudo_allow tool with request_id="${id}" to approve, deny, or always-approve this request.`
+      `Use the lick_confirm tool with lick_id="${id}" to approve (or always-approve with a pattern), or lick_dismiss with lick_id="${id}" to deny.`
     );
     return lines.join('\n');
   }
@@ -2246,7 +2647,7 @@ export class Orchestrator implements ConeApprovalRouter {
       // drain it. The cone keeps the user broker for its own FS / shell gate.
       onSudoRequest: scoop.isCone ? undefined : (request) => this.enqueueSudoRequest(jid, request),
       onSudoResolve: scoop.isCone
-        ? (id, decision) => this.resolveSudoRequestAndPersist(id, decision)
+        ? (id, decision) => this.resolveActionableLick(id, decision)
         : undefined,
       onListSudoRequests: scoop.isCone ? () => this.listPendingSudoRequests() : undefined,
       getBrowserAPI: () => this.callbacks.getBrowserAPI(),

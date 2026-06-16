@@ -58,6 +58,24 @@ describe('formatLickEventForCone', () => {
     expect(out!.content).toContain('upgrade');
   });
 
+  it('upgrade with a registered lickId surfaces the binary confirm/dismiss guidance', () => {
+    const event = {
+      type: 'upgrade',
+      upgradeFromVersion: '0.1.0',
+      upgradeToVersion: '0.2.0',
+      timestamp: '2026-04-30T12:00:00Z',
+      body: { releasedAt: null },
+      lickId: 'lick-upgrade-1',
+    } as unknown as LickEvent;
+    const out = formatLickEventForCone(event);
+    expect(out!.content).toContain('Lick ID: lick-upgrade-1');
+    expect(out!.content).toContain('lick_confirm');
+    expect(out!.content).toContain('Update workspace files');
+    expect(out!.content).toContain('lick_dismiss');
+    // Changelog stays a separate step, not a card action.
+    expect(out!.content).toContain('separate step');
+  });
+
   it('upgrade with no releasedAt omits the Released: line', () => {
     const event = {
       type: 'upgrade',
@@ -157,6 +175,115 @@ describe('formatLickEventForCone', () => {
   });
 });
 
+describe('session-reload lick actionable formatting', () => {
+  it('appends Lick ID + confirm/dismiss guidance for a mount-recovery reload', () => {
+    const out = formatLickEventForCone({
+      type: 'session-reload',
+      lickId: 'lick-reload-1',
+      timestamp: '2026-06-10T00:00:00.000Z',
+      body: {
+        reason: 'mount-recovery',
+        mounts: [{ kind: 'local', path: '/mnt/x', dirName: 'x' }],
+      },
+    } as never);
+    expect(out).not.toBeNull();
+    expect(out!.label).toBe('Session Reload');
+    expect(out!.content).toContain('/mnt/x');
+    expect(out!.content).toContain('Lick ID: lick-reload-1');
+    expect(out!.content).toContain('lick_confirm');
+    expect(out!.content).toContain('lick_dismiss');
+  });
+
+  it('omits the guidance for a mount-recovery reload with no registered lickId', () => {
+    const out = formatLickEventForCone({
+      type: 'session-reload',
+      timestamp: '2026-06-10T00:00:00.000Z',
+      body: {
+        reason: 'mount-recovery',
+        mounts: [{ kind: 'local', path: '/mnt/x', dirName: 'x' }],
+      },
+    } as never);
+    expect(out).not.toBeNull();
+    expect(out!.content).not.toContain('Lick ID:');
+    expect(out!.content).not.toContain('lick_confirm');
+  });
+
+  it('appends Lick ID + dismiss-only guidance for a plain reload', () => {
+    const out = formatLickEventForCone({
+      type: 'session-reload',
+      lickId: 'lick-reload-2',
+      timestamp: '2026-06-10T00:00:00.000Z',
+      body: { reason: 'restored' },
+    } as never);
+    expect(out).not.toBeNull();
+    expect(out!.label).toBe('Session Reload');
+    expect(out!.content).toContain('Lick ID: lick-reload-2');
+    expect(out!.content).toContain('lick_dismiss');
+    // Plain reload is dismiss-only — there is NO confirm action.
+    expect(out!.content).not.toContain('lick_confirm');
+  });
+
+  it('still drops an empty mount-recovery list even when a lickId is set', () => {
+    const out = formatLickEventForCone({
+      type: 'session-reload',
+      lickId: 'lick-reload-3',
+      timestamp: '2026-06-10T00:00:00.000Z',
+      body: { reason: 'mount-recovery', mounts: [] },
+    } as never);
+    expect(out).toBeNull();
+  });
+});
+
+describe('navigate lick actionable formatting', () => {
+  it('appends Lick ID + lick_confirm guidance for an upskill navigate lick', () => {
+    const out = formatLickEventForCone({
+      type: 'navigate',
+      navigateUrl: 'https://origin',
+      lickId: 'lick-nav-1',
+      timestamp: '2026-06-10T00:00:00.000Z',
+      body: { url: 'https://origin', verb: 'upskill', target: 'https://github.com/o/r' },
+    } as never);
+    expect(out).not.toBeNull();
+    expect(out!.label).toBe('Navigate Event');
+    expect(out!.content).toContain('[Navigate Event: https://origin]');
+    expect(out!.content).toContain('Lick ID: lick-nav-1');
+    expect(out!.content).toContain('lick_confirm');
+    expect(out!.content).toContain('lick_dismiss');
+  });
+
+  it('appends Lick ID + human-gate guidance for a handoff navigate lick', () => {
+    const out = formatLickEventForCone({
+      type: 'navigate',
+      navigateUrl: 'https://origin',
+      lickId: 'lick-nav-2',
+      timestamp: '2026-06-10T00:00:00.000Z',
+      body: {
+        url: 'https://origin',
+        verb: 'handoff',
+        target: 'https://origin',
+        instruction: 'do x',
+      },
+    } as never);
+    expect(out).not.toBeNull();
+    expect(out!.content).toContain('Lick ID: lick-nav-2');
+    expect(out!.content).toContain('human-gated');
+    expect(out!.content).toContain("data:{lickId:'lick-nav-2'}");
+    // Handoff must NOT instruct self-approval via the agent tools.
+    expect(out!.content).toContain('do NOT use `lick_confirm`');
+  });
+
+  it('falls back to the plain JSON block when no lickId is registered', () => {
+    const out = formatLickEventForCone({
+      type: 'navigate',
+      navigateUrl: 'https://origin',
+      timestamp: '2026-06-10T00:00:00.000Z',
+      body: { url: 'https://origin', verb: 'upskill', target: 'https://github.com/o/r' },
+    } as never);
+    expect(out!.content).not.toContain('Lick ID:');
+    expect(out!.content).not.toContain('lick_confirm');
+  });
+});
+
 describe('cherry lick formatting', () => {
   it('formats a cherry host event for the cone', () => {
     const formatted = formatLickEventForCone({
@@ -196,32 +323,33 @@ describe("'sudo-request' lick formatting", () => {
     expect(EXTERNAL_LICK_CHANNELS.has('sudo-request')).toBe(true);
   });
 
-  it('formats a sudo-request with id + kind + detail + sudo_allow hint', () => {
+  it('formats a sudo-request with id + kind + detail + lick_confirm hint', () => {
     const formatted = formatLickEventForCone({
       type: 'sudo-request',
-      sudoRequestId: 'sudo-req-1',
+      lickId: 'lick-req-1',
       sudoKind: 'write',
       sudoDetail: '/workspace/build/output.txt',
       sudoScoopName: 'tight-sandbox-scoop',
       sudoSuggestedPattern: '/workspace/build/**',
       timestamp: '2026-06-08T00:00:00.000Z',
-      body: { requestId: 'sudo-req-1' },
+      body: { requestId: 'lick-req-1' },
     } as never);
     expect(formatted).not.toBeNull();
     expect(formatted!.label).toBe('Scoop Access Request');
     expect(formatted!.content).toContain('[Scoop Access Request: tight-sandbox-scoop]');
-    expect(formatted!.content).toContain('Request ID: sudo-req-1');
+    expect(formatted!.content).toContain('Lick ID: lick-req-1');
     expect(formatted!.content).toContain('Kind: write');
     expect(formatted!.content).toContain('Detail: /workspace/build/output.txt');
     expect(formatted!.content).toContain('Suggested pattern: /workspace/build/**');
-    expect(formatted!.content).toContain('sudo_allow');
-    expect(formatted!.content).toContain('request_id="sudo-req-1"');
+    expect(formatted!.content).toContain('lick_confirm');
+    expect(formatted!.content).toContain('lick_dismiss');
+    expect(formatted!.content).toContain('lick_id="lick-req-1"');
   });
 
   it('omits the suggested-pattern line when no pattern is provided', () => {
     const formatted = formatLickEventForCone({
       type: 'sudo-request',
-      sudoRequestId: 'sudo-req-2',
+      lickId: 'lick-req-2',
       sudoKind: 'command',
       sudoDetail: 'rm -rf /tmp/x',
       sudoScoopName: 'scoop',

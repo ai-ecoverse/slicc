@@ -99,6 +99,28 @@ describe('buildThreadChildren', () => {
     expect(card.children).toHaveLength(2);
   });
 
+  it('maps an actionable lick lickState onto the card state attribute', () => {
+    const base = {
+      id: 'sudo-request-lick-1',
+      role: 'user' as const,
+      content: '[@alpha-scoop sudo-request]\nKind: command\nDetail: git push',
+      timestamp: Date.now(),
+      source: 'lick',
+      channel: 'sudo-request',
+      lickId: 'lick-1',
+    };
+    // Pending / unset leaves the card stateless (default amber, no glyph).
+    const [pending] = messageEls({ ...base, lickState: 'pending' });
+    expect(pending.hasAttribute('state')).toBe(false);
+    const [unset] = messageEls(base);
+    expect(unset.hasAttribute('state')).toBe(false);
+    // A settled lick stamps confirmed / dismissed onto the card.
+    const [confirmed] = messageEls({ ...base, lickState: 'confirmed' });
+    expect(confirmed.getAttribute('state')).toBe('confirmed');
+    const [dismissed] = messageEls({ ...base, lickState: 'dismissed' });
+    expect(dismissed.getAttribute('state')).toBe('dismissed');
+  });
+
   it('renders plain user messages as user bubbles', () => {
     const userCount = fixture.filter(
       (m) => m.role === 'user' && !m.source && m.channel !== 'delegation'
@@ -207,6 +229,35 @@ describe('collateLickMessages', () => {
     expect(first.lickCount).toBeUndefined();
     expect(first.content).toBe('one');
   });
+
+  it('never collates actionable licks — each keeps its own row + persisted lickState', () => {
+    function actionable(
+      id: string,
+      lickId: string,
+      lickState: ChatMessage['lickState']
+    ): ChatMessage {
+      return {
+        id,
+        role: 'user',
+        content: '[Scoop Access Request: alpha]',
+        timestamp: 1,
+        source: 'lick',
+        channel: 'sudo-request',
+        lickId,
+        lickState,
+      };
+    }
+    const out = collateLickMessages([
+      actionable('a', 'lick-a', 'confirmed'),
+      actionable('b', 'lick-b', 'pending'),
+    ]);
+    expect(out.map((m) => m.id)).toEqual(['a', 'b']);
+    expect(out.every((m) => (m.lickCount ?? 1) === 1)).toBe(true);
+    expect(out[0].lickId).toBe('lick-a');
+    expect(out[0].lickState).toBe('confirmed');
+    expect(out[1].lickId).toBe('lick-b');
+    expect(out[1].lickState).toBe('pending');
+  });
 });
 
 describe('tool presentation', () => {
@@ -230,8 +281,8 @@ describe('tool presentation', () => {
       ['edit_file', { path: '/tmp/a.ts' }, 'Edit a.ts', 'file-pen'],
       ['send_message', { message: 'hi' }, 'Send a message to Sliccy', 'message-circle'],
       ['feed_scoop', { name: 'pomodoro' }, 'Feed the pomodoro scoop', 'utensils'],
-      ['sudo_allow', { request_id: 'sudo-1' }, 'Grant the scoop access', 'shield-check'],
-      ['sudo_deny', { request_id: 'sudo-1' }, 'Hold the scoop back', 'shield-x'],
+      ['lick_confirm', { lick_id: 'lick-1' }, 'Grant the scoop access', 'shield-check'],
+      ['lick_dismiss', { lick_id: 'lick-1' }, 'Hold the scoop back', 'shield-x'],
       [
         'sudo_request',
         { kind: 'command', detail: 'git push' },

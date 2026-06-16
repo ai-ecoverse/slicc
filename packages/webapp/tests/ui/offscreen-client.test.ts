@@ -44,6 +44,7 @@ describe('OffscreenClient', () => {
     onScoopCreated: vi.fn(),
     onScoopListUpdate: vi.fn(),
     onIncomingMessage: vi.fn(),
+    onMessageUpdate: vi.fn(),
     onScoopActivity: vi.fn(),
   };
 
@@ -192,6 +193,22 @@ describe('OffscreenClient', () => {
     });
 
     expect(callbacks.onScoopActivity).not.toHaveBeenCalled();
+  });
+
+  it('relays message-updated to onMessageUpdate (live lick flip)', () => {
+    simulateMessage('offscreen', {
+      type: 'message-updated',
+      scoopJid: 'cone_123',
+      messageId: 'sudo-request-lick-1',
+      lickId: 'lick-1',
+      lickState: 'confirmed',
+    });
+
+    expect(callbacks.onMessageUpdate).toHaveBeenCalledWith('cone_123', {
+      messageId: 'sudo-request-lick-1',
+      lickId: 'lick-1',
+      lickState: 'confirmed',
+    });
   });
 
   it('handles scoop-status changes', () => {

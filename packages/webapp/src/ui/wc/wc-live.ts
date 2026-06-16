@@ -222,8 +222,18 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
             message.id,
             message.content,
             message.channel,
-            new Date(message.timestamp).getTime()
+            new Date(message.timestamp).getTime(),
+            message.lickId
           );
+      }
+    },
+    onMessageUpdate: (jid, update) => {
+      // Live flip of an actionable lick card's state (sudo-request settled).
+      // Only the selected scoop's thread is mounted, so a non-selected update
+      // is a no-op here — the persisted lickState rehydrates it on next load.
+      if (wiring.getSelected()?.jid !== jid) return;
+      if (update.lickId && update.lickState) {
+        wiring.getController()?.updateLickState(update.lickId, update.lickState);
       }
     },
     onScoopMessagesReplaced: (jid, messages) => {

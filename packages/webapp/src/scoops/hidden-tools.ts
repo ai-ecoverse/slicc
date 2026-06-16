@@ -25,9 +25,12 @@ export const HIDDEN_TOOL_NAMES: ReadonlySet<string> = new Set([
   // `sudo_request` is the scoop-side plumbing for cone-mediated approval;
   // the user-visible event is the `[sudo-request]` channel message the
   // orchestrator delivers to the cone. `list_sudo_requests` is the
-  // cone-side introspection counterpart. The actual decisions
-  // (`sudo_allow` / `sudo_deny`) are user-visible cone actions and stay
-  // un-hidden so they render as normal tool-call rows in the chat UI.
+  // cone-side introspection counterpart.
   'sudo_request',
   'list_sudo_requests',
+  // `lick_confirm` / `lick_dismiss` are cone-side decision mechanics; the
+  // user-visible feedback is the card ✓/✗ flip, so the tool-call rows are
+  // hidden to avoid duplicate "lick_confirm done" noise in the chat UI.
+  'lick_confirm',
+  'lick_dismiss',
 ]);

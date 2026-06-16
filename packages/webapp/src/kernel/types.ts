@@ -149,6 +149,14 @@ export interface KernelClientCallbacks {
   onScoopCreated: (scoop: RegisteredScoop) => void;
   onScoopListUpdate: (scoops: ScoopListMsg['scoops']) => void;
   onIncomingMessage: (scoopJid: string, message: IncomingMessageMsg['message']) => void;
+  onMessageUpdate?: (
+    scoopJid: string,
+    update: {
+      messageId: string;
+      lickId?: string;
+      lickState?: 'pending' | 'confirmed' | 'dismissed';
+    }
+  ) => void;
   onScoopMessagesReplaced?: (
     scoopJid: string,
     messages: ScoopMessagesReplacedMsg['messages']
