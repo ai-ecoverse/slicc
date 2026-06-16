@@ -191,6 +191,9 @@ function parseComparator(cmpStr: string): Comparator {
   }
 
   if (rest === '' || rest === '*' || rest === 'x' || rest === 'X') {
+    if (op === '>' || op === '<') {
+      return { op: '<', version: makeVersion(0, 0, 0, ['0']) };
+    }
     return { op: '', version: emptyVersion() };
   }
 
@@ -380,7 +383,6 @@ function sameTuple(a: SemVer, b: SemVer): boolean {
 
 function setAdmitsPrerelease(version: SemVer, set: ComparatorSet): boolean {
   for (const cmp of set.comparators) {
-    if (cmp.op === '' && wildcardMajor(cmp.version)) return true;
     if (cmp.version.prerelease.length > 0 && sameTuple(version, cmp.version)) {
       return true;
     }
