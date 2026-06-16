@@ -89,6 +89,10 @@ export class RealmRpcClient {
     port.start?.();
   }
 
+  get pendingCount(): number {
+    return this.pending.size;
+  }
+
   call<T = unknown>(channel: RealmRpcChannel, op: string, args: unknown[] = []): Promise<T> {
     if (this.disposed) {
       return Promise.reject(new Error('realm-rpc: client disposed'));
