@@ -21,8 +21,10 @@ import {
   TRAY_WORKER_STORAGE_KEY,
 } from '../../scoops/tray-runtime-config.js';
 import {
+  getConnectedFollowers,
   setConnectedFollowersGetter,
   setTrayResetter,
+  writeConnectedFollowersToShim,
 } from '../../shell/supplemental-commands/host-command.js';
 import { setupStandalonePanelRpc } from '../boot/setup-standalone-panel-rpc.js';
 import { runHostedBootstrap } from '../boot/setup-standalone-tray-init-hosted.js';
@@ -159,6 +161,9 @@ function createLeaderOptionsFactory(
           ? `tray · ${count} follower${count === 1 ? '' : 's'}`
           : (deps.baseFloatLabel ?? 'standalone · live')
       );
+      // Mirror the live follower list into the shim so the standalone
+      // worker-side `host` command (no live getter) reflects it.
+      writeConnectedFollowersToShim(getConnectedFollowers());
     },
     onRemoteTransportsCleaned: (runtimeId) => remoteCdpBridge.cleanupRuntime(runtimeId),
     onForwardedLick: (event) => client.sendForwardedLick(event),
@@ -198,6 +203,9 @@ function createLeaderHookSetup(
     },
     clearLeaderHooks: () => {
       setConnectedFollowersGetter(null);
+      // Leader stopped — clear the worker-visible follower shim so `host`
+      // doesn't keep reporting the followers of a tray we just left.
+      writeConnectedFollowersToShim([]);
       setTrayResetter(null);
       deps.getController()?.setOnLocalUserMessage(undefined);
       deps.sprinkleManager.setSendToSprinkleHook(undefined);
@@ -394,6 +402,9 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
     win.localStorage.setItem('slicc.leaderTrayStatus', JSON.stringify(status));
   });
   win.localStorage.setItem('slicc.leaderTrayStatus', JSON.stringify(getLeaderTrayRuntimeStatus()));
+  // Seed the follower shim on boot so a stale value from a previous session
+  // can't make the worker-side `host` report phantom followers.
+  writeConnectedFollowersToShim(getConnectedFollowers(), win.localStorage);
 
   installRoleSwitchListeners(deps, state, clearLeaderHooks, performTrayLeaveLocally);
 
