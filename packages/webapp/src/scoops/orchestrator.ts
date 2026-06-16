@@ -100,6 +100,20 @@ export interface OrchestratorCallbacks {
   /** Called when a message is routed to a scoop (delegation, lick, etc.) */
   onIncomingMessage?: (scoopJid: string, message: ChannelMessage) => void;
   /**
+   * Called when an already-delivered message's render-relevant state changes
+   * in place (no new message). Currently fires when an actionable lick
+   * (sudo-request) settles, so the UI can flip the rendered card's state
+   * without appending a row. The update is located by `lickId`.
+   */
+  onMessageUpdate?: (
+    scoopJid: string,
+    update: {
+      messageId: string;
+      lickId?: string;
+      lickState?: 'pending' | 'confirmed' | 'dismissed';
+    }
+  ) => void;
+  /**
    * Called after a scoop has been fully unregistered, with a snapshot of
    * the scoop taken BEFORE removal (the registry entry is already gone
    * when this fires). Fires for EVERY unregistration path — the panel's
@@ -1545,7 +1559,47 @@ export class Orchestrator implements ConeApprovalRouter {
     }
 
     const settled = this.resolveSudoRequest(id, decision);
+    if (settled) {
+      await this.persistLickDecision(id, decision.decision);
+    }
     return { settled, persisted, persistedPattern, persistError, scoopFolder, kind };
+  }
+
+  /**
+   * Flip the rendered + persisted state of an actionable lick once its
+   * decision settles: locate the cone's stored `sudo-request` message by
+   * `lickId`, stamp `lickState` ('confirmed' for allow/always, 'dismissed'
+   * for deny), re-save it to the message store (no new row), and notify the
+   * UI to re-render just that card via {@link OrchestratorCallbacks.onMessageUpdate}.
+   * Best-effort — a missing message or store error is logged, not thrown.
+   */
+  private async persistLickDecision(
+    lickId: string,
+    decision: SudoDecision['decision']
+  ): Promise<void> {
+    const lickState = decision === 'deny' ? 'dismissed' : 'confirmed';
+    const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
+    if (!cone) return;
+    try {
+      const messages = await db.getMessagesForScoop(cone.jid);
+      const target = messages.find((m) => m.lickId === lickId || m.id === `sudo-request-${lickId}`);
+      if (!target) {
+        log.warn('Lick decision: no stored message found to flip', { lickId });
+        return;
+      }
+      target.lickState = lickState;
+      await db.saveMessage(target);
+      this.callbacks.onMessageUpdate?.(cone.jid, {
+        messageId: target.id,
+        lickId,
+        lickState,
+      });
+    } catch (err) {
+      log.warn('Failed to persist lick decision', {
+        lickId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**
@@ -1592,6 +1646,10 @@ export class Orchestrator implements ConeApprovalRouter {
       timestamp: new Date().toISOString(),
       fromAssistant: false,
       channel: 'sudo-request',
+      // Carry the actionable lick id so the resolve path can locate this
+      // stored message (and its rendered card) when the cone settles it.
+      lickId: id,
+      lickState: 'pending',
     };
 
     await this.handleMessage(msg);

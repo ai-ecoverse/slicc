@@ -2825,6 +2825,68 @@ describe('Orchestrator.enqueueSudoRequest lick emission', () => {
     await pendingDecision;
   });
 
+  it.each([
+    ['allow', 'confirmed'],
+    ['always', 'confirmed'],
+    ['deny', 'dismissed'],
+  ] as const)('resolveSudoRequestAndPersist (%s) flips the stored lick message + fires onMessageUpdate (%s)', async (decision, expectedState) => {
+    const onMessageUpdate = vi.fn();
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      onIncomingMessage: vi.fn(),
+      onMessageUpdate,
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    });
+    await orch.init();
+
+    const emitEvent = vi.fn();
+    orch.setLickManager({ emitEvent } as any);
+
+    const pendingDecision = orch.enqueueSudoRequest(testScoop.jid, {
+      kind: 'command',
+      detail: 'rm -rf /tmp/x',
+      suggestedPattern: 'rm *',
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    const lickId = emitEvent.mock.calls[0][0].lickId as string;
+
+    // The stored sudo-request message starts pending and carries the lickId.
+    const { getMessagesForScoop } = await import('../../src/scoops/db.js');
+    const before = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(before).toBeDefined();
+    expect(before?.lickState).toBe('pending');
+
+    const result = await orch.resolveSudoRequestAndPersist(lickId, { decision });
+    expect(result.settled).toBe(true);
+
+    // onMessageUpdate fires once, locating the card by lickId with the
+    // settled state — the live-flip notification (parity: same callback
+    // backs standalone + extension through the shared bridge/client).
+    expect(onMessageUpdate).toHaveBeenCalledTimes(1);
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `sudo-request-${lickId}`,
+      lickId,
+      lickState: expectedState,
+    });
+
+    // The persisted message is updated in place (no new row appended).
+    const after = await getMessagesForScoop(cone.jid);
+    const flipped = after.filter((m) => m.lickId === lickId);
+    expect(flipped).toHaveLength(1);
+    expect(flipped[0].lickState).toBe(expectedState);
+
+    await pendingDecision;
+  });
+
   it('does not throw when no lick manager is registered', async () => {
     const container =
       typeof document !== 'undefined'

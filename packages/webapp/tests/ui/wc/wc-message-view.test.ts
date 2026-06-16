@@ -99,6 +99,28 @@ describe('buildThreadChildren', () => {
     expect(card.children).toHaveLength(2);
   });
 
+  it('maps an actionable lick lickState onto the card state attribute', () => {
+    const base = {
+      id: 'sudo-request-lick-1',
+      role: 'user' as const,
+      content: '[@alpha-scoop sudo-request]\nKind: command\nDetail: git push',
+      timestamp: Date.now(),
+      source: 'lick',
+      channel: 'sudo-request',
+      lickId: 'lick-1',
+    };
+    // Pending / unset leaves the card stateless (default amber, no glyph).
+    const [pending] = messageEls({ ...base, lickState: 'pending' });
+    expect(pending.hasAttribute('state')).toBe(false);
+    const [unset] = messageEls(base);
+    expect(unset.hasAttribute('state')).toBe(false);
+    // A settled lick stamps confirmed / dismissed onto the card.
+    const [confirmed] = messageEls({ ...base, lickState: 'confirmed' });
+    expect(confirmed.getAttribute('state')).toBe('confirmed');
+    const [dismissed] = messageEls({ ...base, lickState: 'dismissed' });
+    expect(dismissed.getAttribute('state')).toBe('dismissed');
+  });
+
   it('renders plain user messages as user bubbles', () => {
     const userCount = fixture.filter(
       (m) => m.role === 'user' && !m.source && m.channel !== 'delegation'

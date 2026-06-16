@@ -510,6 +510,11 @@ function lickCardEl(message: ChatMessage): HTMLElement {
   });
   if (scoopName) card.setAttribute('hue', scoopColor({ isCone: false, name: scoopName }));
   if (count > 1) card.setAttribute('count', String(count));
+  // Actionable licks (sudo-request) flip to a result glyph once settled; a
+  // pending/unset state leaves the card in its default amber form.
+  if (message.lickState && message.lickState !== 'pending') {
+    card.setAttribute('state', message.lickState);
+  }
   // Rich slotted body (the `body` attribute is plain text only): markdown
   // through the shared renderer, one section per collated lick.
   const parts = message.lickParts ?? [message.content];
