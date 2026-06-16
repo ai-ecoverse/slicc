@@ -144,7 +144,7 @@ export async function runJsRealm(
 
   const nodeConsole = createNodeConsole(writeStdout, writeStderr);
 
-  const { processShim, didCallProcessExit } = createProcessShim(init, writeStdout, writeStderr);
+  const { processShim, getDidCallProcessExit } = createProcessShim(init, writeStdout, writeStderr);
   const noColor = !!init.env?.NO_COLOR;
 
   // `c` / `cli` are constructed together so cli.die/warn can call into c
@@ -250,7 +250,7 @@ export async function runJsRealm(
     writeStderr
   );
 
-  if (!didCallProcessExit) {
+  if (!getDidCallProcessExit()) {
     await drainPendingRpcs(rpc);
   }
   rpc.dispose();
@@ -303,7 +303,7 @@ function createProcessShim(
   init: RealmInitMsg,
   writeStdout: (value: unknown) => void,
   writeStderr: (value: unknown) => void
-): { processShim: Record<string, unknown>; didCallProcessExit: boolean } {
+): { processShim: Record<string, unknown>; getDidCallProcessExit: () => boolean } {
   const noColor = !!init.env?.NO_COLOR;
   const stdinShim = createStdinShim(init.stdin ?? '');
   const argvWithParseFlags = attachArgvParseFlags(init.argv);
@@ -321,7 +321,7 @@ function createProcessShim(
     stdout: { write: writeStdout, isTTY: !noColor },
     stderr: { write: writeStderr, isTTY: !noColor },
   };
-  return { processShim, didCallProcessExit };
+  return { processShim, getDidCallProcessExit: () => didCallProcessExit };
 }
 
 type ExecResult = { stdout: string; stderr: string; exitCode: number };
