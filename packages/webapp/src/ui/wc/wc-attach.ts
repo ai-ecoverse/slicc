@@ -61,7 +61,13 @@ function mimeFor(name: string): string {
   return map[ext] ?? 'text/plain';
 }
 
-/** Bytes → MessageAttachment: images inline as base64, the rest as text. */
+/**
+ * Bytes → MessageAttachment. Images inline as base64 (within the 4 MB cap);
+ * every other file becomes a `kind:'file'` reference with NO inline content —
+ * the staging step persists the raw bytes to {@link UPLOAD_DIR} and links the
+ * path, so binary files are never UTF-8-decoded (no mojibake) and text files
+ * are never inlined.
+ */
 export function attachmentFromBytes(name: string, bytes: Uint8Array): MessageAttachment {
   const base = { id: uid(), name, size: bytes.length };
   if (IMAGE_EXT.test(name)) {
@@ -75,13 +81,13 @@ export function attachmentFromBytes(name: string, bytes: Uint8Array): MessageAtt
     }
     return { ...base, mimeType: mimeFor(name), kind: 'image', data: toBase64(bytes) };
   }
-  if (bytes.length > MAX_TEXT_BYTES) {
-    return { ...base, mimeType: 'text/plain', kind: 'file', error: 'file too large to inline' };
-  }
-  return { ...base, mimeType: mimeFor(name), kind: 'text', text: new TextDecoder().decode(bytes) };
+  const file = { ...base, mimeType: mimeFor(name), kind: 'file' as const };
+  // Oversized files keep a fallback label only — the staging step replaces it
+  // with a persisted path when a writer is available.
+  return bytes.length > MAX_TEXT_BYTES ? { ...file, error: 'file too large to inline' } : file;
 }
 
-/** A picked/dropped File → MessageAttachment (same inlining rules). */
+/** A picked/dropped File → MessageAttachment (same rules). */
 export async function attachmentFromFile(file: File): Promise<MessageAttachment> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const attachment = attachmentFromBytes(file.name, bytes);
@@ -430,29 +436,51 @@ async function stageCapture(
   if (attachment) stage.add(attachment);
 }
 
-/** Oversized payloads fall back to a VFS copy under /tmp/upload instead of a
- *  "not included" note — the agent reads the path on demand. */
-async function withOversizeFallback(
+/**
+ * Persist a staged upload's raw bytes under {@link UPLOAD_DIR} and reference
+ * the written path — never inline file content. Images within the inline cap
+ * keep their base64 `data` (so the model still sees them) AND gain a `path` to
+ * the full-resolution original; oversized images get the path with no inline
+ * `data`. Once persisted, any inline-fallback `error` is cleared. When no
+ * writer is available we degrade gracefully: images keep their inline data (no
+ * path), and files surface a "not included" note rather than mojibake.
+ */
+async function persistStagedUpload(
   attachment: MessageAttachment,
   bytes: Uint8Array,
   deps: WireWcAttachDeps
 ): Promise<MessageAttachment> {
-  if (!attachment.error) return attachment;
   const writer = (await deps.openWriter?.().catch(() => null)) ?? null;
-  if (!writer) return attachment;
-  const path = await persistUpload(writer, attachment.name, bytes).catch(() => undefined);
-  if (!path) return attachment;
-  return { ...attachment, error: undefined, path };
+  const path = writer
+    ? await persistUpload(writer, attachment.name, bytes).catch(() => undefined)
+    : undefined;
+  if (path) return { ...attachment, error: undefined, path };
+  // No writer (or the write failed): keep inline image data; for files there is
+  // no inline content, so flag a clear "not included" reason.
+  if (attachment.kind === 'image') return attachment;
+  return { ...attachment, error: 'could not be saved to the virtual filesystem' };
 }
 
-/** Stage a VFS file pick, read through the worker-routed reader. */
+/** Stage a VFS file pick by reference — the pick already HAS a canonical path,
+ *  so link it directly instead of reading + inlining its contents. */
 async function stageVfsFile(id: string, deps: WireWcAttachDeps, stage: WcAttachmentStage) {
-  const reader = await deps.openReader();
-  const raw = await reader.readFile(id);
-  const bytes = typeof raw === 'string' ? new TextEncoder().encode(raw) : raw;
-  const attachment = attachmentFromBytes(id.split('/').pop() ?? id, bytes);
-  // A VFS pick already HAS a canonical path — reference it instead of erroring.
-  stage.add(attachment.error ? { ...attachment, error: undefined, path: id } : attachment);
+  const name = id.split('/').pop() ?? id;
+  if (IMAGE_EXT.test(name)) {
+    // Images keep an inline copy for vision alongside the existing path.
+    const reader = await deps.openReader();
+    const raw = await reader.readFile(id);
+    const bytes = typeof raw === 'string' ? new TextEncoder().encode(raw) : raw;
+    const attachment = attachmentFromBytes(name, bytes);
+    stage.add({ ...attachment, error: undefined, path: id });
+    return;
+  }
+  let size = 0;
+  try {
+    size = (await (await deps.openReader()).stat(id)).size;
+  } catch {
+    // Stat failure leaves size at 0 — the reference line still renders.
+  }
+  stage.add({ id: uid(), name, mimeType: mimeFor(name), size, kind: 'file', path: id });
 }
 
 /** Append a skill mention to the composer's draft. */
@@ -469,7 +497,7 @@ async function handleAdd(
 ): Promise<void> {
   if (detail.kind === 'upload' && detail.file instanceof File) {
     const bytes = new Uint8Array(await detail.file.arrayBuffer());
-    stage.add(await withOversizeFallback(await attachmentFromFile(detail.file), bytes, deps));
+    stage.add(await persistStagedUpload(await attachmentFromFile(detail.file), bytes, deps));
   } else if (detail.kind === 'capture') {
     await stageCapture(detail, deps, stage);
   } else if (detail.kind === 'file' && typeof detail.id === 'string') {
