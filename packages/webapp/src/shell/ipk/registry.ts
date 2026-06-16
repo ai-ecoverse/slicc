@@ -223,12 +223,15 @@ function pickDistTag(ctx: ResolveContext, tag: string): string {
 export function resolveVersion(packument: Packument, range: string): string {
   const ctx = buildResolveContext(packument);
   const requested = (range ?? '').trim();
-  if (requested === '' || requested === '*' || requested === 'latest') {
+  // Empty / "latest" -> latest dist-tag. "*" is a valid range and flows into
+  // maxSatisfying below so it resolves to the highest stable version, NOT
+  // whatever the latest dist-tag happens to point at.
+  if (requested === '' || requested === 'latest') {
     return pickLatest(ctx);
   }
   if (ctx.versionMap[requested]) return requested;
 
-  // Valid semver range (including wildcards like x, X, 1.x) -> resolve via maxSatisfying
+  // Valid semver range (including "*", x, X, 1.x) -> resolve via maxSatisfying
   if (isValidRange(requested)) {
     let best: string | null = null;
     try {
