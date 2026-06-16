@@ -401,7 +401,12 @@ describe('resolveDependencyTree', () => {
     expect(nestedA?.version).toBe('2.0.0');
     const nestedB = nestedA?.dependencies.b;
     expect(nestedB?.version).toBe('1.0.0');
-    expect(nestedB?.dependencies).toEqual({});
+
+    const cycleTerminal = nestedB?.dependencies.a;
+    expect(cycleTerminal).toBeDefined();
+    expect(cycleTerminal?.version).toBe('1.0.0');
+    expect(cycleTerminal?.dependencies).toEqual({});
+    expect(cycleTerminal).not.toBe(plan.root.a);
 
     const allNodes = countNodes(plan.root);
     expect(allNodes).toBeLessThan(20);
