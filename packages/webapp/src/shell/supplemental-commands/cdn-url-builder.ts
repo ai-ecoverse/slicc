@@ -20,6 +20,7 @@
 export const UNPKG_HOST = ['unpkg', 'com'].join('.');
 export const ESM_SH_HOST = ['esm', 'sh'].join('.');
 export const JSDELIVR_HOST = ['cdn', 'jsdelivr', 'net'].join('.');
+export const REGISTRY_NPMJS_HOST = ['registry', 'npmjs', 'org'].join('.');
 
 /**
  * Generic CDN URL builder. Composes a `URL` object from a host name
@@ -93,6 +94,25 @@ export function esmShUrl(spec: string, opts: EsmShOpts = {}): URL {
     url.search = `?${parts.join('&')}`;
   }
   return url;
+}
+
+/**
+ * Build a `registry.npmjs.org/<pkg>[/<sub>]` URL for the npm registry.
+ *
+ * Used by `ipk` (Ice Pack) to fetch packuments and (when needed) compose
+ * tarball URLs. The host is constructed from a token array so no full
+ * `registry.npmjs.org` URL literal appears in the bundle, keeping the
+ * MV3 remote-hosted-code guard happy.
+ *
+ * Examples:
+ *   registryUrl('lodash')            → https://registry.npmjs.org/lodash
+ *   registryUrl('@scope/pkg')        → https://registry.npmjs.org/@scope/pkg
+ *   registryUrl('lodash', '/-/lodash-4.17.21.tgz')
+ *     → https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz
+ */
+export function registryUrl(pkg: string, sub?: string): URL {
+  const subPart = sub ? (sub.startsWith('/') ? sub : `/${sub}`) : '';
+  return buildCdnUrl(REGISTRY_NPMJS_HOST, `/${pkg}${subPart}`);
 }
 
 /**

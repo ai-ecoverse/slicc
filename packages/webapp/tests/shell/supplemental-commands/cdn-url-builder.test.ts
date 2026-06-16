@@ -5,6 +5,8 @@ import {
   esmShUrl,
   JSDELIVR_HOST,
   jsdelivrNpmUrl,
+  REGISTRY_NPMJS_HOST,
+  registryUrl,
   UNPKG_HOST,
   unpkgUrl,
 } from '../../../src/shell/supplemental-commands/cdn-url-builder.js';
@@ -14,6 +16,32 @@ describe('cdn-url-builder host constants', () => {
     expect(UNPKG_HOST).toBe('unpkg.com');
     expect(ESM_SH_HOST).toBe('esm.sh');
     expect(JSDELIVR_HOST).toBe('cdn.jsdelivr.net');
+  });
+
+  it('resolves the npm registry host via the token-host pattern', () => {
+    expect(REGISTRY_NPMJS_HOST).toBe('registry.npmjs.org');
+  });
+});
+
+describe('registryUrl', () => {
+  it('builds a packument URL for a plain package', () => {
+    expect(registryUrl('lodash').toString()).toBe('https://registry.npmjs.org/lodash');
+  });
+
+  it('builds a packument URL for a scoped package', () => {
+    expect(registryUrl('@scope/pkg').toString()).toBe('https://registry.npmjs.org/@scope/pkg');
+  });
+
+  it('appends a tarball sub-path when supplied', () => {
+    expect(registryUrl('lodash', '/-/lodash-4.17.21.tgz').toString()).toBe(
+      'https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz'
+    );
+  });
+
+  it('normalizes a sub-path missing its leading slash', () => {
+    expect(registryUrl('lodash', '-/lodash-4.17.21.tgz').toString()).toBe(
+      'https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz'
+    );
   });
 });
 
