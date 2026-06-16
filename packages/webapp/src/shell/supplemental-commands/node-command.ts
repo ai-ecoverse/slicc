@@ -73,8 +73,11 @@ export function createNodeCommand(): Command {
         };
       }
       code = await ctx.fs.readFile(scriptPath);
-      filename = scriptArg;
-      argv = ['node', scriptArg, ...args.slice(1)];
+      // Use the resolved absolute path so that skill.dir (derived from
+      // dirname(argv[1]) in skill-global.ts), __dirname, and __filename
+      // are all correct and absolute for BOTH relative and absolute invocations.
+      filename = scriptPath;
+      argv = ['node', scriptPath, ...args.slice(1)];
     } else if (stdinAsText(ctx.stdin).trim().length > 0) {
       code = stdinAsText(ctx.stdin);
       filename = '<stdin>';
