@@ -3345,3 +3345,138 @@ describe('Orchestrator session-reload-lick actionable resolution', () => {
     expect(onMessageUpdate).not.toHaveBeenCalled();
   });
 });
+
+describe('Orchestrator upgrade-lick actionable resolution', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+    await saveScoop(cone);
+    await saveScoop(testScoop);
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await settleAndDisposeSharedFs(sharedFs);
+  });
+
+  function makeOrch(onMessageUpdate = vi.fn()) {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    return new Orchestrator(container, {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      onIncomingMessage: vi.fn(),
+      onMessageUpdate,
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    });
+  }
+
+  /** Store the cone-facing upgrade ChannelMessage the kernel host would build. */
+  async function saveUpgradeMessage(lickId: string): Promise<void> {
+    const { saveMessage } = await import('../../src/scoops/db.js');
+    await saveMessage({
+      id: `upgrade-0.5.0-${lickId}`,
+      chatJid: cone.jid,
+      senderId: 'upgrade',
+      senderName: 'upgrade:0.4.1→0.5.0',
+      content: '[Upgrade Event: 0.4.1→0.5.0]',
+      timestamp: new Date().toISOString(),
+      fromAssistant: false,
+      channel: 'upgrade',
+      lickId,
+    });
+  }
+
+  it('upgrade lick_confirm returns the update-workspace-files merge directive and flips the card to confirmed', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerUpgradeLick({
+      type: 'upgrade',
+      timestamp: new Date().toISOString(),
+      upgradeFromVersion: '0.4.1',
+      upgradeToVersion: '0.5.0',
+      body: { from: '0.4.1', to: '0.5.0', releasedAt: null },
+    } as any);
+    await saveUpgradeMessage(lickId);
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'allow' });
+
+    expect(result.settled).toBe(true);
+    expect(result.message).toContain('Update workspace files');
+    expect(result.message).toContain('v0.4.1');
+    expect(result.message).toContain('v0.5.0');
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `upgrade-0.5.0-${lickId}`,
+      lickId,
+      lickState: 'confirmed',
+    });
+    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(after?.lickState).toBe('confirmed');
+
+    // Entry is consumed — a second resolution falls through (unknown).
+    const again = await orch.resolveActionableLick(lickId, { decision: 'allow' });
+    expect(again.settled).toBe(false);
+  });
+
+  it('upgrade lick_dismiss leaves files unchanged and mutes the card (dismissed)', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerUpgradeLick({
+      type: 'upgrade',
+      timestamp: new Date().toISOString(),
+      upgradeFromVersion: '0.4.1',
+      upgradeToVersion: '0.5.0',
+      body: { from: '0.4.1', to: '0.5.0', releasedAt: null },
+    } as any);
+    await saveUpgradeMessage(lickId);
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'deny' });
+
+    expect(result.settled).toBe(true);
+    expect(result.message).toContain('dismissed');
+    expect(result.message).not.toContain('Update workspace files');
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `upgrade-0.5.0-${lickId}`,
+      lickId,
+      lickState: 'dismissed',
+    });
+    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(after?.lickState).toBe('dismissed');
+  });
+});

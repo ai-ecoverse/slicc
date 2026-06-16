@@ -113,21 +113,37 @@ function formatSessionReloadLick(
   return undefined;
 }
 
+/**
+ * Upgrade lick. Upgrade licks are agent-actionable with a binary mapping: the
+ * cone calls `lick_confirm` to **Update workspace files** (runs the upgrade
+ * skill's three-way merge of bundled vfs-root content into the user's VFS) or
+ * `lick_dismiss` to clear; the card flips ✓ / muted ✗. Reviewing the changelog
+ * is NOT a card action — it stays a separate step the agent can run first. The
+ * actionable `Lick ID` + guidance is appended only when the orchestrator
+ * registered one (it does for every upgrade lick).
+ */
 function formatUpgradeLick(event: LickEvent, label: string): FormattedLick {
   const from = (event as { upgradeFromVersion?: string }).upgradeFromVersion ?? 'unknown';
   const to = (event as { upgradeToVersion?: string }).upgradeToVersion ?? 'unknown';
   const releasedAt =
     (event.body as { releasedAt?: string | null } | null | undefined)?.releasedAt ?? null;
   const releaseLine = releasedAt ? `\nReleased: ${releasedAt}` : '';
+  const lickId = event.lickId;
+  const guidance = lickId
+    ? `\n\nLick ID: ${lickId}\n` +
+      `Use the **upgrade** skill (\`/workspace/skills/upgrade/SKILL.md\`). The card is a ` +
+      `binary action: call \`lick_confirm\` with this lick id to **Update workspace files** ` +
+      `(it runs the three-way merge of bundled vfs-root content into the user's VFS), or ` +
+      `\`lick_dismiss\` to clear it. The card flips to ✓ on confirm / muted ✗ on dismiss. ` +
+      `Reviewing the changelog is a separate step you can run first — it is NOT a card action.`
+    : `\n\nUse the **upgrade** skill (\`/workspace/skills/upgrade/SKILL.md\`) to offer the user ` +
+      `a three-way merge of bundled vfs-root content into their workspace (bundled snapshot ` +
+      `vs user's VFS, reconciled with the GitHub tag-to-tag diff).`;
   return {
     label,
     content:
       `[${label}: ${from}→${to}]\n\n` +
-      `SLICC was upgraded from \`${from}\` to \`${to}\`.${releaseLine}\n\n` +
-      `Use the **upgrade** skill (\`/workspace/skills/upgrade/SKILL.md\`) to:\n` +
-      `- Show the user the changelog between these tags from GitHub\n` +
-      `- Offer to merge new bundled vfs-root content into their workspace ` +
-      `(three-way merge: bundled snapshot vs user's VFS, reconciled with the GitHub tag-to-tag diff).`,
+      `SLICC was upgraded from \`${from}\` to \`${to}\`.${releaseLine}${guidance}`,
   };
 }
 

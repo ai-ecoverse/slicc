@@ -295,6 +295,17 @@ export class Orchestrator implements ConeApprovalRouter {
    */
   private sessionReloadPlainLicks = new Set<string>();
 
+  /**
+   * Agent-actionable upgrade licks, keyed by the orchestrator-minted `lickId`.
+   * The card is a binary action: `lick_confirm` triggers "Update workspace
+   * files" (the upgrade skill's three-way merge of bundled vfs-root content
+   * into the user's VFS, scoped to the stored `from`→`to` tags); `lick_dismiss`
+   * clears the notice (card → muted ✗). Reviewing the changelog is NOT a card
+   * action — it stays a separate agent step. See {@link registerUpgradeLick} /
+   * {@link resolveUpgradeLick}.
+   */
+  private upgradeLickRegistry = new Map<string, { from: string; to: string }>();
+
   constructor(
     container: HTMLElement,
     callbacks: OrchestratorCallbacks,
@@ -1672,10 +1683,28 @@ export class Orchestrator implements ConeApprovalRouter {
   }
 
   /**
+   * Mint a stable `lickId` for an upgrade lick and register it so a later
+   * resolution can flip the rendered card. Upgrade licks are agent-actionable
+   * with a binary mapping: `lick_confirm` triggers "Update workspace files"
+   * (the three-way merge between the stored `from`→`to` tags); `lick_dismiss`
+   * clears the notice. Called from the kernel host's lick router before the
+   * cone `ChannelMessage` is built so the id flows onto both the UI chip and
+   * the persisted message. Mirrors {@link registerNavigateLick}.
+   */
+  registerUpgradeLick(event: LickEvent): string {
+    const id = `lick-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const from = (event as { upgradeFromVersion?: string }).upgradeFromVersion ?? 'unknown';
+    const to = (event as { upgradeToVersion?: string }).upgradeToVersion ?? 'unknown';
+    this.upgradeLickRegistry.set(id, { from, to });
+    return id;
+  }
+
+  /**
    * Resolve an actionable lick for the cone's `lick_confirm` / `lick_dismiss`
    * tools. Dispatches to the navigate-upskill resolver, the session-reload
-   * mount-recovery resolver, or the plain session-reload (dismiss-only)
-   * resolver by id, otherwise falls through to the sudo-request resolver.
+   * mount-recovery resolver, the plain session-reload (dismiss-only) resolver,
+   * or the upgrade resolver by id, otherwise falls through to the sudo-request
+   * resolver.
    * Handoff lick ids are intentionally NOT resolvable here — they are
    * human-gated, so they fall through and report unknown / already-resolved to
    * the agent.
@@ -1700,6 +1729,9 @@ export class Orchestrator implements ConeApprovalRouter {
     }
     if (this.sessionReloadPlainLicks.has(id)) {
       return this.resolveSessionReloadPlainLick(id, decision);
+    }
+    if (this.upgradeLickRegistry.has(id)) {
+      return this.resolveUpgradeLick(id, decision);
     }
     return this.resolveSudoRequestAndPersist(id, decision);
   }
@@ -1827,6 +1859,38 @@ export class Orchestrator implements ConeApprovalRouter {
     this.sessionReloadPlainLicks.delete(id);
     await this.persistLickDecision(id, 'deny');
     return { settled: true, persisted: false, message: 'Session-reload notice acknowledged.' };
+  }
+
+  /**
+   * Settle an agent-actionable upgrade lick. The card is a binary action: on
+   * allow/always (`lick_confirm` → "Update workspace files") it returns the
+   * merge directive so the agent runs the upgrade skill's three-way merge of
+   * bundled vfs-root content (scoped to the stored `from`→`to` tags); on deny
+   * (`lick_dismiss`) it clears the notice without touching any files. Reviewing
+   * the changelog is NOT handled here — it stays a separate agent step the
+   * agent can run before deciding. Either way the originating card flips
+   * ('confirmed' / muted 'dismissed') and persists via {@link persistLickDecision}.
+   */
+  private async resolveUpgradeLick(
+    id: string,
+    decision: SudoDecision
+  ): Promise<{ settled: boolean; persisted: boolean; message?: string }> {
+    const entry = this.upgradeLickRegistry.get(id);
+    if (!entry) return { settled: false, persisted: false };
+    this.upgradeLickRegistry.delete(id);
+    let message: string;
+    if (decision.decision === 'deny') {
+      message = 'Upgrade dismissed — workspace files were left unchanged.';
+    } else {
+      message =
+        `Update workspace files: run the upgrade skill's three-way merge of bundled ` +
+        `vfs-root content from v${entry.from} → v${entry.to} ` +
+        `(base = v${entry.from}, theirs = v${entry.to}, ours = the user's VFS). ` +
+        `Apply the per-file outcomes and present the summary; do not delete files or ` +
+        `overwrite local edits without showing the result.`;
+    }
+    await this.persistLickDecision(id, decision.decision);
+    return { settled: true, persisted: false, message };
   }
 
   /**

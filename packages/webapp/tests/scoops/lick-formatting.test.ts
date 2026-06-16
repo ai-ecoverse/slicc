@@ -58,6 +58,24 @@ describe('formatLickEventForCone', () => {
     expect(out!.content).toContain('upgrade');
   });
 
+  it('upgrade with a registered lickId surfaces the binary confirm/dismiss guidance', () => {
+    const event = {
+      type: 'upgrade',
+      upgradeFromVersion: '0.1.0',
+      upgradeToVersion: '0.2.0',
+      timestamp: '2026-04-30T12:00:00Z',
+      body: { releasedAt: null },
+      lickId: 'lick-upgrade-1',
+    } as unknown as LickEvent;
+    const out = formatLickEventForCone(event);
+    expect(out!.content).toContain('Lick ID: lick-upgrade-1');
+    expect(out!.content).toContain('lick_confirm');
+    expect(out!.content).toContain('Update workspace files');
+    expect(out!.content).toContain('lick_dismiss');
+    // Changelog stays a separate step, not a card action.
+    expect(out!.content).toContain('separate step');
+  });
+
   it('upgrade with no releasedAt omits the Released: line', () => {
     const event = {
       type: 'upgrade',

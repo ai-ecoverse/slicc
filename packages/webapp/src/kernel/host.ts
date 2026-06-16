@@ -276,15 +276,19 @@ function routeFormattedLickToCone(
   // Actionable licks are minted + registered BEFORE formatting so the
   // formatter can surface the stable lickId and the built ChannelMessage
   // carries it onto the persisted message + UI chip. Navigate (handoff /
-  // upskill) and session-reload (mount-recovery / plain) both apply. Only runs
-  // on the leader/standalone (followers forward navigate licks upstream
-  // instead of reaching this handler).
+  // upskill), session-reload (mount-recovery / plain), and upgrade all apply.
+  // Only runs on the leader/standalone (followers forward navigate licks
+  // upstream instead of reaching this handler).
   if (event.type === 'navigate') {
     event.lickId = orchestrator.registerNavigateLick(event);
   } else if (event.type === 'session-reload') {
     // Session-reload·mount-recovery licks are agent-actionable (lick_confirm
     // re-runs the mount commands); plain reload notices are dismiss-only.
     event.lickId = orchestrator.registerSessionReloadLick(event);
+  } else if (event.type === 'upgrade') {
+    // Upgrade licks are agent-actionable with a binary mapping: lick_confirm
+    // → "Update workspace files" (three-way merge); lick_dismiss → clear.
+    event.lickId = orchestrator.registerUpgradeLick(event);
   }
 
   const formatted = formatLickEventForCone(event);
@@ -325,9 +329,9 @@ function routeFormattedLickToCone(
     timestamp: event.timestamp,
     fromAssistant: false,
     channel,
-    // Actionable licks (navigate, session-reload) carry the minted id so the
-    // resolve path (lick_confirm / lick_dismiss, or the handoff human dip) can
-    // locate this stored message and flip its rendered card.
+    // Actionable licks (navigate, session-reload, upgrade) carry the minted id
+    // so the resolve path (lick_confirm / lick_dismiss, or the handoff human
+    // dip) can locate this stored message and flip its rendered card.
     ...(event.lickId ? { lickId: event.lickId } : {}),
   };
   orchestrator.handleMessage(channelMsg);
