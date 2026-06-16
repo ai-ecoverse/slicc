@@ -363,6 +363,32 @@ describe('ipk via real AlmostBashShell', () => {
     await fs.dispose();
   });
 
+  it('installs the full transitive tree and records only the directly-requested package', async () => {
+    sharedRegistry.current = buildRegistry([
+      { name: 'top', version: '1.0.0' },
+      { name: 'mid', version: '1.0.0' },
+      { name: 'leaf', version: '1.0.0' },
+    ]);
+    // Patch the packument tree so 'top' depends on 'mid' depends on 'leaf'.
+    const reg = sharedRegistry.current as Registry & { packuments: Record<string, any> };
+    (reg.packuments.top as any).versions['1.0.0'].dependencies = { mid: '^1.0.0' };
+    (reg.packuments.mid as any).versions['1.0.0'].dependencies = { leaf: '^1.0.0' };
+
+    const { shell, fs } = await newShell();
+    const r = await shell.executeCommand('ipk install top');
+    expect(r.exitCode).toBe(0);
+
+    expect(await fs.exists('/work/node_modules/top/package.json')).toBe(true);
+    expect(await fs.exists('/work/node_modules/mid/package.json')).toBe(true);
+    expect(await fs.exists('/work/node_modules/leaf/package.json')).toBe(true);
+
+    const root = JSON.parse((await fs.readFile('/work/package.json')) as string);
+    expect(Object.keys(root.dependencies)).toEqual(['top']);
+    expect(root.dependencies.mid).toBeUndefined();
+    expect(root.dependencies.leaf).toBeUndefined();
+    await fs.dispose();
+  });
+
   it('the shell stays responsive after an install error (follow-up command works)', async () => {
     sharedRegistry.current = buildRegistry([{ name: 'pkg', version: '1.0.0' }]);
     sharedRegistry.current.tarballs = {

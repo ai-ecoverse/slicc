@@ -83,12 +83,16 @@ function bytes(s: string): Uint8Array {
 
 function paxRecord(key: string, value: string): Uint8Array {
   const enc = new TextEncoder();
-  const body = ` ${key}=${value}\n`;
+  const body = enc.encode(` ${key}=${value}\n`);
   let len = body.length + 1;
   while (String(len).length + body.length !== len) {
     len = String(len).length + body.length;
   }
-  return enc.encode(`${len}${body}`);
+  const prefix = enc.encode(String(len));
+  const out = new Uint8Array(prefix.length + body.length);
+  out.set(prefix, 0);
+  out.set(body, prefix.length);
+  return out;
 }
 
 describe('gunzip', () => {
@@ -223,7 +227,47 @@ describe('readTar', () => {
     const tar = buildTar([{ name: 'package/a', data: bytes('abc') }]);
     // Corrupt the size field of the first header (offset 124..136).
     for (let i = 124; i < 136; i++) tar[i] = 'Z'.charCodeAt(0);
-    expect(() => readTar(tar)).toThrow();
+    // Recompute the header checksum so this test isolates size-parser validation:
+    // without this the readTar fails on the checksum guard rather than the size parser.
+    for (let i = 0; i < 8; i++) tar[148 + i] = 0x20;
+    const sum = computeChecksum(tar.subarray(0, 512));
+    writeString(tar, 148, 6, sum.toString(8).padStart(6, '0'));
+    tar[154] = 0;
+    tar[155] = 0x20;
+    expect(() => readTar(tar)).toThrow(/invalid octal|readTar/i);
+  });
+
+  it('honors PAX path overrides with multibyte UTF-8 paths (byte-length record framing)', () => {
+    // Multibyte path: each kanji is 3 UTF-8 bytes, so JS string length and byte
+    // length differ. This catches PAX parsers that treat the record-length field
+    // (a byte count) as a JS string index.
+    const longPath = `package/${'漢'.repeat(40)}/file.txt`;
+    const recordBytes = paxRecord('path', longPath);
+    const tar = buildTar([
+      { name: 'package/PaxHeader/file', data: recordBytes, typeflag: 'x' },
+      { name: 'package/placeholder.txt', data: bytes('utf8') },
+    ]);
+    const out = readTar(tar);
+    expect(out).toHaveLength(1);
+    expect(out[0].path).toBe(longPath.replace(/^package\//, ''));
+    expect(new TextDecoder().decode(out[0].bytes)).toBe('utf8');
+  });
+
+  it('parses multiple PAX records back-to-back when paths contain multibyte characters', () => {
+    const longPath = `package/${'好'.repeat(35)}/file.bin`;
+    const enc = new TextEncoder();
+    const sizeRec = paxRecord('size', '4');
+    const pathRec = paxRecord('path', longPath);
+    const combined = new Uint8Array(sizeRec.length + pathRec.length);
+    combined.set(sizeRec, 0);
+    combined.set(pathRec, sizeRec.length);
+    const tar = buildTar([
+      { name: 'package/PaxHeader/file', data: combined, typeflag: 'x' },
+      { name: 'package/placeholder.txt', data: enc.encode('data') },
+    ]);
+    const out = readTar(tar);
+    expect(out).toHaveLength(1);
+    expect(out[0].path).toBe(longPath.replace(/^package\//, ''));
   });
 
   it('throws when input is shorter than a full header block', () => {
