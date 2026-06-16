@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { maxSatisfying, parse, satisfies } from '../../../src/shell/ipk/semver.js';
+import {
+  compare,
+  comparePrerelease,
+  maxSatisfying,
+  parse,
+  satisfies,
+} from '../../../src/shell/ipk/semver.js';
 
 describe('parse', () => {
   it('parses a plain semver', () => {
@@ -97,11 +103,11 @@ describe('satisfies - caret ^', () => {
     expect(satisfies('0.0.2', '^0.0.3')).toBe(false);
   });
 
-  it('^1.2.3 allows prerelease only when range has prerelease', () => {
+  it('^1.2.3 allows prerelease only on the same [major,minor,patch] tuple', () => {
     expect(satisfies('1.2.3-alpha', '^1.2.3')).toBe(false);
     expect(satisfies('1.2.4-alpha', '^1.2.3')).toBe(false);
     expect(satisfies('1.2.3-alpha', '^1.2.3-alpha')).toBe(true);
-    expect(satisfies('1.2.4-alpha', '^1.2.3-alpha')).toBe(true);
+    expect(satisfies('1.2.4-alpha', '^1.2.3-alpha')).toBe(false);
   });
 
   it('^1.2.3-beta allows prerelease versions >=1.2.3-beta', () => {
@@ -201,11 +207,11 @@ describe('satisfies - comparators', () => {
     expect(satisfies('1.2.4', '<1.2.3')).toBe(false);
   });
 
-  it('comparator with prerelease allows prerelease only when comparator has prerelease', () => {
+  it('comparator with prerelease allows prerelease only on same [major,minor,patch] tuple', () => {
     expect(satisfies('1.2.3-alpha', '>=1.2.3')).toBe(false);
     expect(satisfies('1.2.3-alpha', '>=1.2.3-alpha')).toBe(true);
     expect(satisfies('1.2.2-alpha', '>=1.2.3-alpha')).toBe(false);
-    expect(satisfies('1.2.4-alpha', '>=1.2.3-alpha')).toBe(true);
+    expect(satisfies('1.2.4-alpha', '>=1.2.3-alpha')).toBe(false);
   });
 });
 
@@ -218,9 +224,10 @@ describe('satisfies - hyphen ranges', () => {
     expect(satisfies('2.0.1', '1.0.0 - 2.0.0')).toBe(false);
   });
 
-  it('1.0.0 - 2.0.0 prerelease matching', () => {
+  it('1.0.0 - 2.0.0 prerelease matching follows same-tuple rule', () => {
     expect(satisfies('1.5.0-alpha', '1.0.0 - 2.0.0')).toBe(false);
-    expect(satisfies('1.5.0-alpha', '1.0.0-alpha - 2.0.0')).toBe(true);
+    expect(satisfies('1.0.0-alpha', '1.0.0-alpha - 2.0.0')).toBe(true);
+    expect(satisfies('1.5.0-alpha', '1.0.0-alpha - 2.0.0')).toBe(false);
   });
 
   it('shorthand partial left side: 1.0 - 2.0.0 means >=1.0.0 <=2.0.0', () => {
@@ -341,5 +348,188 @@ describe('compare / ordering edge cases', () => {
     expect(satisfies('1.0.0+build1', '1.0.0')).toBe(true);
     expect(satisfies('1.0.0+build1', '1.0.0+build2')).toBe(true);
     expect(satisfies('1.0.0+build2', '1.0.0+build1')).toBe(true);
+  });
+});
+
+describe('prerelease admission requires same [major,minor,patch] tuple (fix 1)', () => {
+  it('compound range admits same-tuple prerelease, rejects cross-tuple', () => {
+    expect(satisfies('1.2.3-beta', '>=1.2.3-alpha <2.0.0')).toBe(true);
+    expect(satisfies('1.5.0-beta', '>=1.2.3-alpha <2.0.0')).toBe(false);
+    expect(satisfies('3.0.0-x', '>=1.2.3-alpha <2.0.0')).toBe(false);
+  });
+
+  it('caret-prerelease admits same-tuple prerelease only', () => {
+    expect(satisfies('1.2.3-alpha', '^1.2.3-alpha')).toBe(true);
+    expect(satisfies('1.2.3-beta', '^1.2.3-alpha')).toBe(true);
+    expect(satisfies('1.2.4-alpha', '^1.2.3-alpha')).toBe(false);
+    expect(satisfies('1.3.0-alpha', '^1.2.3-alpha')).toBe(false);
+  });
+
+  it('release versions still bypass the prerelease tuple rule', () => {
+    expect(satisfies('1.2.4', '>=1.2.3-alpha <2.0.0')).toBe(true);
+    expect(satisfies('1.5.0', '>=1.2.3-alpha <2.0.0')).toBe(true);
+    expect(satisfies('2.0.0', '>=1.2.3-alpha <2.0.0')).toBe(false);
+  });
+
+  it('* still admits prereleases regardless of tuple', () => {
+    expect(satisfies('1.2.3-alpha', '*')).toBe(true);
+    expect(satisfies('99.99.99-rc.0', '*')).toBe(true);
+  });
+});
+
+describe('tilde preserves prerelease lower bound (fix 2)', () => {
+  it('~1.2.3-alpha expands to >=1.2.3-alpha <1.3.0', () => {
+    expect(satisfies('1.2.3-alpha', '~1.2.3-alpha')).toBe(true);
+    expect(satisfies('1.2.3-beta', '~1.2.3-alpha')).toBe(true);
+    expect(satisfies('1.2.4', '~1.2.3-alpha')).toBe(true);
+    expect(satisfies('1.3.0', '~1.2.3-alpha')).toBe(false);
+    expect(satisfies('1.2.0', '~1.2.3-alpha')).toBe(false);
+    expect(satisfies('1.2.3-0', '~1.2.3-alpha')).toBe(false); // 0 < alpha (numeric < alphanumeric)
+  });
+
+  it('plain ~1.2.3 still expands to >=1.2.3 <1.3.0', () => {
+    expect(satisfies('1.2.3', '~1.2.3')).toBe(true);
+    expect(satisfies('1.2.4', '~1.2.3')).toBe(true);
+    expect(satisfies('1.3.0', '~1.2.3')).toBe(false);
+    expect(satisfies('1.2.2', '~1.2.3')).toBe(false);
+  });
+
+  it('~0.2.3-beta preserves prerelease lower bound', () => {
+    expect(satisfies('0.2.3-beta', '~0.2.3-beta')).toBe(true);
+    expect(satisfies('0.2.3-rc', '~0.2.3-beta')).toBe(true);
+    expect(satisfies('0.2.3-alpha', '~0.2.3-beta')).toBe(false);
+    expect(satisfies('0.3.0', '~0.2.3-beta')).toBe(false);
+  });
+});
+
+describe('prerelease identifier ordering (fix 3)', () => {
+  it('shorter identifier list has lower precedence when prefix is equal', () => {
+    expect(compare('1.0.0-alpha', '1.0.0-alpha.1')).toBe(-1);
+    expect(compare('1.0.0-alpha.1', '1.0.0-alpha')).toBe(1);
+    expect(comparePrerelease(['alpha'], ['alpha', '1'])).toBe(-1);
+    expect(comparePrerelease(['alpha', '1'], ['alpha'])).toBe(1);
+  });
+
+  it('numeric identifiers compare numerically', () => {
+    expect(compare('1.0.0-1', '1.0.0-2')).toBe(-1);
+    expect(compare('1.0.0-2', '1.0.0-10')).toBe(-1);
+    expect(compare('1.0.0-10', '1.0.0-2')).toBe(1);
+  });
+
+  it('alphanumeric identifiers compare lexically', () => {
+    expect(compare('1.0.0-alpha', '1.0.0-beta')).toBe(-1);
+    expect(compare('1.0.0-alpha.1', '1.0.0-alpha.beta')).toBe(-1);
+    expect(compare('1.0.0-alpha.beta', '1.0.0-beta')).toBe(-1);
+  });
+
+  it('numeric < alphanumeric when same position', () => {
+    expect(compare('1.0.0-1', '1.0.0-alpha')).toBe(-1);
+    expect(compare('1.0.0-alpha', '1.0.0-1')).toBe(1);
+  });
+
+  it('full chain alpha < alpha.1 < alpha.beta < beta < release', () => {
+    expect(compare('1.0.0-alpha', '1.0.0-alpha.1')).toBe(-1);
+    expect(compare('1.0.0-alpha.1', '1.0.0-alpha.beta')).toBe(-1);
+    expect(compare('1.0.0-alpha.beta', '1.0.0-beta')).toBe(-1);
+    expect(compare('1.0.0-beta', '1.0.0')).toBe(-1);
+  });
+
+  it('satisfies expresses the shorter-list rule for same-tuple prerelease ranges', () => {
+    expect(satisfies('1.0.0-alpha', '<1.0.0-alpha.1')).toBe(true);
+    expect(satisfies('1.0.0-alpha.1', '>1.0.0-alpha')).toBe(true);
+  });
+});
+
+describe('wildcard comparators with operators (fix 4)', () => {
+  it('<=1.x expands to <2.0.0', () => {
+    expect(satisfies('1.9.9', '<=1.x')).toBe(true);
+    expect(satisfies('1.0.0', '<=1.x')).toBe(true);
+    expect(satisfies('2.0.0', '<=1.x')).toBe(false);
+  });
+
+  it('<1.x expands to <1.0.0', () => {
+    expect(satisfies('0.9.9', '<1.x')).toBe(true);
+    expect(satisfies('1.0.0', '<1.x')).toBe(false);
+  });
+
+  it('>1.x expands to >=2.0.0', () => {
+    expect(satisfies('2.0.0', '>1.x')).toBe(true);
+    expect(satisfies('1.9.9', '>1.x')).toBe(false);
+  });
+
+  it('>=1.x expands to >=1.0.0', () => {
+    expect(satisfies('1.0.0', '>=1.x')).toBe(true);
+    expect(satisfies('0.9.9', '>=1.x')).toBe(false);
+  });
+
+  it('<=1.2.x expands to <1.3.0', () => {
+    expect(satisfies('1.2.9', '<=1.2.x')).toBe(true);
+    expect(satisfies('1.3.0', '<=1.2.x')).toBe(false);
+  });
+
+  it('>1.2.x expands to >=1.3.0', () => {
+    expect(satisfies('1.3.0', '>1.2.x')).toBe(true);
+    expect(satisfies('1.2.9', '>1.2.x')).toBe(false);
+  });
+
+  it('<1.2.x expands to <1.2.0', () => {
+    expect(satisfies('1.1.9', '<1.2.x')).toBe(true);
+    expect(satisfies('1.2.0', '<1.2.x')).toBe(false);
+  });
+
+  it('>=1.2.x expands to >=1.2.0', () => {
+    expect(satisfies('1.2.0', '>=1.2.x')).toBe(true);
+    expect(satisfies('1.1.9', '>=1.2.x')).toBe(false);
+  });
+});
+
+describe('parse() rejects partial versions (fix 5)', () => {
+  it('rejects bare major', () => {
+    expect(() => parse('1')).toThrow();
+  });
+
+  it('rejects major.minor', () => {
+    expect(() => parse('1.2')).toThrow();
+  });
+
+  it('accepts full major.minor.patch', () => {
+    const v = parse('1.2.3');
+    expect(v.major).toBe(1);
+    expect(v.minor).toBe(2);
+    expect(v.patch).toBe(3);
+  });
+
+  it('accepts prerelease and build forms', () => {
+    expect(parse('1.2.3-beta').prerelease).toEqual(['beta']);
+    expect(parse('1.2.3+build').build).toEqual(['build']);
+    expect(parse('1.2.3-rc.1+sha.abc').prerelease).toEqual(['rc', '1']);
+  });
+
+  it('does not produce NaN fields for any accepted version', () => {
+    const v = parse('1.2.3');
+    expect(Number.isNaN(v.major)).toBe(false);
+    expect(Number.isNaN(v.minor)).toBe(false);
+    expect(Number.isNaN(v.patch)).toBe(false);
+  });
+
+  it('x-ranges still parse and satisfy via range parsing', () => {
+    expect(satisfies('1.5.0', '1.x')).toBe(true);
+    expect(satisfies('1.5.0', '1.5.x')).toBe(true);
+    expect(satisfies('1.5.0', '*')).toBe(true);
+  });
+
+  it('caret/tilde partials still work via range parsing', () => {
+    expect(satisfies('1.5.0', '^1')).toBe(true);
+    expect(satisfies('1.5.0', '^1.5')).toBe(true);
+    expect(satisfies('2.0.0', '^1')).toBe(false);
+    expect(satisfies('1.5.9', '~1.5')).toBe(true);
+    expect(satisfies('1.6.0', '~1.5')).toBe(false);
+    expect(satisfies('1.9.9', '~1')).toBe(true);
+    expect(satisfies('2.0.0', '~1')).toBe(false);
+  });
+
+  it('hyphen-range partial sides still work', () => {
+    expect(satisfies('1.5.0', '1.0 - 2.0.0')).toBe(true);
+    expect(satisfies('2.0.1', '1.0 - 2.0.0')).toBe(false);
   });
 });
