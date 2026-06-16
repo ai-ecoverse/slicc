@@ -230,6 +230,11 @@ const QUICK_ACTIONS: QuickAction[] = [
  * takes precedence over the demo dataset.
  *
  * @attr theme - `light` | `dark` per-element override of the inherited theme
+ * @attr global-drop - OPT-IN: when present, the component also registers
+ *   document-level file drag/drop listeners (drag-counter guarded) so a file
+ *   dragged anywhere on the owning document opens the menu, activates the drop
+ *   zone, and lands its drop as `slicc-add` upload events. Absent (the default),
+ *   only the wrap-scoped drop zone is active and no document listeners exist.
  * @attr data-open - reflected host state while the panel is open (do not set)
  * @attr data-dropping - reflected host state during a file drag-over (do not set)
  * @csspart wrap - the positioning anchor wrapping the panel + the trigger row
@@ -239,7 +244,7 @@ const QUICK_ACTIONS: QuickAction[] = [
  *   selection of a row, a capture quick-action, or a file upload / drop
  */
 export class SliccAddMenu extends HTMLElement {
-  static readonly observedAttributes = ['theme'];
+  static readonly observedAttributes = ['theme', 'global-drop'];
 
   #root: ShadowRoot;
 
@@ -269,6 +274,110 @@ export class SliccAddMenu extends HTMLElement {
     if (this.#open && !this.contains(e.target as Node)) this.close();
   };
 
+  // ----- Document-level drop (opt-in via the `global-drop` attribute) --------
+
+  /** Whether the document-level drag listeners are currently registered. */
+  #globalDropBound = false;
+  /** Drag-counter so nested dragenter/dragleave don't flicker the drop state. */
+  #docDragDepth = 0;
+  /** Whether the in-flight document drag auto-opened the menu (restore on leave). */
+  #autoOpened = false;
+
+  /** True only for an OS/file drag (carries `Files`), not a text/element drag. */
+  #isFileDrag(e: DragEvent): boolean {
+    const types = e.dataTransfer?.types;
+    return !!types && Array.from(types).includes('Files');
+  }
+
+  /** Open (remembering it was auto-opened) + light up the drop zone. */
+  #activateDrop(): void {
+    if (!this.#open) {
+      this.#autoOpened = true;
+      this.open();
+    }
+    this.setAttribute('data-dropping', '');
+  }
+
+  /** Drag left the window (counter back to 0): clear state, restore if auto-opened. */
+  #resetDrop(): void {
+    this.#docDragDepth = 0;
+    this.removeAttribute('data-dropping');
+    if (this.#autoOpened) {
+      this.#autoOpened = false;
+      this.close();
+    }
+  }
+
+  #onDocDragEnter = (e: DragEvent): void => {
+    if (!this.#isFileDrag(e)) return;
+    e.preventDefault();
+    this.#docDragDepth++;
+    // Over the wrap, the wrap-scoped handlers own the visual state; keep the
+    // counter balanced but don't double-activate.
+    if (e.composedPath().includes(this.#wrap)) return;
+    this.#activateDrop();
+  };
+
+  #onDocDragOver = (e: DragEvent): void => {
+    // preventDefault on dragover is what makes the whole document a drop target.
+    if (this.#isFileDrag(e)) e.preventDefault();
+  };
+
+  #onDocDragLeave = (e: DragEvent): void => {
+    if (!this.#isFileDrag(e)) return;
+    this.#docDragDepth = Math.max(0, this.#docDragDepth - 1);
+    if (this.#docDragDepth === 0) this.#resetDrop();
+  };
+
+  #onDocDrop = (e: DragEvent): void => {
+    if (!this.#isFileDrag(e)) return;
+    // Stop the browser from navigating to the dropped file, even off-menu.
+    e.preventDefault();
+    this.#docDragDepth = 0;
+    // A drop on the wrap is already emitted + closed by the wrap-scoped handler;
+    // only reset our auto-open bookkeeping so we don't double-emit / double-close.
+    if (e.composedPath().includes(this.#wrap)) {
+      this.#autoOpened = false;
+      return;
+    }
+    this.removeAttribute('data-dropping');
+    this.#autoOpened = false;
+    const files = e.dataTransfer?.files;
+    if (files?.length) {
+      for (const f of Array.from(files))
+        this.#emit({ kind: 'upload', name: f.name, size: f.size, file: f });
+    }
+    this.close();
+  };
+
+  /** Attach/detach the document listeners to match the `global-drop` attribute. */
+  #syncGlobalDrop(): void {
+    if (this.isConnected && this.hasAttribute('global-drop')) this.#bindGlobalDrop();
+    else this.#unbindGlobalDrop();
+  }
+
+  #bindGlobalDrop(): void {
+    if (this.#globalDropBound) return;
+    this.#globalDropBound = true;
+    const doc = this.ownerDocument;
+    doc.addEventListener('dragenter', this.#onDocDragEnter);
+    doc.addEventListener('dragover', this.#onDocDragOver);
+    doc.addEventListener('dragleave', this.#onDocDragLeave);
+    doc.addEventListener('drop', this.#onDocDrop);
+  }
+
+  #unbindGlobalDrop(): void {
+    if (!this.#globalDropBound) return;
+    this.#globalDropBound = false;
+    const doc = this.ownerDocument;
+    doc.removeEventListener('dragenter', this.#onDocDragEnter);
+    doc.removeEventListener('dragover', this.#onDocDragOver);
+    doc.removeEventListener('dragleave', this.#onDocDragLeave);
+    doc.removeEventListener('drop', this.#onDocDrop);
+    this.#docDragDepth = 0;
+    this.#autoOpened = false;
+  }
+
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
@@ -277,14 +386,18 @@ export class SliccAddMenu extends HTMLElement {
 
   connectedCallback(): void {
     this.#render();
+    this.#syncGlobalDrop();
   }
 
   disconnectedCallback(): void {
     document.removeEventListener('mousedown', this.#onDoc);
+    this.#unbindGlobalDrop();
   }
 
-  attributeChangedCallback(): void {
+  attributeChangedCallback(name: string): void {
     // `theme` only flips CSS custom-property scopes; no re-render required.
+    // `global-drop` toggles the document-level drop listeners on/off.
+    if (name === 'global-drop') this.#syncGlobalDrop();
   }
 
   // ----- Public injectable API ---------------------------------------------

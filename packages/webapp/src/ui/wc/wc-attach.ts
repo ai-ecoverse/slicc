@@ -503,6 +503,9 @@ export function wireWcAttach(deps: WireWcAttachDeps): WcAttachmentStage {
       openReader: deps.openReader,
       listConversations: deps.listConversations,
     });
+    // Full UI only: a file dragged anywhere in the window opens the add-menu and
+    // activates its drop zone (the library default stays wrap-scoped).
+    menu.setAttribute('global-drop', '');
   }
 
   inputCard.addEventListener('slicc-add', (event) => {
