@@ -326,6 +326,32 @@ describe('resolveVersion', () => {
     };
     expect(() => resolveVersion(broken, 'latest')).toThrow();
   });
+
+  // Regression: * must resolve via maxSatisfying (highest stable), NOT the latest dist-tag
+  it('resolves "*" to the highest stable version when latest dist-tag is an older stable', () => {
+    const pkg = makePackument('old-latest', ['1.0.0', '1.2.0', '2.0.0', '2.1.0'], {
+      latest: '1.2.0',
+    });
+    expect(resolveVersion(pkg, '*')).toBe('2.1.0');
+    expect(resolveVersion(pkg, '')).toBe('1.2.0');
+    expect(resolveVersion(pkg, 'latest')).toBe('1.2.0');
+  });
+
+  it('resolves "*" to the highest stable version when latest dist-tag is a prerelease', () => {
+    const pkg = makePackument('prerelease-latest', ['1.0.0', '1.2.0', '2.0.0', '3.0.0-beta.1'], {
+      latest: '3.0.0-beta.1',
+    });
+    expect(resolveVersion(pkg, '*')).toBe('2.0.0');
+    expect(resolveVersion(pkg, '')).toBe('3.0.0-beta.1');
+    expect(resolveVersion(pkg, 'latest')).toBe('3.0.0-beta.1');
+  });
+
+  it('preserves unknown dist-tag error even when latest is a prerelease', () => {
+    const pkg = makePackument('prerelease-latest', ['1.0.0', '2.0.0', '3.0.0-beta.1'], {
+      latest: '3.0.0-beta.1',
+    });
+    expect(() => resolveVersion(pkg, 'no-such-tag')).toThrow(/unknown dist-tag/i);
+  });
 });
 
 describe('fetchTarball', () => {
