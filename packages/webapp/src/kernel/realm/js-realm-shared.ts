@@ -198,7 +198,11 @@ export async function runJsRealm(
   const execRun = (command: string): Promise<ExecResult> => rpc.call('exec', 'run', [command]);
   const execBridge = Object.assign(execRun, {
     spawn: (argv: string[]): Promise<ExecResult> => rpc.call('exec', 'spawn', [argv]),
-  });
+  }) as ((cmd: string) => Promise<ExecResult>) & {
+    spawn: (argv: string[]) => Promise<ExecResult>;
+    exec: typeof execRun;
+  };
+  execBridge.exec = execBridge;
 
   // `skill` is computed once at boot from argv[1] and frozen. It exposes
   // the script-relative path helpers and the skill-scoped config/token
@@ -250,7 +254,7 @@ export async function runJsRealm(
     return response;
   }
 
-  const sliccyModules: Record<string, unknown> = {
+  const sliccyModules = buildSliccyModules({
     exec: execBridge,
     skill: skillGlobal,
     http: httpGlobal,
@@ -260,10 +264,7 @@ export async function runJsRealm(
     hid: hidBridge,
     cli: cliApi,
     color: colorApi,
-    time,
-    fmt,
-    pool,
-  };
+  });
 
   const requireCache = await preloadRequires(init.code, init.env, loadModule, writeStderr);
   const requireShim = createRequireShim(requireCache, fsBridge, processShim, sliccyModules);
@@ -296,6 +297,10 @@ export async function runJsRealm(
     exitCode,
   };
   port.postMessage(done);
+}
+
+function buildSliccyModules(bridges: Record<string, unknown>): Record<string, unknown> {
+  return { ...bridges, time, fmt, pool };
 }
 
 /**

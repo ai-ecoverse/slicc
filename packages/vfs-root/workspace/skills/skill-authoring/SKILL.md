@@ -93,27 +93,48 @@ Rules of thumb:
 - **Dual-mode**: works in both the CLI server and the Chrome extension (sandbox iframe). Don't rely on CLI-only Node modules.
 - **Top-level `await`**: scripts are wrapped in `AsyncFunction`. Always `await` fs/exec/fetch. Don't use `.then()`.
 
-#### Runtime globals (use these — don't reinvent)
+#### Runtime surface (use these — don't reinvent)
 
-| Global       | Use for                                                                                                                                            |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `process`    | `argv`, `env`, `cwd()`, `exit(code)`, `stdout.write`, `stderr.write`, `stdin.read()`                                                               |
-| `console`    | `log`/`info` → stdout, `warn`/`error` → stderr                                                                                                     |
-| `fs`         | `readFile`, `writeFile`, `readFileBinary`, `writeFileBinary`, `readDir`, `exists`, `stat`, `mkdir`, `rm`, `fetchToFile` — all paths are VFS, async |
-| `exec(cmd)`  | Run any shell command and get `{ stdout, stderr, exitCode }`. Use this to compose with other `.jsh` and supplemental commands.                     |
-| `fetch`      | Standard `fetch` routed through SLICC's proxied transport (cookies + CORS handled).                                                                |
-| `require(p)` | Pull npm packages from esm.sh (version-pinnable: `require('lodash@4')`). Cached per session.                                                       |
+Node-standard bare globals:
+
+| Global                     | Use for                                                                                                                              |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `process`                  | `argv`, `env`, `cwd()`, `exit(code)`, `stdout.write`, `stderr.write`, `stdin.read()`                                                 |
+| `console`                  | `log`/`info` → stdout, `warn`/`error` → stderr                                                                                       |
+| `fetch`                    | Standard `fetch` routed through SLICC's proxied transport (cookies + CORS handled).                                                  |
+| `require(p)`               | Synchronous CJS `require`. Use `require('sliccy:<name>')` for capability bridges and `require('fs')` for the VFS bridge (see below). |
+| `__dirname` / `__filename` | CJS scope vars — the script's own directory and absolute path.                                                                       |
+
+Capability bridges via `require('sliccy:<name>')` (full reference: `./jsh-runtime-extensions.md`):
+
+| `require('sliccy:<name>')`                    | Use for                                                                                                   |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `sliccy:exec`                                 | Callable `exec(cmd)` + `.spawn(argv[])`. Composes with any supplemental command or `.jsh` script.         |
+| `sliccy:skill`                                | `dir` / `refs` / `assets` / `config()` / `token(providerId)` — script-relative paths and provider tokens. |
+| `sliccy:http`                                 | `http.client({ baseUrl, token, headers, retry, timeoutMs })` — standard API-client builder.               |
+| `sliccy:browser`                              | `findTab`, `ensureTab`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`, `websocket.on(...)`.      |
+| `sliccy:usb` / `sliccy:serial` / `sliccy:hid` | `list()` / `request()` + device methods. Chromium-only.                                                   |
+| `sliccy:cli`                                  | `die(msg, opts?)`, `out(value)`, `warn(msg, opts?)`, `help(text)`.                                        |
+| `sliccy:color`                                | ANSI helpers (`green`, `red`, `bold`, `dim`, …) auto-disabled on non-TTY / `NO_COLOR`.                    |
+| `sliccy:time`                                 | `parseDuration`, `ago`, `range`, `future`, `gmailDate`.                                                   |
+| `sliccy:fmt`                                  | `trunc`, `col`, `table`, `date`.                                                                          |
+| `sliccy:pool`                                 | `pool(n, items, fn)` — bounded concurrency runner.                                                        |
+
+VFS bridge:
+
+| `require('fs')` / `require('node:fs')` | `readFile`, `writeFile`, `readFileBinary`, `writeFileBinary`, `readDir`, `exists`, `stat`, `mkdir`, `rm`, `fetchToFile` — all paths are VFS, async. There is no bare `fs` global. |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 
 #### Runtime extensions (live — prefer these over hand-rolled equivalents)
 
-The globals below ship in the jsh realm. Full reference: `./jsh-runtime-extensions.md`. Use them instead of reimplementing the cross-skill patterns they replace.
+Reach these via `require('sliccy:<name>')`. Full reference: `./jsh-runtime-extensions.md`. Use them instead of reimplementing the cross-skill patterns they replace.
 
 - **`process.argv.parseFlags()`** — returns `{ positional, flags, subcommand }`. Replaces the per-skill `--flag=val` / `--flag val` parsing loop.
-- **`browser.*`** — `findTab({ domain | urlMatch })`, `ensureTab(url)`, `eval(tab, fn)`, `evalAsync(tab, fn)`, `cookie(tab, name)`, `localStorage(tab, key)`. Replaces shelling out to `playwright-cli tab-list` and regex-parsing its output.
+- **`require('sliccy:browser')`** — `findTab({ domain | urlMatch })`, `ensureTab(url)`, `eval(tab, fn)`, `evalAsync(tab, fn)`, `cookie(tab, name)`, `localStorage(tab, key)`. Replaces shelling out to `playwright-cli tab-list` and regex-parsing its output.
 - **`browser.fetch(tab, url, opts)`** — page-context fetch (runs inside the tab's origin, so cookies + same-origin headers are automatic). Replaces the `eval-file` temp-file + double-JSON-unwrap dance.
 - **`browser.websocket.on(tab, …).filter({…}).forward({ sink })`** — declarative WebSocket observer with a closed sink set (`webhook` / `scoop` / `vfs` / `log`). **Required** for any new WS-watch use case; do not author page-context `WebSocket.prototype` patches in skill code.
-- **`http.client({ baseUrl, token, headers, retry })`** — `get`/`post`/`put`/`delete` with merged headers, lazy token resolution, and Retry-After-aware backoff for `retry.on` statuses.
-- **`skill.dir` / `skill.refs` / `skill.assets` / `skill.config()` / `skill.token(providerId)`** — replace the per-skill `process.argv[1]` dirname math, ad-hoc `.config` JSON readers, and bespoke `oauth-token` shell-outs.
+- **`require('sliccy:http').client({ baseUrl, token, headers, retry })`** — `get`/`post`/`put`/`delete` with merged headers, lazy token resolution, and Retry-After-aware backoff for `retry.on` statuses.
+- **`require('sliccy:skill')`** — `dir` / `refs` / `assets` / `config()` / `token(providerId)`: replace the per-skill `process.argv[1]` dirname math, ad-hoc `.config` JSON readers, and bespoke `oauth-token` shell-outs.
 
 Ship a `.jsh` when the skill needs deterministic, parameterizable behavior the agent shouldn't have to re-derive each time (e.g. a `slicc-handoff` helper, a custom diff formatter, a domain-specific lint).
 
