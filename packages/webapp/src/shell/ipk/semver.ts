@@ -423,6 +423,15 @@ export function satisfies(versionStr: string, rangeStr: string): boolean {
   return false;
 }
 
+export function isValidRange(rangeStr: string): boolean {
+  try {
+    parseRange(rangeStr);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function maxSatisfying(versions: string[], rangeStr: string): string | null {
   const valid: { ver: SemVer; raw: string }[] = [];
 

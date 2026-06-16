@@ -20,7 +20,7 @@ import {
   REGISTRY_NPMJS_HOST as REGISTRY_HOST_INTERNAL,
   validateNpmPackageName,
 } from '../supplemental-commands/cdn-url-builder.js';
-import { maxSatisfying } from './semver.js';
+import { isValidRange, maxSatisfying } from './semver.js';
 
 export const REGISTRY_NPMJS_HOST = REGISTRY_HOST_INTERNAL;
 export const EXPECTED_TARBALL_HOST = REGISTRY_HOST_INTERNAL;
@@ -220,29 +220,6 @@ function pickDistTag(ctx: ResolveContext, tag: string): string {
   );
 }
 
-function pickByRange(ctx: ResolveContext, requested: string): string {
-  if (isLikelyDistTag(requested)) {
-    const tags = Object.keys(ctx.distTags).join(', ') || 'none';
-    throw new Error(
-      `resolveVersion(${ctx.packageName}): unknown dist-tag '${requested}' (available tags: ${tags})`
-    );
-  }
-  let best: string | null = null;
-  try {
-    best = maxSatisfying(ctx.versions, requested);
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
-    throw new Error(
-      `resolveVersion(${ctx.packageName}): invalid version or range '${requested}' (${reason})`
-    );
-  }
-  if (best) return best;
-  const n = ctx.versions.length;
-  throw new Error(
-    `resolveVersion(${ctx.packageName}): no version satisfies '${requested}' (have ${n} version${n === 1 ? '' : 's'})`
-  );
-}
-
 export function resolveVersion(packument: Packument, range: string): string {
   const ctx = buildResolveContext(packument);
   const requested = (range ?? '').trim();
@@ -250,10 +227,43 @@ export function resolveVersion(packument: Packument, range: string): string {
     return pickLatest(ctx);
   }
   if (ctx.versionMap[requested]) return requested;
+
+  // Valid semver range (including wildcards like x, X, 1.x) -> resolve via maxSatisfying
+  if (isValidRange(requested)) {
+    let best: string | null = null;
+    try {
+      best = maxSatisfying(ctx.versions, requested);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `resolveVersion(${ctx.packageName}): invalid version or range '${requested}' (${reason})`
+      );
+    }
+    if (best) return best;
+    const n = ctx.versions.length;
+    throw new Error(
+      `resolveVersion(${ctx.packageName}): no version satisfies '${requested}' (have ${n} version${n === 1 ? '' : 's'})`
+    );
+  }
+
+  // Known dist-tag
   if (Object.prototype.hasOwnProperty.call(ctx.distTags, requested)) {
     return pickDistTag(ctx, requested);
   }
-  return pickByRange(ctx, requested);
+
+  // Unknown dist-tag (looks like a tag name) -> clear error
+  if (isLikelyDistTag(requested)) {
+    const tags = Object.keys(ctx.distTags).join(', ') || 'none';
+    throw new Error(
+      `resolveVersion(${ctx.packageName}): unknown dist-tag '${requested}' (available tags: ${tags})`
+    );
+  }
+
+  // Not a valid range and not a dist-tag
+  const n = ctx.versions.length;
+  throw new Error(
+    `resolveVersion(${ctx.packageName}): invalid version or range '${requested}' (have ${n} version${n === 1 ? '' : 's'})`
+  );
 }
 
 /**

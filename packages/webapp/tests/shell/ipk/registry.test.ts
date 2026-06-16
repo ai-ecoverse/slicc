@@ -293,6 +293,26 @@ describe('resolveVersion', () => {
     expect(message).not.toMatch(/invalid version or range/i);
   });
 
+  it('resolves bare "x" as a wildcard range (not an unknown dist-tag)', () => {
+    expect(resolveVersion(packument, 'x')).toBe('2.0.0');
+  });
+
+  it('resolves bare "X" as a wildcard range (not an unknown dist-tag)', () => {
+    expect(resolveVersion(packument, 'X')).toBe('2.0.0');
+  });
+
+  it('resolves partial wildcard "1.x" as a semver range', () => {
+    expect(resolveVersion(packument, '1.x')).toBe('1.2.3');
+  });
+
+  it('resolves partial wildcard "1.X" as a semver range', () => {
+    expect(resolveVersion(packument, '1.X')).toBe('1.2.3');
+  });
+
+  it('resolves dist-tag "next" when the packument has it', () => {
+    expect(resolveVersion(packument, 'next')).toBe('3.0.0-beta.1');
+  });
+
   it('throws when the packument contains no versions', () => {
     const empty = { name: 'empty', versions: {} } as Packument;
     expect(() => resolveVersion(empty, '*')).toThrow(/no versions/i);
