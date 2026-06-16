@@ -64,6 +64,14 @@ function iconForKind(kind: string | null): string {
   return (kind && KIND_ICON[kind.toLowerCase()]) || DEFAULT_KIND_ICON;
 }
 
+/** The result state of a lick card: pending (no glyph), confirmed, or dismissed. */
+type LickState = 'pending' | 'confirmed' | 'dismissed';
+/** Lucide glyph shown for each resolved (non-pending) result state. */
+const STATE_ICON: Record<Exclude<LickState, 'pending'>, string> = {
+  confirmed: 'circle-check',
+  dismissed: 'circle-x',
+};
+
 const STYLE = `
 :host{
   /* Licks are right-aligned in the chat column (mirroring the lickIn slide-in
@@ -77,6 +85,9 @@ const STYLE = `
   --lick-bg:color-mix(in srgb,var(--amber) 9%,#fff);
   --lick-border:color-mix(in srgb,var(--amber) 45%,var(--line));
   --lick-head:#9a6300;
+  /* result-state glyph colors (confirmed green / dismissed red). */
+  --lick-confirm:#16a34a;
+  --lick-dismiss:#dc2626;
 }
 /* Dark flips via the library's outer scopes (.dark / [data-theme="dark"] / body.dark);
    :host-context reaches the light-DOM ancestor from inside the shadow root, and the
@@ -85,11 +96,16 @@ const STYLE = `
   --lick-bg:color-mix(in srgb,var(--amber) 18%,var(--canvas));
   --lick-border:color-mix(in srgb,var(--amber) 40%,var(--line));
   --lick-head:#e5b35a;
+  /* lightened result glyphs for dark surfaces, mirroring the header flip. */
+  --lick-confirm:#4ade80;
+  --lick-dismiss:#f87171;
 }
 :host([theme="light"]){
   --lick-bg:color-mix(in srgb,var(--amber) 9%,#fff);
   --lick-border:color-mix(in srgb,var(--amber) 45%,var(--line));
   --lick-head:#9a6300;
+  --lick-confirm:#16a34a;
+  --lick-dismiss:#dc2626;
 }
 *{box-sizing:border-box;}
 
@@ -108,6 +124,14 @@ const STYLE = `
 /* Static (no entrance) — for already-settled cards and reduced-motion. */
 :host([no-animate]) .lick{animation:none;}
 @media (prefers-reduced-motion: reduce){.lick{animation:none;}}
+/* Dismissed cards mute: the amber tint desaturates to the neutral line/canvas
+   mix (theme-aware on both ends) and the whole card dims. Placed after the theme
+   blocks so it wins the token override at equal specificity in either theme. */
+:host([state="dismissed"]){
+  --lick-bg:color-mix(in srgb,var(--line) 8%,var(--canvas));
+  --lick-border:var(--line);
+}
+:host([state="dismissed"]) .lick{opacity:.62;}
 
 .lh{
   display:flex;align-items:center;gap:7px;
@@ -117,6 +141,12 @@ const STYLE = `
 /* The lucide bell icon inherits the header color via stroke:currentColor. */
 .lh .bell{display:inline-flex;flex:0 0 auto;align-items:center;color:var(--lick-head);}
 .lh .bell svg{display:block;}
+/* Result glyph (confirmed/dismissed) sits at the header's right edge after the
+   pill; it inherits its color from the per-state tokens via stroke:currentColor. */
+.lh .status{display:inline-flex;flex:0 0 auto;align-items:center;margin-left:6px;}
+.lh .status svg{display:block;}
+:host([state="confirmed"]) .status{color:var(--lick-confirm);}
+:host([state="dismissed"]) .status{color:var(--lick-dismiss);}
 /* The clickable affordance only exists while collapsible. */
 :host([collapsible]) .lh{cursor:pointer;user-select:none;}
 .lk{
@@ -166,11 +196,14 @@ const MIDDOT = '·';
  * @attr collapsible - make the header toggle body visibility on click/Enter/Space
  * @attr collapsed - hide the body (header card stays); reflected as it toggles
  * @attr theme - `light` | `dark`; per-element override of the inherited theme
+ * @attr state - result state: `pending` (default / unset, no glyph), `confirmed`
+ *   (green `circle-check`), or `dismissed` (red `circle-x` + the whole card mutes)
  * @csspart card - the outer `.lick` card
  * @csspart header - the `.lh` header row
  * @csspart bell - the `.bell` span wrapping the lucide kind `<svg>` (webhook/clock/workflow/bell)
  * @csspart kind - the "lick · <kind>" label span
  * @csspart event - the right-aligned amber `.lk` pill
+ * @csspart status - the `.status` span wrapping the result glyph (confirmed/dismissed)
  * @csspart body - the `.lb` body line
  * @slot - rich body content (overrides the `body` attribute); `<b>` goes semibold
  * @fires slicc-lick-toggle - {collapsed:boolean} when a collapsible card toggles
@@ -186,6 +219,7 @@ export class SliccLickCard extends HTMLElement {
     'collapsed',
     'theme',
     'hue',
+    'state',
   ];
 
   readonly #root: ShadowRoot;
@@ -292,6 +326,21 @@ export class SliccLickCard extends HTMLElement {
     else this.setAttribute('theme', value);
   }
 
+  /**
+   * Result state of the lick: `pending` (default / unset, no status glyph),
+   * `confirmed` (green check), or `dismissed` (red cross + muted card). Unset or
+   * unrecognized attribute values read back as `pending`.
+   */
+  get state(): LickState {
+    const s = this.getAttribute('state');
+    return s === 'confirmed' || s === 'dismissed' ? s : 'pending';
+  }
+
+  set state(value: LickState | null) {
+    if (value == null || value === 'pending') this.removeAttribute('state');
+    else this.setAttribute('state', value);
+  }
+
   /** Toggle the collapsed state and emit `slicc-lick-toggle` (collapsible only). */
   toggle(): void {
     if (!this.collapsible) return;
@@ -352,6 +401,15 @@ export class SliccLickCard extends HTMLElement {
       h('span', { class: 'kind', part: 'kind' }, `${kindText} `),
       h('span', { class: 'lk', part: 'event' }, eventLabel)
     );
+
+    // Result glyph: a confirmed/dismissed lick gets a lucide status icon pinned
+    // after the pill (green check / red cross); a pending card shows none.
+    const state = this.state;
+    if (state !== 'pending') {
+      const status = h('span', { class: 'status', part: 'status', 'aria-hidden': true });
+      status.append(iconEl(STATE_ICON[state], { size: HEADER_ICON_SIZE }));
+      headerRow.append(status);
+    }
 
     // Body: rich slotted content wins; otherwise the escaped `body` attribute
     // (a text node escapes by construction — no markup interpolation).

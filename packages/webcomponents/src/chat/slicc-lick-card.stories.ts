@@ -11,6 +11,7 @@ interface LickCardArgs {
   collapsible?: boolean;
   collapsed?: boolean;
   theme?: 'light' | 'dark';
+  state?: 'pending' | 'confirmed' | 'dismissed';
 }
 
 /**
@@ -43,6 +44,7 @@ function build(args: LickCardArgs): HTMLElement {
   if (args.collapsed) el.setAttribute('collapsed', '');
   if (args.theme) el.setAttribute('theme', args.theme);
   if (args.hue) el.setAttribute('hue', args.hue);
+  if (args.state) el.setAttribute('state', args.state);
   // Rich slotted markup wins over the plain `body` attribute when supplied.
   if (args.bodyHtml != null) appendRichBody(el, args.bodyHtml);
   else if (args.body != null) el.setAttribute('body', args.body);
@@ -62,6 +64,11 @@ const meta: Meta<LickCardArgs> = {
     collapsible: { control: 'boolean', description: 'Header toggles body visibility' },
     collapsed: { control: 'boolean', description: 'Hide the body (header stays)' },
     theme: { control: 'inline-radio', options: ['light', 'dark'], description: 'Theme override' },
+    state: {
+      control: 'inline-radio',
+      options: ['pending', 'confirmed', 'dismissed'],
+      description: 'Result state: pending (no glyph) / confirmed / dismissed',
+    },
   },
   render: build,
 };
@@ -214,5 +221,37 @@ export const ScoopIdentityTag: Story = {
     collapsed: true,
     bodyHtml:
       'Scoop <b>blame-roulette</b> has been ready for 2 minutes without receiving any work.',
+  },
+};
+
+/**
+ * A resolved lick the user CONFIRMED: a green lucide `circle-check` is pinned at
+ * the header's right edge, after the event pill. The card otherwise stays in its
+ * normal amber tint.
+ */
+export const Confirmed: Story = {
+  args: {
+    kind: 'sudo-request',
+    'event-label': 'sudo',
+    state: 'confirmed',
+    'no-animate': true,
+    bodyHtml:
+      'A <b>sudo request</b> the user <b>confirmed</b> — a green check marks the resolved lick.',
+  },
+};
+
+/**
+ * A resolved lick the user DISMISSED: a red lucide `circle-x` glyph, and the
+ * whole card mutes — the amber tint desaturates to the neutral line/canvas mix
+ * and the card dims via reduced opacity.
+ */
+export const Dismissed: Story = {
+  args: {
+    kind: 'sudo-request',
+    'event-label': 'sudo',
+    state: 'dismissed',
+    'no-animate': true,
+    bodyHtml:
+      'A <b>sudo request</b> the user <b>dismissed</b> — a red cross and the whole card mutes.',
   },
 };

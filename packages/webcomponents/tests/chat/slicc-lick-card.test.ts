@@ -188,6 +188,88 @@ describe('slicc-lick-card', () => {
     });
   });
 
+  describe('result state (confirm / dismiss)', () => {
+    function statusSvg(el: SliccLickCard): SVGSVGElement | null {
+      return el.shadowRoot?.querySelector('.status svg') as SVGSVGElement | null;
+    }
+
+    it('renders no status glyph by default (pending)', () => {
+      const el = mount();
+      expect(el.state).toBe('pending');
+      expect(el.shadowRoot?.querySelector('.status')).toBeNull();
+      expect(el.shadowRoot?.querySelector('[part="status"]')).toBeNull();
+    });
+
+    it('renders the green circle-check glyph when confirmed', () => {
+      const el = mount((e) => {
+        e.state = 'confirmed';
+      });
+      expect(el.getAttribute('state')).toBe('confirmed');
+      expect(el.shadowRoot?.querySelector('[part="status"]')).toBeTruthy();
+      expect(statusSvg(el)?.innerHTML).toBe(iconShape('circle-check'));
+    });
+
+    it('renders the red circle-x glyph when dismissed', () => {
+      const el = mount((e) => {
+        e.state = 'dismissed';
+      });
+      expect(el.getAttribute('state')).toBe('dismissed');
+      expect(statusSvg(el)?.innerHTML).toBe(iconShape('circle-x'));
+    });
+
+    it('mutes the whole card (reduced opacity) only when dismissed', () => {
+      // no-animate so the lickIn entrance (which starts at opacity:0) doesn't
+      // race the static result-state opacity we want to measure.
+      const el = mount((e) => {
+        e.noAnimate = true;
+        e.state = 'dismissed';
+      });
+      expect(Number(getComputedStyle(card(el)).opacity)).toBeLessThan(1);
+      // confirmed cards keep full opacity (no muting).
+      el.state = 'confirmed';
+      expect(Number(getComputedStyle(card(el)).opacity)).toBe(1);
+    });
+
+    it('tints the glyph green when confirmed and red when dismissed', () => {
+      const el = mount((e) => {
+        e.state = 'confirmed';
+      });
+      const status = () => el.shadowRoot?.querySelector('.status') as HTMLElement;
+      // --lick-confirm #16a34a → rgb(22, 163, 74).
+      expect(getComputedStyle(status()).color).toBe('rgb(22, 163, 74)');
+      el.state = 'dismissed';
+      // --lick-dismiss #dc2626 → rgb(220, 38, 38).
+      expect(getComputedStyle(status()).color).toBe('rgb(220, 38, 38)');
+    });
+
+    it('swaps the status glyph live as the state changes', () => {
+      const el = mount((e) => {
+        e.state = 'confirmed';
+      });
+      expect(statusSvg(el)?.innerHTML).toBe(iconShape('circle-check'));
+      el.state = 'dismissed';
+      expect(statusSvg(el)?.innerHTML).toBe(iconShape('circle-x'));
+      el.state = 'pending';
+      expect(el.shadowRoot?.querySelector('.status')).toBeNull();
+    });
+
+    it('reflects state (confirmed|dismissed retained; pending/null clears)', () => {
+      const el = mount();
+      expect(el.state).toBe('pending');
+      el.state = 'confirmed';
+      expect(el.getAttribute('state')).toBe('confirmed');
+      el.state = 'pending';
+      expect(el.hasAttribute('state')).toBe(false);
+      el.state = 'dismissed';
+      expect(el.getAttribute('state')).toBe('dismissed');
+      el.state = null;
+      expect(el.hasAttribute('state')).toBe(false);
+      // Unrecognized attribute values read back as pending.
+      el.setAttribute('state', 'bogus');
+      expect(el.state).toBe('pending');
+    });
+  });
+
   describe('attribute ↔ property reflection', () => {
     it('reflects kind', () => {
       const el = mount();
