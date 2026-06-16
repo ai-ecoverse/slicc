@@ -127,6 +127,24 @@ export const TriggerGlyphSwap: Story = {
   },
 };
 
+/**
+ * `global-drop` opt-in: with the attribute set, a file dragged anywhere on the
+ * owning document (not just over the menu) opens the panel and activates the
+ * drop zone. Shown here in its active dropping state — the dashed "Drop files
+ * to add" overlay — with the attribute applied.
+ */
+export const GlobalDrop: Story = {
+  render: () => {
+    const frame = buildAddMenu({ open: true });
+    const el = frame.querySelector('slicc-add-menu') as SliccAddMenu;
+    el.setAttribute('global-drop', '');
+    // Force the dropping visual for the static screenshot (normally driven by a
+    // live document file drag).
+    requestAnimationFrame(() => el.setAttribute('data-dropping', ''));
+    return frame;
+  },
+};
+
 /** Dark theme — surfaces flip via the inherited `.dark` scope (Storybook theme toolbar). */
 export const Dark: Story = {
   args: { open: true },

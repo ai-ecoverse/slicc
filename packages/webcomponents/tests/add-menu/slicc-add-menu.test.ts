@@ -34,6 +34,20 @@ function typeSearch(el: SliccAddMenu, value: string): void {
 /** Yield a microtask so the async #renderBody settles. */
 const flush = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
 
+/**
+ * Build a file `DragEvent` whose `dataTransfer.types` includes `Files` (so the
+ * component treats it as an OS/file drag). `composed` lets a wrap-targeted event
+ * cross the shadow boundary up to the document listener, mirroring native drags.
+ */
+function fileDrag(type: string, files: File[] = [], composed = false): DragEvent {
+  const dt = new DataTransfer();
+  for (const f of files) dt.items.add(f);
+  // Ensure the `Files` type is present even when no concrete file is attached
+  // (native dragenter/dragover expose the type but not the file list).
+  if (files.length === 0) dt.items.add(new File([''], '__probe'));
+  return new DragEvent(type, { bubbles: true, composed, dataTransfer: dt });
+}
+
 describe('slicc-add-menu', () => {
   beforeEach(() => {
     ensureGlobalTokens();
@@ -340,6 +354,124 @@ describe('slicc-add-menu', () => {
     expect(details).toHaveLength(1);
     expect(details[0]).toMatchObject({ kind: 'upload', name: 'drop.md', size: 7 });
     expect(details[0].file).toBe(file);
+  });
+
+  it('global-drop: a document file drag opens the menu and sets data-dropping', async () => {
+    const el = mount();
+    el.setAttribute('global-drop', '');
+    expect(el.isOpen).toBe(false);
+
+    document.dispatchEvent(fileDrag('dragenter'));
+    await flush();
+    expect(el.isOpen).toBe(true);
+    expect(el.hasAttribute('data-dropping')).toBe(true);
+  });
+
+  it('global-drop: a document drop emits one upload per file and closes the menu', async () => {
+    const el = mount();
+    el.setAttribute('global-drop', '');
+    const details: Array<Record<string, unknown>> = [];
+    el.addEventListener('slicc-add', (e) =>
+      details.push((e as CustomEvent<Record<string, unknown>>).detail)
+    );
+
+    document.dispatchEvent(fileDrag('dragenter'));
+    await flush();
+    expect(el.isOpen).toBe(true);
+
+    const a = new File(['a'], 'a.md', { type: 'text/markdown' });
+    const b = new File(['bb'], 'b.txt', { type: 'text/plain' });
+    document.dispatchEvent(fileDrag('drop', [a, b]));
+
+    expect(details).toHaveLength(2);
+    expect(details.map((d) => d.name)).toEqual(['a.md', 'b.txt']);
+    expect(details[0].file).toBe(a);
+    expect(el.hasAttribute('data-dropping')).toBe(false);
+    expect(el.isOpen).toBe(false);
+  });
+
+  it('global-drop: the drag-counter holds data-dropping across nested enter/leave', async () => {
+    const el = mount();
+    el.setAttribute('global-drop', '');
+
+    document.dispatchEvent(fileDrag('dragenter')); // depth 1 — auto-opens
+    await flush();
+    document.dispatchEvent(fileDrag('dragenter')); // depth 2 — nested
+    expect(el.hasAttribute('data-dropping')).toBe(true);
+    expect(el.isOpen).toBe(true);
+
+    document.dispatchEvent(fileDrag('dragleave')); // depth 1 — still inside
+    expect(el.hasAttribute('data-dropping')).toBe(true);
+    expect(el.isOpen).toBe(true);
+
+    document.dispatchEvent(fileDrag('dragleave')); // depth 0 — left the window
+    expect(el.hasAttribute('data-dropping')).toBe(false);
+    // Auto-opened by the drag → restored to closed.
+    expect(el.isOpen).toBe(false);
+  });
+
+  it('global-drop: leaving the window keeps a user-opened menu open', async () => {
+    const el = mount();
+    el.setAttribute('global-drop', '');
+    el.open();
+    await flush();
+
+    document.dispatchEvent(fileDrag('dragenter'));
+    expect(el.hasAttribute('data-dropping')).toBe(true);
+    document.dispatchEvent(fileDrag('dragleave'));
+    expect(el.hasAttribute('data-dropping')).toBe(false);
+    // Not auto-opened (the user opened it) → stays open.
+    expect(el.isOpen).toBe(true);
+  });
+
+  it('without global-drop, a document file drag does nothing (no document listeners)', async () => {
+    const el = mount();
+    document.dispatchEvent(fileDrag('dragenter'));
+    await flush();
+    expect(el.isOpen).toBe(false);
+    expect(el.hasAttribute('data-dropping')).toBe(false);
+  });
+
+  it('removing global-drop detaches the document listeners', async () => {
+    const el = mount();
+    el.setAttribute('global-drop', '');
+    el.removeAttribute('global-drop');
+
+    document.dispatchEvent(fileDrag('dragenter'));
+    await flush();
+    expect(el.isOpen).toBe(false);
+    expect(el.hasAttribute('data-dropping')).toBe(false);
+  });
+
+  it('global-drop listeners are cleaned up on disconnect', async () => {
+    const el = mount();
+    el.setAttribute('global-drop', '');
+    el.remove();
+
+    document.dispatchEvent(fileDrag('dragenter'));
+    await flush();
+    expect(el.isOpen).toBe(false);
+    expect(el.isConnected).toBe(false);
+  });
+
+  it('global-drop does not double-emit when the drop lands on the wrap', () => {
+    const el = mount();
+    el.setAttribute('global-drop', '');
+    const wrap = shadow(el).querySelector('.wrap') as HTMLElement;
+    const details: Array<Record<string, unknown>> = [];
+    el.addEventListener('slicc-add', (e) =>
+      details.push((e as CustomEvent<Record<string, unknown>>).detail)
+    );
+
+    const file = new File(['x'], 'x.md', { type: 'text/markdown' });
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    // composed:true so the event also reaches the document-level listener — the
+    // wrap handler must win and the document handler must NOT re-emit.
+    wrap.dispatchEvent(new DragEvent('drop', { bubbles: true, composed: true, dataTransfer: dt }));
+
+    expect(details).toHaveLength(1);
+    expect(details[0].name).toBe('x.md');
   });
 
   it('cleans up the document listener on disconnect', () => {
