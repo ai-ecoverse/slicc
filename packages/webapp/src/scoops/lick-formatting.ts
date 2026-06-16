@@ -199,6 +199,37 @@ function formatGenericLick(event: LickEvent, label: string): FormattedLick {
 }
 
 /**
+ * Navigate (handoff / upskill) lick. Keeps the generic `[Navigate Event: url]`
+ * + JSON-body block the handoff skill parses, then appends the actionable
+ * `Lick ID` and verb-specific guidance when the orchestrator registered one:
+ *
+ * - **upskill** is agent-actionable — the cone installs via `lick_confirm`
+ *   (runs `upskill`, honoring any `branch` / `path` scope) or skips via
+ *   `lick_dismiss`; the card flips ✓ / muted ✗.
+ * - **handoff** stays human-gated — the cone shows the approval dip and must
+ *   NOT self-approve; carrying the lick id in the dip action flips the card
+ *   when the human accepts / dismisses.
+ */
+function formatNavigateLick(event: LickEvent, label: string): FormattedLick {
+  const generic = formatGenericLick(event, label);
+  const lickId = event.lickId;
+  if (!lickId) return generic;
+  const verb = (event.body as { verb?: string } | null | undefined)?.verb;
+  const guidance =
+    verb === 'upskill'
+      ? `\n\nLick ID: ${lickId}\n` +
+        `Upskill install. To install, call \`lick_confirm\` with this lick id ` +
+        `(it runs \`upskill\` with any branch/path scope from the body); to skip, call ` +
+        `\`lick_dismiss\`. The card flips to ✓ on confirm / muted ✗ on dismiss.`
+      : `\n\nLick ID: ${lickId}\n` +
+        `External handoff — stays human-gated. Show the approval dip and wait for the user; ` +
+        `do NOT use \`lick_confirm\` / \`lick_dismiss\` here. Carry the lick id in the dip ` +
+        `action so the card resolves: ` +
+        `slicc.lick({action:'accept'|'dismiss', data:{lickId:'${lickId}'}}).`;
+  return { label: generic.label, content: `${generic.content}${guidance}` };
+}
+
+/**
  * Build the human-readable label and message body the cone receives for a
  * given lick event. Returns `null` when the event should be silently
  * dropped (empty `mount-recovery` payload).
@@ -215,6 +246,7 @@ export function formatLickEventForCone(event: LickEvent): FormattedLick | null {
   if (event.type === 'cherry') return formatCherryLick(event, label);
   if (event.type === 'workflow') return formatWorkflowLick(event, label);
   if (event.type === 'sudo-request') return formatSudoRequestLick(event, label);
+  if (event.type === 'navigate') return formatNavigateLick(event, label);
 
   return formatGenericLick(event, label);
 }

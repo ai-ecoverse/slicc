@@ -1247,6 +1247,57 @@ describe('OffscreenBridge follower mode', () => {
     expect(mockOrchestrator.handleMessage).toHaveBeenCalled();
   });
 
+  it('sprinkle-lick carrying a handoff lickId flips the card and still routes to the cone', async () => {
+    mockOrchestrator.resolveNavigateHandoffByHuman = vi.fn().mockResolvedValue(true);
+
+    simulatePanelMessage({
+      type: 'sprinkle-lick',
+      sprinkleName: 'inline',
+      body: { action: 'accept', data: { lickId: 'lick-nav-9' } },
+      targetScoop: undefined,
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(mockOrchestrator.resolveNavigateHandoffByHuman).toHaveBeenCalledWith('lick-nav-9', true);
+    // Non-consuming: the dip lick still routes to the cone so it can act on accept.
+    expect(mockOrchestrator.handleMessage).toHaveBeenCalled();
+  });
+
+  it('sprinkle-lick dismiss with a handoff lickId resolves accepted=false', async () => {
+    mockOrchestrator.resolveNavigateHandoffByHuman = vi.fn().mockResolvedValue(true);
+
+    simulatePanelMessage({
+      type: 'sprinkle-lick',
+      sprinkleName: 'inline',
+      body: { action: 'dismiss', data: { lickId: 'lick-nav-10' } },
+      targetScoop: undefined,
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(mockOrchestrator.resolveNavigateHandoffByHuman).toHaveBeenCalledWith(
+      'lick-nav-10',
+      false
+    );
+  });
+
+  it('sprinkle-lick without a lickId does not invoke the handoff card flip', async () => {
+    mockOrchestrator.resolveNavigateHandoffByHuman = vi.fn();
+
+    simulatePanelMessage({
+      type: 'sprinkle-lick',
+      sprinkleName: 'inline',
+      body: { action: 'accept' },
+      targetScoop: undefined,
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(mockOrchestrator.resolveNavigateHandoffByHuman).not.toHaveBeenCalled();
+    expect(mockOrchestrator.handleMessage).toHaveBeenCalled();
+  });
+
   it('applyFollowerSnapshot replaces cone buffer, persists, emits scoop-messages-replaced', () => {
     // Pre-populate with stale local content to verify replacement.
     const buf = (bridge as any).getBuffer('cone_1');

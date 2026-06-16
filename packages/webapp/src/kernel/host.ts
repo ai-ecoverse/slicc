@@ -273,6 +273,15 @@ function routeFormattedLickToCone(
   event: LickEvent,
   { orchestrator, log }: LickRoutingContext
 ): void {
+  // Navigate (handoff / upskill) licks are actionable: mint + register a
+  // stable lickId BEFORE formatting so the formatter can surface it and the
+  // built ChannelMessage carries it onto the persisted message + UI chip.
+  // Only runs on the leader/standalone (followers forward navigate licks
+  // upstream instead of reaching this handler).
+  if (event.type === 'navigate') {
+    event.lickId = orchestrator.registerNavigateLick(event);
+  }
+
   const formatted = formatLickEventForCone(event);
   if (formatted === null) {
     log.debug?.('dropping lick event with no renderable content', { type: event.type });
@@ -311,6 +320,10 @@ function routeFormattedLickToCone(
     timestamp: event.timestamp,
     fromAssistant: false,
     channel,
+    // Actionable navigate licks carry the minted id so the resolve path
+    // (upskill lick_confirm / handoff human dip) can locate this stored
+    // message and flip its rendered card.
+    ...(event.lickId ? { lickId: event.lickId } : {}),
   };
   orchestrator.handleMessage(channelMsg);
 }

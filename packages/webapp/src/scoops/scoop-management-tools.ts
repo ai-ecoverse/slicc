@@ -64,6 +64,13 @@ export interface ScoopManagementToolsConfig {
     persistError?: string;
     scoopFolder?: string;
     kind?: SudoKind;
+    /**
+     * Verbatim result text for a non-sudo actionable lick (e.g. the
+     * navigate·upskill resolver's `upskill` output). When present the
+     * lick_confirm / lick_dismiss tool surfaces it instead of the
+     * sudo-shaped summary.
+     */
+    message?: string;
   }>;
   /** Cone-only: snapshot all pending cone-mediated sudo requests. */
   onListSudoRequests?: () => Array<{
@@ -558,6 +565,7 @@ async function executeLickConfirm(
       always: !!always,
       persisted: outcome.persisted,
     });
+    if (outcome.message) return { content: outcome.message };
     return { content: formatAllowOutcome(outcome, !!always) };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -582,6 +590,7 @@ async function executeLickDismiss(
       };
     }
     log.info('Lick dismissed', { id: lick_id });
+    if (outcome.message) return { content: outcome.message };
     return { content: 'Denied — the scoop will not run this action.' };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

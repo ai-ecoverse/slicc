@@ -35,7 +35,7 @@ import { SudoManager } from '../sudo/sudo-manager.js';
 import { applyConeMemoryBudget, CONE_MEMORY_PATH } from './cone-memory-budget.js';
 import * as db from './db.js';
 import { isExternalLickChannel } from './lick-formatting.js';
-import { buildActiveLicksError, type LickManager } from './lick-manager.js';
+import { buildActiveLicksError, type LickEvent, type LickManager } from './lick-manager.js';
 import { TaskScheduler } from './scheduler.js';
 import { ScoopContext, type ScoopContextCallbacks } from './scoop-context.js';
 import { createDefaultSharedFiles, createDefaultSkills } from './skills.js';
@@ -240,6 +240,26 @@ export class Orchestrator implements ConeApprovalRouter {
    * NOT routed through here — only scoop-originated requests do.
    */
   private sudoRegistry: ConeRequestRegistry = new ConeRequestRegistry();
+
+  /**
+   * Agent-actionable navigate (upskill) licks, keyed by the orchestrator-minted
+   * `lickId`. `lick_confirm` runs `upskill <target> [--branch ..] [--path ..]`;
+   * `lick_dismiss` drops the entry. See {@link registerNavigateLick} /
+   * {@link resolveUpskillLick}.
+   */
+  private navigateUpskillRegistry = new Map<
+    string,
+    { target: string; branch?: string; path?: string }
+  >();
+
+  /**
+   * Human-gated navigate (handoff) lick ids. Handoffs are untrusted external
+   * input, so the agent must NOT self-approve them via `lick_confirm`; the
+   * card flips only when the human resolves the approval dip (see
+   * {@link resolveNavigateHandoffByHuman}). Membership here is what makes a
+   * navigate lick's card flippable from the dip path.
+   */
+  private humanGatedNavigateLicks = new Set<string>();
 
   constructor(
     container: HTMLElement,
@@ -1566,6 +1586,125 @@ export class Orchestrator implements ConeApprovalRouter {
   }
 
   /**
+   * Mint a stable `lickId` for a navigate (handoff / upskill) lick and register
+   * it so a later resolution can flip the rendered card. Upskill licks are
+   * agent-actionable (`lick_confirm` runs `upskill`); handoff licks stay
+   * human-gated (the approval dip is the authority — see
+   * {@link resolveNavigateHandoffByHuman}). Called from the kernel host's lick
+   * router before the cone `ChannelMessage` is built so the id flows onto both
+   * the UI chip and the persisted message. Mirrors the `lick-<ts>-<rand>` id
+   * shape used by {@link ConeRequestRegistry}.
+   */
+  registerNavigateLick(event: LickEvent): string {
+    const id = `lick-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const body = (event.body ?? {}) as Record<string, unknown>;
+    const verb = typeof body.verb === 'string' ? body.verb : undefined;
+    const target = typeof body.target === 'string' ? body.target : undefined;
+    if (verb === 'upskill' && target) {
+      this.navigateUpskillRegistry.set(id, {
+        target,
+        branch: typeof body.branch === 'string' ? body.branch : undefined,
+        path: typeof body.path === 'string' ? body.path : undefined,
+      });
+    } else if (verb === 'handoff') {
+      this.humanGatedNavigateLicks.add(id);
+    }
+    return id;
+  }
+
+  /**
+   * Resolve an actionable lick for the cone's `lick_confirm` / `lick_dismiss`
+   * tools. Dispatches to the navigate-upskill resolver when the id is an
+   * upskill lick, otherwise falls through to the sudo-request resolver. Handoff
+   * lick ids are intentionally NOT resolvable here — they are human-gated, so
+   * they fall through and report unknown / already-resolved to the agent.
+   */
+  async resolveActionableLick(
+    id: string,
+    decision: SudoDecision
+  ): Promise<{
+    settled: boolean;
+    persisted: boolean;
+    persistedPattern?: string;
+    persistError?: string;
+    scoopFolder?: string;
+    kind?: SudoRequest['kind'];
+    message?: string;
+  }> {
+    if (this.navigateUpskillRegistry.has(id)) {
+      return this.resolveUpskillLick(id, decision);
+    }
+    return this.resolveSudoRequestAndPersist(id, decision);
+  }
+
+  /**
+   * Settle an agent-actionable navigate·upskill lick. On allow/always it runs
+   * `upskill <target> [--branch ..] [--path ..]` in the cone's shell (upskill's
+   * on-disk "already exists" check still guards duplicate installs); on deny it
+   * just drops. Either way the originating card flips ('confirmed' / muted
+   * 'dismissed') and persists via {@link persistLickDecision}.
+   */
+  private async resolveUpskillLick(
+    id: string,
+    decision: SudoDecision
+  ): Promise<{ settled: boolean; persisted: boolean; message?: string }> {
+    const entry = this.navigateUpskillRegistry.get(id);
+    if (!entry) return { settled: false, persisted: false };
+    this.navigateUpskillRegistry.delete(id);
+    let message: string | undefined;
+    if (decision.decision !== 'deny') {
+      message = await this.runUpskillInstall(entry);
+    }
+    await this.persistLickDecision(id, decision.decision);
+    return { settled: true, persisted: false, message };
+  }
+
+  /**
+   * Run the `upskill` install for a confirmed navigate·upskill lick through the
+   * cone's shell (which carries the cone fs, proxied fetch, and skills-dir
+   * discovery). Each argument is single-quoted because `target` / `branch` /
+   * `path` originate from an attacker-controlled `Link` header — never
+   * interpolate them raw into the command string. Returns the combined
+   * stdout/stderr (or an error line) for the tool to surface verbatim.
+   */
+  private async runUpskillInstall(entry: {
+    target: string;
+    branch?: string;
+    path?: string;
+  }): Promise<string> {
+    const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
+    const shell = cone ? this.contexts.get(cone.jid)?.getShell() : null;
+    if (!shell) return 'upskill could not run: no cone shell available.';
+    const quote = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+    const parts = ['upskill'];
+    if (entry.branch) parts.push('--branch', quote(entry.branch));
+    if (entry.path) parts.push('--path', quote(entry.path));
+    parts.push(quote(entry.target));
+    try {
+      const result = await shell.executeCommand(parts.join(' '));
+      const out = `${result.stdout}${result.stderr}`.trim();
+      return out.length > 0 ? out : `upskill exited ${result.exitCode}.`;
+    } catch (err) {
+      return `upskill failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  /**
+   * Flip a human-gated navigate·handoff lick card once the user resolves the
+   * approval dip. Returns `true` when `lickId` matched a pending handoff lick.
+   * Called from the dip-lick routing path (the shared
+   * `OffscreenBridge.routeSprinkleLick`), NOT from the agent tools — this is
+   * what preserves the human-approval gate while still letting the card show
+   * ✓ on accept / muted ✗ on dismiss.
+   */
+  async resolveNavigateHandoffByHuman(lickId: string, accepted: boolean): Promise<boolean> {
+    if (!this.humanGatedNavigateLicks.has(lickId)) return false;
+    this.humanGatedNavigateLicks.delete(lickId);
+    await this.persistLickDecision(lickId, accepted ? 'allow' : 'deny');
+    return true;
+  }
+
+  /**
    * Flip the rendered + persisted state of an actionable lick once its
    * decision settles: locate the cone's stored `sudo-request` message by
    * `lickId`, stamp `lickState` ('confirmed' for allow/always, 'dismissed'
@@ -2304,7 +2443,7 @@ export class Orchestrator implements ConeApprovalRouter {
       // drain it. The cone keeps the user broker for its own FS / shell gate.
       onSudoRequest: scoop.isCone ? undefined : (request) => this.enqueueSudoRequest(jid, request),
       onSudoResolve: scoop.isCone
-        ? (id, decision) => this.resolveSudoRequestAndPersist(id, decision)
+        ? (id, decision) => this.resolveActionableLick(id, decision)
         : undefined,
       onListSudoRequests: scoop.isCone ? () => this.listPendingSudoRequests() : undefined,
       getBrowserAPI: () => this.callbacks.getBrowserAPI(),

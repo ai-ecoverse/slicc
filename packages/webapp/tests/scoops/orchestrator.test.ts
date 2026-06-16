@@ -2917,3 +2917,203 @@ describe('Orchestrator.enqueueSudoRequest lick emission', () => {
     await expect(pendingDecision).resolves.toBeDefined();
   });
 });
+
+describe('Orchestrator navigate-lick actionable resolution', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+    await saveScoop(cone);
+    await saveScoop(testScoop);
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await settleAndDisposeSharedFs(sharedFs);
+  });
+
+  function makeOrch(onMessageUpdate = vi.fn()) {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    const o = new Orchestrator(container, {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      onIncomingMessage: vi.fn(),
+      onMessageUpdate,
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    });
+    return o;
+  }
+
+  /** Store the cone-facing navigate ChannelMessage the kernel host would build. */
+  async function saveNavigateMessage(lickId: string): Promise<void> {
+    const { saveMessage } = await import('../../src/scoops/db.js');
+    await saveMessage({
+      id: `navigate-https://x-${lickId}`,
+      chatJid: cone.jid,
+      senderId: 'navigate',
+      senderName: 'navigate:https://origin',
+      content: '[Navigate Event: https://origin]',
+      timestamp: new Date().toISOString(),
+      fromAssistant: false,
+      channel: 'navigate',
+      lickId,
+    });
+  }
+
+  it('upskill lick_confirm runs upskill (with branch/path) and flips the card to confirmed', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerNavigateLick({
+      type: 'navigate',
+      timestamp: new Date().toISOString(),
+      body: {
+        url: 'https://origin',
+        verb: 'upskill',
+        target: 'https://github.com/o/r',
+        branch: 'main',
+        path: 'skills/foo',
+      },
+    } as any);
+    await saveNavigateMessage(lickId);
+
+    const executeCommand = vi
+      .fn()
+      .mockResolvedValue({ stdout: 'Installed skill "foo"\n', stderr: '', exitCode: 0 });
+    const coneCtx = (orch as any).contexts.get(cone.jid);
+    expect(coneCtx).toBeDefined();
+    vi.spyOn(coneCtx, 'getShell').mockReturnValue({ executeCommand } as any);
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'allow' });
+
+    expect(executeCommand).toHaveBeenCalledTimes(1);
+    expect(executeCommand.mock.calls[0][0]).toBe(
+      "upskill --branch 'main' --path 'skills/foo' 'https://github.com/o/r'"
+    );
+    expect(result.settled).toBe(true);
+    expect(result.message).toContain('Installed skill');
+
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `navigate-https://x-${lickId}`,
+      lickId,
+      lickState: 'confirmed',
+    });
+    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(after?.lickState).toBe('confirmed');
+  });
+
+  it('upskill lick_dismiss drops the install and mutes the card (dismissed)', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerNavigateLick({
+      type: 'navigate',
+      timestamp: new Date().toISOString(),
+      body: { url: 'https://origin', verb: 'upskill', target: 'https://github.com/o/r' },
+    } as any);
+    await saveNavigateMessage(lickId);
+
+    const executeCommand = vi.fn();
+    const coneCtx = (orch as any).contexts.get(cone.jid);
+    vi.spyOn(coneCtx, 'getShell').mockReturnValue({ executeCommand } as any);
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'deny' });
+
+    expect(executeCommand).not.toHaveBeenCalled();
+    expect(result.settled).toBe(true);
+    expect(result.message).toBeUndefined();
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `navigate-https://x-${lickId}`,
+      lickId,
+      lickState: 'dismissed',
+    });
+  });
+
+  it('handoff licks are NOT agent-resolvable via lick_confirm (human gate preserved)', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerNavigateLick({
+      type: 'navigate',
+      timestamp: new Date().toISOString(),
+      body: {
+        url: 'https://origin',
+        verb: 'handoff',
+        target: 'https://origin',
+        instruction: 'do x',
+      },
+    } as any);
+    await saveNavigateMessage(lickId);
+
+    // The agent path falls through to the sudo registry, which has no such id.
+    const result = await orch.resolveActionableLick(lickId, { decision: 'allow' });
+    expect(result.settled).toBe(false);
+    expect(onMessageUpdate).not.toHaveBeenCalled();
+    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(after?.lickState).toBeUndefined();
+  });
+
+  it.each([
+    [true, 'confirmed'],
+    [false, 'dismissed'],
+  ] as const)('handoff card flips when the human resolves the dip (accepted=%s → %s)', async (accepted, expectedState) => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerNavigateLick({
+      type: 'navigate',
+      timestamp: new Date().toISOString(),
+      body: { url: 'https://origin', verb: 'handoff', target: 'https://origin' },
+    } as any);
+    await saveNavigateMessage(lickId);
+
+    const ok = await orch.resolveNavigateHandoffByHuman(lickId, accepted);
+    expect(ok).toBe(true);
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `navigate-https://x-${lickId}`,
+      lickId,
+      lickState: expectedState,
+    });
+    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(after?.lickState).toBe(expectedState);
+
+    // Idempotent: a second human resolution is a no-op (entry consumed).
+    expect(await orch.resolveNavigateHandoffByHuman(lickId, accepted)).toBe(false);
+  });
+});

@@ -58,6 +58,23 @@ import type {
 
 const log = createLogger('offscreen-bridge');
 
+/**
+ * Parse a dip lick body for a human navigate·handoff approval resolution.
+ * Returns `{ lickId, accepted }` when the body is the handoff approval card's
+ * `slicc.lick({action:'accept'|'dismiss', data:{lickId}})` shape, else `null`.
+ * The orchestrator's `resolveNavigateHandoffByHuman` ignores ids it does not
+ * hold, so a stray `accept`/`dismiss` carrying an unrelated lickId is a no-op.
+ */
+function parseNavigateHandoffDip(body: unknown): { lickId: string; accepted: boolean } | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const b = body as { action?: unknown; data?: unknown };
+  if (b.action !== 'accept' && b.action !== 'dismiss') return null;
+  const data = b.data as { lickId?: unknown } | null | undefined;
+  const lickId = data && typeof data.lickId === 'string' ? data.lickId : null;
+  if (!lickId) return null;
+  return { lickId, accepted: b.action === 'accept' };
+}
+
 /** Buffered message for state sync */
 interface BufferedChatMessage {
   id: string;
@@ -804,6 +821,14 @@ export class OffscreenBridge implements KernelFacade {
     originLabel?: string
   ): Promise<void> {
     if (!this.orchestrator) return;
+    // Human-gated navigate·handoff licks: when the user resolves the approval
+    // dip, flip the originating lick card in place. Non-consuming — the lick
+    // still routes to the cone below so it can act on accept. No-op unless the
+    // dip carried a registered handoff lick id (see `handoff/SKILL.md`).
+    const handoff = parseNavigateHandoffDip(body);
+    if (handoff) {
+      void this.orchestrator.resolveNavigateHandoffByHuman(handoff.lickId, handoff.accepted);
+    }
     const scoops = this.orchestrator.getScoops();
     let target = targetScoop
       ? scoops.find(

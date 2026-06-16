@@ -157,6 +157,56 @@ describe('formatLickEventForCone', () => {
   });
 });
 
+describe('navigate lick actionable formatting', () => {
+  it('appends Lick ID + lick_confirm guidance for an upskill navigate lick', () => {
+    const out = formatLickEventForCone({
+      type: 'navigate',
+      navigateUrl: 'https://origin',
+      lickId: 'lick-nav-1',
+      timestamp: '2026-06-10T00:00:00.000Z',
+      body: { url: 'https://origin', verb: 'upskill', target: 'https://github.com/o/r' },
+    } as never);
+    expect(out).not.toBeNull();
+    expect(out!.label).toBe('Navigate Event');
+    expect(out!.content).toContain('[Navigate Event: https://origin]');
+    expect(out!.content).toContain('Lick ID: lick-nav-1');
+    expect(out!.content).toContain('lick_confirm');
+    expect(out!.content).toContain('lick_dismiss');
+  });
+
+  it('appends Lick ID + human-gate guidance for a handoff navigate lick', () => {
+    const out = formatLickEventForCone({
+      type: 'navigate',
+      navigateUrl: 'https://origin',
+      lickId: 'lick-nav-2',
+      timestamp: '2026-06-10T00:00:00.000Z',
+      body: {
+        url: 'https://origin',
+        verb: 'handoff',
+        target: 'https://origin',
+        instruction: 'do x',
+      },
+    } as never);
+    expect(out).not.toBeNull();
+    expect(out!.content).toContain('Lick ID: lick-nav-2');
+    expect(out!.content).toContain('human-gated');
+    expect(out!.content).toContain("data:{lickId:'lick-nav-2'}");
+    // Handoff must NOT instruct self-approval via the agent tools.
+    expect(out!.content).toContain('do NOT use `lick_confirm`');
+  });
+
+  it('falls back to the plain JSON block when no lickId is registered', () => {
+    const out = formatLickEventForCone({
+      type: 'navigate',
+      navigateUrl: 'https://origin',
+      timestamp: '2026-06-10T00:00:00.000Z',
+      body: { url: 'https://origin', verb: 'upskill', target: 'https://github.com/o/r' },
+    } as never);
+    expect(out!.content).not.toContain('Lick ID:');
+    expect(out!.content).not.toContain('lick_confirm');
+  });
+});
+
 describe('cherry lick formatting', () => {
   it('formats a cherry host event for the cone', () => {
     const formatted = formatLickEventForCone({

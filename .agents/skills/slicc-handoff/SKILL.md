@@ -28,7 +28,7 @@ The script builds a URL like `https://www.sliccy.ai/handoff?handoff=<urlencoded>
 - **Localhost POST** to `http://localhost:${SLICC_PORT ?? 5710}/api/handoff` with the structured payload `{ verb, target, instruction?, url, title }` — `verb` is `handoff` or `upskill`, `target` is the github URL for upskill or the handoff URL for handoff, and `instruction` carries the prose for handoff. The node-server rebroadcasts it as a `navigate` lick to the connected webapp. Profile-independent: reaches SLICC even when the user's default browser is a different Chrome profile than the one SLICC controls.
 - **`--open`** opens the URL in the local browser. If that browser profile has the SLICC extension installed, `chrome.webRequest` parses the response's RFC 8288 `Link` header (rel `https://www.sliccy.ai/rel/handoff` or `https://www.sliccy.ai/rel/upskill`) and emits the navigate lick when one of those rels is present.
 
-Either path results in a yes/no approval card in the cone; accept dispatches by verb prefix.
+Either path results in a `navigate` lick in the cone. A `handoff:` shows a yes/no approval card the user must accept (the card flips to ✓/✗ on their click); an `upskill:` is installed when the cone calls `lick_confirm` (or skipped via `lick_dismiss`). See `/workspace/skills/handoff/SKILL.md`.
 
 ## Examples
 
