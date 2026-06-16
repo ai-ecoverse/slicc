@@ -222,9 +222,13 @@ export class WcChatController {
     lickId?: string
   ): void {
     // Collate into the trailing card when the previous message is a lick of
-    // the same channel — the pill counts up instead of stacking cards.
+    // the same channel — the pill counts up instead of stacking cards. NEVER
+    // collate actionable licks: if the incoming lick carries a `lickId`, or the
+    // trailing card already does, each must stand alone so exactly one card
+    // flips via `updateLickState`.
     const last = this.#messages[this.#messages.length - 1];
-    if (last && last.source === 'lick' && last.channel === channel) {
+    const actionable = !!lickId || !!last?.lickId;
+    if (!actionable && last && last.source === 'lick' && last.channel === channel) {
       last.lickParts = [...(last.lickParts ?? [last.content]), content];
       last.lickCount = last.lickParts.length;
       last.content += `\n\n${content}`;

@@ -175,6 +175,65 @@ describe('formatLickEventForCone', () => {
   });
 });
 
+describe('session-reload lick actionable formatting', () => {
+  it('appends Lick ID + confirm/dismiss guidance for a mount-recovery reload', () => {
+    const out = formatLickEventForCone({
+      type: 'session-reload',
+      lickId: 'lick-reload-1',
+      timestamp: '2026-06-10T00:00:00.000Z',
+      body: {
+        reason: 'mount-recovery',
+        mounts: [{ kind: 'local', path: '/mnt/x', dirName: 'x' }],
+      },
+    } as never);
+    expect(out).not.toBeNull();
+    expect(out!.label).toBe('Session Reload');
+    expect(out!.content).toContain('/mnt/x');
+    expect(out!.content).toContain('Lick ID: lick-reload-1');
+    expect(out!.content).toContain('lick_confirm');
+    expect(out!.content).toContain('lick_dismiss');
+  });
+
+  it('omits the guidance for a mount-recovery reload with no registered lickId', () => {
+    const out = formatLickEventForCone({
+      type: 'session-reload',
+      timestamp: '2026-06-10T00:00:00.000Z',
+      body: {
+        reason: 'mount-recovery',
+        mounts: [{ kind: 'local', path: '/mnt/x', dirName: 'x' }],
+      },
+    } as never);
+    expect(out).not.toBeNull();
+    expect(out!.content).not.toContain('Lick ID:');
+    expect(out!.content).not.toContain('lick_confirm');
+  });
+
+  it('appends Lick ID + dismiss-only guidance for a plain reload', () => {
+    const out = formatLickEventForCone({
+      type: 'session-reload',
+      lickId: 'lick-reload-2',
+      timestamp: '2026-06-10T00:00:00.000Z',
+      body: { reason: 'restored' },
+    } as never);
+    expect(out).not.toBeNull();
+    expect(out!.label).toBe('Session Reload');
+    expect(out!.content).toContain('Lick ID: lick-reload-2');
+    expect(out!.content).toContain('lick_dismiss');
+    // Plain reload is dismiss-only — there is NO confirm action.
+    expect(out!.content).not.toContain('lick_confirm');
+  });
+
+  it('still drops an empty mount-recovery list even when a lickId is set', () => {
+    const out = formatLickEventForCone({
+      type: 'session-reload',
+      lickId: 'lick-reload-3',
+      timestamp: '2026-06-10T00:00:00.000Z',
+      body: { reason: 'mount-recovery', mounts: [] },
+    } as never);
+    expect(out).toBeNull();
+  });
+});
+
 describe('navigate lick actionable formatting', () => {
   it('appends Lick ID + lick_confirm guidance for an upskill navigate lick', () => {
     const out = formatLickEventForCone({

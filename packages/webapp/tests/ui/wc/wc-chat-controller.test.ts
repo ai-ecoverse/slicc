@@ -322,6 +322,37 @@ describe('WcChatController', () => {
     expect(thread.querySelector('slicc-lick-card')?.getAttribute('state')).toBe('confirmed');
   });
 
+  it('never collates actionable licks — each same-channel card stands alone and flips', () => {
+    // Two consecutive same-channel actionable licks must NOT merge into a
+    // counted card — each needs its own row so exactly one flips per resolve.
+    controller.addLickMessage(
+      'sudo-request-lick-a',
+      '[@alpha-scoop sudo-request]\nKind: command\nDetail: git push',
+      'sudo-request',
+      Date.now(),
+      'lick-a'
+    );
+    controller.addLickMessage(
+      'sudo-request-lick-b',
+      '[@alpha-scoop sudo-request]\nKind: command\nDetail: rm -rf /tmp/x',
+      'sudo-request',
+      Date.now(),
+      'lick-b'
+    );
+    const cards = thread.querySelectorAll('slicc-lick-card');
+    expect(cards).toHaveLength(2);
+    expect([...cards].every((c) => !c.hasAttribute('count'))).toBe(true);
+
+    // Each resolves independently — confirming the first leaves the second pending.
+    controller.updateLickState('lick-a', 'confirmed');
+    const after = thread.querySelectorAll('slicc-lick-card');
+    expect(after).toHaveLength(2);
+    expect(after[0].getAttribute('state')).toBe('confirmed');
+    expect(after[1].hasAttribute('state')).toBe(false);
+    controller.updateLickState('lick-b', 'dismissed');
+    expect(thread.querySelectorAll('slicc-lick-card')[1].getAttribute('state')).toBe('dismissed');
+  });
+
   it('updateLickState dismisses an actionable lick and no-ops unknown ids', () => {
     controller.addLickMessage(
       'sudo-request-lick-2',

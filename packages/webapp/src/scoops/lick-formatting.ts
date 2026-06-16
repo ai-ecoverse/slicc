@@ -95,22 +95,41 @@ function resolveLickEventName(event: LickEvent): string | undefined {
 }
 
 /**
- * Session-reload formatting. Returns `null` to DROP the lick when the
- * mount-recovery payload is empty; returns `undefined` to signal "no
- * mount-recovery payload — fall through to the generic JSON block".
+ * Session-reload formatting. Session-reload licks are agent-actionable: the
+ * orchestrator (`registerSessionReloadLick`) mints a `lickId` for every one,
+ * so — following the `formatUpgradeLick` / `formatNavigateLick` pattern — the
+ * actionable `Lick ID` + guidance is appended only when `event.lickId` is set.
+ *
+ * - **mount-recovery branch**: confirm + dismiss. `lick_confirm` re-runs the
+ *   listed `mount …` commands so the user can re-authorize; `lick_dismiss`
+ *   leaves them unmounted. Returns `null` to DROP the lick when the
+ *   mount-recovery payload is empty.
+ * - **plain reload branch**: dismiss-only. There is NO confirm action — the
+ *   card is informational, `lick_dismiss` acknowledges / clears it.
  */
-function formatSessionReloadLick(
-  event: LickEvent,
-  label: string
-): FormattedLick | null | undefined {
+function formatSessionReloadLick(event: LickEvent, label: string): FormattedLick | null {
   const body = event.body as { reason?: string; mounts?: MountRecoveryEntry[] } | null | undefined;
+  const lickId = event.lickId;
   if (body?.reason === 'mount-recovery') {
     const prompt = formatMountRecoveryPrompt(body.mounts ?? []);
     if (prompt === null) return null; // empty list — drop the lick
-    return { label, content: prompt };
+    const guidance = lickId
+      ? `\n\nLick ID: ${lickId}\n` +
+        `This card is actionable: call \`lick_confirm\` with this lick id to re-run the ` +
+        `listed \`mount …\` command(s) so the user can re-authorize, or \`lick_dismiss\` to ` +
+        `leave them unmounted. The card flips to ✓ on confirm / muted ✗ on dismiss.`
+      : '';
+    return { label, content: `${prompt}${guidance}` };
   }
-  // session-reload with no mount-recovery payload — fall through to JSON block
-  return undefined;
+  // session-reload with no mount-recovery payload — generic JSON block, plus a
+  // dismiss-only acknowledgement when the orchestrator registered a lick id.
+  const generic = formatGenericLick(event, label);
+  if (!lickId) return generic;
+  const guidance =
+    `\n\nLick ID: ${lickId}\n` +
+    `This card is informational — there is NO confirm action. Call \`lick_dismiss\` with ` +
+    `this lick id to acknowledge and clear it. The card flips to muted ✗ on dismiss.`;
+  return { label: generic.label, content: `${generic.content}${guidance}` };
 }
 
 /**
@@ -253,11 +272,7 @@ function formatNavigateLick(event: LickEvent, label: string): FormattedLick {
 export function formatLickEventForCone(event: LickEvent): FormattedLick | null {
   const label = LICK_LABELS[event.type];
 
-  if (event.type === 'session-reload') {
-    const reload = formatSessionReloadLick(event, label);
-    // `null` → drop; a `FormattedLick` → use it; `undefined` → fall through.
-    if (reload !== undefined) return reload;
-  }
+  if (event.type === 'session-reload') return formatSessionReloadLick(event, label);
   if (event.type === 'upgrade') return formatUpgradeLick(event, label);
   if (event.type === 'cherry') return formatCherryLick(event, label);
   if (event.type === 'workflow') return formatWorkflowLick(event, label);

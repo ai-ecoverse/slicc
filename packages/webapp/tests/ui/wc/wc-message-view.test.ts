@@ -229,6 +229,35 @@ describe('collateLickMessages', () => {
     expect(first.lickCount).toBeUndefined();
     expect(first.content).toBe('one');
   });
+
+  it('never collates actionable licks — each keeps its own row + persisted lickState', () => {
+    function actionable(
+      id: string,
+      lickId: string,
+      lickState: ChatMessage['lickState']
+    ): ChatMessage {
+      return {
+        id,
+        role: 'user',
+        content: '[Scoop Access Request: alpha]',
+        timestamp: 1,
+        source: 'lick',
+        channel: 'sudo-request',
+        lickId,
+        lickState,
+      };
+    }
+    const out = collateLickMessages([
+      actionable('a', 'lick-a', 'confirmed'),
+      actionable('b', 'lick-b', 'pending'),
+    ]);
+    expect(out.map((m) => m.id)).toEqual(['a', 'b']);
+    expect(out.every((m) => (m.lickCount ?? 1) === 1)).toBe(true);
+    expect(out[0].lickId).toBe('lick-a');
+    expect(out[0].lickState).toBe('confirmed');
+    expect(out[1].lickId).toBe('lick-b');
+    expect(out[1].lickState).toBe('pending');
+  });
 });
 
 describe('tool presentation', () => {

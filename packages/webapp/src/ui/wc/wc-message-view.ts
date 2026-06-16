@@ -584,7 +584,16 @@ export function collateLickMessages(messages: readonly ChatMessage[]): ChatMessa
       }
     }
     const prev = out[out.length - 1];
-    if (message.source === 'lick' && prev?.source === 'lick' && prev.channel === message.channel) {
+    // NEVER collate actionable licks: a lick carrying a `lickId` (or merging
+    // into a trailing card that carries one) must keep its own row + persisted
+    // `lickState` so exactly one card flips when its decision settles.
+    const actionable = !!message.lickId || !!prev?.lickId;
+    if (
+      !actionable &&
+      message.source === 'lick' &&
+      prev?.source === 'lick' &&
+      prev.channel === message.channel
+    ) {
       prev.lickParts = [...(prev.lickParts ?? [prev.content]), message.content];
       prev.lickCount = prev.lickParts.length;
       prev.content += `\n\n${message.content}`;
