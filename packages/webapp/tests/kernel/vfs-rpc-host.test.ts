@@ -155,7 +155,7 @@ describe('VfsRpcHost round-trip over MessageChannel', () => {
       path: '/notes.md',
       encoding: 'utf-8',
     } satisfies VfsReadRequestMsg);
-    await tick();
+    await waitForResponses(ctx, 1);
     expect(ctx.vfs.readFile).toHaveBeenCalledWith('/notes.md', { encoding: 'utf-8' });
     const resp = ctx.responses[0] as VfsReadFileResultMsg;
     expect(resp.ok).toBe(true);
@@ -174,7 +174,7 @@ describe('VfsRpcHost round-trip over MessageChannel', () => {
       requestId: 'r2b',
       path: '/notes.md',
     } satisfies VfsReadRequestMsg);
-    await tick();
+    await waitForResponses(ctx, 1);
     expect(ctx.vfs.readFile).toHaveBeenCalledWith('/notes.md', { encoding: 'utf-8' });
     ctx.stop();
   });
@@ -189,7 +189,7 @@ describe('VfsRpcHost round-trip over MessageChannel', () => {
       path: '/image.png',
       encoding: 'binary',
     } satisfies VfsReadRequestMsg);
-    await tick();
+    await waitForResponses(ctx, 1);
     const resp = ctx.responses[0] as VfsReadFileResultMsg;
     expect(resp.ok).toBe(true);
     if (resp.ok && resp.encoding === 'binary') {
@@ -208,7 +208,7 @@ describe('VfsRpcHost round-trip over MessageChannel', () => {
       requestId: 'r4',
       path: '/file',
     } satisfies VfsReadRequestMsg);
-    await tick();
+    await waitForResponses(ctx, 1);
     const resp = ctx.responses[0] as VfsStatResultMsg;
     expect(resp.ok).toBe(true);
     if (resp.ok) {
@@ -225,7 +225,7 @@ describe('VfsRpcHost round-trip over MessageChannel', () => {
       requestId: 'r5',
       path: '/missing',
     } satisfies VfsReadRequestMsg);
-    await tick();
+    await waitForResponses(ctx, 1);
     const resp = ctx.responses[0] as VfsReadFileResultMsg;
     expect(resp.ok).toBe(false);
     if (!resp.ok) {
@@ -244,7 +244,7 @@ describe('VfsRpcHost round-trip over MessageChannel', () => {
       requestId: 'r6',
       path: '/wherever',
     } satisfies VfsReadRequestMsg);
-    await tick();
+    await waitForResponses(ctx, 1);
     const resp = ctx.responses[0] as VfsReadDirResultMsg;
     expect(resp.ok).toBe(false);
     if (!resp.ok) {
@@ -265,7 +265,7 @@ describe('VfsRpcHost round-trip over MessageChannel', () => {
       path: '/oops',
       encoding: 'binary',
     } satisfies VfsReadRequestMsg);
-    await tick();
+    await waitForResponses(ctx, 1);
     const resp = ctx.responses[0] as VfsReadFileResultMsg;
     expect(resp.ok).toBe(false);
     if (!resp.ok) {
@@ -283,7 +283,7 @@ describe('VfsRpcHost round-trip over MessageChannel', () => {
       path: '/oops2',
       encoding: 'utf-8',
     } satisfies VfsReadRequestMsg);
-    await tick();
+    await waitForResponses(ctx, 1);
     const resp = ctx.responses[0] as VfsReadFileResultMsg;
     expect(resp.ok).toBe(false);
     if (!resp.ok) {
