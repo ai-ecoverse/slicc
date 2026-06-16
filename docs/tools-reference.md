@@ -456,11 +456,21 @@ channel message the orchestrator delivers to the cone.
 
 ### lick_confirm
 
-Cone-only. Confirm (approve) a pending actionable lick by its `lick_id` —
-currently a scoop sudo escalation raised via `sudo_request`. With `always=true`,
-the orchestrator additionally appends a `NOPASSWD <directive> <pattern>` rule to
-the requesting scoop's `/scoops/<folder>/etc/sudoers` so the same action won't
-prompt again.
+Cone-only. Confirm (approve) a pending actionable lick by its `lick_id`. The
+orchestrator dispatches by `lick_id` to the right resolver. Actionable kinds:
+
+- **sudo** — a scoop escalation raised via `sudo_request`. With `always=true`,
+  the orchestrator additionally appends a `NOPASSWD <directive> <pattern>` rule
+  to the requesting scoop's `/scoops/<folder>/etc/sudoers` so the same action
+  won't prompt again.
+- **navigate·upskill** — confirm runs `upskill <url> [--branch ..] [--path ..]`
+  to install the skill (`upskill`'s on-disk "already exists" check still guards
+  duplicate installs).
+- **session-reload·mount-recovery** — confirm re-runs the `mount` commands
+  reconstructed from the lick's recovery entries.
+- **upgrade** — confirm triggers "Update workspace files" (the upgrade skill's
+  three-way merge of bundled vfs-root content, scoped to the stored `from`→`to`
+  tags). "Review changelog" stays a separate agent step.
 
 | Property   | Value                                                     |
 | ---------- | --------------------------------------------------------- |
@@ -468,17 +478,25 @@ prompt again.
 | **Input**  | `{ lick_id: string, always?: boolean, pattern?: string }` |
 | **Output** | `{ content: "Approved (once\|always)..." }`               |
 
-`pattern` defaults to the request's `suggestedPattern`, then to the exact
-`detail`. `kind: 'secret'` cannot be persisted — there is no sudoers `Secret`
-directive — so `always=true` for a secret request approves once and reports
-"approved but not persisted".
+`always` / `pattern` apply only to **sudo** licks. `pattern` defaults to the
+request's `suggestedPattern`, then to the exact `detail`. `kind: 'secret'`
+cannot be persisted — there is no sudoers `Secret` directive — so `always=true`
+for a secret request approves once and reports "approved but not persisted".
+**navigate·handoff** licks are NOT agent-confirmable: they stay human-gated
+(the approval dip is the authority), so a `lick_confirm` on a handoff id reports
+unknown / already-resolved.
 
 ---
 
 ### lick_dismiss
 
-Cone-only. Dismiss (refuse) a pending actionable lick by its `lick_id`. The scoop
-receives a `deny` decision and the sensitive action does NOT run.
+Cone-only. Dismiss (refuse) a pending actionable lick by its `lick_id`. Per
+kind: a **sudo** request receives a `deny` decision and the sensitive action
+does NOT run; **navigate·upskill** drops the install; **session-reload·mount-recovery**
+leaves the mounts unmounted; **upgrade** clears the notice (no files touched);
+and **session-reload (plain)** is dismiss-only — it just acknowledges the
+already-completed reload (there is no `lick_confirm` for it). In every case the
+card flips to its muted dismissed state.
 
 | Property   | Value                                               |
 | ---------- | --------------------------------------------------- |

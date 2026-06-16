@@ -240,6 +240,29 @@ a red cross (`dismissed`, rendered muted) for `lick_dismiss` — so the resolved
 verdict survives reload. The design-time fixture (`?ui-fixture=1`) carries one
 sample per state (`pending` / `confirmed` / `dismissed`) for styling.
 
+#### Other actionable licks (beyond sudo)
+
+The same `lick_confirm` / `lick_dismiss` tools and `lickId` registry generalize
+to other approval-style licks. The orchestrator mints a `lickId` at emit time,
+registers a per-kind resolver, and dispatches by id in `resolveActionableLick`
+(falling through to the sudo resolver). Each card flips and persists exactly like
+the sudo card — a green check on confirm, a muted red cross on dismiss.
+
+| Lick kind                           | `lick_confirm`                                                                                                                                                  | `lick_dismiss`                                |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| **navigate · upskill**              | Runs `upskill <url> [--branch ..] [--path ..]` (the "already exists" check still guards duplicate installs).                                                    | Drops the install.                            |
+| **navigate · handoff**              | Not agent-confirmable — **human-gated**. The approval dip is the authority; the card still flips ✓ on the human's accept.                                       | Card flips ✗ on the human's dismiss.          |
+| **session-reload · mount-recovery** | Re-runs the listed `mount …` commands to re-establish dropped mounts.                                                                                           | Leaves the mounts unmounted.                  |
+| **session-reload (plain)**          | _Dismiss-only_ — the reload already happened, so there is no confirm.                                                                                           | Acknowledges and clears the notice.           |
+| **upgrade**                         | Triggers "Update workspace files" (the upgrade skill's three-way merge, scoped to the stored `from`→`to` tags). "Review changelog" stays a separate agent step. | Clears the notice without touching any files. |
+
+`navigate · handoff` is the deliberate exception: handoffs are untrusted
+external input, so the human's approval dip remains the authority gate and the
+agent does not self-approve via `lick_confirm` (the card only reflects the
+human's choice). `always` / `pattern` are sudo-only inputs and are ignored for
+these kinds. See [`docs/tools-reference.md`](./tools-reference.md) for the full
+tool inputs/outputs.
+
 ### Explicit `sudo <cmd>` shell command
 
 The transparent `Cmnd` gate above prompts whenever the agent runs a command that
