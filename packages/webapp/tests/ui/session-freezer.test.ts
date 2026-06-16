@@ -911,6 +911,55 @@ describe('enrichPendingSession', () => {
     expect(lastCall.apiKey).toBe('k');
   });
 
+  it('records a picked lucide icon on the renamed entry when pickIcon is supplied', async () => {
+    const vfs = makeFakeVfs();
+    const { pendingFilename, frozenAt } = await seedPending(vfs);
+
+    mockRunOneOffCompactionCall
+      .mockResolvedValueOnce('NONE')
+      .mockResolvedValueOnce('Build pipeline debug');
+    const pickIcon = vi.fn(async () => 'wrench');
+
+    const updated = await enrichPendingSession(
+      vfs as unknown as Parameters<typeof enrichPendingSession>[0],
+      {
+        filename: pendingFilename,
+        title: 'debug the build pipeline',
+        frozenAt,
+        messageCount: 4,
+        pendingEnrichment: true,
+      },
+      { model: fakeModel!, apiKey: 'k', pickIcon }
+    );
+
+    expect(pickIcon).toHaveBeenCalledTimes(1);
+    expect(pickIcon.mock.calls[0][0].subject).toContain('Build pipeline debug');
+    expect(updated!.icon).toBe('wrench');
+    const index = await readSessionsIndex(
+      vfs as unknown as Parameters<typeof readSessionsIndex>[0]
+    );
+    expect(index[0].icon).toBe('wrench');
+
+    // Without a picker the enrichment leaves the icon to the rail's backfill.
+    const vfs2 = makeFakeVfs();
+    const seeded2 = await seedPending(vfs2);
+    mockRunOneOffCompactionCall
+      .mockResolvedValueOnce('NONE')
+      .mockResolvedValueOnce('Another title');
+    const updated2 = await enrichPendingSession(
+      vfs2 as unknown as Parameters<typeof enrichPendingSession>[0],
+      {
+        filename: seeded2.pendingFilename,
+        title: 'debug the build pipeline',
+        frozenAt: seeded2.frozenAt,
+        messageCount: 4,
+        pendingEnrichment: true,
+      },
+      { model: fakeModel!, apiKey: 'k' }
+    );
+    expect(updated2!.icon).toBeUndefined();
+  });
+
   it('is a no-op when the archive file is missing (already renamed)', async () => {
     const vfs = makeFakeVfs();
     const result = await enrichPendingSession(

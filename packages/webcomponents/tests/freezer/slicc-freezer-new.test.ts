@@ -393,6 +393,73 @@ describe('slicc-freezer-new', () => {
     expect(spinRule?.style.animationName).toBe('none');
   });
 
+  // --- determinate progress ring -------------------------------------------
+
+  it('reflects the progress property to the attribute and clamps to 0..1', () => {
+    const el = mount();
+    expect(el.progress).toBeNull();
+    el.progress = 0.5;
+    expect(el.getAttribute('progress')).toBe('0.5');
+    expect(el.progress).toBe(0.5);
+    el.progress = 2;
+    expect(el.progress).toBe(1);
+    el.progress = -1;
+    expect(el.progress).toBe(0);
+    el.progress = null;
+    expect(el.hasAttribute('progress')).toBe(false);
+    expect(el.progress).toBeNull();
+  });
+
+  it('busy without progress shows no determinate ring (plain spinner)', () => {
+    const el = mount((node) => {
+      node.busy = true;
+    });
+    expect(el.shadowRoot?.querySelector('.fznew-spinner')).toBeTruthy();
+    expect(el.shadowRoot?.querySelector('.fznew-ring')).toBeNull();
+  });
+
+  it('busy + progress renders the ring with the part hook and the progress var', () => {
+    const el = mount((node) => {
+      node.busy = true;
+      node.progress = 0.25;
+    });
+    const ring = el.shadowRoot?.querySelector('.fznew-ring') as HTMLElement;
+    expect(ring).toBeTruthy();
+    expect(ring.getAttribute('part')).toBe('ring');
+    expect(ring.style.getPropertyValue('--fznew-progress')).toBe('0.25');
+  });
+
+  it('does NOT render a ring when progress is set but the element is idle', () => {
+    const el = mount((node) => {
+      node.progress = 0.5;
+    });
+    expect(el.shadowRoot?.querySelector('.fznew-ring')).toBeNull();
+  });
+
+  it('streams progress updates in place without rebuilding the spinner svg', () => {
+    const el = mount((node) => {
+      node.busy = true;
+      node.progress = 0.1;
+    });
+    const svgBefore = el.shadowRoot?.querySelector('.fznew-spinner svg');
+    el.progress = 0.8;
+    const ring = el.shadowRoot?.querySelector('.fznew-ring') as HTMLElement;
+    expect(ring.style.getPropertyValue('--fznew-progress')).toBe('0.8');
+    // Same svg node — the fast path updated the var, it did not re-render.
+    expect(el.shadowRoot?.querySelector('.fznew-spinner svg')).toBe(svgBefore);
+  });
+
+  it('removing the progress attribute drops the ring back to the plain spinner', () => {
+    const el = mount((node) => {
+      node.busy = true;
+      node.progress = 0.5;
+    });
+    expect(el.shadowRoot?.querySelector('.fznew-ring')).toBeTruthy();
+    el.progress = null;
+    expect(el.shadowRoot?.querySelector('.fznew-ring')).toBeNull();
+    expect(el.shadowRoot?.querySelector('.fznew-spinner')).toBeTruthy();
+  });
+
   // --- base appearance / metrics (real Chromium) ---------------------------
 
   it('is a full-width 36px-row button with an 8px radius and pointer cursor', () => {
