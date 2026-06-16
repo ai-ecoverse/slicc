@@ -37,11 +37,24 @@ async function seededFs(): Promise<VirtualFS> {
 }
 
 describe('attachmentFromBytes', () => {
-  it('inlines text files as text with a mime from the extension', () => {
-    const att = attachmentFromBytes('notes.md', new TextEncoder().encode('hello'));
-    expect(att.kind).toBe('text');
-    expect(att.text).toBe('hello');
-    expect(att.mimeType).toBe('text/markdown');
+  it('references text and binary files without inlining (no text decode)', () => {
+    const text = attachmentFromBytes('notes.md', new TextEncoder().encode('hello'));
+    expect(text.kind).toBe('file');
+    expect(text.text).toBeUndefined();
+    expect(text.data).toBeUndefined();
+    expect(text.mimeType).toBe('text/markdown');
+
+    // Binary bytes are never UTF-8-decoded — no mojibake, no inline content.
+    const bin = attachmentFromBytes('archive.zip', new Uint8Array([0xff, 0xfe, 0x00, 0x01]));
+    expect(bin.kind).toBe('file');
+    expect(bin.text).toBeUndefined();
+    expect(bin.data).toBeUndefined();
+
+    // Oversized non-images keep only a fallback label (no inline content).
+    const big = attachmentFromBytes('big.bin', new Uint8Array(512 * 1024));
+    expect(big.kind).toBe('file');
+    expect(big.error).toContain('too large');
+    expect(big.text).toBeUndefined();
   });
 
   it('inlines images as base64 and flags oversized payloads instead', () => {
@@ -183,7 +196,7 @@ describe('WcAttachmentStage', () => {
 });
 
 describe('wireWcAttach action routing', () => {
-  async function setup() {
+  async function setup(opts: { withWriter?: boolean } = {}) {
     const fs = await seededFs();
     const inputCard = document.createElement('slicc-input-card') as HTMLElement & {
       value?: string;
@@ -194,6 +207,7 @@ describe('wireWcAttach action routing', () => {
       inputCard,
       freezer,
       openReader: async () => fs,
+      openWriter: opts.withWriter === false ? undefined : async () => fs,
       listConversations: async () => [],
       log,
     });
@@ -204,8 +218,8 @@ describe('wireWcAttach action routing', () => {
     inputCard.dispatchEvent(new CustomEvent('slicc-add', { bubbles: true, detail }));
   }
 
-  it('stages an uploaded File', async () => {
-    const { inputCard, stage } = await setup();
+  it('persists an uploaded text file to /tmp/upload by reference (no inline text)', async () => {
+    const { fs, inputCard, stage } = await setup();
     emitAdd(inputCard, {
       kind: 'upload',
       name: 'drop.md',
@@ -215,16 +229,106 @@ describe('wireWcAttach action routing', () => {
     await vi.waitFor(() => {
       expect(stage.items.map((a) => a.name)).toEqual(['drop.md']);
     });
-    expect(stage.items[0].text).toBe('drop');
+    const item = stage.items[0];
+    expect(item.kind).toBe('file');
+    expect(item.text).toBeUndefined();
+    expect(item.error).toBeUndefined();
+    expect(item.path?.startsWith(`${UPLOAD_DIR}/`)).toBe(true);
+    const raw = await fs.readFile(item.path as string, { encoding: 'utf-8' });
+    expect(typeof raw === 'string' ? raw : new TextDecoder().decode(raw)).toBe('drop');
   });
 
-  it('stages a VFS file pick read through the reader', async () => {
+  it('persists a binary/zip upload to /tmp/upload without decoding bytes', async () => {
+    const { fs, inputCard, stage } = await setup();
+    const bytes = new Uint8Array([0xff, 0xfe, 0x00, 0x01]);
+    emitAdd(inputCard, {
+      kind: 'upload',
+      name: 'pkg.zip',
+      size: bytes.length,
+      file: new File([bytes], 'pkg.zip', { type: 'application/zip' }),
+    });
+    await vi.waitFor(() => {
+      expect(stage.items.map((a) => a.name)).toEqual(['pkg.zip']);
+    });
+    const item = stage.items[0];
+    expect(item.kind).toBe('file');
+    expect(item.text).toBeUndefined();
+    expect(item.data).toBeUndefined();
+    expect(item.error).toBeUndefined();
+    expect(item.path?.startsWith(`${UPLOAD_DIR}/`)).toBe(true);
+    const saved = (await fs.readFile(item.path as string, { encoding: 'binary' })) as Uint8Array;
+    expect(Array.from(saved)).toEqual(Array.from(bytes));
+  });
+
+  it('degrades an upload to a not-included note when no writer is available', async () => {
+    const { inputCard, stage } = await setup({ withWriter: false });
+    emitAdd(inputCard, {
+      kind: 'upload',
+      name: 'drop.txt',
+      size: 4,
+      file: new File(['drop'], 'drop.txt', { type: 'text/plain' }),
+    });
+    await vi.waitFor(() => {
+      expect(stage.items.map((a) => a.name)).toEqual(['drop.txt']);
+    });
+    const item = stage.items[0];
+    expect(item.kind).toBe('file');
+    expect(item.text).toBeUndefined();
+    expect(item.path).toBeUndefined();
+    expect(item.error).toBe('could not be saved to the virtual filesystem');
+  });
+
+  it('keeps an image inline AND persists the original to /tmp/upload', async () => {
+    const { fs, inputCard, stage } = await setup();
+    emitAdd(inputCard, {
+      kind: 'upload',
+      name: 'pic.png',
+      size: 3,
+      file: new File([new Uint8Array([1, 2, 3])], 'pic.png', { type: 'image/png' }),
+    });
+    await vi.waitFor(() => {
+      expect(stage.items.map((a) => a.name)).toEqual(['pic.png']);
+    });
+    const item = stage.items[0];
+    expect(item.kind).toBe('image');
+    expect(item.data).toBe(btoa(String.fromCharCode(1, 2, 3)));
+    expect(item.error).toBeUndefined();
+    expect(item.path?.startsWith(`${UPLOAD_DIR}/`)).toBe(true);
+    const saved = (await fs.readFile(item.path as string, { encoding: 'binary' })) as Uint8Array;
+    expect(Array.from(saved)).toEqual([1, 2, 3]);
+  });
+
+  it('persists an over-4MB image to /tmp/upload with no inline data and no leftover error', async () => {
+    const { fs, inputCard, stage } = await setup();
+    const big = new Uint8Array(5 * 1024 * 1024);
+    emitAdd(inputCard, {
+      kind: 'upload',
+      name: 'huge.png',
+      size: big.length,
+      file: new File([big], 'huge.png', { type: 'image/png' }),
+    });
+    await vi.waitFor(() => {
+      expect(stage.items.map((a) => a.name)).toEqual(['huge.png']);
+    });
+    const item = stage.items[0];
+    expect(item.kind).toBe('image');
+    expect(item.data).toBeUndefined();
+    expect(item.error).toBeUndefined();
+    expect(item.path?.startsWith(`${UPLOAD_DIR}/`)).toBe(true);
+    const saved = (await fs.readFile(item.path as string)) as Uint8Array;
+    expect(saved.length).toBe(big.length);
+  });
+
+  it('references a VFS file pick by its existing path without inlining', async () => {
     const { inputCard, stage } = await setup();
     emitAdd(inputCard, { kind: 'file', id: '/workspace/notes.md', label: 'notes.md' });
     await vi.waitFor(() => {
       expect(stage.items.map((a) => a.name)).toEqual(['notes.md']);
     });
-    expect(stage.items[0].text).toContain('notes with');
+    const item = stage.items[0];
+    expect(item.kind).toBe('file');
+    expect(item.text).toBeUndefined();
+    expect(item.path).toBe('/workspace/notes.md');
   });
 
   it('inserts a skill mention into the composer value', async () => {
