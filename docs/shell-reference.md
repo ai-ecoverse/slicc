@@ -613,7 +613,7 @@ hid close hid3
 
 ### Realm device scripting (event-driven HID from `node -e` / `.jsh`)
 
-Device objects returned by the in-realm `hid.list()` / `hid.request()` globals expose an `EventTarget`-shaped surface so a VIA-style request/response can run as a single script. `addEventListener('inputreport', cb)` lazily subscribes the kernel-side backend (reusing the same `panel-rpc-event` / `subscribeInputReports` relay the panel-terminal `hid watch` uses) and tears it down when the last listener is removed; realm teardown (`rpc.dispose()`) drains any leftovers so the page-side `inputreport` listener can't leak. The top-level `hid` global is unchanged — `.list()` and `.request()` remain the only entry points — and only the returned device objects gained methods.
+Device objects returned by `require('sliccy:hid')` expose an `EventTarget`-shaped surface so a VIA-style request/response can run as a single script. `addEventListener('inputreport', cb)` lazily subscribes the kernel-side backend (reusing the same `panel-rpc-event` / `subscribeInputReports` relay the panel-terminal `hid watch` uses) and tears it down when the last listener is removed; realm teardown (`rpc.dispose()`) drains any leftovers so the page-side `inputreport` listener can't leak. `.list()` and `.request()` remain the only entry points — only the returned device objects gained methods.
 
 | Method                                          | Notes                                                                            |
 | ----------------------------------------------- | -------------------------------------------------------------------------------- |
@@ -625,6 +625,7 @@ Device objects returned by the in-realm `hid.list()` / `hid.request()` globals e
 ```bash
 # VIA-style protocol-version round trip as one node script
 node -e "
+const hid = require('sliccy:hid');
 const [device] = await hid.list();
 await device.open();
 const reply = new Promise((resolve, reject) => {
@@ -642,7 +643,7 @@ console.log('reply:', [...bytes].map(b => b.toString(16).padStart(2,'0')).join('
 "
 ```
 
-The same surface is available from `.jsh` scripts (which run in the same realm). The realm-RPC plumbing reuses the existing event channel (`hid-input-report`) — no new transport — so behavior is identical in the standalone (panel + kernel worker) and extension floats. Already-granted handles are required: `hid.request()` from a realm still requires a user gesture, same as the shell `hid request` subcommand.
+The same surface is available from `.jsh` scripts (which run in the same realm). The realm-RPC plumbing reuses the existing event channel (`hid-input-report`) — no new transport — so behavior is identical in the standalone (panel + kernel worker) and extension floats. Already-granted handles are required: `require('sliccy:hid').request()` from a realm still requires a user gesture, same as the shell `hid request` subcommand.
 
 ---
 
@@ -831,7 +832,7 @@ exports: module.exports   // Alias
 
 > Companion file for in-VFS agents: `packages/vfs-root/workspace/skills/skill-authoring/jsh-runtime-extensions.md`. Keep both in sync when the API changes.
 
-The following globals were added in PR #786 and are available in the jsh realm in both standalone and extension floats. They were extracted from cross-skill duplication analysis (see the workspace spec at `analyze-skills`); skills SHOULD prefer them over hand-rolled equivalents. Test availability with `node -e "console.log(typeof process.argv.parseFlags, typeof browser, typeof http, typeof skill)"`.
+The following capabilities are available in the jsh realm in both standalone and extension floats, reached via `require('sliccy:<name>')` (or the equivalent ESM `import`). They were extracted from cross-skill duplication analysis (see the workspace spec at `analyze-skills`); skills SHOULD prefer them over hand-rolled equivalents. Test availability with `node -e "const { exec } = require('sliccy:exec'); console.log(typeof process.argv.parseFlags, typeof exec)"`.
 
 #### `process.argv.parseFlags()`
 
