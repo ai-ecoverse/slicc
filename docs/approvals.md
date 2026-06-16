@@ -222,11 +222,11 @@ explicit `/etc/sudoers` rules gate cone actions. The cone's shell still
 sees its user broker, and the cone's `RestrictedFS` is not used at all
 (the cone runs against the raw `sharedFs`).
 
-`sudo_request` and `list_sudo_requests` are listed in
-`packages/webapp/src/scoops/hidden-tools.ts` so the plumbing tool-call rows do
-not spam the chat UI; the user-visible event is the `[sudo-request]` channel
-message the orchestrator delivers to the cone, and the user-visible decision is
-the `lick_confirm` / `lick_dismiss` tool call.
+`sudo_request`, `list_sudo_requests`, `lick_confirm`, and `lick_dismiss` are all
+listed in `packages/webapp/src/scoops/hidden-tools.ts` so the plumbing tool-call
+rows do not spam the chat UI; the user-visible event is the `[sudo-request]`
+channel message the orchestrator delivers to the cone, and the user-visible
+signal of the decision is the card ✓/✗ flip — not a tool-call row.
 
 #### Card result UX
 

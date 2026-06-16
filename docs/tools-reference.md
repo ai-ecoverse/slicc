@@ -486,13 +486,13 @@ receives a `deny` decision and the sensitive action does NOT run.
 | **Input**  | `{ lick_id: string }`                               |
 | **Output** | `{ content: "Denied — the scoop will not run..." }` |
 
-Unlike `sudo_request` / `list_sudo_requests`, `lick_confirm` / `lick_dismiss`
-are **not** hidden from the chat UI — the cone's decision is user-visible, so
-they render as normal tool-call rows. In addition, resolving an actionable lick
-flips the originating `<slicc-lick-card>` in place to its result state: a green
-check (confirmed) or a red cross (dismissed, rendered muted), persisted on the
-message so it survives reload. See [`docs/approvals.md`](./approvals.md) "Card
-result UX".
+Like `sudo_request` / `list_sudo_requests`, `lick_confirm` / `lick_dismiss`
+are hidden from the chat UI via `hidden-tools.ts` — no tool-call row appears.
+The user-visible signal of the cone's decision is the originating
+`<slicc-lick-card>` flipping in place to its result state: a green check
+(confirmed) or a red cross (dismissed, rendered muted), persisted on the
+message so it survives reload. That card flip is the only visible signal. See
+[`docs/approvals.md`](./approvals.md) "Card result UX".
 
 ---
 
