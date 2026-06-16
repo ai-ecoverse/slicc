@@ -10,13 +10,13 @@
     "node-server": {
       "lines": 79,
       "statements": 77,
-      "functions": 82,
-      "branches": 66
+      "functions": 83,
+      "branches": 67
     },
     "chrome-extension": {
-      "lines": 73,
-      "statements": 71,
-      "functions": 67,
+      "lines": 74,
+      "statements": 73,
+      "functions": 68,
       "branches": 60,
       "coverageExclude": [
         "**/node_modules/**",
@@ -91,9 +91,9 @@
       "regions": 36
     },
     "swift-optel": {
-      "lines": 70,
-      "functions": 63,
-      "regions": 77
+      "lines": 75,
+      "functions": 70,
+      "regions": 79
     }
   }
 }
