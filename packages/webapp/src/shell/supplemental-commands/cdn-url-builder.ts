@@ -96,6 +96,91 @@ export function esmShUrl(spec: string, opts: EsmShOpts = {}): URL {
   return url;
 }
 
+// npm package-name grammar segment: first char must be a URL-friendly
+// identifier start; subsequent chars may also include `.` `_` `-`. Used
+// for both the unscoped name and (independently) the scope segment. We
+// intentionally permit uppercase to keep legacy registry names like
+// `JSONStream` resolvable.
+const NPM_NAME_SEGMENT = /^[A-Za-z0-9~][A-Za-z0-9._~-]*$/;
+
+const MAX_NPM_NAME_LENGTH = 214;
+
+/**
+ * Validate a package name against npm's package-name grammar.
+ *
+ * Throws an `Error` for anything that is not a legal npm name, including
+ * names starting with `/` or `//`, names containing `..` or any other
+ * path-altering or non-URL-friendly sequence, control characters or
+ * whitespace, and over-long names. Legitimate scoped names of the form
+ * `@scope/name` (exactly one internal `/`, leading `@`) pass through.
+ *
+ * Centralizing this here keeps `registryUrl()` defensible against
+ * host-injection attacks: a name that survives validation cannot change
+ * the host the URL builder produces.
+ */
+export function validateNpmPackageName(name: string): void {
+  if (typeof name !== 'string' || name.length === 0) {
+    throw new Error('Invalid npm package name: must be a non-empty string');
+  }
+  if (name.length > MAX_NPM_NAME_LENGTH) {
+    throw new Error(
+      `Invalid npm package name: '${name}' exceeds ${MAX_NPM_NAME_LENGTH} characters`
+    );
+  }
+  if (name !== name.trim()) {
+    throw new Error(`Invalid npm package name: '${name}' has leading or trailing whitespace`);
+  }
+  if (/[\u0000-\u001f\u007f\s]/.test(name)) {
+    throw new Error(
+      `Invalid npm package name: '${name}' contains control characters or whitespace`
+    );
+  }
+  if (name.includes('..')) {
+    throw new Error(`Invalid npm package name: '${name}' contains '..'`);
+  }
+  if (name.startsWith('/')) {
+    throw new Error(`Invalid npm package name: '${name}' starts with '/'`);
+  }
+  if (name.startsWith('.') || name.startsWith('_')) {
+    throw new Error(`Invalid npm package name: '${name}' cannot start with '.' or '_'`);
+  }
+
+  let local: string;
+  if (name.startsWith('@')) {
+    const slash = name.indexOf('/');
+    if (slash === -1) {
+      throw new Error(
+        `Invalid npm package name: scoped name '${name}' is missing the required '/'`
+      );
+    }
+    if (name.indexOf('/', slash + 1) !== -1) {
+      throw new Error(
+        `Invalid npm package name: scoped name '${name}' must contain exactly one '/'`
+      );
+    }
+    const scope = name.slice(1, slash);
+    local = name.slice(slash + 1);
+    if (!NPM_NAME_SEGMENT.test(scope)) {
+      throw new Error(`Invalid npm package name: scope '@${scope}' is not a legal npm scope`);
+    }
+  } else {
+    if (name.includes('/')) {
+      throw new Error(
+        `Invalid npm package name: '${name}' contains '/' but is not scoped (must start with '@')`
+      );
+    }
+    local = name;
+  }
+  if (!NPM_NAME_SEGMENT.test(local)) {
+    throw new Error(`Invalid npm package name: '${name}' is not a legal npm name`);
+  }
+  if (encodeURIComponent(local) !== local) {
+    throw new Error(
+      `Invalid npm package name: '${name}' contains characters that must be URL-encoded`
+    );
+  }
+}
+
 /**
  * Build a `registry.npmjs.org/<pkg>[/<sub>]` URL for the npm registry.
  *
@@ -104,6 +189,12 @@ export function esmShUrl(spec: string, opts: EsmShOpts = {}): URL {
  * `registry.npmjs.org` URL literal appears in the bundle, keeping the
  * MV3 remote-hosted-code guard happy.
  *
+ * `pkg` is validated against npm's package-name grammar before being
+ * interpolated into the URL path, and the constructed URL's `host` is
+ * asserted to equal `REGISTRY_NPMJS_HOST` as defense-in-depth: a
+ * user-controlled path segment must never be able to change the host
+ * that the token-host pattern was meant to pin.
+ *
  * Examples:
  *   registryUrl('lodash')            → https://registry.npmjs.org/lodash
  *   registryUrl('@scope/pkg')        → https://registry.npmjs.org/@scope/pkg
@@ -111,8 +202,15 @@ export function esmShUrl(spec: string, opts: EsmShOpts = {}): URL {
  *     → https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz
  */
 export function registryUrl(pkg: string, sub?: string): URL {
+  validateNpmPackageName(pkg);
   const subPart = sub ? (sub.startsWith('/') ? sub : `/${sub}`) : '';
-  return buildCdnUrl(REGISTRY_NPMJS_HOST, `/${pkg}${subPart}`);
+  const url = buildCdnUrl(REGISTRY_NPMJS_HOST, `/${pkg}${subPart}`);
+  if (url.host !== REGISTRY_NPMJS_HOST) {
+    throw new Error(
+      `registryUrl: refused to build URL with host '${url.host}' (expected '${REGISTRY_NPMJS_HOST}')`
+    );
+  }
+  return url;
 }
 
 /**

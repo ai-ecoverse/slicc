@@ -67,9 +67,56 @@ describe('registryUrl', () => {
     expect(url.pathname).toBe('/lodash');
   });
 
-  it('preserves scoped package names', () => {
+  it('preserves scoped package names and keeps them on the registry host', () => {
     const url = registryUrl('@scope/pkg');
+    expect(url.host).toBe(REGISTRY_NPMJS_HOST);
     expect(url.pathname).toBe('/@scope/pkg');
+  });
+
+  it('keeps a real-world scoped name on the registry host', () => {
+    const url = registryUrl('@types/node');
+    expect(url.host).toBe(REGISTRY_NPMJS_HOST);
+    expect(url.pathname).toBe('/@types/node');
+  });
+
+  for (const malicious of [
+    '/evil',
+    '//evil.com',
+    '//evil.com/path',
+    '../x',
+    '..',
+    '../../etc/passwd',
+    'foo/../bar',
+    'foo/bar',
+  ]) {
+    it(`rejects malicious package name ${JSON.stringify(malicious)}`, () => {
+      expect(() => registryUrl(malicious)).toThrow(/invalid npm package name/i);
+    });
+  }
+
+  it('rejects a name containing a control character', () => {
+    expect(() => registryUrl('foo\u0000bar')).toThrow(/invalid npm package name/i);
+  });
+
+  it('rejects a name containing whitespace', () => {
+    expect(() => registryUrl('foo bar')).toThrow(/invalid npm package name/i);
+  });
+
+  it('rejects an empty name', () => {
+    expect(() => registryUrl('')).toThrow(/invalid npm package name/i);
+  });
+
+  it('rejects a name starting with a dot or underscore', () => {
+    expect(() => registryUrl('.hidden')).toThrow(/invalid npm package name/i);
+    expect(() => registryUrl('_private')).toThrow(/invalid npm package name/i);
+  });
+
+  it('rejects a scoped name with more than one slash', () => {
+    expect(() => registryUrl('@scope/with/extra')).toThrow(/invalid npm package name/i);
+  });
+
+  it('rejects a scoped name missing its name segment', () => {
+    expect(() => registryUrl('@scope')).toThrow(/invalid npm package name/i);
   });
 });
 
@@ -110,7 +157,7 @@ describe('fetchPackument', () => {
     expect((abortMock.mock.calls[0][1] as SecureFetchOptions)?.method ?? 'GET').toBe('GET');
   });
 
-  it('encodes scoped packages in the URL path', async () => {
+  it('encodes scoped packages in the URL path against the registry host', async () => {
     const packument = makePackument('@scope/pkg', ['1.0.0']);
     const calls: string[] = [];
     const fetchMock = (async (url: string) => {
@@ -120,6 +167,18 @@ describe('fetchPackument', () => {
 
     await fetchPackument('@scope/pkg', fetchMock);
     expect(calls[0]).toContain('/@scope/pkg');
+    const parsed = new URL(calls[0]);
+    expect(parsed.host).toBe(REGISTRY_NPMJS_HOST);
+  });
+
+  it('rejects host-injection attempts via leading-slash names without dispatching the fetch', async () => {
+    const fetchMock = vi.fn() as unknown as SecureFetch;
+    await expect(fetchPackument('/evil', fetchMock)).rejects.toThrow(/invalid npm package name/i);
+    await expect(fetchPackument('//evil.com', fetchMock)).rejects.toThrow(
+      /invalid npm package name/i
+    );
+    await expect(fetchPackument('../x', fetchMock)).rejects.toThrow(/invalid npm package name/i);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('rejects with a clear error on non-2xx HTTP status', async () => {
@@ -221,6 +280,19 @@ describe('resolveVersion', () => {
     expect(() => resolveVersion(packument, 'definitely-not-a-tag')).toThrow();
   });
 
+  it('reports an unknown dist-tag with a clear "unknown dist-tag" message (not "invalid range")', () => {
+    let captured: unknown;
+    try {
+      resolveVersion(packument, 'no-such-tag');
+    } catch (err) {
+      captured = err;
+    }
+    expect(captured).toBeInstanceOf(Error);
+    const message = (captured as Error).message;
+    expect(message).toMatch(/unknown dist-tag/i);
+    expect(message).not.toMatch(/invalid version or range/i);
+  });
+
   it('throws when the packument contains no versions', () => {
     const empty = { name: 'empty', versions: {} } as Packument;
     expect(() => resolveVersion(empty, '*')).toThrow(/no versions/i);
@@ -258,15 +330,19 @@ describe('fetchTarball', () => {
         statusText: 'Server Error',
         headers: {},
         body: new Uint8Array(),
-        url: 'mock://500',
+        url: `https://${REGISTRY_NPMJS_HOST}/p/-/p-500.tgz`,
       }) satisfies FetchResult) as unknown as SecureFetch;
 
-    await expect(fetchTarball('mock://500', fetchMock)).rejects.toThrow(/500|Server Error/);
+    await expect(
+      fetchTarball(`https://${REGISTRY_NPMJS_HOST}/p/-/p-500.tgz`, fetchMock)
+    ).rejects.toThrow(/500|Server Error/);
   });
 
   it('rejects with a clear error when the body is empty', async () => {
     const fetchMock = (async () => binaryResult(new Uint8Array())) as unknown as SecureFetch;
-    await expect(fetchTarball('mock://empty', fetchMock)).rejects.toThrow(/empty/i);
+    await expect(
+      fetchTarball(`https://${REGISTRY_NPMJS_HOST}/p/-/p-empty.tgz`, fetchMock)
+    ).rejects.toThrow(/empty/i);
   });
 
   it('rejects with a clear error when url is empty', async () => {
@@ -277,9 +353,9 @@ describe('fetchTarball', () => {
 
   it('times out if SecureFetch never resolves', async () => {
     const fetchMock = (() => new Promise<FetchResult>(() => {})) as unknown as SecureFetch;
-    await expect(fetchTarball('mock://hangs', fetchMock, { timeoutMs: 10 })).rejects.toThrow(
-      /time(d)? out/i
-    );
+    await expect(
+      fetchTarball(`https://${REGISTRY_NPMJS_HOST}/p/-/p-hang.tgz`, fetchMock, { timeoutMs: 10 })
+    ).rejects.toThrow(/time(d)? out/i);
   });
 
   it('coerces a string body into Uint8Array bytes', async () => {
@@ -289,11 +365,35 @@ describe('fetchTarball', () => {
         statusText: 'OK',
         headers: {},
         body: 'abc' as unknown as Uint8Array,
-        url: 'mock://str',
+        url: `https://${REGISTRY_NPMJS_HOST}/p/-/p-str.tgz`,
       }) satisfies FetchResult) as unknown as SecureFetch;
 
-    const out = await fetchTarball('mock://str', fetchMock);
+    const out = await fetchTarball(`https://${REGISTRY_NPMJS_HOST}/p/-/p-str.tgz`, fetchMock);
     expect(out).toBeInstanceOf(Uint8Array);
     expect(out.length).toBeGreaterThan(0);
+  });
+
+  it('refuses to fetch a tarball whose host is not the expected tarball host', async () => {
+    const fetchMock = vi.fn() as unknown as SecureFetch;
+    await expect(fetchTarball('https://evil.example.com/pkg-1.0.0.tgz', fetchMock)).rejects.toThrow(
+      /host|expected/i
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses to fetch a tarball over a non-https protocol', async () => {
+    const fetchMock = vi.fn() as unknown as SecureFetch;
+    await expect(
+      fetchTarball(`http://${REGISTRY_NPMJS_HOST}/p/-/p-1.0.0.tgz`, fetchMock)
+    ).rejects.toThrow(/protocol|https/i);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses to fetch a tarball with a non-absolute URL', async () => {
+    const fetchMock = vi.fn() as unknown as SecureFetch;
+    await expect(fetchTarball('/relative/path.tgz', fetchMock)).rejects.toThrow(
+      /invalid|URL|absolute/i
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
