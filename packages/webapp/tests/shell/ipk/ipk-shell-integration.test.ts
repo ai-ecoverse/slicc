@@ -286,4 +286,96 @@ describe('ipk via real AlmostBashShell', () => {
     expect(r.stdout).toMatch(/\bi\b/);
     await fs.dispose();
   });
+
+  it('`ipk install pkg@not-a-version` reports a clear error and installs nothing', async () => {
+    sharedRegistry.current = buildRegistry([{ name: 'pkg', version: '1.0.0' }]);
+    const { shell, fs } = await newShell();
+    const r = await shell.executeCommand('ipk install pkg@not-a-version');
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toMatch(/invalid version or range|bad range|not-a-version/i);
+    expect(await fs.exists('/work/node_modules/pkg')).toBe(false);
+    expect(await fs.exists('/work/package.json')).toBe(false);
+    await fs.dispose();
+  });
+
+  it('`ipk install pkg@99.99.99` reports no matching version and installs nothing', async () => {
+    sharedRegistry.current = buildRegistry([{ name: 'pkg', version: '1.0.0' }]);
+    const { shell, fs } = await newShell();
+    const r = await shell.executeCommand('ipk install pkg@99.99.99');
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toMatch(/no version satisfies|matching version/i);
+    expect(await fs.exists('/work/node_modules/pkg')).toBe(false);
+    expect(await fs.exists('/work/package.json')).toBe(false);
+    await fs.dispose();
+  });
+
+  it('`ipk install pkg` with a corrupt tarball reports cleanly and leaves no half-install', async () => {
+    sharedRegistry.current = buildRegistry([{ name: 'pkg', version: '1.0.0' }]);
+    sharedRegistry.current.tarballs = {
+      ...sharedRegistry.current.tarballs,
+      ['https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz']: bytes('not-valid-gzip-at-all'),
+    };
+    const { shell, fs } = await newShell();
+    const r = await shell.executeCommand('ipk install pkg');
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toMatch(/gunzip|gzip|corrupt|decompress|magic/i);
+    expect(await fs.exists('/work/node_modules/pkg')).toBe(false);
+    expect(await fs.exists('/work/package.json')).toBe(false);
+    await fs.dispose();
+  });
+
+  it('in a multi-package install, the failing package is named and successes are preserved', async () => {
+    sharedRegistry.current = buildRegistry([
+      { name: 'is-number', version: '7.0.0' },
+      { name: 'is-odd', version: '3.0.1' },
+    ]);
+    const { shell, fs } = await newShell();
+    const r = await shell.executeCommand('ipk install is-number bogus-xyz is-odd');
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toMatch(/bogus-xyz/);
+    expect(r.stdout).toMatch(/is-number/);
+    expect(r.stdout).toMatch(/is-odd/);
+    expect(await fs.exists('/work/node_modules/is-number/package.json')).toBe(true);
+    expect(await fs.exists('/work/node_modules/is-odd/package.json')).toBe(true);
+    expect(await fs.exists('/work/node_modules/bogus-xyz')).toBe(false);
+    const root = JSON.parse((await fs.readFile('/work/package.json')) as string);
+    expect(root.dependencies['is-number']).toBeDefined();
+    expect(root.dependencies['is-odd']).toBeDefined();
+    expect(root.dependencies['bogus-xyz']).toBeUndefined();
+    await fs.dispose();
+  });
+
+  it('`npm` with no subcommand shows usage and exits non-zero', async () => {
+    sharedRegistry.current = { packuments: {}, tarballs: {} };
+    const { shell, fs } = await newShell();
+    const r = await shell.executeCommand('npm');
+    expect(r.exitCode).not.toBe(0);
+    expect((r.stderr + r.stdout).toLowerCase()).toMatch(/usage|install/);
+    await fs.dispose();
+  });
+
+  it('`ipk bogus` unsupported subcommand shows error and exits non-zero', async () => {
+    sharedRegistry.current = { packuments: {}, tarballs: {} };
+    const { shell, fs } = await newShell();
+    const r = await shell.executeCommand('ipk bogus');
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toMatch(/unknown subcommand|bogus/);
+    await fs.dispose();
+  });
+
+  it('the shell stays responsive after an install error (follow-up command works)', async () => {
+    sharedRegistry.current = buildRegistry([{ name: 'pkg', version: '1.0.0' }]);
+    sharedRegistry.current.tarballs = {
+      ...sharedRegistry.current.tarballs,
+      ['https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz']: bytes('bad-gzip'),
+    };
+    const { shell, fs } = await newShell();
+    const bad = await shell.executeCommand('ipk install pkg');
+    expect(bad.exitCode).not.toBe(0);
+
+    const followUp = await shell.executeCommand('echo still-responsive');
+    expect(followUp.exitCode).toBe(0);
+    expect(followUp.stdout).toContain('still-responsive');
+    await fs.dispose();
+  });
 });

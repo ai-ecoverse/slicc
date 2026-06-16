@@ -370,4 +370,104 @@ describe('createIpkCommand', () => {
       expect(root.dependencies?.anything).toBeUndefined();
     }
   });
+
+  it('npm with no subcommand shows usage and exits non-zero', async () => {
+    const cmd = createIpkCommand('npm', { fs, fetch: makeFetch(buildRegistry([])) });
+    const r = await cmd.execute([], ctxOf(fs) as never);
+    expect(r.exitCode).not.toBe(0);
+    expect((r.stderr + r.stdout).toLowerCase()).toMatch(/usage|install/);
+  });
+
+  it('ipk with an unsupported subcommand prints an error and exits non-zero', async () => {
+    const cmd = createIpkCommand('ipk', { fs, fetch: makeFetch(buildRegistry([])) });
+    const r = await cmd.execute(['bogus'], ctxOf(fs) as never);
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toMatch(/unknown subcommand|bogus/);
+  });
+
+  it('npm with an unsupported subcommand prints an error and exits non-zero', async () => {
+    const cmd = createIpkCommand('npm', { fs, fetch: makeFetch(buildRegistry([])) });
+    const r = await cmd.execute(['remove', 'x'], ctxOf(fs) as never);
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toMatch(/unknown subcommand|remove/);
+  });
+
+  it('i with no args reports a clear error', async () => {
+    const cmd = createIpkCommand('i', { fs, fetch: makeFetch(buildRegistry([])) });
+    const r = await cmd.execute([], ctxOf(fs) as never);
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toMatch(/missing subcommand|package|name|requires/i);
+  });
+
+  it('reports invalid version syntax clearly and installs nothing', async () => {
+    const reg = buildRegistry([{ name: 'pkg', version: '1.0.0' }]);
+    const cmd = createIpkCommand('ipk', { fs, fetch: makeFetch(reg) });
+    const r = await cmd.execute(['install', 'pkg@not-a-version'], ctxOf(fs) as never);
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toMatch(/invalid version or range|bad range|not-a-version/i);
+    expect(await fs.exists('/work/node_modules/pkg')).toBe(false);
+    expect(await fs.exists('/work/package.json')).toBe(false);
+  });
+
+  it('reports unsatisfiable version clearly, leaves no node_modules entry and no manifest pollution', async () => {
+    const reg = buildRegistry([{ name: 'pkg', version: '1.0.0' }]);
+    const cmd = createIpkCommand('ipk', { fs, fetch: makeFetch(reg) });
+    const r = await cmd.execute(['install', 'pkg@99.99.99'], ctxOf(fs) as never);
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toMatch(/no version satisfies|matching version/i);
+    expect(await fs.exists('/work/node_modules/pkg')).toBe(false);
+    expect(await fs.exists('/work/package.json')).toBe(false);
+  });
+
+  it('reports a corrupt tarball clearly, cleans up the partial install, and does not pollute the manifest', async () => {
+    const reg = buildRegistry([{ name: 'pkg', version: '1.0.0' }]);
+    const badReg = {
+      ...reg,
+      tarballs: {
+        ...reg.tarballs,
+        ['https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz']: bytes('this-is-not-gzip-data'),
+      },
+    };
+    const cmd = createIpkCommand('ipk', { fs, fetch: makeFetch(badReg) });
+    const r = await cmd.execute(['install', 'pkg'], ctxOf(fs) as never);
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toMatch(/gunzip|gzip|corrupt|decompress|magic/i);
+    expect(await fs.exists('/work/node_modules/pkg')).toBe(false);
+    expect(await fs.exists('/work/package.json')).toBe(false);
+  });
+
+  it('reports a network throw clearly, leaves no node_modules entry and no manifest pollution', async () => {
+    const fetch = (async (_url: string): Promise<FetchResult> => {
+      throw new Error('ECONNREFUSED: connection refused');
+    }) as unknown as SecureFetch;
+    const cmd = createIpkCommand('ipk', { fs, fetch });
+    const r = await cmd.execute(['install', 'net-pkg'], ctxOf(fs) as never);
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toMatch(/network|ECONNREFUSED|connection refused/i);
+    expect(await fs.exists('/work/node_modules/net-pkg')).toBe(false);
+    expect(await fs.exists('/work/package.json')).toBe(false);
+  });
+
+  it('in a multi-package install, the failing package is named specifically and does not corrupt the manifest for successes', async () => {
+    const reg = buildRegistry([
+      { name: 'is-number', version: '7.0.0' },
+      { name: 'is-odd', version: '3.0.1' },
+    ]);
+    const cmd = createIpkCommand('ipk', { fs, fetch: makeFetch(reg) });
+    const r = await cmd.execute(
+      ['install', 'is-number', 'bogus-xyz123', 'is-odd'],
+      ctxOf(fs) as never
+    );
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toMatch(/bogus-xyz123/);
+    expect(r.stdout).toMatch(/is-number/);
+    expect(r.stdout).toMatch(/is-odd/);
+    expect(await fs.exists('/work/node_modules/is-number/package.json')).toBe(true);
+    expect(await fs.exists('/work/node_modules/is-odd/package.json')).toBe(true);
+    expect(await fs.exists('/work/node_modules/bogus-xyz123')).toBe(false);
+    const root = JSON.parse((await fs.readFile('/work/package.json')) as string);
+    expect(root.dependencies['is-number']).toBeDefined();
+    expect(root.dependencies['is-odd']).toBeDefined();
+    expect(root.dependencies['bogus-xyz123']).toBeUndefined();
+  });
 });
