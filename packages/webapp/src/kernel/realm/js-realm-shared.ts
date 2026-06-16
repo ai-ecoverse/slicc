@@ -17,6 +17,7 @@
  * it's a `MessagePort`-shaped fake.
  */
 
+import '../../shims/buffer-polyfill.js';
 import { esmShUrl } from '../../shell/supplemental-commands/cdn-url-builder.js';
 import type { HidDeviceFilter, HidDeviceInfo } from '../hid-device-registry.js';
 import type {
