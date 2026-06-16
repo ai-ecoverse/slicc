@@ -94,6 +94,7 @@ export default defineConfig({
             'packages/webapp/tests/integration/**/*.test.ts',
             'packages/webapp/tests/e2e/**/*.test.ts',
           ],
+          setupFiles: ['packages/webapp/tests/closeevent-polyfill.ts'],
         },
       },
       {
