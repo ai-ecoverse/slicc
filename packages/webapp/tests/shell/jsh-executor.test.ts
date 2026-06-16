@@ -214,10 +214,10 @@ describe('executeJshFile', () => {
     expect(result.stderr).toBe('warning!\n');
   });
 
-  it('provides fs.readFile for VFS access', async () => {
+  it("require('fs').readFile reads from the VFS", async () => {
     const ctx = createMockCtx({
       '/workspace/reader.jsh':
-        'const content = await fs.readFile("data.txt"); console.log(content);',
+        'const fs = require("fs"); const content = await fs.readFile("data.txt"); console.log(content);',
       '/workspace/data.txt': 'file contents here',
     });
     const result = await executeJshFile('/workspace/reader.jsh', [], ctx);
@@ -225,9 +225,10 @@ describe('executeJshFile', () => {
     expect(result.stdout.trim()).toBe('file contents here');
   });
 
-  it('provides fs.writeFile for VFS access', async () => {
+  it("require('fs').writeFile writes to the VFS", async () => {
     const ctx = createMockCtx({
-      '/workspace/writer.jsh': 'await fs.writeFile("out.txt", "written!"); console.log("done");',
+      '/workspace/writer.jsh':
+        'const fs = require("fs"); await fs.writeFile("out.txt", "written!"); console.log("done");',
     });
     const result = await executeJshFile('/workspace/writer.jsh', [], ctx);
     expect(result.exitCode).toBe(0);
@@ -237,10 +238,10 @@ describe('executeJshFile', () => {
     expect(content).toBe('written!');
   });
 
-  it('provides fs.exists', async () => {
+  it("require('fs').exists returns the VFS existence flag", async () => {
     const ctx = createMockCtx({
       '/workspace/check.jsh':
-        'console.log(await fs.exists("data.txt")); console.log(await fs.exists("nope.txt"));',
+        'const fs = require("fs"); console.log(await fs.exists("data.txt")); console.log(await fs.exists("nope.txt"));',
       '/workspace/data.txt': 'exists',
     });
     const result = await executeJshFile('/workspace/check.jsh', [], ctx);
@@ -248,10 +249,10 @@ describe('executeJshFile', () => {
     expect(result.stdout).toBe('true\nfalse\n');
   });
 
-  it('provides fs.readDir', async () => {
+  it("require('fs').readDir lists VFS entries", async () => {
     const ctx = createMockCtx({
       '/workspace/lsdir.jsh':
-        'const entries = await fs.readDir("."); console.log(entries.sort().join(","));',
+        'const fs = require("fs"); const entries = await fs.readDir("."); console.log(entries.sort().join(","));',
       '/workspace/a.txt': 'a',
       '/workspace/b.txt': 'b',
     });
@@ -412,7 +413,7 @@ describe('executeJsCode', () => {
       '/workspace/data.txt': 'async content',
     });
     const result = await executeJsCode(
-      'const data = await fs.readFile("data.txt"); console.log(data);',
+      'const fs = require("fs"); const data = await fs.readFile("data.txt"); console.log(data);',
       ['node'],
       ctx
     );
@@ -429,7 +430,10 @@ describe('exec bridge', () => {
       exitCode: 0,
     });
     const ctx = createMockCtx(
-      { '/workspace/run.jsh': 'const r = await exec("echo hello"); console.log(r.stdout.trim());' },
+      {
+        '/workspace/run.jsh':
+          'const exec = require("sliccy:exec"); const r = await exec("echo hello"); console.log(r.stdout.trim());',
+      },
       {},
       mockExec
     );
@@ -445,7 +449,10 @@ describe('exec bridge', () => {
       exitCode: 127,
     });
     const ctx = createMockCtx(
-      { '/workspace/check.jsh': 'const r = await exec("bad-cmd"); console.log(r.exitCode);' },
+      {
+        '/workspace/check.jsh':
+          'const exec = require("sliccy:exec"); const r = await exec("bad-cmd"); console.log(r.exitCode);',
+      },
       {},
       mockExec
     );
@@ -456,7 +463,8 @@ describe('exec bridge', () => {
 
   it('throws when exec is not available', async () => {
     const ctx = createMockCtx({
-      '/workspace/noexec.jsh': 'try { await exec("ls"); } catch(e) { console.log(e.message); }',
+      '/workspace/noexec.jsh':
+        'try { const exec = require("sliccy:exec"); await exec("ls"); } catch(e) { console.log(e.message); }',
     });
     const result = await executeJshFile('/workspace/noexec.jsh', [], ctx);
     expect(result.exitCode).toBe(0);
@@ -471,7 +479,7 @@ describe('exec bridge', () => {
     });
     const ctx = createMockCtx({}, {}, mockExec);
     const result = await executeJsCode(
-      'const r = await exec("oauth-token adobe"); process.stdout.write(r.stdout);',
+      'const exec = require("sliccy:exec"); const r = await exec("oauth-token adobe"); process.stdout.write(r.stdout);',
       ['node'],
       ctx
     );
@@ -488,7 +496,7 @@ describe('exec bridge', () => {
     const ctx = createMockCtx(
       {
         '/workspace/fail.jsh':
-          'const r = await exec("restricted-cmd"); console.error(r.stderr.trim()); console.log(r.exitCode);',
+          'const exec = require("sliccy:exec"); const r = await exec("restricted-cmd"); console.error(r.stderr.trim()); console.log(r.exitCode);',
       },
       {},
       mockExec

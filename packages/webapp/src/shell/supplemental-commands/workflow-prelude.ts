@@ -2,8 +2,15 @@
 /**
  * WORKFLOW_PRELUDE — injected ahead of a Claude-Code workflow inside the kind:'js' realm.
  * Defines the orchestration globals, a determinism guard, full-global suppression, and caps.
- * Realm-injected names in scope: fs/process/console/require/module/exports/exec/fetch/skill/
- * http/browser/usb/serial/hid/cli/c/time/fmt/pool/__WF. See the SP1 spec §5/§6.
+ *
+ * Post m3 globals hard-cut: the realm only injects the Node-standard surface
+ * (process/console/require/module/exports/fetch/__dirname/__filename) plus `__WF`.
+ * The capability bridges (exec, skill, http, browser, usb, serial, hid, cli, color,
+ * time, fmt, pool) and the VFS bridge (fs) reach the workflow via
+ * `require('sliccy:<name>')` / `require('fs')`. The `agent()` orchestrator reads
+ * `exec.spawn` via the `sliccy:exec` module; the legacy bare-`exec` lookup is kept
+ * so the prelude unit test (which builds its own AsyncFunction with `exec` in the
+ * param list) keeps exercising the same code path.
  */
 export const WORKFLOW_PRELUDE = String.raw`
 class WorkflowError extends Error {}
@@ -28,9 +35,16 @@ const crypto = { getRandomValues: __det('crypto.getRandomValues'), randomUUID: _
 const performance = { now: __det('performance.now') };
 const setTimeout = __det('setTimeout'), setInterval = __det('setInterval'), queueMicrotask = __det('queueMicrotask');
 
-// suppression — capture exec.spawn, then null the full injected param set (skill/http re-expose fs/shell/fetch)
-const __execSpawn = (typeof exec !== 'undefined' && exec && exec.spawn) ? exec.spawn.bind(exec) : null;
-try { exec = fs = fetch = require = process = module = exports = skill = http = browser = usb = serial = hid = cli = c = time = fmt = pool = undefined; } catch (e) {}
+// suppression — capture exec.spawn (bare global in legacy float, sliccy:exec
+// elsewhere), then null every injected name we can reach. The per-chain
+// try/catch swallows the strict-mode ReferenceError when a name isn't declared.
+const __execSpawn = (function () {
+  try { if (typeof exec !== 'undefined' && exec && exec.spawn) return exec.spawn.bind(exec); } catch (e) {}
+  try { var __sx = require('sliccy:exec'); if (__sx && __sx.spawn) return __sx.spawn.bind(__sx); } catch (e) {}
+  return null;
+})();
+try { require = module = exports = process = fetch = undefined; } catch (e) {}
+try { exec = fs = skill = http = browser = usb = serial = hid = cli = c = time = fmt = pool = undefined; } catch (e) {}
 
 const __cwd = __WF.cwd || '/workspace';
 const __agentCwd = __WF.agentCwd || __cwd;

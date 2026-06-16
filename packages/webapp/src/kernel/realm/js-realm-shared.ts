@@ -80,6 +80,16 @@ const NODE_BUILTINS_UNAVAILABLE = new Set([
 
 const BUILTINS_LOCAL = new Set(['fs', 'process', 'buffer']);
 
+const SLICCY_SCHEME = 'sliccy:';
+
+function dirnameOf(filePath: string): string {
+  if (!filePath) return '';
+  const idx = filePath.lastIndexOf('/');
+  if (idx < 0) return '';
+  if (idx === 0) return '/';
+  return filePath.substring(0, idx);
+}
+
 class NodeExitError extends Error {
   constructor(public readonly code: number) {
     super(`Process exited with code ${code}`);
@@ -240,33 +250,40 @@ export async function runJsRealm(
     return response;
   }
 
+  const sliccyModules: Record<string, unknown> = {
+    exec: execBridge,
+    skill: skillGlobal,
+    http: httpGlobal,
+    browser: browserBridge,
+    usb: usbBridge,
+    serial: serialBridge,
+    hid: hidBridge,
+    cli: cliApi,
+    color: colorApi,
+    time,
+    fmt,
+    pool,
+  };
+
   const requireCache = await preloadRequires(init.code, init.env, loadModule, writeStderr);
-  const requireShim = createRequireShim(requireCache, fsBridge, processShim);
+  const requireShim = createRequireShim(requireCache, fsBridge, processShim, sliccyModules);
 
   const moduleShim = { exports: {} as Record<string, unknown>, filename: init.filename };
+
+  const filename = init.filename;
+  const dirname = dirnameOf(filename);
 
   const exitCode = await runUserCode(
     init.code,
     {
-      fs: fsBridge,
       process: processShim,
       console: nodeConsole,
       require: requireShim,
       module: moduleShim,
       exports: moduleShim.exports,
-      exec: execBridge,
       fetch: realmFetch,
-      skill: skillGlobal,
-      http: httpGlobal,
-      browser: browserBridge,
-      usb: usbBridge,
-      serial: serialBridge,
-      hid: hidBridge,
-      cli: cliApi,
-      c: colorApi,
-      time,
-      fmt,
-      pool,
+      __dirname: dirname,
+      __filename: filename,
     },
     writeStderr
   );
@@ -360,6 +377,7 @@ async function preloadRequires(
 ): Promise<Record<string, unknown>> {
   const specifiers = extractRequireSpecifiers(code);
   const filteredSpecifiers = specifiers
+    .filter((s) => !s.startsWith(SLICCY_SCHEME))
     .map((s) => (s.startsWith('node:') ? s.slice(5) : s))
     .filter((s) => !BUILTINS_LOCAL.has(s) && !NODE_BUILTINS_UNAVAILABLE.has(s));
   const nativeSpecifiers = filteredSpecifiers.filter((s) => NODE_NATIVE_PACKAGES.has(s));
@@ -387,38 +405,63 @@ async function preloadRequires(
   return requireCache;
 }
 
+/**
+ * Resolve a `sliccy:<name>` specifier against the per-realm registry. Unknown
+ * names and the empty form throw a scheme-specific error; sliccy: requires
+ * NEVER consult the require cache or fall through to node-builtin handling.
+ */
+function resolveSliccyModule(id: string, sliccyModules: Record<string, unknown>): unknown {
+  const name = id.slice(SLICCY_SCHEME.length);
+  if (name === '') {
+    throw new Error("require('sliccy:'): empty sliccy: module name");
+  }
+  if (!Object.prototype.hasOwnProperty.call(sliccyModules, name)) {
+    throw new Error(
+      `require('${id}'): unknown sliccy: module '${name}'. Known names: ${Object.keys(sliccyModules).sort().join(', ')}`
+    );
+  }
+  return sliccyModules[name];
+}
+
+const UNAVAILABLE_BUILTIN_HINTS: Record<string, string> = {
+  http: ' Use fetch() instead.',
+  https: ' Use fetch() instead.',
+  child_process: ' Use exec() which is available as a shell bridge.',
+  crypto: ' Use globalThis.crypto (Web Crypto API) instead.',
+};
+
+function unavailableBuiltinError(id: string, bareId: string): Error {
+  return new Error(
+    `require('${id}'): Node built-in '${bareId}' is not available in the browser environment.${UNAVAILABLE_BUILTIN_HINTS[bareId] || ''}`
+  );
+}
+
+function resolvePathRequire(id: string, requireCache: Record<string, unknown>): unknown {
+  if ('path' in requireCache) return requireCache['path'];
+  if (id in requireCache) return requireCache[id];
+  throw new Error(
+    `require('${id}'): path module not pre-loaded. Add require('path') as a static import.`
+  );
+}
+
 /** Synchronous `require(id)` resolving from the pre-loaded cache + built-ins. */
 function createRequireShim(
   requireCache: Record<string, unknown>,
   fsBridge: unknown,
-  processShim: unknown
+  processShim: unknown,
+  sliccyModules: Record<string, unknown>
 ): (id: string) => unknown {
   return (id: string): unknown => {
+    if (typeof id === 'string' && id.startsWith(SLICCY_SCHEME)) {
+      return resolveSliccyModule(id, sliccyModules);
+    }
     const bareId = id.startsWith('node:') ? id.slice(5) : id;
     if (bareId === 'fs') return fsBridge;
     if (bareId === 'process') return processShim;
     if (bareId === 'buffer') return { Buffer: (globalThis as Record<string, unknown>).Buffer };
-    if (bareId === 'path') {
-      if ('path' in requireCache) return requireCache['path'];
-      if (id in requireCache) return requireCache[id];
-      throw new Error(
-        `require('${id}'): path module not pre-loaded. Add require('path') as a static import.`
-      );
-    }
-    if (NODE_NATIVE_PACKAGES.has(bareId)) {
-      throw nativePackageError(id, bareId);
-    }
-    if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) {
-      const hints: Record<string, string> = {
-        http: ' Use fetch() instead.',
-        https: ' Use fetch() instead.',
-        child_process: ' Use exec() which is available as a shell bridge.',
-        crypto: ' Use globalThis.crypto (Web Crypto API) instead.',
-      };
-      throw new Error(
-        `require('${id}'): Node built-in '${bareId}' is not available in the browser environment.${hints[bareId] || ''}`
-      );
-    }
+    if (bareId === 'path') return resolvePathRequire(id, requireCache);
+    if (NODE_NATIVE_PACKAGES.has(bareId)) throw nativePackageError(id, bareId);
+    if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) throw unavailableBuiltinError(id, bareId);
     if (id in requireCache) return requireCache[id];
     if (bareId in requireCache) return requireCache[bareId];
     throw new Error(
