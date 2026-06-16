@@ -17,14 +17,19 @@
  * FIX-1 Buffer + FIX-3 drain).
  */
 
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runInThisContext } from 'node:vm';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = resolve(HERE, '..', '..', '..');
 const SANDBOX_HTML_PATH = resolve(HERE, '..', 'sandbox.html');
 const SANDBOX_HTML = readFileSync(SANDBOX_HTML_PATH, 'utf-8');
+const BUFFER_POLYFILL_DIST = resolve(REPO_ROOT, 'dist/extension/buffer-polyfill.js');
+const BUFFER_POLYFILL_SOURCE = resolve(REPO_ROOT, 'packages/webapp/src/shims/buffer-polyfill.ts');
 
 function extractInlineScript(html: string): string {
   const re = /<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi;
@@ -36,6 +41,47 @@ function extractInlineScript(html: string): string {
 }
 
 const INLINE_SCRIPT = extractInlineScript(SANDBOX_HTML);
+
+function loadBufferPolyfillIife(): string {
+  // Prefer the production-built dist artifact when present — it's the exact
+  // bytes the extension ships to users.
+  try {
+    return readFileSync(BUFFER_POLYFILL_DIST, 'utf-8');
+  } catch {
+    // Fallback: build the same IIFE the Vite `buildBufferPolyfillPlugin`
+    // emits, from the same source. jsdom's TextEncoder/Uint8Array mix
+    // makes esbuild's invariant check fail when imported into the test
+    // realm directly (`new TextEncoder().encode("") instanceof Uint8Array`
+    // returns false across the realm boundary), so we run esbuild in a
+    // clean Node subprocess instead and capture its stdout.
+    const compileScript = `
+      const { build } = require('esbuild');
+      build({
+        entryPoints: [${JSON.stringify(BUFFER_POLYFILL_SOURCE)}],
+        bundle: true,
+        format: 'iife',
+        target: 'esnext',
+        minify: true,
+        write: false,
+        define: { __DEV__: 'false', global: 'globalThis' },
+      }).then((r) => {
+        process.stdout.write(r.outputFiles[0].text);
+      }, (err) => {
+        process.stderr.write(String(err && err.stack ? err.stack : err) + '\\n');
+        process.exit(1);
+      });
+    `;
+    const out = execFileSync(process.execPath, ['-e', compileScript], {
+      cwd: REPO_ROOT,
+      encoding: 'utf-8',
+      maxBuffer: 32 * 1024 * 1024,
+    });
+    if (!out || out.length === 0) {
+      throw new Error('subprocess esbuild produced empty output for buffer-polyfill source');
+    }
+    return out;
+  }
+}
 
 interface RealmPortLike {
   postMessage(msg: unknown, transfer?: unknown[]): void;
@@ -53,10 +99,38 @@ beforeAll(() => {
   if (typeof (window as { fetch?: unknown }).fetch !== 'function') {
     (window as unknown as { fetch: typeof globalThis.fetch }).fetch = globalThis.fetch;
   }
-  const factory = new Function(`${INLINE_SCRIPT}\n;return { bootstrapRealmPort };`) as () => {
-    bootstrapRealmPort: BootstrapFn;
-  };
-  bootstrapRealmPort = factory().bootstrapRealmPort;
+
+  // (B) Prove the bundled polyfill (not Node/jsdom's ambient Buffer) is what
+  // supplies the realm's Buffer. Strip the ambient global FIRST so the
+  // polyfill's `if (typeof globalThis.Buffer === 'undefined')` guard actually
+  // fires, then run the real IIFE asset (dist, falling back to compiling the
+  // exact same source the build ships).
+  delete (globalThis as { Buffer?: unknown }).Buffer;
+  if (typeof window !== 'undefined') {
+    delete (window as unknown as { Buffer?: unknown }).Buffer;
+  }
+  expect(typeof (globalThis as { Buffer?: unknown }).Buffer).toBe('undefined');
+
+  const polyfillIife = loadBufferPolyfillIife();
+  runInThisContext(polyfillIife, { filename: 'buffer-polyfill.js' });
+  expect(typeof (globalThis as { Buffer?: unknown }).Buffer).toBe('function');
+
+  // (A) Execute the inline realm-bootstrap script with real iframe top-level
+  // script semantics. `vm.runInThisContext` evaluates the source as a top-
+  // level `<script>` in the current realm: top-level function/var land on
+  // globalThis AND top-level let/const land in the realm's global lexical
+  // environment, so subsequent Function/AsyncFunction (the user-code path
+  // in `runRealm`) can resolve them the way a real iframe would. A `new
+  // Function` FACTORY or `(0, eval)(...)` would keep let/const in a
+  // function/eval scope, hiding any reintroduced top-level capability
+  // binding from the bare-global tests below.
+  runInThisContext(INLINE_SCRIPT, { filename: 'sandbox.html#inline' });
+  const exposed = (globalThis as unknown as { bootstrapRealmPort?: BootstrapFn })
+    .bootstrapRealmPort;
+  if (typeof exposed !== 'function') {
+    throw new Error('inline script did not expose bootstrapRealmPort on the realm global');
+  }
+  bootstrapRealmPort = exposed;
 });
 
 interface RealmDone {
@@ -383,5 +457,51 @@ describe('sandbox.html structural anchors that the behavioral harness depends on
   it('the inline script exposes bootstrapRealmPort + runRealm at script scope', () => {
     expect(INLINE_SCRIPT).toMatch(/function\s+bootstrapRealmPort\s*\(/);
     expect(INLINE_SCRIPT).toMatch(/async\s+function\s+runRealm\s*\(/);
+  });
+});
+
+describe('harness fidelity: real iframe top-level script semantics + polyfilled Buffer', () => {
+  // The two pinned facts below are what stop the factory-wrap regression
+  // (top-level lexical leaks) and the ambient-Buffer regression (assertions
+  // that pass on Node's Buffer even when the bundled polyfill is missing).
+  // If either drifts back, every VAL-GLOBALS-015 / VAL-GLOBALS-009/010
+  // result above would silently lose its meaning.
+
+  it("a fresh AsyncFunction at global scope sees the inline script's top-level let/const", async () => {
+    // `fetchIdCounter` is `let` at the top of the inline script;
+    // `pendingFetch` is a top-level `const`. Neither is a property of
+    // globalThis — they live in the global lexical environment. A real
+    // iframe `<script>` followed by a `new Function/AsyncFunction(...)` call
+    // resolves these via the global script-scope binding; that's the same
+    // resolution path bare-capability identifiers (`exec`, `skill`, …) take
+    // in user code. Asserting they resolve here proves the harness preserves
+    // that resolution path — so any reintroduced top-level capability binding
+    // would leak through the same channel and the bare-global tests above
+    // would catch it.
+    const asyncFnCtor = Object.getPrototypeOf(async function () {}).constructor as new (
+      body: string
+    ) => () => Promise<string>;
+    const probe = new asyncFnCtor('return typeof fetchIdCounter + " " + typeof pendingFetch');
+    expect(await probe()).toBe('number object');
+
+    expect((globalThis as { fetchIdCounter?: unknown }).fetchIdCounter).toBeUndefined();
+    expect((globalThis as { pendingFetch?: unknown }).pendingFetch).toBeUndefined();
+  });
+
+  it("globalThis.Buffer is the buffer-polyfill IIFE's constructor, not Node's ambient Buffer", async () => {
+    const buf = (globalThis as { Buffer: { from: (s: string) => { toString(): string } } }).Buffer;
+    expect(typeof buf).toBe('function');
+    expect(buf.from('hello-from-polyfill').toString()).toBe('hello-from-polyfill');
+
+    const code = `
+      const direct = Buffer.from('via-async-function').toString();
+      console.log(direct);
+      console.log(Buffer === globalThis.Buffer);
+    `;
+    const done = await runInIframeFloat(code);
+    expect(done.exitCode).toBe(0);
+    const lines = done.stdout.split('\n').filter(Boolean);
+    expect(lines[0]).toBe('via-async-function');
+    expect(lines[1]).toBe('true');
   });
 });
