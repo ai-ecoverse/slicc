@@ -430,12 +430,12 @@ function buildLicks(): ChatMessage[] {
       role: 'user',
       content:
         '[Scoop Access Request: tight-sandbox-scoop]\n' +
-        'Request ID: sudo-req-42\n' +
+        'Lick ID: lick-1700000000000-req42\n' +
         'Kind: write\n' +
         'Detail: /workspace/build/output.txt\n' +
         'Suggested pattern: /workspace/build/**\n\n' +
-        'Use the sudo_allow tool with request_id="sudo-req-42" to approve, deny, or ' +
-        'always-approve this request.',
+        'Use the lick_confirm tool with lick_id="lick-1700000000000-req42" to approve ' +
+        '(or always-approve with a pattern), or lick_dismiss with lick_id="lick-1700000000000-req42" to deny.',
       timestamp: tsAt(17.5),
       source: 'lick',
       channel: 'sudo-request',

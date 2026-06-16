@@ -43,6 +43,13 @@ export type AgentEvent =
 
 export type MessageRole = 'user' | 'assistant';
 
+/**
+ * Result state of an actionable lick card (currently scoop sudo-requests):
+ * `pending` (awaiting a decision — the default), `confirmed` (allowed), or
+ * `dismissed` (denied). Drives the `<slicc-lick-card>` `state` attribute.
+ */
+export type LickState = 'pending' | 'confirmed' | 'dismissed';
+
 export interface ChatMessage {
   id: string;
   role: MessageRole;
@@ -59,6 +66,13 @@ export interface ChatMessage {
   lickCount?: number;
   /** Render-time collation: the individual lick bodies folded into this row. */
   lickParts?: string[];
+  /**
+   * For actionable licks (sudo-request): the orchestrator-minted lick id used
+   * to locate this card when its decision settles, so the state can flip live.
+   */
+  lickId?: string;
+  /** Result state for an actionable lick: pending / confirmed / dismissed. */
+  lickState?: LickState;
   /** True when the message is queued (submitted while the agent is still processing). */
   queued?: boolean;
   /**

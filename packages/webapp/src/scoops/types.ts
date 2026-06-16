@@ -167,6 +167,13 @@ export interface ChannelMessage {
   timestamp: string;
   fromAssistant: boolean;
   channel: string;
+  /**
+   * For actionable licks (sudo-request): the orchestrator-minted lick id, so a
+   * later resolve can find this stored message and flip its rendered card.
+   */
+  lickId?: string;
+  /** Result state for an actionable lick: pending / confirmed / dismissed. */
+  lickState?: 'pending' | 'confirmed' | 'dismissed';
 }
 
 /** Scheduled task */

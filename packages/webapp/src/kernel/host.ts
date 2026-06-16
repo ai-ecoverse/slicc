@@ -262,7 +262,7 @@ function resolveLickEventId(event: LickEvent): string | undefined {
 export function defaultLickEventHandler(event: LickEvent, ctx: LickRoutingContext): void {
   if (event.type === 'sudo-request') {
     ctx.log.debug?.('sudo-request lick: UI-chip-only path; orchestrator owns delivery', {
-      sudoRequestId: event.sudoRequestId,
+      lickId: event.lickId,
     });
     return;
   }

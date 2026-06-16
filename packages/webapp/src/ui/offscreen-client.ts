@@ -14,6 +14,7 @@ import type {
   ExtensionMessage,
   ForwardedLickEvent,
   IncomingMessageMsg,
+  MessageUpdatedMsg,
   OffscreenToPanelMessage,
   PanelToOffscreenMessage,
   ScoopCreatedMsg,
@@ -37,7 +38,7 @@ import { setFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js'
 import { setLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import type { RegisteredScoop, ScoopTabState, ThinkingLevel } from '../scoops/types.js';
 import type { TerminalEventMsg } from '../shell/terminal-protocol.js';
-import type { AgentHandle, AgentEvent as UIAgentEvent } from './types.js';
+import type { AgentHandle, ChatMessage, AgentEvent as UIAgentEvent } from './types.js';
 
 const log = createLogger('offscreen-client');
 
@@ -66,6 +67,16 @@ export interface OffscreenClientCallbacks {
   onScoopCreated: (scoop: RegisteredScoop) => void;
   onScoopListUpdate: (scoops: ScoopListMsg['scoops']) => void;
   onIncomingMessage: (scoopJid: string, message: IncomingMessageMsg['message']) => void;
+  /**
+   * In-place state update for an already-delivered message (currently a
+   * settled actionable lick): the panel flips the rendered card located by
+   * `lickId` instead of appending a row. Parity path for standalone +
+   * extension — both floats route through this client.
+   */
+  onMessageUpdate?: (
+    scoopJid: string,
+    update: { messageId: string; lickId?: string; lickState?: ChatMessage['lickState'] }
+  ) => void;
   /**
    * Whole-history replacement (used when the offscreen acts as a tray
    * follower and receives a snapshot from the leader). The payload has
@@ -623,6 +634,10 @@ export class OffscreenClient implements KernelClientFacade {
         this.handleIncomingMessage(msg as IncomingMessageMsg);
         break;
 
+      case 'message-updated':
+        this.handleMessageUpdated(msg as MessageUpdatedMsg);
+        break;
+
       case 'scoop-messages-replaced': {
         const m = msg as ScoopMessagesReplacedMsg;
         this.resyncStreamPointer(m.scoopJid, m.messages);
@@ -901,6 +916,14 @@ export class OffscreenClient implements KernelClientFacade {
 
   private handleIncomingMessage(msg: IncomingMessageMsg): void {
     this.callbacks.onIncomingMessage(msg.scoopJid, msg.message);
+  }
+
+  private handleMessageUpdated(msg: MessageUpdatedMsg): void {
+    this.callbacks.onMessageUpdate?.(msg.scoopJid, {
+      messageId: msg.messageId,
+      lickId: msg.lickId,
+      lickState: msg.lickState,
+    });
   }
 
   private msgScoopToRegistered(s: ScoopListMsg['scoops'][number]): RegisteredScoop {

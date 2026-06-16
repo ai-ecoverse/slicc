@@ -41,6 +41,7 @@ import type {
   ExtensionMessage,
   ForwardedLickEvent,
   IncomingMessageMsg,
+  MessageUpdatedMsg,
   OffscreenToPanelMessage,
   PanelCdpResponseMsg,
   PanelToOffscreenMessage,
@@ -66,6 +67,10 @@ interface BufferedChatMessage {
   timestamp: number;
   source?: string;
   channel?: string;
+  /** Actionable-lick id (sudo-request) so a later resolve can flip this row. */
+  lickId?: string;
+  /** Result state for an actionable lick: pending / confirmed / dismissed. */
+  lickState?: 'pending' | 'confirmed' | 'dismissed';
   toolCalls?: Array<{
     id: string;
     name: string;
@@ -313,6 +318,8 @@ export class OffscreenBridge implements KernelFacade {
 
       onIncomingMessage: (scoopJid, message) => bridge.bufferIncomingMessage(scoopJid, message),
 
+      onMessageUpdate: (scoopJid, update) => bridge.applyMessageUpdate(scoopJid, update),
+
       onScoopUnregistered: (scoop) => bridge.evictScoopState(scoop),
     };
   }
@@ -395,6 +402,8 @@ export class OffscreenBridge implements KernelFacade {
       timestamp: new Date(message.timestamp).getTime(),
       source: message.channel === 'delegation' ? 'delegation' : undefined,
       channel: message.channel,
+      lickId: message.lickId,
+      lickState: message.lickState,
     };
     this.getBuffer(scoopJid).push(chatMsg);
     this.persistScoop(scoopJid);
@@ -459,8 +468,38 @@ export class OffscreenBridge implements KernelFacade {
         senderName: message.senderName,
         fromAssistant: message.fromAssistant,
         timestamp: message.timestamp,
+        lickId: message.lickId,
+        lickState: message.lickState,
       },
     } satisfies IncomingMessageMsg);
+  }
+
+  /**
+   * Apply an in-place message-state update (currently a settled actionable
+   * lick): flip the buffered row's `lickState` so a panel reload's snapshot
+   * reflects it, re-persist, and emit `message-updated` so the open panel can
+   * re-render just that card. Mirrors `bufferIncomingMessage`'s buffer + persist
+   * + echo shape, but mutates an existing row instead of appending.
+   */
+  private applyMessageUpdate(
+    scoopJid: string,
+    update: { messageId: string; lickId?: string; lickState?: BufferedChatMessage['lickState'] }
+  ): void {
+    const buf = this.messageBuffers.get(scoopJid);
+    const entry = buf?.find(
+      (m) => (update.lickId && m.lickId === update.lickId) || m.id === update.messageId
+    );
+    if (entry) {
+      entry.lickState = update.lickState;
+      this.persistScoop(scoopJid);
+    }
+    this.emit({
+      type: 'message-updated',
+      scoopJid,
+      messageId: update.messageId,
+      lickId: update.lickId,
+      lickState: update.lickState,
+    } satisfies MessageUpdatedMsg);
   }
 
   /**

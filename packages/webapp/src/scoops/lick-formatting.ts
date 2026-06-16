@@ -158,20 +158,20 @@ function formatWorkflowLick(event: LickEvent, label: string): FormattedLick {
 
 /**
  * Sudo-request body mirrors `formatSudoRequestNotification` in orchestrator.ts
- * so the cone-readable text restates the request id + kind + detail + suggested
- * pattern and points at the `sudo_allow` tool. Used by the UI chip path; the
+ * so the cone-readable text restates the lick id + kind + detail + suggested
+ * pattern and points at the `lick_confirm` tool. Used by the UI chip path; the
  * actionable agent message is delivered separately via
  * `deliverSudoRequestToCone` (Path b in the lick-as-UI-chip design — see
  * `Orchestrator.enqueueSudoRequest` and `defaultLickEventHandler`).
  */
 function formatSudoRequestLick(event: LickEvent, label: string): FormattedLick {
   const scoop = event.sudoScoopName ?? 'a scoop';
-  const requestId = event.sudoRequestId ?? '(unknown)';
+  const lickId = event.lickId ?? '(unknown)';
   const kind = event.sudoKind ?? 'unknown';
   const detail = event.sudoDetail ?? '';
   const lines = [
     `[${label}: ${scoop}]`,
-    `Request ID: ${requestId}`,
+    `Lick ID: ${lickId}`,
     `Kind: ${kind}`,
     `Detail: ${detail}`,
   ];
@@ -180,7 +180,7 @@ function formatSudoRequestLick(event: LickEvent, label: string): FormattedLick {
   }
   lines.push(
     '',
-    `Use the sudo_allow tool with request_id="${requestId}" to approve, deny, or always-approve this request.`
+    `Use the lick_confirm tool with lick_id="${lickId}" to approve (or always-approve with a pattern), or lick_dismiss with lick_id="${lickId}" to deny.`
   );
   return { label, content: lines.join('\n') };
 }

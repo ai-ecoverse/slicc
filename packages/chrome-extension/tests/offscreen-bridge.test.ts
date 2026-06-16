@@ -1659,6 +1659,80 @@ describe('OffscreenBridge.notifyPanelIncomingMessage', () => {
     const sent = sentMessages.find((m: any) => m?.payload?.type === 'incoming-message') as any;
     expect(sent.payload.message.channel).toBe('webhook');
   });
+
+  it('carries lickId/lickState onto the incoming-message envelope', () => {
+    const bridge = new OffscreenBridge();
+    const msg: ChannelMessage = {
+      id: 'sudo-request-lick-1',
+      chatJid: 'cone-1',
+      senderId: 'test-scoop',
+      senderName: 'test-scoop',
+      content: '[@test-scoop sudo-request]\nKind: command\nDetail: git push',
+      timestamp: '2026-05-20T00:00:00.000Z',
+      fromAssistant: false,
+      channel: 'sudo-request',
+      lickId: 'lick-1',
+      lickState: 'pending',
+    };
+    sentMessages.length = 0;
+    bridge.notifyPanelIncomingMessage('cone-1', msg);
+    const sent = sentMessages.find((m: any) => m?.payload?.type === 'incoming-message') as any;
+    expect(sent.payload.message).toMatchObject({ lickId: 'lick-1', lickState: 'pending' });
+  });
+});
+
+describe('OffscreenBridge applyMessageUpdate (live lick flip)', () => {
+  it('flips the buffered lick state and emits message-updated', () => {
+    const bridge = new OffscreenBridge();
+    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    // Seed a pending actionable lick into the cone's buffer.
+    callbacks.onIncomingMessage?.('cone-1', {
+      id: 'sudo-request-lick-1',
+      chatJid: 'cone-1',
+      senderId: 'test-scoop',
+      senderName: 'test-scoop',
+      content: '[@test-scoop sudo-request]\nKind: command\nDetail: git push',
+      timestamp: '2026-05-20T00:00:00.000Z',
+      fromAssistant: false,
+      channel: 'sudo-request',
+      lickId: 'lick-1',
+      lickState: 'pending',
+    });
+    sentMessages.length = 0;
+
+    callbacks.onMessageUpdate?.('cone-1', {
+      messageId: 'sudo-request-lick-1',
+      lickId: 'lick-1',
+      lickState: 'confirmed',
+    });
+
+    const buf = (bridge as any).getBuffer('cone-1');
+    const entry = buf.find((m: any) => m.lickId === 'lick-1');
+    expect(entry?.lickState).toBe('confirmed');
+
+    const emitted = sentMessages.find((m: any) => m?.payload?.type === 'message-updated') as any;
+    expect(emitted).toBeDefined();
+    expect(emitted.payload).toMatchObject({
+      type: 'message-updated',
+      scoopJid: 'cone-1',
+      messageId: 'sudo-request-lick-1',
+      lickId: 'lick-1',
+      lickState: 'confirmed',
+    });
+  });
+
+  it('still emits message-updated when no buffered row matches', () => {
+    const bridge = new OffscreenBridge();
+    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    sentMessages.length = 0;
+    callbacks.onMessageUpdate?.('cone-1', {
+      messageId: 'sudo-request-missing',
+      lickId: 'missing',
+      lickState: 'dismissed',
+    });
+    const emitted = sentMessages.find((m: any) => m?.payload?.type === 'message-updated') as any;
+    expect(emitted?.payload.lickState).toBe('dismissed');
+  });
 });
 
 describe('OffscreenBridge follower-forwarding bridge', () => {

@@ -1413,7 +1413,7 @@ export class Orchestrator implements ConeApprovalRouter {
     const scoopForLick = this.scoops.get(scoopJid);
     this.lickManager?.emitEvent({
       type: 'sudo-request',
-      sudoRequestId: id,
+      lickId: id,
       sudoKind: request.kind,
       sudoDetail: request.detail,
       sudoScoopName: scoopForLick?.assistantLabel ?? scoopForLick?.name ?? scoopJid,
@@ -1447,7 +1447,7 @@ export class Orchestrator implements ConeApprovalRouter {
 
   /**
    * Settle a pending cone-mediated sudo request. Used by the cone's
-   * `sudo_allow` / `sudo_deny` tools (and tests). Returns `true` when an
+   * `lick_confirm` / `lick_dismiss` tools (and tests). Returns `true` when an
    * entry was actually resolved, `false` for unknown / already-settled /
    * timed-out ids so the caller can surface that as "this request expired"
    * to the cone.
@@ -1567,7 +1567,7 @@ export class Orchestrator implements ConeApprovalRouter {
   /**
    * Build the cone-facing `sudo-request` `ChannelMessage` and hand it to
    * `handleMessage`. The content is structured so the cone can reproduce
-   * the request id verbatim in its `sudo_allow` tool call. `sudo-request`
+   * the lick id verbatim in its `lick_confirm` tool call. `sudo-request`
    * is a member of `EXTERNAL_LICK_CHANNELS`, so `handleMessage` fires the
    * UI chip (`onIncomingMessage`) automatically — no explicit pre-fire
    * needed here (which would double-fire the chip).
@@ -1604,7 +1604,7 @@ export class Orchestrator implements ConeApprovalRouter {
   ): string {
     const lines = [
       `[@${senderName} sudo-request]`,
-      `Request ID: ${id}`,
+      `Lick ID: ${id}`,
       `Kind: ${request.kind}`,
       `Detail: ${request.detail}`,
     ];
@@ -1613,7 +1613,7 @@ export class Orchestrator implements ConeApprovalRouter {
     }
     lines.push(
       '',
-      `Use the sudo_allow tool with request_id="${id}" to approve, deny, or always-approve this request.`
+      `Use the lick_confirm tool with lick_id="${id}" to approve (or always-approve with a pattern), or lick_dismiss with lick_id="${id}" to deny.`
     );
     return lines.join('\n');
   }

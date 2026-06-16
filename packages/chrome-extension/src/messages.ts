@@ -918,7 +918,25 @@ export interface IncomingMessageMsg {
     senderName: string;
     fromAssistant: boolean;
     timestamp: string;
+    /** Actionable-lick id (sudo-request) so the panel can flip its card later. */
+    lickId?: string;
+    /** Initial actionable-lick state: pending / confirmed / dismissed. */
+    lickState?: 'pending' | 'confirmed' | 'dismissed';
   };
+}
+
+/**
+ * Offscreen → panel: an already-delivered message changed its render-relevant
+ * state in place (no new row). Currently emitted when an actionable lick
+ * (sudo-request) settles so the panel flips the rendered card. The panel
+ * locates the card by `lickId`.
+ */
+export interface MessageUpdatedMsg {
+  type: 'message-updated';
+  scoopJid: string;
+  messageId: string;
+  lickId?: string;
+  lickState?: 'pending' | 'confirmed' | 'dismissed';
 }
 
 /**
@@ -1108,6 +1126,7 @@ export type OffscreenToPanelMessage =
   | ErrorMsg
   | ScoopCreatedMsg
   | IncomingMessageMsg
+  | MessageUpdatedMsg
   | ScoopMessagesReplacedMsg
   | ScoopTranscriptMsg
   | SessionStatsMsg

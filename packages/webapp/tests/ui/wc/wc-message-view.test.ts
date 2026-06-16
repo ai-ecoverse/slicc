@@ -230,8 +230,8 @@ describe('tool presentation', () => {
       ['edit_file', { path: '/tmp/a.ts' }, 'Edit a.ts', 'file-pen'],
       ['send_message', { message: 'hi' }, 'Send a message to Sliccy', 'message-circle'],
       ['feed_scoop', { name: 'pomodoro' }, 'Feed the pomodoro scoop', 'utensils'],
-      ['sudo_allow', { request_id: 'sudo-1' }, 'Grant the scoop access', 'shield-check'],
-      ['sudo_deny', { request_id: 'sudo-1' }, 'Hold the scoop back', 'shield-x'],
+      ['lick_confirm', { lick_id: 'lick-1' }, 'Grant the scoop access', 'shield-check'],
+      ['lick_dismiss', { lick_id: 'lick-1' }, 'Hold the scoop back', 'shield-x'],
       [
         'sudo_request',
         { kind: 'command', detail: 'git push' },

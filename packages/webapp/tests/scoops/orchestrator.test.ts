@@ -2802,8 +2802,8 @@ describe('Orchestrator.enqueueSudoRequest lick emission', () => {
     expect(emitEvent).toHaveBeenCalledTimes(1);
     const lick = emitEvent.mock.calls[0][0];
     expect(lick.type).toBe('sudo-request');
-    expect(typeof lick.sudoRequestId).toBe('string');
-    expect(lick.sudoRequestId.length).toBeGreaterThan(0);
+    expect(typeof lick.lickId).toBe('string');
+    expect(lick.lickId.length).toBeGreaterThan(0);
     expect(lick.sudoKind).toBe('write');
     expect(lick.sudoDetail).toBe('/workspace/build/output.txt');
     expect(lick.sudoSuggestedPattern).toBe('/workspace/build/**');
@@ -2817,11 +2817,11 @@ describe('Orchestrator.enqueueSudoRequest lick emission', () => {
       ([jid, msg]) => jid === cone.jid && msg?.channel === 'sudo-request'
     );
     expect(coneFires).toHaveLength(1);
-    expect(coneFires[0][1].content).toContain('Request ID:');
-    expect(coneFires[0][1].content).toContain('sudo_allow');
+    expect(coneFires[0][1].content).toContain('Lick ID:');
+    expect(coneFires[0][1].content).toContain('lick_confirm');
 
     // Settle the dangling promise so the test framework doesn't warn.
-    orch.resolveSudoRequest(lick.sudoRequestId, { decision: 'deny' });
+    orch.resolveSudoRequest(lick.lickId, { decision: 'deny' });
     await pendingDecision;
   });
 

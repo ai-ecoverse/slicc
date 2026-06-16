@@ -214,7 +214,13 @@ export class WcChatController {
   }
 
   /** Render an inbound lick (webhook/cron/…) into the thread. */
-  addLickMessage(id: string, content: string, channel: string, timestamp: number): void {
+  addLickMessage(
+    id: string,
+    content: string,
+    channel: string,
+    timestamp: number,
+    lickId?: string
+  ): void {
     // Collate into the trailing card when the previous message is a lick of
     // the same channel — the pill counts up instead of stacking cards.
     const last = this.#messages[this.#messages.length - 1];
@@ -232,7 +238,24 @@ export class WcChatController {
       timestamp,
       source: 'lick',
       channel,
+      // Actionable licks (sudo-request) carry an id so a later resolve can
+      // flip this card's state in place (see `updateLickState`).
+      lickId,
+      lickState: lickId ? 'pending' : undefined,
     });
+  }
+
+  /**
+   * Flip an actionable lick card's result state in place (no new row),
+   * located by its `lickId`. Fired when the cone settles a sudo-request;
+   * a no-op when the card isn't in the current thread (e.g. a different
+   * scoop is selected).
+   */
+  updateLickState(lickId: string, lickState: ChatMessage['lickState']): void {
+    const message = this.#messages.find((m) => m.lickId === lickId);
+    if (!message) return;
+    message.lickState = lickState;
+    this.#rerenderMessage(message);
   }
 
   /** External processing-state override (e.g. scoop status broadcasts). */

@@ -64,7 +64,7 @@ Scoops return on `scoop-notify` / `scoop-idle` / `scoop-wait`.
 
 ## Approvals (sudo)
 
-`/etc/sudoers` gates actions; deny → exit 1 / `EACCES`. Rules: `Cmnd`/`Read`/`Write <glob>` (+`NOPASSWD`); `/etc/sudoers*` writes prompt; "Always" → `/etc/sudoers.d/granted`. `sudo <cmd>` requests one. Scoops escalate via `sudo_request`→`sudo_allow`(`always:true` persists)/`sudo_deny`.
+`/etc/sudoers` gates actions; deny → exit 1 / `EACCES`. Rules: `Cmnd`/`Read`/`Write <glob>` (+`NOPASSWD`); `/etc/sudoers*` writes prompt; "Always" → `/etc/sudoers.d/granted`. `sudo <cmd>` requests one. Scoops escalate via `sudo_request`→`lick_confirm`(`always` persists)/`lick_dismiss`.
 
 ## Style
 

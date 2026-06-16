@@ -198,7 +198,7 @@ export class SudoManager {
   /**
    * Append a single `NOPASSWD <directive> <pattern>` rule to a scoop's
    * `/scoops/<folder>/etc/sudoers`, then reload the cached policy. Used by
-   * the cone-mediated `sudo_allow` flow with `always: true` to durably
+   * the cone-mediated `lick_confirm` flow with `always: true` to durably
    * widen the requesting scoop's sandbox.
    *
    * `kind` maps to the sudoers directive: `command → Cmnd`, `read → Read`,

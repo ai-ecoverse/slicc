@@ -161,14 +161,14 @@ gesture resolves to `deny`.
 When a non-cone scoop hits a sudoers gate, the request does NOT go to the human
 directly — it routes through the cone agent. Same goes for the explicit-request
 surface: a scoop calls `sudo_request` to ask up-front, and the cone resolves the
-request with `sudo_allow` (allow-once or always-and-persist) or `sudo_deny`.
+request with `lick_confirm` (allow-once or always-and-persist) or `lick_dismiss`.
 
-| Tool                 | Side  | Purpose                                                                                                                                                  |
-| -------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sudo_request`       | Scoop | Ask the cone for an explicit escalation. Inputs: `kind` (`command`/`read`/`write`/`secret`), `detail`, optional `suggested_pattern`. Blocks on cone.     |
-| `sudo_allow`         | Cone  | Approve a pending request by `request_id`. `always=true` additionally appends a `NOPASSWD <directive> <pattern>` line to the requesting scoop's sudoers. |
-| `sudo_deny`          | Cone  | Refuse a pending request. The scoop's action does NOT run.                                                                                               |
-| `list_sudo_requests` | Cone  | Snapshot outstanding requests (`id`, scoop folder, kind, detail).                                                                                        |
+| Tool                 | Side  | Purpose                                                                                                                                              |
+| -------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sudo_request`       | Scoop | Ask the cone for an explicit escalation. Inputs: `kind` (`command`/`read`/`write`/`secret`), `detail`, optional `suggested_pattern`. Blocks on cone. |
+| `lick_confirm`       | Cone  | Confirm a pending actionable lick by `lick_id`. `always=true` additionally appends a `NOPASSWD <directive> <pattern>` line to the scoop's sudoers.   |
+| `lick_dismiss`       | Cone  | Dismiss a pending actionable lick by `lick_id`. The scoop's action does NOT run.                                                                     |
+| `list_sudo_requests` | Cone  | Snapshot outstanding requests (`lick id`, scoop folder, kind, detail).                                                                               |
 
 The pending-request registry lives on the `Orchestrator` (`enqueueSudoRequest`,
 `resolveSudoRequestAndPersist`, `listPendingSudoRequests`). The scoop's gated
@@ -226,7 +226,7 @@ sees its user broker, and the cone's `RestrictedFS` is not used at all
 `packages/webapp/src/scoops/hidden-tools.ts` so the plumbing tool-call rows do
 not spam the chat UI; the user-visible event is the `[sudo-request]` channel
 message the orchestrator delivers to the cone, and the user-visible decision is
-the `sudo_allow` / `sudo_deny` tool call.
+the `lick_confirm` / `lick_dismiss` tool call.
 
 ### Explicit `sudo <cmd>` shell command
 
@@ -260,18 +260,18 @@ Behavior:
 
 ### Files
 
-| Path                                                              | Role                                                                     |
-| ----------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `packages/webapp/src/shell/sudo/sudoers.ts`                       | Parser + matcher + self-protection                                       |
-| `packages/webapp/src/sudo/sudo-manager.ts`                        | Live policy store + reload + broker                                      |
-| `packages/webapp/src/fs/sudo-fs.ts`                               | FS-level gate (`createSudoFs`)                                           |
-| `packages/webapp/src/shell/sudo/command-guard.ts`                 | Command-level gate                                                       |
-| `packages/webapp/src/shell/supplemental-commands/sudo-command.ts` | `sudo <cmd>` explicit-request surface                                    |
-| `packages/webapp/src/sudo/*-broker.ts`                            | Float-specific approval brokers                                          |
-| `packages/webapp/src/sudo/cone-broker.ts`                         | Cone-mediated broker + pending-request registry                          |
-| `packages/webapp/src/scoops/scoop-management-tools.ts`            | `sudo_request` / `sudo_allow` / `sudo_deny` / `list_sudo_requests` tools |
-| `packages/node-server/src/sudo/`                                  | `/api/sudo-approve` + OS dialogs                                         |
-| `packages/vfs-root/etc/sudoers`                                   | Default commented-out template                                           |
+| Path                                                              | Role                                                                          |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `packages/webapp/src/shell/sudo/sudoers.ts`                       | Parser + matcher + self-protection                                            |
+| `packages/webapp/src/sudo/sudo-manager.ts`                        | Live policy store + reload + broker                                           |
+| `packages/webapp/src/fs/sudo-fs.ts`                               | FS-level gate (`createSudoFs`)                                                |
+| `packages/webapp/src/shell/sudo/command-guard.ts`                 | Command-level gate                                                            |
+| `packages/webapp/src/shell/supplemental-commands/sudo-command.ts` | `sudo <cmd>` explicit-request surface                                         |
+| `packages/webapp/src/sudo/*-broker.ts`                            | Float-specific approval brokers                                               |
+| `packages/webapp/src/sudo/cone-broker.ts`                         | Cone-mediated broker + pending-request registry                               |
+| `packages/webapp/src/scoops/scoop-management-tools.ts`            | `sudo_request` / `lick_confirm` / `lick_dismiss` / `list_sudo_requests` tools |
+| `packages/node-server/src/sudo/`                                  | `/api/sudo-approve` + OS dialogs                                              |
+| `packages/vfs-root/etc/sudoers`                                   | Default commented-out template                                                |
 
 ---
 
