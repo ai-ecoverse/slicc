@@ -156,6 +156,7 @@ interface ProjectManifest {
   name?: string;
   version?: string;
   dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
   [key: string]: unknown;
 }
 
@@ -231,17 +232,32 @@ async function materializeNode(
   fetch: SecureFetch,
   timeoutMs: number | undefined
 ): Promise<void> {
-  const tarballBytes = await fetchTarball(node.resolved, fetch, { timeoutMs });
-  const entries = readTar(gunzip(tarballBytes));
-
   const installDir = packageDirIn(parentModulesDir, node.name);
-  await removeIfExists(fs, installDir);
-  await ensureDir(fs, installDir);
-  try {
-    await writeEntries(fs, installDir, entries);
-  } catch (err) {
+  const installedManifestPath = joinPath(installDir, 'package.json');
+  let alreadySatisfied = false;
+  if (await fs.exists(installedManifestPath)) {
+    const installed = await readJsonOr<InstalledPackageManifest | null>(
+      fs,
+      installedManifestPath,
+      null
+    );
+    if (installed?.version === node.version) {
+      alreadySatisfied = true;
+    }
+  }
+
+  if (!alreadySatisfied) {
+    const tarballBytes = await fetchTarball(node.resolved, fetch, { timeoutMs });
+    const entries = readTar(gunzip(tarballBytes));
+
     await removeIfExists(fs, installDir);
-    throw err;
+    await ensureDir(fs, installDir);
+    try {
+      await writeEntries(fs, installDir, entries);
+    } catch (err) {
+      await removeIfExists(fs, installDir);
+      throw err;
+    }
   }
 
   const nestedNames = Object.keys(node.dependencies);
@@ -409,4 +425,109 @@ export async function installPackage(
     throw new Error(`ipk: install of '${spec}' produced no result`);
   }
   return results[0];
+}
+
+export interface InstallFromManifestResult {
+  results: InstallResult[];
+  errors: InstallFailure[];
+  empty: boolean;
+}
+
+export class ManifestNotFoundError extends Error {
+  constructor(manifestPath: string) {
+    super(
+      `no package.json found at ${manifestPath} (run 'ipk install <pkg>' to create one, or add a package.json)`
+    );
+    this.name = 'ManifestNotFoundError';
+  }
+}
+
+interface ManifestEntry {
+  name: string;
+  range: string;
+}
+
+function collectManifestEntries(manifest: ProjectManifest): ManifestEntry[] {
+  const combined = new Map<string, string>();
+  const devDeps = manifest.devDependencies;
+  if (devDeps && typeof devDeps === 'object') {
+    for (const [name, range] of Object.entries(devDeps)) {
+      if (typeof name === 'string' && typeof range === 'string') {
+        combined.set(name, range);
+      }
+    }
+  }
+  const deps = manifest.dependencies;
+  if (deps && typeof deps === 'object') {
+    for (const [name, range] of Object.entries(deps)) {
+      if (typeof name === 'string' && typeof range === 'string') {
+        combined.set(name, range);
+      }
+    }
+  }
+  return Array.from(combined.entries()).map(([name, range]) => ({ name, range }));
+}
+
+export async function installFromManifest(
+  options: InstallOptions
+): Promise<InstallFromManifestResult> {
+  const { fs, fetch, cwd, timeoutMs } = options;
+  const manifestPath = joinPath(cwd, 'package.json');
+  if (!(await fs.exists(manifestPath))) {
+    throw new ManifestNotFoundError(manifestPath);
+  }
+  const manifest = await readJsonOr<ProjectManifest>(fs, manifestPath, {});
+  const entries = collectManifestEntries(manifest);
+  if (entries.length === 0) {
+    return { results: [], errors: [], empty: true };
+  }
+
+  const { supplier } = buildPackumentSupplier(fetch, timeoutMs);
+
+  const validated: ManifestEntry[] = [];
+  const errors: InstallFailure[] = [];
+  for (const entry of entries) {
+    try {
+      const packument = await supplier(entry.name);
+      resolveVersion(packument, entry.range);
+      validated.push(entry);
+    } catch (err) {
+      errors.push({ spec: `${entry.name}@${entry.range}`, error: toError(err) });
+    }
+  }
+
+  if (validated.length === 0) {
+    return { results: [], errors, empty: false };
+  }
+
+  const rootDependencies: Record<string, string> = {};
+  for (const entry of validated) {
+    rootDependencies[entry.name] = entry.range;
+  }
+
+  const plan = await resolveDependencyTree({
+    rootDependencies,
+    fetchPackument: supplier,
+  });
+
+  const modulesDir = joinPath(cwd, 'node_modules');
+  await materializePlan(fs, modulesDir, plan, fetch, timeoutMs);
+  await createBinShimsForLevel(fs, modulesDir, plan.root);
+
+  const results: InstallResult[] = validated
+    .map((entry) => {
+      const node = plan.root[entry.name];
+      if (!node) return null;
+      return {
+        ok: true as const,
+        name: entry.name,
+        version: node.version,
+        installPath: packageDirIn(modulesDir, entry.name),
+        range: entry.range,
+        manifestPath,
+      } satisfies InstallResult;
+    })
+    .filter((r): r is InstallResult => r !== null);
+
+  return { results, errors, empty: false };
 }

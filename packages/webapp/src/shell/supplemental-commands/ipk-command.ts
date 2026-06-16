@@ -1,18 +1,23 @@
 /**
- * `ipk` (Ice Pack) command — install named packages into the nearest project's
+ * `ipk` (Ice Pack) command — install packages into the nearest project's
  * `node_modules`. Also registered as `npm` (alias) so `npm install <pkg>` and
- * `npm i <pkg>` work the same way.
+ * `npm i <pkg>` behave identically, and as `i` shorthand.
  *
- * M1 scope: single + multi-package named installs over the
- * `installPackage` single-package path in `shell/ipk/installer.ts`. No-arg
- * install (read deps from `package.json`) and full transitive resolution
- * land in M2. `npx`/`ipx` land in M6.
+ * Supports both named installs (`ipk install <pkg>...`) and the no-arg
+ * install-from-manifest path (`ipk install` with no further arguments), which
+ * reads `dependencies` + `devDependencies` from the cwd `package.json` and
+ * installs them via the transitive installer. `npx`/`ipx` land in M6.
  */
 
 import type { Command, CommandContext, ExecResult, SecureFetch } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
-import { installPackages } from '../ipk/installer.js';
+import {
+  type InstallFromManifestResult,
+  installFromManifest,
+  installPackages,
+  ManifestNotFoundError,
+} from '../ipk/installer.js';
 
 export interface IpkCommandDeps {
   fs: VirtualFS;
@@ -25,8 +30,12 @@ function usage(name: string): string {
   return `${name} - install packages from the npm registry into node_modules
 
 Usage:
-  ${name} install <pkg>[@<spec>] [<pkg> ...]
-  ${name} i <pkg>[@<spec>] [<pkg> ...]
+  ${name} install [<pkg>[@<spec>] ...]
+  ${name} i       [<pkg>[@<spec>] ...]
+
+No-arg form:
+  ${name} install            read cwd package.json and install every entry
+                             from dependencies AND devDependencies
 
 Spec forms:
   <pkg>            install the latest published version
@@ -40,8 +49,10 @@ Spec forms:
 Options:
   -h, --help       Show this help message
 
-Installed packages are extracted into <cwd>/node_modules and recorded in
-<cwd>/package.json under dependencies. Existing fields are preserved.
+Installed packages are extracted into <cwd>/node_modules and named installs
+are recorded in <cwd>/package.json under dependencies. Existing fields are
+preserved. Idempotent: re-installing an already-satisfied package is a clean
+no-op.
 `;
 }
 
@@ -54,6 +65,55 @@ function describeError(err: unknown): string {
   return String(err);
 }
 
+async function runManifestInstall(
+  name: string,
+  ctx: CommandContext,
+  deps: IpkCommandDeps
+): Promise<ExecResult> {
+  let outcome: InstallFromManifestResult;
+  try {
+    outcome = await installFromManifest({
+      fs: deps.fs,
+      fetch: deps.fetch,
+      cwd: ctx.cwd,
+    });
+  } catch (err) {
+    if (err instanceof ManifestNotFoundError) {
+      return {
+        stdout: '',
+        stderr: `${name}: ${err.message}\n`,
+        exitCode: 1,
+      };
+    }
+    return {
+      stdout: '',
+      stderr: `${name}: install failed: ${describeError(err)}\n`,
+      exitCode: 1,
+    };
+  }
+
+  if (outcome.empty && outcome.errors.length === 0) {
+    return {
+      stdout: `${name}: nothing to install (package.json declares no dependencies)\n`,
+      stderr: '',
+      exitCode: 0,
+    };
+  }
+
+  const stdout = outcome.results.map(
+    (r) => `${name}: installed ${r.name}@${r.version} -> ${r.installPath}`
+  );
+  const stderr = outcome.errors.map(
+    (e) => `${name}: failed to install ${e.spec}: ${describeError(e.error)}`
+  );
+
+  return {
+    stdout: stdout.length > 0 ? `${stdout.join('\n')}\n` : '',
+    stderr: stderr.length > 0 ? `${stderr.join('\n')}\n` : '',
+    exitCode: outcome.errors.length === 0 ? 0 : 1,
+  };
+}
+
 async function runInstall(
   name: string,
   args: string[],
@@ -62,11 +122,7 @@ async function runInstall(
 ): Promise<ExecResult> {
   const specs = args.filter((a) => !a.startsWith('-'));
   if (specs.length === 0) {
-    return {
-      stdout: '',
-      stderr: `${name}: install requires at least one package name (no-arg install lands in m2)\n`,
-      exitCode: 1,
-    };
+    return runManifestInstall(name, ctx, deps);
   }
 
   let outcome: Awaited<ReturnType<typeof installPackages>>;
@@ -104,12 +160,13 @@ export function createIpkCommand(name: string, deps: IpkCommandDeps): Command {
     if (isHelpRequest(args)) {
       return { stdout: usage(name), stderr: '', exitCode: 0 };
     }
-    if (args.length === 0) {
-      return { stdout: usage(name), stderr: `${name}: missing subcommand\n`, exitCode: 1 };
-    }
 
     if (isShorthand) {
       return runInstall(name, args, ctx, deps);
+    }
+
+    if (args.length === 0) {
+      return { stdout: usage(name), stderr: `${name}: missing subcommand\n`, exitCode: 1 };
     }
 
     const sub = args[0];
