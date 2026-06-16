@@ -428,4 +428,86 @@ describe('installPackage (single-package path)', () => {
     ).rejects.toThrow(/404|registry|not found/i);
     expect(await fs.exists('/work/node_modules/this-does-not-exist')).toBe(false);
   });
+
+  it('rejects with a clear error for a syntactically invalid version range', async () => {
+    const reg = makeRegistry([{ name: 'pkg', version: '1.0.0' }]);
+    await expect(
+      installPackage('pkg@not-a-version', { fs, fetch: fakeFetch(reg), cwd: '/work' })
+    ).rejects.toThrow(/invalid version or range|bad range|not-a-version/i);
+    expect(await fs.exists('/work/node_modules/pkg')).toBe(false);
+    expect(await fs.exists('/work/package.json')).toBe(false);
+  });
+
+  it('rejects with a clear error and cleans up when the tarball is corrupt (not valid gzip)', async () => {
+    const reg = makeRegistry([{ name: 'pkg', version: '1.0.0' }]);
+    // Patch the tarball to be garbage bytes instead of a valid gzip
+    const badReg = {
+      ...reg,
+      tarballs: {
+        ...reg.tarballs,
+        ['https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz']: bytes('this-is-not-gzip-data'),
+      },
+    };
+    await expect(
+      installPackage('pkg', { fs, fetch: fakeFetch(badReg), cwd: '/work' })
+    ).rejects.toThrow(/gunzip|gzip|corrupt|decompress|magic/i);
+    expect(await fs.exists('/work/node_modules/pkg')).toBe(false);
+    expect(await fs.exists('/work/package.json')).toBe(false);
+  });
+
+  it('rejects with a clear error and cleans up when the tarball is truncated (valid gzip, bad tar)', async () => {
+    const pkg = { name: 'pkg', version: '1.0.0' };
+    const reg = makeRegistry([pkg]);
+    // Create a tar header that claims a 1000-byte file but only provides 10 bytes
+    const header = buildUstarHeader({
+      name: 'package/index.js',
+      data: bytes('short'),
+      typeflag: '0',
+    });
+    // Patch size to 1000
+    writeOctal(header, 124, 12, 1000);
+    const sum = computeChecksum(header);
+    writeString(header, 148, 6, sum.toString(8).padStart(6, '0'));
+    header[154] = 0;
+    header[155] = 0x20;
+    const badTar = new Uint8Array(header.length + 10); // header + 10 bytes (not enough)
+    badTar.set(header, 0);
+    badTar.set(bytes('short'), header.length);
+    const truncatedReg = {
+      ...reg,
+      tarballs: {
+        ...reg.tarballs,
+        ['https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz']: gzipSync(badTar),
+      },
+    };
+    await expect(
+      installPackage('pkg', { fs, fetch: fakeFetch(truncatedReg), cwd: '/work' })
+    ).rejects.toThrow(/truncated|readTar/i);
+    expect(await fs.exists('/work/node_modules/pkg')).toBe(false);
+    expect(await fs.exists('/work/package.json')).toBe(false);
+  });
+
+  it('rejects with a clear error and cleans up when the fetch throws a network error', async () => {
+    const fetch = (async (_url: string): Promise<FetchResult> => {
+      throw new Error('ECONNREFUSED: connection refused');
+    }) as unknown as SecureFetch;
+    await expect(installPackage('any-pkg', { fs, fetch, cwd: '/work' })).rejects.toThrow(
+      /network|ECONNREFUSED|connection refused/i
+    );
+    expect(await fs.exists('/work/node_modules/any-pkg')).toBe(false);
+    expect(await fs.exists('/work/package.json')).toBe(false);
+  });
+
+  it('rejects with a clear error and cleans up when the registry times out', async () => {
+    const fetch = (async (_url: string, _opts?: SecureFetchOptions): Promise<FetchResult> => {
+      return new Promise((_resolve, reject) => {
+        setTimeout(() => reject(new Error('timed out after 100ms')), 200);
+      });
+    }) as unknown as SecureFetch;
+    await expect(
+      installPackage('slow-pkg', { fs, fetch, cwd: '/work', timeoutMs: 100 })
+    ).rejects.toThrow(/timed out|timeout/i);
+    expect(await fs.exists('/work/node_modules/slow-pkg')).toBe(false);
+    expect(await fs.exists('/work/package.json')).toBe(false);
+  });
 });

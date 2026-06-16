@@ -176,7 +176,12 @@ export async function installPackage(
   const installDir = packageDirFor(cwd, parsed.name);
   await removeIfExists(fs, installDir);
   await ensureDir(fs, installDir);
-  await writeEntries(fs, installDir, entries);
+  try {
+    await writeEntries(fs, installDir, entries);
+  } catch (err) {
+    await removeIfExists(fs, installDir);
+    throw err;
+  }
 
   const range = chooseSavedRange(parsed, version);
   const manifestPath = await recordDependency(fs, cwd, parsed.name, range);
