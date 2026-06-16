@@ -859,6 +859,12 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
   // require() — pre-fetch from esm.sh + indirect Function constructor
   // for non-import paths in the sandbox context (matches the legacy
   // extension behavior).
+  // `sliccy:` virtual modules — capability bridges previously injected
+  // as bare globals. Single source of truth for `require('sliccy:<name>')`
+  // and the symmetric registry on the worker float. Built ONCE per
+  // realm before requireShim is constructed so the lookup is cheap.
+  const sliccyModules = Object.create(null);
+  // Filled later after every bridge is constructed (see below).
   const requireCache = Object.create(null);
   const loadModuleTimeoutMs = resolveTimeoutMs(init.env);
   const re = /\brequire\s*\(\s*(['"`])([^'"`\s]+)\1\s*\)/g;
@@ -866,6 +872,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
   let m;
   while ((m = re.exec(init.code)) !== null) idsFound.add(m[2]);
   const filtered = [...idsFound]
+    .filter((s) => !s.startsWith('sliccy:'))
     .map((s) => s.startsWith('node:') ? s.slice(5) : s)
     .filter((s) => !BUILTINS_LOCAL.has(s) && !NODE_BUILTINS_UNAVAILABLE.has(s));
   const nativeIds = filtered.filter((s) => NODE_NATIVE_PACKAGES.has(s));
@@ -918,6 +925,16 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     }
   }
   const requireShim = (id) => {
+    if (typeof id === 'string' && id.startsWith('sliccy:')) {
+      const name = id.slice(7);
+      if (name === '') {
+        throw new Error("require('sliccy:'): empty sliccy: module name");
+      }
+      if (!Object.prototype.hasOwnProperty.call(sliccyModules, name)) {
+        throw new Error("require('" + id + "'): unknown sliccy: module '" + name + "'. Known names: " + Object.keys(sliccyModules).sort().join(', '));
+      }
+      return sliccyModules[name];
+    }
     const bareId = id.startsWith('node:') ? id.slice(5) : id;
     if (bareId === 'fs') return fsBridge;
     if (bareId === 'process') return processShim;
@@ -1129,16 +1146,35 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     request: (filters) => rpcCall('hid', 'request', [asFilterArray(filters)]).then(makeHidDevice),
   };
 
+  // Populate the `sliccy:` registry now that every capability bridge
+  // is built. Keep the key set in lockstep with js-realm-shared.ts
+  // (parity test in tests/kernel/realm/js-realm-helpers.test.ts).
+  sliccyModules['exec'] = execBridge;
+  sliccyModules['skill'] = skillGlobal;
+  sliccyModules['http'] = httpGlobal;
+  sliccyModules['browser'] = browserBridge;
+  sliccyModules['usb'] = usbBridge;
+  sliccyModules['serial'] = serialBridge;
+  sliccyModules['hid'] = hidBridge;
+  sliccyModules['cli'] = cliApi;
+  sliccyModules['color'] = colorApi;
+  sliccyModules['time'] = time;
+  sliccyModules['fmt'] = fmt;
+  sliccyModules['pool'] = pool;
+
+  const filename = init.filename;
+  const lastSlash = filename ? filename.lastIndexOf('/') : -1;
+  const dirname = !filename ? '' : (lastSlash < 0 ? '' : (lastSlash === 0 ? '/' : filename.substring(0, lastSlash)));
+
   let exitCode = 0;
   try {
     const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
     const fn = new AsyncFunction(
-      'fs', 'process', 'console', 'require', 'module', 'exports', 'exec', 'fetch', 'skill', 'http', 'browser',
-      'usb', 'serial', 'hid',
-      'cli', 'c', 'time', 'fmt', 'pool',
+      'process', 'console', 'require', 'module', 'exports', 'fetch',
+      '__dirname', '__filename',
       '"use strict";\n' + init.code
     );
-    await fn(fsBridge, processShim, consoleShim, requireShim, moduleShim, moduleShim.exports, execBridge, realmFetch, skillGlobal, httpGlobal, browserBridge, usbBridge, serialBridge, hidBridge, cliApi, colorApi, time, fmt, pool);
+    await fn(processShim, consoleShim, requireShim, moduleShim, moduleShim.exports, realmFetch, dirname, filename);
   } catch (err) {
     if (err && typeof err === 'object' && NODE_EXIT in err) {
       exitCode = err[NODE_EXIT];

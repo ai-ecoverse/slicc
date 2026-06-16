@@ -297,9 +297,67 @@ describe('sandbox.html mirror parity', () => {
       resolve(repoRoot, 'packages/chrome-extension/sandbox.html'),
       'utf-8'
     );
-    // Surfaces the realm wires into AsyncFunction's named parameters.
-    for (const id of ['cli', 'c', 'time', 'fmt', 'pool', 'skill', 'http', 'usb', 'serial', 'hid']) {
-      expect(sandbox).toContain(`'${id}'`);
+    // Capability bridges are now wired into the `sliccy:` registry
+    // (not the AsyncFunction param list). Each name MUST appear as a
+    // quoted key on `sliccyModules` so `require('sliccy:<name>')`
+    // resolves in lockstep with the worker realm.
+    for (const id of [
+      'exec',
+      'skill',
+      'http',
+      'browser',
+      'usb',
+      'serial',
+      'hid',
+      'cli',
+      'color',
+      'time',
+      'fmt',
+      'pool',
+    ]) {
+      expect(sandbox).toContain(`sliccyModules['${id}']`);
+    }
+    // The `sliccy:` scheme + a scheme-specific error path are present.
+    expect(sandbox).toContain("startsWith('sliccy:')");
+    expect(sandbox).toContain('empty sliccy: module name');
+    expect(sandbox).toContain('unknown sliccy: module');
+    // The bespoke globals are NOT in the AsyncFunction param list.
+    // Capture the param list (between AsyncFunction(' and the `"use
+    // strict"`) and assert each removed name is absent. Keeping the
+    // grep here pins that the hard-cut isn't silently reverted in
+    // the iframe mirror while the worker float gets it right.
+    const paramList = sandbox.match(/new AsyncFunction\(([\s\S]*?)'"use strict";\\n'/);
+    expect(paramList, 'expected AsyncFunction(...) param list block').not.toBeNull();
+    const params = paramList![1];
+    for (const removed of [
+      "'fs'",
+      "'exec'",
+      "'skill'",
+      "'http'",
+      "'browser'",
+      "'usb'",
+      "'serial'",
+      "'hid'",
+      "'cli'",
+      "'c'",
+      "'time'",
+      "'fmt'",
+      "'pool'",
+    ]) {
+      expect(params).not.toContain(removed);
+    }
+    // CJS scope vars + Node-standard surface stay bare.
+    for (const kept of [
+      "'process'",
+      "'console'",
+      "'require'",
+      "'module'",
+      "'exports'",
+      "'fetch'",
+      "'__dirname'",
+      "'__filename'",
+    ]) {
+      expect(params).toContain(kept);
     }
     // Symbols whose presence we want pinned so a refactor removing
     // them in one file but not the other fails noisily.
