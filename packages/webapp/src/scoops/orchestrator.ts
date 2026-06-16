@@ -16,6 +16,7 @@ import { createLogger } from '../core/logger.js';
 import { SessionStore } from '../core/session.js';
 import type { AssistantMessage, ImageContent } from '../core/types.js';
 import { FsWatcher, VirtualFS } from '../fs/index.js';
+import { type MountRecoveryEntry, shellQuote } from '../fs/mount-recovery.js';
 import { RestrictedFS } from '../fs/restricted-fs.js';
 import type { ProcessManager } from '../kernel/process-manager.js';
 import {
@@ -54,6 +55,22 @@ export const SCOOP_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
 const SCOOP_NOTIFICATION_DIR = '/shared/scoop-notifications';
 const SCOOP_NOTIFICATION_MAX_FILES = 200;
 const SCOOP_NOTIFICATION_PREVIEW_CHARS = 1000;
+
+/**
+ * Reconstruct the `mount …` command for a mount-recovery entry, byte-for-byte
+ * matching what `formatMountRecoveryPrompt` rendered to the cone: local mounts
+ * re-open the directory picker via `mount '<path>'`; remote mounts re-attach
+ * via `mount --source '<source>' [--profile '<profile>'] '<path>'` (the
+ * `--profile` flag is omitted for the `default` profile). Every argument is
+ * shell-quoted because paths/sources originate from user-mounted targets.
+ */
+function buildMountRecoveryCommand(entry: MountRecoveryEntry): string {
+  if (entry.kind === 'local') {
+    return `mount ${shellQuote(entry.path)}`;
+  }
+  const profileFlag = entry.profile === 'default' ? '' : ` --profile ${shellQuote(entry.profile)}`;
+  return `mount --source ${shellQuote(entry.source)}${profileFlag} ${shellQuote(entry.path)}`;
+}
 
 function countTextLines(text: string): number {
   const normalized = text.replace(/\r\n?/g, '\n');
@@ -260,6 +277,23 @@ export class Orchestrator implements ConeApprovalRouter {
    * navigate lick's card flippable from the dip path.
    */
   private humanGatedNavigateLicks = new Set<string>();
+
+  /**
+   * Agent-actionable session-reload·mount-recovery licks, keyed by the
+   * orchestrator-minted `lickId`. `lick_confirm` re-runs the listed `mount …`
+   * commands reconstructed from the lick body's `MountRecoveryEntry[]`;
+   * `lick_dismiss` leaves them unmounted. See
+   * {@link registerSessionReloadLick} / {@link resolveMountRecoveryLick}.
+   */
+  private sessionReloadMountRegistry = new Map<string, { mounts: MountRecoveryEntry[] }>();
+
+  /**
+   * Plain session-reload lick ids (no mount-recovery payload). The reload
+   * already happened, so these are dismiss-only acknowledgements: `lick_dismiss`
+   * clears the notice (card → muted ✗) while `lick_confirm` is a no-op. See
+   * {@link registerSessionReloadLick} / {@link resolveSessionReloadPlainLick}.
+   */
+  private sessionReloadPlainLicks = new Set<string>();
 
   constructor(
     container: HTMLElement,
@@ -1613,11 +1647,38 @@ export class Orchestrator implements ConeApprovalRouter {
   }
 
   /**
+   * Mint a stable `lickId` for a session-reload lick and register it so a later
+   * resolution can flip the rendered card. Mount-recovery licks (non-empty
+   * `mounts`) are agent-actionable (`lick_confirm` re-runs the listed `mount …`
+   * commands); plain reload notices are dismiss-only (the reload already
+   * happened — nothing to confirm). Called from the kernel host's lick router
+   * before the cone `ChannelMessage` is built so the id flows onto both the UI
+   * chip and the persisted message. Mirrors {@link registerNavigateLick}.
+   */
+  registerSessionReloadLick(event: LickEvent): string {
+    const id = `lick-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const body = (event.body ?? {}) as { reason?: string; mounts?: MountRecoveryEntry[] };
+    const mounts = Array.isArray(body.mounts) ? body.mounts : [];
+    if (body.reason === 'mount-recovery') {
+      // Empty mount-recovery payloads are dropped by the formatter, so only
+      // register when there is something to re-mount — avoids a dangling entry.
+      if (mounts.length > 0) {
+        this.sessionReloadMountRegistry.set(id, { mounts });
+      }
+    } else {
+      this.sessionReloadPlainLicks.add(id);
+    }
+    return id;
+  }
+
+  /**
    * Resolve an actionable lick for the cone's `lick_confirm` / `lick_dismiss`
-   * tools. Dispatches to the navigate-upskill resolver when the id is an
-   * upskill lick, otherwise falls through to the sudo-request resolver. Handoff
-   * lick ids are intentionally NOT resolvable here — they are human-gated, so
-   * they fall through and report unknown / already-resolved to the agent.
+   * tools. Dispatches to the navigate-upskill resolver, the session-reload
+   * mount-recovery resolver, or the plain session-reload (dismiss-only)
+   * resolver by id, otherwise falls through to the sudo-request resolver.
+   * Handoff lick ids are intentionally NOT resolvable here — they are
+   * human-gated, so they fall through and report unknown / already-resolved to
+   * the agent.
    */
   async resolveActionableLick(
     id: string,
@@ -1633,6 +1694,12 @@ export class Orchestrator implements ConeApprovalRouter {
   }> {
     if (this.navigateUpskillRegistry.has(id)) {
       return this.resolveUpskillLick(id, decision);
+    }
+    if (this.sessionReloadMountRegistry.has(id)) {
+      return this.resolveMountRecoveryLick(id, decision);
+    }
+    if (this.sessionReloadPlainLicks.has(id)) {
+      return this.resolveSessionReloadPlainLick(id, decision);
     }
     return this.resolveSudoRequestAndPersist(id, decision);
   }
@@ -1687,6 +1754,79 @@ export class Orchestrator implements ConeApprovalRouter {
     } catch (err) {
       return `upskill failed: ${err instanceof Error ? err.message : String(err)}`;
     }
+  }
+
+  /**
+   * Settle an agent-actionable session-reload·mount-recovery lick. On
+   * allow/always it re-runs the listed `mount …` commands (reconstructed from
+   * the lick body's `MountRecoveryEntry[]`) in the cone's shell; on deny it
+   * leaves the mounts unmounted. Either way the originating card flips
+   * ('confirmed' / muted 'dismissed') and persists via {@link persistLickDecision}.
+   */
+  private async resolveMountRecoveryLick(
+    id: string,
+    decision: SudoDecision
+  ): Promise<{ settled: boolean; persisted: boolean; message?: string }> {
+    const entry = this.sessionReloadMountRegistry.get(id);
+    if (!entry) return { settled: false, persisted: false };
+    this.sessionReloadMountRegistry.delete(id);
+    let message: string | undefined;
+    if (decision.decision !== 'deny') {
+      message = await this.runMountRecovery(entry.mounts);
+    }
+    await this.persistLickDecision(id, decision.decision);
+    return { settled: true, persisted: false, message };
+  }
+
+  /**
+   * Re-run the `mount …` commands for a confirmed mount-recovery lick through
+   * the cone's shell (which carries the shared fs and the gesture-aware `mount`
+   * command). Each command is reconstructed from the persisted
+   * `MountRecoveryEntry` exactly as `formatMountRecoveryPrompt` rendered it, so
+   * the agent re-runs what the user saw. Returns the combined per-command
+   * output (or an error line) for the tool to surface verbatim.
+   */
+  private async runMountRecovery(mounts: MountRecoveryEntry[]): Promise<string> {
+    const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
+    const shell = cone ? this.contexts.get(cone.jid)?.getShell() : null;
+    if (!shell) return 'mount recovery could not run: no cone shell available.';
+    const outputs: string[] = [];
+    for (const mount of mounts) {
+      const cmd = buildMountRecoveryCommand(mount);
+      try {
+        const result = await shell.executeCommand(cmd);
+        const out = `${result.stdout}${result.stderr}`.trim();
+        outputs.push(out.length > 0 ? out : `${cmd} exited ${result.exitCode}.`);
+      } catch (err) {
+        outputs.push(`${cmd} failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return outputs.join('\n');
+  }
+
+  /**
+   * Settle a plain session-reload lick (no mount-recovery payload). The reload
+   * already completed, so these are dismiss-only acknowledgements:
+   * `lick_dismiss` (deny) clears the notice and mutes the card; `lick_confirm`
+   * is a no-op that leaves the entry pending and tells the agent there is
+   * nothing to confirm.
+   */
+  private async resolveSessionReloadPlainLick(
+    id: string,
+    decision: SudoDecision
+  ): Promise<{ settled: boolean; persisted: boolean; message?: string }> {
+    if (!this.sessionReloadPlainLicks.has(id)) return { settled: false, persisted: false };
+    if (decision.decision !== 'deny') {
+      return {
+        settled: true,
+        persisted: false,
+        message:
+          'Nothing to confirm — the reload already completed. Use lick_dismiss to acknowledge and clear this notice.',
+      };
+    }
+    this.sessionReloadPlainLicks.delete(id);
+    await this.persistLickDecision(id, 'deny');
+    return { settled: true, persisted: false, message: 'Session-reload notice acknowledged.' };
   }
 
   /**

@@ -273,13 +273,18 @@ function routeFormattedLickToCone(
   event: LickEvent,
   { orchestrator, log }: LickRoutingContext
 ): void {
-  // Navigate (handoff / upskill) licks are actionable: mint + register a
-  // stable lickId BEFORE formatting so the formatter can surface it and the
-  // built ChannelMessage carries it onto the persisted message + UI chip.
-  // Only runs on the leader/standalone (followers forward navigate licks
-  // upstream instead of reaching this handler).
+  // Actionable licks are minted + registered BEFORE formatting so the
+  // formatter can surface the stable lickId and the built ChannelMessage
+  // carries it onto the persisted message + UI chip. Navigate (handoff /
+  // upskill) and session-reload (mount-recovery / plain) both apply. Only runs
+  // on the leader/standalone (followers forward navigate licks upstream
+  // instead of reaching this handler).
   if (event.type === 'navigate') {
     event.lickId = orchestrator.registerNavigateLick(event);
+  } else if (event.type === 'session-reload') {
+    // Session-reload·mount-recovery licks are agent-actionable (lick_confirm
+    // re-runs the mount commands); plain reload notices are dismiss-only.
+    event.lickId = orchestrator.registerSessionReloadLick(event);
   }
 
   const formatted = formatLickEventForCone(event);
@@ -320,9 +325,9 @@ function routeFormattedLickToCone(
     timestamp: event.timestamp,
     fromAssistant: false,
     channel,
-    // Actionable navigate licks carry the minted id so the resolve path
-    // (upskill lick_confirm / handoff human dip) can locate this stored
-    // message and flip its rendered card.
+    // Actionable licks (navigate, session-reload) carry the minted id so the
+    // resolve path (lick_confirm / lick_dismiss, or the handoff human dip) can
+    // locate this stored message and flip its rendered card.
     ...(event.lickId ? { lickId: event.lickId } : {}),
   };
   orchestrator.handleMessage(channelMsg);

@@ -3117,3 +3117,231 @@ describe('Orchestrator navigate-lick actionable resolution', () => {
     expect(await orch.resolveNavigateHandoffByHuman(lickId, accepted)).toBe(false);
   });
 });
+
+describe('Orchestrator session-reload-lick actionable resolution', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+    await saveScoop(cone);
+    await saveScoop(testScoop);
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await settleAndDisposeSharedFs(sharedFs);
+  });
+
+  function makeOrch(onMessageUpdate = vi.fn()) {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    return new Orchestrator(container, {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      onIncomingMessage: vi.fn(),
+      onMessageUpdate,
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    });
+  }
+
+  /** Store the cone-facing session-reload ChannelMessage the kernel host would build. */
+  async function saveSessionReloadMessage(lickId: string): Promise<void> {
+    const { saveMessage } = await import('../../src/scoops/db.js');
+    await saveMessage({
+      id: `session-reload-${lickId}`,
+      chatJid: cone.jid,
+      senderId: 'session-reload',
+      senderName: 'session-reload:reload',
+      content: '[Session Reload]',
+      timestamp: new Date().toISOString(),
+      fromAssistant: false,
+      channel: 'session-reload',
+      lickId,
+    });
+  }
+
+  function spyConeShell(executeCommand = vi.fn()) {
+    const coneCtx = (orch as any).contexts.get(cone.jid);
+    expect(coneCtx).toBeDefined();
+    vi.spyOn(coneCtx, 'getShell').mockReturnValue({ executeCommand } as any);
+    return executeCommand;
+  }
+
+  it('mount-recovery lick_confirm re-runs the mount commands and flips the card to confirmed', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerSessionReloadLick({
+      type: 'session-reload',
+      timestamp: new Date().toISOString(),
+      body: {
+        reason: 'mount-recovery',
+        mounts: [
+          { kind: 'local', path: '/mnt/proj', dirName: 'proj' },
+          { kind: 's3', path: '/mnt/bucket', source: 's3://bucket', profile: 'prod', reason: 'x' },
+          { kind: 'da', path: '/mnt/da', source: 'da://o/r', profile: 'default', reason: 'y' },
+        ],
+      },
+    } as any);
+    await saveSessionReloadMessage(lickId);
+
+    const executeCommand = vi
+      .fn()
+      .mockResolvedValue({ stdout: 'mounted\n', stderr: '', exitCode: 0 });
+    spyConeShell(executeCommand);
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'allow' });
+
+    expect(executeCommand).toHaveBeenCalledTimes(3);
+    expect(executeCommand.mock.calls[0][0]).toBe("mount '/mnt/proj'");
+    expect(executeCommand.mock.calls[1][0]).toBe(
+      "mount --source 's3://bucket' --profile 'prod' '/mnt/bucket'"
+    );
+    expect(executeCommand.mock.calls[2][0]).toBe("mount --source 'da://o/r' '/mnt/da'");
+    expect(result.settled).toBe(true);
+    expect(result.message).toContain('mounted');
+
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `session-reload-${lickId}`,
+      lickId,
+      lickState: 'confirmed',
+    });
+    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(after?.lickState).toBe('confirmed');
+  });
+
+  it('mount-recovery lick_dismiss leaves the mounts unmounted and mutes the card (dismissed)', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerSessionReloadLick({
+      type: 'session-reload',
+      timestamp: new Date().toISOString(),
+      body: {
+        reason: 'mount-recovery',
+        mounts: [{ kind: 'local', path: '/mnt/proj', dirName: 'proj' }],
+      },
+    } as any);
+    await saveSessionReloadMessage(lickId);
+
+    const executeCommand = spyConeShell();
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'deny' });
+
+    expect(executeCommand).not.toHaveBeenCalled();
+    expect(result.settled).toBe(true);
+    expect(result.message).toBeUndefined();
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `session-reload-${lickId}`,
+      lickId,
+      lickState: 'dismissed',
+    });
+    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(after?.lickState).toBe('dismissed');
+  });
+
+  it('plain session-reload lick_dismiss acknowledges and mutes the card (dismissed)', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerSessionReloadLick({
+      type: 'session-reload',
+      timestamp: new Date().toISOString(),
+      body: {},
+    } as any);
+    await saveSessionReloadMessage(lickId);
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'deny' });
+
+    expect(result.settled).toBe(true);
+    expect(result.message).toBe('Session-reload notice acknowledged.');
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `session-reload-${lickId}`,
+      lickId,
+      lickState: 'dismissed',
+    });
+    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(after?.lickState).toBe('dismissed');
+  });
+
+  it('plain session-reload lick_confirm is a no-op that leaves the card pending', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerSessionReloadLick({
+      type: 'session-reload',
+      timestamp: new Date().toISOString(),
+      body: { reason: 'soft-reload' },
+    } as any);
+    await saveSessionReloadMessage(lickId);
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'allow' });
+
+    expect(result.settled).toBe(true);
+    expect(result.message).toContain('Nothing to confirm');
+    expect(onMessageUpdate).not.toHaveBeenCalled();
+    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(after?.lickState).toBeUndefined();
+
+    // Entry stays pending, so a later dismiss still settles + mutes it.
+    const dismiss = await orch.resolveActionableLick(lickId, { decision: 'deny' });
+    expect(dismiss.settled).toBe(true);
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `session-reload-${lickId}`,
+      lickId,
+      lickState: 'dismissed',
+    });
+  });
+
+  it('mount-recovery with an empty mounts payload is not registered (falls through)', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerSessionReloadLick({
+      type: 'session-reload',
+      timestamp: new Date().toISOString(),
+      body: { reason: 'mount-recovery', mounts: [] },
+    } as any);
+    await saveSessionReloadMessage(lickId);
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'allow' });
+    expect(result.settled).toBe(false);
+    expect(onMessageUpdate).not.toHaveBeenCalled();
+  });
+});
