@@ -150,10 +150,10 @@ describe('satisfies - tilde ~', () => {
 });
 
 describe('satisfies - x / * wildcards', () => {
-  it('* matches anything', () => {
+  it('* matches any release but no prereleases (node-semver default)', () => {
     expect(satisfies('0.0.0', '*')).toBe(true);
     expect(satisfies('99.99.99', '*')).toBe(true);
-    expect(satisfies('1.2.3-alpha', '*')).toBe(true);
+    expect(satisfies('1.2.3-alpha', '*')).toBe(false);
   });
 
   it('1.x matches >=1.0.0 <2.0.0', () => {
@@ -371,9 +371,15 @@ describe('prerelease admission requires same [major,minor,patch] tuple (fix 1)',
     expect(satisfies('2.0.0', '>=1.2.3-alpha <2.0.0')).toBe(false);
   });
 
-  it('* still admits prereleases regardless of tuple', () => {
-    expect(satisfies('1.2.3-alpha', '*')).toBe(true);
-    expect(satisfies('99.99.99-rc.0', '*')).toBe(true);
+  it('wildcard ranges do NOT admit prereleases (node-semver default includePrerelease=false)', () => {
+    expect(satisfies('1.0.0-alpha', '*')).toBe(false);
+    expect(satisfies('1.2.3-alpha', '*')).toBe(false);
+    expect(satisfies('99.99.99-rc.0', '*')).toBe(false);
+    expect(satisfies('1.2.3-alpha', 'x')).toBe(false);
+    expect(satisfies('1.2.3-alpha', 'X')).toBe(false);
+    expect(satisfies('1.2.3-alpha', '1.x')).toBe(false);
+    expect(satisfies('1.2.3-alpha', '1.X')).toBe(false);
+    expect(satisfies('1.2.3-alpha', '1.2.x')).toBe(false);
   });
 });
 
@@ -480,6 +486,68 @@ describe('wildcard comparators with operators (fix 4)', () => {
   it('>=1.2.x expands to >=1.2.0', () => {
     expect(satisfies('1.2.0', '>=1.2.x')).toBe(true);
     expect(satisfies('1.1.9', '>=1.2.x')).toBe(false);
+  });
+});
+
+describe('bare wildcard operands with operators (node-semver replaceXRange)', () => {
+  it('strict >* matches NOTHING', () => {
+    expect(satisfies('0.0.0', '>*')).toBe(false);
+    expect(satisfies('1.2.3', '>*')).toBe(false);
+    expect(satisfies('99.99.99', '>*')).toBe(false);
+    expect(satisfies('0.0.0-0', '>*')).toBe(false);
+    expect(satisfies('1.2.3-alpha', '>*')).toBe(false);
+  });
+
+  it('strict <* matches NOTHING', () => {
+    expect(satisfies('0.0.0', '<*')).toBe(false);
+    expect(satisfies('1.2.3', '<*')).toBe(false);
+    expect(satisfies('99.99.99', '<*')).toBe(false);
+  });
+
+  it('strict >x and >X match NOTHING', () => {
+    expect(satisfies('1.2.3', '>x')).toBe(false);
+    expect(satisfies('1.2.3', '>X')).toBe(false);
+    expect(satisfies('99.99.99', '>x')).toBe(false);
+  });
+
+  it('strict <x and <X match NOTHING', () => {
+    expect(satisfies('1.2.3', '<x')).toBe(false);
+    expect(satisfies('1.2.3', '<X')).toBe(false);
+    expect(satisfies('0.0.0', '<x')).toBe(false);
+  });
+
+  it('>=* matches ANY release version', () => {
+    expect(satisfies('0.0.0', '>=*')).toBe(true);
+    expect(satisfies('1.2.3', '>=*')).toBe(true);
+    expect(satisfies('99.99.99', '>=*')).toBe(true);
+  });
+
+  it('<=* matches ANY release version', () => {
+    expect(satisfies('0.0.0', '<=*')).toBe(true);
+    expect(satisfies('1.2.3', '<=*')).toBe(true);
+    expect(satisfies('99.99.99', '<=*')).toBe(true);
+  });
+
+  it('=* and =x match ANY release version', () => {
+    expect(satisfies('1.2.3', '=*')).toBe(true);
+    expect(satisfies('1.2.3', '=x')).toBe(true);
+    expect(satisfies('1.2.3', '=X')).toBe(true);
+    expect(satisfies('99.99.99', '=*')).toBe(true);
+  });
+
+  it('>=x and <=x match ANY release version', () => {
+    expect(satisfies('1.2.3', '>=x')).toBe(true);
+    expect(satisfies('1.2.3', '<=x')).toBe(true);
+    expect(satisfies('1.2.3', '>=X')).toBe(true);
+    expect(satisfies('1.2.3', '<=X')).toBe(true);
+  });
+
+  it('bare wildcard operands do NOT admit prereleases', () => {
+    expect(satisfies('1.2.3-alpha', '>=*')).toBe(false);
+    expect(satisfies('1.2.3-alpha', '<=*')).toBe(false);
+    expect(satisfies('1.2.3-alpha', '=*')).toBe(false);
+    expect(satisfies('1.2.3-alpha', '>=x')).toBe(false);
+    expect(satisfies('1.2.3-alpha', '<=X')).toBe(false);
   });
 });
 
