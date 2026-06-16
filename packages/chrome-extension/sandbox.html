@@ -597,6 +597,9 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
   // surface as the worker realm (`js-realm-shared.ts`).
   const execBridge = (cmd) => rpcCall('exec', 'run', [cmd]);
   execBridge.spawn = (argv) => rpcCall('exec', 'spawn', [argv]);
+  // Self-reference so destructured access (`const { exec } = require('sliccy:exec')`)
+  // and the property form (`require('sliccy:exec').exec(...)`) both work.
+  execBridge.exec = execBridge;
 
   // `skill` global — mirrors kernel/realm/skill-global.ts (the canonical
   // TS implementation). Boot-time computed from init.argv[1], frozen.

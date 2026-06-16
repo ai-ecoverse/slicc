@@ -730,6 +730,8 @@ Rule: First basename wins (no conflicts)
 
 ### Globals API
 
+`.jsh` scripts run with a small Node-standard surface as bare globals (`process`, `console`, `fetch`, `require`, `Buffer`, `__dirname`, `__filename`, `module`/`exports`, timer functions). All SLICC capability bridges (`exec`, `http`, `browser`, `skill`, `cli`, `color`, `time`, `fmt`, `pool`, `usb`/`serial`/`hid`) are NOT bare globals — they are reached through the `sliccy:` virtual-module scheme: `require('sliccy:exec')`, `require('sliccy:http')`, etc. (`require('fs')` / `require('node:fs')` returns the VFS bridge.) `require('sliccy:<unknown>')` throws a scheme-specific error; the lookup never hits the registry / `node_modules` / `ipk install`. See `packages/vfs-root/workspace/skills/skill-authoring/jsh-runtime-extensions.md` for the agent-facing companion file and the full sliccy: catalog.
+
 #### process
 
 ```typescript
@@ -775,11 +777,12 @@ console.warn(...args); // stderr
 console.error(...args); // stderr
 ```
 
-#### fs (VirtualFS bridge)
+#### fs (VirtualFS bridge — `require('fs')` / `require('node:fs')`)
 
-All paths are resolved relative to `process.cwd()`.
+There is no bare `fs` global. Pull the bridge in with `const fs = require('fs')` (or the `node:fs` alias). All paths are resolved relative to `process.cwd()`.
 
 ```typescript
+const fs = require('fs');
 fs.readFile(path): Promise<string>
 fs.readFileBinary(path): Promise<Uint8Array>
 fs.writeFile(path, content: string): Promise<void>
@@ -792,11 +795,12 @@ fs.rm(path): Promise<void> // Recursive delete
 fs.fetchToFile(url, path): Promise<number> // Download and save, returns byte count
 ```
 
-#### exec (shell command bridge)
+#### exec — `require('sliccy:exec')`
 
-Run any shell command through just-bash and get the result. Works in both CLI and extension mode.
+Run any shell command through just-bash and get the result. Works in both CLI and extension mode. The module export is callable (`exec(cmd)`) and exposes `.spawn(argv[])` plus a `.exec` self-reference so destructuring (`const { exec } = require('sliccy:exec')`) works.
 
 ```typescript
+const { exec } = require('sliccy:exec');
 exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }>
 
 // Example: get an OAuth token
@@ -806,6 +810,9 @@ const token = r.stdout.trim();
 // Example: list files
 const ls = await exec('ls -la /workspace');
 console.log(ls.stdout);
+
+// exec.spawn — bypass shell parsing for untrusted args
+await exec.spawn(['git', 'commit', '-m', userMessage]);
 ```
 
 #### require / module / exports
@@ -848,11 +855,12 @@ for (let i = 1; i < args.length; i++) {
 const { positional, flags, subcommand } = process.argv.parseFlags();
 ```
 
-#### `browser` global
+#### `sliccy:browser`
 
 Replaces the `exec('playwright-cli tab-list')` shell-out + regex parse used in ~12 skills.
 
 ```typescript
+const browser = require('sliccy:browser');
 browser.findTab(opts: { domain?: string; urlMatch?: RegExp | string }): Promise<TabHandle | null>
 browser.ensureTab(url: string): Promise<TabHandle>            // open if missing
 browser.eval(tab, fn: Function | string): Promise<unknown>    // sync expression
@@ -908,11 +916,14 @@ await browser.websocket.list();
 
 ```javascript
 // Before (~90 LoC of injected, string-built JS; flagged for prototype hijacking + exfil):
+const { exec } = require('sliccy:exec');
+const fs = require('fs');
 const interceptorCode = `(async () => { WebSocket.prototype.send = function(data) { /* … */ }; })()`;
 await fs.writeFile(tmpFile, interceptorCode);
 await exec(`playwright-cli eval-file ${tmpFile} --tab=${tabId}`);
 
 // After (~10 LoC, no page-authored JS, audited sinks):
+const browser = require('sliccy:browser');
 const sub = await browser.websocket
   .on(tab, { urlMatch: /wss-primary\.slack\.com/ })
   .filter({ parseAs: 'json', where: { type: 'message', channel: 'C0899S7HV0E' } })
@@ -934,11 +945,12 @@ browser.fetch(tab: TabHandle, url: string, opts?: {
 
 Runs inside the tab's origin, so session cookies and same-origin headers are automatic. Response body is JSON-parsed when content-type permits.
 
-#### `http.client({ baseUrl, token, headers, retry, timeoutMs })`
+#### `sliccy:http`
 
-Standard API-client builder for the jsh realm. `token` is lazy (resolved freshly per request); `Retry-After` (seconds or HTTP date) takes precedence over exponential backoff.
+`require('sliccy:http').client({ baseUrl, token, headers, retry, timeoutMs })` is the standard API-client builder for the jsh realm. `token` is lazy (resolved freshly per request); `Retry-After` (seconds or HTTP date) takes precedence over exponential backoff.
 
 ```typescript
+const http = require('sliccy:http');
 http.client(config: {
   baseUrl?: string;
   token?: (req?: { method: string; path: string; url: string }) =>
@@ -975,6 +987,8 @@ if (args.length < 1) {
 const inputFile = args[0];
 const outputFile = args[1] || inputFile.replace(/\.csv$/, '.json');
 
+const fs = require('fs');
+
 (async () => {
   try {
     const csv = await fs.readFile(inputFile);
@@ -1008,6 +1022,7 @@ process-csv input.csv output.json
 ### Error Handling
 
 ```javascript
+const fs = require('fs');
 try {
   const data = await fs.readFile('/nonexistent.json');
 } catch (err) {
@@ -1169,6 +1184,8 @@ SLICC's shell supports binary data (images, PDFs, archives) via careful encoding
 ### API
 
 ```typescript
+const fs = require('fs');
+
 // Read binary
 const bytes: Uint8Array = await fs.readFileBinary('/image.png');
 

@@ -4,22 +4,44 @@ This file is bundled into the agent VFS at `/workspace/skills/skill-authoring/js
 
 ## Runtime globals (Globals API)
 
-Every `.jsh` script runs in an async wrapper with these globals available. Prefer them over hand-rolled equivalents.
+Every `.jsh` script runs in an async wrapper with a small Node-standard surface available as bare globals. SLICC's capability bridges (exec, http, browser, USB / Serial / HID, skill, color, cli, time, fmt, pool) are NOT bare globals; they are reached via the `sliccy:` virtual-module scheme below.
 
-| Global                      | Purpose                                                                                                                                                                                                               |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `process`                   | `argv` (with `.parseFlags()`), `env`, `cwd()`, `exit(code)`, `stdout.write`, `stderr.write`, `stdin.read()` / async iterator. `stdin` buffer is one-shot — drain or iterate once.                                     |
-| `console`                   | `log`/`info` → stdout, `warn`/`error` → stderr.                                                                                                                                                                       |
-| `fs`                        | `readFile`, `writeFile`, `readFileBinary`, `writeFileBinary`, `readDir`, `exists`, `stat`, `mkdir`, `rm`, `fetchToFile(url, path)` — all paths are VFS, all async.                                                    |
-| `exec(cmd)`                 | Run any shell command, returns `{ stdout, stderr, exitCode }`. Also `exec.spawn(argv[])` to bypass shell parsing.                                                                                                     |
-| `fetch`                     | Standard `fetch` routed through SLICC's proxied transport (cookies + CORS + secret masking handled).                                                                                                                  |
-| `require(p)`                | Pull npm packages from esm.sh; version-pinnable (`require('lodash@4')`); cached per session.                                                                                                                          |
-| `process.argv.parseFlags()` | Parse `--flag=val` / `--flag val` / `-x` / positional / `--` passthrough into `{ positional, flags, subcommand, passthrough }`.                                                                                       |
-| `cli`                       | `die(msg, opts?)`, `out(value)`, `warn(msg, opts?)`, `help(text)`. `opts` is `number` (legacy exit code for `die`) or `{ exitCode?, prefix? }`; `prefix: ''` removes the default `Error:`/`Warning:` prefix entirely. |
-| `c`                         | ANSI color helpers: `green`, `red`, `yellow`, `gray`, `bold`, `cyan`, `dim`, plus `enabled` flag (auto-disabled on non-TTY / `NO_COLOR`). (Avoid `const c = ...` — it silently shadows this global.)                  |
-| `time`                      | `parseDuration(spec)`, `ago(spec)`, `range(spec)`, `future(spec)`, `gmailDate(spec)`. Units: `ms s m h d w M y` (note: `m` = minutes, `M` = months).                                                                  |
-| `fmt`                       | `trunc(s, n)`, `col(s, width)`, `table(rows, widths?)`, `date(value, style?)`. `style`: `'short' \| 'iso' \| 'human' \| 'locale'` (locale = `Intl.DateTimeFormat` medium).                                            |
-| `pool`                      | `pool(n, items, fn)` — bounded concurrency runner, results returned in input order.                                                                                                                                   |
+### Node-standard bare globals
+
+| Global                                                           | Purpose                                                                                                                                                                                 |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `process`                                                        | `argv` (with `.parseFlags()`), `env`, `cwd()`, `exit(code)`, `stdout.write`, `stderr.write`, `stdin.read()` / async iterator. `stdin` buffer is one-shot — drain or iterate once.       |
+| `console`                                                        | `log`/`info` → stdout, `warn`/`error` → stderr.                                                                                                                                         |
+| `fetch`                                                          | Standard `fetch` routed through SLICC's proxied transport (cookies + CORS + secret masking handled).                                                                                    |
+| `require(p)`                                                     | Synchronous CJS `require`. Use `require('sliccy:<name>')` for capability bridges, `require('fs')` / `require('node:fs')` for the VFS bridge, `require('<pkg>')` for installed packages. |
+| `Buffer` / `globalThis`                                          | Node-standard surface.                                                                                                                                                                  |
+| `setTimeout` / `clearTimeout` / `setInterval` / `queueMicrotask` | Web timer surface (also reachable through `globalThis`).                                                                                                                                |
+| `__dirname` / `__filename`                                       | CJS scope vars — the running script's own directory and absolute path.                                                                                                                  |
+| `module` / `exports`                                             | CJS module record (writeable; useful when a `.jsh` is treated as a library by a sibling `require('./helper.jsh')`).                                                                     |
+| `process.argv.parseFlags()`                                      | Parse `--flag=val` / `--flag val` / `-x` / positional / `--` passthrough into `{ positional, flags, subcommand, passthrough }`.                                                         |
+
+### Capability bridges — `sliccy:` virtual modules
+
+The bespoke globals are hard-cut. Reach each capability via `require('sliccy:<name>')` (CJS) or `import ... from 'sliccy:<name>'` (ESM). `require('fs')` / `require('node:fs')` keeps returning the VFS bridge.
+
+| `require('sliccy:<name>')`                    | Purpose                                                                                                                                                                                                |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `sliccy:exec`                                 | Callable `exec(cmd)` plus `.spawn(argv[])` and `.exec` self-reference. Returns `{ stdout, stderr, exitCode }`. Use `const { exec } = require('sliccy:exec')` or `const exec = require('sliccy:exec')`. |
+| `sliccy:skill`                                | Frozen `{ dir, refs, assets, config(), config(updates), token(providerId) }`. Replaces ad-hoc `argv[1]` dirname math and `oauth-token` shell-outs.                                                     |
+| `sliccy:http`                                 | `http.client({ baseUrl, token, headers, retry, timeoutMs })` builder.                                                                                                                                  |
+| `sliccy:browser`                              | `findTab`, `ensureTab`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`, `websocket.on(...).filter(...).forward(...)`.                                                                          |
+| `sliccy:usb` / `sliccy:serial` / `sliccy:hid` | `list()` / `request()` + device methods (`open`/`close`/`sendReport`/...). Chromium-only.                                                                                                              |
+| `sliccy:cli`                                  | `die(msg, opts?)`, `out(value)`, `warn(msg, opts?)`, `help(text)`. `opts` is `number` or `{ exitCode?, prefix? }`; `prefix: ''` removes the default `Error:` / `Warning:` label entirely.              |
+| `sliccy:color`                                | ANSI helpers: `green`, `red`, `yellow`, `gray`, `bold`, `cyan`, `dim`, plus `enabled` flag (auto-disabled on non-TTY / `NO_COLOR`).                                                                    |
+| `sliccy:time`                                 | `parseDuration(spec)`, `ago(spec)`, `range(spec)`, `future(spec)`, `gmailDate(spec)`. Units: `ms s m h d w M y` (note: `m` = minutes, `M` = months).                                                   |
+| `sliccy:fmt`                                  | `trunc(s, n)`, `col(s, width)`, `table(rows, widths?)`, `date(value, style?)`. `style`: `'short' \| 'iso' \| 'human' \| 'locale'` (locale = `Intl.DateTimeFormat` medium).                             |
+| `sliccy:pool`                                 | `pool(n, items, fn)` — bounded concurrency runner, results returned in input order.                                                                                                                    |
+
+`require('sliccy:<unknown>')` throws a scheme-specific error (`Unknown sliccy: module '<name>'`); empty `require('sliccy:')` throws `empty sliccy: module name`. `sliccy:` lookups never hit the registry / `node_modules` / `ipk install`.
+
+### Filesystem (VFS bridge)
+
+`require('fs')` and `require('node:fs')` return the VFS bridge (`readFile`, `writeFile`, `readFileBinary`, `writeFileBinary`, `readDir`, `exists`, `stat`, `mkdir`, `rm`, `fetchToFile(url, path)`). All paths are VFS-resolved, all async. There is no bare `fs` global.
 
 ### Examples for the non-trivial globals
 
@@ -46,7 +68,9 @@ switch (cmd) {
 ```
 
 ```javascript
-// cli + c — early-exit helpers and color
+// cli + color — early-exit helpers and color (both via sliccy:)
+const cli = require('sliccy:cli');
+const c = require('sliccy:color');
 if (!flags.to) cli.die('--to is required'); // writes "Error: …" to stderr, exits 1
 cli.out({ ok: true }); // pretty-prints JSON to stdout with trailing newline
 console.log(c.green('✓'), c.dim('done'));
@@ -54,6 +78,7 @@ console.log(c.green('✓'), c.dim('done'));
 
 ```javascript
 // domain-specific prefix instead of the default "Error:"
+const cli = require('sliccy:cli');
 if (!flags.repo) cli.die('--repo is required', { prefix: 'gh' });
 // → "gh: --repo is required"
 cli.warn('rate limit at 80%', { prefix: 'gh' });
@@ -61,10 +86,13 @@ cli.warn('rate limit at 80%', { prefix: 'gh' });
 
 ```javascript
 // time — duration math
+const time = require('sliccy:time');
 const since = time.ago('7d'); // Date 7 days ago
 const q = `after:${time.gmailDate('7d')}`; // "after:2026/05/22"
 
 // fmt — ANSI-aware table
+const fmt = require('sliccy:fmt');
+const c = require('sliccy:color');
 console.log(
   fmt.table([
     ['name', 'status'],
@@ -74,25 +102,28 @@ console.log(
 );
 
 // pool — bounded concurrency
+const pool = require('sliccy:pool');
 const results = await pool(4, urls, async (url) => (await fetch(url)).status);
 ```
 
 ```javascript
 // exec.spawn(argv[]) — bypass shell parsing. Use for any arg derived from
 // untrusted input: it can't be shell-interpolated.
+const { exec } = require('sliccy:exec');
 const userMessage = flags.message ?? 'wip';
 await exec.spawn(['git', 'commit', '-m', userMessage]); // safe even with quotes/spaces in userMessage
 ```
 
 ## jsh runtime extensions
 
-The following globals collapse the boilerplate that 18 of 23 surveyed skills reinvented. They're available in both standalone and extension floats.
+The following capabilities collapse the boilerplate that 18 of 23 surveyed skills reinvented. They're available in both standalone and extension floats; each is reached through `require('sliccy:<name>')` (or the equivalent ESM `import`).
 
-### `skill.*` — script-relative paths, config, tokens
+### `sliccy:skill` — script-relative paths, config, tokens
 
 Computed once at boot from `argv[1]` and frozen. Replaces ad-hoc `process.argv[1].substring(0, …)` dirname math, bespoke `.config` JSON readers, and `oauth-token` shell-outs.
 
 ```typescript
+const skill = require('sliccy:skill');
 skill.dir: string                                              // directory containing the running script
 skill.refs: string                                             // `<dir>/references`
 skill.assets: string                                           // `<dir>/assets`
@@ -102,16 +133,19 @@ skill.token(providerId: string): Promise<string>               // shells out to 
 ```
 
 ```javascript
+const skill = require('sliccy:skill');
+const fs = require('fs');
 const cfg = (await skill.config()) ?? {};
 const token = await skill.token('adobe');
 const tmpl = await fs.readFile(`${skill.refs}/prompt.md`);
 ```
 
-### `browser.*` — page-context CDP bridge
+### `sliccy:browser` — page-context CDP bridge
 
 Replaces the `exec('playwright-cli tab-list')` shell-out + regex parse used in ~12 skills. Accepts a `TabHandle` (from `findTab` / `ensureTab`) or a bare `targetId` string. `eval` / `evalAsync` serialize functions to a string call expression so realm code can pass a closure as ergonomically as a string.
 
 ```typescript
+const browser = require('sliccy:browser');
 browser.findTab(opts: { domain?: string; urlMatch?: RegExp | string }): Promise<TabHandle | null>
 browser.ensureTab(url: string, opts?: { matchUrl?: RegExp | string }): Promise<TabHandle>
 browser.eval(tab, fn: Function | string): Promise<unknown>      // sync expression
@@ -121,6 +155,8 @@ browser.localStorage(tab, key: string): Promise<string | null>
 ```
 
 ```javascript
+const browser = require('sliccy:browser');
+const cli = require('sliccy:cli');
 const tab = await browser.findTab({ domain: 'slack.com' });
 if (!tab) cli.die('open slack.com first');
 const team = await browser.eval(tab, () => document.title);
@@ -141,6 +177,8 @@ browser.fetch(tab: TabHandle | string, url: string, opts?: {
 ```
 
 ```javascript
+const browser = require('sliccy:browser');
+const cli = require('sliccy:cli');
 const resp = await browser.fetch(tab, '/api/conversations.list', {
   method: 'POST',
   body: { limit: 100 },
@@ -175,11 +213,12 @@ await browser.websocket.list();
 
 Skills cannot supply an arbitrary URL, cannot supply page-context code (the `filter` selector is a declarative JSON object — `parseAs`, `where`, `project` — and the realm rejects functions or strings of JS at the boundary), and cannot intercept outbound `send` traffic. Subscribers owned by a scoop auto-close when the scoop is dropped.
 
-### `http.client({ baseUrl, token, headers, retry })` — standard API-client builder
+### `sliccy:http` — standard API-client builder
 
-Standardizes the `build URL → merge headers → resolve auth → fetch → unwrap JSON → throw on !ok` boilerplate. `token` is **lazy** — resolved freshly per request so token rotation / refresh hooks are picked up without recreating the client. Backoff is exponential, but **`Retry-After` (when present and parseable, in seconds or HTTP date) takes precedence** — the server knows its own rate limit.
+`require('sliccy:http')` exposes `http.client({ baseUrl, token, headers, retry, timeoutMs })`. Standardizes the `build URL → merge headers → resolve auth → fetch → unwrap JSON → throw on !ok` boilerplate. `token` is **lazy** — resolved freshly per request so token rotation / refresh hooks are picked up without recreating the client. Backoff is exponential, but **`Retry-After` (when present and parseable, in seconds or HTTP date) takes precedence** — the server knows its own rate limit.
 
 ```typescript
+const http = require('sliccy:http');
 http.client(config: {
   baseUrl?: string;
   token?: (req?: { method: string; path: string; url: string }) => string | Promise<string | null | undefined>;
@@ -200,6 +239,8 @@ http.client(config: {
 ```
 
 ```javascript
+const http = require('sliccy:http');
+const skill = require('sliccy:skill');
 const api = http.client({
   baseUrl: 'https://graph.microsoft.com/v1.0',
   token: () => skill.token('microsoft'),
@@ -235,13 +276,14 @@ const api = http.client({
 });
 ```
 
-### `hid.*` / `serial.*` / `usb.*` — native device scripting
+### `sliccy:hid` / `sliccy:serial` / `sliccy:usb` — native device scripting
 
-Realm globals for WebHID / Web Serial / WebUSB. The top-level entry points are `hid.list()` / `hid.request(filters?)` (and parity `serial.*` / `usb.*`); each device returned carries its opaque handle and methods that round-trip via panel-RPC. The handle namespace is shared with the `hid` / `serial` / `usb` shell commands — a port from `serial request` is reachable as `(await serial.list()).find(p => p.handle === 'serial1')`. Chromium-only; unavailable in the cloud / hosted-leader float. `hid.request()` still needs a user gesture (same as the shell `hid request`).
+`require('sliccy:hid')` / `require('sliccy:serial')` / `require('sliccy:usb')` expose the WebHID / Web Serial / WebUSB bridges. The top-level entry points are `hid.list()` / `hid.request(filters?)` (and parity `serial.*` / `usb.*`); each device returned carries its opaque handle and methods that round-trip via panel-RPC. The handle namespace is shared with the `hid` / `serial` / `usb` shell commands — a port from `serial request` is reachable as `(await serial.list()).find(p => p.handle === 'serial1')`. Chromium-only; unavailable in the cloud / hosted-leader float. `hid.request()` still needs a user gesture (same as the shell `hid request`).
 
 HID devices expose an `EventTarget`-shaped surface so a VIA-style **request/response in one script** doesn't race: subscribe `'inputreport'` first, then `sendReport`, await the callback. The first listener lazily subscribes the kernel-side relay; the last `removeEventListener` (or realm teardown) unsubscribes — no leaked page-side listeners.
 
 ```typescript
+const hid = require('sliccy:hid');
 hid.list(): Promise<HidDevice[]>
 hid.request(filters?: HidDeviceFilter | HidDeviceFilter[]): Promise<HidDevice>
 
@@ -260,6 +302,7 @@ device.onInputReport(cb): void                     // alias for addEventListener
 ```javascript
 // VIA-style protocol-version round-trip as a single .jsh script.
 // Subscribe BEFORE sendReport so the reply can't beat the listener.
+const hid = require('sliccy:hid');
 const [device] = await hid.list();
 await device.open();
 const reply = new Promise((resolve, reject) => {
@@ -277,9 +320,11 @@ console.log([...bytes].map((b) => b.toString(16).padStart(2, '0')).join(' '));
 
 `serial.*` and `usb.*` mirror the shell surface (`open` / `close` / `read` / `write` / `getSignals` / `setSignals` on serial ports; `open` / `close` / `claim` / `release` / `controlIn` / `controlOut` / `transferIn` / `transferOut` on usb devices). They don't carry the `EventTarget` shape — those transports are explicit-poll.
 
-For ESP32 / ESP8266 work, drive `esptool` through `exec(...)` (no realm global). Beyond the existing `chip_id` / `read_mac` / `erase_flash` / `write_flash` verbs, the read/inspect set is now `flash_id`, `read_reg <addr>`, `read_flash <addr> <size> <outfile>`, `erase_region <addr> <size>`, and `run`. Pass `--port <handle>` to reuse a port from `serial request` so no second picker fires:
+For ESP32 / ESP8266 work, drive `esptool` through `require('sliccy:exec')` (there is no bare `exec` global). Beyond the existing `chip_id` / `read_mac` / `erase_flash` / `write_flash` verbs, the read/inspect set is now `flash_id`, `read_reg <addr>`, `read_flash <addr> <size> <outfile>`, `erase_region <addr> <size>`, and `run`. Pass `--port <handle>` to reuse a port from `serial request` so no second picker fires:
 
 ```javascript
+const serial = require('sliccy:serial');
+const { exec } = require('sliccy:exec');
 const port = (await serial.list())[0] ?? (await serial.request());
 const { stdout } = await exec(`esptool --port ${port.handle} flash_id`);
 console.log(stdout);
@@ -296,4 +341,4 @@ await exec.spawn([
 
 ## Reaching these from sprinkles & dips
 
-The high-value globals here — `exec` / `exec.spawn`, `fetch`, `http.client`, `browser.*`, and the device APIs (`hid.*` / `serial.*` / `usb.*`) — are also exposed to `.shtml` **sprinkles** and **trusted dips** through the `slicc.*` bridge, which routes each call into the **same worker shell** `.jsh` scripts run in. So a sprinkle button can `await slicc.exec('…')` to reach any supplemental command or `.jsh` script, `await slicc.agent('…')` to spawn a one-shot sub-scoop, or `slicc.hid.on('inputreport', cb)` + `slicc.hid.sendReport(handle, reportId, bytes)` to drive a VIA-style keyboard from a UI panel (handles persist across button clicks). The bridge is trust-gated: VFS-sourced sprinkles and trusted dips get it; untrusted inline-chat dips never receive `exec` / `agent` / `browser` / device globals. See the sprinkles skill (`/workspace/skills/sprinkles/SKILL.md`) "Shell, agent, and jsh globals" section, and `docs/shell-reference.md` "Sprinkle & Dip Bridge" (developer-facing).
+The high-value capabilities here — `exec` / `exec.spawn`, `fetch`, `http.client`, `browser.*`, and the device APIs (`hid.*` / `serial.*` / `usb.*`) — are also exposed to `.shtml` **sprinkles** and **trusted dips** through the `slicc.*` bridge, which routes each call into the **same worker shell** `.jsh` scripts run in. So a sprinkle button can `await slicc.exec('…')` to reach any supplemental command or `.jsh` script, `await slicc.agent('…')` to spawn a one-shot sub-scoop, or `slicc.hid.on('inputreport', cb)` + `slicc.hid.sendReport(handle, reportId, bytes)` to drive a VIA-style keyboard from a UI panel (handles persist across button clicks). The bridge is trust-gated: VFS-sourced sprinkles and trusted dips get it; untrusted inline-chat dips never receive `exec` / `agent` / `browser` / device globals. See the sprinkles skill (`/workspace/skills/sprinkles/SKILL.md`) "Shell, agent, and jsh globals" section, and `docs/shell-reference.md` "Sprinkle & Dip Bridge" (developer-facing).
