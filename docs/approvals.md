@@ -228,6 +228,18 @@ not spam the chat UI; the user-visible event is the `[sudo-request]` channel
 message the orchestrator delivers to the cone, and the user-visible decision is
 the `lick_confirm` / `lick_dismiss` tool call.
 
+#### Card result UX
+
+The `[sudo-request]` message renders as a `<slicc-lick-card>` (the
+`'sudo-request'` lick channel). The card carries the orchestrator-minted
+`lickId` on its `ChatMessage`. While the request is outstanding the card stays
+in its default amber `pending` state. When the cone resolves the request, the
+orchestrator persists the decision onto the originating message's `lickState`
+and the card flips in place — a green check (`confirmed`) for `lick_confirm` or
+a red cross (`dismissed`, rendered muted) for `lick_dismiss` — so the resolved
+verdict survives reload. The design-time fixture (`?ui-fixture=1`) carries one
+sample per state (`pending` / `confirmed` / `dismissed`) for styling.
+
 ### Explicit `sudo <cmd>` shell command
 
 The transparent `Cmnd` gate above prompts whenever the agent runs a command that

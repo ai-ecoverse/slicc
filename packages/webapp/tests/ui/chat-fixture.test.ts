@@ -36,12 +36,9 @@ describe('createChatFixture', () => {
     expect(msgs.some((m) => m.role === 'assistant')).toBe(true);
   });
 
-  it('covers every lick channel exactly once', () => {
-    const channels = msgs
-      .filter((m) => m.source === 'lick')
-      .map((m) => m.channel)
-      .sort();
-    expect(channels).toEqual(
+  it('covers every lick channel', () => {
+    const channels = new Set(msgs.filter((m) => m.source === 'lick').map((m) => m.channel));
+    expect([...channels].sort()).toEqual(
       [
         'cron',
         'fswatch',
@@ -53,6 +50,19 @@ describe('createChatFixture', () => {
         'webhook',
       ].sort()
     );
+  });
+
+  it('exercises every actionable-lick (sudo-request) card state', () => {
+    const states = msgs
+      .filter((m) => m.source === 'lick' && m.channel === 'sudo-request')
+      .map((m) => m.lickState)
+      .sort();
+    expect(states).toEqual(['confirmed', 'dismissed', 'pending']);
+    // Every actionable-lick sample carries the orchestrator-minted lick id
+    // used to locate and flip its card when the decision settles.
+    for (const m of msgs.filter((m) => m.source === 'lick' && m.channel === 'sudo-request')) {
+      expect(m.lickId).toBeTruthy();
+    }
   });
 
   it('includes a delegation message from cone', () => {
