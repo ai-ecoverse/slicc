@@ -64,7 +64,7 @@ export function getConnectedFollowersWithFallback(): ConnectedFollowerInfo[] {
 }
 
 // Same reason: the module-level getter is only set on the page thread.
-// Fall back to the localStorage shim value written by onFollowerCountChanged.
+// Fall back to the localStorage shim value written by writeConnectedFollowersToShim.
 function getFollowersWithFallback(): ConnectedFollowerInfo[] {
   if (connectedFollowersGetter) return connectedFollowersGetter();
   try {
@@ -76,6 +76,29 @@ function getFollowersWithFallback(): ConnectedFollowerInfo[] {
     // ignore parse errors
   }
   return [];
+}
+
+/**
+ * Mirror the leader's connected-follower list into the
+ * `slicc.leaderTrayFollowers` shim so the standalone kernel-worker `host`
+ * command — which has no live `connectedFollowersGetter` — sees it via
+ * `getFollowersWithFallback`. The page calls this on every follower-count
+ * change, on boot (to clear a stale value), and when the leader stops;
+ * `installPageStorageSync` forwards the write into the worker's Map-backed
+ * shim. Symmetric with the `slicc.leaderTrayStatus` mirror written in
+ * `wc-tray.ts`. Best-effort: a missing `localStorage` (Node/tests without an
+ * override) or a quota/serialization error is swallowed.
+ */
+export function writeConnectedFollowersToShim(
+  followers: ConnectedFollowerInfo[],
+  storage: Pick<Storage, 'setItem'> | undefined = (globalThis as { localStorage?: Storage })
+    .localStorage
+): void {
+  try {
+    storage?.setItem(LEADER_FOLLOWERS_STORAGE_KEY, JSON.stringify(followers));
+  } catch {
+    // best-effort mirror — ignore quota / serialization failures
+  }
 }
 
 // When `host reset` runs from the kernel-worker's terminal, the worker's

@@ -5,6 +5,9 @@ import {
   formatDuration,
   formatFollowerOutput,
   formatLeaderOutput,
+  getConnectedFollowersWithFallback,
+  setConnectedFollowersGetter,
+  writeConnectedFollowersToShim,
 } from '../../../src/shell/supplemental-commands/host-command.js';
 
 /** Helper to build a FollowerTrayRuntimeStatus with sensible defaults for the new diagnostic fields. */
@@ -93,6 +96,70 @@ describe('host command', () => {
     expect(result.stdout).toContain('followers:');
     expect(result.stdout).toContain('  - follower-abc123');
     expect(result.stdout).toContain('  - follower-def456');
+  });
+
+  it('mirrors connected followers to the shim so a worker-side host reads them', () => {
+    // Kernel-worker thread: no live getter, only the page→worker
+    // localStorage shim is available. Before the page-side writer was
+    // restored, nothing populated this key, so worker-side `host` never
+    // showed live followers.
+    setConnectedFollowersGetter(null);
+    const store = new Map<string, string>();
+    const fakeLs = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        store.set(k, v);
+      },
+      removeItem: (k: string) => {
+        store.delete(k);
+      },
+    } as unknown as Storage;
+    const original = (globalThis as { localStorage?: Storage }).localStorage;
+    (globalThis as { localStorage?: Storage }).localStorage = fakeLs;
+    try {
+      const followers = [
+        {
+          runtimeId: 'follower-abc123',
+          runtime: 'slicc-extension-offscreen',
+          connectedAt: '2026-06-16T00:00:00.000Z',
+        },
+      ];
+      // Page side mirrors the live list into the shim.
+      writeConnectedFollowersToShim(followers);
+      // Worker side reads it back via the shim fallback.
+      expect(getConnectedFollowersWithFallback()).toEqual(followers);
+    } finally {
+      if (original === undefined) delete (globalThis as { localStorage?: Storage }).localStorage;
+      else (globalThis as { localStorage?: Storage }).localStorage = original;
+    }
+  });
+
+  it('writing an empty follower list clears a stale shim value', () => {
+    setConnectedFollowersGetter(null);
+    const store = new Map<string, string>([
+      [
+        'slicc.leaderTrayFollowers',
+        JSON.stringify([{ runtimeId: 'stale-follower', connectedAt: '2026-06-14T00:00:00.000Z' }]),
+      ],
+    ]);
+    const fakeLs = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        store.set(k, v);
+      },
+      removeItem: (k: string) => {
+        store.delete(k);
+      },
+    } as unknown as Storage;
+    const original = (globalThis as { localStorage?: Storage }).localStorage;
+    (globalThis as { localStorage?: Storage }).localStorage = fakeLs;
+    try {
+      writeConnectedFollowersToShim([]);
+      expect(getConnectedFollowersWithFallback()).toEqual([]);
+    } finally {
+      if (original === undefined) delete (globalThis as { localStorage?: Storage }).localStorage;
+      else (globalThis as { localStorage?: Storage }).localStorage = original;
+    }
   });
 
   it('prints error details when leader startup failed', async () => {
