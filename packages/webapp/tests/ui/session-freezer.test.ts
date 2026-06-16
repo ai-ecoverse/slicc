@@ -245,6 +245,39 @@ describe('freezeConeSession', () => {
     expect(r2!.icon).toBeUndefined();
   });
 
+  it('drops a non-lucide picked name so the full-freeze entry records no icon', async () => {
+    mockRunOneOffCompactionCall
+      .mockResolvedValueOnce('NONE')
+      .mockResolvedValueOnce('Fix the auth bug');
+    const store = makeFakeStore({
+      id: 'session-cone',
+      messages: [
+        userMessage('q1'),
+        assistantMessage('a1'),
+        userMessage('q2'),
+        assistantMessage('a2'),
+      ],
+      createdAt: 100,
+      updatedAt: 200,
+    });
+    const vfs = makeFakeVfs();
+    const pickIcon = vi.fn(async () => 'not-a-real-icon');
+
+    const result = await freezeConeSession({
+      sessionStore: store,
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      model: fakeModel,
+      apiKey: 'k',
+      pickIcon,
+    });
+    expect(pickIcon).toHaveBeenCalledTimes(1);
+    expect(result!.icon).toBeUndefined();
+    const index = await readSessionsIndex(
+      vfs as unknown as Parameters<typeof readSessionsIndex>[0]
+    );
+    expect(index[0].icon).toBeUndefined();
+  });
+
   it('skips memory append when LLM returns NONE', async () => {
     mockRunOneOffCompactionCall.mockResolvedValueOnce('NONE').mockResolvedValueOnce('Quick chat');
 
@@ -909,6 +942,145 @@ describe('enrichPendingSession', () => {
     expect(lastCall.vfs).toBe(vfs);
     expect(lastCall.model).toBe(fakeModel);
     expect(lastCall.apiKey).toBe('k');
+  });
+
+  it('records a picked lucide icon on the renamed entry when pickIcon is supplied', async () => {
+    const vfs = makeFakeVfs();
+    const { pendingFilename, frozenAt } = await seedPending(vfs);
+
+    mockRunOneOffCompactionCall
+      .mockResolvedValueOnce('NONE')
+      .mockResolvedValueOnce('Build pipeline debug');
+    const pickIcon = vi.fn(async () => 'wrench');
+
+    const updated = await enrichPendingSession(
+      vfs as unknown as Parameters<typeof enrichPendingSession>[0],
+      {
+        filename: pendingFilename,
+        title: 'debug the build pipeline',
+        frozenAt,
+        messageCount: 4,
+        pendingEnrichment: true,
+      },
+      { model: fakeModel!, apiKey: 'k', pickIcon }
+    );
+
+    expect(pickIcon).toHaveBeenCalledTimes(1);
+    expect(pickIcon.mock.calls[0][0].subject).toContain('Build pipeline debug');
+    expect(updated!.icon).toBe('wrench');
+    const index = await readSessionsIndex(
+      vfs as unknown as Parameters<typeof readSessionsIndex>[0]
+    );
+    expect(index[0].icon).toBe('wrench');
+
+    // Without a picker the enrichment leaves the icon to the rail's backfill.
+    const vfs2 = makeFakeVfs();
+    const seeded2 = await seedPending(vfs2);
+    mockRunOneOffCompactionCall
+      .mockResolvedValueOnce('NONE')
+      .mockResolvedValueOnce('Another title');
+    const updated2 = await enrichPendingSession(
+      vfs2 as unknown as Parameters<typeof enrichPendingSession>[0],
+      {
+        filename: seeded2.pendingFilename,
+        title: 'debug the build pipeline',
+        frozenAt: seeded2.frozenAt,
+        messageCount: 4,
+        pendingEnrichment: true,
+      },
+      { model: fakeModel!, apiKey: 'k' }
+    );
+    expect(updated2!.icon).toBeUndefined();
+  });
+
+  it('drops a non-lucide picked name so the renamed entry records no icon', async () => {
+    const vfs = makeFakeVfs();
+    const { pendingFilename, frozenAt } = await seedPending(vfs);
+
+    mockRunOneOffCompactionCall
+      .mockResolvedValueOnce('NONE')
+      .mockResolvedValueOnce('Build pipeline debug');
+    const pickIcon = vi.fn(async () => 'not-a-real-icon');
+
+    const updated = await enrichPendingSession(
+      vfs as unknown as Parameters<typeof enrichPendingSession>[0],
+      {
+        filename: pendingFilename,
+        title: 'debug the build pipeline',
+        frozenAt,
+        messageCount: 4,
+        pendingEnrichment: true,
+      },
+      { model: fakeModel!, apiKey: 'k', pickIcon }
+    );
+
+    expect(pickIcon).toHaveBeenCalledTimes(1);
+    expect(updated!.icon).toBeUndefined();
+    const index = await readSessionsIndex(
+      vfs as unknown as Parameters<typeof readSessionsIndex>[0]
+    );
+    expect(index[0].icon).toBeUndefined();
+  });
+
+  it('picks the icon before appending memory: a hung pick writes no memory, retry appends once', async () => {
+    const vfs = makeFakeVfs();
+    const { pendingFilename, frozenAt } = await seedPending(vfs);
+
+    // Run 1: a pickIcon that never resolves — the 20s-race / page-close case.
+    mockRunOneOffCompactionCall
+      .mockResolvedValueOnce('- prefers vitest')
+      .mockResolvedValueOnce('Build pipeline debug');
+    const hang = vi.fn(() => new Promise<string>(() => {}));
+
+    // Start enrichment but do NOT await — the hung pick never resolves.
+    void enrichPendingSession(
+      vfs as unknown as Parameters<typeof enrichPendingSession>[0],
+      {
+        filename: pendingFilename,
+        title: 'debug the build pipeline',
+        frozenAt,
+        messageCount: 4,
+        pendingEnrichment: true,
+      },
+      { model: fakeModel!, apiKey: 'k', pickIcon: hang }
+    );
+
+    // Flush microtasks so the two LLM mock calls resolve and the flow reaches
+    // the hung pick (which runs BEFORE the non-idempotent memory append).
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(hang).toHaveBeenCalledTimes(1);
+    // Pick-before-append means the hang leaves the archive cleanly pending
+    // with NO memory written and NO commit/rename.
+    expect(vfs.files.get('/workspace/CLAUDE.md')).toBeUndefined();
+    expect(vfs.files.has(`/sessions/${pendingFilename}`)).toBe(true);
+    const indexAfterHang = await readSessionsIndex(
+      vfs as unknown as Parameters<typeof readSessionsIndex>[0]
+    );
+    expect(indexAfterHang[0].pendingEnrichment).toBe(true);
+
+    // Run 2 (boot retry): same bullets, no picker. Memory appends exactly once.
+    mockRunOneOffCompactionCall
+      .mockResolvedValueOnce('- prefers vitest')
+      .mockResolvedValueOnce('Build pipeline debug');
+    const updated = await enrichPendingSession(
+      vfs as unknown as Parameters<typeof enrichPendingSession>[0],
+      {
+        filename: pendingFilename,
+        title: 'debug the build pipeline',
+        frozenAt,
+        messageCount: 4,
+        pendingEnrichment: true,
+      },
+      { model: fakeModel!, apiKey: 'k' }
+    );
+
+    expect(updated!.pendingEnrichment).toBeUndefined();
+    const memory = vfs.files.get('/workspace/CLAUDE.md');
+    expect(memory).toBeTruthy();
+    // The bullet appears exactly once — no duplicate-memory-on-retry.
+    expect(memory!.match(/prefers vitest/g)).toHaveLength(1);
   });
 
   it('is a no-op when the archive file is missing (already renamed)', async () => {

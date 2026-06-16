@@ -173,11 +173,29 @@ async function pickIconBestEffort(
 ): Promise<string | undefined> {
   try {
     const pick = opts.pickIcon ?? (await import('./quick-llm.js')).pickLucideIcon;
-    return (await pick({ subject: `"${title}" — an archived chat session` })) ?? undefined;
+    const picked = (await pick({ subject: `"${title}" — an archived chat session` })) ?? undefined;
+    return await keepIfLucide(picked);
   } catch (err) {
     log.warn('Icon pick failed (freeze still proceeds)', {
       error: err instanceof Error ? err.message : String(err),
     });
+    return undefined;
+  }
+}
+
+/**
+ * Validation gate at the recording boundary: drop any picked name that isn't
+ * a real lucide registry entry so a non-lucide string never reaches the index
+ * (the card then falls back to its snowflake / lazy backfill). The injectable
+ * `pickIcon` seam can return any string, so we validate against the same
+ * `lucideIconNames()` registry the default picker validates against.
+ */
+async function keepIfLucide(name: string | undefined): Promise<string | undefined> {
+  if (!name) return undefined;
+  try {
+    const { lucideIconNames } = await import('./quick-llm.js');
+    return lucideIconNames().includes(name) ? name : undefined;
+  } catch {
     return undefined;
   }
 }
@@ -291,10 +309,10 @@ async function writeFrozenArchive(
     await ensureDir(opts.vfs, SESSIONS_DIR);
     await opts.vfs.writeFile(`${SESSIONS_DIR}/${filename}`, archiveMarkdown);
     await updateSessionsIndex(opts.vfs, indexEntry);
-    // LightningFS debounces superblock saves — `location.reload()` after
-    // this returns would race the debounce timer and orphan the new
-    // /sessions/ directory inode. Force a flush so the writes are
-    // durable on IDB before the caller reloads.
+    // The WC new-session flow clears the chat in-place (no `location.reload()`),
+    // but the OPFS backend still persists on its own debounce; force a flush so
+    // the archive + index are durable before the caller proceeds to clear the
+    // cone (and, on the single-click "save" path, before any LLM enrichment runs).
     await opts.vfs.flush();
     log.info('Cone session frozen', { filename, title, messageCount: session.messages.length });
     return { ...indexEntry, archive };
@@ -553,6 +571,14 @@ export interface EnrichPendingSessionOptions {
   apiKey: string;
   /** Adobe X-Session-Id and friends — forwarded to both LLM calls. */
   headers?: Record<string, string>;
+  /**
+   * Optional lucide icon picker. When provided, enrichment picks a rail
+   * icon from the LLM title and records it on the renamed index entry —
+   * so the single-click "save" path lands a fully-enriched archive (real
+   * slug + icon) without waiting for the rail's lazy backfill. Omitted by
+   * the boot-time pass, which leaves icons to the rail's lazy enrichment.
+   */
+  pickIcon?: (opts: { subject: string }) => Promise<string | null>;
 }
 
 /**
@@ -585,8 +611,36 @@ export async function enrichPendingSession(
   if (agentMessages === null) return null;
   const calls = await runEnrichmentCalls(entry, agentMessages, opts);
   if (calls === null) return null;
+  // Pick the icon BEFORE appending memory: the pick is a read-only LLM call
+  // that can hang, while the append is non-idempotent. Running it first means
+  // a hung/aborted pick leaves the archive cleanly pending with NO memory
+  // written yet, so the boot retry runs once with no duplicate memory.
+  const icon = await pickEnrichmentIcon(opts, calls.newTitle);
   await appendEnrichmentMemory(vfs, entry, calls.bullets, opts);
-  return await commitEnrichedArchive(vfs, entry, archiveContent, calls.newTitle);
+  return await commitEnrichedArchive(vfs, entry, archiveContent, calls.newTitle, icon);
+}
+
+/**
+ * Enrichment step 5b — pick a lucide rail icon from the LLM title
+ * (best-effort; `undefined` on failure or when no picker was supplied).
+ * Only the single-click "save" path passes `pickIcon`; the boot pass
+ * leaves icons to the rail's lazy backfill.
+ */
+async function pickEnrichmentIcon(
+  opts: EnrichPendingSessionOptions,
+  title: string
+): Promise<string | undefined> {
+  if (!opts.pickIcon) return undefined;
+  try {
+    const picked =
+      (await opts.pickIcon({ subject: `"${title}" — an archived chat session` })) ?? undefined;
+    return await keepIfLucide(picked);
+  } catch (err) {
+    log.warn('Enrichment icon pick failed (continuing without icon)', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return undefined;
+  }
 }
 
 /**
@@ -731,7 +785,8 @@ async function commitEnrichedArchive(
   vfs: WritableVfsClient,
   entry: FrozenSessionIndexEntry,
   archiveContent: string,
-  newTitle: string
+  newTitle: string,
+  icon?: string
 ): Promise<FrozenSessionIndexEntry | null> {
   const oldPath = frozenSessionPath(entry);
   const newContent = rewriteArchiveTitle(archiveContent, newTitle);
@@ -748,11 +803,15 @@ async function commitEnrichedArchive(
     return null;
   }
 
+  // Carry a freshly-picked icon (single-click "save" path) or preserve an
+  // existing one; absent on the boot pass, where the rail backfills lazily.
+  const resolvedIcon = icon ?? entry.icon;
   const updatedEntry: FrozenSessionIndexEntry = {
     filename: newFilename,
     title: newTitle,
     frozenAt: entry.frozenAt,
     messageCount: entry.messageCount,
+    ...(resolvedIcon ? { icon: resolvedIcon } : {}),
   };
   try {
     await replaceIndexEntry(vfs, entry.filename, updatedEntry);

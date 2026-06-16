@@ -31,6 +31,17 @@ const log = createLogger('new-session');
  */
 const FREEZER_SESSION_ANCHOR = 'ui-new-session';
 
+/**
+ * Default race window (ms) the single-click "save" path waits for LLM
+ * enrichment before clearing the chat and letting enrichment finish in the
+ * background. The durable archive is already on disk at t=0, so this only
+ * bounds how long the user watches the spinner — never data safety.
+ */
+const DEFAULT_ENRICHMENT_RACE_MS = 20_000;
+
+/** How often the race timer reports progress (ms) to drive the spinner ring. */
+const ENRICHMENT_PROGRESS_TICK_MS = 250;
+
 export interface RunNewSessionFreezeOptions {
   /**
    * Writable VFS handle. Under `slicc_opfs_vfs === 'opfs'` AND on the
@@ -40,16 +51,55 @@ export interface RunNewSessionFreezeOptions {
    * the same shape structurally.
    */
   vfs: WritableVfsClient;
+  /**
+   * Race window in ms: how long to wait for LLM enrichment before resolving
+   * (so the caller can clear the chat) and continuing enrichment in the
+   * background. Injectable so tests don't block on the real 20s timer.
+   * Defaults to {@link DEFAULT_ENRICHMENT_RACE_MS}.
+   */
+  enrichmentRaceMs?: number;
+  /**
+   * Progress callback driven by the race timer: a 0..1 fraction of the race
+   * window elapsed, then `null` once the race resolves (LLM done or timer
+   * fired). The freezer button maps this to its busy/progress ring.
+   */
+  onProgress?: (fraction: number | null) => void;
+  /**
+   * Fired once background enrichment (the timer-won path) finally resolves,
+   * with the updated index entry (or `null` if it stayed pending). Lets the
+   * caller refresh the freezer rail when the rename + icon land late.
+   */
+  onBackgroundEnriched?: (entry: FrozenSessionIndexEntry | null) => void;
 }
 
+/** Outcome of the enrichment-vs-timer race. */
+type EnrichmentRaceResult =
+  | { kind: 'llm'; updated: FrozenSessionIndexEntry | null }
+  | { kind: 'timer' };
+
 /**
- * Resolve credentials + model + headers, then run the freezer. Returns the
- * frozen entry on success, `null` when nothing was archived (short session,
- * missing creds, or write failure). Never throws.
+ * Single-click "save" freeze — robust against LLM provider outages.
+ *
+ * 1. **Write first.** Quick-freeze the cone session to a durable
+ *    `pending-<id>.md` archive BEFORE any LLM call, so a hung provider can
+ *    never lose the conversation.
+ * 2. **Enrich + race.** Start the combined memory → title → icon enrichment
+ *    over the just-written archive and race it against a {@link
+ *    DEFAULT_ENRICHMENT_RACE_MS} timer that also drives the spinner progress.
+ * 3. **LLM wins (< race window):** apply enrichment synchronously and return
+ *    the fully-enriched entry — the chat clears at LLM-done.
+ * 4. **Timer wins:** return the (still-pending) entry so the caller clears the
+ *    chat now; enrichment continues in the background and `onBackgroundEnriched`
+ *    fires with the renamed entry once it resolves.
+ *
+ * Returns the frozen entry (pending or enriched), or `null` when nothing was
+ * archived (short session / write failure). Never throws.
  */
 export async function runNewSessionFreeze(
   opts: RunNewSessionFreezeOptions
 ): Promise<FrozenSession | null> {
+  const raceMs = opts.enrichmentRaceMs ?? DEFAULT_ENRICHMENT_RACE_MS;
+
   const apiKey = getApiKey() ?? undefined;
   let model: Model<Api> | undefined;
   try {
@@ -75,13 +125,93 @@ export async function runNewSessionFreeze(
     return null;
   }
 
-  return freezeConeSession({
+  // 1. WRITE FIRST — durable archive on disk before any LLM call.
+  const frozen = await freezeConeSession({
     sessionStore,
     vfs: opts.vfs,
-    model,
+    mode: 'quick',
+  });
+  if (!frozen) return null; // short session / write failure — nothing to do.
+
+  // No credentials → nothing to enrich now; leave the entry pending so the
+  // next boot's background scanner finishes it.
+  if (!apiKey || !model) {
+    log.info('Frozen without enrichment (no LLM credentials) — left pending', {
+      filename: frozen.filename,
+    });
+    return frozen;
+  }
+
+  // 2. Start the combined enrichment (memory → title → icon) over the
+  //    already-written pending archive. Best-effort — never throws.
+  const enrichModel = model;
+  const enrichment = enrichPendingSession(opts.vfs, frozen, {
+    model: enrichModel,
     apiKey,
     headers,
+    pickIcon: (iconOpts) =>
+      import('./quick-llm.js').then(({ pickLucideIcon }) => pickLucideIcon(iconOpts)),
+  }).catch((err) => {
+    log.warn('Single-click enrichment threw (entry stays pending)', {
+      filename: frozen.filename,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
   });
+
+  // 3 + 4. Race enrichment against the timer, driving the spinner progress.
+  const winner = await raceEnrichmentAgainstTimer(enrichment, raceMs, opts.onProgress);
+
+  if (winner.kind === 'llm') {
+    // LLM won (< raceMs): enrichment already applied; return the enriched entry.
+    return winner.updated ? { ...winner.updated, archive: frozen.archive } : frozen;
+  }
+
+  // Timer won: the archive is durable, so the caller may clear the chat now.
+  // Let enrichment finish in the background and notify the caller so the rail
+  // can refresh once the rename + icon land.
+  void enrichment.then((updated) => {
+    log.info('Background enrichment resolved after race window', {
+      filename: frozen.filename,
+      enriched: updated?.filename ?? null,
+    });
+    opts.onBackgroundEnriched?.(updated);
+  });
+  return frozen;
+}
+
+/**
+ * Race the enrichment promise against a timer, reporting 0..1 progress on a
+ * fixed tick so the freezer spinner can render a countdown ring. Always
+ * clears both timers and emits a final `null` progress on resolution.
+ */
+async function raceEnrichmentAgainstTimer(
+  enrichment: Promise<FrozenSessionIndexEntry | null>,
+  raceMs: number,
+  onProgress?: (fraction: number | null) => void
+): Promise<EnrichmentRaceResult> {
+  const start = Date.now();
+  let progressTimer: ReturnType<typeof setInterval> | undefined;
+  let raceTimer: ReturnType<typeof setTimeout> | undefined;
+
+  onProgress?.(0);
+  if (onProgress) {
+    progressTimer = setInterval(() => {
+      onProgress(Math.min(1, (Date.now() - start) / raceMs));
+    }, ENRICHMENT_PROGRESS_TICK_MS);
+  }
+  const timer = new Promise<EnrichmentRaceResult>((resolve) => {
+    raceTimer = setTimeout(() => resolve({ kind: 'timer' }), raceMs);
+  });
+  const llm = enrichment.then((updated): EnrichmentRaceResult => ({ kind: 'llm', updated }));
+
+  try {
+    return await Promise.race([llm, timer]);
+  } finally {
+    if (progressTimer) clearInterval(progressTimer);
+    if (raceTimer) clearTimeout(raceTimer);
+    onProgress?.(null);
+  }
 }
 
 /**

@@ -363,8 +363,23 @@ function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
           const { runNewSessionFreeze, runNewSessionFreezeQuick } = await import(
             '../new-session.js'
           );
-          if (action === 'save') await runNewSessionFreeze({ vfs: writer });
-          else await runNewSessionFreezeQuick({ vfs: writer });
+          if (action === 'save') {
+            // Write-first + race: the durable archive lands before any LLM
+            // call, and this resolves at min(LLM-done, race window) so the
+            // chat clears even if the provider is hung. The race timer drives
+            // the spinner's progress ring; background enrichment (timer-won)
+            // refreshes the rail when the late rename/icon land.
+            await runNewSessionFreeze({
+              vfs: writer,
+              onProgress: (fraction) => {
+                const el = freezerNew();
+                if (!el) return;
+                if (fraction === null) el.removeAttribute('progress');
+                else el.setAttribute('progress', String(fraction));
+              },
+              onBackgroundEnriched: () => refreshFreezer(),
+            });
+          } else await runNewSessionFreezeQuick({ vfs: writer });
         }
         await client.clearAllMessages();
         // Clear the thread directly — re-selection only *requests* a replay,
@@ -378,7 +393,9 @@ function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
         log.error('WC new session failed', err);
       } finally {
         newSessionInFlight = false;
-        freezerNew()?.removeAttribute('busy');
+        const el = freezerNew();
+        el?.removeAttribute('busy');
+        el?.removeAttribute('progress');
       }
     })();
   };

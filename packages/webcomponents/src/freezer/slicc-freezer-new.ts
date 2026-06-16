@@ -169,12 +169,30 @@ const STYLE = `
    lucide loader the moment the new-chat work is kicked off (optimistically on a
    save click, or whenever the host sets the busy attribute), so there is
    immediate feedback before any save/reload completes. */
-.fznew-spinner { display: grid; place-items: center; color: var(--ctx); }
+.fznew-spinner { display: grid; place-items: center; color: var(--ctx); position: relative; }
 .fznew-spinner svg { display: block; animation: slicc-fznew-spin 0.8s linear infinite; }
 @keyframes slicc-fznew-spin { to { transform: rotate(360deg); } }
 
+/* .fznew-ring — determinate countdown ring drawn around the badge when the host
+   drives the progress attribute (the new-session save race's 20s timer). A
+   conic-gradient sweep filled to --fznew-progress (0..1) of a full turn,
+   masked to a thin ring so the spinning loader still reads inside it. */
+.fznew-ring {
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  background: conic-gradient(
+    var(--ctx) calc(var(--fznew-progress, 0) * 360deg),
+    color-mix(in srgb, var(--ctx) 18%, transparent) 0
+  );
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+  pointer-events: none;
+}
+
 /* Respect prefers-reduced-motion: no fade, no spin — just hold the static end
-   state (the loader glyph still shows, it simply does not rotate). */
+   state (the loader glyph still shows, it simply does not rotate). The
+   determinate ring stays — it conveys progress, not motion. */
 @media (prefers-reduced-motion: reduce) {
   .fznew, .nlbl { transition: none; }
   .fznew-spinner svg { animation: none; }
@@ -222,10 +240,14 @@ const SHEET = sheet(STYLE);
  * @attr label - the label text / accessible name (default "New chat")
  * @attr busy - boolean; swaps the badge glyph for a spinning loader (entered
  *   optimistically on a save click; also host-drivable)
+ * @attr progress - number 0..1; while busy, draws a determinate countdown ring
+ *   around the badge filled to this fraction (host-driven by the save race's
+ *   20s timer). Absent → the busy state is the plain indeterminate spinner.
  * @csspart button - the inner `<button>` element (the `.fznew` node)
  * @csspart badge - the circular `.nico` icon badge
  * @csspart icon - the lucide `<svg>` glyph inside the badge
  * @csspart spinner - the busy-state spinner wrapper around the loader glyph
+ * @csspart ring - the determinate progress ring drawn around the spinner
  * @csspart label - the `.nlbl` text span
  * @csspart options - the `.fznew-options` legend (expanded, hover/focus only)
  * @csspart option-save / option-skip / option-erase - the three legend buttons
@@ -236,7 +258,7 @@ const SHEET = sheet(STYLE);
  * @fires new-chat-erase - long press / modifier-click: new chat erasing this one
  */
 export class SliccFreezerNew extends HTMLElement {
-  static readonly observedAttributes = ['expanded', 'label', 'busy'];
+  static readonly observedAttributes = ['expanded', 'label', 'busy', 'progress'];
 
   readonly #root: ShadowRoot;
   #button: HTMLButtonElement | null = null;
@@ -261,7 +283,11 @@ export class SliccFreezerNew extends HTMLElement {
     this.#clearPendingShort();
   }
 
-  attributeChangedCallback(): void {
+  attributeChangedCallback(name: string): void {
+    // Progress updates fire on a fast timer; when the ring already exists,
+    // mutate its CSS var in place rather than re-rendering — a full render
+    // would rebuild the loader <svg> and restart its spin animation each tick.
+    if (name === 'progress' && this.#updateProgressInPlace()) return;
     if (this.isConnected) this.#render();
   }
 
@@ -298,14 +324,53 @@ export class SliccFreezerNew extends HTMLElement {
     this.toggleAttribute('busy', value);
   }
 
+  /**
+   * Determinate progress (0..1) for the busy-state countdown ring. `null`
+   * (attribute absent) → the plain indeterminate spinner. Out-of-range values
+   * are clamped. Reflected to the `progress` attribute; only renders a ring
+   * while {@link busy}.
+   */
+  get progress(): number | null {
+    const raw = this.getAttribute('progress');
+    if (raw == null) return null;
+    const n = Number.parseFloat(raw);
+    return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : null;
+  }
+
+  set progress(value: number | null) {
+    if (value == null) this.removeAttribute('progress');
+    else this.setAttribute('progress', String(Math.min(1, Math.max(0, value))));
+  }
+
+  /**
+   * Fast-path for streaming `progress` updates: if the ring is already in the
+   * DOM (busy + progress present), just update its `--fznew-progress` var and
+   * skip the full re-render. Returns false when a full render is needed to add
+   * or remove the ring (busy/progress just toggled).
+   */
+  #updateProgressInPlace(): boolean {
+    const ring = this.#root.querySelector('.fznew-ring') as HTMLElement | null;
+    if (!ring || !this.busy || !this.hasAttribute('progress')) return false;
+    ring.style.setProperty('--fznew-progress', String(this.progress ?? 0));
+    return true;
+  }
+
   #render(): void {
     const label = this.label;
     const busy = this.busy;
+    const showRing = busy && this.hasAttribute('progress');
 
     const glyph = busy
       ? h(
           'span',
           { class: 'fznew-spinner', part: 'spinner' },
+          showRing
+            ? h('span', {
+                class: 'fznew-ring',
+                part: 'ring',
+                style: `--fznew-progress:${this.progress ?? 0}`,
+              })
+            : null,
           iconEl(SPINNER_ICON, { size: ICON_SIZE, part: 'icon' })
         )
       : h('slot', { name: 'icon' }, iconEl(NEW_CHAT_ICON, { size: ICON_SIZE, part: 'icon' }));
