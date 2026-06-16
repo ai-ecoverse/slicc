@@ -235,6 +235,28 @@ function buildSliccEditorPlugin() {
   };
 }
 
+/**
+ * The realm `sandbox.html` iframe runs outside the TS module graph and has
+ * no `globalThis.Buffer` of its own. Bundle the webapp's `buffer@6.0.3`
+ * polyfill as a standalone IIFE so the iframe can pull it in via
+ * `<script src="buffer-polyfill.js">` before the realm bootstrap executes.
+ * Keeps Buffer parity with the standalone worker float
+ * (`js-realm-shared.ts` imports the same polyfill at module load).
+ */
+function buildBufferPolyfillPlugin() {
+  return {
+    name: 'build-buffer-polyfill',
+    async closeBundle() {
+      const esbuild = await import('esbuild');
+      await esbuild.build({
+        ...PROD_IIFE_DEFAULTS,
+        entryPoints: [resolve(Dirname, '../webapp/src/shims/buffer-polyfill.ts')],
+        outfile: resolve(outDir, 'buffer-polyfill.js'),
+      });
+    },
+  };
+}
+
 /** `<slicc-diff>` IIFE bundle for sprinkle iframes. */
 function buildSliccDiffPlugin() {
   return {
@@ -582,6 +604,7 @@ export default defineConfig(({ mode }) => ({
     buildSecretsPagePlugin(),
     buildSliccEditorPlugin(),
     buildSliccDiffPlugin(),
+    buildBufferPolyfillPlugin(),
     copyExtensionAssetsPlugin(),
     buildFfmpegWorkerPlugin(),
     stripFfmpegCoreCdnLiteralPlugin(),

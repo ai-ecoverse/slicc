@@ -403,4 +403,38 @@ describe('sandbox.html mirror parity', () => {
     // require('fs') / require('node:fs') through the realm-port fsBridge).
     expect(sandbox).not.toMatch(/\b(?:const|let|var)\s+fs\s*=/);
   });
+
+  it('ships the buffer polyfill so the iframe float matches worker Buffer availability', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const repoRoot = resolve(here, '..', '..', '..', '..', '..');
+    const sandbox = readFileSync(
+      resolve(repoRoot, 'packages/chrome-extension/sandbox.html'),
+      'utf-8'
+    );
+    const shared = readFileSync(
+      resolve(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-shared.ts'),
+      'utf-8'
+    );
+    // The standalone worker float pulls in the polyfill at module load
+    // so `globalThis.Buffer` is populated before user code runs.
+    expect(shared).toMatch(/import\s+['"][^'"]*buffer-polyfill[^'"]*['"]/);
+    // The extension float ships the compiled polyfill as a bundled
+    // <script> asset loaded BEFORE the realm bootstrap inline <script>
+    // (so the iframe's globalThis.Buffer is set before runRealm runs).
+    expect(sandbox).toMatch(/<script\s+src=["']buffer-polyfill\.js["']\s*>\s*<\/script>/);
+    const polyfillIdx = sandbox.search(
+      /<script\s+src=["']buffer-polyfill\.js["']\s*>\s*<\/script>/
+    );
+    const realmInlineIdx = sandbox.indexOf('function bootstrapRealmPort');
+    expect(polyfillIdx).toBeGreaterThanOrEqual(0);
+    expect(realmInlineIdx).toBeGreaterThan(polyfillIdx);
+    // require('buffer') / require('node:buffer') in both floats reads
+    // through globalThis.Buffer — pin that the resolver did not get
+    // replaced with the legacy `Buffer: undefined` placeholder.
+    expect(shared).toMatch(/bareId\s*===\s*'buffer'[\s\S]*?globalThis[\s\S]*?Buffer/);
+    expect(sandbox).toMatch(/bareId\s*===\s*'buffer'[\s\S]*?globalThis\.Buffer/);
+  });
 });

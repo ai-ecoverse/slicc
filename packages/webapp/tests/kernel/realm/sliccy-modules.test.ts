@@ -286,6 +286,71 @@ describe('require("fs") / require("node:fs") still return the VFS bridge', () =>
   });
 });
 
+describe('Buffer is reachable through the realm seam in both floats', () => {
+  it("require('node:buffer').Buffer round-trips Buffer.from/.toString", async () => {
+    const code = `
+      const { Buffer } = require('node:buffer');
+      console.log(typeof Buffer);
+      console.log(typeof Buffer.from);
+      console.log(Buffer.from('hi-node').toString());
+      console.log(Buffer.from('aGVsbG8=', 'base64').toString());
+    `;
+    const out = await runCode(code, makeCtx());
+    expect(out.exitCode).toBe(0);
+    const lines = out.stdout.split('\n').filter(Boolean);
+    expect(lines[0]).toBe('function');
+    expect(lines[1]).toBe('function');
+    expect(lines[2]).toBe('hi-node');
+    expect(lines[3]).toBe('hello');
+  });
+
+  it("require('buffer').Buffer (bare) also resolves to a working constructor", async () => {
+    const code = `
+      const { Buffer } = require('buffer');
+      console.log(typeof Buffer);
+      console.log(Buffer.from('bare-bare').toString());
+    `;
+    const out = await runCode(code, makeCtx());
+    expect(out.exitCode).toBe(0);
+    const lines = out.stdout.split('\n').filter(Boolean);
+    expect(lines[0]).toBe('function');
+    expect(lines[1]).toBe('bare-bare');
+  });
+
+  it('bare Buffer is a defined global in the realm and Buffer.alloc round-trips', async () => {
+    const code = `
+      console.log(typeof Buffer);
+      console.log(typeof Buffer.from);
+      console.log(typeof Buffer.alloc);
+      const a = Buffer.alloc(4);
+      a[0] = 104; a[1] = 105; a[2] = 33; a[3] = 0;
+      console.log(a.toString('utf-8', 0, 3));
+      console.log(Buffer.from([0x68, 0x69]).toString());
+    `;
+    const out = await runCode(code, makeCtx());
+    expect(out.exitCode).toBe(0);
+    const lines = out.stdout.split('\n').filter(Boolean);
+    expect(lines[0]).toBe('function');
+    expect(lines[1]).toBe('function');
+    expect(lines[2]).toBe('function');
+    expect(lines[3]).toBe('hi!');
+    expect(lines[4]).toBe('hi');
+  });
+
+  it("bare Buffer and require('node:buffer').Buffer refer to the same constructor", async () => {
+    const code = `
+      const { Buffer: B } = require('node:buffer');
+      console.log(B === Buffer);
+      console.log(B.from('x').toString() === Buffer.from('x').toString());
+    `;
+    const out = await runCode(code, makeCtx());
+    expect(out.exitCode).toBe(0);
+    const lines = out.stdout.split('\n').filter(Boolean);
+    expect(lines[0]).toBe('true');
+    expect(lines[1]).toBe('true');
+  });
+});
+
 describe('bespoke globals are fully removed from the realm', () => {
   it.each([
     'exec',
