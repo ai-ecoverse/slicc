@@ -290,4 +290,149 @@ describe('resolveDependencyTree', () => {
       })
     ).rejects.toThrow(/tarball/i);
   });
+
+  it('reuses a reachable lower version whose range is satisfied without nesting a higher copy', async () => {
+    const supplier = makeSupplier([
+      { name: 'left', versions: ['1.0.0'], deps: { '1.0.0': { shared: '1.0.0' } } },
+      { name: 'right', versions: ['1.0.0'], deps: { '1.0.0': { shared: '^1.0.0' } } },
+      { name: 'shared', versions: ['1.0.0', '1.2.0'] },
+    ]);
+    const plan = await resolveDependencyTree({
+      rootDependencies: { left: '^1.0.0', right: '^1.0.0' },
+      fetchPackument: supplier,
+    });
+
+    expect(plan.root.shared?.version).toBe('1.0.0');
+    expect(plan.root.left?.dependencies).toEqual({});
+    expect(plan.root.right?.dependencies).toEqual({});
+  });
+
+  it('compares the EXISTING node version against the incoming range, not a freshly resolved version', async () => {
+    let resolveCount = 0;
+    const wrappedSupplier: PackumentSupplier = async (name: string) => {
+      if (name === 'shared') resolveCount++;
+      const base = makeSupplier([
+        { name: 'first', versions: ['1.0.0'], deps: { '1.0.0': { shared: '1.0.0' } } },
+        { name: 'second', versions: ['1.0.0'], deps: { '1.0.0': { shared: '^1.0.0' } } },
+        { name: 'shared', versions: ['1.0.0', '1.5.0', '2.0.0'] },
+      ]);
+      return base(name);
+    };
+    const plan = await resolveDependencyTree({
+      rootDependencies: { first: '^1.0.0', second: '^1.0.0' },
+      fetchPackument: wrappedSupplier,
+    });
+
+    expect(plan.root.shared?.version).toBe('1.0.0');
+    expect(plan.root.second?.dependencies.shared).toBeUndefined();
+    expect(resolveCount).toBe(1);
+  });
+
+  it('hoist-vs-nest parity: compatible ranges hoist, incompatible ranges nest under the requester', async () => {
+    const supplier = makeSupplier([
+      { name: 'compat-left', versions: ['1.0.0'], deps: { '1.0.0': { dep: '^1.0.0' } } },
+      { name: 'compat-right', versions: ['1.0.0'], deps: { '1.0.0': { dep: '~1.2.0' } } },
+      { name: 'incompat-left', versions: ['1.0.0'], deps: { '1.0.0': { dep: '^1.0.0' } } },
+      { name: 'incompat-right', versions: ['1.0.0'], deps: { '1.0.0': { dep: '^3.0.0' } } },
+      { name: 'dep', versions: ['1.0.0', '1.2.0', '2.0.0', '3.0.0'] },
+    ]);
+
+    const compat = await resolveDependencyTree({
+      rootDependencies: { 'compat-left': '^1.0.0', 'compat-right': '^1.0.0' },
+      fetchPackument: supplier,
+    });
+    expect(compat.root.dep?.version).toBe('1.2.0');
+    expect(compat.root['compat-left']?.dependencies).toEqual({});
+    expect(compat.root['compat-right']?.dependencies).toEqual({});
+
+    const incompat = await resolveDependencyTree({
+      rootDependencies: { 'incompat-left': '^1.0.0', 'incompat-right': '^1.0.0' },
+      fetchPackument: supplier,
+    });
+    expect(incompat.root.dep?.version).toBe('1.2.0');
+    expect(incompat.root['incompat-left']?.dependencies).toEqual({});
+    const nested = incompat.root['incompat-right']?.dependencies.dep;
+    expect(nested?.version).toBe('3.0.0');
+  });
+
+  it('terminates on a conflicting-version cycle (A@1->B@^2, B@2->A@^1) with a finite plan', async () => {
+    const supplier = makeSupplier([
+      { name: 'a', versions: ['1.0.0'], deps: { '1.0.0': { b: '^2.0.0' } } },
+      { name: 'b', versions: ['2.0.0'], deps: { '2.0.0': { a: '^1.0.0' } } },
+    ]);
+    const plan = await resolveDependencyTree({
+      rootDependencies: { a: '^1.0.0' },
+      fetchPackument: supplier,
+    });
+    expect(plan.root.a?.version).toBe('1.0.0');
+    expect(plan.root.b?.version).toBe('2.0.0');
+    expect(plan.root.a?.dependencies).toEqual({});
+  });
+
+  it('terminates on a conflicting-version cycle with version-drift around the loop (path-visited)', async () => {
+    const supplier = makeSupplier([
+      {
+        name: 'a',
+        versions: ['1.0.0', '2.0.0'],
+        deps: {
+          '1.0.0': { b: '^2.0.0' },
+          '2.0.0': { b: '^1.0.0' },
+        },
+      },
+      {
+        name: 'b',
+        versions: ['1.0.0', '2.0.0'],
+        deps: {
+          '1.0.0': { a: '^1.0.0' },
+          '2.0.0': { a: '^2.0.0' },
+        },
+      },
+    ]);
+
+    const plan = await resolveDependencyTree({
+      rootDependencies: { a: '^1.0.0' },
+      fetchPackument: supplier,
+    });
+
+    expect(plan.root.a?.version).toBe('1.0.0');
+    expect(plan.root.b?.version).toBe('2.0.0');
+
+    const nestedA = plan.root.b?.dependencies.a;
+    expect(nestedA?.version).toBe('2.0.0');
+    const nestedB = nestedA?.dependencies.b;
+    expect(nestedB?.version).toBe('1.0.0');
+    expect(nestedB?.dependencies).toEqual({});
+
+    const allNodes = countNodes(plan.root);
+    expect(allNodes).toBeLessThan(20);
+  });
+
+  it('preserves finite nesting for a genuine version conflict (no over-dedup)', async () => {
+    const supplier = makeSupplier([
+      { name: 'top', versions: ['1.0.0'], deps: { '1.0.0': { lib: '^1.0.0' } } },
+      { name: 'side', versions: ['1.0.0'], deps: { '1.0.0': { lib: '^2.0.0' } } },
+      { name: 'lib', versions: ['1.0.0', '2.0.0'] },
+    ]);
+    const plan = await resolveDependencyTree({
+      rootDependencies: { top: '^1.0.0', side: '^1.0.0' },
+      fetchPackument: supplier,
+    });
+
+    expect(plan.root.lib?.version).toBe('1.0.0');
+    const nested = plan.root.side?.dependencies.lib;
+    expect(nested?.version).toBe('2.0.0');
+  });
 });
+
+function countNodes(root: Record<string, InstallNode>): number {
+  let count = 0;
+  const seen = new Set<InstallNode>();
+  const visit = (n: InstallNode): void => {
+    if (seen.has(n)) return;
+    seen.add(n);
+    count++;
+    for (const child of Object.values(n.dependencies)) visit(child);
+  };
+  for (const top of Object.values(root)) visit(top);
+  return count;
+}

@@ -7,8 +7,21 @@
  * layout: compatible duplicates are hoisted to the top, conflicting versions
  * are nested under the dependent's `node_modules/<dep>/node_modules/...`.
  *
- * Cycles in the dependency graph terminate (the walk reuses an existing entry
- * for the same name + concrete version instead of re-enqueuing its deps).
+ * Placement follows npm/Arborist nearest-scope, satisfies-based dedup:
+ *   1. For each edge (name, range) under parent P, walk P's node_modules
+ *      ancestor chain NEAREST-FIRST and then the top level to find the
+ *      nearest already-placed node for `name`.
+ *   2. If the nearest placed `name`'s resolved version satisfies `range`,
+ *      REUSE it (no re-resolution, no nested copy).
+ *   3. Otherwise resolve `range` to a concrete version and either NEST a
+ *      fresh node under P (incompatible) or HOIST one to the top level
+ *      (no `name` reachable in any scope).
+ *
+ * Cycle termination is robust for ALL cycles, including conflicting-version
+ * cycles whose concrete versions drift around the loop: when resolving the
+ * incoming range yields a name@version that already appears in-progress on
+ * the current ancestor path, we link to that ancestor instead of recursing
+ * again.
  *
  * This module owns architecture 4.1 responsibility #1 only (install-time
  * resolution). Module resolution at require/ipx time (responsibility #2) is
@@ -17,6 +30,7 @@
 
 import type { Packument, PackumentVersion } from './registry.js';
 import { resolveVersion } from './registry.js';
+import { satisfies } from './semver.js';
 
 export interface InstallNode {
   name: string;
@@ -37,21 +51,15 @@ export interface ResolveDependencyTreeOptions {
   fetchPackument: PackumentSupplier;
 }
 
-interface WorkItem {
-  name: string;
-  range: string;
-  ancestors: InstallNode[];
-}
-
 /**
  * Resolve the full transitive install plan for `rootDependencies`.
  *
  * The plan is shaped like an npm-style `node_modules` tree:
- *   - the first concrete version chosen for a given name is hoisted to the top;
- *   - any later request that resolves to a different concrete version is nested
- *     under the immediate requester's `dependencies`;
- *   - any later request that resolves to the same already-placed version is
- *     skipped (it would refer to the existing entry on disk).
+ *   - the nearest reachable already-placed version that SATISFIES the
+ *     incoming range is reused (no re-resolution, no nested copy);
+ *   - if the nearest reachable version does not satisfy, a fresh node is
+ *     nested under the dependent's `node_modules`;
+ *   - if no copy is reachable, a fresh node is hoisted to the top level.
  *
  * Packuments are fetched on demand via the supplied `fetchPackument` and
  * memoized so each name is queried at most once.
@@ -70,61 +78,29 @@ export async function resolveDependencyTree(
     return cached;
   }
 
-  const queue: WorkItem[] = [];
-  for (const [name, range] of Object.entries(options.rootDependencies)) {
-    queue.push({ name, range, ancestors: [] });
+  async function place(name: string, range: string, ancestors: InstallNode[]): Promise<void> {
+    const nearest = findNearest(name, ancestors, top);
+    if (nearest && satisfies(nearest.version, range)) {
+      return;
+    }
+
+    const resolved = await resolveEdge(name, range, getPackument);
+    if (isInProgress(name, resolved.version, ancestors)) {
+      return;
+    }
+
+    const node = buildNode(name, resolved.version, resolved.entry);
+    attachNode(top, node, nearest, ancestors);
+
+    const childAncestors: InstallNode[] = [node, ...ancestors];
+    const deps = resolved.entry.dependencies ?? {};
+    for (const [depName, depRange] of Object.entries(deps)) {
+      await place(depName, depRange, childAncestors);
+    }
   }
 
-  while (queue.length > 0) {
-    const item = queue.shift() as WorkItem;
-
-    let packument: Packument;
-    let version: string;
-    try {
-      packument = await getPackument(item.name);
-      version = resolveVersion(packument, item.range);
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      throw new Error(
-        `resolveDependencyTree: failed to resolve ${item.name}@${item.range}: ${reason}`
-      );
-    }
-
-    const existing = findNearest(item.name, item.ancestors, top);
-    if (existing && existing.version === version) {
-      continue;
-    }
-
-    const versionEntry = packument.versions[version] as PackumentVersion | undefined;
-    if (!versionEntry?.dist?.tarball) {
-      throw new Error(
-        `resolveDependencyTree: ${item.name}@${version} has no dist.tarball in the packument`
-      );
-    }
-
-    const node: InstallNode = {
-      name: item.name,
-      version,
-      resolved: versionEntry.dist.tarball,
-      dependencies: {},
-    };
-    if (typeof versionEntry.dist.integrity === 'string') {
-      node.integrity = versionEntry.dist.integrity;
-    }
-
-    if (existing) {
-      const parent = item.ancestors[0];
-      if (!parent) continue;
-      parent.dependencies[item.name] = node;
-    } else {
-      top[item.name] = node;
-    }
-
-    const childAncestors: InstallNode[] = [node, ...item.ancestors];
-    const deps = versionEntry.dependencies ?? {};
-    for (const [depName, depRange] of Object.entries(deps)) {
-      queue.push({ name: depName, range: depRange, ancestors: childAncestors });
-    }
+  for (const [name, range] of Object.entries(options.rootDependencies)) {
+    await place(name, range, []);
   }
 
   return { root: top };
@@ -140,4 +116,67 @@ function findNearest(
     if (inAncestor) return inAncestor;
   }
   return top[name] ?? null;
+}
+
+interface ResolvedEdge {
+  version: string;
+  entry: PackumentVersion;
+}
+
+async function resolveEdge(
+  name: string,
+  range: string,
+  getPackument: (name: string) => Promise<Packument>
+): Promise<ResolvedEdge> {
+  let packument: Packument;
+  let version: string;
+  try {
+    packument = await getPackument(name);
+    version = resolveVersion(packument, range);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`resolveDependencyTree: failed to resolve ${name}@${range}: ${reason}`);
+  }
+
+  const entry = packument.versions[version] as PackumentVersion | undefined;
+  if (!entry?.dist?.tarball) {
+    throw new Error(
+      `resolveDependencyTree: ${name}@${version} has no dist.tarball in the packument`
+    );
+  }
+  return { version, entry };
+}
+
+function isInProgress(name: string, version: string, ancestors: InstallNode[]): boolean {
+  for (const a of ancestors) {
+    if (a.name === name && a.version === version) return true;
+  }
+  return false;
+}
+
+function buildNode(name: string, version: string, entry: PackumentVersion): InstallNode {
+  const node: InstallNode = {
+    name,
+    version,
+    resolved: entry.dist.tarball,
+    dependencies: {},
+  };
+  if (typeof entry.dist.integrity === 'string') {
+    node.integrity = entry.dist.integrity;
+  }
+  return node;
+}
+
+function attachNode(
+  top: Record<string, InstallNode>,
+  node: InstallNode,
+  nearest: InstallNode | null,
+  ancestors: InstallNode[]
+): void {
+  const parent = nearest ? ancestors[0] : null;
+  if (parent) {
+    parent.dependencies[node.name] = node;
+  } else {
+    top[node.name] = node;
+  }
 }
