@@ -12,7 +12,7 @@
 import type { Command, CommandContext, ExecResult, SecureFetch } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
-import { type InstallResult, installPackage } from '../ipk/installer.js';
+import { installPackages } from '../ipk/installer.js';
 
 export interface IpkCommandDeps {
   fs: VirtualFS;
@@ -69,31 +69,32 @@ async function runInstall(
     };
   }
 
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  let failed = 0;
-
-  for (const spec of specs) {
-    try {
-      const result: InstallResult = await installPackage(spec, {
-        fs: deps.fs,
-        fetch: deps.fetch,
-        cwd: ctx.cwd,
-      });
-      stdout.push(`${name}: installed ${result.name}@${result.version} -> ${result.installPath}`);
-    } catch (err) {
-      failed++;
-      const message = describeError(err);
-      stderr.push(`${name}: failed to install ${spec}: ${message}`);
-    }
+  let outcome: Awaited<ReturnType<typeof installPackages>>;
+  try {
+    outcome = await installPackages(specs, {
+      fs: deps.fs,
+      fetch: deps.fetch,
+      cwd: ctx.cwd,
+    });
+  } catch (err) {
+    return {
+      stdout: '',
+      stderr: `${name}: install failed: ${describeError(err)}\n`,
+      exitCode: 1,
+    };
   }
 
-  const finalStdout = stdout.length > 0 ? `${stdout.join('\n')}\n` : '';
-  const finalStderr = stderr.length > 0 ? `${stderr.join('\n')}\n` : '';
+  const stdout = outcome.results.map(
+    (r) => `${name}: installed ${r.name}@${r.version} -> ${r.installPath}`
+  );
+  const stderr = outcome.errors.map(
+    (e) => `${name}: failed to install ${e.spec}: ${describeError(e.error)}`
+  );
+
   return {
-    stdout: finalStdout,
-    stderr: finalStderr,
-    exitCode: failed === 0 ? 0 : 1,
+    stdout: stdout.length > 0 ? `${stdout.join('\n')}\n` : '',
+    stderr: stderr.length > 0 ? `${stderr.join('\n')}\n` : '',
+    exitCode: outcome.errors.length === 0 ? 0 : 1,
   };
 }
 

@@ -69,26 +69,35 @@ function computeChecksums(buf: Uint8Array, offset: number): { unsigned: number; 
 }
 
 function parsePaxRecords(data: Uint8Array): Record<string, string> {
+  // PAX records are framed by BYTE counts, so we walk the buffer byte-by-byte.
+  // Treating the length as a JS string index mishandles multibyte UTF-8 paths.
   const out: Record<string, string> = {};
-  const text = new TextDecoder().decode(data);
+  const decoder = new TextDecoder();
   let i = 0;
-  while (i < text.length) {
-    const spaceIdx = text.indexOf(' ', i);
-    if (spaceIdx === -1) break;
-    const lenStr = text.slice(i, spaceIdx);
+  while (i < data.length) {
+    let spaceIdx = i;
+    while (spaceIdx < data.length && data[spaceIdx] !== 0x20) spaceIdx++;
+    if (spaceIdx >= data.length) break;
+    const lenStr = decoder.decode(data.subarray(i, spaceIdx));
     const recLen = Number.parseInt(lenStr, 10);
-    if (!Number.isFinite(recLen) || recLen <= 0 || i + recLen > text.length) {
+    if (
+      !Number.isFinite(recLen) ||
+      recLen <= 0 ||
+      String(recLen) !== lenStr ||
+      i + recLen > data.length
+    ) {
       throw new Error(`readTar: malformed PAX record near offset ${i}`);
     }
-    const record = text.slice(i, i + recLen);
-    const eq = record.indexOf('=');
-    if (eq === -1) {
+    const recordEnd = i + recLen;
+    let eqIdx = spaceIdx + 1;
+    while (eqIdx < recordEnd && data[eqIdx] !== 0x3d) eqIdx++;
+    if (eqIdx >= recordEnd) {
       throw new Error('readTar: malformed PAX record (no key=value)');
     }
-    const key = record.slice(spaceIdx - i + 1, eq);
-    const value = record.slice(eq + 1, record.length - 1);
+    const key = decoder.decode(data.subarray(spaceIdx + 1, eqIdx));
+    const value = decoder.decode(data.subarray(eqIdx + 1, recordEnd - 1));
     out[key] = value;
-    i += recLen;
+    i = recordEnd;
   }
   return out;
 }

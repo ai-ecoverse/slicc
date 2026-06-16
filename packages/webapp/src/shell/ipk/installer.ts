@@ -1,20 +1,29 @@
 /**
- * Single-package install path for ipk (Ice Pack).
+ * Install path for ipk (Ice Pack).
  *
- * Resolves a `<name>[@<spec>]` install argument against the npm registry,
- * downloads + extracts the tarball into `<cwd>/node_modules/<name>` on the
- * supplied VirtualFS, and records the dependency in `<cwd>/package.json`
- * without clobbering existing fields. Pure and individually testable —
- * takes an injected `SecureFetch` so it works in both floats (CLI worker
- * + extension sandbox) and in unit tests.
+ * Resolves `<name>[@<spec>]` install arguments against the npm registry, walks
+ * the full transitive dependency graph via `resolveDependencyTree`, downloads
+ * each tarball, extracts it into an npm-style `node_modules` layout (compatible
+ * duplicates hoisted to the top, conflicting versions nested under the
+ * dependent's own `node_modules`), creates `node_modules/.bin` shims for every
+ * declared bin (direct AND transitive) without leaving phantom entries for
+ * bin-less packages, and records only the directly-requested packages in the
+ * project `package.json` (transitive dependencies are NOT promoted).
  *
- * M1 scope: a single named package, no transitive resolution, no lockfile,
- * no `.bin` shims. Transitive dep-tree work happens in M2 / M4.
+ * Pure and individually testable: takes an injected `SecureFetch` and
+ * `VirtualFS`, so it works in both floats (CLI worker + extension sandbox) and
+ * in unit tests.
  */
 
 import type { SecureFetch } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
-import { fetchPackument, fetchTarball, resolveVersion } from './registry.js';
+import { fetchPackument, fetchTarball, type Packument, resolveVersion } from './registry.js';
+import {
+  type InstallNode,
+  type InstallPlan,
+  type PackumentSupplier,
+  resolveDependencyTree,
+} from './resolver.js';
 import { gunzip, readTar, type TarEntry } from './tar.js';
 
 export interface InstallOptions {
@@ -31,6 +40,16 @@ export interface InstallResult {
   installPath: string;
   range: string;
   manifestPath: string;
+}
+
+export interface InstallFailure {
+  spec: string;
+  error: Error;
+}
+
+export interface InstallPackagesResult {
+  results: InstallResult[];
+  errors: InstallFailure[];
 }
 
 export interface ParsedSpec {
@@ -72,12 +91,12 @@ function joinPath(base: string, ...parts: string[]): string {
   return `/${segments.join('/')}`;
 }
 
-function packageDirFor(cwd: string, pkgName: string): string {
+function packageDirIn(modulesDir: string, pkgName: string): string {
   if (pkgName.startsWith('@')) {
     const [scope, name] = pkgName.split('/', 2);
-    return joinPath(cwd, 'node_modules', scope, name);
+    return joinPath(modulesDir, scope, name);
   }
-  return joinPath(cwd, 'node_modules', pkgName);
+  return joinPath(modulesDir, pkgName);
 }
 
 async function ensureDir(fs: VirtualFS, path: string): Promise<void> {
@@ -140,40 +159,82 @@ interface ProjectManifest {
   [key: string]: unknown;
 }
 
-async function recordDependency(
-  fs: VirtualFS,
-  cwd: string,
-  pkgName: string,
-  range: string
-): Promise<string> {
-  const manifestPath = joinPath(cwd, 'package.json');
-  const existing = await readJsonOr<ProjectManifest>(fs, manifestPath, {});
-  const next: ProjectManifest = { ...existing };
-  const deps = { ...(existing.dependencies ?? {}) };
-  deps[pkgName] = range;
-  next.dependencies = deps;
-  await fs.writeFile(manifestPath, `${JSON.stringify(next, null, 2)}\n`);
-  return manifestPath;
+interface InstalledPackageManifest {
+  name?: string;
+  bin?: string | Record<string, string>;
+  [key: string]: unknown;
 }
 
-export async function installPackage(
-  spec: string,
-  options: InstallOptions
-): Promise<InstallResult> {
-  const { fs, fetch, cwd, timeoutMs } = options;
-  const parsed = parseInstallSpec(spec);
-  const packument = await fetchPackument(parsed.name, fetch, { timeoutMs });
-  const version = resolveVersion(packument, parsed.range);
-  const versionEntry = packument.versions[version];
-  if (!versionEntry?.dist?.tarball) {
-    throw new Error(
-      `ipk: packument for '${parsed.name}@${version}' is missing dist.tarball; cannot download`
-    );
+function buildPackumentSupplier(
+  fetch: SecureFetch,
+  timeoutMs?: number
+): { supplier: PackumentSupplier; cache: Map<string, Packument> } {
+  const cache = new Map<string, Packument>();
+  const supplier: PackumentSupplier = async (name: string) => {
+    let cached = cache.get(name);
+    if (cached) return cached;
+    cached = await fetchPackument(name, fetch, { timeoutMs });
+    cache.set(name, cached);
+    return cached;
+  };
+  return { supplier, cache };
+}
+
+interface ResolvedDirect {
+  spec: string;
+  parsed: ParsedSpec;
+}
+
+async function stageResolveRoots(
+  specs: string[],
+  supplier: PackumentSupplier
+): Promise<{ directs: ResolvedDirect[]; errors: InstallFailure[] }> {
+  const directs: ResolvedDirect[] = [];
+  const errors: InstallFailure[] = [];
+  const seen = new Set<string>();
+
+  for (const spec of specs) {
+    let parsed: ParsedSpec;
+    try {
+      parsed = parseInstallSpec(spec);
+    } catch (err) {
+      errors.push({ spec, error: toError(err) });
+      continue;
+    }
+    if (seen.has(parsed.name)) {
+      // Later specs for the same name override earlier ones.
+      const idx = directs.findIndex((d) => d.parsed.name === parsed.name);
+      if (idx >= 0) directs.splice(idx, 1);
+    }
+    try {
+      const packument = await supplier(parsed.name);
+      resolveVersion(packument, parsed.range);
+    } catch (err) {
+      errors.push({ spec, error: toError(err) });
+      continue;
+    }
+    directs.push({ spec, parsed });
+    seen.add(parsed.name);
   }
-  const tarballBytes = await fetchTarball(versionEntry.dist.tarball, fetch, { timeoutMs });
+
+  return { directs, errors };
+}
+
+function toError(err: unknown): Error {
+  return err instanceof Error ? err : new Error(String(err));
+}
+
+async function materializeNode(
+  fs: VirtualFS,
+  parentModulesDir: string,
+  node: InstallNode,
+  fetch: SecureFetch,
+  timeoutMs: number | undefined
+): Promise<void> {
+  const tarballBytes = await fetchTarball(node.resolved, fetch, { timeoutMs });
   const entries = readTar(gunzip(tarballBytes));
 
-  const installDir = packageDirFor(cwd, parsed.name);
+  const installDir = packageDirIn(parentModulesDir, node.name);
   await removeIfExists(fs, installDir);
   await ensureDir(fs, installDir);
   try {
@@ -183,15 +244,169 @@ export async function installPackage(
     throw err;
   }
 
-  const range = chooseSavedRange(parsed, version);
-  const manifestPath = await recordDependency(fs, cwd, parsed.name, range);
+  const nestedNames = Object.keys(node.dependencies);
+  if (nestedNames.length > 0) {
+    const childModulesDir = joinPath(installDir, 'node_modules');
+    await ensureDir(fs, childModulesDir);
+    for (const childName of nestedNames) {
+      await materializeNode(fs, childModulesDir, node.dependencies[childName], fetch, timeoutMs);
+    }
+  }
+}
 
-  return {
-    ok: true,
-    name: parsed.name,
-    version,
-    installPath: installDir,
-    range,
-    manifestPath,
-  };
+async function materializePlan(
+  fs: VirtualFS,
+  modulesDir: string,
+  plan: InstallPlan,
+  fetch: SecureFetch,
+  timeoutMs: number | undefined
+): Promise<void> {
+  const topNames = Object.keys(plan.root);
+  if (topNames.length === 0) return;
+  await ensureDir(fs, modulesDir);
+  for (const name of topNames) {
+    await materializeNode(fs, modulesDir, plan.root[name], fetch, timeoutMs);
+  }
+}
+
+function unscopedName(pkgName: string): string {
+  if (pkgName.startsWith('@')) {
+    const slash = pkgName.indexOf('/');
+    if (slash !== -1) return pkgName.slice(slash + 1);
+  }
+  return pkgName;
+}
+
+function normalizeBin(
+  bin: string | Record<string, string>,
+  pkgName: string
+): Record<string, string> {
+  if (typeof bin === 'string') {
+    return { [unscopedName(pkgName)]: bin };
+  }
+  return bin;
+}
+
+function normalizeBinPath(p: string): string {
+  return p.replace(/^\.\//, '').replace(/^\/+/, '');
+}
+
+function buildShim(pkgName: string, binPath: string): string {
+  const target = `../${pkgName}/${normalizeBinPath(binPath)}`;
+  return `#!/usr/bin/env node\nrequire(${JSON.stringify(target)});\n`;
+}
+
+async function createBinShimsForLevel(
+  fs: VirtualFS,
+  modulesDir: string,
+  nodes: Record<string, InstallNode>
+): Promise<void> {
+  const binDir = joinPath(modulesDir, '.bin');
+  let createdAny = false;
+
+  for (const [name, node] of Object.entries(nodes)) {
+    const installDir = packageDirIn(modulesDir, name);
+    const pkgJsonPath = joinPath(installDir, 'package.json');
+    const manifest = await readJsonOr<InstalledPackageManifest | null>(fs, pkgJsonPath, null);
+
+    if (manifest?.bin !== undefined && manifest.bin !== null) {
+      const bins = normalizeBin(manifest.bin, name);
+      for (const [binName, binPath] of Object.entries(bins)) {
+        if (typeof binName !== 'string' || binName.length === 0) continue;
+        if (typeof binPath !== 'string' || binPath.length === 0) continue;
+        if (!createdAny) {
+          await ensureDir(fs, binDir);
+          createdAny = true;
+        }
+        const shimPath = joinPath(binDir, binName);
+        await fs.writeFile(shimPath, buildShim(name, binPath));
+      }
+    }
+
+    if (Object.keys(node.dependencies).length > 0) {
+      const childModulesDir = joinPath(installDir, 'node_modules');
+      await createBinShimsForLevel(fs, childModulesDir, node.dependencies);
+    }
+  }
+}
+
+async function recordDirectDependencies(
+  fs: VirtualFS,
+  cwd: string,
+  entries: Array<{ name: string; range: string }>
+): Promise<string> {
+  const manifestPath = joinPath(cwd, 'package.json');
+  const existing = await readJsonOr<ProjectManifest>(fs, manifestPath, {});
+  const next: ProjectManifest = { ...existing };
+  const deps = { ...(existing.dependencies ?? {}) };
+  for (const entry of entries) {
+    deps[entry.name] = entry.range;
+  }
+  next.dependencies = deps;
+  await fs.writeFile(manifestPath, `${JSON.stringify(next, null, 2)}\n`);
+  return manifestPath;
+}
+
+export async function installPackages(
+  specs: string[],
+  options: InstallOptions
+): Promise<InstallPackagesResult> {
+  const { fs, fetch, cwd, timeoutMs } = options;
+  if (specs.length === 0) {
+    return { results: [], errors: [] };
+  }
+
+  const { supplier } = buildPackumentSupplier(fetch, timeoutMs);
+  const { directs, errors: stageErrors } = await stageResolveRoots(specs, supplier);
+  if (directs.length === 0) {
+    return { results: [], errors: stageErrors };
+  }
+
+  const rootDependencies: Record<string, string> = {};
+  for (const direct of directs) {
+    rootDependencies[direct.parsed.name] = direct.parsed.range;
+  }
+
+  const plan = await resolveDependencyTree({
+    rootDependencies,
+    fetchPackument: supplier,
+  });
+
+  const modulesDir = joinPath(cwd, 'node_modules');
+  await materializePlan(fs, modulesDir, plan, fetch, timeoutMs);
+  await createBinShimsForLevel(fs, modulesDir, plan.root);
+
+  const records = directs.map((d) => {
+    const node = plan.root[d.parsed.name];
+    if (!node) throw new Error(`installer: resolved node missing for ${d.parsed.name}`);
+    return { name: d.parsed.name, range: chooseSavedRange(d.parsed, node.version) };
+  });
+  const manifestPath = await recordDirectDependencies(fs, cwd, records);
+
+  const results: InstallResult[] = directs.map((d) => {
+    const node = plan.root[d.parsed.name];
+    const installPath = packageDirIn(modulesDir, d.parsed.name);
+    return {
+      ok: true,
+      name: d.parsed.name,
+      version: node.version,
+      installPath,
+      range: chooseSavedRange(d.parsed, node.version),
+      manifestPath,
+    };
+  });
+
+  return { results, errors: stageErrors };
+}
+
+export async function installPackage(
+  spec: string,
+  options: InstallOptions
+): Promise<InstallResult> {
+  const { results, errors } = await installPackages([spec], options);
+  if (errors.length > 0) throw errors[0].error;
+  if (results.length === 0) {
+    throw new Error(`ipk: install of '${spec}' produced no result`);
+  }
+  return results[0];
 }
