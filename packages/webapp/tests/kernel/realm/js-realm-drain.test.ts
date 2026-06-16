@@ -143,17 +143,22 @@ describe('realm RPC drain before teardown', () => {
 
   it('bypasses the drain on explicit process.exit so teardown is immediate', async () => {
     // `.catch(()=>{})` silences the expected disposal rejection.
+    // Use a SHORT delay (10 ms) so the pending RPC is still in-flight
+    // when process.exit() is called, but it WOULD settle INSIDE the
+    // drain window if the drain incorrectly runs. This ensures the test
+    // FAILS when the stale `didCallProcessExit` snapshot bug is present:
+    // the .then fires because the response arrives during the drain,
+    // so `done.stdout` contains 'then:'.
     const code = `const fs = require('fs'); fs.readFile('/x').then(v => console.log('then:' + v)).catch(()=>{}); process.exit(0);`;
     const start = Date.now();
-    const done = await runRealm(code, { delayMs: 500 });
+    const done = await runRealm(code, { delayMs: 10 });
     const elapsed = Date.now() - start;
     expect(done.exitCode).toBe(0);
-    // Without the bypass the 500 ms host delay + drain would let the
-    // .then fire; with the bypass dispose() rejects the pending RPC
+    // With the live-flag bypass, dispose() rejects the pending RPC
     // immediately and the .then never prints.
     expect(done.stdout).not.toContain('then:');
-    // Should be well under the drain ceiling (1000 ms) because we
-    // skipped it entirely.
-    expect(elapsed).toBeLessThan(300);
+    // Should be well under the drain ceiling because we skipped it
+    // entirely; a non-bypassed drain would take at least one tick.
+    expect(elapsed).toBeLessThan(50);
   });
 });
