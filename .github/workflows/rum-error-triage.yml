@@ -80,7 +80,7 @@ jobs:
 
       - name: Classify candidates and file issues
         if: steps.query.outputs.has_candidates == 'true' && github.event.inputs.dry_run != 'true'
-        uses: anthropics/claude-code-action@d5726de019ec4498aa667642bc3a80fca83aa102 # v1
+        uses: anthropics/claude-code-action@4d7e1f0cd85743fdc93b1c8040ab54395da024e2 # v1
         env:
           # Bedrock path: authenticate with an Amazon Bedrock API key (the Adobe
           # CAMP `ABSK...` bearer token). Set the AWS_BEARER_TOKEN_BEDROCK secret
