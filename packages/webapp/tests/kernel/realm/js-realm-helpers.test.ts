@@ -383,4 +383,24 @@ describe('sandbox.html mirror parity', () => {
       expect(sandbox).toContain(needle);
     }
   });
+
+  it('has no AsyncFunction("fs" / bare-fs injection anywhere and no top-level fs global', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const repoRoot = resolve(here, '..', '..', '..', '..', '..');
+    const sandbox = readFileSync(
+      resolve(repoRoot, 'packages/chrome-extension/sandbox.html'),
+      'utf-8'
+    );
+    // No AsyncFunction constructor call injects 'fs' as a parameter
+    // anywhere in the file (catches both the main runRealm path and any
+    // legacy one-off exec handler).
+    expect(sandbox).not.toMatch(/AsyncFunction\s*\(\s*['"]`?fs['"]`?/);
+    // No top-level const/var/let `fs` object exposes a bare fs global
+    // to user code (the VFS bridge must be reachable ONLY via
+    // require('fs') / require('node:fs') through the realm-port fsBridge).
+    expect(sandbox).not.toMatch(/\b(?:const|let|var)\s+fs\s*=/);
+  });
 });
