@@ -173,11 +173,29 @@ async function pickIconBestEffort(
 ): Promise<string | undefined> {
   try {
     const pick = opts.pickIcon ?? (await import('./quick-llm.js')).pickLucideIcon;
-    return (await pick({ subject: `"${title}" — an archived chat session` })) ?? undefined;
+    const picked = (await pick({ subject: `"${title}" — an archived chat session` })) ?? undefined;
+    return await keepIfLucide(picked);
   } catch (err) {
     log.warn('Icon pick failed (freeze still proceeds)', {
       error: err instanceof Error ? err.message : String(err),
     });
+    return undefined;
+  }
+}
+
+/**
+ * Validation gate at the recording boundary: drop any picked name that isn't
+ * a real lucide registry entry so a non-lucide string never reaches the index
+ * (the card then falls back to its snowflake / lazy backfill). The injectable
+ * `pickIcon` seam can return any string, so we validate against the same
+ * `lucideIconNames()` registry the default picker validates against.
+ */
+async function keepIfLucide(name: string | undefined): Promise<string | undefined> {
+  if (!name) return undefined;
+  try {
+    const { lucideIconNames } = await import('./quick-llm.js');
+    return lucideIconNames().includes(name) ? name : undefined;
+  } catch {
     return undefined;
   }
 }
@@ -593,8 +611,12 @@ export async function enrichPendingSession(
   if (agentMessages === null) return null;
   const calls = await runEnrichmentCalls(entry, agentMessages, opts);
   if (calls === null) return null;
-  await appendEnrichmentMemory(vfs, entry, calls.bullets, opts);
+  // Pick the icon BEFORE appending memory: the pick is a read-only LLM call
+  // that can hang, while the append is non-idempotent. Running it first means
+  // a hung/aborted pick leaves the archive cleanly pending with NO memory
+  // written yet, so the boot retry runs once with no duplicate memory.
   const icon = await pickEnrichmentIcon(opts, calls.newTitle);
+  await appendEnrichmentMemory(vfs, entry, calls.bullets, opts);
   return await commitEnrichedArchive(vfs, entry, archiveContent, calls.newTitle, icon);
 }
 
@@ -610,7 +632,9 @@ async function pickEnrichmentIcon(
 ): Promise<string | undefined> {
   if (!opts.pickIcon) return undefined;
   try {
-    return (await opts.pickIcon({ subject: `"${title}" — an archived chat session` })) ?? undefined;
+    const picked =
+      (await opts.pickIcon({ subject: `"${title}" — an archived chat session` })) ?? undefined;
+    return await keepIfLucide(picked);
   } catch (err) {
     log.warn('Enrichment icon pick failed (continuing without icon)', {
       error: err instanceof Error ? err.message : String(err),
