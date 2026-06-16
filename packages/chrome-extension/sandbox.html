@@ -319,11 +319,13 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
   }
   const argvWithParseFlags = attachArgvParseFlagsImpl(init.argv);
   const noColor = !!(init.env && init.env.NO_COLOR);
+  let didCallProcessExit = false;
   const processShim = {
     argv: argvWithParseFlags,
     env: init.env,
     cwd: () => init.cwd,
     exit: (code) => {
+      didCallProcessExit = true;
       const e = new Error('Process exited with code ' + (code || 0));
       e[NODE_EXIT] = Number.isFinite(code) ? Number(code) : 0;
       throw e;
@@ -1105,6 +1107,15 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
       const message = err instanceof Error ? (err.stack || err.message) : String(err);
       writeStderr(message + '\n');
       exitCode = 1;
+    }
+  }
+  if (!didCallProcessExit) {
+    const maxTicks = 50;
+    const deadline = Date.now() + 1000;
+    let ticks = 0;
+    while (pending.size > 0 && ticks < maxTicks && Date.now() < deadline) {
+      await new Promise(function (r) { setTimeout(r, 0); });
+      ticks++;
     }
   }
   port.postMessage({ type: 'realm-done', stdout: stdout.join(''), stderr: stderr.join(''), exitCode });

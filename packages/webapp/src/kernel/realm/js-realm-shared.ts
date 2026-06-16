@@ -142,36 +142,10 @@ export async function runJsRealm(
     stderrChunks.push(typeof value === 'string' ? value : String(value));
   };
 
-  const nodeConsole = {
-    log: (...parts: unknown[]) => writeStdout(`${parts.map(formatConsoleArg).join(' ')}\n`),
-    info: (...parts: unknown[]) => writeStdout(`${parts.map(formatConsoleArg).join(' ')}\n`),
-    warn: (...parts: unknown[]) => writeStderr(`${parts.map(formatConsoleArg).join(' ')}\n`),
-    error: (...parts: unknown[]) => writeStderr(`${parts.map(formatConsoleArg).join(' ')}\n`),
-  };
+  const nodeConsole = createNodeConsole(writeStdout, writeStderr);
 
-  // `process.stdin` is the only stdin surface (see `createStdinShim`).
-  const stdinShim = createStdinShim(init.stdin ?? '');
-
-  // `process.argv` carries a non-enumerable `parseFlags()` method so the
-  // per-skill argv-loop reinvention (~25 LoC × every skill) collapses to a
-  // single call. See `js-realm-helpers.ts` for the spec.
-  const argvWithParseFlags = attachArgvParseFlags(init.argv);
-  // `stdout.isTTY` matches the shell's TTY policy: realm output is captured
-  // and replayed verbatim, so we treat stdout as a TTY unless `NO_COLOR` is
-  // explicitly set in the realm env. The `c` global also honors `NO_COLOR`.
+  const { processShim, didCallProcessExit } = createProcessShim(init, writeStdout, writeStderr);
   const noColor = !!init.env?.NO_COLOR;
-  const processShim = {
-    argv: argvWithParseFlags,
-    env: init.env,
-    cwd: () => init.cwd,
-    exit: (codeValue?: number) => {
-      const normalized = Number.isFinite(codeValue) ? Number(codeValue) : 0;
-      throw new NodeExitError(normalized);
-    },
-    stdin: stdinShim,
-    stdout: { write: writeStdout, isTTY: !noColor },
-    stderr: { write: writeStderr, isTTY: !noColor },
-  };
 
   // `c` / `cli` are constructed together so cli.die/warn can call into c
   // without skills having to wire their own colorizer.
@@ -189,21 +163,7 @@ export async function runJsRealm(
 
   const fsBridge = createFsBridge(rpc, realmFetch);
 
-  // `exec(string)` parses the command through the shell — convenient
-  // for one-liners but punishing for anyone constructing commands
-  // programmatically (the spec called out the bespoke `shellQuote()`
-  // helpers skills kept reinventing). `exec.spawn(argv[])` mirrors
-  // `child_process.spawn(cmd, args)` and bypasses shell parsing on
-  // every arg, killing the quoting-trap class of bugs.
-  type ExecResult = { stdout: string; stderr: string; exitCode: number };
-  const execRun = (command: string): Promise<ExecResult> => rpc.call('exec', 'run', [command]);
-  const execBridge = Object.assign(execRun, {
-    spawn: (argv: string[]): Promise<ExecResult> => rpc.call('exec', 'spawn', [argv]),
-  }) as ((cmd: string) => Promise<ExecResult>) & {
-    spawn: (argv: string[]) => Promise<ExecResult>;
-    exec: typeof execRun;
-  };
-  execBridge.exec = execBridge;
+  const execBridge = createExecBridge(rpc);
 
   // `skill` is computed once at boot from argv[1] and frozen. It exposes
   // the script-relative path helpers and the skill-scoped config/token
@@ -290,6 +250,9 @@ export async function runJsRealm(
     writeStderr
   );
 
+  if (!didCallProcessExit) {
+    await drainPendingRpcs(rpc);
+  }
   rpc.dispose();
   const done: RealmDoneMsg = {
     type: 'realm-done',
@@ -298,6 +261,84 @@ export async function runJsRealm(
     exitCode,
   };
   port.postMessage(done);
+}
+
+/**
+ * Yield the event loop to let in-flight RPC callbacks (e.g.
+ * non-awaited `.then` chains on RPC-backed promises) settle before
+ * teardown. Bounded by a tick count and a wall-clock ceiling so a
+ * genuinely never-settling promise does not hang disposal.
+ */
+async function drainPendingRpcs(rpc: RealmRpcClient): Promise<void> {
+  const maxTicks = 50;
+  const deadline = Date.now() + 1000;
+  let ticks = 0;
+  while (rpc.pendingCount > 0 && ticks < maxTicks && Date.now() < deadline) {
+    await new Promise<void>((r) => setTimeout(r, 0));
+    ticks++;
+  }
+}
+
+function createNodeConsole(
+  writeStdout: (value: unknown) => void,
+  writeStderr: (value: unknown) => void
+) {
+  return {
+    log: (...parts: unknown[]) =>
+      writeStdout(`${parts.map(formatConsoleArg).join(' ')}
+`),
+    info: (...parts: unknown[]) =>
+      writeStdout(`${parts.map(formatConsoleArg).join(' ')}
+`),
+    warn: (...parts: unknown[]) =>
+      writeStderr(`${parts.map(formatConsoleArg).join(' ')}
+`),
+    error: (...parts: unknown[]) =>
+      writeStderr(`${parts.map(formatConsoleArg).join(' ')}
+`),
+  };
+}
+
+function createProcessShim(
+  init: RealmInitMsg,
+  writeStdout: (value: unknown) => void,
+  writeStderr: (value: unknown) => void
+): { processShim: Record<string, unknown>; didCallProcessExit: boolean } {
+  const noColor = !!init.env?.NO_COLOR;
+  const stdinShim = createStdinShim(init.stdin ?? '');
+  const argvWithParseFlags = attachArgvParseFlags(init.argv);
+  let didCallProcessExit = false;
+  const processShim = {
+    argv: argvWithParseFlags,
+    env: init.env,
+    cwd: () => init.cwd,
+    exit: (codeValue?: number) => {
+      didCallProcessExit = true;
+      const normalized = Number.isFinite(codeValue) ? Number(codeValue) : 0;
+      throw new NodeExitError(normalized);
+    },
+    stdin: stdinShim,
+    stdout: { write: writeStdout, isTTY: !noColor },
+    stderr: { write: writeStderr, isTTY: !noColor },
+  };
+  return { processShim, didCallProcessExit };
+}
+
+type ExecResult = { stdout: string; stderr: string; exitCode: number };
+
+function createExecBridge(rpc: RealmRpcClient): ((cmd: string) => Promise<ExecResult>) & {
+  spawn: (argv: string[]) => Promise<ExecResult>;
+  exec: (cmd: string) => Promise<ExecResult>;
+} {
+  const execRun = (command: string): Promise<ExecResult> => rpc.call('exec', 'run', [command]);
+  const execBridge = Object.assign(execRun, {
+    spawn: (argv: string[]): Promise<ExecResult> => rpc.call('exec', 'spawn', [argv]),
+  }) as ((cmd: string) => Promise<ExecResult>) & {
+    spawn: (argv: string[]) => Promise<ExecResult>;
+    exec: typeof execRun;
+  };
+  execBridge.exec = execBridge;
+  return execBridge;
 }
 
 function buildSliccyModules(bridges: Record<string, unknown>): Record<string, unknown> {
