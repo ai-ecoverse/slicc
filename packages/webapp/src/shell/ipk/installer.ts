@@ -16,7 +16,7 @@
  */
 
 import type { SecureFetch } from 'just-bash';
-import type { VirtualFS } from '../../fs/index.js';
+import type { DirEntry, VirtualFS } from '../../fs/index.js';
 import { fetchPackument, fetchTarball, type Packument, resolveVersion } from './registry.js';
 import {
   type InstallNode,
@@ -307,42 +307,136 @@ function normalizeBinPath(p: string): string {
   return p.replace(/^\.\//, '').replace(/^\/+/, '');
 }
 
-function buildShim(pkgName: string, binPath: string): string {
-  const target = `../${pkgName}/${normalizeBinPath(binPath)}`;
+function buildShimFromTarget(target: string): string {
   return `#!/usr/bin/env node\nrequire(${JSON.stringify(target)});\n`;
 }
 
-async function createBinShimsForLevel(
+interface InstalledBin {
+  binName: string;
+  pkgName: string;
+  installDir: string;
+  binPath: string;
+  depth: number;
+}
+
+async function collectInstalledBins(fs: VirtualFS, modulesDir: string): Promise<InstalledBin[]> {
+  const out: InstalledBin[] = [];
+  await walkNodeModules(fs, modulesDir, 0, out);
+  return out;
+}
+
+async function walkNodeModules(
   fs: VirtualFS,
-  modulesDir: string,
-  nodes: Record<string, InstallNode>
+  dir: string,
+  depth: number,
+  out: InstalledBin[]
 ): Promise<void> {
-  const binDir = joinPath(modulesDir, '.bin');
-  let createdAny = false;
-
-  for (const [name, node] of Object.entries(nodes)) {
-    const installDir = packageDirIn(modulesDir, name);
-    const pkgJsonPath = joinPath(installDir, 'package.json');
-    const manifest = await readJsonOr<InstalledPackageManifest | null>(fs, pkgJsonPath, null);
-
-    if (manifest?.bin !== undefined && manifest.bin !== null) {
-      const bins = normalizeBin(manifest.bin, name);
-      for (const [binName, binPath] of Object.entries(bins)) {
-        if (typeof binName !== 'string' || binName.length === 0) continue;
-        if (typeof binPath !== 'string' || binPath.length === 0) continue;
-        if (!createdAny) {
-          await ensureDir(fs, binDir);
-          createdAny = true;
-        }
-        const shimPath = joinPath(binDir, binName);
-        await fs.writeFile(shimPath, buildShim(name, binPath));
+  if (!(await fs.exists(dir))) return;
+  let dirEntries: DirEntry[];
+  try {
+    dirEntries = await fs.readDir(dir);
+  } catch {
+    return;
+  }
+  for (const entry of dirEntries) {
+    if (entry.type !== 'directory') continue;
+    if (entry.name === '.bin') continue;
+    if (entry.name.startsWith('@')) {
+      const scopeDir = joinPath(dir, entry.name);
+      let scopeEntries: DirEntry[];
+      try {
+        scopeEntries = await fs.readDir(scopeDir);
+      } catch {
+        continue;
       }
+      for (const sub of scopeEntries) {
+        if (sub.type !== 'directory') continue;
+        const pkgName = `${entry.name}/${sub.name}`;
+        const pkgDir = joinPath(scopeDir, sub.name);
+        await collectFromPackage(fs, pkgDir, pkgName, depth, out);
+      }
+      continue;
     }
+    const pkgName = entry.name;
+    const pkgDir = joinPath(dir, entry.name);
+    await collectFromPackage(fs, pkgDir, pkgName, depth, out);
+  }
+}
 
-    if (Object.keys(node.dependencies).length > 0) {
-      const childModulesDir = joinPath(installDir, 'node_modules');
-      await createBinShimsForLevel(fs, childModulesDir, node.dependencies);
+async function collectFromPackage(
+  fs: VirtualFS,
+  pkgDir: string,
+  pkgName: string,
+  depth: number,
+  out: InstalledBin[]
+): Promise<void> {
+  const manifest = await readJsonOr<InstalledPackageManifest | null>(
+    fs,
+    joinPath(pkgDir, 'package.json'),
+    null
+  );
+  if (manifest?.bin !== undefined && manifest.bin !== null) {
+    const bins = normalizeBin(manifest.bin, pkgName);
+    for (const [binName, binPath] of Object.entries(bins)) {
+      if (typeof binName !== 'string' || binName.length === 0) continue;
+      if (typeof binPath !== 'string' || binPath.length === 0) continue;
+      out.push({ binName, pkgName, installDir: pkgDir, binPath, depth });
     }
+  }
+  const nestedModulesDir = joinPath(pkgDir, 'node_modules');
+  await walkNodeModules(fs, nestedModulesDir, depth + 1, out);
+}
+
+function chooseRootBins(bins: InstalledBin[]): Map<string, InstalledBin> {
+  const chosen = new Map<string, InstalledBin>();
+  for (const e of bins) {
+    const cur = chosen.get(e.binName);
+    if (!cur) {
+      chosen.set(e.binName, e);
+      continue;
+    }
+    if (e.depth < cur.depth) {
+      chosen.set(e.binName, e);
+    } else if (e.depth === cur.depth && e.pkgName < cur.pkgName) {
+      chosen.set(e.binName, e);
+    }
+  }
+  return chosen;
+}
+
+function shimTargetFor(modulesDir: string, installDir: string, binPath: string): string {
+  const rel = installDir.slice(modulesDir.length);
+  return `..${rel}/${normalizeBinPath(binPath)}`;
+}
+
+async function reconcileRootBinShims(fs: VirtualFS, modulesDir: string): Promise<void> {
+  const installed = await collectInstalledBins(fs, modulesDir);
+  const chosen = chooseRootBins(installed);
+
+  const binDir = joinPath(modulesDir, '.bin');
+  const binDirExists = await fs.exists(binDir);
+
+  if (binDirExists) {
+    let existing: DirEntry[];
+    try {
+      existing = await fs.readDir(binDir);
+    } catch {
+      existing = [];
+    }
+    for (const entry of existing) {
+      if (entry.type !== 'file') continue;
+      if (chosen.has(entry.name)) continue;
+      await fs.rm(joinPath(binDir, entry.name));
+    }
+  }
+
+  if (chosen.size === 0) return;
+
+  await ensureDir(fs, binDir);
+  for (const target of chosen.values()) {
+    const shimPath = joinPath(binDir, target.binName);
+    const shim = buildShimFromTarget(shimTargetFor(modulesDir, target.installDir, target.binPath));
+    await fs.writeFile(shimPath, shim);
   }
 }
 
@@ -390,7 +484,7 @@ export async function installPackages(
 
   const modulesDir = joinPath(cwd, 'node_modules');
   await materializePlan(fs, modulesDir, plan, fetch, timeoutMs);
-  await createBinShimsForLevel(fs, modulesDir, plan.root);
+  await reconcileRootBinShims(fs, modulesDir);
 
   const records = directs.map((d) => {
     const node = plan.root[d.parsed.name];
@@ -512,7 +606,7 @@ export async function installFromManifest(
 
   const modulesDir = joinPath(cwd, 'node_modules');
   await materializePlan(fs, modulesDir, plan, fetch, timeoutMs);
-  await createBinShimsForLevel(fs, modulesDir, plan.root);
+  await reconcileRootBinShims(fs, modulesDir);
 
   const results: InstallResult[] = validated
     .map((entry) => {
