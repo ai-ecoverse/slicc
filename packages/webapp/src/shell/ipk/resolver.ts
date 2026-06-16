@@ -86,6 +86,14 @@ export async function resolveDependencyTree(
 
     const resolved = await resolveEdge(name, range, getPackument);
     if (isInProgress(name, resolved.version, ancestors)) {
+      const requester = ancestors[0];
+      if (requester) {
+        // Shadowed cycle: the in-progress satisfying version is not the nearest
+        // reachable copy from the requester's scope, so place a fresh terminal
+        // node under the requester to keep require() reachability correct
+        // without introducing an object-graph cycle into the InstallPlan.
+        requester.dependencies[name] = buildNode(name, resolved.version, resolved.entry);
+      }
       return;
     }
 
