@@ -18,11 +18,14 @@ type FetchResult = Awaited<ReturnType<SecureFetch>>;
 import {
   registryUrl as buildRegistryUrl,
   REGISTRY_NPMJS_HOST as REGISTRY_HOST_INTERNAL,
+  validateNpmPackageName,
 } from '../supplemental-commands/cdn-url-builder.js';
 import { maxSatisfying } from './semver.js';
 
 export const REGISTRY_NPMJS_HOST = REGISTRY_HOST_INTERNAL;
+export const EXPECTED_TARBALL_HOST = REGISTRY_HOST_INTERNAL;
 export const registryUrl = buildRegistryUrl;
+export { validateNpmPackageName };
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -99,7 +102,13 @@ export async function fetchPackument(
     throw new Error('fetchPackument: package name is required');
   }
   const label = `fetchPackument(${name})`;
-  const url = registryUrl(name).toString();
+  const built = registryUrl(name);
+  if (built.host !== REGISTRY_NPMJS_HOST) {
+    throw new Error(
+      `${label}: refused to fetch packument from host '${built.host}' (expected '${REGISTRY_NPMJS_HOST}')`
+    );
+  }
+  const url = built.toString();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   let result: FetchResult;
@@ -212,6 +221,12 @@ function pickDistTag(ctx: ResolveContext, tag: string): string {
 }
 
 function pickByRange(ctx: ResolveContext, requested: string): string {
+  if (isLikelyDistTag(requested)) {
+    const tags = Object.keys(ctx.distTags).join(', ') || 'none';
+    throw new Error(
+      `resolveVersion(${ctx.packageName}): unknown dist-tag '${requested}' (available tags: ${tags})`
+    );
+  }
   let best: string | null = null;
   try {
     best = maxSatisfying(ctx.versions, requested);
@@ -222,12 +237,6 @@ function pickByRange(ctx: ResolveContext, requested: string): string {
     );
   }
   if (best) return best;
-  if (isLikelyDistTag(requested)) {
-    const tags = Object.keys(ctx.distTags).join(', ') || 'none';
-    throw new Error(
-      `resolveVersion(${ctx.packageName}): unknown dist-tag '${requested}' (available tags: ${tags})`
-    );
-  }
   const n = ctx.versions.length;
   throw new Error(
     `resolveVersion(${ctx.packageName}): no version satisfies '${requested}' (have ${n} version${n === 1 ? '' : 's'})`
@@ -261,6 +270,22 @@ export async function fetchTarball(
     throw new Error('fetchTarball: url is required');
   }
   const label = `fetchTarball(${url})`;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`${label}: tarball URL is not a valid absolute URL`);
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error(
+      `${label}: refused to fetch tarball with protocol '${parsed.protocol}' (expected 'https:')`
+    );
+  }
+  if (parsed.host !== EXPECTED_TARBALL_HOST) {
+    throw new Error(
+      `${label}: refused to fetch tarball from host '${parsed.host}' (expected '${EXPECTED_TARBALL_HOST}')`
+    );
+  }
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   let result: FetchResult;

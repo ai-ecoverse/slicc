@@ -9,6 +9,7 @@ import {
   registryUrl,
   UNPKG_HOST,
   unpkgUrl,
+  validateNpmPackageName,
 } from '../../../src/shell/supplemental-commands/cdn-url-builder.js';
 
 describe('cdn-url-builder host constants', () => {
@@ -42,6 +43,69 @@ describe('registryUrl', () => {
     expect(registryUrl('lodash', '-/lodash-4.17.21.tgz').toString()).toBe(
       'https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz'
     );
+  });
+
+  it('rejects a name that would change the URL host away from the registry', () => {
+    expect(() => registryUrl('/evil')).toThrow(/invalid npm package name/i);
+    expect(() => registryUrl('//evil.com')).toThrow(/invalid npm package name/i);
+    expect(() => registryUrl('//evil.com/path')).toThrow(/invalid npm package name/i);
+    expect(() => registryUrl('../escape')).toThrow(/invalid npm package name/i);
+  });
+
+  it('keeps the URL host pinned to the registry host for any legitimate name', () => {
+    expect(registryUrl('lodash').host).toBe(REGISTRY_NPMJS_HOST);
+    expect(registryUrl('@scope/pkg').host).toBe(REGISTRY_NPMJS_HOST);
+    expect(registryUrl('JSONStream').host).toBe(REGISTRY_NPMJS_HOST);
+  });
+});
+
+describe('validateNpmPackageName', () => {
+  for (const valid of [
+    'lodash',
+    'is-number',
+    'is_odd',
+    '@scope/pkg',
+    '@types/node',
+    '@acme/util',
+    'JSONStream',
+    'a',
+    'a.b.c',
+    'a-b_c.d',
+  ]) {
+    it(`accepts a legitimate name ${JSON.stringify(valid)}`, () => {
+      expect(() => validateNpmPackageName(valid)).not.toThrow();
+    });
+  }
+
+  for (const invalid of [
+    '',
+    '/evil',
+    '//evil.com',
+    '//evil.com/path',
+    '..',
+    '../x',
+    '../../etc/passwd',
+    'foo/../bar',
+    'foo/bar',
+    '.hidden',
+    '_private',
+    'foo bar',
+    'foo\tbar',
+    'foo\u0000bar',
+    '@',
+    '@/',
+    '@scope',
+    '@/name',
+    '@scope/with/extra',
+    '@scope//name',
+  ]) {
+    it(`rejects invalid name ${JSON.stringify(invalid)}`, () => {
+      expect(() => validateNpmPackageName(invalid)).toThrow(/invalid npm package name/i);
+    });
+  }
+
+  it('rejects names longer than 214 characters', () => {
+    expect(() => validateNpmPackageName('a'.repeat(215))).toThrow(/invalid npm package name/i);
   });
 });
 
