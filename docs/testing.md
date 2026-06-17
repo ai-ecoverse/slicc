@@ -437,3 +437,144 @@ describe('Bash tool integration', () => {
 ```
 
 But avoid testing implementation details across many layers. Keep most tests focused and fast.
+
+## Fake-LLM E2E Framework
+
+End-to-end agent-loop tests run the real WC composer + kernel-worker
+agent against a deterministic OpenAI-compatible fake LLM server. The
+agent loop is identical to production — fixtures only change which
+assistant turns stream back.
+
+Three pieces compose the framework:
+
+- **Fake server** (`packages/webapp/tests/e2e/fake-llm/`): SSE-streaming
+  OpenAI-compatible server with permissive CORS. Started by a second
+  `webServer` entry in `playwright.config.ts` on port 5781.
+- **Fixture** (`packages/webapp/tests/e2e/fake-llm/fixtures/*.json`):
+  ordered list of scripted assistant `turns` (text + optional
+  `tool_calls`). Turns are matched cursor-first; per-turn
+  `whenUserMessageMatches` (substring or `{ pattern, flags }` regex)
+  selects a specific turn for a specific user input.
+- **Playwright harness** (`packages/webapp/tests/e2e/fake-llm-helpers.ts`):
+  `seedLocalLlmProvider`, `submitUserMessage`, `waitForTurnComplete`,
+  `runUserInputFixture`, and `readCdpPageState`.
+
+### Writing a Scenario
+
+See `packages/webapp/tests/e2e/reference-scenario.test.ts` for the
+working reference. Boilerplate:
+
+```typescript
+import { expect, test } from '@playwright/test';
+import { readCdpPageState, runUserInputFixture, seedLocalLlmProvider } from './fake-llm-helpers.js';
+import { seedSkipSwReload, waitForSW } from './helpers.js';
+
+// Binds Chrome's CDP at the default port the helper probes AND the
+// port the `node-server --serve-only --cdp-port=9222` proxy expects.
+// Run this file serially when other specs also touch 9222.
+test.use({ launchOptions: { args: ['--remote-debugging-port=9222'] } });
+test.describe.configure({ mode: 'serial' });
+
+test('scripted tool call drives a real CDP navigation', async ({ page }) => {
+  // 1. Seed the local-llm provider BEFORE goto so the kernel worker's
+  //    localStorage shim picks the seed up at boot.
+  await seedLocalLlmProvider(page, { modelId: 'fake-coder-reference' });
+  await seedSkipSwReload(page);
+  await page.goto('/');
+  await waitForSW(page);
+
+  // 2. Wait for the cone to be created AND selected. The composer
+  //    renders earlier; submitting before this point produces a
+  //    "No scoop selected" error card.
+  await page.waitForSelector('slicc-input-card');
+  await expect(page.locator('slicc-chat-thread')).toContainText('Welcome to SLICC');
+
+  // 3. Submit the scripted user input. `runUserInputFixture` calls
+  //    `submitUserMessage` + `waitForTurnComplete` for each entry.
+  await runUserInputFixture(page, ['open the reference page']);
+
+  // 4. Chat-transcript assertion — positive proof the fake LLM
+  //    streamed back AND the agent loop ran the scripted turn.
+  await expect(page.locator('slicc-chat-thread')).toContainText('Opening the reference');
+
+  // 5. CDP/browser-state assertion — Chrome at 9222 reports the
+  //    target the agent's `bash playwright-cli tab-new …` opened.
+  await expect
+    .poll(async () => {
+      const targets = await readCdpPageState({
+        filter: (t) => t.type === 'page' && t.url.startsWith('data:text/html'),
+      });
+      return targets.map((t) => t.title);
+    })
+    .toContain('FAKE LLM REFERENCE TARGET');
+});
+```
+
+Matching fixture (`fixtures/reference-scenario.json`):
+
+```json
+{
+  "model": "fake-coder-reference",
+  "turns": [
+    {
+      "whenUserMessageMatches": "open the reference page",
+      "content": "Opening the reference data: URL so the test can assert on the CDP target.",
+      "tool_calls": [
+        {
+          "name": "bash",
+          "arguments": {
+            "command": "playwright-cli tab-new 'data:text/html,<!DOCTYPE html><title>FAKE LLM REFERENCE TARGET</title><h1>Agent landed here</h1>'"
+          }
+        }
+      ]
+    },
+    { "content": "Done. The agent navigated to the reference page." }
+  ],
+  "onOverflow": "error"
+}
+```
+
+### CDP Assertions
+
+`readCdpPageState` polls `http://127.0.0.1:9222/json` and returns the
+browser's CDP target list. Use it whenever you need to observe the
+agent-driven Chrome from the outside — it is runtime-agnostic and
+works against any Chrome with `--remote-debugging-port` set, including
+a cone-driven Chrome the test process never launched.
+
+Why `data:text/html,…` instead of a seeded `/preview/*` page: tabs
+opened via CDP `Target.createTarget` (which is what `playwright-cli
+tab-new` does) are not claimed by the `preview-vfs` service worker —
+the SW only controls clients that loaded the SLICC bootstrap. A `data:`
+URL carries its HTML inline, so the agent-driven tab gets a
+deterministic title without depending on SW interception. When a test
+needs to assert on Playwright-controlled DOM, navigate the existing
+`page` via `bash playwright-cli goto …` instead (and assert via
+`page.locator(...)` before the navigation breaks the test page).
+
+If a scenario needs a `/preview/*` page rendered for assertion,
+`seedVFS` continues to work for content the _test page_ itself loads
+— it just doesn't reach CDP-spawned tabs.
+
+### Running
+
+```bash
+npm run test:e2e
+```
+
+`playwright.config.ts` boots both `webServer` entries (the app on
+5780, the fake LLM on 5781) and the agent talks to the fake server
+via the seeded `local-llm` provider. Override the fixture with the
+`FAKE_LLM_FIXTURE` env var.
+
+### Risks Covered by the Reference Scenario
+
+- **localStorage → kernel-worker shim sync**: the test only passes if
+  the seeded `slicc_accounts` + `selected-model` make it from page
+  storage into the worker's `localStorage` shim — otherwise the agent
+  never resolves the `local-llm` model and never calls the fake server.
+- **`waitForTurnComplete` masking failures**: the popup + chat-transcript
+  assertions are positive — they only succeed when the scripted turn
+  actually ran end to end.
+- **CDP port alignment**: the helper, the `node-server --serve-only`
+  proxy, and the test's `launchOptions.args` all agree on 9222.

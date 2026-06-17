@@ -1,0 +1,21 @@
+{
+  "model": "fake-coder-reference",
+  "turns": [
+    {
+      "whenUserMessageMatches": "open the reference page",
+      "content": "Opening the reference data: URL so the test can assert on the CDP target.",
+      "tool_calls": [
+        {
+          "name": "bash",
+          "arguments": {
+            "command": "playwright-cli tab-new 'data:text/html,<!DOCTYPE html><title>FAKE LLM REFERENCE TARGET</title><h1>Agent landed here</h1>'"
+          }
+        }
+      ]
+    },
+    {
+      "content": "Done. The agent navigated to the reference page."
+    }
+  ],
+  "onOverflow": "error"
+}
