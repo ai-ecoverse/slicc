@@ -36,6 +36,7 @@ vi.mock('../../src/ui/chat-panel.js', () => ({
       .join(''),
 }));
 
+import { applyDictationMarkers } from '../../src/speech/dictation-priming.js';
 import {
   enrichPendingSession,
   freezeConeSession,
@@ -1501,5 +1502,119 @@ describe('freezeConeSession — writes route through WritableVfsClient', () => {
       channel.port1.close();
       channel.port2.close();
     }
+  });
+});
+
+describe('freezeConeSession — dictation marker handling', () => {
+  const MIC = '\uD83C\uDF99\uFE0F';
+  const LEFT = '\u25C1';
+  const RIGHT = '\u25B7';
+
+  beforeEach(() => {
+    mockRunOneOffCompactionCall.mockReset();
+    mockApplyConeMemoryBudget.mockReset();
+    mockApplyConeMemoryBudget.mockResolvedValue({
+      restructured: false,
+      reason: 'no-llm',
+    });
+  });
+
+  it('strips 🎙️ + ◁…▷ from the human-readable body but KEEPS them in the structured data block', async () => {
+    mockRunOneOffCompactionCall
+      .mockResolvedValueOnce('NONE')
+      .mockResolvedValueOnce('Dictation chat');
+
+    const dictatedFirst = applyDictationMarkers('Hello there', true);
+    const dictatedLater = applyDictationMarkers('Try again', false);
+    const messages: ChatMessage[] = [
+      userMessage(dictatedFirst),
+      assistantMessage('Hi back'),
+      userMessage(dictatedLater),
+      assistantMessage('Sure thing'),
+    ];
+    const store = makeFakeStore({
+      id: 'session-cone',
+      messages,
+      createdAt: 100,
+      updatedAt: 200,
+    });
+    const vfs = makeFakeVfs();
+
+    const result = await freezeConeSession({
+      sessionStore: store,
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      model: fakeModel,
+      apiKey: 'k',
+    });
+    expect(result).not.toBeNull();
+
+    const archivePath = `/sessions/${result!.filename}`;
+    const archiveContent = vfs.files.get(archivePath)!;
+
+    // Split into the embedded structured-data block and the visible body.
+    const dataMatch = archiveContent.match(/<!-- slicc:session-data\n([\s\S]*?)\n-->/);
+    expect(dataMatch).not.toBeNull();
+    const dataJson = dataMatch![1];
+    const bodyStart = archiveContent.indexOf('-->\n') + '-->\n'.length;
+    const body = archiveContent.slice(bodyStart);
+
+    // Structured/JSON data MUST keep markers — thaw re-renders through
+    // userMessageEl which strips at render.
+    expect(dataJson).toContain(MIC);
+    expect(dataJson).toContain(LEFT);
+    expect(dataJson).toContain(RIGHT);
+
+    // Human-readable body MUST NOT contain any marker.
+    expect(body).not.toContain(MIC);
+    expect(body).not.toContain(LEFT);
+    expect(body).not.toContain(RIGHT);
+    // The clean text survives.
+    expect(body).toContain('## User\nHello there\n');
+    expect(body).toContain('## User\nTry again\n');
+    // Assistant content is preserved verbatim either way.
+    expect(body).toContain('## Assistant\nHi back\n');
+    expect(body).toContain('## Assistant\nSure thing\n');
+  });
+
+  it('parseFrozenArchive round-trips: thawed user messages retain markers (render-time strip handles display)', async () => {
+    mockRunOneOffCompactionCall.mockResolvedValueOnce('NONE').mockResolvedValueOnce('Roundtrip');
+
+    const dictated = applyDictationMarkers('Round trip test', true);
+    const messages: ChatMessage[] = [
+      userMessage(dictated),
+      assistantMessage('ok'),
+      userMessage('plain text follow-up'),
+      assistantMessage('done'),
+    ];
+    const store = makeFakeStore({
+      id: 'session-cone',
+      messages,
+      createdAt: 0,
+      updatedAt: 1,
+    });
+    const vfs = makeFakeVfs();
+
+    const result = await freezeConeSession({
+      sessionStore: store,
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      model: fakeModel,
+      apiKey: 'k',
+    });
+    expect(result).not.toBeNull();
+    const archiveContent = vfs.files.get(`/sessions/${result!.filename}`)!;
+
+    const { messages: thawed } = parseFrozenArchive(archiveContent);
+    expect(thawed).toHaveLength(4);
+    // The dictated user message arrives at the render layer still carrying
+    // its markers — userMessageEl's stripDictationMarkers handles the
+    // visual cleanup at render time.
+    expect(thawed[0].role).toBe('user');
+    expect(thawed[0].content).toBe(dictated);
+    expect(thawed[0].content).toContain(MIC);
+    // Plain user content round-trips unchanged.
+    expect(thawed[2].content).toBe('plain text follow-up');
+    // Assistant content untouched.
+    expect(thawed[1].content).toBe('ok');
+    expect(thawed[3].content).toBe('done');
   });
 });
