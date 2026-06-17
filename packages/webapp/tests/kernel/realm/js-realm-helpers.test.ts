@@ -465,6 +465,16 @@ describe('sandbox.html mirror parity', () => {
     // (before returning module.exports) in both floats.
     expect(shared).toContain('synthesizeEsModuleDefault(moduleObj.exports)');
     expect(sandbox).toContain('synthesizeEsModuleDefault(moduleObj.exports)');
+    // The synthesis is SCOPED to origin-CJS modules in BOTH floats: a
+    // host-transpiled named-only ESM module (e.g. nanoid@5) also carries
+    // `__esModule:true` with no own `default`, so synthesizing one there would
+    // wrongly make `require('nanoid').default` the whole namespace instead of
+    // `undefined`. Each float guards the call with a per-file kind === 'cjs'
+    // check (kindByPath / moduleKindByPath) keyed by the same `path`.
+    const kindScopeRe =
+      /[kK]ind\w*\.get\(path\)\s*===\s*'cjs'\)\s*synthesizeEsModuleDefault\(moduleObj\.exports\)/;
+    expect(shared, 'js-realm-shared.ts missing kind=cjs synthesis guard').toMatch(kindScopeRe);
+    expect(sandbox, 'sandbox.html missing kind=cjs synthesis guard').toMatch(kindScopeRe);
   });
 
   it('mirrors the Web Crypto-backed nodeCrypto bridge surface in both floats', async () => {

@@ -367,13 +367,19 @@ const chalkPkg: SyntheticPackage = {
 
 /**
  * Faithful uuid@9-shaped fixture modeling the real wrapper->Babel-CJS
- * indirection that the synthetic `uuidPkg` above did NOT capture: the
- * `node.import` entry is `wrapper.mjs` doing `import uuid from './dist/index.js'`,
- * and `dist/index.js` is a Babel-compiled CJS module that sets `__esModule:true`
- * via `Object.defineProperty` and exposes named getters (v1/v4) but has NO own
- * `default` property. Real Node binds `import def from 'cjs'` to the WHOLE
- * `module.exports` regardless of `__esModule`; the realm require shim must
- * synthesize that default so `uuid.v4` is callable.
+ * indirection that the synthetic `uuidPkg` above did NOT capture, and matching
+ * uuid@9's REAL public surface + validation-contract.md (VAL-ESM-002): uuid@9's
+ * `node.import` entry `wrapper.mjs` is NAMED-ONLY (v1..v5, NIL, version,
+ * validate, stringify, parse) with NO package-level `export default`. The named
+ * bindings are re-exported from its INTERNAL `import uuid from './dist/index.js'`
+ * — `dist/index.js` is the Babel-compiled CJS dep that sets `__esModule:true`
+ * via `Object.defineProperty` and exposes named getters but has NO own
+ * `default`. Real Node binds the internal `import uuid from './dist/index.js'`
+ * (require-of-CJS default interop) to the WHOLE `module.exports`, so the realm
+ * require shim must synthesize that default ON THE ORIGIN-CJS dep (kind=cjs).
+ * The package itself exposes no default — so `import { v4 } from 'uuid'`,
+ * dynamic `import('uuid')` named, and `require('uuid').v4()` are what resolve,
+ * NOT a package-level default.
  */
 const realUuidV4Body = [
   'function v4() {',
@@ -397,17 +403,36 @@ const realUuidPkg: SyntheticPackage = {
         '.': { node: { import: './wrapper.mjs', require: './dist/index.js' } },
       },
     }),
+    // Named-only ESM wrapper: re-exports the Babel-CJS dep's named bindings,
+    // NO package-level default (matches real uuid@9's node+import entry).
     'wrapper.mjs': [
       "import uuid from './dist/index.js';",
       'export const v1 = uuid.v1;',
+      'export const v3 = uuid.v3;',
       'export const v4 = uuid.v4;',
-      'export default uuid;',
+      'export const v5 = uuid.v5;',
+      'export const NIL = uuid.NIL;',
+      'export const version = uuid.version;',
+      'export const validate = uuid.validate;',
+      'export const stringify = uuid.stringify;',
+      'export const parse = uuid.parse;',
     ].join('\n'),
+    // Babel-CJS dep: __esModule:true + named getters, NO own default. The realm
+    // synthesizes a self-referential default here (kind=cjs) so the wrapper's
+    // `import uuid from './dist/index.js'` binds the whole module.exports.
     'dist/index.js': [
       '"use strict";',
       'Object.defineProperty(exports, "__esModule", { value: true });',
       'Object.defineProperty(exports, "v1", { enumerable: true, get: function () { return v1; } });',
+      'Object.defineProperty(exports, "v3", { enumerable: true, get: function () { return v3; } });',
       'Object.defineProperty(exports, "v4", { enumerable: true, get: function () { return v4; } });',
+      'Object.defineProperty(exports, "v5", { enumerable: true, get: function () { return v5; } });',
+      'Object.defineProperty(exports, "NIL", { enumerable: true, get: function () { return NIL; } });',
+      'Object.defineProperty(exports, "version", { enumerable: true, get: function () { return version; } });',
+      'Object.defineProperty(exports, "validate", { enumerable: true, get: function () { return validate; } });',
+      'Object.defineProperty(exports, "stringify", { enumerable: true, get: function () { return stringify; } });',
+      'Object.defineProperty(exports, "parse", { enumerable: true, get: function () { return parse; } });',
+      'var NIL = "00000000-0000-0000-0000-000000000000";',
       'function v1() {',
       '  const hex = "0123456789abcdef";',
       '  let out = "";',
@@ -416,6 +441,12 @@ const realUuidPkg: SyntheticPackage = {
       '  }',
       '  return out;',
       '}',
+      'function v3() { return v4(); }',
+      'function v5() { return v4(); }',
+      'function version() { return 4; }',
+      'function validate(s) { return typeof s === "string"; }',
+      'function stringify() { return v4(); }',
+      'function parse() { return new Uint8Array(16); }',
       realUuidV4Body,
     ].join('\n'),
   },
@@ -622,7 +653,7 @@ describe('Real-path ESM e2e: ipk install → import over the production realm se
     await fs.dispose();
   });
 
-  it('VAL-ESM-002 (real uuid@9 wrapper->Babel-CJS): named, default, dynamic import, and require all resolve', async () => {
+  it('VAL-ESM-002 (real uuid@9 named-only wrapper->Babel-CJS): named import, dynamic named, and require all resolve (no package default)', async () => {
     sharedRegistry.current = buildRegistry([realUuidPkg]);
     const { shell, fs } = await newShell();
     expect((await shell.executeCommand('ipk install uuid')).exitCode).toBe(0);
@@ -630,36 +661,28 @@ describe('Real-path ESM e2e: ipk install → import over the production realm se
     const uuidRe = '/^[0-9a-f-]{36}$/';
 
     // Named import via wrapper.mjs (node.import) -> uuid.v4 binding works only
-    // when the realm synthesizes the missing `default` on the Babel-CJS module.
+    // when the realm synthesizes the missing `default` on the ORIGIN-CJS
+    // dist/index.js (kind=cjs), so the wrapper's `import uuid from
+    // './dist/index.js'` binds the whole module.exports.
     await fs.writeFile(
       '/work/named.jsh',
-      `import { v4 } from 'uuid';\nconsole.log(${uuidRe}.test(v4()));`
+      `import { v4 } from 'uuid';\nconsole.log(typeof v4, ${uuidRe}.test(v4()));`
     );
     const named = await shell.executeCommand('node named.jsh');
     expect(named.stderr).not.toContain('Cannot find module');
     expect(named.stderr).not.toContain('Cannot read properties of undefined');
     expect(named.exitCode).toBe(0);
-    expect(named.stdout.trim()).toBe('true');
+    expect(named.stdout.trim()).toBe('function true');
 
-    // Default import -> the whole module.exports (def.v4 callable).
-    await fs.writeFile(
-      '/work/def.jsh',
-      `import def from 'uuid';\nconsole.log(${uuidRe}.test(def.v4()));`
-    );
-    const def = await shell.executeCommand('node def.jsh');
-    expect(def.stderr).not.toContain('Cannot read properties of undefined');
-    expect(def.exitCode).toBe(0);
-    expect(def.stdout.trim()).toBe('true');
-
-    // Dynamic import -> namespace exposes both named and default bindings.
+    // Dynamic import -> namespace exposes the named binding (no package default).
     await fs.writeFile(
       '/work/dyn.js',
-      `import('uuid').then(m => console.log(${uuidRe}.test(m.v4()), ${uuidRe}.test(m.default.v4())));`
+      `import('uuid').then(m => console.log(typeof m.v4, ${uuidRe}.test(m.v4())));`
     );
     const dyn = await shell.executeCommand('node dyn.js');
     expect(dyn.stderr).not.toContain('Cannot read properties of undefined');
     expect(dyn.exitCode).toBe(0);
-    expect(dyn.stdout.trim()).toBe('true true');
+    expect(dyn.stdout.trim()).toBe('function true');
 
     // require -> the `require` condition (dist/index.js) -> v4 callable.
     await fs.writeFile('/work/req.js', `console.log(${uuidRe}.test(require('uuid').v4()));`);
@@ -667,6 +690,26 @@ describe('Real-path ESM e2e: ipk install → import over the production realm se
     expect(req.stderr).not.toContain('Cannot find module');
     expect(req.exitCode).toBe(0);
     expect(req.stdout.trim()).toBe('true');
+    await fs.dispose();
+  });
+
+  it('VAL-ESM-007 (kind-scoping): require() of a transpiled named-only ESM package yields __esModule + named fn + default undefined (no synthetic default)', async () => {
+    sharedRegistry.current = buildRegistry([nanoidPkg]);
+    const { shell, fs } = await newShell();
+    expect((await shell.executeCommand('ipk install nanoid')).exitCode).toBe(0);
+
+    // A host-transpiled named-only ESM module (nanoid-shaped) carries
+    // `__esModule:true` and the named binding, but its `default` MUST stay
+    // `undefined` — the realm must NOT synthesize a self-referential default for
+    // an origin-ESM module (kind=esm), only for origin-CJS modules.
+    await fs.writeFile(
+      '/work/req.js',
+      "const m = require('nanoid'); console.log(m.__esModule === true, typeof m.nanoid, m.default === undefined);"
+    );
+    const req = await shell.executeCommand('node req.js');
+    expect(req.stderr).not.toContain('Cannot find module');
+    expect(req.exitCode).toBe(0);
+    expect(req.stdout.trim()).toBe('true function true');
     await fs.dispose();
   });
 });
