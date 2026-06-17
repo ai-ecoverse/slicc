@@ -6,10 +6,26 @@
  */
 
 import 'fake-indexeddb/auto';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
+
+// The boot path dynamically imports real kernel modules that log via real
+// `console` on the intentionally-throwing test transport's async catch-paths.
+// Those late logs queue an `onUserConsoleLog` RPC that races worker teardown
+// under full-suite scheduling on Node 26. Replacing Vitest's interceptor with
+// a no-op spy stops any RPC from being queued.
+beforeAll(() => {
+  vi.spyOn(console, 'debug').mockImplementation(() => {});
+  vi.spyOn(console, 'info').mockImplementation(() => {});
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+});
+
+afterAll(() => {
+  vi.restoreAllMocks();
+});
 
 import type { RegisteredScoop } from '../../../src/scoops/types.js';
 import type { OffscreenClient } from '../../../src/ui/offscreen-client.js';
