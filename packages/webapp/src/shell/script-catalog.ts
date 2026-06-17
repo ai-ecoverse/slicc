@@ -68,21 +68,31 @@ function hasRelevantBshMounts(fs?: BshDiscoveryFS): boolean {
   );
 }
 
+interface CachedSource<T> {
+  cache: T | null;
+  inflight: Promise<T> | null;
+  generation: number;
+}
+
+function createCachedSource<T>(): CachedSource<T> {
+  return { cache: null, inflight: null, generation: 0 };
+}
+
+function bumpGeneration<T>(src: CachedSource<T>): void {
+  src.generation++;
+  src.cache = null;
+  src.inflight = null;
+}
+
 export class ScriptCatalog {
   private readonly jshFs: JshDiscoveryFS;
   private readonly bshFs?: BshDiscoveryFS;
   private readonly watcher: FsWatcher | null;
   private readonly watcherUnsubs: Array<() => void> = [];
 
-  private jshCache: Map<string, string> | null = null;
-  private jshInflight: Promise<Map<string, string>> | null = null;
-  private bshCache: BshEntry[] | null = null;
-  private bshInflight: Promise<BshEntry[]> | null = null;
-  private workflowCache: Map<string, WorkflowCommandEntry> | null = null;
-  private workflowInflight: Promise<Map<string, WorkflowCommandEntry>> | null = null;
-  private jshGeneration = 0;
-  private bshGeneration = 0;
-  private workflowGeneration = 0;
+  private readonly jsh: CachedSource<Map<string, string>> = createCachedSource();
+  private readonly bsh: CachedSource<BshEntry[]> = createCachedSource();
+  private readonly workflow: CachedSource<Map<string, WorkflowCommandEntry>> = createCachedSource();
 
   constructor(options: ScriptCatalogOptions) {
     this.jshFs = options.jshFs;
@@ -128,21 +138,15 @@ export class ScriptCatalog {
   }
 
   invalidateJsh(): void {
-    this.jshGeneration++;
-    this.jshCache = null;
-    this.jshInflight = null;
+    bumpGeneration(this.jsh);
   }
 
   invalidateBsh(): void {
-    this.bshGeneration++;
-    this.bshCache = null;
-    this.bshInflight = null;
+    bumpGeneration(this.bsh);
   }
 
   invalidateWorkflows(): void {
-    this.workflowGeneration++;
-    this.workflowCache = null;
-    this.workflowInflight = null;
+    bumpGeneration(this.workflow);
   }
 
   async getJshCommands(): Promise<Map<string, string>> {
@@ -179,80 +183,69 @@ export class ScriptCatalog {
     return !!this.watcher && !!this.bshFs && !hasRelevantBshMounts(this.bshFs);
   }
 
-  private async loadJshCommands(): Promise<Map<string, string>> {
-    const shouldCache = this.shouldCacheJsh();
-    if (shouldCache && this.jshCache) return this.jshCache;
-
-    if (!this.jshInflight) {
-      const generation = this.jshGeneration;
-      const inflight = discoverJshCommands(this.jshFs)
-        .then((commands) => {
-          const cloned = cloneJshCommands(commands);
-          if (shouldCache && this.jshGeneration === generation) {
-            this.jshCache = cloned;
-          }
-          return cloned;
-        })
-        .finally(() => {
-          if (this.jshInflight === inflight) {
-            this.jshInflight = null;
-          }
-        });
-      this.jshInflight = inflight;
-    }
-
-    return this.jshInflight;
+  // Workflows are discovered from `jshFs`, so their cache eligibility tracks
+  // the same mount-awareness as jsh commands. We expose this as its own method
+  // (rather than reusing `shouldCacheJsh` at the call site) to make the
+  // intent explicit and to give the predicate room to diverge later.
+  private shouldCacheWorkflows(): boolean {
+    return this.shouldCacheJsh();
   }
 
-  private async loadBshEntries(): Promise<BshEntry[]> {
-    if (!this.bshFs) return [];
+  private loadCached<T>(
+    src: CachedSource<T>,
+    shouldCache: boolean,
+    load: () => Promise<T>,
+    clone: (value: T) => T
+  ): Promise<T> {
+    if (shouldCache && src.cache) return Promise.resolve(src.cache);
 
-    const shouldCache = this.shouldCacheBsh();
-    if (shouldCache && this.bshCache) return this.bshCache;
-
-    if (!this.bshInflight) {
-      const generation = this.bshGeneration;
-      const inflight = discoverBshScripts(this.bshFs)
-        .then((entries) => {
-          const cloned = cloneBshEntries(entries);
-          if (shouldCache && this.bshGeneration === generation) {
-            this.bshCache = cloned;
+    if (!src.inflight) {
+      const generation = src.generation;
+      const inflight = load()
+        .then((value) => {
+          const cloned = clone(value);
+          if (shouldCache && src.generation === generation) {
+            src.cache = cloned;
           }
           return cloned;
         })
         .finally(() => {
-          if (this.bshInflight === inflight) {
-            this.bshInflight = null;
+          if (src.inflight === inflight) {
+            src.inflight = null;
           }
         });
-      this.bshInflight = inflight;
+      src.inflight = inflight;
     }
 
-    return this.bshInflight;
+    return src.inflight;
   }
 
-  private async loadWorkflowCommands(): Promise<Map<string, WorkflowCommandEntry>> {
-    const shouldCache = this.shouldCacheJsh();
-    if (shouldCache && this.workflowCache) return this.workflowCache;
+  private loadJshCommands(): Promise<Map<string, string>> {
+    return this.loadCached(
+      this.jsh,
+      this.shouldCacheJsh(),
+      () => discoverJshCommands(this.jshFs),
+      cloneJshCommands
+    );
+  }
 
-    if (!this.workflowInflight) {
-      const generation = this.workflowGeneration;
-      const inflight = discoverWorkflowCommands(this.jshFs)
-        .then((commands) => {
-          const cloned = cloneWorkflowCommands(commands);
-          if (shouldCache && this.workflowGeneration === generation) {
-            this.workflowCache = cloned;
-          }
-          return cloned;
-        })
-        .finally(() => {
-          if (this.workflowInflight === inflight) {
-            this.workflowInflight = null;
-          }
-        });
-      this.workflowInflight = inflight;
-    }
+  private loadBshEntries(): Promise<BshEntry[]> {
+    if (!this.bshFs) return Promise.resolve([]);
+    const bshFs = this.bshFs;
+    return this.loadCached(
+      this.bsh,
+      this.shouldCacheBsh(),
+      () => discoverBshScripts(bshFs),
+      cloneBshEntries
+    );
+  }
 
-    return this.workflowInflight;
+  private loadWorkflowCommands(): Promise<Map<string, WorkflowCommandEntry>> {
+    return this.loadCached(
+      this.workflow,
+      this.shouldCacheWorkflows(),
+      () => discoverWorkflowCommands(this.jshFs),
+      cloneWorkflowCommands
+    );
   }
 }
