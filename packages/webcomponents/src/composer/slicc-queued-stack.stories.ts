@@ -142,7 +142,12 @@ export const InComposer: Story = {
     const stack = buildStack(count);
     // Pull the stack down so most of the front card tucks under the input
     // card — only the top of the pile peeks above into the chat area.
+    // `minHeight` guarantees the badge + a sliver of the front card stay
+    // visible above the overlap even when the front card is a single short
+    // line (otherwise a ~41px card would leave only ~9px peeking above the
+    // 32px tuck and disappear behind the textarea).
     stack.style.marginBottom = '-32px';
+    stack.style.minHeight = '76px';
     // The stack's `.stack` grid is `position: relative` (so its cards can
     // grid-overlap), which makes it a positioned element. Positioned
     // siblings paint above static ones regardless of DOM order, so without

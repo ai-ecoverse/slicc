@@ -419,6 +419,19 @@ export class WcChatController {
     // A RISING edge starts a fresh turn — forget the previous turn's reply
     // so a turn that streams nothing can never surface a stale one.
     if (processing) this.#turnAssistantId = null;
+    // The RISING edge is also the queue-consume boundary: items parked
+    // while busy belong to THIS turn, so flush them into the thread (in
+    // enqueue order, as ordinary user bubbles) BEFORE the streaming
+    // assistant lands. Hanging the flush off the rising edge (rather than
+    // off `message_start`) is the one turn-boundary signal BOTH floats
+    // share — live floats drive processing via scoop STATUS broadcasts
+    // that fire BEFORE the agent's `message_start` arrives, so a flush
+    // gated on `message_start` would miss the live ordering entirely. A
+    // mid-turn second `message_start` (multi-message turns) finds
+    // `#processing` already true → `setProcessing` early-returns above →
+    // no double flush, so items queued mid-turn keep waiting for the NEXT
+    // turn's rising edge.
+    if (processing) this.#flushQueued();
     if (!processing) this.#syncCopyRow();
     this.#onProcessingChange?.(processing);
     // End-of-turn = the processing flag FALLING. This is deliberately not
@@ -494,19 +507,15 @@ export class WcChatController {
   }
 
   #handleMessageStart(messageId: string): void {
-    // The rising edge of processing is the consume boundary for the queued
-    // stack: any submissions parked while busy belong to THIS turn, so flush
-    // them into the thread (in enqueue order, as ordinary user bubbles)
-    // BEFORE the streaming assistant lands. A mid-turn second `message_start`
-    // (multi-message turns) finds `wasProcessing=true` and skips the flush,
-    // so items queued mid-turn keep waiting for the NEXT turn's first start.
-    const wasProcessing = this.#processing;
+    // The queued-stack flush rides the processing rising edge inside
+    // `setProcessing` — both this code path AND the live-float scoop-status
+    // broadcast path go through that one chokepoint, so a flush gated here
+    // would miss the live ordering (status fires BEFORE `message_start`).
     this.setProcessing(true);
     this.#currentStreamId = messageId;
     // Record AFTER the rise (which resets it): a multi-message turn keeps
     // overwriting, so the turn-complete hook gets the turn's LAST message.
     this.#turnAssistantId = messageId;
-    if (!wasProcessing) this.#flushQueued();
     this.#appendMessage({
       id: messageId,
       role: 'assistant',

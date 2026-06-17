@@ -320,9 +320,13 @@ describe('mountWcUiPreview', () => {
     ).toBeTruthy();
     // The InComposer placement contract: stack at z-index 0 + overlap margin,
     // input card lifted to z-index 1 so its opaque background hides the bottom
-    // edge of the front card.
+    // edge of the front card. The `minHeight` floor guarantees the badge and a
+    // sliver of the front card stay visible above the overlap even when the
+    // queued card is a single short line (without it, a ~41px card would leave
+    // only ~9px above the 32px tuck and be obscured by the textarea).
     expect((stack as HTMLElement).style.zIndex).toBe('0');
     expect((stack as HTMLElement).style.marginBottom).toBe('-32px');
+    expect((stack as HTMLElement).style.minHeight).toBe('76px');
     expect((inputCard as HTMLElement).style.zIndex).toBe('1');
     // The ref handle is the same node — controllers drive it via setMessages.
     expect(refs.queuedStack).toBe(stack);

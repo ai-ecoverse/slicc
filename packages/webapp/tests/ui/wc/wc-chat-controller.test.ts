@@ -597,6 +597,50 @@ describe('WcChatController', () => {
     expect(queuedChanges.at(-1)).toHaveLength(0);
   });
 
+  it('flushes queued submissions when scoop status drives the rising edge BEFORE message_start (live ordering)', () => {
+    // The LIVE-FLOAT regression: in `wc-live.ts` the scoop STATUS broadcast
+    // (`onStatusChange → setProcessing(status === 'processing')`) flips
+    // `#processing` to true BEFORE the agent's `message_start` arrives. A
+    // flush gated on the `message_start` handler would see `#processing`
+    // already true and skip — leaving queued bubbles invisible (never
+    // appended to the thread) AND uncleared (never removed from the stack).
+    const queuedChanges: Array<readonly { id: string }[]> = [];
+    const localController = new WcChatController({
+      thread,
+      agent,
+      onQueuedChange: (items) => queuedChanges.push(items.slice()),
+    });
+    // Turn 1 runs and ends — queue two prompts mid-turn, then the falling
+    // edge lands so the next rise is a real false→true transition.
+    agent.emit({ type: 'message_start', messageId: 'm1' });
+    localController.sendUserMessage('first queued');
+    localController.sendUserMessage('second queued');
+    agent.emit({ type: 'turn_end', messageId: 'm1' });
+    expect(localController.getQueuedMessages()).toHaveLength(2);
+    expect(thread.querySelectorAll('slicc-user-message').length).toBe(0);
+    queuedChanges.length = 0;
+
+    // Live ordering: status broadcast fires the rising edge FIRST, with no
+    // accompanying `message_start` from the agent. The flush MUST happen
+    // here — both into the thread (two user bubbles, enqueue order) and
+    // into the host hook (final onQueuedChange with an empty list).
+    localController.setProcessing(true);
+    const flushed = thread.querySelectorAll('slicc-user-message');
+    expect(flushed).toHaveLength(2);
+    expect(flushed[0].shadowRoot?.textContent).toContain('first queued');
+    expect(flushed[1].shadowRoot?.textContent).toContain('second queued');
+    expect([...flushed].some((b) => b.hasAttribute('queued'))).toBe(false);
+    expect(localController.getQueuedMessages()).toHaveLength(0);
+    expect(queuedChanges.at(-1)).toHaveLength(0);
+
+    // The trailing `message_start` finds `#processing` already true → the
+    // setProcessing early-return short-circuits the second flush, so the
+    // user bubbles stay (no duplicates) and the streaming assistant lands
+    // beneath them.
+    agent.emit({ type: 'message_start', messageId: 'm2' });
+    expect(thread.querySelectorAll('slicc-user-message')).toHaveLength(2);
+  });
+
   it('does not re-flush queued items on mid-turn second message_start (multi-message turn)', () => {
     agent.emit({ type: 'message_start', messageId: 'm1' });
     controller.sendUserMessage('queued mid-turn');

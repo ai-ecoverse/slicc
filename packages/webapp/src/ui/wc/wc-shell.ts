@@ -188,11 +188,16 @@ function buildComposer(options: WcShellOptions): {
   // `z-index:1` and the stack is pinned to `z-index:0`, and the stack carries
   // the overlap margin that tucks its front card under the opaque input card.
   // The component renders nothing when empty, so an idle composer is visually
-  // unchanged.
+  // unchanged. `minHeight` guarantees a visible peek above the overlap even
+  // for a short single-line front card: a 41px card would otherwise leave
+  // only ~9px above the 32px overlap, almost entirely hidden by the textarea.
+  // 76px reserves badge(~16) + gap(6) + ~22px card peek above the 32px tuck;
+  // taller cards exceed the floor and keep the deeper tucked-behind look.
   const queuedStack = el('slicc-queued-stack') as SliccQueuedStack;
   queuedStack.style.position = 'relative';
   queuedStack.style.zIndex = '0';
   queuedStack.style.marginBottom = '-32px';
+  queuedStack.style.minHeight = '76px';
   const inputCard = el('slicc-input-card', { placeholder: options.placeholder });
   inputCard.style.position = 'relative';
   inputCard.style.zIndex = '1';
