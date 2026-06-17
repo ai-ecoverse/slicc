@@ -296,6 +296,75 @@ const cryptoUuidPkg: SyntheticPackage = {
   },
 };
 
+/**
+ * Minimal `imports` (`#`-specifier) shape: a plain-string `#x` and a
+ * conditions-object `#y` whose `node` variant top-level-imports a
+ * browser-unavailable built-in. The browser/default variant must be picked so
+ * the graph builds without touching node:os.
+ */
+const importsShapePkg: SyntheticPackage = {
+  name: 'imports-shape',
+  version: '1.0.0',
+  files: {
+    'package.json': JSON.stringify({
+      name: 'imports-shape',
+      version: '1.0.0',
+      type: 'module',
+      main: 'index.js',
+      imports: { '#x': './a.js', '#y': { node: './n.js', default: './b.js' } },
+    }),
+    'index.js': ["import x from '#x';", "import y from '#y';", 'export default { x, y };'].join(
+      '\n'
+    ),
+    'a.js': 'export default "a-resolved";',
+    'n.js': ["import os from 'node:os';", 'export default os.platform();'].join('\n'),
+    'b.js': 'export default "b-browser";',
+  },
+};
+
+/**
+ * chalk@5-shaped: ESM, a string `#ansi-styles` import and a conditions-object
+ * `#supports-color` whose node variant pulls in `node:os`/`node:tty` (both
+ * browser-unavailable). The browser/default variant must be selected so the
+ * graph builds and chalk runs.
+ */
+const chalkPkg: SyntheticPackage = {
+  name: 'chalk',
+  version: '5.3.0',
+  files: {
+    'package.json': JSON.stringify({
+      name: 'chalk',
+      version: '5.3.0',
+      type: 'module',
+      main: './source/index.js',
+      exports: { '.': './source/index.js' },
+      imports: {
+        '#ansi-styles': './source/vendor/ansi-styles/index.js',
+        '#supports-color': {
+          node: './source/vendor/supports-color/index.js',
+          default: './source/vendor/supports-color/browser.js',
+        },
+      },
+    }),
+    'source/index.js': [
+      "import ansiStyles from '#ansi-styles';",
+      "import supportsColor from '#supports-color';",
+      'const chalk = (s) => `${ansiStyles.open}${s}${ansiStyles.close}`;',
+      'chalk.level = supportsColor ? supportsColor.level : 0;',
+      'export default chalk;',
+    ].join('\n'),
+    'source/vendor/ansi-styles/index.js':
+      "export default { open: '\\u001b[31m', close: '\\u001b[39m' };",
+    'source/vendor/supports-color/index.js': [
+      "import os from 'node:os';",
+      "import tty from 'node:tty';",
+      'export default { level: tty.isatty(1) ? 1 : 0, platform: os.platform() };',
+    ].join('\n'),
+    'source/vendor/supports-color/browser.js':
+      'export default { level: globalThis.navigator ? 1 : 0 };',
+  },
+};
+
 describe('Real-path ESM e2e: ipk install → import over the production realm seam', () => {
   beforeEach(() => {
     sharedRegistry.current = { packuments: {}, tarballs: {} };
@@ -421,6 +490,50 @@ describe('Real-path ESM e2e: ipk install → import over the production realm se
     expect(stat.stderr).not.toContain('Cannot find module');
     expect(stat.exitCode).toBe(0);
     expect(stat.stdout.trim()).toBe('true');
+    await fs.dispose();
+  });
+
+  it('VAL-ESM-002 (package #imports): a plain-string #x resolves and a conditions-object #y picks the browser/default variant', async () => {
+    sharedRegistry.current = buildRegistry([importsShapePkg]);
+    const { shell, fs } = await newShell();
+    expect((await shell.executeCommand('ipk install imports-shape')).exitCode).toBe(0);
+
+    await fs.writeFile('/work/use.jsh', "import m from 'imports-shape';\nconsole.log(m.x, m.y);");
+    const out = await shell.executeCommand('node use.jsh');
+    expect(out.stderr).not.toContain('Cannot find module');
+    expect(out.stderr).not.toContain('not available in the browser');
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('a-resolved b-browser');
+    await fs.dispose();
+  });
+
+  it('VAL-ESM-001/002/008 (chalk #imports): import + require resolve #ansi-styles and the browser #supports-color variant without an unavailable-builtin error', async () => {
+    sharedRegistry.current = buildRegistry([chalkPkg]);
+    const { shell, fs } = await newShell();
+    expect((await shell.executeCommand('ipk install chalk')).exitCode).toBe(0);
+
+    // Static import: chalk default is a function; #supports-color resolved its
+    // browser variant, so node:os/node:tty are never pulled into the graph.
+    await fs.writeFile(
+      '/work/imp.jsh',
+      "import chalk from 'chalk';\nconsole.log(typeof chalk, typeof chalk.level);"
+    );
+    const imp = await shell.executeCommand('node imp.jsh');
+    expect(imp.stderr).not.toContain('Cannot find module');
+    expect(imp.stderr).not.toContain('not available in the browser');
+    expect(imp.exitCode).toBe(0);
+    expect(imp.stdout.trim()).toBe('function number');
+
+    // require(): synchronous, default-interop exposes the chalk function.
+    await fs.writeFile(
+      '/work/req.js',
+      "const m = require('chalk'); console.log(typeof (m.default ?? m));"
+    );
+    const req = await shell.executeCommand('node req.js');
+    expect(req.stderr).not.toContain('Cannot find module');
+    expect(req.stderr).not.toContain('not available in the browser');
+    expect(req.exitCode).toBe(0);
+    expect(req.stdout.trim()).toBe('function');
     await fs.dispose();
   });
 

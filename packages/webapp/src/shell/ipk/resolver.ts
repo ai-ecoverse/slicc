@@ -270,6 +270,7 @@ interface ResolverManifest {
   main?: unknown;
   module?: unknown;
   exports?: unknown;
+  imports?: unknown;
 }
 
 function dirOf(path: string): string {
@@ -497,6 +498,96 @@ async function findPackageDir(
   return null;
 }
 
+/**
+ * Walk UP from `fromDir` to the FIRST directory containing a `package.json`
+ * (Node `LOOKUP_PACKAGE_SCOPE`). Stopping at the first enclosing scope keeps
+ * `#`-import resolution package-private: it must never escape into a parent
+ * package's `imports` map.
+ */
+async function findPackageScope(reader: ModuleReader, fromDir: string): Promise<string | null> {
+  let dir = fromDir || '/';
+  while (true) {
+    if (await isFile(reader, joinPath(dir, 'package.json'))) return dir;
+    if (dir === '/' || dir === '') break;
+    dir = dirOf(dir);
+  }
+  return null;
+}
+
+/**
+ * Derive browser-preferring conditions for `#`-import resolution from the
+ * incoming edge conditions: drop `node` and prepend `browser`, preserving the
+ * access kind (`import`/`require`). A package's `#`-private node variant often
+ * top-level-imports browser-unavailable built-ins (e.g. chalk's `#supports-color`
+ * node entry pulls in `node:os`/`node:tty`), so its browser/default variant is
+ * the one that runs in the realm. Scoped to `#`-imports only.
+ */
+function browserPreferringConditions(conditions: string[]): string[] {
+  const kind = conditions.includes('import') ? 'import' : 'require';
+  return ['browser', kind, 'default'];
+}
+
+interface MatchedImport {
+  field: unknown;
+  /** The substring captured by a single `*` pattern key, or '' for exact. */
+  star: string;
+}
+
+/**
+ * Match `specifier` against the `imports` map: exact key first, then a single
+ * `*` pattern key (`#internal/*`). Returns the matched target field plus the
+ * captured `*` substring, or null when nothing matches.
+ */
+function matchImportsKey(
+  specifier: string,
+  importsMap: Record<string, unknown>
+): MatchedImport | null {
+  if (Object.hasOwn(importsMap, specifier)) {
+    return { field: importsMap[specifier], star: '' };
+  }
+  for (const key of Object.keys(importsMap)) {
+    const starIdx = key.indexOf('*');
+    if (starIdx === -1) continue;
+    if (key.indexOf('*', starIdx + 1) !== -1) continue;
+    const prefix = key.slice(0, starIdx);
+    const suffix = key.slice(starIdx + 1);
+    if (specifier.length < prefix.length + suffix.length) continue;
+    if (!specifier.startsWith(prefix)) continue;
+    if (suffix && !specifier.endsWith(suffix)) continue;
+    const star = specifier.slice(prefix.length, specifier.length - suffix.length);
+    return { field: importsMap[key], star };
+  }
+  return null;
+}
+
+/**
+ * Resolve a package `imports` (`#`-specifier) entry. Finds the nearest package
+ * scope, matches the specifier in its `imports` map (exact, then single-`*`
+ * pattern), resolves the matched target through {@link resolveExportsTarget}
+ * with browser-preferring conditions, and resolves the relative target against
+ * the scope dir via {@link loadAsFileOrDirectory}. Returns the resolved file
+ * path or null on any miss.
+ */
+async function resolvePackageImports(
+  specifier: string,
+  fromDir: string,
+  reader: ModuleReader,
+  conditions: string[]
+): Promise<string | null> {
+  const scopeDir = await findPackageScope(reader, fromDir);
+  if (!scopeDir) return null;
+  const manifest = await readManifest(reader, scopeDir);
+  const imports = manifest?.imports;
+  if (!imports || typeof imports !== 'object' || Array.isArray(imports)) return null;
+  const matched = matchImportsKey(specifier, imports as Record<string, unknown>);
+  if (!matched) return null;
+  const browserConditions = browserPreferringConditions(conditions);
+  const target = resolveExportsTarget(matched.field, browserConditions);
+  if (!target) return null;
+  const resolvedTarget = matched.star ? target.replace(/\*/g, matched.star) : target;
+  return loadAsFileOrDirectory(reader, joinPath(scopeDir, resolvedTarget), browserConditions);
+}
+
 const ESM_IMPORT_RE = /(?:^|[;\n}])\s*import\b(?!\s*[(.])/;
 const ESM_EXPORT_RE = /(?:^|[;\n}])\s*export\b/;
 const IMPORT_META_RE = /\bimport\s*\.\s*meta\b/;
@@ -607,6 +698,18 @@ export async function resolve(
   // The realm require shim serves/guards it at require time.
   if (NODE_BUILTINS.has(specifier)) {
     return { type: 'builtin', specifier, name: specifier };
+  }
+
+  // Package `imports` (`#`-specifier): package-private, resolved against the
+  // nearest enclosing package scope. Never installable, so the miss error
+  // carries no `ipk install` hint.
+  if (specifier.startsWith('#')) {
+    if (specifier === '#' || specifier.startsWith('#/')) {
+      throw new Error(`Cannot find module '${specifier}'`);
+    }
+    const resolved = await resolvePackageImports(specifier, fromDir, reader, conditions);
+    if (!resolved) throw new Error(`Cannot find module '${specifier}'`);
+    return { type: 'file', path: resolved, moduleKind: await detectModuleKind(reader, resolved) };
   }
 
   if (isPathSpecifier(specifier)) {
