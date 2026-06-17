@@ -1,6 +1,7 @@
 import { define } from '../internal/define.js';
 import { h } from '../internal/dom.js';
 import { iconEl } from '../internal/icons.js';
+import { shouldShowDevicePicker } from './devices.js';
 import {
   type ComposerSpeech,
   createBuiltinComposerSpeech,
@@ -719,7 +720,7 @@ export class SliccComposer extends HTMLElement {
 
     void speech.microphones().then((mics) => {
       if (token !== this.#token) return;
-      if (mics.length > 1) this.#renderDevicePicker(mics);
+      if (shouldShowDevicePicker(mics)) this.#renderDevicePicker(mics);
     });
 
     void speech

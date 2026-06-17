@@ -16,6 +16,7 @@ import {
   attachmentFromBytes,
   attachmentFromCapture,
   attachmentFromDataUrl,
+  attachmentFromVideoBlob,
   createAddProvider,
   persistUpload,
   UPLOAD_DIR,
@@ -157,6 +158,37 @@ describe('capture persistence (/tmp/upload)', () => {
   });
 });
 
+describe('attachmentFromVideoBlob', () => {
+  it('persists the WebM under /tmp/upload as a kind:file (no inline data)', async () => {
+    const fs = await seededFs();
+    const bytes = new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, 0xff, 0x00]); // mock WebM header bytes
+    const blob = new Blob([bytes], { type: 'video/webm' });
+    const attachment = await attachmentFromVideoBlob('clip.webm', blob, fs);
+    expect(attachment?.kind).toBe('file');
+    expect(attachment?.mimeType).toBe('video/webm');
+    expect(attachment?.size).toBe(bytes.length);
+    expect(attachment?.data).toBeUndefined();
+    expect(attachment?.text).toBeUndefined();
+    expect(attachment?.path?.startsWith(`${UPLOAD_DIR}/`)).toBe(true);
+    const saved = (await fs.readFile(attachment?.path as string, {
+      encoding: 'binary',
+    })) as Uint8Array;
+    expect(Array.from(saved)).toEqual(Array.from(bytes));
+  });
+
+  it('returns null without a writer (a video chip without a path is useless)', async () => {
+    const blob = new Blob([new Uint8Array([1, 2, 3])], { type: 'video/webm' });
+    expect(await attachmentFromVideoBlob('clip.webm', blob, null)).toBeNull();
+  });
+
+  it('falls back to video/webm when the Blob carries no MIME type', async () => {
+    const fs = await seededFs();
+    const blob = new Blob([new Uint8Array([1, 2, 3])]);
+    const attachment = await attachmentFromVideoBlob('clip.webm', blob, fs);
+    expect(attachment?.mimeType).toBe('video/webm');
+  });
+});
+
 describe('WcAttachmentStage', () => {
   it('renders image attachments with a data-URI thumbnail', () => {
     const card = document.createElement('slicc-input-card');
@@ -196,7 +228,7 @@ describe('WcAttachmentStage', () => {
 });
 
 describe('wireWcAttach action routing', () => {
-  async function setup(opts: { withWriter?: boolean } = {}) {
+  async function setup(opts: { withWriter?: boolean; composer?: HTMLElement } = {}) {
     const fs = await seededFs();
     const inputCard = document.createElement('slicc-input-card') as HTMLElement & {
       value?: string;
@@ -206,6 +238,7 @@ describe('wireWcAttach action routing', () => {
     const stage = wireWcAttach({
       inputCard,
       freezer,
+      composer: opts.composer,
       openReader: async () => fs,
       openWriter: opts.withWriter === false ? undefined : async () => fs,
       listConversations: async () => [],
@@ -350,5 +383,235 @@ describe('wireWcAttach action routing', () => {
     await vi.waitFor(() => {
       expect(selects).toEqual(['2026-06-11-session.md']);
     });
+  });
+});
+
+// Stub the `<slicc-composer-capture>` element once so the inline-overlay tests
+// can drive the capture flow without a real camera or the full library load.
+// The stub keeps the public `open()` contract (resolves a `CaptureResult | null`)
+// so the wiring exercises the real photo/video result branches.
+type StubResult =
+  | { kind: 'image'; mimeType: string; width: number; height: number; dataUrl: string }
+  | { kind: 'video'; mimeType: string; width: number; height: number; blob: Blob }
+  | null;
+let stubResult: StubResult = null;
+let stubDeferred: { promise: Promise<StubResult>; resolve: (v: StubResult) => void } | null = null;
+const liveStubs = new Set<HTMLElement>();
+class CaptureStub extends HTMLElement {
+  open(mode?: 'photo' | 'video'): Promise<StubResult> {
+    (this as HTMLElement & { __mode?: string }).__mode = mode ?? 'photo';
+    liveStubs.add(this);
+    if (stubDeferred) return stubDeferred.promise;
+    return Promise.resolve(stubResult);
+  }
+  disconnectedCallback(): void {
+    liveStubs.delete(this);
+  }
+}
+if (!customElements.get('slicc-composer-capture')) {
+  customElements.define('slicc-composer-capture', CaptureStub);
+}
+
+describe('wireWcAttach inline capture overlay', () => {
+  async function setup(opts: { withWriter?: boolean } = {}) {
+    const fs = await seededFs();
+    const inputCard = document.createElement('slicc-input-card') as HTMLElement & {
+      value?: string;
+    };
+    const freezer = document.createElement('slicc-freezer');
+    // The composer-band host is `<slicc-composer>` in the live shell — a
+    // `position:relative` element so the compact capture surface's absolute
+    // placement anchors against it. A bare div with the same property
+    // exercises the same wiring without booting the library.
+    const composer = document.createElement('div');
+    composer.style.position = 'relative';
+    document.body.append(inputCard, freezer, composer);
+    const stage = wireWcAttach({
+      inputCard,
+      freezer,
+      composer,
+      openReader: async () => fs,
+      openWriter: opts.withWriter === false ? undefined : async () => fs,
+      listConversations: async () => [],
+      log,
+    });
+    return { fs, inputCard, composer, stage };
+  }
+
+  function emitAdd(inputCard: HTMLElement, detail: Record<string, unknown>): void {
+    inputCard.dispatchEvent(new CustomEvent('slicc-add', { bubbles: true, detail }));
+  }
+
+  it('mounts the capture surface on the composer band with compact drop-target placement and removes it after open() resolves', async () => {
+    const { inputCard, composer, stage } = await setup();
+    stubResult = {
+      kind: 'image',
+      mimeType: 'image/png',
+      width: 1,
+      height: 1,
+      dataUrl: `data:image/png;base64,${btoa('snap')}`,
+    };
+    let liveCapture: HTMLElement | null = null;
+    // Hold the open() resolution so we can inspect the live surface placement
+    // before the wiring tears it down.
+    let resolveOpen!: (v: StubResult) => void;
+    stubDeferred = {
+      promise: new Promise<StubResult>((r) => {
+        resolveOpen = r;
+      }),
+      resolve: (v) => resolveOpen(v),
+    };
+    try {
+      emitAdd(inputCard, { kind: 'capture', mode: 'photo' });
+      await vi.waitFor(() => {
+        liveCapture = composer.querySelector<HTMLElement>('slicc-composer-capture');
+        expect(liveCapture).toBeTruthy();
+      });
+      // Enlarged overlay geometry: absolute placement anchored ABOVE the
+      // meta row (`bottom:56px` clears the composer's 14px bottom padding
+      // + the 30px `.ctl` meta-pill row) so the model/thinking pills stay
+      // visible and clickable while the box covers the input textarea.
+      // Constrained to the composer's inner-column width (max 680px,
+      // centered via translateX). No `inset:0` full-pane takeover — the
+      // surface still self-bounds via its own responsive aspect-ratio +
+      // max-height (the wrapper imposes no aspect-ratio override).
+      const style = (liveCapture as unknown as HTMLElement).style;
+      expect(style.position).toBe('absolute');
+      expect(style.maxWidth).toBe('680px');
+      expect(style.bottom).toBe('56px');
+      expect(style.transform).toContain('translateX(-50%)');
+      expect(style.zIndex).toBe('3');
+      // The wrapper deliberately omits `aspect-ratio` so the component's
+      // responsive 3:4 desktop / 4:3 mobile rule applies.
+      expect(style.aspectRatio).toBe('');
+      resolveOpen(stubResult);
+    } finally {
+      stubDeferred = null;
+    }
+    // The surface is appended during open() and removed on resolve — so the
+    // staged item is the post-condition we wait on.
+    await vi.waitFor(() => {
+      expect(stage.items).toHaveLength(1);
+    });
+    expect(composer.querySelector('slicc-composer-capture')).toBeNull();
+  });
+
+  it('stages a photo capture result as an image attachment (inline data + VFS path)', async () => {
+    const { fs, inputCard, stage } = await setup();
+    stubResult = {
+      kind: 'image',
+      mimeType: 'image/png',
+      width: 1,
+      height: 1,
+      dataUrl: `data:image/png;base64,${btoa('snap')}`,
+    };
+    emitAdd(inputCard, { kind: 'capture', mode: 'photo' });
+    await vi.waitFor(() => {
+      expect(stage.items).toHaveLength(1);
+    });
+    const item = stage.items[0];
+    expect(item.kind).toBe('image');
+    expect(item.name).toMatch(/^photo-\d+\.png$/);
+    expect(item.data).toBe(btoa('snap'));
+    expect(item.path?.startsWith(`${UPLOAD_DIR}/`)).toBe(true);
+    const saved = await fs.readFile(item.path as string, { encoding: 'utf-8' });
+    expect(typeof saved === 'string' ? saved : new TextDecoder().decode(saved)).toBe('snap');
+  });
+
+  it('stages a video capture result as a kind:file with the WebM persisted to /tmp/upload', async () => {
+    const { fs, inputCard, stage } = await setup();
+    const videoBytes = new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, 0x42, 0x82]);
+    stubResult = {
+      kind: 'video',
+      mimeType: 'video/webm;codecs=vp9,opus',
+      width: 640,
+      height: 480,
+      blob: new Blob([videoBytes], { type: 'video/webm' }),
+    };
+    emitAdd(inputCard, { kind: 'capture', mode: 'photo' });
+    await vi.waitFor(() => {
+      expect(stage.items).toHaveLength(1);
+    });
+    const item = stage.items[0];
+    expect(item.kind).toBe('file');
+    expect(item.name).toMatch(/^video-\d+\.webm$/);
+    expect(item.mimeType).toBe('video/webm');
+    expect(item.data).toBeUndefined();
+    expect(item.path?.startsWith(`${UPLOAD_DIR}/`)).toBe(true);
+    const saved = (await fs.readFile(item.path as string, {
+      encoding: 'binary',
+    })) as Uint8Array;
+    expect(Array.from(saved)).toEqual(Array.from(videoBytes));
+  });
+
+  it('cancel resolves to no attachment and tears down the surface', async () => {
+    const { inputCard, composer, stage } = await setup();
+    stubResult = null;
+    emitAdd(inputCard, { kind: 'capture', mode: 'photo' });
+    // No staged items; the surface was removed.
+    await vi.waitFor(() => {
+      expect(composer.querySelector('slicc-composer-capture')).toBeNull();
+    });
+    expect(stage.items).toHaveLength(0);
+  });
+
+  it('drops a video result when no writer is available (no orphan chip)', async () => {
+    const { inputCard, stage } = await setup({ withWriter: false });
+    stubResult = {
+      kind: 'video',
+      mimeType: 'video/webm',
+      width: 1,
+      height: 1,
+      blob: new Blob([new Uint8Array([1])], { type: 'video/webm' }),
+    };
+    emitAdd(inputCard, { kind: 'capture', mode: 'photo' });
+    // Give the async chain a chance to settle without staging anything.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(stage.items).toHaveLength(0);
+  });
+
+  it('persists camera + mic picks via slicc-capture-device-change', async () => {
+    // Seed the preference store fresh — other tests in the suite may have
+    // written values we'd otherwise be asserting against by accident.
+    localStorage.removeItem('slicc_camera_device');
+    localStorage.removeItem('slicc_microphone_device');
+    // Pause the open() resolution so the overlay stays mounted while we
+    // dispatch device-change events on the live element.
+    let resolveOpen!: (v: StubResult) => void;
+    stubDeferred = {
+      promise: new Promise<StubResult>((r) => {
+        resolveOpen = r;
+      }),
+      resolve: (v) => resolveOpen(v),
+    };
+    try {
+      const { inputCard } = await setup();
+      emitAdd(inputCard, { kind: 'capture', mode: 'photo' });
+      // Wait for the overlay to mount.
+      let live: HTMLElement | null = null;
+      await vi.waitFor(() => {
+        live = [...liveStubs][0] ?? null;
+        expect(live).toBeTruthy();
+      });
+      live?.dispatchEvent(
+        new CustomEvent('slicc-capture-device-change', {
+          bubbles: true,
+          composed: true,
+          detail: { deviceId: 'cam-42', kind: 'camera' },
+        })
+      );
+      live?.dispatchEvent(
+        new CustomEvent('slicc-capture-device-change', {
+          bubbles: true,
+          composed: true,
+          detail: { deviceId: 'mic-99', kind: 'microphone' },
+        })
+      );
+      expect(localStorage.getItem('slicc_camera_device')).toBe('cam-42');
+      expect(localStorage.getItem('slicc_microphone_device')).toBe('mic-99');
+      resolveOpen(null);
+    } finally {
+      stubDeferred = null;
+    }
   });
 });

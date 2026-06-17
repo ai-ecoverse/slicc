@@ -13,6 +13,7 @@ import './chat/slicc-handoff-card.js';
 import './chat/slicc-lick-card.js';
 import './chat/slicc-tool-cluster.js';
 import './chat/slicc-user-message.js';
+import './composer/slicc-composer-capture.js';
 import './composer/slicc-composer-meta.js';
 import './composer/slicc-composer.js';
 import './composer/slicc-input-card.js';

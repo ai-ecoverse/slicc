@@ -21,6 +21,14 @@ export { SliccLickCard } from './chat/slicc-lick-card.js';
 export { SliccToolCluster } from './chat/slicc-tool-cluster.js';
 export { SliccUserMessage } from './chat/slicc-user-message.js';
 export { HOLD_TO_ENABLE_MS, SliccComposer } from './composer/slicc-composer.js';
+export {
+  type CameraMediaProvider,
+  type CaptureDeviceChangeDetail,
+  type CaptureMode,
+  type CaptureResult,
+  type RecorderFactory,
+  SliccComposerCapture,
+} from './composer/slicc-composer-capture.js';
 export { SliccComposerMeta } from './composer/slicc-composer-meta.js';
 export { SliccInputCard } from './composer/slicc-input-card.js';
 export { type QueuedMessage, SliccQueuedStack } from './composer/slicc-queued-stack.js';

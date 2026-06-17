@@ -6,6 +6,7 @@
  * render inside the input card and ride the next submit.
  */
 
+import type { CaptureDeviceChangeDetail, CaptureResult } from '@slicc/webcomponents';
 import type { MessageAttachment } from '../../core/attachments.js';
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
 import type { WritableVfsClient } from '../../kernel/writable-vfs-client.js';
@@ -169,6 +170,31 @@ export async function attachmentFromCapture(
   }
   const inline = attachmentFromDataUrl(name, await downscaleDataUrl(dataUrl).catch(() => dataUrl));
   return { ...(inline ?? full), name, path };
+}
+
+/**
+ * A recorded video Blob → file attachment. The WebM (with its mic audio track)
+ * is persisted to {@link UPLOAD_DIR} and referenced by path — video is not a
+ * vision input, so no inline `data` is carried. Returns `null` when no writer
+ * is available (a video with no path is just a dead chip).
+ */
+export async function attachmentFromVideoBlob(
+  name: string,
+  blob: Blob,
+  writer: WritableVfsClient | null
+): Promise<MessageAttachment | null> {
+  if (!writer) return null;
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const path = await persistUpload(writer, name, bytes).catch(() => undefined);
+  if (!path) return null;
+  return {
+    id: uid(),
+    name,
+    mimeType: blob.type || 'video/webm',
+    size: bytes.length,
+    kind: 'file',
+    path,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -381,15 +407,162 @@ async function captureScreenshot(): Promise<string | null> {
   return grabFrame(stream);
 }
 
-/** Remembered camera pick (the component reports changes via its event). */
+/** Remembered camera + mic picks (the component reports changes via its event). */
 const CAMERA_PREF_KEY = 'slicc_camera_device';
+const MIC_PREF_KEY = 'slicc_microphone_device';
+
+/** Compact "drop-target" placement that mounts inside the composer band
+ *  (`<slicc-composer>` is `position:relative; z-index:2`) and overlays the
+ *  input card region from above the meta row. The meta row sits at the
+ *  bottom of the band (composer padding-bottom 14px + `.ctl` height 30px =
+ *  44px); anchoring at `bottom:56px` keeps the model/thinking pills fully
+ *  visible and clickable while the capture box covers the textarea above.
+ *  Constrained to the composer's inner-column width (max 680px, centered
+ *  via translateX). The component owns its responsive aspect-ratio
+ *  (3:4 desktop / 4:3 mobile), so this wrapper imposes none. */
+const COMPACT_CSS = [
+  'position:absolute',
+  'left:50%',
+  'right:auto',
+  'transform:translateX(-50%)',
+  'bottom:56px',
+  'width:calc(100% - 32px)',
+  'max-width:680px',
+  'z-index:3',
+].join(';');
 
 /**
- * Camera photo through the library's `<slicc-camera-dialog>` — live preview,
- * camera picker, mirrored selfie view. Resolves the raw data URL, or null on
- * cancel / no camera.
+ * Camera capture via the inline `<slicc-composer-capture>` surface, mounted
+ * inside the composer band and anchored above the meta row so the box
+ * overlays the input textarea while leaving the model/thinking pills
+ * visible and interactive. Photo + video are both reachable through the
+ * in-surface mode toggle; the caller picks the initial mode.
+ * Resolves with the raw `CaptureResult` or `null` on cancel / no camera.
+ *
+ * Camera + mic picks persist across sessions via the
+ * `slicc-capture-device-change` event (`detail.kind: 'camera' | 'microphone'`).
  */
-async function capturePhoto(): Promise<string | null> {
+async function captureInline(
+  host: HTMLElement,
+  initialMode: 'photo' | 'video'
+): Promise<CaptureResult | null> {
+  // The library barrel is already imported by `wc-shell.ts`, so the
+  // `<slicc-composer-capture>` element is registered by the time we mount it.
+  const capture = document.createElement('slicc-composer-capture') as HTMLElement & {
+    open(mode?: 'photo' | 'video'): Promise<CaptureResult | null>;
+  };
+  const preferredCam = localStorage.getItem(CAMERA_PREF_KEY);
+  if (preferredCam) capture.setAttribute('preferred-device', preferredCam);
+  const preferredMic = localStorage.getItem(MIC_PREF_KEY);
+  if (preferredMic) capture.setAttribute('preferred-audio-device', preferredMic);
+  capture.style.cssText = COMPACT_CSS;
+  capture.hidden = true;
+  capture.addEventListener('slicc-capture-device-change', (event) => {
+    const detail = (event as CustomEvent<CaptureDeviceChangeDetail>).detail;
+    if (!detail?.deviceId) return;
+    const key = detail.kind === 'microphone' ? MIC_PREF_KEY : CAMERA_PREF_KEY;
+    localStorage.setItem(key, detail.deviceId);
+  });
+  host.append(capture);
+  try {
+    return await capture.open(initialMode);
+  } finally {
+    capture.remove();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Wiring
+// ---------------------------------------------------------------------------
+
+export interface WireWcAttachDeps {
+  inputCard: HTMLElement & { value?: string };
+  /** The freezer rail — conversation picks thaw through its select event. */
+  freezer: HTMLElement;
+  /** Host for the inline `<slicc-composer-capture>` surface — the
+   *  `<slicc-composer>` band element (already `position:relative; z-index:2`).
+   *  The surface anchors above the meta row (`bottom:56px`) so the capture
+   *  box covers the input textarea while the model/thinking pills stay
+   *  visible and interactive. Optional: hosts without an overlay site
+   *  (tests, harnesses) get the legacy `<slicc-camera-dialog>` modal as a
+   *  fallback. */
+  composer?: HTMLElement;
+  openReader(): Promise<LocalVfsClient>;
+  /** Writable VFS for persisting captures + oversized uploads to /tmp/upload. */
+  openWriter?(): Promise<WritableVfsClient>;
+  listConversations(): Promise<{ id: string; label: string; sub?: string }[]>;
+  log: { error(message: string, ...data: unknown[]): void };
+}
+
+/** Stage a photo result (image data URL) — full-res to VFS + inline downscale. */
+async function stagePhotoResult(
+  result: CaptureResult,
+  deps: WireWcAttachDeps,
+  stage: WcAttachmentStage
+): Promise<void> {
+  if (!result.dataUrl) return;
+  const name = `photo-${Date.now()}.png`;
+  const writer = (await deps.openWriter?.().catch(() => null)) ?? null;
+  const attachment = await attachmentFromCapture(name, result.dataUrl, writer);
+  if (attachment) stage.add(attachment);
+}
+
+/** Stage a video result (WebM Blob) — persist to VFS, reference by path. */
+async function stageVideoResult(
+  result: CaptureResult,
+  deps: WireWcAttachDeps,
+  stage: WcAttachmentStage
+): Promise<void> {
+  if (!result.blob) return;
+  const ext = /webm/i.test(result.mimeType) ? 'webm' : 'bin';
+  const name = `video-${Date.now()}.${ext}`;
+  const writer = (await deps.openWriter?.().catch(() => null)) ?? null;
+  const attachment = await attachmentFromVideoBlob(name, result.blob, writer);
+  if (attachment) stage.add(attachment);
+}
+
+/**
+ * Stage a captured frame:
+ * - `mode:'photo'` (camera) → inline `<slicc-composer-capture>` mounted
+ *    inside the composer band and anchored above the meta row so the box
+ *    overlays the input textarea while leaving the meta row visible;
+ *    the in-surface toggle reaches video; photo result → image attachment,
+ *    video result → file attachment (WebM persisted to VFS).
+ * - `mode:'screen'` (or anything else) → `getDisplayMedia` one-frame grab.
+ */
+async function stageCapture(
+  detail: Record<string, unknown>,
+  deps: WireWcAttachDeps,
+  stage: WcAttachmentStage
+): Promise<void> {
+  if (detail.mode === 'photo') {
+    // No overlay host (preview / test harness) → fall back to the modal.
+    if (!deps.composer) {
+      const dataUrl = await capturePhotoFallback();
+      if (!dataUrl) return;
+      const name = `photo-${Date.now()}.png`;
+      const writer = (await deps.openWriter?.().catch(() => null)) ?? null;
+      const attachment = await attachmentFromCapture(name, dataUrl, writer);
+      if (attachment) stage.add(attachment);
+      return;
+    }
+    const result = await captureInline(deps.composer, 'photo');
+    if (!result) return;
+    if (result.kind === 'image') await stagePhotoResult(result, deps, stage);
+    else if (result.kind === 'video') await stageVideoResult(result, deps, stage);
+    return;
+  }
+  const dataUrl = await captureScreenshot();
+  if (!dataUrl) return;
+  const name = `screenshot-${Date.now()}.png`;
+  const writer = (await deps.openWriter?.().catch(() => null)) ?? null;
+  const attachment = await attachmentFromCapture(name, dataUrl, writer);
+  if (attachment) stage.add(attachment);
+}
+
+/** Fallback camera capture via the legacy `<slicc-camera-dialog>` for hosts
+ *  with no chat-pane overlay site. */
+async function capturePhotoFallback(): Promise<string | null> {
   const dialog = document.createElement('slicc-camera-dialog');
   const preferred = localStorage.getItem(CAMERA_PREF_KEY);
   if (preferred) dialog.setAttribute('preferred-device', preferred);
@@ -403,37 +576,6 @@ async function capturePhoto(): Promise<string | null> {
   } finally {
     dialog.remove();
   }
-}
-
-// ---------------------------------------------------------------------------
-// Wiring
-// ---------------------------------------------------------------------------
-
-export interface WireWcAttachDeps {
-  inputCard: HTMLElement & { value?: string };
-  /** The freezer rail — conversation picks thaw through its select event. */
-  freezer: HTMLElement;
-  openReader(): Promise<LocalVfsClient>;
-  /** Writable VFS for persisting captures + oversized uploads to /tmp/upload. */
-  openWriter?(): Promise<WritableVfsClient>;
-  listConversations(): Promise<{ id: string; label: string; sub?: string }[]>;
-  log: { error(message: string, ...data: unknown[]): void };
-}
-
-/** Stage a captured frame (camera vs screen): full-res original persisted to
- *  the VFS, downscaled inline copy for vision. */
-async function stageCapture(
-  detail: Record<string, unknown>,
-  deps: WireWcAttachDeps,
-  stage: WcAttachmentStage
-) {
-  const isPhoto = detail.mode === 'photo';
-  const dataUrl = isPhoto ? await capturePhoto() : await captureScreenshot();
-  if (!dataUrl) return;
-  const name = `${isPhoto ? 'photo' : 'screenshot'}-${Date.now()}.png`;
-  const writer = (await deps.openWriter?.().catch(() => null)) ?? null;
-  const attachment = await attachmentFromCapture(name, dataUrl, writer);
-  if (attachment) stage.add(attachment);
 }
 
 /**
