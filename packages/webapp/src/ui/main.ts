@@ -20,6 +20,7 @@ import { createLogger } from '../core/index.js';
 // — the extension agent engine runs in the offscreen document, not in this file.
 import { registerProviders } from '../providers/index.js';
 import { startFreezeWatchdog } from './boot/setup-freeze-watchdog.js';
+import { setupNukeReloadListener } from './boot/setup-nuke-reload-listener.js';
 import { setupSwRegistration } from './boot/setup-sw-registration.js';
 import { applyProviderDefaults } from './provider-settings.js';
 import { resolveUiRuntimeMode } from './runtime-mode.js';
@@ -51,6 +52,13 @@ async function main(): Promise<void> {
   }
 
   startFreezeWatchdog();
+
+  // Page-side `nuke-reload` listener. The agent shell runs in a
+  // worker / offscreen context where `location.reload()` is a no-op,
+  // so `nuke <launch-code>` broadcasts a reload request that this
+  // window-context listener acts on (clearing select localStorage
+  // keys, then reloading). Idempotent — safe to call across re-inits.
+  setupNukeReloadListener();
 
   // Service-worker registration (preview SW + connect-mode SW detach). The
   // helper returns `'reload-pending'` when it has triggered a one-shot
