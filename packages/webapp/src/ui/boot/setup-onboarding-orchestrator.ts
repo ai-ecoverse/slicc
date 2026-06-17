@@ -137,6 +137,14 @@ export interface OnboardingOrchestratorSetupDeps {
    * around `client.sendSprinkleLick('welcome', data)`.
    */
   onFireFinalLick(data: Record<string, unknown>): void;
+  /**
+   * UI-agnostic accounts-changed hook. The orchestrator fires it after
+   * a successful connect-attempt or OAuth flow so the host can refresh
+   * its model picker; the WC shell binds it to a
+   * `slicc:accounts-changed` window event. Kept optional so headless
+   * tests can omit it.
+   */
+  onAccountsChanged?(): void;
 }
 
 export interface OnboardingOrchestratorHandle {
@@ -186,6 +194,7 @@ export async function createOnboardingOrchestratorSetup(
       },
       broadcastToDip: (payload) => deps.broadcastToDip(payload),
       fireFinalLick: (data) => deps.onFireFinalLick(data),
+      onAccountsChanged: deps.onAccountsChanged ? () => deps.onAccountsChanged?.() : undefined,
       launchOAuth: async (providerId, baseUrl) =>
         await launchOnboardingOAuth(providerId, baseUrl ?? null, deps),
     });

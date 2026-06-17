@@ -139,6 +139,15 @@ export interface OrchestratorDeps {
   /** Fire the FINAL onboarding-complete-with-provider lick to the cone. */
   fireFinalLick: (data: Record<string, unknown>) => void;
   /**
+   * Notify the host that the persisted accounts/model changed so the
+   * UI can re-sync its model picker, identity badge, and pi-ai
+   * resolution. The host wires this to a UI-specific dispatch (the WC
+   * shell dispatches a `slicc:accounts-changed` window event). Without
+   * this hook the picker stayed populated from the boot snapshot and
+   * showed "No models" until the user reloaded.
+   */
+  onAccountsChanged?: () => void;
+  /**
    * Launch the provider's OAuth flow. Resolves once the popup
    * completes and the host has saved the OAuth account locally.
    * Optional — providers without OAuth support can skip this.
@@ -343,7 +352,15 @@ export class OnboardingOrchestrator {
         deployment?.trim() || undefined,
         apiVersion?.trim() || undefined
       );
-      if (effectiveModel) this.deps.setSelectedModel(effectiveModel);
+      // Commit the `providerId:modelId` form explicitly so the worker
+      // resolution path can't drift onto a previously-selected
+      // provider via the bare-id fallback in
+      // `account-store.setSelectedModelId`. Especially important for
+      // Bedrock model ids (they carry a colon and used to fool the
+      // store into treating them as already-prefixed).
+      if (effectiveModel) {
+        this.deps.setSelectedModel(prefixModel(provider, effectiveModel));
+      }
     } catch (err) {
       log.warn('saveAccount failed', err);
       this.deps.broadcastToDip({
@@ -354,6 +371,15 @@ export class OnboardingOrchestrator {
       });
       this.stage = 'awaiting-connect';
       return;
+    }
+    // Tell the host an account landed — the WC shell uses this to
+    // dispatch `slicc:accounts-changed`, which re-syncs the picker
+    // before the cone's onboarding-complete-with-provider reply
+    // renders. Best-effort: a hook throw must not undo the save.
+    try {
+      this.deps.onAccountsChanged?.();
+    } catch (err) {
+      log.warn('onAccountsChanged threw', err);
     }
 
     const note =
@@ -434,10 +460,22 @@ export class OnboardingOrchestrator {
 
     if (result.model) {
       try {
-        this.deps.setSelectedModel(result.model);
+        // Same prefixing contract as the connect-attempt path. The
+        // resolveDefaultModel helper already returns a prefixed id, so
+        // `prefixModel` is a no-op there; explicit hosts that pass a
+        // bare id from another source still get the right routing.
+        this.deps.setSelectedModel(prefixModel(payload.provider, result.model));
       } catch (err) {
         log.warn('setSelectedModel after OAuth failed', err);
       }
+    }
+    // Best-effort re-sync hook — matches the connect-attempt path so
+    // both onboarding entry points refresh the picker before the
+    // cone's reply renders.
+    try {
+      this.deps.onAccountsChanged?.();
+    } catch (err) {
+      log.warn('onAccountsChanged threw', err);
     }
 
     this.deps.broadcastToDip({
@@ -503,4 +541,20 @@ export class OnboardingOrchestrator {
     // separate mkdir call.
     await this.deps.fs.writeFile(`/home/${slug}/.welcome.json`, JSON.stringify(profile, null, 2));
   }
+}
+
+/**
+ * Ensure the model id reaches the host's `setSelectedModel` already
+ * prefixed with the just-saved provider. The downstream
+ * `account-store.setSelectedModelId` can repair a bare id from the
+ * current selection, but during onboarding `getSelectedProvider()`
+ * still points at the previously-selected provider (or the default)
+ * until the new account lands. Building the prefix here makes the
+ * commit deterministic regardless of repair-path heuristics — and
+ * keeps Bedrock model ids (which legitimately contain a colon) from
+ * being misclassified as already-prefixed.
+ */
+function prefixModel(provider: string, modelId: string): string {
+  if (modelId.startsWith(`${provider}:`)) return modelId;
+  return `${provider}:${modelId}`;
 }

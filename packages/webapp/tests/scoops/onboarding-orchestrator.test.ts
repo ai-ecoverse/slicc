@@ -255,7 +255,11 @@ describe('OnboardingOrchestrator', () => {
           apiVersion: undefined,
         },
       ]);
-      expect(h.selectedModels).toEqual(['gpt-4o']);
+      // The orchestrator commits the prefixed `providerId:modelId` form
+      // so the downstream account-store can't drift onto a stale
+      // provider via its bare-id repair path (and so Bedrock ids that
+      // carry their own colon stay routed correctly).
+      expect(h.selectedModels).toEqual(['openai:gpt-4o']);
       expect(h.finalLicks).toHaveLength(1);
       expect(h.finalLicks[0].action).toBe('onboarding-complete-with-provider');
       expect(h.finalLicks[0].data.provider).toBe('openai');
@@ -337,7 +341,8 @@ describe('OnboardingOrchestrator', () => {
         baseUrl: null,
         model: null,
       });
-      expect(h.selectedModels).toEqual(['claude-opus-4-6']);
+      // Same prefixing contract as the explicit-model path.
+      expect(h.selectedModels).toEqual(['anthropic:claude-opus-4-6']);
       expect(h.finalLicks).toHaveLength(1);
       expect(h.finalLicks[0].data.model).toBe('claude-opus-4-6');
       expect(h.finalLicks[0].data.modelLabel).toBe('CLAUDE-OPUS-4-6');
@@ -439,6 +444,135 @@ describe('OnboardingOrchestrator', () => {
       expect(h.accounts).toEqual([]);
       const reject = h.dipInbox.find((m) => m.type === 'slicc-connect-result');
       expect(reject.ok).toBe(false);
+    });
+
+    it('commits a prefixed model id even when the dip submitted a bare Bedrock id', async () => {
+      // Bedrock model ids legitimately carry a `:<version>` suffix. The
+      // host's setSelectedModelId can no longer rely on `includes(':')`
+      // alone, so the orchestrator builds the explicit
+      // `providerId:modelId` form before committing.
+      const fs = new VirtualFS('bedrock-' + Math.random());
+      const selectedModels: string[] = [];
+      const accounts: AccountSnapshot[] = [];
+      const catalogue: ProviderCatalogue = {
+        providers: [
+          {
+            id: 'amazon-bedrock',
+            name: 'AWS Bedrock',
+            requiresApiKey: true,
+            requiresBaseUrl: false,
+          },
+        ],
+        models: { 'amazon-bedrock': [] },
+      };
+      const orch = new OnboardingOrchestrator({
+        fs,
+        postSystemMessage: () => {},
+        postDipReference: () => {},
+        getProviderCatalogue: () => catalogue,
+        saveAccount: (id, key) => accounts.push({ id, key }),
+        setSelectedModel: (id) => selectedModels.push(id),
+        broadcastToDip: () => {},
+        fireFinalLick: () => {},
+        fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
+        rand: () => 0,
+      });
+      await orch.handleOnboardingComplete({});
+      await orch.handleConnectAttempt({
+        provider: 'amazon-bedrock',
+        apiKey: 'bedrock-key',
+        model: 'eu.anthropic.claude-opus-4-5-20251101-v1:0',
+      });
+      expect(selectedModels).toEqual(['amazon-bedrock:eu.anthropic.claude-opus-4-5-20251101-v1:0']);
+    });
+
+    it('fires onAccountsChanged after a successful connect-attempt', async () => {
+      // Closes the "stale picker" hole: without this hook the WC shell
+      // kept rendering the previous account snapshot until the next
+      // reload because nothing dispatched `slicc:accounts-changed`.
+      const fs = new VirtualFS('changed-ok-' + Math.random());
+      const onAccountsChanged = vi.fn();
+      const finalLicks: FinalLickPayload[] = [];
+      const orch = new OnboardingOrchestrator({
+        fs,
+        postSystemMessage: () => {},
+        postDipReference: () => {},
+        getProviderCatalogue: () => baseCatalogue,
+        saveAccount: () => {},
+        setSelectedModel: () => {},
+        broadcastToDip: () => {},
+        fireFinalLick: (data) => finalLicks.push(data),
+        fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
+        rand: () => 0,
+        onAccountsChanged,
+      });
+      await orch.handleOnboardingComplete({});
+      await orch.handleConnectAttempt({
+        provider: 'openai',
+        apiKey: 'sk-good',
+        model: 'gpt-4o',
+      });
+      expect(onAccountsChanged).toHaveBeenCalledTimes(1);
+      expect(finalLicks).toHaveLength(1);
+    });
+
+    it('does NOT fire onAccountsChanged when saveAccount fails', async () => {
+      // The change-notification only fires after a clean save so a
+      // failed write doesn't yank the picker into a non-existent
+      // account.
+      const fs = new VirtualFS('changed-fail-' + Math.random());
+      const onAccountsChanged = vi.fn();
+      const orch = new OnboardingOrchestrator({
+        fs,
+        postSystemMessage: () => {},
+        postDipReference: () => {},
+        getProviderCatalogue: () => baseCatalogue,
+        saveAccount: () => {
+          throw new Error('disk full');
+        },
+        setSelectedModel: () => {},
+        broadcastToDip: () => {},
+        fireFinalLick: () => {},
+        fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
+        rand: () => 0,
+        onAccountsChanged,
+      });
+      await orch.handleOnboardingComplete({});
+      await orch.handleConnectAttempt({
+        provider: 'openai',
+        apiKey: 'sk-good',
+        model: 'gpt-4o',
+      });
+      expect(onAccountsChanged).not.toHaveBeenCalled();
+    });
+
+    it('swallows onAccountsChanged exceptions without rolling back the save', async () => {
+      const fs = new VirtualFS('changed-throw-' + Math.random());
+      const accounts: AccountSnapshot[] = [];
+      const finalLicks: FinalLickPayload[] = [];
+      const orch = new OnboardingOrchestrator({
+        fs,
+        postSystemMessage: () => {},
+        postDipReference: () => {},
+        getProviderCatalogue: () => baseCatalogue,
+        saveAccount: (id, key) => accounts.push({ id, key }),
+        setSelectedModel: () => {},
+        broadcastToDip: () => {},
+        fireFinalLick: (data) => finalLicks.push(data),
+        fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
+        rand: () => 0,
+        onAccountsChanged: () => {
+          throw new Error('listener blew up');
+        },
+      });
+      await orch.handleOnboardingComplete({});
+      await orch.handleConnectAttempt({
+        provider: 'openai',
+        apiKey: 'sk-good',
+        model: 'gpt-4o',
+      });
+      expect(accounts).toHaveLength(1);
+      expect(finalLicks).toHaveLength(1);
     });
   });
 
@@ -595,6 +729,75 @@ describe('OnboardingOrchestrator', () => {
       await h.orchestrator.handleOAuthAttempt({ provider: 'adobe' });
       expect(h.finalLicks).toEqual([]);
       expect(h.dipInbox).toEqual([]);
+    });
+
+    it('prefixes a bare OAuth model id with the just-authenticated provider', async () => {
+      // resolveDefaultModel already returns a prefixed id, but other
+      // OAuth hosts can hand back a bare id. The orchestrator must
+      // normalize so the picker doesn't keep resolving against the
+      // previously-selected provider.
+      const fs = new VirtualFS('oauth-bare-' + Math.random());
+      const selectedModels: string[] = [];
+      const orch = new OnboardingOrchestrator({
+        fs,
+        postSystemMessage: () => {},
+        postDipReference: () => {},
+        getProviderCatalogue: () => baseCatalogue,
+        saveAccount: () => {},
+        setSelectedModel: (id) => selectedModels.push(id),
+        broadcastToDip: () => {},
+        fireFinalLick: () => {},
+        fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
+        rand: () => 0,
+        launchOAuth: async () => ({ ok: true, model: 'claude-sonnet-4-6' }),
+      });
+      await orch.handleOnboardingComplete({});
+      await orch.handleOAuthAttempt({ provider: 'adobe' });
+      expect(selectedModels).toEqual(['adobe:claude-sonnet-4-6']);
+    });
+
+    it('fires onAccountsChanged after a successful OAuth login', async () => {
+      const fs = new VirtualFS('oauth-changed-' + Math.random());
+      const onAccountsChanged = vi.fn();
+      const orch = new OnboardingOrchestrator({
+        fs,
+        postSystemMessage: () => {},
+        postDipReference: () => {},
+        getProviderCatalogue: () => baseCatalogue,
+        saveAccount: () => {},
+        setSelectedModel: () => {},
+        broadcastToDip: () => {},
+        fireFinalLick: () => {},
+        fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
+        rand: () => 0,
+        launchOAuth: async () => ({ ok: true, model: 'adobe:claude-sonnet-4-6' }),
+        onAccountsChanged,
+      });
+      await orch.handleOnboardingComplete({});
+      await orch.handleOAuthAttempt({ provider: 'adobe' });
+      expect(onAccountsChanged).toHaveBeenCalledTimes(1);
+    });
+
+    it('does NOT fire onAccountsChanged when OAuth fails', async () => {
+      const fs = new VirtualFS('oauth-no-change-' + Math.random());
+      const onAccountsChanged = vi.fn();
+      const orch = new OnboardingOrchestrator({
+        fs,
+        postSystemMessage: () => {},
+        postDipReference: () => {},
+        getProviderCatalogue: () => baseCatalogue,
+        saveAccount: () => {},
+        setSelectedModel: () => {},
+        broadcastToDip: () => {},
+        fireFinalLick: () => {},
+        fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
+        rand: () => 0,
+        launchOAuth: async () => ({ ok: false, message: 'cancelled' }),
+        onAccountsChanged,
+      });
+      await orch.handleOnboardingComplete({});
+      await orch.handleOAuthAttempt({ provider: 'adobe' });
+      expect(onAccountsChanged).not.toHaveBeenCalled();
     });
   });
 });

@@ -206,6 +206,7 @@ import {
   saveOAuthAccount,
   setApiKey,
   setBaseUrl,
+  setSelectedModelId,
   setSelectedProvider,
 } from '../../src/ui/provider-settings.js';
 
@@ -396,6 +397,50 @@ describe('selected model encodes provider', () => {
     storage.set('selected-model', 'anthropic:claude-sonnet-4-0');
     setSelectedProvider('openai');
     expect(storage.get('selected-model')).toBe('openai:claude-sonnet-4-0');
+  });
+
+  it('setSelectedModelId stores prefixed ids verbatim when the leading token is a known provider', () => {
+    addAccount('openai', 'oai-key');
+    setSelectedModelId('openai:gpt-5');
+    expect(storage.get('selected-model')).toBe('openai:gpt-5');
+  });
+
+  it('setSelectedModelId prefixes bare ids with the current provider', () => {
+    addAccount('anthropic', 'ant-key');
+    storage.set('selected-model', 'anthropic:claude-sonnet-4-0');
+    setSelectedModelId('claude-opus-4-6');
+    expect(storage.get('selected-model')).toBe('anthropic:claude-opus-4-6');
+  });
+
+  it('setSelectedModelId prefixes Bedrock model ids that legitimately contain a colon', () => {
+    // Bedrock ids like `eu.anthropic.claude-opus-4-5-20251101-v1:0` end with
+    // a `:<version>` segment. A bare `includes(':')` check would store this
+    // as-is and `getSelectedProvider()` would later resolve the phantom
+    // provider `eu.anthropic.claude-opus-4-5-20251101-v1`. The hardened
+    // check inspects the leading token against the registered providers.
+    addAccount('amazon-bedrock', 'bedrock-key');
+    storage.set('selected-model', 'amazon-bedrock:anthropic.claude-3-sonnet');
+    setSelectedModelId('eu.anthropic.claude-opus-4-5-20251101-v1:0');
+    expect(storage.get('selected-model')).toBe(
+      'amazon-bedrock:eu.anthropic.claude-opus-4-5-20251101-v1:0'
+    );
+    // Round-trip: `getSelectedModelId` strips only the first segment, so
+    // the colon-containing tail (`:0`) survives.
+    expect(getSelectedModelId()).toBe('eu.anthropic.claude-opus-4-5-20251101-v1:0');
+    expect(getSelectedProvider()).toBe('amazon-bedrock');
+  });
+
+  it('setSelectedModelId stores fully-prefixed Bedrock ids verbatim', () => {
+    // The picker emits `${providerId}:${bareId}` (and the bareId itself
+    // contains a colon for Bedrock). Storing the value as-is must
+    // preserve BOTH colons.
+    addAccount('amazon-bedrock', 'bedrock-key');
+    setSelectedModelId('amazon-bedrock:eu.anthropic.claude-opus-4-5-20251101-v1:0');
+    expect(storage.get('selected-model')).toBe(
+      'amazon-bedrock:eu.anthropic.claude-opus-4-5-20251101-v1:0'
+    );
+    expect(getSelectedProvider()).toBe('amazon-bedrock');
+    expect(getSelectedModelId()).toBe('eu.anthropic.claude-opus-4-5-20251101-v1:0');
   });
 });
 
