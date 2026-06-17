@@ -72,6 +72,42 @@ describe('WcChatController', () => {
     expect(thread.querySelectorAll('slicc-user-message').length).toBe(0);
   });
 
+  it('strips dictation markers on the follower echo while the agent + history keep them', async () => {
+    // Reset the per-session priming flag so this test is hermetic (other
+    // tests in the suite may have consumed the first-message slot already).
+    const { resetDictationPriming } = await import('../../../src/speech/dictation-priming.js');
+    resetDictationPriming();
+    const localEchoes: Array<{ text: string; messageId: string }> = [];
+    controller.setOnLocalUserMessage((text, messageId) => {
+      localEchoes.push({ text, messageId });
+    });
+    controller.sendUserMessage('hello there', undefined, { dictation: true });
+    // The agent (and the locally-stored ChatMessage) see the marked text so
+    // replay / compaction keep the priming context.
+    expect(agent.sent.length).toBe(1);
+    expect(agent.sent[0].text).toContain('\uD83C\uDF99');
+    expect(agent.sent[0].text).toMatch(/\u25C1[\s\S]*\u25B7/);
+    const stored = controller.getMessages().find((m) => m.role === 'user');
+    expect(stored?.content).toContain('\uD83C\uDF99');
+    // The follower echo is display-clean — iOS renders message.content verbatim
+    // and must not see the AI-only priming note.
+    expect(localEchoes.length).toBe(1);
+    expect(localEchoes[0].text).toBe('hello there');
+    expect(localEchoes[0].text).not.toContain('\uD83C\uDF99');
+    expect(localEchoes[0].text).not.toMatch(/\u25C1[\s\S]*\u25B7/);
+    expect(localEchoes[0].messageId).toBe(stored?.id);
+  });
+
+  it('passes a non-dictated send unchanged to both the agent and the follower echo', () => {
+    const localEchoes: Array<{ text: string; messageId: string }> = [];
+    controller.setOnLocalUserMessage((text, messageId) => {
+      localEchoes.push({ text, messageId });
+    });
+    controller.sendUserMessage('plain typed prompt');
+    expect(agent.sent.map((s) => s.text)).toEqual(['plain typed prompt']);
+    expect(localEchoes.map((e) => e.text)).toEqual(['plain typed prompt']);
+  });
+
   it('streams an assistant message through start → delta → done', async () => {
     agent.emit({ type: 'message_start', messageId: 'm1' });
     const streamingEl = thread.querySelector('slicc-agent-message');

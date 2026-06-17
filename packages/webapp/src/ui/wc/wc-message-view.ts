@@ -8,6 +8,7 @@
 
 import { hasIcon, type SliccUserMessage } from '@slicc/webcomponents';
 import type { MessageAttachment } from '../../core/attachments.js';
+import { stripDictationMarkers } from '../../speech/dictation-priming.js';
 import { renderAssistantMessageContent, renderMessageContent } from '../message-renderer.js';
 import type { ChatMessage, ToolCall } from '../types.js';
 
@@ -431,7 +432,11 @@ function toolCallRow(call: ToolCall): HTMLElement {
 
 function userMessageEl(message: ChatMessage): HTMLElement {
   const bubble = document.createElement('slicc-user-message');
-  bubble.setBodyHtml(renderMessageContent(message.content));
+  // Dictated turns carry AI-only markers (🎙️ + the one-time ◁…▷ priming
+  // note); the visible bubble must never show them. Stripping here keeps
+  // the persisted `content` (what the agent sees on replay/compaction) and
+  // the rendered view cleanly separated — typed messages are a no-op pass.
+  bubble.setBodyHtml(renderMessageContent(stripDictationMarkers(message.content)));
   if (message.queued) bubble.setAttribute('queued', '');
   if (message.attachments?.length) {
     bubble.setAttachments(message.attachments.map(toUserAttachment));

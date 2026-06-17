@@ -6,6 +6,11 @@
  * `wc-message-view.ts` mapper instead of hand-built DOM.
  */
 
+import {
+  applyDictationMarkers,
+  consumeDictationFirst,
+  stripDictationMarkers,
+} from '../../speech/dictation-priming.js';
 import type { AgentEvent, AgentHandle, ChatMessage } from '../types.js';
 import { createCopyRow } from './wc-copy-row.js';
 import { collateLickMessages, daySeparatorEl, messageEls } from './wc-message-view.js';
@@ -188,29 +193,54 @@ export class WcChatController {
     this.#scrollToBottom();
   }
 
-  /** Append a user prompt locally and forward it to the agent. */
-  sendUserMessage(text: string, attachments?: ChatMessage['attachments']): void {
+  /**
+   * Append a user prompt locally and forward it to the agent. When
+   * `options.dictation` is set, the dictation markers (🎙️ + the one-time
+   * priming note) are appended to the text before storing and sending —
+   * the marked text is what the agent (and replay/compaction) sees; the
+   * render seam strips the markers so the visible bubble stays clean.
+   */
+  sendUserMessage(
+    text: string,
+    attachments?: ChatMessage['attachments'],
+    options?: { dictation?: boolean }
+  ): void {
     const trimmed = text.trim();
     if (!trimmed && !attachments?.length) return;
+    const content = options?.dictation ? this.#applyDictation(trimmed) : trimmed;
     const message: ChatMessage = {
       id: uid(),
       role: 'user',
-      content: trimmed,
+      content,
       timestamp: Date.now(),
       attachments: attachments?.length ? attachments : undefined,
       queued: this.#processing ? true : undefined,
     };
     this.#appendMessage(message);
-    this.#agent.sendMessage(trimmed, message.id, message.attachments);
+    this.#agent.sendMessage(content, message.id, message.attachments);
     try {
       // Attachments ride along so tray followers see the full prompt, not a
-      // text-only echo.
-      this.#onLocalUserMessage?.(trimmed, message.id, message.attachments);
+      // text-only echo. The follower echo is a DISPLAY string — iOS renders
+      // `message.content` verbatim, so dictation markers must be stripped
+      // here (web followers strip at render, but iOS does not). The agent
+      // send and the locally-stored ChatMessage keep the marked form so
+      // replay / compaction keep the priming context.
+      const echo = options?.dictation ? stripDictationMarkers(content) : content;
+      this.#onLocalUserMessage?.(echo, message.id, message.attachments);
     } catch (err) {
       // The broadcast hook is the followers' visibility path; never let a
       // broken broadcaster undo the local send.
       console.error('onLocalUserMessage hook threw', err);
     }
+  }
+
+  /**
+   * Append the dictation markers to a freshly-submitted dictated message —
+   * the one-time priming note rides only on the FIRST dictated turn of the
+   * session (via `consumeDictationFirst`); every later turn gets just 🎙️.
+   */
+  #applyDictation(text: string): string {
+    return applyDictationMarkers(text, consumeDictationFirst());
   }
 
   /** Render an inbound lick (webhook/cron/…) into the thread. */

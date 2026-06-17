@@ -396,6 +396,11 @@ function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
         // and the worker no-ops the reply for a (now) empty history, which
         // left the old conversation on screen until the next reload.
         getController()?.loadMessages([]);
+        // Re-arm the dictation priming note: the next dictated turn in the
+        // fresh session must carry the one-time TTS context note again.
+        void import('../../speech/dictation-priming.js')
+          .then(({ resetDictationPriming }) => resetDictationPriming())
+          .catch(() => undefined);
         refreshFreezer();
         const cone = client.getScoops().find((s) => s.isCone);
         if (cone) selectScoop(cone);
@@ -639,6 +644,19 @@ function createWcController(
     .then(({ watchSprinkleThemeBroadcast }) => watchSprinkleThemeBroadcast())
     .catch(() => undefined);
   const agentHandle = client.createAgentHandle();
+  // Soundscape cues for the selected scoop's tool lifecycle: tool_use_start →
+  // 'tool-start', tool_result → 'tool-finish'. The cue helper itself gates on
+  // the persisted enable flag, the voice-mode window (`beginVoiceTurn` from
+  // the composer's dictated-submit handler), and the TTS-active flag — so
+  // typed turns stay silent, the wiring just feeds events through.
+  agentHandle.onEvent((event) => {
+    if (event.type !== 'tool_use_start' && event.type !== 'tool_result') return;
+    void import('../../speech/soundscape.js')
+      .then(({ playCue }) =>
+        playCue(event.type === 'tool_use_start' ? 'tool-start' : 'tool-finish')
+      )
+      .catch(() => undefined);
+  });
   const controller = new WcChatController({
     thread: refs.thread,
     agent: agentHandle,
@@ -647,11 +665,27 @@ function createWcController(
     // chained model download is warm, Web Speech until then. The one-shot
     // flag is consumed on EVERY turn completion (even reply-less ones, e.g.
     // the error path) so it can never linger and voice a later typed turn.
+    // The soundscape's voice-mode window also closes here — TTS is flagged
+    // active for the spoken-reply duration so any tail cues are suppressed,
+    // and `endVoiceTurn` runs in a finally so an error path never pins the
+    // voice gate open for later typed turns.
     onTurnComplete: (message) => {
       void import('../../speech/voice-reply.js')
-        .then(({ consumeVoiceSubmission, speakReplyMarkdown }) => {
+        .then(async ({ consumeVoiceSubmission, speakReplyMarkdown }) => {
           if (!consumeVoiceSubmission()) return;
-          if (message?.content) return speakReplyMarkdown(message.content);
+          const { endVoiceTurn, setTtsActive } = await import('../../speech/soundscape.js');
+          try {
+            if (message?.content) {
+              setTtsActive(true);
+              try {
+                await speakReplyMarkdown(message.content);
+              } finally {
+                setTtsActive(false);
+              }
+            }
+          } finally {
+            endVoiceTurn();
+          }
         })
         .catch(() => undefined);
     },
@@ -785,13 +819,27 @@ function wireWcComposer(deps: {
     const text = submittedText(event);
     if (!text) return;
     // Dictated turns (push-to-talk) get their reply spoken back — mark
-    // BEFORE sending so the turn-complete hook sees the flag.
-    if ((event as Event as CustomEvent<{ source?: string }>).detail?.source === 'dictation') {
+    // BEFORE sending so the turn-complete hook sees the flag. The same
+    // flag drives the dictation markers the controller appends to the
+    // sent text so the model knows the input was dictated.
+    const dictation =
+      (event as Event as CustomEvent<{ source?: string }>).detail?.source === 'dictation';
+    if (dictation) {
       void import('../../speech/voice-reply.js')
         .then(({ markVoiceSubmission }) => markVoiceSubmission())
         .catch(() => undefined);
+      // Soundscape: open the voice-mode window and play the message-sent
+      // cue. `beginVoiceTurn` runs BEFORE `playCue('sent')` so the cue's
+      // own voice-turn gate passes; `endVoiceTurn` closes it in the
+      // turn-complete hook above.
+      void import('../../speech/soundscape.js')
+        .then(({ beginVoiceTurn, playCue }) => {
+          beginVoiceTurn();
+          playCue('sent');
+        })
+        .catch(() => undefined);
     }
-    boot.getController()?.sendUserMessage(text, attachStage?.take());
+    boot.getController()?.sendUserMessage(text, attachStage?.take(), { dictation });
     (refs.inputCard as HTMLElement & { clear?: () => void }).clear?.();
     // User input is most-recent activity: the addressed scoop gets the eyes
     // and the text feeds its hover-tooltip summary.

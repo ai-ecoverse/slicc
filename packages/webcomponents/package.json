@@ -18,6 +18,10 @@
       "types": "./src/internal/icons.ts",
       "default": "./src/internal/icons.ts"
     },
+    "./audio/soundscape-cues": {
+      "types": "./src/audio/soundscape-cues.ts",
+      "default": "./src/audio/soundscape-cues.ts"
+    },
     "./src/*": "./src/*"
   },
   "files": [

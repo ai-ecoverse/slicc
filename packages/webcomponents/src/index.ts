@@ -1,6 +1,13 @@
 // @slicc/webcomponents — public barrel (generated; see register.ts).
 
 export { SliccAddMenu } from './add-menu/slicc-add-menu.js';
+export { SliccSoundboard } from './audio/slicc-soundboard.js';
+export {
+  type CueRecipe,
+  playSoundscapeCue,
+  RECIPES,
+  type SoundscapeCue,
+} from './audio/soundscape-cues.js';
 export { SliccActionCard } from './chat/slicc-action-card.js';
 export { SliccActionRow } from './chat/slicc-action-row.js';
 export { SliccAgentMessage } from './chat/slicc-agent-message.js';

@@ -9,6 +9,7 @@
  * conversation yet, user already typing, call failure).
  */
 
+import { stripDictationMarkers } from '../../speech/dictation-priming.js';
 import type { ChatMessage } from '../types.js';
 
 const TRANSCRIPT_USER_MAX = 400;
@@ -31,8 +32,12 @@ export function placeholderTranscript(messages: readonly ChatMessage[]): string 
   const lastAssistant = [...finalized].reverse().find((m) => m.role === 'assistant');
   const recentUsers = finalized.filter((m) => m.role === 'user').slice(-3);
   if (!lastAssistant || recentUsers.length === 0) return null;
+  // Dictation markers in `content` are AI-only; the suggestion LLM should
+  // see the same clean text the user sees in their bubble.
   return [
-    ...recentUsers.map((m) => `[user]: ${truncate(m.content, TRANSCRIPT_USER_MAX)}`),
+    ...recentUsers.map(
+      (m) => `[user]: ${truncate(stripDictationMarkers(m.content), TRANSCRIPT_USER_MAX)}`
+    ),
     `[assistant]: ${truncate(lastAssistant.content, TRANSCRIPT_ASSISTANT_MAX)}`,
   ].join('\n\n');
 }

@@ -33,8 +33,15 @@ export interface SpeakRequest {
   volume?: number;
 }
 
-/** Spoken replies stay bounded — nobody wants a minutes-long readout. */
-const MAX_SPEECH_CHARS = 1500;
+/**
+ * Spoken replies stay bounded — nobody wants a minutes-long readout, but the
+ * old 1500-char cap also silently chopped any reasonable multi-paragraph
+ * reply (#1038). With kokoro now streaming sentence-by-sentence (each chunk
+ * tokenized + truncated INDIVIDUALLY by kokoro-js, so the engine's ~510-token
+ * clamp no longer truncates the whole text) the cap only exists to keep
+ * pathological / runaway prose from monologuing — a generous upper bound.
+ */
+const MAX_SPEECH_CHARS = 20000;
 
 /**
  * Pick the synthesis engine for a request (pure — unit-tested):
@@ -148,8 +155,11 @@ function webSpeak(req: SpeakRequest): Promise<void> {
 
 /**
  * Speak `req.text` on the best available engine; resolves once playback
- * finishes, reporting which engine ran. A kokoro synthesis/playback failure
- * degrades to webspeech rather than failing the call.
+ * finishes, reporting which engine ran. Kokoro runs via `synthesizeStream`
+ * so multi-paragraph replies are not truncated by the engine's ~510-token
+ * generate clamp (#1038) — sentence chunks play back-to-back as continuous
+ * audio. If the FIRST kokoro chunk fails before any audio plays, fall back
+ * to webspeech; a later-chunk failure logs and stops (no re-speak overlap).
  */
 export async function speak(req: SpeakRequest): Promise<{ engine: SpeakEngine }> {
   const tts = kokoroIfReady();
@@ -158,17 +168,31 @@ export async function speak(req: SpeakRequest): Promise<{ engine: SpeakEngine }>
     voiceIds: tts?.voices().map((v) => v.id) ?? [],
   });
   if (engine === 'kokoro' && tts) {
+    let played = 0;
     try {
-      const { audio, sampleRate } = await tts.synthesize(req.text, {
-        voice: req.voice,
-        speed: req.rate,
+      const stream = tts.synthesizeStream(req.text, {
+        ...(req.voice ? { voice: req.voice } : {}),
+        ...(req.rate ? { speed: req.rate } : {}),
       });
-      await playPcm(audio, sampleRate, req.volume);
+      for await (const chunk of stream) {
+        await playPcm(chunk.audio, chunk.sampleRate, req.volume);
+        played++;
+      }
       return { engine: 'kokoro' };
     } catch (err) {
+      if (played > 0) {
+        log.warn('kokoro stream failed mid-playback; stopping', err);
+        return { engine: 'kokoro' };
+      }
       log.warn('kokoro synthesis failed; falling back to webspeech', err);
     }
   }
   await webSpeak(req);
   return { engine: 'webspeech' };
+}
+
+/** Test-only: drop the cached AudioContext so a fresh stubbed `AudioContext`
+ *  class is picked up on the next `playPcm()` call. */
+export function resetSpeakForTests(): void {
+  audioContext = null;
 }

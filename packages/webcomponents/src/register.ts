@@ -1,5 +1,6 @@
 // Side-effect registration of every SLICC custom element (generated).
 import './add-menu/slicc-add-menu.js';
+import './audio/slicc-soundboard.js';
 import './chat/slicc-action-card.js';
 import './chat/slicc-action-row.js';
 import './chat/slicc-agent-message.js';
