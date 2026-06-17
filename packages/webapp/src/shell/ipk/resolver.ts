@@ -20,14 +20,23 @@
  * Cycle termination is robust for ALL cycles, including conflicting-version
  * cycles whose concrete versions drift around the loop: when resolving the
  * incoming range yields a name@version that already appears in-progress on
- * the current ancestor path, we link to that ancestor instead of recursing
- * again.
+ * the current ancestor path, we place a FRESH terminal node (with empty
+ * dependencies) under the requester rather than recursing again or linking
+ * back to the in-progress ancestor. The fresh terminal node keeps require()
+ * reachability correct while keeping the InstallPlan a finite tree with no
+ * object-graph cycles (so it stays serializable and safe to walk).
  *
- * This module owns architecture 4.1 responsibility #1 only (install-time
- * resolution). Module resolution at require/ipx time (responsibility #2) is
- * a separate concern handled by the M4 module loader.
+ * This module owns BOTH architecture 4.1 resolution responsibilities:
+ *   #1 install-time dependency-tree resolution (`resolveDependencyTree`); and
+ *   #2 require/ipx-time Node module resolution (`resolve`), implementing the
+ *      architecture §5 algorithm (scheme check -> relative/absolute path with
+ *      extension/json/index resolution -> nearest-node_modules walk ->
+ *      package.json exports/main/index entry selection, incl. scoped packages
+ *      and deep subpaths). Building the ordered CJS module GRAPH from those
+ *      resolutions is a separate concern handled by `module-loader.ts`.
  */
 
+import { joinPath, splitPath } from '../../fs/path-utils.js';
 import type { Packument, PackumentVersion } from './registry.js';
 import { resolveVersion } from './registry.js';
 import { satisfies } from './semver.js';
@@ -187,4 +196,385 @@ function attachNode(
   } else {
     top[node.name] = node;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Require/ipx-time Node module resolution (architecture 4.1 #2, §5)
+// ---------------------------------------------------------------------------
+
+/** Detected source kind of a resolved module file. */
+export type ModuleKind = 'cjs' | 'esm' | 'json';
+
+/** A bare specifier resolved to a `node:`/bare Node built-in. */
+export interface ResolvedBuiltin {
+  type: 'builtin';
+  /** The original specifier, e.g. `node:path` or `fs`. */
+  specifier: string;
+  /** The bare built-in name with any `node:` prefix stripped, e.g. `path`. */
+  name: string;
+}
+
+/** A `sliccy:<name>` capability specifier. */
+export interface ResolvedSliccy {
+  type: 'sliccy';
+  /** The original specifier, e.g. `sliccy:exec`. */
+  specifier: string;
+  /** The capability name after the scheme, e.g. `exec`. */
+  name: string;
+}
+
+/** A specifier resolved to a concrete VFS file. */
+export interface ResolvedFile {
+  type: 'file';
+  /** Absolute, normalized VFS path of the resolved module file. */
+  path: string;
+  /** Detected module kind for the resolved file. */
+  moduleKind: ModuleKind;
+}
+
+export type ResolveResult = ResolvedBuiltin | ResolvedSliccy | ResolvedFile;
+
+/**
+ * Minimal read-only VFS surface the resolver needs. Both the real `VirtualFS`
+ * (via {@link createVfsModuleReader}) and synthesized in-memory trees in unit
+ * tests can satisfy it, so resolution stays pure and host-side.
+ */
+export interface ModuleReader {
+  exists(path: string): Promise<boolean>;
+  isDirectory(path: string): Promise<boolean>;
+  readFile(path: string): Promise<string>;
+}
+
+export interface ResolveOptions {
+  /**
+   * Ordered `exports`/condition priority list. Defaults to the CJS-require
+   * order; pass `['node', 'import', 'default']` for `import`-time resolution.
+   */
+  conditions?: string[];
+}
+
+const SLICCY_SCHEME = 'sliccy:';
+const NODE_SCHEME = 'node:';
+
+/** Bare Node built-ins the realm serves directly (not from `node_modules`). */
+export const NODE_BUILTIN_BARE = new Set(['fs', 'path', 'process', 'buffer']);
+
+/** Candidate extensions, tried in order, for extensionless/file resolution. */
+const RESOLVE_EXTENSIONS = ['.js', '.cjs', '.mjs', '.json'] as const;
+
+/** Index basenames, tried in order, for directory resolution. */
+const INDEX_CANDIDATES = ['index.js', 'index.cjs', 'index.mjs', 'index.json'] as const;
+
+const DEFAULT_CONDITIONS = ['node', 'require', 'default'];
+
+interface ResolverManifest {
+  type?: unknown;
+  main?: unknown;
+  module?: unknown;
+  exports?: unknown;
+}
+
+function dirOf(path: string): string {
+  return splitPath(path).dir;
+}
+
+function isPathSpecifier(specifier: string): boolean {
+  return (
+    specifier === '.' ||
+    specifier === '..' ||
+    specifier.startsWith('./') ||
+    specifier.startsWith('../') ||
+    specifier.startsWith('/')
+  );
+}
+
+interface ParsedBareSpecifier {
+  name: string;
+  subpath: string;
+}
+
+function parseBareSpecifier(specifier: string): ParsedBareSpecifier {
+  if (specifier.startsWith('@')) {
+    const parts = specifier.split('/');
+    return { name: parts.slice(0, 2).join('/'), subpath: parts.slice(2).join('/') };
+  }
+  const slash = specifier.indexOf('/');
+  if (slash === -1) return { name: specifier, subpath: '' };
+  return { name: specifier.slice(0, slash), subpath: specifier.slice(slash + 1) };
+}
+
+async function isFile(reader: ModuleReader, path: string): Promise<boolean> {
+  if (!(await reader.exists(path))) return false;
+  return !(await reader.isDirectory(path));
+}
+
+async function loadAsFile(reader: ModuleReader, path: string): Promise<string | null> {
+  if (await isFile(reader, path)) return path;
+  for (const ext of RESOLVE_EXTENSIONS) {
+    const candidate = path + ext;
+    if (await isFile(reader, candidate)) return candidate;
+  }
+  return null;
+}
+
+async function loadAsIndex(reader: ModuleReader, dir: string): Promise<string | null> {
+  for (const name of INDEX_CANDIDATES) {
+    const candidate = joinPath(dir, name);
+    if (await isFile(reader, candidate)) return candidate;
+  }
+  return null;
+}
+
+/**
+ * Resolve a path as a file (with extension probing), preferring a matching
+ * FILE over a same-named directory, then as a directory (package.json entry
+ * selection, then index.*). Returns the resolved file path or null.
+ */
+async function loadAsFileOrDirectory(
+  reader: ModuleReader,
+  path: string,
+  conditions: string[]
+): Promise<string | null> {
+  const asFile = await loadAsFile(reader, path);
+  if (asFile) return asFile;
+  if (await reader.isDirectory(path)) {
+    return loadAsDirectory(reader, path, conditions);
+  }
+  return null;
+}
+
+async function readManifest(reader: ModuleReader, dir: string): Promise<ResolverManifest | null> {
+  const manifestPath = joinPath(dir, 'package.json');
+  if (!(await isFile(reader, manifestPath))) return null;
+  let text: string;
+  try {
+    text = await reader.readFile(manifestPath);
+  } catch {
+    return null;
+  }
+  if (!text.trim()) return null;
+  try {
+    return JSON.parse(text) as ResolverManifest;
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`Invalid package.json at '${manifestPath}': ${reason}`);
+  }
+}
+
+/**
+ * Resolve an `exports` target (string, conditions object, or array of either)
+ * against the ordered `conditions`. Returns the first matching relative target
+ * string or null. `default` participates only when listed in `conditions`.
+ */
+function resolveExportsTarget(field: unknown, conditions: string[]): string | null {
+  if (typeof field === 'string') return field;
+  if (field === null || typeof field !== 'object') return null;
+  if (Array.isArray(field)) {
+    for (const item of field) {
+      const resolved = resolveExportsTarget(item, conditions);
+      if (resolved) return resolved;
+    }
+    return null;
+  }
+  const obj = field as Record<string, unknown>;
+  for (const condition of conditions) {
+    if (Object.hasOwn(obj, condition)) {
+      const resolved = resolveExportsTarget(obj[condition], conditions);
+      if (resolved) return resolved;
+    }
+  }
+  return null;
+}
+
+/** True when `exports` is a subpath map (keys `.` / `./...`) vs a root target. */
+function isSubpathExports(field: unknown): boolean {
+  if (!field || typeof field !== 'object' || Array.isArray(field)) return false;
+  return Object.keys(field as object).some((key) => key === '.' || key.startsWith('./'));
+}
+
+function rootExportsField(field: unknown): unknown {
+  if (isSubpathExports(field)) {
+    return (field as Record<string, unknown>)['.'];
+  }
+  return field;
+}
+
+async function loadAsDirectory(
+  reader: ModuleReader,
+  dir: string,
+  conditions: string[]
+): Promise<string | null> {
+  const manifest = await readManifest(reader, dir);
+  if (manifest) {
+    if (manifest.exports !== undefined) {
+      const target = resolveExportsTarget(rootExportsField(manifest.exports), conditions);
+      if (target) {
+        const resolved = await loadAsFileOrDirectory(reader, joinPath(dir, target), conditions);
+        if (resolved) return resolved;
+        throw new Error(`Cannot find module: exports entry '${target}' missing in '${dir}'`);
+      }
+    }
+    const entry =
+      (typeof manifest.main === 'string' && manifest.main) ||
+      (typeof manifest.module === 'string' && manifest.module) ||
+      '';
+    if (entry) {
+      const resolved = await loadAsFileOrDirectory(reader, joinPath(dir, entry), conditions);
+      if (resolved) return resolved;
+      throw new Error(`Cannot find module: main entry '${entry}' missing in '${dir}'`);
+    }
+  }
+  return loadAsIndex(reader, dir);
+}
+
+async function resolveInPackage(
+  reader: ModuleReader,
+  pkgDir: string,
+  subpath: string,
+  conditions: string[]
+): Promise<string | null> {
+  if (subpath === '') {
+    return loadAsDirectory(reader, pkgDir, conditions);
+  }
+  const manifest = await readManifest(reader, pkgDir);
+  if (manifest?.exports !== undefined && isSubpathExports(manifest.exports)) {
+    const sub = (manifest.exports as Record<string, unknown>)[`./${subpath}`];
+    if (sub !== undefined) {
+      const target = resolveExportsTarget(sub, conditions);
+      if (target) {
+        const resolved = await loadAsFileOrDirectory(reader, joinPath(pkgDir, target), conditions);
+        if (resolved) return resolved;
+        throw new Error(`Cannot find module: exports entry './${subpath}' missing in '${pkgDir}'`);
+      }
+    }
+    // Subpath not declared in `exports`: fall through to direct path resolution
+    // (subpath-exports encapsulation is intentionally not enforced in M4).
+  }
+  return loadAsFileOrDirectory(reader, joinPath(pkgDir, subpath), conditions);
+}
+
+async function findPackageDir(
+  reader: ModuleReader,
+  fromDir: string,
+  name: string
+): Promise<string | null> {
+  let dir = fromDir || '/';
+  while (true) {
+    const candidate = joinPath(dir, 'node_modules', name);
+    if (await reader.isDirectory(candidate)) return candidate;
+    if (dir === '/' || dir === '') break;
+    dir = dirOf(dir);
+  }
+  return null;
+}
+
+/**
+ * Detect the module kind of a resolved file. Extension wins first
+ * (`.json`/`.mjs`/`.cjs`); otherwise the nearest `package.json` `type` field
+ * decides (`module` -> esm, anything else -> cjs).
+ */
+export async function detectModuleKind(
+  reader: ModuleReader,
+  filePath: string
+): Promise<ModuleKind> {
+  if (filePath.endsWith('.json')) return 'json';
+  if (filePath.endsWith('.mjs')) return 'esm';
+  if (filePath.endsWith('.cjs')) return 'cjs';
+  let dir = dirOf(filePath);
+  while (true) {
+    let manifest: ResolverManifest | null = null;
+    try {
+      manifest = await readManifest(reader, dir);
+    } catch {
+      manifest = null;
+    }
+    if (manifest) {
+      return manifest.type === 'module' ? 'esm' : 'cjs';
+    }
+    if (dir === '/' || dir === '') break;
+    dir = dirOf(dir);
+  }
+  return 'cjs';
+}
+
+/**
+ * Resolve `specifier` from `fromDir` against `reader`, implementing the Node
+ * resolution algorithm in architecture §5:
+ *   - `node:` scheme + bare Node built-ins -> {@link ResolvedBuiltin};
+ *   - `sliccy:` scheme -> {@link ResolvedSliccy} (empty name throws);
+ *   - relative/absolute paths -> exact, then `.js`/`.cjs`/`.mjs`/`.json`,
+ *     then `/index.*`, with file-over-directory precedence;
+ *   - bare packages -> nearest-`node_modules` walk + package.json
+ *     `exports`(conditions)/`main`/`module`/`index.js` selection, including
+ *     scoped packages and deep subpaths.
+ *
+ * An uninstalled bare package throws exactly
+ * `Cannot find module '<specifier>' (run: ipk install <name>)`. A relative or
+ * already-installed-but-broken target throws `Cannot find module '<specifier>'`
+ * without the install hint.
+ */
+export async function resolve(
+  specifier: string,
+  fromDir: string,
+  reader: ModuleReader,
+  options: ResolveOptions = {}
+): Promise<ResolveResult> {
+  const conditions = options.conditions ?? DEFAULT_CONDITIONS;
+
+  if (specifier.startsWith(SLICCY_SCHEME)) {
+    const name = specifier.slice(SLICCY_SCHEME.length);
+    if (name === '') {
+      throw new Error("Cannot resolve 'sliccy:': empty sliccy: module name");
+    }
+    return { type: 'sliccy', specifier, name };
+  }
+
+  if (specifier.startsWith(NODE_SCHEME)) {
+    return { type: 'builtin', specifier, name: specifier.slice(NODE_SCHEME.length) };
+  }
+
+  if (NODE_BUILTIN_BARE.has(specifier)) {
+    return { type: 'builtin', specifier, name: specifier };
+  }
+
+  if (isPathSpecifier(specifier)) {
+    const base = specifier.startsWith('/') ? specifier : joinPath(fromDir, specifier);
+    const resolved = await loadAsFileOrDirectory(reader, base, conditions);
+    if (!resolved) throw new Error(`Cannot find module '${specifier}'`);
+    return { type: 'file', path: resolved, moduleKind: await detectModuleKind(reader, resolved) };
+  }
+
+  const { name, subpath } = parseBareSpecifier(specifier);
+  const pkgDir = await findPackageDir(reader, fromDir, name);
+  if (!pkgDir) {
+    throw new Error(`Cannot find module '${specifier}' (run: ipk install ${name})`);
+  }
+  const resolved = await resolveInPackage(reader, pkgDir, subpath, conditions);
+  if (!resolved) throw new Error(`Cannot find module '${specifier}'`);
+  return { type: 'file', path: resolved, moduleKind: await detectModuleKind(reader, resolved) };
+}
+
+/** Structural slice of `VirtualFS` sufficient to back a {@link ModuleReader}. */
+export interface VfsModuleReaderSource {
+  exists(path: string): Promise<boolean>;
+  stat(path: string): Promise<{ type: string }>;
+  readFile(path: string, options?: unknown): Promise<string | Uint8Array>;
+}
+
+/** Adapt a `VirtualFS` (or compatible) into the {@link ModuleReader} surface. */
+export function createVfsModuleReader(fs: VfsModuleReaderSource): ModuleReader {
+  return {
+    exists: (path) => fs.exists(path),
+    isDirectory: async (path) => {
+      try {
+        return (await fs.stat(path)).type === 'directory';
+      } catch {
+        return false;
+      }
+    },
+    readFile: async (path) => {
+      const content = await fs.readFile(path);
+      return typeof content === 'string' ? content : new TextDecoder().decode(content);
+    },
+  };
 }
