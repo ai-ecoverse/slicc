@@ -16,7 +16,16 @@ import type { ChatMessage, ToolCall } from '../types.js';
 import '@slicc/webcomponents';
 import { lickChannelFromBody } from '../../scoops/agent-message-to-chat.js';
 import { isLickChannel } from '../lick-channels.js';
+import { trackImageView } from '../telemetry.js';
 import { scoopColor } from './wc-scoop-color.js';
+
+/**
+ * Dedup set for `viewmedia` beacons: the thread is rebuilt on every render
+ * (streaming, scoop-switch, replay) so `userMessageEl` runs many times per
+ * displayed image. Key by `messageId:attachmentId` so each image fires
+ * `trackImageView` exactly once per session.
+ */
+const trackedImageViews = new Set<string>();
 
 /** Attachment chip shape accepted by `<slicc-user-message>` (not re-exported
  *  by the barrel, so derive it from the class's method signature). */
@@ -440,6 +449,15 @@ function userMessageEl(message: ChatMessage): HTMLElement {
   if (message.queued) bubble.setAttribute('queued', '');
   if (message.attachments?.length) {
     bubble.setAttachments(message.attachments.map(toUserAttachment));
+    // Fire `viewmedia` once per displayed image — the thread rebuilds many
+    // times per session, so dedup by `messageId:attachmentId`.
+    for (const attachment of message.attachments) {
+      if (attachment.kind !== 'image' || !attachment.data) continue;
+      const key = `${message.id}:${attachment.id}`;
+      if (trackedImageViews.has(key)) continue;
+      trackedImageViews.add(key);
+      trackImageView('chat');
+    }
   }
   return bubble;
 }

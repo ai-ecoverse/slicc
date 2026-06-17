@@ -47,7 +47,42 @@ The flag is read by `rum.js` on first call and cached in `window.hlx.rum`. CLI/E
 
 - The extension's manifest CSP and the no-target-page-URL nature of the side panel make the inlined approach simpler and avoid an external script load that would silently 404.
 - CLI/Electron benefit from helix-rum-js's enhancer (CWV, auto-click) which is not reproduced manually.
-- The cost is a per-mode sampling decision (independent RNG draws) and an `error`-beacon payload-shape asymmetry (see "Wiring status" below).
+- The cost is a per-mode sampling decision (independent RNG draws), an `error`-beacon payload-shape asymmetry (see "Wiring status" below), and the extension has no enhancer-derived checkpoints at all (see "Extension Enhancer Parity Decision" below).
+
+## Extension Enhancer Parity Decision
+
+**Decision (2026-06-14, issue #795 Gap 3): accept the gap.** The extension intentionally emits no enhancer-derived checkpoints (`cwv`, `click`, `loadresource`, `missingresource`, `a11y`, `language`, `enter`, `top`, `redirect`). We do **not** bundle a CSP-safe enhancer, and we do **not** add a manual `web-vitals` integration for the extension panel.
+
+### Why not bundle the helix-rum-enhancer
+
+The extension manifest CSP is `script-src 'self' 'wasm-unsafe-eval'` (`packages/chrome-extension/manifest.json`). `@adobe/helix-rum-enhancer` is fundamentally incompatible with this:
+
+1. Helix-rum-js auto-loads the enhancer by injecting a `<script src="https://rum.hlx.page/.rum/@adobe/helix-rum-enhancer@^2/src/index.js">` tag — blocked by CSP.
+2. The enhancer's plugin loader uses `document.currentScript.src` to discover sibling plugins (`/tmp/helix-rum-enhancer/modules/index.js`), which only resolves when the enhancer itself was loaded as an external script. A bundled module has no `currentScript`.
+3. The enhancer's `cwv` plugin loads `web-vitals` via a **second** external `<script src="https://rum.hlx.page/.rum/web-vitals/dist/web-vitals.iife.js">` injection — also blocked by CSP.
+4. Most enhancer plugins (`form`, `video`, `martech`, `consent`, `redirect`, `onetrust`, `trustarc`, `usercentrics`, `webcomponent`) target content websites and have no meaningful signal for a chat-app shell.
+
+Vendoring the entire enhancer + `web-vitals` + retrofitting plugin discovery against a bundler would be substantial maintenance debt for low-value signal.
+
+### Why not bundle `web-vitals` directly
+
+`web-vitals` (5.3.0, ~13 KB) bundles cleanly and exposes `onLCP` / `onINP` / `onCLS` / `onTTFB` / `onFCP` as ES modules — no external script load required, so the CSP constraint is not the blocker. The blockers are signal quality and architectural fit:
+
+- **LCP / FCP**: the side panel is a chat-app shell, not a content page. These would mostly measure initial empty-panel render and would not generalize to user-perceived performance.
+- **CLS**: dominated by streaming-token reflow and chat-history scroll, swamping any real layout-shift signal.
+- **INP**: the only metric with a plausible use case — chat-input latency — but `formsubmit` and `fill` checkpoints already cover those interaction surfaces explicitly, and they carry richer context (scoop name, model id, command name) than a generic INP value.
+- **TTFB**: irrelevant for a `chrome-extension://` page.
+- The **offscreen document is headless** — no DOM, no render — so CWV would only ever apply to the side panel and the detached popout (`?detached=1`, same `index.html`), not the agent runtime where most extension activity happens.
+- The highest-value piece of the original Gap 3 was the `error` checkpoint, which is **already wired in the extension** via `telemetry.ts`'s window `error`/`unhandledrejection` listeners (extension branch), and the parallel work to instrument the offscreen realm closes the remaining capture gap.
+
+### Cross-mode dashboard guidance
+
+- All checkpoints carry `RUM_GENERATION` (`slicc-cli`, `slicc-extension`, `slicc-electron`). Dashboards that query `cwv` MUST filter to `slicc-cli` / `slicc-electron`; querying `cwv` across all generations will show zero events for `slicc-extension` and risk being misread as a regression.
+- The same applies to `click`, `loadresource`, and the other enhancer-derived checkpoints listed above.
+
+### Future option (not committed)
+
+If a concrete extension-perf question emerges in production (e.g., the side panel feeling laggy on chat sends), the smallest sensible addition is a bundled `web-vitals.onINP(…)` call wired through `sampleRUM('cwv', { source: 'inp', target: value })` in the extension branch of `initTelemetry()`. This adds ~3 KB to the extension bundle and would emit one INP value per panel pageview. Defer until the use case is concrete.
 
 ### Where init happens
 
@@ -109,7 +144,7 @@ Historical note: before 2026-05-29, the offscreen realm did not initialize telem
 
 - The extension service worker (`packages/chrome-extension/src/service-worker.ts`). CDP attach/detach, OAuth completion, navigate-licks, tray-socket lifecycle.
 - Custom agent-loop events from the offscreen realm — turn end, tool-call durations, explicit scoop create/delegate/drop. The offscreen `AlmostBashShell` now emits `fill` beacons for every bash call (so the cone-side `agent ...` invocations and `feed_scoop` tool calls show up indirectly), but there are no dedicated `agent-spawn` or `scoop-delegate` checkpoints yet.
-- Core Web Vitals in the extension. The helix enhancer that captures CWV cannot run under the extension's CSP, and we do not self-host it here.
+- Core Web Vitals and other enhancer-derived checkpoints in the extension. See "Extension Enhancer Parity Decision" above for the full rationale; the short version is that CSP makes the auto-loaded enhancer impossible, manual `web-vitals` integration is low-signal for a chat-app shell, and the highest-value piece (`error`) is already wired separately.
 
 These are tracked as future work in `docs/superpowers/specs/2026-04-28-extension-telemetry-design.md`.
 

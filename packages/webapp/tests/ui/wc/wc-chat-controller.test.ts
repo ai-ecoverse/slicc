@@ -10,6 +10,14 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
 
+vi.mock('../../../src/ui/telemetry.js', async () => {
+  const actual = await vi.importActual<typeof import('../../../src/ui/telemetry.js')>(
+    '../../../src/ui/telemetry.js'
+  );
+  return { ...actual, trackChatSend: vi.fn() };
+});
+
+import { trackChatSend } from '../../../src/ui/telemetry.js';
 import type { AgentEvent, AgentHandle } from '../../../src/ui/types.js';
 import { WcChatController } from '../../../src/ui/wc/wc-chat-controller.js';
 
@@ -52,6 +60,7 @@ describe('WcChatController', () => {
     document.body.appendChild(thread);
     agent = new FakeAgent();
     processingStates = [];
+    vi.mocked(trackChatSend).mockClear();
     controller = new WcChatController({
       thread,
       agent,
@@ -106,6 +115,72 @@ describe('WcChatController', () => {
     controller.sendUserMessage('plain typed prompt');
     expect(agent.sent.map((s) => s.text)).toEqual(['plain typed prompt']);
     expect(localEchoes.map((e) => e.text)).toEqual(['plain typed prompt']);
+  });
+
+  describe('telemetry beacon (trackChatSend)', () => {
+    it('fires once per user-initiated send with the resolved scoop + model', () => {
+      const local = document.createElement('slicc-chat-thread');
+      document.body.appendChild(local);
+      const localAgent = new FakeAgent();
+      const ctl = new WcChatController({
+        thread: local,
+        agent: localAgent,
+        resolveTelemetryContext: () => ({ scoopName: 'cone', model: 'claude-sonnet-4-6' }),
+      });
+      ctl.sendUserMessage('hello world');
+      expect(trackChatSend).toHaveBeenCalledTimes(1);
+      expect(trackChatSend).toHaveBeenCalledWith('cone', 'claude-sonnet-4-6');
+    });
+
+    it('does not fire when the prompt is empty (no send happened)', () => {
+      const local = document.createElement('slicc-chat-thread');
+      document.body.appendChild(local);
+      const localAgent = new FakeAgent();
+      const ctl = new WcChatController({
+        thread: local,
+        agent: localAgent,
+        resolveTelemetryContext: () => ({ scoopName: 'cone', model: 'm' }),
+      });
+      ctl.sendUserMessage('   ');
+      expect(trackChatSend).not.toHaveBeenCalled();
+    });
+
+    it('skips the beacon when the context resolver returns null (boot race)', () => {
+      const local = document.createElement('slicc-chat-thread');
+      document.body.appendChild(local);
+      const localAgent = new FakeAgent();
+      const ctl = new WcChatController({
+        thread: local,
+        agent: localAgent,
+        resolveTelemetryContext: () => null,
+      });
+      ctl.sendUserMessage('hello');
+      expect(trackChatSend).not.toHaveBeenCalled();
+      // The send itself must still go through — telemetry never blocks send.
+      expect(localAgent.sent.map((s) => s.text)).toEqual(['hello']);
+    });
+
+    it('swallows resolver throws so a broken resolver cannot block the send', () => {
+      const local = document.createElement('slicc-chat-thread');
+      document.body.appendChild(local);
+      const localAgent = new FakeAgent();
+      const ctl = new WcChatController({
+        thread: local,
+        agent: localAgent,
+        resolveTelemetryContext: () => {
+          throw new Error('resolver blew up');
+        },
+      });
+      expect(() => ctl.sendUserMessage('hello')).not.toThrow();
+      expect(trackChatSend).not.toHaveBeenCalled();
+      expect(localAgent.sent.map((s) => s.text)).toEqual(['hello']);
+    });
+
+    it('is a no-op when no resolveTelemetryContext is wired (default constructor)', () => {
+      // The default `controller` from beforeEach has no resolver wired.
+      controller.sendUserMessage('hi');
+      expect(trackChatSend).not.toHaveBeenCalled();
+    });
   });
 
   it('streams an assistant message through start → delta → done', async () => {

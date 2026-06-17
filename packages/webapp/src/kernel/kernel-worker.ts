@@ -35,6 +35,7 @@ import { createPanelRpcTrayProvider } from '../cdp/panel-rpc-tray-provider.js';
 // `registerProviders()` during boot before any code that reads from
 // the registry runs.
 import { registerProviders } from '../providers/index.js';
+import { initTelemetry } from '../ui/telemetry.js';
 import { WorkerCdpProxy } from './cdp-worker-proxy.js';
 import { createKernelHost, type KernelHost } from './host.js';
 import { makeSameOriginBypassFetch } from './kernel-worker-fetch-bypass.js';
@@ -191,6 +192,15 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
   // `local-storage-*` handlers + `installPageStorageSync` on the page
   // keep the shim in sync with subsequent page writes.
   installLocalStorageShim(init.localStorageSeed ?? {});
+
+  // Initialize RUM telemetry so beacons fire from the worker
+  // AlmostBashShell and uncaught errors in the agent loop are captured.
+  // Without this, `trackShellCommand` and friends silently no-op because
+  // `sampleRUM` is per-realm module state. Runs AFTER the localStorage
+  // shim so the `telemetry-disabled` / `slicc-rum-debug` keys the page
+  // seeded propagate into the worker's `initTelemetry` decision. Fire-
+  // and-forget — telemetry init must never block the boot.
+  void initTelemetry().catch(() => {});
 
   // Register providers first — kernel host construction reads the
   // provider registry (via scoop-context → provider-settings).

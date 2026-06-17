@@ -39,6 +39,7 @@ import { isExternalLickChannel } from './lick-formatting.js';
 import { buildActiveLicksError, type LickEvent, type LickManager } from './lick-manager.js';
 import { TaskScheduler } from './scheduler.js';
 import { ScoopContext, type ScoopContextCallbacks } from './scoop-context.js';
+import { emitScoopLifecycle } from './scoop-telemetry-hook.js';
 import { createDefaultSharedFiles, createDefaultSkills } from './skills.js';
 import {
   type ChannelMessage,
@@ -851,9 +852,19 @@ export class Orchestrator implements ConeApprovalRouter {
     const scoop = this.scoops.get(jid);
     if (!scoop || scoop.isCone) return;
 
+    // Emit completion telemetry before the notify-policy / mute / waiter
+    // branches AND before the empty-response early-return: any non-cone
+    // scoop that transitions to ready has lifecycle-completed regardless
+    // of how (or whether) the cone is told about it, and regardless of
+    // whether it buffered any text (structured-output-only turns, the
+    // `agent` shell-bridge spawns, and empty streams all hit this path).
+    // Without it, dashboards see enter ≫ leave counts.
+    emitScoopLifecycle('complete', scoop.folder);
+
     const responseText = this.scoopResponseBuffer.get(jid);
     this.scoopResponseBuffer.delete(jid);
     if (!responseText) return;
+
     if (scoop.notifyOnComplete === false) return;
 
     // Fire any pending scoop_wait resolvers first. A waiter claims the
@@ -2048,6 +2059,10 @@ export class Orchestrator implements ConeApprovalRouter {
     log.info('Scoop registered', { jid: scoop.jid, name: scoop.name });
     try {
       await this.createScoopTab(scoop.jid);
+      // Cones are tracked separately via boot-time `createScoopTab`
+      // (not `registerScoop`), so this only fires for runtime-spawned
+      // sub-scoops — which is what "delegation activity" cares about.
+      if (!scoop.isCone) emitScoopLifecycle('spawn', scoop.folder);
     } catch (err) {
       log.error('Scoop init failed', {
         jid: scoop.jid,
@@ -2312,6 +2327,8 @@ export class Orchestrator implements ConeApprovalRouter {
     const scoop = this.scoops.get(scoopJid);
     if (!scoop) throw new Error(`Scoop not found: ${scoopJid}`);
 
+    emitScoopLifecycle('feed', scoop.folder);
+
     // Save as a channel message so it shows up in history
     const msg: ChannelMessage = {
       id: `delegate-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -2569,6 +2586,7 @@ export class Orchestrator implements ConeApprovalRouter {
           tab.error = error;
           this.tabs.set(jid, tab);
         }
+        emitScoopLifecycle('error', scoop.folder, error);
         this.callbacks.onError(jid, error);
         this.callbacks.onStatusChange(jid, 'error');
         this.dispatchScoopEvent(jid, 'onError', error);
@@ -2670,6 +2688,8 @@ export class Orchestrator implements ConeApprovalRouter {
 
     const scoopRecord = this.scoops.get(jid)!;
     log.error('Fatal scoop error', { jid, folder: scoopRecord.folder, error });
+
+    emitScoopLifecycle('error', scoopRecord.folder, error);
 
     const tab = this.tabs.get(jid);
     if (tab) {

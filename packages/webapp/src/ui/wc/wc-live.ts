@@ -10,6 +10,7 @@
 import type { BrowserAPI, CDPTransport } from '../../cdp/index.js';
 import { installPageStorageSync } from '../../kernel/page-storage-sync.js';
 import { spawnKernelWorker } from '../../kernel/spawn.js';
+import { resolveCurrentModel, resolveModelById } from '../../providers/account-store.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
 import type { RegisteredScoop, ThinkingLevel } from '../../scoops/types.js';
 import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
@@ -628,6 +629,7 @@ function wireWcWelcome(
 function createWcController(
   refs: WcShellRefs,
   client: OffscreenClient,
+  getSelected: () => RegisteredScoop | null,
   onIdle?: () => void,
   welcome?: WelcomeInterceptHolder
 ): { controller: WcChatController; agentHandle: ReturnType<OffscreenClient['createAgentHandle']> } {
@@ -660,6 +662,24 @@ function createWcController(
   const controller = new WcChatController({
     thread: refs.thread,
     agent: agentHandle,
+    // Operational telemetry — emit a `formsubmit` beacon per user-initiated
+    // chat send carrying the active scoop name + resolved model id. Resolves
+    // the same way `applyThreadContext` builds the composer meta pill so the
+    // beacon agrees with what the user sees in the UI. Returns null when no
+    // scoop is selected (boot race) so the beacon is skipped rather than
+    // reporting a meaningless empty source.
+    resolveTelemetryContext: () => {
+      const scoop = getSelected();
+      if (!scoop) return null;
+      const scoopName = scoop.isCone ? 'cone' : scoop.name;
+      try {
+        const modelId = scoop.config?.modelId;
+        const model = modelId ? resolveModelById(modelId) : resolveCurrentModel();
+        return { scoopName, model: model.id };
+      } catch {
+        return { scoopName, model: '' };
+      }
+    },
     // Spoken-reply loop: a turn that began as push-to-talk dictation (the
     // submit listener marks it) gets its reply read aloud — kokoro once the
     // chained model download is warm, Web Speech until then. The one-shot
@@ -1065,13 +1085,12 @@ export function attachWcClient(
   // wireWcComposer once its module loads) + a stats refresh.
   let refreshPlaceholder: (() => void) | null = null;
   const refreshStats = wireWcStats(boot.wiring, client);
-  const triggerPlaceholder = (): void => {
-    refreshPlaceholder?.();
-  };
+  const triggerPlaceholder = (): void => refreshPlaceholder?.();
   const welcomeHolder: WelcomeInterceptHolder = { intercept: null };
   const { controller, agentHandle } = createWcController(
     refs,
     client,
+    () => boot.getSelected(),
     makeTurnFinishedHook({ boot, triggerPlaceholder, refreshStats }),
     welcomeHolder
   );

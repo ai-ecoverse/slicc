@@ -24,6 +24,7 @@ import { setupNukeReloadListener } from './boot/setup-nuke-reload-listener.js';
 import { setupSwRegistration } from './boot/setup-sw-registration.js';
 import { applyProviderDefaults } from './provider-settings.js';
 import { resolveUiRuntimeMode } from './runtime-mode.js';
+import { initTelemetry } from './telemetry.js';
 
 const log = createLogger('main');
 
@@ -59,6 +60,16 @@ async function main(): Promise<void> {
   // window-context listener acts on (clearing select localStorage
   // keys, then reloading). Idempotent — safe to call across re-inits.
   setupNukeReloadListener();
+
+  // Initialize RUM telemetry for the page/panel realm — `trackShellCommand`,
+  // `trackChatSubmit`, sprinkle `viewblock`, settings `signup`, and panel JS
+  // `error` are silent no-ops until `sampleRUM` is bound here. Mirrors the
+  // offscreen init (see chrome-extension/src/offscreen.ts). Skipped for the
+  // `?connect=1` login-only surface, which has no kernel and no shell.
+  // Fire-and-forget — telemetry init must never block the boot.
+  if (runtimeMode !== 'connect') {
+    initTelemetry().catch(() => {});
+  }
 
   // Service-worker registration (preview SW + connect-mode SW detach). The
   // helper returns `'reload-pending'` when it has triggered a one-shot

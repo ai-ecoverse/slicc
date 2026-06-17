@@ -101,6 +101,83 @@ describe('telemetry', () => {
     expect(mockSampleRUM).toHaveBeenCalledWith('fill', { source: 'node' });
   });
 
+  it('trackScoopLifecycle emits enter/convert/leave for spawn/feed/complete', async () => {
+    const { initTelemetry, trackScoopLifecycle } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    trackScoopLifecycle('spawn', 'researcher');
+    trackScoopLifecycle('feed', 'researcher');
+    trackScoopLifecycle('complete', 'researcher');
+
+    expect(mockSampleRUM).toHaveBeenNthCalledWith(1, 'enter', {
+      source: 'researcher',
+      target: 'scoop-spawn',
+    });
+    expect(mockSampleRUM).toHaveBeenNthCalledWith(2, 'convert', {
+      source: 'researcher',
+      target: 'scoop-feed',
+    });
+    expect(mockSampleRUM).toHaveBeenNthCalledWith(3, 'leave', {
+      source: 'researcher',
+      target: 'scoop-complete',
+    });
+  });
+
+  it('trackScoopLifecycle error namespaces source and sanitizes target', async () => {
+    const { initTelemetry, trackScoopLifecycle } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    trackScoopLifecycle('error', 'planner', 'rate_limit');
+    expect(mockSampleRUM).toHaveBeenCalledWith('error', {
+      source: 'scoop:planner',
+      target: 'rate_limit',
+    });
+  });
+
+  it('trackScoopLifecycle drops error entirely on pure Vite-noise details', async () => {
+    const { initTelemetry, trackScoopLifecycle } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    trackScoopLifecycle('error', 'planner', '[vite] hot updated: /src/foo.ts');
+    const errorCalls = mockSampleRUM.mock.calls.filter(([cp]) => cp === 'error');
+    expect(errorCalls).toHaveLength(0);
+  });
+
+  it('initTelemetry registers the scoop telemetry sink so emitScoopLifecycle reaches RUM', async () => {
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { emitScoopLifecycle } = await import('../../src/scoops/scoop-telemetry-hook.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    emitScoopLifecycle('spawn', 'researcher');
+    expect(mockSampleRUM).toHaveBeenCalledWith('enter', {
+      source: 'researcher',
+      target: 'scoop-spawn',
+    });
+  });
+
+  it('initTelemetry registers the agent-error sink so emitAgentError reaches RUM with typed source', async () => {
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { emitAgentError } = await import('../../src/core/telemetry-hook.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    emitAgentError('llm', 'rate_limit');
+    emitAgentError('tool', 'bash: command failed');
+
+    expect(mockSampleRUM).toHaveBeenNthCalledWith(1, 'error', {
+      source: 'llm',
+      target: 'rate_limit',
+    });
+    expect(mockSampleRUM).toHaveBeenNthCalledWith(2, 'error', {
+      source: 'tool',
+      target: 'bash: command failed',
+    });
+  });
+
   it('trackSprinkleView emits viewblock', async () => {
     const { initTelemetry, trackSprinkleView } = await import('../../src/ui/telemetry.js');
     await initTelemetry();
@@ -137,14 +214,80 @@ describe('telemetry', () => {
     expect(mockSampleRUM).toHaveBeenCalledWith('signup', { source: 'button' });
   });
 
-  it('trackError forwards source/target as-is (sanitization happens at the listener)', async () => {
+  it('trackError sanitizes target (truncates to 200 chars)', async () => {
     const { initTelemetry, trackError } = await import('../../src/ui/telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
 
     const long = 'x'.repeat(250);
     trackError('js', long);
-    expect(mockSampleRUM).toHaveBeenCalledWith('error', { source: 'js', target: long });
+    const target = mockSampleRUM.mock.calls[0][1].target as string;
+    expect(target.length).toBeLessThanOrEqual(200);
+    expect(target.length).toBe(200);
+  });
+
+  it('trackError drops errors that are entirely Vite dev-server noise', async () => {
+    const { initTelemetry, trackError } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    trackError(
+      'js',
+      'Failed to fetch dynamically imported module: http://localhost:5710/@vite/client'
+    );
+    const errorCalls = mockSampleRUM.mock.calls.filter(([cp]) => cp === 'error');
+    expect(errorCalls).toHaveLength(0);
+  });
+
+  it('trackError drops [vite] HMR overlay noise entirely', async () => {
+    const { initTelemetry, trackError } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    trackError('js', '[vite] hot updated: /src/foo.ts');
+    const errorCalls = mockSampleRUM.mock.calls.filter(([cp]) => cp === 'error');
+    expect(errorCalls).toHaveLength(0);
+  });
+
+  it('trackError strips Vite frames from real app errors but keeps the rest', async () => {
+    const { initTelemetry, trackError } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    const mixed = [
+      'TypeError: cannot read property x of undefined',
+      '  at handler (/workspace/skills/foo.ts:10:5)',
+      '  at http://localhost:5710/@vite/client.js:42:1',
+    ].join('\n');
+    trackError('js', mixed);
+
+    const target = mockSampleRUM.mock.calls[0][1].target as string;
+    expect(target).toContain('TypeError');
+    expect(target).not.toContain('@vite/client');
+    expect(target).not.toContain('localhost:5710');
+  });
+
+  it('trackError preserves real errors unchanged (no Vite content)', async () => {
+    const { initTelemetry, trackError } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    trackError('llm', 'rate_limit');
+    expect(mockSampleRUM).toHaveBeenCalledWith('error', { source: 'llm', target: 'rate_limit' });
+  });
+
+  it('CLI sampleRUM wrapper passes through non-error checkpoints unchanged', async () => {
+    const { initTelemetry, trackChatSend } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    // The wrapper sits between trackChatSend and helix's mocked sampleRUM.
+    // Non-error checkpoints must pass through with data intact.
+    trackChatSend('cone', 'claude-sonnet');
+    expect(mockSampleRUM).toHaveBeenCalledWith('formsubmit', {
+      source: 'cone',
+      target: 'claude-sonnet',
+    });
   });
 
   it('track functions are no-op before init', async () => {
@@ -287,6 +430,31 @@ describe('telemetry — extension branch', () => {
     expect(mockSampleRumJs.mock.calls[0][1].target).not.toContain('/foo/bar.ts');
   });
 
+  it('error listener falls back to error.message when event.message is empty', async () => {
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRumJs.mockClear();
+
+    // Chromium synthesizes both ErrorEvent.message and ErrorEvent.error for
+    // an uncaught Error. When the top-level message is empty (e.g. a thrown
+    // Error with no string coercion) we still want context from the nested
+    // Error.message rather than emitting an empty target.
+    const errorEvent = new Event('error') as ErrorEvent;
+    Object.defineProperty(errorEvent, 'message', { value: '' });
+    Object.defineProperty(errorEvent, 'error', {
+      value: new Error('nested error context'),
+    });
+    window.dispatchEvent(errorEvent);
+
+    expect(mockSampleRumJs).toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({
+        source: 'js',
+        target: expect.stringContaining('nested error context'),
+      })
+    );
+  });
+
   it('registers unhandledrejection listener that calls trackError("js", sanitized)', async () => {
     const { initTelemetry } = await import('../../src/ui/telemetry.js');
     await initTelemetry();
@@ -381,6 +549,175 @@ describe('telemetry — extension branch', () => {
     const target = mockSampleRumJs.mock.calls[0][1].target as string;
     expect(target).toContain('/WORKSPACE/.../');
     expect(target).not.toContain('/Foo/Bar.ts');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CLI sendBeacon wrapper — covers the Vite-noise filter applied to beacons
+// emitted by helix-rum-js's internal window.error / unhandledrejection
+// listeners. Those listeners resolve `sampleRUM` via lexical closure to the
+// helix module's internal function declaration, so a wrapper on the exported
+// binding can't intercept them. navigator.sendBeacon is the only chokepoint
+// we can wrap from the outside (issue #795 regression guard).
+// ---------------------------------------------------------------------------
+
+describe('telemetry — CLI sendBeacon wrapper', () => {
+  let savedSendBeacon: typeof navigator.sendBeacon | undefined;
+
+  beforeEach(() => {
+    mockLocalStorage.clear();
+    mockSampleRUM.mockClear();
+    vi.resetModules();
+    stubLocalStorage();
+    savedSendBeacon = (navigator as Navigator).sendBeacon;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+    if (savedSendBeacon) {
+      Object.defineProperty(navigator, 'sendBeacon', {
+        value: savedSendBeacon,
+        writable: true,
+        configurable: true,
+      });
+    } else {
+      delete (navigator as unknown as { sendBeacon?: unknown }).sendBeacon;
+    }
+  });
+
+  function installUnderlyingBeacon(): ReturnType<typeof vi.fn> {
+    const underlying = vi.fn(() => true);
+    Object.defineProperty(navigator, 'sendBeacon', {
+      value: underlying,
+      writable: true,
+      configurable: true,
+    });
+    return underlying;
+  }
+
+  it('drops error beacons whose target is entirely Vite noise', async () => {
+    const underlying = installUnderlyingBeacon();
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    expect(navigator.sendBeacon).not.toBe(underlying);
+
+    const body = JSON.stringify({
+      checkpoint: 'error',
+      target: 'http://localhost:5710/@vite/client',
+    });
+    const result = navigator.sendBeacon('https://rum.hlx.page/.rum/100', body);
+    expect(result).toBe(true);
+    expect(underlying).not.toHaveBeenCalled();
+  });
+
+  it('drops error beacons whose source AND target are both pure Vite noise', async () => {
+    const underlying = installUnderlyingBeacon();
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+
+    const body = JSON.stringify({
+      checkpoint: 'error',
+      source: 'http://localhost:5710/@vite/client',
+      target: 'http://localhost:5710/@vite/client.js',
+    });
+    const result = navigator.sendBeacon('https://rum.hlx.page/.rum/100', body);
+    expect(result).toBe(true);
+    expect(underlying).not.toHaveBeenCalled();
+  });
+
+  it('blanks a noisy source but keeps the beacon when the target survives', async () => {
+    const underlying = installUnderlyingBeacon();
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+
+    const body = JSON.stringify({
+      checkpoint: 'error',
+      source: 'http://localhost:5710/@vite/client',
+      target: 'TypeError: real app failure',
+    });
+    navigator.sendBeacon('https://rum.hlx.page/.rum/100', body);
+    expect(underlying).toHaveBeenCalledOnce();
+    const sent = JSON.parse(underlying.mock.calls[0][1] as string);
+    expect(sent.source).toBe('');
+    expect(sent.target).toContain('TypeError');
+    expect(sent.checkpoint).toBe('error');
+  });
+
+  it('blanks a noisy target but keeps the beacon when the source survives', async () => {
+    const underlying = installUnderlyingBeacon();
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+
+    const body = JSON.stringify({
+      checkpoint: 'error',
+      source: 'https://example.com/app.js',
+      target: 'http://localhost:5710/@vite/client',
+    });
+    navigator.sendBeacon('https://rum.hlx.page/.rum/100', body);
+    expect(underlying).toHaveBeenCalledOnce();
+    const sent = JSON.parse(underlying.mock.calls[0][1] as string);
+    expect(sent.source).toBe('https://example.com/app.js');
+    expect(sent.target).toBe('');
+  });
+
+  it('rewrites error beacons with mixed Vite + real-app content', async () => {
+    const underlying = installUnderlyingBeacon();
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+
+    const body = JSON.stringify({
+      checkpoint: 'error',
+      source: 'undefined error',
+      target: 'TypeError: oops\n  at http://localhost:5710/@vite/client.js:1:1',
+    });
+    navigator.sendBeacon('https://rum.hlx.page/.rum/100', body);
+    expect(underlying).toHaveBeenCalledOnce();
+    const sent = JSON.parse(underlying.mock.calls[0][1] as string);
+    expect(sent.target).toContain('TypeError');
+    expect(sent.target).not.toContain('@vite/client');
+    expect(sent.checkpoint).toBe('error');
+  });
+
+  it('passes through non-error beacons unchanged', async () => {
+    const underlying = installUnderlyingBeacon();
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    const body = JSON.stringify({ checkpoint: 'navigate', target: 'cli' });
+    navigator.sendBeacon('https://rum.hlx.page/.rum/100', body);
+    expect(underlying).toHaveBeenCalledOnce();
+    expect(underlying.mock.calls[0][1]).toBe(body);
+  });
+
+  it('falls through opaque (Blob) bodies without throwing', async () => {
+    const underlying = installUnderlyingBeacon();
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    const blob = new Blob(['{"checkpoint":"error","target":"x"}'], {
+      type: 'application/json',
+    });
+    navigator.sendBeacon('https://rum.hlx.page/.rum/100', blob);
+    expect(underlying).toHaveBeenCalledOnce();
+    expect(underlying.mock.calls[0][1]).toBe(blob);
+  });
+
+  it('does not re-wrap an already-wrapped sendBeacon on re-init', async () => {
+    const underlying = installUnderlyingBeacon();
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    const wrappedOnce = navigator.sendBeacon;
+
+    vi.resetModules();
+    const reloaded = await import('../../src/ui/telemetry.js');
+    await reloaded.initTelemetry();
+    expect(navigator.sendBeacon).toBe(wrappedOnce);
+
+    const viteBody = JSON.stringify({
+      checkpoint: 'error',
+      target: 'http://localhost:5710/@vite/client',
+    });
+    navigator.sendBeacon('https://rum.hlx.page/.rum/100', viteBody);
+    expect(underlying).not.toHaveBeenCalled();
   });
 });
 
