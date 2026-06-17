@@ -79,6 +79,31 @@ describe('slicc-queued-stack', () => {
     expect(badge.textContent).toContain('4 queued');
   });
 
+  it('places the badge above the stack in the shadow DOM (badge then stack)', () => {
+    const el = mount();
+    el.setMessages(items(3));
+    const root = el.shadowRoot as ShadowRoot;
+    const badge = root.querySelector('[part="badge"]') as HTMLElement;
+    const stack = root.querySelector('[part="stack"]') as HTMLElement;
+    expect(badge).not.toBeNull();
+    expect(stack).not.toBeNull();
+    // The badge must be the first child of `.wrap` so it sits at the top-left
+    // above the pile (the pile then grows upward out of the composer band).
+    expect(badge.parentElement).toBe(stack.parentElement);
+    const order = badge.compareDocumentPosition(stack);
+    // DOCUMENT_POSITION_FOLLOWING === 4 — stack comes AFTER badge.
+    expect(order & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('isolates the stack so its per-card z-indices do not leak to siblings', () => {
+    const el = mount();
+    el.setMessages(items(3));
+    const stack = el.shadowRoot?.querySelector('[part="stack"]') as HTMLElement;
+    // `isolation: isolate` creates a stacking context so the cards' positive
+    // z-indices cannot float above the composer's input card layered beneath.
+    expect(getComputedStyle(stack).isolation).toBe('isolate');
+  });
+
   it('exposes ::part hooks on stack, card, front, badge, dismiss', () => {
     const el = mount();
     el.setMessages(items(2));
