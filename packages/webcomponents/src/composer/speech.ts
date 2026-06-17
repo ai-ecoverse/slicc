@@ -1,3 +1,5 @@
+import { labelDevices } from './devices.js';
+
 /**
  * Speech contract for the composer's push-to-talk gesture.
  *
@@ -172,9 +174,10 @@ export function createBuiltinComposerSpeech(): ComposerSpeech {
       if (!navigator.mediaDevices?.enumerateDevices) return [];
       try {
         const devices = await navigator.mediaDevices.enumerateDevices();
-        return devices
-          .filter((d) => d.kind === 'audioinput')
-          .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Microphone ${i + 1}` }));
+        return labelDevices(
+          devices.filter((d) => d.kind === 'audioinput'),
+          'microphone'
+        );
       } catch {
         return [];
       }
