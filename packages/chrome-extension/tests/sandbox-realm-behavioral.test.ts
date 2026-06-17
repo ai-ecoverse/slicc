@@ -22,12 +22,14 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runInThisContext } from 'node:vm';
+import * as ts from 'typescript';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { normalizePath, splitPath } from '../../webapp/src/fs/path-utils.js';
 import { runJsRealm } from '../../webapp/src/kernel/realm/js-realm-shared.js';
 import type { RealmInitMsg } from '../../webapp/src/kernel/realm/realm-types.js';
 import {
   buildRealmModuleGraph,
+  type EntryTranspile,
   type RealmGraphResult,
 } from '../../webapp/src/shell/ipk/module-loader.js';
 import type { ModuleReader } from '../../webapp/src/shell/ipk/resolver.js';
@@ -162,6 +164,14 @@ interface HostHandlers {
    * exercised against a faithful graph.
    */
   files?: Record<string, string>;
+  /**
+   * Optional entry-code transpile hook. The default `buildGraphForHost` omits
+   * the esbuild-backed hooks (esbuild's load-time `TextEncoder` invariant fails
+   * under jsdom). ESM parity cases inject a TypeScript-only `createEntryTranspile`
+   * so the host lowers `import ... from 'sliccy:'`/`node:`/`fs` to `require(...)`
+   * (the same transform `realm-host.ts` performs) without loading esbuild.
+   */
+  transpileEntry?: EntryTranspile;
 }
 
 /** Build a ModuleReader over a flat `{ path: contents }` map (mirrors module-resolve.test.ts). */
@@ -209,9 +219,10 @@ async function buildGraphForHost(
   reader: ModuleReader,
   entryCode: string,
   fromDir: string,
-  entryFilename: string
+  entryFilename: string,
+  transpileEntry?: EntryTranspile
 ): Promise<RealmGraphResult> {
-  return buildRealmModuleGraph({ entryCode, fromDir, entryFilename, reader });
+  return buildRealmModuleGraph({ entryCode, fromDir, entryFilename, reader, transpileEntry });
 }
 
 interface RunOpts {
@@ -263,7 +274,13 @@ function attachFakeRpcHost(hostPort: MessagePort, host: HostHandlers): Promise<R
         const fromDir = (req.args?.[1] as string) ?? '/workspace';
         const entryFilename = (req.args?.[2] as string) ?? '[eval]';
         const reader = makeModuleReader(host.files ?? {});
-        result = await buildGraphForHost(reader, entryCode, fromDir, entryFilename);
+        result = await buildGraphForHost(
+          reader,
+          entryCode,
+          fromDir,
+          entryFilename,
+          host.transpileEntry
+        );
       } else {
         hostPort.postMessage({
           type: 'realm-rpc-res',
@@ -914,6 +931,84 @@ describe('VAL-REQUIRE-016: CJS require matrix — extension iframe float vs CLI 
   ])('matrix entry "%s" produces identical stdout/stderr/exit across floats', async (_label, code) => {
     const { iframe, worker } = await runBothFloats(code, { host: { files: MATRIX_FILES } });
     expect(worker.exitCode).toBe(0);
+    expect(iframe.stdout).toBe(worker.stdout);
+    expect(iframe.stderr).toBe(worker.stderr);
+    expect(iframe.exitCode).toBe(worker.exitCode);
+  });
+});
+
+describe('VAL-GLOBALS-016: ESM sliccy: import + unknown-name error — dual-float parity', () => {
+  // The host-side ESM->CJS transpile runs in `realm-host.ts` (identical for both
+  // floats); the iframe-float evaluator just runs the transpiled CJS. esbuild's
+  // load-time `TextEncoder` invariant fails under jsdom (and importing the real
+  // `createEntryTranspile` pulls esbuild-wasm in at module load), so this injects
+  // the SAME TypeScript lowering `createEntryTranspile` falls back to —
+  // `import ... from 'sliccy:exec'` -> `require('sliccy:exec')`, top-level await
+  // preserved under `module: CommonJS` — so the parity assertion still exercises
+  // the real iframe ESM access path against a byte-identical host transform.
+  const tsEntryTranspile: EntryTranspile = async ({ source, filename }) => {
+    const out = ts.transpileModule(source, {
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        target: ts.ScriptTarget.ES2020,
+        esModuleInterop: true,
+      },
+      fileName: `${(filename || '[eval]').replace(/\.[^./]+$/, '')}.ts`,
+    });
+    return out.outputText;
+  };
+
+  const echoHost = {
+    exec: async (cmd: string) => ({
+      stdout: `${cmd.replace(/^echo\s+/, '')}\n`,
+      stderr: '',
+      exitCode: 0,
+    }),
+    transpileEntry: tsEntryTranspile,
+  };
+
+  it('static named `import { exec } from "sliccy:exec"` resolves and runs identically in both floats', async () => {
+    const code = [
+      "import { exec } from 'sliccy:exec';",
+      "const r = await exec('echo esm-sliccy');",
+      'console.log(r.stdout.trim());',
+    ].join('\n');
+    const { iframe, worker } = await runBothFloats(code, { host: echoHost });
+
+    expect(worker.exitCode).toBe(0);
+    expect(iframe.exitCode).toBe(0);
+    expect(worker.stdout.trim()).toBe('esm-sliccy');
+    expect(iframe.stdout).toBe(worker.stdout);
+    expect(iframe.stderr).toBe(worker.stderr);
+    expect(iframe.exitCode).toBe(worker.exitCode);
+  });
+
+  it('default `import exec from "sliccy:exec"` resolves and runs identically in both floats', async () => {
+    const code = [
+      "import exec from 'sliccy:exec';",
+      "const r = await exec('echo esm-default');",
+      'console.log(r.stdout.trim());',
+    ].join('\n');
+    const { iframe, worker } = await runBothFloats(code, { host: echoHost });
+
+    expect(worker.exitCode).toBe(0);
+    expect(worker.stdout.trim()).toBe('esm-default');
+    expect(iframe.stdout).toBe(worker.stdout);
+    expect(iframe.stderr).toBe(worker.stderr);
+    expect(iframe.exitCode).toBe(worker.exitCode);
+  });
+
+  it("require('sliccy:bogus') throws the same scheme-specific error in both floats", async () => {
+    const code = `
+      try { require('sliccy:bogus'); console.log('UNEXPECTED'); }
+      catch (e) { console.log(e.message); }
+    `;
+    const { iframe, worker } = await runBothFloats(code);
+
+    expect(worker.exitCode).toBe(0);
+    expect(worker.stdout).toContain("unknown sliccy: module 'bogus'");
+    expect(worker.stdout).not.toContain('run: ipk install');
+    // Headline parity: byte-identical error surface across floats.
     expect(iframe.stdout).toBe(worker.stdout);
     expect(iframe.stderr).toBe(worker.stderr);
     expect(iframe.exitCode).toBe(worker.exitCode);
