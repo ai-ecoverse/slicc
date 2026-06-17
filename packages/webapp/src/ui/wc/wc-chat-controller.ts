@@ -276,6 +276,9 @@ export class WcChatController {
       // flip this card's state in place (see `updateLickState`).
       lickId,
       lickState: lickId ? 'pending' : undefined,
+      // Mirror `sendUserMessage`: a lick that arrives mid-turn is not the
+      // originator of the current turn, so retry scans must skip it.
+      queued: this.#processing ? true : undefined,
     });
   }
 
@@ -500,16 +503,20 @@ export class WcChatController {
       // legacy whole-thread scan rather than silently dropping the retry.
     }
     // (1) Immediately-preceding lick — the welcome-lick onboarding case.
+    // A queued lick arrived mid-turn (after the originator) so it is NOT
+    // the originator and must be skipped here.
     const prev = startIndex > 0 ? this.#messages[startIndex - 1] : undefined;
-    if (prev && prev.source === 'lick') {
+    if (prev && prev.source === 'lick' && !prev.queued) {
       this.#agent.sendMessage(prev.content, uid(), prev.attachments);
       return;
     }
-    // (2) Last user-typed message in the thread (skip licks / delegations).
+    // (2) Last user-typed message in the thread (skip licks / delegations
+    // and anything queued mid-turn — that was submitted AFTER the failing
+    // turn started, so it's not the originator).
     let target: ChatMessage | undefined;
     for (let i = startIndex - 1; i >= 0; i--) {
       const m = this.#messages[i];
-      if (m.role === 'user' && m.source !== 'lick' && m.source !== 'delegation') {
+      if (m.role === 'user' && m.source !== 'lick' && m.source !== 'delegation' && !m.queued) {
         target = m;
         break;
       }

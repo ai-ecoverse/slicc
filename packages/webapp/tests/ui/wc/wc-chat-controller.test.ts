@@ -301,6 +301,30 @@ describe('WcChatController', () => {
     expect(agent.sent[0].text).toBe('after the lick');
   });
 
+  it('skips a lick that arrived mid-turn when scanning for the failed originator', () => {
+    // Sequence: user prompt (turn A in flight) → lick arrives mid-turn →
+    // error fires. The lick sits directly above the error but it was
+    // queued AFTER the originator, so retry must resubmit the user prompt
+    // — not the queued lick.
+    controller.sendUserMessage('prompt A');
+    agent.emit({ type: 'message_start', messageId: 'm1' });
+    expect(controller.processing).toBe(true);
+    controller.addLickMessage('l1', '[Webhook Event: deploy]', 'webhook', Date.now());
+    agent.sent.length = 0;
+    agent.emit({ type: 'error', error: 'rate limited' });
+    const card = thread.querySelector('slicc-error-card');
+    const errorId = card?.getAttribute('message-id') ?? null;
+    card?.dispatchEvent(
+      new CustomEvent('slicc-error-retry', {
+        detail: { messageId: errorId },
+        bubbles: true,
+        composed: true,
+      })
+    );
+    expect(agent.sent).toHaveLength(1);
+    expect(agent.sent[0].text).toBe('prompt A');
+  });
+
   it('falls back to the legacy whole-thread scan when detail.messageId is absent', () => {
     controller.sendUserMessage('hello world');
     agent.sent.length = 0;
