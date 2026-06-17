@@ -376,6 +376,168 @@ describe('resolve() — package-dir self-referencing main/module', () => {
   }, 3000);
 });
 
+describe('resolve() — package #imports', () => {
+  it('resolves a plain-string #import through the nearest package scope', async () => {
+    const reader = makeReader({
+      '/app/node_modules/pkg/package.json': JSON.stringify({
+        name: 'pkg',
+        imports: { '#ansi-styles': './source/vendor/ansi-styles/index.js' },
+        main: 'index.js',
+      }),
+      '/app/node_modules/pkg/index.js': "require('#ansi-styles');",
+      '/app/node_modules/pkg/source/vendor/ansi-styles/index.js': 'module.exports = {};',
+    });
+    const r = await resolve('#ansi-styles', '/app/node_modules/pkg', reader);
+    expect(r.type).toBe('file');
+    if (r.type === 'file') {
+      expect(r.path).toBe('/app/node_modules/pkg/source/vendor/ansi-styles/index.js');
+    }
+  });
+
+  it('resolves a #import from a nested module dir by walking up to the package scope', async () => {
+    const reader = makeReader({
+      '/app/node_modules/pkg/package.json': JSON.stringify({
+        name: 'pkg',
+        imports: { '#ansi-styles': './source/vendor/ansi-styles/index.js' },
+      }),
+      '/app/node_modules/pkg/source/index.js': "require('#ansi-styles');",
+      '/app/node_modules/pkg/source/vendor/ansi-styles/index.js': 'module.exports = {};',
+    });
+    const r = await resolve('#ansi-styles', '/app/node_modules/pkg/source', reader);
+    if (r.type === 'file') {
+      expect(r.path).toBe('/app/node_modules/pkg/source/vendor/ansi-styles/index.js');
+    }
+  });
+
+  it('picks the browser/default variant of a conditions-object #import (drops node)', async () => {
+    const reader = makeReader({
+      '/app/node_modules/pkg/package.json': JSON.stringify({
+        name: 'pkg',
+        imports: {
+          '#supports-color': {
+            node: './source/vendor/supports-color/index.js',
+            default: './source/vendor/supports-color/browser.js',
+          },
+        },
+      }),
+      '/app/node_modules/pkg/source/vendor/supports-color/index.js': 'module.exports = "node";',
+      '/app/node_modules/pkg/source/vendor/supports-color/browser.js':
+        'module.exports = "browser";',
+    });
+    const r = await resolve('#supports-color', '/app/node_modules/pkg', reader);
+    if (r.type === 'file') {
+      expect(r.path).toBe('/app/node_modules/pkg/source/vendor/supports-color/browser.js');
+    }
+  });
+
+  it('prefers an explicit browser condition over default for a #import', async () => {
+    const reader = makeReader({
+      '/app/node_modules/pkg/package.json': JSON.stringify({
+        name: 'pkg',
+        imports: {
+          '#env': { browser: './browser.js', node: './node.js', default: './default.js' },
+        },
+      }),
+      '/app/node_modules/pkg/browser.js': 'module.exports = "browser";',
+      '/app/node_modules/pkg/node.js': 'module.exports = "node";',
+      '/app/node_modules/pkg/default.js': 'module.exports = "default";',
+    });
+    const r = await resolve('#env', '/app/node_modules/pkg', reader);
+    if (r.type === 'file') expect(r.path).toBe('/app/node_modules/pkg/browser.js');
+  });
+
+  it('honors require vs import access kind inside #imports conditions', async () => {
+    const reader = makeReader({
+      '/app/node_modules/pkg/package.json': JSON.stringify({
+        name: 'pkg',
+        imports: { '#dual': { import: './esm.js', require: './cjs.js', default: './def.js' } },
+      }),
+      '/app/node_modules/pkg/esm.js': 'export default 1;',
+      '/app/node_modules/pkg/cjs.js': 'module.exports = 1;',
+      '/app/node_modules/pkg/def.js': 'module.exports = 1;',
+    });
+    const req = await resolve('#dual', '/app/node_modules/pkg', reader, {
+      conditions: ['node', 'require', 'default'],
+    });
+    if (req.type === 'file') expect(req.path).toBe('/app/node_modules/pkg/cjs.js');
+    const imp = await resolve('#dual', '/app/node_modules/pkg', reader, {
+      conditions: ['node', 'import', 'default'],
+    });
+    if (imp.type === 'file') expect(imp.path).toBe('/app/node_modules/pkg/esm.js');
+  });
+
+  it('resolves a single-* pattern #import key', async () => {
+    const reader = makeReader({
+      '/app/node_modules/pkg/package.json': JSON.stringify({
+        name: 'pkg',
+        imports: { '#internal/*': './src/internal/*.js' },
+      }),
+      '/app/node_modules/pkg/src/internal/util.js': 'module.exports = {};',
+    });
+    const r = await resolve('#internal/util', '/app/node_modules/pkg', reader);
+    if (r.type === 'file') expect(r.path).toBe('/app/node_modules/pkg/src/internal/util.js');
+  });
+
+  it('stops at the first enclosing package.json and does not escape into a parent package', async () => {
+    const reader = makeReader({
+      '/app/node_modules/parent/package.json': JSON.stringify({
+        name: 'parent',
+        imports: { '#shared': './parent-shared.js' },
+      }),
+      '/app/node_modules/parent/parent-shared.js': 'module.exports = "parent";',
+      '/app/node_modules/parent/node_modules/child/package.json': JSON.stringify({
+        name: 'child',
+      }),
+      '/app/node_modules/parent/node_modules/child/index.js': "require('#shared');",
+    });
+    // The child scope has no #shared, so resolution must NOT escape to parent's.
+    await expect(
+      resolve('#shared', '/app/node_modules/parent/node_modules/child', reader)
+    ).rejects.toThrow("Cannot find module '#shared'");
+  });
+
+  it('throws without an ipk-install hint when a #import is not declared', async () => {
+    const reader = makeReader({
+      '/app/node_modules/pkg/package.json': JSON.stringify({ name: 'pkg', imports: {} }),
+      '/app/node_modules/pkg/index.js': 'x',
+    });
+    const err = await resolve('#missing', '/app/node_modules/pkg', reader).catch((e) => e as Error);
+    expect(err.message).toBe("Cannot find module '#missing'");
+    expect(err.message).not.toMatch(/ipk install/);
+  });
+
+  it('throws when there is no enclosing package scope', async () => {
+    const reader = makeReader({ '/app/index.js': "require('#x');" });
+    await expect(resolve('#x', '/app', reader)).rejects.toThrow("Cannot find module '#x'");
+  });
+
+  it('rejects a bare "#" specifier', async () => {
+    const reader = makeReader({
+      '/app/node_modules/pkg/package.json': JSON.stringify({
+        name: 'pkg',
+        imports: { '#': './a.js' },
+      }),
+      '/app/node_modules/pkg/a.js': 'x',
+    });
+    const err = await resolve('#', '/app/node_modules/pkg', reader).catch((e) => e as Error);
+    expect(err.message).toBe("Cannot find module '#'");
+    expect(err.message).not.toMatch(/ipk install/);
+  });
+
+  it('rejects a "#/"-prefixed specifier', async () => {
+    const reader = makeReader({
+      '/app/node_modules/pkg/package.json': JSON.stringify({
+        name: 'pkg',
+        imports: { '#/foo': './a.js' },
+      }),
+      '/app/node_modules/pkg/a.js': 'x',
+    });
+    const err = await resolve('#/foo', '/app/node_modules/pkg', reader).catch((e) => e as Error);
+    expect(err.message).toBe("Cannot find module '#/foo'");
+    expect(err.message).not.toMatch(/ipk install/);
+  });
+});
+
 describe('resolve() — import-time conditions', () => {
   it('selects the import condition when conditions prioritize import', async () => {
     const reader = makeReader({
