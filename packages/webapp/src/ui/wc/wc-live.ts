@@ -644,6 +644,19 @@ function createWcController(
     .then(({ watchSprinkleThemeBroadcast }) => watchSprinkleThemeBroadcast())
     .catch(() => undefined);
   const agentHandle = client.createAgentHandle();
+  // Soundscape cues for the selected scoop's tool lifecycle: tool_use_start →
+  // 'tool-start', tool_result → 'tool-finish'. The cue helper itself gates on
+  // the persisted enable flag, the voice-mode window (`beginVoiceTurn` from
+  // the composer's dictated-submit handler), and the TTS-active flag — so
+  // typed turns stay silent, the wiring just feeds events through.
+  agentHandle.onEvent((event) => {
+    if (event.type !== 'tool_use_start' && event.type !== 'tool_result') return;
+    void import('../../speech/soundscape.js')
+      .then(({ playCue }) =>
+        playCue(event.type === 'tool_use_start' ? 'tool-start' : 'tool-finish')
+      )
+      .catch(() => undefined);
+  });
   const controller = new WcChatController({
     thread: refs.thread,
     agent: agentHandle,
@@ -652,11 +665,27 @@ function createWcController(
     // chained model download is warm, Web Speech until then. The one-shot
     // flag is consumed on EVERY turn completion (even reply-less ones, e.g.
     // the error path) so it can never linger and voice a later typed turn.
+    // The soundscape's voice-mode window also closes here — TTS is flagged
+    // active for the spoken-reply duration so any tail cues are suppressed,
+    // and `endVoiceTurn` runs in a finally so an error path never pins the
+    // voice gate open for later typed turns.
     onTurnComplete: (message) => {
       void import('../../speech/voice-reply.js')
-        .then(({ consumeVoiceSubmission, speakReplyMarkdown }) => {
+        .then(async ({ consumeVoiceSubmission, speakReplyMarkdown }) => {
           if (!consumeVoiceSubmission()) return;
-          if (message?.content) return speakReplyMarkdown(message.content);
+          const { endVoiceTurn, setTtsActive } = await import('../../speech/soundscape.js');
+          try {
+            if (message?.content) {
+              setTtsActive(true);
+              try {
+                await speakReplyMarkdown(message.content);
+              } finally {
+                setTtsActive(false);
+              }
+            }
+          } finally {
+            endVoiceTurn();
+          }
         })
         .catch(() => undefined);
     },
@@ -798,6 +827,16 @@ function wireWcComposer(deps: {
     if (dictation) {
       void import('../../speech/voice-reply.js')
         .then(({ markVoiceSubmission }) => markVoiceSubmission())
+        .catch(() => undefined);
+      // Soundscape: open the voice-mode window and play the message-sent
+      // cue. `beginVoiceTurn` runs BEFORE `playCue('sent')` so the cue's
+      // own voice-turn gate passes; `endVoiceTurn` closes it in the
+      // turn-complete hook above.
+      void import('../../speech/soundscape.js')
+        .then(({ beginVoiceTurn, playCue }) => {
+          beginVoiceTurn();
+          playCue('sent');
+        })
         .catch(() => undefined);
     }
     boot.getController()?.sendUserMessage(text, attachStage?.take(), { dictation });
