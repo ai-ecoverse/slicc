@@ -497,10 +497,29 @@ async function findPackageDir(
   return null;
 }
 
+const ESM_IMPORT_RE = /(?:^|[;\n}])\s*import\b(?!\s*[(.])/;
+const ESM_EXPORT_RE = /(?:^|[;\n}])\s*export\b/;
+const IMPORT_META_RE = /\bimport\s*\.\s*meta\b/;
+
 /**
- * Detect the module kind of a resolved file. Extension wins first
- * (`.json`/`.mjs`/`.cjs`); otherwise the nearest `package.json` `type` field
- * decides (`module` -> esm, anything else -> cjs).
+ * Heuristically detect ESM syntax in a JS source. True when the source uses a
+ * static `import`/`export` declaration or references `import.meta`. Dynamic
+ * `import(...)` is NOT a marker (it is legal in CJS), and identifiers that
+ * merely begin with `import`/`export` (e.g. `exports`, `important`) are not
+ * matched. This decides syntax-based module-kind detection (architecture 4.4)
+ * and guards the transpiler so plain CJS is never needlessly transpiled.
+ */
+export function hasEsmSyntax(source: string): boolean {
+  return ESM_IMPORT_RE.test(source) || ESM_EXPORT_RE.test(source) || IMPORT_META_RE.test(source);
+}
+
+/**
+ * Detect the module kind of a resolved file (architecture 4.4). Extension wins
+ * first (`.json`/`.mjs`/`.cjs`). For a bare `.js`/extensionless entry the
+ * nearest `package.json` `type` decides when present (`module` -> esm, any
+ * other explicit type -> cjs); when no `type` field is declared (or no
+ * `package.json` is found at all) the file's own syntax decides
+ * (`import`/`export`/`import.meta` -> esm, otherwise cjs).
  */
 export async function detectModuleKind(
   reader: ModuleReader,
@@ -518,12 +537,22 @@ export async function detectModuleKind(
       manifest = null;
     }
     if (manifest) {
-      return manifest.type === 'module' ? 'esm' : 'cjs';
+      if (manifest.type === 'module') return 'esm';
+      // An explicit non-module `type` (e.g. `commonjs`) is authoritative;
+      // only an absent `type` falls through to syntax detection.
+      if (manifest.type !== undefined && manifest.type !== null) return 'cjs';
+      break;
     }
     if (dir === '/' || dir === '') break;
     dir = dirOf(dir);
   }
-  return 'cjs';
+  let source: string;
+  try {
+    source = await reader.readFile(filePath);
+  } catch {
+    return 'cjs';
+  }
+  return hasEsmSyntax(source) ? 'esm' : 'cjs';
 }
 
 /**
