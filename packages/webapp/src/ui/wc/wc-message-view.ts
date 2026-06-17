@@ -589,13 +589,34 @@ function delegationEls(message: ChatMessage): HTMLElement[] {
 }
 
 /**
+ * Literal prefix shared by both `No API key configured…` variants emitted by
+ * `scoop-context.ts` (`No API key configured for provider "<id>". …` and the
+ * provider-less `No API key configured. …`). Prefix-match rather than full
+ * string match so the interpolated provider name doesn't break detection.
+ */
+export const NO_API_KEY_ERROR_PREFIX = 'No API key configured';
+
+/** Whether an error message string is the "no API key" failure. */
+export function isNoApiKeyError(content: string): boolean {
+  return typeof content === 'string' && content.startsWith(NO_API_KEY_ERROR_PREFIX);
+}
+
+/**
  * `slicc-error-card` for a cone-error message. The card is purely
  * presentational; the chat controller listens for the bubbled
  * `slicc-error-retry` event to re-run the last user turn via its existing
- * agent send path.
+ * agent send path. For the "No API key configured" failure the CTA flips to
+ * "Open Settings" (the agent retry path would just re-hit the same missing
+ * key) — the card then fires `slicc-error-open-settings` instead and the
+ * shell-level listener wired by `wireWcNav` routes it to the settings dialog.
  */
 function errorCardEl(message: ChatMessage): HTMLElement {
-  return el('slicc-error-card', { message: message.content, 'message-id': message.id });
+  const attrs: Record<string, string> = {
+    message: message.content,
+    'message-id': message.id,
+  };
+  if (isNoApiKeyError(message.content)) attrs.action = 'settings';
+  return el('slicc-error-card', attrs);
 }
 
 /** Elements for a single chat message, in thread order. */

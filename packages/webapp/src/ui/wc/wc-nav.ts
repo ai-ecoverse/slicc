@@ -239,6 +239,14 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   // routes straight into account settings.
   refs.composerMeta.addEventListener('add-ai', openSettings);
 
+  // The "No API key" error card flips its CTA to "Open Settings" (see
+  // `wc-message-view.ts:errorCardEl`) and bubbles a `slicc-error-open-settings`
+  // event up through the thread. Route it to the same settings dialog as the
+  // composer-meta `add-ai` action so the user lands in one place regardless
+  // of which surface they used. Both standalone and extension floats share
+  // this WC shell, so the listener covers them both.
+  refs.thread?.addEventListener('slicc-error-open-settings', openSettings);
+
   wireAccountsChangedResync({ refreshModels, applyIdentity, client });
 }
 

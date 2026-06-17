@@ -22,7 +22,9 @@ import {
   BASH_ICONS,
   buildThreadChildren,
   collateLickMessages,
+  isNoApiKeyError,
   messageEls,
+  NO_API_KEY_ERROR_PREFIX,
   summarizeToolInput,
   TOOL_ICONS,
 } from '../../../src/ui/wc/wc-message-view.js';
@@ -484,6 +486,45 @@ describe('summarizeToolInput', () => {
     const long = 'x'.repeat(120);
     expect(summarizeToolInput(long)).toHaveLength(80);
     expect(summarizeToolInput(long).endsWith('…')).toBe(true);
+  });
+});
+
+describe('isNoApiKeyError + errorCardEl', () => {
+  it('matches both no-API-key error variants by prefix', () => {
+    expect(NO_API_KEY_ERROR_PREFIX).toBe('No API key configured');
+    expect(isNoApiKeyError('No API key configured. Open Settings to add one.')).toBe(true);
+    expect(
+      isNoApiKeyError('No API key configured for provider "adobe". Open Settings to add one.')
+    ).toBe(true);
+    expect(isNoApiKeyError('rate limited')).toBe(false);
+    expect(isNoApiKeyError('')).toBe(false);
+    expect(isNoApiKeyError(null as unknown as string)).toBe(false);
+  });
+
+  it('renders the no-API-key error as a settings-action error card', () => {
+    const [card] = messageEls({
+      id: 'err-1',
+      role: 'assistant',
+      content: 'No API key configured for provider "adobe". Open Settings to add one.',
+      timestamp: 1,
+      error: true,
+    });
+    expect(card.tagName.toLowerCase()).toBe('slicc-error-card');
+    expect(card.getAttribute('action')).toBe('settings');
+    expect(card.getAttribute('message-id')).toBe('err-1');
+    expect(card.getAttribute('message')).toContain('No API key configured');
+  });
+
+  it('keeps the retry CTA for every other error', () => {
+    const [card] = messageEls({
+      id: 'err-2',
+      role: 'assistant',
+      content: 'The model rate-limited this turn.',
+      timestamp: 1,
+      error: true,
+    });
+    expect(card.tagName.toLowerCase()).toBe('slicc-error-card');
+    expect(card.hasAttribute('action')).toBe(false);
   });
 });
 

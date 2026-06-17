@@ -20,21 +20,33 @@ import { iconEl } from '../internal/icons.js';
  * Set the body via the `message` attribute (escaped plain text) or project
  * content into the default slot for rich markup.
  *
+ * The `action` attribute switches the trailing affordance from the default
+ * `retry` CTA to a `settings` CTA — clicking dispatches `slicc-error-open-settings`
+ * instead of `slicc-error-retry`, the default label flips to "Open Settings",
+ * and the glyph swaps to `settings`. Hosts use this for failures the user
+ * fixes by opening Settings (e.g. "No API key configured") rather than by
+ * re-running the same failing turn.
+ *
  * @attr label - the header label (default "Something went wrong")
  * @attr message - error body text (escaped); ignored when slotted content is present
- * @attr button-label - retry button label (default "Try again")
+ * @attr button-label - action button label (default "Try again", or "Open Settings"
+ *   when `action="settings"`)
  * @attr message-id - id of the failed chat message this card stands for; echoed
- *   back on `slicc-error-retry` so the host can bind retry to THIS turn
+ *   back on the action event so the host can bind it to THIS turn
+ * @attr action - `retry` (default) | `settings`; switches the CTA event,
+ *   default label, and glyph
  * @attr theme - `light` | `dark`; per-element override of the inherited theme
  * @csspart card - the outer `.err` card
  * @csspart header - the `.eh` header row
  * @csspart icon - the `.ic` span wrapping the lucide `triangle-alert` `<svg>`
  * @csspart label - the header label span
  * @csspart body - the `.eb` body line
- * @csspart button - the retry button
+ * @csspart button - the action button
  * @slot - rich body content (overrides the `message` attribute)
  * @fires slicc-error-retry - { messageId: string | null } dispatched on retry
- *   click (bubbles, composed); `messageId` mirrors the `message-id` attribute
+ *   click (bubbles, composed) when `action="retry"` (the default)
+ * @fires slicc-error-open-settings - { messageId: string | null } dispatched on
+ *   click (bubbles, composed) when `action="settings"`
  */
 
 /** Pixel size of the lucide header icon. */
@@ -43,6 +55,11 @@ const HEADER_ICON_SIZE = 14;
 const DEFAULT_LABEL = 'Something went wrong';
 /** Default retry button label. */
 const DEFAULT_BUTTON_LABEL = 'Try again';
+/** Default button label when the `settings` action is selected. */
+const DEFAULT_SETTINGS_BUTTON_LABEL = 'Open Settings';
+
+/** Recognized values for the `action` attribute. */
+type ErrorAction = 'retry' | 'settings';
 
 const STYLE = `
 :host{
@@ -107,10 +124,17 @@ const STYLE = `
 const SHEET = sheet(STYLE);
 
 export class SliccErrorCard extends HTMLElement {
-  static readonly observedAttributes = ['label', 'message', 'button-label', 'message-id', 'theme'];
+  static readonly observedAttributes = [
+    'label',
+    'message',
+    'button-label',
+    'message-id',
+    'action',
+    'theme',
+  ];
 
   readonly #root: ShadowRoot;
-  #onRetryClick: ((e: MouseEvent) => void) | null = null;
+  #onActionClick: ((e: MouseEvent) => void) | null = null;
 
   constructor() {
     super();
@@ -123,7 +147,7 @@ export class SliccErrorCard extends HTMLElement {
   }
 
   disconnectedCallback(): void {
-    this.#unbindRetry();
+    this.#unbindAction();
   }
 
   attributeChangedCallback(): void {
@@ -150,7 +174,7 @@ export class SliccErrorCard extends HTMLElement {
     else this.setAttribute('message', value);
   }
 
-  /** Retry button label (default "Try again"). */
+  /** Action button label (defaults vary by `action`). */
   get buttonLabel(): string | null {
     return this.getAttribute('button-label');
   }
@@ -162,8 +186,8 @@ export class SliccErrorCard extends HTMLElement {
 
   /**
    * Id of the failed chat message this card stands for. Echoed back on the
-   * `slicc-error-retry` event so the host can bind retry to the SPECIFIC turn
-   * that produced this card rather than the newest user message in the thread.
+   * action event so the host can bind it to the SPECIFIC turn that produced
+   * this card rather than the newest user message in the thread.
    */
   get messageId(): string | null {
     return this.getAttribute('message-id');
@@ -172,6 +196,20 @@ export class SliccErrorCard extends HTMLElement {
   set messageId(value: string | null) {
     if (value == null) this.removeAttribute('message-id');
     else this.setAttribute('message-id', value);
+  }
+
+  /**
+   * Action mode: `retry` (default) fires `slicc-error-retry`; `settings` fires
+   * `slicc-error-open-settings`. Any unknown value is normalized back to
+   * `retry` so the default behavior is byte-for-byte preserved.
+   */
+  get action(): ErrorAction {
+    return this.getAttribute('action') === 'settings' ? 'settings' : 'retry';
+  }
+
+  set action(value: ErrorAction | null) {
+    if (value == null) this.removeAttribute('action');
+    else this.setAttribute('action', value);
   }
 
   /** Per-element theme override for the card tokens. */
@@ -196,10 +234,25 @@ export class SliccErrorCard extends HTMLElement {
     );
   }
 
+  /** Dispatch `slicc-error-open-settings` — fired by the button in `settings` mode. */
+  openSettings(): void {
+    this.dispatchEvent(
+      new CustomEvent('slicc-error-open-settings', {
+        detail: { messageId: this.getAttribute('message-id') ?? null },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
   #render(): void {
+    const action = this.action;
     const label = this.label ?? DEFAULT_LABEL;
     const message = this.message;
-    const buttonLabel = this.buttonLabel ?? DEFAULT_BUTTON_LABEL;
+    const defaultButtonLabel =
+      action === 'settings' ? DEFAULT_SETTINGS_BUTTON_LABEL : DEFAULT_BUTTON_LABEL;
+    const buttonLabel = this.buttonLabel ?? defaultButtonLabel;
+    const buttonIcon = action === 'settings' ? 'settings' : 'rotate-ccw';
 
     const icon = h('span', { class: 'ic', part: 'icon', 'aria-hidden': true });
     icon.append(iconEl('triangle-alert', { size: HEADER_ICON_SIZE }));
@@ -215,7 +268,7 @@ export class SliccErrorCard extends HTMLElement {
     // attribute (a text node escapes by construction — no markup interpolation).
     const bodyRow = h('div', { class: 'eb', part: 'body' }, message != null ? message : h('slot'));
 
-    const retryBtn = h(
+    const actionBtn = h(
       'button',
       {
         type: 'button',
@@ -223,32 +276,32 @@ export class SliccErrorCard extends HTMLElement {
         part: 'button',
         'aria-label': buttonLabel,
       },
-      iconEl('rotate-ccw', { size: 12 }),
+      iconEl(buttonIcon, { size: 12 }),
       buttonLabel
     );
 
-    const foot = h('div', { class: 'foot' }, retryBtn);
+    const foot = h('div', { class: 'foot' }, actionBtn);
 
     const cardEl = h('div', { class: 'err', part: 'card' }, headerRow, bodyRow, foot);
     this.#root.replaceChildren(cardEl);
 
-    this.#bindRetry();
+    this.#bindAction();
   }
 
-  #bindRetry(): void {
-    this.#unbindRetry();
+  #bindAction(): void {
+    this.#unbindAction();
     const btn = this.#root.querySelector('.retry');
     if (!btn) return;
-    this.#onRetryClick = () => this.retry();
-    btn.addEventListener('click', this.#onRetryClick as EventListener);
+    this.#onActionClick = () => (this.action === 'settings' ? this.openSettings() : this.retry());
+    btn.addEventListener('click', this.#onActionClick as EventListener);
   }
 
-  #unbindRetry(): void {
+  #unbindAction(): void {
     const btn = this.#root.querySelector('.retry');
-    if (btn && this.#onRetryClick) {
-      btn.removeEventListener('click', this.#onRetryClick as EventListener);
+    if (btn && this.#onActionClick) {
+      btn.removeEventListener('click', this.#onActionClick as EventListener);
     }
-    this.#onRetryClick = null;
+    this.#onActionClick = null;
   }
 }
 

@@ -9,6 +9,12 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
 
+// Capture the dialog-open invocations so we can assert that the bubbled
+// `slicc-error-open-settings` event routes the user into the same surface
+// as the composer-meta `add-ai` action — without booting the real dialog.
+const showWcSettingsSpy = vi.fn(async () => undefined);
+vi.mock('../../../src/ui/wc/wc-settings.js', () => ({ showWcSettings: showWcSettingsSpy }));
+
 import type { OffscreenClient } from '../../../src/ui/offscreen-client.js';
 import type { GroupedModels } from '../../../src/ui/provider-settings.js';
 import { accountIdentity, modelListForMeta, wireWcNav } from '../../../src/ui/wc/wc-nav.js';
@@ -60,8 +66,9 @@ describe('wireWcNav', () => {
     avatarMenu.append(document.createElement('slicc-avatar'));
     const inputCard = document.createElement('slicc-input-card');
     inputCard.append(document.createElement('slicc-send-button'));
-    document.body.append(composerMeta, avatarMenu, inputCard);
-    return { composerMeta, avatarMenu, inputCard } as unknown as WcShellRefs;
+    const thread = document.createElement('slicc-chat-thread');
+    document.body.append(composerMeta, avatarMenu, inputCard, thread);
+    return { composerMeta, avatarMenu, inputCard, thread } as unknown as WcShellRefs;
   }
 
   it('feeds the model picker, persists selection, and wires the menu', async () => {
@@ -144,5 +151,35 @@ describe('wireWcNav', () => {
     );
     expect(events).toHaveLength(1);
     expect(events[0].detail).toEqual({ workerBaseUrl: null });
+  });
+
+  it('routes slicc-error-open-settings from the thread to the settings dialog', async () => {
+    const refs = makeRefs();
+    const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+    await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+
+    showWcSettingsSpy.mockClear();
+    refs.thread.dispatchEvent(
+      new CustomEvent('slicc-error-open-settings', {
+        detail: { messageId: 'err-1' },
+        bubbles: true,
+        composed: true,
+      })
+    );
+    // The handler dynamically imports the settings dialog; wait a microtask
+    // tick for the import to resolve before asserting.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(showWcSettingsSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the same settings dialog for the composer-meta add-ai action', async () => {
+    const refs = makeRefs();
+    const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+    await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+
+    showWcSettingsSpy.mockClear();
+    refs.composerMeta.dispatchEvent(new CustomEvent('add-ai', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(showWcSettingsSpy).toHaveBeenCalledTimes(1);
   });
 });
