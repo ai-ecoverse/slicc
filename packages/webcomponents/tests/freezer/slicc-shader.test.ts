@@ -66,6 +66,58 @@ describe('slicc-shader', () => {
     expect(() => el.pulse()).not.toThrow();
   });
 
+  it('reflects cone-mode brightness/contrast/noise/blur knobs (tuned defaults)', () => {
+    const el = mount();
+    // Tuned defaults baked in so the cone field renders with the Storybook
+    // texture everywhere with no attributes required.
+    // The blur attribute reflects to `blurAmount` because HTMLElement already
+    // defines a `blur()` method — same renaming dance as `scroll`/`scrollOffset`.
+    expect(el.brightness).toBe(1.2);
+    expect(el.contrast).toBe(0.75);
+    expect(el.noise).toBeCloseTo(0.04, 5);
+    expect(el.blurAmount).toBeCloseTo(0.09, 5);
+    // Property → attribute round-trip.
+    el.brightness = 1.25;
+    el.contrast = 1.5;
+    el.noise = 0.15;
+    el.blurAmount = 0.5;
+    expect(el.getAttribute('brightness')).toBe('1.25');
+    expect(el.getAttribute('contrast')).toBe('1.5');
+    expect(el.getAttribute('noise')).toBe('0.15');
+    expect(el.getAttribute('blur')).toBe('0.5');
+    // Attribute → property reflection and clamping at the documented ranges.
+    el.setAttribute('brightness', '99');
+    el.setAttribute('contrast', '0');
+    el.setAttribute('noise', '5');
+    el.setAttribute('blur', '-1');
+    expect(el.brightness).toBe(1.5);
+    expect(el.contrast).toBe(0.5);
+    expect(el.noise).toBe(0.3);
+    expect(el.blurAmount).toBe(0);
+    // Bogus values fall back to the tuned defaults.
+    el.setAttribute('brightness', 'nope');
+    el.setAttribute('contrast', 'nope');
+    el.setAttribute('noise', 'nope');
+    el.setAttribute('blur', 'nope');
+    expect(el.brightness).toBe(1.2);
+    expect(el.contrast).toBe(0.75);
+    expect(el.noise).toBeCloseTo(0.04, 5);
+    expect(el.blurAmount).toBeCloseTo(0.09, 5);
+  });
+
+  it('cone fragment program references the new brightness/contrast/noise/blur uniforms', () => {
+    const cone = SHADER_FRAGMENTS.cone;
+    expect(cone).toContain('uniform float u_brightness');
+    expect(cone).toContain('uniform float u_contrast');
+    expect(cone).toContain('uniform float u_noise');
+    expect(cone).toContain('uniform float u_blur');
+    // And the body actually applies them before the final write.
+    expect(cone).toContain('u_brightness');
+    expect(cone).toContain('u_contrast');
+    expect(cone).toContain('u_noise');
+    expect(cone).toContain('u_blur');
+  });
+
   it('keeps the canvas pointer-transparent and disposes cleanly', async () => {
     const el = mount({ mode: 'scoop' });
     expect(getComputedStyle(el.shadowRoot?.querySelector('canvas') as Element).pointerEvents).toBe(

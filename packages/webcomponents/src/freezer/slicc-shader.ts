@@ -34,6 +34,7 @@ uniform vec2 u_res; uniform float u_time; uniform float u_energy;
 uniform vec2 u_center; uniform vec3 u_evt; uniform float u_freeze; uniform float u_dark;
 uniform float u_density; uniform float u_falloff; uniform float u_life;
 uniform float u_blink; uniform float u_thick; uniform vec3 u_tint; uniform float u_scroll;
+uniform float u_brightness; uniform float u_contrast; uniform float u_noise; uniform float u_blur;
 vec3 themeBg(){ return mix(vec3(0.97,0.95,0.89), vec3(0.09,0.08,0.06), u_dark); }`;
 
 const NOISE = `
@@ -80,6 +81,17 @@ void main(){
   // the light bg in light mode, toward the dark bg in dark mode.
   vec3 col=mix(bg,tint,clamp(stroke*0.20,0.0,0.20));
   col+=u_evt*u_energy*stroke*exp(-dist*dist*4.0)*0.18;
+  /* Cone-only post: a noise/grain layer whose sample frequency is driven by
+     u_blur (high blur => low frequency / soft, low blur => sharp grain), then
+     contrast around 0.5 and brightness as a multiplier. The JS getters bake in
+     tuned defaults (brightness=1.2, contrast=0.75, noise=0.04, blur=0.09); at
+     the shader level the identity is still u_noise=0, u_contrast=1, u_brightness=1. */
+  float noiseFreq=mix(80.0,4.0,clamp(u_blur,0.0,1.0));
+  float grain=fbm(uv*noiseFreq)-0.5;
+  col+=u_noise*grain;
+  col=(col-0.5)*u_contrast+0.5;
+  col*=u_brightness;
+  col=clamp(col,0.0,1.0);
   gl_FragColor=vec4(col,1.0);
 }`;
 
@@ -178,6 +190,10 @@ const UNIFORMS = [
   'u_blink',
   'u_thick',
   'u_tint',
+  'u_brightness',
+  'u_contrast',
+  'u_noise',
+  'u_blur',
 ] as const;
 type UniformName = (typeof UNIFORMS)[number];
 
@@ -200,7 +216,17 @@ function colorToVec3(css: string, fallback: [number, number, number]): [number, 
 }
 
 export class SliccShader extends HTMLElement {
-  static readonly observedAttributes = ['mode', 'tint', 'coverage', 'intensity', 'scroll'];
+  static readonly observedAttributes = [
+    'mode',
+    'tint',
+    'coverage',
+    'intensity',
+    'scroll',
+    'brightness',
+    'contrast',
+    'noise',
+    'blur',
+  ];
 
   readonly #root: ShadowRoot;
   #canvas: HTMLCanvasElement | null = null;
@@ -295,6 +321,42 @@ export class SliccShader extends HTMLElement {
   }
   set scrollOffset(value: number) {
     this.setAttribute('scroll', String(value));
+  }
+
+  /** Cone-mode multiplier on final color (tuned default = 1.2). */
+  get brightness(): number {
+    return clampNum(Number.parseFloat(this.getAttribute('brightness') ?? ''), 0.5, 1.5, 1.2);
+  }
+  set brightness(value: number) {
+    this.setAttribute('brightness', String(value));
+  }
+
+  /** Cone-mode contrast around a 0.5 pivot (tuned default = 0.75). */
+  get contrast(): number {
+    return clampNum(Number.parseFloat(this.getAttribute('contrast') ?? ''), 0.5, 2, 0.75);
+  }
+  set contrast(value: number) {
+    this.setAttribute('contrast', String(value));
+  }
+
+  /** Cone-mode grain amount added to the final color (tuned default = 0.04). */
+  get noise(): number {
+    return clampNum(Number.parseFloat(this.getAttribute('noise') ?? ''), 0, 0.3, 0.04);
+  }
+  set noise(value: number) {
+    this.setAttribute('noise', String(value));
+  }
+
+  /**
+   * Cone-mode blur of the noise layer only (0 = sharp grain, 1 = soft).
+   * Reflects the `blur` attribute; named `blurAmount` because `HTMLElement`
+   * already defines a `blur()` method. Tuned default = 0.09.
+   */
+  get blurAmount(): number {
+    return clampNum(Number.parseFloat(this.getAttribute('blur') ?? ''), 0, 1, 0.09);
+  }
+  set blurAmount(value: number) {
+    this.setAttribute('blur', String(value));
   }
 
   get noWebgl(): boolean {
@@ -449,6 +511,10 @@ export class SliccShader extends HTMLElement {
     gl.uniform1f(u.u_blink ?? null, 0.05);
     gl.uniform1f(u.u_thick ?? null, 0.02);
     gl.uniform3f(u.u_tint ?? null, tint[0], tint[1], tint[2]);
+    gl.uniform1f(u.u_brightness ?? null, this.brightness);
+    gl.uniform1f(u.u_contrast ?? null, this.contrast);
+    gl.uniform1f(u.u_noise ?? null, this.noise);
+    gl.uniform1f(u.u_blur ?? null, this.blurAmount);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     // Energy decays toward rest.
     this.#energy *= 0.95;
