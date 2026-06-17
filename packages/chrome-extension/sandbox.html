@@ -161,7 +161,7 @@ function bootstrapRealmPort(port) {
   // host-side graph walker never routes a bare built-in into node_modules.
   // NODE_BUILTINS_UNAVAILABLE is DERIVED (complete set minus the available
   // ones) so the two lists can never drift.
-  const NODE_BUILTIN_AVAILABLE = new Set(['fs', 'path', 'process', 'buffer']);
+  const NODE_BUILTIN_AVAILABLE = new Set(['fs', 'path', 'crypto', 'process', 'buffer']);
   const NODE_BUILTINS = new Set([
     'assert','assert/strict','async_hooks','buffer','child_process','cluster',
     'console','constants','crypto','dgram','diagnostics_channel','dns',
@@ -919,6 +919,72 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
       parse: parse, format: format,
     };
   })();
+  // `nodeCrypto` — the Web Crypto-backed `crypto` built-in subset served by
+  // `require('crypto')` / `require('node:crypto')`. Dependency-free (all backed
+  // by globalThis.crypto) so it works in the opaque-origin iframe float, where
+  // crypto.randomUUID/subtle are secure-context-gated (hence the
+  // getRandomValues UUID fallback). Mirror of `nodeCrypto` in
+  // `kernel/realm/js-realm-helpers.ts`.
+  const nodeCrypto = (function () {
+    const MAX_RANDOM_BYTES = 65536;
+    function webCrypto() {
+      const c = globalThis.crypto;
+      if (!c || typeof c.getRandomValues !== 'function') {
+        throw new Error('crypto: globalThis.crypto is unavailable in this environment');
+      }
+      return c;
+    }
+    function asByteView(buffer) {
+      return buffer instanceof Uint8Array
+        ? buffer
+        : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    }
+    function fillRandomBytes(view) {
+      const c = webCrypto();
+      for (let offset = 0; offset < view.length; offset += MAX_RANDOM_BYTES) {
+        const end = Math.min(offset + MAX_RANDOM_BYTES, view.length);
+        c.getRandomValues(view.subarray(offset, end));
+      }
+    }
+    const HEX_BYTES = [];
+    for (let i = 0; i < 256; i++) HEX_BYTES.push((i + 0x100).toString(16).slice(1));
+    function randomUUID() {
+      const c = webCrypto();
+      if (typeof c.randomUUID === 'function') return c.randomUUID();
+      const b = new Uint8Array(16);
+      c.getRandomValues(b);
+      b[6] = (b[6] & 0x0f) | 0x40;
+      b[8] = (b[8] & 0x3f) | 0x80;
+      return (
+        HEX_BYTES[b[0]] + HEX_BYTES[b[1]] + HEX_BYTES[b[2]] + HEX_BYTES[b[3]] +
+        '-' + HEX_BYTES[b[4]] + HEX_BYTES[b[5]] +
+        '-' + HEX_BYTES[b[6]] + HEX_BYTES[b[7]] +
+        '-' + HEX_BYTES[b[8]] + HEX_BYTES[b[9]] +
+        '-' + HEX_BYTES[b[10]] + HEX_BYTES[b[11]] + HEX_BYTES[b[12]] + HEX_BYTES[b[13]] + HEX_BYTES[b[14]] + HEX_BYTES[b[15]]
+      );
+    }
+    return {
+      randomFillSync(buffer, offset, size) {
+        const bytes = asByteView(buffer);
+        const start = offset === undefined ? 0 : offset;
+        const end = size === undefined ? bytes.length : start + size;
+        fillRandomBytes(bytes.subarray(start, end));
+        return buffer;
+      },
+      randomBytes(size) {
+        const BufferCtor = globalThis.Buffer;
+        const buf = BufferCtor && typeof BufferCtor.allocUnsafe === 'function'
+          ? BufferCtor.allocUnsafe(size)
+          : new Uint8Array(size);
+        fillRandomBytes(asByteView(buf));
+        return buf;
+      },
+      randomUUID: randomUUID,
+      getRandomValues(array) { return webCrypto().getRandomValues(array); },
+      get webcrypto() { return webCrypto(); },
+      get subtle() { return webCrypto().subtle; },
+    };
+  })();
   const entryFilename = init.filename;
   const entryFromDir = entryFilename && entryFilename.startsWith('/')
     ? (function (f) { const i = f.lastIndexOf('/'); return i <= 0 ? '/' : f.slice(0, i); })(entryFilename)
@@ -951,6 +1017,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     const bareId = id.startsWith('node:') ? id.slice(5) : id;
     if (bareId === 'fs') return { hit: true, value: fsBridge };
     if (bareId === 'path') return { hit: true, value: nodePath };
+    if (bareId === 'crypto') return { hit: true, value: nodeCrypto };
     if (bareId === 'process') return { hit: true, value: processShim };
     if (bareId === 'buffer') return { hit: true, value: { Buffer: globalThis.Buffer } };
     if (NODE_NATIVE_PACKAGES.has(bareId)) throw nativeError(id, bareId);

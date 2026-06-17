@@ -437,4 +437,45 @@ describe('sandbox.html mirror parity', () => {
     expect(shared).toMatch(/bareId\s*===\s*'buffer'[\s\S]*?globalThis[\s\S]*?Buffer/);
     expect(sandbox).toMatch(/bareId\s*===\s*'buffer'[\s\S]*?globalThis\.Buffer/);
   });
+
+  it('mirrors the Web Crypto-backed nodeCrypto bridge surface in both floats', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const repoRoot = resolve(here, '..', '..', '..', '..', '..');
+    const sandbox = readFileSync(
+      resolve(repoRoot, 'packages/chrome-extension/sandbox.html'),
+      'utf-8'
+    );
+    const helpers = readFileSync(
+      resolve(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-helpers.ts'),
+      'utf-8'
+    );
+    const shared = readFileSync(
+      resolve(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-shared.ts'),
+      'utf-8'
+    );
+    // The crypto bridge surface must be present in BOTH the canonical TS helper
+    // and the inline sandbox mirror so the iframe float matches the worker
+    // float's `require('crypto')` capabilities.
+    for (const needle of [
+      'randomFillSync',
+      'randomBytes',
+      'randomUUID',
+      'getRandomValues',
+      'webcrypto',
+      'subtle',
+    ]) {
+      expect(helpers, `js-realm-helpers.ts missing ${needle}`).toContain(needle);
+      expect(sandbox, `sandbox.html missing ${needle}`).toContain(needle);
+    }
+    // Both floats route `crypto` / `node:crypto` (bareId strips the node:
+    // prefix) to the bridge BEFORE the unavailable-builtin throw.
+    expect(shared).toMatch(/bareId\s*===\s*'crypto'[\s\S]*?nodeCrypto/);
+    expect(sandbox).toMatch(/bareId\s*===\s*'crypto'[\s\S]*?nodeCrypto/);
+    // `crypto` is listed AVAILABLE in the sandbox inline mirror so its derived
+    // NODE_BUILTINS_UNAVAILABLE no longer contains it.
+    expect(sandbox).toMatch(/NODE_BUILTIN_AVAILABLE\s*=\s*new Set\(\[[^\]]*'crypto'/);
+  });
 });

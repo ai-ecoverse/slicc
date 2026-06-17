@@ -19,6 +19,7 @@
 export const NODE_BUILTIN_AVAILABLE: ReadonlySet<string> = new Set([
   'fs',
   'path',
+  'crypto',
   'process',
   'buffer',
 ]);

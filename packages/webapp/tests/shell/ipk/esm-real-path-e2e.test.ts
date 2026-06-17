@@ -241,6 +241,61 @@ const isNumberPkg: SyntheticPackage = {
   },
 };
 
+/**
+ * ESM-only, named `randomFillSync` import from `node:crypto` — mirrors the real
+ * nanoid@5 node entry, which fails without the Web Crypto-backed crypto bridge.
+ */
+const cryptoNanoidPkg: SyntheticPackage = {
+  name: 'crypto-nanoid',
+  version: '5.0.0',
+  files: {
+    'package.json': JSON.stringify({
+      name: 'crypto-nanoid',
+      version: '5.0.0',
+      type: 'module',
+      main: 'index.js',
+    }),
+    'index.js': [
+      "import { randomFillSync } from 'node:crypto';",
+      "const ALPHABET = 'useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzrict';",
+      'export function nanoid(size = 21) {',
+      '  const bytes = new Uint8Array(size);',
+      '  randomFillSync(bytes);',
+      '  let id = "";',
+      '  for (let i = 0; i < size; i++) id += ALPHABET[bytes[i] & 63];',
+      '  return id;',
+      '}',
+    ].join('\n'),
+  },
+};
+
+/**
+ * Dual CJS/ESM via `exports` conditions, both calling `crypto.randomUUID()` —
+ * mirrors the real uuid@9 native path (default `import crypto from 'crypto'`
+ * in ESM, `require('crypto')` in CJS).
+ */
+const cryptoUuidPkg: SyntheticPackage = {
+  name: 'crypto-uuid',
+  version: '9.0.0',
+  files: {
+    'package.json': JSON.stringify({
+      name: 'crypto-uuid',
+      version: '9.0.0',
+      exports: { '.': { import: './esm.js', require: './cjs.js' } },
+    }),
+    'esm.js': [
+      "import crypto from 'crypto';",
+      'export function v4() { return crypto.randomUUID(); }',
+      'export default { v4 };',
+    ].join('\n'),
+    'cjs.js': [
+      "const crypto = require('crypto');",
+      'function v4() { return crypto.randomUUID(); }',
+      'module.exports = { v4 };',
+    ].join('\n'),
+  },
+};
+
 describe('Real-path ESM e2e: ipk install → import over the production realm seam', () => {
   beforeEach(() => {
     sharedRegistry.current = { packuments: {}, tarballs: {} };
@@ -338,6 +393,63 @@ describe('Real-path ESM e2e: ipk install → import over the production realm se
     expect(mix.stderr).not.toContain('Cannot find module');
     expect(mix.exitCode).toBe(0);
     expect(mix.stdout.trim()).toBe('true a\\*');
+    await fs.dispose();
+  });
+
+  it('VAL-ESM-016 (crypto regression): an ESM-only package importing randomFillSync from node:crypto produces a non-empty id', async () => {
+    sharedRegistry.current = buildRegistry([cryptoNanoidPkg]);
+    const { shell, fs } = await newShell();
+    expect((await shell.executeCommand('ipk install crypto-nanoid')).exitCode).toBe(0);
+
+    // Dynamic import: the node:crypto-backed bridge fills the buffer.
+    await fs.writeFile(
+      '/work/dyn.js',
+      "import('crypto-nanoid').then(m => console.log(typeof m.nanoid, m.nanoid().length));"
+    );
+    const dyn = await shell.executeCommand('node dyn.js');
+    expect(dyn.stderr).not.toContain('Cannot find module');
+    expect(dyn.stderr).not.toContain('not available in the browser');
+    expect(dyn.exitCode).toBe(0);
+    expect(dyn.stdout.trim()).toBe('function 21');
+
+    // Static named import in a .jsh script generates a non-empty id.
+    await fs.writeFile(
+      '/work/use.jsh',
+      "import { nanoid } from 'crypto-nanoid';\nconsole.log(nanoid().length > 0);"
+    );
+    const stat = await shell.executeCommand('node use.jsh');
+    expect(stat.stderr).not.toContain('Cannot find module');
+    expect(stat.exitCode).toBe(0);
+    expect(stat.stdout.trim()).toBe('true');
+    await fs.dispose();
+  });
+
+  it('VAL-ESM-016 (crypto regression): a dual package calling crypto.randomUUID resolves v4 via require and import conditions', async () => {
+    sharedRegistry.current = buildRegistry([cryptoUuidPkg]);
+    const { shell, fs } = await newShell();
+    expect((await shell.executeCommand('ipk install crypto-uuid')).exitCode).toBe(0);
+
+    // require -> the `require` condition (cjs.js) -> crypto.randomUUID() v4.
+    await fs.writeFile(
+      '/work/req.js',
+      'console.log(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(require("crypto-uuid").v4()));'
+    );
+    const req = await shell.executeCommand('node req.js');
+    expect(req.stderr).not.toContain('Cannot find module');
+    expect(req.stderr).not.toContain('not available in the browser');
+    expect(req.exitCode).toBe(0);
+    expect(req.stdout.trim()).toBe('true');
+
+    // import -> the `import` condition (esm.js) -> crypto.randomUUID() v4.
+    await fs.writeFile(
+      '/work/imp.jsh',
+      "import { v4 } from 'crypto-uuid';\nconsole.log(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(v4()));"
+    );
+    const imp = await shell.executeCommand('node imp.jsh');
+    expect(imp.stderr).not.toContain('Cannot find module');
+    expect(imp.stderr).not.toContain('not available in the browser');
+    expect(imp.exitCode).toBe(0);
+    expect(imp.stdout.trim()).toBe('true');
     await fs.dispose();
   });
 });

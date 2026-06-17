@@ -33,6 +33,7 @@ import {
   createCli,
   createColor,
   fmt,
+  nodeCrypto,
   nodePath,
   pool,
   time,
@@ -448,6 +449,7 @@ function createModuleSystem(opts: {
     const bareId = id.startsWith('node:') ? id.slice(5) : id;
     if (bareId === 'fs') return { hit: true, value: fsBridge };
     if (bareId === 'path') return { hit: true, value: nodePath };
+    if (bareId === 'crypto') return { hit: true, value: nodeCrypto };
     if (bareId === 'process') return { hit: true, value: processShim };
     if (bareId === 'buffer') {
       return { hit: true, value: { Buffer: (globalThis as Record<string, unknown>).Buffer } };

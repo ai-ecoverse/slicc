@@ -592,3 +592,107 @@ export const nodePath: NodePath = {
   parse: pathParse,
   format: pathFormat,
 };
+
+// ---------------------------------------------------------------------------
+// `nodeCrypto` — the subset of the Node `crypto` built-in served by the realm
+// `require('crypto')` / `require('node:crypto')` shim, mirroring the `nodePath`
+// precedent. Every operation is backed by `globalThis.crypto` (Web Crypto), so
+// it is dependency-free and works in BOTH realm floats — including the
+// opaque-origin iframe float where `crypto.randomUUID`/`crypto.subtle` are
+// secure-context-gated (hence the `getRandomValues`-based UUID fallback). Only
+// the subset with a Web Crypto equivalent is exposed; no Node-only primitives.
+// Mirrored inline in `chrome-extension/sandbox.html` (parity test in
+// `tests/kernel/realm/js-realm-helpers.test.ts`).
+// ---------------------------------------------------------------------------
+
+// Web Crypto `getRandomValues` rejects requests larger than 65536 bytes, so a
+// large buffer must be filled in chunks of at most this size.
+const MAX_RANDOM_BYTES = 65536;
+
+export interface NodeCrypto {
+  randomFillSync<T extends ArrayBufferView>(buffer: T, offset?: number, size?: number): T;
+  randomBytes(size: number): Uint8Array;
+  randomUUID(): string;
+  getRandomValues<T extends ArrayBufferView>(array: T): T;
+  readonly webcrypto: Crypto;
+  readonly subtle: SubtleCrypto;
+}
+
+function webCrypto(): Crypto {
+  const c = (globalThis as { crypto?: Crypto }).crypto;
+  if (!c || typeof c.getRandomValues !== 'function') {
+    throw new Error('crypto: globalThis.crypto is unavailable in this environment');
+  }
+  return c;
+}
+
+// Web Crypto's `getRandomValues` is typed for `ArrayBufferView<ArrayBuffer>`;
+// our byte views can carry an `ArrayBufferLike` (e.g. derived from a passed-in
+// buffer), so funnel every call through this cast in one place.
+function secureRandomValues<T extends ArrayBufferView>(view: T): T {
+  return webCrypto().getRandomValues(view as ArrayBufferView<ArrayBuffer>) as T;
+}
+
+function fillRandomBytes(view: Uint8Array): void {
+  for (let offset = 0; offset < view.length; offset += MAX_RANDOM_BYTES) {
+    const end = Math.min(offset + MAX_RANDOM_BYTES, view.length);
+    secureRandomValues(view.subarray(offset, end));
+  }
+}
+
+function asByteView(buffer: ArrayBufferView): Uint8Array {
+  return buffer instanceof Uint8Array
+    ? buffer
+    : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+}
+
+const HEX_BYTES: string[] = Array.from({ length: 256 }, (_, i) =>
+  (i + 0x100).toString(16).slice(1)
+);
+
+function cryptoRandomUUID(): string {
+  const c = webCrypto();
+  if (typeof c.randomUUID === 'function') return c.randomUUID();
+  // RFC 4122 v4 fallback (no secure-context dependency, so the opaque-origin
+  // iframe float — where `crypto.randomUUID` is undefined — still works).
+  const b = secureRandomValues(new Uint8Array(16));
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  return (
+    `${HEX_BYTES[b[0]]}${HEX_BYTES[b[1]]}${HEX_BYTES[b[2]]}${HEX_BYTES[b[3]]}` +
+    `-${HEX_BYTES[b[4]]}${HEX_BYTES[b[5]]}` +
+    `-${HEX_BYTES[b[6]]}${HEX_BYTES[b[7]]}` +
+    `-${HEX_BYTES[b[8]]}${HEX_BYTES[b[9]]}` +
+    `-${HEX_BYTES[b[10]]}${HEX_BYTES[b[11]]}${HEX_BYTES[b[12]]}${HEX_BYTES[b[13]]}${HEX_BYTES[b[14]]}${HEX_BYTES[b[15]]}`
+  );
+}
+
+export const nodeCrypto: NodeCrypto = {
+  randomFillSync<T extends ArrayBufferView>(buffer: T, offset = 0, size?: number): T {
+    const bytes = asByteView(buffer);
+    const start = offset;
+    const end = size === undefined ? bytes.length : start + size;
+    fillRandomBytes(bytes.subarray(start, end));
+    return buffer;
+  },
+  randomBytes(size: number): Uint8Array {
+    const BufferCtor = (globalThis as { Buffer?: { allocUnsafe?: (n: number) => Uint8Array } })
+      .Buffer;
+    const buf =
+      BufferCtor && typeof BufferCtor.allocUnsafe === 'function'
+        ? BufferCtor.allocUnsafe(size)
+        : new Uint8Array(size);
+    fillRandomBytes(asByteView(buf));
+    return buf;
+  },
+  randomUUID: cryptoRandomUUID,
+  getRandomValues<T extends ArrayBufferView>(array: T): T {
+    return secureRandomValues(array);
+  },
+  get webcrypto(): Crypto {
+    return webCrypto();
+  },
+  get subtle(): SubtleCrypto {
+    return webCrypto().subtle;
+  },
+};
