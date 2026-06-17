@@ -414,6 +414,43 @@ describe('detectModuleKind()', () => {
     });
     expect(await detectModuleKind(reader, '/app/node_modules/p/index.js')).toBe('cjs');
   });
+
+  it('keeps a .cjs entry cjs even under "type":"module"', async () => {
+    const reader = makeReader({
+      '/app/node_modules/p/package.json': JSON.stringify({ type: 'module' }),
+      '/app/node_modules/p/index.cjs': 'module.exports = 1;',
+    });
+    expect(await detectModuleKind(reader, '/app/node_modules/p/index.cjs')).toBe('cjs');
+  });
+
+  it('treats an explicit "type":"commonjs" .js entry as cjs without syntax sniffing', async () => {
+    const reader = makeReader({
+      '/app/node_modules/p/package.json': JSON.stringify({ type: 'commonjs' }),
+      '/app/node_modules/p/index.js': 'export default 1;',
+    });
+    expect(await detectModuleKind(reader, '/app/node_modules/p/index.js')).toBe('cjs');
+  });
+
+  it('detects esm by syntax for a no-type .js entry containing export statements', async () => {
+    const reader = makeReader({
+      '/app/node_modules/p/package.json': JSON.stringify({ name: 'p' }),
+      '/app/node_modules/p/index.js': "import dep from 'dep';\nexport default dep;",
+    });
+    expect(await detectModuleKind(reader, '/app/node_modules/p/index.js')).toBe('esm');
+  });
+
+  it('leaves a no-type .js entry that only uses module.exports as cjs', async () => {
+    const reader = makeReader({
+      '/app/node_modules/p/package.json': JSON.stringify({ name: 'p' }),
+      '/app/node_modules/p/index.js': 'module.exports = function () { return 1; };',
+    });
+    expect(await detectModuleKind(reader, '/app/node_modules/p/index.js')).toBe('cjs');
+  });
+
+  it('detects esm by syntax for a .js entry with no package.json at all', async () => {
+    const reader = makeReader({ '/work/script.js': 'export const x = 1;' });
+    expect(await detectModuleKind(reader, '/work/script.js')).toBe('esm');
+  });
 });
 
 describe('createVfsModuleReader()', () => {
