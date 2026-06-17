@@ -799,9 +799,9 @@ function wireWcComposer(deps: {
       attachStage = wireWcAttach({
         inputCard: refs.inputCard as HTMLElement & { value?: string },
         freezer: refs.freezer,
-        // Camera capture mounts as a full-area overlay on the chat pane —
-        // see `slicc-composer-capture` + the Storybook reference pattern.
-        chatPane: refs.chatPane,
+        // Camera capture mounts as a compact drop-target box inside the
+        // composer band — mirrors the `<slicc-add-menu>` `.results` geometry.
+        composer: refs.composer,
         openReader,
         openWriter: deps.openWriter,
         listConversations: async () => {

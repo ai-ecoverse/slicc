@@ -228,7 +228,7 @@ describe('WcAttachmentStage', () => {
 });
 
 describe('wireWcAttach action routing', () => {
-  async function setup(opts: { withWriter?: boolean; chatPane?: HTMLElement } = {}) {
+  async function setup(opts: { withWriter?: boolean; composer?: HTMLElement } = {}) {
     const fs = await seededFs();
     const inputCard = document.createElement('slicc-input-card') as HTMLElement & {
       value?: string;
@@ -238,7 +238,7 @@ describe('wireWcAttach action routing', () => {
     const stage = wireWcAttach({
       inputCard,
       freezer,
-      chatPane: opts.chatPane,
+      composer: opts.composer,
       openReader: async () => fs,
       openWriter: opts.withWriter === false ? undefined : async () => fs,
       listConversations: async () => [],
@@ -419,27 +419,31 @@ describe('wireWcAttach inline capture overlay', () => {
       value?: string;
     };
     const freezer = document.createElement('slicc-freezer');
-    const chatPane = document.createElement('div');
-    chatPane.style.position = 'relative';
-    document.body.append(inputCard, freezer, chatPane);
+    // The composer-band host is `<slicc-composer>` in the live shell — a
+    // `position:relative` element so the compact capture surface's absolute
+    // placement anchors against it. A bare div with the same property
+    // exercises the same wiring without booting the library.
+    const composer = document.createElement('div');
+    composer.style.position = 'relative';
+    document.body.append(inputCard, freezer, composer);
     const stage = wireWcAttach({
       inputCard,
       freezer,
-      chatPane,
+      composer,
       openReader: async () => fs,
       openWriter: opts.withWriter === false ? undefined : async () => fs,
       listConversations: async () => [],
       log,
     });
-    return { fs, inputCard, chatPane, stage };
+    return { fs, inputCard, composer, stage };
   }
 
   function emitAdd(inputCard: HTMLElement, detail: Record<string, unknown>): void {
     inputCard.dispatchEvent(new CustomEvent('slicc-add', { bubbles: true, detail }));
   }
 
-  it('mounts the capture overlay on the chat pane and removes it after open() resolves', async () => {
-    const { inputCard, chatPane, stage } = await setup();
+  it('mounts the capture surface on the composer band with compact drop-target placement and removes it after open() resolves', async () => {
+    const { inputCard, composer, stage } = await setup();
     stubResult = {
       kind: 'image',
       mimeType: 'image/png',
@@ -447,13 +451,42 @@ describe('wireWcAttach inline capture overlay', () => {
       height: 1,
       dataUrl: `data:image/png;base64,${btoa('snap')}`,
     };
-    emitAdd(inputCard, { kind: 'capture', mode: 'photo' });
-    // The overlay is appended to the chat pane during open() and removed
-    // on resolve — so the staged item is the post-condition we wait on.
+    let liveCapture: HTMLElement | null = null;
+    // Hold the open() resolution so we can inspect the live surface placement
+    // before the wiring tears it down.
+    let resolveOpen!: (v: StubResult) => void;
+    stubDeferred = {
+      promise: new Promise<StubResult>((r) => {
+        resolveOpen = r;
+      }),
+      resolve: (v) => resolveOpen(v),
+    };
+    try {
+      emitAdd(inputCard, { kind: 'capture', mode: 'photo' });
+      await vi.waitFor(() => {
+        liveCapture = composer.querySelector<HTMLElement>('slicc-composer-capture');
+        expect(liveCapture).toBeTruthy();
+      });
+      // Compact drop-target geometry: absolute placement, popped UP out of
+      // the band's top edge, constrained to the composer's inner-column
+      // width (max 680px, centered via translateX). No `inset:0` full-pane
+      // takeover — the composer band's height never grows.
+      const style = (liveCapture as unknown as HTMLElement).style;
+      expect(style.position).toBe('absolute');
+      expect(style.maxWidth).toBe('680px');
+      expect(style.bottom).toMatch(/100%/);
+      expect(style.transform).toContain('translateX(-50%)');
+      expect(style.zIndex).toBe('3');
+      resolveOpen(stubResult);
+    } finally {
+      stubDeferred = null;
+    }
+    // The surface is appended during open() and removed on resolve — so the
+    // staged item is the post-condition we wait on.
     await vi.waitFor(() => {
       expect(stage.items).toHaveLength(1);
     });
-    expect(chatPane.querySelector('slicc-composer-capture')).toBeNull();
+    expect(composer.querySelector('slicc-composer-capture')).toBeNull();
   });
 
   it('stages a photo capture result as an image attachment (inline data + VFS path)', async () => {
@@ -504,13 +537,13 @@ describe('wireWcAttach inline capture overlay', () => {
     expect(Array.from(saved)).toEqual(Array.from(videoBytes));
   });
 
-  it('cancel resolves to no attachment and tears down the overlay', async () => {
-    const { inputCard, chatPane, stage } = await setup();
+  it('cancel resolves to no attachment and tears down the surface', async () => {
+    const { inputCard, composer, stage } = await setup();
     stubResult = null;
     emitAdd(inputCard, { kind: 'capture', mode: 'photo' });
-    // No staged items; the overlay was removed.
+    // No staged items; the surface was removed.
     await vi.waitFor(() => {
-      expect(chatPane.querySelector('slicc-composer-capture')).toBeNull();
+      expect(composer.querySelector('slicc-composer-capture')).toBeNull();
     });
     expect(stage.items).toHaveLength(0);
   });

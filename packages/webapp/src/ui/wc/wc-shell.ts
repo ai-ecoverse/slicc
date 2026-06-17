@@ -67,7 +67,8 @@ export interface WcShellRefs {
   /** The WebGL background field (`<slicc-shader>`, one of three programs). */
   shader: HTMLElement;
   /** The chat column (`<slicc-chatpane>`) — `position:relative` so it can host
-   *  full-area overlays (capture surface, drop zone). */
+   *  full-area overlays (drop zone, PTT). The compact `<slicc-composer-capture>`
+   *  surface anchors against the composer band, not the chat pane. */
   chatPane: HTMLElement;
   thread: HTMLElement;
   /** The composer footer band (PTT host — live floats arm + inject speech). */
@@ -99,8 +100,9 @@ const CSS = [
   '.wcui-shader{position:absolute;inset:0;z-index:0;}',
   // The chat column must stay transparent so the cone shader shows through
   // (the component paints an opaque background by default), and `relative`
-  // so it can host the full-area `<slicc-composer-capture>` overlay (and any
-  // other inset:0 surface — drop zone, PTT) without a separate wrapper.
+  // so it can host any `inset:0` overlay (drop zone, PTT) without a
+  // separate wrapper. The compact capture surface anchors on the composer
+  // band instead — see `wc-attach.ts` `captureInline`.
   '.wcui-frame slicc-chatpane{position:relative;background:transparent;}',
   '.wcui-appcol{position:relative;z-index:1;height:100%;display:flex;flex-direction:column;',
   'box-sizing:border-box;padding-left:var(--rail-w,44px);',

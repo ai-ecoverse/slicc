@@ -411,17 +411,30 @@ async function captureScreenshot(): Promise<string | null> {
 const CAMERA_PREF_KEY = 'slicc_camera_device';
 const MIC_PREF_KEY = 'slicc_microphone_device';
 
-/** Overlay styles that turn the self-bounded capture surface into a full-area
- *  overlay over the chat pane (mirrors the Storybook + drop-zone pattern). */
-const OVERLAY_CSS =
-  'position:absolute;inset:0;z-index:10;max-height:none;aspect-ratio:auto;border-radius:0;';
+/** Compact "drop-target" placement that mirrors the `<slicc-add-menu>`
+ *  `.results` panel: the capture surface mounts inside the composer band
+ *  (`<slicc-composer>` is `position:relative; z-index:2`) and pops UP out of
+ *  the band into the thread area above the input row, constrained to the
+ *  composer's inner-column width (max 680px, centered). The composer band's
+ *  height never grows; the input row stays visible underneath. */
+const COMPACT_CSS = [
+  'position:absolute',
+  'left:50%',
+  'right:auto',
+  'transform:translateX(-50%)',
+  'bottom:calc(100% + 6px)',
+  'width:calc(100% - 32px)',
+  'max-width:680px',
+  'aspect-ratio:auto',
+  'z-index:3',
+].join(';');
 
 /**
- * Camera capture via the inline `<slicc-composer-capture>` surface, mounted as
- * a full-area overlay on the chat pane (same pattern as the PTT overlay / drop
- * zone). Photo + video are both reachable through the in-surface mode toggle;
- * the caller picks the initial mode. Resolves with the raw `CaptureResult` or
- * `null` on cancel / no camera.
+ * Camera capture via the inline `<slicc-composer-capture>` surface, mounted
+ * as a compact drop-target box inside the composer band (mirrors the
+ * `<slicc-add-menu>` `.results` geometry). Photo + video are both reachable
+ * through the in-surface mode toggle; the caller picks the initial mode.
+ * Resolves with the raw `CaptureResult` or `null` on cancel / no camera.
  *
  * Camera + mic picks persist across sessions via the
  * `slicc-capture-device-change` event (`detail.kind: 'camera' | 'microphone'`).
@@ -439,7 +452,7 @@ async function captureInline(
   if (preferredCam) capture.setAttribute('preferred-device', preferredCam);
   const preferredMic = localStorage.getItem(MIC_PREF_KEY);
   if (preferredMic) capture.setAttribute('preferred-audio-device', preferredMic);
-  capture.style.cssText = OVERLAY_CSS;
+  capture.style.cssText = COMPACT_CSS;
   capture.hidden = true;
   capture.addEventListener('slicc-capture-device-change', (event) => {
     const detail = (event as CustomEvent<CaptureDeviceChangeDetail>).detail;
@@ -463,11 +476,13 @@ export interface WireWcAttachDeps {
   inputCard: HTMLElement & { value?: string };
   /** The freezer rail — conversation picks thaw through its select event. */
   freezer: HTMLElement;
-  /** Host for the inline `<slicc-composer-capture>` overlay (the chat pane in
-   *  the live shell). Must be `position:relative` so the overlay's `inset:0`
-   *  fills it. Optional: hosts without an overlay site (tests, harnesses) get
-   *  the legacy `<slicc-camera-dialog>` modal as a fallback. */
-  chatPane?: HTMLElement;
+  /** Host for the inline `<slicc-composer-capture>` surface — the
+   *  `<slicc-composer>` band element (already `position:relative; z-index:2`).
+   *  The surface pops UP out of the band into the thread area above the input
+   *  row, mirroring the `<slicc-add-menu>` `.results` geometry. Optional:
+   *  hosts without an overlay site (tests, harnesses) get the legacy
+   *  `<slicc-camera-dialog>` modal as a fallback. */
+  composer?: HTMLElement;
   openReader(): Promise<LocalVfsClient>;
   /** Writable VFS for persisting captures + oversized uploads to /tmp/upload. */
   openWriter?(): Promise<WritableVfsClient>;
@@ -504,9 +519,11 @@ async function stageVideoResult(
 
 /**
  * Stage a captured frame:
- * - `mode:'photo'` (camera) → inline overlay over the chat pane (`<slicc-
- *    composer-capture>`); the in-surface toggle reaches video; photo result →
- *    image attachment, video result → file attachment (WebM persisted to VFS).
+ * - `mode:'photo'` (camera) → inline `<slicc-composer-capture>` mounted as a
+ *    compact drop-target box inside the composer band (popping above the
+ *    input row into the thread area); the in-surface toggle reaches video;
+ *    photo result → image attachment, video result → file attachment
+ *    (WebM persisted to VFS).
  * - `mode:'screen'` (or anything else) → `getDisplayMedia` one-frame grab.
  */
 async function stageCapture(
@@ -516,7 +533,7 @@ async function stageCapture(
 ): Promise<void> {
   if (detail.mode === 'photo') {
     // No overlay host (preview / test harness) → fall back to the modal.
-    if (!deps.chatPane) {
+    if (!deps.composer) {
       const dataUrl = await capturePhotoFallback();
       if (!dataUrl) return;
       const name = `photo-${Date.now()}.png`;
@@ -525,7 +542,7 @@ async function stageCapture(
       if (attachment) stage.add(attachment);
       return;
     }
-    const result = await captureInline(deps.chatPane, 'photo');
+    const result = await captureInline(deps.composer, 'photo');
     if (!result) return;
     if (result.kind === 'image') await stagePhotoResult(result, deps, stage);
     else if (result.kind === 'video') await stageVideoResult(result, deps, stage);
