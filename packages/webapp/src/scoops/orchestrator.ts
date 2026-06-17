@@ -2055,7 +2055,13 @@ export class Orchestrator implements ConeApprovalRouter {
         error: err instanceof Error ? err.message : String(err),
       });
       // Best-effort rollback — leave no half-registered scoop behind.
-      await this.destroyScoopTab(scoop.jid).catch(() => {});
+      await this.destroyScoopTab(scoop.jid).catch((destroyErr) => {
+        log.warn('Failed to destroy scoop runtime during init rollback', {
+          jid: scoop.jid,
+          name: scoop.name,
+          error: destroyErr instanceof Error ? destroyErr.message : String(destroyErr),
+        });
+      });
       this.scoops.delete(scoop.jid);
       this.messageQueues.delete(scoop.jid);
       await db.deleteScoop(scoop.jid).catch((rollbackErr) => {

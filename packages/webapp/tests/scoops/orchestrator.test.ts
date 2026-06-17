@@ -1271,6 +1271,105 @@ describe('Orchestrator observer cleanup on scoop teardown', () => {
   });
 });
 
+describe('Orchestrator registerScoop init-failure rollback', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+    await saveScoop(cone);
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await settleAndDisposeSharedFs(sharedFs);
+  });
+
+  function noopCallbacks() {
+    return {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    };
+  }
+
+  it('logs destroyScoopTab rollback failure via log.warn and still surfaces the init error', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_init_rollback_1',
+      name: 'init-rollback',
+      folder: 'init-rollback-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'init-rollback-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const initErr = new Error('createScoopTab boom');
+    const destroyErr = new Error('destroyScoopTab boom');
+    vi.spyOn(orch, 'createScoopTab').mockRejectedValueOnce(initErr);
+    vi.spyOn(orch, 'destroyScoopTab').mockRejectedValueOnce(destroyErr);
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      await expect(orch.registerScoop(scoop)).rejects.toBe(initErr);
+
+      // Assert log.warn was called with the rollback-specific message and
+      // a payload carrying jid/name plus the string-normalized error.
+      const rollbackCall = warnSpy.mock.calls.find(
+        (call) =>
+          typeof call[1] === 'string' &&
+          call[1].includes('Failed to destroy scoop runtime during init rollback')
+      );
+      expect(rollbackCall).toBeDefined();
+      expect(rollbackCall![2]).toMatchObject({
+        jid: scoop.jid,
+        name: scoop.name,
+        error: destroyErr.message,
+      });
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
 describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
   // Confirms the regression fix: when a scoop completes, the orchestrator
   // must fire `onIncomingMessage` for the cone so the UI can render the
