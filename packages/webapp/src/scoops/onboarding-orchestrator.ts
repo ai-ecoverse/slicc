@@ -6,10 +6,13 @@
  *   1. **collect-profile** — handled by `welcome.shtml`. Produces
  *      `onboarding-complete` lick with a `OnboardingProfile`.
  *   2. **deterministic-intro** — `handleOnboardingComplete()` saves
- *      the profile, kicks off `upskill recommendations --install`
- *      *silently in the background*, posts three deterministic
- *      sliccy lines into chat (no LLM), then renders the
- *      `connect-llm.shtml` dip.
+ *      the profile and writes the welcomed marker, posts three
+ *      deterministic sliccy lines into chat (no LLM), then renders
+ *      the `connect-llm.shtml` dip. Skill install does NOT happen
+ *      here — it runs later as the tail step of the cone's
+ *      `onboarding-complete-with-provider` reply (see
+ *      `welcome/SKILL.md`), so there is one canonical install
+ *      point once an LLM is actually wired up.
  *   3. **connect-llm** — the dip emits `connect-ready` (we reply with
  *      the live provider catalogue) then `connect-attempt` with the
  *      user's chosen provider + key. We validate, save, and finally
