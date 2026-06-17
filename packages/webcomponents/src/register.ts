@@ -16,6 +16,7 @@ import './chat/slicc-user-message.js';
 import './composer/slicc-composer-meta.js';
 import './composer/slicc-composer.js';
 import './composer/slicc-input-card.js';
+import './composer/slicc-queued-stack.js';
 import './dock/slicc-dock-item.js';
 import './dock/slicc-dock.js';
 import './dock/slicc-tab-overlay.js';
