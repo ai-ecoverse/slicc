@@ -614,43 +614,82 @@ function assistantMessageEls(message: ChatMessage): HTMLElement[] {
 }
 
 /**
- * Return every row inside a `<slicc-tool-cluster>` to the cluster's
- * position in the flow, then drop the empty wrappers. Captures the
- * user-expanded state of each cluster (anchored at the first row's
- * owning msg id) into `openClusterAnchors` so the next reflow pass can
- * reopen the rebuilt cluster. Pure DOM mutation — no message-state
- * lookups required so it works on any container.
+ * Return every row inside a `<slicc-tool-cluster>` to its owning
+ * assistant bubble's inline position, then drop the empty wrappers.
+ * Captures the user-expanded state of each cluster (anchored at the
+ * first row's owning msg id) into `openClusterAnchors` so the next
+ * reflow pass can reopen the rebuilt cluster.
+ *
+ * Each row is re-homed next to its `slicc-agent-message[data-msg-id]`
+ * sibling in DOM order (so a per-message rebuild can never reorder
+ * sibling rows from m1/m3 around a delayed `tool_result` for m2);
+ * rows whose owning bubble isn't a sibling fall back to the cluster's
+ * own position.
+ *
+ * Scope: scans DIRECT children of `container` only (`:scope >`), which
+ * matches the only caller (the controller's thread inner). Nested
+ * clusters under other elements are ignored.
  */
 export function unwrapToolClusters(container: HTMLElement, openClusterAnchors: Set<string>): void {
   const clusters = container.querySelectorAll<HTMLElement>(':scope > slicc-tool-cluster');
   for (const cluster of clusters) {
-    const rows = cluster.querySelectorAll<HTMLElement>('slicc-action-row');
-    if (cluster.hasAttribute('open')) {
-      const anchorId = (rows[0] as HTMLElement | undefined)?.dataset.msgId;
-      // Single-message streaming clusters auto-open at reflow time; that
-      // open state is NOT user-driven, so we must not capture it as a
-      // sticky anchor — otherwise the cluster would stay open forever
-      // after the user collapsed it mid-stream.
-      const rowsArr = Array.from(rows);
-      const allSameMsg =
-        anchorId !== undefined &&
-        rowsArr.length > 0 &&
-        rowsArr.every((r) => r.dataset.msgId === anchorId);
-      const owningBubble =
-        anchorId && cluster.parentElement
-          ? cluster.parentElement.querySelector(`slicc-agent-message[data-msg-id="${anchorId}"]`)
-          : null;
-      const autoOpen = allSameMsg && owningBubble?.hasAttribute('streaming') === true;
-      if (anchorId && !autoOpen) openClusterAnchors.add(anchorId);
-    }
+    const rows = Array.from(cluster.querySelectorAll<HTMLElement>('slicc-action-row'));
+    captureUserOpenAnchor(cluster, rows, openClusterAnchors);
     const parent = cluster.parentNode;
     if (!parent) {
       cluster.remove();
       continue;
     }
-    for (const row of rows) parent.insertBefore(row, cluster);
+    for (const row of rows) rehomeUnwrappedRow(row, parent, cluster);
     cluster.remove();
   }
+}
+
+/** Record the first row's msg id as a sticky open anchor — but only if the
+ *  cluster was opened by the user, not auto-opened by the streaming
+ *  single-message reflow path (which would otherwise re-open forever after
+ *  the user collapsed it mid-stream). */
+function captureUserOpenAnchor(
+  cluster: HTMLElement,
+  rows: readonly HTMLElement[],
+  openClusterAnchors: Set<string>
+): void {
+  if (!cluster.hasAttribute('open')) return;
+  const anchorId = rows[0]?.dataset.msgId;
+  if (!anchorId) return;
+  const allSameMsg = rows.length > 0 && rows.every((r) => r.dataset.msgId === anchorId);
+  const owningBubble = cluster.parentElement?.querySelector(
+    `slicc-agent-message[data-msg-id="${anchorId}"]`
+  );
+  const autoOpen = allSameMsg && owningBubble?.hasAttribute('streaming') === true;
+  if (!autoOpen) openClusterAnchors.add(anchorId);
+}
+
+/** Restore an unwrapped row next to its owning `slicc-agent-message` (or
+ *  immediately after the last sibling row already placed for the same
+ *  message). Rows whose owning bubble isn't a sibling fall back to the
+ *  cluster's own position. Keeps chronological order across messages so a
+ *  later per-message rebuild can't reorder rows around a delayed
+ *  `tool_result` for a middle message. */
+function rehomeUnwrappedRow(row: HTMLElement, parent: ParentNode, cluster: HTMLElement): void {
+  const msgId = row.dataset.msgId;
+  const bubble =
+    msgId && parent instanceof Element
+      ? parent.querySelector<HTMLElement>(`:scope > slicc-agent-message[data-msg-id="${msgId}"]`)
+      : null;
+  if (!bubble || bubble.parentNode !== parent) {
+    parent.insertBefore(row, cluster);
+    return;
+  }
+  let after: ChildNode = bubble;
+  while (
+    after.nextSibling instanceof HTMLElement &&
+    after.nextSibling.tagName.toLowerCase() === 'slicc-action-row' &&
+    after.nextSibling.dataset.msgId === msgId
+  ) {
+    after = after.nextSibling;
+  }
+  parent.insertBefore(row, after.nextSibling);
 }
 
 /** Top-level chain-break tags: any of these starts a fresh chain. */

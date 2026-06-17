@@ -314,36 +314,86 @@ describe('WcChatController cross-message tool-call clustering', () => {
     expect(results).toEqual(['…', 'done', '…']);
   });
 
-  it('keeps a user-expanded cluster open across streaming reflow and per-message rebuilds', () => {
-    const { thread, controller } = makeHarness();
-    controller.loadMessages([
-      { id: uid('u'), role: 'user', content: 'go', timestamp: 1000 },
-      assistantMsg(uid('a'), [tc({ id: uid('tc'), name: 'read_file', result: 'a' })], 2000),
-      assistantMsg(uid('a'), [tc({ id: uid('tc'), name: 'read_file', result: 'b' })], 2100),
-      assistantMsg(uid('a'), [tc({ id: uid('tc'), name: 'read_file', result: 'c' })], 2200),
-    ]);
+  it('keeps a user-expanded cluster open across the streaming-append rebuild', () => {
+    // Exercises the `#openClusterAnchors` preservation path: stream three
+    // single-tool turns so a cluster forms, mark it open, then stream a 4th
+    // turn so `#appendMessage` runs unwrap+reflow. The rebuilt cluster must
+    // still carry the `open` attribute (and the higher count) — a full
+    // `loadMessages` reload would discard open state by design, so this test
+    // deliberately stays on the streaming-append path.
+    const { thread, agent } = makeHarness();
+    for (const i of [1, 2, 3]) {
+      agent.emit({ type: 'message_start', messageId: `open-m${i}` });
+      agent.emit({
+        type: 'tool_use_start',
+        messageId: `open-m${i}`,
+        toolName: 'read_file',
+        toolInput: {},
+      });
+      agent.emit({
+        type: 'tool_result',
+        messageId: `open-m${i}`,
+        toolName: 'read_file',
+        result: String(i),
+      });
+      agent.emit({ type: 'content_done', messageId: `open-m${i}` });
+      agent.emit({ type: 'turn_end', messageId: `open-m${i}` });
+    }
     const cluster = thread.querySelector('slicc-tool-cluster') as HTMLElement;
     expect(cluster).not.toBeNull();
     expect(cluster.hasAttribute('open')).toBe(false);
+    expect(cluster.getAttribute('count')).toBe('3');
     // User expands the cluster.
     cluster.setAttribute('open', '');
 
-    // A new tool call streams in via append. The reflow must not snap
-    // the cluster shut while the user is reading it.
-    const a4Id = uid('a');
-    const t4Id = uid('tc');
-    controller.loadMessages([
-      { id: 'reload-u', role: 'user', content: 'go', timestamp: 1000 },
-      assistantMsg('reload-a1', [tc({ id: 'reload-tc1', name: 'read_file', result: 'a' })], 2000),
-      assistantMsg('reload-a2', [tc({ id: 'reload-tc2', name: 'read_file', result: 'b' })], 2100),
-      assistantMsg('reload-a3', [tc({ id: 'reload-tc3', name: 'read_file', result: 'c' })], 2200),
-      assistantMsg(a4Id, [tc({ id: t4Id, name: 'read_file', result: 'd' })], 2300),
-    ]);
-    // After a full reload the open state resets — that's the canonical
-    // "no anchor preserved" path. Re-expand and check the streaming
-    // append path instead.
-    const reloaded = thread.querySelector('slicc-tool-cluster') as HTMLElement;
-    expect(reloaded?.getAttribute('count')).toBe('4');
+    // A fourth single-tool turn streams in — `#appendMessage`'s unwrap
+    // captures the open anchor, then reflow rebuilds the cluster.
+    agent.emit({ type: 'message_start', messageId: 'open-m4' });
+    agent.emit({
+      type: 'tool_use_start',
+      messageId: 'open-m4',
+      toolName: 'read_file',
+      toolInput: {},
+    });
+    agent.emit({ type: 'tool_result', messageId: 'open-m4', toolName: 'read_file', result: '4' });
+    agent.emit({ type: 'content_done', messageId: 'open-m4' });
+    agent.emit({ type: 'turn_end', messageId: 'open-m4' });
+
+    const rebuilt = thread.querySelector('slicc-tool-cluster') as HTMLElement;
+    expect(rebuilt).not.toBeNull();
+    expect(rebuilt.getAttribute('count')).toBe('4');
+    // The actual `#openClusterAnchors` invariant: the rebuilt cluster
+    // preserves the user's expanded state across the streaming append.
+    expect(rebuilt.hasAttribute('open')).toBe(true);
+  });
+
+  it('preserves chronological row order after a delayed middle-message tool_result', () => {
+    // Codex P2 regression: stream three single-tool turns so they cluster
+    // BEFORE any results land (all rows still `…`), then deliver a delayed
+    // `tool_result` for the MIDDLE message. The resulting `#rerenderMessage`
+    // unwraps the cluster and re-inserts m2's new row; the next reflow must
+    // rebuild the cluster in m1→m2→m3 order, NOT m1→m3→m2.
+    const { thread, agent } = makeHarness();
+    for (const id of ['mid-m1', 'mid-m2', 'mid-m3']) {
+      agent.emit({ type: 'message_start', messageId: id });
+      agent.emit({ type: 'tool_use_start', messageId: id, toolName: 'read_file', toolInput: {} });
+    }
+    const initial = thread.querySelector('slicc-tool-cluster') as HTMLElement | null;
+    expect(initial).not.toBeNull();
+    expect(initial?.getAttribute('count')).toBe('3');
+
+    // Delayed result for the MIDDLE message — triggers a rerender of m2
+    // while m1/m2/m3 are clustered. The other two still have `…` rows.
+    agent.emit({ type: 'tool_result', messageId: 'mid-m2', toolName: 'read_file', result: 'ok' });
+
+    const cluster = thread.querySelector('slicc-tool-cluster') as HTMLElement | null;
+    expect(cluster).not.toBeNull();
+    const rows = Array.from(cluster?.querySelectorAll('slicc-action-row') ?? []) as HTMLElement[];
+    expect(rows).toHaveLength(3);
+    const msgIds = rows.map((r) => r.dataset.msgId);
+    expect(msgIds).toEqual(['mid-m1', 'mid-m2', 'mid-m3']);
+    // And the middle row is the one that flipped to `done`.
+    expect(rows.map((r) => r.getAttribute('result'))).toEqual(['…', 'done', '…']);
   });
 
   it('lets the user re-collapse a cluster after streaming reflow', () => {
