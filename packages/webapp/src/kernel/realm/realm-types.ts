@@ -108,7 +108,31 @@ export interface RealmErrorMsg {
 }
 
 /** Channels the kernel host exposes to user code. */
-export type RealmRpcChannel = 'vfs' | 'exec' | 'fetch' | 'browser' | 'usb' | 'serial' | 'hid';
+export type RealmRpcChannel =
+  | 'vfs'
+  | 'exec'
+  | 'fetch'
+  | 'browser'
+  | 'usb'
+  | 'serial'
+  | 'hid'
+  | 'module';
+
+/**
+ * Result of the `module`/`buildGraph` RPC — the ordered, host-resolved CJS
+ * module graph for a realm's `require()` specifiers. Mirrors
+ * {@link import('../../shell/ipk/module-loader.js').ModuleGraph} reduced to a
+ * structured-clone-safe shape (raw `source` is dropped; only `cjsSource` and
+ * `kind` cross the port). `errors` carries the per-entry resolution failure
+ * message (e.g. `Cannot find module 'x' (run: ipk install x)`) so the realm
+ * shim can throw it at `require()` time without a CDN round-trip.
+ */
+export interface RealmModuleGraph {
+  files: { path: string; cjsSource: string; kind: string }[];
+  entryMap: Record<string, string>;
+  edges: Record<string, Record<string, string>>;
+  errors: Record<string, string>;
+}
 
 /**
  * Tab handle returned to realm code by `browser.findTab` /

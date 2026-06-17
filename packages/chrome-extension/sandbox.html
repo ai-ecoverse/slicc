@@ -781,100 +781,204 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     return { method: String(method).toUpperCase(), headers, body };
   }
 
-  // require() — pre-fetch from esm.sh + indirect Function constructor
-  // for non-import paths in the sandbox context (matches the legacy
-  // extension behavior).
+  // require() — hard-switched to the host-resolved node_modules CJS loader
+  // (architecture 4.4, 6). The realm asks the kernel host to build an ordered
+  // CJS module graph for its `require()` specifiers over the `module` RPC
+  // channel, then serves a synchronous `require` from that preloaded graph.
+  // There is NO esm.sh/jsdelivr CDN download path: a missing bare module
+  // throws `Cannot find module 'x' (run: ipk install x)` immediately. Mirror
+  // of `kernel/realm/js-realm-shared.ts` (parity test
+  // `tests/kernel/realm/js-realm-helpers.test.ts` /
+  // `node-command-loadmodule.test.ts`).
   // `sliccy:` virtual modules — capability bridges previously injected
   // as bare globals. Single source of truth for `require('sliccy:<name>')`
   // and the symmetric registry on the worker float. Built ONCE per
   // realm before requireShim is constructed so the lookup is cheap.
   const sliccyModules = Object.create(null);
-  // Filled later after every bridge is constructed (see below).
-  const requireCache = Object.create(null);
-  const loadModuleTimeoutMs = resolveTimeoutMs(init.env);
+  // Bare Node built-ins the realm serves directly (never from node_modules).
+  // Mirrors NODE_BUILTIN_BARE in resolver.ts / js-realm-shared.ts.
+  const NODE_BUILTIN_BARE = new Set(['fs', 'path', 'process', 'buffer']);
+  // `nodePath` — the Node `path` built-in (POSIX). The CDN hard-switch means
+  // `path` can no longer be fetched, so it is implemented inline here, mirror
+  // of `nodePath` in `kernel/realm/js-realm-helpers.ts`.
+  const nodePath = (function () {
+    function normalizeArray(parts, allowAboveRoot) {
+      const res = [];
+      for (const part of parts) {
+        if (part === '' || part === '.') continue;
+        if (part === '..') {
+          if (res.length > 0 && res[res.length - 1] !== '..') res.pop();
+          else if (allowAboveRoot) res.push('..');
+        } else res.push(part);
+      }
+      return res;
+    }
+    function normalize(path) {
+      if (path.length === 0) return '.';
+      const isAbsolute = path.charCodeAt(0) === 47;
+      const trailingSep = path.charCodeAt(path.length - 1) === 47;
+      let normalized = normalizeArray(path.split('/'), !isAbsolute).join('/');
+      if (normalized.length === 0 && !isAbsolute) normalized = '.';
+      if (normalized.length > 0 && trailingSep) normalized += '/';
+      return (isAbsolute ? '/' : '') + normalized;
+    }
+    function join() {
+      const joined = Array.prototype.slice.call(arguments).filter((p) => typeof p === 'string' && p.length > 0).join('/');
+      return joined.length === 0 ? '.' : normalize(joined);
+    }
+    function dirname(path) {
+      if (path.length === 0) return '.';
+      const hasRoot = path.charCodeAt(0) === 47;
+      let end = -1;
+      let matchedSlash = true;
+      for (let i = path.length - 1; i >= 1; i--) {
+        if (path.charCodeAt(i) === 47) { if (!matchedSlash) { end = i; break; } }
+        else matchedSlash = false;
+      }
+      if (end === -1) return hasRoot ? '/' : '.';
+      if (hasRoot && end === 1) return '//';
+      return path.slice(0, end);
+    }
+    function basename(path, ext) {
+      let start = 0;
+      let end = -1;
+      let matchedSlash = true;
+      for (let i = path.length - 1; i >= 0; i--) {
+        if (path.charCodeAt(i) === 47) { if (!matchedSlash) { start = i + 1; break; } }
+        else if (end === -1) { matchedSlash = false; end = i + 1; }
+      }
+      const base = end === -1 ? '' : path.slice(start, end);
+      if (ext && base.endsWith(ext) && base !== ext) return base.slice(0, base.length - ext.length);
+      return base;
+    }
+    function extname(path) {
+      const base = basename(path);
+      const dot = base.lastIndexOf('.');
+      if (dot <= 0) return '';
+      return base.slice(dot);
+    }
+    function resolve() {
+      let resolved = '';
+      let isAbsolute = false;
+      const parts = Array.prototype.slice.call(arguments);
+      for (let i = parts.length - 1; i >= 0 && !isAbsolute; i--) {
+        const part = parts[i];
+        if (typeof part !== 'string' || part.length === 0) continue;
+        resolved = resolved.length > 0 ? part + '/' + resolved : part;
+        isAbsolute = part.charCodeAt(0) === 47;
+      }
+      if (!isAbsolute) resolved = resolved.length > 0 ? '/' + resolved : '/';
+      const normalized = normalizeArray(resolved.split('/'), false).join('/');
+      return normalized.length > 0 ? '/' + normalized : '/';
+    }
+    function relative(from, to) {
+      const fromAbs = resolve(from);
+      const toAbs = resolve(to);
+      if (fromAbs === toAbs) return '';
+      const fromParts = fromAbs.split('/').filter(Boolean);
+      const toParts = toAbs.split('/').filter(Boolean);
+      let i = 0;
+      while (i < fromParts.length && i < toParts.length && fromParts[i] === toParts[i]) i++;
+      const up = fromParts.slice(i).map(() => '..');
+      return up.concat(toParts.slice(i)).join('/');
+    }
+    function parse(path) {
+      const root = path.charCodeAt(0) === 47 ? '/' : '';
+      const base = basename(path);
+      const ext = extname(path);
+      const name = ext ? base.slice(0, base.length - ext.length) : base;
+      let dir = dirname(path);
+      if (dir === '.' && root === '') dir = '';
+      return { root: root, dir: dir, base: base, ext: ext, name: name };
+    }
+    function format(parsed) {
+      parsed = parsed || {};
+      const dir = parsed.dir || parsed.root || '';
+      const base = parsed.base || ((parsed.name || '') + (parsed.ext || ''));
+      if (!dir) return base;
+      if (dir === parsed.root) return dir + base;
+      return dir + '/' + base;
+    }
+    return {
+      sep: '/', delimiter: ':',
+      basename: basename, dirname: dirname, extname: extname,
+      isAbsolute: (path) => path.length > 0 && path.charCodeAt(0) === 47,
+      join: join, normalize: normalize, resolve: resolve, relative: relative,
+      parse: parse, format: format,
+    };
+  })();
   const re = /\brequire\s*\(\s*(['"`])([^'"`\s]+)\1\s*\)/g;
   const idsFound = new Set();
   let m;
   while ((m = re.exec(init.code)) !== null) idsFound.add(m[2]);
-  const filtered = [...idsFound]
-    .filter((s) => !s.startsWith('sliccy:'))
-    .map((s) => s.startsWith('node:') ? s.slice(5) : s)
-    .filter((s) => !BUILTINS_LOCAL.has(s) && !NODE_BUILTINS_UNAVAILABLE.has(s));
-  const nativeIds = filtered.filter((s) => NODE_NATIVE_PACKAGES.has(s));
-  const loadable = filtered.filter((s) => !NODE_NATIVE_PACKAGES.has(s));
-  for (const id of nativeIds) {
-    writeStderr("Warning: " + nativeError(id, id).message + "\n");
-  }
-  // Token-array host construction keeps the full
-  // `cdn.jsdelivr.net/npm/<id>` literal out of the bundled JS so
-  // Chrome Web Store MV3 reviewers' substring scan doesn't trip on
-  // it. Mirrors `packages/webapp/src/shell/supplemental-commands/cdn-url-builder.ts`
-  // (the bundled `jsdelivrNpmUrl` helper); inlined here because
-  // `sandbox.html` is a static HTML shell, not part of the bundle.
-  const JSDELIVR_HOST = ['cdn', 'jsdelivr', 'net'].join('.');
-  if (loadable.length > 0) {
-    const results = await Promise.allSettled(loadable.map(async (id) => {
-      const fetchAndEval = async () => {
-        const url = new URL('/npm/' + id, 'https://' + JSDELIVR_HOST).toString();
-        // Use realmFetch (RPC to realm-host on offscreen) rather than
-        // global window.fetch — the latter is overridden to the
-        // legacy `parent.postMessage` proxiedFetch which has no
-        // receiver in the per-task realm-iframe protocol, so a bare
-        // `fetch()` here hangs forever on cross-origin URLs until
-        // withTimeout kicks in.
-        const resp = await realmFetch(url);
-        if (!resp.ok) throw new Error('HTTP ' + resp.status + ' fetching ' + url);
-        const text = await resp.text();
-        const mod = { exports: {} };
-        try {
-          // Indirect Function call works inside the sandbox CSP.
-          // The call is for its side effects on `mod.exports`; the
-          // return value is discarded — `void` makes that explicit
-          // for static-analysis tools that flag bare side-effecting
-          // calls as "expression has no effect".
-          void (0, Function)('module', 'exports', text)(mod, mod.exports);
-        } catch(fnErr) {
-          throw new Error('Failed to execute module ' + id + ': ' + (fnErr instanceof Error ? fnErr.message : String(fnErr)));
-        }
-        return Object.keys(mod.exports).length > 0 ? mod.exports : (self[id] || mod.exports);
-      };
-      // 15s ceiling per require — CDN stubs that chain into
-      // unresolvable transitive imports (the original sharp hang)
-      // are now bounded instead of parking the realm.
-      requireCache[id] = await withTimeout(fetchAndEval(), loadModuleTimeoutMs, "require('" + id + "')");
-    }));
-    for (let i = 0; i < results.length; i++) {
-      if (results[i].status === 'rejected') {
-        writeStderr("Warning: failed to pre-load require('" + loadable[i] + "'): " + results[i].reason + "\n");
-      }
+  const loadable = [...idsFound].filter((s) => {
+    if (s.startsWith('sliccy:')) return false;
+    const bareId = s.startsWith('node:') ? s.slice(5) : s;
+    if (NODE_BUILTIN_BARE.has(bareId)) return false;
+    if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) return false;
+    if (NODE_NATIVE_PACKAGES.has(bareId)) return false;
+    return true;
+  });
+  const entryFilename = init.filename;
+  const entryFromDir = entryFilename && entryFilename.startsWith('/')
+    ? (function (f) { const i = f.lastIndexOf('/'); return i <= 0 ? '/' : f.slice(0, i); })(entryFilename)
+    : init.cwd;
+  const moduleGraph = loadable.length === 0
+    ? { files: [], entryMap: {}, edges: {}, errors: {} }
+    : await rpcCall('module', 'buildGraph', [loadable, entryFromDir]);
+  const moduleSourceByPath = new Map(moduleGraph.files.map((f) => [f.path, f.cjsSource]));
+  const moduleCache = new Map();
+  function cannotFindModuleError(id) {
+    if (id.startsWith('.') || id.startsWith('/') || id.startsWith('node:')) {
+      return new Error("Cannot find module '" + id + "'");
     }
+    const name = id.startsWith('@') ? id.split('/').slice(0, 2).join('/') : id.split('/')[0];
+    return new Error("Cannot find module '" + id + "' (run: ipk install " + name + ")");
   }
-  const requireShim = (id) => {
+  function resolveBuiltinModule(id) {
     if (typeof id === 'string' && id.startsWith('sliccy:')) {
       const name = id.slice(7);
-      if (name === '') {
-        throw new Error("require('sliccy:'): empty sliccy: module name");
-      }
+      if (name === '') throw new Error("require('sliccy:'): empty sliccy: module name");
       if (!Object.prototype.hasOwnProperty.call(sliccyModules, name)) {
         throw new Error("require('" + id + "'): unknown sliccy: module '" + name + "'. Known names: " + Object.keys(sliccyModules).sort().join(', '));
       }
-      return sliccyModules[name];
+      return { hit: true, value: sliccyModules[name] };
     }
     const bareId = id.startsWith('node:') ? id.slice(5) : id;
-    if (bareId === 'fs') return fsBridge;
-    if (bareId === 'process') return processShim;
-    if (bareId === 'buffer') return { Buffer: globalThis.Buffer };
+    if (bareId === 'fs') return { hit: true, value: fsBridge };
+    if (bareId === 'path') return { hit: true, value: nodePath };
+    if (bareId === 'process') return { hit: true, value: processShim };
+    if (bareId === 'buffer') return { hit: true, value: { Buffer: globalThis.Buffer } };
+    if (NODE_NATIVE_PACKAGES.has(bareId)) throw nativeError(id, bareId);
     if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) {
       const hints = { http: ' Use fetch() instead.', https: ' Use fetch() instead.', child_process: ' Use exec() which is available as a shell bridge.', crypto: ' Use globalThis.crypto (Web Crypto API) instead.' };
       throw new Error("require('" + id + "'): Node built-in '" + bareId + "' is not available in the browser environment." + (hints[bareId] || ''));
     }
-    if (NODE_NATIVE_PACKAGES.has(bareId)) {
-      throw nativeError(id, bareId);
-    }
-    if (id in requireCache) return requireCache[id];
-    if (bareId in requireCache) return requireCache[bareId];
-    throw new Error("require('" + id + "'): module not pre-loaded. Use a string literal so it can be pre-fetched.");
-  };
+    return { hit: false };
+  }
+  function requireFromEdges(edgeMap, id) {
+    const builtin = resolveBuiltinModule(id);
+    if (builtin.hit) return builtin.value;
+    const targetPath = edgeMap && edgeMap[id];
+    if (targetPath) return requireModuleFile(targetPath);
+    if (Object.prototype.hasOwnProperty.call(moduleGraph.errors, id)) throw new Error(moduleGraph.errors[id]);
+    throw cannotFindModuleError(id);
+  }
+  function requireModuleFile(path) {
+    const cached = moduleCache.get(path);
+    if (cached) return cached.exports;
+    const source = moduleSourceByPath.get(path);
+    if (source === undefined) throw new Error("Cannot find module '" + path + "'");
+    const moduleObj = { exports: {} };
+    moduleCache.set(path, moduleObj);
+    const childRequire = (id) => requireFromEdges(moduleGraph.edges[path], id);
+    const lastSlash = path.lastIndexOf('/');
+    const moduleDir = lastSlash <= 0 ? '/' : path.slice(0, lastSlash);
+    const compiled = new Function('module', 'exports', 'require', '__dirname', '__filename', 'process', 'console', 'Buffer', 'global', source);
+    compiled(moduleObj, moduleObj.exports, childRequire, moduleDir, path, processShim, consoleShim, globalThis.Buffer, globalThis);
+    return moduleObj.exports;
+  }
+  const requireShim = (id) => requireFromEdges(moduleGraph.entryMap, id);
   const moduleShim = { exports: {}, filename: init.filename };
 
   // `browser` global — mirror of kernel/realm/js-realm-shared.ts. Calls

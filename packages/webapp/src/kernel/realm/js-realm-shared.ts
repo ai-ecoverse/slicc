@@ -6,11 +6,11 @@
  * is duplicated there because the iframe runs its own bootstrap
  * script outside the TS module graph.
  *
- * `runJsRealm(init, port)` is the entire entry point: pre-fetches
- * `require()` specifiers via esm.sh, builds RPC-backed `fs` /
- * `exec` / `fetch` shims off the supplied `port`, runs the user
- * code in an `AsyncFunction`, then posts `realm-done` over the
- * same port.
+ * `runJsRealm(init, port)` is the entire entry point: builds a
+ * host-resolved CJS module graph for `require()` over the `module`
+ * RPC channel, builds RPC-backed `fs` / `exec` / `fetch` shims off
+ * the supplied `port`, runs the user code in an `AsyncFunction`,
+ * then posts `realm-done` over the same port.
  *
  * `port` is whatever the host gave the realm — for workers it's
  * the worker's own `self` (DedicatedWorkerGlobalScope), for tests
@@ -18,7 +18,6 @@
  */
 
 import '../../shims/buffer-polyfill.js';
-import { esmShUrl } from '../../shell/supplemental-commands/cdn-url-builder.js';
 import type { HidDeviceFilter, HidDeviceInfo } from '../hid-device-registry.js';
 import type {
   SerialDeviceInfo,
@@ -34,6 +33,7 @@ import {
   createCli,
   createColor,
   fmt,
+  nodePath,
   pool,
   time,
 } from './js-realm-helpers.js';
@@ -41,6 +41,7 @@ import { type RealmPortLike, RealmRpcClient } from './realm-rpc.js';
 import type {
   RealmDoneMsg,
   RealmInitMsg,
+  RealmModuleGraph,
   RealmRpcChannel,
   SerializedFetchResponse,
   TabHandle,
@@ -48,12 +49,7 @@ import type {
   WsSink,
   WsSubscriberInfo,
 } from './realm-types.js';
-import {
-  NODE_NATIVE_PACKAGES,
-  nativePackageError,
-  resolveLoadModuleTimeoutMs,
-  withTimeout,
-} from './require-guards.js';
+import { NODE_NATIVE_PACKAGES, nativePackageError } from './require-guards.js';
 import { createSkillGlobal } from './skill-global.js';
 
 const NODE_BUILTINS_UNAVAILABLE = new Set([
@@ -79,7 +75,8 @@ const NODE_BUILTINS_UNAVAILABLE = new Set([
   'inspector',
 ]);
 
-const BUILTINS_LOCAL = new Set(['fs', 'process', 'buffer']);
+/** Bare Node built-ins the realm serves directly (never from `node_modules`). */
+const NODE_BUILTIN_BARE = new Set(['fs', 'path', 'process', 'buffer']);
 
 const SLICCY_SCHEME = 'sliccy:';
 
@@ -122,17 +119,12 @@ function formatConsoleArg(value: unknown): string {
  * caller is expected to surface separately). Returns when the
  * `realm-done` has been posted.
  *
- * The `loadModule` hook is overridable so the iframe (which can't
- * use a dynamic `import()` against the esm.sh CDN reliably under
- * sandbox CSP) can substitute its own fetch + Function fallback.
- * The default is a dynamic `import()` against esm.sh — the
- * standalone worker path.
+ * `require()` resolves synchronously from a host-built CJS module graph
+ * (the `module`/`buildGraph` RPC over `port`), preserving `node:`/`sliccy:`
+ * schemes and Node built-ins. There is no CDN download path — a missing bare
+ * module throws `Cannot find module 'x' (run: ipk install x)` immediately.
  */
-export async function runJsRealm(
-  init: RealmInitMsg,
-  port: RealmPortLike,
-  loadModule: (id: string) => Promise<Record<string, unknown>> = defaultLoadModule
-): Promise<void> {
+export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promise<void> {
   const stdoutChunks: string[] = [];
   const stderrChunks: string[] = [];
   const writeStdout = (value: unknown): void => {
@@ -227,13 +219,20 @@ export async function runJsRealm(
     color: colorApi,
   });
 
-  const requireCache = await preloadRequires(init.code, init.env, loadModule, writeStderr);
-  const requireShim = createRequireShim(requireCache, fsBridge, processShim, sliccyModules);
-
-  const moduleShim = { exports: {} as Record<string, unknown>, filename: init.filename };
-
   const filename = init.filename;
   const dirname = dirnameOf(filename);
+
+  const graph = await loadModuleGraph(rpc, init.code, init.cwd, filename);
+  const moduleSystem = createModuleSystem({
+    graph,
+    fsBridge,
+    processShim,
+    nodeConsole,
+    sliccyModules,
+  });
+  const requireShim = moduleSystem.require;
+
+  const moduleShim = { exports: {} as Record<string, unknown>, filename: init.filename };
 
   const exitCode = await runUserCode(
     init.code,
@@ -410,46 +409,147 @@ function createFsBridge(
 }
 
 /**
- * Pre-fetch require specifiers — one esm.sh request per unique id, resolved
- * exports stashed in the returned cache. Failures go to stderr but don't
- * abort the run. Node-native packages (sharp, sqlite3, …) are hard-failed up
- * front (their CDN entries chain into hanging `.node` loader fetches), and
- * every load is wrapped in `withTimeout` so a stuck import can't park the realm.
+ * Specifiers whose resolution the host module-loader owns (relative paths and
+ * bare `node_modules` packages). `sliccy:`, `node:`/bare Node built-ins, the
+ * browser-unavailable built-ins, and native C++ packages are served (or
+ * hard-failed) directly by the realm require shim, so they never enter the
+ * graph build.
  */
-async function preloadRequires(
+function selectLoadableSpecifiers(code: string): string[] {
+  return extractRequireSpecifiers(code).filter((s) => {
+    if (s.startsWith(SLICCY_SCHEME)) return false;
+    const bareId = s.startsWith('node:') ? s.slice(5) : s;
+    if (NODE_BUILTIN_BARE.has(bareId)) return false;
+    if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) return false;
+    if (NODE_NATIVE_PACKAGES.has(bareId)) return false;
+    return true;
+  });
+}
+
+/**
+ * The directory a script's top-level relative `require()`s resolve against:
+ * the script's own directory for a real file path, else the realm cwd (the
+ * `node -e` / `<eval>` case).
+ */
+function entryFromDir(filename: string, cwd: string): string {
+  return filename?.startsWith('/') ? dirnameOf(filename) : cwd;
+}
+
+/**
+ * Build the host-resolved CJS module graph for the realm's `require()`
+ * specifiers via the `module`/`buildGraph` RPC. Returns an empty graph when
+ * there is nothing to resolve so the no-require fast path never hits the host.
+ */
+async function loadModuleGraph(
+  rpc: RealmRpcClient,
   code: string,
-  env: RealmInitMsg['env'],
-  loadModule: (id: string) => Promise<Record<string, unknown>>,
-  writeStderr: (value: unknown) => void
-): Promise<Record<string, unknown>> {
-  const specifiers = extractRequireSpecifiers(code);
-  const filteredSpecifiers = specifiers
-    .filter((s) => !s.startsWith(SLICCY_SCHEME))
-    .map((s) => (s.startsWith('node:') ? s.slice(5) : s))
-    .filter((s) => !BUILTINS_LOCAL.has(s) && !NODE_BUILTINS_UNAVAILABLE.has(s));
-  const nativeSpecifiers = filteredSpecifiers.filter((s) => NODE_NATIVE_PACKAGES.has(s));
-  const loadableSpecifiers = filteredSpecifiers.filter((s) => !NODE_NATIVE_PACKAGES.has(s));
-  for (const id of nativeSpecifiers) {
-    writeStderr(`Warning: ${nativePackageError(id, id).message}\n`);
-  }
-  const requireCache: Record<string, unknown> = Object.create(null);
-  const loadModuleTimeoutMs = resolveLoadModuleTimeoutMs(env);
-  if (loadableSpecifiers.length === 0) return requireCache;
-  const results = await Promise.allSettled(
-    loadableSpecifiers.map(async (id) => {
-      const mod = await withTimeout(loadModule(id), loadModuleTimeoutMs, `require('${id}')`);
-      const val = mod && 'default' in mod ? mod.default : mod;
-      requireCache[id] = val;
-    })
-  );
-  for (let i = 0; i < results.length; i++) {
-    const r = results[i];
-    if (r.status === 'rejected') {
-      const reason = r.reason instanceof Error ? r.reason.message : String(r.reason);
-      writeStderr(`Warning: failed to pre-load require('${loadableSpecifiers[i]}'): ${reason}\n`);
+  cwd: string,
+  filename: string
+): Promise<RealmModuleGraph> {
+  const loadable = selectLoadableSpecifiers(code);
+  if (loadable.length === 0) return { files: [], entryMap: {}, edges: {}, errors: {} };
+  return rpc.call<RealmModuleGraph>('module', 'buildGraph', [
+    loadable,
+    entryFromDir(filename, cwd),
+  ]);
+}
+
+/**
+ * Construct the realm's synchronous CJS module system over a preloaded graph.
+ * `require` follows the host-resolved `edges`, lazily evaluating each module
+ * once and caching `module.exports` so repeated requires return one shared
+ * singleton (CJS cache semantics). Module evaluation is synchronous CJS via a
+ * `Function` wrapper (Node's `Module._compile` shape). Schemes/built-ins are
+ * served first; an unresolved bare specifier throws the install-hint error.
+ */
+function createModuleSystem(opts: {
+  graph: RealmModuleGraph;
+  fsBridge: unknown;
+  processShim: unknown;
+  nodeConsole: unknown;
+  sliccyModules: Record<string, unknown>;
+}): { require: (id: string) => unknown } {
+  const { graph, fsBridge, processShim, nodeConsole, sliccyModules } = opts;
+  const sourceByPath = new Map(graph.files.map((f) => [f.path, f.cjsSource]));
+  const cache = new Map<string, { exports: Record<string, unknown> }>();
+
+  const resolveBuiltin = (id: string): { hit: boolean; value?: unknown } => {
+    if (typeof id === 'string' && id.startsWith(SLICCY_SCHEME)) {
+      return { hit: true, value: resolveSliccyModule(id, sliccyModules) };
     }
+    const bareId = id.startsWith('node:') ? id.slice(5) : id;
+    if (bareId === 'fs') return { hit: true, value: fsBridge };
+    if (bareId === 'path') return { hit: true, value: nodePath };
+    if (bareId === 'process') return { hit: true, value: processShim };
+    if (bareId === 'buffer') {
+      return { hit: true, value: { Buffer: (globalThis as Record<string, unknown>).Buffer } };
+    }
+    if (NODE_NATIVE_PACKAGES.has(bareId)) throw nativePackageError(id, bareId);
+    if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) throw unavailableBuiltinError(id, bareId);
+    return { hit: false };
+  };
+
+  const requireFromEdges = (edgeMap: Record<string, string> | undefined, id: string): unknown => {
+    const builtin = resolveBuiltin(id);
+    if (builtin.hit) return builtin.value;
+    const targetPath = edgeMap?.[id];
+    if (targetPath) return requireFile(targetPath);
+    if (id in graph.errors) throw new Error(graph.errors[id]);
+    throw cannotFindModuleError(id);
+  };
+
+  function requireFile(path: string): Record<string, unknown> {
+    const cached = cache.get(path);
+    if (cached) return cached.exports;
+    const source = sourceByPath.get(path);
+    if (source === undefined) throw new Error(`Cannot find module '${path}'`);
+    const moduleObj = { exports: {} as Record<string, unknown> };
+    // Register before evaluation so a require cycle sees the partial exports.
+    cache.set(path, moduleObj);
+    const childRequire = (id: string): unknown => requireFromEdges(graph.edges[path], id);
+    const moduleDir = dirnameOf(path);
+    const compiled = new Function(
+      'module',
+      'exports',
+      'require',
+      '__dirname',
+      '__filename',
+      'process',
+      'console',
+      'Buffer',
+      'global',
+      source
+    ) as (...args: unknown[]) => void;
+    compiled(
+      moduleObj,
+      moduleObj.exports,
+      childRequire,
+      moduleDir,
+      path,
+      processShim,
+      nodeConsole,
+      (globalThis as Record<string, unknown>).Buffer,
+      globalThis
+    );
+    return moduleObj.exports;
   }
-  return requireCache;
+
+  return {
+    require: (id: string): unknown => requireFromEdges(graph.entryMap, id),
+  };
+}
+
+/**
+ * Build the Node `Cannot find module` error for a specifier with no graph
+ * edge. Bare package specifiers carry the actionable `ipk install` hint;
+ * relative/absolute/`node:` specifiers do not (matching the host resolver).
+ */
+function cannotFindModuleError(id: string): Error {
+  if (id.startsWith('.') || id.startsWith('/') || id.startsWith('node:')) {
+    return new Error(`Cannot find module '${id}'`);
+  }
+  const name = id.startsWith('@') ? id.split('/').slice(0, 2).join('/') : id.split('/')[0];
+  return new Error(`Cannot find module '${id}' (run: ipk install ${name})`);
 }
 
 /**
@@ -481,40 +581,6 @@ function unavailableBuiltinError(id: string, bareId: string): Error {
   return new Error(
     `require('${id}'): Node built-in '${bareId}' is not available in the browser environment.${UNAVAILABLE_BUILTIN_HINTS[bareId] || ''}`
   );
-}
-
-function resolvePathRequire(id: string, requireCache: Record<string, unknown>): unknown {
-  if ('path' in requireCache) return requireCache['path'];
-  if (id in requireCache) return requireCache[id];
-  throw new Error(
-    `require('${id}'): path module not pre-loaded. Add require('path') as a static import.`
-  );
-}
-
-/** Synchronous `require(id)` resolving from the pre-loaded cache + built-ins. */
-function createRequireShim(
-  requireCache: Record<string, unknown>,
-  fsBridge: unknown,
-  processShim: unknown,
-  sliccyModules: Record<string, unknown>
-): (id: string) => unknown {
-  return (id: string): unknown => {
-    if (typeof id === 'string' && id.startsWith(SLICCY_SCHEME)) {
-      return resolveSliccyModule(id, sliccyModules);
-    }
-    const bareId = id.startsWith('node:') ? id.slice(5) : id;
-    if (bareId === 'fs') return fsBridge;
-    if (bareId === 'process') return processShim;
-    if (bareId === 'buffer') return { Buffer: (globalThis as Record<string, unknown>).Buffer };
-    if (bareId === 'path') return resolvePathRequire(id, requireCache);
-    if (NODE_NATIVE_PACKAGES.has(bareId)) throw nativePackageError(id, bareId);
-    if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) throw unavailableBuiltinError(id, bareId);
-    if (id in requireCache) return requireCache[id];
-    if (bareId in requireCache) return requireCache[bareId];
-    throw new Error(
-      `require('${id}'): module not pre-loaded. Use a string literal so it can be pre-fetched, or use \`await import('${esmShUrl(id).toString()}')\` directly.`
-    );
-  };
 }
 
 /**
@@ -575,10 +641,6 @@ function serializeRequestInit(
     body = typeof init.body === 'string' ? init.body : String(init.body);
   }
   return { method, headers, body };
-}
-
-async function defaultLoadModule(id: string): Promise<Record<string, unknown>> {
-  return (await import(/* @vite-ignore */ esmShUrl(id).toString())) as Record<string, unknown>;
 }
 
 // ---------------------------------------------------------------------------
