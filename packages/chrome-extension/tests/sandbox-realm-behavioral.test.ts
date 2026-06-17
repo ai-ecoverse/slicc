@@ -23,6 +23,9 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runInThisContext } from 'node:vm';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { normalizePath, splitPath } from '../../webapp/src/fs/path-utils.js';
+import { buildModuleGraph } from '../../webapp/src/shell/ipk/module-loader.js';
+import type { ModuleReader } from '../../webapp/src/shell/ipk/resolver.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..', '..', '..');
@@ -146,6 +149,91 @@ interface HostHandlers {
   exec?: (cmd: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
   hangPaths?: Set<string>;
   fsDelayMs?: number;
+  /**
+   * In-memory `{ path: contents }` node_modules tree backing the `module`
+   * channel. When set, the host answers `module`/buildGraph with the REAL
+   * host-side `buildModuleGraph` over a reader on this map — the same loader
+   * `realm-host.ts` runs in production — so the iframe-float evaluator is
+   * exercised against a faithful graph.
+   */
+  files?: Record<string, string>;
+}
+
+/** Build a ModuleReader over a flat `{ path: contents }` map (mirrors module-resolve.test.ts). */
+function makeModuleReader(files: Record<string, string>): ModuleReader {
+  const norm: Record<string, string> = {};
+  const dirs = new Set<string>(['/']);
+  for (const [key, value] of Object.entries(files)) {
+    const p = normalizePath(key);
+    norm[p] = value;
+    let dir = splitPath(p).dir;
+    while (dir && dir !== '/') {
+      dirs.add(dir);
+      dir = splitPath(dir).dir;
+    }
+  }
+  const fileSet = new Set(Object.keys(norm));
+  return {
+    exists: async (path) => {
+      const p = normalizePath(path);
+      return fileSet.has(p) || dirs.has(p);
+    },
+    isDirectory: async (path) => dirs.has(normalizePath(path)),
+    readFile: async (path) => {
+      const v = norm[normalizePath(path)];
+      if (v === undefined) throw new Error(`ENOENT: ${path}`);
+      return v;
+    },
+  };
+}
+
+/**
+ * Mirror `realm-host.ts dispatchModule`: resolve each entry specifier in
+ * isolation so one broken/uninstalled entry surfaces as `errors[specifier]`
+ * without sinking the others, then merge the per-entry graphs.
+ */
+async function buildGraphForHost(
+  reader: ModuleReader,
+  entrySpecifiers: string[],
+  fromDir: string
+): Promise<{
+  files: Array<{ path: string; cjsSource: string; kind: string }>;
+  entryMap: Record<string, string>;
+  edges: Record<string, Record<string, string>>;
+  errors: Record<string, string>;
+}> {
+  const filesByPath = new Map<string, { path: string; cjsSource: string; kind: string }>();
+  const order: string[] = [];
+  const entryMap: Record<string, string> = {};
+  const edges: Record<string, Record<string, string>> = {};
+  const errors: Record<string, string> = {};
+  for (const specifier of entrySpecifiers) {
+    try {
+      const graph = await buildModuleGraph({ entrySpecifiers: [specifier], fromDir, reader });
+      for (const file of graph.files) {
+        if (!filesByPath.has(file.path)) {
+          filesByPath.set(file.path, {
+            path: file.path,
+            cjsSource: file.cjsSource,
+            kind: file.kind,
+          });
+          order.push(file.path);
+        }
+      }
+      Object.assign(entryMap, graph.entryMap);
+      for (const [path, fileEdges] of Object.entries(graph.edges)) {
+        edges[path] = { ...(edges[path] ?? {}), ...fileEdges };
+      }
+    } catch (err) {
+      errors[specifier] = err instanceof Error ? err.message : String(err);
+    }
+  }
+  return {
+    files: order.map((p) => filesByPath.get(p)!),
+    entryMap,
+    edges,
+    errors,
+  };
 }
 
 interface RunOpts {
@@ -189,6 +277,11 @@ async function runInIframeFloat(code: string, opts: RunOpts = {}): Promise<Realm
         result = host.exec
           ? await host.exec(cmd)
           : { stdout: `ran:${cmd}\n`, stderr: '', exitCode: 0 };
+      } else if (req.channel === 'module' && req.op === 'buildGraph') {
+        const entrySpecifiers = (req.args?.[0] as string[]) ?? [];
+        const fromDir = (req.args?.[1] as string) ?? '/workspace';
+        const reader = makeModuleReader(host.files ?? {});
+        result = await buildGraphForHost(reader, entrySpecifiers, fromDir);
       } else {
         hostPort.postMessage({
           type: 'realm-rpc-res',
@@ -441,6 +534,154 @@ describe('sandbox.html iframe float — behavioral harness (VAL-GLOBALS-015 + FI
     expect(done.exitCode).toBe(0);
     expect(done.stdout).not.toContain('then:');
     expect(elapsed).toBeLessThan(400);
+  });
+});
+
+describe('sandbox.html iframe float — CJS require error/edge parity (VAL-REQUIRE-012/014/015)', () => {
+  it('VAL-REQUIRE-012: require("sharp") hard-fails with the native-module error (no CDN/node_modules path)', async () => {
+    const code = "require('sharp');";
+    const start = Date.now();
+    const done = await runInIframeFloat(code);
+    const elapsed = Date.now() - start;
+    expect(done.exitCode).toBe(1);
+    expect(done.stderr).toContain('native module');
+    expect(done.stderr).toContain('C++ bindings');
+    expect(done.stderr).toContain("require('sharp')");
+    // Distinct from the "Cannot find module" install hint; no CDN wording.
+    expect(done.stderr).not.toContain('Cannot find module');
+    expect(done.stderr).not.toContain('ipk install');
+    expect(done.stderr).not.toContain('esm.sh');
+    expect(done.stderr).not.toContain('jsdelivr');
+    expect(elapsed).toBeLessThan(3000);
+  });
+
+  it('VAL-REQUIRE-012: the native hard-fail wins even with a node_modules folder present', async () => {
+    const code = "const s = require('sqlite3'); console.log(s.real);";
+    const done = await runInIframeFloat(code, {
+      host: {
+        files: {
+          '/workspace/node_modules/sqlite3/package.json': JSON.stringify({
+            name: 'sqlite3',
+            version: '5.0.0',
+            main: 'index.js',
+          }),
+          '/workspace/node_modules/sqlite3/index.js':
+            "module.exports = { real: 'should-not-load' };",
+        },
+      },
+    });
+    expect(done.exitCode).toBe(1);
+    expect(done.stderr).toContain('native module');
+    expect(done.stdout).not.toContain('should-not-load');
+  });
+
+  it('VAL-REQUIRE-014: a package whose main points at a nonexistent file errors clearly and terminates', async () => {
+    const code = "require('brokenmain');";
+    const start = Date.now();
+    const done = await runInIframeFloat(code, {
+      host: {
+        files: {
+          '/workspace/node_modules/brokenmain/package.json': JSON.stringify({
+            name: 'brokenmain',
+            version: '1.0.0',
+            main: './nope.js',
+          }),
+        },
+      },
+    });
+    const elapsed = Date.now() - start;
+    expect(done.exitCode).toBe(1);
+    expect(done.stderr).toMatch(/missing/);
+    expect(done.stderr).toContain('nope.js');
+    expect(elapsed).toBeLessThan(3000);
+  });
+
+  it('VAL-REQUIRE-014: a malformed package.json errors clearly and terminates', async () => {
+    const code = "require('badmeta');";
+    const start = Date.now();
+    const done = await runInIframeFloat(code, {
+      host: {
+        files: {
+          '/workspace/node_modules/badmeta/package.json': '{ "name": "badmeta", not valid json',
+          '/workspace/node_modules/badmeta/index.js': 'module.exports = 1;',
+        },
+      },
+    });
+    const elapsed = Date.now() - start;
+    expect(done.exitCode).toBe(1);
+    expect(done.stderr).toContain('Invalid package.json');
+    expect(done.stderr).toContain('badmeta');
+    expect(elapsed).toBeLessThan(3000);
+  });
+
+  it('VAL-REQUIRE-015: a relative a.js <-> b.js cycle resolves with partial exports and no hang', async () => {
+    const code = `const a = require('./a.js');
+      const b = require('./b.js');
+      console.log(a.name, a.done, a.bValue);
+      console.log(b.aNameWhenLoaded, String(b.aDoneWhenLoaded), b.value);`;
+    const start = Date.now();
+    const done = await runInIframeFloat(code, {
+      host: {
+        files: {
+          '/workspace/a.js': `
+            exports.name = 'a';
+            const b = require('./b.js');
+            exports.bValue = b.value;
+            module.exports.done = true;
+          `,
+          '/workspace/b.js': `
+            const a = require('./a.js');
+            exports.aNameWhenLoaded = a.name;
+            exports.aDoneWhenLoaded = a.done;
+            exports.value = 'b-value';
+          `,
+        },
+      },
+    });
+    const elapsed = Date.now() - start;
+    expect(done.exitCode).toBe(0);
+    expect(done.stderr).not.toContain('Cannot find module');
+    const lines = done.stdout.split('\n').filter(Boolean);
+    expect(lines[0]).toBe('a true b-value');
+    expect(lines[1]).toBe('a undefined b-value');
+    expect(elapsed).toBeLessThan(3000);
+  });
+
+  it('VAL-REQUIRE-015: a package-level cycle (pkg-a <-> pkg-b) terminates', async () => {
+    const code = `const a = require('pkg-a');
+      const b = require('pkg-b');
+      console.log(a.tag, a.bTag, b.tag, b.aTagWhenLoaded);`;
+    const start = Date.now();
+    const done = await runInIframeFloat(code, {
+      host: {
+        files: {
+          '/workspace/node_modules/pkg-a/package.json': JSON.stringify({
+            name: 'pkg-a',
+            version: '1.0.0',
+            main: 'index.js',
+          }),
+          '/workspace/node_modules/pkg-a/index.js': `
+            exports.tag = 'a';
+            const b = require('pkg-b');
+            exports.bTag = b.tag;
+          `,
+          '/workspace/node_modules/pkg-b/package.json': JSON.stringify({
+            name: 'pkg-b',
+            version: '1.0.0',
+            main: 'index.js',
+          }),
+          '/workspace/node_modules/pkg-b/index.js': `
+            const a = require('pkg-a');
+            exports.tag = 'b';
+            exports.aTagWhenLoaded = a.tag;
+          `,
+        },
+      },
+    });
+    const elapsed = Date.now() - start;
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout.trim()).toBe('a b b a');
+    expect(elapsed).toBeLessThan(3000);
   });
 });
 
