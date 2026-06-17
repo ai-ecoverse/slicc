@@ -30,6 +30,7 @@ import type { RealmInitMsg } from '../../webapp/src/kernel/realm/realm-types.js'
 import {
   buildRealmModuleGraph,
   type EntryTranspile,
+  type ModuleTranspile,
   type RealmGraphResult,
 } from '../../webapp/src/shell/ipk/module-loader.js';
 import type { ModuleReader } from '../../webapp/src/shell/ipk/resolver.js';
@@ -172,6 +173,13 @@ interface HostHandlers {
    * (the same transform `realm-host.ts` performs) without loading esbuild.
    */
   transpileEntry?: EntryTranspile;
+  /**
+   * Optional ESM-module transpile hook. Like `transpileEntry`, the default
+   * omits the esbuild-backed `createEsmTranspile` (jsdom-hostile); ESM parity
+   * cases inject a TypeScript-only ESM->CJS transform so an installed ESM
+   * package's source is lowered to the same uniform CJS the realm evaluates.
+   */
+  transpileModule?: ModuleTranspile;
 }
 
 /** Build a ModuleReader over a flat `{ path: contents }` map (mirrors module-resolve.test.ts). */
@@ -209,20 +217,29 @@ function makeModuleReader(files: Record<string, string>): ModuleReader {
  * so one broken/uninstalled entry surfaces as `errors[specifier]` without
  * sinking the others, then returns the ordered graph.
  *
- * The transpile hooks (`createEsmTranspile` / `createEntryTranspile`) are
- * intentionally omitted: they pull in `esbuild-wasm`, whose load-time
- * `TextEncoder` invariant fails under this suite's jsdom environment. The
- * behavioral cases here only exercise CJS require/sliccy/globals; ESM transpile
- * parity is covered by the node-environment realm suites in webapp.
+ * The default esbuild-backed hooks (`createEsmTranspile` / `createEntryTranspile`)
+ * are intentionally omitted: they pull in `esbuild-wasm`, whose load-time
+ * `TextEncoder` invariant fails under this suite's jsdom environment. CJS-only
+ * cases need no transpile; ESM parity cases inject TypeScript-only
+ * `transpileEntry`/`transpileModule` hooks instead (the same lowering the
+ * esbuild hooks fall back to).
  */
 async function buildGraphForHost(
   reader: ModuleReader,
   entryCode: string,
   fromDir: string,
   entryFilename: string,
-  transpileEntry?: EntryTranspile
+  transpileEntry?: EntryTranspile,
+  transpileModule?: ModuleTranspile
 ): Promise<RealmGraphResult> {
-  return buildRealmModuleGraph({ entryCode, fromDir, entryFilename, reader, transpileEntry });
+  return buildRealmModuleGraph({
+    entryCode,
+    fromDir,
+    entryFilename,
+    reader,
+    transpileEntry,
+    transpile: transpileModule,
+  });
 }
 
 interface RunOpts {
@@ -279,7 +296,8 @@ function attachFakeRpcHost(hostPort: MessagePort, host: HostHandlers): Promise<R
           entryCode,
           fromDir,
           entryFilename,
-          host.transpileEntry
+          host.transpileEntry,
+          host.transpileModule
         );
       } else {
         hostPort.postMessage({
@@ -1012,5 +1030,174 @@ describe('VAL-GLOBALS-016: ESM sliccy: import + unknown-name error — dual-floa
     expect(iframe.stdout).toBe(worker.stdout);
     expect(iframe.stderr).toBe(worker.stderr);
     expect(iframe.exitCode).toBe(worker.exitCode);
+  });
+});
+
+describe('VAL-ESM-015: dual-float ESM parity + CSP-safe execution (no native import())', () => {
+  // VAL-ESM-015 asks that the default import, named import, dynamic import,
+  // CJS<->ESM interop, and `sliccy:` import each produce byte-identical output
+  // in the extension `sandbox.html` float and the CLI worker float, and that in
+  // the extension float ESM runs under the sandbox CSP with NO native `import()`
+  // (served by the host transpile + uniform CJS graph). The host transpile is
+  // float-agnostic (it runs in `realm-host.ts`, identical for both floats);
+  // here we drive the iframe-float evaluator (`bootstrapRealmPort`) and the CLI
+  // worker-float engine (`runJsRealm`) against a byte-identical host that
+  // transpiles the SAME ESM source for both, and assert identical output.
+  //
+  // esbuild can't load under jsdom (its `TextEncoder` init invariant fails), so
+  // — exactly as VAL-GLOBALS-016 does for the entry — we inject TypeScript-only
+  // module + entry transpiles (the same lowering `createEsmTranspile` /
+  // `createEntryTranspile` fall back to). The real esbuild transpile correctness
+  // is the node-env webapp ESM suites' job; here we prove EVALUATOR parity.
+  // Real-browser extension e2e remains BLOCKED by design.
+  const tsModuleTranspile: ModuleTranspile = async ({ source, path, kind }) => {
+    if (kind !== 'esm') return source;
+    const out = ts.transpileModule(source, {
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        target: ts.ScriptTarget.ES2020,
+        esModuleInterop: true,
+      },
+      fileName: `${path.replace(/\.[^./]+$/, '')}.ts`,
+    });
+    return out.outputText;
+  };
+  const tsEntryTranspile: EntryTranspile = async ({ source, filename }) => {
+    const out = ts.transpileModule(source, {
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        target: ts.ScriptTarget.ES2020,
+        esModuleInterop: true,
+      },
+      fileName: `${(filename || '[eval]').replace(/\.[^./]+$/, '')}.ts`,
+    });
+    return out.outputText;
+  };
+
+  const ESM_FILES: Record<string, string> = {
+    '/workspace/node_modules/esm-pkg/package.json': JSON.stringify({
+      name: 'esm-pkg',
+      version: '1.0.0',
+      type: 'module',
+      main: 'index.js',
+    }),
+    '/workspace/node_modules/esm-pkg/index.js': [
+      "export const named = () => 'named-ok';",
+      "export default function def() { return 'default-ok'; }",
+    ].join('\n'),
+    '/workspace/node_modules/cjs-pkg/package.json': JSON.stringify({
+      name: 'cjs-pkg',
+      version: '1.0.0',
+      main: 'index.js',
+    }),
+    '/workspace/node_modules/cjs-pkg/index.js': "module.exports = { merge: () => 'merged' };",
+  };
+  const esmHost = {
+    files: ESM_FILES,
+    transpileModule: tsModuleTranspile,
+    transpileEntry: tsEntryTranspile,
+    exec: async (cmd: string) => ({
+      stdout: `${cmd.replace(/^echo\s+/, '')}\n`,
+      stderr: '',
+      exitCode: 0,
+    }),
+  };
+
+  /** Assert both floats produced identical output and neither hit a CDN. */
+  function expectFloatParity(iframe: RealmDone, worker: RealmDone, expectedStdout: string): void {
+    expect(worker.exitCode).toBe(0);
+    expect(iframe.exitCode).toBe(0);
+    expect(worker.stdout.trim()).toBe(expectedStdout);
+    expect(iframe.stdout).toBe(worker.stdout);
+    expect(iframe.stderr).toBe(worker.stderr);
+    expect(iframe.exitCode).toBe(worker.exitCode);
+    for (const r of [iframe, worker]) {
+      expect(r.stdout).not.toContain('esm.sh');
+      expect(r.stdout).not.toContain('jsdelivr');
+      expect(r.stderr).not.toContain('esm.sh');
+      expect(r.stderr).not.toContain('jsdelivr');
+    }
+  }
+
+  it('default import of an ESM package is byte-identical across floats', async () => {
+    const code = "import def from 'esm-pkg';\nconsole.log(def());";
+    const { iframe, worker } = await runBothFloats(code, { host: esmHost });
+    expectFloatParity(iframe, worker, 'default-ok');
+  });
+
+  it('named import of an ESM package is byte-identical across floats', async () => {
+    const code = "import { named } from 'esm-pkg';\nconsole.log(named());";
+    const { iframe, worker } = await runBothFloats(code, { host: esmHost });
+    expectFloatParity(iframe, worker, 'named-ok');
+  });
+
+  it('dynamic import of an ESM package is byte-identical across floats', async () => {
+    const code = "import('esm-pkg').then(m => console.log(typeof m.default, m.named()));";
+    const { iframe, worker } = await runBothFloats(code, { host: esmHost });
+    expectFloatParity(iframe, worker, 'function named-ok');
+  });
+
+  it('CJS require() of an ESM package (interop namespace) is byte-identical across floats', async () => {
+    const code =
+      "const m = require('esm-pkg'); console.log(m.__esModule === true, typeof m.default, m.default(), m.named());";
+    const { iframe, worker } = await runBothFloats(code, { host: esmHost });
+    expectFloatParity(iframe, worker, 'true function default-ok named-ok');
+  });
+
+  it('ESM import of a CJS package (default-interop) is byte-identical across floats', async () => {
+    const code = "import _ from 'cjs-pkg';\nconsole.log(_.merge());";
+    const { iframe, worker } = await runBothFloats(code, { host: esmHost });
+    expectFloatParity(iframe, worker, 'merged');
+  });
+
+  it('`sliccy:` ESM import is byte-identical across floats', async () => {
+    const code = [
+      "import { exec } from 'sliccy:exec';",
+      "const r = await exec('echo esm15-sliccy');",
+      'console.log(r.stdout.trim());',
+    ].join('\n');
+    const { iframe, worker } = await runBothFloats(code, { host: esmHost });
+    expectFloatParity(iframe, worker, 'esm15-sliccy');
+  });
+});
+
+describe('VAL-ESM-015: sandbox.html executes ESM CSP-safely (no native import() of remote code)', () => {
+  // The CSP-safety guarantee is structural: the extension `sandbox.html` realm
+  // must NEVER call a native dynamic `import()` (the manifest sandbox CSP allows
+  // `Function`/`eval` but not a cross-origin `import()` of remote code). ESM is
+  // served entirely by the host transpile -> uniform CJS graph, evaluated with
+  // `new Function`/`AsyncFunction`. Guard against a regression reintroducing a
+  // native `import()` or a CDN module URL into the inline realm script.
+  it('the inline realm script contains no native dynamic import()', () => {
+    // Strip string/template literals and comments so an `import(` inside an
+    // explanatory comment or a logged string cannot mask a real call site.
+    const stripped = INLINE_SCRIPT.replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/[^\n]*/g, '')
+      .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+      .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+      .replace(/`(?:[^`\\]|\\.)*`/g, '``');
+    expect(stripped).not.toMatch(/\bimport\s*\(/);
+  });
+
+  it('the inline realm script makes no executable CDN module fetch', () => {
+    // CDN host names still appear in explanatory comments (the rewire removed
+    // the executable path, not the prose). Strip comments + string/template
+    // literals so only a live reference to a CDN module URL would match.
+    const stripped = INLINE_SCRIPT.replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/[^\n]*/g, '')
+      .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+      .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+      .replace(/`(?:[^`\\]|\\.)*`/g, '``');
+    expect(stripped).not.toMatch(/esm\.sh/);
+    expect(stripped).not.toMatch(/jsdelivr/);
+    expect(stripped).not.toMatch(/unpkg/);
+  });
+
+  it('the inline realm script evaluates module sources via Function (the CSP-safe seam)', () => {
+    // The CJS factory + entry wrapper are built with `new Function` /
+    // `AsyncFunction`, which the sandbox CSP permits — this is the seam that
+    // replaces a native `import()` of remote code.
+    expect(INLINE_SCRIPT).toMatch(/new Function\(/);
+    expect(INLINE_SCRIPT).toMatch(/AsyncFunction/);
   });
 });
