@@ -365,6 +365,62 @@ const chalkPkg: SyntheticPackage = {
   },
 };
 
+/**
+ * Faithful uuid@9-shaped fixture modeling the real wrapper->Babel-CJS
+ * indirection that the synthetic `uuidPkg` above did NOT capture: the
+ * `node.import` entry is `wrapper.mjs` doing `import uuid from './dist/index.js'`,
+ * and `dist/index.js` is a Babel-compiled CJS module that sets `__esModule:true`
+ * via `Object.defineProperty` and exposes named getters (v1/v4) but has NO own
+ * `default` property. Real Node binds `import def from 'cjs'` to the WHOLE
+ * `module.exports` regardless of `__esModule`; the realm require shim must
+ * synthesize that default so `uuid.v4` is callable.
+ */
+const realUuidV4Body = [
+  'function v4() {',
+  '  const hex = "0123456789abcdef";',
+  '  const pattern = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx";',
+  '  let out = "";',
+  '  for (const ch of pattern) {',
+  '    out += ch === "-" ? "-" : hex[Math.floor(Math.random() * 16)];',
+  '  }',
+  '  return out;',
+  '}',
+].join('\n');
+const realUuidPkg: SyntheticPackage = {
+  name: 'uuid',
+  version: '9.0.1',
+  files: {
+    'package.json': JSON.stringify({
+      name: 'uuid',
+      version: '9.0.1',
+      exports: {
+        '.': { node: { import: './wrapper.mjs', require: './dist/index.js' } },
+      },
+    }),
+    'wrapper.mjs': [
+      "import uuid from './dist/index.js';",
+      'export const v1 = uuid.v1;',
+      'export const v4 = uuid.v4;',
+      'export default uuid;',
+    ].join('\n'),
+    'dist/index.js': [
+      '"use strict";',
+      'Object.defineProperty(exports, "__esModule", { value: true });',
+      'Object.defineProperty(exports, "v1", { enumerable: true, get: function () { return v1; } });',
+      'Object.defineProperty(exports, "v4", { enumerable: true, get: function () { return v4; } });',
+      'function v1() {',
+      '  const hex = "0123456789abcdef";',
+      '  let out = "";',
+      '  for (let i = 0; i < 36; i++) {',
+      '    out += i === 8 || i === 13 || i === 18 || i === 23 ? "-" : hex[Math.floor(Math.random() * 16)];',
+      '  }',
+      '  return out;',
+      '}',
+      realUuidV4Body,
+    ].join('\n'),
+  },
+};
+
 describe('Real-path ESM e2e: ipk install → import over the production realm seam', () => {
   beforeEach(() => {
     sharedRegistry.current = { packuments: {}, tarballs: {} };
@@ -563,6 +619,54 @@ describe('Real-path ESM e2e: ipk install → import over the production realm se
     expect(imp.stderr).not.toContain('not available in the browser');
     expect(imp.exitCode).toBe(0);
     expect(imp.stdout.trim()).toBe('true');
+    await fs.dispose();
+  });
+
+  it('VAL-ESM-002 (real uuid@9 wrapper->Babel-CJS): named, default, dynamic import, and require all resolve', async () => {
+    sharedRegistry.current = buildRegistry([realUuidPkg]);
+    const { shell, fs } = await newShell();
+    expect((await shell.executeCommand('ipk install uuid')).exitCode).toBe(0);
+
+    const uuidRe = '/^[0-9a-f-]{36}$/';
+
+    // Named import via wrapper.mjs (node.import) -> uuid.v4 binding works only
+    // when the realm synthesizes the missing `default` on the Babel-CJS module.
+    await fs.writeFile(
+      '/work/named.jsh',
+      `import { v4 } from 'uuid';\nconsole.log(${uuidRe}.test(v4()));`
+    );
+    const named = await shell.executeCommand('node named.jsh');
+    expect(named.stderr).not.toContain('Cannot find module');
+    expect(named.stderr).not.toContain('Cannot read properties of undefined');
+    expect(named.exitCode).toBe(0);
+    expect(named.stdout.trim()).toBe('true');
+
+    // Default import -> the whole module.exports (def.v4 callable).
+    await fs.writeFile(
+      '/work/def.jsh',
+      `import def from 'uuid';\nconsole.log(${uuidRe}.test(def.v4()));`
+    );
+    const def = await shell.executeCommand('node def.jsh');
+    expect(def.stderr).not.toContain('Cannot read properties of undefined');
+    expect(def.exitCode).toBe(0);
+    expect(def.stdout.trim()).toBe('true');
+
+    // Dynamic import -> namespace exposes both named and default bindings.
+    await fs.writeFile(
+      '/work/dyn.js',
+      `import('uuid').then(m => console.log(${uuidRe}.test(m.v4()), ${uuidRe}.test(m.default.v4())));`
+    );
+    const dyn = await shell.executeCommand('node dyn.js');
+    expect(dyn.stderr).not.toContain('Cannot read properties of undefined');
+    expect(dyn.exitCode).toBe(0);
+    expect(dyn.stdout.trim()).toBe('true true');
+
+    // require -> the `require` condition (dist/index.js) -> v4 callable.
+    await fs.writeFile('/work/req.js', `console.log(${uuidRe}.test(require('uuid').v4()));`);
+    const req = await shell.executeCommand('node req.js');
+    expect(req.stderr).not.toContain('Cannot find module');
+    expect(req.exitCode).toBe(0);
+    expect(req.stdout.trim()).toBe('true');
     await fs.dispose();
   });
 });

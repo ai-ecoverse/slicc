@@ -424,6 +424,34 @@ async function loadModuleGraph(
 }
 
 /**
+ * Node-faithful CJS default interop: `import def from 'cjs'` binds `def` to the
+ * whole `module.exports` REGARDLESS of `__esModule`. Both transpilers honor a
+ * Babel-style `__esModule` shim and read a real own `.default` (esbuild's
+ * `__toESM` does not synthesize one when `__esModule` is truthy; TS's
+ * `__importDefault` returns the module as-is), so a transpiled-CJS module that
+ * sets `__esModule:true` but exposes no own `default` (e.g. uuid@9's
+ * Babel-compiled `dist/index.js`) would bind `default` to `undefined`. Attach a
+ * non-enumerable, configurable, self-referential `default` so esbuild's
+ * `__copyProps` (own prop NAMES, incl. non-enumerable) and TS's `__importDefault`
+ * both resolve `default` to the whole module. Non-enumerable keeps it invisible
+ * to `Object.keys`/`JSON.stringify`; the extensibility guard + try/catch keep a
+ * frozen/sealed exports object from throwing. Mirrored in
+ * `packages/chrome-extension/sandbox.html`.
+ */
+function synthesizeEsModuleDefault(exp: unknown): void {
+  if (exp === null || typeof exp !== 'object') return;
+  const obj = exp as Record<string, unknown>;
+  if (!obj.__esModule) return;
+  if (Object.prototype.hasOwnProperty.call(obj, 'default')) return;
+  if (!Object.isExtensible(obj)) return;
+  try {
+    Object.defineProperty(obj, 'default', { value: obj, enumerable: false, configurable: true });
+  } catch {
+    // Frozen/sealed exports: leave as-is (defineProperty would throw).
+  }
+}
+
+/**
  * Construct the realm's synchronous CJS module system over a preloaded graph.
  * `require` follows the host-resolved `edges`, lazily evaluating each module
  * once and caching `module.exports` so repeated requires return one shared
@@ -501,6 +529,7 @@ function createModuleSystem(opts: {
       (globalThis as Record<string, unknown>).Buffer,
       globalThis
     );
+    synthesizeEsModuleDefault(moduleObj.exports);
     return moduleObj.exports;
   }
 
