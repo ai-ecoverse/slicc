@@ -483,28 +483,36 @@ describe('tool presentation', () => {
   it('labels clusters via quickLabel from inputs alone — results not required', async () => {
     // Calls WITHOUT results (replays with dropped tool results, running
     // chains) must still get their purpose phrase, not the generic fallback.
+    // Unique tool-call ids per test run so the module-level signature cache
+    // doesn't collide with sibling tests in the suite.
+    const stamp = Date.now();
     const calls = [1, 2, 3].map((i) => ({
-      id: `t${i}`,
+      id: `tlabel-${stamp}-${i}`,
       name: 'bash',
       input: { command: `step ${i}` },
     }));
-    const [, cluster] = messageEls({
-      id: `m-label-${Date.now()}`,
-      role: 'assistant',
-      content: 'working',
-      timestamp: 1,
-      toolCalls: calls,
-    });
-    document.body.append(cluster);
+    const children = buildThreadChildren([
+      {
+        id: `m-label-${stamp}`,
+        role: 'assistant',
+        content: 'working',
+        timestamp: 1,
+        toolCalls: calls,
+      },
+    ]);
+    const cluster = children.find((c) => c.tagName.toLowerCase() === 'slicc-tool-cluster');
+    expect(cluster).toBeTruthy();
+    document.body.append(cluster as HTMLElement);
     await vi.waitFor(() => {
-      expect(cluster.getAttribute('label')).toBe('Push the release to main');
+      expect((cluster as HTMLElement).getAttribute('label')).toBe('Push the release to main');
     });
-    cluster.remove();
+    (cluster as HTMLElement).remove();
   });
 
   it('clusters 3+ tool calls (open while streaming, collapsed when settled)', () => {
+    const stamp = Date.now();
     const calls = [1, 2, 3].map((i) => ({
-      id: `t${i}`,
+      id: `tcollapse-${stamp}-${i}`,
       name: 'bash',
       input: { command: `step ${i}` },
       result: 'ok',
@@ -516,20 +524,26 @@ describe('tool presentation', () => {
       timestamp: 1,
       toolCalls: calls,
     };
-    const [, cluster] = messageEls(settled);
-    expect(cluster.tagName.toLowerCase()).toBe('slicc-tool-cluster');
-    expect(cluster.getAttribute('count')).toBe('3');
-    expect(cluster.hasAttribute('open')).toBe(false);
-    expect(cluster.querySelectorAll('slicc-action-row')).toHaveLength(3);
+    // Per-message clustering moved to the cross-message reflow pass in
+    // `buildThreadChildren` (and the controller). `messageEls` now emits
+    // flat rows tagged with `data-msg-id`; the wrap happens when the
+    // assembled list runs through reflow.
+    const settledChildren = buildThreadChildren([settled]);
+    const cluster = settledChildren.find((c) => c.tagName.toLowerCase() === 'slicc-tool-cluster');
+    expect(cluster).toBeTruthy();
+    expect(cluster?.getAttribute('count')).toBe('3');
+    expect(cluster?.hasAttribute('open')).toBe(false);
+    expect(cluster?.querySelectorAll('slicc-action-row')).toHaveLength(3);
 
     const streaming = { ...settled, id: 'm-s', isStreaming: true };
-    const [, live] = messageEls(streaming);
-    expect(live.hasAttribute('open')).toBe(true);
+    const liveChildren = buildThreadChildren([streaming]);
+    const live = liveChildren.find((c) => c.tagName.toLowerCase() === 'slicc-tool-cluster');
+    expect(live?.hasAttribute('open')).toBe(true);
 
     // Two calls stay flat — no cluster wrapper.
     const flat: ChatMessage = { ...settled, id: 'm-f', toolCalls: calls.slice(0, 2) };
-    const els = messageEls(flat);
-    expect(els.map((e) => e.tagName.toLowerCase())).toEqual([
+    const flatEls = messageEls(flat);
+    expect(flatEls.map((e) => e.tagName.toLowerCase())).toEqual([
       'slicc-agent-message',
       'slicc-action-row',
       'slicc-action-row',

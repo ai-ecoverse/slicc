@@ -12,9 +12,15 @@ import {
   stripDictationMarkers,
 } from '../../speech/dictation-priming.js';
 import { trackChatSend } from '../telemetry.js';
-import type { AgentEvent, AgentHandle, ChatMessage } from '../types.js';
+import type { AgentEvent, AgentHandle, ChatMessage, ToolCall } from '../types.js';
 import { createCopyRow } from './wc-copy-row.js';
-import { collateLickMessages, daySeparatorEl, messageEls } from './wc-message-view.js';
+import {
+  collateLickMessages,
+  daySeparatorEl,
+  messageEls,
+  reflowToolClusters,
+  unwrapToolClusters,
+} from './wc-message-view.js';
 
 /**
  * View shape the controller hands the host for stack rendering. The full
@@ -127,6 +133,12 @@ export class WcChatController {
   #processing = false;
   /** Lazily-built copy affordance, re-appended after the last reply. */
   #copyRow: HTMLElement | null = null;
+  /** Anchor msgIds of tool-call clusters that were expanded immediately
+   *  before the most recent unwrap. Populated by `#unwrapToolClusters`
+   *  and consumed (then cleared) by `#reflowToolClusters`, so the
+   *  rebuilt cluster preserves the user's expanded state when a new
+   *  tool call streams into the chain. */
+  readonly #openClusterAnchors = new Set<string>();
 
   constructor(options: WcChatControllerOptions) {
     this.#thread = options.thread;
@@ -299,6 +311,7 @@ export class WcChatController {
     if (typeof thread.replaceContent === 'function') thread.replaceContent(...children);
     else thread.replaceChildren(...children);
 
+    this.#reflowToolClusters();
     for (const message of this.#messages) {
       if (!message.isStreaming) {
         this.#onMessageRendered?.(message, this.#els.get(message.id) ?? []);
@@ -710,10 +723,17 @@ export class WcChatController {
   }
 
   #appendMessage(message: ChatMessage): void {
+    // Per-message ops must operate on a clean inline layout — tool rows
+    // currently nested inside a cross-message cluster have to be
+    // returned home first so the new message and the unwrapped rows
+    // share the same parent (the thread inner). The next reflow pass
+    // rebuilds the cluster from the post-append DOM.
+    this.#unwrapToolClusters();
     this.#messages.push(message);
     const els = this.#safeMessageEls(message);
     this.#els.set(message.id, els);
     this.#thread.append(...els);
+    this.#reflowToolClusters();
     if (!message.isStreaming) this.#onMessageRendered?.(message, els);
     // The user's own submission always lands in view; agent-driven appends
     // defer to the thread's polite follow (new-messages chip when scrolled).
@@ -722,6 +742,12 @@ export class WcChatController {
   }
 
   #rerenderMessage(message: ChatMessage): void {
+    // Tool rows for sibling messages in the same chain may be sitting
+    // inside a cross-message cluster appended to a different message's
+    // slot. Unwrap first so each message owns its tool rows again
+    // before we swap THIS message's elements — otherwise the new
+    // inline rows would coexist with stale clustered copies.
+    this.#unwrapToolClusters();
     this.#onMessageDisposed?.(message.id);
     const old = this.#els.get(message.id) ?? [];
     const next = this.#safeMessageEls(message);
@@ -737,8 +763,40 @@ export class WcChatController {
       this.#thread.append(...next);
     }
     this.#els.set(message.id, next);
+    this.#reflowToolClusters();
     if (!message.isStreaming) this.#onMessageRendered?.(message, next);
     this.#followThread();
+  }
+
+  /** The thread's reading column (where children actually live). The
+   *  `<slicc-chat-thread>` component appends into its inner column;
+   *  bare hosts (tests) put children on the host element itself. */
+  #threadInner(): HTMLElement {
+    return (this.#thread as { inner?: HTMLElement }).inner ?? this.#thread;
+  }
+
+  /** Return every relocated tool row to its message's inline position
+   *  before any per-message op or full reflow. The shared anchor set
+   *  captures user-expanded state so the rebuilt cluster reopens. */
+  #unwrapToolClusters(): void {
+    unwrapToolClusters(this.#threadInner(), this.#openClusterAnchors);
+  }
+
+  /** Wrap consecutive ≥3-row runs across the thread inner into shared
+   *  `<slicc-tool-cluster>`s. The lookup resolves clustered rows back
+   *  to their owning `ToolCall` so labels are scheduled with input
+   *  data. Safe to call after every load / append / rerender — empty
+   *  threads and shorter runs are no-ops. */
+  #reflowToolClusters(): void {
+    reflowToolClusters(this.#threadInner(), {
+      openClusterAnchors: this.#openClusterAnchors,
+      toolCallLookup: (msgId, callId) => this.#lookupToolCall(msgId, callId),
+    });
+  }
+
+  #lookupToolCall(messageId: string, callId: string): ToolCall | undefined {
+    const message = this.#messages.find((m) => m.id === messageId);
+    return message?.toolCalls?.find((c) => c.id === callId);
   }
 
   #scrollToBottom(): void {
