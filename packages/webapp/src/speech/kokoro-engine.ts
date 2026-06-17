@@ -36,13 +36,33 @@ export interface KokoroVoiceInfo {
   gender?: string;
 }
 
+/** One synthesized PCM chunk — a sentence under `synthesizeStream`. */
+export interface KokoroAudioChunk {
+  audio: Float32Array;
+  sampleRate: number;
+}
+
 /** The loaded engine: text in, PCM out. */
 export interface KokoroTts {
-  /** Synthesize speech; resolves mono PCM + its sample rate. */
-  synthesize(
+  /**
+   * Synthesize speech in one shot; resolves mono PCM + its sample rate.
+   *
+   * NOTE: kokoro-js' `generate()` tokenizes the whole input with truncation
+   * and hard-clamps to ~510 tokens (kokoro's 512-token context). Anything
+   * longer is silently cut off — see #1038. Prefer `synthesizeStream()` for
+   * any reply that may exceed a few sentences.
+   */
+  synthesize(text: string, opts?: { voice?: string; speed?: number }): Promise<KokoroAudioChunk>;
+  /**
+   * Synthesize speech sentence-by-sentence via kokoro-js' `tts.stream()` —
+   * each sentence is tokenized + truncated INDIVIDUALLY, so a multi-paragraph
+   * reply yields multiple chunks instead of being clamped to ~510 tokens.
+   * Consumers play each chunk back-to-back for continuous audio (`speak.ts`).
+   */
+  synthesizeStream(
     text: string,
-    opts?: { voice?: string; speed?: number }
-  ): Promise<{ audio: Float32Array; sampleRate: number }>;
+    opts?: { voice?: string; speed?: number; splitPattern?: RegExp }
+  ): AsyncGenerator<KokoroAudioChunk, void, void>;
   /** The available voices. */
   voices(): KokoroVoiceInfo[];
 }
@@ -140,6 +160,19 @@ async function loadKokoro(onProgress?: WhisperProgress): Promise<KokoroTts> {
         ...(opts?.speed ? { speed: opts.speed } : {}),
       });
       return { audio: audio.audio as Float32Array, sampleRate: audio.sampling_rate };
+    },
+    async *synthesizeStream(text, opts) {
+      const streamOpts = {
+        ...(opts?.voice ? { voice: opts.voice as never } : {}),
+        ...(opts?.speed ? { speed: opts.speed } : {}),
+        ...(opts?.splitPattern ? { split_pattern: opts.splitPattern } : {}),
+      };
+      for await (const chunk of tts.stream(text, streamOpts)) {
+        yield {
+          audio: chunk.audio.audio as Float32Array,
+          sampleRate: chunk.audio.sampling_rate,
+        };
+      }
     },
     voices: () => voiceInfos,
   };

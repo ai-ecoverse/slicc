@@ -8,17 +8,47 @@ vi.mock('../../src/speech/kokoro-engine.js', () => ({
   kokoroIfReady: () => kokoroHolder.tts,
 }));
 
-const { pickSpeakEngine, speechTextFromMarkdown, speak, kokoroVoicesIfReady } = await import(
-  '../../src/speech/speak.js'
-);
+const { pickSpeakEngine, speechTextFromMarkdown, speak, kokoroVoicesIfReady, resetSpeakForTests } =
+  await import('../../src/speech/speak.js');
 
-function fakeKokoro(
-  synthesize?: ReturnType<typeof vi.fn>
-): KokoroTts & { synthesize: ReturnType<typeof vi.fn> } {
+type FakeKokoro = KokoroTts & {
+  synthesize: ReturnType<typeof vi.fn>;
+  synthesizeStream: ReturnType<typeof vi.fn>;
+};
+
+/** Build a fake kokoro engine; `streamChunks` is the sequence its stream
+ *  yields (one yield per chunk), or a thrown error. Default is one chunk. */
+function fakeKokoro(opts?: {
+  synthesize?: ReturnType<typeof vi.fn>;
+  streamChunks?: Array<{ audio: Float32Array; sampleRate: number }>;
+  streamError?: Error;
+  streamErrorAfter?: number;
+}): FakeKokoro {
+  const chunks = opts?.streamChunks ?? [
+    { audio: new Float32Array([0, 0.5, -0.5]), sampleRate: 24000 },
+  ];
+  // `vi.fn(async function* () {...})` does not preserve generator semantics
+  // — wrap a thunk that returns a fresh async iterator instead so the spy
+  // records each call and `for await` iterates as expected.
+  const makeIterator = async function* () {
+    let i = 0;
+    for (const c of chunks) {
+      if (opts?.streamError && i === (opts.streamErrorAfter ?? 0)) {
+        throw opts.streamError;
+      }
+      yield c;
+      i++;
+    }
+    if (opts?.streamError && (opts.streamErrorAfter ?? 0) >= chunks.length) {
+      throw opts.streamError;
+    }
+  };
+  const synthesizeStream = vi.fn(() => makeIterator());
   return {
     synthesize:
-      synthesize ??
+      opts?.synthesize ??
       vi.fn().mockResolvedValue({ audio: new Float32Array([0, 0.5, -0.5]), sampleRate: 24000 }),
+    synthesizeStream: synthesizeStream as never,
     voices: () => [
       { id: 'af_heart', name: 'Heart', lang: 'en-US' },
       { id: 'bm_george', name: 'George', lang: 'en-GB' },
@@ -74,6 +104,7 @@ function stubSpeechGlobals() {
 
 afterEach(() => {
   kokoroHolder.tts = null;
+  resetSpeakForTests();
   vi.unstubAllGlobals();
 });
 
@@ -124,11 +155,72 @@ describe('speechTextFromMarkdown', () => {
     expect(text).not.toContain('secret');
   });
 
-  it('caps runaway replies with an ellipsis on a word boundary', () => {
-    const text = speechTextFromMarkdown(`${'word '.repeat(600)}end`);
-    expect(text.length).toBeLessThanOrEqual(1501);
+  it('preserves long multi-paragraph replies (well past kokoro 510-token clamp)', () => {
+    // ~3.5K characters — old 1500-char cap would have truncated this; now
+    // streaming chunks the prose at the engine boundary so the reducer
+    // passes a multi-paragraph reply through untouched (#1038).
+    const long = `${'word '.repeat(700)}end`;
+    const text = speechTextFromMarkdown(long);
+    expect(text.endsWith('end')).toBe(true);
+    expect(text).not.toContain('…');
+    expect(text.length).toBeGreaterThan(3000);
+  });
+
+  it('caps truly runaway replies with an ellipsis on a word boundary', () => {
+    // The cap is now a generous upper bound (20K chars) — only pathological
+    // outputs trigger it. `word `.repeat(5000) → 25000 chars.
+    const text = speechTextFromMarkdown(`${'word '.repeat(5000)}end`);
+    expect(text.length).toBeLessThanOrEqual(20001);
     expect(text.endsWith('…')).toBe(true);
     expect(text).not.toMatch(/wor…$/);
+  });
+
+  it('linearizes rich formatting in long replies — every type spoken or stripped', () => {
+    const markdown = [
+      '# Plan',
+      '',
+      'I will ship the **hero** redesign with an _accessible_ palette,',
+      'documented in [the spec](https://x.test/spec) and tracked in `issue-42`.',
+      '',
+      '## Steps',
+      '',
+      '- Audit the existing tokens',
+      '- Generate a new ramp',
+      '- Roll out behind a flag',
+      '',
+      '> A measured rollout protects production.',
+      '',
+      '| Token | Before | After |',
+      '| --- | --- | --- |',
+      '| hero | red | warm |',
+      '| body | gray | sand |',
+      '',
+      '```ts',
+      'const SECRET = "do not read aloud";',
+      '```',
+      '',
+      'Wrapping up.',
+    ].join('\n');
+    const text = speechTextFromMarkdown(markdown);
+    expect(text).toContain('Plan');
+    expect(text).toContain('hero');
+    expect(text).toContain('accessible');
+    expect(text).toContain('the spec');
+    expect(text).toContain('issue-42');
+    expect(text).toContain('Audit the existing tokens');
+    expect(text).toContain('Roll out behind a flag');
+    expect(text).toContain('A measured rollout protects production.');
+    expect(text).toContain('Wrapping up.');
+    // Table cells linearize into prose; pipes survive (they aren't markdown
+    // tokens at the inline-grammar level the reducer normalizes).
+    expect(text).toContain('hero');
+    expect(text).toContain('warm');
+    // No raw fence content, no markdown structural tokens.
+    expect(text).not.toContain('SECRET');
+    expect(text).not.toContain('```');
+    expect(text).not.toContain('**');
+    expect(text).not.toMatch(/^#/m);
+    expect(text).not.toMatch(/^>/m);
   });
 
   it('returns empty for content with nothing speakable', () => {
@@ -169,18 +261,53 @@ describe('speak', () => {
 
     const result = await speak({ text: 'hello there', voice: 'af_heart', rate: 1.1 });
     expect(result.engine).toBe('kokoro');
-    expect(tts.synthesize).toHaveBeenCalledWith('hello there', { voice: 'af_heart', speed: 1.1 });
+    expect(tts.synthesizeStream).toHaveBeenCalledWith('hello there', {
+      voice: 'af_heart',
+      speed: 1.1,
+    });
     expect(started.length).toBe(1);
     expect(utterances.length).toBe(0);
   });
 
-  it('falls back to webspeech when kokoro synthesis fails', async () => {
+  it('plays every chunk of a multi-sentence kokoro stream in order (no truncation)', async () => {
+    const { utterances, started } = stubSpeechGlobals();
+    const chunks = [
+      { audio: new Float32Array([0.1]), sampleRate: 24000 },
+      { audio: new Float32Array([0.2]), sampleRate: 24000 },
+      { audio: new Float32Array([0.3]), sampleRate: 24000 },
+      { audio: new Float32Array([0.4]), sampleRate: 24000 },
+    ];
+    kokoroHolder.tts = fakeKokoro({ streamChunks: chunks });
+    const result = await speak({ text: 'first. second. third. fourth.' });
+    expect(result.engine).toBe('kokoro');
+    // Sequential playback — one start() per chunk, in order, NOT capped at one.
+    expect(started.length).toBe(chunks.length);
+    expect(utterances.length).toBe(0);
+  });
+
+  it('falls back to webspeech when kokoro synthesis fails before any chunk plays', async () => {
     const { utterances } = stubSpeechGlobals();
-    kokoroHolder.tts = fakeKokoro(vi.fn().mockRejectedValue(new Error('phonemizer exploded')));
+    kokoroHolder.tts = fakeKokoro({ streamError: new Error('phonemizer exploded') });
 
     const result = await speak({ text: 'resilient' });
     expect(result.engine).toBe('webspeech');
     expect(utterances[0]).toMatchObject({ text: 'resilient' });
+  });
+
+  it('mid-stream failure stops playback rather than re-speaking through webspeech', async () => {
+    const { utterances, started } = stubSpeechGlobals();
+    kokoroHolder.tts = fakeKokoro({
+      streamChunks: [
+        { audio: new Float32Array([0.1]), sampleRate: 24000 },
+        { audio: new Float32Array([0.2]), sampleRate: 24000 },
+      ],
+      streamError: new Error('chunk 2 exploded'),
+      streamErrorAfter: 1,
+    });
+    const result = await speak({ text: 'first. second.' });
+    expect(result.engine).toBe('kokoro');
+    expect(started.length).toBe(1); // only chunk 1 played
+    expect(utterances.length).toBe(0); // no webspeech replay
   });
 
   it('exposes kokoro voices only once the engine is warm', () => {
