@@ -428,12 +428,17 @@ function toolBody(call: ToolCall): HTMLElement | null {
   return body.childElementCount > 0 ? body : null;
 }
 
-function toolCallRow(call: ToolCall): HTMLElement {
+function toolCallRow(call: ToolCall, msgId?: string): HTMLElement {
   const row = el('slicc-action-row', {
     icon: toolIcon(call),
     label: toolTitle(call),
     result: call.isError ? 'error' : call.result !== undefined ? 'done' : '…',
   });
+  // Cross-message reflow uses `data-msg-id` to return relocated rows to
+  // their owning message before per-message rebuilds; `data-tool-id`
+  // anchors label scheduling and per-row lookups.
+  if (msgId) row.setAttribute('data-msg-id', msgId);
+  if (call.id) row.setAttribute('data-tool-id', call.id);
   const body = toolBody(call);
   if (body) row.append(body);
   return row;
@@ -475,14 +480,26 @@ function toUserAttachment(attachment: MessageAttachment): UserAttachment {
 }
 
 /** Three or more tool calls in a row collapse into one summary container. */
-const CLUSTER_MIN = 3;
+export const TOOL_CLUSTER_MIN = 3;
 
-/** Resolved cluster labels by signature; in-flight signatures are deduped. */
+/** Resolved cluster labels by sorted-tool-call-id signature. */
 const clusterLabels = new Map<string, string>();
 const clusterLabelInFlight = new Set<string>();
+/** Sticky label keyed by the cluster's anchor (first tool-call id).
+ *  The anchor stays stable as the cluster grows, so once an LLM label
+ *  has been shown we can re-paint it on every subsequent rebuild —
+ *  instead of flickering back to the generic fallback while the new
+ *  signature's label is being fetched. */
+const clusterLabelsByAnchor = new Map<string, string>();
 
-function clusterSignature(message: ChatMessage): string {
-  return `${message.id}:${(message.toolCalls ?? []).map((c) => c.name).join(',')}`;
+/** Stable cache key for a run of tool calls (sorted ids joined). */
+function clusterRunSignature(toolCalls: readonly ToolCall[]): string {
+  return toolCalls
+    .map((tc) => tc.id ?? '')
+    .filter(Boolean)
+    .slice()
+    .sort()
+    .join('|');
 }
 
 const CLUSTER_LABEL_SYSTEM =
@@ -504,17 +521,32 @@ function isUsefulClusterLabel(text: string): boolean {
 
 /**
  * Fire-and-forget LLM purpose label for a cluster (cached per signature).
- * Labels from the call INPUTS alone — main's approach — so a cluster whose
- * results never settled (replays with dropped tool results, long-running
- * chains) still gets its phrase instead of the generic fallback.
+ * Labels from the call INPUTS alone so a cluster whose results never
+ * settled (replays with dropped tool results, long-running chains) still
+ * gets its phrase. The signature is the sorted list of tool-call ids so
+ * the same run gets the same cache key across rebuilds.
  */
-function scheduleClusterLabel(message: ChatMessage, cluster: HTMLElement): void {
-  const signature = clusterSignature(message);
-  if (clusterLabels.has(signature) || clusterLabelInFlight.has(signature)) return;
-  const calls = message.toolCalls ?? [];
-  if (calls.length === 0) return;
+export function scheduleClusterLabel(toolCalls: readonly ToolCall[], cluster: HTMLElement): void {
+  if (toolCalls.length === 0) return;
+  const signature = clusterRunSignature(toolCalls);
+  if (!signature) return;
+  const cached = clusterLabels.get(signature);
+  if (cached) {
+    cluster.setAttribute('label', cached);
+    return;
+  }
+  // Sticky anchor: an earlier label for THIS chain's first call survives
+  // a re-signature (cluster grew by one tool call) so the visible label
+  // doesn't flicker back to the generic fallback while the new request
+  // is in flight.
+  const anchor = toolCalls[0]?.id;
+  if (anchor) {
+    const sticky = clusterLabelsByAnchor.get(anchor);
+    if (sticky) cluster.setAttribute('label', sticky);
+  }
+  if (clusterLabelInFlight.has(signature)) return;
   clusterLabelInFlight.add(signature);
-  const formatted = calls
+  const formatted = toolCalls
     .map((tc, i) => {
       let argsJson: string;
       try {
@@ -538,28 +570,224 @@ function scheduleClusterLabel(message: ChatMessage, cluster: HTMLElement): void 
       const trimmed = label?.replace(/^["']|["']$|\.$/g, '').trim() ?? '';
       if (!isUsefulClusterLabel(trimmed)) return;
       clusterLabels.set(signature, trimmed);
+      if (anchor) clusterLabelsByAnchor.set(anchor, trimmed);
       if (cluster.isConnected) cluster.setAttribute('label', trimmed);
     })
     .catch(() => undefined)
     .finally(() => clusterLabelInFlight.delete(signature));
 }
 
+/**
+ * Build a `<slicc-tool-cluster>` around an existing list of action rows
+ * (which are moved into the cluster's slotted body). Sets `count`,
+ * optionally opens, and schedules the LLM label when the run's tool
+ * calls are known.
+ */
+export function buildClusterFromElements(
+  rows: readonly HTMLElement[],
+  opts: { open?: boolean; toolCalls?: readonly ToolCall[] } = {}
+): HTMLElement {
+  const cluster = el('slicc-tool-cluster', { count: String(rows.length) });
+  if (opts.open) cluster.setAttribute('open', '');
+  cluster.append(...rows);
+  if (opts.toolCalls && opts.toolCalls.length > 0) {
+    scheduleClusterLabel(opts.toolCalls, cluster);
+  }
+  return cluster;
+}
+
 function assistantMessageEls(message: ChatMessage): HTMLElement[] {
   const bubble = document.createElement('slicc-agent-message');
+  bubble.setAttribute('data-msg-id', message.id);
   if (message.isStreaming) bubble.setAttribute('streaming', '');
   bubble.setBodyHtml(renderAssistantMessageContent(message.content, message.isStreaming === true));
-  const rows = (message.toolCalls ?? []).map(toolCallRow);
-  if (rows.length < CLUSTER_MIN) return [bubble, ...rows];
+  // Empty / whitespace-only bubbles (e.g. message_start with no content
+  // yet, or a tool-only continuation message) do not break a tool run
+  // during reflow. Mark them so the chain walk can ignore them cheaply.
+  if (!(message.content ?? '').trim()) bubble.setAttribute('data-empty', '');
+  // Flat emit: cross-message reflow (see `reflowToolClusters`) is the
+  // single clustering authority. Returning rows inline keeps the
+  // controller's `#els` invariant simple — every row stays a direct
+  // sibling of the thread inner until reflow wraps it into a cluster.
+  const rows = (message.toolCalls ?? []).map((call) => toolCallRow(call, message.id));
+  return [bubble, ...rows];
+}
 
-  // A run of 3+ tool calls collapses behind one summary row. While the turn
-  // is still streaming the cluster stays open so live progress is visible.
-  const cluster = el('slicc-tool-cluster', { count: String(rows.length) });
-  if (message.isStreaming) cluster.setAttribute('open', '');
-  const known = clusterLabels.get(clusterSignature(message));
-  if (known) cluster.setAttribute('label', known);
-  else scheduleClusterLabel(message, cluster);
-  cluster.append(...rows);
-  return [bubble, cluster];
+/**
+ * Return every row inside a `<slicc-tool-cluster>` to the cluster's
+ * position in the flow, then drop the empty wrappers. Captures the
+ * user-expanded state of each cluster (anchored at the first row's
+ * owning msg id) into `openClusterAnchors` so the next reflow pass can
+ * reopen the rebuilt cluster. Pure DOM mutation — no message-state
+ * lookups required so it works on any container.
+ */
+export function unwrapToolClusters(container: HTMLElement, openClusterAnchors: Set<string>): void {
+  const clusters = container.querySelectorAll<HTMLElement>(':scope > slicc-tool-cluster');
+  for (const cluster of clusters) {
+    const rows = cluster.querySelectorAll<HTMLElement>('slicc-action-row');
+    if (cluster.hasAttribute('open')) {
+      const anchorId = (rows[0] as HTMLElement | undefined)?.dataset.msgId;
+      // Single-message streaming clusters auto-open at reflow time; that
+      // open state is NOT user-driven, so we must not capture it as a
+      // sticky anchor — otherwise the cluster would stay open forever
+      // after the user collapsed it mid-stream.
+      const rowsArr = Array.from(rows);
+      const allSameMsg =
+        anchorId !== undefined &&
+        rowsArr.length > 0 &&
+        rowsArr.every((r) => r.dataset.msgId === anchorId);
+      const owningBubble =
+        anchorId && cluster.parentElement
+          ? cluster.parentElement.querySelector(`slicc-agent-message[data-msg-id="${anchorId}"]`)
+          : null;
+      const autoOpen = allSameMsg && owningBubble?.hasAttribute('streaming') === true;
+      if (anchorId && !autoOpen) openClusterAnchors.add(anchorId);
+    }
+    const parent = cluster.parentNode;
+    if (!parent) {
+      cluster.remove();
+      continue;
+    }
+    for (const row of rows) parent.insertBefore(row, cluster);
+    cluster.remove();
+  }
+}
+
+/** Top-level chain-break tags: any of these starts a fresh chain. */
+const CHAIN_BREAK_TAGS = new Set([
+  'slicc-user-message',
+  'slicc-lick-card',
+  'slicc-error-card',
+  'slicc-delegation-line',
+  'slicc-day-separator',
+]);
+
+function isChainBreak(node: Node): boolean {
+  if (!(node instanceof HTMLElement)) return true;
+  return CHAIN_BREAK_TAGS.has(node.tagName.toLowerCase());
+}
+
+function isToolRow(node: Node): boolean {
+  return node instanceof HTMLElement && node.tagName.toLowerCase() === 'slicc-action-row';
+}
+
+function isAgentBubble(node: Node): boolean {
+  return node instanceof HTMLElement && node.tagName.toLowerCase() === 'slicc-agent-message';
+}
+
+/**
+ * Walk consecutive assistant chains in `container` and collapse runs of
+ * three or more contiguous tool-call rows into a single
+ * `<slicc-tool-cluster>` anchored at the run's first row. A run is
+ * broken by a non-empty assistant bubble between rows (the agent's
+ * prose between tool calls must not be hoisted) or by any non-assistant
+ * element (user / lick / error / delegation / day separator).
+ *
+ * Open state is preserved via `openClusterAnchors` — the set is
+ * populated by a prior `unwrapToolClusters` call and consumed (then
+ * cleared) here. `toolCallLookup` resolves a row back to its
+ * `ToolCall` so the cluster label can be (re-)scheduled with the run's
+ * actual call data.
+ */
+/** Group a chain's assistant elements into contiguous tool-row runs. */
+function collectRunsInChain(chain: readonly HTMLElement[]): HTMLElement[][] {
+  const runs: HTMLElement[][] = [];
+  let current: HTMLElement[] = [];
+  for (const node of chain) {
+    if (isAgentBubble(node)) {
+      if (!node.hasAttribute('data-empty') && current.length > 0) {
+        runs.push(current);
+        current = [];
+      }
+    } else if (isToolRow(node)) {
+      current.push(node);
+    }
+  }
+  if (current.length > 0) runs.push(current);
+  return runs;
+}
+
+/** True iff `run` is one assistant message's tool calls AND that message
+ *  is currently streaming (mid-turn). */
+function isSingleMessageStreaming(parent: ParentNode, run: readonly HTMLElement[]): boolean {
+  const anchorMsgId = run[0]?.dataset.msgId;
+  if (!anchorMsgId) return false;
+  if (!run.every((r) => r.dataset.msgId === anchorMsgId)) return false;
+  const bubble = parent.querySelector(`slicc-agent-message[data-msg-id="${anchorMsgId}"]`);
+  return bubble?.hasAttribute('streaming') === true;
+}
+
+/** Resolve a run's rows back to their owning `ToolCall`s via the
+ *  optional lookup; returns `undefined` if any row can't be resolved. */
+function resolveRunToolCalls(
+  run: readonly HTMLElement[],
+  lookup: (msgId: string, callId: string) => ToolCall | undefined
+): ToolCall[] | undefined {
+  const out: ToolCall[] = [];
+  for (const row of run) {
+    const msgId = row.dataset.msgId;
+    const callId = row.dataset.toolId;
+    if (!msgId || !callId) return undefined;
+    const tc = lookup(msgId, callId);
+    if (!tc) return undefined;
+    out.push(tc);
+  }
+  return out;
+}
+
+/** Wrap one ≥3 run in a `<slicc-tool-cluster>` at the run's position. */
+function wrapRunIntoCluster(
+  run: readonly HTMLElement[],
+  opts: {
+    openClusterAnchors: Set<string>;
+    toolCallLookup?: (msgId: string, callId: string) => ToolCall | undefined;
+  }
+): void {
+  const firstRow = run[0];
+  const parent = firstRow.parentNode;
+  if (!parent) return;
+  // The cluster lands where the FIRST row currently sits. Skip any
+  // siblings that belong to this run (subsequent rows): once they move
+  // into the cluster `insertBefore(cluster, detachedRow)` would throw.
+  const runSet = new Set<Node>(run);
+  let anchor: Node | null = firstRow.nextSibling;
+  while (anchor && runSet.has(anchor)) anchor = anchor.nextSibling;
+  const anchorMsgId = firstRow.dataset.msgId;
+  // Anchor preservation keeps a user-expanded cross-message cluster
+  // open across rebuilds. Single-message streaming runs auto-open so
+  // live tool progress is visible (matches pre-merge per-message
+  // behavior). Cross-message runs never auto-open.
+  const userOpen = Boolean(anchorMsgId && opts.openClusterAnchors.has(anchorMsgId));
+  const open = userOpen || isSingleMessageStreaming(parent, run);
+  const toolCalls = opts.toolCallLookup ? resolveRunToolCalls(run, opts.toolCallLookup) : undefined;
+  const cluster = buildClusterFromElements(run, { open, toolCalls });
+  parent.insertBefore(cluster, anchor);
+}
+
+export function reflowToolClusters(
+  container: HTMLElement,
+  opts: {
+    openClusterAnchors: Set<string>;
+    toolCallLookup?: (msgId: string, callId: string) => ToolCall | undefined;
+  }
+): void {
+  unwrapToolClusters(container, opts.openClusterAnchors);
+  const children = Array.from(container.children) as HTMLElement[];
+  let i = 0;
+  while (i < children.length) {
+    if (isChainBreak(children[i])) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < children.length && !isChainBreak(children[j])) j++;
+    const runs = collectRunsInChain(children.slice(i, j));
+    for (const run of runs) {
+      if (run.length >= TOOL_CLUSTER_MIN) wrapRunIntoCluster(run, opts);
+    }
+    i = j;
+  }
+  opts.openClusterAnchors.clear();
 }
 
 function lickCardEl(message: ChatMessage): HTMLElement {
@@ -728,7 +956,10 @@ export function daySeparatorEl(timestamp: number): HTMLElement {
 
 /**
  * Full thread children for a message list: a `slicc-day-separator` at each
- * local-date boundary, then the per-message elements in order.
+ * local-date boundary, then the per-message elements in order. Cross-message
+ * tool-cluster reflow runs once over the assembled list so the fixture (and
+ * any other one-shot caller) gets the same clustering the live controller
+ * applies after each render pass.
  */
 export function buildThreadChildren(messages: readonly ChatMessage[]): HTMLElement[] {
   const children: HTMLElement[] = [];
@@ -741,5 +972,16 @@ export function buildThreadChildren(messages: readonly ChatMessage[]): HTMLEleme
     }
     children.push(...messageEls(message));
   }
-  return children;
+  // Reflow needs a real parent to walk siblings against; do the wrap into
+  // a transient fragment so callers still receive a flat array. A lookup
+  // resolves rows back to their owning `ToolCall` so cluster labels are
+  // scheduled with input data.
+  const host = document.createElement('div');
+  host.append(...children);
+  const lookup = (msgId: string, callId: string): ToolCall | undefined => {
+    const msg = messages.find((m) => m.id === msgId);
+    return msg?.toolCalls?.find((c) => c.id === callId);
+  };
+  reflowToolClusters(host, { openClusterAnchors: new Set(), toolCallLookup: lookup });
+  return Array.from(host.children) as HTMLElement[];
 }
