@@ -37,6 +37,7 @@ import {
   pool,
   time,
 } from './js-realm-helpers.js';
+import { isNodeBuiltin, NODE_BUILTINS_UNAVAILABLE, stripNodeScheme } from './node-builtins.js';
 import { type RealmPortLike, RealmRpcClient } from './realm-rpc.js';
 import type {
   RealmDoneMsg,
@@ -51,32 +52,6 @@ import type {
 } from './realm-types.js';
 import { NODE_NATIVE_PACKAGES, nativePackageError } from './require-guards.js';
 import { createSkillGlobal } from './skill-global.js';
-
-const NODE_BUILTINS_UNAVAILABLE = new Set([
-  'http',
-  'https',
-  'net',
-  'tls',
-  'dgram',
-  'dns',
-  'cluster',
-  'worker_threads',
-  'child_process',
-  'crypto',
-  'os',
-  'stream',
-  'zlib',
-  'vm',
-  'v8',
-  'perf_hooks',
-  'readline',
-  'repl',
-  'tty',
-  'inspector',
-]);
-
-/** Bare Node built-ins the realm serves directly (never from `node_modules`). */
-const NODE_BUILTIN_BARE = new Set(['fs', 'path', 'process', 'buffer']);
 
 const SLICCY_SCHEME = 'sliccy:';
 
@@ -418,10 +393,8 @@ function createFsBridge(
 function selectLoadableSpecifiers(code: string): string[] {
   return extractRequireSpecifiers(code).filter((s) => {
     if (s.startsWith(SLICCY_SCHEME)) return false;
-    const bareId = s.startsWith('node:') ? s.slice(5) : s;
-    if (NODE_BUILTIN_BARE.has(bareId)) return false;
-    if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) return false;
-    if (NODE_NATIVE_PACKAGES.has(bareId)) return false;
+    if (isNodeBuiltin(s)) return false;
+    if (NODE_NATIVE_PACKAGES.has(stripNodeScheme(s))) return false;
     return true;
   });
 }

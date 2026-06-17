@@ -61,6 +61,47 @@ describe('resolve() — schemes', () => {
     }
   });
 
+  it('resolves the complete set of bare Node built-ins to builtins (not node_modules)', async () => {
+    // The browser-unavailable built-ins must still resolve as graph-external
+    // builtins so they are never routed through node_modules resolution (the
+    // realm require shim guards them at require time). Regression for a real
+    // npm package that internally does require('crypto') / require('stream').
+    for (const name of [
+      'crypto',
+      'stream',
+      'os',
+      'http',
+      'https',
+      'zlib',
+      'util',
+      'events',
+      'net',
+      'tls',
+      'assert',
+      'url',
+      'querystring',
+    ]) {
+      const r = await resolve(name, '/app', reader);
+      expect(r).toEqual({ type: 'builtin', specifier: name, name });
+    }
+  });
+
+  it('resolves node:-prefixed built-ins across the complete set', async () => {
+    for (const name of ['crypto', 'stream', 'http', 'zlib', 'util', 'events']) {
+      const r = await resolve(`node:${name}`, '/app', reader);
+      expect(r).toEqual({ type: 'builtin', specifier: `node:${name}`, name });
+    }
+  });
+
+  it('prefers the built-in over a same-named installed package (built-ins win)', async () => {
+    const shadowing = makeReader({
+      '/app/node_modules/crypto/package.json': JSON.stringify({ main: 'index.js' }),
+      '/app/node_modules/crypto/index.js': "module.exports = 'should-not-resolve';",
+    });
+    const r = await resolve('crypto', '/app', shadowing);
+    expect(r).toEqual({ type: 'builtin', specifier: 'crypto', name: 'crypto' });
+  });
+
   it('resolves a sliccy: specifier to a capability marker', async () => {
     const r = await resolve('sliccy:exec', '/app', reader);
     expect(r).toEqual({ type: 'sliccy', specifier: 'sliccy:exec', name: 'exec' });

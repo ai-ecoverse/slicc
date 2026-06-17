@@ -37,6 +37,7 @@
  */
 
 import { joinPath, splitPath } from '../../fs/path-utils.js';
+import { NODE_BUILTINS } from '../../kernel/realm/node-builtins.js';
 import type { Packument, PackumentVersion } from './registry.js';
 import { resolveVersion } from './registry.js';
 import { satisfies } from './semver.js';
@@ -255,9 +256,6 @@ export interface ResolveOptions {
 
 const SLICCY_SCHEME = 'sliccy:';
 const NODE_SCHEME = 'node:';
-
-/** Bare Node built-ins the realm serves directly (not from `node_modules`). */
-export const NODE_BUILTIN_BARE = new Set(['fs', 'path', 'process', 'buffer']);
 
 /** Candidate extensions, tried in order, for extensionless/file resolution. */
 const RESOLVE_EXTENSIONS = ['.js', '.cjs', '.mjs', '.json'] as const;
@@ -564,7 +562,10 @@ export async function resolve(
     return { type: 'builtin', specifier, name: specifier.slice(NODE_SCHEME.length) };
   }
 
-  if (NODE_BUILTIN_BARE.has(specifier)) {
+  // Every bare Node built-in (available OR browser-unavailable) is
+  // graph-external: it must never be routed through node_modules resolution.
+  // The realm require shim serves/guards it at require time.
+  if (NODE_BUILTINS.has(specifier)) {
     return { type: 'builtin', specifier, name: specifier };
   }
 
