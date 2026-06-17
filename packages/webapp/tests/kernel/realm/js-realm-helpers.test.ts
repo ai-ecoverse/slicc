@@ -438,6 +438,35 @@ describe('sandbox.html mirror parity', () => {
     expect(sandbox).toMatch(/bareId\s*===\s*'buffer'[\s\S]*?globalThis\.Buffer/);
   });
 
+  it('synthesizes a Node-faithful __esModule-no-default `default` in BOTH floats', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const repoRoot = resolve(here, '..', '..', '..', '..', '..');
+    const sandbox = readFileSync(
+      resolve(repoRoot, 'packages/chrome-extension/sandbox.html'),
+      'utf-8'
+    );
+    const shared = readFileSync(
+      resolve(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-shared.ts'),
+      'utf-8'
+    );
+    // Both floats must, after evaluating a CJS module, attach a non-enumerable
+    // self-referential `default` when the exports have a truthy `__esModule` but
+    // no own `default` — guarded by Object.isExtensible so frozen exports never
+    // throw. Pin the load order (__esModule check -> own-default check ->
+    // extensibility guard -> defineProperty 'default' non-enumerable) in both.
+    const synthesisRe =
+      /__esModule[\s\S]*?hasOwnProperty[\s\S]*?['"]default['"][\s\S]*?Object\.isExtensible[\s\S]*?defineProperty[\s\S]*?['"]default['"][\s\S]*?enumerable:\s*false/;
+    expect(shared, 'js-realm-shared.ts missing __esModule default synthesis').toMatch(synthesisRe);
+    expect(sandbox, 'sandbox.html missing __esModule default synthesis').toMatch(synthesisRe);
+    // The synthesis runs inside the requireFile/requireModuleFile chokepoint
+    // (before returning module.exports) in both floats.
+    expect(shared).toContain('synthesizeEsModuleDefault(moduleObj.exports)');
+    expect(sandbox).toContain('synthesizeEsModuleDefault(moduleObj.exports)');
+  });
+
   it('mirrors the Web Crypto-backed nodeCrypto bridge surface in both floats', async () => {
     const { readFileSync } = await import('fs');
     const { resolve, dirname } = await import('path');

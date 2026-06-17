@@ -1047,7 +1047,23 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     const moduleDir = lastSlash <= 0 ? '/' : path.slice(0, lastSlash);
     const compiled = new Function('module', 'exports', 'require', '__dirname', '__filename', 'process', 'console', 'Buffer', 'global', source);
     compiled(moduleObj, moduleObj.exports, childRequire, moduleDir, path, processShim, consoleShim, globalThis.Buffer, globalThis);
+    synthesizeEsModuleDefault(moduleObj.exports);
     return moduleObj.exports;
+  }
+  // Node-faithful CJS default interop mirror of kernel/realm/js-realm-shared.ts:
+  // a transpiled-CJS module with `__esModule:true` but no own `default` (e.g.
+  // uuid@9's Babel-compiled dist/index.js) must still bind `import def from
+  // 'cjs'` to the whole module.exports. Attach a non-enumerable, configurable,
+  // self-referential `default` so esbuild's __copyProps and TS's __importDefault
+  // resolve it; the extensibility guard + try/catch keep frozen exports safe.
+  function synthesizeEsModuleDefault(exp) {
+    if (exp === null || typeof exp !== 'object') return;
+    if (!exp.__esModule) return;
+    if (Object.prototype.hasOwnProperty.call(exp, 'default')) return;
+    if (!Object.isExtensible(exp)) return;
+    try {
+      Object.defineProperty(exp, 'default', { value: exp, enumerable: false, configurable: true });
+    } catch (e) {}
   }
   const requireShim = (id) => requireFromEdges(moduleGraph.entryMap, id);
   const moduleShim = { exports: {}, filename: init.filename };
