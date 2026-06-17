@@ -51,6 +51,22 @@ function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/**
+ * esbuild infers Node-ESM interop from the `sourcefile` extension: a `.mjs`/
+ * `.mts` source makes it emit `__toESM(require(x), 1)` (`isNodeMode`), which
+ * binds a default import to the whole `module.exports` and IGNORES a
+ * Babel-style `__esModule` shim. Our host produces exactly such `__esModule`
+ * shims for transpiled ESM modules, so a `.mjs` entry/module would mis-bind
+ * `default` to the namespace object. Normalizing the sourcefile to `.js`
+ * keeps esbuild's default (non-node) interop, which honors `__esModule`
+ * (matching the uniform CJS-graph contract). Kind detection and
+ * `import.meta.url` are unaffected (they come from the resolver / `define`).
+ */
+function cjsSourcefile(name: string): string {
+  const base = name && name.length > 0 ? name : '[eval]';
+  return `${base.replace(/\.[^./]+$/, '')}.js`;
+}
+
 async function transpileWithEsbuild(
   load: EsbuildLoader,
   source: string,
@@ -61,7 +77,7 @@ async function transpileWithEsbuild(
   const result = await esbuild.transform(source, {
     loader: 'js',
     format: 'cjs',
-    sourcefile: path,
+    sourcefile: cjsSourcefile(path),
     // Lower nested dynamic `import('x')` to a `require`-backed promise so the
     // realm's synchronous CJS cache serves it (no real `import()` in the
     // sandbox); `import()` of an installed package resolves through the graph.
@@ -88,7 +104,7 @@ async function transpileEntryWithEsbuild(
   const result = await esbuild.transform(source, {
     loader: 'js',
     format: 'cjs',
-    sourcefile: filename || '[eval]',
+    sourcefile: cjsSourcefile(filename),
     supported: { 'dynamic-import': false },
     ...(importMetaUrl ? { define: { 'import.meta.url': JSON.stringify(importMetaUrl) } } : {}),
   });

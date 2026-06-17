@@ -11,6 +11,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  createEntryTranspile,
   createEsmTranspile,
   hasEsmSyntax,
   vfsPathToModuleUrl,
@@ -237,5 +238,43 @@ describe('buildModuleGraph() with createEsmTranspile (end-to-end)', () => {
     expect(mod?.kind).toBe('esm');
     const exp = evalCjs(mod!.cjsSource);
     expect(exp.default).toBe(99);
+  });
+});
+
+describe('createEntryTranspile() — .mjs/.mts interop honors __esModule (no Node-mode mis-binding)', () => {
+  // A `.mjs` entry's extension makes esbuild emit `__toESM(require(x), 1)`
+  // (`isNodeMode`), which binds a default import to the whole `module.exports`
+  // and IGNORES a Babel-style `__esModule` shim — exactly the shim the host
+  // produces for transpiled ESM dependencies. The sourcefile is normalized to
+  // `.js` so the default import binds the real `default` export instead.
+  const esmShim = { __esModule: true, default: () => 'default-fn' } as const;
+
+  it('default import in a .mjs entry binds the __esModule default (a function), not the namespace', async () => {
+    const entry = await createEntryTranspile()({
+      source: "import d from 'esm-shim';\nglobalThis.__ESM_MJS_OUT = typeof d;",
+      filename: '/work/esm.mjs',
+      fromDir: '/work',
+    });
+    expect(entry).not.toMatch(/__toESM\(\s*require\([^)]*\)\s*,\s*1\s*\)/);
+    try {
+      evalCjs(entry, () => esmShim);
+      expect((globalThis as Record<string, unknown>).__ESM_MJS_OUT).toBe('function');
+    } finally {
+      delete (globalThis as Record<string, unknown>).__ESM_MJS_OUT;
+    }
+  });
+
+  it('default import in a .mts entry likewise binds the __esModule default', async () => {
+    const entry = await createEntryTranspile()({
+      source: "import d from 'esm-shim';\nglobalThis.__ESM_MTS_OUT = d();",
+      filename: '/work/esm.mts',
+      fromDir: '/work',
+    });
+    try {
+      evalCjs(entry, () => esmShim);
+      expect((globalThis as Record<string, unknown>).__ESM_MTS_OUT).toBe('default-fn');
+    } finally {
+      delete (globalThis as Record<string, unknown>).__ESM_MTS_OUT;
+    }
   });
 });
