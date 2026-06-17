@@ -6,44 +6,64 @@
  *
  *   1. `localStorage` → kernel-worker shim sync — proven by seeding
  *      the `local-llm` provider via {@link seedLocalLlmProvider} BEFORE
- *      `page.goto('/')` and then submitting a user message that only
- *      reaches the fake server if the worker's shim picked the seed
- *      up. The chat-transcript assertion below is positive — it only
- *      fires when the agent's scripted turn actually streamed back
+ *      `page.goto('/')` and then submitting user messages that only
+ *      reach the fake server if the worker's shim picked the seed up.
+ *      Per-phase chat-transcript assertions are positive — they only
+ *      fire when the agent's scripted turns actually streamed back
  *      from the fake server and ran.
  *
  *   2. `waitForTurnComplete` masking failures — guarded by the
- *      chat-transcript + CDP-state assertions: both depend on the
- *      scripted turn actually completing, so a silent "turn never
- *      started" failure mode surfaces as a timeout, not a false green.
+ *      chat-transcript + CDP-state assertions interleaved between
+ *      phases: each depends on the prior scripted turn actually
+ *      completing, so a silent "turn never started" failure mode
+ *      surfaces as a timeout, not a false green.
  *
  *   3. CDP port matches the harness default — Playwright launches
  *      Chrome with `--remote-debugging-port=9222` for this file,
  *      `node-server --serve-only --cdp-port=9222` (from
  *      `playwright.config.ts`) proxies to the same port, and
- *      {@link readCdpPageState} probes it by default. The final
- *      assertion calls the helper without a `cdpEndpoint` override;
- *      it returning the scripted target proves the wiring end to end.
+ *      {@link readCdpPageState} probes it by default. The per-phase
+ *      assertions call the helper without a `cdpEndpoint` override.
+ *
+ * The elaborated 3-phase shape additionally exercises the fake-LLM
+ * harness's multi-turn sequencing (cursor + matcher ordering, see
+ * `./fake-llm/types.ts`), a single turn emitting two `bash` tool
+ * calls under small content + tool-arg chunk sizes (SSE delta
+ * reassembly), the object-form regex matcher
+ * (`{ pattern, flags }`), and multi-target CDP enumeration at 9222.
  */
 
 import { expect, test } from '@playwright/test';
 import {
   FAKE_LLM_BASE_URL,
   readCdpPageState,
-  runUserInputFixture,
   seedLocalLlmProvider,
+  submitUserMessage,
+  waitForTurnComplete,
 } from './fake-llm-helpers.js';
 import { seedSkipSwReload, waitForSW } from './helpers.js';
 
 const REFERENCE_MODEL = 'fake-coder-reference';
-const TARGET_TITLE = 'FAKE LLM REFERENCE TARGET';
-// `data:` URL keeps the CDP-driven tab self-contained: no service-worker
-// claim, no VFS seed dance. The URL itself carries the deterministic
-// HTML, so the agent's `playwright-cli tab-new …` is enough to make
-// Chrome report a target whose URL and title both come straight from
-// the scripted bash command — exactly the read-back signal we want.
-const TARGET_HTML = `<!DOCTYPE html><title>${TARGET_TITLE}</title><h1>Agent landed here</h1>`;
-const TARGET_DATA_URL = `data:text/html,${TARGET_HTML}`;
+
+// Distinct titles so multi-tab CDP filters at 9222 are unambiguous.
+const PAGE_A_TITLE = 'FAKE LLM REFERENCE TARGET';
+const PAGE_B_TITLE = 'FAKE LLM COMPARE ALPHA';
+const PAGE_C_TITLE = 'FAKE LLM COMPARE BETA';
+
+// `data:` URLs keep the CDP-driven tabs self-contained: no service-worker
+// claim, no VFS seed dance. Each URL carries its deterministic HTML, so
+// the agent's `playwright-cli tab-new …` is enough to make Chrome
+// report a target whose URL and title both come straight from the
+// scripted bash command — exactly the read-back signal we want.
+const PAGE_A_HTML = `<!DOCTYPE html><title>${PAGE_A_TITLE}</title><h1>Page A</h1>`;
+const PAGE_B_HTML = `<!DOCTYPE html><title>${PAGE_B_TITLE}</title><h1>Page B</h1>`;
+const PAGE_C_HTML = `<!DOCTYPE html><title>${PAGE_C_TITLE}</title><h1>Page C</h1>`;
+const PAGE_A_URL = `data:text/html,${PAGE_A_HTML}`;
+const PAGE_B_URL = `data:text/html,${PAGE_B_HTML}`;
+const PAGE_C_URL = `data:text/html,${PAGE_C_HTML}`;
+
+const ALL_TITLES_SORTED = [PAGE_A_TITLE, PAGE_B_TITLE, PAGE_C_TITLE].slice().sort();
+const PHASE2_TITLES_SORTED = [PAGE_B_TITLE, PAGE_C_TITLE].slice().sort();
 
 // Bind 9222 on the Playwright-launched Chrome so:
 //   - the `node-server --serve-only` CDP proxy (`--cdp-port=9222`)
@@ -57,7 +77,7 @@ test.use({
 test.describe.configure({ mode: 'serial' });
 
 test.describe('fake-llm reference scenario', () => {
-  test('scripted tool call drives a real CDP navigation', async ({ page }) => {
+  test('multi-phase scripted tool calls drive multiple CDP navigations', async ({ page }) => {
     // Sanity: fake server is the one the harness expects.
     expect(FAKE_LLM_BASE_URL).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1$/);
 
@@ -78,43 +98,82 @@ test.describe('fake-llm reference scenario', () => {
     await expect(page.locator('slicc-chat-thread')).toContainText('Welcome to SLICC', {
       timeout: 20_000,
     });
-    await runUserInputFixture(page, ['open the reference page']);
 
-    // ── (a) chat-transcript assertion: scripted assistant text rendered ──
-    // Canonical positive proof that the fake LLM streamed back AND the
-    // agent loop processed the turn — both required for the
-    // localStorage → kernel-worker shim sync to be exercised.
+    // ── Phase 1: single tool call → Page A ───────────────────────────
+    // Fixture turn[0] (matched) + turn[1] (cursor follow-up) deliver
+    // the scripted text and a `playwright-cli tab-new` for Page A.
+    await submitUserMessage(page, 'open the reference page');
+    await waitForTurnComplete(page);
+
     await expect(page.locator('slicc-chat-thread')).toContainText(
       'Opening the reference data: URL'
     );
-    await expect(page.locator('slicc-chat-thread')).toContainText(
-      'Done. The agent navigated to the reference page'
-    );
+    await expect(page.locator('slicc-chat-thread')).toContainText('Done. Page A is open.');
 
-    // ── (b) CDP/browser-state assertion via the harness helper ──────
-    // After the scripted `bash playwright-cli tab-new …` ran, Chrome at
-    // 9222 should report a `page` target whose URL is the data: URL
-    // the agent navigated to AND whose title matches the embedded HTML.
-    // Polls because the target registers a beat after the CDP
-    // `Target.createTarget` resolves on the agent side.
     await expect
       .poll(
         async () => {
           const targets = await readCdpPageState({
-            filter: (t) => t.type === 'page' && t.url.startsWith('data:text/html'),
+            filter: (t) => t.type === 'page' && t.url === PAGE_A_URL,
+          });
+          return { count: targets.length, titles: targets.map((t) => t.title) };
+        },
+        { timeout: 15_000 }
+      )
+      .toMatchObject({ count: 1, titles: [PAGE_A_TITLE] });
+
+    // ── Phase 2: two tool calls in one turn → Pages B + C ────────────
+    // Fixture turn[2] (matched, small `contentChunkSize` +
+    // `toolArgumentsChunkSize`) emits two `bash` tool calls back to
+    // back; the agent runs both, then turn[3] (cursor) closes the
+    // phase.
+    await submitUserMessage(page, 'open the comparison pages');
+    await waitForTurnComplete(page);
+
+    await expect(page.locator('slicc-chat-thread')).toContainText('Done. Pages B and C are open.');
+
+    await expect
+      .poll(
+        async () => {
+          const targets = await readCdpPageState({
+            filter: (t) => t.type === 'page' && (t.url === PAGE_B_URL || t.url === PAGE_C_URL),
           });
           return {
             count: targets.length,
-            titles: targets.map((t) => t.title),
-            urls: targets.map((t) => t.url),
+            titles: targets.map((t) => t.title).sort(),
           };
         },
         { timeout: 15_000 }
       )
-      .toMatchObject({
-        count: 1,
-        titles: [TARGET_TITLE],
-        urls: [TARGET_DATA_URL],
-      });
+      .toMatchObject({ count: 2, titles: PHASE2_TITLES_SORTED });
+
+    // ── Phase 3: regex-matcher → text-only summary turn ──────────────
+    // Fixture turn[4] uses the object-form regex matcher
+    // (`{ pattern: 'summar(y|ize)', flags: 'i' }`) and returns text
+    // only (no tool call) — proves both the regex path and a
+    // text-only terminal turn.
+    await submitUserMessage(page, 'give me a summary');
+    await waitForTurnComplete(page);
+
+    await expect(page.locator('slicc-chat-thread')).toContainText(
+      'Summary: opened three CDP targets'
+    );
+
+    await expect
+      .poll(
+        async () => {
+          const targets = await readCdpPageState({
+            filter: (t) =>
+              t.type === 'page' &&
+              (t.url === PAGE_A_URL || t.url === PAGE_B_URL || t.url === PAGE_C_URL),
+          });
+          return {
+            count: targets.length,
+            titles: targets.map((t) => t.title).sort(),
+          };
+        },
+        { timeout: 15_000 }
+      )
+      .toMatchObject({ count: 3, titles: ALL_TITLES_SORTED });
   });
 });

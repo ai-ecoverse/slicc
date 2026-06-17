@@ -462,11 +462,44 @@ Three pieces compose the framework:
 ### Writing a Scenario
 
 See `packages/webapp/tests/e2e/reference-scenario.test.ts` for the
-working reference. Boilerplate:
+working reference. It runs a single Playwright test against a
+3-phase fixture and interleaves chat-transcript + CDP-state
+assertions after each phase:
+
+- **Phase 1** — user input `"open the reference page"` matches
+  `turns[0]` (substring matcher); the agent runs one `bash`
+  `playwright-cli tab-new` opening Page A
+  (title `FAKE LLM REFERENCE TARGET`). `turns[1]` (cursor follow-up)
+  delivers `"Done. Page A is open."`. The test then asserts both
+  strings are in the thread and that `readCdpPageState` sees exactly
+  one target at the Page A `data:` URL.
+- **Phase 2** — user input `"open the comparison pages"` matches
+  `turns[2]`, which emits **two** `bash` tool calls in one turn
+  (Page B `FAKE LLM COMPARE ALPHA`, Page C `FAKE LLM COMPARE BETA`)
+  with small `contentChunkSize` and `toolArgumentsChunkSize` to
+  stress SSE delta reassembly. `turns[3]` (cursor) closes the
+  phase with `"Done. Pages B and C are open."`. The test asserts
+  the closing text and that `readCdpPageState` filtered to the two
+  Page B/C URLs reports both distinct titles.
+- **Phase 3** — user input `"give me a summary"` matches `turns[4]`
+  via the object-form regex matcher
+  (`{ "pattern": "summar(y|ize)", "flags": "i" }`); the turn returns
+  text only (no tool call). The test asserts the summary text in the
+  thread and that `readCdpPageState` filtered to all three `data:`
+  URLs enumerates Pages A/B/C with their three distinct titles
+  (sorted for a stable assertion).
+
+Boilerplate, lightly abbreviated from
+`reference-scenario.test.ts`:
 
 ```typescript
 import { expect, test } from '@playwright/test';
-import { readCdpPageState, runUserInputFixture, seedLocalLlmProvider } from './fake-llm-helpers.js';
+import {
+  readCdpPageState,
+  seedLocalLlmProvider,
+  submitUserMessage,
+  waitForTurnComplete,
+} from './fake-llm-helpers.js';
 import { seedSkipSwReload, waitForSW } from './helpers.js';
 
 // Binds Chrome's CDP at the default port the helper probes AND the
@@ -475,64 +508,33 @@ import { seedSkipSwReload, waitForSW } from './helpers.js';
 test.use({ launchOptions: { args: ['--remote-debugging-port=9222'] } });
 test.describe.configure({ mode: 'serial' });
 
-test('scripted tool call drives a real CDP navigation', async ({ page }) => {
-  // 1. Seed the local-llm provider BEFORE goto so the kernel worker's
-  //    localStorage shim picks the seed up at boot.
+test('multi-phase scripted tool calls drive multiple CDP navigations', async ({ page }) => {
   await seedLocalLlmProvider(page, { modelId: 'fake-coder-reference' });
   await seedSkipSwReload(page);
   await page.goto('/');
   await waitForSW(page);
-
-  // 2. Wait for the cone to be created AND selected. The composer
-  //    renders earlier; submitting before this point produces a
-  //    "No scoop selected" error card.
   await page.waitForSelector('slicc-input-card');
   await expect(page.locator('slicc-chat-thread')).toContainText('Welcome to SLICC');
 
-  // 3. Submit the scripted user input. `runUserInputFixture` calls
-  //    `submitUserMessage` + `waitForTurnComplete` for each entry.
-  await runUserInputFixture(page, ['open the reference page']);
-
-  // 4. Chat-transcript assertion — positive proof the fake LLM
-  //    streamed back AND the agent loop ran the scripted turn.
-  await expect(page.locator('slicc-chat-thread')).toContainText('Opening the reference');
-
-  // 5. CDP/browser-state assertion — Chrome at 9222 reports the
-  //    target the agent's `bash playwright-cli tab-new …` opened.
+  // Drive one phase at a time so per-phase assertions can interleave.
+  await submitUserMessage(page, 'open the reference page');
+  await waitForTurnComplete(page);
+  await expect(page.locator('slicc-chat-thread')).toContainText('Done. Page A is open.');
   await expect
-    .poll(async () => {
-      const targets = await readCdpPageState({
-        filter: (t) => t.type === 'page' && t.url.startsWith('data:text/html'),
-      });
-      return targets.map((t) => t.title);
-    })
+    .poll(async () =>
+      (await readCdpPageState({ filter: (t) => t.type === 'page' })).map((t) => t.title)
+    )
     .toContain('FAKE LLM REFERENCE TARGET');
+
+  // Phases 2 and 3 follow the same submit + wait + assert pattern.
 });
 ```
 
-Matching fixture (`fixtures/reference-scenario.json`):
-
-```json
-{
-  "model": "fake-coder-reference",
-  "turns": [
-    {
-      "whenUserMessageMatches": "open the reference page",
-      "content": "Opening the reference data: URL so the test can assert on the CDP target.",
-      "tool_calls": [
-        {
-          "name": "bash",
-          "arguments": {
-            "command": "playwright-cli tab-new 'data:text/html,<!DOCTYPE html><title>FAKE LLM REFERENCE TARGET</title><h1>Agent landed here</h1>'"
-          }
-        }
-      ]
-    },
-    { "content": "Done. The agent navigated to the reference page." }
-  ],
-  "onOverflow": "error"
-}
-```
+For full inputs, fixture content, and assertions, read the working
+test directly. The fixture lives at
+`packages/webapp/tests/e2e/fake-llm/fixtures/reference-scenario.json`
+and uses `onOverflow: "error"` so a fixture/test mismatch fails fast
+with a 400 from the fake server rather than hanging.
 
 ### CDP Assertions
 
@@ -573,8 +575,18 @@ via the seeded `local-llm` provider. Override the fixture with the
   the seeded `slicc_accounts` + `selected-model` make it from page
   storage into the worker's `localStorage` shim — otherwise the agent
   never resolves the `local-llm` model and never calls the fake server.
-- **`waitForTurnComplete` masking failures**: the popup + chat-transcript
-  assertions are positive — they only succeed when the scripted turn
-  actually ran end to end.
+- **`waitForTurnComplete` masking failures**: the per-phase
+  chat-transcript + CDP-state assertions are positive — each one only
+  succeeds when the prior scripted turn actually ran end to end, so a
+  silent "turn never started" surfaces as a timeout, not a false green.
 - **CDP port alignment**: the helper, the `node-server --serve-only`
-  proxy, and the test's `launchOptions.args` all agree on 9222.
+  proxy, and the test's `launchOptions.args` all agree on 9222, and
+  the per-phase `readCdpPageState` filters key on each target's
+  distinct title/URL so multi-tab assertions stay unambiguous.
+- **SSE delta reassembly**: phase 2's turn sets small
+  `contentChunkSize` and `toolArgumentsChunkSize` so the agent has to
+  reassemble both streamed content and multi-tool-call argument
+  fragments before the bash commands run.
+- **Matcher coverage**: the three matched turns exercise the
+  substring form (phases 1 + 2) and the object-form regex
+  (`{ pattern, flags }`, phase 3) of `whenUserMessageMatches`.
