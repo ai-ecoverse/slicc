@@ -1,0 +1,313 @@
+/**
+ * Corpus-driven harness for the `git` supplemental command.
+ *
+ * Encodes the EXPECTED behaviour for every subcommand harvested from the
+ * real-world tool-call catalogue (1,568 invocations across ~212 sessions)
+ * plus the five regressions from issue #1033. Cases that currently fail are
+ * the intended TDD red-phase bug inventory for the follow-up fix task.
+ *
+ * Offline only — clone/fetch/push assertions spy on isomorphic-git to verify
+ * arg parsing without touching the network.
+ */
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+// Wrap isomorphic-git so spies can rewire exports (the ESM namespace is frozen).
+vi.mock('isomorphic-git', async (importOriginal) => ({ ...(await importOriginal()) }));
+
+import * as isoGit from 'isomorphic-git';
+import { VirtualFS } from '../../src/fs/virtual-fs.js';
+import { GitCommands } from '../../src/git/git-commands.js';
+
+let vfs: VirtualFS;
+let git: GitCommands;
+let dbCounter = 0;
+
+beforeEach(async () => {
+  const testId = dbCounter++;
+  vfs = await VirtualFS.create({ dbName: `git-corpus-${testId}`, wipe: true });
+  git = new GitCommands({
+    fs: vfs,
+    authorName: 'Corpus User',
+    authorEmail: 'corpus@example.com',
+    globalDbName: `git-corpus-global-${testId}`,
+  });
+});
+
+/** Seed a fresh repo with one committed file so subcommands have history. */
+async function seedRepo(dir = '/project'): Promise<void> {
+  await git.execute(['init'], dir);
+  await vfs.writeFile(`${dir}/file.txt`, 'line1\nline2\nline3\n');
+  await git.execute(['add', 'file.txt'], dir);
+  await git.execute(['commit', '-m', 'initial'], dir);
+}
+
+// ---------------------------------------------------------------------------
+// Catalogue: each catalogued subcommand must NOT fall through to the default
+// "not a git command" branch. Concrete behaviour assertions for the common
+// flag combinations follow per-section.
+// ---------------------------------------------------------------------------
+
+describe('git corpus — subcommand catalogue (offline arg-parsing)', () => {
+  it('init -b <branch> sets the default branch', async () => {
+    const result = await git.execute(['init', '-b', 'main'], '/project');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Initialized empty Git repository');
+  });
+
+  it('add accepts pathspec, ".", and -A', async () => {
+    await git.execute(['init'], '/project');
+    await vfs.writeFile('/project/a.txt', 'a');
+    await vfs.writeFile('/project/b.txt', 'b');
+    expect((await git.execute(['add', 'a.txt'], '/project')).exitCode).toBe(0);
+    expect((await git.execute(['add', '.'], '/project')).exitCode).toBe(0);
+    expect((await git.execute(['add', '-A'], '/project')).exitCode).toBe(0);
+  });
+
+  it('status accepts --short / --porcelain / -s', async () => {
+    await git.execute(['init'], '/project');
+    for (const flag of ['--short', '--porcelain', '-s']) {
+      const r = await git.execute(['status', flag], '/project');
+      expect(r.exitCode, `status ${flag}`).toBe(0);
+    }
+  });
+
+  it('commit accepts -m / -qm / --allow-empty', async () => {
+    await seedRepo('/project');
+    await vfs.writeFile('/project/file.txt', 'changed\n');
+    await git.execute(['add', 'file.txt'], '/project');
+    const r = await git.execute(['commit', '-m', 'msg'], '/project');
+    expect(r.exitCode).toBe(0);
+  });
+
+  it('log accepts --oneline, --format, and -n', async () => {
+    await seedRepo('/project');
+    expect((await git.execute(['log', '--oneline'], '/project')).exitCode).toBe(0);
+    expect((await git.execute(['log', '--format', '%H'], '/project')).exitCode).toBe(0);
+  });
+
+  it('branch list / create / delete', async () => {
+    await seedRepo('/project');
+    expect((await git.execute(['branch', 'feature'], '/project')).exitCode).toBe(0);
+    expect((await git.execute(['branch'], '/project')).stdout).toContain('feature');
+  });
+
+  it('checkout switches branches and accepts -b', async () => {
+    await seedRepo('/project');
+    expect((await git.execute(['checkout', '-b', 'feat'], '/project')).exitCode).toBe(0);
+  });
+
+  it('diff accepts --stat / --name-only / --cached', async () => {
+    await seedRepo('/project');
+    await vfs.writeFile('/project/file.txt', 'changed\n');
+    expect((await git.execute(['diff'], '/project')).exitCode).toBe(0);
+    expect((await git.execute(['diff', '--name-only'], '/project')).exitCode).toBe(0);
+    expect((await git.execute(['diff', '--stat'], '/project')).exitCode).toBe(0);
+    expect((await git.execute(['diff', '--cached'], '/project')).exitCode).toBe(0);
+  });
+
+  it('show accepts <ref> and <ref>:<path>', async () => {
+    await seedRepo('/project');
+    const head = (await git.execute(['log', '--format', '%H', '-1'], '/project')).stdout.trim();
+    expect((await git.execute(['show', head], '/project')).exitCode).toBe(0);
+    expect((await git.execute(['show', `${head}:file.txt`], '/project')).exitCode).toBe(0);
+  });
+
+  it('remote -v and add', async () => {
+    await seedRepo('/project');
+    expect(
+      (await git.execute(['remote', 'add', 'origin', 'https://example.com/x.git'], '/project'))
+        .exitCode
+    ).toBe(0);
+    expect((await git.execute(['remote', '-v'], '/project')).exitCode).toBe(0);
+  });
+
+  it('config get/set works', async () => {
+    await git.execute(['init'], '/project');
+    await git.execute(['config', 'user.name', 'Alice'], '/project');
+    const r = await git.execute(['config', 'user.name'], '/project');
+    expect(r.stdout.trim()).toBe('Alice');
+  });
+
+  it('rev-parse --show-toplevel / --abbrev-ref HEAD', async () => {
+    await seedRepo('/project');
+    expect((await git.execute(['rev-parse', '--show-toplevel'], '/project')).stdout).toContain(
+      '/project'
+    );
+    expect((await git.execute(['rev-parse', '--abbrev-ref', 'HEAD'], '/project')).exitCode).toBe(0);
+  });
+
+  it('tag list / create', async () => {
+    await seedRepo('/project');
+    expect((await git.execute(['tag', 'v1'], '/project')).exitCode).toBe(0);
+    expect((await git.execute(['tag'], '/project')).stdout).toContain('v1');
+  });
+
+  it('ls-files lists tracked files', async () => {
+    await seedRepo('/project');
+    expect((await git.execute(['ls-files'], '/project')).stdout).toContain('file.txt');
+  });
+
+  it('stash list works on a clean repo', async () => {
+    await seedRepo('/project');
+    expect((await git.execute(['stash', 'list'], '/project')).exitCode).toBe(0);
+  });
+
+  it('rm removes a tracked file', async () => {
+    await seedRepo('/project');
+    expect((await git.execute(['rm', 'file.txt'], '/project')).exitCode).toBe(0);
+  });
+
+  it('mv renames a tracked file', async () => {
+    await seedRepo('/project');
+    expect((await git.execute(['mv', 'file.txt', 'renamed.txt'], '/project')).exitCode).toBe(0);
+  });
+
+  it('reset unstages by default', async () => {
+    await seedRepo('/project');
+    await vfs.writeFile('/project/file.txt', 'changed\n');
+    await git.execute(['add', 'file.txt'], '/project');
+    expect((await git.execute(['reset'], '/project')).exitCode).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #1033 — explicit regression cases. Each one documents the EXPECTED
+// behaviour; tests that fail here are the bug inventory for the fix task.
+// ---------------------------------------------------------------------------
+
+describe('git corpus — issue #1033 regressions', () => {
+  // #1033-2 — global `-c <key>=<val>` config override must be recognized.
+  it('#1033-2: git -c user.email=x@y.z commit ... is accepted (not "not a git command")', async () => {
+    await seedRepo('/project');
+    await vfs.writeFile('/project/file.txt', 'changed\n');
+    await git.execute(['add', 'file.txt'], '/project');
+    const result = await git.execute(
+      ['-c', 'user.email=override@example.com', 'commit', '-m', 'msg'],
+      '/project'
+    );
+    expect(result.stderr).not.toContain('is not a git command');
+    expect(result.exitCode).toBe(0);
+  });
+
+  // #1033 (catalogue) — `-C <dir>` must run the subcommand in <dir>.
+  it('#1033-C: git -C <dir> status runs in <dir>', async () => {
+    await seedRepo('/project');
+    // Invoke from a different cwd; -C should redirect.
+    const result = await git.execute(['-C', '/project', 'status'], '/');
+    expect(result.stderr).not.toContain('is not a git command');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('On branch');
+  });
+
+  // #1033 (catalogue) — `--no-pager` global flag must be a no-op.
+  it('#1033-nopager: git --no-pager diff works like git diff', async () => {
+    await seedRepo('/project');
+    await vfs.writeFile('/project/file.txt', 'changed line\n');
+    const result = await git.execute(['--no-pager', 'diff'], '/project');
+    expect(result.stderr).not.toContain('is not a git command');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('diff --git');
+  });
+
+  // #1033-3 — `fetch --depth 1 origin main` must parse remote=`origin`,
+  //           not the `1` value of `--depth`.
+  it('#1033-3: git fetch --depth 1 origin main parses remote=origin', async () => {
+    await git.execute(['init'], '/project');
+    await git.execute(['remote', 'add', 'origin', 'https://example.com/x.git'], '/project');
+    const fetchSpy = vi.spyOn(isoGit, 'fetch').mockResolvedValue({
+      defaultBranch: 'main',
+      fetchHead: null,
+      fetchHeadDescription: null,
+      headers: undefined,
+      pruned: undefined,
+    } as Awaited<ReturnType<typeof isoGit.fetch>>);
+    try {
+      const result = await git.execute(['fetch', '--depth', '1', 'origin', 'main'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(fetchSpy).toHaveBeenCalled();
+      const call = fetchSpy.mock.calls[0]?.[0] as { remote?: string };
+      expect(call?.remote).toBe('origin');
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  // #1033-4 — `git fetch --help` (and checkout/clone --help) print help and
+  //           NEVER execute a network/FS action.
+  it('#1033-4: git fetch --help returns help text and performs NO fetch', async () => {
+    const fetchSpy = vi
+      .spyOn(isoGit, 'fetch')
+      .mockResolvedValue({} as Awaited<ReturnType<typeof isoGit.fetch>>);
+    try {
+      const result = await git.execute(['fetch', '--help'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.toLowerCase()).toContain('fetch');
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('#1033-4: git checkout --help returns help text and performs NO checkout', async () => {
+    const checkoutSpy = vi.spyOn(isoGit, 'checkout').mockResolvedValue(undefined);
+    const branchSpy = vi.spyOn(isoGit, 'branch').mockResolvedValue(undefined);
+    try {
+      const result = await git.execute(['checkout', '--help'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.toLowerCase()).toContain('checkout');
+      expect(checkoutSpy).not.toHaveBeenCalled();
+      expect(branchSpy).not.toHaveBeenCalled();
+    } finally {
+      checkoutSpy.mockRestore();
+      branchSpy.mockRestore();
+    }
+  });
+
+  it('#1033-4: git clone --help returns help text and performs NO clone', async () => {
+    const cloneSpy = vi.spyOn(isoGit, 'clone').mockResolvedValue();
+    try {
+      const result = await git.execute(['clone', '--help'], '/workspace');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.toLowerCase()).toContain('clone');
+      expect(cloneSpy).not.toHaveBeenCalled();
+    } finally {
+      cloneSpy.mockRestore();
+    }
+  });
+
+  // #1033-5 — successful `checkout <branch>` must not leak isomorphic-git's
+  //           "There are multiple errors..." MultipleGitError cosmetic noise.
+  it('#1033-5: git checkout <branch> success produces no "multiple errors" stderr noise', async () => {
+    await seedRepo('/project');
+    await git.execute(['branch', 'feature'], '/project');
+    const result = await git.execute(['checkout', 'feature'], '/project');
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr.toLowerCase()).not.toContain('multiple errors');
+    expect(result.stdout).toContain("Switched to branch 'feature'");
+  });
+
+  // #1033-1 — clone failure into a nested/non-existent target dir must
+  //           surface the real interpolated path, never the literal `<path>`
+  //           placeholder, and must return a non-zero exitCode rather than
+  //           throwing an unhandled rejection.
+  it('#1033-1: git clone failure surfaces the real path, never literal "<path>"', async () => {
+    const targetDir = '/non/existent/parent/myrepo';
+    const cloneSpy = vi
+      .spyOn(isoGit, 'clone')
+      .mockRejectedValue(
+        new Error("ENOENT: no such file or directory, mkdir '/__opfs__/slicc-fs<path>'")
+      );
+    try {
+      const result = await git.execute(
+        ['clone', 'https://github.com/example/repo.git', targetDir],
+        '/workspace'
+      );
+      // Expected: handled error → non-zero exit with a real path in stderr.
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).not.toContain('<path>');
+      expect(result.stderr).toContain(targetDir);
+    } finally {
+      cloneSpy.mockRestore();
+    }
+  });
+});
