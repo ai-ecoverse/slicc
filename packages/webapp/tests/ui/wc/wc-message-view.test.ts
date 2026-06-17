@@ -178,8 +178,14 @@ describe('buildThreadChildren', () => {
     expect(next?.tagName.toLowerCase()).toBe('slicc-user-message');
   });
 
-  it('flags queued messages', () => {
-    expect(children.some((c) => c.hasAttribute('queued'))).toBe(true);
+  it('renders queued user messages as ordinary bubbles (the stack is live-only)', () => {
+    // The inline `queued` attribute path is dead: live queued submissions
+    // live in `<slicc-queued-stack>`, and persisted/historical user messages
+    // — including any that still carry the legacy `queued` flag — render as
+    // plain bubbles in the thread.
+    expect(children.some((c) => c.hasAttribute('queued'))).toBe(false);
+    // The user-message bubble is still rendered (history rehydrates as normal).
+    expect(children.some((c) => c.tagName.toLowerCase() === 'slicc-user-message')).toBe(true);
   });
 });
 

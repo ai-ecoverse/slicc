@@ -546,11 +546,103 @@ describe('WcChatController', () => {
     expect(thread.querySelector('slicc-lick-card')?.getAttribute('state')).toBe('dismissed');
   });
 
-  it('flags prompts sent while processing as queued', () => {
+  it('routes busy-submit prompts to the queued stack and skips the inline bubble', () => {
+    const queuedChanges: Array<readonly { id: string; text: string; attachments?: number }[]> = [];
+    const localController = new WcChatController({
+      thread,
+      agent,
+      onQueuedChange: (items) => queuedChanges.push(items.slice()),
+    });
     agent.emit({ type: 'message_start', messageId: 'm1' });
-    controller.sendUserMessage('queued one');
-    const bubble = [...thread.querySelectorAll('slicc-user-message')].at(-1);
-    expect(bubble?.hasAttribute('queued')).toBe(true);
+    const bubblesBefore = thread.querySelectorAll('slicc-user-message').length;
+    localController.sendUserMessage('queued one');
+    // Delivery still fires immediately (agent received it; orchestrator owns
+    // turn batching). The thread DOM is untouched — no inline bubble.
+    expect(agent.sent.at(-1)?.text).toBe('queued one');
+    expect(thread.querySelectorAll('slicc-user-message').length).toBe(bubblesBefore);
+    expect(thread.querySelector('slicc-user-message[queued]')).toBeNull();
+    // The host-render hook fired with the queued view (id + text only).
+    expect(queuedChanges.length).toBe(1);
+    expect(queuedChanges[0]).toHaveLength(1);
+    expect(queuedChanges[0][0].text).toBe('queued one');
+    expect(localController.getQueuedMessages()).toHaveLength(1);
+  });
+
+  it('flushes queued submissions into the thread at the next turn start', () => {
+    const queuedChanges: Array<readonly { id: string }[]> = [];
+    const localController = new WcChatController({
+      thread,
+      agent,
+      onQueuedChange: (items) => queuedChanges.push(items.slice()),
+    });
+    // Turn 1 starts, two prompts queue mid-turn, turn 1 ends.
+    agent.emit({ type: 'message_start', messageId: 'm1' });
+    localController.sendUserMessage('first queued');
+    localController.sendUserMessage('second queued');
+    agent.emit({ type: 'turn_end', messageId: 'm1' });
+    expect(localController.getQueuedMessages()).toHaveLength(2);
+    expect(thread.querySelectorAll('slicc-user-message').length).toBe(0);
+
+    // Turn 2's first message_start consumes the queue: both bubbles flush
+    // into the thread in enqueue order — first queued first — BEFORE the
+    // streaming assistant bubble. No `queued` attribute on either.
+    agent.emit({ type: 'message_start', messageId: 'm2' });
+    const userBubbles = thread.querySelectorAll('slicc-user-message');
+    expect(userBubbles).toHaveLength(2);
+    expect(userBubbles[0].shadowRoot?.textContent).toContain('first queued');
+    expect(userBubbles[1].shadowRoot?.textContent).toContain('second queued');
+    expect([...userBubbles].some((b) => b.hasAttribute('queued'))).toBe(false);
+    // The queued list is empty and the host got a final change call.
+    expect(localController.getQueuedMessages()).toHaveLength(0);
+    expect(queuedChanges.at(-1)).toHaveLength(0);
+  });
+
+  it('does not re-flush queued items on mid-turn second message_start (multi-message turn)', () => {
+    agent.emit({ type: 'message_start', messageId: 'm1' });
+    controller.sendUserMessage('queued mid-turn');
+    expect(thread.querySelectorAll('slicc-user-message').length).toBe(0);
+    // A second message_start in the SAME turn (multi-message) must NOT
+    // flush — those items belong to the NEXT turn.
+    agent.emit({ type: 'message_start', messageId: 'm1b' });
+    expect(thread.querySelectorAll('slicc-user-message').length).toBe(0);
+    expect(controller.getQueuedMessages()).toHaveLength(1);
+  });
+
+  it('removeQueuedMessage drops the item locally and re-fires onQueuedChange', () => {
+    const queuedChanges: Array<readonly { id: string }[]> = [];
+    const localController = new WcChatController({
+      thread,
+      agent,
+      onQueuedChange: (items) => queuedChanges.push(items.slice()),
+    });
+    agent.emit({ type: 'message_start', messageId: 'm1' });
+    localController.sendUserMessage('keep me');
+    localController.sendUserMessage('drop me');
+    const view = localController.getQueuedMessages();
+    expect(view).toHaveLength(2);
+    const dropId = view[1].id;
+    queuedChanges.length = 0;
+    localController.removeQueuedMessage(dropId);
+    expect(localController.getQueuedMessages().map((m) => m.text)).toEqual(['keep me']);
+    expect(queuedChanges.at(-1)).toHaveLength(1);
+    // Unknown id is a no-op (no change notification).
+    queuedChanges.length = 0;
+    localController.removeQueuedMessage('does-not-exist');
+    expect(queuedChanges).toHaveLength(0);
+  });
+
+  it('idle submits append a plain user bubble (no stack routing)', () => {
+    const queuedChanges: number[] = [];
+    const localController = new WcChatController({
+      thread,
+      agent,
+      onQueuedChange: (items) => queuedChanges.push(items.length),
+    });
+    localController.sendUserMessage('idle prompt');
+    expect(thread.querySelectorAll('slicc-user-message')).toHaveLength(1);
+    expect(thread.querySelector('slicc-user-message[queued]')).toBeNull();
+    expect(localController.getQueuedMessages()).toHaveLength(0);
+    expect(queuedChanges).toEqual([]);
   });
 
   it('stops listening after dispose', () => {

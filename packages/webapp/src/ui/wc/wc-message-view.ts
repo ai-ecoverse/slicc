@@ -446,7 +446,11 @@ function userMessageEl(message: ChatMessage): HTMLElement {
   // the persisted `content` (what the agent sees on replay/compaction) and
   // the rendered view cleanly separated — typed messages are a no-op pass.
   bubble.setBodyHtml(renderMessageContent(stripDictationMarkers(message.content)));
-  if (message.queued) bubble.setAttribute('queued', '');
+  // The inline `queued` attribute path is dead: live queued submissions render
+  // in `<slicc-queued-stack>` until they flush, and persisted user messages
+  // (replay/history) — including any legacy rows that still carry the flag —
+  // render as ordinary bubbles. The `queued` field on `ChatMessage` is kept
+  // for the placeholder/copy-row filters and for back-compat with stored sessions.
   if (message.attachments?.length) {
     bubble.setAttachments(message.attachments.map(toUserAttachment));
     // Fire `viewmedia` once per displayed image — the thread rebuilds many
