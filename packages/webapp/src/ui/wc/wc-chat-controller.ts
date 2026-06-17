@@ -11,6 +11,7 @@ import {
   consumeDictationFirst,
   stripDictationMarkers,
 } from '../../speech/dictation-priming.js';
+import { trackChatSend } from '../telemetry.js';
 import type { AgentEvent, AgentHandle, ChatMessage } from '../types.js';
 import { createCopyRow } from './wc-copy-row.js';
 import { collateLickMessages, daySeparatorEl, messageEls } from './wc-message-view.js';
@@ -37,6 +38,12 @@ export interface WcChatControllerOptions {
    * when none exists). The spoken-reply loop hangs off this.
    */
   onTurnComplete?: (message: ChatMessage | null) => void;
+  /**
+   * Telemetry context resolver fired on each user-initiated send. Returns the
+   * scoop name + resolved model id for the `formsubmit` beacon; returning
+   * null / throwing skips the beacon (telemetry must never block a send).
+   */
+  resolveTelemetryContext?: () => { scoopName: string; model: string } | null;
 }
 
 function uid(): string {
@@ -50,6 +57,7 @@ export class WcChatController {
   readonly #onMessageRendered?: (message: ChatMessage, els: readonly HTMLElement[]) => void;
   readonly #onMessageDisposed?: (messageId: string) => void;
   readonly #onTurnComplete?: (message: ChatMessage | null) => void;
+  readonly #resolveTelemetryContext?: () => { scoopName: string; model: string } | null;
   #unsubscribe: () => void;
   #onLocalUserMessage?: (
     text: string,
@@ -78,6 +86,7 @@ export class WcChatController {
     this.#onMessageRendered = options.onMessageRendered;
     this.#onMessageDisposed = options.onMessageDisposed;
     this.#onTurnComplete = options.onTurnComplete;
+    this.#resolveTelemetryContext = options.resolveTelemetryContext;
     this.#unsubscribe = options.agent.onEvent((event) => this.#handleAgentEvent(event));
     // Bubbled retry event from any rendered `slicc-error-card` (composed, so it
     // pierces shadow roots). One listener at the thread covers every error card.
@@ -218,6 +227,11 @@ export class WcChatController {
     };
     this.#appendMessage(message);
     this.#agent.sendMessage(content, message.id, message.attachments);
+    // Fire ONLY on the single user-initiated send site. The retry path
+    // (`#handleErrorRetry`) replays an existing user turn through
+    // `#agent.sendMessage` directly and intentionally does NOT re-beacon,
+    // so a click on "Try again" can't inflate the chat-send count.
+    this.#emitChatSendBeacon();
     try {
       // Attachments ride along so tray followers see the full prompt, not a
       // text-only echo. The follower echo is a DISPLAY string — iOS renders
@@ -241,6 +255,22 @@ export class WcChatController {
    */
   #applyDictation(text: string): string {
     return applyDictationMarkers(text, consumeDictationFirst());
+  }
+
+  /**
+   * Resolve the active scoop name + model and emit the `formsubmit` telemetry
+   * beacon. Failure to resolve is silently swallowed — telemetry is fire and
+   * forget and must never disrupt the send path.
+   */
+  #emitChatSendBeacon(): void {
+    if (!this.#resolveTelemetryContext) return;
+    try {
+      const ctx = this.#resolveTelemetryContext();
+      if (!ctx) return;
+      trackChatSend(ctx.scoopName, ctx.model);
+    } catch {
+      // Telemetry must never block the send.
+    }
   }
 
   /** Render an inbound lick (webhook/cron/…) into the thread. */
