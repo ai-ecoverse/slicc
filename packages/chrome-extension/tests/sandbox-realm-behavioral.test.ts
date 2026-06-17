@@ -1218,3 +1218,68 @@ describe('VAL-ESM-015: sandbox.html executes ESM CSP-safely (no native import() 
     expect(INLINE_SCRIPT).toMatch(/AsyncFunction/);
   });
 });
+
+describe('VAL-IPX-012: entry sloppy (CJS) vs strict (ESM) — dual-float parity', () => {
+  // Node runs a CommonJS entry in SLOPPY mode and an ES-module entry in STRICT
+  // mode. The realm must match this at the ENTRY layer: the `"use strict"`
+  // wrapper prefix is applied ONLY when the entry is ESM-derived (transpiled to
+  // `graph.entrySource`). These cases prove the conditional BEHAVIORALLY in both
+  // the iframe (`sandbox.html`) float and the CLI worker (`runJsRealm`) float.
+  //
+  // The CJS case needs no transpile (no import/export). The ESM case injects a
+  // TypeScript-only entry transpile with `noImplicitUseStrict` so the emitted
+  // CJS body carries NO "use strict" of its own — strictness then comes purely
+  // from the realm's conditional wrapper prefix, isolating exactly the behavior
+  // under test (esbuild can't load under jsdom, mirroring VAL-GLOBALS-016).
+  const tsEntryTranspileNoImplicitStrict: EntryTranspile = async ({ source, filename }) => {
+    const out = ts.transpileModule(source, {
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        target: ts.ScriptTarget.ES2020,
+        esModuleInterop: true,
+        noImplicitUseStrict: true,
+      },
+      fileName: `${(filename || '[eval]').replace(/\.[^./]+$/, '')}.ts`,
+    });
+    return out.outputText;
+  };
+
+  it('a plain-CJS entry using a strict-only reserved word runs sloppy (prints 42) in both floats', async () => {
+    // No import/export, so `graph.entrySource` stays undefined and the entry
+    // runs verbatim WITHOUT a "use strict" prefix; `var implements` is a legal
+    // identifier in sloppy mode, exactly as Node runs a `node <script.js>` /
+    // `node -e` / ipx bin entry.
+    const code = 'var implements = 41;\nconsole.log(implements + 1);';
+    const { iframe, worker } = await runBothFloats(code);
+
+    expect(worker.exitCode).toBe(0);
+    expect(iframe.exitCode).toBe(0);
+    expect(worker.stdout.trim()).toBe('42');
+    expect(iframe.stdout).toBe(worker.stdout);
+    expect(iframe.stderr).toBe(worker.stderr);
+    expect(iframe.exitCode).toBe(worker.exitCode);
+  });
+
+  it('an ESM entry stays strict (undeclared-assignment throws) in both floats', async () => {
+    // `export {}` marks the entry ESM-derived → `graph.entrySource` is set →
+    // the wrapper prepends "use strict". Assigning to an undeclared identifier
+    // throws a ReferenceError in strict mode but silently creates a global in
+    // sloppy mode, so the throw proves the entry runs strict. (A runtime
+    // violation is used over the `var implements` parse error so it fails the
+    // SAME way INSIDE the evaluator's try/catch in both floats — a parse error
+    // throws at AsyncFunction construction, which the worker float surfaces as
+    // a realm-error rather than an exit code.)
+    const code =
+      "import 'sliccy:time';\nesmStrictProbe = 7;\nconsole.log('ran:' + esmStrictProbe);";
+    const host = { transpileEntry: tsEntryTranspileNoImplicitStrict };
+    const { iframe, worker } = await runBothFloats(code, { host });
+
+    expect(worker.exitCode).toBe(1);
+    expect(iframe.exitCode).toBe(1);
+    expect(worker.stderr).toContain('esmStrictProbe');
+    expect(worker.stderr).toMatch(/not defined/);
+    expect(worker.stdout).not.toContain('ran:');
+    expect(iframe.stdout).toBe(worker.stdout);
+    expect(iframe.exitCode).toBe(worker.exitCode);
+  });
+});
