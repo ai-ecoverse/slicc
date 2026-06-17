@@ -345,6 +345,38 @@ describe('tool presentation', () => {
     expect(custom.output).toBe('On branch main');
   });
 
+  // Chained bash commands: the row icon is driven by the most semantically
+  // meaningful segment (the "real work"), not a low-signal preamble like a
+  // `cd`/`echo`/`export`. See issue #1035.
+  it('ranks chained bash segments so housekeeping preambles lose the icon', () => {
+    const cases: Array<[string, string]> = [
+      // Housekeeping preamble loses to a known git command.
+      ['cd repo && git push', 'git-branch'],
+      // Pure housekeeping pipe still resolves deterministically (first wins).
+      ['cd /tmp && pwd', 'corner-down-right'],
+      // Env-setup housekeeping loses to curl (known network tool).
+      ['export FOO=1 && curl https://x', 'globe'],
+      // Echo housekeeping loses to a known command — npm beats echo here, so
+      // the row picks up npm's `package` icon rather than echo's `quote`.
+      ['echo hi && npm test', 'package'],
+      // The `test` supplemental command outranks an echo preamble: this is
+      // the literal "echo + real-command → real-command icon" case from the
+      // spec, picking `flask-conical` from BASH_ICONS.test.
+      ['echo hi && test foo', 'flask-conical'],
+      // Pipe is also a separator.
+      ['cat foo | grep bar', 'file-text'],
+      // Newline is a separator.
+      ['cd /tmp\ngit status', 'git-branch'],
+      // `||` and `;` are separators too.
+      ['true || rm -rf /tmp/x', 'trash-2'],
+      ['set -e; npm install', 'package'],
+    ];
+    for (const [command, icon] of cases) {
+      const [, row] = messageEls(call('bash', { command }, 'ok'));
+      expect(row.getAttribute('icon'), command).toBe(icon);
+    }
+  });
+
   it('edit bodies show old/new with the diff classes; writes show added content', () => {
     const [, editRow] = messageEls(
       call('edit_file', { path: '/a.ts', old_string: 'before', new_string: 'after' }, 'ok')

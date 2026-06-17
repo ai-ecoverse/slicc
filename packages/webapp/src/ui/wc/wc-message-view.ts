@@ -112,6 +112,40 @@ export function bashProgram(command: string): string {
   return '';
 }
 
+/** Low-signal "housekeeping" programs: navigation, env setup, no-ops. They
+ *  rank below any real command so a chained `cd repo && git push` draws the
+ *  `git-branch` icon, not `corner-down-right`. */
+const HOUSEKEEPING_PROGRAMS: ReadonlySet<string> = new Set([
+  'cd',
+  'echo',
+  'export',
+  'pwd',
+  'true',
+  ':',
+  'set',
+]);
+
+/**
+ * Pick the most semantically meaningful program from a bash command that may
+ * chain several segments together. Splits on `&&`, `||`, `;`, `|`, and
+ * newlines, extracts each segment's program via {@link bashProgram}, scores
+ * each (known-in-`BASH_ICONS` > unknown > housekeeping), and returns the
+ * highest scorer — first wins on ties. When every segment is housekeeping
+ * (e.g. `cd /tmp && pwd`), the first one still wins so the row icon stays
+ * deterministic instead of going empty.
+ */
+export function bashIconProgram(command: string): string {
+  const segments = command.split(/&&|\|\||[;|\n]/);
+  let best: { program: string; score: number } | null = null;
+  for (const seg of segments) {
+    const prog = bashProgram(seg);
+    if (!prog) continue;
+    const score = HOUSEKEEPING_PROGRAMS.has(prog) ? 1 : prog in BASH_ICONS ? 3 : 2;
+    if (!best || score > best.score) best = { program: prog, score };
+  }
+  return best?.program ?? '';
+}
+
 /**
  * Lucide icons for the shell's built-in commands — the cogwheel/CLI glyph is
  * the last resort, not the default look of every bash row.
@@ -205,7 +239,7 @@ export const TOOL_ICONS: Readonly<Record<string, string>> = {
  *  falls back to a known-good generic instead of a blank `<svg>` placeholder. */
 export function toolIcon(call: Pick<ToolCall, 'name' | 'input'>): string {
   if (call.name === 'bash') {
-    const picked = BASH_ICONS[bashProgram(bashCommand(call.input))] ?? 'terminal';
+    const picked = BASH_ICONS[bashIconProgram(bashCommand(call.input))] ?? 'terminal';
     return hasIcon(picked) ? picked : 'terminal';
   }
   const picked = TOOL_ICONS[call.name] ?? 'wrench';
