@@ -327,6 +327,10 @@ describe('slicc-composer-capture', () => {
     // Video mode requests audio AND video so the recorded stream carries mic.
     expect(provider.calls[0]).toEqual({ video: true, audio: true });
     expect(provider.streams[0].getAudioTracks().length).toBe(1);
+    // The live preview element is muted so the mic doesn't echo back through
+    // local playback. `srcObject` ignores the `muted` content attribute in
+    // Chromium — only the IDL property mutes a MediaStream preview.
+    expect(videoOf(el).muted).toBe(true);
 
     // Record.
     primaryOf(el).click();
@@ -624,6 +628,49 @@ describe('slicc-composer-capture', () => {
     expect(audioAfter).toBe(liveAudio);
     expect(audioAfter.getSettings?.().deviceId).toBe('mic-usb');
     expect(audioAfter.readyState).toBe('live');
+
+    el.querySelector<HTMLElement>('[part="cancel"]')?.click();
+    await pending;
+  });
+
+  it('preview <video>.muted stays true across attachStream paths (open/switch/promote)', async () => {
+    const provider = makeProvider(TWO_CAMERAS, TWO_MICS);
+    const el = mount(provider);
+
+    // Start in photo mode (no mic) — preview must already be muted.
+    const pending = el.open('photo');
+    await vi.waitFor(() => {
+      expect(videoOf(el).srcObject).toBeTruthy();
+    });
+    expect(videoOf(el).muted).toBe(true);
+
+    // Promote photo→video — `#attachStream` runs again with an audio track.
+    const videoBtn = el.querySelectorAll<HTMLElement>('[part="mode"]')[1];
+    videoBtn?.click();
+    await vi.waitFor(() => {
+      expect(provider.streams.at(-1)?.getAudioTracks().length).toBe(1);
+    });
+    expect(videoOf(el).muted).toBe(true);
+
+    // Camera switch — `#attachStream` runs against the merged stream.
+    const camPicker = pickerOf(el);
+    camPicker.value = 'cam-rear';
+    camPicker.dispatchEvent(new Event('change'));
+    await vi.waitFor(() => {
+      const last = provider.calls.at(-1);
+      expect(last && 'video' in last).toBe(true);
+    });
+    expect(videoOf(el).muted).toBe(true);
+
+    // Mic switch — audio track is swapped on the live stream.
+    const micPicker = micPickerOf(el);
+    micPicker.value = 'mic-usb';
+    micPicker.dispatchEvent(new Event('change'));
+    await vi.waitFor(() => {
+      const live = videoOf(el).srcObject as MediaStream;
+      expect(live.getAudioTracks()[0]?.getSettings?.().deviceId).toBe('mic-usb');
+    });
+    expect(videoOf(el).muted).toBe(true);
 
     el.querySelector<HTMLElement>('[part="cancel"]')?.click();
     await pending;

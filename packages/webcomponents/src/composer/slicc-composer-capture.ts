@@ -495,6 +495,9 @@ export class SliccComposerCapture extends HTMLElement {
 
   #attachStream(stream: MediaStream): void {
     this.#video.srcObject = stream;
+    // Defensive: ensure the IDL property is set before `play()` so a
+    // mic-carrying stream cannot echo through the preview element.
+    this.#video.muted = true;
     void this.#video.play?.()?.catch(() => undefined);
     const facing = stream.getVideoTracks()[0]?.getSettings?.().facingMode;
     this.#video.toggleAttribute('data-mirrored', facing !== 'environment');
@@ -829,6 +832,10 @@ export class SliccComposerCapture extends HTMLElement {
       muted: true,
       playsinline: true,
     }) as HTMLVideoElement;
+    // Chromium honors the `muted` IDL property — not the content attribute —
+    // when playback is driven by `srcObject`. Set it directly so the live
+    // preview never replays microphone audio (recorded stream is untouched).
+    this.#video.muted = true;
 
     this.#status = h('div', { class: 'slicc-capture__status' });
 
