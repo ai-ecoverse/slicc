@@ -51,10 +51,10 @@ export const Cone: Story = {
     mode: 'cone',
     tint: '#b07823',
     coverage: 0.66,
-    brightness: 1,
-    contrast: 1,
-    noise: 0,
-    blur: 0,
+    brightness: 1.2,
+    contrast: 0.75,
+    noise: 0.04,
+    blur: 0.09,
   },
 };
 /** Scoop — the flowing ice-cream swirl, tinted to the active scoop accent. */

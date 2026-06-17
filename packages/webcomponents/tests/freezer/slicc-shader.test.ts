@@ -66,15 +66,16 @@ describe('slicc-shader', () => {
     expect(() => el.pulse()).not.toThrow();
   });
 
-  it('reflects cone-mode brightness/contrast/noise/blur knobs (identity defaults)', () => {
+  it('reflects cone-mode brightness/contrast/noise/blur knobs (tuned defaults)', () => {
     const el = mount();
-    // Defaults: brightness=1, contrast=1, noise=0, blur=0 (visual identity).
+    // Tuned defaults baked in so the cone field renders with the Storybook
+    // texture everywhere with no attributes required.
     // The blur attribute reflects to `blurAmount` because HTMLElement already
     // defines a `blur()` method — same renaming dance as `scroll`/`scrollOffset`.
-    expect(el.brightness).toBe(1);
-    expect(el.contrast).toBe(1);
-    expect(el.noise).toBe(0);
-    expect(el.blurAmount).toBe(0);
+    expect(el.brightness).toBe(1.2);
+    expect(el.contrast).toBe(0.75);
+    expect(el.noise).toBeCloseTo(0.04, 5);
+    expect(el.blurAmount).toBeCloseTo(0.09, 5);
     // Property → attribute round-trip.
     el.brightness = 1.25;
     el.contrast = 1.5;
@@ -93,15 +94,15 @@ describe('slicc-shader', () => {
     expect(el.contrast).toBe(0.5);
     expect(el.noise).toBe(0.3);
     expect(el.blurAmount).toBe(0);
-    // Bogus values fall back to the identity defaults.
+    // Bogus values fall back to the tuned defaults.
     el.setAttribute('brightness', 'nope');
     el.setAttribute('contrast', 'nope');
     el.setAttribute('noise', 'nope');
     el.setAttribute('blur', 'nope');
-    expect(el.brightness).toBe(1);
-    expect(el.contrast).toBe(1);
-    expect(el.noise).toBe(0);
-    expect(el.blurAmount).toBe(0);
+    expect(el.brightness).toBe(1.2);
+    expect(el.contrast).toBe(0.75);
+    expect(el.noise).toBeCloseTo(0.04, 5);
+    expect(el.blurAmount).toBeCloseTo(0.09, 5);
   });
 
   it('cone fragment program references the new brightness/contrast/noise/blur uniforms', () => {

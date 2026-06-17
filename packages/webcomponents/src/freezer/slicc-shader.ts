@@ -83,8 +83,9 @@ void main(){
   col+=u_evt*u_energy*stroke*exp(-dist*dist*4.0)*0.18;
   /* Cone-only post: a noise/grain layer whose sample frequency is driven by
      u_blur (high blur => low frequency / soft, low blur => sharp grain), then
-     contrast around 0.5 and brightness as a multiplier. Defaults are identity:
-     u_noise=0 zeroes the grain, u_contrast=1 and u_brightness=1 pass col through. */
+     contrast around 0.5 and brightness as a multiplier. The JS getters bake in
+     tuned defaults (brightness=1.2, contrast=0.75, noise=0.04, blur=0.09); at
+     the shader level the identity is still u_noise=0, u_contrast=1, u_brightness=1. */
   float noiseFreq=mix(80.0,4.0,clamp(u_blur,0.0,1.0));
   float grain=fbm(uv*noiseFreq)-0.5;
   col+=u_noise*grain;
@@ -322,25 +323,25 @@ export class SliccShader extends HTMLElement {
     this.setAttribute('scroll', String(value));
   }
 
-  /** Cone-mode multiplier on final color (identity = 1). */
+  /** Cone-mode multiplier on final color (tuned default = 1.2). */
   get brightness(): number {
-    return clampNum(Number.parseFloat(this.getAttribute('brightness') ?? ''), 0.5, 1.5, 1);
+    return clampNum(Number.parseFloat(this.getAttribute('brightness') ?? ''), 0.5, 1.5, 1.2);
   }
   set brightness(value: number) {
     this.setAttribute('brightness', String(value));
   }
 
-  /** Cone-mode contrast around a 0.5 pivot (identity = 1). */
+  /** Cone-mode contrast around a 0.5 pivot (tuned default = 0.75). */
   get contrast(): number {
-    return clampNum(Number.parseFloat(this.getAttribute('contrast') ?? ''), 0.5, 2, 1);
+    return clampNum(Number.parseFloat(this.getAttribute('contrast') ?? ''), 0.5, 2, 0.75);
   }
   set contrast(value: number) {
     this.setAttribute('contrast', String(value));
   }
 
-  /** Cone-mode grain amount added to the final color (identity = 0). */
+  /** Cone-mode grain amount added to the final color (tuned default = 0.04). */
   get noise(): number {
-    return clampNum(Number.parseFloat(this.getAttribute('noise') ?? ''), 0, 0.3, 0);
+    return clampNum(Number.parseFloat(this.getAttribute('noise') ?? ''), 0, 0.3, 0.04);
   }
   set noise(value: number) {
     this.setAttribute('noise', String(value));
@@ -349,10 +350,10 @@ export class SliccShader extends HTMLElement {
   /**
    * Cone-mode blur of the noise layer only (0 = sharp grain, 1 = soft).
    * Reflects the `blur` attribute; named `blurAmount` because `HTMLElement`
-   * already defines a `blur()` method.
+   * already defines a `blur()` method. Tuned default = 0.09.
    */
   get blurAmount(): number {
-    return clampNum(Number.parseFloat(this.getAttribute('blur') ?? ''), 0, 1, 0);
+    return clampNum(Number.parseFloat(this.getAttribute('blur') ?? ''), 0, 1, 0.09);
   }
   set blurAmount(value: number) {
     this.setAttribute('blur', String(value));
