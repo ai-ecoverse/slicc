@@ -602,13 +602,30 @@ export function isNoApiKeyError(content: string): boolean {
 }
 
 /**
+ * Detect a cone failure caused by an invalid model id (e.g. the user is on a
+ * stale alias the active provider doesn't accept). Bedrock CAMP wraps the
+ * upstream message as `Validation error: Bedrock CAMP API error (400): … The
+ * provided model identifier is invalid …` (see
+ * `providers/built-in/bedrock-camp.ts:formatHttpError`); other providers may
+ * pass the substring through verbatim. Match the substring case-insensitively
+ * so future provider wrappings don't drift out of detection.
+ */
+export function isInvalidModelError(content: string | null | undefined): boolean {
+  if (!content) return false;
+  return content.toLowerCase().includes('the provided model identifier is invalid');
+}
+
+/**
  * `slicc-error-card` for a cone-error message. The card is purely
  * presentational; the chat controller listens for the bubbled
  * `slicc-error-retry` event to re-run the last user turn via its existing
- * agent send path. For the "No API key configured" failure the CTA flips to
- * "Open Settings" (the agent retry path would just re-hit the same missing
- * key) — the card then fires `slicc-error-open-settings` instead and the
- * shell-level listener wired by `wireWcNav` routes it to the settings dialog.
+ * agent send path. Two error families flip the CTA:
+ * - "No API key configured" → `action="settings"`, fires
+ *   `slicc-error-open-settings`; routed to the settings dialog by
+ *   `wireWcNav` since the retry path would just re-hit the same missing key.
+ * - Invalid-model errors → `action="change-model"`, fires
+ *   `slicc-error-change-model`; routed to the composer model picker by
+ *   `wireWcNav` so the user can pick a working model.
  */
 function errorCardEl(message: ChatMessage): HTMLElement {
   const attrs: Record<string, string> = {
@@ -616,6 +633,7 @@ function errorCardEl(message: ChatMessage): HTMLElement {
     'message-id': message.id,
   };
   if (isNoApiKeyError(message.content)) attrs.action = 'settings';
+  else if (isInvalidModelError(message.content)) attrs.action = 'change-model';
   return el('slicc-error-card', attrs);
 }
 

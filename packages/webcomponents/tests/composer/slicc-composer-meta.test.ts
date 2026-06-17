@@ -515,6 +515,40 @@ describe('slicc-composer-meta', () => {
     });
   });
 
+  describe('programmatic openMenu()', () => {
+    it('mirrors a pill click — opens the model dropdown', () => {
+      const el = mount((e) => {
+        e.model = 'Opus 4.8';
+      });
+      expect(el.menuOpen).toBe(false);
+      el.openMenu();
+      expect(el.menuOpen).toBe(true);
+      expect(modelPill(el).getAttribute('aria-expanded')).toBe('true');
+      expect(el.shadowRoot?.querySelector('.mwrap.open')).not.toBeNull();
+    });
+
+    it('is a no-op in the no-accounts "Add AI" state', () => {
+      // The pill has no menu in this state — the host should route the
+      // intent into account settings instead. openMenu() mirrors that.
+      const el = mount((e) => {
+        e.models = [];
+      });
+      let addAi = 0;
+      el.addEventListener('add-ai', () => addAi++);
+      el.openMenu();
+      expect(el.menuOpen).toBe(false);
+      // openMenu does NOT fire add-ai; it just declines the open.
+      expect(addAi).toBe(0);
+    });
+
+    it('is idempotent — repeat calls leave the menu open exactly once', () => {
+      const el = mount();
+      el.openMenu();
+      el.openMenu();
+      expect(el.menuOpen).toBe(true);
+    });
+  });
+
   describe('lifecycle cleanup', () => {
     it('detaches click listeners on disconnect', () => {
       const el = mount();

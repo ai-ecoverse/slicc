@@ -182,4 +182,94 @@ describe('wireWcNav', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(showWcSettingsSpy).toHaveBeenCalledTimes(1);
   });
+
+  it('opens the composer model picker on slicc-error-change-model from the thread', async () => {
+    const refs = makeRefs();
+    const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+    const openMenu = vi.fn();
+    (refs.composerMeta as HTMLElement & { openMenu?: () => void }).openMenu = openMenu;
+    await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+    // `wireWcNav` resets `models` from the (empty) provider registry; seed
+    // AFTER it runs so the handler sees a non-empty list and routes to the
+    // picker rather than to settings.
+    (refs.composerMeta as HTMLElement & { models?: unknown[] }).models = [
+      { name: 'Opus 4.8', provider: 'Anthropic', id: 'anthropic:claude-opus-4-8' },
+    ];
+
+    refs.thread.dispatchEvent(
+      new CustomEvent('slicc-error-change-model', {
+        bubbles: true,
+        composed: true,
+        detail: { messageId: 'err-1' },
+      })
+    );
+    expect(openMenu).toHaveBeenCalledTimes(1);
+  });
+
+  it('auto-replays the failed turn on the NEXT model-change after change-model', async () => {
+    const refs = makeRefs();
+    const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+    (refs.composerMeta as HTMLElement & { openMenu?: () => void }).openMenu = vi.fn();
+    await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+    (refs.composerMeta as HTMLElement & { models?: unknown[] }).models = [
+      { name: 'Opus 4.8', provider: 'Anthropic', id: 'anthropic:claude-opus-4-8' },
+    ];
+
+    const retries: CustomEvent[] = [];
+    refs.thread.addEventListener('slicc-error-retry', (e) => retries.push(e as CustomEvent));
+
+    // (1) User clicks Change-model on the error card — stamps the failed id.
+    refs.thread.dispatchEvent(
+      new CustomEvent('slicc-error-change-model', {
+        bubbles: true,
+        composed: true,
+        detail: { messageId: 'err-im' },
+      })
+    );
+    expect(retries).toHaveLength(0);
+
+    // (2) User picks a new model — the picker emits model-change. The next
+    // change consumes the staged retry id and fires slicc-error-retry.
+    refs.composerMeta.dispatchEvent(
+      new CustomEvent('model-change', {
+        bubbles: true,
+        detail: { id: 'adobe:claude-opus-4-7' },
+      })
+    );
+    expect(retries).toHaveLength(1);
+    expect(retries[0].detail).toEqual({ messageId: 'err-im' });
+    expect(retries[0].bubbles).toBe(true);
+    expect(retries[0].composed).toBe(true);
+
+    // (3) A subsequent model-change with no pending retry does NOT re-fire.
+    refs.composerMeta.dispatchEvent(
+      new CustomEvent('model-change', {
+        bubbles: true,
+        detail: { id: 'adobe:claude-sonnet-4-6' },
+      })
+    );
+    expect(retries).toHaveLength(1);
+  });
+
+  it('routes change-model to settings when there are no models yet (no accounts)', async () => {
+    const refs = makeRefs();
+    const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+    (refs.composerMeta as HTMLElement & { models?: unknown[] }).models = [];
+    const openMenu = vi.fn();
+    (refs.composerMeta as HTMLElement & { openMenu?: () => void }).openMenu = openMenu;
+    await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+
+    refs.thread.dispatchEvent(
+      new CustomEvent('slicc-error-change-model', {
+        bubbles: true,
+        composed: true,
+        detail: { messageId: 'err-1' },
+      })
+    );
+    // No menu open in the no-accounts state — the host should drop the user
+    // into account settings instead (asserted indirectly via openMenu staying
+    // untouched; the settings-dialog import is dynamic and exercised in the
+    // settings-wiring tests).
+    expect(openMenu).not.toHaveBeenCalled();
+  });
 });

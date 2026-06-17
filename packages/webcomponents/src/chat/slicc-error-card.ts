@@ -20,21 +20,28 @@ import { iconEl } from '../internal/icons.js';
  * Set the body via the `message` attribute (escaped plain text) or project
  * content into the default slot for rich markup.
  *
- * The `action` attribute switches the trailing affordance from the default
- * `retry` CTA to a `settings` CTA — clicking dispatches `slicc-error-open-settings`
- * instead of `slicc-error-retry`, the default label flips to "Open Settings",
- * and the glyph swaps to `settings`. Hosts use this for failures the user
- * fixes by opening Settings (e.g. "No API key configured") rather than by
- * re-running the same failing turn.
+ * The `action` attribute switches the trailing affordance between three
+ * CTAs that share the same surface:
+ * - `"retry"` (default) — "Try again" label, `rotate-ccw` icon, fires
+ *   `slicc-error-retry`.
+ * - `"settings"` — "Open Settings" label, `settings` icon, fires
+ *   `slicc-error-open-settings`. Used for failures the user fixes by
+ *   opening Settings (e.g. "No API key configured") rather than by
+ *   re-running the same failing turn.
+ * - `"change-model"` — "Change model" label, `sparkles` icon, fires
+ *   `slicc-error-change-model`. Used for invalid-model failures so the host
+ *   can open the composer model picker instead of pointlessly re-running
+ *   the same failed turn.
  *
  * @attr label - the header label (default "Something went wrong")
  * @attr message - error body text (escaped); ignored when slotted content is present
- * @attr button-label - action button label (default "Try again", or "Open Settings"
- *   when `action="settings"`)
+ * @attr button-label - action button label (defaults vary by `action`:
+ *   "Try again" / "Open Settings" / "Change model")
  * @attr message-id - id of the failed chat message this card stands for; echoed
  *   back on the action event so the host can bind it to THIS turn
- * @attr action - `retry` (default) | `settings`; switches the CTA event,
- *   default label, and glyph
+ * @attr action - `retry` (default) | `settings` | `change-model`; switches the
+ *   CTA event, default label, and glyph. Unknown values normalize back to
+ *   `"retry"` so legacy hosts stay safe.
  * @attr theme - `light` | `dark`; per-element override of the inherited theme
  * @csspart card - the outer `.err` card
  * @csspart header - the `.eh` header row
@@ -47,19 +54,31 @@ import { iconEl } from '../internal/icons.js';
  *   click (bubbles, composed) when `action="retry"` (the default)
  * @fires slicc-error-open-settings - { messageId: string | null } dispatched on
  *   click (bubbles, composed) when `action="settings"`
+ * @fires slicc-error-change-model - { messageId: string | null } dispatched on
+ *   click (bubbles, composed) when `action="change-model"`
  */
+
+/** Recognized values for the `action` attribute. */
+export type ErrorAction = 'retry' | 'settings' | 'change-model';
 
 /** Pixel size of the lucide header icon. */
 const HEADER_ICON_SIZE = 14;
+/** Pixel size of the lucide button icon. */
+const BUTTON_ICON_SIZE = 12;
 /** Default header label. */
 const DEFAULT_LABEL = 'Something went wrong';
-/** Default retry button label. */
-const DEFAULT_BUTTON_LABEL = 'Try again';
-/** Default button label when the `settings` action is selected. */
-const DEFAULT_SETTINGS_BUTTON_LABEL = 'Open Settings';
-
-/** Recognized values for the `action` attribute. */
-type ErrorAction = 'retry' | 'settings';
+/** Default button label per action variant. */
+const DEFAULT_BUTTON_LABEL: Record<ErrorAction, string> = {
+  retry: 'Try again',
+  settings: 'Open Settings',
+  'change-model': 'Change model',
+};
+/** Lucide icon name per action variant. */
+const BUTTON_ICON: Record<ErrorAction, string> = {
+  retry: 'rotate-ccw',
+  settings: 'settings',
+  'change-model': 'sparkles',
+};
 
 const STYLE = `
 :host{
@@ -199,12 +218,15 @@ export class SliccErrorCard extends HTMLElement {
   }
 
   /**
-   * Action mode: `retry` (default) fires `slicc-error-retry`; `settings` fires
-   * `slicc-error-open-settings`. Any unknown value is normalized back to
-   * `retry` so the default behavior is byte-for-byte preserved.
+   * Action mode: `retry` (default) fires `slicc-error-retry`; `settings`
+   * fires `slicc-error-open-settings`; `change-model` fires
+   * `slicc-error-change-model`. Any unknown value is normalized back to
+   * `retry` so legacy hosts stay safe.
    */
   get action(): ErrorAction {
-    return this.getAttribute('action') === 'settings' ? 'settings' : 'retry';
+    const a = this.getAttribute('action');
+    if (a === 'settings' || a === 'change-model') return a;
+    return 'retry';
   }
 
   set action(value: ErrorAction | null) {
@@ -245,14 +267,23 @@ export class SliccErrorCard extends HTMLElement {
     );
   }
 
+  /** Dispatch `slicc-error-change-model` — fired by the button in `change-model` mode. */
+  changeModel(): void {
+    this.dispatchEvent(
+      new CustomEvent('slicc-error-change-model', {
+        detail: { messageId: this.getAttribute('message-id') ?? null },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
   #render(): void {
     const action = this.action;
     const label = this.label ?? DEFAULT_LABEL;
     const message = this.message;
-    const defaultButtonLabel =
-      action === 'settings' ? DEFAULT_SETTINGS_BUTTON_LABEL : DEFAULT_BUTTON_LABEL;
-    const buttonLabel = this.buttonLabel ?? defaultButtonLabel;
-    const buttonIcon = action === 'settings' ? 'settings' : 'rotate-ccw';
+    const buttonLabel = this.buttonLabel ?? DEFAULT_BUTTON_LABEL[action];
+    const buttonIcon = BUTTON_ICON[action];
 
     const icon = h('span', { class: 'ic', part: 'icon', 'aria-hidden': true });
     icon.append(iconEl('triangle-alert', { size: HEADER_ICON_SIZE }));
@@ -268,6 +299,8 @@ export class SliccErrorCard extends HTMLElement {
     // attribute (a text node escapes by construction — no markup interpolation).
     const bodyRow = h('div', { class: 'eb', part: 'body' }, message != null ? message : h('slot'));
 
+    // The class hook stays `retry` so existing CSS / shadow-piercing tests
+    // keep matching across all three action variants.
     const actionBtn = h(
       'button',
       {
@@ -276,7 +309,7 @@ export class SliccErrorCard extends HTMLElement {
         part: 'button',
         'aria-label': buttonLabel,
       },
-      iconEl(buttonIcon, { size: 12 }),
+      iconEl(buttonIcon, { size: BUTTON_ICON_SIZE }),
       buttonLabel
     );
 
@@ -292,7 +325,12 @@ export class SliccErrorCard extends HTMLElement {
     this.#unbindAction();
     const btn = this.#root.querySelector('.retry');
     if (!btn) return;
-    this.#onActionClick = () => (this.action === 'settings' ? this.openSettings() : this.retry());
+    const action = this.action;
+    this.#onActionClick = () => {
+      if (action === 'settings') this.openSettings();
+      else if (action === 'change-model') this.changeModel();
+      else this.retry();
+    };
     btn.addEventListener('click', this.#onActionClick as EventListener);
   }
 
