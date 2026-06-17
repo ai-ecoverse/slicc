@@ -120,6 +120,12 @@ export interface AbortMsg {
   scoopJid: string;
 }
 
+export interface DeleteQueuedMessageMsg {
+  type: 'delete-queued-message';
+  scoopJid: string;
+  messageId: string;
+}
+
 export interface SetModelMsg {
   type: 'set-model';
   provider: string;
@@ -761,6 +767,7 @@ export type PanelToOffscreenMessage =
   | ScoopFeedMsg
   | ScoopDropMsg
   | AbortMsg
+  | DeleteQueuedMessageMsg
   | SetModelMsg
   | RequestStateMsg
   | RequestScoopMessagesMsg

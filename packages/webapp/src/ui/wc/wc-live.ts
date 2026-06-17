@@ -749,11 +749,17 @@ function createWcController(
   });
   // Local dismiss path: the `×` button on the stack's front card emits a
   // composed `slicc-queued-remove`; the controller drops the matching item
-  // and re-fires `onQueuedChange` so the stack re-renders. Orchestrator
-  // dequeue is tracked separately — for now the agent keeps the message.
+  // and re-fires `onQueuedChange` so the stack re-renders. The same id is
+  // also dropped from the orchestrator's queue so the message never reaches
+  // the agent on the next poll.
   refs.queuedStack.addEventListener('slicc-queued-remove', (event) => {
     const id = (event as CustomEvent<{ id?: string }>).detail?.id;
-    if (id) controller.removeQueuedMessage(id);
+    if (!id) return;
+    controller.removeQueuedMessage(id);
+    const jid = client.selectedScoopJid;
+    if (jid) {
+      void client.deleteQueuedMessage(jid, id).catch(() => undefined);
+    }
   });
   return { controller, agentHandle };
 }

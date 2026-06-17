@@ -1943,6 +1943,7 @@ describe('OffscreenBridge handlePanelMessage dispatch', () => {
       handleWebhookEvent: vi.fn(),
       stopScoop: vi.fn(),
       clearQueuedMessages: vi.fn().mockResolvedValue(undefined),
+      deleteQueuedMessage: vi.fn().mockResolvedValue(undefined),
       clearScoopMessages: vi.fn().mockResolvedValue(undefined),
       getScoopContext: vi.fn(() => undefined),
       createScoopTab: vi.fn(),
@@ -2069,6 +2070,17 @@ describe('OffscreenBridge handlePanelMessage dispatch', () => {
     await (bridge as any).handlePanelMessage({ type: 'abort', scoopJid: 'cone_1' });
     expect(mockOrchestrator.stopScoop).toHaveBeenCalledWith('cone_1');
     expect(mockOrchestrator.clearQueuedMessages).toHaveBeenCalledWith('cone_1');
+  });
+
+  it('delete-queued-message forwards to orchestrator.deleteQueuedMessage', async () => {
+    await (bridge as any).handlePanelMessage({
+      type: 'delete-queued-message',
+      scoopJid: 'cone_1',
+      messageId: 'msg-42',
+    });
+    expect(mockOrchestrator.deleteQueuedMessage).toHaveBeenCalledWith('cone_1', 'msg-42');
+    // Must not drop neighbouring queued items.
+    expect(mockOrchestrator.clearQueuedMessages).not.toHaveBeenCalled();
   });
 
   it('local-storage-set writes through to globalThis.localStorage', async () => {

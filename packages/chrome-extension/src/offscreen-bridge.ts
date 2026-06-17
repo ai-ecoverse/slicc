@@ -1402,6 +1402,13 @@ export class OffscreenBridge implements KernelFacade {
         break;
       }
 
+      case 'delete-queued-message': {
+        this.orchestrator.deleteQueuedMessage(msg.scoopJid, msg.messageId).catch((err) => {
+          console.warn('[offscreen-bridge] Failed to delete queued message:', err);
+        });
+        break;
+      }
+
       case 'set-model': {
         // Side panel already wrote to localStorage (shared origin).
         // Just tell all running ScoopContexts to re-read the model.
