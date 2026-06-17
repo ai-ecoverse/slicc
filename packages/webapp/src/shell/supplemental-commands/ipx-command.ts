@@ -259,18 +259,23 @@ export function createIpxCommand(name: string, deps: IpxCommandDeps): Command {
       // npx-like auto-install: an already-installed package runs as-is (no
       // reinstall); an absent one is installed (full transitive tree) first.
       let installProgress = '';
-      if (!resolved && !(await isPackageInstalled(deps.fs, ctx.cwd, binName))) {
+      if (!resolved) {
+        const alreadyInstalled = await isPackageInstalled(deps.fs, ctx.cwd, binName);
+        if (alreadyInstalled) {
+          return failure(name, `package '${binName}' does not expose an executable bin`);
+        }
+
         const installed = await autoInstall(name, binName, ctx, deps);
         if ('error' in installed) return installed.error;
         installProgress = installed.progress;
         resolved = await resolveBin(deps.fs, ctx.cwd, binName);
-      }
 
-      if (!resolved) {
-        return failure(
-          name,
-          `could not determine an executable named '${binName}' (run: ipk install ${binName})`
-        );
+        if (!resolved) {
+          return failure(
+            name,
+            `package '${binName}' was installed but does not expose an executable bin`
+          );
+        }
       }
 
       const invalid = await validateBinFile(name, binName, resolved.binFilePath, deps.fs);
