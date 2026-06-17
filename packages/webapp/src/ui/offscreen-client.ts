@@ -339,8 +339,8 @@ export class OffscreenClient implements KernelClientFacade {
     // Handled by the abort message
   }
 
-  async deleteQueuedMessage(_jid: string, _messageId: string): Promise<void> {
-    // Not supported through offscreen proxy
+  async deleteQueuedMessage(jid: string, messageId: string): Promise<void> {
+    this.send({ type: 'delete-queued-message', scoopJid: jid, messageId });
   }
 
   updateModel(): void {

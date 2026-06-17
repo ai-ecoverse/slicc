@@ -138,6 +138,7 @@ function makeOrchestratorMock() {
     unregisterScoop: vi.fn().mockResolvedValue(undefined),
     stopScoop: vi.fn(),
     clearQueuedMessages: vi.fn().mockResolvedValue(undefined),
+    deleteQueuedMessage: vi.fn().mockResolvedValue(undefined),
     clearAllMessages: vi.fn().mockResolvedValue(undefined),
     clearScoopMessages: vi.fn().mockResolvedValue(undefined),
     delegateToScoop: vi.fn().mockResolvedValue(undefined),
@@ -233,6 +234,16 @@ describe('Kernel facade parity', () => {
     const sessionStore = (facade as unknown as { sessionStore: { delete: Mock } }).sessionStore;
     expect(sessionStore.delete).toHaveBeenCalledWith('session-test-scoop');
     expect(orchestrator.unregisterScoop).toHaveBeenCalledWith('scoop_test');
+  });
+
+  // 2b. delete-queued-message: dismissing a queued card on the panel
+  //     drops the matching id from the orchestrator queue (and IndexedDB
+  //     via deleteMessage), leaving neighbouring queued items intact.
+  it('client.deleteQueuedMessage(jid, id) → orchestrator.deleteQueuedMessage(jid, id)', async () => {
+    await client.deleteQueuedMessage('cone_1', 'msg-42');
+    await tick();
+    expect(orchestrator.deleteQueuedMessage).toHaveBeenCalledWith('cone_1', 'msg-42');
+    expect(orchestrator.clearQueuedMessages).not.toHaveBeenCalled();
   });
 
   // 3. clear-chat is cone-only by design: only the cone's session row

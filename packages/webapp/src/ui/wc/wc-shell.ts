@@ -16,6 +16,7 @@ import {
   followSystemTheme,
   type SliccAvatarMenu,
   type SliccFileTree,
+  type SliccQueuedStack,
 } from '@slicc/webcomponents';
 // Adobe Clean @font-face — the library tokens reference the family but the
 // declarations lived only in the (never-loaded) legacy stylesheet.
@@ -71,6 +72,13 @@ export interface WcShellRefs {
   composer: HTMLElement;
   inputCard: HTMLElement;
   composerMeta: HTMLElement;
+  /**
+   * The pile of pending user submissions pinned above the input card. Renders
+   * nothing when empty (the component hides itself), so the idle composer is
+   * unchanged. Live floats populate it when submissions queue behind a busy
+   * agent; the fixture/preview keeps it empty.
+   */
+  queuedStack: SliccQueuedStack;
   switcher: HTMLElement & { scoops: SwitcherScoop[] };
   floatbar: HTMLElement;
   shell: HTMLElement;
@@ -170,12 +178,32 @@ function buildComposer(options: WcShellOptions): {
   composer: HTMLElement;
   inputCard: HTMLElement;
   composerMeta: HTMLElement;
+  queuedStack: SliccQueuedStack;
 } {
   const composer = el('slicc-composer');
+  // The queued pile sits ABOVE the input card inside the composer. Placement
+  // matches the Storybook `InComposer` story: the stack's `.stack` grid is
+  // positioned (so its cards can grid-overlap), which would paint atop a
+  // static sibling regardless of DOM order — so the input card is lifted to
+  // `z-index:1` and the stack is pinned to `z-index:0`, and the stack carries
+  // the overlap margin that tucks its front card under the opaque input card.
+  // The component renders nothing when empty, so an idle composer is visually
+  // unchanged. `minHeight` guarantees a visible peek above the overlap even
+  // for a short single-line front card: a 41px card would otherwise leave
+  // only ~9px above the 32px overlap, almost entirely hidden by the textarea.
+  // 76px reserves badge(~16) + gap(6) + ~22px card peek above the 32px tuck;
+  // taller cards exceed the floor and keep the deeper tucked-behind look.
+  const queuedStack = el('slicc-queued-stack') as SliccQueuedStack;
+  queuedStack.style.position = 'relative';
+  queuedStack.style.zIndex = '0';
+  queuedStack.style.marginBottom = '-32px';
+  queuedStack.style.minHeight = '76px';
   const inputCard = el('slicc-input-card', { placeholder: options.placeholder });
+  inputCard.style.position = 'relative';
+  inputCard.style.zIndex = '1';
   const composerMeta = el('slicc-composer-meta', { model: 'Preview', thinking: 'off' });
-  composer.append(inputCard, composerMeta);
-  return { composer, inputCard, composerMeta };
+  composer.append(queuedStack, inputCard, composerMeta);
+  return { composer, inputCard, composerMeta, queuedStack };
 }
 
 function buildWorkbench(): {
@@ -305,7 +333,7 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
     ...urlState,
   });
   thread.append(...buildThreadChildren(options.messages));
-  const { composer, inputCard, composerMeta } = buildComposer(options);
+  const { composer, inputCard, composerMeta, queuedStack } = buildComposer(options);
   pane.append(thread, composer);
 
   const { workbench, body, header, tree, termSurface, memoryHost, tabBar } = buildWorkbench();
@@ -348,6 +376,7 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
     composer,
     inputCard,
     composerMeta,
+    queuedStack,
     switcher,
     floatbar,
     shell,

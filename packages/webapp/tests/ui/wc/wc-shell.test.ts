@@ -295,6 +295,43 @@ describe('mountWcUiPreview', () => {
     expect(shader.getAttribute('scroll')).toBe('240');
   });
 
+  it('mounts a queued stack above the input card inside the composer (refs.queuedStack)', async () => {
+    const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const refs = mountWcShell(host, {
+      messages: [],
+      scoops: [],
+      floatLabel: 'live',
+      placeholder: 'p',
+    });
+    const composer = host.querySelector('slicc-composer');
+    const stack = composer?.querySelector('slicc-queued-stack');
+    const inputCard = composer?.querySelector('slicc-input-card');
+    expect(stack).toBeTruthy();
+    expect(inputCard).toBeTruthy();
+    // The stack must sit ABOVE the input card inside the composer so its pile
+    // grows out of the top of the composer band. The composer wraps its
+    // children in a `.slicc-composer__inner` band, so check document order
+    // via `compareDocumentPosition` rather than `composer.children` indices.
+    expect(
+      (stack as Element).compareDocumentPosition(inputCard as Element) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    // The InComposer placement contract: stack at z-index 0 + overlap margin,
+    // input card lifted to z-index 1 so its opaque background hides the bottom
+    // edge of the front card. The `minHeight` floor guarantees the badge and a
+    // sliver of the front card stay visible above the overlap even when the
+    // queued card is a single short line (without it, a ~41px card would leave
+    // only ~9px above the 32px tuck and be obscured by the textarea).
+    expect((stack as HTMLElement).style.zIndex).toBe('0');
+    expect((stack as HTMLElement).style.marginBottom).toBe('-32px');
+    expect((stack as HTMLElement).style.minHeight).toBe('76px');
+    expect((inputCard as HTMLElement).style.zIndex).toBe('1');
+    // The ref handle is the same node — controllers drive it via setMessages.
+    expect(refs.queuedStack).toBe(stack);
+  });
+
   it('echoes composer submissions into the thread', () => {
     const root = mount();
     const card = root.querySelector('slicc-input-card') as HTMLElement;

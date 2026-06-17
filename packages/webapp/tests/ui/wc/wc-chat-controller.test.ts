@@ -546,11 +546,202 @@ describe('WcChatController', () => {
     expect(thread.querySelector('slicc-lick-card')?.getAttribute('state')).toBe('dismissed');
   });
 
-  it('flags prompts sent while processing as queued', () => {
+  it('routes busy-submit prompts to the queued stack and skips the inline bubble', () => {
+    const queuedChanges: Array<readonly { id: string; text: string; attachments?: number }[]> = [];
+    const localController = new WcChatController({
+      thread,
+      agent,
+      onQueuedChange: (items) => queuedChanges.push(items.slice()),
+    });
     agent.emit({ type: 'message_start', messageId: 'm1' });
-    controller.sendUserMessage('queued one');
-    const bubble = [...thread.querySelectorAll('slicc-user-message')].at(-1);
-    expect(bubble?.hasAttribute('queued')).toBe(true);
+    const bubblesBefore = thread.querySelectorAll('slicc-user-message').length;
+    localController.sendUserMessage('queued one');
+    // Delivery still fires immediately (agent received it; orchestrator owns
+    // turn batching). The thread DOM is untouched — no inline bubble.
+    expect(agent.sent.at(-1)?.text).toBe('queued one');
+    expect(thread.querySelectorAll('slicc-user-message').length).toBe(bubblesBefore);
+    expect(thread.querySelector('slicc-user-message[queued]')).toBeNull();
+    // The host-render hook fired with the queued view (id + text only).
+    expect(queuedChanges.length).toBe(1);
+    expect(queuedChanges[0]).toHaveLength(1);
+    expect(queuedChanges[0][0].text).toBe('queued one');
+    expect(localController.getQueuedMessages()).toHaveLength(1);
+  });
+
+  it('flushes queued submissions into the thread at the next turn start', () => {
+    const queuedChanges: Array<readonly { id: string }[]> = [];
+    const localController = new WcChatController({
+      thread,
+      agent,
+      onQueuedChange: (items) => queuedChanges.push(items.slice()),
+    });
+    // Turn 1 starts, two prompts queue mid-turn, turn 1 ends.
+    agent.emit({ type: 'message_start', messageId: 'm1' });
+    localController.sendUserMessage('first queued');
+    localController.sendUserMessage('second queued');
+    agent.emit({ type: 'turn_end', messageId: 'm1' });
+    expect(localController.getQueuedMessages()).toHaveLength(2);
+    expect(thread.querySelectorAll('slicc-user-message').length).toBe(0);
+
+    // Turn 2's first message_start consumes the queue: both bubbles flush
+    // into the thread in enqueue order — first queued first — BEFORE the
+    // streaming assistant bubble. No `queued` attribute on either.
+    agent.emit({ type: 'message_start', messageId: 'm2' });
+    const userBubbles = thread.querySelectorAll('slicc-user-message');
+    expect(userBubbles).toHaveLength(2);
+    expect(userBubbles[0].shadowRoot?.textContent).toContain('first queued');
+    expect(userBubbles[1].shadowRoot?.textContent).toContain('second queued');
+    expect([...userBubbles].some((b) => b.hasAttribute('queued'))).toBe(false);
+    // The queued list is empty and the host got a final change call.
+    expect(localController.getQueuedMessages()).toHaveLength(0);
+    expect(queuedChanges.at(-1)).toHaveLength(0);
+  });
+
+  it('flushes queued submissions when scoop status drives the rising edge BEFORE message_start (live ordering)', () => {
+    // The LIVE-FLOAT regression: in `wc-live.ts` the scoop STATUS broadcast
+    // (`onStatusChange → setProcessing(status === 'processing')`) flips
+    // `#processing` to true BEFORE the agent's `message_start` arrives. A
+    // flush gated on the `message_start` handler would see `#processing`
+    // already true and skip — leaving queued bubbles invisible (never
+    // appended to the thread) AND uncleared (never removed from the stack).
+    const queuedChanges: Array<readonly { id: string }[]> = [];
+    const localController = new WcChatController({
+      thread,
+      agent,
+      onQueuedChange: (items) => queuedChanges.push(items.slice()),
+    });
+    // Turn 1 runs and ends — queue two prompts mid-turn, then the falling
+    // edge lands so the next rise is a real false→true transition.
+    agent.emit({ type: 'message_start', messageId: 'm1' });
+    localController.sendUserMessage('first queued');
+    localController.sendUserMessage('second queued');
+    agent.emit({ type: 'turn_end', messageId: 'm1' });
+    expect(localController.getQueuedMessages()).toHaveLength(2);
+    expect(thread.querySelectorAll('slicc-user-message').length).toBe(0);
+    queuedChanges.length = 0;
+
+    // Live ordering: status broadcast fires the rising edge FIRST, with no
+    // accompanying `message_start` from the agent. The flush MUST happen
+    // here — both into the thread (two user bubbles, enqueue order) and
+    // into the host hook (final onQueuedChange with an empty list).
+    localController.setProcessing(true);
+    const flushed = thread.querySelectorAll('slicc-user-message');
+    expect(flushed).toHaveLength(2);
+    expect(flushed[0].shadowRoot?.textContent).toContain('first queued');
+    expect(flushed[1].shadowRoot?.textContent).toContain('second queued');
+    expect([...flushed].some((b) => b.hasAttribute('queued'))).toBe(false);
+    expect(localController.getQueuedMessages()).toHaveLength(0);
+    expect(queuedChanges.at(-1)).toHaveLength(0);
+
+    // The trailing `message_start` finds `#processing` already true → the
+    // setProcessing early-return short-circuits the second flush, so the
+    // user bubbles stay (no duplicates) and the streaming assistant lands
+    // beneath them.
+    agent.emit({ type: 'message_start', messageId: 'm2' });
+    expect(thread.querySelectorAll('slicc-user-message')).toHaveLength(2);
+  });
+
+  it('does not re-flush queued items on mid-turn second message_start (multi-message turn)', () => {
+    agent.emit({ type: 'message_start', messageId: 'm1' });
+    controller.sendUserMessage('queued mid-turn');
+    expect(thread.querySelectorAll('slicc-user-message').length).toBe(0);
+    // A second message_start in the SAME turn (multi-message) must NOT
+    // flush — those items belong to the NEXT turn.
+    agent.emit({ type: 'message_start', messageId: 'm1b' });
+    expect(thread.querySelectorAll('slicc-user-message').length).toBe(0);
+    expect(controller.getQueuedMessages()).toHaveLength(1);
+  });
+
+  it('removeQueuedMessage drops the item locally and re-fires onQueuedChange', () => {
+    const queuedChanges: Array<readonly { id: string }[]> = [];
+    const localController = new WcChatController({
+      thread,
+      agent,
+      onQueuedChange: (items) => queuedChanges.push(items.slice()),
+    });
+    agent.emit({ type: 'message_start', messageId: 'm1' });
+    localController.sendUserMessage('keep me');
+    localController.sendUserMessage('drop me');
+    const view = localController.getQueuedMessages();
+    expect(view).toHaveLength(2);
+    const dropId = view[1].id;
+    queuedChanges.length = 0;
+    localController.removeQueuedMessage(dropId);
+    expect(localController.getQueuedMessages().map((m) => m.text)).toEqual(['keep me']);
+    expect(queuedChanges.at(-1)).toHaveLength(1);
+    // Unknown id is a no-op (no change notification).
+    queuedChanges.length = 0;
+    localController.removeQueuedMessage('does-not-exist');
+    expect(queuedChanges).toHaveLength(0);
+  });
+
+  it('loadMessages cancels every dropped queued id on the backend via onQueuedCancel', () => {
+    // Regression for PR #1062 review: a queue-drop on scoop switch / reload
+    // must route each dropped id through the SAME backend cancel path the
+    // local `×` dismiss uses, otherwise the orchestrator silently delivers
+    // the dropped prompts after the user navigated away.
+    const cancelled: string[] = [];
+    const localController = new WcChatController({
+      thread,
+      agent,
+      onQueuedCancel: (id) => cancelled.push(id),
+    });
+    agent.emit({ type: 'message_start', messageId: 'm1' });
+    localController.sendUserMessage('queued one');
+    localController.sendUserMessage('queued two');
+    const ids = localController.getQueuedMessages().map((m) => m.id);
+    expect(ids).toHaveLength(2);
+    // Scoop switch / session reload: loadMessages clears #queued.
+    localController.loadMessages([]);
+    expect(cancelled).toEqual(ids);
+    expect(localController.getQueuedMessages()).toHaveLength(0);
+  });
+
+  it('loadMessages does not fire onQueuedCancel when the queue is already empty', () => {
+    const cancelled: string[] = [];
+    const localController = new WcChatController({
+      thread,
+      agent,
+      onQueuedCancel: (id) => cancelled.push(id),
+    });
+    localController.loadMessages([{ id: 'h1', role: 'user', content: 'historical', timestamp: 1 }]);
+    expect(cancelled).toEqual([]);
+  });
+
+  it('loadMessages still clears #queued and notifies the host even when onQueuedCancel throws', () => {
+    const queuedChanges: Array<readonly { id: string }[]> = [];
+    const localController = new WcChatController({
+      thread,
+      agent,
+      onQueuedChange: (items) => queuedChanges.push(items.slice()),
+      onQueuedCancel: () => {
+        throw new Error('host blew up');
+      },
+    });
+    agent.emit({ type: 'message_start', messageId: 'm1' });
+    localController.sendUserMessage('queued one');
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      localController.loadMessages([]);
+    } finally {
+      errSpy.mockRestore();
+    }
+    expect(localController.getQueuedMessages()).toHaveLength(0);
+    expect(queuedChanges.at(-1)).toHaveLength(0);
+  });
+
+  it('idle submits append a plain user bubble (no stack routing)', () => {
+    const queuedChanges: number[] = [];
+    const localController = new WcChatController({
+      thread,
+      agent,
+      onQueuedChange: (items) => queuedChanges.push(items.length),
+    });
+    localController.sendUserMessage('idle prompt');
+    expect(thread.querySelectorAll('slicc-user-message')).toHaveLength(1);
+    expect(thread.querySelector('slicc-user-message[queued]')).toBeNull();
+    expect(localController.getQueuedMessages()).toHaveLength(0);
+    expect(queuedChanges).toEqual([]);
   });
 
   it('stops listening after dispose', () => {

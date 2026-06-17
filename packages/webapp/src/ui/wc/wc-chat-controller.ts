@@ -16,6 +16,20 @@ import type { AgentEvent, AgentHandle, ChatMessage } from '../types.js';
 import { createCopyRow } from './wc-copy-row.js';
 import { collateLickMessages, daySeparatorEl, messageEls } from './wc-message-view.js';
 
+/**
+ * View shape the controller hands the host for stack rendering. The full
+ * `ChatMessage` is kept internally; this is the projection the
+ * `slicc-queued-stack` component consumes via `setMessages`. Mirrors the
+ * library's `QueuedMessage` shape without importing the component, so the
+ * controller stays framework-free.
+ */
+export interface QueuedMessageView {
+  id: string;
+  text: string;
+  /** Optional attachment count — shown as a small `+N` hint on the front card. */
+  attachments?: number;
+}
+
 export interface WcChatControllerOptions {
   /** The `<slicc-chat-thread>` element messages render into. */
   thread: HTMLElement;
@@ -44,10 +58,35 @@ export interface WcChatControllerOptions {
    * null / throwing skips the beacon (telemetry must never block a send).
    */
   resolveTelemetryContext?: () => { scoopName: string; model: string } | null;
+  /**
+   * Invoked when the queued-submissions list changes (enqueue, local
+   * dismiss, flush-on-consume). The host wires this to its
+   * `<slicc-queued-stack>` ref's `setMessages`. The controller never
+   * touches the component directly.
+   */
+  onQueuedChange?: (items: readonly QueuedMessageView[]) => void;
+  /**
+   * Invoked once per dropped queued message id when the live-only stack
+   * is discarded by a scoop switch / session reload (`loadMessages` with
+   * a non-empty `#queued`). The host wires this to the SAME backend
+   * cancel path the local `×` dismiss uses (the offscreen client's
+   * `deleteQueuedMessage` RPC) so the orchestrator never delivers a
+   * queued prompt the user has implicitly dropped by navigating away.
+   * The controller stays free of any direct client/RPC dependency,
+   * consistent with the existing `onQueuedChange` seam.
+   */
+  onQueuedCancel?: (messageId: string) => void;
 }
 
 function uid(): string {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** Project a queued `ChatMessage` onto the host-render shape. */
+function toQueuedView(message: ChatMessage): QueuedMessageView {
+  const view: QueuedMessageView = { id: message.id, text: message.content };
+  if (message.attachments?.length) view.attachments = message.attachments.length;
+  return view;
 }
 
 export class WcChatController {
@@ -58,6 +97,8 @@ export class WcChatController {
   readonly #onMessageDisposed?: (messageId: string) => void;
   readonly #onTurnComplete?: (message: ChatMessage | null) => void;
   readonly #resolveTelemetryContext?: () => { scoopName: string; model: string } | null;
+  readonly #onQueuedChange?: (items: readonly QueuedMessageView[]) => void;
+  readonly #onQueuedCancel?: (messageId: string) => void;
   #unsubscribe: () => void;
   #onLocalUserMessage?: (
     text: string,
@@ -68,6 +109,14 @@ export class WcChatController {
   readonly #onErrorRetry: (event: Event) => void;
 
   #messages: ChatMessage[] = [];
+  /**
+   * User submissions sent while `#processing` is true — held OUT of the
+   * thread (no inline bubble) and OUT of `#messages` until the next turn's
+   * first `message_start` flushes them in enqueue order. The host renders
+   * the stack via `onQueuedChange`; the agent already received each one
+   * synchronously in `sendUserMessage` (delivery cancel is a separate task).
+   */
+  #queued: ChatMessage[] = [];
   /** Rendered thread elements per message id (a message can span several). */
   readonly #els = new Map<string, HTMLElement[]>();
   #currentStreamId: string | null = null;
@@ -87,6 +136,8 @@ export class WcChatController {
     this.#onMessageDisposed = options.onMessageDisposed;
     this.#onTurnComplete = options.onTurnComplete;
     this.#resolveTelemetryContext = options.resolveTelemetryContext;
+    this.#onQueuedChange = options.onQueuedChange;
+    this.#onQueuedCancel = options.onQueuedCancel;
     this.#unsubscribe = options.agent.onEvent((event) => this.#handleAgentEvent(event));
     // Bubbled retry event from any rendered `slicc-error-card` (composed, so it
     // pierces shadow roots). One listener at the thread covers every error card.
@@ -139,6 +190,42 @@ export class WcChatController {
     });
   }
 
+  /** Snapshot of the currently-queued submissions (host-render projection). */
+  getQueuedMessages(): QueuedMessageView[] {
+    return this.#queued.map(toQueuedView);
+  }
+
+  /**
+   * Local dismiss path for the stack's `×` button — drops the item from
+   * `#queued` and refreshes the host. Delivery has already happened (the
+   * agent's send fires synchronously on enqueue); cancelling the orchestrator
+   * dequeue is tracked separately. No-op for unknown ids.
+   */
+  removeQueuedMessage(id: string): void {
+    const next = this.#queued.filter((m) => m.id !== id);
+    if (next.length === this.#queued.length) return;
+    this.#queued = next;
+    this.#fireQueuedChange();
+  }
+
+  /**
+   * Flush the queued submissions into the thread as ordinary user bubbles —
+   * in enqueue order, with no `queued` flag set so they render plain. The
+   * agent already received each one in `sendUserMessage`; this is the
+   * presentation-only consume boundary. Fires `onQueuedChange([])` once.
+   */
+  #flushQueued(): void {
+    if (this.#queued.length === 0) return;
+    const items = this.#queued;
+    this.#queued = [];
+    for (const message of items) this.#appendMessage(message);
+    this.#fireQueuedChange();
+  }
+
+  #fireQueuedChange(): void {
+    this.#onQueuedChange?.(this.#queued.map(toQueuedView));
+  }
+
   /**
    * Append a synthetic assistant message that never touched the agent —
    * deterministic onboarding lines and dip references (`![…](…shtml)`,
@@ -156,6 +243,25 @@ export class WcChatController {
   /** Replace the whole thread with a scoop's canonical history. */
   loadMessages(messages: readonly ChatMessage[]): void {
     for (const id of this.#els.keys()) this.#onMessageDisposed?.(id);
+    // The queued stack is live-only — a scoop switch / session reload starts
+    // with an empty pile rather than carrying the previous scoop's queue.
+    // Each dropped id routes through the SAME backend cancel path the local
+    // `×` dismiss uses so the orchestrator never delivers a prompt the user
+    // implicitly dropped by switching away. The hook is fired BEFORE we clear
+    // the local queue so a throwing host can't strand entries half-dropped.
+    if (this.#queued.length > 0) {
+      if (this.#onQueuedCancel) {
+        for (const message of this.#queued) {
+          try {
+            this.#onQueuedCancel(message.id);
+          } catch (err) {
+            console.error('onQueuedCancel hook threw', err);
+          }
+        }
+      }
+      this.#queued = [];
+      this.#fireQueuedChange();
+    }
     // Runs of same-channel licks render as ONE collated card ("×2" pill).
     this.#messages = collateLickMessages(messages);
     // A canonical replay can land mid-turn (rehydrate after a scoop switch /
@@ -223,9 +329,16 @@ export class WcChatController {
       content,
       timestamp: Date.now(),
       attachments: attachments?.length ? attachments : undefined,
-      queued: this.#processing ? true : undefined,
     };
-    this.#appendMessage(message);
+    if (this.#processing) {
+      // Busy-submit: park the bubble in the stack instead of the thread. The
+      // agent still receives it now (orchestrator owns turn batching); the
+      // bubble flushes into the thread when the consuming turn starts.
+      this.#queued.push(message);
+      this.#fireQueuedChange();
+    } else {
+      this.#appendMessage(message);
+    }
     this.#agent.sendMessage(content, message.id, message.attachments);
     // Fire ONLY on the single user-initiated send site. The retry path
     // (`#handleErrorRetry`) replays an existing user turn through
@@ -332,6 +445,19 @@ export class WcChatController {
     // A RISING edge starts a fresh turn — forget the previous turn's reply
     // so a turn that streams nothing can never surface a stale one.
     if (processing) this.#turnAssistantId = null;
+    // The RISING edge is also the queue-consume boundary: items parked
+    // while busy belong to THIS turn, so flush them into the thread (in
+    // enqueue order, as ordinary user bubbles) BEFORE the streaming
+    // assistant lands. Hanging the flush off the rising edge (rather than
+    // off `message_start`) is the one turn-boundary signal BOTH floats
+    // share — live floats drive processing via scoop STATUS broadcasts
+    // that fire BEFORE the agent's `message_start` arrives, so a flush
+    // gated on `message_start` would miss the live ordering entirely. A
+    // mid-turn second `message_start` (multi-message turns) finds
+    // `#processing` already true → `setProcessing` early-returns above →
+    // no double flush, so items queued mid-turn keep waiting for the NEXT
+    // turn's rising edge.
+    if (processing) this.#flushQueued();
     if (!processing) this.#syncCopyRow();
     this.#onProcessingChange?.(processing);
     // End-of-turn = the processing flag FALLING. This is deliberately not
@@ -407,6 +533,10 @@ export class WcChatController {
   }
 
   #handleMessageStart(messageId: string): void {
+    // The queued-stack flush rides the processing rising edge inside
+    // `setProcessing` — both this code path AND the live-float scoop-status
+    // broadcast path go through that one chokepoint, so a flush gated here
+    // would miss the live ordering (status fires BEFORE `message_start`).
     this.setProcessing(true);
     this.#currentStreamId = messageId;
     // Record AFTER the rise (which resets it): a multi-message turn keeps
