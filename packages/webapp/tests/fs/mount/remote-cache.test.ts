@@ -140,4 +140,33 @@ describe('RemoteMountCache.bodies', () => {
     expect(await a.getBody('foo.txt')).toBeNull();
     expect(await b.getBody('bar.txt')).not.toBeNull();
   });
+
+  it('re-opens transparently after versionchange (deleteDatabase) drops the cached connection', async () => {
+    // Use real timers for this case — fake timers break the indexedDB
+    // microtask scheduling that deleteDatabase relies on to deliver
+    // versionchange to open connections.
+    vi.useRealTimers();
+    const dbName = uniqueDbName();
+    const cache = new RemoteMountCache({ mountId: 'm1', ttlMs: 30_000, dbName });
+
+    // First call opens + caches the connection.
+    await cache.putBody('foo.txt', new Uint8Array([1]), '"e"');
+    expect(await cache.getBody('foo.txt')).not.toBeNull();
+
+    // deleteDatabase delivers `versionchange` to open connections. With the
+    // handler installed, the cached connection closes and the cached
+    // dbPromise is nulled; without it, the next transaction would throw the
+    // closing error.
+    await new Promise<void>((resolve, reject) => {
+      const req = indexedDB.deleteDatabase(dbName);
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+      req.onblocked = () =>
+        reject(new Error('deleteDatabase blocked — cached connection was not closed'));
+    });
+
+    // Next op must re-open transparently against the fresh DB.
+    await cache.putBody('bar.txt', new Uint8Array([2]), '"e2"');
+    expect(await cache.getBody('bar.txt')).not.toBeNull();
+  });
 });

@@ -67,7 +67,20 @@ export class RemoteMountCache {
             db.createObjectStore(BODY_STORE);
           }
         };
-        req.onsuccess = () => resolve(req.result);
+        req.onsuccess = () => {
+          const db = req.result;
+          // Drop the cached promise if a peer context bumps the schema or
+          // `nuke` deletes the DB — the next caller re-opens cleanly instead
+          // of throwing "the database connection is closing".
+          db.onversionchange = () => {
+            db.close();
+            this.dbPromise = null;
+          };
+          db.onclose = () => {
+            this.dbPromise = null;
+          };
+          resolve(db);
+        };
         req.onerror = () => reject(req.error);
       });
     }

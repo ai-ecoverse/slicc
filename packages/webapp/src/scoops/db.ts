@@ -21,112 +21,141 @@ const STORES = {
 
 let db: IDBDatabase | null = null;
 
-async function openDB(): Promise<IDBDatabase> {
-  // If we have a cached connection, verify it has all required stores
-  if (db) {
-    const hasAllStores = Object.values(STORES).every((name) => db!.objectStoreNames.contains(name));
-    if (db.version === DB_VERSION && hasAllStores) {
-      return db;
-    }
-    // Close outdated/incomplete connection to trigger upgrade
-    db.close();
-    db = null;
+function runMigrationV1(database: IDBDatabase): void {
+  // Fresh install — create all stores
+  if (!database.objectStoreNames.contains(STORES.MESSAGES)) {
+    const store = database.createObjectStore(STORES.MESSAGES, { keyPath: 'id' });
+    store.createIndex('chatJid', 'chatJid');
+    store.createIndex('timestamp', 'timestamp');
+    store.createIndex('chatJid_timestamp', ['chatJid', 'timestamp']);
   }
+
+  if (!database.objectStoreNames.contains(STORES.SESSIONS)) {
+    database.createObjectStore(STORES.SESSIONS, { keyPath: 'groupFolder' });
+  }
+
+  if (!database.objectStoreNames.contains(STORES.TASKS)) {
+    const store = database.createObjectStore(STORES.TASKS, { keyPath: 'id' });
+    store.createIndex('groupFolder', 'groupFolder');
+  }
+
+  if (!database.objectStoreNames.contains(STORES.STATE)) {
+    database.createObjectStore(STORES.STATE, { keyPath: 'key' });
+  }
+}
+
+function mapLegacyGroupToScoop(g: {
+  jid: string;
+  name: string;
+  folder: string;
+  trigger?: string;
+  requiresTrigger?: boolean;
+  isMain?: boolean;
+  addedAt: string;
+  config?: {
+    systemPromptAppend?: string;
+    timeout?: number;
+    assistantName?: string;
+  };
+}): RegisteredScoop {
+  const isCone = g.isMain ?? false;
+  return {
+    jid: g.jid,
+    name: g.name,
+    folder: g.folder,
+    trigger: isCone ? undefined : g.trigger || `@${g.folder}`,
+    requiresTrigger: !isCone && (g.requiresTrigger ?? true),
+    isCone,
+    type: isCone ? 'cone' : 'scoop',
+    assistantLabel: isCone ? 'sliccy' : g.config?.assistantName || g.folder,
+    addedAt: g.addedAt,
+    config: g.config
+      ? {
+          systemPromptAppend: g.config.systemPromptAppend,
+          timeout: g.config.timeout,
+          assistantName: g.config.assistantName,
+        }
+      : undefined,
+  };
+}
+
+function runMigrationV2(event: IDBVersionChangeEvent, database: IDBDatabase): void {
+  // Migration: groups → scoops
+  if (database.objectStoreNames.contains('groups')) {
+    const tx = (event.target as IDBOpenDBRequest).transaction!;
+    const oldStore = tx.objectStore('groups');
+    const getAllReq = oldStore.getAll();
+    getAllReq.onsuccess = () => {
+      const oldGroups = getAllReq.result;
+      database.deleteObjectStore('groups');
+      const scoopsStore = database.createObjectStore(STORES.SCOOPS, { keyPath: 'jid' });
+      scoopsStore.createIndex('type', 'type');
+      for (const g of oldGroups) {
+        scoopsStore.put(mapLegacyGroupToScoop(g));
+      }
+    };
+    return;
+  }
+  if (!database.objectStoreNames.contains(STORES.SCOOPS)) {
+    const scoopsStore = database.createObjectStore(STORES.SCOOPS, { keyPath: 'jid' });
+    scoopsStore.createIndex('type', 'type');
+  }
+}
+
+function runMigrationV3(database: IDBDatabase): void {
+  if (!database.objectStoreNames.contains(STORES.WEBHOOKS)) {
+    database.createObjectStore(STORES.WEBHOOKS, { keyPath: 'id' });
+  }
+  if (!database.objectStoreNames.contains(STORES.CRONTASKS)) {
+    database.createObjectStore(STORES.CRONTASKS, { keyPath: 'id' });
+  }
+}
+
+function applyMigrations(event: IDBVersionChangeEvent): void {
+  const database = (event.target as IDBOpenDBRequest).result;
+  const oldVersion = event.oldVersion;
+  if (oldVersion < 1) runMigrationV1(database);
+  if (oldVersion < 2) runMigrationV2(event, database);
+  if (oldVersion < 3) runMigrationV3(database);
+}
+
+function getCachedDB(): IDBDatabase | null {
+  if (!db) return null;
+  const hasAllStores = Object.values(STORES).every((name) => db!.objectStoreNames.contains(name));
+  if (db.version === DB_VERSION && hasAllStores) return db;
+  // Close outdated/incomplete connection to trigger upgrade
+  db.close();
+  db = null;
+  return null;
+}
+
+function bindLifecycle(connection: IDBDatabase): void {
+  // Drop the cache if another context (side panel ↔ offscreen) bumps the
+  // schema or `nuke` runs `deleteDatabase` — the next caller re-opens
+  // cleanly instead of throwing "the database connection is closing".
+  // Capture `connection` so concurrent opens close their own handle even
+  // when a later open has already overwritten the module-level cache.
+  connection.onversionchange = () => {
+    connection.close();
+    if (db === connection) db = null;
+  };
+  connection.onclose = () => {
+    if (db === connection) db = null;
+  };
+}
+
+async function openDB(): Promise<IDBDatabase> {
+  const cached = getCachedDB();
+  if (cached) return cached;
 
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-    request.onupgradeneeded = (event) => {
-      const database = (event.target as IDBOpenDBRequest).result;
-      const oldVersion = event.oldVersion;
-
-      if (oldVersion < 1) {
-        // Fresh install — create all stores
-        if (!database.objectStoreNames.contains(STORES.MESSAGES)) {
-          const store = database.createObjectStore(STORES.MESSAGES, { keyPath: 'id' });
-          store.createIndex('chatJid', 'chatJid');
-          store.createIndex('timestamp', 'timestamp');
-          store.createIndex('chatJid_timestamp', ['chatJid', 'timestamp']);
-        }
-
-        if (!database.objectStoreNames.contains(STORES.SESSIONS)) {
-          database.createObjectStore(STORES.SESSIONS, { keyPath: 'groupFolder' });
-        }
-
-        if (!database.objectStoreNames.contains(STORES.TASKS)) {
-          const store = database.createObjectStore(STORES.TASKS, { keyPath: 'id' });
-          store.createIndex('groupFolder', 'groupFolder');
-        }
-
-        if (!database.objectStoreNames.contains(STORES.STATE)) {
-          database.createObjectStore(STORES.STATE, { keyPath: 'key' });
-        }
-      }
-
-      if (oldVersion < 2) {
-        // Migration: groups → scoops
-        const tx = (event.target as IDBOpenDBRequest).transaction!;
-
-        // If old 'groups' store exists, migrate data
-        if (database.objectStoreNames.contains('groups')) {
-          // Read all groups from old store
-          const oldStore = tx.objectStore('groups');
-          const getAllReq = oldStore.getAll();
-          getAllReq.onsuccess = () => {
-            const oldGroups = getAllReq.result;
-
-            // Delete old store
-            database.deleteObjectStore('groups');
-
-            // Create new scoops store
-            const scoopsStore = database.createObjectStore(STORES.SCOOPS, { keyPath: 'jid' });
-            scoopsStore.createIndex('type', 'type');
-
-            // Migrate records
-            for (const g of oldGroups) {
-              const isCone = g.isMain ?? false;
-              const scoop: RegisteredScoop = {
-                jid: g.jid,
-                name: g.name,
-                folder: g.folder,
-                trigger: isCone ? undefined : g.trigger || `@${g.folder}`,
-                requiresTrigger: !isCone && (g.requiresTrigger ?? true),
-                isCone,
-                type: isCone ? 'cone' : 'scoop',
-                assistantLabel: isCone ? 'sliccy' : g.config?.assistantName || g.folder,
-                addedAt: g.addedAt,
-                config: g.config
-                  ? {
-                      systemPromptAppend: g.config.systemPromptAppend,
-                      timeout: g.config.timeout,
-                      assistantName: g.config.assistantName,
-                    }
-                  : undefined,
-              };
-              scoopsStore.put(scoop);
-            }
-          };
-        } else if (!database.objectStoreNames.contains(STORES.SCOOPS)) {
-          // No old store, just create the new one
-          const scoopsStore = database.createObjectStore(STORES.SCOOPS, { keyPath: 'jid' });
-          scoopsStore.createIndex('type', 'type');
-        }
-      }
-
-      if (oldVersion < 3) {
-        // Add webhooks and crontasks stores
-        if (!database.objectStoreNames.contains(STORES.WEBHOOKS)) {
-          database.createObjectStore(STORES.WEBHOOKS, { keyPath: 'id' });
-        }
-        if (!database.objectStoreNames.contains(STORES.CRONTASKS)) {
-          database.createObjectStore(STORES.CRONTASKS, { keyPath: 'id' });
-        }
-      }
-    };
-
+    request.onupgradeneeded = applyMigrations;
     request.onsuccess = () => {
-      db = request.result;
-      resolve(db);
+      const connection = request.result;
+      bindLifecycle(connection);
+      db = connection;
+      resolve(connection);
     };
     request.onerror = () => reject(request.error);
   });

@@ -33,7 +33,19 @@ export class SessionStore {
 
   private getDB(): Promise<IDBDatabase> {
     if (!this.dbPromise) {
-      this.dbPromise = openDB();
+      this.dbPromise = openDB().then((db) => {
+        // Drop the cached promise if another context bumps the schema or
+        // `nuke` deletes the DB — the next caller re-opens cleanly instead
+        // of throwing "the database connection is closing".
+        db.onversionchange = () => {
+          db.close();
+          this.dbPromise = null;
+        };
+        db.onclose = () => {
+          this.dbPromise = null;
+        };
+        return db;
+      });
     }
     return this.dbPromise;
   }
