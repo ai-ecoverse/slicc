@@ -254,4 +254,15 @@ describe('lucideIconNames / pickLucideIcon', () => {
     );
     expect(await pickLucideIcon({ subject: 'x', labelFn: async () => null })).toBe(null);
   });
+
+  it('hasIcon agrees with every name lucideIconNames() enumerates', async () => {
+    // Pins the two derivations together so the kebab↔Pascal round-trips
+    // (pascalToKebab in quick-llm.ts ↔ toPascal in webcomponents/internal/icons.ts)
+    // can never silently diverge after consolidating on hasIcon().
+    const { lucideIconNames } = await import('../../src/ui/quick-llm.js');
+    const { hasIcon } = await import('@slicc/webcomponents/icons');
+    const names = lucideIconNames();
+    const missing = names.filter((name) => !hasIcon(name));
+    expect(missing).toEqual([]);
+  });
 });

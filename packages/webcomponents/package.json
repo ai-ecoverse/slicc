@@ -14,6 +14,10 @@
       "types": "./src/composer/speech.ts",
       "default": "./src/composer/speech.ts"
     },
+    "./icons": {
+      "types": "./src/internal/icons.ts",
+      "default": "./src/internal/icons.ts"
+    },
     "./src/*": "./src/*"
   },
   "files": [

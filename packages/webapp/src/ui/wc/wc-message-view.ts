@@ -6,7 +6,7 @@
  * pipeline so both UIs render byte-identical HTML for the same content.
  */
 
-import type { SliccUserMessage } from '@slicc/webcomponents';
+import { hasIcon, type SliccUserMessage } from '@slicc/webcomponents';
 import type { MessageAttachment } from '../../core/attachments.js';
 import { renderAssistantMessageContent, renderMessageContent } from '../message-renderer.js';
 import type { ChatMessage, ToolCall } from '../types.js';
@@ -112,13 +112,51 @@ export function bashProgram(command: string): string {
   return '';
 }
 
+/** Low-signal "housekeeping" programs: navigation, env setup, no-ops. They
+ *  rank below any real command so a chained `cd repo && git push` draws the
+ *  `git-branch` icon, not `corner-down-right`. */
+const HOUSEKEEPING_PROGRAMS: ReadonlySet<string> = new Set([
+  'cd',
+  'echo',
+  'export',
+  'pwd',
+  'true',
+  ':',
+  'set',
+]);
+
+/**
+ * Pick the most semantically meaningful program from a bash command that may
+ * chain several segments together. Splits on `&&`, `||`, `;`, `|`, and
+ * newlines, extracts each segment's program via {@link bashProgram}, scores
+ * each (known-in-`BASH_ICONS` > unknown > housekeeping), and returns the
+ * highest scorer — first wins on ties. When every segment is housekeeping
+ * (e.g. `cd /tmp && pwd`), the first one still wins so the row icon stays
+ * deterministic instead of going empty.
+ *
+ * The segment split is purely textual and does NOT honor shell quoting or
+ * comments — deliberate, since worst case is a slightly-off icon, never a
+ * crash.
+ */
+export function bashIconProgram(command: string): string {
+  const segments = command.split(/&&|\|\||[;|\n]/);
+  let best: { program: string; score: number } | null = null;
+  for (const seg of segments) {
+    const prog = bashProgram(seg);
+    if (!prog) continue;
+    const score = HOUSEKEEPING_PROGRAMS.has(prog) ? 1 : Object.hasOwn(BASH_ICONS, prog) ? 3 : 2;
+    if (!best || score > best.score) best = { program: prog, score };
+  }
+  return best?.program ?? '';
+}
+
 /**
  * Lucide icons for the shell's built-in commands — the cogwheel/CLI glyph is
  * the last resort, not the default look of every bash row.
  */
-const BASH_ICONS: Readonly<Record<string, string>> = {
+export const BASH_ICONS: Readonly<Record<string, string>> = {
   git: 'git-branch',
-  gh: 'github',
+  gh: 'git-pull-request',
   ls: 'folder-open',
   cat: 'file-text',
   head: 'file-text',
@@ -179,30 +217,38 @@ const BASH_ICONS: Readonly<Record<string, string>> = {
   pbpaste: 'clipboard-paste',
 };
 
-/** Lucide icon for a tool row (per-command for bash, per-tool otherwise). */
+/** Lucide icons for the non-bash tools — exported for the icon-validity guard. */
+export const TOOL_ICONS: Readonly<Record<string, string>> = {
+  read_file: 'file-text',
+  write_file: 'file-plus',
+  edit_file: 'file-pen',
+  send_message: 'message-circle',
+  list_scoops: 'ice-cream-cone',
+  scoop_scoop: 'ice-cream-cone',
+  feed_scoop: 'utensils',
+  drop_scoop: 'trash-2',
+  scoop_mute: 'bell-off',
+  scoop_unmute: 'bell-ring',
+  scoop_wait: 'hourglass',
+  update_global_memory: 'brain',
+  lick_confirm: 'shield-check',
+  lick_dismiss: 'shield-x',
+  sudo_request: 'shield-question',
+  list_sudo_requests: 'list-checks',
+};
+
+/** Lucide icon for a tool row (per-command for bash, per-tool otherwise). The
+ *  chosen name is validated against the live `lucide` registry so a typo (e.g.
+ *  the historic `github` entry, which lucide ships as `github-` family glyphs)
+ *  falls back to a known-good generic instead of a blank `<svg>` placeholder. */
 export function toolIcon(call: Pick<ToolCall, 'name' | 'input'>): string {
   if (call.name === 'bash') {
-    return BASH_ICONS[bashProgram(bashCommand(call.input))] ?? 'terminal';
+    const key = bashIconProgram(bashCommand(call.input));
+    const picked = Object.hasOwn(BASH_ICONS, key) ? BASH_ICONS[key] : 'terminal';
+    return hasIcon(picked) ? picked : 'terminal';
   }
-  const fixed: Record<string, string> = {
-    read_file: 'file-text',
-    write_file: 'file-plus',
-    edit_file: 'file-pen',
-    send_message: 'message-circle',
-    list_scoops: 'ice-cream-cone',
-    scoop_scoop: 'ice-cream-cone',
-    feed_scoop: 'utensils',
-    drop_scoop: 'trash-2',
-    scoop_mute: 'bell-off',
-    scoop_unmute: 'bell-ring',
-    scoop_wait: 'hourglass',
-    update_global_memory: 'brain',
-    lick_confirm: 'shield-check',
-    lick_dismiss: 'shield-x',
-    sudo_request: 'shield-question',
-    list_sudo_requests: 'list-checks',
-  };
-  return fixed[call.name] ?? 'wrench';
+  const picked = Object.hasOwn(TOOL_ICONS, call.name) ? TOOL_ICONS[call.name] : 'wrench';
+  return hasIcon(picked) ? picked : 'wrench';
 }
 
 /**

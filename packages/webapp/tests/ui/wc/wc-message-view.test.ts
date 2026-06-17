@@ -15,13 +15,16 @@ vi.mock('../../../src/ui/quick-llm.js', () => ({
   quickLabel: vi.fn(async () => 'Push the release to main'),
 }));
 
+import { hasIcon } from '@slicc/webcomponents';
 import { createChatFixture } from '../../../src/ui/chat-fixture.js';
 import type { ChatMessage } from '../../../src/ui/types.js';
 import {
+  BASH_ICONS,
   buildThreadChildren,
   collateLickMessages,
   messageEls,
   summarizeToolInput,
+  TOOL_ICONS,
 } from '../../../src/ui/wc/wc-message-view.js';
 
 const fixture = createChatFixture();
@@ -300,6 +303,25 @@ describe('tool presentation', () => {
     }
   });
 
+  // Regression guard: every name in `BASH_ICONS` and `TOOL_ICONS` must resolve
+  // against the real lucide registry, plus the generic fallbacks `toolIcon`
+  // returns on miss. Without this guard, a bad entry (historically
+  // `gh: 'github'` — lucide ships `Github` is gone, only family glyphs) ships
+  // a blank `<svg>` placeholder for the row icon.
+  it('every quick-label icon name is a real lucide icon', () => {
+    const bad: string[] = [];
+    for (const [key, name] of Object.entries(BASH_ICONS)) {
+      if (!hasIcon(name)) bad.push(`BASH_ICONS.${key} → ${name}`);
+    }
+    for (const [key, name] of Object.entries(TOOL_ICONS)) {
+      if (!hasIcon(name)) bad.push(`TOOL_ICONS.${key} → ${name}`);
+    }
+    for (const name of ['terminal', 'wrench']) {
+      if (!hasIcon(name)) bad.push(`fallback → ${name}`);
+    }
+    expect(bad).toEqual([]);
+  });
+
   it('bash bodies render terminal-style: command + output, dark classes', () => {
     const [, row] = messageEls(call('bash', { command: 'ls -la' }, 'total 42'));
     const body = row.querySelector('.wcmsg-bash') as HTMLElement;
@@ -321,6 +343,63 @@ describe('tool presentation', () => {
     expect(custom).toBeTruthy();
     expect(custom.getAttribute('command')).toBe('git status');
     expect(custom.output).toBe('On branch main');
+  });
+
+  // Chained bash commands: the row icon is driven by the most semantically
+  // meaningful segment (the "real work"), not a low-signal preamble like a
+  // `cd`/`echo`/`export`. See issue #1035.
+  it('ranks chained bash segments so housekeeping preambles lose the icon', () => {
+    const cases: Array<[string, string]> = [
+      // Housekeeping preamble loses to a known git command.
+      ['cd repo && git push', 'git-branch'],
+      // Pure housekeeping pipe still resolves deterministically (first wins).
+      ['cd /tmp && pwd', 'corner-down-right'],
+      // Env-setup housekeeping loses to curl (known network tool).
+      ['export FOO=1 && curl https://x', 'globe'],
+      // Echo housekeeping loses to a known command — npm beats echo here, so
+      // the row picks up npm's `package` icon rather than echo's `quote`.
+      ['echo hi && npm test', 'package'],
+      // The `test` supplemental command outranks an echo preamble: this is
+      // the literal "echo + real-command → real-command icon" case from the
+      // spec, picking `flask-conical` from BASH_ICONS.test.
+      ['echo hi && test foo', 'flask-conical'],
+      // Pipe is also a separator.
+      ['cat foo | grep bar', 'file-text'],
+      // Newline is a separator.
+      ['cd /tmp\ngit status', 'git-branch'],
+      // `||` and `;` are separators too.
+      ['true || rm -rf /tmp/x', 'trash-2'],
+      ['set -e; npm install', 'package'],
+    ];
+    for (const [command, icon] of cases) {
+      const [, row] = messageEls(call('bash', { command }, 'ok'));
+      expect(row.getAttribute('icon'), command).toBe(icon);
+    }
+  });
+
+  // Prototype-chain hardening: `in`/bracket access on plain objects walks the
+  // prototype chain, so a segment whose program literally is `toString` (or
+  // any Object.prototype member) would otherwise score as a real tool and the
+  // lookup would return an inherited function — which crashes `hasIcon()`
+  // (`name.replace is not a function`) while rendering the row.
+  it('bash segments named after Object.prototype members fall back to terminal', () => {
+    const cases: string[] = [
+      'cd /tmp && toString',
+      'cd /tmp && hasOwnProperty',
+      'cd /tmp && valueOf',
+      'cd /tmp && constructor',
+    ];
+    for (const command of cases) {
+      const [, row] = messageEls(call('bash', { command }, 'ok'));
+      expect(row.getAttribute('icon'), command).toBe('terminal');
+    }
+  });
+
+  it('tool names equal to Object.prototype members fall back to wrench', () => {
+    for (const name of ['toString', 'hasOwnProperty', 'valueOf', 'constructor']) {
+      const [, row] = messageEls(call(name, {}, 'ok'));
+      expect(row.getAttribute('icon'), name).toBe('wrench');
+    }
   });
 
   it('edit bodies show old/new with the diff classes; writes show added content', () => {

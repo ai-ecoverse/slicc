@@ -22,6 +22,7 @@
 
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import type { Api, Model } from '@earendil-works/pi-ai';
+import { hasIcon } from '@slicc/webcomponents/icons';
 import {
   COMPACTION_MEMORY_INSTRUCTION,
   COMPACTION_TITLE_INSTRUCTION,
@@ -174,7 +175,7 @@ async function pickIconBestEffort(
   try {
     const pick = opts.pickIcon ?? (await import('./quick-llm.js')).pickLucideIcon;
     const picked = (await pick({ subject: `"${title}" — an archived chat session` })) ?? undefined;
-    return await keepIfLucide(picked);
+    return keepIfLucide(picked);
   } catch (err) {
     log.warn('Icon pick failed (freeze still proceeds)', {
       error: err instanceof Error ? err.message : String(err),
@@ -187,17 +188,12 @@ async function pickIconBestEffort(
  * Validation gate at the recording boundary: drop any picked name that isn't
  * a real lucide registry entry so a non-lucide string never reaches the index
  * (the card then falls back to its snowflake / lazy backfill). The injectable
- * `pickIcon` seam can return any string, so we validate against the same
- * `lucideIconNames()` registry the default picker validates against.
+ * `pickIcon` seam can return any string, so we validate against the shared
+ * `hasIcon` registry check used by the default picker.
  */
-async function keepIfLucide(name: string | undefined): Promise<string | undefined> {
+function keepIfLucide(name: string | undefined): string | undefined {
   if (!name) return undefined;
-  try {
-    const { lucideIconNames } = await import('./quick-llm.js');
-    return lucideIconNames().includes(name) ? name : undefined;
-  } catch {
-    return undefined;
-  }
+  return hasIcon(name) ? name : undefined;
 }
 
 /** Freeze step 1 — memory extraction (best-effort; failures never block). */
