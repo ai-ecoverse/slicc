@@ -435,8 +435,13 @@ async function loadModuleGraph(
  * `__copyProps` (own prop NAMES, incl. non-enumerable) and TS's `__importDefault`
  * both resolve `default` to the whole module. Non-enumerable keeps it invisible
  * to `Object.keys`/`JSON.stringify`; the extensibility guard + try/catch keep a
- * frozen/sealed exports object from throwing. Mirrored in
- * `packages/chrome-extension/sandbox.html`.
+ * frozen/sealed exports object from throwing. Called ONLY for modules whose
+ * origin kind is `cjs` (the `kindByPath` guard in `requireFile`): a
+ * host-transpiled ESM module also carries `__esModule:true` with no own
+ * `default` when its source declares none (e.g. nanoid@5), and synthesizing a
+ * default there would wrongly make `require('nanoid').default` the whole
+ * namespace instead of `undefined` (require-of-ESM is Node-faithful with no
+ * default). Mirrored in `packages/chrome-extension/sandbox.html`.
  */
 function synthesizeEsModuleDefault(exp: unknown): void {
   if (exp === null || typeof exp !== 'object') return;
@@ -468,6 +473,7 @@ function createModuleSystem(opts: {
 }): { require: (id: string) => unknown } {
   const { graph, fsBridge, processShim, nodeConsole, sliccyModules } = opts;
   const sourceByPath = new Map(graph.files.map((f) => [f.path, f.cjsSource]));
+  const kindByPath = new Map(graph.files.map((f) => [f.path, f.kind]));
   const cache = new Map<string, { exports: Record<string, unknown> }>();
 
   const resolveBuiltin = (id: string): { hit: boolean; value?: unknown } => {
@@ -529,7 +535,7 @@ function createModuleSystem(opts: {
       (globalThis as Record<string, unknown>).Buffer,
       globalThis
     );
-    synthesizeEsModuleDefault(moduleObj.exports);
+    if (kindByPath.get(path) === 'cjs') synthesizeEsModuleDefault(moduleObj.exports);
     return moduleObj.exports;
   }
 

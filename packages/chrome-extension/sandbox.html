@@ -997,6 +997,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     ? { files: [], entryMap: {}, edges: {}, errors: {} }
     : await rpcCall('module', 'buildGraph', [init.code, entryFromDir, entryFilename]);
   const moduleSourceByPath = new Map(moduleGraph.files.map((f) => [f.path, f.cjsSource]));
+  const moduleKindByPath = new Map(moduleGraph.files.map((f) => [f.path, f.kind]));
   const moduleCache = new Map();
   function cannotFindModuleError(id) {
     if (id.startsWith('.') || id.startsWith('/') || id.startsWith('node:')) {
@@ -1047,7 +1048,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     const moduleDir = lastSlash <= 0 ? '/' : path.slice(0, lastSlash);
     const compiled = new Function('module', 'exports', 'require', '__dirname', '__filename', 'process', 'console', 'Buffer', 'global', source);
     compiled(moduleObj, moduleObj.exports, childRequire, moduleDir, path, processShim, consoleShim, globalThis.Buffer, globalThis);
-    synthesizeEsModuleDefault(moduleObj.exports);
+    if (moduleKindByPath.get(path) === 'cjs') synthesizeEsModuleDefault(moduleObj.exports);
     return moduleObj.exports;
   }
   // Node-faithful CJS default interop mirror of kernel/realm/js-realm-shared.ts:
@@ -1056,6 +1057,10 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
   // 'cjs'` to the whole module.exports. Attach a non-enumerable, configurable,
   // self-referential `default` so esbuild's __copyProps and TS's __importDefault
   // resolve it; the extensibility guard + try/catch keep frozen exports safe.
+  // Scoped to origin-CJS modules only (the moduleKindByPath guard above): a
+  // host-transpiled ESM module also carries `__esModule:true` with no own
+  // `default`, and synthesizing one there would wrongly make
+  // `require('nanoid').default` the whole namespace instead of `undefined`.
   function synthesizeEsModuleDefault(exp) {
     if (exp === null || typeof exp !== 'object') return;
     if (!exp.__esModule) return;
