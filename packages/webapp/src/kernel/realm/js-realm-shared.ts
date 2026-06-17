@@ -203,7 +203,10 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
   const moduleShim = { exports: {} as Record<string, unknown>, filename: init.filename };
 
   // The host transpiles an ESM / dynamic-import / top-level-await entry to a
-  // CJS body the AsyncFunction wrapper can run; a plain-CJS entry runs verbatim.
+  // CJS body the AsyncFunction wrapper can run (and sets `entrySource`); a
+  // plain-CJS entry runs verbatim. That presence is exactly Node's CJS-vs-ESM
+  // distinction, so it also selects sloppy (CJS) vs strict (ESM) execution.
+  const isEsmEntry = graph.entrySource !== undefined;
   const entryCode = graph.entrySource ?? init.code;
 
   const exitCode = await runUserCode(
@@ -218,7 +221,8 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
       __dirname: dirname,
       __filename: filename,
     },
-    writeStderr
+    writeStderr,
+    isEsmEntry
   );
 
   if (!getDidCallProcessExit()) {
@@ -593,11 +597,20 @@ function unavailableBuiltinError(id: string, bareId: string): Error {
  * `bridges` (`fs`, `process`, `console`, …) and invoke it with their values.
  * Returns the process exit code: `NodeExitError.code` on `process.exit`, `1`
  * on any other throw (stack written to stderr), `0` otherwise.
+ *
+ * Node runs a CommonJS entry (a `node <script.js>` target, a `node -e`
+ * snippet, an `ipx`/`npx` bin) in SLOPPY mode, but an ES-module entry in
+ * STRICT mode. `isEsmEntry` carries that distinction: only an ESM-derived
+ * entry (transpiled to `graph.entrySource`) gets the `"use strict"` prefix; a
+ * plain-CJS entry runs without it so strict-only reserved words (e.g. a `var
+ * implements`) parse as Node would. Required/dependency CJS modules are
+ * evaluated sloppy elsewhere and are unaffected.
  */
 async function runUserCode(
   code: string,
   bridges: Record<string, unknown>,
-  writeStderr: (value: unknown) => void
+  writeStderr: (value: unknown) => void,
+  isEsmEntry: boolean
 ): Promise<number> {
   const names = Object.keys(bridges);
   const values = names.map((n) => bridges[n]);
@@ -606,7 +619,7 @@ async function runUserCode(
   }).constructor as new (
     ...args: string[]
   ) => (...args: unknown[]) => Promise<unknown>;
-  const fn = new AsyncFn(...names, `"use strict";\n${code}`);
+  const fn = new AsyncFn(...names, `${isEsmEntry ? '"use strict";\n' : ''}${code}`);
   try {
     await fn(...values);
     return 0;

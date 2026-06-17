@@ -1290,15 +1290,16 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
   let exitCode = 0;
   try {
     // The host transpiles an ESM / dynamic-import / top-level-await entry to a
-    // CJS body this AsyncFunction wrapper can run; plain CJS runs verbatim.
-    const entryCode = (moduleGraph && typeof moduleGraph.entrySource === 'string')
-      ? moduleGraph.entrySource
-      : init.code;
+    // CJS body this AsyncFunction wrapper can run (and sets `entrySource`);
+    // plain CJS runs verbatim. That presence is exactly Node's CJS-vs-ESM
+    // distinction, so it also selects sloppy (CJS) vs strict (ESM) execution.
+    const isEsmEntry = (moduleGraph && typeof moduleGraph.entrySource === 'string');
+    const entryCode = isEsmEntry ? moduleGraph.entrySource : init.code;
     const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
     const fn = new AsyncFunction(
       'process', 'console', 'require', 'module', 'exports', 'fetch',
       '__dirname', '__filename',
-      '"use strict";\n' + entryCode
+      (isEsmEntry ? '"use strict";\n' : '') + entryCode
     );
     await fn(processShim, consoleShim, requireShim, moduleShim, moduleShim.exports, realmFetch, dirname, filename);
   } catch (err) {
