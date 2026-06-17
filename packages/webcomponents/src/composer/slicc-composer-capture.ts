@@ -2,6 +2,7 @@ import { define } from '../internal/define.js';
 import { h } from '../internal/dom.js';
 import { iconEl } from '../internal/icons.js';
 import type { CameraMediaProvider } from '../overlay/slicc-camera-dialog.js';
+import { labelDevices, shouldShowDevicePicker } from './devices.js';
 
 /** Re-export for hosts that swap the media seam without importing from overlay. */
 export type { CameraMediaProvider } from '../overlay/slicc-camera-dialog.js';
@@ -24,9 +25,14 @@ export interface CaptureResult {
   durationMs?: number;
 }
 
-/** The `slicc-capture-device-change` event detail — the chosen camera. */
+/**
+ * The `slicc-capture-device-change` event detail — the chosen device. `kind`
+ * tells the host whether the user picked a new camera or a new microphone so
+ * a single listener can persist both preferences.
+ */
 export interface CaptureDeviceChangeDetail {
   deviceId: string;
+  kind: 'camera' | 'microphone';
 }
 
 /**
@@ -50,7 +56,13 @@ slicc-composer-capture {
   position: relative;
   display: block;
   width: 100%;
+  /* Self-bounded box: the surface fills the composer area at a 4:3 ratio,
+     clamped between a usable min and a sensible max, so the absolutely
+     positioned bar / close / status overlays always sit inside the host
+     rect rather than being pushed below by the <video>'s intrinsic size. */
+  aspect-ratio: 4 / 3;
   min-height: 220px;
+  max-height: min(60vh, 480px);
   border-radius: 14px;
   overflow: hidden;
   background: #000;
@@ -62,9 +74,10 @@ slicc-composer-capture[hidden] {
   display: none;
 }
 slicc-composer-capture .slicc-capture__video {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
-  min-height: 220px;
   display: block;
   object-fit: cover;
   background: #000;
@@ -76,12 +89,36 @@ slicc-composer-capture .slicc-capture__status {
   position: absolute;
   top: 8px;
   left: 10px;
-  right: 10px;
+  /* Leave clearance for the absolutely-positioned close button in the
+     top-right corner so the status text never visually collides with it. */
+  right: 44px;
   font-size: 11.5px;
   color: rgba(255, 255, 255, 0.85);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
   pointer-events: none;
   min-height: 14px;
+}
+slicc-composer-capture .slicc-capture__close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: #fff;
+  background: color-mix(in srgb, #000 55%, transparent);
+  border: 1px solid color-mix(in srgb, #fff 35%, transparent);
+  border-radius: 50%;
+  cursor: pointer;
+  backdrop-filter: blur(8px) saturate(1.2);
+  -webkit-backdrop-filter: blur(8px) saturate(1.2);
+}
+slicc-composer-capture .slicc-capture__close:hover {
+  background: color-mix(in srgb, #fff 18%, transparent);
 }
 slicc-composer-capture .slicc-capture__bar {
   position: absolute;
@@ -91,7 +128,10 @@ slicc-composer-capture .slicc-capture__bar {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  /* Single row: selects shrink (min-width: 0 + flex: 0 1 auto below) instead
+     of wrapping so the bar never becomes two rows when the mic <select>
+     appears in video mode. */
+  flex-wrap: nowrap;
   padding: 6px 8px;
   border-radius: 10px;
   background: color-mix(in srgb, #000 55%, transparent);
@@ -109,7 +149,14 @@ slicc-composer-capture .slicc-capture__select {
   border-radius: 8px;
   padding: 5px 8px;
   outline: none;
-  max-width: 180px;
+  /* Allow shrinking below intrinsic width so long device labels truncate
+     instead of forcing the control bar onto a second row. */
+  min-width: 0;
+  max-width: 140px;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 slicc-composer-capture .slicc-capture__select[hidden] {
   display: none;
@@ -122,13 +169,18 @@ slicc-composer-capture .slicc-capture__mode {
   border: 1px solid color-mix(in srgb, #fff 35%, transparent);
   border-radius: 8px;
   overflow: hidden;
+  flex: 0 0 auto;
 }
 slicc-composer-capture .slicc-capture__mode-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font: 500 12px var(--ui);
   color: #fff;
   background: transparent;
   border: 0;
-  padding: 5px 10px;
+  /* Icon-only buttons: square-ish padding centers the 14px lucide glyph. */
+  padding: 5px 8px;
   cursor: pointer;
 }
 slicc-composer-capture .slicc-capture__mode-btn[aria-pressed='true'] {
@@ -238,12 +290,16 @@ function formatElapsed(ms: number): string {
  * `new MediaRecorder(stream, opts)`) so tests / stories can drive the full
  * flow with canvas-backed fake streams and fake recorders.
  *
- * Audio: video mode requests `getUserMedia({ video, audio: true })` so the
- * recorded stream carries the camera video track AND the mic audio track.
- * Photo mode requests video only (no mic). Mic is on by default in video
- * mode — the UI surfaces this in the status line. On camera switch in video
- * mode, the video track for the new device is re-requested and the existing
- * audio track is preserved on the live stream.
+ * Audio: video mode requests `getUserMedia({ video, audio })` so the recorded
+ * stream carries the camera video track AND the mic audio track. Photo mode
+ * requests video only (no mic). Mic is on by default in video mode — the UI
+ * surfaces this in the status line. On camera switch in video mode, the
+ * video track for the new device is re-requested and the existing audio
+ * track is preserved on the live stream. A second `<select part="audio-picker">`
+ * surfaces in video mode when ≥ 2 `audioinput` devices exist; the chosen
+ * mic is preserved across camera switches and the photo→video promotion
+ * path. The picker is disabled while a `MediaRecorder` is running because
+ * mid-recording audio-track swaps are not reliably picked up.
  *
  * Imperative API: `open(mode?)` starts the stream + shows the surface and
  * resolves with a {@link CaptureResult} — or `null` when the user cancels.
@@ -251,9 +307,11 @@ function formatElapsed(ms: number): string {
  * `disconnectedCallback`); ALL tracks — video AND audio — are stopped.
  *
  * @attr mode - `photo` (default) or `video`
- * @attr preferred-device - deviceId to open first; falls back to any camera
+ * @attr preferred-device - camera deviceId to open first; falls back to any camera
+ * @attr preferred-audio-device - mic deviceId to open first (video mode); falls back to default mic
  * @csspart video - the live preview element
  * @csspart picker - the camera `<select>` (hidden for a single camera)
+ * @csspart audio-picker - the microphone `<select>` (video mode only, hidden for <2 mics)
  * @csspart mode - the Photo / Video toggle buttons
  * @csspart snap - the primary Snap button (photo mode)
  * @csspart record - the primary Record button (video mode, idle)
@@ -261,10 +319,10 @@ function formatElapsed(ms: number): string {
  * @csspart cancel - the Cancel button
  * @fires slicc-capture - composed + bubbling; `detail` is the CaptureResult
  * @fires slicc-capture-cancel - composed + bubbling; no detail; on cancel
- * @fires slicc-capture-device-change - composed + bubbling; `detail.deviceId`
+ * @fires slicc-capture-device-change - composed + bubbling; `detail` is `{ deviceId, kind: 'camera' | 'microphone' }`
  */
 export class SliccComposerCapture extends HTMLElement {
-  static readonly observedAttributes = ['mode', 'preferred-device'];
+  static readonly observedAttributes = ['mode', 'preferred-device', 'preferred-audio-device'];
 
   /** Injectable media seam; `null` falls back to `navigator.mediaDevices`. */
   media: CameraMediaProvider | null = null;
@@ -274,6 +332,7 @@ export class SliccComposerCapture extends HTMLElement {
 
   #video!: HTMLVideoElement;
   #select!: HTMLSelectElement;
+  #audioSelect!: HTMLSelectElement;
   #status!: HTMLElement;
   #timer!: HTMLElement;
   #primary!: HTMLButtonElement;
@@ -336,6 +395,21 @@ export class SliccComposerCapture extends HTMLElement {
     else this.setAttribute('preferred-device', value);
   }
 
+  /**
+   * The microphone deviceId to open first in video mode (reflected to
+   * `preferred-audio-device`). Updated automatically by `#switchMicrophone`
+   * so subsequent camera switches / photo→video promotions preserve the
+   * user's mic choice.
+   */
+  get preferredAudioDevice(): string | null {
+    return this.getAttribute('preferred-audio-device');
+  }
+
+  set preferredAudioDevice(value: string | null) {
+    if (value == null) this.removeAttribute('preferred-audio-device');
+    else this.setAttribute('preferred-audio-device', value);
+  }
+
   #mediaProvider(): CameraMediaProvider | null {
     return this.media ?? (typeof navigator !== 'undefined' ? navigator.mediaDevices : null) ?? null;
   }
@@ -358,13 +432,19 @@ export class SliccComposerCapture extends HTMLElement {
     const provider = this.#mediaProvider();
     if (!provider) return null;
     try {
-      this.#stream = await this.#openStream(provider, this.preferredDevice, this.mode);
+      this.#stream = await this.#openStream(
+        provider,
+        this.preferredDevice,
+        this.preferredAudioDevice,
+        this.mode
+      );
     } catch {
       return null;
     }
     this.#captureAudioTrack();
     this.#attachStream(this.#stream);
     await this.#populatePicker(provider);
+    await this.#populateAudioPicker(provider);
     this.hidden = false;
     return new Promise((resolve) => {
       this.#resolve = resolve;
@@ -374,17 +454,39 @@ export class SliccComposerCapture extends HTMLElement {
   async #openStream(
     provider: CameraMediaProvider,
     deviceId: string | null,
+    audioDeviceId: string | null,
     mode: CaptureMode
   ): Promise<MediaStream> {
-    const audio = mode === 'video';
+    const audio = this.#audioConstraint(audioDeviceId, mode);
     if (deviceId) {
       try {
         return await provider.getUserMedia({ video: { deviceId: { exact: deviceId } }, audio });
       } catch {
-        // Preferred camera is gone — fall through.
+        // Preferred camera (or its audio pairing) is gone — fall through.
       }
     }
-    return provider.getUserMedia({ video: true, audio });
+    try {
+      return await provider.getUserMedia({ video: true, audio });
+    } catch (err) {
+      if (audio === false) throw err;
+      // Mic was requested but unavailable — degrade to video-only so the
+      // caller still gets a usable stream, and surface the degraded state.
+      this.#status.textContent = 'Microphone unavailable — recording video only.';
+      return provider.getUserMedia({ video: true, audio: false });
+    }
+  }
+
+  /**
+   * Build the `audio` half of a `getUserMedia` constraint for the current
+   * mode. Photo mode never asks for audio. Video mode pins the preferred
+   * mic deviceId when set, falling back to the default device otherwise.
+   */
+  #audioConstraint(
+    audioDeviceId: string | null,
+    mode: CaptureMode
+  ): MediaTrackConstraints | boolean {
+    if (mode !== 'video') return false;
+    return audioDeviceId ? { deviceId: { exact: audioDeviceId } } : true;
   }
 
   #captureAudioTrack(): void {
@@ -405,14 +507,45 @@ export class SliccComposerCapture extends HTMLElement {
     } catch {
       cameras = [];
     }
+    const options = labelDevices(cameras, 'camera');
     this.#select.replaceChildren(
-      ...cameras.map((camera, index) =>
-        h('option', { value: camera.deviceId }, camera.label || `Camera ${index + 1}`)
-      )
+      ...options.map((opt) => h('option', { value: opt.deviceId }, opt.label))
     );
     const activeId = this.#stream?.getVideoTracks()[0]?.getSettings?.().deviceId;
     if (activeId) this.#select.value = activeId;
-    this.#select.toggleAttribute('hidden', cameras.length < 2);
+    this.#select.toggleAttribute('hidden', !shouldShowDevicePicker(options));
+  }
+
+  async #populateAudioPicker(provider: CameraMediaProvider): Promise<void> {
+    let mics: MediaDeviceInfo[] = [];
+    try {
+      mics = (await provider.enumerateDevices()).filter((d) => d.kind === 'audioinput');
+    } catch {
+      mics = [];
+    }
+    const options = labelDevices(mics, 'microphone');
+    this.#audioSelect.replaceChildren(
+      ...options.map((opt) => h('option', { value: opt.deviceId }, opt.label))
+    );
+    const activeId =
+      this.#audioTrack?.getSettings?.().deviceId ?? this.preferredAudioDevice ?? null;
+    if (activeId && options.some((o) => o.deviceId === activeId)) {
+      this.#audioSelect.value = activeId;
+    }
+    this.#applyAudioPickerVisibility();
+  }
+
+  /**
+   * Hide the mic `<select>` unless we are in video mode AND the underlying
+   * device list offers a real choice (≥ 2 mics). Called from `#applyMode`
+   * (mode toggle) and `#populateAudioPicker` (after enumeration), so both
+   * triggers stay in lockstep.
+   */
+  #applyAudioPickerVisibility(): void {
+    if (!this.#audioSelect) return;
+    const enough = this.#audioSelect.options.length >= 2;
+    const visible = this.mode === 'video' && enough;
+    this.#audioSelect.toggleAttribute('hidden', !visible);
   }
 
   async #switchCamera(deviceId: string): Promise<void> {
@@ -428,9 +561,11 @@ export class SliccComposerCapture extends HTMLElement {
       if (this.mode === 'video' && this.#audioTrack && this.#audioTrack.readyState === 'live') {
         merged.addTrack(this.#audioTrack);
       } else if (this.mode === 'video') {
-        // No live audio track — re-request one alongside the new video.
+        // No live audio track — re-request one (honoring the preferred mic).
         try {
-          const a = await provider.getUserMedia({ audio: true });
+          const a = await provider.getUserMedia({
+            audio: this.#audioConstraint(this.preferredAudioDevice, 'video'),
+          });
           for (const t of a.getAudioTracks()) {
             this.#audioTrack = t;
             merged.addTrack(t);
@@ -443,7 +578,7 @@ export class SliccComposerCapture extends HTMLElement {
       this.#attachStream(merged);
       this.dispatchEvent(
         new CustomEvent<CaptureDeviceChangeDetail>('slicc-capture-device-change', {
-          detail: { deviceId },
+          detail: { deviceId, kind: 'camera' },
           bubbles: true,
           composed: true,
         })
@@ -451,6 +586,49 @@ export class SliccComposerCapture extends HTMLElement {
     } catch {
       this.#status.textContent = 'Could not switch camera — keeping the current one.';
     }
+  }
+
+  /**
+   * Swap the live audio track for one bound to `deviceId`. Requests an
+   * audio-only stream for the chosen mic, removes + stops the old audio
+   * track on the live `#stream`, adds the new one, and persists the choice
+   * to `preferredAudioDevice` so subsequent camera switches / photo→video
+   * promotions reuse it. No-op (with a status message) on failure.
+   */
+  async #switchMicrophone(deviceId: string): Promise<void> {
+    const provider = this.#mediaProvider();
+    if (!provider || !this.#stream) return;
+    this.#status.textContent = '';
+    let next: MediaStream;
+    try {
+      next = await provider.getUserMedia({ audio: { deviceId: { exact: deviceId } } });
+    } catch {
+      this.#status.textContent = 'Could not switch microphone — keeping the current one.';
+      return;
+    }
+    const newTrack = next.getAudioTracks()[0];
+    if (!newTrack) {
+      this.#status.textContent = 'Could not switch microphone — keeping the current one.';
+      return;
+    }
+    if (this.#audioTrack) {
+      try {
+        this.#stream.removeTrack(this.#audioTrack);
+      } catch {
+        // ignore — removeTrack only throws if the track is already gone.
+      }
+      this.#audioTrack.stop();
+    }
+    this.#stream.addTrack(newTrack);
+    this.#audioTrack = newTrack;
+    this.preferredAudioDevice = deviceId;
+    this.dispatchEvent(
+      new CustomEvent<CaptureDeviceChangeDetail>('slicc-capture-device-change', {
+        detail: { deviceId, kind: 'microphone' },
+        bubbles: true,
+        composed: true,
+      })
+    );
   }
 
   #snap(): void {
@@ -496,6 +674,9 @@ export class SliccComposerCapture extends HTMLElement {
     }
     this.#recorder = recorder;
     this.#recordStartedAt = Date.now();
+    // MediaRecorder doesn't reliably pick up an audio-track swap mid-flight,
+    // so lock the mic picker until recording stops.
+    this.#audioSelect.disabled = true;
     this.#timer.hidden = false;
     this.#timer.textContent = formatElapsed(0);
     this.#timerHandle = setInterval(() => {
@@ -515,12 +696,14 @@ export class SliccComposerCapture extends HTMLElement {
   }
 
   #assembleRecording(mimeType: string): void {
-    this.#stopTimer();
+    // Capture duration BEFORE #stopTimer() — it resets #recordStartedAt to 0.
     const durationMs = this.#recordStartedAt ? Date.now() - this.#recordStartedAt : 0;
+    this.#stopTimer();
     const effectiveType = this.#recorder?.mimeType || mimeType || 'video/webm';
     const blob = new Blob(this.#chunks, { type: effectiveType });
     this.#chunks = [];
     this.#recorder = null;
+    if (this.#audioSelect) this.#audioSelect.disabled = false;
     const dataUrl = typeof URL !== 'undefined' ? URL.createObjectURL(blob) : undefined;
     this.#finishCapture({
       kind: 'video',
@@ -547,6 +730,7 @@ export class SliccComposerCapture extends HTMLElement {
     const recorder = this.#recorder;
     this.#recorder = null;
     this.#chunks = [];
+    if (this.#audioSelect) this.#audioSelect.disabled = false;
     if (recorder) {
       recorder.ondataavailable = null;
       recorder.onstop = null;
@@ -599,6 +783,7 @@ export class SliccComposerCapture extends HTMLElement {
     this.#modeVideo.setAttribute('aria-pressed', String(isVideo));
     this.#status.textContent = isVideo ? 'Mic on — video will record audio.' : '';
     this.#renderPrimary();
+    this.#applyAudioPickerVisibility();
   }
 
   #renderPrimary(): void {
@@ -657,6 +842,16 @@ export class SliccComposerCapture extends HTMLElement {
       void this.#switchCamera(this.#select.value);
     });
 
+    this.#audioSelect = h('select', {
+      class: 'slicc-capture__select',
+      part: 'audio-picker',
+      'aria-label': 'Microphone',
+      hidden: true,
+    }) as HTMLSelectElement;
+    this.#audioSelect.addEventListener('change', () => {
+      void this.#switchMicrophone(this.#audioSelect.value);
+    });
+
     this.#modePhoto = h(
       'button',
       {
@@ -664,8 +859,9 @@ export class SliccComposerCapture extends HTMLElement {
         class: 'slicc-capture__mode-btn',
         part: 'mode',
         'aria-pressed': 'true',
+        'aria-label': 'Photo',
       },
-      'Photo'
+      iconEl('image', { size: 14 })
     ) as HTMLButtonElement;
     this.#modePhoto.addEventListener('click', () => {
       this.mode = 'photo';
@@ -678,8 +874,9 @@ export class SliccComposerCapture extends HTMLElement {
         class: 'slicc-capture__mode-btn',
         part: 'mode',
         'aria-pressed': 'false',
+        'aria-label': 'Video',
       },
-      'Video'
+      iconEl('video', { size: 14 })
     ) as HTMLButtonElement;
     this.#modeVideo.addEventListener('click', () => {
       void this.#switchToVideoMode();
@@ -696,8 +893,13 @@ export class SliccComposerCapture extends HTMLElement {
 
     this.#cancel = h(
       'button',
-      { type: 'button', class: 'slicc-capture__btn', part: 'cancel' },
-      'Cancel'
+      {
+        type: 'button',
+        class: 'slicc-capture__close',
+        part: 'cancel',
+        'aria-label': 'Cancel',
+      },
+      iconEl('x', { size: 14 })
     ) as HTMLButtonElement;
     this.#cancel.addEventListener('click', () => this.#cancelCapture());
 
@@ -713,21 +915,24 @@ export class SliccComposerCapture extends HTMLElement {
       'div',
       { class: 'slicc-capture__bar' },
       this.#select,
-      modeGroup,
+      this.#audioSelect,
       h('span', { class: 'slicc-capture__spacer' }),
       this.#timer,
-      this.#cancel,
-      this.#primary
+      this.#primary,
+      modeGroup
     );
 
-    this.replaceChildren(this.#video, this.#status, bar);
+    this.replaceChildren(this.#video, this.#status, bar, this.#cancel);
     this.#applyMode(this.mode);
   }
 
   /**
    * Promote the surface into video mode mid-session. If the current stream
    * has no audio track (started in photo mode), reopen with audio so the
-   * recorded video carries microphone sound.
+   * recorded video carries microphone sound. Honors `preferredAudioDevice`
+   * so the user's mic choice survives the photo→video promotion, and
+   * re-populates the mic picker so its labels reflect the now-granted
+   * microphone permission.
    */
   async #switchToVideoMode(): Promise<void> {
     this.mode = 'video';
@@ -737,14 +942,16 @@ export class SliccComposerCapture extends HTMLElement {
     if (!provider) return;
     const activeId =
       this.#stream.getVideoTracks()[0]?.getSettings?.().deviceId ?? this.preferredDevice ?? null;
+    const audio = this.#audioConstraint(this.preferredAudioDevice, 'video');
     try {
       const next = activeId
-        ? await provider.getUserMedia({ video: { deviceId: { exact: activeId } }, audio: true })
-        : await provider.getUserMedia({ video: true, audio: true });
+        ? await provider.getUserMedia({ video: { deviceId: { exact: activeId } }, audio })
+        : await provider.getUserMedia({ video: true, audio });
       this.#stopStream();
       this.#stream = next;
       this.#captureAudioTrack();
       this.#attachStream(next);
+      await this.#populateAudioPicker(provider);
     } catch {
       this.#status.textContent = 'Microphone unavailable — recording video only.';
     }
