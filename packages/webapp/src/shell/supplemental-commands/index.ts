@@ -153,6 +153,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
           createIpkCommand('npm', { fs: options.fs, fetch: options.fetch }),
           createIpkCommand('i', { fs: options.fs, fetch: options.fetch }),
           createIpxCommand('ipx', { fs: options.fs, fetch: options.fetch }),
+          createIpxCommand('npx', { fs: options.fs, fetch: options.fetch }),
         ]
       : []),
     createEsbuildCommand(),

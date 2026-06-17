@@ -13,12 +13,16 @@
  * it was invoked as, like cowsay/cowthink), nothing is injected or dropped —
  * exit codes propagate, and stdout/stderr stay separate.
  *
- * The `npx` alias and npx-style auto-install land in the next feature.
+ * npx-like auto-install: when the requested name resolves to no bin AND the
+ * package is not already present in node_modules, ipx installs it first (full
+ * transitive tree materialized) and then runs it. An already-installed package
+ * runs WITHOUT reinstalling. `npx` is registered as an alias of `ipx`.
  */
 
-import type { Command, CommandContext, SecureFetch } from 'just-bash';
+import type { Command, CommandContext, ExecResult, SecureFetch } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 import { joinPath, normalizePath, splitPath } from '../../fs/path-utils.js';
+import { installPackages } from '../ipk/installer.js';
 import { executeJsCode } from '../jsh-executor.js';
 
 export interface IpxCommandDeps {
@@ -168,6 +172,68 @@ async function resolveBin(fs: VirtualFS, cwd: string, name: string): Promise<Res
   return (await resolveFromBinShim(fs, cwd, name)) ?? (await resolveFromPackageBin(fs, cwd, name));
 }
 
+/** Whether a package named `name` is already present in a reachable node_modules. */
+async function isPackageInstalled(fs: VirtualFS, cwd: string, name: string): Promise<boolean> {
+  for (const modulesDir of nodeModulesDirs(cwd)) {
+    if (await isFile(fs, joinPath(modulesDir, name, 'package.json'))) return true;
+  }
+  return false;
+}
+
+function describeError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function failure(name: string, message: string): ExecResult {
+  return { stdout: '', stderr: `${name}: ${message}\n`, exitCode: 1 };
+}
+
+/**
+ * npx-like auto-install of the requested package (full transitive tree).
+ * Returns the human-readable install progress to surface on stderr, or an
+ * error result if the install failed.
+ */
+async function autoInstall(
+  name: string,
+  binName: string,
+  ctx: CommandContext,
+  deps: IpxCommandDeps
+): Promise<{ progress: string } | { error: ExecResult }> {
+  try {
+    const outcome = await installPackages([binName], {
+      fs: deps.fs,
+      fetch: deps.fetch,
+      cwd: ctx.cwd,
+    });
+    if (outcome.errors.length > 0) {
+      return {
+        error: failure(
+          name,
+          `failed to install '${binName}': ${describeError(outcome.errors[0].error)}`
+        ),
+      };
+    }
+    const lines = outcome.results.map((r) => `${name}: installed ${r.name}@${r.version}`);
+    return { progress: lines.length > 0 ? `${lines.join('\n')}\n` : '' };
+  } catch (err) {
+    return { error: failure(name, `failed to install '${binName}': ${describeError(err)}`) };
+  }
+}
+
+/** Validate that a resolved bin path points at a runnable file. */
+async function validateBinFile(
+  name: string,
+  binName: string,
+  binFilePath: string,
+  fs: VirtualFS
+): Promise<ExecResult | null> {
+  if (await isFile(fs, binFilePath)) return null;
+  if (await isDirectory(fs, binFilePath)) {
+    return failure(name, `bin target '${binFilePath}' is a directory, not a file`);
+  }
+  return failure(name, `bin file '${binFilePath}' for '${binName}' does not exist`);
+}
+
 export function createIpxCommand(name: string, deps: IpxCommandDeps): Command {
   return {
     name,
@@ -187,39 +253,39 @@ export function createIpxCommand(name: string, deps: IpxCommandDeps): Command {
       try {
         resolved = await resolveBin(deps.fs, ctx.cwd, binName);
       } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err);
-        return { stdout: '', stderr: `${name}: ${reason}\n`, exitCode: 1 };
+        return failure(name, describeError(err));
+      }
+
+      // npx-like auto-install: an already-installed package runs as-is (no
+      // reinstall); an absent one is installed (full transitive tree) first.
+      let installProgress = '';
+      if (!resolved && !(await isPackageInstalled(deps.fs, ctx.cwd, binName))) {
+        const installed = await autoInstall(name, binName, ctx, deps);
+        if ('error' in installed) return installed.error;
+        installProgress = installed.progress;
+        resolved = await resolveBin(deps.fs, ctx.cwd, binName);
       }
 
       if (!resolved) {
-        return {
-          stdout: '',
-          stderr: `${name}: could not determine an executable named '${binName}' (run: ipk install ${binName})\n`,
-          exitCode: 1,
-        };
+        return failure(
+          name,
+          `could not determine an executable named '${binName}' (run: ipk install ${binName})`
+        );
       }
 
-      if (!(await isFile(deps.fs, resolved.binFilePath))) {
-        if (await isDirectory(deps.fs, resolved.binFilePath)) {
-          return {
-            stdout: '',
-            stderr: `${name}: bin target '${resolved.binFilePath}' is a directory, not a file\n`,
-            exitCode: 1,
-          };
-        }
-        return {
-          stdout: '',
-          stderr: `${name}: bin file '${resolved.binFilePath}' for '${binName}' does not exist\n`,
-          exitCode: 1,
-        };
-      }
+      const invalid = await validateBinFile(name, binName, resolved.binFilePath, deps.fs);
+      if (invalid) return invalid;
 
       const source = stripShebang(await readText(deps.fs, resolved.binFilePath));
       const argv = ['node', resolved.argvName, ...binArgs];
       const result = await executeJsCode(source, argv, ctx, undefined, {
         filename: resolved.binFilePath,
       });
-      return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
+      return {
+        stdout: result.stdout,
+        stderr: installProgress + result.stderr,
+        exitCode: result.exitCode,
+      };
     },
   };
 }
