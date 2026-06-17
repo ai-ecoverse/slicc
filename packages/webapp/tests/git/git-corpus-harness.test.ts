@@ -544,4 +544,116 @@ describe('git corpus — -c <key>=<val> config overrides take effect', () => {
     await git.execute(['commit', '-m', 'no override'], '/project');
     expect(await headEmail('/project')).toBe('corpus@example.com');
   });
+
+  // #1047 review (Minor) — real git lowercases `-c` section + variable names,
+  // so `-c USER.email=…` / `-c User.Name=…` / `-c Init.DefaultBranch=…` must
+  // resolve against the same allowlist as the lowercase forms.
+  it('-c USER.email (uppercase section) overrides the commit author email', async () => {
+    await seedRepo('/project');
+    await vfs.writeFile('/project/file.txt', 'changed\n');
+    await git.execute(['add', 'file.txt'], '/project');
+    const result = await git.execute(
+      ['-c', 'USER.email=upper@example.com', 'commit', '-m', 'upper section'],
+      '/project'
+    );
+    expect(result.exitCode).toBe(0);
+    expect(await headEmail('/project')).toBe('upper@example.com');
+  });
+
+  it('-c User.Name (mixed case) overrides the commit author name', async () => {
+    await seedRepo('/project');
+    await vfs.writeFile('/project/file.txt', 'changed\n');
+    await git.execute(['add', 'file.txt'], '/project');
+    const result = await git.execute(
+      ['-c', 'User.Name=Mixed Case', 'commit', '-m', 'mixed name'],
+      '/project'
+    );
+    expect(result.exitCode).toBe(0);
+    expect(await headName('/project')).toBe('Mixed Case');
+  });
+
+  it('-c Init.DefaultBranch (mixed case) overrides the init default branch', async () => {
+    const result = await git.execute(
+      ['-c', 'Init.DefaultBranch=mainline', 'init'],
+      '/proj-mixed-init'
+    );
+    expect(result.exitCode).toBe(0);
+    const headRef = await vfs.readTextFile('/proj-mixed-init/.git/HEAD');
+    expect(headRef.trim()).toBe('ref: refs/heads/mainline');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1047 review (Major) — per-subcommand `--help` / `-h` short-circuit must be
+// position-aware: only treat it as help when it appears as an UNCONSUMED flag,
+// not when it is the VALUE of a preceding flag or follows a `--` separator.
+// ---------------------------------------------------------------------------
+
+describe('git corpus — #1047 position-aware --help short-circuit', () => {
+  it('git log --grep --help filters the log (--help is the grep pattern, not a help request)', async () => {
+    await seedRepo('/project');
+    // Make a second commit whose message will match the literal "--help" pattern
+    // so we can prove the grep ran rather than the help intercept firing.
+    await vfs.writeFile('/project/file.txt', 'changed\n');
+    await git.execute(['add', 'file.txt'], '/project');
+    await git.execute(['commit', '-m', 'mentions --help in the body'], '/project');
+
+    const result = await git.execute(['log', '--grep', '--help', '--oneline'], '/project');
+    expect(result.exitCode).toBe(0);
+    // Real log output is a single line per commit; the help banner lists
+    // multiple subcommands and would NOT mention the commit subject.
+    expect(result.stdout).toContain('mentions --help');
+    expect(result.stdout.toLowerCase()).not.toContain('available commands');
+  });
+
+  it('git commit -m --help commits with "--help" as the literal message', async () => {
+    await seedRepo('/project');
+    await vfs.writeFile('/project/file.txt', 'changed\n');
+    await git.execute(['add', 'file.txt'], '/project');
+
+    const result = await git.execute(['commit', '-m', '--help'], '/project');
+    expect(result.exitCode).toBe(0);
+    // Commit summary line includes the literal message, not the help banner.
+    expect(result.stdout).toContain('--help');
+    expect(result.stdout.toLowerCase()).not.toContain('available commands');
+
+    // The commit landed with that exact message.
+    const subject = (
+      await git.execute(['log', '--format', '%s', '-n', '1'], '/project')
+    ).stdout.trim();
+    expect(subject).toBe('--help');
+  });
+
+  it('git checkout -- --help routes to file restoration (no help banner, no branch switch)', async () => {
+    await seedRepo('/project');
+
+    // `checkoutFiles` is the file-restoration path; `isoGit.checkout` is the
+    // branch-switch path. Spy on the branch-switch path to prove the help
+    // intercept didn't fire AND the branch-switch path wasn't taken either.
+    // The actual restoration of the missing `--help` file will surface a
+    // fatal-not-found from `git.readBlob` — that's fine, we only assert the
+    // help banner is absent.
+    const checkoutSpy = vi.spyOn(isoGit, 'checkout').mockResolvedValue(undefined);
+    try {
+      const result = await git.execute(['checkout', '--', '--help'], '/project');
+      expect(result.stdout.toLowerCase()).not.toContain('available commands');
+      expect(checkoutSpy).not.toHaveBeenCalled();
+    } finally {
+      checkoutSpy.mockRestore();
+    }
+  });
+
+  it('bare git fetch --help still short-circuits BEFORE any network side effect (#1033-4 stays green)', async () => {
+    const fetchSpy = vi
+      .spyOn(isoGit, 'fetch')
+      .mockResolvedValue({} as Awaited<ReturnType<typeof isoGit.fetch>>);
+    try {
+      const result = await git.execute(['fetch', '--help'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.toLowerCase()).toContain('fetch');
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
 });

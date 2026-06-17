@@ -72,6 +72,70 @@ const PUSH_VALUE_FLAGS = new Set([
   '-6',
 ]);
 
+/**
+ * Per-subcommand sets of flags that consume a value, used by the help-detection
+ * walker (`isHelpRequested`) so a bare `--help` / `-h` is only recognized when
+ * it appears in an UNCONSUMED position. Without this, `git commit -m --help`
+ * fires the help short-circuit because `--help` is literally the commit
+ * message; `git log --grep --help` because `--help` is the grep pattern; etc.
+ * The FETCH/PULL/PUSH sets above are reused as-is so positional-ref parsing
+ * and help-detection stay in lockstep.
+ */
+const HELP_VALUE_FLAGS_BY_COMMAND: Record<string, Set<string>> = {
+  init: new Set(['-b', '--initial-branch']),
+  clone: new Set(['-b', '--branch', '--depth', '-o', '--origin', '--upload-pack']),
+  commit: new Set([
+    '-m',
+    '--message',
+    '--author',
+    '--date',
+    '-C',
+    '--reuse-message',
+    '-c',
+    '--reedit-message',
+    '-F',
+    '--file',
+    '--cleanup',
+  ]),
+  log: new Set([
+    '-n',
+    '--max-count',
+    '--format',
+    '--pretty',
+    '--author',
+    '--committer',
+    '--grep',
+    '--since',
+    '--until',
+    '--skip',
+    '--follow',
+  ]),
+  branch: new Set([
+    '-l',
+    '--list',
+    '-u',
+    '--set-upstream-to',
+    '-t',
+    '--track',
+    '--contains',
+    '--no-contains',
+    '--merged',
+    '--no-merged',
+    '--points-at',
+  ]),
+  checkout: new Set(['-b', '-B', '--orphan', '--track', '--start-point', '--conflict']),
+  diff: new Set(['--format', '--pretty', '--diff-filter']),
+  show: new Set(['--format', '--pretty']),
+  merge: new Set(['-m', '--message', '-s', '--strategy', '-X', '--strategy-option']),
+  tag: new Set(['-m', '--message', '-F', '--file', '-l', '--list', '--contains', '--points-at']),
+  fetch: FETCH_VALUE_FLAGS,
+  pull: PULL_VALUE_FLAGS,
+  push: PUSH_VALUE_FLAGS,
+};
+
+/** Shared empty value-flag set for subcommands without value-taking flags. */
+const EMPTY_FLAG_SET: Set<string> = new Set();
+
 /** Read an env var from either a Map (shell ctx.env) or a plain Record. */
 function readEnvVar(
   env: ReadonlyMap<string, string> | Readonly<Record<string, string>>,
@@ -264,8 +328,12 @@ export class GitCommands {
     const [command, ...rest] = parsed.remainingArgs;
 
     // Per-subcommand help: `git <cmd> --help` / `-h` must short-circuit BEFORE
-    // any network/FS action runs (#1033-4).
-    if (rest.includes('--help') || rest.includes('-h')) {
+    // any network/FS action runs (#1033-4). Detect the help flag with
+    // `isHelpRequested` so a token that is actually the VALUE of a preceding
+    // flag (`commit -m --help`) or a path after `--` (`checkout -- --help`)
+    // doesn't trip the intercept (#1047 review).
+    const helpValueFlags = HELP_VALUE_FLAGS_BY_COMMAND[command] ?? EMPTY_FLAG_SET;
+    if (this.isHelpRequested(rest, helpValueFlags)) {
       return this.help();
     }
 
@@ -390,8 +458,11 @@ export class GitCommands {
       if (step.kind === 'version') versionRequested = true;
       if (step.kind === 'cwd' && step.cwd !== undefined) effectiveCwd = step.cwd;
       if (step.kind === 'config' && step.key !== undefined) {
-        // Last `-c <key>=<val>` wins, matching real git behavior.
-        configOverrides.set(step.key, step.value ?? '');
+        // Last `-c <key>=<val>` wins, matching real git behavior. Real git
+        // lowercases the section and variable name, so `-c USER.email=…` and
+        // `-c User.Name=…` resolve to the same key as the lowercase forms
+        // (#1047 review). Value is preserved as-is.
+        configOverrides.set(step.key.toLowerCase(), step.value ?? '');
       }
       i += step.consume;
     }
@@ -504,7 +575,9 @@ Available commands:
     // wins over the built-in `main` default.
     const defaultBranch =
       this.parseArg(args, '--initial-branch', '-b') ??
-      this.currentConfigOverrides?.get('init.defaultBranch') ??
+      // Override keys are lowercased on insert (matches real git), so look up
+      // the all-lowercase form here.
+      this.currentConfigOverrides?.get('init.defaultbranch') ??
       'main';
 
     await git.init({
@@ -2939,6 +3012,28 @@ Available commands:
         exitCode: 128,
       };
     }
+  }
+
+  /**
+   * Returns true iff a bare `--help` / `-h` token appears at an UNCONSUMED
+   * position in `rest`: stops scanning at a `--` separator (anything after is
+   * a pathspec), treats `--flag=value` as fully consumed inline, and skips
+   * the value slot of known value-taking flags so the help intercept doesn't
+   * fire when `--help` is itself a flag value (e.g. `commit -m --help`,
+   * `log --grep --help`, `checkout -- --help`). See #1047 review.
+   */
+  private isHelpRequested(rest: string[], valueFlags: Set<string>): boolean {
+    for (let i = 0; i < rest.length; i++) {
+      const arg = rest[i];
+      if (arg === '--') break;
+      if (arg === '--help' || arg === '-h') return true;
+      if (arg.startsWith('-') && !arg.includes('=') && valueFlags.has(arg) && i + 1 < rest.length) {
+        // Consume the next token as this flag's value, regardless of what it
+        // looks like — including `--help` / `-h`.
+        i++;
+      }
+    }
+    return false;
   }
 
   /**
