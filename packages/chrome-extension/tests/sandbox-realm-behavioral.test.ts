@@ -26,7 +26,10 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { normalizePath, splitPath } from '../../webapp/src/fs/path-utils.js';
 import { runJsRealm } from '../../webapp/src/kernel/realm/js-realm-shared.js';
 import type { RealmInitMsg } from '../../webapp/src/kernel/realm/realm-types.js';
-import { buildModuleGraph } from '../../webapp/src/shell/ipk/module-loader.js';
+import {
+  buildRealmModuleGraph,
+  type RealmGraphResult,
+} from '../../webapp/src/shell/ipk/module-loader.js';
 import type { ModuleReader } from '../../webapp/src/shell/ipk/resolver.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -190,52 +193,25 @@ function makeModuleReader(files: Record<string, string>): ModuleReader {
 }
 
 /**
- * Mirror `realm-host.ts dispatchModule`: resolve each entry specifier in
- * isolation so one broken/uninstalled entry surfaces as `errors[specifier]`
- * without sinking the others, then merge the per-entry graphs.
+ * Run the REAL host-side `buildRealmModuleGraph` (the same function
+ * `realm-host.ts dispatchModule` calls in production) from the entry CODE: it
+ * extracts the tagged require/import specifiers and resolves each in isolation
+ * so one broken/uninstalled entry surfaces as `errors[specifier]` without
+ * sinking the others, then returns the ordered graph.
+ *
+ * The transpile hooks (`createEsmTranspile` / `createEntryTranspile`) are
+ * intentionally omitted: they pull in `esbuild-wasm`, whose load-time
+ * `TextEncoder` invariant fails under this suite's jsdom environment. The
+ * behavioral cases here only exercise CJS require/sliccy/globals; ESM transpile
+ * parity is covered by the node-environment realm suites in webapp.
  */
 async function buildGraphForHost(
   reader: ModuleReader,
-  entrySpecifiers: string[],
-  fromDir: string
-): Promise<{
-  files: Array<{ path: string; cjsSource: string; kind: string }>;
-  entryMap: Record<string, string>;
-  edges: Record<string, Record<string, string>>;
-  errors: Record<string, string>;
-}> {
-  const filesByPath = new Map<string, { path: string; cjsSource: string; kind: string }>();
-  const order: string[] = [];
-  const entryMap: Record<string, string> = {};
-  const edges: Record<string, Record<string, string>> = {};
-  const errors: Record<string, string> = {};
-  for (const specifier of entrySpecifiers) {
-    try {
-      const graph = await buildModuleGraph({ entrySpecifiers: [specifier], fromDir, reader });
-      for (const file of graph.files) {
-        if (!filesByPath.has(file.path)) {
-          filesByPath.set(file.path, {
-            path: file.path,
-            cjsSource: file.cjsSource,
-            kind: file.kind,
-          });
-          order.push(file.path);
-        }
-      }
-      Object.assign(entryMap, graph.entryMap);
-      for (const [path, fileEdges] of Object.entries(graph.edges)) {
-        edges[path] = { ...(edges[path] ?? {}), ...fileEdges };
-      }
-    } catch (err) {
-      errors[specifier] = err instanceof Error ? err.message : String(err);
-    }
-  }
-  return {
-    files: order.map((p) => filesByPath.get(p)!),
-    entryMap,
-    edges,
-    errors,
-  };
+  entryCode: string,
+  fromDir: string,
+  entryFilename: string
+): Promise<RealmGraphResult> {
+  return buildRealmModuleGraph({ entryCode, fromDir, entryFilename, reader });
 }
 
 interface RunOpts {
@@ -283,10 +259,11 @@ function attachFakeRpcHost(hostPort: MessagePort, host: HostHandlers): Promise<R
           ? await host.exec(cmd)
           : { stdout: `ran:${cmd}\n`, stderr: '', exitCode: 0 };
       } else if (req.channel === 'module' && req.op === 'buildGraph') {
-        const entrySpecifiers = (req.args?.[0] as string[]) ?? [];
+        const entryCode = (req.args?.[0] as string) ?? '';
         const fromDir = (req.args?.[1] as string) ?? '/workspace';
+        const entryFilename = (req.args?.[2] as string) ?? '[eval]';
         const reader = makeModuleReader(host.files ?? {});
-        result = await buildGraphForHost(reader, entrySpecifiers, fromDir);
+        result = await buildGraphForHost(reader, entryCode, fromDir, entryFilename);
       } else {
         hostPort.postMessage({
           type: 'realm-rpc-res',

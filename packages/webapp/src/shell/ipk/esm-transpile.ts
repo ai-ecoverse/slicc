@@ -22,10 +22,10 @@
 
 import { getEsbuild } from '../supplemental-commands/esbuild-wasm.js';
 import { getTypeScript, type TypeScriptModule } from '../supplemental-commands/shared.js';
-import type { ModuleTranspile } from './module-loader.js';
-import { hasEsmSyntax } from './resolver.js';
+import type { EntryTranspile, ModuleTranspile } from './module-loader.js';
+import { hasDynamicImport, hasEsmSyntax } from './resolver.js';
 
-export { hasEsmSyntax } from './resolver.js';
+export { hasDynamicImport, hasEsmSyntax } from './resolver.js';
 
 type EsbuildLoader = () => Promise<typeof import('esbuild-wasm')>;
 type TypeScriptLoader = () => Promise<TypeScriptModule>;
@@ -62,7 +62,35 @@ async function transpileWithEsbuild(
     loader: 'js',
     format: 'cjs',
     sourcefile: path,
+    // Lower nested dynamic `import('x')` to a `require`-backed promise so the
+    // realm's synchronous CJS cache serves it (no real `import()` in the
+    // sandbox); `import()` of an installed package resolves through the graph.
+    supported: { 'dynamic-import': false },
     define: { 'import.meta.url': JSON.stringify(importMetaUrl) },
+  });
+  return result.code;
+}
+
+/**
+ * Transpile the realm ENTRY code to a CJS body for the realm's `AsyncFunction`
+ * wrapper. esbuild (`format: 'cjs'`, dynamic-import lowered) is primary; it
+ * rejects top-level `await`, so a TLA entry falls back to TypeScript
+ * (`module: CommonJS`), which lowers static + dynamic imports to `require`
+ * while preserving the top-level `await` the AsyncFunction body allows.
+ */
+async function transpileEntryWithEsbuild(
+  load: EsbuildLoader,
+  source: string,
+  filename: string,
+  importMetaUrl: string | undefined
+): Promise<string> {
+  const esbuild = await load();
+  const result = await esbuild.transform(source, {
+    loader: 'js',
+    format: 'cjs',
+    sourcefile: filename || '[eval]',
+    supported: { 'dynamic-import': false },
+    ...(importMetaUrl ? { define: { 'import.meta.url': JSON.stringify(importMetaUrl) } } : {}),
   });
   return result.code;
 }
@@ -132,6 +160,40 @@ export function createEsmTranspile(options: CreateEsmTranspileOptions = {}): Mod
     } catch (tsError) {
       throw new Error(
         `Failed to transpile ESM module '${path}': ${messageOf(esbuildError)}; ` +
+          `typescript fallback: ${messageOf(tsError)}`
+      );
+    }
+  };
+}
+
+/**
+ * Create the entry-code transpile hook (see {@link EntryTranspile}). Plain CJS
+ * entries (no static-ESM and no dynamic `import()`) pass through untouched.
+ * Otherwise esbuild lowers imports to `require` (rejecting top-level await), and
+ * a TLA entry falls back to TypeScript, which keeps the top-level `await`.
+ */
+export function createEntryTranspile(options: CreateEsmTranspileOptions = {}): EntryTranspile {
+  const loadEsbuild =
+    options.loadEsbuild ?? ((): Promise<typeof import('esbuild-wasm')> => getEsbuild());
+  const loadTypeScript = options.loadTypeScript ?? getTypeScript;
+
+  return async ({ source, filename }) => {
+    if (!hasEsmSyntax(source) && !hasDynamicImport(source)) return source;
+    const isRealPath = typeof filename === 'string' && filename.startsWith('/');
+    const importMetaUrl = isRealPath ? vfsPathToModuleUrl(filename) : undefined;
+    const tsPath = isRealPath ? filename : '[eval].js';
+
+    let esbuildError: unknown;
+    try {
+      return await transpileEntryWithEsbuild(loadEsbuild, source, filename, importMetaUrl);
+    } catch (err) {
+      esbuildError = err;
+    }
+    try {
+      return await transpileWithTypeScript(loadTypeScript, source, tsPath, importMetaUrl ?? '');
+    } catch (tsError) {
+      throw new Error(
+        `Failed to transpile entry source: ${messageOf(esbuildError)}; ` +
           `typescript fallback: ${messageOf(tsError)}`
       );
     }

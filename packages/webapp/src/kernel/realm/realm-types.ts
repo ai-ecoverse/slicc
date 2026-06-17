@@ -132,6 +132,13 @@ export interface RealmModuleGraph {
   entryMap: Record<string, string>;
   edges: Record<string, Record<string, string>>;
   errors: Record<string, string>;
+  /**
+   * The host-transpiled entry source — present only when the realm's entry
+   * code used static/dynamic `import` or top-level `await` (the host lowers it
+   * to a CJS body the realm's `AsyncFunction` wrapper can run). Absent for a
+   * plain-CJS entry, in which case the realm runs `init.code` verbatim.
+   */
+  entrySource?: string;
 }
 
 /**

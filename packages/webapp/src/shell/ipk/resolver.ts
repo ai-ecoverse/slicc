@@ -513,6 +513,17 @@ export function hasEsmSyntax(source: string): boolean {
   return ESM_IMPORT_RE.test(source) || ESM_EXPORT_RE.test(source) || IMPORT_META_RE.test(source);
 }
 
+const DYNAMIC_IMPORT_RE = /\bimport\s*\(/;
+
+/**
+ * Detect a dynamic `import(...)` call anywhere in a source. Unlike
+ * {@link hasEsmSyntax}, this is true for `import('x')` (legal in CJS), which
+ * the entry transpiler must still lower to a `require`-backed promise.
+ */
+export function hasDynamicImport(source: string): boolean {
+  return DYNAMIC_IMPORT_RE.test(source);
+}
+
 /**
  * Detect the module kind of a resolved file (architecture 4.4). Extension wins
  * first (`.json`/`.mjs`/`.cjs`). For a bare `.js`/extensionless entry the

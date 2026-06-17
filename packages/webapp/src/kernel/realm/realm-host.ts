@@ -14,7 +14,8 @@
 
 import type { CommandContext } from 'just-bash';
 import type { BrowserAPI } from '../../cdp/browser-api.js';
-import { buildModuleGraph, type LoadedModule } from '../../shell/ipk/module-loader.js';
+import { createEntryTranspile, createEsmTranspile } from '../../shell/ipk/esm-transpile.js';
+import { buildRealmModuleGraph } from '../../shell/ipk/module-loader.js';
 import type { ModuleReader } from '../../shell/ipk/resolver.js';
 import {
   type HidBackend,
@@ -391,61 +392,34 @@ function createCtxModuleReader(ctx: CommandContext): ModuleReader {
 }
 
 /**
- * Build the host-resolved CJS module graph for the realm's `require()`
- * specifiers (architecture 4.4, §6). Each entry specifier is resolved in
- * isolation so a single uninstalled package surfaces as a per-entry
- * `errors[specifier]` entry (the resolver's exact
- * `Cannot find module '<x>' (run: ipk install <x>)` text) without sinking the
- * other entries' graphs. Modules shared across entries are emitted once; the
- * realm dedups again by path at evaluation time so the CJS cache stays a
- * singleton per module. There is NO CDN fallback — an unresolved bare module
- * never triggers a network fetch.
+ * Build the host-resolved CJS module graph for the realm's ENTRY CODE
+ * (architecture 4.4, §6) over the `module`/`buildGraph` RPC. The host extracts
+ * the entry's tagged `require`/`import` specifiers, resolves each in isolation
+ * (so a single uninstalled package surfaces as a per-entry `errors[specifier]`
+ * entry — the resolver's exact `Cannot find module '<x>' (run: ipk install
+ * <x>)` text — without sinking the other entries' graphs) using its access-path
+ * `exports` conditions (`import` vs `require`), recursively follows nested edges
+ * per kind, transpiles every ESM module to CJS, and transpiles the entry itself
+ * when it uses static/dynamic `import` or top-level `await`. Modules shared
+ * across entries are emitted once; the realm dedups again by path at evaluation
+ * time so the CJS cache stays a singleton per module. There is NO CDN fallback —
+ * an unresolved bare module never triggers a network fetch.
  */
 async function dispatchModule(op: string, args: unknown[], ctx: CommandContext): Promise<unknown> {
   if (op !== 'buildGraph') throw new Error(`realm-host: unknown module op '${op}'`);
-  const entrySpecifiers = Array.isArray(args[0]) ? (args[0] as string[]) : [];
+  const entryCode = typeof args[0] === 'string' ? (args[0] as string) : '';
   const fromDir = typeof args[1] === 'string' && args[1] ? (args[1] as string) : ctx.cwd;
-  const conditions = Array.isArray(args[2]) ? (args[2] as string[]) : undefined;
+  const entryFilename = typeof args[2] === 'string' ? (args[2] as string) : '';
   const reader = createCtxModuleReader(ctx);
 
-  const files = new Map<string, LoadedModule>();
-  const order: string[] = [];
-  const entryMap: Record<string, string> = {};
-  const edges: Record<string, Record<string, string>> = {};
-  const errors: Record<string, string> = {};
-
-  for (const specifier of entrySpecifiers) {
-    try {
-      const graph = await buildModuleGraph({
-        entrySpecifiers: [specifier],
-        fromDir,
-        reader,
-        ...(conditions ? { conditions } : {}),
-      });
-      for (const file of graph.files) {
-        if (!files.has(file.path)) {
-          files.set(file.path, file);
-          order.push(file.path);
-        }
-      }
-      Object.assign(entryMap, graph.entryMap);
-      for (const [path, fileEdges] of Object.entries(graph.edges)) {
-        edges[path] = { ...(edges[path] ?? {}), ...fileEdges };
-      }
-    } catch (err) {
-      errors[specifier] = err instanceof Error ? err.message : String(err);
-    }
-  }
-
-  return {
-    files: order.map((path) => {
-      const mod = files.get(path)!;
-      return { path: mod.path, cjsSource: mod.cjsSource, kind: mod.kind };
-    }),
-    entryMap,
-    edges,
-    errors,
-  };
+  return buildRealmModuleGraph({
+    entryCode,
+    fromDir,
+    entryFilename,
+    reader,
+    transpile: createEsmTranspile(),
+    transpileEntry: createEntryTranspile(),
+  });
 }
 
 // ---------------------------------------------------------------------------
