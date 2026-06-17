@@ -449,9 +449,12 @@ const DIP_HOST_STYLES = `html,body{margin:0;padding:0;overflow:hidden;background
    by the dip's own content (e.g. .sprinkle-action-card__body) so shtml
    widgets that already pad themselves don't end up double-indented. The
    ResizeObserver on document.body reports the post-padding scrollHeight
-   correctly, so auto-height continues to work. */
+   correctly, so auto-height continues to work. The .sprinkle-inline rule
+   (set on the iframe body) carries 2px of horizontal padding so the 1px
+   focus ring (box-shadow:0 0 0 1px on inputs/select below) doesn't get
+   clipped at the iframe paint boundary. */
 body{padding:12px 0;font-family:var(--s2-font-family, sans-serif);font-size:13px;color:var(--s2-content-default)}
-.sprinkle-inline{padding:var(--s2-spacing-100) 0}
+.sprinkle-inline{padding:var(--s2-spacing-100) 2px}
 .sprinkle-inline .sprinkle-btn{padding:4px 12px;font-size:12px;height:28px;box-shadow:none}
 .sprinkle-inline .sprinkle-btn:not([class*="sprinkle-btn--"]){background:var(--s2-bg-elevated)}
 .sprinkle-inline .sprinkle-card{box-shadow:none;margin:0}
@@ -739,111 +742,127 @@ function toDipUint8Array(value: unknown): Uint8Array {
  * `inputreport` listener for this dip window; `hid.close` and dispose
  * tear it down.
  */
+async function runDipHidOp(
+  iframeWindow: Window,
+  op: string,
+  args: readonly unknown[]
+): Promise<unknown> {
+  const reg = getSharedHidRegistry();
+  switch (op) {
+    case 'list': {
+      const hid = getNavigatorHid();
+      if (!hid) throw new Error('WebHID is unavailable in this browser');
+      return hidOps.hidList(reg, hid);
+    }
+    case 'request': {
+      const hid = getNavigatorHid();
+      if (!hid) throw new Error('WebHID is unavailable in this browser');
+      return hidOps.hidRequest(reg, hid, (args[0] as HidDeviceFilter[]) ?? []);
+    }
+    case 'info':
+      return hidOps.hidDeviceInfo(reg, args[0] as string);
+    case 'open': {
+      const handle = args[0] as string;
+      await hidOps.hidOpen(reg, handle);
+      await attachDipHidInputReports(iframeWindow, handle);
+      return { ok: true };
+    }
+    case 'close': {
+      const handle = args[0] as string;
+      await detachDipHidInputReports(iframeWindow, handle);
+      await hidOps.hidClose(reg, handle);
+      return { ok: true };
+    }
+    case 'sendReport': {
+      const handle = args[0] as string;
+      const reportId = args[1] as number;
+      const bytes = toDipUint8Array(args[2]);
+      const buf = bytes.buffer.slice(
+        bytes.byteOffset,
+        bytes.byteOffset + bytes.byteLength
+      ) as ArrayBuffer;
+      await hidOps.hidSendReport(reg, handle, reportId, buf);
+      return { ok: true };
+    }
+    default:
+      throw new Error(`hid: unknown op '${op}'`);
+  }
+}
+
+async function runDipSerialOp(op: string, args: readonly unknown[]): Promise<unknown> {
+  const reg = getSharedSerialRegistry();
+  switch (op) {
+    case 'list': {
+      const serial = getNavigatorSerial();
+      if (!serial) throw new Error('Web Serial is unavailable in this browser');
+      return serialOps.serialList(reg, serial);
+    }
+    case 'request': {
+      const serial = getNavigatorSerial();
+      if (!serial) throw new Error('Web Serial is unavailable in this browser');
+      return serialOps.serialRequest(reg, serial, (args[0] as SerialFilter[]) ?? []);
+    }
+    case 'info':
+      return serialOps.serialDeviceInfo(reg, args[0] as string);
+    case 'open': {
+      const handle = args[0] as string;
+      const options = (args[1] as SerialOpenOptions) ?? { baudRate: 9600 };
+      await serialOps.serialOpen(reg, handle, options);
+      return { ok: true };
+    }
+    case 'close': {
+      await serialOps.serialClose(reg, args[0] as string);
+      return { ok: true };
+    }
+    default:
+      throw new Error(`serial: unknown op '${op}'`);
+  }
+}
+
+async function runDipUsbOp(op: string, args: readonly unknown[]): Promise<unknown> {
+  const reg = getSharedUsbRegistry();
+  switch (op) {
+    case 'list': {
+      const usb = getNavigatorUsb();
+      if (!usb) throw new Error('WebUSB is unavailable in this browser');
+      return usbOps.usbList(reg, usb);
+    }
+    case 'request': {
+      const usb = getNavigatorUsb();
+      if (!usb) throw new Error('WebUSB is unavailable in this browser');
+      return usbOps.usbRequest(reg, usb, (args[0] as UsbDeviceFilter[]) ?? []);
+    }
+    case 'info':
+      return usbOps.usbDeviceInfo(reg, args[0] as string);
+    case 'open': {
+      await usbOps.usbOpen(reg, args[0] as string);
+      return { ok: true };
+    }
+    case 'close': {
+      await usbOps.usbClose(reg, args[0] as string);
+      return { ok: true };
+    }
+    default:
+      throw new Error(`usb: unknown op '${op}'`);
+  }
+}
+
 async function runDipDeviceOp(
   iframeWindow: Window,
   channel: 'hid' | 'serial' | 'usb',
   op: string,
   args: readonly unknown[]
 ): Promise<unknown> {
-  if (channel === 'hid') {
-    const reg = getSharedHidRegistry();
-    switch (op) {
-      case 'list': {
-        const hid = getNavigatorHid();
-        if (!hid) throw new Error('WebHID is unavailable in this browser');
-        return hidOps.hidList(reg, hid);
-      }
-      case 'request': {
-        const hid = getNavigatorHid();
-        if (!hid) throw new Error('WebHID is unavailable in this browser');
-        return hidOps.hidRequest(reg, hid, (args[0] as HidDeviceFilter[]) ?? []);
-      }
-      case 'info':
-        return hidOps.hidDeviceInfo(reg, args[0] as string);
-      case 'open': {
-        const handle = args[0] as string;
-        await hidOps.hidOpen(reg, handle);
-        await attachDipHidInputReports(iframeWindow, handle);
-        return { ok: true };
-      }
-      case 'close': {
-        const handle = args[0] as string;
-        await detachDipHidInputReports(iframeWindow, handle);
-        await hidOps.hidClose(reg, handle);
-        return { ok: true };
-      }
-      case 'sendReport': {
-        const handle = args[0] as string;
-        const reportId = args[1] as number;
-        const bytes = toDipUint8Array(args[2]);
-        const buf = bytes.buffer.slice(
-          bytes.byteOffset,
-          bytes.byteOffset + bytes.byteLength
-        ) as ArrayBuffer;
-        await hidOps.hidSendReport(reg, handle, reportId, buf);
-        return { ok: true };
-      }
-      default:
-        throw new Error(`hid: unknown op '${op}'`);
-    }
+  switch (channel) {
+    case 'hid':
+      return runDipHidOp(iframeWindow, op, args);
+    case 'serial':
+      return runDipSerialOp(op, args);
+    case 'usb':
+      return runDipUsbOp(op, args);
+    default:
+      throw new Error(`unknown device channel '${channel}'`);
   }
-  if (channel === 'serial') {
-    const reg = getSharedSerialRegistry();
-    switch (op) {
-      case 'list': {
-        const serial = getNavigatorSerial();
-        if (!serial) throw new Error('Web Serial is unavailable in this browser');
-        return serialOps.serialList(reg, serial);
-      }
-      case 'request': {
-        const serial = getNavigatorSerial();
-        if (!serial) throw new Error('Web Serial is unavailable in this browser');
-        return serialOps.serialRequest(reg, serial, (args[0] as SerialFilter[]) ?? []);
-      }
-      case 'info':
-        return serialOps.serialDeviceInfo(reg, args[0] as string);
-      case 'open': {
-        const handle = args[0] as string;
-        const options = (args[1] as SerialOpenOptions) ?? { baudRate: 9600 };
-        await serialOps.serialOpen(reg, handle, options);
-        return { ok: true };
-      }
-      case 'close': {
-        await serialOps.serialClose(reg, args[0] as string);
-        return { ok: true };
-      }
-      default:
-        throw new Error(`serial: unknown op '${op}'`);
-    }
-  }
-  if (channel === 'usb') {
-    const reg = getSharedUsbRegistry();
-    switch (op) {
-      case 'list': {
-        const usb = getNavigatorUsb();
-        if (!usb) throw new Error('WebUSB is unavailable in this browser');
-        return usbOps.usbList(reg, usb);
-      }
-      case 'request': {
-        const usb = getNavigatorUsb();
-        if (!usb) throw new Error('WebUSB is unavailable in this browser');
-        return usbOps.usbRequest(reg, usb, (args[0] as UsbDeviceFilter[]) ?? []);
-      }
-      case 'info':
-        return usbOps.usbDeviceInfo(reg, args[0] as string);
-      case 'open': {
-        await usbOps.usbOpen(reg, args[0] as string);
-        return { ok: true };
-      }
-      case 'close': {
-        await usbOps.usbClose(reg, args[0] as string);
-        return { ok: true };
-      }
-      default:
-        throw new Error(`usb: unknown op '${op}'`);
-    }
-  }
-  throw new Error(`unknown device channel '${channel}'`);
 }
 
 /**
