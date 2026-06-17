@@ -1111,14 +1111,40 @@ export function getSelectedModelId(): string {
 }
 
 export function setSelectedModelId(modelId: string): void {
-  // If modelId already has provider prefix, store as-is
-  if (modelId.includes(':')) {
-    localStorage.setItem(MODEL_KEY, modelId);
-  } else {
-    // Store with provider prefix from current selection
-    const provider = getSelectedProvider();
-    localStorage.setItem(MODEL_KEY, `${provider}:${modelId}`);
+  // Decide whether `modelId` is ALREADY prefixed by inspecting the
+  // leading token, NOT by a bare `includes(':')` test. Bedrock model
+  // ids legitimately carry a `:<version>` segment (e.g.
+  // `eu.anthropic.claude-opus-4-5-20251101-v1:0`); the previous
+  // `includes(':')` shortcut treated those as pre-prefixed, persisted
+  // them as-is, and `getSelectedProvider()` then resolved the leading
+  // token as the provider — leaving the cone routed at a phantom
+  // `eu.anthropic.claude-opus-4-5-20251101-v1` provider.
+  //
+  // The leading token is treated as a provider prefix when either:
+  //   1. It matches a known provider id (built-in extension, external
+  //      provider, or a pi-ai registry entry), OR
+  //   2. It looks like a provider id structurally — no `.` characters.
+  //      Bedrock model fragments invariably contain dots
+  //      (`anthropic.claude-…`, `eu.anthropic.claude-…`,
+  //      `us.amazon.titan-…`); no shipped provider id does. The
+  //      structural fallback keeps fixtures that call this function
+  //      before `registerProviders()` has populated the registry from
+  //      mis-routing a legitimate `adobe:claude-…` style payload.
+  const idx = modelId.indexOf(':');
+  if (idx > 0) {
+    const leading = modelId.slice(0, idx);
+    const known = new Set<string>([...getRegisteredProviderIds(), ...getAvailableProviders()]);
+    const looksLikeBedrockFragment = leading.includes('.');
+    if (known.has(leading) || !looksLikeBedrockFragment) {
+      localStorage.setItem(MODEL_KEY, modelId);
+      return;
+    }
   }
+  // Bare id, or a colon-bearing id whose leading token contains a dot
+  // (Bedrock): attach the current provider prefix so downstream
+  // resolvers don't mis-route.
+  const provider = getSelectedProvider();
+  localStorage.setItem(MODEL_KEY, `${provider}:${modelId}`);
 }
 
 /** Get the raw selected-model value (providerId:modelId) */

@@ -112,6 +112,20 @@ export async function wireWcOnboarding(deps: WcOnboardingDeps): Promise<WcOnboar
     postDipReference: postLine,
     broadcastToDip: (payload) => broadcastToDips(payload),
     onFireFinalLick: fireFinalLick,
+    // After onboarding lands an account, dispatch the same window
+    // event `wc-settings` fires when the user adds an account from
+    // the settings dialog. `wc-nav.wireAccountsChangedResync` listens
+    // for it and re-pulls models + identity so the picker doesn't
+    // show "No models" until the next reload.
+    onAccountsChanged: () => {
+      try {
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('slicc:accounts-changed'));
+        }
+      } catch (err) {
+        log.warn('Failed to dispatch slicc:accounts-changed', err);
+      }
+    },
   });
 
   const interceptWelcomeLick = createWelcomeLickInterceptor({
