@@ -161,17 +161,17 @@ function appendPhotoResult(thread: HTMLElement, result: CaptureResult): void {
 
 /**
  * Wire the add-menu's "Take a photo" quick-action to the inline capture
- * surface mounted inside the composer band: when `slicc-add` bubbles up with
- * `{ kind: 'capture', mode: 'photo' }`, hide the input card + meta row,
- * un-hide the capture surface, and `open('photo')`. When the promise resolves
- * (snap or cancel — `#finishCapture` re-hides the surface itself), restore
- * the input card + meta row and surface any photo result in the thread.
+ * surface mounted as a full-area overlay on the chat-column shell: when
+ * `slicc-add` bubbles up with `{ kind: 'capture', mode: 'photo' }`, un-hide
+ * the surface (it covers the thread + composer band, mirroring the PTT
+ * overlay / drop-zone pattern) and `open('photo')`. When the promise
+ * resolves (snap or cancel — `#finishCapture` re-hides the surface itself),
+ * surface any photo result in the thread. The composer band stays untouched
+ * underneath the overlay, so no card/meta toggling is needed.
  */
 function wireInlineCapture(
   composer: SliccComposer,
   capture: SliccComposerCapture,
-  inputCardEl: HTMLElement,
-  metaRowEl: HTMLElement,
   thread: HTMLElement
 ): void {
   let active = false;
@@ -182,11 +182,7 @@ function wireInlineCapture(
     if (active || detail.kind !== 'capture' || !('mode' in detail)) return;
     if (detail.mode !== 'photo') return;
     active = true;
-    inputCardEl.hidden = true;
-    metaRowEl.hidden = true;
     void capture.open('photo').then((result) => {
-      inputCardEl.hidden = false;
-      metaRowEl.hidden = false;
       active = false;
       if (result) appendPhotoResult(thread, result);
     });
@@ -200,17 +196,22 @@ function wireInlineCapture(
  * components: `<slicc-input-card>` (add-menu + gravatar send button) + a
  * `<slicc-composer-meta>` row. Light/dark is driven by the global theme toolbar.
  *
- * The composer also mounts a `<slicc-composer-capture>` surface (hidden at
- * rest, fake camera provider so no real permission is needed). The add-menu's
- * "Take a photo" quick-action drives it inline via the bubbling `slicc-add`
- * event — Snap or Cancel returns to the input card and surfaces any photo
- * result in the thread.
+ * The shell also hosts a `<slicc-composer-capture>` surface as a full-area
+ * overlay (hidden at rest, fake camera provider so no real permission is
+ * needed). It is appended to the shell — not into the composer band — and
+ * given story-level inline styles that override the component's self-bounded
+ * tag stylesheet so it fills the whole chat column (`position:absolute;
+ * inset:0; z-index:10`), mirroring the PTT overlay and add-menu drop-zone
+ * pattern. The add-menu's "Take a photo" quick-action drives it inline via
+ * the bubbling `slicc-add` event — Snap or Cancel returns to the resting
+ * composer and surfaces any photo result in the thread.
  */
 function composer({ open }: ComposerArgs): HTMLElement {
   // A chat-column shell: faux thread above, composer footer pinned below.
+  // `position:relative` anchors the absolutely-positioned capture overlay.
   const shell = document.createElement('div');
   shell.style.cssText =
-    'display:flex;flex-direction:column;height:460px;width:100%;background:var(--bg);overflow:hidden;font-family:var(--ui);';
+    'position:relative;display:flex;flex-direction:column;height:460px;width:100%;background:var(--bg);overflow:hidden;font-family:var(--ui);';
 
   const thread = document.createElement('div');
   thread.style.cssText =
@@ -234,17 +235,22 @@ function composer({ open }: ComposerArgs): HTMLElement {
 
   const el = document.createElement('slicc-composer') as SliccComposer;
   if (open) el.setAttribute('open', '');
-  const card = inputCard();
-  const meta = metaRow(Boolean(open));
+  el.append(inputCard(), metaRow(Boolean(open)));
+
   const capture = document.createElement('slicc-composer-capture') as SliccComposerCapture;
   capture.media = makeFakePhotoProvider();
   capture.setAttribute('mode', 'photo');
   capture.hidden = true;
-  el.append(card, meta, capture);
+  // Story-level overlay: inline styles win over the component's tag-selector
+  // self-bounded box (4:3 / max 480px) so the surface fills the whole chat
+  // column with its bottom control bar fully visible. Same pattern as the
+  // PTT overlay (`.slicc-composer__ptt`) and the add-menu drop zone (`.drop`).
+  capture.style.cssText =
+    'position:absolute;inset:0;z-index:10;max-height:none;aspect-ratio:auto;border-radius:0;';
 
-  wireInlineCapture(el, capture, card, meta, thread);
+  wireInlineCapture(el, capture, thread);
 
-  shell.append(thread, el);
+  shell.append(thread, el, capture);
   return shell;
 }
 
