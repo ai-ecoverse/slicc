@@ -305,24 +305,29 @@ describe('executeJshFile', () => {
     });
     const result = await executeJshFile('/workspace/req.jsh', [], ctx);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('not pre-loaded');
+    // Hard-switched loader: a dynamic specifier with no graph edge throws the
+    // Node `Cannot find module` error with the install hint, never a CDN path.
+    expect(result.stdout).toContain(
+      "Cannot find module 'dynamic-pkg' (run: ipk install dynamic-pkg)"
+    );
   });
 
-  it('require throws helpful error for modules that failed to pre-fetch', async () => {
+  it('require throws helpful error for modules that are not installed', async () => {
     const ctx = createMockCtx({
       '/workspace/req-err.jsh':
         'try { const x = require("this-package-definitely-does-not-exist-xyz123"); console.log("got: " + typeof x); } catch(e) { console.log(e.message); }',
     });
     const result = await executeJshFile('/workspace/req-err.jsh', [], ctx);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('not pre-loaded');
+    expect(result.stdout).toContain(
+      "Cannot find module 'this-package-definitely-does-not-exist-xyz123' (run: ipk install this-package-definitely-does-not-exist-xyz123)"
+    );
   });
 
-  // Phase-8 removed the kernel-side `nodeRuntimeState.__requireCache`.
-  // Each realm task fetches its own modules via esm.sh; there's no
-  // shared cache to pre-populate from outside the realm. The
-  // require-pre-loaded path is covered by the negative test above
-  // (`require throws for non-pre-scanned dynamic specifiers`).
+  // The CJS require hard-switch resolves every specifier from the installed
+  // node_modules graph (host-resolved over the `module` RPC). There is no CDN
+  // download path; an uninstalled module hard-errors with the install hint
+  // (covered by the negative tests above).
 
   it('require("fs") returns the fs bridge', async () => {
     const ctx = createMockCtx({

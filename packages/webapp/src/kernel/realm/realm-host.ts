@@ -14,6 +14,8 @@
 
 import type { CommandContext } from 'just-bash';
 import type { BrowserAPI } from '../../cdp/browser-api.js';
+import { buildModuleGraph, type LoadedModule } from '../../shell/ipk/module-loader.js';
+import type { ModuleReader } from '../../shell/ipk/resolver.js';
 import {
   type HidBackend,
   resolveHidBackend,
@@ -187,6 +189,8 @@ async function dispatch(
       return dispatchSerial(req.op, req.args, resolveSerialBackendForHost(opts));
     case 'hid':
       return dispatchHid(req.op, req.args, resolveHidBackendForHost(opts), hidCtx);
+    case 'module':
+      return dispatchModule(req.op, req.args, ctx);
     default:
       throw new Error(`realm-host: unknown channel '${req.channel}'`);
   }
@@ -355,6 +359,92 @@ async function dispatchFetch(
     headers,
     body,
     url: response.url,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Channel: module
+// ---------------------------------------------------------------------------
+
+/**
+ * Adapt a `CommandContext`'s VFS into the read-only {@link ModuleReader} the
+ * resolver/loader need. Paths arriving from the resolver are absolute (built
+ * from `fromDir`), but we still route through `resolvePath` so a relative
+ * `fromDir` is anchored to the realm's cwd the same way `dispatchVfs` does.
+ */
+function createCtxModuleReader(ctx: CommandContext): ModuleReader {
+  const resolveP = (p: string): string => ctx.fs.resolvePath(ctx.cwd, p);
+  return {
+    exists: (p) => ctx.fs.exists(resolveP(p)),
+    isDirectory: async (p) => {
+      try {
+        return (await ctx.fs.stat(resolveP(p))).isDirectory;
+      } catch {
+        return false;
+      }
+    },
+    readFile: async (p) => {
+      const content = await ctx.fs.readFile(resolveP(p));
+      return typeof content === 'string' ? content : new TextDecoder().decode(content);
+    },
+  };
+}
+
+/**
+ * Build the host-resolved CJS module graph for the realm's `require()`
+ * specifiers (architecture 4.4, §6). Each entry specifier is resolved in
+ * isolation so a single uninstalled package surfaces as a per-entry
+ * `errors[specifier]` entry (the resolver's exact
+ * `Cannot find module '<x>' (run: ipk install <x>)` text) without sinking the
+ * other entries' graphs. Modules shared across entries are emitted once; the
+ * realm dedups again by path at evaluation time so the CJS cache stays a
+ * singleton per module. There is NO CDN fallback — an unresolved bare module
+ * never triggers a network fetch.
+ */
+async function dispatchModule(op: string, args: unknown[], ctx: CommandContext): Promise<unknown> {
+  if (op !== 'buildGraph') throw new Error(`realm-host: unknown module op '${op}'`);
+  const entrySpecifiers = Array.isArray(args[0]) ? (args[0] as string[]) : [];
+  const fromDir = typeof args[1] === 'string' && args[1] ? (args[1] as string) : ctx.cwd;
+  const conditions = Array.isArray(args[2]) ? (args[2] as string[]) : undefined;
+  const reader = createCtxModuleReader(ctx);
+
+  const files = new Map<string, LoadedModule>();
+  const order: string[] = [];
+  const entryMap: Record<string, string> = {};
+  const edges: Record<string, Record<string, string>> = {};
+  const errors: Record<string, string> = {};
+
+  for (const specifier of entrySpecifiers) {
+    try {
+      const graph = await buildModuleGraph({
+        entrySpecifiers: [specifier],
+        fromDir,
+        reader,
+        ...(conditions ? { conditions } : {}),
+      });
+      for (const file of graph.files) {
+        if (!files.has(file.path)) {
+          files.set(file.path, file);
+          order.push(file.path);
+        }
+      }
+      Object.assign(entryMap, graph.entryMap);
+      for (const [path, fileEdges] of Object.entries(graph.edges)) {
+        edges[path] = { ...(edges[path] ?? {}), ...fileEdges };
+      }
+    } catch (err) {
+      errors[specifier] = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  return {
+    files: order.map((path) => {
+      const mod = files.get(path)!;
+      return { path: mod.path, cjsSource: mod.cjsSource, kind: mod.kind };
+    }),
+    entryMap,
+    edges,
+    errors,
   };
 }
 

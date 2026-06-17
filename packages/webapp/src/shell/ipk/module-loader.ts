@@ -47,6 +47,15 @@ export interface ModuleGraph {
   files: LoadedModule[];
   /** Map of each file entry specifier to its resolved absolute VFS path. */
   entryMap: Record<string, string>;
+  /**
+   * Per-file require edges: for each module path, a map of the literal
+   * `require()` specifier to its resolved absolute VFS path. Only `file`
+   * edges are recorded — `node:`/`sliccy:`/bare-built-in specifiers are
+   * served directly by the realm require shim and have no graph edge. The
+   * realm uses these to drive a synchronous nested `require` along the
+   * preloaded graph.
+   */
+  edges: Record<string, Record<string, string>>;
 }
 
 /** ESM->CJS transpile hook (wired host-side in M5 via esbuild/tsc). */
@@ -112,6 +121,7 @@ export async function buildModuleGraph(options: BuildModuleGraphOptions): Promis
   const { entrySpecifiers, fromDir, reader, conditions, transpile } = options;
   const built = new Map<string, LoadedModule>();
   const order: string[] = [];
+  const edges: Record<string, Record<string, string>> = {};
   const resolveOptions = conditions ? { conditions } : undefined;
 
   async function visit(path: string, kind: ModuleKind): Promise<void> {
@@ -121,6 +131,7 @@ export async function buildModuleGraph(options: BuildModuleGraphOptions): Promis
     // Register before recursing so a require cycle terminates.
     built.set(path, { path, source, cjsSource, kind });
     const moduleDir = dirOf(path);
+    const fileEdges: Record<string, string> = {};
     for (const specifier of extractRequireSpecifiers(source)) {
       let result: ResolveResult;
       try {
@@ -130,9 +141,11 @@ export async function buildModuleGraph(options: BuildModuleGraphOptions): Promis
         throw new Error(`While loading '${path}': ${reason}`);
       }
       if (result.type === 'file') {
+        fileEdges[specifier] = result.path;
         await visit(result.path, result.moduleKind);
       }
     }
+    edges[path] = fileEdges;
     order.push(path);
   }
 
@@ -152,5 +165,6 @@ export async function buildModuleGraph(options: BuildModuleGraphOptions): Promis
       return mod;
     }),
     entryMap,
+    edges,
   };
 }

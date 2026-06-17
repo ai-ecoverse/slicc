@@ -113,9 +113,7 @@ function runRealm(
       }
     });
   });
-  void runJsRealm(makeInit(code), realm, () =>
-    Promise.reject(new Error('in-process: require not pre-loaded'))
-  );
+  void runJsRealm(makeInit(code), realm);
   return promise;
 }
 

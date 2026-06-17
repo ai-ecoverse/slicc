@@ -82,9 +82,7 @@ export function createInProcessJsRealmFactory(): RealmFactory {
       realmSide.removeEventListener('message', initHandler);
       const init = event.data as RealmInitMsg;
       if (init.kind !== 'js') return;
-      const failingLoadModule = (id: string): Promise<Record<string, unknown>> =>
-        Promise.reject(new Error(`in-process realm: require('${id}') is not pre-loaded`));
-      void runJsRealm(init, realmSide, failingLoadModule).catch((err: unknown) => {
+      void runJsRealm(init, realmSide).catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         const errMsg: RealmErrorMsg = { type: 'realm-error', message };
         realmSide.postMessage(errMsg);
