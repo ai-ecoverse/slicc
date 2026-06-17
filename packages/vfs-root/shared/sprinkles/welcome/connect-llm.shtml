@@ -9,10 +9,6 @@
         font-size: 13px;
         color: var(--s2-content-default, #e8e8e8);
         background: transparent;
-        /* Small inset so input :focus `box-shadow: 0 0 0 1px` rings,
-           which paint 1px outside the border, aren't clipped by the
-           tight-fitting dip iframe edge. */
-        padding: 2px 3px;
       }
       .step { display: none; animation: fadeUp 0.18s ease both; }
       .step.active { display: block; }
