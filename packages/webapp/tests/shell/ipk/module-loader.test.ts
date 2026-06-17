@@ -120,6 +120,34 @@ describe('buildModuleGraph()', () => {
     expect(graph.files.map((f) => f.path)).toEqual(['/app/index.js']);
   });
 
+  it('treats a nested package require of any bare Node built-in as a graph-external edge', async () => {
+    // A real npm package that internally does require('crypto') / require('stream') /
+    // require('http') / require('zlib') must build as a builtin edge (no
+    // "Cannot find module" / node_modules miss). The realm shim guards them at
+    // require time; the graph walker only owns node_modules resolution.
+    const reader = makeReader({
+      '/app/node_modules/needsbuiltins/package.json': JSON.stringify({ main: 'index.js' }),
+      '/app/node_modules/needsbuiltins/index.js': `
+        const crypto = require('crypto');
+        const stream = require('stream');
+        const http = require('http');
+        const zlib = require('zlib');
+        const util = require('util');
+        const events = require('events');
+        const os = require('node:os');
+        module.exports = { crypto, stream, http, zlib, util, events, os };
+      `,
+    });
+    const graph = await buildModuleGraph({
+      entrySpecifiers: ['needsbuiltins'],
+      fromDir: '/app',
+      reader,
+    });
+    // Only the package file is in the graph — no builtin became a file edge.
+    expect(graph.files.map((f) => f.path)).toEqual(['/app/node_modules/needsbuiltins/index.js']);
+    expect(graph.edges['/app/node_modules/needsbuiltins/index.js']).toEqual({});
+  });
+
   it('terminates on a require cycle, visiting each file once', async () => {
     const reader = makeReader({
       '/app/a.js': "exports.name = 'a'; exports.b = require('./b.js');",

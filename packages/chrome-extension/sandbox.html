@@ -154,12 +154,27 @@ parent.postMessage({ type: 'realm-iframe-ready' }, '*');
 // fetch back through `realm-rpc-req` over the same port. Mirror of
 // `js-realm-worker.ts` minus the worker-only globals.
 function bootstrapRealmPort(port) {
-  const NODE_BUILTINS_UNAVAILABLE = new Set([
-    'http','https','net','tls','dgram','dns','cluster','worker_threads',
-    'child_process','crypto','os','stream','zlib','vm','v8','perf_hooks',
-    'readline','repl','tty','inspector',
+  // Single source-of-truth mirror — NODE_BUILTINS / NODE_BUILTIN_AVAILABLE in
+  // kernel/realm/node-builtins.ts (consumed by js-realm-shared.ts AND the
+  // host-side resolver). The realm serves fs/path/process/buffer directly and
+  // hard-fails every other Node built-in as browser-unavailable, so the
+  // host-side graph walker never routes a bare built-in into node_modules.
+  // NODE_BUILTINS_UNAVAILABLE is DERIVED (complete set minus the available
+  // ones) so the two lists can never drift.
+  const NODE_BUILTIN_AVAILABLE = new Set(['fs', 'path', 'process', 'buffer']);
+  const NODE_BUILTINS = new Set([
+    'assert','assert/strict','async_hooks','buffer','child_process','cluster',
+    'console','constants','crypto','dgram','diagnostics_channel','dns',
+    'dns/promises','domain','events','fs','fs/promises','http','http2','https',
+    'inspector','inspector/promises','module','net','os','path','path/posix',
+    'path/win32','perf_hooks','process','punycode','querystring','readline',
+    'readline/promises','repl','stream','stream/consumers','stream/promises',
+    'stream/web','string_decoder','sys','timers','timers/promises','tls',
+    'trace_events','tty','url','util','util/types','v8','vm','wasi',
+    'worker_threads','zlib',
   ]);
-  const BUILTINS_LOCAL = new Set(['fs', 'process', 'buffer']);
+  const NODE_BUILTINS_UNAVAILABLE = new Set([...NODE_BUILTINS].filter((n) => !NODE_BUILTIN_AVAILABLE.has(n)));
+  const BUILTINS_LOCAL = NODE_BUILTIN_AVAILABLE;
   // Mirrors NODE_NATIVE_PACKAGES in kernel/realm/require-guards.ts
   // (the canonical source-of-truth; js-realm-shared.ts imports from
   // there). C++-bound packages never load in the sandbox; their CDN
