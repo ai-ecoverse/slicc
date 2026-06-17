@@ -429,9 +429,13 @@ async function resolvePorts(state: ServerState): Promise<void> {
     state.servePort = await findAvailablePort(PREFERRED_SERVE_PORT);
     // Pass 0 for Chrome CDP so Chrome picks an available port (parsed from its
     // stderr) — avoids a race where Node's probe succeeds but Chrome can't bind.
-    // Electron keeps the preferred port (external CDP, not launched by us).
-    state.requestedCdpPort = ELECTRON_MODE ? PREFERRED_CDP_PORT : 0;
-    state.cdpPort = ELECTRON_MODE ? PREFERRED_CDP_PORT : 0;
+    // Electron / serve-only modes keep the preferred port: in both cases the
+    // CDP target is external (Electron app, or a user-launched Chrome / a
+    // Playwright-launched Chrome with --remote-debugging-port=<PREFERRED>),
+    // so the proxy needs the exact port up front.
+    const useExternalCdpPort = ELECTRON_MODE || SERVE_ONLY;
+    state.requestedCdpPort = useExternalCdpPort ? PREFERRED_CDP_PORT : 0;
+    state.cdpPort = useExternalCdpPort ? PREFERRED_CDP_PORT : 0;
   }
   state.serveOrigin = `http://localhost:${state.servePort}`;
 
