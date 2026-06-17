@@ -70,11 +70,12 @@ const PHASE2_TITLES_SORTED = [PAGE_B_TITLE, PAGE_C_TITLE].slice().sort();
 //     connects to a real Chrome
 //   - the agent's `playwright-cli tab-new` opens a CDP-driven tab there
 //   - {@link readCdpPageState} sees the same target at its default port
-// Sequential mode keeps the port singular within this file.
+// Project-level `workers: 1` in `playwright.config.ts` already
+// serializes every CDP-binding scenario (preview-serve.test.ts also
+// claims 9222), so no per-file `mode: 'serial'` is needed here.
 test.use({
   launchOptions: { args: ['--remote-debugging-port=9222'] },
 });
-test.describe.configure({ mode: 'serial' });
 
 test.describe('fake-llm reference scenario', () => {
   test('multi-phase scripted tool calls drive multiple CDP navigations', async ({ page }) => {

@@ -25,6 +25,8 @@ npm run package:release
 
 `packages/node-server/src/runtime-flags.ts` is the source of truth for supported flags such as `--serve-only`, `--cdp-port`, `--electron`, `--profile`, `--lead`, `--join`, and `--prompt`.
 
+`--serve-only` now honors `--cdp-port` (previously parsed but silently dropped, so the CDP proxy always pointed at 9222); the fake-LLM E2E harness depends on this to keep the proxy, the helper's `readCdpPageState` probe, and Playwright Chrome's `--remote-debugging-port` agreed on the same port.
+
 ## `--prompt` for Automated Testing
 
 The `--prompt` flag auto-submits a prompt when the UI loads and is the quickest way to smoke-test common flows.

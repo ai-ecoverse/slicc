@@ -77,6 +77,20 @@ describe('startFakeLlmServer — boot + endpoints', () => {
     expect(res.headers.get('access-control-allow-headers')).toContain('Content-Type');
   });
 
+  it('echoes Access-Control-Request-Headers into Access-Control-Allow-Headers when present', async () => {
+    await start({ model: 'fake', turns: [] });
+    const requested = 'x-stainless-os, x-stainless-arch';
+    const res = await fetch(`${server.url}/v1/chat/completions`, {
+      method: 'OPTIONS',
+      headers: {
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': requested,
+      },
+    });
+    expect(res.status).toBe(204);
+    expect(res.headers.get('access-control-allow-headers')).toBe(requested);
+  });
+
   it('returns 404 JSON for unknown routes', async () => {
     await start({ model: 'fake', turns: [] });
     const res = await fetch(`${server.url}/v1/nope`);

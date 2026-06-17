@@ -126,8 +126,14 @@ export interface WaitForTurnOptions {
   timeoutMs?: number;
   /** How long to wait for the processing flag to RISE before assuming
    *  the turn never started (e.g. the model returned synchronously
-   *  before observation). Defaults to 2000ms. */
+   *  before observation). Defaults to 8000ms. */
   riseTimeoutMs?: number;
+  /** When `true`, throw if `[data-processing]` never rises within
+   *  `riseTimeoutMs`. Default `false` preserves the original "treat as
+   *  already-finished" behaviour for fast fixtures. Set to `true` in
+   *  tests where you depend on the turn actually streaming — otherwise
+   *  a silent "turn never started" can pass as a false green. */
+  mustObserveTurnRise?: boolean;
 }
 
 /**
@@ -138,16 +144,19 @@ export interface WaitForTurnOptions {
  * waits for the attribute to rise, then to fall again — the same
  * signal `onTurnComplete` hangs off internally.
  *
- * If `[data-processing]` never rises within `riseTimeoutMs`, the
- * helper assumes the turn already finished (or never streamed) and
- * returns successfully — making it safe to call right after a fast
- * fake-fixture turn.
+ * Invariant: by default, if `[data-processing]` never rises within
+ * `riseTimeoutMs`, the helper assumes the turn already finished (or
+ * never streamed) and returns successfully — making it safe to call
+ * right after a fast fake-fixture turn. Callers that need the rise
+ * to be observed (so a "turn never started" failure cannot pass
+ * silently) MUST set `mustObserveTurnRise: true`, which makes the
+ * helper throw instead of returning when no rise is seen.
  */
 export async function waitForTurnComplete(
   page: Page,
   options: WaitForTurnOptions = {}
 ): Promise<void> {
-  const rise = options.riseTimeoutMs ?? 2_000;
+  const rise = options.riseTimeoutMs ?? 8_000;
   const fallTimeout = options.timeoutMs ?? 20_000;
 
   await page.waitForSelector('.wcui-frame');
@@ -160,7 +169,17 @@ export async function waitForTurnComplete(
     )
     .then(() => true)
     .catch(() => false);
-  if (!rose) return;
+  if (!rose) {
+    if (options.mustObserveTurnRise) {
+      throw new Error(
+        `waitForTurnComplete: [data-processing] never rose within ${rise}ms ` +
+          `(mustObserveTurnRise=true). The turn likely never started — ` +
+          `check that the user message was submitted and the fake LLM ` +
+          `picked the expected fixture turn.`
+      );
+    }
+    return;
+  }
 
   await page.waitForFunction(
     () => document.querySelector('.wcui-frame')?.hasAttribute('data-processing') === false,
@@ -223,9 +242,13 @@ export async function readCdpPageState(
   let raw: unknown;
   try {
     const res = await fetch(`${base.replace(/\/+$/, '')}/json`);
-    if (!res.ok) return [];
+    if (!res.ok) {
+      console.warn(`[readCdpPageState] CDP probe failed: HTTP ${res.status} from ${base}/json`);
+      return [];
+    }
     raw = await res.json();
-  } catch {
+  } catch (err) {
+    console.warn('[readCdpPageState] CDP probe failed:', err);
     return [];
   }
   if (!Array.isArray(raw)) return [];

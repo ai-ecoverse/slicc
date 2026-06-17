@@ -34,7 +34,10 @@ export default defineConfig({
     {
       command: `npx tsx ${resolve(repoRoot, 'packages/webapp/tests/e2e/fake-llm/start.ts')}`,
       port: FAKE_LLM_PORT,
-      reuseExistingServer: !process.env['CI'],
+      // Always boot a fresh fake server so the turn cursor + fixture are
+      // pristine each run; reusing a previous run's process would leak
+      // stale cursor state across scenarios.
+      reuseExistingServer: false,
       env: {
         FAKE_LLM_PORT: String(FAKE_LLM_PORT),
         FAKE_LLM_HOST: '127.0.0.1',
@@ -45,6 +48,12 @@ export default defineConfig({
   use: {
     baseURL: 'http://localhost:5780',
   },
+  // Single-worker by construction: the node-server CDP proxy points at one
+  // Chrome on port 9222, and every CDP-binding scenario (reference-scenario,
+  // preview-serve) launches Playwright Chrome with `--remote-debugging-port=9222`.
+  // Running them in parallel would collide on the port and on the proxy's
+  // outbound target.
+  workers: 1,
   fullyParallel: true,
   timeout: 30_000,
   retries: 0,

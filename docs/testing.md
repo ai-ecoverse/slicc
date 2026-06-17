@@ -569,6 +569,16 @@ npm run test:e2e
 via the seeded `local-llm` provider. Override the fixture with the
 `FAKE_LLM_FIXTURE` env var.
 
+The project pins `workers: 1` so only one CDP-binding scenario runs
+at a time. The `node-server --serve-only --cdp-port=9222` proxy can
+only point at one Chrome at a time, and every scenario that drives
+the agent's `playwright-cli` (`reference-scenario.test.ts`,
+`preview-serve.test.ts`) launches Playwright Chrome with
+`--remote-debugging-port=9222` — running them in parallel would
+collide on the port and on the proxy's outbound target. The fake-LLM
+webServer entry also sets `reuseExistingServer: false` so each run
+starts with a fresh turn cursor and fixture.
+
 ### Risks Covered by the Reference Scenario
 
 - **localStorage → kernel-worker shim sync**: the test only passes if

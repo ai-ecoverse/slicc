@@ -69,6 +69,14 @@ export async function startFakeLlmServer(opts: StartOptions): Promise<FakeLlmSer
 
   const server = createServer((req, res) => {
     handleRequest(req, res).catch((err) => {
+      // If the response already started (e.g. an SSE stream that errored
+      // mid-write), the headers/body are out the door — overwriting with
+      // a 500 JSON would throw `ERR_HTTP_HEADERS_SENT`. Tear the socket
+      // down so the client sees a clean disconnect.
+      if (res.headersSent) {
+        res.destroy(err);
+        return;
+      }
       writeJson(res, 500, {
         error: { message: String(err?.message ?? err), type: 'server_error' },
       });
@@ -81,6 +89,15 @@ export async function startFakeLlmServer(opts: StartOptions): Promise<FakeLlmSer
     const method = (req.method ?? 'GET').toUpperCase();
     const url = req.url ?? '/';
     if (method === 'OPTIONS') {
+      // Echo the client's requested headers when present so direct
+      // browser/extension callers (e.g. pi-ai's X-Stainless-* set) pass
+      // the preflight without us having to enumerate every header up
+      // front. Header lookup is case-insensitive via node's lowercased
+      // `req.headers` map.
+      const requested = req.headers['access-control-request-headers'];
+      if (typeof requested === 'string' && requested.length > 0) {
+        res.setHeader('Access-Control-Allow-Headers', requested);
+      }
       res.statusCode = 204;
       res.end();
       return;
