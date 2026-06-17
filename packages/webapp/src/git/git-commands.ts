@@ -39,6 +39,103 @@ export interface GitCommandsOptions {
   globalDbName?: string;
 }
 
+/**
+ * Sets of subcommand flags that consume a value, used by `extractPositional`
+ * so positional refs (`<remote>` / `<branch>`) aren't mis-picked from the
+ * value slot of a preceding flag. Conservative lists — extend when the
+ * catalogue surfaces a new high-frequency variant.
+ */
+const FETCH_VALUE_FLAGS = new Set([
+  '--depth',
+  '-o',
+  '--refmap',
+  '--upload-pack',
+  '--negotiation-tip',
+  '--server-option',
+]);
+const PULL_VALUE_FLAGS = new Set([
+  '--depth',
+  '-s',
+  '--strategy',
+  '-X',
+  '--strategy-option',
+  '--upload-pack',
+]);
+const PUSH_VALUE_FLAGS = new Set([
+  '-o',
+  '--push-option',
+  '--receive-pack',
+  '--repo',
+  '--exec',
+  '--signed',
+  '-4',
+  '-6',
+]);
+
+/**
+ * Per-subcommand sets of flags that consume a value, used by the help-detection
+ * walker (`isHelpRequested`) so a bare `--help` / `-h` is only recognized when
+ * it appears in an UNCONSUMED position. Without this, `git commit -m --help`
+ * fires the help short-circuit because `--help` is literally the commit
+ * message; `git log --grep --help` because `--help` is the grep pattern; etc.
+ * The FETCH/PULL/PUSH sets above are reused as-is so positional-ref parsing
+ * and help-detection stay in lockstep.
+ */
+const HELP_VALUE_FLAGS_BY_COMMAND: Record<string, Set<string>> = {
+  init: new Set(['-b', '--initial-branch']),
+  clone: new Set(['-b', '--branch', '--depth', '-o', '--origin', '--upload-pack']),
+  commit: new Set([
+    '-m',
+    '--message',
+    '--author',
+    '--date',
+    '-C',
+    '--reuse-message',
+    '-c',
+    '--reedit-message',
+    '-F',
+    '--file',
+    '--cleanup',
+  ]),
+  log: new Set([
+    '-n',
+    '--max-count',
+    '--format',
+    '--pretty',
+    '--author',
+    '--committer',
+    '--grep',
+    '--since',
+    '--until',
+    '--skip',
+    '--follow',
+  ]),
+  branch: new Set([
+    '-l',
+    '--list',
+    '-u',
+    '--set-upstream-to',
+    '-t',
+    '--track',
+    '--contains',
+    '--no-contains',
+    '--merged',
+    '--no-merged',
+    '--points-at',
+  ]),
+  checkout: new Set(['-b', '-B', '--orphan', '--track', '--start-point', '--conflict']),
+  diff: new Set(['--format', '--pretty', '--diff-filter']),
+  show: new Set(['--format', '--pretty']),
+  merge: new Set(['-m', '--message', '-s', '--strategy', '-X', '--strategy-option']),
+  tag: new Set(['-m', '--message', '-F', '--file', '-l', '--list', '--contains', '--points-at']),
+  fetch: FETCH_VALUE_FLAGS,
+  pull: PULL_VALUE_FLAGS,
+  push: PUSH_VALUE_FLAGS,
+};
+
+/** Shared empty value-flag set for subcommands without value-taking flags. */
+const EMPTY_FLAG_SET: Set<string> = new Set();
+
 /** Read an env var from either a Map (shell ctx.env) or a plain Record. */
 function readEnvVar(
   env: ReadonlyMap<string, string> | Readonly<Record<string, string>>,
@@ -73,6 +170,13 @@ export class GitCommands {
    * subsequent call without env doesn't accidentally inherit it.
    */
   private currentEnv?: ReadonlyMap<string, string> | Readonly<Record<string, string>>;
+  /**
+   * Per-invocation config overrides parsed from leading `-c key=val` flags.
+   * Honored for the allowlist below; unknown keys remain accepted no-ops.
+   * Cleared at the end of every `execute()` invocation so overrides do not
+   * leak across calls.
+   */
+  private currentConfigOverrides?: ReadonlyMap<string, string>;
 
   constructor(private options: GitCommandsOptions) {
     // Route through a VirtualFS-backed adapter so isomorphic-git sees mount
@@ -161,10 +265,12 @@ export class GitCommands {
 
   /**
    * Resolve the git author identity for an operation, mirroring git's lookup
-   * order: local repo config → global config → in-memory defaults from the
-   * constructor. This way values written to /workspace/.gitconfig (e.g. by
-   * the GitHub OAuth provider or by `git config --global`) take effect on
-   * subsequent commits without requiring a fresh GitCommands instance.
+   * order: per-invocation `-c` overrides → local repo config → global config →
+   * in-memory defaults from the constructor. This way values written to
+   * /workspace/.gitconfig (e.g. by the GitHub OAuth provider or by
+   * `git config --global`) take effect on subsequent commits without
+   * requiring a fresh GitCommands instance, while `git -c user.email=…` wins
+   * for a single invocation (matches real git).
    */
   private async resolveAuthor(cwd: string): Promise<{ name: string; email: string }> {
     const readLocal = async (key: string): Promise<string | undefined> => {
@@ -174,12 +280,15 @@ export class GitCommands {
         return undefined;
       }
     };
+    const overrides = this.currentConfigOverrides;
     const globalFs = await this.getGlobalFs();
     const name =
+      overrides?.get('user.name') ??
       (await readLocal('user.name')) ??
       (await readGlobalGitConfigValue(globalFs, 'user.name')) ??
       this.authorName;
     const email =
+      overrides?.get('user.email') ??
       (await readLocal('user.email')) ??
       (await readGlobalGitConfigValue(globalFs, 'user.email')) ??
       this.authorEmail;
@@ -203,66 +312,94 @@ export class GitCommands {
       return this.help();
     }
 
-    const [command, ...rest] = args;
+    // Strip global flags (-c, -C, --no-pager, --git-dir, --work-tree, --help,
+    // --version) before dispatching. Global help/version are intercepted here;
+    // per-subcommand --help / -h is intercepted further below so spies on
+    // git.fetch / git.checkout / git.clone never see a call.
+    const parsed = this.parseGlobalFlags(args, cwd);
+    if (parsed.versionRequested && parsed.remainingArgs.length === 0) {
+      return this.version();
+    }
+    if (parsed.helpRequested || parsed.remainingArgs.length === 0) {
+      return this.help();
+    }
+
+    const effectiveCwd = parsed.effectiveCwd;
+    const [command, ...rest] = parsed.remainingArgs;
+
+    // Per-subcommand help: `git <cmd> --help` / `-h` must short-circuit BEFORE
+    // any network/FS action runs (#1033-4). Detect the help flag with
+    // `isHelpRequested` so a token that is actually the VALUE of a preceding
+    // flag (`commit -m --help`) or a path after `--` (`checkout -- --help`)
+    // doesn't trip the intercept (#1047 review).
+    const helpValueFlags = HELP_VALUE_FLAGS_BY_COMMAND[command] ?? EMPTY_FLAG_SET;
+    if (this.isHelpRequested(rest, helpValueFlags)) {
+      return this.help();
+    }
 
     this.currentEnv = env;
+    this.currentConfigOverrides = parsed.configOverrides;
     try {
       await this.loadGithubToken();
+      // NB: every async dispatch below MUST be `return await`, not `return`.
+      // The `finally` block clears `currentEnv` / `currentConfigOverrides`,
+      // and per JS spec a bare `return promise` in a try block runs the
+      // finally synchronously after the expression evaluates (i.e. before
+      // the returned promise resolves) — clearing the overrides while the
+      // subcommand is still mid-await and breaking `-c key=val` for any
+      // consumer that reads them after its first await.
       switch (command) {
         case 'init':
-          return this.init(cwd, rest);
+          return await this.init(effectiveCwd, rest);
         case 'clone':
-          return this.clone(cwd, rest);
+          return await this.clone(effectiveCwd, rest);
         case 'add':
-          return this.add(cwd, rest);
+          return await this.add(effectiveCwd, rest);
         case 'status':
-          return this.status(cwd, rest);
+          return await this.status(effectiveCwd, rest);
         case 'commit':
-          return this.commit(cwd, rest);
+          return await this.commit(effectiveCwd, rest);
         case 'log':
-          return this.log(cwd, rest);
+          return await this.log(effectiveCwd, rest);
         case 'branch':
-          return this.branch(cwd, rest);
+          return await this.branch(effectiveCwd, rest);
         case 'checkout':
-          return this.checkout(cwd, rest);
+          return await this.checkout(effectiveCwd, rest);
         case 'diff':
-          return this.diff(cwd, rest);
+          return await this.diff(effectiveCwd, rest);
         case 'show':
-          return this.show(cwd, rest);
+          return await this.show(effectiveCwd, rest);
         case 'remote':
-          return this.remote(cwd, rest);
+          return await this.remote(effectiveCwd, rest);
         case 'fetch':
-          return this.fetch(cwd, rest);
+          return await this.fetch(effectiveCwd, rest);
         case 'pull':
-          return this.pull(cwd, rest);
+          return await this.pull(effectiveCwd, rest);
         case 'push':
-          return this.push(cwd, rest);
+          return await this.push(effectiveCwd, rest);
         case 'merge':
-          return this.merge(cwd, rest);
+          return await this.merge(effectiveCwd, rest);
         case 'reset':
-          return this.reset(cwd, rest);
+          return await this.reset(effectiveCwd, rest);
         case 'config':
-          return this.config(cwd, rest);
+          return await this.config(effectiveCwd, rest);
         case 'tag':
-          return this.tag(cwd, rest);
+          return await this.tag(effectiveCwd, rest);
         case 'ls-files':
-          return this.lsFiles(cwd, rest);
+          return await this.lsFiles(effectiveCwd, rest);
         case 'show-ref':
-          return this.showRef(cwd, rest);
+          return await this.showRef(effectiveCwd, rest);
         case 'stash':
-          return this.stash(cwd, rest);
+          return await this.stash(effectiveCwd, rest);
         case 'rm':
-          return this.rm(cwd, rest);
+          return await this.rm(effectiveCwd, rest);
         case 'mv':
-          return this.mv(cwd, rest);
+          return await this.mv(effectiveCwd, rest);
         case 'rev-parse':
-          return this.revParse(cwd, rest);
+          return await this.revParse(effectiveCwd, rest);
         case 'help':
-        case '--help':
-        case '-h':
           return this.help();
         case 'version':
-        case '--version':
           return this.version();
         default:
           return {
@@ -280,7 +417,111 @@ export class GitCommands {
       };
     } finally {
       this.currentEnv = undefined;
+      this.currentConfigOverrides = undefined;
     }
+  }
+
+  /**
+   * Strip global git flags that appear BEFORE the subcommand:
+   *   `-c <key>=<val>`, `-C <dir>`, `--no-pager`, `--git-dir[=<dir>]`,
+   *   `--work-tree[=<dir>]`, `--help` / `-h`, `--version`.
+   *
+   * The first non-flag token is the subcommand; flags after it belong to the
+   * subcommand and are left untouched. `-c key=val` overrides are collected
+   * into a per-invocation map; known keys (see `resolveAuthor` / `init`) take
+   * effect, unknown keys remain accepted no-ops so they don't fall through to
+   * the "not a git command" branch — see #1033-2.
+   */
+  private parseGlobalFlags(
+    args: string[],
+    cwd: string
+  ): {
+    effectiveCwd: string;
+    remainingArgs: string[];
+    helpRequested: boolean;
+    versionRequested: boolean;
+    configOverrides: ReadonlyMap<string, string>;
+  } {
+    let effectiveCwd = cwd;
+    let helpRequested = false;
+    let versionRequested = false;
+    const configOverrides = new Map<string, string>();
+
+    let i = 0;
+    while (i < args.length) {
+      const arg = args[i];
+      if (!arg.startsWith('-')) break; // subcommand reached
+
+      const step = this.classifyGlobalFlag(arg, args[i + 1], effectiveCwd);
+      if (step.kind === 'stop') break;
+      if (step.kind === 'help') helpRequested = true;
+      if (step.kind === 'version') versionRequested = true;
+      if (step.kind === 'cwd' && step.cwd !== undefined) effectiveCwd = step.cwd;
+      if (step.kind === 'config' && step.key !== undefined) {
+        // Last `-c <key>=<val>` wins, matching real git behavior. Real git
+        // lowercases the section and variable name, so `-c USER.email=…` and
+        // `-c User.Name=…` resolve to the same key as the lowercase forms
+        // (#1047 review). Value is preserved as-is.
+        configOverrides.set(step.key.toLowerCase(), step.value ?? '');
+      }
+      i += step.consume;
+    }
+
+    return {
+      effectiveCwd,
+      remainingArgs: args.slice(i),
+      helpRequested,
+      versionRequested,
+      configOverrides,
+    };
+  }
+
+  /**
+   * Classify a single leading flag for `parseGlobalFlags`. Returns how many
+   * args to consume and any side-effect payload (cwd, help, version, config)
+   * for the caller to apply. `kind:'stop'` means the flag is unknown and
+   * should fall through to subcommand parsing.
+   */
+  private classifyGlobalFlag(
+    arg: string,
+    next: string | undefined,
+    effectiveCwd: string
+  ):
+    | { kind: 'consume'; consume: number }
+    | { kind: 'help'; consume: number }
+    | { kind: 'version'; consume: number }
+    | { kind: 'cwd'; consume: number; cwd: string | undefined }
+    | { kind: 'config'; consume: number; key: string | undefined; value: string | undefined }
+    | { kind: 'stop'; consume: 0 } {
+    if (arg === '--help' || arg === '-h') return { kind: 'help', consume: 1 };
+    if (arg === '--version') return { kind: 'version', consume: 1 };
+    if (arg === '--no-pager' || arg === '--paginate' || arg === '--no-replace-objects') {
+      return { kind: 'consume', consume: 1 };
+    }
+    if (arg === '-C') {
+      if (next === undefined) return { kind: 'consume', consume: 1 };
+      const cwd = next.startsWith('/') ? next : `${effectiveCwd}/${next}`;
+      return { kind: 'cwd', consume: 2, cwd };
+    }
+    if (arg === '-c') {
+      // `-c key=val` — capture the override; malformed (no `=`) is accepted
+      // as a no-op for back-compat. Real git only accepts the `key=val` form.
+      if (next === undefined) return { kind: 'consume', consume: 1 };
+      const eq = next.indexOf('=');
+      if (eq < 0) {
+        return { kind: 'config', consume: 2, key: next, value: undefined };
+      }
+      const key = next.slice(0, eq);
+      const value = next.slice(eq + 1);
+      return { kind: 'config', consume: 2, key, value };
+    }
+    if (arg.startsWith('--git-dir=') || arg.startsWith('--work-tree=')) {
+      return { kind: 'consume', consume: 1 };
+    }
+    if (arg === '--git-dir' || arg === '--work-tree') {
+      return { kind: 'consume', consume: next === undefined ? 1 : 2 };
+    }
+    return { kind: 'stop', consume: 0 };
   }
 
   private version(): GitCommandResult {
@@ -329,7 +570,15 @@ Available commands:
   }
 
   private async init(cwd: string, args: string[]): Promise<GitCommandResult> {
-    const defaultBranch = this.parseArg(args, '--initial-branch', '-b') ?? 'main';
+    // Precedence (matches real git): explicit `--initial-branch`/`-b` flag
+    // wins over a per-invocation `-c init.defaultBranch=…` override, which
+    // wins over the built-in `main` default.
+    const defaultBranch =
+      this.parseArg(args, '--initial-branch', '-b') ??
+      // Override keys are lowercased on insert (matches real git), so look up
+      // the all-lowercase form here.
+      this.currentConfigOverrides?.get('init.defaultbranch') ??
+      'main';
 
     await git.init({
       fs: this.lfs,
@@ -372,24 +621,30 @@ Available commands:
     // Use a shared cache for the clone operation
     const cache = {};
 
-    await git.clone({
-      fs: this.lfs,
-      http: gitHttp,
-      dir: targetDir,
-      url,
-      corsProxy: this.corsProxy,
-      depth: depth ? parseInt(depth, 10) : 1, // Default to depth 1 for faster clones
-      ref: branch,
-      singleBranch,
-      noCheckout: false, // Let clone handle checkout
-      cache,
-      onAuth: this.getOnAuth(),
-      onProgress: (event) => {
-        if (event.phase === 'Receiving objects') {
-          output += `Receiving objects: ${event.loaded}/${event.total}\n`;
-        }
-      },
-    });
+    try {
+      await git.clone({
+        fs: this.lfs,
+        http: gitHttp,
+        dir: targetDir,
+        url,
+        corsProxy: this.corsProxy,
+        depth: depth ? parseInt(depth, 10) : 1, // Default to depth 1 for faster clones
+        ref: branch,
+        singleBranch,
+        noCheckout: false, // Let clone handle checkout
+        cache,
+        onAuth: this.getOnAuth(),
+        onProgress: (event) => {
+          if (event.phase === 'Receiving objects') {
+            output += `Receiving objects: ${event.loaded}/${event.total}\n`;
+          }
+        },
+      });
+    } catch (err: unknown) {
+      // #1033-1: surface the real target dir, never the literal `<path>`
+      // placeholder that bubbles up from the OPFS backend.
+      return this.formatCloneError(err, targetDir);
+    }
 
     // List files that were checked out
     try {
@@ -405,6 +660,24 @@ Available commands:
       stdout: output + 'done.\n',
       stderr: '',
       exitCode: 0,
+    };
+  }
+
+  /**
+   * Format a clone failure: interpolates the real target dir in place of the
+   * OPFS internal placeholder so the user sees the path they asked for, never
+   * the literal `<path>` token from the backend (#1033-1).
+   */
+  private formatCloneError(err: unknown, targetDir: string): GitCommandResult {
+    const raw = err instanceof Error ? err.message : String(err);
+    const scrubbed = raw
+      .replace(/'\/__opfs__\/[^']*<path>'/g, `'${targetDir}'`)
+      .replace(/\/__opfs__\/[^\s'"<]*<path>/g, targetDir)
+      .replace(/<path>/g, targetDir);
+    return {
+      stdout: '',
+      stderr: `fatal: ${scrubbed}\n`,
+      exitCode: 128,
     };
   }
 
@@ -935,14 +1208,18 @@ Available commands:
       const bIdx = args.indexOf('-b');
       const afterB = args.slice(bIdx + 1).filter((a) => !a.startsWith('-'));
       const startPoint = afterB.length > 1 ? afterB[1] : undefined;
-      await git.branch({
-        fs: this.lfs,
-        dir: cwd,
-        ref,
-        object: startPoint,
-        checkout: true,
-        force,
-      });
+      try {
+        await git.branch({
+          fs: this.lfs,
+          dir: cwd,
+          ref,
+          object: startPoint,
+          checkout: true,
+          force,
+        });
+      } catch (err: unknown) {
+        return this.formatCheckoutError(err, ref);
+      }
       return {
         stdout: `Switched to a new branch '${ref}'\n`,
         stderr: '',
@@ -950,12 +1227,41 @@ Available commands:
       };
     }
 
-    await git.checkout({ fs: this.lfs, dir: cwd, ref, force });
+    try {
+      await git.checkout({ fs: this.lfs, dir: cwd, ref, force });
+    } catch (err: unknown) {
+      return this.formatCheckoutError(err, ref);
+    }
     return {
       stdout: `Switched to branch '${ref}'\n`,
       stderr: '',
       exitCode: 0,
     };
+  }
+
+  /**
+   * Format a checkout failure. `MultipleGitError` from isomorphic-git carries
+   * a `.data.errors[]` array of per-file failures; surface each underlying
+   * message instead of the cosmetic "There are multiple errors..." noise
+   * (#1033-5). Anything else is rethrown so `execute()`'s outer catch still
+   * handles it uniformly.
+   */
+  private formatCheckoutError(err: unknown, ref: string): GitCommandResult {
+    if (err instanceof Error && err.name === 'MultipleGitError') {
+      const data = err as Error & { errors?: unknown; data?: { errors?: unknown } };
+      const errorsList = Array.isArray(data.errors)
+        ? data.errors
+        : Array.isArray(data.data?.errors)
+          ? data.data?.errors
+          : [];
+      let stderr = `error: unable to checkout '${ref}':\n`;
+      for (const inner of errorsList as unknown[]) {
+        const msg = inner instanceof Error ? inner.message : String(inner);
+        stderr += `  ${msg}\n`;
+      }
+      return { stdout: '', stderr, exitCode: 1 };
+    }
+    throw err;
   }
 
   /**
@@ -1397,8 +1703,13 @@ Available commands:
   }
 
   private async fetch(cwd: string, args: string[]): Promise<GitCommandResult> {
-    const remote = args.find((a) => !a.startsWith('-')) ?? 'origin';
+    // Positional ref must round-trip: `fetch --depth 1 origin main` →
+    // remote=origin, ref=main (NOT remote=1) — #1033-3.
+    const positional = this.extractPositional(args, FETCH_VALUE_FLAGS);
+    const remote = positional[0] ?? 'origin';
+    const ref = positional[1];
     const prune = args.includes('--prune') || args.includes('-p');
+    const depth = this.parseArg(args, '--depth');
 
     let output = `Fetching ${remote}\n`;
 
@@ -1407,8 +1718,10 @@ Available commands:
       http: gitHttp,
       dir: cwd,
       remote,
+      ref,
       corsProxy: this.corsProxy,
       prune,
+      depth: depth ? parseInt(depth, 10) : undefined,
       onAuth: this.getOnAuth(),
       onProgress: (event) => {
         output += `${event.phase}: ${event.loaded}/${event.total}\n`;
@@ -1424,7 +1737,13 @@ Available commands:
   }
 
   private async pull(cwd: string, args: string[]): Promise<GitCommandResult> {
-    const remote = args.find((a) => !a.startsWith('-')) ?? 'origin';
+    // Same positional-ref bug class as fetch: skip flag values when picking
+    // remote/ref out of `pull --ff-only origin main`.
+    const positional = this.extractPositional(args, PULL_VALUE_FLAGS);
+    const remote = positional[0] ?? 'origin';
+    const ref = positional[1];
+    const ffOnly = args.includes('--ff-only');
+    const noFf = args.includes('--no-ff');
 
     let output = `Pulling from ${remote}...\n`;
 
@@ -1433,8 +1752,11 @@ Available commands:
       http: gitHttp,
       dir: cwd,
       remote,
+      ref,
       corsProxy: this.corsProxy,
       author: await this.resolveAuthor(cwd),
+      fastForwardOnly: ffOnly,
+      fastForward: !noFf,
       onAuth: this.getOnAuth(),
       onProgress: (event) => {
         output += `${event.phase}: ${event.loaded}/${event.total}\n`;
@@ -1449,8 +1771,8 @@ Available commands:
     const force = args.includes('-f') || args.includes('--force');
     const setUpstream = args.includes('-u') || args.includes('--set-upstream');
 
-    // Extract positional args (skip flags)
-    const positional = args.filter((a) => !a.startsWith('-'));
+    // Extract positional args, skipping flag VALUES (`--push-option <opt>` etc.).
+    const positional = this.extractPositional(args, PUSH_VALUE_FLAGS);
     const remote = positional[0] ?? 'origin';
     const branch = positional[1] ?? (await git.currentBranch({ fs: this.lfs, dir: cwd }));
 
@@ -2690,6 +3012,51 @@ Available commands:
         exitCode: 128,
       };
     }
+  }
+
+  /**
+   * Returns true iff a bare `--help` / `-h` token appears at an UNCONSUMED
+   * position in `rest`: stops scanning at a `--` separator (anything after is
+   * a pathspec), treats `--flag=value` as fully consumed inline, and skips
+   * the value slot of known value-taking flags so the help intercept doesn't
+   * fire when `--help` is itself a flag value (e.g. `commit -m --help`,
+   * `log --grep --help`, `checkout -- --help`). See #1047 review.
+   */
+  private isHelpRequested(rest: string[], valueFlags: Set<string>): boolean {
+    for (let i = 0; i < rest.length; i++) {
+      const arg = rest[i];
+      if (arg === '--') break;
+      if (arg === '--help' || arg === '-h') return true;
+      if (arg.startsWith('-') && !arg.includes('=') && valueFlags.has(arg) && i + 1 < rest.length) {
+        // Consume the next token as this flag's value, regardless of what it
+        // looks like — including `--help` / `-h`.
+        i++;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Extract positional (non-flag) arguments, skipping value-taking flags AND
+   * their values. The default split-on-`-` approach mis-picks the next token
+   * as positional for forms like `fetch --depth 1 origin main` (the `1`
+   * looks positional). Callers pass the set of flags that consume a value.
+   */
+  private extractPositional(args: string[], flagsWithValues: Set<string>): string[] {
+    const positional: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      if (arg.startsWith('-')) {
+        // `--flag=value` carries the value inline — never consume the next arg.
+        if (arg.includes('=')) continue;
+        if (flagsWithValues.has(arg) && i + 1 < args.length && !args[i + 1].startsWith('-')) {
+          i++; // skip the value
+        }
+        continue;
+      }
+      positional.push(arg);
+    }
+    return positional;
   }
 
   /** Parse a flag with a value from args. */
