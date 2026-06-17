@@ -26,17 +26,33 @@ export class SessionStore {
   private db: IDBDatabase | null = null;
 
   async init(): Promise<void> {
-    this.db = await openDb();
+    await this.getDb();
   }
 
-  private ensureDb(): IDBDatabase {
-    if (!this.db) throw new Error('SessionStore not initialized. Call init() first.');
+  /**
+   * Lazy connection accessor — re-opens transparently after a `versionchange`
+   * or `close` event drops the cached handle (e.g. a peer context bumped the
+   * schema or `nuke` ran `deleteDatabase`). Replaces the old throw-if-null
+   * `ensureDb()` so callers don't have to re-`init()` after such events.
+   */
+  private async getDb(): Promise<IDBDatabase> {
+    if (!this.db) {
+      const db = await openDb();
+      db.onversionchange = () => {
+        db.close();
+        this.db = null;
+      };
+      db.onclose = () => {
+        this.db = null;
+      };
+      this.db = db;
+    }
     return this.db;
   }
 
   /** Save a session (upsert). */
   async save(session: Session): Promise<void> {
-    const db = this.ensureDb();
+    const db = await this.getDb();
     return new Promise((resolve, reject) => {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       tx.objectStore(STORE_NAME).put(session);
@@ -47,7 +63,7 @@ export class SessionStore {
 
   /** Load a session by ID. */
   async load(id: string): Promise<Session | null> {
-    const db = this.ensureDb();
+    const db = await this.getDb();
     return new Promise((resolve, reject) => {
       const tx = db.transaction(STORE_NAME, 'readonly');
       const req = tx.objectStore(STORE_NAME).get(id);
@@ -58,7 +74,7 @@ export class SessionStore {
 
   /** List all session IDs (most recent first). */
   async list(): Promise<string[]> {
-    const db = this.ensureDb();
+    const db = await this.getDb();
     return new Promise((resolve, reject) => {
       const tx = db.transaction(STORE_NAME, 'readonly');
       const req = tx.objectStore(STORE_NAME).getAll();
@@ -72,7 +88,7 @@ export class SessionStore {
 
   /** Delete a session. */
   async delete(id: string): Promise<void> {
-    const db = this.ensureDb();
+    const db = await this.getDb();
     return new Promise((resolve, reject) => {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       tx.objectStore(STORE_NAME).delete(id);
