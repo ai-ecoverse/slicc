@@ -122,6 +122,16 @@ function createMockCtx(files: Record<string, string> = {}, cwd = '/workspace'): 
   };
 }
 
+describe('node command — trusted dispatch', () => {
+  it('is registered as a trusted command so the worker realm gets unpatched async I/O', () => {
+    // just-bash runs untrusted commands inside a defense-in-depth box that
+    // monkey-patches async primitives, which breaks the cross-thread worker RPC
+    // await and drops a failing require's non-zero exit on the floor (exit 0).
+    // The command must be trusted, like the `.jsh` script command.
+    expect(createNodeCommand().trusted).toBe(true);
+  });
+});
+
 describe('node command — relative script path absolutization', () => {
   it('passes an absolute argv[1] when invoked with a relative script path', async () => {
     const ctx = createMockCtx(
