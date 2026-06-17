@@ -39,6 +39,39 @@ export interface GitCommandsOptions {
   globalDbName?: string;
 }
 
+/**
+ * Sets of subcommand flags that consume a value, used by `extractPositional`
+ * so positional refs (`<remote>` / `<branch>`) aren't mis-picked from the
+ * value slot of a preceding flag. Conservative lists — extend when the
+ * catalogue surfaces a new high-frequency variant.
+ */
+const FETCH_VALUE_FLAGS = new Set([
+  '--depth',
+  '-o',
+  '--refmap',
+  '--upload-pack',
+  '--negotiation-tip',
+  '--server-option',
+]);
+const PULL_VALUE_FLAGS = new Set([
+  '--depth',
+  '-s',
+  '--strategy',
+  '-X',
+  '--strategy-option',
+  '--upload-pack',
+]);
+const PUSH_VALUE_FLAGS = new Set([
+  '-o',
+  '--push-option',
+  '--receive-pack',
+  '--repo',
+  '--exec',
+  '--signed',
+  '-4',
+  '-6',
+]);
+
 /** Read an env var from either a Map (shell ctx.env) or a plain Record. */
 function readEnvVar(
   env: ReadonlyMap<string, string> | Readonly<Record<string, string>>,
@@ -203,66 +236,82 @@ export class GitCommands {
       return this.help();
     }
 
-    const [command, ...rest] = args;
+    // Strip global flags (-c, -C, --no-pager, --git-dir, --work-tree, --help,
+    // --version) before dispatching. Global help/version are intercepted here;
+    // per-subcommand --help / -h is intercepted further below so spies on
+    // git.fetch / git.checkout / git.clone never see a call.
+    const parsed = this.parseGlobalFlags(args, cwd);
+    if (parsed.versionRequested && parsed.remainingArgs.length === 0) {
+      return this.version();
+    }
+    if (parsed.helpRequested || parsed.remainingArgs.length === 0) {
+      return this.help();
+    }
+
+    const effectiveCwd = parsed.effectiveCwd;
+    const [command, ...rest] = parsed.remainingArgs;
+
+    // Per-subcommand help: `git <cmd> --help` / `-h` must short-circuit BEFORE
+    // any network/FS action runs (#1033-4).
+    if (rest.includes('--help') || rest.includes('-h')) {
+      return this.help();
+    }
 
     this.currentEnv = env;
     try {
       await this.loadGithubToken();
       switch (command) {
         case 'init':
-          return this.init(cwd, rest);
+          return this.init(effectiveCwd, rest);
         case 'clone':
-          return this.clone(cwd, rest);
+          return this.clone(effectiveCwd, rest);
         case 'add':
-          return this.add(cwd, rest);
+          return this.add(effectiveCwd, rest);
         case 'status':
-          return this.status(cwd, rest);
+          return this.status(effectiveCwd, rest);
         case 'commit':
-          return this.commit(cwd, rest);
+          return this.commit(effectiveCwd, rest);
         case 'log':
-          return this.log(cwd, rest);
+          return this.log(effectiveCwd, rest);
         case 'branch':
-          return this.branch(cwd, rest);
+          return this.branch(effectiveCwd, rest);
         case 'checkout':
-          return this.checkout(cwd, rest);
+          return this.checkout(effectiveCwd, rest);
         case 'diff':
-          return this.diff(cwd, rest);
+          return this.diff(effectiveCwd, rest);
         case 'show':
-          return this.show(cwd, rest);
+          return this.show(effectiveCwd, rest);
         case 'remote':
-          return this.remote(cwd, rest);
+          return this.remote(effectiveCwd, rest);
         case 'fetch':
-          return this.fetch(cwd, rest);
+          return this.fetch(effectiveCwd, rest);
         case 'pull':
-          return this.pull(cwd, rest);
+          return this.pull(effectiveCwd, rest);
         case 'push':
-          return this.push(cwd, rest);
+          return this.push(effectiveCwd, rest);
         case 'merge':
-          return this.merge(cwd, rest);
+          return this.merge(effectiveCwd, rest);
         case 'reset':
-          return this.reset(cwd, rest);
+          return this.reset(effectiveCwd, rest);
         case 'config':
-          return this.config(cwd, rest);
+          return this.config(effectiveCwd, rest);
         case 'tag':
-          return this.tag(cwd, rest);
+          return this.tag(effectiveCwd, rest);
         case 'ls-files':
-          return this.lsFiles(cwd, rest);
+          return this.lsFiles(effectiveCwd, rest);
         case 'show-ref':
-          return this.showRef(cwd, rest);
+          return this.showRef(effectiveCwd, rest);
         case 'stash':
-          return this.stash(cwd, rest);
+          return this.stash(effectiveCwd, rest);
         case 'rm':
-          return this.rm(cwd, rest);
+          return this.rm(effectiveCwd, rest);
         case 'mv':
-          return this.mv(cwd, rest);
+          return this.mv(effectiveCwd, rest);
         case 'rev-parse':
-          return this.revParse(cwd, rest);
+          return this.revParse(effectiveCwd, rest);
         case 'help':
-        case '--help':
-        case '-h':
           return this.help();
         case 'version':
-        case '--version':
           return this.version();
         default:
           return {
@@ -281,6 +330,89 @@ export class GitCommands {
     } finally {
       this.currentEnv = undefined;
     }
+  }
+
+  /**
+   * Strip global git flags that appear BEFORE the subcommand:
+   *   `-c <key>=<val>`, `-C <dir>`, `--no-pager`, `--git-dir[=<dir>]`,
+   *   `--work-tree[=<dir>]`, `--help` / `-h`, `--version`.
+   *
+   * The first non-flag token is the subcommand; flags after it belong to the
+   * subcommand and are left untouched. `-c` overrides are currently consumed
+   * but not applied (we accept the syntax so they don't fall through to the
+   * "not a git command" branch — see #1033-2).
+   */
+  private parseGlobalFlags(
+    args: string[],
+    cwd: string
+  ): {
+    effectiveCwd: string;
+    remainingArgs: string[];
+    helpRequested: boolean;
+    versionRequested: boolean;
+  } {
+    let effectiveCwd = cwd;
+    let helpRequested = false;
+    let versionRequested = false;
+
+    let i = 0;
+    while (i < args.length) {
+      const arg = args[i];
+      if (!arg.startsWith('-')) break; // subcommand reached
+
+      const step = this.classifyGlobalFlag(arg, args[i + 1], effectiveCwd);
+      if (step.kind === 'stop') break;
+      if (step.kind === 'help') helpRequested = true;
+      if (step.kind === 'version') versionRequested = true;
+      if (step.kind === 'cwd' && step.cwd !== undefined) effectiveCwd = step.cwd;
+      i += step.consume;
+    }
+
+    return {
+      effectiveCwd,
+      remainingArgs: args.slice(i),
+      helpRequested,
+      versionRequested,
+    };
+  }
+
+  /**
+   * Classify a single leading flag for `parseGlobalFlags`. Returns how many
+   * args to consume and any side-effect payload (cwd, help, version) for the
+   * caller to apply. `kind:'stop'` means the flag is unknown and should fall
+   * through to subcommand parsing.
+   */
+  private classifyGlobalFlag(
+    arg: string,
+    next: string | undefined,
+    effectiveCwd: string
+  ):
+    | { kind: 'consume'; consume: number }
+    | { kind: 'help'; consume: number }
+    | { kind: 'version'; consume: number }
+    | { kind: 'cwd'; consume: number; cwd: string | undefined }
+    | { kind: 'stop'; consume: 0 } {
+    if (arg === '--help' || arg === '-h') return { kind: 'help', consume: 1 };
+    if (arg === '--version') return { kind: 'version', consume: 1 };
+    if (arg === '--no-pager' || arg === '--paginate' || arg === '--no-replace-objects') {
+      return { kind: 'consume', consume: 1 };
+    }
+    if (arg === '-C') {
+      if (next === undefined) return { kind: 'consume', consume: 1 };
+      const cwd = next.startsWith('/') ? next : `${effectiveCwd}/${next}`;
+      return { kind: 'cwd', consume: 2, cwd };
+    }
+    if (arg === '-c') {
+      // Config override: consume `-c key=val` (two args) and ignore.
+      return { kind: 'consume', consume: next === undefined ? 1 : 2 };
+    }
+    if (arg.startsWith('--git-dir=') || arg.startsWith('--work-tree=')) {
+      return { kind: 'consume', consume: 1 };
+    }
+    if (arg === '--git-dir' || arg === '--work-tree') {
+      return { kind: 'consume', consume: next === undefined ? 1 : 2 };
+    }
+    return { kind: 'stop', consume: 0 };
   }
 
   private version(): GitCommandResult {
@@ -372,24 +504,30 @@ Available commands:
     // Use a shared cache for the clone operation
     const cache = {};
 
-    await git.clone({
-      fs: this.lfs,
-      http: gitHttp,
-      dir: targetDir,
-      url,
-      corsProxy: this.corsProxy,
-      depth: depth ? parseInt(depth, 10) : 1, // Default to depth 1 for faster clones
-      ref: branch,
-      singleBranch,
-      noCheckout: false, // Let clone handle checkout
-      cache,
-      onAuth: this.getOnAuth(),
-      onProgress: (event) => {
-        if (event.phase === 'Receiving objects') {
-          output += `Receiving objects: ${event.loaded}/${event.total}\n`;
-        }
-      },
-    });
+    try {
+      await git.clone({
+        fs: this.lfs,
+        http: gitHttp,
+        dir: targetDir,
+        url,
+        corsProxy: this.corsProxy,
+        depth: depth ? parseInt(depth, 10) : 1, // Default to depth 1 for faster clones
+        ref: branch,
+        singleBranch,
+        noCheckout: false, // Let clone handle checkout
+        cache,
+        onAuth: this.getOnAuth(),
+        onProgress: (event) => {
+          if (event.phase === 'Receiving objects') {
+            output += `Receiving objects: ${event.loaded}/${event.total}\n`;
+          }
+        },
+      });
+    } catch (err: unknown) {
+      // #1033-1: surface the real target dir, never the literal `<path>`
+      // placeholder that bubbles up from the OPFS backend.
+      return this.formatCloneError(err, targetDir);
+    }
 
     // List files that were checked out
     try {
@@ -405,6 +543,24 @@ Available commands:
       stdout: output + 'done.\n',
       stderr: '',
       exitCode: 0,
+    };
+  }
+
+  /**
+   * Format a clone failure: interpolates the real target dir in place of the
+   * OPFS internal placeholder so the user sees the path they asked for, never
+   * the literal `<path>` token from the backend (#1033-1).
+   */
+  private formatCloneError(err: unknown, targetDir: string): GitCommandResult {
+    const raw = err instanceof Error ? err.message : String(err);
+    const scrubbed = raw
+      .replace(/'\/__opfs__\/[^']*<path>'/g, `'${targetDir}'`)
+      .replace(/\/__opfs__\/[^\s'"<]*<path>/g, targetDir)
+      .replace(/<path>/g, targetDir);
+    return {
+      stdout: '',
+      stderr: `fatal: ${scrubbed}\n`,
+      exitCode: 128,
     };
   }
 
@@ -935,14 +1091,18 @@ Available commands:
       const bIdx = args.indexOf('-b');
       const afterB = args.slice(bIdx + 1).filter((a) => !a.startsWith('-'));
       const startPoint = afterB.length > 1 ? afterB[1] : undefined;
-      await git.branch({
-        fs: this.lfs,
-        dir: cwd,
-        ref,
-        object: startPoint,
-        checkout: true,
-        force,
-      });
+      try {
+        await git.branch({
+          fs: this.lfs,
+          dir: cwd,
+          ref,
+          object: startPoint,
+          checkout: true,
+          force,
+        });
+      } catch (err: unknown) {
+        return this.formatCheckoutError(err, ref);
+      }
       return {
         stdout: `Switched to a new branch '${ref}'\n`,
         stderr: '',
@@ -950,12 +1110,41 @@ Available commands:
       };
     }
 
-    await git.checkout({ fs: this.lfs, dir: cwd, ref, force });
+    try {
+      await git.checkout({ fs: this.lfs, dir: cwd, ref, force });
+    } catch (err: unknown) {
+      return this.formatCheckoutError(err, ref);
+    }
     return {
       stdout: `Switched to branch '${ref}'\n`,
       stderr: '',
       exitCode: 0,
     };
+  }
+
+  /**
+   * Format a checkout failure. `MultipleGitError` from isomorphic-git carries
+   * a `.data.errors[]` array of per-file failures; surface each underlying
+   * message instead of the cosmetic "There are multiple errors..." noise
+   * (#1033-5). Anything else is rethrown so `execute()`'s outer catch still
+   * handles it uniformly.
+   */
+  private formatCheckoutError(err: unknown, ref: string): GitCommandResult {
+    if (err instanceof Error && err.name === 'MultipleGitError') {
+      const data = err as Error & { errors?: unknown; data?: { errors?: unknown } };
+      const errorsList = Array.isArray(data.errors)
+        ? data.errors
+        : Array.isArray(data.data?.errors)
+          ? data.data?.errors
+          : [];
+      let stderr = `error: unable to checkout '${ref}':\n`;
+      for (const inner of errorsList as unknown[]) {
+        const msg = inner instanceof Error ? inner.message : String(inner);
+        stderr += `  ${msg}\n`;
+      }
+      return { stdout: '', stderr, exitCode: 1 };
+    }
+    throw err;
   }
 
   /**
@@ -1397,8 +1586,13 @@ Available commands:
   }
 
   private async fetch(cwd: string, args: string[]): Promise<GitCommandResult> {
-    const remote = args.find((a) => !a.startsWith('-')) ?? 'origin';
+    // Positional ref must round-trip: `fetch --depth 1 origin main` →
+    // remote=origin, ref=main (NOT remote=1) — #1033-3.
+    const positional = this.extractPositional(args, FETCH_VALUE_FLAGS);
+    const remote = positional[0] ?? 'origin';
+    const ref = positional[1];
     const prune = args.includes('--prune') || args.includes('-p');
+    const depth = this.parseArg(args, '--depth');
 
     let output = `Fetching ${remote}\n`;
 
@@ -1407,8 +1601,10 @@ Available commands:
       http: gitHttp,
       dir: cwd,
       remote,
+      ref,
       corsProxy: this.corsProxy,
       prune,
+      depth: depth ? parseInt(depth, 10) : undefined,
       onAuth: this.getOnAuth(),
       onProgress: (event) => {
         output += `${event.phase}: ${event.loaded}/${event.total}\n`;
@@ -1424,7 +1620,13 @@ Available commands:
   }
 
   private async pull(cwd: string, args: string[]): Promise<GitCommandResult> {
-    const remote = args.find((a) => !a.startsWith('-')) ?? 'origin';
+    // Same positional-ref bug class as fetch: skip flag values when picking
+    // remote/ref out of `pull --ff-only origin main`.
+    const positional = this.extractPositional(args, PULL_VALUE_FLAGS);
+    const remote = positional[0] ?? 'origin';
+    const ref = positional[1];
+    const ffOnly = args.includes('--ff-only');
+    const noFf = args.includes('--no-ff');
 
     let output = `Pulling from ${remote}...\n`;
 
@@ -1433,8 +1635,11 @@ Available commands:
       http: gitHttp,
       dir: cwd,
       remote,
+      ref,
       corsProxy: this.corsProxy,
       author: await this.resolveAuthor(cwd),
+      fastForwardOnly: ffOnly,
+      fastForward: !noFf,
       onAuth: this.getOnAuth(),
       onProgress: (event) => {
         output += `${event.phase}: ${event.loaded}/${event.total}\n`;
@@ -1449,8 +1654,8 @@ Available commands:
     const force = args.includes('-f') || args.includes('--force');
     const setUpstream = args.includes('-u') || args.includes('--set-upstream');
 
-    // Extract positional args (skip flags)
-    const positional = args.filter((a) => !a.startsWith('-'));
+    // Extract positional args, skipping flag VALUES (`--push-option <opt>` etc.).
+    const positional = this.extractPositional(args, PUSH_VALUE_FLAGS);
     const remote = positional[0] ?? 'origin';
     const branch = positional[1] ?? (await git.currentBranch({ fs: this.lfs, dir: cwd }));
 
@@ -2690,6 +2895,29 @@ Available commands:
         exitCode: 128,
       };
     }
+  }
+
+  /**
+   * Extract positional (non-flag) arguments, skipping value-taking flags AND
+   * their values. The default split-on-`-` approach mis-picks the next token
+   * as positional for forms like `fetch --depth 1 origin main` (the `1`
+   * looks positional). Callers pass the set of flags that consume a value.
+   */
+  private extractPositional(args: string[], flagsWithValues: Set<string>): string[] {
+    const positional: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      if (arg.startsWith('-')) {
+        // `--flag=value` carries the value inline — never consume the next arg.
+        if (arg.includes('=')) continue;
+        if (flagsWithValues.has(arg) && i + 1 < args.length && !args[i + 1].startsWith('-')) {
+          i++; // skip the value
+        }
+        continue;
+      }
+      positional.push(arg);
+    }
+    return positional;
   }
 
   /** Parse a flag with a value from args. */

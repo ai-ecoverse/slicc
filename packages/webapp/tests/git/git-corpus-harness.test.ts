@@ -210,8 +210,9 @@ describe('git corpus — issue #1033 regressions', () => {
   });
 
   // #1033-3 — `fetch --depth 1 origin main` must parse remote=`origin`,
-  //           not the `1` value of `--depth`.
-  it('#1033-3: git fetch --depth 1 origin main parses remote=origin', async () => {
+  //           not the `1` value of `--depth`, AND the positional ref must
+  //           round-trip through to isomorphic-git.
+  it('#1033-3: git fetch --depth 1 origin main parses remote=origin AND ref=main', async () => {
     await git.execute(['init'], '/project');
     await git.execute(['remote', 'add', 'origin', 'https://example.com/x.git'], '/project');
     const fetchSpy = vi.spyOn(isoGit, 'fetch').mockResolvedValue({
@@ -225,8 +226,14 @@ describe('git corpus — issue #1033 regressions', () => {
       const result = await git.execute(['fetch', '--depth', '1', 'origin', 'main'], '/project');
       expect(result.exitCode).toBe(0);
       expect(fetchSpy).toHaveBeenCalled();
-      const call = fetchSpy.mock.calls[0]?.[0] as { remote?: string };
+      const call = fetchSpy.mock.calls[0]?.[0] as {
+        remote?: string;
+        ref?: string;
+        depth?: number;
+      };
       expect(call?.remote).toBe('origin');
+      expect(call?.ref).toBe('main');
+      expect(call?.depth).toBe(1);
     } finally {
       fetchSpy.mockRestore();
     }
@@ -308,6 +315,116 @@ describe('git corpus — issue #1033 regressions', () => {
       expect(result.stderr).toContain(targetDir);
     } finally {
       cloneSpy.mockRestore();
+    }
+  });
+
+  // #1033-5 (real repro) — when isomorphic-git throws MultipleGitError
+  // (e.g. a dirty/conflicting working tree), the wrapper must NOT pass the
+  // cosmetic "There are multiple errors..." message through. It must surface
+  // each underlying per-file failure so the user can act on them.
+  it('#1033-5: checkout MultipleGitError surfaces underlying errors, never the cosmetic noise', async () => {
+    await seedRepo('/project');
+    class FakeMultipleGitError extends Error {
+      override name = 'MultipleGitError';
+      errors: Error[];
+      data: { errors: Error[] };
+      constructor(errs: Error[]) {
+        super('There are multiple errors that were thrown by the program');
+        this.errors = errs;
+        this.data = { errors: errs };
+      }
+    }
+    const innerA = new Error("workdir contains uncommitted changes to 'a.txt'");
+    const innerB = new Error("workdir contains uncommitted changes to 'b.txt'");
+    const checkoutSpy = vi
+      .spyOn(isoGit, 'checkout')
+      .mockRejectedValue(new FakeMultipleGitError([innerA, innerB]));
+    try {
+      const result = await git.execute(['checkout', 'feature'], '/project');
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr.toLowerCase()).not.toContain('multiple errors');
+      expect(result.stderr).toContain('a.txt');
+      expect(result.stderr).toContain('b.txt');
+      expect(result.stderr).toContain("checkout 'feature'");
+    } finally {
+      checkoutSpy.mockRestore();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// push / pull — high-frequency in the catalogue, missing from the original
+// harness. Offline-only: spies replace isomorphic-git so no network occurs.
+// ---------------------------------------------------------------------------
+
+describe('git corpus — push / pull offline arg-parsing', () => {
+  it('push -u origin <branch> sends remote+ref through to isomorphic-git', async () => {
+    await seedRepo('/project');
+    await git.execute(['remote', 'add', 'origin', 'https://example.com/x.git'], '/project');
+    const pushSpy = vi
+      .spyOn(isoGit, 'push')
+      .mockResolvedValue({ ok: true } as Awaited<ReturnType<typeof isoGit.push>>);
+    try {
+      const result = await git.execute(['push', '-u', 'origin', 'main'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(pushSpy).toHaveBeenCalled();
+      const call = pushSpy.mock.calls[0]?.[0] as {
+        remote?: string;
+        ref?: string;
+        force?: boolean;
+      };
+      expect(call?.remote).toBe('origin');
+      expect(call?.ref).toBe('main');
+      expect(call?.force).toBe(false);
+    } finally {
+      pushSpy.mockRestore();
+    }
+  });
+
+  it('push --help short-circuits BEFORE any push side effect', async () => {
+    const pushSpy = vi
+      .spyOn(isoGit, 'push')
+      .mockResolvedValue({ ok: true } as Awaited<ReturnType<typeof isoGit.push>>);
+    try {
+      const result = await git.execute(['push', '--help'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.toLowerCase()).toContain('push');
+      expect(pushSpy).not.toHaveBeenCalled();
+    } finally {
+      pushSpy.mockRestore();
+    }
+  });
+
+  it('pull --ff-only origin <branch> sends remote+ref+fastForwardOnly through', async () => {
+    await seedRepo('/project');
+    await git.execute(['remote', 'add', 'origin', 'https://example.com/x.git'], '/project');
+    const pullSpy = vi.spyOn(isoGit, 'pull').mockResolvedValue(undefined);
+    try {
+      const result = await git.execute(['pull', '--ff-only', 'origin', 'main'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(pullSpy).toHaveBeenCalled();
+      const call = pullSpy.mock.calls[0]?.[0] as {
+        remote?: string;
+        ref?: string;
+        fastForwardOnly?: boolean;
+      };
+      expect(call?.remote).toBe('origin');
+      expect(call?.ref).toBe('main');
+      expect(call?.fastForwardOnly).toBe(true);
+    } finally {
+      pullSpy.mockRestore();
+    }
+  });
+
+  it('pull --help short-circuits BEFORE any pull side effect', async () => {
+    const pullSpy = vi.spyOn(isoGit, 'pull').mockResolvedValue(undefined);
+    try {
+      const result = await git.execute(['pull', '--help'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.toLowerCase()).toContain('pull');
+      expect(pullSpy).not.toHaveBeenCalled();
+    } finally {
+      pullSpy.mockRestore();
     }
   });
 });
