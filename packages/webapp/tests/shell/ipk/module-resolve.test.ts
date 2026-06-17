@@ -1,0 +1,327 @@
+/**
+ * Require/ipx-time Node module resolution tests (architecture 4.1 #2, §5).
+ *
+ * Exercises every branch of `resolve()` against a synthesized in-memory
+ * node_modules tree: scheme handling (node:/sliccy:/bare built-ins), relative
+ * and absolute path resolution (exact, extension, json, index, file-over-dir
+ * precedence), the nearest-node_modules walk (ancestor + nearest-wins),
+ * package.json entry selection (exports conditions, main/module, index
+ * fallback), scoped packages, deep subpaths, module-kind detection, and the
+ * exact uninstalled-package error string.
+ */
+import { describe, expect, it } from 'vitest';
+import { normalizePath, splitPath } from '../../../src/fs/path-utils.js';
+import {
+  createVfsModuleReader,
+  detectModuleKind,
+  type ModuleReader,
+  resolve,
+} from '../../../src/shell/ipk/resolver.js';
+
+/** Build a ModuleReader over a flat `{ path: contents }` map. */
+function makeReader(files: Record<string, string>): ModuleReader {
+  const norm: Record<string, string> = {};
+  const dirs = new Set<string>(['/']);
+  for (const [key, value] of Object.entries(files)) {
+    const p = normalizePath(key);
+    norm[p] = value;
+    let dir = splitPath(p).dir;
+    while (dir && dir !== '/') {
+      dirs.add(dir);
+      dir = splitPath(dir).dir;
+    }
+  }
+  const fileSet = new Set(Object.keys(norm));
+  return {
+    exists: async (path) => {
+      const p = normalizePath(path);
+      return fileSet.has(p) || dirs.has(p);
+    },
+    isDirectory: async (path) => dirs.has(normalizePath(path)),
+    readFile: async (path) => {
+      const p = normalizePath(path);
+      if (!(p in norm)) throw new Error(`ENOENT: ${p}`);
+      return norm[p];
+    },
+  };
+}
+
+describe('resolve() — schemes', () => {
+  const reader = makeReader({});
+
+  it('resolves a node: specifier to a builtin', async () => {
+    const r = await resolve('node:path', '/app', reader);
+    expect(r).toEqual({ type: 'builtin', specifier: 'node:path', name: 'path' });
+  });
+
+  it('resolves bare Node built-ins (fs/path/process/buffer) to builtins', async () => {
+    for (const name of ['fs', 'path', 'process', 'buffer']) {
+      const r = await resolve(name, '/app', reader);
+      expect(r).toEqual({ type: 'builtin', specifier: name, name });
+    }
+  });
+
+  it('resolves a sliccy: specifier to a capability marker', async () => {
+    const r = await resolve('sliccy:exec', '/app', reader);
+    expect(r).toEqual({ type: 'sliccy', specifier: 'sliccy:exec', name: 'exec' });
+  });
+
+  it('throws on an empty sliccy: name (not routed to node_modules)', async () => {
+    await expect(resolve('sliccy:', '/app', reader)).rejects.toThrow(/empty sliccy: module name/);
+  });
+});
+
+describe('resolve() — relative & absolute paths', () => {
+  it('resolves an exact relative file', async () => {
+    const reader = makeReader({ '/app/local.js': 'x' });
+    const r = await resolve('./local.js', '/app', reader);
+    expect(r.type).toBe('file');
+    if (r.type === 'file') expect(r.path).toBe('/app/local.js');
+  });
+
+  it('resolves an extensionless relative file via .js', async () => {
+    const reader = makeReader({ '/app/local.js': 'x' });
+    const r = await resolve('./local', '/app', reader);
+    if (r.type === 'file') expect(r.path).toBe('/app/local.js');
+  });
+
+  it('resolves .cjs when only the .cjs file exists', async () => {
+    const reader = makeReader({ '/app/local.cjs': 'x' });
+    const r = await resolve('./local', '/app', reader);
+    if (r.type === 'file') {
+      expect(r.path).toBe('/app/local.cjs');
+      expect(r.moduleKind).toBe('cjs');
+    }
+  });
+
+  it('resolves a .json file and detects the json kind', async () => {
+    const reader = makeReader({ '/app/data.json': '{"answer":42}' });
+    const r = await resolve('./data', '/app', reader);
+    if (r.type === 'file') {
+      expect(r.path).toBe('/app/data.json');
+      expect(r.moduleKind).toBe('json');
+    }
+  });
+
+  it('resolves a directory to its index.js', async () => {
+    const reader = makeReader({ '/app/dir/index.js': 'x' });
+    const r = await resolve('./dir', '/app', reader);
+    if (r.type === 'file') expect(r.path).toBe('/app/dir/index.js');
+  });
+
+  it('prefers a file over a same-named directory (file-over-directory)', async () => {
+    const reader = makeReader({ '/app/x.js': 'file', '/app/x/index.js': 'dir' });
+    const r = await resolve('./x', '/app', reader);
+    if (r.type === 'file') expect(r.path).toBe('/app/x.js');
+  });
+
+  it('resolves a parent-relative path', async () => {
+    const reader = makeReader({ '/app/x.js': 'x' });
+    const r = await resolve('../x.js', '/app/sub', reader);
+    if (r.type === 'file') expect(r.path).toBe('/app/x.js');
+  });
+
+  it('resolves a VFS-absolute path', async () => {
+    const reader = makeReader({ '/workspace/dir/x.js': 'x' });
+    const r = await resolve('/workspace/dir/x.js', '/elsewhere', reader);
+    if (r.type === 'file') expect(r.path).toBe('/workspace/dir/x.js');
+  });
+
+  it('throws without the install hint for a missing relative path', async () => {
+    const reader = makeReader({});
+    await expect(resolve('./nope.js', '/app', reader)).rejects.toThrow(
+      "Cannot find module './nope.js'"
+    );
+    await expect(resolve('./nope.js', '/app', reader)).rejects.not.toThrow(/ipk install/);
+  });
+});
+
+describe('resolve() — bare packages', () => {
+  it('resolves a package main entry', async () => {
+    const reader = makeReader({
+      '/app/node_modules/withmain/package.json': JSON.stringify({ main: 'lib/entry.js' }),
+      '/app/node_modules/withmain/lib/entry.js': 'x',
+      '/app/node_modules/withmain/index.js': 'decoy',
+    });
+    const r = await resolve('withmain', '/app', reader);
+    if (r.type === 'file') expect(r.path).toBe('/app/node_modules/withmain/lib/entry.js');
+  });
+
+  it('falls back to index.js when no main/exports declared', async () => {
+    const reader = makeReader({
+      '/app/node_modules/noentry/package.json': JSON.stringify({ name: 'noentry' }),
+      '/app/node_modules/noentry/index.js': 'x',
+    });
+    const r = await resolve('noentry', '/app', reader);
+    if (r.type === 'file') expect(r.path).toBe('/app/node_modules/noentry/index.js');
+  });
+
+  it('honors exports require over import/default', async () => {
+    const reader = makeReader({
+      '/app/node_modules/dual/package.json': JSON.stringify({
+        exports: { '.': { require: './cjs.js', import: './esm.js', default: './fallback.js' } },
+      }),
+      '/app/node_modules/dual/cjs.js': 'x',
+      '/app/node_modules/dual/esm.js': 'x',
+      '/app/node_modules/dual/fallback.js': 'x',
+    });
+    const r = await resolve('dual', '/app', reader);
+    if (r.type === 'file') expect(r.path).toBe('/app/node_modules/dual/cjs.js');
+  });
+
+  it('falls back to the exports default condition', async () => {
+    const reader = makeReader({
+      '/app/node_modules/defonly/package.json': JSON.stringify({
+        exports: { '.': { default: './d.js' } },
+      }),
+      '/app/node_modules/defonly/d.js': 'x',
+    });
+    const r = await resolve('defonly', '/app', reader);
+    if (r.type === 'file') expect(r.path).toBe('/app/node_modules/defonly/d.js');
+  });
+
+  it('resolves an exports subpath map for a deep specifier', async () => {
+    const reader = makeReader({
+      '/app/node_modules/feat/package.json': JSON.stringify({
+        exports: { './feature': { require: './feature-cjs.js' } },
+      }),
+      '/app/node_modules/feat/feature-cjs.js': 'x',
+    });
+    const r = await resolve('feat/feature', '/app', reader);
+    if (r.type === 'file') expect(r.path).toBe('/app/node_modules/feat/feature-cjs.js');
+  });
+
+  it('resolves a deep subpath file directly (independent of main)', async () => {
+    const reader = makeReader({
+      '/app/node_modules/multi/package.json': JSON.stringify({ main: 'index.js' }),
+      '/app/node_modules/multi/index.js': 'x',
+      '/app/node_modules/multi/lib/greet.js': 'x',
+    });
+    const r = await resolve('multi/lib/greet.js', '/app', reader);
+    if (r.type === 'file') expect(r.path).toBe('/app/node_modules/multi/lib/greet.js');
+  });
+
+  it('resolves a scoped package from its nested @scope directory', async () => {
+    const reader = makeReader({
+      '/app/node_modules/@acme/util/package.json': JSON.stringify({ main: 'main.js' }),
+      '/app/node_modules/@acme/util/main.js': 'x',
+    });
+    const r = await resolve('@acme/util', '/app', reader);
+    if (r.type === 'file') expect(r.path).toBe('/app/node_modules/@acme/util/main.js');
+  });
+
+  it('walks up to an ancestor node_modules', async () => {
+    const reader = makeReader({
+      '/app/node_modules/is-number/package.json': JSON.stringify({ main: 'index.js' }),
+      '/app/node_modules/is-number/index.js': 'x',
+    });
+    const r = await resolve('is-number', '/app/a/b', reader);
+    if (r.type === 'file') expect(r.path).toBe('/app/node_modules/is-number/index.js');
+  });
+
+  it('prefers the nearest copy over an ancestor copy', async () => {
+    const reader = makeReader({
+      '/app/node_modules/dep/package.json': JSON.stringify({ main: 'far.js' }),
+      '/app/node_modules/dep/far.js': 'far',
+      '/app/a/node_modules/dep/package.json': JSON.stringify({ main: 'near.js' }),
+      '/app/a/node_modules/dep/near.js': 'near',
+    });
+    const r = await resolve('dep', '/app/a/b', reader);
+    if (r.type === 'file') expect(r.path).toBe('/app/a/node_modules/dep/near.js');
+  });
+
+  it('throws the exact install-hint error for an uninstalled bare package', async () => {
+    const reader = makeReader({});
+    await expect(resolve('not-installed', '/app', reader)).rejects.toThrow(
+      "Cannot find module 'not-installed' (run: ipk install not-installed)"
+    );
+  });
+
+  it('names the package (not the subpath) in the install hint', async () => {
+    const reader = makeReader({});
+    await expect(resolve('pkg/sub.js', '/app', reader)).rejects.toThrow(
+      "Cannot find module 'pkg/sub.js' (run: ipk install pkg)"
+    );
+  });
+
+  it('throws without the install hint when an installed package has a broken main', async () => {
+    const reader = makeReader({
+      '/app/node_modules/broken/package.json': JSON.stringify({ main: './nope.js' }),
+    });
+    const err = await resolve('broken', '/app', reader).catch((e) => e as Error);
+    expect(err.message).toMatch(/missing/);
+    expect(err.message).not.toMatch(/ipk install/);
+  });
+
+  it('throws a clear error for malformed package.json', async () => {
+    const reader = makeReader({
+      '/app/node_modules/bad/package.json': '{ not json',
+    });
+    await expect(resolve('bad', '/app', reader)).rejects.toThrow(/Invalid package.json/);
+  });
+});
+
+describe('resolve() — import-time conditions', () => {
+  it('selects the import condition when conditions prioritize import', async () => {
+    const reader = makeReader({
+      '/app/node_modules/dual/package.json': JSON.stringify({
+        exports: { '.': { require: './cjs.js', import: './esm.js' } },
+      }),
+      '/app/node_modules/dual/cjs.js': 'x',
+      '/app/node_modules/dual/esm.js': 'x',
+    });
+    const r = await resolve('dual', '/app', reader, { conditions: ['node', 'import', 'default'] });
+    if (r.type === 'file') expect(r.path).toBe('/app/node_modules/dual/esm.js');
+  });
+});
+
+describe('detectModuleKind()', () => {
+  it('detects esm via the .mjs extension regardless of package type', async () => {
+    const reader = makeReader({
+      '/app/node_modules/p/package.json': JSON.stringify({ type: 'commonjs' }),
+      '/app/node_modules/p/index.mjs': 'x',
+    });
+    expect(await detectModuleKind(reader, '/app/node_modules/p/index.mjs')).toBe('esm');
+  });
+
+  it('detects esm for a .js entry under "type":"module"', async () => {
+    const reader = makeReader({
+      '/app/node_modules/p/package.json': JSON.stringify({ type: 'module' }),
+      '/app/node_modules/p/index.js': 'x',
+    });
+    expect(await detectModuleKind(reader, '/app/node_modules/p/index.js')).toBe('esm');
+  });
+
+  it('defaults a .js entry with no package type to cjs', async () => {
+    const reader = makeReader({
+      '/app/node_modules/p/package.json': JSON.stringify({ name: 'p' }),
+      '/app/node_modules/p/index.js': 'x',
+    });
+    expect(await detectModuleKind(reader, '/app/node_modules/p/index.js')).toBe('cjs');
+  });
+});
+
+describe('createVfsModuleReader()', () => {
+  it('adapts a VirtualFS-like surface, decoding binary reads to text', async () => {
+    const reader = createVfsModuleReader({
+      exists: async (p) => p === '/app/index.js' || p === '/app',
+      stat: async (p) => ({ type: p === '/app' ? 'directory' : 'file' }),
+      readFile: async () => new TextEncoder().encode('module.exports = 1;'),
+    });
+    expect(await reader.exists('/app/index.js')).toBe(true);
+    expect(await reader.isDirectory('/app')).toBe(true);
+    expect(await reader.isDirectory('/app/index.js')).toBe(false);
+    expect(await reader.readFile('/app/index.js')).toBe('module.exports = 1;');
+  });
+
+  it('reports isDirectory false when stat throws (missing path)', async () => {
+    const reader = createVfsModuleReader({
+      exists: async () => false,
+      stat: async () => {
+        throw new Error('ENOENT');
+      },
+      readFile: async () => '',
+    });
+    expect(await reader.isDirectory('/missing')).toBe(false);
+  });
+});
