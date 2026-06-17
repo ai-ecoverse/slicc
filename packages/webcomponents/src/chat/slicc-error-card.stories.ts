@@ -6,6 +6,7 @@ interface ErrorCardArgs {
   message?: string;
   bodyHtml?: string;
   'button-label'?: string;
+  action?: 'retry' | 'settings';
   theme?: 'light' | 'dark';
 }
 
@@ -34,6 +35,7 @@ function build(args: ErrorCardArgs): HTMLElement {
   const el = document.createElement('slicc-error-card');
   if (args.label != null) el.setAttribute('label', args.label);
   if (args['button-label'] != null) el.setAttribute('button-label', args['button-label']);
+  if (args.action) el.setAttribute('action', args.action);
   if (args.theme) el.setAttribute('theme', args.theme);
   // Rich slotted markup wins over the plain `message` attribute when supplied.
   if (args.bodyHtml != null) appendRichBody(el, args.bodyHtml);
@@ -62,6 +64,13 @@ const meta: Meta<ErrorCardArgs> = {
     message: { control: 'text', description: 'Error body text (escaped)' },
     bodyHtml: { control: 'text', description: 'Rich slotted body markup (overrides message)' },
     'button-label': { control: 'text', description: 'Retry button label (default "Try again")' },
+    action: {
+      control: 'inline-radio',
+      options: ['retry', 'settings'],
+      description:
+        'Action mode: `retry` (default) fires `slicc-error-retry`; `settings` flips the CTA to ' +
+        '"Open Settings" and fires `slicc-error-open-settings` instead.',
+    },
     theme: { control: 'inline-radio', options: ['light', 'dark'], description: 'Theme override' },
   },
   render: build,
@@ -114,6 +123,30 @@ export const CustomLabels: Story = {
     label: 'Network unreachable',
     'button-label': 'Retry connection',
     message: 'The LLM provider returned no response. Check your connection and retry.',
+  },
+};
+
+/**
+ * `action="settings"` variant — the CTA flips to "Open Settings" with a
+ * settings glyph and dispatches `slicc-error-open-settings` instead of
+ * `slicc-error-retry`. Used by the host for failures the user fixes by
+ * opening Settings (e.g. "No API key configured").
+ */
+export const SettingsAction: Story = {
+  args: {
+    label: 'Cannot reach the model',
+    action: 'settings',
+    message: 'No API key configured for provider "adobe". Open Settings to add one.',
+  },
+};
+
+/** Settings variant in dark mode — same red tint over the dark canvas. */
+export const SettingsActionDark: Story = {
+  args: {
+    label: 'Cannot reach the model',
+    action: 'settings',
+    theme: 'dark',
+    message: 'No API key configured. Open Settings to add one.',
   },
 };
 

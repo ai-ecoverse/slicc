@@ -187,4 +187,99 @@ describe('slicc-error-card', () => {
     btn.click();
     expect(seen).toHaveLength(0);
   });
+
+  describe('action="settings" variant', () => {
+    it('defaults the action attribute to "retry"', () => {
+      const el = mount({ message: 'oops' });
+      expect(el.action).toBe('retry');
+    });
+
+    it('reflects the action attribute to the property and back', () => {
+      const el = mount();
+      el.action = 'settings';
+      expect(el.getAttribute('action')).toBe('settings');
+      el.setAttribute('action', 'retry');
+      expect(el.action).toBe('retry');
+      // Unknown values normalize back to the default so existing hosts stay safe.
+      el.setAttribute('action', 'banana');
+      expect(el.action).toBe('retry');
+      el.action = null;
+      expect(el.hasAttribute('action')).toBe(false);
+    });
+
+    it('defaults the button label to "Open Settings"', () => {
+      const el = mount({ message: 'No API key configured.', action: 'settings' });
+      expect(el.shadowRoot?.querySelector('[part="button"]')?.textContent?.trim()).toBe(
+        'Open Settings'
+      );
+    });
+
+    it('still honors an explicit button-label override', () => {
+      const el = mount({
+        message: 'No API key configured.',
+        action: 'settings',
+        'button-label': 'Add a key',
+      });
+      expect(el.shadowRoot?.querySelector('[part="button"]')?.textContent?.trim()).toBe(
+        'Add a key'
+      );
+    });
+
+    it('renders the lucide settings glyph instead of rotate-ccw', () => {
+      const el = mount({ message: 'No API key configured.', action: 'settings' });
+      const btn = el.shadowRoot?.querySelector('[part="button"]') as HTMLButtonElement;
+      const svg = btn.querySelector('svg');
+      expect(svg).toBeInstanceOf(SVGSVGElement);
+      expect(svg?.innerHTML).toBe(iconShape('settings', 12));
+      expect(svg?.innerHTML).not.toBe(iconShape('rotate-ccw', 12));
+    });
+
+    it('dispatches slicc-error-open-settings (bubbling, composed) on click', () => {
+      const el = mount({
+        message: 'No API key configured.',
+        action: 'settings',
+        'message-id': 'err-9',
+      });
+      const settingsSeen: CustomEvent[] = [];
+      const retrySeen: CustomEvent[] = [];
+      document.body.addEventListener('slicc-error-open-settings', (e) =>
+        settingsSeen.push(e as CustomEvent)
+      );
+      document.body.addEventListener('slicc-error-retry', (e) => retrySeen.push(e as CustomEvent));
+      const btn = el.shadowRoot?.querySelector('[part="button"]') as HTMLButtonElement;
+      btn.click();
+      expect(settingsSeen).toHaveLength(1);
+      expect(settingsSeen[0].bubbles).toBe(true);
+      expect(settingsSeen[0].composed).toBe(true);
+      expect(settingsSeen[0].detail).toEqual({ messageId: 'err-9' });
+      // The retry event is mutually exclusive in settings mode.
+      expect(retrySeen).toHaveLength(0);
+    });
+
+    it('exposes a programmatic openSettings() that dispatches the same event', () => {
+      const el = mount({ message: 'oops', 'message-id': 'err-2', action: 'settings' });
+      const spy = vi.fn();
+      el.addEventListener('slicc-error-open-settings', spy);
+      el.openSettings();
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect((spy.mock.calls[0][0] as CustomEvent).detail).toEqual({ messageId: 'err-2' });
+    });
+
+    it('re-renders when the action attribute toggles back to retry', () => {
+      const el = mount({ message: 'oops', action: 'settings' });
+      expect(el.shadowRoot?.querySelector('[part="button"]')?.textContent?.trim()).toBe(
+        'Open Settings'
+      );
+      el.removeAttribute('action');
+      expect(el.shadowRoot?.querySelector('[part="button"]')?.textContent?.trim()).toBe(
+        'Try again'
+      );
+      const svg = el.shadowRoot?.querySelector('[part="button"] svg');
+      expect(svg?.innerHTML).toBe(iconShape('rotate-ccw', 12));
+      const seen: CustomEvent[] = [];
+      el.addEventListener('slicc-error-retry', (e) => seen.push(e as CustomEvent));
+      (el.shadowRoot?.querySelector('[part="button"]') as HTMLButtonElement).click();
+      expect(seen).toHaveLength(1);
+    });
+  });
 });
