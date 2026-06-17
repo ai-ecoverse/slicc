@@ -852,14 +852,18 @@ export class Orchestrator implements ConeApprovalRouter {
     const scoop = this.scoops.get(jid);
     if (!scoop || scoop.isCone) return;
 
+    // Emit completion telemetry before the notify-policy / mute / waiter
+    // branches AND before the empty-response early-return: any non-cone
+    // scoop that transitions to ready has lifecycle-completed regardless
+    // of how (or whether) the cone is told about it, and regardless of
+    // whether it buffered any text (structured-output-only turns, the
+    // `agent` shell-bridge spawns, and empty streams all hit this path).
+    // Without it, dashboards see enter ≫ leave counts.
+    emitScoopLifecycle('complete', scoop.folder);
+
     const responseText = this.scoopResponseBuffer.get(jid);
     this.scoopResponseBuffer.delete(jid);
     if (!responseText) return;
-
-    // Emit completion telemetry before the notify-policy / mute / waiter
-    // branches: a scoop that produced output has lifecycle-completed
-    // regardless of how (or whether) the cone is told about it.
-    emitScoopLifecycle('complete', scoop.folder);
 
     if (scoop.notifyOnComplete === false) return;
 

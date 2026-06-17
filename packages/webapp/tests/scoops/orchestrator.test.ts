@@ -880,6 +880,45 @@ describe('Orchestrator scoop-notify gating (notifyOnComplete)', () => {
     // Even with notifyOnComplete default, empty output => no notify sent.
     expect(captured).toHaveLength(0);
   });
+
+  it('emits the complete lifecycle beacon even when the scoop produced no output', async () => {
+    const { setScoopTelemetrySink } = await import('../../src/scoops/scoop-telemetry-hook.js');
+    const sink = vi.fn();
+    setScoopTelemetrySink(sink);
+
+    try {
+      const emptyScoop: RegisteredScoop = {
+        jid: 'scoop_empty_lifecycle_1',
+        name: 'empty-lifecycle',
+        folder: 'empty-lifecycle-scoop',
+        isCone: false,
+        type: 'scoop',
+        requiresTrigger: false,
+        assistantLabel: 'empty-lifecycle-scoop',
+        addedAt: new Date().toISOString(),
+        configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+      };
+      await saveScoop(emptyScoop);
+      const o = await initOrchestrator();
+      const priv = o as unknown as OrchestratorPrivate;
+      priv.handleMessage = async () => {};
+
+      // Drop any spawn/feed emits from earlier setup so the assertion below
+      // pins specifically the empty-response complete path.
+      sink.mockClear();
+
+      // No response buffer entry — structured-output-only / agent shell-bridge
+      // / empty-stream paths all hit this. The complete beacon must still
+      // fire so dashboards keep enter ≈ leave counts.
+      await priv.maybeNotifyConeOnScoopComplete(emptyScoop.jid);
+
+      const completeEmits = sink.mock.calls.filter((c) => c[0] === 'complete');
+      expect(completeEmits).toHaveLength(1);
+      expect(completeEmits[0][1]).toBe('empty-lifecycle-scoop');
+    } finally {
+      setScoopTelemetrySink(null);
+    }
+  });
 });
 
 describe('Orchestrator scoop-notify file artifacts', () => {

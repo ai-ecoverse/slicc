@@ -430,6 +430,31 @@ describe('telemetry — extension branch', () => {
     expect(mockSampleRumJs.mock.calls[0][1].target).not.toContain('/foo/bar.ts');
   });
 
+  it('error listener falls back to error.message when event.message is empty', async () => {
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRumJs.mockClear();
+
+    // Chromium synthesizes both ErrorEvent.message and ErrorEvent.error for
+    // an uncaught Error. When the top-level message is empty (e.g. a thrown
+    // Error with no string coercion) we still want context from the nested
+    // Error.message rather than emitting an empty target.
+    const errorEvent = new Event('error') as ErrorEvent;
+    Object.defineProperty(errorEvent, 'message', { value: '' });
+    Object.defineProperty(errorEvent, 'error', {
+      value: new Error('nested error context'),
+    });
+    window.dispatchEvent(errorEvent);
+
+    expect(mockSampleRumJs).toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({
+        source: 'js',
+        target: expect.stringContaining('nested error context'),
+      })
+    );
+  });
+
   it('registers unhandledrejection listener that calls trackError("js", sanitized)', async () => {
     const { initTelemetry } = await import('../../src/ui/telemetry.js');
     await initTelemetry();
@@ -579,12 +604,61 @@ describe('telemetry — CLI sendBeacon wrapper', () => {
 
     const body = JSON.stringify({
       checkpoint: 'error',
-      source: 'undefined error',
       target: 'http://localhost:5710/@vite/client',
     });
     const result = navigator.sendBeacon('https://rum.hlx.page/.rum/100', body);
     expect(result).toBe(true);
     expect(underlying).not.toHaveBeenCalled();
+  });
+
+  it('drops error beacons whose source AND target are both pure Vite noise', async () => {
+    const underlying = installUnderlyingBeacon();
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+
+    const body = JSON.stringify({
+      checkpoint: 'error',
+      source: 'http://localhost:5710/@vite/client',
+      target: 'http://localhost:5710/@vite/client.js',
+    });
+    const result = navigator.sendBeacon('https://rum.hlx.page/.rum/100', body);
+    expect(result).toBe(true);
+    expect(underlying).not.toHaveBeenCalled();
+  });
+
+  it('blanks a noisy source but keeps the beacon when the target survives', async () => {
+    const underlying = installUnderlyingBeacon();
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+
+    const body = JSON.stringify({
+      checkpoint: 'error',
+      source: 'http://localhost:5710/@vite/client',
+      target: 'TypeError: real app failure',
+    });
+    navigator.sendBeacon('https://rum.hlx.page/.rum/100', body);
+    expect(underlying).toHaveBeenCalledOnce();
+    const sent = JSON.parse(underlying.mock.calls[0][1] as string);
+    expect(sent.source).toBe('');
+    expect(sent.target).toContain('TypeError');
+    expect(sent.checkpoint).toBe('error');
+  });
+
+  it('blanks a noisy target but keeps the beacon when the source survives', async () => {
+    const underlying = installUnderlyingBeacon();
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+
+    const body = JSON.stringify({
+      checkpoint: 'error',
+      source: 'https://example.com/app.js',
+      target: 'http://localhost:5710/@vite/client',
+    });
+    navigator.sendBeacon('https://rum.hlx.page/.rum/100', body);
+    expect(underlying).toHaveBeenCalledOnce();
+    const sent = JSON.parse(underlying.mock.calls[0][1] as string);
+    expect(sent.source).toBe('https://example.com/app.js');
+    expect(sent.target).toBe('');
   });
 
   it('rewrites error beacons with mixed Vite + real-app content', async () => {

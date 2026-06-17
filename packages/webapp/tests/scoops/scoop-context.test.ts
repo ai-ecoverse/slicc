@@ -2349,6 +2349,47 @@ describe('ScoopContext typed-source error telemetry', () => {
     );
   });
 
+  it('strips <img:data:...;base64,...> parts from the tool-error telemetry payload but keeps them in onToolEnd', () => {
+    const callbacks = createMockCallbacks();
+    const onToolEnd = vi.fn();
+    callbacks.onToolEnd = onToolEnd;
+    const ctx = new ScoopContext(testScoop, callbacks, {} as any);
+    injectMockAgent(ctx, async () => {});
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    // Base64 stand-in long enough to make the cost of routing it through
+    // telemetry obvious if the strip regresses.
+    const fakeBase64 = 'A'.repeat(4096);
+    handler({
+      type: 'tool_execution_end',
+      toolName: 'playwright',
+      isError: true,
+      result: {
+        content: [
+          { type: 'text', text: 'navigation failed: target closed' },
+          { type: 'image', mimeType: 'image/png', data: fakeBase64 },
+        ],
+      },
+    });
+
+    expect(sink).toHaveBeenCalledTimes(1);
+    const [src, payload] = sink.mock.calls[0] as [string, string];
+    expect(src).toBe('tool');
+    expect(payload).toContain('playwright:');
+    expect(payload).toContain('navigation failed: target closed');
+    expect(payload).not.toContain('<img:');
+    expect(payload).not.toContain(fakeBase64);
+
+    // onToolEnd still sees the full joined string — the strip is
+    // telemetry-only so the agent's tool-result rendering is unchanged.
+    expect(callbacks.onToolEnd).toHaveBeenCalledTimes(1);
+    const onToolEndArgs = (callbacks.onToolEnd as any).mock.calls[0];
+    expect(onToolEndArgs[0]).toBe('playwright');
+    expect(onToolEndArgs[1]).toContain('<img:data:image/png;base64,');
+    expect(onToolEndArgs[1]).toContain(fakeBase64);
+    expect(onToolEndArgs[2]).toBe(true);
+  });
+
   it('does NOT emit telemetry on a successful tool_execution_end (isError=false)', () => {
     const callbacks = createMockCallbacks();
     const ctx = new ScoopContext(testScoop, callbacks, {} as any);

@@ -37,6 +37,13 @@ declare global {
  * worker-realm boot through the page branch and crash on
  * `localStorage.getItem(...)`. A real DedicatedWorker has none of these;
  * a real browser page has all of them in functional form.
+ *
+ * The duck-typing here couples the page branch to the worker branch:
+ * jsdom satisfies all four predicates, so a future page-branch test
+ * must not stub `localStorage` (or any of the other three) to a
+ * non-function shape, or the boot will silently route through the
+ * worker branch.
+ * @see telemetry-worker.test.ts
  */
 function isWorkerLikeRealm(): boolean {
   return (
@@ -118,7 +125,11 @@ export async function initTelemetry(): Promise<void> {
       const mod = await import('./rum-worker.js');
       sampleRUM = mod.default as SampleRUM;
       self.addEventListener('error', (e) => {
-        trackError('js', (e as ErrorEvent).message ?? '');
+        // Prefer `error.message` over `event.message`: a thrown Error with
+        // an empty top-level event message still yields a useful payload via
+        // the underlying Error.message.
+        const evt = e as ErrorEvent;
+        trackError('js', evt.error?.message ?? evt.message ?? '');
       });
       self.addEventListener('unhandledrejection', (e) => {
         const reason = (e as PromiseRejectionEvent).reason;
@@ -137,7 +148,9 @@ export async function initTelemetry(): Promise<void> {
       // shared with the CLI sampleRUM wrapper below.
       if (typeof window !== 'undefined') {
         window.addEventListener('error', (e) => {
-          trackError('js', (e as ErrorEvent).message ?? '');
+          // Same `error.message`-first preference as the worker branch above.
+          const evt = e as ErrorEvent;
+          trackError('js', evt.error?.message ?? evt.message ?? '');
         });
         window.addEventListener('unhandledrejection', (e) => {
           const reason = (e as PromiseRejectionEvent).reason;
@@ -297,13 +310,70 @@ function sanitizeError(msg: string): string | null {
  */
 const SENDBEACON_WRAPPED = Symbol.for('slicc.telemetry.sendBeacon.wrapped');
 
+type ParsedBeacon = { checkpoint?: string; source?: unknown; target?: unknown };
+
+/** Outcome of sanitizing one error-beacon string field. */
+type FieldOutcome =
+  /** Field absent — neither contributes a "drop" vote nor mutates. */
+  | { kind: 'absent' }
+  /** Field present and informative; may have been rewritten. */
+  | { kind: 'kept'; value: string; mutated: boolean }
+  /** Field present but reduced to pure Vite noise; should blank or drop. */
+  | { kind: 'noise' };
+
+function sanitizeBeaconField(raw: unknown): FieldOutcome {
+  if (typeof raw !== 'string') return { kind: 'absent' };
+  const sanitized = sanitizeError(raw);
+  if (sanitized === null) return { kind: 'noise' };
+  return { kind: 'kept', value: sanitized, mutated: sanitized !== raw };
+}
+
+/**
+ * Sanitize an error-checkpoint beacon body. Returns the literal `true` when
+ * the beacon should be dropped (every present string field is pure Vite
+ * noise), a re-serialized JSON string when at least one field changed, or
+ * `null` to forward the original body unchanged.
+ */
+function sanitizeErrorBeaconBody(parsed: ParsedBeacon): true | string | null {
+  const sourceOutcome = sanitizeBeaconField(parsed.source);
+  const targetOutcome = sanitizeBeaconField(parsed.target);
+  // Drop only when at least one field was present AND every present field
+  // reduced to pure noise. A missing field can't vote for "drop" on its own.
+  const sourceVotesDrop = sourceOutcome.kind !== 'kept';
+  const targetVotesDrop = targetOutcome.kind !== 'kept';
+  const eitherPresent = sourceOutcome.kind !== 'absent' || targetOutcome.kind !== 'absent';
+  if (eitherPresent && sourceVotesDrop && targetVotesDrop) return true;
+  let mutated = false;
+  if (sourceOutcome.kind === 'kept') {
+    if (sourceOutcome.mutated) {
+      parsed.source = sourceOutcome.value;
+      mutated = true;
+    }
+  } else if (sourceOutcome.kind === 'noise') {
+    // Source was pure noise but target survived — blank source so the
+    // rewritten beacon doesn't carry the dropped URL.
+    parsed.source = '';
+    mutated = true;
+  }
+  if (targetOutcome.kind === 'kept') {
+    if (targetOutcome.mutated) {
+      parsed.target = targetOutcome.value;
+      mutated = true;
+    }
+  } else if (targetOutcome.kind === 'noise') {
+    parsed.target = '';
+    mutated = true;
+  }
+  return mutated ? JSON.stringify(parsed) : null;
+}
+
 /**
  * Wrap `navigator.sendBeacon` so error beacons emitted by helix-rum-js's
  * internal listeners (which we cannot intercept at the sampleRUM seam) are
  * filtered through sanitizeError. Vite-noise-only beacons are dropped and a
- * mixed beacon is rewritten with a sanitized `target`. Non-error checkpoints
- * pass through untouched. Opaque (Blob/ArrayBufferView) bodies are passed
- * through unchanged — sendBeacon is sync and Blob.text() is async.
+ * mixed beacon is rewritten with sanitized `source` / `target`. Non-error
+ * checkpoints pass through untouched. Opaque (Blob/ArrayBufferView) bodies are
+ * passed through unchanged — sendBeacon is sync and Blob.text() is async.
  */
 function wrapSendBeaconForViteFilter(): void {
   if (typeof navigator === 'undefined' || typeof navigator.sendBeacon !== 'function') return;
@@ -321,18 +391,18 @@ function wrapSendBeaconForViteFilter(): void {
             ? new TextDecoder().decode(data)
             : null;
       if (text && text.length > 0 && text.charCodeAt(0) === 123 /* '{' */) {
-        const parsed = JSON.parse(text) as { checkpoint?: string; target?: unknown };
-        if (parsed?.checkpoint === 'error' && typeof parsed.target === 'string') {
-          const sanitized = sanitizeError(parsed.target);
-          if (sanitized === null) return true;
-          if (sanitized !== parsed.target) {
-            parsed.target = sanitized;
-            return original(url, JSON.stringify(parsed));
-          }
+        const parsed = JSON.parse(text) as ParsedBeacon;
+        if (parsed?.checkpoint === 'error') {
+          const outcome = sanitizeErrorBeaconBody(parsed);
+          if (outcome === true) return true;
+          if (outcome !== null) return original(url, outcome);
         }
       }
     } catch {
       // Opaque or non-JSON body — fall through and send as-is.
+      // TODO: a same-origin self-host (see docs/operational-telemetry.md
+      // "Self-Hosting Option") sends Blob beacons that bypass this Vite
+      // filter; sync sendBeacon can't await Blob.text() to peek at them.
     }
     return original(url, data);
   }) as typeof navigator.sendBeacon & { [SENDBEACON_WRAPPED]?: boolean };

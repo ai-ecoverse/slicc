@@ -1169,7 +1169,13 @@ export class ScoopContext {
     if (event.isError) {
       // Telemetry is best-effort — `target` is sanitized+truncated by
       // `trackError` downstream so passing the raw text excerpt is safe.
-      emitAgentError('tool', `${event.toolName}: ${joined}`);
+      // Strip `<img:data:...;base64,...>` parts before emitting: their
+      // base64 payload can run into MBs per failed image-emitting tool
+      // call, and the telemetry sink only truncates downstream on the
+      // wire. The full `joined` (images included) still flows to the
+      // onToolEnd callback unchanged.
+      const telemetryText = parts.filter((p) => !p.startsWith('<img:')).join('\n');
+      emitAgentError('tool', `${event.toolName}: ${telemetryText}`);
     }
     this.callbacks.onToolEnd?.(event.toolName, joined, event.isError);
   }
