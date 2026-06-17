@@ -24,6 +24,8 @@ import { fileURLToPath } from 'node:url';
 import { runInThisContext } from 'node:vm';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { normalizePath, splitPath } from '../../webapp/src/fs/path-utils.js';
+import { runJsRealm } from '../../webapp/src/kernel/realm/js-realm-shared.js';
+import type { RealmInitMsg } from '../../webapp/src/kernel/realm/realm-types.js';
 import { buildModuleGraph } from '../../webapp/src/shell/ipk/module-loader.js';
 import type { ModuleReader } from '../../webapp/src/shell/ipk/resolver.js';
 
@@ -245,12 +247,15 @@ interface RunOpts {
   host?: HostHandlers;
 }
 
-async function runInIframeFloat(code: string, opts: RunOpts = {}): Promise<RealmDone> {
-  const channel = new MessageChannel();
-  const hostPort = channel.port1;
-  const realmPort = channel.port2;
-  const host = opts.host ?? {};
-
+/**
+ * Wire a fake RPC host onto the host end of a `MessageChannel`: it answers the
+ * `vfs` / `exec` / `module` channels the realm calls back on (the `module`
+ * channel runs the REAL host-side `buildModuleGraph`, mirroring
+ * `realm-host.ts dispatchModule`) and resolves once the realm posts
+ * `realm-done`. Shared by BOTH float runners so the iframe float and the CLI
+ * worker float are driven against a byte-identical host.
+ */
+function attachFakeRpcHost(hostPort: MessagePort, host: HostHandlers): Promise<RealmDone> {
   hostPort.addEventListener('message', async (ev) => {
     const req = ev.data as {
       type?: string;
@@ -301,7 +306,7 @@ async function runInIframeFloat(code: string, opts: RunOpts = {}): Promise<Realm
   });
   hostPort.start();
 
-  const done = new Promise<RealmDone>((resolveDone, rejectDone) => {
+  return new Promise<RealmDone>((resolveDone, rejectDone) => {
     hostPort.addEventListener('message', (ev) => {
       const data = ev.data as { type?: string; message?: string };
       if (data?.type === 'realm-done') {
@@ -311,10 +316,10 @@ async function runInIframeFloat(code: string, opts: RunOpts = {}): Promise<Realm
       }
     });
   });
+}
 
-  bootstrapRealmPort(realmPort as unknown as RealmPortLike);
-
-  hostPort.postMessage({
+function makeRealmInit(code: string, opts: RunOpts): RealmInitMsg {
+  return {
     type: 'realm-init',
     kind: 'js',
     code,
@@ -323,11 +328,53 @@ async function runInIframeFloat(code: string, opts: RunOpts = {}): Promise<Realm
     cwd: opts.cwd ?? '/workspace',
     filename: opts.filename ?? '[eval]',
     stdin: opts.stdin ?? '',
+  };
+}
+
+async function runInIframeFloat(code: string, opts: RunOpts = {}): Promise<RealmDone> {
+  const channel = new MessageChannel();
+  const hostPort = channel.port1;
+  const realmPort = channel.port2;
+  const done = attachFakeRpcHost(hostPort, opts.host ?? {});
+
+  bootstrapRealmPort(realmPort as unknown as RealmPortLike);
+  hostPort.postMessage(makeRealmInit(code, opts));
+
+  const result = await done;
+  hostPort.close();
+  return result;
+}
+
+/**
+ * Drive the CLI/standalone worker float realm. `js-realm-shared.ts runJsRealm`
+ * is the SAME engine the production DedicatedWorker (`js-realm-worker.ts`) runs,
+ * so this is a faithful worker-float reference; we run it against the identical
+ * fake RPC host the iframe float uses so any divergence is a real parity bug.
+ */
+async function runInWorkerFloat(code: string, opts: RunOpts = {}): Promise<RealmDone> {
+  const channel = new MessageChannel();
+  const hostPort = channel.port1;
+  const realmPort = channel.port2;
+  const done = attachFakeRpcHost(hostPort, opts.host ?? {});
+
+  void runJsRealm(makeRealmInit(code, opts), realmPort as unknown as RealmPortLike).catch(() => {
+    // runJsRealm posts `realm-error` on the port for engine-level failures,
+    // which `attachFakeRpcHost` rejects with; nothing extra to do here.
   });
 
   const result = await done;
   hostPort.close();
   return result;
+}
+
+/** Run the same code+host in BOTH floats so a single test can assert parity. */
+async function runBothFloats(
+  code: string,
+  opts: RunOpts = {}
+): Promise<{ iframe: RealmDone; worker: RealmDone }> {
+  const iframe = await runInIframeFloat(code, opts);
+  const worker = await runInWorkerFloat(code, opts);
+  return { iframe, worker };
 }
 
 describe('sandbox.html iframe float — behavioral harness (VAL-GLOBALS-015 + FIX-1 + FIX-3)', () => {
@@ -786,5 +833,112 @@ describe('harness fidelity: real iframe top-level script semantics + polyfilled 
     const lines = done.stdout.split('\n').filter(Boolean);
     expect(lines[0]).toBe('via-async-function');
     expect(lines[1]).toBe('true');
+  });
+});
+
+describe('VAL-REQUIRE-016: CJS require matrix — extension iframe float vs CLI worker float parity', () => {
+  // The standalone browser-terminal harness cannot load the extension
+  // `sandbox.html` float (chrome.runtime absent; /sandbox.html serves the
+  // standalone app), so this behavioral harness is the option-D acceptance for
+  // the extension-float side of VAL-REQUIRE-016. We execute the SAME require
+  // matrix — an installed package, a relative require, a `.json` require, a
+  // `node:` builtin, a `sliccy:` scheme, and an uninstalled hard-error — in the
+  // real iframe float AND in the CLI/standalone worker float (`runJsRealm`, the
+  // engine `js-realm-worker.ts` runs) against a byte-identical fake RPC host,
+  // and assert the two floats produce identical stdout, stderr (including the
+  // exact `Cannot find module ... (run: ipk install ...)` text), and exit/throw
+  // behavior. The real-browser extension e2e remains BLOCKED by design.
+
+  const MATRIX_FILES: Record<string, string> = {
+    '/workspace/node_modules/is-number/package.json': JSON.stringify({
+      name: 'is-number',
+      version: '7.0.0',
+      main: 'index.js',
+    }),
+    '/workspace/node_modules/is-number/index.js':
+      'module.exports = function isNumber(n) { return typeof n === "number" && n - n === 0; };',
+    '/workspace/local.js': 'module.exports = { tag: "local-ok" };',
+    '/workspace/data.json': JSON.stringify({ answer: 42 }),
+  };
+
+  // Installed pkg, relative, .json, node: builtin, sliccy: scheme, and an
+  // uninstalled hard-error (caught so the whole matrix runs in one script and
+  // its exact `Cannot find module ...` message is captured on stdout).
+  const MATRIX_CODE = `
+    console.log('pkg', typeof require('is-number'), require('is-number')(5));
+    console.log('relative', require('./local.js').tag);
+    console.log('json', require('./data.json').answer);
+    console.log('node', require('node:path').join('a', 'b'));
+    console.log('sliccy', require('sliccy:time').parseDuration('1h'));
+    try { require('not-installed'); console.log('UNEXPECTED'); }
+    catch (e) { console.log('missing', e.message); }
+  `;
+
+  const EXPECTED_MATRIX_LINES = [
+    'pkg function true',
+    'relative local-ok',
+    'json 42',
+    'node a/b',
+    'sliccy 3600000',
+    "missing Cannot find module 'not-installed' (run: ipk install not-installed)",
+  ];
+
+  it('the full require matrix resolves byte-identically across both floats', async () => {
+    const { iframe, worker } = await runBothFloats(MATRIX_CODE, { host: { files: MATRIX_FILES } });
+
+    // Each float, on its own, produced the expected matrix output and exit 0.
+    expect(worker.exitCode).toBe(0);
+    expect(iframe.exitCode).toBe(0);
+    expect(worker.stdout.split('\n').filter(Boolean)).toEqual(EXPECTED_MATRIX_LINES);
+    expect(iframe.stdout.split('\n').filter(Boolean)).toEqual(EXPECTED_MATRIX_LINES);
+
+    // The headline parity assertion: identical stdout, stderr, and exit code.
+    expect(iframe.stdout).toBe(worker.stdout);
+    expect(iframe.stderr).toBe(worker.stderr);
+    expect(iframe.exitCode).toBe(worker.exitCode);
+
+    // Neither float retains a CDN fallback for any matrix entry.
+    for (const r of [iframe, worker]) {
+      expect(r.stdout).not.toContain('esm.sh');
+      expect(r.stdout).not.toContain('jsdelivr');
+      expect(r.stderr).not.toContain('esm.sh');
+      expect(r.stderr).not.toContain('jsdelivr');
+    }
+  });
+
+  it('an uninstalled bare require throws + exits non-zero with the exact install hint in both floats', async () => {
+    const code = "require('not-installed');";
+    const { iframe, worker } = await runBothFloats(code);
+    const expectedErr = "Cannot find module 'not-installed' (run: ipk install not-installed)";
+
+    // Throw/exit behavior is identical: a hard non-zero exit in both floats.
+    expect(worker.exitCode).toBe(1);
+    expect(iframe.exitCode).toBe(1);
+    expect(iframe.exitCode).toBe(worker.exitCode);
+
+    // The exact install-hint text appears in BOTH floats' stderr.
+    expect(worker.stderr).toContain(expectedErr);
+    expect(iframe.stderr).toContain(expectedErr);
+
+    // No CDN fallback / legacy esm.sh wording, immediate failure (no prefetch).
+    for (const r of [iframe, worker]) {
+      expect(r.stderr).not.toContain('esm.sh');
+      expect(r.stderr).not.toContain('jsdelivr');
+      expect(r.stdout).toBe('');
+    }
+  });
+
+  it.each([
+    ['installed package', "console.log(typeof require('is-number'), require('is-number')(5));"],
+    ['relative require', "console.log(require('./local.js').tag);"],
+    ['.json require', "console.log(require('./data.json').answer);"],
+    ['node: builtin', "console.log(require('node:path').join('a', 'b'));"],
+    ['sliccy: scheme', "console.log(require('sliccy:time').parseDuration('1h'));"],
+  ])('matrix entry "%s" produces identical stdout/stderr/exit across floats', async (_label, code) => {
+    const { iframe, worker } = await runBothFloats(code, { host: { files: MATRIX_FILES } });
+    expect(worker.exitCode).toBe(0);
+    expect(iframe.stdout).toBe(worker.stdout);
+    expect(iframe.stderr).toBe(worker.stderr);
+    expect(iframe.exitCode).toBe(worker.exitCode);
   });
 });

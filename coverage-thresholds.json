@@ -32,6 +32,7 @@
         "packages/webapp/src/net/**",
         "packages/webapp/src/shell/**",
         "packages/webapp/src/fs/**",
+        "packages/webapp/src/kernel/**",
         "packages/webapp/src/core/proxy-error.ts",
         "packages/node-server/src/**"
       ]
