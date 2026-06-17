@@ -6,7 +6,7 @@
  * pipeline so both UIs render byte-identical HTML for the same content.
  */
 
-import type { SliccUserMessage } from '@slicc/webcomponents';
+import { hasIcon, type SliccUserMessage } from '@slicc/webcomponents';
 import type { MessageAttachment } from '../../core/attachments.js';
 import { renderAssistantMessageContent, renderMessageContent } from '../message-renderer.js';
 import type { ChatMessage, ToolCall } from '../types.js';
@@ -116,9 +116,9 @@ export function bashProgram(command: string): string {
  * Lucide icons for the shell's built-in commands — the cogwheel/CLI glyph is
  * the last resort, not the default look of every bash row.
  */
-const BASH_ICONS: Readonly<Record<string, string>> = {
+export const BASH_ICONS: Readonly<Record<string, string>> = {
   git: 'git-branch',
-  gh: 'github',
+  gh: 'git-pull-request',
   ls: 'folder-open',
   cat: 'file-text',
   head: 'file-text',
@@ -179,30 +179,37 @@ const BASH_ICONS: Readonly<Record<string, string>> = {
   pbpaste: 'clipboard-paste',
 };
 
-/** Lucide icon for a tool row (per-command for bash, per-tool otherwise). */
+/** Lucide icons for the non-bash tools — exported for the icon-validity guard. */
+export const TOOL_ICONS: Readonly<Record<string, string>> = {
+  read_file: 'file-text',
+  write_file: 'file-plus',
+  edit_file: 'file-pen',
+  send_message: 'message-circle',
+  list_scoops: 'ice-cream-cone',
+  scoop_scoop: 'ice-cream-cone',
+  feed_scoop: 'utensils',
+  drop_scoop: 'trash-2',
+  scoop_mute: 'bell-off',
+  scoop_unmute: 'bell-ring',
+  scoop_wait: 'hourglass',
+  update_global_memory: 'brain',
+  lick_confirm: 'shield-check',
+  lick_dismiss: 'shield-x',
+  sudo_request: 'shield-question',
+  list_sudo_requests: 'list-checks',
+};
+
+/** Lucide icon for a tool row (per-command for bash, per-tool otherwise). The
+ *  chosen name is validated against the live `lucide` registry so a typo (e.g.
+ *  the historic `github` entry, which lucide ships as `github-` family glyphs)
+ *  falls back to a known-good generic instead of a blank `<svg>` placeholder. */
 export function toolIcon(call: Pick<ToolCall, 'name' | 'input'>): string {
   if (call.name === 'bash') {
-    return BASH_ICONS[bashProgram(bashCommand(call.input))] ?? 'terminal';
+    const picked = BASH_ICONS[bashProgram(bashCommand(call.input))] ?? 'terminal';
+    return hasIcon(picked) ? picked : 'terminal';
   }
-  const fixed: Record<string, string> = {
-    read_file: 'file-text',
-    write_file: 'file-plus',
-    edit_file: 'file-pen',
-    send_message: 'message-circle',
-    list_scoops: 'ice-cream-cone',
-    scoop_scoop: 'ice-cream-cone',
-    feed_scoop: 'utensils',
-    drop_scoop: 'trash-2',
-    scoop_mute: 'bell-off',
-    scoop_unmute: 'bell-ring',
-    scoop_wait: 'hourglass',
-    update_global_memory: 'brain',
-    lick_confirm: 'shield-check',
-    lick_dismiss: 'shield-x',
-    sudo_request: 'shield-question',
-    list_sudo_requests: 'list-checks',
-  };
-  return fixed[call.name] ?? 'wrench';
+  const picked = TOOL_ICONS[call.name] ?? 'wrench';
+  return hasIcon(picked) ? picked : 'wrench';
 }
 
 /**

@@ -15,13 +15,16 @@ vi.mock('../../../src/ui/quick-llm.js', () => ({
   quickLabel: vi.fn(async () => 'Push the release to main'),
 }));
 
+import { hasIcon } from '@slicc/webcomponents';
 import { createChatFixture } from '../../../src/ui/chat-fixture.js';
 import type { ChatMessage } from '../../../src/ui/types.js';
 import {
+  BASH_ICONS,
   buildThreadChildren,
   collateLickMessages,
   messageEls,
   summarizeToolInput,
+  TOOL_ICONS,
 } from '../../../src/ui/wc/wc-message-view.js';
 
 const fixture = createChatFixture();
@@ -298,6 +301,25 @@ describe('tool presentation', () => {
       expect(row.getAttribute('label'), name).toBe(title);
       expect(row.getAttribute('icon'), name).toBe(icon);
     }
+  });
+
+  // Regression guard: every name in `BASH_ICONS` and `TOOL_ICONS` must resolve
+  // against the real lucide registry, plus the generic fallbacks `toolIcon`
+  // returns on miss. Without this guard, a bad entry (historically
+  // `gh: 'github'` — lucide ships `Github` is gone, only family glyphs) ships
+  // a blank `<svg>` placeholder for the row icon.
+  it('every quick-label icon name is a real lucide icon', () => {
+    const bad: string[] = [];
+    for (const [key, name] of Object.entries(BASH_ICONS)) {
+      if (!hasIcon(name)) bad.push(`BASH_ICONS.${key} → ${name}`);
+    }
+    for (const [key, name] of Object.entries(TOOL_ICONS)) {
+      if (!hasIcon(name)) bad.push(`TOOL_ICONS.${key} → ${name}`);
+    }
+    for (const name of ['terminal', 'wrench']) {
+      if (!hasIcon(name)) bad.push(`fallback → ${name}`);
+    }
+    expect(bad).toEqual([]);
   });
 
   it('bash bodies render terminal-style: command + output, dark classes', () => {
