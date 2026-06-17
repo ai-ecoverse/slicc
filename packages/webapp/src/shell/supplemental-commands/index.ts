@@ -30,6 +30,7 @@ import { createHostCommand } from './host-command.js';
 import type { ImgcatCommandOptions } from './imgcat-command.js';
 import { createImgcatCommand } from './imgcat-command.js';
 import { createIpkCommand } from './ipk-command.js';
+import { createIpxCommand } from './ipx-command.js';
 import { createKillCommand } from './kill-command.js';
 import { createLocalLlmCommand } from './local-llm-command.js';
 import { createManCommand } from './man-command.js';
@@ -151,6 +152,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
           createIpkCommand('ipk', { fs: options.fs, fetch: options.fetch }),
           createIpkCommand('npm', { fs: options.fs, fetch: options.fetch }),
           createIpkCommand('i', { fs: options.fs, fetch: options.fetch }),
+          createIpxCommand('ipx', { fs: options.fs, fetch: options.fetch }),
         ]
       : []),
     createEsbuildCommand(),
