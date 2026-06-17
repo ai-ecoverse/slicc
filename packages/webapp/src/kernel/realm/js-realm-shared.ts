@@ -37,7 +37,7 @@ import {
   pool,
   time,
 } from './js-realm-helpers.js';
-import { isNodeBuiltin, NODE_BUILTINS_UNAVAILABLE, stripNodeScheme } from './node-builtins.js';
+import { NODE_BUILTINS_UNAVAILABLE } from './node-builtins.js';
 import { type RealmPortLike, RealmRpcClient } from './realm-rpc.js';
 import type {
   RealmDoneMsg,
@@ -68,14 +68,6 @@ class NodeExitError extends Error {
     super(`Process exited with code ${code}`);
     this.name = 'NodeExitError';
   }
-}
-
-function extractRequireSpecifiers(code: string): string[] {
-  const re = /\brequire\s*\(\s*(['"`])([^'"`\s]+)\1\s*\)/g;
-  const ids = new Set<string>();
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(code)) !== null) ids.add(m[2]);
-  return [...ids];
 }
 
 function formatConsoleArg(value: unknown): string {
@@ -209,8 +201,12 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
 
   const moduleShim = { exports: {} as Record<string, unknown>, filename: init.filename };
 
+  // The host transpiles an ESM / dynamic-import / top-level-await entry to a
+  // CJS body the AsyncFunction wrapper can run; a plain-CJS entry runs verbatim.
+  const entryCode = graph.entrySource ?? init.code;
+
   const exitCode = await runUserCode(
-    init.code,
+    entryCode,
     {
       process: processShim,
       console: nodeConsole,
@@ -238,19 +234,23 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
 }
 
 /**
- * Yield the event loop to let in-flight RPC callbacks (e.g.
- * non-awaited `.then` chains on RPC-backed promises) settle before
- * teardown. Bounded by a tick count and a wall-clock ceiling so a
- * genuinely never-settling promise does not hang disposal.
+ * Yield the event loop to let in-flight callbacks settle before teardown:
+ * RPC-backed `.then` chains (fetch/exec) AND fire-and-forget dynamic-import
+ * `.then` chains (pure microtasks, no pending RPC — e.g.
+ * `import('pkg').then(m => ...)`). We always tick at least once: a single
+ * macrotask boundary fully drains the microtask queue, so a non-awaited
+ * dynamic import settles before `realm-done` captures stdout — matching Node,
+ * which drains microtasks before exit. Bounded by a tick count and a
+ * wall-clock ceiling so a never-settling promise cannot hang disposal.
  */
 async function drainPendingRpcs(rpc: RealmRpcClient): Promise<void> {
   const maxTicks = 50;
   const deadline = Date.now() + 1000;
   let ticks = 0;
-  while (rpc.pendingCount > 0 && ticks < maxTicks && Date.now() < deadline) {
+  do {
     await new Promise<void>((r) => setTimeout(r, 0));
     ticks++;
-  }
+  } while (rpc.pendingCount > 0 && ticks < maxTicks && Date.now() < deadline);
 }
 
 function createNodeConsole(
@@ -384,34 +384,29 @@ function createFsBridge(
 }
 
 /**
- * Specifiers whose resolution the host module-loader owns (relative paths and
- * bare `node_modules` packages). `sliccy:`, `node:`/bare Node built-ins, the
- * browser-unavailable built-ins, and native C++ packages are served (or
- * hard-failed) directly by the realm require shim, so they never enter the
- * graph build.
- */
-function selectLoadableSpecifiers(code: string): string[] {
-  return extractRequireSpecifiers(code).filter((s) => {
-    if (s.startsWith(SLICCY_SCHEME)) return false;
-    if (isNodeBuiltin(s)) return false;
-    if (NODE_NATIVE_PACKAGES.has(stripNodeScheme(s))) return false;
-    return true;
-  });
-}
-
-/**
- * The directory a script's top-level relative `require()`s resolve against:
- * the script's own directory for a real file path, else the realm cwd (the
- * `node -e` / `<eval>` case).
+ * The directory a script's top-level relative `require()`/`import`s resolve
+ * against: the script's own directory for a real file path, else the realm cwd
+ * (the `node -e` / `<eval>` case).
  */
 function entryFromDir(filename: string, cwd: string): string {
   return filename?.startsWith('/') ? dirnameOf(filename) : cwd;
 }
 
 /**
- * Build the host-resolved CJS module graph for the realm's `require()`
- * specifiers via the `module`/`buildGraph` RPC. Returns an empty graph when
- * there is nothing to resolve so the no-require fast path never hits the host.
+ * Cheap pre-check: does the entry code reference any `require`/`import` at all?
+ * When it does not, there is nothing for the host to resolve or transpile, so
+ * the no-module fast path skips the `module`/buildGraph RPC entirely.
+ */
+function mightNeedModuleGraph(code: string): boolean {
+  return code.includes('require') || code.includes('import');
+}
+
+/**
+ * Build the host-resolved CJS module graph from the realm's ENTRY CODE via the
+ * `module`/`buildGraph` RPC. The host extracts the entry's tagged
+ * `require`/`import` specifiers, resolves them per access path, transpiles ESM
+ * modules + the entry itself (`entrySource`), and returns the ordered graph.
+ * Returns an empty graph (no RPC) when the entry references no module at all.
  */
 async function loadModuleGraph(
   rpc: RealmRpcClient,
@@ -419,11 +414,11 @@ async function loadModuleGraph(
   cwd: string,
   filename: string
 ): Promise<RealmModuleGraph> {
-  const loadable = selectLoadableSpecifiers(code);
-  if (loadable.length === 0) return { files: [], entryMap: {}, edges: {}, errors: {} };
+  if (!mightNeedModuleGraph(code)) return { files: [], entryMap: {}, edges: {}, errors: {} };
   return rpc.call<RealmModuleGraph>('module', 'buildGraph', [
-    loadable,
+    code,
     entryFromDir(filename, cwd),
+    filename,
   ]);
 }
 

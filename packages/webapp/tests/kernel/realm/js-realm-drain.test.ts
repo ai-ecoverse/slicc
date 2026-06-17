@@ -78,6 +78,16 @@ function attachFakeHost(
       });
       return;
     }
+    if (req.channel === 'module' && req.op === 'buildGraph') {
+      // These scripts only `require('fs')` (a builtin the realm shim serves),
+      // so the real host would return an empty graph; mirror that here.
+      host.postMessage({
+        type: 'realm-rpc-res',
+        id: req.id,
+        result: { files: [], entryMap: {}, edges: {}, errors: {} },
+      });
+      return;
+    }
     // Unknown ops — just echo an error so the realm doesn't hang.
     host.postMessage({
       type: 'realm-rpc-res',
