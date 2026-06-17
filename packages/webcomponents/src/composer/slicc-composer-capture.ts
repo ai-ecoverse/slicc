@@ -60,12 +60,12 @@ slicc-composer-capture {
      clamped between a usable min and a sensible max, so the absolutely
      positioned bar / close / status overlays always sit inside the host
      rect rather than being pushed below by the <video>'s intrinsic size.
-     Compact drop-target max-height mirrors the ~300px add-menu .results
-     panel so the surface reads as an overlay above the input row, not a
-     full chat-pane takeover. */
+     The enlarged max-height lets the box cover the composer textarea
+     when anchored to the band's bottom while keeping the control bar
+     one row at the bottom. */
   aspect-ratio: 4 / 3;
   min-height: 220px;
-  max-height: min(40vh, 300px);
+  max-height: min(60vh, 480px);
   border-radius: 14px;
   overflow: hidden;
   background: #000;

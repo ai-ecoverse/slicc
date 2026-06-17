@@ -467,14 +467,15 @@ describe('wireWcAttach inline capture overlay', () => {
         liveCapture = composer.querySelector<HTMLElement>('slicc-composer-capture');
         expect(liveCapture).toBeTruthy();
       });
-      // Compact drop-target geometry: absolute placement, popped UP out of
-      // the band's top edge, constrained to the composer's inner-column
-      // width (max 680px, centered via translateX). No `inset:0` full-pane
-      // takeover — the composer band's height never grows.
+      // Enlarged overlay geometry: absolute placement anchored to the
+      // composer band's bottom (`bottom:0`) so the box covers the input
+      // textarea, constrained to the composer's inner-column width
+      // (max 680px, centered via translateX). No `inset:0` full-pane
+      // takeover — the surface still self-bounds via its own max-height.
       const style = (liveCapture as unknown as HTMLElement).style;
       expect(style.position).toBe('absolute');
       expect(style.maxWidth).toBe('680px');
-      expect(style.bottom).toMatch(/100%/);
+      expect(style.bottom).toBe('0px');
       expect(style.transform).toContain('translateX(-50%)');
       expect(style.zIndex).toBe('3');
       resolveOpen(stubResult);

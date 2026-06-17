@@ -411,18 +411,18 @@ async function captureScreenshot(): Promise<string | null> {
 const CAMERA_PREF_KEY = 'slicc_camera_device';
 const MIC_PREF_KEY = 'slicc_microphone_device';
 
-/** Compact "drop-target" placement that mirrors the `<slicc-add-menu>`
- *  `.results` panel: the capture surface mounts inside the composer band
- *  (`<slicc-composer>` is `position:relative; z-index:2`) and pops UP out of
- *  the band into the thread area above the input row, constrained to the
- *  composer's inner-column width (max 680px, centered). The composer band's
- *  height never grows; the input row stays visible underneath. */
+/** Compact "drop-target" placement that mounts inside the composer band
+ *  (`<slicc-composer>` is `position:relative; z-index:2`) and overlays the
+ *  input row from the bottom up — `bottom:0` aligns the surface's bottom
+ *  with the composer band's bottom so the enlarged capture box covers the
+ *  textarea while open. Constrained to the composer's inner-column width
+ *  (max 680px, centered via translateX). */
 const COMPACT_CSS = [
   'position:absolute',
   'left:50%',
   'right:auto',
   'transform:translateX(-50%)',
-  'bottom:calc(100% + 6px)',
+  'bottom:0',
   'width:calc(100% - 32px)',
   'max-width:680px',
   'aspect-ratio:auto',
@@ -431,8 +431,8 @@ const COMPACT_CSS = [
 
 /**
  * Camera capture via the inline `<slicc-composer-capture>` surface, mounted
- * as a compact drop-target box inside the composer band (mirrors the
- * `<slicc-add-menu>` `.results` geometry). Photo + video are both reachable
+ * inside the composer band and anchored to its bottom so the enlarged box
+ * overlays the input textarea while open. Photo + video are both reachable
  * through the in-surface mode toggle; the caller picks the initial mode.
  * Resolves with the raw `CaptureResult` or `null` on cancel / no camera.
  *
@@ -478,9 +478,9 @@ export interface WireWcAttachDeps {
   freezer: HTMLElement;
   /** Host for the inline `<slicc-composer-capture>` surface — the
    *  `<slicc-composer>` band element (already `position:relative; z-index:2`).
-   *  The surface pops UP out of the band into the thread area above the input
-   *  row, mirroring the `<slicc-add-menu>` `.results` geometry. Optional:
-   *  hosts without an overlay site (tests, harnesses) get the legacy
+   *  The surface anchors to the band's bottom (`bottom:0`) so the enlarged
+   *  capture box overlays the input textarea while open. Optional: hosts
+   *  without an overlay site (tests, harnesses) get the legacy
    *  `<slicc-camera-dialog>` modal as a fallback. */
   composer?: HTMLElement;
   openReader(): Promise<LocalVfsClient>;
@@ -519,9 +519,9 @@ async function stageVideoResult(
 
 /**
  * Stage a captured frame:
- * - `mode:'photo'` (camera) → inline `<slicc-composer-capture>` mounted as a
- *    compact drop-target box inside the composer band (popping above the
- *    input row into the thread area); the in-surface toggle reaches video;
+ * - `mode:'photo'` (camera) → inline `<slicc-composer-capture>` mounted
+ *    inside the composer band and anchored to its bottom so the enlarged
+ *    box overlays the input textarea; the in-surface toggle reaches video;
  *    photo result → image attachment, video result → file attachment
  *    (WebM persisted to VFS).
  * - `mode:'screen'` (or anything else) → `getDisplayMedia` one-frame grab.
