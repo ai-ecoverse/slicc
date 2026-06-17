@@ -20,16 +20,21 @@ export interface QueuedMessage {
  * the lucide `clock` glyph for the count badge, and the 0.62 dim on dimmed
  * cards. Cards stack with CSS grid (`grid-template-areas: 'card'`) so they all
  * occupy the same cell and the front card defines the container's height;
- * layering is z-index only.
+ * layering is z-index only. The badge sits at the top-left of the wrap, above
+ * the pile, so the stack can grow upward out of the composer band beneath it.
+ * `.stack` is `isolation: isolate` so the per-card z-indices stay scoped and
+ * don't compete with the composer's input card stacked below the stack.
+ * `.card` rotates about its center (not a corner) so the back cards read as a
+ * loosely stacked pile of paper rather than a hand-held fan.
  */
 const STYLE = `
 :host{display:block;font-family:var(--ui);}
 :host(:not([count])),:host([count="0"]),:host([count="-0"]){display:none;}
-.wrap{display:flex;flex-direction:column;align-items:flex-end;gap:6px;}
-.badge{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;color:var(--txt-3);}
+.wrap{display:flex;flex-direction:column;align-items:stretch;gap:6px;}
+.badge{display:inline-flex;align-self:flex-start;align-items:center;gap:4px;font-size:10.5px;color:var(--txt-3);}
 .badge svg{display:block;}
-.stack{position:relative;display:grid;grid-template-areas:"card";align-self:stretch;justify-items:end;}
-.card{grid-area:card;display:flex;align-items:flex-start;gap:8px;box-sizing:border-box;max-width:80%;background:var(--deep);color:#fff;padding:10px 14px;border-radius:16px 16px 4px 16px;font-size:14px;line-height:1.5;transform-origin:bottom right;will-change:transform;}
+.stack{position:relative;display:grid;grid-template-areas:"card";align-self:stretch;justify-items:end;isolation:isolate;}
+.card{grid-area:card;display:flex;align-items:flex-start;gap:8px;box-sizing:border-box;max-width:80%;background:var(--deep);color:#fff;padding:10px 14px;border-radius:16px 16px 4px 16px;font-size:14px;line-height:1.5;transform-origin:center;will-change:transform;}
 .card.is-back{opacity:.62;}
 .card.is-deep{opacity:.45;}
 .bubble{flex:1 1 auto;min-width:0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;text-overflow:ellipsis;word-break:break-word;}
@@ -186,7 +191,7 @@ export class SliccQueuedStack extends HTMLElement {
       iconEl('clock', { size: 11 }),
       `${total} queued`
     );
-    const wrap = h('div', { class: 'wrap' }, stack, badge);
+    const wrap = h('div', { class: 'wrap' }, badge, stack);
     this.#root.replaceChildren(wrap);
   }
 }

@@ -4,6 +4,7 @@ import '../primitives/slicc-send-button.js';
 import './slicc-composer-meta.js';
 import './slicc-composer.js';
 import './slicc-input-card.js';
+import './slicc-queued-stack.js';
 import type { QueuedMessage, SliccQueuedStack } from './slicc-queued-stack.js';
 
 interface StackArgs {
@@ -100,10 +101,17 @@ export const WithAttachments: Story = {
 };
 
 /**
- * In-composer placement — the stack pinned above the `<slicc-input-card>` inside
- * a real `<slicc-composer>`. Matches the design intent: queued messages perch
- * directly over the composer's input card so the user sees the agent's backlog
- * exactly where the next message will be sent.
+ * In-composer placement — the stack tucks BEHIND the `<slicc-input-card>`
+ * inside a real `<slicc-composer>`: the bottom of the front card slips under
+ * the opaque white input card (negative bottom margin pulls them into
+ * overlap, and an explicit `position: relative; z-index: 1` on the input
+ * card lifts it above the stack's positioned `.stack` grid — which would
+ * otherwise paint atop a static sibling regardless of DOM order). The
+ * composer's frosted band extends upward to wrap the visible top of the
+ * pile, even nudging slightly into the chat thread above (small negative
+ * top margin). Matches the design intent: the stack appears to grow out of
+ * the composer rather than float as a separate band, with only its top
+ * peeking up above the input card.
  */
 export const InComposer: Story = {
   args: { count: 3 },
@@ -127,9 +135,29 @@ export const InComposer: Story = {
     thread.append(intro, reply);
 
     const composer = document.createElement('slicc-composer');
+    // Let the composer's frosted band creep up into the chat thread above so
+    // it visually wraps the top of the pile rather than floating as a band.
+    composer.style.marginTop = '-12px';
+
     const stack = buildStack(count);
+    // Pull the stack down so most of the front card tucks under the input
+    // card — only the top of the pile peeks above into the chat area.
+    stack.style.marginBottom = '-32px';
+    // The stack's `.stack` grid is `position: relative` (so its cards can
+    // grid-overlap), which makes it a positioned element. Positioned
+    // siblings paint above static ones regardless of DOM order, so without
+    // an explicit stacking context here the stack would draw OVER the
+    // input card. Pin it to z-index 0 so the input card's z-index 1 wins.
+    stack.style.position = 'relative';
+    stack.style.zIndex = '0';
+
     const card = document.createElement('slicc-input-card');
     card.setAttribute('placeholder', 'Ask sliccy…');
+    // Lift the opaque white input card above the queued stack so its
+    // background hides the bottom edge of the front card (and the box
+    // shadow reads cleanly against the chat thread below the cut line).
+    card.style.position = 'relative';
+    card.style.zIndex = '1';
     const addMenu = document.createElement('slicc-add-menu');
     addMenu.setAttribute('slot', 'toolbar');
     const spacer = document.createElement('div');
