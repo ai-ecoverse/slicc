@@ -16,9 +16,13 @@
  * `main.ts` boot path so they are covered by the same call. The
  * design-time `?ui-fixture` surface has no kernel and skips this stage
  * along with the rest of boot.
+ *
+ * Imports the listener from `nuke-channel.ts` — the shell-free split
+ * of `nuke-command.ts` — so wiring it into `main.ts` does NOT drag
+ * the `just-bash` browser entry into the page bundle.
  */
 
-import { installNukeReloadListener } from '../../shell/supplemental-commands/nuke-command.js';
+import { installNukeReloadListener } from '../../shell/supplemental-commands/nuke-channel.js';
 
 let dispose: (() => void) | null = null;
 

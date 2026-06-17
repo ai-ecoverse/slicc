@@ -8,7 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { NUKE_CONTROL_CHANNEL } from '../../../src/shell/supplemental-commands/nuke-command.js';
+import { NUKE_CONTROL_CHANNEL } from '../../../src/shell/supplemental-commands/nuke-channel.js';
 import {
   __resetNukeReloadListenerForTest,
   setupNukeReloadListener,
