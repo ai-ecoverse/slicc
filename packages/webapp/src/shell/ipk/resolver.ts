@@ -333,12 +333,13 @@ async function loadAsIndex(reader: ModuleReader, dir: string): Promise<string | 
 async function loadAsFileOrDirectory(
   reader: ModuleReader,
   path: string,
-  conditions: string[]
+  conditions: string[],
+  visited?: Set<string>
 ): Promise<string | null> {
   const asFile = await loadAsFile(reader, path);
   if (asFile) return asFile;
   if (await reader.isDirectory(path)) {
-    return loadAsDirectory(reader, path, conditions);
+    return loadAsDirectory(reader, path, conditions, visited);
   }
   return null;
 }
@@ -399,19 +400,51 @@ function rootExportsField(field: unknown): unknown {
   return field;
 }
 
+/**
+ * Resolve a manifest `main`/`module`/`exports` target relative to `dir`. An
+ * entry that normalizes back to `dir` itself (e.g. `"."`/`"./"`) routes to
+ * index.* resolution rather than re-entering directory resolution on the same
+ * path (which would never terminate); a self-referencing entry with no index
+ * returns null so the caller surfaces the clear `Cannot find module '<spec>'`
+ * error. A non-self entry that cannot be resolved throws a `<label>` error.
+ */
+async function resolveManifestEntry(
+  reader: ModuleReader,
+  dir: string,
+  target: string,
+  conditions: string[],
+  visited: Set<string>,
+  label: string
+): Promise<string | null> {
+  const targetPath = joinPath(dir, target);
+  const isSelf = targetPath === dir;
+  const resolved = isSelf
+    ? await loadAsIndex(reader, dir)
+    : await loadAsFileOrDirectory(reader, targetPath, conditions, visited);
+  if (resolved) return resolved;
+  if (isSelf) return null;
+  throw new Error(`Cannot find module: ${label} '${target}' missing in '${dir}'`);
+}
+
 async function loadAsDirectory(
   reader: ModuleReader,
   dir: string,
-  conditions: string[]
+  conditions: string[],
+  visited: Set<string> = new Set()
 ): Promise<string | null> {
+  // A `main`/`module`/`exports` entry can normalize back to a directory already
+  // being resolved (e.g. via a longer cross-directory cycle). Re-entering
+  // directory resolution on such a path recurses forever, so resolve the
+  // package index here instead — guaranteeing termination for any cycle.
+  if (visited.has(dir)) return loadAsIndex(reader, dir);
+  visited.add(dir);
+
   const manifest = await readManifest(reader, dir);
   if (manifest) {
     if (manifest.exports !== undefined) {
       const target = resolveExportsTarget(rootExportsField(manifest.exports), conditions);
       if (target) {
-        const resolved = await loadAsFileOrDirectory(reader, joinPath(dir, target), conditions);
-        if (resolved) return resolved;
-        throw new Error(`Cannot find module: exports entry '${target}' missing in '${dir}'`);
+        return resolveManifestEntry(reader, dir, target, conditions, visited, 'exports entry');
       }
     }
     const entry =
@@ -419,9 +452,7 @@ async function loadAsDirectory(
       (typeof manifest.module === 'string' && manifest.module) ||
       '';
     if (entry) {
-      const resolved = await loadAsFileOrDirectory(reader, joinPath(dir, entry), conditions);
-      if (resolved) return resolved;
-      throw new Error(`Cannot find module: main entry '${entry}' missing in '${dir}'`);
+      return resolveManifestEntry(reader, dir, entry, conditions, visited, 'main entry');
     }
   }
   return loadAsIndex(reader, dir);

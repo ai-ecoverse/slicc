@@ -210,6 +210,60 @@ describe('CJS require hard-switch e2e: ipk install → node require over the rea
     await fs.dispose();
   });
 
+  it('package-dir self-main "." resolves to index.js through the real realm seam', async () => {
+    sharedRegistry.current = buildRegistry([
+      {
+        name: 'selfidx',
+        version: '1.0.0',
+        files: {
+          'package.json': JSON.stringify({ name: 'selfidx', version: '1.0.0', main: '.' }),
+          'index.js': "module.exports = 'self-index-ok';\n",
+        },
+      },
+    ]);
+    const { shell, fs } = await newShell();
+    expect((await shell.executeCommand('ipk install selfidx')).exitCode).toBe(0);
+
+    await fs.writeFile('/work/run.js', "console.log(require('selfidx'));");
+    const run = await shell.executeCommand('node run.js');
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout.trim()).toBe('self-index-ok');
+    await fs.dispose();
+  }, 15000);
+
+  it('package-dir self-main "." with no index.* hard-errors (no hang/stack overflow)', async () => {
+    const url = 'https://registry.npmjs.org/noidx/-/noidx-1.0.0.tgz';
+    const tarball = gzipSync(
+      buildTar([
+        {
+          name: 'package/package.json',
+          data: bytes(JSON.stringify({ name: 'noidx', version: '1.0.0', main: '.' })),
+        },
+      ])
+    );
+    sharedRegistry.current = {
+      packuments: {
+        noidx: {
+          name: 'noidx',
+          'dist-tags': { latest: '1.0.0' },
+          versions: {
+            '1.0.0': { name: 'noidx', version: '1.0.0', dist: { tarball: url } },
+          },
+        },
+      },
+      tarballs: { [url]: tarball },
+    };
+    const { shell, fs } = await newShell();
+    expect((await shell.executeCommand('ipk install noidx')).exitCode).toBe(0);
+    expect(await fs.exists('/work/node_modules/noidx/index.js')).toBe(false);
+
+    await fs.writeFile('/work/run.js', "require('noidx');");
+    const run = await shell.executeCommand('node run.js');
+    expect(run.exitCode).not.toBe(0);
+    expect(run.stderr).toContain("Cannot find module 'noidx'");
+    await fs.dispose();
+  }, 15000);
+
   it('VAL-CROSS-011 / VAL-REQUIRE-013: a missing module hard-errors with the install hint and NO CDN download', async () => {
     sharedRegistry.current = buildRegistry([{ name: 'is-number', version: '7.0.0' }]);
     const { shell, fs } = await newShell();

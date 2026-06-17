@@ -261,6 +261,80 @@ describe('resolve() — bare packages', () => {
   });
 });
 
+describe('resolve() — package-dir self-referencing main/module', () => {
+  it('resolves main "." to the package index.js without recursing', async () => {
+    const reader = makeReader({
+      '/app/node_modules/selfmain/package.json': JSON.stringify({ main: '.' }),
+      '/app/node_modules/selfmain/index.js': 'x',
+    });
+    const r = await resolve('selfmain', '/app', reader);
+    if (r.type === 'file') expect(r.path).toBe('/app/node_modules/selfmain/index.js');
+  });
+
+  it('resolves main "./" to the package index.js without recursing', async () => {
+    const reader = makeReader({
+      '/app/node_modules/slashmain/package.json': JSON.stringify({ main: './' }),
+      '/app/node_modules/slashmain/index.js': 'x',
+    });
+    const r = await resolve('slashmain', '/app', reader);
+    if (r.type === 'file') expect(r.path).toBe('/app/node_modules/slashmain/index.js');
+  });
+
+  it('honors index file-over-directory precedence (index.js before index/)', async () => {
+    const reader = makeReader({
+      '/app/node_modules/selfidx/package.json': JSON.stringify({ main: '.' }),
+      '/app/node_modules/selfidx/index.js': 'file',
+      '/app/node_modules/selfidx/index/inner.js': 'dir',
+    });
+    const r = await resolve('selfidx', '/app', reader);
+    if (r.type === 'file') expect(r.path).toBe('/app/node_modules/selfidx/index.js');
+  });
+
+  it('resolves module "." (no main) to the package index.cjs', async () => {
+    const reader = makeReader({
+      '/app/node_modules/modself/package.json': JSON.stringify({ module: '.' }),
+      '/app/node_modules/modself/index.cjs': 'x',
+    });
+    const r = await resolve('modself', '/app', reader);
+    if (r.type === 'file') expect(r.path).toBe('/app/node_modules/modself/index.cjs');
+  });
+
+  it('throws "Cannot find module" (no hang) when main "." has no index.*', async () => {
+    const reader = makeReader({
+      '/app/node_modules/noidx/package.json': JSON.stringify({ main: '.' }),
+    });
+    const err = await resolve('noidx', '/app', reader).catch((e) => e as Error);
+    expect(err.message).toBe("Cannot find module 'noidx'");
+    expect(err.message).not.toMatch(/ipk install/);
+  }, 3000);
+
+  it('resolves a relative dir whose main "." points back to itself', async () => {
+    const reader = makeReader({
+      '/app/pkg/package.json': JSON.stringify({ main: '.' }),
+      '/app/pkg/index.js': 'x',
+    });
+    const r = await resolve('./pkg', '/app', reader);
+    if (r.type === 'file') expect(r.path).toBe('/app/pkg/index.js');
+  });
+
+  it('throws (no hang) for a relative dir self-main with no index.*', async () => {
+    const reader = makeReader({
+      '/app/pkg/package.json': JSON.stringify({ main: './' }),
+    });
+    await expect(resolve('./pkg', '/app', reader)).rejects.toThrow("Cannot find module './pkg'");
+  }, 3000);
+
+  it('terminates (no hang) for a multi-directory normalization cycle', async () => {
+    const reader = makeReader({
+      '/app/node_modules/cyc/package.json': JSON.stringify({ main: './sub' }),
+      '/app/node_modules/cyc/sub/package.json': JSON.stringify({ main: '../' }),
+    });
+    const err = await resolve('cyc', '/app', reader).catch((e) => e as Error);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toMatch(/Cannot find module/);
+  }, 3000);
+});
+
 describe('resolve() — import-time conditions', () => {
   it('selects the import condition when conditions prioritize import', async () => {
     const reader = makeReader({
