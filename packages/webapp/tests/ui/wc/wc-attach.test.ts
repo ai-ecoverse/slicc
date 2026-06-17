@@ -467,17 +467,23 @@ describe('wireWcAttach inline capture overlay', () => {
         liveCapture = composer.querySelector<HTMLElement>('slicc-composer-capture');
         expect(liveCapture).toBeTruthy();
       });
-      // Enlarged overlay geometry: absolute placement anchored to the
-      // composer band's bottom (`bottom:0`) so the box covers the input
-      // textarea, constrained to the composer's inner-column width
-      // (max 680px, centered via translateX). No `inset:0` full-pane
-      // takeover — the surface still self-bounds via its own max-height.
+      // Enlarged overlay geometry: absolute placement anchored ABOVE the
+      // meta row (`bottom:56px` clears the composer's 14px bottom padding
+      // + the 30px `.ctl` meta-pill row) so the model/thinking pills stay
+      // visible and clickable while the box covers the input textarea.
+      // Constrained to the composer's inner-column width (max 680px,
+      // centered via translateX). No `inset:0` full-pane takeover — the
+      // surface still self-bounds via its own responsive aspect-ratio +
+      // max-height (the wrapper imposes no aspect-ratio override).
       const style = (liveCapture as unknown as HTMLElement).style;
       expect(style.position).toBe('absolute');
       expect(style.maxWidth).toBe('680px');
-      expect(style.bottom).toBe('0px');
+      expect(style.bottom).toBe('56px');
       expect(style.transform).toContain('translateX(-50%)');
       expect(style.zIndex).toBe('3');
+      // The wrapper deliberately omits `aspect-ratio` so the component's
+      // responsive 3:4 desktop / 4:3 mobile rule applies.
+      expect(style.aspectRatio).toBe('');
       resolveOpen(stubResult);
     } finally {
       stubDeferred = null;

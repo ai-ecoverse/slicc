@@ -413,27 +413,30 @@ const MIC_PREF_KEY = 'slicc_microphone_device';
 
 /** Compact "drop-target" placement that mounts inside the composer band
  *  (`<slicc-composer>` is `position:relative; z-index:2`) and overlays the
- *  input row from the bottom up — `bottom:0` aligns the surface's bottom
- *  with the composer band's bottom so the enlarged capture box covers the
- *  textarea while open. Constrained to the composer's inner-column width
- *  (max 680px, centered via translateX). */
+ *  input card region from above the meta row. The meta row sits at the
+ *  bottom of the band (composer padding-bottom 14px + `.ctl` height 30px =
+ *  44px); anchoring at `bottom:56px` keeps the model/thinking pills fully
+ *  visible and clickable while the capture box covers the textarea above.
+ *  Constrained to the composer's inner-column width (max 680px, centered
+ *  via translateX). The component owns its responsive aspect-ratio
+ *  (3:4 desktop / 4:3 mobile), so this wrapper imposes none. */
 const COMPACT_CSS = [
   'position:absolute',
   'left:50%',
   'right:auto',
   'transform:translateX(-50%)',
-  'bottom:0',
+  'bottom:56px',
   'width:calc(100% - 32px)',
   'max-width:680px',
-  'aspect-ratio:auto',
   'z-index:3',
 ].join(';');
 
 /**
  * Camera capture via the inline `<slicc-composer-capture>` surface, mounted
- * inside the composer band and anchored to its bottom so the enlarged box
- * overlays the input textarea while open. Photo + video are both reachable
- * through the in-surface mode toggle; the caller picks the initial mode.
+ * inside the composer band and anchored above the meta row so the box
+ * overlays the input textarea while leaving the model/thinking pills
+ * visible and interactive. Photo + video are both reachable through the
+ * in-surface mode toggle; the caller picks the initial mode.
  * Resolves with the raw `CaptureResult` or `null` on cancel / no camera.
  *
  * Camera + mic picks persist across sessions via the
@@ -478,10 +481,11 @@ export interface WireWcAttachDeps {
   freezer: HTMLElement;
   /** Host for the inline `<slicc-composer-capture>` surface — the
    *  `<slicc-composer>` band element (already `position:relative; z-index:2`).
-   *  The surface anchors to the band's bottom (`bottom:0`) so the enlarged
-   *  capture box overlays the input textarea while open. Optional: hosts
-   *  without an overlay site (tests, harnesses) get the legacy
-   *  `<slicc-camera-dialog>` modal as a fallback. */
+   *  The surface anchors above the meta row (`bottom:56px`) so the capture
+   *  box covers the input textarea while the model/thinking pills stay
+   *  visible and interactive. Optional: hosts without an overlay site
+   *  (tests, harnesses) get the legacy `<slicc-camera-dialog>` modal as a
+   *  fallback. */
   composer?: HTMLElement;
   openReader(): Promise<LocalVfsClient>;
   /** Writable VFS for persisting captures + oversized uploads to /tmp/upload. */
@@ -520,10 +524,10 @@ async function stageVideoResult(
 /**
  * Stage a captured frame:
  * - `mode:'photo'` (camera) → inline `<slicc-composer-capture>` mounted
- *    inside the composer band and anchored to its bottom so the enlarged
- *    box overlays the input textarea; the in-surface toggle reaches video;
- *    photo result → image attachment, video result → file attachment
- *    (WebM persisted to VFS).
+ *    inside the composer band and anchored above the meta row so the box
+ *    overlays the input textarea while leaving the meta row visible;
+ *    the in-surface toggle reaches video; photo result → image attachment,
+ *    video result → file attachment (WebM persisted to VFS).
  * - `mode:'screen'` (or anything else) → `getDisplayMedia` one-frame grab.
  */
 async function stageCapture(

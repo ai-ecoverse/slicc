@@ -56,14 +56,18 @@ slicc-composer-capture {
   position: relative;
   display: block;
   width: 100%;
-  /* Self-bounded box: the surface fills the composer area at a 4:3 ratio,
-     clamped between a usable min and a sensible max, so the absolutely
-     positioned bar / close / status overlays always sit inside the host
-     rect rather than being pushed below by the <video>'s intrinsic size.
-     The enlarged max-height lets the box cover the composer textarea
-     when anchored to the band's bottom while keeping the control bar
-     one row at the bottom. */
-  aspect-ratio: 4 / 3;
+  /* Self-bounded box: the surface fills the composer area at a responsive
+     ratio (3:4 portrait on desktop / 4:3 landscape on mobile), clamped
+     between a usable min and a sensible max, so the absolutely positioned
+     bar / close / status overlays always sit inside the host rect rather
+     than being pushed below by the <video>'s intrinsic size. The desktop
+     max-width:360px lets the 3:4 ratio actually manifest as portrait
+     within the wider 680px composer column (480px tall x 360px wide),
+     with the box centered via margin:0 auto; the control bar stays one
+     row at the bottom. */
+  aspect-ratio: 3 / 4;
+  max-width: 360px;
+  margin: 0 auto;
   min-height: 220px;
   max-height: min(60vh, 480px);
   border-radius: 14px;
@@ -75,6 +79,15 @@ slicc-composer-capture {
 }
 slicc-composer-capture[hidden] {
   display: none;
+}
+/* Narrow / mobile: switch to landscape 4:3 and drop the desktop width
+   cap so the box fills the column (matches the WC shell's 560px narrow
+   breakpoint used by the chat thread / meta hint / logo). */
+@media (max-width: 560px) {
+  slicc-composer-capture {
+    aspect-ratio: 4 / 3;
+    max-width: 100%;
+  }
 }
 slicc-composer-capture .slicc-capture__video {
   position: absolute;
