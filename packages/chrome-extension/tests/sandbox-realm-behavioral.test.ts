@@ -706,40 +706,57 @@ describe('sandbox.html iframe float — CJS require error/edge parity (VAL-REQUI
     expect(elapsed).toBeLessThan(3000);
   });
 
-  it('m4: a nested package require("crypto") hard-fails with the built-in-unavailable message (not Cannot find module)', async () => {
-    const code = "const u = require('usescrypto'); u();";
+  it('m4: a nested package require("os") hard-fails with the built-in-unavailable message (not Cannot find module)', async () => {
+    const code = "const u = require('usesos'); u();";
     const done = await runInIframeFloat(code, {
       host: {
         files: {
-          '/workspace/node_modules/usescrypto/package.json': JSON.stringify({
-            name: 'usescrypto',
+          '/workspace/node_modules/usesos/package.json': JSON.stringify({
+            name: 'usesos',
             version: '1.0.0',
             main: 'index.js',
           }),
-          '/workspace/node_modules/usescrypto/index.js':
-            "const crypto = require('crypto'); module.exports = () => crypto.randomBytes(8);",
+          '/workspace/node_modules/usesos/index.js':
+            "const os = require('os'); module.exports = () => os.hostname();",
         },
       },
     });
     expect(done.exitCode).toBe(1);
     expect(done.stderr).toContain('not available in the browser');
-    expect(done.stderr).toContain('crypto');
+    expect(done.stderr).toContain('os');
     expect(done.stderr).not.toContain('Cannot find module');
     expect(done.stderr).not.toContain('ipk install');
   });
 
-  it('m4: a package that lazily guards a built-in loads cleanly in the iframe float', async () => {
-    const code = "const m = require('lazycrypto'); console.log(m.tag);";
+  it('m5: require("crypto") / require("node:crypto") resolve to the Web Crypto bridge in the iframe float', async () => {
+    const code = `const crypto = require('crypto');
+      const aliased = require('node:crypto');
+      const buf = new Uint8Array(8);
+      const same = crypto.randomFillSync(buf) === buf;
+      const filled = buf.some((b) => b !== 0);
+      const uuid = crypto.randomUUID();
+      const rb = crypto.randomBytes(16);
+      const v4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+      console.log(same, filled, v4.test(uuid), rb.length === 16, aliased === crypto);`;
+    const done = await runInIframeFloat(code, {});
+    expect(done.exitCode).toBe(0);
+    expect(done.stderr).not.toContain('not available in the browser');
+    expect(done.stderr).not.toContain('Cannot find module');
+    expect(done.stdout.trim()).toBe('true true true true true');
+  });
+
+  it('m4: a package that lazily guards an unavailable built-in loads cleanly in the iframe float', async () => {
+    const code = "const m = require('lazyos'); console.log(m.tag);";
     const done = await runInIframeFloat(code, {
       host: {
         files: {
-          '/workspace/node_modules/lazycrypto/package.json': JSON.stringify({
-            name: 'lazycrypto',
+          '/workspace/node_modules/lazyos/package.json': JSON.stringify({
+            name: 'lazyos',
             version: '1.0.0',
             main: 'index.js',
           }),
-          '/workspace/node_modules/lazycrypto/index.js':
-            "module.exports = { hash: () => require('crypto').createHash('sha256'), tag: 'loaded' };",
+          '/workspace/node_modules/lazyos/index.js':
+            "module.exports = { host: () => require('os').hostname(), tag: 'loaded' };",
         },
       },
     });

@@ -384,20 +384,33 @@ describe('executeJshFile', () => {
     expect(result.stdout).toContain('not available in the browser');
   });
 
-  it('require("node:crypto") strips prefix and throws browser-unavailable error', async () => {
+  it('require("node:os") strips prefix and throws browser-unavailable error', async () => {
     const ctx = createMockCtx({
-      '/workspace/req-crypto.jsh': `
+      '/workspace/req-os.jsh': `
         try {
-          require('node:crypto');
+          require('node:os');
         } catch(e) {
           console.log(e.message);
         }
       `,
     });
-    const result = await executeJshFile('/workspace/req-crypto.jsh', [], ctx);
+    const result = await executeJshFile('/workspace/req-os.jsh', [], ctx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('not available in the browser');
-    expect(result.stdout).toContain('crypto');
+    expect(result.stdout).toContain('os');
+  });
+
+  it('require("node:crypto") strips prefix and returns the Web Crypto bridge', async () => {
+    const ctx = createMockCtx({
+      '/workspace/req-crypto.jsh': `
+        const crypto = require('node:crypto');
+        const buf = new Uint8Array(8);
+        console.log(crypto.randomFillSync(buf) === buf, typeof crypto.randomUUID());
+      `,
+    });
+    const result = await executeJshFile('/workspace/req-crypto.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('true string');
   });
 });
 
