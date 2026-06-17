@@ -14,23 +14,31 @@ import { speak, speechTextFromMarkdown } from './speak.js';
 
 const log = createLogger('speech:voice-reply');
 
-let pending = false;
+// Tracked as a COUNT, not a boolean: queued dictated turns each call
+// `markVoiceSubmission` before any of them complete, and EVERY turn's
+// completion must balance its own `beginVoiceTurn` so the soundscape's
+// voice-mode gate doesn't latch open and pin later typed turns audible.
+let pendingCount = 0;
 
 /** A dictated submission just went out — the next reply should be spoken. */
 export function markVoiceSubmission(): void {
-  pending = true;
+  pendingCount++;
 }
 
-/** Whether the completing turn was voice-initiated (one-shot). */
+/**
+ * Whether the completing turn was voice-initiated. Decrements the pending
+ * count when positive so N dictated submits → N true consumes → N matching
+ * `endVoiceTurn` calls in the host (begins and ends stay balanced).
+ */
 export function consumeVoiceSubmission(): boolean {
-  const wasPending = pending;
-  pending = false;
-  return wasPending;
+  if (pendingCount <= 0) return false;
+  pendingCount--;
+  return true;
 }
 
-/** Test-only: reset the one-shot flag. */
+/** Test-only: reset the pending-submission count. */
 export function resetVoiceSubmissionForTests(): void {
-  pending = false;
+  pendingCount = 0;
 }
 
 /**

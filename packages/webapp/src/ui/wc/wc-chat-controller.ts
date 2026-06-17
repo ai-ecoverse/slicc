@@ -6,7 +6,11 @@
  * `wc-message-view.ts` mapper instead of hand-built DOM.
  */
 
-import { applyDictationMarkers, consumeDictationFirst } from '../../speech/dictation-priming.js';
+import {
+  applyDictationMarkers,
+  consumeDictationFirst,
+  stripDictationMarkers,
+} from '../../speech/dictation-priming.js';
 import type { AgentEvent, AgentHandle, ChatMessage } from '../types.js';
 import { createCopyRow } from './wc-copy-row.js';
 import { collateLickMessages, daySeparatorEl, messageEls } from './wc-message-view.js';
@@ -216,8 +220,13 @@ export class WcChatController {
     this.#agent.sendMessage(content, message.id, message.attachments);
     try {
       // Attachments ride along so tray followers see the full prompt, not a
-      // text-only echo.
-      this.#onLocalUserMessage?.(content, message.id, message.attachments);
+      // text-only echo. The follower echo is a DISPLAY string — iOS renders
+      // `message.content` verbatim, so dictation markers must be stripped
+      // here (web followers strip at render, but iOS does not). The agent
+      // send and the locally-stored ChatMessage keep the marked form so
+      // replay / compaction keep the priming context.
+      const echo = options?.dictation ? stripDictationMarkers(content) : content;
+      this.#onLocalUserMessage?.(echo, message.id, message.attachments);
     } catch (err) {
       // The broadcast hook is the followers' visibility path; never let a
       // broken broadcaster undo the local send.

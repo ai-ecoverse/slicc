@@ -19,6 +19,27 @@ describe('voice-reply', () => {
     expect(consumeVoiceSubmission()).toBe(false);
   });
 
+  it('queued dictated submissions stack: N marks → N true consumes → none leak', () => {
+    // Two dictated submits queued before either turn completes — the bool
+    // version coalesced these and only consumed one, leaving the second
+    // begin orphaned in the soundscape voice-turn gate.
+    markVoiceSubmission();
+    markVoiceSubmission();
+    expect(consumeVoiceSubmission()).toBe(true);
+    expect(consumeVoiceSubmission()).toBe(true);
+    // Both consumed — a later typed turn must not speak.
+    expect(consumeVoiceSubmission()).toBe(false);
+  });
+
+  it('consume never goes negative when called without a pending mark', () => {
+    expect(consumeVoiceSubmission()).toBe(false);
+    expect(consumeVoiceSubmission()).toBe(false);
+    // A fresh mark still produces exactly one true consume.
+    markVoiceSubmission();
+    expect(consumeVoiceSubmission()).toBe(true);
+    expect(consumeVoiceSubmission()).toBe(false);
+  });
+
   it('speaks the reply as reduced prose', async () => {
     const speakFn = vi.fn().mockResolvedValue({ engine: 'kokoro' });
     await speakReplyMarkdown('**Done!** I shipped the `hero` fix.', speakFn as never);
