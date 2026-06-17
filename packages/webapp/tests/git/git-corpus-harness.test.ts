@@ -428,3 +428,120 @@ describe('git corpus — push / pull offline arg-parsing', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// `git -c <key>=<val>` config overrides — values from the catalogue allowlist
+// (user.email, user.name, init.defaultBranch, commit.gpgsign) must take
+// effect for the single invocation. Unknown keys remain accepted no-ops.
+// ---------------------------------------------------------------------------
+
+describe('git corpus — -c <key>=<val> config overrides take effect', () => {
+  // Verify via `git log --format` (which already reads back the persisted
+  // commit object via isomorphic-git) instead of round-tripping through a
+  // second isomorphic-git client — that keeps the test surface aligned with
+  // the real shell-user verification path.
+  const headEmail = async (dir: string): Promise<string> =>
+    (await git.execute(['log', '--format', '%ae', '-n', '1'], dir)).stdout.trim();
+  const headName = async (dir: string): Promise<string> =>
+    (await git.execute(['log', '--format', '%an', '-n', '1'], dir)).stdout.trim();
+
+  it('-c user.email overrides the author email used by commit', async () => {
+    await seedRepo('/project');
+    await vfs.writeFile('/project/file.txt', 'changed\n');
+    await git.execute(['add', 'file.txt'], '/project');
+    const result = await git.execute(
+      ['-c', 'user.email=override@example.com', 'commit', '-m', 'override email'],
+      '/project'
+    );
+    expect(result.exitCode).toBe(0);
+    expect(await headEmail('/project')).toBe('override@example.com');
+    // Name falls back to the default since only email was overridden.
+    expect(await headName('/project')).toBe('Corpus User');
+  });
+
+  it('-c user.name overrides the author name used by commit', async () => {
+    await seedRepo('/project');
+    await vfs.writeFile('/project/file.txt', 'changed\n');
+    await git.execute(['add', 'file.txt'], '/project');
+    const result = await git.execute(
+      ['-c', 'user.name=Override Name', 'commit', '-m', 'override name'],
+      '/project'
+    );
+    expect(result.exitCode).toBe(0);
+    expect(await headName('/project')).toBe('Override Name');
+    expect(await headEmail('/project')).toBe('corpus@example.com');
+  });
+
+  it('multiple -c flags compose: user.name + user.email both apply', async () => {
+    await seedRepo('/project');
+    await vfs.writeFile('/project/file.txt', 'changed\n');
+    await git.execute(['add', 'file.txt'], '/project');
+    const result = await git.execute(
+      ['-c', 'user.name=Alice', '-c', 'user.email=alice@example.com', 'commit', '-m', 'both'],
+      '/project'
+    );
+    expect(result.exitCode).toBe(0);
+    expect(await headName('/project')).toBe('Alice');
+    expect(await headEmail('/project')).toBe('alice@example.com');
+  });
+
+  it('-c init.defaultBranch overrides the default branch used by init', async () => {
+    const result = await git.execute(['-c', 'init.defaultBranch=trunk', 'init'], '/proj-trunk');
+    expect(result.exitCode).toBe(0);
+    const headRef = await vfs.readTextFile('/proj-trunk/.git/HEAD');
+    expect(headRef.trim()).toBe('ref: refs/heads/trunk');
+  });
+
+  it('explicit --initial-branch wins over -c init.defaultBranch', async () => {
+    const result = await git.execute(
+      ['-c', 'init.defaultBranch=trunk', 'init', '-b', 'develop'],
+      '/proj-explicit'
+    );
+    expect(result.exitCode).toBe(0);
+    const headRef = await vfs.readTextFile('/proj-explicit/.git/HEAD');
+    expect(headRef.trim()).toBe('ref: refs/heads/develop');
+  });
+
+  it('-c commit.gpgsign=false is accepted and is a safe no-op (we do not sign)', async () => {
+    await seedRepo('/project');
+    await vfs.writeFile('/project/file.txt', 'changed\n');
+    await git.execute(['add', 'file.txt'], '/project');
+    const result = await git.execute(
+      ['-c', 'commit.gpgsign=false', 'commit', '-m', 'unsigned'],
+      '/project'
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain('is not a git command');
+    // Identity remains the default — gpgsign is a no-op, not an identity override.
+    expect(await headEmail('/project')).toBe('corpus@example.com');
+  });
+
+  it('unknown -c keys remain accepted no-ops (preserves prior behavior)', async () => {
+    await seedRepo('/project');
+    await vfs.writeFile('/project/file.txt', 'changed\n');
+    await git.execute(['add', 'file.txt'], '/project');
+    const result = await git.execute(
+      ['-c', 'totally.unknown.key=whatever', 'commit', '-m', 'msg'],
+      '/project'
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain('is not a git command');
+    expect(await headEmail('/project')).toBe('corpus@example.com');
+  });
+
+  it('overrides do not leak across invocations: next commit uses the default identity', async () => {
+    await seedRepo('/project');
+    await vfs.writeFile('/project/file.txt', 'first\n');
+    await git.execute(['add', 'file.txt'], '/project');
+    await git.execute(
+      ['-c', 'user.email=ephemeral@example.com', 'commit', '-m', 'with override'],
+      '/project'
+    );
+    expect(await headEmail('/project')).toBe('ephemeral@example.com');
+
+    await vfs.writeFile('/project/file.txt', 'second\n');
+    await git.execute(['add', 'file.txt'], '/project');
+    await git.execute(['commit', '-m', 'no override'], '/project');
+    expect(await headEmail('/project')).toBe('corpus@example.com');
+  });
+});

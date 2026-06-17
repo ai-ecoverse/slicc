@@ -106,6 +106,13 @@ export class GitCommands {
    * subsequent call without env doesn't accidentally inherit it.
    */
   private currentEnv?: ReadonlyMap<string, string> | Readonly<Record<string, string>>;
+  /**
+   * Per-invocation config overrides parsed from leading `-c key=val` flags.
+   * Honored for the allowlist below; unknown keys remain accepted no-ops.
+   * Cleared at the end of every `execute()` invocation so overrides do not
+   * leak across calls.
+   */
+  private currentConfigOverrides?: ReadonlyMap<string, string>;
 
   constructor(private options: GitCommandsOptions) {
     // Route through a VirtualFS-backed adapter so isomorphic-git sees mount
@@ -194,10 +201,12 @@ export class GitCommands {
 
   /**
    * Resolve the git author identity for an operation, mirroring git's lookup
-   * order: local repo config → global config → in-memory defaults from the
-   * constructor. This way values written to /workspace/.gitconfig (e.g. by
-   * the GitHub OAuth provider or by `git config --global`) take effect on
-   * subsequent commits without requiring a fresh GitCommands instance.
+   * order: per-invocation `-c` overrides → local repo config → global config →
+   * in-memory defaults from the constructor. This way values written to
+   * /workspace/.gitconfig (e.g. by the GitHub OAuth provider or by
+   * `git config --global`) take effect on subsequent commits without
+   * requiring a fresh GitCommands instance, while `git -c user.email=…` wins
+   * for a single invocation (matches real git).
    */
   private async resolveAuthor(cwd: string): Promise<{ name: string; email: string }> {
     const readLocal = async (key: string): Promise<string | undefined> => {
@@ -207,12 +216,15 @@ export class GitCommands {
         return undefined;
       }
     };
+    const overrides = this.currentConfigOverrides;
     const globalFs = await this.getGlobalFs();
     const name =
+      overrides?.get('user.name') ??
       (await readLocal('user.name')) ??
       (await readGlobalGitConfigValue(globalFs, 'user.name')) ??
       this.authorName;
     const email =
+      overrides?.get('user.email') ??
       (await readLocal('user.email')) ??
       (await readGlobalGitConfigValue(globalFs, 'user.email')) ??
       this.authorEmail;
@@ -258,57 +270,65 @@ export class GitCommands {
     }
 
     this.currentEnv = env;
+    this.currentConfigOverrides = parsed.configOverrides;
     try {
       await this.loadGithubToken();
+      // NB: every async dispatch below MUST be `return await`, not `return`.
+      // The `finally` block clears `currentEnv` / `currentConfigOverrides`,
+      // and per JS spec a bare `return promise` in a try block runs the
+      // finally synchronously after the expression evaluates (i.e. before
+      // the returned promise resolves) — clearing the overrides while the
+      // subcommand is still mid-await and breaking `-c key=val` for any
+      // consumer that reads them after its first await.
       switch (command) {
         case 'init':
-          return this.init(effectiveCwd, rest);
+          return await this.init(effectiveCwd, rest);
         case 'clone':
-          return this.clone(effectiveCwd, rest);
+          return await this.clone(effectiveCwd, rest);
         case 'add':
-          return this.add(effectiveCwd, rest);
+          return await this.add(effectiveCwd, rest);
         case 'status':
-          return this.status(effectiveCwd, rest);
+          return await this.status(effectiveCwd, rest);
         case 'commit':
-          return this.commit(effectiveCwd, rest);
+          return await this.commit(effectiveCwd, rest);
         case 'log':
-          return this.log(effectiveCwd, rest);
+          return await this.log(effectiveCwd, rest);
         case 'branch':
-          return this.branch(effectiveCwd, rest);
+          return await this.branch(effectiveCwd, rest);
         case 'checkout':
-          return this.checkout(effectiveCwd, rest);
+          return await this.checkout(effectiveCwd, rest);
         case 'diff':
-          return this.diff(effectiveCwd, rest);
+          return await this.diff(effectiveCwd, rest);
         case 'show':
-          return this.show(effectiveCwd, rest);
+          return await this.show(effectiveCwd, rest);
         case 'remote':
-          return this.remote(effectiveCwd, rest);
+          return await this.remote(effectiveCwd, rest);
         case 'fetch':
-          return this.fetch(effectiveCwd, rest);
+          return await this.fetch(effectiveCwd, rest);
         case 'pull':
-          return this.pull(effectiveCwd, rest);
+          return await this.pull(effectiveCwd, rest);
         case 'push':
-          return this.push(effectiveCwd, rest);
+          return await this.push(effectiveCwd, rest);
         case 'merge':
-          return this.merge(effectiveCwd, rest);
+          return await this.merge(effectiveCwd, rest);
         case 'reset':
-          return this.reset(effectiveCwd, rest);
+          return await this.reset(effectiveCwd, rest);
         case 'config':
-          return this.config(effectiveCwd, rest);
+          return await this.config(effectiveCwd, rest);
         case 'tag':
-          return this.tag(effectiveCwd, rest);
+          return await this.tag(effectiveCwd, rest);
         case 'ls-files':
-          return this.lsFiles(effectiveCwd, rest);
+          return await this.lsFiles(effectiveCwd, rest);
         case 'show-ref':
-          return this.showRef(effectiveCwd, rest);
+          return await this.showRef(effectiveCwd, rest);
         case 'stash':
-          return this.stash(effectiveCwd, rest);
+          return await this.stash(effectiveCwd, rest);
         case 'rm':
-          return this.rm(effectiveCwd, rest);
+          return await this.rm(effectiveCwd, rest);
         case 'mv':
-          return this.mv(effectiveCwd, rest);
+          return await this.mv(effectiveCwd, rest);
         case 'rev-parse':
-          return this.revParse(effectiveCwd, rest);
+          return await this.revParse(effectiveCwd, rest);
         case 'help':
           return this.help();
         case 'version':
@@ -329,6 +349,7 @@ export class GitCommands {
       };
     } finally {
       this.currentEnv = undefined;
+      this.currentConfigOverrides = undefined;
     }
   }
 
@@ -338,9 +359,10 @@ export class GitCommands {
    *   `--work-tree[=<dir>]`, `--help` / `-h`, `--version`.
    *
    * The first non-flag token is the subcommand; flags after it belong to the
-   * subcommand and are left untouched. `-c` overrides are currently consumed
-   * but not applied (we accept the syntax so they don't fall through to the
-   * "not a git command" branch — see #1033-2).
+   * subcommand and are left untouched. `-c key=val` overrides are collected
+   * into a per-invocation map; known keys (see `resolveAuthor` / `init`) take
+   * effect, unknown keys remain accepted no-ops so they don't fall through to
+   * the "not a git command" branch — see #1033-2.
    */
   private parseGlobalFlags(
     args: string[],
@@ -350,10 +372,12 @@ export class GitCommands {
     remainingArgs: string[];
     helpRequested: boolean;
     versionRequested: boolean;
+    configOverrides: ReadonlyMap<string, string>;
   } {
     let effectiveCwd = cwd;
     let helpRequested = false;
     let versionRequested = false;
+    const configOverrides = new Map<string, string>();
 
     let i = 0;
     while (i < args.length) {
@@ -365,6 +389,10 @@ export class GitCommands {
       if (step.kind === 'help') helpRequested = true;
       if (step.kind === 'version') versionRequested = true;
       if (step.kind === 'cwd' && step.cwd !== undefined) effectiveCwd = step.cwd;
+      if (step.kind === 'config' && step.key !== undefined) {
+        // Last `-c <key>=<val>` wins, matching real git behavior.
+        configOverrides.set(step.key, step.value ?? '');
+      }
       i += step.consume;
     }
 
@@ -373,14 +401,15 @@ export class GitCommands {
       remainingArgs: args.slice(i),
       helpRequested,
       versionRequested,
+      configOverrides,
     };
   }
 
   /**
    * Classify a single leading flag for `parseGlobalFlags`. Returns how many
-   * args to consume and any side-effect payload (cwd, help, version) for the
-   * caller to apply. `kind:'stop'` means the flag is unknown and should fall
-   * through to subcommand parsing.
+   * args to consume and any side-effect payload (cwd, help, version, config)
+   * for the caller to apply. `kind:'stop'` means the flag is unknown and
+   * should fall through to subcommand parsing.
    */
   private classifyGlobalFlag(
     arg: string,
@@ -391,6 +420,7 @@ export class GitCommands {
     | { kind: 'help'; consume: number }
     | { kind: 'version'; consume: number }
     | { kind: 'cwd'; consume: number; cwd: string | undefined }
+    | { kind: 'config'; consume: number; key: string | undefined; value: string | undefined }
     | { kind: 'stop'; consume: 0 } {
     if (arg === '--help' || arg === '-h') return { kind: 'help', consume: 1 };
     if (arg === '--version') return { kind: 'version', consume: 1 };
@@ -403,8 +433,16 @@ export class GitCommands {
       return { kind: 'cwd', consume: 2, cwd };
     }
     if (arg === '-c') {
-      // Config override: consume `-c key=val` (two args) and ignore.
-      return { kind: 'consume', consume: next === undefined ? 1 : 2 };
+      // `-c key=val` — capture the override; malformed (no `=`) is accepted
+      // as a no-op for back-compat. Real git only accepts the `key=val` form.
+      if (next === undefined) return { kind: 'consume', consume: 1 };
+      const eq = next.indexOf('=');
+      if (eq < 0) {
+        return { kind: 'config', consume: 2, key: next, value: undefined };
+      }
+      const key = next.slice(0, eq);
+      const value = next.slice(eq + 1);
+      return { kind: 'config', consume: 2, key, value };
     }
     if (arg.startsWith('--git-dir=') || arg.startsWith('--work-tree=')) {
       return { kind: 'consume', consume: 1 };
@@ -461,7 +499,13 @@ Available commands:
   }
 
   private async init(cwd: string, args: string[]): Promise<GitCommandResult> {
-    const defaultBranch = this.parseArg(args, '--initial-branch', '-b') ?? 'main';
+    // Precedence (matches real git): explicit `--initial-branch`/`-b` flag
+    // wins over a per-invocation `-c init.defaultBranch=…` override, which
+    // wins over the built-in `main` default.
+    const defaultBranch =
+      this.parseArg(args, '--initial-branch', '-b') ??
+      this.currentConfigOverrides?.get('init.defaultBranch') ??
+      'main';
 
     await git.init({
       fs: this.lfs,
