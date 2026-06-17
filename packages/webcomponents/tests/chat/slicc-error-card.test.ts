@@ -282,4 +282,100 @@ describe('slicc-error-card', () => {
       expect(seen).toHaveLength(1);
     });
   });
+
+  describe('action="change-model" variant', () => {
+    it('reflects action="change-model" through the property', () => {
+      const el = mount();
+      el.action = 'change-model';
+      expect(el.getAttribute('action')).toBe('change-model');
+      el.setAttribute('action', 'retry');
+      expect(el.action).toBe('retry');
+      // Unknown values normalize back to retry.
+      el.setAttribute('action', 'banana');
+      expect(el.action).toBe('retry');
+    });
+
+    it('defaults the button label to "Change model"', () => {
+      const el = mount({ message: 'invalid model id', action: 'change-model' });
+      expect(el.shadowRoot?.querySelector('[part="button"]')?.textContent?.trim()).toBe(
+        'Change model'
+      );
+    });
+
+    it('still honors an explicit button-label override', () => {
+      const el = mount({
+        message: 'invalid model id',
+        action: 'change-model',
+        'button-label': 'Pick a model',
+      });
+      expect(el.shadowRoot?.querySelector('[part="button"]')?.textContent?.trim()).toBe(
+        'Pick a model'
+      );
+    });
+
+    it('renders the lucide sparkles glyph instead of rotate-ccw or settings', () => {
+      const el = mount({ message: 'invalid model id', action: 'change-model' });
+      const btn = el.shadowRoot?.querySelector('[part="button"]') as HTMLButtonElement;
+      const svg = btn.querySelector('svg');
+      expect(svg).toBeInstanceOf(SVGSVGElement);
+      expect(svg?.innerHTML).toBe(iconShape('sparkles', 12));
+      expect(svg?.innerHTML).not.toBe(iconShape('rotate-ccw', 12));
+      expect(svg?.innerHTML).not.toBe(iconShape('settings', 12));
+    });
+
+    it('dispatches slicc-error-change-model (bubbling, composed) on click', () => {
+      const el = mount({
+        message: 'invalid model id',
+        action: 'change-model',
+        'message-id': 'err-cm',
+      });
+      const changeSeen: CustomEvent[] = [];
+      const retrySeen: CustomEvent[] = [];
+      const settingsSeen: CustomEvent[] = [];
+      document.body.addEventListener('slicc-error-change-model', (e) =>
+        changeSeen.push(e as CustomEvent)
+      );
+      document.body.addEventListener('slicc-error-retry', (e) => retrySeen.push(e as CustomEvent));
+      document.body.addEventListener('slicc-error-open-settings', (e) =>
+        settingsSeen.push(e as CustomEvent)
+      );
+      const btn = el.shadowRoot?.querySelector('[part="button"]') as HTMLButtonElement;
+      btn.click();
+      expect(changeSeen).toHaveLength(1);
+      expect(changeSeen[0].bubbles).toBe(true);
+      expect(changeSeen[0].composed).toBe(true);
+      expect(changeSeen[0].detail).toEqual({ messageId: 'err-cm' });
+      // Sibling action events are mutually exclusive in change-model mode.
+      expect(retrySeen).toHaveLength(0);
+      expect(settingsSeen).toHaveLength(0);
+    });
+
+    it('exposes a programmatic changeModel() that dispatches the same event', () => {
+      const el = mount({ message: 'oops', 'message-id': 'err-2', action: 'change-model' });
+      const spy = vi.fn();
+      el.addEventListener('slicc-error-change-model', spy);
+      el.changeModel();
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect((spy.mock.calls[0][0] as CustomEvent).detail).toEqual({ messageId: 'err-2' });
+    });
+
+    it('re-renders when the action attribute toggles between all three modes', () => {
+      const el = mount({ message: 'oops' });
+      expect(el.shadowRoot?.querySelector('[part="button"]')?.textContent?.trim()).toBe(
+        'Try again'
+      );
+      el.setAttribute('action', 'change-model');
+      expect(el.shadowRoot?.querySelector('[part="button"]')?.textContent?.trim()).toBe(
+        'Change model'
+      );
+      el.setAttribute('action', 'settings');
+      expect(el.shadowRoot?.querySelector('[part="button"]')?.textContent?.trim()).toBe(
+        'Open Settings'
+      );
+      el.removeAttribute('action');
+      expect(el.shadowRoot?.querySelector('[part="button"]')?.textContent?.trim()).toBe(
+        'Try again'
+      );
+    });
+  });
 });

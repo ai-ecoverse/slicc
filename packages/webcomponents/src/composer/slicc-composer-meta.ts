@@ -610,6 +610,18 @@ export class SliccComposerMeta extends HTMLElement {
     return this.#menuOpen;
   }
 
+  /**
+   * Programmatic surface that mirrors a click on the model pill. Hosts call
+   * this when they want to route a non-pill action to the picker (e.g. the
+   * `slicc-error-change-model` event off `<slicc-error-card>`). No-op when
+   * the pill is in the no-accounts "Add AI" state — the host should route
+   * that case to its account-settings dialog instead, same as a real click.
+   */
+  openMenu(): void {
+    if (this.#noModels) return;
+    this.#openMenu();
+  }
+
   #toggleMenu(): void {
     this.#menuOpen ? this.#closeMenu() : this.#openMenu();
   }

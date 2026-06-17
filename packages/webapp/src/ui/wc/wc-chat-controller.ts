@@ -467,16 +467,26 @@ export class WcChatController {
   }
 
   /**
-   * Re-run the user turn that produced THIS error card through the existing
+   * Re-run the input that produced THIS error card through the existing
    * agent send path (`#agent.sendMessage`) — no new agent API, no duplicate
    * user bubble. The card forwards its `message-id` (the failed error
-   * message's id) on the event; we walk backward from that message to find the
-   * user turn that produced it, so a click on an older error card or a retry
-   * after a newer prompt was queued still re-runs the RIGHT turn. A retry
-   * while a turn is in flight is dropped to avoid double-submissions. Lick /
-   * delegation user-rows are skipped: they are not user turns. Falls back to
-   * the legacy "last user message in the whole thread" scan if the event
-   * carries no messageId (older callers / non-card dispatchers).
+   * message's id) on the event; we walk backward from that message to find
+   * the originating input. A retry while a turn is in flight is dropped to
+   * avoid double-submissions. Falls back to the legacy "scan the whole
+   * thread" when the event carries no messageId (older callers / non-card
+   * dispatchers).
+   *
+   * Two replay sources, in priority order:
+   * 1. **Immediately-preceding lick.** Welcome / webhook / cron licks DO
+   *    trigger cone turns (e.g. the onboarding welcome lick is the very
+   *    first input the cone sees). If the cone errored on the lick — common
+   *    for an invalid-model fail on the first turn after sign-in — there is
+   *    no user message to fall back to. Replaying the lick body so the cone
+   *    has context is the whole point of the change-model affordance.
+   * 2. **Last user-typed message** otherwise. Lick rows further up the
+   *    thread are skipped; only the lick directly above the error counts as
+   *    the originating turn. Delegation rows are skipped in both modes —
+   *    they are scoop-internal, never a user-driven retry target.
    */
   #handleErrorRetry(event: Event): void {
     if (this.#processing) return;
@@ -489,6 +499,13 @@ export class WcChatController {
       // If the id is unknown (stale card, history reload), fall back to the
       // legacy whole-thread scan rather than silently dropping the retry.
     }
+    // (1) Immediately-preceding lick — the welcome-lick onboarding case.
+    const prev = startIndex > 0 ? this.#messages[startIndex - 1] : undefined;
+    if (prev && prev.source === 'lick') {
+      this.#agent.sendMessage(prev.content, uid(), prev.attachments);
+      return;
+    }
+    // (2) Last user-typed message in the thread (skip licks / delegations).
     let target: ChatMessage | undefined;
     for (let i = startIndex - 1; i >= 0; i--) {
       const m = this.#messages[i];

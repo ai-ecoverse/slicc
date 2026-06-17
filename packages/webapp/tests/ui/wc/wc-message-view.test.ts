@@ -22,6 +22,7 @@ import {
   BASH_ICONS,
   buildThreadChildren,
   collateLickMessages,
+  isInvalidModelError,
   isNoApiKeyError,
   messageEls,
   NO_API_KEY_ERROR_PREFIX,
@@ -192,6 +193,63 @@ describe('messageEls', () => {
     expect(bubble.shadowRoot?.querySelectorAll('.attachment-chip').length).toBe(
       message?.attachments?.length ?? -1
     );
+  });
+
+  it('renders a plain error message as a retry-action error card', () => {
+    const [card] = messageEls({
+      id: 'e1',
+      role: 'assistant',
+      content: 'rate limited',
+      timestamp: 1,
+      error: true,
+    });
+    expect(card.tagName.toLowerCase()).toBe('slicc-error-card');
+    // No `action` attribute → defaults to the existing 'retry' CTA.
+    expect(card.getAttribute('action')).toBeNull();
+    expect(card.getAttribute('message-id')).toBe('e1');
+  });
+
+  it('flips to action="change-model" when the body carries the invalid-model marker', () => {
+    // The Bedrock CAMP wrapper (`providers/built-in/bedrock-camp.ts`) prefixes
+    // the upstream "The provided model identifier is invalid" with its own
+    // validation envelope. Detection MUST survive both shapes.
+    const [card] = messageEls({
+      id: 'e-im',
+      role: 'assistant',
+      content:
+        'Validation error: Bedrock CAMP API error (400): The provided model identifier is invalid.',
+      timestamp: 1,
+      error: true,
+    });
+    expect(card.tagName.toLowerCase()).toBe('slicc-error-card');
+    expect(card.getAttribute('action')).toBe('change-model');
+  });
+});
+
+describe('isInvalidModelError', () => {
+  it('matches the Bedrock CAMP wrapped form (case-insensitive)', () => {
+    expect(
+      isInvalidModelError(
+        'Validation error: Bedrock CAMP API error (400): The provided model identifier is invalid.'
+      )
+    ).toBe(true);
+    expect(isInvalidModelError('the PROVIDED Model Identifier is INVALID — switch models')).toBe(
+      true
+    );
+  });
+
+  it('matches the bare upstream substring on other providers', () => {
+    expect(isInvalidModelError('AccessDenied: The provided model identifier is invalid')).toBe(
+      true
+    );
+  });
+
+  it('rejects unrelated errors, empty strings, and nullish input', () => {
+    expect(isInvalidModelError('rate limited')).toBe(false);
+    expect(isInvalidModelError('invalid api key')).toBe(false);
+    expect(isInvalidModelError('')).toBe(false);
+    expect(isInvalidModelError(null)).toBe(false);
+    expect(isInvalidModelError(undefined)).toBe(false);
   });
 });
 

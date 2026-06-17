@@ -80,7 +80,25 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
     );
   };
   refreshModels();
-  await wireModelPicker(refs, client);
+  // After the invalid-model error card opens the picker via
+  // `slicc-error-change-model`, the next model pick should auto-replay the
+  // failed turn so the user doesn't have to also click "Try again". The
+  // change-model handler stamps this with the failed message id; the
+  // model-picker `model-change` handler consumes it on the next pick by
+  // dispatching `slicc-error-retry` (with that id) onto the thread.
+  let pendingReplayMessageId: string | null = null;
+  await wireModelPicker(refs, client, () => {
+    const id = pendingReplayMessageId;
+    pendingReplayMessageId = null;
+    if (id == null) return;
+    refs.thread?.dispatchEvent(
+      new CustomEvent('slicc-error-retry', {
+        detail: { messageId: id },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  });
 
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
   const applyIdentity = (): void => {
@@ -168,43 +186,7 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   refs.avatarMenu.addEventListener('slicc-avatar-menu-toggle', (event) => {
     if ((event as CustomEvent<{ open?: boolean }>).detail?.open) syncMenuItems();
   });
-  const handleTrayAction = (id: string): boolean => {
-    if (id === 'tray-enable') {
-      void resolveTrayWorkerBaseUrl({
-        locationHref: window.location.href,
-        storage: window.localStorage,
-        envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
-        defaultWorkerBaseUrl: __DEV__
-          ? DEFAULT_STAGING_TRAY_WORKER_BASE_URL
-          : DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
-      }).then((workerBaseUrl) => {
-        if (!workerBaseUrl) return log.error('tray enable: no worker base URL resolvable');
-        window.dispatchEvent(new CustomEvent('slicc:tray-leave', { detail: { workerBaseUrl } }));
-      });
-      return true;
-    }
-    if (id === 'tray-copy') {
-      const joinUrl = getLeaderTrayRuntimeStatus().session?.joinUrl;
-      if (joinUrl) {
-        void copyTextToClipboard(joinUrl).catch(() => undefined);
-        void import('../legacy-styles.js')
-          .then(({ loadLegacyDialogStyles }) => loadLegacyDialogStyles())
-          .then(async () => {
-            const { showSyncEnabledDialog } = await import('../sync-dialog.js');
-            showSyncEnabledDialog({ joinUrl, copied: true });
-          })
-          .catch((err) => log.error('sync dialog failed', err));
-      }
-      return true;
-    }
-    if (id === 'tray-stop') {
-      window.dispatchEvent(
-        new CustomEvent('slicc:tray-leave', { detail: { workerBaseUrl: null } })
-      );
-      return true;
-    }
-    return false;
-  };
+  const handleTrayAction = (id: string): boolean => handleTrayActionId(id, log);
 
   // The WC-native settings surface (slicc-dialog chrome). The legacy
   // provider-settings dialog survives only for the onboarding-only
@@ -247,7 +229,94 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   // this WC shell, so the listener covers them both.
   refs.thread?.addEventListener('slicc-error-open-settings', openSettings);
 
+  wireChangeModelEvent({
+    refs,
+    log,
+    openSettings,
+    setPendingReplayMessageId: (id) => {
+      pendingReplayMessageId = id;
+    },
+  });
+
   wireAccountsChangedResync({ refreshModels, applyIdentity, client });
+}
+
+/**
+ * Dispatch the picked tray menu action. Returns `true` when the id mapped to
+ * a tray action so the caller can short-circuit; `false` lets the caller
+ * keep matching other ids (settings / popout). Extracted as a top-level
+ * helper to keep `wireWcNav` under the per-function line budget.
+ */
+function handleTrayActionId(id: string, log: BootStageLogger): boolean {
+  if (id === 'tray-enable') {
+    void resolveTrayWorkerBaseUrl({
+      locationHref: window.location.href,
+      storage: window.localStorage,
+      envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
+      defaultWorkerBaseUrl: __DEV__
+        ? DEFAULT_STAGING_TRAY_WORKER_BASE_URL
+        : DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
+    }).then((workerBaseUrl) => {
+      if (!workerBaseUrl) return log.error('tray enable: no worker base URL resolvable');
+      window.dispatchEvent(new CustomEvent('slicc:tray-leave', { detail: { workerBaseUrl } }));
+    });
+    return true;
+  }
+  if (id === 'tray-copy') {
+    const joinUrl = getLeaderTrayRuntimeStatus().session?.joinUrl;
+    if (joinUrl) {
+      void copyTextToClipboard(joinUrl).catch(() => undefined);
+      void import('../legacy-styles.js')
+        .then(({ loadLegacyDialogStyles }) => loadLegacyDialogStyles())
+        .then(async () => {
+          const { showSyncEnabledDialog } = await import('../sync-dialog.js');
+          showSyncEnabledDialog({ joinUrl, copied: true });
+        })
+        .catch((err) => log.error('sync dialog failed', err));
+    }
+    return true;
+  }
+  if (id === 'tray-stop') {
+    window.dispatchEvent(new CustomEvent('slicc:tray-leave', { detail: { workerBaseUrl: null } }));
+    return true;
+  }
+  return false;
+}
+
+/**
+ * The invalid-model error card (see `wc-message-view.ts:errorCardEl`) flips
+ * its CTA to "Change model" and bubbles `slicc-error-change-model` up through
+ * the thread. Route it to the composer model picker so the user can pick a
+ * working model without re-running the same failed turn first; stamp the
+ * failed message id so the NEXT model-change auto-replays the originating
+ * turn (the chat controller's `#handleErrorRetry` walks back from that id
+ * through any preceding lick — the onboarding welcome lick is the common
+ * case). Falls back to the account-settings dialog when there are no models
+ * yet (no accounts) — same affordance as the "Add AI" pill click.
+ */
+function wireChangeModelEvent(opts: {
+  refs: WcShellRefs;
+  log: BootStageLogger;
+  openSettings(): void;
+  setPendingReplayMessageId(id: string | null): void;
+}): void {
+  const { refs, log, openSettings, setPendingReplayMessageId } = opts;
+  refs.thread?.addEventListener('slicc-error-change-model', (event) => {
+    setPendingReplayMessageId(
+      (event as CustomEvent<{ messageId?: string | null }>).detail?.messageId ?? null
+    );
+    const meta = refs.composerMeta as HTMLElement & { openMenu?: () => void };
+    const models = (meta as HTMLElement & { models?: unknown[] }).models;
+    if (Array.isArray(models) && models.length === 0) {
+      openSettings();
+      return;
+    }
+    try {
+      meta.openMenu?.();
+    } catch (err) {
+      log.error('opening composer model picker failed', err);
+    }
+  });
 }
 
 /**
@@ -256,7 +325,11 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
  * and the active model's reasoning capability toggles `no-thinking` on the
  * composer so the thinking-effort pill only shows for a model that supports it.
  */
-async function wireModelPicker(refs: WcShellRefs, client: OffscreenClient): Promise<void> {
+async function wireModelPicker(
+  refs: WcShellRefs,
+  client: OffscreenClient,
+  onAfterModelChange?: () => void
+): Promise<void> {
   const { resolveModelById, resolveCurrentModel, setSelectedModelId } = await import(
     '../provider-settings.js'
   );
@@ -289,6 +362,10 @@ async function wireModelPicker(refs: WcShellRefs, client: OffscreenClient): Prom
     setSelectedModelId(id);
     applyThinkingCapability(id);
     client.updateModel();
+    // The change-model CTA stages a pending retry: now that a new model is
+    // selected, fire it so the originating turn re-runs without a second
+    // click. The hook is a no-op when no retry is staged.
+    onAfterModelChange?.();
   });
 }
 

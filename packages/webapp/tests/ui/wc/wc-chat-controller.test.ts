@@ -240,7 +240,30 @@ describe('WcChatController', () => {
     expect(agent.sent).toHaveLength(0);
   });
 
-  it('skips lick rows when finding the last user turn for retry', () => {
+  it('replays an immediately-preceding lick (welcome-lick onboarding case)', () => {
+    // The onboarding welcome lick is the very first input the cone sees;
+    // an invalid-model fail on that turn leaves no user-typed message to
+    // replay. The retry handler must resubmit the lick body so the cone
+    // gets context (else the user sees "I don't have any context").
+    controller.addLickMessage('l1', '[Welcome] hello', 'webhook', Date.now());
+    agent.sent.length = 0;
+    agent.emit({ type: 'error', error: 'rate limited' });
+    const card = thread.querySelector('slicc-error-card');
+    const errorId = card?.getAttribute('message-id') ?? null;
+    card?.dispatchEvent(
+      new CustomEvent('slicc-error-retry', {
+        detail: { messageId: errorId },
+        bubbles: true,
+        composed: true,
+      })
+    );
+    expect(agent.sent).toHaveLength(1);
+    expect(agent.sent[0].text).toBe('[Welcome] hello');
+  });
+
+  it('replays the lick immediately before the error even when an older user turn exists', () => {
+    // Lick directly above the error is the originating turn; the older
+    // user message is not what produced this error.
     controller.sendUserMessage('first');
     controller.addLickMessage('l1', '[Webhook Event: x]', 'webhook', Date.now());
     agent.sent.length = 0;
@@ -255,7 +278,27 @@ describe('WcChatController', () => {
       })
     );
     expect(agent.sent).toHaveLength(1);
-    expect(agent.sent[0].text).toBe('first');
+    expect(agent.sent[0].text).toBe('[Webhook Event: x]');
+  });
+
+  it('falls back to the last user turn when no lick sits directly above the error', () => {
+    // Sequence: lick → user → error. The user message is the originating
+    // turn; licks further up the thread are skipped.
+    controller.addLickMessage('l1', '[Webhook Event: x]', 'webhook', Date.now());
+    controller.sendUserMessage('after the lick');
+    agent.sent.length = 0;
+    agent.emit({ type: 'error', error: 'rate limited' });
+    const card = thread.querySelector('slicc-error-card');
+    const errorId = card?.getAttribute('message-id') ?? null;
+    card?.dispatchEvent(
+      new CustomEvent('slicc-error-retry', {
+        detail: { messageId: errorId },
+        bubbles: true,
+        composed: true,
+      })
+    );
+    expect(agent.sent).toHaveLength(1);
+    expect(agent.sent[0].text).toBe('after the lick');
   });
 
   it('falls back to the legacy whole-thread scan when detail.messageId is absent', () => {
