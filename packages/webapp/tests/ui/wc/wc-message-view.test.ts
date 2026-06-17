@@ -377,6 +377,31 @@ describe('tool presentation', () => {
     }
   });
 
+  // Prototype-chain hardening: `in`/bracket access on plain objects walks the
+  // prototype chain, so a segment whose program literally is `toString` (or
+  // any Object.prototype member) would otherwise score as a real tool and the
+  // lookup would return an inherited function — which crashes `hasIcon()`
+  // (`name.replace is not a function`) while rendering the row.
+  it('bash segments named after Object.prototype members fall back to terminal', () => {
+    const cases: string[] = [
+      'cd /tmp && toString',
+      'cd /tmp && hasOwnProperty',
+      'cd /tmp && valueOf',
+      'cd /tmp && constructor',
+    ];
+    for (const command of cases) {
+      const [, row] = messageEls(call('bash', { command }, 'ok'));
+      expect(row.getAttribute('icon'), command).toBe('terminal');
+    }
+  });
+
+  it('tool names equal to Object.prototype members fall back to wrench', () => {
+    for (const name of ['toString', 'hasOwnProperty', 'valueOf', 'constructor']) {
+      const [, row] = messageEls(call(name, {}, 'ok'));
+      expect(row.getAttribute('icon'), name).toBe('wrench');
+    }
+  });
+
   it('edit bodies show old/new with the diff classes; writes show added content', () => {
     const [, editRow] = messageEls(
       call('edit_file', { path: '/a.ts', old_string: 'before', new_string: 'after' }, 'ok')

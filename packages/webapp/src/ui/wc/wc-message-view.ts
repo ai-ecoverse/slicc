@@ -133,6 +133,10 @@ const HOUSEKEEPING_PROGRAMS: ReadonlySet<string> = new Set([
  * highest scorer — first wins on ties. When every segment is housekeeping
  * (e.g. `cd /tmp && pwd`), the first one still wins so the row icon stays
  * deterministic instead of going empty.
+ *
+ * The segment split is purely textual and does NOT honor shell quoting or
+ * comments — deliberate, since worst case is a slightly-off icon, never a
+ * crash.
  */
 export function bashIconProgram(command: string): string {
   const segments = command.split(/&&|\|\||[;|\n]/);
@@ -140,7 +144,7 @@ export function bashIconProgram(command: string): string {
   for (const seg of segments) {
     const prog = bashProgram(seg);
     if (!prog) continue;
-    const score = HOUSEKEEPING_PROGRAMS.has(prog) ? 1 : prog in BASH_ICONS ? 3 : 2;
+    const score = HOUSEKEEPING_PROGRAMS.has(prog) ? 1 : Object.hasOwn(BASH_ICONS, prog) ? 3 : 2;
     if (!best || score > best.score) best = { program: prog, score };
   }
   return best?.program ?? '';
@@ -239,10 +243,11 @@ export const TOOL_ICONS: Readonly<Record<string, string>> = {
  *  falls back to a known-good generic instead of a blank `<svg>` placeholder. */
 export function toolIcon(call: Pick<ToolCall, 'name' | 'input'>): string {
   if (call.name === 'bash') {
-    const picked = BASH_ICONS[bashIconProgram(bashCommand(call.input))] ?? 'terminal';
+    const key = bashIconProgram(bashCommand(call.input));
+    const picked = Object.hasOwn(BASH_ICONS, key) ? BASH_ICONS[key] : 'terminal';
     return hasIcon(picked) ? picked : 'terminal';
   }
-  const picked = TOOL_ICONS[call.name] ?? 'wrench';
+  const picked = Object.hasOwn(TOOL_ICONS, call.name) ? TOOL_ICONS[call.name] : 'wrench';
   return hasIcon(picked) ? picked : 'wrench';
 }
 
