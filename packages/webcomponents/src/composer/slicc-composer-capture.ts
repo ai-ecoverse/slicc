@@ -694,8 +694,11 @@ export class SliccComposerCapture extends HTMLElement {
     this.#recorder = recorder;
     this.#recordStartedAt = Date.now();
     // MediaRecorder doesn't reliably pick up an audio-track swap mid-flight,
-    // so lock the mic picker until recording stops.
+    // so lock the mic picker until recording stops. Lock the camera picker
+    // too — switching cameras would stop the video tracks the recorder is
+    // bound to and produce a broken recording.
     this.#audioSelect.disabled = true;
+    this.#select.disabled = true;
     this.#timer.hidden = false;
     this.#timer.textContent = formatElapsed(0);
     this.#timerHandle = setInterval(() => {
@@ -723,6 +726,7 @@ export class SliccComposerCapture extends HTMLElement {
     this.#chunks = [];
     this.#recorder = null;
     if (this.#audioSelect) this.#audioSelect.disabled = false;
+    if (this.#select) this.#select.disabled = false;
     const dataUrl = typeof URL !== 'undefined' ? URL.createObjectURL(blob) : undefined;
     this.#finishCapture({
       kind: 'video',
@@ -750,6 +754,7 @@ export class SliccComposerCapture extends HTMLElement {
     this.#recorder = null;
     this.#chunks = [];
     if (this.#audioSelect) this.#audioSelect.disabled = false;
+    if (this.#select) this.#select.disabled = false;
     if (recorder) {
       recorder.ondataavailable = null;
       recorder.onstop = null;

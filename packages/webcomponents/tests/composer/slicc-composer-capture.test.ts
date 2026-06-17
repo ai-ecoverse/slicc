@@ -531,7 +531,7 @@ describe('slicc-composer-capture', () => {
     await pending;
   });
 
-  it('disables the mic picker while recording and re-enables it on stop', async () => {
+  it('disables the mic and camera pickers while recording and re-enables them on stop', async () => {
     const provider = makeProvider(TWO_CAMERAS, TWO_MICS);
     const { factory, recorders } = makeRecorderFactory();
     const el = mount(provider);
@@ -542,7 +542,9 @@ describe('slicc-composer-capture', () => {
       expect(videoOf(el).srcObject).toBeTruthy();
     });
     const picker = micPickerOf(el);
+    const camPicker = pickerOf(el);
     expect(picker.disabled).toBe(false);
+    expect(camPicker.disabled).toBe(false);
 
     // Record.
     primaryOf(el).click();
@@ -551,13 +553,18 @@ describe('slicc-composer-capture', () => {
       expect(recorders[0].state).toBe('recording');
     });
     expect(picker.disabled).toBe(true);
+    // Camera picker is locked too — switching cameras mid-recording would
+    // stop the video tracks the active MediaRecorder is bound to.
+    expect(camPicker.disabled).toBe(true);
 
     // Stop.
     primaryOf(el).click();
     await pending;
-    // After assembly, the picker is unlocked again — even though the element
-    // is hidden, the disabled state has been cleared for the next session.
+    // After assembly, both pickers are unlocked again — even though the
+    // element is hidden, the disabled state has been cleared for the next
+    // session.
     expect(picker.disabled).toBe(false);
+    expect(camPicker.disabled).toBe(false);
   });
 
   it('switching mics replaces the live audio track instance on the stream', async () => {
