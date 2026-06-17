@@ -5,7 +5,14 @@ import type { Meta, StoryObj } from '@storybook/web-components-vite';
 // directly so the custom send-button (with a gravatar `email`) we slot in is
 // registered too, and so the meta row's model/thinking pills are available.
 import '../add-menu/slicc-add-menu.js';
+import type { SliccAddDetail } from '../add-menu/slicc-add-menu.js';
 import '../primitives/slicc-send-button.js';
+import './slicc-composer-capture.js';
+import type {
+  CameraMediaProvider,
+  CaptureResult,
+  SliccComposerCapture,
+} from './slicc-composer-capture.js';
 import './slicc-composer-meta.js';
 import './slicc-composer.js';
 import './slicc-input-card.js';
@@ -85,11 +92,119 @@ function metaRow(narrow: boolean): HTMLElement {
 }
 
 /**
+ * A canvas-backed `CameraMediaProvider` for photo-only capture in the composer
+ * story: one fake `videoinput` paints a hued, animated canvas at 15fps and
+ * `enumerateDevices()` returns the matching `MediaDeviceInfo`. Photo mode never
+ * asks for audio, so no oscillator / mic track is needed here — the broader
+ * multi-camera + video + mic variants live in `slicc-composer-capture.stories.ts`.
+ * Keeps the inline-capture demo permission-free without dragging the full fake
+ * provider over from the capture-surface story.
+ */
+function makeFakePhotoProvider(): CameraMediaProvider {
+  return {
+    getUserMedia: async () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 640;
+      canvas.height = 480;
+      const ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
+      let t = 0;
+      const tick = setInterval(() => {
+        t += 1;
+        ctx.fillStyle = `hsl(28, 70%, ${55 + 10 * Math.sin(t / 10)}%)`;
+        ctx.fillRect(0, 0, 640, 480);
+        ctx.fillStyle = '#fff';
+        ctx.font = '28px sans-serif';
+        ctx.fillText('Demo camera', 24, 240);
+        ctx.font = '14px monospace';
+        ctx.fillText(`frame ${t}`, 24, 280);
+      }, 80);
+      const stream = new MediaStream();
+      const track = canvas.captureStream(15).getVideoTracks()[0];
+      const origStop = track.stop.bind(track);
+      track.stop = () => {
+        clearInterval(tick);
+        origStop();
+      };
+      track.getSettings = () =>
+        ({ deviceId: 'demo-front', facingMode: 'user' }) as MediaTrackSettings;
+      stream.addTrack(track);
+      return stream;
+    },
+    enumerateDevices: async () => [
+      { kind: 'videoinput', deviceId: 'demo-front', label: 'Demo camera' } as MediaDeviceInfo,
+    ],
+  };
+}
+
+/**
+ * Append a small thumbnail line to the faux thread so the add-menu → capture →
+ * result round-trip is visible without leaving the story. Photo results carry
+ * a PNG data URL; the block uses token-driven surfaces so it reads in both
+ * light and dark themes.
+ */
+function appendPhotoResult(thread: HTMLElement, result: CaptureResult): void {
+  if (result.kind !== 'image' || !result.dataUrl) return;
+  const block = document.createElement('p');
+  block.style.cssText =
+    'margin:14px 0 0;padding:10px;border:1px solid var(--line);border-radius:10px;' +
+    'background:var(--canvas);color:var(--ink);display:flex;align-items:center;gap:10px;';
+  const img = document.createElement('img');
+  img.src = result.dataUrl;
+  img.alt = 'Captured photo';
+  img.style.cssText = 'width:64px;height:48px;object-fit:cover;border-radius:6px;display:block;';
+  const cap = document.createElement('span');
+  cap.style.cssText = 'font-size:12px;color:var(--txt-2);';
+  cap.textContent = `Snapped ${result.width}×${result.height} · ${result.mimeType}`;
+  block.append(img, cap);
+  thread.appendChild(block);
+}
+
+/**
+ * Wire the add-menu's "Take a photo" quick-action to the inline capture
+ * surface mounted inside the composer band: when `slicc-add` bubbles up with
+ * `{ kind: 'capture', mode: 'photo' }`, hide the input card + meta row,
+ * un-hide the capture surface, and `open('photo')`. When the promise resolves
+ * (snap or cancel — `#finishCapture` re-hides the surface itself), restore
+ * the input card + meta row and surface any photo result in the thread.
+ */
+function wireInlineCapture(
+  composer: SliccComposer,
+  capture: SliccComposerCapture,
+  inputCardEl: HTMLElement,
+  metaRowEl: HTMLElement,
+  thread: HTMLElement
+): void {
+  let active = false;
+  composer.addEventListener('slicc-add', (event) => {
+    const detail = (event as CustomEvent<SliccAddDetail>).detail;
+    // The detail union's catch-all variant overlaps with `kind: 'capture'`, so
+    // narrow on the `mode` property's presence before reading it.
+    if (active || detail.kind !== 'capture' || !('mode' in detail)) return;
+    if (detail.mode !== 'photo') return;
+    active = true;
+    inputCardEl.hidden = true;
+    metaRowEl.hidden = true;
+    void capture.open('photo').then((result) => {
+      inputCardEl.hidden = false;
+      metaRowEl.hidden = false;
+      active = false;
+      if (result) appendPhotoResult(thread, result);
+    });
+  });
+}
+
+/**
  * Build a fully-populated composer mounted in a chat-column shell, so the
  * frosted footer band reads against a chat-thread-like surface above it (the
  * prototype layout). The footer is composed entirely from real library
  * components: `<slicc-input-card>` (add-menu + gravatar send button) + a
  * `<slicc-composer-meta>` row. Light/dark is driven by the global theme toolbar.
+ *
+ * The composer also mounts a `<slicc-composer-capture>` surface (hidden at
+ * rest, fake camera provider so no real permission is needed). The add-menu's
+ * "Take a photo" quick-action drives it inline via the bubbling `slicc-add`
+ * event — Snap or Cancel returns to the input card and surfaces any photo
+ * result in the thread.
  */
 function composer({ open }: ComposerArgs): HTMLElement {
   // A chat-column shell: faux thread above, composer footer pinned below.
@@ -99,15 +214,35 @@ function composer({ open }: ComposerArgs): HTMLElement {
 
   const thread = document.createElement('div');
   thread.style.cssText =
-    'flex:1 1 auto;overflow:hidden;padding:28px 24px;color:var(--txt-2);font-size:14px;line-height:1.5;';
-  thread.innerHTML =
-    '<p style="margin:0 0 12px;color:var(--ink);">Make the landing hero feel warmer.</p>' +
-    '<p style="margin:0 0 12px;">On it — auditing the cold hero, then redesigning in a live sprinkle. I will verify before/after in the browser and open a PR.</p>' +
-    '<p style="margin:0;">The composer footer below frosts over this thread; opening the add-menu pops a results panel <b>up and over</b> these lines (z-index:2) without growing the band.</p>';
+    'flex:1 1 auto;overflow:auto;padding:28px 24px;color:var(--txt-2);font-size:14px;line-height:1.5;';
+  for (const [tone, text] of [
+    ['ink', 'Make the landing hero feel warmer.'],
+    [
+      'mute',
+      'On it — auditing the cold hero, then redesigning in a live sprinkle. I will verify before/after in the browser and open a PR.',
+    ],
+    [
+      'mute',
+      'The composer footer below frosts over this thread; opening the add-menu pops a results panel up and over these lines (z-index:2) without growing the band.',
+    ],
+  ] as const) {
+    const p = document.createElement('p');
+    p.textContent = text;
+    p.style.cssText = tone === 'ink' ? 'margin:0 0 12px;color:var(--ink);' : 'margin:0 0 12px;';
+    thread.appendChild(p);
+  }
 
   const el = document.createElement('slicc-composer') as SliccComposer;
   if (open) el.setAttribute('open', '');
-  el.append(inputCard(), metaRow(Boolean(open)));
+  const card = inputCard();
+  const meta = metaRow(Boolean(open));
+  const capture = document.createElement('slicc-composer-capture') as SliccComposerCapture;
+  capture.media = makeFakePhotoProvider();
+  capture.setAttribute('mode', 'photo');
+  capture.hidden = true;
+  el.append(card, meta, capture);
+
+  wireInlineCapture(el, capture, card, meta, thread);
 
   shell.append(thread, el);
   return shell;
