@@ -396,6 +396,11 @@ function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
         // and the worker no-ops the reply for a (now) empty history, which
         // left the old conversation on screen until the next reload.
         getController()?.loadMessages([]);
+        // Re-arm the dictation priming note: the next dictated turn in the
+        // fresh session must carry the one-time TTS context note again.
+        void import('../../speech/dictation-priming.js')
+          .then(({ resetDictationPriming }) => resetDictationPriming())
+          .catch(() => undefined);
         refreshFreezer();
         const cone = client.getScoops().find((s) => s.isCone);
         if (cone) selectScoop(cone);
@@ -785,13 +790,17 @@ function wireWcComposer(deps: {
     const text = submittedText(event);
     if (!text) return;
     // Dictated turns (push-to-talk) get their reply spoken back — mark
-    // BEFORE sending so the turn-complete hook sees the flag.
-    if ((event as Event as CustomEvent<{ source?: string }>).detail?.source === 'dictation') {
+    // BEFORE sending so the turn-complete hook sees the flag. The same
+    // flag drives the dictation markers the controller appends to the
+    // sent text so the model knows the input was dictated.
+    const dictation =
+      (event as Event as CustomEvent<{ source?: string }>).detail?.source === 'dictation';
+    if (dictation) {
       void import('../../speech/voice-reply.js')
         .then(({ markVoiceSubmission }) => markVoiceSubmission())
         .catch(() => undefined);
     }
-    boot.getController()?.sendUserMessage(text, attachStage?.take());
+    boot.getController()?.sendUserMessage(text, attachStage?.take(), { dictation });
     (refs.inputCard as HTMLElement & { clear?: () => void }).clear?.();
     // User input is most-recent activity: the addressed scoop gets the eyes
     // and the text feeds its hover-tooltip summary.
