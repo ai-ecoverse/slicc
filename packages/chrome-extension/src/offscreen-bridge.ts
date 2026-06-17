@@ -1403,9 +1403,7 @@ export class OffscreenBridge implements KernelFacade {
       }
 
       case 'delete-queued-message': {
-        this.orchestrator.deleteQueuedMessage(msg.scoopJid, msg.messageId).catch((err) => {
-          console.warn('[offscreen-bridge] Failed to delete queued message:', err);
-        });
+        this.handleDeleteQueuedMessage(msg.scoopJid, msg.messageId);
         break;
       }
 
@@ -1542,6 +1540,27 @@ export class OffscreenBridge implements KernelFacade {
         break;
       }
     }
+  }
+
+  /**
+   * Drop a queued message from the orchestrator AND from the bridge's
+   * per-scoop chat buffer (and its persisted UI session) so a subsequent
+   * `request-scoop-messages` — panel reload, HMR, scoop switch back —
+   * cannot resurrect the dismissed prompt from `messageBuffers` or the
+   * session store. No-op safe when the buffer or entry is absent;
+   * `persistScoop` is fire-and-forget like every other bridge writeback.
+   */
+  private handleDeleteQueuedMessage(scoopJid: string, messageId: string): void {
+    if (!this.orchestrator) return;
+    this.orchestrator.deleteQueuedMessage(scoopJid, messageId).catch((err) => {
+      console.warn('[offscreen-bridge] Failed to delete queued message:', err);
+    });
+    const buf = this.messageBuffers.get(scoopJid);
+    if (!buf) return;
+    const next = buf.filter((m) => m.id !== messageId);
+    if (next.length === buf.length) return;
+    this.messageBuffers.set(scoopJid, next);
+    this.persistScoop(scoopJid);
   }
 
   /**

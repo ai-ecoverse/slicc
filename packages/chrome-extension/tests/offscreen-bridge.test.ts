@@ -2083,6 +2083,51 @@ describe('OffscreenBridge handlePanelMessage dispatch', () => {
     expect(mockOrchestrator.clearQueuedMessages).not.toHaveBeenCalled();
   });
 
+  it('delete-queued-message evicts the matching entry from the per-scoop buffer', async () => {
+    // Regression for PR #1062 review: a dismissed queued bubble could be
+    // resurrected after a reload/HMR because the bridge's messageBuffers
+    // still carried the entry — `request-scoop-messages` would replay it.
+    const buf = (bridge as any).getBuffer('cone_1');
+    buf.push({ id: 'msg-keep', role: 'user', content: 'keep me', timestamp: 1 });
+    buf.push({ id: 'msg-drop', role: 'user', content: 'drop me', timestamp: 2 });
+    buf.push({ id: 'msg-also-keep', role: 'user', content: 'also keep', timestamp: 3 });
+    const persistSpy = vi.spyOn(bridge as any, 'persistScoop');
+    await (bridge as any).handlePanelMessage({
+      type: 'delete-queued-message',
+      scoopJid: 'cone_1',
+      messageId: 'msg-drop',
+    });
+    const after = (bridge as any).messageBuffers.get('cone_1');
+    expect(after.map((m: any) => m.id)).toEqual(['msg-keep', 'msg-also-keep']);
+    // Re-persists so the UI session store mirrors the eviction; a later
+    // session-store-backed rehydration cannot resurrect the dropped entry.
+    expect(persistSpy).toHaveBeenCalledWith('cone_1');
+  });
+
+  it('delete-queued-message is a no-op when the buffer is absent or missing the id', async () => {
+    const persistSpy = vi.spyOn(bridge as any, 'persistScoop');
+    // Buffer absent: orchestrator delete still fires, no buffer mutation.
+    await (bridge as any).handlePanelMessage({
+      type: 'delete-queued-message',
+      scoopJid: 'scoop_a',
+      messageId: 'ghost',
+    });
+    expect((bridge as any).messageBuffers.has('scoop_a')).toBe(false);
+    expect(persistSpy).not.toHaveBeenCalled();
+    // Buffer present but no matching entry: no mutation, no re-persist.
+    const buf = (bridge as any).getBuffer('cone_1');
+    buf.push({ id: 'msg-keep', role: 'user', content: 'keep me', timestamp: 1 });
+    await (bridge as any).handlePanelMessage({
+      type: 'delete-queued-message',
+      scoopJid: 'cone_1',
+      messageId: 'unknown',
+    });
+    expect((bridge as any).messageBuffers.get('cone_1').map((m: any) => m.id)).toEqual([
+      'msg-keep',
+    ]);
+    expect(persistSpy).not.toHaveBeenCalled();
+  });
+
   it('local-storage-set writes through to globalThis.localStorage', async () => {
     const ls = {
       setItem: vi.fn(),

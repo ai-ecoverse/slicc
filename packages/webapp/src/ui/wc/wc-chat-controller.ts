@@ -65,6 +65,17 @@ export interface WcChatControllerOptions {
    * touches the component directly.
    */
   onQueuedChange?: (items: readonly QueuedMessageView[]) => void;
+  /**
+   * Invoked once per dropped queued message id when the live-only stack
+   * is discarded by a scoop switch / session reload (`loadMessages` with
+   * a non-empty `#queued`). The host wires this to the SAME backend
+   * cancel path the local `×` dismiss uses (the offscreen client's
+   * `deleteQueuedMessage` RPC) so the orchestrator never delivers a
+   * queued prompt the user has implicitly dropped by navigating away.
+   * The controller stays free of any direct client/RPC dependency,
+   * consistent with the existing `onQueuedChange` seam.
+   */
+  onQueuedCancel?: (messageId: string) => void;
 }
 
 function uid(): string {
@@ -87,6 +98,7 @@ export class WcChatController {
   readonly #onTurnComplete?: (message: ChatMessage | null) => void;
   readonly #resolveTelemetryContext?: () => { scoopName: string; model: string } | null;
   readonly #onQueuedChange?: (items: readonly QueuedMessageView[]) => void;
+  readonly #onQueuedCancel?: (messageId: string) => void;
   #unsubscribe: () => void;
   #onLocalUserMessage?: (
     text: string,
@@ -125,6 +137,7 @@ export class WcChatController {
     this.#onTurnComplete = options.onTurnComplete;
     this.#resolveTelemetryContext = options.resolveTelemetryContext;
     this.#onQueuedChange = options.onQueuedChange;
+    this.#onQueuedCancel = options.onQueuedCancel;
     this.#unsubscribe = options.agent.onEvent((event) => this.#handleAgentEvent(event));
     // Bubbled retry event from any rendered `slicc-error-card` (composed, so it
     // pierces shadow roots). One listener at the thread covers every error card.
@@ -232,7 +245,20 @@ export class WcChatController {
     for (const id of this.#els.keys()) this.#onMessageDisposed?.(id);
     // The queued stack is live-only — a scoop switch / session reload starts
     // with an empty pile rather than carrying the previous scoop's queue.
+    // Each dropped id routes through the SAME backend cancel path the local
+    // `×` dismiss uses so the orchestrator never delivers a prompt the user
+    // implicitly dropped by switching away. The hook is fired BEFORE we clear
+    // the local queue so a throwing host can't strand entries half-dropped.
     if (this.#queued.length > 0) {
+      if (this.#onQueuedCancel) {
+        for (const message of this.#queued) {
+          try {
+            this.#onQueuedCancel(message.id);
+          } catch (err) {
+            console.error('onQueuedCancel hook threw', err);
+          }
+        }
+      }
       this.#queued = [];
       this.#fireQueuedChange();
     }

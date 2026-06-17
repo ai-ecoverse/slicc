@@ -516,6 +516,20 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
   const selectScoop = (scoop: RegisteredScoop): void => {
     selected = scoop;
     if (!client) return;
+    // Scoop-switch queue-cancel: snapshot the OLD scoop's currently-queued
+    // ids and cancel them on the backend BEFORE switching selectedScoopJid,
+    // so the orchestrator never silently delivers a prompt the user dropped
+    // by navigating to a different scoop. The controller's #queued is
+    // dropped locally later via loadMessages; its onQueuedCancel hook then
+    // fires against the NEW jid as defense-in-depth (a redundant per-id
+    // delete is a no-op once the backend already removed it).
+    const previousJid = client.selectedScoopJid;
+    if (previousJid && previousJid !== scoop.jid) {
+      const queued = controller?.getQueuedMessages() ?? [];
+      for (const m of queued) {
+        void client.deleteQueuedMessage(previousJid, m.id).catch(() => undefined);
+      }
+    }
     client.setSelectedScoopJid(scoop.jid);
     refs.inputCard.removeAttribute('disabled');
     void applyThreadContext(refs, scoop);
@@ -745,6 +759,16 @@ function createWcController(
     // list); the controller owns enqueue / dismiss / flush-on-consume.
     onQueuedChange: (items) => {
       refs.queuedStack.setMessages(items);
+    },
+    // Scoop switch / session reload drops the live-only stack. Route each
+    // dropped id through the SAME backend cancel RPC the `×` dismiss uses
+    // so the orchestrator never delivers a prompt the user implicitly
+    // dropped by navigating away. Best-effort — a transient RPC failure
+    // must not block the local UI from clearing.
+    onQueuedCancel: (messageId) => {
+      const jid = client.selectedScoopJid;
+      if (!jid) return;
+      void client.deleteQueuedMessage(jid, messageId).catch(() => undefined);
     },
   });
   // Local dismiss path: the `×` button on the stack's front card emits a

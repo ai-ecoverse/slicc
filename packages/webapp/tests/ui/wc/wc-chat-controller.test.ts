@@ -675,6 +675,61 @@ describe('WcChatController', () => {
     expect(queuedChanges).toHaveLength(0);
   });
 
+  it('loadMessages cancels every dropped queued id on the backend via onQueuedCancel', () => {
+    // Regression for PR #1062 review: a queue-drop on scoop switch / reload
+    // must route each dropped id through the SAME backend cancel path the
+    // local `×` dismiss uses, otherwise the orchestrator silently delivers
+    // the dropped prompts after the user navigated away.
+    const cancelled: string[] = [];
+    const localController = new WcChatController({
+      thread,
+      agent,
+      onQueuedCancel: (id) => cancelled.push(id),
+    });
+    agent.emit({ type: 'message_start', messageId: 'm1' });
+    localController.sendUserMessage('queued one');
+    localController.sendUserMessage('queued two');
+    const ids = localController.getQueuedMessages().map((m) => m.id);
+    expect(ids).toHaveLength(2);
+    // Scoop switch / session reload: loadMessages clears #queued.
+    localController.loadMessages([]);
+    expect(cancelled).toEqual(ids);
+    expect(localController.getQueuedMessages()).toHaveLength(0);
+  });
+
+  it('loadMessages does not fire onQueuedCancel when the queue is already empty', () => {
+    const cancelled: string[] = [];
+    const localController = new WcChatController({
+      thread,
+      agent,
+      onQueuedCancel: (id) => cancelled.push(id),
+    });
+    localController.loadMessages([{ id: 'h1', role: 'user', content: 'historical', timestamp: 1 }]);
+    expect(cancelled).toEqual([]);
+  });
+
+  it('loadMessages still clears #queued and notifies the host even when onQueuedCancel throws', () => {
+    const queuedChanges: Array<readonly { id: string }[]> = [];
+    const localController = new WcChatController({
+      thread,
+      agent,
+      onQueuedChange: (items) => queuedChanges.push(items.slice()),
+      onQueuedCancel: () => {
+        throw new Error('host blew up');
+      },
+    });
+    agent.emit({ type: 'message_start', messageId: 'm1' });
+    localController.sendUserMessage('queued one');
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      localController.loadMessages([]);
+    } finally {
+      errSpy.mockRestore();
+    }
+    expect(localController.getQueuedMessages()).toHaveLength(0);
+    expect(queuedChanges.at(-1)).toHaveLength(0);
+  });
+
   it('idle submits append a plain user bubble (no stack routing)', () => {
     const queuedChanges: number[] = [];
     const localController = new WcChatController({
