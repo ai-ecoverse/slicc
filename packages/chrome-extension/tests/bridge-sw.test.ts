@@ -75,7 +75,7 @@ function makeDeps(overrides: Partial<BridgeSwDeps> = {}): BridgeSwDeps {
       };
     },
     queryTabs: async () => [
-      { id: 42, title: 'Leader', url: 'https://app.sliccy.ai/' },
+      { id: 42, title: 'Leader', url: 'https://www.sliccy.ai/' },
       { id: 43, title: 'Other', url: 'https://example.com/' },
     ],
     getTab: async (tabId) => ({ id: tabId, title: 't', url: 'https://example.com' }),
@@ -90,7 +90,7 @@ function makeDeps(overrides: Partial<BridgeSwDeps> = {}): BridgeSwDeps {
 }
 
 const goodSender: FakeSender = {
-  origin: 'https://app.sliccy.ai',
+  origin: 'https://www.sliccy.ai',
   tab: { id: 42 },
   frameId: 0,
 };
@@ -132,7 +132,7 @@ describe('validateBridgePin', () => {
   });
 
   it('rejects when sender.tab is missing', async () => {
-    const r = await validateBridgePin({ origin: 'https://app.sliccy.ai', frameId: 0 } as never, {
+    const r = await validateBridgePin({ origin: 'https://www.sliccy.ai', frameId: 0 } as never, {
       readStoredLeaderTabId: async () => 42,
     });
     expect(r).toEqual({ ok: false, reason: 'no-sender-tab' });
@@ -152,9 +152,7 @@ describe('validateBridgePin', () => {
   });
 
   it('ships a sensible default origin allowlist', () => {
-    expect(BRIDGE_ALLOWED_ORIGINS).toContain('https://app.sliccy.ai');
-    expect(BRIDGE_ALLOWED_ORIGINS).toContain('https://www.sliccy.ai');
-    expect(BRIDGE_ALLOWED_ORIGINS).toContain('https://sliccy.ai');
+    expect(BRIDGE_ALLOWED_ORIGINS).toEqual(['https://www.sliccy.ai']);
   });
 });
 
