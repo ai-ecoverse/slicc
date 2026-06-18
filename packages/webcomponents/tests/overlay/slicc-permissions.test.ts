@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type PermissionDenyDetail,
   type PermissionGrant,
+  type PermissionPromptResult,
   SliccPermissions,
 } from '../../src/overlay/slicc-permissions.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
@@ -285,6 +286,156 @@ describe('slicc-permissions', () => {
       kind: 'filesystem',
       reason: 'cancelled',
       message: 'permission denied',
+    });
+  });
+
+  it('routes screenshare through the injected provider and emits grant', async () => {
+    const el = mount();
+    const stream = makeStream('screen');
+    const getDisplayMedia = vi.fn(async () => stream);
+    el.providers = { screenshare: { getDisplayMedia } };
+    const result = await el.request('screenshare');
+    expect(result).toEqual({ kind: 'screenshare', stream });
+    expect(getDisplayMedia).toHaveBeenCalledWith({ video: true });
+  });
+
+  it('screenshare emits deny when the user cancels (AbortError)', async () => {
+    const el = mount();
+    el.providers = {
+      screenshare: {
+        getDisplayMedia: async () => {
+          const err = new Error('user cancelled');
+          err.name = 'AbortError';
+          throw err;
+        },
+      },
+    };
+    const denyP = nextDeny(el);
+    const result = await el.request('screenshare');
+    expect(result).toBeNull();
+    await expect(denyP).resolves.toMatchObject({ kind: 'screenshare', reason: 'cancelled' });
+  });
+
+  describe('prompt() — multi-kind pre-prompt', () => {
+    function getPanel(el: SliccPermissions): HTMLElement {
+      const panel = el.querySelector('.slicc-permissions__prompt') as HTMLElement | null;
+      if (!panel) throw new Error('prompt panel not rendered');
+      return panel;
+    }
+
+    it('renders a top-floating dialog with heading, description, and one icon per kind', async () => {
+      const el = mount();
+      el.providers = {
+        media: { getUserMedia: async () => makeStream('cam'), enumerateDevices: async () => [] },
+      };
+      const pending = el.prompt({
+        kinds: ['camera', 'microphone'],
+        heading: 'ffmpeg wants your camera + mic',
+        description: 'Click below to grant; there will be a second confirmation.',
+      });
+      const panel = getPanel(el);
+      expect(panel.getAttribute('role')).toBe('dialog');
+      expect(panel.getAttribute('aria-modal')).toBe('true');
+      const heading = panel.querySelector('.slicc-permissions__prompt-heading');
+      expect(heading?.textContent).toBe('ffmpeg wants your camera + mic');
+      const desc = panel.querySelector('.slicc-permissions__prompt-desc');
+      expect(desc?.textContent).toBe('Click below to grant; there will be a second confirmation.');
+      const icons = panel.querySelectorAll('.slicc-permissions__prompt-icon svg');
+      expect(icons.length).toBe(2);
+      // Cancel so the prompt closes cleanly before the test exits.
+      (panel.querySelector('[part="prompt-cancel"]') as HTMLButtonElement).click();
+      await pending;
+    });
+
+    it('Allow runs each requested kind in order and resolves with all grants', async () => {
+      const el = mount();
+      const camStream = makeStream('cam');
+      const screenStream = makeStream('screen');
+      el.providers = {
+        media: { getUserMedia: async () => camStream, enumerateDevices: async () => [] },
+        screenshare: { getDisplayMedia: async () => screenStream },
+      };
+      const pending = el.prompt({
+        kinds: ['camera', 'screenshare'],
+        description: 'Allow both?',
+      });
+      const panel = getPanel(el);
+      (panel.querySelector('[part="prompt-grant"]') as HTMLButtonElement).click();
+      const result = (await pending) as PermissionPromptResult;
+      expect(result.status).toBe('granted');
+      expect(result.grants).toEqual([
+        { kind: 'camera', stream: camStream },
+        { kind: 'screenshare', stream: screenStream },
+      ]);
+      // Panel was removed from the DOM after close.
+      expect(el.querySelector('.slicc-permissions__prompt')).toBeNull();
+    });
+
+    it('Cancel emits one deny per requested kind and resolves with cancelled', async () => {
+      const el = mount();
+      el.providers = {
+        media: { getUserMedia: async () => makeStream('cam'), enumerateDevices: async () => [] },
+      };
+      const denies: PermissionDenyDetail[] = [];
+      el.addEventListener('slicc-permission-deny', (e) => {
+        denies.push((e as CustomEvent<PermissionDenyDetail>).detail);
+      });
+      const pending = el.prompt({
+        kinds: ['camera', 'microphone'],
+        description: 'Both?',
+      });
+      const panel = getPanel(el);
+      (panel.querySelector('[part="prompt-cancel"]') as HTMLButtonElement).click();
+      const result = (await pending) as PermissionPromptResult;
+      expect(result.status).toBe('cancelled');
+      expect(result.reason).toBe('cancelled');
+      expect(result.grants).toEqual([]);
+      expect(denies.map((d) => ({ kind: d.kind, reason: d.reason }))).toEqual([
+        { kind: 'camera', reason: 'cancelled' },
+        { kind: 'microphone', reason: 'cancelled' },
+      ]);
+    });
+
+    it('Escape closes the prompt and emits cancelled denies', async () => {
+      const el = mount();
+      const denies: PermissionDenyDetail[] = [];
+      el.addEventListener('slicc-permission-deny', (e) => {
+        denies.push((e as CustomEvent<PermissionDenyDetail>).detail);
+      });
+      const pending = el.prompt({
+        kinds: ['screenshare'],
+        description: 'Share your screen?',
+      });
+      // Wait for the rAF-driven open transition so focus has landed on the
+      // grant button before we synthesize Escape.
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
+      const panel = getPanel(el);
+      panel.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+      );
+      const result = (await pending) as PermissionPromptResult;
+      expect(result.status).toBe('cancelled');
+      expect(denies).toEqual([{ kind: 'screenshare', reason: 'cancelled', message: undefined }]);
+    });
+
+    it('opening a second prompt cancels the first', async () => {
+      const el = mount();
+      const first = el.prompt({ kinds: ['camera'], description: 'First' });
+      const second = el.prompt({ kinds: ['microphone'], description: 'Second' });
+      const firstResult = (await first) as PermissionPromptResult;
+      expect(firstResult.status).toBe('cancelled');
+      // Cancel the second so the test exits cleanly.
+      const panel = el.querySelector('.slicc-permissions__prompt') as HTMLElement;
+      (panel.querySelector('[part="prompt-cancel"]') as HTMLButtonElement).click();
+      const secondResult = (await second) as PermissionPromptResult;
+      expect(secondResult.status).toBe('cancelled');
+    });
+
+    it('returns granted with no grants for an empty kinds array', async () => {
+      const el = mount();
+      const result = await el.prompt({ kinds: [], description: '' });
+      expect(result).toEqual({ status: 'granted', grants: [] });
+      expect(el.querySelector('.slicc-permissions__prompt')).toBeNull();
     });
   });
 });

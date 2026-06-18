@@ -7,11 +7,27 @@ import type { CameraMediaProvider } from './slicc-camera-dialog.js';
 export type { CameraMediaProvider } from './slicc-camera-dialog.js';
 
 /** The picker families the unified surface routes through one gesture. */
-export type PermissionKind = 'camera' | 'microphone' | 'usb' | 'hid' | 'serial' | 'filesystem';
+export type PermissionKind =
+  | 'camera'
+  | 'microphone'
+  | 'screenshare'
+  | 'usb'
+  | 'hid'
+  | 'serial'
+  | 'filesystem';
 
 /** Injectable USB seam — defaults to `navigator.usb`. */
 export interface UsbPermissionProvider {
   requestDevice(opts: { filters?: unknown[] }): Promise<unknown>;
+}
+
+/**
+ * Injectable screen-share seam — defaults to `navigator.mediaDevices.getDisplayMedia`.
+ * Kept distinct from {@link CameraMediaProvider} so hosts can swap (and tests can
+ * fake) the display-media flow without rewiring the camera/mic surface.
+ */
+export interface ScreenSharePermissionProvider {
+  getDisplayMedia(constraints?: MediaStreamConstraints): Promise<MediaStream>;
 }
 
 /** Injectable HID seam — defaults to `navigator.hid`. */
@@ -36,6 +52,7 @@ export interface FilesystemPermissionProvider {
 /** Bundle of injectable provider seams. Any field omitted falls back to the platform default. */
 export interface PermissionProviders {
   media?: CameraMediaProvider | null;
+  screenshare?: ScreenSharePermissionProvider | null;
   usb?: UsbPermissionProvider | null;
   hid?: HidPermissionProvider | null;
   serial?: SerialPermissionProvider | null;
@@ -56,6 +73,7 @@ export interface PermissionRequestOptions {
 export type PermissionGrant =
   | { kind: 'camera'; stream: MediaStream }
   | { kind: 'microphone'; stream: MediaStream }
+  | { kind: 'screenshare'; stream: MediaStream }
   | { kind: 'usb'; device: unknown }
   | { kind: 'hid'; device: unknown; devices: unknown[] }
   | { kind: 'serial'; port: unknown }
@@ -70,6 +88,34 @@ export type PermissionGrant =
 export interface PermissionDenyDetail {
   kind: PermissionKind;
   reason: 'cancelled' | 'unavailable' | 'error';
+  message?: string;
+}
+
+/** Options for {@link SliccPermissions.prompt} — the multi-kind pre-prompt. */
+export interface PermissionPromptOptions {
+  /** Permission kinds being requested (one icon per kind, all granted together). */
+  kinds: PermissionKind[];
+  /** Optional heading; defaults to a generic line built from the kinds. */
+  heading?: string;
+  /** Body copy explaining what's being requested and why. Caller-supplied. */
+  description: string;
+  /** Grant-button label (default `"Allow"`). */
+  grantLabel?: string;
+  /** Cancel-button label (default `"Cancel"`). */
+  cancelLabel?: string;
+  /** Optional per-kind picker hints applied when the user clicks Allow. */
+  requestOptions?: Partial<Record<PermissionKind, PermissionRequestOptions>>;
+}
+
+/** Outcome of {@link SliccPermissions.prompt}. */
+export interface PermissionPromptResult {
+  /** `'granted'` only when every requested kind resolved successfully. */
+  status: 'granted' | 'cancelled' | 'error';
+  /** Successful grants in the order kinds were requested. */
+  grants: PermissionGrant[];
+  /** Set when `status !== 'granted'` — mirrors the first failing deny event. */
+  reason?: PermissionDenyDetail['reason'];
+  /** Optional human-readable detail (forwarded from the underlying picker). */
   message?: string;
 }
 
@@ -114,6 +160,127 @@ slicc-permissions .slicc-permissions__drop-inner {
 slicc-permissions .slicc-permissions__drop-inner svg {
   width: 32px;
   height: 32px;
+}
+
+/* Top-floating multi-kind prompt — anchored near where Chrome's native
+   permission popup appears (just under the address bar). Non-modal: no
+   backdrop, so clicks outside don't accidentally cancel. Escape + Cancel
+   button are the dismiss surfaces. */
+slicc-permissions .slicc-permissions__prompt {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-8px);
+  opacity: 0;
+  width: min(440px, calc(100vw - 32px));
+  max-width: 92vw;
+  pointer-events: auto;
+  background: var(--canvas, #fff);
+  color: var(--ink, #111);
+  border: 1px solid var(--line, rgba(0, 0, 0, 0.12));
+  border-radius: 16px;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.08),
+    0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: 16px;
+  font-family: var(--ui, system-ui, sans-serif);
+  z-index: 1;
+  transition:
+    transform 160ms ease,
+    opacity 160ms ease;
+}
+slicc-permissions .slicc-permissions__prompt[data-open] {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
+}
+slicc-permissions .slicc-permissions__prompt-icons {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+slicc-permissions .slicc-permissions__prompt-icon {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--ghost, rgba(0, 0, 0, 0.05));
+  color: var(--ink, #111);
+  flex: 0 0 auto;
+}
+slicc-permissions .slicc-permissions__prompt-icon svg {
+  width: 22px;
+  height: 22px;
+}
+slicc-permissions .slicc-permissions__prompt-heading {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink, #111);
+  text-align: center;
+  /* Token-driven; tokens already meet 4.5:1 on the canvas surface. */
+}
+slicc-permissions .slicc-permissions__prompt-desc {
+  margin: 0 0 16px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--txt-2, #444);
+  text-align: center;
+}
+slicc-permissions .slicc-permissions__prompt-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+slicc-permissions .slicc-permissions__prompt-btn {
+  appearance: none;
+  font: 600 13px var(--ui, system-ui, sans-serif);
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  min-height: 32px;
+  border: 1px solid transparent;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+slicc-permissions .slicc-permissions__prompt-btn:focus-visible {
+  outline: 2px solid var(--ctx, var(--accent, #3b63fb));
+  outline-offset: 2px;
+}
+slicc-permissions .slicc-permissions__prompt-btn[data-variant='ghost'] {
+  background: transparent;
+  color: var(--ink, #111);
+  border-color: var(--line, rgba(0, 0, 0, 0.15));
+}
+slicc-permissions .slicc-permissions__prompt-btn[data-variant='ghost']:hover {
+  background: var(--ghost, rgba(0, 0, 0, 0.05));
+}
+slicc-permissions .slicc-permissions__prompt-btn[data-variant='ghost']:active {
+  background: color-mix(in oklab, var(--ink, #111) 10%, transparent);
+}
+slicc-permissions .slicc-permissions__prompt-btn[data-variant='primary'] {
+  background: var(--ctx, var(--accent, #3b63fb));
+  color: #fff;
+}
+slicc-permissions .slicc-permissions__prompt-btn[data-variant='primary']:hover {
+  background: color-mix(in oklab, var(--ctx, var(--accent, #3b63fb)) 90%, #000);
+}
+slicc-permissions .slicc-permissions__prompt-btn[data-variant='primary']:active {
+  background: color-mix(in oklab, var(--ctx, var(--accent, #3b63fb)) 80%, #000);
+}
+slicc-permissions .slicc-permissions__prompt-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+@media (prefers-reduced-motion: reduce) {
+  slicc-permissions .slicc-permissions__prompt {
+    transition: none;
+    transform: translateX(-50%) translateY(0);
+  }
 }
 `;
 
@@ -167,6 +334,7 @@ export class SliccPermissions extends HTMLElement {
   #dropOverlay!: HTMLElement;
   #built = false;
   #docDragDepth = 0;
+  #activePrompt: { cancel: () => void } | null = null;
 
   connectedCallback(): void {
     ensurePermissionsStyle(this.ownerDocument);
@@ -186,6 +354,7 @@ export class SliccPermissions extends HTMLElement {
     doc.removeEventListener('drop', this.#onDocDrop);
     this.#docDragDepth = 0;
     this.removeAttribute('data-dropping');
+    if (this.#activePrompt) this.#activePrompt.cancel();
   }
 
   /**
@@ -203,6 +372,8 @@ export class SliccPermissions extends HTMLElement {
         return this.#requestCamera(opts);
       case 'microphone':
         return this.#requestMicrophone(opts);
+      case 'screenshare':
+        return this.#requestScreenShare(opts);
       case 'usb':
         return this.#requestUsb(opts);
       case 'hid':
@@ -215,6 +386,30 @@ export class SliccPermissions extends HTMLElement {
         // Exhaustiveness — should be unreachable.
         return null;
     }
+  }
+
+  /**
+   * Multi-kind pre-prompt: render a top-floating dialog with caller-supplied
+   * copy, one Lucide icon per requested kind, and Allow / Cancel actions.
+   * Clicking Allow runs each kind's picker in sequence under the same user
+   * activation, so hosts can ask for `['camera','microphone']` (or
+   * `['screenshare']`) with a single user gesture. Cancel / Escape emits one
+   * `slicc-permission-deny` with `reason: 'cancelled'` per requested kind.
+   *
+   * Only one prompt may be open at a time — opening a second one
+   * automatically cancels the first.
+   */
+  async prompt(opts: PermissionPromptOptions): Promise<PermissionPromptResult> {
+    if (!opts.kinds.length) {
+      return { status: 'granted', grants: [] };
+    }
+    // Cancel any prompt already on screen so we never stack two panels.
+    if (this.#activePrompt) {
+      this.#activePrompt.cancel();
+    }
+    return new Promise<PermissionPromptResult>((resolve) => {
+      this.#openPrompt(opts, resolve);
+    });
   }
 
   #mediaProvider(): CameraMediaProvider | null {
@@ -244,6 +439,33 @@ export class SliccPermissions extends HTMLElement {
       return this.#grant({ kind: 'microphone', stream });
     } catch (err) {
       return this.#denyError('microphone', err);
+    }
+  }
+
+  #screenShareProvider(): ScreenSharePermissionProvider | null {
+    if (this.providers.screenshare) return this.providers.screenshare;
+    const md =
+      typeof navigator !== 'undefined'
+        ? (navigator.mediaDevices as
+            | (MediaDevices & {
+                getDisplayMedia?: (c?: MediaStreamConstraints) => Promise<MediaStream>;
+              })
+            | undefined)
+        : undefined;
+    if (md && typeof md.getDisplayMedia === 'function') {
+      return { getDisplayMedia: (c) => md.getDisplayMedia!(c) };
+    }
+    return null;
+  }
+
+  async #requestScreenShare(opts?: PermissionRequestOptions): Promise<PermissionGrant | null> {
+    const provider = this.#screenShareProvider();
+    if (!provider) return this.#deny('screenshare', 'unavailable', 'getDisplayMedia unavailable');
+    try {
+      const stream = await provider.getDisplayMedia(opts?.constraints ?? { video: true });
+      return this.#grant({ kind: 'screenshare', stream });
+    } catch (err) {
+      return this.#denyError('screenshare', err);
     }
   }
 
@@ -460,6 +682,220 @@ export class SliccPermissions extends HTMLElement {
     );
     this.append(this.#dropOverlay);
   }
+
+  // ----- Top-floating multi-kind prompt -----------------------------------
+
+  #openPrompt(
+    opts: PermissionPromptOptions,
+    resolve: (result: PermissionPromptResult) => void
+  ): void {
+    const headingText = opts.heading ?? defaultPromptHeading(opts.kinds);
+    const grantLabel = opts.grantLabel ?? 'Allow';
+    const cancelLabel = opts.cancelLabel ?? 'Cancel';
+
+    const headingId = `slicc-permissions__heading-${Math.random().toString(36).slice(2, 8)}`;
+    const descId = `slicc-permissions__desc-${Math.random().toString(36).slice(2, 8)}`;
+
+    const cancelBtn = h(
+      'button',
+      {
+        type: 'button',
+        class: 'slicc-permissions__prompt-btn',
+        'data-variant': 'ghost',
+        part: 'prompt-cancel',
+      },
+      cancelLabel
+    ) as HTMLButtonElement;
+
+    const grantBtn = h(
+      'button',
+      {
+        type: 'button',
+        class: 'slicc-permissions__prompt-btn',
+        'data-variant': 'primary',
+        part: 'prompt-grant',
+      },
+      grantLabel
+    ) as HTMLButtonElement;
+
+    const iconRow = h(
+      'div',
+      { class: 'slicc-permissions__prompt-icons', 'aria-hidden': 'true' },
+      ...opts.kinds.map((kind) =>
+        h(
+          'span',
+          { class: 'slicc-permissions__prompt-icon' },
+          iconEl(iconNameForKind(kind), { size: 22 })
+        )
+      )
+    );
+
+    const panel = h(
+      'div',
+      {
+        class: 'slicc-permissions__prompt',
+        part: 'prompt',
+        role: 'dialog',
+        'aria-modal': 'true',
+        'aria-labelledby': headingId,
+        'aria-describedby': descId,
+        tabindex: '-1',
+      },
+      iconRow,
+      h('h2', { class: 'slicc-permissions__prompt-heading', id: headingId }, headingText),
+      h('p', { class: 'slicc-permissions__prompt-desc', id: descId }, opts.description),
+      h('div', { class: 'slicc-permissions__prompt-actions' }, cancelBtn, grantBtn)
+    );
+    this.append(panel);
+
+    let settled = false;
+    const previouslyFocused = (this.ownerDocument.activeElement as HTMLElement | null) ?? null;
+
+    const close = (): void => {
+      panel.removeEventListener('keydown', onKeydown);
+      // Synchronous removal — matches Chrome's native popup, which vanishes
+      // immediately on Allow / Cancel. The entrance transition is what
+      // matters for the user; the close just gets out of the way.
+      panel.remove();
+      if (previouslyFocused && typeof previouslyFocused.focus === 'function') {
+        try {
+          previouslyFocused.focus();
+        } catch {
+          /* element may have detached — silent */
+        }
+      }
+      this.#activePrompt = null;
+    };
+
+    const cancelAll = (reason: PermissionDenyDetail['reason'], message?: string): void => {
+      if (settled) return;
+      settled = true;
+      for (const kind of opts.kinds) {
+        this.#deny(kind, reason, message);
+      }
+      close();
+      resolve({ status: 'cancelled', grants: [], reason, message });
+    };
+
+    const onKeydown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        cancelAll('cancelled');
+        return;
+      }
+      if (event.key === 'Tab') {
+        // Two focusable elements — trap focus between them.
+        const focusables = [cancelBtn, grantBtn];
+        const active = this.ownerDocument.activeElement;
+        const idx = focusables.indexOf(active as HTMLButtonElement);
+        if (idx === -1) {
+          focusables[0].focus();
+          event.preventDefault();
+          return;
+        }
+        const next = event.shiftKey
+          ? focusables[(idx - 1 + focusables.length) % focusables.length]
+          : focusables[(idx + 1) % focusables.length];
+        next.focus();
+        event.preventDefault();
+      }
+    };
+
+    cancelBtn.addEventListener('click', () => cancelAll('cancelled'));
+    grantBtn.addEventListener('click', async () => {
+      if (settled) return;
+      settled = true;
+      grantBtn.disabled = true;
+      cancelBtn.disabled = true;
+      const grants: PermissionGrant[] = [];
+      let failure: PermissionDenyDetail | null = null;
+      for (const kind of opts.kinds) {
+        const grant = await this.request(kind, opts.requestOptions?.[kind]);
+        if (grant) {
+          grants.push(grant);
+        } else {
+          // request() already emitted a deny event for this kind.
+          // Treat the first failure as the prompt outcome and synthesize
+          // deny events for any remaining kinds so callers see one event
+          // per requested kind.
+          failure = { kind, reason: 'cancelled' };
+          break;
+        }
+      }
+      const failedIndex = failure ? opts.kinds.indexOf(failure.kind) : -1;
+      if (failure && failedIndex >= 0) {
+        for (let i = failedIndex + 1; i < opts.kinds.length; i++) {
+          this.#deny(opts.kinds[i], 'cancelled');
+        }
+      }
+      close();
+      if (failure) {
+        resolve({ status: 'cancelled', grants, reason: 'cancelled' });
+      } else {
+        resolve({ status: 'granted', grants });
+      }
+    });
+
+    panel.addEventListener('keydown', onKeydown);
+    this.#activePrompt = { cancel: () => cancelAll('cancelled') };
+
+    // Activate the entrance transition on the next frame so the initial
+    // state has been laid out — keeps the slide-down visible.
+    requestAnimationFrame(() => {
+      panel.setAttribute('data-open', '');
+      grantBtn.focus();
+    });
+  }
+}
+
+/**
+ * One lucide glyph per permission kind. Names match the lucide registry
+ * (verified at build time by `iconEl`); unknowns would warn at runtime.
+ */
+function iconNameForKind(kind: PermissionKind): string {
+  switch (kind) {
+    case 'camera':
+      return 'camera';
+    case 'microphone':
+      return 'mic';
+    case 'screenshare':
+      return 'monitor-up';
+    case 'usb':
+      return 'usb';
+    case 'hid':
+      return 'keyboard';
+    case 'serial':
+      return 'cable';
+    case 'filesystem':
+      return 'folder';
+  }
+}
+
+/** Human-readable kind label for the auto-generated heading fallback. */
+function labelForKind(kind: PermissionKind): string {
+  switch (kind) {
+    case 'camera':
+      return 'camera';
+    case 'microphone':
+      return 'microphone';
+    case 'screenshare':
+      return 'screen';
+    case 'usb':
+      return 'USB device';
+    case 'hid':
+      return 'HID device';
+    case 'serial':
+      return 'serial port';
+    case 'filesystem':
+      return 'folder';
+  }
+}
+
+function defaultPromptHeading(kinds: PermissionKind[]): string {
+  if (kinds.length === 1) return `Allow access to your ${labelForKind(kinds[0])}?`;
+  const labels = kinds.map(labelForKind);
+  const last = labels.pop();
+  return `Allow access to your ${labels.join(', ')} and ${last}?`;
 }
 
 define('slicc-permissions', SliccPermissions);
