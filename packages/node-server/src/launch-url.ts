@@ -1,3 +1,4 @@
+import { BRIDGE_TOKEN_QUERY_PARAM, BRIDGE_WS_QUERY_PARAM } from './bridge-security.js';
 import {
   buildCanonicalTrayLaunchUrl,
   normalizeTrayWorkerBaseUrl,
@@ -11,6 +12,21 @@ export interface CliLaunchUrlOptions {
   envWorkerBaseUrl?: string | null;
   join: boolean;
   joinUrl?: string | null;
+  /**
+   * Thin-bridge coordinates appended as query params so the hosted leader can
+   * discover + authenticate the local /cdp WebSocket. Both must be set
+   * together; both unset = no bridge params (legacy / bundled UI path).
+   */
+  bridgeWsUrl?: string | null;
+  bridgeToken?: string | null;
+}
+
+function appendBridgeParams(url: string, opts: CliLaunchUrlOptions): string {
+  if (!opts.bridgeWsUrl || !opts.bridgeToken) return url;
+  const params = new URLSearchParams();
+  params.set(BRIDGE_WS_QUERY_PARAM, opts.bridgeWsUrl);
+  params.set(BRIDGE_TOKEN_QUERY_PARAM, opts.bridgeToken);
+  return `${url}${url.includes('?') ? '&' : '?'}${params.toString()}`;
 }
 
 function buildTrayJoinLaunchUrl(locationHref: string, joinUrl: string): string {
@@ -42,11 +58,14 @@ export function resolveCliBrowserLaunchUrl(options: CliLaunchUrlOptions): string
         'The --join launch flow requires a tray join URL via --join <url> or --join=<url>.'
       );
     }
-    return buildTrayJoinLaunchUrl(options.serveOrigin, options.joinUrl);
+    return appendBridgeParams(
+      buildTrayJoinLaunchUrl(options.serveOrigin, options.joinUrl),
+      options
+    );
   }
 
   if (!options.lead) {
-    return options.serveOrigin;
+    return appendBridgeParams(options.serveOrigin, options);
   }
 
   const workerBaseUrl = normalizeTrayWorkerBaseUrl(
@@ -58,5 +77,5 @@ export function resolveCliBrowserLaunchUrl(options: CliLaunchUrlOptions): string
     );
   }
 
-  return buildTrayLeadLaunchUrl(options.serveOrigin, workerBaseUrl);
+  return appendBridgeParams(buildTrayLeadLaunchUrl(options.serveOrigin, workerBaseUrl), options);
 }

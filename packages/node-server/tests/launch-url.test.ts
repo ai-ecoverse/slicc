@@ -91,4 +91,68 @@ describe('resolveCliBrowserLaunchUrl', () => {
       })
     ).toThrow(/--lead launch flow requires a tray worker base URL/);
   });
+
+  describe('thin-bridge query params', () => {
+    it('appends bridge + bridgeToken to the plain serve origin', () => {
+      const url = resolveCliBrowserLaunchUrl({
+        serveOrigin: 'https://www.sliccy.ai/?runtime=hosted-leader',
+        lead: false,
+        join: false,
+        bridgeWsUrl: 'ws://localhost:5710/cdp',
+        bridgeToken: 'tok-123',
+      });
+      const parsed = new URL(url);
+      expect(parsed.searchParams.get('bridge')).toBe('ws://localhost:5710/cdp');
+      expect(parsed.searchParams.get('bridgeToken')).toBe('tok-123');
+      expect(parsed.searchParams.get('runtime')).toBe('hosted-leader');
+    });
+
+    it('appends bridge params alongside the tray param in lead mode', () => {
+      const url = resolveCliBrowserLaunchUrl({
+        serveOrigin: 'http://localhost:3000',
+        lead: true,
+        leadWorkerBaseUrl: 'https://tray.example.com/base',
+        join: false,
+        bridgeWsUrl: 'ws://localhost:3000/cdp',
+        bridgeToken: 'tok-abc',
+      });
+      const parsed = new URL(url);
+      expect(parsed.searchParams.get('tray')).toBe('https://tray.example.com/base');
+      expect(parsed.searchParams.get('bridge')).toBe('ws://localhost:3000/cdp');
+      expect(parsed.searchParams.get('bridgeToken')).toBe('tok-abc');
+    });
+
+    it('appends bridge params alongside the tray param in join mode', () => {
+      const url = resolveCliBrowserLaunchUrl({
+        serveOrigin: 'http://localhost:3000',
+        lead: false,
+        join: true,
+        joinUrl: 'https://tray.example.com/base/join/tray-123.secret',
+        bridgeWsUrl: 'ws://localhost:3000/cdp',
+        bridgeToken: 'tok-xyz',
+      });
+      const parsed = new URL(url);
+      expect(parsed.searchParams.get('tray')).toBeTruthy();
+      expect(parsed.searchParams.get('bridge')).toBe('ws://localhost:3000/cdp');
+      expect(parsed.searchParams.get('bridgeToken')).toBe('tok-xyz');
+    });
+
+    it('omits bridge params when only one of bridgeWsUrl/bridgeToken is set', () => {
+      const noToken = resolveCliBrowserLaunchUrl({
+        serveOrigin: 'http://localhost:3000',
+        lead: false,
+        join: false,
+        bridgeWsUrl: 'ws://localhost:3000/cdp',
+      });
+      expect(new URL(noToken).searchParams.get('bridge')).toBeNull();
+
+      const noUrl = resolveCliBrowserLaunchUrl({
+        serveOrigin: 'http://localhost:3000',
+        lead: false,
+        join: false,
+        bridgeToken: 'tok-xyz',
+      });
+      expect(new URL(noUrl).searchParams.get('bridgeToken')).toBeNull();
+    });
+  });
 });
