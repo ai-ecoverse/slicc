@@ -11,6 +11,16 @@
 // `packages/webapp/src/ui/slicc-launcher-inject.ts`, but imports the launcher
 // module directly (not via the barrel) so esbuild does not drag every other
 // `slicc-*` component along through their side-effect `define()` registrations.
+//
+// **MAIN-world content script** (manifest `content_scripts[].world = "MAIN"`):
+// Chrome MV3 content-script ISOLATED worlds expose `customElements` as `null`
+// (Chrome 146 verified), so `define('slicc-launcher', …)` would throw and the
+// element would never upgrade. Custom-element registries are per-world, so the
+// launcher MUST register + mount in the page's MAIN world. Side effect: this
+// realm has no `chrome.runtime` / `chrome.tabs` access — that is fine for the
+// pure-UI launcher (it loads sliccy.ai by URL in an iframe). The future Wave
+// 3b CDP relay, which needs `chrome.runtime`, will live in a SEPARATE content
+// script entry that stays in the default ISOLATED world.
 
 import { SliccLauncher } from '@slicc/webcomponents/src/launcher/slicc-launcher.js';
 
