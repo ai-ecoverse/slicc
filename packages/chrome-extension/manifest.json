@@ -54,9 +54,6 @@
       "world": "MAIN"
     }
   ],
-  "externally_connectable": {
-    "matches": ["https://app.sliccy.ai/*", "https://www.sliccy.ai/*", "https://sliccy.ai/*"]
-  },
   "action": {
     "default_title": "slicc"
   },

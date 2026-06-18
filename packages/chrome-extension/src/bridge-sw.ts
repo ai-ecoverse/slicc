@@ -39,11 +39,7 @@ const LEADER_TAB_ID_KEY = 'slicc_leader_tab_id';
 /** Origin allowlist for the bridge Port. Externally_connectable also gates
  *  this at the manifest level, but enforcing in code is defense-in-depth and
  *  makes test injection straightforward. */
-export const BRIDGE_ALLOWED_ORIGINS: readonly string[] = [
-  'https://app.sliccy.ai',
-  'https://www.sliccy.ai',
-  'https://sliccy.ai',
-];
+export const BRIDGE_ALLOWED_ORIGINS: readonly string[] = ['https://www.sliccy.ai'];
 
 /** Dev-mode origins added when SLICC_EXT_DEV=1 is built. The build pipeline
  *  swaps in the dev allowlist via this module's `setBridgeAllowedOrigins`
