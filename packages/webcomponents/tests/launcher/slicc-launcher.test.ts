@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_LAUNCHER_CORNER,
+  DEFAULT_LAUNCHER_FOLLOWER_STATUS,
   LAUNCHER_CORNERS,
+  LAUNCHER_FOLLOWER_STATUS_ATTR,
+  LAUNCHER_FOLLOWER_STATUSES,
   normalizeLauncherCorner,
+  normalizeLauncherFollowerStatus,
   resolveLauncherCorner,
   shouldSnapLauncher,
 } from '../../src/launcher/launcher-state.js';
@@ -55,6 +59,19 @@ describe('launcher-state', () => {
   it('exposes a complete corner set', () => {
     expect(new Set(LAUNCHER_CORNERS).size).toBe(8);
   });
+
+  it('normalizes follower-status to the disconnected default for absent/invalid values', () => {
+    expect(normalizeLauncherFollowerStatus('connected')).toBe('connected');
+    expect(normalizeLauncherFollowerStatus('disconnected')).toBe('disconnected');
+    expect(normalizeLauncherFollowerStatus('error')).toBe('error');
+    expect(normalizeLauncherFollowerStatus(null)).toBe(DEFAULT_LAUNCHER_FOLLOWER_STATUS);
+    expect(normalizeLauncherFollowerStatus('')).toBe(DEFAULT_LAUNCHER_FOLLOWER_STATUS);
+    expect(normalizeLauncherFollowerStatus('nonsense')).toBe(DEFAULT_LAUNCHER_FOLLOWER_STATUS);
+    expect(DEFAULT_LAUNCHER_FOLLOWER_STATUS).toBe('disconnected');
+    expect(new Set(LAUNCHER_FOLLOWER_STATUSES)).toEqual(
+      new Set(['disconnected', 'connected', 'error'])
+    );
+  });
 });
 
 describe('slicc-launcher', () => {
@@ -84,13 +101,24 @@ describe('slicc-launcher', () => {
     const root = el.shadowRoot as ShadowRoot;
     const button = root.querySelector('button.launcher') as HTMLButtonElement;
     expect(root.querySelector('.glyph')).toBeNull();
-    const dark = button.querySelector('.logo-for-dark svg');
-    const light = button.querySelector('.logo-for-light svg');
-    expect(dark).not.toBeNull();
-    expect(light).not.toBeNull();
+    // Each follower-status state wrapper carries a dark + light variant, so a
+    // three-state launcher renders 3 dark + 3 light SVGs side-by-side; CSS
+    // gates which one is visible.
+    const dark = button.querySelectorAll('.logo-for-dark svg');
+    const light = button.querySelectorAll('.logo-for-light svg');
+    expect(dark.length).toBe(3);
+    expect(light.length).toBe(3);
     // The Sliccy assets ship a 1024×1024 viewBox — sanity-check the import
     // actually reached the SVG (parseSvg(...) preserved the root attribute).
-    expect((dark as SVGElement).getAttribute('viewBox')).toBe('0 0 1024 1024');
+    expect((dark[0] as SVGElement).getAttribute('viewBox')).toBe('0 0 1024 1024');
+  });
+
+  it('renders one wrapper per follower-status state', () => {
+    const el = mount();
+    const root = el.shadowRoot as ShadowRoot;
+    expect(root.querySelector('.logo-state-disconnected')).not.toBeNull();
+    expect(root.querySelector('.logo-state-connected')).not.toBeNull();
+    expect(root.querySelector('.logo-state-error')).not.toBeNull();
   });
 
   it('shows a "SLICC" tab label at edge-midpoint corners and hides it at true corners', () => {
@@ -261,6 +289,74 @@ describe('slicc-launcher', () => {
     const rect = button.getBoundingClientRect();
     expect(rect.top).toBeLessThan(40);
     expect(window.innerWidth - rect.right).toBeLessThan(40);
+  });
+
+  it('defaults follower-status to disconnected when the attribute is absent', () => {
+    const el = mount();
+    expect(el.hasAttribute(LAUNCHER_FOLLOWER_STATUS_ATTR)).toBe(false);
+    expect(el.followerStatus).toBe('disconnected');
+    const root = el.shadowRoot as ShadowRoot;
+    const disconnected = root.querySelector('.logo-state-disconnected') as HTMLElement;
+    const connected = root.querySelector('.logo-state-connected') as HTMLElement;
+    const error = root.querySelector('.logo-state-error') as HTMLElement;
+    expect(getComputedStyle(disconnected).display).toBe('contents');
+    expect(getComputedStyle(connected).display).toBe('none');
+    expect(getComputedStyle(error).display).toBe('none');
+  });
+
+  it('swaps the visible wrapper as follower-status changes', () => {
+    const el = mount();
+    const root = el.shadowRoot as ShadowRoot;
+    const disconnected = root.querySelector('.logo-state-disconnected') as HTMLElement;
+    const connected = root.querySelector('.logo-state-connected') as HTMLElement;
+    const error = root.querySelector('.logo-state-error') as HTMLElement;
+
+    el.followerStatus = 'connected';
+    expect(el.getAttribute(LAUNCHER_FOLLOWER_STATUS_ATTR)).toBe('connected');
+    expect(getComputedStyle(disconnected).display).toBe('none');
+    expect(getComputedStyle(connected).display).toBe('contents');
+    expect(getComputedStyle(error).display).toBe('none');
+
+    el.followerStatus = 'error';
+    expect(el.getAttribute(LAUNCHER_FOLLOWER_STATUS_ATTR)).toBe('error');
+    expect(getComputedStyle(disconnected).display).toBe('none');
+    expect(getComputedStyle(connected).display).toBe('none');
+    expect(getComputedStyle(error).display).toBe('contents');
+
+    el.followerStatus = 'disconnected';
+    expect(el.getAttribute(LAUNCHER_FOLLOWER_STATUS_ATTR)).toBe('disconnected');
+    expect(getComputedStyle(disconnected).display).toBe('contents');
+  });
+
+  it('coerces an invalid follower-status attribute back to disconnected', () => {
+    const el = mount({ 'follower-status': 'bogus' });
+    // attributeChangedCallback normalizes the bad value in place.
+    expect(el.getAttribute(LAUNCHER_FOLLOWER_STATUS_ATTR)).toBe('disconnected');
+    expect(el.followerStatus).toBe('disconnected');
+    const disconnected = el.shadowRoot?.querySelector('.logo-state-disconnected') as HTMLElement;
+    expect(getComputedStyle(disconnected).display).toBe('contents');
+  });
+
+  it('removing the follower-status attribute via the setter clears it', () => {
+    const el = mount({ 'follower-status': 'connected' });
+    expect(el.followerStatus).toBe('connected');
+    el.followerStatus = null;
+    expect(el.hasAttribute(LAUNCHER_FOLLOWER_STATUS_ATTR)).toBe(false);
+    expect(el.followerStatus).toBe('disconnected');
+  });
+
+  it('keeps follower-status swap working in tab mode (no layout shift)', () => {
+    const el = mount({ corner: 'top' });
+    const button = el.shadowRoot?.querySelector('button.launcher') as HTMLElement;
+    const before = button.getBoundingClientRect();
+    el.followerStatus = 'connected';
+    const afterConnected = button.getBoundingClientRect();
+    el.followerStatus = 'error';
+    const afterError = button.getBoundingClientRect();
+    expect(afterConnected.width).toBe(before.width);
+    expect(afterConnected.height).toBe(before.height);
+    expect(afterError.width).toBe(before.width);
+    expect(afterError.height).toBe(before.height);
   });
 
   it('vi spy on focus event detail is undefined (it has no payload)', () => {

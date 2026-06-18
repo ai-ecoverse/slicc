@@ -1,13 +1,21 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
+import { LAUNCHER_FOLLOWER_STATUSES } from './launcher-state.js';
 import './slicc-launcher.js';
 
 const meta: Meta = {
   title: 'Launcher/Launcher',
   parameters: { layout: 'fullscreen' },
   tags: ['autodocs'],
+  argTypes: {
+    followerStatus: {
+      control: 'inline-radio',
+      options: LAUNCHER_FOLLOWER_STATUSES,
+      description: 'follower-status host attribute — selects which Sliccy icon variant is visible',
+    },
+  },
 };
 export default meta;
-type Story = StoryObj;
+type Story = StoryObj<{ followerStatus?: string }>;
 
 /** A synthetic "leader app" rendered into a Blob URL so the iframe loads without
  *  a live SLICC running — the story still demonstrates the full open/close
@@ -28,7 +36,10 @@ function makeFakeAppUrl(label: string, hue: number): string {
   return URL.createObjectURL(new Blob([html], { type: 'text/html' }));
 }
 
-function host(setup: (el: HTMLElement) => void): HTMLElement {
+function host(
+  setup: (el: HTMLElement) => void,
+  args: { followerStatus?: string } = {}
+): HTMLElement {
   const wrap = document.createElement('div');
   wrap.style.cssText =
     'min-height:100vh;background:linear-gradient(120deg,#fafafa,#eef0f4);position:relative;font-family:-apple-system,BlinkMacSystemFont,sans-serif;color:#1a1a1a;';
@@ -56,96 +67,148 @@ function host(setup: (el: HTMLElement) => void): HTMLElement {
     });
   }
   setup(launcher);
+  if (args.followerStatus) launcher.setAttribute('follower-status', args.followerStatus);
   wrap.append(launcher);
   return wrap;
 }
 
 /** Default launcher mounted in the top-right corner, sidebar closed. */
 export const Closed: Story = {
-  render: () =>
+  render: (args) =>
     host((el) => {
       el.setAttribute('app-url', makeFakeAppUrl('SLICC leader', 210));
-    }),
+    }, args),
 };
 
 /** Same shell with the sidebar pre-opened so the iframe is visible. */
 export const Open: Story = {
-  render: () =>
+  render: (args) =>
     host((el) => {
       el.setAttribute('app-url', makeFakeAppUrl('SLICC leader', 210));
       el.setAttribute('open', '');
-    }),
+    }, args),
 };
 
 /** Empty app-url shows the placeholder copy instead of an iframe. */
 export const EmptyAppUrl: Story = {
-  render: () =>
+  render: (args) =>
     host((el) => {
       el.setAttribute('open', '');
-    }),
+    }, args),
 };
 
 /** Persisted bottom-left position — what users see after they drag the button. */
 export const BottomLeft: Story = {
-  render: () =>
+  render: (args) =>
     host((el) => {
       el.setAttribute('app-url', makeFakeAppUrl('SLICC leader', 320));
       el.setAttribute('corner', 'bottom-left');
-    }),
+    }, args),
 };
 
 /** Edge midpoints snap to TAB mode — the launcher widens, shows the "SLICC"
  *  label, and rounds only the two corners NOT touching the viewport edge. */
 export const TabTop: Story = {
-  render: () =>
+  render: (args) =>
     host((el) => {
       el.setAttribute('app-url', makeFakeAppUrl('SLICC leader', 200));
       el.setAttribute('corner', 'top');
-    }),
+    }, args),
 };
 
 export const TabBottom: Story = {
-  render: () =>
+  render: (args) =>
     host((el) => {
       el.setAttribute('app-url', makeFakeAppUrl('SLICC leader', 200));
       el.setAttribute('corner', 'bottom');
-    }),
+    }, args),
 };
 
 export const TabLeft: Story = {
-  render: () =>
+  render: (args) =>
     host((el) => {
       el.setAttribute('app-url', makeFakeAppUrl('SLICC leader', 200));
       el.setAttribute('corner', 'left');
-    }),
+    }, args),
 };
 
 export const TabRight: Story = {
-  render: () =>
+  render: (args) =>
     host((el) => {
       el.setAttribute('app-url', makeFakeAppUrl('SLICC leader', 200));
       el.setAttribute('corner', 'right');
-    }),
+    }, args),
 };
 
 /** Open tab — confirms the sidebar slides in correctly when the launcher is
  *  rendered as a tab against an edge. */
 export const TabLeftOpen: Story = {
-  render: () =>
+  render: (args) =>
     host((el) => {
       el.setAttribute('app-url', makeFakeAppUrl('SLICC leader', 280));
       el.setAttribute('corner', 'left');
       el.setAttribute('open', '');
-    }),
+    }, args),
 };
 
 /** Dragging state — the host carries the [dragging] attribute so the sidebar
  *  + backdrop are hidden (no iframe flicker while the user moves the button). */
 export const Dragging: Story = {
-  render: () =>
+  render: (args) =>
     host((el) => {
       el.setAttribute('app-url', makeFakeAppUrl('SLICC leader', 210));
       el.setAttribute('open', '');
       el.setAttribute('dragging', '');
-    }),
+    }, args),
+};
+
+/** Follower disconnected — the default icon shown when no telemetry has been
+ *  posted yet (or the follower has dropped). Same icon shape as the
+ *  attribute-absent state. */
+export const FollowerDisconnected: Story = {
+  args: { followerStatus: 'disconnected' },
+  render: (args) =>
+    host((el) => {
+      el.setAttribute('app-url', makeFakeAppUrl('SLICC leader', 210));
+    }, args),
+};
+
+/** Follower connected — the "1 scoop" Sliccy variant, indicating a live
+ *  link to the leader. */
+export const FollowerConnected: Story = {
+  args: { followerStatus: 'connected' },
+  render: (args) =>
+    host((el) => {
+      el.setAttribute('app-url', makeFakeAppUrl('SLICC leader', 210));
+    }, args),
+};
+
+/** Follower error — the crossed-eyes Sliccy variant; the link failed. */
+export const FollowerError: Story = {
+  args: { followerStatus: 'error' },
+  render: (args) =>
+    host((el) => {
+      el.setAttribute('app-url', makeFakeAppUrl('SLICC leader', 210));
+    }, args),
+};
+
+/** Follower connected in tab mode — verifies the state-driven icon swap
+ *  also works when the launcher is rendered as an edge tab. */
+export const TabTopFollowerConnected: Story = {
+  args: { followerStatus: 'connected' },
+  render: (args) =>
+    host((el) => {
+      el.setAttribute('app-url', makeFakeAppUrl('SLICC leader', 200));
+      el.setAttribute('corner', 'top');
+    }, args),
+};
+
+/** Follower error in tab mode — crossed-eyes Sliccy as an edge tab. */
+export const TabLeftFollowerError: Story = {
+  args: { followerStatus: 'error' },
+  render: (args) =>
+    host((el) => {
+      el.setAttribute('app-url', makeFakeAppUrl('SLICC leader', 200));
+      el.setAttribute('corner', 'left');
+    }, args),
 };

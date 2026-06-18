@@ -54,9 +54,14 @@ export { escapeHtml } from './internal/html.js';
 export { hasIcon, iconSvg } from './internal/icons.js';
 export {
   DEFAULT_LAUNCHER_CORNER,
+  DEFAULT_LAUNCHER_FOLLOWER_STATUS,
   LAUNCHER_CORNERS,
+  LAUNCHER_FOLLOWER_STATUS_ATTR,
+  LAUNCHER_FOLLOWER_STATUSES,
   type LauncherCorner,
+  type LauncherFollowerStatus,
   normalizeLauncherCorner,
+  normalizeLauncherFollowerStatus,
   resolveLauncherCorner,
   shouldSnapLauncher,
 } from './launcher/launcher-state.js';
