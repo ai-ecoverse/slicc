@@ -1057,6 +1057,131 @@ async function maybeAttachOffscreen(
 }
 
 /**
+ * Launcher-injection scenario. Opens a real http(s) page in a new tab
+ * (content scripts don't inject into `chrome-extension://` URLs), waits
+ * for the MAIN-world content script to register and mount
+ * `<slicc-launcher>`, then asserts the element upgraded with a shadow
+ * root, the toggle button is reachable, and the iframe app-url points
+ * at sliccy.ai. Regression guard for the Chrome 146 ISOLATED-world
+ * `customElements === null` bootstrapper crash.
+ */
+async function runLauncherScenario(cdpPort: number, failures: ScenarioFailure[]): Promise<void> {
+  const scenario = 'launcher';
+  const targetUrl = 'https://example.com/';
+  logArtifact(`[${scenario}] opening ${targetUrl} ...`);
+
+  let tab: CdpTarget;
+  try {
+    tab = (await fetchJson(
+      cdpPort,
+      `/json/new?${encodeURIComponent(targetUrl)}`,
+      'PUT'
+    )) as CdpTarget;
+  } catch (err) {
+    failures.push({ scenario, message: `open page tab failed: ${(err as Error).message}` });
+    return;
+  }
+  if (!tab?.webSocketDebuggerUrl) {
+    failures.push({ scenario, message: 'open page tab returned no webSocketDebuggerUrl' });
+    return;
+  }
+  const wsUrl = tab.webSocketDebuggerUrl
+    .replace('ws://localhost/', `ws://127.0.0.1:${cdpPort}/`)
+    .replace('ws://localhost:', `ws://127.0.0.1:`)
+    .replace(/^ws:\/\/127\.0\.0\.1\//, `ws://127.0.0.1:${cdpPort}/`);
+
+  let pageCdp: CdpSession;
+  try {
+    pageCdp = await CdpSession.connect(wsUrl);
+  } catch (err) {
+    failures.push({ scenario, message: `connect to page CDP failed: ${(err as Error).message}` });
+    return;
+  }
+  try {
+    await pageCdp.send('Page.enable');
+    await pageCdp.send('Runtime.enable');
+
+    interface LauncherProbe {
+      tag: string | null;
+      appUrl: string | null;
+      hasShadow: boolean;
+      hasButton: boolean;
+      iframeSrc: string | null;
+      readyState: string;
+      docUrl: string;
+    }
+
+    const probeExpr = `
+      (() => {
+        const el = document.querySelector('slicc-launcher');
+        if (!el) return {
+          tag: null, appUrl: null, hasShadow: false, hasButton: false,
+          iframeSrc: null, readyState: document.readyState, docUrl: document.URL,
+        };
+        const sr = el.shadowRoot;
+        const btn = sr ? sr.querySelector('button.launcher') : null;
+        const iframe = sr ? sr.querySelector('iframe') : null;
+        return {
+          tag: el.tagName.toLowerCase(),
+          appUrl: el.getAttribute('app-url'),
+          hasShadow: !!sr,
+          hasButton: !!btn,
+          iframeSrc: iframe ? (iframe.src || iframe.getAttribute('src') || null) : null,
+          readyState: document.readyState,
+          docUrl: document.URL,
+        };
+      })()
+    `;
+
+    // content_scripts inject at document_idle. Poll up to 30s for the
+    // element to appear and upgrade with a shadow root.
+    const deadline = Date.now() + 30_000;
+    let probe: LauncherProbe | null = null;
+    while (Date.now() < deadline) {
+      const result = (await pageCdp.send('Runtime.evaluate', {
+        expression: probeExpr,
+        returnByValue: true,
+      })) as { result?: { value?: LauncherProbe } };
+      probe = result.result?.value ?? null;
+      if (probe?.tag === 'slicc-launcher' && probe.hasShadow && probe.hasButton) break;
+      await delay(500);
+    }
+    logArtifact(`[${scenario}] probe=${JSON.stringify(probe)}`);
+
+    assertScenario(
+      failures,
+      scenario,
+      !!probe && probe.tag === 'slicc-launcher',
+      'document.querySelector("slicc-launcher") is non-null',
+      { probe }
+    );
+    assertScenario(
+      failures,
+      scenario,
+      !!probe?.hasShadow,
+      'slicc-launcher upgraded with an open shadow root',
+      { probe }
+    );
+    assertScenario(
+      failures,
+      scenario,
+      !!probe?.hasButton,
+      'shadow root contains the .launcher toggle button',
+      { probe }
+    );
+    assertScenario(
+      failures,
+      scenario,
+      probe?.appUrl === 'https://sliccy.ai',
+      `app-url attribute is "https://sliccy.ai" (got "${probe?.appUrl}")`,
+      { probe }
+    );
+  } finally {
+    pageCdp.close();
+  }
+}
+
+/**
  * Run all scenarios in sequence, rotating the bridge session between
  * each so a stuck inflight exec on the offscreen side doesn't bleed
  * into the next scenario. Returns the accumulated failures.
@@ -1064,9 +1189,15 @@ async function maybeAttachOffscreen(
 async function runScenarios(
   cdp: CdpSession,
   entries: NetEntry[],
-  extId: string
+  extId: string,
+  cdpPort: number
 ): Promise<ScenarioFailure[]> {
   const failures: ScenarioFailure[] = [];
+  // Launcher scenario runs against a separate https page (content
+  // scripts don't inject into chrome-extension:// targets); independent
+  // of the panel bridge state, so order doesn't matter relative to the
+  // other scenarios.
+  await runLauncherScenario(cdpPort, failures);
   await runFfmpegScenario(cdp, entries, extId, failures);
   // ffmpeg.exec() may still be running on the offscreen side after
   // its smoke-side timeout; rotate to a fresh session so the next
@@ -1227,7 +1358,7 @@ async function main(): Promise<number> {
     offscreen = await maybeAttachOffscreen(cdpPort, extId, recorder.entries);
 
     logArtifact('running scenarios ...');
-    const failures = await runScenarios(cdp, recorder.entries, extId);
+    const failures = await runScenarios(cdp, recorder.entries, extId, cdpPort);
     recorder.dispose();
     offscreen?.dispose();
     offscreen = null;

@@ -104,12 +104,43 @@ and self-close, but DO NOT count as the canonical detached tab.
 
 **Spec:** `docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md`.
 
+## Launcher Content Script (MAIN World)
+
+The `<slicc-launcher>` overlay is injected into every page by
+`src/content-script.ts`, declared in `manifest.json` with
+**`"world": "MAIN"`**. Custom-element registries are per-world, and
+Chrome 146's content-script ISOLATED world exposes
+`customElements` as `null` (not `undefined`), which would make
+`@slicc/webcomponents`'s `define()` throw a `TypeError`. Registering and
+mounting `<slicc-launcher>` in the page MAIN world is the only way to get
+a working upgrade + render.
+
+Trade-off: MAIN-world scripts cannot reach `chrome.runtime` / `chrome.tabs`
+/ `chrome.debugger`. That is fine for the pure-UI launcher — it loads
+`https://sliccy.ai` by URL in an iframe.
+
+Seam for Wave 3b CDP relay: the relay needs `chrome.runtime` to reach the
+service-worker debugger proxy, so it must stay in the default ISOLATED
+world. When that ships it will land as a SEPARATE `content_scripts[]`
+entry (a second file, e.g. `src/relay-isolated.ts`) — no `world` field,
+default ISOLATED, paired with its own esbuild plugin in `vite.config.ts`.
+Keeping the two scripts in separate files keeps the launcher's bundle
+free of `chrome.runtime` dead code and the relay's bundle free of the
+launcher web-component graph.
+
+`define()` in `@slicc/webcomponents/internal/define.ts` additionally
+guards `customElements == null` so importing component modules in
+registry-less worlds (e.g. a future ISOLATED-world relay that pulls in a
+shared util that transitively imports a component) is a no-op rather
+than a crash.
+
 ## Key Files
 
 - `src/service-worker.ts` — MV3 background relay and CDP proxy
 - `src/offscreen.ts` — offscreen runtime bootstrap
 - `src/offscreen-bridge.ts` — panel/offscreen message bridge
 - `src/messages.ts` — typed envelopes for panel, offscreen, and CDP traffic
+- `src/content-script.ts` — MAIN-world launcher injector (see section above)
 - `src/lick-manager-proxy.ts` — panel access to lick operations hosted in offscreen. Surfaces cron task + webhook CRUD plus a `getTrayWebhookUrl` resolver so the side-panel `webhook` command can build per-webhook URLs from the active leader tray session.
 - `src/sprinkle-proxy.ts` — sprinkle relay between offscreen and panel
 - `src/tab-group.ts` — persistent Chrome tab group handling
