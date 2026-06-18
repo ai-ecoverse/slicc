@@ -199,11 +199,84 @@ export async function handleWorkerRequest(
     return Response.redirect(target.toString(), 301);
   }
 
+  const cloudResponse = await tryHandleCloudRoutes(url, request, env);
+  if (cloudResponse) return cloudResponse;
+
+  if (url.pathname === '/tray' && request.method === 'POST') {
+    return createTray(request, env);
+  }
+
+  if ((url.pathname === '/session' || url.pathname === '/trays') && request.method === 'POST') {
+    return jsonResponse(
+      {
+        error: 'Tray creation moved to POST /tray',
+        code: 'TRAY_CREATE_ENDPOINT_MOVED',
+        canonical: 'POST /tray',
+      },
+      410
+    );
+  }
+
+  const oauthResponse = await tryHandleOAuthRoutes(url, request, env, fetchImpl);
+  if (oauthResponse) return oauthResponse;
+
+  const infoResponse = await tryHandleInfoRoutes(url, request, env);
+  if (infoResponse) return infoResponse;
+
+  const capResponse = await tryHandleCapabilityRoutes(url, request, env);
+  if (capResponse) return capResponse;
+
+  // SPA fallback for GET/HEAD browser navigation, unless ?json=true
+  if (!wantsJSON(request) && (request.method === 'GET' || request.method === 'HEAD')) {
+    return serveSPA(request, env);
+  }
+
+  return jsonResponse(ROUTES_INDEX_BODY, 200);
+}
+
+const ROUTES_INDEX_BODY = {
+  service: 'slicc-tray-hub',
+  phase: 1,
+  routes: [
+    'POST /tray',
+    'GET /download/slicc.dmg',
+    'GET /handoff',
+    'GET /.well-known/api-catalog',
+    'GET /llms.txt',
+    'GET /status',
+    'GET /rel/:name',
+    'GET|POST /join/:token',
+    'GET|POST /controller/:token',
+    'POST /webhook/:token/:webhookId',
+    'GET /auth/callback',
+    'POST /oauth/token',
+    'POST /oauth/revoke',
+    'GET /api/runtime-config',
+    'ANY /api/fetch-proxy',
+    'GET /api/cloud/config',
+    'POST /api/cloud/start',
+    'GET /api/cloud/list',
+    'POST /api/cloud/pause',
+    'POST /api/cloud/resume',
+    'POST /api/cloud/kill',
+    'GET /api/cloud/cone-config',
+    'POST /api/cloud/sign-out',
+    'GET /api/cloud/admin/stats',
+    'GET /auth/cloud-callback',
+    'GET /auth/cloud-callback.js',
+    'GET /cloud',
+    'GET /cloud/*',
+  ],
+};
+
+async function tryHandleCloudRoutes(
+  url: URL,
+  request: Request,
+  env: WorkerEnv
+): Promise<Response | null> {
   // Cloud cones routes (Plan D).
   if (url.pathname.startsWith('/api/cloud/')) {
     const op = url.pathname.replace('/api/cloud/', '');
-    // Handlers expect CloudEnv/AdminEnv types, which are structurally compatible
-    // with WorkerEnv but have different optionality. Cast at dispatch boundary.
     const cloudEnv = env as unknown as Parameters<typeof handleStart>[1];
     const adminEnv = env as unknown as Parameters<typeof handleAdminStats>[1];
     switch (op) {
@@ -239,18 +312,10 @@ export async function handleWorkerRequest(
     url.pathname === '/cloud' ||
     (url.pathname.startsWith('/cloud/') && (request.method === 'GET' || request.method === 'HEAD'))
   ) {
-    // Use the canonical directory URL — fetching `index.html` triggers CF
-    // Static Assets' html_handling auto-canonicalize which 307s to the dir,
-    // and the worker only intercepts `/cloud*`, so the followed redirect
-    // hits Static Assets directly without our CSP wrapper. Asking for `/`
-    // returns the same index.html content without the redirect dance.
     const path =
       url.pathname === '/cloud' ? '/packages/webapp/cloud/' : `/packages/webapp${url.pathname}`;
     const res = await env.ASSETS.fetch(new Request(new URL(path, request.url), request));
 
-    // If ASSETS still returned a redirect (e.g., for some edge path),
-    // follow it internally and proxy the eventual response — this preserves
-    // our CSP wrapping across any auto-canonicalize hop.
     const finalRes =
       res.status >= 300 && res.status < 400 && res.headers.get('location')
         ? await env.ASSETS.fetch(
@@ -277,28 +342,18 @@ export async function handleWorkerRequest(
     });
   }
 
-  if (url.pathname === '/tray' && request.method === 'POST') {
-    return createTray(request, env);
-  }
+  return null;
+}
 
-  if ((url.pathname === '/session' || url.pathname === '/trays') && request.method === 'POST') {
-    return jsonResponse(
-      {
-        error: 'Tray creation moved to POST /tray',
-        code: 'TRAY_CREATE_ENDPOINT_MOVED',
-        canonical: 'POST /tray',
-      },
-      410
-    );
-  }
-
+async function tryHandleOAuthRoutes(
+  url: URL,
+  request: Request,
+  env: WorkerEnv,
+  fetchImpl: typeof fetch
+): Promise<Response | null> {
   // OAuth callback relay — serves a static HTML page that reads the OAuth state
   // parameter and redirects to the correct localhost port. Provider-agnostic.
   if (url.pathname === '/auth/callback') {
-    // Capture hop: the relay has already bounced the provider response back to
-    // this origin (provider params present, `state` consumed). Hand the URL to
-    // the opener via postMessage instead of re-running the relay — this is the
-    // webapp-served-by-worker (connect/cloud) completion path.
     const isCaptureHop =
       !url.searchParams.has('state') &&
       (url.searchParams.has('code') || url.searchParams.has('error'));
@@ -325,8 +380,14 @@ export async function handleWorkerRequest(
     return handleOAuthRevoke(request, env as unknown as Record<string, unknown>, fetchImpl);
   }
 
-  // Serve runtime config for the webapp (when served from the worker).
-  // CORS enabled so dev-mode apps on localhost can fetch env-specific config.
+  return null;
+}
+
+async function tryHandleInfoRoutes(
+  url: URL,
+  request: Request,
+  env: WorkerEnv
+): Promise<Response | null> {
   if (url.pathname === '/api/runtime-config') {
     const workerBaseUrl = `${url.protocol}//${url.host}`;
     const envRecord = env as unknown as Record<string, unknown>;
@@ -337,8 +398,6 @@ export async function handleWorkerRequest(
     return jsonResponse(
       {
         trayWorkerBaseUrl: workerBaseUrl,
-        // Expose public OAuth client IDs so the webapp can build authorize URLs
-        // for the correct environment (staging vs production).
         oauth: {
           github:
             typeof envRecord.GITHUB_CLIENT_ID === 'string' ? envRecord.GITHUB_CLIENT_ID : undefined,
@@ -349,7 +408,6 @@ export async function handleWorkerRequest(
     );
   }
 
-  // Fetch proxy not available in worker mode (webapp uses direct fetch instead)
   if (url.pathname === '/api/fetch-proxy') {
     return jsonResponse({ error: 'Fetch proxy not available in worker mode' }, 404);
   }
@@ -376,9 +434,6 @@ export async function handleWorkerRequest(
     return buildLlmsTxtResponse(request);
   }
 
-  // Public health endpoint. Advertised via the `status` rel (RFC 8631) in the
-  // standard Link header set, so any consumer that walks the rels can probe
-  // liveness without hard-coding a path.
   if (url.pathname === '/status' && (request.method === 'GET' || request.method === 'HEAD')) {
     return jsonResponse(
       {
@@ -391,90 +446,46 @@ export async function handleWorkerRequest(
     );
   }
 
-  // Documentation pages for the SLICC custom rel URIs (per RFC 8288 §2.1.2,
-  // extension rels SHOULD be dereferenceable). Match `/rel/<name>` only —
-  // not `/rel/<name>/sub` — so we don't intercept future nested routes.
   const relMatch = url.pathname.match(/^\/rel\/([a-z0-9-]+)$/);
   if (relMatch && (request.method === 'GET' || request.method === 'HEAD')) {
     return buildRelResponse(relMatch[1]);
   }
 
+  return null;
+}
+
+async function tryHandleCapabilityRoutes(
+  url: URL,
+  request: Request,
+  env: WorkerEnv
+): Promise<Response | null> {
   const tokenMatch = url.pathname.match(/^\/(join|controller|webhook)\/([^/]+?)(?:\/([^/]+))?$/);
-  if (tokenMatch) {
-    const route = tokenMatch[1];
-    const token = tokenMatch[2];
+  if (!tokenMatch) return null;
 
-    // Serve SPA for GET/HEAD browser navigation to join/controller URLs,
-    // unless the client explicitly requests JSON via ?json=true
-    // WebSocket upgrades must pass through to the Durable Object
-    if (
-      !wantsJSON(request) &&
-      !request.headers.get('Upgrade') &&
-      (route === 'join' || route === 'controller') &&
-      (request.method === 'GET' || request.method === 'HEAD')
-    ) {
-      return serveSPA(request, env);
-    }
+  const route = tokenMatch[1];
+  const token = tokenMatch[2];
 
-    const parsed = parseCapabilityToken(token);
-    if (!parsed) {
-      return jsonResponse(
-        { error: 'Malformed capability token', code: 'MALFORMED_CAPABILITY' },
-        400
-      );
-    }
-    const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(parsed.trayId));
-    const webhookId = route === 'webhook' ? tokenMatch[3] : undefined;
-    if (webhookId) {
-      const doUrl = new URL(request.url);
-      doUrl.pathname = `/webhook/${token}/${webhookId}`;
-      return stub.fetch(new Request(doUrl, request));
-    }
-    return stub.fetch(request);
-  }
-
-  // SPA fallback for GET/HEAD browser navigation, unless ?json=true
-  if (!wantsJSON(request) && (request.method === 'GET' || request.method === 'HEAD')) {
+  if (
+    !wantsJSON(request) &&
+    !request.headers.get('Upgrade') &&
+    (route === 'join' || route === 'controller') &&
+    (request.method === 'GET' || request.method === 'HEAD')
+  ) {
     return serveSPA(request, env);
   }
 
-  return jsonResponse(
-    {
-      service: 'slicc-tray-hub',
-      phase: 1,
-      routes: [
-        'POST /tray',
-        'GET /download/slicc.dmg',
-        'GET /handoff',
-        'GET /.well-known/api-catalog',
-        'GET /llms.txt',
-        'GET /status',
-        'GET /rel/:name',
-        'GET|POST /join/:token',
-        'GET|POST /controller/:token',
-        'POST /webhook/:token/:webhookId',
-        'GET /auth/callback',
-        'POST /oauth/token',
-        'POST /oauth/revoke',
-        'GET /api/runtime-config',
-        'ANY /api/fetch-proxy',
-        'GET /api/cloud/config',
-        'POST /api/cloud/start',
-        'GET /api/cloud/list',
-        'POST /api/cloud/pause',
-        'POST /api/cloud/resume',
-        'POST /api/cloud/kill',
-        'GET /api/cloud/cone-config',
-        'POST /api/cloud/sign-out',
-        'GET /api/cloud/admin/stats',
-        'GET /auth/cloud-callback',
-        'GET /auth/cloud-callback.js',
-        'GET /cloud',
-        'GET /cloud/*',
-      ],
-    },
-    200
-  );
+  const parsed = parseCapabilityToken(token);
+  if (!parsed) {
+    return jsonResponse({ error: 'Malformed capability token', code: 'MALFORMED_CAPABILITY' }, 400);
+  }
+  const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(parsed.trayId));
+  const webhookId = route === 'webhook' ? tokenMatch[3] : undefined;
+  if (webhookId) {
+    const doUrl = new URL(request.url);
+    doUrl.pathname = `/webhook/${token}/${webhookId}`;
+    return stub.fetch(new Request(doUrl, request));
+  }
+  return stub.fetch(request);
 }
 
 const RELEASES_FALLBACK = 'https://github.com/ai-ecoverse/slicc/releases/latest';
