@@ -48,8 +48,30 @@ export interface WorkerEnv {
   CONE_CAP_RUNNING?: string;
   CONE_CAP_PAUSED?: string;
   ALLOWED_CLOUD_DASHBOARD_ORIGINS?: string;
-  /** Space-separated origins permitted to frame the `?cherry=1` SPA. Empty = deny. */
+  /**
+   * Space-separated origins permitted to frame the `?cherry=1` SPA. Empty/unset = deny.
+   * A bare `*` token (alone or among origins) opens framing to arbitrary
+   * third-party pages and emits `frame-ancestors *` (the CSP wildcard).
+   */
   ALLOWED_CHERRY_HOST_ORIGINS?: string;
+}
+
+/**
+ * Resolve the `frame-ancestors` value for a `?cherry=1` response from the
+ * `ALLOWED_CHERRY_HOST_ORIGINS` env var.
+ *
+ * - empty / unset → `'none'` (deny — default)
+ * - contains `*`  → `*` (arbitrary third-party embedding, wildcard wins)
+ * - otherwise     → the space-separated origin allowlist as configured
+ *
+ * Exported for tests.
+ */
+export function resolveCherryFrameAncestors(allowed: string | undefined): string {
+  const trimmed = (allowed ?? '').trim();
+  if (trimmed.length === 0) return "'none'";
+  const tokens = trimmed.split(/\s+/).filter(Boolean);
+  if (tokens.includes('*')) return '*';
+  return tokens.join(' ');
 }
 
 async function serveSPA(request: Request, env: WorkerEnv): Promise<Response> {
@@ -58,8 +80,7 @@ async function serveSPA(request: Request, env: WorkerEnv): Promise<Response> {
   const out = new Response(res.body, res); // clone for mutable headers
 
   if (url.searchParams.get('cherry') === '1') {
-    const allowed = (env.ALLOWED_CHERRY_HOST_ORIGINS ?? '').trim();
-    const ancestors = allowed.length > 0 ? allowed : "'none'";
+    const ancestors = resolveCherryFrameAncestors(env.ALLOWED_CHERRY_HOST_ORIGINS);
     out.headers.set('Content-Security-Policy', `frame-ancestors ${ancestors}`);
     // Cherry and non-cherry responses must never share a cache entry.
     out.headers.set('Cache-Control', 'no-store');

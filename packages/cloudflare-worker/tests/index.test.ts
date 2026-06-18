@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import worker, { handleWorkerRequest } from '../src/index.js';
+import worker, { handleWorkerRequest, resolveCherryFrameAncestors } from '../src/index.js';
 import { SessionTrayDurableObject } from '../src/session-tray.js';
 import {
   type CreateTrayRequest,
@@ -2272,5 +2272,64 @@ describe('cherry framing policy', () => {
     const { env } = createTestHarness();
     const res = await worker.fetch(new Request('https://app.example/?cherry=1'), env);
     expect(res.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+  });
+
+  it('cherry boot with wildcard ancestor permits arbitrary third-party embedding', async () => {
+    const env = {
+      ...createTestHarness().env,
+      ALLOWED_CHERRY_HOST_ORIGINS: '*',
+    };
+    const res = await worker.fetch(new Request('https://app.example/?cherry=1'), env);
+    const csp = res.headers.get('content-security-policy') ?? '';
+    expect(csp).toContain('frame-ancestors *');
+    expect(csp).not.toContain("frame-ancestors 'none'");
+    expect(res.headers.get('cache-control')).toContain('no-store');
+    expect(res.headers.get('vary') ?? '').toContain('Sec-Fetch-Dest');
+  });
+
+  it('wildcard token wins when mixed with explicit origins', async () => {
+    const env = {
+      ...createTestHarness().env,
+      ALLOWED_CHERRY_HOST_ORIGINS: 'https://host.example *',
+    };
+    const res = await worker.fetch(new Request('https://app.example/?cherry=1'), env);
+    const csp = res.headers.get('content-security-policy') ?? '';
+    expect(csp).toContain('frame-ancestors *');
+    expect(csp).not.toContain('https://host.example');
+  });
+
+  it('non-cherry leader/top-level response keeps frame-ancestors none even with wildcard env', async () => {
+    const env = {
+      ...createTestHarness().env,
+      ALLOWED_CHERRY_HOST_ORIGINS: '*',
+    };
+    const res = await worker.fetch(new Request('https://app.example/'), env);
+    expect(res.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+    expect(res.headers.get('cache-control') ?? '').not.toContain('no-store');
+  });
+});
+
+describe('resolveCherryFrameAncestors', () => {
+  it('returns none for empty/undefined input', () => {
+    expect(resolveCherryFrameAncestors(undefined)).toBe("'none'");
+    expect(resolveCherryFrameAncestors('')).toBe("'none'");
+    expect(resolveCherryFrameAncestors('   ')).toBe("'none'");
+  });
+
+  it('returns the trimmed origin list as configured', () => {
+    expect(resolveCherryFrameAncestors('https://a.example')).toBe('https://a.example');
+    expect(resolveCherryFrameAncestors('https://a.example https://b.example')).toBe(
+      'https://a.example https://b.example'
+    );
+    // collapses arbitrary whitespace between tokens
+    expect(resolveCherryFrameAncestors('  https://a.example   https://b.example  ')).toBe(
+      'https://a.example https://b.example'
+    );
+  });
+
+  it('returns * when wildcard token is present (alone or mixed)', () => {
+    expect(resolveCherryFrameAncestors('*')).toBe('*');
+    expect(resolveCherryFrameAncestors('* https://a.example')).toBe('*');
+    expect(resolveCherryFrameAncestors('https://a.example *')).toBe('*');
   });
 });
