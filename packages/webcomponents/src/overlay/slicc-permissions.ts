@@ -153,8 +153,9 @@ type DataTransferItemWithHandle = DataTransferItem & {
  * same-tick rule) and runs `requestPermission({mode:'readwrite'})` in the
  * same activation, yielding a writable mount handle without a second click.
  *
- * Light DOM (no shadow root): composes `<slicc-dialog>` BY TAG so the host
- * page styles inherit, and injects one scoped stylesheet into the document.
+ * Light DOM (no shadow root): the six pickers are native browser dialogs, so
+ * the only in-app surface is a drop overlay built with `h()` and appended to
+ * the host. One scoped stylesheet is injected into the document.
  *
  * @fires slicc-permission-grant - composed + bubbling; `detail` is a {@link PermissionGrant}
  * @fires slicc-permission-deny - composed + bubbling; `detail` is a {@link PermissionDenyDetail}
