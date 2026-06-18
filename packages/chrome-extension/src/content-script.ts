@@ -3,8 +3,11 @@
 // The launcher is the `<slicc-launcher>` web component from
 // `@slicc/webcomponents` (Wave 2 of the thin-extension migration): a floating
 // button + sidebar-iframe shell with corner persistence. Clicking the button
-// opens the sliccy.ai webapp inside the iframe, so this content script ships
-// no webapp bundle — only the launcher web component itself.
+// opens the sliccy.ai webapp inside the iframe in cherry-follower mode, so
+// this content script ships no webapp bundle — only the launcher web
+// component itself. The framing block (`frame-ancestors 'none'` on every
+// non-cherry SPA response) is relaxed for `sub_frame` requests to sliccy.ai
+// via the static DNR ruleset in `dnr-frame-ancestors.json`.
 //
 // Mirrors the Electron injection precedent in
 // `packages/webapp/src/ui/electron-overlay-entry.ts` /
@@ -24,7 +27,7 @@
 
 import { SliccLauncher } from '@slicc/webcomponents/src/launcher/slicc-launcher.js';
 
-const SLICC_APP_URL = 'https://sliccy.ai';
+const SLICC_APP_URL = 'https://www.sliccy.ai/?cherry=1';
 const SLICC_LAUNCHER_HOST_ID = 'slicc-electron-overlay-root';
 
 function injectLauncher(): void {

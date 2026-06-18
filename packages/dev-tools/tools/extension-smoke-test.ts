@@ -1062,7 +1062,8 @@ async function maybeAttachOffscreen(
  * for the MAIN-world content script to register and mount
  * `<slicc-launcher>`, then asserts the element upgraded with a shadow
  * root, the toggle button is reachable, and the iframe app-url points
- * at sliccy.ai. Regression guard for the Chrome 146 ISOLATED-world
+ * at www.sliccy.ai in cherry-follower mode. Regression guard for the
+ * Chrome 146 ISOLATED-world
  * `customElements === null` bootstrapper crash.
  */
 async function runLauncherScenario(cdpPort: number, failures: ScenarioFailure[]): Promise<void> {
@@ -1172,8 +1173,8 @@ async function runLauncherScenario(cdpPort: number, failures: ScenarioFailure[])
     assertScenario(
       failures,
       scenario,
-      probe?.appUrl === 'https://sliccy.ai',
-      `app-url attribute is "https://sliccy.ai" (got "${probe?.appUrl}")`,
+      probe?.appUrl === 'https://www.sliccy.ai/?cherry=1',
+      `app-url attribute is "https://www.sliccy.ai/?cherry=1" (got "${probe?.appUrl}")`,
       { probe }
     );
   } finally {

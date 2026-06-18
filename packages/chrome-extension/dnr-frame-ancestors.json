@@ -1,0 +1,20 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "condition": {
+      "urlFilter": "||sliccy.ai",
+      "resourceTypes": ["sub_frame"]
+    },
+    "action": {
+      "type": "modifyHeaders",
+      "responseHeaders": [
+        {
+          "header": "content-security-policy",
+          "operation": "set",
+          "value": "frame-ancestors *"
+        }
+      ]
+    }
+  }
+]

@@ -33,6 +33,15 @@
   "background": {
     "service_worker": "service-worker.js"
   },
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "frame_ancestors_sliccy",
+        "enabled": true,
+        "path": "dnr-frame-ancestors.json"
+      }
+    ]
+  },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
