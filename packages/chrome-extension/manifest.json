@@ -33,6 +33,9 @@
   "background": {
     "service_worker": "service-worker.js"
   },
+  "externally_connectable": {
+    "matches": ["https://www.sliccy.ai/*"]
+  },
   "declarative_net_request": {
     "rule_resources": [
       {
@@ -51,6 +54,9 @@
       "world": "MAIN"
     }
   ],
+  "externally_connectable": {
+    "matches": ["https://app.sliccy.ai/*", "https://www.sliccy.ai/*", "https://sliccy.ai/*"]
+  },
   "action": {
     "default_title": "slicc"
   },

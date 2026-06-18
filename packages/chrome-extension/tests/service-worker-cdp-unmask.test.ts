@@ -33,6 +33,7 @@ describe('service-worker CDP outgoing unmask', () => {
     (globalThis as any).chrome = {
       runtime: {
         onConnect: { addListener: vi.fn() },
+        onConnectExternal: { addListener: vi.fn() },
         onMessage: { addListener: (fn: MessageListener) => messageListeners.push(fn) },
         onInstalled: { addListener: vi.fn() },
         onStartup: { addListener: vi.fn() },

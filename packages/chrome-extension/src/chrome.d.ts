@@ -56,6 +56,26 @@ interface ChromeMessageSender {
   id?: string;
   tab?: ChromeTab;
   url?: string;
+  /** Origin of the connecting page. Populated for externally_connectable
+   *  connections (always present), and for internal connections when the
+   *  caller is a page. */
+  origin?: string;
+  /** Frame id within `tab`. `0` is the top-level frame. */
+  frameId?: number;
+}
+
+/** Long-lived port from `chrome.runtime.connect` / `onConnect` /
+ *  `onConnectExternal`. */
+interface ChromeRuntimePort {
+  name: string;
+  sender?: ChromeMessageSender;
+  postMessage(message: unknown): void;
+  disconnect(): void;
+  onMessage: {
+    addListener(callback: (message: unknown) => void): void;
+    removeListener(callback: (message: unknown) => void): void;
+  };
+  onDisconnect: { addListener(callback: () => void): void };
 }
 
 interface ChromeOffscreenAPI {
@@ -112,23 +132,16 @@ interface ChromeAPI {
         ) => void | boolean
       ): void;
     };
-    connect(connectInfo: { name: string }): {
-      name: string;
-      postMessage(message: unknown): void;
-      disconnect(): void;
-      onMessage: { addListener(callback: (message: unknown) => void): void };
-      onDisconnect: { addListener(callback: () => void): void };
-    };
+    connect(connectInfo: { name: string }): ChromeRuntimePort;
     onConnect: {
-      addListener(
-        callback: (port: {
-          name: string;
-          postMessage(message: unknown): void;
-          disconnect(): void;
-          onMessage: { addListener(callback: (message: unknown) => void): void };
-          onDisconnect: { addListener(callback: () => void): void };
-        }) => void
-      ): void;
+      addListener(callback: (port: ChromeRuntimePort) => void): void;
+    };
+    /**
+     * Long-lived port opened by an externally_connectable page. The Port's
+     * `sender` carries the page's `tab` / `frameId` / `origin` for pinning.
+     */
+    onConnectExternal: {
+      addListener(callback: (port: ChromeRuntimePort) => void): void;
     };
   };
   sidePanel: {
@@ -190,8 +203,12 @@ interface ChromeAPI {
   tabs: {
     query(queryInfo: Record<string, unknown>): Promise<ChromeTab[]>;
     get(tabId: number): Promise<ChromeTab>;
-    create(properties: { url?: string; active?: boolean }): Promise<{ id: number }>;
-    update(tabId: number, properties: { active?: boolean }): Promise<ChromeTab>;
+    create(properties: {
+      url?: string;
+      active?: boolean;
+      pinned?: boolean;
+    }): Promise<{ id: number; windowId?: number }>;
+    update(tabId: number, properties: { active?: boolean; pinned?: boolean }): Promise<ChromeTab>;
     remove(tabId: number): Promise<void>;
     group(options: { tabIds: number | number[]; groupId?: number }): Promise<number>;
     onCreated: {
