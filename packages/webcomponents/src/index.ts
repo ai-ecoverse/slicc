@@ -52,6 +52,19 @@ export { SliccShader } from './freezer/slicc-shader.js';
 export { define } from './internal/define.js';
 export { escapeHtml } from './internal/html.js';
 export { hasIcon, iconSvg } from './internal/icons.js';
+export {
+  DEFAULT_LAUNCHER_CORNER,
+  LAUNCHER_CORNERS,
+  type LauncherCorner,
+  normalizeLauncherCorner,
+  resolveLauncherCorner,
+  shouldSnapLauncher,
+} from './launcher/launcher-state.js';
+export {
+  type LauncherMoveDetail,
+  type LauncherToggleDetail,
+  SliccLauncher,
+} from './launcher/slicc-launcher.js';
 export { SliccMemrow } from './memory/slicc-memrow.js';
 export { SliccMemtag } from './memory/slicc-memtag.js';
 export { SliccPaletteCell } from './memory/slicc-palette-cell.js';
