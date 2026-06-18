@@ -277,7 +277,6 @@
     {
       "includes": [
         "packages/chrome-extension/src/extension-leader-tray.ts",
-        "packages/cloudflare-worker/src/index.ts",
         "packages/webapp/cloud/app.js",
         "packages/webapp/src/core/context-compaction.ts",
         "packages/webapp/src/scoops/tray-leader-sync.ts",
@@ -307,7 +306,6 @@
         "packages/cloud-core/src/operations/list.ts",
         "packages/cloud-core/src/operations/start.ts",
         "packages/cloudflare-worker/src/cloud/auth.ts",
-        "packages/cloudflare-worker/src/index.ts",
         "packages/cloudflare-worker/src/session-tray.ts",
         "packages/node-server/src/chrome-launch.ts",
         "packages/node-server/src/cloud/dispatch.ts",
