@@ -37,7 +37,7 @@
     "@zenfs/dom": "1.2.9",
     "buffer": "6.0.3",
     "croner": "^10.0.1",
-    "esbuild-wasm": "0.28.0",
+    "esbuild-wasm": "0.28.1",
     "esptool-js": "^0.6.0",
     "fflate": "^0.8.2",
     "isomorphic-dompurify": "^3.1.0",
