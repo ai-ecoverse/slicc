@@ -79,6 +79,70 @@ describe('slicc-launcher', () => {
     expect(root.querySelector('iframe')).not.toBeNull();
   });
 
+  it('renders the Sliccy mono logo (both color-scheme variants) instead of a hamburger glyph', () => {
+    const el = mount();
+    const root = el.shadowRoot as ShadowRoot;
+    const button = root.querySelector('button.launcher') as HTMLButtonElement;
+    expect(root.querySelector('.glyph')).toBeNull();
+    const dark = button.querySelector('.logo-for-dark svg');
+    const light = button.querySelector('.logo-for-light svg');
+    expect(dark).not.toBeNull();
+    expect(light).not.toBeNull();
+    // The Sliccy assets ship a 1024×1024 viewBox — sanity-check the import
+    // actually reached the SVG (parseSvg(...) preserved the root attribute).
+    expect((dark as SVGElement).getAttribute('viewBox')).toBe('0 0 1024 1024');
+  });
+
+  it('shows a "SLICC" tab label at edge-midpoint corners and hides it at true corners', () => {
+    const el = mount();
+    const label = el.shadowRoot?.querySelector('.tab-label') as HTMLElement;
+    expect(label.textContent).toBe('SLICC');
+    el.corner = 'top-right';
+    expect(getComputedStyle(label).display).toBe('none');
+    el.corner = 'top';
+    expect(getComputedStyle(label).display).toBe('block');
+    el.corner = 'left';
+    expect(getComputedStyle(label).display).toBe('block');
+    el.corner = 'bottom-left';
+    expect(getComputedStyle(label).display).toBe('none');
+  });
+
+  it('renders the button as a rounded tab (not a circle) at edge midpoints', () => {
+    const el = mount({ corner: 'top' });
+    const button = el.shadowRoot?.querySelector('button.launcher') as HTMLElement;
+    const style = getComputedStyle(button);
+    // Tab mode: rounded only on the two corners NOT touching the viewport edge.
+    expect(style.borderTopLeftRadius).toBe('0px');
+    expect(style.borderTopRightRadius).toBe('0px');
+    expect(style.borderBottomLeftRadius).toBe('10px');
+    expect(style.borderBottomRightRadius).toBe('10px');
+    // The rect is no longer the 44×44 pill — width tracks content.
+    const rect = button.getBoundingClientRect();
+    expect(rect.height).toBeLessThan(44);
+  });
+
+  it('keeps the pill shape (44px circle) at true corners', () => {
+    const el = mount({ corner: 'top-right' });
+    const button = el.shadowRoot?.querySelector('button.launcher') as HTMLElement;
+    const rect = button.getBoundingClientRect();
+    expect(Math.round(rect.width)).toBe(44);
+    expect(Math.round(rect.height)).toBe(44);
+  });
+
+  it('hides the sidebar + backdrop while the host carries [dragging] so the iframe does not flicker', () => {
+    const el = mount();
+    el.show();
+    const sidebar = el.shadowRoot?.querySelector('.sidebar') as HTMLElement;
+    const backdrop = el.shadowRoot?.querySelector('.backdrop') as HTMLElement;
+    expect(getComputedStyle(sidebar).visibility).toBe('visible');
+    expect(getComputedStyle(backdrop).visibility).toBe('visible');
+    el.setAttribute('dragging', '');
+    expect(getComputedStyle(sidebar).visibility).toBe('hidden');
+    expect(getComputedStyle(backdrop).visibility).toBe('hidden');
+    el.removeAttribute('dragging');
+    expect(getComputedStyle(sidebar).visibility).toBe('visible');
+  });
+
   it('keeps its CSS in a constructable adopted stylesheet (no <style> node)', () => {
     const el = mount();
     expect(el.shadowRoot?.querySelector('style')).toBeNull();

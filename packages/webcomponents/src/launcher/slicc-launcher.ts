@@ -1,3 +1,11 @@
+// Sliccy mono SVG logos imported as raw strings (Vite `?raw` feature, declared
+// in `src/css.d.ts`). The dark variant has a dark fill + white outlines so it
+// reads on light backgrounds; the light variant inverts that for dark
+// backgrounds. Color-scheme media query gates which variant is visible (matches
+// the original electron-overlay behavior). Parsed via DOMParser at runtime so
+// the markup can be appended without `.innerHTML` (forbidden by `lint:no-innerhtml`).
+import sliccyDarkSvg from '../../../assets/logos/sliccy-mono-dark-1scoops.svg?raw';
+import sliccyLightSvg from '../../../assets/logos/sliccy-mono-light-1scoops.svg?raw';
 import { define } from '../internal/define.js';
 import { h, sheet } from '../internal/dom.js';
 import {
@@ -33,7 +41,7 @@ const STYLE = `
   background: var(--canvas, #fff); color: var(--ink, #131313);
   box-shadow: 0 2px 8px rgba(0,0,0,.2), 0 0 0 1px rgba(0,0,0,.08);
   cursor: grab;
-  display: inline-flex; align-items: center; justify-content: center;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   pointer-events: auto;
   touch-action: none; user-select: none; -webkit-user-select: none;
   padding: 0; overflow: hidden;
@@ -53,7 +61,55 @@ const STYLE = `
 .launcher:hover { box-shadow: 0 4px 16px rgba(0,0,0,.3), 0 0 0 1px rgba(0,0,0,.12); }
 .launcher:active { transform: scale(.96); }
 :host([open]) .launcher { box-shadow: 0 4px 16px rgba(0,0,0,.3), 0 0 0 2px var(--ctx, #3562ff); }
-.launcher .glyph { width: 22px; height: 22px; display: block; pointer-events: none; }
+
+/* === Sliccy mono logo — three variants render side-by-side; color-scheme
+   media query gates which one is visible. Matches the original
+   electron-overlay logo wrappers. === */
+.logo-icon { width: 32px; height: 32px; display: block; pointer-events: none; }
+.logo-icon svg { width: 100%; height: 100%; display: block; }
+.logo-for-dark { display: block; }
+.logo-for-light { display: none; }
+@media (prefers-color-scheme: light) {
+  .logo-for-dark { display: none; }
+  .logo-for-light { display: block; }
+}
+
+/* === Tab mode (edge midpoints) — width/height auto, label visible, rounded
+   only on the two edges NOT touching the viewport edge. Matches
+   electron-overlay.ts lines 230-263. === */
+.tab-label {
+  display: none;
+  font-size: 12px; font-weight: 700;
+  letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap;
+}
+:host([corner="top"]) .launcher,
+:host([corner="bottom"]) .launcher,
+:host([corner="left"]) .launcher,
+:host([corner="right"]) .launcher {
+  width: auto; height: auto;
+  border-radius: 0;
+  padding: 6px 12px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.2);
+}
+:host([corner="top"]) .launcher,
+:host([corner="bottom"]) .launcher { flex-direction: row; }
+:host([corner="left"]) .launcher,
+:host([corner="right"]) .launcher { flex-direction: column; padding: 10px 6px; }
+:host([corner="left"]) .tab-label,
+:host([corner="right"]) .tab-label { writing-mode: vertical-lr; }
+:host([corner="right"]) .tab-label { rotate: 180deg; }
+:host([corner="top"]) .launcher    { border-radius: 0 0 10px 10px; }
+:host([corner="bottom"]) .launcher { border-radius: 10px 10px 0 0; }
+:host([corner="left"]) .launcher   { border-radius: 0 10px 10px 0; }
+:host([corner="right"]) .launcher  { border-radius: 10px 0 0 10px; }
+:host([corner="top"]) .tab-label,
+:host([corner="bottom"]) .tab-label,
+:host([corner="left"]) .tab-label,
+:host([corner="right"]) .tab-label { display: block; }
+:host([corner="top"]) .logo-icon,
+:host([corner="bottom"]) .logo-icon,
+:host([corner="left"]) .logo-icon,
+:host([corner="right"]) .logo-icon { width: 22px; height: 22px; }
 
 /* === Sidebar — full-screen overlay with iframe === */
 .backdrop {
@@ -89,6 +145,18 @@ const STYLE = `
 :host([corner="bottom"]) .sidebar { top: auto; bottom: 12px; height: calc(100vh - 24px); transform: translateY(calc(100% + 28px)); }
 :host([open][corner="top"]) .sidebar,
 :host([open][corner="bottom"]) .sidebar { transform: translateY(0); }
+
+/* === Drag suppression — while the launcher is being dragged, fully hide the
+   sidebar + backdrop so the iframe never repaints under the moving cursor and
+   a mid-drag corner change can't slide the panel across the viewport. The
+   iframe is only visible when [open] AND not [dragging]. === */
+:host([dragging]) .sidebar,
+:host([dragging]) .backdrop {
+  transition: none;
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .viewport { position: relative; flex: 1; min-height: 0; background: var(--bg, #f4f4f4); }
 .viewport iframe { border: 0; width: 100%; height: 100%; display: block; }
 .empty {
@@ -104,23 +172,22 @@ const STYLE = `
 `;
 const SHEET = sheet(STYLE);
 
-const SVG_NS = 'http://www.w3.org/2000/svg';
-function glyph(): SVGSVGElement {
-  const svg = document.createElementNS(SVG_NS, 'svg');
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('fill', 'none');
-  svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '2');
-  svg.setAttribute('stroke-linecap', 'round');
-  svg.setAttribute('stroke-linejoin', 'round');
-  svg.setAttribute('aria-hidden', 'true');
-  svg.setAttribute('class', 'glyph');
-  for (const d of ['M4 12h16', 'M4 6h16', 'M4 18h16']) {
-    const p = document.createElementNS(SVG_NS, 'path');
-    p.setAttribute('d', d);
-    svg.appendChild(p);
-  }
-  return svg;
+/** Parse a `?raw` SVG string into an importable `<svg>` element without
+ *  touching innerHTML (forbidden by `lint:no-innerhtml`). The leading XML
+ *  declaration is stripped because `DOMParser` accepts it inconsistently. */
+function parseSvg(raw: string): SVGElement {
+  const stripped = raw.replace(/<\?xml[^?]*\?>\s*/i, '');
+  const parsed = new DOMParser().parseFromString(stripped, 'image/svg+xml');
+  return document.importNode(parsed.documentElement, true) as unknown as SVGElement;
+}
+
+/** Build one Sliccy logo wrapper (dark + light SVGs gated by color scheme). */
+function buildLogo(): HTMLElement {
+  const forDark = h('div', { class: 'logo-icon logo-for-dark', 'aria-hidden': 'true' });
+  forDark.appendChild(parseSvg(sliccyDarkSvg));
+  const forLight = h('div', { class: 'logo-icon logo-for-light', 'aria-hidden': 'true' });
+  forLight.appendChild(parseSvg(sliccyLightSvg));
+  return h('span', { class: 'logo', part: 'logo' }, forDark, forLight);
 }
 
 interface PointerState {
@@ -282,7 +349,8 @@ export class SliccLauncher extends HTMLElement {
         type: 'button',
         'aria-label': 'Toggle SLICC',
       },
-      glyph()
+      buildLogo(),
+      h('span', { class: 'tab-label', part: 'tab-label' }, 'SLICC')
     ) as HTMLButtonElement;
     this.#button.addEventListener('click', (e) => {
       if (this.#suppressClick) {
