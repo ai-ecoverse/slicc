@@ -24,7 +24,19 @@ export const LAUNCHER_FLICK_THRESHOLD_PX = 12;
 export const LAUNCHER_FLICK_THRESHOLD_PX_PER_MS = 0.6;
 export const LAUNCHER_STORAGE_KEY = 'slicc-launcher-corner';
 
+/**
+ * Three visible follower-link states. `disconnected` is the default so the
+ * launcher never starts on the misleading "connected" icon before real
+ * telemetry has been posted. Mirrors `ElectronOverlayFollowerStatus` in the
+ * webapp's `runtime-mode.ts`.
+ */
+export const LAUNCHER_FOLLOWER_STATUSES = ['disconnected', 'connected', 'error'] as const;
+export type LauncherFollowerStatus = (typeof LAUNCHER_FOLLOWER_STATUSES)[number];
+export const DEFAULT_LAUNCHER_FOLLOWER_STATUS: LauncherFollowerStatus = 'disconnected';
+export const LAUNCHER_FOLLOWER_STATUS_ATTR = 'follower-status';
+
 const CORNER_SET = new Set<string>(LAUNCHER_CORNERS);
+const FOLLOWER_STATUS_SET = new Set<string>(LAUNCHER_FOLLOWER_STATUSES);
 
 /** Coerce a string into a valid launcher corner, falling back to `fallback`. */
 export function normalizeLauncherCorner(
@@ -32,6 +44,14 @@ export function normalizeLauncherCorner(
   fallback: LauncherCorner = DEFAULT_LAUNCHER_CORNER
 ): LauncherCorner {
   return corner && CORNER_SET.has(corner) ? (corner as LauncherCorner) : fallback;
+}
+
+/** Coerce a string into a valid follower status, falling back to `disconnected`. */
+export function normalizeLauncherFollowerStatus(
+  status: string | null | undefined,
+  fallback: LauncherFollowerStatus = DEFAULT_LAUNCHER_FOLLOWER_STATUS
+): LauncherFollowerStatus {
+  return status && FOLLOWER_STATUS_SET.has(status) ? (status as LauncherFollowerStatus) : fallback;
 }
 
 /** Whether a pointer movement is sufficient to leave click territory and snap. */

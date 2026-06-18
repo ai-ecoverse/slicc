@@ -1,24 +1,34 @@
 // Sliccy mono SVG logos imported as raw strings (Vite `?raw` feature, declared
-// in `src/css.d.ts`). The dark variant has a dark fill + white outlines so it
-// reads on light backgrounds; the light variant inverts that for dark
-// backgrounds. Color-scheme media query gates which variant is visible (matches
+// in `src/css.d.ts`). Each follower-status state ships a dark + light variant:
+// the dark variant has a dark fill + white outlines so it reads on light
+// backgrounds; the light variant inverts that for dark backgrounds. The
+// `follower-status` host attribute gates which state-wrapper is visible, and
+// a color-scheme media query gates which variant inside it is visible (matches
 // the original electron-overlay behavior). Parsed via DOMParser at runtime so
 // the markup can be appended without `.innerHTML` (forbidden by `lint:no-innerhtml`).
-import sliccyDarkSvg from '../../../assets/logos/sliccy-mono-dark-1scoops.svg?raw';
-import sliccyLightSvg from '../../../assets/logos/sliccy-mono-light-1scoops.svg?raw';
+
+import sliccyDarkErrorSvg from '../../../assets/logos/sliccy-error-mono-dark-0scoops.svg?raw';
+import sliccyLightErrorSvg from '../../../assets/logos/sliccy-error-mono-light-0scoops.svg?raw';
+import sliccyDarkDisconnectedSvg from '../../../assets/logos/sliccy-mono-dark-0scoops.svg?raw';
+import sliccyDarkConnectedSvg from '../../../assets/logos/sliccy-mono-dark-1scoops.svg?raw';
+import sliccyLightDisconnectedSvg from '../../../assets/logos/sliccy-mono-light-0scoops.svg?raw';
+import sliccyLightConnectedSvg from '../../../assets/logos/sliccy-mono-light-1scoops.svg?raw';
 import { define } from '../internal/define.js';
 import { h, sheet } from '../internal/dom.js';
 import {
   DEFAULT_LAUNCHER_CORNER,
+  LAUNCHER_FOLLOWER_STATUS_ATTR,
   LAUNCHER_OFFSET_PX,
   LAUNCHER_STORAGE_KEY,
   type LauncherCorner,
+  type LauncherFollowerStatus,
   normalizeLauncherCorner,
+  normalizeLauncherFollowerStatus,
   resolveLauncherCorner,
   shouldSnapLauncher,
 } from './launcher-state.js';
 
-export type { LauncherCorner } from './launcher-state.js';
+export type { LauncherCorner, LauncherFollowerStatus } from './launcher-state.js';
 
 const STYLE = `
 :host {
@@ -62,11 +72,19 @@ const STYLE = `
 .launcher:active { transform: scale(.96); }
 :host([open]) .launcher { box-shadow: 0 4px 16px rgba(0,0,0,.3), 0 0 0 2px var(--ctx, #3562ff); }
 
-/* === Sliccy mono logo — three variants render side-by-side; color-scheme
-   media query gates which one is visible. Matches the original
-   electron-overlay logo wrappers. === */
+/* === Sliccy mono logo — three follower-status state-wrappers render
+   side-by-side; the host follower-status attribute selects which wrapper is
+   visible, and inside each, a color-scheme media query gates the dark vs
+   light variant. Absent/invalid attribute falls back to "disconnected" so the
+   launcher never starts on the misleading "connected" icon. Matches the
+   original electron-overlay logo wrappers. === */
 .logo-icon { width: 32px; height: 32px; display: block; pointer-events: none; }
 .logo-icon svg { width: 100%; height: 100%; display: block; }
+.logo-state { display: none; }
+:host(:not([${LAUNCHER_FOLLOWER_STATUS_ATTR}])) .logo-state-disconnected,
+:host([${LAUNCHER_FOLLOWER_STATUS_ATTR}="disconnected"]) .logo-state-disconnected,
+:host([${LAUNCHER_FOLLOWER_STATUS_ATTR}="connected"]) .logo-state-connected,
+:host([${LAUNCHER_FOLLOWER_STATUS_ATTR}="error"]) .logo-state-error { display: contents; }
 .logo-for-dark { display: block; }
 .logo-for-light { display: none; }
 @media (prefers-color-scheme: light) {
@@ -181,13 +199,43 @@ function parseSvg(raw: string): SVGElement {
   return document.importNode(parsed.documentElement, true) as unknown as SVGElement;
 }
 
-/** Build one Sliccy logo wrapper (dark + light SVGs gated by color scheme). */
+/** Per-state SVG pair (dark + light variant) for one follower-status. */
+interface StateIcons {
+  state: LauncherFollowerStatus;
+  darkSvg: string;
+  lightSvg: string;
+}
+
+const STATE_ICONS: readonly StateIcons[] = [
+  {
+    state: 'disconnected',
+    darkSvg: sliccyDarkDisconnectedSvg,
+    lightSvg: sliccyLightDisconnectedSvg,
+  },
+  { state: 'connected', darkSvg: sliccyDarkConnectedSvg, lightSvg: sliccyLightConnectedSvg },
+  { state: 'error', darkSvg: sliccyDarkErrorSvg, lightSvg: sliccyLightErrorSvg },
+];
+
+/** Build the Sliccy logo group — three state wrappers (disconnected / connected
+ *  / error) rendered side-by-side, each carrying both dark + light variants.
+ *  CSS gates which wrapper is visible from the host's `follower-status`
+ *  attribute and which variant inside it from `prefers-color-scheme`. */
 function buildLogo(): HTMLElement {
-  const forDark = h('div', { class: 'logo-icon logo-for-dark', 'aria-hidden': 'true' });
-  forDark.appendChild(parseSvg(sliccyDarkSvg));
-  const forLight = h('div', { class: 'logo-icon logo-for-light', 'aria-hidden': 'true' });
-  forLight.appendChild(parseSvg(sliccyLightSvg));
-  return h('span', { class: 'logo', part: 'logo' }, forDark, forLight);
+  const logo = h('span', { class: 'logo', part: 'logo' });
+  for (const { state, darkSvg, lightSvg } of STATE_ICONS) {
+    const forDark = h('div', { class: 'logo-icon logo-for-dark' });
+    forDark.appendChild(parseSvg(darkSvg));
+    const forLight = h('div', { class: 'logo-icon logo-for-light' });
+    forLight.appendChild(parseSvg(lightSvg));
+    const wrapper = h(
+      'span',
+      { class: `logo-state logo-state-${state}`, 'aria-hidden': 'true' },
+      forDark,
+      forLight
+    );
+    logo.appendChild(wrapper);
+  }
+  return logo;
 }
 
 interface PointerState {
@@ -251,6 +299,7 @@ function persistCorner(view: Window | null | undefined, corner: LauncherCorner):
  * @attr app-url - the URL loaded in the sidebar iframe; empty hides the iframe
  * @attr open - reflected; whether the sidebar is shown
  * @attr corner - one of `top-left | top-right | bottom-left | bottom-right | top | right | bottom | left`
+ * @attr follower-status - one of `disconnected | connected | error`; absent or invalid → `disconnected`
  * @csspart launcher - the floating button
  * @csspart sidebar - the sidebar shell
  * @csspart backdrop - the dimmed backdrop behind the sidebar
@@ -259,7 +308,7 @@ function persistCorner(view: Window | null | undefined, corner: LauncherCorner):
  * @fires slicc-launcher-move - `{ corner }` after a drag snaps to a new corner
  */
 export class SliccLauncher extends HTMLElement {
-  static readonly observedAttributes = ['open', 'corner', 'app-url'];
+  static readonly observedAttributes = ['open', 'corner', 'app-url', LAUNCHER_FOLLOWER_STATUS_ATTR];
 
   readonly #root: ShadowRoot;
   #button!: HTMLButtonElement;
@@ -295,6 +344,20 @@ export class SliccLauncher extends HTMLElement {
     if (name === 'corner') {
       persistCorner(this.ownerDocument.defaultView, this.corner);
     }
+    if (name === LAUNCHER_FOLLOWER_STATUS_ATTR) {
+      // Coerce invalid attribute values back to `disconnected` so CSS gating
+      // (which can't express "anything not in {connected, error}") always
+      // resolves to a visible wrapper.
+      const raw = this.getAttribute(LAUNCHER_FOLLOWER_STATUS_ATTR);
+      if (raw !== null) {
+        const next = normalizeLauncherFollowerStatus(raw);
+        if (next !== raw) {
+          this.#syncingAttributes = true;
+          this.setAttribute(LAUNCHER_FOLLOWER_STATUS_ATTR, next);
+          this.#syncingAttributes = false;
+        }
+      }
+    }
   }
 
   /** Whether the sidebar is open. */
@@ -325,6 +388,22 @@ export class SliccLauncher extends HTMLElement {
     const next = (value ?? '').trim();
     if (next) this.setAttribute('app-url', next);
     else this.removeAttribute('app-url');
+  }
+
+  /** Follower-link status — drives which Sliccy icon variant is visible.
+   *  Reading the property always returns a valid value (absent/invalid
+   *  attribute → `disconnected`); setting it reflects to the attribute. */
+  get followerStatus(): LauncherFollowerStatus {
+    return normalizeLauncherFollowerStatus(this.getAttribute(LAUNCHER_FOLLOWER_STATUS_ATTR));
+  }
+  set followerStatus(value: LauncherFollowerStatus | null | undefined) {
+    if (value == null) {
+      this.removeAttribute(LAUNCHER_FOLLOWER_STATUS_ATTR);
+      return;
+    }
+    const next = normalizeLauncherFollowerStatus(value);
+    if (this.getAttribute(LAUNCHER_FOLLOWER_STATUS_ATTR) === next) return;
+    this.setAttribute(LAUNCHER_FOLLOWER_STATUS_ATTR, next);
   }
 
   /** Show the sidebar. */
