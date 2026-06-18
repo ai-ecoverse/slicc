@@ -30,7 +30,21 @@ import { SliccLauncher } from '@slicc/webcomponents/src/launcher/slicc-launcher.
 const SLICC_APP_URL = 'https://www.sliccy.ai/?cherry=1';
 const SLICC_LAUNCHER_HOST_ID = 'slicc-electron-overlay-root';
 
-function injectLauncher(): void {
+/** SLICC app origin. The launcher MUST NOT inject on this origin — the leader
+ *  tab (`https://www.sliccy.ai/?slicc=leader`) IS the real SLICC UI, and a
+ *  cherry iframe loaded from the same origin already runs the webapp; injecting
+ *  the launcher on top would self-recurse. Mirrors `BRIDGE_ALLOWED_ORIGINS` in
+ *  `bridge-sw.ts` as the single canonical origin check. The manifest's
+ *  `content_scripts[].exclude_matches` is the primary gate; this constant
+ *  exists for the defensive in-script guard so future `all_frames` or
+ *  programmatic injection paths still skip the SLICC origin. */
+export const SLICC_APP_ORIGIN = 'https://www.sliccy.ai';
+
+export function shouldInjectLauncher(origin: string): boolean {
+  return origin !== SLICC_APP_ORIGIN;
+}
+
+export function injectLauncher(): void {
   const existing = document.getElementById(SLICC_LAUNCHER_HOST_ID);
   let launcher: SliccLauncher;
 
@@ -49,8 +63,13 @@ function injectLauncher(): void {
   }
 }
 
-try {
-  injectLauncher();
-} catch (e) {
-  console.error('[slicc-launcher] Injection failed:', e);
+export function bootstrap(origin: string): void {
+  if (!shouldInjectLauncher(origin)) return;
+  try {
+    injectLauncher();
+  } catch (e) {
+    console.error('[slicc-launcher] Injection failed:', e);
+  }
 }
+
+bootstrap(location.origin);
