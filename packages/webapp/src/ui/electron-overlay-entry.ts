@@ -1,31 +1,37 @@
+// Electron-overlay entry bundle. Wave 2 of the thin-extension migration rewires
+// this to mount the new `<slicc-launcher>` web component from
+// `@slicc/webcomponents`; the legacy `<slicc-electron-overlay>` element in
+// `electron-overlay.ts` is preserved for back-compat (and existing tests) but
+// no longer driven from Electron. The exposed `window.__SLICC_ELECTRON_OVERLAY__`
+// API surface is unchanged so `node-server/src/electron-main.ts` keeps working.
 import {
-  type InjectElectronOverlayOptions,
-  injectElectronOverlayShell,
-  removeElectronOverlayShell,
-} from './electron-overlay.js';
+  type InjectSliccLauncherOptions,
+  injectSliccLauncher,
+  removeSliccLauncher,
+} from './slicc-launcher-inject.js';
 
 declare global {
   interface Window {
     __SLICC_ELECTRON_OVERLAY__?: {
-      inject: (options?: InjectElectronOverlayOptions) => void;
+      inject: (options?: InjectSliccLauncherOptions) => void;
       remove: () => void;
     };
   }
 }
 
 window.__SLICC_ELECTRON_OVERLAY__ = {
-  inject(options: InjectElectronOverlayOptions = {}): void {
+  inject(options: InjectSliccLauncherOptions = {}): void {
     try {
-      injectElectronOverlayShell(document, options);
+      injectSliccLauncher(document, options);
     } catch (e) {
-      console.error('[slicc-overlay] Injection failed:', e);
+      console.error('[slicc-launcher] Injection failed:', e);
     }
   },
   remove(): void {
     try {
-      removeElectronOverlayShell(document);
+      removeSliccLauncher(document);
     } catch (e) {
-      console.error('[slicc-overlay] Removal failed:', e);
+      console.error('[slicc-launcher] Removal failed:', e);
     }
   },
 };
