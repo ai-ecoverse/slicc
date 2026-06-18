@@ -93,3 +93,59 @@ export const BottomLeft: Story = {
       el.setAttribute('corner', 'bottom-left');
     }),
 };
+
+/** Edge midpoints snap to TAB mode — the launcher widens, shows the "SLICC"
+ *  label, and rounds only the two corners NOT touching the viewport edge. */
+export const TabTop: Story = {
+  render: () =>
+    host((el) => {
+      el.setAttribute('app-url', makeFakeAppUrl('SLICC leader', 200));
+      el.setAttribute('corner', 'top');
+    }),
+};
+
+export const TabBottom: Story = {
+  render: () =>
+    host((el) => {
+      el.setAttribute('app-url', makeFakeAppUrl('SLICC leader', 200));
+      el.setAttribute('corner', 'bottom');
+    }),
+};
+
+export const TabLeft: Story = {
+  render: () =>
+    host((el) => {
+      el.setAttribute('app-url', makeFakeAppUrl('SLICC leader', 200));
+      el.setAttribute('corner', 'left');
+    }),
+};
+
+export const TabRight: Story = {
+  render: () =>
+    host((el) => {
+      el.setAttribute('app-url', makeFakeAppUrl('SLICC leader', 200));
+      el.setAttribute('corner', 'right');
+    }),
+};
+
+/** Open tab — confirms the sidebar slides in correctly when the launcher is
+ *  rendered as a tab against an edge. */
+export const TabLeftOpen: Story = {
+  render: () =>
+    host((el) => {
+      el.setAttribute('app-url', makeFakeAppUrl('SLICC leader', 280));
+      el.setAttribute('corner', 'left');
+      el.setAttribute('open', '');
+    }),
+};
+
+/** Dragging state — the host carries the [dragging] attribute so the sidebar
+ *  + backdrop are hidden (no iframe flicker while the user moves the button). */
+export const Dragging: Story = {
+  render: () =>
+    host((el) => {
+      el.setAttribute('app-url', makeFakeAppUrl('SLICC leader', 210));
+      el.setAttribute('open', '');
+      el.setAttribute('dragging', '');
+    }),
+};

@@ -10,3 +10,11 @@ declare module '*.css' {
   const css: string;
   export default css;
 }
+
+// SVG imports as raw strings — parsed via DOMParser at runtime so the markup
+// can be appended without `.innerHTML` (forbidden in shipped component source;
+// see `lint:no-innerhtml`).
+declare module '*.svg?raw' {
+  const svg: string;
+  export default svg;
+}
