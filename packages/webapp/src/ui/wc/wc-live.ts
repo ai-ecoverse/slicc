@@ -1165,6 +1165,22 @@ function wireWcUrlContext(
   }
 }
 
+/**
+ * Leader-tab permission surface: the in-tab `<slicc-permissions>` host
+ * routes camera / mic / USB / HID / serial / FS pickers through ONE
+ * gesture-gated surface and accepts folder drops as writable mounts
+ * (Wave 1 Spike A). Cherry follower iframes skip the mount — Spike A
+ * confirmed cross-origin iframes can't hold writable FS handles.
+ */
+function wireWcPermissionsSurface(options: AttachWcClientOptions, log: BootStageLogger): void {
+  void import('./wc-permissions.js')
+    .then(({ installLeaderPermissionsSurface }) => {
+      const runtimeMode = options.standalone?.runtimeMode ?? 'standalone';
+      installLeaderPermissionsSurface({ runtimeMode });
+    })
+    .catch((err) => log.warn('WC permissions surface wiring failed', err));
+}
+
 export function attachWcClient(
   boot: WcShellBoot,
   client: OffscreenClient,
@@ -1211,7 +1227,7 @@ export function attachWcClient(
 
   wireWcSwitcher(boot, client);
   wireWcBrowserOverlay(boot, options, log);
-
+  wireWcPermissionsSurface(options, log);
   // Workbench: VFS file tree + worker-shell terminal, both lazy on first
   // surface activation from the dock or tab bar.
   boot.setActivateSurface(

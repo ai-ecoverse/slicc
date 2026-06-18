@@ -78,6 +78,18 @@ export { SliccAvatarMenu } from './nav/slicc-avatar-menu.js';
 export { SliccNav } from './nav/slicc-nav.js';
 export { SliccCameraDialog } from './overlay/slicc-camera-dialog.js';
 export { SliccDialog } from './overlay/slicc-dialog.js';
+export {
+  type FilesystemPermissionProvider,
+  type HidPermissionProvider,
+  type PermissionDenyDetail,
+  type PermissionGrant,
+  type PermissionKind,
+  type PermissionProviders,
+  type PermissionRequestOptions,
+  type SerialPermissionProvider,
+  SliccPermissions,
+  type UsbPermissionProvider,
+} from './overlay/slicc-permissions.js';
 export { SliccTooltip } from './overlay/slicc-tooltip.js';
 export { SliccPill } from './pill/slicc-pill.js';
 export { SliccAvatar } from './primitives/slicc-avatar.js';
