@@ -14,6 +14,7 @@ import { fileURLToPath } from 'url';
 import { defineConfig } from 'vite';
 import { stripBiomeWasmAssetPlugin } from '../webapp/vite-plugins/strip-biome-wasm-asset';
 import { stripOrtWasmAssetPlugin } from '../webapp/vite-plugins/strip-ort-wasm-asset';
+import { devReloadPlugin } from './vite-plugins/dev-reload';
 
 const Dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(Dirname, '../..');
@@ -420,6 +421,17 @@ function stripFfmpegCoreCdnLiteralPlugin() {
   };
 }
 
+// `dev:extension` (npm run dev:extension) sets SLICC_EXT_DEV_WATCH=1 so the
+// dev-reload plugin runs after every rebuild AND so the esbuild-managed entry
+// points (content-script, service-worker, secrets-entry, …) that live outside
+// the Rollup module graph still trigger rebuilds. The seam is `this.addWatchFile`
+// inside the dev-reload plugin's `buildStart` — `build.watch.include` would NOT
+// work because Rollup treats it as a filter on the existing graph rather than
+// an additive include. See packages/chrome-extension/CLAUDE.md "Dev Watch".
+const isDevWatch = process.env['SLICC_EXT_DEV_WATCH'] === '1';
+const devReloadSyncTo = process.env['SLICC_EXT_PATH'] ?? '/tmp/slicc-ext-build';
+const devReloadCdpPort = Number(process.env['SLICC_CDP_PORT'] ?? '9333');
+
 export default defineConfig(({ mode }) => ({
   root: repoRoot,
   publicDir: resolve(repoRoot, 'packages/assets'),
@@ -495,6 +507,13 @@ export default defineConfig(({ mode }) => ({
         entryFileNames: 'assets/[name]-[hash].js',
       },
     },
+    // In watch mode, an empty `watch: {}` opts into Rollup's watcher loop.
+    // Expanding which files trigger rebuilds is handled by the dev-reload
+    // plugin via `this.addWatchFile` (see vite-plugins/dev-reload.ts) —
+    // `watch.include` is filter-only, NOT additive, so wiring it here would
+    // never pick up the esbuild-managed entries (content-script, service-
+    // worker, secrets-entry, …) that live outside Rollup's module graph.
+    watch: isDevWatch ? {} : undefined,
   },
   plugins: [
     stripBiomeWasmAssetPlugin(),
@@ -509,5 +528,20 @@ export default defineConfig(({ mode }) => ({
     copyExtensionAssetsPlugin(),
     buildFfmpegWorkerPlugin(),
     stripFfmpegCoreCdnLiteralPlugin(),
+    // Must run AFTER every other closeBundle so the synced tree reflects the
+    // complete build (manifest stamp, ffmpeg-core literal strip, etc.).
+    // `extraWatchDirs` registers esbuild-input sources with Rollup's watcher
+    // via `this.addWatchFile`; webapp/src is already in Rollup's graph
+    // through the offscreen + index entries, so it doesn't need to be listed.
+    ...(isDevWatch
+      ? [
+          devReloadPlugin({
+            outDir,
+            syncTo: devReloadSyncTo,
+            cdpPort: devReloadCdpPort,
+            extraWatchDirs: [resolve(Dirname, 'src')],
+          }),
+        ]
+      : []),
   ],
 }));

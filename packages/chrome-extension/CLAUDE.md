@@ -370,6 +370,20 @@ with the recipe. Then verify each scenario:
    - In the detached tab, verify the tray runtime is still connected
      and `refresh-tray-runtime` relays work.
 
+## Dev Watch + Auto-Reload (`npm run dev:extension`)
+
+For the iteration loop, run `npm run dev:extension -w @slicc/chrome-extension` ALONGSIDE the Local QA Chrome (above). The script runs `vite build --watch` with `SLICC_EXT_DEV=1 SLICC_EXT_DEV_WATCH=1` so:
+
+1. **Rebuild on edit** — Rollup re-runs every `closeBundle` hook (the esbuild-managed entries for `content-script`, `service-worker`, `secrets-entry`, `slicc-editor-entry`, `slicc-diff-entry`, `preview-sw`, plus the ffmpeg-core literal strip) on any change under `packages/chrome-extension/src/`. The `dev-reload` plugin registers those paths via `this.addWatchFile` from `buildStart` because Rollup's `build.watch.include` is filter-only and never picks up esbuild inputs that live outside the Rollup module graph.
+2. **Sync to the Chrome path** — `closeBundle` overlay-copies `dist/extension/` into `$SLICC_EXT_PATH` (default `/tmp/slicc-ext-build`). Overlay (not `rmSync` then `cpSync`) is deliberate: wiping the destination would briefly remove the manifest under a loaded extension and trigger Chrome to evict the service-worker target the CDP reload that immediately follows would race.
+3. **CDP-reload the extension** — connects to Chrome on `$SLICC_CDP_PORT` (default `9333`), finds the unique `*/service-worker.js` target (falls back to any chrome-extension origin page if the SW is idle / evicted — MV3 SWs die after 30s without events and `/json/list` does NOT wake them), and runs a single `chrome.runtime.reload()`. We deliberately do **not** also iterate `chrome.tabs` + `chrome.tabs.reload` from the SW: a tab-reload landing concurrently with the extension restart can leave Chrome with the extension disabled. Refresh open tabs by hand to pick up new content-script code.
+
+The wire stack uses `localhost` (not `127.0.0.1`) for CDP HTTP — Chrome for Testing on macOS binds the listener to IPv6 (`::1`), and forcing IPv4 misses it. Let Node's DNS resolve `localhost` per-platform order.
+
+Failure modes log warnings but never fail the build: if Chrome isn't running, the watcher keeps the build green and the next rebuild attaches automatically once Chrome is up.
+
+Source: `packages/chrome-extension/vite-plugins/dev-reload.ts` (pure helpers tested in `tests/dev-reload.test.ts`). Env overrides: `SLICC_EXT_PATH` (sync destination), `SLICC_CDP_PORT` (Chrome's `--remote-debugging-port`).
+
 ## Secret-Aware Fetch Proxy
 
 The service worker handles `fetch-proxy.fetch` Port connections for secret-aware HTTP proxying. The Port `onMessage` listener attaches **synchronously** in `onConnect` (via `handleFetchProxyConnectionAsync` — the pipeline is awaited INSIDE the listener); the previous "await build → then add listener" pattern silently dropped the page's immediate `request` message, which made `curl` hang. See `docs/pitfalls.md` "Chrome Port: onMessage Listener Must Attach Synchronously".

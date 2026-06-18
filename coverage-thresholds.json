@@ -28,6 +28,7 @@
         "**/index.html",
         "**/shims/**",
         "packages/*/src/**/*.test.ts",
+        "packages/chrome-extension/vite-plugins/**",
         "packages/webapp/src/scoops/**",
         "packages/webapp/src/net/**",
         "packages/webapp/src/shell/**",
