@@ -22,6 +22,7 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
     (globalThis as any).chrome = {
       runtime: {
         onConnect: { addListener: (fn: any) => connectListeners.push(fn) },
+        onConnectExternal: { addListener: vi.fn() },
         onMessage: { addListener: (fn: any) => messageListeners.push(fn) },
         onInstalled: { addListener: vi.fn() },
         onStartup: { addListener: vi.fn() },

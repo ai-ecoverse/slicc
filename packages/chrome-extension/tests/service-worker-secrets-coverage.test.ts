@@ -36,6 +36,7 @@ describe('service-worker secrets handlers — branch coverage', () => {
     (globalThis as any).chrome = {
       runtime: {
         onConnect: { addListener: vi.fn() },
+        onConnectExternal: { addListener: vi.fn() },
         onMessage: { addListener: (fn: MsgListener) => messageListeners.push(fn) },
         onInstalled: { addListener: vi.fn() },
         onStartup: { addListener: vi.fn() },

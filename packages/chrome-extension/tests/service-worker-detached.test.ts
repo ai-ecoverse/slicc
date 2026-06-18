@@ -122,6 +122,7 @@ const mockChrome = {
     sendMessage: vi.fn(async () => {}),
     getContexts: vi.fn(async () => []),
     onConnect: { addListener: vi.fn() },
+    onConnectExternal: { addListener: vi.fn() },
     lastError: undefined,
   },
   debugger: {

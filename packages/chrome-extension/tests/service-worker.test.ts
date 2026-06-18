@@ -95,6 +95,9 @@ function createChromeMock() {
       onConnect: {
         addListener: vi.fn(),
       },
+      onConnectExternal: {
+        addListener: vi.fn(),
+      },
       onInstalled: {
         addListener: vi.fn(),
       },

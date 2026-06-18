@@ -28,6 +28,7 @@ import {
   extractHandoffFromWebRequest,
   handoffFingerprint,
 } from '../../webapp/src/net/handoff-link.js';
+import { buildDefaultBridgeSwDeps, handleBridgePortConnect } from './bridge-sw.js';
 import { handleFetchProxyConnectionAsync } from './fetch-proxy-shared.js';
 import type {
   CdpCommandMsg,
@@ -275,6 +276,31 @@ async function handleActionClick(clickedTab: ChromeTab): Promise<void> {
   chrome.storage.session.remove(DETACHED_TAB_ID_KEY).catch(() => {});
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
   chrome.sidePanel.setOptions({ enabled: true }).catch(() => {});
+
+  // Wave 3b: if a pinned leader tab is alive, focus it instead of opening
+  // the side panel. The leader tab is the thin-extension primary UI; the
+  // side-panel fallback remains for users still on the fat-extension path
+  // (Wave 6 cleanup will remove it).
+  const leaderId = await readStoredLeaderTabId();
+  if (leaderId !== undefined) {
+    let leaderTab: ChromeTab | undefined;
+    try {
+      leaderTab = await chrome.tabs.get(leaderId);
+    } catch {
+      leaderTab = undefined;
+    }
+    if (leaderTab !== undefined && isLeaderTabUrl(leaderTab.url)) {
+      await chrome.tabs.update(leaderId, { active: true });
+      if (leaderTab.windowId !== undefined) {
+        await chrome.windows.update(leaderTab.windowId, { focused: true });
+      }
+      return;
+    }
+    // Stored leader tab is gone or has navigated away — clear stale state
+    // and fall through to the side-panel fallback below.
+    await clearStoredLeaderTabId();
+  }
+
   if (clickedTab.id !== undefined) {
     await chrome.sidePanel.open({ tabId: clickedTab.id });
   }
@@ -298,6 +324,158 @@ async function handleTabRemoved(tabId: number): Promise<void> {
 chrome.tabs.onRemoved.addListener((tabId) => {
   handleTabRemoved(tabId).catch((err) => {
     console.error('[slicc-sw] handleTabRemoved failed', err);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Leader tab state (Wave 3b — thin extension)
+// ---------------------------------------------------------------------------
+//
+// The thin extension opens https://www.sliccy.ai/?slicc=leader in a pinned
+// "home" tab that acts as the tray leader. Per-page injected iframes (the
+// `<slicc-launcher>` content script) connect as followers in auto-follow
+// mode, so closing a host page never stops the agent.
+//
+// Lifecycle mirrors the detached-popout pattern above: `chrome.storage.session`
+// persists the tab id; reconciliation runs at SW startup + `onStartup` +
+// `onInstalled`; `ensureLeaderTab` creates the pinned tab if missing;
+// `tabs.onRemoved` clears the storage when the user closes the leader tab.
+//
+// The bridge transport (sibling task) reads `LEADER_TAB_ID_KEY` from
+// `chrome.storage.session` for its three-factor pinning — keep the key
+// name and shape stable.
+
+const LEADER_TAB_ID_KEY = 'slicc_leader_tab_id';
+const LEADER_TAB_URL = 'https://www.sliccy.ai/?slicc=leader';
+const LEADER_TAB_URL_GLOB = 'https://www.sliccy.ai/*';
+
+async function readStoredLeaderTabId(): Promise<number | undefined> {
+  try {
+    const result = await chrome.storage.session.get(LEADER_TAB_ID_KEY);
+    const raw = result[LEADER_TAB_ID_KEY];
+    return typeof raw === 'number' ? raw : undefined;
+  } catch (err) {
+    console.error('[slicc-sw] storage.session.get leader tab id failed', err);
+    return undefined;
+  }
+}
+
+async function writeStoredLeaderTabId(tabId: number): Promise<void> {
+  await chrome.storage.session.set({ [LEADER_TAB_ID_KEY]: tabId });
+}
+
+async function clearStoredLeaderTabId(): Promise<void> {
+  await chrome.storage.session.remove(LEADER_TAB_ID_KEY);
+}
+
+function isLeaderTabUrl(rawUrl: string | undefined): boolean {
+  if (!rawUrl) return false;
+  let u: URL;
+  try {
+    u = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  // Pin to the exact leader origin — `www.sliccy.ai`. The Cloudflare worker
+  // 301-redirects bare-host requests to `www`, so any leader URL the user
+  // restored from a previous session has settled at the www subdomain.
+  if (u.origin !== 'https://www.sliccy.ai') return false;
+  return u.searchParams.get('slicc') === 'leader';
+}
+
+async function reconcileLeaderTabOnBoot(): Promise<void> {
+  const storedId = await readStoredLeaderTabId();
+  if (storedId === undefined) return;
+  let tab: ChromeTab | undefined;
+  try {
+    tab = await chrome.tabs.get(storedId);
+  } catch {
+    // Tab gone (closed while SW was evicted or storage.session restored stale)
+  }
+  if (tab !== undefined && isLeaderTabUrl(tab.url)) return;
+  await clearStoredLeaderTabId();
+}
+
+// Serialize concurrent ensureLeaderTab() calls so multiple lifecycle
+// triggers (top-level + onStartup + onInstalled) firing in quick
+// succession can't race past the storage check and create duplicate
+// pinned tabs. Same pattern as `offscreenLock` below.
+let leaderTabLock: Promise<void> | null = null;
+
+async function ensureLeaderTab(): Promise<void> {
+  if (leaderTabLock) return leaderTabLock;
+  leaderTabLock = (async () => {
+    try {
+      const storedId = await readStoredLeaderTabId();
+      if (storedId !== undefined) {
+        try {
+          const tab = await chrome.tabs.get(storedId);
+          if (isLeaderTabUrl(tab.url)) return;
+        } catch {
+          // fall through to recovery
+        }
+        await clearStoredLeaderTabId();
+      }
+
+      // Adopt a restored leader tab if Chrome's "Continue where you left off"
+      // brought one back from the previous session. storage.session is wiped
+      // on restart but the tab itself may still be open; claim it instead of
+      // spawning a duplicate.
+      try {
+        const matches = await chrome.tabs.query({ url: LEADER_TAB_URL_GLOB });
+        const restored = matches.find((t) => isLeaderTabUrl(t.url) && t.id !== undefined);
+        if (restored && restored.id !== undefined) {
+          await writeStoredLeaderTabId(restored.id);
+          return;
+        }
+      } catch (err) {
+        console.error('[slicc-sw] tabs.query for leader tab failed', err);
+      }
+
+      const created = await chrome.tabs.create({
+        url: LEADER_TAB_URL,
+        active: false,
+        pinned: true,
+      });
+      if (created.id !== undefined) {
+        await writeStoredLeaderTabId(created.id);
+      }
+    } finally {
+      leaderTabLock = null;
+    }
+  })();
+  return leaderTabLock;
+}
+
+// Top-level: reconcile only (defensive cleanup on SW eviction recovery).
+// `ensureLeaderTab` is intentionally NOT called here — that path runs from
+// the lifecycle listeners below, so MV3 SW recycles within a session don't
+// keep recreating the leader tab.
+reconcileLeaderTabOnBoot().catch((err) => {
+  console.error('[slicc-sw] reconcile leader tab failed', err);
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  reconcileLeaderTabOnBoot()
+    .then(() => ensureLeaderTab())
+    .catch(() => {});
+});
+
+chrome.runtime.onInstalled.addListener(() => {
+  reconcileLeaderTabOnBoot()
+    .then(() => ensureLeaderTab())
+    .catch(() => {});
+});
+
+async function handleLeaderTabRemoved(tabId: number): Promise<void> {
+  const storedId = await readStoredLeaderTabId();
+  if (storedId !== tabId) return;
+  await clearStoredLeaderTabId();
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  handleLeaderTabRemoved(tabId).catch((err) => {
+    console.error('[slicc-sw] handleLeaderTabRemoved failed', err);
   });
 });
 
@@ -1144,6 +1322,47 @@ async function buildSecretsPipeline(): Promise<SecretsPipeline> {
   };
   return new SecretsPipeline({ sessionId, source, sessionStore: sessionSecretStore });
 }
+
+// ---------------------------------------------------------------------------
+// Wave 3b: full CDP pass-through bridge for the sliccy.ai leader tab.
+//
+// The leader opens a long-lived Port via `chrome.runtime.connect(EXT_ID,
+// { name: 'slicc.cdp-bridge' })`, gated here by externally_connectable + the
+// three-factor pin enforced inside `handleBridgePortConnect` (origin
+// allowlist + sender.tab.id === storedLeaderTabId + sender.frameId === 0).
+// `slicc_leader_tab_id` is owned by the sibling leader-tab task; absent →
+// pin fails closed. The deps here delegate attach/detach to the existing
+// `attachedTabs` accounting so the bridge and the offscreen CDP proxy never
+// trample each other, and route outbound commands through `maybeUnmaskCdpFrame`
+// so raw CDP secrets MUST NEVER reach the leader tab.
+// ---------------------------------------------------------------------------
+
+const bridgeSwDeps = buildDefaultBridgeSwDeps({
+  attachDebugger: async (tabId) => {
+    if (!attachedTabs.has(tabId)) {
+      await chrome.debugger.attach({ tabId }, '1.3');
+      attachedTabs.add(tabId);
+    }
+  },
+  detachDebugger: async (tabId) => {
+    if (!attachedTabs.has(tabId)) return;
+    attachedTabs.delete(tabId);
+    await chrome.debugger.detach({ tabId }).catch(() => {
+      /* tab may already be closed */
+    });
+  },
+  sendDebuggerCommand: async (tabId, method, params) => {
+    const result = await chrome.debugger.sendCommand({ tabId }, method, params);
+    return result ?? {};
+  },
+  maybeUnmaskCdpFrame,
+});
+
+chrome.runtime.onConnectExternal.addListener((port: ChromeRuntimePort) => {
+  handleBridgePortConnect(port, bridgeSwDeps).catch((err) => {
+    console.error('[slicc-sw] CDP bridge connect failed', err);
+  });
+});
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'fetch-proxy.fetch') return;

@@ -217,13 +217,21 @@ function buildSliccDiffPlugin() {
  * Write manifest.json with the root package version (the committed source
  * value is a sentinel and never read at runtime). SLICC_EXT_DEV=1 also
  * strips "key" so Chrome assigns a random ID (avoids stale storage from
- * previous installs).
+ * previous installs), and widens `externally_connectable` so the leader
+ * tab served from a localhost vite dev server can open the CDP bridge Port.
  */
 function writeExtensionManifest(): void {
   const manifest = JSON.parse(readFileSync(resolve(Dirname, 'manifest.json'), 'utf-8'));
   manifest.version = rootPkg.version;
   if (process.env['SLICC_EXT_DEV']) {
     delete manifest.key;
+    if (manifest.externally_connectable?.matches) {
+      manifest.externally_connectable.matches = [
+        ...manifest.externally_connectable.matches,
+        'http://localhost:*/*',
+        'http://127.0.0.1:*/*',
+      ];
+    }
   }
   writeFileSync(resolve(outDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
 }
