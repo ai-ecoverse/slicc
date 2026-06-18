@@ -4,7 +4,7 @@ import './slicc-permissions.js';
 
 /**
  * All seven permission kinds the surface routes. The story uses every one;
- * the multi-select control picks which to include in the multi-kind prompt.
+ * the radio control picks which one drives the floating pre-prompt dialog.
  */
 const ALL_KINDS: PermissionKind[] = [
   'camera',
@@ -17,7 +17,7 @@ const ALL_KINDS: PermissionKind[] = [
 ];
 
 interface PlaygroundArgs {
-  kinds: PermissionKind[];
+  kind: PermissionKind;
   heading: string;
   description: string;
   grantLabel: string;
@@ -29,26 +29,26 @@ const meta: Meta<PlaygroundArgs> = {
   parameters: { layout: 'fullscreen' },
   tags: ['autodocs'],
   argTypes: {
-    kinds: {
-      control: 'check',
+    kind: {
+      control: 'radio',
       options: ALL_KINDS,
-      description: 'Permission kinds passed to the multi-kind pre-prompt.',
+      description: 'Permission kind passed to the floating pre-prompt dialog.',
     },
     heading: {
       control: 'text',
-      description: 'Heading for the multi-kind prompt; blank uses the built-in default.',
+      description: 'Heading for the pre-prompt dialog; blank uses the built-in default.',
     },
     description: {
       control: 'text',
-      description: 'Body copy for the multi-kind prompt.',
+      description: 'Body copy for the pre-prompt dialog.',
     },
     grantLabel: { control: 'text' },
     cancelLabel: { control: 'text' },
   },
   args: {
-    kinds: ['camera', 'microphone'],
+    kind: 'camera',
     heading: '',
-    description: 'Sliccy needs access to ask for the selected devices and folders.',
+    description: 'Sliccy needs access to ask for the selected device or folder.',
     grantLabel: 'Allow',
     cancelLabel: 'Cancel',
   },
@@ -238,19 +238,19 @@ function storyHost(args: PlaygroundArgs): HTMLElement {
   }
   const promptBtn = document.createElement('button');
   promptBtn.type = 'button';
-  promptBtn.textContent = 'multi-kind prompt';
+  promptBtn.textContent = 'Trigger dialog';
   promptBtn.style.cssText =
     'font:600 12px var(--ui,sans-serif);padding:8px 14px;border:1px solid var(--ctx,#3b63fb);' +
     'border-radius:9px;background:var(--ctx,#3b63fb);color:#fff;cursor:pointer;';
   promptBtn.addEventListener('click', () => {
-    const kinds = (args.kinds ?? []).filter((k) => ALL_KINDS.includes(k));
-    if (!kinds.length) {
-      append('prompt: no kinds selected — use the "kinds" control');
+    const kind = args.kind;
+    if (!ALL_KINDS.includes(kind)) {
+      append(`prompt: unknown kind "${kind}" — use the "kind" control`);
       return;
     }
     void surface
       .prompt({
-        kinds,
+        kinds: [kind],
         heading: args.heading || undefined,
         description: args.description,
         grantLabel: args.grantLabel || undefined,
@@ -331,5 +331,9 @@ function storyHost(args: PlaygroundArgs): HTMLElement {
  * controls. Light/dark is covered by the toolbar theme decorator.
  */
 export const Playground: Story = {
+  args: {
+    kind: 'camera',
+  },
+
   render: (args) => storyHost(args),
 };
