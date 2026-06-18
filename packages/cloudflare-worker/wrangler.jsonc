@@ -31,8 +31,8 @@
     "CONE_CAP_PAUSED": "5",
     // OAuth relay allowlist for remote origins (staging/preview deploys)
     "ALLOWED_CLOUD_DASHBOARD_ORIGINS": "https://www.sliccy.ai,https://slicc-tray-hub-staging.minivelos.workers.dev",
-    // Space-separated origins permitted to frame the ?cherry=1 SPA (empty = deny)
-    "ALLOWED_CHERRY_HOST_ORIGINS": "https://of1-labs-frontend.pages.dev"
+    // Space-separated origins permitted to frame the ?cherry=1 SPA (empty = deny, "*" = any origin)
+    "ALLOWED_CHERRY_HOST_ORIGINS": "*"
   },
   // Secrets must be set via: npx wrangler secret put <SECRET_NAME>
   // - CLOUDFLARE_TURN_API_TOKEN
