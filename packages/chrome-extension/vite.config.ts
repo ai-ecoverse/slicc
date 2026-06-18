@@ -101,6 +101,47 @@ function buildPreviewSwPlugin() {
 }
 
 /**
+ * esbuild plugin: load `*.svg?raw` imports as text — matches Vite's `?raw`
+ * loader so the launcher's inline mono-logo SVGs bundle correctly.
+ */
+function rawSvgEsbuildPlugin(): import('esbuild').Plugin {
+  return {
+    name: 'raw-svg',
+    setup(build) {
+      build.onResolve({ filter: /\.svg\?raw$/ }, (args) => ({
+        path: resolve(args.resolveDir, args.path.replace('?raw', '')),
+        namespace: 'raw-svg',
+      }));
+      build.onLoad({ filter: /.*/, namespace: 'raw-svg' }, async (args) => {
+        const { readFile } = await import('fs/promises');
+        return { contents: await readFile(args.path, 'utf8'), loader: 'text' };
+      });
+    },
+  };
+}
+
+/**
+ * Build the content script as a self-contained IIFE bundle. MV3 content
+ * scripts are classic scripts (no ESM imports), so the launcher web component
+ * + injector are inlined into one file at `dist/extension/content-script.js`.
+ * Manifest's `content_scripts[]` entry loads this on every page.
+ */
+function buildContentScriptPlugin() {
+  return {
+    name: 'build-content-script',
+    async closeBundle() {
+      const esbuild = await import('esbuild');
+      await esbuild.build({
+        ...PROD_IIFE_DEFAULTS,
+        entryPoints: [resolve(Dirname, 'src/content-script.ts')],
+        outfile: resolve(outDir, 'content-script.js'),
+        plugins: [rawSvgEsbuildPlugin()],
+      });
+    },
+  };
+}
+
+/**
  * The Mount Secrets options page (secrets.html) loads
  * dist/extension/secrets.js as a classic script — bundle the TypeScript
  * entry to a single self-contained IIFE.
@@ -450,6 +491,7 @@ export default defineConfig(({ mode }) => ({
     stubPiNodeInternalsPlugin(),
     buildExtensionServiceWorkerPlugin(mode),
     buildPreviewSwPlugin(),
+    buildContentScriptPlugin(),
     buildSecretsPagePlugin(),
     buildSliccEditorPlugin(),
     buildSliccDiffPlugin(),
