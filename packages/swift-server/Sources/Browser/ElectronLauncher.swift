@@ -311,6 +311,90 @@ func buildElectronOverlayAppURL(servePort: Int) -> String {
     "http://localhost:\(servePort)/electron"
 }
 
+// MARK: - Path B: thin-bridge launch URL
+
+/// Query-param name used to mark the role of an overlay tab on the hosted
+/// launcher URL. The pinned leader carries `role=leader`; auto-follow
+/// followers carry `role=follower`. Mirrors `BRIDGE_ROLE_QUERY_PARAM` in
+/// `packages/node-server/src/electron-controller.ts`.
+let bridgeRoleQueryParam = "role"
+let bridgeRoleLeader = "leader"
+let bridgeRoleFollower = "follower"
+
+/// Thin-bridge coordinates for the Electron overlay. When supplied to
+/// `ElectronOverlayInjector`, the injected overlay loads from a
+/// sliccy.ai-hosted launcher (Path B) and dials back to the local `/cdp`
+/// WebSocket using the per-process bridge token. Mirrors
+/// `ThinBridgeConfig` in `packages/node-server/src/electron-controller.ts`.
+struct ThinBridgeConfig: Equatable, Sendable {
+    let hostedLeaderOrigin: String
+    let bridgeWsUrl: String
+    let bridgeToken: String
+}
+
+enum OverlayRole: String, Sendable {
+    case leader
+    case follower
+}
+
+struct ThinOverlayURLOptions {
+    let config: ThinBridgeConfig
+    let role: OverlayRole
+    let activeTab: String?
+
+    init(config: ThinBridgeConfig, role: OverlayRole, activeTab: String? = nil) {
+        self.config = config
+        self.role = role
+        self.activeTab = activeTab
+    }
+}
+
+/// Build the hosted launcher URL for an overlay injection. Mirrors the
+/// standalone Path A launch-URL shape (`bridge`, `bridgeToken` query
+/// params) with one Electron-specific addition: a `role` param that pins
+/// the first injected tab as the leader and marks every subsequent tab as
+/// an auto-follow follower. Byte-for-byte parity with
+/// `buildThinOverlayAppUrl` in node-server's `electron-controller.ts`.
+func buildThinOverlayAppURL(options: ThinOverlayURLOptions) -> String {
+    let base = options.config.hostedLeaderOrigin
+    let trimmed = base.hasSuffix("/") ? String(base.dropLast()) : base
+    guard var components = URLComponents(string: "\(trimmed)/electron") else {
+        return "\(trimmed)/electron"
+    }
+    var items: [URLQueryItem] = components.queryItems ?? []
+    items.append(URLQueryItem(name: BridgeSecurity.wsQueryParam, value: options.config.bridgeWsUrl))
+    items.append(URLQueryItem(name: BridgeSecurity.tokenQueryParam, value: options.config.bridgeToken))
+    items.append(URLQueryItem(name: bridgeRoleQueryParam, value: options.role.rawValue))
+    if let activeTab = options.activeTab, !activeTab.isEmpty, activeTab != "chat" {
+        items.append(URLQueryItem(name: "tab", value: activeTab))
+    }
+    components.queryItems = items
+    return components.string ?? "\(trimmed)/electron"
+}
+
+/// Resolve the hosted leader origin Chrome / Electron should open in thin
+/// mode. Prefers explicit overrides (`SLICC_HOSTED_LEADER_ORIGIN`, then
+/// `WORKER_BASE_URL`) so dev can point at staging; defaults to production
+/// `https://www.sliccy.ai`. Trailing slashes are stripped so callers can
+/// safely concatenate paths. Mirrors `resolveHostedLeaderOrigin` in
+/// `packages/node-server/src/electron-controller.ts`.
+func resolveHostedLeaderOrigin(environment: [String: String] = ProcessInfo.processInfo.environment) -> String {
+    let explicit = environment["SLICC_HOSTED_LEADER_ORIGIN"] ?? environment["WORKER_BASE_URL"]
+    if let explicit, !explicit.isEmpty {
+        return explicit.replacingOccurrences(of: #"/+$"#, with: "", options: .regularExpression)
+    }
+    return "https://www.sliccy.ai"
+}
+
+/// Pre-built thin-mode bootstrap pair — one per overlay role. The
+/// injector picks `leader` for the first injected target and `follower`
+/// for every subsequent target. Mirrors `ThinBootstrapSet` in
+/// `packages/node-server/src/electron-controller.ts`.
+struct ThinBootstrapSet: Sendable {
+    let leader: String
+    let follower: String
+}
+
 func buildElectronOverlayBootstrapScript(bundleSource: String, appURL: String) -> String {
     let escapedAppURL = appURL.replacingOccurrences(of: "\\", with: "\\\\")
         .replacingOccurrences(of: "\"", with: "\\\"")
@@ -416,10 +500,27 @@ final class ElectronOverlayInjector: @unchecked Sendable {
     private let session: URLSession
     private let logger: Logger
     private let probeDelayNanoseconds: UInt64
+    /// Thin-bridge config: when non-nil the injector switches to Path B
+    /// mode — overlay loads from a sliccy.ai-hosted launcher with
+    /// per-process bridge token + role tag. Nil keeps the legacy bundled
+    /// overlay path (Path A / bundled UI).
+    private let thinBridge: ThinBridgeConfig?
     private let stateQueue = DispatchQueue(label: "slicc.browser.electron-overlay-injector")
     private var sessions: [String: OverlayTargetSession] = [:]
     private var cspBypassedURLs = Set<String>()
     private var pollTask: Task<Void, Never>?
+    /// URL of the target currently elected as the pinned leader (thin
+    /// mode only). Cleared by `syncTargets` when that target disappears
+    /// so the next injection re-elects a fresh leader. Mirrors node-
+    /// server's `leaderTargetUrl` in `electron-controller.ts`.
+    private var leaderTargetURL: String?
+
+    /// Test-only injection seam: when set, `loadBootstrapScript()` returns
+    /// this string instead of reading bundle files. Mirrors node-server's
+    /// `_createForTesting` bootstrap override so unit tests can drive the
+    /// per-target connect flow without bundle I/O.
+    private let testingLegacyBootstrap: String?
+    private let testingThinBootstraps: ThinBootstrapSet?
 
     init(
         cdpPort: Int,
@@ -427,7 +528,8 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         projectRoot: URL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
         session: URLSession = .shared,
         logger: Logger = Logger(label: "slicc.browser.electron-overlay"),
-        probeDelayNanoseconds: UInt64 = 1_500_000_000
+        probeDelayNanoseconds: UInt64 = 1_500_000_000,
+        thinBridge: ThinBridgeConfig? = nil
     ) {
         self.cdpPort = cdpPort
         self.servePort = servePort
@@ -435,6 +537,33 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         self.session = session
         self.logger = logger
         self.probeDelayNanoseconds = probeDelayNanoseconds
+        self.thinBridge = thinBridge
+        self.testingLegacyBootstrap = nil
+        self.testingThinBootstraps = nil
+    }
+
+    /// Test-only init that skips bundle loading and lets tests drive the
+    /// per-target connect flow directly with controllable bootstrap
+    /// markers + probe delay. Mirrors node-server's
+    /// `ElectronOverlayInjector._createForTesting` factory.
+    init(
+        _testingServePort servePort: Int,
+        cdpPort: Int = 9223,
+        bootstrapScript: String? = nil,
+        thinBootstraps: ThinBootstrapSet? = nil,
+        probeDelayNanoseconds: UInt64 = 20_000_000,
+        session: URLSession = .shared,
+        logger: Logger = Logger(label: "slicc.browser.electron-overlay")
+    ) {
+        self.cdpPort = cdpPort
+        self.servePort = servePort
+        self.projectRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        self.session = session
+        self.logger = logger
+        self.probeDelayNanoseconds = probeDelayNanoseconds
+        self.thinBridge = nil
+        self.testingLegacyBootstrap = bootstrapScript ?? "/* test-noop */"
+        self.testingThinBootstraps = thinBootstraps
     }
 
     func start() {
@@ -538,7 +667,7 @@ final class ElectronOverlayInjector: @unchecked Sendable {
     }
 
     private func syncTargets() async throws {
-        let bootstrapScript = try loadBootstrapScript()
+        let bootstraps = try loadBootstrapScripts()
         var request = URLRequest(url: URL(string: "http://127.0.0.1:\(cdpPort)/json/list")!)
         request.timeoutInterval = 2
         let (data, response) = try await session.data(for: request)
@@ -553,6 +682,19 @@ final class ElectronOverlayInjector: @unchecked Sendable {
             "selectedTargets": .stringConvertible(selectedTargets.count)
         ])
         let liveTargetIDs = Set(selectedTargets.compactMap(\.webSocketDebuggerURL))
+
+        // Thin mode: drop the elected leader if its target is no longer
+        // present so the next injection re-elects. Without this a stale
+        // leaderTargetURL would block every future tab from becoming the
+        // pinned leader after the original leader closed.
+        if bootstraps.thin != nil {
+            let liveTargetURLs = Set(selectedTargets.map(\.url))
+            stateQueue.sync {
+                if let current = leaderTargetURL, !liveTargetURLs.contains(current) {
+                    leaderTargetURL = nil
+                }
+            }
+        }
 
         // Drop sessions whose CDP target disappeared (e.g. tab/window closed).
         let stale: [OverlayTargetSession] = stateQueue.sync {
@@ -572,9 +714,76 @@ final class ElectronOverlayInjector: @unchecked Sendable {
             let alreadyConnected = stateQueue.sync { sessions[targetID] != nil }
             guard !alreadyConnected else { continue }
 
-            let session = makeTargetSession(target: target, bootstrapScript: bootstrapScript)
+            let bootstrap = resolveBootstrapForTarget(target, bootstraps: bootstraps)
+            let session = makeTargetSession(target: target, bootstrapScript: bootstrap)
             stateQueue.sync { sessions[targetID] = session }
             session.start()
+        }
+    }
+
+    /// Pick the bootstrap script for `target`, electing the leader on
+    /// first use when thin-mode is active. Same target URL ↔ same role
+    /// across reconnects so a page that bounces its CDP session stays the
+    /// leader (no re-election on transient drops, only on `syncTargets`
+    /// cleanup). Mirrors node-server's `resolveBootstrapForTarget` in
+    /// `electron-controller.ts`.
+    func resolveBootstrapForTarget(
+        _ target: ElectronInspectableTarget,
+        bootstraps: ResolvedBootstraps
+    ) -> String {
+        guard let thin = bootstraps.thin else {
+            return bootstraps.legacy
+        }
+        return stateQueue.sync {
+            if leaderTargetURL == target.url {
+                return thin.leader
+            }
+            if leaderTargetURL == nil {
+                leaderTargetURL = target.url
+                return thin.leader
+            }
+            return thin.follower
+        }
+    }
+
+    /// Snapshot the elected leader target URL (nil when no leader has
+    /// been elected). Mirrors node-server's `_testingLeaderTargetUrl()`.
+    func _testing_leaderTargetURL() -> String? {
+        stateQueue.sync { leaderTargetURL }
+    }
+
+    /// Seed the elected leader so the next injection elects a follower
+    /// against a known target. Mirrors node-server's
+    /// `_testingSeedLeaderTargetUrl()`.
+    func _testing_seedLeaderTargetURL(_ url: String?) {
+        stateQueue.sync { leaderTargetURL = url }
+    }
+
+    /// Test-only: drive the per-target connect flow without going
+    /// through `start()`. Returns the freshly-created session so callers
+    /// can stop it explicitly (no polling loop is running in tests).
+    @discardableResult
+    func _testing_connectToTarget(_ target: ElectronInspectableTarget) throws -> OverlayTargetSession {
+        let bootstraps = try loadBootstrapScripts()
+        let bootstrap = resolveBootstrapForTarget(target, bootstraps: bootstraps)
+        let session = makeTargetSession(target: target, bootstrapScript: bootstrap)
+        if let targetID = target.webSocketDebuggerURL {
+            stateQueue.sync { sessions[targetID] = session }
+        }
+        session.start()
+        return session
+    }
+
+    /// Test-only: close any sessions opened by `_testing_connectToTarget`.
+    /// Mirrors node-server's `_testingCloseConnections`.
+    func _testing_closeConnections() {
+        let snapshot: [OverlayTargetSession] = stateQueue.sync {
+            let value = Array(sessions.values)
+            sessions.removeAll()
+            return value
+        }
+        for session in snapshot {
+            session.stop()
         }
     }
 
@@ -616,7 +825,58 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         stateQueue.sync { _ = cspBypassedURLs.insert(url) }
     }
 
-    private func loadBootstrapScript() throws -> String {
+    /// Pre-built bootstrap scripts loaded once per `syncTargets` cycle.
+    /// In legacy mode `thin` is nil and `legacy` is the single bundled
+    /// bootstrap. In thin mode `thin` carries the leader/follower pair
+    /// keyed off the per-process bridge token + role.
+    struct ResolvedBootstraps {
+        let legacy: String
+        let thin: ThinBootstrapSet?
+    }
+
+    /// Build the bootstrap script set for the current injector mode. In
+    /// thin mode (`thinBridge != nil`) we emit leader/follower variants
+    /// whose only difference is the `role=` query param on the hosted
+    /// launcher URL; in legacy mode we emit the single bundled-overlay
+    /// bootstrap (unchanged from Wave 5).
+    func loadBootstrapScripts() throws -> ResolvedBootstraps {
+        // Test-only override path: skip bundle I/O entirely.
+        if let testingThin = testingThinBootstraps {
+            return ResolvedBootstraps(legacy: testingLegacyBootstrap ?? "/* test-noop */", thin: testingThin)
+        }
+        if let testingLegacy = testingLegacyBootstrap {
+            return ResolvedBootstraps(legacy: testingLegacy, thin: nil)
+        }
+
+        let bundleSource = try loadOverlayBundleSource()
+        let legacy = buildElectronOverlayBootstrapScript(
+            bundleSource: bundleSource,
+            appURL: buildElectronOverlayAppURL(servePort: servePort)
+        )
+
+        guard let thinBridge else {
+            return ResolvedBootstraps(legacy: legacy, thin: nil)
+        }
+
+        let leader = buildElectronOverlayBootstrapScript(
+            bundleSource: bundleSource,
+            appURL: buildThinOverlayAppURL(
+                options: ThinOverlayURLOptions(config: thinBridge, role: .leader)
+            )
+        )
+        let follower = buildElectronOverlayBootstrapScript(
+            bundleSource: bundleSource,
+            appURL: buildThinOverlayAppURL(
+                options: ThinOverlayURLOptions(config: thinBridge, role: .follower)
+            )
+        )
+        return ResolvedBootstraps(
+            legacy: legacy,
+            thin: ThinBootstrapSet(leader: leader, follower: follower)
+        )
+    }
+
+    private func loadOverlayBundleSource() throws -> String {
         let fileManager = FileManager.default
         let candidates = [
             projectRoot,
@@ -629,20 +889,13 @@ final class ElectronOverlayInjector: @unchecked Sendable {
             for relativePath in relativePaths {
                 let candidate = root.appendingPathComponent(relativePath)
                 if fileManager.fileExists(atPath: candidate.path) {
-                    let source = try String(contentsOf: candidate, encoding: .utf8)
-                    return buildElectronOverlayBootstrapScript(
-                        bundleSource: source,
-                        appURL: buildElectronOverlayAppURL(servePort: servePort)
-                    )
+                    return try String(contentsOf: candidate, encoding: .utf8)
                 }
             }
         }
 
         logger.warning("Electron overlay bundle not found; using inline fallback")
-        return buildElectronOverlayBootstrapScript(
-            bundleSource: inlineFallbackOverlayBundle(),
-            appURL: buildElectronOverlayAppURL(servePort: servePort)
-        )
+        return inlineFallbackOverlayBundle()
     }
 
     private func inlineFallbackOverlayBundle() -> String {
