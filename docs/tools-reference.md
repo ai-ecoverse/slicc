@@ -626,9 +626,9 @@ The agent can inspect `isError` to determine if a tool call succeeded or needs r
 
 ### Extension Mode
 
-- VirtualFS backed by IndexedDB (LightningFS)
-- Tools run in browser (side panel and offscreen document)
-- Browser operations via `chrome.debugger` API
+- VirtualFS backed by IndexedDB (LightningFS), opened from the hosted leader tab (`https://www.sliccy.ai`)
+- Tools run in the hosted leader tab's page and kernel-worker realms
+- Browser operations route through the SW's `bridge.cdp` Port → `chrome.debugger`
 - `node -e` and `.jsh` scripts run in sandbox iframe (CSP-exempt)
 - Fetch requests routed through `fetch-proxy.fetch` SW Port handler with secret unmask/scrub
 

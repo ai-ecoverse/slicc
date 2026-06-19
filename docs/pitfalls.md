@@ -1,6 +1,6 @@
 # Pitfalls & Gotchas
 
-Common mistakes when working on SLICC. All subsystems must work in both **CLI mode** (Node.js/Express + Chrome) and **extension mode** (Chrome extension side panel). This document captures dual-mode incompatibilities and the patterns to fix them.
+Common mistakes when working on SLICC. All subsystems must work in both **CLI mode** (Node.js/Express + Chrome) and **extension mode** (the thin Chrome extension: service worker bridge + MAIN-world content-script launcher + the hosted webapp on `https://www.sliccy.ai`). This document captures dual-mode incompatibilities and the patterns to fix them.
 
 ## Extension CSP & Dynamic Code Execution
 
@@ -70,7 +70,7 @@ Manifest sandbox pages (`sandbox.html`, `sprinkle-sandbox.html`, `tool-ui-sandbo
 
 | Pattern                                    | How it works                                                                                                                                             | Used by                                        |
 | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| **Fetch-and-inline (full-doc)**            | Side panel scans HTML for `<script src="https://...">`, fetches content, replaces with `<script>inline</script>` before sending to sandbox               | `sprinkle-renderer.ts:inlineExternalScripts()` |
+| **Fetch-and-inline (full-doc)**            | Webapp scans HTML for `<script src="https://...">`, fetches content, replaces with `<script>inline</script>` before sending to sandbox                   | `sprinkle-renderer.ts:inlineExternalScripts()` |
 | **Parent relay (partial)**                 | Sandbox sends `sprinkle-fetch-script` to parent via postMessage, parent fetches, returns `sprinkle-fetch-script-response`                                | `sprinkle-sandbox.html:fetchScriptViaRelay()`  |
 | **jsdelivr + Function constructor**        | Fetch from `https://cdn.jsdelivr.net/npm/PACKAGE` (serves UMD/CJS main file), evaluate with `(0, Function)('module', 'exports', text)(mod, mod.exports)` | `node-command.ts:__loadModule()`               |
 | **Static `<script src>` in `<head>` only** | Extension-relative scripts must load statically in the initial HTML, not via dynamic `createElement`                                                     | `sprinkle-sandbox.html` lines 8-10             |
@@ -82,14 +82,14 @@ Manifest sandbox pages (`sandbox.html`, `sprinkle-sandbox.html`, `tool-ui-sandbo
 2. **Never dynamically create `<script>` elements with extension-relative `src`** — opaque origin blocks runtime loads. Load statically in `<head>`.
 3. **Never call `import()` with external URLs in sandbox context** — CSP blocks it and generates noisy console errors even when caught. Use jsdelivr CDN + indirect Function constructor (`(0, Function)('module', 'exports', text)`) for npm packages in `node -e`.
 4. **Always guard `document.body` in scripts loaded from `<head>`** — use `try {} catch {}` around `observer.observe(document.body)` rather than deferring to DOMContentLoaded (DOMContentLoaded listeners interfere with sandbox page load timing).
-5. **Use the parent relay for cross-origin fetches** — sandbox null origin means CORS is unreliable. The side panel has full network access.
+5. **Use the parent relay for cross-origin fetches** — sandbox null origin means CORS is unreliable. The parent webapp realm has full network access.
 6. **Call `LucideIcons.render()` explicitly after injecting content in partial-content sprinkles** — the MutationObserver can't start in `<head>` (body is null), so icons won't auto-render. An explicit `render()` call after script execution handles this.
 7. **Use function replacements with `String.replace` when the replacement contains fetched code** — `String.replace(str, replacement)` interprets `$&`, `$1`, etc. as special patterns. Minified libraries (e.g. lodash) contain `$&` in regex escape functions. Use `str.replace(match, () => replacement)` to prevent corruption.
 8. **esm.sh `?bundle` returns ESM stubs, not evaluable bundles** — the top-level URL returns a small file with `export ... from "/.../pkg.bundle.mjs"`. Use jsdelivr (`https://cdn.jsdelivr.net/npm/PACKAGE`) instead, which serves the npm package's main file (typically UMD/CJS).
 
-**macOS TCC and Side Panel Crashes**
+**macOS TCC and Picker Crashes**
 
-Chrome's side panel cannot host macOS TCC (Transparency, Consent, and Control) permission dialogs, and it also crashes (rather than throwing a normal error) when `showDirectoryPicker()` is called against a system folder Chrome refuses to share (Documents, Downloads, Desktop, the home directory). Solution: never call `showDirectoryPicker()` from the side panel — route directory selection through a popup window where TCC and the system-folder rejection render correctly. The popup pattern and its three extension-side entry points are documented in [`docs/approvals.md` — Local mount picker](./approvals.md#local-mount-picker).
+Chrome's `chrome-extension://`-origin surfaces cannot host macOS TCC (Transparency, Consent, and Control) permission dialogs, and they also crash (rather than throwing a normal error) when `showDirectoryPicker()` is called against a system folder Chrome refuses to share (Documents, Downloads, Desktop, the home directory). Solution: never call `showDirectoryPicker()` directly from a `chrome-extension://` context — route directory selection through a popup window where TCC and the system-folder rejection render correctly. The popup pattern and its three extension-side entry points are documented in [`docs/approvals.md` — Local mount picker](./approvals.md#local-mount-picker).
 
 ## WASM & Bundled Assets in Extension Mode
 
@@ -380,7 +380,7 @@ All paths in VirtualFS must follow these rules:
 
 **The Problem**
 
-Chrome extension side panels cannot trigger mic permission prompts. `navigator.mediaDevices.getUserMedia()` silently fails. This is one of the OS-capture gates catalogued in [`docs/approvals.md` — OS capture gates](./approvals.md#os-capture-gates).
+`chrome-extension://`-origin surfaces cannot trigger mic permission prompts. `navigator.mediaDevices.getUserMedia()` silently fails when invoked from those contexts. This is one of the OS-capture gates catalogued in [`docs/approvals.md` — OS capture gates](./approvals.md#os-capture-gates).
 
 **The Solution**
 
@@ -390,15 +390,15 @@ Fallback to a popup window (`voice-popup.html`) for the one-time mic permission 
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
 | **CLI mode**                   | `getUserMedia()` → permission prompt → speech recognition starts                                                         |
 | **Extension, first use**       | `getUserMedia()` fails → open popup window → user grants permission → popup closes → direct mic access cached per origin |
-| **Extension, subsequent uses** | Permission cached → `getUserMedia()` succeeds → speech recognition starts directly in side panel                         |
+| **Extension, subsequent uses** | Permission cached → `getUserMedia()` succeeds → speech recognition starts directly in the hosted webapp                  |
 
 **Code**: Lines 109–130 (try getUserMedia, catch failure in extension mode → fallback to popup).
 
 **Popup Window Details**
 
 - URL: `chrome.runtime.getURL('voice-popup.html?lang=...')`
-- Messaging: side panel ↔ popup via `chrome.runtime.onMessage`
-- Cleanup: popup sends `'speech-end'` message, side panel closes window and clears listeners
+- Messaging: webapp ↔ popup via `chrome.runtime.onMessage`
+- Cleanup: popup sends `'speech-end'` message, the webapp closes the window and clears listeners
 
 ## CDP Transport: Extension Mode
 
@@ -428,16 +428,18 @@ Use `chrome.debugger` API to control tabs directly.
 
 **The Problem**
 
-Leader tray bootstrap waits for a `leader.connected` control frame. In extension mode, that WebSocket must not live in the offscreen document.
+Leader tray bootstrap waits for a `leader.connected` control frame.
 
 **The Solution**
 
-Host the real leader tray `WebSocket` in `packages/chrome-extension/src/service-worker.ts` and relay frames through `chrome.runtime.sendMessage`. The offscreen document should use `ServiceWorkerLeaderTraySocket` from `packages/chrome-extension/src/tray-socket-proxy.ts` as the `LeaderTrayManager` `webSocketFactory`.
+In the thin extension the hosted leader tab (`https://www.sliccy.ai/?slicc=leader`) is a regular `https` page and owns the leader tray `WebSocket` directly via the standard page-side `LeaderSyncManager` (`packages/webapp/src/ui/page-leader-tray.ts`) — same shape as the standalone CLI. The service worker is not in the tray data path; it only pass-through-proxies CDP through the `bridge.cdp` Port in `packages/chrome-extension/src/bridge-sw.ts`.
 
-| Mode          | Leader tray socket owner                         |
-| ------------- | ------------------------------------------------ |
-| **CLI**       | Direct `WebSocket` in the app runtime            |
-| **Extension** | Service worker proxy, not the offscreen document |
+| Mode          | Leader tray socket owner                                                       |
+| ------------- | ------------------------------------------------------------------------------ |
+| **CLI**       | Direct `WebSocket` in the app runtime                                          |
+| **Extension** | Direct `WebSocket` in the hosted leader tab — identical to the standalone path |
+
+Historical note: prior to the thin-bridge release, the extension hosted the leader tray socket in `service-worker.ts` and proxied frames into the offscreen document via `ServiceWorkerLeaderTraySocket`/`tray-socket-proxy.ts`. Both modules are gone.
 
 ## Silent OAuth renewal must stay windowless (IMS JS redirect)
 
@@ -602,17 +604,19 @@ chrome.runtime.onConnect.addListener((port) => {
 
 See `packages/chrome-extension/src/fetch-proxy-shared.ts:handleFetchProxyConnectionAsync` for the production pattern. Regression test: `packages/chrome-extension/tests/fetch-proxy-shared.test.ts` — "handleFetchProxyConnectionAsync — synchronous listener attach".
 
-## Offscreen Documents: Smaller chrome.\* Surface than the SW
+## Hosted Leader Tab Cannot Reach `chrome.storage`
 
 **The Problem**
 
-MV3 offscreen documents inherit only a subset of the manifest's `permissions`. Notably, **`chrome.storage` is NOT exposed in offscreen documents** — even when the manifest grants `"storage"` and the SW has it. Code paths that work in the SW (where `chrome.storage.local.get(null)` returns instantly) throw `Cannot read properties of undefined (reading 'local')` when they end up running in offscreen.
+In the thin extension the webapp loads from `https://www.sliccy.ai` (or `http://localhost:8787` in dev) rather than from `chrome-extension://<id>`. `chrome.storage` is only exposed to extension-origin contexts (service worker, popups, sandbox iframes). Page-realm code on the hosted origin has no `chrome.storage` reference and cannot read or write the secrets store directly.
 
-This was hit by the `secret list` shell command: the panel-terminal `AlmostBashShellHeadless` is hosted in the offscreen document (via `createPanelTerminalHost`), and `chrome.storage.local.get(...)` from inside the supplemental command callback throws.
+This was hit by the `secret list` shell command and the secrets management UI: the panel-terminal `AlmostBashShellHeadless` runs in the kernel worker spawned by the hosted leader tab, and any `chrome.storage.local.get(...)` from inside a supplemental command callback throws.
 
 **The Solution**
 
-For management operations that must touch `chrome.storage.local`, **route through the SW via `chrome.runtime.sendMessage`**. The SW has full storage access. Add a handler in `service-worker.ts:onMessage` that performs the storage call and replies via `sendResponse`. See the `secrets.list` / `secrets.set` / `secrets.delete` handlers there for the canonical pattern. Always `return true` from the listener for async work, and always include `chrome.runtime.lastError` handling on the caller side.
+For management operations that must touch `chrome.storage.local`, **route through the SW via `chrome.runtime.sendMessage`** (the `externally_connectable` matches in `packages/chrome-extension/manifest.json` allow the hosted origin to talk to the SW directly). The SW has full storage access. Add a handler in `service-worker.ts:onMessage` that performs the storage call and replies via `sendResponse`. See the `secrets.list` / `secrets.set` / `secrets.delete` handlers there for the canonical pattern. Always `return true` from the listener for async work, and always include `chrome.runtime.lastError` handling on the caller side.
+
+Historical note: prior to the thin-bridge release the same pattern existed because MV3 offscreen documents inherit only a subset of the manifest's `permissions` (notably, `chrome.storage` is not exposed in offscreen documents). The fix shape is identical; only the realm that lacks `chrome.storage` changed (offscreen → hosted leader tab).
 
 ## SecretsPipeline Mutation Pitfall
 
@@ -832,11 +836,11 @@ Any code that modifies `AgentMessage[]` must preserve ToolCall blocks in assista
 
 **The Problem**
 
-The extension service worker (`packages/chrome-extension/src/service-worker.ts`) is built by Rollup as an entry point. If it imports from modules that are shared with other entry points (index.html, offscreen.html), Rollup code-splits them into shared chunks with ES `import` statements. Chrome extension service workers are **not** ES modules — `import` statements cause `Uncaught SyntaxError: Cannot use import statement outside a module` at runtime.
+The extension service worker (`packages/chrome-extension/src/service-worker.ts`) is built as an entry point. If it imports from modules that are shared with other entry points (content scripts, sandbox pages, the secrets options page), Rollup code-splits them into shared chunks with ES `import` statements. Chrome extension service workers are **not** ES modules — `import` statements cause `Uncaught SyntaxError: Cannot use import statement outside a module` at runtime.
 
 **The Rule**
 
-The service worker must only import **types** (erased at compile time) from other modules. All runtime code must be inlined. If you need to share logic between the service worker and other extension contexts (offscreen, side panel), maintain an inline copy in the service worker and the canonical version in a shared module.
+The service worker must only import **types** (erased at compile time) from other modules. All runtime code must be inlined. If you need to share logic between the service worker and other extension contexts (content script, secrets options page, sandbox iframes), maintain an inline copy in the service worker and the canonical version in a shared module.
 
 | Import type   | Example                                            | Allowed in SW?                    |
 | ------------- | -------------------------------------------------- | --------------------------------- |
@@ -844,45 +848,47 @@ The service worker must only import **types** (erased at compile time) from othe
 | Runtime value | `import { bar } from './tab-group.js'`             | **No** (causes code split)        |
 | Core modules  | `import { createLogger } from '../core/logger.js'` | **No** (pulls in dependency tree) |
 
-**Current example**: `addToSliccGroup` has an inline copy in `service-worker.ts` and a canonical version in `tab-group.ts` (imported by `debugger-client.ts` in the offscreen document, which IS an ES module).
+**Current example**: `addToSliccGroup` has an inline copy in `service-worker.ts` and a canonical version in `tab-group.ts` (the canonical module is kept for any ES-module consumer; the SW must never `import` it directly).
 
-## Extension Dual-Shell Context
+## Page / Worker Realm Split
 
 **The Problem**
 
-In extension mode, there are **two separate AlmostBashShell instances** running in different execution contexts:
+Every float that hosts the cone runs the agent engine in a `DedicatedWorker` (the "kernel worker") and the UI in the page realm. They share IndexedDB (VFS, sessions) but **NOT** window globals, DOM, or Layout instances. The kernel worker has no `document`, no `window.open`, no DOM APIs.
 
-| Context                | Location                                         | Shell purpose                    | Window globals                  |
-| ---------------------- | ------------------------------------------------ | -------------------------------- | ------------------------------- |
-| **Side panel**         | `packages/webapp/src/ui/main.ts` (mainExtension) | Terminal tab — user-facing shell | Has Layout + DOM                |
-| **Offscreen document** | `packages/chrome-extension/src/offscreen.ts`     | Agent's bash tool — LLM-driven   | Has Orchestrator, no DOM/Layout |
+| Context           | Location                                      | Purpose                                | Window globals                  |
+| ----------------- | --------------------------------------------- | -------------------------------------- | ------------------------------- |
+| **Page realm**    | `packages/webapp/src/ui/main.ts` (`main()`)   | xterm.js terminal UI, Layout, DOM      | Has Layout + DOM                |
+| **Kernel worker** | `packages/webapp/src/kernel/kernel-worker.ts` | Agent loop + `AlmostBashShellHeadless` | Has Orchestrator, no DOM/Layout |
 
-These contexts share IndexedDB (VFS, sessions) but **NOT** window globals, DOM, or Layout instances. They communicate via `chrome.runtime` messages routed through the service worker.
+The two communicate via a `KernelTransport` over `MessagePort` — `OffscreenBridge` on the worker side, `OffscreenClient` on the page side.
 
 **The Pattern: UI-Affecting Shell Commands**
 
-When a shell command run by the agent (offscreen context) needs to drive the side panel UI, use the dual-context pattern:
+When a shell command run by the agent (worker realm) needs to drive the page-realm UI, use the cross-realm dispatch pattern:
 
-1. **Direct hook** (panel context): check `window.__slicc_*` — if present, call directly
-2. **Message relay** (offscreen context): send `chrome.runtime.sendMessage({ source: 'offscreen', payload: { type: '...', ... } })` → service worker routes to panel → `OffscreenClient` handles in `setupMessageListener()` and dispatches to the appropriate Layout/panel API.
+1. **Direct hook** (page realm): check `window.__slicc_*` — if present, call directly
+2. **Worker → page relay** (worker realm): post a panel-RPC envelope through the `OffscreenBridge` → `OffscreenClient.setupMessageListener()` dispatches to the registered handler.
 
 ```typescript
-// Pattern: try direct hook, fall back to message relay
-const toggle = (window as any).__slicc_someUiOp;
+// Pattern: try direct hook, fall back to cross-realm dispatch
+const toggle = (globalThis as any).__slicc_someUiOp;
 if (toggle) {
-  toggle(arg); // Running in panel context
+  toggle(arg); // Running in page realm
 } else {
-  chrome.runtime.sendMessage({ source: 'offscreen', payload: { type: 'some-ui-op', arg } });
+  // Worker realm: dispatch via the kernel transport
 }
 ```
 
-No built-in supplemental command currently uses this hook+relay shape — the previous example (`debug-command.ts`) was removed when Terminal/Memory became unconditional in the rail. The sprinkle subsystem solves a related problem differently (a `globalThis.__slicc_sprinkleManager` proxy interface published in both realms, dispatching `sprinkle-op` request/response RPCs), and is the right reference for new code that needs full bidirectional dispatch rather than a fire-and-forget UI side effect.
+The sprinkle subsystem is the canonical reference for full bidirectional dispatch: a `globalThis.__slicc_sprinkleManager` proxy is published in both realms and dispatches `sprinkle-op` request/response RPCs over the kernel transport.
 
 **Related Files**
 
-- `packages/chrome-extension/src/sprinkle-proxy.ts` (offscreen-side proxy that publishes `globalThis.__slicc_sprinkleManager` and relays via `sprinkle-op`)
-- `packages/webapp/src/ui/main.ts` (`client.setSprinkleOpHandler(...)` — where the panel-side handler is registered)
+- `packages/chrome-extension/src/sprinkle-proxy.ts` (worker-side proxy that publishes `globalThis.__slicc_sprinkleManager` and relays via `sprinkle-op`)
+- `packages/webapp/src/ui/main.ts` (`client.setSprinkleOpHandler(...)` — where the page-side handler is registered)
 - `packages/webapp/src/ui/offscreen-client.ts` `setupMessageListener()` (routes `sprinkle-op` payloads to the registered handler)
+
+Historical note: prior to the thin-bridge release the equivalent split was the chrome-extension side panel (page) vs the offscreen document (agent), bridged through `chrome.runtime.sendMessage` routed by the service worker. The realms changed but the page/worker idea is the same.
 
 ## Dual-Mode Testing Checklist
 
@@ -1087,26 +1093,15 @@ adaptively on its own).
   onto a shared version-threshold parser so opus-4-9 / sonnet-4-7 are
   handled automatically.
 
-## Detached popout: boot is the lock event
+## Detached popout (historical, removed)
 
-The detached popout flow accepts three entry paths: the side-panel
-"Pop out" button, direct URL navigation (paste/bookmark), and
-Chrome's tab restore. ALL three converge on the detached tab's boot
-emitting a `detached-claim` envelope to the SW — the button is a
-convenience, not a trust signal. Spec:
-`docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md`.
-
-## Detached popout: claim URL validation
-
-The SW's claim handler parses `sender.url` as a URL and validates
-`origin`, pathname (`/index.html` or `/`), and
-`searchParams.get('detached') === '1'`. Substring matches on
-`sender.url` MUST NOT be used — they are brittle to query reordering.
-
-## Detached popout: top-frame requirement for claim emission
-
-`detached-claim` MUST be sent from the detached tab's top frame
-because validation uses the sender document URL; a nested
-sprinkle iframe will not carry `?detached=1` and the claim will
-be rejected. Future code that moves the claim-emit point must
-preserve this.
+Historical note: the legacy fat-extension shipped a "detached popout"
+flow with a `?detached=1` claim envelope emitted by the popped-out tab
+to the service worker. The flow accepted three entry paths (side-panel
+"Pop out" button, direct URL navigation, Chrome tab restore) and validated
+the claim by parsing `sender.url` for origin + pathname + `?detached=1`.
+The entire flow is gone in the thin-extension release — the webapp now
+always runs in the pinned hosted leader tab at `https://www.sliccy.ai/?slicc=leader`
+and `?detached=1` is no longer a recognized boot mode. Future code MUST
+NOT reintroduce the detached-claim pattern without redesigning around
+the hosted-origin model.
