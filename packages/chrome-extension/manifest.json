@@ -8,8 +8,6 @@
     "debugger",
     "tabs",
     "tabGroups",
-    "sidePanel",
-    "offscreen",
     "identity",
     "storage",
     "webRequest",
