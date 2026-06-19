@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ModuleReader } from '../../../src/shell/ipk/resolver.js';
 import {
   createEsbuildCommand,
+  createIpkContextFromCtx,
   createVfsPlugin,
   inferLoader,
   parseEsbuildArgs,
@@ -434,6 +435,58 @@ describe('tryLoadEsbuildWasmFromNodeModules', () => {
     });
 
     expect(result).toBeNull();
+  });
+});
+
+describe('createIpkContextFromCtx', () => {
+  it('produces a context whose reader+readBytes find an ipk-installed esbuild-wasm', async () => {
+    const wasmBytes = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+    const files = new Map<string, string>([
+      [
+        '/workspace/node_modules/esbuild-wasm/package.json',
+        JSON.stringify({ name: 'esbuild-wasm', version: '0.0.0-test' }),
+      ],
+    ]);
+    const dirs = new Set<string>([
+      '/',
+      '/workspace',
+      '/workspace/node_modules',
+      '/workspace/node_modules/esbuild-wasm',
+    ]);
+    const bytes = new Map<string, Uint8Array>([
+      ['/workspace/node_modules/esbuild-wasm/esbuild.wasm', wasmBytes],
+    ]);
+    const ctx = createMockCtx({
+      cwd: '/workspace',
+      fs: {
+        exists: async (p) => files.has(p) || dirs.has(p) || bytes.has(p),
+        stat: async (p) => {
+          if (dirs.has(p)) return { isFile: false, isDirectory: true, size: 0 } as never;
+          if (files.has(p)) {
+            return { isFile: true, isDirectory: false, size: files.get(p)!.length } as never;
+          }
+          if (bytes.has(p)) {
+            return { isFile: true, isDirectory: false, size: bytes.get(p)!.length } as never;
+          }
+          throw new Error(`ENOENT: ${p}`);
+        },
+        readFile: async (p) => {
+          const v = files.get(p);
+          if (v === undefined) throw new Error(`ENOENT: ${p}`);
+          return v;
+        },
+        readFileBuffer: async (p: string) => {
+          const b = bytes.get(p);
+          if (b === undefined) throw new Error(`ENOENT: ${p}`);
+          return b;
+        },
+      },
+    });
+
+    const ipk = createIpkContextFromCtx(ctx);
+    const result = await tryLoadEsbuildWasmFromNodeModules(ipk);
+
+    expect(result).toEqual(wasmBytes);
   });
 });
 

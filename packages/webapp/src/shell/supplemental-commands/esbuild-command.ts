@@ -28,8 +28,35 @@ import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { stdinAsText } from '../just-bash-compat.js';
 import { esmShUrl } from './cdn-url-builder.js';
-import { getEsbuild } from './esbuild-wasm.js';
+import { getEsbuild, type IpkResolutionContext } from './esbuild-wasm.js';
 import { basename, dirname, joinPath } from './shared.js';
+
+/**
+ * Build an {@link IpkResolutionContext} from a command's `ctx` so
+ * `getEsbuild` can prefer an ipk-installed `esbuild-wasm` in the VFS
+ * `node_modules` over the CDN. The reader adapts just-bash's
+ * `IFileSystem` surface (`exists` / `stat` / `readFile`) to the
+ * resolver's `ModuleReader`; `readBytes` routes through
+ * `readFileBuffer` for raw `.wasm` bytes. `fromDir` is the shell
+ * `cwd` so the standard `node_modules` walk starts where the user is.
+ */
+export function createIpkContextFromCtx(ctx: CommandContext): IpkResolutionContext {
+  return {
+    reader: {
+      exists: (path) => ctx.fs.exists(path),
+      isDirectory: async (path) => {
+        try {
+          return (await ctx.fs.stat(path)).isDirectory;
+        } catch {
+          return false;
+        }
+      },
+      readFile: (path) => ctx.fs.readFile(path),
+    },
+    readBytes: (path) => ctx.fs.readFileBuffer(path),
+    fromDir: ctx.cwd,
+  };
+}
 
 const HELP_TEXT = `esbuild - WASM build of the esbuild bundler / transpiler
 
@@ -395,7 +422,7 @@ export function createEsbuildCommand(): Command {
 
     let esbuildMod: typeof import('esbuild-wasm');
     try {
-      esbuildMod = await getEsbuild();
+      esbuildMod = await getEsbuild({ ipk: createIpkContextFromCtx(ctx) });
     } catch (err) {
       return {
         stdout: '',

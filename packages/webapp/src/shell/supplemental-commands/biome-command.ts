@@ -28,7 +28,34 @@
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { stdinAsText } from '../just-bash-compat.js';
-import { type BiomeRuntime, getBiome } from './biome-runtime.js';
+import { type BiomeRuntime, getBiome, type IpkResolutionContext } from './biome-runtime.js';
+
+/**
+ * Build an {@link IpkResolutionContext} from a command's `ctx` so
+ * `getBiome` can prefer an ipk-installed `@biomejs/wasm-web` in the
+ * VFS `node_modules` over the CDN. The reader adapts just-bash's
+ * `IFileSystem` surface (`exists` / `stat` / `readFile`) to the
+ * resolver's `ModuleReader`; `readBytes` routes through
+ * `readFileBuffer` for raw `.wasm` bytes. `fromDir` is the shell
+ * `cwd` so the standard `node_modules` walk starts where the user is.
+ */
+export function createIpkContextFromCtx(ctx: CommandContext): IpkResolutionContext {
+  return {
+    reader: {
+      exists: (path) => ctx.fs.exists(path),
+      isDirectory: async (path) => {
+        try {
+          return (await ctx.fs.stat(path)).isDirectory;
+        } catch {
+          return false;
+        }
+      },
+      readFile: (path) => ctx.fs.readFile(path),
+    },
+    readBytes: (path) => ctx.fs.readFileBuffer(path),
+    fromDir: ctx.cwd,
+  };
+}
 
 const LINTABLE_EXTENSIONS = new Set([
   'js',
@@ -248,7 +275,7 @@ export function createBiomeCommand(): Command {
 
     let runtime: BiomeRuntime;
     try {
-      runtime = await getBiome();
+      runtime = await getBiome({ ipk: createIpkContextFromCtx(ctx) });
     } catch (err) {
       return {
         stdout: '',
