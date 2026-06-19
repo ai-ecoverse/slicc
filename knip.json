@@ -22,6 +22,7 @@
     "packages/webapp": {
       "entry": [
         "vite.config.ts!",
+        "vite-plugins/**/*.ts!",
         "src/ui/main.ts!",
         "src/ui/preview-sw.ts!",
         "src/ui/llm-proxy-sw.ts!",
@@ -35,10 +36,16 @@
         "src/shims/http.ts!",
         "src/shims/https.ts!",
         "src/shims/http2.ts!",
+        "src/cdp/extension-bridge-transport.ts!",
         "providers/*.ts!",
         "tests/**/*.test.ts"
       ],
-      "project": ["src/**/*.{ts,tsx,js}!", "providers/**/*.ts!", "tests/**/*.ts"],
+      "project": [
+        "src/**/*.{ts,tsx,js}!",
+        "providers/**/*.ts!",
+        "vite-plugins/**/*.ts!",
+        "tests/**/*.ts"
+      ],
       "ignore": [
         "src/types/**",
         "src/globals.d.ts",
@@ -52,6 +59,7 @@
       "entry": [
         "vite.config.ts!",
         "src/service-worker.ts!",
+        "src/content-script.ts!",
         "src/secrets-entry.ts!",
         "voice-popup.js!",
         "tests/**/*.test.ts"
