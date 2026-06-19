@@ -1,11 +1,16 @@
 import { createServer, type Server } from 'node:http';
 import { describe, expect, it } from 'vitest';
 import { WebSocketServer, type WebSocket as WsWebSocket } from 'ws';
-
+import { BRIDGE_TOKEN_QUERY_PARAM, BRIDGE_WS_QUERY_PARAM } from '../src/bridge-security.js';
 import {
+  BRIDGE_ROLE_FOLLOWER,
+  BRIDGE_ROLE_LEADER,
+  BRIDGE_ROLE_QUERY_PARAM,
+  buildThinOverlayAppUrl,
   ElectronOverlayInjector,
   findMatchingElectronAppPids,
   resolveFetchProxyOrigin,
+  resolveHostedLeaderOrigin,
 } from '../src/electron-controller.js';
 
 describe('findMatchingElectronAppPids', () => {
@@ -688,6 +693,291 @@ describe('ElectronOverlayInjector connect flow (file:// parity with swift-server
       expect(reloads).toHaveLength(0);
       expect(fetches).toHaveLength(0);
 
+      injector._testingCloseConnections();
+    } finally {
+      await harness.close();
+    }
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Thin-bridge helpers + leader/follower election (Path B).
+// -----------------------------------------------------------------------------
+
+const THIN_BRIDGE = {
+  hostedLeaderOrigin: 'https://www.sliccy.ai',
+  bridgeWsUrl: 'ws://localhost:5710/cdp',
+  bridgeToken: 'aabbccdd-1122-3344-5566-778899aabbcc',
+};
+
+describe('buildThinOverlayAppUrl', () => {
+  it('embeds bridge ws url + token + leader role on the hosted /electron path', () => {
+    const url = buildThinOverlayAppUrl({ ...THIN_BRIDGE, role: BRIDGE_ROLE_LEADER });
+    const parsed = new URL(url);
+    expect(parsed.origin).toBe('https://www.sliccy.ai');
+    expect(parsed.pathname).toBe('/electron');
+    expect(parsed.searchParams.get(BRIDGE_WS_QUERY_PARAM)).toBe(THIN_BRIDGE.bridgeWsUrl);
+    expect(parsed.searchParams.get(BRIDGE_TOKEN_QUERY_PARAM)).toBe(THIN_BRIDGE.bridgeToken);
+    expect(parsed.searchParams.get(BRIDGE_ROLE_QUERY_PARAM)).toBe(BRIDGE_ROLE_LEADER);
+    expect(parsed.searchParams.get('tab')).toBeNull();
+  });
+
+  it('emits role=follower for auto-follow tabs', () => {
+    const url = buildThinOverlayAppUrl({ ...THIN_BRIDGE, role: BRIDGE_ROLE_FOLLOWER });
+    expect(new URL(url).searchParams.get(BRIDGE_ROLE_QUERY_PARAM)).toBe(BRIDGE_ROLE_FOLLOWER);
+  });
+
+  it('emits a tab override only when not the default "chat" tab', () => {
+    expect(
+      new URL(
+        buildThinOverlayAppUrl({ ...THIN_BRIDGE, role: BRIDGE_ROLE_LEADER, activeTab: 'chat' })
+      ).searchParams.get('tab')
+    ).toBeNull();
+    expect(
+      new URL(
+        buildThinOverlayAppUrl({ ...THIN_BRIDGE, role: BRIDGE_ROLE_LEADER, activeTab: 'memory' })
+      ).searchParams.get('tab')
+    ).toBe('memory');
+  });
+
+  it('honors a custom hosted origin (staging worker / dev override)', () => {
+    const url = buildThinOverlayAppUrl({
+      ...THIN_BRIDGE,
+      hostedLeaderOrigin: 'https://slicc-tray-hub-staging.minivelos.workers.dev',
+      role: BRIDGE_ROLE_LEADER,
+    });
+    expect(new URL(url).origin).toBe('https://slicc-tray-hub-staging.minivelos.workers.dev');
+  });
+});
+
+describe('resolveHostedLeaderOrigin', () => {
+  it('defaults to production sliccy.ai', () => {
+    expect(resolveHostedLeaderOrigin({})).toBe('https://www.sliccy.ai');
+  });
+
+  it('prefers SLICC_HOSTED_LEADER_ORIGIN over WORKER_BASE_URL', () => {
+    expect(
+      resolveHostedLeaderOrigin({
+        SLICC_HOSTED_LEADER_ORIGIN: 'https://primary.example',
+        WORKER_BASE_URL: 'https://fallback.example',
+      })
+    ).toBe('https://primary.example');
+  });
+
+  it('falls back to WORKER_BASE_URL when SLICC_HOSTED_LEADER_ORIGIN is unset', () => {
+    expect(resolveHostedLeaderOrigin({ WORKER_BASE_URL: 'https://staging.example' })).toBe(
+      'https://staging.example'
+    );
+  });
+
+  it('strips trailing slashes so callers can concatenate paths', () => {
+    expect(
+      resolveHostedLeaderOrigin({ SLICC_HOSTED_LEADER_ORIGIN: 'https://example.com///' })
+    ).toBe('https://example.com');
+  });
+});
+
+describe('ElectronOverlayInjector thin-mode leader/follower election', () => {
+  // Marker substrings for the test-only bootstrap pair — what we assert
+  // travelled in the `Runtime.evaluate` expression for each target.
+  const LEADER_MARK = 'LEADER_BOOTSTRAP_MARKER';
+  const FOLLOWER_MARK = 'FOLLOWER_BOOTSTRAP_MARKER';
+
+  function makeThinInjector(): ElectronOverlayInjector {
+    return ElectronOverlayInjector._createForTesting({
+      servePort: 5711,
+      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK },
+      probeDelayMs: 20,
+    });
+  }
+
+  it('pins the first injected target as leader and elects subsequent targets as followers', async () => {
+    const injector = makeThinInjector();
+    const leaderUrl = 'https://app.slack.com/';
+    const followerUrl = 'https://teams.microsoft.com/';
+
+    const leaderHarness = await startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+    });
+    const followerHarness = await startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+    });
+
+    try {
+      injector._testingConnectToTarget({
+        id: '1',
+        type: 'page',
+        title: 'Slack',
+        url: leaderUrl,
+        webSocketDebuggerUrl: leaderHarness.url,
+      });
+
+      const leaderEval = await leaderHarness.waitFor(
+        (m) =>
+          m.method === 'Runtime.evaluate' &&
+          typeof m.params?.expression === 'string' &&
+          (m.params.expression as string).includes(LEADER_MARK),
+        'leader Runtime.evaluate'
+      );
+      expect(leaderEval.params!.expression as string).not.toContain(FOLLOWER_MARK);
+      expect(injector._testingLeaderTargetUrl()).toBe(leaderUrl);
+
+      injector._testingConnectToTarget({
+        id: '2',
+        type: 'page',
+        title: 'Teams',
+        url: followerUrl,
+        webSocketDebuggerUrl: followerHarness.url,
+      });
+
+      const followerEval = await followerHarness.waitFor(
+        (m) =>
+          m.method === 'Runtime.evaluate' &&
+          typeof m.params?.expression === 'string' &&
+          (m.params.expression as string).includes(FOLLOWER_MARK),
+        'follower Runtime.evaluate'
+      );
+      expect(followerEval.params!.expression as string).not.toContain(LEADER_MARK);
+      // The leader election must NOT have flipped — the original leader stays pinned.
+      expect(injector._testingLeaderTargetUrl()).toBe(leaderUrl);
+
+      injector._testingCloseConnections();
+    } finally {
+      await Promise.all([leaderHarness.close(), followerHarness.close()]);
+    }
+  });
+
+  it('keeps the same target as leader across reconnects (idempotent election)', async () => {
+    const injector = makeThinInjector();
+    const targetUrl = 'https://app.slack.com/';
+
+    const firstHarness = await startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+    });
+
+    try {
+      injector._testingConnectToTarget({
+        id: '1',
+        type: 'page',
+        title: 'Slack',
+        url: targetUrl,
+        webSocketDebuggerUrl: firstHarness.url,
+      });
+
+      await firstHarness.waitFor(
+        (m) =>
+          m.method === 'Runtime.evaluate' &&
+          typeof m.params?.expression === 'string' &&
+          (m.params.expression as string).includes(LEADER_MARK),
+        'first leader injection'
+      );
+      injector._testingCloseConnections();
+    } finally {
+      await firstHarness.close();
+    }
+
+    // Same target URL reconnects → still leader (no follower demotion).
+    const secondHarness = await startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+    });
+    try {
+      injector._testingConnectToTarget({
+        id: '1',
+        type: 'page',
+        title: 'Slack',
+        url: targetUrl,
+        webSocketDebuggerUrl: secondHarness.url,
+      });
+
+      const reEval = await secondHarness.waitFor(
+        (m) =>
+          m.method === 'Runtime.evaluate' &&
+          typeof m.params?.expression === 'string' &&
+          (m.params.expression as string).includes(LEADER_MARK),
+        'leader Runtime.evaluate on reconnect'
+      );
+      expect(reEval.params!.expression as string).not.toContain(FOLLOWER_MARK);
+      injector._testingCloseConnections();
+    } finally {
+      await secondHarness.close();
+    }
+  });
+
+  it('legacy mode (no thin bootstraps) injects the single bundled script regardless of target', async () => {
+    const injector = ElectronOverlayInjector._createForTesting({
+      servePort: 5711,
+      bootstrapScript: 'LEGACY_BOOTSTRAP_MARKER',
+      probeDelayMs: 20,
+    });
+    const harness = await startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+    });
+
+    try {
+      injector._testingConnectToTarget({
+        id: '1',
+        type: 'page',
+        title: 'Slack',
+        url: 'https://app.slack.com/',
+        webSocketDebuggerUrl: harness.url,
+      });
+
+      const legacyEval = await harness.waitFor(
+        (m) =>
+          m.method === 'Runtime.evaluate' &&
+          typeof m.params?.expression === 'string' &&
+          (m.params.expression as string).includes('LEGACY_BOOTSTRAP_MARKER'),
+        'legacy Runtime.evaluate'
+      );
+      expect(legacyEval.params!.expression).toBeDefined();
+      // Legacy mode never touches leaderTargetUrl.
+      expect(injector._testingLeaderTargetUrl()).toBeNull();
+      injector._testingCloseConnections();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('_testingSeedLeaderTargetUrl forces a target to be elected as follower', async () => {
+    const injector = makeThinInjector();
+    injector._testingSeedLeaderTargetUrl('https://leader.example/');
+    expect(injector._testingLeaderTargetUrl()).toBe('https://leader.example/');
+
+    const harness = await startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+    });
+
+    try {
+      injector._testingConnectToTarget({
+        id: '1',
+        type: 'page',
+        title: 'Other',
+        url: 'https://other.example/',
+        webSocketDebuggerUrl: harness.url,
+      });
+
+      const followerEval = await harness.waitFor(
+        (m) =>
+          m.method === 'Runtime.evaluate' &&
+          typeof m.params?.expression === 'string' &&
+          (m.params.expression as string).includes(FOLLOWER_MARK),
+        'follower Runtime.evaluate'
+      );
+      expect(followerEval.params!.expression as string).not.toContain(LEADER_MARK);
+      // Seeded leader stays pinned.
+      expect(injector._testingLeaderTargetUrl()).toBe('https://leader.example/');
       injector._testingCloseConnections();
     } finally {
       await harness.close();
