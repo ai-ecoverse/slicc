@@ -6,10 +6,16 @@
  * render inside the input card and ride the next submit.
  */
 
-import type { CaptureDeviceChangeDetail, CaptureResult } from '@slicc/webcomponents';
+import type {
+  CaptureDeviceChangeDetail,
+  CaptureResult,
+  PermissionGrant,
+  PermissionKind,
+} from '@slicc/webcomponents';
 import type { MessageAttachment } from '../../core/attachments.js';
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
 import type { WritableVfsClient } from '../../kernel/writable-vfs-client.js';
+import { getLeaderPermissionsSurface } from './wc-permissions-registry.js';
 
 /** Mirrors the library's `SliccAddSection` (not exported through the barrel). */
 interface AddSection {
@@ -401,10 +407,64 @@ async function grabFrame(stream: MediaStream): Promise<string | null> {
   }
 }
 
-/** One-frame screen capture via the user's display-picker (raw data URL). */
+/**
+ * One-frame screen capture via the user's display-picker (raw data URL).
+ *
+ * Wave 9b routes the gesture-gated `getDisplayMedia` through the leader
+ * `<slicc-permissions>` surface (`screenshare` kind) so the screencapture
+ * picker funnels through the same single host as camera / mic / USB / HID /
+ * serial / FS. The add-menu click is the user activation; awaiting
+ * `surface.request(...)` directly preserves it because the surface forwards
+ * to the platform default without an intervening DOM event. When no surface
+ * is mounted (cherry follower / headless test) we degrade to the legacy
+ * direct `navigator.mediaDevices.getDisplayMedia` path to keep the harness
+ * green; production leader tabs always have a surface mounted via
+ * `installLeaderPermissionsSurface`.
+ */
 async function captureScreenshot(): Promise<string | null> {
+  const surface = getLeaderPermissionsSurface();
+  if (surface) {
+    const grant = await surface.request('screenshare', { constraints: { video: true } });
+    if (!grant) return null;
+    const stream = (grant as Extract<PermissionGrant, { kind: 'screenshare' }>).stream;
+    return grabFrame(stream);
+  }
   const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
   return grabFrame(stream);
+}
+
+/**
+ * Gesture-gate the requested kinds through the leader `<slicc-permissions>`
+ * surface and release any returned streams. The composer photo/video flow
+ * still acquires a live stream inside `<slicc-composer-capture>` via its
+ * own media provider (it needs `enumerateDevices` + repeated `getUserMedia`
+ * calls for device + mode switching, neither of which the one-shot
+ * surface exposes); routing the FIRST gesture through the surface ensures
+ * the unified host owns the camera + mic grants, and the in-component
+ * acquisitions then succeed silently because the realm already holds the
+ * permission. Mirrors `composer-speech.ts`'s probe-and-release pattern
+ * for the PTT mic.
+ *
+ * Returns `true` when all requested kinds were granted (so the capture
+ * flow can proceed), `false` when the user cancelled or any kind was
+ * unavailable / errored, and `null` when no surface is mounted so callers
+ * can decide whether to fall back to direct `navigator.mediaDevices`
+ * (the legacy host-less fallback path).
+ */
+async function probeCaptureKinds(
+  kinds: PermissionKind[],
+  description: string
+): Promise<boolean | null> {
+  const surface = getLeaderPermissionsSurface();
+  if (!surface) return null;
+  const result = await surface.prompt({ kinds, description });
+  // Drop any granted streams immediately — we only wanted the gesture-gate.
+  for (const grant of result.grants) {
+    if (grant.kind === 'camera' || grant.kind === 'microphone' || grant.kind === 'screenshare') {
+      for (const track of grant.stream.getTracks()) track.stop();
+    }
+  }
+  return result.status === 'granted';
 }
 
 /** Remembered camera + mic picks (the component reports changes via its event). */
@@ -446,6 +506,24 @@ async function captureInline(
   host: HTMLElement,
   initialMode: 'photo' | 'video'
 ): Promise<CaptureResult | null> {
+  // Wave 9b — gesture-gate the camera + mic acquisitions through the
+  // leader `<slicc-permissions>` surface BEFORE mounting the inline
+  // capture element. We probe both kinds in one prompt under the
+  // add-menu click so the in-surface mode toggle (photo ↔ video) works
+  // without a second native browser prompt; the realm already holds the
+  // grants, so subsequent `getUserMedia` calls inside
+  // `<slicc-composer-capture>` succeed silently. Probe-and-release
+  // matches `composer-speech.ts`'s PTT-mic pattern. A `false` here means
+  // the user cancelled / a kind was unavailable — surface a `null` to
+  // stageCapture so nothing lands in the stage. `null` from
+  // `probeCaptureKinds` means no surface is mounted (cherry / headless
+  // test) — let the legacy `navigator.mediaDevices` path inside
+  // `<slicc-composer-capture>` handle it directly.
+  const granted = await probeCaptureKinds(
+    ['camera', 'microphone'],
+    'Slicc is requesting access to your camera and microphone to capture a photo or video for this conversation.'
+  );
+  if (granted === false) return null;
   // The library barrel is already imported by `wc-shell.ts`, so the
   // `<slicc-composer-capture>` element is registered by the time we mount it.
   const capture = document.createElement('slicc-composer-capture') as HTMLElement & {
@@ -561,8 +639,16 @@ async function stageCapture(
 }
 
 /** Fallback camera capture via the legacy `<slicc-camera-dialog>` for hosts
- *  with no chat-pane overlay site. */
+ *  with no chat-pane overlay site. Wave 9b probes the camera grant through
+ *  the leader `<slicc-permissions>` surface first so the legacy modal's
+ *  acquisition piggy-backs on the unified gesture-gate; the dialog itself
+ *  is photo-only so we don't probe `microphone`. */
 async function capturePhotoFallback(): Promise<string | null> {
+  const granted = await probeCaptureKinds(
+    ['camera'],
+    'Slicc is requesting access to your camera to capture a photo for this conversation.'
+  );
+  if (granted === false) return null;
   const dialog = document.createElement('slicc-camera-dialog');
   const preferred = localStorage.getItem(CAMERA_PREF_KEY);
   if (preferred) dialog.setAttribute('preferred-device', preferred);

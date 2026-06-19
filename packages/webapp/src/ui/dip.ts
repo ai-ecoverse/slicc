@@ -8,6 +8,12 @@
  * route to the cone via the onLick callback. Auto-height via ResizeObserver.
  */
 
+import type {
+  PermissionDenyDetail,
+  PermissionGrant,
+  PermissionKind,
+  PermissionRequestOptions,
+} from '@slicc/webcomponents';
 import {
   getNavigatorHid,
   getSharedHidRegistry,
@@ -37,6 +43,7 @@ import {
 } from './sprinkle-bridge.js';
 import { collectThemeCSS } from './sprinkle-renderer.js';
 import { isThemeLight, registerSprinkleWindow, unregisterSprinkleWindow } from './theme.js';
+import { getLeaderPermissionsSurface } from './wc/wc-permissions-registry.js';
 
 const isExtension =
   typeof chrome !== 'undefined' && !!(chrome as { runtime?: { id?: string } })?.runtime?.id;
@@ -1521,28 +1528,94 @@ async function handleDipPickerActionExtension(
   }
 }
 
+/**
+ * Drive a single picker through the leader `<slicc-permissions>` surface so
+ * Wave 9b's cone-driven approval cards funnel through the SAME unified
+ * gesture-gated host the terminal keystroke path uses
+ * (`remote-terminal-view.ts:requestPermission`). The click on the approval
+ * card's button is the user activation; awaiting `surface.request(...)`
+ * directly preserves it because the surface forwards to its platform
+ * default without an intervening DOM event.
+ *
+ * Returns `null` when no surface is mounted (cherry follower / headless
+ * test) so callers can decide whether to surface a stable error to
+ * `onLick` instead of falling back to a direct-navigator path (which
+ * would bypass the very unification this wave is wiring).
+ */
+async function requestPickerFromSurface(
+  kind: PermissionKind,
+  opts?: PermissionRequestOptions
+): Promise<
+  | { ok: true; grant: PermissionGrant }
+  | { ok: false; reason: PermissionDenyDetail['reason']; message?: string }
+  | null
+> {
+  const surface = getLeaderPermissionsSurface();
+  if (!surface) return null;
+  // Hold the deny detail in a ref so closure assignment doesn't run afoul
+  // of TS's control-flow narrowing (closures don't participate in CFA) —
+  // mirrors `remote-terminal-view.ts:requestPermission`.
+  const denyRef: { current: PermissionDenyDetail | null } = { current: null };
+  const onDeny = (event: Event): void => {
+    const detail = (event as CustomEvent<PermissionDenyDetail>).detail;
+    if (detail.kind === kind) denyRef.current = detail;
+  };
+  surface.addEventListener('slicc-permission-deny', onDeny);
+  try {
+    const grant = await surface.request(kind, opts);
+    if (grant) return { ok: true, grant };
+    const deny = denyRef.current;
+    return {
+      ok: false,
+      reason: deny?.reason ?? 'error',
+      ...(deny?.message ? { message: deny.message } : {}),
+    };
+  } finally {
+    surface.removeEventListener('slicc-permission-deny', onDeny);
+  }
+}
+
+/**
+ * Translate a surface denial into the existing `onLick` shape consumed
+ * by the cone-driven approval card path:
+ *   - cancelled    → `{ cancelled: true }`
+ *   - unavailable  → `{ error: <unavailableMessage> }` (preserves the
+ *                    legacy "X is not available" UX so existing renderers
+ *                    don't change)
+ *   - error        → `{ error: <deny.message ?? fallback> }`
+ */
+function dispatchPickerDenial(
+  action: string,
+  denial: { reason: PermissionDenyDetail['reason']; message?: string },
+  unavailableMessage: string,
+  onLick: (action: string, data: unknown) => void
+): void {
+  if (denial.reason === 'cancelled') {
+    onLick(action, { cancelled: true });
+    return;
+  }
+  if (denial.reason === 'unavailable') {
+    onLick(action, { error: unavailableMessage });
+    return;
+  }
+  onLick(action, { error: denial.message ?? 'unknown error' });
+}
+
 async function runDirectoryPicker(
   action: string,
   onLick: (action: string, data: unknown) => void
 ): Promise<void> {
-  const win = window as Window & {
-    showDirectoryPicker?: (opts?: { mode?: string }) => Promise<FileSystemDirectoryHandle>;
-  };
-  if (typeof win.showDirectoryPicker !== 'function') {
+  const result = await requestPickerFromSurface('filesystem');
+  if (!result) {
     onLick(action, { error: 'File System Access API not available' });
     return;
   }
-  let handle: FileSystemDirectoryHandle;
-  try {
-    handle = await win.showDirectoryPicker({ mode: 'readwrite' });
-  } catch (err: unknown) {
-    if (err instanceof Error && err.name === 'AbortError') {
-      onLick(action, { cancelled: true });
-      return;
-    }
-    onLick(action, { error: err instanceof Error ? err.message : String(err) });
+  if (!result.ok) {
+    dispatchPickerDenial(action, result, 'File System Access API not available', onLick);
     return;
   }
+  const grant = result.grant as Extract<PermissionGrant, { kind: 'filesystem' }>;
+  const handle = grant.handle;
   const idbKey = `pendingMount:dip-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   try {
     const { storePendingHandle } = await import('../fs/mount-picker-popup.js');
@@ -1561,28 +1634,21 @@ async function runUsbPicker(
   filters: unknown[],
   onLick: (action: string, data: unknown) => void
 ): Promise<void> {
-  const nav = (globalThis as unknown as { navigator?: { usb?: { requestDevice?: Function } } })
-    .navigator;
-  if (typeof nav?.usb?.requestDevice !== 'function') {
+  const result = await requestPickerFromSurface('usb', { filters });
+  if (!result) {
     onLick(action, { error: 'WebUSB is not available' });
     return;
   }
-  try {
-    const device = await (
-      nav.usb.requestDevice as (opts: { filters: unknown[] }) => Promise<unknown>
-    )({ filters });
-    const { getSharedUsbRegistry, deviceToInfo } = await import('../kernel/usb-device-registry.js');
-    const registry = getSharedUsbRegistry();
-    const handle = registry.register(device as Parameters<typeof registry.register>[0]);
-    const info = deviceToInfo(handle, device as Parameters<typeof deviceToInfo>[1]);
-    onLick(action, { granted: true, handle, info });
-  } catch (err: unknown) {
-    if (err instanceof Error && (err.name === 'AbortError' || err.name === 'NotFoundError')) {
-      onLick(action, { cancelled: true });
-      return;
-    }
-    onLick(action, { error: err instanceof Error ? err.message : String(err) });
+  if (!result.ok) {
+    dispatchPickerDenial(action, result, 'WebUSB is not available', onLick);
+    return;
   }
+  const grant = result.grant as Extract<PermissionGrant, { kind: 'usb' }>;
+  const { getSharedUsbRegistry, deviceToInfo } = await import('../kernel/usb-device-registry.js');
+  const registry = getSharedUsbRegistry();
+  const handle = registry.register(grant.device as Parameters<typeof registry.register>[0]);
+  const info = deviceToInfo(handle, grant.device as Parameters<typeof deviceToInfo>[1]);
+  onLick(action, { granted: true, handle, info });
 }
 
 async function runSerialPicker(
@@ -1590,33 +1656,22 @@ async function runSerialPicker(
   filters: unknown[],
   onLick: (action: string, data: unknown) => void
 ): Promise<void> {
-  const nav = (globalThis as unknown as { navigator?: { serial?: { requestPort?: Function } } })
-    .navigator;
-  if (typeof nav?.serial?.requestPort !== 'function') {
+  const result = await requestPickerFromSurface('serial', filters.length ? { filters } : undefined);
+  if (!result) {
     onLick(action, { error: 'Web Serial is not available' });
     return;
   }
-  try {
-    const port = await (
-      nav.serial.requestPort as (opts: { filters?: unknown[] }) => Promise<unknown>
-    )(filters.length ? { filters } : {});
-    if (!port) {
-      onLick(action, { cancelled: true });
-      return;
-    }
-    const serialMod = await import('../kernel/serial-port-registry.js');
-    const registry = serialMod.getSharedSerialRegistry();
-    const handle = registry.register(port as Parameters<typeof registry.register>[0]);
-    const entry = registry.get(handle);
-    const info = entry ? serialMod.deviceToInfo(handle, entry) : { handle };
-    onLick(action, { granted: true, handle, info });
-  } catch (err: unknown) {
-    if (err instanceof Error && (err.name === 'AbortError' || err.name === 'NotFoundError')) {
-      onLick(action, { cancelled: true });
-      return;
-    }
-    onLick(action, { error: err instanceof Error ? err.message : String(err) });
+  if (!result.ok) {
+    dispatchPickerDenial(action, result, 'Web Serial is not available', onLick);
+    return;
   }
+  const grant = result.grant as Extract<PermissionGrant, { kind: 'serial' }>;
+  const serialMod = await import('../kernel/serial-port-registry.js');
+  const registry = serialMod.getSharedSerialRegistry();
+  const handle = registry.register(grant.port as Parameters<typeof registry.register>[0]);
+  const entry = registry.get(handle);
+  const info = entry ? serialMod.deviceToInfo(handle, entry) : { handle };
+  onLick(action, { granted: true, handle, info });
 }
 
 async function runHidPicker(
@@ -1624,41 +1679,30 @@ async function runHidPicker(
   filters: unknown[],
   onLick: (action: string, data: unknown) => void
 ): Promise<void> {
-  const nav = (globalThis as unknown as { navigator?: { hid?: { requestDevice?: Function } } })
-    .navigator;
-  if (typeof nav?.hid?.requestDevice !== 'function') {
+  const result = await requestPickerFromSurface('hid', { filters });
+  if (!result) {
     onLick(action, { error: 'WebHID is not available' });
     return;
   }
-  try {
-    const devices = (await (
-      nav.hid.requestDevice as (opts: { filters: unknown[] }) => Promise<unknown>
-    )({ filters })) as unknown[];
-    const granted = Array.isArray(devices) ? devices : devices ? [devices] : [];
-    if (granted.length === 0) {
-      onLick(action, { cancelled: true });
-      return;
-    }
-    const { getSharedHidRegistry, hidDeviceToInfo } = await import(
-      '../kernel/hid-device-registry.js'
-    );
-    const registry = getSharedHidRegistry();
-    // Register EVERY granted interface so a multi-interface device
-    // (e.g. a VIA/QMK keyboard's raw-HID 0xFF60 interface) is reachable
-    // from the cone's subsequent `hid list` / `hid watch <handle>`.
-    const infos = granted.map((d) => {
-      const handle = registry.register(d as Parameters<typeof registry.register>[0]);
-      return hidDeviceToInfo(handle, d as Parameters<typeof hidDeviceToInfo>[1]);
-    });
-    const primary = infos[0];
-    onLick(action, { granted: true, handle: primary.handle, info: primary, devices: infos });
-  } catch (err: unknown) {
-    if (err instanceof Error && (err.name === 'AbortError' || err.name === 'NotFoundError')) {
-      onLick(action, { cancelled: true });
-      return;
-    }
-    onLick(action, { error: err instanceof Error ? err.message : String(err) });
+  if (!result.ok) {
+    dispatchPickerDenial(action, result, 'WebHID is not available', onLick);
+    return;
   }
+  // Surface returns `{ device, devices }`; register EVERY granted interface
+  // so a multi-interface device (e.g. a VIA/QMK keyboard's raw-HID 0xFF60
+  // interface) is reachable from the cone's subsequent `hid list` /
+  // `hid watch <handle>`. Mirrors the terminal-keystroke path.
+  const grant = result.grant as Extract<PermissionGrant, { kind: 'hid' }>;
+  const { getSharedHidRegistry, hidDeviceToInfo } = await import(
+    '../kernel/hid-device-registry.js'
+  );
+  const registry = getSharedHidRegistry();
+  const infos = (grant.devices as unknown[]).map((d) => {
+    const handle = registry.register(d as Parameters<typeof registry.register>[0]);
+    return hidDeviceToInfo(handle, d as Parameters<typeof hidDeviceToInfo>[1]);
+  });
+  const primary = infos[0];
+  onLick(action, { granted: true, handle: primary.handle, info: primary, devices: infos });
 }
 
 /**
