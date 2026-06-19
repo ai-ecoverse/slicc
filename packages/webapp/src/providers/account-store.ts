@@ -18,6 +18,7 @@ import {
 import type { Model } from '../core/index.js';
 import { createLogger, getModel, getModels, getProviders } from '../core/index.js';
 import { getPanelRpcClient, hasLocalDom } from '../kernel/panel-rpc.js';
+import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 import { bedrockCampRegionFromBaseUrl, isBedrockCampCompatible } from './built-in/bedrock-camp.js';
 import {
   getRegisteredProviderConfig,
@@ -728,7 +729,10 @@ async function deleteOAuthReplica(providerId: string): Promise<void> {
         log.error('SW secrets.delete returned error', { providerId, error: resp.error });
       }
     } else {
-      const r = await fetch(`/api/secrets/oauth/${providerId}`, { method: 'DELETE' });
+      const r = await fetch(resolveApiUrl(`/api/secrets/oauth/${providerId}`), {
+        method: 'DELETE',
+        headers: apiHeaders(),
+      });
       // 404 is benign (already deleted). Anything else non-2xx means the server
       // still has the OAuth token — surface so local clear ≠ server clear is visible.
       if (!r.ok && r.status !== 404) {
@@ -1014,9 +1018,9 @@ export async function saveOAuthAccount(opts: {
         { sendMaskRequest, getAccounts, saveAccounts: saveAccountsAsync }
       );
     } else if (!(globalThis as Record<string, unknown>).__slicc_connect_mode) {
-      const r = await fetch('/api/secrets/oauth-update', {
+      const r = await fetch(resolveApiUrl('/api/secrets/oauth-update'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: apiHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           providerId: opts.providerId,
           accessToken: opts.accessToken,

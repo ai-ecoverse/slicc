@@ -1,5 +1,6 @@
 import { createLogger } from '../core/logger.js';
 import { isProxyError, readProxyErrorMessage } from '../core/proxy-error.js';
+import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 import * as db from './db.js';
 import { buildTrayWorkerUrl } from './tray-runtime-config.js';
 import type { LeaderToWorkerControlMessage, WorkerToLeaderControlMessage } from './tray-types.js';
@@ -707,8 +708,12 @@ export function createTrayFetch(fetchImpl: typeof fetch = fetch): typeof fetch {
 
     const headers = new Headers(init.headers);
     headers.set('X-Target-URL', targetUrl);
+    // Thin-bridge mode (UI hosted, /api on the local node-server) requires
+    // the per-process bridge token on cross-origin /api/* calls; same-origin
+    // / loopback returns an empty record so the legacy path is unchanged.
+    for (const [k, v] of Object.entries(apiHeaders())) headers.set(k, v);
 
-    const response = await fetchImpl('/api/fetch-proxy', {
+    const response = await fetchImpl(resolveApiUrl('/api/fetch-proxy'), {
       ...init,
       headers,
       cache: 'no-store',

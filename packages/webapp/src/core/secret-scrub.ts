@@ -16,6 +16,7 @@
  * primary defense.
  */
 
+import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 import { createLogger } from './logger.js';
 
 const log = createLogger('secret-scrub');
@@ -71,9 +72,9 @@ export function getToolResultScrubber(): ToolResultScrubber {
   return async (text) => {
     if (!text) return text;
     try {
-      const resp = await fetch('/api/secrets/scrub', {
+      const resp = await fetch(resolveApiUrl('/api/secrets/scrub'), {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: apiHeaders({ 'content-type': 'application/json' }),
         body: JSON.stringify({ text }),
       });
       if (!resp.ok) {
