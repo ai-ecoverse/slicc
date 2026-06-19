@@ -265,20 +265,7 @@ Every change must satisfy **tests**, **docs**, and **verification**.
 
 ### Verification
 
-These are the repo's CI gates and the default full verification pass before commit:
-
-```bash
-npm run lint                           # Format + lint FIRST — CI fails on unformatted code
-npm run typecheck
-npm run test
-npm run test:coverage                  # Enforces minimum coverage thresholds
-npm run build
-npm run build -w @slicc/chrome-extension
-```
-
-**Always run `npm run lint` before committing.** It runs `biome check --write .` over JS/TS/JSON/CSS and `prettier --write .` over the remaining doc / config-text formats (Markdown, YAML, HTML), then `lint:docs` (CLAUDE.md size limits) and `lint:skills` (tessl `SKILL.md` lint). CI runs the check-only/strict equivalents (`npm run lint:ci`) as a hard gate and will reject any unformatted code. This is the most common CI failure — don't skip it.
-
-CI runs these gates in `.github/workflows/ci.yml`.
+Run the full pre-push/PR pass — `lint` (always first; the most common CI failure), `typecheck`, `test`, `test:coverage`, both `build`s, plus the touched-file complexity gate — before committing. Commands, lint internals, and the CI-only gates: [`docs/verification.md`](docs/verification.md). CI runs these gates in `.github/workflows/ci.yml`.
 
 ## Automated PR Review Checklist
 
