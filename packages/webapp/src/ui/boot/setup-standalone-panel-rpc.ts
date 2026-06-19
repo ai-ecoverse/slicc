@@ -44,6 +44,7 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
     '../../kernel/panel-rpc.js'
   );
   const { createStandalonePanelRpcHandlers } = await import('../panel-rpc-handlers.js');
+  const { getLeaderPermissionsSurface } = await import('../wc/wc-permissions-registry.js');
   const panelRpcEventEmitter = createPanelRpcEventEmitter({ instanceId });
   const stopPanelRpcHandler = installPanelRpcHandler({
     instanceId,
@@ -62,6 +63,11 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
         getLeader()?.sync.emitCherrySliccEvent(runtimeId, name, detail) ?? false,
       listRemoteTargets: () => browser.listAllTargets(),
       remoteCdp: remoteCdpBridge,
+      // Lazy lookup — the leader surface may mount after the panel-RPC
+      // handler is installed (the `<slicc-permissions>` install runs from
+      // the WC shell's attach pass), so the resolver must read the live
+      // registry binding rather than capture it at install time.
+      getPermissionsSurface: () => getLeaderPermissionsSurface(),
     }),
   });
   win.addEventListener(
