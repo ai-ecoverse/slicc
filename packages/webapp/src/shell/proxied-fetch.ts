@@ -87,9 +87,48 @@ export function getBridgeToken(): string | null {
   return bridgeToken;
 }
 
+/**
+ * Resolve a same-origin `/api/*` path to the absolute URL the bridge
+ * configuration says to target. With no `setLocalApiBaseUrl` set (legacy
+ * bundled-UI, same-origin case) the path is returned unchanged so
+ * `fetch(resolveApiUrl('/api/secrets'))` keeps the relative-URL behavior
+ * every existing caller expects. In thin-bridge mode (hosted leader on
+ * sliccy.ai, local node-server cross-origin) the configured base is
+ * prepended so the call reaches the local /api surface. `path` must
+ * include the leading slash — we deliberately do not normalize it so
+ * accidental `api/...` callers fail loudly instead of producing
+ * `${base}api/...`.
+ */
+export function resolveApiUrl(path: string): string {
+  return localApiBaseUrl ? `${localApiBaseUrl}${path}` : path;
+}
+
+/**
+ * Build the request headers for a same-origin `/api/*` call, layering an
+ * optional `extra` overrides record on top of the bridge-token header.
+ * `X-Bridge-Token` is attached ONLY when both a bridge token and a local
+ * API base are configured (i.e. the cross-origin thin-bridge case). On
+ * the legacy same-origin path the token is omitted even if set — the
+ * local node-server doesn't require it for loopback origins, and
+ * sending it would needlessly leak a session capability. `extra` wins
+ * over the bridge token if a caller deliberately overrides it.
+ */
+export function apiHeaders(extra?: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (bridgeToken && localApiBaseUrl) {
+    headers['X-Bridge-Token'] = bridgeToken;
+  }
+  if (extra) {
+    for (const k of Object.keys(extra)) {
+      headers[k] = extra[k];
+    }
+  }
+  return headers;
+}
+
 /** Resolve the absolute /api/fetch-proxy URL, honoring `setLocalApiBaseUrl`. */
 function resolveFetchProxyUrl(): string {
-  return localApiBaseUrl ? `${localApiBaseUrl}/api/fetch-proxy` : '/api/fetch-proxy';
+  return resolveApiUrl('/api/fetch-proxy');
 }
 
 /** Check if a content-type header indicates text (safe for UTF-8 decoding). */
@@ -324,17 +363,15 @@ export function createProxiedFetch(): SecureFetch {
     const method = options?.method ?? 'GET';
     const plainHeaders = headersToRecord(options?.headers);
     const encoded = encodeForbiddenRequestHeaders(plainHeaders);
-    const headers: Record<string, string> = {
+    // Thin-bridge: cross-origin /api/* from a remote allowlisted leader
+    // (sliccy.ai) needs the per-process bridge token. `apiHeaders` only
+    // attaches it when both base + token are set, so same-origin /
+    // loopback callers don't carry it (and the local node-server only
+    // requires it for non-loopback origins anyway).
+    const headers: Record<string, string> = apiHeaders({
       ...encoded,
       'X-Target-URL': url,
-    };
-    // Thin-bridge: cross-origin /api/* from a remote allowlisted leader
-    // (sliccy.ai) needs the per-process bridge token. Only attach when
-    // there is one — same-origin / loopback callers don't need it and
-    // the local node-server only requires it for non-loopback origins.
-    if (bridgeToken && localApiBaseUrl) {
-      headers['X-Bridge-Token'] = bridgeToken;
-    }
+    });
 
     const init: RequestInit = { method, headers, cache: 'no-store' };
     if (options?.body && !['GET', 'HEAD'].includes(method)) {
