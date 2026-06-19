@@ -1086,4 +1086,28 @@ describe('migrateLegacyDefaultChromeProfile', () => {
 
     expect(await readFile(join(newProfile, 'marker.txt'), 'utf8')).toBe('first-data');
   });
+
+  it('does not resurrect the profile after a deliberate delete (runs at most once)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'slicc-migrate-'));
+    tempDirs.push(root);
+
+    const legacyProfile = join(root, 'legacy', 'browser-coding-agent-chrome');
+    await mkdir(legacyProfile, { recursive: true });
+    await writeFile(join(legacyProfile, 'marker.txt'), 'legacy-data');
+
+    const profilesDir = join(root, 'profiles');
+    const newProfile = join(profilesDir, 'browser-coding-agent-chrome');
+
+    // First boot migrates the legacy profile.
+    await migrateLegacyDefaultChromeProfile(newProfile, [legacyProfile]);
+    expect(await readFile(join(newProfile, 'marker.txt'), 'utf8')).toBe('legacy-data');
+
+    // User deliberately wipes the profile for a clean state; legacy copy still on disk.
+    await rm(newProfile, { recursive: true, force: true });
+
+    // Next boot must NOT copy the legacy profile back — the marker in the
+    // profiles directory short-circuits the entire migration.
+    await migrateLegacyDefaultChromeProfile(newProfile, [legacyProfile]);
+    expect(fsExistsSync(newProfile)).toBe(false);
+  });
 });

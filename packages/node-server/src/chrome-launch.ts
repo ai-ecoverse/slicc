@@ -155,31 +155,50 @@ export function legacyChromeCandidates(
   return [...bases].map((b) => join(b, profileDirName));
 }
 
+/** Sentinel written into the profiles directory once legacy migration has run. */
+const PROFILE_MIGRATION_MARKER = '.profile-migration-complete';
+
 /**
  * One-time migration: if `newDir` doesn't exist yet, copies the first matching
  * candidate (legacy profile from $TMPDIR or /tmp) to the stable new location.
  * Non-destructive — the old profile is left in place.
+ *
+ * Runs at most once ever, gated by a marker file in the profiles directory
+ * (the parent of `newDir`). Because the marker lives beside the profile rather
+ * than inside it, deleting the profile for a clean state does NOT re-trigger
+ * migration — only deleting the whole profiles directory re-arms it.
  */
 export async function migrateLegacyDefaultChromeProfile(
   newDir: string,
   candidates: string[]
 ): Promise<void> {
-  if (existsSync(newDir)) return;
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) {
-      try {
-        await cp(candidate, newDir, { recursive: true });
-        console.log(`Migrated Chrome profile: ${candidate} → ${newDir}`);
-      } catch (err) {
-        await rm(newDir, { recursive: true, force: true }).catch(() => {});
-        console.warn(
-          `Chrome profile migration failed (${candidate} → ${newDir}); continuing with a fresh profile.`,
-          err
-        );
+  const profilesDir = dirname(newDir);
+  const marker = join(profilesDir, PROFILE_MIGRATION_MARKER);
+  if (existsSync(marker)) return;
+
+  if (!existsSync(newDir)) {
+    for (const candidate of candidates) {
+      if (existsSync(candidate)) {
+        try {
+          await cp(candidate, newDir, { recursive: true });
+          console.log(`Migrated Chrome profile: ${candidate} → ${newDir}`);
+        } catch (err) {
+          await rm(newDir, { recursive: true, force: true }).catch(() => {});
+          console.warn(
+            `Chrome profile migration failed (${candidate} → ${newDir}); continuing with a fresh profile.`,
+            err
+          );
+        }
+        break;
       }
-      return;
     }
   }
+
+  // Record that migration has been evaluated so it never resurrects a profile
+  // the user deliberately deleted. Best-effort: a failure here just means the
+  // (idempotent) check runs again next boot.
+  await mkdir(profilesDir, { recursive: true }).catch(() => {});
+  await writeFile(marker, '').catch(() => {});
 }
 
 export function resolveChromeLaunchProfile(options: {
