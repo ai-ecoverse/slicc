@@ -153,3 +153,63 @@ export function isBridgeConfigMessage(value: unknown): value is BridgeConfigMess
   const v = value as { type?: unknown };
   return v.type === SW_BRIDGE_CONFIG_MESSAGE;
 }
+
+/**
+ * Per-client cache for thin-bridge config posted from the page → SW.
+ *
+ * Keyed by the posting client's id (`MessageEvent.source.id` on inbound
+ * `postMessage`; `FetchEvent.clientId` on the consume side) so that two
+ * leader tabs open at the same hosted origin don't clobber each other:
+ * without this, the second tab's config overwrites the first tab's
+ * entry in a module-level global, and the first tab's subsequent LLM /
+ * curl requests are then sent to the wrong localhost bridge / token.
+ *
+ * Cleanup policy: entries are removed when an empty config (null
+ * apiBaseUrl or token) is posted by the same client. We intentionally do
+ * NOT actively reap entries against `clients.matchAll()` — service
+ * worker lifetime is bounded by the browser session, the Map only ever
+ * holds one entry per leader tab in scope, and the fallback path in the
+ * SW (`resolveBridgeFromClientUrls`) gracefully handles a missing-cache
+ * lookup by re-parsing the controlling client's URL.
+ */
+export class BridgeConfigCache {
+  private readonly byClient = new Map<string, ResolvedBridgeConfig>();
+
+  /**
+   * Record (or clear) the bridge config for one client. A partial
+   * payload (null apiBaseUrl or token) deletes the entry — symmetric
+   * with the pre-existing "treat nulls as cache-miss" semantics used by
+   * `resolveBridgeConfig`.
+   */
+  set(clientId: string, payload: { apiBaseUrl: string | null; token: string | null }): void {
+    if (!clientId) return;
+    if (!payload.apiBaseUrl || !payload.token) {
+      this.byClient.delete(clientId);
+      return;
+    }
+    this.byClient.set(clientId, {
+      apiBaseUrl: payload.apiBaseUrl.replace(/\/+$/, ''),
+      token: payload.token,
+    });
+  }
+
+  /**
+   * Look up the cached config for a client. Returns `null` for unknown
+   * or empty client ids; the caller then falls back to URL parsing via
+   * `resolveBridgeFromClientUrls`.
+   */
+  get(clientId: string | null | undefined): ResolvedBridgeConfig | null {
+    if (!clientId) return null;
+    return this.byClient.get(clientId) ?? null;
+  }
+
+  /** Drop one client's entry (used when a client explicitly clears config). */
+  delete(clientId: string): void {
+    this.byClient.delete(clientId);
+  }
+
+  /** Total entries — exposed for tests / diagnostics, not consumed by the SW. */
+  size(): number {
+    return this.byClient.size;
+  }
+}

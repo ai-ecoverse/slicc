@@ -38,6 +38,7 @@
 import { encodeForbiddenRequestHeaders, headersToRecord } from '../shell/proxy-headers.js';
 import { synthesizeForwardResponse } from './llm-proxy-response.js';
 import {
+  BridgeConfigCache,
   isBridgeConfigMessage,
   isBridgeFetchProxyUrl,
   resolveBridgeFromClientUrls,
@@ -53,13 +54,15 @@ const BRIDGE_TOKEN_HEADER = 'X-Bridge-Token';
 /**
  * Bridge config cache populated by the page → SW `postMessage` posted
  * from `boot/setup-sw-registration.ts` after the SW becomes the
- * controller (and re-posted on `controllerchange`). On a cache miss
- * `forwardThroughProxy` falls back to parsing the controlling client's
- * URL so the SW survives eviction/restart without losing thin-bridge
- * mode. Mirrors the page-realm `proxied-fetch.ts` state.
+ * controller (and re-posted on `controllerchange`). Keyed by the
+ * posting client's id so that two leader tabs at the same hosted
+ * origin can't clobber each other — see `BridgeConfigCache` for the
+ * rationale. On a cache miss `forwardThroughProxy` falls back to
+ * parsing the controlling client's URL so the SW survives
+ * eviction/restart without losing thin-bridge mode. Mirrors the
+ * page-realm `proxied-fetch.ts` state.
  */
-let cachedBridgeApiBaseUrl: string | null = null;
-let cachedBridgeToken: string | null = null;
+const bridgeConfigCache = new BridgeConfigCache();
 
 // Pull in preview-sw so its fetch handler runs in this SW's context.
 //
@@ -87,11 +90,22 @@ self.addEventListener('activate', (event) => {
 
 // Thin-bridge config push from the page. Only acts on the tagged
 // message shape so unrelated SW postMessage traffic (e.g. future
-// page→SW signaling) doesn't corrupt the bridge state.
+// page→SW signaling) doesn't corrupt the bridge state. The posting
+// client's id keys the cache so two leader tabs at the same hosted
+// origin don't clobber each other's bridge / token state.
 self.addEventListener('message', (event: ExtendableMessageEvent) => {
   if (!isBridgeConfigMessage(event.data)) return;
-  cachedBridgeApiBaseUrl = event.data.apiBaseUrl;
-  cachedBridgeToken = event.data.token;
+  const source = event.source;
+  // `source` may be Client | ServiceWorker | MessagePort | null. Only
+  // Client carries the `id` we key the cache on; anything else is
+  // dropped silently — the page-side bootstrap only sends from window
+  // clients, so a non-Client sender is either an unrelated message or
+  // a future channel we haven't wired up yet.
+  if (!source || !('id' in source) || typeof source.id !== 'string') return;
+  bridgeConfigCache.set(source.id, {
+    apiBaseUrl: event.data.apiBaseUrl,
+    token: event.data.token,
+  });
 });
 
 self.addEventListener('fetch', (event: FetchEvent) => {
@@ -142,15 +156,18 @@ async function forwardThroughProxy(req: Request, clientId: string | null): Promi
   proxyHeaders.set('X-Target-URL', targetUrl);
 
   // Thin-bridge: rewrite the forward target onto the local node-server's
-  // origin and attach the per-process bridge token. Cache miss falls back
-  // to parsing `bridge`/`bridgeToken` from the triggering client URL; if
-  // that client is a worker (kernel DedicatedWorker → no launch params)
-  // or unknown, we additionally enumerate the page window clients so the
-  // SW recovers bridge mode after eviction + worker-originated fetches.
-  // Same-origin (non-bridge) callers keep the legacy `/api/fetch-proxy`
-  // path with no token header — mirrors `proxied-fetch.ts` gating.
-  const cached = { apiBaseUrl: cachedBridgeApiBaseUrl, token: cachedBridgeToken };
-  const hasCache = !!(cached.apiBaseUrl && cached.token);
+  // origin and attach the per-process bridge token. Per-client cache
+  // lookup keyed by the triggering FetchEvent's `clientId` keeps two
+  // leader tabs at the same hosted origin isolated. Cache miss falls
+  // back to parsing `bridge`/`bridgeToken` from the triggering client
+  // URL; if that client is a worker (kernel DedicatedWorker → no
+  // launch params) or unknown, we additionally enumerate the page
+  // window clients so the SW recovers bridge mode after eviction +
+  // worker-originated fetches. Same-origin (non-bridge) callers keep
+  // the legacy `/api/fetch-proxy` path with no token header — mirrors
+  // `proxied-fetch.ts` gating.
+  const cached = bridgeConfigCache.get(clientId);
+  const hasCache = !!cached;
   const triggeringClientUrl = await readClientUrl(clientId);
   const windowClientUrls = hasCache ? [] : await readWindowClientUrls();
   const bridge = resolveBridgeFromClientUrls(cached, [triggeringClientUrl, ...windowClientUrls]);

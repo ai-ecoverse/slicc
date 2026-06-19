@@ -12,6 +12,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  BridgeConfigCache,
   isBridgeConfigMessage,
   isBridgeFetchProxyUrl,
   resolveBridgeConfig,
@@ -213,5 +214,94 @@ describe('isBridgeConfigMessage', () => {
     expect(isBridgeConfigMessage('string')).toBe(false);
     expect(isBridgeConfigMessage({ type: 'something-else' })).toBe(false);
     expect(isBridgeConfigMessage({})).toBe(false);
+  });
+});
+
+describe('BridgeConfigCache', () => {
+  it('returns null for an unknown client id', () => {
+    const cache = new BridgeConfigCache();
+    expect(cache.get('client-a')).toBeNull();
+  });
+
+  it('returns null when called with a null/undefined/empty client id', () => {
+    const cache = new BridgeConfigCache();
+    cache.set('client-a', { apiBaseUrl: 'http://localhost:5710', token: 'a' });
+    expect(cache.get(null)).toBeNull();
+    expect(cache.get(undefined)).toBeNull();
+    expect(cache.get('')).toBeNull();
+  });
+
+  it('stores a config and returns it (trimming the trailing slash on apiBaseUrl)', () => {
+    const cache = new BridgeConfigCache();
+    cache.set('client-a', { apiBaseUrl: 'http://localhost:5710/', token: 'tok-a' });
+    expect(cache.get('client-a')).toEqual({
+      apiBaseUrl: 'http://localhost:5710',
+      token: 'tok-a',
+    });
+  });
+
+  it('treats a partial payload (null apiBaseUrl or token) as a delete', () => {
+    const cache = new BridgeConfigCache();
+    cache.set('client-a', { apiBaseUrl: 'http://localhost:5710', token: 'tok-a' });
+    cache.set('client-a', { apiBaseUrl: null, token: 'tok-a' });
+    expect(cache.get('client-a')).toBeNull();
+
+    cache.set('client-a', { apiBaseUrl: 'http://localhost:5710', token: 'tok-a' });
+    cache.set('client-a', { apiBaseUrl: 'http://localhost:5710', token: null });
+    expect(cache.get('client-a')).toBeNull();
+  });
+
+  it('ignores set() calls with an empty client id', () => {
+    const cache = new BridgeConfigCache();
+    cache.set('', { apiBaseUrl: 'http://localhost:5710', token: 'tok-a' });
+    expect(cache.size()).toBe(0);
+  });
+
+  it('isolates two clients so posting from B does not corrupt A', () => {
+    // Regression for the multi-tab collision: previously the SW kept a
+    // single module-level pair of `cachedBridgeApiBaseUrl` /
+    // `cachedBridgeToken`, so when leader tab B (different bridge /
+    // token because it was launched on a different node-server port)
+    // posted its config, leader tab A's subsequent LLM / curl
+    // requests started flowing to tab B's bridge with tab B's token.
+    const cache = new BridgeConfigCache();
+    cache.set('client-a', { apiBaseUrl: 'http://localhost:5710', token: 'tok-a' });
+    cache.set('client-b', { apiBaseUrl: 'http://localhost:5711', token: 'tok-b' });
+    expect(cache.get('client-a')).toEqual({
+      apiBaseUrl: 'http://localhost:5710',
+      token: 'tok-a',
+    });
+    expect(cache.get('client-b')).toEqual({
+      apiBaseUrl: 'http://localhost:5711',
+      token: 'tok-b',
+    });
+  });
+
+  it('overwrites a single client without disturbing other clients', () => {
+    const cache = new BridgeConfigCache();
+    cache.set('client-a', { apiBaseUrl: 'http://localhost:5710', token: 'tok-a' });
+    cache.set('client-b', { apiBaseUrl: 'http://localhost:5711', token: 'tok-b' });
+    cache.set('client-a', { apiBaseUrl: 'http://localhost:5712', token: 'tok-a2' });
+    expect(cache.get('client-a')).toEqual({
+      apiBaseUrl: 'http://localhost:5712',
+      token: 'tok-a2',
+    });
+    expect(cache.get('client-b')).toEqual({
+      apiBaseUrl: 'http://localhost:5711',
+      token: 'tok-b',
+    });
+  });
+
+  it('clears one client without affecting the others', () => {
+    const cache = new BridgeConfigCache();
+    cache.set('client-a', { apiBaseUrl: 'http://localhost:5710', token: 'tok-a' });
+    cache.set('client-b', { apiBaseUrl: 'http://localhost:5711', token: 'tok-b' });
+    cache.delete('client-a');
+    expect(cache.get('client-a')).toBeNull();
+    expect(cache.get('client-b')).toEqual({
+      apiBaseUrl: 'http://localhost:5711',
+      token: 'tok-b',
+    });
+    expect(cache.size()).toBe(1);
   });
 });
