@@ -181,4 +181,73 @@ final class SliccProcessLaunchArgsTests: XCTestCase {
         )
         XCTAssertEqual(args.last, "--static-root=/tmp/overlay")
     }
+
+    // MARK: - Thin-Electron env (forwarded to slicc-server `--electron` child)
+
+    func testResolveHostedLeaderOriginDefaultsToProductionWhenEnvAbsent() {
+        XCTAssertEqual(
+            SliccProcess.resolveHostedLeaderOrigin(inheritedEnv: [:]),
+            SliccProcess.defaultHostedLeaderOrigin
+        )
+    }
+
+    func testResolveHostedLeaderOriginPrefersExplicitOverride() {
+        XCTAssertEqual(
+            SliccProcess.resolveHostedLeaderOrigin(
+                inheritedEnv: ["SLICC_HOSTED_LEADER_ORIGIN": "https://staging.example.test"]
+            ),
+            "https://staging.example.test"
+        )
+    }
+
+    func testResolveHostedLeaderOriginFallsBackToWorkerBaseUrl() {
+        XCTAssertEqual(
+            SliccProcess.resolveHostedLeaderOrigin(
+                inheritedEnv: ["WORKER_BASE_URL": "https://worker.example.test"]
+            ),
+            "https://worker.example.test"
+        )
+    }
+
+    func testResolveHostedLeaderOriginStripsTrailingSlashes() {
+        XCTAssertEqual(
+            SliccProcess.resolveHostedLeaderOrigin(
+                inheritedEnv: ["SLICC_HOSTED_LEADER_ORIGIN": "https://staging.example.test///"]
+            ),
+            "https://staging.example.test"
+        )
+    }
+
+    func testResolveHostedLeaderOriginTreatsEmptyOverrideAsAbsent() {
+        XCTAssertEqual(
+            SliccProcess.resolveHostedLeaderOrigin(
+                inheritedEnv: ["SLICC_HOSTED_LEADER_ORIGIN": "", "WORKER_BASE_URL": ""]
+            ),
+            SliccProcess.defaultHostedLeaderOrigin
+        )
+    }
+
+    func testThinElectronEnvCarriesHostedOriginAndBridgeToken() {
+        let env = SliccProcess.thinElectronEnv(
+            inheritedEnv: ["SLICC_HOSTED_LEADER_ORIGIN": "https://staging.example.test"],
+            bridgeToken: "launcher-token-xyz"
+        )
+        XCTAssertEqual(env["SLICC_HOSTED_LEADER_ORIGIN"], "https://staging.example.test")
+        XCTAssertEqual(env["SLICC_BRIDGE_TOKEN"], "launcher-token-xyz")
+    }
+
+    func testThinElectronBridgeTokenIsStableAcrossCalls() {
+        // The launcher-wide token must be the SAME across every reattach +
+        // launchWithElectronApp call so the spawned slicc-server child's
+        // gate sees the same secret it was launched with. A per-call mint
+        // would silently break reattach after a smooth update.
+        XCTAssertEqual(SliccProcess.thinElectronBridgeToken, SliccProcess.thinElectronBridgeToken)
+        XCTAssertFalse(SliccProcess.thinElectronBridgeToken.isEmpty)
+    }
+
+    func testThinElectronEnvDefaultsToLauncherMintedToken() {
+        let env = SliccProcess.thinElectronEnv(inheritedEnv: [:])
+        XCTAssertEqual(env["SLICC_BRIDGE_TOKEN"], SliccProcess.thinElectronBridgeToken)
+        XCTAssertEqual(env["SLICC_HOSTED_LEADER_ORIGIN"], SliccProcess.defaultHostedLeaderOrigin)
+    }
 }

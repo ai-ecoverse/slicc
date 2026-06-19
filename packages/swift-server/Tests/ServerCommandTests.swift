@@ -381,4 +381,79 @@ final class ServerCommandTests: XCTestCase {
         XCTAssertEqual(resolvedPort, ServerCommand.defaultServePort)
         XCTAssertEqual(observedStrict, false)
     }
+
+    // MARK: - Thin-Electron mode
+
+    func testIsThinElectronModeRequiresElectronAndHostedOriginEnv() throws {
+        let electronConfig = ServerConfig.resolve(
+            from: try XCTUnwrap(try ServerCommand.parseAsRoot(["--electron"]) as? ServerCommand),
+            arguments: ["slicc-server", "--electron"]
+        )
+        // Opt-in active: --electron + non-empty SLICC_HOSTED_LEADER_ORIGIN.
+        XCTAssertTrue(ServerCommand.isThinElectronMode(
+            config: electronConfig,
+            environment: ["SLICC_HOSTED_LEADER_ORIGIN": "https://www.sliccy.ai"]
+        ))
+        // Empty env value is treated as absent (matches resolveHostedLeaderOrigin).
+        XCTAssertFalse(ServerCommand.isThinElectronMode(
+            config: electronConfig,
+            environment: ["SLICC_HOSTED_LEADER_ORIGIN": ""]
+        ))
+        XCTAssertFalse(ServerCommand.isThinElectronMode(
+            config: electronConfig,
+            environment: [:]
+        ))
+    }
+
+    func testIsThinElectronModeRejectsServeOnlyAndNonElectron() throws {
+        let env = ["SLICC_HOSTED_LEADER_ORIGIN": "https://www.sliccy.ai"]
+        let serveOnlyElectron = ServerConfig.resolve(
+            from: try XCTUnwrap(try ServerCommand.parseAsRoot(["--electron", "--serve-only"]) as? ServerCommand),
+            arguments: ["slicc-server", "--electron", "--serve-only"]
+        )
+        XCTAssertFalse(ServerCommand.isThinElectronMode(config: serveOnlyElectron, environment: env))
+
+        let baseConfig = ServerConfig.resolve(
+            from: try XCTUnwrap(try ServerCommand.parseAsRoot([]) as? ServerCommand),
+            arguments: ["slicc-server"]
+        )
+        XCTAssertFalse(ServerCommand.isThinElectronMode(config: baseConfig, environment: env))
+    }
+
+    func testResolveBridgeTokenReturnsNilOutsideThinModes() {
+        XCTAssertNil(ServerCommand.resolveBridgeToken(
+            thinBridgeMode: false,
+            thinElectronMode: false,
+            environment: ["SLICC_BRIDGE_TOKEN": "ignored"]
+        ))
+    }
+
+    func testResolveBridgeTokenPrefersEnvForwardedToken() {
+        let token = ServerCommand.resolveBridgeToken(
+            thinBridgeMode: false,
+            thinElectronMode: true,
+            environment: ["SLICC_BRIDGE_TOKEN": "launcher-minted-abc"]
+        )
+        XCTAssertEqual(token, "launcher-minted-abc")
+    }
+
+    func testResolveBridgeTokenMintsFreshTokenWhenEnvAbsent() {
+        let token = ServerCommand.resolveBridgeToken(
+            thinBridgeMode: true,
+            thinElectronMode: false,
+            environment: [:]
+        )
+        XCTAssertNotNil(token)
+        XCTAssertFalse(token?.isEmpty ?? true)
+    }
+
+    func testResolveBridgeTokenTreatsEmptyEnvAsAbsent() {
+        let token = ServerCommand.resolveBridgeToken(
+            thinBridgeMode: false,
+            thinElectronMode: true,
+            environment: ["SLICC_BRIDGE_TOKEN": ""]
+        )
+        XCTAssertNotNil(token)
+        XCTAssertNotEqual(token, "")
+    }
 }

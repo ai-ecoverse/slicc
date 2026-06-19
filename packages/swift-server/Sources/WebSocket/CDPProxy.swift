@@ -86,24 +86,14 @@ actor CDPProxy {
         self.cdpPort = cdpPort
         let proxyLogger = self.logger
         router.ws("/cdp") { request, _ in
-            guard let bridgeToken else {
-                return .upgrade([:])
-            }
-            let origin = request.headers[.origin]
-            let subprotocolHeader = request.headers[.secWebSocketProtocol]
-            let gate = BridgeSecurity.validateUpgrade(
-                origin: origin,
-                subprotocolHeader: subprotocolHeader,
-                expectedToken: bridgeToken
+            Self.evaluateBridgeUpgrade(
+                origin: request.headers[.origin],
+                subprotocolHeader: request.headers[.secWebSocketProtocol],
+                bridgeToken: bridgeToken,
+                onReject: { reason in
+                    proxyLogger.warning("[cdp-proxy] /cdp upgrade rejected: \(reason)")
+                }
             )
-            guard gate.ok, let accepted = gate.acceptedSubprotocol else {
-                let reason = gate.reason?.rawValue ?? "rejected"
-                proxyLogger.warning("[cdp-proxy] /cdp upgrade rejected: \(reason)")
-                return .dontUpgrade
-            }
-            var headers = HTTPFields()
-            headers[.secWebSocketProtocol] = accepted
-            return .upgrade(headers)
         } onUpgrade: { inbound, outbound, context in
             try await self.handleClientConnection(
                 inbound: inbound,
@@ -112,6 +102,39 @@ actor CDPProxy {
                 cdpPort: cdpPort
             )
         }
+    }
+
+    /// Pure decision logic for the `/cdp` WebSocket upgrade gate. Returns
+    /// `.upgrade([:])` in legacy modes (`bridgeToken == nil`) so existing
+    /// dev / serve-only / electron-without-hosted-origin paths see no
+    /// behavior change. In thin modes (`bridgeToken != nil`), runs the
+    /// origin allowlist + `Sec-WebSocket-Protocol` token check from
+    /// `BridgeSecurity.validateUpgrade` and, on success, echoes the
+    /// accepted subprotocol back in the 101 response (RFC 6455 §1.9 — the
+    /// browser otherwise closes the socket). Extracted from `install()` so
+    /// the gate is unit-testable without spinning up Hummingbird.
+    static func evaluateBridgeUpgrade(
+        origin: String?,
+        subprotocolHeader: String?,
+        bridgeToken: String?,
+        onReject: ((String) -> Void)? = nil
+    ) -> RouterShouldUpgrade {
+        guard let bridgeToken else {
+            return .upgrade([:])
+        }
+        let gate = BridgeSecurity.validateUpgrade(
+            origin: origin,
+            subprotocolHeader: subprotocolHeader,
+            expectedToken: bridgeToken
+        )
+        guard gate.ok, let accepted = gate.acceptedSubprotocol else {
+            let reason = gate.reason?.rawValue ?? "rejected"
+            onReject?(reason)
+            return .dontUpgrade
+        }
+        var headers = HTTPFields()
+        headers[.secWebSocketProtocol] = accepted
+        return .upgrade(headers)
     }
 
     func preWarm(cdpPort: Int) async throws {
