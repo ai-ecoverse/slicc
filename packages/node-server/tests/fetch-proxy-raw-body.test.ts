@@ -105,6 +105,13 @@ describe('FETCH_PROXY_SKIP_HEADERS contract', () => {
     }
   });
 
+  it('contains the thin-bridge token header so it never leaks to upstream targets', () => {
+    // The bridge token only authenticates the browser→local-proxy hop;
+    // forwarding it to api.openai.com (or any agent-driven `curl` URL)
+    // would leak a session-scoped capability cross-origin.
+    expect(FETCH_PROXY_SKIP_HEADERS.has('x-bridge-token')).toBe(true);
+  });
+
   it('does not skip headers that should be forwarded (sanity)', () => {
     for (const header of ['authorization', 'x-amz-date', 'x-amz-content-sha256', 'content-type']) {
       expect(FETCH_PROXY_SKIP_HEADERS.has(header)).toBe(false);
