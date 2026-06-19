@@ -178,6 +178,102 @@ final class ServerCommandTests: XCTestCase {
         )
     }
 
+    // MARK: - Thin-bridge launch URL parity with node-server Path A
+
+    // Thin-bridge mode appends `bridge=<ws-url>&bridgeToken=<token>` to the
+    // hosted-leader launch URL so the same webapp bridge client connects
+    // unchanged regardless of which runtime served it. Mirrors
+    // `appendBridgeParams` in `packages/node-server/src/launch-url.ts`.
+    func testResolveBrowserLaunchURLAppendsBridgeParamsInThinMode() throws {
+        let parsed = try ServerCommand.parseAsRoot([])
+        let command = try XCTUnwrap(parsed as? ServerCommand)
+        let config = ServerConfig.resolve(from: command, arguments: ["slicc-server"])
+
+        let launchURL = try ServerCommand.resolveBrowserLaunchURL(
+            serveOrigin: "http://localhost:5710",
+            config: config,
+            environment: [:],
+            bridgeWsUrl: "ws://localhost:5710/cdp",
+            bridgeToken: "tok-abc"
+        )
+
+        // The launch URL points at the hosted leader, NOT the local serve origin.
+        XCTAssertTrue(launchURL.hasPrefix("https://www.sliccy.ai"))
+        XCTAssertTrue(launchURL.contains("bridge=ws://localhost:5710/cdp"))
+        XCTAssertTrue(launchURL.contains("bridgeToken=tok-abc"))
+    }
+
+    func testResolveBrowserLaunchURLPrefersExplicitLeaderOriginInThinMode() throws {
+        let parsed = try ServerCommand.parseAsRoot([
+            "--lead-worker-base-url", "https://slicc-tray-hub-staging.minivelos.workers.dev/"
+        ])
+        let command = try XCTUnwrap(parsed as? ServerCommand)
+        let config = ServerConfig.resolve(
+            from: command,
+            arguments: [
+                "slicc-server",
+                "--lead-worker-base-url", "https://slicc-tray-hub-staging.minivelos.workers.dev/"
+            ]
+        )
+
+        let launchURL = try ServerCommand.resolveBrowserLaunchURL(
+            serveOrigin: "http://localhost:5710",
+            config: config,
+            environment: [:],
+            bridgeWsUrl: "ws://localhost:5710/cdp",
+            bridgeToken: "tok-xyz"
+        )
+
+        // `--lead` flow composes with the bridge params; tray=... is appended
+        // to the staging leader origin.
+        XCTAssertTrue(launchURL.hasPrefix("https://slicc-tray-hub-staging.minivelos.workers.dev"))
+        XCTAssertTrue(launchURL.contains("tray=https://slicc-tray-hub-staging.minivelos.workers.dev"))
+        XCTAssertTrue(launchURL.contains("bridge=ws://localhost:5710/cdp"))
+        XCTAssertTrue(launchURL.contains("bridgeToken=tok-xyz"))
+    }
+
+    func testResolveBrowserLaunchURLOmitsBridgeParamsWithoutToken() throws {
+        let parsed = try ServerCommand.parseAsRoot([])
+        let command = try XCTUnwrap(parsed as? ServerCommand)
+        let config = ServerConfig.resolve(from: command, arguments: ["slicc-server"])
+
+        let launchURL = try ServerCommand.resolveBrowserLaunchURL(
+            serveOrigin: "http://localhost:5710",
+            config: config,
+            environment: [:]
+        )
+
+        XCTAssertEqual(launchURL, "http://localhost:5710")
+        XCTAssertFalse(launchURL.contains("bridge="))
+        XCTAssertFalse(launchURL.contains("bridgeToken="))
+    }
+
+    func testIsThinBridgeModeRejectsDevElectronAndServeOnly() throws {
+        let baseConfig = ServerConfig.resolve(
+            from: try XCTUnwrap(try ServerCommand.parseAsRoot([]) as? ServerCommand),
+            arguments: ["slicc-server"]
+        )
+        XCTAssertTrue(ServerCommand.isThinBridgeMode(config: baseConfig))
+
+        let devConfig = ServerConfig.resolve(
+            from: try XCTUnwrap(try ServerCommand.parseAsRoot(["--dev"]) as? ServerCommand),
+            arguments: ["slicc-server", "--dev"]
+        )
+        XCTAssertFalse(ServerCommand.isThinBridgeMode(config: devConfig))
+
+        let serveOnlyConfig = ServerConfig.resolve(
+            from: try XCTUnwrap(try ServerCommand.parseAsRoot(["--serve-only"]) as? ServerCommand),
+            arguments: ["slicc-server", "--serve-only"]
+        )
+        XCTAssertFalse(ServerCommand.isThinBridgeMode(config: serveOnlyConfig))
+
+        let electronConfig = ServerConfig.resolve(
+            from: try XCTUnwrap(try ServerCommand.parseAsRoot(["--electron"]) as? ServerCommand),
+            arguments: ["slicc-server", "--electron"]
+        )
+        XCTAssertFalse(ServerCommand.isThinBridgeMode(config: electronConfig))
+    }
+
     func testStaticRootIsCapturedInResolvedConfig() throws {
         let parsed = try ServerCommand.parseAsRoot(["--static-root", "/tmp/slicc/dist/ui"])
         let command = try XCTUnwrap(parsed as? ServerCommand)

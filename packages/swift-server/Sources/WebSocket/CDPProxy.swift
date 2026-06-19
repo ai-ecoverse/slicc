@@ -2,6 +2,7 @@ import AsyncHTTPClient
 import Foundation
 import Hummingbird
 import HummingbirdWebSocket
+import HTTPTypes
 import Logging
 import NIOCore
 import NIOHTTP1
@@ -68,10 +69,41 @@ actor CDPProxy {
         })
     }
 
-    func install(on router: Router<BasicWebSocketRequestContext>, cdpPort: Int) {
+    /// Install the `/cdp` route on `router`.
+    ///
+    /// When `bridgeToken` is non-nil (thin standalone mode), the WebSocket
+    /// upgrade is gated by `BridgeSecurity.validateUpgrade`: bad origin or
+    /// missing/wrong `Sec-WebSocket-Protocol` token → `.dontUpgrade` (405)
+    /// before any handler runs. The accepted subprotocol is echoed back in
+    /// the 101 response (RFC 6455 §1.9) so the browser does not close the
+    /// socket. Legacy modes (dev / electron / serve-only) pass `nil` to keep
+    /// the same-origin behavior unchanged.
+    func install(
+        on router: Router<BasicWebSocketRequestContext>,
+        cdpPort: Int,
+        bridgeToken: String? = nil
+    ) {
         self.cdpPort = cdpPort
-        router.ws("/cdp") { _, _ in
-            .upgrade([:])
+        let proxyLogger = self.logger
+        router.ws("/cdp") { request, _ in
+            guard let bridgeToken else {
+                return .upgrade([:])
+            }
+            let origin = request.headers[.origin]
+            let subprotocolHeader = request.headers[.secWebSocketProtocol]
+            let gate = BridgeSecurity.validateUpgrade(
+                origin: origin,
+                subprotocolHeader: subprotocolHeader,
+                expectedToken: bridgeToken
+            )
+            guard gate.ok, let accepted = gate.acceptedSubprotocol else {
+                let reason = gate.reason?.rawValue ?? "rejected"
+                proxyLogger.warning("[cdp-proxy] /cdp upgrade rejected: \(reason)")
+                return .dontUpgrade
+            }
+            var headers = HTTPFields()
+            headers[.secWebSocketProtocol] = accepted
+            return .upgrade(headers)
         } onUpgrade: { inbound, outbound, context in
             try await self.handleClientConnection(
                 inbound: inbound,
