@@ -840,6 +840,222 @@ final class ElectronLauncherTests: XCTestCase {
         XCTAssertEqual(session._testing_pendingWaiterCount(), 0)
     }
 
+    // MARK: - Path B: thin-bridge launch URL + leader/follower election
+
+    private static let thinBridge = ThinBridgeConfig(
+        hostedLeaderOrigin: "https://www.sliccy.ai",
+        bridgeWsUrl: "ws://localhost:5710/cdp",
+        bridgeToken: "aabbccdd-1122-3344-5566-778899aabbcc"
+    )
+
+    func testBuildThinOverlayAppURLEmbedsBridgeAndLeaderRole() throws {
+        let url = buildThinOverlayAppURL(
+            options: ThinOverlayURLOptions(config: Self.thinBridge, role: .leader)
+        )
+        let components = try XCTUnwrap(URLComponents(string: url))
+        XCTAssertEqual(components.scheme, "https")
+        XCTAssertEqual(components.host, "www.sliccy.ai")
+        XCTAssertEqual(components.path, "/electron")
+        let items = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+        XCTAssertEqual(items[BridgeSecurity.wsQueryParam], Self.thinBridge.bridgeWsUrl)
+        XCTAssertEqual(items[BridgeSecurity.tokenQueryParam], Self.thinBridge.bridgeToken)
+        XCTAssertEqual(items[bridgeRoleQueryParam], bridgeRoleLeader)
+        XCTAssertNil(items["tab"])
+    }
+
+    func testBuildThinOverlayAppURLEmitsFollowerRoleForAutoFollowTabs() throws {
+        let url = buildThinOverlayAppURL(
+            options: ThinOverlayURLOptions(config: Self.thinBridge, role: .follower)
+        )
+        let components = try XCTUnwrap(URLComponents(string: url))
+        let items = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+        XCTAssertEqual(items[bridgeRoleQueryParam], bridgeRoleFollower)
+    }
+
+    func testBuildThinOverlayAppURLEmitsTabOverrideOnlyWhenNonDefault() throws {
+        let chatURL = buildThinOverlayAppURL(
+            options: ThinOverlayURLOptions(config: Self.thinBridge, role: .leader, activeTab: "chat")
+        )
+        let chatItems = Dictionary(uniqueKeysWithValues:
+            (URLComponents(string: chatURL)?.queryItems ?? []).map { ($0.name, $0.value ?? "") }
+        )
+        XCTAssertNil(chatItems["tab"])
+
+        let memoryURL = buildThinOverlayAppURL(
+            options: ThinOverlayURLOptions(config: Self.thinBridge, role: .leader, activeTab: "memory")
+        )
+        let memoryItems = Dictionary(uniqueKeysWithValues:
+            (URLComponents(string: memoryURL)?.queryItems ?? []).map { ($0.name, $0.value ?? "") }
+        )
+        XCTAssertEqual(memoryItems["tab"], "memory")
+    }
+
+    func testBuildThinOverlayAppURLHonorsCustomHostedOrigin() throws {
+        let custom = ThinBridgeConfig(
+            hostedLeaderOrigin: "https://slicc-tray-hub-staging.minivelos.workers.dev",
+            bridgeWsUrl: Self.thinBridge.bridgeWsUrl,
+            bridgeToken: Self.thinBridge.bridgeToken
+        )
+        let url = buildThinOverlayAppURL(
+            options: ThinOverlayURLOptions(config: custom, role: .leader)
+        )
+        let components = try XCTUnwrap(URLComponents(string: url))
+        XCTAssertEqual(components.host, "slicc-tray-hub-staging.minivelos.workers.dev")
+        XCTAssertEqual(components.path, "/electron")
+    }
+
+    func testBuildThinOverlayAppURLStripsTrailingSlashInHostedOrigin() throws {
+        let custom = ThinBridgeConfig(
+            hostedLeaderOrigin: "https://example.com/",
+            bridgeWsUrl: Self.thinBridge.bridgeWsUrl,
+            bridgeToken: Self.thinBridge.bridgeToken
+        )
+        let url = buildThinOverlayAppURL(
+            options: ThinOverlayURLOptions(config: custom, role: .leader)
+        )
+        let components = try XCTUnwrap(URLComponents(string: url))
+        XCTAssertEqual(components.path, "/electron")
+        XCTAssertEqual(components.host, "example.com")
+    }
+
+    func testResolveHostedLeaderOriginDefaultsToProductionSliccy() {
+        XCTAssertEqual(resolveHostedLeaderOrigin(environment: [:]), "https://www.sliccy.ai")
+    }
+
+    func testResolveHostedLeaderOriginPrefersExplicitOverWorkerBase() {
+        let result = resolveHostedLeaderOrigin(environment: [
+            "SLICC_HOSTED_LEADER_ORIGIN": "https://primary.example",
+            "WORKER_BASE_URL": "https://fallback.example"
+        ])
+        XCTAssertEqual(result, "https://primary.example")
+    }
+
+    func testResolveHostedLeaderOriginFallsBackToWorkerBase() {
+        let result = resolveHostedLeaderOrigin(environment: [
+            "WORKER_BASE_URL": "https://staging.example"
+        ])
+        XCTAssertEqual(result, "https://staging.example")
+    }
+
+    func testResolveHostedLeaderOriginStripsTrailingSlashes() {
+        let result = resolveHostedLeaderOrigin(environment: [
+            "SLICC_HOSTED_LEADER_ORIGIN": "https://example.com///"
+        ])
+        XCTAssertEqual(result, "https://example.com")
+    }
+
+    // MARK: - ElectronOverlayInjector thin-mode leader/follower election
+
+    private static let leaderMark = "LEADER_BOOTSTRAP_MARKER"
+    private static let followerMark = "FOLLOWER_BOOTSTRAP_MARKER"
+
+    private func makeThinInjector() -> ElectronOverlayInjector {
+        ElectronOverlayInjector(
+            _testingServePort: 5711,
+            thinBootstraps: ThinBootstrapSet(leader: Self.leaderMark, follower: Self.followerMark),
+            probeDelayNanoseconds: 1_000_000
+        )
+    }
+
+    private func thinTarget(url: String, debuggerURL: String = "ws://127.0.0.1:9999/devtools/page/x") -> ElectronInspectableTarget {
+        ElectronInspectableTarget(type: "page", title: nil, url: url, webSocketDebuggerURL: debuggerURL)
+    }
+
+    func testThinModePinsFirstTargetAsLeaderAndElectsSubsequentAsFollower() throws {
+        let injector = makeThinInjector()
+        XCTAssertNil(injector._testing_leaderTargetURL())
+
+        let leader = thinTarget(url: "https://app.slack.com/")
+        let follower = thinTarget(url: "https://teams.microsoft.com/", debuggerURL: "ws://127.0.0.1:9999/devtools/page/y")
+
+        let bootstraps = try injector.loadBootstrapScripts()
+        let leaderScript = injector.resolveBootstrapForTarget(leader, bootstraps: bootstraps)
+        XCTAssertEqual(leaderScript, Self.leaderMark)
+        XCTAssertEqual(injector._testing_leaderTargetURL(), leader.url)
+
+        let followerScript = injector.resolveBootstrapForTarget(follower, bootstraps: bootstraps)
+        XCTAssertEqual(followerScript, Self.followerMark)
+        // Original leader must stay pinned even after second election.
+        XCTAssertEqual(injector._testing_leaderTargetURL(), leader.url)
+    }
+
+    func testThinModeKeepsSameTargetAsLeaderAcrossReconnects() throws {
+        let injector = makeThinInjector()
+        let target = thinTarget(url: "https://app.slack.com/")
+
+        let bootstraps = try injector.loadBootstrapScripts()
+        let first = injector.resolveBootstrapForTarget(target, bootstraps: bootstraps)
+        XCTAssertEqual(first, Self.leaderMark)
+
+        // Same target URL re-resolved → still leader (idempotent election).
+        let second = injector.resolveBootstrapForTarget(target, bootstraps: bootstraps)
+        XCTAssertEqual(second, Self.leaderMark)
+        XCTAssertEqual(injector._testing_leaderTargetURL(), target.url)
+    }
+
+    func testSeededLeaderForcesUnknownTargetToFollower() throws {
+        let injector = makeThinInjector()
+        injector._testing_seedLeaderTargetURL("https://leader.example/")
+        XCTAssertEqual(injector._testing_leaderTargetURL(), "https://leader.example/")
+
+        let other = thinTarget(url: "https://other.example/")
+        let bootstraps = try injector.loadBootstrapScripts()
+        let script = injector.resolveBootstrapForTarget(other, bootstraps: bootstraps)
+        XCTAssertEqual(script, Self.followerMark)
+        // Seeded leader stays pinned.
+        XCTAssertEqual(injector._testing_leaderTargetURL(), "https://leader.example/")
+    }
+
+    func testLegacyModeWithoutThinBootstrapsAlwaysReturnsLegacyScript() throws {
+        let injector = ElectronOverlayInjector(
+            _testingServePort: 5711,
+            bootstrapScript: "LEGACY_BOOTSTRAP_MARKER",
+            probeDelayNanoseconds: 1_000_000
+        )
+        let target = thinTarget(url: "https://app.slack.com/")
+        let bootstraps = try injector.loadBootstrapScripts()
+        let script = injector.resolveBootstrapForTarget(target, bootstraps: bootstraps)
+        XCTAssertEqual(script, "LEGACY_BOOTSTRAP_MARKER")
+        // Legacy mode never touches leaderTargetURL.
+        XCTAssertNil(injector._testing_leaderTargetURL())
+    }
+
+    func testLoadBootstrapScriptsProducesLeaderFollowerPairInThinMode() throws {
+        let injector = ElectronOverlayInjector(
+            cdpPort: 0,
+            servePort: 5711,
+            projectRoot: FileManager.default.temporaryDirectory,
+            probeDelayNanoseconds: 1_000_000,
+            thinBridge: Self.thinBridge
+        )
+        let bootstraps = try injector.loadBootstrapScripts()
+        let thin = try XCTUnwrap(bootstraps.thin)
+
+        // Both variants embed the inline fallback bundle source (no
+        // dist/ui in the temp project root) and the role-tagged URL.
+        XCTAssertTrue(thin.leader.contains("role=leader"))
+        XCTAssertTrue(thin.follower.contains("role=follower"))
+        XCTAssertTrue(thin.leader.contains(Self.thinBridge.bridgeToken))
+        XCTAssertTrue(thin.follower.contains(Self.thinBridge.bridgeToken))
+        // Legacy script stays available as a fallback so callers that
+        // explicitly bypass thin mode (e.g. dev profile) still get a
+        // working bundled bootstrap.
+        XCTAssertFalse(bootstraps.legacy.isEmpty)
+    }
+
+    func testLoadBootstrapScriptsProducesLegacyOnlyWhenThinBridgeAbsent() throws {
+        let injector = ElectronOverlayInjector(
+            cdpPort: 0,
+            servePort: 5711,
+            projectRoot: FileManager.default.temporaryDirectory,
+            probeDelayNanoseconds: 1_000_000
+        )
+        let bootstraps = try injector.loadBootstrapScripts()
+        XCTAssertNil(bootstraps.thin)
+        XCTAssertFalse(bootstraps.legacy.isEmpty)
+        XCTAssertTrue(bootstraps.legacy.contains("http://localhost:5711/electron"))
+    }
+
     // MARK: - Test helpers
 
     private func waitFor(timeout seconds: Double, predicate: @Sendable () -> Bool) async -> Bool {
