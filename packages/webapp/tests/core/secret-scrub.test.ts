@@ -4,6 +4,7 @@ import {
   getIdentityToolResultScrubber,
   getToolResultScrubber,
 } from '../../src/core/secret-scrub.js';
+import { setBridgeToken, setLocalApiBaseUrl } from '../../src/shell/proxied-fetch.js';
 
 describe('secret-scrub.getToolResultScrubber', () => {
   const originalFetch = globalThis.fetch;
@@ -132,6 +133,98 @@ describe('secret-scrub.getToolResultScrubber', () => {
       const scrub = getToolResultScrubber();
       expect(await scrub('input')).toBe('input');
     });
+  });
+});
+
+describe('secret-scrub.getToolResultScrubber — thin-bridge URL + token', () => {
+  // Mirrors signed-fetch / http-broker / transformers-env: cover legacy
+  // same-origin + the three thin-bridge cases so the `apiHeaders` /
+  // `resolveApiUrl` wiring at the call site can't silently regress.
+  const originalFetch = globalThis.fetch;
+  const originalChrome = (globalThis as any).chrome;
+
+  beforeEach(() => {
+    // Default: no chrome → CLI/fetch branch (the thin-bridge surface).
+    delete (globalThis as any).chrome;
+    setLocalApiBaseUrl(null);
+    setBridgeToken(null);
+  });
+
+  afterEach(() => {
+    setLocalApiBaseUrl(null);
+    setBridgeToken(null);
+    globalThis.fetch = originalFetch;
+    if (originalChrome !== undefined) {
+      (globalThis as any).chrome = originalChrome;
+    } else {
+      delete (globalThis as any).chrome;
+    }
+  });
+
+  function captureCall(): {
+    getUrl: () => string | null;
+    getHeaders: () => Record<string, string> | null;
+  } {
+    let capturedUrl: string | null = null;
+    let capturedHeaders: Record<string, string> | null = null;
+    globalThis.fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      capturedUrl = String(url);
+      capturedHeaders = (init?.headers ?? null) as Record<string, string> | null;
+      return new Response(JSON.stringify({ text: 'scrubbed' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+    return { getUrl: () => capturedUrl, getHeaders: () => capturedHeaders };
+  }
+
+  it('legacy / same-origin: POSTs the relative /api/secrets/scrub with no X-Bridge-Token', async () => {
+    const cap = captureCall();
+    const scrub = getToolResultScrubber();
+    await scrub('hello');
+    expect(cap.getUrl()).toBe('/api/secrets/scrub');
+    const headers = cap.getHeaders();
+    expect(headers).not.toBeNull();
+    expect(headers!['X-Bridge-Token']).toBeUndefined();
+    expect(headers!['content-type']).toBe('application/json');
+  });
+
+  it('thin-bridge: POSTs to the bridge origin with X-Bridge-Token', async () => {
+    setLocalApiBaseUrl('http://localhost:5710');
+    setBridgeToken('abc-123');
+    const cap = captureCall();
+    const scrub = getToolResultScrubber();
+    await scrub('hello');
+    expect(cap.getUrl()).toBe('http://localhost:5710/api/secrets/scrub');
+    const headers = cap.getHeaders();
+    expect(headers).not.toBeNull();
+    expect(headers!['X-Bridge-Token']).toBe('abc-123');
+    expect(headers!['content-type']).toBe('application/json');
+  });
+
+  it('thin-bridge: base set but no token → absolute URL, still no X-Bridge-Token', async () => {
+    // apiHeaders attaches the token ONLY when both base AND token are set.
+    setLocalApiBaseUrl('http://localhost:5710');
+    const cap = captureCall();
+    const scrub = getToolResultScrubber();
+    await scrub('hello');
+    expect(cap.getUrl()).toBe('http://localhost:5710/api/secrets/scrub');
+    const headers = cap.getHeaders();
+    expect(headers).not.toBeNull();
+    expect(headers!['X-Bridge-Token']).toBeUndefined();
+  });
+
+  it('token set but no base → relative path, X-Bridge-Token omitted', async () => {
+    // Symmetric to the proxied-fetch rule: the token is a cross-origin
+    // capability and must not leak on the loopback / bundled-UI path.
+    setBridgeToken('abc-123');
+    const cap = captureCall();
+    const scrub = getToolResultScrubber();
+    await scrub('hello');
+    expect(cap.getUrl()).toBe('/api/secrets/scrub');
+    const headers = cap.getHeaders();
+    expect(headers).not.toBeNull();
+    expect(headers!['X-Bridge-Token']).toBeUndefined();
   });
 });
 
