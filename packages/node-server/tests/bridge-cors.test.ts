@@ -10,17 +10,29 @@ import type { NextFunction, Request, Response } from 'express';
 import express from 'express';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { buildCorsHeaders, buildPnaPreflightHeaders } from '../src/bridge-security.js';
+import {
+  BRIDGE_TOKEN_HEADER,
+  buildCorsHeaders,
+  buildPnaPreflightHeaders,
+  isLoopbackBridgeOrigin,
+  validateBridgeToken,
+} from '../src/bridge-security.js';
 
 const PROD_ORIGIN = 'https://www.sliccy.ai';
+const BRIDGE_TOKEN = 'aabbccdd-1122-3344-5566-778899aabbcc';
 
 let server: Server;
 let base = '';
 
 beforeEach(async () => {
   const app = express();
+  // Mirror `createThinBridgeCorsMiddleware` from `index.ts`. The middleware
+  // there is closure-scoped over `bridgeToken`, so we re-create the same
+  // shape here against the public helpers — if those helpers change, both
+  // the live wiring and the test update together.
   app.use((req: Request, res: Response, next: NextFunction) => {
-    const cors = buildCorsHeaders(req.headers.origin);
+    const origin = req.headers.origin;
+    const cors = buildCorsHeaders(origin, req.headers['access-control-request-headers']);
     if (cors) {
       for (const [k, v] of Object.entries(cors)) res.setHeader(k, v);
     }
@@ -31,6 +43,15 @@ beforeEach(async () => {
         res.status(204).end();
         return;
       }
+    }
+    if (
+      cors &&
+      req.path.startsWith('/api/') &&
+      !isLoopbackBridgeOrigin(origin) &&
+      !validateBridgeToken(req.headers[BRIDGE_TOKEN_HEADER.toLowerCase()], BRIDGE_TOKEN)
+    ) {
+      res.status(403).json({ error: 'bridge-token-required' });
+      return;
     }
     next();
   });
@@ -51,13 +72,30 @@ afterEach(async () => {
 describe('thin-bridge CORS + PNA middleware', () => {
   it('attaches CORS headers to /api responses from an allowlisted origin', async () => {
     const res = await fetch(`${base}/api/ping`, {
-      headers: { Origin: PROD_ORIGIN },
+      headers: { Origin: PROD_ORIGIN, [BRIDGE_TOKEN_HEADER]: BRIDGE_TOKEN },
     });
     expect(res.status).toBe(200);
     expect(res.headers.get('access-control-allow-origin')).toBe(PROD_ORIGIN);
     expect(res.headers.get('access-control-allow-credentials')).toBe('true');
-    expect(res.headers.get('vary')).toBe('Origin');
+    expect(res.headers.get('vary')).toBe('Origin, Access-Control-Request-Headers');
     expect(await res.json()).toEqual({ ok: true });
+  });
+
+  it('reflects /api/fetch-proxy custom request headers on preflight', async () => {
+    const res = await fetch(`${base}/api/ping`, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: PROD_ORIGIN,
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'x-target-url, x-proxy-cookie, anthropic-version',
+      },
+    });
+    expect(res.status).toBe(204);
+    const allow = res.headers.get('access-control-allow-headers') ?? '';
+    expect(allow).toContain('X-Target-URL');
+    expect(allow).toContain('X-Proxy-Cookie');
+    // Reflected upstream header is preserved with its requested casing.
+    expect(allow).toContain('anthropic-version');
   });
 
   it('omits CORS headers for non-allowlisted origins', async () => {
@@ -66,6 +104,59 @@ describe('thin-bridge CORS + PNA middleware', () => {
     });
     expect(res.status).toBe(200);
     expect(res.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('rejects cross-origin /api/* requests missing the bridge token', async () => {
+    // sliccy.ai is allowlisted but the per-process token is the auth
+    // factor. A script on sliccy.ai with no token must NOT reach /api.
+    const res = await fetch(`${base}/api/ping`, {
+      headers: { Origin: PROD_ORIGIN },
+    });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'bridge-token-required' });
+  });
+
+  it('rejects cross-origin /api/* requests with a wrong bridge token', async () => {
+    const res = await fetch(`${base}/api/ping`, {
+      headers: { Origin: PROD_ORIGIN, [BRIDGE_TOKEN_HEADER]: 'not-the-token' },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('does not gate same-origin (no Origin) requests on the bridge token', async () => {
+    // curl-style callers and same-origin GETs send no Origin header.
+    // The token requirement is a top-up over the origin allowlist; no
+    // allowlisted origin → no token requirement.
+    const res = await fetch(`${base}/api/ping`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+  });
+
+  it('does not gate loopback allowlisted origins on the bridge token', async () => {
+    // The locally-served OAuth callback page at
+    // `http://localhost:5710/auth/callback` POSTs to `/api/oauth-result`
+    // from a loopback origin without a token — it originates from this
+    // same server.
+    const res = await fetch(`${base}/api/ping`, {
+      headers: { Origin: 'http://localhost:5710' },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+  });
+
+  it('answers OPTIONS preflight without requiring the bridge token', async () => {
+    // Browsers strip custom headers (including X-Bridge-Token) from
+    // preflights, so OPTIONS must short-circuit before the gate.
+    const res = await fetch(`${base}/api/ping`, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: PROD_ORIGIN,
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': `${BRIDGE_TOKEN_HEADER}, content-type`,
+      },
+    });
+    expect(res.status).toBe(204);
+    expect(res.headers.get('access-control-allow-headers')).toContain('X-Bridge-Token');
   });
 
   it('answers OPTIONS preflight with 204 + PNA opt-in for allowlisted origin', async () => {

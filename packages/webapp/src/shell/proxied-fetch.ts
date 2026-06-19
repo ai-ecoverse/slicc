@@ -31,6 +31,67 @@ import {
 
 const REQUEST_BODY_CAP = 32 * 1024 * 1024;
 
+/**
+ * Optional absolute origin (e.g. `http://localhost:5710`) the CLI mode
+ * should prepend to `/api/fetch-proxy`. Set in thin-bridge mode where
+ * the hosted leader (sliccy.ai) serves the UI cross-origin but has no
+ * local /api surface — the bridge launch params carry the local
+ * node-server origin, which is wired here via `setLocalApiBaseUrl`.
+ * Page realm and kernel-worker realm have independent module instances;
+ * each calls the setter once during boot.
+ */
+let localApiBaseUrl: string | null = null;
+
+/**
+ * Per-process bridge token paired with `localApiBaseUrl`. When set, the
+ * CLI-mode fetcher attaches it as the `X-Bridge-Token` header so the
+ * local node-server's thin-bridge middleware accepts the cross-origin
+ * call — the origin allowlist alone is insufficient because any script
+ * on a remote allowlisted origin (e.g. `https://www.sliccy.ai`) would
+ * otherwise reach /api unchallenged. Treat as a session capability:
+ * never log, never put on a URL, never expose via a Referer.
+ */
+let bridgeToken: string | null = null;
+
+/**
+ * Set the absolute origin CLI-mode proxied fetches should target. Pass
+ * `null` to fall back to same-origin (the legacy bundled-UI path).
+ * Trailing slashes are trimmed so we never double-slash the path.
+ */
+export function setLocalApiBaseUrl(baseUrl: string | null): void {
+  if (baseUrl === null || baseUrl === '') {
+    localApiBaseUrl = null;
+    return;
+  }
+  localApiBaseUrl = baseUrl.replace(/\/+$/, '');
+}
+
+/** Test-only accessor for the currently configured local API base. */
+export function getLocalApiBaseUrl(): string | null {
+  return localApiBaseUrl;
+}
+
+/**
+ * Set the per-process bridge token CLI-mode proxied fetches should send
+ * as `X-Bridge-Token` on cross-origin /api/fetch-proxy calls. Pass `null`
+ * or an empty string to clear. Called from the boot path (page realm via
+ * `setupStandalonePrelude`, worker realm via `kernel-worker`) once the
+ * `bridgeToken` launch param has been parsed.
+ */
+export function setBridgeToken(token: string | null): void {
+  bridgeToken = token === null || token === '' ? null : token;
+}
+
+/** Test-only accessor for the currently configured bridge token. */
+export function getBridgeToken(): string | null {
+  return bridgeToken;
+}
+
+/** Resolve the absolute /api/fetch-proxy URL, honoring `setLocalApiBaseUrl`. */
+function resolveFetchProxyUrl(): string {
+  return localApiBaseUrl ? `${localApiBaseUrl}/api/fetch-proxy` : '/api/fetch-proxy';
+}
+
 /** Check if a content-type header indicates text (safe for UTF-8 decoding). */
 export function isTextContentType(contentType: string): boolean {
   if (!contentType) return true; // Default to text for unknown types
@@ -267,13 +328,20 @@ export function createProxiedFetch(): SecureFetch {
       ...encoded,
       'X-Target-URL': url,
     };
+    // Thin-bridge: cross-origin /api/* from a remote allowlisted leader
+    // (sliccy.ai) needs the per-process bridge token. Only attach when
+    // there is one — same-origin / loopback callers don't need it and
+    // the local node-server only requires it for non-loopback origins.
+    if (bridgeToken && localApiBaseUrl) {
+      headers['X-Bridge-Token'] = bridgeToken;
+    }
 
     const init: RequestInit = { method, headers, cache: 'no-store' };
     if (options?.body && !['GET', 'HEAD'].includes(method)) {
       init.body = prepareRequestBody(options.body, headers);
     }
 
-    const resp = await fetch('/api/fetch-proxy', init);
+    const resp = await fetch(resolveFetchProxyUrl(), init);
 
     // Only treat the response as a proxy infrastructure failure when the
     // proxy itself tags it with `X-Proxy-Error: 1`. Upstream 4xx/5xx

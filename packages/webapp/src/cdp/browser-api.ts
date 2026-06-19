@@ -57,6 +57,15 @@ export class BrowserAPI {
   private _frameContextCache = new Map<string, number>();
   private _tabLock: Promise<void> = Promise.resolve();
   private _onSessionChange?: ((sessionId: string, transport: CDPTransport) => void) | undefined;
+  /**
+   * Last-used connect options (url + protocols) captured on the first
+   * successful (or attempted) `connect()`. Lazy reconnects via
+   * `ensureConnected()` / `ensureLocalConnected()` reuse this so the
+   * bridge URL + subprotocol survive a transport drop — without it, a
+   * thin-bridge reconnect would fall back to `getDefaultCdpUrl()` and
+   * try to hit `wss://<hosted-leader-host>/cdp`, which doesn't exist.
+   */
+  private _lastConnectOptions: Partial<CDPConnectOptions> | null = null;
   private readonly handleJavaScriptDialogOpening = async (
     params: Record<string, unknown>
   ): Promise<void> => {
@@ -189,6 +198,11 @@ export class BrowserAPI {
    * DebuggerClient (extension mode) accepts but ignores these options.
    */
   async connect(options?: Partial<CDPConnectOptions>): Promise<void> {
+    // Capture the connect options BEFORE attempting the connection so
+    // subsequent lazy reconnects via `ensureConnected()` can replay the
+    // same bridge URL + subprotocol even when the very first connect
+    // racing against bridge startup failed.
+    this._lastConnectOptions = options ? { ...options } : {};
     await this.client.connect({
       url: options?.url ?? getDefaultCdpUrl(),
       timeout: options?.timeout,
@@ -1158,7 +1172,12 @@ export class BrowserAPI {
    */
   private async ensureLocalConnected(): Promise<void> {
     if (this.localClient.state === 'disconnected') {
-      await this.localClient.connect({ url: getDefaultCdpUrl() });
+      const opts = this._lastConnectOptions;
+      await this.localClient.connect({
+        url: opts?.url ?? getDefaultCdpUrl(),
+        ...(opts?.timeout !== undefined ? { timeout: opts.timeout } : {}),
+        ...(opts?.protocols !== undefined ? { protocols: opts.protocols } : {}),
+      });
     }
   }
 
@@ -1178,7 +1197,8 @@ export class BrowserAPI {
       this.sessionId = null;
       this.attachedTargetId = null;
       if (this.client.state === 'disconnected') {
-        await this.connect();
+        // Replay the last-used connect options so the bridge URL + subprotocol survive.
+        await this.connect(this._lastConnectOptions ?? undefined);
       }
     }
   }

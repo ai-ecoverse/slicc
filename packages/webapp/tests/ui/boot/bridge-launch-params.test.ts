@@ -3,6 +3,7 @@ import {
   BRIDGE_SUBPROTOCOL_PREFIX,
   BRIDGE_TOKEN_QUERY_PARAM,
   BRIDGE_WS_QUERY_PARAM,
+  deriveBridgeApiBaseUrl,
   parseBridgeLaunchParams,
 } from '../../../src/ui/boot/bridge-launch-params.js';
 
@@ -25,25 +26,45 @@ describe('parseBridgeLaunchParams', () => {
     expect(parseBridgeLaunchParams('?bridge=javascript:alert(1)&bridgeToken=abc')).toBeNull();
   });
 
-  it('parses a ws:// bridge URL + token into url + subprotocol', () => {
+  it('parses a ws:// bridge URL + token into url + subprotocol + token + apiBaseUrl', () => {
     const params = parseBridgeLaunchParams('?bridge=ws://localhost:5710/cdp&bridgeToken=abc-123');
     expect(params).toEqual({
       url: 'ws://localhost:5710/cdp',
       subprotocol: 'slicc.bridge.v1.abc-123',
+      token: 'abc-123',
+      apiBaseUrl: 'http://localhost:5710',
     });
   });
 
-  it('accepts wss:// bridge URLs', () => {
+  it('accepts wss:// bridge URLs (apiBaseUrl uses https://)', () => {
     const params = parseBridgeLaunchParams(
       '?bridge=wss%3A%2F%2Fbridge.example%2Fcdp&bridgeToken=xyz'
     );
     expect(params?.url).toBe('wss://bridge.example/cdp');
     expect(params?.subprotocol).toBe('slicc.bridge.v1.xyz');
+    expect(params?.token).toBe('xyz');
+    expect(params?.apiBaseUrl).toBe('https://bridge.example');
   });
 
   it('uses the same param/prefix constants the node-server gates on', () => {
     expect(BRIDGE_WS_QUERY_PARAM).toBe('bridge');
     expect(BRIDGE_TOKEN_QUERY_PARAM).toBe('bridgeToken');
     expect(BRIDGE_SUBPROTOCOL_PREFIX).toBe('slicc.bridge.v1.');
+  });
+});
+
+describe('deriveBridgeApiBaseUrl', () => {
+  it('maps ws:// → http:// preserving host:port and dropping path', () => {
+    expect(deriveBridgeApiBaseUrl('ws://localhost:5710/cdp')).toBe('http://localhost:5710');
+    expect(deriveBridgeApiBaseUrl('ws://127.0.0.1:5720/cdp')).toBe('http://127.0.0.1:5720');
+  });
+
+  it('maps wss:// → https://', () => {
+    expect(deriveBridgeApiBaseUrl('wss://bridge.example/cdp')).toBe('https://bridge.example');
+  });
+
+  it('returns null for unparseable URLs', () => {
+    expect(deriveBridgeApiBaseUrl('not a url')).toBeNull();
+    expect(deriveBridgeApiBaseUrl('')).toBeNull();
   });
 });

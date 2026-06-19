@@ -35,6 +35,7 @@ import { createPanelRpcTrayProvider } from '../cdp/panel-rpc-tray-provider.js';
 // `registerProviders()` during boot before any code that reads from
 // the registry runs.
 import { registerProviders } from '../providers/index.js';
+import { setBridgeToken, setLocalApiBaseUrl } from '../shell/proxied-fetch.js';
 import { initTelemetry } from '../ui/telemetry.js';
 import { WorkerCdpProxy } from './cdp-worker-proxy.js';
 import { createKernelHost, type KernelHost } from './host.js';
@@ -79,6 +80,20 @@ export interface KernelWorkerInitMsg {
    * bridge falls back to a global channel name.
    */
   instanceId?: string;
+  /**
+   * Absolute origin (e.g. `http://localhost:5710`) the worker-side
+   * `proxied-fetch` realm should target for `/api/fetch-proxy`. Set in
+   * thin-bridge mode where the hosted leader serves the UI but has no
+   * local /api surface. `null` / undefined falls back to same-origin
+   * (the bundled-UI legacy path).
+   */
+  localApiBaseUrl?: string | null;
+  /**
+   * Per-process bridge token paired with `localApiBaseUrl`. The worker
+   * realm attaches it as the `X-Bridge-Token` header on cross-origin
+   * /api/fetch-proxy calls. `null` / undefined outside thin-bridge mode.
+   */
+  bridgeToken?: string | null;
 }
 
 /** Posted back over the kernel port once `createKernelHost` resolves. */
@@ -182,6 +197,14 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
   // `kernel-worker-fetch-bypass.ts` for the CORS-preflight reasoning.
   // Must run before any fetcher does.
   installFetchBypass();
+
+  // Thin-bridge: the hosted leader serves the UI but has no local /api
+  // surface, so proxied-fetch must target the bridge-discovered local
+  // node-server origin + carry the per-process `X-Bridge-Token` (origin
+  // allowlist alone is insufficient — see `bridge-security.ts`). The
+  // page realm sets its own copy in `setupStandalonePrelude`.
+  setLocalApiBaseUrl(init.localApiBaseUrl ?? null);
+  setBridgeToken(init.bridgeToken ?? null);
 
   // The worker has no `localStorage` (Web Workers don't get one).
   // `provider-settings.getApiKey()` and `selected-model` reads on the

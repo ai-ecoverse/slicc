@@ -19,7 +19,7 @@
  * testable from `tests/bridge-security.test.ts`.
  */
 
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 
 /**
  * Origin allowlist. Production + staging worker plus the dev-mode loopback
@@ -43,9 +43,44 @@ export const BRIDGE_TOKEN_QUERY_PARAM = 'bridgeToken';
 /** Query-param name the launch URL uses to forward the local /cdp WebSocket URL. */
 export const BRIDGE_WS_QUERY_PARAM = 'bridge';
 
-/** Headers we allow on cross-origin /api requests from the hosted leader. */
-const CORS_ALLOW_HEADERS =
-  'Content-Type, X-Slicc-Raw-Body, X-Session-Id, X-Bridge-Token, Authorization';
+/**
+ * Request header carrying the per-process bridge token on cross-origin
+ * /api/* calls from a remote allowlisted leader (e.g. sliccy.ai). The
+ * webapp's `proxied-fetch.ts` attaches it whenever a local API base
+ * origin is set; the thin-bridge CORS middleware validates it. Header
+ * is included in `CORS_BASE_ALLOW_HEADERS` so browsers don't strip it
+ * on the preflight.
+ */
+export const BRIDGE_TOKEN_HEADER = 'X-Bridge-Token';
+
+/**
+ * Headers we allow on cross-origin /api requests from the hosted leader.
+ * Includes the `/api/fetch-proxy` transport headers (`X-Target-URL`, the
+ * forbidden-header `X-Proxy-*` bridges, `X-Slicc-Raw-Body`) so the
+ * webapp's `createProxiedFetch` can route through the local node-server
+ * cross-origin in thin-bridge mode. Custom upstream headers (any header
+ * the agent's `curl -H …` would pass through) are reflected via
+ * `Access-Control-Request-Headers` in `buildCorsHeaders` below.
+ */
+const CORS_BASE_ALLOW_HEADERS = [
+  'Content-Type',
+  'X-Slicc-Raw-Body',
+  'X-Session-Id',
+  'X-Bridge-Token',
+  'Authorization',
+  'X-Target-URL',
+  'X-Proxy-Cookie',
+  'X-Proxy-Origin',
+  'X-Proxy-Referer',
+];
+
+/**
+ * Response headers the browser is allowed to read after a cross-origin
+ * /api call — must include the proxy's infrastructure-error marker
+ * (`isProxyError` reads `X-Proxy-Error`) and the forbidden-response
+ * bridge (`decodeForbiddenResponseHeaders` reads `X-Proxy-Set-Cookie`).
+ */
+const CORS_EXPOSE_HEADERS = 'Link, X-Proxy-Error, X-Proxy-Set-Cookie';
 
 /** Methods exposed to the hosted leader. */
 const CORS_ALLOW_METHODS = 'GET, POST, PUT, DELETE, OPTIONS';
@@ -54,6 +89,50 @@ const CORS_ALLOW_METHODS = 'GET, POST, PUT, DELETE, OPTIONS';
 export function isAllowedBridgeOrigin(origin: string | undefined | null): boolean {
   if (!origin) return false;
   return BRIDGE_ALLOWED_ORIGINS.includes(origin);
+}
+
+/**
+ * True iff `origin` is a loopback host (localhost / 127.0.0.1 / ::1).
+ * Loopback allowlisted origins (e.g. the locally-served OAuth callback
+ * page at `http://localhost:5710/auth/callback` posting to
+ * `/api/oauth-result`) are exempt from the bridge-token requirement —
+ * the token's threat model is "remote allowlisted origin (sliccy.ai)
+ * with a hostile script", not "local server talking to itself".
+ */
+export function isLoopbackBridgeOrigin(origin: string | undefined | null): boolean {
+  if (!origin) return false;
+  try {
+    const url = new URL(origin);
+    // Node's WHATWG URL parser keeps the brackets on IPv6 hostnames
+    // (`http://[::1]:5710` → `[::1]`); accept both bracketed and bare.
+    return (
+      url.hostname === 'localhost' ||
+      url.hostname === '127.0.0.1' ||
+      url.hostname === '::1' ||
+      url.hostname === '[::1]'
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Constant-time compare for the bridge token. `presented` may be missing
+ * or shaped wrong (Express delivers headers as `string | string[] |
+ * undefined`). Returns `false` for any non-string, length mismatch, or
+ * empty expected — never throws.
+ */
+export function validateBridgeToken(
+  presented: string | string[] | undefined,
+  expected: string | null
+): boolean {
+  if (!expected) return false;
+  const value = Array.isArray(presented) ? presented[0] : presented;
+  if (typeof value !== 'string' || value.length === 0) return false;
+  const a = Buffer.from(value);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
 }
 
 /**
@@ -136,22 +215,59 @@ export function validateBridgeUpgrade(input: {
 }
 
 /**
+ * Resolve the `Access-Control-Allow-Headers` value for a request. Starts
+ * from `CORS_BASE_ALLOW_HEADERS` (the static set covering the documented
+ * /api endpoints + the `/api/fetch-proxy` transport headers) and unions
+ * in any header names from the request's `Access-Control-Request-Headers`
+ * that aren't already listed. This is the reflect-headers pattern: the
+ * agent's `bash curl -H X-Custom: …` can route through `/api/fetch-proxy`
+ * cross-origin without us having to enumerate every possible upstream
+ * header in advance. Comparison is case-insensitive; the static set's
+ * canonical casing wins on duplicates.
+ */
+export function resolveCorsAllowHeaders(requestHeadersHeader: string | undefined | null): string {
+  if (!requestHeadersHeader) return CORS_BASE_ALLOW_HEADERS.join(', ');
+  const seen = new Set(CORS_BASE_ALLOW_HEADERS.map((h) => h.toLowerCase()));
+  const extras: string[] = [];
+  for (const raw of requestHeadersHeader.split(',')) {
+    const name = raw.trim();
+    if (!name) continue;
+    const lower = name.toLowerCase();
+    if (seen.has(lower)) continue;
+    seen.add(lower);
+    extras.push(name);
+  }
+  if (extras.length === 0) return CORS_BASE_ALLOW_HEADERS.join(', ');
+  return [...CORS_BASE_ALLOW_HEADERS, ...extras].join(', ');
+}
+
+/**
  * CORS headers for an allowlisted `Origin`. Returns `null` when the origin
  * is not in the allowlist (caller should NOT set CORS headers).
  *
  * `Access-Control-Allow-Credentials: true` is included so the hosted leader
  * can carry cookies to /api/* (e.g. auth) when that's added later. Today
  * the bridge token is the auth factor, not cookies.
+ *
+ * `requestHeadersHeader` should be the request's `Access-Control-Request-Headers`
+ * value (preflight only); on a non-preflight request pass `null` and the
+ * caller can omit it.
  */
-export function buildCorsHeaders(origin: string | undefined | null): Record<string, string> | null {
+export function buildCorsHeaders(
+  origin: string | undefined | null,
+  requestHeadersHeader?: string | string[] | null
+): Record<string, string> | null {
   if (!isAllowedBridgeOrigin(origin)) return null;
+  const reqHeaders = Array.isArray(requestHeadersHeader)
+    ? requestHeadersHeader.join(', ')
+    : (requestHeadersHeader ?? null);
   return {
     'Access-Control-Allow-Origin': origin!,
     'Access-Control-Allow-Credentials': 'true',
     'Access-Control-Allow-Methods': CORS_ALLOW_METHODS,
-    'Access-Control-Allow-Headers': CORS_ALLOW_HEADERS,
-    'Access-Control-Expose-Headers': 'Link',
-    Vary: 'Origin',
+    'Access-Control-Allow-Headers': resolveCorsAllowHeaders(reqHeaders),
+    'Access-Control-Expose-Headers': CORS_EXPOSE_HEADERS,
+    Vary: 'Origin, Access-Control-Request-Headers',
   };
 }
 

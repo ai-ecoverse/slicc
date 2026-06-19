@@ -136,6 +136,55 @@ describe('BrowserAPI', () => {
       expect(sessionId).toBe('sess-new');
       expect(mockClient.connect).toHaveBeenCalled();
     });
+
+    it('replays the last connect() options on lazy reconnect (bridge URL + subprotocol)', async () => {
+      // Initial explicit connect with bridge URL + subprotocol.
+      await api.connect({
+        url: 'ws://localhost:5710/cdp',
+        protocols: 'slicc.bridge.v1.abc-123',
+      });
+      expect(mockClient.connect).toHaveBeenLastCalledWith({
+        url: 'ws://localhost:5710/cdp',
+        timeout: undefined,
+        protocols: 'slicc.bridge.v1.abc-123',
+      });
+
+      // Simulate a transport drop, then trigger an op that lazy-reconnects.
+      (mockClient as unknown as { state: string }).state = 'disconnected';
+      (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ targetInfos: [] });
+      await api.listPages();
+
+      // ensureConnected() must REPLAY the bridge URL + subprotocol — without
+      // this it would fall back to getDefaultCdpUrl() and lose the bridge token.
+      expect(mockClient.connect).toHaveBeenLastCalledWith({
+        url: 'ws://localhost:5710/cdp',
+        timeout: undefined,
+        protocols: 'slicc.bridge.v1.abc-123',
+      });
+    });
+
+    it('captures connect() options even when the initial attempt rejects', async () => {
+      (mockClient.connect as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+        new Error('bridge not listening yet')
+      );
+      await expect(
+        api.connect({
+          url: 'ws://localhost:5710/cdp',
+          protocols: 'slicc.bridge.v1.xyz',
+        })
+      ).rejects.toThrow('bridge not listening yet');
+
+      // Subsequent lazy reconnect should still use the bridge URL + subprotocol.
+      (mockClient as unknown as { state: string }).state = 'disconnected';
+      (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ targetInfos: [] });
+      await api.listPages();
+
+      expect(mockClient.connect).toHaveBeenLastCalledWith({
+        url: 'ws://localhost:5710/cdp',
+        timeout: undefined,
+        protocols: 'slicc.bridge.v1.xyz',
+      });
+    });
   });
 
   describe('listPages', () => {

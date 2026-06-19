@@ -24,6 +24,7 @@ import {
   fetchRuntimeConfig,
   resolveTrayRuntimeConfig,
 } from '../../scoops/tray-runtime-config.js';
+import { setBridgeToken, setLocalApiBaseUrl } from '../../shell/proxied-fetch.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import { shouldUseRuntimeModeTrayDefaults } from '../runtime-mode.js';
 import { parseBridgeLaunchParams } from './bridge-launch-params.js';
@@ -44,12 +45,67 @@ export interface StandalonePreludeResult {
   cherryTransport?: CherryHostTransport;
   instanceId: string;
   isElectronOverlay: boolean;
+  /**
+   * Local node-server origin to use for proxied /api/* requests in
+   * thin-bridge mode (where the hosted leader serves the UI but has no
+   * local /api surface). `null` when not running behind a bridge.
+   * Forwarded to the kernel worker so its proxied-fetch realm targets
+   * the same origin as the page realm.
+   */
+  localApiBaseUrl: string | null;
+  /**
+   * Per-process bridge token paired with `localApiBaseUrl`. Sent as the
+   * `X-Bridge-Token` header on cross-origin /api/* fetches so the local
+   * node-server's thin-bridge middleware accepts the call. Forwarded to
+   * the kernel worker so its proxied-fetch realm authenticates the same
+   * way as the page realm. `null` outside thin-bridge mode.
+   */
+  bridgeToken: string | null;
 }
 
 function mintInstanceId(): string {
   return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
     : `slicc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Backoff schedule for the initial CDP bridge connect (ms). Total bounded
+ * window ≈ 3.1s — long enough to cover the worst observed packaged-CLI
+ * race (Chrome opens the hosted leader before `server.listen()` finishes
+ * binding), short enough not to noticeably delay boot when the bridge is
+ * genuinely down. Exported for tests.
+ */
+export const CDP_BRIDGE_CONNECT_RETRY_DELAYS_MS: readonly number[] = [100, 200, 400, 800, 1600];
+
+export async function connectWithBoundedRetry(
+  browser: BrowserAPI,
+  options: Parameters<BrowserAPI['connect']>[0],
+  log: BootStageLogger,
+  delays: readonly number[] = CDP_BRIDGE_CONNECT_RETRY_DELAYS_MS,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms))
+): Promise<void> {
+  const attempts = delays.length + 1;
+  let lastError: unknown = null;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await browser.connect(options);
+      if (i > 0) {
+        log.info('CDP bridge connect succeeded after retry', { attempt: i + 1 });
+      }
+      return;
+    } catch (err) {
+      lastError = err;
+      if (i < delays.length) {
+        const delay = delays[i] ?? 0;
+        await sleep(delay);
+      }
+    }
+  }
+  log.warn(
+    'Initial CDP connect failed after retries; worker-forwarded commands will retry on demand',
+    lastError instanceof Error ? lastError.message : String(lastError)
+  );
 }
 
 export async function setupStandalonePrelude(
@@ -83,6 +139,8 @@ export async function setupStandalonePrelude(
   let browser: BrowserAPI;
   let cherryJoinUrl: string | undefined;
   let cherryTransport: CherryHostTransport | undefined;
+  let localApiBaseUrl: string | null = null;
+  let bridgeToken: string | null = null;
   if (runtimeMode === 'cherry') {
     const { setupCherryFollower } = await import('../main-cherry.js');
     const cherry = await setupCherryFollower();
@@ -94,17 +152,30 @@ export async function setupStandalonePrelude(
     const bridge = parseBridgeLaunchParams(win.location.search);
     if (bridge) {
       log.info('Routing CDP through local standalone bridge', { url: bridge.url });
+      // Thin-bridge: the hosted leader at sliccy.ai has no /api surface,
+      // so route proxied /api/* requests at the local node-server origin
+      // we just learned about from the bridge launch params. The kernel
+      // worker has its own proxied-fetch realm; the caller forwards this
+      // value into `spawnKernelWorker`.
+      if (bridge.apiBaseUrl) {
+        localApiBaseUrl = bridge.apiBaseUrl;
+        setLocalApiBaseUrl(bridge.apiBaseUrl);
+        // Pair the API base with the bridge token: the local node-server
+        // enforces `X-Bridge-Token` on cross-origin /api/* in thin-bridge
+        // mode (origin allowlist alone is insufficient — any script on
+        // sliccy.ai could otherwise reach /api). Token never appears on
+        // a query string or in logs; it's only used as a request header.
+        bridgeToken = bridge.token;
+        setBridgeToken(bridge.token);
+      }
     }
-    try {
-      await browser.connect(
-        bridge ? { url: bridge.url, protocols: bridge.subprotocol } : undefined
-      );
-    } catch (err) {
-      log.warn(
-        'Initial CDP connect failed; worker-forwarded commands will retry on demand',
-        err instanceof Error ? err.message : String(err)
-      );
-    }
+    const connectOpts = bridge ? { url: bridge.url, protocols: bridge.subprotocol } : undefined;
+    // Bounded retry — the packaged CLI launches Chrome before the local
+    // /cdp bridge has finished `server.listen()` in some races, so the
+    // very first connect can lose to the bridge by a few hundred ms.
+    // Retry with capped backoff so we recover from the boot race without
+    // hanging boot if the bridge truly never comes up.
+    await connectWithBoundedRetry(browser, connectOpts, log);
   }
   const realCdpTransport = browser.getTransport();
 
@@ -122,5 +193,7 @@ export async function setupStandalonePrelude(
     cherryTransport,
     instanceId: mintInstanceId(),
     isElectronOverlay,
+    localApiBaseUrl,
+    bridgeToken,
   };
 }
