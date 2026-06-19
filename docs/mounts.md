@@ -80,7 +80,7 @@ secret list
 
 The **S3 / R2 / MinIO profile** tab is a wizard: one form fills the five paired keys (`s3.<profile>.access_key_id`, `secret_access_key`, `region`, `endpoint`, `path_style`) with auto-derived domain wildcards from the endpoint host.
 
-You can also reach the page from the side-panel terminal:
+You can also reach the page from the hosted leader tab's terminal:
 
 ```bash
 secret edit

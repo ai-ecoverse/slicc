@@ -164,8 +164,8 @@ Manual verification in the relevant runtimes:
   - Extension profile auto-loads `dist/extension`
 - [ ] Feature works in extension mode (load `dist/extension/` unpacked in `chrome://extensions`)
   - Load `dist/extension/` as unpacked extension
-  - Open side panel
-  - Interact with UI; check functionality
+  - Click the toolbar icon to focus the pinned hosted leader tab (`https://www.sliccy.ai/?slicc=leader`)
+  - Interact with UI in that tab; check functionality
 - [ ] Electron-specific changes work in Electron mode (`npm run dev:electron -- /Applications/Slack.app`)
   - The CLI launches or relaunches the target Electron app with remote debugging enabled
   - If the app is already running, the CLI exits clearly unless `--kill` is also supplied
@@ -232,13 +232,13 @@ If you want a reusable browser profile instead of re-loading the unpacked extens
    - Click "Load unpacked"
    - Select the repo's `dist/extension/` directory
 
-3. **Open side panel**
-   - Click extension icon in Chrome toolbar
-   - Side panel appears on the right
-   - Chat/Terminal/Files/Memory tabs visible
+3. **Focus the hosted leader tab**
+   - Click the extension icon in Chrome toolbar
+   - The pinned tab at `https://www.sliccy.ai/?slicc=leader` (or `http://localhost:8787/?slicc=leader` when built with `SLICC_EXT_DEV=1`) becomes active
+   - Chat/Terminal/Files/Memory tabs visible inside that tab
 
 4. **Test feature**
-   - Interact with side panel
+   - Interact with the hosted leader tab UI
    - Check terminal output
    - Verify file browser works
    - Open a `https://www.sliccy.ai/handoff?handoff=test` URL and confirm the Chat tab shows the approval card derived from the response's `Link` header
@@ -248,7 +248,7 @@ If you want a reusable browser profile instead of re-loading the unpacked extens
    - Make code changes in `packages/*/src/`
    - Run `npm run build:extension` again
    - Refresh extension in `chrome://extensions` (circular arrow icon)
-   - Side panel auto-reloads
+   - Reload the hosted leader tab to pick up new webapp code; the SW + content script pick up changes on extension reload
 
 ## Debugging Browser Features
 
@@ -281,7 +281,7 @@ This launches:
 
 - The main CLI entrypoint in `--electron` mode
 - The target Electron app with remote debugging on port 9223
-- The same local UI server on port 5710 plus persistent overlay injection from `electron-overlay-entry.js`
+- The same local UI server on port 5710 acting as the local CDP bridge; Electron pages load the hosted webapp directly via `/electron?bridge=ws://localhost:9223/cdp&bridgeToken=<token>&role=leader|follower` (no bundled overlay shell is injected anymore)
 
 ### Viewing console output
 
@@ -358,15 +358,15 @@ New features MUST work in the relevant runtimes:
   - Can load WASM from `/` (web server root)
 
 - **Extension mode** (`npm run build:extension`)
-  - Runs in Chrome side panel
-  - CSP blocks dynamic eval and CDN fetches
+  - Webapp runs in the hosted leader tab (`https://www.sliccy.ai/?slicc=leader`, or `http://localhost:8787/?slicc=leader` when built with `SLICC_EXT_DEV=1`); the extension is a thin CDP-bridge service worker plus a MAIN-world content-script launcher
+  - CSP blocks dynamic eval and CDN fetches in extension-origin contexts
   - Must use sandbox iframe for dynamic code (`sandbox.html`) and sprinkles/dips (`sprinkle-sandbox.html`)
   - Must use `chrome.runtime.getURL()` for bundled assets
   - Must detect runtime via `typeof chrome !== 'undefined' && !!chrome?.runtime?.id`
 
 - **Electron float** (`npm run dev:electron -- /Applications/Slack.app`)
   - Reuses the main CLI entrypoint instead of a separate Electron-only launcher
-  - Injects `electron-overlay-entry.js` into Electron page targets over CDP
+  - Electron page targets are pointed at the hosted webapp over CDP with a `/electron?bridge=…&bridgeToken=…&role=leader|follower` URL; no overlay JS shell is injected anymore
   - Uses Electron CDP (`9223` by default) instead of launching Chrome
   - Requires `--kill` to stop and relaunch an already running target app with remote debugging enabled
 
