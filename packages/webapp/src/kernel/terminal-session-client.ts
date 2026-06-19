@@ -258,64 +258,15 @@ export class TerminalSessionClient {
   private handleEvent(event: TerminalEventMsg): void {
     this.onEvent?.(event);
     switch (event.type) {
-      case 'terminal-status': {
-        const status = event as TerminalStatusMsg;
-        if (status.state === 'opened') {
-          this.opened = true;
-          const waiters = this.openWaiters;
-          this.openWaiters = [];
-          this.clearOpenTimers();
-          for (const waiter of waiters) waiter();
-        } else if (status.state === 'error') {
-          this.opened = false;
-          const err = new Error(status.error ?? 'terminal session error');
-          const waiters = this.openWaiters;
-          this.openWaiters = [];
-          this.clearOpenTimers();
-          for (const waiter of waiters) waiter(err);
-        }
+      case 'terminal-status':
+        this.handleStatusEvent(event as TerminalStatusMsg);
         return;
-      }
-      case 'terminal-output': {
-        const out = event as TerminalOutputMsg;
-        // The current host always tags output with the originating
-        // `execId`. Route the chunk to the matching buffer; if the
-        // exec already completed (terminal-exit landed first), the
-        // chunk is dropped instead of bleeding into a sibling exec
-        // that happens to also be in-flight.
-        //
-        // Legacy hosts that don't set `execId` fall back to broadcast
-        // behavior (accumulate against every in-flight buffer). The
-        // protocol allows only one exec at a time per session, so the
-        // broadcast is unambiguous on older hosts.
-        if (out.execId !== undefined) {
-          const buf = this.buffers.get(out.execId);
-          if (!buf) return;
-          if (out.stream === 'stdout') buf.stdout += out.data;
-          else buf.stderr += out.data;
-        } else {
-          for (const buf of this.buffers.values()) {
-            if (out.stream === 'stdout') buf.stdout += out.data;
-            else buf.stderr += out.data;
-          }
-        }
+      case 'terminal-output':
+        this.handleOutputEvent(event as TerminalOutputMsg);
         return;
-      }
-      case 'terminal-exit': {
-        const exit = event as TerminalExitMsg;
-        const resolve = this.pending.get(exit.execId);
-        const buf = this.buffers.get(exit.execId);
-        this.pending.delete(exit.execId);
-        this.buffers.delete(exit.execId);
-        if (resolve) {
-          resolve({
-            stdout: buf?.stdout ?? '',
-            stderr: buf?.stderr ?? '',
-            exitCode: exit.exitCode,
-          });
-        }
+      case 'terminal-exit':
+        this.handleExitEvent(event as TerminalExitMsg);
         return;
-      }
       case 'terminal-cleared':
       case 'terminal-media-preview':
         // Surfaced via onEvent already; no client-side state change.
@@ -325,6 +276,61 @@ export class TerminalSessionClient {
     // is added and we forget to handle it here.
     event satisfies never;
   }
+
+  private handleStatusEvent(status: TerminalStatusMsg): void {
+    if (status.state === 'opened') {
+      this.opened = true;
+      this.flushOpenWaiters();
+    } else if (status.state === 'error') {
+      this.opened = false;
+      this.flushOpenWaiters(new Error(status.error ?? 'terminal session error'));
+    }
+  }
+
+  private flushOpenWaiters(err?: Error): void {
+    const waiters = this.openWaiters;
+    this.openWaiters = [];
+    this.clearOpenTimers();
+    for (const waiter of waiters) waiter(err);
+  }
+
+  private handleOutputEvent(out: TerminalOutputMsg): void {
+    // The current host always tags output with the originating
+    // `execId`. Route the chunk to the matching buffer; if the
+    // exec already completed (terminal-exit landed first), the
+    // chunk is dropped instead of bleeding into a sibling exec
+    // that happens to also be in-flight.
+    //
+    // Legacy hosts that don't set `execId` fall back to broadcast
+    // behavior (accumulate against every in-flight buffer). The
+    // protocol allows only one exec at a time per session, so the
+    // broadcast is unambiguous on older hosts.
+    if (out.execId !== undefined) {
+      const buf = this.buffers.get(out.execId);
+      if (buf) appendOutputChunk(buf, out);
+      return;
+    }
+    for (const buf of this.buffers.values()) appendOutputChunk(buf, out);
+  }
+
+  private handleExitEvent(exit: TerminalExitMsg): void {
+    const resolve = this.pending.get(exit.execId);
+    const buf = this.buffers.get(exit.execId);
+    this.pending.delete(exit.execId);
+    this.buffers.delete(exit.execId);
+    if (resolve) {
+      resolve({
+        stdout: buf?.stdout ?? '',
+        stderr: buf?.stderr ?? '',
+        exitCode: exit.exitCode,
+      });
+    }
+  }
+}
+
+function appendOutputChunk(buf: { stdout: string; stderr: string }, out: TerminalOutputMsg): void {
+  if (out.stream === 'stdout') buf.stdout += out.data;
+  else buf.stderr += out.data;
 }
 
 // Re-export envelopes for ergonomic imports at call sites.
