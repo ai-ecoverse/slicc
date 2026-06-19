@@ -47,6 +47,27 @@ export interface ThinBridgeConfig {
 
 export type OverlayRole = typeof BRIDGE_ROLE_LEADER | typeof BRIDGE_ROLE_FOLLOWER;
 
+/**
+ * Build the thin-bridge config for the Electron overlay injector when
+ * both `SLICC_HOSTED_LEADER_ORIGIN` and a `bridgeToken` are available.
+ * Returns `null` to keep the legacy bundled overlay path otherwise —
+ * `ElectronOverlayInjector.create` treats `thinBridge: null` the same
+ * as omitting it.
+ */
+export function resolveOverlayThinBridge(
+  env: Record<string, string | undefined>,
+  bridgeToken: string | null,
+  servePort: number
+): ThinBridgeConfig | null {
+  if (!bridgeToken) return null;
+  if (!env['SLICC_HOSTED_LEADER_ORIGIN']) return null;
+  return {
+    hostedLeaderOrigin: resolveHostedLeaderOrigin(env),
+    bridgeWsUrl: `ws://localhost:${servePort}/cdp`,
+    bridgeToken,
+  };
+}
+
 export interface ThinOverlayUrlOptions extends ThinBridgeConfig {
   role: OverlayRole;
   activeTab?: string;
@@ -751,6 +772,11 @@ export class ElectronOverlayInjector {
   /** Test-only: snapshot the per-target "already bypassed" guard set. */
   _testingBypassedTargets(): ReadonlySet<string> {
     return new Set(this.cspBypassedTargets);
+  }
+
+  /** Test-only: drive a single `syncTargets` pass without `start()`'s interval. */
+  async _testingSyncTargets(): Promise<void> {
+    await this.syncTargets();
   }
 
   /** Test-only: close any sockets opened by `_testingConnectToTarget`. */

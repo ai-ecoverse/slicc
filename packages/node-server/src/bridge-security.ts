@@ -202,6 +202,24 @@ export function mintBridgeToken(): string {
 }
 
 /**
+ * Resolve the `/cdp` upgrade-gate token for this server process.
+ *
+ * Honors an inbound `SLICC_BRIDGE_TOKEN` env var (forwarded by
+ * `electron-main.ts` to the `--serve-only`/`--electron` child) so the
+ * gate is enforced even when `thinBridgeMode` is false. Falls back to
+ * minting a fresh token in `thinBridgeMode`, and to `null` (gate off)
+ * in the remaining legacy modes.
+ */
+export function resolveServerBridgeToken(
+  env: Record<string, string | undefined>,
+  opts: { thinBridgeMode: boolean }
+): string | null {
+  const fromEnv = env['SLICC_BRIDGE_TOKEN'];
+  if (fromEnv && fromEnv.length > 0) return fromEnv;
+  return opts.thinBridgeMode ? mintBridgeToken() : null;
+}
+
+/**
  * Parse the `Sec-WebSocket-Protocol` request header into a trimmed list. The
  * header is a comma-separated list per RFC 6455; `ws` exposes it raw.
  */

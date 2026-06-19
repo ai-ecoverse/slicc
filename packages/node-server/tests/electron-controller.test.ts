@@ -11,7 +11,9 @@ import {
   findMatchingElectronAppPids,
   resolveFetchProxyOrigin,
   resolveHostedLeaderOrigin,
+  resolveOverlayThinBridge,
 } from '../src/electron-controller.js';
+import type { ElectronInspectableTarget } from '../src/electron-runtime.js';
 
 describe('findMatchingElectronAppPids', () => {
   it('excludes the current CLI pid while keeping other matching Electron app pids', () => {
@@ -982,5 +984,142 @@ describe('ElectronOverlayInjector thin-mode leader/follower election', () => {
     } finally {
       await harness.close();
     }
+  });
+
+  it('syncTargets drops the elected leader once its target disappears from /json/list', async () => {
+    // Boot a fake CDP `/json/list` endpoint whose page set we can swap
+    // between sync passes. The injector polls this with `fetch()`.
+    const listServer: Server = createServer();
+    let currentTargets: ElectronInspectableTarget[] = [];
+    listServer.on('request', (req, res) => {
+      if (req.url === '/json/list') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(currentTargets));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    await new Promise<void>((resolve) => listServer.listen(0, '127.0.0.1', resolve));
+    const address = listServer.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('Failed to bind fake /json/list server');
+    }
+    const cdpPort = address.port;
+
+    const injector = ElectronOverlayInjector._createForTesting({
+      cdpPort,
+      servePort: 5711,
+      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK },
+      probeDelayMs: 20,
+    });
+
+    try {
+      // Seed the elected leader to a target URL that's NOT in the live
+      // list — exactly the stale-leader state we want syncTargets to clean up.
+      injector._testingSeedLeaderTargetUrl('https://stale.example/');
+      currentTargets = [
+        {
+          id: 'live-1',
+          type: 'page',
+          title: 'Live',
+          url: 'https://live.example/',
+          webSocketDebuggerUrl: 'ws://127.0.0.1:65535/devtools/page/live-1',
+        } as ElectronInspectableTarget,
+      ];
+
+      await injector._testingSyncTargets();
+
+      // Stale leader URL is no longer in the live list → must be cleared
+      // so the next injection re-elects from the live targets instead of
+      // permanently pinning every new tab as a follower.
+      expect(injector._testingLeaderTargetUrl()).toBeNull();
+    } finally {
+      injector._testingCloseConnections();
+      await new Promise<void>((resolve) => listServer.close(() => resolve()));
+    }
+  });
+
+  it('syncTargets keeps the elected leader pinned while its target is still live', async () => {
+    const listServer: Server = createServer();
+    let currentTargets: ElectronInspectableTarget[] = [];
+    listServer.on('request', (req, res) => {
+      if (req.url === '/json/list') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(currentTargets));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    await new Promise<void>((resolve) => listServer.listen(0, '127.0.0.1', resolve));
+    const address = listServer.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('Failed to bind fake /json/list server');
+    }
+    const cdpPort = address.port;
+
+    const injector = ElectronOverlayInjector._createForTesting({
+      cdpPort,
+      servePort: 5711,
+      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK },
+      probeDelayMs: 20,
+    });
+
+    try {
+      injector._testingSeedLeaderTargetUrl('https://live.example/');
+      currentTargets = [
+        {
+          id: 'live-1',
+          type: 'page',
+          title: 'Live',
+          url: 'https://live.example/',
+          webSocketDebuggerUrl: 'ws://127.0.0.1:65535/devtools/page/live-1',
+        } as ElectronInspectableTarget,
+      ];
+
+      await injector._testingSyncTargets();
+
+      // Leader URL is still in the live list → stays pinned.
+      expect(injector._testingLeaderTargetUrl()).toBe('https://live.example/');
+    } finally {
+      injector._testingCloseConnections();
+      await new Promise<void>((resolve) => listServer.close(() => resolve()));
+    }
+  });
+});
+
+describe('resolveOverlayThinBridge', () => {
+  const TOKEN = 'cafef00d-1234-5678-9abc-def012345678';
+
+  it('returns null when bridgeToken is null (legacy mode keeps the bundled overlay)', () => {
+    expect(
+      resolveOverlayThinBridge({ SLICC_HOSTED_LEADER_ORIGIN: 'https://www.sliccy.ai' }, null, 5711)
+    ).toBeNull();
+  });
+
+  it('returns null when SLICC_HOSTED_LEADER_ORIGIN is unset (legacy overlay path)', () => {
+    expect(resolveOverlayThinBridge({}, TOKEN, 5711)).toBeNull();
+  });
+
+  it('builds a thin-bridge config when both inputs are present', () => {
+    const cfg = resolveOverlayThinBridge(
+      { SLICC_HOSTED_LEADER_ORIGIN: 'https://www.sliccy.ai' },
+      TOKEN,
+      5711
+    );
+    expect(cfg).toEqual({
+      hostedLeaderOrigin: 'https://www.sliccy.ai',
+      bridgeWsUrl: 'ws://localhost:5711/cdp',
+      bridgeToken: TOKEN,
+    });
+  });
+
+  it('honors a custom hosted origin from SLICC_HOSTED_LEADER_ORIGIN', () => {
+    const cfg = resolveOverlayThinBridge(
+      { SLICC_HOSTED_LEADER_ORIGIN: 'https://slicc-tray-hub-staging.minivelos.workers.dev/' },
+      TOKEN,
+      5712
+    );
+    expect(cfg?.hostedLeaderOrigin).toBe('https://slicc-tray-hub-staging.minivelos.workers.dev');
+    expect(cfg?.bridgeWsUrl).toBe('ws://localhost:5712/cdp');
   });
 });
