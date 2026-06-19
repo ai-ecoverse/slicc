@@ -33,6 +33,8 @@
  */
 
 import * as esbuild from 'esbuild-wasm';
+import { splitPath } from '../../fs/path-utils.js';
+import { type ModuleReader, resolve } from '../ipk/resolver.js';
 import { unpkgUrl } from './cdn-url-builder.js';
 import { isExtensionRuntime, isNodeRuntime } from './shared.js';
 
@@ -52,6 +54,21 @@ export const ESBUILD_WASM_CDN_URL = unpkgUrl(
 
 const CACHE_NAME = `slicc-esbuild-${ESBUILD_VERSION}`;
 
+/**
+ * Read-only VFS context the loader needs to prefer an ipk-installed
+ * `esbuild-wasm/esbuild.wasm` over the CDN path. `reader` is the
+ * resolver's `ModuleReader` (used to find the package via the standard
+ * `node_modules` walk); `readBytes` reads the resolved `.wasm` as raw
+ * bytes (the resolver's `readFile` is text-only). `fromDir` is the
+ * starting directory for the `node_modules` walk — typically the
+ * shell `cwd` of the calling command.
+ */
+export interface IpkResolutionContext {
+  reader: ModuleReader;
+  readBytes(absolutePath: string): Promise<Uint8Array>;
+  fromDir: string;
+}
+
 let esbuildPromise: Promise<typeof esbuild> | null = null;
 
 /**
@@ -59,12 +76,17 @@ let esbuildPromise: Promise<typeof esbuild> | null = null;
  * `esbuild.initialize` may only be called once per realm, so the
  * loader memoizes the underlying promise and re-throws the same
  * failure if init was rejected (a fresh import would still reject).
+ *
+ * `ipk` (optional) lets the browser path prefer an installed copy of
+ * `esbuild-wasm` in the VFS `node_modules` (via the ipk resolver)
+ * over the hardcoded CDN. When omitted or when nothing is installed,
+ * the CDN+Cache fallback runs unchanged.
  */
 export async function getEsbuild(
-  options: { onProgress?: (msg: string) => void } = {}
+  options: { onProgress?: (msg: string) => void; ipk?: IpkResolutionContext } = {}
 ): Promise<typeof esbuild> {
   if (!esbuildPromise) {
-    esbuildPromise = loadEsbuild(options.onProgress).catch((err) => {
+    esbuildPromise = loadEsbuild(options.onProgress, options.ipk).catch((err) => {
       esbuildPromise = null;
       throw err;
     });
@@ -72,7 +94,41 @@ export async function getEsbuild(
   return esbuildPromise;
 }
 
-async function loadEsbuild(onProgress?: (msg: string) => void): Promise<typeof esbuild> {
+/**
+ * Try to read `esbuild.wasm` from an ipk-installed `esbuild-wasm` in
+ * the VFS. Resolves `esbuild-wasm/package.json` through the shared
+ * resolver (so the standard `node_modules` walk and resolution rules
+ * apply), derives the package directory from the resolved file, and
+ * reads sibling `esbuild.wasm` bytes. Returns `null` on any miss —
+ * the caller falls back to the CDN+Cache path.
+ *
+ * Exported so the loader's resolution behavior is unit-testable
+ * without booting the heavy WASM service.
+ */
+export async function tryLoadEsbuildWasmFromNodeModules(
+  ipk: IpkResolutionContext
+): Promise<Uint8Array | null> {
+  let resolved;
+  try {
+    resolved = await resolve('esbuild-wasm/package.json', ipk.fromDir, ipk.reader);
+  } catch {
+    return null;
+  }
+  if (resolved.type !== 'file') return null;
+  const pkgDir = splitPath(resolved.path).dir;
+  const wasmPath = `${pkgDir}/esbuild.wasm`;
+  if (!(await ipk.reader.exists(wasmPath))) return null;
+  try {
+    return await ipk.readBytes(wasmPath);
+  } catch {
+    return null;
+  }
+}
+
+async function loadEsbuild(
+  onProgress?: (msg: string) => void,
+  ipk?: IpkResolutionContext
+): Promise<typeof esbuild> {
   const log = onProgress ?? (() => {});
 
   if (isNodeRuntime()) {
@@ -85,12 +141,22 @@ async function loadEsbuild(onProgress?: (msg: string) => void): Promise<typeof e
     return esbuild;
   }
 
-  // Browser (standalone OR extension): fetch the wasm bytes through
-  // the Cache Storage-backed path, compile to a module, and hand it
-  // to `initialize` as `wasmModule`. Symmetric across floats.
-  const url = ESBUILD_WASM_CDN_URL;
-  log('downloading esbuild.wasm (cached after first run)...');
-  const bytes = await fetchWithCache(url, 'application/wasm', log);
+  // Browser (standalone OR extension): prefer an ipk-installed copy
+  // of `esbuild.wasm` in the VFS `node_modules` when present, falling
+  // back to the Cache Storage-backed CDN fetch when nothing is
+  // installed (or no ipk context was supplied). The compiled
+  // `WebAssembly.Module` path is symmetric across floats.
+  let bytes: Uint8Array | null = null;
+  if (ipk) {
+    bytes = await tryLoadEsbuildWasmFromNodeModules(ipk);
+    if (bytes) {
+      log(`esbuild.wasm loaded from ipk node_modules (${bytes.byteLength} bytes)`);
+    }
+  }
+  if (!bytes) {
+    log('downloading esbuild.wasm (cached after first run)...');
+    bytes = await fetchWithCache(ESBUILD_WASM_CDN_URL, 'application/wasm', log);
+  }
   // Materialize the underlying ArrayBuffer explicitly so the
   // WebAssembly.compile typings don't trip on the
   // `SharedArrayBuffer | ArrayBuffer` union that Uint8Array<...>

@@ -1,12 +1,16 @@
 import type { IFileSystem } from 'just-bash';
 import { describe, expect, it, vi } from 'vitest';
+import type { ModuleReader } from '../../../src/shell/ipk/resolver.js';
 import {
   createBiomeCommand,
   expandPaths,
   isLintableFile,
   parseBiomeArgs,
 } from '../../../src/shell/supplemental-commands/biome-command.js';
-import { resetBiomeForTests } from '../../../src/shell/supplemental-commands/biome-runtime.js';
+import {
+  resetBiomeForTests,
+  tryLoadBiomeWasmFromNodeModules,
+} from '../../../src/shell/supplemental-commands/biome-runtime.js';
 
 /**
  * The Biome WASM init pulls the wasm-nodejs binary into memory and
@@ -175,6 +179,107 @@ describe('createBiomeCommand (dispatch)', () => {
     const result = await cmd.execute(['--help'], createMockCtx());
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('biome - WASM build');
+  });
+});
+
+/**
+ * Build a minimal {@link ModuleReader} + `readBytes` pair over an in-memory
+ * tree so the ipk node_modules resolution path is exercisable without a real
+ * VFS. Mirrors the `esbuild-command.test.ts` fixture — wasm bytes flow
+ * through `readBytes` (the resolver's `readFile` is text-only).
+ */
+function makeIpkFixture(
+  files: Map<string, string>,
+  dirs: Set<string>,
+  bytes: Map<string, Uint8Array>
+): { reader: ModuleReader; readBytes: (p: string) => Promise<Uint8Array> } {
+  const reader: ModuleReader = {
+    exists: async (path) => files.has(path) || dirs.has(path) || bytes.has(path),
+    isDirectory: async (path) => dirs.has(path),
+    readFile: async (path) => {
+      const v = files.get(path);
+      if (v === undefined) throw new Error(`ENOENT: ${path}`);
+      return v;
+    },
+  };
+  const readBytes = async (path: string): Promise<Uint8Array> => {
+    const b = bytes.get(path);
+    if (b === undefined) throw new Error(`ENOENT: ${path}`);
+    return b;
+  };
+  return { reader, readBytes };
+}
+
+describe('tryLoadBiomeWasmFromNodeModules', () => {
+  it('resolves biome_wasm_bg.wasm bytes from an ipk-installed node_modules tree', async () => {
+    const wasmBytes = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+    const files = new Map<string, string>([
+      [
+        '/workspace/node_modules/@biomejs/wasm-web/package.json',
+        JSON.stringify({ name: '@biomejs/wasm-web', version: '0.0.0-test' }),
+      ],
+    ]);
+    const dirs = new Set<string>([
+      '/',
+      '/workspace',
+      '/workspace/node_modules',
+      '/workspace/node_modules/@biomejs',
+      '/workspace/node_modules/@biomejs/wasm-web',
+    ]);
+    const bytes = new Map<string, Uint8Array>([
+      ['/workspace/node_modules/@biomejs/wasm-web/biome_wasm_bg.wasm', wasmBytes],
+    ]);
+    const { reader, readBytes } = makeIpkFixture(files, dirs, bytes);
+
+    const result = await tryLoadBiomeWasmFromNodeModules({
+      reader,
+      readBytes,
+      fromDir: '/workspace',
+    });
+
+    expect(result).not.toBeNull();
+    expect(result).toEqual(wasmBytes);
+  });
+
+  it('returns null when nothing is installed (CDN fallback engages)', async () => {
+    const { reader, readBytes } = makeIpkFixture(
+      new Map(),
+      new Set(['/', '/workspace']),
+      new Map()
+    );
+
+    const result = await tryLoadBiomeWasmFromNodeModules({
+      reader,
+      readBytes,
+      fromDir: '/workspace',
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it('returns null when the package directory exists but the .wasm is missing', async () => {
+    const files = new Map<string, string>([
+      [
+        '/workspace/node_modules/@biomejs/wasm-web/package.json',
+        JSON.stringify({ name: '@biomejs/wasm-web', version: '0.0.0-test' }),
+      ],
+    ]);
+    const dirs = new Set<string>([
+      '/',
+      '/workspace',
+      '/workspace/node_modules',
+      '/workspace/node_modules/@biomejs',
+      '/workspace/node_modules/@biomejs/wasm-web',
+    ]);
+    const { reader, readBytes } = makeIpkFixture(files, dirs, new Map());
+
+    const result = await tryLoadBiomeWasmFromNodeModules({
+      reader,
+      readBytes,
+      fromDir: '/workspace',
+    });
+
+    expect(result).toBeNull();
   });
 });
 

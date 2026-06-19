@@ -43,6 +43,8 @@
 import type { Biome } from '@biomejs/js-api';
 import type { ProjectKey } from '@biomejs/wasm-web';
 import wasmWebPkg from '@biomejs/wasm-web/package.json' with { type: 'json' };
+import { splitPath } from '../../fs/path-utils.js';
+import { type ModuleReader, resolve } from '../ipk/resolver.js';
 import { unpkgUrl } from './cdn-url-builder.js';
 import { isNodeRuntime, resolvePinnedPackageVersion } from './shared.js';
 
@@ -65,13 +67,34 @@ export interface BiomeRuntime {
   version: string;
 }
 
+/**
+ * Read-only VFS context the loader needs to prefer an ipk-installed
+ * `@biomejs/wasm-web/biome_wasm_bg.wasm` over the CDN path. `reader`
+ * is the resolver's `ModuleReader` (used to find the package via the
+ * standard `node_modules` walk); `readBytes` reads the resolved
+ * `.wasm` as raw bytes (the resolver's `readFile` is text-only).
+ * `fromDir` is the starting directory for the `node_modules` walk —
+ * typically the shell `cwd` of the calling command.
+ */
+export interface IpkResolutionContext {
+  reader: ModuleReader;
+  readBytes(absolutePath: string): Promise<Uint8Array>;
+  fromDir: string;
+}
+
 let runtimePromise: Promise<BiomeRuntime> | null = null;
 
+/**
+ * `ipk` (optional) lets the browser path prefer an installed copy of
+ * `@biomejs/wasm-web` in the VFS `node_modules` (via the ipk
+ * resolver) over the hardcoded CDN. When omitted or when nothing is
+ * installed, the CDN+Cache fallback runs unchanged.
+ */
 export async function getBiome(
-  options: { onProgress?: (msg: string) => void } = {}
+  options: { onProgress?: (msg: string) => void; ipk?: IpkResolutionContext } = {}
 ): Promise<BiomeRuntime> {
   if (!runtimePromise) {
-    runtimePromise = loadBiome(options.onProgress).catch((err) => {
+    runtimePromise = loadBiome(options.onProgress, options.ipk).catch((err) => {
       runtimePromise = null;
       throw err;
     });
@@ -79,7 +102,42 @@ export async function getBiome(
   return runtimePromise;
 }
 
-async function loadBiome(onProgress?: (msg: string) => void): Promise<BiomeRuntime> {
+/**
+ * Try to read `biome_wasm_bg.wasm` from an ipk-installed
+ * `@biomejs/wasm-web` in the VFS. Resolves
+ * `@biomejs/wasm-web/package.json` through the shared resolver (so
+ * the standard `node_modules` walk applies), derives the package
+ * directory from the resolved file, and reads sibling
+ * `biome_wasm_bg.wasm` bytes. Returns `null` on any miss — the
+ * caller falls back to the CDN+Cache path.
+ *
+ * Exported so the loader's resolution behavior is unit-testable
+ * without booting the heavy WASM workspace.
+ */
+export async function tryLoadBiomeWasmFromNodeModules(
+  ipk: IpkResolutionContext
+): Promise<Uint8Array | null> {
+  let resolved;
+  try {
+    resolved = await resolve('@biomejs/wasm-web/package.json', ipk.fromDir, ipk.reader);
+  } catch {
+    return null;
+  }
+  if (resolved.type !== 'file') return null;
+  const pkgDir = splitPath(resolved.path).dir;
+  const wasmPath = `${pkgDir}/biome_wasm_bg.wasm`;
+  if (!(await ipk.reader.exists(wasmPath))) return null;
+  try {
+    return await ipk.readBytes(wasmPath);
+  } catch {
+    return null;
+  }
+}
+
+async function loadBiome(
+  onProgress?: (msg: string) => void,
+  ipk?: IpkResolutionContext
+): Promise<BiomeRuntime> {
   const log = onProgress ?? (() => {});
 
   if (isNodeRuntime()) {
@@ -93,11 +151,21 @@ async function loadBiome(onProgress?: (msg: string) => void): Promise<BiomeRunti
     return { biome, projectKey, version: BIOME_VERSION };
   }
 
-  // Browser (standalone OR extension): fetch the wasm bytes through
-  // the Cache Storage-backed path, compile to a module, hand it to
-  // the wasm-bindgen init, then construct the high-level wrapper.
-  log('downloading biome_wasm_bg.wasm (cached after first run)...');
-  const bytes = await fetchWithCache(BIOME_WASM_CDN_URL, 'application/wasm', log);
+  // Browser (standalone OR extension): prefer an ipk-installed copy
+  // of `biome_wasm_bg.wasm` in the VFS `node_modules` when present,
+  // falling back to the Cache Storage-backed CDN fetch when nothing
+  // is installed (or no ipk context was supplied).
+  let bytes: Uint8Array | null = null;
+  if (ipk) {
+    bytes = await tryLoadBiomeWasmFromNodeModules(ipk);
+    if (bytes) {
+      log(`biome_wasm_bg.wasm loaded from ipk node_modules (${bytes.byteLength} bytes)`);
+    }
+  }
+  if (!bytes) {
+    log('downloading biome_wasm_bg.wasm (cached after first run)...');
+    bytes = await fetchWithCache(BIOME_WASM_CDN_URL, 'application/wasm', log);
+  }
   // Materialize the underlying ArrayBuffer explicitly so the
   // WebAssembly.compile typings don't trip on the
   // `SharedArrayBuffer | ArrayBuffer` union that Uint8Array carries.

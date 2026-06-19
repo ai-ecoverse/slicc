@@ -1,12 +1,16 @@
 import type { IFileSystem } from 'just-bash';
 import { describe, expect, it, vi } from 'vitest';
+import type { ModuleReader } from '../../../src/shell/ipk/resolver.js';
 import {
   createEsbuildCommand,
   createVfsPlugin,
   inferLoader,
   parseEsbuildArgs,
 } from '../../../src/shell/supplemental-commands/esbuild-command.js';
-import { resetEsbuildForTests } from '../../../src/shell/supplemental-commands/esbuild-wasm.js';
+import {
+  resetEsbuildForTests,
+  tryLoadEsbuildWasmFromNodeModules,
+} from '../../../src/shell/supplemental-commands/esbuild-wasm.js';
 
 /**
  * The full WASM init is heavy in CI (esbuild-wasm spawns a child
@@ -330,6 +334,106 @@ describe('createEsbuildCommand routing', () => {
     const result = await cmd.execute(['a.js', 'b.js'], createMockCtx());
     expect(result.exitCode).toBe(2);
     expect(result.stderr).toMatch(/--bundle/);
+  });
+});
+
+/**
+ * Build a minimal {@link ModuleReader} + `readBytes` pair over an in-memory
+ * tree so the ipk node_modules resolution path is exercisable without a real
+ * VFS. `files` keys are absolute VFS paths; `dirs` is the set of paths that
+ * should answer `isDirectory: true`. `bytes` returns binary contents (the
+ * resolver's `readFile` is text-only — wasm bytes flow through `readBytes`).
+ */
+function makeIpkFixture(
+  files: Map<string, string>,
+  dirs: Set<string>,
+  bytes: Map<string, Uint8Array>
+): { reader: ModuleReader; readBytes: (p: string) => Promise<Uint8Array> } {
+  const reader: ModuleReader = {
+    exists: async (path) => files.has(path) || dirs.has(path) || bytes.has(path),
+    isDirectory: async (path) => dirs.has(path),
+    readFile: async (path) => {
+      const v = files.get(path);
+      if (v === undefined) throw new Error(`ENOENT: ${path}`);
+      return v;
+    },
+  };
+  const readBytes = async (path: string): Promise<Uint8Array> => {
+    const b = bytes.get(path);
+    if (b === undefined) throw new Error(`ENOENT: ${path}`);
+    return b;
+  };
+  return { reader, readBytes };
+}
+
+describe('tryLoadEsbuildWasmFromNodeModules', () => {
+  it('resolves esbuild.wasm bytes from an ipk-installed node_modules tree', async () => {
+    const wasmBytes = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+    const files = new Map<string, string>([
+      [
+        '/workspace/node_modules/esbuild-wasm/package.json',
+        JSON.stringify({ name: 'esbuild-wasm', version: '0.0.0-test' }),
+      ],
+    ]);
+    const dirs = new Set<string>([
+      '/',
+      '/workspace',
+      '/workspace/node_modules',
+      '/workspace/node_modules/esbuild-wasm',
+    ]);
+    const bytes = new Map<string, Uint8Array>([
+      ['/workspace/node_modules/esbuild-wasm/esbuild.wasm', wasmBytes],
+    ]);
+    const { reader, readBytes } = makeIpkFixture(files, dirs, bytes);
+
+    const result = await tryLoadEsbuildWasmFromNodeModules({
+      reader,
+      readBytes,
+      fromDir: '/workspace',
+    });
+
+    expect(result).not.toBeNull();
+    expect(result).toEqual(wasmBytes);
+  });
+
+  it('returns null when nothing is installed (CDN fallback engages)', async () => {
+    const { reader, readBytes } = makeIpkFixture(
+      new Map(),
+      new Set(['/', '/workspace']),
+      new Map()
+    );
+
+    const result = await tryLoadEsbuildWasmFromNodeModules({
+      reader,
+      readBytes,
+      fromDir: '/workspace',
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it('returns null when the package directory exists but the .wasm is missing', async () => {
+    const files = new Map<string, string>([
+      [
+        '/workspace/node_modules/esbuild-wasm/package.json',
+        JSON.stringify({ name: 'esbuild-wasm', version: '0.0.0-test' }),
+      ],
+    ]);
+    const dirs = new Set<string>([
+      '/',
+      '/workspace',
+      '/workspace/node_modules',
+      '/workspace/node_modules/esbuild-wasm',
+    ]);
+    const { reader, readBytes } = makeIpkFixture(files, dirs, new Map());
+
+    const result = await tryLoadEsbuildWasmFromNodeModules({
+      reader,
+      readBytes,
+      fromDir: '/workspace',
+    });
+
+    expect(result).toBeNull();
   });
 });
 
