@@ -1082,6 +1082,33 @@ export function wireWcChipTips(deps: {
 }
 
 /**
+ * Mount the worker-shell terminal into the workbench `term` surface.
+ *
+ * Gated on `boot.onClientReady`: a `terminal-open` sent before the worker's
+ * `TerminalSessionHost` subscribes is dropped (same race as the freezer/stats
+ * wiring — the bus has no listener yet). `onClientReady` fires immediately
+ * when the kernel already reported ready, so this is free on late
+ * activations. The client-side `open()` also retries defensively.
+ */
+async function mountWorkbenchTerminal(
+  boot: WcShellBoot,
+  client: OffscreenClient,
+  container: HTMLElement
+): Promise<void> {
+  const { RemoteTerminalView } = await import('../../kernel/remote-terminal-view.js');
+  const { fetchSecretEnvVars } = await import('../../core/secret-env.js');
+  const env = await fetchSecretEnvVars();
+  const view = new RemoteTerminalView({
+    client,
+    cwd: '/',
+    env: Object.keys(env).length > 0 ? env : undefined,
+  });
+  await new Promise<void>((resolve) => boot.onClientReady(resolve));
+  await view.mount(container);
+  window.addEventListener('beforeunload', () => view.dispose(), { once: true });
+}
+
+/**
  * URL context routing. The thread owns the `ctx` param; the host resolves a
  * context id to app state: cone / scoop selection, or a freezer thaw. Covers
  * back/forward (the thread's `slicc-url-context` on popstate — it re-applies
@@ -1173,18 +1200,7 @@ export function attachWcClient(
       termSurface: refs.termSurface,
       memoryHost: refs.memoryHost,
       openFs: openReader,
-      mountTerminal: async (container) => {
-        const { RemoteTerminalView } = await import('../../kernel/remote-terminal-view.js');
-        const { fetchSecretEnvVars } = await import('../../core/secret-env.js');
-        const env = await fetchSecretEnvVars();
-        const view = new RemoteTerminalView({
-          client,
-          cwd: '/',
-          env: Object.keys(env).length > 0 ? env : undefined,
-        });
-        await view.mount(container);
-        window.addEventListener('beforeunload', () => view.dispose(), { once: true });
-      },
+      mountTerminal: (container) => mountWorkbenchTerminal(boot, client, container),
       log,
     })
   );
@@ -1305,6 +1321,7 @@ export async function mountWcUiLive(
     cherryTransport,
     localApiBaseUrl,
     bridgeToken,
+    localLickWsUrl,
   } = await setupStandalonePrelude({
     runtimeMode,
     envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
@@ -1329,6 +1346,7 @@ export async function mountWcUiLive(
     callbacks: createWcLiveCallbacks(boot.wiring),
     localApiBaseUrl,
     bridgeToken,
+    localLickWsUrl,
   });
   installPageStorageSync({ send: (m) => host.client.sendRaw(m) });
   attachWcClient(boot, host.client, log, {
