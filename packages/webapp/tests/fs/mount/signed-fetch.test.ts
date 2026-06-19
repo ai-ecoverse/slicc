@@ -17,7 +17,8 @@
 
 import type { SignAndForwardReply } from '@slicc/shared-ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { makeSignedFetchS3 } from '../../../src/fs/mount/signed-fetch.js';
+import { makeSignedFetchDa, makeSignedFetchS3 } from '../../../src/fs/mount/signed-fetch.js';
+import { setBridgeToken, setLocalApiBaseUrl } from '../../../src/shell/proxied-fetch.js';
 
 // ----------------- helpers -----------------
 
@@ -25,6 +26,10 @@ const ORIGINAL_FETCH = globalThis.fetch;
 
 afterEach(() => {
   globalThis.fetch = ORIGINAL_FETCH;
+  // Reset module-level base + token so thin-bridge cases don't leak into
+  // later same-origin assertions.
+  setLocalApiBaseUrl(null);
+  setBridgeToken(null);
   vi.restoreAllMocks();
 });
 
@@ -284,5 +289,85 @@ describe('signed-fetch CLI transport — request envelope shape', () => {
     // Body is base64-encoded in the envelope.
     const decoded = atob(parsed.bodyBase64);
     expect(decoded).toBe('hello world');
+  });
+});
+
+describe('signed-fetch CLI transport — thin-bridge URL + token', () => {
+  // Helper: capture the URL + init for the first fetch call so each case
+  // can assert against the resolved endpoint and `X-Bridge-Token`.
+  function captureCall(): {
+    getUrl: () => string | null;
+    getHeaders: () => Record<string, string> | null;
+  } {
+    let capturedUrl: string | null = null;
+    let capturedHeaders: Record<string, string> | null = null;
+    mockFetch(async (url, init) => {
+      capturedUrl = String(url);
+      const initObj = init as { headers?: Record<string, string> } | undefined;
+      capturedHeaders = (initObj?.headers ?? null) as Record<string, string> | null;
+      return jsonResponse({ ok: true, status: 200, headers: {}, bodyBase64: '' });
+    });
+    return { getUrl: () => capturedUrl, getHeaders: () => capturedHeaders };
+  }
+
+  it('legacy / same-origin: relative /api/s3-sign-and-forward, no X-Bridge-Token', async () => {
+    const cap = captureCall();
+    const transport = makeSignedFetchS3('aws');
+    await transport({ method: 'GET', bucket: 'b', key: 'k' });
+    expect(cap.getUrl()).toBe('/api/s3-sign-and-forward');
+    const headers = cap.getHeaders();
+    expect(headers).not.toBeNull();
+    expect(headers!['X-Bridge-Token']).toBeUndefined();
+    expect(headers!['content-type']).toBe('application/json');
+  });
+
+  it('thin-bridge: S3 envelope POSTs to the bridge origin with X-Bridge-Token', async () => {
+    setLocalApiBaseUrl('http://localhost:5710');
+    setBridgeToken('abc-123');
+    const cap = captureCall();
+    const transport = makeSignedFetchS3('aws');
+    await transport({ method: 'GET', bucket: 'b', key: 'k' });
+    expect(cap.getUrl()).toBe('http://localhost:5710/api/s3-sign-and-forward');
+    const headers = cap.getHeaders();
+    expect(headers).not.toBeNull();
+    expect(headers!['X-Bridge-Token']).toBe('abc-123');
+    expect(headers!['content-type']).toBe('application/json');
+  });
+
+  it('thin-bridge: DA envelope POSTs to the bridge origin with X-Bridge-Token', async () => {
+    setLocalApiBaseUrl('http://localhost:5710');
+    setBridgeToken('abc-123');
+    const cap = captureCall();
+    const transport = makeSignedFetchDa({ getImsToken: async () => 'ims-token' });
+    await transport({ method: 'GET', path: '/source/foo' });
+    expect(cap.getUrl()).toBe('http://localhost:5710/api/da-sign-and-forward');
+    const headers = cap.getHeaders();
+    expect(headers).not.toBeNull();
+    expect(headers!['X-Bridge-Token']).toBe('abc-123');
+  });
+
+  it('thin-bridge: base set but no token → absolute URL, still no X-Bridge-Token', async () => {
+    // apiHeaders attaches the token ONLY when both base AND token are set.
+    setLocalApiBaseUrl('http://localhost:5710');
+    const cap = captureCall();
+    const transport = makeSignedFetchS3('aws');
+    await transport({ method: 'GET', bucket: 'b', key: 'k' });
+    expect(cap.getUrl()).toBe('http://localhost:5710/api/s3-sign-and-forward');
+    const headers = cap.getHeaders();
+    expect(headers).not.toBeNull();
+    expect(headers!['X-Bridge-Token']).toBeUndefined();
+  });
+
+  it('token set but no base → same-origin path, X-Bridge-Token omitted', async () => {
+    // Symmetric to the proxied-fetch rule: the token is a cross-origin
+    // capability and must not leak on the loopback / bundled-UI path.
+    setBridgeToken('abc-123');
+    const cap = captureCall();
+    const transport = makeSignedFetchS3('aws');
+    await transport({ method: 'GET', bucket: 'b', key: 'k' });
+    expect(cap.getUrl()).toBe('/api/s3-sign-and-forward');
+    const headers = cap.getHeaders();
+    expect(headers).not.toBeNull();
+    expect(headers!['X-Bridge-Token']).toBeUndefined();
   });
 });

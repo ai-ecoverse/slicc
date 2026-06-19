@@ -6,8 +6,12 @@
  * function which routes:
  *
  *   - **CLI / Electron**: HTTP POST to node-server's
- *     `/api/s3-sign-and-forward` or `/api/da-sign-and-forward` (relative URL,
- *     same origin). Server resolves credentials, signs, forwards.
+ *     `/api/s3-sign-and-forward` or `/api/da-sign-and-forward`. The URL is
+ *     resolved through `resolveApiUrl` so thin-bridge mode (hosted leader on
+ *     sliccy.ai) targets the local node-server's absolute bridge origin with
+ *     the per-process `X-Bridge-Token`; the legacy bundled-UI / loopback
+ *     case stays on the relative URL with no extra header. Server resolves
+ *     credentials, signs, forwards.
  *   - **Extension**: `chrome.runtime.sendMessage` to the service worker.
  *     Service worker reads `s3.<profile>.*` from `chrome.storage.local`
  *     (S3) or accepts a transient IMS token in the envelope (DA), then
@@ -20,6 +24,7 @@
  */
 
 import type { SignAndForwardReply } from '@slicc/shared-ts';
+import { apiHeaders, resolveApiUrl } from '../../shell/proxied-fetch.js';
 import { FsError } from '../types.js';
 import type { SignedFetchDa, SignedFetchDaRequest } from './backend-da.js';
 import type { SignedFetchS3, SignedFetchS3Request } from './backend-s3.js';
@@ -127,13 +132,22 @@ function envelopeToResponse(reply: SignAndForwardReply): Response {
   });
 }
 
-/** POST an envelope to node-server's sign-and-forward endpoint, parse reply. */
+/**
+ * POST an envelope to node-server's sign-and-forward endpoint, parse reply.
+ *
+ * `endpoint` is a same-origin `/api/*` path; in thin-bridge mode (hosted
+ * leader on sliccy.ai, local node-server cross-origin) `resolveApiUrl`
+ * prepends the configured bridge origin and `apiHeaders` attaches the
+ * `X-Bridge-Token` capability. Same-origin / loopback callers continue to
+ * hit the relative URL with no extra headers — the local node-server only
+ * requires the token for non-loopback origins.
+ */
 async function postEnvelopeToCli(endpoint: string, body: unknown): Promise<SignAndForwardReply> {
   let res: Response;
   try {
-    res = await fetch(endpoint, {
+    res = await fetch(resolveApiUrl(endpoint), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: apiHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify(body),
     });
   } catch (err) {
