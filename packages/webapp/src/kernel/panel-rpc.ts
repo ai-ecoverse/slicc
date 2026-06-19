@@ -366,6 +366,30 @@ export type PanelRpcRequest =
       // Open a new tab on a remote runtime; returns the composite targetId.
       op: 'remote-open-tab';
       payload: { runtimeId: string; url: string };
+    }
+  | {
+      // Run one or more gesture-gated pickers through the leader tab's
+      // `<slicc-permissions>` surface. Worker-realm / agent-initiated
+      // flows have no ambient user activation, so the page supplies it
+      // via the surface's own Allow button (`SliccPermissions.prompt`).
+      // Result entries carry only serializable references: usb/hid/serial
+      // grants land in the shared page-side device registries and the
+      // returned `handle` matches today's picker path (`usb1` / `hid1` /
+      // `serial1`); filesystem grants stash via `storePendingHandle` and
+      // the returned `idbKey` round-trips through `loadAndClearPendingHandle`;
+      // media / screenshare grants live on the page only (their MediaStream
+      // can't cross the bridge) and are reported as `{ kind, ok: true }`.
+      // Rejects with a clear error on cancel / unavailable / picker error
+      // so the worker-side caller surfaces a single failure rather than
+      // a partial result.
+      op: 'permission-request';
+      payload: {
+        kinds: PermissionRpcKind[];
+        description: string;
+        heading?: string;
+        grantLabel?: string;
+        cancelLabel?: string;
+      };
     };
 
 export interface PanelRpcResults {
@@ -449,7 +473,37 @@ export interface PanelRpcResults {
   'remote-cdp-unsubscribe': { ok: true };
   'remote-cdp-detach': { ok: true };
   'remote-open-tab': { targetId: string };
+  'permission-request': { grants: PermissionRpcGrant[] };
 }
+
+/**
+ * The subset of `<slicc-permissions>` kinds bridged across panel-RPC.
+ * Mirror of `PermissionKind` from `@slicc/webcomponents`, kept inline so
+ * the worker-side type graph stays import-free of the page-only library.
+ */
+export type PermissionRpcKind =
+  | 'camera'
+  | 'microphone'
+  | 'screenshare'
+  | 'usb'
+  | 'hid'
+  | 'serial'
+  | 'filesystem';
+
+/**
+ * Serializable grant returned by `permission-request`. The non-serializable
+ * artifact (MediaStream, USBDevice, FileSystemDirectoryHandle, …) stays on
+ * the page; usb/hid/serial pass back a registry `handle` (the same one
+ * `--__resolved` rewrites carry), filesystem passes back an `idbKey` for
+ * `loadAndClearPendingHandle`, and media / screenshare report only that
+ * the grant succeeded.
+ */
+export type PermissionRpcGrant =
+  | { kind: 'usb'; handle: string }
+  | { kind: 'hid'; handle: string }
+  | { kind: 'serial'; handle: string }
+  | { kind: 'filesystem'; idbKey: string; dirName: string }
+  | { kind: 'camera' | 'microphone' | 'screenshare'; ok: true };
 
 /**
  * Serializable enhanced-speech-engine lifecycle snapshot returned by

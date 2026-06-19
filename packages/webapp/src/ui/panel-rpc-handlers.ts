@@ -10,15 +10,30 @@
  * offscreen document already has a DOM.
  */
 
+import type { SliccPermissions } from '@slicc/webcomponents';
+
 import type { PageInfo } from '../cdp/types.js';
-import { getNavigatorHid, getSharedHidRegistry } from '../kernel/hid-device-registry.js';
+import {
+  getNavigatorHid,
+  getSharedHidRegistry,
+  type HidDevice,
+} from '../kernel/hid-device-registry.js';
 import * as hidOps from '../kernel/hid-operations.js';
-import type { PanelRpcHandlers, PanelRpcResults } from '../kernel/panel-rpc.js';
+import type { PanelRpcHandlers, PanelRpcResults, PermissionRpcGrant } from '../kernel/panel-rpc.js';
 import * as serialOps from '../kernel/serial-operations.js';
-import { getNavigatorSerial, getSharedSerialRegistry } from '../kernel/serial-port-registry.js';
-import { getNavigatorUsb, getSharedUsbRegistry } from '../kernel/usb-device-registry.js';
+import {
+  getNavigatorSerial,
+  getSharedSerialRegistry,
+  type SerialPort,
+} from '../kernel/serial-port-registry.js';
+import {
+  getNavigatorUsb,
+  getSharedUsbRegistry,
+  type UsbDevice,
+} from '../kernel/usb-device-registry.js';
 import * as usbOps from '../kernel/usb-operations.js';
 import type { LeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
+import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 import { getAllExtraOAuthDomains, setExtraOAuthDomains } from './provider-settings.js';
 import type { RemoteCdpPageBridge } from './remote-cdp-page-bridge.js';
 
@@ -83,6 +98,14 @@ export interface StandalonePanelRpcHandlerOptions {
    * See issue #848.
    */
   remoteCdp?: RemoteCdpPageBridge;
+  /**
+   * Resolve the currently-mounted leader `<slicc-permissions>` element
+   * for the `permission-request` op. Lazy accessor (not a direct
+   * reference) so the resolver reads the live registry binding — the
+   * surface may mount after handler installation. Returning `null` lets
+   * the op reject with a clear "permission surface unavailable" error.
+   */
+  getPermissionsSurface?: () => SliccPermissions | null;
 }
 
 /**
@@ -107,6 +130,7 @@ export function createStandalonePanelRpcHandlers(
     ...buildSerialHandlers(),
     ...buildEsptoolHandlers(options),
     ...buildRemoteCdpHandlers(options),
+    ...buildPermissionRequestHandler(options),
   };
 }
 
@@ -748,6 +772,77 @@ function buildRemoteCdpHandlers(options: StandalonePanelRpcHandlerOptions) {
   } satisfies Partial<PanelRpcHandlers>;
 }
 
+/**
+ * `permission-request`: run the leader surface's multi-kind prompt,
+ * register usb/hid/serial grants into the shared page-side registries,
+ * stash filesystem grants via `storePendingHandle`, and return only
+ * serializable references (registry handles / IDB keys / `ok:true`).
+ * Rejects with a single error on cancel / unavailable / picker failure.
+ */
+function buildPermissionRequestHandler(options: StandalonePanelRpcHandlerOptions) {
+  return {
+    'permission-request': async (payload) => {
+      const surface = options.getPermissionsSurface?.() ?? null;
+      if (!surface) {
+        throw new Error('permission-request: permission surface unavailable');
+      }
+      const result = await surface.prompt({
+        kinds: payload.kinds,
+        description: payload.description,
+        heading: payload.heading,
+        grantLabel: payload.grantLabel,
+        cancelLabel: payload.cancelLabel,
+      });
+      if (result.status !== 'granted') {
+        const detail = result.message ? `: ${result.message}` : '';
+        throw new Error(`permission-request: ${result.reason ?? result.status}${detail}`);
+      }
+      const out: PermissionRpcGrant[] = [];
+      for (const grant of result.grants) {
+        switch (grant.kind) {
+          case 'usb': {
+            const handle = usbRegistry().register(grant.device as UsbDevice);
+            out.push({ kind: 'usb', handle });
+            break;
+          }
+          case 'hid': {
+            // The HID prompt may yield multiple sibling interfaces;
+            // register the first (the one the surface returned as the
+            // primary `device`) to match the standalone `hid request`
+            // shell-path behavior.
+            const handle = hidRegistry().register(grant.device as HidDevice);
+            out.push({ kind: 'hid', handle });
+            break;
+          }
+          case 'serial': {
+            const handle = serialRegistry().register(grant.port as SerialPort);
+            out.push({ kind: 'serial', handle });
+            break;
+          }
+          case 'filesystem': {
+            const { storePendingHandle } = await import('../fs/mount-picker-popup.js');
+            const idbKey = `pendingMount:rpc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+            await storePendingHandle(idbKey, grant.handle);
+            out.push({ kind: 'filesystem', idbKey, dirName: grant.handle.name });
+            break;
+          }
+          case 'camera':
+          case 'microphone':
+          case 'screenshare': {
+            // The MediaStream can't cross the bridge; the page retains it
+            // (the surface emits a `slicc-permission-grant` event the
+            // host can subscribe to for stream handling) and the worker
+            // only learns the kind succeeded.
+            out.push({ kind: grant.kind, ok: true });
+            break;
+          }
+        }
+      }
+      return { grants: out };
+    },
+  } satisfies Partial<PanelRpcHandlers>;
+}
+
 /** Shared page-side WebUSB registry (lazy singleton). */
 function usbRegistry() {
   return getSharedUsbRegistry();
@@ -1120,7 +1215,9 @@ function openOAuthPopup(authorizeUrl: string): Promise<string | null> {
     pollTimer = setInterval(async () => {
       if (resolved) return;
       try {
-        const res = await fetch('/api/oauth-result');
+        const res = await fetch(resolveApiUrl('/api/oauth-result'), {
+          headers: apiHeaders(),
+        });
         if (res.status === 204) return;
         if (!res.ok) return; // server hiccup — keep polling
         const data = (await res.json()) as { redirectUrl?: string; error?: string };

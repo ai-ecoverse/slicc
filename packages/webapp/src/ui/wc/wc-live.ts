@@ -1153,14 +1153,63 @@ function wireWcUrlContext(
  * gesture-gated surface and accepts folder drops as writable mounts
  * (Wave 1 Spike A). Cherry follower iframes skip the mount — Spike A
  * confirmed cross-origin iframes can't hold writable FS handles.
+ *
+ * The mounted handle is published via the page-realm accessor
+ * (`getLeaderPermissionsSurface`) in `wc-permissions-registry.ts` so
+ * other page-side callers (panel-RPC `permission-request` handler, future
+ * terminal/composer/mount migrations) can reach the same surface without
+ * an ad-hoc DOM query.
  */
 function wireWcPermissionsSurface(options: AttachWcClientOptions, log: BootStageLogger): void {
   void import('./wc-permissions.js')
-    .then(({ installLeaderPermissionsSurface }) => {
+    .then(async ({ installLeaderPermissionsSurface }) => {
       const runtimeMode = options.standalone?.runtimeMode ?? 'standalone';
-      installLeaderPermissionsSurface({ runtimeMode });
+      const providers = await buildLeaderPermissionProviders(runtimeMode);
+      installLeaderPermissionsSurface({ runtimeMode, providers });
     })
     .catch((err) => log.warn('WC permissions surface wiring failed', err));
+}
+
+/**
+ * Pick injectable provider seams for the leader surface. Extension mode
+ * swaps `filesystem` for a popup-window picker (the side panel can't host
+ * `showDirectoryPicker` directly — see `fs/mount-picker-popup.ts`); other
+ * kinds keep the platform defaults so the existing usb/hid/serial picker
+ * paths (and their `--__resolved` gesture rewrite) keep working unchanged.
+ */
+async function buildLeaderPermissionProviders(
+  runtimeMode: UiRuntimeMode
+): Promise<import('@slicc/webcomponents').PermissionProviders | undefined> {
+  if (runtimeMode !== 'extension' && runtimeMode !== 'extension-detached') return undefined;
+  const { openMountPickerPopup, storePendingHandle, loadAndClearPendingHandle } = await import(
+    '../../fs/mount-picker-popup.js'
+  );
+  return {
+    filesystem: {
+      async showDirectoryPicker(): Promise<FileSystemDirectoryHandle> {
+        const result = await openMountPickerPopup();
+        if (result.cancelled) {
+          throw new DOMException('mount picker cancelled', 'AbortError');
+        }
+        if (result.error) {
+          throw new Error(result.error);
+        }
+        if (!result.idbKey) {
+          throw new Error('mount picker returned no handle key');
+        }
+        const handle = await loadAndClearPendingHandle(result.idbKey);
+        if (!handle) {
+          throw new Error('mount picker returned no handle');
+        }
+        // Re-stash so downstream consumers that key off the same IDB
+        // store can still pick it up; the surface's `permission-request`
+        // handler will overwrite this with its own key on the next
+        // round-trip if it needs to.
+        await storePendingHandle(result.idbKey, handle);
+        return handle;
+      },
+    },
+  };
 }
 
 export function attachWcClient(

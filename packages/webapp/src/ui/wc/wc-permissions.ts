@@ -17,10 +17,11 @@
 
 // Component registration ships through the main barrel side-effect import
 // in `wc-shell.ts`; types come from the same barrel.
-import type { PermissionGrant, SliccPermissions } from '@slicc/webcomponents';
+import type { PermissionGrant, PermissionProviders, SliccPermissions } from '@slicc/webcomponents';
 
 import { createLogger } from '../../core/logger.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
+import { setLeaderPermissionsSurface } from './wc-permissions-registry.js';
 
 const log = createLogger('wc-permissions');
 
@@ -36,6 +37,15 @@ export interface InstallPermissionsOptions {
   runtimeMode: UiRuntimeMode;
   /** Host the surface lives in. Defaults to `document.body`. */
   host?: HTMLElement;
+  /**
+   * Injectable provider seams forwarded onto the mounted element's
+   * `providers` field. Any field omitted falls back to the platform
+   * default (`navigator.usb` / `navigator.hid` / `navigator.serial` /
+   * `window.showDirectoryPicker` / `navigator.mediaDevices`).
+   * Hosts use this to swap in an extension-mode popup picker for
+   * `filesystem`, or to fake providers under test.
+   */
+  providers?: PermissionProviders;
 }
 
 /**
@@ -63,7 +73,11 @@ export function installLeaderPermissionsSurface(
   const host = options.host ?? document.body;
   const element = document.createElement('slicc-permissions') as SliccPermissions;
   element.setAttribute('data-leader-permissions', '');
+  if (options.providers) {
+    element.providers = options.providers;
+  }
   host.appendChild(element);
+  setLeaderPermissionsSurface(element);
 
   const onGrant = (event: Event): void => {
     const detail = (event as CustomEvent<PermissionGrant>).detail;
@@ -86,6 +100,7 @@ export function installLeaderPermissionsSurface(
     dispose() {
       element.removeEventListener('slicc-permission-grant', onGrant);
       element.remove();
+      setLeaderPermissionsSurface(null);
     },
   };
 }
