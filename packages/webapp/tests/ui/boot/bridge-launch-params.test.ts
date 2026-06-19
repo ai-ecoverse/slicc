@@ -26,11 +26,12 @@ describe('parseBridgeLaunchParams', () => {
     expect(parseBridgeLaunchParams('?bridge=javascript:alert(1)&bridgeToken=abc')).toBeNull();
   });
 
-  it('parses a ws:// bridge URL + token into url + subprotocol + apiBaseUrl', () => {
+  it('parses a ws:// bridge URL + token into url + subprotocol + token + apiBaseUrl', () => {
     const params = parseBridgeLaunchParams('?bridge=ws://localhost:5710/cdp&bridgeToken=abc-123');
     expect(params).toEqual({
       url: 'ws://localhost:5710/cdp',
       subprotocol: 'slicc.bridge.v1.abc-123',
+      token: 'abc-123',
       apiBaseUrl: 'http://localhost:5710',
     });
   });
@@ -41,6 +42,7 @@ describe('parseBridgeLaunchParams', () => {
     );
     expect(params?.url).toBe('wss://bridge.example/cdp');
     expect(params?.subprotocol).toBe('slicc.bridge.v1.xyz');
+    expect(params?.token).toBe('xyz');
     expect(params?.apiBaseUrl).toBe('https://bridge.example');
   });
 

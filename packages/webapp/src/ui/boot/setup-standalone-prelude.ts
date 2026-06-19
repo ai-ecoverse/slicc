@@ -24,7 +24,7 @@ import {
   fetchRuntimeConfig,
   resolveTrayRuntimeConfig,
 } from '../../scoops/tray-runtime-config.js';
-import { setLocalApiBaseUrl } from '../../shell/proxied-fetch.js';
+import { setBridgeToken, setLocalApiBaseUrl } from '../../shell/proxied-fetch.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import { shouldUseRuntimeModeTrayDefaults } from '../runtime-mode.js';
 import { parseBridgeLaunchParams } from './bridge-launch-params.js';
@@ -53,6 +53,14 @@ export interface StandalonePreludeResult {
    * the same origin as the page realm.
    */
   localApiBaseUrl: string | null;
+  /**
+   * Per-process bridge token paired with `localApiBaseUrl`. Sent as the
+   * `X-Bridge-Token` header on cross-origin /api/* fetches so the local
+   * node-server's thin-bridge middleware accepts the call. Forwarded to
+   * the kernel worker so its proxied-fetch realm authenticates the same
+   * way as the page realm. `null` outside thin-bridge mode.
+   */
+  bridgeToken: string | null;
 }
 
 function mintInstanceId(): string {
@@ -132,6 +140,7 @@ export async function setupStandalonePrelude(
   let cherryJoinUrl: string | undefined;
   let cherryTransport: CherryHostTransport | undefined;
   let localApiBaseUrl: string | null = null;
+  let bridgeToken: string | null = null;
   if (runtimeMode === 'cherry') {
     const { setupCherryFollower } = await import('../main-cherry.js');
     const cherry = await setupCherryFollower();
@@ -151,6 +160,13 @@ export async function setupStandalonePrelude(
       if (bridge.apiBaseUrl) {
         localApiBaseUrl = bridge.apiBaseUrl;
         setLocalApiBaseUrl(bridge.apiBaseUrl);
+        // Pair the API base with the bridge token: the local node-server
+        // enforces `X-Bridge-Token` on cross-origin /api/* in thin-bridge
+        // mode (origin allowlist alone is insufficient — any script on
+        // sliccy.ai could otherwise reach /api). Token never appears on
+        // a query string or in logs; it's only used as a request header.
+        bridgeToken = bridge.token;
+        setBridgeToken(bridge.token);
       }
     }
     const connectOpts = bridge ? { url: bridge.url, protocols: bridge.subprotocol } : undefined;
@@ -178,5 +194,6 @@ export async function setupStandalonePrelude(
     instanceId: mintInstanceId(),
     isElectronOverlay,
     localApiBaseUrl,
+    bridgeToken,
   };
 }

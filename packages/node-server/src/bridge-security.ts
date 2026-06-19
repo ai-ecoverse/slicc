@@ -19,7 +19,7 @@
  * testable from `tests/bridge-security.test.ts`.
  */
 
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 
 /**
  * Origin allowlist. Production + staging worker plus the dev-mode loopback
@@ -42,6 +42,16 @@ export const BRIDGE_TOKEN_QUERY_PARAM = 'bridgeToken';
 
 /** Query-param name the launch URL uses to forward the local /cdp WebSocket URL. */
 export const BRIDGE_WS_QUERY_PARAM = 'bridge';
+
+/**
+ * Request header carrying the per-process bridge token on cross-origin
+ * /api/* calls from a remote allowlisted leader (e.g. sliccy.ai). The
+ * webapp's `proxied-fetch.ts` attaches it whenever a local API base
+ * origin is set; the thin-bridge CORS middleware validates it. Header
+ * is included in `CORS_BASE_ALLOW_HEADERS` so browsers don't strip it
+ * on the preflight.
+ */
+export const BRIDGE_TOKEN_HEADER = 'X-Bridge-Token';
 
 /**
  * Headers we allow on cross-origin /api requests from the hosted leader.
@@ -79,6 +89,50 @@ const CORS_ALLOW_METHODS = 'GET, POST, PUT, DELETE, OPTIONS';
 export function isAllowedBridgeOrigin(origin: string | undefined | null): boolean {
   if (!origin) return false;
   return BRIDGE_ALLOWED_ORIGINS.includes(origin);
+}
+
+/**
+ * True iff `origin` is a loopback host (localhost / 127.0.0.1 / ::1).
+ * Loopback allowlisted origins (e.g. the locally-served OAuth callback
+ * page at `http://localhost:5710/auth/callback` posting to
+ * `/api/oauth-result`) are exempt from the bridge-token requirement —
+ * the token's threat model is "remote allowlisted origin (sliccy.ai)
+ * with a hostile script", not "local server talking to itself".
+ */
+export function isLoopbackBridgeOrigin(origin: string | undefined | null): boolean {
+  if (!origin) return false;
+  try {
+    const url = new URL(origin);
+    // Node's WHATWG URL parser keeps the brackets on IPv6 hostnames
+    // (`http://[::1]:5710` → `[::1]`); accept both bracketed and bare.
+    return (
+      url.hostname === 'localhost' ||
+      url.hostname === '127.0.0.1' ||
+      url.hostname === '::1' ||
+      url.hostname === '[::1]'
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Constant-time compare for the bridge token. `presented` may be missing
+ * or shaped wrong (Express delivers headers as `string | string[] |
+ * undefined`). Returns `false` for any non-string, length mismatch, or
+ * empty expected — never throws.
+ */
+export function validateBridgeToken(
+  presented: string | string[] | undefined,
+  expected: string | null
+): boolean {
+  if (!expected) return false;
+  const value = Array.isArray(presented) ? presented[0] : presented;
+  if (typeof value !== 'string' || value.length === 0) return false;
+  const a = Buffer.from(value);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
 }
 
 /**

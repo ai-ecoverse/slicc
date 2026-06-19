@@ -1297,13 +1297,20 @@ export async function mountWcUiLive(
   log: BootStageLogger,
   runtimeMode: UiRuntimeMode = 'standalone'
 ): Promise<void> {
-  const { browser, realCdpTransport, instanceId, cherryJoinUrl, cherryTransport, localApiBaseUrl } =
-    await setupStandalonePrelude({
-      runtimeMode,
-      envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
-      window,
-      log,
-    });
+  const {
+    browser,
+    realCdpTransport,
+    instanceId,
+    cherryJoinUrl,
+    cherryTransport,
+    localApiBaseUrl,
+    bridgeToken,
+  } = await setupStandalonePrelude({
+    runtimeMode,
+    envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
+    window,
+    log,
+  });
 
   // The floatbar names the serving runtime, not just "standalone": the
   // native Sliccstart server vs the Node CLI, fingerprinted via /api/status.
@@ -1321,6 +1328,7 @@ export async function mountWcUiLive(
     instanceId,
     callbacks: createWcLiveCallbacks(boot.wiring),
     localApiBaseUrl,
+    bridgeToken,
   });
   installPageStorageSync({ send: (m) => host.client.sendRaw(m) });
   attachWcClient(boot, host.client, log, {

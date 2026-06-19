@@ -3,12 +3,15 @@ import { describe, expect, it } from 'vitest';
 import {
   BRIDGE_ALLOWED_ORIGINS,
   BRIDGE_SUBPROTOCOL_PREFIX,
+  BRIDGE_TOKEN_HEADER,
   buildCorsHeaders,
   buildPnaPreflightHeaders,
   isAllowedBridgeOrigin,
+  isLoopbackBridgeOrigin,
   mintBridgeToken,
   parseSubprotocolHeader,
   selectBridgeSubprotocol,
+  validateBridgeToken,
   validateBridgeUpgrade,
 } from '../src/bridge-security.js';
 
@@ -177,5 +180,63 @@ describe('buildPnaPreflightHeaders', () => {
     expect(buildPnaPreflightHeaders()).toEqual({
       'Access-Control-Allow-Private-Network': 'true',
     });
+  });
+});
+
+describe('BRIDGE_TOKEN_HEADER', () => {
+  it('matches the X-Bridge-Token header name listed in CORS_BASE_ALLOW_HEADERS', () => {
+    // Strict equality: the webapp proxied-fetch and the node-server gate
+    // BOTH literal this name; drifting it breaks cross-origin /api/* calls.
+    expect(BRIDGE_TOKEN_HEADER).toBe('X-Bridge-Token');
+    const headers = buildCorsHeaders(PROD_ORIGIN);
+    expect(headers!['Access-Control-Allow-Headers']).toContain('X-Bridge-Token');
+  });
+});
+
+describe('isLoopbackBridgeOrigin', () => {
+  it('accepts localhost / 127.0.0.1 / ::1 origins on any port', () => {
+    expect(isLoopbackBridgeOrigin('http://localhost:5710')).toBe(true);
+    expect(isLoopbackBridgeOrigin('http://127.0.0.1:5710')).toBe(true);
+    expect(isLoopbackBridgeOrigin('http://[::1]:5710')).toBe(true);
+    // No port — still loopback.
+    expect(isLoopbackBridgeOrigin('http://localhost')).toBe(true);
+  });
+
+  it('rejects remote / malformed / empty origins', () => {
+    expect(isLoopbackBridgeOrigin(undefined)).toBe(false);
+    expect(isLoopbackBridgeOrigin(null)).toBe(false);
+    expect(isLoopbackBridgeOrigin('')).toBe(false);
+    expect(isLoopbackBridgeOrigin('https://www.sliccy.ai')).toBe(false);
+    expect(isLoopbackBridgeOrigin('https://localhost.evil.com')).toBe(false);
+    expect(isLoopbackBridgeOrigin('not a url')).toBe(false);
+  });
+});
+
+describe('validateBridgeToken', () => {
+  it('accepts a matching string presented value', () => {
+    expect(validateBridgeToken(TOKEN, TOKEN)).toBe(true);
+  });
+
+  it('uses the first value of a string[] presented header', () => {
+    // Express delivers repeated headers as string[]; the matcher must
+    // grab the first value rather than coerce the array to a string
+    // (which would produce a comma-separated false-positive).
+    expect(validateBridgeToken([TOKEN, 'other'], TOKEN)).toBe(true);
+    expect(validateBridgeToken(['wrong', TOKEN], TOKEN)).toBe(false);
+  });
+
+  it('rejects mismatches, missing values, and an unset expected token', () => {
+    expect(validateBridgeToken('other', TOKEN)).toBe(false);
+    expect(validateBridgeToken(undefined, TOKEN)).toBe(false);
+    expect(validateBridgeToken('', TOKEN)).toBe(false);
+    // No expected token configured — never accept, even on empty input.
+    expect(validateBridgeToken(TOKEN, null)).toBe(false);
+    expect(validateBridgeToken('', null)).toBe(false);
+  });
+
+  it('rejects length-mismatched values without throwing', () => {
+    // timingSafeEqual throws on length mismatch; the wrapper must guard.
+    expect(validateBridgeToken('short', TOKEN)).toBe(false);
+    expect(validateBridgeToken(`${TOKEN}-extra`, TOKEN)).toBe(false);
   });
 });

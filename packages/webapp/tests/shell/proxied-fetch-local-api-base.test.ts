@@ -35,9 +35,10 @@ describe('createProxiedFetch — local API base (thin-bridge)', () => {
     if (originalFetch) {
       (globalThis as { fetch: typeof globalThis.fetch }).fetch = originalFetch;
     }
-    // Reset module-level base so cases don't leak.
-    const { setLocalApiBaseUrl } = await import('../../src/shell/proxied-fetch.js');
+    // Reset module-level base + token so cases don't leak.
+    const { setLocalApiBaseUrl, setBridgeToken } = await import('../../src/shell/proxied-fetch.js');
     setLocalApiBaseUrl(null);
+    setBridgeToken(null);
     vi.restoreAllMocks();
   });
 
@@ -94,5 +95,54 @@ describe('createProxiedFetch — local API base (thin-bridge)', () => {
     const init = mockFetch.mock.calls[0][1] as RequestInit;
     const headers = init.headers as Record<string, string>;
     expect(headers['X-Target-URL']).toBe('https://api.example.com/v1');
+  });
+
+  it('attaches X-Bridge-Token when a token is set alongside a local API base', async () => {
+    const { createProxiedFetch, setLocalApiBaseUrl, setBridgeToken, getBridgeToken } = await import(
+      '../../src/shell/proxied-fetch.js'
+    );
+    setLocalApiBaseUrl('http://localhost:5710');
+    setBridgeToken('abc-123');
+    expect(getBridgeToken()).toBe('abc-123');
+    await createProxiedFetch()('https://api.example.com/v1', { method: 'GET' });
+    const init = mockFetch.mock.calls[0][1] as RequestInit;
+    const headers = init.headers as Record<string, string>;
+    expect(headers['X-Bridge-Token']).toBe('abc-123');
+  });
+
+  it('omits X-Bridge-Token on the same-origin path even when a token is set', async () => {
+    // No local API base set → same-origin /api/fetch-proxy. The token
+    // requirement only applies to cross-origin calls; sending it on
+    // same-origin would leak a session capability the local UI doesn't
+    // need.
+    const { createProxiedFetch, setBridgeToken } = await import('../../src/shell/proxied-fetch.js');
+    setBridgeToken('abc-123');
+    await createProxiedFetch()('https://api.example.com/v1', { method: 'GET' });
+    expect(mockFetch.mock.calls[0][0]).toBe('/api/fetch-proxy');
+    const init = mockFetch.mock.calls[0][1] as RequestInit;
+    const headers = init.headers as Record<string, string>;
+    expect(headers['X-Bridge-Token']).toBeUndefined();
+  });
+
+  it('omits X-Bridge-Token when only the API base is set (no token configured)', async () => {
+    const { createProxiedFetch, setLocalApiBaseUrl } = await import(
+      '../../src/shell/proxied-fetch.js'
+    );
+    setLocalApiBaseUrl('http://localhost:5710');
+    await createProxiedFetch()('https://api.example.com/v1', { method: 'GET' });
+    const init = mockFetch.mock.calls[0][1] as RequestInit;
+    const headers = init.headers as Record<string, string>;
+    expect(headers['X-Bridge-Token']).toBeUndefined();
+  });
+
+  it('treats null and empty string as a reset for the bridge token', async () => {
+    const { setBridgeToken, getBridgeToken } = await import('../../src/shell/proxied-fetch.js');
+    setBridgeToken('abc-123');
+    expect(getBridgeToken()).toBe('abc-123');
+    setBridgeToken('');
+    expect(getBridgeToken()).toBeNull();
+    setBridgeToken('abc-123');
+    setBridgeToken(null);
+    expect(getBridgeToken()).toBeNull();
   });
 });

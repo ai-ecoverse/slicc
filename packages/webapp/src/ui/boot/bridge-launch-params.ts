@@ -28,6 +28,16 @@ export interface BridgeLaunchParams {
   /** The `Sec-WebSocket-Protocol` value to offer on the upgrade. */
   subprotocol: string;
   /**
+   * Raw per-process bridge token (the value the node-server minted via
+   * `mintBridgeToken`). Sent on cross-origin /api/* fetches as the
+   * `X-Bridge-Token` header so the local node-server can gate access on
+   * top of the origin allowlist — the allowlist alone is insufficient
+   * because any script on `https://www.sliccy.ai` could otherwise reach
+   * /api unchallenged. Treat as a session capability: never log it,
+   * never put it on a query string or Referer.
+   */
+  token: string;
+  /**
    * HTTP origin of the local node-server, derived from the bridge WS URL
    * (ws→http, wss→https, same host:port, no path). The webapp uses this
    * to route proxied /api/* requests at the local node-server when the
@@ -75,6 +85,7 @@ export function parseBridgeLaunchParams(search: string): BridgeLaunchParams | nu
   return {
     url,
     subprotocol: `${BRIDGE_SUBPROTOCOL_PREFIX}${token}`,
+    token,
     apiBaseUrl: deriveBridgeApiBaseUrl(url),
   };
 }

@@ -80,6 +80,13 @@ export interface KernelWorkerSpawnOptions {
    * local /api surface. `null` / undefined falls back to same-origin.
    */
   localApiBaseUrl?: string | null;
+  /**
+   * Per-process bridge token paired with `localApiBaseUrl`. Forwarded
+   * to the worker-side `proxied-fetch` realm so cross-origin /api/*
+   * calls carry the required `X-Bridge-Token` header. `null` / undefined
+   * outside thin-bridge mode.
+   */
+  bridgeToken?: string | null;
 }
 
 export interface KernelWorkerBootstrapOptions {
@@ -96,6 +103,8 @@ export interface KernelWorkerBootstrapOptions {
   instanceId?: string;
   /** See `KernelWorkerSpawnOptions.localApiBaseUrl`. */
   localApiBaseUrl?: string | null;
+  /** See `KernelWorkerSpawnOptions.bridgeToken`. */
+  bridgeToken?: string | null;
 }
 
 /**
@@ -211,6 +220,7 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
     localStorageSeed,
     instanceId: options.instanceId,
     localApiBaseUrl: options.localApiBaseUrl ?? null,
+    bridgeToken: options.bridgeToken ?? null,
   };
   worker.postMessage(init, [kernelChannel.port2, cdpChannel.port2]);
 
@@ -278,5 +288,6 @@ export function spawnKernelWorker(options: KernelWorkerSpawnOptions): SpawnedKer
     localStorageSeed: options.localStorageSeed ?? collectLocalStorageSeed(),
     instanceId: options.instanceId,
     localApiBaseUrl: options.localApiBaseUrl,
+    bridgeToken: options.bridgeToken,
   });
 }
