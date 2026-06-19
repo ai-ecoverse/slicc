@@ -1,12 +1,14 @@
 /**
- * Extension service worker — message relay + CDP proxy + offscreen lifecycle.
+ * Extension service worker — thin-extension bridge + bootstrapper backend.
  *
  * Responsibilities:
- * 1. Open the side panel on action icon click
- * 2. Create/maintain the offscreen document (agent engine)
- * 3. Relay messages between side panel ↔ offscreen document
- * 4. Proxy chrome.debugger CDP calls for the offscreen document
- * 5. Host the leader tray WebSocket for the offscreen document
+ * 1. Open and keep the pinned hosted leader tab alive
+ * 2. Focus the leader tab on action icon click
+ * 3. Proxy `chrome.debugger` CDP calls for the hosted leader tab over the
+ *    `externally_connectable` Port (see `bridge-sw.ts`)
+ * 4. Serve the secret-aware fetch proxy + mount sign-and-forward backends
+ *    consumed by the hosted webapp
+ * 5. Surface SLICC handoff notifications observed via `webRequest`
  *
  * Chrome extension API types provided by ./chrome.d.ts
  */
@@ -44,288 +46,9 @@ import type {
   TraySocketOpenedMsg,
   TraySocketOpenMsg,
 } from './messages.js';
-import {
-  DETACHED_RUNTIME_QUERY_NAME,
-  DETACHED_RUNTIME_QUERY_VALUE,
-  isExtensionMessage,
-} from './messages.js';
 import { buildWebAuthFlowOptions } from './oauth-flow-options.js';
 import { deleteSecret, listSecrets, listSecretsWithValues, setSecret } from './secrets-storage.js';
 import { readOrCreateSwSessionId } from './sw-session-id.js';
-
-// ---------------------------------------------------------------------------
-// Detached popout state
-// ---------------------------------------------------------------------------
-
-const DETACHED_TAB_ID_KEY = 'slicc.detached.tabId';
-
-async function readStoredDetachedTabId(): Promise<number | undefined> {
-  try {
-    const result = await chrome.storage.session.get(DETACHED_TAB_ID_KEY);
-    const raw = result[DETACHED_TAB_ID_KEY];
-    return typeof raw === 'number' ? raw : undefined;
-  } catch (err) {
-    console.error('[slicc-sw] storage.session.get failed', err);
-    return undefined;
-  }
-}
-
-async function writeStoredDetachedTabId(tabId: number): Promise<void> {
-  await chrome.storage.session.set({ [DETACHED_TAB_ID_KEY]: tabId });
-}
-
-async function clearStoredDetachedTabId(): Promise<void> {
-  await chrome.storage.session.remove(DETACHED_TAB_ID_KEY);
-}
-
-async function reconcileDetachedLockOnBoot(): Promise<void> {
-  const storedTabId = await readStoredDetachedTabId();
-
-  if (storedTabId !== undefined) {
-    let tabAlive = false;
-    try {
-      await chrome.tabs.get(storedTabId);
-      tabAlive = true;
-    } catch {
-      // Tab gone (closed/discarded while SW was evicted)
-    }
-
-    if (tabAlive) {
-      await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
-      await chrome.sidePanel.setOptions({ enabled: false });
-      return;
-    }
-
-    await clearStoredDetachedTabId();
-  }
-
-  await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-  await chrome.sidePanel.setOptions({ enabled: true });
-}
-
-reconcileDetachedLockOnBoot().catch((err) => {
-  console.error('[slicc-sw] reconcile detached lock failed', err);
-});
-
-chrome.runtime.onStartup.addListener(() => {
-  reconcileDetachedLockOnBoot().catch(() => {});
-});
-
-chrome.runtime.onInstalled.addListener(() => {
-  reconcileDetachedLockOnBoot().catch(() => {});
-});
-
-function isValidClaimUrl(rawUrl: string | undefined): boolean {
-  if (!rawUrl) return false;
-  let u: URL;
-  try {
-    u = new URL(rawUrl);
-  } catch {
-    return false;
-  }
-  let expectedOrigin: string;
-  try {
-    expectedOrigin = new URL(chrome.runtime.getURL('index.html')).origin;
-  } catch {
-    return false;
-  }
-  // Accept both '/index.html' (explicit) and '/' (root → index.html
-  // served by the manifest's default). Both produce the same boot
-  // path; reject anything else so e.g. /secrets.html?detached=1
-  // cannot claim the lock.
-  const isExtensionIndex = u.pathname === '/index.html' || u.pathname === '/';
-  return (
-    u.origin === expectedOrigin &&
-    isExtensionIndex &&
-    u.searchParams.get(DETACHED_RUNTIME_QUERY_NAME) === DETACHED_RUNTIME_QUERY_VALUE
-  );
-}
-
-async function handleDetachedClaim(sender: ChromeMessageSender): Promise<void> {
-  const claimingTabId = sender.tab?.id;
-  if (claimingTabId === undefined) return;
-  if (!isValidClaimUrl(sender.url)) return;
-
-  let step = 'read-stored-tab-id';
-  try {
-    const storedTabId = await readStoredDetachedTabId();
-
-    if (storedTabId === claimingTabId) {
-      // Idempotent reclaim (detached tab reload). No state change.
-      return;
-    }
-
-    if (storedTabId !== undefined) {
-      step = 'check-existing-tab';
-      let existing: ChromeTab | undefined;
-      try {
-        existing = await chrome.tabs.get(storedTabId);
-      } catch {
-        existing = undefined;
-      }
-      if (existing !== undefined && existing.id !== undefined) {
-        // A different detached tab already holds the lock. Close the new one.
-        step = 'remove-claiming-tab';
-        await chrome.tabs.remove(claimingTabId);
-        step = 'focus-existing-tab';
-        await chrome.tabs.update(existing.id, { active: true });
-        if (existing.windowId !== undefined) {
-          step = 'focus-existing-window';
-          await chrome.windows.update(existing.windowId, { focused: true });
-        }
-        return;
-      }
-      // Stored tab is gone; fall through to lock with the new claimer.
-    }
-
-    step = 'write-detached-tab-id';
-    await writeStoredDetachedTabId(claimingTabId);
-    step = 'set-panel-behavior-locked';
-    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
-    step = 'set-options-disabled';
-    await chrome.sidePanel.setOptions({ enabled: false });
-    step = 'broadcast-detached-active';
-    // Fire-and-forget; .catch() suppresses the unhandled-rejection warning
-    // that Chrome emits when there are no listeners (e.g., no panel open).
-    // Matches the codebase's existing fire-and-forget pattern for
-    // chrome.runtime.sendMessage.
-    chrome.runtime
-      .sendMessage({
-        source: 'service-worker',
-        payload: { type: 'detached-active' },
-      })
-      .catch(() => {});
-
-    // Best-effort hard close of any open side panel (Chrome 141+).
-    step = 'get-windows';
-    const windows = await chrome.windows.getAll();
-    step = 'close-side-panels';
-    await Promise.all(
-      windows.map(async (win) => {
-        try {
-          await chrome.sidePanel.close({ windowId: win.id });
-        } catch {
-          // No side panel open in that window — normal case, swallow.
-        }
-      })
-    );
-  } catch (err) {
-    console.error(`[slicc-sw] handleDetachedClaim failed at step=${step}`, err);
-    throw err;
-  }
-}
-
-async function handleDetachedPopoutRequest(): Promise<void> {
-  const detachedUrl = `${chrome.runtime.getURL('index.html')}?${DETACHED_RUNTIME_QUERY_NAME}=${DETACHED_RUNTIME_QUERY_VALUE}`;
-  await chrome.tabs.create({ url: detachedUrl, active: true });
-  // The lock change is driven by the new tab's detached-claim message,
-  // not by tab creation. See spec.
-}
-
-chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
-  // Return false explicitly to tell Chrome we will not call sendResponse
-  // asynchronously. Returning true keeps sendResponse alive and conflicts
-  // with the other SW onMessage listeners that may want to respond.
-  if (!isExtensionMessage(message)) return false;
-  if (message.source !== 'panel') return false;
-  const payloadType = (message.payload as { type?: string }).type;
-
-  if (payloadType === 'detached-claim') {
-    handleDetachedClaim(sender).catch((err) => {
-      // Step-context already logged by handleDetachedClaim's internal catch.
-      // This catch is the final safety net so the rejection doesn't go unhandled.
-      console.error('[slicc-sw] handleDetachedClaim unhandled', err);
-    });
-    return false;
-  }
-
-  if (payloadType === 'detached-popout-request') {
-    handleDetachedPopoutRequest().catch((err) => {
-      console.error('[slicc-sw] handleDetachedPopoutRequest failed', err);
-    });
-    return false;
-  }
-  return false;
-});
-
-async function handleActionClick(clickedTab: ChromeTab): Promise<void> {
-  const storedId = await readStoredDetachedTabId();
-
-  if (storedId !== undefined) {
-    let alive: ChromeTab | undefined;
-    try {
-      alive = await chrome.tabs.get(storedId);
-    } catch {
-      alive = undefined;
-    }
-    if (alive !== undefined) {
-      await chrome.tabs.update(storedId, { active: true });
-      if (alive.windowId !== undefined) {
-        await chrome.windows.update(alive.windowId, { focused: true });
-      }
-      return;
-    }
-  }
-
-  // Recovery: no detached tab actually exists.
-  // Fire-and-forget the cleanup (don't await) so the user-gesture
-  // context from chrome.action.onClicked is still active when
-  // sidePanel.open() is called below. Awaiting any Promise inside
-  // a gesture-triggered listener can consume the activation and
-  // cause sidePanel.open to reject.
-  chrome.storage.session.remove(DETACHED_TAB_ID_KEY).catch(() => {});
-  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
-  chrome.sidePanel.setOptions({ enabled: true }).catch(() => {});
-
-  // Wave 3b: if a pinned leader tab is alive, focus it instead of opening
-  // the side panel. The leader tab is the thin-extension primary UI; the
-  // side-panel fallback remains for users still on the fat-extension path
-  // (Wave 6 cleanup will remove it).
-  const leaderId = await readStoredLeaderTabId();
-  if (leaderId !== undefined) {
-    let leaderTab: ChromeTab | undefined;
-    try {
-      leaderTab = await chrome.tabs.get(leaderId);
-    } catch {
-      leaderTab = undefined;
-    }
-    if (leaderTab !== undefined && isLeaderTabUrl(leaderTab.url)) {
-      await chrome.tabs.update(leaderId, { active: true });
-      if (leaderTab.windowId !== undefined) {
-        await chrome.windows.update(leaderTab.windowId, { focused: true });
-      }
-      return;
-    }
-    // Stored leader tab is gone or has navigated away — clear stale state
-    // and fall through to the side-panel fallback below.
-    await clearStoredLeaderTabId();
-  }
-
-  if (clickedTab.id !== undefined) {
-    await chrome.sidePanel.open({ tabId: clickedTab.id });
-  }
-}
-
-chrome.action.onClicked.addListener((tab) => {
-  chrome.action.setBadgeText({ text: '' });
-  handleActionClick(tab).catch((err) => {
-    console.error('[slicc-sw] handleActionClick failed', err);
-  });
-});
-
-async function handleTabRemoved(tabId: number): Promise<void> {
-  const storedId = await readStoredDetachedTabId();
-  if (storedId !== tabId) return;
-  await clearStoredDetachedTabId();
-  await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-  await chrome.sidePanel.setOptions({ enabled: true });
-}
-
-chrome.tabs.onRemoved.addListener((tabId) => {
-  handleTabRemoved(tabId).catch((err) => {
-    console.error('[slicc-sw] handleTabRemoved failed', err);
-  });
-});
 
 // ---------------------------------------------------------------------------
 // Leader tab state (Wave 3b — thin extension)
@@ -336,12 +59,12 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // `<slicc-launcher>` content script) connect as followers in auto-follow
 // mode, so closing a host page never stops the agent.
 //
-// Lifecycle mirrors the detached-popout pattern above: `chrome.storage.session`
-// persists the tab id; reconciliation runs at SW startup + `onStartup` +
-// `onInstalled`; `ensureLeaderTab` creates the pinned tab if missing;
-// `tabs.onRemoved` clears the storage when the user closes the leader tab.
+// `chrome.storage.session` persists the tab id; reconciliation runs at SW
+// startup + `onStartup` + `onInstalled`; `ensureLeaderTab` creates the
+// pinned tab if missing; `tabs.onRemoved` clears the storage when the
+// user closes the leader tab.
 //
-// The bridge transport (sibling task) reads `LEADER_TAB_ID_KEY` from
+// The bridge transport (`bridge-sw.ts`) reads `LEADER_TAB_ID_KEY` from
 // `chrome.storage.session` for its three-factor pinning — keep the key
 // name and shape stable.
 
@@ -434,7 +157,7 @@ async function reconcileLeaderTabOnBoot(): Promise<void> {
 // Serialize concurrent ensureLeaderTab() calls so multiple lifecycle
 // triggers (top-level + onStartup + onInstalled) firing in quick
 // succession can't race past the storage check and create duplicate
-// pinned tabs. Same pattern as `offscreenLock` below.
+// pinned tabs.
 let leaderTabLock: Promise<void> | null = null;
 
 async function ensureLeaderTab(): Promise<void> {
@@ -515,76 +238,56 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 // ---------------------------------------------------------------------------
-// Offscreen document lifecycle
+// Action icon click — focus the pinned leader tab (the thin extension's UI).
 // ---------------------------------------------------------------------------
 
-const OFFSCREEN_URL = 'offscreen.html';
-
-// Serialize concurrent ensureOffscreen calls to prevent race conditions
-// where multiple callers pass hasDocument() before any creates the document.
-let offscreenLock: Promise<void> | null = null;
-
-async function ensureOffscreen(): Promise<void> {
-  if (offscreenLock) return offscreenLock;
-  offscreenLock = (async () => {
+async function focusLeaderTab(): Promise<void> {
+  const storedId = await readStoredLeaderTabId();
+  if (storedId !== undefined) {
+    let leaderTab: ChromeTab | undefined;
     try {
-      if (!chrome.offscreen) {
-        console.error(
-          '[slicc-sw] chrome.offscreen API not available — missing "offscreen" permission?'
-        );
-        return;
-      }
-      const exists = await chrome.offscreen.hasDocument();
-      if (exists) {
-        console.log('[slicc-sw] Offscreen document already exists');
-        return;
-      }
-      console.log('[slicc-sw] Creating offscreen document...');
-      // `USER_MEDIA` / `DISPLAY_MEDIA` are offscreen-API *reasons* (not
-      // manifest permissions): they let the offscreen document touch
-      // `navigator.mediaDevices` (e.g. `enumerateDevices`). The actual
-      // camera/mic/screen capture still happens in a visible popup window
-      // because the offscreen document has no surface to show Chrome's
-      // permission prompt / screen picker — see `capture-popup.html` and
-      // `packages/webapp/src/shell/supplemental-commands/extension-media-capture.ts`.
-      await chrome.offscreen.createDocument({
-        url: OFFSCREEN_URL,
-        reasons: ['WORKERS', 'USER_MEDIA', 'DISPLAY_MEDIA'],
-        justification:
-          'Runs the SLICC agent engine so work survives side panel close, and enumerates camera/mic/screen devices for media-capture commands.',
-      });
-      console.log('[slicc-sw] Offscreen document created');
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      // "Only a single offscreen document may be created" is benign — another
-      // call won the race. Only log unexpected errors.
-      if (!msg.includes('single offscreen')) {
-        console.error('[slicc-sw] Failed to create offscreen document:', err);
-      }
-    } finally {
-      offscreenLock = null;
+      leaderTab = await chrome.tabs.get(storedId);
+    } catch {
+      leaderTab = undefined;
     }
-  })();
-  return offscreenLock;
+    if (leaderTab !== undefined && isLeaderTabUrl(leaderTab.url)) {
+      await chrome.tabs.update(storedId, { active: true });
+      if (leaderTab.windowId !== undefined) {
+        await chrome.windows.update(leaderTab.windowId, { focused: true });
+      }
+      return;
+    }
+    // Stored leader tab is gone or has navigated away — clear and re-create.
+    await clearStoredLeaderTabId();
+  }
+  await ensureLeaderTab();
+  const newId = await readStoredLeaderTabId();
+  if (newId === undefined) return;
+  const tab = await chrome.tabs.get(newId).catch(() => undefined);
+  if (tab === undefined) return;
+  await chrome.tabs.update(newId, { active: true });
+  if (tab.windowId !== undefined) {
+    await chrome.windows.update(tab.windowId, { focused: true });
+  }
 }
 
-// Create offscreen doc on install/startup
-chrome.runtime.onInstalled?.addListener?.(() => {
-  ensureOffscreen();
+chrome.action.onClicked.addListener(() => {
+  chrome.action.setBadgeText({ text: '' });
+  focusLeaderTab().catch((err) => {
+    console.error('[slicc-sw] focusLeaderTab failed', err);
+  });
 });
-ensureOffscreen();
 
 // ---------------------------------------------------------------------------
 // Media-capture popup window
 // ---------------------------------------------------------------------------
 // Media capture (`getUserMedia` / `getDisplayMedia`) needs a *visible* surface
-// so Chrome can show its permission prompt / screen picker. The shell command
-// requesting the capture runs in the offscreen document (or the side-panel
-// shell); the offscreen document can't call `chrome.windows.create`, so it
-// asks the service worker to open the capture popup here. The popup performs
-// the capture and broadcasts the bytes back over `chrome.runtime` messaging,
-// which the requesting context picks up directly (no SW relay needed for the
-// result). See `capture-popup.html` / `capture-popup.js`.
+// so Chrome can show its permission prompt / screen picker. Callers ask the
+// service worker to open the capture popup here (they can't call
+// `chrome.windows.create` themselves). The popup performs the capture and
+// broadcasts the bytes back over `chrome.runtime` messaging, which the
+// requesting context picks up directly (no SW relay needed for the result).
+// See `capture-popup.html` / `capture-popup.js`.
 function isCaptureOpenWindowMsg(
   msg: unknown
 ): msg is { type: 'capture-open-window'; url: string; requestId?: string } {
@@ -662,47 +365,29 @@ async function addToSliccGroup(tabId: number): Promise<void> {
 
 // ---------------------------------------------------------------------------
 // Handoff notifications — alert the user when a main-frame document response
-// advertises a SLICC handoff via RFC 8288 `Link` header, and open the side
-// panel on notification click (user gesture required).
+// advertises a SLICC handoff via RFC 8288 `Link` header, and focus the
+// hosted leader tab on notification click (user gesture required).
 // ---------------------------------------------------------------------------
 
-/** Maps notification ID → windowId so the click handler can open the right panel. */
-const handoffNotificationWindows = new Map<string, number>();
+const handoffNotificationIds = new Set<string>();
 
-async function showHandoffNotification(windowId: number): Promise<void> {
-  const contexts = await chrome.runtime.getContexts({ contextTypes: ['SIDE_PANEL'] });
-  if (contexts.length > 0) return;
-
+function showHandoffNotification(): void {
   const notificationId = `slicc-handoff-${Date.now()}`;
-  handoffNotificationWindows.set(notificationId, windowId);
+  handoffNotificationIds.add(notificationId);
   chrome.action.setBadgeText({ text: '!' });
   chrome.action.setBadgeBackgroundColor({ color: '#ff5f72' });
   chrome.notifications.create(notificationId, {
     type: 'basic',
     iconUrl: 'logos/sliccy-color-1scoops-128x128.png',
     title: 'Slicc handoff received',
-    message: 'Click to open the Slicc side panel and process the handoff.',
+    message: 'Click to open the Slicc leader tab and process the handoff.',
   });
 }
 
 chrome.notifications.onClicked.addListener((notificationId: string) => {
-  const windowId = handoffNotificationWindows.get(notificationId);
-  handoffNotificationWindows.delete(notificationId);
+  if (!handoffNotificationIds.delete(notificationId)) return;
   chrome.action.setBadgeText({ text: '' });
-  if (windowId !== undefined) {
-    chrome.sidePanel.open({ windowId }).catch(() => {});
-  }
-  readStoredDetachedTabId()
-    .then(async (detachedTabId) => {
-      if (detachedTabId !== undefined) {
-        const tab = await chrome.tabs.get(detachedTabId);
-        await chrome.tabs.update(detachedTabId, { active: true });
-        if (tab.windowId !== undefined) {
-          await chrome.windows.update(tab.windowId, { focused: true });
-        }
-      }
-    })
-    .catch(() => {});
+  focusLeaderTab().catch(() => {});
 });
 
 // ---------------------------------------------------------------------------
@@ -711,22 +396,20 @@ chrome.notifications.onClicked.addListener((notificationId: string) => {
 // ---------------------------------------------------------------------------
 
 /**
- * Payload fingerprints of handoffs whose OS notification has already been shown
- * this service-worker lifetime. A site can advertise the same SLICC `Link` rel
- * on every page response; without this guard each navigation re-shows the
- * toast.
+ * Payload fingerprints of handoffs whose OS notification has already been
+ * shown this service-worker lifetime. A site can advertise the same SLICC
+ * `Link` rel on every page response; without this guard each navigation
+ * re-shows the toast.
  *
  * IMPORTANT: this set gates ONLY the notification — never the forward. The
- * durable cone-turn dedup lives in the long-lived offscreen `LickManager`,
- * which records a fingerprint only at the instant it actually fires (in-process,
- * no async delivery gap). The forward here (`chrome.runtime.sendMessage`) is
- * best-effort and silently drops when the offscreen document isn't listening
- * yet (e.g. cold start). If we suppressed the forward on "seen", a first
- * delivery that was dropped before the offscreen came up would lose the handoff
- * permanently. So we always forward and let the offscreen guard dedup the cone
- * turn. MV3 may evict and respawn the worker, resetting this set — an accepted
- * limitation of the in-memory design (a repeat toast can appear once after
- * eviction). See {@link handoffFingerprint}.
+ * forward here (`chrome.runtime.sendMessage`) is best-effort and silently
+ * drops when nothing is listening yet (e.g. the leader tab still booting).
+ * If we suppressed the forward on "seen", a first delivery that was dropped
+ * before the leader was ready would lose the handoff permanently. So we
+ * always forward and let the receiver dedup the cone turn. MV3 may evict
+ * and respawn the worker, resetting this set — an accepted limitation of
+ * the in-memory design (a repeat toast can appear once after eviction).
+ * See {@link handoffFingerprint}.
  */
 const notifiedHandoffFingerprints = new Set<string>();
 
@@ -751,24 +434,16 @@ chrome.webRequest.onHeadersReceived.addListener(
     const dispatch = (title?: string) => {
       if (title) payload.title = title;
       chrome.runtime.sendMessage({ source: 'service-worker' as const, payload }).catch(() => {
-        // Offscreen may not be listening yet — best effort.
+        // Leader may not be listening yet — best effort.
       });
     };
+    if (!alreadyNotified) showHandoffNotification();
     if (tabId >= 0) {
       chrome.tabs
         .get(tabId)
-        .then((tab) => {
-          if (!alreadyNotified && tab.windowId !== undefined) showHandoffNotification(tab.windowId);
-          dispatch(tab.title);
-        })
+        .then((tab) => dispatch(tab.title))
         .catch(() => dispatch());
     } else {
-      if (!alreadyNotified) {
-        chrome.windows
-          .getCurrent()
-          .then((w) => showHandoffNotification(w.id!))
-          .catch(() => {});
-      }
       dispatch();
     }
   },

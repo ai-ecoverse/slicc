@@ -17,9 +17,6 @@
     "notifications"
   ],
   "host_permissions": ["<all_urls>"],
-  "side_panel": {
-    "default_path": "index.html"
-  },
   "options_ui": {
     "page": "secrets.html",
     "open_in_tab": true

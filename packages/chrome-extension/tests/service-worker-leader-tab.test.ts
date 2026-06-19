@@ -3,9 +3,9 @@
  *
  * Focuses on reconcileLeaderTabOnBoot, ensureLeaderTab,
  * action.onClicked leader-focus path, and tabs.onRemoved cleanup.
- * Mirrors the detached-popout suite — the leader-tab lifecycle was
- * intentionally modeled on the same MV3 SW eviction + storage.session
- * pattern.
+ *
+ * After the Wave 9a thin-extension strip the leader tab is the only
+ * UI surface — there is no side panel or detached popout fallback.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -332,13 +332,13 @@ describe('leader tab — action.onClicked', () => {
     resetMocks();
   });
 
-  it('focuses the leader tab when no detached popout is locked', async () => {
+  it('focuses the stored leader tab', async () => {
     sessionStorage.set(LEADER_KEY, 21);
     tabsStore.set(21, { id: 21, windowId: 555, url: LEADER_URL });
     await loadSw();
     mockChrome.tabs.update.mockClear();
     mockChrome.windows.update.mockClear();
-    mockChrome.sidePanel.open.mockClear();
+    mockChrome.tabs.create.mockClear();
 
     for (const cb of actionClickListeners) {
       cb({ id: 42, windowId: 0 });
@@ -348,66 +348,49 @@ describe('leader tab — action.onClicked', () => {
 
     expect(mockChrome.tabs.update).toHaveBeenCalledWith(21, { active: true });
     expect(mockChrome.windows.update).toHaveBeenCalledWith(555, { focused: true });
-    expect(mockChrome.sidePanel.open).not.toHaveBeenCalled();
+    expect(mockChrome.tabs.create).not.toHaveBeenCalled();
   });
 
-  it('detached popout takes precedence over the leader tab', async () => {
-    // Both are stored and alive. During the Wave 6 transition the detached
-    // path must continue to win — `service-worker-detached.test.ts` exercises
-    // the same expectation without a leader tab present.
-    sessionStorage.set('slicc.detached.tabId', 30);
-    sessionStorage.set(LEADER_KEY, 21);
-    tabsStore.set(30, {
-      id: 30,
-      windowId: 555,
-      url: 'chrome-extension://test/index.html?detached=1',
-    });
-    tabsStore.set(21, { id: 21, windowId: 777, url: LEADER_URL });
-    await loadSw();
-    mockChrome.tabs.update.mockClear();
-    mockChrome.windows.update.mockClear();
-
-    for (const cb of actionClickListeners) {
-      cb({ id: 42, windowId: 0 });
-    }
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
-
-    expect(mockChrome.tabs.update).toHaveBeenCalledWith(30, { active: true });
-    expect(mockChrome.tabs.update).not.toHaveBeenCalledWith(21, { active: true });
-  });
-
-  it('falls back to side panel when the stored leader tab is gone', async () => {
-    // detached not set, leader stored but dead → side-panel fallback.
+  it('creates a new leader tab when the stored one is gone', async () => {
     sessionStorage.set(LEADER_KEY, 88);
     // tabsStore does not contain 88.
     await loadSw();
-    mockChrome.sidePanel.open.mockClear();
+    mockChrome.tabs.create.mockClear();
 
     for (const cb of actionClickListeners) {
       cb({ id: 42, windowId: 0 });
     }
     await new Promise((r) => setTimeout(r, 0));
     await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
-    expect(sessionStorage.has(LEADER_KEY)).toBe(false);
-    expect(mockChrome.sidePanel.open).toHaveBeenCalledWith({ tabId: 42 });
+    expect(mockChrome.tabs.create).toHaveBeenCalledWith({
+      url: LEADER_URL,
+      active: false,
+      pinned: true,
+    });
   });
 
-  it('clears stale leader id and falls back to side panel when the tab navigated away', async () => {
+  it('clears stale leader id and creates a new leader tab when the tab navigated away', async () => {
     sessionStorage.set(LEADER_KEY, 12);
     tabsStore.set(12, { id: 12, windowId: 100, url: 'https://www.example.com/' });
     await loadSw();
-    mockChrome.sidePanel.open.mockClear();
+    mockChrome.tabs.create.mockClear();
 
     for (const cb of actionClickListeners) {
       cb({ id: 42, windowId: 0 });
     }
     await new Promise((r) => setTimeout(r, 0));
     await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
-    expect(sessionStorage.has(LEADER_KEY)).toBe(false);
-    expect(mockChrome.sidePanel.open).toHaveBeenCalledWith({ tabId: 42 });
+    expect(sessionStorage.has(LEADER_KEY)).toBe(true);
+    expect(sessionStorage.get(LEADER_KEY)).not.toBe(12);
+    expect(mockChrome.tabs.create).toHaveBeenCalledWith({
+      url: LEADER_URL,
+      active: false,
+      pinned: true,
+    });
   });
 });
 
