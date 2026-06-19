@@ -50,8 +50,6 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
           remove: vi.fn(async () => undefined),
         },
       },
-      sidePanel: { setPanelBehavior: vi.fn(), setOptions: vi.fn() },
-      offscreen: { hasDocument: vi.fn(async () => true) },
       action: {
         setBadgeText: vi.fn(),
         setBadgeBackgroundColor: vi.fn(),

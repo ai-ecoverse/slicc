@@ -1,11 +1,19 @@
 /**
  * CDP-driven smoke test for the SLICC Chrome extension.
  *
- * End-to-end verification: launches a disposable Chrome profile with
- * `dist/extension/` loaded, drives the extension via CDP to run the two
- * highest-risk shell command paths (`ffmpeg` transcoding a staged WAV
- * and `node -e` resolving an npm `require()`), and asserts both
- * complete without remote-code policy violations. Network capture
+ * KNOWN-STALE — Wave 13 follow-up. This script targets the legacy
+ * fat-extension architecture (bundled side-panel UI + offscreen
+ * document) that the thin-extension strip removed. The agent surface
+ * now lives in a hosted leader tab driven via the SW's CDP bridge;
+ * the thin-extension equivalent of this smoke test lands as part of
+ * the Wave 13 verification task. CI currently runs this with
+ * `continue-on-error: true`.
+ *
+ * End-to-end verification (legacy): launches a disposable Chrome
+ * profile with `dist/extension/` loaded, drives the extension via CDP
+ * to run the two highest-risk shell command paths (`ffmpeg` transcoding
+ * a staged WAV and `node -e` resolving an npm `require()`), and asserts
+ * both complete without remote-code policy violations. Network capture
  * spans the panel AND the offscreen document (where the agent shell
  * runs) so the `ffmpeg-core.js` fetch — which happens in offscreen,
  * not the panel — is actually observable.

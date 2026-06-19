@@ -57,14 +57,6 @@ class MockWebSocket {
 
 function createChromeMock() {
   return {
-    sidePanel: {
-      setPanelBehavior: vi.fn(),
-      setOptions: vi.fn(),
-    },
-    offscreen: {
-      hasDocument: vi.fn(async () => true),
-      createDocument: vi.fn(),
-    },
     action: {
       setBadgeText: vi.fn(async () => undefined),
       setBadgeBackgroundColor: vi.fn(async () => undefined),

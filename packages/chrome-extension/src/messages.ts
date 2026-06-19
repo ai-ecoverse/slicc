@@ -1,8 +1,11 @@
 /**
- * Shared message types for communication between extension contexts:
- * Side Panel <-> Service Worker <-> Offscreen Document.
+ * Shared message types for communication between extension contexts and
+ * webapp-consumed cross-package helpers.
  *
- * All messages flow through the service worker as a relay.
+ * Historically used to relay messages between Side Panel, Service Worker,
+ * and Offscreen Document; the thin extension no longer bundles those UI
+ * surfaces, but the typed envelopes are still consumed by the standalone
+ * webapp's kernel-worker and crontask/webhook commands.
  */
 
 import type { MessageAttachment } from '../../webapp/src/core/attachments.js';
