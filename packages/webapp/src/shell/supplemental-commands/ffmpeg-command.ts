@@ -156,14 +156,158 @@ export function parseAvfoundationDeviceSpec(spec: string): {
   };
 }
 
+// Conservative list of ffmpeg flags that consume a single value.
+// Anything not in the list is treated as a boolean toggle.
+const VALUE_TAKING_FLAGS = new Set([
+  '-f',
+  '-i',
+  '-c',
+  '-c:v',
+  '-c:a',
+  '-vf',
+  '-af',
+  '-filter:v',
+  '-filter:a',
+  '-filter_complex',
+  '-r',
+  '-b:v',
+  '-b:a',
+  '-s',
+  '-t',
+  '-ss',
+  '-to',
+  '-pix_fmt',
+  '-vcodec',
+  '-acodec',
+  '-ar',
+  '-ac',
+  '-frames:v',
+  '-frames:a',
+  '-q:v',
+  '-q:a',
+  '-crf',
+  '-preset',
+  '-tune',
+  '-movflags',
+  '-map',
+  '-metadata',
+  '-loglevel',
+  '-threads',
+  '-video_size',
+  '-framerate',
+  '-pixel_format',
+  '-update',
+  '-list_devices',
+  '-warmup',
+]);
+
+interface ParseState {
+  inputs: ParsedInput[];
+  outputOpts: string[];
+  outputPath: string | null;
+  listDevices: boolean;
+  warmupMs?: number;
+  exactSize: boolean;
+  pendingOpts: string[];
+  pendingFormat?: string;
+  pendingVideoSize?: { width: number; height: number };
+  pendingFrameRate?: number;
+}
+
+function newParseState(): ParseState {
+  return {
+    inputs: [],
+    outputOpts: [],
+    outputPath: null,
+    listDevices: false,
+    exactSize: false,
+    pendingOpts: [],
+  };
+}
+
+function requireValueAt(args: string[], i: number, flag: string): string {
+  const v = args[i + 1];
+  if (typeof v !== 'string') throw new Error(`ffmpeg: ${flag} requires a value`);
+  return v;
+}
+
+/**
+ * Push the parsed `-i FILE` onto `state.inputs`, capturing the
+ * pending pre-input options (`-f`, `-video_size`, …) so per-input
+ * flags stay bound to the right file when argv is rebuilt.
+ */
+function handleInputToken(state: ParseState, args: string[], i: number): number {
+  const path = requireValueAt(args, i, '-i');
+  state.inputs.push({
+    path,
+    format: state.pendingFormat,
+    videoSize: state.pendingVideoSize,
+    frameRate: state.pendingFrameRate,
+    raw: [...state.pendingOpts, '-i', path],
+  });
+  state.pendingFormat = undefined;
+  state.pendingVideoSize = undefined;
+  state.pendingFrameRate = undefined;
+  state.pendingOpts = [];
+  return i + 2;
+}
+
+function handleVideoSizeToken(state: ParseState, args: string[], i: number): number {
+  const value = requireValueAt(args, i, '-video_size');
+  const m = /^(\d+)x(\d+)$/.exec(value);
+  if (m) state.pendingVideoSize = { width: parseInt(m[1], 10), height: parseInt(m[2], 10) };
+  state.pendingOpts.push('-video_size', value);
+  return i + 2;
+}
+
+function handleFramerateToken(state: ParseState, args: string[], i: number): number {
+  const value = requireValueAt(args, i, '-framerate');
+  const n = parseFloat(value);
+  if (!Number.isNaN(n)) state.pendingFrameRate = n;
+  state.pendingOpts.push('-framerate', value);
+  return i + 2;
+}
+
+function handleListDevicesToken(state: ParseState, args: string[], i: number): number {
+  const value = requireValueAt(args, i, '-list_devices');
+  if (/^(true|1|yes)$/i.test(value)) state.listDevices = true;
+  state.pendingOpts.push('-list_devices', value);
+  return i + 2;
+}
+
+function handleWarmupToken(state: ParseState, args: string[], i: number): number {
+  const value = requireValueAt(args, i, '-warmup');
+  const n = parseInt(value, 10);
+  if (!Number.isNaN(n) && n >= 0) state.warmupMs = n;
+  return i + 2;
+}
+
+function handleGenericOptionToken(
+  state: ParseState,
+  args: string[],
+  i: number,
+  tok: string
+): number {
+  if (VALUE_TAKING_FLAGS.has(tok)) {
+    const value = requireValueAt(args, i, tok);
+    state.pendingOpts.push(tok, value);
+    return i + 2;
+  }
+  state.pendingOpts.push(tok);
+  return i + 1;
+}
+
+function handlePositionalToken(state: ParseState, tok: string, i: number): number {
+  // Positional: binds to an output file. Whatever options were
+  // pending at this point apply to *this* output. We currently
+  // surface only the last output, but options for it are correct.
+  state.outputPath = tok;
+  state.outputOpts = state.pendingOpts;
+  state.pendingOpts = [];
+  return i + 1;
+}
+
 export function parseFfmpegArgs(args: string[]): ParsedFfmpegInvocation {
-  const inputs: ParsedInput[] = [];
-  let outputOpts: string[] = [];
-  let outputPath: string | null = null;
-  let listDevices = false;
-  let warmupMs: number | undefined;
-  let exactSize = false;
-  let i = 0;
   // ffmpeg's option binding rule: most options apply to the *next*
   // file (input or output) they precede on the command line. We
   // collect each option into `pendingOpts` and flush it the next
@@ -171,158 +315,61 @@ export function parseFfmpegArgs(args: string[]): ParsedFfmpegInvocation {
   // path (binds to that output). This preserves correctness for
   // multi-input invocations like `-i a.mp4 -ss 5 -i b.mp4 out.mp4`
   // where `-ss 5` is a seek on `b.mp4`, not an output option.
-  let pendingOpts: string[] = [];
-  let pendingFormat: string | undefined;
-  let pendingVideoSize: { width: number; height: number } | undefined;
-  let pendingFrameRate: number | undefined;
-
-  const takesValue = (flag: string): boolean => {
-    // Conservative list of ffmpeg flags that consume a single value.
-    // Anything not in the list is treated as a boolean toggle.
-    return new Set([
-      '-f',
-      '-i',
-      '-c',
-      '-c:v',
-      '-c:a',
-      '-vf',
-      '-af',
-      '-filter:v',
-      '-filter:a',
-      '-filter_complex',
-      '-r',
-      '-b:v',
-      '-b:a',
-      '-s',
-      '-t',
-      '-ss',
-      '-to',
-      '-pix_fmt',
-      '-vcodec',
-      '-acodec',
-      '-ar',
-      '-ac',
-      '-frames:v',
-      '-frames:a',
-      '-q:v',
-      '-q:a',
-      '-crf',
-      '-preset',
-      '-tune',
-      '-movflags',
-      '-map',
-      '-metadata',
-      '-loglevel',
-      '-threads',
-      '-video_size',
-      '-framerate',
-      '-pixel_format',
-      '-update',
-      '-list_devices',
-      '-warmup',
-    ]).has(flag);
-  };
-
-  const requireValue = (flag: string): string => {
-    const v = args[i + 1];
-    if (typeof v !== 'string') {
-      throw new Error(`ffmpeg: ${flag} requires a value`);
-    }
-    return v;
-  };
-
+  const state = newParseState();
+  let i = 0;
   while (i < args.length) {
     const tok = args[i];
     if (tok === '-i') {
-      const path = requireValue('-i');
-      inputs.push({
-        path,
-        format: pendingFormat,
-        videoSize: pendingVideoSize,
-        frameRate: pendingFrameRate,
-        raw: [...pendingOpts, '-i', path],
-      });
-      pendingFormat = undefined;
-      pendingVideoSize = undefined;
-      pendingFrameRate = undefined;
-      pendingOpts = [];
-      i += 2;
+      i = handleInputToken(state, args, i);
       continue;
     }
     if (tok === '-f') {
-      const value = requireValue('-f');
-      pendingFormat = value;
-      pendingOpts.push(tok, value);
+      const value = requireValueAt(args, i, '-f');
+      state.pendingFormat = value;
+      state.pendingOpts.push('-f', value);
       i += 2;
       continue;
     }
     if (tok === '-video_size') {
-      const value = requireValue('-video_size');
-      const m = /^(\d+)x(\d+)$/.exec(value);
-      if (m) pendingVideoSize = { width: parseInt(m[1], 10), height: parseInt(m[2], 10) };
-      pendingOpts.push(tok, value);
-      i += 2;
+      i = handleVideoSizeToken(state, args, i);
       continue;
     }
     if (tok === '-framerate') {
-      const value = requireValue('-framerate');
-      const n = parseFloat(value);
-      if (!Number.isNaN(n)) pendingFrameRate = n;
-      pendingOpts.push(tok, value);
-      i += 2;
+      i = handleFramerateToken(state, args, i);
       continue;
     }
     // avfoundation device enumeration request. ffmpeg writes the
     // device list to stderr and exits non-zero with "Output file is
     // required" if you actually try to run, so we intercept up front.
     if (tok === '-list_devices') {
-      const value = requireValue('-list_devices');
-      if (/^(true|1|yes)$/i.test(value)) listDevices = true;
-      pendingOpts.push(tok, value);
-      i += 2;
+      i = handleListDevicesToken(state, args, i);
       continue;
     }
     // Custom flag: photo warmup override (ms).
     if (tok === '-warmup') {
-      const value = requireValue('-warmup');
-      const n = parseInt(value, 10);
-      if (!Number.isNaN(n) && n >= 0) warmupMs = n;
-      i += 2;
+      i = handleWarmupToken(state, args, i);
       continue;
     }
     // Custom flag: switch getUserMedia constraints to `exact:`.
     if (tok === '-exact_size') {
-      exactSize = true;
+      state.exactSize = true;
       i += 1;
       continue;
     }
     if (tok.startsWith('-')) {
-      if (takesValue(tok)) {
-        const value = requireValue(tok);
-        pendingOpts.push(tok, value);
-        i += 2;
-        continue;
-      }
-      pendingOpts.push(tok);
-      i += 1;
+      i = handleGenericOptionToken(state, args, i, tok);
       continue;
     }
-    // Positional: binds to an output file. Whatever options were
-    // pending at this point apply to *this* output. We currently
-    // surface only the last output, but options for it are correct.
-    outputPath = tok;
-    outputOpts = pendingOpts;
-    pendingOpts = [];
-    i += 1;
+    i = handlePositionalToken(state, tok, i);
   }
 
   return {
-    inputs,
-    outputOpts,
-    outputPath,
-    listDevices,
-    ...(warmupMs !== undefined ? { warmupMs } : {}),
-    exactSize,
+    inputs: state.inputs,
+    outputOpts: state.outputOpts,
+    outputPath: state.outputPath,
+    listDevices: state.listDevices,
+    ...(state.warmupMs !== undefined ? { warmupMs: state.warmupMs } : {}),
+    exactSize: state.exactSize,
   };
 }
 
@@ -738,10 +785,102 @@ async function enumerateMediaDevices(): Promise<MediaDeviceSummary> {
   return panelRpc.call('enumerate-media-devices', undefined, { timeoutMs: 10_000 });
 }
 
+type CmdResult = { stdout: string; stderr: string; exitCode: number };
+
+/**
+ * Run the popup-based extension capture path and normalize the
+ * payload into a {@link CameraCaptureResult}. The bytes are copied
+ * through a fresh `ArrayBuffer` so the VFS write later in the
+ * pipeline gets a non-shared backing buffer.
+ */
+async function captureViaExtensionPopup(
+  plan: ReturnType<typeof buildCameraRequest>
+): Promise<CameraCaptureResult> {
+  // Extension mode: capture in a visible popup window so Chrome can
+  // show its camera/mic permission prompt — the offscreen document
+  // (where this shell command usually runs) has no surface for it.
+  const popup = await captureViaPopup({ kind: 'camera', ...plan.request });
+  const buf = new ArrayBuffer(popup.bytes.byteLength);
+  new Uint8Array(buf).set(popup.bytes);
+  return {
+    bytes: buf,
+    mimeType: popup.mimeType,
+    width: popup.width,
+    height: popup.height,
+    ...(popup.durationMs !== undefined ? { durationMs: popup.durationMs } : {}),
+  };
+}
+
+/**
+ * Round-trip the capture request through the panel-RPC bridge to
+ * the page realm. Returns `null` when no bridge is available so
+ * the caller can surface the standard "requires a browser context"
+ * error.
+ */
+async function captureViaPanelRpc(
+  plan: ReturnType<typeof buildCameraRequest>
+): Promise<CameraCaptureResult | null> {
+  const panelRpc = getPanelRpcClient();
+  if (!panelRpc) return null;
+  // Camera capture can take a while when permission has not
+  // been granted yet (user has to click "Allow") — give it a
+  // generous timeout matching `screencapture`.
+  const r = await panelRpc.call('capture-camera', plan.request, { timeoutMs: 5 * 60_000 });
+  return {
+    bytes: r.bytes,
+    mimeType: r.mimeType,
+    width: r.width,
+    height: r.height,
+    durationMs: r.durationMs,
+  };
+}
+
+/**
+ * Pick a capture mechanism (extension popup → direct getUserMedia
+ * → panel-RPC) and return either the captured frames/clip or a
+ * fully-formed shell error result. The error mapper translates
+ * NotAllowed / NotFound into friendly messages.
+ */
+async function performCameraCapture(
+  plan: ReturnType<typeof buildCameraRequest>
+): Promise<{ result: CameraCaptureResult } | { error: CmdResult }> {
+  try {
+    if (isExtensionFloat()) {
+      return { result: await captureViaExtensionPopup(plan) };
+    }
+    if (hasLocalDom() && typeof navigator !== 'undefined' && navigator.mediaDevices) {
+      return { result: await captureCamera(plan.request) };
+    }
+    const r = await captureViaPanelRpc(plan);
+    if (!r) {
+      return {
+        error: {
+          stdout: '',
+          stderr:
+            'ffmpeg: camera capture requires a browser context — not available in this runtime\n',
+          exitCode: 1,
+        },
+      };
+    }
+    return { result: r };
+  } catch (err) {
+    return { error: { stdout: '', stderr: formatCaptureError(err), exitCode: 1 } };
+  }
+}
+
+function formatCaptureError(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  if (/NotAllowedError|Permission denied/i.test(message)) {
+    return 'ffmpeg: camera permission denied\n';
+  }
+  if (/NotFoundError/i.test(message)) return 'ffmpeg: no camera device found\n';
+  return `ffmpeg: ${message}\n`;
+}
+
 async function runAvfoundationCapture(
   parsed: ParsedFfmpegInvocation,
   ctx: Parameters<Parameters<typeof defineCommand>[1]>[1]
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+): Promise<CmdResult> {
   let plan: ReturnType<typeof buildCameraRequest>;
   try {
     plan = buildCameraRequest(parsed);
@@ -768,70 +907,9 @@ async function runAvfoundationCapture(
     };
   }
 
-  let result: CameraCaptureResult;
-  try {
-    if (isExtensionFloat()) {
-      // Extension mode: capture in a visible popup window so Chrome can
-      // show its camera/mic permission prompt — the offscreen document
-      // (where this shell command usually runs) has no surface for it.
-      const popup = await captureViaPopup({ kind: 'camera', ...plan.request });
-      const buf = new ArrayBuffer(popup.bytes.byteLength);
-      new Uint8Array(buf).set(popup.bytes);
-      result = {
-        bytes: buf,
-        mimeType: popup.mimeType,
-        width: popup.width,
-        height: popup.height,
-        ...(popup.durationMs !== undefined ? { durationMs: popup.durationMs } : {}),
-      };
-    } else if (hasLocalDom() && typeof navigator !== 'undefined' && navigator.mediaDevices) {
-      result = await captureCamera(plan.request);
-    } else {
-      const panelRpc = getPanelRpcClient();
-      if (!panelRpc) {
-        return {
-          stdout: '',
-          stderr:
-            'ffmpeg: camera capture requires a browser context — not available in this runtime\n',
-          exitCode: 1,
-        };
-      }
-      // Camera capture can take a while when permission has not
-      // been granted yet (user has to click "Allow") — give it a
-      // generous timeout matching `screencapture`.
-      const r = await panelRpc.call('capture-camera', plan.request, {
-        timeoutMs: 5 * 60_000,
-      });
-      result = {
-        bytes: r.bytes,
-        mimeType: r.mimeType,
-        width: r.width,
-        height: r.height,
-        durationMs: r.durationMs,
-      };
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (/NotAllowedError|Permission denied/i.test(message)) {
-      return {
-        stdout: '',
-        stderr: 'ffmpeg: camera permission denied\n',
-        exitCode: 1,
-      };
-    }
-    if (/NotFoundError/i.test(message)) {
-      return {
-        stdout: '',
-        stderr: 'ffmpeg: no camera device found\n',
-        exitCode: 1,
-      };
-    }
-    return {
-      stdout: '',
-      stderr: `ffmpeg: ${message}\n`,
-      exitCode: 1,
-    };
-  }
+  const captured = await performCameraCapture(plan);
+  if ('error' in captured) return captured.error;
+  const result = captured.result;
 
   const sizeKB = Math.round(result.bytes.byteLength / 1024);
   const dims = `${result.width}x${result.height}`;
@@ -949,28 +1027,103 @@ async function transcodeCapturedBytes(args: {
   }
 }
 
-async function runWasmFfmpeg(
+interface ResolvedInput {
+  ffmpegName: string;
+  bytes: Uint8Array;
+}
+
+/**
+ * Resolve every `-i FILE` against the VFS up front and read the
+ * bytes. Returns a fully-typed list of MEMFS-name + bytes pairs,
+ * or a `{ error }` shell result on the first missing input.
+ */
+async function loadResolvedInputs(
   parsed: ParsedFfmpegInvocation,
   ctx: Parameters<Parameters<typeof defineCommand>[1]>[1]
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  // Validate inputs up front so we don't pay the cold-start cost
-  // before realizing the user typo'd a path.
-  const resolvedInputs: Array<{ ffmpegName: string; bytes: Uint8Array }> = [];
+): Promise<{ inputs: ResolvedInput[] } | { error: CmdResult }> {
+  const resolvedInputs: ResolvedInput[] = [];
   for (const [idx, input] of parsed.inputs.entries()) {
     const resolved = ctx.fs.resolvePath(ctx.cwd, input.path);
     if (!(await ctx.fs.exists(resolved))) {
       return {
-        stdout: '',
-        stderr: `ffmpeg: input file not found: ${input.path}\n`,
-        exitCode: 1,
+        error: {
+          stdout: '',
+          stderr: `ffmpeg: input file not found: ${input.path}\n`,
+          exitCode: 1,
+        },
       };
     }
     const bytes = await ctx.fs.readFileBuffer(resolved);
-    resolvedInputs.push({
-      ffmpegName: inferInputName(input, idx),
-      bytes,
-    });
+    resolvedInputs.push({ ffmpegName: inferInputName(input, idx), bytes });
   }
+  return { inputs: resolvedInputs };
+}
+
+/**
+ * Rebuild argv with the MEMFS-local input names. Each input's
+ * `raw` carries the options that precede it on the user's command
+ * line, so splicing them back keeps per-input flags (`-ss`, `-f`,
+ * `-vf`, …) bound to the right file.
+ */
+function buildFinalFfmpegArgs(
+  parsed: ParsedFfmpegInvocation,
+  resolvedInputs: ResolvedInput[],
+  outputName: string
+): string[] {
+  const finalArgs: string[] = [];
+  for (const [idx, input] of parsed.inputs.entries()) {
+    // Strip the original -i path and replace with the MEMFS name.
+    // Preserve any pre-input options the user provided (`-f`,
+    // `-video_size`, …) so user filters survive.
+    const ffmpegName = resolvedInputs[idx].ffmpegName;
+    const raw = input.raw;
+    for (let k = 0; k < raw.length; k++) {
+      if (raw[k] === '-i') {
+        finalArgs.push('-i', ffmpegName);
+        k += 1;
+        continue;
+      }
+      finalArgs.push(raw[k]);
+    }
+  }
+  finalArgs.push(...parsed.outputOpts);
+  finalArgs.push(outputName);
+  return finalArgs;
+}
+
+/**
+ * Best-effort MEMFS cleanup so repeated invocations don't pile up
+ * megabytes of stale media in the wasm heap. Swallow each
+ * `deleteFile` error individually.
+ */
+async function cleanupMemfs(
+  ffmpeg: Awaited<ReturnType<typeof getFfmpeg>>,
+  resolvedInputs: ResolvedInput[],
+  outputName: string
+): Promise<void> {
+  for (const input of resolvedInputs) {
+    try {
+      await ffmpeg.deleteFile(input.ffmpegName);
+    } catch {
+      /* noop */
+    }
+  }
+  try {
+    await ffmpeg.deleteFile(outputName);
+  } catch {
+    /* noop */
+  }
+}
+
+async function runWasmFfmpeg(
+  parsed: ParsedFfmpegInvocation,
+  ctx: Parameters<Parameters<typeof defineCommand>[1]>[1]
+): Promise<CmdResult> {
+  // Validate inputs up front so we don't pay the cold-start cost
+  // before realizing the user typo'd a path.
+  const loaded = await loadResolvedInputs(parsed, ctx);
+  if ('error' in loaded) return loaded.error;
+  const resolvedInputs = loaded.inputs;
 
   const outputPath = parsed.outputPath!;
   const outputName = `__out_${outputPath.split('/').pop() || 'out.bin'}`;
@@ -1002,31 +1155,7 @@ async function runWasmFfmpeg(
       await ffmpeg.writeFile(input.ffmpegName, input.bytes);
     }
 
-    // Rebuild argv with the MEMFS-local input names. Each input's
-    // `raw` carries the options that precede it on the user's
-    // command line, so splicing them back keeps per-input flags
-    // (`-ss`, `-f`, `-vf`, …) bound to the right file.
-    const finalArgs: string[] = [];
-    for (const [idx, input] of parsed.inputs.entries()) {
-      // Strip the original -i path and replace with the MEMFS name.
-      // Preserve any pre-input options the user provided (`-f`,
-      // `-video_size`, …) so user filters survive.
-      const ffmpegName = resolvedInputs[idx].ffmpegName;
-      const rawWithoutOriginalPath: string[] = [];
-      const raw = input.raw;
-      for (let k = 0; k < raw.length; k++) {
-        if (raw[k] === '-i') {
-          rawWithoutOriginalPath.push('-i', ffmpegName);
-          k += 1;
-          continue;
-        }
-        rawWithoutOriginalPath.push(raw[k]);
-      }
-      finalArgs.push(...rawWithoutOriginalPath);
-    }
-    finalArgs.push(...parsed.outputOpts);
-    finalArgs.push(outputName);
-
+    const finalArgs = buildFinalFfmpegArgs(parsed, resolvedInputs, outputName);
     const exitCode = await ffmpeg.exec(finalArgs);
     if (exitCode !== 0) {
       return {
@@ -1045,11 +1174,7 @@ async function runWasmFfmpeg(
     const resolvedOutput = ctx.fs.resolvePath(ctx.cwd, outputPath);
     await ctx.fs.writeFile(resolvedOutput, outputBytes);
 
-    return {
-      stdout: '',
-      stderr,
-      exitCode: 0,
-    };
+    return { stdout: '', stderr, exitCode: 0 };
   } catch (err) {
     return {
       stdout: '',
@@ -1062,19 +1187,6 @@ async function runWasmFfmpeg(
     } catch {
       /* noop */
     }
-    // Best-effort MEMFS cleanup so repeated invocations don't pile
-    // up megabytes of stale media in the wasm heap.
-    for (const input of resolvedInputs) {
-      try {
-        await ffmpeg.deleteFile(input.ffmpegName);
-      } catch {
-        /* noop */
-      }
-    }
-    try {
-      await ffmpeg.deleteFile(outputName);
-    } catch {
-      /* noop */
-    }
+    await cleanupMemfs(ffmpeg, resolvedInputs, outputName);
   }
 }

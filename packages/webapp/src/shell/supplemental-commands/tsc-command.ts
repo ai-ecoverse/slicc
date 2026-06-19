@@ -137,6 +137,48 @@ export function parseTscArgs(args: string[]): ParsedTscArgs {
 }
 
 /**
+ * Consume a quoted string starting at `start` (the opening quote).
+ * Returns the verbatim slice (including both quotes) and the index
+ * just past the closing quote. Honors backslash escapes so the
+ * closing quote inside an escape sequence isn't treated as the
+ * terminator.
+ */
+function consumeQuotedString(
+  input: string,
+  start: number,
+  quote: string
+): { text: string; next: number } {
+  let out = input[start];
+  let i = start + 1;
+  while (i < input.length) {
+    const ch = input[i];
+    out += ch;
+    if (ch === '\\' && i + 1 < input.length) {
+      out += input[i + 1];
+      i += 2;
+      continue;
+    }
+    i += 1;
+    if (ch === quote) return { text: out, next: i };
+  }
+  return { text: out, next: i };
+}
+
+/** Return the index just past the next newline (or EOF). */
+function skipLineComment(input: string, start: number): number {
+  let i = start;
+  while (i < input.length && input[i] !== '\n') i += 1;
+  return i;
+}
+
+/** Return the index just past the matching `*\/` (or EOF). */
+function skipBlockComment(input: string, start: number): number {
+  let i = start + 2;
+  while (i < input.length && !(input[i] === '*' && input[i + 1] === '/')) i += 1;
+  return i + 2;
+}
+
+/**
  * Strip `//` line and `/* … *\/` block comments from a JSON-with-comments
  * string. tsconfig.json allows comments; JSON.parse does not. Quoted
  * strings are preserved as-is so paths like `"https://example.com"`
@@ -145,36 +187,20 @@ export function parseTscArgs(args: string[]): ParsedTscArgs {
 export function stripJsonComments(input: string): string {
   let out = '';
   let i = 0;
-  let inString = false;
-  let stringQuote = '';
   while (i < input.length) {
     const ch = input[i];
-    if (inString) {
-      out += ch;
-      if (ch === '\\' && i + 1 < input.length) {
-        out += input[i + 1];
-        i += 2;
-        continue;
-      }
-      if (ch === stringQuote) inString = false;
-      i += 1;
-      continue;
-    }
     if (ch === '"' || ch === "'") {
-      inString = true;
-      stringQuote = ch;
-      out += ch;
-      i += 1;
+      const { text, next } = consumeQuotedString(input, i, ch);
+      out += text;
+      i = next;
       continue;
     }
     if (ch === '/' && input[i + 1] === '/') {
-      while (i < input.length && input[i] !== '\n') i += 1;
+      i = skipLineComment(input, i);
       continue;
     }
     if (ch === '/' && input[i + 1] === '*') {
-      i += 2;
-      while (i < input.length && !(input[i] === '*' && input[i + 1] === '/')) i += 1;
-      i += 2;
+      i = skipBlockComment(input, i);
       continue;
     }
     out += ch;
@@ -297,126 +323,155 @@ function transpileOne(
   };
 }
 
-export function createTscCommand(): Command {
-  return defineCommand('tsc', async (args, ctx) => {
-    let parsed: ParsedTscArgs;
-    try {
-      parsed = parseTscArgs(args);
-    } catch (err) {
-      return {
+/**
+ * Stdin → stdout transpile (`cat foo.ts | tsc`). Returns the full
+ * shell result so the command dispatcher can return it directly.
+ */
+function runStdinTranspile(
+  ts: TypeScriptModule,
+  parsed: ParsedTscArgs,
+  config: ResolvedTscConfig,
+  source: string
+): { stdout: string; stderr: string; exitCode: number } {
+  const { outputText, diagnostics } = transpileOne(
+    ts,
+    source,
+    '<stdin>.ts',
+    config.compilerOptions,
+    true
+  );
+  const errLines = diagnostics.map((d) => diagnosticToString(ts, d));
+  const stderr = errLines.length > 0 ? `${errLines.join('\n')}\n` : '';
+  return {
+    stdout: parsed.noEmit ? '' : outputText,
+    stderr,
+    exitCode: diagnostics.length > 0 ? 1 : 0,
+  };
+}
+
+/**
+ * Read, transpile, and (unless `--noEmit`) write a single file.
+ * Returns the per-file stderr fragment and whether the file
+ * contributed an error to the overall exit code.
+ */
+async function transpileOneFile(
+  ts: TypeScriptModule,
+  ctx: CommandContext,
+  fileArg: string,
+  parsed: ParsedTscArgs,
+  config: ResolvedTscConfig
+): Promise<{ stderr: string; hadError: boolean }> {
+  const inputPath = ctx.fs.resolvePath(ctx.cwd, fileArg);
+  if (!(await ctx.fs.exists(inputPath))) {
+    return { stderr: `tsc: ${fileArg}: no such file\n`, hadError: true };
+  }
+  let source: string;
+  try {
+    source = await ctx.fs.readFile(inputPath);
+  } catch (err) {
+    return {
+      stderr: `tsc: ${fileArg}: ${err instanceof Error ? err.message : String(err)}\n`,
+      hadError: true,
+    };
+  }
+
+  // Touch the script-kind helper so the import isn't dead code;
+  // `transpileModule` already infers kind from `fileName`, so we
+  // don't pass it through, but keeping the helper exported makes
+  // it available to the upcoming `test` command without a refactor.
+  void inferScriptKind(ts, inputPath);
+
+  const { outputText, diagnostics } = transpileOne(
+    ts,
+    source,
+    inputPath,
+    config.compilerOptions,
+    true
+  );
+
+  const stderrParts: string[] = [];
+  for (const d of diagnostics) stderrParts.push(`${diagnosticToString(ts, d)}\n`);
+  let hadError = diagnostics.length > 0;
+
+  if (parsed.noEmit) return { stderr: stderrParts.join(''), hadError };
+
+  const outputPath = ctx.fs.resolvePath(ctx.cwd, deriveOutputPath(inputPath, parsed.outDir));
+  try {
+    await ctx.fs.writeFile(outputPath, outputText);
+  } catch (err) {
+    stderrParts.push(`tsc: ${outputPath}: ${err instanceof Error ? err.message : String(err)}\n`);
+    hadError = true;
+  }
+  return { stderr: stderrParts.join(''), hadError };
+}
+
+type TscCmdResult = { stdout: string; stderr: string; exitCode: number };
+
+/**
+ * Parse argv and load the typescript package. Returns either a
+ * fully-formed early-return result (parse error / `--help` /
+ * `--version` / ipk-missing guidance) OR the inputs the main
+ * command body needs to proceed.
+ */
+async function prepareTscRun(
+  args: string[],
+  ctx: CommandContext
+): Promise<{ done: TscCmdResult } | { parsed: ParsedTscArgs; ts: TypeScriptModule }> {
+  let parsed: ParsedTscArgs;
+  try {
+    parsed = parseTscArgs(args);
+  } catch (err) {
+    return {
+      done: {
         stdout: '',
         stderr: `${err instanceof Error ? err.message : String(err)}\n`,
         exitCode: 2,
-      };
-    }
+      },
+    };
+  }
+  if (parsed.showHelp) return { done: { stdout: HELP_TEXT, stderr: '', exitCode: 0 } };
 
-    if (parsed.showHelp) {
-      return { stdout: HELP_TEXT, stderr: '', exitCode: 0 };
-    }
-
-    let ts: TypeScriptModule;
-    try {
-      ts = await getTypeScript(createIpkContextFromCtx(ctx));
-    } catch (err) {
-      // `getTypeScript` already emits the canonical
-      // "run `ipk add typescript`" guidance when nothing is installed;
-      // surface it verbatim.
-      return {
+  let ts: TypeScriptModule;
+  try {
+    ts = await getTypeScript(createIpkContextFromCtx(ctx));
+  } catch (err) {
+    // `getTypeScript` already emits the canonical
+    // "run `ipk add typescript`" guidance when nothing is installed;
+    // surface it verbatim.
+    return {
+      done: {
         stdout: '',
         stderr: `tsc: ${err instanceof Error ? err.message : String(err)}\n`,
         exitCode: 1,
-      };
-    }
+      },
+    };
+  }
+  if (parsed.showVersion) {
+    return { done: { stdout: `Version ${ts.version}\n`, stderr: '', exitCode: 0 } };
+  }
+  return { parsed, ts };
+}
 
-    if (parsed.showVersion) {
-      return { stdout: `Version ${ts.version}\n`, stderr: '', exitCode: 0 };
-    }
-
+export function createTscCommand(): Command {
+  return defineCommand('tsc', async (args, ctx) => {
+    const prep = await prepareTscRun(args, ctx);
+    if ('done' in prep) return prep.done;
+    const { parsed, ts } = prep;
     const config = await loadTsconfig(ctx.fs, ctx.cwd);
 
-    // No files: transpile stdin → stdout, mirroring `cat foo.ts | tsc`.
     if (parsed.files.length === 0) {
       const source = stdinAsText(ctx.stdin);
-      if (!source) {
-        return { stdout: HELP_TEXT, stderr: '', exitCode: 0 };
-      }
-      const { outputText, diagnostics } = transpileOne(
-        ts,
-        source,
-        '<stdin>.ts',
-        config.compilerOptions,
-        true
-      );
-      const errLines = diagnostics.map((d) => diagnosticToString(ts, d));
-      if (diagnostics.length > 0) {
-        return {
-          stdout: parsed.noEmit ? '' : outputText,
-          stderr: errLines.length > 0 ? `${errLines.join('\n')}\n` : '',
-          exitCode: 1,
-        };
-      }
-      return {
-        stdout: parsed.noEmit ? '' : outputText,
-        stderr: '',
-        exitCode: 0,
-      };
+      if (!source) return { stdout: HELP_TEXT, stderr: '', exitCode: 0 };
+      return runStdinTranspile(ts, parsed, config, source);
     }
 
     const stderrParts: string[] = [];
     let hadError = false;
-
     for (const fileArg of parsed.files) {
-      const inputPath = ctx.fs.resolvePath(ctx.cwd, fileArg);
-      if (!(await ctx.fs.exists(inputPath))) {
-        stderrParts.push(`tsc: ${fileArg}: no such file\n`);
-        hadError = true;
-        continue;
-      }
-      let source: string;
-      try {
-        source = await ctx.fs.readFile(inputPath);
-      } catch (err) {
-        stderrParts.push(`tsc: ${fileArg}: ${err instanceof Error ? err.message : String(err)}\n`);
-        hadError = true;
-        continue;
-      }
-
-      // Touch the script-kind helper so the import isn't dead code;
-      // `transpileModule` already infers kind from `fileName`, so we
-      // don't pass it through, but keeping the helper exported makes
-      // it available to the upcoming `test` command without a refactor.
-      void inferScriptKind(ts, inputPath);
-
-      const { outputText, diagnostics } = transpileOne(
-        ts,
-        source,
-        inputPath,
-        config.compilerOptions,
-        true
-      );
-
-      for (const d of diagnostics) {
-        stderrParts.push(`${diagnosticToString(ts, d)}\n`);
-      }
-      if (diagnostics.length > 0) hadError = true;
-
-      if (parsed.noEmit) continue;
-
-      const outputPath = ctx.fs.resolvePath(ctx.cwd, deriveOutputPath(inputPath, parsed.outDir));
-      try {
-        await ctx.fs.writeFile(outputPath, outputText);
-      } catch (err) {
-        stderrParts.push(
-          `tsc: ${outputPath}: ${err instanceof Error ? err.message : String(err)}\n`
-        );
-        hadError = true;
-      }
+      const r = await transpileOneFile(ts, ctx, fileArg, parsed, config);
+      if (r.stderr) stderrParts.push(r.stderr);
+      if (r.hadError) hadError = true;
     }
-
-    return {
-      stdout: '',
-      stderr: stderrParts.join(''),
-      exitCode: hadError ? 1 : 0,
-    };
+    return { stdout: '', stderr: stderrParts.join(''), exitCode: hadError ? 1 : 0 };
   });
 }

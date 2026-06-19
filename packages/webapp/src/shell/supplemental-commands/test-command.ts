@@ -434,107 +434,173 @@ export function _resetTstHarnessForTests(): void {
   preparedHarness = null;
 }
 
-export function createTestCommand(): Command {
-  return defineCommand('test', async (args, ctx) => {
-    let parsed: ParsedTestArgs;
-    try {
-      parsed = parseTestArgs(args);
-    } catch (err) {
-      return {
+type TestCmdResult = { stdout: string; stderr: string; exitCode: number };
+
+type UserCompilerOptions = import('typescript').CompilerOptions;
+
+const USER_OPTS_TEMPLATE = {
+  esModuleInterop: true,
+  allowJs: true,
+  isolatedModules: false,
+};
+
+function buildUserOpts(ts: TypeScriptModule): UserCompilerOptions {
+  return {
+    module: ts.ModuleKind.CommonJS,
+    target: ts.ScriptTarget.ES2022,
+    ...USER_OPTS_TEMPLATE,
+  } as UserCompilerOptions;
+}
+
+interface TestRunSetup {
+  parsed: ParsedTestArgs;
+  files: string[];
+  ts: TypeScriptModule;
+  harness: string;
+  userOpts: UserCompilerOptions;
+}
+
+/**
+ * Parse argv, resolve matching test files, load the ipk-provided
+ * typescript package, and build the tst harness + user compiler
+ * options. Returns either an early-return result (parse / help /
+ * no-match / ipk-missing) or the inputs the per-file loop needs.
+ */
+async function prepareTestRun(
+  args: string[],
+  ctx: CommandContext
+): Promise<{ done: TestCmdResult } | TestRunSetup> {
+  let parsed: ParsedTestArgs;
+  try {
+    parsed = parseTestArgs(args);
+  } catch (err) {
+    return {
+      done: {
         stdout: '',
         stderr: `${err instanceof Error ? err.message : String(err)}\n`,
         exitCode: 2,
-      };
-    }
-    if (parsed.showHelp) return { stdout: HELP_TEXT, stderr: '', exitCode: 0 };
+      },
+    };
+  }
+  if (parsed.showHelp) return { done: { stdout: HELP_TEXT, stderr: '', exitCode: 0 } };
 
-    const files = await resolveTestFiles(ctx.fs, ctx.cwd, parsed.globs);
-    if (files.length === 0) {
-      return {
+  const files = await resolveTestFiles(ctx.fs, ctx.cwd, parsed.globs);
+  if (files.length === 0) {
+    return {
+      done: {
         stdout: '',
         stderr: `test: no test files matched ${parsed.globs.join(' ')}\n`,
         exitCode: 1,
-      };
-    }
+      },
+    };
+  }
 
-    let ts: TypeScriptModule;
-    try {
-      ts = await getTypeScript(createIpkContextFromCtx(ctx));
-    } catch (err) {
-      // `getTypeScript` already emits the canonical
-      // "run `ipk add typescript`" guidance when nothing is installed;
-      // surface it verbatim.
-      return {
+  let ts: TypeScriptModule;
+  try {
+    ts = await getTypeScript(createIpkContextFromCtx(ctx));
+  } catch (err) {
+    // `getTypeScript` already emits the canonical
+    // "run `ipk add typescript`" guidance when nothing is installed;
+    // surface it verbatim.
+    return {
+      done: {
         stdout: '',
         stderr: `test: ${err instanceof Error ? err.message : String(err)}\n`,
         exitCode: 1,
-      };
-    }
-    const harness = await prepareTstHarness(ts);
-    const userOpts = {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-      esModuleInterop: true,
-      allowJs: true,
-      isolatedModules: false,
-    } as import('typescript').CompilerOptions;
+      },
+    };
+  }
+  const harness = await prepareTstHarness(ts);
+  return { parsed, files, ts, harness, userOpts: buildUserOpts(ts) };
+}
+
+interface OneFileResult {
+  stdout: string;
+  stderr: string;
+  failed: boolean;
+}
+
+/**
+ * Read, transpile, resolve local deps, and execute a single test
+ * file in its own realm. Each failure-mode (read / transpile /
+ * local-require / non-zero realm exit) contributes to `failed` so
+ * the caller can fold it into the overall exit code.
+ */
+async function runOneTestFile(
+  ctx: CommandContext,
+  setup: TestRunSetup,
+  file: string,
+  prefixWithFilename: boolean
+): Promise<OneFileResult> {
+  const { ts, harness, userOpts, parsed } = setup;
+  let source: string;
+  try {
+    source = await ctx.fs.readFile(file);
+  } catch (err) {
+    return {
+      stdout: '',
+      stderr: `test: ${file}: ${err instanceof Error ? err.message : String(err)}\n`,
+      failed: true,
+    };
+  }
+  let userCjs: string;
+  try {
+    userCjs = ts.transpileModule(source, { compilerOptions: userOpts, fileName: file }).outputText;
+  } catch (err) {
+    return {
+      stdout: '',
+      stderr: `test: ${file}: transpile error: ${err instanceof Error ? err.message : String(err)}\n`,
+      failed: true,
+    };
+  }
+  let localModules: Map<string, string>;
+  let edgeRewrites: Map<string, Map<string, string>>;
+  try {
+    ({ modules: localModules, edgeRewrites } = await collectLocalDependencies(
+      ctx.fs,
+      ts,
+      file,
+      userCjs,
+      userOpts
+    ));
+  } catch (err) {
+    return {
+      stdout: '',
+      stderr: `test: ${file}: local-require resolve error: ${err instanceof Error ? err.message : String(err)}\n`,
+      failed: true,
+    };
+  }
+  const runner = buildRunnerScript(
+    harness,
+    file,
+    userCjs,
+    parsed.reporter,
+    localModules,
+    edgeRewrites
+  );
+  const result = await executeJsCode(runner, ['node', file], ctx, undefined, { filename: file });
+  return {
+    stdout: prefixWithFilename ? `# ${file}\n${result.stdout}` : result.stdout,
+    stderr: result.stderr,
+    failed: result.exitCode !== 0,
+  };
+}
+
+export function createTestCommand(): Command {
+  return defineCommand('test', async (args, ctx) => {
+    const prep = await prepareTestRun(args, ctx);
+    if ('done' in prep) return prep.done;
+    const prefixWithFilename = prep.files.length > 1;
 
     let stdout = '';
     let stderr = '';
     let anyFailed = false;
-
-    for (const file of files) {
-      let source: string;
-      try {
-        source = await ctx.fs.readFile(file);
-      } catch (err) {
-        stderr += `test: ${file}: ${err instanceof Error ? err.message : String(err)}\n`;
-        anyFailed = true;
-        continue;
-      }
-      let userCjs: string;
-      try {
-        userCjs = ts.transpileModule(source, {
-          compilerOptions: userOpts,
-          fileName: file,
-        }).outputText;
-      } catch (err) {
-        stderr += `test: ${file}: transpile error: ${err instanceof Error ? err.message : String(err)}\n`;
-        anyFailed = true;
-        continue;
-      }
-      let localModules: Map<string, string>;
-      let edgeRewrites: Map<string, Map<string, string>>;
-      try {
-        ({ modules: localModules, edgeRewrites } = await collectLocalDependencies(
-          ctx.fs,
-          ts,
-          file,
-          userCjs,
-          userOpts
-        ));
-      } catch (err) {
-        stderr += `test: ${file}: local-require resolve error: ${err instanceof Error ? err.message : String(err)}\n`;
-        anyFailed = true;
-        continue;
-      }
-      const runner = buildRunnerScript(
-        harness,
-        file,
-        userCjs,
-        parsed.reporter,
-        localModules,
-        edgeRewrites
-      );
-      const result = await executeJsCode(runner, ['node', file], ctx, undefined, {
-        filename: file,
-      });
-      if (files.length > 1) stdout += `# ${file}\n`;
-      stdout += result.stdout;
-      stderr += result.stderr;
-      if (result.exitCode !== 0) anyFailed = true;
+    for (const file of prep.files) {
+      const r = await runOneTestFile(ctx, prep, file, prefixWithFilename);
+      stdout += r.stdout;
+      stderr += r.stderr;
+      if (r.failed) anyFailed = true;
     }
-
     return { stdout, stderr, exitCode: anyFailed ? 1 : 0 };
   });
 }
