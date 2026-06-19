@@ -26,6 +26,12 @@ import { randomUUID, timingSafeEqual } from 'node:crypto';
  * origins (parallel to chrome-extension's `BRIDGE_DEV_ORIGINS`). Add a new
  * origin here and in the extension allowlist together — they MUST stay in
  * sync, otherwise extension and standalone disagree on what's a leader.
+ *
+ * Dev-only extra origins can be added at process start via the
+ * `BRIDGE_DEV_ALLOWED_ORIGINS` env var (comma-separated). Used by the
+ * local two-service harness (wrangler dev UI on :8787 + node-server
+ * bridge); see Wave 5c. When the env var is unset, the effective
+ * allowlist is byte-identical to this frozen base — prod is unaffected.
  */
 export const BRIDGE_ALLOWED_ORIGINS: readonly string[] = Object.freeze([
   'https://www.sliccy.ai',
@@ -33,6 +39,46 @@ export const BRIDGE_ALLOWED_ORIGINS: readonly string[] = Object.freeze([
   'http://localhost:5710',
   'http://127.0.0.1:5710',
 ]);
+
+/**
+ * Normalize a single env-supplied origin: trim, lowercase, drop trailing
+ * slash. Returns `null` for blank/whitespace entries or anything that
+ * `URL` can't parse. Never throws.
+ */
+function normalizeDevOrigin(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  let candidate = trimmed.toLowerCase();
+  while (candidate.endsWith('/')) {
+    candidate = candidate.slice(0, -1);
+  }
+  if (!candidate) return null;
+  try {
+    // Sanity check: must parse as an absolute URL with scheme + host.
+    const parsed = new URL(candidate);
+    if (!parsed.protocol || !parsed.hostname) return null;
+  } catch {
+    return null;
+  }
+  return candidate;
+}
+
+/**
+ * Dev-only extra origins parsed once from `BRIDGE_DEV_ALLOWED_ORIGINS` at
+ * module load. Comma-separated; blank entries ignored; malformed entries
+ * dropped. Frozen prod base above is left intact; `isAllowedBridgeOrigin`
+ * consults the union.
+ */
+const BRIDGE_DEV_ALLOWED_ORIGINS: ReadonlySet<string> = (() => {
+  const raw = process.env.BRIDGE_DEV_ALLOWED_ORIGINS;
+  if (!raw) return new Set<string>();
+  const set = new Set<string>();
+  for (const entry of raw.split(',')) {
+    const normalized = normalizeDevOrigin(entry);
+    if (normalized) set.add(normalized);
+  }
+  return set;
+})();
 
 /** Subprotocol prefix advertised by the leader; the per-process token is appended. */
 export const BRIDGE_SUBPROTOCOL_PREFIX = 'slicc.bridge.v1.';
@@ -85,10 +131,21 @@ const CORS_EXPOSE_HEADERS = 'Link, X-Proxy-Error, X-Proxy-Set-Cookie';
 /** Methods exposed to the hosted leader. */
 const CORS_ALLOW_METHODS = 'GET, POST, PUT, DELETE, OPTIONS';
 
-/** True iff `origin` is in the bridge allowlist. Case-sensitive (origins are normalized lowercase). */
+/**
+ * True iff `origin` is in the bridge allowlist. The frozen prod base
+ * (`BRIDGE_ALLOWED_ORIGINS`) is matched case-sensitively against the
+ * raw origin; the dev-only env-supplied extras (normalized lowercase
+ * + trailing-slash-stripped at load) are matched against a normalized
+ * copy of the input, so a leader sending `Origin: HTTP://Localhost:8787`
+ * (or with a stray trailing slash) still resolves correctly.
+ */
 export function isAllowedBridgeOrigin(origin: string | undefined | null): boolean {
   if (!origin) return false;
-  return BRIDGE_ALLOWED_ORIGINS.includes(origin);
+  if (BRIDGE_ALLOWED_ORIGINS.includes(origin)) return true;
+  if (BRIDGE_DEV_ALLOWED_ORIGINS.size === 0) return false;
+  const normalized = normalizeDevOrigin(origin);
+  if (!normalized) return false;
+  return BRIDGE_DEV_ALLOWED_ORIGINS.has(normalized);
 }
 
 /**

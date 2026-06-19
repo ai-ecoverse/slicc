@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   BRIDGE_ALLOWED_ORIGINS,
@@ -14,6 +14,24 @@ import {
   validateBridgeToken,
   validateBridgeUpgrade,
 } from '../src/bridge-security.js';
+
+/**
+ * Re-import `bridge-security.ts` with `BRIDGE_DEV_ALLOWED_ORIGINS` env set
+ * to `value` (or unset when `value === undefined`). The env var is read
+ * once at module load, so each test that needs a different value gets a
+ * fresh module via `vi.resetModules()` + dynamic import.
+ */
+async function reloadBridgeSecurity(value: string | undefined) {
+  vi.resetModules();
+  if (value === undefined) {
+    vi.stubEnv('BRIDGE_DEV_ALLOWED_ORIGINS', '');
+    // stubEnv with '' sets it to empty string; we need it actually unset.
+    delete process.env.BRIDGE_DEV_ALLOWED_ORIGINS;
+  } else {
+    vi.stubEnv('BRIDGE_DEV_ALLOWED_ORIGINS', value);
+  }
+  return await import('../src/bridge-security.js');
+}
 
 const PROD_ORIGIN = 'https://www.sliccy.ai';
 const TOKEN = 'aabbccdd-1122-3344-5566-778899aabbcc';
@@ -238,5 +256,93 @@ describe('validateBridgeToken', () => {
     // timingSafeEqual throws on length mismatch; the wrapper must guard.
     expect(validateBridgeToken('short', TOKEN)).toBe(false);
     expect(validateBridgeToken(`${TOKEN}-extra`, TOKEN)).toBe(false);
+  });
+});
+
+describe('BRIDGE_DEV_ALLOWED_ORIGINS env extension', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it('accepts an env-extended origin alongside the frozen base', async () => {
+    const mod = await reloadBridgeSecurity('http://localhost:8787');
+    expect(mod.isAllowedBridgeOrigin('http://localhost:8787')).toBe(true);
+    // Frozen prod base still works.
+    expect(mod.isAllowedBridgeOrigin('https://www.sliccy.ai')).toBe(true);
+    expect(mod.isAllowedBridgeOrigin('http://localhost:5710')).toBe(true);
+    // Unrelated origins are still rejected.
+    expect(mod.isAllowedBridgeOrigin('http://localhost:9999')).toBe(false);
+    expect(mod.isAllowedBridgeOrigin('https://evil.example.com')).toBe(false);
+  });
+
+  it('flows through validateBridgeUpgrade for an env-extended origin', async () => {
+    const mod = await reloadBridgeSecurity('http://localhost:8787');
+    const proto = `${mod.BRIDGE_SUBPROTOCOL_PREFIX}${TOKEN}`;
+    const res = mod.validateBridgeUpgrade({
+      origin: 'http://localhost:8787',
+      subprotocolHeader: proto,
+      expectedToken: TOKEN,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.acceptedSubprotocol).toBe(proto);
+  });
+
+  it('returns CORS headers for an env-extended origin', async () => {
+    const mod = await reloadBridgeSecurity('http://localhost:8787');
+    const headers = mod.buildCorsHeaders('http://localhost:8787');
+    expect(headers).not.toBeNull();
+    expect(headers!['Access-Control-Allow-Origin']).toBe('http://localhost:8787');
+    expect(headers!['Access-Control-Allow-Headers']).toContain('X-Bridge-Token');
+  });
+
+  it('is byte-identical to the frozen base when the env var is unset', async () => {
+    const mod = await reloadBridgeSecurity(undefined);
+    // Every base entry accepted; nothing else.
+    for (const origin of mod.BRIDGE_ALLOWED_ORIGINS) {
+      expect(mod.isAllowedBridgeOrigin(origin)).toBe(true);
+    }
+    expect(mod.isAllowedBridgeOrigin('http://localhost:8787')).toBe(false);
+    expect(mod.isAllowedBridgeOrigin('http://localhost:9999')).toBe(false);
+    expect(mod.buildCorsHeaders('http://localhost:8787')).toBeNull();
+  });
+
+  it('supports multiple comma-separated origins', async () => {
+    const mod = await reloadBridgeSecurity(
+      'http://localhost:8787,http://localhost:4200,http://127.0.0.1:8787'
+    );
+    expect(mod.isAllowedBridgeOrigin('http://localhost:8787')).toBe(true);
+    expect(mod.isAllowedBridgeOrigin('http://localhost:4200')).toBe(true);
+    expect(mod.isAllowedBridgeOrigin('http://127.0.0.1:8787')).toBe(true);
+    expect(mod.isAllowedBridgeOrigin('http://localhost:9999')).toBe(false);
+  });
+
+  it('ignores blank and whitespace-only entries', async () => {
+    const mod = await reloadBridgeSecurity(
+      ' , http://localhost:8787 ,  ,\t, ,http://localhost:4200,'
+    );
+    expect(mod.isAllowedBridgeOrigin('http://localhost:8787')).toBe(true);
+    expect(mod.isAllowedBridgeOrigin('http://localhost:4200')).toBe(true);
+    // Empty string and whitespace must not somehow leak in as allowed.
+    expect(mod.isAllowedBridgeOrigin('')).toBe(false);
+    expect(mod.isAllowedBridgeOrigin(' ')).toBe(false);
+  });
+
+  it('tolerates malformed entries without throwing', async () => {
+    // Mixes a valid entry with garbage that URL() will reject.
+    const mod = await reloadBridgeSecurity('not a url,http://localhost:8787,://broken,');
+    expect(mod.isAllowedBridgeOrigin('http://localhost:8787')).toBe(true);
+    expect(mod.isAllowedBridgeOrigin('not a url')).toBe(false);
+    expect(mod.isAllowedBridgeOrigin('://broken')).toBe(false);
+  });
+
+  it('normalizes trailing slashes and case in env entries', async () => {
+    const mod = await reloadBridgeSecurity('HTTP://Localhost:8787/');
+    // The leader sends the canonical lowercase origin in its header;
+    // the env-supplied entry must still match.
+    expect(mod.isAllowedBridgeOrigin('http://localhost:8787')).toBe(true);
+    // And the messy variants normalize to the same set.
+    expect(mod.isAllowedBridgeOrigin('HTTP://Localhost:8787')).toBe(true);
+    expect(mod.isAllowedBridgeOrigin('http://localhost:8787/')).toBe(true);
   });
 });

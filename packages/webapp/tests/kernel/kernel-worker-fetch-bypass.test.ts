@@ -9,6 +9,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   type FetchFn,
+  isBridgeFetchProxyTarget,
   isSameOrigin,
   makeSameOriginBypassFetch,
 } from '../../src/kernel/kernel-worker-fetch-bypass.js';
@@ -115,5 +116,117 @@ describe('makeSameOriginBypassFetch', () => {
     const { fn } = captureOrig();
     const wrapped = makeSameOriginBypassFetch(fn, undefined);
     expect(wrapped).toBe(fn);
+  });
+
+  it('stamps x-bypass-llm-proxy on cross-origin calls to the known bridge /api/fetch-proxy', async () => {
+    // Thin-bridge: hosted-leader UI calls the local node-server's
+    // /api/fetch-proxy across origins. Stamping the bypass header tells
+    // the page-installed SW to leave the request alone (preserving the
+    // caller's X-Target-URL byte-for-byte).
+    const { fn, calls } = captureOrig();
+    const wrapped = makeSameOriginBypassFetch(fn, SELF_ORIGIN, () => 'http://localhost:5711');
+    await wrapped('http://localhost:5711/api/fetch-proxy', {
+      headers: { 'X-Target-URL': 'https://api.openai.com/v1' },
+    });
+    expect(getHeader(calls[0].init, 'x-bypass-llm-proxy')).toBe('1');
+    expect(getHeader(calls[0].init, 'X-Target-URL')).toBe('https://api.openai.com/v1');
+  });
+
+  it('does NOT stamp on cross-origin calls to the bridge origin if the path is different', async () => {
+    const { fn, calls } = captureOrig();
+    const wrapped = makeSameOriginBypassFetch(fn, SELF_ORIGIN, () => 'http://localhost:5711');
+    await wrapped('http://localhost:5711/some-other-route');
+    expect(getHeader(calls[0].init, 'x-bypass-llm-proxy')).toBeNull();
+  });
+
+  it('does NOT stamp on cross-origin CDN calls regardless of bridge config', async () => {
+    // Regression: stamping the header on a CDN call would trip CORS
+    // preflight (jsdelivr et al reject custom headers).
+    const { fn, calls } = captureOrig();
+    const wrapped = makeSameOriginBypassFetch(fn, SELF_ORIGIN, () => 'http://localhost:5711');
+    await wrapped('https://cdn.jsdelivr.net/npm/x.wasm');
+    expect(getHeader(calls[0].init, 'x-bypass-llm-proxy')).toBeNull();
+  });
+
+  it('does NOT stamp when the bridge-origin getter returns null', async () => {
+    // Outside thin-bridge mode the wrapper falls back to same-origin-only
+    // stamping. Same as the no-getter behavior — confirms the getter is
+    // consulted per-call and a null return doesn't error.
+    const { fn, calls } = captureOrig();
+    const wrapped = makeSameOriginBypassFetch(fn, SELF_ORIGIN, () => null);
+    await wrapped('http://localhost:5711/api/fetch-proxy');
+    expect(getHeader(calls[0].init, 'x-bypass-llm-proxy')).toBeNull();
+  });
+
+  it('re-evaluates the bridge-origin getter on every call', async () => {
+    // The boot path runs `setLocalApiBaseUrl(...)` AFTER `installFetchBypass`,
+    // so a one-shot snapshot at construction time would miss the bridge
+    // origin on the very first proxied-fetch call.
+    let bridgeOrigin: string | null = null;
+    const { fn, calls } = captureOrig();
+    const wrapped = makeSameOriginBypassFetch(fn, SELF_ORIGIN, () => bridgeOrigin);
+    await wrapped('http://localhost:5711/api/fetch-proxy');
+    expect(getHeader(calls[0].init, 'x-bypass-llm-proxy')).toBeNull();
+    bridgeOrigin = 'http://localhost:5711';
+    await wrapped('http://localhost:5711/api/fetch-proxy');
+    expect(getHeader(calls[1].init, 'x-bypass-llm-proxy')).toBe('1');
+  });
+
+  it('tolerates a throwing bridge-origin getter without breaking the request', async () => {
+    const { fn, calls } = captureOrig();
+    const wrapped = makeSameOriginBypassFetch(fn, SELF_ORIGIN, () => {
+      throw new Error('boom');
+    });
+    // Same-origin call should still succeed unaffected.
+    await expect(wrapped('/api/x')).resolves.toBeInstanceOf(Response);
+    expect(getHeader(calls[0].init, 'x-bypass-llm-proxy')).toBe('1');
+  });
+});
+
+describe('isBridgeFetchProxyTarget', () => {
+  it('matches the bridge /api/fetch-proxy URL', () => {
+    expect(
+      isBridgeFetchProxyTarget(
+        'http://localhost:5711/api/fetch-proxy',
+        'http://localhost:5711',
+        SELF_ORIGIN
+      )
+    ).toBe(true);
+  });
+
+  it('rejects a different path on the bridge origin', () => {
+    expect(
+      isBridgeFetchProxyTarget(
+        'http://localhost:5711/api/other',
+        'http://localhost:5711',
+        SELF_ORIGIN
+      )
+    ).toBe(false);
+  });
+
+  it('rejects a different origin even with the matching path', () => {
+    expect(
+      isBridgeFetchProxyTarget(
+        'http://localhost:5710/api/fetch-proxy',
+        'http://localhost:5711',
+        SELF_ORIGIN
+      )
+    ).toBe(false);
+  });
+
+  it('handles Request objects', () => {
+    expect(
+      isBridgeFetchProxyTarget(
+        new Request('http://localhost:5711/api/fetch-proxy'),
+        'http://localhost:5711',
+        SELF_ORIGIN
+      )
+    ).toBe(true);
+  });
+
+  it('returns false on unparseable bridge origin', () => {
+    expect(
+      isBridgeFetchProxyTarget('http://localhost:5711/api/fetch-proxy', 'not a url', SELF_ORIGIN)
+    ).toBe(false);
   });
 });

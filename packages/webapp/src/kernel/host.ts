@@ -160,6 +160,17 @@ export interface KernelHostConfig {
    * Logger. Defaults to `console`.
    */
   logger?: KernelHostLogger;
+
+  /**
+   * Absolute lick-WS URL override for `startLickWsBridge` (e.g.
+   * `ws://localhost:5710/licks-ws`). Set in thin-bridge mode where the
+   * hosted leader serves the UI but the node-server lives on a
+   * different origin — deriving the URL from `self.location.href` here
+   * would dial the UI origin. `null` / undefined falls back to the
+   * legacy same-origin derivation. Ignored when `isExtension` is true
+   * (the extension float has no lick-ws bridge).
+   */
+  localLickWsUrl?: string | null;
 }
 
 export interface LickRoutingContext {
@@ -570,12 +581,14 @@ async function buildWsSubscriberRegistry(deps: {
  */
 async function startLickWsBridgeForHost(
   lickManager: LickManager,
-  log: KernelHostLogger
+  log: KernelHostLogger,
+  localLickWsUrl: string | null | undefined
 ): Promise<(() => void) | null> {
   try {
     const { startLickWsBridge } = await import('../scoops/lick-ws-bridge.js');
     const handle = startLickWsBridge(lickManager, {
       locationHref: self.location.href,
+      lickWsUrl: localLickWsUrl ?? null,
     });
     return handle.stop;
   } catch (err) {
@@ -803,7 +816,11 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   //     shape.
   let lickWsBridgeStop: (() => void) | null = null;
   if (!isExtension) {
-    lickWsBridgeStop = await startLickWsBridgeForHost(lickManager, log);
+    lickWsBridgeStop = await startLickWsBridgeForHost(
+      lickManager,
+      log,
+      config.localLickWsUrl ?? null
+    );
   }
 
   // 8b. CDP-level NavigationWatcher (standalone / kernel-worker only).

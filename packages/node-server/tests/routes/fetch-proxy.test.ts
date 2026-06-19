@@ -10,7 +10,7 @@ import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express from 'express';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerFetchProxyRoute } from '../../src/routes/fetch-proxy.js';
 import { EnvSecretStore } from '../../src/secrets/env-secret-store.js';
 import { SecretProxyManager } from '../../src/secrets/proxy-manager.js';
@@ -28,6 +28,11 @@ let proxy: Server;
 let upstreamUrl = '';
 let proxyBase = '';
 let masked = '';
+let logger: {
+  log: ReturnType<typeof vi.fn>;
+  warn: ReturnType<typeof vi.fn>;
+  error: ReturnType<typeof vi.fn>;
+};
 
 function tempSecrets(domains = '127.0.0.1'): string {
   tmpDir = join(tmpdir(), `slicc-fp-${randomUUID()}`);
@@ -63,7 +68,8 @@ async function setup(handler: UpstreamHandler, secretDomains?: string): Promise<
 
   const app = express();
   app.use(express.json({ type: () => false })); // never parse — proxy collects raw body
-  registerFetchProxyRoute(app, { secretProxy: proxyManager });
+  logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  registerFetchProxyRoute(app, { secretProxy: proxyManager, logger });
   const proxyPort = await listen(proxy === undefined ? (proxy = createServer(app)) : proxy);
   proxyBase = `http://127.0.0.1:${proxyPort}`;
 }
@@ -164,5 +170,65 @@ describe('registerFetchProxyRoute', () => {
     });
     expect(res.status).toBe(502);
     expect(res.headers.get('x-proxy-error')).toBe('1');
+  });
+
+  it('logs the method, target URL, and upstream status on a successful proxy', async () => {
+    await setup((_req, res) => {
+      res.setHeader('content-type', 'text/plain');
+      res.end('ok');
+    });
+    await fetch(`${proxyBase}/api/fetch-proxy`, {
+      method: 'GET',
+      headers: { 'x-target-url': upstreamUrl },
+    });
+    // Entry log + completion log.
+    const logLines = logger.log.mock.calls.map((c) => c[0]).join('\n');
+    expect(logLines).toContain(`GET ${upstreamUrl}`);
+    expect(logLines).toContain(`← 200`);
+  });
+
+  it('warns when X-Target-URL is missing', async () => {
+    await setup((_req, res) => res.end('ignored'));
+    await fetch(`${proxyBase}/api/fetch-proxy`);
+    expect(logger.warn.mock.calls.map((c) => c[0]).join('\n')).toContain('missing X-Target-URL');
+  });
+
+  it('errors when the upstream fetch throws', async () => {
+    await setup((_req, res) => res.end('unused'));
+    await fetch(`${proxyBase}/api/fetch-proxy`, {
+      headers: { 'x-target-url': 'http://127.0.0.1:1/nope' },
+    });
+    const errLines = logger.error.mock.calls.map((c) => c[0]).join('\n');
+    expect(errLines).toContain('← 502');
+  });
+
+  it('warns when a masked secret is rejected for an out-of-scope domain', async () => {
+    await setup((_req, res) => res.end('should-not-reach'), 'api.github.com');
+    await fetch(`${proxyBase}/api/fetch-proxy`, {
+      headers: { 'x-target-url': upstreamUrl, authorization: `Bearer ${masked}` },
+    });
+    expect(logger.warn.mock.calls.map((c) => c[0]).join('\n')).toContain('not allowed');
+  });
+
+  it('strips the thin-bridge auth header before forwarding upstream', async () => {
+    // Regression: the bridge token authenticates the browser->local hop
+    // (validated by `createThinBridgeCorsMiddleware`); if it leaks onward
+    // to `targetUrl` a hostile or curious upstream can replay it. The
+    // route must filter `x-bridge-token` out of the forwarded headers
+    // alongside the other proxy-internal markers.
+    let receivedHeaders: Record<string, string | string[] | undefined> = {};
+    await setup((req, res) => {
+      receivedHeaders = req.headers;
+      res.setHeader('content-type', 'text/plain');
+      res.end('ok');
+    });
+    const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
+      headers: {
+        'x-target-url': upstreamUrl,
+        'x-bridge-token': 'secret-token',
+      },
+    });
+    expect(res.status).toBe(200);
+    expect(receivedHeaders['x-bridge-token']).toBeUndefined();
   });
 });

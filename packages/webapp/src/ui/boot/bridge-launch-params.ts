@@ -46,6 +46,16 @@ export interface BridgeLaunchParams {
    * callers should fall back to same-origin in that case.
    */
   apiBaseUrl: string | null;
+  /**
+   * Lick management WebSocket URL on the local node-server, derived from
+   * the bridge WS URL (same scheme + host:port, path swapped to
+   * `/licks-ws`). The kernel host dials this from the worker float to
+   * receive webhook/handoff events and serve management requests. `null`
+   * when the bridge URL can't be parsed — callers should fall back to
+   * same-origin in that case (which is wrong in thin-bridge mode but
+   * matches the legacy bundled-UI assumption).
+   */
+  lickWsUrl: string | null;
 }
 
 /**
@@ -58,6 +68,21 @@ export function deriveBridgeApiBaseUrl(bridgeWsUrl: string): string | null {
     const u = new URL(bridgeWsUrl);
     const httpScheme = u.protocol === 'wss:' ? 'https:' : 'http:';
     return `${httpScheme}//${u.host}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Derive the lick WebSocket URL on the local node-server from a bridge
+ * `ws://` / `wss://` URL. `ws://localhost:5710/cdp` →
+ * `ws://localhost:5710/licks-ws`. Same scheme + host:port; only the
+ * path changes. Returns `null` when the URL can't be parsed.
+ */
+export function deriveBridgeLickWsUrl(bridgeWsUrl: string): string | null {
+  try {
+    const u = new URL(bridgeWsUrl);
+    return `${u.protocol}//${u.host}/licks-ws`;
   } catch {
     return null;
   }
@@ -87,5 +112,6 @@ export function parseBridgeLaunchParams(search: string): BridgeLaunchParams | nu
     subprotocol: `${BRIDGE_SUBPROTOCOL_PREFIX}${token}`,
     token,
     apiBaseUrl: deriveBridgeApiBaseUrl(url),
+    lickWsUrl: deriveBridgeLickWsUrl(url),
   };
 }

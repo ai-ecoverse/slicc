@@ -87,6 +87,15 @@ export interface KernelWorkerSpawnOptions {
    * outside thin-bridge mode.
    */
   bridgeToken?: string | null;
+  /**
+   * Absolute lick-WS URL (e.g. `ws://localhost:5710/licks-ws`) the
+   * worker-resident `/licks-ws` bridge should dial in thin-bridge mode.
+   * Set when the hosted leader serves the UI but the node-server lives
+   * on a different origin — deriving the URL from `self.location.href`
+   * inside the worker would dial the UI origin instead. `null` /
+   * undefined falls back to same-origin (the legacy bundled-UI path).
+   */
+  localLickWsUrl?: string | null;
 }
 
 export interface KernelWorkerBootstrapOptions {
@@ -105,6 +114,8 @@ export interface KernelWorkerBootstrapOptions {
   localApiBaseUrl?: string | null;
   /** See `KernelWorkerSpawnOptions.bridgeToken`. */
   bridgeToken?: string | null;
+  /** See `KernelWorkerSpawnOptions.localLickWsUrl`. */
+  localLickWsUrl?: string | null;
 }
 
 /**
@@ -221,6 +232,7 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
     instanceId: options.instanceId,
     localApiBaseUrl: options.localApiBaseUrl ?? null,
     bridgeToken: options.bridgeToken ?? null,
+    localLickWsUrl: options.localLickWsUrl ?? null,
   };
   worker.postMessage(init, [kernelChannel.port2, cdpChannel.port2]);
 
@@ -289,5 +301,6 @@ export function spawnKernelWorker(options: KernelWorkerSpawnOptions): SpawnedKer
     instanceId: options.instanceId,
     localApiBaseUrl: options.localApiBaseUrl,
     bridgeToken: options.bridgeToken,
+    localLickWsUrl: options.localLickWsUrl,
   });
 }

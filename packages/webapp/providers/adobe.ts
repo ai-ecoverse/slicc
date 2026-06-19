@@ -41,6 +41,7 @@ import {
   type AdobeModelMetadata,
   enrichAdobeModel,
 } from '../src/providers/adobe-model-metadata.js';
+import { buildAdobeOAuthState } from '../src/providers/adobe-oauth-state.js';
 import { getOAuthPageOrigin } from '../src/providers/oauth-service.js';
 import { createSilentRenewBackoff } from '../src/providers/silent-renew-backoff.js';
 import { withSupportedTemperature } from '../src/providers/temperature-support.js';
@@ -317,22 +318,30 @@ export const config: ProviderConfig = {
     // `DedicatedWorker` (no `window`); the page-context login path still
     // reads `window.location.*` directly through the helper.
     const pageInfo = isExtension ? null : await getOAuthPageOrigin();
+    // CLI / page-context path branches on whether the SPA is served by the
+    // worker (thin-bridge / hosted-leader). `buildAdobeOAuthState` returns
+    // `source:'opener'` + same-origin redirect_uri in that case, so the
+    // worker's relay postMessages the implicit-flow callback URL straight
+    // back to this window's opener instead of self-looping a localhost
+    // redirect that doesn't resolve. Classic CLI keeps the legacy
+    // `{ port, path, nonce }` shape.
+    const stateInfo = !isExtension
+      ? buildAdobeOAuthState(
+          {
+            pageHref: pageInfo!.href,
+            pageOrigin: pageInfo!.origin,
+            configuredRedirectUri: adobeConfig.redirectUri,
+          },
+          () => crypto.randomUUID()
+        )
+      : null;
     const redirectUri = isExtension
       ? (adobeConfig.extensionRedirectUri ??
         `https://${(chrome as any).runtime.id}.chromiumapp.org/`)
-      : (adobeConfig.redirectUri ?? `${pageInfo!.origin}/auth/callback`);
+      : stateInfo!.redirectUri;
 
-    // Build OAuth state with port and CSRF nonce for the sliccy.ai relay (CLI only)
-    const oauthState = !isExtension
-      ? btoa(
-          JSON.stringify({
-            port: parseInt(new URL(pageInfo!.href).port || '5710', 10),
-            path: '/auth/callback',
-            nonce: crypto.randomUUID(),
-          })
-        )
-      : undefined;
-    const expectedNonce = oauthState ? JSON.parse(atob(oauthState)).nonce : null;
+    const oauthState = stateInfo?.oauthState;
+    const expectedNonce = stateInfo?.expectedNonce ?? null;
 
     const params = new URLSearchParams({
       client_id: clientId,
@@ -515,109 +524,128 @@ async function silentRenewToken(): Promise<string | null> {
   // Deduplicate concurrent renewal attempts
   if (renewalInProgress) return renewalInProgress;
 
-  renewalInProgress = (async () => {
-    try {
-      const proxyEndpoint = getProxyEndpoint();
-      const proxyConfig = await fetchProxyConfig(proxyEndpoint);
-      const clientId = resolveClientId(proxyConfig);
-      const scopes = resolveScopes(proxyConfig);
-      const imsEnv = resolveImsEnvironment(proxyConfig);
-
-      const redirectUri = isExtension
-        ? (adobeConfig.extensionRedirectUri ??
-          `https://${(chrome as any).runtime.id}.chromiumapp.org/`)
-        : (adobeConfig.redirectUri ?? `${window.location.origin}/auth/callback`);
-
-      // Build OAuth state with port and CSRF nonce for the sliccy.ai relay (CLI only)
-      const oauthState = !isExtension
-        ? btoa(
-            JSON.stringify({
-              port: parseInt(new URL(window.location.href).port || '5710', 10),
-              path: '/auth/callback',
-              nonce: crypto.randomUUID(),
-            })
-          )
-        : undefined;
-      const expectedNonce = oauthState ? JSON.parse(atob(oauthState)).nonce : null;
-
-      const params = new URLSearchParams({
-        client_id: clientId,
-        scope: scopes,
-        response_type: 'token',
-        redirect_uri: redirectUri,
-        prompt: 'none', // Silent — no UI, relies on existing IMS session
-      });
-      if (oauthState) params.set('state', oauthState);
-      const authorizeUrl = `${imsHost(imsEnv)}/ims/authorize/v2?${params}`;
-
-      // Use the same launcher as normal login — handles CLI, extension, and Electron
-      const { createOAuthLauncher } = await import('../src/providers/oauth-service.js');
-      const launcher = createOAuthLauncher();
-      // prompt=none needs no user interaction → drive the launcher silently.
-      // In the extension this maps to launchWebAuthFlow({ interactive: false }).
-      const redirectUrl = await launcher(authorizeUrl, { interactive: false });
-
-      if (!redirectUrl) return null;
-
-      // Verify CSRF nonce from relay callback
-      if (expectedNonce && redirectUrl) {
-        try {
-          const callbackUrl = new URL(redirectUrl);
-          const receivedNonce = callbackUrl.searchParams.get('nonce');
-          if (receivedNonce !== expectedNonce) {
-            console.error('[adobe] OAuth nonce mismatch — possible CSRF');
-            return null;
-          }
-        } catch (err) {
-          // URL parse failure — continue (backwards compat with old localhost flow)
-          console.warn(
-            '[adobe] Nonce check skipped (URL parse failed):',
-            err instanceof Error ? err.message : String(err)
-          );
-        }
-      }
-
-      const tokenInfo = extractTokenFromUrl(redirectUrl);
-      if (!tokenInfo) return null;
-
-      // Save the renewed token. Preserve the baseUrl so getProxyEndpoint()
-      // continues to resolve after a page reload wipes the in-memory cache.
-      // Only pin when there is no bundled config — same rationale as onOAuthLogin.
-      const account = getAdobeAccount();
-      await saveOAuthAccount({
-        providerId: 'adobe',
-        accessToken: tokenInfo.accessToken,
-        tokenExpiresAt: Date.now() + tokenInfo.expiresIn * 1000,
-        userName: account?.userName,
-        userAvatar: account?.userAvatar,
-        baseUrl: adobeConfig.proxyEndpoint ? undefined : proxyEndpoint,
-      });
-
-      console.log('[adobe] Token renewed silently');
-
-      // Refresh model list to repopulate proxyMetadataCache (needed for
-      // OpenAI-compatible model routing). Without this, getModelIds() falls
-      // back to stale localStorage data that may lack the 'api' field.
-      await getAdobeModels().catch((err) =>
-        console.warn(
-          '[adobe] Failed to refresh models after silent renewal:',
-          err instanceof Error ? err.message : String(err)
-        )
-      );
-
-      return tokenInfo.accessToken;
-    } catch (err) {
-      console.warn(
-        '[adobe] Silent renewal error:',
-        err instanceof Error ? err.message : String(err)
-      );
-      return null;
-    } finally {
-      renewalInProgress = null;
-    }
-  })();
-
+  renewalInProgress = performSilentRenewal().finally(() => {
+    renewalInProgress = null;
+  });
   return renewalInProgress;
+}
+
+interface SilentRenewAuthorizeContext {
+  authorizeUrl: string;
+  expectedNonce: string | null;
+  proxyEndpoint: string;
+}
+
+function buildSilentRenewAuthorize(
+  proxyEndpoint: string,
+  proxyConfig: ProxyConfig
+): SilentRenewAuthorizeContext {
+  const clientId = resolveClientId(proxyConfig);
+  const scopes = resolveScopes(proxyConfig);
+  const imsEnv = resolveImsEnvironment(proxyConfig);
+
+  const redirectUri = isExtension
+    ? (adobeConfig.extensionRedirectUri ?? `https://${(chrome as any).runtime.id}.chromiumapp.org/`)
+    : (adobeConfig.redirectUri ?? `${window.location.origin}/auth/callback`);
+
+  // Build OAuth state with port and CSRF nonce for the sliccy.ai relay (CLI only)
+  const oauthState = !isExtension
+    ? btoa(
+        JSON.stringify({
+          port: parseInt(new URL(window.location.href).port || '5710', 10),
+          path: '/auth/callback',
+          nonce: crypto.randomUUID(),
+        })
+      )
+    : undefined;
+  const expectedNonce = oauthState ? JSON.parse(atob(oauthState)).nonce : null;
+
+  const params = new URLSearchParams({
+    client_id: clientId,
+    scope: scopes,
+    response_type: 'token',
+    redirect_uri: redirectUri,
+    prompt: 'none', // Silent — no UI, relies on existing IMS session
+  });
+  if (oauthState) params.set('state', oauthState);
+  const authorizeUrl = `${imsHost(imsEnv)}/ims/authorize/v2?${params}`;
+  return { authorizeUrl, expectedNonce, proxyEndpoint };
+}
+
+/** Verify the CSRF nonce echoed back in the relay callback (CLI only). */
+function verifySilentRenewNonce(redirectUrl: string, expectedNonce: string | null): boolean {
+  if (!expectedNonce) return true;
+  try {
+    const callbackUrl = new URL(redirectUrl);
+    const receivedNonce = callbackUrl.searchParams.get('nonce');
+    if (receivedNonce !== expectedNonce) {
+      console.error('[adobe] OAuth nonce mismatch — possible CSRF');
+      return false;
+    }
+  } catch (err) {
+    // URL parse failure — continue (backwards compat with old localhost flow)
+    console.warn(
+      '[adobe] Nonce check skipped (URL parse failed):',
+      err instanceof Error ? err.message : String(err)
+    );
+  }
+  return true;
+}
+
+async function persistRenewedToken(
+  tokenInfo: { accessToken: string; expiresIn: number },
+  proxyEndpoint: string
+): Promise<void> {
+  // Save the renewed token. Preserve the baseUrl so getProxyEndpoint()
+  // continues to resolve after a page reload wipes the in-memory cache.
+  // Only pin when there is no bundled config — same rationale as onOAuthLogin.
+  const account = getAdobeAccount();
+  await saveOAuthAccount({
+    providerId: 'adobe',
+    accessToken: tokenInfo.accessToken,
+    tokenExpiresAt: Date.now() + tokenInfo.expiresIn * 1000,
+    userName: account?.userName,
+    userAvatar: account?.userAvatar,
+    baseUrl: adobeConfig.proxyEndpoint ? undefined : proxyEndpoint,
+  });
+}
+
+async function performSilentRenewal(): Promise<string | null> {
+  try {
+    const proxyEndpoint = getProxyEndpoint();
+    const proxyConfig = await fetchProxyConfig(proxyEndpoint);
+    const { authorizeUrl, expectedNonce } = buildSilentRenewAuthorize(proxyEndpoint, proxyConfig);
+
+    // Use the same launcher as normal login — handles CLI, extension, and Electron
+    const { createOAuthLauncher } = await import('../src/providers/oauth-service.js');
+    const launcher = createOAuthLauncher();
+    // prompt=none needs no user interaction → drive the launcher silently.
+    // In the extension this maps to launchWebAuthFlow({ interactive: false }).
+    const redirectUrl = await launcher(authorizeUrl, { interactive: false });
+    if (!redirectUrl) return null;
+    if (!verifySilentRenewNonce(redirectUrl, expectedNonce)) return null;
+
+    const tokenInfo = extractTokenFromUrl(redirectUrl);
+    if (!tokenInfo) return null;
+
+    await persistRenewedToken(tokenInfo, proxyEndpoint);
+    console.log('[adobe] Token renewed silently');
+
+    // Refresh model list to repopulate proxyMetadataCache (needed for
+    // OpenAI-compatible model routing). Without this, getModelIds() falls
+    // back to stale localStorage data that may lack the 'api' field.
+    await getAdobeModels().catch((err) =>
+      console.warn(
+        '[adobe] Failed to refresh models after silent renewal:',
+        err instanceof Error ? err.message : String(err)
+      )
+    );
+
+    return tokenInfo.accessToken;
+  } catch (err) {
+    console.warn('[adobe] Silent renewal error:', err instanceof Error ? err.message : String(err));
+    return null;
+  }
 }
 
 // ── SLICC version header ─────────────────────────────────────────────
@@ -866,6 +894,68 @@ const streamSimpleAdobe = (model: Model<Api>, context: Context, options?: Simple
 
 // ── Model list ──────────────────────────────────────────────────────
 
+/** Pull the typed metadata fields off a raw proxy `/v1/models` entry. */
+function toMetadataEntry(pm: Record<string, any>): AdobeModelMetadata {
+  const entry: AdobeModelMetadata = { id: pm.id, name: pm.name };
+  if (pm.api !== undefined) entry.api = pm.api;
+  if (pm.context_window !== undefined) entry.context_window = pm.context_window;
+  if (pm.max_tokens !== undefined) entry.max_tokens = pm.max_tokens;
+  if (pm.reasoning !== undefined) entry.reasoning = pm.reasoning;
+  if (pm.input !== undefined) entry.input = pm.input;
+  return entry;
+}
+
+/** Lookup across all pi-ai providers (Anthropic, Cerebras, OpenAI, etc.). */
+function buildPiAiModelMap(): Map<string, Model<Api>> {
+  const modelMap = new Map<string, Model<Api>>();
+  for (const provider of getProviders() as string[]) {
+    try {
+      for (const m of getModels(provider as any) as Model<Api>[]) modelMap.set(m.id, m);
+    } catch {}
+  }
+  return modelMap;
+}
+
+/** Construct an Adobe-tagged Model from a proxy entry, reusing pi-ai metadata when present. */
+function buildAdobeModel(
+  pm: Record<string, any>,
+  endpoint: string,
+  modelMap: Map<string, Model<Api>>
+): Model<Api> {
+  // Determine API type from metadata or default to anthropic
+  const apiType = pm.api === 'openai' ? 'openai' : 'anthropic';
+  const customApi = `adobe-${apiType}` as Api;
+  const base = modelMap.get(pm.id);
+  if (base) return { ...base, provider: 'adobe', api: customApi };
+  return {
+    id: pm.id,
+    name: pm.name ?? pm.id,
+    provider: 'adobe',
+    api: customApi,
+    baseUrl: endpoint,
+    contextWindow: 200000,
+    maxTokens: 16384,
+    input: ['text', 'image'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    inputCost: 0,
+    outputCost: 0,
+    cacheReadCost: 0,
+    cacheWriteCost: 0,
+    reasoning: true,
+  } as unknown as Model<Api>;
+}
+
+/** Map a successful `/v1/models` payload into the Adobe-tagged Model<Api>[] list,
+ * populating `proxyMetadataCache` as a side effect for later use in `getModelIds()`. */
+function processProxyModelsPayload(
+  rawModels: Array<Record<string, any>>,
+  endpoint: string
+): Model<Api>[] {
+  for (const pm of rawModels) proxyMetadataCache.set(pm.id, toMetadataEntry(pm));
+  const modelMap = buildPiAiModelMap();
+  return rawModels.map((pm) => buildAdobeModel(pm, endpoint, modelMap));
+}
+
 async function fetchProxyModels(accessToken?: string): Promise<Model<Api>[] | null> {
   try {
     // Pre-warm callers (cloud cone, before the account is persisted) pass the
@@ -878,55 +968,13 @@ async function fetchProxyModels(accessToken?: string): Promise<Model<Api>[] | nu
         [SLICC_VERSION_HEADER]: __SLICC_VERSION__,
       },
     });
-    if (res.ok) {
-      const data = (await res.json()) as { data?: Array<any> };
-      if (data.data?.length) {
-        // Store metadata from proxy response for later use in getModelIds()
-        for (const pm of data.data) {
-          const entry: AdobeModelMetadata = { id: pm.id, name: pm.name };
-          if (pm.api !== undefined) entry.api = pm.api;
-          if (pm.context_window !== undefined) entry.context_window = pm.context_window;
-          if (pm.max_tokens !== undefined) entry.max_tokens = pm.max_tokens;
-          if (pm.reasoning !== undefined) entry.reasoning = pm.reasoning;
-          if (pm.input !== undefined) entry.input = pm.input;
-          proxyMetadataCache.set(pm.id, entry);
-        }
-
-        // Build lookup across all pi-ai providers (Anthropic, Cerebras, OpenAI, etc.)
-        const modelMap = new Map<string, Model<Api>>();
-        for (const p of getProviders() as string[]) {
-          try {
-            for (const m of getModels(p as any) as Model<Api>[]) modelMap.set(m.id, m);
-          } catch {}
-        }
-        return data.data.map((pm) => {
-          const base = modelMap.get(pm.id);
-          // Determine API type from metadata or default to anthropic
-          const apiType = pm.api === 'openai' ? 'openai' : 'anthropic';
-          const customApi = `adobe-${apiType}` as Api;
-          if (base) return { ...base, provider: 'adobe', api: customApi };
-          return {
-            id: pm.id,
-            name: pm.name ?? pm.id,
-            provider: 'adobe',
-            api: customApi,
-            baseUrl: endpoint,
-            contextWindow: 200000,
-            maxTokens: 16384,
-            input: ['text', 'image'],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            inputCost: 0,
-            outputCost: 0,
-            cacheReadCost: 0,
-            cacheWriteCost: 0,
-            reasoning: true,
-          } as unknown as Model<Api>;
-        });
-      }
-    } else {
+    if (!res.ok) {
       console.warn(
         `[adobe] Proxy /v1/models returned ${res.status}, falling back to Anthropic models`
       );
+    } else {
+      const data = (await res.json()) as { data?: Array<any> };
+      if (data.data?.length) return processProxyModelsPayload(data.data, endpoint);
     }
   } catch (err) {
     console.warn(

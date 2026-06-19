@@ -75,6 +75,10 @@ export class TerminalSessionClient {
   private opened = false;
   private openWaiters: Array<(err?: Error) => void> = [];
   private unsubscribe: (() => void) | null = null;
+  /** Active retry interval for the in-flight `open()` call (cleared on reply / timeout / close / dispose). */
+  private openRetryTimer: ReturnType<typeof setInterval> | null = null;
+  /** Active timeout for the in-flight `open()` call. */
+  private openTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: TerminalSessionClientOptions) {
     this.client = options.client;
@@ -89,19 +93,73 @@ export class TerminalSessionClient {
 
   /**
    * Open the session in the worker. Resolves on
-   * `terminal-status: opened`, rejects on `error`.
+   * `terminal-status: opened`, rejects on `error` or on timeout.
+   *
+   * Defense-in-depth retry: the worker's `TerminalSessionHost`
+   * subscribes on boot, but mounts that race the host-install lose
+   * the initial `terminal-open` (the message bus drops messages with
+   * no listener). Mirroring `OffscreenClient.requestState`, we
+   * resend `terminal-open` every `retryMs` until a `terminal-status`
+   * arrives or `timeoutMs` elapses. Page-side `mountTerminal` also
+   * gates the call on kernel-ready so this retry should almost never
+   * fire in production — but a genuine failure now rejects (visible
+   * error in the view) instead of hanging silently.
    */
-  open(opts: { cwd?: string; env?: Record<string, string> } = {}): Promise<void> {
+  open(
+    opts: {
+      cwd?: string;
+      env?: Record<string, string>;
+      /** Resend interval for the open envelope. Default 500ms. */
+      retryMs?: number;
+      /** Hard ceiling; reject after this many ms with no status. Default 10000ms. */
+      timeoutMs?: number;
+    } = {}
+  ): Promise<void> {
     if (this.opened) return Promise.resolve();
+    const retryMs = opts.retryMs ?? 500;
+    const timeoutMs = opts.timeoutMs ?? 10_000;
+    const envelope = {
+      type: 'terminal-open' as const,
+      sid: this.sid,
+      cwd: opts.cwd,
+      env: opts.env,
+    };
     return new Promise((resolve, reject) => {
-      this.openWaiters.push((err) => (err ? reject(err) : resolve()));
-      this.send({
-        type: 'terminal-open',
-        sid: this.sid,
-        cwd: opts.cwd,
-        env: opts.env,
+      this.openWaiters.push((err) => {
+        this.clearOpenTimers();
+        if (err) reject(err);
+        else resolve();
       });
+      this.send(envelope);
+      // Resend until status arrives.
+      this.openRetryTimer = setInterval(() => {
+        if (this.opened || this.openWaiters.length === 0) {
+          this.clearOpenTimers();
+          return;
+        }
+        this.send(envelope);
+      }, retryMs);
+      // Hard ceiling.
+      this.openTimeoutTimer = setTimeout(() => {
+        if (this.opened || this.openWaiters.length === 0) return;
+        const err = new Error(`terminal-open timed out after ${timeoutMs}ms`);
+        const waiters = this.openWaiters;
+        this.openWaiters = [];
+        this.clearOpenTimers();
+        for (const waiter of waiters) waiter(err);
+      }, timeoutMs);
     });
+  }
+
+  private clearOpenTimers(): void {
+    if (this.openRetryTimer) {
+      clearInterval(this.openRetryTimer);
+      this.openRetryTimer = null;
+    }
+    if (this.openTimeoutTimer) {
+      clearTimeout(this.openTimeoutTimer);
+      this.openTimeoutTimer = null;
+    }
   }
 
   /**
@@ -141,16 +199,22 @@ export class TerminalSessionClient {
    * (typically on tab teardown / page unload).
    */
   close(): void {
-    if (!this.opened) {
+    // Cancel any in-flight open retry/timeout first so a `close()` mid-handshake
+    // doesn't leak timers even if `opened` is still false.
+    const hadPendingOpen = this.openWaiters.length > 0;
+    if (!this.opened && !hadPendingOpen) {
       // Idempotent — also a no-op if open() was never called.
+      this.clearOpenTimers();
       return;
     }
-    this.send({ type: 'terminal-close', sid: this.sid });
+    if (this.opened) this.send({ type: 'terminal-close', sid: this.sid });
     this.opened = false;
     // Reject pending opens (none in steady state) and resolve
     // pending execs with a synthetic exit so callers don't hang.
-    for (const waiter of this.openWaiters) waiter(new Error('terminal session closed'));
+    const waiters = this.openWaiters;
     this.openWaiters = [];
+    this.clearOpenTimers();
+    for (const waiter of waiters) waiter(new Error('terminal session closed'));
     for (const [execId, resolve] of this.pending) {
       const buf = this.buffers.get(execId) ?? { stdout: '', stderr: '' };
       resolve({ stdout: buf.stdout, stderr: buf.stderr, exitCode: 130 });
@@ -164,6 +228,10 @@ export class TerminalSessionClient {
    * (or skip `close()` and call this directly to abort).
    */
   dispose(): void {
+    this.clearOpenTimers();
+    const waiters = this.openWaiters;
+    this.openWaiters = [];
+    for (const waiter of waiters) waiter(new Error('terminal session disposed'));
     this.unsubscribe?.();
     this.unsubscribe = null;
   }
@@ -190,60 +258,15 @@ export class TerminalSessionClient {
   private handleEvent(event: TerminalEventMsg): void {
     this.onEvent?.(event);
     switch (event.type) {
-      case 'terminal-status': {
-        const status = event as TerminalStatusMsg;
-        if (status.state === 'opened') {
-          this.opened = true;
-          for (const waiter of this.openWaiters) waiter();
-          this.openWaiters = [];
-        } else if (status.state === 'error') {
-          this.opened = false;
-          const err = new Error(status.error ?? 'terminal session error');
-          for (const waiter of this.openWaiters) waiter(err);
-          this.openWaiters = [];
-        }
+      case 'terminal-status':
+        this.handleStatusEvent(event as TerminalStatusMsg);
         return;
-      }
-      case 'terminal-output': {
-        const out = event as TerminalOutputMsg;
-        // The current host always tags output with the originating
-        // `execId`. Route the chunk to the matching buffer; if the
-        // exec already completed (terminal-exit landed first), the
-        // chunk is dropped instead of bleeding into a sibling exec
-        // that happens to also be in-flight.
-        //
-        // Legacy hosts that don't set `execId` fall back to broadcast
-        // behavior (accumulate against every in-flight buffer). The
-        // protocol allows only one exec at a time per session, so the
-        // broadcast is unambiguous on older hosts.
-        if (out.execId !== undefined) {
-          const buf = this.buffers.get(out.execId);
-          if (!buf) return;
-          if (out.stream === 'stdout') buf.stdout += out.data;
-          else buf.stderr += out.data;
-        } else {
-          for (const buf of this.buffers.values()) {
-            if (out.stream === 'stdout') buf.stdout += out.data;
-            else buf.stderr += out.data;
-          }
-        }
+      case 'terminal-output':
+        this.handleOutputEvent(event as TerminalOutputMsg);
         return;
-      }
-      case 'terminal-exit': {
-        const exit = event as TerminalExitMsg;
-        const resolve = this.pending.get(exit.execId);
-        const buf = this.buffers.get(exit.execId);
-        this.pending.delete(exit.execId);
-        this.buffers.delete(exit.execId);
-        if (resolve) {
-          resolve({
-            stdout: buf?.stdout ?? '',
-            stderr: buf?.stderr ?? '',
-            exitCode: exit.exitCode,
-          });
-        }
+      case 'terminal-exit':
+        this.handleExitEvent(event as TerminalExitMsg);
         return;
-      }
       case 'terminal-cleared':
       case 'terminal-media-preview':
         // Surfaced via onEvent already; no client-side state change.
@@ -253,6 +276,61 @@ export class TerminalSessionClient {
     // is added and we forget to handle it here.
     event satisfies never;
   }
+
+  private handleStatusEvent(status: TerminalStatusMsg): void {
+    if (status.state === 'opened') {
+      this.opened = true;
+      this.flushOpenWaiters();
+    } else if (status.state === 'error') {
+      this.opened = false;
+      this.flushOpenWaiters(new Error(status.error ?? 'terminal session error'));
+    }
+  }
+
+  private flushOpenWaiters(err?: Error): void {
+    const waiters = this.openWaiters;
+    this.openWaiters = [];
+    this.clearOpenTimers();
+    for (const waiter of waiters) waiter(err);
+  }
+
+  private handleOutputEvent(out: TerminalOutputMsg): void {
+    // The current host always tags output with the originating
+    // `execId`. Route the chunk to the matching buffer; if the
+    // exec already completed (terminal-exit landed first), the
+    // chunk is dropped instead of bleeding into a sibling exec
+    // that happens to also be in-flight.
+    //
+    // Legacy hosts that don't set `execId` fall back to broadcast
+    // behavior (accumulate against every in-flight buffer). The
+    // protocol allows only one exec at a time per session, so the
+    // broadcast is unambiguous on older hosts.
+    if (out.execId !== undefined) {
+      const buf = this.buffers.get(out.execId);
+      if (buf) appendOutputChunk(buf, out);
+      return;
+    }
+    for (const buf of this.buffers.values()) appendOutputChunk(buf, out);
+  }
+
+  private handleExitEvent(exit: TerminalExitMsg): void {
+    const resolve = this.pending.get(exit.execId);
+    const buf = this.buffers.get(exit.execId);
+    this.pending.delete(exit.execId);
+    this.buffers.delete(exit.execId);
+    if (resolve) {
+      resolve({
+        stdout: buf?.stdout ?? '',
+        stderr: buf?.stderr ?? '',
+        exitCode: exit.exitCode,
+      });
+    }
+  }
+}
+
+function appendOutputChunk(buf: { stdout: string; stderr: string }, out: TerminalOutputMsg): void {
+  if (out.stream === 'stdout') buf.stdout += out.data;
+  else buf.stderr += out.data;
 }
 
 // Re-export envelopes for ergonomic imports at call sites.

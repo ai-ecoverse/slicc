@@ -37,11 +37,32 @@
 
 import { encodeForbiddenRequestHeaders, headersToRecord } from '../shell/proxy-headers.js';
 import { synthesizeForwardResponse } from './llm-proxy-response.js';
+import {
+  BridgeConfigCache,
+  isBridgeConfigMessage,
+  isBridgeFetchProxyUrl,
+  resolveBridgeFromClientUrls,
+  resolveFetchProxyTarget,
+} from './llm-proxy-sw-config.js';
 
 declare const self: ServiceWorkerGlobalScope;
 
 const FETCH_PROXY_PATH = '/api/fetch-proxy';
 const BYPASS_HEADER = 'x-bypass-llm-proxy';
+const BRIDGE_TOKEN_HEADER = 'X-Bridge-Token';
+
+/**
+ * Bridge config cache populated by the page → SW `postMessage` posted
+ * from `boot/setup-sw-registration.ts` after the SW becomes the
+ * controller (and re-posted on `controllerchange`). Keyed by the
+ * posting client's id so that two leader tabs at the same hosted
+ * origin can't clobber each other — see `BridgeConfigCache` for the
+ * rationale. On a cache miss `forwardThroughProxy` falls back to
+ * parsing the controlling client's URL so the SW survives
+ * eviction/restart without losing thin-bridge mode. Mirrors the
+ * page-realm `proxied-fetch.ts` state.
+ */
+const bridgeConfigCache = new BridgeConfigCache();
 
 // Pull in preview-sw so its fetch handler runs in this SW's context.
 //
@@ -67,6 +88,26 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim());
 });
 
+// Thin-bridge config push from the page. Only acts on the tagged
+// message shape so unrelated SW postMessage traffic (e.g. future
+// page→SW signaling) doesn't corrupt the bridge state. The posting
+// client's id keys the cache so two leader tabs at the same hosted
+// origin don't clobber each other's bridge / token state.
+self.addEventListener('message', (event: ExtendableMessageEvent) => {
+  if (!isBridgeConfigMessage(event.data)) return;
+  const source = event.source;
+  // `source` may be Client | ServiceWorker | MessagePort | null. Only
+  // Client carries the `id` we key the cache on; anything else is
+  // dropped silently — the page-side bootstrap only sends from window
+  // clients, so a non-Client sender is either an unrelated message or
+  // a future channel we haven't wired up yet.
+  if (!source || !('id' in source) || typeof source.id !== 'string') return;
+  bridgeConfigCache.set(source.id, {
+    apiBaseUrl: event.data.apiBaseUrl,
+    token: event.data.token,
+  });
+});
+
 self.addEventListener('fetch', (event: FetchEvent) => {
   const req = event.request;
   if (req.headers.get(BYPASS_HEADER) === '1') return;
@@ -87,10 +128,10 @@ self.addEventListener('fetch', (event: FetchEvent) => {
   // Non-network protocols: nothing for us to do.
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
 
-  event.respondWith(forwardThroughProxy(req));
+  event.respondWith(forwardThroughProxy(req, event.clientId || null));
 });
 
-async function forwardThroughProxy(req: Request): Promise<Response> {
+async function forwardThroughProxy(req: Request, clientId: string | null): Promise<Response> {
   const targetUrl = req.url;
   const inboundHeaders: Record<string, string> = {};
   req.headers.forEach((value, key) => {
@@ -114,6 +155,49 @@ async function forwardThroughProxy(req: Request): Promise<Response> {
   }
   proxyHeaders.set('X-Target-URL', targetUrl);
 
+  // Thin-bridge: rewrite the forward target onto the local node-server's
+  // origin and attach the per-process bridge token. Per-client cache
+  // lookup keyed by the triggering FetchEvent's `clientId` keeps two
+  // leader tabs at the same hosted origin isolated. Cache miss falls
+  // back to parsing `bridge`/`bridgeToken` from the triggering client
+  // URL; if that client is a worker (kernel DedicatedWorker → no
+  // launch params) or unknown, we additionally enumerate the page
+  // window clients so the SW recovers bridge mode after eviction +
+  // worker-originated fetches. Same-origin (non-bridge) callers keep
+  // the legacy `/api/fetch-proxy` path with no token header — mirrors
+  // `proxied-fetch.ts` gating.
+  const cached = bridgeConfigCache.get(clientId);
+  const hasCache = !!cached;
+  const triggeringClientUrl = await readClientUrl(clientId);
+  const windowClientUrls = hasCache ? [] : await readWindowClientUrls();
+  const bridge = resolveBridgeFromClientUrls(cached, [triggeringClientUrl, ...windowClientUrls]);
+
+  // Bridge-proxy pass-through: when the original request ALREADY targets
+  // the bridge's own `/api/fetch-proxy`, re-proxying it would clobber the
+  // caller's `X-Target-URL` (the cross-origin analogue of the same-origin
+  // skip at the top of the fetch handler). Re-fetch with the bypass
+  // header so this SW instance does not re-intercept the outgoing call,
+  // preserving the caller's headers byte-for-byte.
+  if (bridge && isBridgeFetchProxyUrl(req.url, bridge.apiBaseUrl, FETCH_PROXY_PATH)) {
+    const passHeaders = new Headers(req.headers);
+    passHeaders.set(BYPASS_HEADER, '1');
+    const passInit: RequestInit = {
+      method: req.method,
+      headers: passHeaders,
+      cache: 'no-store',
+      credentials: req.credentials,
+      redirect: 'manual',
+      signal: req.signal,
+      body: await readForwardBody(req),
+    };
+    return synthesizeForwardResponse(await fetch(req.url, passInit));
+  }
+
+  if (bridge) {
+    proxyHeaders.set(BRIDGE_TOKEN_HEADER, bridge.token);
+  }
+  const forwardUrl = resolveFetchProxyTarget(FETCH_PROXY_PATH, bridge);
+
   const body = await readForwardBody(req);
   const init: RequestInit = {
     method: req.method,
@@ -131,7 +215,7 @@ async function forwardThroughProxy(req: Request): Promise<Response> {
   // user-/timeout-cancellations into infrastructure errors and (b) break
   // unrelated callers like validateApiKey() which depend on rejected
   // fetches to classify transient outages as `kind: 'skipped'`.
-  const response = await fetch(FETCH_PROXY_PATH, init);
+  const response = await fetch(forwardUrl, init);
   // Wrap in a synthetic Response (see `llm-proxy-response.ts` for
   // the full rationale). Body stays a streamed ReadableStream so
   // SSE token-by-token UX for LLM completions is unchanged.
@@ -148,6 +232,40 @@ async function readForwardBody(req: Request): Promise<BodyInit | undefined> {
   // payloads, so buffering the body is the more reliable transport.
   const body = await req.arrayBuffer();
   return body.byteLength > 0 ? body : undefined;
+}
+
+/**
+ * Resolve the controlling client's URL for the bridge-config fallback
+ * path. Returns `null` when the client is unknown (e.g. background
+ * fetch, deleted tab) — the caller treats that as cache-only mode.
+ */
+async function readClientUrl(clientId: string | null): Promise<string | null> {
+  if (!clientId) return null;
+  try {
+    const client = await self.clients.get(clientId);
+    return client?.url ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Enumerate page window clients for the bridge-config fallback. Used
+ * when the triggering fetch came from the kernel DedicatedWorker (whose
+ * URL has no launch params) or an unknown client. Guarded so a clients
+ * API hiccup can't throw inside the fetch handler — on any error we
+ * return `[]` and the caller treats it as cache-only mode.
+ */
+async function readWindowClientUrls(): Promise<string[]> {
+  try {
+    const clients = await self.clients.matchAll({
+      type: 'window',
+      includeUncontrolled: true,
+    });
+    return clients.map((c) => c.url).filter((u): u is string => !!u);
+  } catch {
+    return [];
+  }
 }
 
 // Reference unused import so it survives tree-shaking (the helper is

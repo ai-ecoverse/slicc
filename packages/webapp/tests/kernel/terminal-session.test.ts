@@ -528,4 +528,97 @@ describe('TerminalSessionHost ⇄ TerminalSessionClient round-trip', () => {
     channel.port1.close();
     channel.port2.close();
   });
+
+  // Regression: the panel terminal mounts and sends `terminal-open` before
+  // the worker's `TerminalSessionHost` subscribes (the offscreen-bridge
+  // boot order). The fire-once `open` was dropped → the banner rendered
+  // but the prompt never appeared. The client now resends `terminal-open`
+  // until a `terminal-status` arrives.
+  it('open retries until terminal-status: opened arrives (boot-race)', async () => {
+    const channel = new MessageChannel();
+    const shell = makeStubShell();
+    const shellFactory = vi.fn(() => shell);
+    const panelTransport = createPanelMessageChannelTransport(channel.port1);
+    const panelClient = new OffscreenClient(
+      {
+        onStatusChange: vi.fn(),
+        onScoopCreated: vi.fn(),
+        onScoopListUpdate: vi.fn(),
+        onIncomingMessage: vi.fn(),
+      },
+      panelTransport
+    );
+    const client = new TerminalSessionClient({ client: panelClient, sid: 'br' });
+
+    // Begin open BEFORE the host starts — the first envelope is dropped
+    // (no listener on the worker port yet).
+    const openP = client.open({ cwd: '/', retryMs: 20, timeoutMs: 2000 });
+
+    // Race window: let the open envelope go out (and get lost).
+    await tick(50);
+
+    // Now start the host. The next retry tick will find a listener.
+    const bridgeTransport = createBridgeMessageChannelTransport(channel.port2);
+    const host = new TerminalSessionHost({
+      transport: bridgeTransport,
+      createShell: shellFactory,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+    });
+    const stopHost = host.start();
+
+    // Must eventually resolve.
+    await openP;
+    expect(shellFactory).toHaveBeenCalledWith('br', { cwd: '/', env: undefined });
+
+    client.close();
+    stopHost();
+    channel.port1.close();
+    channel.port2.close();
+  });
+
+  it('open rejects with timeout error when no host ever subscribes', async () => {
+    const channel = new MessageChannel();
+    const panelTransport = createPanelMessageChannelTransport(channel.port1);
+    const panelClient = new OffscreenClient(
+      {
+        onStatusChange: vi.fn(),
+        onScoopCreated: vi.fn(),
+        onScoopListUpdate: vi.fn(),
+        onIncomingMessage: vi.fn(),
+      },
+      panelTransport
+    );
+    const client = new TerminalSessionClient({ client: panelClient, sid: 'to' });
+
+    await expect(client.open({ cwd: '/', retryMs: 10, timeoutMs: 50 })).rejects.toThrow(
+      /timed out/
+    );
+
+    client.close();
+    channel.port1.close();
+    channel.port2.close();
+  });
+
+  it('close mid-open-retry rejects the pending open and stops retrying', async () => {
+    const channel = new MessageChannel();
+    const panelTransport = createPanelMessageChannelTransport(channel.port1);
+    const panelClient = new OffscreenClient(
+      {
+        onStatusChange: vi.fn(),
+        onScoopCreated: vi.fn(),
+        onScoopListUpdate: vi.fn(),
+        onIncomingMessage: vi.fn(),
+      },
+      panelTransport
+    );
+    const client = new TerminalSessionClient({ client: panelClient, sid: 'cm' });
+
+    const openP = client.open({ cwd: '/', retryMs: 10, timeoutMs: 5000 });
+    await tick(30);
+    client.close();
+    await expect(openP).rejects.toThrow(/closed/);
+
+    channel.port1.close();
+    channel.port2.close();
+  });
 });
