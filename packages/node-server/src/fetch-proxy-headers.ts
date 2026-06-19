@@ -27,5 +27,7 @@ export const FETCH_PROXY_SKIP_HEADERS: ReadonlySet<string> = new Set([
   'x-proxy-cookie',
   'x-proxy-origin',
   'x-proxy-referer',
+  // Kept in sync with `BRIDGE_TOKEN_HEADER` in `bridge-security.ts`
+  // (lowercased because Node lowercases incoming request header keys).
   'x-bridge-token',
 ]);
