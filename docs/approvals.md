@@ -140,9 +140,10 @@ ScoopContext.init() — cone (unchanged)
 
 Brokers (`packages/webapp/src/sudo/`):
 
-- **Extension** — `createExtensionSudoBroker` relays offscreen → side panel via
-  `chrome.runtime.sendMessage`; the panel responder (`installPanelSudoResponder`,
-  wired in `ui/main.ts`) raises the real `window.confirm`/`window.prompt`.
+- **Extension** — the thin extension delegates approval to the hosted leader tab.
+  The kernel worker raises the prompt directly in the leader tab (the page realm
+  hosts `window.confirm` / `window.prompt`); there is no longer an offscreen-to-
+  side-panel relay because the extension does not ship either surface.
 - **CLI / Electron** — `createHttpSudoBroker` POSTs `POST /api/sudo-approve`
   (`packages/node-server/src/sudo/`), which selects an OS-native backend
   (Electron / osascript / PowerShell / zenity / TTY).
@@ -386,12 +387,13 @@ In the **extension**, the picker additionally routes through the shared
 picker popup window (`packages/chrome-extension/picker-popup.html` —
 `?kind=directory` mode — plus the shared helpers `openMountPickerPopup` /
 `loadAndClearPendingHandle` / `reactivateHandle` in
-`packages/webapp/src/fs/mount-picker-popup.ts`). Chrome's side panel cannot
-host macOS TCC (Transparency, Consent, and Control) permission dialogs and
-crashes when `showDirectoryPicker` is invoked there against a system folder
-Chrome refuses to share (Documents/Downloads/Desktop/home). All three
-extension-side mount entry points use the popup: the shell `mount` command,
-agent-driven approval dips, and the welcome sprinkle's `request-mount` lick.
+`packages/webapp/src/fs/mount-picker-popup.ts`). The hosted leader tab the
+SW pins cannot host macOS TCC (Transparency, Consent, and Control) permission
+dialogs reliably and crashes when `showDirectoryPicker` is invoked there
+against a system folder Chrome refuses to share (Documents/Downloads/Desktop/home).
+All three extension-side mount entry points use the popup: the shell `mount`
+command, agent-driven approval dips, and the welcome sprinkle's `request-mount`
+lick.
 
 Local mounts are cone-only because the directory picker requires a real user
 gesture. S3 / DA mounts are allowed from scoops since their credentials come
@@ -403,20 +405,21 @@ from the secret store.
 all call a WebUSB / Web Serial / WebHID device picker. Same gesture constraint
 as `mount`.
 
-The panel terminal bridges the gesture identically: `RemoteTerminalView`
+The page terminal bridges the gesture identically: `RemoteTerminalView`
 pre-intercepts a `<cmd> request` line on Enter, runs the picker in the page
 realm, then forwards a rewritten command carrying `--__resolved <handle>` so
 the worker-side command body looks up the already-granted device instead of
 prompting. In the extension, the picker additionally routes through a
 dedicated popup window (`usb-picker-popup.html` / `serial-picker-popup.html` /
-`hid-picker-popup.html`) because the side panel cannot host `requestDevice`
-reliably.
+`hid-picker-popup.html`) because the hosted leader tab cannot host
+`requestDevice` reliably across all configurations.
 
 Because the gesture must originate from a real keystroke, the picker
 subcommands do **not** work from an agent `bash` tool call or a scoop with no
-UI — only from the panel terminal (cone) or an extension popup. Already-
-granted handles (from `*-list`/`*-request`) can be operated on from any realm
-via panel-RPC. Chromium-only; unavailable in the cloud / hosted-leader float.
+UI — only from the terminal in the leader tab (cone) or an extension popup.
+Already-granted handles (from `*-list`/`*-request`) can be operated on from
+any realm via panel-RPC. Chromium-only; unavailable in the cloud /
+hosted-leader float.
 
 ### Authoring agent-driven approval UI
 
@@ -463,7 +466,7 @@ outcome. ✅ = pass, ⚠️ = noted asymmetry, ❌ = regression — fix before m
 | `serial request`                   | Panel terminal       | `picker-popup.html?kind=serial-port` opens → chooser → `serial list` shows handle `serial1`          |
 | Agent issues `serial request`      | Cone-driven approval | Card click → popup → grant → handle returned                                                         |
 | `esptool flash …` without `--port` | Panel terminal       | Routes through `serial request` popup; once granted, esptool drives the same handle                  |
-| Composer mic button (push-to-talk) | Composer             | `getUserMedia` prompt appears in the **side panel** (extension) or the page (standalone)             |
+| Composer mic button (push-to-talk) | Composer             | `getUserMedia` prompt appears in the hosted leader tab (extension and standalone alike)              |
 
 Cancel / deny on each row to confirm the surface emits `slicc-permission-deny`
 with `reason: 'cancelled'`; the picker dip should not stay open.
@@ -488,12 +491,13 @@ the dialog — same constraint as the mount picker.
 ### Microphone (voice input)
 
 `packages/webapp/src/ui/voice-input.ts` calls
-`navigator.mediaDevices.getUserMedia({ audio: true })`. Chrome's side panel
-cannot trigger the mic permission prompt — `getUserMedia` silently fails. The
-voice-input module falls back to a popup window (`voice-popup.html`) for the
-one-time permission grant; once granted, permission is cached per origin and
-subsequent invocations succeed directly in the side panel. The mechanics are
-documented in [`docs/pitfalls.md` "Voice Input: Extension Workaround"](./pitfalls.md#voice-input-extension-workaround).
+`navigator.mediaDevices.getUserMedia({ audio: true })`. In some extension
+configurations the hosted leader tab cannot trigger the mic permission prompt
+reliably — `getUserMedia` silently fails. The voice-input module falls back to
+a popup window (`voice-popup.html`) for the one-time permission grant; once
+granted, permission is cached per origin and subsequent invocations succeed
+directly in the leader tab. The mechanics are documented in
+[`docs/pitfalls.md` "Voice Input: Extension Workaround"](./pitfalls.md#voice-input-extension-workaround).
 
 ### Files
 

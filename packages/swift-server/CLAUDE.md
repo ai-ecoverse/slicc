@@ -6,6 +6,10 @@ This file covers the native macOS server in `packages/swift-server/`.
 
 `packages/swift-server/` is a Hummingbird-based standalone server that serves the built UI, launches Chrome/Electron, proxies CDP, and exposes the lick WebSocket/event surface.
 
+## Thin-bridge parity
+
+Swift-server and `packages/node-server/` are byte-for-byte compatible bridges. With the breaking thin-extension release the launched Chrome/Electron pages load the hosted webapp from `https://www.sliccy.ai` (or `http://localhost:8787` for the wrangler dev harness) with the local bridge attached via `?bridge=ws://localhost:<cdpPort>/cdp&bridgeToken=<token>` (or `/electron?...&role=leader|follower` for Electron pages). `CDPProxy.swift` echoes the `slicc.bridge.v1.<token>` Sec-WebSocket-Protocol per RFC 6455, matching node-server's `Sec-WebSocket-Protocol` handling — the webapp's `CDPClient` uses the same subprotocol regardless of bridge implementation. See [`docs/architecture.md` §Thin-Bridge Architecture](../../docs/architecture.md#thin-bridge-architecture) for the cross-bridge contract.
+
 ## Build and Test Commands
 
 ```bash
