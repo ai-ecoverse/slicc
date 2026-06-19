@@ -7,6 +7,7 @@
  * which look like real tokens but aren't.
  */
 
+import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 import { createLogger } from './logger.js';
 
 const log = createLogger('secret-env');
@@ -97,7 +98,7 @@ export async function fetchSecretEnvVars(): Promise<Record<string, string>> {
   }
 
   try {
-    const resp = await fetch('/api/secrets/masked');
+    const resp = await fetch(resolveApiUrl('/api/secrets/masked'), { headers: apiHeaders() });
     if (!resp.ok) {
       log.warn('Failed to fetch masked secrets', { status: resp.status });
       return {};

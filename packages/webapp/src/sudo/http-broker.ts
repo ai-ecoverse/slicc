@@ -14,6 +14,7 @@
  */
 
 import { createLogger } from '../core/logger.js';
+import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 import { suggestPattern } from './suggest-pattern.js';
 import {
   SUDO_APPROVE_PATH,
@@ -50,9 +51,9 @@ export function createHttpSudoBroker(deps: HttpSudoBrokerDeps = {}): SudoBroker 
       }
 
       try {
-        const resp = await fetchImpl(path, {
+        const resp = await fetchImpl(resolveApiUrl(path), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: apiHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({
             kind: req.kind,
             detail: req.detail,

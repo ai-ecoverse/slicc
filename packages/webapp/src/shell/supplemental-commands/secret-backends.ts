@@ -7,7 +7,14 @@
  * existing transports — HTTP `/api/secrets*` in CLI, `chrome.runtime` messages
  * in the extension. Session secrets never touch disk/storage; only the
  * in-memory session store in the trusted realm holds their values.
+ *
+ * The CLI backend routes through `resolveApiUrl` / `apiHeaders` so thin-bridge
+ * mode (UI on sliccy.ai, node-server cross-origin on localhost) reaches the
+ * bridge with `X-Bridge-Token`; same-origin callers keep the relative URL and
+ * no extra headers.
  */
+
+import { apiHeaders, resolveApiUrl } from '../proxied-fetch.js';
 
 /** A secret's identity + scope, without its value. */
 export interface SecretRecord {
@@ -72,9 +79,12 @@ async function apiCall(
   path: string,
   body?: unknown
 ): Promise<{ ok: boolean; status: number; data: unknown }> {
-  const init: RequestInit = { method, headers: { 'Content-Type': 'application/json' } };
+  const init: RequestInit = {
+    method,
+    headers: apiHeaders({ 'Content-Type': 'application/json' }),
+  };
   if (body) init.body = JSON.stringify(body);
-  const resp = await fetch(`/api/secrets${path}`, init);
+  const resp = await fetch(resolveApiUrl(`/api/secrets${path}`), init);
   const data = await resp.json().catch(() => ({}));
   return { ok: resp.ok, status: resp.status, data };
 }

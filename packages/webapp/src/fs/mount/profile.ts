@@ -12,6 +12,8 @@
  * Profile name is accepted for symmetry but only `default` has meaning.
  */
 
+import { apiHeaders, resolveApiUrl } from '../../shell/proxied-fetch.js';
+
 /**
  * The minimal SecretStore surface this module needs. Any concrete store
  * (production or test fake) implementing `get` is structurally compatible.
@@ -94,7 +96,7 @@ export async function getDefaultSecretStore(): Promise<SecretStore> {
     return {
       async get(key: string): Promise<string | undefined> {
         try {
-          const resp = await fetch('/api/secrets');
+          const resp = await fetch(resolveApiUrl('/api/secrets'), { headers: apiHeaders() });
           if (!resp.ok) return undefined;
           const entries = (await resp.json()) as Array<{ name: string }>;
           if (!entries.find((e) => e.name === key)) return undefined;

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setBridgeToken, setLocalApiBaseUrl } from '../../../src/shell/proxied-fetch.js';
 import {
   createCliSecretBackend,
   createDefaultSecretBackend,
@@ -33,6 +34,8 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  setLocalApiBaseUrl(null);
+  setBridgeToken(null);
 });
 
 describe('createCliSecretBackend.list', () => {
@@ -249,5 +252,54 @@ describe('createExtensionSecretBackend', () => {
       (globalThis as { chrome: { runtime: { sendMessage: ReturnType<typeof vi.fn> } } }).chrome
         .runtime.sendMessage
     ).toHaveBeenCalled();
+  });
+});
+
+describe('createCliSecretBackend — thin-bridge URL + token', () => {
+  it('legacy / same-origin: hits the relative /api/secrets path with no X-Bridge-Token', async () => {
+    const { calls } = mockFetch(() => jsonResponse([]));
+    await createCliSecretBackend().list();
+    expect(calls[0].url).toBe('/api/secrets');
+    expect(calls[1].url).toBe('/api/secrets/session');
+    expect(calls[0].init.headers?.['X-Bridge-Token']).toBeUndefined();
+    expect(calls[1].init.headers?.['X-Bridge-Token']).toBeUndefined();
+  });
+
+  it('thin-bridge: hits the bridge origin with X-Bridge-Token', async () => {
+    setLocalApiBaseUrl('http://localhost:5710');
+    setBridgeToken('abc-123');
+    const { calls } = mockFetch(() => jsonResponse([]));
+    await createCliSecretBackend().list();
+    expect(calls[0].url).toBe('http://localhost:5710/api/secrets');
+    expect(calls[1].url).toBe('http://localhost:5710/api/secrets/session');
+    expect(calls[0].init.headers?.['X-Bridge-Token']).toBe('abc-123');
+    expect(calls[1].init.headers?.['X-Bridge-Token']).toBe('abc-123');
+  });
+
+  it('thin-bridge: peek query string is preserved on the bridge origin', async () => {
+    setLocalApiBaseUrl('http://localhost:5710');
+    setBridgeToken('abc-123');
+    const { calls } = mockFetch(() =>
+      jsonResponse({ name: 'A B', preview: 'masked', domains: [] })
+    );
+    await createCliSecretBackend().peek('A B');
+    expect(calls[0].url).toBe('http://localhost:5710/api/secrets/peek?name=A%20B');
+    expect(calls[0].init.headers?.['X-Bridge-Token']).toBe('abc-123');
+  });
+
+  it('base set but no token → absolute URL, still no X-Bridge-Token', async () => {
+    setLocalApiBaseUrl('http://localhost:5710');
+    const { calls } = mockFetch(() => jsonResponse([]));
+    await createCliSecretBackend().list();
+    expect(calls[0].url).toBe('http://localhost:5710/api/secrets');
+    expect(calls[0].init.headers?.['X-Bridge-Token']).toBeUndefined();
+  });
+
+  it('token set but no base → relative path, X-Bridge-Token omitted', async () => {
+    setBridgeToken('abc-123');
+    const { calls } = mockFetch(() => jsonResponse([]));
+    await createCliSecretBackend().list();
+    expect(calls[0].url).toBe('/api/secrets');
+    expect(calls[0].init.headers?.['X-Bridge-Token']).toBeUndefined();
   });
 });
