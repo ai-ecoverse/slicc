@@ -431,19 +431,20 @@ for the API and HTML conventions.
 
 ### Files
 
-| Path                                                                 | Role                                                                     |
-| -------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `packages/webcomponents/src/overlay/slicc-permissions.ts`            | The `<slicc-permissions>` web component (camera/mic/USB/HID/serial/FS)   |
-| `packages/webapp/src/ui/wc/wc-permissions.ts`                        | `installLeaderPermissionsSurface` — mounts the surface in the leader tab |
-| `packages/webapp/src/ui/wc/wc-permissions-registry.ts`               | `getLeaderPermissionsSurface()` accessor — the single page-realm seam    |
-| `packages/webapp/src/ui/wc/wc-permissions-providers.ts`              | Extension popup-backed providers (filesystem + usb + hid + serial)       |
-| `packages/webapp/src/kernel/remote-terminal-view.ts`                 | Terminal `<cmd> request` keystroke gesture → `surface.request(kind)`     |
-| `packages/webapp/src/speech/composer-speech.ts`                      | Composer mic / PTT → `surface.request('microphone')`                     |
-| `packages/webapp/src/shell/supplemental-commands/picker-approval.ts` | Cone-driven `runDevicePickerApproval` chat card (`data-picker=…`)        |
-| `packages/webapp/src/ui/dip.ts`                                      | `handleDipPickerAction` — runtime-aware dispatch for picker dip clicks   |
-| `packages/webapp/src/fs/mount-picker-popup.ts`                       | Extension popup helpers for the FS-Access picker                         |
-| `packages/chrome-extension/picker-popup.html`                        | Extension picker popup shell (mount + USB/serial/HID)                    |
-| `packages/webapp/src/ui/panel-rpc-handlers.ts`                       | `permission-request` panel-RPC op (worker → surface → registry handle)   |
+| Path                                                                 | Role                                                                                                                           |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `packages/webcomponents/src/overlay/slicc-permissions.ts`            | The `<slicc-permissions>` web component (camera/mic/USB/HID/serial/FS)                                                         |
+| `packages/webapp/src/ui/wc/wc-permissions.ts`                        | `installLeaderPermissionsSurface` — mounts the surface in the leader tab                                                       |
+| `packages/webapp/src/ui/wc/wc-permissions-registry.ts`               | `getLeaderPermissionsSurface()` accessor — the single page-realm seam                                                          |
+| `packages/webapp/src/ui/wc/wc-permissions-providers.ts`              | Extension popup-backed providers (filesystem + usb + hid + serial)                                                             |
+| `packages/webapp/src/kernel/remote-terminal-view.ts`                 | Terminal `<cmd> request` keystroke gesture → `surface.request(kind)`                                                           |
+| `packages/webapp/src/speech/composer-speech.ts`                      | Composer mic / PTT → `surface.request('microphone')`                                                                           |
+| `packages/webapp/src/shell/supplemental-commands/ffmpeg-command.ts`  | `ffmpeg -f avfoundation` camera/video capture → `surface.prompt({kinds})` (panel-RPC `permission-request` in the worker realm) |
+| `packages/webapp/src/shell/supplemental-commands/picker-approval.ts` | Cone-driven `runDevicePickerApproval` chat card (`data-picker=…`)                                                              |
+| `packages/webapp/src/ui/dip.ts`                                      | `handleDipPickerAction` — runtime-aware dispatch for picker dip clicks                                                         |
+| `packages/webapp/src/fs/mount-picker-popup.ts`                       | Extension popup helpers for the FS-Access picker                                                                               |
+| `packages/chrome-extension/picker-popup.html`                        | Extension picker popup shell (mount + USB/serial/HID)                                                                          |
+| `packages/webapp/src/ui/panel-rpc-handlers.ts`                       | `permission-request` panel-RPC op (worker → surface → registry handle)                                                         |
 
 ### Manual smoke checklist — `:8787` wrangler harness
 
@@ -456,18 +457,19 @@ For each row: launch the harness (see `docs/architecture.md` §thin-bridge
 harness), then run the action in the listed surface and confirm the listed
 outcome. ✅ = pass, ⚠️ = noted asymmetry, ❌ = regression — fix before merge.
 
-| Action                             | Surface              | Expected                                                                                             |
-| ---------------------------------- | -------------------- | ---------------------------------------------------------------------------------------------------- |
-| `mount /workspace/scratch`         | Panel terminal       | `picker-popup.html?kind=directory` opens → "Select directory" → chooser → mount appears in file tree |
-| Drag a folder onto the panel       | Folder drop          | `slicc-mount-pending` fires → mount appears (no popup; drop is the gesture)                          |
-| `usb request`                      | Panel terminal       | `picker-popup.html?kind=usb-device` opens → chooser → `usb list` shows handle `usb1`                 |
-| Agent issues `usb request` (cone)  | Cone-driven approval | Chat card "Connect USB device" → click → popup opens → grant → handle returned, no silent no-op      |
-| `hid request --vid 0x594d`         | Panel terminal       | Popup with filters applied → chooser → multi-interface device registers EVERY matching interface     |
-| Agent issues `hid request`         | Cone-driven approval | Card click → popup → grant → handle returned                                                         |
-| `serial request`                   | Panel terminal       | `picker-popup.html?kind=serial-port` opens → chooser → `serial list` shows handle `serial1`          |
-| Agent issues `serial request`      | Cone-driven approval | Card click → popup → grant → handle returned                                                         |
-| `esptool flash …` without `--port` | Panel terminal       | Routes through `serial request` popup; once granted, esptool drives the same handle                  |
-| Composer mic button (push-to-talk) | Composer             | `getUserMedia` prompt appears in the hosted leader tab (extension and standalone alike)              |
+| Action                                                                             | Surface              | Expected                                                                                                                                                              |
+| ---------------------------------------------------------------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mount /workspace/scratch`                                                         | Panel terminal       | `picker-popup.html?kind=directory` opens → "Select directory" → chooser → mount appears in file tree                                                                  |
+| Drag a folder onto the panel                                                       | Folder drop          | `slicc-mount-pending` fires → mount appears (no popup; drop is the gesture)                                                                                           |
+| `usb request`                                                                      | Panel terminal       | `picker-popup.html?kind=usb-device` opens → chooser → `usb list` shows handle `usb1`                                                                                  |
+| Agent issues `usb request` (cone)                                                  | Cone-driven approval | Chat card "Connect USB device" → click → popup opens → grant → handle returned, no silent no-op                                                                       |
+| `hid request --vid 0x594d`                                                         | Panel terminal       | Popup with filters applied → chooser → multi-interface device registers EVERY matching interface                                                                      |
+| Agent issues `hid request`                                                         | Cone-driven approval | Card click → popup → grant → handle returned                                                                                                                          |
+| `serial request`                                                                   | Panel terminal       | `picker-popup.html?kind=serial-port` opens → chooser → `serial list` shows handle `serial1`                                                                           |
+| Agent issues `serial request`                                                      | Cone-driven approval | Card click → popup → grant → handle returned                                                                                                                          |
+| `esptool flash …` without `--port`                                                 | Panel terminal       | Routes through `serial request` popup; once granted, esptool drives the same handle                                                                                   |
+| Composer mic button (push-to-talk)                                                 | Composer             | `getUserMedia` prompt appears in the hosted leader tab (extension and standalone alike)                                                                               |
+| `ffmpeg -f avfoundation -i 0 -frames:v 1 photo.jpg` (after `ipk add @ffmpeg/core`) | Panel terminal       | `<slicc-permissions>` pre-prompt for `camera` → Allow → browser prompt → photo lands in VFS; denying surfaces a clean `camera permission denied` error and no capture |
 
 Cancel / deny on each row to confirm the surface emits `slicc-permission-deny`
 with `reason: 'cancelled'`; the picker dip should not stay open.

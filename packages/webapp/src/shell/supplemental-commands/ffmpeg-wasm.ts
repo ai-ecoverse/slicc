@@ -1,66 +1,60 @@
 /**
- * Shared ffmpeg-wasm loader. Bundled as the small `@ffmpeg/ffmpeg`
- * JS wrapper; the large `@ffmpeg/core` artifacts (`ffmpeg-core.js`
- * + `ffmpeg-core.wasm`, ~31 MB combined) are intentionally NOT
- * bundled and are fetched on demand the first time `ffmpeg` runs
- * in a session.
- *
- * Caching: downloaded bytes are stored via the Cache Storage API
- * under a versioned name so subsequent loads (same session OR
- * across reloads) skip the network. The HTTP cache alone is too
- * volatile for a 31 MB asset — it gets evicted aggressively, and
- * the user-facing latency on every cold start is painful.
+ * Shared ffmpeg-wasm loader. The small `@ffmpeg/ffmpeg` JS wrapper
+ * is statically bundled; the heavy `@ffmpeg/core` artifacts
+ * (`ffmpeg-core.js` + `ffmpeg-core.wasm`, ~31 MB combined) are
+ * intentionally NOT bundled and must be installed by the user via
+ * `ipk add @ffmpeg/core`. There is no CDN fallback — uninstalled
+ * calls throw the canonical guidance error which the calling
+ * command surfaces verbatim. ZERO network in the not-installed
+ * path. Mirrors the install-required loader pattern used by
+ * `esbuild-wasm.ts`, `biome-command.ts`, and `getTypeScript()` in
+ * `shared.ts`.
  *
  * Extension mode: cross-origin `importScripts` is blocked under the
  * extension origin's CSP, and Chrome Web Store MV3 review forbids
- * hosting executable JS off-package. Both the 112 KB
- * `ffmpeg-core.js` Emscripten glue AND the `@ffmpeg/ffmpeg` wrapper
- * worker are bundled under `dist/extension/vendor/` and loaded
- * via `chrome.runtime.getURL` — same-origin to the extension,
- * satisfies the reviewer, AND keeps the worker's internal
- * `import(coreURL)` same-scheme (a cross-scheme module import
- * from a `blob:` worker to a `chrome-extension://` URL
- * deadlocks silently). The (~32 MB) `ffmpeg-core.wasm` binary
- * still streams from the CDN on first run and is cached via
- * Cache Storage.
+ * hosting executable JS off-package. Both the 112 KB `ffmpeg-core.js`
+ * Emscripten glue AND the `@ffmpeg/ffmpeg` wrapper worker are
+ * bundled under `dist/extension/vendor/` and loaded via
+ * `chrome.runtime.getURL` — same-origin to the extension, satisfies
+ * the reviewer, AND keeps the worker's internal `import(coreURL)`
+ * same-scheme (a cross-scheme module import from a `blob:` worker
+ * to a `chrome-extension://` URL deadlocks silently). The heavy
+ * `ffmpeg-core.wasm` binary is read from VFS `node_modules` via
+ * the shared `ipk` resolver — same install requirement as
+ * standalone — and handed to the wrapper as a `blob:` URL.
  *
- * Standalone CLI: `unpkg.com` ships CORS-enabled responses, so the
- * loader feeds it the bare CDN URLs. The proxied-fetch path on the
- * page side handles the bytes-into-cache hop transparently.
- *
- * Renovate compatibility: the core version is derived from the
- * `CORE_URL` constant exported by `@ffmpeg/ffmpeg/dist/esm/const.js`,
- * which the installed wrapper bumps in lockstep with its own
- * release. When renovate updates `@ffmpeg/ffmpeg` in `package.json`,
- * the CDN base URL auto-tracks the new core version — no
- * hand-maintained constants here.
+ * Standalone CLI: both the core JS glue and the wasm binary come
+ * from the ipk-installed `@ffmpeg/core` package in the VFS
+ * `node_modules`; both are materialized as `blob:` URLs so the
+ * `@ffmpeg/ffmpeg` wrapper worker (also `blob:` by default) can
+ * `import(coreURL)` same-scheme.
  */
 
 import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { unpkgUrl } from './cdn-url-builder.js';
-import { isExtensionRuntime } from './shared.js';
+import { splitPath } from '../../fs/path-utils.js';
+import { resolve as ipkResolve, type ModuleReader } from '../ipk/resolver.js';
+import { isExtensionRuntime, isNodeRuntime } from './shared.js';
 
-// Pin @ffmpeg/core version explicitly. The wrapper does NOT depend on
-// `@ffmpeg/core` in its package.json (you bring your own URL), so
-// renovate cannot bump this constant automatically as part of the
-// wrapper upgrade flow. The custom manager entry in `renovate.json`
-// teaches renovate to treat this string as an npm version pin for
-// `@ffmpeg/core`, so it raises a PR whenever a new core releases.
-// renovate: datasource=npm depName=@ffmpeg/core
-const FFMPEG_CORE_VERSION = '0.12.10';
+const FFMPEG_CORE_NOT_INSTALLED =
+  '@ffmpeg/core is not installed in node_modules: run `ipk add @ffmpeg/core` (no network fallback)';
 
-// @ffmpeg/ffmpeg always spawns its inner worker as `type: "module"`,
-// so `importScripts(coreURL)` synchronously fails (module workers
-// have no `importScripts`). The loader then falls back to a dynamic
-// `import(coreURL)` and reads `.default` off the namespace. Only the
-// ESM build of `@ffmpeg/core` provides that default export; the UMD
-// build is a side-effecting IIFE with no exports and therefore
-// surfaces as `ERROR_IMPORT_FAILURE` ("failed to import
-// ffmpeg-core.js"). Always point at /esm/.
-export const FFMPEG_CORE_CDN_BASE_URL = unpkgUrl('@ffmpeg/core', FFMPEG_CORE_VERSION, 'dist/esm/');
-export const FFMPEG_CORE_CDN_BASE = FFMPEG_CORE_CDN_BASE_URL.toString();
-
-const CACHE_NAME = `slicc-ffmpeg-${FFMPEG_CORE_VERSION}`;
+/**
+ * Read-only VFS context the loader needs to read an ipk-installed
+ * `@ffmpeg/core/dist/esm/{ffmpeg-core.js,ffmpeg-core.wasm}` pair.
+ * Mirrors the {@link IpkResolutionContext} shape used by
+ * `esbuild-wasm.ts` and `biome-command.ts` so every float
+ * (standalone/hosted/extension/Node) wires the loader the same way.
+ * `reader` is the resolver's `ModuleReader` (used to find the
+ * package via the standard `node_modules` walk); `readBytes` reads
+ * the resolved `.wasm` as raw bytes (the resolver's `readFile` is
+ * text-only). `fromDir` is the starting directory for the walk —
+ * typically the shell `cwd` of the calling command.
+ */
+export interface IpkResolutionContext {
+  reader: ModuleReader;
+  readBytes(absolutePath: string): Promise<Uint8Array>;
+  fromDir: string;
+}
 
 interface FfmpegAssetUrls {
   coreURL: string;
@@ -74,12 +68,17 @@ let ffmpegPromise: Promise<FFmpeg> | null = null;
  * Public entry point. Idempotent across calls within a session —
  * the loaded `FFmpeg` instance is shared. Subsequent `ffmpeg`
  * invocations reuse the same wasm-backed worker.
+ *
+ * Browser runtime (standalone OR extension): `ipk` is required to
+ * locate the `@ffmpeg/core` assets in VFS `node_modules`. Calls
+ * without an ipk context, or with one that finds nothing installed,
+ * throw {@link FFMPEG_CORE_NOT_INSTALLED}.
  */
 export async function getFfmpeg(
-  options: { onProgress?: (msg: string) => void } = {}
+  options: { onProgress?: (msg: string) => void; ipk?: IpkResolutionContext } = {}
 ): Promise<FFmpeg> {
   if (!ffmpegPromise) {
-    ffmpegPromise = loadFfmpeg(options.onProgress).catch((err) => {
+    ffmpegPromise = loadFfmpeg(options.onProgress, options.ipk).catch((err) => {
       // Reset on failure so the next call retries from scratch.
       ffmpegPromise = null;
       throw err;
@@ -88,10 +87,13 @@ export async function getFfmpeg(
   return ffmpegPromise;
 }
 
-async function loadFfmpeg(onProgress?: (msg: string) => void): Promise<FFmpeg> {
+async function loadFfmpeg(
+  onProgress?: (msg: string) => void,
+  ipk?: IpkResolutionContext
+): Promise<FFmpeg> {
   const log = onProgress ?? (() => {});
   const ffmpeg = new FFmpeg();
-  const assets = await resolveAssetUrls(log);
+  const assets = await resolveAssetUrls(ipk, log);
   log('initializing ffmpeg-core...');
   await ffmpeg.load({
     coreURL: assets.coreURL,
@@ -102,93 +104,88 @@ async function loadFfmpeg(onProgress?: (msg: string) => void): Promise<FFmpeg> {
   return ffmpeg;
 }
 
-async function resolveAssetUrls(log: (msg: string) => void): Promise<FfmpegAssetUrls> {
-  const coreUrl = `${FFMPEG_CORE_CDN_BASE}ffmpeg-core.js`;
-  const wasmUrl = `${FFMPEG_CORE_CDN_BASE}ffmpeg-core.wasm`;
-
-  if (!isExtensionRuntime()) {
-    // Pre-warm the Cache Storage so the worker's importScripts call
-    // hits hot bytes on subsequent reloads. Only the core JS + wasm
-    // are pre-fetched here; the inner worker JS comes from the npm
-    // bundle (same-origin) in standalone mode.
-    await Promise.all([preloadIntoCache(coreUrl, log), preloadIntoCache(wasmUrl, log)]);
-    return { coreURL: coreUrl, wasmURL: wasmUrl };
-  }
-
-  // Extension origin: both the wrapper worker and the core JS glue
-  // are bundled into the package under `vendor/` (see
-  // `build-ffmpeg-worker` and `copy-extension-assets` in
-  // `packages/chrome-extension/vite.config.ts`) and exposed as
-  // web-accessible resources. Loading both from
-  // `chrome.runtime.getURL` keeps everything on the extension origin:
-  // the wrapper worker spawns from `chrome-extension://<id>/...` and
-  // its internal `await import(coreURL)` resolves same-scheme without
-  // tripping the cross-scheme blob-to-chrome-extension module-import
-  // deadlock. Only the heavy `ffmpeg-core.wasm` binary still streams
-  // from the CDN on first run; cached bytes are served from a
-  // `blob:` URL on subsequent loads.
-  const coreUrlExt = chrome.runtime.getURL('vendor/ffmpeg-core.js');
-  const classWorkerUrlExt = chrome.runtime.getURL('vendor/ffmpeg-worker.js');
-  log('downloading ffmpeg-core.wasm (cached after first run)...');
-  const wasmBytes = await fetchWithCache(wasmUrl, 'application/wasm', log);
-  return {
-    coreURL: coreUrlExt,
-    wasmURL: bytesToBlobUrl(wasmBytes, 'application/wasm'),
-    classWorkerURL: classWorkerUrlExt,
-  };
-}
-
-async function preloadIntoCache(url: string, log: (msg: string) => void): Promise<void> {
-  if (typeof caches === 'undefined') return;
+/**
+ * Try to read `@ffmpeg/core`'s `dist/esm/ffmpeg-core.{js,wasm}` from
+ * an ipk-installed `@ffmpeg/core` in the VFS. Resolves
+ * `@ffmpeg/core/package.json` through the shared resolver (so the
+ * standard `node_modules` walk and resolution rules apply), derives
+ * the package directory from the resolved file, and reads the
+ * sibling JS source + wasm bytes. Returns `null` on any resolution
+ * / read miss so the caller surfaces the canonical guidance error.
+ * Exported so the loader's resolution behavior is unit-testable
+ * without booting the heavy wasm runtime.
+ */
+export async function tryLoadFfmpegCoreFromNodeModules(
+  ipk: IpkResolutionContext
+): Promise<{ coreSource: string; wasmBytes: Uint8Array } | null> {
+  let resolved;
   try {
-    const cache = await caches.open(CACHE_NAME);
-    const hit = await cache.match(url);
-    if (hit) return;
-    log(`fetching ${shortUrl(url)}...`);
-    const res = await fetch(url);
-    if (!res.ok) {
-      throw new Error(`ffmpeg-core fetch ${url} failed: HTTP ${res.status}`);
-    }
-    await cache.put(url, res.clone());
-  } catch (err) {
-    // Cache failures shouldn't block a working network — the
-    // loader will fall back to live HTTP next time.
-    log(`cache preload failed (${err instanceof Error ? err.message : String(err)})`);
+    resolved = await ipkResolve('@ffmpeg/core/package.json', ipk.fromDir, ipk.reader);
+  } catch {
+    return null;
+  }
+  if (resolved.type !== 'file') return null;
+  const pkgDir = splitPath(resolved.path).dir;
+  const corePath = `${pkgDir}/dist/esm/ffmpeg-core.js`;
+  const wasmPath = `${pkgDir}/dist/esm/ffmpeg-core.wasm`;
+  if (!(await ipk.reader.exists(corePath))) return null;
+  if (!(await ipk.reader.exists(wasmPath))) return null;
+  try {
+    const coreSource = await ipk.reader.readFile(corePath);
+    const wasmBytes = await ipk.readBytes(wasmPath);
+    return { coreSource, wasmBytes };
+  } catch {
+    return null;
   }
 }
 
-async function fetchWithCache(
-  url: string,
-  contentType: string,
+async function resolveAssetUrls(
+  ipk: IpkResolutionContext | undefined,
   log: (msg: string) => void
-): Promise<Uint8Array> {
-  if (typeof caches !== 'undefined') {
-    try {
-      const cache = await caches.open(CACHE_NAME);
-      const hit = await cache.match(url);
-      if (hit) {
-        return new Uint8Array(await hit.arrayBuffer());
-      }
-    } catch {
-      /* fall through to network */
-    }
+): Promise<FfmpegAssetUrls> {
+  if (isNodeRuntime()) {
+    // Node / vitest don't run the wasm core — every code path that
+    // would call into the loader short-circuits before reaching here
+    // (the avfoundation capture branch needs a browser realm). Surface
+    // a clear error if a caller still tries.
+    throw new Error('ffmpeg-wasm is not available in Node runtime');
   }
-  log(`fetching ${shortUrl(url)}...`);
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`ffmpeg asset fetch ${url} failed: HTTP ${res.status}`);
+  if (!ipk) throw new Error(FFMPEG_CORE_NOT_INSTALLED);
+  const loaded = await tryLoadFfmpegCoreFromNodeModules(ipk);
+  if (!loaded) throw new Error(FFMPEG_CORE_NOT_INSTALLED);
+
+  log(
+    `ffmpeg-core loaded from ipk node_modules (js: ${loaded.coreSource.length} chars, wasm: ${loaded.wasmBytes.byteLength} bytes)`
+  );
+  const wasmURL = bytesToBlobUrl(loaded.wasmBytes, 'application/wasm');
+
+  if (isExtensionRuntime()) {
+    // Extension origin: both the wrapper worker and the core JS glue
+    // are bundled into the package under `vendor/` (see
+    // `build-ffmpeg-worker` and `copy-extension-assets` in
+    // `packages/chrome-extension/vite.config.ts`) and exposed as
+    // web-accessible resources. Loading both from
+    // `chrome.runtime.getURL` keeps everything on the extension
+    // origin: the wrapper worker spawns from
+    // `chrome-extension://<id>/...` and its internal
+    // `await import(coreURL)` resolves same-scheme without tripping
+    // the cross-scheme `blob:` → `chrome-extension://` module-import
+    // deadlock. Only the heavy `ffmpeg-core.wasm` bytes go through
+    // the ipk → blob URL path.
+    return {
+      coreURL: chrome.runtime.getURL('vendor/ffmpeg-core.js'),
+      wasmURL,
+      classWorkerURL: chrome.runtime.getURL('vendor/ffmpeg-worker.js'),
+    };
   }
-  const bytes = new Uint8Array(await res.arrayBuffer());
-  if (typeof caches !== 'undefined') {
-    try {
-      const cache = await caches.open(CACHE_NAME);
-      const stored = new Response(bytes, { headers: { 'content-type': contentType } });
-      await cache.put(url, stored);
-    } catch {
-      /* best-effort */
-    }
-  }
-  return bytes;
+
+  // Standalone: materialize the core JS source as a blob URL so the
+  // `@ffmpeg/ffmpeg` wrapper worker (also `blob:` by default) can
+  // `import(coreURL)` same-scheme.
+  return {
+    coreURL: stringToBlobUrl(loaded.coreSource, 'text/javascript'),
+    wasmURL,
+  };
 }
 
 function bytesToBlobUrl(bytes: Uint8Array, contentType: string): string {
@@ -197,8 +194,8 @@ function bytesToBlobUrl(bytes: Uint8Array, contentType: string): string {
   return URL.createObjectURL(new Blob([buffer], { type: contentType }));
 }
 
-function shortUrl(url: string): string {
-  return url.replace(/^https?:\/\//, '').slice(0, 64);
+function stringToBlobUrl(source: string, contentType: string): string {
+  return URL.createObjectURL(new Blob([source], { type: contentType }));
 }
 
 /**

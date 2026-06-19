@@ -27,16 +27,16 @@
  *     a real DOM (extension offscreen, standalone non-worker).
  */
 
-import type { Command } from 'just-bash';
+import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import { getPanelRpcClient, hasLocalDom } from '../../kernel/panel-rpc.js';
+import { getPanelRpcClient, hasLocalDom, type PermissionRpcKind } from '../../kernel/panel-rpc.js';
 import {
   type CameraCaptureRequest,
   type CameraCaptureResult,
   captureCamera,
 } from '../../ui/panel-rpc-handlers.js';
 import { captureViaPopup, isExtensionFloat } from './extension-media-capture.js';
-import { getFfmpeg } from './ffmpeg-wasm.js';
+import { getFfmpeg, type IpkResolutionContext } from './ffmpeg-wasm.js';
 
 interface MediaDeviceSummary {
   videoinputs: Array<{ deviceId: string; label: string; groupId?: string }>;
@@ -333,6 +333,125 @@ export function parseFfmpegArgs(args: string[]): ParsedFfmpegInvocation {
  */
 export function isAvfoundationCapture(parsed: ParsedFfmpegInvocation): boolean {
   return parsed.inputs.some((input) => input.format === 'avfoundation');
+}
+
+/**
+ * Build an {@link IpkResolutionContext} from a command's `ctx` so
+ * `getFfmpeg` can locate the ipk-installed `@ffmpeg/core` in the
+ * VFS `node_modules`. Mirrors `createIpkContextFromCtx` in
+ * `tsc-command.ts` / `esbuild-command.ts` / `biome-command.ts` so
+ * every float wires the loader the same way.
+ */
+export function createIpkContextFromCtx(ctx: CommandContext): IpkResolutionContext {
+  return {
+    reader: {
+      exists: (path) => ctx.fs.exists(path),
+      isDirectory: async (path) => {
+        try {
+          return (await ctx.fs.stat(path)).isDirectory;
+        } catch {
+          return false;
+        }
+      },
+      readFile: (path) => ctx.fs.readFile(path),
+    },
+    readBytes: (path) => ctx.fs.readFileBuffer(path),
+    fromDir: ctx.cwd,
+  };
+}
+
+/**
+ * Map a parsed camera capture plan onto the `<slicc-permissions>`
+ * kinds the leader surface should prompt for: `'camera'` whenever a
+ * video track is requested, `'microphone'` for video-mode captures
+ * that include audio. Audio-only captures fall under `'microphone'`
+ * alone — the request flags `captureVideo: false` so no camera
+ * prompt is needed. Exported for unit tests.
+ */
+export function permissionKindsFor(req: CameraCaptureRequest): PermissionRpcKind[] {
+  const kinds: PermissionRpcKind[] = [];
+  const wantsVideo = req.mode === 'photo' || req.captureVideo !== false;
+  if (wantsVideo) kinds.push('camera');
+  if (req.mode === 'video' && req.captureAudio) kinds.push('microphone');
+  return kinds;
+}
+
+function describeKindsForPrompt(kinds: PermissionRpcKind[]): string {
+  if (kinds.length === 0) return 'media devices';
+  if (kinds.length === 1) return kinds[0];
+  return `${kinds.slice(0, -1).join(', ')} and ${kinds[kinds.length - 1]}`;
+}
+
+/**
+ * Route a camera/mic capture request through the unified leader
+ * `<slicc-permissions>` surface BEFORE handing off to the underlying
+ * capture mechanism (panel-rpc, direct `getUserMedia`, or the
+ * extension capture popup). Mirrors the composer-speech mic flow
+ * (`packages/webapp/src/speech/composer-speech.ts`) and the
+ * `permission-request` panel-RPC handler
+ * (`packages/webapp/src/ui/panel-rpc-handlers.ts`):
+ *
+ * - Page realm with a mounted surface → call `surface.prompt(...)`
+ *   directly. Granted → `{ ok: true }`; cancelled / error → clean
+ *   denial message.
+ * - Worker realm → round-trip via `panel-rpc('permission-request')`;
+ *   the page-side handler forwards to the same surface.
+ * - No surface mounted (boot race, test environment without a
+ *   leader, …) → fall through with `{ ok: true }` so the legacy
+ *   capture path can still surface the browser's native prompt
+ *   instead of failing the command outright.
+ *
+ * Exported for unit-test composition.
+ */
+export async function requestCapturePermission(
+  kinds: PermissionRpcKind[]
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  if (kinds.length === 0) return { ok: true };
+  const description = `ffmpeg is requesting access to your ${describeKindsForPrompt(kinds)}.`;
+
+  // Page realm: ask the in-tab surface directly when one is mounted.
+  if (typeof window !== 'undefined') {
+    try {
+      const { getLeaderPermissionsSurface } = await import(
+        '../../ui/wc/wc-permissions-registry.js'
+      );
+      const surface = getLeaderPermissionsSurface();
+      if (surface) {
+        const result = await surface.prompt({ kinds, description });
+        if (result.status === 'granted') return { ok: true };
+        const detail = result.message ? `: ${result.message}` : '';
+        return { ok: false, message: `${result.reason ?? result.status}${detail}` };
+      }
+    } catch {
+      // wc-permissions-registry isn't reachable from this realm —
+      // fall through to the panel-RPC bridge / legacy capture path.
+    }
+  }
+
+  // Worker realm: bridge to the leader surface via panel-RPC. The
+  // generous 5-minute timeout matches the underlying capture call —
+  // the user may take a while to click Allow in the prompt UI.
+  const panelRpc = getPanelRpcClient();
+  if (panelRpc) {
+    try {
+      await panelRpc.call('permission-request', { kinds, description }, { timeoutMs: 5 * 60_000 });
+      return { ok: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // No mounted surface (boot race, headless test) — fall through
+      // and let the legacy capture path surface the browser's own
+      // prompt; preserves backward compatibility for callers that
+      // never set up the leader UI.
+      if (/permission surface unavailable/i.test(message)) {
+        return { ok: true };
+      }
+      return { ok: false, message };
+    }
+  }
+
+  // No realm to route through — proceed and let the capture path
+  // surface its own error.
+  return { ok: true };
 }
 
 /**
@@ -634,6 +753,21 @@ async function runAvfoundationCapture(
     };
   }
 
+  // Route every capture mechanism (popup, direct getUserMedia,
+  // panel-RPC) through the unified leader `<slicc-permissions>`
+  // surface first. The surface gates the prompt UI; on grant, the
+  // browser-level camera/mic permission carries through to the
+  // capture call below (same origin, same activation).
+  const permKinds = permissionKindsFor(plan.request);
+  const permResult = await requestCapturePermission(permKinds);
+  if (!permResult.ok) {
+    return {
+      stdout: '',
+      stderr: `ffmpeg: camera permission denied (${permResult.message})\n`,
+      exitCode: 1,
+    };
+  }
+
   let result: CameraCaptureResult;
   try {
     if (isExtensionFloat()) {
@@ -715,6 +849,7 @@ async function runAvfoundationCapture(
         captureMime: plan.captureMime,
         outputName: plan.outputPath,
         outputOpts: parsed.outputOpts,
+        ipk: createIpkContextFromCtx(ctx),
         onLog: (line) => {
           transcodeLog += `${line}\n`;
         },
@@ -760,13 +895,18 @@ async function runAvfoundationCapture(
  * codec / filter / container options the browser-side capture can't
  * satisfy on its own. Inputs are staged into MEMFS under a name
  * matching the capture mime so ffmpeg picks the right demuxer; the
- * output path is reduced to a filename for MEMFS.
+ * output path is reduced to a filename for MEMFS. `ipk` is the
+ * VFS resolution context the loader uses to find the user-installed
+ * `@ffmpeg/core` package — without it (or with `@ffmpeg/core`
+ * missing), the loader throws the canonical `ipk add` guidance
+ * error which the caller surfaces verbatim.
  */
 async function transcodeCapturedBytes(args: {
   bytes: Uint8Array;
   captureMime: string;
   outputName: string;
   outputOpts: string[];
+  ipk: IpkResolutionContext;
   onLog: (line: string) => void;
 }): Promise<Uint8Array> {
   const inputExt = captureExtensionForMime(args.captureMime);
@@ -774,7 +914,7 @@ async function transcodeCapturedBytes(args: {
   const outputName = `__out_${args.outputName.split('/').pop() || 'out.bin'}`;
 
   args.onLog('transcoding captured stream...');
-  const ffmpeg = await getFfmpeg({ onProgress: args.onLog });
+  const ffmpeg = await getFfmpeg({ onProgress: args.onLog, ipk: args.ipk });
   const logHandler = (event: { type: string; message: string }): void => {
     args.onLog(event.message);
   };
@@ -842,6 +982,7 @@ async function runWasmFfmpeg(
       onProgress: (msg) => {
         stderr += `${msg}\n`;
       },
+      ipk: createIpkContextFromCtx(ctx),
     });
   } catch (err) {
     return {
