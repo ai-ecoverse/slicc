@@ -12,8 +12,8 @@
  * `?raw`, transpiled to CJS once per process, and stitched into
  * each test file's runner script as IIFEs. User imports of `tst`
  * are rewired to that inline module via a per-file `__tstReq`
- * shim — that also keeps the realm's `require()` pre-fetch from
- * firing an esm.sh round-trip for the tst specifier.
+ * shim — that also keeps the realm's `require()` from looking up
+ * the tst specifier in the host-built ipk module graph.
  *
  * Reporters map to tst's built-in formats: `tap` (default) →
  * tst `tap`, `--reporter=spec` → tst `pretty`.
@@ -252,16 +252,18 @@ __tst.manual = true;
 /**
  * Rewrite literal `require("...")` calls produced by the TS CJS emit
  * so the realm's `extractRequireSpecifiers` regex skips them —
- * otherwise the pre-fetch path would try to load every specifier
- * (including local files) from esm.sh. The rewrite swaps the
- * `require(` token for `__tstReq(` / `__localReq(`, which the regex
- * doesn't match.
+ * otherwise the host module graph would try to resolve every
+ * specifier (including local files) from ipk `node_modules`. The
+ * rewrite swaps the `require(` token for `__tstReq(` / `__localReq(`,
+ * which the regex doesn't match.
  *
  * Three buckets:
  *   - `tst` / `tst/tst.js` / `tst/assert(.js)?` → `__tstReq(...)`
  *   - any local specifier in `localModules`    → `__localReq(<abs>)`
- *   - everything else (bare specifiers, esm.sh consumers) is left
- *     to the realm's existing `require()` shim.
+ *   - everything else (bare specifiers) is left to the realm's
+ *     `require()` shim, which resolves it from the ipk-built CJS
+ *     module graph (a missing package surfaces the canonical
+ *     `ipk install <name>` hint, no CDN fallback).
  *
  * The regex anchors on a word boundary before `require` so it skips
  * identifier suffixes like `myrequire(...)` or `req.requireLike(...)`
@@ -335,9 +337,10 @@ async function resolveLocalSpecifier(
  * them in as IIFE-wrapped modules.
  *
  * Only relative specifiers (`./` or `../`) are followed. Bare
- * specifiers fall through to the realm's existing esm.sh shim.
- * Cycles are guarded by `modules` (path-keyed) — we re-enter only
- * for unseen paths.
+ * specifiers fall through to the realm's `require()` shim, which
+ * resolves them from the host-built CJS module graph rooted in the
+ * ipk `node_modules` tree. Cycles are guarded by `modules`
+ * (path-keyed) — we re-enter only for unseen paths.
  */
 async function collectLocalDependencies(
   fs: CommandContext['fs'],

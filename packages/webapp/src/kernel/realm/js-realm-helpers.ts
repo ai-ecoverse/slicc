@@ -425,8 +425,9 @@ export const pool: PoolFn = async <T, R>(
 // ---------------------------------------------------------------------------
 // `nodePath` — the Node `path` built-in (POSIX semantics) served by the realm
 // `require('path')` / `require('node:path')` shim. The CJS require hard-switch
-// (architecture 4.4, 6) removed the CDN, so `path` can no longer be fetched
-// from esm.sh; it is implemented here once and mirrored inline in
+// (architecture 4.4, 6) means every realm `require()` resolves from the
+// host-built ipk module graph; `path` is implemented inline here so the
+// graph can serve it without a `node_modules` install, and mirrored inline in
 // `chrome-extension/sandbox.html` (parity test in
 // `tests/kernel/realm/js-realm-helpers.test.ts`). POSIX-only: separator is
 // always `/`, mirroring the VFS.

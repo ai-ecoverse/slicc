@@ -818,12 +818,11 @@ await exec.spawn(['git', 'commit', '-m', userMessage]);
 
 #### require / module / exports
 
-Scripts can import npm packages via `require('package-name')`. This fetches from esm.sh CDN and caches for the session. Version pinning is supported: `require('lodash@4')`.
+Scripts can import npm packages via `require('package-name')`. Bare specifiers resolve from the VFS `node_modules` tree populated by `ipk` — install first, then require. There is no CDN fallback; a missing package throws `Cannot find module 'x' (run: ipk install x)` immediately.
 
 ```typescript
-const _ = require('lodash');
-const { marked } = require('marked');
-const chalk = require('chalk@5');
+const _ = require('lodash');             // requires `ipk add lodash` first
+const { marked } = require('marked');    // requires `ipk add marked` first
 module.exports: {}        // Available for ES module pattern
 exports: module.exports   // Alias
 ```
@@ -1305,19 +1304,25 @@ For large-scale processing (1000+ files), batch operations and `.jsh` scripts ar
 
 ---
 
-## CDN-backed require()
+## Bundle-first require() (ipk install → esbuild bundle → run)
 
-`node -e`, `.jsh`, and `.bsh` scripts can import npm packages at runtime via `require()`:
+`node -e` and `.jsh` resolve bare-specifier `require()` calls synchronously from the **ipk-built CJS module graph** — the host walks the VFS `node_modules` tree the same way `esbuild --bundle` does. There is **no CDN fallback** in any float (standalone CLI, hosted leader, Cherry follower, extension service worker). A missing package throws `Cannot find module 'x' (run: ipk install x)` immediately.
 
 ```js
-const _ = require('lodash');
-const { marked } = require('marked');
-const chalk = require('chalk@5');
+const _ = require('lodash'); // requires `ipk add lodash` first
+const { marked } = require('marked'); // requires `ipk add marked` first
 ```
 
-Packages are fetched from [esm.sh](https://esm.sh) and cached for the session. Version pinning via `@version` syntax is supported.
+`.bsh` scripts are stricter: they execute in the **target browser page** via CDP `Runtime.evaluate`, where the realm's resolver isn't reachable. They must be pre-bundled, and unbundled `require()` calls fail loudly:
 
-**Note:** require() is synchronous. Modules referenced with string literals are automatically pre-fetched before script execution. For dynamic specifiers, use `await import('https://esm.sh/' + name)` directly.
+```bash
+# Install deps, then bundle the .bsh entry into a single file:
+ipk add lodash
+ipx esbuild --bundle /workspace/login.okta.com.bsh \
+  --outfile=/workspace/login.okta.com.bsh
+```
+
+If a `.bsh` is loaded with surviving bare `require()` specifiers, the watchdog wrapper logs a single actionable error to the target page's console pointing at the `ipx esbuild --bundle` workflow and skips evaluation. The error never round-trips to a CDN.
 
 ### Node Built-in Modules
 
@@ -1328,8 +1333,8 @@ Some Node.js built-in modules are available via `require()`:
 | `fs`                                                    | ✅ VFS bridge (readFile, writeFile, readDir, exists, stat, mkdir, rm) |
 | `process`                                               | ✅ Shim (argv, env, cwd, exit, stdout, stderr)                        |
 | `buffer`                                                | ✅ Browser polyfill                                                   |
-| `path`                                                  | ✅ Via esm.sh (browser polyfill)                                      |
-| `url`, `querystring`, `util`, `events`, `assert`        | ✅ Via esm.sh                                                         |
+| `path`                                                  | ✅ POSIX polyfill served by the realm (no network)                    |
+| `url`, `querystring`, `util`, `events`, `assert`        | ✅ Install via `ipk add <name>` and resolve from node_modules         |
 | `http`, `https`, `crypto`, `net`, `child_process`, etc. | ❌ Not available in browser                                           |
 
 The `node:` prefix is supported: `require('node:path')` works the same as `require('path')`.

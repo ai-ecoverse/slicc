@@ -4,19 +4,19 @@
  * Two guard rails wrap every `loadModule(id)` call:
  *
  *   - `NODE_NATIVE_PACKAGES` is a hard-fail list of npm packages
- *     that ship C++ bindings via node-gyp/prebuild. Their esm.sh
- *     and jsdelivr stubs chain into a transitive `.node` loader
- *     fetch that returns 404, redirects forever, or hangs on a
- *     resource that the CDN won't serve — depending on the
- *     package. Hard-failing here keeps a stray
- *     `require('sharp')` from parking the realm for the full
- *     timeout per specifier.
+ *     that ship C++ bindings via node-gyp/prebuild. Even when the
+ *     user installs them via `ipk`, the resolver chains into a
+ *     transitive `.node` loader that the realm cannot evaluate.
+ *     Hard-failing here surfaces the canonical guidance error
+ *     immediately instead of waiting on the per-module resolution
+ *     budget per specifier.
  *
  *   - `withTimeout(promise, ms, label)` caps every actual
- *     `loadModule(id)` so a stuck transitive import still bounds
- *     the realm's wall time. esm.sh and jsdelivr normally resolve
- *     well under a second; anything still pending past 15s is
- *     almost certainly never going to complete.
+ *     `loadModule(id)` so a stuck resolution call still bounds the
+ *     realm's wall time. The host's CJS module-graph build over the
+ *     ipk `node_modules` walk normally resolves well under a
+ *     second; anything still pending past 15s is almost certainly
+ *     never going to complete.
  *
  * Mirrored verbatim in `packages/chrome-extension/sandbox.html`
  * because the sandbox iframe bootstrap runs outside the TS module

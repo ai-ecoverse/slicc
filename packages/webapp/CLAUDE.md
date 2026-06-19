@@ -226,6 +226,7 @@ Deep reference: `docs/kernel/process-model.md`.
   - `login.okta.com.bsh` → exact host match
 - Optional `// @match` directives in the first 10 lines narrow matching further.
 - `BshWatchdog` uses `ScriptCatalog` for matching and reads script content from VFS before evaluating it in the target page via CDP.
+- **Bundle-first.** The target page has no realm-side resolver — bare `require()` specifiers cannot be resolved at runtime. Install deps via `ipk add <pkg>`, bundle the script in place with `ipx esbuild --bundle <script>.bsh --outfile=<script>.bsh`, then drop the bundled file in `/workspace`. The watchdog wrapper pre-scans for unbundled `require()` specifiers and emits a single actionable bundle-first error in the target page's console instead of evaluating the script. There is no CDN fallback in any float.
 
 ## Secret-Aware Fetch Proxy
 

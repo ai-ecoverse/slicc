@@ -9,9 +9,11 @@
  *
  * The realm runtime owns: AsyncFunction construction, Node-like
  * shims (`console`, `process`, `fs` via VFS RPC, `exec` via shell
- * RPC, `fetch` via SecureFetch RPC), `require()` pre-fetch via
- * esm.sh / cdn.jsdelivr.net. See `kernel/realm/js-realm-shared.ts`
- * for the full list.
+ * RPC, `fetch` via SecureFetch RPC), and a synchronous `require()`
+ * served from a host-built CJS module graph rooted in the ipk
+ * `node_modules` walk — no CDN, no network. A missing bare module
+ * throws `Cannot find module 'x' (run: ipk install x)` immediately.
+ * See `kernel/realm/js-realm-shared.ts` for the full list.
  */
 
 import type { Command, CommandContext } from 'just-bash';
