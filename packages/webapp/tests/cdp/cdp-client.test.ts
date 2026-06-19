@@ -16,8 +16,13 @@ class MockWebSocket {
   onmessage: WSHandler | null = null;
 
   sent: string[] = [];
+  protocols: string | string[] | undefined;
 
-  constructor(public url: string) {
+  constructor(
+    public url: string,
+    protocols?: string | string[]
+  ) {
+    this.protocols = protocols;
     MockWebSocket.instances.push(this);
   }
 
@@ -122,6 +127,36 @@ describe('CDPClient', () => {
       await expect(client.connect({ url: 'ws://localhost:5710/cdp' })).rejects.toThrow(
         'Cannot connect'
       );
+    });
+
+    it('forwards a subprotocol string to the WebSocket constructor', async () => {
+      const p = client.connect({
+        url: 'ws://localhost:5710/cdp',
+        protocols: 'slicc.bridge.v1.token-abc',
+      });
+      const ws = MockWebSocket.instances[0];
+      expect(ws.protocols).toBe('slicc.bridge.v1.token-abc');
+      ws.simulateOpen();
+      await p;
+    });
+
+    it('forwards a subprotocol array to the WebSocket constructor', async () => {
+      const p = client.connect({
+        url: 'ws://localhost:5710/cdp',
+        protocols: ['slicc.bridge.v1.tok1', 'slicc.bridge.v1.tok2'],
+      });
+      const ws = MockWebSocket.instances[0];
+      expect(ws.protocols).toEqual(['slicc.bridge.v1.tok1', 'slicc.bridge.v1.tok2']);
+      ws.simulateOpen();
+      await p;
+    });
+
+    it('omits protocols argument when not provided', async () => {
+      const p = client.connect({ url: 'ws://localhost:5710/cdp' });
+      const ws = MockWebSocket.instances[0];
+      expect(ws.protocols).toBeUndefined();
+      ws.simulateOpen();
+      await p;
     });
   });
 

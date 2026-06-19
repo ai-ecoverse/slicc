@@ -26,6 +26,7 @@ import {
 } from '../../scoops/tray-runtime-config.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import { shouldUseRuntimeModeTrayDefaults } from '../runtime-mode.js';
+import { parseBridgeLaunchParams } from './bridge-launch-params.js';
 import { setupSudoStandalone } from './setup-sudo.js';
 import type { BootStageLogger } from './types.js';
 
@@ -90,8 +91,14 @@ export async function setupStandalonePrelude(
     cherryTransport = cherry.transport;
   } else {
     browser = new BrowserAPI();
+    const bridge = parseBridgeLaunchParams(win.location.search);
+    if (bridge) {
+      log.info('Routing CDP through local standalone bridge', { url: bridge.url });
+    }
     try {
-      await browser.connect();
+      await browser.connect(
+        bridge ? { url: bridge.url, protocols: bridge.subprotocol } : undefined
+      );
     } catch (err) {
       log.warn(
         'Initial CDP connect failed; worker-forwarded commands will retry on demand',

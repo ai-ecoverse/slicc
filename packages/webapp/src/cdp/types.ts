@@ -78,6 +78,14 @@ export interface CDPConnectOptions {
   url: string;
   /** Timeout for the initial connection in ms. Default: 5000. */
   timeout?: number;
+  /**
+   * `Sec-WebSocket-Protocol` value(s) offered on the upgrade. Used by the
+   * hosted-leader bridge path to pass the per-session token to a local
+   * standalone /cdp socket without leaking it via the URL. The server MUST
+   * echo back exactly one of these on the 101 (RFC 6455 §1.9) — see
+   * `packages/node-server/src/bridge-security.ts` (`BRIDGE_SUBPROTOCOL_PREFIX`).
+   */
+  protocols?: string | string[];
 }
 
 /** Options for evaluate(). */
