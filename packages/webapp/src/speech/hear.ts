@@ -16,6 +16,7 @@
  */
 
 import { createLogger } from '../core/logger.js';
+import { getLeaderPermissionsSurface } from '../ui/wc/wc-permissions-registry.js';
 import { decodeToMono16k } from './audio.js';
 import {
   getWhisper,
@@ -26,6 +27,50 @@ import {
 import { whisperLanguage } from './whisper-session.js';
 
 const log = createLogger('speech:hear');
+
+/**
+ * Minimal seam for the leader `<slicc-permissions>` surface — just the slice
+ * we need to drive a microphone grant through the unified prompt. Defined
+ * locally so tests can fake it without constructing the full custom element.
+ * Matches the structural shape of `SliccPermissions.prompt`.
+ */
+export interface HearPermissionSurface {
+  prompt(opts: {
+    kinds: ReadonlyArray<'microphone'>;
+    description?: string;
+    requestOptions?: { microphone?: { constraints?: MediaStreamConstraints } };
+  }): Promise<{
+    status: 'granted' | 'cancelled' | 'denied' | 'error';
+    grants: ReadonlyArray<{ kind: 'microphone'; stream: MediaStream } | { kind: string }>;
+    reason?: string;
+    message?: string;
+  }>;
+}
+
+/** Injectable seams for tests; real wiring picks defaults. */
+export interface HearDeps {
+  /** Returns the mounted leader permission surface, or `null` when none. */
+  getPermissionSurface?: () => HearPermissionSurface | null;
+}
+
+let injectedDeps: HearDeps = {};
+
+/** Test-only: install fakes for the permission surface lookup. */
+export function setHearDepsForTests(deps: HearDeps): void {
+  injectedDeps = deps;
+}
+
+/** Test-only: drop any injected deps so subsequent runs use real wiring. */
+export function resetHearDepsForTests(): void {
+  injectedDeps = {};
+}
+
+function resolvePermissionSurface(): HearPermissionSurface | null {
+  if (injectedDeps.getPermissionSurface) return injectedDeps.getPermissionSurface();
+  const surface = getLeaderPermissionsSurface();
+  if (!surface) return null;
+  return surface as unknown as HearPermissionSurface;
+}
 
 export interface HearCaptureOptions {
   /** BCP-47 language tag. Omit for auto-detect (whisper detects the spoken
@@ -125,14 +170,51 @@ function builtinOnce(lang: string | undefined, timeoutMs: number): Promise<strin
   });
 }
 
+/**
+ * Acquire a microphone `MediaStream` for the hear command. `hear` is
+ * agent-or-terminal-initiated with no ambient user activation, so when the
+ * leader `<slicc-permissions>` surface is mounted we drive its multi-kind
+ * prompt — the user's click on Allow IS the gesture that authorizes
+ * `getUserMedia`. When no surface is reachable (early boot, headless tests,
+ * non-WC realms) we fall back to a direct `getUserMedia` so dev/test paths
+ * keep working.
+ *
+ * Rejects with a clear message on denial / cancel / unavailable so the
+ * command exits cleanly instead of hanging.
+ */
+async function acquireMicrophoneStream(deviceId: string | undefined): Promise<MediaStream> {
+  const constraints: MediaStreamConstraints = {
+    audio: deviceId ? { deviceId: { exact: deviceId } } : true,
+  };
+  const surface = resolvePermissionSurface();
+  if (surface) {
+    const result = await surface.prompt({
+      kinds: ['microphone'],
+      description: 'The hear command needs your microphone to transcribe speech.',
+      requestOptions: { microphone: { constraints } },
+    });
+    if (result.status !== 'granted') {
+      const detail = result.message ? `: ${result.message}` : '';
+      throw new Error(`microphone permission ${result.reason ?? result.status}${detail}`);
+    }
+    const grant = result.grants.find(
+      (g): g is { kind: 'microphone'; stream: MediaStream } => g.kind === 'microphone'
+    );
+    if (!grant) throw new Error('microphone permission granted without a stream');
+    return grant.stream;
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error('microphone capture unavailable in this realm');
+  }
+  return navigator.mediaDevices.getUserMedia(constraints);
+}
+
 /** Record the mic until `stop()` is called; resolves the encoded container. */
 async function recordUntil(deviceId: string | undefined): Promise<{
   stop(): Promise<Blob | null>;
   cancel(): void;
 }> {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: deviceId ? { deviceId: { exact: deviceId } } : true,
-  });
+  const stream = await acquireMicrophoneStream(deviceId);
   const recorder = new MediaRecorder(stream);
   const chunks: Blob[] = [];
   recorder.ondataavailable = (e) => {
@@ -171,6 +253,20 @@ async function recordUntil(deviceId: string | undefined): Promise<{
   };
 }
 
+/**
+ * Acquire-and-release a microphone grant through the leader surface so the
+ * Web Speech recognizer reuses the now-granted origin permission instead of
+ * surfacing its own browser prompt. No-op when no surface is mounted — the
+ * recognizer then drives the browser prompt itself, preserving compatibility
+ * with non-WC realms and headless tests.
+ */
+async function primeBuiltinPermission(deviceId: string | undefined): Promise<void> {
+  const surface = resolvePermissionSurface();
+  if (!surface) return;
+  const stream = await acquireMicrophoneStream(deviceId);
+  for (const track of stream.getTracks()) track.stop();
+}
+
 /** One-shot capture → transcript (the `hear` command's microphone mode). */
 export async function hearCapture(opts: HearCaptureOptions = {}): Promise<HearResult> {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -185,11 +281,21 @@ export async function hearCapture(opts: HearCaptureOptions = {}): Promise<HearRe
 
   const useEnhanced = engine !== 'builtin' && enhancedReady;
   if (!useEnhanced) {
+    // Route the microphone grant through the leader `<slicc-permissions>`
+    // surface even on the builtin recognizer path so every voice input
+    // funnels through ONE prompt. We acquire-and-release: the Web Speech
+    // recognizer opens its own mic internally, but the origin-level grant
+    // is established here so its `start()` no longer triggers a separate
+    // browser prompt. Without a surface (early boot / non-WC realm) we
+    // fall through to the recognizer's own permission flow.
+    await primeBuiltinPermission(opts.deviceId);
     const transcript = await builtinOnce(opts.lang, timeoutMs);
     return { transcript, engine: 'builtin' };
   }
 
   // Enhanced: builtin endpointing + parallel capture, whisper for the text.
+  // `recordUntil` already drives the surface grant — the builtin recognizer
+  // reuses the now-granted origin permission without its own prompt.
   const recording = await recordUntil(opts.deviceId);
   let builtinText = '';
   try {
