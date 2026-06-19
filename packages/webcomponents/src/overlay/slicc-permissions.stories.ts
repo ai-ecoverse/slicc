@@ -332,7 +332,7 @@ function storyHost(args: PlaygroundArgs): HTMLElement {
  */
 export const Playground: Story = {
   args: {
-    kind: 'camera',
+    kind: 'microphone',
   },
 
   render: (args) => storyHost(args),
