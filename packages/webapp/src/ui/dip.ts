@@ -1415,12 +1415,21 @@ export function disposeDips(instances: DipInstance[]): void {
  * `{ error: <msg> }` so the agent's existing onAction handler renders
  * them through its own error path.
  */
-async function handleDipPickerAction(
+export async function handleDipPickerAction(
   msg: { type: string; action: string; data?: unknown; picker?: string },
   onLick: (action: string, data: unknown) => void
 ): Promise<void> {
   const data = (msg.data ?? null) as Record<string, unknown> | null;
   const filters = Array.isArray(data?.filters) ? (data!.filters as unknown[]) : [];
+  // Extension mode routes pickers through `chrome.windows.create` because
+  // the side panel cannot host system choosers (TCC + `requestDevice`
+  // both misbehave there). The popup runs the picker on its own button
+  // click, then posts identifiers back; the page re-acquires the granted
+  // device in its own realm.
+  if (isExtension) {
+    await handleDipPickerActionExtension(msg.picker, msg.action, filters, onLick);
+    return;
+  }
   switch (msg.picker) {
     case 'directory':
       await runDirectoryPicker(msg.action, onLick);
@@ -1439,6 +1448,76 @@ async function handleDipPickerAction(
       // still reaches the registry.
       onLick(msg.action, msg.data);
       return;
+  }
+}
+
+/**
+ * Extension-mode picker dispatch — routes mount/usb/hid/serial through
+ * the shared `picker-popup.html` window. Mirrors the standalone helpers'
+ * `onLick` contract: `{ handleInIdb, idbKey, dirName }` for directory,
+ * `{ granted, handle, info }` for device pickers. Cancellations resolve
+ * as `{ cancelled: true }`; failures as `{ error }`.
+ */
+async function handleDipPickerActionExtension(
+  picker: string | undefined,
+  action: string,
+  filters: unknown[],
+  onLick: (action: string, data: unknown) => void
+): Promise<void> {
+  try {
+    switch (picker) {
+      case 'directory': {
+        const { openMountPickerPopup } = await import('../fs/mount-picker-popup.js');
+        const res = await openMountPickerPopup();
+        if (res.cancelled) onLick(action, { cancelled: true });
+        else if (res.error) onLick(action, { error: res.error });
+        else if (res.idbKey)
+          onLick(action, {
+            handleInIdb: true,
+            idbKey: res.idbKey,
+            dirName: res.dirName ?? '',
+          });
+        else onLick(action, { error: 'mount picker returned no handle key' });
+        return;
+      }
+      case 'usb-device': {
+        const { openUsbPickerPopup } = await import('../shell/supplemental-commands/usb-picker.js');
+        const res = await openUsbPickerPopup(filters as Parameters<typeof openUsbPickerPopup>[0]);
+        // Extension popup returns identifiers only — the registry handle
+        // is re-acquired by the offscreen command in its own realm
+        // (`usb-backends.ts:reacquire`). Pass info up so picker-approval's
+        // `onAction` can hand it back to the worker command.
+        if ('cancelled' in res) onLick(action, { cancelled: true });
+        else if ('error' in res) onLick(action, { error: res.error });
+        else onLick(action, { granted: true, info: res.info });
+        return;
+      }
+      case 'serial-port': {
+        const { openSerialPickerPopup } = await import(
+          '../shell/supplemental-commands/serial-picker.js'
+        );
+        const res = await openSerialPickerPopup(
+          filters as Parameters<typeof openSerialPickerPopup>[0]
+        );
+        if ('cancelled' in res) onLick(action, { cancelled: true });
+        else if ('error' in res) onLick(action, { error: res.error });
+        else onLick(action, { granted: true, info: res.info });
+        return;
+      }
+      case 'hid-device': {
+        const { openHidPickerPopup } = await import('../shell/supplemental-commands/hid-picker.js');
+        const res = await openHidPickerPopup(filters as Parameters<typeof openHidPickerPopup>[0]);
+        if ('cancelled' in res) onLick(action, { cancelled: true });
+        else if ('error' in res) onLick(action, { error: res.error });
+        else onLick(action, { granted: true, info: res.info });
+        return;
+      }
+      default:
+        onLick(action, { error: `unknown picker kind: ${picker ?? '(none)'}` });
+        return;
+    }
+  } catch (err: unknown) {
+    onLick(action, { error: err instanceof Error ? err.message : String(err) });
   }
 }
 
@@ -1618,6 +1697,13 @@ function mountDipExtension(
       void handleDipExecRequest(iframe.contentWindow, msg);
     } else if (msg.type === 'dip-device-op') {
       void handleDipDeviceRequest(iframe.contentWindow, msg);
+    } else if (msg.type === 'dip-picker-action') {
+      // Side panel can't host system pickers reliably — `handleDipPickerAction`
+      // detects the extension runtime and routes mount + usb/hid/serial through
+      // the shared `picker-popup.html` window so the chooser runs on its own
+      // user-gesture click. Without this branch every cone-driven approval
+      // card in extension mode was a silent no-op (the dead legacy path).
+      void handleDipPickerAction(msg, onLick);
     }
   };
   window.addEventListener('message', messageHandler);

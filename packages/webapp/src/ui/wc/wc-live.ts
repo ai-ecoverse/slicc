@@ -1174,60 +1174,30 @@ function wireWcUrlContext(
  *
  * The mounted handle is published via the page-realm accessor
  * (`getLeaderPermissionsSurface`) in `wc-permissions-registry.ts` so
- * other page-side callers (panel-RPC `permission-request` handler, future
- * terminal/composer/mount migrations) can reach the same surface without
- * an ad-hoc DOM query.
+ * other page-side callers (panel-RPC `permission-request` handler,
+ * terminal `<cmd> request` gestures, composer mic / PTT, the cone-driven
+ * approval card) can reach the same surface without an ad-hoc DOM query.
+ *
+ * Extension mode (detected via `chrome.runtime.id`) injects popup-backed
+ * providers from `wc-permissions-providers.ts` so the surface keeps a
+ * single gesture entry point across runtimes — the side panel can't host
+ * `showDirectoryPicker` / `navigator.{usb,hid,serial}.request*` directly,
+ * so the popup window owns the picker click and the page re-acquires the
+ * granted device before handing it back to the surface.
  */
 function wireWcPermissionsSurface(options: AttachWcClientOptions, log: BootStageLogger): void {
   void import('./wc-permissions.js')
     .then(async ({ installLeaderPermissionsSurface }) => {
       const runtimeMode = options.standalone?.runtimeMode ?? 'standalone';
-      const providers = await buildLeaderPermissionProviders(runtimeMode);
+      const { buildLeaderPermissionProviders, isExtensionRuntime } = await import(
+        './wc-permissions-providers.js'
+      );
+      const providers = await buildLeaderPermissionProviders(
+        isExtensionRuntime() || runtimeMode === 'extension' || runtimeMode === 'extension-detached'
+      );
       installLeaderPermissionsSurface({ runtimeMode, providers });
     })
     .catch((err) => log.warn('WC permissions surface wiring failed', err));
-}
-
-/**
- * Pick injectable provider seams for the leader surface. Extension mode
- * swaps `filesystem` for a popup-window picker (the side panel can't host
- * `showDirectoryPicker` directly — see `fs/mount-picker-popup.ts`); other
- * kinds keep the platform defaults so the existing usb/hid/serial picker
- * paths (and their `--__resolved` gesture rewrite) keep working unchanged.
- */
-async function buildLeaderPermissionProviders(
-  runtimeMode: UiRuntimeMode
-): Promise<import('@slicc/webcomponents').PermissionProviders | undefined> {
-  if (runtimeMode !== 'extension' && runtimeMode !== 'extension-detached') return undefined;
-  const { openMountPickerPopup, storePendingHandle, loadAndClearPendingHandle } = await import(
-    '../../fs/mount-picker-popup.js'
-  );
-  return {
-    filesystem: {
-      async showDirectoryPicker(): Promise<FileSystemDirectoryHandle> {
-        const result = await openMountPickerPopup();
-        if (result.cancelled) {
-          throw new DOMException('mount picker cancelled', 'AbortError');
-        }
-        if (result.error) {
-          throw new Error(result.error);
-        }
-        if (!result.idbKey) {
-          throw new Error('mount picker returned no handle key');
-        }
-        const handle = await loadAndClearPendingHandle(result.idbKey);
-        if (!handle) {
-          throw new Error('mount picker returned no handle');
-        }
-        // Re-stash so downstream consumers that key off the same IDB
-        // store can still pick it up; the surface's `permission-request`
-        // handler will overwrite this with its own key on the next
-        // round-trip if it needs to.
-        await storePendingHandle(result.idbKey, handle);
-        return handle;
-      },
-    },
-  };
 }
 
 export function attachWcClient(
