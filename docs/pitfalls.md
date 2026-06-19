@@ -68,24 +68,22 @@ Manifest sandbox pages (`sandbox.html`, `sprinkle-sandbox.html`, `tool-ui-sandbo
 
 **Solutions**
 
-| Pattern                                    | How it works                                                                                                                                             | Used by                                        |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| **Fetch-and-inline (full-doc)**            | Webapp scans HTML for `<script src="https://...">`, fetches content, replaces with `<script>inline</script>` before sending to sandbox                   | `sprinkle-renderer.ts:inlineExternalScripts()` |
-| **Parent relay (partial)**                 | Sandbox sends `sprinkle-fetch-script` to parent via postMessage, parent fetches, returns `sprinkle-fetch-script-response`                                | `sprinkle-sandbox.html:fetchScriptViaRelay()`  |
-| **jsdelivr + Function constructor**        | Fetch from `https://cdn.jsdelivr.net/npm/PACKAGE` (serves UMD/CJS main file), evaluate with `(0, Function)('module', 'exports', text)(mod, mod.exports)` | `node-command.ts:__loadModule()`               |
-| **Static `<script src>` in `<head>` only** | Extension-relative scripts must load statically in the initial HTML, not via dynamic `createElement`                                                     | `sprinkle-sandbox.html` lines 8-10             |
-| **Guard `document.body` with try-catch**   | Scripts loaded in `<head>` must guard `observer.observe(document.body)` — use try-catch, not DOMContentLoaded (which interferes with sandbox page load)  | `lucide-icons.ts`                              |
+| Pattern                                    | How it works                                                                                                                                            | Used by                                        |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| **Fetch-and-inline (full-doc)**            | Webapp scans HTML for `<script src="https://...">`, fetches content, replaces with `<script>inline</script>` before sending to sandbox                  | `sprinkle-renderer.ts:inlineExternalScripts()` |
+| **Parent relay (partial)**                 | Sandbox sends `sprinkle-fetch-script` to parent via postMessage, parent fetches, returns `sprinkle-fetch-script-response`                               | `sprinkle-sandbox.html:fetchScriptViaRelay()`  |
+| **Static `<script src>` in `<head>` only** | Extension-relative scripts must load statically in the initial HTML, not via dynamic `createElement`                                                    | `sprinkle-sandbox.html` lines 8-10             |
+| **Guard `document.body` with try-catch**   | Scripts loaded in `<head>` must guard `observer.observe(document.body)` — use try-catch, not DOMContentLoaded (which interferes with sandbox page load) | `lucide-icons.ts`                              |
 
 **Key rules for extension sandbox development:**
 
 1. **Never use `<script src="https://...">` in sandbox HTML** — it will be blocked by CSP. Use fetch-and-inline or the parent relay instead.
 2. **Never dynamically create `<script>` elements with extension-relative `src`** — opaque origin blocks runtime loads. Load statically in `<head>`.
-3. **Never call `import()` with external URLs in sandbox context** — CSP blocks it and generates noisy console errors even when caught. Use jsdelivr CDN + indirect Function constructor (`(0, Function)('module', 'exports', text)`) for npm packages in `node -e`.
+3. **Never call `import()` with external URLs in sandbox context** — CSP blocks it and generates noisy console errors even when caught. `node -e`'s `require()` resolves only against the ipk-installed VFS `node_modules` graph; a missing bare module throws `Cannot find module 'x' (run: ipk install x)` instead of round-tripping a CDN. There is no jsdelivr / esm.sh fallback in any float.
 4. **Always guard `document.body` in scripts loaded from `<head>`** — use `try {} catch {}` around `observer.observe(document.body)` rather than deferring to DOMContentLoaded (DOMContentLoaded listeners interfere with sandbox page load timing).
 5. **Use the parent relay for cross-origin fetches** — sandbox null origin means CORS is unreliable. The parent webapp realm has full network access.
 6. **Call `LucideIcons.render()` explicitly after injecting content in partial-content sprinkles** — the MutationObserver can't start in `<head>` (body is null), so icons won't auto-render. An explicit `render()` call after script execution handles this.
 7. **Use function replacements with `String.replace` when the replacement contains fetched code** — `String.replace(str, replacement)` interprets `$&`, `$1`, etc. as special patterns. Minified libraries (e.g. lodash) contain `$&` in regex escape functions. Use `str.replace(match, () => replacement)` to prevent corruption.
-8. **esm.sh `?bundle` returns ESM stubs, not evaluable bundles** — the top-level URL returns a small file with `export ... from "/.../pkg.bundle.mjs"`. Use jsdelivr (`https://cdn.jsdelivr.net/npm/PACKAGE`) instead, which serves the npm package's main file (typically UMD/CJS).
 
 **macOS TCC and Picker Crashes**
 
@@ -104,7 +102,7 @@ Extension CSP also blocks CDN fetches and dynamic asset loading. ImageMagick WAS
 | **ffmpeg-core JS**   | Bundled at `dist/extension/vendor/ffmpeg-core.js` (~112 KB). Load via `chrome.runtime.getURL('vendor/ffmpeg-core.js')`. The `ffmpeg-core.wasm` binary is NOT bundled and NOT fetched from a CDN — the user installs `@ffmpeg/core` via `ipk add @ffmpeg/core` and the loader reads the wasm from VFS `node_modules` through the shared `ipk` resolver; uninstalled invocations surface a guidance error |
 | **Sandbox HTML**     | Loaded via `chrome.runtime.getURL('sandbox.html')` as iframe src                                                                                                                                                                                                                                                                                                                                        |
 
-Standalone browser mode loads Pyodide assets from jsdelivr. Keep `pyodide` pinned to an exact version in `package.json`; `packages/webapp/src/shell/supplemental-commands/shared.ts` derives the CDN URL from the installed `pyodide/package.json` version so Renovate updates the npm loader and browser assets together.
+Standalone browser mode loads the Pyodide JS loader from the ipk-installed `/workspace/node_modules/pyodide/` via the preview SW (`resolvePyodideIndexURL` in `kernel/realm/realm-factory.ts`), not from jsdelivr — a missing install surfaces the canonical `ipk add pyodide` guidance error rather than a network fetch. The `PYODIDE_RUNTIME_CDN` constant remains the single documented runtime-CDN exception for Pyodide's wheel ecosystem only (downloaded on demand by `micropip` / `loadPackage`); keep `pyodide` pinned to an exact version in `package.json` so the npm loader and the wheel host stay in lockstep.
 
 **Build Integration**
 
