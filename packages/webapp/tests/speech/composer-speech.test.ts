@@ -4,8 +4,34 @@ import type {
   SpeechSession,
 } from '@slicc/webcomponents/composer/speech';
 import { describe, expect, it, vi } from 'vitest';
-import { createComposerSpeech } from '../../src/speech/composer-speech.js';
+import {
+  createComposerSpeech,
+  type MicPermissionSurface,
+} from '../../src/speech/composer-speech.js';
 import type { WhisperAsr, WhisperProgress } from '../../src/speech/whisper-engine.js';
+
+/** Build a fake `<slicc-permissions>` slice that hands back a stub stream. */
+function fakeSurface(
+  grant: { kind: 'microphone'; stream: MediaStream } | null = {
+    kind: 'microphone',
+    stream: fakeStream(),
+  }
+) {
+  const surface = {
+    request: vi.fn(async (_kind: 'microphone', _opts?: unknown) => grant),
+  } satisfies MicPermissionSurface;
+  return surface;
+}
+
+/** A pretend `MediaStream` carrying one stoppable audio track. */
+function fakeStream(): MediaStream {
+  const stop = vi.fn();
+  const track = { stop, kind: 'audio' } as unknown as MediaStreamTrack;
+  return {
+    getTracks: () => [track],
+    // Cast: tests only touch getTracks; rest of MediaStream is irrelevant.
+  } as unknown as MediaStream;
+}
 
 function stubSession(transcript: string): SpeechSession {
   return { stop: async () => transcript, cancel: () => {} };
@@ -173,5 +199,105 @@ describe('createComposerSpeech', () => {
     const session = await speech.start({});
     await expect(session.stop()).resolves.toBe('builtin words');
     expect(builtin.startCalls).toBe(1);
+  });
+
+  it('routes requestPermission through the leader permission surface and probes-and-releases', async () => {
+    const builtin = stubBuiltin();
+    const stream = fakeStream();
+    const surface = fakeSurface({ kind: 'microphone', stream });
+    const speech = createComposerSpeech({
+      builtin,
+      loadWhisper: deferredLoader().load,
+      getPermissionSurface: () => surface,
+    });
+
+    await expect(speech.requestPermission()).resolves.toBe(true);
+    expect(surface.request).toHaveBeenCalledWith('microphone');
+    // Probe-and-release: the track captured from the grant is stopped so the
+    // real dictation session in `start()` re-acquires a fresh stream.
+    const [track] = stream.getTracks();
+    expect(track.stop).toHaveBeenCalledTimes(1);
+    // Builtin's requestPermission is bypassed when the surface owns the gesture.
+    expect(builtin.requestPermission).not.toHaveBeenCalled();
+  });
+
+  it('treats a surface denial as denied without touching the builtin engine', async () => {
+    const builtin = stubBuiltin();
+    const surface = fakeSurface(null);
+    const speech = createComposerSpeech({
+      builtin,
+      loadWhisper: deferredLoader().load,
+      getPermissionSurface: () => surface,
+    });
+
+    await expect(speech.requestPermission()).resolves.toBe(false);
+    expect(surface.request).toHaveBeenCalledWith('microphone');
+    expect(builtin.requestPermission).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the builtin requestPermission when no surface is mounted', async () => {
+    const builtin = stubBuiltin();
+    const speech = createComposerSpeech({
+      builtin,
+      loadWhisper: deferredLoader().load,
+      getPermissionSurface: () => null,
+    });
+
+    await expect(speech.requestPermission()).resolves.toBe(true);
+    expect(builtin.requestPermission).toHaveBeenCalledTimes(1);
+  });
+
+  it('acquires the whisper session stream through the surface and threads it through', async () => {
+    const builtin = stubBuiltin();
+    const loader = deferredLoader();
+    const stream = fakeStream();
+    const surface = fakeSurface({ kind: 'microphone', stream });
+    const startSession = vi.fn(async () => stubSession('whisper transcript'));
+    const speech = createComposerSpeech({
+      builtin,
+      loadWhisper: loader.load,
+      startSession: startSession as never,
+      getPermissionSurface: () => surface,
+    });
+
+    speech.warmup();
+    loader.resolve(fakeAsr);
+    await vi.waitFor(() => expect(speech.status().state).toBe('ready'));
+
+    const session = await speech.start({ deviceId: 'usb' });
+    await expect(session.stop()).resolves.toBe('whisper transcript');
+    expect(surface.request).toHaveBeenCalledWith('microphone', {
+      constraints: { audio: { deviceId: { exact: 'usb' } } },
+    });
+    expect(startSession).toHaveBeenCalledWith(
+      fakeAsr,
+      expect.objectContaining({ deviceId: 'usb', stream })
+    );
+    // The surface-acquired stream is owned by the whisper session — the
+    // probe-and-release path that runs in requestPermission must NOT fire
+    // here (otherwise capture starts on a dead track).
+    expect(stream.getTracks()[0].stop).not.toHaveBeenCalled();
+  });
+
+  it('falls back to direct getUserMedia inside the whisper session when no surface is mounted', async () => {
+    const builtin = stubBuiltin();
+    const loader = deferredLoader();
+    const startSession = vi.fn(async () => stubSession('whisper transcript'));
+    const speech = createComposerSpeech({
+      builtin,
+      loadWhisper: loader.load,
+      startSession: startSession as never,
+      getPermissionSurface: () => null,
+    });
+
+    speech.warmup();
+    loader.resolve(fakeAsr);
+    await vi.waitFor(() => expect(speech.status().state).toBe('ready'));
+
+    await speech.start({ deviceId: 'usb' });
+    expect(startSession).toHaveBeenCalledWith(
+      fakeAsr,
+      expect.objectContaining({ deviceId: 'usb', stream: undefined })
+    );
   });
 });

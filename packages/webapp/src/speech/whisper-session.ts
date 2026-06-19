@@ -29,6 +29,10 @@ export interface WhisperSessionOptions {
   lang?: string;
   onPartial?: (text: string) => void;
   onError?: (message: string) => void;
+  /** Pre-acquired microphone stream. When set, the session uses it directly
+   *  instead of calling `getUserMedia` — the host already ran the leader
+   *  permission surface under the PTT gesture and owns the grant. */
+  stream?: MediaStream;
 }
 
 export interface WhisperSessionHandle {
@@ -51,12 +55,17 @@ export async function startWhisperSession(
   asr: WhisperAsr,
   opts: WhisperSessionOptions
 ): Promise<WhisperSessionHandle> {
-  if (!navigator.mediaDevices?.getUserMedia) {
-    throw new Error('microphone capture unavailable in this realm');
+  let stream: MediaStream;
+  if (opts.stream) {
+    stream = opts.stream;
+  } else {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error('microphone capture unavailable in this realm');
+    }
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: opts.deviceId ? { deviceId: { exact: opts.deviceId } } : true,
+    });
   }
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: opts.deviceId ? { deviceId: { exact: opts.deviceId } } : true,
-  });
 
   const recorder = new MediaRecorder(stream);
   const chunks: Blob[] = [];
