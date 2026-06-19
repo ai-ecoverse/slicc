@@ -30,7 +30,7 @@ SLICC runs in a browser and controls the browser it runs in. It combines a shell
 
 ## Breaking release — thin extension + hosted webapp
 
-This release splits the webapp out of the extension. The Chrome extension is now a thin **CDP pass-through bridge + per-page launcher**; the webapp UI and the agent engine load from the hosted leader tab (`https://www.sliccy.ai/?slicc=leader`, or `http://localhost:8787/?slicc=leader` for the `SLICC_EXT_DEV=1` dev build).
+This release splits the webapp out of the extension. The Chrome extension is now a thin **CDP pass-through bridge + per-page launcher**; the webapp UI and the agent engine load from the hosted leader tab (`https://www.sliccy.ai/?slicc=leader`, or `http://localhost:5710/?slicc=leader` for the `SLICC_EXT_DEV=1` dev build).
 
 What changed:
 
