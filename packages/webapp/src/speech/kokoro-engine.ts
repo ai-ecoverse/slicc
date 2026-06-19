@@ -2,14 +2,17 @@
  * Lazy Kokoro-82M loader — the on-device speech-SYNTHESIS engine behind
  * spoken replies and the `say` command's enhanced voice.
  *
- * Same lazy-fetch contract as the whisper engine: nothing is bundled; the
+ * Same lazy-fetch contract as the whisper engine: nothing is bundled. The
  * first call dynamically imports `kokoro-js` (deduped onto the workspace's
- * `@huggingface/transformers` by the Vite configs) and streams the
+ * `@huggingface/transformers` by the Vite configs) and reads the
  * `onnx-community/Kokoro-82M-v1.0-ONNX` model (~80-300 MB depending on
- * dtype; https://ttslab.dev/models/kokoro-82m) from the Hugging Face CDN,
- * cached in Cache Storage. The download is CHAINED: `whisper-engine.ts`
- * kicks it automatically once speech recognition is ready, so by the time a
- * dictated turn completes the reply voice is usually warm.
+ * dtype; https://ttslab.dev/models/kokoro-82m) from the VFS at
+ * `/workspace/models/onnx-community/Kokoro-82M-v1.0-ONNX/` (Wave 7 swap —
+ * no Hugging Face CDN). Weights must be staged via the `hf download`
+ * shell command before first call. The "download" warmup is CHAINED:
+ * `whisper-engine.ts` kicks it automatically once speech recognition is
+ * ready, so by the time a dictated turn completes the reply voice is
+ * usually warm.
  *
  * Kokoro v1.0 ONNX ships English voices only (`a*` = en-US, `b*` = en-GB) —
  * engine pick for other languages stays on Web Speech (see `speak.ts`).

@@ -1,35 +1,49 @@
 /**
  * Shared transformers.js environment configuration for the speech engines.
  *
- * The ort-web wasm/JSEP runtime is resolved at run time, not bundle time —
- * point it at the version-matched CDN directory instead of letting the
- * bundler-mangled `import.meta.url` resolution guess (and instead of Vite
- * emitting ~22 MB assets into dist; see `vite-plugins/strip-ort-wasm-asset.ts`).
+ * Wave 7 swap (no jsdelivr): both the ort-web runtime assets AND the model
+ * weights are resolved from the VFS via the preview Service Worker.
+ *
+ * - `env.backends.onnx.wasm.wasmPaths` points at `toPreviewUrl(
+ *   '/workspace/node_modules/onnxruntime-web/dist/')` — `ipk add
+ *   onnxruntime-web` lands the dist there and the preview SW streams the
+ *   wasm/JSEP loader directly from the live OPFS-backed `VirtualFS`. No
+ *   `import.meta.url` asset emission (handled out-of-band by the vite
+ *   `strip-ort-wasm-asset` plugin), no CDN fallback.
+ * - `env.allowRemoteModels = false` + `env.localModelPath = toPreviewUrl(
+ *   '/workspace/models/')` keeps transformers.js fetching weights from the
+ *   VFS only — users place them there via the `hf download` shell command.
  *
  * Both whisper (`@huggingface/transformers` directly) and kokoro
  * (`kokoro-js`, deduped onto the same transformers copy by the Vite configs)
  * call this after import — whichever engine loads first wins; the config is
  * idempotent.
  *
- * `env.fetch` override: Hugging Face model requests 302-redirect to a Xet
- * storage backend (`cas-bridge.xethub.hf.co`) that does NOT grant CORS to
- * the leader origin (e.g. `sliccy.ai`, `localhost:8787`). In CLI /
- * standalone / thin-bridge floats we route remote http(s) requests through
- * the bridge's `/api/fetch-proxy` so the redirect is followed server-side,
- * reusing the shared `resolveApiUrl` / `apiHeaders` helpers (same wiring
- * as every other agent-initiated HTTP site). Extension float has
- * host_permissions covering both origins, so the library's default
- * `fetch` is left alone.
+ * `env.fetch` override: even though weights now live locally, transformers.js
+ * still emits HTTP requests against `huggingface.co` for catalog probes (model
+ * card, config.json) when traversing fallbacks. Routing those through
+ * `/api/fetch-proxy` keeps CORS sane on the leader origin (Xet redirect, no
+ * leader-origin grant) — same wiring as every other agent-initiated HTTP
+ * site. Extension float has host_permissions covering both origins, so the
+ * library's default `fetch` is left alone there.
  */
 
 import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
-import { jsdelivrNpmUrl } from '../shell/supplemental-commands/cdn-url-builder.js';
-import { ORT_WEB_VERSION } from './ort-version.js';
+import { toPreviewUrl } from '../shell/supplemental-commands/shared.js';
 
 /** Structural slice of transformers.js' `env` that we touch. */
 export interface TransformersEnvLike {
   backends?: { onnx?: { wasm?: { wasmPaths?: unknown } } };
   fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+  /** Disable HF-Hub fetches; weights load only from `localModelPath`. */
+  allowRemoteModels?: boolean;
+  /** Allow loading from `localModelPath` (default true; pinned to true here). */
+  allowLocalModels?: boolean;
+  /**
+   * Base URL transformers.js prepends to model ids when reading locally.
+   * `<localModelPath>/<modelId>/<file>` — must end with `/`.
+   */
+  localModelPath?: string;
 }
 
 /** Idempotency marker on a wrapped `env.fetch` — so a second engine load
@@ -37,6 +51,11 @@ export interface TransformersEnvLike {
 const FETCH_WRAPPED_MARKER = Symbol.for('slicc.transformers-env.fetch-wrapped');
 
 const isExtensionFloat = (): boolean => typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+
+/** Where the user-installed `onnxruntime-web` package lives in the VFS. */
+const ORT_DIST_VFS_PATH = '/workspace/node_modules/onnxruntime-web/dist/';
+/** Base path under which `hf download` materializes model repos in the VFS. */
+const LOCAL_MODELS_VFS_PATH = '/workspace/models/';
 
 function urlString(input: string | URL | Request): string {
   if (typeof input === 'string') return input;
@@ -73,13 +92,19 @@ async function proxiedTransformersFetch(
   return fetch(resolveApiUrl('/api/fetch-proxy'), proxyInit);
 }
 
-/** Point ort-web's runtime asset resolution at the version-pinned CDN dir,
- *  and override `env.fetch` so HF model downloads survive the Xet CORS gap. */
+/**
+ * Point ort-web at the VFS-served onnxruntime-web dist (via the preview SW),
+ * pin transformers to local-only model loading, and override `env.fetch` so
+ * any residual HF probe still survives the Xet CORS gap.
+ */
 export function configureTransformersEnv(env: TransformersEnvLike): void {
   const onnxWasm = env.backends?.onnx?.wasm;
   if (onnxWasm) {
-    onnxWasm.wasmPaths = jsdelivrNpmUrl('onnxruntime-web', ORT_WEB_VERSION, 'dist/').toString();
+    onnxWasm.wasmPaths = toPreviewUrl(ORT_DIST_VFS_PATH);
   }
+  env.allowRemoteModels = false;
+  env.allowLocalModels = true;
+  env.localModelPath = toPreviewUrl(LOCAL_MODELS_VFS_PATH);
   if (isExtensionFloat()) return;
   const existing = env.fetch as
     | (TransformersEnvLike['fetch'] & { [FETCH_WRAPPED_MARKER]?: boolean })

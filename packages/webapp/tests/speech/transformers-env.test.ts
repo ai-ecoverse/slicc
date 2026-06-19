@@ -1,8 +1,10 @@
 /**
- * `configureTransformersEnv` — applies ort-web `wasmPaths` AND wraps
- * `env.fetch` so transformers.js' model downloads route through the
- * bridge `/api/fetch-proxy` (`resolveApiUrl` + `apiHeaders`), bypassing
- * the Xet redirect's CORS gap on hosted/thin-bridge leaders.
+ * `configureTransformersEnv` — points ort-web's `wasmPaths` at the VFS-served
+ * `/preview/.../onnxruntime-web/dist/` (no jsdelivr), pins transformers to
+ * local-only model loading from `/workspace/models/`, AND wraps `env.fetch`
+ * so any residual remote http(s) probes route through the bridge
+ * `/api/fetch-proxy` (`resolveApiUrl` + `apiHeaders`), bypassing the Xet
+ * redirect's CORS gap on hosted/thin-bridge leaders.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,6 +12,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 interface FakeEnv {
   backends?: { onnx?: { wasm?: { wasmPaths?: unknown } } };
   fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+  allowRemoteModels?: boolean;
+  allowLocalModels?: boolean;
+  localModelPath?: string;
 }
 
 function makeEnv(): FakeEnv {
@@ -33,13 +38,24 @@ describe('configureTransformersEnv', () => {
     vi.restoreAllMocks();
   });
 
-  it('sets ort-web wasmPaths to the version-pinned CDN dir', async () => {
+  it('sets ort-web wasmPaths to the VFS preview path for the ipk-installed onnxruntime-web', async () => {
     const { configureTransformersEnv } = await import('../../src/speech/transformers-env.js');
     const env = makeEnv();
     configureTransformersEnv(env as never);
-    expect(typeof env.backends?.onnx?.wasm?.wasmPaths).toBe('string');
-    expect(env.backends?.onnx?.wasm?.wasmPaths).toMatch(/onnxruntime-web/);
-    expect(env.backends?.onnx?.wasm?.wasmPaths).toMatch(/\/dist\/$/);
+    const wasmPaths = env.backends?.onnx?.wasm?.wasmPaths;
+    expect(typeof wasmPaths).toBe('string');
+    expect(wasmPaths).toMatch(/\/preview\/workspace\/node_modules\/onnxruntime-web\/dist\/$/);
+    // Defense in depth: must not point at any CDN host.
+    expect(wasmPaths).not.toMatch(/jsdelivr|unpkg|huggingface/);
+  });
+
+  it('pins model loading to local /workspace/models via the preview SW', async () => {
+    const { configureTransformersEnv } = await import('../../src/speech/transformers-env.js');
+    const env = makeEnv();
+    configureTransformersEnv(env as never);
+    expect(env.allowRemoteModels).toBe(false);
+    expect(env.allowLocalModels).toBe(true);
+    expect(env.localModelPath).toMatch(/\/preview\/workspace\/models\/$/);
   });
 
   it('wraps env.fetch and routes remote http(s) URLs through /api/fetch-proxy (same-origin)', async () => {

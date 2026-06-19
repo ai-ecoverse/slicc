@@ -4,16 +4,20 @@
  *
  * Mirrors the `ffmpeg-wasm.ts` pattern for heavy on-demand artifacts: nothing
  * is bundled. The first call dynamically imports `@huggingface/transformers`
- * (its own Vite chunk) and streams the `onnx-community/whisper-tiny` model
- * files (~150 MB fp32 on WebGPU, a q8 subset on WASM) from the Hugging Face
- * CDN. transformers.js persists the model bytes in Cache Storage
- * (`env.useBrowserCache`, on by default), so reloads skip the network the
- * same way the ffmpeg core does.
+ * (its own Vite chunk) and reads the `onnx-community/whisper-tiny` model
+ * files (~150 MB fp32 on WebGPU, a q8 subset on WASM) from the VFS at
+ * `/workspace/models/onnx-community/whisper-tiny/` (Wave 7 swap — no
+ * Hugging Face CDN). `configureTransformersEnv` pins `allowRemoteModels =
+ * false` + `localModelPath` to the VFS preview URL, so weights must be
+ * staged via the `hf download` shell command (`hf download
+ * onnx-community/whisper-tiny --to /workspace/models/onnx-community/whisper-tiny`)
+ * before the first call.
  *
  * Progress: per-file `progress_callback` events are folded by
  * `createDownloadTracker` into one loaded/total/ETA snapshot, which feeds the
  * composer's "better speech recognition downloading · ready in ~ETA" line and
- * `hear --status`.
+ * `hear --status`. With local-only weights the snapshot mostly reflects the
+ * preview-SW read pass (initial decode + cache warm).
  *
  * Device: WebGPU when the browser exposes it, with one automatic retry on
  * plain WASM when the WebGPU path fails to initialize (driver/adapter

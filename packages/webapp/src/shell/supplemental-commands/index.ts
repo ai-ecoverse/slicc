@@ -25,6 +25,7 @@ import { createFfmpegCommand } from './ffmpeg-command.js';
 import { createFsWatchCommand } from './fswatch-command.js';
 import { createHearCommand } from './hear-command.js';
 import { createCommandsCommand } from './help-command.js';
+import { createHfCommand } from './hf-command.js';
 import { createHidCommand } from './hid-command.js';
 import { createHostCommand } from './host-command.js';
 import type { ImgcatCommandOptions } from './imgcat-command.js';
@@ -157,6 +158,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
           createIpxCommand('npx', { fs: options.fs, fetch: options.fetch }),
         ]
       : []),
+    ...(options.fetch ? [createHfCommand({ fetch: options.fetch })] : []),
     createFfmpegCommand(),
     createWebhookCommand(),
     createWebsocatCommand(),
