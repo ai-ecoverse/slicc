@@ -209,4 +209,26 @@ describe('registerFetchProxyRoute', () => {
     });
     expect(logger.warn.mock.calls.map((c) => c[0]).join('\n')).toContain('not allowed');
   });
+
+  it('strips the thin-bridge auth header before forwarding upstream', async () => {
+    // Regression: the bridge token authenticates the browser->local hop
+    // (validated by `createThinBridgeCorsMiddleware`); if it leaks onward
+    // to `targetUrl` a hostile or curious upstream can replay it. The
+    // route must filter `x-bridge-token` out of the forwarded headers
+    // alongside the other proxy-internal markers.
+    let receivedHeaders: Record<string, string | string[] | undefined> = {};
+    await setup((req, res) => {
+      receivedHeaders = req.headers;
+      res.setHeader('content-type', 'text/plain');
+      res.end('ok');
+    });
+    const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
+      headers: {
+        'x-target-url': upstreamUrl,
+        'x-bridge-token': 'secret-token',
+      },
+    });
+    expect(res.status).toBe(200);
+    expect(receivedHeaders['x-bridge-token']).toBeUndefined();
+  });
 });
