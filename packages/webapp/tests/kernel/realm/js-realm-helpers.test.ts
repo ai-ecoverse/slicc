@@ -517,4 +517,50 @@ describe('sandbox.html mirror parity', () => {
     // NODE_BUILTINS_UNAVAILABLE no longer contains it.
     expect(sandbox).toMatch(/NODE_BUILTIN_AVAILABLE\s*=\s*new Set\(\[[^\]]*'crypto'/);
   });
+
+  it('mirrors the nodeAssert shim and resolver wiring in both floats', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const repoRoot = resolve(here, '..', '..', '..', '..', '..');
+    const sandbox = readFileSync(
+      resolve(repoRoot, 'packages/chrome-extension/sandbox.html'),
+      'utf-8'
+    );
+    const helpers = readFileSync(
+      resolve(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-helpers.ts'),
+      'utf-8'
+    );
+    const shared = readFileSync(
+      resolve(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-shared.ts'),
+      'utf-8'
+    );
+    // The assert shim surface must be present in BOTH the canonical TS helper
+    // and the inline sandbox mirror so the iframe float matches the worker
+    // float's `require('assert')` capabilities. (Wave 14 — assert builtin.)
+    for (const needle of [
+      'AssertionError',
+      'ok',
+      'strictEqual',
+      'notStrictEqual',
+      'deepStrictEqual',
+      'notDeepStrictEqual',
+      'throws',
+      'doesNotThrow',
+    ]) {
+      expect(helpers, `js-realm-helpers.ts missing ${needle}`).toContain(needle);
+      expect(sandbox, `sandbox.html missing ${needle}`).toContain(needle);
+    }
+    // Both floats route `assert` / `node:assert` / `assert/strict` to the shim
+    // BEFORE the unavailable-builtin throw.
+    expect(shared).toMatch(/bareId\s*===\s*'assert'[\s\S]*?nodeAssert/);
+    expect(sandbox).toMatch(/bareId\s*===\s*'assert'[\s\S]*?nodeAssert/);
+    expect(shared).toMatch(/bareId\s*===\s*'assert\/strict'[\s\S]*?nodeAssertStrict/);
+    expect(sandbox).toMatch(/bareId\s*===\s*'assert\/strict'[\s\S]*?nodeAssertStrict/);
+    // Both `assert` and `assert/strict` are AVAILABLE in the sandbox inline
+    // mirror so they no longer end up in NODE_BUILTINS_UNAVAILABLE.
+    expect(sandbox).toMatch(/NODE_BUILTIN_AVAILABLE\s*=\s*new Set\(\[[^\]]*'assert'/);
+    expect(sandbox).toMatch(/NODE_BUILTIN_AVAILABLE\s*=\s*new Set\(\[[^\]]*'assert\/strict'/);
+  });
 });

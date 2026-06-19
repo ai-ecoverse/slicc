@@ -33,6 +33,8 @@ import {
   createCli,
   createColor,
   fmt,
+  nodeAssert,
+  nodeAssertStrict,
   nodeCrypto,
   nodePath,
   pool,
@@ -492,6 +494,8 @@ function createModuleSystem(opts: {
     if (bareId === 'buffer') {
       return { hit: true, value: { Buffer: (globalThis as Record<string, unknown>).Buffer } };
     }
+    if (bareId === 'assert') return { hit: true, value: nodeAssert };
+    if (bareId === 'assert/strict') return { hit: true, value: nodeAssertStrict };
     if (NODE_NATIVE_PACKAGES.has(bareId)) throw nativePackageError(id, bareId);
     if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) throw unavailableBuiltinError(id, bareId);
     return { hit: false };

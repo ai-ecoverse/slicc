@@ -161,7 +161,7 @@ function bootstrapRealmPort(port) {
   // host-side graph walker never routes a bare built-in into node_modules.
   // NODE_BUILTINS_UNAVAILABLE is DERIVED (complete set minus the available
   // ones) so the two lists can never drift.
-  const NODE_BUILTIN_AVAILABLE = new Set(['fs', 'path', 'crypto', 'process', 'buffer']);
+  const NODE_BUILTIN_AVAILABLE = new Set(['fs', 'path', 'crypto', 'process', 'buffer', 'assert', 'assert/strict']);
   const NODE_BUILTINS = new Set([
     'assert','assert/strict','async_hooks','buffer','child_process','cluster',
     'console','constants','crypto','dgram','diagnostics_channel','dns',
@@ -985,6 +985,177 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
       get subtle() { return webCrypto().subtle; },
     };
   })();
+  // `nodeAssert` / `nodeAssertStrict` — the Node `assert` built-in subset served
+  // by `require('assert')` / `require('node:assert')` / `require('assert/strict')`.
+  // Mirror of `nodeAssert` in `kernel/realm/js-realm-helpers.ts`; keep in
+  // lockstep (parity asserted by tests/kernel/realm/js-realm-helpers.test.ts).
+  const __nodeAssertPair = (function () {
+    function stringifyOperand(v) {
+      if (typeof v === 'string') return JSON.stringify(v);
+      if (v === null || v === undefined) return String(v);
+      if (typeof v === 'object') { try { return JSON.stringify(v); } catch (_) { return String(v); } }
+      return String(v);
+    }
+    function AssertionError(opts) {
+      opts = opts || {};
+      const generated = !opts.message;
+      const msg = opts.message || (stringifyOperand(opts.actual) + ' ' + (opts.operator || '!=') + ' ' + stringifyOperand(opts.expected));
+      const err = new Error(msg);
+      err.name = 'AssertionError';
+      err.actual = opts.actual;
+      err.expected = opts.expected;
+      err.operator = opts.operator || '';
+      err.generatedMessage = generated;
+      err.code = 'ERR_ASSERTION';
+      return err;
+    }
+    function toAssertError(message, fallback) {
+      if (message instanceof Error) return message;
+      if (typeof message === 'string') return AssertionError({ message: message });
+      return fallback();
+    }
+    function deepEq(a, b, strict, seen) {
+      if (strict ? Object.is(a, b) : a === b) return true;
+      // eslint-disable-next-line eqeqeq
+      if (!strict && a == b) return true;
+      if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+      if (strict && Object.getPrototypeOf(a) !== Object.getPrototypeOf(b)) return false;
+      const cached = seen.get(a);
+      if (cached === b) return true;
+      seen.set(a, b);
+      if (Array.isArray(a) !== Array.isArray(b)) return false;
+      if (Array.isArray(a) && Array.isArray(b)) {
+        if (a.length !== b.length) return false;
+        for (let i = 0; i < a.length; i++) if (!deepEq(a[i], b[i], strict, seen)) return false;
+        return true;
+      }
+      const ak = Object.keys(a);
+      const bk = Object.keys(b);
+      if (ak.length !== bk.length) return false;
+      for (const k of ak) {
+        if (!Object.prototype.hasOwnProperty.call(b, k)) return false;
+        if (!deepEq(a[k], b[k], strict, seen)) return false;
+      }
+      return true;
+    }
+    function matchThrown(err, expected) {
+      if (expected === undefined) return true;
+      if (expected instanceof RegExp) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return expected.test(msg);
+      }
+      if (typeof expected === 'function') {
+        try { if (err instanceof expected) return true; } catch (_) { /* not a class */ }
+        try { return Boolean(expected(err)); } catch (_) { return false; }
+      }
+      if (expected && typeof expected === 'object') {
+        if (!err || typeof err !== 'object') return false;
+        const keys = Object.keys(expected);
+        for (let i = 0; i < keys.length; i++) {
+          const k = keys[i];
+          const v = expected[k];
+          const ev = err[k];
+          if (v instanceof RegExp) { if (typeof ev !== 'string' || !v.test(ev)) return false; }
+          else if (ev !== v) return false;
+        }
+        return true;
+      }
+      return false;
+    }
+    function buildAssert(strictMode) {
+      const ok = function (value, message) {
+        if (value) return;
+        throw toAssertError(message, function () {
+          return AssertionError({ message: 'The expression evaluated to a falsy value', actual: value, expected: true, operator: '==' });
+        });
+      };
+      const callable = function (value, message) { ok(value, message); };
+      const strictEqual = function (actual, expected, message) {
+        if (Object.is(actual, expected)) return;
+        throw toAssertError(message, function () { return AssertionError({ actual: actual, expected: expected, operator: 'strictEqual' }); });
+      };
+      const equal = function (actual, expected, message) {
+        if (strictMode) return strictEqual(actual, expected, message);
+        // eslint-disable-next-line eqeqeq
+        if (actual == expected) return;
+        throw toAssertError(message, function () { return AssertionError({ actual: actual, expected: expected, operator: '==' }); });
+      };
+      const notStrictEqual = function (actual, expected, message) {
+        if (!Object.is(actual, expected)) return;
+        throw toAssertError(message, function () { return AssertionError({ actual: actual, expected: expected, operator: 'notStrictEqual' }); });
+      };
+      const notEqual = function (actual, expected, message) {
+        if (strictMode) return notStrictEqual(actual, expected, message);
+        // eslint-disable-next-line eqeqeq
+        if (actual != expected) return;
+        throw toAssertError(message, function () { return AssertionError({ actual: actual, expected: expected, operator: '!=' }); });
+      };
+      const deepStrictEqual = function (actual, expected, message) {
+        if (deepEq(actual, expected, true, new WeakMap())) return;
+        throw toAssertError(message, function () { return AssertionError({ actual: actual, expected: expected, operator: 'deepStrictEqual' }); });
+      };
+      const deepEqual = function (actual, expected, message) {
+        if (strictMode) return deepStrictEqual(actual, expected, message);
+        if (deepEq(actual, expected, false, new WeakMap())) return;
+        throw toAssertError(message, function () { return AssertionError({ actual: actual, expected: expected, operator: 'deepEqual' }); });
+      };
+      const notDeepStrictEqual = function (actual, expected, message) {
+        if (!deepEq(actual, expected, true, new WeakMap())) return;
+        throw toAssertError(message, function () { return AssertionError({ actual: actual, expected: expected, operator: 'notDeepStrictEqual' }); });
+      };
+      const notDeepEqual = function (actual, expected, message) {
+        if (strictMode) return notDeepStrictEqual(actual, expected, message);
+        if (!deepEq(actual, expected, false, new WeakMap())) return;
+        throw toAssertError(message, function () { return AssertionError({ actual: actual, expected: expected, operator: 'notDeepEqual' }); });
+      };
+      const throws = function (block, errorOrMsg, message) {
+        let thrown; let didThrow = false;
+        try { block(); } catch (e) { thrown = e; didThrow = true; }
+        if (!didThrow) {
+          throw toAssertError(typeof errorOrMsg === 'string' ? errorOrMsg : message, function () {
+            return AssertionError({ message: 'Missing expected exception', operator: 'throws' });
+          });
+        }
+        const isMsgOnly = typeof errorOrMsg === 'string' || errorOrMsg instanceof Error;
+        if (!isMsgOnly && !matchThrown(thrown, errorOrMsg)) {
+          throw toAssertError(message, function () {
+            return AssertionError({ message: 'Got unwanted exception', actual: thrown, operator: 'throws' });
+          });
+        }
+      };
+      const doesNotThrow = function (block, message) {
+        try { block(); } catch (e) {
+          throw toAssertError(message, function () {
+            return AssertionError({ message: 'Got unwanted exception', actual: e, operator: 'doesNotThrow' });
+          });
+        }
+      };
+      const fail = function (message) {
+        throw toAssertError(message, function () { return AssertionError({ message: 'Failed', operator: 'fail' }); });
+      };
+      callable.ok = ok;
+      callable.equal = equal;
+      callable.notEqual = notEqual;
+      callable.strictEqual = strictEqual;
+      callable.notStrictEqual = notStrictEqual;
+      callable.deepEqual = deepEqual;
+      callable.deepStrictEqual = deepStrictEqual;
+      callable.notDeepEqual = notDeepEqual;
+      callable.notDeepStrictEqual = notDeepStrictEqual;
+      callable.throws = throws;
+      callable.doesNotThrow = doesNotThrow;
+      callable.fail = fail;
+      callable.AssertionError = AssertionError;
+      return callable;
+    }
+    const strict = buildAssert(true);
+    strict.strict = strict;
+    const loose = buildAssert(false);
+    loose.strict = strict;
+    return { loose: loose, strict: strict };
+  })();
+  const nodeAssert = __nodeAssertPair.loose;
+  const nodeAssertStrict = __nodeAssertPair.strict;
   const entryFilename = init.filename;
   const entryFromDir = entryFilename && entryFilename.startsWith('/')
     ? (function (f) { const i = f.lastIndexOf('/'); return i <= 0 ? '/' : f.slice(0, i); })(entryFilename)
@@ -1021,6 +1192,8 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     if (bareId === 'crypto') return { hit: true, value: nodeCrypto };
     if (bareId === 'process') return { hit: true, value: processShim };
     if (bareId === 'buffer') return { hit: true, value: { Buffer: globalThis.Buffer } };
+    if (bareId === 'assert') return { hit: true, value: nodeAssert };
+    if (bareId === 'assert/strict') return { hit: true, value: nodeAssertStrict };
     if (NODE_NATIVE_PACKAGES.has(bareId)) throw nativeError(id, bareId);
     if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) {
       const hints = { http: ' Use fetch() instead.', https: ' Use fetch() instead.', child_process: ' Use exec() which is available as a shell bridge.', crypto: ' Use globalThis.crypto (Web Crypto API) instead.' };

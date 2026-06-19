@@ -192,3 +192,82 @@ describe('m5: crypto built-in is served by the Web Crypto-backed bridge', () => 
     expect(out.stdout.trim()).toBe('true true');
   });
 });
+
+describe('Wave 14: assert built-in is served by the nodeAssert shim', () => {
+  it('require("assert") and require("node:assert") return the SAME callable shim with .ok / .equal / .strictEqual / .deepEqual / .throws / .AssertionError / .strict', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const assert = require('assert');
+       const aliased = require('node:assert');
+       assert(true, 'callable form ok');
+       assert.ok(1);
+       assert.equal(1, '1');
+       assert.strictEqual(2, 2);
+       assert.notEqual(1, 2);
+       assert.notStrictEqual(1, '1');
+       assert.deepEqual({ a: 1, b: [2] }, { a: 1, b: [2] });
+       assert.deepStrictEqual([1, 2, 3], [1, 2, 3]);
+       assert.throws(() => { throw new TypeError('boom'); }, TypeError);
+       assert.doesNotThrow(() => {});
+       const isErr = assert.AssertionError && new assert.AssertionError({ message: 'x' }).code === 'ERR_ASSERTION';
+       const same = aliased === assert;
+       const strictRef = assert.strict && assert.strict.strict === assert.strict;
+       console.log(isErr, same, strictRef);`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stderr).not.toContain('not available in the browser');
+    expect(out.stderr).not.toContain('Cannot find module');
+    expect(out.stdout.trim()).toBe('true true true');
+  });
+
+  it('assert.strictEqual throws an AssertionError-shaped error on mismatch', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const assert = require('assert');
+       try {
+         assert.strictEqual(1, 2);
+         console.log('UNEXPECTED');
+       } catch (e) {
+         console.log(e.name, e.code, e.actual, e.expected, e.operator);
+       }`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('AssertionError ERR_ASSERTION 1 2 strictEqual');
+  });
+
+  it('require("assert/strict") returns the strict variant where .equal is strict and .deepEqual is deepStrictEqual', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const strict = require('assert/strict');
+       let looseEqThrew = false;
+       try { strict.equal(1, '1'); } catch (e) { looseEqThrew = e.code === 'ERR_ASSERTION'; }
+       let looseDeepThrew = false;
+       try { strict.deepEqual({ a: 1 }, { a: '1' }); } catch (e) { looseDeepThrew = e.code === 'ERR_ASSERTION'; }
+       console.log(looseEqThrew, looseDeepThrew, strict.strict === strict);`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('true true true');
+  });
+
+  it('a node_modules package that internally requires assert loads and runs without "module not available"', async () => {
+    const ctx = makeCtx({
+      files: {
+        '/workspace/node_modules/usesassert/package.json': JSON.stringify({
+          name: 'usesassert',
+          version: '1.0.0',
+          main: 'index.js',
+        }),
+        '/workspace/node_modules/usesassert/index.js':
+          "const assert = require('assert'); module.exports = (v) => { assert.ok(v, 'must be truthy'); return 'ok'; };",
+      },
+    });
+    const out = await runCode("const u = require('usesassert'); console.log(u(1));", ctx);
+    expect(out.exitCode).toBe(0);
+    expect(out.stderr).not.toContain('not available in the browser');
+    expect(out.stderr).not.toContain('Cannot find module');
+    expect(out.stdout.trim()).toBe('ok');
+  });
+});
