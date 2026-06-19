@@ -468,6 +468,92 @@ final class CDPProxyTests: XCTestCase {
         await proxy.receive(.text(outbound), from: client.handle.id)
         XCTAssertEqual(harness.sentTextsSnapshot(), [outbound])
     }
+
+    // MARK: - /cdp upgrade gate (RFC 6455 + BridgeSecurity wiring)
+    //
+    // Cross-runtime parity with node-server's `validateBridgeUpgrade` tests
+    // in `packages/node-server/tests/bridge-security.test.ts`. The thin
+    // standalone + thin-Electron modes both depend on the same upgrade
+    // contract: same-origin Chrome runs unchanged (bridgeToken == nil) and
+    // hosted-leader runs require the per-process subprotocol token to be
+    // echoed back so the browser keeps the socket open.
+
+    func testEvaluateBridgeUpgradeLegacyModeAllowsAllUpgrades() {
+        let decision = CDPProxy.evaluateBridgeUpgrade(
+            origin: "https://untrusted.example.com",
+            subprotocolHeader: nil,
+            bridgeToken: nil
+        )
+        guard case .upgrade(let headers) = decision else {
+            XCTFail("Expected .upgrade for legacy (nil token) mode, got \(decision)")
+            return
+        }
+        // Legacy upgrade returns empty headers (no subprotocol echo).
+        XCTAssertTrue(headers.isEmpty)
+    }
+
+    func testEvaluateBridgeUpgradeAcceptsMatchingSubprotocolAndEchoesIt() {
+        let token = "test-token-123"
+        let subprotocol = "slicc.bridge.v1.\(token)"
+        let decision = CDPProxy.evaluateBridgeUpgrade(
+            origin: "https://www.sliccy.ai",
+            subprotocolHeader: subprotocol,
+            bridgeToken: token
+        )
+        guard case .upgrade(let headers) = decision else {
+            XCTFail("Expected .upgrade for matching token, got \(decision)")
+            return
+        }
+        // RFC 6455 §1.9: the selected subprotocol MUST be echoed back in
+        // the 101 response, otherwise the client closes the socket.
+        XCTAssertEqual(headers[.secWebSocketProtocol], subprotocol)
+    }
+
+    func testEvaluateBridgeUpgradeRejectsMissingSubprotocolHeader() {
+        var rejectionReason: String?
+        let decision = CDPProxy.evaluateBridgeUpgrade(
+            origin: "https://www.sliccy.ai",
+            subprotocolHeader: nil,
+            bridgeToken: "test-token-123",
+            onReject: { rejectionReason = $0 }
+        )
+        guard case .dontUpgrade = decision else {
+            XCTFail("Expected .dontUpgrade for missing subprotocol, got \(decision)")
+            return
+        }
+        XCTAssertEqual(rejectionReason, BridgeSecurity.RejectionReason.subprotocolMissingOrMismatched.rawValue)
+    }
+
+    func testEvaluateBridgeUpgradeRejectsMismatchedSubprotocolToken() {
+        var rejectionReason: String?
+        let decision = CDPProxy.evaluateBridgeUpgrade(
+            origin: "https://www.sliccy.ai",
+            subprotocolHeader: "slicc.bridge.v1.wrong-token",
+            bridgeToken: "test-token-123",
+            onReject: { rejectionReason = $0 }
+        )
+        guard case .dontUpgrade = decision else {
+            XCTFail("Expected .dontUpgrade for wrong token, got \(decision)")
+            return
+        }
+        XCTAssertEqual(rejectionReason, BridgeSecurity.RejectionReason.subprotocolMissingOrMismatched.rawValue)
+    }
+
+    func testEvaluateBridgeUpgradeRejectsDisallowedOriginEvenWithCorrectToken() {
+        var rejectionReason: String?
+        let token = "test-token-123"
+        let decision = CDPProxy.evaluateBridgeUpgrade(
+            origin: "https://evil.example.com",
+            subprotocolHeader: "slicc.bridge.v1.\(token)",
+            bridgeToken: token,
+            onReject: { rejectionReason = $0 }
+        )
+        guard case .dontUpgrade = decision else {
+            XCTFail("Expected .dontUpgrade for disallowed origin, got \(decision)")
+            return
+        }
+        XCTAssertEqual(rejectionReason, BridgeSecurity.RejectionReason.originNotAllowed.rawValue)
+    }
 }
 
 private final class ClientRecorder: @unchecked Sendable {

@@ -96,7 +96,17 @@ struct ServerCommand: AsyncParsableCommand {
         // bridge token gates that WS upgrade and rides into the launch URL.
         // Mirrors `THIN_BRIDGE_MODE` in `packages/node-server/src/index.ts`.
         let thinBridgeMode = Self.isThinBridgeMode(config: config)
-        let bridgeToken: String? = thinBridgeMode ? BridgeSecurity.mintToken() : nil
+        // Thin-Electron mode (Path B for `--electron`): when Sliccstart
+        // (or any caller) sets `SLICC_HOSTED_LEADER_ORIGIN`, the Electron
+        // overlay loads from the hosted launcher instead of the bundled
+        // overlay, and the same `/cdp` upgrade gate kicks in. Mirrors
+        // node-server's `electron-main.ts` env-forwarding shape.
+        let thinElectronMode = Self.isThinElectronMode(config: config, environment: environment)
+        let bridgeToken: String? = Self.resolveBridgeToken(
+            thinBridgeMode: thinBridgeMode,
+            thinElectronMode: thinElectronMode,
+            environment: environment
+        )
 
         var browserProcess: Process?
         // Real Chrome PID when we routed the spawn through `/usr/bin/open`
@@ -290,11 +300,20 @@ struct ServerCommand: AsyncParsableCommand {
 
             let consoleForwarder: ConsoleForwarder?
             if config.electron {
+                let thinBridge: ThinBridgeConfig? = (thinElectronMode && bridgeToken != nil)
+                    ? ThinBridgeConfig(
+                        hostedLeaderOrigin: resolveHostedLeaderOrigin(environment: environment),
+                        bridgeWsUrl: "ws://localhost:\(servePort)/cdp",
+                        // swiftlint:disable:next force_unwrapping
+                        bridgeToken: bridgeToken!
+                    )
+                    : nil
                 let injector = ElectronOverlayInjector(
                     cdpPort: cdpPort,
                     servePort: servePort,
                     projectRoot: repositoryRoot,
-                    logger: Logger(label: "slicc.browser.electron-overlay")
+                    logger: Logger(label: "slicc.browser.electron-overlay"),
+                    thinBridge: thinBridge
                 )
                 injector.start()
                 overlayInjector = injector
@@ -321,6 +340,8 @@ struct ServerCommand: AsyncParsableCommand {
 
             if thinBridgeMode {
                 print("Thin /cdp bridge + /api at \(serveOrigin)")
+            } else if thinElectronMode {
+                print("Thin Electron overlay + /cdp gate at \(serveOrigin)")
             } else {
                 print("Serving UI at \(serveOrigin)")
             }
@@ -586,6 +607,37 @@ extension ServerCommand {
     /// connects unchanged regardless of which runtime serves it.
     static func isThinBridgeMode(config: ServerConfig) -> Bool {
         !config.dev && !config.serveOnly && !config.electron
+    }
+
+    /// True iff thin-Electron overlay mode is active. Requires `--electron`,
+    /// not `--serve-only`, and a non-empty `SLICC_HOSTED_LEADER_ORIGIN` in
+    /// the environment (the opt-in signal Sliccstart sets when spawning the
+    /// child). Mirrors node-server's `electron-main.ts` env-forwarding shape
+    /// — the same env var also activates the `/cdp` upgrade gate downstream.
+    static func isThinElectronMode(config: ServerConfig, environment: [String: String]) -> Bool {
+        guard config.electron, !config.serveOnly else { return false }
+        guard let origin = environment["SLICC_HOSTED_LEADER_ORIGIN"], !origin.isEmpty else {
+            return false
+        }
+        return true
+    }
+
+    /// Resolve the per-process `/cdp` bridge token. Returns `nil` in legacy
+    /// modes (dev / serve-only / electron-without-hosted-origin). In thin
+    /// modes, prefers an explicit `SLICC_BRIDGE_TOKEN` env var (forwarded
+    /// by Sliccstart so a single launcher-minted token gates every child)
+    /// and falls back to a freshly minted UUID. Mirrors node-server's
+    /// `BRIDGE_TOKEN` mint in `electron-main.ts` / `index.ts`.
+    static func resolveBridgeToken(
+        thinBridgeMode: Bool,
+        thinElectronMode: Bool,
+        environment: [String: String]
+    ) -> String? {
+        guard thinBridgeMode || thinElectronMode else { return nil }
+        if let token = environment["SLICC_BRIDGE_TOKEN"], !token.isEmpty {
+            return token
+        }
+        return BridgeSecurity.mintToken()
     }
 
     /// Resolve the leader origin Chrome should open in thin-bridge mode.
