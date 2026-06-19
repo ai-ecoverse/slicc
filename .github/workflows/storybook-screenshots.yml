@@ -66,14 +66,25 @@ jobs:
 
       - name: Compute changed files (PR diff)
         id: diff
+        # Use `git diff` against the PR base SHA rather than `gh pr diff`, which
+        # caps at 20000 lines and errors out on large PRs. The `fetch-depth: 0`
+        # checkout above makes the base ref locally available; on the rare case
+        # it isn't, we degrade to an empty list (zero affected stories) rather
+        # than failing the job.
         env:
-          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           mkdir -p .storybook-screenshots
-          gh pr diff "$PR_NUMBER" --name-only > .storybook-screenshots/changed-files.txt
+          OUT=.storybook-screenshots/changed-files.txt
+          : > "$OUT"
+          if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git diff --name-only "${BASE_SHA}...HEAD" > "$OUT"
+          else
+            echo "::warning::Base ref ${BASE_SHA} not available; treating as zero affected stories."
+          fi
           echo "Changed files:"
-          cat .storybook-screenshots/changed-files.txt
+          cat "$OUT"
 
       - name: Install Chromium (Storybook capture)
         run: npx playwright install --with-deps chromium

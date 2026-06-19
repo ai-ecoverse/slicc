@@ -147,26 +147,8 @@ export interface PageLeaderTrayHandle {
   readonly sync: LeaderSyncManager;
 }
 
-/**
- * Construct + start the leader tray subsystem on the page. Returns a
- * handle that the caller can hold for `host reset` and shutdown.
- *
- * Caller is responsible for gating on `workerBaseUrl` presence and
- * `joinUrl` absence (presence of a join URL means this instance is a
- * follower, handled separately by {@link startPageFollowerTray}).
- */
-export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLeaderTrayHandle {
-  const refreshIntervalMs = options._refreshIntervalMs ?? 5000;
-  const fetchImpl = options._fetchImpl ?? ((url, init) => fetch(url, init));
-
-  // Forward declarations so the closures below can capture by reference;
-  // managers are constructed bottom-up because each one references the
-  // others by closure exactly like the pre-regression `main.ts` code did.
-  let leader!: LeaderTrayManager;
-  let peers!: LeaderTrayPeerManager;
-  let sync!: LeaderSyncManager;
-
-  // --- Sync manager (top of the dependency chain — peers feeds it) ---
+/** --- Sync manager (top of the dependency chain — peers feeds it) --- */
+function buildSyncManager(options: StartPageLeaderTrayOptions): LeaderSyncManager {
   const syncOptions: LeaderSyncManagerOptions = {
     getMessages: options.getMessages,
     getMessagesForScoop: options.getMessagesForScoop,
@@ -185,13 +167,22 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
     browserTransport: options.browserTransport,
     vfs: options.vfs,
   };
-  sync = new LeaderSyncManager(syncOptions);
-  options.browserAPI.setTrayTargetProvider(sync);
+  return new LeaderSyncManager(syncOptions);
+}
 
-  // --- Peer manager: routes signaling through the leader tray and
-  // hands open data channels to the sync manager. ---
-  peers = new LeaderTrayPeerManager({
-    sendControlMessage: (message) => leader.sendControlMessage(message),
+/**
+ * --- Peer manager: routes signaling through the leader tray and hands open
+ * data channels to the sync manager. `getLeader` is a forward-reference
+ * getter because the leader manager is constructed AFTER the peer manager
+ * (each references the other by closure, exactly like the pre-regression
+ * `main.ts` code did).
+ */
+function buildPeerManager(
+  getLeader: () => LeaderTrayManager,
+  sync: LeaderSyncManager
+): LeaderTrayPeerManager {
+  return new LeaderTrayPeerManager({
+    sendControlMessage: (message) => getLeader().sendControlMessage(message),
     onPeerConnected: (peer, channel) => {
       log.info('Tray follower data channel opened', {
         controllerId: peer.controllerId,
@@ -208,11 +199,20 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
       log.info('Tray follower disconnected', { bootstrapId, reason });
     },
   });
+}
 
-  // --- Tray manager: WebSocket liaison + control-message dispatcher.
-  // Webhook events relay through the bridge to the worker's LickManager;
-  // everything else is signaling for the peer manager.
-  leader = new LeaderTrayManager({
+/**
+ * --- Tray manager: WebSocket liaison + control-message dispatcher. Webhook
+ * events relay through the bridge to the worker's LickManager; everything
+ * else is signaling for the peer manager.
+ */
+function buildLeaderManager(
+  options: StartPageLeaderTrayOptions,
+  peers: LeaderTrayPeerManager,
+  fetchImpl: typeof fetch,
+  updateUrlBar: (session: LeaderTraySession) => void
+): LeaderTrayManager {
+  return new LeaderTrayManager({
     workerBaseUrl: options.workerBaseUrl,
     runtime: options.runtime ?? 'slicc-standalone',
     ...(options.kind ? { kind: options.kind } : {}),
@@ -253,29 +253,25 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
       log.error('Leader tray reconnect gave up', { lastError, attempts });
     },
   });
+}
 
-  // --- Agent event tap → broadcast to all followers. The helper owns
-  // this subscription (and unsubscribes on stop) so the caller doesn't
-  // have to track it.
-  const unsubscribeAgent = options.onAgentEvent((event) => sync.broadcastEvent(event));
-
-  // --- Periodic refreshes. Each fires every `refreshIntervalMs` (5s
-  // default) so a single missed update on the data channel doesn't
-  // leave the follower's view permanently stale.
-  const intervals: ReturnType<typeof setInterval>[] = [];
-
-  // Browser targets: poll local CDP for the leader's open pages and
-  // push them into the sync manager as the leader's local targets.
-  // The throttle is keyed to CDP listing only — broadcast failures
-  // (the second try block below) are their own surface and shouldn't
-  // be conflated with "CDP refresh failed". See
-  // `scoops/throttled-error-tracker.ts` for the full throttle/recovery
-  // contract.
+/**
+ * Browser targets refresher: poll local CDP for the leader's open pages and
+ * push them into the sync manager as the leader's local targets. The
+ * throttle is keyed to CDP listing only — broadcast failures (the second
+ * try block below) are their own surface and shouldn't be conflated with
+ * "CDP refresh failed". See `scoops/throttled-error-tracker.ts` for the
+ * full throttle/recovery contract.
+ */
+function createRefreshLeaderTargets(
+  options: StartPageLeaderTrayOptions,
+  sync: LeaderSyncManager
+): () => Promise<void> {
   const cdpThrottle = new ThrottledErrorTracker(log, {
     failureMessage: 'Leader CDP target refresh failed (best-effort, throttled)',
     recoveryMessage: 'Leader CDP target refresh recovered (stable for debounce window)',
   });
-  const refreshLeaderTargets = async () => {
+  return async () => {
     let pages: Awaited<ReturnType<typeof options.browserAPI.listPages>>;
     try {
       pages = await options.browserAPI.listPages();
@@ -299,34 +295,43 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
       });
     }
   };
-  intervals.push(setInterval(refreshLeaderTargets, refreshIntervalMs));
-  void refreshLeaderTargets();
+}
 
-  // Scoops + sprinkles lists: re-broadcast so followers stay in sync as
-  // the leader adds, drops, or activates scoops / sprinkles.
-  intervals.push(
-    setInterval(() => {
-      try {
-        sync.broadcastScoopsList();
-        sync.broadcastSprinklesList();
-      } catch (err) {
-        // `error`, not `warn` — the prod default log level is ERROR
-        // (`logger.ts`), so `warn` would also be suppressed. The inner
-        // broadcast methods have their own narrow catches around user
-        // callbacks (e.g. `getSprinkles`); anything reaching this outer
-        // catch is unexpected and an `error`-grade signal. Sustained
-        // failures otherwise leave followers staring at stale scoop /
-        // sprinkle lists for the entire session with no log signal.
-        log.error('Failed to broadcast follower lists', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }, refreshIntervalMs)
-  );
+/**
+ * Scoops + sprinkles lists: re-broadcast so followers stay in sync as the
+ * leader adds, drops, or activates scoops / sprinkles.
+ */
+function scheduleListBroadcasts(
+  sync: LeaderSyncManager,
+  refreshIntervalMs: number
+): ReturnType<typeof setInterval> {
+  return setInterval(() => {
+    try {
+      sync.broadcastScoopsList();
+      sync.broadcastSprinklesList();
+    } catch (err) {
+      // `error`, not `warn` — the prod default log level is ERROR
+      // (`logger.ts`), so `warn` would also be suppressed. The inner
+      // broadcast methods have their own narrow catches around user
+      // callbacks (e.g. `getSprinkles`); anything reaching this outer
+      // catch is unexpected and an `error`-grade signal. Sustained
+      // failures otherwise leave followers staring at stale scoop /
+      // sprinkle lists for the entire session with no log signal.
+      log.error('Failed to broadcast follower lists', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }, refreshIntervalMs);
+}
 
-  // --- Update the URL bar with the tray join URL after successful
-  // connection, so reloads attach to the same session.
-  function updateUrlBar(session: LeaderTraySession): void {
+/**
+ * Update the URL bar with the tray join URL after successful connection, so
+ * reloads attach to the same session.
+ */
+function createUpdateUrlBar(
+  options: StartPageLeaderTrayOptions
+): (session: LeaderTraySession) => void {
+  return (session: LeaderTraySession): void => {
     const history = options._historyOverride ?? safePageHistory();
     if (!history) return;
     try {
@@ -339,7 +344,44 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
         error: err instanceof Error ? err.message : String(err),
       });
     }
-  }
+  };
+}
+
+/**
+ * Construct + start the leader tray subsystem on the page. Returns a
+ * handle that the caller can hold for `host reset` and shutdown.
+ *
+ * Caller is responsible for gating on `workerBaseUrl` presence and
+ * `joinUrl` absence (presence of a join URL means this instance is a
+ * follower, handled separately by {@link startPageFollowerTray}).
+ */
+export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLeaderTrayHandle {
+  const refreshIntervalMs = options._refreshIntervalMs ?? 5000;
+  const fetchImpl = options._fetchImpl ?? ((url, init) => fetch(url, init));
+
+  // Forward declaration so the peer manager can call `leader.sendControlMessage`
+  // through the getter closure; the leader is constructed bottom-up after peers.
+  let leader!: LeaderTrayManager;
+  const updateUrlBar = createUpdateUrlBar(options);
+
+  const sync = buildSyncManager(options);
+  options.browserAPI.setTrayTargetProvider(sync);
+  const peers = buildPeerManager(() => leader, sync);
+  leader = buildLeaderManager(options, peers, fetchImpl, updateUrlBar);
+
+  // --- Agent event tap → broadcast to all followers. The helper owns
+  // this subscription (and unsubscribes on stop) so the caller doesn't
+  // have to track it.
+  const unsubscribeAgent = options.onAgentEvent((event) => sync.broadcastEvent(event));
+
+  // --- Periodic refreshes. Each fires every `refreshIntervalMs` (5s
+  // default) so a single missed update on the data channel doesn't
+  // leave the follower's view permanently stale.
+  const intervals: ReturnType<typeof setInterval>[] = [];
+  const refreshLeaderTargets = createRefreshLeaderTargets(options, sync);
+  intervals.push(setInterval(refreshLeaderTargets, refreshIntervalMs));
+  void refreshLeaderTargets();
+  intervals.push(scheduleListBroadcasts(sync, refreshIntervalMs));
 
   // Kick off the leader connection.
   void leader

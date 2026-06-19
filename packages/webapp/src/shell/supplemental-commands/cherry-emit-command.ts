@@ -133,88 +133,104 @@ export function buildDefaultCherryRegistry(
   };
 }
 
-export function createCherryEmitCommand(options: CherryEmitCommandOptions = {}): Command {
-  const registry = options.registry ?? buildDefaultCherryRegistry();
-  return defineCommand('cherry-emit', async (args) => {
-    if (args.includes('--help') || args.includes('-h')) {
-      return {
-        stdout: `cherry-emit - push a slicc.event to a cherry host page through a follower runtime
+const HELP_TEXT = `cherry-emit - push a slicc.event to a cherry host page through a follower runtime
 
 Usage: cherry-emit <name> [--detail <json>] [--runtime <id>]
 
   --detail <json>   JSON payload delivered as the event detail
   --runtime <id>    Target a specific follower runtime (canonical id, e.g. follower-abc).
                     Defaults to the sole connected runtime; required when more than one.
-`,
-        stderr: '',
-        exitCode: 0,
-      };
+`;
+
+type CommandResult = { stdout: string; stderr: string; exitCode: number };
+
+function errResult(message: string): CommandResult {
+  return { stdout: '', stderr: `cherry-emit: ${message}\n`, exitCode: 1 };
+}
+
+interface ParsedArgs {
+  positionals: string[];
+  detailJson?: string;
+  runtime?: string;
+}
+
+/**
+ * Parse `cherry-emit` argv into positionals plus the two flag values.
+ * Returns a `CommandResult` instead of `ParsedArgs` on a flag-arg error so
+ * the caller can surface it without branching on multiple shapes here.
+ */
+function parseArgs(args: string[]): ParsedArgs | CommandResult {
+  const parsed: ParsedArgs = { positionals: [] };
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg !== '--detail' && arg !== '--runtime') {
+      parsed.positionals.push(arg!);
+      continue;
+    }
+    const next = args[i + 1];
+    if (next === undefined || next.startsWith('--')) {
+      return errResult(`${arg} requires a value`);
+    }
+    if (arg === '--detail') parsed.detailJson = next;
+    else parsed.runtime = next;
+    i++;
+  }
+  return parsed;
+}
+
+/**
+ * Pick the target runtime id from the registry's available ids plus an
+ * optional user-supplied override. Returns the resolved id on success or a
+ * `CommandResult` error when the registry is empty, ambiguous, or the
+ * override is unknown.
+ */
+function resolveRuntime(ids: string[], requested: string | undefined): string | CommandResult {
+  if (ids.length === 0) return errResult('no cherry follower runtime is connected');
+  if (!requested) {
+    if (ids.length > 1) {
+      return errResult(
+        `multiple runtimes connected, pass --runtime <id>. Available: ${ids.join(', ')}`
+      );
+    }
+    return ids[0]!;
+  }
+  if (!ids.includes(requested)) {
+    return errResult(`runtime '${requested}' not connected. Available: ${ids.join(', ')}`);
+  }
+  return requested;
+}
+
+function parseDetail(detailJson: string | undefined): { detail: unknown } | CommandResult {
+  if (detailJson === undefined) return { detail: undefined };
+  try {
+    return { detail: JSON.parse(detailJson) };
+  } catch {
+    return errResult('--detail must be valid JSON');
+  }
+}
+
+export function createCherryEmitCommand(options: CherryEmitCommandOptions = {}): Command {
+  const registry = options.registry ?? buildDefaultCherryRegistry();
+  return defineCommand('cherry-emit', async (args) => {
+    if (args.includes('--help') || args.includes('-h')) {
+      return { stdout: HELP_TEXT, stderr: '', exitCode: 0 };
     }
 
-    const positionals: string[] = [];
-    let detailJson: string | undefined;
-    let runtime: string | undefined;
-    for (let i = 0; i < args.length; i++) {
-      const arg = args[i];
-      if (arg === '--detail' || arg === '--runtime') {
-        const next = args[i + 1];
-        if (next === undefined || next.startsWith('--')) {
-          return { stdout: '', stderr: `cherry-emit: ${arg} requires a value\n`, exitCode: 1 };
-        }
-        if (arg === '--detail') detailJson = next;
-        else runtime = next;
-        i++;
-      } else {
-        positionals.push(arg!);
-      }
-    }
+    const parsed = parseArgs(args);
+    if ('exitCode' in parsed) return parsed;
 
-    const name = positionals[0];
-    if (!name) {
-      return { stdout: '', stderr: 'cherry-emit: event name is required\n', exitCode: 1 };
-    }
+    const name = parsed.positionals[0];
+    if (!name) return errResult('event name is required');
 
-    const ids = registry.listRuntimeIds();
-    if (ids.length === 0) {
-      return {
-        stdout: '',
-        stderr: 'cherry-emit: no cherry follower runtime is connected\n',
-        exitCode: 1,
-      };
-    }
-    if (!runtime) {
-      if (ids.length > 1) {
-        return {
-          stdout: '',
-          stderr: `cherry-emit: multiple runtimes connected, pass --runtime <id>. Available: ${ids.join(', ')}\n`,
-          exitCode: 1,
-        };
-      }
-      runtime = ids[0];
-    } else if (!ids.includes(runtime)) {
-      return {
-        stdout: '',
-        stderr: `cherry-emit: runtime '${runtime}' not connected. Available: ${ids.join(', ')}\n`,
-        exitCode: 1,
-      };
-    }
+    const runtime = resolveRuntime(registry.listRuntimeIds(), parsed.runtime);
+    if (typeof runtime !== 'string') return runtime;
 
-    let detail: unknown;
-    if (detailJson !== undefined) {
-      try {
-        detail = JSON.parse(detailJson);
-      } catch {
-        return { stdout: '', stderr: 'cherry-emit: --detail must be valid JSON\n', exitCode: 1 };
-      }
-    }
+    const detail = parseDetail(parsed.detailJson);
+    if ('exitCode' in detail) return detail;
 
-    const result = await registry.emitSliccEvent(runtime!, name, detail);
+    const result = await registry.emitSliccEvent(runtime, name, detail.detail);
     if (!result.delivered) {
-      return {
-        stdout: '',
-        stderr: `cherry-emit: failed to deliver '${name}' to ${runtime}: ${result.reason}\n`,
-        exitCode: 1,
-      };
+      return errResult(`failed to deliver '${name}' to ${runtime}: ${result.reason}`);
     }
     return { stdout: `cherry-emit: sent '${name}' to ${runtime}\n`, stderr: '', exitCode: 0 };
   });
