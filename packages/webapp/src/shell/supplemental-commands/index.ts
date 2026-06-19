@@ -5,6 +5,7 @@ import type { ProcessManager } from '../../kernel/process-manager.js';
 import type { ScriptCatalog } from '../script-catalog.js';
 import { createAfplayCommand, createChimeCommand } from './afplay-command.js';
 import { createAgentCommand } from './agent-command.js';
+import { createBiomeCommand } from './biome-command.js';
 import type { CherryRuntimeRegistry } from './cherry-emit-command.js';
 import { createCherryEmitCommand } from './cherry-emit-command.js';
 import {
@@ -18,6 +19,7 @@ import { createCrontaskCommand } from './crontask-command.js';
 import { createDfCommand, createDiskutilCommand } from './df-command.js';
 import { createDigCommand } from './dig-command.js';
 import { createDiscoverCommand } from './discover-command.js';
+import { createEsbuildCommand } from './esbuild-command.js';
 import { createEsptoolCommand } from './esptool-command.js';
 import { createFfmpegCommand } from './ffmpeg-command.js';
 import { createFsWatchCommand } from './fswatch-command.js';
@@ -141,6 +143,8 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createSqliteCommand('sqllite'),
     createTscCommand(),
     createTestCommand(),
+    createEsbuildCommand(),
+    createBiomeCommand(),
     createNodeCommand(),
     createPython3LikeCommand('python3'),
     createPython3LikeCommand('python'),

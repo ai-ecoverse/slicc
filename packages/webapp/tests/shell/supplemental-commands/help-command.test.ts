@@ -144,6 +144,8 @@ const DEFAULT_BUILTIN_COMMANDS = [
   'sqlite3',
   'tsc',
   'test',
+  'esbuild',
+  'biome',
   'skill',
   'upskill',
   'serve',
@@ -247,9 +249,9 @@ describe('commands command', () => {
     expect(result.stdout).not.toContain('Other:');
   });
 
-  it('groups tsc/test under Build tools', async () => {
+  it('groups tsc/test/esbuild/biome under Build tools', async () => {
     const cmd = createCommandsCommand();
-    const result = await cmd.execute([], createMockCtx(['ls', 'tsc', 'test']));
+    const result = await cmd.execute([], createMockCtx(['ls', 'tsc', 'test', 'esbuild', 'biome']));
     expect(result.exitCode).toBe(0);
     const lines = result.stdout.split('\n');
     const idx = lines.findIndex((l) => l.includes('Build tools:'));
@@ -257,6 +259,8 @@ describe('commands command', () => {
     const listing = (lines[idx + 1] ?? '').trim();
     expect(listing).toContain('tsc');
     expect(listing).toContain('test');
+    expect(listing).toContain('esbuild');
+    expect(listing).toContain('biome');
   });
 
   it('lists workflow commands under a Workflows section', async () => {

@@ -1,0 +1,578 @@
+/**
+ * `biome` shell command — thin built-in surface that loads the
+ * Biome WASM API from an ipk-installed `@biomejs/wasm-web` (and
+ * `@biomejs/js-api`) in the VFS `node_modules`. Inert unless both
+ * packages are installed via `ipk add` — there is no bundled
+ * binary anywhere on this code path, and no CDN fallback: a
+ * missing package surfaces as a clean guidance error that names
+ * the exact `ipk add` line.
+ *
+ * Subcommands (the minimum surface the prior built-in exposed):
+ *
+ *   biome --version           Print the installed wasm-web version
+ *   biome check  [files...]   Lint + format check together
+ *   biome format [files...]   Print formatted output to stdout
+ *                             (or write back with --write)
+ *
+ * Stdin mode (no file arguments + piped input):
+ *   --stdin-file-path <path>  Virtual path so Biome picks the parser
+ *
+ * The lint/format operations run inside the kernel realm via
+ * `executeJsCode` — the realm's ipk-aware `require()` resolves
+ * `@biomejs/wasm-web` and `@biomejs/js-api/web` from VFS
+ * `node_modules`; the helper script compiles the wasm bytes via
+ * `WebAssembly.compile` and hands the resulting module to
+ * wasm-bindgen's `init({ module_or_path })`. Missing packages
+ * surface as the realm's canonical "Cannot find module" error,
+ * which this wrapper rewrites into a `ipk add ...` hint.
+ */
+
+import type { Command, CommandContext } from 'just-bash';
+import { defineCommand } from 'just-bash';
+import { splitPath } from '../../fs/path-utils.js';
+import { resolve as ipkResolve, type ModuleReader } from '../ipk/resolver.js';
+import { executeJsCode } from '../jsh-executor.js';
+import { stdinAsText } from '../just-bash-compat.js';
+
+/**
+ * Read-only VFS context the loader needs to find an ipk-installed
+ * `@biomejs/wasm-web` in the VFS `node_modules`. Mirrors the
+ * `IpkResolutionContext` shape used by `esbuild-wasm.ts` so every
+ * float (standalone/hosted/extension/Node) wires it the same way.
+ */
+export interface IpkResolutionContext {
+  reader: ModuleReader;
+  readBytes(absolutePath: string): Promise<Uint8Array>;
+  fromDir: string;
+}
+
+export function createIpkContextFromCtx(ctx: CommandContext): IpkResolutionContext {
+  return {
+    reader: {
+      exists: (path) => ctx.fs.exists(path),
+      isDirectory: async (path) => {
+        try {
+          return (await ctx.fs.stat(path)).isDirectory;
+        } catch {
+          return false;
+        }
+      },
+      readFile: (path) => ctx.fs.readFile(path),
+    },
+    readBytes: (path) => ctx.fs.readFileBuffer(path),
+    fromDir: ctx.cwd,
+  };
+}
+
+const LINTABLE_EXTENSIONS = new Set([
+  'js',
+  'mjs',
+  'cjs',
+  'jsx',
+  'ts',
+  'mts',
+  'cts',
+  'tsx',
+  'json',
+  'jsonc',
+  'css',
+  'graphql',
+  'gql',
+  'html',
+  'svelte',
+  'vue',
+  'astro',
+]);
+
+const SUBCOMMANDS = new Set(['check', 'format']);
+export type BiomeSubcommand = 'check' | 'format';
+
+const NOT_INSTALLED_HINT = 'run: ipk add @biomejs/wasm-web @biomejs/js-api (no network fallback)';
+
+const HELP_TEXT = `biome - thin wrapper over the ipk-loaded @biomejs/wasm-web
+
+Usage:
+  biome <subcommand> [options] [files...]
+  echo "code" | biome <subcommand> --stdin-file-path <path>
+
+Subcommands:
+  check         Lint + format check together
+  format        Print formatted output to stdout (or write with --write)
+
+Flags:
+  --write                    Write formatted output back to disk (format / check)
+  --stdin-file-path <path>   Virtual file path for stdin mode
+  -h, --help                 Show this help
+  -v, --version              Show installed @biomejs/wasm-web version
+
+Install:
+  Inert until the backing packages are installed in node_modules:
+    ipk add @biomejs/wasm-web @biomejs/js-api
+  Both packages must be present in the VFS \`node_modules\` for
+  lint/format to run. There is no bundled binary, no CDN fallback;
+  a missing package exits non-zero with a clear \`ipk add\` hint.
+`;
+
+export interface ParsedBiomeArgs {
+  subcommand: BiomeSubcommand | null;
+  paths: string[];
+  write: boolean;
+  stdinFilePath: string | null;
+  showHelp: boolean;
+  showVersion: boolean;
+}
+
+export function parseBiomeArgs(args: string[]): ParsedBiomeArgs {
+  const out: ParsedBiomeArgs = {
+    subcommand: null,
+    paths: [],
+    write: false,
+    stdinFilePath: null,
+    showHelp: false,
+    showVersion: false,
+  };
+
+  if (args.length === 0) {
+    out.showHelp = true;
+    return out;
+  }
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '-h' || arg === '--help') {
+      out.showHelp = true;
+      continue;
+    }
+    if (arg === '-v' || arg === '--version') {
+      out.showVersion = true;
+      continue;
+    }
+    if (out.subcommand === null && SUBCOMMANDS.has(arg)) {
+      out.subcommand = arg as BiomeSubcommand;
+      continue;
+    }
+    if (arg === '--write') {
+      out.write = true;
+      continue;
+    }
+    if (arg === '--stdin-file-path') {
+      const value = args[i + 1];
+      if (typeof value !== 'string' || value.startsWith('-')) {
+        throw new Error('biome: --stdin-file-path requires a value');
+      }
+      out.stdinFilePath = value;
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('--stdin-file-path=')) {
+      out.stdinFilePath = arg.slice('--stdin-file-path='.length);
+      continue;
+    }
+    if (arg.startsWith('-')) {
+      throw new Error(`biome: unknown option: ${arg}`);
+    }
+    out.paths.push(arg);
+  }
+
+  return out;
+}
+
+export function isLintableFile(path: string): boolean {
+  const dot = path.lastIndexOf('.');
+  if (dot < 0) return false;
+  return LINTABLE_EXTENSIONS.has(path.slice(dot + 1).toLowerCase());
+}
+
+/**
+ * Expand `paths` into a flat list of concrete file paths. Each
+ * input may be a file (kept as-is) or a directory (walked
+ * recursively, filtered by `isLintableFile`). Missing entries are
+ * tracked separately so the caller can surface a diagnostic per
+ * missing argument instead of failing the run.
+ */
+export async function expandPaths(
+  fs: CommandContext['fs'],
+  cwd: string,
+  paths: string[]
+): Promise<{ files: string[]; missing: string[] }> {
+  const files: string[] = [];
+  const missing: string[] = [];
+  for (const raw of paths) {
+    const resolved = fs.resolvePath(cwd, raw);
+    if (!(await fs.exists(resolved))) {
+      missing.push(raw);
+      continue;
+    }
+    const stat = (await fs.stat?.(resolved)) as
+      | { isFile?: boolean; isDirectory?: boolean }
+      | undefined;
+    if (stat?.isDirectory) {
+      await walkDirectory(fs, resolved, files);
+    } else if (isLintableFile(resolved)) {
+      files.push(resolved);
+    }
+  }
+  return { files, missing };
+}
+
+async function walkDirectory(fs: CommandContext['fs'], dir: string, out: string[]): Promise<void> {
+  const entries = (await fs.readdir?.(dir)) ?? [];
+  for (const name of entries) {
+    if (name === 'node_modules' || name.startsWith('.git')) continue;
+    const full = dir === '/' ? `/${name}` : `${dir}/${name}`;
+    const stat = (await fs.stat?.(full)) as { isFile?: boolean; isDirectory?: boolean } | undefined;
+    if (stat?.isDirectory) {
+      await walkDirectory(fs, full, out);
+    } else if (isLintableFile(full)) {
+      out.push(full);
+    }
+  }
+}
+
+/**
+ * Try to read the installed `@biomejs/wasm-web` version by
+ * resolving its `package.json` from VFS `node_modules`. Returns
+ * `null` when nothing is installed — the caller surfaces the
+ * canonical guidance error.
+ *
+ * Exported so the loader's resolution behavior is unit-testable
+ * without booting the heavy WASM workspace.
+ */
+export async function tryReadBiomeWasmVersion(ipk: IpkResolutionContext): Promise<string | null> {
+  let resolved;
+  try {
+    resolved = await ipkResolve('@biomejs/wasm-web/package.json', ipk.fromDir, ipk.reader);
+  } catch {
+    return null;
+  }
+  if (resolved.type !== 'file') return null;
+  try {
+    const text = await ipk.reader.readFile(resolved.path);
+    const parsed = JSON.parse(text) as { version?: unknown };
+    return typeof parsed.version === 'string' ? parsed.version : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Check that BOTH `@biomejs/wasm-web` and `@biomejs/js-api` are
+ * installed in the VFS `node_modules`. Returns the resolved
+ * `@biomejs/wasm-web` package directory on success, or a guidance
+ * string naming the missing package on failure. Exported for
+ * unit-testing the install-required path without booting the
+ * realm.
+ */
+export async function checkBiomeInstalled(
+  ipk: IpkResolutionContext
+): Promise<{ ok: true; wasmPkgDir: string } | { ok: false; missing: string }> {
+  let wasmWeb;
+  try {
+    wasmWeb = await ipkResolve('@biomejs/wasm-web/package.json', ipk.fromDir, ipk.reader);
+  } catch {
+    return { ok: false, missing: '@biomejs/wasm-web' };
+  }
+  if (wasmWeb.type !== 'file') return { ok: false, missing: '@biomejs/wasm-web' };
+  try {
+    const jsApi = await ipkResolve('@biomejs/js-api/web', ipk.fromDir, ipk.reader);
+    if (jsApi.type !== 'file') return { ok: false, missing: '@biomejs/js-api' };
+  } catch {
+    return { ok: false, missing: '@biomejs/js-api' };
+  }
+  return { ok: true, wasmPkgDir: splitPath(wasmWeb.path).dir };
+}
+
+/**
+ * Per-file biome operation request piped into the realm helper as
+ * JSON in `process.argv[2]`. The helper streams JSON-encoded result
+ * objects back on stdout; the wrapper parses + formats them.
+ */
+interface BiomeRequest {
+  op: BiomeSubcommand;
+  write: boolean;
+  files: { path: string; source: string }[];
+}
+
+interface BiomeFileResult {
+  path: string;
+  formatted: string | null;
+  diagnosticsText: string;
+  errorCount: number;
+  warningCount: number;
+  unchanged: boolean;
+}
+
+/**
+ * Helper script run inside the kernel realm. Loads
+ * `@biomejs/wasm-web` + `@biomejs/js-api/web` via the realm's
+ * ipk-aware `require()` (which throws the canonical
+ * "Cannot find module 'X' (run: ipk install X)" when a package
+ * is absent — we rewrite that to a clean `ipk add` hint above).
+ *
+ * The wasm bytes are read with the realm's async `fs.readFileBinary`
+ * shim and compiled to a `WebAssembly.Module` that wasm-bindgen
+ * accepts via `init({ module_or_path })`. This sidesteps
+ * wasm-bindgen's `new URL('biome_wasm_bg.wasm', import.meta.url)`
+ * fallback — which never works inside the realm and would in any
+ * case violate the no-network constraint.
+ *
+ * Output is a single JSON document on stdout, parsed by
+ * {@link runBiomeOps}. The helper never writes back to disk; the
+ * wrapper applies `--write` against the host VFS so all writes
+ * pass through the same sudo-fs gate the rest of the shell uses.
+ */
+const BIOME_HELPER_SCRIPT = `
+const fs = require('fs');
+async function main() {
+  const req = JSON.parse(process.argv[2]);
+  const wasmPath = process.argv[3];
+  const wasmBytes = await fs.readFileBinary(wasmPath);
+  const buf = new ArrayBuffer(wasmBytes.byteLength);
+  new Uint8Array(buf).set(wasmBytes);
+  const wasmModule = await WebAssembly.compile(buf);
+  const wasmWeb = require('@biomejs/wasm-web');
+  const init = wasmWeb.default || wasmWeb;
+  await init({ module_or_path: wasmModule });
+  const jsApi = require('@biomejs/js-api/web');
+  const Biome = jsApi.Biome || (jsApi.default && jsApi.default.Biome);
+  if (!Biome) throw new Error('@biomejs/js-api/web does not export Biome');
+  const biome = new Biome();
+  const { projectKey } = biome.openProject();
+  const results = [];
+  for (const file of req.files) {
+    let formatted = null;
+    let unchanged = true;
+    let diagText = '';
+    let errors = 0;
+    let warnings = 0;
+    const fmt = biome.formatContent(projectKey, file.source, { filePath: file.path });
+    for (const d of (fmt.diagnostics || [])) {
+      if (d.severity === 'error' || d.severity === 'fatal') errors++;
+      else if (d.severity === 'warn' || d.severity === 'warning') warnings++;
+    }
+    if (fmt.diagnostics && fmt.diagnostics.length > 0) {
+      try {
+        diagText += biome.printDiagnostics(fmt.diagnostics, { filePath: file.path, fileSource: file.source });
+      } catch (e) { /* ignore */ }
+    }
+    if (fmt.content !== file.source) {
+      formatted = fmt.content;
+      unchanged = false;
+    }
+    if (req.op === 'check') {
+      const lint = biome.lintContent(projectKey, file.source, { filePath: file.path });
+      for (const d of (lint.diagnostics || [])) {
+        if (d.severity === 'error' || d.severity === 'fatal') errors++;
+        else if (d.severity === 'warn' || d.severity === 'warning') warnings++;
+      }
+      if (lint.diagnostics && lint.diagnostics.length > 0) {
+        try {
+          diagText += biome.printDiagnostics(lint.diagnostics, { filePath: file.path, fileSource: file.source });
+        } catch (e) { /* ignore */ }
+      }
+      if (!unchanged && !req.write) {
+        diagText += file.path + ': file is not formatted (run with --write to fix)\\n';
+        errors++;
+      }
+    }
+    results.push({ path: file.path, formatted, diagnosticsText: diagText, errorCount: errors, warningCount: warnings, unchanged });
+  }
+  process.stdout.write(JSON.stringify(results));
+}
+main().catch((err) => { process.stderr.write(String(err && err.message || err) + '\\n'); process.exit(1); });
+`;
+
+function rewriteMissingModuleError(stderr: string): string | null {
+  const m = stderr.match(/Cannot find module '(@biomejs\/[^']+)'/);
+  if (!m) return null;
+  const pkg = m[1].split('/').slice(0, 2).join('/');
+  return `biome: ${pkg} is not installed (run: ipk add ${pkg}); ${NOT_INSTALLED_HINT}\n`;
+}
+
+interface RunOpsOutcome {
+  results: BiomeFileResult[];
+  stderr: string;
+  exitCode: number;
+}
+
+async function runBiomeOps(
+  ctx: CommandContext,
+  op: BiomeSubcommand,
+  write: boolean,
+  files: { path: string; source: string }[],
+  wasmPath: string
+): Promise<RunOpsOutcome> {
+  const req: BiomeRequest = { op, write, files };
+  const argv = ['node', '[biome-helper]', JSON.stringify(req), wasmPath];
+  const result = await executeJsCode(BIOME_HELPER_SCRIPT, argv, ctx, undefined, {
+    filename: '[biome-helper]',
+  });
+  if (result.exitCode !== 0) {
+    const rewritten = rewriteMissingModuleError(result.stderr);
+    return { results: [], stderr: rewritten ?? result.stderr, exitCode: result.exitCode };
+  }
+  try {
+    const parsed = JSON.parse(result.stdout) as BiomeFileResult[];
+    return { results: parsed, stderr: '', exitCode: 0 };
+  } catch (err) {
+    return {
+      results: [],
+      stderr: `biome: failed to parse helper output: ${err instanceof Error ? err.message : String(err)}\n`,
+      exitCode: 1,
+    };
+  }
+}
+
+type ExecResult = { stdout: string; stderr: string; exitCode: number };
+
+async function preflight(
+  ctx: CommandContext,
+  ipk: IpkResolutionContext
+): Promise<{ wasmPath: string } | ExecResult> {
+  const installed = await checkBiomeInstalled(ipk);
+  if (!installed.ok) {
+    return {
+      stdout: '',
+      stderr: `biome: ${installed.missing} is not installed (run: ipk add ${installed.missing}); ${NOT_INSTALLED_HINT}\n`,
+      exitCode: 1,
+    };
+  }
+  const wasmPath = `${installed.wasmPkgDir}/biome_wasm_bg.wasm`;
+  if (!(await ctx.fs.exists(wasmPath))) {
+    return {
+      stdout: '',
+      stderr: `biome: ${wasmPath} not found (reinstall: ipk add @biomejs/wasm-web)\n`,
+      exitCode: 1,
+    };
+  }
+  return { wasmPath };
+}
+
+interface GatheredInputs {
+  inputs: { path: string; source: string }[];
+  missingErrText: string;
+}
+
+async function gatherInputs(
+  ctx: CommandContext,
+  parsed: ParsedBiomeArgs
+): Promise<GatheredInputs | ExecResult> {
+  if (parsed.paths.length === 0 && ctx.stdin) {
+    const virtualPath = parsed.stdinFilePath ?? '/stdin.ts';
+    return { inputs: [{ path: virtualPath, source: stdinAsText(ctx.stdin) }], missingErrText: '' };
+  }
+  if (parsed.paths.length === 0) {
+    return { stdout: '', stderr: 'biome: no files or directories specified\n', exitCode: 2 };
+  }
+  const expanded = await expandPaths(ctx.fs, ctx.cwd, parsed.paths);
+  const missingErrText = expanded.missing
+    .map((m) => `biome: ${m}: no such file or directory\n`)
+    .join('');
+  const inputs: { path: string; source: string }[] = [];
+  for (const file of expanded.files) {
+    inputs.push({ path: file, source: await ctx.fs.readFile(file) });
+  }
+  if (inputs.length === 0) {
+    return {
+      stdout: '',
+      stderr: `${missingErrText}biome: no lintable files found\n`,
+      exitCode: expanded.missing.length > 0 ? 1 : 0,
+    };
+  }
+  return { inputs, missingErrText };
+}
+
+async function finalizeOutcome(
+  ctx: CommandContext,
+  parsed: ParsedBiomeArgs,
+  inputs: { path: string; source: string }[],
+  outcome: RunOpsOutcome,
+  missingErrText: string
+): Promise<ExecResult> {
+  const stdoutParts: string[] = [];
+  const stderrParts: string[] = [missingErrText];
+  let errorCount = 0;
+  let changed = 0;
+  for (const r of outcome.results) {
+    if (r.diagnosticsText) stderrParts.push(r.diagnosticsText);
+    errorCount += r.errorCount;
+    if (parsed.write && r.formatted !== null && !r.unchanged) {
+      await ctx.fs.writeFile(r.path, r.formatted);
+      changed++;
+    } else if (
+      !parsed.write &&
+      parsed.subcommand === 'format' &&
+      inputs.length === 1 &&
+      inputs[0].path === r.path
+    ) {
+      stdoutParts.push(r.formatted ?? inputs[0].source);
+    }
+  }
+  if (parsed.write && changed > 0) {
+    stderrParts.push(`biome: wrote ${changed} file(s)\n`);
+  }
+  const finalExit = errorCount > 0 || missingErrText.length > 0 ? 1 : 0;
+  return { stdout: stdoutParts.join(''), stderr: stderrParts.join(''), exitCode: finalExit };
+}
+
+async function handleVersion(ipk: IpkResolutionContext): Promise<ExecResult> {
+  const version = await tryReadBiomeWasmVersion(ipk);
+  if (!version) {
+    return {
+      stdout: '',
+      stderr: `biome: @biomejs/wasm-web is not installed (run: ipk add @biomejs/wasm-web); ${NOT_INSTALLED_HINT}\n`,
+      exitCode: 1,
+    };
+  }
+  return { stdout: `${version}\n`, stderr: '', exitCode: 0 };
+}
+
+export function createBiomeCommand(): Command {
+  return defineCommand('biome', async (args, ctx): Promise<ExecResult> => {
+    let parsed: ParsedBiomeArgs;
+    try {
+      parsed = parseBiomeArgs(args);
+    } catch (err) {
+      return {
+        stdout: '',
+        stderr: `${err instanceof Error ? err.message : String(err)}\n`,
+        exitCode: 2,
+      };
+    }
+
+    if (parsed.showHelp) return { stdout: HELP_TEXT, stderr: '', exitCode: 0 };
+
+    const ipk = createIpkContextFromCtx(ctx);
+    if (parsed.showVersion) return handleVersion(ipk);
+
+    if (parsed.subcommand === null) {
+      return {
+        stdout: '',
+        stderr: 'biome: missing subcommand (expected check or format)\n',
+        exitCode: 2,
+      };
+    }
+
+    const pre = await preflight(ctx, ipk);
+    if ('exitCode' in pre) return pre;
+
+    const gathered = await gatherInputs(ctx, parsed);
+    if ('exitCode' in gathered) return gathered;
+
+    const outcome = await runBiomeOps(
+      ctx,
+      parsed.subcommand,
+      parsed.write,
+      gathered.inputs,
+      pre.wasmPath
+    );
+    if (outcome.exitCode !== 0) {
+      return {
+        stdout: '',
+        stderr: gathered.missingErrText + outcome.stderr,
+        exitCode: outcome.exitCode,
+      };
+    }
+    return finalizeOutcome(ctx, parsed, gathered.inputs, outcome, gathered.missingErrText);
+  });
+}
