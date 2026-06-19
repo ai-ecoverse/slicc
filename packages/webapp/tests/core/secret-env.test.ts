@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchSecretEnvVars } from '../../src/core/secret-env.js';
+import { setBridgeToken, setLocalApiBaseUrl } from '../../src/shell/proxied-fetch.js';
 
 describe('fetchSecretEnvVars', () => {
   let originalChrome: unknown;
@@ -195,6 +196,77 @@ describe('fetchSecretEnvVars', () => {
         // GITHUB_TOKEN was not user-set, so the OAuth alias still fills it.
         expect(result.GITHUB_TOKEN).toBe('ghp_masked_oauth');
         expect(result['oauth.github.token']).toBeUndefined();
+      });
+    });
+
+    describe('thin-bridge URL + token', () => {
+      afterEach(() => {
+        setLocalApiBaseUrl(null);
+        setBridgeToken(null);
+      });
+
+      it('legacy / same-origin: hits the relative path with no X-Bridge-Token', async () => {
+        vi.mocked(globalThis.fetch).mockResolvedValueOnce({
+          ok: true,
+          json: async () => [],
+        } as Response);
+        await fetchSecretEnvVars();
+        const [url, init] = vi.mocked(globalThis.fetch).mock.calls[0] as [
+          string,
+          RequestInit | undefined,
+        ];
+        expect(url).toBe('/api/secrets/masked');
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        expect(headers['X-Bridge-Token']).toBeUndefined();
+      });
+
+      it('thin-bridge: hits the bridge origin with X-Bridge-Token', async () => {
+        setLocalApiBaseUrl('http://localhost:5710');
+        setBridgeToken('abc-123');
+        vi.mocked(globalThis.fetch).mockResolvedValueOnce({
+          ok: true,
+          json: async () => [],
+        } as Response);
+        await fetchSecretEnvVars();
+        const [url, init] = vi.mocked(globalThis.fetch).mock.calls[0] as [
+          string,
+          RequestInit | undefined,
+        ];
+        expect(url).toBe('http://localhost:5710/api/secrets/masked');
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        expect(headers['X-Bridge-Token']).toBe('abc-123');
+      });
+
+      it('base set but no token → absolute URL, still no X-Bridge-Token', async () => {
+        setLocalApiBaseUrl('http://localhost:5710');
+        vi.mocked(globalThis.fetch).mockResolvedValueOnce({
+          ok: true,
+          json: async () => [],
+        } as Response);
+        await fetchSecretEnvVars();
+        const [url, init] = vi.mocked(globalThis.fetch).mock.calls[0] as [
+          string,
+          RequestInit | undefined,
+        ];
+        expect(url).toBe('http://localhost:5710/api/secrets/masked');
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        expect(headers['X-Bridge-Token']).toBeUndefined();
+      });
+
+      it('token set but no base → relative path, X-Bridge-Token omitted', async () => {
+        setBridgeToken('abc-123');
+        vi.mocked(globalThis.fetch).mockResolvedValueOnce({
+          ok: true,
+          json: async () => [],
+        } as Response);
+        await fetchSecretEnvVars();
+        const [url, init] = vi.mocked(globalThis.fetch).mock.calls[0] as [
+          string,
+          RequestInit | undefined,
+        ];
+        expect(url).toBe('/api/secrets/masked');
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        expect(headers['X-Bridge-Token']).toBeUndefined();
       });
     });
   });

@@ -3,9 +3,15 @@
  * suggester are injected so transport and fail-closed paths are deterministic.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { setBridgeToken, setLocalApiBaseUrl } from '../../src/shell/proxied-fetch.js';
 import { createHttpSudoBroker } from '../../src/sudo/http-broker.js';
 import { SUDO_APPROVE_PATH, type SudoRequest } from '../../src/sudo/types.js';
+
+afterEach(() => {
+  setLocalApiBaseUrl(null);
+  setBridgeToken(null);
+});
 
 const REQ: SudoRequest = { kind: 'command', detail: 'git push origin main' };
 
@@ -79,5 +85,53 @@ describe('createHttpSudoBroker', () => {
     await broker.requestApproval(REQ);
     const body = JSON.parse((fetchImpl.mock.calls[0][1] as RequestInit).body as string);
     expect(body.suggestedPattern).toBe('git push origin main');
+  });
+});
+
+describe('createHttpSudoBroker — thin-bridge URL + token', () => {
+  it('legacy / same-origin: POSTs the relative path with no X-Bridge-Token', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ decision: 'allow' }));
+    const broker = createHttpSudoBroker({ fetchImpl, suggest });
+    await broker.requestApproval(REQ);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(SUDO_APPROVE_PATH);
+    const headers = init.headers as Record<string, string>;
+    expect(headers['X-Bridge-Token']).toBeUndefined();
+    expect(headers['Content-Type']).toBe('application/json');
+  });
+
+  it('thin-bridge: POSTs to the bridge origin with X-Bridge-Token', async () => {
+    setLocalApiBaseUrl('http://localhost:5710');
+    setBridgeToken('abc-123');
+    const fetchImpl = vi.fn(async () => jsonResponse({ decision: 'allow' }));
+    const broker = createHttpSudoBroker({ fetchImpl, suggest });
+    await broker.requestApproval(REQ);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('http://localhost:5710/api/sudo-approve');
+    const headers = init.headers as Record<string, string>;
+    expect(headers['X-Bridge-Token']).toBe('abc-123');
+    expect(headers['Content-Type']).toBe('application/json');
+  });
+
+  it('thin-bridge: base set but no token → absolute URL, still no X-Bridge-Token', async () => {
+    setLocalApiBaseUrl('http://localhost:5710');
+    const fetchImpl = vi.fn(async () => jsonResponse({ decision: 'allow' }));
+    const broker = createHttpSudoBroker({ fetchImpl, suggest });
+    await broker.requestApproval(REQ);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('http://localhost:5710/api/sudo-approve');
+    const headers = init.headers as Record<string, string>;
+    expect(headers['X-Bridge-Token']).toBeUndefined();
+  });
+
+  it('token set but no base → relative path, X-Bridge-Token omitted', async () => {
+    setBridgeToken('abc-123');
+    const fetchImpl = vi.fn(async () => jsonResponse({ decision: 'allow' }));
+    const broker = createHttpSudoBroker({ fetchImpl, suggest });
+    await broker.requestApproval(REQ);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(SUDO_APPROVE_PATH);
+    const headers = init.headers as Record<string, string>;
+    expect(headers['X-Bridge-Token']).toBeUndefined();
   });
 });

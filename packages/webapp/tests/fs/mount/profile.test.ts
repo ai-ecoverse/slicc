@@ -1,9 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  getDefaultSecretStore,
   ProfileNotConfiguredError,
   resolveDaProfile,
   resolveS3Profile,
 } from '../../../src/fs/mount/profile.js';
+import { setBridgeToken, setLocalApiBaseUrl } from '../../../src/shell/proxied-fetch.js';
 import { createFakeImsClient } from './helpers/fake-ims-client.js';
 import { createFakeSecretStore } from './helpers/fake-secret-store.js';
 
@@ -87,5 +89,73 @@ describe('resolveDaProfile', () => {
     };
     const profile = await resolveDaProfile('default', ims);
     expect(profile.identity).toBe('adobe-ims');
+  });
+});
+
+describe('getDefaultSecretStore (browser) — thin-bridge URL + token', () => {
+  // The function picks the browser branch when `window` exists and `process`
+  // does not. Stub both globals for the duration of each test.
+  const originalProcess = (globalThis as { process?: unknown }).process;
+  const originalWindow = (globalThis as { window?: unknown }).window;
+  const originalFetch = globalThis.fetch;
+
+  function stubBrowserContext() {
+    (globalThis as { window?: unknown }).window = {};
+    delete (globalThis as { process?: unknown }).process;
+  }
+
+  afterEach(() => {
+    if (originalProcess === undefined) {
+      delete (globalThis as { process?: unknown }).process;
+    } else {
+      (globalThis as { process?: unknown }).process = originalProcess;
+    }
+    if (originalWindow === undefined) {
+      delete (globalThis as { window?: unknown }).window;
+    } else {
+      (globalThis as { window?: unknown }).window = originalWindow;
+    }
+    globalThis.fetch = originalFetch;
+    setLocalApiBaseUrl(null);
+    setBridgeToken(null);
+  });
+
+  it('legacy / same-origin: hits the relative path with no X-Bridge-Token', async () => {
+    stubBrowserContext();
+    const fetchFn = vi.fn(async () => ({ ok: true, json: async () => [] }) as unknown as Response);
+    globalThis.fetch = fetchFn as unknown as typeof fetch;
+    const store = await getDefaultSecretStore();
+    await store.get('any.key');
+    const [url, init] = fetchFn.mock.calls[0] as [string, RequestInit | undefined];
+    expect(url).toBe('/api/secrets');
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    expect(headers['X-Bridge-Token']).toBeUndefined();
+  });
+
+  it('thin-bridge: hits the bridge origin with X-Bridge-Token', async () => {
+    stubBrowserContext();
+    setLocalApiBaseUrl('http://localhost:5710');
+    setBridgeToken('abc-123');
+    const fetchFn = vi.fn(async () => ({ ok: true, json: async () => [] }) as unknown as Response);
+    globalThis.fetch = fetchFn as unknown as typeof fetch;
+    const store = await getDefaultSecretStore();
+    await store.get('any.key');
+    const [url, init] = fetchFn.mock.calls[0] as [string, RequestInit | undefined];
+    expect(url).toBe('http://localhost:5710/api/secrets');
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    expect(headers['X-Bridge-Token']).toBe('abc-123');
+  });
+
+  it('token set but no base → relative path, X-Bridge-Token omitted', async () => {
+    stubBrowserContext();
+    setBridgeToken('abc-123');
+    const fetchFn = vi.fn(async () => ({ ok: true, json: async () => [] }) as unknown as Response);
+    globalThis.fetch = fetchFn as unknown as typeof fetch;
+    const store = await getDefaultSecretStore();
+    await store.get('any.key');
+    const [url, init] = fetchFn.mock.calls[0] as [string, RequestInit | undefined];
+    expect(url).toBe('/api/secrets');
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    expect(headers['X-Bridge-Token']).toBeUndefined();
   });
 });
