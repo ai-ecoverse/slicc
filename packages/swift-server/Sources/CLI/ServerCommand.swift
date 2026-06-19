@@ -91,6 +91,13 @@ struct ServerCommand: AsyncParsableCommand {
 
         let serveOrigin = "http://localhost:\(servePort)"
 
+        // Thin-bridge mode: no bundled UI; Chrome opens the sliccy.ai-hosted
+        // leader, which connects back to ws://127.0.0.1:<servePort>/cdp. The
+        // bridge token gates that WS upgrade and rides into the launch URL.
+        // Mirrors `THIN_BRIDGE_MODE` in `packages/node-server/src/index.ts`.
+        let thinBridgeMode = Self.isThinBridgeMode(config: config)
+        let bridgeToken: String? = thinBridgeMode ? BridgeSecurity.mintToken() : nil
+
         var browserProcess: Process?
         // Real Chrome PID when we routed the spawn through `/usr/bin/open`
         // (LaunchServices) for TCC attribution. `browserProcess` then wraps
@@ -167,7 +174,9 @@ struct ServerCommand: AsyncParsableCommand {
             let launchURL = try Self.resolveBrowserLaunchURL(
                 serveOrigin: serveOrigin,
                 config: config,
-                environment: environment
+                environment: environment,
+                bridgeWsUrl: thinBridgeMode ? "ws://localhost:\(servePort)/cdp" : nil,
+                bridgeToken: bridgeToken
             )
             let userDataDir = chromeLauncher.resolveUserDataDir(servePort: servePort)
 
@@ -198,12 +207,20 @@ struct ServerCommand: AsyncParsableCommand {
 
         let router = Router(context: BasicRequestContext.self)
         router.middlewares.add(RequestLogger<BasicRequestContext>(logger: Logger(label: "slicc.request")))
-        router.middlewares.add(
-            StaticFileMiddleware<BasicRequestContext>(
-                staticRoot: staticRoot,
-                logger: Logger(label: "slicc.static-files")
+        if thinBridgeMode {
+            // Thin-bridge mode: cross-origin /api calls from sliccy.ai need
+            // CORS, and Chrome's public→private PNA preflight needs an opt-in.
+            // Mirrors `createThinBridgeCorsMiddleware()` in node-server's
+            // `packages/node-server/src/index.ts`.
+            router.middlewares.add(ThinBridgeCorsMiddleware<BasicRequestContext>())
+        } else {
+            router.middlewares.add(
+                StaticFileMiddleware<BasicRequestContext>(
+                    staticRoot: staticRoot,
+                    logger: Logger(label: "slicc.static-files")
+                )
             )
-        )
+        }
         registerAPIRoutes(
             router: router,
             lickSystem: lickSystem,
@@ -214,7 +231,7 @@ struct ServerCommand: AsyncParsableCommand {
         )
 
         let wsRouter = Router(context: BasicWebSocketRequestContext.self)
-        await cdpProxy.install(on: wsRouter, cdpPort: cdpPort)
+        await cdpProxy.install(on: wsRouter, cdpPort: cdpPort, bridgeToken: bridgeToken)
         LickWebSocketRoute.register(on: wsRouter, lickSystem: lickSystem)
 
         let app = Application(
@@ -302,7 +319,11 @@ struct ServerCommand: AsyncParsableCommand {
                 )
             )
 
-            print("Serving UI at \(serveOrigin)")
+            if thinBridgeMode {
+                print("Thin /cdp bridge + /api at \(serveOrigin)")
+            } else {
+                print("Serving UI at \(serveOrigin)")
+            }
             print("CDP proxy at ws://localhost:\(servePort)/cdp")
 
             try await appTask.value
@@ -559,23 +580,65 @@ extension ServerCommand {
         return repositoryRoot.appendingPathComponent("dist/ui", isDirectory: true).path
     }
 
+    /// True iff thin-bridge mode is active: no `--serve-only`, no `--electron`,
+    /// and no `--dev`. Mirrors `THIN_BRIDGE_MODE` in
+    /// `packages/node-server/src/index.ts` so the same webapp bridge client
+    /// connects unchanged regardless of which runtime serves it.
+    static func isThinBridgeMode(config: ServerConfig) -> Bool {
+        !config.dev && !config.serveOnly && !config.electron
+    }
+
+    /// Resolve the leader origin Chrome should open in thin-bridge mode.
+    /// Prefers an explicit `--lead-worker-base-url` / `WORKER_BASE_URL` so dev
+    /// can point at staging; defaults to production sliccy.ai. Mirrors
+    /// `resolveThinLeaderOrigin` in node-server's `index.ts`.
+    static func resolveThinLeaderOrigin(
+        config: ServerConfig,
+        environment: [String: String]
+    ) -> String {
+        let explicit = config.leadWorkerBaseUrl ?? environment["WORKER_BASE_URL"]
+        if let explicit, !explicit.isEmpty {
+            return explicit.replacingOccurrences(
+                of: #"/+$"#,
+                with: "",
+                options: .regularExpression
+            )
+        }
+        return "https://www.sliccy.ai"
+    }
+
+    /// Build the Chrome launch URL.
+    ///
+    /// When `bridgeWsUrl` and `bridgeToken` are both non-nil (thin-bridge
+    /// standalone mode), the launch URL points at the sliccy.ai-hosted leader
+    /// — overriding `serveOrigin` — and carries `bridge=<ws-url>` +
+    /// `bridgeToken=<token>` query params so the leader can discover +
+    /// authenticate the local `/cdp` WebSocket. Mirrors `buildBrowserLaunchUrl`
+    /// in `packages/node-server/src/index.ts` byte-for-byte.
     static func resolveBrowserLaunchURL(
         serveOrigin: String,
         config: ServerConfig,
-        environment: [String: String]
+        environment: [String: String],
+        bridgeWsUrl: String? = nil,
+        bridgeToken: String? = nil
     ) throws -> String {
         if config.lead && config.join {
             throw ValidationError("The --lead and --join launch flows are mutually exclusive.")
         }
 
-        var launchURL = serveOrigin
+        let isThinBridge = bridgeWsUrl != nil && bridgeToken != nil
+        let baseHref = isThinBridge
+            ? Self.resolveThinLeaderOrigin(config: config, environment: environment)
+            : serveOrigin
+
+        var launchURL = baseHref
         if config.join {
             guard let joinURL = config.joinUrl else {
                 throw ValidationError(
                     "The --join launch flow requires a tray join URL via --join <url> or --join=<url>."
                 )
             }
-            launchURL = try buildTrayJoinLaunchURL(locationHref: serveOrigin, joinURL: joinURL)
+            launchURL = try buildTrayJoinLaunchURL(locationHref: baseHref, joinURL: joinURL)
         } else if config.lead {
             guard let workerBaseURL = normalizeTrayWorkerBaseURL(
                 config.leadWorkerBaseUrl ?? environment["WORKER_BASE_URL"]
@@ -584,7 +647,20 @@ extension ServerCommand {
                     "The --lead launch flow requires a tray worker base URL via --lead <url>, --lead=<url>, or WORKER_BASE_URL."
                 )
             }
-            launchURL = try buildCanonicalTrayLaunchURL(locationHref: serveOrigin, trayValue: workerBaseURL)
+            launchURL = try buildCanonicalTrayLaunchURL(locationHref: baseHref, trayValue: workerBaseURL)
+        }
+
+        if let bridgeWsUrl, let bridgeToken {
+            launchURL = try appendQueryItem(
+                urlString: launchURL,
+                name: BridgeSecurity.wsQueryParam,
+                value: bridgeWsUrl
+            )
+            launchURL = try appendQueryItem(
+                urlString: launchURL,
+                name: BridgeSecurity.tokenQueryParam,
+                value: bridgeToken
+            )
         }
 
         guard let prompt = config.prompt else {
