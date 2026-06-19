@@ -119,6 +119,12 @@ export default defineConfig({
           // __DEV__ at module load. Without this, those tests fail to
           // import with `ReferenceError: __DEV__ is not defined`.
           __DEV__: 'true',
+          // The extension build defines __SLICC_EXT_DEV__ from the
+          // SLICC_EXT_DEV env var (see vite.config.ts). Tests default to
+          // the production value (`false`) so module-level constants
+          // resolve to hosted URLs; resolver helpers are exercised in
+          // both modes through their parameterized API.
+          __SLICC_EXT_DEV__: 'false',
         },
         test: {
           name: 'chrome-extension',

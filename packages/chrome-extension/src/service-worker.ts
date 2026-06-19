@@ -346,8 +346,41 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // name and shape stable.
 
 const LEADER_TAB_ID_KEY = 'slicc_leader_tab_id';
-const LEADER_TAB_URL = 'https://www.sliccy.ai/?slicc=leader';
-const LEADER_TAB_URL_GLOB = 'https://www.sliccy.ai/*';
+
+/** Hosted (production) leader-tab URL and matching tabs.query glob. */
+const PROD_LEADER_TAB_URL = 'https://www.sliccy.ai/?slicc=leader';
+const PROD_LEADER_TAB_URL_GLOB = 'https://www.sliccy.ai/*';
+const PROD_LEADER_TAB_ORIGIN = 'https://www.sliccy.ai';
+/** Local vite dev-server leader-tab URL. Selected when the extension was
+ *  built with `SLICC_EXT_DEV=1`. Paired with `DEV_SLICC_APP_URL` in
+ *  `content-script.ts`. */
+const DEV_LEADER_TAB_URL = 'http://localhost:5710/?slicc=leader';
+const DEV_LEADER_TAB_URL_GLOB = 'http://localhost:5710/*';
+const DEV_LEADER_TAB_ORIGIN = 'http://localhost:5710';
+
+/** Pure resolver — returns the leader-tab URL the SW should pin. Parameterized
+ *  on the build-time `__SLICC_EXT_DEV__` flag so unit tests exercise both
+ *  branches without rebuilding. */
+export function getLeaderTabUrl(isExtDev: boolean): string {
+  return isExtDev ? DEV_LEADER_TAB_URL : PROD_LEADER_TAB_URL;
+}
+
+/** Pure resolver — returns the `tabs.query` URL glob used to adopt a leader
+ *  tab restored by Chrome's "Continue where you left off". */
+export function getLeaderTabUrlGlob(isExtDev: boolean): string {
+  return isExtDev ? DEV_LEADER_TAB_URL_GLOB : PROD_LEADER_TAB_URL_GLOB;
+}
+
+/** Pure resolver — returns the canonical origin a leader-tab URL must
+ *  match. Used by `isLeaderTabUrl` so a stored tab id is only accepted
+ *  when it still points at the build's pinned origin. */
+export function getLeaderTabOrigin(isExtDev: boolean): string {
+  return isExtDev ? DEV_LEADER_TAB_ORIGIN : PROD_LEADER_TAB_ORIGIN;
+}
+
+const LEADER_TAB_URL = getLeaderTabUrl(__SLICC_EXT_DEV__);
+const LEADER_TAB_URL_GLOB = getLeaderTabUrlGlob(__SLICC_EXT_DEV__);
+const LEADER_TAB_ORIGIN = getLeaderTabOrigin(__SLICC_EXT_DEV__);
 
 async function readStoredLeaderTabId(): Promise<number | undefined> {
   try {
@@ -376,10 +409,12 @@ function isLeaderTabUrl(rawUrl: string | undefined): boolean {
   } catch {
     return false;
   }
-  // Pin to the exact leader origin — `www.sliccy.ai`. The Cloudflare worker
-  // 301-redirects bare-host requests to `www`, so any leader URL the user
-  // restored from a previous session has settled at the www subdomain.
-  if (u.origin !== 'https://www.sliccy.ai') return false;
+  // Pin to the exact leader origin selected at build time — `www.sliccy.ai`
+  // in production, `http://localhost:5710` when built with `SLICC_EXT_DEV=1`.
+  // The Cloudflare worker 301-redirects bare-host requests to `www`, so any
+  // prod leader URL the user restored from a previous session has settled at
+  // the www subdomain.
+  if (u.origin !== LEADER_TAB_ORIGIN) return false;
   return u.searchParams.get('slicc') === 'leader';
 }
 

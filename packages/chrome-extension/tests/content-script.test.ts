@@ -62,6 +62,26 @@ describe('content-script bootstrap (origin guard)', () => {
     expect(mod.SLICC_APP_ORIGIN).toBe('https://www.sliccy.ai');
   });
 
+  // __SLICC_EXT_DEV__ defaults to `false` in the chrome-extension vitest
+  // project (see vitest.config.ts), so the resolver helpers are tested with
+  // an explicit dev=true argument here instead of attempting to mutate the
+  // module-level const (which is frozen by the time the module loads).
+  it('getSliccAppUrl returns the hosted cherry URL in production builds', () => {
+    expect(mod.getSliccAppUrl(false)).toBe('https://www.sliccy.ai/?cherry=1');
+  });
+
+  it('getSliccAppUrl returns the localhost vite URL in dev builds', () => {
+    expect(mod.getSliccAppUrl(true)).toBe('http://localhost:5710/?cherry=1');
+  });
+
+  it('getSliccAppOrigin returns the hosted origin in production builds', () => {
+    expect(mod.getSliccAppOrigin(false)).toBe('https://www.sliccy.ai');
+  });
+
+  it('getSliccAppOrigin returns the localhost vite origin in dev builds', () => {
+    expect(mod.getSliccAppOrigin(true)).toBe('http://localhost:5710');
+  });
+
   it('shouldInjectLauncher returns false on the SLICC origin', () => {
     expect(mod.shouldInjectLauncher('https://www.sliccy.ai')).toBe(false);
   });
