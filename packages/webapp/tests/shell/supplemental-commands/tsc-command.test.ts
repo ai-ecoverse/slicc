@@ -1,6 +1,8 @@
 import type { IFileSystem } from 'just-bash';
 import { describe, expect, it, vi } from 'vitest';
+import { tryLoadTypeScriptSourceFromNodeModules } from '../../../src/shell/supplemental-commands/shared.js';
 import {
+  createIpkContextFromCtx,
   createTscCommand,
   deriveOutputPath,
   findTsconfigPath,
@@ -12,10 +14,11 @@ function createMockCtx(
   overrides: Partial<{ fs: Partial<IFileSystem>; cwd: string; stdin: string }> = {}
 ): Parameters<ReturnType<typeof createTscCommand>['execute']>[1] {
   const fileStore = new Map<string, string>();
+  const dirSet = new Set<string>(['/workspace']);
   const fs: Partial<IFileSystem> = {
     resolvePath: (base: string, path: string) =>
       path.startsWith('/') ? path : `${base.replace(/\/$/, '')}/${path}`,
-    exists: vi.fn().mockImplementation(async (p: string) => fileStore.has(p)),
+    exists: vi.fn().mockImplementation(async (p: string) => fileStore.has(p) || dirSet.has(p)),
     readFile: vi.fn().mockImplementation(async (p: string) => {
       const v = fileStore.get(p);
       if (v === undefined) throw new Error(`ENOENT: ${p}`);
@@ -23,6 +26,25 @@ function createMockCtx(
     }),
     writeFile: vi.fn().mockImplementation(async (p: string, content: string | Uint8Array) => {
       fileStore.set(p, typeof content === 'string' ? content : new TextDecoder().decode(content));
+      const parts = p.split('/').slice(0, -1);
+      for (let i = 1; i <= parts.length; i++) {
+        const seg = parts.slice(0, i).join('/') || '/';
+        dirSet.add(seg);
+      }
+    }),
+    stat: vi.fn().mockImplementation(async (p: string) => {
+      if (fileStore.has(p)) {
+        return { isFile: true, isDirectory: false, size: fileStore.get(p)!.length };
+      }
+      if (dirSet.has(p)) {
+        return { isFile: false, isDirectory: true, size: 0 };
+      }
+      throw new Error(`ENOENT: ${p}`);
+    }),
+    readFileBuffer: vi.fn().mockImplementation(async (p: string) => {
+      const v = fileStore.get(p);
+      if (v === undefined) throw new Error(`ENOENT: ${p}`);
+      return new TextEncoder().encode(v);
     }),
     ...overrides.fs,
   };
@@ -122,7 +144,8 @@ describe('createTscCommand', () => {
     const cmd = createTscCommand();
     const result = await cmd.execute(['--help'], createMockCtx());
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('tsc - TypeScript compiler');
+    expect(result.stdout).toContain('tsc - thin wrapper');
+    expect(result.stdout).toContain('ipk add typescript');
   });
 
   it('transpiles a single .ts file to a sibling .js', async () => {
@@ -160,5 +183,43 @@ describe('createTscCommand', () => {
     const result = await cmd.execute([], ctx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toMatch(/const a = 2/);
+  });
+});
+
+describe('install-required guidance (browser branch)', () => {
+  // Vitest runs under Node so `getTypeScript`'s Node fallback always loads the
+  // bundled `typescript` — exercise the browser-branch resolver helper
+  // directly to pin the null-when-absent / source-when-installed behavior.
+  // (The command's end-to-end guidance path is exercised manually per the
+  // task's verification plan — see the spec note.)
+  it('tryLoadTypeScriptSourceFromNodeModules returns null when typescript is absent', async () => {
+    const ctx = createMockCtx();
+    const result = await tryLoadTypeScriptSourceFromNodeModules(createIpkContextFromCtx(ctx));
+    expect(result).toBeNull();
+  });
+
+  it('tryLoadTypeScriptSourceFromNodeModules reads lib/typescript.js when installed', async () => {
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile(
+      '/workspace/node_modules/typescript/package.json',
+      JSON.stringify({ name: 'typescript', version: '6.0.3', main: 'lib/typescript.js' })
+    );
+    await ctx.fs.writeFile(
+      '/workspace/node_modules/typescript/lib/typescript.js',
+      "module.exports = { version: '6.0.3' };"
+    );
+    const result = await tryLoadTypeScriptSourceFromNodeModules(createIpkContextFromCtx(ctx));
+    expect(result).toContain("version: '6.0.3'");
+  });
+
+  it('help text includes the `ipk add typescript` hint (zero network)', () => {
+    // The HELP_TEXT is the canonical user-facing surface for the install
+    // requirement. The command always emits it on `--help`, even when
+    // typescript is absent.
+    const cmd = createTscCommand();
+    return cmd.execute(['--help'], createMockCtx()).then((res) => {
+      expect(res.stdout).toMatch(/ipk add typescript/);
+      expect(res.stdout).not.toMatch(/unpkg|jsdelivr|esm\.sh|https?:\/\//);
+    });
   });
 });

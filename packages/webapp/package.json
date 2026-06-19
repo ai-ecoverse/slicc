@@ -46,7 +46,6 @@
     "openai": "^6.26.0",
     "sql.js": "^1.14.0",
     "tst": "9.4.0",
-    "typescript": "6.0.3",
     "unpdf": "^1.4.0"
   },
   "devDependencies": {

@@ -20,8 +20,12 @@
  * transpiler-missing path (VAL-ESM-014) becomes reachable.
  */
 
-import { getEsbuild } from '../supplemental-commands/esbuild-wasm.js';
-import { getTypeScript, type TypeScriptModule } from '../supplemental-commands/shared.js';
+import { getEsbuild, type IpkResolutionContext } from '../supplemental-commands/esbuild-wasm.js';
+import {
+  getTypeScript,
+  type TypeScriptIpkContext,
+  type TypeScriptModule,
+} from '../supplemental-commands/shared.js';
 import type { EntryTranspile, ModuleTranspile } from './module-loader.js';
 import { hasDynamicImport, hasEsmSyntax } from './resolver.js';
 
@@ -35,6 +39,17 @@ export interface CreateEsmTranspileOptions {
   loadEsbuild?: EsbuildLoader;
   /** Override the typescript loader (defaults to the bundled `getTypeScript`). */
   loadTypeScript?: TypeScriptLoader;
+  /**
+   * VFS context threaded into the default `getEsbuild` / `getTypeScript`
+   * loaders so the browser branch can read the ipk-installed
+   * `esbuild-wasm` / `typescript` packages from VFS `node_modules`.
+   * Ignored when both loaders are supplied, and unused under Node
+   * runtime (where the bundled wrappers are used directly). The
+   * `IpkResolutionContext` shape is a structural superset of
+   * `TypeScriptIpkContext`, so the same object satisfies both
+   * loaders.
+   */
+  ipk?: IpkResolutionContext;
 }
 
 /**
@@ -154,9 +169,13 @@ async function transpileWithTypeScript(
  * typescript. Both paths preserve a module-correct `import.meta.url`.
  */
 export function createEsmTranspile(options: CreateEsmTranspileOptions = {}): ModuleTranspile {
+  const { ipk } = options;
   const loadEsbuild =
-    options.loadEsbuild ?? ((): Promise<typeof import('esbuild-wasm')> => getEsbuild());
-  const loadTypeScript = options.loadTypeScript ?? getTypeScript;
+    options.loadEsbuild ??
+    ((): Promise<typeof import('esbuild-wasm')> => getEsbuild(ipk ? { ipk } : {}));
+  const loadTypeScript =
+    options.loadTypeScript ??
+    ((): Promise<TypeScriptModule> => getTypeScript(ipk as TypeScriptIpkContext | undefined));
 
   return async ({ source, path, kind }) => {
     if (kind !== 'esm') return source;
@@ -189,9 +208,13 @@ export function createEsmTranspile(options: CreateEsmTranspileOptions = {}): Mod
  * a TLA entry falls back to TypeScript, which keeps the top-level `await`.
  */
 export function createEntryTranspile(options: CreateEsmTranspileOptions = {}): EntryTranspile {
+  const { ipk } = options;
   const loadEsbuild =
-    options.loadEsbuild ?? ((): Promise<typeof import('esbuild-wasm')> => getEsbuild());
-  const loadTypeScript = options.loadTypeScript ?? getTypeScript;
+    options.loadEsbuild ??
+    ((): Promise<typeof import('esbuild-wasm')> => getEsbuild(ipk ? { ipk } : {}));
+  const loadTypeScript =
+    options.loadTypeScript ??
+    ((): Promise<TypeScriptModule> => getTypeScript(ipk as TypeScriptIpkContext | undefined));
 
   return async ({ source, filename }) => {
     if (!hasEsmSyntax(source) && !hasDynamicImport(source)) return source;

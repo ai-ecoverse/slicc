@@ -1,7 +1,11 @@
 /**
- * `tsc` shell command. Single-file TypeScript transpile via the
- * bundled `typescript` package (pure JS, lazy-loaded singleton in
- * `shared.ts:getTypeScript`).
+ * `tsc` shell command — thin built-in surface that drives the
+ * `typescript` package loaded from VFS `node_modules` via the shared
+ * `getTypeScript()` ipk loader in `shared.ts`. Inert until the user
+ * runs `ipk add typescript`; without the package, the loader throws
+ * the canonical guidance error which this command surfaces verbatim.
+ * ZERO network in the not-installed path — there is no CDN fallback
+ * anywhere on this code path.
  *
  * Surfaces:
  *   - `tsc <file.ts> [more.ts ...]` — writes `<file.js>` next to
@@ -22,7 +26,38 @@
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { stdinAsText } from '../just-bash-compat.js';
-import { basename, dirname, getTypeScript, type TypeScriptModule } from './shared.js';
+import {
+  basename,
+  dirname,
+  getTypeScript,
+  type TypeScriptIpkContext,
+  type TypeScriptModule,
+} from './shared.js';
+
+/**
+ * Build a {@link TypeScriptIpkContext} from a command's `ctx` so
+ * `getTypeScript` can locate the ipk-installed `typescript` in the
+ * VFS `node_modules`. Mirrors `createIpkContextFromCtx` in
+ * `esbuild-command.ts` / `biome-command.ts` so every float wires the
+ * loader the same way.
+ */
+export function createIpkContextFromCtx(ctx: CommandContext): TypeScriptIpkContext {
+  return {
+    reader: {
+      exists: (path) => ctx.fs.exists(path),
+      isDirectory: async (path) => {
+        try {
+          return (await ctx.fs.stat(path)).isDirectory;
+        } catch {
+          return false;
+        }
+      },
+      readFile: (path) => ctx.fs.readFile(path),
+    },
+    readBytes: (path) => ctx.fs.readFileBuffer(path),
+    fromDir: ctx.cwd,
+  };
+}
 
 export interface ParsedTscArgs {
   files: string[];
@@ -32,7 +67,7 @@ export interface ParsedTscArgs {
   showVersion: boolean;
 }
 
-const HELP_TEXT = `tsc - TypeScript compiler (single-file transpile via the bundled typescript package)
+const HELP_TEXT = `tsc - thin wrapper over the ipk-loaded typescript package
 
 Usage:
   tsc [options] [files...]
@@ -49,6 +84,13 @@ Notes:
   - Defaults: target=ES2022, module=ESNext.
   - This is a single-file transpile pass; cross-file type checking is
     not yet wired up.
+
+Install:
+  Inert until the backing package is installed in node_modules:
+    ipk add typescript
+  Then \`tsc --version\` and the transpile commands above. There is no
+  bundled binary, no CDN fallback; a missing package exits non-zero
+  with a clear \`ipk add\` hint.
 `;
 
 export function parseTscArgs(args: string[]): ParsedTscArgs {
@@ -274,11 +316,14 @@ export function createTscCommand(): Command {
 
     let ts: TypeScriptModule;
     try {
-      ts = await getTypeScript();
+      ts = await getTypeScript(createIpkContextFromCtx(ctx));
     } catch (err) {
+      // `getTypeScript` already emits the canonical
+      // "run `ipk add typescript`" guidance when nothing is installed;
+      // surface it verbatim.
       return {
         stdout: '',
-        stderr: `tsc: failed to load typescript: ${err instanceof Error ? err.message : String(err)}\n`,
+        stderr: `tsc: ${err instanceof Error ? err.message : String(err)}\n`,
         exitCode: 1,
       };
     }

@@ -411,14 +411,23 @@ async function dispatchModule(op: string, args: unknown[], ctx: CommandContext):
   const fromDir = typeof args[1] === 'string' && args[1] ? (args[1] as string) : ctx.cwd;
   const entryFilename = typeof args[2] === 'string' ? (args[2] as string) : '';
   const reader = createCtxModuleReader(ctx);
+  // ipk context for the default `getEsbuild` / `getTypeScript` loaders
+  // so the browser branch can read ipk-installed packages from VFS
+  // `node_modules`. Under Node runtime both loaders use the bundled
+  // wrappers and the ipk context is unused.
+  const ipk = {
+    reader,
+    readBytes: (path: string) => ctx.fs.readFileBuffer(path),
+    fromDir,
+  };
 
   return buildRealmModuleGraph({
     entryCode,
     fromDir,
     entryFilename,
     reader,
-    transpile: createEsmTranspile(),
-    transpileEntry: createEntryTranspile(),
+    transpile: createEsmTranspile({ ipk }),
+    transpileEntry: createEntryTranspile({ ipk }),
   });
 }
 

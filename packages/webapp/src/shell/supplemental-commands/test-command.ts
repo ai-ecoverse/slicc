@@ -26,6 +26,7 @@ import tstSource from 'tst/tst.js?raw';
 import { normalizePath } from '../../fs/path-utils.js';
 import { executeJsCode } from '../jsh-executor.js';
 import { getTypeScript, dirname as posixDirname, type TypeScriptModule } from './shared.js';
+import { createIpkContextFromCtx } from './tsc-command.js';
 
 const HELP_TEXT = `test - run *.test.{js,ts} files with the bundled tst runner
 
@@ -455,11 +456,14 @@ export function createTestCommand(): Command {
 
     let ts: TypeScriptModule;
     try {
-      ts = await getTypeScript();
+      ts = await getTypeScript(createIpkContextFromCtx(ctx));
     } catch (err) {
+      // `getTypeScript` already emits the canonical
+      // "run `ipk add typescript`" guidance when nothing is installed;
+      // surface it verbatim.
       return {
         stdout: '',
-        stderr: `test: failed to load typescript: ${err instanceof Error ? err.message : String(err)}\n`,
+        stderr: `test: ${err instanceof Error ? err.message : String(err)}\n`,
         exitCode: 1,
       };
     }
