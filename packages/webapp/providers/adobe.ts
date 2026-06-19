@@ -41,6 +41,7 @@ import {
   type AdobeModelMetadata,
   enrichAdobeModel,
 } from '../src/providers/adobe-model-metadata.js';
+import { buildAdobeOAuthState } from '../src/providers/adobe-oauth-state.js';
 import { getOAuthPageOrigin } from '../src/providers/oauth-service.js';
 import { createSilentRenewBackoff } from '../src/providers/silent-renew-backoff.js';
 import { withSupportedTemperature } from '../src/providers/temperature-support.js';
@@ -317,22 +318,30 @@ export const config: ProviderConfig = {
     // `DedicatedWorker` (no `window`); the page-context login path still
     // reads `window.location.*` directly through the helper.
     const pageInfo = isExtension ? null : await getOAuthPageOrigin();
+    // CLI / page-context path branches on whether the SPA is served by the
+    // worker (thin-bridge / hosted-leader). `buildAdobeOAuthState` returns
+    // `source:'opener'` + same-origin redirect_uri in that case, so the
+    // worker's relay postMessages the implicit-flow callback URL straight
+    // back to this window's opener instead of self-looping a localhost
+    // redirect that doesn't resolve. Classic CLI keeps the legacy
+    // `{ port, path, nonce }` shape.
+    const stateInfo = !isExtension
+      ? buildAdobeOAuthState(
+          {
+            pageHref: pageInfo!.href,
+            pageOrigin: pageInfo!.origin,
+            configuredRedirectUri: adobeConfig.redirectUri,
+          },
+          () => crypto.randomUUID()
+        )
+      : null;
     const redirectUri = isExtension
       ? (adobeConfig.extensionRedirectUri ??
         `https://${(chrome as any).runtime.id}.chromiumapp.org/`)
-      : (adobeConfig.redirectUri ?? `${pageInfo!.origin}/auth/callback`);
+      : stateInfo!.redirectUri;
 
-    // Build OAuth state with port and CSRF nonce for the sliccy.ai relay (CLI only)
-    const oauthState = !isExtension
-      ? btoa(
-          JSON.stringify({
-            port: parseInt(new URL(pageInfo!.href).port || '5710', 10),
-            path: '/auth/callback',
-            nonce: crypto.randomUUID(),
-          })
-        )
-      : undefined;
-    const expectedNonce = oauthState ? JSON.parse(atob(oauthState)).nonce : null;
+    const oauthState = stateInfo?.oauthState;
+    const expectedNonce = stateInfo?.expectedNonce ?? null;
 
     const params = new URLSearchParams({
       client_id: clientId,

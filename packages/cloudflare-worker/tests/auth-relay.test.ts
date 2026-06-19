@@ -28,16 +28,21 @@ async function fetchRelayBody(query: string): Promise<string> {
 function runRelay(
   html: string,
   search: string,
-  hash = ''
-): { replaced?: string; error?: string; postedMessage?: any } {
+  hash = '',
+  opts: { origin?: string; hasOpener?: boolean } = {}
+): { replaced?: string; error?: string; postedMessage?: any; postedTarget?: string } {
   const match = html.match(/<script>([\s\S]*?)<\/script>/);
   if (!match) throw new Error('No <script> in relay HTML');
   let replaced: string | undefined;
   let errorText: string | undefined;
   let postedMessage: any;
+  let postedTarget: string | undefined;
+  const origin = opts.origin ?? 'https://www.sliccy.ai';
   const fakeLocation = {
     search,
     hash,
+    origin,
+    href: `${origin}/auth/callback${search}${hash}`,
     replace: (url: string) => {
       replaced = url;
     },
@@ -45,12 +50,13 @@ function runRelay(
   const msgEl = { textContent: '' };
   const fakeDocument = { getElementById: (_id: string) => msgEl };
   const fakeOpener = {
-    postMessage: (msg: any, _targetOrigin: string) => {
+    postMessage: (msg: any, targetOrigin: string) => {
       postedMessage = msg;
+      postedTarget = targetOrigin;
     },
   };
   const fakeWindow = {
-    opener: fakeOpener,
+    opener: opts.hasOpener === false ? null : fakeOpener,
     close: () => {
       /* no-op in test */
     },
@@ -85,7 +91,7 @@ function runRelay(
       .replace(/^OAuth redirect failed: /, '')
       .replace(/\. Close.*$/, '');
   }
-  return { replaced, error: errorText, postedMessage };
+  return { replaced, error: errorText, postedMessage, postedTarget };
 }
 
 describe('OAuth callback relay — page response', () => {
@@ -245,6 +251,78 @@ describe('OAuth callback relay — extension source', () => {
     const { replaced, error } = runRelay(html, `?state=${state}`);
     expect(replaced).toBeUndefined();
     expect(error).toContain('Invalid path');
+  });
+});
+
+describe('OAuth callback relay — opener source (worker-served SPA)', () => {
+  it('postMessages the full callback URL to the opener instead of redirecting', async () => {
+    const state = btoa(JSON.stringify({ source: 'opener', path: '/auth/callback', nonce: 'n1' }));
+    const search = `?state=${state}`;
+    const hash = '#access_token=abc&expires_in=3600&state=' + state;
+    const html = await fetchRelayBody(search);
+    const { replaced, error, postedMessage, postedTarget } = runRelay(html, search, hash);
+    expect(replaced).toBeUndefined();
+    expect(error).toBeUndefined();
+    expect(postedMessage?.type).toBe('oauth-callback');
+    // The delivered URL must carry the IMS hash (access_token lives there) and
+    // the nonce in the query so adobe.ts' verifier can read it back.
+    expect(postedMessage?.redirectUrl).toContain('#access_token=abc');
+    expect(postedMessage?.redirectUrl).toContain('nonce=n1');
+    // State is stripped from the query portion (consumer doesn't need it).
+    // IMS round-trips state into the hash too — that residue is harmless and
+    // preserved as-is so the delivered URL is a complete picture.
+    const queryPart = postedMessage.redirectUrl.split('#')[0];
+    expect(queryPart).not.toContain('state=');
+    // Scoped to the page's own origin (NOT '*') so the token can't leak.
+    expect(postedTarget).toBe('https://www.sliccy.ai');
+  });
+
+  it('errors out when opener is gone', async () => {
+    const state = btoa(JSON.stringify({ source: 'opener', path: '/auth/callback', nonce: 'n' }));
+    const html = await fetchRelayBody(`?state=${state}`);
+    const { replaced, error } = runRelay(html, `?state=${state}`, '', { hasOpener: false });
+    expect(replaced).toBeUndefined();
+    expect(error).toContain('No opener window');
+  });
+
+  it('rejects path that does not start with /', async () => {
+    const state = btoa(JSON.stringify({ source: 'opener', path: 'evil.com/x', nonce: 'n' }));
+    const html = await fetchRelayBody(`?state=${state}`);
+    const { error } = runRelay(html, `?state=${state}`);
+    expect(error).toContain('Invalid path');
+  });
+});
+
+describe('OAuth callback relay — self-origin guard for local source', () => {
+  it('diverts to opener postMessage when the local target matches the relay origin', async () => {
+    // wrangler dev: page at http://localhost:8787, state.port=8787 → would
+    // self-loop the relay. Guard must divert to opener delivery instead.
+    const state = btoa(
+      JSON.stringify({ source: 'local', port: 8787, path: '/auth/callback', nonce: 'n1' })
+    );
+    const search = `?state=${state}&code=abc`;
+    const html = await fetchRelayBody(search);
+    const { replaced, error, postedMessage, postedTarget } = runRelay(html, search, '', {
+      origin: 'http://localhost:8787',
+    });
+    expect(replaced).toBeUndefined();
+    expect(error).toBeUndefined();
+    expect(postedMessage?.type).toBe('oauth-callback');
+    expect(postedMessage?.redirectUrl).toContain('code=abc');
+    expect(postedMessage?.redirectUrl).toContain('nonce=n1');
+    expect(postedTarget).toBe('http://localhost:8787');
+  });
+
+  it('still redirects to localhost when ports differ (harness path: page :8787, bridge :5710)', async () => {
+    const state = btoa(
+      JSON.stringify({ source: 'local', port: 5710, path: '/auth/callback', nonce: 'n' })
+    );
+    const html = await fetchRelayBody(`?state=${state}&code=abc`);
+    const { replaced, postedMessage } = runRelay(html, `?state=${state}&code=abc`, '', {
+      origin: 'http://localhost:8787',
+    });
+    expect(replaced).toMatch(/^http:\/\/localhost:5710\/auth\/callback\?/);
+    expect(postedMessage).toBeUndefined();
   });
 });
 

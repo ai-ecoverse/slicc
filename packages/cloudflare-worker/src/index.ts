@@ -149,11 +149,36 @@ try {
   params.delete('state');
   params.set('nonce', nonce);
   var query = '?' + params.toString();
-  var target;
-  if (source === 'local') {
+  // 'opener' delivery (worker-served SPA / thin-bridge / hosted-leader):
+  // the popup at /auth/callback shares the worker origin with the SLICC tab
+  // that opened it, so post the full callback URL (including the implicit-
+  // flow hash that carries the access_token) to the opener instead of
+  // self-looping a localhost redirect that doesn't resolve.
+  function deliverToOpener() {
+    if (!window.opener) throw new Error('No opener window');
+    var redirectUrl = location.origin + path + query + location.hash;
+    window.opener.postMessage(
+      { type: 'oauth-callback', redirectUrl: redirectUrl },
+      location.origin
+    );
+    setTimeout(function () { try { window.close(); } catch (e) {} }, 300);
+  }
+  var target = null;
+  if (source === 'opener') {
+    deliverToOpener();
+  } else if (source === 'local') {
     var port = Number(state.port);
     if (!port || port < 1024 || port > 65535) throw new Error('Invalid port: ' + port);
-    target = 'http://localhost:' + port + path + query;
+    var localOrigin = 'http://localhost:' + port;
+    // Self-origin guard: if the 'local' target points at the relay's own
+    // origin (e.g. wrangler dev on :8787 with state.port=8787) we'd loop the
+    // relay forever. Divert to the opener delivery branch instead — the
+    // worker-served SPA can always consume the message.
+    if (localOrigin === location.origin) {
+      deliverToOpener();
+    } else {
+      target = localOrigin + path + query;
+    }
   } else if (source === 'extension') {
     // Chrome extension IDs are 32 chars in [a-p]. Strict format check prevents
     // open-redirect via subdomain injection (e.g. "evil.com.").
@@ -176,7 +201,7 @@ try {
   } else {
     throw new Error('Unknown source: ' + source);
   }
-  location.replace(target + location.hash);
+  if (target !== null) location.replace(target + location.hash);
 } catch (e) {
   var msg = 'OAuth redirect failed: ' + e.message + '. Close this window and try again.';
   document.getElementById('msg').textContent = msg;
