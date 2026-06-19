@@ -120,17 +120,17 @@ loaded into the extension itself.
 
 ## Device / Directory Picker Popups
 
-The `mount` / `usb` / `serial` / `hid` shell commands call system choosers (`showDirectoryPicker` / `navigator.{usb,serial,hid}.request*`), which the side panel cannot host reliably. All four pickers share a single popup entry point — `picker-popup.html` + `picker-popup.js` — parameterized by `?kind=directory|usb-device|serial-port|hid-device`. The two files are copied into `dist/extension/` by the `closeBundle` hook in `vite.config.ts` (not Vite `rollupOptions.input` entries).
+The `mount` / `usb` / `serial` / `hid` shell commands call system choosers (`showDirectoryPicker` / `navigator.{usb,serial,hid}.request*`), which the hosted leader tab cannot host reliably under TCC. All four pickers share a single popup entry point — `picker-popup.html` + `picker-popup.js` — parameterized by `?kind=directory|usb-device|serial-port|hid-device`. The two files are copied into `dist/extension/` by the `closeBundle` hook in `vite.config.ts` (not Vite `rollupOptions.input` entries).
 
 The popup runs the chooser on its own button-click gesture (satisfying Chrome's user-gesture rule), then posts `{ source: 'picker-popup', kind, requestId, … }` back via `chrome.runtime` messaging. The page-side launcher is `openPickerPopup(kind, filters, requestId)` in `packages/webapp/src/shell/supplemental-commands/picker-popup.ts`; thin typed adapters (`openMountPickerPopup`, `openUsbPickerPopup`, `openSerialPickerPopup`, `openHidPickerPopup`) wrap it for the existing call sites. Directory results carry an opaque `{ handleInIdb, idbKey, dirName }` (the popup stashes the non-postable `FileSystemDirectoryHandle` in the shared `slicc-pending-mount` IDB store); device results carry identifiers (`vendorId/productId/serialNumber`) the caller re-acquires via `navigator.{usb,serial,hid}.getDevices()` in its own realm.
 
-The cone (agent) path for `usb request` / `serial request` / `hid request` mirrors `mount`'s approval flow: the command surfaces a `showToolUI` approval card in chat (built by `picker-approval.ts`); the user click drives the chooser via dip (`handleDipPickerAction` in `dip.ts`) in standalone or via the unified popup transparent-swap in `tool-ui-renderer.ts` in extension. Any change to the `closeBundle` static-asset copy list must keep both `picker-popup.html` and `picker-popup.js` listed or all four picker windows 404.
+The cone (agent) path for `usb request` / `serial request` / `hid request` mirrors `mount`'s approval flow: the command surfaces a `showToolUI` approval card in the hosted leader tab's chat (built by `picker-approval.ts`); the user click drives the chooser via dip (`handleDipPickerAction` in `dip.ts`) in standalone or via the unified popup transparent-swap in `tool-ui-renderer.ts` in extension. Any change to the `closeBundle` static-asset copy list must keep both `picker-popup.html` and `picker-popup.js` listed or all four picker windows 404.
 
 ## Media Capture (popup grant path)
 
 Camera / microphone / screen capture (`ffmpeg -f avfoundation`, `screencapture`) work without any new manifest permission:
 
-- **Media capture needs a visible surface**: `getUserMedia` / `getDisplayMedia` are gated by a runtime prompt that an invisible context cannot show. Route the capture through a real window — `capture-popup.html` / `capture-popup.js`, modeled on the `voice-popup` pair. The shell command (`extension-media-capture.ts:captureViaPopup`) asks the service worker to open the popup (`capture-open-window` message → `chrome.windows.create`, no permission needed), the popup performs the capture and posts the bytes back over `chrome.runtime` messaging, and `ffmpeg-command.ts` / `screencapture-command.ts` gate this path behind `isExtensionFloat()`. CLI / standalone keep their page-served auto-grant path unchanged.
+- **Media capture needs a visible surface**: `getUserMedia` / `getDisplayMedia` are gated by a runtime prompt that an invisible context cannot show. Route the capture through a real window — `capture-popup.html` / `capture-popup.js`, modeled on the `voice-popup` pair. The shell command (`extension-media-capture.ts:captureViaPopup`) asks the service worker to open the popup (`capture-open-window` message → `chrome.windows.create`, no permission needed), the popup performs the capture and posts the bytes back over `chrome.runtime` messaging, and `ffmpeg-command.ts` / `screencapture-command.ts` gate this path behind `isExtensionFloat()`. CLI / standalone and the hosted leader tab keep their page-served auto-grant path unchanged.
 
 ## Runtime Conventions
 
@@ -328,11 +328,13 @@ The extras are read by `saveOAuthAccount` in `provider-settings.ts` and merged w
 
 ## Automated CDP Smoke Test
 
-> **Wave 13 follow-up.** The historical smoke test below targets the
-> offscreen + side-panel architecture, which the thin-extension strip
-> removed. The thin-extension equivalent — drive the hosted leader tab
-> via the SW's CDP bridge — lands as part of the Wave 13 verification
-> task. CI runs the script today with `continue-on-error: true`.
+> **Status.** The script described below was written against the legacy
+> fat-extension (offscreen + side-panel) architecture and was retired with
+> the thin-bridge strip. CI runs it with `continue-on-error: true` while
+> the thin-extension replacement — drive the pinned hosted leader tab via
+> the SW's CDP bridge and assert that `ffmpeg -version` / `node -e` still
+> route through the bundled vendor JS — is in flight. Treat the recipe
+> below as historical context until the replacement lands.
 
 `packages/dev-tools/tools/extension-smoke-test.ts` is the end-to-end
 verification that the rebuilt extension actually works in a real Chrome
@@ -354,12 +356,14 @@ What it does:
 3. Resolves the extension ID dynamically from `/json/list`
    (matches the `chrome-extension://<id>/service-worker.js` target).
 4. Opens `chrome-extension://<id>/index.html?detached=1` as a regular
-   tab so the side-panel UI bootstraps in a CDP-reachable target.
+   tab so the legacy fat-UI bootstraps in a CDP-reachable target. (This
+   step is the part that no longer applies in thin-bridge mode — the
+   replacement will instead drive the pinned hosted leader tab.)
 5. Installs a tiny in-page bridge via `Runtime.evaluate` that
    synthesizes `TerminalControlMsg` envelopes through
-   `chrome.runtime.sendMessage` (same wire format as the panel's own
-   `TerminalSessionClient`). The bridge opens one terminal session and
-   exposes `window.__sliccSmokeExec(command)`.
+   `chrome.runtime.sendMessage` (the legacy wire format the old
+   `TerminalSessionClient` used). The bridge opens one terminal session
+   and exposes `window.__sliccSmokeExec(command)`.
 6. Runs two scenarios with `Network.requestWillBeSent` capture:
    - **`ffmpeg -version`** — asserts exit 0, output contains
      `ffmpeg version`, no remote `.js` fetches from forbidden hosts
@@ -379,11 +383,12 @@ Local debugging knobs:
 - `SLICC_SMOKE_KEEP_PROFILE=1` skip teardown of the tmp profile.
 - `SLICC_SMOKE_TIMEOUT_MS=180000` extend the per-scenario budget.
 
-CI runs the smoke test on Linux under `xvfb-run` (MV3 side panels need
-headed Chrome; `--headless=new` is incompatible with extension loading
-in production Chrome). The CI step is `continue-on-error: true` while
-the `ffmpeg-core.js` bundling work lands — the artifact stays visible
-so regressions are obvious without blocking merges during the rollout.
+CI runs the smoke test on Linux under `xvfb-run` (MV3 extensions and the
+hosted leader tab both need headed Chrome; `--headless=new` is
+incompatible with extension loading in production Chrome). The CI step
+is `continue-on-error: true` while the thin-bridge replacement lands —
+the artifact stays visible so regressions are obvious without blocking
+merges during the rollout.
 
 ## Related Guides
 
