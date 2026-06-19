@@ -1,28 +1,15 @@
 /**
- * `CdpTransportBridge` — shared base for the proxied `CDPTransport`
- * implementations.
+ * `CdpTransportBridge` — shared base for proxied `CDPTransport`
+ * implementations that need pending-command id allocation, listener
+ * dispatch, timeout handling, and disconnect tear-down.
  *
- * Today's `OffscreenCdpProxy` (offscreen → service worker) and
- * `PanelCdpProxy` (panel → offscreen) duplicated ~95% of their bodies:
- *  - pending-command id allocation
- *  - per-command `{resolve, reject, timer}` map
- *  - timeout handling
- *  - listener Map keyed by event method
- *  - `on` / `off` / `once` semantics
- *  - response / event dispatch
- *  - disconnect tear-down
- *
- * The only differences were:
+ * Per-implementation differences are factored into `CdpBridgeOptions`:
  *  1. The outbound envelope shape (which `source` tag, which payload `type`).
  *  2. The inbound source filter (which envelope `source` to accept).
- *  3. The wire itself (chrome.runtime in extension; MessagePort in the
- *     standalone kernel-worker path).
+ *  3. The wire itself (chrome.runtime in the thin extension's
+ *     `ExtensionBridgeTransport`; MessagePort in the kernel-worker's
+ *     `WorkerCdpProxy`).
  *  4. Whether listener errors are logged or swallowed.
- *
- * `CdpTransportBridge` factors out (1)–(4) into `CdpBridgeOptions` so the
- * existing chrome.runtime proxies can extend it (see
- * `cdp/offscreen-cdp-proxy.ts` and `cdp/panel-cdp-proxy.ts`) and a future
- * `cdp-worker-proxy.ts` can reuse the same bridge over a `KernelTransport`.
  *
  * Worker safety: this file uses only timers, `Map`, `Set`, and `Promise`.
  * No DOM, no chrome.* — typechecked under `tsconfig.webapp-worker.json`
@@ -86,15 +73,14 @@ export interface CdpBridgeOptions {
   parseEvent: (envelope: unknown) => ParsedCdpEvent | null;
 
   /**
-   * Logger for listener exceptions. Today's `OffscreenCdpProxy`
-   * silently swallowed errors; `PanelCdpProxy` logged them. Both
-   * behaviors are valid; configurable here.
+   * Logger for listener exceptions. Implementations historically split
+   * between silent-drop and warn-and-continue; configurable here.
    */
   onListenerError?: (event: string, err: unknown) => void;
 
   /**
-   * Logger for unrecognized response ids. Today's `PanelCdpProxy`
-   * console.warns; `OffscreenCdpProxy` silently drops. Optional.
+   * Logger for unrecognized response ids. Optional; `console.warn` and
+   * silent-drop are both valid policies.
    */
   onUnknownResponseId?: (id: number) => void;
 

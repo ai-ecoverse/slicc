@@ -1,6 +1,7 @@
 /**
- * CherryHostTransport — the third CDPTransport implementation (alongside
- * CDPClient over WebSocket and DebuggerClient over chrome.debugger).
+ * CherryHostTransport — `CDPTransport` implementation for the cherry
+ * follower mode, alongside `CDPClient` (WebSocket / CLI) and
+ * `ExtensionBridgeTransport` (thin extension `chrome.runtime` Port).
  *
  * Runs INSIDE the embedded SLICC follower iframe. Instead of a WebSocket or
  * chrome.debugger, it sends `cdp.request` envelopes to the host SDK
