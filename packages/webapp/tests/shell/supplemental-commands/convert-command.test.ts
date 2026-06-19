@@ -1,6 +1,9 @@
 import type { IFileSystem } from 'just-bash';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createConvertCommand } from '../../../src/shell/supplemental-commands/convert-command.js';
+import {
+  createConvertCommand,
+  createIpkContextFromCtx,
+} from '../../../src/shell/supplemental-commands/convert-command.js';
 import * as magickWasm from '../../../src/shell/supplemental-commands/magick-wasm.js';
 
 function createMockCtx(overrides: Partial<{ fs: Partial<IFileSystem>; cwd: string }> = {}) {
@@ -329,5 +332,83 @@ describe('convert output snapshot (regression: WASM heap clobber)', () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('Failed to generate output image');
     expect(writtenContent).toHaveLength(0);
+  });
+});
+
+describe('install-required guidance (browser branch)', () => {
+  // Vitest runs under Node so `getMagick`'s Node fallback always resolves
+  // the locally-installed npm `@imagemagick/magick-wasm`. Exercise the
+  // browser-branch resolver helper directly to pin the
+  // null-when-absent / bytes-when-installed behavior. The end-to-end
+  // guidance path is exercised manually per the task's verification plan
+  // (`ipk add @imagemagick/magick-wasm && convert in.png out.jpg`).
+
+  function createIpkMockCtx() {
+    const fileStore = new Map<string, string | Uint8Array>();
+    const dirSet = new Set<string>(['/workspace']);
+    const fs: Partial<IFileSystem> = {
+      resolvePath: (base: string, path: string) =>
+        path.startsWith('/') ? path : `${base.replace(/\/$/, '')}/${path}`,
+      exists: vi.fn().mockImplementation(async (p: string) => fileStore.has(p) || dirSet.has(p)),
+      stat: vi.fn().mockImplementation(async (p: string) => {
+        if (fileStore.has(p)) {
+          const v = fileStore.get(p)!;
+          return { isFile: true, isDirectory: false, size: v.length };
+        }
+        if (dirSet.has(p)) return { isFile: false, isDirectory: true, size: 0 };
+        throw new Error(`ENOENT: ${p}`);
+      }),
+      readFile: vi.fn().mockImplementation(async (p: string) => {
+        const v = fileStore.get(p);
+        if (v === undefined) throw new Error(`ENOENT: ${p}`);
+        return typeof v === 'string' ? v : new TextDecoder().decode(v);
+      }),
+      readFileBuffer: vi.fn().mockImplementation(async (p: string) => {
+        const v = fileStore.get(p);
+        if (v === undefined) throw new Error(`ENOENT: ${p}`);
+        return typeof v === 'string' ? new TextEncoder().encode(v) : v;
+      }),
+      writeFile: vi.fn().mockImplementation(async (p: string, content: string | Uint8Array) => {
+        fileStore.set(p, content);
+        const parts = p.split('/').slice(0, -1);
+        for (let i = 1; i <= parts.length; i++) {
+          dirSet.add(parts.slice(0, i).join('/') || '/');
+        }
+      }),
+    };
+    return {
+      fs: fs as IFileSystem,
+      cwd: '/workspace',
+      env: new Map<string, string>(),
+      stdin: '',
+    };
+  }
+
+  it('tryLoadMagickWasmFromNodeModules returns null when the package is absent', async () => {
+    const ctx = createIpkMockCtx();
+    const result = await magickWasm.tryLoadMagickWasmFromNodeModules(createIpkContextFromCtx(ctx));
+    expect(result).toBeNull();
+  });
+
+  it('tryLoadMagickWasmFromNodeModules reads dist/magick.wasm when installed', async () => {
+    const ctx = createIpkMockCtx();
+    await ctx.fs.writeFile(
+      '/workspace/node_modules/@imagemagick/magick-wasm/package.json',
+      JSON.stringify({ name: '@imagemagick/magick-wasm', version: '0.0.38', main: 'dist/index.js' })
+    );
+    const fakeWasm = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+    await ctx.fs.writeFile(
+      '/workspace/node_modules/@imagemagick/magick-wasm/dist/magick.wasm',
+      fakeWasm
+    );
+    const result = await magickWasm.tryLoadMagickWasmFromNodeModules(createIpkContextFromCtx(ctx));
+    expect(result).not.toBeNull();
+    expect(Array.from(result!)).toEqual(Array.from(fakeWasm));
+  });
+
+  it('help text contains no CDN / jsdelivr references (zero network)', async () => {
+    const cmd = createConvertCommand();
+    const result = await cmd.execute(['--help'], createIpkMockCtx());
+    expect(result.stdout).not.toMatch(/jsdelivr|unpkg|esm\.sh|https?:\/\//);
   });
 });

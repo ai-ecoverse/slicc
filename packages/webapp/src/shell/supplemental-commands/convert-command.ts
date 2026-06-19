@@ -1,6 +1,31 @@
-import type { Command } from 'just-bash';
+import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import { getMagick } from './magick-wasm.js';
+import { getMagick, type IpkResolutionContext } from './magick-wasm.js';
+
+/**
+ * Build an {@link IpkResolutionContext} from a command's `ctx` so
+ * `getMagick` can locate the ipk-installed `@imagemagick/magick-wasm`
+ * in the VFS `node_modules`. Mirrors `createIpkContextFromCtx` in
+ * `esbuild-command.ts` / `tsc-command.ts` so every float wires the
+ * loader the same way.
+ */
+export function createIpkContextFromCtx(ctx: CommandContext): IpkResolutionContext {
+  return {
+    reader: {
+      exists: (path) => ctx.fs.exists(path),
+      isDirectory: async (path) => {
+        try {
+          return (await ctx.fs.stat(path)).isDirectory;
+        } catch {
+          return false;
+        }
+      },
+      readFile: (path) => ctx.fs.readFile(path),
+    },
+    readBytes: (path) => ctx.fs.readFileBuffer(path),
+    fromDir: ctx.cwd,
+  };
+}
 
 function inferFormat(path: string): string {
   const lower = path.toLowerCase();
@@ -124,8 +149,10 @@ export function createConvertCommand(name: string = 'convert'): Command {
       const resolvedInput = ctx.fs.resolvePath(ctx.cwd, inputPath);
       const inputData = await ctx.fs.readFileBuffer(resolvedInput);
 
-      // Initialize ImageMagick
-      const magick = await getMagick();
+      // Initialize ImageMagick — pass an ipk context so the browser
+      // path can find `@imagemagick/magick-wasm/dist/magick.wasm` in
+      // the VFS `node_modules`. Node / extension paths ignore it.
+      const magick = await getMagick({ ipk: createIpkContextFromCtx(ctx) });
 
       // Process image
       let outputData: Uint8Array | null = null;
