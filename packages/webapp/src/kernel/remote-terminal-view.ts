@@ -34,6 +34,12 @@
  * the worker bundle.
  */
 
+import type {
+  PermissionDenyDetail,
+  PermissionGrant,
+  PermissionKind,
+  PermissionRequestOptions,
+} from '@slicc/webcomponents';
 import type { FitAddon } from '@xterm/addon-fit';
 import type { Terminal } from '@xterm/xterm';
 import { storePendingHandle } from '../fs/mount-picker-popup.js';
@@ -46,20 +52,21 @@ import {
 import { parseUsbArgs, parseUsbFilters } from '../shell/supplemental-commands/usb-command.js';
 import type { TerminalEventMsg, TerminalSessionId } from '../shell/terminal-protocol.js';
 import type { OffscreenClient } from '../ui/offscreen-client.js';
+import { getLeaderPermissionsSurface } from '../ui/wc/wc-permissions-registry.js';
 import {
-  getNavigatorHid,
   getSharedHidRegistry,
+  type HidDevice,
   type HidDeviceFilter,
 } from './hid-device-registry.js';
 import {
-  getNavigatorSerial,
   getSharedSerialRegistry,
   type SerialFilter,
+  type SerialPort,
 } from './serial-port-registry.js';
 import { type TerminalExecResult, TerminalSessionClient } from './terminal-session-client.js';
 import {
-  getNavigatorUsb,
   getSharedUsbRegistry,
+  type UsbDevice,
   type UsbDeviceFilter,
 } from './usb-device-registry.js';
 
@@ -687,33 +694,90 @@ export class RemoteTerminalView {
   }
 
   /**
-   * Run the WebUSB chooser on the Enter-keystroke gesture, register the
-   * granted device in the page-side registry, then forward
-   * `usb request --__resolved <handle>` so the worker command renders
-   * the device descriptor. Cancellation surfaces as a terminal line and
-   * skips the worker exec entirely.
+   * Run a gesture-gated picker through the leader `<slicc-permissions>`
+   * surface and capture the matching deny event so callers can render a
+   * cancellation / unavailable / error line. The Enter keystroke
+   * activation is preserved because we await `surface.request(...)`
+   * directly — the surface forwards `opts.filters` to the platform
+   * default (`navigator.usb.requestDevice` / `navigator.hid.requestDevice`
+   * / `navigator.serial.requestPort` / `showDirectoryPicker`) without an
+   * intervening DOM event, so user activation flows straight through.
+   */
+  private async requestPermission(
+    kind: PermissionKind,
+    opts?: PermissionRequestOptions
+  ): Promise<
+    | { ok: true; grant: PermissionGrant }
+    | { ok: false; reason: PermissionDenyDetail['reason']; message?: string }
+  > {
+    const surface = getLeaderPermissionsSurface();
+    if (!surface) {
+      return { ok: false, reason: 'unavailable', message: 'permission surface not mounted' };
+    }
+    // Hold the deny detail in a property ref so TS's control-flow
+    // narrowing doesn't pin it to `null` after the closure assignment
+    // (closures don't participate in CFA).
+    const denyRef: { current: PermissionDenyDetail | null } = { current: null };
+    const onDeny = (event: Event): void => {
+      const detail = (event as CustomEvent<PermissionDenyDetail>).detail;
+      if (detail.kind === kind) denyRef.current = detail;
+    };
+    surface.addEventListener('slicc-permission-deny', onDeny);
+    try {
+      const grant = await surface.request(kind, opts);
+      if (grant) return { ok: true, grant };
+      const deny = denyRef.current;
+      return {
+        ok: false,
+        reason: deny?.reason ?? 'error',
+        ...(deny?.message ? { message: deny.message } : {}),
+      };
+    } finally {
+      surface.removeEventListener('slicc-permission-deny', onDeny);
+    }
+  }
+
+  /**
+   * Render a denial outcome from {@link requestPermission}. `label`
+   * prefixes the line and matches today's command-name prefix; the
+   * `unavailable` branch uses the caller-supplied long-form message so
+   * the existing UX ("usb: WebUSB is not available in this browser",
+   * "mount: File System Access API not available", …) is preserved.
+   */
+  private writePickerDenial(
+    label: string,
+    denial: { reason: PermissionDenyDetail['reason']; message?: string },
+    unavailableMessage: string
+  ): void {
+    if (!this.terminal) return;
+    if (denial.reason === 'cancelled') {
+      this.terminal.writeln(`${label}: cancelled`);
+      return;
+    }
+    if (denial.reason === 'unavailable') {
+      this.terminal.writeln(`${label}: ${unavailableMessage}`);
+      return;
+    }
+    this.terminal.writeln(`${label}: ${denial.message ?? 'unknown error'}`);
+  }
+
+  /**
+   * Run the WebUSB chooser through the centralized permission surface
+   * on the Enter-keystroke gesture, register the granted device in the
+   * page-side registry, then forward `usb request --__resolved <handle>`
+   * so the worker command renders the device descriptor. Cancellation
+   * surfaces as a terminal line and skips the worker exec entirely.
    */
   private async runRemoteWithUsbPicker(filters: UsbDeviceFilter[]): Promise<void> {
     this.isExecuting = true;
     try {
-      const usb = getNavigatorUsb();
-      if (!usb) {
-        this.terminal?.writeln('usb: WebUSB is not available in this browser');
+      const result = await this.requestPermission('usb', { filters });
+      if (!result.ok) {
+        this.writePickerDenial('usb', result, 'WebUSB is not available in this browser');
         return;
       }
-      let handle: string;
-      try {
-        const device = await usb.requestDevice({ filters });
-        handle = getSharedUsbRegistry().register(device);
-      } catch (err: unknown) {
-        const name = err instanceof Error ? err.name : '';
-        if (name === 'NotFoundError' || name === 'AbortError') {
-          this.terminal?.writeln('usb: cancelled');
-          return;
-        }
-        this.terminal?.writeln(`usb: ${err instanceof Error ? err.message : String(err)}`);
-        return;
-      }
+      const grant = result.grant as Extract<PermissionGrant, { kind: 'usb' }>;
+      const handle = getSharedUsbRegistry().register(grant.device as UsbDevice);
       await this.runRemoteImpl(`usb request --__resolved ${handle}`);
     } finally {
       this.isExecuting = false;
@@ -722,44 +786,30 @@ export class RemoteTerminalView {
   }
 
   /**
-   * Run the WebHID chooser on the Enter-keystroke gesture, register
-   * EVERY granted interface in the page-side registry, then forward
-   * `hid request --__resolved <h1,h2,…>` so the worker command renders
-   * each one. `navigator.hid.requestDevice` resolves with an array —
-   * for a multi-interface device (e.g. a VIA/QMK keyboard) a single
-   * chooser pick maps to one `HIDDevice` per interface, and the
-   * raw-HID (0xFF60) interface is often NOT the first entry. Dropping
-   * all but `devices[0]` would silently lose those siblings; the
-   * `--usage-page`/`--usage` filter flags are preserved on the rewrite
-   * so the resolved branch can reorder the matching interface to the
-   * top, matching the worker-side `hid request` behavior.
+   * Run the WebHID chooser through the centralized permission surface
+   * on the Enter-keystroke gesture, register EVERY granted interface in
+   * the page-side registry, then forward `hid request --__resolved <h1,h2,…>`
+   * so the worker command renders each one. The surface returns
+   * `{ device, devices }` where `devices` is the full array — for a
+   * multi-interface device (e.g. a VIA/QMK keyboard) a single chooser
+   * pick maps to one `HIDDevice` per interface, and the raw-HID (0xFF60)
+   * interface is often NOT the first entry. Dropping all but `devices[0]`
+   * would silently lose those siblings; the `--usage-page`/`--usage`
+   * filter flags are preserved on the rewrite so the resolved branch can
+   * reorder the matching interface to the top, matching the worker-side
+   * `hid request` behavior.
    */
   private async runRemoteWithHidPicker(filters: HidDeviceFilter[]): Promise<void> {
     this.isExecuting = true;
     try {
-      const hid = getNavigatorHid();
-      if (!hid) {
-        this.terminal?.writeln('hid: WebHID is not available in this browser');
+      const result = await this.requestPermission('hid', { filters });
+      if (!result.ok) {
+        this.writePickerDenial('hid', result, 'WebHID is not available in this browser');
         return;
       }
-      let handles: string[];
-      try {
-        const devices = await hid.requestDevice({ filters });
-        if (devices.length === 0) {
-          this.terminal?.writeln('hid: cancelled');
-          return;
-        }
-        const registry = getSharedHidRegistry();
-        handles = devices.map((d) => registry.register(d));
-      } catch (err: unknown) {
-        const name = err instanceof Error ? err.name : '';
-        if (name === 'NotFoundError' || name === 'AbortError') {
-          this.terminal?.writeln('hid: cancelled');
-          return;
-        }
-        this.terminal?.writeln(`hid: ${err instanceof Error ? err.message : String(err)}`);
-        return;
-      }
+      const grant = result.grant as Extract<PermissionGrant, { kind: 'hid' }>;
+      const registry = getSharedHidRegistry();
+      const handles = (grant.devices as HidDevice[]).map((d) => registry.register(d));
       const usageSuffix = serializeHidUsageFlags(filters[0]);
       await this.runRemoteImpl(`hid request --__resolved ${handles.join(',')}${usageSuffix}`);
     } finally {
@@ -769,33 +819,25 @@ export class RemoteTerminalView {
   }
 
   /**
-   * Run the Web Serial chooser on the Enter-keystroke gesture, register
-   * the granted port in the page-side registry, then forward
-   * `serial request --__resolved <handle>` so the worker command renders
-   * the port descriptor. `navigator.serial.requestPort` rejects with
-   * NotFound/Abort when the user dismisses the chooser.
+   * Run the Web Serial chooser through the centralized permission surface
+   * on the Enter-keystroke gesture, register the granted port in the
+   * page-side registry, then forward `serial request --__resolved <handle>`
+   * so the worker command renders the port descriptor. Cancellation /
+   * unavailable surfaces as a terminal line.
    */
   private async runRemoteWithSerialPicker(filters: SerialFilter[]): Promise<void> {
     this.isExecuting = true;
     try {
-      const serial = getNavigatorSerial();
-      if (!serial) {
-        this.terminal?.writeln('serial: Web Serial is not available in this browser');
+      const result = await this.requestPermission(
+        'serial',
+        filters.length ? { filters } : undefined
+      );
+      if (!result.ok) {
+        this.writePickerDenial('serial', result, 'Web Serial is not available in this browser');
         return;
       }
-      let handle: string;
-      try {
-        const port = await serial.requestPort(filters.length ? { filters } : {});
-        handle = getSharedSerialRegistry().register(port);
-      } catch (err: unknown) {
-        const name = err instanceof Error ? err.name : '';
-        if (name === 'NotFoundError' || name === 'AbortError') {
-          this.terminal?.writeln('serial: cancelled');
-          return;
-        }
-        this.terminal?.writeln(`serial: ${err instanceof Error ? err.message : String(err)}`);
-        return;
-      }
+      const grant = result.grant as Extract<PermissionGrant, { kind: 'serial' }>;
+      const handle = getSharedSerialRegistry().register(grant.port as SerialPort);
       await this.runRemoteImpl(`serial request --__resolved ${handle}`);
     } finally {
       this.isExecuting = false;
@@ -804,12 +846,13 @@ export class RemoteTerminalView {
   }
 
   /**
-   * Run the Web Serial chooser on the Enter-keystroke gesture for an
-   * `esptool` invocation that omitted `--port`, register the granted
-   * port, and forward the ORIGINAL command line with `--port <handle>`
-   * appended so the worker command reuses the resolved port instead of
-   * trying its own (gesture-less) `requestPort`. Cancellation surfaces
-   * as a terminal line and skips the worker exec.
+   * Run the Web Serial chooser through the centralized permission surface
+   * on the Enter-keystroke gesture for an `esptool` invocation that
+   * omitted `--port`, register the granted port, and forward the ORIGINAL
+   * command line with `--port <handle>` appended so the worker command
+   * reuses the resolved port instead of trying its own (gesture-less)
+   * `requestPort`. Cancellation surfaces as a terminal line and skips
+   * the worker exec.
    */
   private async runRemoteWithEsptoolPicker(
     command: string,
@@ -817,24 +860,16 @@ export class RemoteTerminalView {
   ): Promise<void> {
     this.isExecuting = true;
     try {
-      const serial = getNavigatorSerial();
-      if (!serial) {
-        this.terminal?.writeln('esptool: Web Serial is not available in this browser');
+      const result = await this.requestPermission(
+        'serial',
+        filters.length ? { filters } : undefined
+      );
+      if (!result.ok) {
+        this.writePickerDenial('esptool', result, 'Web Serial is not available in this browser');
         return;
       }
-      let handle: string;
-      try {
-        const port = await serial.requestPort(filters.length ? { filters } : {});
-        handle = getSharedSerialRegistry().register(port);
-      } catch (err: unknown) {
-        const name = err instanceof Error ? err.name : '';
-        if (name === 'NotFoundError' || name === 'AbortError') {
-          this.terminal?.writeln('esptool: cancelled');
-          return;
-        }
-        this.terminal?.writeln(`esptool: ${err instanceof Error ? err.message : String(err)}`);
-        return;
-      }
+      const grant = result.grant as Extract<PermissionGrant, { kind: 'serial' }>;
+      const handle = getSharedSerialRegistry().register(grant.port as SerialPort);
       await this.runRemoteImpl(`${command.trim()} --port ${handle}`);
     } finally {
       this.isExecuting = false;
@@ -843,36 +878,23 @@ export class RemoteTerminalView {
   }
 
   /**
-   * Pre-pick a local directory before forwarding the `mount` command
-   * to the worker. Runs `showDirectoryPicker` on the keystroke
-   * activation chain. Cancellation surfaces as a brief terminal
-   * line and skips the exec entirely (so the worker doesn't
-   * receive a no-op `mount` call).
+   * Pre-pick a local directory through the centralized permission surface
+   * before forwarding the `mount` command to the worker. Runs
+   * `showDirectoryPicker` on the keystroke activation chain. Cancellation
+   * surfaces as a brief terminal line and skips the exec entirely (so
+   * the worker doesn't receive a no-op `mount` call).
    */
   private async runRemoteWithLocalPicker(command: string, target: string): Promise<void> {
     this.isExecuting = true;
     try {
-      const win = window as Window & {
-        showDirectoryPicker?: (opts?: { mode?: string }) => Promise<FileSystemDirectoryHandle>;
-      };
-      if (typeof win.showDirectoryPicker !== 'function') {
-        this.terminal?.writeln(`mount: File System Access API not available\n`);
+      const result = await this.requestPermission('filesystem');
+      if (!result.ok) {
+        this.writePickerDenial('mount', result, 'File System Access API not available');
         return;
       }
-      let handle: FileSystemDirectoryHandle;
+      const grant = result.grant as Extract<PermissionGrant, { kind: 'filesystem' }>;
       try {
-        handle = await win.showDirectoryPicker({ mode: 'readwrite' });
-      } catch (err: unknown) {
-        if (err instanceof Error && err.name === 'AbortError') {
-          this.terminal?.writeln(`mount: cancelled`);
-          return;
-        }
-        const msg = err instanceof Error ? err.message : String(err);
-        this.terminal?.writeln(`mount: ${msg}`);
-        return;
-      }
-      try {
-        await storePendingHandle(localMountIdbKey(target), handle);
+        await storePendingHandle(localMountIdbKey(target), grant.handle);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         this.terminal?.writeln(`mount: failed to stash handle: ${msg}`);
