@@ -4,7 +4,8 @@
  * Returns the underlying {@link CDPTransport} of whatever `BrowserAPI` was
  * registered by the kernel host (`packages/webapp/src/kernel/host.ts`)
  * — which is the `WorkerCdpProxy` over WebSocket in standalone CLI mode,
- * and the `DebuggerClient` (via the offscreen proxy) in extension mode.
+ * and the `ExtensionBridgeTransport` (thin extension `chrome.runtime`
+ * Port to the service-worker `chrome.debugger` proxy) in extension mode.
  *
  * Used by the OAuth interception launcher
  * ({@link import('../providers/intercepted-oauth.js').createInterceptingOAuthLauncher})

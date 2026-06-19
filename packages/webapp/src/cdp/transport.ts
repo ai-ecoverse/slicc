@@ -1,8 +1,11 @@
 /**
  * CDPTransport — abstract interface for sending CDP commands.
  *
- * Implemented by CDPClient (WebSocket, CLI mode) and DebuggerClient
- * (chrome.debugger API, extension mode).
+ * Implemented by `CDPClient` (WebSocket, CLI mode), `ExtensionBridgeTransport`
+ * (thin extension's `chrome.runtime` Port to the service worker's
+ * `chrome.debugger` proxy), `CherryHostTransport` (synthetic CDP over
+ * postMessage in cherry follower mode), and `PanelRpcCdpTransport`
+ * (federated tray targets driven from the kernel worker).
  */
 
 import type { CDPConnectOptions, CDPEventListener, ConnectionState } from './types.js';

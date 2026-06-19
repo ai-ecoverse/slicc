@@ -100,9 +100,9 @@ export interface KernelHostConfig {
 
   /**
    * `BrowserAPI` instance. The factory does NOT construct this — the
-   * caller supplies the float-specific transport (extension wraps
-   * `OffscreenCdpProxy`; standalone wraps a WebSocket-backed `CDPClient`;
-   * future kernel-worker wraps a kernel-transport CDP proxy).
+   * caller supplies the float-specific transport (thin extension wraps
+   * `ExtensionBridgeTransport`; standalone wraps a WebSocket-backed
+   * `CDPClient`; future kernel-worker wraps a kernel-transport CDP proxy).
    */
   browser: BrowserAPI;
 

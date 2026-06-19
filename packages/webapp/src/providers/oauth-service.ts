@@ -32,8 +32,8 @@ export function createOAuthLauncher(): OAuthLauncher {
  * controlled browser attached), so the caller can fall back gracefully.
  *
  * Intentionally async + lazy: the transport-lookup paths differ by mode
- * (DebuggerClient in extension mode, CDPClient in CLI/node-server mode) and
- * we don't want to import them eagerly.
+ * (`ExtensionBridgeTransport` in extension mode, `CDPClient` in CLI /
+ * node-server mode) and we don't want to import them eagerly.
  */
 export async function createInterceptingOAuthLauncherForCurrentRuntime(): Promise<InterceptingOAuthLauncher | null> {
   const transport = await resolveActiveCdpTransport();

@@ -1,7 +1,7 @@
 /**
- * ExtensionBridgeTransport — fourth `CDPTransport` implementation, alongside
- * `CDPClient` (WS/CLI), `DebuggerClient` (in-extension `chrome.debugger`), and
- * `CherryHostTransport` (synthetic CDP over postMessage).
+ * ExtensionBridgeTransport — `CDPTransport` implementation for the thin
+ * extension, alongside `CDPClient` (WS/CLI) and `CherryHostTransport`
+ * (synthetic CDP over postMessage).
  *
  * Runs INSIDE the sliccy.ai leader tab. Opens a long-lived Port to the
  * extension service worker via `chrome.runtime.connect(extensionId, { name:

@@ -195,7 +195,7 @@ export class BrowserAPI {
 
   /**
    * Connect to the CDP proxy.
-   * DebuggerClient (extension mode) accepts but ignores these options.
+   * `ExtensionBridgeTransport` (thin extension) ignores these options.
    */
   async connect(options?: Partial<CDPConnectOptions>): Promise<void> {
     // Capture the connect options BEFORE attempting the connection so
