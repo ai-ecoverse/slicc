@@ -1,17 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE,
-  ELECTRON_OVERLAY_FOLLOWER_STATUS_MESSAGE_TYPE,
-  ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE,
   getElectronOverlayInitialTab,
   getLickWebSocketUrl,
   getTrayWebhookUrl,
   getWebhookUrl,
-  isElectronOverlayCloseMessage,
-  isElectronOverlayFollowerStatusMessage,
-  isElectronOverlaySetTabMessage,
-  mapFollowerStateToOverlayStatus,
   resolveUiRuntimeMode,
   shouldUseRuntimeModeTrayDefaults,
   type UiRuntimeMode,
@@ -90,97 +83,6 @@ describe('runtime-mode', () => {
     expect(getTrayWebhookUrl('https://hub.slicc.dev/webhook/abc.def/', '/my-webhook')).toBe(
       'https://hub.slicc.dev/webhook/abc.def/my-webhook'
     );
-  });
-
-  it('recognizes overlay tab messages', () => {
-    expect(
-      isElectronOverlaySetTabMessage({ type: ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE, tab: 'files' })
-    ).toBe(true);
-    expect(isElectronOverlaySetTabMessage({ type: 'something-else' })).toBe(false);
-    expect(isElectronOverlaySetTabMessage(null)).toBe(false);
-  });
-
-  it('exposes the dedicated overlay close message type', () => {
-    expect(ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE).toBe('slicc-electron-overlay:close');
-    // The close message must NOT be confused with the toggle or set-tab
-    // messages — the parent shell routes each to a different action.
-    expect(ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE).not.toBe(ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE);
-  });
-
-  it('recognizes overlay close messages', () => {
-    expect(isElectronOverlayCloseMessage({ type: ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE })).toBe(true);
-    expect(isElectronOverlayCloseMessage({ type: ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE })).toBe(
-      false
-    );
-    expect(isElectronOverlayCloseMessage({ type: 'something-else' })).toBe(false);
-    expect(isElectronOverlayCloseMessage(null)).toBe(false);
-    expect(isElectronOverlayCloseMessage(undefined)).toBe(false);
-    expect(isElectronOverlayCloseMessage({})).toBe(false);
-  });
-
-  it('exposes the dedicated overlay follower-status message type', () => {
-    expect(ELECTRON_OVERLAY_FOLLOWER_STATUS_MESSAGE_TYPE).toBe(
-      'slicc-electron-overlay:follower-status'
-    );
-    // The follower-status message must not collide with close / set-tab.
-    expect(ELECTRON_OVERLAY_FOLLOWER_STATUS_MESSAGE_TYPE).not.toBe(
-      ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE
-    );
-    expect(ELECTRON_OVERLAY_FOLLOWER_STATUS_MESSAGE_TYPE).not.toBe(
-      ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE
-    );
-  });
-
-  it('recognizes overlay follower-status messages with valid status values', () => {
-    expect(
-      isElectronOverlayFollowerStatusMessage({
-        type: ELECTRON_OVERLAY_FOLLOWER_STATUS_MESSAGE_TYPE,
-        status: 'disconnected',
-      })
-    ).toBe(true);
-    expect(
-      isElectronOverlayFollowerStatusMessage({
-        type: ELECTRON_OVERLAY_FOLLOWER_STATUS_MESSAGE_TYPE,
-        status: 'connected',
-      })
-    ).toBe(true);
-    expect(
-      isElectronOverlayFollowerStatusMessage({
-        type: ELECTRON_OVERLAY_FOLLOWER_STATUS_MESSAGE_TYPE,
-        status: 'error',
-      })
-    ).toBe(true);
-  });
-
-  it('rejects malformed follower-status messages', () => {
-    expect(isElectronOverlayFollowerStatusMessage(null)).toBe(false);
-    expect(isElectronOverlayFollowerStatusMessage(undefined)).toBe(false);
-    expect(isElectronOverlayFollowerStatusMessage({})).toBe(false);
-    expect(
-      isElectronOverlayFollowerStatusMessage({
-        type: ELECTRON_OVERLAY_FOLLOWER_STATUS_MESSAGE_TYPE,
-      })
-    ).toBe(false);
-    expect(
-      isElectronOverlayFollowerStatusMessage({
-        type: ELECTRON_OVERLAY_FOLLOWER_STATUS_MESSAGE_TYPE,
-        status: 'bogus',
-      })
-    ).toBe(false);
-    expect(
-      isElectronOverlayFollowerStatusMessage({
-        type: ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE,
-        status: 'connected',
-      })
-    ).toBe(false);
-  });
-
-  it('maps follower runtime states down to the three launcher states', () => {
-    expect(mapFollowerStateToOverlayStatus('connected')).toBe('connected');
-    expect(mapFollowerStateToOverlayStatus('error')).toBe('error');
-    expect(mapFollowerStateToOverlayStatus('inactive')).toBe('disconnected');
-    expect(mapFollowerStateToOverlayStatus('connecting')).toBe('disconnected');
-    expect(mapFollowerStateToOverlayStatus('reconnecting')).toBe('disconnected');
   });
 });
 
