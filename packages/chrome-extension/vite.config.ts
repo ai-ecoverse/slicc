@@ -24,13 +24,26 @@ const rootPkg = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf-
 const sliccReleasedAt = process.env['SLICC_RELEASED_AT'] ?? null;
 const outDir = resolve(repoRoot, 'dist/extension');
 
+/** Build-time signal that the extension is being packaged for local development
+ *  (the same env var that already strips the manifest `key` and widens
+ *  `externally_connectable` in `writeExtensionManifest`). The vite `mode`
+ *  cannot stand in for this because `npm run dev:extension` runs `vite build
+ *  --watch` without `--mode development`, so `mode === 'production'` in both
+ *  prod and dev:extension. Code that needs to swap hosted URLs for the local
+ *  vite dev server reads `__SLICC_EXT_DEV__` instead of `__DEV__`. */
+const isExtDev = !!process.env['SLICC_EXT_DEV'];
+
 /** The production esbuild defaults the standalone IIFE bundles share. */
 const PROD_IIFE_DEFAULTS = {
   bundle: true,
   format: 'iife',
   target: 'esnext',
   minify: true,
-  define: { __DEV__: 'false', global: 'globalThis' },
+  define: {
+    __DEV__: 'false',
+    __SLICC_EXT_DEV__: JSON.stringify(isExtDev),
+    global: 'globalThis',
+  },
 } as const;
 
 /**
@@ -79,6 +92,7 @@ function buildExtensionServiceWorkerPlugin(mode: string) {
         },
         define: {
           __DEV__: JSON.stringify(mode !== 'production'),
+          __SLICC_EXT_DEV__: JSON.stringify(isExtDev),
           global: 'globalThis',
         },
       });
@@ -445,6 +459,7 @@ export default defineConfig(({ mode }) => ({
   publicDir: resolve(repoRoot, 'packages/assets'),
   define: {
     __DEV__: JSON.stringify(mode !== 'production'),
+    __SLICC_EXT_DEV__: JSON.stringify(isExtDev),
     __SLICC_VERSION__: JSON.stringify(rootPkg.version),
     __SLICC_RELEASED_AT__: JSON.stringify(sliccReleasedAt),
   },

@@ -73,15 +73,18 @@ describe('manifest.json — DNR ruleset wiring', () => {
 describe('content-script.ts — launcher app URL', () => {
   // Source-file inspection: the content script runs `define('slicc-launcher')`
   // at top-level import, which crashes Node test runs (no customElements).
-  // Read the file as text instead and assert the URL literal.
+  // Read the file as text instead and assert the URL literal. `PROD_…` is
+  // the hosted-build branch of the `__SLICC_EXT_DEV__` resolver — the dev
+  // branch points at `http://localhost:5710` and is exercised through the
+  // unit-test of `getSliccAppUrl` in `content-script.test.ts`.
   const src = readFileSync(resolve(PKG_ROOT, 'src/content-script.ts'), 'utf-8');
 
   it('points the launcher iframe at the cherry-follower URL', () => {
-    expect(src).toContain("const SLICC_APP_URL = 'https://www.sliccy.ai/?cherry=1';");
+    expect(src).toContain("const PROD_SLICC_APP_URL = 'https://www.sliccy.ai/?cherry=1';");
   });
 
   it('uses the www. host (skip apex→www 301) and a non-empty search (skip marketing redirect)', () => {
-    const m = src.match(/const SLICC_APP_URL = '([^']+)';/);
+    const m = src.match(/const PROD_SLICC_APP_URL = '([^']+)';/);
     expect(m).not.toBeNull();
     const url = new URL(m?.[1] ?? '');
     expect(url.hostname).toBe('www.sliccy.ai');

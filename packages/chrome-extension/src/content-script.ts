@@ -27,18 +27,50 @@
 
 import { SliccLauncher } from '@slicc/webcomponents/src/launcher/slicc-launcher.js';
 
-const SLICC_APP_URL = 'https://www.sliccy.ai/?cherry=1';
+/** Hosted (production) cherry-follower URL. Read by `dnr-frame-ancestors.test.ts`
+ *  as a source-text literal to verify the production URL invariant — keep the
+ *  exact `const PROD_SLICC_APP_URL =` declaration form so the regex match
+ *  still picks it up after renames. */
+const PROD_SLICC_APP_URL = 'https://www.sliccy.ai/?cherry=1';
+/** Local vite dev-server cherry-follower URL. Selected when the extension was
+ *  built with `SLICC_EXT_DEV=1` (see `vite.config.ts` `__SLICC_EXT_DEV__`),
+ *  which is the same signal that strips the manifest `key` and widens
+ *  `externally_connectable` to localhost. */
+const DEV_SLICC_APP_URL = 'http://localhost:5710/?cherry=1';
+/** Hosted (production) SLICC origin. */
+const PROD_SLICC_APP_ORIGIN = 'https://www.sliccy.ai';
+/** Local vite dev-server SLICC origin (paired with `DEV_SLICC_APP_URL`). */
+const DEV_SLICC_APP_ORIGIN = 'http://localhost:5710';
+
 const SLICC_LAUNCHER_HOST_ID = 'slicc-electron-overlay-root';
 
+/** Pure resolver — returns the cherry-follower URL the launcher should point
+ *  its iframe at. Parameterized on the build-time `__SLICC_EXT_DEV__` flag so
+ *  unit tests can exercise both branches without rebuilding. */
+export function getSliccAppUrl(isExtDev: boolean): string {
+  return isExtDev ? DEV_SLICC_APP_URL : PROD_SLICC_APP_URL;
+}
+
+/** Pure resolver — returns the canonical SLICC app origin used by the
+ *  defensive in-script injection guard. Dev builds compare against
+ *  `http://localhost:5710` so the leader-served-from-vite page does not
+ *  self-inject the launcher. */
+export function getSliccAppOrigin(isExtDev: boolean): string {
+  return isExtDev ? DEV_SLICC_APP_ORIGIN : PROD_SLICC_APP_ORIGIN;
+}
+
+const SLICC_APP_URL = getSliccAppUrl(__SLICC_EXT_DEV__);
+
 /** SLICC app origin. The launcher MUST NOT inject on this origin — the leader
- *  tab (`https://www.sliccy.ai/?slicc=leader`) IS the real SLICC UI, and a
- *  cherry iframe loaded from the same origin already runs the webapp; injecting
- *  the launcher on top would self-recurse. Mirrors `BRIDGE_ALLOWED_ORIGINS` in
- *  `bridge-sw.ts` as the single canonical origin check. The manifest's
- *  `content_scripts[].exclude_matches` is the primary gate; this constant
- *  exists for the defensive in-script guard so future `all_frames` or
- *  programmatic injection paths still skip the SLICC origin. */
-export const SLICC_APP_ORIGIN = 'https://www.sliccy.ai';
+ *  tab (`https://www.sliccy.ai/?slicc=leader` in prod, `http://localhost:5710/?slicc=leader`
+ *  in dev) IS the real SLICC UI, and a cherry iframe loaded from the same
+ *  origin already runs the webapp; injecting the launcher on top would
+ *  self-recurse. Mirrors `BRIDGE_ALLOWED_ORIGINS` in `bridge-sw.ts` as the
+ *  single canonical origin check. The manifest's `content_scripts[].exclude_matches`
+ *  is the primary gate; this constant exists for the defensive in-script guard
+ *  so future `all_frames` or programmatic injection paths still skip the SLICC
+ *  origin. */
+export const SLICC_APP_ORIGIN = getSliccAppOrigin(__SLICC_EXT_DEV__);
 
 export function shouldInjectLauncher(origin: string): boolean {
   return origin !== SLICC_APP_ORIGIN;

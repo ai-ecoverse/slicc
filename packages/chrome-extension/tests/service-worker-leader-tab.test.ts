@@ -442,3 +442,44 @@ describe('leader tab — tabs.onRemoved', () => {
     expect(sessionStorage.get(LEADER_KEY)).toBe(60);
   });
 });
+
+describe('leader tab — URL resolvers (dev vs prod)', () => {
+  // __SLICC_EXT_DEV__ defaults to `false` in the chrome-extension vitest
+  // project (see vitest.config.ts), so the resolver helpers are tested with
+  // an explicit dev=true argument here instead of attempting to mutate the
+  // module-level const (which is frozen by the time the module loads). The
+  // resolver helpers feed the SW's LEADER_TAB_URL / LEADER_TAB_URL_GLOB /
+  // isLeaderTabUrl origin check.
+  let sw: typeof import('../src/service-worker.js');
+
+  beforeEach(async () => {
+    resetMocks();
+    vi.resetModules();
+    sw = await import('../src/service-worker.js');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+
+  it('getLeaderTabUrl returns the hosted leader URL in production builds', () => {
+    expect(sw.getLeaderTabUrl(false)).toBe('https://www.sliccy.ai/?slicc=leader');
+  });
+
+  it('getLeaderTabUrl returns the localhost vite leader URL in dev builds', () => {
+    expect(sw.getLeaderTabUrl(true)).toBe('http://localhost:5710/?slicc=leader');
+  });
+
+  it('getLeaderTabUrlGlob returns the hosted tabs.query glob in production builds', () => {
+    expect(sw.getLeaderTabUrlGlob(false)).toBe('https://www.sliccy.ai/*');
+  });
+
+  it('getLeaderTabUrlGlob returns the localhost vite glob in dev builds', () => {
+    expect(sw.getLeaderTabUrlGlob(true)).toBe('http://localhost:5710/*');
+  });
+
+  it('getLeaderTabOrigin returns the hosted origin in production builds', () => {
+    expect(sw.getLeaderTabOrigin(false)).toBe('https://www.sliccy.ai');
+  });
+
+  it('getLeaderTabOrigin returns the localhost vite origin in dev builds', () => {
+    expect(sw.getLeaderTabOrigin(true)).toBe('http://localhost:5710');
+  });
+});
