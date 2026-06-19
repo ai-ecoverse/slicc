@@ -52,7 +52,6 @@
       "entry": [
         "vite.config.ts!",
         "src/service-worker.ts!",
-        "src/offscreen.ts!",
         "src/secrets-entry.ts!",
         "voice-popup.js!",
         "tests/**/*.test.ts"
