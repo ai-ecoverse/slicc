@@ -176,6 +176,7 @@ vi.mock('../../src/providers/oauth-service.js', () => ({
   openIdpLogoutUrl: vi.fn().mockResolvedValue(undefined),
 }));
 
+import { setBridgeToken, setLocalApiBaseUrl } from '../../src/shell/proxied-fetch.js';
 import type { ProviderDefault } from '../../src/ui/provider-settings.js';
 import {
   addAccount,
@@ -2205,5 +2206,162 @@ describe('persistOAuthMaskViaServiceWorker (#847 — offscreen has no chrome.sto
       expect.stringContaining('give-up'),
       expect.objectContaining({ providerId: 'github', reason: 'entry missing after write' })
     );
+  });
+});
+
+describe('OAuth replica HTTP — thin-bridge URL + token', () => {
+  // Mirrors signed-fetch / http-broker / transformers-env: cover legacy
+  // same-origin + the three thin-bridge cases for the two account-store
+  // call sites that hit the node-server: `saveOAuthAccount` POSTs the
+  // mask request, `logoutOAuthAccount` DELETEs the replica. Both must
+  // honor `resolveApiUrl` / `apiHeaders` so a hosted leader on sliccy.ai
+  // reaches the local /api surface with the per-process bridge token.
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+    setLocalApiBaseUrl(null);
+    setBridgeToken(null);
+    // Configure test-oauth with oauthTokenDomains so the POST branch
+    // in saveOAuthAccount actually fires (it short-circuits on an
+    // empty merged domain list).
+    const configs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    configs.set('test-oauth', {
+      id: 'test-oauth',
+      name: 'Test OAuth',
+      description: 'OAuth test provider',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      oauthTokenDomains: ['api.test-oauth.example.com'],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => configs.get(id));
+  });
+
+  afterEach(() => {
+    setLocalApiBaseUrl(null);
+    setBridgeToken(null);
+    globalThis.fetch = originalFetch;
+  });
+
+  function captureCall(): {
+    getUrl: () => string | null;
+    getInit: () => RequestInit | null;
+  } {
+    let capturedUrl: string | null = null;
+    let capturedInit: RequestInit | null = null;
+    globalThis.fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      capturedUrl = String(url);
+      capturedInit = init ?? null;
+      // Shape matches what saveOAuthAccount expects on 200; the DELETE
+      // branch only checks ok/status so the same response works for both.
+      return new Response(JSON.stringify({ maskedValue: 'MASK' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+    return { getUrl: () => capturedUrl, getInit: () => capturedInit };
+  }
+
+  describe('saveOAuthAccount → POST /api/secrets/oauth-update', () => {
+    it('legacy / same-origin: POSTs the relative path with no X-Bridge-Token', async () => {
+      const cap = captureCall();
+      await saveOAuthAccount({ providerId: 'test-oauth', accessToken: 'tok-1' });
+      expect(cap.getUrl()).toBe('/api/secrets/oauth-update');
+      const init = cap.getInit();
+      expect(init?.method).toBe('POST');
+      const headers = init?.headers as Record<string, string>;
+      expect(headers['X-Bridge-Token']).toBeUndefined();
+      expect(headers['Content-Type']).toBe('application/json');
+    });
+
+    it('thin-bridge: POSTs to the bridge origin with X-Bridge-Token', async () => {
+      setLocalApiBaseUrl('http://localhost:5710');
+      setBridgeToken('abc-123');
+      const cap = captureCall();
+      await saveOAuthAccount({ providerId: 'test-oauth', accessToken: 'tok-1' });
+      expect(cap.getUrl()).toBe('http://localhost:5710/api/secrets/oauth-update');
+      const init = cap.getInit();
+      expect(init?.method).toBe('POST');
+      const headers = init?.headers as Record<string, string>;
+      expect(headers['X-Bridge-Token']).toBe('abc-123');
+      expect(headers['Content-Type']).toBe('application/json');
+    });
+
+    it('thin-bridge: base set but no token → absolute URL, still no X-Bridge-Token', async () => {
+      // apiHeaders attaches the token ONLY when both base AND token are set.
+      setLocalApiBaseUrl('http://localhost:5710');
+      const cap = captureCall();
+      await saveOAuthAccount({ providerId: 'test-oauth', accessToken: 'tok-1' });
+      expect(cap.getUrl()).toBe('http://localhost:5710/api/secrets/oauth-update');
+      const headers = cap.getInit()?.headers as Record<string, string>;
+      expect(headers['X-Bridge-Token']).toBeUndefined();
+    });
+
+    it('token set but no base → relative path, X-Bridge-Token omitted', async () => {
+      // Symmetric to the proxied-fetch rule: the token is a cross-origin
+      // capability and must not leak on the loopback / bundled-UI path.
+      setBridgeToken('abc-123');
+      const cap = captureCall();
+      await saveOAuthAccount({ providerId: 'test-oauth', accessToken: 'tok-1' });
+      expect(cap.getUrl()).toBe('/api/secrets/oauth-update');
+      const headers = cap.getInit()?.headers as Record<string, string>;
+      expect(headers['X-Bridge-Token']).toBeUndefined();
+    });
+  });
+
+  describe('logoutOAuthAccount → DELETE /api/secrets/oauth/{providerId}', () => {
+    beforeEach(() => {
+      // Pre-seed an OAuth account so logoutOAuthAccount reaches the
+      // deleteOAuthReplica branch (logoutOAuthAccount short-circuits when
+      // no account exists).
+      storage.set(
+        'slicc_accounts',
+        JSON.stringify([{ providerId: 'test-oauth', apiKey: '', accessToken: 'tok-xyz' }])
+      );
+    });
+
+    it('legacy / same-origin: DELETEs the relative path with no X-Bridge-Token', async () => {
+      const cap = captureCall();
+      await logoutOAuthAccount('test-oauth');
+      expect(cap.getUrl()).toBe('/api/secrets/oauth/test-oauth');
+      const init = cap.getInit();
+      expect(init?.method).toBe('DELETE');
+      const headers = init?.headers as Record<string, string>;
+      expect(headers['X-Bridge-Token']).toBeUndefined();
+    });
+
+    it('thin-bridge: DELETEs at the bridge origin with X-Bridge-Token', async () => {
+      setLocalApiBaseUrl('http://localhost:5710');
+      setBridgeToken('abc-123');
+      const cap = captureCall();
+      await logoutOAuthAccount('test-oauth');
+      expect(cap.getUrl()).toBe('http://localhost:5710/api/secrets/oauth/test-oauth');
+      const init = cap.getInit();
+      expect(init?.method).toBe('DELETE');
+      const headers = init?.headers as Record<string, string>;
+      expect(headers['X-Bridge-Token']).toBe('abc-123');
+    });
+
+    it('thin-bridge: base set but no token → absolute URL, still no X-Bridge-Token', async () => {
+      setLocalApiBaseUrl('http://localhost:5710');
+      const cap = captureCall();
+      await logoutOAuthAccount('test-oauth');
+      expect(cap.getUrl()).toBe('http://localhost:5710/api/secrets/oauth/test-oauth');
+      const headers = cap.getInit()?.headers as Record<string, string>;
+      expect(headers['X-Bridge-Token']).toBeUndefined();
+    });
+
+    it('token set but no base → relative path, X-Bridge-Token omitted', async () => {
+      setBridgeToken('abc-123');
+      const cap = captureCall();
+      await logoutOAuthAccount('test-oauth');
+      expect(cap.getUrl()).toBe('/api/secrets/oauth/test-oauth');
+      const headers = cap.getInit()?.headers as Record<string, string>;
+      expect(headers['X-Bridge-Token']).toBeUndefined();
+    });
   });
 });
