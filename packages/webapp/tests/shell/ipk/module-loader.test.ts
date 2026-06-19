@@ -203,6 +203,56 @@ describe('buildModuleGraph()', () => {
     expect(mod.cjsSource).toContain('module.exports = 1;');
   });
 
+  it('strips a leading shebang from CJS module source before evaluation (Wave 15 / fix B1)', async () => {
+    const reader = makeReader({
+      '/app/node_modules/binmod/package.json': JSON.stringify({ main: 'index.js' }),
+      '/app/node_modules/binmod/index.js': '#!/usr/bin/env node\nmodule.exports = "ok";\n',
+    });
+    const graph = await buildModuleGraph({
+      entrySpecifiers: ['binmod'],
+      fromDir: '/app',
+      reader,
+    });
+    const mod = graph.files.find((f) => f.path === '/app/node_modules/binmod/index.js');
+    expect(mod).toBeDefined();
+    // The raw source still carries the shebang (reader output is verbatim),
+    // but the CJS-ready source handed to the realm evaluator must NOT.
+    expect(mod?.source.startsWith('#!')).toBe(true);
+    expect(mod?.cjsSource.startsWith('#!')).toBe(false);
+    expect(mod?.cjsSource).toContain('module.exports = "ok";');
+    // The shebang line is stripped; only the FIRST line is removed.
+    const evaluated = new Function('module', `${mod?.cjsSource}; return module.exports;`)({
+      exports: {},
+    });
+    expect(evaluated).toBe('ok');
+  });
+
+  it('strips a leading shebang from ESM source before passing it to the transpile hook', async () => {
+    const reader = makeReader({
+      '/app/node_modules/esm-bin/package.json': JSON.stringify({
+        type: 'module',
+        main: 'index.js',
+      }),
+      '/app/node_modules/esm-bin/index.js': '#!/usr/bin/env node\nexport default 42;\n',
+    });
+    let seenSource = '';
+    const graph = await buildModuleGraph({
+      entrySpecifiers: ['esm-bin'],
+      fromDir: '/app',
+      reader,
+      transpile: ({ source }) => {
+        seenSource = source;
+        return `/*cjs*/ ${source.replace('export default', 'module.exports =')}`;
+      },
+    });
+    // The transpile hook saw the shebang-stripped source.
+    expect(seenSource.startsWith('#!')).toBe(false);
+    expect(seenSource).toContain('export default 42;');
+    const mod = graph.files[0];
+    expect(mod.kind).toBe('esm');
+    expect(mod.cjsSource).toContain('module.exports = 42;');
+  });
+
   it('passes import-time conditions through to resolution', async () => {
     const reader = makeReader({
       '/app/node_modules/dual/package.json': JSON.stringify({

@@ -252,3 +252,49 @@ describe('node command — relative script path absolutization', () => {
     expect(result.stderr).toContain('cannot find module');
   });
 });
+
+describe('node command — shebang stripping (Wave 15 / fix B1)', () => {
+  it('runs a shebang-prefixed script file without a parse error', async () => {
+    const ctx = createMockCtx(
+      {
+        '/workspace/x.js': '#!/usr/bin/env node\nconsole.log("hi");\n',
+      },
+      '/workspace'
+    );
+    const cmd = createNodeCommand();
+    const result = await cmd.execute(['./x.js'], ctx);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('hi');
+    expect(result.stderr).not.toMatch(/SyntaxError|Unexpected/);
+  });
+
+  it('runs a shebang-prefixed script read from stdin without a parse error', async () => {
+    const ctx: CommandContext = {
+      fs: createMockFs(),
+      cwd: '/workspace',
+      env: new Map(),
+      stdin: '#!/usr/bin/env node\nconsole.log("via stdin");\n',
+    };
+    const cmd = createNodeCommand();
+    const result = await cmd.execute([], ctx);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('via stdin');
+    expect(result.stderr).not.toMatch(/SyntaxError|Unexpected/);
+  });
+
+  it('leaves scripts without a shebang line untouched', async () => {
+    const ctx = createMockCtx(
+      {
+        '/workspace/y.js': 'console.log("no shebang");\n',
+      },
+      '/workspace'
+    );
+    const cmd = createNodeCommand();
+    const result = await cmd.execute(['./y.js'], ctx);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('no shebang');
+  });
+});

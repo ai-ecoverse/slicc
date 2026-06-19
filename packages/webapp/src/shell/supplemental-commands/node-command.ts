@@ -17,6 +17,7 @@
 import type { Command, CommandContext } from 'just-bash';
 import { executeJsCode } from '../jsh-executor.js';
 import { EMPTY_BYTES, stdinAsText } from '../just-bash-compat.js';
+import { stripShebang } from '../strip-shebang.js';
 import { NODE_VERSION } from './shared.js';
 
 function nodeHelp(): { stdout: string; stderr: string; exitCode: number } {
@@ -108,7 +109,7 @@ export function createNodeCommand(): Command {
         };
       }
 
-      return executeJsCode(code, argv, innerCtx, undefined, { filename });
+      return executeJsCode(stripShebang(code), argv, innerCtx, undefined, { filename });
     },
   };
 }

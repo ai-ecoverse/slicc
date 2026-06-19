@@ -25,6 +25,7 @@
 import { splitPath } from '../../fs/path-utils.js';
 import { NODE_BUILTINS } from '../../kernel/realm/node-builtins.js';
 import { NODE_NATIVE_PACKAGES } from '../../kernel/realm/require-guards.js';
+import { stripShebang } from '../strip-shebang.js';
 import {
   hasDynamicImport,
   hasEsmSyntax,
@@ -170,15 +171,19 @@ async function toCjsSource(
   if (kind === 'json') {
     return `module.exports = JSON.parse(${JSON.stringify(source)});\n`;
   }
+  // Strip any leading `#!...` line before evaluating: a published bin / script
+  // module shipped with a shebang would otherwise be a parse error in both the
+  // CJS evaluator and the ESM transpiler. Only the first line is touched.
+  const stripped = stripShebang(source);
   if (kind === 'esm') {
     if (!transpile) {
       throw new Error(
         `Cannot load ESM module '${path}': no transpile hook configured (run: ipk install esbuild-wasm)`
       );
     }
-    return await transpile({ source, path, kind });
+    return await transpile({ source: stripped, path, kind });
   }
-  return source;
+  return stripped;
 }
 
 /**

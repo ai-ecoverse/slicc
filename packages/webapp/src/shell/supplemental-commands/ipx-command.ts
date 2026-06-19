@@ -24,6 +24,7 @@ import type { VirtualFS } from '../../fs/index.js';
 import { joinPath, normalizePath, splitPath } from '../../fs/path-utils.js';
 import { installPackages } from '../ipk/installer.js';
 import { executeJsCode } from '../jsh-executor.js';
+import { stripShebang } from '../strip-shebang.js';
 
 export interface IpxCommandDeps {
   fs: VirtualFS;
@@ -52,12 +53,6 @@ forwarding argv and stdin. Exit codes propagate.
 Options:
   -h, --help   Show this help message
 `;
-}
-
-function stripShebang(source: string): string {
-  if (!source.startsWith('#!')) return source;
-  const newline = source.indexOf('\n');
-  return newline === -1 ? '' : source.slice(newline + 1);
 }
 
 async function readText(fs: VirtualFS, path: string): Promise<string> {
