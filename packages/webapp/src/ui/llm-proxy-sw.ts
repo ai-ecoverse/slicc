@@ -37,11 +37,28 @@
 
 import { encodeForbiddenRequestHeaders, headersToRecord } from '../shell/proxy-headers.js';
 import { synthesizeForwardResponse } from './llm-proxy-response.js';
+import {
+  isBridgeConfigMessage,
+  resolveBridgeConfig,
+  resolveFetchProxyTarget,
+} from './llm-proxy-sw-config.js';
 
 declare const self: ServiceWorkerGlobalScope;
 
 const FETCH_PROXY_PATH = '/api/fetch-proxy';
 const BYPASS_HEADER = 'x-bypass-llm-proxy';
+const BRIDGE_TOKEN_HEADER = 'X-Bridge-Token';
+
+/**
+ * Bridge config cache populated by the page → SW `postMessage` posted
+ * from `boot/setup-sw-registration.ts` after the SW becomes the
+ * controller (and re-posted on `controllerchange`). On a cache miss
+ * `forwardThroughProxy` falls back to parsing the controlling client's
+ * URL so the SW survives eviction/restart without losing thin-bridge
+ * mode. Mirrors the page-realm `proxied-fetch.ts` state.
+ */
+let cachedBridgeApiBaseUrl: string | null = null;
+let cachedBridgeToken: string | null = null;
 
 // Pull in preview-sw so its fetch handler runs in this SW's context.
 //
@@ -67,6 +84,15 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim());
 });
 
+// Thin-bridge config push from the page. Only acts on the tagged
+// message shape so unrelated SW postMessage traffic (e.g. future
+// page→SW signaling) doesn't corrupt the bridge state.
+self.addEventListener('message', (event: ExtendableMessageEvent) => {
+  if (!isBridgeConfigMessage(event.data)) return;
+  cachedBridgeApiBaseUrl = event.data.apiBaseUrl;
+  cachedBridgeToken = event.data.token;
+});
+
 self.addEventListener('fetch', (event: FetchEvent) => {
   const req = event.request;
   if (req.headers.get(BYPASS_HEADER) === '1') return;
@@ -87,10 +113,10 @@ self.addEventListener('fetch', (event: FetchEvent) => {
   // Non-network protocols: nothing for us to do.
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
 
-  event.respondWith(forwardThroughProxy(req));
+  event.respondWith(forwardThroughProxy(req, event.clientId || null));
 });
 
-async function forwardThroughProxy(req: Request): Promise<Response> {
+async function forwardThroughProxy(req: Request, clientId: string | null): Promise<Response> {
   const targetUrl = req.url;
   const inboundHeaders: Record<string, string> = {};
   req.headers.forEach((value, key) => {
@@ -114,6 +140,22 @@ async function forwardThroughProxy(req: Request): Promise<Response> {
   }
   proxyHeaders.set('X-Target-URL', targetUrl);
 
+  // Thin-bridge: rewrite the forward target onto the local node-server's
+  // origin and attach the per-process bridge token. Cache miss falls back
+  // to parsing `bridge`/`bridgeToken` from the controlling client URL so
+  // the SW survives eviction/restart without losing thin-bridge mode.
+  // Same-origin (non-bridge) callers keep the legacy `/api/fetch-proxy`
+  // path with no token header — mirrors `proxied-fetch.ts` gating.
+  const clientUrl = await readClientUrl(clientId);
+  const bridge = resolveBridgeConfig(
+    { apiBaseUrl: cachedBridgeApiBaseUrl, token: cachedBridgeToken },
+    clientUrl
+  );
+  if (bridge) {
+    proxyHeaders.set(BRIDGE_TOKEN_HEADER, bridge.token);
+  }
+  const forwardUrl = resolveFetchProxyTarget(FETCH_PROXY_PATH, bridge);
+
   const body = await readForwardBody(req);
   const init: RequestInit = {
     method: req.method,
@@ -131,7 +173,7 @@ async function forwardThroughProxy(req: Request): Promise<Response> {
   // user-/timeout-cancellations into infrastructure errors and (b) break
   // unrelated callers like validateApiKey() which depend on rejected
   // fetches to classify transient outages as `kind: 'skipped'`.
-  const response = await fetch(FETCH_PROXY_PATH, init);
+  const response = await fetch(forwardUrl, init);
   // Wrap in a synthetic Response (see `llm-proxy-response.ts` for
   // the full rationale). Body stays a streamed ReadableStream so
   // SSE token-by-token UX for LLM completions is unchanged.
@@ -148,6 +190,21 @@ async function readForwardBody(req: Request): Promise<BodyInit | undefined> {
   // payloads, so buffering the body is the more reliable transport.
   const body = await req.arrayBuffer();
   return body.byteLength > 0 ? body : undefined;
+}
+
+/**
+ * Resolve the controlling client's URL for the bridge-config fallback
+ * path. Returns `null` when the client is unknown (e.g. background
+ * fetch, deleted tab) — the caller treats that as cache-only mode.
+ */
+async function readClientUrl(clientId: string | null): Promise<string | null> {
+  if (!clientId) return null;
+  try {
+    const client = await self.clients.get(clientId);
+    return client?.url ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // Reference unused import so it survives tree-shaking (the helper is

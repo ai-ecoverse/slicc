@@ -19,6 +19,7 @@ import { createLogger } from '../core/index.js';
 // IMPORTANT: This import must also appear in packages/chrome-extension/src/offscreen.ts
 // — the extension agent engine runs in the offscreen document, not in this file.
 import { registerProviders } from '../providers/index.js';
+import { parseBridgeLaunchParams } from './boot/bridge-launch-params.js';
 import { startFreezeWatchdog } from './boot/setup-freeze-watchdog.js';
 import { setupNukeReloadListener } from './boot/setup-nuke-reload-listener.js';
 import { setupSwRegistration } from './boot/setup-sw-registration.js';
@@ -74,8 +75,18 @@ async function main(): Promise<void> {
   // Service-worker registration (preview SW + connect-mode SW detach). The
   // helper returns `'reload-pending'` when it has triggered a one-shot
   // `location.reload()` and we must abort the rest of `main()` so the
-  // page tears down cleanly.
-  const swResult = await setupSwRegistration();
+  // page tears down cleanly. In thin-bridge mode we forward the parsed
+  // bridge `{ apiBaseUrl, token }` so the LLM-proxy SW rewrites
+  // cross-origin LLM fetches at the local node-server's origin with the
+  // bridge token attached, instead of hitting `https://www.sliccy.ai`'s
+  // non-existent `/api/fetch-proxy`. `setupStandalonePrelude` parses the
+  // same params again for the page-realm `proxied-fetch.ts` wiring; the
+  // duplicate parse keeps the SW boot independent of the kernel-worker
+  // bring-up order.
+  const bridge = parseBridgeLaunchParams(window.location.search);
+  const swResult = await setupSwRegistration(
+    bridge ? { apiBaseUrl: bridge.apiBaseUrl, token: bridge.token } : null
+  );
   if (swResult === 'reload-pending') return;
 
   // Provider auto-discovery + defaults before any OAuth probe. Both must
