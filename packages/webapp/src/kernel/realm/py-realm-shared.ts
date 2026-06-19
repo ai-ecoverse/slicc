@@ -6,10 +6,10 @@
  * use, so we don't duplicate `loadPyodide` + VFS sync logic in two
  * places.
  *
- * Constants (`PYODIDE_VERSION`, `PYODIDE_CDN`, `PYTHON_RUNNER`)
- * also live here so the kernel-side `realm-factory.ts` and the
- * worker can share the same CDN-pin without crossing into the
- * supplemental-commands layer.
+ * Constants (`PYODIDE_VERSION`, `PYODIDE_RUNTIME_CDN`,
+ * `PYTHON_RUNNER`) also live here so the kernel-side
+ * `realm-factory.ts` and the worker can share the same pin
+ * without crossing into the supplemental-commands layer.
  */
 
 import type { PyodideInterface } from 'pyodide';
@@ -30,7 +30,33 @@ import type { RealmDoneMsg, RealmErrorMsg, RealmInitMsg, RealmMountPoint } from 
 import { registerSliccFsModule } from './slicc-fs-module.js';
 
 export const PYODIDE_VERSION = resolvePinnedPackageVersion('pyodide', pyodidePackageVersion);
-export const PYODIDE_CDN = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
+
+/**
+ * The SINGLE documented runtime-CDN exception. Wave 8 moved the
+ * pyodide JS loader from jsdelivr to the ipk-installed npm package
+ * at `/workspace/node_modules/pyodide/` (served via the preview SW),
+ * but pyodide's package-wheel ecosystem lives on jsdelivr — this
+ * constant pins the `cdn.jsdelivr.net/pyodide/v<VERSION>/full/`
+ * base so any wheel-fetching path stays consistent with the loader
+ * version.
+ *
+ * Every other CDN-resolver in the webapp was retired in Waves 1-7;
+ * do NOT add another. New runtime assets must be installed via
+ * `ipk add <pkg>` and resolved through the preview SW.
+ */
+export const PYODIDE_RUNTIME_CDN = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
+
+/**
+ * Heuristic: does `url` look like a preview-SW URL pointing at the
+ * ipk-installed pyodide package? Used by the `loadPyodide` error
+ * handler to append `ipk add pyodide` guidance when the browser
+ * indexURL 404s — the only failure mode where that guidance helps.
+ * The Node and extension branches resolve assets out of band and
+ * surface different errors that the hint would only confuse.
+ */
+function isPyodidePreviewUrl(url: string): boolean {
+  return url.includes('/preview/workspace/node_modules/pyodide/');
+}
 
 /**
  * The Python "runner" — wraps user code in `compile`/`exec` with a
@@ -92,7 +118,13 @@ export async function runPyRealm(
   } catch (err) {
     rpc.dispose();
     const message = err instanceof Error ? err.message : String(err);
-    const errMsg: RealmErrorMsg = { type: 'realm-error', message: `loadPyodide: ${message}` };
+    const guidance = isPyodidePreviewUrl(init.pyodideIndexURL ?? '')
+      ? ` (run \`ipk add pyodide\` to install the pyodide loader into /workspace/node_modules/)`
+      : '';
+    const errMsg: RealmErrorMsg = {
+      type: 'realm-error',
+      message: `loadPyodide: ${message}${guidance}`,
+    };
     port.postMessage(errMsg);
     return;
   }

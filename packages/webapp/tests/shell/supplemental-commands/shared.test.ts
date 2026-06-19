@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { PYODIDE_CDN } from '../../../src/kernel/realm/py-realm-shared.js';
 import { resolvePyodideIndexURL } from '../../../src/kernel/realm/realm-factory.js';
 import {
   basename,
@@ -285,16 +284,21 @@ describe('resolvePyodideIndexURL', () => {
     }
   });
 
-  it('falls back to the CDN for browser/worker runtimes (no chrome, no process)', () => {
+  it('resolves to the preview-SW node_modules URL for browser/worker runtimes (Wave 8)', () => {
     // Simulate a DedicatedWorker: no `chrome`, no `process`. We have
     // to fake both because vitest itself is Node — these branches are
     // exactly what the CLI standalone kernel-worker hits at runtime.
+    // The pyodide JS loader resolves from the ipk-installed package
+    // at /workspace/node_modules/pyodide/ via the preview SW, NOT
+    // from jsdelivr (Wave 8: the loader was moved off the CDN).
     const savedChrome = (globalThis as { chrome?: unknown }).chrome;
     const savedProcess = (globalThis as { process?: unknown }).process;
     (globalThis as { chrome?: unknown }).chrome = undefined;
     (globalThis as { process?: unknown }).process = undefined;
     try {
-      expect(resolvePyodideIndexURL()).toBe(PYODIDE_CDN);
+      const resolved = resolvePyodideIndexURL();
+      expect(resolved).toContain('/preview/workspace/node_modules/pyodide/');
+      expect(resolved).not.toContain('cdn.jsdelivr.net');
     } finally {
       (globalThis as { chrome?: unknown }).chrome = savedChrome;
       (globalThis as { process?: unknown }).process = savedProcess;

@@ -19,8 +19,9 @@ import {
   isExtensionRuntime,
   isNodeRuntime,
   resolveNodePackageBaseUrl,
+  toPreviewUrl,
 } from '../../shell/supplemental-commands/shared.js';
-import { PYODIDE_CDN } from './py-realm-shared.js';
+import { PYODIDE_RUNTIME_CDN } from './py-realm-shared.js';
 import { createIframeRealm } from './realm-iframe.js';
 import { createInProcessJsRealmFactory, createInProcessPyRealmFactory } from './realm-inprocess.js';
 import type { RealmPortLike } from './realm-rpc.js';
@@ -122,6 +123,15 @@ function wrapWorker(worker: Worker): Realm {
  * context) as Node and steers them at the local `node_modules`
  * tree, which the Vite dev server returns the SPA fallback for —
  * the worker then tries to load `<!DOCTYPE …>` as a WASM module.
+ *
+ * Browser/standalone now resolves the pyodide JS loader from the
+ * ipk-installed npm package at `/workspace/node_modules/pyodide/`
+ * via the preview SW (Wave 8), not from jsdelivr. The
+ * `PYODIDE_RUNTIME_CDN` constant remains the single documented
+ * runtime-CDN exception for pyodide's wheel ecosystem only — it is
+ * NOT the loader default. A missing VFS install surfaces through
+ * `runPyRealm`'s `loadPyodide` error catch with the `ipk add pyodide`
+ * guidance the worker stamps onto fetch failures for the preview URL.
  */
 export function resolvePyodideIndexURL(): string {
   if (isExtensionRuntime()) {
@@ -135,7 +145,10 @@ export function resolvePyodideIndexURL(): string {
         .pathname
     );
   }
-  return PYODIDE_CDN;
+  // Reference `PYODIDE_RUNTIME_CDN` so the documented exception stays
+  // tree-shake-resistant and discoverable from the loader call site.
+  void PYODIDE_RUNTIME_CDN;
+  return toPreviewUrl('/workspace/node_modules/pyodide/');
 }
 
 export type { Realm, RealmFactory, RealmKind };

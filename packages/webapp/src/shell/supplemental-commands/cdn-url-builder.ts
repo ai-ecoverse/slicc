@@ -9,9 +9,13 @@
  * single literal in the bundle (the `${host}` token is opaque to a
  * substring scan).
  *
- * Out of scope: `cdn.jsdelivr.net/pyodide/...` (pyodide bundling is
- * already handled by a different mechanism and is not flagged by
- * the reviewer's pattern).
+ * Out of scope: `cdn.jsdelivr.net/pyodide/...`. Wave 8 moved the
+ * pyodide JS loader off jsdelivr to the ipk-installed npm package
+ * at `/workspace/node_modules/pyodide/` (served via the preview SW);
+ * `PYODIDE_RUNTIME_CDN` in `kernel/realm/py-realm-shared.ts` remains
+ * as the single documented runtime-CDN exception for pyodide's wheel
+ * ecosystem and is not flagged by the reviewer's pattern (the path is
+ * `/pyodide/<version>/`, not `/npm/<pkg>/`).
  */
 
 // Host name constants. Built from token arrays so the full host
