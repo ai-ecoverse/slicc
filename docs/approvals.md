@@ -345,9 +345,10 @@ across runtimes:
   in a normal browser window — the chooser runs on its own button click and
   posts identifiers back; the page-side provider re-acquires the granted device
   via `navigator.{usb,hid,serial}.getDevices()` (mount goes through the shared
-  `slicc-pending-mount` IDB store) before handing it to the surface. The side
-  panel itself can't host the chooser reliably under TCC, which is why the
-  popup is a parity requirement, not an enhancement.
+  `slicc-pending-mount` IDB store) before handing it to the surface. The
+  leader tab's `<slicc-permissions>` surface can't host the chooser reliably
+  under TCC, which is why the popup is a parity requirement, not an
+  enhancement.
 - **Cherry follower** — the surface is intentionally NOT mounted; cross-origin
   iframes can't hold writable `FileSystemDirectoryHandle`s (Spike A), and
   followers focus the leader tab when they need a gesture instead.
