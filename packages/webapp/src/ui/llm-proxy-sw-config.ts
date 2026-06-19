@@ -116,6 +116,34 @@ export function resolveFetchProxyTarget(
 }
 
 /**
+ * True when `requestUrl` already targets the bridge's own `/api/fetch-proxy`
+ * endpoint at the configured `bridgeApiBaseUrl`. Used by the SW (cross-origin
+ * analogue of the same-origin pass-through) and the kernel worker's
+ * fetch-bypass wrapper to recognize "this is already our forward target, do
+ * not re-proxy / preserve the caller's `X-Target-URL`".
+ *
+ * Comparison normalizes on `URL` parsing (origin compare + exact pathname
+ * match) so trailing slashes and query strings don't affect the result.
+ * Unparseable inputs return `false` — the caller falls through to the
+ * default proxy path, which is no worse than today's behavior.
+ */
+export function isBridgeFetchProxyUrl(
+  requestUrl: string,
+  bridgeApiBaseUrl: string,
+  fetchProxyPath = '/api/fetch-proxy'
+): boolean {
+  let bridge: URL;
+  let target: URL;
+  try {
+    bridge = new URL(bridgeApiBaseUrl);
+    target = new URL(requestUrl);
+  } catch {
+    return false;
+  }
+  return target.origin === bridge.origin && target.pathname === fetchProxyPath;
+}
+
+/**
  * Type guard for inbound `MessageEvent.data` — the SW only acts on
  * messages tagged with `SW_BRIDGE_CONFIG_MESSAGE` and ignores anything
  * else (other code may be using `postMessage` against the SW too).

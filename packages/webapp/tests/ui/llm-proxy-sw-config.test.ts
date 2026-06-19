@@ -13,6 +13,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   isBridgeConfigMessage,
+  isBridgeFetchProxyUrl,
   resolveBridgeConfig,
   resolveBridgeFromClientUrls,
   resolveFetchProxyTarget,
@@ -139,6 +140,59 @@ describe('resolveFetchProxyTarget', () => {
         token: 'abc',
       })
     ).toBe('http://localhost:5710/api/fetch-proxy');
+  });
+});
+
+describe('isBridgeFetchProxyUrl', () => {
+  it('matches the bridge /api/fetch-proxy on the configured origin', () => {
+    expect(
+      isBridgeFetchProxyUrl('http://localhost:5710/api/fetch-proxy', 'http://localhost:5710')
+    ).toBe(true);
+  });
+
+  it('matches regardless of trailing slash on the bridge base URL', () => {
+    expect(
+      isBridgeFetchProxyUrl('http://localhost:5710/api/fetch-proxy', 'http://localhost:5710/')
+    ).toBe(true);
+  });
+
+  it('ignores query strings on the target URL', () => {
+    expect(
+      isBridgeFetchProxyUrl('http://localhost:5710/api/fetch-proxy?x=1', 'http://localhost:5710')
+    ).toBe(true);
+  });
+
+  it('rejects a different path under the same origin', () => {
+    expect(
+      isBridgeFetchProxyUrl('http://localhost:5710/api/something-else', 'http://localhost:5710')
+    ).toBe(false);
+  });
+
+  it('rejects a different origin even if the path matches', () => {
+    expect(
+      isBridgeFetchProxyUrl('https://api.openai.com/api/fetch-proxy', 'http://localhost:5710')
+    ).toBe(false);
+  });
+
+  it('rejects different ports on the same host', () => {
+    expect(
+      isBridgeFetchProxyUrl('http://localhost:5711/api/fetch-proxy', 'http://localhost:5710')
+    ).toBe(false);
+  });
+
+  it('honors the optional fetchProxyPath override', () => {
+    expect(
+      isBridgeFetchProxyUrl(
+        'http://localhost:5710/api/other-proxy',
+        'http://localhost:5710',
+        '/api/other-proxy'
+      )
+    ).toBe(true);
+  });
+
+  it('returns false for unparseable inputs', () => {
+    expect(isBridgeFetchProxyUrl('not a url', 'http://localhost:5710')).toBe(false);
+    expect(isBridgeFetchProxyUrl('http://localhost:5710/api/fetch-proxy', 'not a url')).toBe(false);
   });
 });
 

@@ -6,6 +6,14 @@ import type { SecretProxyManager } from '../secrets/proxy-manager.js';
 
 export interface FetchProxyDeps {
   secretProxy: SecretProxyManager;
+  /**
+   * Optional logger sink for per-request observability. Defaults to
+   * `console`. Tests pass a silent sink so the route's logging doesn't
+   * leak into test output. The bridge's silence on `Failed to fetch`
+   * regressions was the original motivation — see issue tracker for
+   * the thin-bridge curl diagnosis.
+   */
+  logger?: Pick<Console, 'log' | 'warn' | 'error'>;
 }
 
 /** Pick the first value of a possibly-multi-valued request header. */
@@ -282,16 +290,18 @@ function streamUpstreamBody(
  * checks req.body first.
  */
 export function registerFetchProxyRoute(app: Express, deps: FetchProxyDeps): void {
-  const { secretProxy } = deps;
+  const { secretProxy, logger = console } = deps;
 
   app.all('/api/fetch-proxy', async (req, res) => {
     const rawBody = await collectRawBody(req);
     const targetUrl = req.headers['x-target-url'] as string;
     if (!targetUrl) {
+      logger.warn(`[fetch-proxy] ${req.method} → 400 (missing X-Target-URL)`);
       res.setHeader('X-Proxy-Error', '1');
       res.status(400).json({ error: 'Missing X-Target-URL header' });
       return;
     }
+    logger.log(`[fetch-proxy] ${req.method} ${targetUrl}`);
     // Hoisted so the catch handler can detach it on early failures (e.g. fetch
     // threw before the success-path detach could run).
     let onClientClose: (() => void) | null = null;
@@ -314,6 +324,9 @@ export function registerFetchProxyRoute(app: Express, deps: FetchProxyDeps): voi
 
       const injection = injectRequestSecrets(secretProxy, headers, targetUrl, targetHostname);
       if ('forbidden' in injection) {
+        logger.warn(
+          `[fetch-proxy] ${req.method} ${targetUrl} → 403 (secret "${injection.forbidden.secretName}" not allowed for "${injection.forbidden.hostname}")`
+        );
         res.setHeader('X-Proxy-Error', '1');
         res.status(403).json({
           error: `Secret "${injection.forbidden.secretName}" is not allowed for domain "${injection.forbidden.hostname}"`,
@@ -340,6 +353,7 @@ export function registerFetchProxyRoute(app: Express, deps: FetchProxyDeps): voi
       fetchInit.signal = abortController.signal;
 
       const upstream = await fetch(injection.cleanedUrl, fetchInit);
+      logger.log(`[fetch-proxy] ${req.method} ${targetUrl} ← ${upstream.status}`);
       forwardUpstreamHeaders(res, upstream, secretProxy);
 
       if (!upstream.body) {
@@ -353,6 +367,7 @@ export function registerFetchProxyRoute(app: Express, deps: FetchProxyDeps): voi
       // listener attached to the response object.
       detachClientClose();
       const message = err instanceof Error ? err.message : String(err);
+      logger.error(`[fetch-proxy] ${req.method} ${targetUrl} ← 502 (${message})`);
       res.setHeader('X-Proxy-Error', '1');
       res.status(502).json({ error: `Proxy fetch failed: ${message}` });
     }

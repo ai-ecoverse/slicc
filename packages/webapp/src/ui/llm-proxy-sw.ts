@@ -39,6 +39,7 @@ import { encodeForbiddenRequestHeaders, headersToRecord } from '../shell/proxy-h
 import { synthesizeForwardResponse } from './llm-proxy-response.js';
 import {
   isBridgeConfigMessage,
+  isBridgeFetchProxyUrl,
   resolveBridgeFromClientUrls,
   resolveFetchProxyTarget,
 } from './llm-proxy-sw-config.js';
@@ -153,6 +154,28 @@ async function forwardThroughProxy(req: Request, clientId: string | null): Promi
   const triggeringClientUrl = await readClientUrl(clientId);
   const windowClientUrls = hasCache ? [] : await readWindowClientUrls();
   const bridge = resolveBridgeFromClientUrls(cached, [triggeringClientUrl, ...windowClientUrls]);
+
+  // Bridge-proxy pass-through: when the original request ALREADY targets
+  // the bridge's own `/api/fetch-proxy`, re-proxying it would clobber the
+  // caller's `X-Target-URL` (the cross-origin analogue of the same-origin
+  // skip at the top of the fetch handler). Re-fetch with the bypass
+  // header so this SW instance does not re-intercept the outgoing call,
+  // preserving the caller's headers byte-for-byte.
+  if (bridge && isBridgeFetchProxyUrl(req.url, bridge.apiBaseUrl, FETCH_PROXY_PATH)) {
+    const passHeaders = new Headers(req.headers);
+    passHeaders.set(BYPASS_HEADER, '1');
+    const passInit: RequestInit = {
+      method: req.method,
+      headers: passHeaders,
+      cache: 'no-store',
+      credentials: req.credentials,
+      redirect: 'manual',
+      signal: req.signal,
+      body: await readForwardBody(req),
+    };
+    return synthesizeForwardResponse(await fetch(req.url, passInit));
+  }
+
   if (bridge) {
     proxyHeaders.set(BRIDGE_TOKEN_HEADER, bridge.token);
   }
