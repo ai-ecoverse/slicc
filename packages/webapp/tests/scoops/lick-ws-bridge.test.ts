@@ -105,6 +105,83 @@ describe('startLickWsBridge', () => {
     handle.stop();
   });
 
+  it('prefers the lickWsUrl override over the locationHref-derived URL', async () => {
+    // Thin-bridge: locationHref points at the hosted UI (e.g. wrangler
+    // on :8787) but the bridge override directs the dial at the local
+    // node-server's :5710 /licks-ws. Without this, the upgrade lands at
+    // the UI origin where it returns 200 instead of 101.
+    const { startLickWsBridge } = await loadBridge();
+    const handle = startLickWsBridge(buildLickManagerMock(), {
+      locationHref: 'http://localhost:8787/index.html',
+      lickWsUrl: 'ws://localhost:5710/licks-ws',
+      webSocketFactory: (url) => new FakeWebSocket(url),
+    });
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(FakeWebSocket.instances[0].url).toBe('ws://localhost:5710/licks-ws');
+    handle.stop();
+  });
+
+  it('list_webhooks fallback URL uses the lickWsUrl override origin (not locationHref)', async () => {
+    // Same thin-bridge scenario as above: webhooks must point at the
+    // node-server on :5710, not the hosted UI on :8787.
+    const { startLickWsBridge } = await loadBridge();
+    const entries: WebhookEntry[] = [
+      { id: 'wh-1', name: 'github', createdAt: new Date().toISOString(), scoop: 'scoop-a' },
+    ];
+    const lm = buildLickManagerMock({
+      listWebhooks: vi.fn().mockReturnValue(entries),
+    });
+
+    const handle = startLickWsBridge(lm, {
+      locationHref: 'http://localhost:8787/index.html',
+      lickWsUrl: 'ws://localhost:5710/licks-ws',
+      webSocketFactory: (url) => new FakeWebSocket(url),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws.emit({ type: 'list_webhooks', requestId: 'r-1' });
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
+    const reply = JSON.parse(ws.sent[0]);
+    expect(reply.data[0].url).toBe('http://localhost:5710/webhooks/wh-1');
+    handle.stop();
+  });
+
+  it('default setTimer / clearTimer are bound to globalThis (no "Illegal invocation")', async () => {
+    // Regression: when `setTimeoutFn` / `clearTimeoutFn` are not passed,
+    // the bridge previously stored the bare global `setTimeout` reference
+    // and invoked it as a method on `rt`, which throws "Illegal
+    // invocation" in real browsers because the timer is an internal-slot
+    // method on the global object. Using `.bind(globalThis)` fixes it.
+    const { startLickWsBridge } = await loadBridge();
+    // Synthetic socket that flips into CLOSED state on construction so
+    // onBridgeFailure runs and exercises the default setTimer path.
+    class FailingWebSocket extends FakeWebSocket {
+      constructor(url: string) {
+        super(url);
+        this.readyState = 3;
+        queueMicrotask(() => this.onclose?.(new CloseEvent('close', { code: 1006 })));
+      }
+    }
+
+    const handle = startLickWsBridge(buildLickManagerMock(), {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FailingWebSocket(url),
+      // Set a long base delay so the reconnect timer is armed but does
+      // not fire before we call stop() below — we only need to verify
+      // that the default setTimer/clearTimer don't throw.
+      reconnectDelayMs: 60_000,
+    });
+
+    // Let the microtask-queued onclose fire so scheduleBridgeReconnect
+    // invokes the default setTimer path.
+    await new Promise((r) => setTimeout(r, 0));
+    // stop() exercises the default clearTimer path. If either timer
+    // were unbound from globalThis, this assertion would surface the
+    // TypeError instead of a clean no-throw.
+    expect(() => handle.stop()).not.toThrow();
+  });
+
   it('responds to list_webhooks with entries augmented by the local URL', async () => {
     const { startLickWsBridge } = await loadBridge();
     const entries: WebhookEntry[] = [

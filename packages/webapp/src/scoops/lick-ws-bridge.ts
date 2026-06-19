@@ -71,6 +71,18 @@ export interface LickWsBridgeOptions {
    * silently looping the reconnect.
    */
   locationHref: string;
+  /**
+   * Absolute lick-WS URL override (e.g. `ws://localhost:5710/licks-ws`).
+   * Set in thin-bridge mode where the hosted leader serves the UI but
+   * the node-server (and its `/licks-ws`) lives on a different origin —
+   * deriving the URL from `locationHref` would dial the UI origin
+   * (e.g. wrangler on :8787), which cannot speak the lick wire. When
+   * set, the bridge also derives the fallback webhook origin from this
+   * URL instead of `locationHref` so `list_webhooks` URLs point at the
+   * node-server's `/webhooks/<id>` endpoint. `null` / undefined falls
+   * back to same-origin (the legacy bundled-UI assumption).
+   */
+  lickWsUrl?: string | null;
   /** Override the WebSocket constructor (tests). */
   webSocketFactory?: (url: string) => MinimalWebSocket;
   /** Override the base reconnect delay (tests). Defaults to 3000ms. */
@@ -109,6 +121,15 @@ interface BridgeRuntime {
   lickManager: LickManager;
   options: LickWsBridgeOptions;
   wsUrl: string;
+  /**
+   * HTTP/HTTPS origin used to build the fallback webhook URL when no
+   * tray session is active. Derived from `options.lickWsUrl` when that
+   * override is supplied (ws→http, wss→https), so thin-bridge mode
+   * points webhooks at the node-server origin rather than the hosted
+   * UI origin. `null` when no override was supplied — the fallback
+   * keeps using `options.locationHref` for backwards compatibility.
+   */
+  webhookOriginOverride: string | null;
   baseDelay: number;
   wsFactory: (url: string) => MinimalWebSocket;
   setTimer: (cb: () => void, delay: number) => ReturnType<typeof setTimeout>;
@@ -422,9 +443,17 @@ async function handleLickRequest(
 
 function resolveLickWebhookUrl(rt: BridgeRuntime, webhookId: string): string {
   const traySession = getLeaderTrayRuntimeStatus().session;
-  return traySession?.webhookUrl
-    ? getTrayWebhookUrl(traySession.webhookUrl, webhookId)
-    : getWebhookUrl(rt.options.locationHref, webhookId);
+  if (traySession?.webhookUrl) {
+    return getTrayWebhookUrl(traySession.webhookUrl, webhookId);
+  }
+  // Thin-bridge: dial the node-server origin we learned from the bridge
+  // launch params, not the UI origin (which is the hosted leader in
+  // thin-bridge mode and has no `/webhooks/*` route). Falls through to
+  // the same-origin assumption when no override was supplied.
+  if (rt.webhookOriginOverride) {
+    return `${rt.webhookOriginOverride}/webhooks/${webhookId}`;
+  }
+  return getWebhookUrl(rt.options.locationHref, webhookId);
 }
 
 function stopBridge(rt: BridgeRuntime): void {
@@ -475,16 +504,46 @@ export function startLickWsBridge(
     );
   }
 
+  // Prefer the explicit override (thin-bridge) over the
+  // locationHref-derived URL. Without this the worker dials the hosted
+  // UI origin (e.g. `ws://localhost:8787/licks-ws`) where wrangler
+  // cannot speak the lick wire and the upgrade handshake returns 200.
+  const wsUrl =
+    typeof options.lickWsUrl === 'string' && options.lickWsUrl.length > 0
+      ? options.lickWsUrl
+      : getLickWebSocketUrl(options.locationHref);
+  // Derive the webhook-fallback origin from the override URL when
+  // present (ws→http, wss→https). `URL` parse failures degrade to
+  // `null` rather than throw — the existing `locationHref`-based
+  // fallback then takes over.
+  let webhookOriginOverride: string | null = null;
+  if (typeof options.lickWsUrl === 'string' && options.lickWsUrl.length > 0) {
+    try {
+      const u = new URL(options.lickWsUrl);
+      const httpScheme = u.protocol === 'wss:' ? 'https:' : 'http:';
+      webhookOriginOverride = `${httpScheme}//${u.host}`;
+    } catch {
+      webhookOriginOverride = null;
+    }
+  }
+
   // DOM `WebSocket` satisfies `MinimalWebSocket` structurally — no
-  // cast needed.
+  // cast needed. `setTimeout` / `clearTimeout` MUST be bound to
+  // `globalThis` when used as the default — passing the bare global as
+  // `setTimer` then invoking it through `rt.setTimer(...)` calls it as
+  // a method on `rt`, which throws "Illegal invocation" in browsers
+  // (the timer functions are internal-slot methods on `window` /
+  // `WorkerGlobalScope`). Tests can still inject plain functions via
+  // `setTimeoutFn` / `clearTimeoutFn`.
   const rt: BridgeRuntime = {
     lickManager,
     options,
-    wsUrl: getLickWebSocketUrl(options.locationHref),
+    wsUrl,
+    webhookOriginOverride,
     baseDelay: options.reconnectDelayMs ?? DEFAULT_RECONNECT_DELAY_MS,
     wsFactory: options.webSocketFactory ?? ((url) => new WebSocket(url)),
-    setTimer: options.setTimeoutFn ?? setTimeout,
-    clearTimer: options.clearTimeoutFn ?? clearTimeout,
+    setTimer: options.setTimeoutFn ?? setTimeout.bind(globalThis),
+    clearTimer: options.clearTimeoutFn ?? clearTimeout.bind(globalThis),
     stopped: false,
     socket: null,
     reconnectHandle: null,

@@ -35,7 +35,7 @@ import { createPanelRpcTrayProvider } from '../cdp/panel-rpc-tray-provider.js';
 // `registerProviders()` during boot before any code that reads from
 // the registry runs.
 import { registerProviders } from '../providers/index.js';
-import { setBridgeToken, setLocalApiBaseUrl } from '../shell/proxied-fetch.js';
+import { getLocalApiBaseUrl, setBridgeToken, setLocalApiBaseUrl } from '../shell/proxied-fetch.js';
 import { initTelemetry } from '../ui/telemetry.js';
 import { WorkerCdpProxy } from './cdp-worker-proxy.js';
 import { createKernelHost, type KernelHost } from './host.js';
@@ -94,6 +94,16 @@ export interface KernelWorkerInitMsg {
    * /api/fetch-proxy calls. `null` / undefined outside thin-bridge mode.
    */
   bridgeToken?: string | null;
+  /**
+   * Absolute lick-WS URL (e.g. `ws://localhost:5710/licks-ws`) the
+   * worker-resident `/licks-ws` bridge should dial. Set in thin-bridge
+   * mode where the hosted leader serves the UI but the node-server
+   * lives on a different origin; deriving from `self.location.href`
+   * inside the worker would dial the UI origin (e.g. wrangler on
+   * :8787) where the upgrade handshake returns 200 instead of 101.
+   * `null` / undefined falls back to same-origin.
+   */
+  localLickWsUrl?: string | null;
 }
 
 /** Posted back over the kernel port once `createKernelHost` resolves. */
@@ -112,12 +122,36 @@ export interface KernelWorkerReadyMsg {
  * full rationale; the short version is that stamping on cross-origin
  * requests would turn every CDN fetch into a CORS-preflighted one,
  * which strict CDNs (jsdelivr et al) reject.
+ *
+ * Thin-bridge: stamping is also extended to cross-origin calls that
+ * target the KNOWN bridge `/api/fetch-proxy` (our own infra endpoint).
+ * The bridge origin is resolved per-call from `getLocalApiBaseUrl()`
+ * because `setLocalApiBaseUrl` runs AFTER `installFetchBypass`.
  */
 function installFetchBypass(): void {
   const orig = globalThis.fetch;
   if (!orig) return;
   const selfOrigin = self?.location ? self.location.origin : undefined;
-  globalThis.fetch = makeSameOriginBypassFetch(orig.bind(globalThis), selfOrigin);
+  globalThis.fetch = makeSameOriginBypassFetch(
+    orig.bind(globalThis),
+    selfOrigin,
+    resolveBridgeProxyOrigin
+  );
+}
+
+/**
+ * Per-call lookup for the bridge `/api/fetch-proxy` origin. Returns
+ * `null` outside thin-bridge mode. Parsed lazily so a malformed
+ * `setLocalApiBaseUrl` value can't break the wrapper at install time.
+ */
+function resolveBridgeProxyOrigin(): string | null {
+  const baseUrl = getLocalApiBaseUrl();
+  if (!baseUrl) return null;
+  try {
+    return new URL(baseUrl).origin;
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -251,6 +285,7 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
     bridge,
     callbacks,
     logger: console,
+    localLickWsUrl: init.localLickWsUrl ?? null,
   });
 
   // Publish a sprinkle-manager proxy on the worker's globalThis so the

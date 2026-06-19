@@ -61,6 +61,15 @@ export interface StandalonePreludeResult {
    * way as the page realm. `null` outside thin-bridge mode.
    */
   bridgeToken: string | null;
+  /**
+   * Absolute lick-WS URL on the local node-server (e.g.
+   * `ws://localhost:5710/licks-ws`), derived from the bridge launch
+   * params alongside `localApiBaseUrl`. Forwarded to the kernel worker
+   * so the worker-resident `/licks-ws` bridge dials the node-server
+   * directly instead of the hosted UI origin (which can't speak the
+   * lick wire). `null` outside thin-bridge mode.
+   */
+  localLickWsUrl: string | null;
 }
 
 function mintInstanceId(): string {
@@ -141,6 +150,7 @@ export async function setupStandalonePrelude(
   let cherryTransport: CherryHostTransport | undefined;
   let localApiBaseUrl: string | null = null;
   let bridgeToken: string | null = null;
+  let localLickWsUrl: string | null = null;
   if (runtimeMode === 'cherry') {
     const { setupCherryFollower } = await import('../main-cherry.js');
     const cherry = await setupCherryFollower();
@@ -167,6 +177,13 @@ export async function setupStandalonePrelude(
         // a query string or in logs; it's only used as a request header.
         bridgeToken = bridge.token;
         setBridgeToken(bridge.token);
+      }
+      // Forward the lick-WS URL so the kernel worker dials the node-
+      // server's `/licks-ws` rather than deriving it from the hosted UI
+      // origin. Stays null when the bridge URL didn't parse — the
+      // worker falls back to the legacy same-origin assumption.
+      if (bridge.lickWsUrl) {
+        localLickWsUrl = bridge.lickWsUrl;
       }
     }
     const connectOpts = bridge ? { url: bridge.url, protocols: bridge.subprotocol } : undefined;
@@ -195,5 +212,6 @@ export async function setupStandalonePrelude(
     isElectronOverlay,
     localApiBaseUrl,
     bridgeToken,
+    localLickWsUrl,
   };
 }

@@ -4,6 +4,7 @@ import {
   BRIDGE_TOKEN_QUERY_PARAM,
   BRIDGE_WS_QUERY_PARAM,
   deriveBridgeApiBaseUrl,
+  deriveBridgeLickWsUrl,
   parseBridgeLaunchParams,
 } from '../../../src/ui/boot/bridge-launch-params.js';
 
@@ -26,17 +27,18 @@ describe('parseBridgeLaunchParams', () => {
     expect(parseBridgeLaunchParams('?bridge=javascript:alert(1)&bridgeToken=abc')).toBeNull();
   });
 
-  it('parses a ws:// bridge URL + token into url + subprotocol + token + apiBaseUrl', () => {
+  it('parses a ws:// bridge URL + token into url + subprotocol + token + apiBaseUrl + lickWsUrl', () => {
     const params = parseBridgeLaunchParams('?bridge=ws://localhost:5710/cdp&bridgeToken=abc-123');
     expect(params).toEqual({
       url: 'ws://localhost:5710/cdp',
       subprotocol: 'slicc.bridge.v1.abc-123',
       token: 'abc-123',
       apiBaseUrl: 'http://localhost:5710',
+      lickWsUrl: 'ws://localhost:5710/licks-ws',
     });
   });
 
-  it('accepts wss:// bridge URLs (apiBaseUrl uses https://)', () => {
+  it('accepts wss:// bridge URLs (apiBaseUrl uses https://, lickWsUrl uses wss://)', () => {
     const params = parseBridgeLaunchParams(
       '?bridge=wss%3A%2F%2Fbridge.example%2Fcdp&bridgeToken=xyz'
     );
@@ -44,6 +46,7 @@ describe('parseBridgeLaunchParams', () => {
     expect(params?.subprotocol).toBe('slicc.bridge.v1.xyz');
     expect(params?.token).toBe('xyz');
     expect(params?.apiBaseUrl).toBe('https://bridge.example');
+    expect(params?.lickWsUrl).toBe('wss://bridge.example/licks-ws');
   });
 
   it('uses the same param/prefix constants the node-server gates on', () => {
@@ -66,5 +69,21 @@ describe('deriveBridgeApiBaseUrl', () => {
   it('returns null for unparseable URLs', () => {
     expect(deriveBridgeApiBaseUrl('not a url')).toBeNull();
     expect(deriveBridgeApiBaseUrl('')).toBeNull();
+  });
+});
+
+describe('deriveBridgeLickWsUrl', () => {
+  it('preserves ws:// scheme and host:port, swapping path to /licks-ws', () => {
+    expect(deriveBridgeLickWsUrl('ws://localhost:5710/cdp')).toBe('ws://localhost:5710/licks-ws');
+    expect(deriveBridgeLickWsUrl('ws://127.0.0.1:5720/cdp')).toBe('ws://127.0.0.1:5720/licks-ws');
+  });
+
+  it('preserves wss:// scheme', () => {
+    expect(deriveBridgeLickWsUrl('wss://bridge.example/cdp')).toBe('wss://bridge.example/licks-ws');
+  });
+
+  it('returns null for unparseable URLs', () => {
+    expect(deriveBridgeLickWsUrl('not a url')).toBeNull();
+    expect(deriveBridgeLickWsUrl('')).toBeNull();
   });
 });
