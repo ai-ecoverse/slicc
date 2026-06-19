@@ -39,7 +39,7 @@ import { encodeForbiddenRequestHeaders, headersToRecord } from '../shell/proxy-h
 import { synthesizeForwardResponse } from './llm-proxy-response.js';
 import {
   isBridgeConfigMessage,
-  resolveBridgeConfig,
+  resolveBridgeFromClientUrls,
   resolveFetchProxyTarget,
 } from './llm-proxy-sw-config.js';
 
@@ -142,15 +142,17 @@ async function forwardThroughProxy(req: Request, clientId: string | null): Promi
 
   // Thin-bridge: rewrite the forward target onto the local node-server's
   // origin and attach the per-process bridge token. Cache miss falls back
-  // to parsing `bridge`/`bridgeToken` from the controlling client URL so
-  // the SW survives eviction/restart without losing thin-bridge mode.
+  // to parsing `bridge`/`bridgeToken` from the triggering client URL; if
+  // that client is a worker (kernel DedicatedWorker → no launch params)
+  // or unknown, we additionally enumerate the page window clients so the
+  // SW recovers bridge mode after eviction + worker-originated fetches.
   // Same-origin (non-bridge) callers keep the legacy `/api/fetch-proxy`
   // path with no token header — mirrors `proxied-fetch.ts` gating.
-  const clientUrl = await readClientUrl(clientId);
-  const bridge = resolveBridgeConfig(
-    { apiBaseUrl: cachedBridgeApiBaseUrl, token: cachedBridgeToken },
-    clientUrl
-  );
+  const cached = { apiBaseUrl: cachedBridgeApiBaseUrl, token: cachedBridgeToken };
+  const hasCache = !!(cached.apiBaseUrl && cached.token);
+  const triggeringClientUrl = await readClientUrl(clientId);
+  const windowClientUrls = hasCache ? [] : await readWindowClientUrls();
+  const bridge = resolveBridgeFromClientUrls(cached, [triggeringClientUrl, ...windowClientUrls]);
   if (bridge) {
     proxyHeaders.set(BRIDGE_TOKEN_HEADER, bridge.token);
   }
@@ -204,6 +206,25 @@ async function readClientUrl(clientId: string | null): Promise<string | null> {
     return client?.url ?? null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Enumerate page window clients for the bridge-config fallback. Used
+ * when the triggering fetch came from the kernel DedicatedWorker (whose
+ * URL has no launch params) or an unknown client. Guarded so a clients
+ * API hiccup can't throw inside the fetch handler — on any error we
+ * return `[]` and the caller treats it as cache-only mode.
+ */
+async function readWindowClientUrls(): Promise<string[]> {
+  try {
+    const clients = await self.clients.matchAll({
+      type: 'window',
+      includeUncontrolled: true,
+    });
+    return clients.map((c) => c.url).filter((u): u is string => !!u);
+  } catch {
+    return [];
   }
 }
 

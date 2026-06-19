@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 import {
   isBridgeConfigMessage,
   resolveBridgeConfig,
+  resolveBridgeFromClientUrls,
   resolveFetchProxyTarget,
   SW_BRIDGE_CONFIG_MESSAGE,
 } from '../../src/ui/llm-proxy-sw-config.js';
@@ -71,6 +72,58 @@ describe('resolveBridgeConfig', () => {
     expect(
       resolveBridgeConfig(null, 'https://www.sliccy.ai/?bridge=not-a-url&bridgeToken=t')
     ).toBeNull();
+  });
+});
+
+describe('resolveBridgeFromClientUrls', () => {
+  it('returns the cached config without inspecting any candidate URLs', () => {
+    const cached = { apiBaseUrl: 'http://localhost:5710/', token: 'cached-token' };
+    const out = resolveBridgeFromClientUrls(cached, [
+      'about:blank',
+      'https://www.sliccy.ai/?bridge=ws://localhost:9999/cdp&bridgeToken=other',
+    ]);
+    expect(out).toEqual({ apiBaseUrl: 'http://localhost:5710', token: 'cached-token' });
+  });
+
+  it('falls back to a window client URL when the worker client URL has no params', () => {
+    // First candidate mimics the kernel DedicatedWorker (no bridge params);
+    // second is the page window URL carrying the launch params. The
+    // resolver must skip the worker entry and pick up the window entry.
+    const out = resolveBridgeFromClientUrls(null, [
+      'http://localhost:5710/kernel-worker.js',
+      'https://www.sliccy.ai/?bridge=ws%3A%2F%2Flocalhost%3A5710%2Fcdp&bridgeToken=abc-123',
+    ]);
+    expect(out).toEqual({ apiBaseUrl: 'http://localhost:5710', token: 'abc-123' });
+  });
+
+  it('returns the first candidate that carries the launch params', () => {
+    const out = resolveBridgeFromClientUrls(null, [
+      'https://www.sliccy.ai/?bridge=ws://localhost:5711/cdp&bridgeToken=first',
+      'https://www.sliccy.ai/?bridge=ws://localhost:5712/cdp&bridgeToken=second',
+    ]);
+    expect(out).toEqual({ apiBaseUrl: 'http://localhost:5711', token: 'first' });
+  });
+
+  it('returns null when no candidate carries launch params and the cache is empty', () => {
+    expect(
+      resolveBridgeFromClientUrls(null, [
+        'http://localhost:5710/kernel-worker.js',
+        'https://www.sliccy.ai/?foo=bar',
+        null,
+      ])
+    ).toBeNull();
+  });
+
+  it('treats a partial cache (apiBaseUrl only) as a miss and consults the candidates', () => {
+    const out = resolveBridgeFromClientUrls({ apiBaseUrl: 'http://localhost:5710', token: null }, [
+      'http://localhost:5710/kernel-worker.js',
+      'https://www.sliccy.ai/?bridge=ws://localhost:5711/cdp&bridgeToken=fallback-token',
+    ]);
+    expect(out).toEqual({ apiBaseUrl: 'http://localhost:5711', token: 'fallback-token' });
+  });
+
+  it('returns null when given an empty candidate list and no cache', () => {
+    expect(resolveBridgeFromClientUrls(null, [])).toBeNull();
   });
 });
 

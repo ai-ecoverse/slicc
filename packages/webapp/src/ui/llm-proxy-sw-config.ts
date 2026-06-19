@@ -78,6 +78,32 @@ export function resolveBridgeConfig(
 }
 
 /**
+ * Resolve the bridge config from an ordered list of candidate client URLs.
+ *
+ * The single-client `resolveBridgeConfig` is insufficient when the
+ * triggering fetch comes from the kernel DedicatedWorker (or an empty
+ * client id), whose URL carries no `bridge` / `bridgeToken` params. The
+ * SW recovers by also consulting the page window clients via
+ * `self.clients.matchAll({ type: 'window' })`. The cached `postMessage`
+ * config still wins (fast path); only on cache miss do we iterate the
+ * candidate URLs in order, returning the first one that carries the
+ * launch params.
+ */
+export function resolveBridgeFromClientUrls(
+  cached: { apiBaseUrl: string | null; token: string | null } | null,
+  clientUrls: (string | null)[]
+): ResolvedBridgeConfig | null {
+  if (cached?.apiBaseUrl && cached.token) {
+    return resolveBridgeConfig(cached, null);
+  }
+  for (const url of clientUrls) {
+    const resolved = resolveBridgeConfig(null, url);
+    if (resolved) return resolved;
+  }
+  return null;
+}
+
+/**
  * Build the absolute `/api/fetch-proxy` URL the SW should hit. In bridge
  * mode the local node-server origin is prepended; otherwise the legacy
  * same-origin path is returned unchanged.
