@@ -24,7 +24,23 @@ describe('isWorkerServedSpa', () => {
 });
 
 describe('buildAdobeOAuthState — worker-served (thin-bridge / hosted-leader)', () => {
-  it('emits source:"opener" and pins redirect_uri to the page origin', () => {
+  it('hosted-leader (page IS the prod relay): source:"opener", redirect_uri = configured prod relay', () => {
+    const result = buildAdobeOAuthState(
+      {
+        pageHref: 'https://www.sliccy.ai/?bridge=wss://host/cdp&bridgeToken=t',
+        pageOrigin: 'https://www.sliccy.ai',
+        configuredRedirectUri: 'https://www.sliccy.ai/auth/callback',
+      },
+      nonce
+    );
+    expect(result.source).toBe('opener');
+    expect(result.redirectUri).toBe('https://www.sliccy.ai/auth/callback');
+    const decoded = JSON.parse(atob(result.oauthState));
+    expect(decoded).toEqual({ source: 'opener', path: '/auth/callback', nonce: 'fixed-nonce' });
+    expect(result.expectedNonce).toBe('fixed-nonce');
+  });
+
+  it('wrangler dev (localhost:8787): source:"local", port 8787, redirect_uri = prod relay (trampoline)', () => {
     const result = buildAdobeOAuthState(
       {
         pageHref: 'http://localhost:8787/?bridge=ws://localhost:5710/cdp',
@@ -33,27 +49,63 @@ describe('buildAdobeOAuthState — worker-served (thin-bridge / hosted-leader)',
       },
       nonce
     );
-    expect(result.source).toBe('opener');
-    expect(result.redirectUri).toBe('http://localhost:8787/auth/callback');
+    expect(result.source).toBe('local');
+    // redirect_uri MUST be the prod relay — the only origin IMS allowlists.
+    expect(result.redirectUri).toBe('https://www.sliccy.ai/auth/callback');
     const decoded = JSON.parse(atob(result.oauthState));
-    expect(decoded.source).toBe('opener');
-    expect(decoded.path).toBe('/auth/callback');
-    expect(decoded.nonce).toBe('fixed-nonce');
-    expect(decoded.port).toBeUndefined();
+    expect(decoded).toEqual({
+      source: 'local',
+      port: 8787,
+      path: '/auth/callback',
+      nonce: 'fixed-nonce',
+    });
     expect(result.expectedNonce).toBe('fixed-nonce');
   });
 
-  it('ignores configuredRedirectUri in worker-served mode (would break opener delivery)', () => {
+  it('wrangler dev on 127.0.0.1 also trampolines via prod relay', () => {
     const result = buildAdobeOAuthState(
       {
-        pageHref: 'https://www.sliccy.ai/?bridge=wss://host/cdp&bridgeToken=t',
-        pageOrigin: 'https://www.sliccy.ai',
-        configuredRedirectUri: 'https://elsewhere.example/auth/callback',
+        pageHref: 'http://127.0.0.1:8787/?bridge=ws://127.0.0.1:5710/cdp',
+        pageOrigin: 'http://127.0.0.1:8787',
+        configuredRedirectUri: 'https://www.sliccy.ai/auth/callback',
       },
       nonce
     );
+    expect(result.source).toBe('local');
     expect(result.redirectUri).toBe('https://www.sliccy.ai/auth/callback');
+    const decoded = JSON.parse(atob(result.oauthState));
+    expect(decoded.source).toBe('local');
+    expect(decoded.port).toBe(8787);
+  });
+
+  it('preserves the wrangler-dev port (e.g. 5720) instead of hardcoding 8787', () => {
+    const result = buildAdobeOAuthState(
+      {
+        pageHref: 'http://localhost:5720/?bridge=ws://localhost:5721/cdp',
+        pageOrigin: 'http://localhost:5720',
+        configuredRedirectUri: 'https://www.sliccy.ai/auth/callback',
+      },
+      nonce
+    );
+    const decoded = JSON.parse(atob(result.oauthState));
+    expect(decoded.source).toBe('local');
+    expect(decoded.port).toBe(5720);
+    expect(result.redirectUri).toBe('https://www.sliccy.ai/auth/callback');
+  });
+
+  it('falls back to degraded opener path when configuredRedirectUri is absent', () => {
+    const result = buildAdobeOAuthState(
+      {
+        pageHref: 'http://localhost:8787/?bridge=ws://localhost:5710/cdp',
+        pageOrigin: 'http://localhost:8787',
+        // no configuredRedirectUri
+      },
+      nonce
+    );
     expect(result.source).toBe('opener');
+    expect(result.redirectUri).toBe('http://localhost:8787/auth/callback');
+    const decoded = JSON.parse(atob(result.oauthState));
+    expect(decoded).toEqual({ source: 'opener', path: '/auth/callback', nonce: 'fixed-nonce' });
   });
 });
 

@@ -11,12 +11,25 @@
  *     local server's callback page handles delivery.
  *
  *   - **Worker-served / thin-bridge / hosted-leader**: SPA is served by the
- *     cloudflare-worker (`https://www.sliccy.ai`, or `http://localhost:8787`
- *     in `wrangler dev`). Routing back through localhost would self-loop the
- *     relay (or worse, fail because no local callback exists). Instead the
- *     relay delivers the callback URL straight to `window.opener` via
- *     `postMessage` — `state.source: 'opener'`, redirect_uri pinned to the
- *     opener's own origin.
+ *     cloudflare-worker — either the production relay (`https://www.sliccy.ai`)
+ *     or `wrangler dev` on `http://localhost:8787`. `redirect_uri` MUST be the
+ *     hardcoded production relay (`configuredRedirectUri`) because that is the
+ *     only origin Adobe IMS allowlists; pinning to the page's own origin
+ *     (especially `http://localhost:8787`) makes IMS reject the request.
+ *
+ *     - **Hosted-leader** (`pageOrigin === relayOrigin`): state uses
+ *       `source:'opener'`; the relay's HTML `postMessage`s the full callback
+ *       URL (with the implicit-flow hash) to `window.opener` directly.
+ *     - **Wrangler dev** (`pageOrigin` is a localhost/127.0.0.1 origin with a
+ *       port): state uses `source:'local'` + the page's port; the prod relay
+ *       forwards the IMS hash back to `http://localhost:<port>/auth/callback`,
+ *       and the local relay (same worker code) trips its self-origin guard
+ *       (`localOrigin === location.origin`) and delivers to the opener.
+ *
+ *     If `configuredRedirectUri` is absent in the worker-served path we fall
+ *     back to the previous degraded behavior (`source:'opener'` pinned to
+ *     `${pageOrigin}/auth/callback`); this only works when IMS happens to
+ *     allowlist the page origin, but it never makes a missing config worse.
  *
  * Detection: the thin-bridge launch params include `?bridge=<ws-url>`. When
  * that query param is present on the page URL the SPA is being served by the
@@ -70,10 +83,62 @@ export function buildAdobeOAuthState(
   const nonce = nonceFactory();
 
   if (workerServed) {
-    // Worker-served: opener is same-origin as the relay. Bypass the
-    // (cross-origin, prod) `configuredRedirectUri` — IMS would redirect to a
-    // different host than the opener, and the relay can't postMessage back
-    // across that origin boundary. Pin redirect_uri to the opener's origin.
+    // Worker-served path: redirect_uri MUST be the hardcoded prod relay
+    // (the only origin IMS allowlists). Branch state shape on whether the
+    // page IS the relay (hosted-leader → opener delivery) or a localhost
+    // dev host (wrangler → trampoline via prod relay → local relay's
+    // self-origin guard → opener).
+    if (input.configuredRedirectUri) {
+      let relayOrigin = '';
+      try {
+        relayOrigin = new URL(input.configuredRedirectUri).origin;
+      } catch {
+        relayOrigin = '';
+      }
+
+      if (relayOrigin && input.pageOrigin === relayOrigin) {
+        const oauthState = btoa(
+          JSON.stringify({ source: 'opener', path: '/auth/callback', nonce })
+        );
+        return {
+          redirectUri: input.configuredRedirectUri,
+          oauthState,
+          expectedNonce: nonce,
+          source: 'opener',
+        };
+      }
+
+      let pageUrl: URL | null = null;
+      try {
+        pageUrl = new URL(input.pageHref);
+      } catch {
+        pageUrl = null;
+      }
+      const isLocalhostWithPort =
+        pageUrl !== null &&
+        pageUrl.protocol === 'http:' &&
+        (pageUrl.hostname === 'localhost' || pageUrl.hostname === '127.0.0.1') &&
+        pageUrl.port !== '';
+      if (isLocalhostWithPort && pageUrl) {
+        const port = parseInt(pageUrl.port, 10);
+        const oauthState = btoa(
+          JSON.stringify({ source: 'local', port, path: '/auth/callback', nonce })
+        );
+        return {
+          redirectUri: input.configuredRedirectUri,
+          oauthState,
+          expectedNonce: nonce,
+          source: 'local',
+        };
+      }
+      // Unknown worker-served topology (configured prod relay present but
+      // pageOrigin matches neither relay nor localhost-with-port). Fall
+      // through to the degraded same-origin opener path below.
+    }
+
+    // Degraded fallback: no configured prod relay (or unknown topology).
+    // Pin redirect_uri to the opener's own origin; works only when IMS
+    // allowlists that origin, but it never makes the missing config worse.
     const redirectUri = `${input.pageOrigin}/auth/callback`;
     const oauthState = btoa(
       JSON.stringify({
