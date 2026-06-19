@@ -100,7 +100,7 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
   ['Network', ['curl', 'wget', 'dig', 'websocat', 'html-to-markdown']],
   ['Version control', ['git']],
   ['Languages', ['node', 'python', 'python3', 'sqlite3']],
-  ['Build tools', ['tsc', 'esbuild', 'test', 'biome']],
+  ['Build tools', ['tsc', 'test']],
   ['Packages', ['ipk', 'npm', 'i', 'ipx', 'npx']],
   ['Skills', ['skill', 'upskill']],
   ['Browser & UI', ['serve', 'open', 'imgcat', ...PLAYWRIGHT_COMMAND_NAMES, 'sprinkle']],
