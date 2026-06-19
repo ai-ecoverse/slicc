@@ -78,11 +78,6 @@ interface ChromeRuntimePort {
   onDisconnect: { addListener(callback: () => void): void };
 }
 
-interface ChromeOffscreenAPI {
-  createDocument(params: { url: string; reasons: string[]; justification: string }): Promise<void>;
-  hasDocument(): Promise<boolean>;
-}
-
 interface ChromeActionAPI {
   setBadgeText(details: { text: string }): Promise<void>;
   setBadgeBackgroundColor(details: { color: string }): Promise<void>;
@@ -144,12 +139,6 @@ interface ChromeAPI {
       addListener(callback: (port: ChromeRuntimePort) => void): void;
     };
   };
-  sidePanel: {
-    setPanelBehavior(options: { openPanelOnActionClick: boolean }): Promise<void>;
-    setOptions(options: { tabId?: number; path?: string; enabled?: boolean }): Promise<void>;
-    open(options: { tabId?: number; windowId?: number }): Promise<void>;
-    close(options: { tabId?: number; windowId?: number }): Promise<void>;
-  };
   notifications: {
     create(
       notificationId: string,
@@ -194,7 +183,6 @@ interface ChromeAPI {
     getRedirectURL(path?: string): string;
   };
   action: ChromeActionAPI;
-  offscreen: ChromeOffscreenAPI;
   storage: {
     local: ChromeStorageArea;
     session: ChromeStorageArea;

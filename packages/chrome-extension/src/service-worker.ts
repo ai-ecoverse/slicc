@@ -328,8 +328,7 @@ chrome.runtime.onMessage.addListener((message: unknown) => {
 
 // ---------------------------------------------------------------------------
 // Tab grouping — inline copy for service worker (SW can't import shared chunks)
-// See packages/chrome-extension/src/tab-group.ts for the canonical implementation used by
-// debugger-client.ts in the offscreen document.
+// See packages/chrome-extension/src/tab-group.ts for the canonical implementation.
 // ---------------------------------------------------------------------------
 
 let sliccGroupId: number | null = null;

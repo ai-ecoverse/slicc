@@ -17,13 +17,12 @@ import { type ConnectedFollowerInfo, getConnectedFollowersWithFallback } from '.
 export type CherryEmitResult = { delivered: true } | { delivered: false; reason: string };
 
 /**
- * A direct, in-realm emitter for floats where the leader tray lives in the
- * SAME realm as the `cherry-emit` command — i.e. the extension offscreen
- * document, where `extension-leader-tray.ts` constructs the `LeaderSyncManager`
- * alongside the agent shell. Returns whether the event was handed to the owning
- * follower's channel. When unset (e.g. the standalone kernel worker, where the
- * leader tray lives on the page), `emitSliccEvent` falls back to the worker→page
- * panel-RPC bridge.
+ * A direct, in-realm emitter for floats where the leader tray lives in
+ * the SAME realm as the `cherry-emit` command (no kernel-worker → page
+ * bridge hop). Returns whether the event was handed to the owning
+ * follower's channel. When unset (e.g. the standalone kernel worker,
+ * where the leader tray lives on the page), `emitSliccEvent` falls back
+ * to the worker→page panel-RPC bridge.
  */
 export type CherryDirectEmitter = (
   runtimeId: string,

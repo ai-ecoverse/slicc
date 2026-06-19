@@ -49,12 +49,6 @@ const mockChrome = {
       remove: vi.fn(async () => {}),
     },
   },
-  sidePanel: {
-    setPanelBehavior: vi.fn(async () => {}),
-    setOptions: vi.fn(async () => {}),
-    open: vi.fn(async () => {}),
-    close: vi.fn(async () => {}),
-  },
   tabs: {
     get: vi.fn(async (id: number) => {
       const t = tabsStore.get(id);
@@ -126,10 +120,6 @@ const mockChrome = {
     onEvent: { addListener: vi.fn() },
     onDetach: { addListener: vi.fn() },
   },
-  offscreen: {
-    hasDocument: vi.fn(async () => true),
-    createDocument: vi.fn(async () => {}),
-  },
   identity: {
     launchWebAuthFlow: vi.fn(),
     getRedirectURL: vi.fn(),
@@ -164,9 +154,6 @@ function resetMocks(): void {
     if (typeof fn === 'function' && 'mockClear' in fn) (fn as { mockClear(): void }).mockClear();
   }
   for (const fn of Object.values(mockChrome.windows)) {
-    if (typeof fn === 'function' && 'mockClear' in fn) (fn as { mockClear(): void }).mockClear();
-  }
-  for (const fn of Object.values(mockChrome.sidePanel)) {
     if (typeof fn === 'function' && 'mockClear' in fn) (fn as { mockClear(): void }).mockClear();
   }
   (mockChrome.tabs.query as ReturnType<typeof vi.fn>).mockImplementation(

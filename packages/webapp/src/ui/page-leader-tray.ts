@@ -230,8 +230,7 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
         // tray signaling/bootstrap envelope could not be applied; the
         // user sees a follower never showing up, with no surface signal
         // otherwise. Prod log gate is ERROR (`logger.ts`), so `warn`
-        // would be invisible. Matches the extension parity in
-        // `extension-leader-tray.ts`.
+        // would be invisible.
         log.error('Tray leader bootstrap handling failed', {
           error: err instanceof Error ? err.message : String(err),
         });
