@@ -10,10 +10,37 @@
  */
 
 import { getPanelRpcClient } from '../kernel/panel-rpc.js';
+import { getBridgeToken, getLocalApiBaseUrl } from '../shell/proxied-fetch.js';
 import { createInterceptingOAuthLauncher } from './intercepted-oauth.js';
 import type { InterceptingOAuthLauncher, OAuthLauncher } from './types.js';
 
 const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?.id;
+
+/**
+ * Resolve the GET target for the OAuth-result poll. In classic CLI (UI
+ * served by the local node-server) this is the legacy same-origin path;
+ * in thin-bridge mode (UI hosted at sliccy.ai, /api on the local
+ * node-server) `setLocalApiBaseUrl` has been called during boot and we
+ * route to that absolute origin so the poll doesn't hit the wrangler UI
+ * and parse the SPA index.html as JSON.
+ */
+function resolveOAuthResultUrl(): string {
+  const base = getLocalApiBaseUrl();
+  return base ? `${base}/api/oauth-result` : '/api/oauth-result';
+}
+
+/**
+ * Build the request headers for the OAuth-result poll. Same gating as
+ * `createProxiedFetch` in CLI mode: only attach `X-Bridge-Token` when
+ * both a bridge token and a local API base are configured — same-origin
+ * / loopback callers don't need it and the local node-server only
+ * enforces it on cross-origin /api/* in thin-bridge mode.
+ */
+function buildOAuthResultHeaders(): Record<string, string> {
+  const base = getLocalApiBaseUrl();
+  const token = getBridgeToken();
+  return base && token ? { 'X-Bridge-Token': token } : {};
+}
 
 /** Create an OAuthLauncher appropriate for the current runtime. */
 export function createOAuthLauncher(): OAuthLauncher {
@@ -163,7 +190,9 @@ async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
     pollTimer = setInterval(async () => {
       if (resolved) return;
       try {
-        const res = await fetch('/api/oauth-result');
+        const res = await fetch(resolveOAuthResultUrl(), {
+          headers: buildOAuthResultHeaders(),
+        });
         if (res.status === 204) return; // no result yet
         if (!res.ok) return; // server hiccup — keep polling
         const data = (await res.json()) as { redirectUrl?: string; error?: string };

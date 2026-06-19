@@ -286,7 +286,7 @@ describe('createOAuthLauncher', () => {
 
     // Let one poll fire and return 204
     await vi.advanceTimersByTimeAsync(1000);
-    expect(mockFetch).toHaveBeenCalledWith('/api/oauth-result');
+    expect(mockFetch).toHaveBeenCalledWith('/api/oauth-result', { headers: {} });
     const callsBeforeMessage = mockFetch.mock.calls.length;
 
     // Now postMessage wins
@@ -449,6 +449,94 @@ describe('createOAuthLauncher', () => {
 
     const result = await promise;
     expect(result).toBe('http://localhost:5710/auth/callback#token=first');
+  });
+});
+
+describe('createOAuthLauncher — OAuth-result poll routing (thin-bridge)', () => {
+  // When `setLocalApiBaseUrl` has been called during boot (UI hosted at
+  // sliccy.ai, /api on the local node-server) the poll MUST hit the local
+  // origin — otherwise the relative `/api/oauth-result` resolves against
+  // the wrangler UI host and the SPA index.html is returned as text/html,
+  // which fails JSON.parse with "Unexpected token '<'".
+  beforeEach(() => {
+    vi.useFakeTimers();
+    messageListeners.clear();
+    vi.clearAllMocks();
+  });
+
+  afterEach(async () => {
+    const { setLocalApiBaseUrl, setBridgeToken } = await import('../../src/shell/proxied-fetch.js');
+    setLocalApiBaseUrl(null);
+    setBridgeToken(null);
+    vi.useRealTimers();
+  });
+
+  it('routes the poll to the configured local API base when bridge mode is active', async () => {
+    const { setLocalApiBaseUrl, setBridgeToken } = await import('../../src/shell/proxied-fetch.js');
+    setLocalApiBaseUrl('http://localhost:5710');
+    setBridgeToken('bridge-token-abc');
+
+    const mockFetch = vi.mocked(fetch);
+    mockFetch.mockResolvedValue({ status: 204 } as Response);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(mockFetch).toHaveBeenCalledWith('http://localhost:5710/api/oauth-result', {
+      headers: { 'X-Bridge-Token': 'bridge-token-abc' },
+    });
+
+    fireMessage({
+      type: 'oauth-callback',
+      redirectUrl: 'http://localhost:5710/auth/callback#token=msg',
+    });
+    await promise;
+  });
+
+  it('omits the bridge token when no local API base is configured (classic CLI)', async () => {
+    const { setLocalApiBaseUrl, setBridgeToken } = await import('../../src/shell/proxied-fetch.js');
+    setLocalApiBaseUrl(null);
+    // Even if a token was set, no base means same-origin and no header.
+    setBridgeToken('stray-token');
+
+    const mockFetch = vi.mocked(fetch);
+    mockFetch.mockResolvedValue({ status: 204 } as Response);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(mockFetch).toHaveBeenCalledWith('/api/oauth-result', { headers: {} });
+
+    fireMessage({
+      type: 'oauth-callback',
+      redirectUrl: 'http://localhost:5710/auth/callback#done',
+    });
+    await promise;
+  });
+
+  it('omits the bridge token when a base is set but no token (defensive)', async () => {
+    const { setLocalApiBaseUrl, setBridgeToken } = await import('../../src/shell/proxied-fetch.js');
+    setLocalApiBaseUrl('http://localhost:5710');
+    setBridgeToken(null);
+
+    const mockFetch = vi.mocked(fetch);
+    mockFetch.mockResolvedValue({ status: 204 } as Response);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(mockFetch).toHaveBeenCalledWith('http://localhost:5710/api/oauth-result', {
+      headers: {},
+    });
+
+    fireMessage({
+      type: 'oauth-callback',
+      redirectUrl: 'http://localhost:5710/auth/callback#done',
+    });
+    await promise;
   });
 });
 
