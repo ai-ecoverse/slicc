@@ -19,8 +19,19 @@ export const BRIDGE_WS_QUERY_PARAM = 'bridge';
 /** Query-param name carrying the per-process bridge token. */
 export const BRIDGE_TOKEN_QUERY_PARAM = 'bridgeToken';
 
+/** Query-param name carrying the overlay role (`leader` or `follower`). */
+export const BRIDGE_ROLE_QUERY_PARAM = 'role';
+
 /** Subprotocol prefix the leader sends; server validates `<prefix><token>`. */
 export const BRIDGE_SUBPROTOCOL_PREFIX = 'slicc.bridge.v1.';
+
+/**
+ * Overlay role marker the node-server's `ElectronOverlayInjector` writes
+ * onto the launcher URL: the pinned tab carries `leader`, every
+ * auto-follow tab carries `follower`. The leader drives the `/cdp`
+ * bridge; followers stay off the bridge and observe via tray sync.
+ */
+export type BridgeRole = 'leader' | 'follower';
 
 export interface BridgeLaunchParams {
   /** The fully-qualified `ws://localhost:<port>/cdp` URL the leader will dial. */
@@ -56,6 +67,12 @@ export interface BridgeLaunchParams {
    * matches the legacy bundled-UI assumption).
    */
   lickWsUrl: string | null;
+  /**
+   * Overlay role from the launch URL, or `null` when the launcher did
+   * not stamp one (single-tab standalone bridge launches). Followers
+   * MUST NOT dial `/cdp` — that capability belongs to the leader.
+   */
+  role: BridgeRole | null;
 }
 
 /**
@@ -107,11 +124,15 @@ export function parseBridgeLaunchParams(search: string): BridgeLaunchParams | nu
   if (!url || !token) return null;
   if (!/^wss?:\/\//.test(url)) return null;
 
+  const rawRole = params.get(BRIDGE_ROLE_QUERY_PARAM);
+  const role: BridgeRole | null = rawRole === 'leader' || rawRole === 'follower' ? rawRole : null;
+
   return {
     url,
     subprotocol: `${BRIDGE_SUBPROTOCOL_PREFIX}${token}`,
     token,
     apiBaseUrl: deriveBridgeApiBaseUrl(url),
     lickWsUrl: deriveBridgeLickWsUrl(url),
+    role,
   };
 }

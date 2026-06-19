@@ -161,7 +161,10 @@ export async function setupStandalonePrelude(
     browser = new BrowserAPI();
     const bridge = parseBridgeLaunchParams(win.location.search);
     if (bridge) {
-      log.info('Routing CDP through local standalone bridge', { url: bridge.url });
+      log.info('Routing CDP through local standalone bridge', {
+        url: bridge.url,
+        role: bridge.role ?? '(unset)',
+      });
       // Thin-bridge: the hosted leader at sliccy.ai has no /api surface,
       // so route proxied /api/* requests at the local node-server origin
       // we just learned about from the bridge launch params. The kernel
@@ -187,12 +190,19 @@ export async function setupStandalonePrelude(
       }
     }
     const connectOpts = bridge ? { url: bridge.url, protocols: bridge.subprotocol } : undefined;
-    // Bounded retry — the packaged CLI launches Chrome before the local
-    // /cdp bridge has finished `server.listen()` in some races, so the
-    // very first connect can lose to the bridge by a few hundred ms.
-    // Retry with capped backoff so we recover from the boot race without
-    // hanging boot if the bridge truly never comes up.
-    await connectWithBoundedRetry(browser, connectOpts, log);
+    // Overlay followers (Electron auto-follow tabs) MUST NOT dial /cdp —
+    // that capability belongs to the pinned leader tab. Skip the eager
+    // connect so multiple overlay tabs don't all race to drive Chrome.
+    if (bridge?.role === 'follower') {
+      log.info('Skipping CDP connect for follower overlay tab');
+    } else {
+      // Bounded retry — the packaged CLI launches Chrome before the local
+      // /cdp bridge has finished `server.listen()` in some races, so the
+      // very first connect can lose to the bridge by a few hundred ms.
+      // Retry with capped backoff so we recover from the boot race without
+      // hanging boot if the bridge truly never comes up.
+      await connectWithBoundedRetry(browser, connectOpts, log);
+    }
   }
   const realCdpTransport = browser.getTransport();
 

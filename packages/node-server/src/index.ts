@@ -15,7 +15,7 @@ import {
   buildCorsHeaders,
   buildPnaPreflightHeaders,
   isLoopbackBridgeOrigin,
-  mintBridgeToken,
+  resolveServerBridgeToken,
   selectBridgeSubprotocol,
   validateBridgeToken,
   validateBridgeUpgrade,
@@ -46,6 +46,7 @@ import {
   ElectronAppAlreadyRunningError,
   ElectronOverlayInjector,
   launchElectronApp,
+  resolveOverlayThinBridge,
 } from './electron-controller.js';
 import { getElectronAppPorts } from './electron-runtime.js';
 import { FileLogger } from './file-logger.js';
@@ -404,9 +405,13 @@ interface ServerState {
   shuttingDown: boolean;
   discoveredTrayJoinUrl: string | null;
   /**
-   * Per-process subprotocol token for the thin /cdp bridge. Null in
-   * legacy modes (dev / electron / serve-only / hosted) — `/cdp` stays
-   * ungated there because the connecting client is always same-origin.
+   * Per-process subprotocol token for the thin /cdp bridge. Minted in
+   * `THIN_BRIDGE_MODE`; inherited from `SLICC_BRIDGE_TOKEN` when an
+   * Electron host (or other parent) forwarded one — that's how the
+   * Electron float's `--serve-only` child gates `/cdp` against the
+   * same token the float's `BrowserWindow` carries. Null in remaining
+   * legacy modes — `/cdp` stays ungated there because the connecting
+   * client is always same-origin.
    */
   bridgeToken: string | null;
   // CDP WebSocket proxy state (one Chrome connection, swapped client).
@@ -427,7 +432,7 @@ function createServerState(): ServerState {
     overlayInjector: null,
     shuttingDown: false,
     discoveredTrayJoinUrl: RUNTIME_FLAGS.joinUrl ?? null,
-    bridgeToken: THIN_BRIDGE_MODE ? mintBridgeToken() : null,
+    bridgeToken: resolveServerBridgeToken(process.env, { thinBridgeMode: THIN_BRIDGE_MODE }),
     cdpUrl: null,
     chromeWs: null,
     activeClientWs: null,
@@ -1166,14 +1171,22 @@ async function startOverlayInjector(
   servePort: number
 ): Promise<void> {
   try {
+    const thinBridge = resolveOverlayThinBridge(process.env, state.bridgeToken, servePort);
     state.overlayInjector = await ElectronOverlayInjector.create({
       cdpPort,
       servePort,
       dev: DEV_MODE,
       projectRoot: PROJECT_ROOT,
+      thinBridge,
     });
     await state.overlayInjector.start();
-    console.log('[electron-float] Overlay injector is watching Electron page targets');
+    if (thinBridge) {
+      console.log(
+        `[electron-float] Overlay injector is watching Electron page targets (thin bridge → ${thinBridge.hostedLeaderOrigin})`
+      );
+    } else {
+      console.log('[electron-float] Overlay injector is watching Electron page targets');
+    }
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     console.error('[electron-float] Failed to start overlay injector:', message);

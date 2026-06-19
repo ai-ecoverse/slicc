@@ -10,6 +10,7 @@ import {
   isLoopbackBridgeOrigin,
   mintBridgeToken,
   parseSubprotocolHeader,
+  resolveServerBridgeToken,
   selectBridgeSubprotocol,
   validateBridgeToken,
   validateBridgeUpgrade,
@@ -63,6 +64,29 @@ describe('mintBridgeToken', () => {
     const b = mintBridgeToken();
     expect(a).toMatch(/^[0-9a-f-]{36}$/);
     expect(a).not.toBe(b);
+  });
+});
+
+describe('resolveServerBridgeToken', () => {
+  it('returns the SLICC_BRIDGE_TOKEN value when set, regardless of mode', () => {
+    expect(resolveServerBridgeToken({ SLICC_BRIDGE_TOKEN: TOKEN }, { thinBridgeMode: false })).toBe(
+      TOKEN
+    );
+    expect(resolveServerBridgeToken({ SLICC_BRIDGE_TOKEN: TOKEN }, { thinBridgeMode: true })).toBe(
+      TOKEN
+    );
+  });
+
+  it('mints a fresh UUID-shaped token when thinBridgeMode is true and env is unset', () => {
+    const token = resolveServerBridgeToken({}, { thinBridgeMode: true });
+    expect(token).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('returns null in legacy modes when SLICC_BRIDGE_TOKEN is unset', () => {
+    expect(resolveServerBridgeToken({}, { thinBridgeMode: false })).toBeNull();
+    expect(
+      resolveServerBridgeToken({ SLICC_BRIDGE_TOKEN: '' }, { thinBridgeMode: false })
+    ).toBeNull();
   });
 });
 
