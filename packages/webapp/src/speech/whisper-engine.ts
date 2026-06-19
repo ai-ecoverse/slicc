@@ -26,7 +26,7 @@
 
 import { createLogger } from '../core/logger.js';
 import { createDownloadTracker, type DownloadSnapshot } from './download-progress.js';
-import { configureTransformersEnv } from './transformers-env.js';
+import { assertLocalModelPresent, configureTransformersEnv } from './transformers-env.js';
 
 const log = createLogger('speech:whisper');
 
@@ -103,6 +103,10 @@ type AsrPipeline = (
 async function loadWhisper(): Promise<WhisperAsr> {
   const { pipeline, env } = await import('@huggingface/transformers');
   configureTransformersEnv(env as never);
+  // Surface a clear "run hf download …" message if the user hasn't staged
+  // the weights yet — transformers.js otherwise dies with a generic
+  // "Could not load model" deep inside its file fallback loop.
+  await assertLocalModelPresent(WHISPER_MODEL_ID);
 
   const tracker = createDownloadTracker();
   const progressCallback = (p: {

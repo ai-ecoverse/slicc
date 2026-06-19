@@ -20,7 +20,7 @@
 
 import { createLogger } from '../core/logger.js';
 import { createDownloadTracker, type DownloadSnapshot } from './download-progress.js';
-import { configureTransformersEnv } from './transformers-env.js';
+import { assertLocalModelPresent, configureTransformersEnv } from './transformers-env.js';
 import type { WhisperProgress } from './whisper-engine.js';
 
 const log = createLogger('speech:kokoro');
@@ -134,6 +134,10 @@ async function loadKokoro(onProgress?: WhisperProgress): Promise<KokoroTts> {
   // without whisper ever having loaded.
   const { env } = await import('@huggingface/transformers');
   configureTransformersEnv(env as never);
+  // Surface a clear "run hf download …" message if the user hasn't staged
+  // the kokoro weights yet — kokoro-js otherwise dies with a generic
+  // transformers.js model-load error.
+  await assertLocalModelPresent(KOKORO_MODEL_ID);
   const { KokoroTTS } = await import('kokoro-js');
 
   const tracker = createDownloadTracker();

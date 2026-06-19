@@ -35,6 +35,7 @@ describe('configureTransformersEnv', () => {
     const { setLocalApiBaseUrl, setBridgeToken } = await import('../../src/shell/proxied-fetch.js');
     setLocalApiBaseUrl(null);
     setBridgeToken(null);
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
@@ -110,6 +111,43 @@ describe('configureTransformersEnv', () => {
     expect(env.fetch).toBe(wrappedOnce);
   });
 
+  it('passes same-origin preview URLs through unwrapped so the SW intercepts them', async () => {
+    // Page realm: location.origin is the UI origin. The preview SW serves
+    // `/preview/workspace/models/<modelId>/<file>` from OPFS — routing those
+    // through `/api/fetch-proxy` would bypass the SW entirely and bounce off
+    // the node-server (which has no /preview handler).
+    vi.stubGlobal('location', { origin: 'http://localhost:5710' });
+    const { configureTransformersEnv } = await import('../../src/speech/transformers-env.js');
+    const env = makeEnv();
+    configureTransformersEnv(env as never);
+    await env.fetch?.(
+      'http://localhost:5710/preview/workspace/models/onnx-community/whisper-tiny/config.json'
+    );
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit | undefined];
+    expect(url).toBe(
+      'http://localhost:5710/preview/workspace/models/onnx-community/whisper-tiny/config.json'
+    );
+    // No proxy headers, no rewritten target URL.
+    const headers = (init?.headers as Record<string, string> | undefined) ?? {};
+    expect(headers['X-Target-URL']).toBeUndefined();
+  });
+
+  it('still proxies cross-origin URLs even when same-origin pass-through is active', async () => {
+    vi.stubGlobal('location', { origin: 'http://localhost:5710' });
+    const { configureTransformersEnv } = await import('../../src/speech/transformers-env.js');
+    const env = makeEnv();
+    configureTransformersEnv(env as never);
+    await env.fetch?.(
+      'https://huggingface.co/onnx-community/whisper-tiny/resolve/main/config.json'
+    );
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/fetch-proxy');
+    expect((init.headers as Record<string, string>)['X-Target-URL']).toBe(
+      'https://huggingface.co/onnx-community/whisper-tiny/resolve/main/config.json'
+    );
+  });
+
   it('forwards caller method/body and merges init.headers into the proxy request', async () => {
     const { configureTransformersEnv } = await import('../../src/speech/transformers-env.js');
     const env = makeEnv();
@@ -128,5 +166,49 @@ describe('configureTransformersEnv', () => {
       'https://huggingface.co/model.safetensors'
     );
     expect(init.body).toBe('payload');
+  });
+});
+
+describe('assertLocalModelPresent', () => {
+  const realFetch = globalThis.fetch;
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchSpy = vi.fn(async () => new Response('{}', { status: 200 }));
+    globalThis.fetch = fetchSpy as unknown as typeof globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('returns silently when the local config.json is reachable', async () => {
+    const { assertLocalModelPresent } = await import('../../src/speech/transformers-env.js');
+    await expect(assertLocalModelPresent('onnx-community/whisper-tiny')).resolves.toBeUndefined();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    // The probe must hit the preview SW path under /workspace/models/, so the
+    // user's `hf download` lands exactly where this check looks.
+    expect(url).toMatch(
+      /\/preview\/workspace\/models\/onnx-community\/whisper-tiny\/config\.json$/
+    );
+  });
+
+  it('throws clean `hf download` guidance when the preview SW returns 404', async () => {
+    fetchSpy.mockResolvedValueOnce(new Response('', { status: 404, statusText: 'Not Found' }));
+    const { assertLocalModelPresent } = await import('../../src/speech/transformers-env.js');
+    await expect(assertLocalModelPresent('onnx-community/whisper-tiny')).rejects.toThrow(
+      /hf download onnx-community\/whisper-tiny/
+    );
+  });
+
+  it('wraps a probe network failure with the same actionable guidance', async () => {
+    fetchSpy.mockRejectedValueOnce(new Error('boom'));
+    const { assertLocalModelPresent } = await import('../../src/speech/transformers-env.js');
+    await expect(assertLocalModelPresent('onnx-community/Kokoro-82M-v1.0-ONNX')).rejects.toThrow(
+      /hf download onnx-community\/Kokoro-82M-v1\.0-ONNX/
+    );
   });
 });

@@ -68,6 +68,30 @@ function isRemoteHttpUrl(input: string | URL | Request): boolean {
   return s.startsWith('http://') || s.startsWith('https://');
 }
 
+/** The current realm's origin, or null if no `location.origin` is exposed. */
+function realmOrigin(): string | null {
+  const loc = (globalThis as { location?: { origin?: string } }).location;
+  return loc?.origin ?? null;
+}
+
+/**
+ * Same-origin URLs (the preview SW serving `/workspace/models/` + the
+ * onnxruntime-web `dist/`) must NOT route through `/api/fetch-proxy` — the
+ * proxy fetches externally with node-server, bypassing the in-browser SW that
+ * actually serves the VFS-backed bytes. Skipping same-origin lets the wrapped
+ * `env.fetch` fall through to the native page-realm `fetch`, which the SW
+ * intercepts and answers from OPFS.
+ */
+function isSameOriginUrl(input: string | URL | Request): boolean {
+  const here = realmOrigin();
+  if (!here) return false;
+  try {
+    return new URL(urlString(input)).origin === here;
+  } catch {
+    return false;
+  }
+}
+
 /** Route one transformers.js remote fetch through `/api/fetch-proxy`. */
 async function proxiedTransformersFetch(
   input: string | URL | Request,
@@ -113,7 +137,7 @@ export function configureTransformersEnv(env: TransformersEnvLike): void {
   const originalFetch = existing;
   const wrapped: NonNullable<TransformersEnvLike['fetch']> & { [FETCH_WRAPPED_MARKER]?: boolean } =
     async (input, init) => {
-      if (!isRemoteHttpUrl(input)) {
+      if (!isRemoteHttpUrl(input) || isSameOriginUrl(input)) {
         if (originalFetch) return originalFetch(input, init);
         return fetch(input as RequestInfo, init);
       }
@@ -121,4 +145,31 @@ export function configureTransformersEnv(env: TransformersEnvLike): void {
     };
   wrapped[FETCH_WRAPPED_MARKER] = true;
   env.fetch = wrapped;
+}
+
+/**
+ * Verify that the local weights for `modelId` are reachable before invoking
+ * transformers.js — otherwise the library surfaces an opaque "Could not load
+ * model …" error and the user has no idea they need to stage the weights.
+ *
+ * Probes `<localModelPath>/<modelId>/config.json` (the entry every
+ * transformers / kokoro-js model declares); routes through the page-realm
+ * `fetch` so the preview SW serves it from OPFS. A 404 → clean guidance that
+ * names the exact `hf download` command. Network / SW unreachable errors are
+ * wrapped with the same guidance so the user always sees the actionable line.
+ */
+export async function assertLocalModelPresent(modelId: string): Promise<void> {
+  const url = `${toPreviewUrl(LOCAL_MODELS_VFS_PATH)}${modelId}/config.json`;
+  const guidance = `weights for ${modelId} are missing — run \`hf download ${modelId}\` to fetch them into /workspace/models/.`;
+  let resp: Response;
+  try {
+    resp = await fetch(url, { method: 'GET', cache: 'no-store' });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`${guidance} (probe failed: ${detail})`);
+  }
+  if (resp.status === 404) throw new Error(guidance);
+  if (resp.status < 200 || resp.status >= 300) {
+    throw new Error(`${guidance} (probe returned ${resp.status} ${resp.statusText})`);
+  }
 }
