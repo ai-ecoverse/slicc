@@ -1297,7 +1297,7 @@ export async function mountWcUiLive(
   log: BootStageLogger,
   runtimeMode: UiRuntimeMode = 'standalone'
 ): Promise<void> {
-  const { browser, realCdpTransport, instanceId, cherryJoinUrl, cherryTransport } =
+  const { browser, realCdpTransport, instanceId, cherryJoinUrl, cherryTransport, localApiBaseUrl } =
     await setupStandalonePrelude({
       runtimeMode,
       envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
@@ -1320,6 +1320,7 @@ export async function mountWcUiLive(
     realCdpTransport,
     instanceId,
     callbacks: createWcLiveCallbacks(boot.wiring),
+    localApiBaseUrl,
   });
   installPageStorageSync({ send: (m) => host.client.sendRaw(m) });
   attachWcClient(boot, host.client, log, {

@@ -73,6 +73,13 @@ export interface KernelWorkerSpawnOptions {
    * scoped to one tab/worker pair. Optional.
    */
   instanceId?: string;
+  /**
+   * Absolute origin (e.g. `http://localhost:5710`) the worker-side
+   * proxied-fetch realm should target for `/api/fetch-proxy`. Set in
+   * thin-bridge mode where the hosted leader serves the UI but has no
+   * local /api surface. `null` / undefined falls back to same-origin.
+   */
+  localApiBaseUrl?: string | null;
 }
 
 export interface KernelWorkerBootstrapOptions {
@@ -87,6 +94,8 @@ export interface KernelWorkerBootstrapOptions {
    * scoped to one tab/worker pair. Optional.
    */
   instanceId?: string;
+  /** See `KernelWorkerSpawnOptions.localApiBaseUrl`. */
+  localApiBaseUrl?: string | null;
 }
 
 /**
@@ -201,6 +210,7 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
     cdpPort: cdpChannel.port2,
     localStorageSeed,
     instanceId: options.instanceId,
+    localApiBaseUrl: options.localApiBaseUrl ?? null,
   };
   worker.postMessage(init, [kernelChannel.port2, cdpChannel.port2]);
 
@@ -267,5 +277,6 @@ export function spawnKernelWorker(options: KernelWorkerSpawnOptions): SpawnedKer
     readyTimeoutMs: options.readyTimeoutMs,
     localStorageSeed: options.localStorageSeed ?? collectLocalStorageSeed(),
     instanceId: options.instanceId,
+    localApiBaseUrl: options.localApiBaseUrl,
   });
 }

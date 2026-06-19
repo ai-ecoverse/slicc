@@ -133,12 +133,42 @@ describe('buildCorsHeaders', () => {
     expect(headers!['Access-Control-Allow-Credentials']).toBe('true');
     expect(headers!['Access-Control-Allow-Methods']).toContain('OPTIONS');
     expect(headers!['Access-Control-Allow-Headers']).toContain('Content-Type');
-    expect(headers!.Vary).toBe('Origin');
+    expect(headers!['Access-Control-Allow-Headers']).toContain('X-Target-URL');
+    expect(headers!['Access-Control-Allow-Headers']).toContain('X-Proxy-Cookie');
+    expect(headers!['Access-Control-Expose-Headers']).toContain('X-Proxy-Error');
+    expect(headers!['Access-Control-Expose-Headers']).toContain('X-Proxy-Set-Cookie');
+    expect(headers!.Vary).toBe('Origin, Access-Control-Request-Headers');
   });
 
   it('returns null for non-allowlisted origins', () => {
     expect(buildCorsHeaders('https://evil.example.com')).toBeNull();
     expect(buildCorsHeaders(undefined)).toBeNull();
+  });
+
+  it('reflects unknown headers from Access-Control-Request-Headers', () => {
+    const headers = buildCorsHeaders(PROD_ORIGIN, 'X-Custom-Upstream, Anthropic-Version');
+    expect(headers).not.toBeNull();
+    const allow = headers!['Access-Control-Allow-Headers'];
+    expect(allow).toContain('X-Custom-Upstream');
+    expect(allow).toContain('Anthropic-Version');
+    // Base headers are still present.
+    expect(allow).toContain('Content-Type');
+  });
+
+  it('skips reflected headers that are already in the base set', () => {
+    const headers = buildCorsHeaders(PROD_ORIGIN, 'content-type, X-Target-URL, X-Other');
+    const allow = headers!['Access-Control-Allow-Headers'];
+    // The base canonical casing wins; no duplicate of Content-Type or X-Target-URL.
+    expect(allow.match(/Content-Type/gi)?.length ?? 0).toBe(1);
+    expect(allow.match(/X-Target-URL/gi)?.length ?? 0).toBe(1);
+    expect(allow).toContain('X-Other');
+  });
+
+  it('accepts string[] Access-Control-Request-Headers (Node header shape)', () => {
+    const headers = buildCorsHeaders(PROD_ORIGIN, ['X-One', 'X-Two']);
+    const allow = headers!['Access-Control-Allow-Headers'];
+    expect(allow).toContain('X-One');
+    expect(allow).toContain('X-Two');
   });
 });
 

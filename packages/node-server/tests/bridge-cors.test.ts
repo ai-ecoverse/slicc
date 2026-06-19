@@ -20,7 +20,10 @@ let base = '';
 beforeEach(async () => {
   const app = express();
   app.use((req: Request, res: Response, next: NextFunction) => {
-    const cors = buildCorsHeaders(req.headers.origin);
+    const cors = buildCorsHeaders(
+      req.headers.origin,
+      req.headers['access-control-request-headers']
+    );
     if (cors) {
       for (const [k, v] of Object.entries(cors)) res.setHeader(k, v);
     }
@@ -56,8 +59,25 @@ describe('thin-bridge CORS + PNA middleware', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('access-control-allow-origin')).toBe(PROD_ORIGIN);
     expect(res.headers.get('access-control-allow-credentials')).toBe('true');
-    expect(res.headers.get('vary')).toBe('Origin');
+    expect(res.headers.get('vary')).toBe('Origin, Access-Control-Request-Headers');
     expect(await res.json()).toEqual({ ok: true });
+  });
+
+  it('reflects /api/fetch-proxy custom request headers on preflight', async () => {
+    const res = await fetch(`${base}/api/ping`, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: PROD_ORIGIN,
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'x-target-url, x-proxy-cookie, anthropic-version',
+      },
+    });
+    expect(res.status).toBe(204);
+    const allow = res.headers.get('access-control-allow-headers') ?? '';
+    expect(allow).toContain('X-Target-URL');
+    expect(allow).toContain('X-Proxy-Cookie');
+    // Reflected upstream header is preserved with its requested casing.
+    expect(allow).toContain('anthropic-version');
   });
 
   it('omits CORS headers for non-allowlisted origins', async () => {

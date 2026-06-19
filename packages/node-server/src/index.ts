@@ -990,11 +990,31 @@ function forwardClientFrame(state: ServerState, data: unknown, ctx: CdpProxyCont
   }
 }
 
+/**
+ * Wait for `state.cdpPort` to be populated (i.e. `launchChromeTarget`'s
+ * `waitForCdpPort` has resolved). Used by clients that race ahead of the
+ * browser launch — primarily the thin-bridge case where `server.listen()`
+ * runs BEFORE `launchBrowser` so the hosted leader can connect to /cdp
+ * the moment Chrome opens it, even before Chrome's own CDP port is known.
+ */
+async function waitForServerCdpPort(state: ServerState, timeoutMs = 30_000): Promise<number> {
+  if (state.cdpPort > 0) return state.cdpPort;
+  const startedAt = Date.now();
+  while (state.cdpPort === 0 && Date.now() - startedAt < timeoutMs) {
+    if (state.shuttingDown) throw new Error('Server shutting down');
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  if (state.cdpPort === 0) {
+    throw new Error('Chrome CDP port did not become available in time');
+  }
+  return state.cdpPort;
+}
+
 async function handleCdpClient(
   state: ServerState,
   clientWs: WebSocket,
   ctx: CdpProxyContext,
-  cdpPort: number
+  cdpPort?: number
 ): Promise<void> {
   try {
     // Only one client active at a time — close the previous one.
@@ -1025,7 +1045,8 @@ async function handleCdpClient(
 
     // NOW do async work — messages arriving during these awaits are buffered.
     if (!state.cdpUrl) {
-      state.cdpUrl = await waitForCDP(cdpPort);
+      const port = cdpPort && cdpPort > 0 ? cdpPort : await waitForServerCdpPort(state);
+      state.cdpUrl = await waitForCDP(port);
       console.log(`[cdp-proxy] CDP available at: ${state.cdpUrl}`);
     }
     await ensureChromeConnection(state, state.cdpUrl, ctx);
@@ -1078,7 +1099,6 @@ interface ShutdownDeps {
   fileLogger: FileLogger;
   wss: WebSocketServer;
   server: HttpServer;
-  cdpPort: number;
 }
 
 /** Build the idempotent graceful-shutdown handler wired to the process signals. */
@@ -1104,7 +1124,9 @@ function createGracefulShutdown(state: ServerState, deps: ShutdownDeps): () => P
     // Stop accepting new HTTP connections.
     deps.server.close();
 
-    await closeLaunchedBrowserGracefully(state, deps.cdpPort);
+    // Read cdpPort from state — populated by `launchChromeTarget`; may be 0
+    // if shutdown fires before the browser ever launched.
+    await closeLaunchedBrowserGracefully(state, state.cdpPort);
     process.exit(0);
   };
 }
@@ -1114,10 +1136,10 @@ async function preconnectCdp(
   state: ServerState,
   ctx: CdpProxyContext,
   app: express.Express,
-  servePort: number,
-  cdpPort: number
+  servePort: number
 ): Promise<void> {
   try {
+    const cdpPort = state.cdpPort > 0 ? state.cdpPort : await waitForServerCdpPort(state);
     state.cdpUrl = await waitForCDP(cdpPort);
     console.log(`[cdp-proxy] Pre-connected: CDP available at ${state.cdpUrl}`);
     await ensureChromeConnection(state, state.cdpUrl, ctx);
@@ -1165,36 +1187,60 @@ interface CdpServerDeps {
   cdpPort: number;
 }
 
-/** Start listening and warm up the CDP proxy, overlay injector, and console forwarder. */
-function startCdpServer(state: ServerState, deps: CdpServerDeps): void {
-  const { app, server, ctx, fileLogger, servePort, serveOrigin, cdpPort } = deps;
-  server.listen(servePort, '127.0.0.1', () => {
-    if (THIN_BRIDGE_MODE) {
-      console.log(`Thin /cdp bridge + /api at ${serveOrigin}`);
-    } else {
-      console.log(`Serving UI at ${serveOrigin}`);
-    }
-    console.log(`CDP proxy at ws://localhost:${servePort}/cdp`);
-    fileLogger.log('info', 'CLI server started', {
-      port: servePort,
-      cdpPort,
-      devMode: DEV_MODE,
-      electronMode: ELECTRON_MODE,
+/**
+ * Bind the HTTP server (and the /cdp WS upgrade handler attached to it) so
+ * incoming `ws://localhost/cdp` connections are accepted. Resolves when
+ * `server.listen` fires its 'listening' callback.
+ *
+ * Split out of the old `startCdpServer` so `main()` can `await` listening
+ * BEFORE `launchBrowser(state)` runs — without this ordering the hosted
+ * leader's eager `browser.connect()` (fired the moment Chrome opens
+ * sliccy.ai in thin-bridge mode) can race ahead of the bridge and fail
+ * its one-shot WebSocket handshake.
+ */
+function startListening(deps: Omit<CdpServerDeps, 'ctx' | 'app'>): Promise<void> {
+  const { server, fileLogger, servePort, serveOrigin, cdpPort } = deps;
+  return new Promise((resolve) => {
+    server.listen(servePort, '127.0.0.1', () => {
+      if (THIN_BRIDGE_MODE) {
+        console.log(`Thin /cdp bridge + /api at ${serveOrigin}`);
+      } else {
+        console.log(`Serving UI at ${serveOrigin}`);
+      }
+      console.log(`CDP proxy at ws://localhost:${servePort}/cdp`);
+      fileLogger.log('info', 'CLI server started', {
+        port: servePort,
+        cdpPort,
+        devMode: DEV_MODE,
+        electronMode: ELECTRON_MODE,
+      });
+      resolve();
     });
-
-    void preconnectCdp(state, ctx, app, servePort, cdpPort);
-
-    if (ELECTRON_MODE) {
-      void startOverlayInjector(state, cdpPort, servePort);
-    } else if (!THIN_BRIDGE_MODE) {
-      // Thin-bridge mode has no local UI page to forward console output from.
-      setTimeout(() => {
-        attachConsoleForwarder(cdpPort, String(servePort)).catch((err) => {
-          console.error('[page] Console forwarder error:', err);
-        });
-      }, 2500);
-    }
   });
+}
+
+/**
+ * Post-listen warmup: pre-connects to Chrome's CDP (so the proxy is warm
+ * before the first client), starts the Electron overlay injector, and
+ * attaches the console forwarder. Reads `state.cdpPort` dynamically so
+ * the value populated by `launchChromeTarget` is used regardless of when
+ * this runs relative to the listen callback.
+ */
+function runCdpProxyWarmup(state: ServerState, deps: CdpServerDeps): void {
+  const { app, ctx, servePort } = deps;
+  void preconnectCdp(state, ctx, app, servePort);
+
+  if (ELECTRON_MODE) {
+    void startOverlayInjector(state, state.cdpPort, servePort);
+  } else if (!THIN_BRIDGE_MODE) {
+    // Thin-bridge mode has no local UI page to forward console output from.
+    const cdpPort = state.cdpPort;
+    setTimeout(() => {
+      attachConsoleForwarder(cdpPort, String(servePort)).catch((err) => {
+        console.error('[page] Console forwarder error:', err);
+      });
+    }, 2500);
+  }
 }
 
 interface SecretBootstrap {
@@ -1241,7 +1287,14 @@ async function bootstrapSecrets(): Promise<SecretBootstrap> {
  */
 function createThinBridgeCorsMiddleware(): import('express').RequestHandler {
   return (req, res, next) => {
-    const cors = buildCorsHeaders(req.headers.origin);
+    // Reflect the requested headers so the agent's `bash curl -H …` (which
+    // can carry arbitrary upstream headers through /api/fetch-proxy) is not
+    // blocked by a hardcoded allowlist. Cross-origin preflights advertise
+    // those headers via `Access-Control-Request-Headers`.
+    const cors = buildCorsHeaders(
+      req.headers.origin,
+      req.headers['access-control-request-headers']
+    );
     if (cors) {
       for (const [k, v] of Object.entries(cors)) res.setHeader(k, v);
     }
@@ -1276,13 +1329,18 @@ function createCdpWebSocketServer(bridgeToken: string | null): WebSocketServer {
 }
 
 async function main() {
-  // Resolve ports, launch the browser, then snapshot the now-final values that
-  // the rest of boot reads. Mutable lifecycle fields stay on `state`.
+  // Resolve ports first; `launchBrowser` is deferred until AFTER
+  // `server.listen()` so the /cdp bridge is accepting connections before
+  // Chrome opens its target URL (the packaged-CLI thin-bridge mode opens
+  // the hosted leader at sliccy.ai, whose eager `browser.connect()`
+  // otherwise races ahead of the bridge listener and fails its one-shot
+  // WebSocket handshake). `state.cdpPort` becomes valid inside
+  // `launchChromeTarget` once Chrome announces its CDP port; consumers
+  // that need it (`handleCdpClient`, `preconnectCdp`, the graceful-
+  // shutdown handler) read it dynamically from `state`.
   const state = createServerState();
   await resolvePorts(state);
-  await launchBrowser(state);
-  const { servePort: SERVE_PORT, cdpPort: CDP_PORT, serveOrigin: SERVE_ORIGIN } = state;
-  const discoveredTrayJoinUrl = state.discoveredTrayJoinUrl;
+  const { servePort: SERVE_PORT, serveOrigin: SERVE_ORIGIN } = state;
 
   // 3. Set up express app with request logging
   const { secretStore, secretProxy, oauthStore } = await bootstrapSecrets();
@@ -1328,7 +1386,11 @@ async function main() {
         (DEV_MODE
           ? 'https://slicc-tray-hub-staging.minivelos.workers.dev'
           : 'https://www.sliccy.ai'),
-      trayJoinUrl: discoveredTrayJoinUrl ?? null,
+      // Read dynamically from state — populated by `launchElectronTarget`
+      // when an existing leader is discovered. `launchBrowser` now runs
+      // after `server.listen()`, so this endpoint must NOT close over a
+      // pre-launch snapshot or it would always return null.
+      trayJoinUrl: state.discoveredTrayJoinUrl ?? null,
     });
   });
 
@@ -1413,7 +1475,6 @@ async function main() {
     fileLogger,
     wss,
     server,
-    cdpPort: CDP_PORT,
   });
   process.on('SIGINT', () => {
     gracefulShutdown();
@@ -1433,18 +1494,54 @@ async function main() {
     }
   });
 
+  await startCdpStack(state, { app, server, wss, cdpCtx, fileLogger });
+}
+
+/**
+ * Bottom half of `main()`: bind the /cdp WS handler, start listening on
+ * the HTTP server BEFORE launching the browser so the /cdp bridge is
+ * accepting the hosted leader's eager connect the instant Chrome opens
+ * sliccy.ai, then launch the browser (populates `state.cdpPort`), then
+ * run the post-launch warmup (preconnect / overlay / console forwarder).
+ *
+ * Extracted purely to keep `main()` under the lint-enforced function-size
+ * cap; not a meaningful boundary, just a co-locating helper.
+ */
+async function startCdpStack(
+  state: ServerState,
+  deps: {
+    app: express.Express;
+    server: HttpServer;
+    wss: WebSocketServer;
+    cdpCtx: CdpProxyContext;
+    fileLogger: FileLogger;
+  }
+): Promise<void> {
+  const { app, server, wss, cdpCtx, fileLogger } = deps;
+  const { servePort: SERVE_PORT, serveOrigin: SERVE_ORIGIN } = state;
+
+  // Read `state.cdpPort` dynamically — populated by `launchChromeTarget`
+  // AFTER `server.listen()` so we can't capture it here.
   wss.on('connection', (clientWs) => {
-    void handleCdpClient(state, clientWs, cdpCtx, CDP_PORT);
+    void handleCdpClient(state, clientWs, cdpCtx, state.cdpPort);
   });
 
-  startCdpServer(state, {
+  await startListening({
+    server,
+    fileLogger,
+    servePort: SERVE_PORT,
+    serveOrigin: SERVE_ORIGIN,
+    cdpPort: state.cdpPort,
+  });
+  await launchBrowser(state);
+  runCdpProxyWarmup(state, {
     app,
     server,
     ctx: cdpCtx,
     fileLogger,
     servePort: SERVE_PORT,
     serveOrigin: SERVE_ORIGIN,
-    cdpPort: CDP_PORT,
+    cdpPort: state.cdpPort,
   });
 }
 
