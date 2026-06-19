@@ -823,6 +823,56 @@ export function probeCdpAlive(port: number, options: ProbeCdpAliveOptions = {}):
 }
 
 /**
+ * Parse a `DevToolsActivePort` file body into a candidate port + websocket
+ * path. Chrome writes the port on line 1 and the WS path on line 2, atomically
+ * once the listener is up. A read mid-write yields an empty file, the port-only
+ * first line, or a corrupt body — every parse failure returns `null` so the
+ * caller falls through to the next poll tick. The port range mirrors
+ * `probeCdpAlive`'s guard so we never hand it a value it'd reject anyway.
+ */
+function parseDevToolsActivePort(contents: string): { port: number; wsPath: string | null } | null {
+  const lines = contents.split('\n');
+  const firstLine = lines[0]?.trim();
+  if (!firstLine) return null;
+  const port = Number.parseInt(firstLine, 10);
+  if (!Number.isInteger(port) || port <= 0 || port > 65_535) return null;
+  const secondLine = lines[1]?.trim();
+  return { port, wsPath: secondLine?.startsWith('/') ? secondLine : null };
+}
+
+/**
+ * Read + parse the `DevToolsActivePort` file. ENOENT before Chrome writes the
+ * file (and any other read error) is swallowed to `null` — we'd rather keep
+ * polling and let the stderr-scraper path race alongside than reject early.
+ */
+async function readDevToolsActivePort(
+  path: string
+): Promise<{ port: number; wsPath: string | null } | null> {
+  try {
+    return parseDevToolsActivePort(await readFile(path, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Run the CDP liveness verifier, treating any rejection — including a rogue
+ * custom verifier in tests — as "not alive" rather than aborting the poll loop
+ * and hanging discovery indefinitely.
+ */
+async function verifyCandidatePort(
+  verifyPort: (port: number, expectedWebSocketPath: string | null) => Promise<boolean>,
+  port: number,
+  wsPath: string | null
+): Promise<boolean> {
+  try {
+    return await verifyPort(port, wsPath);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Poll `<userDataDir>/DevToolsActivePort` for the CDP port. Chrome writes
  * this file as soon as the DevTools listener is up — its first line is
  * the port, the second is the websocket path. This is the canonical way
@@ -888,57 +938,20 @@ export function waitForCdpPortFromActivePortFile(
 
     const tick = async (): Promise<void> => {
       if (settled) return;
-      let candidatePort: number | null = null;
-      let candidateWsPath: string | null = null;
-      try {
-        const contents = await readFile(path, 'utf-8');
-        // First line is the port; second is the WS path. Chrome writes
-        // both atomically once the listener is up. If we read it
-        // mid-write we'll either get an empty file, the port-only first
-        // line, or a corrupt body — every parse failure falls through
-        // to the next tick.
-        const lines = contents.split('\n');
-        const firstLine = lines[0]?.trim();
-        if (firstLine) {
-          const port = Number.parseInt(firstLine, 10);
-          // Match `probeCdpAlive`'s range guard so we never hand it a
-          // value it'll reject anyway.
-          if (Number.isInteger(port) && port > 0 && port <= 65_535) {
-            candidatePort = port;
-            const secondLine = lines[1]?.trim();
-            if (secondLine?.startsWith('/')) {
-              candidateWsPath = secondLine;
-            }
-          }
-        }
-      } catch (err) {
-        // ENOENT before Chrome writes the file — keep polling. Anything
-        // else is ignored too: we'd rather fall back to the stderr path
-        // racing alongside this poller than reject early.
-        void err;
-      }
 
-      if (candidatePort !== null) {
+      const candidate = await readDevToolsActivePort(path);
+      if (candidate) {
         sawCandidate = true;
-        lastCandidatePort = candidatePort;
-        // Verify the file's port actually answers CDP and reports the
-        // same websocket path the file claims. A stale file (e.g. from
-        // a previous run that crashed before
-        // `clearStaleDevToolsActivePort` could land) or a port that's
-        // been reused by an unrelated Chrome will fail this probe and
-        // fall through to the next tick. Wrap in try/catch so any
-        // unexpected verifier rejection — including a rogue custom
-        // verifier in tests — is treated as "not alive" rather than
-        // aborting the poll loop and hanging discovery indefinitely.
-        let alive = false;
-        try {
-          alive = await verifyPort(candidatePort, candidateWsPath);
-        } catch {
-          alive = false;
-        }
+        lastCandidatePort = candidate.port;
+        // Verify the file's port actually answers CDP and reports the same
+        // websocket path the file claims. A stale file (e.g. from a previous
+        // run that crashed before `clearStaleDevToolsActivePort` landed) or a
+        // port reused by an unrelated Chrome fails this probe and falls
+        // through to the next tick.
+        const alive = await verifyCandidatePort(verifyPort, candidate.port, candidate.wsPath);
         if (settled) return; // child exited mid-probe — `child.on('exit')` already rejected.
         if (alive) {
-          finish(() => resolve(candidatePort!));
+          finish(() => resolve(candidate.port));
           return;
         }
       }
