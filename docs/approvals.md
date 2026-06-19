@@ -319,6 +319,48 @@ APIs cannot run there directly. The panel terminal bridges the gesture; agent
 `bash` calls fall back to an in-chat approval dip (`mount`) or fail with a
 clear "needs a real user gesture" message (`usb`/`serial`/`hid`/`esptool`).
 
+### Single gesture entry — `<slicc-permissions>`
+
+Every gesture-gated picker (camera / microphone / USB / HID / serial / FS) and
+folder-drop mount routes through ONE in-tab `<slicc-permissions>` web component
+mounted in the leader tab. The element is published via the page-realm accessor
+`getLeaderPermissionsSurface()` in
+`packages/webapp/src/ui/wc/wc-permissions-registry.ts`, so every caller —
+panel-RPC `permission-request` handler, terminal `<cmd> request` keystroke,
+composer mic / PTT, the cone-driven `runDevicePickerApproval` chat card —
+reaches the same host without an ad-hoc DOM query.
+
+The surface accepts injectable `providers` seams so the same contract works
+across runtimes:
+
+- **Standalone / Electron / hosted-leader / detached popout** — providers stay
+  unset; the surface calls the platform defaults (`navigator.usb` /
+  `navigator.hid` / `navigator.serial` / `window.showDirectoryPicker` /
+  `navigator.mediaDevices`) directly inside the gesture handler.
+- **Chrome extension** (`chrome.runtime.id` is set) — `wc-live.ts` injects the
+  popup-backed providers from
+  `packages/webapp/src/ui/wc/wc-permissions-providers.ts`. Each picker opens
+  `chrome-extension://<id>/picker-popup.html` (`?kind=directory|usb-device|serial-port|hid-device`)
+  in a normal browser window — the chooser runs on its own button click and
+  posts identifiers back; the page-side provider re-acquires the granted device
+  via `navigator.{usb,hid,serial}.getDevices()` (mount goes through the shared
+  `slicc-pending-mount` IDB store) before handing it to the surface. The side
+  panel itself can't host the chooser reliably under TCC, which is why the
+  popup is a parity requirement, not an enhancement.
+- **Cherry follower** — the surface is intentionally NOT mounted; cross-origin
+  iframes can't hold writable `FileSystemDirectoryHandle`s (Spike A), and
+  followers focus the leader tab when they need a gesture instead.
+
+The `runDevicePickerApproval` chat-card path
+(`packages/webapp/src/shell/supplemental-commands/picker-approval.ts`) stays as
+the agent-initiated entry point — the card's "Approve" button satisfies the
+user-gesture rule, and the click handler dispatches `dip-picker-action` to the
+page where `handleDipPickerAction` (`packages/webapp/src/ui/dip.ts`) runs the
+picker. The extension branch — silently broken before this wave because
+`mountDipExtension` never listened for `dip-picker-action` — now routes through
+the same popup-window providers as the surface, so the cone-driven flow has
+parity with the terminal keystroke path.
+
 ### Local mount picker
 
 Only **local** mounts surface an approval card. The card is _not_ a consent
@@ -385,12 +427,46 @@ for the API and HTML conventions.
 
 ### Files
 
-| Path                                                 | Role                                                   |
-| ---------------------------------------------------- | ------------------------------------------------------ |
-| `packages/webapp/src/kernel/remote-terminal-view.ts` | Keystroke gesture pre-intercept (`mount`, `*-request`) |
-| `packages/webapp/src/fs/mount-picker-popup.ts`       | Extension popup helpers for the FS-Access picker       |
-| `packages/chrome-extension/picker-popup.html`        | Extension picker popup shell (mount + USB/serial/HID)  |
-| `packages/webapp/src/tools/tool-ui.ts`               | Agent-driven approval-card primitive                   |
+| Path                                                                 | Role                                                                     |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `packages/webcomponents/src/overlay/slicc-permissions.ts`            | The `<slicc-permissions>` web component (camera/mic/USB/HID/serial/FS)   |
+| `packages/webapp/src/ui/wc/wc-permissions.ts`                        | `installLeaderPermissionsSurface` — mounts the surface in the leader tab |
+| `packages/webapp/src/ui/wc/wc-permissions-registry.ts`               | `getLeaderPermissionsSurface()` accessor — the single page-realm seam    |
+| `packages/webapp/src/ui/wc/wc-permissions-providers.ts`              | Extension popup-backed providers (filesystem + usb + hid + serial)       |
+| `packages/webapp/src/kernel/remote-terminal-view.ts`                 | Terminal `<cmd> request` keystroke gesture → `surface.request(kind)`     |
+| `packages/webapp/src/speech/composer-speech.ts`                      | Composer mic / PTT → `surface.request('microphone')`                     |
+| `packages/webapp/src/shell/supplemental-commands/picker-approval.ts` | Cone-driven `runDevicePickerApproval` chat card (`data-picker=…`)        |
+| `packages/webapp/src/ui/dip.ts`                                      | `handleDipPickerAction` — runtime-aware dispatch for picker dip clicks   |
+| `packages/webapp/src/fs/mount-picker-popup.ts`                       | Extension popup helpers for the FS-Access picker                         |
+| `packages/chrome-extension/picker-popup.html`                        | Extension picker popup shell (mount + USB/serial/HID)                    |
+| `packages/webapp/src/ui/panel-rpc-handlers.ts`                       | `permission-request` panel-RPC op (worker → surface → registry handle)   |
+
+### Manual smoke checklist — `:8787` wrangler harness
+
+After a release build, walk the unified surface end-to-end against the local
+wrangler UI (`packages/cloudflare-worker/`, port `8787`) so the popup paths
+exercise the deployed `picker-popup.html`. CI cannot drive `requestDevice`
+dialogs headlessly.
+
+For each row: launch the harness (see `docs/architecture.md` §thin-bridge
+harness), then run the action in the listed surface and confirm the listed
+outcome. ✅ = pass, ⚠️ = noted asymmetry, ❌ = regression — fix before merge.
+
+| Action                             | Surface              | Expected                                                                                             |
+| ---------------------------------- | -------------------- | ---------------------------------------------------------------------------------------------------- |
+| `mount /workspace/scratch`         | Panel terminal       | `picker-popup.html?kind=directory` opens → "Select directory" → chooser → mount appears in file tree |
+| Drag a folder onto the panel       | Folder drop          | `slicc-mount-pending` fires → mount appears (no popup; drop is the gesture)                          |
+| `usb request`                      | Panel terminal       | `picker-popup.html?kind=usb-device` opens → chooser → `usb list` shows handle `usb1`                 |
+| Agent issues `usb request` (cone)  | Cone-driven approval | Chat card "Connect USB device" → click → popup opens → grant → handle returned, no silent no-op      |
+| `hid request --vid 0x594d`         | Panel terminal       | Popup with filters applied → chooser → multi-interface device registers EVERY matching interface     |
+| Agent issues `hid request`         | Cone-driven approval | Card click → popup → grant → handle returned                                                         |
+| `serial request`                   | Panel terminal       | `picker-popup.html?kind=serial-port` opens → chooser → `serial list` shows handle `serial1`          |
+| Agent issues `serial request`      | Cone-driven approval | Card click → popup → grant → handle returned                                                         |
+| `esptool flash …` without `--port` | Panel terminal       | Routes through `serial request` popup; once granted, esptool drives the same handle                  |
+| Composer mic button (push-to-talk) | Composer             | `getUserMedia` prompt appears in the **side panel** (extension) or the page (standalone)             |
+
+Cancel / deny on each row to confirm the surface emits `slicc-permission-deny`
+with `reason: 'cancelled'`; the picker dip should not stay open.
 
 ---
 
