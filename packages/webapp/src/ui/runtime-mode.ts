@@ -20,18 +20,7 @@ export type UiRuntimeMode =
 export const ELECTRON_OVERLAY_RUNTIME_QUERY_VALUE = 'electron-overlay';
 export const HOSTED_LEADER_RUNTIME_QUERY_VALUE = 'hosted-leader';
 export const ELECTRON_OVERLAY_RUNTIME_PATH = '/electron';
-export const ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE = 'slicc-electron-overlay:set-tab';
-export const ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE = 'slicc-electron-overlay:close';
-export const ELECTRON_OVERLAY_FOLLOWER_STATUS_MESSAGE_TYPE =
-  'slicc-electron-overlay:follower-status';
 
-/**
- * Three visible follower states the floating launcher pill renders. The inner
- * app maps its richer `FollowerTrayRuntimeStatus.state` down to this enum
- * before posting it to the overlay shell — see `mapFollowerStateToOverlay`
- * in `main.ts`.
- */
-export type ElectronOverlayFollowerStatus = 'disconnected' | 'connected' | 'error';
 // Re-export shared detached-runtime constants from chrome-extension/messages.ts
 // so panel-side code (resolveUiRuntimeMode) and SW-side code share the same
 // source of truth.
@@ -39,34 +28,6 @@ export {
   DETACHED_RUNTIME_QUERY_NAME,
   DETACHED_RUNTIME_QUERY_VALUE,
 } from '../../../chrome-extension/src/messages.js';
-
-export interface ElectronOverlaySetTabMessage {
-  type: typeof ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE;
-  tab?: string;
-}
-
-export interface ElectronOverlayCloseMessage {
-  type: typeof ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE;
-}
-
-export interface ElectronOverlayFollowerStatusMessage {
-  type: typeof ELECTRON_OVERLAY_FOLLOWER_STATUS_MESSAGE_TYPE;
-  status: ElectronOverlayFollowerStatus;
-}
-
-/**
- * Map the rich `FollowerTrayRuntimeStatus.state` enum down to the three
- * visible launcher states: `connected` is the only "synced" case; `error`
- * keeps its own icon (crossed-out eyes); everything else (`inactive`,
- * `connecting`, `reconnecting`) falls back to `disconnected`.
- */
-export function mapFollowerStateToOverlayStatus(
-  state: 'inactive' | 'connecting' | 'connected' | 'reconnecting' | 'error'
-): ElectronOverlayFollowerStatus {
-  if (state === 'connected') return 'connected';
-  if (state === 'error') return 'error';
-  return 'disconnected';
-}
 
 export function resolveUiRuntimeMode(locationHref: string, isExtension: boolean): UiRuntimeMode {
   if (isExtension) {
@@ -144,36 +105,4 @@ export function getTrayWebhookUrl(trayWebhookUrl: string, webhookId: string): st
   const normalizedBase = trayWebhookUrl.replace(/\/+$/, '');
   const normalizedWebhookId = webhookId.replace(/^\/+/, '');
   return `${normalizedBase}/${normalizedWebhookId}`;
-}
-
-export function isElectronOverlaySetTabMessage(
-  value: unknown
-): value is ElectronOverlaySetTabMessage {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'type' in value &&
-    (value as Record<string, unknown>).type === ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE
-  );
-}
-
-export function isElectronOverlayCloseMessage(
-  value: unknown
-): value is ElectronOverlayCloseMessage {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'type' in value &&
-    (value as Record<string, unknown>).type === ELECTRON_OVERLAY_CLOSE_MESSAGE_TYPE
-  );
-}
-
-export function isElectronOverlayFollowerStatusMessage(
-  value: unknown
-): value is ElectronOverlayFollowerStatusMessage {
-  if (typeof value !== 'object' || value === null || !('type' in value)) return false;
-  const record = value as Record<string, unknown>;
-  if (record.type !== ELECTRON_OVERLAY_FOLLOWER_STATUS_MESSAGE_TYPE) return false;
-  const status = record.status;
-  return status === 'disconnected' || status === 'connected' || status === 'error';
 }

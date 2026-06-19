@@ -27,8 +27,7 @@ export const LAUNCHER_STORAGE_KEY = 'slicc-launcher-corner';
 /**
  * Three visible follower-link states. `disconnected` is the default so the
  * launcher never starts on the misleading "connected" icon before real
- * telemetry has been posted. Mirrors `ElectronOverlayFollowerStatus` in the
- * webapp's `runtime-mode.ts`.
+ * telemetry has been posted.
  */
 export const LAUNCHER_FOLLOWER_STATUSES = ['disconnected', 'connected', 'error'] as const;
 export type LauncherFollowerStatus = (typeof LAUNCHER_FOLLOWER_STATUSES)[number];
